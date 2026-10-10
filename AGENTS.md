@@ -6,6 +6,8 @@ Read [concept.md](concept.md) before planning or implementing changes. It contai
 
 Keep the two documents consistent. Use `concept.md` for detailed product decisions and this file for instructions that apply across tasks. Explicit user instructions take precedence over this documentation.
 
+When the owner requests an implementation coordinator, also read [COORDINATOR.md](COORDINATOR.md). It defines Trello execution, bounded subagent delegation, worktree ownership, independent review, recovery state, and PR handoff. Use the [launch prompt](docs/prompts/coordinator-start.md) to start that role in a separate chat. This role applies only when requested; delegated workers follow their bounded assignments and the repository rules.
+
 ## Documentation Language
 
 **Write all internal documentation that may be committed to Git in English.** This is an explicit owner requirement.
@@ -40,6 +42,11 @@ Git setup update on October 10, 2026:
 - The application and native development toolchains remain unverified.
 - GitHub allows only squash merging and automatically deletes merged task branches. Squash commits use the PR title and body.
 - GitHub returned HTTP 403 for branch protection and rulesets because this private repository requires an upgraded plan for those features. PR-only changes to `main` are an owner policy, reinforced by the local pre-push hook; they are not currently enforced on the server. No required CI checks exist yet.
+
+Coordinator documentation update on October 10, 2026:
+
+- [COORDINATOR.md](COORDINATOR.md) and the [launch prompt](docs/prompts/coordinator-start.md) define the optional owner-requested coordinator role. Local recovery state lives under ignored `.local/`.
+- This documentation does not implement an application, configure Trello access, start agents, or add CI. Inspect current implementation and integration availability before running the coordinator.
 
 ## Product Requirements to Preserve
 

@@ -234,6 +234,7 @@ Install, replace, or remove the DLL only while the game is closed. Manage only t
 ## 11. Guidance for Future Agents
 
 - Start with this document and the applicable repository instructions in `AGENTS.md`.
+- For owner-requested implementation coordination, follow [COORDINATOR.md](COORDINATOR.md) and the [launch prompt](docs/prompts/coordinator-start.md). The coordinator delegates bounded work, verifies dependencies and acceptance evidence, manages Trello execution, and prepares PRs for owner review. This workflow does not change product requirements, authorize merges, or establish game compatibility.
 - Write all internal documentation that may enter Git in English, including explanatory code documentation. Continue user-facing conversation in the user's preferred language; the owner currently communicates in Russian.
 - Explain desktop-specific behavior through concrete process and component responsibilities, accounting for the owner's web development background.
 - Validate the SDK/application/overlay path against a running game early in implementation.

@@ -1,2 +1,5 @@
 # Local temporary Trello planning manifest.
 /planning/trello-cards.json
+
+# Local coordinator recovery state and temporary PR bodies.
+/.local/
