@@ -29,6 +29,7 @@ The project owner has web development experience with React and TypeScript, but 
 - Record both trip summaries and **one telemetry sample per second** for future charts and trip analysis.
 - The website, accounts, company-wide statistics, and server synchronization belong to a later phase.
 - Visual design will be discussed separately. Correct data acquisition and storage are the current priorities.
+- New functionality must preserve existing behavior through regression tests added alongside each feature. Bug fixes should retain a reproducing test where feasible; the detailed policy is in [TESTING.md](TESTING.md).
 - **All internal documentation that may be committed to Git must be written in English.** This includes this concept, agent instructions, technical specifications, and development guides. This does not determine the application's UI language.
 
 The technical choices below are the working implementation baseline. Changes to these user requirements should be discussed with the owner. Routine implementation details can be decided within this concept without repeatedly seeking approval.
@@ -55,7 +56,7 @@ Support either launch order: application first or game first. Starting recording
 | Local transport | Windows Named Pipes | Messages between the plugin and application |
 | Storage | SQLite, better-sqlite3 | Trips, events, samples, migrations |
 | Distribution | Electron Forge | Application installation and updates |
-| Automated checks | Vitest, Playwright, a simulated telemetry source | Business logic, UI, scenario replay |
+| Automated checks | Vitest, CTest, Playwright, a simulated telemetry source | Domain and native logic, contracts, integration, UI, scenario replay |
 
 Electron keeps most application logic in TypeScript. Measure its memory usage and impact on the game during the early prototype. Tauri was considered but not selected because it would introduce Rust into the current architecture.
 
@@ -216,6 +217,8 @@ Client telemetry is a source of statistics, not proof that a trip was legitimate
 Install, replace, or remove the DLL only while the game is closed. Manage only this project's plugin; do not overwrite other telemetry plugins. Manual updates through the distribution package are sufficient for the MVP; an automatic update service is not required.
 
 ## 10. Acceptance Criteria and Validation
+
+[TESTING.md](TESTING.md) defines the test layers, permanent regression scenarios, CI/merge policy, historical migration checks, and real-game evidence. Build test infrastructure with the initial scaffold and extend it in every feature PR; the final acceptance milestone must not be the first time regression testing is introduced. Most repeatable logic is checked through simulation, real local transport, and isolated storage; real-game compatibility and input/window behavior require separate evidence. This strategy is planned: no tests or workflows have been implemented yet.
 
 - Complete job lifecycle in both games: acceptance, driving, stopping, pausing, delivery, and cancellation.
 - A separate compatibility matrix for single-player, Convoy, and TruckersMP, recording tested versions. Documentation alone does not establish compatibility.
