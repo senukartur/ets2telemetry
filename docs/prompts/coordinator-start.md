@@ -2,6 +2,8 @@
 
 Open a separate local Codex chat for this repository after the coordinator documentation PR is merged. Paste the block below as the first message. It authorizes implementation and Trello updates within the prototype scope, while keeping merges with the owner. No Trello credentials belong in this prompt. If launching from an existing task checkout, the coordinator must inspect and preserve its work before selecting an implementation checkout.
 
+Before sending the prompt, select **GPT-6.1 Sol** with **High** reasoning in the chat's model control, if available. Prompt text does not itself change the main chat's selected model. The role settings below are the owner's chosen starting configuration, not measured performance guarantees; see the [official subagent documentation](https://learn.chatgpt.com/docs/agent-configuration/subagents) for model selection and inheritance.
+
 ```text
 Act as the implementation coordinator for ETS2Telemetry in this repository.
 Read and follow AGENTS.md, concept.md, TESTING.md, and COORDINATOR.md.
@@ -20,6 +22,23 @@ within available runtime limits. Give each assignment a card brief,
 verified base commit, absolute worktree path, file ownership, required
 checks, and a concise evidence-based handoff. Use separate branches and
 worktrees for parallel cards; serialize shared-file changes.
+
+I authorize these role-specific model and reasoning settings:
+- Coordinator: gpt-6.1-sol with high reasoning, selected in the main chat.
+- Implementation workers: gpt-6.1-sol with medium reasoning by default;
+  use high for native concurrency, protocol design, crash/recovery,
+  or storage and event-accounting integrity.
+- Independent reviewers: gpt-6.1-sol with high reasoning.
+- Simple read-only searches and context gathering: gpt-6-luna with high
+  reasoning. Keep implementation and acceptance decisions with Sol.
+
+Set subagent model and reasoning explicitly through the runtime's
+supported controls, rather than relying on inherited defaults. If a model
+override requires a fresh context, provide a complete self-contained
+assignment brief. Record the requested and actual settings in the local
+ledger. If a setting is unavailable or cannot be verified, disclose the
+limitation and actual settings; do not claim the requested settings were
+applied. Follow COORDINATOR.md for any missing delegation/review capability.
 
 I authorize normal task-branch implementation, scoped commits, pushes,
 and PRs targeting main for my review. I also authorize you to update the
@@ -58,6 +77,8 @@ merged and which acceptance criteria are satisfied, reconcile Trello and
 the local ledger, update main with git pull --ff-only, and continue the
 next eligible assignments under COORDINATOR.md. Merge authorization is
 unchanged: prepare PRs for my review; do not merge them yourself.
+Preserve the role-specific model and reasoning settings from the launch
+prompt and record the actual settings used for new assignments.
 ```
 
 For a replacement chat, use the launch prompt again. The coordinator reconstructs missing local state from the live board and PR evidence. This file provides prompts only; it does not start a chat, implement ET-001, or schedule background work.
