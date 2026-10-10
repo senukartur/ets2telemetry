@@ -1,6 +1,6 @@
 # Testing and Regression Strategy
 
-Recorded on October 10, 2026. **Status: planned, not implemented.** The project currently has no application code, test suite, or CI workflows. This document defines how testing must grow with the product; it does not claim any passing application or game checks. Add verified commands here when tooling exists.
+Recorded on October 10, 2026; updated October 11, 2026. **Status: scaffold checks implemented; feature suites and CI pending.** ET-001 defines Node unit, Electron startup/worker, and native CTest entrypoints. The broader strategy below grows with implemented features. Check results belong to the candidate acceptance record; no game compatibility is established.
 
 Read [concept.md](concept.md) for product behavior and [AGENTS.md](AGENTS.md) for the development workflow.
 
@@ -81,6 +81,8 @@ ET-022 introduces GitHub Actions early, after the scaffold exists. Workflows and
 
 ET-001 must start with meaningful scaffold checks. ET-022 wires existing checks into CI and provides reusable test infrastructure; each feature task adds its own tests as the component arrives. ET-019 extends cross-component fault coverage before distribution. Do not postpone all regression work until ET-019 or create green empty suites for unimplemented features.
 
+ET-001 entrypoints and limitations are in [docs/setup.md](docs/setup.md). Node Vitest covers Node-safe status/path, lifecycle, and logging modules without loading Electron or native SQLite. Electron Playwright checks the sandboxed window and actual utilityProcess/storage worker probe; repeat against the Forge package from an unrelated temporary cwd to exercise the pinned N-API native binary and ASAR worker paths. CTest calls the placeholder DLL export and checks x64. These checks do not cover production migrations or establish full REG-017 upgrade/history preservation. The early SP-01 and CAP-01 packages feed ET-009 as defined in concept.md; game evidence does not await ET-022, but relevant local code checks remain mandatory.
+
 Keep the initial PR suite bounded; target feedback within about 10 minutes and measure the actual duration once it exists. This is a planning target, not a current measurement or permission to skip failing checks. Start with the full existing fast suite on every code PR; adopt affected-test filtering only after its dependency mapping is verified. Documentation-only PRs can use focused document checks when runtime/build files are untouched.
 
 A failing baseline suite blocks acceptance of the change. Check the current PR commit, not a stale earlier run; shared-contract or migration changes require all relevant consumers. Record check names only after real jobs exist. On the current private repository plan, branch protection is unavailable: this is an owner/reviewer merge policy, not a server-enforced guarantee. Enable required status checks if repository capabilities later permit it.
@@ -109,3 +111,17 @@ When ET-101 resolves the future-phase requirements, extend this strategy with AP
 ## 9. Handoff for every behavior change
 
 The PR and task handoff identify the protected requirement/scenario, tests added or updated, actual commands/results on the current commit, and any manual checks still needed. Explain a justified test omission instead of inventing coverage. Update the scenario registry, fixtures, and this document when behavior or test entry points change. Move a card to Review with evidence; Done requires accepted criteria, including regression protection for the behavior implemented.
+
+### ET-001 recovery checks and runtime hold
+
+Following the October 11, 2026 host freezes, the owner authorizes source fixes, logging, watchdog preparation, and rebuilding only. Electron, the packaged app, and installer execution remain prohibited until a new explicit instruction. See [the recovery procedure](docs/setup.md#packaged-startup-recovery-hold-october-11-2026).
+
+| Requirement | Executable regression protection | Evidence boundary |
+| --- | --- | --- |
+| Partial REG-011 startup/stop races | `tests/unit/service-probe.test.ts`, `tests/unit/service-supervisor.test.ts` | Deterministic Node tests; no Electron runtime claim |
+| Bounded/private startup logs | `tests/unit/diagnostics.test.ts` | Temporary filesystem and failed-destination cases |
+| Physical ASAR entrypoints and isolated native dependency resolution | `tests/unit/scaffold.test.ts`, `scripts/inspect-package.mjs` | Reads packaged bytes and resolves files; never loads the native binding |
+| External process containment | `tests/watchdog/run.ps1` | Real Windows Job Objects with harmless Node fixtures; timeout, orphan, watchdog death, bounded logs and unrelated-process preservation |
+| Packaged app / partial REG-017 | `tests/electron/startup.spec.ts` | Pending: deliberately not run under the owner hold |
+
+Do not reproduce the previous host freeze to obtain a red test. Static package inspection exposed SQLite resolving outside the package before the full module was unpacked; the retained inspector rejects that layout. The first orphan fixture used Node's own child cleanup and did not leave an orphan; the corrected fixture uses a detached child to exercise watchdog cleanup. No retries of Electron were performed during recovery.

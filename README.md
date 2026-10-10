@@ -6,7 +6,7 @@ The local MVP will display live truck metrics in an overlay, maintain a trip jou
 
 ## Project status
 
-**Design stage, as of October 10, 2026.** This repository contains requirements and working instructions. No application, native plugin, server, build scripts, or test suite has been implemented. Application dependencies and native build tools have not been verified.
+**ET-001 scaffold, as of October 11, 2026.** The repository contains a minimal React/Electron window, telemetry utilityProcess and isolated SQLite worker probe, npm workspaces, Forge packaging configuration, and a C++17 x64 placeholder DLL. Build, unit, native, and Electron startup checks have entrypoints. Recovery packaging/static inspection and Node/watchdog checks pass, but desktop execution is on an owner-requested hold after host freezes; runtime and clean-install evidence remain pending; no protocol, game adapter, recorder, overlay, server, or CI is implemented.
 
 Compatibility with either game, Convoy, and TruckersMP is required but has not yet been tested. Overlay behavior, resource usage, and display latency also require real-game validation.
 
@@ -36,7 +36,7 @@ The plugin will copy telemetry in SDK callbacks and send it from a background th
 
 The live display target is up to **20 Hz**, separate from history sampling at **1 Hz**. The planned database location is `%LOCALAPPDATA%\ETS2Telemetry\data\telemetry.sqlite`.
 
-These technologies are architecture choices, not installed application dependencies. Compatible versions will be pinned when scaffolding begins.
+The scaffold pins Node/npm and application dependencies. Electron main supervises a telemetry utilityProcess, which owns the dedicated storage worker. The current probe writes only temporary synthetic data.
 
 ## Implementation sequence
 
@@ -50,7 +50,8 @@ These technologies are architecture choices, not installed application dependenc
 
 - [Project concept and requirements](concept.md): product requirements, architecture, recording rules, implementation sequence, acceptance criteria, and primary research sources.
 - [Agent instructions](AGENTS.md): repository-wide working rules and the current handoff.
-- [Testing and regression strategy](TESTING.md): test layers, permanent scenarios, CI/merge policy, and real-game acceptance evidence. Planned; no test suite or CI workflow exists yet.
+- [Testing and regression strategy](TESTING.md): scaffold checks, permanent scenarios, CI/merge policy, and pending real-game acceptance evidence.
+- [Windows setup](docs/setup.md): pinned tools, build/test/package entrypoints, process boundaries, SDK acquisition, and remaining checks.
 - [Implementation coordinator](COORDINATOR.md): Trello execution, subagent assignments, worktree ownership, independent review, and recovery handoffs.
 - [Coordinator launch prompt](docs/prompts/coordinator-start.md): copy into a separate local Codex chat to coordinate the prototype and prepare PRs for owner review.
 
@@ -72,6 +73,4 @@ See [Git workflow rules](AGENTS.md#git-workflow) for branch, PR, history, valida
 
 ## Development setup
 
-Git for Windows and GitHub CLI are configured on the owner's workstation. The application development toolchain has not been established, so there are no application install, build, run, or test commands yet.
-
-Document verified setup commands and dependency versions when the first implementation milestone is scaffolded.
+Follow [Windows setup](docs/setup.md). Node/npm and Visual Studio/CMake paths were inspected; packaging, GUI startup, and installation commands remain subject to the ET-001 acceptance record.

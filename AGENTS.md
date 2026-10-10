@@ -50,6 +50,8 @@ Coordinator documentation update on October 10, 2026:
 
 ## Product Requirements to Preserve
 
+ET-001 scaffold update on October 11, 2026: npm workspaces, pinned Node 24.19.0/npm 11.17.0 and application dependencies, a secure React/Electron window, utilityProcess-owned isolated SQLite worker probe, Vite/Forge commands, and a C++17 x64 placeholder DLL are implemented. Recovery typecheck, 21 Node unit checks, console-only watchdog checks, native build/CTest (1/1), Forge packaging, and static package inspection passed on the working diff. Electron/packaged runtime, clean-install, maker acceptance, and independent review remain pending under the owner launch hold. See [docs/setup.md](docs/setup.md). No protocol, SDK adapter, production schema/history, overlay, CI, or game compatibility is established. Older project-state entries above are historical baselines.
+
 - Build an ETS2 and ATS telemetry utility for a virtual trucking company.
 - Target Windows x64 first. TruckersMP compatibility is required; validate single-player and Convoy as well.
 - The MVP is local and works without an account or internet connection: live telemetry, an overlay, a trip journal, and one-second samples.
@@ -66,11 +68,12 @@ Coordinator documentation update on October 10, 2026:
 | Game integration | Project-owned C++17 DLL using the official SCS Telemetry SDK; CMake and MSVC |
 | Local transport | Windows Named Pipes |
 | Persistence | SQLite through better-sqlite3 in a dedicated worker |
+| Process supervision | Electron main supervises a telemetry utilityProcess that owns the storage worker |
 | Packaging | Electron Forge |
 | Validation | Vitest, CTest for native executables, Playwright, simulation/replay, and actual game sessions |
 | Later server direction | Node.js, TypeScript, Fastify, PostgreSQL, React |
 
-These are planned choices, not installed dependencies. Pin compatible versions when scaffolding. Distinguish SDK archive versions from API versions and game versions.
+The ET-001 scaffold pins dependencies and defines process boundaries; consult [docs/setup.md](docs/setup.md) and actual check evidence for installed and verified tooling. Distinguish SDK archive versions from API versions and game versions.
 
 Keep telemetry processing and trip accounting separate from React components so they can be tested without the UI. Keep the plugin, application transport, persistence, and overlay responsibilities distinct. Expose narrow typed interfaces across boundaries.
 
@@ -153,7 +156,7 @@ Work on the milestone requested by the user. Routine implementation decisions wi
 
 The first implementation milestone is a complete path from game telemetry to a working speed/fuel overlay in both games, including TruckersMP. Subsequent milestones add application behavior, reliable recording, and distribution. Follow the sequence and acceptance criteria in `concept.md`.
 
-Follow [TESTING.md](TESTING.md) for regression scenarios, test layers, CI/merge policy, and real-game evidence. Testing grows with each feature: ET-022 establishes CI after the scaffold, while ET-019 adds broader recovery coverage later. Neither task replaces tests owned by each implementing card. There are still no implemented tests or CI workflows at this planning stage.
+Follow [TESTING.md](TESTING.md) for regression scenarios, test layers, CI/merge policy, and real-game evidence. ET-001 establishes scaffold tests; ET-022 establishes CI, while ET-019 adds broader recovery coverage later. Neither task replaces tests owned by each implementing card. CI and feature regression suites remain pending.
 
 - Include appropriate behavior tests in the same PR as a feature; retain a reproducing regression test for bug fixes where feasible. Explain justified omissions. Do not add redundant implementation-mirroring tests or application tests for documentation-only edits.
 - Use deterministic fixtures and controlled clocks for domain logic; use actual Windows pipes, temporary SQLite files, and the storage worker for integration boundaries. Keep all test data isolated from real user history and game files.
@@ -172,3 +175,5 @@ Follow [TESTING.md](TESTING.md) for regression scenarios, test layers, CI/merge 
 - Keep changes focused and preserve unrelated work. Update the relevant documentation when requirements, interfaces, setup, or implementation status change.
 
 Consult the primary sources linked in `concept.md` when validating SDK or framework behavior. Examples of other telemetry utilities may help, but receiving them from the owner is not a prerequisite for implementation.
+
+ET-001 recovery update on October 11, 2026: startup/shutdown fixes, bounded structured logging, a Windows Job Object watchdog, and static package inspection are implemented. The owner's current instruction permits rebuilding but prohibits Electron, packaged-app, and installer launches. Preserve this hold when resuming the coordinator. See [the recovery procedure](docs/setup.md#packaged-startup-recovery-hold-october-11-2026). Node-only regressions and watchdog console-fixture checks do not establish that the Windows freeze is fixed. Runtime acceptance and independent review remain pending.
