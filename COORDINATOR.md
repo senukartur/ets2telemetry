@@ -1,0 +1,153 @@
+# Implementation Coordinator
+
+## Purpose and activation
+
+Follow this document when the owner asks you to coordinate implementation, manage Trello execution, or launches the [coordinator prompt](docs/prompts/coordinator-start.md). It does not turn every repository task into an orchestration run. Instructions for a delegated worker apply only to its assignment.
+
+Act as the accountable coordinator: select eligible cards, delegate bounded implementation, integrate results, verify acceptance evidence, maintain execution status, and prepare PRs for owner review. Use subagents for implementation and independent review. Routine decisions within the approved scope do not require repeated confirmation.
+
+Read [AGENTS.md](AGENTS.md), [concept.md](concept.md), and [TESTING.md](TESTING.md) before planning. Product requirements and architecture remain in those documents. Discuss requirement or major architecture changes with the owner. Speak Russian with the owner; write internal documentation, handoffs, commit messages, and PR text in English.
+
+## Sources and access
+
+- Repository rules and requirements: the three documents above, including more specific applicable agent instructions.
+- Execution plan: the live [Trello board](https://trello.com/b/ZF3E5ggm/ets2-telemetry), its ET-000 guide, card dependencies, scope, ownership, and acceptance criteria.
+- Implementation evidence: Git commits, PR diffs, actual check results, and recorded manual acceptance evidence.
+- Recovery state: the coordinator's local execution ledger described below. Reconcile it with GitHub and Trello; it is not proof that a check passed or a card is complete.
+
+Discover available Trello tools or an already configured API integration. Read the board and target cards before changing them. Verify read and write access separately. A board URL or an old export does not establish current access or status. Use Git and GitHub CLI for repository operations as specified in AGENTS.md.
+
+The launch prompt authorizes updates to the selected implementation cards: status moves, checklist results, and concise progress, blocker, and PR comments. Keep these writes with the coordinator. Preserve unrelated descriptions, comments, cards, and board structure. Do not create/delete cards, lists, or dependencies or change acceptance criteria without an owner instruction. Avoid duplicate comments: reread after an uncertain write before retrying.
+
+If Trello is unavailable, report the missing capability and record pending board updates locally. An existing local `planning/trello-cards.json`, supplied card text, or a previously verified snapshot can support work within the authorized scope; record its date and that live status is unverified. Do not commit the temporary manifest, copy it wholesale into tracked documents, or claim synchronization succeeded. If the task brief or dependencies cannot be established, request that missing information and continue independent authorized work. Never request credentials in chat; use the integration's supported authentication flow.
+
+Local `plan.md` and `plan-review.md`, if present, are review drafts rather than prerequisites for a fresh checkout. Preserve them and do not commit them without authorization. Do not assume development tools, CI, subagent capabilities, or game installations exist: inspect the actual environment.
+
+## Startup and scheduling
+
+1. Inspect Git status, branch, worktrees, existing PRs, and local state. Preserve unrelated changes. Reuse an existing assignment when continuing the same work; do not start a duplicate implementation or PR.
+2. Establish the owner's current scope and stop conditions. The supplied launch prompt selects the prototype through ET-009, including ET-022; later local MVP and server work require a new scope instruction.
+3. Read current card briefs and reconcile prerequisites against accepted results and merged PRs. A card in Done with missing required evidence, or a merged PR with incomplete acceptance, does not satisfy its dependency. Report discrepancies and keep dependent work ineligible.
+4. Before new implementation, update a clean local `main` with `git pull --ff-only`, following AGENTS.md. Do not switch a checkout used by another agent. Create each task branch from the verified updated base; enable `.githooks` in each checkout.
+5. Assign one accountable worker per card. Record the assignment before spawning it. Start with one implementation worker and a separate reviewer for ET-001. After the scaffold is accepted, allow at most two implementation workers and one reviewer concurrently, always within the runtime's available slots.
+6. Continue eligible independent work in scope while other cards await review or a manual check. If all remaining work needs owner review, access, or game evidence, save a concrete handoff and yield. Resume on new owner input; this document does not schedule automatic wakeups or authorize recurring automation.
+
+The initial prototype dependency snapshot is below. Read live cards at startup and resolve contradictions with repository requirements before implementation. Card numbers are identifiers, not execution order.
+
+| Card | Prerequisites | Result |
+| --- | --- | --- |
+| ET-001 | None | Windows desktop/native scaffold and meaningful initial checks |
+| ET-002 | ET-001 | Protocol v1 and shared contracts |
+| ET-022 | ET-001 | Windows CI and regression infrastructure |
+| ET-003 | ET-002 | SCS SDK adapter |
+| ET-005 | ET-002 | Simulator and replay fixtures |
+| ET-004 | ET-003 | Native pipe transport |
+| ET-007 | ET-003 | Game-window tracking |
+| ET-006 | ET-002, ET-005 | Electron ingestion and typed renderer bridge |
+| ET-008 | ET-004, ET-006, ET-007 | Minimal speed/fuel overlay |
+| ET-009 | ET-008, ET-022 | Actual-game prototype acceptance |
+
+ET-002 and ET-022 can run concurrently after ET-001 is accepted and merged, coordinating shared configuration. ET-003 and ET-005 can follow ET-002. ET-004 and ET-007 can follow ET-003. ET-006 can progress against the accepted simulator alongside native work. Do not build on an unmerged dependency by default or introduce stacked PRs without owner authorization. ET-009 requires both games and the required multiplayer/display matrix; simulator success does not close this gate.
+
+## Delegation and file ownership
+
+Use the session's subagent tools for bounded assignments. Do not create separate user-owned chats or message existing unrelated chats unless the owner explicitly requests that action. Workers must not spawn further agents unless the coordinator explicitly assigns that delegation.
+
+For parallel cards, use a separate task branch and worktree per card. Subagent creation alone does not provide filesystem isolation. Pass the absolute working directory to every worker and reviewer. Inspect existing worktrees before creating another. Keep the coordinator's control checkout and ledger location stable.
+
+If isolated worktrees are unavailable, serialize implementation. Within one card, multiple agents may use one checkout only with disjoint file ownership and a single agent responsible for branch changes, staging, and commits. Never let agents switch branches in another agent's active checkout. Workers may make scoped local commits in their exclusive worktree; the coordinator normally owns pushes, PR creation, and Trello writes.
+
+Name an owner for shared protocol types, root manifests, lockfiles, native build files, migrations, and test configuration before parallel edits. Reserve those files to one writer or integrate agreed changes sequentially. Coordinate contracts before implementing their consumers. Worktrees prevent working-file collisions; they do not prevent incompatible interfaces or merge conflicts.
+
+Every worker assignment includes:
+
+```text
+Role: implementation worker
+Card ID and URL; objective and current acceptance criteria:
+Prerequisites and verified base commit:
+Absolute worktree path and task branch:
+Owned files/modules; shared files requiring coordination:
+Required interfaces/invariants and explicit exclusions:
+Relevant REG scenarios and required checks:
+Local commit responsibility; no push, PR, or Trello write unless assigned:
+Return: changed paths, commit/diff, criterion-by-criterion results,
+actual commands and outcomes, remaining checks, blockers, and next action.
+Read applicable AGENTS.md, concept.md, TESTING.md, and the card brief.
+Report scope conflicts promptly; do not overwrite another agent's work.
+```
+
+Steer a worker when new evidence changes its assignment. On reassignment or interruption, first confirm the old worker has stopped editing, inspect its changes and commits, and preserve its useful work. Do not infer completion from a tool returning or an agent saying "done."
+
+## Verification and independent review
+
+The coordinator reads the final diff and checks that the assigned scope, shared interfaces, and card criteria are satisfied. Follow TESTING.md for existing baseline checks and additional boundary checks. Feature tests belong in their feature PR; ET-022 and ET-019 do not replace them. For documentation-only tasks, use document checks rather than application tests.
+
+Use a separate reviewer subagent for each implementation PR. Give it the card brief, requirements, exact candidate commit, base commit, absolute worktree path, relevant REG scenarios, and reported checks. Request review of correctness, data integrity, security boundaries, contract compatibility, missing tests, and scope drift as applicable. Reviewers return actionable findings with file/line references and remaining acceptance gaps; they do not edit files, publish reviews, or merge.
+
+Resolve relevant findings, inspect the fixes, and rerun affected checks. Record reviewer identity and reviewed commit. New changes invalidate relevant earlier review/check evidence; verify the final PR commit. Report flaky results and unavailable checks explicitly. If subagent tools are unavailable, disclose the missing independent review, perform useful work, and preserve that gap in the PR and ledger.
+
+Use real pipes and isolated storage for their integration boundaries, deterministic fixtures for domain logic, and actual games for SDK/window/input compatibility as TESTING.md requires. Never substitute simulator results for ETS2, ATS, Convoy, TruckersMP, latency, or frame-time evidence. Do not install or replace a DLL while the game is running or touch unrelated plugins. Coordinate required manual sessions with the owner using a concrete checklist and candidate identity.
+
+## PR and board lifecycle
+
+Follow the Git workflow and [.github/pull_request_template.md](.github/pull_request_template.md). Keep one coherent task per PR by default, link the Trello card, report actual checks on the candidate commit, and state remaining verification. Push the task branch, open a PR targeting `main`, attach it to the Codex chat when supported, and post its link to the card. Recover an existing PR after an uncertain outcome instead of creating a duplicate.
+
+Use a draft PR while implementation, required checks, or independent review remain unfinished. Move the card to Review when changes are available for verification and list every unresolved criterion. Mark the PR ready for owner review when required evidence and reviewer findings are resolved. The owner reviews and merges by default. Never merge, publish a release, rewrite published history, or bypass the main guard without the required explicit owner authorization.
+
+Map these logical statuses to the board's current lists; inspect names and IDs rather than creating a new workflow. Initial list labels are recorded here only as external identifiers.
+
+| Logical status | Initial list | Rule |
+| --- | --- | --- |
+| Backlog | `Нужно сделать` | Not yet eligible or selected |
+| Ready | `Ready` | Dependencies accepted/merged, brief clear, within scope |
+| In Progress | `В процессе` | One worker assigned; branch/worktree recorded |
+| Review | `Review` | PR/evidence available; outstanding criteria explicit |
+| Blocked | `Blocked` | No useful work on this card can proceed; record cause and unblock action |
+| Done | `Готово` | All mandatory criteria accepted and implementation PR merged |
+
+Keep ET-000 in its guide list and future-phase cards in Later unless authorized otherwise. Check off only evidenced checklist items. Owner-review waiting normally remains Review. A rejected or closed-unmerged PR is not Done. A merge with missing required acceptance stays incomplete and cannot unlock dependents. Record blockers on the affected card without stopping independent work.
+
+After a confirmed squash merge, record the merged commit, update local `main` with `git pull --ff-only`, reconcile the card, and select the next eligible task. Delete/archive a task checkout only after confirming the merge and preserving remaining work. Apply pending board writes once access returns, rereading current state first.
+
+## Recovery ledger and owner handoff
+
+Maintain `.local/coordinator-state.md` in the recorded control checkout; this path is ignored by Git. Only the coordinator writes it. Create it on the first actual coordinator run, update it after assignments, blockers, checks, PR changes, and merges, and before yielding or context handoff. Do not commit transient state, raw logs, credentials, or the temporary Trello manifest.
+
+Use this compact structure; replace placeholders with verified facts or explicit pending values:
+
+```markdown
+# Coordinator State
+
+Updated UTC: <timestamp>
+Authorized scope and stop condition: <owner instruction>
+Control checkout and ledger path: <absolute paths>
+Board access/snapshot: <read/write availability, source, verification time>
+Verified main commit: <SHA>
+
+| Card / URL | Status | Worker | Worktree / branch | Base / candidate SHA | PR | Next action |
+| --- | --- | --- | --- | --- | --- | --- |
+
+## Ownership and interfaces
+<shared-file reservations and agreed interfaces>
+
+## Evidence by card
+<criterion, REG scenario, command/result, tested SHA, review SHA/findings,
+manual evidence, accepted/merged commit; keep missing evidence pending>
+
+## Blockers and pending board updates
+<cause, required owner/external action, exact unsynchronized updates>
+
+## Resume
+<next eligible task, active work to preserve, decisions needing input>
+```
+
+On resume, read the ledger but verify current branches, PR state, tool access, board status, and active agents before assigning work. Local state may be absent in a new worktree or machine: rebuild it from PRs, card comments, and explicit owner instructions. Do not assume previous agents or background runs are still active.
+
+Give concise Russian progress updates focused on outcomes and blockers. At handoff, list prepared PRs, checks actually performed, unresolved criteria, the exact owner action needed, and the next eligible work. A yielded chat does not automatically restart after a merge; continue when the owner sends a resume message or an explicitly authorized automation invokes it.
+
+## Official workflow references
+
+- [OpenAI: Subagents](https://learn.chatgpt.com/docs/agent-configuration/subagents): bounded delegation, context, and review workflows.
+- [OpenAI: Git worktrees](https://learn.chatgpt.com/docs/environments/git-worktrees): independent checkouts for parallel work.
+
+These references inform the workflow; available tools and permissions must still be verified in each session. This document does not install tools or configure a Trello integration.
