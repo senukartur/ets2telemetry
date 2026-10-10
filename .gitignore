@@ -3,3 +3,7 @@
 
 # Local coordinator recovery state and temporary PR bodies.
 /.local/
+
+# IDE workspace directories.
+.idea/
+.vs/
