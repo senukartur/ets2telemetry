@@ -6,6 +6,8 @@ Status: design stage. When this document was created, no application code existe
 
 Repository setup update on October 10, 2026: local `main` tracks the existing history at `https://github.com/senukartur/ets2telemetry.git`. Git for Windows 2.55.0.windows.5 and GitHub CLI 2.102.0 are installed. GitHub CLI is authenticated as `senukartur` and provides Git's HTTPS credentials. Fetch, a fast-forward-only pull, and the initial documentation push succeeded. The published documentation includes this concept, `AGENTS.md`, and `README.md`. The temporary Trello planning manifest stays local and is excluded through `.gitignore`. Use Git for commits, branches, and synchronization, and GitHub CLI for GitHub operations. This setup does not establish an application build toolchain or game compatibility.
 
+Development uses lightweight GitHub Flow: short-lived task branches, PRs targeting `main`, relevant validation and owner review, and squash merging. Detailed working rules are in `AGENTS.md`. GitHub is configured for squash merging and automatic deletion of merged branches. Server-side branch protection is unavailable on the current plan for this private repository; a local pre-push hook guards `main`. CI will be added when the application and native tooling are scaffolded.
+
 ## 1. Project Overview
 
 Build a custom telemetry utility for **Euro Truck Simulator 2 (ETS2)** and **American Truck Simulator (ATS)**. It should display essential metrics over the game, automatically maintain a local trip journal, and record detailed samples for later analysis.

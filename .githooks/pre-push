@@ -1,0 +1,12 @@
+#!/bin/sh
+
+# Git for Windows runs Git hooks through its bundled shell.
+while read -r hook_local_ref hook_local_oid hook_remote_ref hook_remote_oid
+do
+    if [ "$hook_remote_ref" = "refs/heads/main" ]; then
+        printf '%s\n' 'Direct pushes to main are blocked. Push a task branch and open a pull request.' >&2
+        exit 1
+    fi
+done
+
+exit 0

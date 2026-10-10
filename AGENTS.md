@@ -38,6 +38,8 @@ Git setup update on October 10, 2026:
 - Fetch, `git pull --ff-only`, and the initial documentation push succeeded. The published documentation includes `README.md`, `AGENTS.md`, and `concept.md`. The temporary Trello planning manifest stays local and is excluded through `.gitignore`; do not commit it.
 - Use Git for local history and synchronization, and GitHub CLI for pull requests and GitHub checks. A GitHub MCP server is not required for this workflow.
 - The application and native development toolchains remain unverified.
+- GitHub allows only squash merging and automatically deletes merged task branches. Squash commits use the PR title and body.
+- GitHub returned HTTP 403 for branch protection and rulesets because this private repository requires an upgraded plan for those features. PR-only changes to `main` are an owner policy, reinforced by the local pre-push hook; they are not currently enforced on the server. No required CI checks exist yet.
 
 ## Product Requirements to Preserve
 
@@ -101,6 +103,42 @@ Keep telemetry processing and trip accounting separate from React components so 
 - Keep synthetic/replay data distinguishable from real history.
 
 The working storage allowance is about **100 MB per 100 hours** at 1 Hz (estimated range: 60-120 MB). Re-measure once the actual schema exists; do not present this as a guaranteed limit.
+
+## Git Workflow
+
+Use lightweight GitHub Flow: `main` -> task branch -> pull request -> validation and owner review -> squash merge. Do not create a permanent `develop` branch.
+
+### Branches and Scope
+
+- Never implement work or make ordinary commits directly on `main`. Start new tasks from an updated `main` using `git pull --ff-only`; inspect status first and preserve unrelated local work.
+- Use one short-lived branch for one coherent task: `feat/<description>`, `fix/<description>`, `docs/<description>`, or `chore/<description>`. Use lowercase English names with hyphens. Reuse the existing task branch when continuing the same task.
+- Keep PRs small enough to review independently. Update both plugin and application in the same PR when a shared protocol change requires coordinated compatibility.
+- Keep `main` buildable and compatible as implementation progresses. Working in a task branch does not waive the product's acceptance criteria.
+- Never commit the ignored temporary Trello planning manifest.
+
+### Commits and Pull Requests
+
+- Write commit messages, PR titles, and PR descriptions in English. Use descriptive prefixes such as `feat:`, `fix:`, `docs:`, `chore:`, `refactor:`, or `test:`.
+- Commit and push the task branch, then open a PR targeting `main`. Use a draft PR for unfinished work. Implementation requests authorize the normal branch, commit, push, and PR workflow unless the owner specifies otherwise.
+- Follow `.github/pull_request_template.md`. Explain the problem and resulting behavior, report checks actually performed, and identify remaining verification. Do not claim that CI or game testing passed when it did not run.
+- Attach the created PR to the Codex chat when the app provides an attachment tool, and provide the PR link to the owner.
+- The owner reviews and merges PRs by default. The agent may merge only when the owner explicitly requests or authorizes it; do not infer merge authorization from a request to implement a task or open a PR.
+- Merge with **Squash merge** after relevant checks pass and review feedback is resolved. A PR becomes one descriptive commit on `main`; the task branch is deleted after merging.
+- After a merge, update local `main` with `git pull --ff-only` before starting the next task. Confirm the PR is merged before deleting a local task branch; preserve any remaining work.
+
+### History and Local Guard
+
+- Do not push directly to `main`, force-push `main`, delete `main`, or bypass the local hook during normal work. Rewrite published history only when the owner explicitly authorizes that specific operation. Use an explicit expected remote commit with `--force-with-lease` for an authorized rewrite.
+- Fix merged mistakes through a new PR or a revert PR. Avoid rewriting shared history for ordinary corrections.
+- Enable the tracked hook in each checkout with `git config --local core.hooksPath .githooks`. The current checkout is configured this way. Git for Windows includes the shell used by the hook.
+- `.githooks/pre-push` rejects direct updates or deletion of remote `main`; GitHub PR merging is unaffected. This local guard can be bypassed and does not replace server-side branch protection. Do not bypass it unless necessary for a specifically authorized exception.
+- If server-side protection becomes available, require PRs, linear history, resolved review conversations, and passing existing CI checks; block force pushes and branch deletion. Do not invent required check names or require a second-account approval in the current single-owner setup.
+
+### Validation and Releases
+
+- Add build, type, and test checks when the corresponding tooling is scaffolded. Until then, perform appropriate local document checks and state that CI is not configured.
+- Test changed telemetry logic through simulation/replay. Validate integration and overlay behavior in actual games when required by the milestone; record versions and display modes. Passing automated checks alone does not establish TruckersMP support.
+- Mark tested releases with version tags such as `v0.1.0-alpha.1` or `v1.0.0`, and include release artifacts and game validation results when available. A merge alone does not publish a release. Create or publish releases only when authorized by the owner.
 
 ## Workflow and Verification
 

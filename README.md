@@ -53,6 +53,20 @@ These technologies are architecture choices, not installed application dependenc
 
 Read `concept.md` before planning or implementing changes. Internal documentation and explanatory code comments must be written in English. Temporary Trello planning manifests stay local and must not be committed.
 
+## Git workflow
+
+Work in short-lived task branches and open pull requests targeting `main`. Use `feat/`, `fix/`, `docs/`, or `chore/` branch prefixes. Report validation results in the PR, resolve review feedback, and use squash merging. The owner merges by default; agents need explicit authorization to merge. GitHub automatically deletes merged branches.
+
+Enable the local guard in each checkout:
+
+```powershell
+git config --local core.hooksPath .githooks
+```
+
+The hook blocks direct pushes to remote `main`. Server-side branch protection is unavailable for this private repository on the current plan, so the local guard and working rules currently enforce the process within this checkout. CI will be added when build and test tooling exists.
+
+See [Git workflow rules](AGENTS.md#git-workflow) for branch, PR, history, validation, and release policies.
+
 ## Development setup
 
 Git for Windows and GitHub CLI are configured on the owner's workstation. The application development toolchain has not been established, so there are no application install, build, run, or test commands yet.
