@@ -50,6 +50,7 @@ These technologies are architecture choices, not installed application dependenc
 
 - [Project concept and requirements](concept.md): product requirements, architecture, recording rules, implementation sequence, acceptance criteria, and primary research sources.
 - [Agent instructions](AGENTS.md): repository-wide working rules and the current handoff.
+- [Testing and regression strategy](TESTING.md): test layers, permanent scenarios, CI/merge policy, and real-game acceptance evidence. Planned; no test suite or CI workflow exists yet.
 
 Read `concept.md` before planning or implementing changes. Internal documentation and explanatory code comments must be written in English. Temporary Trello planning manifests stay local and must not be committed.
 

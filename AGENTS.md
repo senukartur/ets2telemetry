@@ -2,7 +2,7 @@
 
 ## Start Here
 
-Read [concept.md](concept.md) before planning or implementing changes. It contains the product requirements, architecture baseline, implementation sequence, acceptance criteria, and research sources. This file contains repository-wide working instructions and a compact handoff.
+Read [concept.md](concept.md) before planning or implementing changes. It contains the product requirements, architecture baseline, implementation sequence, acceptance criteria, and research sources. Read [TESTING.md](TESTING.md) before changing behavior or test infrastructure. This file contains repository-wide working instructions and a compact handoff.
 
 Keep the two documents consistent. Use `concept.md` for detailed product decisions and this file for instructions that apply across tasks. Explicit user instructions take precedence over this documentation.
 
@@ -60,7 +60,7 @@ Git setup update on October 10, 2026:
 | Local transport | Windows Named Pipes |
 | Persistence | SQLite through better-sqlite3 in a dedicated worker |
 | Packaging | Electron Forge |
-| Validation | Vitest, Playwright, simulation/replay, and actual game sessions |
+| Validation | Vitest, CTest for native executables, Playwright, simulation/replay, and actual game sessions |
 | Later server direction | Node.js, TypeScript, Fastify, PostgreSQL, React |
 
 These are planned choices, not installed dependencies. Pin compatible versions when scaffolding. Distinguish SDK archive versions from API versions and game versions.
@@ -145,6 +145,14 @@ Use lightweight GitHub Flow: `main` -> task branch -> pull request -> validation
 Work on the milestone requested by the user. Routine implementation decisions within the agreed requirements do not require repeated confirmation. Discuss changes to product requirements or major architecture before committing to them.
 
 The first implementation milestone is a complete path from game telemetry to a working speed/fuel overlay in both games, including TruckersMP. Subsequent milestones add application behavior, reliable recording, and distribution. Follow the sequence and acceptance criteria in `concept.md`.
+
+Follow [TESTING.md](TESTING.md) for regression scenarios, test layers, CI/merge policy, and real-game evidence. Testing grows with each feature: ET-022 establishes CI after the scaffold, while ET-019 adds broader recovery coverage later. Neither task replaces tests owned by each implementing card. There are still no implemented tests or CI workflows at this planning stage.
+
+- Include appropriate behavior tests in the same PR as a feature; retain a reproducing regression test for bug fixes where feasible. Explain justified omissions. Do not add redundant implementation-mirroring tests or application tests for documentation-only edits.
+- Use deterministic fixtures and controlled clocks for domain logic; use actual Windows pipes, temporary SQLite files, and the storage worker for integration boundaries. Keep all test data isolated from real user history and game files.
+- Preserve historical migration fixtures and explicit expectations for trip completion/completeness, event deduplication, durable ACKs, and missing intervals. Update the scenario-to-test registry as components are implemented.
+- A failing existing baseline suite blocks acceptance. Check the current PR commit and run extra migration, packaging, native, or real-game checks when the change affects those boundaries. Current repository limitations mean the owner enforces this merge policy; do not claim server-side required checks exist.
+- Report flaky outcomes and pending manual checks honestly. Do not silently skip critical tests, replace expected values merely to accept changed behavior, or treat retries/coverage percentages as proof of correctness.
 
 - Inspect the actual project state before choosing commands or editing files. Prefer `rg` for searches.
 - Use PowerShell-safe quoting and literal paths. Avoid Unix-only command assumptions in development instructions.
