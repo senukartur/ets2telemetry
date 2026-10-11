@@ -62,6 +62,8 @@ export class TelemetryIngestion {
     this.lastClock = time; return time;
   }
   private emit(status: LiveTelemetry['status'], reason: string, fresh = false): void {
+    if (!['connected', 'paused', 'waiting', 'stale'].includes(status) && this.live.observation)
+      this.live = {...this.live, observation: {...this.live.observation, windowFresh: false}};
     this.live = {...this.live, status, reason, fresh}; this.publish(this.live);
   }
   private open(): void {
@@ -74,7 +76,9 @@ export class TelemetryIngestion {
     const close = (status: LiveTelemetry['status'], reason: string, retry: boolean) => {
       if (!active()) return; closed = true;
       clearTimeout(this.handshake); clearInterval(this.freshness); this.handshake = undefined; this.freshness = undefined;
-      socket.destroy(); this.socket = undefined; this.emit(status, reason);
+      socket.destroy(); this.socket = undefined;
+      if (this.live.observation) this.live = {...this.live, observation: {...this.live.observation, windowFresh: false}};
+      this.emit(status, reason);
       if (retry) this.retry = setTimeout(() => {
         this.retry = undefined;
         // Cancellation requests do not establish that the owned broker has exited.
@@ -100,12 +104,25 @@ export class TelemetryIngestion {
           const applied = consumer.accept(message);
           // Welcome does not establish a current observation or freshness.
           if (message.kind !== 'checkpoint' && message.kind !== 'snapshot') return;
-          const receivedMonotonicMs = this.clock();
+          const receipt = this.clock();
+          const previous = this.live.observation;
+          const newCapture = !hydrated || !previous || BigInt(message.capture.monotonicNs) > BigInt(previous.capture.monotonicNs);
+          const receivedMonotonicMs = newCapture ? receipt : previous.receivedMonotonicMs;
           hydrated = true; this.attempt = 0; clearTimeout(this.handshake); this.handshake = undefined;
-          this.live = {...this.live, observation: {source: message.source, state: message.data.state, seq: message.seq, receivedMonotonicMs, applied: applied!}};
-          this.emit(message.data.state.simulation === 'paused' ? 'paused' : message.data.state.simulation === 'running' ? 'connected' : 'waiting', 'Validated current observation', message.data.state.simulation !== 'unavailable');
+          this.live = {...this.live, observation: {source: message.source, state: message.data.state, seq: message.seq, capture: message.capture,
+            receivedMonotonicMs, windowReceivedMonotonicMs: receipt, windowFresh: message.data.state.window.available, applied: applied!}};
+          const fresh = message.data.state.simulation !== 'unavailable' && receipt - receivedMonotonicMs < (this.options.staleMs ?? 500);
+          this.emit(fresh ? message.data.state.simulation === 'paused' ? 'paused' : 'connected' : message.data.state.simulation === 'unavailable' ? 'waiting' : 'stale',
+            fresh ? 'Validated current observation' : 'No recent SDK capture', fresh);
           if (!this.freshness) this.freshness = setInterval(() => {
-            try {if (active() && this.live.fresh && this.clock() - this.live.observation!.receivedMonotonicMs >= (this.options.staleMs ?? 500)) this.emit('stale', 'No recent current observation');}
+            try {
+              if (!active()) return;
+              const now = this.clock(), observation = this.live.observation!;
+              const windowExpired = observation.windowFresh && now - observation.windowReceivedMonotonicMs >= 250;
+              if (windowExpired) this.live = {...this.live, observation: {...observation, windowFresh: false}};
+              if (this.live.fresh && now - observation.receivedMonotonicMs >= (this.options.staleMs ?? 500)) this.emit('stale', 'No recent SDK capture');
+              else if (windowExpired) this.publish(this.live);
+            }
             catch {close('incompatible', 'Receive clock failure', false);}
           }, 50);
         });

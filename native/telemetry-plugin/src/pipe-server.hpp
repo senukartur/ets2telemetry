@@ -1,6 +1,7 @@
 #pragma once
 #include "pipe-discovery.hpp"
 #include "protocol-v0.hpp"
+#include "game-window-monitor.hpp"
 #include <atomic>
 #include <thread>
 #include <mutex>
@@ -21,7 +22,7 @@ class Server final {
  public:
   explicit Server(sdk::Adapter& adapter, std::uint64_t initial_sequence = 0) : adapter_(adapter), initial_sequence_(initial_sequence) {}
   ~Server();
-  bool start(std::wstring directory = {}) noexcept;
+  bool start(std::wstring directory = {}, const window::Monitor* monitor = nullptr) noexcept;
   StartupFailure await_startup() noexcept;
   void stop() noexcept;
   Status status() const noexcept { return status_.load(); }
@@ -42,6 +43,11 @@ class Server final {
   std::atomic<bool> write_pending_{false};
   mutable std::mutex endpoint_mutex_; std::wstring endpoint_;
   sdk::Snapshot current_{}; struct Pending { sdk::Snapshot snapshot; std::uint64_t seq, diagnostic_seq; };
+  // Borrowed provider stays alive until stop() has observed transport completion.
+  const window::Monitor* monitor_ = nullptr;
+  window::Snapshot window_{};
+  std::uint64_t process_creation_ = 0, next_window_poll_ = 0;
+  bool window_available_ = false;
   std::optional<Pending> pending_; OutboundSequence sequence_; std::uint64_t coalesced_ = 0, lost_ = 0;
   bool diagnostics_ = false;
   const std::uint64_t initial_sequence_;

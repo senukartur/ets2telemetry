@@ -1,6 +1,7 @@
 #include "snapshot-wire.hpp"
 #include "protocol-json.hpp"
 #include <set>
+#include <cstring>
 
 namespace ets2telemetry::transport {
 namespace {
@@ -22,7 +23,7 @@ J measure(const sdk::Reading<double>& r, const char* unit) {
 J continuity(v0::Continuity c) {
   return object({{"coalescedSnapshots", integer(c.coalesced_snapshots)}, {"lostObservations", integer(c.lost_observations)}, {"offlineTransitions", integer(c.offline_transitions)}});
 }
-J state(const sdk::Snapshot& s) {
+J state(const sdk::Snapshot& s, const window::Snapshot* w, std::uint64_t creation, std::uint64_t now) {
   const auto& st = s.state;
   auto channel = [&](sdk::Field f, const char* unit) { return measure(st.channels[static_cast<std::size_t>(f)], unit); };
   auto gt = available(st.game_time_minutes.status, integer(st.game_time_minutes.value));
@@ -37,13 +38,21 @@ J state(const sdk::Snapshot& s) {
   if (job.status == sdk::Availability::available && (job.cargo_id.status == sdk::Availability::invalid || job.destination_city_id.status == sdk::Availability::invalid || job.expected_income.status == sdk::Availability::invalid)) job_status = sdk::Availability::invalid;
   J job_value = object({{"cargoId", text(job.cargo_id.c_str())}, {"destinationCityId", text(job.destination_city_id.c_str())},
     {"plannedDistance", measure(job.planned_distance_m, "m")}, {"expectedIncome", object({{"rawValue", integer(job.expected_income.value)}, {"currency", currency}})}});
+  const auto mapped = current_window(s, w, creation, now);
+  J window_value{nullptr};
+  if (mapped.value) {
+    const auto& v = *mapped.value;
+    window_value = object({{"handle", integer(v.handle)}, {"x", J{static_cast<double>(v.x)}}, {"y", J{static_cast<double>(v.y)}},
+      {"width", J{static_cast<double>(v.width)}}, {"height", J{static_cast<double>(v.height)}}, {"dpi", J{static_cast<double>(v.dpi)}},
+      {"foreground", J{v.foreground}}, {"minimized", J{v.minimized}}, {"displayMode", text("unknown")}});
+  }
   return object({{"simulation", text(st.simulation == sdk::Simulation::running ? "running" : st.simulation == sdk::Simulation::paused ? "paused" : "unavailable")},
     {"speed", channel(sdk::Field::speed, "m/s")}, {"fuel", channel(sdk::Field::fuel, "L")}, {"fuelCapacity", measure(st.fuel_capacity_l, "L")},
     {"engineRpm", channel(sdk::Field::rpm, "rpm")}, {"gear", channel(sdk::Field::gear, "index")}, {"odometer", channel(sdk::Field::odometer, "m")},
     {"averageConsumption", channel(sdk::Field::consumption, "L/100km")}, {"estimatedRange", channel(sdk::Field::range, "m")}, {"gameTime", gt},
     {"captureUtcUnixMs", available(sdk::Availability::not_supported, integer(0))},
     {"configuration", object({{"revision", integer(st.configuration_revision)}, {"truckId", available(st.truck_id.status, text(st.truck_id.c_str()))}, {"job", available(job_status, job_value)}})},
-    {"window", available(sdk::Availability::not_supported, J{nullptr})}});
+    {"window", available(mapped.value ? sdk::Availability::available : !w ? sdk::Availability::not_supported : sdk::Availability::not_observed, window_value)}});
 }
 J envelope(const sdk::Snapshot& s, const char* kind, std::uint64_t seq, J data) {
   return object({{"version", object({{"major", J{0.0}}, {"minor", J{0.0}}})}, {"kind", text(kind)},
@@ -53,10 +62,21 @@ J envelope(const sdk::Snapshot& s, const char* kind, std::uint64_t seq, J data) 
 }
 v0::Message checked(J wire) { return v0::decode_payload(v0::detail::serialize(wire)); }
 }
-v0::Message current_message(const sdk::Snapshot& s, const char* kind, std::uint64_t seq, v0::Continuity c, bool diagnostics) {
+v0::Available<v0::GameWindow> current_window(const sdk::Snapshot& s, const window::Snapshot* w, std::uint64_t creation, std::uint64_t now) {
+  if (!w) return {{}, v0::AvailabilityReason::not_supported};
+  if (!s.active || s.source_retired || s.exhausted || w->status != window::Status::available || !w->per_monitor_v2 ||
+      !w->visible || w->minimized || !w->client_bounds_available || !w->handle || !w->dpi || !w->client.width || !w->client.height ||
+      !creation || w->process_creation_time != creation || w->process_id != s.identity.process_id ||
+      w->windows_session_id != s.identity.windows_session_id ||
+      w->plugin_session_id != s.identity.plugin_session_id.bytes || now < w->capture_monotonic_ms || now - w->capture_monotonic_ms > 250)
+    return {{}, v0::AvailabilityReason::not_observed};
+  return {v0::GameWindow{w->handle,w->client.x,w->client.y,w->client.width,w->client.height,w->dpi,w->foreground,w->minimized,"unknown"}, v0::AvailabilityReason::not_observed};
+}
+v0::Message current_message(const sdk::Snapshot& s, const char* kind, std::uint64_t seq, v0::Continuity c, bool diagnostics,
+                            const window::Snapshot* w, std::uint64_t creation, std::uint64_t now) {
   J data;
   if (std::string(kind) == "welcome") data = object({{"diagnostics", J{diagnostics}}, {"durableRecording", J{false}}});
-  else { data = object({{"state", state(s)}, {"continuity", continuity(c)}}); if (std::string(kind) == "checkpoint") std::get<J::Object>(data.value).emplace("boundarySeq", integer(seq)); }
+  else { data = object({{"state", state(s,w,creation,now)}, {"continuity", continuity(c)}}); if (std::string(kind) == "checkpoint") std::get<J::Object>(data.value).emplace("boundarySeq", integer(seq)); }
   return checked(envelope(s, kind, seq, std::move(data)));
 }
 v0::Message diagnostic_message(const sdk::Snapshot& s, std::uint64_t seq, v0::Continuity& c, std::uint64_t& omitted) {

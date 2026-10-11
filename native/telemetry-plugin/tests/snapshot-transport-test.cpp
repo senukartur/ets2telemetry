@@ -217,6 +217,18 @@ void serialization() {
   auto welcome=current_message(s,"welcome",UINT64_MAX-2,{}); auto checkpoint=current_message(s,"checkpoint",UINT64_MAX-1,{});
   v0::Consumer consumer(false); consumer.accept(welcome); const auto applied=consumer.accept(checkpoint);
   require(applied&&applied->hydration,"coherent boundary exact uint64"); require(checkpoint.state->window.reason==v0::AvailabilityReason::not_supported,"window unavailable");
+  window::Snapshot w{}; w.status=window::Status::available; w.process_id=s.identity.process_id; w.windows_session_id=s.identity.windows_session_id;
+  w.process_creation_time=42; w.plugin_session_id=s.identity.plugin_session_id.bytes; w.per_monitor_v2=w.visible=w.client_bounds_available=true;
+  w.handle=UINT64_MAX; w.client={-400,-300,640,480}; w.dpi=144; w.capture_monotonic_ms=1000;
+  auto mapped=current_message(s,"snapshot",3,{},false,&w,42,1250);
+  require(mapped.state->window.value&&mapped.state->window.value->handle==UINT64_MAX&&mapped.state->window.value->x==-400&&mapped.state->window.value->display_mode=="unknown","exact HWND signed physical geometry and unknown mode at age limit");
+  require(!current_window(s,&w,42,1251).value&&!current_window(s,&w,42,999).value,"stale and future window captures unavailable");
+  for(unsigned i=0;i<13;++i) {auto bad=w;
+    switch(i){case 0:bad.process_id++;break;case 1:bad.windows_session_id++;break;case 2:bad.process_creation_time++;break;case 3:bad.plugin_session_id[0]='x';break;
+      case 4:bad.handle=0;break;case 5:bad.dpi=0;break;case 6:bad.client.width=0;break;case 7:bad.client.height=0;break;case 8:bad.visible=false;break;
+      case 9:bad.minimized=true;bad.client={};bad.client_bounds_available=false;break;case 10:bad.per_monitor_v2=false;break;case 11:bad.status=window::Status::ambiguous;break;case 12:bad.status=window::Status::stopped;break;}
+    auto invalid=current_message(s,"snapshot",3,{},false,&bad,42,1000); require(!invalid.state->window.value,"identity/availability mismatch never retains old geometry");
+  }
   s.state.job.status=sdk::Availability::available; s.state.job.cargo_id.status=sdk::Availability::invalid;
   auto invalid_job=current_message(s,"snapshot",3,{}); require(!invalid_job.state->configuration.job.value&&invalid_job.state->configuration.job.reason==v0::AvailabilityReason::invalid,"invalid required job identity remains invalid");
   s.observation_count=3; s.observations[0].kind=sdk::ObservationKind::channel; s.observations[0].name.assign("value"); s.observations[0].value.type=SCS_VALUE_TYPE_u64; s.observations[0].value.status=sdk::Availability::available; s.observations[0].value.unsigned_integer=UINT64_MAX;
@@ -343,8 +355,47 @@ void seeded_transport_fuzz() {
   receiver.read(h.get(),4); v0::Consumer consumer(true); for(const auto& message:receiver.messages) consumer.accept(message);
   require(receiver.messages.back().continuity.coalesced_snapshots>0,"seeded burst queue preserves ordered state and loss"); f.server.stop(); require(f.server.shutdown_ms()<1000,"seeded transport joined");
 }
+struct OwnedWindow {
+  HWND handle=nullptr;
+  OwnedWindow() { create(); }
+  void create() {
+    static const wchar_t* name=L"ETS2TelemetryBoundWindowFixture";
+    WNDCLASSW wc{}; wc.lpfnWndProc=DefWindowProcW; wc.hInstance=GetModuleHandleW(nullptr); wc.lpszClassName=name;
+    if(!RegisterClassW(&wc)) require(GetLastError()==ERROR_CLASS_ALREADY_EXISTS,"fixture class registration");
+    handle=CreateWindowExW(WS_EX_NOACTIVATE,name,L"Owned telemetry window fixture",WS_OVERLAPPEDWINDOW,-400,-300,640,480,nullptr,nullptr,wc.hInstance,nullptr);
+    require(handle!=nullptr,"owned fixture window"); ShowWindow(handle,SW_SHOWNOACTIVATE);
+  }
+  ~OwnedWindow() {if(handle)DestroyWindow(handle);}
+  void recreate() {require(DestroyWindow(handle)!=FALSE,"destroy owned fixture");handle=nullptr; create();}
+};
+void window_binding() {
+  // The provider also outlives the server during exception unwinding.
+  window::Monitor monitor; Fixture f; OwnedWindow owned; sdk::Snapshot identity; f.adapter->read_current(identity);
+  require(monitor.start("eut2",identity.identity.plugin_session_id.c_str()),"actual named host accepted by monitor");
+  require(until([&]{return monitor.latest().status==window::Status::available;}),"real window geometry observed");
+  f.host.event(SCS_TELEMETRY_EVENT_started); f.host.event(SCS_TELEMETRY_EVENT_paused); f.host.frame(10);
+  require(f.server.start(f.directory,&monitor)&&f.server.await_startup()==StartupFailure::none,"provider-bound server startup");
+  auto client=f.connect();send(client.get(),framed(hello_payload));Receiver receiver;receiver.read(client.get(),2);
+  require(receiver.messages[1].state->window.value.has_value(),"checkpoint carries physical window");
+  const auto capture=receiver.messages[1].capture.monotonic_ns; const auto generation=monitor.latest().window_generation;
+  auto observe=[&](const std::function<bool(const v0::Message&)>& predicate){const auto end=GetTickCount64()+2000;do{receiver.read(client.get(),receiver.messages.size()+1); if(predicate(receiver.messages.back()))return true;}while(GetTickCount64()<end);return false;};
+  require(SetWindowPos(owned.handle,nullptr,-200,-100,800,600,SWP_NOACTIVATE|SWP_NOZORDER)!=FALSE,"move owned fixture without activation");
+  require(observe([](const v0::Message& m){return m.state&&m.state->window.value&&m.state->window.value->width>700;}),"paused no-frame geometry move reaches pipe");
+  ShowWindow(owned.handle,SW_HIDE);require(observe([](const v0::Message& m){return m.state&&!m.state->window.value;}),"hidden metadata unavailable on pipe");
+  ShowWindow(owned.handle,SW_SHOWNOACTIVATE);require(observe([](const v0::Message& m){return m.state&&m.state->window.value.has_value();}),"restore current geometry on pipe");
+  ShowWindow(owned.handle,SW_SHOWMINNOACTIVE);require(observe([](const v0::Message& m){return m.state&&!m.state->window.value;}),"minimized zero geometry unavailable on pipe");
+  ShowWindow(owned.handle,SW_SHOWNOACTIVATE);require(observe([](const v0::Message& m){return m.state&&m.state->window.value.has_value();}),"minimized restore current geometry on pipe");
+  owned.recreate(); require(observe([&](const v0::Message& m){return monitor.latest().window_generation>generation&&m.state&&m.state->window.value.has_value();}),"recreated window reaches pipe with current identity");
+  const auto first_quiet=receiver.messages.size(),quiet_start=GetTickCount64();
+  do {receiver.read(client.get(),receiver.messages.size()+1);}while(GetTickCount64()-quiet_start<600);
+  require(receiver.messages.size()-first_quiet<=14,"window-only publication remains bounded to 20 Hz cadence");
+  v0::Consumer consumer(true); for(const auto& m:receiver.messages){consumer.accept(m);require(m.capture.monotonic_ns==capture,"window-only update preserves original SDK capture");}
+  require(receiver.messages.back().continuity.lost_observations==receiver.messages[1].continuity.lost_observations,"window-only publications invent no lost SDK observations");
+  require(receiver.messages.back().state->simulation=="paused"&&f.host.wrong_thread==0,"paused telemetry remains paused and monitor never calls SDK");
+  const auto start=GetTickCount64();f.server.stop();monitor.stop();require(GetTickCount64()-start<1000,"transport joins before monitor retires");
+}
 void dll_lifecycle(const char* path) {
-  Fixture f; f.adapter->shutdown();
+  Fixture f; OwnedWindow owned; f.adapter->shutdown();
   for(unsigned scenario=0;scenario<3;++scenario) {
     HMODULE module=LoadLibraryA(path); require(module!=nullptr,"isolated test DLL load");
     auto init=reinterpret_cast<decltype(&scs_telemetry_init)>(GetProcAddress(module,"scs_telemetry_init"));
@@ -365,6 +416,7 @@ void dll_lifecycle(const char* path) {
   }
 }
 void dll_startup_reporting(const char* path) {
+  OwnedWindow owned;
   bool reported=true;
   for(unsigned scenario=0;scenario<3;++scenario) {
     Fixture f; sdk::Snapshot source; f.adapter->read_current(source); f.adapter->shutdown();
@@ -389,12 +441,13 @@ void dll_startup_reporting(const char* path) {
   }
   require(reported,"all startup failures return generic error and log the fixed reason once on the direct SDK caller thread");
 }
-int controlled_host(const char* dll_path,const char* directory_utf8) {
+int controlled_host(const char* dll_path,const char* directory_utf8,bool windows=false) {
   const HANDLE input=GetStdHandle(STD_INPUT_HANDLE); require(GetFileType(input)==FILE_TYPE_PIPE,"controlled host requires piped stdin");
   const auto length=MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,directory_utf8,-1,nullptr,0); require(length>1&&length<4096,"controlled host directory encoding");
   std::wstring directory(static_cast<std::size_t>(length),L'\0'); MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,directory_utf8,-1,directory.data(),length); directory.resize(static_cast<std::size_t>(length-1));
   auto user=current_user(); OwnerSecurity security(user.sid); security.ensure_directory(directory);
-  Host host; HMODULE module=LoadLibraryA(dll_path); require(module!=nullptr,"controlled official SDK DLL load");
+  Host host; std::unique_ptr<OwnedWindow> owned; if(windows)owned=std::make_unique<OwnedWindow>();
+  HMODULE module=LoadLibraryA(dll_path); require(module!=nullptr,"controlled official SDK DLL load");
   auto init=reinterpret_cast<decltype(&scs_telemetry_init)>(GetProcAddress(module,"scs_telemetry_init"));
   auto shutdown=reinterpret_cast<decltype(&scs_telemetry_shutdown)>(GetProcAddress(module,"scs_telemetry_shutdown"));
   using SetDirectory=int(*)(const wchar_t*); using GetEndpoint=int(*)(wchar_t*,unsigned);
@@ -402,20 +455,33 @@ int controlled_host(const char* dll_path,const char* directory_utf8) {
   bool initialized=false;
   try {
     require(init&&shutdown&&set_directory&&get_endpoint,"controlled test-only official lifecycle exports"); require(set_directory(directory.c_str())!=0,"controlled isolated directory"); auto p=host.params(); require(init(SCS_TELEMETRY_VERSION_1_01,&p)==SCS_RESULT_ok,"controlled SDK init"); initialized=true;
-    host.event(SCS_TELEMETRY_EVENT_started); host.frame(10); std::array<wchar_t,512> endpoint{}; require(until([&]{return get_endpoint(endpoint.data(),static_cast<unsigned>(endpoint.size()))!=0;}),"controlled endpoint publication");
+    host.event(SCS_TELEMETRY_EVENT_started); if(windows)host.event(SCS_TELEMETRY_EVENT_paused); host.frame(10);
+    std::array<wchar_t,512> endpoint{}; require(until([&]{return get_endpoint(endpoint.data(),static_cast<unsigned>(endpoint.size()))!=0;}),"controlled endpoint publication");
     v0::Json ready{v0::Json::Object{{"ready",v0::Json{true}},{"fixture",v0::Json{std::string("fake-sdk-host")}}, {"processId",v0::Json{static_cast<double>(GetCurrentProcessId())}}, {"processCreationTime",v0::Json{std::to_string(creation_time(GetCurrentProcess()))}}, {"pipeName",v0::Json{utf8(endpoint.data())}}}};
     std::cout<<v0::detail::serialize(ready)<<'\n'<<std::flush;
-    for(;;) {DWORD available=0; if(!PeekNamedPipe(input,nullptr,0,nullptr,&available,nullptr)) {require(GetLastError()==ERROR_BROKEN_PIPE,"controlled stdin EOF");break;}
-      if(available){std::array<char,256> command{};DWORD read=0;if(!ReadFile(input,command.data(),static_cast<DWORD>(command.size()),&read,nullptr)||!read)break; if(std::string(command.data(),read).find("exit")!=std::string::npos)break;}
-      host.frame(10); Sleep(50);
+    const auto deadline=GetTickCount64()+30000; std::string commands;bool exit=false;
+    while(!exit&&GetTickCount64()<deadline) {DWORD available=0; if(!PeekNamedPipe(input,nullptr,0,nullptr,&available,nullptr)) {require(GetLastError()==ERROR_BROKEN_PIPE,"controlled stdin EOF");break;}
+      if(available){std::array<char,256> command{};DWORD read=0;if(!ReadFile(input,command.data(),static_cast<DWORD>(command.size()),&read,nullptr)||!read)break;commands.append(command.data(),read);require(commands.size()<=1024,"controlled command bound");
+        for(auto newline=commands.find('\n');newline!=std::string::npos;newline=commands.find('\n')) {auto action=commands.substr(0,newline);commands.erase(0,newline+1);if(!action.empty()&&action.back()=='\r')action.pop_back();
+          if(action=="exit"){exit=true;break;} if(windows){
+            if(action=="move")require(SetWindowPos(owned->handle,nullptr,-200,-100,800,600,SWP_NOACTIVATE|SWP_NOZORDER)!=FALSE,"controlled move");
+            else if(action=="hide")ShowWindow(owned->handle,SW_HIDE);else if(action=="minimize")ShowWindow(owned->handle,SW_SHOWMINNOACTIVE);
+            else if(action=="restore")ShowWindow(owned->handle,SW_SHOWNOACTIVATE);else if(action=="recreate")owned->recreate();
+            else require(false,"unknown controlled window command");
+            std::cout<<"{\"phase\":\""<<action<<"\"}\n"<<std::flush;
+          }
+        }
+      }
+      MSG msg{};while(PeekMessageW(&msg,nullptr,0,0,PM_REMOVE)){TranslateMessage(&msg);DispatchMessageW(&msg);}
+      if(!windows)host.frame(10); Sleep(windows?10:50);
     }
     const auto start=GetTickCount64(); shutdown(); initialized=false; require(GetTickCount64()-start<1000&&host.wrong_thread==0,"controlled normal join"); require(FreeLibrary(module)!=FALSE,"controlled DLL unload"); return 0;
   }catch(...){if(initialized&&shutdown)shutdown();FreeLibrary(module);throw;}
 }
 }
 int main(int argc,char** argv) {
-  try { if(argc==4&&std::string(argv[1])=="host")return controlled_host(argv[2],argv[3]);
-    const std::map<std::string,std::function<void()>> cases{{"serialization",serialization},{"live",live_reconnect_security},{"rejection",rejection_and_timeout},{"collision",collision_and_discovery},{"coalescing",coalescing_and_stalled_shutdown},{"policy",policy_and_exhaustion},{"fuzz",seeded_transport_fuzz}
+  try { if(argc==4&&(std::string(argv[1])=="host"||std::string(argv[1])=="host-window"))return controlled_host(argv[2],argv[3],std::string(argv[1])=="host-window");
+    const std::map<std::string,std::function<void()>> cases{{"serialization",serialization},{"live",live_reconnect_security},{"rejection",rejection_and_timeout},{"collision",collision_and_discovery},{"coalescing",coalescing_and_stalled_shutdown},{"policy",policy_and_exhaustion},{"fuzz",seeded_transport_fuzz},{"window",window_binding}
 #ifdef ETS2TELEMETRY_TRANSPORT_TEST_HOOKS
     ,{"accept-disconnect",accept_disconnect},{"accept-failure",accept_failure},{"hash-cancel",hash_cancel},{"hash-cancel-race",hash_cancel_race}
 #endif

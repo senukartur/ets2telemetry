@@ -1,6 +1,6 @@
 // Scaffold status only. The telemetry wire protocol belongs to ET-002a.
 export interface ScaffoldStatus { service: 'ready'; storage: 'verified'; synthetic: true }
-import type {CurrentState, SourceIdentity, AppliedState} from './protocol-v0';
+import type {CurrentState, SourceIdentity, AppliedState, CaptureTime} from './protocol-v0';
 export type SourceSelection = 'game' | 'ets2' | 'ats' | 'synthetic' | 'replay';
 export interface LiveTelemetry {
   selection: SourceSelection;
@@ -10,7 +10,9 @@ export interface LiveTelemetry {
   fresh: boolean;
   recording: false;
   coverage: 'unknown';
-  observation?: {source: SourceIdentity; state: CurrentState; seq: string; receivedMonotonicMs: number; applied: AppliedState};
+  observation?: {source: SourceIdentity; state: CurrentState; seq: string; capture: CaptureTime;
+    // SDK receipt advances only with a new capture; window receipt has its own conservative TTL.
+    receivedMonotonicMs: number; windowReceivedMonotonicMs: number; windowFresh: boolean; applied: AppliedState};
 }
 export interface DesktopBridge {
   getStatus(): Promise<ScaffoldStatus>;

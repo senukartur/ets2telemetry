@@ -6,20 +6,44 @@ let listener: ((update: LiveTelemetry) => void) | undefined;
 let port: MessagePort | undefined;
 let current: LiveTelemetry = initialLive();
 let freshness: ReturnType<typeof setTimeout> | undefined;
+let windowFreshness: ReturnType<typeof setTimeout> | undefined;
+let sdkReceiptKey: string | undefined;
+let sdkExpiry = 0;
+let windowReceiptKey: string | undefined;
+let windowExpiry = 0;
 let recovery: ReturnType<typeof setTimeout> | undefined;
 let recoveryBudget = new RecoveryBudget();
 let subscription = Symbol();
-function clearFreshness(): void {clearTimeout(freshness); freshness = undefined;}
+function clearFreshness(): void {clearTimeout(freshness); freshness = undefined; clearTimeout(windowFreshness); windowFreshness = undefined;}
 function clearRecovery(): void {clearTimeout(recovery); recovery = undefined;}
 function closePort(): void {const previous = port; port = undefined; previous?.close();}
 function stale(reason: string): void {
-  clearFreshness(); current = {...current, status: 'stale', fresh: false, reason}; listener?.(current);
+  clearFreshness(); current = {...current, status: 'stale', fresh: false, reason,
+    ...(current.observation ? {observation: {...current.observation, windowFresh: false}} : {})}; listener?.(current);
 }
 function publish(update: LiveTelemetry): void {
   clearFreshness(); current = update;
+  const now = performance.now(), observation = update.observation;
+  const sourceKey = observation ? `${observation.source.pluginSessionId}|${observation.source.processInstanceId}|${observation.capture.clockId}` : undefined;
+  const sdkKey = observation ? `${sourceKey}|${observation.capture.monotonicNs}|${observation.receivedMonotonicMs}` : undefined;
+  if (!observation || sdkKey !== sdkReceiptKey) {sdkReceiptKey = sdkKey; sdkExpiry = now + 500;}
+  const windowKey = observation ? `${sourceKey}|${observation.windowReceivedMonotonicMs}` : undefined;
+  if (!observation || windowKey !== windowReceiptKey) {windowReceiptKey = windowKey; windowExpiry = now + 250;}
   // Quiet but open channels stay subscribed. Data expiry is separate from transport recovery.
-  if (update.fresh) freshness = setTimeout(() => stale('Renderer has no recent current observation'), 500);
-  listener?.(update);
+  if (update.fresh) {
+    if (now >= sdkExpiry) current = {...current, status: 'stale', fresh: false, reason: 'Renderer has no recent SDK capture'};
+    else freshness = setTimeout(() => {
+      freshness = undefined; current = {...current, status: 'stale', fresh: false, reason: 'Renderer has no recent SDK capture'}; listener?.(current);
+    }, sdkExpiry - now);
+  }
+  if (observation?.windowFresh) {
+    if (now >= windowExpiry) current = {...current, observation: {...observation, windowFresh: false}};
+    else windowFreshness = setTimeout(() => {
+      windowFreshness = undefined;
+      if (current.observation) {current = {...current, observation: {...current.observation, windowFresh: false}}; listener?.(current);}
+    }, windowExpiry - now);
+  }
+  listener?.(current);
 }
 function lost(next: MessagePort): void {
   if (port !== next || !listener) return;
@@ -32,7 +56,7 @@ function lost(next: MessagePort): void {
 }
 ipcRenderer.on('telemetry:port', event => {
   clearRecovery(); clearFreshness(); closePort(); const next = event.ports[0];
-  if (listener && current.fresh) stale('Replacement live subscription awaits a current observation');
+  if (listener && (current.fresh || current.observation?.windowFresh)) stale('Replacement live subscription awaits a current observation');
   if (!listener || event.ports.length !== 1) {for (const incoming of event.ports) incoming.close(); return;}
   port = next;
   // Electron's renderer MessagePort includes the documented close-event extension.
@@ -62,7 +86,7 @@ const bridge: DesktopBridge = {
   },
   subscribeLive: callback => {
     if (typeof callback !== 'function' || listener) throw new Error('One live subscription is allowed');
-    subscription = Symbol(); listener = callback; current = initialLive(); recoveryBudget = new RecoveryBudget(); ipcRenderer.send('telemetry:subscribe');
+    subscription = Symbol(); listener = callback; current = initialLive(); sdkReceiptKey = windowReceiptKey = undefined; recoveryBudget = new RecoveryBudget(); ipcRenderer.send('telemetry:subscribe');
     let active = true;
     return () => {if (!active) return; active = false; subscription = Symbol(); listener = undefined; clearFreshness(); clearRecovery(); closePort(); ipcRenderer.send('telemetry:unsubscribe');};
   }
