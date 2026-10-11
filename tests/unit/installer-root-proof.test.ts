@@ -1,6 +1,22 @@
 import {describe,expect,it} from 'vitest';
-import {validateRootSet,validateConsoleExit,validateLateDriverConsole,validateStopSet,validateLateBinding,validateFinalConsoleExit} from '../vm/installer-root-proof.mjs';
+import {validateRootSet,validateConsoleExit,validateLateDriverConsole,validateStopSet,validateLateBinding,validateFinalConsoleExit,validateInstallerRoles} from '../vm/installer-root-proof.mjs';
 const consoleProof=()=>({pid:13,nativeImage:'C:\\Windows\\System32\\conhost.exe',metadataImage:'C:\\WINDOWS\\system32\\conhost.exe',parentProcessId:11,commandLine:'\\??\\C:\\WINDOWS\\system32\\conhost.exe 0x4',nativeExitBefore:259,nativeExitAfter:259,nativeSignaledBefore:false,nativeSignaledAfter:false,nativeImageFailure:null,nativeExitFailure:null,metadataFailure:null,queryElapsedMilliseconds:351});
+describe('terminal member accounting cannot substitute lifecycle proof',()=>{
+  const executable='C:\\Users\\fixture\\AppData\\Local\\ETS2TelemetryDesktop\\app-0.1.1\\ETS2TelemetryDesktop.exe';
+  const selfExecutable='C:\\Users\\fixture\\AppData\\Local\\ETS2TelemetryDesktop\\app-0.1.1\\Squirrel.exe';
+  const helper=(pid:number,image:string,commandLine:string)=>({pid,role:'installer-helper',executablePath:image,commandLine,parentProcessId:10,metadataPolicy:'held-native-helper-wmi-image',metadataCompleted:true,nativeIdentityHeld:true,nativeIdentityRetired:true,nativeFinalSignaled:true,exitCode:0,queryFailure:null,exitQueryFailure:null,metadataProviderFailure:null,metadataFailureStage:null,metadataManagementErrorCode:null,metadataRequestedProcessId:pid,metadataProcessId:pid,metadataHandle:String(pid),metadataClassName:'Win32_Process',metadataObjectPath:`Win32_Process.Handle="${pid}"`,metadataCommandLine:commandLine,metadataParentProcessId:10,diagnosticTruncatedFields:[]});
+  const hook=()=>helper(20,executable,`"${executable}" --squirrel-updated 0.1.1`);
+  const self=()=>helper(21,selfExecutable,`"${selfExecutable}" --updateSelf=C:\\Users\\fixture\\AppData\\Local\\ETS2TelemetryDesktop\\Update.exe`);
+  const unresolved=()=>({...hook(),pid:22,role:'terminal-metadata-unresolved',metadataPolicy:'terminal-metadata-unresolved',commandLine:null,metadataCommandLine:null,parentProcessId:null,metadataParentProcessId:0,metadataProcessId:null,metadataHandle:null,metadataObjectPath:null,metadataClassName:null,metadataProviderFailure:'Retained NotFound',metadataFailureStage:'get',metadataManagementErrorCode:-2147217406});
+  const check=(records:unknown)=>validateInstallerRoles(records,'update','0.1.1',executable,selfExecutable);
+  it('retains terminal accounting alongside independently proved actual hook and self-update',()=>expect(check([hook(),self(),unresolved()]).hook).toEqual(hook()));
+  it('rejects absent mandatory hook even when identical EXE terminal member exited0',()=>expect(()=>check([self(),unresolved()])).toThrow(/fully proved --squirrel-updated/));
+  it('rejects a terminal member claiming hook argv or mutated ordinary policy',()=>expect(()=>check([self(),{...unresolved(),metadataPolicy:'held-native-helper-wmi-image',commandLine:hook().commandLine}])).toThrow(/fully proved --squirrel-updated/));
+  it('rejects changed role+policy when raw NotFound and keys remain unresolved',()=>expect(()=>check([self(),{...unresolved(),role:'installer-helper',metadataPolicy:'held-native-helper-wmi-image',commandLine:hook().commandLine}])).toThrow(/fully proved --squirrel-updated/));
+  it('rejects a missing self-update despite successful hook and terminal self image',()=>expect(()=>check([hook(),{...unresolved(),executablePath:selfExecutable,commandLine:self().commandLine}])).toThrow(/fully proved Squirrel self-update/));
+  it.each([{nativeFinalSignaled:false},{nativeIdentityRetired:false},{exitCode:9},{metadataProviderFailure:'denied'},{metadataProcessId:99},{metadataHandle:'99'},{metadataClassName:null},{metadataCommandLine:null},{metadataParentProcessId:99},{diagnosticTruncatedFields:['metadataCommandLine']}])('rejects lost actual hook proof %j',change=>expect(()=>check([{...hook(),...change},self(),unresolved()])).toThrow(/fully proved --squirrel-updated/));
+  it('rejects duplicate rebound member identity',()=>expect(()=>check([hook(),self(),{...unresolved(),pid:20}])).toThrow(/unique/));
+});
 describe('installer observer console trust boundary',()=>{
   it('accepts the two native roots without a console descriptor',()=>expect(validateRootSet([10,11],null,10,11,12)).toBeNull());
   it('accounts for one live observer-owned System32 console without hiding its PID',()=>expect(validateRootSet([10,11,13],consoleProof(),10,11,12)).toBe(13));

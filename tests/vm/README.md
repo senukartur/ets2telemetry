@@ -1,6 +1,6 @@
 # Disposable VMware packaged acceptance
 
-These sources prepare an inert, self-contained test kit and run the packaged lifecycle only inside the owner-authorized VMware guest. Physical-host Electron, application and installer launches remain prohibited. The coordinator exclusively owns VM startup, its independent outer watchdog, transfer, interactive scheduled-task dispatch, log export, shutdown and clean-snapshot restoration. Preparation does not perform any of those actions.
+These sources prepare an inert, self-contained test kit and run the packaged lifecycle only inside the owner-authorized VMware guest. The owner now permits native Windows application launches and no longer requires a VM. These historical harnesses retain their guest guards; current native installer acceptance uses [the Windows ownership harness](../windows/README.md). The coordinator exclusively owns VM startup, its independent outer watchdog, transfer, interactive scheduled-task dispatch, log export, shutdown and clean-snapshot restoration. Preparation does not perform any of those actions.
 
 The kit carries the unchanged reviewed package, portable Node 24.19.0, playwright-core 1.64.0 (no downloaded browsers), and the existing package verifier and Job Object helper. Every file is included in a SHA256 manifest; supply its reviewed hash separately to the guest wrapper. `-IncludeInstaller` can copy maker artifacts for a later lifecycle attempt; this harness does not execute them or establish install/update/uninstall acceptance.
 

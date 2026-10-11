@@ -53,3 +53,15 @@ export function validateFinalConsoleExit(receipt,lateFrame,consoleHost,driverPid
   const latePid=lateFrame===null?null:validateLateDriverConsole(lateFrame,consoleHost,driverPid,observerPid,controllerPid);
   assert.equal(receipt.driverConsolePid,latePid);assert.equal(receipt.driverConsoleSignaled,latePid!==null);assert.equal(receipt.driverConsoleExitCode,latePid===null?null:0);
 }
+export function validateInstallerRoles(records,step,version,executable,selfUpdateExecutable){
+  assert.ok(Array.isArray(records));assert.equal(new Set(records.map(record=>record.pid)).size,records.length,'Installer member identities must be unique');
+  const fullyProven=record=>record.role==='installer-helper'&&['held-native-helper-wmi-null','held-native-helper-wmi-image','held-native-helper-wmi-advisory-mismatch'].includes(record.metadataPolicy)&&record.metadataCompleted===true&&record.nativeIdentityHeld===true&&record.nativeIdentityRetired===true&&record.nativeFinalSignaled===true&&record.exitCode===0&&record.queryFailure===null&&record.exitQueryFailure===null&&record.metadataProviderFailure===null&&record.metadataFailureStage===null&&record.metadataManagementErrorCode===null&&record.metadataRequestedProcessId===record.pid&&record.metadataProcessId===record.pid&&record.metadataHandle===String(record.pid)&&record.metadataClassName?.toLowerCase()==='win32_process'&&[`win32_process.handle="${record.pid}"`,`win32_process.handle='${record.pid}'`].includes(record.metadataObjectPath?.toLowerCase())&&record.metadataCommandLine===record.commandLine&&Number.isSafeInteger(record.parentProcessId)&&record.parentProcessId>0&&record.metadataParentProcessId===record.parentProcessId&&Array.isArray(record.diagnosticTruncatedFields)&&record.diagnosticTruncatedFields.length===0;
+  if(step==='smoke')return {hook:null,selfUpdates:[]};
+  assert.ok(['install','repair','update','uninstall'].includes(step));
+  const event=step==='update'?'updated':step==='uninstall'?'uninstall':'install';
+  const hook=records.find(record=>fullyProven(record)&&record.executablePath?.toLowerCase()===executable.toLowerCase()&&record.commandLine?.includes(`--squirrel-${event} ${version}`));
+  assert.ok(hook,`Actual fully proved --squirrel-${event} ${version} command-line observation required`);
+  const selfUpdates=records.filter(record=>fullyProven(record)&&record.executablePath?.toLowerCase()===selfUpdateExecutable.toLowerCase()&&record.commandLine?.includes('--updateSelf='));
+  if(step!=='uninstall')assert.ok(selfUpdates.length>=1,'Actual fully proved Squirrel self-update helper observation required');
+  return {hook,selfUpdates};
+}

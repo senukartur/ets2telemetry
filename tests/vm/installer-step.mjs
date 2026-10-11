@@ -5,7 +5,7 @@ import {spawn} from 'node:child_process';
 import {readFile, readdir, mkdir, writeFile} from 'node:fs/promises';
 import {performance} from 'node:perf_hooks';
 import {createHash} from 'node:crypto';
-import {validateRootSet,validateConsoleExit,validateLateDriverConsole,validateStopSet,validateLateBinding} from './installer-root-proof.mjs';
+import {validateRootSet,validateConsoleExit,validateLateDriverConsole,validateStopSet,validateLateBinding,validateInstallerRoles} from './installer-root-proof.mjs';
 const [kit, output, guardFile, step, version, budgetText] = process.argv.slice(2);
 const result={step,version,passed:false,startedUtc:new Date().toISOString(),finishedUtc:null,failure:null,
   primary:null,observer:null,smoke:null,windowsPlaywrightShellWrapper:step==='smoke'};
@@ -156,17 +156,8 @@ try{
   assert.deepEqual(result.observer.driverConsoleHost,lateDriverConsole?.consoleHost??null);
   if(lateDriverConsole){validateLateBinding(lateDriverConsole,await boundedJson(path.join(output,'late-driver-console.json')),result.observer.consoleHost,process.pid,observer.pid,controllerReceipt.controllerPid);assert.equal(result.observer.driverConsoleLastExitCode,259);}
   if(step!=='smoke'){
-    const event=step==='update'?'updated':step==='uninstall'?'uninstall':'install';
-    const hook=result.observer.processes.find(record=>record.executablePath?.toLowerCase()===executable.toLowerCase()&&record.commandLine?.includes(`--squirrel-${event} ${version}`));
-    assert.ok(hook,`Actual --squirrel-${event} ${version} command-line observation required`);
-    assert.equal(hook.exitCode,0,'Actual lifecycle hook must exit 0');
-    result.hook=hook;
-    if(step!=='uninstall'){
-      const selfUpdates=result.observer.processes.filter(record=>record.executablePath?.toLowerCase()===path.join(binaryRoot,`app-${version}`,'Squirrel.exe').toLowerCase()&&record.commandLine?.includes('--updateSelf='));
-      assert.ok(selfUpdates.length>=1,'Actual Squirrel self-update helper observation required');
-      for(const helper of selfUpdates)assert.equal(helper.exitCode,0,'Self-update helper must finish normally before driver exit');
-      result.selfUpdates=selfUpdates;
-    }
+    const roles=validateInstallerRoles(result.observer.processes,step,version,executable,path.join(binaryRoot,`app-${version}`,'Squirrel.exe'));
+    result.hook=roles.hook;result.selfUpdates=roles.selfUpdates;
     assert.deepEqual((await readdir(process.env.TEMP)).filter(name=>name.startsWith('ets2telemetry-probe-')),[]);
     assert.deepEqual(await readdir(process.env.ETS2TELEMETRY_DIAGNOSTIC_DIR),[],'Installer hook must not start app/service diagnostics');
   }

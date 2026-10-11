@@ -162,4 +162,104 @@ $terminalDiagnostic=New-HelperFixture;Set-ImageRaceFixture $terminalDiagnostic.r
 Set-HelperMetadataDiagnostics $terminalDiagnostic.record $terminalDiagnostic.metadata
 if($terminalDiagnostic.record.nativeImageAfterQueryFailure -cne $originalError -or $terminalDiagnostic.record.nativeImageAfterQueryErrorCode -ne 31 -or $null -ne $terminalDiagnostic.record.nativeImageAfterQuery -or (Invoke-HelperFixture $terminalDiagnostic) -cne 'held-native-helper-wmi-null'){throw 'Actual diagnostic copy replaced terminal error, code or unqueried path.'}
 $rows.Add(@{name='actual diagnostic preserves terminal image error and absent after path';passed=$true})
+function New-TerminalFixture {
+    $c=New-HelperFixture;Set-TerminalFixture $c.record
+    $c.record.executablePath='C:\Users\fixture\AppData\Local\ETS2TelemetryDesktop\app-0.1.1\ETS2TelemetryDesktop.exe'
+    $c.record.nativeCustody=@{snapshot=@{AssignedCount=4;ListedCount=4;Pids=@(10,11,13,20)};scope=@{LimitFlags=8712;ActiveProcessLimit=16;JobMemoryBytes=2147483648;CpuFlags=5;CpuRate=2500};exitCode=259;signaled=$false;failure=$null}
+    $c.record.sealedImageSha256='a'*64;$c.record.sealedImageBytes=42;$c.record.sealedImageFailure=$null
+    $c.images=@(@{path=$c.record.executablePath;sha256=('a'*64);bytes=42})
+    $c.metadata=[pscustomobject]@{RequestedProcessId=20;ProcessId=$null;Handle=$null;ObjectPath=$null;ClassName=$null;ExecutablePath=$null;CommandLine=$null;ParentProcessId=0;Failure='Retained synthetic single Get NotFound';FailureStage='get';ManagementErrorCode=[int]-2147217406}
+    return $c
+}
+function New-AccountingContextFixture([int]$index){
+    $steps=@(@('install','0.1.0',45000),@('repair','0.1.0',45000),@('smoke','0.1.0',30000),@('update','0.1.1',45000),@('smoke','0.1.1',30000),@('uninstall','0.1.1',30000))
+    $entry=$steps[$index-1];$directory='C:\ETS2ET001Acceptance\evidence\'+('a'*32)+'\step-'+$index+'-'+$entry[0]+'-'+$entry[1];$now=[datetime]::Parse('2026-10-11T08:00:00Z',[Globalization.CultureInfo]::InvariantCulture,[Globalization.DateTimeStyles]::AdjustToUniversal);$binary='C:\Users\fixture\AppData\Local\ETS2TelemetryDesktop'
+    return @{directory=$directory;ready=($directory+'\observer-ready.json');stop=($directory+'\observer-stop.json');result=($directory+'\job-observation.json');binary=$binary;now=$now;digest=('a'*64);guard=[pscustomobject]@{manifestSha256=('a'*64);vmUuid='94674D56-D803-F4D5-9AAC-C4E91CFB475F';labId='9a047927-f94b-41cb-bda8-abcc7d0b76f1';jobRequired=$true;step=$entry[0];version=$entry[1];binaryRoot=$binary;verifiedUtc=$now.ToString('o');outerDeadlineUtc=$now.AddSeconds(200).ToString('o')};manifest=[pscustomobject]@{schemaVersion=1;kind='et001-installer';guestRoot='C:\ETS2ET001Acceptance';guestUuid='94674D56-D803-F4D5-9AAC-C4E91CFB475F';labId='9a047927-f94b-41cb-bda8-abcc7d0b76f1';fixtureOnly=$true;applicationVersion='0.1.0';fixtureVersion='0.1.1';runtimeFiles=@([pscustomobject]@{path='ETS2TelemetryDesktop.exe';sha256=('b'*64);bytes=42})};ceiling=$entry[2]}
+}
+function Invoke-AccountingContext($c){Assert-InstallerAccountingContext $c.guard $c.manifest $c.digest $c.directory $c.ready $c.stop $c.result $c.binary $c.now}
+function New-ContextReceipt($c,[int]$budget){$quoted=@('C:\ETS2ET001Acceptance\tools\node.exe','C:\ETS2ET001Acceptance\harness\installer-step.mjs','C:\ETS2ET001Acceptance',$c.directory,($c.directory+'\step-guard.json'),$c.guard.step,$c.guard.version,[string]$budget)|ForEach-Object {'"'+$_+'"'};return [pscustomobject]@{driverPid=10;observerPid=11;controllerPid=12;driverCommandLine=($quoted -join ' ')}}
+foreach($index in 1..6){
+    $c=New-AccountingContextFixture $index;$context=Invoke-AccountingContext $c
+    if($context.maximumMilliseconds -ne $c.ceiling -or $context.expectedImages.Count -ne $(if($index -eq 4){2}else{1})){throw 'Actual context lost exact step policy.'}
+    foreach($budget in @($c.ceiling,10000,12345)){if((Assert-InstallerAccountingCommand $context (New-ContextReceipt $c $budget) 10 11 12) -ne $budget){throw 'Actual context lost exact shortened created command budget.'}}
+    foreach($budget in @(($c.ceiling+1),9999)){ $failure=$null;try{$null=Assert-InstallerAccountingCommand $context (New-ContextReceipt $c $budget) 10 11 12}catch{$failure=$_.Exception.Message};if($failure -notin @('Accounting context created budget exceeds the existing step bounds.','Accounting context differs from the exact created driver command.')){throw 'Actual context accepted a changed step budget.'} }
+    $rows.Add(@{name=('actual accounting context step '+$index+' exact and shortened budgets');passed=$true})
+}
+function Reject-Context([string]$name,[scriptblock]$change,[string]$expected){$c=New-AccountingContextFixture 4;& $change $c;$failure=$null;try{$null=Invoke-AccountingContext $c}catch{$failure=$_.Exception.Message};if($failure -cne $expected){throw "Actual context rejection $name differs: $failure"};$rows.Add(@{name=$name;passed=$true;failure=$failure})}
+$contextError='Accounting context manifest, lab identity or step differs.'
+Reject-Context 'actual context wrong manifest hash' {param($c)$c.digest='c'*64} $contextError
+Reject-Context 'actual context wrong lab identity' {param($c)$c.guard.labId='other'} $contextError
+Reject-Context 'actual context wrong manifest kind' {param($c)$c.manifest.kind='other'} $contextError
+Reject-Context 'actual context wrong step version' {param($c)$c.guard.version='0.1.0'} $contextError
+Reject-Context 'actual context wrong step name' {param($c)$c.guard.step='smoke'} $contextError
+Reject-Context 'actual context wrong binary root' {param($c)$c.guard.binaryRoot='C:\Temp\ETS2TelemetryDesktop'} $contextError
+Reject-Context 'actual context wrong directory' {param($c)$c.directory='C:\Temp\step-4-update-0.1.1'} 'Accounting context paths differ from the controlled step.'
+Reject-Context 'actual context swapped ready path' {param($c)$c.ready=$c.stop} 'Accounting context paths differ from the controlled step.'
+Reject-Context 'actual context expired guard' {param($c)$c.guard.verifiedUtc=$c.now.AddSeconds(-90).ToString('o')} 'Accounting context guard has expired.'
+Reject-Context 'actual context malformed timestamp' {param($c)$c.guard.verifiedUtc='not a date'} 'Accounting context timestamps are malformed.'
+Reject-Context 'actual context missing sealed EXE' {param($c)$c.manifest.runtimeFiles=@()} 'Accounting context has no exact sealed app image.'
+Reject-Context 'actual context duplicate sealed EXE' {param($c)$c.manifest.runtimeFiles+=@($c.manifest.runtimeFiles[0])} 'Accounting context has no exact sealed app image.'
+$c=New-AccountingContextFixture 4;$context=Invoke-AccountingContext $c;$receipt=New-ContextReceipt $c 45000;$receipt.driverCommandLine=$receipt.driverCommandLine.Replace('"update"','"repair"');$failure=$null;try{$null=Assert-InstallerAccountingCommand $context $receipt 10 11 12}catch{$failure=$_.Exception.Message};if($failure -cne 'Accounting context differs from the exact created driver command.'){throw 'Actual context accepted rewritten command step.'};$rows.Add(@{name='actual context exact created command wrong step rejected';passed=$true})
+function Invoke-TerminalFixture($c){Assert-InstallerTerminalAccounting $c.record $c.metadata $c.records $c.images 10 11 12 $c.consoles}
+function Check-Terminal([string]$name,[scriptblock]$change,[string]$expected){$c=New-TerminalFixture;& $change $c;$before=$c.metadata|ConvertTo-Json -Compress;$failure=$null;$policy=$null;try{$policy=Invoke-TerminalFixture $c}catch{$failure=$_.Exception.Message};if(($c.metadata|ConvertTo-Json -Compress) -cne $before){throw 'Terminal accounting mutated missing metadata.'};if($expected -ceq 'terminal-metadata-unresolved'){if($policy -cne $expected -or $failure){throw "Terminal acceptance $name differs: $failure"}}elseif($failure -cne $expected){throw "Terminal rejection $name differs: $failure"};$rows.Add(@{name=$name;passed=$true;policy=$policy;failure=$failure})}
+Check-Terminal 'terminal NotFound counts member without invented metadata' {} 'terminal-metadata-unresolved'
+$unavailable=New-TerminalFixture;$rawUnavailable=$unavailable.metadata|ConvertTo-Json -Compress;Set-HelperMetadataDiagnostics $unavailable.record $unavailable.metadata
+if($unavailable.record.metadataImageObservation -cne 'unavailable-get-notfound' -or $null -ne $unavailable.record.metadataImage -or $null -ne $unavailable.record.metadataCommandLine -or ($unavailable.metadata|ConvertTo-Json -Compress) -cne $rawUnavailable){throw 'Actual diagnostic labelled failed Get as a returned null image.'};$rows.Add(@{name='actual NotFound diagnostic retains null as unavailable provider data';passed=$true})
+$typed='Terminal accounting requires typed single-Get NotFound.';$partial='Terminal accounting cannot consume partial returned metadata.';$custody='Terminal accounting live Job custody is incomplete.';$membership='Terminal accounting Job membership differs.';$sealed='Terminal accounting installed image is not sealed.'
+foreach($change in @(@{FailureStage='queue'},@{FailureStage='returned-fields'},@{ManagementErrorCode=[int]-2147217405},@{ManagementErrorCode=$null},@{ManagementErrorCode='-2147217406'},@{Failure=$null},@{RequestedProcessId=21})){Check-Terminal ('typed Get proof '+($change|ConvertTo-Json -Compress)) {param($c)foreach($k in $change.Keys){$c.metadata.$k=$change[$k]}}.GetNewClosure() $typed}
+foreach($keyName in @('ProcessId','Handle','ObjectPath','ClassName','ExecutablePath','CommandLine')){Check-Terminal ('partial returned '+$keyName) {param($c)$c.metadata.$keyName='returned'}.GetNewClosure() $partial}
+Check-Terminal 'missing typed Get operand' {param($c)$c.metadata.PSObject.Properties.Remove('FailureStage')} 'Terminal accounting typed metadata operands are missing.'
+Check-Terminal 'missing Job custody' {param($c)$c.record.nativeCustody=$null} $custody
+foreach($change in @(@{exitCode=0},@{signaled=$true},@{failure='native failure'})){Check-Terminal ('invalid live custody '+($change|ConvertTo-Json -Compress)) {param($c)foreach($k in $change.Keys){$c.record.nativeCustody[$k]=$change[$k]}}.GetNewClosure() $custody}
+Check-Terminal 'snapshot lost held member' {param($c)$c.record.nativeCustody.snapshot.Pids=@(10,11,13,21)} $membership
+Check-Terminal 'snapshot inconsistent count' {param($c)$c.record.nativeCustody.snapshot.ListedCount=3} $membership
+Check-Terminal 'snapshot includes controller' {param($c)$c.record.nativeCustody.snapshot.Pids=@(10,11,12,20)} $membership
+Check-Terminal 'snapshot duplicate PID' {param($c)$c.record.nativeCustody.snapshot.Pids=@(10,11,20,20)} $membership
+Check-Terminal 'different Job caps' {param($c)$c.record.nativeCustody.scope.CpuRate=5000} 'Terminal accounting Job limits differ.'
+foreach($change in @(@{sealedImageSha256=('b'*64)},@{sealedImageBytes=43},@{sealedImageFailure='hash failure'},@{executablePath='C:\Temp\ETS2TelemetryDesktop.exe'})){Check-Terminal ('unsealed image '+($change|ConvertTo-Json -Compress)) {param($c)foreach($k in $change.Keys){$c.record[$k]=$change[$k]}}.GetNewClosure() $sealed}
+Check-Terminal 'live NotFound is not accounted' {param($c)$c.record.nativeImageAttemptedAfterQuery=$true;$c.record.nativeImageAfterQuery=$c.record.executablePath;$c.record.nativeAfterQueryProof='live-image';$c.record.nativeExitAfterQuery=259;$c.record.nativeSignaledAfterQuery=$false} 'Terminal accounting requires actual same-handle terminal exit 0.'
+Check-Terminal 'transition zero unsignaled is not accounted' {param($c)$c.record.nativeImageAttemptedAfterQuery=$true;$c.record.nativeImageAfterQuery=$c.record.executablePath;$c.record.nativeAfterQueryProof='live-image';$c.record.nativeSignaledAfterQuery=$false} 'Terminal accounting requires actual same-handle terminal exit 0.'
+Check-Terminal 'terminal nonzero is rejected' {param($c)$c.record.nativeExitAfterQuery=9} 'Helper after-query native state is invalid.'
+Check-Terminal 'differing native image still rejected' {param($c)$c.record.nativeImageAttemptedAfterQuery=$true;$c.record.nativeImageAfterQuery='C:\Temp\Other.exe'} 'Helper successful after-query native image differs.'
+Check-Terminal 'terminal accounting cannot absorb image error too' {param($c)Set-ImageRaceFixture $c.record} 'Terminal accounting native state has image errors.'
+Check-Terminal 'native before not live' {param($c)$c.record.nativeExitBefore=0} 'Terminal accounting native or metadata custody is incomplete.'
+Check-Terminal 'clipped failure is rejected' {param($c)$c.record.diagnosticTruncatedFields=@('metadataProviderFailure')} 'Terminal accounting native or metadata custody is incomplete.'
+Check-Terminal 'unresolved cannot acquire parent' {param($c)$c.record.parentProcessId=10} 'Terminal accounting cannot invent arguments or ancestry.'
+Check-Terminal 'console role cannot use terminal policy' {param($c)$c.record.role='driver-console'} 'Terminal accounting identity overlaps another role.'
+Check-Terminal 'duplicate terminal identity rejected' {param($c)$c.records+=@($c.record)} 'Terminal accounting identity overlaps another role.'
+$terminal=New-TerminalFixture;$terminal.record.role='terminal-metadata-unresolved';$terminal.record.metadataPolicy='terminal-metadata-unresolved';$terminal.record.nativeFinalSignaled=$true;$terminal.record.exitCode=0
+Assert-InstallerHelperExit $terminal.record;$rows.Add(@{name='terminal accounting still requires final signaled zero';passed=$true})
+$terminal.record.nativeFinalSignaled=$false;$failure=$null;try{Assert-InstallerHelperExit $terminal.record}catch{$failure=$_.Exception.Message};if($failure -cne 'Helper final native signaled exit 0 proof is incomplete.'){throw 'Terminal final proof accepted a transition.'};$rows.Add(@{name='terminal accounting final transition rejected';passed=$true})
+Reject-Helper 'unresolved member cannot anchor parent DAG' {param($c)$p=Add-Parent $c;$p.role='terminal-metadata-unresolved';$p.metadataPolicy='terminal-metadata-unresolved';$p.nativeIdentityRetired=$true;$p.nativeFinalSignaled=$true;$p.exitCode=0} $failedParent
+# Compile only the actual pure capture method and metadata DTO; no production DLL/native method.
+Add-Type -AssemblyName System.Management
+$librarySource=[IO.File]::ReadAllText((Join-Path $PSScriptRoot 'InstallerJobView.cs'))
+$dto=[regex]::Match($librarySource,'(?s)public sealed class InstallerMetadata \{.*?\r?\n\}').Value
+$capture=[regex]::Match($librarySource,'(?s)public static void CaptureMetadataFailure\(.*?\r?\n    \}').Value
+if(!$dto -or !$capture){throw 'Actual pure metadata capture source missing.'}
+Add-Type -TypeDefinition ('using System;using System.Management;'+$dto+'public static class PureMetadataCapture {'+$capture+'}') -ReferencedAssemblies System.Management.dll
+$constructor=[Management.ManagementException].GetConstructor([Reflection.BindingFlags]'Instance,NonPublic',$null,[type[]]@([Management.ManagementStatus],[string],[Management.ManagementBaseObject]),$null)
+if(!$constructor){throw 'Framework typed ManagementException constructor missing.'}
+foreach($status in @([Management.ManagementStatus]::NotFound,[Management.ManagementStatus]::AccessDenied)){
+    $exception=$constructor.Invoke([object[]]@($status,'Synthetic constructed exception: no WMI query',$null));$captured=[InstallerMetadata]::new();[PureMetadataCapture]::CaptureMetadataFailure($captured,$exception,'get')
+    if($captured.ManagementErrorCode -ne [int]$status -or $captured.FailureStage -cne 'get' -or !$captured.Failure -or $null -ne $captured.CommandLine){throw 'Actual typed exception capture lost status or invented fields.'}
+    $rows.Add(@{name=('actual typed capture '+$status);passed=$true;managementErrorCode=$captured.ManagementErrorCode})
+}
+$captured=[InstallerMetadata]::new();[PureMetadataCapture]::CaptureMetadataFailure($captured,[Exception]::new('Not found'),'get');if($null -ne $captured.ManagementErrorCode){throw 'Actual capture matched generic exception text.'};$rows.Add(@{name='actual typed capture rejects generic Not found text';passed=$true})
+$readFunction=@($observerAst.FindAll({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq 'Read-InstallerBoundedJson'},$true));if($readFunction.Count -ne 1){throw 'Actual bounded context reader missing.'};. ([scriptblock]::Create($readFunction[0].Extent.Text))
+$readDirectory=Join-Path ([IO.Path]::GetTempPath()) ('et001-inert-reader-'+[guid]::NewGuid().ToString('N'));$null=[IO.Directory]::CreateDirectory($readDirectory)
+try{$readPath=Join-Path $readDirectory 'guard.json';[IO.File]::WriteAllText($readPath,'{"value":1}',[Text.UTF8Encoding]::new($false));$read=Read-InstallerBoundedJson $readPath 11;if($read.value.value -ne 1 -or $read.sha256 -notmatch '^[a-f0-9]{64}$'){throw 'Actual bounded context reader lost bytes.'};[IO.File]::WriteAllText($readPath,('x'*12));$failure=$null;try{$null=Read-InstallerBoundedJson $readPath 11}catch{$failure=$_.Exception.Message};if($failure -cne 'Accounting context exceeds its bounded input size.'){throw 'Actual bounded context reader accepted an oversized input.'}}finally{[IO.Directory]::Delete($readDirectory,$true)}
+$rows.Add(@{name='actual bounded context reader rejects before parsing oversized bytes';passed=$true})
+$sealDto=[regex]::Match($librarySource,'(?s)public sealed class InstallerImageSeal \{.*?\r?\n\}').Value
+$sealMethod=[regex]::Match($librarySource,'(?s)public static Task<InstallerImageSeal> SealAsync\(.*?\r?\n    \}').Value
+if(!$sealDto -or !$sealMethod){throw 'Actual bounded image-seal source missing.'}
+Add-Type -TypeDefinition ('using System;using System.IO;using System.Security.Cryptography;using System.Threading.Tasks;'+$sealDto+'public static class PureImageSeal {'+$sealMethod+'}')
+$sealDirectory=Join-Path ([IO.Path]::GetTempPath()) ('et001-inert-seal-'+[guid]::NewGuid().ToString('N'));$null=[IO.Directory]::CreateDirectory($sealDirectory)
+try{
+    $sealPath=Join-Path $sealDirectory 'image.bin';[IO.File]::WriteAllBytes($sealPath,[Text.Encoding]::ASCII.GetBytes('abc'));$task=[PureImageSeal]::SealAsync($sealPath,3)
+    if(!$task.Wait(2000) -or $task.Result.Failure -or $task.Result.Bytes -ne 3 -or $task.Result.Sha256 -cne 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad'){throw 'Actual bounded image seal lost bytes or digest.'}
+    $task=[PureImageSeal]::SealAsync($sealPath,4);if(!$task.Wait(2000) -or !$task.Result.Failure -or $null -ne $task.Result.Sha256){throw 'Actual bounded image seal accepted wrong size.'}
+    [IO.File]::Delete($sealPath);$task=[PureImageSeal]::SealAsync($sealPath,3);if(!$task.Wait(2000) -or !$task.Result.Failure -or $null -ne $task.Result.Sha256){throw 'Actual bounded image seal invented an unavailable digest.'}
+}finally{[IO.Directory]::Delete($sealDirectory,$true)}
+$rows.Add(@{name='actual asynchronous image seal retains digest and rejects wrong or missing bytes';passed=$true})
 [ordered]@{passed=$true;nativeObserverInvoked=$false;applicationLaunched=$false;cases=$rows.ToArray()}|ConvertTo-Json -Depth 4 -Compress

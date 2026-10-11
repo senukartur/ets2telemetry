@@ -6,7 +6,7 @@ import type {ElectronApplication} from '@playwright/test';
 import type {DesktopBridge} from '../../packages/contracts/src';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
-if (process.env.ETS2TELEMETRY_ALLOW_DESKTOP_LAUNCH !== '1') throw new Error('Desktop launches require explicit owner authorization; see docs/setup.md');
+// The owner lifted the native Windows application launch hold on October 11, 2026.
 
 async function closeWithinDeadline(application: ElectronApplication): Promise<void> {
   const child = application.process();

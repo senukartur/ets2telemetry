@@ -1,4 +1,32 @@
 # Pure helper proof rules. No native APIs, process creation, queries or file access.
+function Assert-InstallerAccountingContext($guard,$manifest,[string]$manifestSha256,[string]$directory,[string]$readyFile,[string]$stopFile,[string]$resultFile,[string]$binaryRoot,[datetime]$now){
+    $kit='C:\ETS2ET001Acceptance'
+    if($directory -notmatch '^C:\\ETS2ET001Acceptance\\evidence\\[a-fA-F0-9]{32}\\step-([1-6])-(install|repair|smoke|update|uninstall)-(0\.1\.[01])$'){throw 'Accounting context paths differ from the controlled step.'}
+    $index=[int]$Matches[1];$step=$Matches[2];$version=$Matches[3]
+    if($readyFile -ine ($directory+'\observer-ready.json') -or $stopFile -ine ($directory+'\observer-stop.json') -or $resultFile -ine ($directory+'\job-observation.json')){throw 'Accounting context paths differ from the controlled step.'}
+    $definitions=@(@('install','0.1.0',45000),@('repair','0.1.0',45000),@('smoke','0.1.0',30000),@('update','0.1.1',45000),@('smoke','0.1.1',30000),@('uninstall','0.1.1',30000))
+    if($manifestSha256 -notmatch '^[a-fA-F0-9]{64}$' -or $guard.manifestSha256 -ine $manifestSha256 -or $guard.vmUuid -cne '94674D56-D803-F4D5-9AAC-C4E91CFB475F' -or $guard.labId -cne '9a047927-f94b-41cb-bda8-abcc7d0b76f1' -or $guard.jobRequired -isnot [bool] -or !$guard.jobRequired -or $guard.step -cne $step -or $guard.version -cne $version -or $definitions[$index-1][0] -cne $step -or $definitions[$index-1][1] -cne $version -or $guard.binaryRoot -ine $binaryRoot -or $manifest.schemaVersion -ne 1 -or $manifest.kind -cne 'et001-installer' -or $manifest.guestRoot -cne $kit -or $manifest.guestUuid -cne $guard.vmUuid -or $manifest.labId -cne $guard.labId -or $manifest.fixtureOnly -isnot [bool] -or !$manifest.fixtureOnly -or $manifest.applicationVersion -cne '0.1.0' -or $manifest.fixtureVersion -cne '0.1.1'){throw 'Accounting context manifest, lab identity or step differs.'}
+    $verified=[datetime]::MinValue;$outer=[datetime]::MinValue
+    if($guard.verifiedUtc -isnot [string] -or $guard.outerDeadlineUtc -isnot [string] -or ![datetime]::TryParse($guard.verifiedUtc,[ref]$verified) -or ![datetime]::TryParse($guard.outerDeadlineUtc,[ref]$outer)){throw 'Accounting context timestamps are malformed.'}
+    $age=($now-$verified.ToUniversalTime()).TotalSeconds
+    if($age -lt 0 -or $age -ge 90 -or $outer.ToUniversalTime() -le $now){throw 'Accounting context guard has expired.'}
+    $row=@($manifest.runtimeFiles|Where-Object {$_.path -ceq 'ETS2TelemetryDesktop.exe'})
+    if($row.Count -ne 1 -or $row[0].sha256 -notmatch '^[a-fA-F0-9]{64}$' -or $row[0].bytes -le 0){throw 'Accounting context has no exact sealed app image.'}
+    $versions=if($step -ceq 'update'){@('0.1.0','0.1.1')}else{@($version)}
+    $images=@($versions|ForEach-Object {@{path=($binaryRoot+'\app-'+$_+'\ETS2TelemetryDesktop.exe');sha256=$row[0].sha256;bytes=$row[0].bytes}})
+    return @{manifestSha256=$manifestSha256;directory=$directory;step=$step;version=$version;maximumMilliseconds=$definitions[$index-1][2];expectedImages=$images}
+}
+function Assert-InstallerAccountingCommand($context,$receipt,[int]$driverPid,[int]$observerPid,[int]$controllerPid){
+    $args=@('C:\ETS2ET001Acceptance\tools\node.exe','C:\ETS2ET001Acceptance\harness\installer-step.mjs','C:\ETS2ET001Acceptance',$context.directory,($context.directory+'\step-guard.json'),$context.step,$context.version)
+    foreach($arg in $args){if($arg -isnot [string] -or $arg -match '["\r\n]' -or $arg.EndsWith('\')){throw 'Accounting context contains command delimiters.'}}
+    $prefix=(@($args|ForEach-Object {'"'+$_+'"'}) -join ' ')+' '
+    if($receipt.driverPid -ne $driverPid -or $receipt.observerPid -ne $observerPid -or $receipt.controllerPid -ne $controllerPid -or $receipt.driverCommandLine -isnot [string] -or !$receipt.driverCommandLine.StartsWith($prefix,[StringComparison]::Ordinal)){throw 'Accounting context differs from the exact created driver command.'}
+    $budgetText=$receipt.driverCommandLine.Substring($prefix.Length)
+    if($budgetText -notmatch '^"([0-9]{5})"$'){throw 'Accounting context differs from the exact created driver command.'}
+    $budget=[int]$Matches[1]
+    if($budget -lt 10000 -or $budget -gt $context.maximumMilliseconds){throw 'Accounting context created budget exceeds the existing step bounds.'}
+    return $budget
+}
 function Read-InstallerHelperExecutable($command){
     if($command -isnot [string] -or !$command -or $command -match '[\x00\r\n]' -or [char]::IsWhiteSpace($command[0])){throw 'Helper executable token is missing or malformed.'}
     if($command[0] -eq '"'){
@@ -81,5 +109,26 @@ function Assert-InstallerHelperProvenance($record,$metadata,$records,[int]$drive
 }
 function Assert-InstallerHelperExit($record){
     foreach($key in @('metadataPolicy','nativeFinalSignaled','exitCode','queryFailure','exitQueryFailure')){if(!$record.Contains($key)){throw 'Helper final native signaled exit 0 proof is incomplete.'}}
-    if($record.metadataPolicy -notin @('held-native-helper-wmi-null','held-native-helper-wmi-image','held-native-helper-wmi-advisory-mismatch','strict-console-image') -or $record.nativeFinalSignaled -isnot [bool] -or !$record.nativeFinalSignaled -or $record.exitCode -ne 0 -or $null -ne $record.queryFailure -or $null -ne $record.exitQueryFailure){throw 'Helper final native signaled exit 0 proof is incomplete.'}
+    if($record.metadataPolicy -notin @('held-native-helper-wmi-null','held-native-helper-wmi-image','held-native-helper-wmi-advisory-mismatch','strict-console-image','terminal-metadata-unresolved') -or $record.nativeFinalSignaled -isnot [bool] -or !$record.nativeFinalSignaled -or $record.exitCode -ne 0 -or $null -ne $record.queryFailure -or $null -ne $record.exitQueryFailure){throw 'Helper final native signaled exit 0 proof is incomplete.'}
+    if(($record.metadataPolicy -ceq 'terminal-metadata-unresolved') -ne ($record.role -ceq 'terminal-metadata-unresolved')){throw 'Terminal accounting role or policy was changed.'}
+}
+function Assert-InstallerTerminalAccounting($record,$metadata,$records,$expectedImages,[int]$driverPid,[int]$observerPid,[int]$controllerPid,$consolePids){
+    $roots=@($driverPid,$observerPid,$controllerPid)
+    if(@($roots|Where-Object {$_ -le 0}).Count -or @($roots|Select-Object -Unique).Count -ne 3 -or $record.pid -le 0 -or $roots -contains $record.pid -or $consolePids -contains $record.pid -or @($records|Where-Object {$_.pid -eq $record.pid}).Count -ne 1 -or $record.role -cne 'installer-helper'){throw 'Terminal accounting identity overlaps another role.'}
+    foreach($key in @('RequestedProcessId','ProcessId','Handle','ObjectPath','ClassName','ExecutablePath','CommandLine','ParentProcessId','Failure','FailureStage','ManagementErrorCode')){if($null -eq $metadata.PSObject.Properties[$key]){throw 'Terminal accounting typed metadata operands are missing.'}}
+    if($metadata.RequestedProcessId -isnot [int] -or $metadata.RequestedProcessId -ne $record.pid -or $metadata.Failure -isnot [string] -or !$metadata.Failure -or $metadata.FailureStage -cne 'get' -or $metadata.ManagementErrorCode -isnot [int] -or $metadata.ManagementErrorCode -ne -2147217406){throw 'Terminal accounting requires typed single-Get NotFound.'}
+    foreach($key in @('ProcessId','Handle','ObjectPath','ClassName','ExecutablePath','CommandLine')){if($null -ne $metadata.$key){throw 'Terminal accounting cannot consume partial returned metadata.'}}
+    if($metadata.ParentProcessId -isnot [int] -or $metadata.ParentProcessId -ne 0 -or $null -ne $record.commandLine -or $null -ne $record.parentProcessId){throw 'Terminal accounting cannot invent arguments or ancestry.'}
+    if($record.nativeIdentityHeld -ne $true -or $record.nativeExitBefore -ne 259 -or $record.nativeSignaledBefore -isnot [bool] -or $record.nativeSignaledBefore -or $record.metadataCompleted -ne $true -or $record.queryFailure -or $record.exitQueryFailure -or $null -eq $record.diagnosticTruncatedFields -or $record.diagnosticTruncatedFields.Count){throw 'Terminal accounting native or metadata custody is incomplete.'}
+    $custody=$record.nativeCustody
+    if(!$custody -or $null -ne $custody.failure -or $custody.exitCode -ne 259 -or $custody.signaled -isnot [bool] -or $custody.signaled -or !$custody.snapshot -or !$custody.scope){throw 'Terminal accounting live Job custody is incomplete.'}
+    $pids=@($custody.snapshot.Pids)
+    if($custody.snapshot.AssignedCount -ne $pids.Count -or $custody.snapshot.ListedCount -ne $pids.Count -or $pids.Count -lt 3 -or $pids.Count -gt 16 -or @($pids|Select-Object -Unique).Count -ne $pids.Count -or @($pids|Where-Object {$_ -le 0}).Count -or $pids -notcontains $record.pid -or $pids -notcontains $driverPid -or $pids -notcontains $observerPid -or $pids -contains $controllerPid){throw 'Terminal accounting Job membership differs.'}
+    if($custody.scope.LimitFlags -ne 8712 -or $custody.scope.ActiveProcessLimit -ne 16 -or $custody.scope.JobMemoryBytes -ne 2147483648 -or $custody.scope.CpuFlags -ne 5 -or $custody.scope.CpuRate -ne 2500){throw 'Terminal accounting Job limits differ.'}
+    $image=@($expectedImages|Where-Object {[string]::Equals($_.path,$record.executablePath,[StringComparison]::OrdinalIgnoreCase)})
+    if($image.Count -ne 1 -or $image[0].sha256 -notmatch '^[a-fA-F0-9]{64}$' -or $image[0].bytes -le 0 -or $record.sealedImageFailure -or $record.sealedImageSha256 -ine $image[0].sha256 -or $record.sealedImageBytes -ne $image[0].bytes){throw 'Terminal accounting installed image is not sealed.'}
+    $phase=Assert-InstallerHelperNativeAfter $record
+    if($null -ne $record.nativeImageAfterQueryFailure -or $null -ne $record.nativeImageAfterQueryErrorCode){throw 'Terminal accounting native state has image errors.'}
+    if($record.nativeAfterQueryProof -cne $phase -or $record.nativeSignaledAfterQuery -ne $true -or $record.nativeExitAfterQuery -ne 0){throw 'Terminal accounting requires actual same-handle terminal exit 0.'}
+    return 'terminal-metadata-unresolved'
 }

@@ -18,11 +18,11 @@
     "tools/telemetry-simulator"
   ],
   "scripts": {
-    "dev": "node scripts/require-desktop-launch.mjs && npm run build && electron-forge start",
+    "dev": "npm run build && electron-forge start",
     "build": "node scripts/build.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:electron": "node scripts/require-desktop-launch.mjs && npm run package && playwright test",
+    "test:electron": "npm run package && playwright test",
     "inspect:package": "node scripts/inspect-package.mjs",
     "postinstall": "install-electron",
     "package": "npm run build && electron-forge package --platform win32 --arch x64",

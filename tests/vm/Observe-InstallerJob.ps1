@@ -4,10 +4,21 @@ param([Parameter(Mandatory)][int]$DriverPid, [Parameter(Mandatory)][int]$Control
 $ErrorActionPreference='Stop'
 if($env:ETS2TELEMETRY_VM_JOB -ne '1'){throw 'Contained guest driver required.'}
 Add-Type -AssemblyName System.Management
+function Read-InstallerBoundedJson([string]$filename,[int]$limit){
+    $stream=[IO.File]::Open($filename,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
+    try{$bytes=[byte[]]::new($limit+1);$kept=0;while($kept -lt $bytes.Length){$read=$stream.Read($bytes,$kept,$bytes.Length-$kept);if($read -eq 0){break};$kept+=$read};if($kept -gt $limit){throw 'Accounting context exceeds its bounded input size.'}}finally{$stream.Dispose()}
+    $hash=[Security.Cryptography.SHA256]::Create();try{$digest=([BitConverter]::ToString($hash.ComputeHash($bytes,0,$kept))).Replace('-','').ToLowerInvariant()}finally{$hash.Dispose()}
+    return @{value=([Text.Encoding]::UTF8.GetString($bytes,0,$kept).TrimStart([char]0xfeff)|ConvertFrom-Json);sha256=$digest}
+}
+$kit='C:\ETS2ET001Acceptance'
+$stepDirectory=Split-Path -Parent $ResultFile
+if($PSScriptRoot -ine (Join-Path $kit 'harness') -or $stepDirectory -notmatch '^C:\\ETS2ET001Acceptance\\evidence\\[a-fA-F0-9]{32}\\step-[1-6]-(install|repair|smoke|update|uninstall)-0\.1\.[01]$'){throw 'Accounting context paths differ from the controlled step.'}
+$stepGuard=(Read-InstallerBoundedJson (Join-Path $stepDirectory 'step-guard.json') 8192).value
+$manifestInput=Read-InstallerBoundedJson (Join-Path $kit 'kit-manifest.json') 1048576
+$observerManifest=$manifestInput.value
+if($stepGuard.manifestSha256 -notmatch '^[a-fA-F0-9]{64}$' -or $stepGuard.manifestSha256 -ine $manifestInput.sha256){throw 'Accounting context manifest hash differs.'}
 $observerAssembly=Join-Path (Split-Path -Parent $PSScriptRoot) 'tools/InstallerJobView.dll'
-$observerManifest=Get-Content -LiteralPath (Join-Path (Split-Path -Parent $PSScriptRoot) 'kit-manifest.json') -Raw|ConvertFrom-Json
 if($observerManifest.observerAssemblySha256 -notmatch '^[a-fA-F0-9]{64}$' -or (Get-FileHash -LiteralPath $observerAssembly).Hash -ne $observerManifest.observerAssemblySha256){throw 'Sealed observer assembly preimage mismatch.'}
-[void][Reflection.Assembly]::LoadFrom($observerAssembly)
 $driverRule=Join-Path $PSScriptRoot 'Assert-InstallerDriverProvenance.ps1'
 $driverRuleRow=@($observerManifest.files|Where-Object {$_.path -ceq 'harness/Assert-InstallerDriverProvenance.ps1'})
 if($driverRuleRow.Count -ne 1 -or $driverRuleRow[0].sha256 -notmatch '^[a-fA-F0-9]{64}$' -or (Get-FileHash -LiteralPath $driverRule).Hash -ne $driverRuleRow[0].sha256 -or (Get-Item -LiteralPath $driverRule).Length -ne $driverRuleRow[0].bytes){throw 'Sealed initial-driver proof rule preimage mismatch.'}
@@ -16,12 +27,18 @@ $helperRule=Join-Path $PSScriptRoot 'Assert-InstallerHelperProvenance.ps1'
 $helperRuleRow=@($observerManifest.files|Where-Object {$_.path -ceq 'harness/Assert-InstallerHelperProvenance.ps1'})
 if($helperRuleRow.Count -ne 1 -or $helperRuleRow[0].sha256 -notmatch '^[a-fA-F0-9]{64}$' -or (Get-FileHash -LiteralPath $helperRule).Hash -ne $helperRuleRow[0].sha256 -or (Get-Item -LiteralPath $helperRule).Length -ne $helperRuleRow[0].bytes){throw 'Sealed installer-helper proof rule preimage mismatch.'}
 . $helperRule
+$accountingContext=Assert-InstallerAccountingContext $stepGuard $observerManifest $manifestInput.sha256 $stepDirectory $ReadyFile $StopFile $ResultFile (Join-Path $env:LOCALAPPDATA 'ETS2TelemetryDesktop') ([datetime]::UtcNow)
+$expectedAccountingImages=$accountingContext.expectedImages
+$receipt=(Read-InstallerBoundedJson (Join-Path $stepDirectory 'job/controller-receipt.json') 8192).value
+$createdBudget=Assert-InstallerAccountingCommand $accountingContext $receipt $DriverPid $PID $ControllerPid
+[void][Reflection.Assembly]::LoadFrom($observerAssembly)
 $seen=[Collections.Generic.HashSet[int]]::new()
 $records=[Collections.Generic.List[object]]::new()
 $handles=[Collections.Generic.Dictionary[int,IntPtr]]::new()
 # Completed approved parents retain their original handle until finally; never reopen a PID.
 $retiredHandles=[Collections.Generic.Dictionary[int,IntPtr]]::new()
 $queries=@{}
+$imageQueries=@{}
 $initialHandles=[Collections.Generic.Dictionary[int,IntPtr]]::new()
 $view=[ordered]@{passed=$false;observerPid=$PID;driverPid=$DriverPid;controllerPid=$ControllerPid;parentProcessId=$null;driverParentProcessId=$null;driverImage=$null;controllerImage=$null;startedUtc=[datetime]::UtcNow.ToString('o');finishedUtc=$null;failure=$null;drained=$false;finalPids=@();processes=@();initialPidSnapshot=$null;initialScope=$null;initialScopeFailure=$null;jobScope=$null;metadataWorkers=4;metadataQueueSeconds=3;metadataQuerySeconds=3;metadataCompletionSeconds=8;warmupMilliseconds=$null;pollCount=0;maximumPollGapMilliseconds=0}
 $view.initialUnexpectedProcesses=@();$view.initialDiagnosticMilliseconds=0;$view.initialDiagnosticFailure=$null
@@ -37,8 +54,9 @@ function Read-InstallerNativeErrorCode($failure){
 function Set-HelperMetadataDiagnostics($record,$metadata){
     $record.metadataCompleted=$true;$record.metadataImage=$metadata.ExecutablePath;$record.metadataCommandLine=$metadata.CommandLine;$record.metadataParentProcessId=$metadata.ParentProcessId;$record.metadataProviderFailure=$metadata.Failure;$record.metadataQueryElapsedMilliseconds=$metadata.ElapsedMilliseconds
     $record.metadataRequestedProcessId=$metadata.RequestedProcessId;$record.metadataProcessId=$metadata.ProcessId;$record.metadataHandle=$metadata.Handle;$record.metadataObjectPath=$metadata.ObjectPath;$record.metadataClassName=$metadata.ClassName
-    try{$record.metadataImageObservation=Read-InstallerHelperImageObservation $metadata $record.executablePath}catch{$record.metadataImageObservation='invalid'}
-    foreach($key in @('metadataImage','metadataCommandLine','metadataProviderFailure','metadataProcessId','metadataHandle','metadataObjectPath','metadataClassName','nativeImageAfterQuery','nativeImageAfterQueryFailure','nativeExitAfterQueryFailure')){if($record[$key] -is [string] -and $record[$key].Length -gt 4096){$record[$key]=$record[$key].Substring(0,4096);$record.diagnosticTruncatedFields+=@($key)}}
+    $record.metadataFailureStage=$metadata.FailureStage;$record.metadataManagementErrorCode=$metadata.ManagementErrorCode
+    if($metadata.Failure){$record.metadataImageObservation=if($metadata.FailureStage -ceq 'get' -and $metadata.ManagementErrorCode -eq -2147217406){'unavailable-get-notfound'}else{'unavailable-provider-error'}}else{try{$record.metadataImageObservation=Read-InstallerHelperImageObservation $metadata $record.executablePath}catch{$record.metadataImageObservation='invalid'}}
+    foreach($key in @('metadataImage','metadataCommandLine','metadataProviderFailure','metadataProcessId','metadataHandle','metadataObjectPath','metadataClassName','metadataFailureStage','nativeImageAfterQuery','nativeImageAfterQueryFailure','nativeExitAfterQueryFailure')){if($record[$key] -is [string] -and $record[$key].Length -gt 4096){$record[$key]=$record[$key].Substring(0,4096);$record.diagnosticTruncatedFields+=@($key)}}
 }
 try {
     $view.initialPidSnapshot=[InstallerJobView]::ReadPids()
@@ -123,13 +141,7 @@ try {
         }
         if(!$view.driverProvenance.metadataCompleted -or $driverMetadata.Result.Failure){throw 'Suspended sibling metadata query failed.'}
         $view.driverParentProcessId=$driverMetadata.Result.ParentProcessId
-        $receiptStream=[IO.File]::Open((Join-Path (Split-Path -Parent $ResultFile) 'job/controller-receipt.json'),[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
-        try{
-            $receiptBytes=[byte[]]::new(8193);$receiptKept=0
-            while($receiptKept -lt $receiptBytes.Length){$receiptRead=$receiptStream.Read($receiptBytes,$receiptKept,$receiptBytes.Length-$receiptKept);if($receiptRead -eq 0){break};$receiptKept+=$receiptRead}
-            if($receiptKept -gt 8192){throw 'Initial controller receipt exceeds 8 KiB.'}
-        }finally{$receiptStream.Dispose()}
-        $receipt=[Text.Encoding]::UTF8.GetString($receiptBytes,0,$receiptKept).TrimStart([char]0xfeff)|ConvertFrom-Json
+        $view.accountingContext=@{manifestSha256=$manifestInput.sha256;step=$accountingContext.step;version=$accountingContext.version;expectedImages=$expectedAccountingImages;driverCommandVerified=$true;createdBudgetMilliseconds=$createdBudget}
         $rawProof=[ordered]@{};foreach($key in $view.driverProvenance.Keys){$rawProof[$key]=$view.driverProvenance[$key]}
         # Compare original WMI values; bounded diagnostic copies cannot authorize a match.
         $rawProof.metadataImage=$driverMetadata.Result.ExecutablePath;$rawProof.metadataCommandLine=$driverMetadata.Result.CommandLine;$rawProof.metadataFailure=$driverMetadata.Result.Failure
@@ -153,12 +165,14 @@ try {
             if($view.consoleHost -and $ownedPid -eq $view.consoleHost.pid){if([InstallerJobView]::ExitCode($initialHandles[$ownedPid]) -ne 259){throw 'Held observer console exited during helper observation.'};continue}
             if($records.Count -ge 64){throw 'Owned process observation lifetime bound exceeded.'}
             $record=[ordered]@{pid=$ownedPid;observedUtc=[datetime]::UtcNow.ToString('o');commandLine=$null;executablePath=$null;parentProcessId=$null;role='installer-helper';nativeIdentityHeld=$false;nativeIdentityRetired=$false;nativeFinalSignaled=$false;metadataPolicy=$null;nativeExitBefore=$null;nativeSignaledBefore=$null;queryFailure=$null;queryElapsedMilliseconds=$null;queryStartedMilliseconds=$pollClock.Elapsed.TotalMilliseconds;exitCode=$null;exitQueryFailure=$null;metadataCompleted=$false;metadataImage=$null;metadataImageObservation=$null;metadataRequestedProcessId=$null;metadataProcessId=$null;metadataHandle=$null;metadataObjectPath=$null;metadataClassName=$null;metadataCommandLine=$null;metadataParentProcessId=$null;metadataProviderFailure=$null;metadataQueryElapsedMilliseconds=$null;nativeImageAfterQuery=$null;nativeImageAfterQueryFailure=$null;nativeImageAfterQueryErrorCode=$null;nativeImageAttemptedAfterQuery=$false;nativeAfterQueryProof=$null;nativeExitAfterQuery=$null;nativeSignaledAfterQuery=$null;nativeExitAfterQueryFailure=$null;diagnosticTextLimitCharacters=4096;diagnosticTruncatedFields=@()}
+            $record.nativeCustody=@{snapshot=$null;scope=$null;exitCode=$null;signaled=$null;failure=$null};$record.sealedImageSha256=$null;$record.sealedImageBytes=$null;$record.sealedImageFailure=$null;$record.metadataFailureStage=$null;$record.metadataManagementErrorCode=$null
             # Capture native identity/handles immediately, before asynchronous metadata.
             $handle=[InstallerJobView]::Hold($ownedPid)
             if($handle -ne [IntPtr]::Zero){
                 $handles.Add($ownedPid,$handle)
                 $record.nativeIdentityHeld=$true
                 try{$record.executablePath=[InstallerJobView]::Image($handle);$record.nativeExitBefore=[InstallerJobView]::ExitCode($handle);$record.nativeSignaledBefore=[InstallerJobView]::Signaled($handle)}catch{$record.queryFailure=$_.Exception.Message}
+                try{$record.nativeCustody.snapshot=[InstallerJobView]::ReadPids();$record.nativeCustody.scope=[InstallerJobView]::AuthoritativeScope();$record.nativeCustody.exitCode=[InstallerJobView]::ExitCode($handle);$record.nativeCustody.signaled=[InstallerJobView]::Signaled($handle)}catch{$record.nativeCustody.failure=$_.Exception.ToString()}
                 if($queries.Count -ge 16){throw 'Pending metadata query bound exceeded.'}
                 $queries[$ownedPid]=[InstallerJobView]::QueryAsync($ownedPid)
             }else{$record.exitQueryFailure='Owned process exited before a read-only handle could be opened.'}
@@ -198,14 +212,31 @@ try {
                         if($metadata.Failure -or $null -eq $metadata.ExecutablePath -or $metadata.ExecutablePath -ine $record.executablePath -or $record.diagnosticTruncatedFields.Count){throw 'Console helper metadata image or observation differs.'}
                         $record.metadataPolicy='strict-console-image'
                     }else{
-                        try{$record.nativeAfterQueryProof=Assert-InstallerHelperNativeAfter $record;$policy=Assert-InstallerHelperProvenance $record $metadata $records $DriverPid $PID $ControllerPid @($view.consoleHost.pid,$view.driverConsoleHost.pid)}catch{$record.queryFailure=$_.Exception.Message;throw}
+                        try{
+                            $record.nativeAfterQueryProof=Assert-InstallerHelperNativeAfter $record
+                            if($metadata.Failure){
+                                $expectedImage=@($expectedAccountingImages|Where-Object {$_.path -ieq $record.executablePath})
+                                if($expectedImage.Count -ne 1){throw 'Terminal accounting installed image is not sealed.'}
+                                if(!$imageQueries.ContainsKey($record.pid)){
+                                    if($metadata.FailureStage -cne 'get' -or $metadata.ManagementErrorCode -ne -2147217406){throw 'Terminal accounting requires typed single-Get NotFound.'}
+                                    $record.sealedImageStartedMilliseconds=$pollClock.Elapsed.TotalMilliseconds
+                                    $imageQueries[$record.pid]=[InstallerJobView]::SealAsync($record.executablePath,$expectedImage[0].bytes)
+                                }
+                                $seal=$imageQueries[$record.pid]
+                                if($pollClock.Elapsed.TotalMilliseconds-$record.queryStartedMilliseconds -ge 8000){throw 'Image seal exceeded the existing eight-second completion deadline.'}
+                                if(!$seal.IsCompleted){continue}
+                                $record.sealedImageBytes=$seal.Result.Bytes;$record.sealedImageSha256=$seal.Result.Sha256;$record.sealedImageFailure=$seal.Result.Failure;$imageQueries.Remove($record.pid)
+                                $policy=Assert-InstallerTerminalAccounting $record $metadata $records $expectedAccountingImages $DriverPid $PID $ControllerPid @($view.consoleHost.pid,$view.driverConsoleHost.pid)
+                                $record.role='terminal-metadata-unresolved'
+                            }else{$policy=Assert-InstallerHelperProvenance $record $metadata $records $DriverPid $PID $ControllerPid @($view.consoleHost.pid,$view.driverConsoleHost.pid)}
+                        }catch{$record.queryFailure=$_.Exception.Message;throw}
                         if($policy -eq 'pending-audited-parent'){
                             if($pollClock.Elapsed.TotalMilliseconds-$record.queryStartedMilliseconds -ge 8000){throw 'Helper parent approval exceeded the existing eight-second completion deadline.'}
                             continue
                         }
                         $record.metadataPolicy=$policy
                     }
-                    $record.commandLine=$metadata.CommandLine;$record.parentProcessId=$metadata.ParentProcessId
+                    if($record.role -cne 'terminal-metadata-unresolved'){$record.commandLine=$metadata.CommandLine;$record.parentProcessId=$metadata.ParentProcessId}
                     $queries.Remove($record.pid)
                     if($record.executablePath -ieq 'C:\Windows\System32\conhost.exe' -and $record.parentProcessId -eq $DriverPid){
                         if($view.driverConsoleHost -or !$handles.ContainsKey($record.pid) -or $initial -contains $record.pid -or $record.pid -eq $ControllerPid){throw 'Late driver console duplicates or overlaps an existing role.'}

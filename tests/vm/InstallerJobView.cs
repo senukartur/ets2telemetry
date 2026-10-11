@@ -3,17 +3,25 @@ using System.ComponentModel;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Management;
+using System.IO;
+using System.Security.Cryptography;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 public sealed class InstallerMetadata {
     public string CommandLine, ExecutablePath, Failure;
+    public string FailureStage;
+    public int? ManagementErrorCode;
     public int RequestedProcessId;
     public object ProcessId;
     public string Handle, ObjectPath, ClassName;
     public int ParentProcessId;
     public double ElapsedMilliseconds;
+}
+public sealed class InstallerImageSeal {
+    public long Bytes;
+    public string Sha256, Failure;
 }
 public sealed class InstallerJobScope {
     public uint LimitFlags, ActiveProcessLimit, CpuFlags, CpuRate;
@@ -24,6 +32,27 @@ public sealed class InstallerJobPidSnapshot {
     public int[] Pids;
 }
 public static class InstallerJobView {
+    // Conditional file verification never blocks native PID polling or opens a process.
+    public static Task<InstallerImageSeal> SealAsync(string path, long expectedBytes) {
+        return Task.Factory.StartNew(() => {
+            var result=new InstallerImageSeal();
+            try {
+                if(expectedBytes<=0 || expectedBytes>536870912L || (File.GetAttributes(path)&FileAttributes.ReparsePoint)!=0)throw new InvalidOperationException("Invalid bounded image seal input");
+                using(var file=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.Read,65536,FileOptions.SequentialScan))
+                using(var hash=SHA256.Create()) {
+                    if(file.Length!=expectedBytes)throw new InvalidOperationException("Image seal size differs");
+                    var buffer=new byte[65536];int read;
+                    while((read=file.Read(buffer,0,buffer.Length))!=0){result.Bytes+=read;if(result.Bytes>expectedBytes)throw new InvalidOperationException("Image seal read exceeds expected size");hash.TransformBlock(buffer,0,read,buffer,0);}
+                    if(result.Bytes!=expectedBytes)throw new InvalidOperationException("Image seal read size differs");hash.TransformFinalBlock(new byte[0],0,0);result.Sha256=BitConverter.ToString(hash.Hash).Replace("-","").ToLowerInvariant();
+                }
+            }catch(Exception error){result.Failure=error.ToString();}
+            return result;
+        });
+    }
+    // Pure capture used by the single query catch; classifications never parse exception text.
+    public static void CaptureMetadataFailure(InstallerMetadata result, Exception error, string stage) {
+        result.Failure=error.ToString();result.FailureStage=stage;var management=error as ManagementException;if(management!=null)result.ManagementErrorCode=(int)management.ErrorCode;
+    }
     // Metadata workers never block native PID/handle polling. Four queries maximum.
     static readonly SemaphoreSlim MetadataSlots = new SemaphoreSlim(4,4);
     [StructLayout(LayoutKind.Sequential)] struct BasicLimits {
@@ -74,12 +103,15 @@ public static class InstallerJobView {
     public static Task<InstallerMetadata> QueryAsync(int pid) {
         return Task.Factory.StartNew(() => {
             var result=new InstallerMetadata {RequestedProcessId=pid};var clock=Stopwatch.StartNew();
-            bool acquired=MetadataSlots.Wait(3000);
+            bool acquired=MetadataSlots.Wait(3000);string stage="queue";
             try {
                 if(!acquired) throw new TimeoutException("Metadata worker queue exceeded three seconds");
+                stage="construct";
                 using(var process=new ManagementObject("Win32_Process.Handle='"+pid+"'")) {
                     process.Options.Timeout=TimeSpan.FromSeconds(3);
+                    stage="get";
                     process.Get();
+                    stage="returned-fields";
                     // Raw keys from this same returned instance; no second query or image fallback.
                     result.ProcessId=process["ProcessId"];
                     result.Handle=(string)process["Handle"];
@@ -89,7 +121,7 @@ public static class InstallerJobView {
                     result.ExecutablePath=(string)process["ExecutablePath"];
                     result.ParentProcessId=Convert.ToInt32(process["ParentProcessId"]);
                 }
-            }catch(Exception error){result.Failure=error.ToString();}
+            }catch(Exception error){CaptureMetadataFailure(result,error,stage);}
             finally {if(acquired) MetadataSlots.Release();result.ElapsedMilliseconds=clock.Elapsed.TotalMilliseconds;}
             return result;
         });
