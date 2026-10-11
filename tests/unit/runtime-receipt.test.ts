@@ -17,13 +17,16 @@ it('requires an intact current driver receipt and normal Job exit without overwr
       {name: 'different mode', body: JSON.stringify({passed: true, commit: 'candidate', mode: 'development'}), code: 0, available: true, reason: 'DRIVER_RESULT_IDENTITY_MISMATCH'},
       {name: 'driver failed', body: JSON.stringify({passed: false, commit: 'candidate', mode: 'packaged'}), code: 0, available: true, reason: 'DRIVER_FAILED'},
       {name: 'Job failure overrides driver success', body: JSON.stringify({passed: true, commit: 'candidate', mode: 'packaged'}), code: 125, available: true, reason: 'JOB_FAILED'},
-      {name: 'normal intact success', body: JSON.stringify({passed: true, commit: 'candidate', mode: 'packaged'}), code: 0, available: true, reason: null}
+      {name: 'normal intact success', body: JSON.stringify({passed: true, commit: 'candidate', mode: 'packaged'}), code: 0, available: true, reason: null},
+      {name: 'scaffold receipt cannot prove telemetry', body: JSON.stringify({passed: true, commit: 'candidate', mode: 'packaged', scenarioKind: 'scaffold'}), scenario: 'telemetry', code: 0, available: true, reason: 'DRIVER_RESULT_SCENARIO_MISMATCH'},
+      {name: 'telemetry receipt missing scenario', body: JSON.stringify({passed: true, commit: 'candidate', mode: 'packaged'}), scenario: 'telemetry', code: 0, available: true, reason: 'DRIVER_RESULT_SCENARIO_MISMATCH'},
+      {name: 'matching telemetry scenario', body: JSON.stringify({passed: true, commit: 'candidate', mode: 'packaged', scenarioKind: 'telemetry'}), scenario: 'telemetry', code: 0, available: true, reason: null}
     ];
     for (const [index, scenario] of cases.entries()) {
       const receipt = path.join(resources.directory, `receipt-${index}.json`);
       const config = path.join(resources.directory, `config-${index}.json`);
       if (scenario.body !== undefined) await writeFile(receipt, scenario.body);
-      await writeFile(config, JSON.stringify({receipt, code: scenario.code}));
+      await writeFile(config, JSON.stringify({receipt, code: scenario.code, scenario: 'scenario' in scenario ? scenario.scenario : undefined}));
       const output = execFileSync(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
         path.resolve('tests/shared/Read-RuntimeReceipt.ps1'), '-Configuration', config],
       {encoding: 'utf8', timeout: 5000, windowsHide: true, env: {...process.env, PSModulePath: ''}});

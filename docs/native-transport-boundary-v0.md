@@ -1,0 +1,29 @@
+# Native transport boundary for prototype v0
+
+This integration contract coordinates ET-004a and ET-006a. It describes required behavior while implementation and independent runtime evidence are pending. It does not accept either package or establish real-game support. The owner authorized dependent branches before full prerequisite acceptance on October 11, 2026.
+
+## Responsibilities
+
+The game DLL owns the Windows Named Pipe server. Electron main supervises the telemetry utilityProcess; ingestion, framing/schema validation, ordering, current state and subscription orchestration stay in that service. A fixed project-owned native client executable performs documented Windows connected-pipe/process/token queries and raw I/O because Node's public net API does not expose authoritative pipe-peer identity. This broker is an owned child of the service, not a renderer command interface. The service retains its separate SQLite worker; v0 performs no production history writes or durable acknowledgements.
+
+Main/service resolve one fixed development or packaged broker artifact. Renderer source selection exposes bounded identifiers only, never executable paths, arguments, discovery paths or arbitrary native commands. Packaging must bind the broker to committed source/build evidence and static package inspection. Its process lifetime is supervised with the service; restart retires old connection generations and handles before a new source can become fresh.
+
+## Discovery and service policy
+
+Use SHA-256 of canonical current-user SID UTF-8 as a lowercase 64-hex userTag. Derive the pipe name from validated game/protocol/user/session/process-instance fields using the accepted [v0 contract](protocol/v0.md). Discovery records are bounded exact-schema JSON, not authority. Version 1 records include schemaVersion, protocolMajor, game, userTag, windowsSessionId, processId, processCreationTime (canonical unsigned FILETIME decimal string), processInstanceId, pluginSessionId and pipeName. Store each record as transport/v0/{processInstanceId}.json under the ETS2Telemetry LOCALAPPDATA directory with protected current-user access. Endpoint creation must succeed before publication; cleanup removes only the still-owned record. Reject reparse traversal, foreign ACLs/owners, corrupt/stale records and inconsistent derived names.
+
+service-policy.json in the same protected directory is UTF-8 JSON capped at 16 KiB with exact fields schemaVersion:1, userTag, windowsSessionId and allowedExecutables. The array contains 1–4 exact records with canonical final DOS path and lowercase SHA-256 digest. Reject unknown/duplicate keys. Provision only the fixed owned broker artifact, using held executable identity; preserve other valid entries through bounded atomic updates. No general Electron executable or arbitrary same-user path fallback. Missing/invalid policy fails closed.
+
+Both peers derive authority from the connected pipe's actual peer PID, retained constrained process handle, creation FILETIME, token SID, Windows session and approved executable provenance. Verify the game executable and selected discovery identity independently; compare envelope identity before applying any state. Retain/recheck authority on reconnect and reject exited/reused identities. Paths and claimed receipts are not standalone proof. The boundary is a local same-user model; it does not promise defense against a compromised process with that user's authority.
+
+## Bounded flow and lifetime
+
+The broker sends one authority receipt capped at 4,096 payload bytes before raw server frames; the utility must validate it against its supervisor-owned connection generation and selected source before applying state. Startup accepts one raw hello capped at 4,096 payload bytes plus its four-byte prefix. Both native peers reject that bound before accumulating larger handshake contents. General server frames retain the accepted 65,536-byte payload limit. Later internal credit/stop controls cannot carry arbitrary native operations. Finite frame credits cap the broker-to-service relay. Internal flow control is not a wire ACK and conveys no durable recording result.
+
+The service retains at most one in-flight live update and one coalesced latest pending update per bounded subscriber. Credit timeout, detached/recreated ports, stale service generations and slow consumers must not create hidden unbounded Electron queues. Welcome/checkpoint ordering and increasing sequence/capture/continuity invariants survive coalescing and reconnects. Explicit stale/disconnected state precedes new hydration.
+
+The plugin transport uses overlapped I/O. CancelIoEx is a request, not completed cancellation: observe actual completion before reusing/freeing each buffer, OVERLAPPED and handle, then join the worker before DLL unload. ERROR_NOT_FOUND can be a completion race. No SDK API calls on transport/broker threads, no serialization/I/O in SDK callbacks, and no blocking worker teardown in DllMain. Console sanitizer tests stay separate from the uninstrumented game DLL.
+
+## Required evidence
+
+Each owning package records actual security/collision/identity mismatch, handshake/framing/limits, absent/stalled consumer, reconnect, cancellation and orderly shutdown tests. ET-006a adds real source-to-renderer development and packaged checks under the existing bounded Windows Job Object; prior scaffold security/SQLite/shutdown checks remain mandatory. Controlled pipes/windows and synthetic telemetry are explicitly distinct from real games. Second-user/remote/elevation/clean-machine/game checks without actual execution stay pending.

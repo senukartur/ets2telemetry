@@ -1,0 +1,39 @@
+# Prototype telemetry service and renderer bridge
+
+ET-006a consumes the accepted [protocol 0.0](protocol/v0.md). It adds live ingestion and a functional speed/fuel display, with no production database writes, samples, trips, durable events or wire ACKs. The only SQLite operation remains the existing isolated temporary worker probe. Simulator success is not game compatibility evidence.
+
+Electron main owns the window, authorization, fixed native artifact resolution and utility-process supervision. The utility process owns framing, ordering, source checks, freshness, subscriptions and the SQLite worker. React receives a frozen narrow preload API: `getStatus`, `selectSource`, and `subscribeLive`. It receives no IPC object, Node access, filesystem path, native operation or database operation. Both sender identity and the main-frame identity authorize every main IPC request.
+
+## Source selection and trust
+
+The default `game` selection waits for an explicit target. `ets2` and `ats` select a game by enum. Multiple discovery records for the same selected game fail closed rather than choosing the first process. `synthetic` and `replay` require an explicitly configured isolated fixture endpoint; there is no fallback from a game source to a fixture. The main-owned environment configuration is `ETS2TELEMETRY_SOURCE_KIND` plus `ETS2TELEMETRY_SOURCE_PIPE`. Renderer commands cannot supply a path. The fixture endpoint must exactly match `\\.\pipe\ETS2Telemetry-SYNTHETIC-TEST-v0-{pid}-{uuid}`; the envelope origin must equal the selected fixture kind. The current ET-005a simulator produces synthetic data, so selecting replay against that simulator is rejected.
+
+Node `net` is used only for the explicit fixture path. It does not authenticate game peers. The separate owned native client connects game sources using the [native transport boundary](native-transport-boundary-v0.md). Development uses the fixed `native/telemetry-client/build/Release/telemetry-pipe-client.exe`; packaged applications use `resources/telemetry-client/telemetry-pipe-client.exe`. Main compares the adjacent build receipt's source map with the desktop build receipt and hashes the executable before passing this fixed configuration to the service. This is build provenance within the same-user model, not a defense against a compromised account.
+
+The client reads owner-only UTF-8 discovery records under `%LOCALAPPDATA%\ETS2Telemetry\transport\v0`, rejects unknown/duplicate keys, unsafe DACLs and reparses, and bounds inspection to 256 directory entries/128 records/16 KiB per record. It verifies the connected pipe server PID, retained process creation FILETIME, token SID and Windows session, and holds the game image and process handles. The executable basename must be `eurotrucks2.exe` or `amtrucks.exe` for the selected game. The record UUIDs bind discovery to the envelopes; they are not independently authoritative OS identities. Every envelope must match the native receipt's game, PID, session, process-instance UUID, plugin-session UUID and game origin. Reconnection launches a fresh verifier and consumer.
+
+Before connecting, the broker publishes its own canonical held image path and SHA256 into the bounded protected `service-policy.json`, preserving valid existing entries (maximum four). A protected, exclusive, delete-on-close lock serializes this owned policy publication; contention fails closed. The plugin checks the actual connected broker process against this policy. The broker does not authorize Electron generally or infer role from command-line/ancestry claims. Other-user and remote connection evidence remains with the native transport acceptance record.
+
+## Native broker control
+
+The broker accepts only `--game ets2|ats --discovery-dir <main-owned-directory>`. Its first stdout frame is a four-byte little-endian length followed by a JSON receipt of at most 4,096 bytes:
+
+```json
+{"type":"authority","schemaVersion":1,"source":{"game":"ets2","processId":123,"windowsSessionId":1,"processInstanceId":"00112233-4455-6677-8899-aabbccddeeff","pluginSessionId":"11112233-4455-6677-8899-aabbccddeeff","origin":"game"},"processCreationTime":"134000000000000000","userTag":"<64 lowercase hex characters>"}
+```
+
+No matching record produces `{"type":"waiting","schemaVersion":1}` and exit code 2. Authority failure exits 1. Source disconnect/cancellation exits 3. The service sends one bounded framed v0 hello, then one byte `0x01` per relay credit. One credit permits one wire frame of at most 65,540 total bytes. The service returns a credit only after synchronous schema/order/identity validation and state application. Credits control this owned stdio boundary; they are not v0 or durable acknowledgements. An unsolicited frame, duplicate control credit, malformed frame, oversize payload or changed identity closes the connection.
+
+There is one native client per service, including while switching sources: the previous client must actually close before the latest pending selection starts. Switching requests coalesce into one pending selection. Native pipe operations have five-second deadlines and cancellation waits for actual completion. An input EOF monitor cancels outstanding overlapped reads. Synchronous stdio cancellation joins the owned I/O thread. The production executable uses the static MSVC runtime; optional ASan console targets are separate artifacts.
+
+## Current state and recovery
+
+The service sends a single hello per connection and requires welcome followed by checkpoint. Welcome alone never creates a fresh reading. The accepted consumer rejects duplicates, regressions, unsupported versions, source/clock changes, regressing counters, malformed/split/oversize frames and partial EOF. A protocol failure closes the stream without scanning for another prefix. An explicit reselection is required after incompatibility. Normal disconnects retry at bounded delays of 250, 500, 1,000, 2,000 and 4,000 ms; a hydrated checkpoint resets that backoff.
+
+`waiting`, `connected`, `paused`, `stale`, `incompatible`, `disconnected`, `unavailable`, `service-failed` and `restarting` are visible. A service monotonic receive clock controls the 500 ms stale threshold. Source and receive clocks are never subtracted. A disconnect immediately clears freshness; an old observation may remain as context but the UI hides its speed/fuel values. Every update has `recording:false` and `coverage:"unknown"`; hydration is current-state replacement and never invents interval history.
+
+Main authorizes one renderer subscription. The utility permits at most two port slots to bound replacement races. Each port holds one outstanding delivery and one replaceable latest update, receives at most 20 updates per second, and closes after five seconds without callback consumption. Delivery-ID exhaustion fails closed. The preload consumes the delivery only after invoking the narrow callback. Unsubscribe, navigation and renderer/service restarts retire old ports. A fresh authorized port hydrates from the new utility's state after a service restart.
+
+Two service restarts are supervised, after 250 and 1,000 ms; exhaustion remains visibly failed until explicit application exit. Renderer recovery reloads at most twice. The opt-in diagnostic service-exit event exists only when `ETS2TELEMETRY_LIVE_SMOKE=1` and diagnostic/profile directories are configured; it targets the currently owned utility object, never a PID supplied by a renderer. Normal shutdown retains the original worker-probe cleanup and final deadlines. A deliberately killed service can leave its isolated probe directory; it is recorded separately from normal shutdown evidence. V0 has no recording. Close-to-tray recording and explicit recording-exit semantics remain ET-011/ET-015 work.
+
+Validation and remaining evidence are listed in [ET-006a validation](validation/et-006a.md).

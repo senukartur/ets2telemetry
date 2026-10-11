@@ -64,6 +64,8 @@ ET-022 candidate update on October 11, 2026: Windows CI has actual clean and res
 
 ET-002a acceptance update on October 11, 2026: Owner decision on October 11, 2026: ET-002a was explicitly accepted after its exact-head checks and independent review; PR #9 was squash merged as `247c076cf803529c4650e125544faaf0bc3ccad7`. The owner expanded the sequencing exception to start ET-003 and ET-005a from that updated `main` while SP-01 remains unaccepted and PR #8 stays draft. The real ETS2 single-player windowed retry and Convoy checks remain mandatory pending evidence. This decision changes sequencing only; it does not establish game compatibility, authorize protocol v1, or waive the acceptance and merge criteria of subsequent packages.
 
+Owner sequencing decision on October 11, 2026: ET-004a, ET-006a and ET-007 may start before full acceptance of ET-003/ET-005a, using isolated branches based on their independently reviewed PR #10/#11 commits. Those prerequisites remain unaccepted draft PRs; every missing game/environment/desktop criterion remains pending. This exception does not mark packages Done, authorize v1/history or extend scope to ET-008 or later phases.
+
 ## Architecture Baseline
 
 | Area | Working choice |
@@ -80,6 +82,8 @@ ET-002a acceptance update on October 11, 2026: Owner decision on October 11, 202
 The ET-001 scaffold pins dependencies and defines process boundaries; consult [docs/setup.md](docs/setup.md) and actual check evidence for installed and verified tooling. Distinguish SDK archive versions from API versions and game versions.
 
 Keep telemetry processing and trip accounting separate from React components so they can be tested without the UI. Keep the plugin, application transport, persistence, and overlay responsibilities distinct. Expose narrow typed interfaces across boundaries.
+
+The utilityProcess owns ingestion and source validation. A fixed project-owned native client broker supplies authoritative Windows pipe-peer queries and bounded raw I/O under its supervision; it exposes no arbitrary renderer commands. See [the v0 native boundary](docs/native-transport-boundary-v0.md) for discovery, provenance, flow-control and lifetime requirements. This is a transport implementation detail, not a wire change or game-compatibility claim.
 
 ## Implementation Constraints
 

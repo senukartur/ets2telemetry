@@ -105,3 +105,7 @@ The then-frozen package passed two contained guest Playwright launches with rend
 ## Native installed scaffold acceptance
 
 All six actual native operations completed with normal root/primary exits and naturally empty Jobs. Both installed smokes verified the real utilityProcess/SQLite worker, secure renderer, temporary cleanup and main/service/launcher exit 0. The first wrapper rejected vendor-owned uninstall residues; a separately reviewed strict predicate accepted only the exact .dead marker and sealed helpers, followed by exact owned cleanup. The original failure remains unchanged. Current artifact identities, preserved owner preimages, independent review and an unexplained earlier Playwright timeout are in [the validation record](validation/et-001.md). No further VM run is required. The complete installer cycle was not rerun solely to replace the incorrect assertion.
+
+## ET-006a native client build
+
+The ET-006a candidate extends npm run build to configure and compile the fixed native/telemetry-client Windows x64 executable with CMake/MSVC before bundling desktop source. Keep the documented CMake toolchain on PATH for desktop build/package/make commands. The generated native client and its source-bound receipt remain in ignored native/telemetry-client/build and .local/package-native; Forge copies the owned staged client directory to resources/telemetry-client. This does not install a game DLL or create real history. Exact runtime outcomes and remaining checks are recorded in docs/validation/et-006a.md.

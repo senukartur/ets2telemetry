@@ -11,12 +11,15 @@ export class ServiceSupervisor {
   private exited = false;
   private finished = false;
   private exitCode = 0;
+  private restarts = 0;
   stopping = false;
 
   constructor(private readonly log: (event: string, detail?: unknown) => void,
-    private readonly exit: (code: number) => void) {}
+    private readonly exit: (code: number) => void,
+    private readonly recovery?: {restart(): void; state(state: 'service-failed' | 'restarting'): void; exhausted(): void}) {}
 
   attach(service: SupervisedService): void {
+    this.exited = false; this.readySeen = false;
     this.service = service;
     this.timers.push(setTimeout(() => this.fail('SERVICE_START_TIMEOUT'), 15000));
     this.log('SERVICE_START_REQUESTED');
@@ -40,6 +43,15 @@ export class ServiceSupervisor {
   serviceExited(code: number): void {
     this.exited = true;
     this.log('SERVICE_EXIT', {code});
+    if (!this.stopping && this.recovery) {
+      this.clearTimers(); this.readySeen = false; this.recovery.state('service-failed');
+      if (this.restarts < 2) {
+        const delay = this.restarts++ === 0 ? 250 : 1000;
+        this.recovery.state('restarting');
+        this.timers.push(setTimeout(() => {if (!this.stopping) this.recovery!.restart();}, delay));
+      } else this.recovery.exhausted();
+      return;
+    }
     if (!this.stopping || code !== 0) this.exitCode = 1;
     this.finish();
   }

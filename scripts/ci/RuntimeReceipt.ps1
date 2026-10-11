@@ -1,6 +1,7 @@
 # Pure receipt validation; this file never launches a process.
 function Test-RuntimeReceipt {
-    param([string]$DriverResultPath, [string]$ExpectedCommit, [string]$ExpectedMode, [int]$JobExitCode)
+    param([string]$DriverResultPath, [string]$ExpectedCommit, [string]$ExpectedMode, [int]$JobExitCode,
+        [string]$ExpectedScenario)
     $validation = [ordered]@{passed=$false; driverResultAvailable=$false; reason=$null; driverPassed=$null}
     if (!(Test-Path -LiteralPath $DriverResultPath -PathType Leaf)) {
         $validation.reason = 'DRIVER_RESULT_MISSING'; return $validation
@@ -15,6 +16,9 @@ function Test-RuntimeReceipt {
     $validation.driverPassed = $driver.passed
     if ($driver.commit -cne $ExpectedCommit -or $driver.mode -cne $ExpectedMode) {
         $validation.reason = 'DRIVER_RESULT_IDENTITY_MISMATCH'; return $validation
+    }
+    if ($ExpectedScenario -and $driver.scenarioKind -cne $ExpectedScenario) {
+        $validation.reason = 'DRIVER_RESULT_SCENARIO_MISMATCH'; return $validation
     }
     if ($JobExitCode -ne 0) { $validation.reason = 'JOB_FAILED'; return $validation }
     if ($driver.passed -ne $true) { $validation.reason = 'DRIVER_FAILED'; return $validation }
