@@ -6,6 +6,7 @@ import {afterEach, describe, expect, it, vi} from 'vitest';
 import {TelemetryIngestion, TEST_PIPE_PATTERN, initialLive, sourceSelection} from '../../apps/desktop/src/telemetry-ingestion';
 import {LiveSubscriptions, type LivePort} from '../../apps/desktop/src/live-subscriptions';
 import {ServiceSupervisor} from '../../apps/desktop/src/service-supervisor';
+import type {ProbeDependencies} from '../../apps/desktop/src/service-probe';
 import {FrameDecoder, encodeFrame} from '../../packages/contracts/src/protocol-v0';
 import type {SourceIdentity} from '../../packages/contracts/src/protocol-v0';
 import type {LiveTelemetry} from '../../packages/contracts/src';
@@ -29,6 +30,41 @@ class TestPort extends EventEmitter implements LivePort {
   consume(): void {this.emit('message', {data: {type: 'consumed', delivery: this.messages.at(-1)!.delivery}});}
 }
 afterEach(() => vi.useRealTimers());
+it('boots transport only after the parent selection and retains it across renderer subscriptions', async () => {
+  vi.useFakeTimers(); const sockets: TestSocket[] = [];
+  const connect = vi.spyOn(net, 'connect').mockImplementation(() => {const socket = new TestSocket(); sockets.push(socket); return socket as unknown as net.Socket;});
+  const exit = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+  const previousPort = Object.getOwnPropertyDescriptor(process, 'parentPort');
+  const parent = Object.assign(new EventEmitter(), {postMessage: vi.fn()});
+  Object.defineProperty(process, 'parentPort', {configurable: true, value: parent});
+  vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'synthetic'); vi.stubEnv('ETS2TELEMETRY_SOURCE_PIPE', endpoint);
+  vi.doMock('../../apps/desktop/src/diagnostics', () => ({createDiagnostics: () => vi.fn()}));
+  // Isolate the existing storage probe; exercise the actual service handlers and ingestion.
+  vi.doMock('../../apps/desktop/src/service-probe', () => ({ServiceProbe: class {
+    constructor(private readonly dependencies: ProbeDependencies) {}
+    async start() {this.dependencies.report({type: 'ready'});}
+    async stop() {this.dependencies.report({type: 'stopped'});}
+  }}));
+  const command = (type: string, ports: TestPort[] = []) => parent.emit('message', {data: {type, source: 'synthetic'}, ports});
+  try {
+    await import('../../apps/desktop/src/telemetry-service');
+    expect(parent.postMessage).toHaveBeenCalledWith({type: 'ready'}); expect(connect).not.toHaveBeenCalled();
+    command('select'); expect(connect).toHaveBeenCalledTimes(1);
+    sockets[0].emit('connect'); sockets[0].emit('data', Buffer.concat([emissions[0].frame, emissions[1].frame]));
+    for (let reload = 0; reload < 2; reload++) {
+      const port = new TestPort(); command('subscribe', [port]);
+      expect(port.messages.at(-1)?.update).toMatchObject({selection: 'synthetic', fresh: true});
+      command('unsubscribe'); expect(port.closed).toBe(true);
+    }
+    expect(connect).toHaveBeenCalledTimes(1);
+    command('select'); expect(connect).toHaveBeenCalledTimes(2); expect(sockets[0].destroyed).toBe(true);
+  } finally {
+    command('stop'); await vi.advanceTimersByTimeAsync(0); expect(exit).toHaveBeenCalledWith(0);
+    if (previousPort) Object.defineProperty(process, 'parentPort', previousPort); else Reflect.deleteProperty(process, 'parentPort');
+    connect.mockRestore(); exit.mockRestore(); vi.unstubAllEnvs();
+    vi.doUnmock('../../apps/desktop/src/diagnostics'); vi.doUnmock('../../apps/desktop/src/service-probe'); vi.resetModules();
+  }
+});
 function fixture() {
   vi.useFakeTimers(); const updates: LiveTelemetry[] = []; const sockets: TestSocket[] = []; let now = 0;
   const ingestion = new TelemetryIngestion(state => updates.push(state), {now: () => now, connect: () => {const socket = new TestSocket(); sockets.push(socket); return socket;}});

@@ -18,7 +18,6 @@ let launcher;
 let timer;
 let tracing = false;
 let telemetrySource;
-let diagnosticCrashRequested = false;
 const failure = error => ({name: error.name, message: error.message, stack: error.stack});
 try {
   assert.equal(process.platform, 'win32');
@@ -68,14 +67,13 @@ try {
     await window.reload(); await current('renderer-reload-1');
     await window.reload(); await current('renderer-reload-2');
     result.telemetry.rendererReloads = 2;
-    diagnosticCrashRequested = true;
-    result.telemetry.diagnosticCrashRequested = true;
     const restartRequested = await application.evaluate(({app}) => app.emit('ets2telemetry:diagnostic-service-exit'));
     assert.equal(restartRequested, true, 'Opt-in diagnostic event unavailable');
+    result.telemetry.diagnosticCrashRequested = true;
     await window.getByText(/^(restarting|service-failed):/).waitFor({state: 'visible', timeout: 5000});
     await current('service-restart'); result.telemetry.serviceRestartRecovered = true;
     result.telemetry.source = telemetrySource.statistics();
-    assert.ok(result.telemetry.source.connections >= 2, 'Restart did not reconnect actual source');
+    assert.equal(result.telemetry.source.connections, 2, 'Expected one initial source connection and one service-restart connection');
     await telemetrySource.stop();
     await window.getByText('Speed: unavailable', {exact: true}).waitFor({state: 'visible', timeout: 5000});
     assert.match(await window.getByTestId('telemetry-status').innerText(), /^(disconnected|waiting):/);
@@ -115,9 +113,10 @@ finally {
       .trim().split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line));
     result.mainEvents = await logs(config.diagnostics);
     result.serviceEvents = await logs(path.join(config.diagnostics, 'service'));
+    const diagnosticCrashObserved = result.mainEvents.some(row => row.event === 'DIAGNOSTIC_SERVICE_EXIT_REQUEST');
     for (const name of ['APP_EXIT', 'SERVICE_EXIT']) {
       const rows = result.mainEvents.filter(row => row.event === name);
-      assert.equal(rows.length, name === 'SERVICE_EXIT' && diagnosticCrashRequested ? 2 : 1);
+      assert.equal(rows.length, name === 'SERVICE_EXIT' && diagnosticCrashObserved ? 2 : 1);
       assert.equal(rows.at(-1).detail.code, 0);
     }
     assert.ok(result.serviceEvents.some(row => row.event === 'STORAGE_VERIFIED'));
