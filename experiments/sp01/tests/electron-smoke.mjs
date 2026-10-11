@@ -21,7 +21,15 @@ const deadline = (promise, milliseconds, label) => {
   let timer;
   return Promise.race([promise, new Promise((_resolve, reject) => { timer = setTimeout(() => reject(new Error(`${label} deadline`)), milliseconds); })]).finally(() => clearTimeout(timer));
 };
-let fixture, fixtureExit, app, child, childExit, page, failure;
+let fixture, fixtureExit, app, child, childExit, page, failure, closeAttempted = false;
+async function disposePlaywright() {
+  closeAttempted = true;
+  try {
+    await deadline(app.close(), 3000, 'Playwright connection disposal');
+    receipt.playwrightDisposed = true;
+  } catch (error) { receipt.cleanupError = String(error); throw error; }
+}
+const isAlive = (process) => process && process.exitCode === null && process.signalCode === null;
 try {
   const manifest = JSON.parse(await readFile(path.join(root, 'package.json')));
   receipt.versions = { node: process.version, electron: manifest.devDependencies.electron, playwright: manifest.devDependencies['@playwright/test'], sdkArchive: '1.15', sdkApi: '1.01', wire: 'sp01-1' };
@@ -43,7 +51,9 @@ try {
     const win = BrowserWindow.getAllWindows()[0]; const pref = win.webContents.getLastWebPreferences();
     return { visible: win.isVisible(), focusable: win.isFocusable(), backgroundColor: win.getBackgroundColor(), sandbox: pref.sandbox, isolation: pref.contextIsolation, node: pref.nodeIntegration };
   });
-  assert.deepEqual(receipt.window, { visible: false, focusable: false, backgroundColor: '#00000000', sandbox: true, isolation: true, node: false });
+  // Electron returns RGB only, excluding alpha; this assertion does not prove transparency.
+  // https://www.electronjs.org/docs/latest/api/browser-window#wingetbackgroundcolor
+  assert.deepEqual(receipt.window, { visible: false, focusable: false, backgroundColor: '#000000', sandbox: true, isolation: true, node: false });
   await page.screenshot({ path: path.join(output, 'synthetic-overlay.png'), omitBackground: true });
   receipt.fixtureExit = await deadline(fixtureExit, 10000, 'fixture natural exit');
   assert.deepEqual(receipt.fixtureExit, { code: 0, signal: null });
@@ -54,13 +64,17 @@ try {
   assert.deepEqual(receipt.appExit, { code: 0, signal: null });
   assert.ok(logs.join('').includes('SP01_SERVICE_EXIT:0'), 'utility service must stop normally');
   assert.ok(!logs.join('').includes('SP01_SERVICE_STOP_TIMEOUT'));
+  // Child exit is cached above; close the Playwright connection even after the app terminated.
+  await disposePlaywright();
   receipt.passed = true;
 } catch (error) {
   failure = error; receipt.error = error.stack ?? String(error);
-  try { await page?.context().tracing.stop({ path: path.join(output, 'failure-trace.zip') }); } catch {}
+  try { if (page) await deadline(page.context().tracing.stop({ path: path.join(output, 'failure-trace.zip') }), 2000, 'failure trace'); }
+  catch (error) { receipt.traceCleanupError = String(error); }
 } finally {
-  if (child && child.exitCode === null) { receipt.forcedCleanup.push({ owner: 'app', pid: child.pid }); child.kill(); try { receipt.cleanupAppExit = await deadline(childExit, 2000, 'app cleanup'); } catch (error) { receipt.cleanupError = String(error); } }
-  if (fixture && fixture.exitCode === null) { receipt.forcedCleanup.push({ owner: 'fixture', pid: fixture.pid }); fixture.kill(); try { receipt.cleanupFixtureExit = await deadline(fixtureExit, 2000, 'fixture cleanup'); } catch (error) { receipt.cleanupError = String(error); } }
+  if (app && !closeAttempted) { try { await disposePlaywright(); } catch { /* The receipt retains the failed disposal; no retry hides it. */ } }
+  if (isAlive(child)) { receipt.forcedCleanup.push({ owner: 'app', pid: child.pid }); child.kill(); try { receipt.cleanupAppExit = await deadline(childExit, 2000, 'app cleanup'); } catch (error) { receipt.cleanupError = String(error); } }
+  if (isAlive(fixture)) { receipt.forcedCleanup.push({ owner: 'fixture', pid: fixture.pid }); fixture.kill(); try { receipt.cleanupFixtureExit = await deadline(fixtureExit, 2000, 'fixture cleanup'); } catch (error) { receipt.cleanupError = String(error); } }
   if (receipt.forcedCleanup.length || receipt.cleanupError) receipt.passed = false;
   receipt.finishedUtc = new Date().toISOString();
   await writeFile(path.join(output, 'process.log'), logs.join(''));
