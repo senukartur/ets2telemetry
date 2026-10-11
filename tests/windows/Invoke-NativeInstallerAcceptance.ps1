@@ -9,6 +9,7 @@ param(
     [string]$OutDirectory
 )
 $ErrorActionPreference='Stop'
+. (Join-Path $PSScriptRoot 'Assert-UninstallResidue.ps1')
 if(!$Run){@{run=$false;steps=@('install','repair','smoke-0.1.0','update','smoke-0.1.1','uninstall');globalSeconds=300;stepSeconds=@(45,45,30,45,30,30);preconditions='No product install, registration, product shortcut or data directory; preserve all existing user files.';control=$Control;applicationLaunched=$false}|ConvertTo-Json;return}
 $clock=[Diagnostics.Stopwatch]::StartNew();$report=[ordered]@{passed=$false;failure=$null;startedUtc=[datetime]::UtcNow.ToString('o');control=$Control;steps=@();globalSeconds=300;synthetic=$true;automaticHookExitCodesClaimed=$false;originalFilesPreserved=$false;originalShortcutsPreserved=$false;ownedDataRemoved=$false}
 $saved=@{};$steps=[Collections.Generic.List[object]]::new();$ownedDatabase=$false;$prepared=$false
@@ -104,6 +105,7 @@ try{
         $code=[ETS2Telemetry.Diagnostics.BoundedProcess]::Run($ps,@('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',(Join-Path $PSScriptRoot 'native-installer-step.ps1'),'-ConfigFile',$configFile),$directory,$jobDirectory,$milliseconds)
         $step=[ordered]@{name=$definition.name;version=$definition.version;jobExitCode=$code;budgetMilliseconds=$milliseconds;rootProof=$null;postconditions=$null};$steps.Add($step);$report.steps=$steps.ToArray()
         $resultPath=Join-Path $directory 'step-result.json';if(Test-Path -LiteralPath $resultPath){$step.rootProof=Json $resultPath 65536}
+        $step['squirrelLogs']=@(Save-Logs $directory)
         if($Control -eq 'linger'){
             if($code -notin @(124,125) -or !$step.rootProof -or $step.rootProof.passed -or $step.rootProof.childrenNaturallyDrained -or @($step.rootProof.primary).Count -ne 1 -or !$step.rootProof.primary[0].stdout -or !(Select-String -LiteralPath $step.rootProof.primary[0].stdout -SimpleMatch 'ET001_NATIVE_LINGER_REACHED' -Quiet)){throw 'Lingering child did not produce bounded rejection with actual marker.'}
             $step.postconditions=@{expectedBoundedRejection=$true;actualChildMarker=$true};continue
@@ -112,10 +114,11 @@ try{
         if($Control -eq 'none'){
             $databasePreimage=Json (Join-Path $OutDirectory 'sqlite-preimage.json') 8192;if($databasePreimage.path -ne $database -or $databasePreimage.synthetic -ne $true -or (Get-FileHash -LiteralPath $database).Hash -ne $databasePreimage.sha256){throw 'Synthetic database preservation proof failed.'}
             if($definition.name -eq 'uninstall'){
-                if(@(Registration).Count -or @(Product-Links).Count -or (Test-Path -LiteralPath (Join-Path $binaryRoot 'Update.exe')) -or @(Get-ChildItem -LiteralPath $binaryRoot -Recurse -Filter 'ETS2TelemetryDesktop.exe' -File -ErrorAction SilentlyContinue).Count){throw 'Uninstall product binaries/registration/shortcuts remain.'};Assert-Preserved;$step.postconditions=@{uninstalled=$true;syntheticDataPreserved=$true}
+                $squirrel=@($projection.runtimeFiles|Where-Object {$_.path -ieq 'squirrel.exe'});if($squirrel.Count -ne 1){throw 'Ambiguous sealed vendor helper.'}
+                $step.postconditions=Assert-UninstallResidue -BinaryRoot $binaryRoot -Version $definition.version -Squirrel $squirrel[0] -Registration @(Registration) -ProductShortcuts @(Product-Links)
+                Assert-Preserved;$step.postconditions['syntheticDataPreserved']=$true;$report['vendorCleanupPending']=$true
             }else{$step.postconditions=Assert-Installed $definition.version}
         }
-        $step['squirrelLogs']=@(Save-Logs $directory)
     }
     Assert-Preserved
     if($ownedDatabase){
