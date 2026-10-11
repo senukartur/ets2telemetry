@@ -77,6 +77,26 @@ function fixture() {
   return {ingestion, updates, sockets, time: (value: number) => {now = value;}};
 }
 describe('v0 utility ingestion', () => {
+  it('updates window receipts while equal SDK captures expire and only a newer SDK capture restores freshness', async () => {
+    const f = fixture(), socket = f.sockets[0]; socket.emit('connect');
+    socket.emit('data', Buffer.concat([emissions[0].frame, emissions[1].frame]));
+    const checkpoint = f.updates.at(-1)!.observation!;
+    const message = structuredClone(emissions[2].message);
+    if (message.kind !== 'snapshot') throw new Error('Fixture must be a snapshot');
+    message.capture = {...checkpoint.capture}; message.seq = (BigInt(checkpoint.seq) + 1n).toString();
+    message.data.state.window = {available: true, value: {handle: '18446744073709551615', x: -400, y: -300, width: 640, height: 480, dpi: 144, foreground: true, minimized: false, displayMode: 'unknown'}};
+    for (const now of [100, 400, 600]) {
+      f.time(now); socket.emit('data', encodeFrame(message)); message.seq = (BigInt(message.seq) + 1n).toString();
+      expect(f.updates.at(-1)?.observation).toMatchObject({receivedMonotonicMs: 0, windowReceivedMonotonicMs: now, windowFresh: true});
+    }
+    expect(f.updates.at(-1)).toMatchObject({status: 'stale', fresh: false});
+    f.time(850); await vi.advanceTimersByTimeAsync(50); expect(f.updates.at(-1)?.observation?.windowFresh).toBe(false);
+    message.capture.monotonicNs = (BigInt(checkpoint.capture.monotonicNs) + 1n).toString();
+    socket.emit('data', encodeFrame(message)); expect(f.updates.at(-1)?.fresh).toBe(true);
+    expect(f.updates.at(-1)?.observation?.receivedMonotonicMs).toBe(850);
+    socket.emit('end'); expect(f.updates.at(-1)?.observation?.windowFresh).toBe(false);
+    await f.ingestion.stop();
+  });
   function delayedBroker() {
     vi.useFakeTimers(); const updates: LiveTelemetry[] = [];
     const sockets: Array<TestSocket & {completion: Promise<void>; finish: () => void; game: 'ets2' | 'ats'}> = [];

@@ -1,8 +1,10 @@
 import {EventEmitter} from 'node:events';
+import {readFileSync} from 'node:fs';
 import {afterEach, beforeEach, expect, it, vi} from 'vitest';
 import type {DesktopBridge, LiveTelemetry} from '../../packages/contracts/src';
 import {initialLive} from '../../apps/desktop/src/live-state';
 import {LiveSubscriptions} from '../../apps/desktop/src/live-subscriptions';
+import {validateMessage} from '../../packages/contracts/src/protocol-v0';
 
 class RendererPort {
   onmessage?: (event: {data: unknown}) => void;
@@ -27,6 +29,34 @@ afterEach(() => {vi.useRealTimers(); vi.doUnmock('electron');});
 const connected = (): LiveTelemetry => ({...initialLive('synthetic'), status: 'connected', fresh: true});
 function attach() {const port = new RendererPort(); ipc.emit('telemetry:port', {ports: [port]}); return port;}
 function subscriptions() {return ipc.send.mock.calls.filter(call => call[0] === 'telemetry:subscribe').length;}
+it('does not extend SDK expiry for equal captures and expires window metadata separately', async () => {
+  const consume = vi.fn(); const stop = bridge.subscribeLive(consume); const port = attach();
+  const message = validateMessage(JSON.parse(readFileSync('tests/fixtures/protocol-v0/snapshot.json', 'utf8')));
+  if (message.kind !== 'snapshot') throw new Error('Expected snapshot');
+  const live: LiveTelemetry = {...connected(), observation: {source: message.source, state: message.data.state, seq: message.seq,
+    capture: message.capture, receivedMonotonicMs: 0, windowReceivedMonotonicMs: 0, windowFresh: true,
+    applied: {hydration: false, skippedSequences: '0', continuity: message.data.continuity}}};
+  port.deliver(live); await vi.advanceTimersByTimeAsync(400);
+  port.deliver({...live, observation: {...live.observation!, windowReceivedMonotonicMs: 400}}, 2);
+  await vi.advanceTimersByTimeAsync(101); expect(consume.mock.lastCall?.[0]).toMatchObject({fresh: false, observation: {windowFresh: true}});
+  await vi.advanceTimersByTimeAsync(150); expect(consume.mock.lastCall?.[0].observation.windowFresh).toBe(false);
+  port.deliver({...live, observation: {...live.observation!, windowReceivedMonotonicMs: 400}}, 3);
+  expect(consume.mock.lastCall?.[0]).toMatchObject({fresh: false, observation: {windowFresh: false}});
+  port.deliver({...live, observation: {...live.observation!, receivedMonotonicMs: 700, windowReceivedMonotonicMs: 700,
+    capture: {...message.capture, monotonicNs: (BigInt(message.capture.monotonicNs) + 1n).toString()}}}, 4);
+  expect(consume.mock.lastCall?.[0].fresh).toBe(true); stop(); expect(vi.getTimerCount()).toBe(0);
+});
+it('invalidates fresh window metadata when a replacement port arrives after SDK expiry', async () => {
+  const consume = vi.fn(); const stop = bridge.subscribeLive(consume); const port = attach();
+  const message = validateMessage(JSON.parse(readFileSync('tests/fixtures/protocol-v0/snapshot.json', 'utf8')));
+  if (message.kind !== 'snapshot') throw new Error('Expected snapshot');
+  port.deliver({...connected(), fresh: false, status: 'stale', observation: {source: message.source, state: message.data.state,
+    seq: message.seq, capture: message.capture, receivedMonotonicMs: 0, windowReceivedMonotonicMs: 600, windowFresh: true,
+    applied: {hydration: false, skippedSequences: '0', continuity: message.data.continuity}}});
+  attach(); await vi.advanceTimersByTimeAsync(251);
+  expect(consume.mock.lastCall?.[0]).toMatchObject({fresh: false, observation: {windowFresh: false}});
+  stop(); expect(vi.getTimerCount()).toBe(0);
+});
 
 it('expires current data while keeping a quiet healthy subscription open', async () => {
   const consume = vi.fn(); const stop = bridge.subscribeLive(consume); const port = attach();

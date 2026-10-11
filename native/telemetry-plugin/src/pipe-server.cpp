@@ -22,16 +22,18 @@ const char* startup_failure_message(StartupFailure failure) noexcept {
   }
 }
 Server::~Server() { stop(); }
-bool Server::start(std::wstring directory) noexcept {
+bool Server::start(std::wstring directory, const window::Monitor* monitor) noexcept {
   try {
     if (worker_.joinable()) return false;
+    monitor_ = monitor; window_ = {}; next_window_poll_ = 0; window_available_ = false;
+    process_creation_ = creation_time(GetCurrentProcess());
     startup_failure_.store(StartupFailure::worker_creation);
     stop_event_.reset(CreateEventW(nullptr,TRUE,FALSE,nullptr));
     startup_event_.reset(CreateEventW(nullptr,TRUE,FALSE,nullptr));
     if (!stop_event_ || !startup_event_) throw std::runtime_error("startup-event");
     sequence_ = OutboundSequence(initial_sequence_); coalesced_ = lost_ = 0; diagnostics_ = false; pending_.reset(); current_ = {}; shutdown_ms_.store(0); status_.store(Status::starting);
     worker_ = std::thread([this, directory = std::move(directory)] { run(directory); }); return true;
-  } catch (...) { status_.store(Status::failed); stop_event_.reset(); startup_event_.reset(); return false; }
+  } catch (...) { monitor_ = nullptr; status_.store(Status::failed); stop_event_.reset(); startup_event_.reset(); return false; }
 }
 StartupFailure Server::await_startup() noexcept {
   // Only explicit SDK initialization waits here; no callback or client handshake does.
@@ -44,7 +46,7 @@ void Server::stop() noexcept {
     if (!worker_.joinable()) return; auto started = GetTickCount64(); SetEvent(stop_event_.get());
     // File policy/image inspection may have synchronous reads. Only this owned worker is cancelled.
     CancelSynchronousIo(worker_.native_handle()); worker_.join();
-    shutdown_ms_.store(GetTickCount64() - started); stop_event_.reset(); startup_event_.reset();
+    shutdown_ms_.store(GetTickCount64() - started); monitor_ = nullptr; stop_event_.reset(); startup_event_.reset();
     if (shutdown_ms_.load() > 1000) status_.store(Status::shutdown_deadline_exceeded);
     else if (status_.load() != Status::failed) status_.store(Status::stopped);
   } catch (...) { status_.store(Status::failed); }
@@ -56,11 +58,27 @@ v0::Continuity Server::continuity(const sdk::Snapshot& s) const {
 }
 void Server::capture() {
   sdk::Snapshot next;
-  if (!adapter_.read_latest(next)) return;
+  const bool sdk_update = adapter_.read_latest(next);
+  bool window_update = false;
+  const auto now = GetTickCount64();
+  if (monitor_ && now >= next_window_poll_) {
+    auto latest = monitor_->latest();
+    const auto available = current_window(sdk_update ? next : current_, &latest, process_creation_, now).value.has_value();
+    window_update = latest.revision != window_.revision || available != window_available_;
+    window_ = latest; window_available_ = available; next_window_poll_ = now + 50;
+  }
+  if (!sdk_update && !window_update) return;
+  if (!sdk_update) {
+    if (!adapter_.read_current(next)) return;
+    if (next.source_retired || next.exhausted || !next.active) throw std::runtime_error("source-retired");
+    // A window publication never gives old telemetry a new SDK capture time.
+    if (pending_) next = pending_->snapshot;
+    else { next = current_; next.observations = {}; next.observation_count = 0; }
+  }
   if (next.source_retired || next.exhausted || !next.active) throw std::runtime_error("source-retired");
   // Eligibility receives an exact sequence before replacing the unsent slot.
   auto seq = next_sequence(); const auto diagnostic_seq = diagnostics_ && next.observation_count ? next_sequence() : 0;
-  if (pending_) { if (coalesced_ != UINT64_MAX) ++coalesced_; lost_ = lost_ > UINT64_MAX - pending_->snapshot.observation_count ? UINT64_MAX : lost_ + pending_->snapshot.observation_count; }
+  if (pending_) { if (coalesced_ != UINT64_MAX) ++coalesced_; if (sdk_update) lost_ = lost_ > UINT64_MAX - pending_->snapshot.observation_count ? UINT64_MAX : lost_ + pending_->snapshot.observation_count; }
   current_ = next; current_.observations = {}; current_.observation_count = 0;
   pending_ = Pending{std::move(next),seq,diagnostic_seq};
 }
@@ -118,10 +136,11 @@ void Server::serve(HANDLE pipe, const std::wstring& directory, const OwnerSecuri
   diagnostics_ = hello.diagnostics;
   adapter_.set_consumer(true,diagnostics_);
   if (!adapter_.read_current(current_) || current_.source_retired || current_.exhausted) return;
+  if (monitor_) { window_ = monitor_->latest(); window_available_ = current_window(current_, &window_, process_creation_, GetTickCount64()).value.has_value(); next_window_poll_ = GetTickCount64()+50; }
   pending_.reset();
   if (!write_frame(pipe,v0::encode_frame(current_message(current_,"welcome",next_sequence(),continuity(current_),diagnostics_)),false)) return;
   if (!adapter_.read_current(current_) || current_.source_retired || current_.exhausted) return;
-  if (!write_frame(pipe,v0::encode_frame(current_message(current_,"checkpoint",next_sequence(),continuity(current_))),false)) return;
+  if (!write_frame(pipe,v0::encode_frame(current_message(current_,"checkpoint",next_sequence(),continuity(current_),false,monitor_ ? &window_ : nullptr,process_creation_,GetTickCount64())),false)) return;
   // Discard any adapter publication covered by hydration before live eligibility is established.
   sdk::Snapshot hydrated;
   if (adapter_.read_latest(hydrated) && hydrated.boundary_order > current_.boundary_order) {
@@ -143,7 +162,7 @@ void Server::serve(HANDLE pipe, const std::wstring& directory, const OwnerSecuri
       capture();
       if (pending_ && GetTickCount64() >= next_display) {
         auto next = std::move(*pending_); pending_.reset();
-        if (!write_frame(pipe,v0::encode_frame(current_message(next.snapshot,"snapshot",next.seq,continuity(next.snapshot))),true)) { lost_ = lost_ > UINT64_MAX - next.snapshot.observation_count ? UINT64_MAX : lost_ + next.snapshot.observation_count; break; }
+        if (!write_frame(pipe,v0::encode_frame(current_message(next.snapshot,"snapshot",next.seq,continuity(next.snapshot),false,monitor_ ? &window_ : nullptr,process_creation_,GetTickCount64())),true)) { lost_ = lost_ > UINT64_MAX - next.snapshot.observation_count ? UINT64_MAX : lost_ + next.snapshot.observation_count; break; }
         if (next.diagnostic_seq) {
           auto c = continuity(next.snapshot); std::uint64_t omitted = 0;
           auto message = diagnostic_message(next.snapshot,next.diagnostic_seq,c,omitted);
