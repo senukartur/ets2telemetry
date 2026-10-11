@@ -26,6 +26,7 @@ namespace ETS2Telemetry.Diagnostics {
     [DllImport("kernel32.dll",SetLastError=true)] static extern bool SetInformationJobObject(IntPtr job,int type,ref Extended value,uint size);
     [DllImport("kernel32.dll",SetLastError=true)] static extern bool SetInformationJobObject(IntPtr job,int type,ref Cpu value,uint size);
     [DllImport("kernel32.dll",SetLastError=true)] static extern bool QueryInformationJobObject(IntPtr job,int type,out Accounting value,uint size,IntPtr returned);
+    [DllImport("kernel32.dll",SetLastError=true)] static extern bool QueryInformationJobObject(IntPtr job,int type,IntPtr value,uint size,IntPtr returned);
     [DllImport("kernel32.dll",SetLastError=true)] static extern bool TerminateJobObject(IntPtr job,uint code);
     [DllImport("kernel32.dll",SetLastError=true)] static extern bool CloseHandle(IntPtr handle);
     [DllImport("kernel32.dll",SetLastError=true)] static extern uint ResumeThread(IntPtr thread);
@@ -43,6 +44,17 @@ namespace ETS2Telemetry.Diagnostics {
     static string Quote(string value){var b=new StringBuilder("\"");int n=0;foreach(char c in value){if(c=='\\'){n++;continue;}b.Append('\\',c=='"'?n*2+1:n);b.Append(c);n=0;}b.Append('\\',n*2);return b.Append('"').ToString();}
     static void Json(string file,object value){string temporary=file+".partial";File.WriteAllText(temporary,new JavaScriptSerializer().Serialize(value)+"\n",new UTF8Encoding(false));File.Move(temporary,file);}
     static uint Active(IntPtr job){Accounting a;Check(QueryInformationJobObject(job,1,out a,(uint)Marshal.SizeOf(typeof(Accounting)),IntPtr.Zero));return a.Active;}
+    static object PidSnapshot(IntPtr job){
+      IntPtr buffer=IntPtr.Zero;
+      try{
+        int size=8+16*IntPtr.Size;buffer=Marshal.AllocHGlobal(size);
+        Check(QueryInformationJobObject(job,3,buffer,(uint)size,IntPtr.Zero));
+        int assigned=Marshal.ReadInt32(buffer,0),listed=Marshal.ReadInt32(buffer,4);var pids=new List<long>();
+        if(listed>=0&&listed<=16)for(int i=0;i<listed;i++)pids.Add(IntPtr.Size==8?Marshal.ReadInt64(buffer,8+i*8):Marshal.ReadInt32(buffer,8+i*4));
+        return new{assignedCount=assigned,listedCount=listed,pids=pids.ToArray(),utc=DateTime.UtcNow.ToString("o"),failure=(string)null};
+      }catch(Exception error){return new{failure=error.ToString(),utc=DateTime.UtcNow.ToString("o")};}
+      finally{if(buffer!=IntPtr.Zero)Marshal.FreeHGlobal(buffer);}
+    }
     static Thread Drain(IntPtr handle,string file,Child child){var t=new Thread(()=>{try{using(var input=new FileStream(new SafeFileHandle(handle,true),FileAccess.Read))using(var output=new FileStream(file,FileMode.CreateNew,FileAccess.Write,FileShare.Read)){var buffer=new byte[8192];int n,kept=0;while((n=input.Read(buffer,0,buffer.Length))>0){int keep=Math.Min(n,1048576-kept);if(keep>0){output.Write(buffer,0,keep);output.Flush();kept+=keep;}}}}catch(Exception error){child.DrainFailure=error.ToString();}});t.IsBackground=true;t.Start();return t;}
     static void Spawn(Child child,IntPtr job,string exe,string[] args,string cwd,string output,string name){
       var security=new Security{Size=Marshal.SizeOf(typeof(Security)),Inherit=1};
@@ -73,7 +85,7 @@ namespace ETS2Telemetry.Diagnostics {
       if(timeoutMs<1500||timeoutMs>60000||!Environment.Is64BitProcess)throw new ArgumentException("Bounded Windows x64 invocation required");
       foreach(string value in new[]{node,observerScript,cwd,output})if(!Path.IsPathRooted(value))throw new ArgumentException("Absolute paths required");
       if(Path.GetFileName(node)!="node.exe")throw new ArgumentException("Portable Node root required");
-      Directory.CreateDirectory(output);var clock=Stopwatch.StartNew();IntPtr job=IntPtr.Zero;var driver=new Child();var observer=new Child();int code=126;string failure=null;
+      Directory.CreateDirectory(output);var clock=Stopwatch.StartNew();IntPtr job=IntPtr.Zero;var driver=new Child();var observer=new Child();int code=126;string failure=null;object initialJobSnapshot=null,failureJobSnapshot=null;
       string proof=Directory.GetParent(output).FullName,ready=Path.Combine(proof,"observer-ready.json"),exit=Path.Combine(output,"observer-exit.json");
       try{
         if(File.Exists(ready)||File.Exists(exit))throw new InvalidOperationException("Fresh readiness/exit proof required");
@@ -84,7 +96,8 @@ namespace ETS2Telemetry.Diagnostics {
         int owner=Process.GetCurrentProcess().Id;
         Deadline(clock,timeoutMs);Spawn(observer,job,@"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",new[]{"-NoProfile","-NonInteractive","-ExecutionPolicy","Bypass","-File",observerScript,"-DriverPid",driver.Info.Pid.ToString(),"-ControllerPid",owner.ToString(),"-StopFile",Path.Combine(proof,"observer-stop.json"),"-ResultFile",Path.Combine(proof,"job-observation.json"),"-ReadyFile",ready},cwd,output,"observer");
         if(Active(job)!=2)throw new InvalidOperationException("Expected exactly two suspended assigned roots");
-        Json(Path.Combine(output,"controller-receipt.json"),new{controllerPid=owner,driverPid=driver.Info.Pid,observerPid=observer.Info.Pid,observerScript=observerScript,nodeExecutable=node,atomicJobAssignment=true,jobHandleInherited=false,limitFlags=0x2208,processLimit=16,jobMemoryBytes=2147483648L,cpuFlags=5,cpuRate=2500,startedUtc=DateTime.UtcNow.ToString("o")});
+        initialJobSnapshot=PidSnapshot(job);
+        Json(Path.Combine(output,"controller-receipt.json"),new{controllerPid=owner,driverPid=driver.Info.Pid,observerPid=observer.Info.Pid,observerScript=observerScript,nodeExecutable=node,atomicJobAssignment=true,jobHandleInherited=false,initialJobSnapshot=initialJobSnapshot,limitFlags=0x2208,processLimit=16,jobMemoryBytes=2147483648L,cpuFlags=5,cpuRate=2500,startedUtc=DateTime.UtcNow.ToString("o")});
         File.WriteAllText(Path.Combine(output,"owned-pid.txt"),driver.Info.Pid.ToString());
         Deadline(clock,timeoutMs);Check(ResumeThread(observer.Info.Thread)!=UInt32.MaxValue);
         while(!File.Exists(ready)){
@@ -103,14 +116,14 @@ namespace ETS2Telemetry.Diagnostics {
           }
           if(clock.ElapsedMilliseconds>=timeoutMs-750){code=124;throw new TimeoutException("Single controller deadline");}Thread.Sleep(10);
         }
-      }catch(Exception error){failure=error.ToString();if(error is TimeoutException)code=124;}
+      }catch(Exception error){failure=error.ToString();if(error is TimeoutException)code=124;if(job!=IntPtr.Zero)failureJobSnapshot=PidSnapshot(job);}
       finally{
         if(job!=IntPtr.Zero){TerminateJobObject(job,(uint)(failure==null?126:code));Close(ref job);}
         foreach(var child in new[]{driver,observer})if(child.Info.Process!=IntPtr.Zero){WaitForSingleObject(child.Info.Process,(uint)Math.Max(0,Math.Min(250,timeoutMs-(int)clock.ElapsedMilliseconds)));try{Exited(child);}catch(Exception error){failure=failure??error.ToString();}}
         bool driverDrain=Dispose(driver,clock,timeoutMs);bool observerDrain=Dispose(observer,clock,timeoutMs);
         if(!driverDrain||!observerDrain||clock.ElapsedMilliseconds>timeoutMs){failure=failure??"Streams did not finish inside the single deadline";if(code==0)code=126;}
         if(driver.DrainFailure!=null||observer.DrainFailure!=null){failure=failure??("Diagnostic drain failure: "+driver.DrainFailure+" "+observer.DrainFailure);if(code==0)code=126;}
-        Json(Path.Combine(output,"controller-result.json"),new{passed=failure==null&&code==0&&driver.Code==0&&observer.Code==0&&driverDrain&&observerDrain,code=code,failure=failure,driverPid=driver.Info.Pid,observerPid=observer.Info.Pid,driverExitCode=driver.Code,observerExitCode=observer.Code,driverStreamsDrained=driverDrain,observerStreamsDrained=observerDrain,elapsedMilliseconds=clock.ElapsedMilliseconds,budgetMilliseconds=timeoutMs});
+        Json(Path.Combine(output,"controller-result.json"),new{passed=failure==null&&code==0&&driver.Code==0&&observer.Code==0&&driverDrain&&observerDrain,code=code,failure=failure,driverPid=driver.Info.Pid,observerPid=observer.Info.Pid,driverExitCode=driver.Code,observerExitCode=observer.Code,initialJobSnapshot=initialJobSnapshot,failureJobSnapshot=failureJobSnapshot,driverStreamsDrained=driverDrain,observerStreamsDrained=observerDrain,elapsedMilliseconds=clock.ElapsedMilliseconds,budgetMilliseconds=timeoutMs});
       }
       return code;
     }

@@ -40,6 +40,12 @@ try{
         if($mode -eq 'partial-start'){$script='C:\'+('x'*33000)+'.ps1'}
         $code=[ETS2Telemetry.Diagnostics.InstallerBoundedProcess]::Run($NodePath,[string[]]@($fixture,$mode,$directory),$script,$directory,(Join-Path $directory 'job'),5000)
         $proof=Get-Content -LiteralPath (Join-Path $directory 'job/controller-result.json') -Raw|ConvertFrom-Json
+        if($mode -ne 'partial-start'){
+            Assert (!$proof.initialJobSnapshot.failure -and $proof.initialJobSnapshot.assignedCount -eq 2 -and $proof.initialJobSnapshot.listedCount -eq 2) 'Suspended-root diagnostic counts differ.'
+            Assert ($proof.initialJobSnapshot.pids.Count -eq 2 -and $proof.initialJobSnapshot.pids -contains $proof.driverPid -and $proof.initialJobSnapshot.pids -contains $proof.observerPid) 'Suspended-root diagnostic identities differ.'
+        }else{
+            Assert (!$proof.failureJobSnapshot.failure -and $proof.failureJobSnapshot.assignedCount -eq 1 -and $proof.failureJobSnapshot.listedCount -eq 1 -and $proof.failureJobSnapshot.pids -contains $proof.driverPid) 'Partial-start diagnostic must retain its assigned suspended root.'
+        }
         if($mode -in @('normal','output')){
             Assert ($code -eq 0 -and $proof.passed -and $proof.driverExitCode -eq 0 -and $proof.observerExitCode -eq 0) 'Two normal roots require actual exits 0.'
             Assert ((Get-Content -LiteralPath (Join-Path $directory 'driver-marker.json') -Raw|ConvertFrom-Json).marker -eq 'SIBLING_NODE_REACHED') 'Node marker missing.'

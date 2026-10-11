@@ -23,6 +23,10 @@ public sealed class InstallerJobScope {
     public uint LimitFlags, ActiveProcessLimit, CpuFlags, CpuRate;
     public ulong JobMemoryBytes;
 }
+public sealed class InstallerJobPidSnapshot {
+    public int AssignedCount, ListedCount;
+    public int[] Pids;
+}
 public static class InstallerJobView {
     // Metadata workers never block native PID/handle polling. Four queries maximum.
     static readonly SemaphoreSlim MetadataSlots = new SemaphoreSlim(4,4);
@@ -50,7 +54,7 @@ public static class InstallerJobView {
     }
     public static long ExitCode(IntPtr handle) {uint code;if(!GetExitCodeProcess(handle,out code)) throw new Win32Exception(Marshal.GetLastWin32Error());return code;}
     public static void Release(IntPtr handle) {if(handle!=IntPtr.Zero) CloseHandle(handle);}
-    public static InstallerJobScope AuthoritativeScope() {
+    public static InstallerJobScope ReadScope() {
         IntPtr limits=Marshal.AllocHGlobal(Marshal.SizeOf(typeof(ExtendedLimits)));
         IntPtr cpu=Marshal.AllocHGlobal(Marshal.SizeOf(typeof(CpuLimits)));
         try {
@@ -59,11 +63,15 @@ public static class InstallerJobView {
             var extended=(ExtendedLimits)Marshal.PtrToStructure(limits,typeof(ExtendedLimits));
             var rate=(CpuLimits)Marshal.PtrToStructure(cpu,typeof(CpuLimits));
             var scope=new InstallerJobScope {LimitFlags=extended.Basic.Flags,ActiveProcessLimit=extended.Basic.ActiveProcessLimit,JobMemoryBytes=extended.JobMemory.ToUInt64(),CpuFlags=rate.Flags,CpuRate=rate.Rate};
+            return scope;
+        }finally{Marshal.FreeHGlobal(limits);Marshal.FreeHGlobal(cpu);}
+    }
+    public static InstallerJobScope AuthoritativeScope() {
+            var scope=ReadScope();
             // Reject libuv's immediate breakaway Job or any unexpected containing scope.
             if(scope.LimitFlags!=0x2208 || (scope.LimitFlags & (0x800 | 0x1000))!=0 || scope.ActiveProcessLimit!=16 || scope.JobMemoryBytes!=2147483648UL || scope.CpuFlags!=5 || scope.CpuRate!=2500)
                 throw new InvalidOperationException(String.Format("Observer immediate Job does not match the authoritative nonbreakaway watchdog limits: flags=0x{0:x}, processes={1}, memory={2}, cpuFlags={3}, cpuRate={4}",scope.LimitFlags,scope.ActiveProcessLimit,scope.JobMemoryBytes,scope.CpuFlags,scope.CpuRate));
             return scope;
-        }finally{Marshal.FreeHGlobal(limits);Marshal.FreeHGlobal(cpu);}
     }
     public static Task<InstallerMetadata> QueryAsync(int pid) {
         return Task.Factory.StartNew(() => {
@@ -83,7 +91,7 @@ public static class InstallerJobView {
             return result;
         });
     }
-    public static int[] Pids() {
+    public static InstallerJobPidSnapshot ReadPids() {
         bool found;
         if(!IsProcessInJob(new IntPtr(-1), IntPtr.Zero, out found)) throw new Win32Exception(Marshal.GetLastWin32Error());
         if(!found) throw new InvalidOperationException("Observer is outside the required Job");
@@ -92,21 +100,30 @@ public static class InstallerJobView {
         try {
             if(!QueryInformationJobObject(IntPtr.Zero,3,buffer,(uint)size,IntPtr.Zero)) throw new Win32Exception(Marshal.GetLastWin32Error());
             int assigned=Marshal.ReadInt32(buffer,0), count=Marshal.ReadInt32(buffer,4);
-            if(count<1 || count>16 || assigned!=count) throw new InvalidOperationException("Incomplete or unexpected Job PID count");
             var pids=new List<int>();
-            for(int i=0;i<count;i++) pids.Add(checked((int)(IntPtr.Size==8 ? Marshal.ReadInt64(buffer,8+i*8) : Marshal.ReadInt32(buffer,8+i*4))));
-            return pids.ToArray();
+            // Retain raw counts without reading beyond the fixed sixteen-entry buffer.
+            if(count>=0 && count<=16) for(int i=0;i<count;i++) pids.Add(checked((int)(IntPtr.Size==8 ? Marshal.ReadInt64(buffer,8+i*8) : Marshal.ReadInt32(buffer,8+i*4))));
+            return new InstallerJobPidSnapshot {AssignedCount=assigned,ListedCount=count,Pids=pids.ToArray()};
         } finally {Marshal.FreeHGlobal(buffer);}
     }
+    public static int[] ValidatePids(InstallerJobPidSnapshot snapshot) {
+        if(snapshot.ListedCount<1 || snapshot.ListedCount>16 || snapshot.AssignedCount!=snapshot.ListedCount)
+            throw new InvalidOperationException("Incomplete or unexpected Job PID count: assigned="+snapshot.AssignedCount+", listed="+snapshot.ListedCount);
+        return snapshot.Pids;
+    }
+    public static int[] Pids() {return ValidatePids(ReadPids());}
 }
 '@
 $seen=[Collections.Generic.HashSet[int]]::new()
 $records=[Collections.Generic.List[object]]::new()
 $handles=[Collections.Generic.Dictionary[int,IntPtr]]::new()
 $queries=@{}
-$view=[ordered]@{passed=$false;observerPid=$PID;driverPid=$DriverPid;controllerPid=$ControllerPid;parentProcessId=$null;driverParentProcessId=$null;driverImage=$null;controllerImage=$null;startedUtc=[datetime]::UtcNow.ToString('o');finishedUtc=$null;failure=$null;drained=$false;finalPids=@();processes=@();jobScope=$null;metadataWorkers=4;metadataQueueSeconds=3;metadataQuerySeconds=3;metadataCompletionSeconds=8;warmupMilliseconds=$null;pollCount=0;maximumPollGapMilliseconds=0}
+$view=[ordered]@{passed=$false;observerPid=$PID;driverPid=$DriverPid;controllerPid=$ControllerPid;parentProcessId=$null;driverParentProcessId=$null;driverImage=$null;controllerImage=$null;startedUtc=[datetime]::UtcNow.ToString('o');finishedUtc=$null;failure=$null;drained=$false;finalPids=@();processes=@();initialPidSnapshot=$null;initialScope=$null;initialScopeFailure=$null;jobScope=$null;metadataWorkers=4;metadataQueueSeconds=3;metadataQuerySeconds=3;metadataCompletionSeconds=8;warmupMilliseconds=$null;pollCount=0;maximumPollGapMilliseconds=0}
 try {
-    $initial=[InstallerJobView]::Pids()
+    $view.initialPidSnapshot=[InstallerJobView]::ReadPids()
+    # Capture immediate-Job limits even when the unchanged fresh-membership gate fails.
+    try{$view.initialScope=[InstallerJobView]::ReadScope()}catch{$view.initialScopeFailure=$_.Exception.ToString()}
+    $initial=[InstallerJobView]::ValidatePids($view.initialPidSnapshot)
     if($DriverPid -eq $ControllerPid -or $DriverPid -eq $PID -or $ControllerPid -eq $PID -or $initial -notcontains $DriverPid -or $initial -notcontains $PID -or $initial.Count -ne 2){throw 'Observer must start in a fresh Job containing exactly suspended driver and observer.'}
     $view.jobScope=[InstallerJobView]::AuthoritativeScope()
     foreach($entry in @(@{pid=$DriverPid;key='driverImage';image='C:\ETS2ET001Acceptance\tools\node.exe'},@{pid=$ControllerPid;key='controllerImage';image='C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe'})){
