@@ -10,6 +10,8 @@ The local MVP will display live truck metrics in an overlay, maintain a trip jou
 
 Compatibility with either game, Convoy, and TruckersMP is required but has not yet been tested. Overlay behavior, resource usage, and display latency also require real-game validation.
 
+**ET-022 candidate.** Windows x64 CI now connects the scaffold checks to pull requests, main pushes and manual runs, with isolated development and packaged worker probes and retained diagnostics. Local checks and hosted acceptance are separate: clean hosted execution and controlled failure/restoration evidence remain pending. See [CI commands and evidence](docs/ci.md) and the [regression registry](docs/regression-registry.md). The preceding ET-001 status describes the merged scaffold baseline.
+
 ## Planned MVP
 
 - Windows x64 support for ETS2 and ATS, including TruckersMP, single-player, and Convoy.
