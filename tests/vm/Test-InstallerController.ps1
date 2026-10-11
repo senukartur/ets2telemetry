@@ -48,6 +48,11 @@ try{
         $proof=Get-Content -LiteralPath (Join-Path $directory 'job/controller-result.json') -Raw|ConvertFrom-Json
         Assert-NativeCleanup $proof
         if($mode -ne 'partial-start'){
+            $created=Get-Content -LiteralPath (Join-Path $directory 'job/controller-receipt.json') -Raw|ConvertFrom-Json
+            $expectedCommand=(@($NodePath,$fixture,$mode,$directory)|ForEach-Object {$quote.Invoke($null,@([string]$_))}) -join ' '
+            Assert ([string]::Equals($created.driverCommandLine,$expectedCommand,[StringComparison]::Ordinal)) 'Created driver command receipt differs from actual fixed invocation.'
+        }
+        if($mode -ne 'partial-start'){
             Assert (!$proof.initialJobSnapshot.failure -and $proof.initialJobSnapshot.assignedCount -eq 2 -and $proof.initialJobSnapshot.listedCount -eq 2) 'Suspended-root diagnostic counts differ.'
             Assert ($proof.initialJobSnapshot.pids.Count -eq 2 -and $proof.initialJobSnapshot.pids -contains $proof.driverPid -and $proof.initialJobSnapshot.pids -contains $proof.observerPid) 'Suspended-root diagnostic identities differ.'
         }else{

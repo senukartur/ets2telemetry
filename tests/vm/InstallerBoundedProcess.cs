@@ -21,7 +21,7 @@ namespace ETS2Telemetry.Diagnostics {
     [StructLayout(LayoutKind.Sequential,CharSet=CharSet.Unicode)] struct Startup {public int Size;public string Reserved,Desktop,Title;public uint X,Y,Width,Height,CharsX,CharsY,Fill,Flags;public ushort Show,ReservedSize;public IntPtr ReservedData,Input,Output,Error;}
     [StructLayout(LayoutKind.Sequential)] struct StartupEx {public Startup Startup;public IntPtr Attributes;}
     [StructLayout(LayoutKind.Sequential)] struct ProcessInfo {public IntPtr Process,Thread;public uint Pid,Tid;}
-    sealed class Child {public ProcessInfo Info;public IntPtr OutRead,OutWrite,ErrRead,ErrWrite,Input;public Thread OutThread,ErrThread;public string DrainFailure;public uint? Code;}
+    sealed class Child {public ProcessInfo Info;public IntPtr OutRead,OutWrite,ErrRead,ErrWrite,Input;public Thread OutThread,ErrThread;public string DrainFailure,CommandLine;public uint? Code;}
     sealed class ConsoleCustody {public IntPtr Handle;public int Pid;public string Image;public uint? Code;}
     [DllImport("kernel32.dll",SetLastError=true)] static extern IntPtr CreateJobObject(IntPtr security,string name);
     [DllImport("kernel32.dll",SetLastError=true)] static extern bool SetInformationJobObject(IntPtr job,int type,ref Extended value,uint size);
@@ -96,6 +96,7 @@ namespace ETS2Telemetry.Diagnostics {
         var startup=new StartupEx{Startup=new Startup{Size=Marshal.SizeOf(typeof(StartupEx)),Flags=0x100|1,Show=0,Input=child.Input,Output=child.OutWrite,Error=child.ErrWrite},Attributes=list};
         var command=new StringBuilder(Quote(exe));foreach(string arg in args)command.Append(' ').Append(Quote(arg));
         // Atomic Job assignment removes the unassigned suspended-child owner-death gap.
+        child.CommandLine=command.ToString();
         Check(CreateProcess(exe,command,IntPtr.Zero,IntPtr.Zero,true,0x4|0x08000000|0x00080000,IntPtr.Zero,cwd,ref startup,out child.Info));
       }finally{if(initialized)DeleteProcThreadAttributeList(list);if(list!=IntPtr.Zero)Marshal.FreeHGlobal(list);if(jobs!=IntPtr.Zero)Marshal.FreeHGlobal(jobs);if(handles!=IntPtr.Zero)Marshal.FreeHGlobal(handles);}
       Close(ref child.OutWrite);Close(ref child.ErrWrite);Close(ref child.Input);
@@ -130,7 +131,9 @@ namespace ETS2Telemetry.Diagnostics {
         Deadline(clock,timeoutMs);Spawn(observer,job,@"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",observerArgs.ToArray(),cwd,output,"observer");
         if(Active(job)!=2)throw new InvalidOperationException("Expected exactly two suspended assigned roots");
         initialJobSnapshot=PidSnapshot(job);
-        Json(Path.Combine(output,"controller-receipt.json"),new{controllerPid=owner,driverPid=driver.Info.Pid,observerPid=observer.Info.Pid,observerScript=observerScript,nodeExecutable=node,consolePolicy=ConsolePolicy(fixture),atomicJobAssignment=true,jobHandleInherited=false,initialJobSnapshot=initialJobSnapshot,limitFlags=0x2208,processLimit=16,jobMemoryBytes=2147483648L,cpuFlags=5,cpuRate=2500,startedUtc=DateTime.UtcNow.ToString("o")});
+        var receipt=new{controllerPid=owner,driverPid=driver.Info.Pid,observerPid=observer.Info.Pid,observerScript=observerScript,nodeExecutable=node,driverCommandLine=driver.CommandLine,consolePolicy=ConsolePolicy(fixture),atomicJobAssignment=true,jobHandleInherited=false,initialJobSnapshot=initialJobSnapshot,limitFlags=0x2208,processLimit=16,jobMemoryBytes=2147483648L,cpuFlags=5,cpuRate=2500,startedUtc=DateTime.UtcNow.ToString("o")};
+        if(Encoding.UTF8.GetByteCount(new JavaScriptSerializer().Serialize(receipt))+1>8192)throw new InvalidOperationException("Initial controller receipt exceeds 8 KiB");
+        Json(Path.Combine(output,"controller-receipt.json"),receipt);
         File.WriteAllText(Path.Combine(output,"owned-pid.txt"),driver.Info.Pid.ToString());
         Deadline(clock,timeoutMs);Check(ResumeThread(observer.Info.Thread)!=UInt32.MaxValue);
         string previousMembers=null;

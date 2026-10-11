@@ -8,6 +8,10 @@ $observerAssembly=Join-Path (Split-Path -Parent $PSScriptRoot) 'tools/InstallerJ
 $observerManifest=Get-Content -LiteralPath (Join-Path (Split-Path -Parent $PSScriptRoot) 'kit-manifest.json') -Raw|ConvertFrom-Json
 if($observerManifest.observerAssemblySha256 -notmatch '^[a-fA-F0-9]{64}$' -or (Get-FileHash -LiteralPath $observerAssembly).Hash -ne $observerManifest.observerAssemblySha256){throw 'Sealed observer assembly preimage mismatch.'}
 [void][Reflection.Assembly]::LoadFrom($observerAssembly)
+$driverRule=Join-Path $PSScriptRoot 'Assert-InstallerDriverProvenance.ps1'
+$driverRuleRow=@($observerManifest.files|Where-Object {$_.path -ceq 'harness/Assert-InstallerDriverProvenance.ps1'})
+if($driverRuleRow.Count -ne 1 -or $driverRuleRow[0].sha256 -notmatch '^[a-fA-F0-9]{64}$' -or (Get-FileHash -LiteralPath $driverRule).Hash -ne $driverRuleRow[0].sha256 -or (Get-Item -LiteralPath $driverRule).Length -ne $driverRuleRow[0].bytes){throw 'Sealed initial-driver proof rule preimage mismatch.'}
+. $driverRule
 $seen=[Collections.Generic.HashSet[int]]::new()
 $records=[Collections.Generic.List[object]]::new()
 $handles=[Collections.Generic.Dictionary[int,IntPtr]]::new()
@@ -74,7 +78,7 @@ try {
     if($warmup.Result.Failure -or !$warmup.Result.CommandLine){throw 'Read-only metadata provider warmup failed.'}
     $view.parentProcessId=$warmup.Result.ParentProcessId
     if($view.parentProcessId -ne $ControllerPid -or $warmup.Result.ExecutablePath -ine 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe'){throw 'Observer parent/image provenance differs from actual controller.'}
-    $view.driverProvenance=[ordered]@{pid=$DriverPid;nativeHandleHeld=$false;nativeImageBefore=$null;nativeExitBefore=$null;nativeSignaledBefore=$null;nativeFailureBefore=$null;nativeImageAfter=$null;nativeExitAfter=$null;nativeSignaledAfter=$null;nativeFailureAfter=$null;metadataImage=$null;metadataParentProcessId=$null;metadataCommandLine=$null;metadataFailure=$null;metadataCompleted=$false;queryElapsedMilliseconds=$null;waitElapsedMilliseconds=$null;diagnosticFailure=$null;textLimitCharacters=4096;truncatedFields=@()}
+    $view.driverProvenance=[ordered]@{phase='pre-resume-suspended-driver';pid=$DriverPid;nativeHandleHeld=$false;nativeImageBefore=$null;nativeExitBefore=$null;nativeSignaledBefore=$null;nativeFailureBefore=$null;nativeImageAfter=$null;nativeExitAfter=$null;nativeSignaledAfter=$null;nativeFailureAfter=$null;metadataImage=$null;metadataParentProcessId=$null;metadataCommandLine=$null;metadataFailure=$null;metadataCompleted=$false;queryElapsedMilliseconds=$null;waitElapsedMilliseconds=$null;diagnosticFailure=$null;textLimitCharacters=4096;truncatedFields=@()}
     function Save-DriverProvenance([string]$suffix){
         foreach($key in @('nativeImageBefore','nativeImageAfter','nativeFailureBefore','nativeFailureAfter','metadataImage','metadataCommandLine','metadataFailure','diagnosticFailure')){if($null -ne $view.driverProvenance[$key] -and $view.driverProvenance[$key].Length -gt 4096){$view.driverProvenance[$key]=$view.driverProvenance[$key].Substring(0,4096);if($view.driverProvenance.truncatedFields -notcontains $key){$view.driverProvenance.truncatedFields+=@($key)}}}
         try{$view.driverProvenance|ConvertTo-Json -Depth 3|Set-Content -LiteralPath ($ResultFile+$suffix) -Encoding UTF8}catch{$view.driverProvenance.diagnosticFailure=$_.Exception.Message.Substring(0,[math]::Min(4096,$_.Exception.Message.Length))}
@@ -99,7 +103,17 @@ try {
         }
         if(!$view.driverProvenance.metadataCompleted -or $driverMetadata.Result.Failure){throw 'Suspended sibling metadata query failed.'}
         $view.driverParentProcessId=$driverMetadata.Result.ParentProcessId
-        if($view.driverParentProcessId -ne $ControllerPid -or $driverMetadata.Result.ExecutablePath -ine $view.driverImage){throw 'Driver parent/image provenance differs from actual controller.'}
+        $receiptStream=[IO.File]::Open((Join-Path (Split-Path -Parent $ResultFile) 'job/controller-receipt.json'),[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
+        try{
+            $receiptBytes=[byte[]]::new(8193);$receiptKept=0
+            while($receiptKept -lt $receiptBytes.Length){$receiptRead=$receiptStream.Read($receiptBytes,$receiptKept,$receiptBytes.Length-$receiptKept);if($receiptRead -eq 0){break};$receiptKept+=$receiptRead}
+            if($receiptKept -gt 8192){throw 'Initial controller receipt exceeds 8 KiB.'}
+        }finally{$receiptStream.Dispose()}
+        $receipt=[Text.Encoding]::UTF8.GetString($receiptBytes,0,$receiptKept).TrimStart([char]0xfeff)|ConvertFrom-Json
+        $rawProof=[ordered]@{};foreach($key in $view.driverProvenance.Keys){$rawProof[$key]=$view.driverProvenance[$key]}
+        # Compare original WMI values; bounded diagnostic copies cannot authorize a match.
+        $rawProof.metadataImage=$driverMetadata.Result.ExecutablePath;$rawProof.metadataCommandLine=$driverMetadata.Result.CommandLine;$rawProof.metadataFailure=$driverMetadata.Result.Failure
+        $view.driverProvenance.policy=Assert-InstallerDriverProvenance $rawProof $receipt $initial $view.jobScope $DriverPid $PID $ControllerPid 'C:\ETS2ET001Acceptance\tools\node.exe' $view.consoleHost.pid
     }finally{if($driverIdentity -ne [IntPtr]::Zero){[InstallerJobView]::Release($driverIdentity)}}
     $view.warmupMilliseconds=$warmup.Result.ElapsedMilliseconds
     Assert-ObserverMembers ([InstallerJobView]::Pids())
