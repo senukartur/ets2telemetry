@@ -1,5 +1,6 @@
 # Guest-only lifecycle. Root owns the outer VM watchdog, transport, export and snapshot restoration.
 [CmdletBinding()]
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingBrokenHashAlgorithms', '', Justification = 'Squirrel RELEASES entries identify packages by SHA1; SHA256 is checked as well where a pin exists.')]
 param([switch]$Run,[string]$ExpectedManifestSha256,[string]$ExpectedPackageSha256,[string]$ExpectedAsarSha256,[string]$OuterDeadlineUtc)
 $ErrorActionPreference='Stop'
 $kit='C:\ETS2ET001Acceptance'

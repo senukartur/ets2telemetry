@@ -17,9 +17,9 @@ function Assert-InstallerAccountingContext($guard,$manifest,[string]$manifestSha
     return @{manifestSha256=$manifestSha256;directory=$directory;step=$step;version=$version;maximumMilliseconds=$definitions[$index-1][2];expectedImages=$images}
 }
 function Assert-InstallerAccountingCommand($context,$receipt,[int]$driverPid,[int]$observerPid,[int]$controllerPid){
-    $args=@('C:\ETS2ET001Acceptance\tools\node.exe','C:\ETS2ET001Acceptance\harness\installer-step.mjs','C:\ETS2ET001Acceptance',$context.directory,($context.directory+'\step-guard.json'),$context.step,$context.version)
-    foreach($arg in $args){if($arg -isnot [string] -or $arg -match '["\r\n]' -or $arg.EndsWith('\')){throw 'Accounting context contains command delimiters.'}}
-    $prefix=(@($args|ForEach-Object {'"'+$_+'"'}) -join ' ')+' '
+    $expectedArgs=@('C:\ETS2ET001Acceptance\tools\node.exe','C:\ETS2ET001Acceptance\harness\installer-step.mjs','C:\ETS2ET001Acceptance',$context.directory,($context.directory+'\step-guard.json'),$context.step,$context.version)
+    foreach($arg in $expectedArgs){if($arg -isnot [string] -or $arg -match '["\r\n]' -or $arg.EndsWith('\')){throw 'Accounting context contains command delimiters.'}}
+    $prefix=(@($expectedArgs|ForEach-Object {'"'+$_+'"'}) -join ' ')+' '
     if($receipt.driverPid -ne $driverPid -or $receipt.observerPid -ne $observerPid -or $receipt.controllerPid -ne $controllerPid -or $receipt.driverCommandLine -isnot [string] -or !$receipt.driverCommandLine.StartsWith($prefix,[StringComparison]::Ordinal)){throw 'Accounting context differs from the exact created driver command.'}
     $budgetText=$receipt.driverCommandLine.Substring($prefix.Length)
     if($budgetText -notmatch '^"([0-9]{5})"$'){throw 'Accounting context differs from the exact created driver command.'}
@@ -72,9 +72,9 @@ function Resolve-InstallerHelperParent($record,$records,[int]$driverPid,[int]$ob
     $parent=$record.metadataParentProcessId;$pending=$false
     while($parent -ne $driverPid){
         if($null -eq $parent -or $parent -le 0 -or $forbidden -contains $parent -or !$seen.Add($parent)){throw 'Helper parent chain is unknown, conflicted or cyclic.'}
-        $matches=@($records|Where-Object {$_.pid -eq $parent})
-        if($matches.Count -ne 1){throw 'Helper parent chain is unknown, conflicted or cyclic.'}
-        $ancestor=$matches[0]
+        $parentRecords=@($records|Where-Object {$_.pid -eq $parent})
+        if($parentRecords.Count -ne 1){throw 'Helper parent chain is unknown, conflicted or cyclic.'}
+        $ancestor=$parentRecords[0]
         if($ancestor.role -cne 'installer-helper' -or $ancestor.executablePath -ieq 'C:\Windows\System32\conhost.exe' -or $ancestor.nativeIdentityHeld -ne $true -or $null -ne $ancestor.queryFailure -or $null -ne $ancestor.exitQueryFailure -or $null -ne $ancestor.nativeExitAfterQueryFailure -or ($null -ne $ancestor.exitCode -and $ancestor.exitCode -ne 0) -or ($ancestor.nativeIdentityRetired -eq $true -and ($ancestor.nativeFinalSignaled -ne $true -or $ancestor.exitCode -ne 0))){throw 'Helper parent proof failed or belongs to another role.'}
         if($ancestor.metadataCompleted -eq $true){try{$parentNative=Assert-InstallerHelperNativeAfter $ancestor;if($ancestor.nativeAfterQueryProof -cne $parentNative){throw 'Parent native classification differs.'}}catch{throw 'Helper parent proof failed or belongs to another role.'}}
         if($ancestor.metadataPolicy -notin @('held-native-helper-wmi-null','held-native-helper-wmi-image','held-native-helper-wmi-advisory-mismatch')){

@@ -1,5 +1,6 @@
 # Inert by default. Reads/copies archives and sources; never executes any binary or maker.
 [CmdletBinding()]
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingBrokenHashAlgorithms', '', Justification = 'Squirrel RELEASES entries identify packages by SHA1; SHA256 is checked as well where a pin exists.')]
 param([switch]$Prepare,[string]$OutputDirectory,[Alias('UpgradeFeed')][string]$FixtureDirectory,[string]$InstallerOutput,
     [string]$ObserverBuildDirectory,[string]$ExpectedObserverAssemblySha256,
     [string]$ExpectedSetupSha256,[string]$ExpectedOriginalNugetSha256,
