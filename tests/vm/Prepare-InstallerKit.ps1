@@ -1,15 +1,26 @@
 # Inert by default. Reads/copies archives and sources; never executes any binary or maker.
 [CmdletBinding()]
 param([switch]$Prepare,[string]$OutputDirectory,[Alias('UpgradeFeed')][string]$FixtureDirectory,[string]$InstallerOutput,
+    [string]$ObserverBuildDirectory,[string]$ExpectedObserverAssemblySha256,
     [string]$ExpectedSetupSha256,[string]$ExpectedOriginalNugetSha256,
     [string]$ExpectedPackageSha256='ffd4227c69487d31b63b8f92f1de4205103ec68648d4c11e8336ad061015d69f',
     [string]$ExpectedAsarSha256='2356ed080cb8854e2358065b3a209632814ae0777951ed3d41d447dbc11d2790')
 $ErrorActionPreference='Stop'
 $repository=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
-if(!$Prepare){[ordered]@{prepare=$false;applicationLaunched=$false;guestRoot='C:\ETS2ET001Acceptance';globalGuestSeconds=160;minimumOuterRemainingSeconds=185;action='Supply -Prepare, a fresh OutputDirectory, reviewed original Setup/NuGet hashes and separately prepared clone-only 0.1.1 FixtureDirectory. Seal reviewed two-root controller source; it is compiled inertly in the guest.'}|ConvertTo-Json;return}
-foreach($hash in @($ExpectedSetupSha256,$ExpectedOriginalNugetSha256,$ExpectedPackageSha256,$ExpectedAsarSha256)){if($hash -notmatch '^[a-fA-F0-9]{64}$'){throw 'Reviewed SHA256 values required.'}}
+if(!$Prepare){[ordered]@{prepare=$false;applicationLaunched=$false;guestRoot='C:\ETS2ET001Acceptance';globalGuestSeconds=160;minimumOuterRemainingSeconds=185;action='Supply -Prepare, a fresh OutputDirectory, reviewed original Setup/NuGet hashes, clone-only 0.1.1 FixtureDirectory, and reviewed inert ObserverBuildDirectory/ExpectedObserverAssemblySha256. Seal source, compiler receipt and observer library; no observer compilation in its guest Job.'}|ConvertTo-Json;return}
+foreach($hash in @($ExpectedSetupSha256,$ExpectedOriginalNugetSha256,$ExpectedPackageSha256,$ExpectedAsarSha256,$ExpectedObserverAssemblySha256)){if($hash -notmatch '^[a-fA-F0-9]{64}$'){throw 'Reviewed SHA256 values required.'}}
 if(!$OutputDirectory -or ![IO.Path]::IsPathRooted($OutputDirectory) -or (Test-Path -LiteralPath $OutputDirectory)){throw 'A fresh absolute output directory is required.'}
 $output=[IO.Path]::GetFullPath($OutputDirectory).TrimEnd('\','/')
+$observerBuild=(Resolve-Path -LiteralPath $ObserverBuildDirectory).Path
+$observerAssembly=Join-Path $observerBuild 'InstallerJobView.dll';$observerReceipt=Join-Path $observerBuild 'build-receipt.json';$observerSource=Join-Path $PSScriptRoot 'InstallerJobView.cs'
+foreach($filename in @($observerAssembly,$observerReceipt,(Join-Path $observerBuild 'InstallerJobView.cs'))){if((Get-Item -LiteralPath $filename).Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'Observer build inputs must be ordinary files.'}}
+$build=Get-Content -LiteralPath $observerReceipt -Raw|ConvertFrom-Json
+$sourceSha256=(Get-FileHash -LiteralPath $observerSource).Hash.ToLowerInvariant()
+if($build.schemaVersion -ne 1 -or $build.kind -ne 'et001-installer-observer-build' -or $build.sourceSha256 -ne $sourceSha256 -or (Get-FileHash -LiteralPath (Join-Path $observerBuild 'InstallerJobView.cs')).Hash -ne $sourceSha256 -or $build.assemblySha256 -ne $ExpectedObserverAssemblySha256 -or (Get-FileHash -LiteralPath $observerAssembly).Hash -ne $ExpectedObserverAssemblySha256 -or $build.assemblyBytes -ne (Get-Item -LiteralPath $observerAssembly).Length -or $build.assemblyBytes -le 0 -or $build.assemblyBytes -gt 1048576 -or $build.compilerPath -ne 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe' -or $build.compilerSha256 -ne '46809206887326d2d24db1eff1f3064de972c3451abe766b49111450a5e08e00' -or $build.compilerSignature -ne 'Valid Microsoft Corporation' -or !$build.compilerVersion -or $build.exitCode -ne 0 -or $build.assemblyLoaded -ne $false -or $build.nativeObserverInvoked -ne $false){throw 'Reviewed observer source/compiler/library build receipt mismatch.'}
+$buildArguments=@('/nologo','/noconfig','/target:library','/platform:x64','/optimize+','/reference:System.dll','/reference:System.Core.dll','/reference:System.Management.dll',('/out:'+$observerAssembly),(Join-Path $observerBuild 'InstallerJobView.cs'))
+if($build.compilerSignerSubject -notmatch '^CN=Microsoft Windows, O=Microsoft Corporation,' -or $build.elapsedMilliseconds -gt 30000){throw 'Unexpected compiler signature or build deadline.'}
+if(@($build.arguments).Count -ne $buildArguments.Count){throw 'Unexpected observer compiler flags.'}
+for($index=0;$index -lt $buildArguments.Count;$index++){if($build.arguments[$index] -cne $buildArguments[$index]){throw 'Unexpected observer compiler argument.'}}
 $fixture=(Resolve-Path -LiteralPath $FixtureDirectory).Path
 $maker=if($InstallerOutput){(Resolve-Path -LiteralPath $InstallerOutput).Path}else{Join-Path $repository 'out/make/squirrel.windows/x64'}
 $setup=Join-Path $maker 'ETS2Telemetry Desktop-0.1.0 Setup.exe'
@@ -81,7 +92,13 @@ Copy-Item -LiteralPath $playwright -Destination (Join-Path $output 'node_modules
 foreach($name in @('Invoke-GuestInstallerAcceptance.ps1','installer-step.mjs','Observe-InstallerJob.ps1')){Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination (Join-Path $output 'harness')}
 Copy-Item -LiteralPath (Join-Path $repository 'scripts/watchdog/BoundedProcess.cs') -Destination (Join-Path $output 'tools')
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'InstallerBoundedProcess.cs') -Destination (Join-Path $output 'tools')
+Copy-Item -LiteralPath $observerAssembly -Destination (Join-Path $output 'tools/InstallerJobView.dll')
+Copy-Item -LiteralPath $observerSource -Destination (Join-Path $output 'tools/InstallerJobView.cs')
+Copy-Item -LiteralPath $observerReceipt -Destination (Join-Path $output 'tools/observer-build-receipt.json')
 $files=@(Get-ChildItem -LiteralPath $output -Recurse -Force|ForEach-Object{if($_.Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'Kit reparse points prohibited.'};if(!$_.PSIsContainer){[ordered]@{path=$_.FullName.Substring($output.Length+1).Replace('\','/');bytes=$_.Length;sha256=(Get-FileHash -LiteralPath $_.FullName).Hash.ToLowerInvariant()}}})
 $manifest=[ordered]@{schemaVersion=1;kind='et001-installer';guestRoot='C:\ETS2ET001Acceptance';guestUuid='94674D56-D803-F4D5-9AAC-C4E91CFB475F';labId='9a047927-f94b-41cb-bda8-abcc7d0b76f1';nodeVersion='24.19.0';playwrightCoreVersion='1.64.0';controllerSourceSha256=(Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'InstallerBoundedProcess.cs')).Hash.ToLowerInvariant();packageSha256=$ExpectedPackageSha256;asarSha256=$ExpectedAsarSha256;setupSha256=$ExpectedSetupSha256;originalNugetSha256=$ExpectedOriginalNugetSha256;fixtureNugetSha256=(Get-FileHash -LiteralPath $fixturePackage).Hash.ToLowerInvariant();applicationVersion='0.1.0';fixtureVersion='0.1.1';fixtureOnly=$true;runtimeFiles=$runtime;portableOmissions=$omitted.ToArray();generatedFiles=@($generated.path);files=$files;applicationLaunched=$false;preparedUtc=[datetime]::UtcNow.ToString('o')}
+$manifest.observerSourceSha256=$sourceSha256
+$manifest.observerAssemblySha256=$ExpectedObserverAssemblySha256.ToLowerInvariant()
+$manifest.observerBuildReceiptSha256=(Get-FileHash -LiteralPath $observerReceipt).Hash.ToLowerInvariant()
 $manifest|ConvertTo-Json -Depth 7|Set-Content -LiteralPath (Join-Path $output 'kit-manifest.json') -Encoding UTF8
 [ordered]@{prepared=$true;applicationLaunched=$false;kit=$output;files=$files.Count;runtimeFiles=$runtime.Count;manifestSha256=(Get-FileHash -LiteralPath (Join-Path $output 'kit-manifest.json')).Hash.ToLowerInvariant();setupSha256=$ExpectedSetupSha256;fixtureNugetSha256=$manifest.fixtureNugetSha256}|ConvertTo-Json

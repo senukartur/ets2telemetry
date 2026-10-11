@@ -108,6 +108,11 @@ try{
     if(!$runtimeNames.Contains('ETS2TelemetryDesktop.exe') -or !$runtimeNames.Contains('resources/app.asar') -or @($manifest.runtimeFiles|Where-Object {$_.path -eq 'resources/app.asar' -and $_.sha256 -eq $ExpectedAsarSha256}).Count -ne 1){throw 'Frozen critical runtime projection missing.'}
     if((Get-FileHash -LiteralPath (Join-Path $kit 'installer/Setup.exe')).Hash -ne $manifest.setupSha256 -or (Get-FileHash -LiteralPath (Join-Path $kit 'feed/ETS2TelemetryDesktop-0.1.1-full.nupkg')).Hash -ne $manifest.fixtureNugetSha256){throw 'Reviewed maker/feed identity mismatch.'}
     if($manifest.controllerSourceSha256 -notmatch '^[a-fA-F0-9]{64}$' -or (Get-FileHash -LiteralPath (Join-Path $kit 'tools/InstallerBoundedProcess.cs')).Hash -ne $manifest.controllerSourceSha256){throw 'Reviewed two-root controller source identity mismatch.'}
+    foreach($pair in @(@{file='tools/InstallerJobView.cs';hash=$manifest.observerSourceSha256},@{file='tools/InstallerJobView.dll';hash=$manifest.observerAssemblySha256},@{file='tools/observer-build-receipt.json';hash=$manifest.observerBuildReceiptSha256})){
+        if($pair.hash -notmatch '^[a-fA-F0-9]{64}$' -or (Get-FileHash -LiteralPath (Join-Path $kit $pair.file)).Hash -ne $pair.hash){throw 'Sealed observer source/library/receipt identity mismatch.'}
+    }
+    $observerBuild=Get-Content -LiteralPath (Join-Path $kit 'tools/observer-build-receipt.json') -Raw|ConvertFrom-Json
+    if($observerBuild.kind -ne 'et001-installer-observer-build' -or $observerBuild.sourceSha256 -ne $manifest.observerSourceSha256 -or $observerBuild.assemblySha256 -ne $manifest.observerAssemblySha256 -or $observerBuild.exitCode -ne 0 -or $observerBuild.assemblyLoaded -ne $false -or $observerBuild.nativeObserverInvoked -ne $false){throw 'Observer inert-build receipt differs from sealed manifest.'}
     $local=[Environment]::GetFolderPath('LocalApplicationData')
     if($local -ne $env:LOCALAPPDATA -or $local -notmatch '^C:\\Users\\ets2lab\\AppData\\Local$'){throw 'Actual disposable per-user LocalApplicationData required.'}
     $report.binaryRoot=Join-Path $local 'ETS2TelemetryDesktop';$report.dataRoot=Join-Path $local 'ETS2Telemetry'
