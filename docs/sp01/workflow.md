@@ -17,6 +17,8 @@ The downloader verifies SDK archive 1.15 against SHA256 `77504F14D2AC1405BA70EE3
 
 ## Synthetic desktop smoke
 
+The bounded `run-checks.ps1` entrypoint also runs the placement unit regressions alongside the codec tests. The placement module keeps the overlay at 280×96 DIP, skips unchanged bounds and repairs an oversized window at the same anchor. The additional real-Electron geometry driver, `experiments/sp01/tests/window-geometry.mjs`, requires a coordinator-prepared, independently reviewed manifest and read-only native/PID helpers. It is currently scoped to this host's 150% display and isolated `.local/sp01-manual` outputs; it is not part of the hosted scaffold CI. Run it only under the existing 60-second Job with fresh outputs and exact candidate/input hashes. See the [G03 record](sessions/sp01-g03.md) for actual attempts and results; synthetic geometry does not establish game appearance or identify its failure's cause.
+
 Only the coordinator launches the reviewed smoke under `scripts/watchdog/BoundedProcess.cs`, with at most 16 processes, 2 GiB job committed memory, 25% CPU, kill-on-close and a 45-second external deadline. Pass absolute paths, the current Windows SID, and frozen candidate commit. The smoke creates a new output directory, isolated TEMP/TMP/APPDATA/LOCALAPPDATA/cwd/profile, an eight-second native synthetic source, and Electron. It retains failure receipts, logs and trace, checks actual natural fixture/app exits and utility service stop, and does not claim game focus/click-through compatibility. Reruns require new output directories; preserve failed results.
 
 ```powershell
