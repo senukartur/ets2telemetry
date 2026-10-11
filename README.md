@@ -76,3 +76,5 @@ See [Git workflow rules](AGENTS.md#git-workflow) for branch, PR, history, valida
 ## Development setup
 
 Follow [Windows setup](docs/setup.md). Node/npm and Visual Studio/CMake paths were inspected; packaging, GUI startup, and installation commands remain subject to the ET-001 acceptance record.
+
+<!-- ET-024 path-filter probe; this PR is closed without merging. -->
