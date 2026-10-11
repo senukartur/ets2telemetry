@@ -2,6 +2,7 @@
 const { app, BrowserWindow, Menu, Tray, nativeImage, screen, session, utilityProcess } = require('electron');
 const path = require('node:path');
 const { validate } = require('./codec.cjs');
+const { updateOverlayBounds } = require('./overlay-window.cjs');
 const game = process.argv.find((arg) => arg.startsWith('--game='))?.slice(7);
 const sid = process.argv.find((arg) => arg.startsWith('--sid='))?.slice(6);
 const profile = process.argv.find((arg) => arg.startsWith('--profile='))?.slice(10);
@@ -40,7 +41,7 @@ if (!['eut2', 'ats'].includes(game) || !/^S-1-[0-9-]+$/.test(sid) || !profile ||
       overlay.webContents.send('sp01:snapshot', value);
       if (!value?.window.visible) { overlay.hide(); return; }
       const rect = screen.screenToDipRect(null, value.window);
-      overlay.setPosition(Math.round(rect.x + 20), Math.round(rect.y + 20));
+      updateOverlayBounds(overlay, rect);
       if (!overlay.isVisible()) overlay.showInactive();
     }, 50);
   }
