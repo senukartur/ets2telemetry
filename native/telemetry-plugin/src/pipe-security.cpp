@@ -6,15 +6,28 @@
 #include <array>
 #include <stdexcept>
 #include <algorithm>
+#ifdef ETS2TELEMETRY_TRANSPORT_TEST_HOOKS
+#include <atomic>
+#endif
 
 namespace ets2telemetry::transport {
+#ifdef ETS2TELEMETRY_TRANSPORT_TEST_HOOKS
+namespace { std::atomic<TransportTestHook> inspection_hook{nullptr}; }
+void set_transport_test_hook(TransportTestHook hook) noexcept { inspection_hook.store(hook); }
+DWORD transport_test_hook(const char* phase, HANDLE object, HANDLE stop, DWORD result) {
+  auto hook = inspection_hook.load(); return hook ? hook(phase,object,stop,result) : result;
+}
+#endif
 namespace {
 [[noreturn]] void fail(const char* code) { throw std::runtime_error(code); }
-std::wstring token_sid(HANDLE process) {
-  HANDLE raw = nullptr; if (!OpenProcessToken(process, TOKEN_QUERY, &raw)) fail("token-open"); Handle token(raw);
-  DWORD bytes = 0; GetTokenInformation(token.get(), TokenUser, nullptr, 0, &bytes);
+std::wstring token_sid(HANDLE process, HANDLE stop_event = nullptr) {
+  inspection_running(stop_event);
+  HANDLE raw = nullptr; if (!OpenProcessToken(process, TOKEN_QUERY, &raw)) fail("token-open"); Handle token(raw); inspection_running(stop_event);
+  DWORD bytes = 0; inspection_running(stop_event); GetTokenInformation(token.get(), TokenUser, nullptr, 0, &bytes);
+  inspection_running(stop_event);
   if (!bytes || bytes > 16384) fail("token-size"); std::vector<unsigned char> buffer(bytes);
   if (!GetTokenInformation(token.get(), TokenUser, buffer.data(), bytes, &bytes)) fail("token-user");
+  inspection_running(stop_event);
   LPWSTR sid = nullptr; if (!ConvertSidToStringSidW(reinterpret_cast<TOKEN_USER*>(buffer.data())->User.Sid, &sid)) fail("token-sid");
   std::wstring result(sid); LocalFree(sid); return result;
 }
@@ -31,35 +44,69 @@ class Hash {
  private: BCRYPT_ALG_HANDLE algorithm_ = nullptr; BCRYPT_HASH_HANDLE hash_ = nullptr;
 };
 }
+void inspection_running(HANDLE stop_event) {
+  if (!stop_event) return;
+  const auto result = WaitForSingleObject(stop_event,0);
+  if (result == WAIT_OBJECT_0) fail("inspection-stopped");
+  if (result != WAIT_TIMEOUT) fail("inspection-stop-event");
+}
 std::string sha256_bytes(const void* p, std::size_t n) { Hash h; h.add(p,n); return h.finish(); }
-std::wstring final_path(HANDLE h) {
+std::wstring final_path(HANDLE h, HANDLE stop_event) {
+  inspection_running(stop_event);
   std::wstring result(32768, L'\0'); auto length = GetFinalPathNameByHandleW(h, result.data(), static_cast<DWORD>(result.size()), FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+  inspection_running(stop_event);
   if (!length || length >= result.size()) fail("final-path"); result.resize(length); return result;
 }
-std::string sha256_handle(HANDLE file) {
+std::string sha256_handle(HANDLE file, HANDLE stop_event) {
+  inspection_running(stop_event);
   FILE_ATTRIBUTE_TAG_INFO attributes{}; LARGE_INTEGER size{};
   if (!GetFileInformationByHandleEx(file, FileAttributeTagInfo, &attributes, sizeof(attributes)) || (attributes.FileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY)) || !GetFileSizeEx(file, &size) || size.QuadPart <= 0 || size.QuadPart > 512LL * 1024 * 1024) fail("image-file");
+  inspection_running(stop_event);
   Hash hash; std::array<unsigned char, 65536> bytes{}; DWORD read = 0;
-  do { if (!ReadFile(file, bytes.data(), static_cast<DWORD>(bytes.size()), &read, nullptr)) fail("image-read"); hash.add(bytes.data(),read); } while (read);
+  do {
+    inspection_running(stop_event);
+#ifdef ETS2TELEMETRY_TRANSPORT_TEST_HOOKS
+    transport_test_hook("hash-before-read",file,stop_event);
+#endif
+    inspection_running(stop_event);
+    if (!ReadFile(file, bytes.data(), static_cast<DWORD>(bytes.size()), &read, nullptr)) fail("image-read");
+    inspection_running(stop_event);
+#ifdef ETS2TELEMETRY_TRANSPORT_TEST_HOOKS
+    transport_test_hook("hash-after-read",file,stop_event);
+#endif
+    inspection_running(stop_event);
+    if (read) hash.add(bytes.data(),read);
+#ifdef ETS2TELEMETRY_TRANSPORT_TEST_HOOKS
+    if (read) transport_test_hook("hash-after-block",file,stop_event);
+#endif
+    inspection_running(stop_event);
+  } while (read);
+  inspection_running(stop_event);
   return hash.finish();
 }
-std::string sha256_file(const std::wstring& path) {
+std::string sha256_file(const std::wstring& path, HANDLE stop_event) {
+  inspection_running(stop_event);
   Handle file(CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_SEQUENTIAL_SCAN, nullptr));
-  if (!file) fail("image-open"); return sha256_handle(file.get());
+  if (!file) fail("image-open"); inspection_running(stop_event); return sha256_handle(file.get(),stop_event);
 }
 std::uint64_t creation_time(HANDLE process) {
   FILETIME created{}, exited{}, kernel{}, user{}; if (!GetProcessTimes(process, &created, &exited, &kernel, &user)) fail("process-time");
   return (static_cast<std::uint64_t>(created.dwHighDateTime) << 32) | created.dwLowDateTime;
 }
-PeerIdentity inspect_peer(DWORD pid) {
+PeerIdentity inspect_peer(DWORD pid, HANDLE stop_event) {
+  inspection_running(stop_event);
   PeerIdentity peer; peer.pid = pid; peer.process.reset(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, pid));
   if (!peer.process || WaitForSingleObject(peer.process.get(),0) != WAIT_TIMEOUT) fail("process-open");
-  peer.creation = creation_time(peer.process.get()); peer.sid = token_sid(peer.process.get());
+  inspection_running(stop_event); peer.creation = creation_time(peer.process.get());
+  peer.sid = token_sid(peer.process.get(),stop_event); inspection_running(stop_event);
   if (!ProcessIdToSessionId(pid, &peer.session)) fail("process-session");
+  inspection_running(stop_event);
   std::wstring path(32768,L'\0'); DWORD count = static_cast<DWORD>(path.size());
   if (!QueryFullProcessImageNameW(peer.process.get(),0,path.data(),&count)) fail("process-image"); path.resize(count);
+  inspection_running(stop_event);
   peer.image_file.reset(CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
-  if (!peer.image_file) fail("process-image-open"); peer.image = final_path(peer.image_file.get()); peer.sha256 = sha256_handle(peer.image_file.get());
+  if (!peer.image_file) fail("process-image-open"); inspection_running(stop_event); peer.image = final_path(peer.image_file.get(),stop_event); peer.sha256 = sha256_handle(peer.image_file.get(),stop_event);
+  inspection_running(stop_event);
   if (WaitForSingleObject(peer.process.get(),0) != WAIT_TIMEOUT || creation_time(peer.process.get()) != peer.creation) fail("process-retired"); return peer;
 }
 UserIdentity current_user() {
@@ -80,13 +127,15 @@ OwnerSecurity::OwnerSecurity(const std::wstring& sid) : sid_(sid) {
   attributes_ = {sizeof(SECURITY_ATTRIBUTES), descriptor_, FALSE};
 }
 OwnerSecurity::~OwnerSecurity() { if (descriptor_) LocalFree(descriptor_); }
-void OwnerSecurity::verify_owner_only(const std::wstring& path) const {
+void OwnerSecurity::verify_owner_only(const std::wstring& path, HANDLE stop_event) const {
+  inspection_running(stop_event);
   Handle file(CreateFileW(path.c_str(), READ_CONTROL | FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr));
-  if (!file) fail("owner-open"); FILE_ATTRIBUTE_TAG_INFO attributes{};
+  if (!file) fail("owner-open"); inspection_running(stop_event); FILE_ATTRIBUTE_TAG_INFO attributes{};
   if (!GetFileInformationByHandleEx(file.get(),FileAttributeTagInfo,&attributes,sizeof(attributes)) || attributes.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) fail("owner-reparse");
-  verify_handle(file.get());
+  inspection_running(stop_event); verify_handle(file.get(),stop_event);
 }
-void OwnerSecurity::verify_handle(HANDLE file) const {
+void OwnerSecurity::verify_handle(HANDLE file, HANDLE stop_event) const {
+  inspection_running(stop_event);
   PSID owner = nullptr; PACL acl = nullptr; PSECURITY_DESCRIPTOR raw = nullptr;
   if (GetSecurityInfo(file,SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,&owner,nullptr,&acl,nullptr,&raw) != ERROR_SUCCESS) fail("owner-descriptor");
   bool valid = false; PSID expected = nullptr;
@@ -97,7 +146,7 @@ void OwnerSecurity::verify_handle(HANDLE file) const {
     valid = valid && GetAce(acl,0,&ace) && reinterpret_cast<ACE_HEADER*>(ace)->AceType == ACCESS_ALLOWED_ACE_TYPE && EqualSid(&reinterpret_cast<ACCESS_ALLOWED_ACE*>(ace)->SidStart,expected);
     LocalFree(expected);
   }
-  LocalFree(raw); if (!valid) fail("owner-dacl");
+  LocalFree(raw); inspection_running(stop_event); if (!valid) fail("owner-dacl");
 }
 void OwnerSecurity::ensure_directory(const std::wstring& path) const {
   if (!CreateDirectoryW(path.c_str(),const_cast<SECURITY_ATTRIBUTES*>(&attributes_)) && GetLastError() != ERROR_ALREADY_EXISTS) fail("owner-directory"); verify_owner_only(path);

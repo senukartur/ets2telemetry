@@ -71,6 +71,145 @@ struct Receiver {
   v0::FrameDecoder decoder; std::vector<v0::Message> messages;
   void read(HANDLE h,std::size_t minimum) { const auto deadline=GetTickCount64()+2500; while(messages.size()<minimum && GetTickCount64()<deadline) { std::array<std::uint8_t,65540> b{}; DWORD count=0; require(io(h,true,b.data(),static_cast<DWORD>(b.size()),count)&&count,"server frame read"); decoder.push(b.data(),count,[&](v0::Message m){messages.push_back(std::move(m));}); } require(messages.size()>=minimum,"message count"); }
 };
+#ifdef ETS2TELEMETRY_TRANSPORT_TEST_HOOKS
+struct HookState {
+  enum class Mode { none, accept_close, accept_immediate, accept_completion, hash_block, hash_read, cancel_race } mode = Mode::none;
+  Handle ready{CreateEventW(nullptr,TRUE,FALSE,nullptr)}, release{CreateEventW(nullptr,TRUE,FALSE,nullptr)}, first_cancel{CreateEventW(nullptr,TRUE,FALSE,nullptr)}, completed{CreateEventW(nullptr,TRUE,FALSE,nullptr)};
+  Handle blocked_read, blocked_write;
+  std::atomic<unsigned> accepts{0}, reads{0}, blocks{0};
+  std::atomic<DWORD> observed_error{ERROR_SUCCESS}, late_read_error{ERROR_SUCCESS};
+  std::atomic<bool> synchronized{true}; DWORD injected = ERROR_SUCCESS;
+  static HookState* active;
+  ~HookState() { set_transport_test_hook(nullptr); active=nullptr; }
+  void enable() { active=this; set_transport_test_hook(hook); }
+  static DWORD hook(const char* phase,HANDLE object,HANDLE stop,DWORD result) {
+    auto& s=*active;
+    if (!stop) return result;
+    const std::string name(phase);
+    if(name=="accept-before-connect") {
+      const auto attempt=++s.accepts;
+      if(attempt==1 && s.mode==Mode::accept_close) {
+        SetEvent(s.ready.get()); if(WaitForSingleObject(s.release.get(),2000)!=WAIT_OBJECT_0)s.synchronized.store(false);
+      }
+      if(attempt==1 && s.mode==Mode::accept_immediate)return s.injected;
+    }
+    if(name=="accept-pending" && s.accepts.load()==1 && s.mode==Mode::accept_completion) {
+      SetEvent(s.ready.get());
+      if(s.injected==ERROR_OPERATION_ABORTED)CancelIoEx(object,nullptr);
+    }
+    if(name=="accept-result" && s.accepts.load()==1) {
+      s.observed_error.store(result);
+      // Deliberately clobber Win32 last-error after the worker has saved completion.
+      SetLastError(ERROR_INVALID_HANDLE);
+      if(s.mode==Mode::accept_completion && s.injected!=ERROR_OPERATION_ABORTED)return s.injected;
+    }
+    if(name=="hash-before-read")++s.reads;
+    if(name=="hash-after-block")++s.blocks;
+    const bool boundary=(s.mode==Mode::hash_block && name=="hash-after-block") || (s.mode==Mode::hash_read && name=="hash-after-read") || (s.mode==Mode::cancel_race && name=="hash-after-block");
+    if(boundary && s.reads.load()==1) {
+      SetEvent(s.ready.get());
+      if(s.mode==Mode::cancel_race) {
+        if(WaitForSingleObject(s.first_cancel.get(),2000)!=WAIT_OBJECT_0)s.synchronized.store(false);
+        // The first cancellation already found no pending read. This real synchronous
+        // read represents the check/read scheduling race on the owned worker.
+        char byte=0; DWORD count=0;
+        const auto ok=ReadFile(s.blocked_read.get(),&byte,1,&count,nullptr);
+        s.late_read_error.store(ok?ERROR_SUCCESS:GetLastError()); SetEvent(s.completed.get());
+      } else if(WaitForSingleObject(stop,2000)!=WAIT_OBJECT_0)s.synchronized.store(false);
+    }
+    if(name=="stop-after-cancel")SetEvent(s.first_cancel.get());
+    return result;
+  }
+};
+HookState* HookState::active=nullptr;
+void accept_disconnect() {
+  {
+    HookState hooks; Fixture f; hooks.mode=HookState::Mode::accept_close; hooks.enable(); f.start();
+    require(WaitForSingleObject(hooks.ready.get(),2000)==WAIT_OBJECT_0,"accept barrier reached");
+    auto departed=f.connect(); departed.reset(); SetEvent(hooks.release.get());
+    require(until([&]{return hooks.accepts.load()>=2;}),"immediate-close accept rearmed");
+    require(hooks.observed_error.load()==ERROR_NO_DATA,"actual closed client produces ERROR_NO_DATA");
+    std::cout<<"actualEarlyCloseError="<<hooks.observed_error.load()<<" acceptAttempts="<<hooks.accepts.load()<<'\n';
+    auto replacement=f.connect(); send(replacement.get(),framed(hello_payload)); Receiver receiver; receiver.read(replacement.get(),2);
+    require(receiver.messages[0].kind=="welcome"&&receiver.messages[1].kind=="checkpoint","authorized replacement hydrates after actual immediate close");
+    require(hooks.synchronized.load(),"actual close barrier synchronized"); f.server.stop();
+  }
+  for(auto mode:{HookState::Mode::accept_immediate,HookState::Mode::accept_completion}) {
+    HookState hooks; Fixture f; hooks.mode=mode; hooks.injected=mode==HookState::Mode::accept_immediate?ERROR_BROKEN_PIPE:ERROR_NO_DATA; hooks.enable();
+    require(f.server.start(f.directory),"injected disconnect worker start"); require(f.server.await_startup()==StartupFailure::none,"injected disconnect startup");
+    Handle departed; if(mode==HookState::Mode::accept_completion) {
+      require(WaitForSingleObject(hooks.ready.get(),2000)==WAIT_OBJECT_0,"overlapped accept pending before connection"); departed=f.connect();
+    }
+    require(until([&]{return hooks.accepts.load()>=2;}),"known disconnected accept outcome rearmed"); departed.reset();
+    auto replacement=f.connect(); send(replacement.get(),framed(hello_payload)); Receiver receiver; receiver.read(replacement.get(),2);
+    require(receiver.messages[1].kind=="checkpoint","replacement hydrates after injected disconnected outcome"); f.server.stop();
+  }
+}
+void accept_failure() {
+  for(auto mode:{HookState::Mode::accept_immediate,HookState::Mode::accept_completion}) {
+    HookState hooks; Fixture f; hooks.mode=mode; hooks.injected=mode==HookState::Mode::accept_completion?ERROR_OPERATION_ABORTED:ERROR_ACCESS_DENIED; hooks.enable();
+    require(f.server.start(f.directory),"unknown accept worker starts"); require(f.server.await_startup()==StartupFailure::none,"unknown accept startup succeeds");
+    if(mode==HookState::Mode::accept_completion)
+      require(WaitForSingleObject(hooks.ready.get(),2000)==WAIT_OBJECT_0,"failed overlapped accept established");
+    require(until([&]{return f.server.status()==Status::failed;}),"unexpected accept failure reported as failed");
+    require(until([&]{return f.server.endpoint().empty();}),"failed accept retires endpoint");
+    sdk::Snapshot current; require(f.adapter->read_current(current),"failed accept source retained");
+    const auto record=f.directory+L"\\"+std::wstring(current.identity.process_instance_id.bytes.begin(),current.identity.process_instance_id.bytes.begin()+36)+L".json";
+    require(GetFileAttributesW(record.c_str())==INVALID_FILE_ATTRIBUTES,"unexpected accept failure retires actual discovery");
+    std::cout<<"unexpectedAcceptError="<<hooks.observed_error.load()<<" acceptAttempts="<<hooks.accepts.load()<<'\n';
+    if(mode==HookState::Mode::accept_completion)
+      require(hooks.observed_error.load()==ERROR_OPERATION_ABORTED,"actual overlapped completion failure saved before last-error clobber");
+    require(hooks.accepts.load()==1,"unexpected accept error never broadly retried"); f.server.stop(); require(f.server.status()==Status::failed,"stop preserves accept failure");
+  }
+  HookState hooks; Fixture f; hooks.enable(); f.start(); require(until([&]{return hooks.accepts.load()==1;}),"pending accept established");
+  f.server.stop(); require(f.server.status()==Status::stopped&&f.server.endpoint().empty(),"stop cancellation retires normally without accept failure");
+}
+void hash_cancel() {
+  HookState hooks; Fixture f;
+  const auto path=f.directory+L"\\hash-fixture.bin";
+  struct OwnedFile { const std::wstring& path; ~OwnedFile() { DeleteFileW(path.c_str()); } } cleanup{path};
+  std::vector<unsigned char> content(3*65536+17);
+  for(std::size_t i=0;i<content.size();++i)content[i]=static_cast<unsigned char>(i%251);
+  {Handle file(CreateFileW(path.c_str(),GENERIC_WRITE,0,f.security.attributes(),CREATE_NEW,0,nullptr)); DWORD written=0; require(file&&WriteFile(file.get(),content.data(),static_cast<DWORD>(content.size()),&written,nullptr)&&written==content.size(),"multi-block hash fixture write");}
+  Handle stop(CreateEventW(nullptr,TRUE,FALSE,nullptr)); hooks.enable();
+  {Handle file(CreateFileW(path.c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,0,nullptr)); require(sha256_handle(file.get(),stop.get())=="4bb7439bc39bc2d0e3d6a915d7c81e38250a9c5bb320a94a19a95bba0d5fe40a"&&sha256_bytes(content.data(),content.size())=="4bb7439bc39bc2d0e3d6a915d7c81e38250a9c5bb320a94a19a95bba0d5fe40a","complete held-file hash matches independently pinned digest");}
+  require(hooks.reads.load()==5&&hooks.blocks.load()==4,"positive full hash spans four blocks and EOF");
+  for(auto mode:{HookState::Mode::hash_block,HookState::Mode::hash_read}) {
+    ResetEvent(stop.get()); ResetEvent(hooks.ready.get()); hooks.mode=mode; hooks.reads.store(0); hooks.blocks.store(0);
+    bool cancelled=false; std::thread hash_worker([&]{try{Handle file(CreateFileW(path.c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,0,nullptr)); sha256_handle(file.get(),stop.get());}catch(const std::exception& e){cancelled=std::string(e.what())=="inspection-stopped";}});
+    const auto reached=WaitForSingleObject(hooks.ready.get(),2000); SetEvent(stop.get()); hash_worker.join();
+    require(reached==WAIT_OBJECT_0&&hooks.synchronized.load(),"hash cancellation boundary synchronized");
+    std::cout<<"cancelledHash="<<cancelled<<" reads="<<hooks.reads.load()<<" blocks="<<hooks.blocks.load()<<'\n';
+    require(cancelled,"stop rejects partial digest"); require(hooks.reads.load()==1,"stop between blocks prevents next file read");
+    require(hooks.blocks.load()==(mode==HookState::Mode::hash_block?1u:0u),"stop after read prevents new hash work");
+  }
+  hooks.mode=HookState::Mode::none; ResetEvent(stop.get()); hooks.reads.store(0); hooks.blocks.store(0);
+  auto peer=inspect_peer(GetCurrentProcessId(),stop.get()); require(peer.image==f.self.image&&peer.sha256==f.self.sha256&&peer.creation==f.self.creation&&peer.sid==f.user.sid&&peer.session==f.user.session,"complete peer inspection retains exact image process token session authority");
+  const auto policy=read_service_policy(f.directory,f.security,f.user,stop.get());
+  require(policy.size()==1&&policy[0].image==f.self.image&&policy[0].sha256==f.self.sha256,"complete protected policy preserves exact path and digest");
+  SetEvent(stop.get()); bool policy_cancelled=false,peer_cancelled=false;
+  try{read_service_policy(f.directory,f.security,f.user,stop.get());}catch(const std::exception& e){policy_cancelled=std::string(e.what())=="inspection-stopped";}
+  try{inspect_peer(GetCurrentProcessId(),stop.get());}catch(const std::exception& e){peer_cancelled=std::string(e.what())=="inspection-stopped";}
+  require(policy_cancelled&&peer_cancelled,"stopped peer and protected policy inspection reject before new authority I/O"); ResetEvent(stop.get());
+  hooks.mode=HookState::Mode::hash_block; hooks.reads.store(0); hooks.blocks.store(0); ResetEvent(hooks.ready.get());
+  f.start(); auto client=f.connect(); require(WaitForSingleObject(hooks.ready.get(),2000)==WAIT_OBJECT_0,"actual worker peer hash boundary reached");
+  f.server.stop(); require(hooks.synchronized.load()&&hooks.reads.load()==1&&hooks.blocks.load()==1,"actual worker stop prevents further peer hash I/O");
+  std::cout<<"actualHashWorkerShutdownMs="<<f.server.shutdown_ms()<<" reads="<<hooks.reads.load()<<" blocks="<<hooks.blocks.load()<<'\n';
+  require(f.server.status()==Status::stopped&&f.server.endpoint().empty(),"actual hash worker completed joined and retired"); client.reset(); require(DeleteFileW(path.c_str())!=FALSE,"owned hash fixture removed");
+}
+void hash_cancel_race() {
+  HookState hooks; Fixture f; hooks.mode=HookState::Mode::cancel_race;
+  HANDLE read=nullptr,write=nullptr; require(CreatePipe(&read,&write,nullptr,0)!=FALSE,"owned synchronous read fixture"); hooks.blocked_read.reset(read); hooks.blocked_write.reset(write); hooks.enable(); f.start(); auto client=f.connect();
+  require(WaitForSingleObject(hooks.ready.get(),2000)==WAIT_OBJECT_0,"late synchronous read boundary reached");
+  std::atomic<bool> fallback{false};
+  // A bounded fallback releases the original broken implementation for retained RED evidence.
+  std::thread guard([&]{if(WaitForSingleObject(hooks.completed.get(),750)!=WAIT_OBJECT_0){fallback.store(true); char byte=1; DWORD written=0; WriteFile(hooks.blocked_write.get(),&byte,1,&written,nullptr);}});
+  f.server.stop(); guard.join();
+  std::cout<<"lateReadError="<<hooks.late_read_error.load()<<" fallback="<<fallback.load()<<" shutdownMs="<<f.server.shutdown_ms()<<'\n';
+  require(hooks.synchronized.load()&&!fallback.load()&&hooks.late_read_error.load()==ERROR_OPERATION_ABORTED,"stop cancels real read scheduled after first cancellation");
+  require(hooks.reads.load()==1&&hooks.blocks.load()==1&&f.server.status()==Status::stopped&&f.server.endpoint().empty(),"race worker completed joined without further image work");
+}
+#endif
 void serialization() {
   OutboundSequence sequences(UINT64_MAX-1); require(sequences.reserve()==UINT64_MAX,"last sequence represented exactly"); bool exhausted=false; try{sequences.reserve();}catch(const SessionExhausted&){exhausted=true;} require(exhausted,"sequence exhaustion never wraps");
   require(sha256_bytes("abc",3)=="ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad","pinned SHA256 hash format");
@@ -342,7 +481,11 @@ int controlled_host(const char* dll_path,const char* directory_utf8,bool windows
 }
 int main(int argc,char** argv) {
   try { if(argc==4&&(std::string(argv[1])=="host"||std::string(argv[1])=="host-window"))return controlled_host(argv[2],argv[3],std::string(argv[1])=="host-window");
-    const std::map<std::string,std::function<void()>> cases{{"serialization",serialization},{"live",live_reconnect_security},{"rejection",rejection_and_timeout},{"collision",collision_and_discovery},{"coalescing",coalescing_and_stalled_shutdown},{"policy",policy_and_exhaustion},{"fuzz",seeded_transport_fuzz},{"window",window_binding}};
+    const std::map<std::string,std::function<void()>> cases{{"serialization",serialization},{"live",live_reconnect_security},{"rejection",rejection_and_timeout},{"collision",collision_and_discovery},{"coalescing",coalescing_and_stalled_shutdown},{"policy",policy_and_exhaustion},{"fuzz",seeded_transport_fuzz},{"window",window_binding}
+#ifdef ETS2TELEMETRY_TRANSPORT_TEST_HOOKS
+    ,{"accept-disconnect",accept_disconnect},{"accept-failure",accept_failure},{"hash-cancel",hash_cancel},{"hash-cancel-race",hash_cancel_race}
+#endif
+    };
     auto timed=[](const std::string& name,const std::function<void()>& fn){const auto start=GetTickCount64(); std::cout<<name<<'\n'<<std::flush; fn(); std::cout<<name<<" elapsedMs="<<GetTickCount64()-start<<'\n'<<std::flush;};
     if(argc==3&&std::string(argv[1])=="dll") timed("dll",[&]{dll_lifecycle(argv[2]);}); else if(argc==3&&std::string(argv[1])=="dll-report") timed("dll-report",[&]{dll_startup_reporting(argv[2]);}); else if(argc==2) timed(argv[1],cases.at(argv[1])); else for(const auto& entry:cases) timed(entry.first,entry.second);
     std::cout<<"Actual Windows snapshot transport: "<<assertions<<" assertions passed; second-user/remote/game checks pending\n"; return 0;

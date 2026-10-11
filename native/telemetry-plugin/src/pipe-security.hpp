@@ -22,12 +22,19 @@ class Handle final {
 struct UserIdentity { std::wstring sid; std::string tag; DWORD session = 0; };
 struct PeerIdentity { Handle process, image_file; DWORD pid = 0, session = 0; std::uint64_t creation = 0; std::wstring sid, image; std::string sha256; };
 struct AllowedPeer { DWORD pid = 0; std::uint64_t creation = 0; std::wstring image; std::string sha256; };
+#ifdef ETS2TELEMETRY_TRANSPORT_TEST_HOOKS
+// Console-only synchronized fault hooks. The caller retains context until all owned workers join.
+using TransportTestHook = DWORD (*)(const char*, HANDLE, HANDLE, DWORD);
+void set_transport_test_hook(TransportTestHook) noexcept;
+DWORD transport_test_hook(const char*, HANDLE, HANDLE, DWORD = ERROR_SUCCESS);
+#endif
+void inspection_running(HANDLE stop_event);
 UserIdentity current_user();
 std::string sha256_bytes(const void*, std::size_t);
-std::string sha256_file(const std::wstring&);
-std::string sha256_handle(HANDLE);
+std::string sha256_file(const std::wstring&, HANDLE stop_event = nullptr);
+std::string sha256_handle(HANDLE, HANDLE stop_event = nullptr);
 std::uint64_t creation_time(HANDLE);
-PeerIdentity inspect_peer(DWORD pid);
+PeerIdentity inspect_peer(DWORD pid, HANDLE stop_event = nullptr);
 PeerIdentity authenticate_client(HANDLE pipe, const UserIdentity&, const AllowedPeer&);
 class OwnerSecurity final {
  public:
@@ -36,11 +43,11 @@ class OwnerSecurity final {
   OwnerSecurity(const OwnerSecurity&) = delete;
   SECURITY_ATTRIBUTES* attributes() const noexcept { return const_cast<SECURITY_ATTRIBUTES*>(&attributes_); }
   void ensure_directory(const std::wstring&) const;
-  void verify_owner_only(const std::wstring&) const;
-  void verify_handle(HANDLE) const;
+  void verify_owner_only(const std::wstring&, HANDLE stop_event = nullptr) const;
+  void verify_handle(HANDLE, HANDLE stop_event = nullptr) const;
  private:
   std::wstring sid_; PSECURITY_DESCRIPTOR descriptor_ = nullptr; SECURITY_ATTRIBUTES attributes_{};
 };
-std::wstring final_path(HANDLE);
+std::wstring final_path(HANDLE, HANDLE stop_event = nullptr);
 std::wstring local_transport_directory(const OwnerSecurity&);
 }

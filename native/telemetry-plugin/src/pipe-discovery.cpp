@@ -18,32 +18,39 @@ std::string narrow(const std::wstring& s) {
 void keys(const J& j, std::initializer_list<const char*> expected) {
   const auto* o = std::get_if<J::Object>(&j.value); if (!o || o->size() != expected.size()) fail(); for (auto key : expected) if (!o->count(key)) fail();
 }
-std::string bounded_file(HANDLE f, std::size_t limit) {
+std::string bounded_file(HANDLE f, std::size_t limit, HANDLE stop_event) {
+  inspection_running(stop_event);
   FILE_ATTRIBUTE_TAG_INFO info{}; LARGE_INTEGER size{};
   if (!GetFileInformationByHandleEx(f,FileAttributeTagInfo,&info,sizeof(info)) || info.FileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY) || !GetFileSizeEx(f,&size) || size.QuadPart < 1 || static_cast<std::uint64_t>(size.QuadPart) > limit) fail();
+  inspection_running(stop_event);
   std::string result(static_cast<std::size_t>(size.QuadPart),'\0'); DWORD read = 0;
-  if (!ReadFile(f,result.data(),static_cast<DWORD>(result.size()),&read,nullptr) || read != result.size()) fail(); return result;
+  inspection_running(stop_event);
+  if (!ReadFile(f,result.data(),static_cast<DWORD>(result.size()),&read,nullptr) || read != result.size()) fail(); inspection_running(stop_event); return result;
 }
 }
 std::wstring endpoint_name(const sdk::Snapshot& s, const UserIdentity& user) {
   return L"\\\\.\\pipe\\ETS2Telemetry-" + widen(s.identity.game.c_str()) + L"-v0-" + widen(user.tag) + L"-" + std::to_wstring(user.session) + L"-" + widen(s.identity.process_instance_id.c_str());
 }
-std::vector<AllowedPeer> read_service_policy(const std::wstring& directory, const OwnerSecurity& security, const UserIdentity& user) {
-  security.verify_owner_only(directory);
+std::vector<AllowedPeer> read_service_policy(const std::wstring& directory, const OwnerSecurity& security, const UserIdentity& user, HANDLE stop_event) {
+  inspection_running(stop_event); security.verify_owner_only(directory,stop_event);
+  inspection_running(stop_event);
   Handle file(CreateFileW((directory + L"\\service-policy.json").c_str(),GENERIC_READ | READ_CONTROL,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_FLAG_OPEN_REPARSE_POINT,nullptr));
-  if (!file) fail(); security.verify_handle(file.get()); const auto bytes = bounded_file(file.get(),16384); const auto j = v0::detail::Parser(bytes).parse();
+  if (!file) fail(); inspection_running(stop_event); security.verify_handle(file.get(),stop_event);
+  const auto bytes = bounded_file(file.get(),16384,stop_event); inspection_running(stop_event);
+  const auto j = v0::detail::Parser(bytes).parse(); inspection_running(stop_event);
   keys(j,{"schemaVersion","userTag","windowsSessionId","allowedExecutables"});
   if (j.at("schemaVersion").number() != 1 || j.at("userTag").string() != user.tag || j.at("windowsSessionId").number() != user.session) fail();
   const auto* array = std::get_if<J::Array>(&j.at("allowedExecutables").value); if (!array || array->empty() || array->size() > 4) fail();
   std::vector<AllowedPeer> result; std::set<std::wstring> paths;
   for (const auto& e : *array) {
+    inspection_running(stop_event);
     keys(e,{"path","sha256"}); const auto& path = e.at("path").string(); const auto& digest = e.at("sha256").string();
     if (path.size() < 7 || path.size() > 4096 || path.substr(0,4) != "\\\\?\\" || path[5] != ':' || path[6] != '\\' || digest.size() != 64) fail();
     for (auto c : path) if (static_cast<unsigned char>(c) < 32 || c == 127) fail();
     for (auto c : digest) if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) fail();
     AllowedPeer allowed; allowed.image = widen(path); allowed.sha256 = digest; if (!paths.emplace(allowed.image).second) fail(); result.push_back(std::move(allowed));
   }
-  return result;
+  inspection_running(stop_event); return result;
 }
 Discovery::Discovery(const std::wstring& directory, const OwnerSecurity& security, const UserIdentity& user, const sdk::Snapshot& s, const std::wstring& pipe) {
   security.verify_owner_only(directory); path_ = directory + L"\\" + widen(s.identity.process_instance_id.c_str()) + L".json";

@@ -45,7 +45,15 @@ void Server::stop() noexcept {
   try {
     if (!worker_.joinable()) return; auto started = GetTickCount64(); SetEvent(stop_event_.get());
     // File policy/image inspection may have synchronous reads. Only this owned worker is cancelled.
-    CancelSynchronousIo(worker_.native_handle()); worker_.join();
+    CancelSynchronousIo(worker_.native_handle());
+#ifdef ETS2TELEMETRY_TRANSPORT_TEST_HOOKS
+    transport_test_hook("stop-after-cancel",worker_.native_handle(),stop_event_.get());
+#endif
+    // A read can start after the first cancellation request. Keep requesting
+    // cancellation until this exact worker terminates; join still owns its lifetime.
+    while (WaitForSingleObject(worker_.native_handle(),10) == WAIT_TIMEOUT)
+      CancelSynchronousIo(worker_.native_handle());
+    worker_.join();
     shutdown_ms_.store(GetTickCount64() - started); monitor_ = nullptr; stop_event_.reset(); startup_event_.reset();
     if (shutdown_ms_.load() > 1000) status_.store(Status::shutdown_deadline_exceeded);
     else if (status_.load() != Status::failed) status_.store(Status::stopped);
@@ -109,10 +117,13 @@ bool Server::write_frame(HANDLE pipe, const std::vector<std::uint8_t>& frame, bo
 }
 void Server::serve(HANDLE pipe, const std::wstring& directory, const OwnerSecurity& security, const UserIdentity& user) {
   const auto handshake_deadline = GetTickCount64()+5000;
+  inspection_running(stop_event_.get());
   ULONG pid = 0; if (!GetNamedPipeClientProcessId(pipe,&pid)) return;
-  auto peer = inspect_peer(pid); if (peer.sid != user.sid || peer.session != user.session) return;
-  auto policy = read_service_policy(directory,security,user); bool allowed = false;
+  auto peer = inspect_peer(pid,stop_event_.get()); if (peer.sid != user.sid || peer.session != user.session) return;
+  inspection_running(stop_event_.get());
+  auto policy = read_service_policy(directory,security,user,stop_event_.get()); inspection_running(stop_event_.get()); bool allowed = false;
   for (const auto& candidate : policy) if (!_wcsicmp(candidate.image.c_str(),peer.image.c_str()) && candidate.sha256 == peer.sha256) allowed = true;
+  inspection_running(stop_event_.get());
   if (!allowed || GetTickCount64() >= handshake_deadline) return;
   v0::FrameDecoder decoder; bool hello_received = false; v0::Message hello;
   std::array<std::uint8_t,4> prefix{}; std::size_t received = 0; std::uint32_t hello_length = 0;
@@ -194,10 +205,34 @@ void Server::run(std::wstring directory) noexcept {
     startup_failure_.store(StartupFailure::none); startup_complete = true; SetEvent(startup_event_.get());
     while (WaitForSingleObject(stop_event_.get(),0) == WAIT_TIMEOUT) {
       status_.store(Status::listening); Operation connect; DWORD transferred = 0;
-      auto connected = ConnectNamedPipe(pipe.get(),&connect.overlapped); auto error = connected ? ERROR_SUCCESS : GetLastError();
-      if (!connected && error == ERROR_IO_PENDING) connected = wait_io(pipe.get(),connect.overlapped,transferred,UINT64_MAX,false);
+      DWORD injected = ERROR_SUCCESS;
+#ifdef ETS2TELEMETRY_TRANSPORT_TEST_HOOKS
+      injected = transport_test_hook("accept-before-connect",pipe.get(),stop_event_.get());
+#endif
+      auto connected = injected == ERROR_SUCCESS ? ConnectNamedPipe(pipe.get(),&connect.overlapped) : FALSE;
+      auto error = injected != ERROR_SUCCESS ? injected : connected ? ERROR_SUCCESS : GetLastError();
+      if (!connected && error == ERROR_IO_PENDING) {
+#ifdef ETS2TELEMETRY_TRANSPORT_TEST_HOOKS
+        transport_test_hook("accept-pending",pipe.get(),stop_event_.get());
+#endif
+        connected = wait_io(pipe.get(),connect.overlapped,transferred,UINT64_MAX,false);
+        // Preserve completion failure before hooks, waits or disconnect can change last-error.
+        error = connected ? ERROR_SUCCESS : GetLastError();
+      }
       else if (error == ERROR_PIPE_CONNECTED) connected = TRUE;
-      if (!connected) break;
+      #ifdef ETS2TELEMETRY_TRANSPORT_TEST_HOOKS
+      error = transport_test_hook("accept-result",pipe.get(),stop_event_.get(),error);
+      if (error != ERROR_SUCCESS && error != ERROR_PIPE_CONNECTED && error != ERROR_IO_PENDING) connected = FALSE;
+#endif
+      if (!connected) {
+        if (WaitForSingleObject(stop_event_.get(),0) == WAIT_OBJECT_0) break;
+        if (error != ERROR_NO_DATA && error != ERROR_BROKEN_PIPE) throw std::runtime_error("endpoint-accept");
+        // A departed client owns only this connection, never the listening endpoint.
+        if (!DisconnectNamedPipe(pipe.get()) && GetLastError() != ERROR_PIPE_NOT_CONNECTED)
+          throw std::runtime_error("endpoint-reset");
+        continue;
+      }
+      if (WaitForSingleObject(stop_event_.get(),0) == WAIT_OBJECT_0) break;
       try { serve(pipe.get(),directory,security,user); }
       catch (const SessionExhausted&) { throw; } // Retire discovery/session; never reset an exhausted counter in place.
       catch (...) { /* Malformed/rejected clients retire only their connection. */ }
