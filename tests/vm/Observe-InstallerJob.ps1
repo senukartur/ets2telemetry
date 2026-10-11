@@ -74,10 +74,33 @@ try {
     if($warmup.Result.Failure -or !$warmup.Result.CommandLine){throw 'Read-only metadata provider warmup failed.'}
     $view.parentProcessId=$warmup.Result.ParentProcessId
     if($view.parentProcessId -ne $ControllerPid -or $warmup.Result.ExecutablePath -ine 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe'){throw 'Observer parent/image provenance differs from actual controller.'}
-    $driverMetadata=[InstallerJobView]::QueryAsync($DriverPid)
-    if(!$driverMetadata.Wait(5000) -or $driverMetadata.Result.Failure){throw 'Suspended sibling metadata query failed.'}
-    $view.driverParentProcessId=$driverMetadata.Result.ParentProcessId
-    if($view.driverParentProcessId -ne $ControllerPid -or $driverMetadata.Result.ExecutablePath -ine $view.driverImage){throw 'Driver parent/image provenance differs from actual controller.'}
+    $view.driverProvenance=[ordered]@{pid=$DriverPid;nativeHandleHeld=$false;nativeImageBefore=$null;nativeExitBefore=$null;nativeSignaledBefore=$null;nativeFailureBefore=$null;nativeImageAfter=$null;nativeExitAfter=$null;nativeSignaledAfter=$null;nativeFailureAfter=$null;metadataImage=$null;metadataParentProcessId=$null;metadataCommandLine=$null;metadataFailure=$null;metadataCompleted=$false;queryElapsedMilliseconds=$null;waitElapsedMilliseconds=$null;diagnosticFailure=$null;textLimitCharacters=4096;truncatedFields=@()}
+    function Save-DriverProvenance([string]$suffix){
+        foreach($key in @('nativeImageBefore','nativeImageAfter','nativeFailureBefore','nativeFailureAfter','metadataImage','metadataCommandLine','metadataFailure','diagnosticFailure')){if($null -ne $view.driverProvenance[$key] -and $view.driverProvenance[$key].Length -gt 4096){$view.driverProvenance[$key]=$view.driverProvenance[$key].Substring(0,4096);if($view.driverProvenance.truncatedFields -notcontains $key){$view.driverProvenance.truncatedFields+=@($key)}}}
+        try{$view.driverProvenance|ConvertTo-Json -Depth 3|Set-Content -LiteralPath ($ResultFile+$suffix) -Encoding UTF8}catch{$view.driverProvenance.diagnosticFailure=$_.Exception.Message.Substring(0,[math]::Min(4096,$_.Exception.Message.Length))}
+    }
+    $driverIdentity=[IntPtr]::Zero
+    try{
+        try{
+            $driverIdentity=[InstallerJobView]::Hold($DriverPid);$view.driverProvenance.nativeHandleHeld=$driverIdentity -ne [IntPtr]::Zero
+            if($driverIdentity -eq [IntPtr]::Zero){throw 'Suspended driver diagnostic identity could not be held.'}
+            $view.driverProvenance.nativeImageBefore=[InstallerJobView]::Image($driverIdentity);$view.driverProvenance.nativeExitBefore=[InstallerJobView]::ExitCode($driverIdentity);$view.driverProvenance.nativeSignaledBefore=[InstallerJobView]::Signaled($driverIdentity)
+        }catch{$view.driverProvenance.nativeFailureBefore=$_.Exception.ToString()}
+        Save-DriverProvenance '.driver-before.json'
+        $driverMetadata=[InstallerJobView]::QueryAsync($DriverPid);$driverWait=[Diagnostics.Stopwatch]::StartNew()
+        try{
+            $view.driverProvenance.metadataCompleted=$driverMetadata.Wait(5000)
+            if($view.driverProvenance.metadataCompleted){$view.driverProvenance.metadataImage=$driverMetadata.Result.ExecutablePath;$view.driverProvenance.metadataParentProcessId=$driverMetadata.Result.ParentProcessId;$view.driverProvenance.metadataCommandLine=$driverMetadata.Result.CommandLine;$view.driverProvenance.metadataFailure=$driverMetadata.Result.Failure;$view.driverProvenance.queryElapsedMilliseconds=$driverMetadata.Result.ElapsedMilliseconds}else{$view.driverProvenance.metadataFailure='Existing suspended sibling metadata wait exceeded 5000 ms.'}
+        }catch{$view.driverProvenance.metadataFailure=$_.Exception.ToString();throw}
+        finally{
+            $view.driverProvenance.waitElapsedMilliseconds=$driverWait.Elapsed.TotalMilliseconds
+            try{if($driverIdentity -ne [IntPtr]::Zero){$view.driverProvenance.nativeImageAfter=[InstallerJobView]::Image($driverIdentity);$view.driverProvenance.nativeExitAfter=[InstallerJobView]::ExitCode($driverIdentity);$view.driverProvenance.nativeSignaledAfter=[InstallerJobView]::Signaled($driverIdentity)}}catch{$view.driverProvenance.nativeFailureAfter=$_.Exception.ToString()}
+            Save-DriverProvenance '.driver-provenance.json'
+        }
+        if(!$view.driverProvenance.metadataCompleted -or $driverMetadata.Result.Failure){throw 'Suspended sibling metadata query failed.'}
+        $view.driverParentProcessId=$driverMetadata.Result.ParentProcessId
+        if($view.driverParentProcessId -ne $ControllerPid -or $driverMetadata.Result.ExecutablePath -ine $view.driverImage){throw 'Driver parent/image provenance differs from actual controller.'}
+    }finally{if($driverIdentity -ne [IntPtr]::Zero){[InstallerJobView]::Release($driverIdentity)}}
     $view.warmupMilliseconds=$warmup.Result.ElapsedMilliseconds
     Assert-ObserverMembers ([InstallerJobView]::Pids())
     $ready=[ordered]@{ready=$true;observerPid=$PID;driverPid=$DriverPid;controllerPid=$ControllerPid;parentProcessId=$view.parentProcessId;driverParentProcessId=$view.driverParentProcessId;driverImage=$view.driverImage;controllerImage=$view.controllerImage;initialPids=$initial;consoleHost=$view.consoleHost;jobScope=$view.jobScope;warmupMilliseconds=$view.warmupMilliseconds}
