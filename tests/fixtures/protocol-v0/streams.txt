@@ -1,0 +1,11 @@
+normal 1 welcome,checkpoint,snapshot,diagnostic accept 1:0,0:3,0:0
+duplicate 1 welcome,checkpoint,snapshot,duplicate-snapshot reject -
+regression 1 welcome,checkpoint,regression reject -
+missing-checkpoint 1 welcome,snapshot reject -
+pre-handshake 1 checkpoint reject -
+identity-switch 1 welcome,checkpoint,source-switch reject -
+clock-reset 1 welcome,checkpoint,clock-reset reject -
+counter-reset 1 welcome,checkpoint,snapshot,counter-reset reject -
+unsolicited-diagnostics 0 welcome reject -
+diagnostics-disabled 1 no-diagnostics-welcome,checkpoint,diagnostic reject -
+second-checkpoint 1 welcome,checkpoint,checkpoint reject -

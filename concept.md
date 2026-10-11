@@ -209,6 +209,10 @@ Client telemetry is a source of statistics, not proof that a trip was legitimate
 
 ## 9. Implementation Sequence
 
+ET-002a now implements SDK-independent prototype protocol 0.0 contracts and shared TypeScript/C++ fixtures in its task branch. See [wire format](docs/protocol/v0.md) and [validation](docs/validation/et-002a.md). This is synthetic contract evidence; actual pipe/game integration and durable recording are not implemented by this package.
+
+Owner exception on October 11, 2026: ET-002a may be implemented independently from updated `main` and submitted as a draft PR while SP-01 real-game validation is deferred. SP-01 remains unaccepted and unmerged; its failed ETS2 single-player windowed appearance check requires a real retry, and Convoy remains pending. This early-start exception does not establish game compatibility, enable durable protocol v1, or waive other acceptance and merge prerequisites.
+
 Owner-approved package sequence (October 11, 2026): ET-001 enables ET-022 and SP-01 (the early ET-009 game-validation package) in parallel. SP-01 enables ET-002a protocol v0; ET-002a enables ET-003 and ET-005a. ET-003 enables ET-004a and ET-007. ET-002a plus ET-005a enables ET-006a; ET-004a plus ET-006a plus ET-007 enables ET-008. ET-003 plus ET-004a plus ET-006a enables CAP-01. ET-008 plus CAP-01 enables full ET-009. ET-002a plus CAP-01 enables ET-002b; ET-004a plus ET-002b enables ET-004b; ET-005a plus ET-002b plus CAP-01 enables ET-005b; ET-006a plus ET-004b plus ET-005b enables ET-006b. Package acceptance requires its criteria and merge; a parent card is Done only after all its packages are accepted. ET-009 game evidence does not depend on ET-022, while relevant code checks remain mandatory. The owner alone authorizes merges.
 
 1. **End-to-end technical prototype.** Read speed and fuel through the project-owned plugin, transmit them to Electron, and display them above the game. Validate ETS2 and ATS, including TruckersMP, before expanding the journal or visual design.

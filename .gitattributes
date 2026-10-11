@@ -1,1 +1,6 @@
 .githooks/pre-push text eol=lf
+# Protocol fixtures include intentionally invalid UTF-8 and exact byte boundaries.
+tests/fixtures/protocol-v0/*.json -text
+tests/fixtures/protocol-v0/*.txt text eol=lf
+# This rejection fixture is deliberately 65,537 spaces, not formatted JSON.
+tests/fixtures/protocol-v0/oversized.json -whitespace
