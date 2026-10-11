@@ -16,7 +16,7 @@ int main(int argc, char** argv) {
   using Init = decltype(&scs_telemetry_init); using Shutdown = decltype(&scs_telemetry_shutdown);
   auto init = reinterpret_cast<Init>(GetProcAddress(module, "scs_telemetry_init"));
   auto shutdown = reinterpret_cast<Shutdown>(GetProcAddress(module, "scs_telemetry_shutdown"));
-  bool passed = init && shutdown;
+  bool passed = init && shutdown && !GetProcAddress(module, "ets2telemetry_test_directory") && !GetProcAddress(module, "ets2telemetry_test_endpoint") && !GetProcAddress(module, "ets2telemetry_test_write_pending");
   if (passed) {
     passed = init(SCS_MAKE_VERSION(2,0), nullptr) == SCS_RESULT_unsupported && init(SCS_TELEMETRY_VERSION_1_01, nullptr) == SCS_RESULT_invalid_parameter;
     scs_telemetry_init_params_v100_t params{}; params.common.game_id = "eut2"; params.common.game_version = SCS_MAKE_VERSION(1,20);
