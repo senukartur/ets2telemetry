@@ -6,9 +6,11 @@ The local MVP will display live truck metrics in an overlay, maintain a trip jou
 
 ## Project status
 
-**ET-001 scaffold, as of October 11, 2026.** The repository contains a minimal React/Electron window, telemetry utilityProcess and isolated SQLite worker probe, pinned npm workspaces, Forge packaging, and a C++17 x64 placeholder DLL. Build, typecheck, 118 Node tests, native CTest and bounded packaged startup checks passed. Native Windows install, repair, update, both installed worker/security smokes and uninstall completed with normal exits and empty Jobs. Acceptance combines that actual cycle with a separately reviewed correction to the uninstall residue check; the original failed wrapper report is retained. Existing user files and shortcuts were preserved, and owned test files were cleaned up. One earlier Playwright startup timeout remains unexplained flakiness. See [the validation record](docs/validation/et-001.md) for exact artifacts, independent review and evidence limits. Native launches are owner-authorized; no further VM run is required. No protocol, game adapter, recorder, overlay, server, or CI is implemented.
+**ET-001 scaffold, as of October 11, 2026.** The repository contains a minimal React/Electron window, telemetry utilityProcess and isolated SQLite worker probe, pinned npm workspaces, Forge packaging, and a C++17 x64 placeholder DLL. Build, typecheck, 118 Node tests, native CTest and bounded packaged startup checks passed. Native Windows install, repair, update, both installed worker/security smokes and uninstall completed with normal exits and empty Jobs. Acceptance combines that actual cycle with a separately reviewed correction to the uninstall residue check; the original failed wrapper report is retained. Existing user files and shortcuts were preserved, and owned test files were cleaned up. One earlier Playwright startup timeout remains unexplained flakiness. See [the validation record](docs/validation/et-001.md) for exact artifacts, independent review and evidence limits. Native launches are owner-authorized; no further VM run is required. That merged scaffold baseline did not include protocol, game adapter, recorder, overlay, server or CI.
 
 Compatibility with either game, Convoy, and TruckersMP is required but has not yet been tested. Overlay behavior, resource usage, and display latency also require real-game validation.
+
+**ET-022 candidate, hosted evidence recorded.** Windows x64 CI connects scaffold checks to pull requests, main pushes and manual runs, with isolated development and packaged worker probes and retained diagnostics. Clean and restored hosted jobs passed all 122 tests, native CTest and both smokes in 199/200 seconds; a deliberate assertion failed the job between them. Final PR-head verification, independent review and owner merge remain required. See [ET-022 validation](docs/validation/et-022.md). See [CI commands and evidence](docs/ci.md) and the [regression registry](docs/regression-registry.md). The preceding ET-001 status describes the merged scaffold baseline.
 
 ## Planned MVP
 
@@ -67,7 +69,7 @@ Enable the local guard in each checkout:
 git config --local core.hooksPath .githooks
 ```
 
-The hook blocks direct pushes to remote `main`. Server-side branch protection is unavailable for this private repository on the current plan, so the local guard and working rules currently enforce the process within this checkout. CI will be added when build and test tooling exists.
+The hook blocks direct pushes to remote `main`. Server-side branch protection is unavailable for this private repository on the current plan, so the local guard and working rules currently enforce the process within this checkout. Windows CI is implemented with hosted clean/failure/restoration evidence; final current-head validation and owner review still gate merging.
 
 See [Git workflow rules](AGENTS.md#git-workflow) for branch, PR, history, validation, and release policies.
 

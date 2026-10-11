@@ -1,6 +1,6 @@
 # Testing and Regression Strategy
 
-Recorded on October 10, 2026; updated October 11, 2026. **Status: scaffold checks implemented and verified; feature suites and CI pending.** ET-001 defines Node unit, Electron startup/worker, native CTest, bounded native Windows installer and historical disposable-guest entrypoints. Current native evidence covers six normally completed install/repair/smoke/update/upgraded-smoke/uninstall operations, actual packaged SQLite/security/orderly shutdown, separate corrected uninstall postconditions and exact owned cleanup. The original failed wrapper report and an unexplained standalone Playwright launch timeout remain recorded. Exact identities and independent review belong in [the acceptance record](docs/validation/et-001.md). No game compatibility or full production REG-017 coverage is established.
+Recorded on October 10, 2026; updated October 11, 2026. **Status: scaffold checks implemented and verified; ET-022 CI workflow implemented with hosted clean/failure/restoration evidence recorded; feature suites pending.** ET-001 defines Node unit, Electron startup/worker, native CTest, bounded native Windows installer and historical disposable-guest entrypoints. Current native evidence covers six normally completed install/repair/smoke/update/upgraded-smoke/uninstall operations, actual packaged SQLite/security/orderly shutdown, separate corrected uninstall postconditions and exact owned cleanup. The original failed wrapper report and an unexplained standalone Playwright launch timeout remain recorded. Exact identities and independent review belong in [the acceptance record](docs/validation/et-001.md). No game compatibility or full production REG-017 coverage is established.
 
 Read [concept.md](concept.md) for product behavior and [AGENTS.md](AGENTS.md) for the development workflow.
 
@@ -69,7 +69,7 @@ For regression fixes, identify the smallest reproducing scenario, demonstrate th
 
 ## 5. Automation and merge policy
 
-ET-022 introduces GitHub Actions early, after the scaffold exists. Workflows and actual commands are implemented in that task, not by this planning document. [GitHub workflows](https://docs.github.com/en/actions/concepts/workflows-and-actions/workflows) support PR, push, and manual triggers; use a supported, explicitly selected [Windows x64 runner image](https://docs.github.com/en/actions/reference/runners/github-hosted-runners) for Windows/native integration.
+ET-022 introduces GitHub Actions early, after the scaffold exists. The implemented workflow and bounded commands are documented in [docs/ci.md](docs/ci.md); clean hosted acceptance and controlled failure/restore runs are recorded in [ET-022 validation](docs/validation/et-022.md); the final current PR head still requires its check/review association before owner merge. The [scenario registry](docs/regression-registry.md) maps all REG-001–018 requirements to implemented partial protection or explicit pending owners. [GitHub workflows](https://docs.github.com/en/actions/concepts/workflows-and-actions/workflows) support PR, push, and manual triggers; use a supported, explicitly selected [Windows x64 runner image](https://docs.github.com/en/actions/reference/runners/github-hosted-runners) for Windows/native integration.
 
 | When | Planned checks |
 | --- | --- |

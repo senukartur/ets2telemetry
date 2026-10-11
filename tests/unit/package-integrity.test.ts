@@ -30,7 +30,7 @@ async function fixture() {
   const physical = (filename: string) => path.join(`${archive}.unpacked`, filename);
   return {packageDirectory, archive, archiveHash, physical, files};
 }
-function powershell(packageDirectory: string) {
+function powershell(packageDirectory: string, script = 'tests/package-integrity/read.ps1') {
   // A pwsh 7 parent may otherwise export incompatible module locations to PowerShell 5.1.
   const environment = Object.fromEntries(Object.entries(process.env).filter(([name]) => name.toLowerCase() !== 'psmodulepath'));
   environment.PSModulePath = [
@@ -39,7 +39,7 @@ function powershell(packageDirectory: string) {
   ].join(';');
   // Only this child process bypasses script policy; machine/user policy is unchanged.
   return JSON.parse(execFileSync(shell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
-    path.resolve('tests/package-integrity/read.ps1'), '-PackageDirectory', packageDirectory],
+    path.resolve(script), '-PackageDirectory', packageDirectory],
   {encoding: 'utf8', timeout: 15000, windowsHide: true, env: environment, stdio: ['ignore', 'pipe', 'pipe']}));
 }
 function expectPowershellFailure(packageDirectory: string, diagnostic: string) {
@@ -54,6 +54,20 @@ it('matches Node and clean-Windows PowerShell fingerprints without launching pac
   const actual = verifyPackage(f.packageDirectory);
   expect(actual.unpackedFilesVerified).toBe(4);
   expect(powershell(f.packageDirectory)).toEqual(actual);
+}, 20000);
+
+it('preserves package identity across short/long Windows path spellings and rejects tampering', async () => {
+  const f = await fixture();
+  const expected = verifyPackage(f.packageDirectory);
+  const result = powershell(f.packageDirectory, 'tests/package-integrity/path-regression.ps1');
+  expect(result.relativeNames).toEqual(['resources/app.asar', 'resources/app.asar']);
+  expect(result.invalidNamesRejected).toBe(6);
+  expect(result.parentTraversalRejected).toBe(true);
+  expect(result.fingerprint).toEqual(expected);
+  expect(result.aliasFingerprint).toEqual(expected);
+  expect(result.tamperRejections).toBe(2);
+  expect(typeof result.actualAliasAvailable).toBe('boolean');
+  console.info(`Windows 8.3 alias available: ${result.actualAliasAvailable}; deterministic mixed-spelling regression always exercised`);
 }, 20000);
 
 for (const kind of ['service', 'sqlite-loader', 'native'] as const) {

@@ -1,0 +1,94 @@
+name: Windows CI
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      extended:
+        description: Run existing bounded containment and uninstall-residue regressions
+        type: boolean
+        default: true
+permissions:
+  contents: read
+concurrency:
+  group: windows-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  windows:
+    name: Windows x64 scaffold
+    runs-on: windows-2022
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      ELECTRON_CACHE: ${{ github.workspace }}\.local\cache\electron
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+      ETS2TELEMETRY_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: '24.19.0'
+          architecture: x64
+          package-manager-cache: false
+      - name: Acquire checksum-pinned CMake 4.3.1 x64
+        run: ./scripts/ci/Install-CMake.ps1
+      - name: Verify pinned npm and record host versions
+        run: |
+          if ((npm --version) -ne '11.17.0') { throw 'Expected npm 11.17.0 bundled with pinned Node.' }
+          node scripts/ci/versions.mjs
+          cmake --version
+          & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products '*' -format json
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~\AppData\Local\npm-cache
+            .local/cache/electron
+          key: download-${{ runner.os }}-x64-node24.19.0-abi137-electron44.7.0-abi149-${{ hashFiles('package-lock.json') }}
+      - name: Clean lockfile installation
+        run: npm ci
+      - name: Full Node-safe suite and typecheck
+        run: |
+          npm run typecheck
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm test -- --reporter=default --reporter=junit --outputFile=.local/ci/vitest.xml
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build desktop and native x64
+        run: |
+          npm run build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake -S native/telemetry-plugin -B native/telemetry-plugin/build -G 'Visual Studio 17 2022' -A x64
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run native:build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run native:test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Bounded development Electron worker smoke
+        run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development
+      - name: Forge maker and static native package inspection
+        run: |
+          npm run make
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run inspect:package
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Bounded Forge packaged Electron worker smoke
+        run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged
+      - name: Extended existing safety regressions
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.extended)
+        run: ./scripts/ci/Invoke-Extended.ps1
+      - name: Record final versions and duration
+        if: always()
+        run: node scripts/ci/versions.mjs
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: windows-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .local/ci
+            .local/diagnostics/package-inspection.json
+            native/telemetry-plugin/build/Testing/Temporary
+          retention-days: 14
+          if-no-files-found: error
+          include-hidden-files: true
