@@ -151,10 +151,20 @@ function validReceipt() {
   const identity = {origin: 'synthetic', game: 'ets2', processId: 1234, pluginSessionId: '00000000-0000-4000-8000-000000000001',
     processInstanceId: '00000000-0000-4000-8000-000000000002', clockId: '00000000-0000-4000-8000-000000000003'};
   const source = {connections: 1, origin: 'synthetic', history: false, identity, activeClients: 1};
+  // Authentic binary64 timestamps from retained development receipt 41623d / 4cf3af26.
+  // PS5.1 parses their JSON decimal spellings as Decimal; subtracting those spellings
+  // gives 5999.99999999999977/5999.9999999999997 instead of the producer's exact 6000.
+  const timing = {
+    overlay: {rendererStartBarrierMonotonicMs: 58.70000000298023, rendererStartedMonotonicMs: 58.70000000298023,
+      rendererCompletedMonotonicMs: 6058.70000000298, startedObserverMonotonicMs: 2372.7528, readingChangedObserverMonotonicMs: 2372.7617,
+      observedObserverMonotonicMs: 2542.5261, completedObserverMonotonicMs: 8384.7904},
+    dashboard: {rendererStartBarrierMonotonicMs: 194.3999999910593, rendererStartedMonotonicMs: 194.3999999910593,
+      rendererCompletedMonotonicMs: 6194.399999991059, startedObserverMonotonicMs: 8883.1131, readingChangedObserverMonotonicMs: 8883.1189,
+      observedObserverMonotonicMs: 9008.7316, completedObserverMonotonicMs: 14885.1964}
+  };
   const stallProof = (kind: 'overlay' | 'dashboard') => ({kind, marker: `ETS2TELEMETRY_${kind.toUpperCase()}_STALL_00000000-0000-4000-8000-000000000004`,
     requestedMilliseconds: 6000, started: true, completed: true, pendingAtObservation: true,
-    rendererStartBarrierMonotonicMs: 100, rendererStartedMonotonicMs: 100, rendererCompletedMonotonicMs: 6100,
-    startedObserverMonotonicMs: 200, readingChangedObserverMonotonicMs: 201, observedObserverMonotonicMs: 300, completedObserverMonotonicMs: 6200,
+    ...timing[kind],
     sourceAtObservation: structuredClone(source), independentObservation: {windows: structuredClone(windows),
       reading: kind === 'overlay' ? {status: 'connected: Validated current observation', speed: 'Speed: 72.0 km/h', fuel: 'Fuel: 71.0 L'} :
         {...current, phase: 'during-dashboard-stall', speed: '72.0', fuel: '71.0'}}});
@@ -185,7 +195,7 @@ it('requires the complete current overlay receipt and rejects missing results, m
   const powershell = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe');
   const valid = validReceipt();
   const cases: {name: string; mutate?: (receipt: ReturnType<typeof JSON.parse>) => void; code?: number; reason: string | null}[] = [
-    {name: 'complete hidden-renderer result', reason: null},
+    {name: 'complete hidden-renderer result with authentic fractional timestamps', reason: null},
     {name: 'overlay result absent', mutate: receipt => {delete receipt.overlay;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
     {name: 'overlay bridge absent', mutate: receipt => {delete receipt.overlay.bridge;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
     {name: 'raw geometry exposed', mutate: receipt => {receipt.overlay.bridge.keys.push('setBounds');}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
@@ -204,9 +214,12 @@ it('requires the complete current overlay receipt and rejects missing results, m
     {name: 'stall proof absent', mutate: receipt => {delete receipt.overlay.overlayStallProof;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
     {name: 'missing start barrier', mutate: receipt => {receipt.overlay.overlayStallProof.started = false;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
     {name: 'observation after completion', mutate: receipt => {receipt.overlay.overlayStallProof.pendingAtObservation = false;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
-    {name: 'observation timestamp after completion', mutate: receipt => {receipt.overlay.overlayStallProof.observedObserverMonotonicMs = 6300;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+    {name: 'observation timestamp after completion', mutate: receipt => {receipt.overlay.overlayStallProof.observedObserverMonotonicMs = receipt.overlay.overlayStallProof.completedObserverMonotonicMs + 1;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
     {name: 'reading changed before start barrier', mutate: receipt => {receipt.overlay.overlayStallProof.readingChangedObserverMonotonicMs = 199;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
     {name: 'actual stall too short', mutate: receipt => {receipt.overlay.overlayStallProof.rendererCompletedMonotonicMs = 1300;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+    {name: 'overlay stall one millisecond below strict minimum', mutate: receipt => {receipt.overlay.overlayStallProof.rendererCompletedMonotonicMs = receipt.overlay.overlayStallProof.rendererStartedMonotonicMs + 5999;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+    {name: 'dashboard stall one millisecond below strict minimum', mutate: receipt => {receipt.overlay.dashboardStallProof.rendererCompletedMonotonicMs = receipt.overlay.dashboardStallProof.rendererStartedMonotonicMs + 5999;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+    {name: 'representably shorter fractional overlay stall', mutate: receipt => {receipt.overlay.overlayStallProof.rendererCompletedMonotonicMs = receipt.overlay.overlayStallProof.rendererStartedMonotonicMs + 5999.999999;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
     {name: 'malformed time value', mutate: receipt => {receipt.overlay.overlayStallProof.rendererCompletedMonotonicMs = 'invalid';}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
     {name: 'barrier timing differs from actual execution', mutate: receipt => {receipt.overlay.overlayStallProof.rendererStartBarrierMonotonicMs = 99;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
     {name: 'source reconnected during stall', mutate: receipt => {receipt.overlay.overlayStallProof.sourceAtObservation.connections = 2;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},

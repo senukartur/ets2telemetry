@@ -50,8 +50,10 @@ function Test-RuntimeReceipt {
                     $value -lt 0) { $valid = $false; $timesValid = $false }
                 elseif ([double]::IsNaN([double]$value) -or [double]::IsInfinity([double]$value)) { $valid = $false; $timesValid = $false }
             }
+            # performance.now() produces binary64 values. PS5.1 JSON parsing uses Decimal;
+            # restore the producer's numeric representation before the strict elapsed check.
             if ($timesValid -and ($proof.rendererStartBarrierMonotonicMs -ne $proof.rendererStartedMonotonicMs -or
-                $proof.rendererCompletedMonotonicMs - $proof.rendererStartedMonotonicMs -lt 6000 -or
+                ([double]$proof.rendererCompletedMonotonicMs - [double]$proof.rendererStartedMonotonicMs) -lt 6000 -or
                 $proof.startedObserverMonotonicMs -gt $proof.readingChangedObserverMonotonicMs -or
                 $proof.readingChangedObserverMonotonicMs -ge $proof.observedObserverMonotonicMs -or
                 $proof.observedObserverMonotonicMs -ge $proof.completedObserverMonotonicMs)) { $valid = $false }
