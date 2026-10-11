@@ -26,6 +26,14 @@ $initialHandles=[Collections.Generic.Dictionary[int,IntPtr]]::new()
 $view=[ordered]@{passed=$false;observerPid=$PID;driverPid=$DriverPid;controllerPid=$ControllerPid;parentProcessId=$null;driverParentProcessId=$null;driverImage=$null;controllerImage=$null;startedUtc=[datetime]::UtcNow.ToString('o');finishedUtc=$null;failure=$null;drained=$false;finalPids=@();processes=@();initialPidSnapshot=$null;initialScope=$null;initialScopeFailure=$null;jobScope=$null;metadataWorkers=4;metadataQueueSeconds=3;metadataQuerySeconds=3;metadataCompletionSeconds=8;warmupMilliseconds=$null;pollCount=0;maximumPollGapMilliseconds=0}
 $view.initialUnexpectedProcesses=@();$view.initialDiagnosticMilliseconds=0;$view.initialDiagnosticFailure=$null
 $view.consoleHost=$null;$view.consoleLastExitCode=$null;$view.driverConsoleHost=$null;$view.driverConsoleLastExitCode=$null
+function Read-InstallerNativeErrorCode($failure){
+    $current=$failure
+    for($depth=0;$depth -lt 8 -and $null -ne $current;$depth++){
+        if($current -is [ComponentModel.Win32Exception]){return $current.NativeErrorCode}
+        $current=$current.InnerException
+    }
+    return $null
+}
 function Set-HelperMetadataDiagnostics($record,$metadata){
     $record.metadataCompleted=$true;$record.metadataImage=$metadata.ExecutablePath;$record.metadataCommandLine=$metadata.CommandLine;$record.metadataParentProcessId=$metadata.ParentProcessId;$record.metadataProviderFailure=$metadata.Failure;$record.metadataQueryElapsedMilliseconds=$metadata.ElapsedMilliseconds
     $record.metadataRequestedProcessId=$metadata.RequestedProcessId;$record.metadataProcessId=$metadata.ProcessId;$record.metadataHandle=$metadata.Handle;$record.metadataObjectPath=$metadata.ObjectPath;$record.metadataClassName=$metadata.ClassName
@@ -144,7 +152,7 @@ try {
             if($ownedPid -eq $PID -or $ownedPid -eq $DriverPid -or !$seen.Add($ownedPid)){continue}
             if($view.consoleHost -and $ownedPid -eq $view.consoleHost.pid){if([InstallerJobView]::ExitCode($initialHandles[$ownedPid]) -ne 259){throw 'Held observer console exited during helper observation.'};continue}
             if($records.Count -ge 64){throw 'Owned process observation lifetime bound exceeded.'}
-            $record=[ordered]@{pid=$ownedPid;observedUtc=[datetime]::UtcNow.ToString('o');commandLine=$null;executablePath=$null;parentProcessId=$null;role='installer-helper';nativeIdentityHeld=$false;nativeIdentityRetired=$false;nativeFinalSignaled=$false;metadataPolicy=$null;nativeExitBefore=$null;nativeSignaledBefore=$null;queryFailure=$null;queryElapsedMilliseconds=$null;queryStartedMilliseconds=$pollClock.Elapsed.TotalMilliseconds;exitCode=$null;exitQueryFailure=$null;metadataCompleted=$false;metadataImage=$null;metadataImageObservation=$null;metadataRequestedProcessId=$null;metadataProcessId=$null;metadataHandle=$null;metadataObjectPath=$null;metadataClassName=$null;metadataCommandLine=$null;metadataParentProcessId=$null;metadataProviderFailure=$null;metadataQueryElapsedMilliseconds=$null;nativeImageAfterQuery=$null;nativeImageAfterQueryFailure=$null;nativeExitAfterQuery=$null;nativeSignaledAfterQuery=$null;nativeExitAfterQueryFailure=$null;diagnosticTextLimitCharacters=4096;diagnosticTruncatedFields=@()}
+            $record=[ordered]@{pid=$ownedPid;observedUtc=[datetime]::UtcNow.ToString('o');commandLine=$null;executablePath=$null;parentProcessId=$null;role='installer-helper';nativeIdentityHeld=$false;nativeIdentityRetired=$false;nativeFinalSignaled=$false;metadataPolicy=$null;nativeExitBefore=$null;nativeSignaledBefore=$null;queryFailure=$null;queryElapsedMilliseconds=$null;queryStartedMilliseconds=$pollClock.Elapsed.TotalMilliseconds;exitCode=$null;exitQueryFailure=$null;metadataCompleted=$false;metadataImage=$null;metadataImageObservation=$null;metadataRequestedProcessId=$null;metadataProcessId=$null;metadataHandle=$null;metadataObjectPath=$null;metadataClassName=$null;metadataCommandLine=$null;metadataParentProcessId=$null;metadataProviderFailure=$null;metadataQueryElapsedMilliseconds=$null;nativeImageAfterQuery=$null;nativeImageAfterQueryFailure=$null;nativeImageAfterQueryErrorCode=$null;nativeImageAttemptedAfterQuery=$false;nativeAfterQueryProof=$null;nativeExitAfterQuery=$null;nativeSignaledAfterQuery=$null;nativeExitAfterQueryFailure=$null;diagnosticTextLimitCharacters=4096;diagnosticTruncatedFields=@()}
             # Capture native identity/handles immediately, before asynchronous metadata.
             $handle=[InstallerJobView]::Hold($ownedPid)
             if($handle -ne [IntPtr]::Zero){
@@ -165,8 +173,23 @@ try {
                     # Capture once, then resolve pending parents using this same completed query.
                     if(!$record.metadataCompleted){
                         if($handles.ContainsKey($record.pid)){
-                            try{$record.nativeImageAfterQuery=[InstallerJobView]::Image($handles[$record.pid])}catch{$record.nativeImageAfterQueryFailure=$_.Exception.ToString()}
-                            try{$record.nativeExitAfterQuery=[InstallerJobView]::ExitCode($handles[$record.pid]);$record.nativeSignaledAfterQuery=[InstallerJobView]::Signaled($handles[$record.pid])}catch{$record.nativeExitAfterQueryFailure=$_.Exception.ToString()}
+                            if($record.executablePath -ieq 'C:\Windows\System32\conhost.exe'){
+                                # Console proof stays live/image strict and keeps its existing ordering.
+                                $record.nativeImageAttemptedAfterQuery=$true
+                                try{$record.nativeImageAfterQuery=[InstallerJobView]::Image($handles[$record.pid])}catch{$record.nativeImageAfterQueryFailure=$_.Exception.ToString();$record.nativeImageAfterQueryErrorCode=Read-InstallerNativeErrorCode $_.Exception}
+                                try{$record.nativeExitAfterQuery=[InstallerJobView]::ExitCode($handles[$record.pid]);$record.nativeSignaledAfterQuery=[InstallerJobView]::Signaled($handles[$record.pid])}catch{$record.nativeExitAfterQueryFailure=$_.Exception.ToString()}
+                            }else{
+                                # The retained process object is authoritative after terminal exit 0.
+                                try{$record.nativeSignaledAfterQuery=[InstallerJobView]::Signaled($handles[$record.pid]);$record.nativeExitAfterQuery=[InstallerJobView]::ExitCode($handles[$record.pid])}catch{$record.nativeExitAfterQueryFailure=$_.Exception.ToString()}
+                                if($null -eq $record.nativeExitAfterQueryFailure -and !($record.nativeSignaledAfterQuery -and $record.nativeExitAfterQuery -eq 0)){
+                                    $record.nativeImageAttemptedAfterQuery=$true
+                                    try{$record.nativeImageAfterQuery=[InstallerJobView]::Image($handles[$record.pid])}catch{
+                                        $record.nativeImageAfterQueryFailure=$_.Exception.ToString();$record.nativeImageAfterQueryErrorCode=Read-InstallerNativeErrorCode $_.Exception
+                                        # One fixed zero-time same-handle check resolves an image/exit race.
+                                        try{$record.nativeSignaledAfterQuery=[InstallerJobView]::Signaled($handles[$record.pid]);$record.nativeExitAfterQuery=[InstallerJobView]::ExitCode($handles[$record.pid])}catch{$record.nativeExitAfterQueryFailure=$_.Exception.ToString()}
+                                    }
+                                }
+                            }
                         }else{$record.nativeImageAfterQueryFailure='Existing metadata query has no retained native identity.'}
                         Set-HelperMetadataDiagnostics $record $metadata
                     }
@@ -175,7 +198,7 @@ try {
                         if($metadata.Failure -or $null -eq $metadata.ExecutablePath -or $metadata.ExecutablePath -ine $record.executablePath -or $record.diagnosticTruncatedFields.Count){throw 'Console helper metadata image or observation differs.'}
                         $record.metadataPolicy='strict-console-image'
                     }else{
-                        try{$policy=Assert-InstallerHelperProvenance $record $metadata $records $DriverPid $PID $ControllerPid @($view.consoleHost.pid,$view.driverConsoleHost.pid)}catch{$record.queryFailure=$_.Exception.Message;throw}
+                        try{$record.nativeAfterQueryProof=Assert-InstallerHelperNativeAfter $record;$policy=Assert-InstallerHelperProvenance $record $metadata $records $DriverPid $PID $ControllerPid @($view.consoleHost.pid,$view.driverConsoleHost.pid)}catch{$record.queryFailure=$_.Exception.Message;throw}
                         if($policy -eq 'pending-audited-parent'){
                             if($pollClock.Elapsed.TotalMilliseconds-$record.queryStartedMilliseconds -ge 8000){throw 'Helper parent approval exceeded the existing eight-second completion deadline.'}
                             continue
