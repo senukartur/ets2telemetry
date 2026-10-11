@@ -59,13 +59,12 @@ try {
   assert.deepEqual(receipt.fixtureExit, { code: 0, signal: null });
   await page.getByText('disconnected', { exact: false }).waitFor({ timeout: 3000 });
   await page.context().tracing.stop({ path: path.join(output, 'trace.zip') });
-  await app.evaluate(({ app }) => { setImmediate(() => app.quit()); });
+  // Playwright initiates app.quit and disposes its connection; the child handle was cached at launch.
+  await disposePlaywright();
   receipt.appExit = await deadline(childExit, 3000, 'app normal exit');
   assert.deepEqual(receipt.appExit, { code: 0, signal: null });
   assert.ok(logs.join('').includes('SP01_SERVICE_EXIT:0'), 'utility service must stop normally');
   assert.ok(!logs.join('').includes('SP01_SERVICE_STOP_TIMEOUT'));
-  // Child exit is cached above; close the Playwright connection even after the app terminated.
-  await disposePlaywright();
   receipt.passed = true;
 } catch (error) {
   failure = error; receipt.error = error.stack ?? String(error);
@@ -76,9 +75,12 @@ try {
   if (isAlive(child)) { receipt.forcedCleanup.push({ owner: 'app', pid: child.pid }); child.kill(); try { receipt.cleanupAppExit = await deadline(childExit, 2000, 'app cleanup'); } catch (error) { receipt.cleanupError = String(error); } }
   if (isAlive(fixture)) { receipt.forcedCleanup.push({ owner: 'fixture', pid: fixture.pid }); fixture.kill(); try { receipt.cleanupFixtureExit = await deadline(fixtureExit, 2000, 'fixture cleanup'); } catch (error) { receipt.cleanupError = String(error); } }
   if (receipt.forcedCleanup.length || receipt.cleanupError) receipt.passed = false;
+  receipt.driverExitCode = receipt.passed ? 0 : 1;
   receipt.finishedUtc = new Date().toISOString();
   await writeFile(path.join(output, 'process.log'), logs.join(''));
   await writeFile(path.join(output, 'result.json'), JSON.stringify(receipt, null, 2));
 }
 if (failure || !receipt.passed) { console.error(failure ?? 'normal lifecycle not established'); process.exitCode = 1; }
 else console.log(JSON.stringify(receipt));
+// Receipts/logs are durable above. The external Job remains authoritative for any surviving descendants.
+process.exit(receipt.passed ? 0 : 1);
