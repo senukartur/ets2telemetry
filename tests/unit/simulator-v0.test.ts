@@ -4,7 +4,7 @@ import {join,resolve} from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {builtinModules} from 'node:module';
 import net from 'node:net';
-import {describe,it,expect} from 'vitest';
+import {describe,it,expect,vi} from 'vitest';
 import {FrameDecoder,encodeFrame,PROTOCOL_V0,type ServerMessage} from '../../packages/contracts/src/protocol-v0';
 import {replay,seededId,validateScenario,type Scenario,type Reading} from '../../tools/telemetry-simulator/src/scenario';
 import {SnapshotProbe} from '../../tools/telemetry-simulator/src/consumer';
@@ -14,6 +14,7 @@ import {readFixtureFile,MAX_FIXTURE_BYTES} from '../../tools/telemetry-simulator
 import {checkCadence} from '../../tools/telemetry-simulator/src/cadence';
 
 const fixture=JSON.parse(readFileSync('tests/fixtures/simulator-v0/reconnect.json','utf8')) as Scenario;
+const lateDiagnostic:Scenario={id:'synthetic-late-diagnostic',origin:'synthetic',game:'ets2',seed:'late-diagnostic',diagnostics:true,steps:[{action:'connect',atMs:0},{action:'reading',reading:{atMs:0,speedMps:25,fuelL:73,simulation:'running',revision:'1',truck:null,gameMinute:'0'}},{action:'diagnostic',atMs:700,observations:[{channel:'synthetic.review',sdkType:'string',value:{available:true,value:'copied'},unit:'raw'}]},{action:'disconnect',atMs:701}]};
 const expected=JSON.parse(readFileSync('tests/fixtures/simulator-v0/reconnect.expected.json','utf8')) as {messages:unknown[];freshness:Array<{receivedAtMs:number;observeAtMs:number;stale:boolean}>};
 function summary(bytes:ReturnType<typeof replay>) {
   const probe=new SnapshotProbe();let connection=0;
@@ -117,6 +118,14 @@ describe('synthetic v0 replay',()=>{
     p.connect();for(const e of emissions.filter(e=>e.connection===2))p.push(e.frame,e.atMs);expect(p.stale(400)).toBe(false);
     expect(()=>p.stale(399)).toThrow('backwards');
   });
+  it('copied diagnostics at 700ms do not extend the snapshot 499/500ms freshness boundary',()=>{
+    const probe=new SnapshotProbe(true);probe.connect();const emissions=replay(lateDiagnostic);
+    for(const e of emissions.slice(0,3))probe.push(e.frame,e.atMs);
+    expect(probe.stale(0)).toBe(false);expect(probe.stale(499)).toBe(false);expect(probe.stale(500)).toBe(true);
+    probe.push(emissions[3].frame,700);
+    expect(probe.stale(499)).toBe(false);expect(probe.stale(500)).toBe(true);expect(probe.stale(700)).toBe(true);
+    probe.end();expect(probe.stale(0)).toBe(true);
+  });
   it('a new connection is stale/unhydrated through welcome and cannot reset the receive clock',()=>{
     const e=replay(fixture),p=new SnapshotProbe();p.connect();p.push(e[0].frame,100);p.push(e[1].frame,100);expect(p.stale(100)).toBe(false);p.end();p.connect();expect(p.state).toBeUndefined();expect(p.stale(100)).toBe(true);expect(()=>p.push(e[4].frame,99)).toThrow('receive boundary');p.push(e[4].frame,350);expect(p.stale(350)).toBe(true);expect(p.state).toBeUndefined();p.push(e[5].frame,350);expect(p.stale(350)).toBe(false);
   });
@@ -185,12 +194,25 @@ describe('fixture filesystem boundary',()=>{
   });
 });
 describe('isolated actual Windows pipe boundary',()=>{
+  it('CLI smoke accepts late diagnostics without refreshing snapshot freshness',async()=>{
+    const directory=mkdtempSync(join(tmpdir(),'ETS2Telemetry-SYNTHETIC-TEST-late-diagnostic-'));
+    try {
+      const cli=await buildCli(directory),path=join(directory,'late-diagnostic.json');writeFileSync(path,JSON.stringify(lateDiagnostic));
+      const result=spawnSync(process.execPath,[cli,'smoke',path],{encoding:'utf8',timeout:10_000,maxBuffer:65536,windowsHide:true});
+      expect(result.error).toBeUndefined();expect(result.stderr).toBe('');expect(result.status).toBe(0);
+      expect(JSON.parse(result.stdout).freshness).toEqual([{connection:1,freshAtSnapshot:true,freshBeforeTimeout:true,freshAtLastMessage:false,staleAfterTimeout:true,staleAfterDisconnect:true}]);
+    }finally{rmSync(directory,{recursive:true,force:true});}
+  });
+  it.each([true,false])('actual pipe rejects a broken constant stale=%s observer',async(stale)=>{
+    const observer=vi.spyOn(SnapshotProbe.prototype,'stale').mockReturnValue(stale),run=await startPipe(replay({...fixture,steps:[{action:'connect',atMs:0}]}));
+    try{await expect(consumePipe(run.endpoint,1)).rejects.toThrow('freshness');}finally{observer.mockRestore();await run.stop().catch(()=>{});}
+  });
   it('speaks real v0 hello/welcome/checkpoint/snapshot across reconnect with real cadence',async()=>{
     const emissions=replay(fixture),run=await startPipe(emissions,{realtime:true});
     try {
       const result=await consumePipe(run.endpoint,2);await run.closed;expect(result.probe.applied.map(e=>e.message)).toEqual(emissions.map(e=>e.message));
-      // Observed at the last receive instant of each connection, not after a tautological disconnect.
-      const observed={freshAtLastMessage:true,staleAfterTimeout:true,staleAfterDisconnect:true};
+      // Snapshot receive-time checks precede disconnect; this fixture ends with a snapshot.
+      const observed={freshAtSnapshot:true,freshBeforeTimeout:true,freshAtLastMessage:true,staleAfterTimeout:true,staleAfterDisconnect:true};
       expect(result.freshness).toEqual([{connection:1,...observed},{connection:2,...observed}]);
       expect(result.arrivalsMs[2]-result.arrivalsMs[1]).toBeGreaterThanOrEqual(20);expect(result.arrivalsMs.at(-1)!).toBeLessThan(4000);
     }finally{await run.stop();}
@@ -213,7 +235,7 @@ describe('isolated actual Windows pipe boundary',()=>{
       const result=spawnSync(process.execPath,[cli,'smoke',path],{encoding:'utf8',timeout:10_000,maxBuffer:65536,windowsHide:true});
       expect(result.stderr).toBe('');expect(result.status).toBe(0);
       const report=JSON.parse(result.stdout) as {cadence:unknown;freshness:unknown};
-      expect(report.cadence).toBeNull();expect(report.freshness).toEqual([{connection:1,freshAtLastMessage:true,staleAfterTimeout:true,staleAfterDisconnect:true}]);
+      expect(report.cadence).toBeNull();expect(report.freshness).toEqual([{connection:1,freshAtSnapshot:true,freshBeforeTimeout:true,freshAtLastMessage:true,staleAfterTimeout:true,staleAfterDisconnect:true}]);
     }finally{rmSync(directory,{recursive:true,force:true});}
   });
   it('does not accept a production endpoint',async()=>await expect(consumePipe('\\\\.\\pipe\\ETS2Telemetry-ets2-v0-real',1)).rejects.toThrow('synthetic endpoint'));

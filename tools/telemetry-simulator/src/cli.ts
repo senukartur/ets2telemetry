@@ -17,7 +17,7 @@ async function main():Promise<void> {
       if(result.probe.applied.length!==emissions.length)throw new Error('Missing synthetic messages');
       result.probe.applied.forEach(({message},i)=>{if(JSON.stringify(message)!==JSON.stringify(emissions[i].message))throw new Error('Wire replay differs from deterministic source');});
       const cadence=checkCadence(emissions,result.arrivalsMs);
-      if(result.freshness.some(f=>!f.freshAtLastMessage||!f.staleAfterTimeout||!f.staleAfterDisconnect))throw new Error('Synthetic freshness observation failed');
+      if(result.freshness.some(f=>!f.freshAtSnapshot||!f.freshBeforeTimeout||!f.staleAfterTimeout||!f.staleAfterDisconnect))throw new Error('Synthetic freshness observation failed');
       console.log(JSON.stringify({origin:'synthetic',messages:result.probe.applied.length,connections:new Set(emissions.map(e=>e.connection)).size,arrivalsMs:result.arrivalsMs,cadence:cadence??null,freshness:result.freshness,history:false}));
     }
     await run.closed;

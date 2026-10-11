@@ -82,8 +82,8 @@ export async function startPipe(emissions:Emission[],options:PipeOptions={}):Pro
   if(options.signal?.aborted)finish();
   return {endpoint,closed,stop:async()=>{finish();await closed;}};
 }
-/** Freshness observed at the last receive instant of a connection, before and after its disconnect. */
-export interface ConnectionFreshness { connection:number; freshAtLastMessage:boolean; staleAfterTimeout:boolean; staleAfterDisconnect:boolean }
+/** Snapshot receipt and timeout checks precede disconnect; diagnostics do not refresh state. */
+export interface ConnectionFreshness { connection:number; freshAtSnapshot:boolean; freshBeforeTimeout:boolean; freshAtLastMessage:boolean; staleAfterTimeout:boolean; staleAfterDisconnect:boolean }
 export async function consumePipe(endpoint:string,connections:number,timeoutMs=5000,diagnostics=false):Promise<{probe:SnapshotProbe;arrivalsMs:number[];freshness:ConnectionFreshness[]}> {
   if(!endpoint.startsWith(PREFIX)||!/^\\\\\.\\pipe\\ETS2Telemetry-SYNTHETIC-TEST-v0-[0-9]+-[0-9a-f-]{36}$/.test(endpoint)) throw new Error('Private synthetic endpoint required');
   if(!Number.isInteger(connections)||connections<1||connections>1000)throw new Error('Invalid connection count');
@@ -92,18 +92,29 @@ export async function consumePipe(endpoint:string,connections:number,timeoutMs=5
   for(let connection=0;connection<connections;connection++) {
     probe.connect();
     await new Promise<void>((resolve,reject)=>{
-      let cleanEnd=false,lastReceivedMs:number|undefined;
+      let cleanEnd=false,lastReceivedMs:number|undefined,lastSnapshotMs:number|undefined,freshAtSnapshot=true;
       const socket=net.connect(endpoint);const deadline=setTimeout(()=>{socket.destroy();reject(new Error('Synthetic consumer deadline exceeded'));},timeoutMs);
       socket.on('connect',()=>socket.write(encodeFrame({version:PROTOCOL_V0,kind:'hello',data:{clientInstanceId:randomUUID(),minMinor:0,maxMinor:0,diagnostics}})));
-      socket.on('data',chunk=>{try{const before=probe.applied.length;lastReceivedMs=Math.floor(performance.now()-start);probe.push(chunk,lastReceivedMs);for(let i=before;i<probe.applied.length;i++)arrivalsMs.push(performance.now()-start);}catch(error){clearTimeout(deadline);socket.destroy();reject(error);}});
+      socket.on('data',chunk=>{try{
+        const before=probe.applied.length;lastReceivedMs=Math.floor(performance.now()-start);probe.push(chunk,lastReceivedMs);
+        for(let i=before;i<probe.applied.length;i++){
+          arrivalsMs.push(performance.now()-start);
+          const kind=probe.applied[i].message.kind;
+          if(kind==='checkpoint'||kind==='snapshot'){
+            lastSnapshotMs=lastReceivedMs;freshAtSnapshot=freshAtSnapshot&&!probe.stale(lastSnapshotMs);
+            if(!freshAtSnapshot)throw new Error('Synthetic snapshot receipt freshness failed');
+          }
+        }
+      }catch(error){clearTimeout(deadline);socket.destroy();reject(error);}});
       socket.on('error',error=>{clearTimeout(deadline);reject(error);});
       socket.on('end',()=>{
         try {
-          if(lastReceivedMs===undefined)throw new Error('Synthetic connection ended before hydration');
-          // Evaluate at the receive clock, not wall time after EOF: disconnect alone would always read stale.
-          const freshAtLastMessage=!probe.stale(lastReceivedMs),staleAfterTimeout=probe.stale(lastReceivedMs+STALE_AFTER_MS);
+          if(lastReceivedMs===undefined||lastSnapshotMs===undefined||!probe.state)throw new Error('Synthetic connection ended before hydration');
+          // Evaluate while connected against snapshot receive time, never diagnostic receive time.
+          const freshAtLastMessage=!probe.stale(lastReceivedMs),freshBeforeTimeout=!probe.stale(lastSnapshotMs+STALE_AFTER_MS-1),staleAfterTimeout=probe.stale(lastSnapshotMs+STALE_AFTER_MS);
+          if(!freshBeforeTimeout||!staleAfterTimeout)throw new Error('Synthetic snapshot timeout freshness failed');
           probe.end();if(!probe.state)throw new Error('Synthetic connection ended before hydration');
-          freshness.push({connection:connection+1,freshAtLastMessage,staleAfterTimeout,staleAfterDisconnect:probe.stale(lastReceivedMs)});cleanEnd=true;
+          freshness.push({connection:connection+1,freshAtSnapshot,freshBeforeTimeout,freshAtLastMessage,staleAfterTimeout,staleAfterDisconnect:probe.stale(lastReceivedMs)});cleanEnd=true;
         }catch(error){clearTimeout(deadline);socket.destroy();reject(error);}
       });
       socket.on('close',()=>{clearTimeout(deadline);cleanEnd?resolve():reject(new Error('Synthetic connection closed before clean EOF'));});

@@ -22,8 +22,13 @@ timer and write latency do not accumulate across steps. The smoke checks the
 first scheduled gap of at least 20 ms, measured from that connection's first
 message, against half to one second more than its fixture time; shorter gaps are
 below timer resolution and are reported as `cadence: null`. It also reports
-freshness at each connection's last receive instant (fresh, stale after the
-probe deadline, stale after disconnect). `serve <fixture.json>` prints its
+freshness at every checkpoint/snapshot receipt (`freshAtSnapshot`), immediately
+before and at the 500 ms deadline relative to the latest snapshot
+(`freshBeforeTimeout`, `staleAfterTimeout`), and after disconnect
+(`staleAfterDisconnect`). These checks are required for success. The optional
+last-message observation (`freshAtLastMessage`) can be false when a diagnostic
+arrives after the snapshot deadline; diagnostics never grant snapshot freshness.
+`serve <fixture.json>` prints its
 private endpoint and waits for an explicit test client; each client connection
 receives the next scripted connection segment. Ctrl+C cancels owned handles.
 Both modes have a five-second total deadline and one-second handshake/write
