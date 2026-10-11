@@ -7,11 +7,13 @@
 | Event | Job | Notes |
 | --- | --- | --- |
 | Non-draft PR opened or reopened, or draft marked ready for review | `Automatic PR review` | Runs from the PR's own workflow file. Pushing new commits does not re-run it, which keeps the cost bounded |
-| Owner comment containing `@claude` on a PR (conversation or review line) | `On-demand review (@claude)` | Use it for re-reviews after new commits and for questions. GitHub runs comment-triggered workflows from the default branch only, so this job is active only after the workflow is merged to `main` |
+| Owner comment containing `@claude` on a PR (conversation or review line) | `On-demand review (@claude)` | Use it for re-reviews after new commits and for questions. PR conversation comments (`issue_comment`) run the workflow file from the default branch, so they work only after the workflow is merged to `main`. Review-line comments (`pull_request_review_comment`) use the PR merge ref, like `pull_request` |
 
-Both jobs skip PRs from forks and comments from accounts other than the repository owner. The action also refuses actors without write access and bot actors by default.
+Both jobs ignore accounts other than the repository owner. The automatic job and review-line mentions skip PRs from forks; a PR conversation comment does not carry the head repository, so an owner `@claude` comment on a fork PR would still run the on-demand job. The action also refuses actors without write access and bot actors by default.
 
-Each job runs on `ubuntu-latest` with a 20-minute timeout and job permissions limited to `contents: read`, `pull-requests: write` and `issues: write`. Claude may read the repository and post PR comments through the job's `GITHUB_TOKEN`; it cannot push commits. Allowed tools are restricted to `Read`, `Grep`, `Glob`, `gh pr view`, `gh pr diff`, `gh pr comment` and inline review comments. The automatic review keeps one sticky summary comment per PR. Both jobs pin the model with `--model claude-sonnet-5-5` so an action update cannot change it silently; change both `claude_args` entries to switch models.
+Concurrency is set per job. The automatic review cancels its own earlier run for the same PR; on-demand reviews queue instead of cancelling each other. A workflow-level group would let runs started by ordinary comments, whose jobs are all skipped, cancel an in-progress review.
+
+Each job runs on `ubuntu-latest` with a 20-minute timeout and job permissions limited to `contents: read`, `pull-requests: write` and `issues: write`. Claude may read the repository and post PR comments through the job's `GITHUB_TOKEN`; it cannot push commits. Allowed tools are restricted to `Read`, `Grep`, `Glob`, `gh pr view`, `gh pr diff`, `gh pr comment` and inline review comments. Each run posts a new summary comment. Both jobs pin the model with `--model claude-sonnet-5-5` so an action update cannot change it silently; change both `claude_args` entries to switch models.
 
 The action restores `CLAUDE.md` and `.claude/` from the PR base branch before running. The root [CLAUDE.md](../CLAUDE.md) only imports [AGENTS.md](../AGENTS.md), so repository rules are maintained in one place. The review prompt in the workflow lists the project-specific constraints to check; update it when AGENTS.md changes a review-relevant invariant.
 
