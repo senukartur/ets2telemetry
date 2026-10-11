@@ -89,3 +89,4 @@ jobs:
             native/telemetry-plugin/build/Testing/Temporary
           retention-days: 14
           if-no-files-found: error
+          include-hidden-files: true
