@@ -1,5 +1,7 @@
 # Testing and Regression Strategy
 
+Owner exception on October 11, 2026 permits early ET-002a protocol v0 implementation and a draft PR while SP-01 game checks are deferred. Keep the failed ETS2 single-player windowed appearance result and required retry explicit; Convoy remains pending. Automated contract checks do not accept SP-01 or establish game compatibility. Existing applicable baseline suites remain mandatory.
+
 Recorded on October 10, 2026; updated October 11, 2026. **Status: scaffold checks implemented and verified; ET-022 CI workflow implemented with hosted clean/failure/restoration evidence recorded; feature suites pending.** ET-001 defines Node unit, Electron startup/worker, native CTest, bounded native Windows installer and historical disposable-guest entrypoints. Current native evidence covers six normally completed install/repair/smoke/update/upgraded-smoke/uninstall operations, actual packaged SQLite/security/orderly shutdown, separate corrected uninstall postconditions and exact owned cleanup. The original failed wrapper report and an unexplained standalone Playwright launch timeout remain recorded. Exact identities and independent review belong in [the acceptance record](docs/validation/et-001.md). No game compatibility or full production REG-017 coverage is established.
 
 Read [concept.md](concept.md) for product behavior and [AGENTS.md](AGENTS.md) for the development workflow.

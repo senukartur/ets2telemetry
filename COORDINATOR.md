@@ -55,6 +55,8 @@ The initial prototype dependency snapshot is below. Read live cards at startup a
 
 ET-022 and SP-01 can run concurrently after ET-001 is accepted and merged. Follow the package graph above and verify live card criteria. A package prerequisite requires its acceptance criteria and merge; a parent card is Done only when all its packages are accepted. Do not build on an unmerged dependency or introduce stacked PRs without owner authorization. ET-009 game evidence does not depend on ET-022, but relevant code checks remain mandatory. ET-009 requires both games and the multiplayer/display matrix; simulator success does not close this gate. The owner alone authorizes merges.
 
+Owner exception on October 11, 2026: start ET-002a implementation and a draft PR from updated `main` before SP-01 acceptance or merge. SP-01 remains draft: the failed ETS2 single-player windowed appearance check needs a real retry, and Convoy evidence remains pending. This exception permits independent protocol v0 work only; it does not accept SP-01, establish game compatibility, enable protocol v1, or waive other package acceptance and merge prerequisites.
+
 ## Delegation and file ownership
 
 Use the session's subagent tools for bounded assignments. Do not create separate user-owned chats or message existing unrelated chats unless the owner explicitly requests that action. Workers must not spawn further agents unless the coordinator explicitly assigns that delegation.
