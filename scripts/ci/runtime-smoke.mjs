@@ -125,6 +125,11 @@ finally {
     finally {clearTimeout(timer);}
   }
   try {
+    const logs = async directory => (await readFile(path.join(directory, 'startup.jsonl'), 'utf8'))
+      .trim().split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line));
+    // Preserve lifecycle evidence even when a later cleanup assertion fails.
+    result.mainEvents = await logs(config.diagnostics);
+    result.serviceEvents = await logs(path.join(config.diagnostics, 'service'));
     result.probesAfterExit = (await readdir(config.temp)).filter(name => name.startsWith('ets2telemetry-probe-'));
     if (telemetrySource && result.telemetry?.serviceRestartRecovered) {
       // A deliberately killed worker's original isolated probe is retained as crash evidence.
@@ -133,10 +138,6 @@ finally {
       result.telemetry.retainedCrashProbe = result.probesAfterExit;
       result.expected.probesAfterExit = result.probesBeforeExit;
     } else assert.deepEqual(result.probesAfterExit, []);
-    const logs = async directory => (await readFile(path.join(directory, 'startup.jsonl'), 'utf8'))
-      .trim().split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line));
-    result.mainEvents = await logs(config.diagnostics);
-    result.serviceEvents = await logs(path.join(config.diagnostics, 'service'));
     const diagnosticCrashObserved = result.mainEvents.some(row => row.event === 'DIAGNOSTIC_SERVICE_EXIT_REQUEST');
     for (const name of ['APP_EXIT', 'SERVICE_EXIT']) {
       const rows = result.mainEvents.filter(row => row.event === name);

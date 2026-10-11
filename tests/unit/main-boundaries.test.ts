@@ -35,7 +35,8 @@ afterEach(() => {
   vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllEnvs();
   for (const name of ['electron', 'electron-squirrel-startup', '../../apps/desktop/src/entrypoints', '../../apps/desktop/src/diagnostics', '../../apps/desktop/src/broker-artifact']) vi.doUnmock(name);
 });
-async function ready() {await import('../../apps/desktop/src/main'); await Promise.resolve(); child.emit('message', {type: 'ready'});}
+async function settle() {await Promise.resolve(); await Promise.resolve();}
+async function ready() {await import('../../apps/desktop/src/main'); await Promise.resolve(); child.emit('message', {type: 'ready'}); await settle();}
 const trusted = () => ({sender: contents, senderFrame: contents.mainFrame});
 
 it('does not inspect an unused broker for explicit synthetic startup', async () => {
@@ -52,12 +53,45 @@ it('keeps unavailable game broker selection contained in the service instead of 
 });
 it('commits selected state only after successful IPC and retains sender/main-frame checks', async () => {
   await ready(); const select = handlers.get('telemetry:select')!;
-  expect(() => select({sender: {}, senderFrame: contents.mainFrame}, 'ats')).toThrow('Untrusted');
-  expect(() => select({sender: contents, senderFrame: {}}, 'ats')).toThrow('Untrusted');
+  await expect(select({sender: {}, senderFrame: contents.mainFrame}, 'ats')).rejects.toThrow('Untrusted');
+  await expect(select({sender: contents, senderFrame: {}}, 'ats')).rejects.toThrow('Untrusted');
   child.postMessage.mockImplementationOnce(() => {throw new Error('closed IPC');});
-  expect(() => select(trusted(), 'replay')).toThrow('closed IPC');
+  await expect(select(trusted(), 'replay')).rejects.toThrow('closed IPC');
   child.emit('exit', 1);
   expect(contents.send.mock.calls[0][1].selection).toBe('synthetic');
+});
+
+function pendingVerification() {
+  let complete!: (value: undefined) => void;
+  resolveBroker.mockReturnValue(new Promise<undefined>(resolve => {complete = resolve;}));
+  return () => complete(undefined);
+}
+it.each(['owned', 'retired'])('awaits game startup verification before window creation and ignores a %s service generation', async outcome => {
+  vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2'); const complete = pendingVerification();
+  await ready(); expect(loadFile).not.toHaveBeenCalled(); expect(child.postMessage).not.toHaveBeenCalled();
+  await expect(handlers.get('telemetry:select')!(trusted(), 'synthetic')).rejects.toThrow('Untrusted');
+  if (outcome === 'retired') child.emit('exit', 1);
+  complete(); await settle();
+  if (outcome === 'retired') {expect(loadFile).not.toHaveBeenCalled(); expect(child.postMessage).not.toHaveBeenCalled();}
+  else {expect(loadFile).toHaveBeenCalledOnce(); expect(child.postMessage).toHaveBeenCalledWith({type: 'select', source: 'ets2', broker: undefined});}
+});
+it('does not dispatch or commit an older game request after a newer source selection', async () => {
+  await ready(); const complete = pendingVerification(), select = handlers.get('telemetry:select')!;
+  const older = select(trusted(), 'ets2'); await vi.advanceTimersByTimeAsync(250);
+  await select(trusted(), 'replay'); complete(); await expect(older).rejects.toThrow('retired');
+  expect(child.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({type: 'select', source: 'ets2'}));
+  child.emit('exit', 1); expect(contents.send.mock.calls[0][1].selection).toBe('replay');
+});
+it.each(['service-exit', 'frame-replaced', 'reload', 'renderer-crash', 'stop'])('rechecks async dispatch ownership after %s', async reason => {
+  await ready(); const complete = pendingVerification(), event = trusted();
+  const pending = handlers.get('telemetry:select')!(event, 'ats');
+  if (reason === 'service-exit') child.emit('exit', 1);
+  else if (reason === 'frame-replaced') contents.mainFrame = {};
+  else if (reason === 'reload') contents.emit('did-start-loading');
+  else if (reason === 'renderer-crash') contents.emit('render-process-gone', {}, {reason: 'crashed'});
+  else app.emit('before-quit', {preventDefault: vi.fn()});
+  complete(); await expect(pending).rejects.toThrow('retired');
+  expect(child.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({type: 'select', source: 'ats'}));
 });
 it('recovers separated renderer crashes while stopping clustered crash loops', async () => {
   await ready();

@@ -47,7 +47,12 @@ ipcRenderer.on('telemetry:port', event => {
   };
   next.start();
 });
-ipcRenderer.on('telemetry:service-state', (_event, update: LiveTelemetry) => {clearRecovery(); closePort(); publish(update);});
+ipcRenderer.on('telemetry:service-state', (_event, update: LiveTelemetry) => {
+  const owner = subscription;
+  clearRecovery(); closePort(); publish(update);
+  // Remote close can clear main's intent before its failure notification arrives. Reassert only the active owner.
+  if (listener && subscription === owner && (update.status === 'service-failed' || update.status === 'restarting')) ipcRenderer.send('telemetry:subscribe');
+});
 const bridge: DesktopBridge = {
   getStatus: () => ipcRenderer.invoke('scaffold:status'),
   selectSource: source => {

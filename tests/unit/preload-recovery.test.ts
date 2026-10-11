@@ -53,7 +53,8 @@ it('cancels closure recovery on unsubscribe or a main-owned service restart', as
   await vi.advanceTimersByTimeAsync(1000); expect(subscriptions()).toBe(1);
   const stopAgain = bridge.subscribeLive(vi.fn()); attach().close();
   ipc.emit('telemetry:service-state', {}, {...initialLive(), status: 'restarting'});
-  await vi.advanceTimersByTimeAsync(1000); expect(subscriptions()).toBe(2);
+  expect(subscriptions()).toBe(3); // Immediate trusted intent replaces obsolete delayed port recovery.
+  await vi.advanceTimersByTimeAsync(1000); expect(subscriptions()).toBe(3);
   stopAgain(); expect(vi.getTimerCount()).toBe(0);
 });
 
@@ -83,4 +84,34 @@ it('preserves the frozen narrow bridge and rejects privileged source values befo
   await expect(bridge.selectSource('C:\\arbitrary.exe' as never)).rejects.toThrow('Invalid source selection');
   expect(ipc.invoke).not.toHaveBeenCalled();
   await bridge.selectSource('ats'); expect(ipc.invoke).toHaveBeenCalledWith('telemetry:select', 'ats');
+});
+
+it.each(['close-first', 'state-first'])('preserves active main subscription intent across service replacement (%s)', async order => {
+  // Main's existing trusted handlers retain intent while serviceReady=false; ready only transfers when that intent is true.
+  let subscribed = false;
+  ipc.send.mockImplementation((channel: string) => {
+    if (channel === 'telemetry:subscribe') subscribed = true;
+    if (channel === 'telemetry:unsubscribe') subscribed = false;
+  });
+  const consume = vi.fn(); const stop = bridge.subscribeLive(consume); const old = attach(); old.deliver(connected());
+  const states = () => {
+    ipc.emit('telemetry:service-state', {}, {...initialLive('synthetic'), status: 'service-failed'});
+    ipc.emit('telemetry:service-state', {}, {...initialLive('synthetic'), status: 'restarting'});
+  };
+  if (order === 'close-first') {old.close(); states();} else {states(); old.close();}
+  expect(consume.mock.lastCall?.[0]).toMatchObject({status: 'restarting', fresh: false});
+  expect(subscribed).toBe(true);
+  if (subscribed) attach().deliver(connected());
+  expect(consume.mock.lastCall?.[0]).toMatchObject({status: 'connected', fresh: true});
+  const requestCount = subscriptions(); await vi.advanceTimersByTimeAsync(250);
+  expect(subscriptions()).toBe(requestCount); // Obsolete closure recovery did not issue another request.
+  old.deliver(connected(), 2); expect(consume.mock.lastCall?.[0].fresh).toBe(true);
+  stop(); expect(subscribed).toBe(false); expect(vi.getTimerCount()).toBe(0);
+});
+it('does not reassert service subscription after the callback unsubscribes its owner', () => {
+  let stop!: () => void;
+  stop = bridge.subscribeLive(update => {if (update.status === 'restarting') stop();}); const old = attach();
+  ipc.emit('telemetry:service-state', {}, {...initialLive(), status: 'restarting'});
+  old.close(); ipc.emit('telemetry:service-state', {}, {...initialLive(), status: 'service-failed'});
+  expect(subscriptions()).toBe(1); expect(vi.getTimerCount()).toBe(0);
 });

@@ -19,12 +19,14 @@ else {
   let subscribed = false, serviceReady = false;
   const rendererBudget = new RecoveryBudget();
   const resolveBroker = createBrokerResolver(__dirname, process.resourcesPath, app.isPackaged, process.env.LOCALAPPDATA, error => log('BROKER_UNAVAILABLE', String(error)));
-  function selectedBroker(source: SourceSelection) {
+  async function selectedBroker(source: SourceSelection) {
     if (source !== 'ets2' && source !== 'ats') return undefined;
-    try {return resolveBroker();}
+    try {return await resolveBroker();}
     catch (error) {log('BROKER_UNAVAILABLE', String(error)); return undefined;}
   }
   let lastSelectionRequest = -Infinity;
+  let selectionGeneration = 0;
+  let rendererEpoch = 0;
   let selection: SourceSelection = sourceSelection(process.env.ETS2TELEMETRY_SOURCE_KIND || 'game');
   const supervisor = new ServiceSupervisor(log, code => app.exit(code), {
     restart: () => startService(),
@@ -42,9 +44,9 @@ else {
     window = new BrowserWindow({width: 800, height: 500, webPreferences: {preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false}});
     window.webContents.setWindowOpenHandler(() => ({action: 'deny'}));
     window.webContents.on('will-navigate', event => event.preventDefault());
-    window.webContents.on('did-start-loading', () => {subscribed = false; service?.postMessage({type: 'unsubscribe'});});
+    window.webContents.on('did-start-loading', () => {rendererEpoch++; subscribed = false; service?.postMessage({type: 'unsubscribe'});});
     window.webContents.on('render-process-gone', (_event, details) => {
-      subscribed = false; service?.postMessage({type: 'unsubscribe'}); log('RENDER_PROCESS_GONE', details);
+      rendererEpoch++; subscribed = false; service?.postMessage({type: 'unsubscribe'}); log('RENDER_PROCESS_GONE', details);
       if (!supervisor.stopping && rendererBudget.take() !== undefined) loadWindow(); else supervisor.fail('RENDERER_RESTART_EXHAUSTED');
     });
     loadWindow();
@@ -66,9 +68,14 @@ else {
       if (supervisor.stopping || service !== child) return;
       if (message?.type === 'ready') {
         if (!supervisor.ready()) return;
-        serviceReady = true; status = {service: 'ready', storage: 'verified', synthetic: true};
-        child.postMessage({type: 'select', source: selection, broker: selectedBroker(selection)});
-        if (!window) createWindow(); else connectSubscription();
+        const requested = selection, generation = ++selectionGeneration;
+        void (async () => {
+          const broker = requested === 'ets2' || requested === 'ats' ? await selectedBroker(requested) : undefined;
+          if (supervisor.stopping || service !== child || generation !== selectionGeneration) return;
+          child.postMessage({type: 'select', source: requested, broker});
+          serviceReady = true; status = {service: 'ready', storage: 'verified', synthetic: true};
+          if (!window) createWindow(); else connectSubscription();
+        })().catch(error => {if (!supervisor.stopping && service === child) supervisor.fail('SERVICE_CONFIGURATION_FAILED', error);});
       } else if (message?.type === 'failed') supervisor.fail('SERVICE_START_FAILED', message);
       else if (message?.type !== 'stopped') supervisor.fail('SERVICE_INVALID_MESSAGE');
     });
@@ -90,13 +97,15 @@ else {
     }
   } catch (error) {supervisor.fail('PROFILE_SETUP_FAILED', error);}
   ipcMain.handle('scaffold:status', event => {if (!trusted(event) || !status) throw new Error('Untrusted status request'); return status;});
-  ipcMain.handle('telemetry:select', (event, source: unknown) => {
+  ipcMain.handle('telemetry:select', async (event, source: unknown) => {
     if (!trusted(event) || !serviceReady) throw new Error('Untrusted source request');
     const next = sourceSelection(source);
     if (performance.now() - lastSelectionRequest < 250) throw new Error('Source selection request limit exceeded');
     lastSelectionRequest = performance.now();
-    const broker = selectedBroker(next);
-    service!.postMessage({type: 'select', source: next, broker});
+    const child = service!, generation = ++selectionGeneration, epoch = rendererEpoch;
+    const broker = next === 'ets2' || next === 'ats' ? await selectedBroker(next) : undefined;
+    if (!trusted(event) || !serviceReady || supervisor.stopping || service !== child || generation !== selectionGeneration || epoch !== rendererEpoch) throw new Error('Source request was retired');
+    child.postMessage({type: 'select', source: next, broker});
     selection = next;
   });
   ipcMain.on('telemetry:subscribe', event => {if (!trusted(event) || subscribed) return; subscribed = true; connectSubscription();});
