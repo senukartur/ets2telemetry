@@ -62,3 +62,22 @@ it('can stop before a service is created', () => {
   expect(supervisor.stopping).toBe(true);
   expect(exit).toHaveBeenCalledExactlyOnceWith(0);
 });
+
+it('recovers widely separated crashes but bounds three crashes within a minute', async () => {
+  const service = {postMessage: vi.fn(), kill: vi.fn(() => true)};
+  const exhausted = vi.fn(); const restart = vi.fn();
+  const supervisor = new ServiceSupervisor(vi.fn(), vi.fn(), {restart, state: vi.fn(), exhausted});
+  for (let index = 0; index < 4; index++) {
+    supervisor.attach(service); supervisor.ready(); supervisor.serviceExited(1);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(restart).toHaveBeenCalledTimes(index + 1);
+    await vi.advanceTimersByTimeAsync(60000);
+  }
+  expect(exhausted).not.toHaveBeenCalled();
+  for (let index = 0; index < 3; index++) {
+    supervisor.attach(service); supervisor.ready(); supervisor.serviceExited(1);
+    await vi.advanceTimersByTimeAsync(1000);
+  }
+  expect(restart).toHaveBeenCalledTimes(6); expect(exhausted).toHaveBeenCalledOnce();
+  supervisor.stop(); expect(vi.getTimerCount()).toBe(0);
+});

@@ -7,6 +7,8 @@
 node_modules/
 apps/desktop/dist/
 native/telemetry-plugin/build/
+native/telemetry-client/build/
+native/telemetry-client/build-asan/
 out/
 test-results/
 playwright-report/

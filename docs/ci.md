@@ -56,6 +56,21 @@ Job timeout is 20 minutes. The clean and restored hosted jobs measured 199 and 2
 
 [Run 38128847239](https://github.com/senukartur/ets2telemetry/actions/runs/38128847239) passed the complete clean hosted scaffold job. [Run 38129098029](https://github.com/senukartur/ets2telemetry/actions/runs/38129098029) deliberately failed one assertion (expected 1001, actual 1000; 122 other tests passed). The assertion was removed, and [run 38129283542](https://github.com/senukartur/ets2telemetry/actions/runs/38129283542) passed the restored tree. Earlier genuine 8.3-path and CMake failures remain recorded separately. See [validation](validation/et-022.md) for source/merge-checkout identities, measured timings, evidence limits and the owner-provided account usage snapshot. The coordinator owns final PR checks and review: verify the actual final head after documentation changes and record its association externally in the PR/ledger. Do not treat the historical successful run as a check of an untested later commit.
 
+## ET-006a native client and live smoke (implementation candidate)
+
+The hosted job also builds separate console AddressSanitizer client/fixture targets and runs `native-pipe-client-asan` with the matching MSVC runtime on PATH. The production broker remains uninstrumented. Local ASan controls failed during the recorded Avast scan interference investigation; a hosted result is a separate environment result and does not erase those failures. No antivirus exclusions are required or configured by this workflow.
+
+The maintained client adds a fixed project-owned native broker for connected-pipe identity checks and bounded raw I/O. Ingestion, validation and subscriptions stay in the utilityProcess. The broker is built as part of npm run build using the documented CMake/MSVC toolchain. Its source-bound build receipt and executable are staged under ignored .local/package-native/telemetry-client and packaged as resources/telemetry-client; static inspection compares native bytes, x64 PE identity and source hashes. No generated binary is committed. See native-transport-boundary-v0.md and the feature validation record for final checks and pending real-game evidence.
+
+Alongside the unchanged bounded scaffold probe, the candidate adds the following commands from the repository root:
+
+```powershell
+./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario telemetry
+./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged -Scenario telemetry
+```
+
+These use an explicitly isolated synthetic Windows pipe and the same 60-second/16-process/2-GiB/25%-CPU Windows Job Object limits with zero retries. The intended assertions exercise source-to-renderer speed/fuel, six-second renderer stall with changed values and subscription recovery, invalid source rejection, two renderer reloads, one deliberately terminated owned service followed by supervised reconnect/new ports, and stale readings after disconnect. The diagnostic main event is opt-in under isolated smoke configuration and is not a renderer command. The killed service's exact original temporary SQLite probe may remain as retained crash evidence; the replacement service must remove its normal-shutdown probe. Ordinary scaffold smokes still require zero remaining probes, unchanged SQLite 42/security assertions and normal shutdown. Actual outcomes must be recorded before acceptance; neither this planned harness nor synthetic telemetry establishes game support.
+
 ## Advisory AI review
 
 A separate [Claude code review](ai-review.md) workflow comments on non-draft PRs and on owner `@claude` requests. It runs on Ubuntu, needs a Claude secret, and is not part of the Windows CI result.
