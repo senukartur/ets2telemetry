@@ -69,6 +69,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run lint
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      # Runs under Windows PowerShell 5.1, like local checks; downloads the hash-pinned module.
+      - name: Analyze PowerShell scripts
+        run: npm run lint:ps
       - name: Full Node-safe suite and typecheck
         run: |
           npm run typecheck

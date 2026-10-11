@@ -1,4 +1,5 @@
 # Fixed marker/surrogate console fixture. Never loads the production observer DLL.
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'ResultFile', Justification = 'Callers pass the shared observer argument list; this fixture reports through ReadyFile.')]
 param([int]$DriverPid,[int]$ControllerPid,[string]$StopFile,[string]$ResultFile,[string]$ReadyFile,[string]$NodePath,[string]$FixturePath,[ValidateSet('normal','absent','outside','nonzero','live','owner-death','wrong-image')][string]$Mode)
 $ErrorActionPreference='Stop';$directory=Split-Path -Parent $ReadyFile
 . (Join-Path $PSScriptRoot 'sibling-console-metadata-fixture.ps1')

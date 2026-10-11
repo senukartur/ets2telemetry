@@ -23,6 +23,7 @@
     "typecheck": "tsc --noEmit",
     "lint:install": "npm ci --prefix tools/lint",
     "lint": "node tools/lint/node_modules/eslint/bin/eslint.js --max-warnings 0 .",
+    "lint:ps": "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/Invoke-ScriptAnalysis.ps1",
     "test": "vitest run",
     "test:electron": "npm run package && playwright test",
     "inspect:package": "node scripts/inspect-package.mjs",
