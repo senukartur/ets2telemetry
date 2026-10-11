@@ -55,7 +55,7 @@ try {
   assert.equal(receipt.versions.electron, manifest.electron); assert.equal(receipt.scaleFactor, 1.5); assert.deepEqual(receipt.initial.security, { sandbox: true, isolation: true, node: false });
   receipt.identity = await identity('Before'); assert.equal(receipt.identity.ancestryVerified, true); assert.equal(receipt.identity.browserImageMatchesPinned, true);
   receipt.stages = {};
-  const step = async (name) => { const rows = await deadline(app.evaluate((stage) => globalThis.__sp01WindowRegression.step(stage), name), 6500, name); receipt.stages[name] = rows; return rows; };
+  const step = async (name) => { const rows = await deadline(app.evaluate((_electron, stage) => globalThis.__sp01WindowRegression.step(stage), name), 6500, name); receipt.stages[name] = rows; return rows; };
   const first = (await step('initial'))[0]; fixed(first, receipt.initial.anchor); await native(await info(), 'initial');
   const page = await app.firstWindow({ timeout: 3000 }); page.setDefaultTimeout(3000); receipt.renderer = await page.locator('main').innerText(); assert.ok(receipt.renderer.includes('SYNTHETIC'));
   await page.screenshot({ path: path.join(output, 'initial.png'), omitBackground: true, timeout: 3000 });
