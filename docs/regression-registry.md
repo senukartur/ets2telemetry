@@ -6,14 +6,14 @@ Read the full requirements in [TESTING.md](../TESTING.md). Pending means the own
 | --- | --- | --- |
 | REG-001 normal job/road stop/delivery | Pending | ET-014, ET-015 domain/1 Hz integration |
 | REG-002 pause/resume | Pending | ET-014, ET-015 controlled-clock samples/events |
-| REG-003 late attachment/gap | Pending | ET-006, ET-014, ET-015 ingestion/completeness |
+| REG-003 late attachment/gap | Partial: `tests/unit/protocol-v0.test.ts`, native `protocol-v0-contract`, shared checkpoint/continuity streams; v0 hydration has no gameplay effects | ET-006, ET-014, ET-015 actual ingestion/recording completeness |
 | REG-004 cancellation/disappearance | Pending | ET-003, ET-014 terminal payload/lifecycle |
-| REG-005 duplicate/order | Pending | ET-002, ET-004, ET-014, ET-015 contracts/accounting |
+| REG-005 duplicate/order | Partial: shared v0 ordering streams reject duplicate/regressing sequence, changed identity/clock, and counter regression in TypeScript and C++ | ET-002b, ET-004, ET-014, ET-015 durable redelivery/accounting |
 | REG-006 crash before commit/ACK | Pending | ET-004, ET-013, ET-015 actual storage process recovery |
 | REG-007 failed writes/bounded buffer | Pending | ET-013, ET-015 durable ACK/failure integration |
 | REG-008 resets/truck/refueling | Pending | ET-010, ET-014 domain discontinuities |
-| REG-009 missing/zero/units | Pending | ET-003, ET-010 SDK normalization |
-| REG-010 frame parser/version | Pending; native CTest is only placeholder export/x64 | ET-002, ET-004, ET-006 shared fixtures, parser bounds/fuzz/ASan when implemented |
+| REG-009 missing/zero/units | Partial: shared v0 availability/unit fixtures and materialized zero/unavailable assertions in TypeScript and C++ | ET-003, ET-010 actual SDK normalization and trip averages |
+| REG-010 frame parser/version | Partial: `tests/unit/protocol-v0.test.ts`, native `protocol-v0-contract`, identical `tests/fixtures/protocol-v0` bytes; split/coalesced/invalid UTF-8/duplicate keys/depth/frame bounds/version/uint64 checks | ET-002b v1, ET-004/ET-006 actual pipe/ingestion integration; fuzz/sanitizer coverage pending |
 | REG-011 stalled reader/reconnect/shutdown | Partial: `tests/unit/service-probe.test.ts`, `service-supervisor.test.ts`; `tests/watchdog/run.ps1`; `scripts/ci/Invoke-RuntimeSmoke.ps1` orderly scaffold worker stop | ET-004, ET-006 real pipe queues/callback bounds/gap semantics pending |
 | REG-012 close-to-tray/instance/restart | Pending; scaffold explicit smoke shutdown is not recording persistence | ET-011, ET-015 app lifecycle |
 | REG-013 historical migrations | Pending; no production schema or historical database exists | ET-013, ET-018 immutable supported/unsupported-newer fixtures |

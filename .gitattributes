@@ -1,1 +1,4 @@
 .githooks/pre-push text eol=lf
+# Protocol fixtures include intentionally invalid UTF-8 and exact byte boundaries.
+tests/fixtures/protocol-v0/*.json -text
+tests/fixtures/protocol-v0/*.txt text eol=lf
