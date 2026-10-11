@@ -11,7 +11,7 @@
 
 Both jobs skip PRs from forks and comments from accounts other than the repository owner. The action also refuses actors without write access and bot actors by default.
 
-Each job runs on `ubuntu-latest` with a 20-minute timeout and job permissions limited to `contents: read`, `pull-requests: write` and `issues: write`. Claude may read the repository and post PR comments through the job's `GITHUB_TOKEN`; it cannot push commits. Allowed tools are restricted to `Read`, `Grep`, `Glob`, `gh pr view`, `gh pr diff`, `gh pr comment` and inline review comments. The automatic review keeps one sticky summary comment per PR.
+Each job runs on `ubuntu-latest` with a 20-minute timeout and job permissions limited to `contents: read`, `pull-requests: write` and `issues: write`. Claude may read the repository and post PR comments through the job's `GITHUB_TOKEN`; it cannot push commits. Allowed tools are restricted to `Read`, `Grep`, `Glob`, `gh pr view`, `gh pr diff`, `gh pr comment` and inline review comments. The automatic review keeps one sticky summary comment per PR. Both jobs pin the model with `--model claude-sonnet-5-5` so an action update cannot change it silently; change both `claude_args` entries to switch models.
 
 The action restores `CLAUDE.md` and `.claude/` from the PR base branch before running. The root [CLAUDE.md](../CLAUDE.md) only imports [AGENTS.md](../AGENTS.md), so repository rules are maintained in one place. The review prompt in the workflow lists the project-specific constraints to check; update it when AGENTS.md changes a review-relevant invariant.
 
@@ -26,7 +26,7 @@ The workflow needs exactly one of these repository secrets (**Settings → Secre
 
 With the GitHub CLI, run `gh secret set CLAUDE_CODE_OAUTH_TOKEN` (or `ANTHROPIC_API_KEY`) from the repository and paste the value at the prompt. Never commit a token or paste it into a PR or issue. No GitHub App installation is required, because the workflow authenticates to GitHub with `GITHUB_TOKEN`; comments therefore appear as `github-actions[bot]`.
 
-Without a secret, the review job fails with an authentication error. That failure concerns only the advisory review and does not affect the Windows CI result.
+Without a valid secret, the review job fails with an authentication error (`api_error_status: 401`, "Not logged in"). That failure concerns only the advisory review and does not affect the Windows CI result. Claude output is hidden by default; use **Re-run jobs → Enable debug logging** to show it (`show_full_output` follows `runner.debug`). Copying a long token from a narrow terminal can insert line breaks; `(Get-Clipboard -Raw) -replace '\s','' | gh secret set CLAUDE_CODE_OAUTH_TOKEN` stores the copied token without whitespace.
 
 ## Cost and limits
 
