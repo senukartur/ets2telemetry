@@ -1,6 +1,7 @@
 # Pinned Squirrel may retain its own mapped helpers; no application payload is allowed.
 function Assert-UninstallResidue {
     [CmdletBinding()]
+    [OutputType([hashtable])]
     param([Parameter(Mandatory)][string]$BinaryRoot,[Parameter(Mandatory)][ValidateSet('0.1.0','0.1.1')][string]$Version,
         [Parameter(Mandatory)][object]$Squirrel,[object[]]$Registration=@(),[object[]]$ProductShortcuts=@())
     if(@($Registration).Count){throw 'UNINSTALL_REGISTRATION_REMAINS'}
