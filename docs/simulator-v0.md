@@ -16,8 +16,19 @@ npm test -- tests/unit/simulator-v0.test.ts
 
 `replay` writes deterministic JSON lines to stdout; it does not open a pipe.
 `smoke` creates an actual Windows Named Pipe, performs the v0 hello exchange,
-consumes two fixture connections, validates every received message, reports
-local receive cadence, and closes its handles. `serve <fixture.json>` prints its
+consumes two fixture connections, validates every received message, and closes
+its handles. Real-time writes are scheduled from each connection's start, so
+timer and write latency do not accumulate across steps. The smoke checks the
+first scheduled gap of at least 20 ms, measured from that connection's first
+message, against half to one second more than its fixture time; shorter gaps are
+below timer resolution and are reported as `cadence: null`. It also reports
+freshness at every checkpoint/snapshot receipt (`freshAtSnapshot`), immediately
+before and at the 500 ms deadline relative to the latest snapshot
+(`freshBeforeTimeout`, `staleAfterTimeout`), and after disconnect
+(`staleAfterDisconnect`). These checks are required for success. The optional
+last-message observation (`freshAtLastMessage`) can be false when a diagnostic
+arrives after the snapshot deadline; diagnostics never grant snapshot freshness.
+`serve <fixture.json>` prints its
 private endpoint and waits for an explicit test client; each client connection
 receives the next scripted connection segment. Ctrl+C cancels owned handles.
 Both modes have a five-second total deadline and one-second handshake/write
@@ -25,7 +36,8 @@ deadlines. A source fixture with gaps longer than this smoke budget should use
 deterministic `replay`; this CLI does not support long-running live simulation.
 
 `src/scenario.ts` exports `validateScenario`, `replay`, and the typed `Scenario`
-interface. `src/pipe.ts` exports `startPipe` and `consumePipe`; `SnapshotProbe`
+interface. `src/pipe.ts` exports `startPipe` and `consumePipe`; `src/cadence.ts`
+exports the smoke `checkCadence` rule; `SnapshotProbe`
 is a narrow bounded test observer. These are source interfaces for ET-006a,
 not a production discovery or authentication interface.
 
@@ -43,7 +55,9 @@ hydrates a copied job with unknown currency and an exact large expected-income
 value; disappearance of that job produces no delivery/cancellation claim.
 
 Every fixture declares `origin: "synthetic"`, game (`ets2` or `ats`), scenario ID,
-seed, and ordered steps. `reading.atMs` and other step `atMs` values are controlled
+seed, and ordered steps. Fixture files are parsed with the protocol's strict
+JSON parser, so duplicate keys are rejected instead of silently keeping the last
+value. `reading.atMs` and other step `atMs` values are controlled
 elapsed milliseconds (0 through one day). A reading supplies speed in m/s, fuel
 in liters, simulation status, configuration revision, nullable truck ID, exact
 decimal game minutes and optionally a complete wire job availability object.
@@ -68,7 +82,8 @@ Each source reading consumes a session sequence even offline; welcome and
 checkpoint consume their own sequences. Offline state retains one current
 value. Replacing an earlier offline reading increments `coalescedSnapshots`;
 simulation/configuration changes observed offline increment `offlineTransitions`.
-These fixture counting boundaries do not finalize ET-003/ET-004a producer policy.
+The first reading has no prior observation; comparing it with the placeholder
+initial state is not a transition. These fixture counting boundaries do not finalize ET-003/ET-004a producer policy.
 The `diagnostic` step uses copied v0 observations. It emits only when the fixture
 explicitly enables `diagnostics` and a client opts in; disabled/offline
 observations increment `lostObservations` without payload retention. Copied

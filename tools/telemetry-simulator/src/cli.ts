@@ -1,6 +1,7 @@
 import {readFixtureFile} from './fixture-file';
 import {replay,validateScenario} from './scenario';
 import {startPipe,consumePipe} from './pipe';
+import {checkCadence} from './cadence';
 
 async function main():Promise<void> {
   const [command,file,...extra]=process.argv.slice(2);
@@ -15,10 +16,9 @@ async function main():Promise<void> {
       const result=await consumePipe(run.endpoint,new Set(emissions.map(e=>e.connection)).size,5000,scenario.diagnostics??false);
       if(result.probe.applied.length!==emissions.length)throw new Error('Missing synthetic messages');
       result.probe.applied.forEach(({message},i)=>{if(JSON.stringify(message)!==JSON.stringify(emissions[i].message))throw new Error('Wire replay differs from deterministic source');});
-      const deltas=result.arrivalsMs.slice(1).map((t,i)=>t-result.arrivalsMs[i]);
-      const expectedDelta=emissions.findIndex((e,i)=>i>0&&e.connection===emissions[i-1].connection&&e.atMs>emissions[i-1].atMs);
-      if(expectedDelta>=0&&(deltas[expectedDelta-1]<20||deltas[expectedDelta-1]>2000))throw new Error('Real cadence outside smoke bounds');
-      console.log(JSON.stringify({origin:'synthetic',messages:result.probe.applied.length,connections:new Set(emissions.map(e=>e.connection)).size,arrivalsMs:result.arrivalsMs,staleAfterDisconnect:result.probe.stale(Math.ceil(result.arrivalsMs.at(-1)??0)),history:false}));
+      const cadence=checkCadence(emissions,result.arrivalsMs);
+      if(result.freshness.some(f=>!f.freshAtSnapshot||!f.freshBeforeTimeout||!f.staleAfterTimeout||!f.staleAfterDisconnect))throw new Error('Synthetic freshness observation failed');
+      console.log(JSON.stringify({origin:'synthetic',messages:result.probe.applied.length,connections:new Set(emissions.map(e=>e.connection)).size,arrivalsMs:result.arrivalsMs,cadence:cadence??null,freshness:result.freshness,history:false}));
     }
     await run.closed;
   }finally {await run.stop();process.removeListener('SIGINT',cancel);process.removeListener('SIGTERM',cancel);}

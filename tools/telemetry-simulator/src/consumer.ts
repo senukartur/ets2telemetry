@@ -1,4 +1,6 @@
 import {FrameDecoder,V0Consumer,type CurrentState,type ServerMessage,type AppliedState} from '../../../packages/contracts/src/protocol-v0';
+/** Test observer freshness deadline; not the ET-006a or ET-015 policy. */
+export const STALE_AFTER_MS=500;
 /** A narrow test consumer, not an Electron bridge or history sampler. */
 export class SnapshotProbe {
   private decoder=new FrameDecoder();
@@ -28,7 +30,7 @@ export class SnapshotProbe {
     }catch(error){this.disconnected=true;throw error;}
   }
   end():void {this.disconnected=true;this.decoder.end();}
-  stale(nowMs:number,deadlineMs=500):boolean {
+  stale(nowMs:number,deadlineMs=STALE_AFTER_MS):boolean {
     if(!Number.isSafeInteger(nowMs)||nowMs<0||!Number.isSafeInteger(deadlineMs)||deadlineMs<1) throw new Error('Invalid freshness clock');
     if(this.lastReceivedMs!==undefined && nowMs<this.lastReceivedMs) throw new Error('Receive clock moved backwards');
     return this.disconnected||this.lastReceivedMs===undefined||nowMs-this.lastReceivedMs>=deadlineMs;

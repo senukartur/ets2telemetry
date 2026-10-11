@@ -58,7 +58,7 @@ export interface Emission { atMs:number; connection:number; message:ServerMessag
 export function replay(input:Scenario):Emission[] {
   const s=validateScenario(input), source=identity(s.seed,s.game), counters=zeroCounters();
   let state=readingState(s.seed,{atMs:0,speedMps:null,fuelL:null,simulation:'unavailable',revision:'0',truck:null,gameMinute:'0'});
-  let seq=0n, connected=false, connection=0, offlineReading=false,gameClockEpoch=0;
+  let seq=0n, connected=false, connection=0, offlineReading=false, observed=false, gameClockEpoch=0;
   const result:Emission[]=[];
   function emit(kind:'welcome'|'checkpoint'|'snapshot',atMs:number) {
     const n=(seq++).toString();
@@ -82,11 +82,12 @@ export function replay(input:Scenario):Emission[] {
       next.gameTime.clockId=seededId(s.seed,gameClockEpoch===0?'game-clock':`game-clock-${gameClockEpoch}`);
       if(!connected) {
         if(offlineReading) counters.coalescedSnapshots=(BigInt(counters.coalescedSnapshots)+1n).toString();
-        if(state.simulation!==next.simulation || !isDeepStrictEqual(state.configuration,next.configuration)) counters.offlineTransitions=(BigInt(counters.offlineTransitions)+1n).toString();
+        // The placeholder initial state is not an observation, so the first reading is not a transition.
+        if(observed && (state.simulation!==next.simulation || !isDeepStrictEqual(state.configuration,next.configuration))) counters.offlineTransitions=(BigInt(counters.offlineTransitions)+1n).toString();
         offlineReading=true;
         seq++; // A source snapshot boundary exists even if no client receives it.
       }
-      state=next;
+      state=next;observed=true;
       if(connected) emit('snapshot',step.reading.atMs);
     }
   }
