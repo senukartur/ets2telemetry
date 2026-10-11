@@ -107,6 +107,7 @@ try{
     foreach($row in $manifest.runtimeFiles){if(!$row.path -or $row.path -match '(^/|\\|:|(^|/)\.\.?(/|$))' -or !$runtimeNames.Add($row.path) -or $row.sha256 -notmatch '^[a-fA-F0-9]{64}$'){throw 'Invalid runtime projection manifest.'}}
     if(!$runtimeNames.Contains('ETS2TelemetryDesktop.exe') -or !$runtimeNames.Contains('resources/app.asar') -or @($manifest.runtimeFiles|Where-Object {$_.path -eq 'resources/app.asar' -and $_.sha256 -eq $ExpectedAsarSha256}).Count -ne 1){throw 'Frozen critical runtime projection missing.'}
     if((Get-FileHash -LiteralPath (Join-Path $kit 'installer/Setup.exe')).Hash -ne $manifest.setupSha256 -or (Get-FileHash -LiteralPath (Join-Path $kit 'feed/ETS2TelemetryDesktop-0.1.1-full.nupkg')).Hash -ne $manifest.fixtureNugetSha256){throw 'Reviewed maker/feed identity mismatch.'}
+    if($manifest.controllerSourceSha256 -notmatch '^[a-fA-F0-9]{64}$' -or (Get-FileHash -LiteralPath (Join-Path $kit 'tools/InstallerBoundedProcess.cs')).Hash -ne $manifest.controllerSourceSha256){throw 'Reviewed two-root controller source identity mismatch.'}
     $local=[Environment]::GetFolderPath('LocalApplicationData')
     if($local -ne $env:LOCALAPPDATA -or $local -notmatch '^C:\\Users\\ets2lab\\AppData\\Local$'){throw 'Actual disposable per-user LocalApplicationData required.'}
     $report.binaryRoot=Join-Path $local 'ETS2TelemetryDesktop';$report.dataRoot=Join-Path $local 'ETS2Telemetry'
@@ -124,7 +125,7 @@ try{
     # Pinned Setup treats SQUIRREL_TEMP as the installation base, not merely scratch.
     # Clear it so the actual per-user install uses LOCALAPPDATA; preserve its preimage above.
     foreach($name in @('NODE_OPTIONS','NODE_PATH','ELECTRON_RUN_AS_NODE','SQUIRREL_TEMP')){[Environment]::SetEnvironmentVariable($name,$null,'Process')}
-    Add-Type -Path (Join-Path $kit 'tools/BoundedProcess.cs')
+    Add-Type -Path (Join-Path $kit 'tools/InstallerBoundedProcess.cs') -ReferencedAssemblies System.dll,System.Core.dll,System.Web.Extensions.dll
     $definitions=@(@{name='install';version='0.1.0';seconds=45},@{name='repair';version='0.1.0';seconds=45},@{name='smoke';version='0.1.0';seconds=30},@{name='update';version='0.1.1';seconds=45},@{name='smoke';version='0.1.1';seconds=30},@{name='uninstall';version='0.1.1';seconds=30})
     $index=0
     foreach($definition in $definitions){
@@ -139,9 +140,11 @@ try{
         $env:TEMP=Join-Path $scratchStep 'temp';$env:TMP=$env:TEMP;$env:ETS2TELEMETRY_PROFILE_DIR=Join-Path $scratchStep 'profile';$env:ETS2TELEMETRY_DIAGNOSTIC_DIR=Join-Path $directory 'diagnostics'
         $guard=[ordered]@{verifiedUtc=[datetime]::UtcNow.ToString('o');vmUuid=$identity.UUID;labId=$manifest.labId;manifestSha256=$ExpectedManifestSha256;binaryRoot=$report.binaryRoot;step=$definition.name;version=$definition.version;outerDeadlineUtc=$OuterDeadlineUtc;jobRequired=$true}
         $guardPath=Join-Path $directory 'step-guard.json';$guard|ConvertTo-Json|Set-Content -LiteralPath $guardPath -Encoding UTF8
-        $step=[ordered]@{index=$index;name=$definition.name;version=$definition.version;directory=$directory;jobBudgetMilliseconds=$milliseconds;jobExitCode=$null;driver=$null;postconditions=$null};$steps.Add($step)
-        $code=[ETS2Telemetry.Diagnostics.BoundedProcess]::Run((Join-Path $kit 'tools/node.exe'),@((Join-Path $kit 'harness/installer-step.mjs'),$kit,$directory,$guardPath,$definition.name,$definition.version,[string]$milliseconds),$directory,(Join-Path $directory 'job'),$milliseconds)
+        $step=[ordered]@{index=$index;name=$definition.name;version=$definition.version;directory=$directory;jobBudgetMilliseconds=$milliseconds;jobExitCode=$null;controller=$null;driver=$null;postconditions=$null};$steps.Add($step)
+        $code=[ETS2Telemetry.Diagnostics.InstallerBoundedProcess]::Run((Join-Path $kit 'tools/node.exe'),@((Join-Path $kit 'harness/installer-step.mjs'),$kit,$directory,$guardPath,$definition.name,$definition.version,[string]$milliseconds),(Join-Path $kit 'harness/Observe-InstallerJob.ps1'),$directory,(Join-Path $directory 'job'),$milliseconds)
         $step.jobExitCode=$code
+        $controllerPath=Join-Path $directory 'job/controller-result.json'
+        if(Test-Path -LiteralPath $controllerPath){$step.controller=Get-Content -LiteralPath $controllerPath -Raw|ConvertFrom-Json}
         $resultPath=Join-Path $directory 'step-result.json'
         if(Test-Path -LiteralPath $resultPath){$step.driver=Get-Content -LiteralPath $resultPath -Raw|ConvertFrom-Json}
         if($definition.name -eq 'install'){
@@ -153,7 +156,7 @@ try{
             }
         }
         Save-SquirrelLogs $directory
-        if($code -ne 0 -or !$step.driver -or $step.driver.passed -ne $true){throw ('Installer step failed: '+$definition.name+'; Job exit '+$code)}
+        if($code -ne 0 -or !$step.driver -or $step.driver.passed -ne $true -or !$step.controller -or $step.controller.passed -ne $true -or $step.controller.driverExitCode -ne 0 -or $step.controller.observerExitCode -ne 0 -or $step.controller.driverStreamsDrained -ne $true -or $step.controller.observerStreamsDrained -ne $true -or $step.controller.elapsedMilliseconds -gt $milliseconds){throw ('Installer step failed: '+$definition.name+'; Job exit '+$code)}
         if($sentinels.Count -ne 6 -or $step.driver.sqlitePreservation.integrity -ne 'ok' -or $step.driver.sqlitePreservation.value -ne 42 -or $step.driver.sqlitePreservation.synthetic -ne 1){throw 'Incomplete synthetic data/SQLite preservation proof.'}
         Assert-Budget
         if($definition.name -ne 'uninstall'){$step.postconditions=Assert-Installed $definition.version}

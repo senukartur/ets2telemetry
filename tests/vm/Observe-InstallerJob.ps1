@@ -1,6 +1,6 @@
-# Read-only observer, itself a child of the contained Node driver. Never creates/kills a process.
+# Read-only observer, a contained sibling of the Node driver. Never creates/kills a process.
 [CmdletBinding()]
-param([Parameter(Mandatory)][int]$DriverPid, [Parameter(Mandatory)][string]$StopFile, [Parameter(Mandatory)][string]$ResultFile)
+param([Parameter(Mandatory)][int]$DriverPid, [Parameter(Mandatory)][int]$ControllerPid, [Parameter(Mandatory)][string]$StopFile, [Parameter(Mandatory)][string]$ResultFile, [Parameter(Mandatory)][string]$ReadyFile)
 $ErrorActionPreference='Stop'
 if($env:ETS2TELEMETRY_VM_JOB -ne '1'){throw 'Contained guest driver required.'}
 Add-Type -AssemblyName System.Management
@@ -16,6 +16,7 @@ using System.Threading;
 using System.Threading.Tasks;
 public sealed class InstallerMetadata {
     public string CommandLine, ExecutablePath, Failure;
+    public int ParentProcessId;
     public double ElapsedMilliseconds;
 }
 public sealed class InstallerJobScope {
@@ -75,6 +76,7 @@ public static class InstallerJobView {
                     process.Get();
                     result.CommandLine=(string)process["CommandLine"];
                     result.ExecutablePath=(string)process["ExecutablePath"];
+                    result.ParentProcessId=Convert.ToInt32(process["ParentProcessId"]);
                 }
             }catch(Exception error){result.Failure=error.ToString();}
             finally {if(acquired) MetadataSlots.Release();result.ElapsedMilliseconds=clock.Elapsed.TotalMilliseconds;}
@@ -102,17 +104,32 @@ $seen=[Collections.Generic.HashSet[int]]::new()
 $records=[Collections.Generic.List[object]]::new()
 $handles=[Collections.Generic.Dictionary[int,IntPtr]]::new()
 $queries=@{}
-$view=[ordered]@{passed=$false;observerPid=$PID;driverPid=$DriverPid;startedUtc=[datetime]::UtcNow.ToString('o');finishedUtc=$null;failure=$null;drained=$false;finalPids=@();processes=@();jobScope=$null;metadataWorkers=4;metadataQueueSeconds=3;metadataQuerySeconds=3;metadataCompletionSeconds=8;warmupMilliseconds=$null;pollCount=0;maximumPollGapMilliseconds=0}
+$view=[ordered]@{passed=$false;observerPid=$PID;driverPid=$DriverPid;controllerPid=$ControllerPid;parentProcessId=$null;driverParentProcessId=$null;driverImage=$null;controllerImage=$null;startedUtc=[datetime]::UtcNow.ToString('o');finishedUtc=$null;failure=$null;drained=$false;finalPids=@();processes=@();jobScope=$null;metadataWorkers=4;metadataQueueSeconds=3;metadataQuerySeconds=3;metadataCompletionSeconds=8;warmupMilliseconds=$null;pollCount=0;maximumPollGapMilliseconds=0}
 try {
     $initial=[InstallerJobView]::Pids()
-    if($initial -notcontains $DriverPid -or $initial -notcontains $PID -or $initial.Count -ne 2){throw 'Observer must start in a fresh Job containing only itself and its driver.'}
+    if($DriverPid -eq $ControllerPid -or $DriverPid -eq $PID -or $ControllerPid -eq $PID -or $initial -notcontains $DriverPid -or $initial -notcontains $PID -or $initial.Count -ne 2){throw 'Observer must start in a fresh Job containing exactly suspended driver and observer.'}
     $view.jobScope=[InstallerJobView]::AuthoritativeScope()
+    foreach($entry in @(@{pid=$DriverPid;key='driverImage';image='C:\ETS2ET001Acceptance\tools\node.exe'},@{pid=$ControllerPid;key='controllerImage';image='C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe'})){
+        $identityHandle=[InstallerJobView]::Hold($entry.pid)
+        if($identityHandle -eq [IntPtr]::Zero){throw 'Sibling/controller native identity cannot be held.'}
+        try{$view[$entry.key]=[InstallerJobView]::Image($identityHandle)}finally{[InstallerJobView]::Release($identityHandle)}
+        if($view[$entry.key] -ine $entry.image){throw 'Sibling/controller native image differs from fixed reviewed identity.'}
+    }
     # Warm WMI before Setup starts; a cold provider cannot consume the hook interval.
     $warmup=[InstallerJobView]::QueryAsync($PID)
     if(!$warmup.Wait(5000)){throw 'Read-only metadata provider warmup exceeded five seconds.'}
     if($warmup.Result.Failure -or !$warmup.Result.CommandLine){throw 'Read-only metadata provider warmup failed.'}
+    $view.parentProcessId=$warmup.Result.ParentProcessId
+    if($view.parentProcessId -ne $ControllerPid -or $warmup.Result.ExecutablePath -ine 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe'){throw 'Observer parent/image provenance differs from actual controller.'}
+    $driverMetadata=[InstallerJobView]::QueryAsync($DriverPid)
+    if(!$driverMetadata.Wait(5000) -or $driverMetadata.Result.Failure){throw 'Suspended sibling metadata query failed.'}
+    $view.driverParentProcessId=$driverMetadata.Result.ParentProcessId
+    if($view.driverParentProcessId -ne $ControllerPid -or $driverMetadata.Result.ExecutablePath -ine $view.driverImage){throw 'Driver parent/image provenance differs from actual controller.'}
     $view.warmupMilliseconds=$warmup.Result.ElapsedMilliseconds
-    [ordered]@{ready=$true;observerPid=$PID;driverPid=$DriverPid;initialPids=$initial;jobScope=$view.jobScope;warmupMilliseconds=$view.warmupMilliseconds}|ConvertTo-Json -Depth 4 -Compress|Write-Output
+    $ready=[ordered]@{ready=$true;observerPid=$PID;driverPid=$DriverPid;controllerPid=$ControllerPid;parentProcessId=$view.parentProcessId;driverParentProcessId=$view.driverParentProcessId;driverImage=$view.driverImage;controllerImage=$view.controllerImage;initialPids=$initial;jobScope=$view.jobScope;warmupMilliseconds=$view.warmupMilliseconds}
+    $ready|ConvertTo-Json -Depth 4 -Compress|Set-Content -LiteralPath ($ReadyFile+'.partial') -Encoding UTF8
+    Move-Item -LiteralPath ($ReadyFile+'.partial') -Destination $ReadyFile
+    $ready|ConvertTo-Json -Depth 4 -Compress|Write-Output
     $deadline=[datetime]::UtcNow.AddSeconds(55)
     $pollClock=[Diagnostics.Stopwatch]::StartNew();$previousPoll=0
     do {

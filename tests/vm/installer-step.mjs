@@ -1,4 +1,4 @@
-// Each invocation is the direct Node root of a fresh existing BoundedProcess Job.
+// Each invocation is the Node sibling root of a fresh test-only InstallerBoundedProcess Job.
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import {spawn} from 'node:child_process';
@@ -14,25 +14,40 @@ const persist=async()=>{result.finishedUtc=new Date().toISOString();await writeF
 async function within(promise,milliseconds,code){let timer;try{return await Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error(code)),milliseconds);})]);}finally{clearTimeout(timer);}}
 const budget=Number(budgetText);
 const timer=setTimeout(async()=>{result.failure??=errorValue(new Error('STEP_DRIVER_DEADLINE'));try{await persist();}finally{process.exit(1);}},Math.max(1000,budget-2000));
-const powershell=path.join(process.env.WINDIR,'System32/WindowsPowerShell/v1.0/powershell.exe');
 const expectedJobScope={LimitFlags:0x2208,ActiveProcessLimit:16,JobMemoryBytes:2147483648,CpuFlags:5,CpuRate:2500};
 let observer;
 let observerClosed;
+let controllerReceipt;
+async function boundedJson(filename){const bytes=await readFile(filename);assert.ok(bytes.length<=8192,'Bounded controller/ready JSON required');return parse(bytes.toString('utf8'));}
 async function startObserver(){
-  const stopFile=path.join(output,'observer-stop.json');
-  const viewFile=path.join(output,'job-observation.json');
-  // MUST be the first child spawn. Pinned libuv detached spawning skips its private
-  // breakaway Job; it does not request CREATE_BREAKAWAY_FROM_JOB. Retain pipes/handle.
-  observer=spawn(powershell,['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',path.join(kit,'harness/Observe-InstallerJob.ps1'),'-DriverPid',String(process.pid),'-StopFile',stopFile,'-ResultFile',viewFile],{detached:true,shell:false,windowsHide:true,stdio:['ignore','pipe','pipe']});
-  let text='';let errors='';
-  observer.stderr.on('data',chunk=>{errors=(errors+chunk).slice(0,8192);});
-  observerClosed=new Promise((resolve,reject)=>{observer.once('error',reject);observer.once('close',(code,signal)=>resolve({code,signal,stderr:errors}));});
-  const ready=await within(new Promise((resolve,reject)=>{
-    observer.stdout.on('data',chunk=>{text=(text+chunk).slice(0,8192);if(text.includes('\n')){try{const ready=parse(text.split(/\r?\n/)[0]);assert.equal(ready.ready,true);assert.equal(ready.observerPid,observer.pid);assert.deepEqual(ready.jobScope,expectedJobScope);resolve(ready);}catch(error){reject(error);}}});
-    observer.once('error',reject);observer.once('exit',()=>reject(new Error('OBSERVER_EXIT_BEFORE_READY')));
-  }),12000,'OBSERVER_START_TIMEOUT');
-  result.observerLaunch={firstChild:true,detached:true,unref:false,jobScope:ready.jobScope};
+  const stopFile=path.join(output,'observer-stop.json');const viewFile=path.join(output,'job-observation.json');
+  const launch=result.observerLaunch={mode:'native-sibling',ready:false,receipt:null,readyProof:null,exitReceipt:null,
+    stdoutPath:path.join(output,'job/observer-stdout.log'),stderrPath:path.join(output,'job/observer-stderr.log'),drainFailure:null};
+  controllerReceipt=await boundedJson(path.join(output,'job/controller-receipt.json'));launch.receipt=controllerReceipt;
+  const receipt=controllerReceipt;
+  assert.equal(receipt.driverPid,process.pid);assert.ok(Number.isSafeInteger(receipt.observerPid)&&receipt.observerPid>0);
+  assert.ok(Number.isSafeInteger(receipt.controllerPid)&&receipt.controllerPid>0);
+  assert.equal(new Set([process.pid,receipt.observerPid,receipt.controllerPid]).size,3);
+  assert.equal(receipt.nodeExecutable,path.join(kit,'tools/node.exe'));assert.equal(receipt.observerScript,path.join(kit,'harness/Observe-InstallerJob.ps1'));
+  assert.equal(receipt.atomicJobAssignment,true);assert.equal(receipt.jobHandleInherited,false);
+  assert.deepEqual({LimitFlags:receipt.limitFlags,ActiveProcessLimit:receipt.processLimit,JobMemoryBytes:receipt.jobMemoryBytes,CpuFlags:receipt.cpuFlags,CpuRate:receipt.cpuRate},expectedJobScope);
+  const ready=await boundedJson(path.join(output,'observer-ready.json'));launch.readyProof=ready;
+  assert.equal(ready.ready,true);assert.equal(ready.driverPid,process.pid);assert.equal(ready.observerPid,receipt.observerPid);assert.equal(ready.controllerPid,receipt.controllerPid);
+  assert.equal(ready.parentProcessId,receipt.controllerPid);assert.equal(ready.driverParentProcessId,receipt.controllerPid);
+  assert.equal(ready.driverImage.toLowerCase(),path.join(kit,'tools/node.exe').toLowerCase());
+  assert.equal(ready.controllerImage.toLowerCase(),'c:\\windows\\system32\\windowspowershell\\v1.0\\powershell.exe');
+  assert.equal(ready.initialPids.length,2);assert.deepEqual(new Set(ready.initialPids),new Set([process.pid,receipt.observerPid]));assert.deepEqual(ready.jobScope,expectedJobScope);
+  observer={pid:receipt.observerPid};launch.ready=true;
   return {stopFile,viewFile};
+}
+async function nativeObserverExit(){
+  for(;;){
+    let exit;
+    try{exit=await boundedJson(path.join(output,'job/observer-exit.json'));}catch(error){if(error.code!=='ENOENT')throw error;await new Promise(resolve=>setTimeout(resolve,20));continue;}
+    result.observerLaunch.exitReceipt=exit;
+    assert.equal(exit.controllerPid,controllerReceipt.controllerPid);assert.equal(exit.driverPid,process.pid);assert.equal(exit.observerPid,observer.pid);assert.equal(exit.signaled,true);
+    return {code:exit.exitCode,signal:null};
+  }
 }
 async function primary(executable,args){
   result.primary={executable,args,pid:null,exitCode:null,signal:null};
@@ -114,9 +129,13 @@ try{
     else if(step==='smoke')await smoke(executable);
     else throw new Error('UNKNOWN_INSTALLER_STEP');
   }finally{await writeFile(observed.stopFile,'{}\n');}
-  const observerExit=await observerClosed;assert.equal(observerExit.code,0);assert.equal(observerExit.signal,null);
+  observerClosed=nativeObserverExit();const observerExit=await observerClosed;assert.equal(observerExit.code,0);assert.equal(observerExit.signal,null);
   result.observer=parse(await readFile(observed.viewFile,'utf8'));assert.equal(result.observer.passed,true);assert.equal(result.observer.drained,true);
   assert.deepEqual(result.observer.jobScope,expectedJobScope);
+  assert.equal(result.observer.controllerPid,controllerReceipt.controllerPid);assert.equal(result.observer.observerPid,observer.pid);
+  assert.equal(result.observer.parentProcessId,controllerReceipt.controllerPid);assert.equal(result.observer.driverParentProcessId,controllerReceipt.controllerPid);
+  assert.equal(result.observer.driverImage.toLowerCase(),path.join(kit,'tools/node.exe').toLowerCase());
+  assert.equal(result.observer.controllerImage.toLowerCase(),'c:\\windows\\system32\\windowspowershell\\v1.0\\powershell.exe');
   assert.deepEqual(new Set(result.observer.finalPids),new Set([process.pid,observer.pid]));
   if(step!=='smoke'){
     const event=step==='update'?'updated':step==='uninstall'?'uninstall':'install';
@@ -135,6 +154,12 @@ try{
   }
   result.passed=true;
 }catch(error){result.failure=errorValue(error);}
-finally{clearTimeout(timer);await persist();}
+finally{
+  if(result.failure&&observerClosed){
+    try{await within(observerClosed,1000,'OBSERVER_FAILURE_DRAIN_TIMEOUT');}
+    catch(error){result.observerLaunch.drainFailure=errorValue(error);}
+  }
+  clearTimeout(timer);await persist();
+}
 // Node remains alive until the observer saw all installer/helper descendants exit naturally.
 process.exit(result.passed?0:1);
