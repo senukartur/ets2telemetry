@@ -32,7 +32,7 @@ if ($spResult -ne 0) { throw "Smoke failed: preserve the receipt and job logs" }
 
 ## Game DLL installation/removal
 
-The coordinator must coordinate a concrete session before any game-file changes. No installation or game launch was performed during implementation. The game and TruckersMP must be closed before changing the DLL. Never use broad process kills or remove other plugins. Use a separate game test profile where practical; this spike never writes telemetry history.
+The coordinator must coordinate a concrete session before any game-file changes. The initial implementation stage did not install or launch games; the later owner-coordinated [G01 session](sessions/sp01-g01.md) installed and removed only the two project files. The game and TruckersMP must be closed before changing the DLL. Never use broad process kills or remove other plugins. Use a separate game test profile where practical; this spike never writes telemetry history.
 
 1. Inspect the selected absolute game root and exact `bin\win_x64` executable, including version. Reject reparse-point roots/plugin paths, unexpected executable names, and unresolved paths. Check all `eurotrucks2` and `amtrucks` processes are absent; if discovery fails or either is running, stop. Keep the games closed throughout the operation.
 2. Hash the frozen built DLL. Inspect the exact destination `bin\win_x64\plugins\ets2telemetry_sp01.dll`. If it already exists without a matching prior project install receipt, **stop**; never overwrite unknown data. Inventory unrelated DLL names/hashes read-only.
@@ -44,7 +44,21 @@ For a manually coordinated app session, use an isolated absolute profile and one
 
 ```powershell
 $spSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-& ./node_modules/electron/dist/electron.exe ./experiments/sp01/app/main.cjs --game=eut2 "--sid=$spSid" "--profile=$PWD/.local/sp01-game-profile-<unique-session>"
+$spRunAsNodePresent = Test-Path Env:ELECTRON_RUN_AS_NODE
+$spRunAsNodeValue = $env:ELECTRON_RUN_AS_NODE
+try {
+  Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
+  if (Test-Path Env:ELECTRON_RUN_AS_NODE) { throw 'Electron run-as-node environment remains present' }
+  & ./node_modules/electron/dist/electron.exe ./experiments/sp01/app/main.cjs --game=eut2 "--sid=$spSid" "--profile=$PWD/.local/sp01-game-profile-<unique-session>"
+} finally {
+  if ($spRunAsNodePresent) {
+    [Environment]::SetEnvironmentVariable('ELECTRON_RUN_AS_NODE', $spRunAsNodeValue, 'Process')
+  } else {
+    Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
+  }
+}
 ```
 
 Select `--game=ats` for ATS. The overlay starts hidden; use the tray's **Exit SP-01** action for full exit. There is no main recording window in this speed/fuel experiment. The command is a manual session entrypoint, not authorization to run it automatically. Bound the app using the coordinator's reviewed owned-process launcher and isolated environment; actual game sessions need a separately agreed duration rather than silently raising the automated smoke deadline.
+
+On PowerShell 7.6.5, `SetEnvironmentVariable(name, $null, 'Process')` left `ELECTRON_RUN_AS_NODE` present with an empty value. The first G01 app launch consequently ran as Node and failed before game launch. Explicit environment-provider removal, absence assertion and restoration of original presence/value passed inert absent/empty/value checks; the corrected reviewed manual launcher used that sequence. Preserve failed receipts. This finding does not explain the earlier ET-001 host freeze or Playwright timeouts. The G01 evidence reader also needed a reviewed narrow read-only exception for the standard OneDrive Documents game-log alias; this does not relax installation/removal reparse guards or authorize arbitrary alias traversal.

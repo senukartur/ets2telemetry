@@ -6,15 +6,15 @@ Recorded October 11, 2026. Base: `e4f0324eafd3a90e0274f6c42a9e54f90f780ae6`. Bra
 
 | Criterion / regression | Evidence | State |
 | --- | --- | --- |
-| Project-owned SDK-derived C++17 x64 DLL | Release build with MSVC `/W4 /WX`; official SDK license retained | Passed build; actual load pending |
+| Project-owned SDK-derived C++17 x64 DLL | Release build with MSVC `/W4 /WX`; official SDK license retained; fresh G01 game-log project load/API lines | Passed build; actual ETS2 load observed on `fc806886`; other game sessions pending |
 | Short callback copying, unavailable/zero, SDK units, pause/reset | `sp01_sdk_lifecycle` console harness compiles the plugin source and supplies synthetic SDK callbacks; both game IDs, registration error, unsupported API/game, duplicate init and repeat shutdown | Passed; no actual SDK invocation claim |
 | Bounded queues/frame serialization | `sp01_native` queue overflow/order/empty and finite/null/zero checks | Passed |
 | Local user DACL, one server, actual pipe, reconnect, stalled consumer and shutdown / partial REG-011 | `sp01_native` inspects exact ACE SID, rejects server collision, reads actual unique named pipe, reconnects, stops an unread client, tests absent reader | Passed in bounded Job; different-user/remote-client attempts not executed |
 | Frame validation / partial REG-009, REG-010 | Six Node test groups: split/coalesced frames, uint64 precision, sequence/session rejection, malformed/version/game/value/window bounds, unavailable/zero, field stripping | Passed |
 | Functional React overlay and TypeScript | Vite build and spike-specific strict typecheck | Passed build |
-| Native pipe → utilityProcess → secure preload → renderer → disconnect/normal shutdown | Coordinator smoke of `d711834` verified synthetic 90 km/h / 800.0 L, renderer security, unavailable readings after source disconnect, normal source/app/service exits and disposed Playwright connection | Passed synthetic desktop boundary; actual game behavior pending |
-| Foreground/minimize/focus/click-through/DPI / REG-016 | Native PID foreground predicate and Electron flags implemented; [actual checklist](game-checklist.md) | Mandatory game evidence pending |
-| Both TruckersMP borderless sessions, one SP windowed and one Convoy session | [SP-01 matrix](game-checklist.md) | Pending |
+| Native pipe → utilityProcess → secure preload → renderer → disconnect/normal shutdown | Coordinator smoke of `d711834` verified synthetic 90 km/h / 800.0 L, renderer security, unavailable readings after source disconnect, normal source/app/service exits and disposed Playwright connection; G01 owner observed visible changing values | Passed synthetic desktop boundary; partial actual ETS2 observations; no exact value or actual normal-shutdown proof |
+| Foreground/minimize/focus/click-through/DPI / REG-016 | Native PID foreground predicate and Electron flags implemented; G01 owner observed Alt+Tab disappearance, explicitly did not test return; [actual checklist](game-checklist.md) | Partial Alt+Tab observation; other mandatory game evidence pending |
+| Both TruckersMP borderless sessions, one SP windowed and one Convoy session | [SP-01 matrix](game-checklist.md), [G01 record](sessions/sp01-g01.md) | G01 partial; G02/G03/G04 pending |
 | 200 ms display latency, frame-time impact and longer stability | No clock mapping or game measurement yet | Unmeasured |
 
 No production integrity, durable events/ACKs, storage, migrations, sampling, packaged distribution or full ET-009 coverage is claimed. The native SDK test is a console harness compiling the same source with an isolated test pipe suffix, not a real-game DLL load test. The DLL has no test suffix override. The synthetic app smoke cannot prove click-through/input focus or game compatibility.
@@ -56,11 +56,23 @@ Windows Steam registry points to `C:\Program Files (x86)\Steam`. Its actual `ste
 | TruckersMP launcher | `%LOCALAPPDATA%\TruckersMP\app-1.3.13\TruckersMP-Launcher.exe`; file/product 1.3.13. This identifies the installed launcher, not a connected multiplayer client/server session |
 | Host | Windows 11 Home 10.0.26200/build 26200; Intel Core i7-13700KF; NVIDIA GeForce RTX 4070 Ti, driver 32.0.16.1714 |
 
-No `eurotrucks2` or `amtrucks` process was found in the read-only process inventory. No project DLL was installed or removed, no game/client launched, and no accounts or game profiles were changed. Monitor/DPI, RAM, privileges and actual-session client version remain to be recorded when testing.
+At that discovery stage, no `eurotrucks2` or `amtrucks` process was found, no project DLL was installed or removed, and no game/client launched or accounts/game profiles changed. This historical discovery is separate from the later G01 installation/session/removal. Actual-session client version and remaining environment metadata are not established by discovery alone.
+
+## Partial actual ETS2 TruckersMP session: SP01-G01
+
+The [sanitized G01 record](sessions/sp01-g01.md) records October 11 evidence against source `fc80688653588ce82375e6b93319091d31063c1d`; later documentation commits are not relabeled as runtime-tested. ETS2 executable version was **1.61.1.1**, Steam build **25482642**. Fresh project-only game-log lines confirmed the DLL loaded, telemetry API **1.01**, game ID **eut2** and telemetry game API **1.20**, with zero project lines in the before capture. SDK archive **1.15** and the frozen DLL hashes are those above. The owner explicitly confirmed TruckersMP and borderless mode; the exact multiplayer client version was not collected. Launcher **1.3.13** remains a discovery identity, not the session's client build.
+
+The owner observed the overlay visible with changing values and disappearing after Alt+Tab. Readings seemed to match at first glance; exact stopped/reverse/fuel-unit accuracy was not verified. Return after Alt+Tab was explicitly not tested. Input pass-through/nonfocus, minimize/restore, DPI/monitor changes, pause/reset, game-first/reconnect and natural tray/service exit remain pending. Two cumulative OS CPU/memory samples do not prove frame-time impact, comparable with/without performance, latency or longer stability.
+
+Preserved failures include the initial before-capture rejection of the standard OneDrive Documents game-log reparse alias and the first app launch returning **1** with Electron `app` undefined under embedded Node **24.21.0**. The narrow reviewed read-only alias exception retained mutation guards. PowerShell **7.6.5** left run-as-node present-empty after a null environment assignment; explicit removal/assertion/restoration passed three inert environment cases before the corrected launcher ran. These launcher findings do not establish the cause of earlier ET-001 freezes or Playwright timeouts.
+
+The corrected owner-approved 600,000 ms app run lasted **10:03:01.6248125–10:13:02.2559046 UTC** (about 600.63 s wrapper wall time), under 16-process / 2 GiB / 25% CPU / kill-on-close Job limits; the game was outside that Job. It ended by deadline cleanup with **124**, not normal tray/service shutdown, and no app descendants survived. The game remained running until the owner closed it; the app deadline does not establish a game hang. The original install receipt was copied byte-identically with continuation provenance; there was no reinstall. The two project files installed at **09:58:50.5225498 UTC** were removed at **10:15:06.296 UTC** after games/client were absent. Independent cleanup verification found both files absent, all nine unrelated plugin hashes identical and no game/app processes.
+
+Raw receipts remain ignored under `.local/sp01-manual/g01-20261011-session1`, `g01-20261011-session2` and `g01-preparation` in the coordinator's control checkout. No raw game logs, personal paths, SID, player/account data or isolated browser-profile files are copied into Git. This is partial actual-session evidence, not a callback capture corpus, CAP-01, real history, production ACK evidence or complete SP-01 acceptance.
 
 ## Decision
 
-**Continue to coordinated manual validation; acceptance/proceed decision remains pending.** Build, isolated native/protocol checks and the corrected synthetic desktop pass support preparing the sessions. They do not support marking TruckersMP compatible or unlocking ET-002a. Keep the PR draft and the ET-009 parent open. Retire/promote the experiment only after recording the required actual evidence and resolving observed failures.
+**Continue to coordinated manual validation; acceptance/proceed decision remains pending.** Build, isolated native/protocol checks, the corrected synthetic desktop pass and partial G01 observations support continuing the required sessions. They do not support marking full TruckersMP compatibility or unlocking ET-002a. Keep [PR #8](https://github.com/senukartur/ets2telemetry/pull/8) draft and the ET-009 parent open. Retire/promote the experiment only after recording the required actual evidence and resolving observed failures.
 
 ## Primary sources
 
