@@ -210,10 +210,12 @@ export function encodeFrame(message: ProtocolMessage): Uint8Array {
 }
 export class FrameDecoder {
   private header = new Uint8Array(4); private headerUsed = 0;
-  private payload: Uint8Array | undefined; private payloadUsed = 0; private failed = false;
+  private payload: Uint8Array | undefined; private payloadUsed = 0; private failed = false; private pushing = false;
   // Emit immediately; the decoder never accumulates an unbounded result list for a large chunk.
   push(chunk: Uint8Array, emit: (message: ProtocolMessage) => void): void {
     if (this.failed) throw new ProtocolError('Decoder is closed');
+    if (this.pushing) { this.failed = true; this.payload = undefined; throw new ProtocolError('Recursive decoding is unsupported'); }
+    this.pushing = true;
     try {
       let offset = 0;
       while (offset < chunk.length) {
@@ -228,9 +230,11 @@ export class FrameDecoder {
         this.payload.set(chunk.subarray(offset, offset + n), this.payloadUsed); this.payloadUsed += n; offset += n;
         if (this.payloadUsed === this.payload.length) {
           const message = decodePayload(this.payload); this.payload = undefined; this.headerUsed = 0; emit(message);
+          if (this.failed) return;
         }
       }
     } catch (error) { this.failed = true; this.payload = undefined; throw error; }
+    finally { this.pushing = false; }
   }
   end(): void { const truncated = this.failed || this.headerUsed !== 0 || !!this.payload; this.failed = true; this.payload = undefined; if (truncated) throw new ProtocolError('Truncated or failed stream'); }
 }

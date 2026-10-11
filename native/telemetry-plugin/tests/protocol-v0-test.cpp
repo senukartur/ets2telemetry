@@ -106,6 +106,25 @@ int main(int argc, char** argv) {
     FrameDecoder exact_decoder; unsigned exact_count = 0; exact_decoder.push(exact_frame.data(), exact_frame.size(), [&](Message) { ++exact_count; }); exact_decoder.end(); check(exact_count == 1, "exact frame bound");
     std::vector<std::uint8_t> bad{1, 0, 0, 0, '{'}; bad.insert(bad.end(), hello.begin(), hello.end()); FrameDecoder malformed; unsigned emitted = 0;
     rejects([&] { malformed.push(bad.data(), bad.size(), [&](Message) { ++emitted; }); }, "malformed combined stream"); check(emitted == 0, "no resynchronization");
+    auto two_hellos = hello; two_hellos.insert(two_hellos.end(), hello.begin(), hello.end());
+    FrameDecoder callback_close; unsigned close_emitted = 0;
+    callback_close.push(two_hellos.data(), two_hellos.size(), [&](Message) { if (++close_emitted == 1) callback_close.end(); });
+    check(close_emitted == 1, "callback closure stops remaining chunk");
+    rejects([&] { callback_close.push(hello.data(), hello.size(), [](Message) {}); }, "callback-closed decoder stays closed");
+    FrameDecoder recursive; unsigned recursive_emitted = 0;
+    rejects([&] { recursive.push(hello.data(), hello.size(), [&](Message) {
+      ++recursive_emitted; recursive.push(hello.data(), hello.size(), [&](Message) { ++recursive_emitted; });
+    }); }, "recursive push rejected");
+    check(recursive_emitted == 1, "recursive push emits no nested frames");
+    rejects([&] { recursive.push(hello.data(), hello.size(), [](Message) {}); }, "recursive decoder stays closed");
+    FrameDecoder caught_recursive; unsigned caught_emitted = 0; bool caught_rejection = false;
+    caught_recursive.push(two_hellos.data(), two_hellos.size(), [&](Message) {
+      ++caught_emitted;
+      try { caught_recursive.push(hello.data(), hello.size(), [&](Message) { ++caught_emitted; }); }
+      catch (const ProtocolError&) { caught_rejection = true; }
+    });
+    check(caught_rejection && caught_emitted == 1, "caught recursive error still stops remaining chunk");
+    rejects([&] { caught_recursive.push(hello.data(), hello.size(), [](Message) {}); }, "caught recursive decoder stays closed");
     Consumer consumer(true); consumer.accept(load("welcome")); consumer.accept(cp); auto skip = consumer.accept(load("snapshot"));
     check(skip->skipped_sequences == 3 && skip->continuity.lost_observations == 2, "skip is distinct from loss");
     consumer.accept(load("max-uint64")); rejects([&] { consumer.accept(load("snapshot")); }, "sequence exhaustion does not wrap");

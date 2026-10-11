@@ -164,6 +164,8 @@ Measure normalize_sdk_measurement(SdkField field, Available<double> input) {
 }
 void FrameDecoder::push(const std::uint8_t* data, std::size_t size, const std::function<void(Message)>& emit) {
   if (failed_) throw ProtocolError("Decoder is closed");
+  if (pushing_) { failed_ = true; payload_.clear(); throw ProtocolError("Recursive decoding is unsupported"); }
+  pushing_ = true;
   try {
     std::size_t offset = 0;
     while (offset < size) {
@@ -174,9 +176,13 @@ void FrameDecoder::push(const std::uint8_t* data, std::size_t size, const std::f
         if (!length || length > max_frame_bytes) fail(); expected_ = length; payload_.reserve(expected_);
       }
       const auto n = std::min(expected_ - payload_.size(), size - offset); payload_.append(reinterpret_cast<const char*>(data + offset), n); offset += n;
-      if (payload_.size() == expected_) { auto m = decode_payload(payload_); payload_.clear(); expected_ = 0; header_used_ = 0; emit(std::move(m)); }
+      if (payload_.size() == expected_) {
+        auto m = decode_payload(payload_); payload_.clear(); expected_ = 0; header_used_ = 0; emit(std::move(m));
+        if (failed_) break;
+      }
     }
-  } catch (...) { failed_ = true; payload_.clear(); throw; }
+    pushing_ = false;
+  } catch (...) { pushing_ = false; failed_ = true; payload_.clear(); throw; }
 }
 void FrameDecoder::end() {
   const auto truncated = failed_ || header_used_ != 0 || expected_ != 0; failed_ = true; payload_.clear();

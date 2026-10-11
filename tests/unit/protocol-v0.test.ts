@@ -109,6 +109,27 @@ describe('bounded framing', () => {
     const found: ProtocolMessage[] = []; const decoder = new FrameDecoder(); expect(() => decoder.push(chunk, m => found.push(m))).toThrow();
     expect(found).toEqual([]); expect(() => decoder.push(good, m => found.push(m))).toThrow();
   });
+  it('stops the remaining chunk when the emit callback closes the decoder', () => {
+    const frame = encodeFrame(message('hello')); const combined = new Uint8Array(frame.length * 2);
+    combined.set(frame); combined.set(frame, frame.length); const decoder = new FrameDecoder(); let emitted = 0;
+    decoder.push(combined, () => { emitted++; if (emitted === 1) decoder.end(); });
+    expect(emitted).toBe(1); expect(() => decoder.push(frame, () => {})).toThrow(ProtocolError);
+  });
+  it('rejects recursive push calls from emit callbacks and closes the decoder', () => {
+    const frame = encodeFrame(message('hello')); const decoder = new FrameDecoder(); let emitted = 0;
+    expect(() => decoder.push(frame, () => { emitted++; decoder.push(frame, () => { emitted++; }); })).toThrow(ProtocolError);
+    expect(emitted).toBe(1); expect(() => decoder.push(frame, () => {})).toThrow(ProtocolError);
+  });
+  it('stops later frames even when the callback catches a recursive push error', () => {
+    const frame = encodeFrame(message('hello')); const combined = new Uint8Array(frame.length * 2);
+    combined.set(frame); combined.set(frame, frame.length); const decoder = new FrameDecoder(); let emitted = 0; let rejected = false;
+    decoder.push(combined, () => {
+      emitted++;
+      try { decoder.push(frame, () => { emitted++; }); } catch (error) { rejected = error instanceof ProtocolError; }
+    });
+    expect(rejected).toBe(true); expect(emitted).toBe(1);
+    expect(() => decoder.push(frame, () => {})).toThrow(ProtocolError);
+  });
 });
 
 describe('REG-003/005 checkpoint and ordering (no gameplay effects)', () => {

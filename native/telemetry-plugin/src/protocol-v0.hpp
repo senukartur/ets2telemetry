@@ -72,7 +72,7 @@ class FrameDecoder {
   void end();
  private:
   std::uint8_t header_[4]{}; std::size_t header_used_ = 0, expected_ = 0;
-  std::string payload_; bool failed_ = false;
+  std::string payload_; bool failed_ = false, pushing_ = false;
 };
 struct AppliedState { bool hydration = false; std::uint64_t skipped_sequences = 0; Continuity continuity; };
 class Consumer {
