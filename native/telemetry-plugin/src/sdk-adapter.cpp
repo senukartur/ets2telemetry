@@ -138,7 +138,7 @@ scs_result_t Adapter::initialize(scs_u32_t version, const scs_telemetry_init_par
       published_ = {}; unread_ = false;
       producer_ = {}; consumer_.store(0, std::memory_order_release); discarded_observations_.store(0, std::memory_order_relaxed);
     }
-    clock_epoch_ = 0;
+    clock_epoch_ = 0; observed_in_frame_.fill(false); in_frame_ = false;
     producer_.identity.game_id.assign(input.common.game_id); producer_.identity.game.assign(ets2 ? "ets2" : "ats");
     producer_.identity.api_version = version; producer_.identity.game_telemetry_version = input.common.game_version;
     producer_.identity.process_id = GetCurrentProcessId();
@@ -200,7 +200,7 @@ void Adapter::cleanup() noexcept {
     registered_events_[i] = false;
     try { api_.unregister_from_event(i); } catch (...) { failure(); }
   }
-  initialized_ = false; api_ = {}; producer_.active = false; source_live_.store(false, std::memory_order_release); producer_.state.simulation = Simulation::unavailable;
+  initialized_ = false; api_ = {}; observed_in_frame_.fill(false); in_frame_ = false; producer_.active = false; source_live_.store(false, std::memory_order_release); producer_.state.simulation = Simulation::unavailable;
   increment(producer_.continuity.lost_observations); // Shutdown boundary itself is not durable evidence.
   consumer_.store(0, std::memory_order_release); gate_diagnostics();
   publish();
@@ -217,11 +217,19 @@ void Adapter::clock_restart() noexcept {
   ++clock_epoch_;
   constexpr char hex[] = "0123456789abcdef";
   for (unsigned i = 0; i < 12; ++i) producer_.state.game_clock_id.bytes[35 - i] = hex[(clock_epoch_ >> (i * 4)) & 15];
-  producer_.state.game_time_minutes = {};
-  producer_.state.world_placement = {};
-  if (!registered_channels_[static_cast<std::size_t>(Field::world_placement)]) producer_.state.world_placement.status = Availability::not_supported;
-  // The previous truck readings belong to an unknown continuation after a timer reset.
-  for (std::size_t i = 0; i < producer_.state.channels.size(); ++i) if (registered_channels_[i]) producer_.state.channels[i] = {};
+  const auto game_time = static_cast<std::size_t>(Field::game_time);
+  const auto placement = static_cast<std::size_t>(Field::world_placement);
+  if (!(in_frame_ && observed_in_frame_[game_time])) {
+    producer_.state.game_time_minutes = {};
+    if (!registered_channels_[game_time]) producer_.state.game_time_minutes.status = Availability::not_supported;
+  }
+  if (!(in_frame_ && observed_in_frame_[placement])) {
+    producer_.state.world_placement = {};
+    if (!registered_channels_[placement]) producer_.state.world_placement.status = Availability::not_supported;
+  }
+  // Channel order is unspecified: retain observations from this actual frame,
+  // while invalidating only prior cache values from an ambiguous continuation.
+  for (std::size_t i = 0; i < producer_.state.channels.size(); ++i) if (registered_channels_[i] && !(in_frame_ && observed_in_frame_[i])) producer_.state.channels[i] = {};
 }
 bool Adapter::diagnostics_enabled() const noexcept { return consumer_.load(std::memory_order_acquire) == 3; }
 void Adapter::gate_diagnostics() noexcept {
@@ -301,7 +309,9 @@ void Adapter::event(scs_event_t event_id, const void* info) {
       if (!(consumer_.load(std::memory_order_acquire) & 1)) increment(producer_.continuity.offline_transitions);
       observe(ObservationKind::lifecycle, "simulation", event_id == SCS_TELEMETRY_EVENT_started ? "started" : "paused", SCS_U32_NIL, nullptr); break;
     case SCS_TELEMETRY_EVENT_frame_start:
+      observed_in_frame_.fill(false); in_frame_ = false;
       if (info) {
+        in_frame_ = true;
         const auto& frame = *static_cast<const scs_telemetry_frame_start_t*>(info);
         if ((frame.flags & SCS_TELEMETRY_FRAME_START_FLAG_timer_restart) || (producer_.state.frame_available && (frame.render_time < producer_.state.frame.render_time || frame.simulation_time < producer_.state.frame.simulation_time || frame.paused_simulation_time < producer_.state.frame.paused_simulation_time))) {
           clock_restart(); observe(ObservationKind::lifecycle, "timers", "restart", SCS_U32_NIL, nullptr);
@@ -309,7 +319,8 @@ void Adapter::event(scs_event_t event_id, const void* info) {
         }
         producer_.state.frame = frame; producer_.state.frame_available = true;
       } else failure(); break;
-    case SCS_TELEMETRY_EVENT_frame_end: publish(); break;
+    case SCS_TELEMETRY_EVENT_frame_end:
+      publish(); observed_in_frame_.fill(false); in_frame_ = false; break;
     default: failure(); break;
   }
 }
@@ -322,6 +333,7 @@ void Adapter::channel(Field field, const scs_value_t* value) {
     producer_.state.world_placement.status = value && value->type != SCS_VALUE_TYPE_dplacement ? Availability::invalid : copied.status;
     if (producer_.state.world_placement.status == Availability::available) producer_.state.world_placement.value = copied.placement;
   } else producer_.state.channels[i] = measurement(value, spec.type, spec.multiplier, spec.minimum, spec.maximum);
+  if (in_frame_) observed_in_frame_[i] = true;
   if (field == Field::game_time) {
     if (value && value->type == SCS_VALUE_TYPE_u32 && producer_.state.game_time_minutes.status == Availability::available && value->value_u32.value < producer_.state.game_time_minutes.value) {
       clock_restart(); observe(ObservationKind::lifecycle, "game.time", "regression", SCS_U32_NIL, nullptr);

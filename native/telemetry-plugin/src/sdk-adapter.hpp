@@ -86,7 +86,7 @@ struct Snapshot {
 };
 
 // SDK calls and mutable producer state belong exclusively to the SDK calling thread.
-  // read_latest / read_current / set_consumer are the only methods for a future transport thread.
+// read_latest / read_current / set_consumer are the only methods for a future transport thread.
 // No SDK-owned pointers or C++ allocations cross the DLL boundary.
 class Adapter final {
  public:
@@ -123,6 +123,9 @@ class Adapter final {
   std::array<bool, 7> registered_events_{};
   std::array<bool, static_cast<std::size_t>(Field::count)> registered_channels_{};
   std::array<Context, static_cast<std::size_t>(Field::count)> contexts_{};
+  // Only explicit SDK frame boundaries establish that a reading belongs to the current frame.
+  std::array<bool, static_cast<std::size_t>(Field::count)> observed_in_frame_{};
+  bool in_frame_ = false;
   std::uint64_t clock_epoch_ = 0;
   std::int64_t monotonic_origin_ = 0, monotonic_frequency_ = 0;
 };

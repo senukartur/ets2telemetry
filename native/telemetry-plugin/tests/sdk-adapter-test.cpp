@@ -1,4 +1,5 @@
 #include "sdk-adapter.hpp"
+#include <algorithm>
 #include <cmath>
 #include <future>
 #include <iostream>
@@ -209,8 +210,75 @@ void failure_cleanup() {
   auto adapter = std::make_unique<Adapter>(); Host host; auto params = host.params(); host.erroneous = "truck.engine.rpm";
   require(adapter->initialize(SCS_TELEMETRY_VERSION_1_01, &params) == SCS_RESULT_generic_error && host.channels.empty() && host.events.empty(), "unexpected channel registration errors fail closed");
 }
+void missing_game_time_reset() {
+  auto adapter = std::make_unique<Adapter>(); Host host; host.missing = "game.time"; auto params = host.params();
+  require(adapter->initialize(SCS_TELEMETRY_VERSION_1_01, &params) == SCS_RESULT_ok, "missing game-time reset init"); auto initial = read(*adapter);
+  require(initial->state.game_time_minutes.status == Availability::not_supported, "missing game-time capability before restart");
+  scs_telemetry_frame_start_t frame{}; frame.flags = SCS_TELEMETRY_FRAME_START_FLAG_timer_restart;
+  host.event(SCS_TELEMETRY_EVENT_frame_start, &frame); host.frame_end(); auto reset = read(*adapter);
+  require(reset->state.game_time_minutes.status == Availability::not_supported && reading(reset, Field::game_time).status == Availability::not_supported, "missing game-time typed/scalar capability survives timer restart");
+  frame.flags = 0; frame.render_time = frame.simulation_time = 100; host.event(SCS_TELEMETRY_EVENT_frame_start, &frame); host.frame_end(); read(*adapter);
+  frame.render_time = frame.simulation_time = 1; host.event(SCS_TELEMETRY_EVENT_frame_start, &frame); host.frame_end(); auto implicit = read(*adapter);
+  require(implicit->state.game_time_minutes.status == Availability::not_supported && reading(implicit, Field::game_time).status == Availability::not_supported, "missing game-time capability survives unflagged frame regression");
+  adapter->shutdown();
 }
-int main() {
-  try { lifecycle(); config_terminal_and_bounds(); clocks_and_contention(); failure_cleanup(); std::cout << "SDK adapter: " << assertions << " checks passed; snapshot bytes=" << sizeof(Snapshot) << ", adapter bytes=" << sizeof(Adapter) << "\n"; return 0; }
+void game_time_reset_callback_orders() {
+  std::array<Field, 4> order{{Field::speed, Field::fuel, Field::game_time, Field::world_placement}};
+  do {
+    auto adapter = std::make_unique<Adapter>(); Host host; auto params = host.params();
+    require(adapter->initialize(SCS_TELEMETRY_VERSION_1_01, &params) == SCS_RESULT_ok, "frame-order reset init"); read(*adapter);
+    scs_telemetry_frame_start_t frame{}; frame.render_time = frame.simulation_time = 10;
+    host.event(SCS_TELEMETRY_EVENT_frame_start, &frame);
+    auto old_time = u32(500), old_speed = floating(5), old_fuel = floating(20), old_rpm = floating(1200);
+    scs_value_t old_placement{}; old_placement.type = SCS_VALUE_TYPE_dplacement; old_placement.value_dplacement.position = {1,2,3};
+    host.channel(Field::game_time, &old_time); host.channel(Field::speed, &old_speed); host.channel(Field::fuel, &old_fuel); host.channel(Field::rpm, &old_rpm); host.channel(Field::world_placement, &old_placement); host.frame_end(); auto previous = read(*adapter);
+    frame.render_time = frame.simulation_time = 20; host.event(SCS_TELEMETRY_EVENT_frame_start, &frame);
+    auto time = u32(100), speed = floating(9), fuel = floating(30);
+    scs_value_t placement{}; placement.type = SCS_VALUE_TYPE_dplacement; placement.value_dplacement.position = {10,20,30};
+    for (auto field : order) {
+      const auto* value = field == Field::speed ? &speed : field == Field::fuel ? &fuel : field == Field::game_time ? &time : &placement;
+      host.channel(field, value);
+    }
+    host.frame_end(); auto current = read(*adapter);
+    require(reading(current, Field::speed).status == Availability::available && reading(current, Field::speed).value == 9, "current-frame speed survives late game-time regression");
+    require(reading(current, Field::fuel).status == Availability::available && reading(current, Field::fuel).value == 30, "current-frame fuel survives late game-time regression");
+    require(current->state.world_placement.status == Availability::available && current->state.world_placement.value.position.x == 10, "current-frame placement survives late game-time regression");
+    require(current->state.game_time_minutes.status == Availability::available && current->state.game_time_minutes.value == 100 && std::string(current->state.game_clock_id.c_str()) != previous->state.game_clock_id.c_str(), "same frame regressed time keeps new observation and rotates clock");
+    require(reading(current, Field::rpm).status == Availability::not_observed, "regression still clears unobserved previous-frame RPM");
+    // The next actual frame observes only the regressed clock: previous frame's fresh values are now stale.
+    frame.render_time = frame.simulation_time = 30; host.event(SCS_TELEMETRY_EVENT_frame_start, &frame); time = u32(50); host.channel(Field::game_time, &time); host.frame_end(); auto next = read(*adapter);
+    require(reading(next, Field::speed).status == Availability::not_observed && reading(next, Field::fuel).status == Availability::not_observed && next->state.world_placement.status == Availability::not_observed, "freshness expires across explicit frame boundaries");
+    adapter->shutdown();
+  } while (std::next_permutation(order.begin(), order.end()));
+}
+void game_time_reset_frame_delimitation() {
+  auto adapter = std::make_unique<Adapter>(); Host host; auto params = host.params();
+  require(adapter->initialize(SCS_TELEMETRY_VERSION_1_01, &params) == SCS_RESULT_ok, "frame-delimitation reset init"); read(*adapter);
+  scs_telemetry_frame_start_t frame{}; frame.render_time = frame.simulation_time = 10; host.event(SCS_TELEMETRY_EVENT_frame_start, &frame);
+  auto time = u32(500), speed = floating(5), fuel = floating(20);
+  scs_value_t placement{}; placement.type = SCS_VALUE_TYPE_dplacement; placement.value_dplacement.position = {1,2,3};
+  host.channel(Field::game_time, &time); host.channel(Field::speed, &speed); host.channel(Field::fuel, &fuel); host.channel(Field::world_placement, &placement); host.frame_end(); read(*adapter);
+  // These callbacks happen outside a delimited frame. A subsequent start cannot adopt them as fresh.
+  speed = floating(9); fuel = floating(30); placement.value_dplacement.position.x = 10;
+  host.channel(Field::speed, &speed); host.channel(Field::fuel, &fuel); host.channel(Field::world_placement, &placement);
+  frame.render_time = frame.simulation_time = 20; host.event(SCS_TELEMETRY_EVENT_frame_start, &frame); time = u32(100); host.channel(Field::game_time, &time); host.frame_end(); auto outside = read(*adapter);
+  require(reading(outside, Field::speed).status == Availability::not_observed && reading(outside, Field::fuel).status == Availability::not_observed && outside->state.world_placement.status == Availability::not_observed, "frame start cannot adopt preceding callbacks as current-frame readings");
+  host.event(SCS_TELEMETRY_EVENT_frame_start, nullptr);
+  host.channel(Field::speed, &speed); host.channel(Field::fuel, &fuel); host.channel(Field::world_placement, &placement); time = u32(50); host.channel(Field::game_time, &time); host.frame_end(); auto invalid_frame = read(*adapter);
+  require(reading(invalid_frame, Field::speed).status == Availability::not_observed && reading(invalid_frame, Field::fuel).status == Availability::not_observed && invalid_frame->state.world_placement.status == Availability::not_observed, "invalid frame-start payload cannot establish current-frame freshness");
+  frame.render_time = frame.simulation_time = 30; host.event(SCS_TELEMETRY_EVENT_frame_start, &frame);
+  host.channel(Field::speed, nullptr); fuel = floating(NAN); host.channel(Field::fuel, &fuel); placement.value_dplacement.position.x = NAN; host.channel(Field::world_placement, &placement);
+  time = u32(25); host.channel(Field::game_time, &time); host.frame_end(); auto unavailable = read(*adapter);
+  require(reading(unavailable, Field::speed).status == Availability::not_observed && reading(unavailable, Field::fuel).status == Availability::invalid && unavailable->state.world_placement.status == Availability::invalid, "current-frame unavailable/invalid observations retain their meanings after time reset");
+  adapter->shutdown();
+}
+}
+int main(int argc, char** argv) {
+  try {
+    if (argc == 2 && std::string(argv[1]) == "missing-game-time-reset") missing_game_time_reset();
+    else if (argc == 2 && std::string(argv[1]) == "callback-order-reset") game_time_reset_callback_orders();
+    else { lifecycle(); config_terminal_and_bounds(); clocks_and_contention(); failure_cleanup(); missing_game_time_reset(); game_time_reset_callback_orders(); game_time_reset_frame_delimitation(); }
+    std::cout << "SDK adapter: " << assertions << " checks passed; snapshot bytes=" << sizeof(Snapshot) << ", adapter bytes=" << sizeof(Adapter) << "\n"; return 0;
+  }
   catch (const std::exception& error) { std::cerr << "SDK adapter failure: " << error.what() << '\n'; return 1; }
 }
