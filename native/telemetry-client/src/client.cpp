@@ -13,6 +13,9 @@
 namespace v0 = ets2telemetry::v0;
 using v0::Json;
 namespace fs = std::filesystem;
+#ifdef ETS2TELEMETRY_CLIENT_DISCOVERY_TEST
+void discovery_before_open(const fs::path& filename);
+#endif
 void test_trace(const char* value) {
 #ifdef ETS2TELEMETRY_CLIENT_ASAN_DIAGNOSTICS
   const auto text = std::string(value) + ":" + std::to_string(GetTickCount64()) + "\n"; DWORD written = 0;
@@ -111,6 +114,16 @@ struct OwnerSecurity {
 Handle secure_file(const fs::path& filename, const Identity& identity, bool directory = false, bool discovery = false) {
   Handle file(CreateFileW(filename.c_str(), GENERIC_READ | READ_CONTROL, discovery || directory ? FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE : FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT | (directory ? FILE_FLAG_BACKUP_SEMANTICS : 0), nullptr));
   protected_owner(file.value, identity); return file;
+}
+std::optional<Handle> enumerated_discovery_file(const fs::path& filename, const Identity& identity) {
+  const auto raw = CreateFileW(filename.c_str(), GENERIC_READ | READ_CONTROL, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+  if (raw == INVALID_HANDLE_VALUE) {
+    const auto error = GetLastError();
+    // Only an enumerated record's confirmed retirement is skippable; security and lookup uncertainty stay hard.
+    if (error == ERROR_FILE_NOT_FOUND || error == ERROR_DELETE_PENDING) return std::nullopt;
+    fail();
+  }
+  Handle file(raw); protected_owner(file.value, identity); return std::optional<Handle>(std::move(file));
 }
 std::string read_bounded(HANDLE file, DWORD bound) {
   LARGE_INTEGER size{}; if (!GetFileSizeEx(file, &size) || size.QuadPart <= 0 || size.QuadPart > bound) fail();
@@ -272,7 +285,12 @@ int wmain(int argc, wchar_t** argv) {
     for (const auto& entry : fs::directory_iterator(directory)) {
       if (++visited > 256) fail();
       const auto stem = utf8(entry.path().stem().wstring()); if (!uuid(stem) || entry.path().extension() != L".json") continue;
-      if (++records > 128) fail(); auto file = secure_file(entry.path(), self, false, true); auto record = parse(read_bounded(file.value, 16384));
+      if (++records > 128) fail();
+#ifdef ETS2TELEMETRY_CLIENT_DISCOVERY_TEST
+      discovery_before_open(entry.path());
+#endif
+      auto file = enumerated_discovery_file(entry.path(), self); if (!file) continue;
+      auto record = parse(read_bounded(file->value, 16384));
       exact(record, {"schemaVersion", "protocolMajor", "game", "userTag", "windowsSessionId", "processId", "processCreationTime", "processInstanceId", "pluginSessionId", "pipeName"});
       if (integer(record.at("schemaVersion")) != 1 || integer(record.at("protocolMajor")) != 0 || record.at("userTag").string() != self.userTag || integer(record.at("windowsSessionId")) != self.session || record.at("processInstanceId").string() != stem || !uuid(record.at("pluginSessionId").string())) fail();
       if (record.at("game").string() != "ets2" && record.at("game").string() != "ats") fail();

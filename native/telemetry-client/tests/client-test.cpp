@@ -1,6 +1,8 @@
 // This is an isolated console fixture named eurotrucks2.exe; it never launches or touches a game.
 #define wmain broker_entrypoint
+#define ETS2TELEMETRY_CLIENT_DISCOVERY_TEST
 #include "../src/client.cpp"
+#undef ETS2TELEMETRY_CLIENT_DISCOVERY_TEST
 #undef wmain
 #include <fstream>
 #include <iostream>
@@ -13,6 +15,14 @@ struct TestDirectoryCleanup {
 struct JunctionCleanup {
   fs::path path;
   ~JunctionCleanup() {if (!path.empty()) RemoveDirectoryW(path.c_str());}
+};
+struct FixtureDaclRestore {
+  Handle file; OwnerSecurity security; PACL dacl = nullptr;
+  FixtureDaclRestore(const fs::path& filename, const Identity& identity) : file(CreateFileW(filename.c_str(), READ_CONTROL | WRITE_DAC | DELETE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr)), security(identity) {
+    BOOL present = FALSE, defaulted = FALSE; require(GetSecurityDescriptorDacl(security.descriptor, &present, &dacl, &defaulted) && present && dacl);
+  }
+  bool restore() {if (!dacl) return true; const auto result = SetSecurityInfo(file.value, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, nullptr, nullptr, dacl, nullptr); if (result == ERROR_SUCCESS) dacl = nullptr; else std::cerr << "fixture DACL restoration error " << result << "\n"; return result == ERROR_SUCCESS;}
+  ~FixtureDaclRestore() {restore();}
 };
 void create_junction(const fs::path& link, const fs::path& target, const Identity& identity) {
   OwnerSecurity security(identity); require(CreateDirectoryW(link.c_str(), &security.attributes) != 0);
@@ -119,6 +129,20 @@ void write_file(const fs::path& filename, const Json& value, const Identity& ide
   auto encoded = v0::detail::serialize(value); DWORD written = 0; require(WriteFile(file.value, encoded.data(), static_cast<DWORD>(encoded.size()), &written, nullptr) && written == encoded.size());
 }
 std::string file_bytes(const fs::path& filename) {std::ifstream input(filename, std::ios::binary); return std::string(std::istreambuf_iterator<char>(input), {});}
+std::string discoveryCase;
+std::optional<Handle> pendingRecord;
+void discovery_before_open(const fs::path& filename) {
+  if (discoveryCase == "retired-record") require(DeleteFileW(filename.c_str()) != 0);
+  if (discoveryCase == "delete-pending-record") {
+    pendingRecord.emplace(CreateFileW(filename.c_str(), GENERIC_READ | DELETE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+    require(DeleteFileW(filename.c_str()) != 0);
+    FILE_STANDARD_INFO info{}; require(GetFileInformationByHandleEx(pendingRecord->value, FileStandardInfo, &info, sizeof(info)) && info.DeletePending);
+    const auto raw = CreateFileW(filename.c_str(), GENERIC_READ | READ_CONTROL, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    const auto error = GetLastError(); if (raw != INVALID_HANDLE_VALUE) CloseHandle(raw); require(raw == INVALID_HANDLE_VALUE);
+    std::cerr << "actual delete-pending discovery open error " << error << "\n";
+    receipt(Json{Json::Object{{"type", Json{std::string("pending-observation")}}, {"error", Json{static_cast<double>(error)}}}});
+  }
+}
 int host(const fs::path& directory, const fs::path& fixtures, const std::string& mode) {
   Identity self(GetCurrentProcess()); OwnerSecurity security(self);
   const std::string instance = "00112233-4455-6677-8899-aabbccddeeff", plugin = "11112233-4455-6677-8899-aabbccddeeff";
@@ -179,6 +203,11 @@ int host(const fs::path& directory, const fs::path& fixtures, const std::string&
 }
 int wmain(int argc, wchar_t** argv) {
   try {
+    if (argc == 4 && std::wstring(argv[1]) == L"--discovery-case") {
+      discoveryCase = utf8(argv[3]);
+      wchar_t* arguments[] = {argv[0], const_cast<wchar_t*>(L"--game"), const_cast<wchar_t*>(L"ets2"), const_cast<wchar_t*>(L"--discovery-dir"), argv[2]};
+      return broker_entrypoint(5, arguments);
+    }
     if (argc == 5 && std::wstring(argv[1]) == L"--host") return host(argv[2], argv[3], utf8(argv[4]));
     require(argc == 3); const auto broker = std::wstring(argv[1]); const fs::path fixtures(argv[2]);
     descriptor_owner_test(Identity(GetCurrentProcess()));
@@ -187,6 +216,35 @@ int wmain(int argc, wchar_t** argv) {
     controlled_token_owner_test(base, identity);
     wchar_t selfName[32768]; const auto selfLength = GetModuleFileNameW(nullptr, selfName, 32768); require(selfLength > 0); const std::wstring self(selfName, selfLength);
     wchar_t filterBuffer[128]{}; const auto filterSize = GetEnvironmentVariableW(L"ETS2TELEMETRY_CLIENT_TEST_CASE", filterBuffer, 128); require(filterSize < 128); const auto filter = filterSize ? utf8(filterBuffer) : std::string();
+    for (const auto* mode : {"retired-record", "delete-pending-record", "denied-record", "zero-record", "short-record", "directory-record", "reparse-record"}) {
+      if (!filter.empty() && filter != mode) continue;
+      std::cerr << "case " << mode << "\n";
+      const auto directory = base / wide(mode) / "transport" / "v0"; fs::create_directory(directory.parent_path().parent_path());
+      require(CreateDirectoryW(directory.parent_path().c_str(), &security.attributes)); require(CreateDirectoryW(directory.c_str(), &security.attributes));
+      const std::string instance = "00112233-4455-6677-8899-aabbccddeeff";
+      const auto record = directory / (instance + ".json"); const std::string scenario(mode); JunctionCleanup junction; std::optional<FixtureDaclRestore> permissionRestore;
+      if (scenario == "directory-record") require(CreateDirectoryW(record.c_str(), &security.attributes));
+      else if (scenario == "reparse-record") {const auto target = directory / "junction-target"; require(CreateDirectoryW(target.c_str(), &security.attributes)); junction.path = record; create_junction(record, target, identity);}
+      else {
+        const auto endpoint = "\\\\.\\pipe\\ETS2Telemetry-ets2-v0-" + identity.userTag + "-" + std::to_string(identity.session) + "-" + instance;
+        write_file(record, Json{Json::Object{{"schemaVersion", Json{1.0}}, {"protocolMajor", Json{0.0}}, {"game", Json{std::string("ets2")}}, {"userTag", Json{identity.userTag}}, {"windowsSessionId", Json{static_cast<double>(identity.session)}}, {"processId", Json{static_cast<double>(GetCurrentProcessId())}}, {"processCreationTime", Json{std::to_string(creation(GetCurrentProcess()))}}, {"processInstanceId", Json{instance}}, {"pluginSessionId", Json{std::string("11112233-4455-6677-8899-aabbccddeeff")}}, {"pipeName", Json{endpoint}}}}, identity);
+        if (scenario == "zero-record" || scenario == "short-record") {Handle file(CreateFileW(record.c_str(), GENERIC_WRITE, 0, nullptr, TRUNCATE_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr)); if (scenario == "short-record") {DWORD written = 0; require(WriteFile(file.value, "{", 1, &written, nullptr) && written == 1);}}
+        if (scenario == "denied-record") {
+          permissionRestore.emplace(record, identity);
+          PSECURITY_DESCRIPTOR descriptor = nullptr; const auto sddl = L"D:P(D;;GR;;;" + wide(identity.sid) + L")(A;;GA;;;" + wide(identity.sid) + L")";
+          require(ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.c_str(), SDDL_REVISION_1, &descriptor, nullptr)); PACL dacl = nullptr; BOOL present = FALSE, defaulted = FALSE;
+          require(GetSecurityDescriptorDacl(descriptor, &present, &dacl, &defaulted)); const auto result = SetNamedSecurityInfoW(const_cast<wchar_t*>(record.c_str()), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, nullptr, nullptr, dacl, nullptr); LocalFree(descriptor); require(result == ERROR_SUCCESS);
+          const auto raw = CreateFileW(record.c_str(), GENERIC_READ | READ_CONTROL, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr); const auto error = GetLastError(); if (raw != INVALID_HANDLE_VALUE) CloseHandle(raw); require(raw == INVALID_HANDLE_VALUE && error == ERROR_ACCESS_DENIED);
+          std::cerr << "actual discovery access denied observed\n";
+        }
+      }
+      Child client(self, L"--discovery-case \"" + directory.wstring() + L"\" " + wide(mode)); DWORD expected = scenario == "retired-record" ? 2u : 1u;
+      if (scenario == "delete-pending-record") {const auto observed = parse(read_frame(client.output.value)); require(observed.at("type").string() == "pending-observation"); const auto error = integer(observed.at("error")); expected = error == ERROR_FILE_NOT_FOUND || error == ERROR_DELETE_PENDING ? 2u : 1u;}
+      const auto actual = client.wait(); std::cerr << "broker entrypoint exit " << actual << " expected " << expected << "\n"; require(actual == expected);
+      if (expected == 2) {const auto result = parse(read_frame(client.output.value)); exact(result, {"type", "schemaVersion"}); require(result.at("type").string() == "waiting" && integer(result.at("schemaVersion")) == 1);}
+      DWORD available = 0; const auto peeked = PeekNamedPipe(client.output.value, nullptr, 0, nullptr, &available, nullptr); require((peeked || GetLastError() == ERROR_BROKEN_PIPE) && available == 0);
+      if (permissionRestore) require(permissionRestore->restore());
+    }
     for (const auto* mode : {"valid", "creation", "dead", "stale-live", "dead-live", "collision", "session", "malformed", "dacl", "payload-break", "bad-length", "invalid-credit", "quiet", "quiet-exit", "partial-prefix", "partial-payload"}) {
       if (!filter.empty() && filter != mode) continue;
       std::cerr << "case " << mode << "\n";

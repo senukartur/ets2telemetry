@@ -54,17 +54,26 @@ export class NativePipeClient extends EventEmitter implements TelemetrySocket {
           if (!this.receiptSeen) {
             const receipt = JSON.parse(frame.subarray(4).toString('utf8'));
             this.receiptSeen = true;
-            if (receipt.type === 'waiting' && Object.keys(receipt).length === 2 && receipt.schemaVersion === 1) {clearTimeout(this.startup); continue;}
+            if (receipt.type === 'waiting' && Object.keys(receipt).length === 2 && receipt.schemaVersion === 1) {
+              if (this.buffer.length) throw new Error('Uncredited native receipt suffix');
+              clearTimeout(this.startup); continue;
+            }
             if (receipt.type !== 'authority' || receipt.schemaVersion !== 1 || Object.keys(receipt).length !== 5 || !isUint64(receipt.processCreationTime) || !/^[0-9a-f]{64}$/.test(receipt.userTag)) throw new Error('Native authority receipt rejected');
             const source = receipt.source as SourceIdentity;
             if (!source || Object.keys(source).length !== 6 || source.game !== game || source.origin !== 'game' || !Number.isInteger(source.processId) || source.processId < 1 || source.processId > 0xffffffff || !Number.isInteger(source.windowsSessionId) || source.windowsSessionId < 0 || source.windowsSessionId > 0xffffffff || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(source.processInstanceId) || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(source.pluginSessionId)) throw new Error('Native source authority rejected');
+            // Bytes received before hello/credit cannot become authorized by the synchronous connect listener.
+            if (this.buffer.length) throw new Error('Uncredited native receipt suffix');
             this.authority = Object.freeze(source); clearTimeout(this.startup); this.emit('connect');
           } else {
             if (!this.creditOutstanding || !this.authority) throw new Error('Uncredited native relay frame');
             this.creditOutstanding = false;
             this.emit('data', frame);
             // Event listeners synchronously validate/apply; a rejected stream destroys this adapter.
-            if (!this.stopped) this.credit();
+            if (!this.stopped) {
+              // The current input must contain only this credited frame, including across fragmented reads.
+              if (this.buffer.length) throw new Error('Uncredited native frame suffix');
+              this.credit();
+            }
           }
         }
       } catch {this.reject('Native relay protocol rejected');}
