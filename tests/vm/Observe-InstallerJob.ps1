@@ -15,7 +15,7 @@ $queries=@{}
 $initialHandles=[Collections.Generic.Dictionary[int,IntPtr]]::new()
 $view=[ordered]@{passed=$false;observerPid=$PID;driverPid=$DriverPid;controllerPid=$ControllerPid;parentProcessId=$null;driverParentProcessId=$null;driverImage=$null;controllerImage=$null;startedUtc=[datetime]::UtcNow.ToString('o');finishedUtc=$null;failure=$null;drained=$false;finalPids=@();processes=@();initialPidSnapshot=$null;initialScope=$null;initialScopeFailure=$null;jobScope=$null;metadataWorkers=4;metadataQueueSeconds=3;metadataQuerySeconds=3;metadataCompletionSeconds=8;warmupMilliseconds=$null;pollCount=0;maximumPollGapMilliseconds=0}
 $view.initialUnexpectedProcesses=@();$view.initialDiagnosticMilliseconds=0;$view.initialDiagnosticFailure=$null
-$view.consoleHost=$null;$view.consoleLastExitCode=$null
+$view.consoleHost=$null;$view.consoleLastExitCode=$null;$view.driverConsoleHost=$null;$view.driverConsoleLastExitCode=$null
 try {
     $view.initialPidSnapshot=[InstallerJobView]::ReadPids()
     # Preserve unexpected native identities before metadata or the unchanged fresh guard.
@@ -60,7 +60,7 @@ try {
         if($console.nativeImage -ine 'C:\Windows\System32\conhost.exe' -or $console.metadataImage -ine $console.nativeImage -or $console.parentProcessId -ne $PID -or $console.commandLine -ine '\??\C:\Windows\System32\conhost.exe 0x4' -or $console.nativeExitBefore -ne 259 -or $console.nativeExitAfter -ne 259 -or $console.nativeSignaledBefore -ne $false -or $console.nativeSignaledAfter -ne $false -or $console.nativeImageFailure -or $console.nativeExitFailure -or $console.metadataFailure -or $view.initialDiagnosticFailure -or !$initialHandles.ContainsKey($console.pid)){throw 'Unexpected root is not the live, held, fully verified observer-owned System32 console host.'}
         $view.consoleHost=$console
     }
-    function Assert-ObserverMembers($members){if($members.Count -ne $initial.Count -or @($members|Where-Object {$_ -notin $initial}).Count -ne 0){throw 'Audited root/console membership changed.'};if($view.consoleHost){$view.consoleLastExitCode=[InstallerJobView]::ExitCode($initialHandles[$view.consoleHost.pid]);if($view.consoleLastExitCode -ne 259 -or [InstallerJobView]::Signaled($initialHandles[$view.consoleHost.pid])){throw 'Held observer console exited before observer completion.'}}}
+    function Assert-ObserverMembers($members){$expected=@($initial);if($view.driverConsoleHost){$expected+=@($view.driverConsoleHost.pid)};if($members.Count -ne $expected.Count -or @($members|Where-Object {$_ -notin $expected}).Count -ne 0){throw 'Audited root/console membership changed.'};foreach($role in @(@{host=$view.consoleHost;key='consoleLastExitCode'},@{host=$view.driverConsoleHost;key='driverConsoleLastExitCode'})){if($role.host){$view[$role.key]=[InstallerJobView]::ExitCode($initialHandles[$role.host.pid]);if($view[$role.key] -ne 259 -or [InstallerJobView]::Signaled($initialHandles[$role.host.pid])){throw 'Held root console exited before observer completion.'}}}}
     $view.jobScope=[InstallerJobView]::AuthoritativeScope()
     foreach($entry in @(@{pid=$DriverPid;key='driverImage';image='C:\ETS2ET001Acceptance\tools\node.exe'},@{pid=$ControllerPid;key='controllerImage';image='C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe'})){
         $identityHandle=[InstallerJobView]::Hold($entry.pid)
@@ -95,12 +95,12 @@ try {
             if($ownedPid -eq $PID -or $ownedPid -eq $DriverPid -or !$seen.Add($ownedPid)){continue}
             if($view.consoleHost -and $ownedPid -eq $view.consoleHost.pid){if([InstallerJobView]::ExitCode($initialHandles[$ownedPid]) -ne 259){throw 'Held observer console exited during helper observation.'};continue}
             if($records.Count -ge 64){throw 'Owned process observation lifetime bound exceeded.'}
-            $record=[ordered]@{pid=$ownedPid;observedUtc=[datetime]::UtcNow.ToString('o');commandLine=$null;executablePath=$null;queryFailure=$null;queryElapsedMilliseconds=$null;queryStartedMilliseconds=$pollClock.Elapsed.TotalMilliseconds;exitCode=$null;exitQueryFailure=$null}
+            $record=[ordered]@{pid=$ownedPid;observedUtc=[datetime]::UtcNow.ToString('o');commandLine=$null;executablePath=$null;parentProcessId=$null;role='installer-helper';nativeExitBefore=$null;nativeSignaledBefore=$null;queryFailure=$null;queryElapsedMilliseconds=$null;queryStartedMilliseconds=$pollClock.Elapsed.TotalMilliseconds;exitCode=$null;exitQueryFailure=$null}
             # Capture native identity/handles immediately, before asynchronous metadata.
             $handle=[InstallerJobView]::Hold($ownedPid)
             if($handle -ne [IntPtr]::Zero){
                 $handles.Add($ownedPid,$handle)
-                try{$record.executablePath=[InstallerJobView]::Image($handle)}catch{$record.queryFailure=$_.Exception.Message}
+                try{$record.executablePath=[InstallerJobView]::Image($handle);$record.nativeExitBefore=[InstallerJobView]::ExitCode($handle);$record.nativeSignaledBefore=[InstallerJobView]::Signaled($handle)}catch{$record.queryFailure=$_.Exception.Message}
                 if($queries.Count -ge 16){throw 'Pending metadata query bound exceeded.'}
                 $queries[$ownedPid]=[InstallerJobView]::QueryAsync($ownedPid)
             }else{$record.exitQueryFailure='Owned process exited before a read-only handle could be opened.'}
@@ -114,8 +114,18 @@ try {
                     $record.queryElapsedMilliseconds=$metadata.ElapsedMilliseconds
                     if($metadata.Failure){$record.queryFailure=$metadata.Failure}
                     elseif($metadata.ExecutablePath -ne $record.executablePath){$record.queryFailure='Metadata image differs from the held native process identity.'}
-                    else{$record.commandLine=$metadata.CommandLine}
+                    else{$record.commandLine=$metadata.CommandLine;$record.parentProcessId=$metadata.ParentProcessId}
                     $queries.Remove($record.pid)
+                    if($record.executablePath -ieq 'C:\Windows\System32\conhost.exe' -and $record.parentProcessId -eq $DriverPid){
+                        if($view.driverConsoleHost -or !$handles.ContainsKey($record.pid) -or $initial -contains $record.pid -or $record.pid -eq $ControllerPid){throw 'Late driver console duplicates or overlaps an existing role.'}
+                        $held=$handles[$record.pid];$after=[InstallerJobView]::ExitCode($held);$signaled=[InstallerJobView]::Signaled($held)
+                        if($record.commandLine -ine '\??\C:\Windows\System32\conhost.exe 0x4' -or $record.nativeExitBefore -ne 259 -or $record.nativeSignaledBefore -ne $false -or $after -ne 259 -or $signaled -or $record.queryFailure -or $record.exitQueryFailure){throw 'Late driver console metadata or native liveness is invalid.'}
+                        $view.driverConsoleHost=[ordered]@{pid=$record.pid;nativeImage=$record.executablePath;metadataImage=$metadata.ExecutablePath;parentProcessId=$metadata.ParentProcessId;commandLine=$record.commandLine;nativeExitBefore=$record.nativeExitBefore;nativeExitAfter=$after;nativeSignaledBefore=$record.nativeSignaledBefore;nativeSignaledAfter=$signaled;nativeImageFailure=$null;nativeExitFailure=$null;metadataFailure=$null;queryElapsedMilliseconds=$record.queryElapsedMilliseconds}
+                        $record.role='driver-console';$initialHandles.Add($record.pid,$held);$null=$handles.Remove($record.pid)
+                        $lateFile=Join-Path (Split-Path -Parent $ReadyFile) 'late-driver-console.json'
+                        [ordered]@{phase='late-driver-console';driverPid=$DriverPid;observerPid=$PID;controllerPid=$ControllerPid;consoleHost=$view.driverConsoleHost}|ConvertTo-Json -Depth 4 -Compress|Set-Content -LiteralPath ($lateFile+'.partial') -Encoding UTF8
+                        Move-Item -LiteralPath ($lateFile+'.partial') -Destination $lateFile
+                    }
                 }elseif($pollClock.Elapsed.TotalMilliseconds-$record.queryStartedMilliseconds -ge 8000){throw 'Read-only metadata query exceeded its eight-second completion deadline.'}
             }
             if(!$handles.ContainsKey($record.pid)){continue}
@@ -127,7 +137,7 @@ try {
         }
         # Stop is requested only after the primary installer/updater has exited.
         # The PID list includes child jobs. Require natural exit and completed metadata.
-        if((Test-Path -LiteralPath $StopFile) -and $pids.Count -eq $initial.Count -and $handles.Count -eq 0 -and $queries.Count -eq 0){Assert-ObserverMembers $pids;$view.drained=$true;$view.finalPids=$pids;break}
+        if((Test-Path -LiteralPath $StopFile) -and $pids.Count -eq ($initial.Count+[int][bool]$view.driverConsoleHost) -and $handles.Count -eq 0 -and $queries.Count -eq 0){Assert-ObserverMembers $pids;if(@($records|Where-Object {$_.role -ne 'driver-console' -and ($_.queryFailure -or $_.exitQueryFailure -or $_.exitCode -ne 0)}).Count){throw 'Installer helper native exit or metadata proof failed.'};$view.drained=$true;$view.finalPids=$pids;break}
         Start-Sleep -Milliseconds 20
     }while([datetime]::UtcNow -lt $deadline)
     if(!$view.drained){throw 'Installer descendants did not drain within the observer deadline.'}

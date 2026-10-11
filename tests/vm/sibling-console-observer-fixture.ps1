@@ -32,9 +32,14 @@ if($diagnostic.unexpected.Count){
 Assert-FixtureQuietStreams
 [ordered]@{ready=$true;driverPid=$DriverPid;observerPid=$PID;controllerPid=$ControllerPid;consoleHost=$console;fixtureConsoleHost=$ownConsole;fixtureConsoleNodeHost=$nodeConsole;fixtureOnly=$true}|ConvertTo-Json -Depth 4 -Compress|Set-Content -LiteralPath ($ReadyFile+'.partial') -Encoding UTF8
 Move-Item -LiteralPath ($ReadyFile+'.partial') -Destination $ReadyFile
+while(!(Test-Path -LiteralPath (Join-Path $directory 'driver-marker.json'))){Assert-FixtureQuietStreams;Start-Sleep -Milliseconds 10}
+$lateKnown=[int[]]@($DriverPid,$PID,$candidate)+[int[]]@(@($ownConsole.pid,$nodeConsole.pid)|Where-Object {$_})
+$late=Publish-FixtureDriverConsole $directory $lateKnown ''
 while(!(Test-Path -LiteralPath $StopFile)){Assert-FixtureQuietStreams;Start-Sleep -Milliseconds 10}
 if($Mode -eq 'live'){while(!(Test-Path -LiteralPath (Join-Path $directory 'fixture-release.json'))){Assert-FixtureQuietStreams;Start-Sleep -Milliseconds 10}}
 Assert-FixtureQuietStreams
+$members=Get-Content -LiteralPath (Join-Path $directory 'job/controller-members.json') -Raw|ConvertFrom-Json;$stopExpected=@($lateKnown)+@($late.consoleHost.pid)
+if($members.pids.Count -ne $stopExpected.Count -or @($members.pids|Where-Object {$_ -notin $stopExpected}).Count){throw 'Fixed surrogate Stop contains unaudited members.'}
 '{}'|Set-Content -LiteralPath (Join-Path $directory 'surrogate-stop.json') -Encoding UTF8
 if($surrogate){$surrogate.Dispose()}
 exit 0

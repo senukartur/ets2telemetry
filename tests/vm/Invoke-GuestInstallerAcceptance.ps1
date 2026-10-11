@@ -161,7 +161,10 @@ try{
             }
         }
         Save-SquirrelLogs $directory
-        if($code -ne 0 -or !$step.driver -or $step.driver.passed -ne $true -or !$step.controller -or $step.controller.passed -ne $true -or $step.controller.driverExitCode -ne 0 -or $step.controller.observerExitCode -ne 0 -or $step.controller.driverStreamsDrained -ne $true -or $step.controller.observerStreamsDrained -ne $true -or $step.controller.elapsedMilliseconds -gt $milliseconds){throw ('Installer step failed: '+$definition.name+'; Job exit '+$code)}
+        if($code -ne 0 -or !$step.driver -or $step.driver.passed -ne $true -or !$step.controller -or $step.controller.phase -ne 'final' -or $step.controller.passed -ne $true -or $step.controller.jobDrained -ne $true -or $step.controller.driverExitCode -ne 0 -or $step.controller.observerExitCode -ne 0 -or $step.controller.driverStreamsDrained -ne $true -or $step.controller.observerStreamsDrained -ne $true -or $step.controller.elapsedMilliseconds -gt $milliseconds){throw ('Installer step failed: '+$definition.name+'; Job exit '+$code)}
+        $latePid=$step.driver.observerLaunch.lateDriverConsole.consoleHost.pid
+        if($latePid){if($step.controller.driverConsolePid -ne $latePid -or $step.controller.driverConsoleSignaled -ne $true -or $step.controller.driverConsoleExitCode -ne 0){throw 'Final native driver-console exit 0 proof is missing.'}}
+        elseif($null -ne $step.controller.driverConsolePid -or $step.controller.driverConsoleSignaled -ne $false -or $null -ne $step.controller.driverConsoleExitCode){throw 'Unexpected final driver-console identity.'}
         if($sentinels.Count -ne 6 -or $step.driver.sqlitePreservation.integrity -ne 'ok' -or $step.driver.sqlitePreservation.value -ne 42 -or $step.driver.sqlitePreservation.synthetic -ne 1){throw 'Incomplete synthetic data/SQLite preservation proof.'}
         Assert-Budget
         if($definition.name -ne 'uninstall'){$step.postconditions=Assert-Installed $definition.version}

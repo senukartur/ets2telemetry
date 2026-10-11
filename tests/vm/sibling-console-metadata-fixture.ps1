@@ -1,5 +1,5 @@
 # Fixed harmless metadata fixture; no production observer DLL or native Job query.
-function Save-FixtureUnexpectedMembers($directory,[int[]]$knownPids){
+function Save-FixtureUnexpectedMembers($directory,[int[]]$knownPids,[string]$fileName='fixture-member-diagnostics.json'){
     $clock=[Diagnostics.Stopwatch]::StartNew();$held=[Collections.Generic.List[Diagnostics.Process]]::new();$rows=[Collections.Generic.List[object]]::new()
     $proof=[ordered]@{rawPids=@();knownPids=$knownPids;unexpected=@();failure=$null;elapsedMilliseconds=0;queryStartCutoffMilliseconds=1000;operationTimeoutSeconds=1}
     try{
@@ -21,9 +21,24 @@ function Save-FixtureUnexpectedMembers($directory,[int[]]$knownPids){
     finally{
         foreach($process in $held){$process.Dispose()}
         $proof.unexpected=$rows.ToArray();$proof.elapsedMilliseconds=$clock.Elapsed.TotalMilliseconds
-        $proof|ConvertTo-Json -Depth 5 -Compress|Set-Content -LiteralPath (Join-Path $directory 'fixture-member-diagnostics.json') -Encoding UTF8
+        $proof|ConvertTo-Json -Depth 5 -Compress|Set-Content -LiteralPath (Join-Path $directory $fileName) -Encoding UTF8
     }
     return $proof
+}
+function Publish-FixtureDriverConsole($directory,[int[]]$knownPids,[string]$mode){
+    $clock=[Diagnostics.Stopwatch]::StartNew();$file=Join-Path $directory 'job/controller-members.json'
+    do{$members=Get-Content -LiteralPath $file -Raw|ConvertFrom-Json;if(@($members.pids|Where-Object {$_ -notin $knownPids}).Count){break};Start-Sleep -Milliseconds 10}while($clock.ElapsedMilliseconds -lt 500)
+    $diagnostic=Save-FixtureUnexpectedMembers $directory $knownPids 'fixture-driver-console-diagnostics.json'
+    if($diagnostic.failure -or $diagnostic.unexpected.Count -ne 1){throw 'One actual late driver console is required for this ordering fixture.'}
+    $row=$diagnostic.unexpected[0]
+    if($row.nativeImage -ine 'C:\Windows\System32\conhost.exe' -or $row.metadataImage -ine $row.nativeImage -or $row.parentProcessId -ne $DriverPid -or $row.commandLine -ine '\??\C:\Windows\System32\conhost.exe 0x4' -or $row.nativeSignaledBefore -ne $false -or $row.nativeSignaledAfter -ne $false -or $row.nativeFailure -or $row.metadataFailure){throw 'Held late fixture driver console metadata differs.'}
+    $hostProof=[ordered]@{pid=$row.pid;nativeImage=$row.nativeImage;metadataImage=$row.metadataImage;parentProcessId=$row.parentProcessId;commandLine=$row.commandLine;nativeExitBefore=259;nativeExitAfter=259;nativeSignaledBefore=$row.nativeSignaledBefore;nativeSignaledAfter=$row.nativeSignaledAfter;nativeImageFailure=$null;nativeExitFailure=$null;metadataFailure=$null;queryElapsedMilliseconds=$diagnostic.elapsedMilliseconds;fixtureMetadata=$true}
+    if($mode -eq 'late-wrong-parent'){$hostProof.parentProcessId=$ControllerPid}
+    if($mode -eq 'late-wrong-image'){$hostProof.nativeImage='C:\Temp\conhost.exe'}
+    if($mode -eq 'late-role-overlap'){$hostProof.pid=$DriverPid}
+    $frame=[ordered]@{phase='late-driver-console';driverPid=$DriverPid;observerPid=$PID;controllerPid=$ControllerPid;consoleHost=$hostProof}
+    $lateFile=Join-Path $directory 'late-driver-console.json';$frame|ConvertTo-Json -Depth 4 -Compress|Set-Content -LiteralPath ($lateFile+'.partial') -Encoding UTF8;Move-Item -LiteralPath ($lateFile+'.partial') -Destination $lateFile
+    return $frame
 }
 function Get-FixtureConsole($directory){
     $clock=[Diagnostics.Stopwatch]::StartNew();$members=$null

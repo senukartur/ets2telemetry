@@ -9,6 +9,9 @@ Add-Type -Path (Join-Path $PSScriptRoot 'InstallerBoundedProcess.cs') -Reference
 $entry=[ETS2Telemetry.Diagnostics.InstallerBoundedProcess].GetMethod('RunConsoleFixture',[Reflection.BindingFlags]'NonPublic,Static')
 $quote=[ETS2Telemetry.Diagnostics.InstallerBoundedProcess].GetMethod('Quote',[Reflection.BindingFlags]'NonPublic,Static')
 function Assert($condition,$message){if(!$condition){throw $message}}
+function Assert-NativeCleanup($proof){
+    Assert ($proof.cleanupJobDrained -and $proof.cleanupRootsSignaled -and $proof.cleanupConsolesSignaled -and $null -eq $proof.cleanupFailure -and $null -eq $proof.cleanupJobSnapshot.failure -and $proof.cleanupJobSnapshot.assignedCount -eq 0 -and $proof.cleanupJobSnapshot.listedCount -eq 0 -and @($proof.cleanupJobSnapshot.pids).Count -eq 0 -and $proof.driverStreamsDrained -and $proof.observerStreamsDrained -and $proof.elapsedMilliseconds -le $proof.budgetMilliseconds) 'Native Job and held identities did not finish cleanup inside the original deadline.'
+}
 function Hold([int]$number){$process=[Diagnostics.Process]::GetProcessById($number);$null=$process.Handle;return $process}
 $rows=[Collections.Generic.List[object]]::new();$sentinel=$null;$owner=$null;$diagnosticHandles=[Collections.Generic.List[Diagnostics.Process]]::new();$saved=$env:ETS2TELEMETRY_CONSOLE_OUTSIDE_PID
 try{
@@ -23,7 +26,9 @@ try{
             $owner=Start-Process -FilePath 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe' -ArgumentList $arguments -WindowStyle Hidden -PassThru;$null=$owner.Handle;$clock=[Diagnostics.Stopwatch]::StartNew()
             while(!(Test-Path -LiteralPath (Join-Path $directory 'driver-marker.json'))){if($owner.HasExited -or $clock.ElapsedMilliseconds -ge 6500){throw 'Fixed owner-death roots did not start.'};Start-Sleep -Milliseconds 10}
             $receipt=Get-Content -LiteralPath (Join-Path $directory 'job/controller-receipt.json') -Raw|ConvertFrom-Json;$custody=Get-Content -LiteralPath (Join-Path $directory 'job/console-custody.json') -Raw|ConvertFrom-Json
-            $held=@(@($receipt.driverPid,$receipt.observerPid,$custody.consolePid,$custody.fixtureConsolePid,$custody.fixtureConsoleNodeHostPid)|Where-Object {$_}|ForEach-Object {Hold $_})
+            while(!(Test-Path -LiteralPath (Join-Path $directory 'job/driver-console-custody.json'))){if($owner.HasExited -or $clock.ElapsedMilliseconds -ge 6500){throw 'Late driver console did not bind before the failure/death gate.'};Start-Sleep -Milliseconds 10}
+            $lateCustody=Get-Content -LiteralPath (Join-Path $directory 'job/driver-console-custody.json') -Raw|ConvertFrom-Json
+            $held=@(@($receipt.driverPid,$receipt.observerPid,$custody.consolePid,$custody.fixtureConsolePid,$custody.fixtureConsoleNodeHostPid,$lateCustody.consolePid)|Where-Object {$_}|ForEach-Object {Hold $_})
             if($mode -eq 'live'){
                 $driver=@($held|Where-Object {$_.Id -eq $receipt.driverPid})[0];$queryClock=[Diagnostics.Stopwatch]::StartNew();$children=[Collections.Generic.List[object]]::new()
                 $diagnostic=[ordered]@{driverPid=$driver.Id;driverStartUtc=$driver.StartTime.ToUniversalTime().ToString('o');driverSignaledBefore=$driver.WaitForExit(0);driverSignaledAfter=$null;operationTimeoutSeconds=1;maximumChildren=16;children=@();failure=$null;elapsedMilliseconds=0;capturedPidsInFailureSnapshot=@()}
@@ -52,7 +57,7 @@ try{
             }
             if($mode -eq 'owner-death'){$owner.Kill()};Assert ($owner.WaitForExit(6500)) 'Owner did not exit.';foreach($process in $held){Assert ($process.WaitForExit(1000)) 'Owned root/console survived owner death/deadline.';$process.Dispose()}
             if($mode -eq 'owner-death'){Assert (!(Test-Path -LiteralPath (Join-Path $directory 'job/controller-result.json'))) 'Killed owner must not report normal completion.'}
-            else{$proof=Get-Content -LiteralPath (Join-Path $directory 'job/controller-result.json') -Raw|ConvertFrom-Json;Assert ($owner.ExitCode -eq 124 -and $proof.consoleExitCode -eq 124 -and $proof.observerExitCode -eq 0 -and (!$custody.fixtureConsoleNodeHostPid -or ($proof.fixtureConsoleNodeHostPid -eq $custody.fixtureConsoleNodeHostPid -and $null -ne $proof.fixtureConsoleNodeHostExitCode -and $proof.fixtureConsoleNodeHostExitCode -ne 259)) -and $proof.driverStreamsDrained -and $proof.observerStreamsDrained -and $proof.elapsedMilliseconds -le 5000 -and !(Test-Path -LiteralPath (Join-Path $directory 'job/observer-exit.json'))) 'Live console must fail after actual PowerShell exit inside the original drained deadline.'}
+            else{$proof=Get-Content -LiteralPath (Join-Path $directory 'job/controller-result.json') -Raw|ConvertFrom-Json;Assert-NativeCleanup $proof;Assert ($owner.ExitCode -eq 124 -and $proof.consoleExitCode -eq 124 -and $proof.observerExitCode -eq 0 -and (!$custody.fixtureConsoleNodeHostPid -or ($proof.fixtureConsoleNodeHostPid -eq $custody.fixtureConsoleNodeHostPid -and $null -ne $proof.fixtureConsoleNodeHostExitCode -and $proof.fixtureConsoleNodeHostExitCode -ne 259)) -and $proof.driverStreamsDrained -and $proof.observerStreamsDrained -and $proof.elapsedMilliseconds -le 5000 -and !(Test-Path -LiteralPath (Join-Path $directory 'job/observer-exit.json'))) 'Live console must fail after actual PowerShell exit inside the original drained deadline.'}
             if($mode -eq 'live'){
                 $diagnostic.capturedPidsInFailureSnapshot=@($diagnostic.children|ForEach-Object {[ordered]@{pid=$_.pid;presentInFailureSnapshot=$proof.failureJobSnapshot.pids -contains $_.pid;identityBound=$_.identityBound}})
                 $diagnostic|ConvertTo-Json -Depth 5 -Compress|Set-Content -LiteralPath ($diagnosticFile+'.completed') -Encoding UTF8
@@ -63,20 +68,17 @@ try{
         $invocation=[object[]]@([string]$NodePath,[string[]]@([string](Join-Path $PSScriptRoot 'sibling-console-fixture.cjs'),[string]$mode,[string]$directory),[string](Join-Path $PSScriptRoot 'sibling-console-observer-fixture.ps1'),[string]$directory,[string](Join-Path $directory 'job'),[int]5000)
         $code=$entry.Invoke($null,$invocation)
         $proof=Get-Content -LiteralPath (Join-Path $directory 'job/controller-result.json') -Raw|ConvertFrom-Json
+        Assert-NativeCleanup $proof
         Assert ($proof.driverStreamsDrained -and $proof.observerStreamsDrained -and $proof.elapsedMilliseconds -le 5000) 'All four streams and cleanup must finish within the original deadline.'
         Assert ((Get-Content -LiteralPath (Join-Path $directory 'observer-marker.json') -Raw|ConvertFrom-Json).marker -eq 'CONSOLE_POWERSHELL_REACHED') 'Actual observer execution marker missing.'
         if($mode -eq 'normal'){
-            Assert ($code -eq 0 -and $proof.passed -and $proof.consoleExitCode -eq 0 -and $proof.driverExitCode -eq 0 -and $proof.observerExitCode -eq 0) 'Actual roots and held surrogate must exit 0.'
+            Assert ($code -eq 0 -and $proof.phase -eq 'final' -and $proof.passed -and $proof.jobDrained -and $proof.consoleExitCode -eq 0 -and $proof.driverExitCode -eq 0 -and $proof.observerExitCode -eq 0 -and $proof.driverConsolePid -and $proof.driverConsoleSignaled -and $proof.driverConsoleExitCode -eq 0) 'Actual roots, helpers and final driver console must exit 0.'
             Assert ((Get-Content -LiteralPath (Join-Path $directory 'driver-marker.json') -Raw|ConvertFrom-Json).marker -eq 'CONSOLE_DRIVER_REACHED') 'Driver marker missing.'
             $exit=Get-Content -LiteralPath (Join-Path $directory 'job/observer-exit.json') -Raw|ConvertFrom-Json;Assert ($exit.consoleSignaled -and $exit.consoleExitCode -eq 0 -and (!$exit.fixtureConsolePid -or ($exit.fixtureConsoleSignaled -and $exit.fixtureConsoleExitCode -eq 0 -and $proof.fixtureConsoleExitCode -eq 0)) -and (!$exit.fixtureConsoleNodeHostPid -or ($exit.fixtureConsoleNodeHostSignaled -and $exit.fixtureConsoleNodeHostExitCode -eq 0 -and $proof.fixtureConsoleNodeHostExitCode -eq 0))) 'Native console exit receipt missing.'
         }elseif($mode -eq 'live'){Assert ($code -eq 124 -and $proof.consoleExitCode -eq 124) 'Live console must fail the unchanged deadline and be contained.'}
         elseif($mode -eq 'nonzero'){Assert ($code -eq 126 -and $proof.consoleExitCode -eq 9 -and $proof.observerExitCode -eq 0) 'Nonzero console must fail after PowerShell exit without publishing a success receipt.'}
         else{Assert ($code -eq 126 -and !(Test-Path -LiteralPath (Join-Path $directory 'driver-marker.json'))) 'Invalid console must fail before driver resume.'}
         if($mode -ne 'normal'){Assert (!(Test-Path -LiteralPath (Join-Path $directory 'job/observer-exit.json'))) 'Invalid/nonzero/live console published success.'}
-        $marker=Get-Content -LiteralPath (Join-Path $directory 'observer-marker.json') -Raw|ConvertFrom-Json
-        $owned=@($proof.driverPid,$proof.observerPid,$proof.consolePid,$proof.fixtureConsolePid,$proof.fixtureConsoleNodeHostPid,$marker.surrogatePid)+@($proof.failureJobSnapshot.pids)
-        if(Test-Path -LiteralPath (Join-Path $directory 'surrogate-marker.json')){$owned+=@((Get-Content -LiteralPath (Join-Path $directory 'surrogate-marker.json') -Raw|ConvertFrom-Json).pid)}
-        foreach($number in $owned|Where-Object {$_ -and $_ -ne $sentinel.Id}|Select-Object -Unique){Assert (!(Get-Process -Id $number -ErrorAction SilentlyContinue)) 'Owned process remains after bounded result.'}
         $rows.Add([ordered]@{case=$mode;passed=$true;controller=$proof})
     }
     Assert (!$sentinel.HasExited) 'Unrelated sentinel was affected.'

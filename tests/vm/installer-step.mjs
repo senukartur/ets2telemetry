@@ -5,7 +5,7 @@ import {spawn} from 'node:child_process';
 import {readFile, readdir, mkdir, writeFile} from 'node:fs/promises';
 import {performance} from 'node:perf_hooks';
 import {createHash} from 'node:crypto';
-import {validateRootSet,validateConsoleExit} from './installer-root-proof.mjs';
+import {validateRootSet,validateConsoleExit,validateLateDriverConsole,validateStopSet,validateLateBinding} from './installer-root-proof.mjs';
 const [kit, output, guardFile, step, version, budgetText] = process.argv.slice(2);
 const result={step,version,passed:false,startedUtc:new Date().toISOString(),finishedUtc:null,failure:null,
   primary:null,observer:null,smoke:null,windowsPlaywrightShellWrapper:step==='smoke'};
@@ -19,6 +19,7 @@ const expectedJobScope={LimitFlags:0x2208,ActiveProcessLimit:16,JobMemoryBytes:2
 let observer;
 let observerClosed;
 let controllerReceipt;
+let lateDriverConsole=null;
 async function boundedJson(filename){const bytes=await readFile(filename);assert.ok(bytes.length<=8192,'Bounded controller/ready JSON required');return parse(bytes.toString('utf8'));}
 async function startObserver(){
   const stopFile=path.join(output,'observer-stop.json');const viewFile=path.join(output,'job-observation.json');
@@ -51,7 +52,14 @@ async function nativeObserverExit(){
     try{exit=await boundedJson(path.join(output,'job/observer-exit.json'));}catch(error){if(error.code!=='ENOENT')throw error;await new Promise(resolve=>setTimeout(resolve,20));continue;}
     result.observerLaunch.exitReceipt=exit;
     assert.equal(exit.controllerPid,controllerReceipt.controllerPid);assert.equal(exit.driverPid,process.pid);assert.equal(exit.observerPid,observer.pid);assert.equal(exit.signaled,true);
-    validateConsoleExit(exit,result.observerLaunch.readyProof.consoleHost,process.pid,observer.pid,controllerReceipt.controllerPid);
+    if(exit.driverConsolePid!==null){
+      lateDriverConsole=await boundedJson(path.join(output,'late-driver-console.json'));
+      validateLateDriverConsole(lateDriverConsole,result.observerLaunch.readyProof.consoleHost,process.pid,observer.pid,controllerReceipt.controllerPid);
+      const custody=await boundedJson(path.join(output,'job/driver-console-custody.json'));
+      assert.equal(custody.controllerPid,controllerReceipt.controllerPid);assert.equal(custody.driverPid,process.pid);assert.equal(custody.observerPid,observer.pid);assert.equal(custody.consolePid,lateDriverConsole.consoleHost.pid);assert.equal(custody.nativeImage.toLowerCase(),lateDriverConsole.consoleHost.nativeImage.toLowerCase());assert.equal(custody.memberVerified,true);assert.deepEqual(custody.descriptor,lateDriverConsole);
+      result.observerLaunch.lateDriverConsole=lateDriverConsole;
+    }
+    validateConsoleExit(exit,result.observerLaunch.readyProof.consoleHost,process.pid,observer.pid,controllerReceipt.controllerPid,lateDriverConsole);
     return {code:exit.exitCode,signal:null};
   }
 }
@@ -142,9 +150,11 @@ try{
   assert.equal(result.observer.parentProcessId,controllerReceipt.controllerPid);assert.equal(result.observer.driverParentProcessId,controllerReceipt.controllerPid);
   assert.equal(result.observer.driverImage.toLowerCase(),path.join(kit,'tools/node.exe').toLowerCase());
   assert.equal(result.observer.controllerImage.toLowerCase(),'c:\\windows\\system32\\windowspowershell\\v1.0\\powershell.exe');
-  validateRootSet(result.observer.finalPids,result.observer.consoleHost,process.pid,observer.pid,controllerReceipt.controllerPid);
+  validateStopSet(result.observer.finalPids,result.observer.consoleHost,lateDriverConsole,process.pid,observer.pid,controllerReceipt.controllerPid);
   assert.deepEqual(result.observer.consoleHost,result.observerLaunch.readyProof.consoleHost);
   if(result.observer.consoleHost)assert.equal(result.observer.consoleLastExitCode,259);
+  assert.deepEqual(result.observer.driverConsoleHost,lateDriverConsole?.consoleHost??null);
+  if(lateDriverConsole){validateLateBinding(lateDriverConsole,await boundedJson(path.join(output,'late-driver-console.json')),result.observer.consoleHost,process.pid,observer.pid,controllerReceipt.controllerPid);assert.equal(result.observer.driverConsoleLastExitCode,259);}
   if(step!=='smoke'){
     const event=step==='update'?'updated':step==='uninstall'?'uninstall':'install';
     const hook=result.observer.processes.find(record=>record.executablePath?.toLowerCase()===executable.toLowerCase()&&record.commandLine?.includes(`--squirrel-${event} ${version}`));
@@ -169,5 +179,5 @@ finally{
   }
   clearTimeout(timer);await persist();
 }
-// Node remains alive until the observer saw all installer/helper descendants exit naturally.
+// PS-only proof permits Node exit; the controller then requires its console exit 0.
 process.exit(result.passed?0:1);
