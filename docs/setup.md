@@ -62,6 +62,32 @@ Rule exceptions, each with its reason:
 | `tests/**` | `@typescript-eslint/unbound-method` off | `expect(mock.method)` passes a mock as a value and never calls it with a lost `this` |
 | `packages/contracts/src/protocol-v0.ts`, `scripts/package-integrity.mjs` | Inline `no-control-regex` | Both regular expressions deliberately reject control characters |
 
+## PowerShell script analysis
+
+ET-023b runs [PSScriptAnalyzer](https://learn.microsoft.com/en-us/powershell/utility-modules/psscriptanalyzer/overview) 1.25.0 over every Git-tracked `.ps1`, `.psm1` and `.psd1` file. Run from the repository root:
+
+```powershell
+npm run lint:ps
+```
+
+The command starts built-in Windows PowerShell 5.1 (`powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass`, affecting that process only) with `scripts/Invoke-ScriptAnalysis.ps1`. Local checks and CI therefore use the same engine; most repository scripts target Windows PowerShell 5.1. The script resets the child's `PSModulePath` to the built-in Windows PowerShell locations, so a pwsh 7 parent such as the CI shell cannot redirect module autoloading. Git must be on PATH.
+
+The module is not installed through PowerShellGet. On first use the script downloads `https://www.powershellgallery.com/api/v2/package/PSScriptAnalyzer/1.25.0` to ignored `.local/tools/psscriptanalyzer/`, compares its SHA512 with the PowerShell Gallery `PackageHash` pinned in the script, extracts it there and imports it by path. A hash mismatch fails before extraction, and an imported version other than 1.25.0 fails. Later runs re-verify the retained package and reuse the extraction; the extracted files themselves are trusted through a marker written after verified extraction, so delete `.local/tools/psscriptanalyzer/` if they may have been altered. CI always starts from a fresh runner. `.local/ci/psscriptanalyzer.json` records version, source, package hash, PowerShell version and counts; CI uploads it with the other evidence. To upgrade, change the version and hash in the script together after checking the gallery's published hash.
+
+`PSScriptAnalyzerSettings.psd1` runs every default rule at every severity (Error, Warning, Information) except the exclusions below. Any finding fails the command. Exceptions, each with its reason:
+
+| Scope | Exception | Reason |
+| --- | --- | --- |
+| All files | `PSUseApprovedVerbs`, `PSUseSingularNouns`, `PSUseShouldProcessForStateChangingFunctions` excluded | Naming and `-WhatIf` conventions for published cmdlets; every function here is a private script helper, and no module is exported |
+| All files | `PSAvoidUsingPositionalParameters` excluded | Argument-style preference (200 findings); rewriting reviewed acceptance harnesses would not fix a defect |
+| `tests/vm/Invoke-GuestInstallerAcceptance.ps1`, `tests/vm/Prepare-InstallerKit.ps1`, `tests/windows/Invoke-NativeInstallerAcceptance.ps1` | Script-level `PSAvoidUsingBrokenHashAlgorithms` suppression | Squirrel `RELEASES` entries identify packages by SHA1; SHA256 is also checked where a pin exists |
+| `tests/vm/Assert-InstallerDriverProvenance.ps1` | Script-level `PSAvoidInvokingEmptyMembers` suppression | Before/After proof fields are selected from a fixed suffix list |
+| `tests/vm/sibling-console-observer-fixture.ps1` | `PSReviewUnusedParameter` suppression for `ResultFile` | Callers pass the shared observer argument list; this fixture reports through `ReadyFile` |
+
+Script-level suppressions cover the whole file, including future uses of the same rule there: the three Squirrel scripts include their top-level feed check, and `Assert-InstallerDriverProvenance.ps1` has a single function with plain parameters. Review new SHA1/MD5 or dynamic member access in these files deliberately; prefer a function-level attribute for new exceptions.
+
+Findings fixed instead of excepted: a function that assigned the automatic `$args` and a loop that assigned the automatic `$matches` (renamed in `tests/vm/Assert-InstallerHelperProvenance.ps1`), unused `param($root)` in empty uninstall-residue setups, and a missing `OutputType` on `Assert-UninstallResidue`.
+
 ## Runtime paths and diagnostics
 
 Resolve `%LOCALAPPDATA%` at runtime. The application root is `%LOCALAPPDATA%\ETS2Telemetry`; planned locations are `data\telemetry.sqlite`, `settings\`, `logs\`, `backups\`, and `plugins\` for project-owned plugin metadata. Binary installation has an independent Squirrel identity/root. The scaffold creates startup logs only, with a separate temporary SQLite probe. No production history, updater, migration, production backup, or uninstall deletion is implemented.
