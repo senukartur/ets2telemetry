@@ -4,3 +4,5 @@ tests/fixtures/protocol-v0/*.json -text
 tests/fixtures/protocol-v0/*.txt text eol=lf
 # This rejection fixture is deliberately 65,537 spaces, not formatted JSON.
 tests/fixtures/protocol-v0/oversized.json -whitespace
+# Preserve the pinned upstream SDK bytes and their checksum manifest on Windows.
+native/telemetry-plugin/vendor/scs-sdk-1.15/** -text

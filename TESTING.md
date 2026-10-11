@@ -8,6 +8,8 @@ Recorded on October 10, 2026; updated October 11, 2026. **Status: scaffold check
 
 Read [concept.md](concept.md) for product behavior and [AGENTS.md](AGENTS.md) for the development workflow.
 
+Owner decision on October 11, 2026: ET-002a was explicitly accepted after its exact-head checks and independent review; PR #9 was squash merged as `247c076cf803529c4650e125544faaf0bc3ccad7`. The owner expanded the sequencing exception to start ET-003 and ET-005a from that updated `main` while SP-01 remains unaccepted and PR #8 stays draft. The real ETS2 single-player windowed retry and Convoy checks remain mandatory pending evidence. This decision changes sequencing only; it does not establish game compatibility, authorize protocol v1, or waive the acceptance and merge criteria of subsequent packages.
+
 ## 1. Delivery rule
 
 Protect existing behavior while adding features. A behavior change includes appropriate automated tests in the same PR, and a bug fix normally includes a regression case that fails with the defect and passes with the fix. Choose the smallest useful test boundary; do not write tests that merely repeat the implementation. Documentation-only changes need document checks, not application tests.
