@@ -167,3 +167,7 @@ Give concise Russian progress updates focused on outcomes and blockers. At hando
 - [OpenAI: Git worktrees](https://learn.chatgpt.com/docs/environments/git-worktrees): independent checkouts for parallel work.
 
 These references inform the workflow; available tools and permissions must still be verified in each session. This document does not install tools or configure a Trello integration.
+
+## Owner merge and board-status exception — October 12, 2026
+
+The owner authorized the coordinator to squash merge PR #10 (ET-003), #12 (ET-004a) and #14 (ET-007) without further confirmation once agreed actionable review findings are resolved and the required final Windows CI passes, and directed their corresponding Trello cards to Done. PR #10 was merged as `85d9f83a763f1ca71c2d640dadc5d8fbf2d9e69b` after its exact-head CI and independent review. Integrate accepted main and verify the final candidate before each subsequent merge. This is an explicit administrative status/code-review exception: mandatory game, environment, CAP-01 and performance evidence, SP-01 windowed retry/Convoy, and ET-004b remain pending and are not accepted or implemented by that status. No compatibility, protocol-v1, durable-history or later-phase authorization follows. Keep every missing check visible in the card and ledger. Advisory AI-review execution failures remain non-gating under docs/ai-review.md; mandatory independent review and Windows checks remain required.
