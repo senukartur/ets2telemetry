@@ -3,3 +3,5 @@ export function isScaffoldStatus(value: unknown): boolean {
   const status = value as Record<string, unknown>;
   return status.service === 'ready' && status.storage === 'verified' && status.synthetic === true;
 }
+// ET-023a deliberate lint violation (floating promise); removed before review.
+export function lintViolationProbe(): void { Promise.resolve(); }
