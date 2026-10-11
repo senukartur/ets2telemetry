@@ -12,6 +12,19 @@ function Read-InstallerHelperExecutable($command){
     if($token -notmatch '^(?:[A-Za-z]:\\|\\\\[^\\]+\\[^\\]+\\)' -or $token.Contains('"')){throw 'Helper executable token is missing or malformed.'}
     return $token
 }
+function Read-InstallerHelperImageObservation($metadata,[string]$nativeImage){
+    if($null -eq $metadata.PSObject.Properties['ExecutablePath']){throw 'Helper metadata operands are missing.'}
+    if($null -eq $metadata.ExecutablePath){return 'explicit-null'}
+    if($metadata.ExecutablePath -isnot [string] -or !$metadata.ExecutablePath){throw 'Helper advisory metadata image is empty or malformed.'}
+    if([string]::Equals($metadata.ExecutablePath,$nativeImage,[StringComparison]::OrdinalIgnoreCase)){return 'matched-native'}
+    return 'advisory-mismatch'
+}
+function Assert-InstallerHelperMetadataKey($record,$metadata){
+    foreach($key in @('RequestedProcessId','ProcessId','Handle','ObjectPath','ClassName')){if($null -eq $metadata.PSObject.Properties[$key]){throw 'Helper returned metadata identity operands are missing.'}}
+    $keyText=$record.pid.ToString([Globalization.CultureInfo]::InvariantCulture)
+    $keyPaths=@(('Win32_Process.Handle="'+$keyText+'"'),("Win32_Process.Handle='"+$keyText+"'"))
+    if($metadata.RequestedProcessId -isnot [int] -or $metadata.RequestedProcessId -ne $record.pid -or ($metadata.ProcessId -isnot [uint32] -and $metadata.ProcessId -isnot [int]) -or $metadata.ProcessId -ne $record.pid -or $metadata.Handle -isnot [string] -or ![string]::Equals($metadata.Handle,$keyText,[StringComparison]::Ordinal) -or $metadata.ClassName -isnot [string] -or ![string]::Equals($metadata.ClassName,'Win32_Process',[StringComparison]::OrdinalIgnoreCase) -or $metadata.ObjectPath -isnot [string] -or !(@($keyPaths|Where-Object {[string]::Equals($_,$metadata.ObjectPath,[StringComparison]::OrdinalIgnoreCase)}).Count)){throw 'Helper returned WMI process key or class differs.'}
+}
 function Resolve-InstallerHelperParent($record,$records,[int]$driverPid,[int]$observerPid,[int]$controllerPid,$consolePids){
     $forbidden=@($observerPid,$controllerPid)+@($consolePids)
     $seen=[Collections.Generic.HashSet[int]]::new();$null=$seen.Add($record.pid)
@@ -22,7 +35,7 @@ function Resolve-InstallerHelperParent($record,$records,[int]$driverPid,[int]$ob
         if($matches.Count -ne 1){throw 'Helper parent chain is unknown, conflicted or cyclic.'}
         $ancestor=$matches[0]
         if($ancestor.role -cne 'installer-helper' -or $ancestor.executablePath -ieq 'C:\Windows\System32\conhost.exe' -or $ancestor.nativeIdentityHeld -ne $true -or $null -ne $ancestor.queryFailure -or $null -ne $ancestor.exitQueryFailure -or $null -ne $ancestor.nativeImageAfterQueryFailure -or $null -ne $ancestor.nativeExitAfterQueryFailure -or ($null -ne $ancestor.exitCode -and $ancestor.exitCode -ne 0) -or ($ancestor.nativeIdentityRetired -eq $true -and ($ancestor.nativeFinalSignaled -ne $true -or $ancestor.exitCode -ne 0))){throw 'Helper parent proof failed or belongs to another role.'}
-        if($ancestor.metadataPolicy -notin @('held-native-helper-wmi-null','held-native-helper-wmi-image')){
+        if($ancestor.metadataPolicy -notin @('held-native-helper-wmi-null','held-native-helper-wmi-image','held-native-helper-wmi-advisory-mismatch')){
             if($ancestor.metadataCompleted -eq $true -and ($null -ne $ancestor.metadataProviderFailure -or $ancestor.diagnosticTruncatedFields.Count -ne 0)){throw 'Helper parent proof failed or belongs to another role.'}
             $pending=$true
             if($ancestor.metadataCompleted -ne $true){return 'pending-audited-parent'}
@@ -39,16 +52,18 @@ function Assert-InstallerHelperProvenance($record,$metadata,$records,[int]$drive
     if(@($roots|Where-Object {$_ -le 0}).Count -or @($roots|Select-Object -Unique).Count -ne 3 -or $record.pid -le 0 -or $roots -contains $record.pid -or $consolePids -contains $record.pid -or @($records|Where-Object {$_.pid -eq $record.pid}).Count -ne 1 -or $record.role -cne 'installer-helper' -or $record.executablePath -ieq 'C:\Windows\System32\conhost.exe'){throw 'Helper identity duplicates or overlaps another role.'}
     if($record.nativeIdentityHeld -isnot [bool] -or !$record.nativeIdentityHeld -or $record.metadataCompleted -isnot [bool] -or !$record.metadataCompleted -or $null -ne $metadata.Failure -or $null -ne $record.queryFailure -or $null -ne $record.exitQueryFailure -or $null -eq $record.diagnosticTruncatedFields -or $record.diagnosticTruncatedFields.Count -ne 0){throw 'Helper metadata observation is incomplete or clipped.'}
     if($record.executablePath -isnot [string] -or !$record.executablePath -or $record.nativeExitBefore -ne 259 -or $record.nativeSignaledBefore -isnot [bool] -or $record.nativeSignaledBefore -or ![string]::Equals($record.nativeImageAfterQuery,$record.executablePath,[StringComparison]::OrdinalIgnoreCase) -or $null -ne $record.nativeImageAfterQueryFailure -or $null -ne $record.nativeExitAfterQueryFailure -or $record.nativeExitAfterQuery -notin @(259,0) -or $record.nativeSignaledAfterQuery -isnot [bool] -or ($record.nativeExitAfterQuery -eq 259 -and $record.nativeSignaledAfterQuery)){throw 'Helper held native identity or after-query state differs.'}
-    if($null -ne $metadata.ExecutablePath -and ($metadata.ExecutablePath -isnot [string] -or ![string]::Equals($metadata.ExecutablePath,$record.executablePath,[StringComparison]::OrdinalIgnoreCase))){throw 'Helper non-null metadata image differs.'}
+    Assert-InstallerHelperMetadataKey $record $metadata
+    $imageObservation=Read-InstallerHelperImageObservation $metadata $record.executablePath
     $token=Read-InstallerHelperExecutable $metadata.CommandLine
     if(![string]::Equals($token,$record.executablePath,[StringComparison]::OrdinalIgnoreCase)){throw 'Helper command executable differs from its native image.'}
     if($metadata.ParentProcessId -ne $record.metadataParentProcessId){throw 'Helper recorded parent differs from its original metadata.'}
     $parent=Resolve-InstallerHelperParent $record $records $driverPid $observerPid $controllerPid $consolePids
     if($parent -eq 'pending-audited-parent'){return $parent}
-    if($null -eq $metadata.ExecutablePath){return 'held-native-helper-wmi-null'}
+    if($imageObservation -eq 'explicit-null'){return 'held-native-helper-wmi-null'}
+    if($imageObservation -eq 'advisory-mismatch'){return 'held-native-helper-wmi-advisory-mismatch'}
     return 'held-native-helper-wmi-image'
 }
 function Assert-InstallerHelperExit($record){
     foreach($key in @('metadataPolicy','nativeFinalSignaled','exitCode','queryFailure','exitQueryFailure')){if(!$record.Contains($key)){throw 'Helper final native signaled exit 0 proof is incomplete.'}}
-    if($record.metadataPolicy -notin @('held-native-helper-wmi-null','held-native-helper-wmi-image','strict-console-image') -or $record.nativeFinalSignaled -isnot [bool] -or !$record.nativeFinalSignaled -or $record.exitCode -ne 0 -or $null -ne $record.queryFailure -or $null -ne $record.exitQueryFailure){throw 'Helper final native signaled exit 0 proof is incomplete.'}
+    if($record.metadataPolicy -notin @('held-native-helper-wmi-null','held-native-helper-wmi-image','held-native-helper-wmi-advisory-mismatch','strict-console-image') -or $record.nativeFinalSignaled -isnot [bool] -or !$record.nativeFinalSignaled -or $record.exitCode -ne 0 -or $null -ne $record.queryFailure -or $null -ne $record.exitQueryFailure){throw 'Helper final native signaled exit 0 proof is incomplete.'}
 }

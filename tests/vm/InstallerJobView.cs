@@ -9,6 +9,9 @@ using System.Threading;
 using System.Threading.Tasks;
 public sealed class InstallerMetadata {
     public string CommandLine, ExecutablePath, Failure;
+    public int RequestedProcessId;
+    public object ProcessId;
+    public string Handle, ObjectPath, ClassName;
     public int ParentProcessId;
     public double ElapsedMilliseconds;
 }
@@ -70,13 +73,18 @@ public static class InstallerJobView {
     }
     public static Task<InstallerMetadata> QueryAsync(int pid) {
         return Task.Factory.StartNew(() => {
-            var result=new InstallerMetadata();var clock=Stopwatch.StartNew();
+            var result=new InstallerMetadata {RequestedProcessId=pid};var clock=Stopwatch.StartNew();
             bool acquired=MetadataSlots.Wait(3000);
             try {
                 if(!acquired) throw new TimeoutException("Metadata worker queue exceeded three seconds");
                 using(var process=new ManagementObject("Win32_Process.Handle='"+pid+"'")) {
                     process.Options.Timeout=TimeSpan.FromSeconds(3);
                     process.Get();
+                    // Raw keys from this same returned instance; no second query or image fallback.
+                    result.ProcessId=process["ProcessId"];
+                    result.Handle=(string)process["Handle"];
+                    result.ObjectPath=(string)process.SystemProperties["__RELPATH"].Value;
+                    result.ClassName=(string)process.SystemProperties["__CLASS"].Value;
                     result.CommandLine=(string)process["CommandLine"];
                     result.ExecutablePath=(string)process["ExecutablePath"];
                     result.ParentProcessId=Convert.ToInt32(process["ParentProcessId"]);
