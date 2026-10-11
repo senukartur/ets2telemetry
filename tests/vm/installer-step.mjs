@@ -27,7 +27,7 @@ async function startObserver(){
   await within(new Promise((resolve,reject)=>{
     observer.stdout.on('data',chunk=>{text=(text+chunk).slice(0,8192);if(text.includes('\n')){try{const ready=parse(text.split(/\r?\n/)[0]);assert.equal(ready.ready,true);assert.equal(ready.observerPid,observer.pid);resolve(ready);}catch(error){reject(error);}}});
     observer.once('error',reject);observer.once('exit',()=>reject(new Error('OBSERVER_EXIT_BEFORE_READY')));
-  }),8000,'OBSERVER_START_TIMEOUT');
+  }),12000,'OBSERVER_START_TIMEOUT');
   return {stopFile,viewFile};
 }
 async function primary(executable,args){
@@ -93,6 +93,8 @@ try{
   assert.equal(process.platform,'win32');assert.equal(process.versions.node,'24.19.0');assert.equal(path.resolve(kit),'C:\\ETS2ET001Acceptance');
   assert.equal(process.env.ETS2TELEMETRY_VM_JOB,'1');assert.equal(process.env.ETS2TELEMETRY_ALLOW_DESKTOP_LAUNCH,'1');
   assert.ok(path.resolve(output).startsWith(path.join(kit,'evidence')+path.sep));assert.ok(budget>=10000&&budget<=60000);
+  assert.equal(process.env.SQUIRREL_TEMP,undefined,'SQUIRREL_TEMP redirects the pinned installer base and must be absent');
+  for(const name of ['TEMP','TMP','ETS2TELEMETRY_PROFILE_DIR'])assert.ok(path.resolve(process.env[name]).startsWith(path.join(kit,'scratch')+path.sep),`${name} must use isolated guest scratch outside exported proof`);
   const guard=parse(await readFile(guardFile,'utf8'));assert.equal(guard.vmUuid,'94674D56-D803-F4D5-9AAC-C4E91CFB475F');assert.equal(guard.labId,'9a047927-f94b-41cb-bda8-abcc7d0b76f1');assert.equal(guard.step,step);assert.equal(guard.version,version);assert.equal(guard.jobRequired,true);
   assert.ok(Date.now()-Date.parse(guard.verifiedUtc)<90000);assert.ok(Date.parse(guard.outerDeadlineUtc)-Date.now()>=budget+15000);
   assert.equal(parse(await readFile(path.join(kit,'node_modules/playwright-core/package.json'),'utf8')).version,'1.64.0');

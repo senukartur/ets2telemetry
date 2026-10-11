@@ -9,9 +9,12 @@ if($identity.UUID -ne '94674D56-D803-F4D5-9AAC-C4E91CFB475F' -or $computer.Manuf
 if((Get-Content -LiteralPath 'C:\ETS2VMwareLab\guest-marker.txt' -Raw).Trim() -ne '9a047927-f94b-41cb-bda8-abcc7d0b76f1'){throw 'Wrong baseline marker.'}
 if([IO.Path]::GetFullPath((Split-Path $PSScriptRoot -Parent)).TrimEnd('\') -ne $kit){throw 'Wrong acceptance kit root.'}
 $clock=[Diagnostics.Stopwatch]::StartNew()
-$runDirectory=Join-Path $kit ('evidence/'+[guid]::NewGuid().ToString('N'))
+$runId=[guid]::NewGuid().ToString('N')
+$runDirectory=Join-Path $kit ('evidence/'+$runId)
+$scratchDirectory=Join-Path $kit ('scratch/'+$runId)
 $report=[ordered]@{schemaVersion=1;kind='et001-installer';startedUtc=[datetime]::UtcNow.ToString('o');finishedUtc=$null;passed=$false;failure=$null;vmUuid=$identity.UUID;manifestSha256=$ExpectedManifestSha256;packageSha256=$ExpectedPackageSha256;asarSha256=$ExpectedAsarSha256;outerDeadlineUtc=$OuterDeadlineUtc;globalBudgetSeconds=160;elapsedSeconds=$null;runDirectory=$runDirectory;binaryRoot=$null;dataRoot=$null;sentinels=@();steps=@();fixtureOnly=$true;applicationVersion='0.1.0';fixtureVersion='0.1.1';limits=@{maxStepSeconds=45;maxProcesses=16;jobMemoryBytes=2147483648;systemCpuPercent=25;retainedBytesPerStream=1048576}}
 $saved=@{};$steps=[Collections.Generic.List[object]]::new();$sentinels=[Collections.Generic.List[object]]::new()
+$report['scratchDirectory']=$scratchDirectory
 function Assert-Budget {if($clock.Elapsed.TotalSeconds -ge 160){throw 'Guest global 160-second budget exhausted.'};if(([datetime]$OuterDeadlineUtc).ToUniversalTime().Subtract([datetime]::UtcNow).TotalSeconds -lt 15){throw 'Insufficient outer deadline for export/shutdown.'}}
 function Read-Registration {
     $items=[Collections.Generic.List[object]]::new()
@@ -78,7 +81,7 @@ function Assert-Installed([string]$version){
 }
 function Save-SquirrelLogs([string]$destination){
     $counter=0;$bytes=0;$map=[Collections.Generic.List[object]]::new();$seen=[Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
-    foreach($root in @($report.binaryRoot,$env:TEMP,$env:SQUIRREL_TEMP,(Join-Path $env:LOCALAPPDATA 'SquirrelTemp'))){
+    foreach($root in @($report.binaryRoot,$env:TEMP,(Join-Path $env:LOCALAPPDATA 'SquirrelTemp'))){
         if(!(Test-Path -LiteralPath $root)){continue}
         foreach($file in Get-ChildItem -LiteralPath $root -Recurse -Filter 'Squirrel*.log' -File -ErrorAction Stop){
             if(!$seen.Add($file.FullName)){continue}
@@ -109,7 +112,7 @@ try{
     $report.binaryRoot=Join-Path $local 'ETS2TelemetryDesktop';$report.dataRoot=Join-Path $local 'ETS2Telemetry'
     if((Test-Path -LiteralPath $report.binaryRoot) -or (Test-Path -LiteralPath $report.dataRoot) -or @(Read-Registration).Count -or @(Read-Shortcuts).Count){throw 'Pristine guest precondition failed; no installation permitted.'}
     if(Get-Process -Name ETS2TelemetryDesktop -ErrorAction SilentlyContinue){throw 'Existing app instance; no installation permitted.'}
-    New-Item -ItemType Directory -Path $runDirectory|Out-Null
+    New-Item -ItemType Directory -Path $runDirectory,$scratchDirectory|Out-Null
     foreach($relative in @('data/history-preservation.et001.json','settings/synthetic-settings.json','logs/synthetic-archive.et001.jsonl','backups/synthetic-backup.et001.bin','plugins/synthetic-metadata.et001.json')){
         $filename=Join-Path $report.dataRoot $relative;New-Item -ItemType Directory -Path (Split-Path $filename -Parent) -Force|Out-Null
         [ordered]@{synthetic=$true;purpose='ET-001 installer preservation sentinel, not real history or a schema fixture';id=[guid]::NewGuid().ToString('N')}|ConvertTo-Json|Set-Content -LiteralPath $filename -Encoding UTF8
@@ -118,7 +121,9 @@ try{
     $report.sentinels=$sentinels.ToArray()
     foreach($name in @('TEMP','TMP','SQUIRREL_TEMP','ETS2TELEMETRY_PROFILE_DIR','ETS2TELEMETRY_DIAGNOSTIC_DIR','ETS2TELEMETRY_ALLOW_DESKTOP_LAUNCH','ETS2TELEMETRY_VM_JOB','NODE_OPTIONS','NODE_PATH','ELECTRON_RUN_AS_NODE')){$saved[$name]=[Environment]::GetEnvironmentVariable($name,'Process')}
     $env:ETS2TELEMETRY_ALLOW_DESKTOP_LAUNCH='1';$env:ETS2TELEMETRY_VM_JOB='1'
-    foreach($name in @('NODE_OPTIONS','NODE_PATH','ELECTRON_RUN_AS_NODE')){[Environment]::SetEnvironmentVariable($name,$null,'Process')}
+    # Pinned Setup treats SQUIRREL_TEMP as the installation base, not merely scratch.
+    # Clear it so the actual per-user install uses LOCALAPPDATA; preserve its preimage above.
+    foreach($name in @('NODE_OPTIONS','NODE_PATH','ELECTRON_RUN_AS_NODE','SQUIRREL_TEMP')){[Environment]::SetEnvironmentVariable($name,$null,'Process')}
     Add-Type -Path (Join-Path $kit 'tools/BoundedProcess.cs')
     $definitions=@(@{name='install';version='0.1.0';seconds=45},@{name='repair';version='0.1.0';seconds=45},@{name='smoke';version='0.1.0';seconds=30},@{name='update';version='0.1.1';seconds=45},@{name='smoke';version='0.1.1';seconds=30},@{name='uninstall';version='0.1.1';seconds=30})
     $index=0
@@ -128,8 +133,10 @@ try{
         $milliseconds=[int][math]::Min($definition.seconds*1000,$remaining)
         if($milliseconds -lt 10000){throw 'Insufficient shared guest budget for next bounded step.'}
         $directory=Join-Path $runDirectory ('step-'+$index+'-'+$definition.name+'-'+$definition.version);New-Item -ItemType Directory -Path $directory|Out-Null
-        foreach($name in @('temp','profile','diagnostics','squirrel-temp')){New-Item -ItemType Directory -Path (Join-Path $directory $name)|Out-Null}
-        $env:TEMP=Join-Path $directory 'temp';$env:TMP=$env:TEMP;$env:SQUIRREL_TEMP=Join-Path $directory 'squirrel-temp';$env:ETS2TELEMETRY_PROFILE_DIR=Join-Path $directory 'profile';$env:ETS2TELEMETRY_DIAGNOSTIC_DIR=Join-Path $directory 'diagnostics'
+        $scratchStep=Join-Path $scratchDirectory ('step-'+$index+'-'+$definition.name+'-'+$definition.version)
+        foreach($name in @('temp','profile')){New-Item -ItemType Directory -Path (Join-Path $scratchStep $name)|Out-Null}
+        New-Item -ItemType Directory -Path (Join-Path $directory 'diagnostics')|Out-Null
+        $env:TEMP=Join-Path $scratchStep 'temp';$env:TMP=$env:TEMP;$env:ETS2TELEMETRY_PROFILE_DIR=Join-Path $scratchStep 'profile';$env:ETS2TELEMETRY_DIAGNOSTIC_DIR=Join-Path $directory 'diagnostics'
         $guard=[ordered]@{verifiedUtc=[datetime]::UtcNow.ToString('o');vmUuid=$identity.UUID;labId=$manifest.labId;manifestSha256=$ExpectedManifestSha256;binaryRoot=$report.binaryRoot;step=$definition.name;version=$definition.version;outerDeadlineUtc=$OuterDeadlineUtc;jobRequired=$true}
         $guardPath=Join-Path $directory 'step-guard.json';$guard|ConvertTo-Json|Set-Content -LiteralPath $guardPath -Encoding UTF8
         $step=[ordered]@{index=$index;name=$definition.name;version=$definition.version;directory=$directory;jobBudgetMilliseconds=$milliseconds;jobExitCode=$null;driver=$null;postconditions=$null};$steps.Add($step)
