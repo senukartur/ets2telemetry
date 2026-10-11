@@ -114,14 +114,15 @@ The PR and task handoff identify the protected requirement/scenario, tests added
 
 ### ET-001 recovery checks and runtime hold
 
-Following the October 11, 2026 host freezes, the owner authorizes source fixes, logging, watchdog preparation, and rebuilding only. Electron, the packaged app, and installer execution remain prohibited until a new explicit instruction. See [the recovery procedure](docs/setup.md#packaged-startup-recovery-hold-october-11-2026).
+Following the October 11, 2026 host freezes, source fixes, logging, watchdog preparation, and rebuilding remain authorized. Electron, the packaged app, and installer execution on the physical host remain prohibited. The owner explicitly authorized isolated VM runtime checks with an inner process job, an independent outer VM watchdog, log export, VM shutdown, and clean-snapshot restoration. Two 30-second packaged-startup runs reached service/storage readiness and ended through forced watchdog termination (exit 124). This is startup evidence only; normal exit, relaunch, installer lifecycle, and longer stability remain pending. See [the recovery procedure](docs/setup.md#packaged-startup-recovery-hold-october-11-2026) and [the validation record](docs/validation/et-001.md).
 
 | Requirement | Executable regression protection | Evidence boundary |
 | --- | --- | --- |
 | Partial REG-011 startup/stop races | `tests/unit/service-probe.test.ts`, `tests/unit/service-supervisor.test.ts` | Deterministic Node tests; no Electron runtime claim |
 | Bounded/private startup logs | `tests/unit/diagnostics.test.ts` | Temporary filesystem and failed-destination cases |
 | Physical ASAR entrypoints and isolated native dependency resolution | `tests/unit/scaffold.test.ts`, `scripts/inspect-package.mjs` | Reads packaged bytes and resolves files; never loads the native binding |
+| Reviewed package identity includes unpacked code and native/binary assets | `tests/unit/package-integrity.test.ts`, `scripts/verify-package.ps1`, `scripts/package-integrity.mjs` | Inert fixtures check Node/PowerShell fingerprint agreement, same-ASAR unpacked corruption, extra files, altered EXE bytes, and invalid header/path/link rejection; never executes the fixtures |
 | External process containment | `tests/watchdog/run.ps1` | Real Windows Job Objects with harmless Node fixtures; timeout, orphan, watchdog death, bounded logs and unrelated-process preservation |
-| Packaged app / partial REG-017 | `tests/electron/startup.spec.ts` | Pending: deliberately not run under the owner hold |
+| Packaged app / partial REG-017 | `tests/electron/startup.spec.ts`; separately recorded VM watchdog probes | Playwright remains pending; VM probes verify bounded startup/storage readiness only, without normal shutdown or installer/upgrade acceptance |
 
 Do not reproduce the previous host freeze to obtain a red test. Static package inspection exposed SQLite resolving outside the package before the full module was unpacked; the retained inspector rejects that layout. The first orphan fixture used Node's own child cleanup and did not leave an orphan; the corrected fixture uses a detached child to exercise watchdog cleanup. No retries of Electron were performed during recovery.

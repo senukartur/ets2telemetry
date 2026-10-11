@@ -6,7 +6,7 @@ The local MVP will display live truck metrics in an overlay, maintain a trip jou
 
 ## Project status
 
-**ET-001 scaffold, as of October 11, 2026.** The repository contains a minimal React/Electron window, telemetry utilityProcess and isolated SQLite worker probe, npm workspaces, Forge packaging configuration, and a C++17 x64 placeholder DLL. Build, unit, native, and Electron startup checks have entrypoints. Recovery packaging/static inspection and Node/watchdog checks pass, but desktop execution is on an owner-requested hold after host freezes; runtime and clean-install evidence remain pending; no protocol, game adapter, recorder, overlay, server, or CI is implemented.
+**ET-001 scaffold, as of October 11, 2026.** The repository contains a minimal React/Electron window, telemetry utilityProcess and isolated SQLite worker probe, npm workspaces, Forge packaging configuration, and a C++17 x64 placeholder DLL. Build, unit, native, and Electron startup checks have entrypoints. Recovery packaging/static inspection and Node/watchdog checks passed. Two bounded 30-second packaged-startup runs passed in an isolated Windows VM under explicit owner authorization; orderly shutdown, relaunch, installer lifecycle, and longer stability remain pending. Launching Electron or the installer on the physical host remains prohibited after host freezes. See [the validation record](docs/validation/et-001.md). No protocol, game adapter, recorder, overlay, server, or CI is implemented.
 
 Compatibility with either game, Convoy, and TruckersMP is required but has not yet been tested. Overlay behavior, resource usage, and display latency also require real-game validation.
 

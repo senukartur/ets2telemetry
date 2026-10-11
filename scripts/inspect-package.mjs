@@ -4,10 +4,12 @@ import {createRequire} from 'node:module';
 import path from 'node:path';
 import * as asar from '@electron/asar';
 import {sha256, sourceHashes} from './source-inputs.mjs';
+import {verifyPackage} from './package-integrity.mjs';
 
 // Read bytes and resolve paths only. Never import application entries or native bindings.
 const directory = path.resolve(process.argv[2] || 'out/ETS2Telemetry Desktop-win32-x64');
 const archive = path.join(directory, 'resources/app.asar');
+const integrity = verifyPackage(directory);
 const paths = asar.listPackage(archive).map(filename => filename.replaceAll('\\', '/'));
 assert.ok(!paths.some(filename => /^\/(test-results|playwright-report|\.local|tests|scripts)(\/|$)/.test(filename)), 'Diagnostic or development files leaked into package');
 const read = filename => asar.extractFile(archive, path.normalize(filename));
@@ -42,8 +44,9 @@ const peOffset = nativeBytes.readUInt32LE(0x3c);
 assert.equal(nativeBytes.readUInt16LE(peOffset + 4), 0x8664, 'Native binding must be x64');
 const executable = path.join(directory, 'ETS2TelemetryDesktop.exe');
 const report = {checkedUtc: new Date().toISOString(), directory, applicationLaunched: false,
+  ...integrity,
   asarSha256: sha256(readFileSync(archive)), executableSha256: sha256(readFileSync(executable)),
   nativeSha256: sha256(nativeBytes), compiledFilesVerified: files, sources: metadata.sources};
 mkdirSync('.local/diagnostics', {recursive: true});
 writeFileSync('.local/diagnostics/package-inspection.json', JSON.stringify(report, null, 2) + '\n');
-console.log(JSON.stringify({applicationLaunched: false, compiledFilesVerified: files.length, asarSha256: report.asarSha256, executableSha256: report.executableSha256}, null, 2));
+console.log(JSON.stringify({applicationLaunched: false, ...integrity, compiledFilesVerified: files.length, asarSha256: report.asarSha256, executableSha256: report.executableSha256}, null, 2));
