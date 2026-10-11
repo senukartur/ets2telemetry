@@ -2,7 +2,7 @@ import { parentPort, workerData } from 'node:worker_threads';
 import Database from 'better-sqlite3';
 // Only isolated probe data is written. No production history path is accepted.
 try {
-  const filename = workerData.filename as string;
+  const filename = (workerData as {filename: string}).filename;
   let database = new Database(filename);
   database.exec('CREATE TABLE probe (value INTEGER NOT NULL)');
   database.prepare('INSERT INTO probe VALUES (?)').run(42);

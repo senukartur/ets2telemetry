@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import {spawn} from 'node:child_process';
-import {readFile, readdir, mkdir, writeFile} from 'node:fs/promises';
+import {readFile, readdir, writeFile} from 'node:fs/promises';
 import {performance} from 'node:perf_hooks';
 import {createHash} from 'node:crypto';
 import {validateRootSet,validateConsoleExit,validateLateDriverConsole,validateStopSet,validateLateBinding,validateInstallerRoles} from './installer-root-proof.mjs';
@@ -84,7 +84,7 @@ async function smoke(executable){
     smoke.security=await application.evaluate(({BrowserWindow})=>{const windows=BrowserWindow.getAllWindows();const p=windows[0].webContents.getLastWebPreferences();return {windows:windows.length,sandbox:p.sandbox,isolation:p.contextIsolation,node:p.nodeIntegration};});
     assert.deepEqual(smoke.security,{windows:1,sandbox:true,isolation:true,node:false});
     smoke.status=await window.evaluate(async()=>({require:typeof globalThis.require,process:typeof globalThis.process,keys:Object.keys(globalThis.desktop),frozen:Object.isFrozen(globalThis.desktop),status:await globalThis.desktop.getStatus()}));
-    assert.deepEqual(smoke.status,{require:'undefined',process:'undefined',keys:['getStatus'],frozen:true,status:{service:'ready',storage:'verified',synthetic:true}});
+    assert.deepEqual(smoke.status,{require:'undefined',process:'undefined',keys:['getStatus','selectSource','subscribeLive'],frozen:true,status:{service:'ready',storage:'verified',synthetic:true}});
     smoke.probeBefore=(await readdir(process.env.TEMP)).filter(name=>name.startsWith('ets2telemetry-probe-'));assert.equal(smoke.probeBefore.length,1);
     await window.screenshot({path:path.join(output,'installed-ready.png')});
     const applicationIdentity=await application.evaluate(({app})=>({executable:process.execPath,version:app.getVersion(),packaged:app.isPackaged}));

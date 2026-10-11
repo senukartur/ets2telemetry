@@ -1,0 +1,14 @@
+{
+  "name": "@ets2telemetry/lint",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Lint-only toolchain; TypeScript 6 supplies the compiler API that typescript-eslint needs while the project builds with TypeScript 7",
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "eslint": "10.12.0",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "globals": "17.13.0",
+    "typescript": "npm:@typescript/typescript6@6.0.2",
+    "typescript-eslint": "8.71.1"
+  }
+}

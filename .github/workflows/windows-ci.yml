@@ -1,8 +1,16 @@
 name: Windows CI
 on:
   pull_request:
+    # Draft PRs are skipped by the job condition below; ready_for_review starts the full run.
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
   push:
     branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
   workflow_dispatch:
     inputs:
       extended:
@@ -17,13 +25,18 @@ concurrency:
 jobs:
   windows:
     name: Windows x64 scaffold
+    # A skipped draft run is not a passed check; use workflow_dispatch on the branch to check a draft head.
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: windows-2022
     timeout-minutes: 20
     defaults:
       run:
         shell: pwsh
     env:
-      ELECTRON_CACHE: ${{ github.workspace }}\.local\cache\electron
+      # Download caches live in the workspace so actions/cache saves paths that actually exist.
+      # Electron's installer and @electron/get read electron_config_cache, not ELECTRON_CACHE.
+      npm_config_cache: ${{ github.workspace }}\.local\cache\npm
+      electron_config_cache: ${{ github.workspace }}\.local\cache\electron
       PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
       ETS2TELEMETRY_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
@@ -44,11 +57,18 @@ jobs:
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
-            ~\AppData\Local\npm-cache
+            .local/cache/npm
             .local/cache/electron
-          key: download-${{ runner.os }}-x64-node24.19.0-abi137-electron44.7.0-abi149-${{ hashFiles('package-lock.json') }}
+          key: download-${{ runner.os }}-x64-node24.19.0-abi137-electron44.7.0-abi149-${{ hashFiles('package-lock.json', 'tools/lint/package-lock.json') }}
       - name: Clean lockfile installation
         run: npm ci
+      # Lint runs before the build for fast feedback; its toolchain has a separate lockfile (docs/setup.md).
+      - name: Lint TypeScript and JavaScript
+        run: |
+          npm run lint:install
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run lint
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Full Node-safe suite and typecheck
         run: |
           npm run typecheck
@@ -58,6 +78,8 @@ jobs:
       - name: Build desktop and native x64
         run: |
           npm run build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ctest --test-dir native/telemetry-client/build -C Release --output-on-failure --no-tests=error
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cmake -S native/telemetry-plugin -B native/telemetry-plugin/build -G 'Visual Studio 17 2022' -A x64
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -80,8 +102,27 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ctest --test-dir native/telemetry-plugin/build-asan -C Release --output-on-failure -R asan-contract
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Separate native client AddressSanitizer controls
+        run: |
+          $clientVsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if ($LASTEXITCODE -ne 0 -or -not $clientVsPath) { throw 'MSVC installation not found for client ASan runtime.' }
+          $clientVcVersion = (Get-Content -LiteralPath (Join-Path $clientVsPath 'VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt') -Raw).Trim()
+          $clientAsanBin = Join-Path $clientVsPath "VC\Tools\MSVC\$clientVcVersion\bin\Hostx64\x64"
+          if (-not (Test-Path -LiteralPath (Join-Path $clientAsanBin 'clang_rt.asan_dynamic-x86_64.dll'))) { throw 'MSVC AddressSanitizer runtime not found.' }
+          $env:PATH = "$clientAsanBin;$env:PATH"
+          Write-Output "Client ASan runtime: $clientAsanBin"
+          cmake -S native/telemetry-client -B native/telemetry-client/build-asan -G 'Visual Studio 17 2022' -A x64 -DETS2TELEMETRY_CLIENT_ASAN=ON
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build native/telemetry-client/build-asan --config Release --target telemetry-pipe-client-asan telemetry-client-test-asan
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ctest --test-dir native/telemetry-client/build-asan -C Release --output-on-failure --no-tests=error -R '^native-pipe-client-asan$'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Isolated synthetic v0 CLI pipe smoke
+        run: npm run smoke --workspace @ets2telemetry/telemetry-simulator
       - name: Bounded development Electron worker smoke
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development
+      - name: Bounded development telemetry source and recovery smoke
+        run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario telemetry
       - name: Forge maker and static native package inspection
         run: |
           npm run make
@@ -90,6 +131,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Bounded Forge packaged Electron worker smoke
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged
+      - name: Bounded packaged telemetry source and recovery smoke
+        run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged -Scenario telemetry
       - name: Extended existing safety regressions
         if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.extended)
         run: ./scripts/ci/Invoke-Extended.ps1
@@ -105,6 +148,8 @@ jobs:
             .local/diagnostics/package-inspection.json
             native/telemetry-plugin/build/Testing/Temporary
             native/telemetry-plugin/build-asan/Testing/Temporary
+            native/telemetry-client/build/Testing/Temporary
+            native/telemetry-client/build-asan/Testing/Temporary
           retention-days: 14
           if-no-files-found: error
           include-hidden-files: true
