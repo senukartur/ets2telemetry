@@ -63,7 +63,7 @@ export async function startPipe(emissions:Emission[],options:PipeOptions={}):Pro
                 if(options.realtime&&waitMs>0)await delay(Math.ceil(waitMs),undefined,{signal:controller.signal});
                 await new Promise<void>((resolve,reject)=>{
                   const deadline=setTimeout(()=>{socket.destroy();reject(new Error('Synthetic write deadline exceeded'));},writeTimeoutMs);
-                  socket.write(emission.frame,error=>{clearTimeout(deadline);error?reject(error):resolve();});
+                  socket.write(emission.frame,error=>{clearTimeout(deadline);if(error)reject(error);else resolve();});
                 });
               }
               completed=true;
@@ -105,7 +105,7 @@ export async function consumePipe(endpoint:string,connections:number,timeoutMs=5
             if(!freshAtSnapshot)throw new Error('Synthetic snapshot receipt freshness failed');
           }
         }
-      }catch(error){clearTimeout(deadline);socket.destroy();reject(error);}});
+      }catch(error){clearTimeout(deadline);socket.destroy();reject(error instanceof Error?error:new Error('Synthetic consumer failed',{cause:error}));}});
       socket.on('error',error=>{clearTimeout(deadline);reject(error);});
       socket.on('end',()=>{
         try {
@@ -115,9 +115,9 @@ export async function consumePipe(endpoint:string,connections:number,timeoutMs=5
           if(!freshBeforeTimeout||!staleAfterTimeout)throw new Error('Synthetic snapshot timeout freshness failed');
           probe.end();if(!probe.state)throw new Error('Synthetic connection ended before hydration');
           freshness.push({connection:connection+1,freshAtSnapshot,freshBeforeTimeout,freshAtLastMessage,staleAfterTimeout,staleAfterDisconnect:probe.stale(lastReceivedMs)});cleanEnd=true;
-        }catch(error){clearTimeout(deadline);socket.destroy();reject(error);}
+        }catch(error){clearTimeout(deadline);socket.destroy();reject(error instanceof Error?error:new Error('Synthetic consumer failed',{cause:error}));}
       });
-      socket.on('close',()=>{clearTimeout(deadline);cleanEnd?resolve():reject(new Error('Synthetic connection closed before clean EOF'));});
+      socket.on('close',()=>{clearTimeout(deadline);if(cleanEnd)resolve();else reject(new Error('Synthetic connection closed before clean EOF'));});
     });
   }
   return {probe,arrivalsMs,freshness};

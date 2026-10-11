@@ -59,9 +59,16 @@ jobs:
           path: |
             .local/cache/npm
             .local/cache/electron
-          key: download-${{ runner.os }}-x64-node24.19.0-abi137-electron44.7.0-abi149-${{ hashFiles('package-lock.json') }}
+          key: download-${{ runner.os }}-x64-node24.19.0-abi137-electron44.7.0-abi149-${{ hashFiles('package-lock.json', 'tools/lint/package-lock.json') }}
       - name: Clean lockfile installation
         run: npm ci
+      # Lint runs before the build for fast feedback; its toolchain has a separate lockfile (docs/setup.md).
+      - name: Lint TypeScript and JavaScript
+        run: |
+          npm run lint:install
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run lint
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Full Node-safe suite and typecheck
         run: |
           npm run typecheck

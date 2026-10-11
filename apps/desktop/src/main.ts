@@ -42,7 +42,8 @@ else {
     service.stderr?.on('data', chunk => log('SERVICE_STDERR', String(chunk)));
     service.once('spawn', () => log('SERVICE_SPAWN', {pid: service.pid}));
     service.once('exit', code => supervisor.serviceExited(code));
-    service.on('message', message => {
+    // Utility-process messages are untyped; only the discriminator is inspected here.
+    service.on('message', (message: {type?: unknown} | null | undefined) => {
       if (supervisor.stopping) return;
       if (message?.type === 'ready') {
         if (!supervisor.ready()) return;

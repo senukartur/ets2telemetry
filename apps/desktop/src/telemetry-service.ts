@@ -32,5 +32,5 @@ const probe = new ServiceProbe({
     if (message.code === 'SERVICE_STOP_FAILED') process.exit(1);
   }
 });
-port.on('message', event => {if (event.data?.type === 'stop') void probe.stop();});
+port.on('message', event => {if ((event.data as {type?: unknown} | null | undefined)?.type === 'stop') void probe.stop();});
 void probe.start();
