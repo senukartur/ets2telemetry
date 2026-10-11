@@ -152,7 +152,7 @@ Use lightweight GitHub Flow: `main` -> task branch -> pull request -> validation
 These rules apply to the agent that addresses review feedback on a PR, whoever wrote the comment (owner, independent reviewer, or the advisory Claude review).
 
 - Close every review thread you handle with a reply, then resolve it. Never resolve a thread silently.
-- **Fixed:** push the fix to the PR branch first, then reply with the commit SHA that contains the fix and a one-line summary, for example `Fixed in 28b2f26: renderer rules now cover apps/desktop/src/**/*.tsx.` Use the actual commit that changed the code, not a later documentation or merge commit.
+- **Fixed:** push the fix to the PR branch first, then reply with the commit SHA that contains the fix and a one-line summary, for example `Fixed in 28b2f26: renderer rules now cover apps/desktop/src/**/*.tsx.` Use the actual commit that changed the code, not a later documentation or merge commit. If the branch is later rewritten, update the reply so the SHA still exists on the PR branch.
 - **Not fixed:** if you disagree with the finding, reply with the reason and the evidence (requirement, test, measurement, or code reference), then resolve the thread. Disagreement is not a reason to leave a thread open or to resolve it without a reply.
 - If the owner reopens a thread or replies after it is resolved, treat it as open feedback: answer again and resolve it only after the new point is addressed.
 - Findings in a summary comment, outside any line thread, get one PR comment that lists each finding with its fixing SHA or the reason it was not changed.
@@ -161,8 +161,9 @@ These rules apply to the agent that addresses review feedback on a PR, whoever w
 Commands (replace `<pr>`, `<comment-id>` and `<thread-id>`):
 
 ```powershell
-# List threads with their IDs, state and the first comment's database ID.
-gh api graphql -f query='query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){reviewThreads(first:100){nodes{id isResolved path comments(first:1){nodes{databaseId body}}}}}}}' -F o=senukartur -F r=ets2telemetry -F n=<pr>
+# List threads with their IDs, state and the first comment's database ID, 100 per page.
+# If pageInfo.hasNextPage is true, repeat with -F c=<endCursor> until it is false.
+gh api graphql -f query='query($o:String!,$r:String!,$n:Int!,$c:String){repository(owner:$o,name:$r){pullRequest(number:$n){reviewThreads(first:100,after:$c){totalCount pageInfo{hasNextPage endCursor} nodes{id isResolved path comments(first:1){nodes{databaseId body}}}}}}}' -F o=senukartur -F r=ets2telemetry -F n=<pr>
 # Reply inside the thread, then resolve it.
 gh api -X POST repos/senukartur/ets2telemetry/pulls/<pr>/comments/<comment-id>/replies -f body='Fixed in <sha>: <summary>'
 gh api graphql -f query='mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{isResolved}}}' -F id=<thread-id>
