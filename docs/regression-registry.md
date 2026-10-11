@@ -6,15 +6,15 @@ Read the full requirements in [TESTING.md](../TESTING.md). Pending means the own
 | --- | --- | --- |
 | REG-001 normal job/road stop/delivery | Pending | ET-014, ET-015 domain/1 Hz integration |
 | REG-002 pause/resume | Pending | ET-014, ET-015 controlled-clock samples/events |
-| REG-003 late attachment/gap | Partial: `tests/unit/protocol-v0.test.ts`, native `protocol-v0-contract`, shared checkpoint/continuity streams; v0 hydration has no gameplay effects | ET-006, ET-014, ET-015 actual ingestion/recording completeness |
+| REG-003 late attachment/gap | Partial: `tests/unit/protocol-v0.test.ts`, native `protocol-v0-contract`, shared checkpoint/continuity streams; `tests/unit/simulator-v0.test.ts` synthetic replay and actual test pipes exercise reconnect hydration, offline counters and stale-until-checkpoint | ET-006, ET-014, ET-015 actual desktop ingestion/recording completeness |
 | REG-004 cancellation/disappearance | Pending | ET-003, ET-014 terminal payload/lifecycle |
 | REG-005 duplicate/order | Partial: shared v0 ordering streams reject duplicate/regressing sequence, changed identity/clock, and counter regression in TypeScript and C++ | ET-002b, ET-004, ET-014, ET-015 durable redelivery/accounting |
 | REG-006 crash before commit/ACK | Pending | ET-004, ET-013, ET-015 actual storage process recovery |
 | REG-007 failed writes/bounded buffer | Pending | ET-013, ET-015 durable ACK/failure integration |
 | REG-008 resets/truck/refueling | Pending | ET-010, ET-014 domain discontinuities |
-| REG-009 missing/zero/units | Partial: shared v0 availability/unit fixtures and materialized zero/unavailable assertions in TypeScript and C++ | ET-003, ET-010 actual SDK normalization and trip averages |
-| REG-010 frame parser/version | Partial: `tests/unit/protocol-v0.test.ts`, native `protocol-v0-contract`, identical `tests/fixtures/protocol-v0` bytes; split/coalesced/invalid UTF-8/duplicate keys/depth/frame bounds/version/uint64 checks | ET-002b v1, ET-004/ET-006 actual pipe/ingestion integration; fuzz/sanitizer coverage pending |
-| REG-011 stalled reader/reconnect/shutdown | Partial: `tests/unit/service-probe.test.ts`, `service-supervisor.test.ts`; `tests/watchdog/run.ps1`; `scripts/ci/Invoke-RuntimeSmoke.ps1` orderly scaffold worker stop | ET-004, ET-006 real pipe queues/callback bounds/gap semantics pending |
+| REG-009 missing/zero/units | Partial: shared v0 availability/unit fixtures and materialized zero/unavailable assertions in TypeScript and C++; synthetic simulator fixtures preserve canonical units, explicit availability, reverse speed and legitimate zero | ET-003, ET-010 actual SDK normalization and trip averages |
+| REG-010 frame parser/version | Partial: `tests/unit/protocol-v0.test.ts`, native `protocol-v0-contract`, identical `tests/fixtures/protocol-v0` bytes; split/coalesced/invalid UTF-8/duplicate keys/depth/frame bounds/version/uint64 checks; `simulator-v0.test.ts` and CLI test-pipe smoke reject malformed handshake/frames and incomplete hydration | ET-002b v1, ET-004/ET-006 production pipe/desktop ingestion integration; fuzz/sanitizer coverage pending |
+| REG-011 stalled reader/reconnect/shutdown | Partial: `tests/unit/service-probe.test.ts`, `service-supervisor.test.ts`; `tests/watchdog/run.ps1`; `scripts/ci/Invoke-RuntimeSmoke.ps1` orderly scaffold worker stop; `simulator-v0.test.ts` actual synthetic pipes cover slow readers, bounded waits, cancellation and immediate reconnects | ET-004, ET-006 native production pipe queues/callback bounds/gap semantics pending |
 | REG-012 close-to-tray/instance/restart | Pending; scaffold explicit smoke shutdown is not recording persistence | ET-011, ET-015 app lifecycle |
 | REG-013 historical migrations | Pending; no production schema or historical database exists | ET-013, ET-018 immutable supported/unsupported-newer fixtures |
 | REG-014 journal/export | Pending | ET-016 reconciliation/cancellation |

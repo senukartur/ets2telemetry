@@ -1,0 +1,19 @@
+{
+  "id": "REG-003-synthetic-current-state-hydration",
+  "origin": "synthetic",
+  "game": "ets2",
+  "seed": "et005a-fixed-1",
+  "steps": [
+    {"action":"reading","reading":{"atMs":0,"speedMps":10,"fuelL":100,"simulation":"running","revision":"1","truck":"synthetic-truck-A","gameMinute":"9007199254740993"}},
+    {"action":"reading","reading":{"atMs":50,"speedMps":0,"fuelL":100,"simulation":"paused","revision":"1","truck":"synthetic-truck-A","gameMinute":"9007199254740993"}},
+    {"action":"connect","atMs":100},
+    {"action":"reading","reading":{"atMs":150,"speedMps":0,"fuelL":100,"simulation":"running","revision":"1","truck":"synthetic-truck-A","gameMinute":"9007199254740994"}},
+    {"action":"reading","reading":{"atMs":200,"speedMps":0,"fuelL":100,"simulation":"running","revision":"1","truck":"synthetic-truck-A","gameMinute":"9007199254740994"}},
+    {"action":"disconnect","atMs":210},
+    {"action":"reading","reading":{"atMs":250,"speedMps":null,"fuelL":null,"simulation":"unavailable","revision":"2","truck":null,"gameMinute":"0"}},
+    {"action":"reading","reading":{"atMs":300,"speedMps":-2,"fuelL":120,"simulation":"running","revision":"3","truck":"synthetic-truck-B","gameMinute":"1"}},
+    {"action":"connect","atMs":350},
+    {"action":"reading","reading":{"atMs":400,"speedMps":null,"fuelL":0,"simulation":"paused","revision":"3","truck":"synthetic-truck-B","gameMinute":"1"}},
+    {"action":"disconnect","atMs":410}
+  ]
+}

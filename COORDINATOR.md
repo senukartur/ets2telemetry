@@ -57,6 +57,8 @@ ET-022 and SP-01 can run concurrently after ET-001 is accepted and merged. Follo
 
 Owner exception on October 11, 2026: start ET-002a implementation and a draft PR from updated `main` before SP-01 acceptance or merge. SP-01 remains draft: the failed ETS2 single-player windowed appearance check needs a real retry, and Convoy evidence remains pending. This exception permits independent protocol v0 work only; it does not accept SP-01, establish game compatibility, enable protocol v1, or waive other package acceptance and merge prerequisites.
 
+Owner decision on October 11, 2026: ET-002a was explicitly accepted after its exact-head checks and independent review; PR #9 was squash merged as `247c076cf803529c4650e125544faaf0bc3ccad7`. The owner expanded the sequencing exception to start ET-003 and ET-005a from that updated `main` while SP-01 remains unaccepted and PR #8 stays draft. The real ETS2 single-player windowed retry and Convoy checks remain mandatory pending evidence. This decision changes sequencing only; it does not establish game compatibility, authorize protocol v1, or waive the acceptance and merge criteria of subsequent packages.
+
 ## Delegation and file ownership
 
 Use the session's subagent tools for bounded assignments. Do not create separate user-owned chats or message existing unrelated chats unless the owner explicitly requests that action. Workers must not spawn further agents unless the coordinator explicitly assigns that delegation.

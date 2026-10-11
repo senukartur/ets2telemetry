@@ -159,7 +159,7 @@ export function validateMessage(v: unknown): ProtocolMessage {
 }
 
 // JSON.parse alone loses duplicate keys. This bounded parser rejects them before schema validation.
-function strictJson(input: string): unknown {
+export function strictJson(input: string): unknown {
   let p = 0;
   const ws = () => { while (/[ \r\n\t]/.test(input[p] ?? '\0')) p++; };
   const str = (): string => {
