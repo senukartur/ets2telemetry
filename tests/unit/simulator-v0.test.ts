@@ -11,6 +11,7 @@ import {SnapshotProbe} from '../../tools/telemetry-simulator/src/consumer';
 import {faultBytes,type Fault} from '../../tools/telemetry-simulator/src/faults';
 import {startPipe,consumePipe} from '../../tools/telemetry-simulator/src/pipe';
 import {readFixtureFile,MAX_FIXTURE_BYTES} from '../../tools/telemetry-simulator/src/fixture-file';
+import {checkCadence} from '../../tools/telemetry-simulator/src/cadence';
 
 const fixture=JSON.parse(readFileSync('tests/fixtures/simulator-v0/reconnect.json','utf8')) as Scenario;
 const expected=JSON.parse(readFileSync('tests/fixtures/simulator-v0/reconnect.expected.json','utf8')) as {messages:unknown[];freshness:Array<{receivedAtMs:number;observeAtMs:number;stale:boolean}>};
@@ -35,7 +36,14 @@ describe('synthetic v0 replay',()=>{
     const reordered:Reading['job']={value:{expectedIncome:{currency:{status:'unknown'},rawValue:'0'},plannedDistance:{unit:'m',value:0,available:true},destinationCityId:'synthetic-city',cargoId:'synthetic-cargo'},available:true};
     const reading:Reading={atMs:0,speedMps:0,fuelL:0,simulation:'running',revision:'1',truck:'synthetic-truck',gameMinute:'0',job};
     const e=replay({...fixture,steps:[{action:'reading',reading},{action:'reading',reading:{...reading,atMs:1,job:reordered}},{action:'connect',atMs:2}]});
-    const checkpoint=e[1].message;if(checkpoint.kind!=='checkpoint')throw new Error('checkpoint');expect(checkpoint.data.continuity).toEqual({coalescedSnapshots:'1',lostObservations:'0',offlineTransitions:'1'});
+    const checkpoint=e[1].message;if(checkpoint.kind!=='checkpoint')throw new Error('checkpoint');expect(checkpoint.data.continuity).toEqual({coalescedSnapshots:'1',lostObservations:'0',offlineTransitions:'0'});
+  });
+  it('does not count the first observation against the placeholder initial state as an offline transition',()=>{
+    const reading:Reading={atMs:0,speedMps:0,fuelL:0,simulation:'running',revision:'1',truck:'synthetic-truck',gameMinute:'0'};
+    const first=replay({...fixture,steps:[{action:'reading',reading},{action:'connect',atMs:1}]})[1].message;
+    const changed=replay({...fixture,steps:[{action:'reading',reading},{action:'reading',reading:{...reading,atMs:1,simulation:'paused'}},{action:'connect',atMs:2}]})[1].message;
+    if(first.kind!=='checkpoint'||changed.kind!=='checkpoint')throw new Error('checkpoint');
+    expect(first.data.continuity.offlineTransitions).toBe('0');expect(changed.data.continuity.offlineTransitions).toBe('1');
   });
   it.each(['root','step','reading'])('rejects an oversized undeclared property at %s before retaining the scenario',level=>{
     const s=structuredClone(fixture) as unknown as Record<string,unknown>;const steps=s.steps as Array<Record<string,unknown>>;
@@ -130,7 +138,32 @@ describe('synthetic v0 replay',()=>{
   });
 });
 
+describe('real-time smoke cadence',()=>{
+  const at=(...times:number[])=>times.map(atMs=>({atMs,connection:1}));
+  it('skips gaps below timer resolution instead of failing correct delivery',()=>expect(checkCadence(at(0,0,5,10,15),[0,0,1,1,2])).toBeUndefined());
+  it('compares the first measurable gap with its own schedule',()=>{
+    expect(checkCadence(at(0,0,5,60),[0,0,5,61])).toEqual({index:3,expectedMs:60,actualMs:61});
+    expect(()=>checkCadence(at(0,0,60),[0,0,10])).toThrow('cadence');
+    expect(()=>checkCadence(at(0,0,60),[0,0,1100])).toThrow('cadence');
+  });
+  it('measures each connection from its own first message',()=>{
+    expect(checkCadence([...at(0,0),{atMs:500,connection:2},{atMs:500,connection:2},{atMs:550,connection:2}],[0,0,900,900,951])).toEqual({index:4,expectedMs:50,actualMs:51});
+  });
+});
+/** Bundles current CLI source into an owned directory, so tests never use a cached artifact. */
+async function buildCli(directory:string):Promise<string> {
+  const {build}=await import('vite');const bundle=join(directory,'bundle');
+  await build({configFile:false,logLevel:'silent',build:{outDir:bundle,emptyOutDir:true,lib:{entry:resolve('tools/telemetry-simulator/src/cli.ts'),formats:['cjs'],fileName:()=> 'cli.cjs'},rollupOptions:{external:[...builtinModules,...builtinModules.map(x=>`node:${x}`)]}}});
+  return join(bundle,'cli.cjs');
+}
 describe('fixture filesystem boundary',()=>{
+  it('rejects duplicate keys that JSON.parse would silently collapse',()=>{
+    const directory=mkdtempSync(join(tmpdir(),'ETS2Telemetry-SYNTHETIC-TEST-fixture-'));
+    try {
+      const path=join(directory,'fixture.json');writeFileSync(path,JSON.stringify(fixture).replace('"seed":','"seed":"shadowed","seed":'));
+      expect(()=>readFixtureFile(path)).toThrow('duplicate');
+    }finally{rmSync(directory,{recursive:true,force:true});}
+  });
   it('accepts exactly the byte cap and rejects overflow/invalid UTF-8 while closing the handle',()=>{
     const directory=mkdtempSync(join(tmpdir(),'ETS2Telemetry-SYNTHETIC-TEST-fixture-'));
     try {
@@ -143,13 +176,10 @@ describe('fixture filesystem boundary',()=>{
     const directory=mkdtempSync(join(tmpdir(),'ETS2Telemetry-SYNTHETIC-TEST-fixture-'));
     try {
       const path=join(directory,'fixture.json'),preload=join(directory,'grow.cjs'),marker=join(directory,'grew.txt');writeFileSync(path,JSON.stringify(fixture));
-      // Bundle the current source in an owned temporary directory, so the fast
-      // suite never depends on a prior root build or a cached CLI artifact.
-      const {build}=await import('vite');const bundle=join(directory,'bundle');
-      await build({configFile:false,logLevel:'silent',build:{outDir:bundle,emptyOutDir:true,lib:{entry:resolve('tools/telemetry-simulator/src/cli.ts'),formats:['cjs'],fileName:()=> 'cli.cjs'},rollupOptions:{external:[...builtinModules,...builtinModules.map(x=>`node:${x}`)]}}});
+      const cli=await buildCli(directory);
       // An actual filesystem mutation at a deterministic boundary, not mocked read bytes.
       writeFileSync(preload,`const fs=require('node:fs');const path=process.env.SIMULATOR_FIXTURE;let grown=false;function grow(p){if(!grown&&String(p)===path){grown=true;fs.appendFileSync(path,' '.repeat(3*1024*1024));fs.writeFileSync(process.env.SIMULATOR_GROWTH_MARKER,'actual-file-grew');}}const stat=fs.statSync;fs.statSync=function(p,...args){const result=stat.call(this,p,...args);grow(p);return result;};const open=fs.openSync;fs.openSync=function(p,...args){const result=open.call(this,p,...args);grow(p);return result;};`);
-      const result=spawnSync(process.execPath,['--require',preload,join(bundle,'cli.cjs'),'replay',path],{env:{...process.env,SIMULATOR_FIXTURE:path,SIMULATOR_GROWTH_MARKER:marker},encoding:'utf8',timeout:5000,maxBuffer:65536,windowsHide:true});
+      const result=spawnSync(process.execPath,['--require',preload,cli,'replay',path],{env:{...process.env,SIMULATOR_FIXTURE:path,SIMULATOR_GROWTH_MARKER:marker},encoding:'utf8',timeout:5000,maxBuffer:65536,windowsHide:true});
       expect(result.error).toBeUndefined();expect(readFileSync(marker,'utf8')).toBe('actual-file-grew');expect(result.status).toBe(1);expect(result.stdout).toBe('');expect(result.stderr).toContain('exceeds 2 MiB');
     }finally{rmSync(directory,{recursive:true,force:true});}
   });
@@ -157,7 +187,34 @@ describe('fixture filesystem boundary',()=>{
 describe('isolated actual Windows pipe boundary',()=>{
   it('speaks real v0 hello/welcome/checkpoint/snapshot across reconnect with real cadence',async()=>{
     const emissions=replay(fixture),run=await startPipe(emissions,{realtime:true});
-    try {const result=await consumePipe(run.endpoint,2);await run.closed;expect(result.probe.applied.map(e=>e.message)).toEqual(emissions.map(e=>e.message));expect(result.probe.stale(5000)).toBe(true);expect(result.arrivalsMs[2]-result.arrivalsMs[1]).toBeGreaterThanOrEqual(20);expect(result.arrivalsMs.at(-1)!).toBeLessThan(4000);}finally{await run.stop();}
+    try {
+      const result=await consumePipe(run.endpoint,2);await run.closed;expect(result.probe.applied.map(e=>e.message)).toEqual(emissions.map(e=>e.message));
+      // Observed at the last receive instant of each connection, not after a tautological disconnect.
+      const observed={freshAtLastMessage:true,staleAfterTimeout:true,staleAfterDisconnect:true};
+      expect(result.freshness).toEqual([{connection:1,...observed},{connection:2,...observed}]);
+      expect(result.arrivalsMs[2]-result.arrivalsMs[1]).toBeGreaterThanOrEqual(20);expect(result.arrivalsMs.at(-1)!).toBeLessThan(4000);
+    }finally{await run.stop();}
+  });
+  it('schedules real-time writes from the session start so latency does not accumulate',async()=>{
+    const reading:Reading={atMs:25,speedMps:1,fuelL:1,simulation:'running',revision:'1',truck:null,gameMinute:'0'};
+    const steps:Scenario['steps']=[{action:'connect',atMs:0},...Array.from({length:40},(_,i)=>({action:'reading' as const,reading:{...reading,atMs:25*(i+1)}})),{action:'disconnect',atMs:1000}];
+    const emissions=replay({...fixture,steps}),run=await startPipe(emissions,{realtime:true});
+    try {
+      const result=await consumePipe(run.endpoint,1);await run.closed;const spanMs=result.arrivalsMs.at(-1)!-result.arrivalsMs[0];
+      expect(spanMs).toBeGreaterThanOrEqual(950);expect(spanMs).toBeLessThan(1150);
+    }finally{await run.stop();}
+  });
+  it('CLI smoke accepts a correctly delivered fixture whose gaps are below the measurable threshold',async()=>{
+    const directory=mkdtempSync(join(tmpdir(),'ETS2Telemetry-SYNTHETIC-TEST-fixture-'));
+    try {
+      const cli=await buildCli(directory),path=join(directory,'short-gaps.json');
+      const reading:Reading={atMs:5,speedMps:1,fuelL:1,simulation:'running',revision:'1',truck:null,gameMinute:'0'};
+      writeFileSync(path,JSON.stringify({...fixture,steps:[{action:'connect',atMs:0},{action:'reading',reading},{action:'reading',reading:{...reading,atMs:10}},{action:'disconnect',atMs:15}]}));
+      const result=spawnSync(process.execPath,[cli,'smoke',path],{encoding:'utf8',timeout:10_000,maxBuffer:65536,windowsHide:true});
+      expect(result.stderr).toBe('');expect(result.status).toBe(0);
+      const report=JSON.parse(result.stdout) as {cadence:unknown;freshness:unknown};
+      expect(report.cadence).toBeNull();expect(report.freshness).toEqual([{connection:1,freshAtLastMessage:true,staleAfterTimeout:true,staleAfterDisconnect:true}]);
+    }finally{rmSync(directory,{recursive:true,force:true});}
   });
   it('does not accept a production endpoint',async()=>await expect(consumePipe('\\\\.\\pipe\\ETS2Telemetry-ets2-v0-real',1)).rejects.toThrow('synthetic endpoint'));
   it('rejects clean EOF before checkpoint hydration rather than accepting an incomplete handshake',async()=>{
@@ -181,7 +238,7 @@ describe('isolated actual Windows pipe boundary',()=>{
     const initial=replay(fixture).filter(e=>e.connection===1);const snapshot=initial[2];
     const welcome=initial[0].message;if(welcome.kind!=='welcome')throw new Error('welcome');welcome.data.diagnostics=true;initial[0].frame=encodeFrame(welcome);
     const large=initial.concat(Array.from({length:400},(_,i)=>{
-      const message:ServerMessage={...snapshot.message,kind:'diagnostic',seq:(6+i).toString(),capture:{...snapshot.message.capture,monotonicNs:(BigInt(201+i)*1_000_000n).toString()},data:{copied:true,observations:Array.from({length:32},(_,j)=>({channel:`synthetic.${j}`,sdkType:'string',value:{available:true,value:'x'.repeat(1024)},unit:'raw'})),continuity:{coalescedSnapshots:'1',lostObservations:'0',offlineTransitions:'2'}}};
+      const message:ServerMessage={...snapshot.message,kind:'diagnostic',seq:(6+i).toString(),capture:{...snapshot.message.capture,monotonicNs:(BigInt(201+i)*1_000_000n).toString()},data:{copied:true,observations:Array.from({length:32},(_,j)=>({channel:`synthetic.${j}`,sdkType:'string',value:{available:true,value:'x'.repeat(1024)},unit:'raw'})),continuity:{coalescedSnapshots:'1',lostObservations:'0',offlineTransitions:'1'}}};
       return {...snapshot,message,atMs:201+i,frame:encodeFrame(message)};
     }));
     const run=await startPipe(large,{timeoutMs:500,writeTimeoutMs:80});const socket=net.connect(run.endpoint);
