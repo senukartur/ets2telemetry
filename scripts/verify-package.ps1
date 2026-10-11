@@ -1,24 +1,41 @@
 # Read package bytes only. This verifier never launches Electron or loads SQLite.
+function Get-PackageEntryRelativeName {
+    param([string]$ParentRelative, $Entry)
+    # Enumerated names carry the relative tree identity. FullName may expand 8.3
+    # ancestors while Resolve-Path keeps their short spelling; never slice it.
+    $name = [string]$Entry.Name
+    if (!$name -or $name -eq '.' -or $name -eq '..' -or $name -match '[<>:"/\\|?*\x00-\x1f]') {
+        throw 'Invalid package path segment.'
+    }
+    foreach ($segment in $ParentRelative.Split('/')) {
+        if ($ParentRelative -and (!$segment -or $segment -eq '.' -or $segment -eq '..' -or $segment -match '[<>:"/\\|?*\x00-\x1f]')) {
+            throw 'Invalid package parent path.'
+        }
+    }
+    if ($ParentRelative) { return "$ParentRelative/$name" }
+    return $name
+}
 function Test-PackageIntegrity {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$PackageDirectory)
     $packageRoot = (Resolve-Path -LiteralPath $PackageDirectory -ErrorAction Stop).Path.TrimEnd('\', '/')
     $relativeFiles = [Collections.Generic.List[string]]::new()
     $treeBounds = @{ Entries=0 }
-    function Read-PackageTree([string]$directory, [int]$depth) {
+    function Read-PackageTree([string]$directory, [string]$relative, [int]$depth) {
         if ($depth -gt 64) { throw 'Package directory depth exceeds the verification bound.' }
         foreach ($item in Get-ChildItem -LiteralPath $directory -Force -ErrorAction Stop) {
             if (++$treeBounds.Entries -gt 100000) { throw 'Package entry count exceeds the verification bound.' }
             if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Package reparse points are not allowed.' }
-            if ($item.PSIsContainer) { Read-PackageTree $item.FullName ($depth + 1) }
+            $childRelative = Get-PackageEntryRelativeName $relative $item
+            if ($item.PSIsContainer) { Read-PackageTree $item.FullName $childRelative ($depth + 1) }
             else {
                 if ($relativeFiles.Count -ge 100000) { throw 'Package file count exceeds the verification bound.' }
-                $relativeFiles.Add($item.FullName.Substring($packageRoot.Length + 1).Replace('\', '/'))
+                $relativeFiles.Add($childRelative)
             }
         }
     }
     if ((Get-Item -LiteralPath $packageRoot).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Package reparse points are not allowed.' }
-    Read-PackageTree $packageRoot 0
+    Read-PackageTree $packageRoot '' 0
     $relativeFiles.Sort([StringComparer]::Ordinal)
     $archive = Join-Path $packageRoot 'resources/app.asar'
     $stream = [IO.File]::OpenRead($archive)
