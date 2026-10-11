@@ -6,7 +6,7 @@ Status updated October 11, 2026: ET-001 scaffold implemented and its native Wind
 
 Repository setup update on October 10, 2026: local `main` tracks the existing history at `https://github.com/senukartur/ets2telemetry.git`. Git for Windows 2.55.0.windows.5 and GitHub CLI 2.102.0 are installed. GitHub CLI is authenticated as `senukartur` and provides Git's HTTPS credentials. Fetch, a fast-forward-only pull, and the initial documentation push succeeded. The published documentation includes this concept, `AGENTS.md`, and `README.md`. The temporary Trello planning manifest stays local and is excluded through `.gitignore`. Use Git for commits, branches, and synchronization, and GitHub CLI for GitHub operations. This setup does not establish an application build toolchain or game compatibility.
 
-Development uses lightweight GitHub Flow: short-lived task branches, PRs targeting `main`, relevant validation and owner review, and squash merging. Detailed working rules are in `AGENTS.md`. GitHub is configured for squash merging and automatic deletion of merged branches. Server-side branch protection is unavailable on the current plan for this private repository; a local pre-push hook guards `main`. CI will be added when the application and native tooling are scaffolded.
+Development uses lightweight GitHub Flow: short-lived task branches, PRs targeting `main`, relevant validation and owner review, and squash merging. Detailed working rules are in `AGENTS.md`. GitHub is configured for squash merging and automatic deletion of merged branches. Server-side branch protection is unavailable on the current plan for this private repository; a local pre-push hook guards `main`. ET-022 now defines [Windows CI](docs/ci.md) after the scaffold; actual hosted-runner acceptance remains pending until recorded.
 
 ## 1. Project Overview
 
@@ -221,7 +221,7 @@ Install, replace, or remove the DLL only while the game is closed. Manage only t
 
 ## 10. Acceptance Criteria and Validation
 
-[TESTING.md](TESTING.md) defines the test layers, permanent regression scenarios, CI/merge policy, historical migration checks, and real-game evidence. ET-001 adds scaffold checks; extend them in every feature PR. Most repeatable feature logic will use simulation, real local transport, and isolated storage; real-game compatibility and input/window behavior require separate evidence. CI and broader feature suites remain pending.
+[TESTING.md](TESTING.md) defines the test layers, permanent regression scenarios, CI/merge policy, historical migration checks, and real-game evidence. ET-001 adds scaffold checks; extend them in every feature PR. Most repeatable feature logic will use simulation, real local transport, and isolated storage; real-game compatibility and input/window behavior require separate evidence. The Windows CI workflow is implemented with hosted-runner acceptance pending; broader feature suites remain pending.
 
 - Complete job lifecycle in both games: acceptance, driving, stopping, pausing, delivery, and cancellation.
 - A separate compatibility matrix for single-player, Convoy, and TruckersMP, recording tested versions. Documentation alone does not establish compatibility.

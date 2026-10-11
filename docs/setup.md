@@ -1,6 +1,6 @@
 # Windows x64 scaffold
 
-ET-001 is a scaffold, not a game integration. Do not install the placeholder DLL in a game. No production schema, protocol, recorder, overlay, or CI exists yet.
+ET-001 is a scaffold, not a game integration. Do not install the placeholder DLL in a game. No production schema, protocol, recorder or overlay exists yet. ET-022 defines [Windows CI and bounded worker smokes](ci.md), with actual hosted acceptance pending.
 
 ## Toolchain
 
