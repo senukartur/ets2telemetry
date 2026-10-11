@@ -55,3 +55,7 @@ Job timeout is 20 minutes. The clean and restored hosted jobs measured 199 and 2
 ## Recorded acceptance and final-head gate
 
 [Run 38128847239](https://github.com/senukartur/ets2telemetry/actions/runs/38128847239) passed the complete clean hosted scaffold job. [Run 38129098029](https://github.com/senukartur/ets2telemetry/actions/runs/38129098029) deliberately failed one assertion (expected 1001, actual 1000; 122 other tests passed). The assertion was removed, and [run 38129283542](https://github.com/senukartur/ets2telemetry/actions/runs/38129283542) passed the restored tree. Earlier genuine 8.3-path and CMake failures remain recorded separately. See [validation](validation/et-022.md) for source/merge-checkout identities, measured timings, evidence limits and the owner-provided account usage snapshot. The coordinator owns final PR checks and review: verify the actual final head after documentation changes and record its association externally in the PR/ledger. Do not treat the historical successful run as a check of an untested later commit.
+
+## Advisory AI review
+
+A separate [Claude code review](ai-review.md) workflow comments on non-draft PRs and on owner `@claude` requests. It runs on Ubuntu, needs a Claude secret, and is not part of the Windows CI result.

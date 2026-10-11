@@ -93,6 +93,8 @@ Keep the initial PR suite bounded; target feedback within about 10 minutes and m
 
 A failing baseline suite blocks acceptance of the change. Check the current PR commit, not a stale earlier run; shared-contract or migration changes require all relevant consumers. Record check names only after real jobs exist. On the current private repository plan, branch protection is unavailable: this is an owner/reviewer merge policy, not a server-enforced guarantee. Enable required status checks if repository capabilities later permit it.
 
+The optional [Claude code review](docs/ai-review.md) workflow posts advisory PR comments only. It is not a baseline suite or required check, and its findings or silence do not replace owner review, independent review, CI results, or real-game evidence.
+
 Dependency upgrades (especially Electron, Node, better-sqlite3, SDK, or protocol tooling) need the relevant native, packaged, and migration checks in addition to unit tests. Real-game checks are triggered before release and earlier for SDK, window/input behavior, game/client compatibility, or native changes that simulation cannot validate. If a necessary machine or game is unavailable, keep the required acceptance evidence pending rather than claiming success.
 
 ## 6. Test reliability and evidence
