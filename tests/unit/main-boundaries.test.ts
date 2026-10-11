@@ -3,7 +3,7 @@ import {afterEach, beforeEach, expect, it, vi} from 'vitest';
 
 const processEvents = ['uncaughtException', 'unhandledRejection'] as const;
 const processEmitter: EventEmitter = process;
-let originals: Map<string, Function[]>;
+let originals: Map<string, ReturnType<EventEmitter['listeners']>>;
 let app: EventEmitter & {exit: ReturnType<typeof vi.fn>};
 let ipc: EventEmitter;
 let handlers: Map<string, (event: unknown, source?: unknown) => unknown>;

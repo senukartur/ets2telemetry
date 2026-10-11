@@ -1,4 +1,5 @@
 import type {Page} from '@playwright/test';
+import {runInNewContext} from 'node:vm';
 import {afterEach, describe, expect, it, vi} from 'vitest';
 import {currentTelemetryObservation, waitForCurrentTelemetry, type RendererObservation} from '../../scripts/ci/renderer-observation.mjs';
 
@@ -13,21 +14,19 @@ function controlledPage(samples: RendererObservation[]) {
   }});
   const page = {
     // These separate legacy reads intentionally advance between renderer observations.
-    getByText: (text: string) => ({waitFor: async () => {
-      for (let count = 0; count <= 40; count++) {const sample = next(); if (sample.speed === text || sample.fuel === text) return;}
-      throw new Error('legacy visible wait timed out');
+    getByText: (text: string) => ({waitFor: () => {
+      for (let count = 0; count <= 40; count++) {const sample = next(); if (sample.speed === text || sample.fuel === text) return Promise.resolve();}
+      return Promise.reject(new Error('legacy visible wait timed out'));
     }}),
-    getByTestId: () => ({innerText: async () => next().status}),
-    waitForFunction: async (predicate: () => unknown, _argument: unknown, options: {timeout: number}) => {
+    getByTestId: () => ({innerText: () => Promise.resolve(next().status)}),
+    waitForFunction: (predicate: () => unknown, _argument: unknown, options: {timeout: number}) => {
       bounds.push(options.timeout);
       // Recreate the callback from source as Playwright does: imported closures cannot help it.
-      const serialized = new Function(`return (${predicate.toString()});`)() as () => unknown;
       for (elapsed = 0; elapsed <= options.timeout; elapsed += 250) {
-        vi.stubGlobal('document', documentFor(next())); vi.stubGlobal('getComputedStyle', () => ({visibility: 'visible'}));
-        vi.stubGlobal('innerWidth', 784); vi.stubGlobal('innerHeight', 435);
-        const value = serialized(); if (value) return {jsonValue: async () => value, dispose: async () => {disposed = true;}};
+        const value: unknown = runInNewContext(`(${predicate.toString()})()`, {document: documentFor(next()), getComputedStyle: () => ({visibility: 'visible'}), innerWidth: 784, innerHeight: 435});
+        if (value) return Promise.resolve({jsonValue: () => Promise.resolve(value), dispose: () => {disposed = true; return Promise.resolve();}});
       }
-      throw new Error(`snapshot timeout ${options.timeout}`);
+      return Promise.reject(new Error(`snapshot timeout ${options.timeout}`));
     }
   } as unknown as Page;
   return {page, bounds, elapsed: () => elapsed, disposed: () => disposed};

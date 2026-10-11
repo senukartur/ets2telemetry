@@ -38,11 +38,24 @@ const probe = new ServiceProbe({
   }
 });
 port.on('message', event => {
-  if (event.data?.type === 'stop') {subscriptions.close(); void ingestion.stop().then(() => probe.stop());}
-  else if (event.data?.type === 'unsubscribe') subscriptions.close();
-  else if (event.data?.type === 'subscribe' && event.ports.length === 1) subscriptions.attach(event.ports[0]);
-  else if (event.data?.type === 'select') {
-    try {const selection = sourceSelection(event.data.source); ingestion.configureBroker(event.data.broker); ingestion.select(selection, fixtureEndpoint);}
+  const incoming: unknown = event.data;
+  const command = incoming && typeof incoming === 'object' && !Array.isArray(incoming) ? incoming as Record<string, unknown> : undefined;
+  if (command?.type === 'stop') {subscriptions.close(); void ingestion.stop().then(() => probe.stop());}
+  else if (command?.type === 'unsubscribe') subscriptions.close();
+  else if (command?.type === 'subscribe' && event.ports.length === 1) subscriptions.attach(event.ports[0]);
+  else if (command?.type === 'select') {
+    try {
+      const selection = sourceSelection(command.source);
+      const incomingBroker = command.broker;
+      let broker;
+      if (incomingBroker !== undefined) {
+        if (!incomingBroker || typeof incomingBroker !== 'object' || Array.isArray(incomingBroker)) throw new Error('Invalid broker configuration');
+        const configuration = incomingBroker as Record<string, unknown>;
+        if (typeof configuration.executable !== 'string' || typeof configuration.discoveryDirectory !== 'string') throw new Error('Invalid broker configuration');
+        broker = {executable: configuration.executable, discoveryDirectory: configuration.discoveryDirectory};
+      }
+      ingestion.configureBroker(broker); ingestion.select(selection, fixtureEndpoint);
+    }
     catch {port.postMessage({type: 'failed', code: 'INVALID_SOURCE_COMMAND'});}
   } else {for (const transferred of event.ports) transferred.close();}
 });

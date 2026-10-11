@@ -1,7 +1,7 @@
 import {afterEach, describe, expect, it, vi} from 'vitest';
 import {ServiceProbe, type ProbeWorker} from '../../apps/desktop/src/service-probe';
 
-function fixture(createDirectory: () => Promise<string> = async () => 'temporary-probe') {
+function fixture(createDirectory: () => Promise<string> = () => Promise.resolve('temporary-probe')) {
   let message: (value: unknown) => void = () => {};
   let error: (error: unknown) => void = () => {};
   let exit: (code: number) => void = () => {};
@@ -103,7 +103,7 @@ describe('Temporary storage probe lifecycle (partial REG-011)', () => {
   });
 
   it('reports directory creation failure without attempting cleanup on an unknown path', async () => {
-    const f = fixture(async () => {throw new Error('access denied');});
+    const f = fixture(() => Promise.reject(new Error('access denied')));
     await f.probe.start();
     await f.probe.stop();
     expect(f.dependencies.createWorker).not.toHaveBeenCalled();

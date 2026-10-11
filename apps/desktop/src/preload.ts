@@ -38,7 +38,8 @@ ipcRenderer.on('telemetry:port', event => {
   // Electron's renderer MessagePort includes the documented close-event extension.
   next.addEventListener('close', () => lost(next));
   next.onmessageerror = () => lost(next);
-  next.onmessage = event => {
+  // This private port is supplied by main; its update payload is produced by the typed service.
+  next.onmessage = (event: MessageEvent<{type: string; delivery: number; update: LiveTelemetry} | undefined>) => {
     if (port !== next) return;
     const data = event.data;
     if (!listener || !data || data.type !== 'live' || !Number.isSafeInteger(data.delivery) || data.delivery < 1) {lost(next); return;}
@@ -57,7 +58,7 @@ const bridge: DesktopBridge = {
   getStatus: () => ipcRenderer.invoke('scaffold:status'),
   selectSource: source => {
     try {return ipcRenderer.invoke('telemetry:select', sourceSelection(source));}
-    catch (error) {return Promise.reject(error);}
+    catch (error) {return Promise.reject(error instanceof Error ? error : new Error('Invalid source selection'));}
   },
   subscribeLive: callback => {
     if (typeof callback !== 'function' || listener) throw new Error('One live subscription is allowed');

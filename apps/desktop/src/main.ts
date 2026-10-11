@@ -64,9 +64,10 @@ else {
     child.stderr?.on('data', chunk => log('SERVICE_STDERR', String(chunk)));
     child.once('spawn', () => log('SERVICE_SPAWN', {pid: child.pid}));
     child.once('exit', code => {if (service === child) {service = undefined; supervisor.serviceExited(code);}});
-    child.on('message', message => {
+    child.on('message', (message: unknown) => {
       if (supervisor.stopping || service !== child) return;
-      if (message?.type === 'ready') {
+      const type = message && typeof message === 'object' && !Array.isArray(message) ? (message as Record<string, unknown>).type : undefined;
+      if (type === 'ready') {
         if (!supervisor.ready()) return;
         const requested = selection, generation = ++selectionGeneration;
         void (async () => {
@@ -76,8 +77,8 @@ else {
           serviceReady = true; status = {service: 'ready', storage: 'verified', synthetic: true};
           if (!window) createWindow(); else connectSubscription();
         })().catch(error => {if (!supervisor.stopping && service === child) supervisor.fail('SERVICE_CONFIGURATION_FAILED', error);});
-      } else if (message?.type === 'failed') supervisor.fail('SERVICE_START_FAILED', message);
-      else if (message?.type !== 'stopped') supervisor.fail('SERVICE_INVALID_MESSAGE');
+      } else if (type === 'failed') supervisor.fail('SERVICE_START_FAILED', message);
+      else if (type !== 'stopped') supervisor.fail('SERVICE_INVALID_MESSAGE');
     });
   }
   log('APP_START', {electron: process.versions.electron, node: process.versions.node, packaged: app.isPackaged});

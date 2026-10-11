@@ -41,9 +41,10 @@ export class NativePipeClient extends EventEmitter implements TelemetrySocket {
       }
       this.emit('close');
     });
-    this.child.stdout.on('data', bytes => {
+    this.child.stdout.on('data', (bytes: unknown) => {
       if (this.stopped) return;
       try {
+        if (!(bytes instanceof Uint8Array)) throw new Error('Native relay bytes rejected');
         if (this.buffer.length + bytes.length > 65540) throw new Error('Native relay byte bound exceeded');
         this.buffer = Buffer.concat([this.buffer, bytes]);
         while (this.buffer.length >= 4) {
@@ -52,18 +53,21 @@ export class NativePipeClient extends EventEmitter implements TelemetrySocket {
           if (this.buffer.length < length + 4) return;
           const frame = this.buffer.subarray(0, length + 4); this.buffer = this.buffer.subarray(length + 4);
           if (!this.receiptSeen) {
-            const receipt = JSON.parse(frame.subarray(4).toString('utf8'));
+            const receipt: unknown = JSON.parse(frame.subarray(4).toString('utf8'));
             this.receiptSeen = true;
-            if (receipt.type === 'waiting' && Object.keys(receipt).length === 2 && receipt.schemaVersion === 1) {
+            if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt)) throw new Error('Native authority receipt rejected');
+            const record = receipt as Record<string, unknown>;
+            if (record.type === 'waiting' && Object.keys(record).length === 2 && record.schemaVersion === 1) {
               if (this.buffer.length) throw new Error('Uncredited native receipt suffix');
               clearTimeout(this.startup); continue;
             }
-            if (receipt.type !== 'authority' || receipt.schemaVersion !== 1 || Object.keys(receipt).length !== 5 || !isUint64(receipt.processCreationTime) || !/^[0-9a-f]{64}$/.test(receipt.userTag)) throw new Error('Native authority receipt rejected');
-            const source = receipt.source as SourceIdentity;
-            if (!source || Object.keys(source).length !== 6 || source.game !== game || source.origin !== 'game' || !Number.isInteger(source.processId) || source.processId < 1 || source.processId > 0xffffffff || !Number.isInteger(source.windowsSessionId) || source.windowsSessionId < 0 || source.windowsSessionId > 0xffffffff || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(source.processInstanceId) || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(source.pluginSessionId)) throw new Error('Native source authority rejected');
+            if (record.type !== 'authority' || record.schemaVersion !== 1 || Object.keys(record).length !== 5 || !isUint64(record.processCreationTime) || typeof record.userTag !== 'string' || !/^[0-9a-f]{64}$/.test(record.userTag)) throw new Error('Native authority receipt rejected');
+            if (!record.source || typeof record.source !== 'object' || Array.isArray(record.source)) throw new Error('Native source authority rejected');
+            const source = record.source as Record<string, unknown>;
+            if (Object.keys(source).length !== 6 || source.game !== game || source.origin !== 'game' || typeof source.processId !== 'number' || !Number.isInteger(source.processId) || source.processId < 1 || source.processId > 0xffffffff || typeof source.windowsSessionId !== 'number' || !Number.isInteger(source.windowsSessionId) || source.windowsSessionId < 0 || source.windowsSessionId > 0xffffffff || typeof source.processInstanceId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(source.processInstanceId) || typeof source.pluginSessionId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(source.pluginSessionId)) throw new Error('Native source authority rejected');
             // Bytes received before hello/credit cannot become authorized by the synchronous connect listener.
             if (this.buffer.length) throw new Error('Uncredited native receipt suffix');
-            this.authority = Object.freeze(source); clearTimeout(this.startup); this.emit('connect');
+            this.authority = Object.freeze({game, origin: source.origin, processId: source.processId, windowsSessionId: source.windowsSessionId, processInstanceId: source.processInstanceId, pluginSessionId: source.pluginSessionId}); clearTimeout(this.startup); this.emit('connect');
           } else {
             if (!this.creditOutstanding || !this.authority) throw new Error('Uncredited native relay frame');
             this.creditOutstanding = false;

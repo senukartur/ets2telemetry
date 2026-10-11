@@ -5,6 +5,8 @@ import {performance} from 'node:perf_hooks';
 import {_electron as electron} from '@playwright/test';
 import {startLiveSmokeSource} from './live-smoke-source.mjs';
 import {waitForCurrentTelemetry} from './renderer-observation.mjs';
+// These read-only globals are used only inside serialized Playwright browser callbacks.
+/* global document: readonly, getComputedStyle: readonly, innerHeight: readonly, innerWidth: readonly */
 
 const [configFile] = process.argv.slice(2);
 const config = JSON.parse((await readFile(configFile, 'utf8')).replace(/^\uFEFF/, ''));

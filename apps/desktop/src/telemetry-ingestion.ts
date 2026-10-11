@@ -87,9 +87,10 @@ export class TelemetryIngestion {
     socket.once('connect', () => {
       if (active()) socket.write(encodeFrame({version: PROTOCOL_V0, kind: 'hello', data: {clientInstanceId: this.clientInstanceId, minMinor: 0, maxMinor: 0, diagnostics: false}}));
     });
-    socket.on('data', bytes => {
+    socket.on('data', (bytes: unknown) => {
       if (!active()) return;
       try {
+        if (!(bytes instanceof Uint8Array)) throw new Error('Invalid transport bytes');
         decoder.push(bytes, message => {
           if (message.kind === 'hello') throw new Error('Unexpected client direction');
           if (selection === 'ets2' || selection === 'ats') {

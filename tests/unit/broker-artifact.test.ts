@@ -55,7 +55,7 @@ it.each(['native', 'desktop', 'executable'] as const)('rejects changed %s conten
   const f = fixture(); const original = fs.promises.lstat;
   const fixedStats = new Map(await Promise.all([f.executable, f.native, f.desktop].map(async filename => [filename, await original(filename)] as const)));
   const fixedBigStats = new Map(await Promise.all([f.executable, f.native, f.desktop].map(async filename => [filename, await original(filename, {bigint: true})] as const)));
-  vi.mocked(lstat).mockImplementation((async (filename: fs.PathLike, options?: {bigint?: boolean}) => options?.bigint ? fixedBigStats.get(String(filename)) ?? original(filename, {bigint: true}) : fixedStats.get(String(filename)) ?? original(filename)) as typeof lstat);
+  vi.mocked(lstat).mockImplementation(async (filename: fs.PathLike, options?: {bigint?: boolean}) => options?.bigint ? fixedBigStats.get(String(filename)) ?? original(filename, {bigint: true}) : fixedStats.get(String(filename)) ?? original(filename));
   expect(await f.resolve()).toBeDefined(); expect(lstat).toHaveBeenCalledWith(f.native);
   const filename = f[which], before = fs.readFileSync(filename);
   const changed = which === 'native' ? {...f.receipt, executableSha256: 'b'.repeat(64)} : {...f.receipt, sources: {'fixture.ts': 'b'.repeat(64)}};
@@ -120,7 +120,7 @@ it('rejects an image that grows after opening using at most one extra byte beyon
 it('keeps the slot reserved after a result deadline until pending owned stat I/O settles', async () => {
   vi.useFakeTimers(); const f = fixture();
   const stat = await fs.promises.lstat(f.executable, {bigint: true}); let complete!: (stat: fs.BigIntStats) => void;
-  vi.mocked(lstat).mockImplementationOnce((() => new Promise<fs.BigIntStats>(resolve => {complete = resolve;})) as unknown as typeof lstat);
+  vi.mocked(lstat).mockImplementationOnce(() => new Promise<fs.BigIntStats>(resolve => {complete = resolve;}));
   const first = f.resolve(); await vi.advanceTimersByTimeAsync(5000);
   expect(await first).toBeUndefined(); expect(f.resolve()).toBe(first); expect(lstat).toHaveBeenCalledOnce();
   complete(stat); await vi.advanceTimersByTimeAsync(0);
@@ -130,11 +130,11 @@ it('rejects oversized image metadata and bounded receipt bytes before hashing', 
   const f = fixture(); writeFileSync(f.native, Buffer.alloc(1024 * 1024 + 1));
   expect(await f.resolve()).toBeUndefined();
   writeFileSync(f.native, JSON.stringify(f.receipt)); const original = fs.promises.lstat;
-  vi.mocked(lstat).mockImplementation((async (filename: fs.PathLike, options?: {bigint?: boolean}) => {
+  vi.mocked(lstat).mockImplementation(async (filename: fs.PathLike, options?: {bigint?: boolean}) => {
     const stat = await original(filename, options as {bigint: true});
     if (String(filename) === f.executable) stat.size = 65n * 1024n * 1024n;
     return stat;
-  }) as typeof lstat);
+  });
   const opens = vi.mocked(open).mock.calls.length;
   expect(await f.resolve()).toBeUndefined(); expect(open).toHaveBeenCalledTimes(opens);
 });

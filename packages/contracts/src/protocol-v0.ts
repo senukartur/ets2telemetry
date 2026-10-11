@@ -59,6 +59,7 @@ function object(v: unknown, keys: string[]): Record<string, unknown> {
   return o;
 }
 function text(v: unknown, max = 128, allowEmpty = false): asserts v is string {
+  // eslint-disable-next-line no-control-regex -- control characters are deliberately rejected.
   if (typeof v !== 'string' || (!allowEmpty && v.length === 0) || v.length > max || new TextEncoder().encode(v).length > max || /[\u0000-\u001f\u007f]/u.test(v) || /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(v)) fail();
 }
 function uuid(v: unknown) { if (typeof v !== 'string' || v.length !== 36 || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(v)) fail(); }

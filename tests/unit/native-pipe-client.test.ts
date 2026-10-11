@@ -114,6 +114,14 @@ it('accepts waiting code2 without authority but rejects it after an authority re
   expect(contradictory.waiting).not.toHaveBeenCalled(); expect(contradictory.error).toHaveBeenCalledOnce();
 });
 const invalidReceipts = [
+  ['null receipt', () => null],
+  ['array receipt', () => []],
+  ['null source', () => ({...authority(), source: null})],
+  ['array source', () => ({...authority(), source: []})],
+  ['string PID', () => ({...authority(), source: {...source, processId: '123'}})],
+  ['numeric user tag', () => ({...authority(), userTag: 1111111111111111})],
+  ['coerced process UUID', () => ({...authority(), source: {...source, processInstanceId: [source.processInstanceId]}})],
+  ['coerced plugin UUID', () => ({...authority(), source: {...source, pluginSessionId: [source.pluginSessionId]}})],
   ['extra receipt key', () => ({...authority(), path: 'C:\\untrusted'})],
   ['extra source key', () => ({...authority(), source: {...source, path: 'C:\\untrusted'}})],
   ['selected game mismatch', () => ({...authority(), source: {...source, game: 'ats'}})],

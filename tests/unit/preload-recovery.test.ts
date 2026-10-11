@@ -109,8 +109,8 @@ it.each(['close-first', 'state-first'])('preserves active main subscription inte
   stop(); expect(subscribed).toBe(false); expect(vi.getTimerCount()).toBe(0);
 });
 it('does not reassert service subscription after the callback unsubscribes its owner', () => {
-  let stop!: () => void;
-  stop = bridge.subscribeLive(update => {if (update.status === 'restarting') stop();}); const old = attach();
+  const onUpdate = (update: LiveTelemetry) => {if (update.status === 'restarting') stop();};
+  const stop = bridge.subscribeLive(onUpdate); const old = attach();
   ipc.emit('telemetry:service-state', {}, {...initialLive(), status: 'restarting'});
   old.close(); ipc.emit('telemetry:service-state', {}, {...initialLive(), status: 'service-failed'});
   expect(subscriptions()).toBe(1); expect(vi.getTimerCount()).toBe(0);

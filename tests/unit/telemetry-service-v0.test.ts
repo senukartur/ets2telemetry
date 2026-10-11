@@ -42,13 +42,18 @@ it('boots transport only after the parent selection and retains it across render
   // Isolate the existing storage probe; exercise the actual service handlers and ingestion.
   vi.doMock('../../apps/desktop/src/service-probe', () => ({ServiceProbe: class {
     constructor(private readonly dependencies: ProbeDependencies) {}
-    async start() {this.dependencies.report({type: 'ready'});}
-    async stop() {this.dependencies.report({type: 'stopped'});}
+    start() {this.dependencies.report({type: 'ready'}); return Promise.resolve();}
+    stop() {this.dependencies.report({type: 'stopped'}); return Promise.resolve();}
   }}));
   const command = (type: string, ports: TestPort[] = []) => parent.emit('message', {data: {type, source: 'synthetic'}, ports});
   try {
     await import('../../apps/desktop/src/telemetry-service');
     expect(parent.postMessage).toHaveBeenCalledWith({type: 'ready'}); expect(connect).not.toHaveBeenCalled();
+    for (const broker of [null, [], {executable: 123, discoveryDirectory: 'isolated'}, {executable: 'isolated', discoveryDirectory: []}]) {
+      parent.emit('message', {data: {type: 'select', source: 'synthetic', broker}, ports: []});
+      expect(parent.postMessage).toHaveBeenLastCalledWith({type: 'failed', code: 'INVALID_SOURCE_COMMAND'});
+      expect(connect).not.toHaveBeenCalled();
+    }
     command('select'); expect(connect).toHaveBeenCalledTimes(1);
     sockets[0].emit('connect'); sockets[0].emit('data', Buffer.concat([emissions[0].frame, emissions[1].frame]));
     for (let reload = 0; reload < 2; reload++) {
