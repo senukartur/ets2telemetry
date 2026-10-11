@@ -4,6 +4,7 @@ import {readFile, readdir, writeFile} from 'node:fs/promises';
 import {performance} from 'node:perf_hooks';
 import {_electron as electron} from '@playwright/test';
 import {startLiveSmokeSource} from './live-smoke-source.mjs';
+import {waitForCurrentTelemetry} from './renderer-observation.mjs';
 
 const [configFile] = process.argv.slice(2);
 const config = JSON.parse((await readFile(configFile, 'utf8')).replace(/^\uFEFF/, ''));
@@ -17,6 +18,7 @@ let launcher;
 let timer;
 let tracing = false;
 let telemetrySource;
+let diagnosticCrashRequested = false;
 const failure = error => ({name: error.name, message: error.message, stack: error.stack});
 try {
   assert.equal(process.platform, 'win32');
@@ -53,24 +55,25 @@ try {
   result.probesBeforeExit = (await readdir(config.temp)).filter(name => name.startsWith('ets2telemetry-probe-'));
   assert.equal(result.probesBeforeExit.length, 1);
   if (telemetrySource) {
-    const current = async () => {
-      await window.getByText('Speed: 90.0 km/h', {exact: true}).waitFor({state: 'visible', timeout: 10000});
-      await window.getByText('Fuel: 73.0 L', {exact: true}).waitFor({state: 'visible', timeout: 10000});
-      assert.match(await window.getByTestId('telemetry-status').innerText(), /^connected:/);
+    const current = async phase => {
+      const observation = await waitForCurrentTelemetry(window);
+      (result.rendererObservations ??= []).push({phase, ...observation});
     };
-    await current();
+    await current('initial');
     result.telemetry = {origin: 'synthetic', speedKmh: 90, fuelL: 73, recording: false};
     result.telemetry.invalidSelectionRejected = await window.evaluate(async () => {
       try {await globalThis.desktop.selectSource('../arbitrary-path'); return false;} catch {return true;}
     });
     assert.equal(result.telemetry.invalidSelectionRejected, true);
-    await window.reload(); await current();
-    await window.reload(); await current();
+    await window.reload(); await current('renderer-reload-1');
+    await window.reload(); await current('renderer-reload-2');
     result.telemetry.rendererReloads = 2;
+    diagnosticCrashRequested = true;
+    result.telemetry.diagnosticCrashRequested = true;
     const restartRequested = await application.evaluate(({app}) => app.emit('ets2telemetry:diagnostic-service-exit'));
     assert.equal(restartRequested, true, 'Opt-in diagnostic event unavailable');
     await window.getByText(/^(restarting|service-failed):/).waitFor({state: 'visible', timeout: 5000});
-    await current(); result.telemetry.serviceRestartRecovered = true;
+    await current('service-restart'); result.telemetry.serviceRestartRecovered = true;
     result.telemetry.source = telemetrySource.statistics();
     assert.ok(result.telemetry.source.connections >= 2, 'Restart did not reconnect actual source');
     await telemetrySource.stop();
@@ -114,7 +117,7 @@ finally {
     result.serviceEvents = await logs(path.join(config.diagnostics, 'service'));
     for (const name of ['APP_EXIT', 'SERVICE_EXIT']) {
       const rows = result.mainEvents.filter(row => row.event === name);
-      assert.equal(rows.length, name === 'SERVICE_EXIT' && telemetrySource ? 2 : 1);
+      assert.equal(rows.length, name === 'SERVICE_EXIT' && diagnosticCrashRequested ? 2 : 1);
       assert.equal(rows.at(-1).detail.code, 0);
     }
     assert.ok(result.serviceEvents.some(row => row.event === 'STORAGE_VERIFIED'));
