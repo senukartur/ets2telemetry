@@ -41,9 +41,9 @@ try {
   assert.deepEqual(receipt.security, { require: 'undefined', process: 'undefined', api: ['subscribe'] });
   receipt.window = await app.evaluate(({ BrowserWindow }) => {
     const win = BrowserWindow.getAllWindows()[0]; const pref = win.webContents.getLastWebPreferences();
-    return { visible: win.isVisible(), focusable: win.isFocusable(), transparent: win.isTransparent(), sandbox: pref.sandbox, isolation: pref.contextIsolation, node: pref.nodeIntegration };
+    return { visible: win.isVisible(), focusable: win.isFocusable(), backgroundColor: win.getBackgroundColor(), sandbox: pref.sandbox, isolation: pref.contextIsolation, node: pref.nodeIntegration };
   });
-  assert.deepEqual(receipt.window, { visible: false, focusable: false, transparent: true, sandbox: true, isolation: true, node: false });
+  assert.deepEqual(receipt.window, { visible: false, focusable: false, backgroundColor: '#00000000', sandbox: true, isolation: true, node: false });
   await page.screenshot({ path: path.join(output, 'synthetic-overlay.png'), omitBackground: true });
   receipt.fixtureExit = await deadline(fixtureExit, 10000, 'fixture natural exit');
   assert.deepEqual(receipt.fixtureExit, { code: 0, signal: null });
