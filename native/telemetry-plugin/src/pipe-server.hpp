@@ -15,11 +15,14 @@ class OutboundSequence final {
  private: std::uint64_t value_;
 };
 enum class Status { stopped, starting, listening, connected, failed, shutdown_deadline_exceeded };
+enum class StartupFailure { none, worker_creation, identity_security, source_identity, endpoint_creation, discovery_publication, timeout };
+const char* startup_failure_message(StartupFailure) noexcept;
 class Server final {
  public:
   explicit Server(sdk::Adapter& adapter, std::uint64_t initial_sequence = 0) : adapter_(adapter), initial_sequence_(initial_sequence) {}
   ~Server();
   bool start(std::wstring directory = {}) noexcept;
+  StartupFailure await_startup() noexcept;
   void stop() noexcept;
   Status status() const noexcept { return status_.load(); }
   std::wstring endpoint() const;
@@ -33,7 +36,8 @@ class Server final {
   bool wait_io(HANDLE pipe, OVERLAPPED&, DWORD& transferred, ULONGLONG deadline, bool capture_updates);
   bool write_frame(HANDLE pipe, const std::vector<std::uint8_t>&, bool capture_updates);
   void serve(HANDLE pipe, const std::wstring& directory, const OwnerSecurity&, const UserIdentity&);
-  sdk::Adapter& adapter_; std::thread worker_; Handle stop_event_;
+  sdk::Adapter& adapter_; std::thread worker_; Handle stop_event_, startup_event_;
+  std::atomic<StartupFailure> startup_failure_{StartupFailure::worker_creation};
   std::atomic<Status> status_{Status::stopped}; std::atomic<std::uint64_t> shutdown_ms_{0};
   std::atomic<bool> write_pending_{false};
   mutable std::mutex endpoint_mutex_; std::wstring endpoint_;

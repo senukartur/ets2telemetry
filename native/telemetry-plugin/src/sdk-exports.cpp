@@ -16,12 +16,21 @@ extern "C" __declspec(dllexport) int ets2telemetry_test_write_pending() noexcept
 SCSAPI_RESULT scs_telemetry_init(const scs_u32_t version, const scs_telemetry_init_params_t* const params) {
   try {
     auto result = ets2telemetry::sdk::adapter().initialize(version, params);
-    if (result == SCS_RESULT_ok && !ets2telemetry::transport::server().start(
+    if (result != SCS_RESULT_ok) return result;
+    auto& transport = ets2telemetry::transport::server();
+    auto failure = ets2telemetry::transport::StartupFailure::worker_creation;
+    if (transport.start(
 #ifdef ETS2TELEMETRY_TRANSPORT_TEST_DLL
       test_directory
 #endif
-    )) {
-      ets2telemetry::sdk::adapter().shutdown(); return SCS_RESULT_generic_error;
+    )) failure = transport.await_startup();
+    if (failure != ets2telemetry::transport::StartupFailure::none) {
+      // Completion/join precedes return even when cancellation exceeds the startup wait budget.
+      transport.stop(); ets2telemetry::sdk::adapter().shutdown();
+      // SDK readme permits game calls only during the direct game caller's invocation.
+      const auto log = static_cast<const scs_telemetry_init_params_v100_t*>(params)->common.log;
+      if (log) log(SCS_LOG_TYPE_error,ets2telemetry::transport::startup_failure_message(failure));
+      return SCS_RESULT_generic_error;
     }
     return result;
   }

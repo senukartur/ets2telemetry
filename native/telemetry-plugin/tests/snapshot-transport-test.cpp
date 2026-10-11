@@ -22,16 +22,18 @@ bool until(const std::function<bool()>& predicate, DWORD ms = 2000) {
 struct Host {
   static Host* active;
   std::thread::id caller = std::this_thread::get_id(); unsigned wrong_thread = 0;
+  std::vector<std::string> logs;
   std::map<scs_event_t,std::pair<scs_telemetry_event_callback_t,scs_context_t>> events;
   struct Channel { scs_telemetry_channel_callback_t cb; scs_context_t ctx; };
   std::map<std::string,Channel> channels; std::uint64_t frames = 0;
   Host() { active = this; }
   static void check() { if (active->caller != std::this_thread::get_id()) ++active->wrong_thread; }
+  static SCSAPI_VOID log(scs_log_type_t type,scs_string_t message) { check(); require(type==SCS_LOG_TYPE_error,"startup error severity"); active->logs.emplace_back(message); }
   static SCSAPI_RESULT reg_event(scs_event_t id,scs_telemetry_event_callback_t cb,scs_context_t ctx) { check(); active->events[id] = {cb,ctx}; return SCS_RESULT_ok; }
   static SCSAPI_RESULT unreg_event(scs_event_t id) { check(); active->events.erase(id); return SCS_RESULT_ok; }
   static SCSAPI_RESULT reg_channel(scs_string_t name,scs_u32_t,scs_value_type_t,scs_u32_t,scs_telemetry_channel_callback_t cb,scs_context_t ctx) { check(); active->channels[name] = {cb,ctx}; return SCS_RESULT_ok; }
   static SCSAPI_RESULT unreg_channel(scs_string_t name,scs_u32_t,scs_value_type_t) { check(); active->channels.erase(name); return SCS_RESULT_ok; }
-  scs_telemetry_init_params_v100_t params(const char* game="eut2") { scs_telemetry_init_params_v100_t p{}; p.common.game_id=game; p.common.game_version=SCS_MAKE_VERSION(1,20); p.register_for_event=reg_event; p.unregister_from_event=unreg_event; p.register_for_channel=reg_channel; p.unregister_from_channel=unreg_channel; return p; }
+  scs_telemetry_init_params_v100_t params(const char* game="eut2") { scs_telemetry_init_params_v100_t p{}; p.common.game_id=game; p.common.game_version=SCS_MAKE_VERSION(1,20); p.common.log=log; p.register_for_event=reg_event; p.unregister_from_event=unreg_event; p.register_for_channel=reg_channel; p.unregister_from_channel=unreg_channel; return p; }
   void event(scs_event_t id,const void* value=nullptr) { auto entry=events.at(id); entry.first(id,value,entry.second); }
   void channel(const char* name, const scs_value_t& v) { const auto entry=channels.at(name); entry.cb(name,SCS_U32_NIL,&v,entry.ctx); }
   void frame(float speed) { scs_telemetry_frame_start_t f{}; f.render_time=f.simulation_time=f.paused_simulation_time=++frames*50000; event(SCS_TELEMETRY_EVENT_frame_start,&f);
@@ -223,6 +225,31 @@ void dll_lifecycle(const char* path) {
     require(FreeLibrary(module)!=FALSE,"test DLL unload after joined worker"); require(f.host.wrong_thread==0,"DLL worker makes no SDK API calls");
   }
 }
+void dll_startup_reporting(const char* path) {
+  bool reported=true;
+  for(unsigned scenario=0;scenario<3;++scenario) {
+    Fixture f; sdk::Snapshot source; f.adapter->read_current(source); f.adapter->shutdown();
+    const auto name=endpoint_name(source,f.user); const auto record=f.directory+L"\\"+std::wstring(source.identity.process_instance_id.bytes.begin(),source.identity.process_instance_id.bytes.begin()+36)+L".json";
+    Handle foreign_pipe,foreign_record;
+    const char* expected=scenario==0?"ETS2Telemetry: transport startup failed: endpoint-creation":scenario==1?"ETS2Telemetry: transport startup failed: identity-security":"ETS2Telemetry: transport startup failed: discovery-publication";
+    if(scenario==0) {foreign_pipe.reset(CreateNamedPipeW(name.c_str(),PIPE_ACCESS_DUPLEX|FILE_FLAG_OVERLAPPED|FILE_FLAG_FIRST_PIPE_INSTANCE,PIPE_TYPE_BYTE|PIPE_REJECT_REMOTE_CLIENTS,1,4096,4096,0,f.security.attributes()));require(static_cast<bool>(foreign_pipe),"actual foreign reporting endpoint");}
+    if(scenario==1) {PSECURITY_DESCRIPTOR insecure=nullptr; require(ConvertStringSecurityDescriptorToSecurityDescriptorW(L"D:P(A;;GA;;;WD)",SDDL_REVISION_1,&insecure,nullptr)!=FALSE,"reporting broad ACL descriptor"); require(SetFileSecurityW(f.directory.c_str(),DACL_SECURITY_INFORMATION|PROTECTED_DACL_SECURITY_INFORMATION,insecure)!=FALSE,"reporting broad ACL directory"); LocalFree(insecure);}
+    if(scenario==2) {foreign_record.reset(CreateFileW(record.c_str(),GENERIC_READ|GENERIC_WRITE|DELETE,FILE_SHARE_READ,f.security.attributes(),CREATE_NEW,0,nullptr)); require(static_cast<bool>(foreign_record),"actual foreign discovery record"); DWORD written=0; require(WriteFile(foreign_record.get(),"foreign",7,&written,nullptr)&&written==7,"foreign discovery sentinel");}
+    HMODULE module=LoadLibraryA(path); require(module!=nullptr,"reporting DLL load");
+    auto init=reinterpret_cast<decltype(&scs_telemetry_init)>(GetProcAddress(module,"scs_telemetry_init")); auto shutdown=reinterpret_cast<decltype(&scs_telemetry_shutdown)>(GetProcAddress(module,"scs_telemetry_shutdown"));
+    using SetDirectory=int(*)(const wchar_t*); auto directory=reinterpret_cast<SetDirectory>(GetProcAddress(module,"ets2telemetry_test_directory")); require(init&&shutdown&&directory&&directory(f.directory.c_str()),"reporting official SDK/test directory");
+    auto params=f.host.params(); const auto started=GetTickCount64(); const auto result=init(SCS_TELEMETRY_VERSION_1_01,&params); const auto elapsed=GetTickCount64()-started;
+    // Even the retained red implementation is safely joined before assertions and unloading.
+    shutdown(); require(FreeLibrary(module)!=FALSE,"reporting DLL unload");
+    bool preserved=true;
+    if(scenario==0) {Handle replacement(CreateNamedPipeW(name.c_str(),PIPE_ACCESS_DUPLEX|FILE_FLAG_OVERLAPPED|FILE_FLAG_FIRST_PIPE_INSTANCE,PIPE_TYPE_BYTE|PIPE_REJECT_REMOTE_CLIENTS,1,4096,4096,0,f.security.attributes())); preserved=!replacement;}
+    if(scenario==2) {std::array<char,7> sentinel{}; LARGE_INTEGER zero{}; DWORD read=0; preserved=SetFilePointerEx(foreign_record.get(),zero,nullptr,FILE_BEGIN)&&ReadFile(foreign_record.get(),sentinel.data(),7,&read,nullptr)&&read==7&&std::string(sentinel.data(),7)=="foreign"; FILE_DISPOSITION_INFO remove{TRUE}; SetFileInformationByHandle(foreign_record.get(),FileDispositionInfo,&remove,sizeof(remove)); foreign_record.reset();}
+    std::cout<<"startup scenario="<<scenario<<" result="<<result<<" logs="<<f.host.logs.size()<<" wrongThread="<<f.host.wrong_thread<<" elapsedMs="<<elapsed<<std::endl;
+    reported=reported&&result==SCS_RESULT_generic_error&&f.host.logs.size()==1&&f.host.logs[0]==expected&&f.host.wrong_thread==0;
+    require(elapsed<1000,"local startup failure promptly returned without client wait"); require(preserved,"foreign collision/publication object preserved");
+  }
+  require(reported,"all startup failures return generic error and log the fixed reason once on the direct SDK caller thread");
+}
 int controlled_host(const char* dll_path,const char* directory_utf8) {
   const HANDLE input=GetStdHandle(STD_INPUT_HANDLE); require(GetFileType(input)==FILE_TYPE_PIPE,"controlled host requires piped stdin");
   const auto length=MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,directory_utf8,-1,nullptr,0); require(length>1&&length<4096,"controlled host directory encoding");
@@ -251,7 +278,7 @@ int main(int argc,char** argv) {
   try { if(argc==4&&std::string(argv[1])=="host")return controlled_host(argv[2],argv[3]);
     const std::map<std::string,std::function<void()>> cases{{"serialization",serialization},{"live",live_reconnect_security},{"rejection",rejection_and_timeout},{"collision",collision_and_discovery},{"coalescing",coalescing_and_stalled_shutdown},{"policy",policy_and_exhaustion},{"fuzz",seeded_transport_fuzz}};
     auto timed=[](const std::string& name,const std::function<void()>& fn){const auto start=GetTickCount64(); std::cout<<name<<'\n'<<std::flush; fn(); std::cout<<name<<" elapsedMs="<<GetTickCount64()-start<<'\n'<<std::flush;};
-    if(argc==3&&std::string(argv[1])=="dll") timed("dll",[&]{dll_lifecycle(argv[2]);}); else if(argc==2) timed(argv[1],cases.at(argv[1])); else for(const auto& entry:cases) timed(entry.first,entry.second);
+    if(argc==3&&std::string(argv[1])=="dll") timed("dll",[&]{dll_lifecycle(argv[2]);}); else if(argc==3&&std::string(argv[1])=="dll-report") timed("dll-report",[&]{dll_startup_reporting(argv[2]);}); else if(argc==2) timed(argv[1],cases.at(argv[1])); else for(const auto& entry:cases) timed(entry.first,entry.second);
     std::cout<<"Actual Windows snapshot transport: "<<assertions<<" assertions passed; second-user/remote/game checks pending\n"; return 0;
   }catch(const std::exception& e){std::cerr<<"Transport failure after "<<assertions<<" assertions: "<<e.what()<<'\n'; return 1;}
 }

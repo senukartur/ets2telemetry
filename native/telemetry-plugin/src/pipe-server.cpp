@@ -11,21 +11,40 @@ struct Operation { Handle event{CreateEventW(nullptr,TRUE,FALSE,nullptr)}; OVERL
 };
 }
 Server& server() noexcept { static Server value(sdk::adapter()); return value; }
+const char* startup_failure_message(StartupFailure failure) noexcept {
+  switch (failure) {
+    case StartupFailure::identity_security: return "ETS2Telemetry: transport startup failed: identity-security";
+    case StartupFailure::source_identity: return "ETS2Telemetry: transport startup failed: source-identity";
+    case StartupFailure::endpoint_creation: return "ETS2Telemetry: transport startup failed: endpoint-creation";
+    case StartupFailure::discovery_publication: return "ETS2Telemetry: transport startup failed: discovery-publication";
+    case StartupFailure::timeout: return "ETS2Telemetry: transport startup failed: timeout";
+    default: return "ETS2Telemetry: transport startup failed: worker-creation";
+  }
+}
 Server::~Server() { stop(); }
 bool Server::start(std::wstring directory) noexcept {
   try {
     if (worker_.joinable()) return false;
-    stop_event_.reset(CreateEventW(nullptr,TRUE,FALSE,nullptr)); if (!stop_event_) return false;
+    startup_failure_.store(StartupFailure::worker_creation);
+    stop_event_.reset(CreateEventW(nullptr,TRUE,FALSE,nullptr));
+    startup_event_.reset(CreateEventW(nullptr,TRUE,FALSE,nullptr));
+    if (!stop_event_ || !startup_event_) throw std::runtime_error("startup-event");
     sequence_ = OutboundSequence(initial_sequence_); coalesced_ = lost_ = 0; diagnostics_ = false; pending_.reset(); current_ = {}; shutdown_ms_.store(0); status_.store(Status::starting);
     worker_ = std::thread([this, directory = std::move(directory)] { run(directory); }); return true;
-  } catch (...) { status_.store(Status::failed); stop_event_.reset(); return false; }
+  } catch (...) { status_.store(Status::failed); stop_event_.reset(); startup_event_.reset(); return false; }
+}
+StartupFailure Server::await_startup() noexcept {
+  // Only explicit SDK initialization waits here; no callback or client handshake does.
+  if (!startup_event_) return StartupFailure::worker_creation;
+  if (WaitForSingleObject(startup_event_.get(),1000) == WAIT_OBJECT_0) return startup_failure_.load();
+  return StartupFailure::timeout;
 }
 void Server::stop() noexcept {
   try {
     if (!worker_.joinable()) return; auto started = GetTickCount64(); SetEvent(stop_event_.get());
     // File policy/image inspection may have synchronous reads. Only this owned worker is cancelled.
     CancelSynchronousIo(worker_.native_handle()); worker_.join();
-    shutdown_ms_.store(GetTickCount64() - started); stop_event_.reset();
+    shutdown_ms_.store(GetTickCount64() - started); stop_event_.reset(); startup_event_.reset();
     if (shutdown_ms_.load() > 1000) status_.store(Status::shutdown_deadline_exceeded);
     else if (status_.load() != Status::failed) status_.store(Status::stopped);
   } catch (...) { status_.store(Status::failed); }
@@ -138,16 +157,22 @@ void Server::serve(HANDLE pipe, const std::wstring& directory, const OwnerSecuri
   CancelIoEx(pipe,&inbound.overlapped); GetOverlappedResult(pipe,&inbound.overlapped,&bytes,TRUE);
 }
 void Server::run(std::wstring directory) noexcept {
+  auto startup_stage = StartupFailure::identity_security;
+  bool startup_complete = false;
   try {
     auto user = current_user(); OwnerSecurity security(user.sid);
     if (directory.empty()) directory = local_transport_directory(security); else security.ensure_directory(directory);
+    startup_stage = StartupFailure::source_identity;
     if (!adapter_.read_current(current_) || current_.source_retired || current_.identity.windows_session_id != user.session) throw std::runtime_error("source-identity");
     const auto name = endpoint_name(current_,user);
+    startup_stage = StartupFailure::endpoint_creation;
     Handle pipe(CreateNamedPipeW(name.c_str(),PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED | FILE_FLAG_FIRST_PIPE_INSTANCE,
       PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,1,65540,65540,0,security.attributes()));
     if (!pipe) throw std::runtime_error("endpoint-collision");
+    startup_stage = StartupFailure::discovery_publication;
     Discovery discovery(directory,security,user,current_,name);
     { std::lock_guard<std::mutex> lock(endpoint_mutex_); endpoint_ = name; }
+    startup_failure_.store(StartupFailure::none); startup_complete = true; SetEvent(startup_event_.get());
     while (WaitForSingleObject(stop_event_.get(),0) == WAIT_TIMEOUT) {
       status_.store(Status::listening); Operation connect; DWORD transferred = 0;
       auto connected = ConnectNamedPipe(pipe.get(),&connect.overlapped); auto error = connected ? ERROR_SUCCESS : GetLastError();
@@ -162,7 +187,10 @@ void Server::run(std::wstring directory) noexcept {
       pending_.reset(); current_.observations = {}; current_.observation_count = 0; diagnostics_ = false; CancelIoEx(pipe.get(),nullptr); DisconnectNamedPipe(pipe.get());
     }
     adapter_.set_consumer(false,false);
-  } catch (...) { adapter_.set_consumer(false,false); status_.store(Status::failed); }
+  } catch (...) {
+    adapter_.set_consumer(false,false); status_.store(Status::failed);
+    if (!startup_complete) { startup_failure_.store(startup_stage); SetEvent(startup_event_.get()); }
+  }
   { std::lock_guard<std::mutex> lock(endpoint_mutex_); endpoint_.clear(); }
 }
 }
