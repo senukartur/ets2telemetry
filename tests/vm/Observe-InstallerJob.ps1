@@ -13,8 +13,40 @@ $records=[Collections.Generic.List[object]]::new()
 $handles=[Collections.Generic.Dictionary[int,IntPtr]]::new()
 $queries=@{}
 $view=[ordered]@{passed=$false;observerPid=$PID;driverPid=$DriverPid;controllerPid=$ControllerPid;parentProcessId=$null;driverParentProcessId=$null;driverImage=$null;controllerImage=$null;startedUtc=[datetime]::UtcNow.ToString('o');finishedUtc=$null;failure=$null;drained=$false;finalPids=@();processes=@();initialPidSnapshot=$null;initialScope=$null;initialScopeFailure=$null;jobScope=$null;metadataWorkers=4;metadataQueueSeconds=3;metadataQuerySeconds=3;metadataCompletionSeconds=8;warmupMilliseconds=$null;pollCount=0;maximumPollGapMilliseconds=0}
+$view.initialUnexpectedProcesses=@();$view.initialDiagnosticMilliseconds=0;$view.initialDiagnosticFailure=$null
 try {
     $view.initialPidSnapshot=[InstallerJobView]::ReadPids()
+    # Preserve unexpected native identities before metadata or the unchanged fresh guard.
+    $initialHandles=[Collections.Generic.Dictionary[int,IntPtr]]::new();$initialQueries=@{}
+    $initialRecords=[Collections.Generic.List[object]]::new();$initialClock=[Diagnostics.Stopwatch]::StartNew()
+    try{
+        foreach($initialPid in $view.initialPidSnapshot.Pids){
+            if($initialPid -eq $DriverPid -or $initialPid -eq $PID){continue}
+            $entry=[ordered]@{pid=$initialPid;observedUtc=[datetime]::UtcNow.ToString('o');nativeImage=$null;nativeImageFailure=$null;nativeExitBefore=$null;nativeExitAfter=$null;nativeExitFailure=$null;parentProcessId=$null;commandLine=$null;metadataImage=$null;metadataFailure=$null;queryElapsedMilliseconds=$null}
+            $initialRecords.Add($entry)
+            $held=[InstallerJobView]::Hold($initialPid)
+            if($held -eq [IntPtr]::Zero){$entry.nativeImageFailure='Unexpected initial PID vanished or could not be held.';continue}
+            $initialHandles.Add($initialPid,$held)
+            try{$entry.nativeImage=[InstallerJobView]::Image($held)}catch{$entry.nativeImageFailure=$_.Exception.ToString()}
+            try{$entry.nativeExitBefore=[InstallerJobView]::ExitCode($held)}catch{$entry.nativeExitFailure=$_.Exception.ToString()}
+        }
+        $view.initialUnexpectedProcesses=$initialRecords.ToArray()
+        # Retain native evidence even if the existing controller deadline ends metadata work.
+        $view|ConvertTo-Json -Depth 6|Set-Content -LiteralPath ($ResultFile+'.initial.json') -Encoding UTF8
+        foreach($entry in $initialRecords){if($initialHandles.ContainsKey($entry.pid)){$initialQueries[$entry.pid]=[InstallerJobView]::QueryAsync($entry.pid)}}
+        foreach($entry in $initialRecords){
+            if(!$initialQueries.ContainsKey($entry.pid)){continue}
+            $query=$initialQueries[$entry.pid];$remaining=[math]::Max(0,1500-[int]$initialClock.ElapsedMilliseconds)
+            if($query.Wait($remaining)){
+                $metadata=$query.Result;$entry.queryElapsedMilliseconds=$metadata.ElapsedMilliseconds
+                if($metadata.Failure){$entry.metadataFailure=$metadata.Failure}
+                elseif($metadata.CommandLine.Length -gt 32768 -or $metadata.ExecutablePath.Length -gt 32768){$entry.metadataFailure='Initial metadata exceeds bounded text retention.'}
+                else{$entry.parentProcessId=$metadata.ParentProcessId;$entry.commandLine=$metadata.CommandLine;$entry.metadataImage=$metadata.ExecutablePath;if($entry.nativeImage -and $metadata.ExecutablePath -ine $entry.nativeImage){$entry.metadataFailure='Initial metadata image differs from held native identity.'}}
+            }else{$entry.metadataFailure='Initial metadata exceeded the aggregate 1500 ms diagnostic allowance.'}
+            try{$entry.nativeExitAfter=[InstallerJobView]::ExitCode($initialHandles[$entry.pid])}catch{$entry.nativeExitFailure=$_.Exception.ToString()}
+        }
+    }catch{$view.initialDiagnosticFailure=$_.Exception.ToString()}
+    finally{foreach($held in $initialHandles.Values){[InstallerJobView]::Release($held)};$view.initialUnexpectedProcesses=$initialRecords.ToArray();$view.initialDiagnosticMilliseconds=$initialClock.Elapsed.TotalMilliseconds}
     # Capture immediate-Job limits even when the unchanged fresh-membership gate fails.
     try{$view.initialScope=[InstallerJobView]::ReadScope()}catch{$view.initialScopeFailure=$_.Exception.ToString()}
     $initial=[InstallerJobView]::ValidatePids($view.initialPidSnapshot)
