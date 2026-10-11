@@ -10,3 +10,7 @@ native/telemetry-plugin/build/
 out/
 test-results/
 playwright-report/
+
+# IDE workspace directories.
+.idea/
+.vs/
