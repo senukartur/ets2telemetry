@@ -1,3 +1,5 @@
+<!-- Title: [ET-XXX] type: summary, using the work-package ID when one exists, or [NO-CARD] with the reason stated under Change. See AGENTS.md. -->
+
 ## Change
 
 Describe the problem and the resulting behavior. Link the related task or issue when applicable.
