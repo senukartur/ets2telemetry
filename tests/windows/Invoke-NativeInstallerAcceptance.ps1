@@ -1,4 +1,5 @@
 [CmdletBinding()]
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingBrokenHashAlgorithms', '', Justification = 'Squirrel RELEASES entries identify packages by SHA1; SHA256 is checked as well where a pin exists.')]
 param(
     [switch]$Run,[ValidateSet('none','normal','linger')][string]$Control='none',
     [string]$Manifest,[string]$ManifestSha256,[string]$Setup,[string]$SetupSha256,

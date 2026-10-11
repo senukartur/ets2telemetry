@@ -1,4 +1,6 @@
 # Pure pre-resume proof rule; no native calls, queries, process creation or file access.
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidInvokingEmptyMembers', '', Justification = 'Before/After proof fields are selected by a fixed suffix list.')]
+param()
 function Assert-InstallerDriverProvenance($proof,$receipt,$members,$scope,[int]$driverPid,[int]$observerPid,[int]$controllerPid,[string]$nodeImage,$consolePid){
     $roles=@($driverPid,$observerPid,$controllerPid)
     if(@($roles|Where-Object {$_ -le 0}).Count -or @($roles|Select-Object -Unique).Count -ne 3){throw 'Initial driver roles overlap or are invalid.'}
