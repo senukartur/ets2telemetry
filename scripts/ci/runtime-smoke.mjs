@@ -11,6 +11,7 @@ const result = {scenario: 'SCAFFOLD-WORKER / partial REG-011, REG-017', passed: 
     status: {service: 'ready', storage: 'verified', synthetic: true}, exit: 0, probesAfterExit: []},
   startedUtc: new Date().toISOString()};
 let application;
+let launcher;
 let timer;
 let tracing = false;
 const failure = error => ({name: error.name, message: error.message, stack: error.stack});
@@ -25,6 +26,7 @@ try {
     env: {...process.env, TEMP: config.temp, TMP: config.temp, APPDATA: config.appdata,
       LOCALAPPDATA: config.localappdata, ETS2TELEMETRY_PROFILE_DIR: config.profile,
       ETS2TELEMETRY_DIAGNOSTIC_DIR: config.diagnostics}});
+  launcher = application.process();
   await application.context().tracing.start({screenshots: true, snapshots: true});
   tracing = true;
   const window = await application.firstWindow({timeout: 10000});
@@ -59,9 +61,9 @@ finally {
         timer = setTimeout(() => reject(new Error('APP_CLOSE_TIMEOUT_8_SECONDS')), 8000);
       })]);
       result.closeMilliseconds = performance.now() - start;
-      result.launcherExit = application.process().exitCode;
+      result.launcherExit = launcher.exitCode;
       assert.equal(result.launcherExit, 0);
-      assert.equal(application.process().signalCode, null);
+      assert.equal(launcher.signalCode, null);
     } catch (error) {result.closeFailure = failure(error);}
     finally {clearTimeout(timer);}
   }
