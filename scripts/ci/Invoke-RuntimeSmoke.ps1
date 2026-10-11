@@ -1,5 +1,6 @@
 [CmdletBinding()]
 param([ValidateSet('development','packaged')][string]$Mode,
+    [ValidateSet('scaffold','telemetry')][string]$Scenario = 'scaffold',
     [string]$OutputRoot = (Join-Path $PSScriptRoot '../../.local/ci'))
 $ErrorActionPreference = 'Stop'
 $checkout = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path
@@ -13,6 +14,7 @@ foreach ($name in @('cwd','temp','appdata','localappdata','profile','diagnostics
 }
 $config = $paths.Clone()
 $config.mode = $Mode; $config.output = $output; $config.checkout = $checkout
+$config.scenario = $Scenario
 $config.commit = (& git -C $checkout rev-parse HEAD)
 if ($LASTEXITCODE -ne 0) { throw 'Commit identity unavailable.' }
 $config.executable = Join-Path $checkout 'out/ETS2Telemetry Desktop-win32-x64/ETS2TelemetryDesktop.exe'
@@ -29,10 +31,10 @@ $code = [ETS2Telemetry.Diagnostics.BoundedProcess]::Run($node,
   durationSeconds=([datetime]::UtcNow-$started).TotalSeconds;
   limits='60 s; 16 processes; 2 GiB; 25% CPU; kill-on-close';
   descendantsNaturallyDrained=($code -eq 0)} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $output 'job-result.json') -Encoding utf8
-$validation = Test-RuntimeReceipt -DriverResultPath (Join-Path $output 'result.json') -ExpectedCommit $config.commit -ExpectedMode $Mode -JobExitCode $code
+$validation = Test-RuntimeReceipt -DriverResultPath (Join-Path $output 'result.json') -ExpectedCommit $config.commit -ExpectedMode $Mode -ExpectedScenario $Scenario -JobExitCode $code
 $ownedPidPath = Join-Path $output 'job/owned-pid.txt'
 $ownedPid = if (Test-Path -LiteralPath $ownedPidPath -PathType Leaf) { (Get-Content -LiteralPath $ownedPidPath -Raw).Trim() } else { $null }
-$receipt = [ordered]@{passed=$validation.passed; scenario='SCAFFOLD-WORKER / partial REG-011, REG-017';
+$receipt = [ordered]@{passed=$validation.passed; scenario=$Scenario;
     mode=$Mode; commit=$config.commit; validation=$validation; actualJobExitCode=$code;
     expected=@{jobExitCode=0; driverPassed=$true; status='ready; isolated storage verified; orderly exit'};
     driverResultPath=(Join-Path $output 'result.json'); stdoutPath=(Join-Path $output 'job/stdout.log');

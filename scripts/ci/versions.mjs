@@ -15,6 +15,7 @@ const report = {startedUtc, observedUtc: new Date().toISOString(),
   platform: process.platform, arch: process.arch, osRelease: os.release(), versions: process.versions,
   image: {name: process.env.ImageOS, version: process.env.ImageVersion},
   github: {runId: process.env.GITHUB_RUN_ID, attempt: process.env.GITHUB_RUN_ATTEMPT},
-  dependencies: JSON.parse(await readFile('package.json', 'utf8')).devDependencies};
+  dependencies: JSON.parse(await readFile('package.json', 'utf8')).devDependencies,
+  lintDependencies: JSON.parse(await readFile('tools/lint/package.json', 'utf8')).devDependencies};
 await writeFile(filename, JSON.stringify(report, null, 2) + '\n');
 console.log(JSON.stringify(report, null, 2));

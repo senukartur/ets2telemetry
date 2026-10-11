@@ -1,3 +1,7 @@
-# Simulator placeholder
+# Synthetic protocol v0 simulator
 
-Replay and telemetry generation belong to ET-005a. ET-001 creates the workspace only; it emits no telemetry and cannot establish game compatibility.
+ET-005a provides deterministic current-state replay, a Windows Named Pipe server,
+and a bounded test consumer. See [usage and scope](../../docs/simulator-v0.md)
+and [validation](../../docs/validation/et-005a.md).
+
+No SDK, desktop bridge, database, durable events, or game acceptance is provided.
