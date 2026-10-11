@@ -1,6 +1,6 @@
 # Windows CI and regression infrastructure
 
-ET-022 provides [Windows CI](../.github/workflows/windows-ci.yml) for pull requests, pushes to `main`, and manual dispatch. Clean hosted execution and the deliberate failing-assertion/restoration sequence passed as recorded in [ET-022 validation](validation/et-022.md). The final current PR head still needs its own check/review association before owner merge. These runs do not establish branch protection or game compatibility.
+ET-022 provides [Windows CI](../.github/workflows/windows-ci.yml) for pull requests, pushes to `main`, and manual dispatch. ET-024 limits automatic runs as described in [Triggers and draft checks](#triggers-and-draft-checks). Clean hosted execution and the deliberate failing-assertion/restoration sequence passed as recorded in [ET-022 validation](validation/et-022.md). The final current PR head still needs its own check/review association before owner merge. These runs do not establish branch protection or game compatibility.
 
 The explicitly selected x64 `windows-2022` image uses Visual Studio 2022 with `Visual Studio 17 2022`, not the local Visual Studio 2026 generator. Image updates may change MSVC and SDK patch versions; each run records image identity and vendor versions. Node 24.19.0, npm 11.17.0, Electron 44.7.0 and Playwright 1.64.0 are pinned. CMake 4.3.1 is acquired explicitly before tool verification and configuration; the runner's CMake 3.31.6 does not satisfy the existing native minimum of 4.3. Action revisions are pinned to exact commits (checkout v5, setup-node v5, cache v4, upload-artifact v4). The [runner manifest](https://github.com/actions/runner-images/blob/main/images/windows/Windows2022-Readme.md) documents VS 2022 support.
 
@@ -8,7 +8,28 @@ The explicitly selected x64 `windows-2022` image uses Visual Studio 2022 with `V
 
 Every run installs the lockfile into a clean workspace, runs typecheck and the full Node-safe Vitest corpus, builds desktop and native x64, runs CTest, executes a bounded development Electron smoke, makes the actual Forge/Squirrel artifact, inspects packaged bytes/native paths, and executes the packaged smoke from an unrelated working directory. Vitest never imports Electron or native SQLite. No lint command exists in the scaffold. No test filtering or retries are enabled.
 
-Caching is configured only for downloaded npm archives and Electron distributions. Successful hosted runs reported a nonblocking cache-save path warning and saved no cache; no cache hit is claimed. Keys include lockfile, Windows/x64, Node 24.19.0 ABI 137 and Electron 44.7.0 ABI 149. No `node_modules`, native build tree, SQLite binding compiled for another runtime, packaged artifact, profile or database is cached. This is deliberately stricter than [setup-node's default download caching](https://github.com/actions/setup-node/blob/main/docs/advanced-usage.md).
+Caching is configured only for downloaded npm archives and Electron distributions. Before ET-024, every hosted run ended with `Path Validation Error: Path(s) specified in the action for caching do(es) not exist` and saved nothing: npm did not use `~\AppData\Local\npm-cache` on the runner, and Electron's installer ignores `ELECTRON_CACHE` (it reads `electron_config_cache`), so `.local/cache/electron` was never created. The job now sets `npm_config_cache` and `electron_config_cache` to `.local/cache/npm` and `.local/cache/electron` inside the workspace and caches exactly those paths. GitHub saves a cache only after a successful job, and a cache saved on `main` is visible to all PR branches, while a PR-branch cache is visible only to that PR. ET-024 measurements on dispatch runs [38167660898](https://github.com/senukartur/ets2telemetry/actions/runs/38167660898) (cold, saved ~212 MB in 4 s) and [38167962488](https://github.com/senukartur/ets2telemetry/actions/runs/38167962488) (cache hit, restored in 4 s) show `npm ci` taking 17 s cold and 14 s warm. The restore costs about what it saves, so the cache gives no measurable speedup; it is kept as protection against registry/CDN download failures, not as a time saving. The largest step is Forge make/inspection (68–108 s across these runs); whole-job time varied from 169 s to 236 s between runners for the same work. Keys include lockfile, Windows/x64, Node 24.19.0 ABI 137 and Electron 44.7.0 ABI 149. No `node_modules`, native build tree, SQLite binding compiled for another runtime, packaged artifact, profile or database is cached. This is deliberately stricter than [setup-node's default download caching](https://github.com/actions/setup-node/blob/main/docs/advanced-usage.md).
+
+## Triggers and draft checks
+
+| Event | Behavior |
+| --- | --- |
+| PR opened, updated or reopened while **draft** | Workflow run is created but the job is skipped (no runner minutes). A skipped job is not a passed check |
+| PR marked **Ready for review**, or updated while ready | Full job on the PR merge result |
+| PR or `main` push changing only `**.md` or `docs/**` | No run at all; GitHub reports no check for that commit |
+| Push to `main` touching anything else | Full job plus extended regressions |
+| Manual dispatch | Full job on the selected branch head; extended regressions unless `extended=false` |
+
+Any change outside `**.md` and `docs/**` (code, tests, fixtures, scripts, workflow, `package*.json`, config) runs the full job. GitHub evaluates path filters against the whole PR diff, so a PR that later gains a code change runs normally. Documentation-only PRs rely on the focused document checks in [TESTING.md](../TESTING.md). If required status checks are ever enabled, a path-filtered workflow reports no check and would leave such PRs waiting.
+
+To check a draft head without marking it ready, dispatch the workflow on the task branch:
+
+```powershell
+gh workflow run windows-ci.yml --ref <task-branch> -f extended=false
+gh run list --workflow windows-ci.yml --branch <task-branch> --limit 1
+```
+
+A dispatch run checks the branch head itself, not the PR merge result with current `main`. GitHub attaches it to the head commit (visible in the commit's checks and the Actions list), but the PR check list keeps showing the skipped pull-request job for that commit, so record the dispatch run link in the PR or ledger. The final-head gate is therefore the pull-request run triggered by **Ready for review** (or a later push while ready). If that run fails, fix the branch or return the PR to draft (`gh pr ready <number> --undo`).
 
 ## Bounded runtime checks
 

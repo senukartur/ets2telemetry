@@ -1,8 +1,16 @@
 name: Windows CI
 on:
   pull_request:
+    # Draft PRs are skipped by the job condition below; ready_for_review starts the full run.
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
   push:
     branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
   workflow_dispatch:
     inputs:
       extended:
@@ -17,13 +25,18 @@ concurrency:
 jobs:
   windows:
     name: Windows x64 scaffold
+    # A skipped draft run is not a passed check; use workflow_dispatch on the branch to check a draft head.
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: windows-2022
     timeout-minutes: 20
     defaults:
       run:
         shell: pwsh
     env:
-      ELECTRON_CACHE: ${{ github.workspace }}\.local\cache\electron
+      # Download caches live in the workspace so actions/cache saves paths that actually exist.
+      # Electron's installer and @electron/get read electron_config_cache, not ELECTRON_CACHE.
+      npm_config_cache: ${{ github.workspace }}\.local\cache\npm
+      electron_config_cache: ${{ github.workspace }}\.local\cache\electron
       PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
       ETS2TELEMETRY_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
@@ -44,7 +57,7 @@ jobs:
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
-            ~\AppData\Local\npm-cache
+            .local/cache/npm
             .local/cache/electron
           key: download-${{ runner.os }}-x64-node24.19.0-abi137-electron44.7.0-abi149-${{ hashFiles('package-lock.json') }}
       - name: Clean lockfile installation
