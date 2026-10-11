@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param([ValidateSet('development','packaged')][string]$Mode,
-    [ValidateSet('scaffold','telemetry')][string]$Scenario = 'scaffold',
+    [ValidateSet('scaffold','telemetry','overlay')][string]$Scenario = 'scaffold',
     [string]$OutputRoot = (Join-Path $PSScriptRoot '../../.local/ci'))
 $ErrorActionPreference = 'Stop'
 $checkout = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path
@@ -27,7 +27,7 @@ $started = [datetime]::UtcNow
 $code = [ETS2Telemetry.Diagnostics.BoundedProcess]::Run($node,
     [string[]]@((Join-Path $PSScriptRoot 'runtime-smoke.mjs'), $configFile),
     $checkout, (Join-Path $output 'job'), 60000)
-@{mode=$Mode; commit=$config.commit; exitCode=$code; retries=0;
+@{mode=$Mode; scenario=$Scenario; commit=$config.commit; exitCode=$code; retries=0;
   durationSeconds=([datetime]::UtcNow-$started).TotalSeconds;
   limits='60 s; 16 processes; 2 GiB; 25% CPU; kill-on-close';
   descendantsNaturallyDrained=($code -eq 0)} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $output 'job-result.json') -Encoding utf8

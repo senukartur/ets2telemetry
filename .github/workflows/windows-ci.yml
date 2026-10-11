@@ -126,6 +126,8 @@ jobs:
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development
       - name: Bounded development telemetry source and recovery smoke
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario telemetry
+      - name: Bounded development hidden overlay projection and isolation smoke
+        run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario overlay
       - name: Forge maker and static native package inspection
         run: |
           npm run make
@@ -136,6 +138,8 @@ jobs:
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged
       - name: Bounded packaged telemetry source and recovery smoke
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged -Scenario telemetry
+      - name: Bounded packaged hidden overlay projection and isolation smoke
+        run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged -Scenario overlay
       - name: Extended existing safety regressions
         if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.extended)
         run: ./scripts/ci/Invoke-Extended.ps1
