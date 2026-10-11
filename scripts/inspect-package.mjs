@@ -47,6 +47,16 @@ const report = {checkedUtc: new Date().toISOString(), directory, applicationLaun
   ...integrity,
   asarSha256: sha256(readFileSync(archive)), executableSha256: sha256(readFileSync(executable)),
   nativeSha256: sha256(nativeBytes), compiledFilesVerified: files, sources: metadata.sources};
+const clientDirectory = path.join(directory, 'resources/telemetry-client');
+const clientMetadata = JSON.parse(readFileSync(path.join(clientDirectory, 'build-evidence.json'), 'utf8'));
+assert.deepEqual(clientMetadata.sources, metadata.sources, 'Native client and desktop sources differ');
+assert.deepEqual(clientMetadata.sources, sourceHashes(), 'Native client built from stale inputs');
+const clientBytes = readFileSync(path.join(clientDirectory, 'telemetry-pipe-client.exe'));
+assert.equal(sha256(clientBytes), clientMetadata.executableSha256, 'Native client build hash mismatch');
+assert.equal(sha256(clientBytes), sha256(readFileSync('native/telemetry-client/build/Release/telemetry-pipe-client.exe')), 'Packaged client differs from local build');
+assert.equal(clientBytes.readUInt16LE(0), 0x5a4d, 'Native client must be a PE executable');
+assert.equal(clientBytes.readUInt16LE(clientBytes.readUInt32LE(0x3c) + 4), 0x8664, 'Native client must be x64');
+report.nativeClient = {executableSha256: clientMetadata.executableSha256, sourcesVerified: true};
 mkdirSync('.local/diagnostics', {recursive: true});
 writeFileSync('.local/diagnostics/package-inspection.json', JSON.stringify(report, null, 2) + '\n');
 console.log(JSON.stringify({applicationLaunched: false, ...integrity, compiledFilesVerified: files.length, asarSha256: report.asarSha256, executableSha256: report.executableSha256}, null, 2));

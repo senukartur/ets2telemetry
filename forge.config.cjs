@@ -3,6 +3,7 @@ module.exports = {
   // Other native dependencies remain eligible for Forge's Electron rebuild.
   rebuildConfig: {ignoreModules:['better-sqlite3']},
   packagerConfig: {
+    extraResource: ['.local/package-native/telemetry-client'],
     // The physical Node worker must resolve SQLite's JavaScript loader without ASAR patches.
     asar: { unpack: '**/*.{node,cjs}', unpackDir: '**/better-sqlite3' }, executableName: 'ETS2TelemetryDesktop',
     appBundleId: 'com.ets2telemetry.desktop',

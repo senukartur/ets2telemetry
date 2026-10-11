@@ -6,10 +6,15 @@ import { processEntrypoint } from './entrypoints';
 import { ServiceProbe } from './service-probe';
 import {existsSync} from 'node:fs';
 import {createDiagnostics} from './diagnostics';
+import {TelemetryIngestion, initialLive, sourceSelection} from './telemetry-ingestion';
+import {LiveSubscriptions} from './live-subscriptions';
 const port = process.parentPort;
 if (!port) throw new Error('Missing Electron parent port');
 const log = createDiagnostics(path.join(process.env.ETS2TELEMETRY_DIAGNOSTIC_DIR || path.join(process.env.LOCALAPPDATA || tmpdir(), 'ETS2Telemetry', 'logs'), 'service'), Boolean(process.env.ETS2TELEMETRY_DIAGNOSTIC_DIR));
 log('SERVICE_BOOT');
+const subscriptions = new LiveSubscriptions(initialLive());
+const ingestion = new TelemetryIngestion(update => subscriptions.publish(update));
+const fixtureEndpoint = process.env.ETS2TELEMETRY_SOURCE_PIPE;
 const probe = new ServiceProbe({
   diagnose: log,
   createDirectory: () => mkdtemp(path.join(tmpdir(), 'ets2telemetry-probe-')),
@@ -32,5 +37,26 @@ const probe = new ServiceProbe({
     if (message.code === 'SERVICE_STOP_FAILED') process.exit(1);
   }
 });
-port.on('message', event => {if (event.data?.type === 'stop') void probe.stop();});
+port.on('message', event => {
+  const incoming: unknown = event.data;
+  const command = incoming && typeof incoming === 'object' && !Array.isArray(incoming) ? incoming as Record<string, unknown> : undefined;
+  if (command?.type === 'stop') {subscriptions.close(); void ingestion.stop().then(() => probe.stop());}
+  else if (command?.type === 'unsubscribe') subscriptions.close();
+  else if (command?.type === 'subscribe' && event.ports.length === 1) subscriptions.attach(event.ports[0]);
+  else if (command?.type === 'select') {
+    try {
+      const selection = sourceSelection(command.source);
+      const incomingBroker = command.broker;
+      let broker;
+      if (incomingBroker !== undefined) {
+        if (!incomingBroker || typeof incomingBroker !== 'object' || Array.isArray(incomingBroker)) throw new Error('Invalid broker configuration');
+        const configuration = incomingBroker as Record<string, unknown>;
+        if (typeof configuration.executable !== 'string' || typeof configuration.discoveryDirectory !== 'string') throw new Error('Invalid broker configuration');
+        broker = {executable: configuration.executable, discoveryDirectory: configuration.discoveryDirectory};
+      }
+      ingestion.configureBroker(broker); ingestion.select(selection, fixtureEndpoint);
+    }
+    catch {port.postMessage({type: 'failed', code: 'INVALID_SOURCE_COMMAND'});}
+  } else {for (const transferred of event.ports) transferred.close();}
+});
 void probe.start();

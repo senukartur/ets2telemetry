@@ -2,4 +2,4 @@ param([string]$Configuration)
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '../../scripts/ci/RuntimeReceipt.ps1')
 $config = Get-Content -LiteralPath $Configuration -Raw | ConvertFrom-Json
-Test-RuntimeReceipt -DriverResultPath $config.receipt -ExpectedCommit 'candidate' -ExpectedMode 'packaged' -JobExitCode $config.code | ConvertTo-Json -Compress
+Test-RuntimeReceipt -DriverResultPath $config.receipt -ExpectedCommit 'candidate' -ExpectedMode 'packaged' -ExpectedScenario $config.scenario -JobExitCode $config.code | ConvertTo-Json -Compress
