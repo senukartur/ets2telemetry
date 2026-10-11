@@ -15,6 +15,8 @@ const nodeBuiltins = [...builtinModules, ...builtinModules.map(name => `node:${n
 // Promote every rule a preset enables to an error; CI must not stay green with known findings.
 const asErrors = rules => Object.fromEntries(Object.entries(rules).map(([name, level]) => [name, level === 'off' || level === 0 ? 'off' : 'error']));
 const hooks = reactHooks.configs.flat['recommended-latest'];
+// Renderer code is every .tsx module of the desktop app; main, preload, service and worker entries are .ts.
+const rendererFiles = ['apps/desktop/src/**/*.tsx'];
 
 export default tseslint.config(
   {
@@ -60,14 +62,14 @@ export default tseslint.config(
     }
   },
   {
-    files: ['apps/desktop/src/renderer.tsx'],
+    files: rendererFiles,
     plugins: hooks.plugins,
     rules: asErrors(hooks.rules),
     languageOptions: {globals: globals.browser}
   },
   {
     // Renderers run sandboxed with context isolation; only the preload bridge reaches Electron.
-    files: ['apps/desktop/src/renderer.tsx'],
+    files: rendererFiles,
     rules: {
       'no-restricted-imports': ['error', {
         paths: [...nodeBuiltins, 'electron', 'better-sqlite3', 'electron-squirrel-startup'].map(name => ({name, message: 'Renderer code must use the typed preload bridge, not Node.js or Electron modules.'})),
