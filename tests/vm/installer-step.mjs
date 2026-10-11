@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import {spawn} from 'node:child_process';
-import {readFile, readdir, mkdir, writeFile} from 'node:fs/promises';
+import {readFile, readdir, writeFile} from 'node:fs/promises';
 import {performance} from 'node:perf_hooks';
 import {createHash} from 'node:crypto';
 import {validateRootSet,validateConsoleExit,validateLateDriverConsole,validateStopSet,validateLateBinding,validateInstallerRoles} from './installer-root-proof.mjs';

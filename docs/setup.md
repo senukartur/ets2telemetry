@@ -36,6 +36,32 @@ Remove-Item Env:ETS2TELEMETRY_TEST_EXE
 
 The probe exercises Electron main -> utilityProcess telemetry service -> dedicated worker -> better-sqlite3. It writes and reopens a uniquely named temporary SQLite database; its orderly shutdown path removes that directory. It never opens production history. The pinned better-sqlite3 13.0.3 uses node-addon-api and bundles a Windows x64 N-API prebuild; it has no install script and does not require a Node-version-specific rebuild. Forge's `rebuildConfig.ignoreModules` skips only `better-sqlite3`, preserving that binary; other native dependencies remain eligible for Electron rebuilding. An attempted unnecessary node-gyp rebuild failed because Python was unavailable. No successful SQLite rebuild is claimed. The earlier guest-tested package passed two guest Playwright launches with SQLite write/reopen readiness, renderer isolation, orderly application/service exit 0, probe removal and complete Job drain; installed lifecycle composite acceptance is recorded; final verifier/documentation review is recorded separately. Node Vitest covers Node-safe lifecycle/path/logging modules and must not load Electron or native storage dependencies. `test:electron` packages first so native assets and compiled worker paths are prepared. ASAR explicitly unpacks compiled CommonJS entries and the complete better-sqlite3 module, including its JavaScript loader and native binaries. See [the validation record](validation/et-001.md) for the exact tested artifact and limits.
 
+## Linting
+
+ET-023a adds ESLint for TypeScript and JavaScript in `apps/`, `packages/`, `tools/`, `tests/`, `scripts/` and root config files. Run from the repository root after `npm ci`:
+
+```powershell
+npm run lint:install
+npm run lint
+```
+
+`lint:install` runs `npm ci --prefix tools/lint`, a separate lockfile that is not a root workspace. `lint` fails on any error or warning (`--max-warnings 0`). Linting does not build, launch Electron or touch native code. Pinned versions: ESLint 10.12.0, @eslint/js 10.0.1, typescript-eslint 8.71.1, eslint-plugin-react-hooks 7.1.1, globals 17.13.0, and the lint-only TypeScript 6.0.2 described below. Update them with `npm install --prefix tools/lint <package>@<version>`, which keeps exact pins through `tools/lint/.npmrc`.
+
+**Why a separate TypeScript.** The project compiles and typechecks with TypeScript 7.0.2. TypeScript 7.0 ships no JavaScript compiler API: its `typescript` entry point exposes only version fields. typescript-eslint parses every TypeScript file through that API, so it cannot run on TypeScript 7 at all, with or without type information. typescript-eslint 8.71.1 declares `typescript >=4.8.4 <6.1.0`, and its maintainers [state](https://github.com/typescript-eslint/typescript-eslint/issues/12518) that TypeScript 7 support waits for a TypeScript 7 API ([tracking issue](https://github.com/typescript-eslint/typescript-eslint/issues/10940)); they recommend TypeScript 6 side by side. `tools/lint` therefore installs Microsoft's side-by-side package `@typescript/typescript6@6.0.2` under the name `typescript`. Its own lockfile guarantees that every lint package, including `ts-api-utils`, resolves that copy: as a root workspace, npm hoisted `ts-api-utils` beside the root TypeScript 7. The project TypeScript version is unchanged, and `npm run typecheck` still uses TypeScript 7.
+
+Type-aware rules are enabled. They read the root `tsconfig.json` through TypeScript 6, so type information comes from the 6.0 checker rather than the 7.0 checker that gates typecheck; a rule could disagree with `tsc` where the two versions differ. Revisit this when typescript-eslint supports TypeScript 7.
+
+The configuration lives in `tools/lint/config.mjs`, and the root `eslint.config.mjs` re-exports it. It uses `@eslint/js` recommended for all files, `typescript-eslint` `recommendedTypeChecked` for TypeScript (including `no-floating-promises` and `no-misused-promises`), and syntax-only rules for plain `.mjs`/`.cjs`/`.js` files, which are not part of a TypeScript project. React Hooks recommended rules apply to the renderer as errors, including the rules the preset marks as warnings. The renderer may not import Node.js built-ins, `electron`, `better-sqlite3` or `electron-squirrel-startup`, and the sandboxed preload may not import Node.js built-ins. Generated and third-party output (`dist`, `out`, `node_modules`, `native/`, `.local`, `planning`, Playwright output, protocol fixtures) is ignored. Unused `eslint-disable` directives are errors.
+
+Rule exceptions, each with its reason:
+
+| Scope | Exception | Reason |
+| --- | --- | --- |
+| All files | `prefer-const` with `ignoreReadBeforeAssign` | A `let` read by an earlier closure and assigned later cannot become `const` without a temporal-dead-zone hazard |
+| `tests/**` | `@typescript-eslint/no-unsafe-*` (argument, assignment, call, member access, return) off | Tests inspect untyped JSON reports from child processes and files; `expect` checks their shape at runtime, and casts would only silence the rules |
+| `tests/**` | `@typescript-eslint/unbound-method` off | `expect(mock.method)` passes a mock as a value and never calls it with a lost `this` |
+| `packages/contracts/src/protocol-v0.ts`, `scripts/package-integrity.mjs` | Inline `no-control-regex` | Both regular expressions deliberately reject control characters |
+
 ## Runtime paths and diagnostics
 
 Resolve `%LOCALAPPDATA%` at runtime. The application root is `%LOCALAPPDATA%\ETS2Telemetry`; planned locations are `data\telemetry.sqlite`, `settings\`, `logs\`, `backups\`, and `plugins\` for project-owned plugin metadata. Binary installation has an independent Squirrel identity/root. The scaffold creates startup logs only, with a separate temporary SQLite probe. No production history, updater, migration, production backup, or uninstall deletion is implemented.

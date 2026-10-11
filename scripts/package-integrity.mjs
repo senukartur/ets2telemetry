@@ -41,6 +41,7 @@ export function verifyPackage(directory) {
     if ('files' in entry) {
       assert.ok(entry.files && typeof entry.files === 'object' && !Array.isArray(entry.files), 'Invalid ASAR directory');
       for (const [name, child] of Object.entries(entry.files)) {
+        // eslint-disable-next-line no-control-regex -- control characters are invalid in Windows path segments.
         assert.ok(name && name !== '.' && name !== '..' && !/[<>:"/\\|?*\x00-\x1f]/.test(name), 'Invalid ASAR path segment');
         readHeader(child, relative ? `${relative}/${name}` : name, depth + 1);
       }

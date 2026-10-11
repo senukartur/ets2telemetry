@@ -1,0 +1,87 @@
+// Repository ESLint flat config, loaded through the root eslint.config.mjs.
+// This module lives beside its own lockfile so that typescript-eslint resolves
+// `typescript` to the TypeScript 6 API package; TypeScript 7.0 has no compiler API.
+import {builtinModules} from 'node:module';
+import {fileURLToPath} from 'node:url';
+import js from '@eslint/js';
+import reactHooks from 'eslint-plugin-react-hooks';
+import globals from 'globals';
+import tseslint from 'typescript-eslint';
+
+const root = fileURLToPath(new URL('../..', import.meta.url));
+const tsFiles = ['**/*.ts', '**/*.tsx', '**/*.mts', '**/*.cts'];
+const jsFiles = ['**/*.js', '**/*.mjs', '**/*.cjs'];
+const nodeBuiltins = [...builtinModules, ...builtinModules.map(name => `node:${name}`)];
+// Promote every rule a preset enables to an error; CI must not stay green with known findings.
+const asErrors = rules => Object.fromEntries(Object.entries(rules).map(([name, level]) => [name, level === 'off' || level === 0 ? 'off' : 'error']));
+const hooks = reactHooks.configs.flat['recommended-latest'];
+
+export default tseslint.config(
+  {
+    ignores: [
+      '**/node_modules/**', '**/dist/**', 'out/**', '.local/**', 'native/**', 'planning/**',
+      'test-results/**', 'playwright-report/**', 'tests/fixtures/**'
+    ]
+  },
+  {linterOptions: {reportUnusedDisableDirectives: 'error', reportUnusedInlineConfigs: 'error'}},
+  {
+    files: [...tsFiles, ...jsFiles],
+    extends: [js.configs.recommended],
+    languageOptions: {globals: globals.node},
+    // A `let` assigned after a closure that reads it cannot become `const` without a temporal-dead-zone hazard.
+    rules: {'prefer-const': ['error', {ignoreReadBeforeAssign: true}]}
+  },
+  {
+    files: tsFiles,
+    extends: [tseslint.configs.recommendedTypeChecked],
+    languageOptions: {
+      parserOptions: {
+        // Files outside tsconfig.json (root tool configs) use its options as a default project.
+        projectService: {allowDefaultProject: ['*.ts', '*.mts'], defaultProject: 'tsconfig.json'},
+        tsconfigRootDir: root
+      }
+    }
+  },
+  // Plain JavaScript is not part of a TypeScript project, so it gets syntax-only rules.
+  {files: jsFiles, extends: [tseslint.configs.disableTypeChecked]},
+  {files: ['**/*.cjs'], languageOptions: {sourceType: 'commonjs'}},
+  {
+    files: ['tests/**'],
+    rules: {
+      // Tests inspect untyped JSON reports from child processes and files; `expect` checks their shape at
+      // runtime, and casts would only silence these rules without adding a check.
+      '@typescript-eslint/no-unsafe-argument': 'off',
+      '@typescript-eslint/no-unsafe-assignment': 'off',
+      '@typescript-eslint/no-unsafe-call': 'off',
+      '@typescript-eslint/no-unsafe-member-access': 'off',
+      '@typescript-eslint/no-unsafe-return': 'off',
+      // `expect(mock.method)` passes a mock as a value and never calls it with a lost `this`.
+      '@typescript-eslint/unbound-method': 'off'
+    }
+  },
+  {
+    files: ['apps/desktop/src/renderer.tsx'],
+    plugins: hooks.plugins,
+    rules: asErrors(hooks.rules),
+    languageOptions: {globals: globals.browser}
+  },
+  {
+    // Renderers run sandboxed with context isolation; only the preload bridge reaches Electron.
+    files: ['apps/desktop/src/renderer.tsx'],
+    rules: {
+      'no-restricted-imports': ['error', {
+        paths: [...nodeBuiltins, 'electron', 'better-sqlite3', 'electron-squirrel-startup'].map(name => ({name, message: 'Renderer code must use the typed preload bridge, not Node.js or Electron modules.'})),
+        patterns: [{group: ['electron/*'], message: 'Renderer code must use the typed preload bridge.'}]
+      }]
+    }
+  },
+  {
+    // A sandboxed preload can load only Electron's renderer modules, not Node.js built-ins.
+    files: ['apps/desktop/src/preload.ts'],
+    rules: {
+      'no-restricted-imports': ['error', {
+        paths: [...nodeBuiltins, 'better-sqlite3', 'electron-squirrel-startup'].map(name => ({name, message: 'The sandboxed preload may import only electron renderer APIs.'}))
+      }]
+    }
+  }
+);
