@@ -19,4 +19,18 @@ export interface DesktopBridge {
   selectSource(source: SourceSelection): Promise<void>;
   subscribeLive(listener: (update: LiveTelemetry) => void): () => void;
 }
+/** Read-only display projection: no source selection, HWND or native placement authority. */
+export interface OverlayPresentation {
+  source: 'ETS2' | 'ATS' | 'No game';
+  origin: 'game' | 'synthetic' | 'replay' | 'none';
+  status: LiveTelemetry['status'];
+  speed: string;
+  speedUnit: 'km/h' | 'mph';
+  fuel: string;
+  fuelUnit: 'L' | 'US gal';
+  freshness: 'current' | 'stale' | 'unavailable';
+}
+export interface OverlayBridge {
+  subscribeOverlay(listener: (update: OverlayPresentation) => void): () => void;
+}
 export * from './protocol-v0';

@@ -79,7 +79,7 @@ export default tseslint.config(
   },
   {
     // A sandboxed preload can load only Electron's renderer modules, not Node.js built-ins.
-    files: ['apps/desktop/src/preload.ts'],
+    files: ['apps/desktop/src/preload.ts', 'apps/desktop/src/overlay-preload.ts'],
     rules: {
       'no-restricted-imports': ['error', {
         paths: [...nodeBuiltins, 'better-sqlite3', 'electron-squirrel-startup'].map(name => ({name, message: 'The sandboxed preload may import only electron renderer APIs.'}))

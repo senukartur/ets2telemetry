@@ -8,12 +8,12 @@ export interface LivePort {
   close(): void;
 }
 /** One outstanding delivery and one replaceable update per authorized subscription. */
-export class LiveSubscriptions {
-  private readonly clients = new Map<LivePort, {inFlight?: number; latest?: LiveTelemetry; timer?: ReturnType<typeof setTimeout>}>();
+export class LiveSubscriptions<T = LiveTelemetry> {
+  private readonly clients = new Map<LivePort, {inFlight?: number; latest?: T; timer?: ReturnType<typeof setTimeout>}>();
   private serial = 0;
   private flushTimer?: ReturnType<typeof setTimeout>;
   private lastSend = -Infinity;
-  constructor(private current: LiveTelemetry, private readonly limit = 2, private readonly ackTimeoutMs = 5000, private readonly maxDeliveries = Number.MAX_SAFE_INTEGER) {}
+  constructor(private current: T, private readonly limit = 2, private readonly ackTimeoutMs = 5000, private readonly maxDeliveries = Number.MAX_SAFE_INTEGER) {}
   attach(port: LivePort): boolean {
     if (this.clients.size >= this.limit || this.clients.has(port)) {port.close(); return false;}
     this.clients.set(port, {});
@@ -27,7 +27,7 @@ export class LiveSubscriptions {
     });
     port.start(); this.send(port, this.current); return true;
   }
-  publish(update: LiveTelemetry): void {
+  publish(update: T): void {
     this.current = update;
     for (const client of this.clients.values()) client.latest = update;
     this.schedule();
@@ -39,7 +39,7 @@ export class LiveSubscriptions {
   }
   close(): void {for (const port of this.clients.keys()) this.remove(port); clearTimeout(this.flushTimer); this.flushTimer = undefined;}
   get size(): number {return this.clients.size;}
-  private send(port: LivePort, update: LiveTelemetry): void {
+  private send(port: LivePort, update: T): void {
     const client = this.clients.get(port); if (!client) return;
     if (this.serial >= this.maxDeliveries) {this.close(); return;}
     client.inFlight = ++this.serial;

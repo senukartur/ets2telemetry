@@ -1,15 +1,19 @@
-import {app, BrowserWindow, ipcMain, MessageChannelMain, utilityProcess, type UtilityProcess, type IpcMainEvent, type IpcMainInvokeEvent} from 'electron';
+import {app, BrowserWindow, ipcMain, MessageChannelMain, screen, utilityProcess, type MessagePortMain, type UtilityProcess, type IpcMainEvent, type IpcMainInvokeEvent} from 'electron';
 import squirrelStartup from 'electron-squirrel-startup';
 import {existsSync, mkdirSync} from 'node:fs';
 import path from 'node:path';
 import type {EventEmitter} from 'node:events';
-import type {ScaffoldStatus, SourceSelection} from '../../../packages/contracts/src';
+import type {LiveTelemetry, OverlayPresentation, ScaffoldStatus, SourceSelection} from '../../../packages/contracts/src';
 import {processEntrypoint} from './entrypoints';
 import {createDiagnostics} from './diagnostics';
 import {ServiceSupervisor} from './service-supervisor';
 import {initialLive, sourceSelection} from './live-state';
 import {createBrokerResolver} from './broker-artifact';
 import {RecoveryBudget} from './recovery-budget';
+import {LiveSubscriptions} from './live-subscriptions';
+import {LiveFreshness} from './live-freshness';
+import {OverlayController} from './overlay-controller';
+import {overlayPresentation} from './overlay-presentation';
 
 if (squirrelStartup) app.quit();
 else {
@@ -17,6 +21,15 @@ else {
   const log = createDiagnostics(diagnosticDirectory || path.join(process.env.LOCALAPPDATA || app.getPath('userData'), 'ETS2Telemetry', 'logs'), Boolean(diagnosticDirectory));
   let window: BrowserWindow | undefined, service: UtilityProcess | undefined, status: ScaffoldStatus | undefined;
   let subscribed = false, serviceReady = false;
+  let overlay: BrowserWindow | undefined, overlayController: OverlayController | undefined;
+  let dashboardPort: MessagePortMain | undefined, overlayPort: MessagePortMain | undefined, upstream: MessagePortMain | undefined;
+  let upstreamRecovery: ReturnType<typeof setTimeout> | undefined;
+  const upstreamBudget = new RecoveryBudget(), overlayBudget = new RecoveryBudget();
+  const dashboardSubscriptions = new LiveSubscriptions(initialLive(), 1);
+  const overlaySubscriptions = new LiveSubscriptions<OverlayPresentation>(overlayPresentation(initialLive()), 1, 500);
+  const freshness = new LiveFreshness(update => {
+    dashboardSubscriptions.publish(update); overlaySubscriptions.publish(overlayPresentation(update)); overlayController?.update(update);
+  });
   const rendererBudget = new RecoveryBudget();
   const resolveBroker = createBrokerResolver(__dirname, process.resourcesPath, app.isPackaged, process.env.LOCALAPPDATA, error => log('BROKER_UNAVAILABLE', String(error)));
   async function selectedBroker(source: SourceSelection) {
@@ -26,33 +39,89 @@ else {
   }
   let lastSelectionRequest = -Infinity;
   let selectionGeneration = 0;
+  let selectionPending = false;
   let rendererEpoch = 0;
   let selection: SourceSelection = sourceSelection(process.env.ETS2TELEMETRY_SOURCE_KIND || 'game');
   const supervisor = new ServiceSupervisor(log, code => app.exit(code), {
     restart: () => startService(),
-    state: state => {serviceReady = false; status = undefined; window?.webContents.send('telemetry:service-state', {...initialLive(selection), status: state, reason: 'Telemetry service exited; current interval is unknown'});},
-    exhausted: () => {window?.webContents.send('telemetry:service-state', {...initialLive(selection), status: 'service-failed', reason: 'Automatic service restart limit reached'});}
+    state: state => {serviceReady = false; selectionPending = false; status = undefined; closeUpstream();
+      const update: LiveTelemetry = {...initialLive(selection), status: state, reason: 'Telemetry service exited; current interval is unknown'};
+      freshness.invalidate(update); dashboardSubscriptions.close(); dashboardPort = undefined; window?.webContents.send('telemetry:service-state', update);},
+    exhausted: () => {const update: LiveTelemetry = {...initialLive(selection), status: 'service-failed', reason: 'Automatic service restart limit reached'};
+      freshness.invalidate(update); window?.webContents.send('telemetry:service-state', update);}
   });
+  function retireLive(): void {freshness.close(); closeUpstream(); overlayController?.loaded(false); dashboardSubscriptions.close(); overlaySubscriptions.close(); dashboardPort = overlayPort = undefined;}
+  function stop(): void {retireLive(); supervisor.stop();}
+  function fail(code: string, error?: unknown): void {retireLive(); supervisor.fail(code, error);}
   const trusted = (event: IpcMainEvent | IpcMainInvokeEvent) => Boolean(window && !window.isDestroyed() && event.sender === window.webContents && event.senderFrame === window.webContents.mainFrame);
   function connectSubscription(): void {
-    if (!subscribed || !serviceReady || !service || !window || window.isDestroyed()) return;
+    if (!subscribed || dashboardPort || supervisor.stopping || !window || window.isDestroyed()) return;
     const {port1, port2} = new MessageChannelMain();
-    try {service.postMessage({type: 'subscribe'}, [port2]); window.webContents.postMessage('telemetry:port', null, [port1]);}
+    dashboardPort = port1;
+    port1.on('close', () => {if (dashboardPort === port1) dashboardPort = undefined;});
+    try {dashboardSubscriptions.attach(port1); window.webContents.postMessage('telemetry:port', null, [port2]);}
     catch (error) {port1.close(); port2.close(); log('SUBSCRIPTION_FAILED', String(error));}
+  }
+  function closeUpstream(): void {
+    clearTimeout(upstreamRecovery); upstreamRecovery = undefined;
+    const previous = upstream; upstream = undefined; previous?.close();
+  }
+  function connectUpstream(): void {
+    if (upstream || !serviceReady || !service || supervisor.stopping) return;
+    const child = service, {port1, port2} = new MessageChannelMain(); upstream = port1;
+    const lost = () => {
+      if (upstream !== port1) return;
+      closeUpstream(); freshness.invalidate({...initialLive(selection), status: 'stale', reason: 'Main live subscription closed; current interval is unknown'});
+      if (service === child && serviceReady && !supervisor.stopping && upstreamBudget.take() !== undefined)
+        upstreamRecovery = setTimeout(() => {upstreamRecovery = undefined; connectUpstream();}, 250);
+    };
+    port1.on('close', lost);
+    port1.on('message', (event: {data: {type?: string; delivery?: number; update?: LiveTelemetry} | undefined}) => {
+      if (upstream !== port1 || service !== child || !serviceReady || supervisor.stopping) return;
+      const data = event.data;
+      if (!data || data.type !== 'live' || !Number.isSafeInteger(data.delivery) || data.delivery! < 1 || !data.update) {lost(); return;}
+      // The single typed utilityProcess publisher is trusted; renderers never reach this port.
+      if (!selectionPending && data.update.selection === selection) freshness.accept(data.update);
+      try {if (upstream === port1) port1.postMessage({type: 'consumed', delivery: data.delivery});} catch {lost();}
+    });
+    try {port1.start(); child.postMessage({type: 'subscribe'}, [port2]);} catch (error) {port2.close(); lost(); log('MAIN_SUBSCRIPTION_FAILED', String(error));}
+  }
+  function createOverlay(): void {
+    overlay = new BrowserWindow({width: 300, height: 132, show: false, frame: false, transparent: true, backgroundColor: '#00000000',
+      focusable: false, skipTaskbar: true, alwaysOnTop: true, resizable: false, movable: false, minimizable: false, maximizable: false, fullscreenable: false,
+      webPreferences: {preload: path.join(__dirname, 'overlay-preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false}});
+    overlay.setIgnoreMouseEvents(true); overlay.setFocusable(false);
+    overlayController = new OverlayController(overlay, screen);
+    overlay.webContents.setWindowOpenHandler(() => ({action: 'deny'}));
+    overlay.webContents.on('will-navigate', event => event.preventDefault());
+    const retire = () => {overlayController?.loaded(false); overlaySubscriptions.close(); overlayPort = undefined;};
+    overlay.webContents.on('did-start-loading', retire);
+    overlay.webContents.on('render-process-gone', (_event, details) => {
+      retire(); log('OVERLAY_RENDER_PROCESS_GONE', details);
+      if (!supervisor.stopping && overlayBudget.take() !== undefined) loadOverlay(); else fail('OVERLAY_RESTART_EXHAUSTED');
+    });
+    overlay.on('closed', () => {retire(); overlay = undefined; overlayController = undefined; if (!supervisor.stopping) stop();});
+    const changed = () => overlayController?.topologyChanged();
+    screen.on('display-added', changed); screen.on('display-removed', changed); screen.on('display-metrics-changed', changed);
+    loadOverlay();
+  }
+  function loadOverlay(): void {
+    void overlay!.loadFile(path.join(__dirname, 'renderer', 'index.html'), {query: {view: 'overlay'}}).catch(error => fail('OVERLAY_LOAD_FAILED', error));
   }
   function createWindow(): void {
     window = new BrowserWindow({width: 800, height: 500, webPreferences: {preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false}});
     window.webContents.setWindowOpenHandler(() => ({action: 'deny'}));
     window.webContents.on('will-navigate', event => event.preventDefault());
-    window.webContents.on('did-start-loading', () => {rendererEpoch++; subscribed = false; service?.postMessage({type: 'unsubscribe'});});
+    window.webContents.on('did-start-loading', () => {rendererEpoch++; subscribed = false; dashboardSubscriptions.close(); dashboardPort = undefined;});
     window.webContents.on('render-process-gone', (_event, details) => {
-      rendererEpoch++; subscribed = false; service?.postMessage({type: 'unsubscribe'}); log('RENDER_PROCESS_GONE', details);
-      if (!supervisor.stopping && rendererBudget.take() !== undefined) loadWindow(); else supervisor.fail('RENDERER_RESTART_EXHAUSTED');
+      rendererEpoch++; subscribed = false; dashboardSubscriptions.close(); dashboardPort = undefined; log('RENDER_PROCESS_GONE', details);
+      if (!supervisor.stopping && rendererBudget.take() !== undefined) loadWindow(); else fail('RENDERER_RESTART_EXHAUSTED');
     });
+    window.on('closed', () => {subscribed = false; dashboardSubscriptions.close(); freshness.close(); closeUpstream(); overlay?.destroy(); stop();});
     loadWindow();
   }
   function loadWindow(): void {
-    void window!.loadFile(path.join(__dirname, 'renderer', 'index.html')).then(() => log('WINDOW_LOADED')).catch(error => supervisor.fail('WINDOW_LOAD_FAILED', error));
+    void window!.loadFile(path.join(__dirname, 'renderer', 'index.html')).then(() => log('WINDOW_LOADED')).catch(error => fail('WINDOW_LOAD_FAILED', error));
   }
   function startService(): void {
     if (supervisor.stopping) return;
@@ -74,19 +143,20 @@ else {
           const broker = requested === 'ets2' || requested === 'ats' ? await selectedBroker(requested) : undefined;
           if (supervisor.stopping || service !== child || generation !== selectionGeneration) return;
           child.postMessage({type: 'select', source: requested, broker});
-          serviceReady = true; status = {service: 'ready', storage: 'verified', synthetic: true};
-          if (!window) createWindow(); else connectSubscription();
-        })().catch(error => {if (!supervisor.stopping && service === child) supervisor.fail('SERVICE_CONFIGURATION_FAILED', error);});
-      } else if (type === 'failed') supervisor.fail('SERVICE_START_FAILED', message);
-      else if (type !== 'stopped') supervisor.fail('SERVICE_INVALID_MESSAGE');
+          serviceReady = true; selectionPending = false; status = {service: 'ready', storage: 'verified', synthetic: true};
+          if (!window) {createWindow(); createOverlay();} else connectSubscription();
+          connectUpstream();
+        })().catch(error => {if (!supervisor.stopping && service === child) fail('SERVICE_CONFIGURATION_FAILED', error);});
+      } else if (type === 'failed') fail('SERVICE_START_FAILED', message);
+      else if (type !== 'stopped') fail('SERVICE_INVALID_MESSAGE');
     });
   }
   log('APP_START', {electron: process.versions.electron, node: process.versions.node, packaged: app.isPackaged});
-  process.on('uncaughtException', error => supervisor.fail('UNCAUGHT_EXCEPTION', error));
-  process.on('unhandledRejection', error => supervisor.fail('UNHANDLED_REJECTION', error));
-  app.on('before-quit', event => {event.preventDefault(); supervisor.stop();});
+  process.on('uncaughtException', error => fail('UNCAUGHT_EXCEPTION', error));
+  process.on('unhandledRejection', error => fail('UNHANDLED_REJECTION', error));
+  app.on('before-quit', event => {event.preventDefault(); freshness.close(); closeUpstream(); overlayController?.loaded(false); stop();});
   // V0 records no history. Close-to-tray recording lifecycle belongs to ET-011/015.
-  app.on('window-all-closed', () => supervisor.stop());
+  app.on('window-all-closed', () => stop());
   if (process.env.ETS2TELEMETRY_LIVE_SMOKE === '1' && diagnosticDirectory && path.isAbsolute(diagnosticDirectory) && process.env.ETS2TELEMETRY_PROFILE_DIR && path.isAbsolute(process.env.ETS2TELEMETRY_PROFILE_DIR)) {
     (app as unknown as EventEmitter).on('ets2telemetry:diagnostic-service-exit', () => {if (service && serviceReady && !supervisor.stopping) {log('DIAGNOSTIC_SERVICE_EXIT_REQUEST', {pid: service.pid}); service.kill();}});
   }
@@ -96,7 +166,7 @@ else {
       if (!path.isAbsolute(profile)) throw new Error('Diagnostic profile must be absolute');
       mkdirSync(profile, {recursive: true}); app.setPath('userData', profile); app.setPath('sessionData', profile);
     }
-  } catch (error) {supervisor.fail('PROFILE_SETUP_FAILED', error);}
+  } catch (error) {fail('PROFILE_SETUP_FAILED', error);}
   ipcMain.handle('scaffold:status', event => {if (!trusted(event) || !status) throw new Error('Untrusted status request'); return status;});
   ipcMain.handle('telemetry:select', async (event, source: unknown) => {
     if (!trusted(event) || !serviceReady) throw new Error('Untrusted source request');
@@ -104,12 +174,24 @@ else {
     if (performance.now() - lastSelectionRequest < 250) throw new Error('Source selection request limit exceeded');
     lastSelectionRequest = performance.now();
     const child = service!, generation = ++selectionGeneration, epoch = rendererEpoch;
-    const broker = next === 'ets2' || next === 'ats' ? await selectedBroker(next) : undefined;
-    if (!trusted(event) || !serviceReady || supervisor.stopping || service !== child || generation !== selectionGeneration || epoch !== rendererEpoch) throw new Error('Source request was retired');
-    child.postMessage({type: 'select', source: next, broker});
-    selection = next;
+    selectionPending = true; freshness.invalidate(initialLive(next));
+    try {
+      const broker = next === 'ets2' || next === 'ats' ? await selectedBroker(next) : undefined;
+      if (!trusted(event) || !serviceReady || supervisor.stopping || service !== child || generation !== selectionGeneration || epoch !== rendererEpoch) throw new Error('Source request was retired');
+      child.postMessage({type: 'select', source: next, broker});
+      selection = next;
+    } finally {if (generation === selectionGeneration) selectionPending = false;}
   });
-  ipcMain.on('telemetry:subscribe', event => {if (!trusted(event) || subscribed) return; subscribed = true; connectSubscription();});
-  ipcMain.on('telemetry:unsubscribe', event => {if (!trusted(event)) return; subscribed = false; service?.postMessage({type: 'unsubscribe'});});
-  app.whenReady().then(startService).catch(error => supervisor.fail('APP_START_FAILED', error));
+  ipcMain.on('telemetry:subscribe', event => {if (!trusted(event) || subscribed || supervisor.stopping) return; subscribed = true; connectSubscription();});
+  ipcMain.on('telemetry:unsubscribe', event => {if (!trusted(event)) return; subscribed = false; dashboardSubscriptions.close(); dashboardPort = undefined;});
+  const trustedOverlay = (event: IpcMainEvent) => Boolean(overlay && !overlay.isDestroyed() && event.sender === overlay.webContents && event.senderFrame === overlay.webContents.mainFrame);
+  ipcMain.on('overlay:subscribe', event => {
+    if (!trustedOverlay(event) || overlayPort || supervisor.stopping) return;
+    const {port1, port2} = new MessageChannelMain(); overlayPort = port1;
+    port1.on('close', () => {if (overlayPort === port1) {overlayPort = undefined; overlayController?.loaded(false);}});
+    try {overlaySubscriptions.attach(port1); overlay!.webContents.postMessage('overlay:port', null, [port2]); overlayController?.loaded(true);}
+    catch (error) {port1.close(); port2.close(); log('OVERLAY_SUBSCRIPTION_FAILED', String(error));}
+  });
+  ipcMain.on('overlay:unsubscribe', event => {if (!trustedOverlay(event)) return; overlayController?.loaded(false); overlaySubscriptions.close(); overlayPort = undefined;});
+  app.whenReady().then(startService).catch(error => fail('APP_START_FAILED', error));
 }

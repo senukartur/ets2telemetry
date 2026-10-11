@@ -1,7 +1,16 @@
 import React, {useEffect, useState} from 'react';
 import {createRoot} from 'react-dom/client';
-import type {DesktopBridge, LiveTelemetry, SourceSelection} from '../../../packages/contracts/src';
-declare global {interface Window {desktop: DesktopBridge}}
+import type {DesktopBridge, LiveTelemetry, OverlayBridge, OverlayPresentation, SourceSelection} from '../../../packages/contracts/src';
+declare global {interface Window {desktop: DesktopBridge; overlay: OverlayBridge}}
+function Overlay() {
+  const [live, setLive] = useState<OverlayPresentation>();
+  useEffect(() => window.overlay.subscribeOverlay(setLive), []);
+  return <main className="overlay" aria-label="Telemetry overlay">
+    <div className="overlay-source" data-testid="overlay-status">{live?.source ?? 'No game'} · {live?.origin ?? 'none'} · {live?.status ?? 'waiting'} · {live?.freshness ?? 'unavailable'}</div>
+    <div className="overlay-metrics"><div><span className="overlay-label">Speed</span><strong data-testid="overlay-speed">{live?.speed ?? '—'}</strong><span>{live?.speedUnit ?? 'km/h'}</span></div>
+      <div><span className="overlay-label">Fuel</span><strong data-testid="overlay-fuel">{live?.fuel ?? '—'}</strong><span>{live?.fuelUnit ?? 'L'}</span></div></div>
+  </main>;
+}
 function App() {
   const [startup, setStartup] = useState('Starting');
   const [live, setLive] = useState<LiveTelemetry>();
@@ -21,4 +30,6 @@ function App() {
     <p>Prototype live display. No trip recording or durable history.</p>
   </main>;
 }
-createRoot(document.getElementById('root')!).render(<App/>);
+const overlayView = new URLSearchParams(window.location.search).get('view') === 'overlay';
+if (overlayView) document.body.classList.add('overlay-body');
+createRoot(document.getElementById('root')!).render(overlayView ? <Overlay/> : <App/>);

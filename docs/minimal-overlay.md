@@ -1,0 +1,25 @@
+# Minimal overlay (ET-008)
+
+The prototype adds a separate transparent speed/fuel/source-status window. It is a bounded 300 × 132 DIP widget anchored inside the selected game's client rectangle. ETS2 defaults to km/h and liters; ATS defaults to mph and US gallons (3.785411784 L). Canonical v0 values remain m/s and L. Missing readings are `—`; stale captures blank both metrics and show `stale`. These conversions follow the contract and ET-000 defaults; real SDK units still require CAP-01 evidence.
+
+## Ownership and authorization
+
+The utilityProcess still owns ingestion, source validation and the fixed native broker; its SQLite worker remains the isolated scaffold probe. Main consumes exactly one service port and fans out to independent bounded dashboard and overlay subscriptions. Each has one outstanding delivery, one replaceable latest update and a maximum 20 Hz delivery rate. Credits acknowledge callback consumption only. They are neither v0 wire acknowledgements nor durable storage acknowledgements. Dashboard unsubscribe/reload cannot close the upstream or overlay subscription. History sampling is not implemented.
+
+The dashboard retains its existing three-key bridge and source selection. The overlay has a separate sandboxed, context-isolated preload exposing only frozen `window.overlay.subscribeOverlay`. Its projected payload contains display strings, units, source/origin/status/freshness, without SDK observations, geometry, HWNDs, paths or source-selection commands. Main accepts its subscribe/unsubscribe messages only from the current overlay main frame. Popups and navigation are denied. No renderer receives Node.js or filesystem access.
+
+The overlay is constructed hidden, transparent, nonfocusable and outside the taskbar. Mouse ignoring is enabled before loading/showing; authorized display uses `showInactive()`. There is no editing or always-visible mode. Explicit synthetic/replay selections can populate the hidden renderer and identify their origin; they cannot authorize native window visibility.
+
+## Placement and freshness
+
+Main reuses `currentGameClientBounds`: explicit ETS2/ATS selection, matching game-origin identity, valid fresh client bounds, foreground and non-minimized state are required. SDK freshness is independent of window freshness. Main applies 500 ms SDK and 250 ms window deadlines measured on its own receipt clock. Capture/session/process/clock identity keys prevent equal SDK captures from renewing metrics; window receipts expire separately. No `performance.now()` values are compared across processes. A fresh window can authorize a visible overlay with explicit stale, blank metrics.
+
+Physical signed client bounds are converted through [Electron `screen.screenToDipRect(null, rect)`](https://www.electronjs.org/docs/latest/api/screen#screenscreentodiprectwindow-rect-windows), which chooses the display nearest the rectangle. Game DPI is not used as a coordinate divisor. Geometry is recomputed when physical bounds change; display addition/removal/metrics changes hide the overlay until a new window receipt and invalidate cached conversion. Small/invalid/offscreen rectangles and conversion failures hide it. The widget is clipped inside client dimensions and must fit an available display.
+
+Selection requests immediately hide the old placement. Pending requests suppress upstream observations, and sender/frame/document/child/request generations are rechecked after broker verification. Retired ports cannot publish. Service/port failure invalidates current data; upstream recovery has at most two attempts per 60 seconds. Overlay renderer reload/failure hides and retires its channel; renderer recovery is separately bounded. Overlay consumers have a 500 ms credit deadline, and the preload blanks quiet current readings after 500 ms. SDK expiry does not terminate a healthy quiet channel. Closing the dashboard destroys the overlay and stops the v0 service; ET-011/ET-015 own future recording/tray behavior.
+
+## Validation boundary
+
+Node tests cover units/zeros/missing/stale values, independent clocks, equal captures, signed/mixed-scale placement through a mocked Electron API, topology invalidation, foreground/minimize/source gates, trusted frames, async selection, independent credits, port retirement and shutdown. Controlled synthetic renderer fixtures are useful for DOM, isolation and recovery checks while the native overlay stays hidden. They do not establish actual mixed-DPI conversion, input pass-through, focus behavior or game compatibility.
+
+Follow [manual prototype setup](manual-plugin-setup.md) for the maintained SDK DLL, build and launch commands. See [ET-008 validation](validation/et-008.md). Actual ETS2/ATS single-player/Convoy/TruckersMP windowed and borderless sessions, elevation, monitor removal, latency, resource use and frame-time impact remain pending. Exclusive fullscreen, rendering hooks, arbitrary game memory access, configuration UI, recording and server functionality are outside this package.
