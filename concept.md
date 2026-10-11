@@ -225,6 +225,8 @@ Install, replace, or remove the DLL only while the game is closed. Manage only t
 
 Owner decision on October 11, 2026: ET-002a was explicitly accepted after its exact-head checks and independent review; PR #9 was squash merged as `247c076cf803529c4650e125544faaf0bc3ccad7`. The owner expanded the sequencing exception to start ET-003 and ET-005a from that updated `main` while SP-01 remains unaccepted and PR #8 stays draft. The real ETS2 single-player windowed retry and Convoy checks remain mandatory pending evidence. This decision changes sequencing only; it does not establish game compatibility, authorize protocol v1, or waive the acceptance and merge criteria of subsequent packages.
 
+Owner sequencing decision on October 11, 2026: ET-004a, ET-006a and ET-007 may start before full acceptance of ET-003/ET-005a, using isolated branches based on their independently reviewed PR #10/#11 commits. Those prerequisites remain unaccepted draft PRs; every missing game/environment/desktop criterion remains pending. This exception does not mark packages Done, authorize v1/history or extend scope to ET-008 or later phases.
+
 ## 10. Acceptance Criteria and Validation
 
 [TESTING.md](TESTING.md) defines the test layers, permanent regression scenarios, CI/merge policy, historical migration checks, and real-game evidence. ET-001 adds scaffold checks; extend them in every feature PR. Most repeatable feature logic will use simulation, real local transport, and isolated storage; real-game compatibility and input/window behavior require separate evidence. The Windows CI workflow has recorded clean hosted and deliberate failure/restoration evidence; final current-head checks and review remain required, and broader feature suites remain pending.

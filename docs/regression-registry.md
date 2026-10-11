@@ -19,7 +19,7 @@ Read the full requirements in [TESTING.md](../TESTING.md). Pending means the own
 | REG-013 historical migrations | Pending; no production schema or historical database exists | ET-013, ET-018 immutable supported/unsupported-newer fixtures |
 | REG-014 journal/export | Pending | ET-016 reconciliation/cancellation |
 | REG-015 project DLL management | Pending; placeholder is never installed in a game | ET-017, ET-018 actual game path/plugin ownership |
-| REG-016 overlay/DPI/focus | Pending | ET-007, ET-008, ET-012 and real games |
+| REG-016 overlay/DPI/focus | Partial candidate: native `game-window-monitor-contract` and separate console ASan copies exercise actual controlled Win32 lifecycle, negative window origin, one-monitor DPI, unrelated host/PID rejection, ambiguity, minimized unavailable bounds, recreation and shutdown | ET-007 production transport binding, mixed-DPI/negative monitor topology/removal/elevation and actual game focus/input checks pending; ET-008/012 overlay behavior pending |
 | REG-017 packaged startup/upgrade/history | Partial: `tests/unit/scaffold.test.ts`, `package-integrity.test.ts`, `scripts/inspect-package.mjs`, CI packaged SQLite worker smoke, `tests/windows/Test-UninstallResidue.ps1`; earlier ET-001 native installer evidence in its validation record | ET-018, ET-020 full production history/settings/migration upgrade pending |
 | REG-018 sustained one-hour | Pending | ET-019, ET-020 real duration/resource/game evidence |
 
