@@ -90,6 +90,21 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run native:test
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: SDK-independent console AddressSanitizer checks
+        run: |
+          $sdkVsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if ($LASTEXITCODE -ne 0 -or -not $sdkVsPath) { throw 'MSVC installation not found for ASan runtime.' }
+          $sdkVcVersion = (Get-Content -LiteralPath (Join-Path $sdkVsPath 'VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt') -Raw).Trim()
+          $sdkAsanBin = Join-Path $sdkVsPath "VC\Tools\MSVC\$sdkVcVersion\bin\Hostx64\x64"
+          if (-not (Test-Path -LiteralPath (Join-Path $sdkAsanBin 'clang_rt.asan_dynamic-x86_64.dll'))) { throw 'MSVC AddressSanitizer runtime not found.' }
+          $env:PATH = "$sdkAsanBin;$env:PATH"
+          Write-Output "ASan runtime: $sdkAsanBin"
+          cmake -S native/telemetry-plugin -B native/telemetry-plugin/build-asan -G 'Visual Studio 17 2022' -A x64 -DETS2TELEMETRY_ASAN_TESTS=ON
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build native/telemetry-plugin/build-asan --config Release --target protocol-v0-asan-test sdk-adapter-asan-test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ctest --test-dir native/telemetry-plugin/build-asan -C Release --output-on-failure -R asan-contract
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Separate native client AddressSanitizer controls
         run: |
           $clientVsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
@@ -135,6 +150,7 @@ jobs:
             .local/ci
             .local/diagnostics/package-inspection.json
             native/telemetry-plugin/build/Testing/Temporary
+            native/telemetry-plugin/build-asan/Testing/Temporary
             native/telemetry-client/build/Testing/Temporary
             native/telemetry-client/build-asan/Testing/Temporary
           retention-days: 14
