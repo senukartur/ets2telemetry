@@ -87,12 +87,13 @@ try {
     } catch (error) { run.failure = serializeError(error); }
     finally {
       if (application) {
+        const launcher = application.process();
         const started = performance.now();
         try {
           await within(application.close(), 8000, 'APP_CLOSE_TIMEOUT_8_SECONDS');
           run.closeMilliseconds = performance.now() - started;
-          run.launcherExitCode = application.process().exitCode;
-          run.launcherSignalCode = application.process().signalCode;
+          run.launcherExitCode = launcher.exitCode;
+          run.launcherSignalCode = launcher.signalCode;
           assert.equal(run.launcherExitCode, 0, 'Contained Playwright launcher exit must be 0');
           assert.equal(run.launcherSignalCode, null, 'Launcher exit must not use forced termination');
         } catch (error) { run.closeFailure = serializeError(error); }
