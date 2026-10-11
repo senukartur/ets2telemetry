@@ -1,4 +1,8 @@
-import {readFileSync} from 'node:fs';
+import {readFileSync,mkdtempSync,writeFileSync,rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join,resolve} from 'node:path';
+import {spawnSync} from 'node:child_process';
+import {builtinModules} from 'node:module';
 import net from 'node:net';
 import {describe,it,expect} from 'vitest';
 import {FrameDecoder,encodeFrame,PROTOCOL_V0,type ServerMessage} from '../../packages/contracts/src/protocol-v0';
@@ -6,6 +10,7 @@ import {replay,seededId,validateScenario,type Scenario,type Reading} from '../..
 import {SnapshotProbe} from '../../tools/telemetry-simulator/src/consumer';
 import {faultBytes,type Fault} from '../../tools/telemetry-simulator/src/faults';
 import {startPipe,consumePipe} from '../../tools/telemetry-simulator/src/pipe';
+import {readFixtureFile,MAX_FIXTURE_BYTES} from '../../tools/telemetry-simulator/src/fixture-file';
 
 const fixture=JSON.parse(readFileSync('tests/fixtures/simulator-v0/reconnect.json','utf8')) as Scenario;
 const expected=JSON.parse(readFileSync('tests/fixtures/simulator-v0/reconnect.expected.json','utf8')) as {messages:unknown[];freshness:Array<{receivedAtMs:number;observeAtMs:number;stale:boolean}>};
@@ -24,6 +29,29 @@ describe('synthetic v0 replay',()=>{
   it('matches independent ordered expectations, retains only checkpoint after offline changes',()=>expect(summary(replay(fixture))).toEqual(expected.messages));
   it('repeats identical bytes under fixed seed and controlled time without mutating input',()=>{
     const before=JSON.stringify(fixture);expect(replay(fixture)).toEqual(replay(fixture));expect(JSON.stringify(fixture)).toBe(before);
+  });
+  it('counts semantic configuration transitions independently of job object key order',()=>{
+    const job:Reading['job']={available:true,value:{cargoId:'synthetic-cargo',destinationCityId:'synthetic-city',plannedDistance:{available:true,value:0,unit:'m'},expectedIncome:{rawValue:'0',currency:{status:'unknown'}}}};
+    const reordered:Reading['job']={value:{expectedIncome:{currency:{status:'unknown'},rawValue:'0'},plannedDistance:{unit:'m',value:0,available:true},destinationCityId:'synthetic-city',cargoId:'synthetic-cargo'},available:true};
+    const reading:Reading={atMs:0,speedMps:0,fuelL:0,simulation:'running',revision:'1',truck:'synthetic-truck',gameMinute:'0',job};
+    const e=replay({...fixture,steps:[{action:'reading',reading},{action:'reading',reading:{...reading,atMs:1,job:reordered}},{action:'connect',atMs:2}]});
+    const checkpoint=e[1].message;if(checkpoint.kind!=='checkpoint')throw new Error('checkpoint');expect(checkpoint.data.continuity).toEqual({coalescedSnapshots:'1',lostObservations:'0',offlineTransitions:'1'});
+  });
+  it.each(['root','step','reading'])('rejects an oversized undeclared property at %s before retaining the scenario',level=>{
+    const s=structuredClone(fixture) as unknown as Record<string,unknown>;const steps=s.steps as Array<Record<string,unknown>>;
+    const target=level==='root'?s:level==='step'?steps[0]:steps[0].reading as Record<string,unknown>;
+    target.unused='x'.repeat(3*1024*1024);expect(()=>validateScenario(s)).toThrow();
+  });
+  it('rejects unknown wire-nested job and diagnostic fields',()=>{
+    const job={available:true,value:{cargoId:'synthetic',destinationCityId:'synthetic',plannedDistance:{available:true,value:0,unit:'m',unused:'extra'},expectedIncome:{rawValue:'0',currency:{status:'unknown'}}}};
+    const s=structuredClone(fixture) as unknown as {steps:Array<{reading?:Record<string,unknown>}>};s.steps[0].reading!.job=job;expect(()=>validateScenario(s)).toThrow();
+    expect(()=>validateScenario({...fixture,steps:[{action:'diagnostic',atMs:0,observations:[{channel:'synthetic',sdkType:'string',unit:'raw',value:{available:true,value:'synthetic',unused:'extra'}}]}]})).toThrow();
+  });
+  it('normalizes declared arrays without retaining unused metadata or caller aliases',()=>{
+    const s=structuredClone(fixture);Object.assign(s.steps,{unused:'x'.repeat(3*1024*1024)});const normalized=validateScenario(s);
+    expect(Object.hasOwn(normalized.steps,'unused')).toBe(false);expect(normalized.steps).not.toBe(s.steps);
+    const observations=[{channel:'synthetic',sdkType:'string' as const,unit:'raw',value:{available:true as const,value:'synthetic'}}];Object.assign(observations,{unused:'x'.repeat(3*1024*1024)});
+    const diagnostic=validateScenario({...fixture,steps:[{action:'diagnostic',atMs:0,observations}]}).steps[0];if(diagnostic.action!=='diagnostic')throw new Error('diagnostic');expect(Object.hasOwn(diagnostic.observations,'unused')).toBe(false);
   });
   it('seed controls all project identities; changing seed preserves values and times',()=>{
     const a=replay(fixture),b=replay({...fixture,seed:'another-seed'});
@@ -99,6 +127,31 @@ describe('synthetic v0 replay',()=>{
     for(const mutate of [(m:ReturnType<typeof replay>[number]['message'])=>{m.seq='2';},(m:ReturnType<typeof replay>[number]['message'])=>{m.source.processId=99;},(m:ReturnType<typeof replay>[number]['message'])=>{m.capture.monotonicNs='0';}]) {
       const e=replay(fixture),p=new SnapshotProbe();p.connect();p.push(e[0].frame,100);p.push(e[1].frame,100);const bad=structuredClone(e[2].message);mutate(bad);expect(()=>p.push(encodeFrame(bad),150)).toThrow();
     }
+  });
+});
+
+describe('fixture filesystem boundary',()=>{
+  it('accepts exactly the byte cap and rejects overflow/invalid UTF-8 while closing the handle',()=>{
+    const directory=mkdtempSync(join(tmpdir(),'ETS2Telemetry-SYNTHETIC-TEST-fixture-'));
+    try {
+      const path=join(directory,'fixture.json'),bytes=Buffer.from(JSON.stringify(fixture)),bounded=Buffer.alloc(MAX_FIXTURE_BYTES,0x20);bytes.copy(bounded);writeFileSync(path,bounded);
+      expect(readFixtureFile(path)).toEqual(fixture);writeFileSync(path,Buffer.concat([bounded,Buffer.from(' ')]));expect(()=>readFixtureFile(path)).toThrow('exceeds 2 MiB');
+      writeFileSync(path,Buffer.from([0xff]));expect(()=>readFixtureFile(path)).toThrow();
+    }finally{rmSync(directory,{recursive:true,force:true});}
+  });
+  it('rejects a fixture that grows beyond 2 MiB between metadata/open and the actual byte read',async()=>{
+    const directory=mkdtempSync(join(tmpdir(),'ETS2Telemetry-SYNTHETIC-TEST-fixture-'));
+    try {
+      const path=join(directory,'fixture.json'),preload=join(directory,'grow.cjs'),marker=join(directory,'grew.txt');writeFileSync(path,JSON.stringify(fixture));
+      // Bundle the current source in an owned temporary directory, so the fast
+      // suite never depends on a prior root build or a cached CLI artifact.
+      const {build}=await import('vite');const bundle=join(directory,'bundle');
+      await build({configFile:false,logLevel:'silent',build:{outDir:bundle,emptyOutDir:true,lib:{entry:resolve('tools/telemetry-simulator/src/cli.ts'),formats:['cjs'],fileName:()=> 'cli.cjs'},rollupOptions:{external:[...builtinModules,...builtinModules.map(x=>`node:${x}`)]}}});
+      // An actual filesystem mutation at a deterministic boundary, not mocked read bytes.
+      writeFileSync(preload,`const fs=require('node:fs');const path=process.env.SIMULATOR_FIXTURE;let grown=false;function grow(p){if(!grown&&String(p)===path){grown=true;fs.appendFileSync(path,' '.repeat(3*1024*1024));fs.writeFileSync(process.env.SIMULATOR_GROWTH_MARKER,'actual-file-grew');}}const stat=fs.statSync;fs.statSync=function(p,...args){const result=stat.call(this,p,...args);grow(p);return result;};const open=fs.openSync;fs.openSync=function(p,...args){const result=open.call(this,p,...args);grow(p);return result;};`);
+      const result=spawnSync(process.execPath,['--require',preload,join(bundle,'cli.cjs'),'replay',path],{env:{...process.env,SIMULATOR_FIXTURE:path,SIMULATOR_GROWTH_MARKER:marker},encoding:'utf8',timeout:5000,maxBuffer:65536,windowsHide:true});
+      expect(result.error).toBeUndefined();expect(readFileSync(marker,'utf8')).toBe('actual-file-grew');expect(result.status).toBe(1);expect(result.stdout).toBe('');expect(result.stderr).toContain('exceeds 2 MiB');
+    }finally{rmSync(directory,{recursive:true,force:true});}
   });
 });
 describe('isolated actual Windows pipe boundary',()=>{

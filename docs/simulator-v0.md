@@ -47,6 +47,11 @@ seed, and ordered steps. `reading.atMs` and other step `atMs` values are control
 elapsed milliseconds (0 through one day). A reading supplies speed in m/s, fuel
 in liters, simulation status, configuration revision, nullable truck ID, exact
 decimal game minutes and optionally a complete wire job availability object.
+Unknown scenario, step and reading object fields are rejected; nested job and
+diagnostic objects use the unchanged strict v0 validator. Retained input is
+rebuilt from declared bounded values only, including fresh arrays without
+caller metadata. Configuration equality is semantic: reordering JSON keys
+does not count as an offline transition.
 `null` speed/fuel become unavailable; numeric zero remains available. Other
 unmodeled channels explicitly report unavailable. The illustrative SDK mean
 0.3 L/km maps through the accepted helper to 30 L/100km; it is not a trip mean.
@@ -89,6 +94,9 @@ history path, endpoint override, production identity, or disk spool.
 
 Input files are at most 2 MiB; scenarios at most 1,000 steps; wire runs and test
 observers at most 2,000 messages; a pipe run's input frames at most 16 MiB.
+The CLI opens a fixture once and reads at most 2 MiB plus one overflow-probe
+byte from that handle. It decodes UTF-8 and parses JSON only after enforcing
+the byte cap; path replacement or growth after opening cannot waive this cap.
 Writes are serial with a per-write deadline; there is no pending event queue.
 Before serving, the accepted consumer guard also checks every scripted connection's
 identity, ordering, capture time, continuity and diagnostic opt-in. The test

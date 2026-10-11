@@ -1,12 +1,11 @@
-import {readFileSync,statSync} from 'node:fs';
+import {readFixtureFile} from './fixture-file';
 import {replay,validateScenario} from './scenario';
 import {startPipe,consumePipe} from './pipe';
 
 async function main():Promise<void> {
   const [command,file,...extra]=process.argv.slice(2);
   if(!['replay','serve','smoke'].includes(command)||!file||extra.length)throw new Error('Usage: cli.cjs replay|serve|smoke <synthetic-fixture.json>');
-  if(statSync(file).size>2*1024*1024)throw new Error('Synthetic fixture file exceeds 2 MiB');
-  const scenario=validateScenario(JSON.parse(readFileSync(file,'utf8')) as unknown),emissions=replay(scenario);
+  const scenario=validateScenario(readFixtureFile(file)),emissions=replay(scenario);
   if(command==='replay') {for(const {connection,atMs,message} of emissions)console.log(JSON.stringify({scenario:scenario.id,origin:'synthetic',connection,atMs,message}));return;}
   const controller=new AbortController();const cancel=()=>controller.abort();process.once('SIGINT',cancel);process.once('SIGTERM',cancel);
   const run=await startPipe(emissions,{realtime:true,signal:controller.signal});
