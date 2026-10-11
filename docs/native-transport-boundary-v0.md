@@ -27,4 +27,3 @@ The plugin transport uses overlapped I/O. CancelIoEx is a request, not completed
 ## Required evidence
 
 Each owning package records actual security/collision/identity mismatch, handshake/framing/limits, absent/stalled consumer, reconnect, cancellation and orderly shutdown tests. ET-006a adds real source-to-renderer development and packaged checks under the existing bounded Windows Job Object; prior scaffold security/SQLite/shutdown checks remain mandatory. Controlled pipes/windows and synthetic telemetry are explicitly distinct from real games. Second-user/remote/elevation/clean-machine/game checks without actual execution stay pending.
-
