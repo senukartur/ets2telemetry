@@ -36,18 +36,24 @@ The initial prototype dependency snapshot is below. Read live cards at startup a
 
 | Card | Prerequisites | Result |
 | --- | --- | --- |
-| ET-001 | None | Windows desktop/native scaffold and meaningful initial checks |
-| ET-002 | ET-001 | Protocol v1 and shared contracts |
+| ET-001 | None | Desktop/native scaffold; packaged utilityProcess and SQLite worker probe |
 | ET-022 | ET-001 | Windows CI and regression infrastructure |
-| ET-003 | ET-002 | SCS SDK adapter |
-| ET-005 | ET-002 | Simulator and replay fixtures |
-| ET-004 | ET-003 | Native pipe transport |
+| SP-01 (ET-009 package) | ET-001 | Early game-validation evidence |
+| ET-002a | SP-01 | Protocol v0 and shared contracts |
+| ET-003 | ET-002a | SCS SDK adapter |
+| ET-005a | ET-002a | Initial simulator and replay fixtures |
+| ET-004a | ET-003 | Initial native pipe transport |
 | ET-007 | ET-003 | Game-window tracking |
-| ET-006 | ET-002, ET-005 | Electron ingestion and typed renderer bridge |
-| ET-008 | ET-004, ET-006, ET-007 | Minimal speed/fuel overlay |
-| ET-009 | ET-008, ET-022 | Actual-game prototype acceptance |
+| ET-006a | ET-002a, ET-005a | Initial Electron ingestion and renderer bridge |
+| ET-008 | ET-004a, ET-006a, ET-007 | Minimal speed/fuel overlay |
+| CAP-01 | ET-003, ET-004a, ET-006a | Capability evidence |
+| Full ET-009 | ET-008, CAP-01 | Actual-game prototype acceptance |
+| ET-002b | ET-002a, CAP-01 | Finalized protocol package |
+| ET-004b | ET-004a, ET-002b | Finalized pipe transport package |
+| ET-005b | ET-005a, ET-002b, CAP-01 | Broader simulator package |
+| ET-006b | ET-006a, ET-004b, ET-005b | Finalized ingestion package |
 
-ET-002 and ET-022 can run concurrently after ET-001 is accepted and merged, coordinating shared configuration. ET-003 and ET-005 can follow ET-002. ET-004 and ET-007 can follow ET-003. ET-006 can progress against the accepted simulator alongside native work. Do not build on an unmerged dependency by default or introduce stacked PRs without owner authorization. ET-009 requires both games and the required multiplayer/display matrix; simulator success does not close this gate.
+ET-022 and SP-01 can run concurrently after ET-001 is accepted and merged. Follow the package graph above and verify live card criteria. A package prerequisite requires its acceptance criteria and merge; a parent card is Done only when all its packages are accepted. Do not build on an unmerged dependency or introduce stacked PRs without owner authorization. ET-009 game evidence does not depend on ET-022, but relevant code checks remain mandatory. ET-009 requires both games and the multiplayer/display matrix; simulator success does not close this gate. The owner alone authorizes merges.
 
 ## Delegation and file ownership
 

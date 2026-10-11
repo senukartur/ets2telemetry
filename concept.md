@@ -2,7 +2,7 @@
 
 Concept recorded on: October 10, 2026.
 
-Status: design stage. When this document was created, no application code existed and no integration had been tested in a running game. ETS2Telemetry is the working project name.
+Status updated October 11, 2026: ET-001 scaffold implemented and its native Windows installer/packaged-worker criteria verified. All six actual lifecycle operations exited normally; acceptance includes a separate corrected uninstall residue evaluation and exact owned cleanup, preserving the original failed wrapper report. The package passed installed SQLite/security/startup/shutdown probes. Independent whole-PR review found no actionable source issues; the final documentation delta is reviewed separately. An earlier native Playwright launch timeout remains unexplained flakiness. No integration has been tested in a running game. ETS2Telemetry is the working project name. See [Windows setup](docs/setup.md) and [the validation record](docs/validation/et-001.md) for exact identities and limits. ET-022 and SP-01 become eligible after the accepted scaffold PR is merged.
 
 Repository setup update on October 10, 2026: local `main` tracks the existing history at `https://github.com/senukartur/ets2telemetry.git`. Git for Windows 2.55.0.windows.5 and GitHub CLI 2.102.0 are installed. GitHub CLI is authenticated as `senukartur` and provides Git's HTTPS credentials. Fetch, a fast-forward-only pull, and the initial documentation push succeeded. The published documentation includes this concept, `AGENTS.md`, and `README.md`. The temporary Trello planning manifest stays local and is excluded through `.gitignore`. Use Git for commits, branches, and synchronization, and GitHub CLI for GitHub operations. This setup does not establish an application build toolchain or game compatibility.
 
@@ -75,10 +75,11 @@ Project-owned C++ DLL plugin
     |
     | Local Windows named pipe
     v
-Application telemetry processing
-    |-- Main React window
-    |-- React overlay window
-    `-- Storage worker --> SQLite
+Electron main process (window lifecycle and service supervision)
+    |-- Main React window (sandboxed, narrow preload)
+    |-- React overlay window (sandboxed, narrow preload)
+    `-- utilityProcess telemetry service
+            `-- Dedicated storage worker --> SQLite
                               |
                               | Later phase
                               v
@@ -182,7 +183,7 @@ The working database location for each Windows user is:
 
 Resolve the location through the user's system directory without hardcoding an account name. Store the database separately from application binaries. Application updates preserve history; schema changes use migrations.
 
-Run SQLite in a dedicated worker. Persist an event and its corresponding trip update transactionally. The MVP does not automatically delete history. Provide JSON export.
+The telemetry utilityProcess owns a dedicated SQLite worker; Electron main supervises service lifecycle and owns windows. Keep processing and persistence outside renderers. Persist an event and its corresponding trip update transactionally. The MVP does not automatically delete history. Provide JSON export.
 
 Estimated storage is **60-120 MB per 100 hours**, with **100 MB per 100 hours** as the planning allowance. At 1 Hz, 100 hours produces 360,000 samples. An in-memory SQLite model with 15 fields and two indexes used about 52 MB with numeric references and 107 MB with full UUIDs repeated in each row. This is a model estimate, not a measurement of the finished application; auxiliary files and the final schema affect disk usage.
 
@@ -208,6 +209,8 @@ Client telemetry is a source of statistics, not proof that a trip was legitimate
 
 ## 9. Implementation Sequence
 
+Owner-approved package sequence (October 11, 2026): ET-001 enables ET-022 and SP-01 (the early ET-009 game-validation package) in parallel. SP-01 enables ET-002a protocol v0; ET-002a enables ET-003 and ET-005a. ET-003 enables ET-004a and ET-007. ET-002a plus ET-005a enables ET-006a; ET-004a plus ET-006a plus ET-007 enables ET-008. ET-003 plus ET-004a plus ET-006a enables CAP-01. ET-008 plus CAP-01 enables full ET-009. ET-002a plus CAP-01 enables ET-002b; ET-004a plus ET-002b enables ET-004b; ET-005a plus ET-002b plus CAP-01 enables ET-005b; ET-006a plus ET-004b plus ET-005b enables ET-006b. Package acceptance requires its criteria and merge; a parent card is Done only after all its packages are accepted. ET-009 game evidence does not depend on ET-022, while relevant code checks remain mandatory. The owner alone authorizes merges.
+
 1. **End-to-end technical prototype.** Read speed and fuel through the project-owned plugin, transmit them to Electron, and display them above the game. Validate ETS2 and ATS, including TruckersMP, before expanding the journal or visual design.
 2. **Application and overlay behavior.** Connection states, reconnection, core metrics, tray operation, settings, window tracking, and monitor handling.
 3. **Reliable history.** Job events, SQLite, samples, incomplete recordings, the journal, trip details, and export.
@@ -218,7 +221,7 @@ Install, replace, or remove the DLL only while the game is closed. Manage only t
 
 ## 10. Acceptance Criteria and Validation
 
-[TESTING.md](TESTING.md) defines the test layers, permanent regression scenarios, CI/merge policy, historical migration checks, and real-game evidence. Build test infrastructure with the initial scaffold and extend it in every feature PR; the final acceptance milestone must not be the first time regression testing is introduced. Most repeatable logic is checked through simulation, real local transport, and isolated storage; real-game compatibility and input/window behavior require separate evidence. This strategy is planned: no tests or workflows have been implemented yet.
+[TESTING.md](TESTING.md) defines the test layers, permanent regression scenarios, CI/merge policy, historical migration checks, and real-game evidence. ET-001 adds scaffold checks; extend them in every feature PR. Most repeatable feature logic will use simulation, real local transport, and isolated storage; real-game compatibility and input/window behavior require separate evidence. CI and broader feature suites remain pending.
 
 - Complete job lifecycle in both games: acceptance, driving, stopping, pausing, delivery, and cancellation.
 - A separate compatibility matrix for single-player, Convoy, and TruckersMP, recording tested versions. Documentation alone does not establish compatibility.
@@ -259,3 +262,9 @@ Install, replace, or remove the DLL only while the game is closed. Manage only t
 - [Electron Forge](https://www.electronforge.io/).
 
 These sources reflect research performed when the concept was recorded. Verify current APIs and required capabilities again when selecting implementation versions.
+
+### ET-001 recovery status (October 11, 2026)
+
+At source `43d3cc3`, coordinator typecheck and 102 Node tests passed; 18 actual harmless installer-controller controls were independently accepted. Installed attempts remain failed evidence, including WMI null and non-null differing images with matching held native identity. The single-query native-authority observer passed metadata binding in the guest; terminal held-identity handling is now being validated without changing product architecture or runtime caps. Actual installed acceptance and final immutable PR review are still required before dependent packages start; see the validation record for exact commits, exports and restoration results.
+
+The scaffold includes bounded startup diagnostics, corrected physical worker/dependency packaging, shutdown regression tests, an external Windows Job Object watchdog and static package fingerprints. The owner revoked the native launch hold and VM requirement on October 11, 2026. Native installed lifecycle/probe acceptance is recorded as six actual operations plus a separate corrected uninstall predicate and owned cleanup; historical failures remain retained. This does not prove long-session stability, game compatibility or resolution of the original Windows-wide freeze. See [setup](docs/setup.md#packaged-startup-recovery-hold-october-11-2026) and [validation](docs/validation/et-001.md).

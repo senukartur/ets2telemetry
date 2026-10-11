@@ -4,6 +4,13 @@
 # Local coordinator recovery state and temporary PR bodies.
 /.local/
 
+node_modules/
+apps/desktop/dist/
+native/telemetry-plugin/build/
+out/
+test-results/
+playwright-report/
+
 # IDE workspace directories.
 .idea/
 .vs/

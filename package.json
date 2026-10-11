@@ -1,0 +1,63 @@
+{
+  "name": "ets2telemetry-desktop",
+  "productName": "ETS2Telemetry Desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local ETS2 and ATS telemetry desktop scaffold",
+  "author": "Artur Sianiuk",
+  "license": "UNLICENSED",
+  "main": "apps/desktop/dist/main.cjs",
+  "packageManager": "npm@11.17.0",
+  "engines": {
+    "node": "24.19.0",
+    "npm": "11.17.0"
+  },
+  "workspaces": [
+    "apps/desktop",
+    "packages/*",
+    "tools/telemetry-simulator"
+  ],
+  "scripts": {
+    "dev": "npm run build && electron-forge start",
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:electron": "npm run package && playwright test",
+    "inspect:package": "node scripts/inspect-package.mjs",
+    "postinstall": "install-electron",
+    "package": "npm run build && electron-forge package --platform win32 --arch x64",
+    "make": "npm run build && electron-forge make --platform win32 --arch x64",
+    "native:configure": "cmake -S native/telemetry-plugin -B native/telemetry-plugin/build -A x64",
+    "native:build": "cmake --build native/telemetry-plugin/build --config Release",
+    "native:test": "ctest --test-dir native/telemetry-plugin/build -C Release --output-on-failure"
+  },
+  "dependencies": {
+    "better-sqlite3": "13.0.3",
+    "electron-squirrel-startup": "1.0.1"
+  },
+  "devDependencies": {
+    "@electron-forge/cli": "8.0.1",
+    "@electron-forge/maker-squirrel": "8.0.1",
+    "@electron-forge/plugin-auto-unpack-natives": "8.0.1",
+    "@electron/asar": "4.3.1",
+    "@playwright/test": "1.64.0",
+    "@types/better-sqlite3": "9.6.0",
+    "@types/electron-squirrel-startup": "1.0.2",
+    "@types/node": "24.7.2",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "electron": "44.7.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "typescript": "7.0.2",
+    "vite": "8.3.4",
+    "vitest": "5.0.3"
+  },
+  "config": {
+    "forge": "./forge.config.cjs"
+  },
+  "allowScripts": {
+    "electron-winstaller@5.4.4": true,
+    "better-sqlite3@13.0.3": false
+  }
+}
