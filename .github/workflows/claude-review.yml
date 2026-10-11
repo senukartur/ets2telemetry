@@ -37,6 +37,8 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          # Full Claude output only for an explicit "Re-run with debug logging".
+          show_full_output: ${{ runner.debug == '1' }}
           use_sticky_comment: true
           prompt: |
             REPO: ${{ github.repository }}
@@ -100,6 +102,7 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          show_full_output: ${{ runner.debug == '1' }}
           # Read-only answers and re-reviews; Claude cannot push with contents: read.
           claude_args: >-
             --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Read,Grep,Glob"
