@@ -1,11 +1,43 @@
 #include "sdk-adapter.hpp"
+#include "pipe-server.hpp"
+
+#ifdef ETS2TELEMETRY_TRANSPORT_TEST_DLL
+namespace { std::wstring test_directory; }
+// This isolated-console test seam is absent from the production game's DLL.
+extern "C" __declspec(dllexport) int ets2telemetry_test_directory(const wchar_t* directory) noexcept {
+  try { if (!directory || wcslen(directory) > 4096) return 0; test_directory = directory; return 1; } catch (...) { return 0; }
+}
+extern "C" __declspec(dllexport) int ets2telemetry_test_endpoint(wchar_t* output, unsigned capacity) noexcept {
+  try { const auto endpoint = ets2telemetry::transport::server().endpoint(); if (!output || endpoint.empty() || endpoint.size()+1 > capacity) return 0; wcscpy_s(output,capacity,endpoint.c_str()); return 1; } catch (...) { return 0; }
+}
+extern "C" __declspec(dllexport) int ets2telemetry_test_write_pending() noexcept { return ets2telemetry::transport::server().write_pending() ? 1 : 0; }
+#endif
 
 SCSAPI_RESULT scs_telemetry_init(const scs_u32_t version, const scs_telemetry_init_params_t* const params) {
-  try { return ets2telemetry::sdk::adapter().initialize(version, params); }
+  try {
+    auto result = ets2telemetry::sdk::adapter().initialize(version, params);
+    if (result != SCS_RESULT_ok) return result;
+    auto& transport = ets2telemetry::transport::server();
+    auto failure = ets2telemetry::transport::StartupFailure::worker_creation;
+    if (transport.start(
+#ifdef ETS2TELEMETRY_TRANSPORT_TEST_DLL
+      test_directory
+#endif
+    )) failure = transport.await_startup();
+    if (failure != ets2telemetry::transport::StartupFailure::none) {
+      // Completion/join precedes return even when cancellation exceeds the startup wait budget.
+      transport.stop(); ets2telemetry::sdk::adapter().shutdown();
+      // SDK readme permits game calls only during the direct game caller's invocation.
+      const auto log = static_cast<const scs_telemetry_init_params_v100_t*>(params)->common.log;
+      if (log) log(SCS_LOG_TYPE_error,ets2telemetry::transport::startup_failure_message(failure));
+      return SCS_RESULT_generic_error;
+    }
+    return result;
+  }
   catch (...) { return SCS_RESULT_generic_error; }
 }
 SCSAPI_VOID scs_telemetry_shutdown() {
-  try { ets2telemetry::sdk::adapter().shutdown(); }
+  try { ets2telemetry::transport::server().stop(); ets2telemetry::sdk::adapter().shutdown(); }
   catch (...) { /* SDK exports never propagate a C++ exception into the game. */ }
 }
-// There is deliberately no DllMain and no worker/thread/file/transport initialization here.
+// No DllMain: start/stop/join belongs to the explicit SDK lifecycle, outside the loader lock.

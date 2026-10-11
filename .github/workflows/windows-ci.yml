@@ -101,7 +101,7 @@ jobs:
           Write-Output "ASan runtime: $sdkAsanBin"
           cmake -S native/telemetry-plugin -B native/telemetry-plugin/build-asan -G 'Visual Studio 17 2022' -A x64 -DETS2TELEMETRY_ASAN_TESTS=ON
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cmake --build native/telemetry-plugin/build-asan --config Release --target protocol-v0-asan-test sdk-adapter-asan-test
+          cmake --build native/telemetry-plugin/build-asan --config Release --target protocol-v0-asan-test sdk-adapter-asan-test snapshot-transport-asan-test snapshot-transport-test-plugin
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ctest --test-dir native/telemetry-plugin/build-asan -C Release --output-on-failure -R asan-contract
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
