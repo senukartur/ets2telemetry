@@ -18,9 +18,23 @@ public sealed class InstallerMetadata {
     public string CommandLine, ExecutablePath, Failure;
     public double ElapsedMilliseconds;
 }
+public sealed class InstallerJobScope {
+    public uint LimitFlags, ActiveProcessLimit, CpuFlags, CpuRate;
+    public ulong JobMemoryBytes;
+}
 public static class InstallerJobView {
     // Metadata workers never block native PID/handle polling. Four queries maximum.
     static readonly SemaphoreSlim MetadataSlots = new SemaphoreSlim(4,4);
+    [StructLayout(LayoutKind.Sequential)] struct BasicLimits {
+        public long PerProcessTime, PerJobTime;public uint Flags;
+        public UIntPtr MinimumWorkingSet, MaximumWorkingSet;public uint ActiveProcessLimit;
+        public UIntPtr Affinity;public uint PriorityClass, SchedulingClass;
+    }
+    [StructLayout(LayoutKind.Sequential)] struct Io {public ulong ReadOps,WriteOps,OtherOps,ReadBytes,WriteBytes,OtherBytes;}
+    [StructLayout(LayoutKind.Sequential)] struct ExtendedLimits {
+        public BasicLimits Basic;public Io Io;public UIntPtr ProcessMemory,JobMemory,PeakProcessMemory,PeakJobMemory;
+    }
+    [StructLayout(LayoutKind.Sequential)] struct CpuLimits {public uint Flags,Rate;}
     [DllImport("kernel32.dll", SetLastError=true)] static extern bool IsProcessInJob(IntPtr process, IntPtr job, out bool found);
     [DllImport("kernel32.dll", SetLastError=true)] static extern bool QueryInformationJobObject(IntPtr job, int type, IntPtr information, uint size, IntPtr returned);
     [DllImport("kernel32.dll", SetLastError=true)] static extern IntPtr OpenProcess(uint access, bool inherit, int pid);
@@ -35,6 +49,21 @@ public static class InstallerJobView {
     }
     public static long ExitCode(IntPtr handle) {uint code;if(!GetExitCodeProcess(handle,out code)) throw new Win32Exception(Marshal.GetLastWin32Error());return code;}
     public static void Release(IntPtr handle) {if(handle!=IntPtr.Zero) CloseHandle(handle);}
+    public static InstallerJobScope AuthoritativeScope() {
+        IntPtr limits=Marshal.AllocHGlobal(Marshal.SizeOf(typeof(ExtendedLimits)));
+        IntPtr cpu=Marshal.AllocHGlobal(Marshal.SizeOf(typeof(CpuLimits)));
+        try {
+            if(!QueryInformationJobObject(IntPtr.Zero,9,limits,(uint)Marshal.SizeOf(typeof(ExtendedLimits)),IntPtr.Zero)) throw new Win32Exception(Marshal.GetLastWin32Error());
+            if(!QueryInformationJobObject(IntPtr.Zero,15,cpu,(uint)Marshal.SizeOf(typeof(CpuLimits)),IntPtr.Zero)) throw new Win32Exception(Marshal.GetLastWin32Error());
+            var extended=(ExtendedLimits)Marshal.PtrToStructure(limits,typeof(ExtendedLimits));
+            var rate=(CpuLimits)Marshal.PtrToStructure(cpu,typeof(CpuLimits));
+            var scope=new InstallerJobScope {LimitFlags=extended.Basic.Flags,ActiveProcessLimit=extended.Basic.ActiveProcessLimit,JobMemoryBytes=extended.JobMemory.ToUInt64(),CpuFlags=rate.Flags,CpuRate=rate.Rate};
+            // Reject libuv's immediate breakaway Job or any unexpected containing scope.
+            if(scope.LimitFlags!=0x2208 || (scope.LimitFlags & (0x800 | 0x1000))!=0 || scope.ActiveProcessLimit!=16 || scope.JobMemoryBytes!=2147483648UL || scope.CpuFlags!=5 || scope.CpuRate!=2500)
+                throw new InvalidOperationException(String.Format("Observer immediate Job does not match the authoritative nonbreakaway watchdog limits: flags=0x{0:x}, processes={1}, memory={2}, cpuFlags={3}, cpuRate={4}",scope.LimitFlags,scope.ActiveProcessLimit,scope.JobMemoryBytes,scope.CpuFlags,scope.CpuRate));
+            return scope;
+        }finally{Marshal.FreeHGlobal(limits);Marshal.FreeHGlobal(cpu);}
+    }
     public static Task<InstallerMetadata> QueryAsync(int pid) {
         return Task.Factory.StartNew(() => {
             var result=new InstallerMetadata();var clock=Stopwatch.StartNew();
@@ -73,16 +102,17 @@ $seen=[Collections.Generic.HashSet[int]]::new()
 $records=[Collections.Generic.List[object]]::new()
 $handles=[Collections.Generic.Dictionary[int,IntPtr]]::new()
 $queries=@{}
-$view=[ordered]@{passed=$false;observerPid=$PID;driverPid=$DriverPid;startedUtc=[datetime]::UtcNow.ToString('o');finishedUtc=$null;failure=$null;drained=$false;finalPids=@();processes=@();metadataWorkers=4;metadataQueueSeconds=3;metadataQuerySeconds=3;metadataCompletionSeconds=8;warmupMilliseconds=$null;pollCount=0;maximumPollGapMilliseconds=0}
+$view=[ordered]@{passed=$false;observerPid=$PID;driverPid=$DriverPid;startedUtc=[datetime]::UtcNow.ToString('o');finishedUtc=$null;failure=$null;drained=$false;finalPids=@();processes=@();jobScope=$null;metadataWorkers=4;metadataQueueSeconds=3;metadataQuerySeconds=3;metadataCompletionSeconds=8;warmupMilliseconds=$null;pollCount=0;maximumPollGapMilliseconds=0}
 try {
     $initial=[InstallerJobView]::Pids()
     if($initial -notcontains $DriverPid -or $initial -notcontains $PID -or $initial.Count -ne 2){throw 'Observer must start in a fresh Job containing only itself and its driver.'}
+    $view.jobScope=[InstallerJobView]::AuthoritativeScope()
     # Warm WMI before Setup starts; a cold provider cannot consume the hook interval.
     $warmup=[InstallerJobView]::QueryAsync($PID)
     if(!$warmup.Wait(5000)){throw 'Read-only metadata provider warmup exceeded five seconds.'}
     if($warmup.Result.Failure -or !$warmup.Result.CommandLine){throw 'Read-only metadata provider warmup failed.'}
     $view.warmupMilliseconds=$warmup.Result.ElapsedMilliseconds
-    [ordered]@{ready=$true;observerPid=$PID;driverPid=$DriverPid;initialPids=$initial;warmupMilliseconds=$view.warmupMilliseconds}|ConvertTo-Json -Compress|Write-Output
+    [ordered]@{ready=$true;observerPid=$PID;driverPid=$DriverPid;initialPids=$initial;jobScope=$view.jobScope;warmupMilliseconds=$view.warmupMilliseconds}|ConvertTo-Json -Depth 4 -Compress|Write-Output
     $deadline=[datetime]::UtcNow.AddSeconds(55)
     $pollClock=[Diagnostics.Stopwatch]::StartNew();$previousPoll=0
     do {

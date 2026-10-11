@@ -15,19 +15,23 @@ async function within(promise,milliseconds,code){let timer;try{return await Prom
 const budget=Number(budgetText);
 const timer=setTimeout(async()=>{result.failure??=errorValue(new Error('STEP_DRIVER_DEADLINE'));try{await persist();}finally{process.exit(1);}},Math.max(1000,budget-2000));
 const powershell=path.join(process.env.WINDIR,'System32/WindowsPowerShell/v1.0/powershell.exe');
+const expectedJobScope={LimitFlags:0x2208,ActiveProcessLimit:16,JobMemoryBytes:2147483648,CpuFlags:5,CpuRate:2500};
 let observer;
 let observerClosed;
 async function startObserver(){
   const stopFile=path.join(output,'observer-stop.json');
   const viewFile=path.join(output,'job-observation.json');
-  observer=spawn(powershell,['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',path.join(kit,'harness/Observe-InstallerJob.ps1'),'-DriverPid',String(process.pid),'-StopFile',stopFile,'-ResultFile',viewFile],{shell:false,windowsHide:true,stdio:['ignore','pipe','pipe']});
+  // MUST be the first child spawn. Pinned libuv detached spawning skips its private
+  // breakaway Job; it does not request CREATE_BREAKAWAY_FROM_JOB. Retain pipes/handle.
+  observer=spawn(powershell,['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',path.join(kit,'harness/Observe-InstallerJob.ps1'),'-DriverPid',String(process.pid),'-StopFile',stopFile,'-ResultFile',viewFile],{detached:true,shell:false,windowsHide:true,stdio:['ignore','pipe','pipe']});
   let text='';let errors='';
   observer.stderr.on('data',chunk=>{errors=(errors+chunk).slice(0,8192);});
   observerClosed=new Promise((resolve,reject)=>{observer.once('error',reject);observer.once('close',(code,signal)=>resolve({code,signal,stderr:errors}));});
-  await within(new Promise((resolve,reject)=>{
-    observer.stdout.on('data',chunk=>{text=(text+chunk).slice(0,8192);if(text.includes('\n')){try{const ready=parse(text.split(/\r?\n/)[0]);assert.equal(ready.ready,true);assert.equal(ready.observerPid,observer.pid);resolve(ready);}catch(error){reject(error);}}});
+  const ready=await within(new Promise((resolve,reject)=>{
+    observer.stdout.on('data',chunk=>{text=(text+chunk).slice(0,8192);if(text.includes('\n')){try{const ready=parse(text.split(/\r?\n/)[0]);assert.equal(ready.ready,true);assert.equal(ready.observerPid,observer.pid);assert.deepEqual(ready.jobScope,expectedJobScope);resolve(ready);}catch(error){reject(error);}}});
     observer.once('error',reject);observer.once('exit',()=>reject(new Error('OBSERVER_EXIT_BEFORE_READY')));
   }),12000,'OBSERVER_START_TIMEOUT');
+  result.observerLaunch={firstChild:true,detached:true,unref:false,jobScope:ready.jobScope};
   return {stopFile,viewFile};
 }
 async function primary(executable,args){
@@ -112,6 +116,7 @@ try{
   }finally{await writeFile(observed.stopFile,'{}\n');}
   const observerExit=await observerClosed;assert.equal(observerExit.code,0);assert.equal(observerExit.signal,null);
   result.observer=parse(await readFile(observed.viewFile,'utf8'));assert.equal(result.observer.passed,true);assert.equal(result.observer.drained,true);
+  assert.deepEqual(result.observer.jobScope,expectedJobScope);
   assert.deepEqual(new Set(result.observer.finalPids),new Set([process.pid,observer.pid]));
   if(step!=='smoke'){
     const event=step==='update'?'updated':step==='uninstall'?'uninstall':'install';
