@@ -4,7 +4,36 @@
 #undef wmain
 #include <fstream>
 #include <iostream>
+#include <winioctl.h>
 void require(bool value) {if (!value) throw std::runtime_error("Native client test assertion failed");}
+struct TestDirectoryCleanup {
+  fs::path path;
+  ~TestDirectoryCleanup() {std::error_code ignored; fs::remove_all(path, ignored);}
+};
+struct JunctionCleanup {
+  fs::path path;
+  ~JunctionCleanup() {if (!path.empty()) RemoveDirectoryW(path.c_str());}
+};
+void create_junction(const fs::path& link, const fs::path& target, const Identity& identity) {
+  OwnerSecurity security(identity); require(CreateDirectoryW(link.c_str(), &security.attributes) != 0);
+  Handle directory(CreateFileW(link.c_str(), GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+  struct MountPoint {
+    DWORD tag; WORD dataLength, reserved, substituteOffset, substituteLength, printOffset, printLength; wchar_t names[1024];
+  } data{};
+  static_assert(offsetof(MountPoint, names) == 16);
+  const auto substitute = L"\\??\\" + target.wstring(), printable = target.wstring();
+  require(substitute.size() + printable.size() + 2 < 1024);
+  data.tag = IO_REPARSE_TAG_MOUNT_POINT;
+  data.substituteLength = static_cast<WORD>(substitute.size() * sizeof(wchar_t));
+  data.printOffset = static_cast<WORD>((substitute.size() + 1) * sizeof(wchar_t));
+  data.printLength = static_cast<WORD>(printable.size() * sizeof(wchar_t));
+  data.dataLength = static_cast<WORD>(8 + data.printOffset + data.printLength + sizeof(wchar_t));
+  std::copy(substitute.begin(), substitute.end(), data.names);
+  std::copy(printable.begin(), printable.end(), data.names + substitute.size() + 1);
+  DWORD returned = 0;
+  require(DeviceIoControl(directory.value, FSCTL_SET_REPARSE_POINT, &data, static_cast<DWORD>(8 + data.dataLength), nullptr, 0, &returned, nullptr) != 0);
+  FILE_ATTRIBUTE_TAG_INFO attributes{}; require(GetFileInformationByHandleEx(directory.value, FileAttributeTagInfo, &attributes, sizeof(attributes)) && attributes.ReparseTag == IO_REPARSE_TAG_MOUNT_POINT);
+}
 void descriptor_owner_test(const Identity& identity) {
   OwnerSecurity security(identity); PSID owner = nullptr; BOOL defaulted = FALSE;
   require(GetSecurityDescriptorOwner(security.descriptor, &owner, &defaulted) != 0);
@@ -75,6 +104,11 @@ struct Child {
   }
   void eof() {if (input.value != INVALID_HANDLE_VALUE) {CloseHandle(input.value); input.value = INVALID_HANDLE_VALUE;}}
   DWORD wait() {require(WaitForSingleObject(process.value, 6000) == WAIT_OBJECT_0); DWORD code = 0; require(GetExitCodeProcess(process.value, &code) != 0); return code;}
+  ~Child() {
+    eof();
+    // Only this exact owned handle is terminated on a failed assertion; never enumerate host processes.
+    if (WaitForSingleObject(process.value, 0) == WAIT_TIMEOUT) {TerminateProcess(process.value, 90); WaitForSingleObject(process.value, 2000);}
+  }
 };
 std::string read_frame(HANDLE pipe) {
   unsigned char prefix[4]; stdio_io(pipe, prefix, 4, false); const auto length = frame_length(prefix); require(length > 0 && length <= 65536);
@@ -94,13 +128,21 @@ int host(const fs::path& directory, const fs::path& fixtures, const std::string&
   auto record = Json{Json::Object{{"schemaVersion", Json{1.0}}, {"protocolMajor", Json{0.0}}, {"game", Json{std::string("ets2")}}, {"userTag", Json{self.userTag}}, {"windowsSessionId", Json{static_cast<double>(self.session)}}, {"processId", Json{static_cast<double>(GetCurrentProcessId())}}, {"processCreationTime", Json{std::to_string(creation(GetCurrentProcess()) + (mode == "creation" ? 1 : 0))}}, {"processInstanceId", Json{instance}}, {"pluginSessionId", Json{plugin}}, {"pipeName", Json{endpoint}}}};
   if (mode == "session") std::get<Json::Object>(record.value)["windowsSessionId"] = Json{static_cast<double>(self.session + 1)};
   if (mode == "malformed") std::get<Json::Object>(record.value)["unexpected"] = Json{false};
+  if (mode == "dead") std::get<Json::Object>(record.value)["processId"] = Json{static_cast<double>(MAXDWORD)};
   const auto recordPath = directory / (instance + ".json"); write_file(recordPath, record, self);
   if (mode == "dacl") {
     PSECURITY_DESCRIPTOR descriptor = nullptr; require(ConvertStringSecurityDescriptorToSecurityDescriptorW(L"D:P(A;;GA;;;WD)", SDDL_REVISION_1, &descriptor, nullptr));
     PACL dacl = nullptr; BOOL present = FALSE, defaulted = FALSE; require(GetSecurityDescriptorDacl(descriptor, &present, &dacl, &defaulted));
     require(SetNamedSecurityInfoW(const_cast<wchar_t*>(recordPath.c_str()), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, nullptr, nullptr, dacl, nullptr) == ERROR_SUCCESS); LocalFree(descriptor);
   }
-  if (mode == "collision") {std::get<Json::Object>(record.value)["processInstanceId"] = Json{std::string("22112233-4455-6677-8899-aabbccddeeff")}; write_file(directory / "22112233-4455-6677-8899-aabbccddeeff.json", record, self);}
+  if (mode == "collision" || mode == "stale-live" || mode == "dead-live") {
+    const std::string second = "22112233-4455-6677-8899-aabbccddeeff";
+    auto duplicate = record; auto& fields = std::get<Json::Object>(duplicate.value);
+    fields["processInstanceId"] = Json{second}; fields["pipeName"] = Json{endpoint.substr(0, endpoint.size() - instance.size()) + second};
+    if (mode == "stale-live") fields["processCreationTime"] = Json{std::to_string(creation(GetCurrentProcess()) + 1)};
+    if (mode == "dead-live") fields["processId"] = Json{static_cast<double>(MAXDWORD)};
+    write_file(directory / (second + ".json"), duplicate, self);
+  }
   receipt(Json{Json::Object{{"type", Json{std::string("ready")}}}});
   test_trace("host-listen");
   Handle connected(CreateEventW(nullptr, TRUE, FALSE, nullptr)); OVERLAPPED operation{}; operation.hEvent = connected.value;
@@ -117,6 +159,15 @@ int host(const fs::path& directory, const fs::path& fixtures, const std::string&
   bool allowed = false; for (const auto& entry : std::get<Json::Array>(policyJson.at("allowedExecutables").value)) if (entry.at("path").string() == peerPath) {const auto bytes = read_bounded(peerImage.value, 64 * 1024 * 1024); allowed = entry.at("sha256").string() == sha256(std::vector<unsigned char>(bytes.begin(), bytes.end()));}
   test_trace("host-policy-checked"); require(allowed);
   unsigned char header[4]; pipe_io(pipe.value, client.value, header, 4, false); const auto length = frame_length(header); require(length > 0 && length <= 4096); std::string hello(length, '\0'); pipe_io(pipe.value, client.value, hello.data(), length, false); require(v0::decode_payload(hello).kind == "hello");
+  if (mode == "invalid-credit") {WaitForSingleObject(client.value, 10000); return 0;}
+  if (mode == "payload-break" || mode == "partial-payload" || mode == "partial-prefix" || mode == "bad-length") {
+    unsigned char incomplete[] = {8, 0, 0, 0, '{'};
+    if (mode == "bad-length") std::fill(incomplete, incomplete + 4, static_cast<unsigned char>(0));
+    const DWORD count = mode == "partial-prefix" ? 1 : mode == "bad-length" ? 4 : 5;
+    pipe_io(pipe.value, client.value, incomplete, count, true);
+    if (mode != "payload-break") WaitForSingleObject(client.value, 10000);
+    return 0;
+  }
   for (const auto* filename : {"welcome.json", "checkpoint.json"}) {
     auto message = parse(file_bytes(fixtures / filename)); auto& object = std::get<Json::Object>(message.value); object["source"] = source;
     if (std::string(filename) == "welcome.json") std::get<Json::Object>(object["data"].value)["diagnostics"] = Json{false};
@@ -124,7 +175,7 @@ int host(const fs::path& directory, const fs::path& fixtures, const std::string&
     pipe_io(pipe.value, client.value, const_cast<unsigned char*>(frame.data()), static_cast<DWORD>(frame.size()), true);
   }
   // Remain connected until the owned client exits or cancels while waiting for the next frame.
-  WaitForSingleObject(client.value, 5000); return 0;
+  WaitForSingleObject(client.value, mode == "quiet-exit" ? 5500 : 10000); return 0;
 }
 int wmain(int argc, wchar_t** argv) {
   try {
@@ -132,10 +183,12 @@ int wmain(int argc, wchar_t** argv) {
     require(argc == 3); const auto broker = std::wstring(argv[1]); const fs::path fixtures(argv[2]);
     descriptor_owner_test(Identity(GetCurrentProcess()));
     wchar_t temporary[MAX_PATH]; require(GetTempPathW(MAX_PATH, temporary) != 0); const auto base = fs::path(temporary) / (L"ets2telemetry-client-test-" + std::to_wstring(GetCurrentProcessId()));
-    require(!fs::exists(base)); fs::create_directory(base); Identity identity(GetCurrentProcess()); OwnerSecurity security(identity);
+    require(!fs::exists(base)); fs::create_directory(base); TestDirectoryCleanup cleanup{base}; Identity identity(GetCurrentProcess()); OwnerSecurity security(identity);
     controlled_token_owner_test(base, identity);
     wchar_t selfName[32768]; const auto selfLength = GetModuleFileNameW(nullptr, selfName, 32768); require(selfLength > 0); const std::wstring self(selfName, selfLength);
-    for (const auto* mode : {"valid", "creation", "collision", "session", "malformed", "dacl"}) {
+    wchar_t filterBuffer[128]{}; const auto filterSize = GetEnvironmentVariableW(L"ETS2TELEMETRY_CLIENT_TEST_CASE", filterBuffer, 128); require(filterSize < 128); const auto filter = filterSize ? utf8(filterBuffer) : std::string();
+    for (const auto* mode : {"valid", "creation", "dead", "stale-live", "dead-live", "collision", "session", "malformed", "dacl", "payload-break", "bad-length", "invalid-credit", "quiet", "quiet-exit", "partial-prefix", "partial-payload"}) {
+      if (!filter.empty() && filter != mode) continue;
       std::cerr << "case " << mode << "\n";
       const auto directory = base / wide(mode) / "transport" / "v0"; fs::create_directory(directory.parent_path().parent_path());
       require(CreateDirectoryW(directory.parent_path().c_str(), &security.attributes)); require(CreateDirectoryW(directory.c_str(), &security.attributes));
@@ -143,15 +196,61 @@ int wmain(int argc, wchar_t** argv) {
       require(parse(read_frame(server.output.value)).at("type").string() == "ready");
       std::cerr << "host ready\n";
       Child client(broker, L"--game ets2 --discovery-dir \"" + directory.wstring() + L"\"");
-      if (std::string(mode) != "valid") {client.eof(); require(client.wait() == 1); server.eof(); require(server.wait() == 0); continue;}
+      const std::string scenario(mode);
+      if (scenario == "creation" || scenario == "dead") {require(parse(read_frame(client.output.value)).at("type").string() == "waiting"); require(client.wait() == 2); server.eof(); require(server.wait() == 0); continue;}
+      if (scenario == "collision" || scenario == "session" || scenario == "malformed" || scenario == "dacl") {client.eof(); require(client.wait() == 1); server.eof(); require(server.wait() == 0); continue;}
       const auto authority = parse(read_frame(client.output.value)); require(authority.at("type").string() == "authority"); require(integer(authority.at("source").at("processId")) == server.pid);
       std::cerr << "authority received\n";
       auto hello = v0::encode_frame(v0::decode_payload(file_bytes(fixtures / "hello.json"))); stdio_io(client.input.value, hello.data(), static_cast<DWORD>(hello.size()), true);
-      unsigned char credit = 1; stdio_io(client.input.value, &credit, 1, true); auto welcome = v0::decode_payload(read_frame(client.output.value)); require(welcome.kind == "welcome");
+      if (scenario == "invalid-credit") {unsigned char invalid = 2; stdio_io(client.input.value, &invalid, 1, true); require(client.wait() == 1); server.eof(); require(server.wait() == 0); continue;}
+      unsigned char credit = 1; stdio_io(client.input.value, &credit, 1, true);
+      if (scenario == "payload-break" || scenario == "partial-prefix" || scenario == "partial-payload" || scenario == "bad-length") {require(client.wait() == (scenario == "bad-length" ? 1u : 3u)); require(server.wait() == 0); continue;}
+      auto welcome = v0::decode_payload(read_frame(client.output.value)); require(welcome.kind == "welcome");
       Sleep(100); DWORD available = 0; require(PeekNamedPipe(client.output.value, nullptr, 0, nullptr, &available, nullptr) && available == 0);
       stdio_io(client.input.value, &credit, 1, true); auto checkpoint = v0::decode_payload(read_frame(client.output.value)); v0::Consumer consumer(false); consumer.accept(welcome); require(consumer.accept(checkpoint)->hydration);
+      if (scenario == "quiet" || scenario == "quiet-exit") {
+        stdio_io(client.input.value, &credit, 1, true);
+        if (scenario == "quiet") {require(WaitForSingleObject(client.process.value, 5500) == WAIT_TIMEOUT); const auto started = GetTickCount64(); client.eof(); require(client.wait() == 3 && GetTickCount64() - started < 2000);}
+        else require(client.wait() == 3);
+        require(server.wait() == 0); continue;
+      }
       client.eof(); require(client.wait() == 3); require(server.wait() == 0);
     }
-    fs::remove_all(base); std::cout << "native authority, collision, creation mismatch, frame credits and EOF cancellation passed\n"; return 0;
+    for (const auto* mode : {"policy-prune", "policy-cap", "policy-duplicate", "policy-case-duplicate", "policy-junction"}) {
+      if (!filter.empty() && filter != mode) continue;
+      std::cerr << "case " << mode << "\n";
+      const auto directory = base / wide(mode) / "transport" / "v0"; fs::create_directory(directory.parent_path().parent_path());
+      require(CreateDirectoryW(directory.parent_path().c_str(), &security.attributes)); require(CreateDirectoryW(directory.c_str(), &security.attributes));
+      Json::Array entries;
+      for (unsigned index = 0; index < 4; ++index) {
+        const auto filename = directory / ("retired-" + std::to_string(index)) / "broker.exe";
+        if (std::string(mode) != "policy-prune") {fs::create_directory(filename.parent_path()); std::ofstream output(filename, std::ios::binary); output << "fixture";}
+        entries.push_back(Json{Json::Object{{"path", Json{std::string("\\\\?\\") + utf8(filename.wstring())}}, {"sha256", Json{std::string(64, '0')}}}});
+      }
+      if (std::string(mode) == "policy-duplicate") entries[1] = entries[0];
+      if (std::string(mode) == "policy-case-duplicate") {
+        entries[1] = entries[0]; auto& path = std::get<Json::Object>(entries[1].value)["path"];
+        auto variant = path.string(); const auto offset = variant.find("retired-0"); require(offset != std::string::npos); variant.replace(offset, 9, "RETIRED-0"); path = Json{variant};
+      }
+      JunctionCleanup junction;
+      if (std::string(mode) == "policy-junction") {
+        const auto target = directory / "junction-target"; require(CreateDirectoryW(target.c_str(), &security.attributes) != 0);
+        junction.path = directory / "junction-link"; create_junction(junction.path, target, identity);
+        const auto missing = std::string("\\\\?\\") + utf8((junction.path / "missing-broker.exe").wstring());
+        auto raw = CreateFileW(wide(missing).c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+        const auto error = GetLastError(); require(raw == INVALID_HANDLE_VALUE && (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND));
+        require(!provably_missing_image(missing)); std::get<Json::Object>(entries[0].value)["path"] = Json{missing};
+      }
+      auto policy = Json{Json::Object{{"schemaVersion", Json{1.0}}, {"userTag", Json{identity.userTag}}, {"windowsSessionId", Json{static_cast<double>(identity.session)}}, {"allowedExecutables", Json{entries}}}};
+      write_file(directory / "service-policy.json", policy, identity);
+      Child client(broker, L"--game ets2 --discovery-dir \"" + directory.wstring() + L"\"");
+      if (std::string(mode) == "policy-prune") {
+        require(parse(read_frame(client.output.value)).at("type").string() == "waiting"); require(client.wait() == 2);
+        const auto updated = parse(file_bytes(directory / "service-policy.json")); const auto& kept = std::get<Json::Array>(updated.at("allowedExecutables").value); require(kept.size() == 1);
+        auto own = image(GetCurrentProcess());
+        require(!provably_missing_image(utf8(final_path(own.value))) && !provably_missing_image("\\\\?\\UNC\\unverified-server\\share\\broker.exe"));
+      } else {client.eof(); require(client.wait() == 1); require(file_bytes(directory / "service-policy.json") == v0::detail::serialize(policy));}
+    }
+    fs::remove_all(base); std::cout << "native authority, stale lifetime filtering, hard security rejection, bounded partial frames, quiet-source and EOF cancellation passed\n"; return 0;
   } catch (const std::exception& error) {std::cerr << (argc == 5 ? "host: " : "controller: ") << error.what() << "\n"; return 1;}
 }

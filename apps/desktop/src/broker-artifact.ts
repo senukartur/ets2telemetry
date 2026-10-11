@@ -18,3 +18,26 @@ export function brokerConfiguration(directory: string, resources: string, packag
   if (createHash('sha256').update(readFileSync(executable)).digest('hex') !== receipt.executableSha256) throw new Error('Native artifact byte hash rejected');
   return {executable, discoveryDirectory: path.join(localAppData, 'ETS2Telemetry', 'transport', 'v0')};
 }
+
+/** Cache verification only while all three fixed artifacts retain their observed file identities. */
+export function createBrokerResolver(directory: string, resources: string, packaged: boolean, localAppData: string | undefined, rejected: (error: unknown) => void) {
+  const root = packaged ? path.join(resources, 'telemetry-client') : path.resolve(directory, '../../../native/telemetry-client/build/Release');
+  const filenames = [path.join(root, 'telemetry-pipe-client.exe'), path.join(root, 'build-evidence.json'), path.join(directory, 'build-evidence.json')];
+  let identity: string | undefined, cached: BrokerConfiguration | undefined;
+  return (): BrokerConfiguration | undefined => {
+    try {
+      const current = JSON.stringify(filenames.map(filename => {
+        try {
+          const stat = lstatSync(filename, {bigint: true});
+          return [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs, stat.mode].map(String);
+        } catch (error) {if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error;}
+      }));
+      if (current === identity) return cached;
+      // Failures are also cached until an artifact changes, bounding repeated rejected requests.
+      identity = current; cached = undefined;
+      try {cached = brokerConfiguration(directory, resources, packaged, localAppData);}
+      catch (error) {rejected(error);}
+      return cached;
+    } catch (error) {identity = undefined; cached = undefined; rejected(error); return undefined;}
+  };
+}

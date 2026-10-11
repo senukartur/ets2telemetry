@@ -1,3 +1,4 @@
+import {RecoveryBudget} from './recovery-budget';
 export interface SupervisedService {
   postMessage(message: {type: 'stop'}): void;
   kill(): boolean;
@@ -11,7 +12,7 @@ export class ServiceSupervisor {
   private exited = false;
   private finished = false;
   private exitCode = 0;
-  private restarts = 0;
+  private readonly restartBudget = new RecoveryBudget();
   stopping = false;
 
   constructor(private readonly log: (event: string, detail?: unknown) => void,
@@ -45,8 +46,9 @@ export class ServiceSupervisor {
     this.log('SERVICE_EXIT', {code});
     if (!this.stopping && this.recovery) {
       this.clearTimers(); this.readySeen = false; this.recovery.state('service-failed');
-      if (this.restarts < 2) {
-        const delay = this.restarts++ === 0 ? 250 : 1000;
+      const attempt = this.restartBudget.take();
+      if (attempt !== undefined) {
+        const delay = attempt === 1 ? 250 : 1000;
         this.recovery.state('restarting');
         this.timers.push(setTimeout(() => {if (!this.stopping) this.recovery!.restart();}, delay));
       } else this.recovery.exhausted();

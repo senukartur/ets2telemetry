@@ -8,14 +8,22 @@ import {processEntrypoint} from './entrypoints';
 import {createDiagnostics} from './diagnostics';
 import {ServiceSupervisor} from './service-supervisor';
 import {initialLive, sourceSelection} from './live-state';
-import {brokerConfiguration} from './broker-artifact';
+import {createBrokerResolver} from './broker-artifact';
+import {RecoveryBudget} from './recovery-budget';
 
 if (squirrelStartup) app.quit();
 else {
   const diagnosticDirectory = process.env.ETS2TELEMETRY_DIAGNOSTIC_DIR;
   const log = createDiagnostics(diagnosticDirectory || path.join(process.env.LOCALAPPDATA || app.getPath('userData'), 'ETS2Telemetry', 'logs'), Boolean(diagnosticDirectory));
   let window: BrowserWindow | undefined, service: UtilityProcess | undefined, status: ScaffoldStatus | undefined;
-  let subscribed = false, serviceReady = false, rendererRestarts = 0;
+  let subscribed = false, serviceReady = false;
+  const rendererBudget = new RecoveryBudget();
+  const resolveBroker = createBrokerResolver(__dirname, process.resourcesPath, app.isPackaged, process.env.LOCALAPPDATA, error => log('BROKER_UNAVAILABLE', String(error)));
+  function selectedBroker(source: SourceSelection) {
+    if (source !== 'ets2' && source !== 'ats') return undefined;
+    try {return resolveBroker();}
+    catch (error) {log('BROKER_UNAVAILABLE', String(error)); return undefined;}
+  }
   let lastSelectionRequest = -Infinity;
   let selection: SourceSelection = sourceSelection(process.env.ETS2TELEMETRY_SOURCE_KIND || 'game');
   const supervisor = new ServiceSupervisor(log, code => app.exit(code), {
@@ -37,7 +45,7 @@ else {
     window.webContents.on('did-start-loading', () => {subscribed = false; service?.postMessage({type: 'unsubscribe'});});
     window.webContents.on('render-process-gone', (_event, details) => {
       subscribed = false; service?.postMessage({type: 'unsubscribe'}); log('RENDER_PROCESS_GONE', details);
-      if (rendererRestarts++ < 2 && !supervisor.stopping) loadWindow(); else supervisor.fail('RENDERER_RESTART_EXHAUSTED');
+      if (!supervisor.stopping && rendererBudget.take() !== undefined) loadWindow(); else supervisor.fail('RENDERER_RESTART_EXHAUSTED');
     });
     loadWindow();
   }
@@ -59,7 +67,7 @@ else {
       if (message?.type === 'ready') {
         if (!supervisor.ready()) return;
         serviceReady = true; status = {service: 'ready', storage: 'verified', synthetic: true};
-        child.postMessage({type: 'select', source: selection, broker: brokerConfiguration(__dirname, process.resourcesPath, app.isPackaged, process.env.LOCALAPPDATA)});
+        child.postMessage({type: 'select', source: selection, broker: selectedBroker(selection)});
         if (!window) createWindow(); else connectSubscription();
       } else if (message?.type === 'failed') supervisor.fail('SERVICE_START_FAILED', message);
       else if (message?.type !== 'stopped') supervisor.fail('SERVICE_INVALID_MESSAGE');
@@ -86,7 +94,10 @@ else {
     if (!trusted(event) || !serviceReady) throw new Error('Untrusted source request');
     const next = sourceSelection(source);
     if (performance.now() - lastSelectionRequest < 250) throw new Error('Source selection request limit exceeded');
-    lastSelectionRequest = performance.now(); selection = next; service!.postMessage({type: 'select', source: selection, broker: brokerConfiguration(__dirname, process.resourcesPath, app.isPackaged, process.env.LOCALAPPDATA)});
+    lastSelectionRequest = performance.now();
+    const broker = selectedBroker(next);
+    service!.postMessage({type: 'select', source: next, broker});
+    selection = next;
   });
   ipcMain.on('telemetry:subscribe', event => {if (!trusted(event) || subscribed) return; subscribed = true; connectSubscription();});
   ipcMain.on('telemetry:unsubscribe', event => {if (!trusted(event)) return; subscribed = false; service?.postMessage({type: 'unsubscribe'});});

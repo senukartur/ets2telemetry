@@ -60,6 +60,30 @@ try {
     };
     await current('initial');
     result.telemetry = {origin: 'synthetic', speedKmh: 90, fuelL: 73, recording: false};
+    // Stall only this owned renderer beyond the five-second consumption-credit deadline.
+    // Change the source while it is stalled: a stranded cached reading cannot pass recovery.
+    let changedDuringStall = false;
+    const changeReading = setTimeout(() => {telemetrySource.setReading(20, 71); changedDuringStall = true;}, 1000);
+    try {
+      await window.evaluate(() => {const until = performance.now() + 6000; while (performance.now() < until) { /* controlled renderer stall */ }});
+    } finally {clearTimeout(changeReading);}
+    assert.equal(changedDuringStall, true, 'Source did not change during controlled renderer stall');
+    const recovered = await window.waitForFunction(() => {
+      const read = id => {
+        const nodes = document.querySelectorAll(`[data-testid="${id}"]`);
+        if (nodes.length !== 1) return undefined;
+        const node = nodes[0], bounds = node.getBoundingClientRect();
+        return getComputedStyle(node).visibility === 'visible' && bounds.width > 0 && bounds.height > 0 && bounds.bottom > 0 && bounds.right > 0 && bounds.top < innerHeight && bounds.left < innerWidth ? node.innerText : undefined;
+      };
+      return /^connected:/.test(read('telemetry-status') ?? '') && read('speed') === 'Speed: 72.0 km/h' && read('fuel') === 'Fuel: 71.0 L';
+    }, undefined, {timeout: 10000});
+    try {assert.equal(await recovered.jsonValue(), true);} finally {await recovered.dispose();}
+    assert.equal(telemetrySource.statistics().connections, 1, 'Subscription recovery restarted source ingestion');
+    result.telemetry.subscriptionRestartRecovered = true;
+    result.telemetry.rendererStallMilliseconds = 6000;
+    result.telemetry.changedReadingAfterStall = {speedKmh: 72, fuelL: 71};
+    telemetrySource.setReading(25, 73);
+    await waitForCurrentTelemetry(window);
     result.telemetry.invalidSelectionRejected = await window.evaluate(async () => {
       try {await globalThis.desktop.selectSource('../arbitrary-path'); return false;} catch {return true;}
     });

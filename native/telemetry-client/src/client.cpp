@@ -23,6 +23,16 @@ void test_trace(const char* value) {
 }
 struct Disconnected : std::runtime_error {Disconnected() : std::runtime_error("Source disconnected") {}};
 [[noreturn]] void fail() {throw std::runtime_error("Verified pipe client rejected source or transport");}
+[[noreturn]] void process_query_failed(HANDLE process) {
+  // Access/security failures stay hard rejections, even if the process exits concurrently.
+  const auto error = GetLastError();
+  if ((error == ERROR_INVALID_PARAMETER || error == ERROR_PROCESS_ABORTED || error == ERROR_NO_TOKEN) && WaitForSingleObject(process, 0) == WAIT_OBJECT_0) throw Disconnected();
+  fail();
+}
+[[noreturn]] void pipe_failed(DWORD error) {
+  if (error == ERROR_BROKEN_PIPE || error == ERROR_PIPE_NOT_CONNECTED || error == ERROR_NO_DATA) throw Disconnected();
+  fail();
+}
 struct Handle {
   HANDLE value = INVALID_HANDLE_VALUE;
   Handle() = default;
@@ -56,7 +66,7 @@ std::string sha256(const std::vector<unsigned char>& bytes) {
 struct Identity {
   std::vector<unsigned char> tokenUser; std::string sid, userTag; DWORD session = 0;
   explicit Identity(HANDLE process) {
-    HANDLE raw = nullptr; if (!OpenProcessToken(process, TOKEN_QUERY, &raw)) fail(); Handle token(raw);
+    HANDLE raw = nullptr; if (!OpenProcessToken(process, TOKEN_QUERY, &raw)) process_query_failed(process); Handle token(raw);
     DWORD size = 0; GetTokenInformation(token.value, TokenUser, nullptr, 0, &size); if (!size || size > 16384) fail();
     tokenUser.resize(size); if (!GetTokenInformation(token.value, TokenUser, tokenUser.data(), size, &size)) fail();
     auto user = reinterpret_cast<TOKEN_USER*>(tokenUser.data()); LPWSTR text = nullptr;
@@ -67,7 +77,7 @@ struct Identity {
   PSID user() const {return reinterpret_cast<const TOKEN_USER*>(tokenUser.data())->User.Sid;}
 };
 std::uint64_t creation(HANDLE process) {
-  FILETIME created{}, exited{}, kernel{}, user{}; if (!GetProcessTimes(process, &created, &exited, &kernel, &user)) fail();
+  FILETIME created{}, exited{}, kernel{}, user{}; if (!GetProcessTimes(process, &created, &exited, &kernel, &user)) process_query_failed(process);
   return (static_cast<std::uint64_t>(created.dwHighDateTime) << 32) | created.dwLowDateTime;
 }
 std::wstring final_path(HANDLE file) {
@@ -115,7 +125,7 @@ bool uuid(const std::string& text) {return std::regex_match(text, std::regex("[0
 Json parse(const std::string& text) {return v0::detail::Parser(text).parse();}
 Handle image(HANDLE process) {
   std::wstring name(32768, L'\0'); DWORD length = static_cast<DWORD>(name.size());
-  if (!QueryFullProcessImageNameW(process, 0, name.data(), &length)) fail(); name.resize(length);
+  if (!QueryFullProcessImageNameW(process, 0, name.data(), &length)) process_query_failed(process); name.resize(length);
   Handle file(CreateFileW(name.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
   FILE_ATTRIBUTE_TAG_INFO attributes{}; if (!GetFileInformationByHandleEx(file.value, FileAttributeTagInfo, &attributes, sizeof(attributes)) || attributes.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) fail(); return file;
 }
@@ -125,6 +135,27 @@ void reject_reparse_ancestors(fs::path directory) {
     FILE_ATTRIBUTE_TAG_INFO attributes{}; if (!GetFileInformationByHandleEx(held.value, FileAttributeTagInfo, &attributes, sizeof(attributes)) || attributes.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) fail();
     auto parent = directory.parent_path(); if (parent == directory) break; directory = parent;
   }
+}
+bool provably_missing_image(const std::string& path) {
+  if (path.size() < 7 || path[5] != ':' || path[6] != '\\' || !((path[4] >= 'A' && path[4] <= 'Z') || (path[4] >= 'a' && path[4] <= 'z'))) return false;
+  const fs::path filename(wide(path));
+  HANDLE raw = CreateFileW(filename.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+  if (raw != INVALID_HANDLE_VALUE) {Handle existing(raw); return false;}
+  const auto error = GetLastError(); if (error != ERROR_FILE_NOT_FOUND && error != ERROR_PATH_NOT_FOUND) return false;
+  // A missing leaf through a reparse or inaccessible ancestor is not proof of retirement.
+  const auto volumeRoot = wide(path.substr(0, 7));
+  auto ancestor = filename.parent_path(); bool rootVerified = false;
+  while (!ancestor.empty()) {
+    if (_wcsicmp(ancestor.c_str(), wide(path.substr(0, 6)).c_str()) == 0) ancestor = fs::path(volumeRoot);
+    raw = CreateFileW(ancestor.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    if (raw != INVALID_HANDLE_VALUE) {
+      Handle held(raw); FILE_ATTRIBUTE_TAG_INFO attributes{};
+      if (!GetFileInformationByHandleEx(held.value, FileAttributeTagInfo, &attributes, sizeof(attributes)) || attributes.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) return false;
+      if (_wcsicmp(ancestor.c_str(), volumeRoot.c_str()) == 0) {rootVerified = true; break;}
+    } else {const auto ancestorError = GetLastError(); if (ancestorError != ERROR_FILE_NOT_FOUND && ancestorError != ERROR_PATH_NOT_FOUND) return false;}
+    const auto parent = ancestor.parent_path(); if (parent == ancestor) break; ancestor = parent;
+  }
+  return rootVerified;
 }
 void bootstrap_policy(const fs::path& directory, const Identity& identity, HANDLE ownImage, const char*& stage) {
   OwnerSecurity lockSecurity(identity);
@@ -145,8 +176,9 @@ void bootstrap_policy(const fs::path& directory, const Identity& identity, HANDL
     bool found = false; std::vector<std::string> paths;
     for (const auto& entry : *list) {
       exact(entry, {"path", "sha256"}); const auto& p = entry.at("path").string(); const auto& h = entry.at("sha256").string();
-      if (p.size() > 32768 || p.rfind("\\\\?\\", 0) != 0 || !std::regex_match(h, std::regex("[0-9a-f]{64}")) || std::find(paths.begin(), paths.end(), p) != paths.end()) fail(); paths.push_back(p);
-      if (_wcsicmp(wide(p).c_str(), wide(ownPath).c_str()) == 0) {entries.push_back(Json{Json::Object{{"path", Json{ownPath}}, {"sha256", Json{hash}}}}); found = true;} else entries.push_back(entry);
+      if (p.size() > 32768 || p.rfind("\\\\?\\", 0) != 0 || !std::regex_match(h, std::regex("[0-9a-f]{64}")) || std::any_of(paths.begin(), paths.end(), [&](const auto& prior) {return _wcsicmp(wide(prior).c_str(), wide(p).c_str()) == 0;})) fail(); paths.push_back(p);
+      if (_wcsicmp(wide(p).c_str(), wide(ownPath).c_str()) == 0) {entries.push_back(Json{Json::Object{{"path", Json{ownPath}}, {"sha256", Json{hash}}}}); found = true;}
+      else if (!provably_missing_image(p)) entries.push_back(entry);
     }
     if (!found) {if (entries.size() == 4) fail(); entries.push_back(Json{Json::Object{{"path", Json{ownPath}}, {"sha256", Json{hash}}}});}
   } else entries.push_back(Json{Json::Object{{"path", Json{ownPath}}, {"sha256", Json{hash}}}});
@@ -164,20 +196,22 @@ void bootstrap_policy(const fs::path& directory, const Identity& identity, HANDL
 // Anonymous stdio uses synchronous handles. Cancel the owned blocked thread, then join actual completion.
 void stdio_io(HANDLE handle, void* buffer, DWORD size, bool write, DWORD timeoutMs = 5000) {
   Handle done(CreateEventW(nullptr, TRUE, FALSE, nullptr)); bool ok = false;
-  std::thread worker([&] {DWORD transferred = 0; while (transferred < size) {DWORD count = 0; const bool success = write ? WriteFile(handle, static_cast<char*>(buffer) + transferred, size - transferred, &count, nullptr) : ReadFile(handle, static_cast<char*>(buffer) + transferred, size - transferred, &count, nullptr); if (!success || !count) break; transferred += count;} ok = transferred == size; SetEvent(done.value);});
+  DWORD error = ERROR_SUCCESS;
+  std::thread worker([&] {DWORD transferred = 0; while (transferred < size) {DWORD count = 0; const bool success = write ? WriteFile(handle, static_cast<char*>(buffer) + transferred, size - transferred, &count, nullptr) : ReadFile(handle, static_cast<char*>(buffer) + transferred, size - transferred, &count, nullptr); if (!success || !count) {error = success ? ERROR_BROKEN_PIPE : GetLastError(); break;} transferred += count;} ok = transferred == size; SetEvent(done.value);});
   const auto waited = WaitForSingleObject(done.value, timeoutMs);
   if (waited != WAIT_OBJECT_0) {
     do {CancelSynchronousIo(worker.native_handle());} while (WaitForSingleObject(done.value, 25) == WAIT_TIMEOUT);
   }
-  worker.join(); if (waited != WAIT_OBJECT_0 || !ok) fail();
+  worker.join(); if (waited == WAIT_TIMEOUT) throw Disconnected(); if (waited != WAIT_OBJECT_0) fail(); if (!ok) pipe_failed(error);
 }
 struct Credits {
   Handle ready{CreateSemaphoreW(nullptr, 0, 1, nullptr)}, cancelled{CreateEventW(nullptr, TRUE, FALSE, nullptr)}, done{CreateEventW(nullptr, TRUE, FALSE, nullptr)};
-  std::atomic<bool> stopping{false}; std::thread reader;
+  std::atomic<bool> stopping{false}, rejected{false}; std::thread reader;
   Credits() : reader([this] {
     while (!stopping) {
       unsigned char credit = 0; DWORD read = 0;
-      if (!ReadFile(GetStdHandle(STD_INPUT_HANDLE), &credit, 1, &read, nullptr) || read != 1 || credit != 1 || !ReleaseSemaphore(ready.value, 1, nullptr)) break;
+      if (!ReadFile(GetStdHandle(STD_INPUT_HANDLE), &credit, 1, &read, nullptr) || read != 1) break;
+      if (credit != 1 || !ReleaseSemaphore(ready.value, 1, nullptr)) {rejected = true; break;}
     }
     SetEvent(cancelled.value); SetEvent(done.value);
   }) {}
@@ -188,20 +222,32 @@ struct Credits {
   }
   void take(HANDLE process) {
     HANDLE waits[] = {ready.value, process, cancelled.value};
-    if (WaitForMultipleObjects(3, waits, FALSE, 5000) != WAIT_OBJECT_0 || WaitForSingleObject(cancelled.value, 0) == WAIT_OBJECT_0) fail();
+    const auto waited = WaitForMultipleObjects(3, waits, FALSE, 5000);
+    if (rejected) fail();
+    if (waited == WAIT_TIMEOUT || waited == WAIT_OBJECT_0 + 1 || waited == WAIT_OBJECT_0 + 2 || WaitForSingleObject(cancelled.value, 0) == WAIT_OBJECT_0) throw Disconnected();
+    if (waited != WAIT_OBJECT_0) fail();
   }
 };
-void pipe_io(HANDLE pipe, HANDLE process, void* buffer, DWORD size, bool write, HANDLE cancelled = nullptr) {
-  const auto deadline = GetTickCount64() + 5000; DWORD transferred = 0;
+void pipe_io(HANDLE pipe, HANDLE process, void* buffer, DWORD size, bool write, HANDLE cancelled = nullptr, bool awaitFrame = false) {
+  auto deadline = GetTickCount64() + 5000; DWORD transferred = 0;
   while (transferred < size) {
     Handle event(CreateEventW(nullptr, TRUE, FALSE, nullptr)); OVERLAPPED operation{}; operation.hEvent = event.value;
     DWORD count = 0; bool ok = write ? WriteFile(pipe, static_cast<char*>(buffer) + transferred, size - transferred, &count, &operation) : ReadFile(pipe, static_cast<char*>(buffer) + transferred, size - transferred, &count, &operation);
-    if (!ok && GetLastError() == ERROR_IO_PENDING) {
+    auto error = ok ? ERROR_SUCCESS : GetLastError();
+    if (!ok && error == ERROR_IO_PENDING) {
       HANDLE waits[] = {event.value, process, cancelled}; const auto remaining = deadline > GetTickCount64() ? deadline - GetTickCount64() : 0;
-      if (WaitForMultipleObjects(cancelled ? 3 : 2, waits, FALSE, static_cast<DWORD>(remaining)) != WAIT_OBJECT_0) {CancelIoEx(pipe, &operation); GetOverlappedResult(pipe, &operation, &count, TRUE); fail();}
+      const auto waited = WaitForMultipleObjects(cancelled ? 3 : 2, waits, FALSE, awaitFrame && !transferred ? INFINITE : static_cast<DWORD>(remaining));
+      if (waited != WAIT_OBJECT_0) {
+        CancelIoEx(pipe, &operation); GetOverlappedResult(pipe, &operation, &count, TRUE);
+        if (waited == WAIT_TIMEOUT || waited == WAIT_OBJECT_0 + 1 || (cancelled && waited == WAIT_OBJECT_0 + 2)) throw Disconnected();
+        fail();
+      }
       ok = GetOverlappedResult(pipe, &operation, &count, FALSE) != 0;
+      error = ok ? ERROR_SUCCESS : GetLastError();
     }
-    if (!ok || !count) fail(); transferred += count;
+    if (!ok) pipe_failed(error); if (!count) throw Disconnected();
+    if (awaitFrame && !transferred) deadline = GetTickCount64() + 5000;
+    transferred += count;
   }
 }
 DWORD frame_length(const unsigned char* prefix) {return static_cast<DWORD>(prefix[0]) | (static_cast<DWORD>(prefix[1]) << 8) | (static_cast<DWORD>(prefix[2]) << 16) | (static_cast<DWORD>(prefix[3]) << 24);}
@@ -222,29 +268,41 @@ int wmain(int argc, wchar_t** argv) {
     // The two owned transport directories must both remain protected and free of reparses.
     auto parent = secure_file(directory.parent_path(), self, true); auto owned = secure_file(directory, self, true);
     stage = "policy"; auto ownImage = image(GetCurrentProcess()); bootstrap_policy(directory, self, ownImage.value, stage);
-    stage = "discovery"; test_trace(stage); std::optional<Json> selected; unsigned records = 0, visited = 0;
+    stage = "discovery"; test_trace(stage); std::optional<Json> selected; std::optional<Handle> selectedProcess; unsigned records = 0, visited = 0;
     for (const auto& entry : fs::directory_iterator(directory)) {
       if (++visited > 256) fail();
       const auto stem = utf8(entry.path().stem().wstring()); if (!uuid(stem) || entry.path().extension() != L".json") continue;
       if (++records > 128) fail(); auto file = secure_file(entry.path(), self, false, true); auto record = parse(read_bounded(file.value, 16384));
       exact(record, {"schemaVersion", "protocolMajor", "game", "userTag", "windowsSessionId", "processId", "processCreationTime", "processInstanceId", "pluginSessionId", "pipeName"});
       if (integer(record.at("schemaVersion")) != 1 || integer(record.at("protocolMajor")) != 0 || record.at("userTag").string() != self.userTag || integer(record.at("windowsSessionId")) != self.session || record.at("processInstanceId").string() != stem || !uuid(record.at("pluginSessionId").string())) fail();
+      if (record.at("game").string() != "ets2" && record.at("game").string() != "ats") fail();
       if (record.at("game").string() != game) continue;
-      if (selected) fail(); selected = record;
+      const auto pid = integer(record.at("processId")); if (!pid) fail();
+      const auto expectedCreation = v0::parse_uint64(record.at("processCreationTime"));
+      const auto endpoint = "\\\\.\\pipe\\ETS2Telemetry-" + game + "-v0-" + self.userTag + "-" + std::to_string(self.session) + "-" + stem;
+      if (record.at("pipeName").string() != endpoint) fail();
+      stage = "server-process";
+      const auto raw = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, pid);
+      if (!raw) {if (GetLastError() == ERROR_INVALID_PARAMETER) {stage = "discovery"; continue;} fail();}
+      Handle candidate(raw);
+      if (WaitForSingleObject(candidate.value, 0) == WAIT_OBJECT_0 || creation(candidate.value) != expectedCreation) {stage = "discovery"; continue;}
+      Identity server(candidate.value); if (server.sid != self.sid || server.session != self.session) fail();
+      stage = "server-image"; auto serverImage = image(candidate.value); const auto expectedName = game == "ets2" ? L"eurotrucks2.exe" : L"amtrucks.exe";
+      if (_wcsicmp(fs::path(final_path(serverImage.value)).filename().c_str(), expectedName) != 0) fail();
+      if (selected) fail(); selected = record; selectedProcess.emplace(std::move(candidate)); stage = "discovery";
     }
     if (!selected) {receipt(Json{Json::Object{{"type", Json{std::string("waiting")}}, {"schemaVersion", Json{1.0}}}}); return 2;}
     const auto& record = *selected; const auto pid = integer(record.at("processId")); if (!pid) fail();
     const auto expectedCreation = v0::parse_uint64(record.at("processCreationTime"));
     const auto endpoint = "\\\\.\\pipe\\ETS2Telemetry-" + game + "-v0-" + self.userTag + "-" + std::to_string(self.session) + "-" + record.at("processInstanceId").string();
     if (record.at("pipeName").string() != endpoint) fail();
-    stage = "server-process"; test_trace(stage); Handle process(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, pid)); Identity server(process.value);
-    if (server.sid != self.sid || server.session != self.session || creation(process.value) != expectedCreation || WaitForSingleObject(process.value, 0) != WAIT_TIMEOUT) fail();
-    stage = "server-image"; auto serverImage = image(process.value); const auto expectedName = game == "ets2" ? L"eurotrucks2.exe" : L"amtrucks.exe";
-    if (_wcsicmp(fs::path(final_path(serverImage.value)).filename().c_str(), expectedName) != 0) fail();
-    stage = "connected-peer"; if (!WaitNamedPipeW(wide(endpoint).c_str(), 250)) fail();
-    Handle pipe(CreateFileW(wide(endpoint).c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr));
-    ULONG actualPid = 0; if (!GetNamedPipeServerProcessId(pipe.value, &actualPid) || actualPid != pid) fail();
-    auto verify = [&] {if (WaitForSingleObject(process.value, 0) != WAIT_TIMEOUT) throw Disconnected(); Identity fresh(process.value); if (fresh.sid != self.sid || fresh.session != self.session || creation(process.value) != expectedCreation) fail(); ULONG current = 0; if (!GetNamedPipeServerProcessId(pipe.value, &current) || current != pid) fail();};
+    auto& process = *selectedProcess;
+    stage = "connected-peer"; if (!WaitNamedPipeW(wide(endpoint).c_str(), 250)) {const auto error = GetLastError(); if (error == ERROR_FILE_NOT_FOUND || error == ERROR_SEM_TIMEOUT) throw Disconnected(); pipe_failed(error);}
+    const auto rawPipe = CreateFileW(wide(endpoint).c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
+    if (rawPipe == INVALID_HANDLE_VALUE) {const auto error = GetLastError(); if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PIPE_BUSY) throw Disconnected(); pipe_failed(error);}
+    Handle pipe(rawPipe);
+    ULONG actualPid = 0; if (!GetNamedPipeServerProcessId(pipe.value, &actualPid)) pipe_failed(GetLastError()); if (actualPid != pid) fail();
+    auto verify = [&] {const auto waited = WaitForSingleObject(process.value, 0); if (waited == WAIT_OBJECT_0) throw Disconnected(); if (waited != WAIT_TIMEOUT) fail(); Identity fresh(process.value); if (fresh.sid != self.sid || fresh.session != self.session || creation(process.value) != expectedCreation) fail(); ULONG current = 0; if (!GetNamedPipeServerProcessId(pipe.value, &current)) pipe_failed(GetLastError()); if (current != pid) fail();};
     verify();
     Json source{Json::Object{{"game", Json{game}}, {"processId", Json{static_cast<double>(pid)}}, {"windowsSessionId", Json{static_cast<double>(self.session)}}, {"processInstanceId", record.at("processInstanceId")}, {"pluginSessionId", record.at("pluginSessionId")}, {"origin", Json{std::string("game")}}}};
     stage = "authority-receipt"; receipt(Json{Json::Object{{"type", Json{std::string("authority")}}, {"schemaVersion", Json{1.0}}, {"source", source}, {"processCreationTime", record.at("processCreationTime")}, {"userTag", Json{self.userTag}}}});
@@ -252,13 +310,15 @@ int wmain(int argc, wchar_t** argv) {
     std::vector<unsigned char> hello(helloLength + 4); std::copy(prefix, prefix + 4, hello.begin()); stdio_io(GetStdHandle(STD_INPUT_HANDLE), hello.data() + 4, helloLength, false);
     const auto helloMessage = v0::decode_payload(std::string(reinterpret_cast<char*>(hello.data() + 4), helloLength)); v0::negotiate(helloMessage);
     stage = "relay"; Credits credits;
+    try {
     pipe_io(pipe.value, process.value, hello.data(), static_cast<DWORD>(hello.size()), true, credits.cancelled.value);
     for (;;) {
       stage = "relay"; credits.take(process.value); stage = "retained-authority"; verify(); stage = "relay";
-      pipe_io(pipe.value, process.value, prefix, 4, false, credits.cancelled.value); stage = "wire-frame"; const auto length = frame_length(prefix); if (!length || length > v0::max_frame_bytes) fail(); stage = "relay";
+      pipe_io(pipe.value, process.value, prefix, 4, false, credits.cancelled.value, true); stage = "wire-frame"; const auto length = frame_length(prefix); if (!length || length > v0::max_frame_bytes) fail(); stage = "relay";
       stage = "wire-payload"; std::vector<unsigned char> frame(length + 4); std::copy(prefix, prefix + 4, frame.begin()); pipe_io(pipe.value, process.value, frame.data() + 4, length, false, credits.cancelled.value); stage = "retained-authority"; verify(); stage = "relay";
       stdio_io(GetStdHandle(STD_OUTPUT_HANDLE), frame.data(), static_cast<DWORD>(frame.size()), true);
     }
+    } catch (const Disconnected&) {if (credits.rejected) fail(); throw;}
   } catch (const Disconnected&) {return 3;}
-  catch (...) {const auto diagnostic = std::string(stage) + ":" + std::to_string(GetLastError()); DWORD written = 0; WriteFile(GetStdHandle(STD_ERROR_HANDLE), diagnostic.data(), static_cast<DWORD>(diagnostic.size()), &written, nullptr); return std::string(stage) == "relay" ? 3 : 1;}
+  catch (...) {const auto diagnostic = std::string(stage) + ":" + std::to_string(GetLastError()); DWORD written = 0; WriteFile(GetStdHandle(STD_ERROR_HANDLE), diagnostic.data(), static_cast<DWORD>(diagnostic.size()), &written, nullptr); return 1;}
 }

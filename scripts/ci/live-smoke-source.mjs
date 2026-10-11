@@ -62,5 +62,10 @@ export async function startLiveSmokeSource(checkout) {
     for (const socket of clients) socket.destroy();
     await new Promise(resolve => server.close(resolve));
   };
-  return {endpoint, stop, statistics: () => ({connections, frames, origin: 'synthetic', history: false})};
+  return {endpoint, stop,
+    setReading: (speedMps, fuelL) => {
+      assert.ok(Number.isFinite(speedMps) && Number.isFinite(fuelL) && fuelL >= 0);
+      checkpoint.data.state.speed.value = speedMps; checkpoint.data.state.fuel.value = fuelL;
+    },
+    statistics: () => ({connections, frames, origin: 'synthetic', history: false})};
 }
