@@ -8,7 +8,9 @@ $directory=Split-Path -Parent $ReadyFile
 if($mode -eq 'nonzero'){exit 9}
 'SIBLING_POWERSHELL_REACHED'|Write-Output
 if($mode -eq 'output'){Write-Output ('y'*(2*1024*1024))}
-[ordered]@{ready=$true;driverPid=$DriverPid;observerPid=$PID;controllerPid=$ControllerPid}|ConvertTo-Json -Compress|Set-Content -LiteralPath ($ReadyFile+'.partial') -Encoding UTF8
+. (Join-Path $PSScriptRoot 'sibling-console-metadata-fixture.ps1')
+$console=Get-FixtureConsole $directory
+[ordered]@{ready=$true;driverPid=$DriverPid;observerPid=$PID;controllerPid=$ControllerPid;consoleHost=$console;fixtureOnly=$true}|ConvertTo-Json -Depth 4 -Compress|Set-Content -LiteralPath ($ReadyFile+'.partial') -Encoding UTF8
 Move-Item -LiteralPath ($ReadyFile+'.partial') -Destination $ReadyFile
 while(!(Test-Path -LiteralPath $StopFile)){Start-Sleep -Milliseconds 10}
 [ordered]@{passed=$true;fixtureOnly=$true}|ConvertTo-Json -Compress|Set-Content -LiteralPath $ResultFile -Encoding UTF8

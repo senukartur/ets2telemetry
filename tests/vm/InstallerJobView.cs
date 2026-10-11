@@ -37,6 +37,7 @@ public static class InstallerJobView {
     [DllImport("kernel32.dll", SetLastError=true)] static extern bool QueryInformationJobObject(IntPtr job, int type, IntPtr information, uint size, IntPtr returned);
     [DllImport("kernel32.dll", SetLastError=true)] static extern IntPtr OpenProcess(uint access, bool inherit, int pid);
     [DllImport("kernel32.dll", SetLastError=true)] static extern bool GetExitCodeProcess(IntPtr process, out uint code);
+    [DllImport("kernel32.dll", SetLastError=true)] static extern uint WaitForSingleObject(IntPtr process,uint milliseconds);
     [DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Unicode)] static extern bool QueryFullProcessImageName(IntPtr process, uint flags, StringBuilder text, ref uint length);
     [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
     public static IntPtr Hold(int pid) {return OpenProcess(0x1000 | 0x100000, false, pid);}
@@ -46,6 +47,7 @@ public static class InstallerJobView {
         return text.ToString();
     }
     public static long ExitCode(IntPtr handle) {uint code;if(!GetExitCodeProcess(handle,out code)) throw new Win32Exception(Marshal.GetLastWin32Error());return code;}
+    public static bool Signaled(IntPtr handle) {uint state=WaitForSingleObject(handle,0);if(state==258)return false;if(state==0)return true;throw new Win32Exception(Marshal.GetLastWin32Error());}
     public static void Release(IntPtr handle) {if(handle!=IntPtr.Zero) CloseHandle(handle);}
     public static InstallerJobScope ReadScope() {
         IntPtr limits=Marshal.AllocHGlobal(Marshal.SizeOf(typeof(ExtendedLimits)));

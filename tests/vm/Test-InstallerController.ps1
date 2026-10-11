@@ -38,7 +38,9 @@ try{
         $script=Join-Path $PSScriptRoot 'sibling-observer-fixture.ps1'
         # Force actual second CreateProcess failure after the first root is assigned.
         if($mode -eq 'partial-start'){$script='C:\'+('x'*33000)+'.ps1'}
-        $code=[ETS2Telemetry.Diagnostics.InstallerBoundedProcess]::Run($NodePath,[string[]]@($fixture,$mode,$directory),$script,$directory,(Join-Path $directory 'job'),5000)
+        $entry=[ETS2Telemetry.Diagnostics.InstallerBoundedProcess].GetMethod('RunLegacyFixture',[Reflection.BindingFlags]'NonPublic,Static')
+        $invocation=[object[]]@([string]$NodePath,[string[]]@([string]$fixture,[string]$mode,[string]$directory),[string]$script,[string]$directory,[string](Join-Path $directory 'job'),[int]5000)
+        $code=$entry.Invoke($null,$invocation)
         $proof=Get-Content -LiteralPath (Join-Path $directory 'job/controller-result.json') -Raw|ConvertFrom-Json
         if($mode -ne 'partial-start'){
             Assert (!$proof.initialJobSnapshot.failure -and $proof.initialJobSnapshot.assignedCount -eq 2 -and $proof.initialJobSnapshot.listedCount -eq 2) 'Suspended-root diagnostic counts differ.'

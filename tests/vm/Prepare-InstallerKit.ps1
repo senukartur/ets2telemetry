@@ -89,7 +89,7 @@ Copy-Item -LiteralPath (Join-Path $fixture 'RELEASES') -Destination (Join-Path $
 foreach($name in $feedNames){Copy-Item -LiteralPath (Join-Path $fixture $name) -Destination (Join-Path $output 'feed')}
 Copy-Item -LiteralPath $node -Destination (Join-Path $output 'tools/node.exe')
 Copy-Item -LiteralPath $playwright -Destination (Join-Path $output 'node_modules/playwright-core') -Recurse
-foreach($name in @('Invoke-GuestInstallerAcceptance.ps1','installer-step.mjs','Observe-InstallerJob.ps1')){Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination (Join-Path $output 'harness')}
+foreach($name in @('Invoke-GuestInstallerAcceptance.ps1','installer-step.mjs','installer-root-proof.mjs','Observe-InstallerJob.ps1')){Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination (Join-Path $output 'harness')}
 Copy-Item -LiteralPath (Join-Path $repository 'scripts/watchdog/BoundedProcess.cs') -Destination (Join-Path $output 'tools')
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'InstallerBoundedProcess.cs') -Destination (Join-Path $output 'tools')
 Copy-Item -LiteralPath $observerAssembly -Destination (Join-Path $output 'tools/InstallerJobView.dll')

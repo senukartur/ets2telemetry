@@ -5,6 +5,7 @@ import {spawn} from 'node:child_process';
 import {readFile, readdir, mkdir, writeFile} from 'node:fs/promises';
 import {performance} from 'node:perf_hooks';
 import {createHash} from 'node:crypto';
+import {validateRootSet,validateConsoleExit} from './installer-root-proof.mjs';
 const [kit, output, guardFile, step, version, budgetText] = process.argv.slice(2);
 const result={step,version,passed:false,startedUtc:new Date().toISOString(),finishedUtc:null,failure:null,
   primary:null,observer:null,smoke:null,windowsPlaywrightShellWrapper:step==='smoke'};
@@ -30,13 +31,17 @@ async function startObserver(){
   assert.equal(new Set([process.pid,receipt.observerPid,receipt.controllerPid]).size,3);
   assert.equal(receipt.nodeExecutable,path.join(kit,'tools/node.exe'));assert.equal(receipt.observerScript,path.join(kit,'harness/Observe-InstallerJob.ps1'));
   assert.equal(receipt.atomicJobAssignment,true);assert.equal(receipt.jobHandleInherited,false);
+  assert.equal(receipt.consolePolicy,'system32-conhost');
   assert.deepEqual({LimitFlags:receipt.limitFlags,ActiveProcessLimit:receipt.processLimit,JobMemoryBytes:receipt.jobMemoryBytes,CpuFlags:receipt.cpuFlags,CpuRate:receipt.cpuRate},expectedJobScope);
   const ready=await boundedJson(path.join(output,'observer-ready.json'));launch.readyProof=ready;
   assert.equal(ready.ready,true);assert.equal(ready.driverPid,process.pid);assert.equal(ready.observerPid,receipt.observerPid);assert.equal(ready.controllerPid,receipt.controllerPid);
   assert.equal(ready.parentProcessId,receipt.controllerPid);assert.equal(ready.driverParentProcessId,receipt.controllerPid);
   assert.equal(ready.driverImage.toLowerCase(),path.join(kit,'tools/node.exe').toLowerCase());
   assert.equal(ready.controllerImage.toLowerCase(),'c:\\windows\\system32\\windowspowershell\\v1.0\\powershell.exe');
-  assert.equal(ready.initialPids.length,2);assert.deepEqual(new Set(ready.initialPids),new Set([process.pid,receipt.observerPid]));assert.deepEqual(ready.jobScope,expectedJobScope);
+  validateRootSet(ready.initialPids,ready.consoleHost,process.pid,receipt.observerPid,receipt.controllerPid);assert.deepEqual(ready.jobScope,expectedJobScope);
+  const custody=await boundedJson(path.join(output,'job/console-custody.json'));
+  assert.equal(custody.consolePolicy,'system32-conhost');assert.equal(custody.controllerPid,receipt.controllerPid);assert.equal(custody.driverPid,process.pid);assert.equal(custody.observerPid,receipt.observerPid);assert.equal(custody.memberVerified,true);
+  assert.equal(custody.consolePid,ready.consoleHost?.pid??null);assert.equal(custody.nativeImage?.toLowerCase()??null,ready.consoleHost?.nativeImage.toLowerCase()??null);
   observer={pid:receipt.observerPid};launch.ready=true;
   return {stopFile,viewFile};
 }
@@ -46,6 +51,7 @@ async function nativeObserverExit(){
     try{exit=await boundedJson(path.join(output,'job/observer-exit.json'));}catch(error){if(error.code!=='ENOENT')throw error;await new Promise(resolve=>setTimeout(resolve,20));continue;}
     result.observerLaunch.exitReceipt=exit;
     assert.equal(exit.controllerPid,controllerReceipt.controllerPid);assert.equal(exit.driverPid,process.pid);assert.equal(exit.observerPid,observer.pid);assert.equal(exit.signaled,true);
+    validateConsoleExit(exit,result.observerLaunch.readyProof.consoleHost,process.pid,observer.pid,controllerReceipt.controllerPid);
     return {code:exit.exitCode,signal:null};
   }
 }
@@ -136,7 +142,9 @@ try{
   assert.equal(result.observer.parentProcessId,controllerReceipt.controllerPid);assert.equal(result.observer.driverParentProcessId,controllerReceipt.controllerPid);
   assert.equal(result.observer.driverImage.toLowerCase(),path.join(kit,'tools/node.exe').toLowerCase());
   assert.equal(result.observer.controllerImage.toLowerCase(),'c:\\windows\\system32\\windowspowershell\\v1.0\\powershell.exe');
-  assert.deepEqual(new Set(result.observer.finalPids),new Set([process.pid,observer.pid]));
+  validateRootSet(result.observer.finalPids,result.observer.consoleHost,process.pid,observer.pid,controllerReceipt.controllerPid);
+  assert.deepEqual(result.observer.consoleHost,result.observerLaunch.readyProof.consoleHost);
+  if(result.observer.consoleHost)assert.equal(result.observer.consoleLastExitCode,259);
   if(step!=='smoke'){
     const event=step==='update'?'updated':step==='uninstall'?'uninstall':'install';
     const hook=result.observer.processes.find(record=>record.executablePath?.toLowerCase()===executable.toLowerCase()&&record.commandLine?.includes(`--squirrel-${event} ${version}`));
