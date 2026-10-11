@@ -1,0 +1,17 @@
+{
+  "specification": "Hand-authored expectations: each reading consumes one sequence; each connection adds welcome and coherent checkpoint. No offline reading is replayed as history.",
+  "messages": [
+    {"connection":1,"atMs":100,"kind":"welcome","seq":"2"},
+    {"connection":1,"atMs":100,"kind":"checkpoint","seq":"3","speed":0,"fuel":100,"simulation":"paused","revision":"1","coalesced":"1","offline":"2","hydration":true,"skipped":"0"},
+    {"connection":1,"atMs":150,"kind":"snapshot","seq":"4","speed":0,"fuel":100,"simulation":"running","revision":"1","coalesced":"1","offline":"2","hydration":false,"skipped":"0"},
+    {"connection":1,"atMs":200,"kind":"snapshot","seq":"5","speed":0,"fuel":100,"simulation":"running","revision":"1","coalesced":"1","offline":"2","hydration":false,"skipped":"0"},
+    {"connection":2,"atMs":350,"kind":"welcome","seq":"8"},
+    {"connection":2,"atMs":350,"kind":"checkpoint","seq":"9","speed":-2,"fuel":120,"simulation":"running","revision":"3","coalesced":"2","offline":"4","hydration":true,"skipped":"0"},
+    {"connection":2,"atMs":400,"kind":"snapshot","seq":"10","speed":null,"fuel":0,"simulation":"paused","revision":"3","coalesced":"2","offline":"4","hydration":false,"skipped":"0"}
+  ],
+  "freshness": [
+    {"receivedAtMs":200,"observeAtMs":200,"stale":false},
+    {"receivedAtMs":200,"observeAtMs":700,"stale":true},
+    {"receivedAtMs":400,"observeAtMs":400,"stale":false}
+  ]
+}

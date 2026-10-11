@@ -62,6 +62,8 @@ ET-022 candidate update on October 11, 2026: Windows CI has actual clean and res
 - Visual design is deferred. Start with a functional, readable UI.
 - The owner knows React and TypeScript and is new to desktop development. Explain unfamiliar native and desktop concepts clearly.
 
+ET-002a acceptance update on October 11, 2026: Owner decision on October 11, 2026: ET-002a was explicitly accepted after its exact-head checks and independent review; PR #9 was squash merged as `247c076cf803529c4650e125544faaf0bc3ccad7`. The owner expanded the sequencing exception to start ET-003 and ET-005a from that updated `main` while SP-01 remains unaccepted and PR #8 stays draft. The real ETS2 single-player windowed retry and Convoy checks remain mandatory pending evidence. This decision changes sequencing only; it does not establish game compatibility, authorize protocol v1, or waive the acceptance and merge criteria of subsequent packages.
+
 ## Architecture Baseline
 
 | Area | Working choice |

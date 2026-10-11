@@ -1,1 +1,1 @@
-{"name":"@ets2telemetry/telemetry-simulator","version":"0.1.0","private":true}
+{"name":"@ets2telemetry/telemetry-simulator","version":"0.1.0","private":true,"scripts":{"build":"node build.mjs","start":"node dist/cli.cjs","smoke":"node dist/cli.cjs smoke ../../tests/fixtures/simulator-v0/reconnect.json"}}
