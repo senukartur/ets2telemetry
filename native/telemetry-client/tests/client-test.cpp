@@ -5,6 +5,62 @@
 #include <fstream>
 #include <iostream>
 void require(bool value) {if (!value) throw std::runtime_error("Native client test assertion failed");}
+void descriptor_owner_test(const Identity& identity) {
+  OwnerSecurity security(identity); PSID owner = nullptr; BOOL defaulted = FALSE;
+  require(GetSecurityDescriptorOwner(security.descriptor, &owner, &defaulted) != 0);
+  require(owner && EqualSid(owner, identity.user()) && !defaulted);
+  std::cout << "explicit descriptor owner equals TokenUser passed\n";
+}
+std::vector<unsigned char> token_information(HANDLE token, TOKEN_INFORMATION_CLASS kind) {
+  DWORD size = 0; GetTokenInformation(token, kind, nullptr, 0, &size); require(size > 0 && size <= 65536);
+  std::vector<unsigned char> result(size); require(GetTokenInformation(token, kind, result.data(), size, &size) != 0); return result;
+}
+bool file_owner_is(HANDLE file, PSID expected) {
+  PSECURITY_DESCRIPTOR descriptor = nullptr; PSID owner = nullptr;
+  require(GetSecurityInfo(file, SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION, &owner, nullptr, nullptr, nullptr, &descriptor) == ERROR_SUCCESS);
+  const bool matches = owner && EqualSid(owner, expected); LocalFree(descriptor); return matches;
+}
+void controlled_token_owner_test(const fs::path& base, const Identity& identity) {
+  HANDLE raw = nullptr; require(OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY | TOKEN_DUPLICATE, &raw) != 0); Handle token(raw);
+  auto ownerBytes = token_information(token.value, TokenOwner), groupBytes = token_information(token.value, TokenGroups), privilegeBytes = token_information(token.value, TokenPrivileges);
+  const auto defaultOwner = reinterpret_cast<TOKEN_OWNER*>(ownerBytes.data())->Owner;
+  const auto groups = reinterpret_cast<TOKEN_GROUPS*>(groupBytes.data()); PSID alternateOwner = nullptr;
+  for (DWORD index = 0; index < groups->GroupCount; ++index) {
+    const auto& group = groups->Groups[index];
+    if ((group.Attributes & SE_GROUP_OWNER) && !(group.Attributes & SE_GROUP_USE_FOR_DENY_ONLY) && !EqualSid(group.Sid, identity.user())) {alternateOwner = group.Sid; break;}
+  }
+  TOKEN_ELEVATION elevation{}; DWORD written = 0; require(GetTokenInformation(token.value, TokenElevation, &elevation, sizeof(elevation), &written) != 0);
+  std::cout << "token roles: elevated=" << (elevation.TokenIsElevated != 0) << " defaultOwnerEqualsUser=" << (EqualSid(defaultOwner, identity.user()) != 0) << " alternateOwnerAvailable=" << (alternateOwner != nullptr) << "\n";
+  const auto privileges = reinterpret_cast<TOKEN_PRIVILEGES*>(privilegeBytes.data());
+  for (const auto* name : {L"SeRestorePrivilege", L"SeTakeOwnershipPrivilege", L"SeImpersonatePrivilege"}) {
+    LUID identifier{}; require(LookupPrivilegeValueW(nullptr, name, &identifier) != 0); bool present = false, enabled = false;
+    for (DWORD index = 0; index < privileges->PrivilegeCount; ++index) {
+      const auto& privilege = privileges->Privileges[index];
+      if (privilege.Luid.HighPart == identifier.HighPart && privilege.Luid.LowPart == identifier.LowPart) {present = true; enabled = (privilege.Attributes & SE_PRIVILEGE_ENABLED) != 0;}
+    }
+    std::cout << utf8(name) << ": present=" << present << " enabled=" << enabled << "\n";
+  }
+  if (!alternateOwner) {std::cout << "controlled TokenOwner mismatch unavailable: no eligible alternate owner group; descriptor-owner regression passed, elevation not established\n"; return;}
+  HANDLE duplicated = nullptr;
+  require(DuplicateTokenEx(token.value, TOKEN_QUERY | TOKEN_ADJUST_DEFAULT | TOKEN_IMPERSONATE, nullptr, SecurityImpersonation, TokenImpersonation, &duplicated) != 0); Handle testToken(duplicated);
+  TOKEN_OWNER changed{alternateOwner}; require(SetTokenInformation(testToken.value, TokenOwner, &changed, sizeof(changed)) != 0);
+  auto changedBytes = token_information(testToken.value, TokenOwner); require(EqualSid(reinterpret_cast<TOKEN_OWNER*>(changedBytes.data())->Owner, alternateOwner) != 0);
+  // Only this duplicate token's default owner changes; the process token and account remain untouched.
+  require(ImpersonateLoggedOnUser(testToken.value) != 0);
+  try {
+    OwnerSecurity explicitSecurity(identity);
+    PSECURITY_DESCRIPTOR implicitDescriptor = nullptr;
+    const auto implicitSddl = L"D:P(A;;GA;;;" + wide(identity.sid) + L")";
+    require(ConvertStringSecurityDescriptorToSecurityDescriptorW(implicitSddl.c_str(), SDDL_REVISION_1, &implicitDescriptor, nullptr) != 0);
+    struct Descriptor {PSECURITY_DESCRIPTOR value; ~Descriptor() {LocalFree(value);}} implicit{implicitDescriptor};
+    SECURITY_ATTRIBUTES implicitSecurity{sizeof(SECURITY_ATTRIBUTES), implicit.value, FALSE};
+    Handle implicitFile(CreateFileW((base / L"implicit-owner.tmp").c_str(), GENERIC_WRITE | READ_CONTROL | DELETE, 0, &implicitSecurity, CREATE_NEW, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_DELETE_ON_CLOSE, nullptr));
+    require(file_owner_is(implicitFile.value, alternateOwner) && !file_owner_is(implicitFile.value, identity.user()));
+    Handle explicitFile(CreateFileW((base / L"explicit-owner.tmp").c_str(), GENERIC_WRITE | READ_CONTROL | DELETE, 0, &explicitSecurity.attributes, CREATE_NEW, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_DELETE_ON_CLOSE, nullptr));
+    protected_owner(explicitFile.value, identity);
+  } catch (...) {require(RevertToSelf() != 0); throw;}
+  require(RevertToSelf() != 0); std::cout << "controlled duplicate TokenOwner mismatch: implicit owner rejected, explicit TokenUser owner and strict DACL passed\n";
+}
 struct Child {
   Handle process, input, output; DWORD pid = 0;
   Child(const std::wstring& executable, const std::wstring& arguments) {
@@ -74,8 +130,10 @@ int wmain(int argc, wchar_t** argv) {
   try {
     if (argc == 5 && std::wstring(argv[1]) == L"--host") return host(argv[2], argv[3], utf8(argv[4]));
     require(argc == 3); const auto broker = std::wstring(argv[1]); const fs::path fixtures(argv[2]);
+    descriptor_owner_test(Identity(GetCurrentProcess()));
     wchar_t temporary[MAX_PATH]; require(GetTempPathW(MAX_PATH, temporary) != 0); const auto base = fs::path(temporary) / (L"ets2telemetry-client-test-" + std::to_wstring(GetCurrentProcessId()));
     require(!fs::exists(base)); fs::create_directory(base); Identity identity(GetCurrentProcess()); OwnerSecurity security(identity);
+    controlled_token_owner_test(base, identity);
     wchar_t selfName[32768]; const auto selfLength = GetModuleFileNameW(nullptr, selfName, 32768); require(selfLength > 0); const std::wstring self(selfName, selfLength);
     for (const auto* mode : {"valid", "creation", "collision", "session", "malformed", "dacl"}) {
       std::cerr << "case " << mode << "\n";

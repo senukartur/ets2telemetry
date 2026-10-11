@@ -14,6 +14,8 @@ The client reads owner-only UTF-8 discovery records under `%LOCALAPPDATA%\ETS2Te
 
 Before connecting, the broker publishes its own canonical held image path and SHA256 into the bounded protected `service-policy.json`, preserving valid existing entries (maximum four). A protected, exclusive, delete-on-close lock serializes this owned policy publication; contention fails closed. The plugin checks the actual connected broker process against this policy. The broker does not authorize Electron generally or infer role from command-line/ancestry claims. Other-user and remote connection evidence remains with the native transport acceptance record.
 
+Broker-created security descriptors explicitly set the owner to the current `TokenUser` SID as well as a protected single-user DACL. They do not rely on `TokenOwner`, which can designate an Administrators group for an elevated token. The strict reader still requires the owner and sole allowed trustee to equal `TokenUser`; policy lock and atomic temporary publication use the same descriptor.
+
 ## Native broker control
 
 The broker accepts only `--game ets2|ats --discovery-dir <main-owned-directory>`. Its first stdout frame is a four-byte little-endian length followed by a JSON receipt of at most 4,096 bytes:
@@ -24,7 +26,7 @@ The broker accepts only `--game ets2|ats --discovery-dir <main-owned-directory>`
 
 No matching record produces `{"type":"waiting","schemaVersion":1}` and exit code 2. Authority failure exits 1. Source disconnect/cancellation exits 3. The service sends one bounded framed v0 hello, then one byte `0x01` per relay credit. One credit permits one wire frame of at most 65,540 total bytes. The service returns a credit only after synchronous schema/order/identity validation and state application. Credits control this owned stdio boundary; they are not v0 or durable acknowledgements. An unsolicited frame, duplicate control credit, malformed frame, oversize payload or changed identity closes the connection.
 
-There is one native client per service, including while switching sources: the previous client must actually close before the latest pending selection starts. Switching requests coalesce into one pending selection. Native pipe operations have five-second deadlines and cancellation waits for actual completion. An input EOF monitor cancels outstanding overlapped reads. Synchronous stdio cancellation joins the owned I/O thread. The production executable uses the static MSVC runtime; optional ASan console targets are separate artifacts.
+There is one native client per service, including during automatic recovery and source switching. Both the retry backoff and actual previous-client completion must finish before a new verifier starts. An automatic retry captures its connection generation; stopping or selecting another source invalidates it even if completion arrives later. Switching requests coalesce into one pending selection. Native pipe operations have five-second deadlines and cancellation waits for actual completion. An input EOF monitor cancels outstanding overlapped reads. Synchronous stdio cancellation joins the owned I/O thread. The production executable uses the static MSVC runtime; optional ASan console targets are separate artifacts.
 
 ## Current state and recovery
 

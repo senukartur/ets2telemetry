@@ -75,7 +75,13 @@ export class TelemetryIngestion {
       if (!active()) return; closed = true;
       clearTimeout(this.handshake); clearInterval(this.freshness); this.handshake = undefined; this.freshness = undefined;
       socket.destroy(); this.socket = undefined; this.emit(status, reason);
-      if (retry) this.retry = setTimeout(() => {this.retry = undefined; this.open();}, Math.min(250 * 2 ** Math.min(this.attempt++, 4), 4000));
+      if (retry) this.retry = setTimeout(() => {
+        this.retry = undefined;
+        // Cancellation requests do not establish that the owned broker has exited.
+        void Promise.all(this.completions).then(() => {
+          if (!this.disposed && generation === this.generation) this.open();
+        });
+      }, Math.min(250 * 2 ** Math.min(this.attempt++, 4), 4000));
     };
     this.handshake = setTimeout(() => close('disconnected', 'Hello/checkpoint deadline exceeded', true), this.options.handshakeMs ?? 5000);
     socket.once('connect', () => {

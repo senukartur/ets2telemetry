@@ -92,7 +92,7 @@ void protected_owner(HANDLE file, const Identity& identity) {
 struct OwnerSecurity {
   PSECURITY_DESCRIPTOR descriptor = nullptr; SECURITY_ATTRIBUTES attributes{};
   explicit OwnerSecurity(const Identity& identity) {
-    const auto sddl = L"D:P(A;;GA;;;" + wide(identity.sid) + L")";
+    const auto sddl = L"O:" + wide(identity.sid) + L"D:P(A;;GA;;;" + wide(identity.sid) + L")";
     if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.c_str(), SDDL_REVISION_1, &descriptor, nullptr)) fail();
     attributes = {sizeof(SECURITY_ATTRIBUTES), descriptor, FALSE};
   }

@@ -36,6 +36,47 @@ function fixture() {
   return {ingestion, updates, sockets, time: (value: number) => {now = value;}};
 }
 describe('v0 utility ingestion', () => {
+  function delayedBroker() {
+    vi.useFakeTimers(); const updates: LiveTelemetry[] = [];
+    const sockets: Array<TestSocket & {completion: Promise<void>; finish: () => void; game: 'ets2' | 'ats'}> = [];
+    const ingestion = new TelemetryIngestion(update => updates.push(update), {broker: {executable: 'fixed', discoveryDirectory: 'fixed'}, connectGame: (_configuration, game) => {
+      let finish!: () => void;
+      const socket = Object.assign(new TestSocket(), {game, completion: new Promise<void>(resolve => {finish = resolve;}), finish: () => finish()});
+      sockets.push(socket); return socket;
+    }});
+    ingestion.select('ets2');
+    const cleanup = async () => {const stopped = ingestion.stop(); for (const socket of sockets) socket.finish(); await stopped;};
+    return {ingestion, updates, sockets, cleanup};
+  }
+  it.each(['waiting', 'end', 'close', 'deadline'])('gates automatic %s recovery on actual cancelled broker completion', async trigger => {
+    const f = delayedBroker();
+    try {
+      if (trigger === 'deadline') await vi.advanceTimersByTimeAsync(5000); else f.sockets[0].emit(trigger);
+      expect(f.sockets[0].destroyed).toBe(true); expect(f.updates.at(-1)?.fresh).toBe(false);
+      await vi.advanceTimersByTimeAsync(20000); expect(f.sockets).toHaveLength(1);
+      f.sockets[0].finish(); await vi.advanceTimersByTimeAsync(0); expect(f.sockets).toHaveLength(2);
+      expect(f.sockets[1].game).toBe('ets2'); expect(f.updates.at(-1)?.fresh).toBe(false);
+    } finally {await f.cleanup();}
+  });
+  it('preserves the automatic backoff when broker completion precedes its deadline', async () => {
+    const f = delayedBroker();
+    try {
+      f.sockets[0].emit('waiting'); f.sockets[0].finish(); await vi.advanceTimersByTimeAsync(249); expect(f.sockets).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1); expect(f.sockets).toHaveLength(2);
+    } finally {await f.cleanup();}
+  });
+  it.each(['stop', 'selection'])('invalidates pending automatic recovery during %s while completion is delayed', async action => {
+    const f = delayedBroker();
+    try {
+      f.sockets[0].emit('waiting'); await vi.advanceTimersByTimeAsync(250); expect(f.sockets).toHaveLength(1);
+      let stopped: Promise<void> | undefined; let stopFinished = false;
+      if (action === 'stop') {stopped = f.ingestion.stop().then(() => {stopFinished = true;});} else {f.ingestion.select('ats'); f.ingestion.select('ets2'); f.ingestion.select('ats');}
+      await vi.advanceTimersByTimeAsync(10000); expect(f.sockets).toHaveLength(1); expect(stopFinished).toBe(false);
+      f.sockets[0].finish(); await vi.advanceTimersByTimeAsync(0); await stopped;
+      expect(f.sockets).toHaveLength(action === 'stop' ? 1 : 2);
+      if (action === 'selection') {expect(f.sockets[1].game).toBe('ats'); expect(f.updates.at(-1)).toMatchObject({selection: 'ats', fresh: false});}
+    } finally {await f.cleanup();}
+  });
   it('requires every game envelope to match retained native authority and waits for an old broker to finish before starting another', async () => {
     vi.useFakeTimers(); const updates: LiveTelemetry[] = []; const sockets: Array<TestSocket & {authority: SourceIdentity; completion: Promise<void>}> = [];
     let finish!: () => void;
