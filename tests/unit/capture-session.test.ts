@@ -135,6 +135,16 @@ describe('CAP0 session failure handling', () => {
     await capture.start(); const manifest = await capture.done;
     expect(manifest?.stop.reason).toBe('source-unavailable'); expect(manifest?.stop.detail).toMatch(/^3 transient pre-authority failures/); expect(transports).toHaveLength(3);
   });
+  it('restarts the transient window after discovery progress', async () => {
+    let clock = 0;
+    const {capture, transports} = scripted([
+      t => t.emit('error', transient('Capture authority deadline exceeded')),
+      t => t.emit('waiting'),
+      t => { clock += 70_000; t.emit('error', transient('Capture authority deadline exceeded')); },
+      deliver], {now: () => clock});
+    await capture.start(); const manifest = await capture.done;
+    expect(transports).toHaveLength(4); expect(manifest).toMatchObject({status: 'complete', stop: {reason: 'source-end'}});
+  });
   it('cancels a pending transient retry when the service stops', async () => {
     const {capture, transports} = scripted([t => t.emit('error', transient('Capture authority deadline exceeded'))], {transientWindowMs: 60_000});
     await capture.start(); await new Promise(resolve => setTimeout(resolve, 30));

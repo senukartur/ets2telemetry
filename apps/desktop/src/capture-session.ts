@@ -146,7 +146,7 @@ export class CaptureSession {
     transport.on('authority', (authority: CaptureAuthority) => {
       if (writer.closed) return;
       try { writer.bindAuthority(authority); } catch (error) { void writer.close('authority-rejected', error instanceof Error ? error.message : 'authority'); return; }
-      authorized = this.connected = true; transport.sendHello(encodeCap0Hello(this.captureSessionId));
+      this.progress(); authorized = this.connected = true; transport.sendHello(encodeCap0Hello(this.captureSessionId));
     });
     transport.on('packet', (payload: Uint8Array) => {
       if (writer.closed) return;
@@ -155,8 +155,10 @@ export class CaptureSession {
       // Credit only after synchronous validation and bounded admission: the writer is the backpressure point.
       if (writer.accept(packet, utf8.decode(payload)) && !writer.closed) transport.credit();
     });
-    transport.on('waiting', () => retry(this.options.retryMs ?? 1000));
-    transport.on('end', () => { if (authorized) void writer.close('disconnect', 'source closed before an end marker'); else retry(this.options.retryMs ?? 1000); });
+    // A completed discovery round (waiting, or a clean broker exit) is progress: transient failures
+    // are only counted within one uninterrupted run of failures.
+    transport.on('waiting', () => { this.progress(); retry(this.options.retryMs ?? 1000); });
+    transport.on('end', () => { if (authorized) void writer.close('disconnect', 'source closed before an end marker'); else { this.progress(); retry(this.options.retryMs ?? 1000); } });
     transport.on('error', (error: Error) => {
       const message = error.message.slice(0, 120);
       if (authorized) void writer.close('disconnect', message);
@@ -166,6 +168,7 @@ export class CaptureSession {
       else void writer.close('authority-rejected', message);
     });
   }
+  private progress(): void { this.firstTransient = undefined; this.transientFailures = 0; }
   private transientFailure(message: string): void {
     const writer = this.writer!, now = (this.options.now ?? (() => performance.now()))();
     this.firstTransient ??= now; this.transientFailures++;
