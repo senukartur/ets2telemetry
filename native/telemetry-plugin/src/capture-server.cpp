@@ -157,7 +157,11 @@ void CaptureServer::serve(HANDLE pipe, const std::wstring& directory, const tran
     // intact: that envelope is reported as unsent and the markers follow. A frame or split envelope cut
     // after bytes left cannot be followed by a valid marker, so the stream then ends without one.
     try {
-      while (drain && GetTickCount64() < drain_deadline && queue_.pop(envelope)) {
+      // An envelope is started only if the previous one's serialization and write time still fits in the
+      // drain window, so cutting a split envelope (which forbids markers) stays rare.
+      ULONGLONG last_cost = 0;
+      while (drain && GetTickCount64() + last_cost < drain_deadline && queue_.pop(envelope)) {
+        const auto envelope_started = GetTickCount64();
         const auto first_seq = packet_seq; const auto packets = envelope_packets(session, envelope, packet_seq, stamp());
         bool cut = false;
         for (std::size_t i = 0; i < packets.size(); ++i) {
@@ -167,7 +171,7 @@ void CaptureServer::serve(HANDLE pipe, const std::wstring& directory, const tran
           packet_seq = first_seq; abandoned = 1; cut = true; break;
         }
         if (cut) break;
-        ++published;
+        ++published; last_cost = GetTickCount64() - envelope_started;
       }
     } catch (const ClockUnavailable&) { throw; }
     catch (...) { reason = EndReason::encoding_failed; }
