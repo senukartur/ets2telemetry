@@ -24,7 +24,7 @@ Owner-approved deferred capabilities are tracked in [technical debt](docs/techni
 
 - The initial platform is **Windows x64**.
 - Both ETS2 and ATS must be supported.
-- **TruckersMP compatibility is required** for the first release. Single-player and the built-in Convoy mode are also part of the validation matrix.
+- **TruckersMP compatibility is required** for the first release. Single-player is also part of the validation matrix. The built-in Convoy mode is deferred from the matrix by owner decision on October 12, 2026; it is neither validated nor claimed as supported.
 - The initial overlay may require windowed mode, including borderless fullscreen. Exclusive fullscreen support is outside the MVP.
 - The main interface and overlay use **React and TypeScript**.
 - The first release includes live metrics, an overlay, and a local trip history.
@@ -38,8 +38,8 @@ The technical choices below are the working implementation baseline. Changes to 
 
 ## 3. Initial User Journey
 
-1. The driver installs the utility and selects installed games through a setup wizard.
-2. The utility installs its telemetry plugin into each selected game.
+1. The driver installs the utility. On launch, it discovers installed games without a multi-step setup wizard.
+2. The utility installs or updates its telemetry plugin in each discovered game silently, and asks the driver only when it cannot proceed alone (see the October 12, 2026 silent plugin installation decision).
 3. The driver starts the utility and launches the game normally or through TruckersMP.
 4. The application connects to the plugin and displays connection status and live metrics.
 5. The overlay remains visible while driving, while mouse clicks and controls continue to reach the game.
@@ -240,7 +240,7 @@ The maintained v0 client uses a fixed project-owned native broker for documented
 [TESTING.md](TESTING.md) defines the test layers, permanent regression scenarios, CI/merge policy, historical migration checks, and real-game evidence. ET-001 adds scaffold checks; extend them in every feature PR. Most repeatable feature logic will use simulation, real local transport, and isolated storage; real-game compatibility and input/window behavior require separate evidence. The Windows CI workflow has recorded clean hosted and deliberate failure/restoration evidence; final current-head checks and review remain required, and broader feature suites remain pending.
 
 - Complete job lifecycle in both games: acceptance, driving, stopping, pausing, delivery, and cancellation.
-- A separate compatibility matrix for single-player, Convoy, and TruckersMP, recording tested versions. Documentation alone does not establish compatibility.
+- A separate compatibility matrix for single-player and TruckersMP, recording tested versions. Convoy is deferred (see the October 12, 2026 owner decision). Documentation alone does not establish compatibility.
 - Application launch before and after the game, reconnection, restart, game exit, and plugin reinitialization.
 - Save loading, truck changes, refueling, unavailable channels, timer resets, and partially recorded trips.
 - The ordering of job configuration changes and delivery events must not lose the result. Duplicate events must not create duplicate trips.
@@ -296,3 +296,32 @@ After the conditional code-review merges of PR #10, #12 and #14, the owner instr
 ## ET-008 code-acceptance exception — October 12, 2026
 
 The owner explicitly accepts ET-008 code by exception and authorizes the coordinator to integrate PR #21 with current main, preserve Tailwind/shadcn in the main window and the isolated transparent overlay, obtain independent review and a successful final automatic Windows CI after Ready, then squash merge without another confirmation. This supersedes the earlier implementation-only permission for this package. Mandatory game, environment, CAP-01/SP-01 and performance checks remain pending; a code merge does not establish compatibility or complete those criteria. The card remains in Review until its mandatory criteria are accepted. No protocol v1, durable history, later MVP or server work is authorized.
+
+## CAP-01a evidence capture transport — October 12, 2026
+
+The owner approved the CAP0 evidence-capture direction on October 12, 2026. CAP0 is a separately versioned, default-off, evidence-only contract on its own named pipe, isolated from the frozen v0 live protocol; the v0 handshake, parser, fixtures and overlay path are unchanged. Approved bounds: 64 KiB per packet; a native evidence queue of 128 envelopes and 2 MiB with non-blocking newest-drop and explicit loss counters; an application writer with 2 MiB pending data, 20 MiB per file and a 10-minute default deadline; output in a separate capture directory outside `telemetry.sqlite` and the application binaries. CAP0 has no ACK, offline spool, history, trip effects or renderer authority. Package CAP-01a implements this contract and its tooling without a game; see [the CAP0 contract](docs/protocol/cap0.md) and [CAP-01a validation](docs/validation/cap-01a.md). The production plugin always exposes a passive CAP0 endpoint that copies nothing until the approved broker authenticates; the application enables one capture per launch only through `ETS2TELEMETRY_CAPTURE=cap0`. CAP-01a does not accept CAP-01 or ET-009: real captures from both games and the required modes, sanitized and independently reviewed observations, frame-time impact, and the SP-01 windowed retry remain pending (Convoy is deferred). No protocol v1, durable history or later-phase work is authorized.
+
+## Convoy validation deferral — October 12, 2026
+
+The owner removed the built-in Convoy multiplayer mode from the current validation matrix: the owner does not play Convoy and has no procedure to test it. The matrix for SP-01, CAP-01, the full ET-009 gate and later ET-020 is now ETS2 and ATS, each in single-player and TruckersMP, with windowed and borderless modes. Convoy is deferred, not rejected: it is neither validated nor claimed as supported, and the application must not advertise Convoy compatibility. Earlier dated records that list Convoy as pending keep their historical wording; this decision supersedes those pending Convoy checks. TruckersMP still requires actual game evidence; single-player and TruckersMP results do not establish Convoy behavior.
+
+## Silent plugin installation — October 12, 2026
+
+The owner chose silent plugin installation, matching other telemetry utilities, over a multi-step setup wizard. On launch, the application discovers ETS2 and ATS through the Steam library list. Without asking, it installs the project plugin into each discovered game's `bin/win_x64/plugins`, or updates it there, whenever it can do so safely. The driver can also add a game folder manually at any time, for example an installation outside the Steam libraries. The driver can exclude a game, and the exclusion persists in settings, so an excluded game is never reinstalled silently.
+
+The application shows a prompt only when it cannot proceed alone:
+
+- the game or TruckersMP is running, so the driver must close it before the plugin can be installed or replaced;
+- no game is found automatically, so the driver must choose the game folder;
+- the destination needs permissions the application does not have;
+- a file with the project plugin's name already exists, but its hash matches no version this application installed (for example after the developer procedure in `docs/manual-plugin-setup.md`, an interrupted copy or a user-modified file). The driver must remove or explicitly confirm it; the application never overwrites it silently.
+
+All existing safety rules still apply, made precise for unattended installs:
+
+- Change the DLL only while the game and client are closed. Treat the closed-state check as advisory: if the destination is locked, or the game starts during an update, fail the update and report `blocked`. Never wait or retry while the game is in use; try again after the game exits or at the next launch.
+- Manage only this project's file and never touch other plugins.
+- Copy atomically. Write a temporary file in the same `plugins` directory and verify its SHA-256 against the expected hash of the plugin bundled with this application version. Then rename it over the destination. A failed or interrupted copy must never leave a partial `ets2telemetry-plugin.dll`.
+- Replace or remove an existing file only when its hash matches a version this application installed.
+- Remove only the owned file on uninstall.
+
+The application must show the plugin state for each game: installed, outdated, missing, excluded by the driver, or blocked (with the reason). ET-017 implements this behaviour; its card title still says "wizard", but this decision governs the user experience.

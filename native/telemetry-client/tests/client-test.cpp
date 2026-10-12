@@ -209,6 +209,29 @@ int host(const fs::path& directory, const fs::path& fixtures, const std::string&
   // Remain connected until the owned client exits or cancels while waiting for the next frame.
   WaitForSingleObject(client.value, mode == "quiet-exit" ? 5500 : 10000); return 0;
 }
+// CAP0 capture host: publishes the same v0 discovery record but serves only the separate capture endpoint.
+int capture_host(const fs::path& directory, const std::string& mode) {
+  Identity self(GetCurrentProcess()); OwnerSecurity security(self);
+  const std::string instance = "00112233-4455-6677-8899-aabbccddeeff", plugin = "11112233-4455-6677-8899-aabbccddeeff";
+  const auto endpoint = "\\\\.\\pipe\\ETS2Telemetry-ets2-v0-" + self.userTag + "-" + std::to_string(self.session) + "-" + instance;
+  const auto capture = "\\\\.\\pipe\\ETS2Telemetry-ets2-cap0-" + self.userTag + "-" + std::to_string(self.session) + "-" + instance + "-" + plugin;
+  Handle pipe(CreateNamedPipeW(wide(capture).c_str(), PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE | FILE_FLAG_OVERLAPPED, PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS, 1, 65540, 65540, 0, &security.attributes));
+  write_file(directory / (instance + ".json"), Json{Json::Object{{"schemaVersion", Json{1.0}}, {"protocolMajor", Json{0.0}}, {"game", Json{std::string("ets2")}}, {"userTag", Json{self.userTag}}, {"windowsSessionId", Json{static_cast<double>(self.session)}}, {"processId", Json{static_cast<double>(GetCurrentProcessId())}}, {"processCreationTime", Json{std::to_string(creation(GetCurrentProcess()))}}, {"processInstanceId", Json{instance}}, {"pluginSessionId", Json{plugin}}, {"pipeName", Json{endpoint}}}}, self);
+  receipt(Json{Json::Object{{"type", Json{std::string("ready")}}}});
+  Handle connected(CreateEventW(nullptr, TRUE, FALSE, nullptr)); OVERLAPPED operation{}; operation.hEvent = connected.value;
+  const auto success = ConnectNamedPipe(pipe.value, &operation); const auto error = success ? ERROR_SUCCESS : GetLastError();
+  if (error == ERROR_PIPE_CONNECTED) SetEvent(connected.value); else if (error != ERROR_IO_PENDING && error != ERROR_SUCCESS) fail();
+  if (WaitForSingleObject(connected.value, 5000) != WAIT_OBJECT_0) {CancelIoEx(pipe.value, &operation); DWORD ignored = 0; GetOverlappedResult(pipe.value, &operation, &ignored, TRUE); return mode == "capture-v0-hello" ? 0 : 1;}
+  ULONG clientPid = 0; require(GetNamedPipeClientProcessId(pipe.value, &clientPid) && clientPid != 0); Handle client(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, clientPid));
+  // The broker must reject a v0 hello locally; nothing reaches the capture endpoint.
+  if (mode == "capture-v0-hello") {WaitForSingleObject(client.value, 10000); return 0;}
+  unsigned char header[4]; pipe_io(pipe.value, client.value, header, 4, false); const auto length = frame_length(header); require(length > 0 && length <= 4096);
+  std::string hello(length, '\0'); pipe_io(pipe.value, client.value, hello.data(), length, false); require(ets2telemetry::cap0::validate_hello(hello) == "0cab0000-0000-4000-8000-0000000000a1");
+  const auto packet = std::string("{\"format\":\"ets2telemetry-cap0\",\"kind\":\"header\",\"fixture\":true}"); const auto n = static_cast<DWORD>(packet.size());
+  unsigned char prefix[] = {static_cast<unsigned char>(n), static_cast<unsigned char>(n >> 8), static_cast<unsigned char>(n >> 16), static_cast<unsigned char>(n >> 24)};
+  pipe_io(pipe.value, client.value, prefix, 4, true); pipe_io(pipe.value, client.value, const_cast<char*>(packet.data()), n, true);
+  WaitForSingleObject(client.value, 10000); return 0;
+}
 int wmain(int argc, wchar_t** argv) {
   try {
     if (argc == 4 && std::wstring(argv[1]) == L"--discovery-case") {
@@ -217,6 +240,7 @@ int wmain(int argc, wchar_t** argv) {
       return broker_entrypoint(5, arguments);
     }
     if (argc == 5 && std::wstring(argv[1]) == L"--host") return host(argv[2], argv[3], utf8(argv[4]));
+    if (argc == 4 && std::wstring(argv[1]) == L"--capture-host") return capture_host(argv[2], utf8(argv[3]));
     require(argc == 3); const auto broker = std::wstring(argv[1]); const fs::path fixtures(argv[2]);
     descriptor_owner_test(Identity(GetCurrentProcess()));
     wchar_t temporary[MAX_PATH]; require(GetTempPathW(MAX_PATH, temporary) != 0); const auto base = fs::path(temporary) / (L"ets2telemetry-client-test-" + std::to_wstring(GetCurrentProcessId()));
@@ -281,6 +305,35 @@ int wmain(int argc, wchar_t** argv) {
         require(server.wait() == 0); continue;
       }
       client.eof(); require(client.wait() == 3); require(server.wait() == 0);
+    }
+    // CAP0 broker mode: same authority checks, separate keyed endpoint, marked receipt and CAP0-only hello.
+    for (const auto* mode : {"capture", "capture-v0-hello", "capture-bad-arguments"}) {
+      if (!filter.empty() && filter != mode) continue;
+      std::cerr << "case " << mode << "\n";
+      const auto directory = base / wide(mode) / "transport" / "v0"; fs::create_directory(directory.parent_path().parent_path());
+      require(CreateDirectoryW(directory.parent_path().c_str(), &security.attributes)); require(CreateDirectoryW(directory.c_str(), &security.attributes));
+      const std::string scenario(mode);
+      if (scenario == "capture-bad-arguments") {
+        Child client(broker, L"--game ets2 --discovery-dir \"" + directory.wstring() + L"\" --capture cap1"); client.eof(); require(client.wait() == 1); continue;
+      }
+      Child server(self, L"--capture-host \"" + directory.wstring() + L"\" " + wide(mode));
+      require(parse(read_frame(server.output.value)).at("type").string() == "ready");
+      Child client(broker, L"--game ets2 --discovery-dir \"" + directory.wstring() + L"\" --capture cap0");
+      const auto authority = parse(read_frame(client.output.value));
+      exact(authority, {"type", "schemaVersion", "source", "processCreationTime", "userTag", "evidence"});
+      require(authority.at("type").string() == "authority" && authority.at("evidence").string() == "cap0" && integer(authority.at("source").at("processId")) == server.pid);
+      if (scenario == "capture-v0-hello") {
+        auto hello = v0::encode_frame(v0::decode_payload(file_bytes(fixtures / "hello.json"))); stdio_io(client.input.value, hello.data(), static_cast<DWORD>(hello.size()), true);
+        require(client.wait() == 1); server.eof(); require(server.wait() == 0); continue;
+      }
+      const auto payload = ets2telemetry::cap0::hello_payload("0cab0000-0000-4000-8000-0000000000a1"); const auto n = static_cast<DWORD>(payload.size());
+      unsigned char prefix[] = {static_cast<unsigned char>(n), static_cast<unsigned char>(n >> 8), static_cast<unsigned char>(n >> 16), static_cast<unsigned char>(n >> 24)};
+      stdio_io(client.input.value, prefix, 4, true); stdio_io(client.input.value, const_cast<char*>(payload.data()), n, true);
+      unsigned char credit = 1; stdio_io(client.input.value, &credit, 1, true);
+      const auto relayed = parse(read_frame(client.output.value)); require(relayed.at("kind").string() == "header" && relayed.at("fixture").boolean());
+      // The v0 endpoint named by the record is never opened in capture mode.
+      client.eof(); require(client.wait() == 3); require(server.wait() == 0);
+      std::cerr << "capture relay passed\n";
     }
     for (const auto* mode : {"policy-prune", "policy-cap", "policy-duplicate", "policy-case-duplicate", "policy-junction"}) {
       if (!filter.empty() && filter != mode) continue;

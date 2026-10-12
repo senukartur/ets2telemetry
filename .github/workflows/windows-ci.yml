@@ -90,6 +90,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run native:test
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      # Needs the Release test plugin DLL, fake-SDK host and native broker built above. Synthetic only.
+      - name: CAP0 controlled capture chain
+        timeout-minutes: 3
+        run: |
+          npm run test:cap0-chain
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: SDK-independent console AddressSanitizer checks
         run: |
           $sdkVsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
@@ -101,7 +107,7 @@ jobs:
           Write-Output "ASan runtime: $sdkAsanBin"
           cmake -S native/telemetry-plugin -B native/telemetry-plugin/build-asan -G 'Visual Studio 17 2022' -A x64 -DETS2TELEMETRY_ASAN_TESTS=ON
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cmake --build native/telemetry-plugin/build-asan --config Release --target protocol-v0-asan-test sdk-adapter-asan-test snapshot-transport-asan-test snapshot-transport-test-plugin game-window-monitor-asan-test snapshot-transport-game-host-asan
+          cmake --build native/telemetry-plugin/build-asan --config Release --target protocol-v0-asan-test sdk-adapter-asan-test snapshot-transport-asan-test snapshot-transport-test-plugin game-window-monitor-asan-test snapshot-transport-game-host-asan capture-cap0-asan-test
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ctest --test-dir native/telemetry-plugin/build-asan -C Release --output-on-failure -R asan-contract
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

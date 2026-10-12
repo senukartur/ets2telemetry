@@ -112,11 +112,36 @@ Findings fixed instead of excepted: a function that assigned the automatic `$arg
 
 ## Runtime paths and diagnostics
 
-Resolve `%LOCALAPPDATA%` at runtime. The application root is `%LOCALAPPDATA%\ETS2Telemetry`; planned locations are `data\telemetry.sqlite`, `settings\`, `logs\`, `backups\`, and `plugins\` for project-owned plugin metadata. Binary installation has an independent Squirrel identity/root. The scaffold creates startup logs only, with a separate temporary SQLite probe. No production history, updater, migration, production backup, or uninstall deletion is implemented.
+Resolve `%LOCALAPPDATA%` at runtime. The application root is `%LOCALAPPDATA%\ETS2Telemetry`; planned locations are `data\telemetry.sqlite`, `settings\`, `logs\`, `backups\`, and `plugins\` for project-owned plugin metadata. Opt-in CAP0 evidence captures use the separate `captures\` directory. Binary installation has an independent Squirrel identity/root. The scaffold creates startup logs only, with a separate temporary SQLite probe. No production history, updater, migration, production backup, or uninstall deletion is implemented.
 
 Normal diagnostics use stable error codes. Opt-in diagnostic runs retain bounded error details and child output; see the recovery procedure below for file limits, privacy and paths. Startup has a 15-second deadline; the storage probe has 10 seconds; orderly service stop allows 3 seconds before forced termination and 5 seconds before failed application exit. These application timers require a responsive event loop, so the external watchdog provides a separate deadline.
 
 Squirrel lifecycle arguments are handled before service/window creation through electron-squirrel-startup. The [native ownership harness](../tests/windows/README.md) verified install, repair, local synthetic update, both installed worker/security smokes and uninstall with preserved owner files. Acceptance combines six normal operations with separately reviewed corrected Squirrel residue postconditions and exact test cleanup; the original failed wrapper report is retained. The synthetic installer version 0.1.1 retains application 0.1.0 bytes and does not test production migrations/releases. Uninstall retains the separate data root; optional owned-data deletion belongs to ET-018. Squirrel may leave its sealed helper binaries and .dead marker; the test reports that residue explicitly. Do not install/remove against pre-existing owner state through this fresh-install harness.
+
+## CAP0 evidence capture (CAP-01a)
+
+The [CAP0 contract](protocol/cap0.md) adds an opt-in, evidence-only capture path for owner-scheduled game sessions. It is off by default and has no renderer control. To request one capture interval, set the variables in the shell that launches the application, then select ETS2 or ATS:
+
+```powershell
+$env:ETS2TELEMETRY_CAPTURE = 'cap0'
+$env:ETS2TELEMETRY_CAPTURE_MINUTES = '10'          # optional, 1-60; default 10
+$env:ETS2TELEMETRY_CAPTURE_LABEL = 'ets2-sp-windowed' # optional manifest label
+npm run dev
+Remove-Item Env:ETS2TELEMETRY_CAPTURE, Env:ETS2TELEMETRY_CAPTURE_MINUTES, Env:ETS2TELEMETRY_CAPTURE_LABEL
+```
+
+The grant applies to the first verified ETS2/ATS selection of that launch only. Unit tests and the controlled chain below cover this activation path. The owner first used it through `npm run dev` in ETS2 single-player sessions on October 12, 2026; see [CAP-01a validation](validation/cap-01a.md#owner-game-sessions-october-12-2026). Packaged builds and the rest of the CAP-01 matrix have not exercised it. Raw output goes to `%LOCALAPPDATA%\ETS2Telemetry\captures\<captureSessionId>\` (`packets.ndjson` and `manifest.json`), never to `telemetry.sqlite`. Raw captures contain local identifiers and paths: never commit or upload them. Export a sanitized copy for review with `npm run capture:export -- <raw-capture-directory> <new-export-directory>`; the command builds `tools/capture-export` with Vite first.
+
+Native checks run in `npm run native:test` as `capture-cap0-*` (CTest) and in the native client test's `capture*` cases. The optional cross-package chain needs the native plugin and client Release builds and runs the tests-only fake-SDK host (`native/telemetry-plugin/build/cap0-host/Release/eurotrucks2.exe`), the test plugin DLL, the native broker and the TypeScript writer in isolated temporary directories:
+
+```powershell
+npm run native:configure
+npm run native:build
+npm run build
+npm run test:cap0-chain
+```
+
+It is not part of `npm test` because CI runs Vitest before the native build; Windows CI runs it as a separate bounded step after the native build. It is controlled synthetic evidence, not a game session.
 
 ## Official SDK acquisition
 

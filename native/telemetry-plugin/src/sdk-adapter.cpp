@@ -248,6 +248,29 @@ void Adapter::observe(ObservationKind kind, const char* group, const char* name,
   output = {}; output.kind = kind; output.group.assign(group); output.name.assign(name); output.index = index; output.callback_order = producer_.boundary_order; output.value = scalar(value);
   if (output.group.status != Availability::available || output.name.status != Availability::available) output.value.status = Availability::invalid;
 }
+bool Adapter::source_monotonic_ns(std::uint64_t& output) const noexcept {
+  LARGE_INTEGER now{};
+  if (!QueryPerformanceCounter(&now) || monotonic_frequency_ <= 0 || now.QuadPart < monotonic_origin_) return false;
+  const long double elapsed = static_cast<long double>(now.QuadPart - monotonic_origin_) * 1e9L / static_cast<long double>(monotonic_frequency_);
+  if (elapsed >= static_cast<long double>(UINT64_MAX)) return false;
+  output = static_cast<std::uint64_t>(elapsed); return true;
+}
+void Adapter::evidence(cap0::Kind kind, const char* id, const scs_named_value_t* attributes, bool attributes_expected) noexcept {
+  // CAP0 copies the same borrowed callback input already inspected above; it makes no SDK call.
+  auto* queue = evidence_.load(std::memory_order_acquire);
+  if (!queue || !queue->is_open()) return;
+  cap0::Context c;
+  c.kind = kind; c.id = id; c.attributes = attributes; c.attributes_expected = attributes_expected;
+  c.boundary_order = producer_.boundary_order; c.configuration_revision = producer_.state.configuration_revision;
+  c.monotonic_available = source_monotonic_ns(c.monotonic_ns);
+  c.frame_available = producer_.state.frame_available;
+  if (c.frame_available) { c.render_us = producer_.state.frame.render_time; c.simulation_us = producer_.state.frame.simulation_time; c.paused_simulation_us = producer_.state.frame.paused_simulation_time; }
+  const auto& game_time = producer_.state.game_time_minutes;
+  c.game_time_status = static_cast<cap0::Status>(game_time.status); c.game_time_minutes = game_time.value;
+  c.game_clock_id = producer_.state.game_clock_id.c_str();
+  c.simulation = producer_.state.simulation == Simulation::running ? cap0::Simulation::running : producer_.state.simulation == Simulation::paused ? cap0::Simulation::paused : cap0::Simulation::unavailable;
+  queue->capture(c);
+}
 void Adapter::copy_attributes(ObservationKind kind, const char* group, const scs_named_value_t* attributes) {
   // Empty event marker preserves the distinction between no event and an event with no attributes.
   observe(kind, group, "$event", SCS_U32_NIL, nullptr);
@@ -301,13 +324,19 @@ void Adapter::event(scs_event_t event_id, const void* info) {
   if (!initialized_ || producer_.exhausted || !next_order()) return;
   switch (event_id) {
     case SCS_TELEMETRY_EVENT_configuration:
-      if (info) configuration(*static_cast<const scs_telemetry_configuration_t*>(info)); else failure(); break;
+      if (info) {
+        const auto& config = *static_cast<const scs_telemetry_configuration_t*>(info);
+        configuration(config);
+        if (!producer_.exhausted) evidence(cap0::Kind::configuration, config.id, config.attributes, true);
+      } else { failure(); evidence(cap0::Kind::configuration, nullptr, nullptr, true); } break;
     case SCS_TELEMETRY_EVENT_gameplay:
-      if (info) { const auto& event_info = *static_cast<const scs_telemetry_gameplay_event_t*>(info); copy_attributes(ObservationKind::gameplay, event_info.id, event_info.attributes); } else failure(); break;
+      if (info) { const auto& event_info = *static_cast<const scs_telemetry_gameplay_event_t*>(info); copy_attributes(ObservationKind::gameplay, event_info.id, event_info.attributes); evidence(cap0::Kind::gameplay, event_info.id, event_info.attributes, true); }
+      else { failure(); evidence(cap0::Kind::gameplay, nullptr, nullptr, true); } break;
     case SCS_TELEMETRY_EVENT_started: case SCS_TELEMETRY_EVENT_paused:
       producer_.state.simulation = event_id == SCS_TELEMETRY_EVENT_started ? Simulation::running : Simulation::paused;
       if (!(consumer_.load(std::memory_order_acquire) & 1)) increment(producer_.continuity.offline_transitions);
-      observe(ObservationKind::lifecycle, "simulation", event_id == SCS_TELEMETRY_EVENT_started ? "started" : "paused", SCS_U32_NIL, nullptr); break;
+      observe(ObservationKind::lifecycle, "simulation", event_id == SCS_TELEMETRY_EVENT_started ? "started" : "paused", SCS_U32_NIL, nullptr);
+      evidence(cap0::Kind::lifecycle, event_id == SCS_TELEMETRY_EVENT_started ? "simulation.started" : "simulation.paused", nullptr, false); break;
     case SCS_TELEMETRY_EVENT_frame_start:
       observed_in_frame_.fill(false); in_frame_ = false;
       if (info) {
@@ -316,6 +345,9 @@ void Adapter::event(scs_event_t event_id, const void* info) {
         if ((frame.flags & SCS_TELEMETRY_FRAME_START_FLAG_timer_restart) || (producer_.state.frame_available && (frame.render_time < producer_.state.frame.render_time || frame.simulation_time < producer_.state.frame.simulation_time || frame.paused_simulation_time < producer_.state.frame.paused_simulation_time))) {
           clock_restart(); observe(ObservationKind::lifecycle, "timers", "restart", SCS_U32_NIL, nullptr);
           if (!(consumer_.load(std::memory_order_acquire) & 1)) increment(producer_.continuity.offline_transitions);
+          // Record the new frame times with the restart marker; prior values remain in earlier envelopes.
+          producer_.state.frame = frame; producer_.state.frame_available = true;
+          evidence(cap0::Kind::lifecycle, "timers.restart", nullptr, false);
         }
         producer_.state.frame = frame; producer_.state.frame_available = true;
       } else failure(); break;
@@ -339,6 +371,11 @@ void Adapter::channel(Field field, const scs_value_t* value) {
       clock_restart(); observe(ObservationKind::lifecycle, "game.time", "regression", SCS_U32_NIL, nullptr);
       if (!(consumer_.load(std::memory_order_acquire) & 1)) increment(producer_.continuity.offline_transitions);
       producer_.state.channels[i] = measurement(value, spec.type, spec.multiplier, spec.minimum, spec.maximum);
+      producer_.state.game_time_minutes = {};
+      producer_.state.game_time_minutes.status = producer_.state.channels[i].status;
+      if (producer_.state.game_time_minutes.status == Availability::available) producer_.state.game_time_minutes.value = value->value_u32.value;
+      // The envelope carries the regressed reading under the rotated game clock.
+      evidence(cap0::Kind::lifecycle, "game.time.regression", nullptr, false);
     }
     producer_.state.game_time_minutes = {};
     producer_.state.game_time_minutes.status = producer_.state.channels[i].status;

@@ -48,13 +48,22 @@ void write_policy(const std::wstring& directory,const OwnerSecurity& security,co
   const auto bytes=v0::detail::serialize(j); Handle f(CreateFileW((directory+L"\\service-policy.json").c_str(),GENERIC_WRITE,0,security.attributes(),CREATE_ALWAYS,FILE_FLAG_OPEN_REPARSE_POINT,nullptr));
   require(static_cast<bool>(f),"policy create"); DWORD written=0; require(WriteFile(f.get(),bytes.data(),static_cast<DWORD>(bytes.size()),&written,nullptr)&&written==bytes.size(),"policy write");
 }
+// await_startup() applies the product's fixed 1 s SDK-initialization budget and returns
+// StartupFailure::timeout when it expires; the worker itself never stores timeout. Cases that test
+// behavior after startup, not that budget, wait for the worker's actual startup result instead, so a
+// loaded host (hosted ASan CI) cannot turn a slow but successful startup into a false failure.
+StartupFailure settled_startup(Server& server) {
+  const auto started=GetTickCount64(); auto result=server.await_startup();
+  while(result==StartupFailure::timeout && GetTickCount64()-started<10000) result=server.await_startup();
+  std::cout<<"startupMs="<<GetTickCount64()-started<<'\n'; return result;
+}
 struct Fixture {
   UserIdentity user=current_user(); OwnerSecurity security{user.sid}; PeerIdentity self=inspect_peer(GetCurrentProcessId());
   Host host; std::unique_ptr<sdk::Adapter> adapter=std::make_unique<sdk::Adapter>(); Server server{*adapter}; std::wstring directory;
   Fixture() { WCHAR temporary[MAX_PATH]{}; require(GetTempPathW(MAX_PATH,temporary)>0,"temp path"); GUID id{}; CoCreateGuid(&id); WCHAR label[40]{}; StringFromGUID2(id,label,40); directory=std::wstring(temporary)+L"ET004a-"+label; security.ensure_directory(directory);
     auto p=host.params(); require(adapter->initialize(SCS_TELEMETRY_VERSION_1_01,&p)==SCS_RESULT_ok,"SDK initialize"); write_policy(directory,security,user,self); }
   ~Fixture() { server.stop(); adapter->shutdown(); DeleteFileW((directory+L"\\service-policy.json").c_str()); RemoveDirectoryW(directory.c_str()); }
-  void start() { require(server.start(directory),"worker start"); require(until([&]{return server.status()==Status::listening;}),"listening"); }
+  void start() { require(server.start(directory),"worker start"); require(settled_startup(server)==StartupFailure::none,"worker startup"); require(until([&]{return server.status()==Status::listening;}),"listening"); }
   Handle connect() { Handle h; require(until([&]{ h.reset(CreateFileW(server.endpoint().c_str(),GENERIC_READ|GENERIC_WRITE,0,nullptr,OPEN_EXISTING,FILE_FLAG_OVERLAPPED,nullptr)); return static_cast<bool>(h); }),"client connect"); return h; }
 };
 bool io(HANDLE pipe,bool read,std::uint8_t* bytes,DWORD count,DWORD& transferred,DWORD deadline=2000) {
@@ -136,7 +145,7 @@ void accept_disconnect() {
   }
   for(auto mode:{HookState::Mode::accept_immediate,HookState::Mode::accept_completion}) {
     HookState hooks; Fixture f; hooks.mode=mode; hooks.injected=mode==HookState::Mode::accept_immediate?ERROR_BROKEN_PIPE:ERROR_NO_DATA; hooks.enable();
-    require(f.server.start(f.directory),"injected disconnect worker start"); require(f.server.await_startup()==StartupFailure::none,"injected disconnect startup");
+    require(f.server.start(f.directory),"injected disconnect worker start"); require(settled_startup(f.server)==StartupFailure::none,"injected disconnect startup");
     Handle departed; if(mode==HookState::Mode::accept_completion) {
       require(WaitForSingleObject(hooks.ready.get(),2000)==WAIT_OBJECT_0,"overlapped accept pending before connection"); departed=f.connect();
     }
@@ -148,7 +157,7 @@ void accept_disconnect() {
 void accept_failure() {
   for(auto mode:{HookState::Mode::accept_immediate,HookState::Mode::accept_completion}) {
     HookState hooks; Fixture f; hooks.mode=mode; hooks.injected=mode==HookState::Mode::accept_completion?ERROR_OPERATION_ABORTED:ERROR_ACCESS_DENIED; hooks.enable();
-    require(f.server.start(f.directory),"unknown accept worker starts"); require(f.server.await_startup()==StartupFailure::none,"unknown accept startup succeeds");
+    require(f.server.start(f.directory),"unknown accept worker starts"); require(settled_startup(f.server)==StartupFailure::none,"unknown accept startup succeeds");
     if(mode==HookState::Mode::accept_completion)
       require(WaitForSingleObject(hooks.ready.get(),2000)==WAIT_OBJECT_0,"failed overlapped accept established");
     require(until([&]{return f.server.status()==Status::failed;}),"unexpected accept failure reported as failed");
@@ -374,7 +383,7 @@ void window_binding() {
   require(monitor.start("eut2",identity.identity.plugin_session_id.c_str()),"actual named host accepted by monitor");
   require(until([&]{return monitor.latest().status==window::Status::available;}),"real window geometry observed");
   f.host.event(SCS_TELEMETRY_EVENT_started); f.host.event(SCS_TELEMETRY_EVENT_paused); f.host.frame(10);
-  require(f.server.start(f.directory,&monitor)&&f.server.await_startup()==StartupFailure::none,"provider-bound server startup");
+  require(f.server.start(f.directory,&monitor)&&settled_startup(f.server)==StartupFailure::none,"provider-bound server startup");
   auto client=f.connect();send(client.get(),framed(hello_payload));Receiver receiver;receiver.read(client.get(),2);
   require(receiver.messages[1].state->window.value.has_value(),"checkpoint carries physical window");
   const auto capture=receiver.messages[1].capture.monotonic_ns; const auto generation=monitor.latest().window_generation;

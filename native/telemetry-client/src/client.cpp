@@ -3,6 +3,7 @@
 #include <sddl.h>
 #include <bcrypt.h>
 #include "protocol-json.hpp"
+#include "capture-hello.hpp"
 #include <algorithm>
 #include <filesystem>
 #include <memory>
@@ -313,7 +314,9 @@ int wmain(int argc, wchar_t** argv) {
   test_trace("entry");
   Stage stage;
   try {
-    if (argc != 5 || std::wstring(argv[1]) != L"--game" || std::wstring(argv[3]) != L"--discovery-dir") fail();
+    // CAP0 evidence capture is a separate explicit mode: distinct endpoint, receipt marker and hello.
+    const bool capture = argc == 7 && std::wstring(argv[5]) == L"--capture" && std::wstring(argv[6]) == L"cap0";
+    if ((argc != 5 && !capture) || std::wstring(argv[1]) != L"--game" || std::wstring(argv[3]) != L"--discovery-dir") fail();
     const auto game = utf8(argv[2]); if (game != "ets2" && game != "ats") fail();
     stage = "identity"; test_trace("current-identity-start"); Identity self(GetCurrentProcess()); test_trace("current-identity-done");
     stage = "directory"; const fs::path directory(argv[4]); if (!directory.is_absolute()) fail();
@@ -355,19 +358,24 @@ int wmain(int argc, wchar_t** argv) {
     const auto expectedCreation = v0::parse_uint64(record.at("processCreationTime"));
     const auto endpoint = "\\\\.\\pipe\\ETS2Telemetry-" + game + "-v0-" + self.userTag + "-" + std::to_string(self.session) + "-" + record.at("processInstanceId").string();
     if (record.at("pipeName").string() != endpoint) fail();
+    // The capture endpoint is keyed to the same verified process instance and its plugin session.
+    const auto connectTo = capture ? "\\\\.\\pipe\\ETS2Telemetry-" + game + "-cap0-" + self.userTag + "-" + std::to_string(self.session) + "-" + record.at("processInstanceId").string() + "-" + record.at("pluginSessionId").string() : endpoint;
     auto& process = *selectedProcess;
-    stage = "connected-peer"; if (!WaitNamedPipeW(wide(endpoint).c_str(), 250)) {const auto error = GetLastError(); if (error == ERROR_FILE_NOT_FOUND || error == ERROR_SEM_TIMEOUT) throw Disconnected(); pipe_failed(error);}
-    const auto rawPipe = CreateFileW(wide(endpoint).c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
+    stage = "connected-peer"; if (!WaitNamedPipeW(wide(connectTo).c_str(), 250)) {const auto error = GetLastError(); if (error == ERROR_FILE_NOT_FOUND || error == ERROR_SEM_TIMEOUT) throw Disconnected(); pipe_failed(error);}
+    const auto rawPipe = CreateFileW(wide(connectTo).c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
     if (rawPipe == INVALID_HANDLE_VALUE) {const auto error = GetLastError(); if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PIPE_BUSY) throw Disconnected(); pipe_failed(error);}
     Handle pipe(rawPipe);
     ULONG actualPid = 0; if (!GetNamedPipeServerProcessId(pipe.value, &actualPid)) pipe_failed(GetLastError()); if (actualPid != pid) fail();
     auto verify = [&] {const auto waited = WaitForSingleObject(process.value, 0); if (waited == WAIT_OBJECT_0) throw Disconnected(); if (waited != WAIT_TIMEOUT) fail(); Identity fresh(process.value); if (fresh.sid != self.sid || fresh.session != self.session || creation(process.value) != expectedCreation) fail(); ULONG current = 0; if (!GetNamedPipeServerProcessId(pipe.value, &current)) pipe_failed(GetLastError()); if (current != pid) fail();};
     verify();
     Json source{Json::Object{{"game", Json{game}}, {"processId", Json{static_cast<double>(pid)}}, {"windowsSessionId", Json{static_cast<double>(self.session)}}, {"processInstanceId", record.at("processInstanceId")}, {"pluginSessionId", record.at("pluginSessionId")}, {"origin", Json{std::string("game")}}}};
-    stage = "authority-receipt"; receipt(Json{Json::Object{{"type", Json{std::string("authority")}}, {"schemaVersion", Json{1.0}}, {"source", source}, {"processCreationTime", record.at("processCreationTime")}, {"userTag", Json{self.userTag}}}});
+    Json::Object authority{{"type", Json{std::string("authority")}}, {"schemaVersion", Json{1.0}}, {"source", source}, {"processCreationTime", record.at("processCreationTime")}, {"userTag", Json{self.userTag}}};
+    if (capture) authority["evidence"] = Json{std::string("cap0")};
+    stage = "authority-receipt"; receipt(Json{authority});
     stage = "hello"; unsigned char prefix[4]; stdio_io(GetStdHandle(STD_INPUT_HANDLE), prefix, 4, false); const auto helloLength = frame_length(prefix); if (!helloLength || helloLength > 4096) fail();
     std::vector<unsigned char> hello(helloLength + 4); std::copy(prefix, prefix + 4, hello.begin()); stdio_io(GetStdHandle(STD_INPUT_HANDLE), hello.data() + 4, helloLength, false);
-    const auto helloMessage = v0::decode_payload(std::string(reinterpret_cast<char*>(hello.data() + 4), helloLength)); v0::negotiate(helloMessage);
+    const std::string helloPayload(reinterpret_cast<char*>(hello.data() + 4), helloLength);
+    if (capture) ets2telemetry::cap0::validate_hello(helloPayload); else v0::negotiate(v0::decode_payload(helloPayload));
     stage = "relay"; Credits credits;
     try {
     pipe_io(pipe.value, process.value, hello.data(), static_cast<DWORD>(hello.size()), true, credits.cancelled.value);
