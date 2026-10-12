@@ -1,5 +1,10 @@
 import type {LiveTelemetry, OverlayPresentation} from '../../../packages/contracts/src';
 
+function displaySpeed(value: number): string {
+  const rounded = value.toFixed(1);
+  return rounded === '-0.0' ? '0.0' : rounded;
+}
+
 /** Canonical v0 m/s and liters remain unchanged; only this display projection converts. */
 export function overlayPresentation(live: LiveTelemetry): OverlayPresentation {
   const observation = live.observation;
@@ -11,7 +16,7 @@ export function overlayPresentation(live: LiveTelemetry): OverlayPresentation {
   const state = observation?.state;
   return {
     source: ats ? 'ATS' : game === 'ets2' ? 'ETS2' : 'No game', origin: observation?.source.origin ?? 'none', status: live.status,
-    speed: current && state?.speed.available ? (state.speed.value * (ats ? 2.2369362920544 : 3.6)).toFixed(1) : '—',
+    speed: current && state?.speed.available ? displaySpeed(state.speed.value * (ats ? 2.2369362920544 : 3.6)) : '—',
     speedUnit: ats ? 'mph' : 'km/h',
     fuel: current && state?.fuel.available ? (state.fuel.value / (ats ? 3.785411784 : 1)).toFixed(1) : '—',
     fuelUnit: ats ? 'US gal' : 'L',

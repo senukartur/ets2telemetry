@@ -28,6 +28,39 @@ it('converts ETS2 and ATS defaults without changing canonical quantities, includ
   state.speed.value = 0; state.fuel.value = 0;
   expect(overlayPresentation(current)).toMatchObject({speed: '0.0', fuel: '0.0'});
 });
+it.each([
+  {game: 'ets2' as const, unit: 'km/h', below: 0.0136, above: 0.0142, reverse: '-7.2'},
+  {game: 'ats' as const, unit: 'mph', below: 0.0219, above: 0.0228, reverse: '-4.5'}
+])('shows rounded zero without a minus sign and preserves signed reverse speed in $game', ({game, unit, below, above, reverse}) => {
+  const current = live(), state = current.observation!.state;
+  current.selection = game; current.observation!.source.game = game;
+  // Values straddle 0.05 in each display unit, safely away from binary rounding ties.
+  const cases = [
+    {raw: -0.001, displayed: '0.0'},
+    {raw: -0, displayed: '0.0'},
+    {raw: 0, displayed: '0.0'},
+    {raw: -below, displayed: '0.0'},
+    {raw: -above, displayed: '-0.1'},
+    {raw: below, displayed: '0.0'},
+    {raw: above, displayed: '0.1'},
+    {raw: -2, displayed: reverse}
+  ];
+  for (const {raw, displayed} of cases) {
+    state.speed = {available: true, value: raw, unit: 'm/s'};
+    expect(overlayPresentation(current), `canonical speed ${String(raw)} m/s`).toMatchObject({
+      speed: displayed, speedUnit: unit, source: game.toUpperCase(), origin: 'game', status: 'connected', freshness: 'current'
+    });
+    expect(state.speed.value).toBe(raw);
+  }
+});
+it.each(['ets2', 'ats'] as const)('keeps unavailable and stale speed distinct from rounded zero in %s', game => {
+  const current = live(); current.selection = game; current.observation!.source.game = game;
+  current.observation!.state.speed = {available: false, reason: 'not-observed', unit: 'm/s'};
+  expect(overlayPresentation(current)).toMatchObject({speed: '—', origin: 'game', status: 'connected', freshness: 'current'});
+  current.observation!.state.speed = {available: true, value: -0.001, unit: 'm/s'};
+  current.fresh = false; current.status = 'stale';
+  expect(overlayPresentation(current)).toMatchObject({speed: '—', origin: 'game', status: 'stale', freshness: 'stale'});
+});
 it.each(['missing', 'stale', 'synthetic', 'wrong-game', 'disconnected'])('blanks untrusted or unavailable metrics: %s', fault => {
   const current = live();
   if (fault === 'missing') {current.observation!.state.speed = {available: false, reason: 'not-observed', unit: 'm/s'}; current.observation!.state.fuel = {available: false, reason: 'not-observed', unit: 'L'};}
