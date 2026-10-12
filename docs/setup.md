@@ -64,7 +64,7 @@ Rule exceptions, each with its reason:
 
 ## UI components (shadcn/ui)
 
-The main window uses [shadcn/ui](https://ui.shadcn.com/) with Tailwind CSS v4. shadcn/ui is not a runtime dependency: the CLI copies component source into `apps/desktop/src/components/ui`, where it is project code that is linted, typechecked and edited like any other module. The renderer bundle is built by Vite, so every UI package is a pinned dev dependency: tailwindcss and @tailwindcss/vite 4.3.3, tw-animate-css, radix-ui, class-variance-authority, lucide-react, cn (the class-name merge helper that generated components import) and @fontsource-variable/geist. The CLI is not installed; run it through npx.
+The main window uses [shadcn/ui](https://ui.shadcn.com/) with Tailwind CSS v4. shadcn/ui is not a runtime dependency: the CLI copies component source into `apps/desktop/src/components/ui`, where it is project code that is linted, typechecked and edited like any other module. The renderer bundle is built by Vite, so every UI package is a pinned dev dependency: tailwindcss and @tailwindcss/vite 4.3.3, tw-animate-css, radix-ui, class-variance-authority, lucide-react, cn (a Tailwind-aware class-name merge helper published by shadcn, MIT, repository shadcn-ui/cn, described as a drop-in replacement for clsx plus tailwind-merge; generated components import it directly and `apps/desktop/src/lib/utils.ts` re-exports it) and @fontsource-variable/geist. The CLI is not installed; run it through npx.
 
 Add a component from the repository root:
 
@@ -78,7 +78,7 @@ Constraints that are easy to break:
 
 - **Path alias.** `tsconfig.json` maps `@/*` to `apps/desktop/src/*` and `scripts/build.mjs` repeats it as a Vite alias; keep the two in step. The shadcn documentation tells you to add `baseUrl`, but TypeScript 7.0 removed that option (error TS5102). Use `paths` alone.
 - **Stylesheet typing.** `apps/desktop/src/css.d.ts` declares `*.css` modules. Without it, `import './index.css'` fails typecheck with TS2882.
-- **Content Security Policy.** `index.html` allows only `'self'` sources and no `data:`. The renderer build therefore sets `assetsInlineLimit: 0`, so small fonts and images stay separate files. Do not load fonts or images from the network.
+- **Content Security Policy.** `index.html` allows only `'self'` sources and no `data:`. The renderer build therefore sets `assetsInlineLimit: 0`, so small fonts and images stay separate files. Do not load fonts or images from the network. `scripts/build.mjs` also fails the build if the emitted renderer page or stylesheet embeds a `data:` URI.
 - **Lint.** Every `apps/desktop/src/**/*.tsx` file, including generated components, must pass the zero-warning ESLint run with the React Hooks rules in [Linting](#linting). Fix generated code that violates them in the component itself and note the change in the PR.
 - **Overlay.** `index.css` sets `body` to an opaque background, which would defeat the transparent overlay window. The overlay needs its own entry page and stylesheet that imports Tailwind utilities without the shadcn base layer.
 
