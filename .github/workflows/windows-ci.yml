@@ -90,6 +90,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run native:test
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      # Needs the Release test plugin DLL, fake-SDK host and native broker built above. Synthetic only.
+      - name: CAP0 controlled capture chain
+        timeout-minutes: 3
+        run: |
+          npm run test:cap0-chain
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: SDK-independent console AddressSanitizer checks
         run: |
           $sdkVsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
