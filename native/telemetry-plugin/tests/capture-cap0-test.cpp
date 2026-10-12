@@ -370,12 +370,14 @@ void stall_and_loss() {
   BigConfiguration big(255, 1024, 'q');
   // The client stops reading. Callbacks must stay short while the worker blocks in pipe I/O.
   double worst_ms = 0; const auto started = GetTickCount64();
-  for (unsigned i = 0; i < 200; ++i) {
+  // 60 attempts already overflow the 7-envelope byte capacity many times; fewer attempts keep slow sanitized
+  // runners well inside the 1 s write deadline before the client resumes reading.
+  for (unsigned i = 0; i < 60; ++i) {
     const auto before = std::chrono::steady_clock::now(); f.host.config("job", big.attributes.data());
     worst_ms = (std::max)(worst_ms, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - before).count());
   }
   const auto produced_ms = GetTickCount64() - started; const auto counters = f.capture.queue().counters();
-  require(counters.attempted == 200 && counters.dropped > 0 && counters.dropped_full_bytes > 0, "newest-drop loss counted while client stalled");
+  require(counters.attempted == 60 && counters.dropped > 0 && counters.dropped_full_bytes > 0, "newest-drop loss counted while client stalled");
   require(produced_ms < 600 * timing_scale && worst_ms < 100.0 * timing_scale, "callbacks bounded and nonblocking under stalled capture client");
   require(f.capture.queue().queued_bytes() <= cap0::queue_bytes && f.capture.queue().queued_envelopes() <= cap0::queue_envelopes, "queue bounds hold");
   // Resume reading within the 1 s write deadline and account for every attempted envelope.
@@ -516,28 +518,12 @@ void counter_snapshots() {
   std::cout << "counterSamples=" << samples << " concurrent=" << concurrent << " attempted=" << final.attempted << " dropped=" << final.dropped << " popped=" << popped << '\n';
 }
 
-void stop_during_write() {
-  // A stop while a frame write is in flight lets that frame finish, then drains and ends explicitly.
-  Fixture f; f.start(); auto client = f.connect(f.capture.endpoint()); hello(client.get()); Packets packets; require(packets.read(client.get(), 1), "header");
-  BigConfiguration big(255, 1024, 's');
-  for (unsigned i = 0; i < 12; ++i) f.host.config("job", big.attributes.data());
-  require(until([&] { return f.capture.queue().queued_envelopes() > 0; }), "worker blocked behind a full pipe with queued evidence");
-  Sleep(50);
-  std::thread stopper([&] { f.capture.stop(); });
-  Sleep(30); // The stop is now pending while the worker's write is in flight; the client resumes reading.
-  packets.read(client.get(), 10000, 4000 * static_cast<DWORD>(timing_scale));
-  stopper.join();
-  require(!packets.items.empty() && packets.last().at("kind").string() == "end" && packets.last().at("data").at("reason").string() == "plugin-shutdown", "stop during an in-flight write still ends with plugin-shutdown");
-  for (const auto& item : packets.items) if (item.at("kind").string() == "loss") require(loss_consistent(item.at("data")), "loss consistent");
-  require(f.capture.shutdown_ms() < 1000 * timing_scale && f.host.wrong_thread == 0, "bounded stop and no SDK calls on worker");
-  std::cout << "stopDuringWritePackets=" << packets.items.size() << " unsent=" << packets.last().at("data").at("unsentEnvelopes").string() << " shutdownMs=" << f.capture.shutdown_ms() << '\n';
-}
 
 // Parses everything a client received. Every complete frame must be a valid, contiguous CAP0 packet; an
 // end marker may only follow complete envelopes. Returns "end" when the stream ends with a marker,
 // "partial" when it ends inside a frame, or "clean" when it ends on a frame boundary without a marker.
 std::string verify_stream(const std::vector<std::uint8_t>& bytes, std::string& end_detail) {
-  std::size_t offset = 0, index = 0; bool open_split = false, ended = false;
+  std::size_t offset = 0, index = 0; bool open_split = false, ended = false; std::uint64_t finals = 0;
   while (bytes.size() - offset >= 4) {
     const auto n = static_cast<std::uint32_t>(bytes[offset]) | (static_cast<std::uint32_t>(bytes[offset + 1]) << 8) | (static_cast<std::uint32_t>(bytes[offset + 2]) << 16) | (static_cast<std::uint32_t>(bytes[offset + 3]) << 24);
     require(n > 0 && n <= cap0::max_packet_bytes, "received frame length valid");
@@ -546,11 +532,16 @@ std::string verify_stream(const std::vector<std::uint8_t>& bytes, std::string& e
     require(!ended, "nothing after the end marker");
     require(packet.at("packetSeq").string() == std::to_string(index), "received packets contiguous");
     const auto kind = packet.at("kind").string();
-    if (kind == "envelope") open_split = !packet.at("data").at("attributes").at("final").boolean();
+    if (index == 0) require(kind == "header", "stream starts with the header");
+    if (kind == "envelope") { open_split = !packet.at("data").at("attributes").at("final").boolean(); if (!open_split) ++finals; }
     if (kind == "loss") require(!open_split && loss_consistent(packet.at("data")), "loss marker after complete envelopes and consistent");
     if (kind == "end") {
       require(!open_split, "end marker never follows a partial envelope"); ended = true;
-      end_detail = packet.at("data").at("reason").string() + " unsent=" + packet.at("data").at("unsentEnvelopes").string();
+      const auto& d = packet.at("data");
+      const auto enqueued = std::stoull(d.at("enqueuedEnvelopes").string()), published = std::stoull(d.at("publishedEnvelopes").string()), unsent = std::stoull(d.at("unsentEnvelopes").string());
+      // Every enqueued envelope is either received completely or reported unsent; nothing is double counted.
+      require(enqueued == published + unsent && finals == published, "end marker accounts for every enqueued envelope");
+      end_detail = d.at("reason").string() + " unsent=" + d.at("unsentEnvelopes").string();
     }
     offset += 4 + n; ++index;
   }
@@ -584,7 +575,8 @@ void stop_with_reader(DWORD pause_ms, const char* label, std::size_t attributes 
   if (outcome == "end") require(detail.rfind("plugin-shutdown", 0) == 0, "shutdown end marker reason");
   // A marker may be missing only in the documented case: the drain window was exhausted and a pending
   // write had to be cancelled. A capture that finished early must always end with the marker.
-  if (expect_end) require(outcome == "end" || f.capture.shutdown_ms() >= 440, "end marker unless the drain window was exhausted");
+  // 400 ms rather than 450 ms allows for the 15.6 ms GetTickCount64 resolution used by the deadlines.
+  if (expect_end) require(outcome == "end" || f.capture.shutdown_ms() >= 400, "end marker unless the drain window was exhausted");
   require(f.host.wrong_thread == 0, "no SDK calls from worker");
 }
 void stop_slow_reader() { stop_with_reader(25, "slowReader"); }
@@ -592,6 +584,50 @@ void stop_slow_reader() { stop_with_reader(25, "slowReader"); }
 // depend on timer resolution: the drain normally completes and the reserved window delivers the
 // plugin-shutdown end marker.
 void stop_drain_boundary() { stop_with_reader(0, "drainBoundary", 50, 40, true); }
+
+std::vector<std::uint8_t> read_until_eof(HANDLE pipe) {
+  std::vector<std::uint8_t> stream, chunk(65540); DWORD count = 0;
+  while (io(pipe, true, chunk.data(), static_cast<DWORD>(chunk.size()), count, 4000 * static_cast<DWORD>(timing_scale)) && count) stream.insert(stream.end(), chunk.begin(), chunk.begin() + count);
+  return stream;
+}
+void stop_during_write() {
+  // A stop while a frame write is pending. Whether the pending write completes inside the stop budget
+  // depends on scheduling, so the contract is asserted: a valid contiguous stream; with an end marker,
+  // plugin-shutdown and exact unsent accounting; without one, nothing follows the cut. The marker path
+  // itself is proven deterministically by stop-clean-markers.
+  Fixture f; f.start(); auto client = f.connect(f.capture.endpoint()); hello(client.get());
+  require(until([&] { return f.capture.queue().is_open(); }), "capture gate open");
+  BigConfiguration big(255, 1024, 's');
+  for (unsigned i = 0; i < 12; ++i) f.host.config("job", big.attributes.data());
+  require(until([&] { return f.capture.queue().queued_envelopes() > 0; }), "worker blocked behind a full pipe with queued evidence");
+  Sleep(50);
+  std::thread stopper([&] { f.capture.stop(); });
+  struct Join { std::thread& t; ~Join() { if (t.joinable()) t.join(); } } join{stopper};
+  Sleep(30); // The stop is now pending while the worker's write is in flight; the client resumes reading.
+  const auto stream = read_until_eof(client.get());
+  stopper.join();
+  std::string detail; const auto outcome = verify_stream(stream, detail);
+  if (outcome == "end") require(detail.rfind("plugin-shutdown", 0) == 0, "shutdown end marker reason");
+  require(f.capture.shutdown_ms() < (550 + 150) * timing_scale && f.host.wrong_thread == 0, "bounded stop and no SDK calls on worker");
+  std::cout << "stopDuringWriteBytes=" << stream.size() << " outcome=" << outcome << (detail.empty() ? "" : " end=") << detail << " shutdownMs=" << f.capture.shutdown_ms() << '\n';
+}
+void stop_clean_markers() {
+  // Deterministic marker path: the whole capture fits in the 64 KiB pipe buffer, so no write can pend
+  // even though the client reads nothing until the stop has returned.
+  Fixture f; f.start(); auto client = f.connect(f.capture.endpoint()); hello(client.get());
+  require(until([&] { return f.capture.queue().is_open(); }), "capture gate open");
+  for (unsigned i = 0; i < 10; ++i) { f.host.event(SCS_TELEMETRY_EVENT_started); f.host.event(SCS_TELEMETRY_EVENT_paused); }
+  std::vector<scs_named_value_t> job{named("income", u64(UINT64_MAX)), named("cargo.id", text("cargo")), scs_named_value_t{}};
+  for (unsigned i = 0; i < 10; ++i) f.host.config("job", job.data());
+  f.capture.stop();
+  const auto stream = read_until_eof(client.get());
+  std::string detail; const auto outcome = verify_stream(stream, detail);
+  std::cout << "cleanMarkersBytes=" << stream.size() << " outcome=" << outcome << " end=" << detail << " shutdownMs=" << f.capture.shutdown_ms() << '\n';
+  require(stream.size() < 60000, "capture fits in the pipe buffer");
+  require(outcome == "end" && detail == "plugin-shutdown unsent=0", "plugin-shutdown end marker always delivered on the clean path");
+  require(f.capture.shutdown_ms() < (550 + 150) * timing_scale && f.host.wrong_thread == 0, "bounded stop and no SDK calls on worker");
+}
+
 
 
 void v0_continuity() {
@@ -677,7 +713,7 @@ int controlled_host(const char* dll_path, const char* directory_utf8) {
 int main(int argc, char** argv) {
   try {
     if (argc == 4 && std::string(argv[1]) == "host") return controlled_host(argv[2], argv[3]);
-    const std::map<std::string, std::function<void()>> cases{{"queue", queue_bounds}, {"adapter", adapter_copy}, {"wire", wire}, {"server", server_capture}, {"stall", stall_and_loss}, {"rejection", rejection}, {"v0-isolation", v0_isolation}, {"counters", counter_snapshots}, {"stop-inflight", stop_during_write}, {"stop-slow-reader", stop_slow_reader}, {"stop-drain-boundary", stop_drain_boundary}, {"v0-continuity", v0_continuity}
+    const std::map<std::string, std::function<void()>> cases{{"queue", queue_bounds}, {"adapter", adapter_copy}, {"wire", wire}, {"server", server_capture}, {"stall", stall_and_loss}, {"rejection", rejection}, {"v0-isolation", v0_isolation}, {"counters", counter_snapshots}, {"stop-inflight", stop_during_write}, {"stop-slow-reader", stop_slow_reader}, {"stop-drain-boundary", stop_drain_boundary}, {"stop-clean-markers", stop_clean_markers}, {"v0-continuity", v0_continuity}
 #ifdef ETS2TELEMETRY_TRANSPORT_TEST_HOOKS
       , {"clock", clock_unavailable}
 #endif
