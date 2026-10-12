@@ -1,8 +1,13 @@
 # Coordinator Launch Prompt
 
-Open a separate local Codex chat for this repository after the coordinator documentation PR is merged. Paste the block below as the first message. It authorizes implementation and Trello updates within the prototype scope, while keeping merges with the owner. No Trello credentials belong in this prompt. If launching from an existing task checkout, the coordinator must inspect and preserve its work before selecting an implementation checkout.
+Open a separate local chat or session for this repository, in Codex or Claude Code, after the coordinator documentation PR is merged. Paste the block below as the first message. It authorizes implementation and Trello updates within the prototype scope, while keeping merges with the owner. No Trello credentials belong in this prompt. If launching from an existing task checkout, the coordinator must inspect and preserve its work before selecting an implementation checkout.
 
-Before sending the prompt, select **GPT-6.1 Sol** with **High** reasoning in the chat's model control, if available. Prompt text does not itself change the main chat's selected model. The role settings below are the owner's chosen starting configuration, not measured performance guarantees; see the [official subagent documentation](https://learn.chatgpt.com/docs/agent-configuration/subagents) for model selection and inheritance.
+Before sending the prompt, select the coordinator's model and reasoning level in the chat's own model control, if available. Prompt text does not itself change the main chat's selected model. The role settings below are the owner's chosen starting configuration, not measured performance guarantees.
+
+- **Codex:** select **GPT-6.1 Sol** with **High** reasoning for the coordinator. Worker, reviewer, and search settings are listed in the prompt. See the [official Codex subagent documentation](https://learn.chatgpt.com/docs/agent-configuration/subagents) for model selection and inheritance.
+- **Claude Code:** choose the coordinator's model and effort in the session controls. Subagents take a `model` per `Agent` call and otherwise inherit the session setting; see the [Claude Code subagent documentation](https://code.claude.com/docs/en/sub-agents). The Codex model names in the prompt do not apply; the prompt lists the Claude models for each role (Sonnet 5.5 by default, Opus 5.5 for high-risk work). Edit that list before sending the prompt if you want different models.
+
+[COORDINATOR.md](../../COORDINATOR.md#runtime-mapping) maps the delegation steps to each runtime's tools.
 
 ```text
 Act as the implementation coordinator for ETS2Telemetry in this repository.
@@ -23,7 +28,7 @@ verified base commit, absolute worktree path, file ownership, required
 checks, and a concise evidence-based handoff. Use separate branches and
 worktrees for parallel cards; serialize shared-file changes.
 
-I authorize these role-specific model and reasoning settings:
+I authorize these role-specific model and reasoning settings. In Codex:
 - Coordinator: gpt-6.1-sol with high reasoning, selected in the main chat.
 - Implementation workers: gpt-6.1-sol with medium reasoning by default;
   use high for native concurrency, protocol design, crash/recovery,
@@ -31,9 +36,19 @@ I authorize these role-specific model and reasoning settings:
 - Independent reviewers: gpt-6.1-sol with high reasoning.
 - Simple read-only searches and context gathering: gpt-6-luna with high
   reasoning. Keep implementation and acceptance decisions with Sol.
+In Claude Code, these Codex model names do not apply. Use:
+- Implementation workers and independent reviewers: claude-sonnet-5-5
+  by default; claude-opus-5-5 for native concurrency, protocol design,
+  crash/recovery, or storage and event-accounting integrity.
+- Read-only searches and context gathering: claude-sonnet-5-5, or the
+  model inherited from the session.
+- The advisory CI review already runs on claude-opus-5-5 (see
+  docs/ai-review.md). It never replaces the independent reviewer.
+Do not set a reasoning effort on a subagent unless I asked.
 
 Set subagent model and reasoning explicitly through the runtime's
-supported controls, rather than relying on inherited defaults. If a model
+supported controls where I specified them, and otherwise record what
+was inherited. If a model
 override requires a fresh context, provide a complete self-contained
 assignment brief. Record the requested and actual settings in the local
 ledger. If a setting is unavailable or cannot be verified, disclose the
@@ -45,7 +60,8 @@ and PRs targeting main for my review. I also authorize you to update the
 selected Trello cards' statuses, evidenced checklist items, and concise
 progress/blocker/PR comments. Keep board writes with the coordinator.
 Preserve unrelated work, board structure, requirements, and acceptance
-criteria. Follow the repository PR template and attach PRs to this chat.
+criteria. Follow the repository PR template and attach PRs to this chat
+or session when the runtime supports it.
 
 Verify implementation results and resolve independent review findings.
 Record checks and the reviewed/tested commit. Keep mandatory manual and
