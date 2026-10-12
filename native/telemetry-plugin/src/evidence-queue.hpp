@@ -86,6 +86,9 @@ class EvidenceQueue final {
  private:
   struct Slot { std::uint32_t offset = 0, size = 0, charge = 0; };
   void drop(std::uint64_t seq, std::uint64_t bytes, bool slots, std::uint64_t monotonic_ns, bool monotonic_available) noexcept;
+  void begin_counters() noexcept;
+  void end_counters() noexcept;
+  std::atomic<std::uint64_t> version_{0};
   std::unique_ptr<unsigned char[]> arena_;
   std::array<Slot, queue_envelopes> slots_{};
   std::atomic<bool> open_{false};

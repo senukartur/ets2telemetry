@@ -162,17 +162,27 @@ void EvidenceQueue::close() noexcept {
   // copying. The section is bounded by the attribute/string caps and never waits.
   while (in_capture_.load(std::memory_order_seq_cst)) YieldProcessor();
 }
+// Seqlock writer: the single SDK producer publishes every counter change of one attempt as one
+// version. It never waits; only the worker's counters() read retries across a concurrent write.
+void EvidenceQueue::begin_counters() noexcept {
+  version_.store(version_.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed);
+  std::atomic_thread_fence(std::memory_order_release);
+}
+void EvidenceQueue::end_counters() noexcept { version_.store(version_.load(std::memory_order_relaxed) + 1, std::memory_order_release); }
 void EvidenceQueue::drop(std::uint64_t seq, std::uint64_t bytes, bool slots, std::uint64_t monotonic_ns, bool monotonic_available) noexcept {
+  begin_counters();
+  attempted_.store(seq, std::memory_order_relaxed);
   saturating_add(dropped_, 1); saturating_add(dropped_bytes_, bytes); saturating_add(slots ? dropped_slots_ : dropped_capacity_, 1);
+  // The last-drop sequence and time are one pair: a drop without a clock clears the time.
   last_dropped_seq_.store(seq, std::memory_order_relaxed);
-  if (monotonic_available) { last_drop_ns_.store(monotonic_ns, std::memory_order_relaxed); last_drop_available_.store(true, std::memory_order_relaxed); }
+  last_drop_ns_.store(monotonic_available ? monotonic_ns : 0, std::memory_order_relaxed); last_drop_available_.store(monotonic_available, std::memory_order_relaxed);
+  end_counters();
   if (pending_drops_ != UINT64_MAX) ++pending_drops_;
 }
 void EvidenceQueue::capture(const Context& context) noexcept {
   in_capture_.fetch_add(1, std::memory_order_seq_cst);
   if (!open_.load(std::memory_order_seq_cst)) { in_capture_.fetch_sub(1, std::memory_order_release); return; }
-  const auto seq = attempted_.load(std::memory_order_relaxed) == UINT64_MAX ? UINT64_MAX : attempted_.load(std::memory_order_relaxed) + 1;
-  attempted_.store(seq, std::memory_order_relaxed);
+  const auto previous = attempted_.load(std::memory_order_relaxed), seq = previous == UINT64_MAX ? UINT64_MAX : previous + 1;
   const auto size = encoded_size(context);
   const auto tail = tail_.load(std::memory_order_relaxed), head = head_.load(std::memory_order_acquire);
   auto used = used_.load(std::memory_order_acquire);
@@ -189,7 +199,8 @@ void EvidenceQueue::capture(const Context& context) noexcept {
       slots_[tail % queue_envelopes] = {static_cast<std::uint32_t>(offset), written, static_cast<std::uint32_t>(charge)};
       write_ = offset + size == queue_bytes ? 0 : offset + size;
       used_.fetch_add(charge, std::memory_order_acq_rel);
-      pending_drops_ = 0; saturating_add(enqueued_, 1);
+      pending_drops_ = 0;
+      begin_counters(); attempted_.store(seq, std::memory_order_relaxed); saturating_add(enqueued_, 1); end_counters();
       tail_.store(tail + 1, std::memory_order_release);
     }
   }
@@ -236,11 +247,20 @@ bool EvidenceQueue::pop(Envelope& output) {
   output = std::move(e); return true;
 }
 Counters EvidenceQueue::counters() const noexcept {
+  // Seqlock reader: retry until one producer version was read completely, so every snapshot satisfies
+  // attempted == enqueued + dropped and dropped == queue-full + bytes-full drops.
   Counters c;
-  c.attempted = attempted_.load(std::memory_order_relaxed); c.enqueued = enqueued_.load(std::memory_order_relaxed); c.dequeued = dequeued_.load(std::memory_order_relaxed);
-  c.dropped = dropped_.load(std::memory_order_relaxed); c.dropped_bytes = dropped_bytes_.load(std::memory_order_relaxed);
-  c.dropped_full_slots = dropped_slots_.load(std::memory_order_relaxed); c.dropped_full_bytes = dropped_capacity_.load(std::memory_order_relaxed);
-  c.last_drop_available = last_drop_available_.load(std::memory_order_relaxed); c.last_dropped_seq = last_dropped_seq_.load(std::memory_order_relaxed); c.last_drop_monotonic_ns = last_drop_ns_.load(std::memory_order_relaxed);
+  for (;;) {
+    const auto before = version_.load(std::memory_order_acquire);
+    if (before & 1) { YieldProcessor(); continue; }
+    c.attempted = attempted_.load(std::memory_order_relaxed); c.enqueued = enqueued_.load(std::memory_order_relaxed);
+    c.dropped = dropped_.load(std::memory_order_relaxed); c.dropped_bytes = dropped_bytes_.load(std::memory_order_relaxed);
+    c.dropped_full_slots = dropped_slots_.load(std::memory_order_relaxed); c.dropped_full_bytes = dropped_capacity_.load(std::memory_order_relaxed);
+    c.last_drop_available = last_drop_available_.load(std::memory_order_relaxed); c.last_dropped_seq = last_dropped_seq_.load(std::memory_order_relaxed); c.last_drop_monotonic_ns = last_drop_ns_.load(std::memory_order_relaxed);
+    std::atomic_thread_fence(std::memory_order_acquire);
+    if (version_.load(std::memory_order_relaxed) == before) break;
+  }
+  c.dequeued = dequeued_.load(std::memory_order_relaxed);
   return c;
 }
 std::size_t EvidenceQueue::queued_envelopes() const noexcept {
