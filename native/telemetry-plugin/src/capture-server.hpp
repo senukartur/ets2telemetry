@@ -39,8 +39,9 @@ class CaptureServer final {
   enum class StopMode { cancel, grace, ignore };
   struct ClockUnavailable : std::runtime_error { ClockUnavailable() : std::runtime_error("capture-clock-unavailable") {} };
   bool wait_io(HANDLE pipe, OVERLAPPED&, DWORD& transferred, ULONGLONG deadline, StopMode);
-  // `sent` (optional) reports bytes transferred, so a cancelled write can be told apart from a partial frame.
-  bool write(HANDLE pipe, const std::string& payload, ULONGLONG deadline, StopMode, DWORD* sent = nullptr);
+  // `not_issued` (optional) is true only when nothing was handed to the pipe: the deadline had passed or
+  // WriteFile failed immediately. A pending write that was cancelled is never treated as clean.
+  bool write(HANDLE pipe, const std::string& payload, ULONGLONG deadline, StopMode, bool* not_issued = nullptr);
   std::uint64_t stamp() const;
   // One shutdown budget per stop, measured from when the worker first observes it: writes in flight
   // and the drain share the window up to (total - marker); loss and end markers must finish by total.
