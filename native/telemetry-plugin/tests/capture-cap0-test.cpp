@@ -35,6 +35,14 @@ void require(bool condition, const char* message) { ++assertions; if (!condition
 bool until(const std::function<bool()>& predicate, DWORD ms = 3000) {
   const auto end = GetTickCount64() + ms; do { if (predicate()) return true; Sleep(2); } while (GetTickCount64() < end); return false;
 }
+// await_startup() applies the product's fixed 1 s SDK-initialization budget and returns timeout when it
+// expires; the worker never stores timeout. Cases that test behavior after startup wait for the actual
+// startup result instead, bounded at 10 s, so a loaded host cannot fail a slow but successful startup.
+transport::StartupFailure settled_startup(transport::Server& server) {
+  const auto started = GetTickCount64(); auto result = server.await_startup();
+  while (result == transport::StartupFailure::timeout && GetTickCount64() - started < 10000) result = server.await_startup();
+  std::cout << "startupMs=" << GetTickCount64() - started << '\n'; return result;
+}
 // Fake official SDK host. Every SDK API entry records whether it ran on the SDK caller thread.
 struct Host {
   static Host* active;
@@ -106,7 +114,9 @@ bool io(HANDLE pipe, bool read, std::uint8_t* bytes, DWORD count, DWORD& transfe
   Handle event(CreateEventW(nullptr, TRUE, FALSE, nullptr)); OVERLAPPED op{}; op.hEvent = event.get();
   const auto ok = read ? ReadFile(pipe, bytes, count, &transferred, &op) : WriteFile(pipe, bytes, count, &transferred, &op);
   if (ok) return true; if (GetLastError() != ERROR_IO_PENDING) return false;
-  if (WaitForSingleObject(event.get(), deadline) != WAIT_OBJECT_0) { CancelIoEx(pipe, &op); GetOverlappedResult(pipe, &op, &transferred, TRUE); return false; }
+  // An operation can complete between the deadline and the cancellation. Its bytes were then consumed,
+  // so report them; dropping them would desynchronize the caller's frame decoder.
+  if (WaitForSingleObject(event.get(), deadline) != WAIT_OBJECT_0) { CancelIoEx(pipe, &op); return GetOverlappedResult(pipe, &op, &transferred, TRUE) != FALSE; }
   return GetOverlappedResult(pipe, &op, &transferred, FALSE) != FALSE;
 }
 void send(HANDLE h, const std::vector<std::uint8_t>& bytes) { DWORD written = 0; auto copy = bytes; require(io(h, false, copy.data(), static_cast<DWORD>(copy.size()), written) && written == copy.size(), "client write"); }
@@ -428,7 +438,7 @@ void rejection() {
 }
 
 void v0_isolation() {
-  Fixture f; f.start(); require(f.live.start(f.directory) && f.live.await_startup() == transport::StartupFailure::none, "v0 server start");
+  Fixture f; f.start(); require(f.live.start(f.directory) && settled_startup(f.live) == transport::StartupFailure::none, "v0 server start");
   auto live = f.connect(f.live.endpoint());
   const auto v0_hello = std::string("{\"version\":{\"major\":0,\"minor\":0},\"kind\":\"hello\",\"data\":{\"clientInstanceId\":\"00000000-0000-4000-8000-000000000001\",\"minMinor\":0,\"maxMinor\":0,\"diagnostics\":true}}");
   send(live.get(), cap0::frame(v0_hello));
