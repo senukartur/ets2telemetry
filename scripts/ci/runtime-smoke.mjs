@@ -5,7 +5,7 @@ import {performance} from 'node:perf_hooks';
 import {_electron as electron} from '@playwright/test';
 import {startLiveSmokeSource} from './live-smoke-source.mjs';
 import {waitForCurrentTelemetry} from './renderer-observation.mjs';
-import {rendererPages, runOverlaySmoke, windowSecurity} from './overlay-observation.mjs';
+import {rendererPages, runOverlaySmoke, windowSecurity, verifyRendererStyles} from './overlay-observation.mjs';
 // These read-only globals are used only inside serialized Playwright browser callbacks.
 /* global document: readonly, getComputedStyle: readonly, innerHeight: readonly, innerWidth: readonly */
 
@@ -50,6 +50,7 @@ try {
   assert.equal(result.runtime.packaged, config.mode === 'packaged');
   assert.deepEqual(result.runtime.security, {sandbox: true, isolation: true, node: false});
   result.runtime.windows = await windowSecurity(application);
+  result.runtime.rendererStyles = await verifyRendererStyles(window, overlay);
   result.actual = await window.evaluate(async () => ({require: typeof globalThis.require,
     process: typeof globalThis.process, keys: Object.keys(globalThis.desktop),
     frozen: Object.isFrozen(globalThis.desktop), status: await globalThis.desktop.getStatus()}));

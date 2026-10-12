@@ -20,6 +20,8 @@ The project owner has web development experience with React and TypeScript, but 
 
 ## 2. User Requirements
 
+Owner-approved deferred capabilities are tracked in [technical debt](docs/technical-debt.md). TD-001 records future game screenshots containing the overlay, including investigation and actual validation of Steam capture. It does not change the current separate-window overlay or authorize rendering hooks in the MVP.
+
 - The initial platform is **Windows x64**.
 - Both ETS2 and ATS must be supported.
 - **TruckersMP compatibility is required** for the first release. Single-player and the built-in Convoy mode are also part of the validation matrix.
@@ -51,7 +53,7 @@ Support either launch order: application first or game first. Starting recording
 | Component | Technologies | Responsibility |
 | --- | --- | --- |
 | Desktop shell | Electron, TypeScript | Windows, tray, application lifecycle, plugin connection |
-| Main interface and overlay | React, TypeScript, Vite | Metrics, journal, settings |
+| Main interface and overlay | React, TypeScript, Vite, Tailwind CSS v4, shadcn/ui | Metrics, journal, settings. The overlay is display-only and keeps its own minimal stylesheet |
 | Game plugin | C++17, CMake, MSVC, SCS Telemetry SDK | Data acquisition through the supported game interface |
 | Local transport | Windows Named Pipes | Messages between the plugin and application |
 | Storage | SQLite, better-sqlite3 | Trips, events, samples, migrations |
@@ -290,3 +292,7 @@ The owner authorized the coordinator to squash merge PR #10 (ET-003), #12 (ET-00
 ## Minimal overlay continuation — October 12, 2026
 
 After the conditional code-review merges of PR #10, #12 and #14, the owner instructed the coordinator to continue available first-stage work that does not require launching actual games. ET-008 may now implement the maintained minimal overlay from accepted main `6c3af45b039aa9d8bb88a8479728f1212f7a343f` (ET-004a, ET-006a and ET-007). Keep its real-game/input/focus/mixed-DPI/monitor-removal/performance acceptance pending, as well as CAP-01 and SP-01 windowed retry/Convoy. This permission authorizes implementation, isolated automated/controlled validation and a task PR; it does not extend the PR10/12/14 conditional merge or Done exception to ET-008, waive its game gate, or authorize ET-010+, protocol v1, durable history or server work. Reuse the protected v0/typed bridge and current-window authority; the overlay renderer receives no native placement, HWND, filesystem or source-selection authority. Follow physical-client to Electron DIP conversion and preserve independent SDK/window freshness, bounded up-to-20Hz delivery, nonfocus click-through driving mode and hiding on foreground/minimize loss. ET-000 display defaults remain ETS2 metric and ATS US customary, separate from canonical v0 m/s and L; real SDK unit observations remain pending CAP-01.
+
+## ET-008 code-acceptance exception — October 12, 2026
+
+The owner explicitly accepts ET-008 code by exception and authorizes the coordinator to integrate PR #21 with current main, preserve Tailwind/shadcn in the main window and the isolated transparent overlay, obtain independent review and a successful final automatic Windows CI after Ready, then squash merge without another confirmation. This supersedes the earlier implementation-only permission for this package. Mandatory game, environment, CAP-01/SP-01 and performance checks remain pending; a code merge does not establish compatibility or complete those criteria. The card remains in Review until its mandatory criteria are accepted. No protocol v1, durable history, later MVP or server work is authorized.

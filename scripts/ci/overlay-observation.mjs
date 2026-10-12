@@ -28,6 +28,37 @@ export async function waitForOverlay(page, expected) {
   try {return await handle.jsonValue();} finally {await handle.dispose();}
 }
 
+// Inspect the CSS actually loaded by each isolated renderer, including dynamic Vite chunks.
+// A hidden DOM check protects style isolation; it does not establish real game visibility.
+export async function verifyRendererStyles(dashboard, overlay) {
+  await overlay.getByTestId('overlay-status').waitFor({state: 'attached', timeout: 10000});
+  const read = () => {
+    const document = globalThis.document;
+    const style = node => globalThis.getComputedStyle(node);
+    const card = document.querySelector('[data-slot="card"]');
+    const widget = document.querySelector('.overlay');
+    return {htmlBackground: style(document.documentElement).backgroundColor,
+      bodyBackground: style(document.body).backgroundColor,
+      themeBackground: style(document.documentElement).getPropertyValue('--background').trim(),
+      fontFaces: Array.from(document.fonts).map(font => font.family),
+      stylesheets: Array.from(document.styleSheets).map(sheet => sheet.href),
+      cardBackground: card ? style(card).backgroundColor : null,
+      widgetBackground: widget ? style(widget).backgroundColor : null};
+  };
+  const mainStyles = await dashboard.evaluate(read);
+  const overlayStyles = await overlay.evaluate(read);
+  assert.ok(mainStyles.themeBackground && mainStyles.cardBackground && mainStyles.cardBackground !== 'rgba(0, 0, 0, 0)', 'Dashboard shadcn theme and Card must be styled');
+  assert.ok(mainStyles.fontFaces.some(family => family.includes('Geist')), 'Dashboard must retain the configured Geist font');
+  assert.equal(overlayStyles.htmlBackground, 'rgba(0, 0, 0, 0)');
+  assert.equal(overlayStyles.bodyBackground, 'rgba(0, 0, 0, 0)');
+  assert.equal(overlayStyles.themeBackground, '', 'Overlay must not load the main theme');
+  assert.deepEqual(overlayStyles.fontFaces, [], 'Overlay must not load main-window font faces');
+  assert.equal(overlayStyles.widgetBackground, 'rgba(10, 17, 24, 0.88)');
+  assert.ok(mainStyles.stylesheets.length > 0 && overlayStyles.stylesheets.length > 0);
+  assert.ok(overlayStyles.stylesheets.every(href => href && !mainStyles.stylesheets.includes(href)), 'Renderer CSS assets must be separate');
+  return {dashboard: mainStyles, overlay: overlayStyles};
+}
+
 export async function rendererPages(application) {
   const deadline = performance.now() + 10000;
   while (performance.now() < deadline) {
@@ -127,6 +158,7 @@ export async function runOverlaySmoke(application, dashboard, overlay, source, r
   result.silentOpenStale = true;
   source.resume(); await observe('resumed'); result.resumeRecovered = true;
   await overlay.reload({timeout: 10000}); await observe('overlay-reload'); await dashboardReading('90.0', '73.0');
+  result.stylesAfterOverlayReload = await verifyRendererStyles(dashboard, overlay);
   assert.equal(source.statistics().connections, 1); result.overlayReloadIndependent = true;
   result.overlayStallProof = {};
   await proveIndependentDuringStall(overlay, 'overlay', async () => ({reading: await dashboardReading('72.0', '71.0'),

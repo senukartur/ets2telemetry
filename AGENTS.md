@@ -1,10 +1,17 @@
 # Agent Instructions
 
+## ET-008 code-acceptance exception — October 12, 2026
+
+The owner explicitly accepts ET-008 code by exception and authorizes the coordinator to integrate PR #21 with current main, preserve Tailwind/shadcn in the main window and the isolated transparent overlay, obtain independent review and a successful final automatic Windows CI after Ready, then squash merge without another confirmation. This supersedes the earlier implementation-only permission for this package. Mandatory game, environment, CAP-01/SP-01 and performance checks remain pending; a code merge does not establish compatibility or complete those criteria. The card remains in Review until its mandatory criteria are accepted. No protocol v1, durable history, later MVP or server work is authorized.
+
+
 ## Start Here
 
 Read [concept.md](concept.md) before planning or implementing changes. It contains the product requirements, architecture baseline, implementation sequence, acceptance criteria, and research sources. Read [TESTING.md](TESTING.md) before changing behavior or test infrastructure. This file contains repository-wide working instructions and a compact handoff.
 
 Keep the two documents consistent. Use `concept.md` for detailed product decisions and this file for instructions that apply across tasks. Explicit user instructions take precedence over this documentation.
+
+Owner-approved deferred capabilities are tracked in [technical debt](docs/technical-debt.md). An entry there records a future need; it does not expand the current milestone or authorize work outside the MVP scope.
 
 When the owner requests an implementation coordinator, also read [COORDINATOR.md](COORDINATOR.md). It defines Trello execution, bounded subagent delegation, worktree ownership, independent review, recovery state, and PR handoff. Use the [launch prompt](docs/prompts/coordinator-start.md) to start that role in a separate chat. This role applies only when requested; delegated workers follow their bounded assignments and the repository rules.
 
@@ -74,7 +81,7 @@ Owner decision on October 11, 2026: ET-006a implementation and automated evidenc
 
 | Area | Working choice |
 | --- | --- |
-| Desktop and UI | Electron, React, TypeScript, Vite |
+| Desktop and UI | Electron, React, TypeScript, Vite, Tailwind CSS v4, shadcn/ui (Radix) |
 | Game integration | Project-owned C++17 DLL using the official SCS Telemetry SDK; CMake and MSVC |
 | Local transport | Windows Named Pipes |
 | Persistence | SQLite through better-sqlite3 in a dedicated worker |
@@ -107,6 +114,7 @@ The utilityProcess owns ingestion and source validation. A fixed project-owned n
 - Use a transparent window that passes mouse input to the game and does not steal focus while driving.
 - Track the game window and hide the overlay when the game is minimized or another application is foreground. Account for monitor and DPI changes.
 - Keep the display update target of up to **20 Hz** separate from the history sampling rate of **1 Hz**.
+- Build main-window UI from the shadcn/ui components in `apps/desktop/src/components/ui`; see [docs/setup.md](docs/setup.md#ui-components-shadcnui). The transparent overlay must not load the shadcn base stylesheet (it paints an opaque `body` background) and does not need interactive Radix components.
 - Use context isolation, sandboxed renderers, and a narrow preload/IPC API. Do not give React direct Node.js or filesystem access.
 - Closing the main window must not silently end recording. Full application exit must be explicit.
 
@@ -144,7 +152,7 @@ Use lightweight GitHub Flow: `main` -> task branch -> pull request -> validation
 - Start every PR title with the Trello identifier in square brackets, followed by a space and the prefixed summary: `[ET-023b] chore: add PSScriptAnalyzer checks`. Use the work-package ID when the PR implements a package (`ET-023b`, `ET-015a`); otherwise use the card ID (`ET-024`, `SP-01`, `CAP-01`). Use `[NO-CARD]` only for work without a card, and explain why in the PR description. Squash merges use the PR title, so the identifier also lands in `main` history. Rename an older open PR to this format when you next update it.
 - Commit and push the task branch, then open a PR targeting `main`. Use a draft PR for unfinished work. CI does not run automatically on draft PRs or on changes limited to `**.md`/`docs/**`. A skipped or absent run is not a passed check. Check a draft head by manual dispatch and record the run link; the run after **Ready for review** on the final head is the merge gate (see [docs/ci.md](docs/ci.md#triggers-and-draft-checks)). Implementation requests authorize the normal branch, commit, push, and PR workflow unless the owner specifies otherwise.
 - Follow `.github/pull_request_template.md`. Explain the problem and resulting behavior, report checks actually performed, and identify remaining verification. Do not claim that CI or game testing passed when it did not run.
-- Attach the created PR to the Codex chat when the app provides an attachment tool, and provide the PR link to the owner.
+- Attach or bind the created PR to the current chat or session when the app provides a tool for it (Codex attachment tool, Claude Code desktop PR binding), and provide the PR link to the owner.
 - The owner reviews and merges PRs by default. The agent may merge only when the owner explicitly requests or authorizes it; do not infer merge authorization from a request to implement a task or open a PR.
 - Merge with **Squash merge** after relevant checks pass and review feedback is resolved as described in [Review Threads](#review-threads). A PR becomes one descriptive commit on `main`; the task branch is deleted after merging.
 - After a merge, update local `main` with `git pull --ff-only` before starting the next task. Confirm the PR is merged before deleting a local task branch; preserve any remaining work.
