@@ -106,7 +106,7 @@ The utilityProcess owns ingestion and source validation. A fixed project-owned n
 - Version the protocol and preserve session identity and message ordering. Validate incoming messages and document the wire format alongside implementation.
 - Coalesce live snapshots when appropriate. Preserve gameplay events separately, acknowledge them after persistence, and handle redelivery without duplicates.
 - Restrict pipes to the local user and reject remote access.
-- Install the DLL in the selected game's `bin/win_x64/plugins` directory. Change it only while the game is closed, and manage only this project's plugin.
+- Install the DLL in each discovered, non-excluded game's `bin/win_x64/plugins` directory, silently where safe (see the October 12, 2026 silent plugin installation decision in `concept.md`). Change it only while the game is closed, copy atomically with SHA-256 verification against the bundled artifact, never overwrite an unrecognized file with the plugin's name, and manage only this project's plugin.
 - Use real game tests to establish TruckersMP support. Do not infer compatibility solely from successful single-player tests or documentation.
 
 ### Overlay and Electron
