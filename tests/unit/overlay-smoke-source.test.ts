@@ -231,6 +231,7 @@ it('requires the complete current overlay receipt and rejects missing results, m
     {name: 'overlay session persists to disk', mutate: receipt => {receipt.overlay.windows[0].windows[1].sessionPersistent = true;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
     {name: 'overlay uses dashboard session', mutate: receipt => {receipt.overlay.windows[0].windows[1].isDefaultSession = true;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
     {name: 'fractional process identity', mutate: receipt => {receipt.runtime.windows[0].rendererPid = 111.5;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+    {name: 'tiny fractional Decimal process identity', reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
     {name: 'fixture reconnected', mutate: receipt => {receipt.overlay.sourceAfter.connections = 2;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
     {name: 'silent pipe was closed', mutate: receipt => {receipt.overlay.silentOpenSource.activeClients = 0;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
     {name: 'identity changed', mutate: receipt => {receipt.overlay.sourceAfter.identity.clockId = '00000000-0000-4000-8000-000000000099';}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
@@ -258,7 +259,10 @@ it('requires the complete current overlay receipt and rejects missing results, m
     for (const [index, scenario] of cases.entries()) {
       const receipt = structuredClone(valid); scenario.mutate?.(receipt);
       const file = path.join(resources.directory, `overlay-receipt-${index}.json`), config = path.join(resources.directory, `overlay-config-${index}.json`);
-      const original = JSON.stringify(receipt); await writeFile(file, original);
+      // Preserve the exact JSON spelling: Number would erase this fractional Decimal PID before PS5.1 sees it.
+      const original = scenario.name === 'tiny fractional Decimal process identity'
+        ? JSON.stringify(receipt).replace('"rendererPid":222', '"rendererPid":222.00000000000000001') : JSON.stringify(receipt);
+      await writeFile(file, original);
       await writeFile(config, JSON.stringify({receipt: file, code: scenario.code ?? 0, scenario: 'overlay'}));
       const output = execFileSync(powershell, ['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',
         path.resolve('tests/shared/Read-RuntimeReceipt.ps1'), '-Configuration', config],

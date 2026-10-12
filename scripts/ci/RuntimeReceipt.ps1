@@ -8,7 +8,10 @@ function Test-OverlayRendererIsolation {
     foreach ($window in $Windows) {
         $rendererId = $window.rendererPid
         if (($rendererId -isnot [int] -and $rendererId -isnot [long] -and $rendererId -isnot [double] -and $rendererId -isnot [decimal]) -or
-            $rendererId -le 0 -or $rendererId -gt 4294967295 -or [math]::Truncate([double]$rendererId) -ne [double]$rendererId) { return $false }
+            [double]::IsNaN([double]$rendererId) -or [double]::IsInfinity([double]$rendererId) -or
+            $rendererId -le 0 -or $rendererId -gt 4294967295 -or
+            [math]::Truncate([double]$rendererId) -ne [double]$rendererId -or
+            [math]::Truncate([decimal]$rendererId) -ne [decimal]$rendererId) { return $false }
         foreach ($flag in @('isDefaultSession','isOverlaySession','sessionPersistent')) {
             if ($window.$flag -isnot [bool]) { return $false }
         }
