@@ -462,7 +462,7 @@ it('keeps expired SDK and window authority across upstream cooldown and rejects 
   expect(upstreamRequests()).toBe(4); expect(children).toHaveLength(1);
 });
 it('attaches an explicit CAP0 capture grant once, only to a verified ETS2/ATS selection', async () => {
-  const broker = {executable: 'C:\isolated\telemetry-pipe-client.exe', discoveryDirectory: 'C:\isolated\transport\v0'};
+  const broker = {executable: 'C:\\isolated\\telemetry-pipe-client.exe', discoveryDirectory: 'C:\\isolated\\transport\\v0'};
   vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2'); vi.stubEnv('ETS2TELEMETRY_CAPTURE', 'cap0'); vi.stubEnv('ETS2TELEMETRY_CAPTURE_MINUTES', '15');
   resolveBroker.mockImplementation(() => broker);
   await ready();
@@ -475,7 +475,7 @@ it('attaches an explicit CAP0 capture grant once, only to a verified ETS2/ATS se
 });
 it('keeps capture off by default and rejects an invalid activation without starting capture', async () => {
   vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2'); vi.stubEnv('ETS2TELEMETRY_CAPTURE', 'cap0'); vi.stubEnv('ETS2TELEMETRY_CAPTURE_MINUTES', '600');
-  resolveBroker.mockImplementation(() => ({executable: 'C:\isolated\b.exe', discoveryDirectory: 'C:\isolated\t'}));
+  resolveBroker.mockImplementation(() => ({executable: 'C:\\isolated\\b.exe', discoveryDirectory: 'C:\\isolated\\t'}));
   await ready();
   expect(log).toHaveBeenCalledWith('CAPTURE_ACTIVATION_REJECTED', expect.stringContaining('interval'));
   expect(child.postMessage.mock.calls.some(call => 'capture' in (call[0] as object))).toBe(false);

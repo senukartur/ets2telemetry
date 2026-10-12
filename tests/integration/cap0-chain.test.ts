@@ -1,11 +1,10 @@
-import {spawn, type ChildProcessWithoutNullStreams} from 'node:child_process';
+import {spawn, spawnSync, type ChildProcessWithoutNullStreams} from 'node:child_process';
 import {existsSync} from 'node:fs';
 import {mkdtemp, readFile, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {afterEach, expect, it} from 'vitest';
 import {CaptureSession, NativeCaptureClient} from '../../apps/desktop/src/capture-session';
-import {exportCapture} from '../../tools/capture-export/src/sanitize';
 
 // Controlled chain: tests-only fake SDK host (named eurotrucks2.exe) loading the isolated test plugin
 // DLL -> CAP0 endpoint -> fixed native broker in capture mode -> TypeScript session and writer.
@@ -45,8 +44,12 @@ it('captures fake-SDK evidence through the plugin endpoint, native broker and bo
     authority: {game: 'ets2', processId: ready.processId}, header: {source: {processId: ready.processId, sdkGameId: 'eut2'}}});
   const text = await readFile(packets, 'utf8');
   for (const expected of ['"18446744073709551615"', '"-9223372036854775808"', '"job.delivered"', '"cargo.fixture"', '"simulation.paused"']) expect(text).toContain(expected);
-  const exported = await exportCapture(path.join(captures, session.captureSessionId), path.join(directory, 'export'));
-  const sanitized = await readFile(path.join(exported.outputDirectory, 'packets.ndjson'), 'utf8');
+  // The sanitizer runs through its built command-line entry, as an operator would use it.
+  for (const args of [[path.join(root, 'tools/capture-export/build.mjs')], [path.join(root, 'tools/capture-export/dist/cli.cjs'), path.join(captures, session.captureSessionId), path.join(directory, 'export')]]) {
+    const result = spawnSync(process.execPath, args, {cwd: root, encoding: 'utf8', timeout: 60_000}); expect(result.status, result.stderr).toBe(0);
+    if (args.length === 3) expect(JSON.parse(result.stdout.trim().split('\n').at(-1)!)).toMatchObject({sanitized: true, packets: manifest!.counts.packetsWritten});
+  }
+  const sanitized = await readFile(path.join(directory, 'export', 'packets.ndjson'), 'utf8');
   expect(sanitized).not.toContain(manifest!.authority!.processInstanceId); expect(sanitized).toContain('"18446744073709551615"');
   expect(await until(() => host!.exitCode !== null, 5_000)).toBe(true); expect(host.exitCode).toBe(0);
   console.log(JSON.stringify({chain: 'passed', packets: manifest!.counts.packetsWritten, envelopes: manifest!.counts.envelopesCompleted, captureSessionId: 'redacted'}));
