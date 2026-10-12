@@ -18,12 +18,19 @@
 #include <objbase.h>
 #include <set>
 #include <string>
+#include <thread>
 #include <vector>
 
 using namespace ets2telemetry;
 using transport::Handle;
 namespace {
 unsigned assertions = 0;
+// Sanitized builds on small hosted runners are slower; functional assertions are unchanged, only wall-clock bounds widen.
+#if defined(__SANITIZE_ADDRESS__)
+constexpr unsigned long long timing_scale = 4;
+#else
+constexpr unsigned long long timing_scale = 1;
+#endif
 void require(bool condition, const char* message) { ++assertions; if (!condition) throw std::runtime_error(message); }
 bool until(const std::function<bool()>& predicate, DWORD ms = 3000) {
   const auto end = GetTickCount64() + ms; do { if (predicate()) return true; Sleep(2); } while (GetTickCount64() < end); return false;
@@ -134,6 +141,17 @@ const v0::Json& observation(const v0::Json& packet, const char* name) {
   for (const auto& o : std::get<v0::Json::Array>(packet.at("data").at("observations").value))
     if (o.at("name").at("available").boolean() && o.at("name").at("value").string() == name) return o;
   throw std::runtime_error(std::string("observation missing: ") + name);
+}
+
+// Mirrors the TypeScript CAP0 loss validator (capture-cap0.ts): the decoder rejects any violation.
+bool loss_consistent(const v0::Json& data) {
+  const auto attempted = std::stoull(data.at("attemptedEnvelopes").string()), dropped = std::stoull(data.at("droppedEnvelopes").string());
+  const auto slots = std::stoull(data.at("droppedQueueFull").string()), bytes = std::stoull(data.at("droppedBytesFull").string());
+  return dropped <= attempted && slots + bytes == dropped && (!data.at("lastDroppedEnvelopeSeq").at("available").boolean() || std::stoull(data.at("lastDroppedEnvelopeSeq").at("value").string()) <= attempted);
+}
+bool counters_consistent(const cap0::Counters& c) {
+  return c.attempted == c.enqueued + c.dropped && c.dropped == c.dropped_full_slots + c.dropped_full_bytes && (!c.dropped || (c.last_dropped_seq && c.last_dropped_seq <= c.attempted)) &&
+    (c.last_drop_available || c.last_drop_monotonic_ns == 0);
 }
 
 void queue_bounds() {
@@ -342,7 +360,7 @@ void server_capture() {
   const auto started = GetTickCount64(); f.capture.stop(); const auto elapsed = GetTickCount64() - started;
   require(second.read(again.get(), 4), "drained envelope and end marker on shutdown");
   require(second.last().at("kind").string() == "end" && second.last().at("data").at("reason").string() == "plugin-shutdown" && second.last().at("data").at("unsentEnvelopes").string() == "0", "explicit shutdown end marker");
-  require(elapsed < 1000 && f.capture.status() == cap0::CaptureStatus::stopped, "bounded capture shutdown");
+  require(elapsed < 1000 * timing_scale && f.capture.status() == cap0::CaptureStatus::stopped, "bounded capture shutdown");
   require(f.host.wrong_thread == 0, "capture worker never calls SDK API");
   std::cout << "captureShutdownMs=" << elapsed << '\n';
 }
@@ -358,7 +376,7 @@ void stall_and_loss() {
   }
   const auto produced_ms = GetTickCount64() - started; const auto counters = f.capture.queue().counters();
   require(counters.attempted == 200 && counters.dropped > 0 && counters.dropped_full_bytes > 0, "newest-drop loss counted while client stalled");
-  require(produced_ms < 600 && worst_ms < 100, "callbacks bounded and nonblocking under stalled capture client");
+  require(produced_ms < 600 * timing_scale && worst_ms < 100.0 * timing_scale, "callbacks bounded and nonblocking under stalled capture client");
   require(f.capture.queue().queued_bytes() <= cap0::queue_bytes && f.capture.queue().queued_envelopes() <= cap0::queue_envelopes, "queue bounds hold");
   // Resume reading within the 1 s write deadline and account for every attempted envelope.
   std::set<std::uint64_t> seen; std::uint64_t dropped_marked = 0, previous = 0; bool loss = false;
@@ -374,7 +392,7 @@ void stall_and_loss() {
   }, 5000), "every retained envelope and the complete loss count received");
   for (const auto& item : packets.items) {
     const auto kind = item.at("kind").string();
-    if (kind == "loss") loss = true;
+    if (kind == "loss") { loss = true; require(loss_consistent(item.at("data")), "every emitted loss packet is internally consistent"); }
     if (kind != "envelope" || !item.at("data").at("attributes").at("final").boolean()) continue;
     const auto seq = std::stoull(item.at("data").at("envelopeSeq").string()), gap = std::stoull(item.at("data").at("droppedBefore").string());
     require(seq - previous - 1 == gap, "droppedBefore equals the exact sequence gap"); previous = seq; dropped_marked += gap; seen.insert(seq);
@@ -392,7 +410,7 @@ void rejection() {
   Fixture f; f.start(); const auto endpoint = f.capture.endpoint();
   auto closed = [&](std::vector<std::uint8_t> bytes) {
     auto h = f.connect(endpoint); if (!bytes.empty()) send(h.get(), bytes);
-    std::array<std::uint8_t, 64> response{}; DWORD read = 0; const bool got = io(h.get(), true, response.data(), 64, read, 6500);
+    std::array<std::uint8_t, 64> response{}; DWORD read = 0; const bool got = io(h.get(), true, response.data(), 64, read, static_cast<DWORD>(5000 + 1500 * timing_scale));
     h.reset(); require(until([&] { return f.capture.status() == cap0::CaptureStatus::listening; }), "listening after rejection"); return !got;
   };
   const auto v0_hello = std::string("{\"version\":{\"major\":0,\"minor\":0},\"kind\":\"hello\",\"data\":{\"clientInstanceId\":\"00000000-0000-4000-8000-000000000001\",\"minMinor\":0,\"maxMinor\":0,\"diagnostics\":true}}");
@@ -402,7 +420,7 @@ void rejection() {
   auto trailing = cap0::frame(cap0::hello_payload(session_id)); trailing.push_back(0); require(closed(trailing), "byte after hello rejected");
   require(closed(cap0::frame("{")), "malformed hello rejected");
   const auto started = GetTickCount64(); require(closed({}), "missing hello times out"); const auto waited = GetTickCount64() - started;
-  require(waited >= 4900 && waited < 6400, "five-second hello deadline");
+  require(waited >= 4900 && waited < 5000 + 1400 * timing_scale, "five-second hello deadline");
   write_policy(f.directory, f.security, f.user, f.self, std::string(64, '0')); require(closed(cap0::frame(cap0::hello_payload(session_id))), "unapproved client image rejected");
   require(f.capture.sessions() == 0 && f.capture.queue().counters().attempted == 0, "rejected clients never opened the evidence gate");
 }
@@ -450,10 +468,86 @@ void dll_lifecycle(const char* path) {
   require(packets.read(client.get(), 2), "DLL envelope");
   const auto started = GetTickCount64(); shutdown(); const auto elapsed = GetTickCount64() - started;
   require(packets.read(client.get(), 3) && packets.last().at("kind").string() == "end" && packets.last().at("data").at("reason").string() == "plugin-shutdown", "official shutdown end marker");
-  require(elapsed < 1500, "official shutdown joins capture and live workers"); require(FreeLibrary(module) != FALSE, "unload after joined workers");
+  require(elapsed < 1500 * timing_scale, "official shutdown joins capture and live workers"); require(FreeLibrary(module) != FALSE, "unload after joined workers");
   require(f.host.wrong_thread == 0, "DLL workers make no SDK calls");
   std::cout << "dllShutdownMs=" << elapsed << '\n';
 }
+
+void counter_snapshots() {
+  // A live producer bursts drops while the worker-side reader samples; every sample must be one
+  // coherent version, and every loss packet built from it must satisfy the decoder.
+  cap0::EvidenceQueue q; require(q.prepare(), "prepare"); q.open();
+  std::atomic<bool> done{false}; std::atomic<std::uint64_t> produced{0};
+  std::thread producer([&] {
+    cap0::Context c; c.kind = cap0::Kind::lifecycle; c.id = "simulation.started"; c.monotonic_available = true;
+    for (std::uint64_t i = 0; i < 3000000; ++i) { c.boundary_order = i + 1; c.monotonic_ns = i + 1; c.monotonic_available = (i % 3) != 0; q.capture(c); produced.store(i + 1, std::memory_order_relaxed); }
+    done.store(true);
+  });
+  std::uint64_t samples = 0, concurrent = 0, previous_attempted = 0, previous_dropped = 0, popped = 0; cap0::Envelope e; bool inconsistent = false;
+  while (!done.load() || samples < 1000) {
+    const bool live = !done.load(); const auto c = q.counters(); ++samples; if (live) ++concurrent;
+    if (!counters_consistent(c) || c.attempted < previous_attempted || c.dropped < previous_dropped) inconsistent = true;
+    if (!loss_consistent(v0::detail::Parser(cap0::loss_packet(session_id, c, samples, samples)).parse().at("data"))) inconsistent = true;
+    previous_attempted = c.attempted; previous_dropped = c.dropped;
+    if (samples % 64 == 0) while (q.pop(e)) ++popped; // Mix enqueue and drop outcomes.
+    if (done.load() && samples >= 1000) break;
+  }
+  producer.join();
+  const auto final = q.counters();
+  require(!inconsistent, "every concurrent counter sample and loss packet is internally consistent");
+  require(concurrent >= 1000, "samples overlapped the live producer burst"); require(final.attempted == 3000000 && counters_consistent(final) && final.dropped > 0 && final.enqueued > 0, "burst mixed retained and dropped envelopes");
+  std::cout << "counterSamples=" << samples << " concurrent=" << concurrent << " attempted=" << final.attempted << " dropped=" << final.dropped << " popped=" << popped << '\n';
+}
+
+void stop_during_write() {
+  // A stop while a frame write is in flight lets that frame finish, then drains and ends explicitly.
+  Fixture f; f.start(); auto client = f.connect(f.capture.endpoint()); hello(client.get()); Packets packets; require(packets.read(client.get(), 1), "header");
+  BigConfiguration big(255, 1024, 's');
+  for (unsigned i = 0; i < 12; ++i) f.host.config("job", big.attributes.data());
+  require(until([&] { return f.capture.queue().queued_envelopes() > 0; }), "worker blocked behind a full pipe with queued evidence");
+  Sleep(50);
+  std::thread stopper([&] { f.capture.stop(); });
+  Sleep(30); // The stop is now pending while the worker's write is in flight; the client resumes reading.
+  packets.read(client.get(), 10000, 4000 * static_cast<DWORD>(timing_scale));
+  stopper.join();
+  require(!packets.items.empty() && packets.last().at("kind").string() == "end" && packets.last().at("data").at("reason").string() == "plugin-shutdown", "stop during an in-flight write still ends with plugin-shutdown");
+  for (const auto& item : packets.items) if (item.at("kind").string() == "loss") require(loss_consistent(item.at("data")), "loss consistent");
+  require(f.capture.shutdown_ms() < 1000 * timing_scale && f.host.wrong_thread == 0, "bounded stop and no SDK calls on worker");
+  std::cout << "stopDuringWritePackets=" << packets.items.size() << " unsent=" << packets.last().at("data").at("unsentEnvelopes").string() << " shutdownMs=" << f.capture.shutdown_ms() << '\n';
+}
+
+void v0_continuity() {
+  // A connected, polling capture worker must not perturb v0 publication: compare with a reference.
+  Fixture f; Host reference_host; sdk::Adapter reference; auto rp = reference_host.params(); require(reference.initialize(SCS_TELEMETRY_VERSION_1_01, &rp) == SCS_RESULT_ok, "reference init");
+  Host::active = &f.host;
+  f.start(); auto client = f.connect(f.capture.endpoint()); hello(client.get()); Packets packets; require(packets.read(client.get(), 1), "header");
+  const auto end = GetTickCount64() + 1500 * timing_scale; unsigned frames = 0;
+  while (GetTickCount64() < end) { f.host.frame(static_cast<float>(frames % 40)); reference_host.frame(static_cast<float>(frames % 40)); ++frames; if (frames % 20 == 0) Sleep(1); }
+  auto with = std::make_unique<sdk::Snapshot>(), without = std::make_unique<sdk::Snapshot>();
+  require(f.adapter->read_current(*with) && reference.read_current(*without), "snapshots");
+  require(with->continuity.coalesced_snapshots == without->continuity.coalesced_snapshots && with->continuity.lost_observations == without->continuity.lost_observations &&
+    with->continuity.offline_transitions == without->continuity.offline_transitions && with->boundary_order == without->boundary_order, "v0 continuity identical with a running capture worker");
+  reference.shutdown();
+  std::cout << "v0ContinuityFrames=" << frames << " coalesced=" << with->continuity.coalesced_snapshots << '\n';
+}
+
+#ifdef ETS2TELEMETRY_TRANSPORT_TEST_HOOKS
+void clock_unavailable() {
+  // Without the source clock nothing is stamped with a fabricated time: no header, or the capture ends.
+  struct Reset { ~Reset() { cap0::set_capture_clock_failure_for_test(false); } } reset;
+  Fixture f; f.start();
+  cap0::set_capture_clock_failure_for_test(true);
+  { auto client = f.connect(f.capture.endpoint()); hello(client.get()); Packets packets; require(!packets.read(client.get(), 1, 2000) && packets.items.empty(), "no header without a source clock"); }
+  require(until([&] { return f.capture.status() == cap0::CaptureStatus::listening; }), "listening after clock refusal");
+  require(f.capture.sessions() == 0 && !f.capture.queue().is_open(), "gate never opened without a clock");
+  cap0::set_capture_clock_failure_for_test(false);
+  auto client = f.connect(f.capture.endpoint()); hello(client.get()); Packets packets; require(packets.read(client.get(), 1), "header with clock");
+  cap0::set_capture_clock_failure_for_test(true);
+  f.host.event(SCS_TELEMETRY_EVENT_paused);
+  require(!packets.read(client.get(), 2, 2000) && packets.items.size() == 1, "capture closes without a fabricated publication time");
+  require(until([&] { return f.capture.status() == cap0::CaptureStatus::listening && !f.capture.queue().is_open(); }), "capture closed after clock loss");
+}
+#endif
 
 // Tests-only fake SDK host for the cross-package chain check (broker capture mode + TypeScript).
 int controlled_host(const char* dll_path, const char* directory_utf8) {
@@ -505,7 +599,11 @@ int controlled_host(const char* dll_path, const char* directory_utf8) {
 int main(int argc, char** argv) {
   try {
     if (argc == 4 && std::string(argv[1]) == "host") return controlled_host(argv[2], argv[3]);
-    const std::map<std::string, std::function<void()>> cases{{"queue", queue_bounds}, {"adapter", adapter_copy}, {"wire", wire}, {"server", server_capture}, {"stall", stall_and_loss}, {"rejection", rejection}, {"v0-isolation", v0_isolation}};
+    const std::map<std::string, std::function<void()>> cases{{"queue", queue_bounds}, {"adapter", adapter_copy}, {"wire", wire}, {"server", server_capture}, {"stall", stall_and_loss}, {"rejection", rejection}, {"v0-isolation", v0_isolation}, {"counters", counter_snapshots}, {"stop-inflight", stop_during_write}, {"v0-continuity", v0_continuity}
+#ifdef ETS2TELEMETRY_TRANSPORT_TEST_HOOKS
+      , {"clock", clock_unavailable}
+#endif
+    };
     auto timed = [](const std::string& name, const std::function<void()>& fn) { const auto start = GetTickCount64(); std::cout << name << '\n' << std::flush; fn(); std::cout << name << " elapsedMs=" << GetTickCount64() - start << '\n' << std::flush; };
     if (argc == 3 && std::string(argv[1]) == "dll") timed("dll", [&] { dll_lifecycle(argv[2]); });
     else if (argc == 2) timed(argv[1], cases.at(argv[1]));
