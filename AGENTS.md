@@ -6,6 +6,8 @@ Read [concept.md](concept.md) before planning or implementing changes. It contai
 
 Keep the two documents consistent. Use `concept.md` for detailed product decisions and this file for instructions that apply across tasks. Explicit user instructions take precedence over this documentation.
 
+Owner-approved deferred capabilities are tracked in [technical debt](docs/technical-debt.md). An entry there records a future need; it does not expand the current milestone or authorize work outside the MVP scope.
+
 When the owner requests an implementation coordinator, also read [COORDINATOR.md](COORDINATOR.md). It defines Trello execution, bounded subagent delegation, worktree ownership, independent review, recovery state, and PR handoff. Use the [launch prompt](docs/prompts/coordinator-start.md) to start that role in a separate chat. This role applies only when requested; delegated workers follow their bounded assignments and the repository rules.
 
 ## Documentation Language
