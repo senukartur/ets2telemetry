@@ -77,17 +77,17 @@ Use the session's subagent tools for bounded assignments. Do not create separate
 | --- | --- | --- |
 | Implementation worker | Subagent with the assignment below | `Agent` tool, `general-purpose` type, assignment below as the prompt |
 | Independent reviewer | Separate read-only subagent | `Agent` tool with a prompt that forbids edits, commits, and PR or Trello writes; a read-only type such as `Explore` suits searches but not whole-file review |
-| Worktree isolation | Separate worktree per card | `isolation: "worktree"` on the `Agent` call, or a manually created `git worktree`; either way pass and verify the absolute path |
+| Worktree isolation | Separate worktree per card | For per-card branches, create the `git worktree` yourself from the verified base and pass its absolute path. `isolation: "worktree"` creates the worktree for you, so you cannot choose its path or base commit up front; read back the created path and base commit and record them in the ledger |
 | Continue or steer a worker | Message the existing subagent | `SendMessage` to the agent's ID or name; a new `Agent` call starts cold without its context |
 | Worker result | Subagent response | The agent's final report is not shown to the owner; relay what matters in your own update |
-| Model and reasoning | Per-role settings from the launch prompt | `model` parameter on `Agent`; set `effort` only if the owner asked for a specific level |
-| Attach the PR to the session | Attachment tool, if the app provides one | The desktop app's PR binding (`get_status`, then `bind_pr` if the PR is not reported), or the PR link in the reply |
+| Model and reasoning | Per-role settings from the launch prompt | `model` parameter on `Agent`, which takes aliases (for example `sonnet`, `opus`) rather than full model IDs, so the alias may not resolve to the exact version a prompt names; verify and record the actual model. Reasoning effort is a separate setting, available only where the session's `Agent` tool or agent definition offers it; set it only if the owner asked for a specific level |
+| Attach the PR to the session | Attachment tool, if the app provides one | The desktop app's PR-binding tool, if the session offers one (check the PR's current status first, then bind it if it is not reported); otherwise the PR link in the reply. Tool names are not fixed by this document: check the session's tool list |
 
 Runtime-specific rules:
 
 - A subagent is not isolated by itself. Verify its working directory and branch before it edits anything, and again before you accept its result.
 - Background agents report asynchronously. Do not treat a notification, a tool return, or a "done" message as proof of completion; inspect the commits and diff (see below).
-- Where the launch prompt specifies models or reasoning for Codex, use the owner's equivalent instruction for Claude. If the owner gave none, inherit the session defaults and record them as the actual settings. Do not invent a mapping, and never claim a setting was applied unless the runtime confirmed it.
+- Models and reasoning for Claude Code follow this order: a later explicit owner instruction in the chat overrides the owner's launch prompt, and both override the session defaults. Where the owner gave none, inherit the session defaults and record them as the actual settings. Do not invent a mapping, and never claim a setting was applied unless the runtime confirmed it.
 - Read Trello through the connected Trello tools in either runtime. Verify read and write access separately, as described above.
 
 For parallel cards, use a separate task branch and worktree per card. Subagent creation alone does not provide filesystem isolation. Pass the absolute working directory to every worker and reviewer. Inspect existing worktrees before creating another. Keep the coordinator's control checkout and ledger location stable.

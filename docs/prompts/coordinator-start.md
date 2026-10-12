@@ -44,6 +44,8 @@ In Claude Code, these Codex model names do not apply. Use:
   model inherited from the session.
 - The advisory CI review already runs on claude-opus-5-5 (see
   docs/ai-review.md). It never replaces the independent reviewer.
+Subagent calls may accept only model aliases (sonnet, opus) instead of
+full IDs; verify which model was actually used and record it.
 Do not set a reasoning effort on a subagent unless I asked.
 
 Set subagent model and reasoning explicitly through the runtime's
