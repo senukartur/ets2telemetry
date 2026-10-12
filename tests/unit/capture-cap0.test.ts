@@ -50,6 +50,12 @@ describe('CAP0 decoder validation', () => {
     const unknown = {...observation(0, 'odd', 'unknown', 0, 99), value: {available: false, reason: 'not-supported', detail: 'unsupported-type'}};
     expect(decodeCap0Payload(payload(envelope(1, 1, {observations: [unknown as never]}))).kind).toBe('envelope');
   });
+  it('decodes negative zero exactly as sent', () => {
+    const text = JSON.stringify(envelope(1, 1, {observations: [observation(0, 'damage', 'float', 0)]})).replace('"value":0}', '"value":-0}');
+    const decoded = decodeCap0Payload(bytes(text));
+    if (decoded.kind !== 'envelope' || !decoded.data.observations[0].value.available) throw new Error('kind');
+    expect(Object.is(decoded.data.observations[0].value.value, -0)).toBe(true);
+  });
   it('rejects inconsistent attribute ranges, positions and unavailable forms', () => {
     const base = envelope(1, 1, {observations: delivered()});
     const invalid = [

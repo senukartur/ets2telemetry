@@ -94,3 +94,26 @@ describe('CAP0 bounded writer', () => {
     await expect(writer().instance.start()).rejects.toThrow();
   });
 });
+
+describe('CAP0 writer close robustness and fidelity', () => {
+  it('never rejects when the manifest write fails: onClose runs and the in-memory result records the failure', async () => {
+    const unhandled: unknown[] = [], listener = (reason: unknown) => unhandled.push(reason); process.on('unhandledRejection', listener);
+    try {
+      const {instance, closed} = writer({writeManifest: () => Promise.reject(new Error('manifest disk full'))});
+      await instance.start(); instance.accept(header()); instance.accept(end(1, 0));
+      const manifest = await instance.close('service-stop');
+      await new Promise(resolve => setTimeout(resolve, 20));
+      expect(manifest).toMatchObject({stop: {reason: 'source-end'}, manifestWriteError: 'manifest disk full'}); expect(closed).toEqual([manifest]);
+      expect((await readdir(instance.directory)).sort()).toEqual(['packets.ndjson']); expect(unhandled).toEqual([]);
+    } finally { process.off('unhandledRejection', listener); }
+  });
+  it('stores the validated payload text verbatim, preserving -0 and exact number spellings', async () => {
+    const {instance} = writer(); await instance.start(); instance.accept(header());
+    const packet = envelope(1, 1, {observations: [observation(0, 'damage', 'float', -0)]});
+    const text = JSON.stringify(packet).replace('"value":0}', '"value":-0}').replace('"packetSeq"', '\n"packetSeq"');
+    expect(text).toContain('-0'); instance.accept(packet, text); await instance.close('service-stop');
+    const lines = (await readFile(path.join(instance.directory, 'packets.ndjson'), 'utf8')).trimEnd().split('\n');
+    expect(lines).toHaveLength(2); expect(lines[1]).toContain('"value":-0}');
+    expect(Object.is((JSON.parse(lines[1]) as {packet: {data: {observations: {value: {value: number}}[]}}}).packet.data.observations[0].value.value, -0)).toBe(true);
+  });
+});

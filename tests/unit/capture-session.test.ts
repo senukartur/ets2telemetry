@@ -7,7 +7,7 @@ import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 import {Cap0FrameDecoder} from '../../packages/contracts/src/capture-cap0';
 import {CaptureSession, type CaptureAuthority, type CaptureTransport} from '../../apps/desktop/src/capture-session';
 import {temporaryResources} from '../shared/resources';
-import {AUTHORITY, SESSION, delivered, end, envelope, frame, header, loss} from '../shared/cap0-fixtures';
+import {AUTHORITY, SESSION, delivered, end, envelope, frame, header, loss, payload} from '../shared/cap0-fixtures';
 
 // Actual Windows named pipes with a synthetic CAP0 source standing in for the fake-SDK plugin endpoint.
 class PipeTransport extends EventEmitter implements CaptureTransport {
@@ -89,5 +89,57 @@ describe('CAP0 capture over an actual Windows named pipe', () => {
     const manifest = await capture.stop();
     expect(manifest).toMatchObject({stop: {reason: 'service-stop'}, status: 'partial', counts: {packetsWritten: 2}, loss: {endMarkerReceived: false}});
     expect(await capture.done).toEqual(manifest);
+  });
+});
+
+// Scripted transport: each connect() takes the next behaviour; emits run after listeners attach.
+class ScriptedTransport extends EventEmitter implements CaptureTransport {
+  readonly completion = Promise.resolve(); destroyed = 0; credits = 0; hellos = 0;
+  constructor(script: (t: ScriptedTransport) => void) { super(); setTimeout(() => script(this), 0); }
+  sendHello(): void { this.hellos++; } credit(): void { this.credits++; } destroy(): void { this.destroyed++; }
+}
+function scripted(steps: ((t: ScriptedTransport) => void)[], options: Partial<ConstructorParameters<typeof CaptureSession>[0]> = {}) {
+  const transports: ScriptedTransport[] = [];
+  const capture = new CaptureSession({root: path.join(resources.directory, 'captures'), game: 'ets2', captureSessionId: SESSION, retryMs: 5, context: context(), ...options,
+    connect: () => { const t = new ScriptedTransport(steps[Math.min(transports.length, steps.length - 1)]); transports.push(t); return t; }});
+  return {capture, transports};
+}
+const transient = (message: string) => Object.assign(new Error(message), {transient: true});
+const deliver = (t: ScriptedTransport) => { t.emit('authority', AUTHORITY); for (const packet of [header(), envelope(1, 1), end(2, 1)]) t.emit('packet', payload(packet)); };
+
+describe('CAP0 session failure handling', () => {
+  it('finishes, tears down the transport and never rejects when the manifest cannot be written', async () => {
+    const unhandled: unknown[] = [], listener = (reason: unknown) => unhandled.push(reason); process.on('unhandledRejection', listener);
+    try {
+      const {capture, transports} = scripted([deliver], {writer: {writeManifest: () => Promise.reject(new Error('manifest write denied'))}});
+      await capture.start(); const manifest = await capture.done; await new Promise(resolve => setTimeout(resolve, 20));
+      expect(manifest).toMatchObject({status: 'complete', manifestWriteError: 'manifest write denied'});
+      expect(transports[0].destroyed).toBeGreaterThan(0); expect(unhandled).toEqual([]);
+      expect(await capture.stop()).toEqual(manifest);
+    } finally { process.off('unhandledRejection', listener); }
+  });
+  it('retries transient pre-authority failures with bounded backoff and keeps one grant', async () => {
+    const {capture, transports} = scripted([t => t.emit('error', transient('Capture authority deadline exceeded')), t => t.emit('error', transient('Capture broker exited before or during capture')), deliver]);
+    await capture.start(); const manifest = await capture.done;
+    expect(transports).toHaveLength(3); expect(manifest).toMatchObject({status: 'complete', stop: {reason: 'source-end'}, authority: AUTHORITY});
+    expect(transports[2].hellos).toBe(1); expect(transports[2].credits).toBe(2); // No credit after the end marker closes the capture.
+  });
+  it('reserves authority-rejected for an explicitly invalid receipt or protocol use', async () => {
+    const {capture, transports} = scripted([t => t.emit('error', Object.assign(new Error('Capture relay protocol rejected'), {transient: false}))]);
+    await capture.start(); const manifest = await capture.done;
+    expect(transports).toHaveLength(1); expect(manifest).toMatchObject({stop: {reason: 'authority-rejected', detail: 'Capture relay protocol rejected'}, authority: null});
+  });
+  it('ends as source-unavailable after the bounded transient window', async () => {
+    let clock = 0;
+    const {capture, transports} = scripted([t => { clock += 30_000; t.emit('error', transient('Capture broker could not start')); }], {now: () => clock});
+    await capture.start(); const manifest = await capture.done;
+    expect(manifest?.stop.reason).toBe('source-unavailable'); expect(manifest?.stop.detail).toMatch(/^3 transient pre-authority failures/); expect(transports).toHaveLength(3);
+  });
+  it('cancels a pending transient retry when the service stops', async () => {
+    const {capture, transports} = scripted([t => t.emit('error', transient('Capture authority deadline exceeded'))], {transientWindowMs: 60_000});
+    await capture.start(); await new Promise(resolve => setTimeout(resolve, 30));
+    const manifest = await capture.stop(); const attempts = transports.length;
+    await new Promise(resolve => setTimeout(resolve, 600));
+    expect(manifest).toMatchObject({stop: {reason: 'no-source'}}); expect(transports).toHaveLength(attempts);
   });
 });

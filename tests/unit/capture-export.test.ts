@@ -1,8 +1,8 @@
-import {appendFile, readdir, readFile} from 'node:fs/promises';
+import {appendFile, readdir, readFile, rm} from 'node:fs/promises';
 import path from 'node:path';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 import {CaptureWriter} from '../../apps/desktop/src/capture-writer';
-import {exportCapture} from '../../tools/capture-export/src/sanitize';
+import {exportCapture, Sanitizer, stringify} from '../../tools/capture-export/src/sanitize';
 import {temporaryResources} from '../shared/resources';
 import {AUTHORITY, SESSION, delivered, end, envelope, header} from '../shared/cap0-fixtures';
 
@@ -54,5 +54,27 @@ describe('CAP0 export sanitizer', () => {
     await appendFile(path.join(raw, 'packets.ndjson'), '{}\n');
     await expect(exportCapture(raw, path.join(resources.directory, 'tampered'))).rejects.toThrow(/do not match/);
     await expect(exportCapture('relative', output)).rejects.toThrow(/absolute/);
+  });
+  it('refuses a capture without a manifest, as left by a service crash mid-capture', async () => {
+    const raw = await capture(); await rm(path.join(raw, 'manifest.json'));
+    await expect(exportCapture(raw, path.join(resources.directory, 'crashed'))).rejects.toThrow();
+  });
+});
+describe('CAP0 export free-text and number fidelity', () => {
+  it('redacts paths and user-profile fragments embedded anywhere in strings while keeping game text', () => {
+    const sanitizer = new Sanitizer(0n);
+    const value = sanitizer.value({observations: [
+      {name: 'message', value: 'failed to open C:\\Users\\Driver\\Documents\\Euro Truck Simulator 2\\profiles\\x.sii'},
+      {name: 'share', value: 'copy from \\\\server\\share\\logs\\a.txt'}, {name: 'relative', value: 'see ..\\Users\\Bob\\file and /home/alice/x'},
+      {name: 'again', value: 'C:\\Users\\Driver\\Documents\\Euro Truck Simulator 2\\profiles\\x.sii'}, {name: 'plate', value: 'AB 123 CD'}, {name: 'url', value: 'http://example.test/a'}]}) as {observations: {value: string}[]};
+    const text = JSON.stringify(value);
+    for (const secret of ['Driver', 'server', 'Bob', 'alice', 'Documents']) expect(text).not.toContain(secret);
+    expect(value.observations[0].value).toBe('failed to open redacted-path-1'); expect(value.observations[3].value).toBe('redacted-path-1');
+    expect(value.observations[1].value).toBe('copy from redacted-path-2');
+    expect(value.observations[2].value).toBe('see ..\\Users\\redacted-user-1\\file and /home/redacted-user-2/x');
+    expect(value.observations[4].value).toBe('AB 123 CD'); expect(value.observations[5].value).toBe('http://example.test/a');
+  });
+  it('writes -0 exactly', () => {
+    expect(stringify({value: -0, other: 0, list: [-0, 1.5]})).toBe('{"value":-0,"other":0,"list":[-0,1.5]}');
   });
 });
