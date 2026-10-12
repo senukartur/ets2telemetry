@@ -25,6 +25,7 @@
     "lint": "node tools/lint/node_modules/eslint/bin/eslint.js --max-warnings 0 .",
     "lint:ps": "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/Invoke-ScriptAnalysis.ps1",
     "test": "vitest run",
+    "test:cap0-chain": "vitest run --config vitest.cap0-chain.config.mts",
     "test:electron": "npm run package && playwright test",
     "inspect:package": "node scripts/inspect-package.mjs",
     "postinstall": "install-electron",
@@ -32,7 +33,8 @@
     "make": "npm run build && electron-forge make --platform win32 --arch x64",
     "native:configure": "cmake -S native/telemetry-plugin -B native/telemetry-plugin/build -A x64",
     "native:build": "cmake --build native/telemetry-plugin/build --config Release",
-    "native:test": "ctest --test-dir native/telemetry-plugin/build -C Release --output-on-failure"
+    "native:test": "ctest --test-dir native/telemetry-plugin/build -C Release --output-on-failure",
+    "capture:export": "node tools/capture-export/build.mjs && node tools/capture-export/dist/cli.cjs"
   },
   "dependencies": {
     "better-sqlite3": "13.0.3",

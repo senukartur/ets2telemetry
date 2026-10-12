@@ -1,6 +1,6 @@
 import { Worker } from 'node:worker_threads';
 import path from 'node:path';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, open } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { processEntrypoint } from './entrypoints';
 import { ServiceProbe } from './service-probe';
@@ -8,6 +8,13 @@ import {existsSync} from 'node:fs';
 import {createDiagnostics} from './diagnostics';
 import {TelemetryIngestion, initialLive, sourceSelection} from './telemetry-ingestion';
 import {LiveSubscriptions} from './live-subscriptions';
+import {createHash} from 'node:crypto';
+import os from 'node:os';
+import {dataPaths} from './paths';
+import {CaptureSession, NativeCaptureClient} from './capture-session';
+import {validateCaptureGrant, type CaptureGrant} from './capture-activation';
+import type {BrokerConfiguration} from './native-pipe-client';
+import type {SourceSelection} from '../../../packages/contracts/src';
 const port = process.parentPort;
 if (!port) throw new Error('Missing Electron parent port');
 const log = createDiagnostics(path.join(process.env.ETS2TELEMETRY_DIAGNOSTIC_DIR || path.join(process.env.LOCALAPPDATA || tmpdir(), 'ETS2Telemetry', 'logs'), 'service'), Boolean(process.env.ETS2TELEMETRY_DIAGNOSTIC_DIR));
@@ -15,6 +22,34 @@ log('SERVICE_BOOT');
 const subscriptions = new LiveSubscriptions(initialLive());
 const ingestion = new TelemetryIngestion(update => subscriptions.publish(update));
 const fixtureEndpoint = process.env.ETS2TELEMETRY_SOURCE_PIPE;
+let capture: Promise<CaptureSession | undefined> | undefined;
+async function boundedSha256(filename: string, limit: number): Promise<string | null> {
+  try {
+    const file = await open(filename, 'r');
+    try {
+      if ((await file.stat()).size > limit) return null;
+      const hash = createHash('sha256'), chunk = Buffer.alloc(64 * 1024); let offset = 0;
+      for (;;) { const {bytesRead} = await file.read(chunk, 0, chunk.length, offset); if (!bytesRead) break; offset += bytesRead; if (offset > limit) return null; hash.update(chunk.subarray(0, bytesRead)); }
+      return hash.digest('hex');
+    } finally {await file.close();}
+  } catch {return null;}
+}
+/** One opt-in capture interval per service lifetime; it never feeds live state, history or ACKs. */
+function startCapture(grant: CaptureGrant, selection: SourceSelection, broker: BrokerConfiguration | undefined): void {
+  const localAppData = process.env.LOCALAPPDATA;
+  if (capture || !broker || (selection !== 'ets2' && selection !== 'ats') || !localAppData || !path.isAbsolute(localAppData)) throw new Error('Capture prerequisites unavailable');
+  const game = selection;
+  capture = (async () => {
+    const [desktopBuildEvidenceSha256, brokerSha256] = await Promise.all([boundedSha256(path.join(__dirname, 'build-evidence.json'), 1024 * 1024), boundedSha256(broker.executable, 64 * 1024 * 1024)]);
+    const session = new CaptureSession({root: dataPaths(localAppData).captures, game, connect: () => new NativeCaptureClient(broker, game), context: {
+      activation: {mechanism: 'environment', deadlineMs: grant.deadlineMs, operatorLabel: grant.operatorLabel}, displays: grant.displays,
+      code: {desktopBuildEvidenceSha256, brokerSha256, electron: process.versions.electron ?? null, node: process.versions.node, sourceCommit: process.env.ETS2TELEMETRY_SOURCE_COMMIT ?? null},
+      platform: {os: os.version(), release: os.release(), arch: process.arch}}});
+    await session.start(); log('CAPTURE_STARTED', {captureSessionId: session.captureSessionId});
+    void session.done.then(manifest => log('CAPTURE_CLOSED', {status: manifest?.status ?? null, reason: manifest?.stop.reason ?? null}));
+    return session;
+  })().catch(error => {log('CAPTURE_FAILED', String(error)); return undefined;});
+}
 const probe = new ServiceProbe({
   diagnose: log,
   createDirectory: () => mkdtemp(path.join(tmpdir(), 'ets2telemetry-probe-')),
@@ -40,7 +75,7 @@ const probe = new ServiceProbe({
 port.on('message', event => {
   const incoming: unknown = event.data;
   const command = incoming && typeof incoming === 'object' && !Array.isArray(incoming) ? incoming as Record<string, unknown> : undefined;
-  if (command?.type === 'stop') {subscriptions.close(); void ingestion.stop().then(() => probe.stop());}
+  if (command?.type === 'stop') {subscriptions.close(); void Promise.all([ingestion.stop(), capture?.then(session => session?.stop()).catch(error => log('CAPTURE_STOP_FAILED', String(error)))]).then(() => probe.stop());}
   else if (command?.type === 'unsubscribe') subscriptions.close();
   else if (command?.type === 'subscribe' && event.ports.length === 1) subscriptions.attach(event.ports[0]);
   else if (command?.type === 'select') {
@@ -55,6 +90,11 @@ port.on('message', event => {
         broker = {executable: configuration.executable, discoveryDirectory: configuration.discoveryDirectory};
       }
       ingestion.configureBroker(broker); ingestion.select(selection, fixtureEndpoint);
+      // Evidence capture is independent of live ingestion: a rejected grant never fails selection.
+      if (command.capture !== undefined) {
+        try {startCapture(validateCaptureGrant(command.capture), selection, broker);}
+        catch (error) {log('CAPTURE_REJECTED', String(error));}
+      }
     }
     catch {port.postMessage({type: 'failed', code: 'INVALID_SOURCE_COMMAND'});}
   } else {for (const transferred of event.ports) transferred.close();}
