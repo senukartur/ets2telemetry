@@ -38,8 +38,8 @@ The technical choices below are the working implementation baseline. Changes to 
 
 ## 3. Initial User Journey
 
-1. The driver installs the utility and selects installed games through a setup wizard.
-2. The utility installs its telemetry plugin into each selected game.
+1. The driver installs the utility. On launch, it discovers installed games without a multi-step setup wizard.
+2. The utility installs or updates its telemetry plugin in each discovered game silently, and asks the driver only when it cannot proceed alone (see the October 12, 2026 silent plugin installation decision).
 3. The driver starts the utility and launches the game normally or through TruckersMP.
 4. The application connects to the plugin and displays connection status and live metrics.
 5. The overlay remains visible while driving, while mouse clicks and controls continue to reach the game.
@@ -300,3 +300,21 @@ The owner explicitly accepts ET-008 code by exception and authorizes the coordin
 ## Convoy validation deferral — October 12, 2026
 
 The owner removed the built-in Convoy multiplayer mode from the current validation matrix: the owner does not play Convoy and has no procedure to test it. The matrix for SP-01, CAP-01, the full ET-009 gate and later ET-020 is now ETS2 and ATS, each in single-player and TruckersMP, with windowed and borderless modes. Convoy is deferred, not rejected: it is neither validated nor claimed as supported, and the application must not advertise Convoy compatibility. Earlier dated records that list Convoy as pending keep their historical wording; this decision supersedes those pending Convoy checks. TruckersMP still requires actual game evidence; single-player and TruckersMP results do not establish Convoy behavior.
+
+## Silent plugin installation — October 12, 2026
+
+The owner chose silent plugin installation, matching other telemetry utilities, over a multi-step setup wizard. On launch, the application discovers ETS2 and ATS through the Steam library list. Without asking, it installs the project plugin into each discovered game's `bin/win_x64/plugins`, or updates it there, whenever it can do so safely. It shows a prompt only when it cannot proceed alone:
+
+- the game or TruckersMP is running, so the driver must close it before the plugin can be installed or replaced;
+- no game is found automatically, so the driver must choose the game folder;
+- the destination needs permissions the application does not have.
+
+All existing safety rules still apply:
+
+- change the DLL only while the game and client are closed;
+- manage only this project's file and never touch other plugins;
+- verify the copied file's SHA-256;
+- replace or remove an existing file only when its hash matches a version this application installed;
+- remove only the owned file on uninstall.
+
+The application must show the plugin state for each game: installed, outdated, missing or blocked. ET-017 implements this behaviour; its card title still says "wizard", but this decision governs the user experience.
