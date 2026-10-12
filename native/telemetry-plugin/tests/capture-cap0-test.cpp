@@ -523,25 +523,64 @@ void stop_during_write() {
   std::cout << "stopDuringWritePackets=" << packets.items.size() << " unsent=" << packets.last().at("data").at("unsentEnvelopes").string() << " shutdownMs=" << f.capture.shutdown_ms() << '\n';
 }
 
-void stop_slow_reader() {
+// Parses everything a client received. Every complete frame must be a valid, contiguous CAP0 packet; an
+// end marker may only follow complete envelopes. Returns "end" when the stream ends with a marker,
+// "partial" when it ends inside a frame, or "clean" when it ends on a frame boundary without a marker.
+std::string verify_stream(const std::vector<std::uint8_t>& bytes, std::string& end_detail) {
+  std::size_t offset = 0, index = 0; bool open_split = false, ended = false;
+  while (bytes.size() - offset >= 4) {
+    const auto n = static_cast<std::uint32_t>(bytes[offset]) | (static_cast<std::uint32_t>(bytes[offset + 1]) << 8) | (static_cast<std::uint32_t>(bytes[offset + 2]) << 16) | (static_cast<std::uint32_t>(bytes[offset + 3]) << 24);
+    require(n > 0 && n <= cap0::max_packet_bytes, "received frame length valid");
+    if (bytes.size() - offset - 4 < n) break;
+    const auto packet = v0::detail::Parser(std::string(bytes.begin() + static_cast<std::ptrdiff_t>(offset + 4), bytes.begin() + static_cast<std::ptrdiff_t>(offset + 4 + n))).parse();
+    require(!ended, "nothing after the end marker");
+    require(packet.at("packetSeq").string() == std::to_string(index), "received packets contiguous");
+    const auto kind = packet.at("kind").string();
+    if (kind == "envelope") open_split = !packet.at("data").at("attributes").at("final").boolean();
+    if (kind == "loss") require(!open_split && loss_consistent(packet.at("data")), "loss marker after complete envelopes and consistent");
+    if (kind == "end") {
+      require(!open_split, "end marker never follows a partial envelope"); ended = true;
+      end_detail = packet.at("data").at("reason").string() + " unsent=" + packet.at("data").at("unsentEnvelopes").string();
+    }
+    offset += 4 + n; ++index;
+  }
+  return ended ? "end" : offset == bytes.size() ? "clean" : "partial";
+}
+void stop_with_reader(DWORD pause_ms, const char* label, std::size_t attributes = 255, unsigned envelopes = 12, bool expect_end = false) {
   // A client that keeps reading, but slowly, must not stretch shutdown write by write: the whole
-  // stop is bounded by one 550 ms budget even while a split envelope is being written.
-  Fixture f; f.start(); auto client = f.connect(f.capture.endpoint()); hello(client.get()); Packets packets; require(packets.read(client.get(), 1), "header");
-  BigConfiguration big(255, 1024, 'w');
-  for (unsigned i = 0; i < 12; ++i) f.host.config("job", big.attributes.data());
-  std::atomic<bool> reading{true}; std::atomic<std::uint64_t> received{0};
+  // stop is bounded by one 550 ms budget even while a split envelope is being written. Drain writes
+  // stop at 450 ms so the last 100 ms remain for markers.
+  Fixture f; f.start(); auto client = f.connect(f.capture.endpoint()); hello(client.get());
+  require(until([&] { return f.capture.queue().is_open(); }), "capture gate open before evidence is produced");
+  BigConfiguration big(attributes, 1024, 'w');
+  for (unsigned i = 0; i < envelopes; ++i) f.host.config("job", big.attributes.data());
+  std::atomic<bool> slow{true}; std::atomic<std::uint64_t> received{0}; std::vector<std::uint8_t> stream;
   std::thread reader([&] {
     std::vector<std::uint8_t> chunk(8192); DWORD count = 0;
-    // About 8 KiB per 25 ms: each 64 KiB packet takes roughly 200 ms, so a split envelope spans many writes.
-    while (reading.load() && io(client.get(), true, chunk.data(), static_cast<DWORD>(chunk.size()), count, 3000) && count) { received += count; Sleep(25); }
+    // While capturing, 8 KiB per pause; after stop returns, read the rest at full speed until EOF.
+    while (io(client.get(), true, chunk.data(), static_cast<DWORD>(chunk.size()), count, 3000) && count) {
+      stream.insert(stream.end(), chunk.begin(), chunk.begin() + count); received += count;
+      if (slow.load()) Sleep(pause_ms);
+    }
   });
-  require(until([&] { return received.load() > 100000; }, 5000), "slow client is reading a split envelope");
+  // A failed assertion still joins the reader instead of terminating the process.
+  struct Join { std::thread& t; std::atomic<bool>& slow; ~Join() { slow.store(false); if (t.joinable()) t.join(); } } join{reader, slow};
+  require(until([&] { return received.load() > 100000; }, 5000), "client is reading a split envelope");
   const auto started = GetTickCount64(); f.capture.stop(); const auto elapsed = GetTickCount64() - started;
-  reading.store(false); reader.join();
-  std::cout << "slowReaderStopMs=" << elapsed << " workerShutdownMs=" << f.capture.shutdown_ms() << " receivedBytes=" << received.load() << '\n';
-  require(elapsed < (550 + 150) * timing_scale, "stop with a slow reader stays within the single stop budget");
+  slow.store(false); reader.join();
+  std::string detail; const auto outcome = verify_stream(stream, detail);
+  std::cout << label << "StopMs=" << elapsed << " workerShutdownMs=" << f.capture.shutdown_ms() << " receivedBytes=" << stream.size() << " outcome=" << outcome << (detail.empty() ? "" : " end=") << detail << '\n';
+  require(elapsed < (550 + 150) * timing_scale, "stop stays within the single stop budget");
+  if (outcome == "end") require(detail.rfind("plugin-shutdown", 0) == 0, "shutdown end marker reason");
+  if (expect_end) require(outcome == "end", "drain cut at an envelope boundary keeps the reserved marker window");
   require(f.host.wrong_thread == 0, "no SDK calls from worker");
 }
+void stop_slow_reader() { stop_with_reader(25, "slowReader"); }
+// Single-packet envelopes (about 55 KiB each) and a reader that drains the pipe buffer well within
+// 100 ms: whether the drain finishes or is cut at 450 ms, the cut falls on an envelope boundary,
+// so the reserved window must deliver the plugin-shutdown end marker.
+void stop_drain_boundary() { stop_with_reader(2, "drainBoundary", 50, 40, true); }
+
 
 void v0_continuity() {
   // A connected, polling capture worker must not perturb v0 publication: compare with a reference.
@@ -626,7 +665,7 @@ int controlled_host(const char* dll_path, const char* directory_utf8) {
 int main(int argc, char** argv) {
   try {
     if (argc == 4 && std::string(argv[1]) == "host") return controlled_host(argv[2], argv[3]);
-    const std::map<std::string, std::function<void()>> cases{{"queue", queue_bounds}, {"adapter", adapter_copy}, {"wire", wire}, {"server", server_capture}, {"stall", stall_and_loss}, {"rejection", rejection}, {"v0-isolation", v0_isolation}, {"counters", counter_snapshots}, {"stop-inflight", stop_during_write}, {"stop-slow-reader", stop_slow_reader}, {"v0-continuity", v0_continuity}
+    const std::map<std::string, std::function<void()>> cases{{"queue", queue_bounds}, {"adapter", adapter_copy}, {"wire", wire}, {"server", server_capture}, {"stall", stall_and_loss}, {"rejection", rejection}, {"v0-isolation", v0_isolation}, {"counters", counter_snapshots}, {"stop-inflight", stop_during_write}, {"stop-slow-reader", stop_slow_reader}, {"stop-drain-boundary", stop_drain_boundary}, {"v0-continuity", v0_continuity}
 #ifdef ETS2TELEMETRY_TRANSPORT_TEST_HOOKS
       , {"clock", clock_unavailable}
 #endif
