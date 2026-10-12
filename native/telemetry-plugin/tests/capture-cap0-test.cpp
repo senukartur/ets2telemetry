@@ -478,27 +478,31 @@ void dll_lifecycle(const char* path) {
 void counter_snapshots() {
   // A live producer bursts drops while the worker-side reader samples; every sample must be one
   // coherent version, and every loss packet built from it must satisfy the decoder.
+  // Overlap is guaranteed by construction, not by scheduling: after every burst of `burst` attempts the
+  // test producer waits (bounded, failing loudly) until the reader has taken another sample. So at least
+  // `bursts` samples are taken while the producer is live, on any core count. The wait is test-only.
+  constexpr std::uint64_t bursts = timing_scale > 1 ? 200 : 1000, burst = 64;
   cap0::EvidenceQueue q; require(q.prepare(), "prepare"); q.open();
-  // Sanitized builds on small hosted runners sample far slower; the overlap requirement is lower there,
-  // while every sample is still checked for consistency.
-  constexpr std::uint64_t required_overlap = timing_scale > 1 ? 200 : 1000;
-  std::atomic<bool> done{false}, enough{false}; std::atomic<std::uint64_t> produced{0};
+  std::atomic<bool> done{false}, stalled{false}, waiting{false}; std::atomic<std::uint64_t> produced{0}, reader_samples{0};
   std::thread producer([&] {
-    cap0::Context c; c.kind = cap0::Kind::lifecycle; c.id = "simulation.started"; c.monotonic_available = true;
-    // The burst lasts at least one second and until the reader has the required overlapping samples
-    // (bounded by 15 s, well under the 30 s CTest timeout). No attempt count is required.
-    const auto started = GetTickCount64(), minimum = started + 1000, limit = started + 15000;
-    for (std::uint64_t i = 0; (GetTickCount64() < minimum || !enough.load(std::memory_order_relaxed)) && GetTickCount64() < limit; ++i) { c.boundary_order = i + 1; c.monotonic_ns = i + 1; c.monotonic_available = (i % 3) != 0; q.capture(c); produced.store(i + 1, std::memory_order_relaxed);
-      // Real SDK callbacks are spaced by game work; a short pause keeps the reader from being starved by
-      // an artificially back-to-back writer while drops still race every sample.
-      for (int k = 0; k < 64; ++k) YieldProcessor();
-      // On few cores, periodically give up the time slice so the reader thread is scheduled while writes continue.
-      if ((i & 255) == 255) SwitchToThread(); }
+    cap0::Context c; c.kind = cap0::Kind::lifecycle; c.id = "simulation.started";
+    std::uint64_t i = 0;
+    for (std::uint64_t b = 0; b < bursts && !stalled.load(); ++b) {
+      for (std::uint64_t k = 0; k < burst; ++k, ++i) { c.boundary_order = i + 1; c.monotonic_ns = i + 1; c.monotonic_available = (i % 3) != 0; q.capture(c); produced.store(i + 1, std::memory_order_relaxed); }
+      const auto checkpoint = reader_samples.load(), deadline = GetTickCount64() + 10000;
+      waiting.store(true);
+      while (reader_samples.load() == checkpoint) {
+        if (GetTickCount64() >= deadline) { stalled.store(true); break; }
+        SwitchToThread();
+      }
+      waiting.store(false);
+    }
     done.store(true);
   });
+  struct Join { std::thread& t; ~Join() { if (t.joinable()) t.join(); } } join{producer};
   std::uint64_t samples = 0, concurrent = 0, previous_attempted = 0, previous_dropped = 0, popped = 0, dropped_at_pop = 0; cap0::Envelope e; bool inconsistent = false;
-  while (!done.load() || samples < required_overlap) {
-    const bool live = !done.load(); const auto c = q.counters(); ++samples; if (live && ++concurrent >= required_overlap) enough.store(true, std::memory_order_relaxed);
+  for (;;) {
+    const bool live = !done.load(); const auto c = q.counters(); ++samples; if (live) ++concurrent;
     if (!counters_consistent(c) || c.attempted < previous_attempted || c.dropped < previous_dropped) inconsistent = true;
     // Every sample checks the decoder invariants directly; the full JSON loss packet round trip, which is
     // expensive under ASan, runs on every 16th sample.
@@ -507,14 +511,18 @@ void counter_snapshots() {
     // Drain only after new drops: the queue fills (enqueues), overflows (drops) and is emptied again, so
     // both outcomes race the samples regardless of how fast this reader runs.
     if (c.dropped > dropped_at_pop) { while (q.pop(e)) ++popped; dropped_at_pop = c.dropped; }
-    if (done.load() && samples >= required_overlap) break;
+    reader_samples.store(samples);
+    // On a single core the waiting producer needs this thread to give up its time slice.
+    if (waiting.load()) SwitchToThread();
+    if (!live) break;
   }
   producer.join();
   const auto final = q.counters();
+  require(!stalled.load(), "reader advanced within 10 s of every producer burst");
   require(!inconsistent, "every concurrent counter sample and loss packet is internally consistent");
-  if (concurrent < required_overlap) std::cout << "concurrentSamples=" << concurrent << " produced=" << produced.load() << '\n';
-  require(concurrent >= required_overlap, "samples overlapped the live producer burst");
-  require(loss_consistent(v0::detail::Parser(cap0::loss_packet(session_id, final, samples + 1, samples + 1)).parse().at("data")), "final loss packet consistent"); require(final.attempted == produced.load() && counters_consistent(final) && final.dropped > 0 && final.enqueued > 0, "burst mixed retained and dropped envelopes");
+  require(concurrent >= bursts, "samples overlapped every producer burst");
+  require(loss_consistent(v0::detail::Parser(cap0::loss_packet(session_id, final, samples + 1, samples + 1)).parse().at("data")), "final loss packet consistent");
+  require(final.attempted == produced.load() && final.attempted == bursts * burst && counters_consistent(final) && final.dropped > 0 && final.enqueued > 0, "burst mixed retained and dropped envelopes");
   std::cout << "counterSamples=" << samples << " concurrent=" << concurrent << " attempted=" << final.attempted << " dropped=" << final.dropped << " popped=" << popped << '\n';
 }
 
