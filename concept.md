@@ -20,6 +20,8 @@ The project owner has web development experience with React and TypeScript, but 
 
 ## 2. User Requirements
 
+Owner-approved deferred capabilities are tracked in [technical debt](docs/technical-debt.md). TD-001 records future game screenshots containing the overlay, including investigation and actual validation of Steam capture. It does not change the current separate-window overlay or authorize rendering hooks in the MVP.
+
 - The initial platform is **Windows x64**.
 - Both ETS2 and ATS must be supported.
 - **TruckersMP compatibility is required** for the first release. Single-player and the built-in Convoy mode are also part of the validation matrix.
