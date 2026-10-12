@@ -545,7 +545,12 @@ std::string verify_stream(const std::vector<std::uint8_t>& bytes, std::string& e
     }
     offset += 4 + n; ++index;
   }
-  return ended ? "end" : offset == bytes.size() ? "clean" : "partial";
+  if (ended || offset == bytes.size()) return ended ? "end" : "clean";
+  // A trailing incomplete frame must be only the cut frame itself: markers written after a cut would land
+  // inside its declared length and look like payload. Test payloads are filler, so a marker kind is a defect.
+  const std::string trailing(bytes.begin() + static_cast<std::ptrdiff_t>(offset), bytes.end());
+  require(trailing.find("\"kind\":\"end\"") == std::string::npos && trailing.find("\"kind\":\"loss\"") == std::string::npos, "no marker inside a cut frame");
+  return "partial";
 }
 void stop_with_reader(DWORD pause_ms, const char* label, std::size_t attributes = 255, unsigned envelopes = 12, bool expect_end = false) {
   // A client that keeps reading, but slowly, must not stretch shutdown write by write: the whole
@@ -611,6 +616,49 @@ void stop_during_write() {
   require(f.capture.shutdown_ms() < (550 + 150) * timing_scale && f.host.wrong_thread == 0, "bounded stop and no SDK calls on worker");
   std::cout << "stopDuringWriteBytes=" << stream.size() << " outcome=" << outcome << (detail.empty() ? "" : " end=") << detail << " shutdownMs=" << f.capture.shutdown_ms() << '\n';
 }
+void stream_verifier() {
+  // The stop tests rely on verify_stream to reject markers hidden inside a cut frame. Build that exact
+  // defect synthetically: a header, then a 64 KiB frame cut after 10 KiB of filler, followed by loss/end
+  // marker frames that fall inside the cut frame's declared length.
+  cap0::HeaderInfo h; h.capture_session_id = session_id; h.origin = "synthetic"; h.game = "ets2"; h.sdk_game_id = "eut2";
+  h.process_instance_id = h.plugin_session_id = h.source_clock_id = h.game_clock_id = "00000000-0000-4000-8000-000000000001"; h.process_id = 1;
+  auto append = [](std::vector<std::uint8_t>& out, const std::vector<std::uint8_t>& bytes) { out.insert(out.end(), bytes.begin(), bytes.end()); };
+  std::vector<std::uint8_t> clean; append(clean, cap0::frame(cap0::header_packet(h, 0, 1)));
+  auto cut = clean; const std::uint32_t declared = 65536;
+  cut.push_back(static_cast<std::uint8_t>(declared)); cut.push_back(static_cast<std::uint8_t>(declared >> 8)); cut.push_back(static_cast<std::uint8_t>(declared >> 16)); cut.push_back(static_cast<std::uint8_t>(declared >> 24));
+  cut.insert(cut.end(), 10240, static_cast<std::uint8_t>('s'));
+  std::string detail;
+  require(verify_stream(cut, detail) == "partial", "a cut frame of filler is a valid partial ending");
+  cap0::Counters c; c.attempted = 1; c.enqueued = 1;
+  auto hidden = cut; append(hidden, cap0::frame(cap0::loss_packet(session_id, c, 1, 2))); append(hidden, cap0::frame(cap0::end_packet(session_id, {cap0::EndReason::plugin_shutdown, c, 0, 1}, 2, 3)));
+  bool rejected = false; try { verify_stream(hidden, detail); } catch (const std::runtime_error&) { rejected = true; }
+  require(rejected, "markers written inside a cut frame are rejected");
+  auto valid = clean; append(valid, cap0::frame(cap0::end_packet(session_id, {cap0::EndReason::plugin_shutdown, c, 0, 1}, 1, 2)));
+  require(verify_stream(valid, detail) == "end" && detail == "plugin-shutdown unsent=1", "a complete stream with an end marker is accepted");
+}
+
+void stop_stalled_partial() {
+  // The reader drains part of the stream, so a single-packet envelope's write is pending mid-frame, and
+  // then stalls through the whole stop. The pending write must be cancelled without any marker: the stream
+  // ends cleanly or inside the cut frame, never with loss/end bytes.
+  Fixture f; f.start(); auto client = f.connect(f.capture.endpoint()); hello(client.get());
+  require(until([&] { return f.capture.queue().is_open(); }), "capture gate open");
+  BigConfiguration big(50, 1024, 'p');
+  for (unsigned i = 0; i < 12; ++i) f.host.config("job", big.attributes.data());
+  std::vector<std::uint8_t> stream, chunk(8192); DWORD count = 0;
+  // Read about 100 KB: beyond the 64 KiB pipe buffer, so the worker is inside a pending packet write.
+  while (stream.size() < 100000 && io(client.get(), true, chunk.data(), static_cast<DWORD>(chunk.size()), count, 3000) && count) stream.insert(stream.end(), chunk.begin(), chunk.begin() + count);
+  require(stream.size() >= 100000, "reader drained into a pending packet");
+  Sleep(100);
+  require(f.capture.queue().queued_envelopes() > 0, "evidence still queued behind the stalled reader");
+  f.capture.stop();
+  const auto rest = read_until_eof(client.get()); stream.insert(stream.end(), rest.begin(), rest.end());
+  std::string detail; const auto outcome = verify_stream(stream, detail);
+  std::cout << "stalledPartialBytes=" << stream.size() << " outcome=" << outcome << " shutdownMs=" << f.capture.shutdown_ms() << '\n';
+  require(outcome == "partial" || outcome == "clean", "a cancelled pending write never yields markers");
+  require(f.capture.shutdown_ms() < (550 + 150) * timing_scale && f.host.wrong_thread == 0, "bounded stop and no SDK calls on worker");
+}
+
 void stop_clean_markers() {
   // Deterministic marker path: the whole capture fits in the 64 KiB pipe buffer, so no write can pend
   // even though the client reads nothing until the stop has returned.
@@ -713,7 +761,7 @@ int controlled_host(const char* dll_path, const char* directory_utf8) {
 int main(int argc, char** argv) {
   try {
     if (argc == 4 && std::string(argv[1]) == "host") return controlled_host(argv[2], argv[3]);
-    const std::map<std::string, std::function<void()>> cases{{"queue", queue_bounds}, {"adapter", adapter_copy}, {"wire", wire}, {"server", server_capture}, {"stall", stall_and_loss}, {"rejection", rejection}, {"v0-isolation", v0_isolation}, {"counters", counter_snapshots}, {"stop-inflight", stop_during_write}, {"stop-slow-reader", stop_slow_reader}, {"stop-drain-boundary", stop_drain_boundary}, {"stop-clean-markers", stop_clean_markers}, {"v0-continuity", v0_continuity}
+    const std::map<std::string, std::function<void()>> cases{{"queue", queue_bounds}, {"adapter", adapter_copy}, {"wire", wire}, {"server", server_capture}, {"stall", stall_and_loss}, {"rejection", rejection}, {"v0-isolation", v0_isolation}, {"counters", counter_snapshots}, {"stop-inflight", stop_during_write}, {"stop-slow-reader", stop_slow_reader}, {"stop-drain-boundary", stop_drain_boundary}, {"stop-clean-markers", stop_clean_markers}, {"stop-stalled-partial", stop_stalled_partial}, {"stream-verifier", stream_verifier}, {"v0-continuity", v0_continuity}
 #ifdef ETS2TELEMETRY_TRANSPORT_TEST_HOOKS
       , {"clock", clock_unavailable}
 #endif
