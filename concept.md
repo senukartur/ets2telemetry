@@ -303,18 +303,21 @@ The owner removed the built-in Convoy multiplayer mode from the current validati
 
 ## Silent plugin installation — October 12, 2026
 
-The owner chose silent plugin installation, matching other telemetry utilities, over a multi-step setup wizard. On launch, the application discovers ETS2 and ATS through the Steam library list. Without asking, it installs the project plugin into each discovered game's `bin/win_x64/plugins`, or updates it there, whenever it can do so safely. It shows a prompt only when it cannot proceed alone:
+The owner chose silent plugin installation, matching other telemetry utilities, over a multi-step setup wizard. On launch, the application discovers ETS2 and ATS through the Steam library list. Without asking, it installs the project plugin into each discovered game's `bin/win_x64/plugins`, or updates it there, whenever it can do so safely. The driver can also add a game folder manually at any time, for example an installation outside the Steam libraries. The driver can exclude a game, and the exclusion persists in settings, so an excluded game is never reinstalled silently.
+
+The application shows a prompt only when it cannot proceed alone:
 
 - the game or TruckersMP is running, so the driver must close it before the plugin can be installed or replaced;
 - no game is found automatically, so the driver must choose the game folder;
-- the destination needs permissions the application does not have.
+- the destination needs permissions the application does not have;
+- a file with the project plugin's name already exists, but its hash matches no version this application installed (for example after the developer procedure in `docs/manual-plugin-setup.md`, an interrupted copy or a user-modified file). The driver must remove or explicitly confirm it; the application never overwrites it silently.
 
-All existing safety rules still apply:
+All existing safety rules still apply, made precise for unattended installs:
 
-- change the DLL only while the game and client are closed;
-- manage only this project's file and never touch other plugins;
-- verify the copied file's SHA-256;
-- replace or remove an existing file only when its hash matches a version this application installed;
-- remove only the owned file on uninstall.
+- Change the DLL only while the game and client are closed. Treat the closed-state check as advisory: if the destination is locked, or the game starts during an update, fail the update and report `blocked`. Never wait or retry while the game is in use; try again after the game exits or at the next launch.
+- Manage only this project's file and never touch other plugins.
+- Copy atomically. Write a temporary file in the same `plugins` directory and verify its SHA-256 against the expected hash of the plugin bundled with this application version. Then rename it over the destination. A failed or interrupted copy must never leave a partial `ets2telemetry-plugin.dll`.
+- Replace or remove an existing file only when its hash matches a version this application installed.
+- Remove only the owned file on uninstall.
 
-The application must show the plugin state for each game: installed, outdated, missing or blocked. ET-017 implements this behaviour; its card title still says "wizard", but this decision governs the user experience.
+The application must show the plugin state for each game: installed, outdated, missing, excluded by the driver, or blocked (with the reason). ET-017 implements this behaviour; its card title still says "wizard", but this decision governs the user experience.
