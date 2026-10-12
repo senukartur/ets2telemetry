@@ -41,6 +41,11 @@ class CaptureServer final {
   bool wait_io(HANDLE pipe, OVERLAPPED&, DWORD& transferred, ULONGLONG deadline, StopMode);
   bool write(HANDLE pipe, const std::string& payload, ULONGLONG deadline, StopMode);
   std::uint64_t stamp() const;
+  // One shutdown budget per stop, measured from when the worker first observes it: writes in flight
+  // and the drain share the window up to (total - marker); loss and end markers must finish by total.
+  static constexpr ULONGLONG stop_total_ms = 550, stop_marker_ms = 100;
+  ULONGLONG stop_deadline_ = 0;
+  ULONGLONG stop_budget() noexcept { if (!stop_deadline_) stop_deadline_ = GetTickCount64() + stop_total_ms; return stop_deadline_; }
   sdk::Adapter& adapter_; const char* origin_;
   EvidenceQueue queue_;
   std::thread worker_; transport::Handle stop_event_;

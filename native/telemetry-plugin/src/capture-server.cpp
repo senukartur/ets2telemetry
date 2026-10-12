@@ -73,14 +73,14 @@ std::uint64_t CaptureServer::stamp() const {
   return value;
 }
 bool CaptureServer::wait_io(HANDLE pipe, OVERLAPPED& operation, DWORD& transferred, ULONGLONG deadline, StopMode mode) {
-  bool graced = false;
   for (;;) {
     if (GetOverlappedResult(pipe, &operation, &transferred, FALSE)) return true;
     if (GetLastError() != ERROR_IO_INCOMPLETE) return false;
     const auto now = GetTickCount64();
     const bool stopping = mode != StopMode::ignore && WaitForSingleObject(stop_event_.get(), 0) == WAIT_OBJECT_0;
-    // grace: a stop lets an in-flight frame finish within 250 ms instead of truncating it.
-    if (stopping && mode == StopMode::grace && !graced) { graced = true; deadline = (std::min)(deadline, now + 250); }
+    // grace: in-flight and remaining split-envelope writes may continue until the drain window of the
+    // single stop budget closes. The bound is per stop, not per write, so later writes never extend it.
+    if (stopping && mode == StopMode::grace) deadline = (std::min)(deadline, stop_budget() - stop_marker_ms);
     if ((stopping && mode == StopMode::cancel) || now >= deadline) {
       CancelIoEx(pipe, &operation);
       // Completion is observed before the buffer or OVERLAPPED leaves scope, including CancelIoEx races.
@@ -100,6 +100,7 @@ bool CaptureServer::write(HANDLE pipe, const std::string& payload, ULONGLONG dea
   return written == bytes.size();
 }
 void CaptureServer::serve(HANDLE pipe, const std::wstring& directory, const transport::OwnerSecurity& security, const transport::UserIdentity& user) {
+  stop_deadline_ = 0;
   const auto handshake_deadline = GetTickCount64() + 5000;
   ULONG pid = 0; if (!GetNamedPipeClientProcessId(pipe, &pid)) return;
   // Same connected-peer authority as v0: token user, session and the protected broker policy.
@@ -137,13 +138,17 @@ void CaptureServer::serve(HANDLE pipe, const std::wstring& directory, const tran
   header.image_available = image_known_; header.image_path = image_path_; header.image_sha256 = image_sha256_;
   header.boundary_at_open = current.boundary_order;
   // Only now, after authority and explicit opt-in, may callbacks copy evidence.
-  header.open_monotonic_ns = stamp(); queue_.open(); status_.store(CaptureStatus::capturing); ++sessions_;
+  // Both header stamps are taken before the gate opens, so a missing clock never opens it.
+  header.open_monotonic_ns = stamp(); const auto header_payload = header_packet(header, 0, stamp());
+  queue_.open(); status_.store(CaptureStatus::capturing); ++sessions_;
   std::uint64_t packet_seq = 0, published = 0, reported_drops = 0; ULONGLONG last_loss = 0, next_source_check = GetTickCount64() + 250;
   auto finish = [&](EndReason reason, bool drain) {
     queue_.close();
     // Shutdown drains already copied envelopes for up to 200 ms, then reports loss and the end marker
     // within a further 100 ms; envelopes still queued are counted as unsent.
-    const auto started = GetTickCount64(), drain_deadline = started + 200, deadline = started + 300; Envelope envelope;
+    // On shutdown both deadlines come from the single stop budget (see stop_budget()).
+    const auto started = GetTickCount64();
+    const auto deadline = reason == EndReason::plugin_shutdown ? stop_budget() : started + 300, drain_deadline = deadline - stop_marker_ms; Envelope envelope;
     try {
       while (drain && GetTickCount64() < drain_deadline && queue_.pop(envelope)) {
         for (const auto& payload : envelope_packets(session, envelope, packet_seq, stamp())) if (!write(pipe, payload, deadline, StopMode::ignore)) return;
@@ -154,7 +159,8 @@ void CaptureServer::serve(HANDLE pipe, const std::wstring& directory, const tran
     if (counters.dropped != reported_drops && !write(pipe, loss_packet(session, counters, packet_seq++, stamp()), deadline, StopMode::ignore)) return;
     write(pipe, end_packet(session, {reason, counters, published, queue_.queued_envelopes()}, packet_seq++, stamp()), deadline, StopMode::ignore);
   };
-  if (!write(pipe, header_packet(header, packet_seq++, stamp()), GetTickCount64() + 1000, StopMode::cancel)) return;
+  ++packet_seq;
+  if (!write(pipe, header_payload, GetTickCount64() + 1000, StopMode::cancel)) return;
   Operation inbound; std::array<std::uint8_t, 64> input{}; DWORD bytes = 0;
   if (ReadFile(pipe, input.data(), static_cast<DWORD>(input.size()), &bytes, &inbound.overlapped) || GetLastError() != ERROR_IO_PENDING) return;
   // After an end marker the endpoint keeps serving, and DisconnectNamedPipe would discard unread
