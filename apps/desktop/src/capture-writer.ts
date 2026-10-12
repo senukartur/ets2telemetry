@@ -38,7 +38,11 @@ export interface CaptureManifest {
   clockDomains: Record<string, unknown>;
   timing: {receiptClockId: string; startedMonotonicNs: string; stoppedMonotonicNs: string | null; startedUtcUnixMs: string; stoppedUtcUnixMs: string};
   counts: {packetsReceived: number; packetsWritten: number; bytesWritten: number; packetsDiscarded: number; bytesDiscarded: number; envelopesCompleted: number};
-  /** Broker credits held back while pending storage lacked room for one maximum packet; total and open-at-close time in receipt-clock ms. */
+  /**
+   * Broker credits held back while pending storage lacked room for one maximum packet; total and
+   * open-at-close time in receipt-clock ms. Always written by this writer, but an additive field of
+   * schema version 1: earlier manifests lack it, so readers must treat it as optional.
+   */
   flowControl: {creditsWithheld: number; withheldMs: number; withheldAtClose: boolean};
   loss: {pluginLoss: Cap0LossData | null; end: Cap0EndData | null; endMarkerReceived: boolean; envelopePartial: boolean; lastPacketSeq: string | null; lastEnvelopeSeq: string;
     knownBoundaries: {envelopeSeq: string; droppedBefore: string}[]; boundariesOmitted: number};
@@ -128,14 +132,23 @@ export class CaptureWriter {
    */
   whenRoom(grant: () => void): void {
     if (this.closing || this.waiter) return;
-    if (this.hasRoom()) { grant(); return; }
+    if (this.hasRoom()) { this.grant(grant); return; }
     this.flowControl.creditsWithheld++; this.waiter = {grant, since: this.now()};
   }
   private hasRoom(): boolean { return this.pendingBytes === 0 || this.pendingBytes + MAX_LINE_BYTES <= this.limits.pendingBytes; }
   private releaseWaiter(): void {
     const waiter = this.waiter;
     if (!waiter || this.closing || this.failure || !this.hasRoom()) return;
-    this.waiter = undefined; this.flowControl.withheldMs += this.elapsedMs(waiter.since); waiter.grant();
+    this.waiter = undefined; this.flowControl.withheldMs += this.elapsedMs(waiter.since); this.grant(waiter.grant);
+  }
+  /**
+   * Runs a credit grant without letting it throw into admission or the write loop, where it could
+   * become an unhandled rejection. A failed grant would leave the source without credit, so the
+   * capture closes with the failure recorded in its manifest.
+   */
+  private grant(grant: () => void): void {
+    try { grant(); }
+    catch (error) { this.closeQuietly('internal-error', `credit grant failed: ${error instanceof Error ? error.message.slice(0, 120) : 'unknown'}`); }
   }
   private elapsedMs(since: number): number { const ms = this.now() - since; return Number.isFinite(ms) && ms > 0 ? Math.round(ms) : 0; }
   /**

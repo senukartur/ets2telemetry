@@ -42,6 +42,23 @@ describe('CAP0 bounded writer', () => {
     expect((await readdir(instance.directory)).sort()).toEqual(['manifest.json', 'packets.ndjson']);
     expect(path.relative(resources.directory, instance.directory)).toBe(path.join('captures', SESSION));
   });
+  it('contains a throwing credit grant, immediate or after a completed write, as an internal-error close', async () => {
+    const unhandled: unknown[] = [], listener = (reason: unknown) => unhandled.push(reason); process.on('unhandledRejection', listener);
+    try {
+      const immediate = writer(); await immediate.instance.start(); immediate.instance.accept(header());
+      await new Promise(resolve => setTimeout(resolve, 5)); // Header written: room for another line.
+      expect(() => immediate.instance.whenRoom(() => { throw new Error('stdin closed'); })).not.toThrow();
+      expect(await immediate.instance.close('disconnect')).toMatchObject({stop: {reason: 'internal-error', detail: 'credit grant failed: stdin closed'}});
+      await resources.dispose(); resources = await temporaryResources();
+      const gate = deferred();
+      const delayed = writer({limits: {pendingBytes: 4096}, open: () => Promise.resolve({write: async (buffer: Buffer, offset = 0, length = buffer.length - offset) => { await gate.promise; return {bytesWritten: length, buffer}; }, sync: async () => {}, close: async () => {}} as never)});
+      await delayed.instance.start(); delayed.instance.accept(header());
+      delayed.instance.whenRoom(() => { throw new Error('broker gone'); }); expect(delayed.instance.closed).toBe(false);
+      gate.resolve(); await new Promise(resolve => setTimeout(resolve, 20));
+      expect(await delayed.instance.close('disconnect')).toMatchObject({stop: {reason: 'internal-error', detail: 'credit grant failed: broker gone'}, flowControl: {creditsWithheld: 1, withheldAtClose: false}});
+      expect(unhandled).toEqual([]);
+    } finally { process.off('unhandledRejection', listener); }
+  });
   it('closes on the pending-byte cap while a slow write is outstanding and records the discard', async () => {
     const gate = deferred(); let writes = 0;
     const {instance} = writer({limits: {pendingBytes: 4096}, open: () => Promise.resolve({write: async (buffer: Buffer, offset = 0, length = buffer.length - offset) => { writes++; await gate.promise; return {bytesWritten: length, buffer}; }, sync: async () => {}, close: async () => {}} as never)});
