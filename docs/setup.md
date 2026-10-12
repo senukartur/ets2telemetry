@@ -141,7 +141,7 @@ npm run build
 npm run test:cap0-chain
 ```
 
-It is not part of `npm test` because CI runs Vitest before the native build. It is controlled synthetic evidence, not a game session.
+It is not part of `npm test` because CI runs Vitest before the native build; Windows CI runs it as a separate bounded step after the native build. It is controlled synthetic evidence, not a game session.
 
 ## Official SDK acquisition
 
