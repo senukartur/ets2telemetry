@@ -249,10 +249,12 @@ bool EvidenceQueue::pop(Envelope& output) {
 Counters EvidenceQueue::counters() const noexcept {
   // Seqlock reader: retry until one producer version was read completely, so every snapshot satisfies
   // attempted == enqueued + dropped and dropped == queue-full + bytes-full drops.
-  Counters c;
-  for (;;) {
+  // After a short spin the worker yields its time slice, so a busy producer is never starved of CPU.
+  Counters c; unsigned spins = 0;
+  for (;; ++spins) {
+    if (spins >= 64) SwitchToThread(); else if (spins) YieldProcessor();
     const auto before = version_.load(std::memory_order_acquire);
-    if (before & 1) { YieldProcessor(); continue; }
+    if (before & 1) continue;
     c.attempted = attempted_.load(std::memory_order_relaxed); c.enqueued = enqueued_.load(std::memory_order_relaxed);
     c.dropped = dropped_.load(std::memory_order_relaxed); c.dropped_bytes = dropped_bytes_.load(std::memory_order_relaxed);
     c.dropped_full_slots = dropped_slots_.load(std::memory_order_relaxed); c.dropped_full_bytes = dropped_capacity_.load(std::memory_order_relaxed);
