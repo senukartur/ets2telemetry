@@ -20,6 +20,7 @@ let overlayContents: typeof contents;
 let windows: (EventEmitter & {webContents: typeof contents; hide: ReturnType<typeof vi.fn>; showInactive: ReturnType<typeof vi.fn>; setBounds: ReturnType<typeof vi.fn>})[];
 let channels: {port1: EventEmitter & {postMessage: ReturnType<typeof vi.fn>; close: ReturnType<typeof vi.fn<() => void>>; start: ReturnType<typeof vi.fn<() => void>>}; port2: {close: ReturnType<typeof vi.fn<() => void>>}}[];
 let configurations: Electron.BrowserWindowConstructorOptions[];
+let log: ReturnType<typeof vi.fn>;
 beforeEach(() => {
   vi.useFakeTimers(); vi.resetModules();
   originals = new Map(processEvents.map(name => [name, processEmitter.listeners(name)]));
@@ -50,7 +51,7 @@ beforeEach(() => {
     }}));
   vi.doMock('electron-squirrel-startup', () => ({default: false}));
   vi.doMock('../../apps/desktop/src/entrypoints', () => ({processEntrypoint: () => 'package.json'}));
-  vi.doMock('../../apps/desktop/src/diagnostics', () => ({createDiagnostics: () => vi.fn()}));
+  log = vi.fn(); vi.doMock('../../apps/desktop/src/diagnostics', () => ({createDiagnostics: () => log}));
   vi.doMock('../../apps/desktop/src/broker-artifact', () => ({brokerConfiguration: resolveBroker, createBrokerResolver: () => resolveBroker}));
   vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'synthetic');
 });
@@ -198,4 +199,50 @@ it('retires exact service generations and releases pending source selection on s
   deliver(current, 1, next); expect(windows[1].showInactive).toHaveBeenCalledOnce();
   expect(replacement.postMessage).toHaveBeenCalledWith({type: 'select', source: 'ets2', broker: undefined});
   expect(replacement.postMessage).not.toHaveBeenCalledWith({type: 'stop'});
+});
+it.each(['credit-timeout', 'port-loss', 'invalid-credit'])('logs factual current-overlay closure after %s and keeps upstream alive', async reason => {
+  vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2'); await ready();
+  ipc.emit('overlay:subscribe', overlayTrusted()); const current = channels[1]; deliver(currentGame());
+  windows[1].hide.mockClear();
+  if (reason === 'credit-timeout') await vi.advanceTimersByTimeAsync(500);
+  else if (reason === 'port-loss') current.port1.close();
+  else current.port1.emit('message', {data: {type: 'consumed', delivery: -1}});
+  expect(windows[1].hide).toHaveBeenCalled();
+  expect(log.mock.calls.filter(call => call[0] === 'OVERLAY_CHANNEL_CLOSED')).toEqual([['OVERLAY_CHANNEL_CLOSED', 'Active overlay subscription closed']]);
+  expect(channels[0].port1.close).not.toHaveBeenCalled(); expect(child.kill).not.toHaveBeenCalled();
+  ipc.emit('overlay:subscribe', overlayTrusted()); expect(channels).toHaveLength(3);
+  windows[1].hide.mockClear(); current.port1.emit('close');
+  expect(windows[1].hide).not.toHaveBeenCalled();
+  expect(log.mock.calls.filter(call => call[0] === 'OVERLAY_CHANNEL_CLOSED')).toHaveLength(1);
+});
+it.each(['unsubscribe', 'reload', 'overlay-crash', 'overlay-close', 'dashboard-close', 'stop'])('does not label intentional overlay %s as unexpected closure', async reason => {
+  await ready(); ipc.emit('overlay:subscribe', overlayTrusted()); const current = channels[1];
+  if (reason === 'unsubscribe') ipc.emit('overlay:unsubscribe', overlayTrusted());
+  else if (reason === 'reload') overlayContents.emit('did-start-loading');
+  else if (reason === 'overlay-crash') overlayContents.emit('render-process-gone', {}, {reason: 'crashed'});
+  else if (reason === 'overlay-close') windows[1].emit('closed');
+  else if (reason === 'dashboard-close') windows[0].emit('closed');
+  else app.emit('before-quit', {preventDefault: vi.fn()});
+  expect(current.port1.close).toHaveBeenCalled(); current.port1.emit('close');
+  expect(log.mock.calls.filter(call => call[0] === 'OVERLAY_CHANNEL_CLOSED')).toHaveLength(0);
+});
+it('requires current window authority and new projected data after a long overlay channel gap', async () => {
+  vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2'); await ready();
+  ipc.emit('overlay:subscribe', overlayTrusted()); deliver(currentGame()); channels[1].port1.close();
+  await vi.advanceTimersByTimeAsync(60000); windows[1].showInactive.mockClear();
+  ipc.emit('overlay:subscribe', overlayTrusted()); const replacement = channels[2];
+  expect(windows[1].showInactive).not.toHaveBeenCalled();
+  const stale = replacement.port1.postMessage.mock.lastCall![0];
+  expect(stale.update).toMatchObject({freshness: 'stale', speed: '—', fuel: '—'});
+  replacement.port1.emit('message', {data: {type: 'consumed', delivery: stale.delivery}});
+  const current = currentGame(); current.observation!.windowReceivedMonotonicMs = 60000;
+  // A new window receipt authorizes placement, but the old SDK capture cannot renew metrics.
+  deliver(current, 2); await vi.advanceTimersByTimeAsync(50);
+  expect(windows[1].showInactive).toHaveBeenCalledOnce();
+  const sameCapture = replacement.port1.postMessage.mock.lastCall![0];
+  expect(sameCapture.update).toMatchObject({freshness: 'stale', speed: '—', fuel: '—'});
+  replacement.port1.emit('message', {data: {type: 'consumed', delivery: sameCapture.delivery}});
+  current.observation!.capture.monotonicNs = '9999999999'; current.observation!.windowReceivedMonotonicMs = 60050;
+  deliver(current, 3); await vi.advanceTimersByTimeAsync(50);
+  expect(replacement.port1.postMessage.mock.lastCall![0].update).toMatchObject({freshness: 'current', source: 'ETS2'});
 });

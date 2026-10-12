@@ -12,12 +12,21 @@ const unavailable: OverlayPresentation = {source: 'No game', origin: 'none', sta
 let current = unavailable;
 function close(): void {const previous = port; port = undefined; previous?.close(); clearTimeout(expiry); expiry = undefined;}
 function invalidate(): void {current = {...current, status: 'stale', speed: '—', fuel: '—', freshness: 'stale'}; listener?.(current);}
+function recover(generation: symbol): void {
+  if (generation !== owner || !listener || port || recovery !== undefined) return;
+  if (budget.take() === undefined) {
+    // Keep one cancellable wait; a quiet document can recover after the sliding budget expires.
+    recovery = setTimeout(() => {recovery = undefined; recover(generation);}, 60000);
+    return;
+  }
+  recovery = setTimeout(() => {recovery = undefined; if (generation === owner && listener && !port) ipcRenderer.send('overlay:subscribe');}, 250);
+}
 function lost(next: MessagePort): void {
   if (port !== next || !listener) return;
   const generation = owner; close(); invalidate();
   if (generation !== owner || !listener) return;
   ipcRenderer.send('overlay:unsubscribe');
-  if (budget.take() !== undefined) recovery = setTimeout(() => {recovery = undefined; if (generation === owner && listener && !port) ipcRenderer.send('overlay:subscribe');}, 250);
+  recover(generation);
 }
 ipcRenderer.on('overlay:port', event => {
   clearTimeout(recovery); recovery = undefined; close(); invalidate();

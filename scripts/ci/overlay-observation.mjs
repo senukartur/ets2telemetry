@@ -24,7 +24,8 @@ export function overlayObservation(expected) {
 }
 
 export async function waitForOverlay(page, expected) {
-  const handle = await page.waitForFunction(overlayObservation, expected, {timeout: 10000});
+  // Observe DOM delivery independently of Chromium's animation-frame scheduling.
+  const handle = await page.waitForFunction(overlayObservation, expected, {timeout: 10000, polling: 50});
   try {return await handle.jsonValue();} finally {await handle.dispose();}
 }
 
@@ -112,6 +113,9 @@ export async function proveIndependentDuringStall(page, kind, independentObserva
     source.setReading(20, 71); proof.readingChangedObserverMonotonicMs = performance.now();
     proof.independentObservation = await independentObservation();
     proof.observedObserverMonotonicMs = performance.now();
+    proof.readingObservedObserverMonotonicMs = proof.independentObservation.reading.observedObserverMonotonicMs;
+    assert.ok(proof.readingChangedObserverMonotonicMs < proof.readingObservedObserverMonotonicMs &&
+      proof.readingObservedObserverMonotonicMs <= proof.observedObserverMonotonicMs, 'Changed DOM reading must precede its window metadata receipt');
     proof.sourceAtObservation = source.statistics(); proof.pendingAtObservation = !completed;
     assert.equal(proof.pendingAtObservation, true, 'Independent reading arrived after the stalled renderer completed');
     assert.equal(proof.sourceAtObservation.connections, 1, 'Independent observation reconnected the source');
@@ -129,7 +133,7 @@ export async function runOverlaySmoke(application, dashboard, overlay, source, r
     observations: [], windows: []});
   const expected = {source: 'ETS2', origin: 'synthetic', statuses: ['connected'], freshness: 'current', speed: '90.0', fuel: '73.0', speedUnit: 'km/h', fuelUnit: 'L'};
   const observe = async (phase, change = {}) => {
-    const observation = {phase, ...await waitForOverlay(overlay, {...expected, ...change})};
+    const observation = {phase, ...await waitForOverlay(overlay, {...expected, ...change}), observedObserverMonotonicMs: performance.now()};
     result.observations.push(observation);
     result.windows.push({phase, windows: await windowSecurity(application)});
     return observation;
@@ -139,8 +143,8 @@ export async function runOverlaySmoke(application, dashboard, overlay, source, r
       const read = id => {const nodes = globalThis.document.querySelectorAll(`[data-testid="${id}"]`); return nodes.length === 1 ? nodes[0].innerText : undefined;};
       const observation = {status: read('telemetry-status'), speed: read('speed'), fuel: read('fuel')};
       return /^connected:/.test(observation.status ?? '') && observation.speed === `Speed: ${speed} km/h` && observation.fuel === `Fuel: ${fuel} L` ? observation : false;
-    }, {speed, fuel}, {timeout: 10000});
-    try {const observation = await handle.jsonValue(); assert.ok(observation); return observation;} finally {await handle.dispose();}
+    }, {speed, fuel}, {timeout: 10000, polling: 50});
+    try {const observation = await handle.jsonValue(); assert.ok(observation); return {...observation, observedObserverMonotonicMs: performance.now()};} finally {await handle.dispose();}
   };
   result.bridge = await overlay.evaluate(() => ({require: typeof globalThis.require, process: typeof globalThis.process,
     desktop: typeof globalThis.desktop, keys: Object.getOwnPropertyNames(globalThis.overlay), frozen: Object.isFrozen(globalThis.overlay)}));

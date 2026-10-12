@@ -50,7 +50,8 @@ else {
     exhausted: () => {const update: LiveTelemetry = {...initialLive(selection), status: 'service-failed', reason: 'Automatic service restart limit reached'};
       freshness.invalidate(update); window?.webContents.send('telemetry:service-state', update);}
   });
-  function retireLive(): void {freshness.close(); closeUpstream(); overlayController?.loaded(false); dashboardSubscriptions.close(); overlaySubscriptions.close(); dashboardPort = overlayPort = undefined;}
+  function retireOverlay(): void {overlayPort = undefined; overlayController?.loaded(false); overlaySubscriptions.close();}
+  function retireLive(): void {freshness.close(); closeUpstream(); retireOverlay(); dashboardSubscriptions.close(); dashboardPort = undefined;}
   function stop(): void {retireLive(); supervisor.stop();}
   function fail(code: string, error?: unknown): void {retireLive(); supervisor.fail(code, error);}
   const trusted = (event: IpcMainEvent | IpcMainInvokeEvent) => Boolean(window && !window.isDestroyed() && event.sender === window.webContents && event.senderFrame === window.webContents.mainFrame);
@@ -94,7 +95,7 @@ else {
     overlayController = new OverlayController(overlay, screen);
     overlay.webContents.setWindowOpenHandler(() => ({action: 'deny'}));
     overlay.webContents.on('will-navigate', event => event.preventDefault());
-    const retire = () => {overlayController?.loaded(false); overlaySubscriptions.close(); overlayPort = undefined;};
+    const retire = () => retireOverlay();
     overlay.webContents.on('did-start-loading', retire);
     overlay.webContents.on('render-process-gone', (_event, details) => {
       retire(); log('OVERLAY_RENDER_PROCESS_GONE', details);
@@ -188,10 +189,10 @@ else {
   ipcMain.on('overlay:subscribe', event => {
     if (!trustedOverlay(event) || overlayPort || supervisor.stopping) return;
     const {port1, port2} = new MessageChannelMain(); overlayPort = port1;
-    port1.on('close', () => {if (overlayPort === port1) {overlayPort = undefined; overlayController?.loaded(false);}});
+    port1.on('close', () => {if (overlayPort === port1) {overlayPort = undefined; overlayController?.loaded(false); log('OVERLAY_CHANNEL_CLOSED', 'Active overlay subscription closed');}});
     try {overlaySubscriptions.attach(port1); overlay!.webContents.postMessage('overlay:port', null, [port2]); overlayController?.loaded(true);}
-    catch (error) {port1.close(); port2.close(); log('OVERLAY_SUBSCRIPTION_FAILED', String(error));}
+    catch (error) {retireOverlay(); port1.close(); port2.close(); log('OVERLAY_SUBSCRIPTION_FAILED', String(error));}
   });
-  ipcMain.on('overlay:unsubscribe', event => {if (!trustedOverlay(event)) return; overlayController?.loaded(false); overlaySubscriptions.close(); overlayPort = undefined;});
+  ipcMain.on('overlay:unsubscribe', event => {if (!trustedOverlay(event)) return; retireOverlay();});
   app.whenReady().then(startService).catch(error => fail('APP_START_FAILED', error));
 }
