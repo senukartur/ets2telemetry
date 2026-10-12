@@ -370,7 +370,7 @@ int wmain(int argc, wchar_t** argv) {
         require(!provably_missing_image(utf8(final_path(own.value))) && !provably_missing_image("\\\\?\\UNC\\unverified-server\\share\\broker.exe"));
       } else {client.eof(); require(client.wait() == 1); require(file_bytes(directory / "service-policy.json") == v0::detail::serialize(policy));}
     }
-    for (const auto* mode : {"policy-lock-busy", "policy-lock-pending", "policy-publish-busy"}) {
+    for (const auto* mode : {"policy-lock-busy", "policy-lock-pending", "policy-publish-busy", "image-busy"}) {
       if (!filter.empty() && filter != mode) continue;
       std::cerr << "case " << mode << "\n";
       const std::string scenario(mode);
@@ -384,6 +384,9 @@ int wmain(int argc, wchar_t** argv) {
         // The released lock stays delete-pending while another (scanner-like) handle remains open.
         Handle creator(CreateFileW(lock.c_str(), lockAccess, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, &security.attributes, CREATE_NEW, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_DELETE_ON_CLOSE, nullptr));
         holder.emplace(CreateFileW(lock.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, 0, nullptr));
+      } else if (scenario == "image-busy") {
+        // Another holder with DELETE access (an updater or scanner) blocks the broker's deny-write image open, not its launch.
+        holder.emplace(CreateFileW(broker.c_str(), DELETE, FILE_SHARE_READ | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, 0, nullptr));
       } else {
         // An existing approved entry forces a replacement; the reader uses the plugin's policy share mode.
         auto own = image(GetCurrentProcess()); const auto ownPath = utf8(final_path(own.value));
@@ -391,12 +394,12 @@ int wmain(int argc, wchar_t** argv) {
         before = file_bytes(policyPath);
         holder.emplace(CreateFileW(policyPath.c_str(), GENERIC_READ | READ_CONTROL, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
       }
-      const DWORD expectedError = scenario == "policy-lock-busy" ? ERROR_FILE_EXISTS : ERROR_ACCESS_DENIED;
+      const DWORD expectedError = scenario == "policy-lock-busy" ? ERROR_FILE_EXISTS : scenario == "image-busy" ? ERROR_SHARING_VIOLATION : ERROR_ACCESS_DENIED;
       {
         Child client(broker, L"--game ets2 --discovery-dir \"" + directory.wstring() + L"\"", true); client.eof();
         const auto code = client.wait(); std::cerr << "contention exit " << code << "\n"; require(code == 4);
         const auto diagnostic = client.diagnostic(); std::cerr << "contention diagnostic " << diagnostic;
-        const auto expectedStage = scenario == "policy-publish-busy" ? std::string("policy-publish") : std::string("policy-lock");
+        const auto expectedStage = scenario == "policy-publish-busy" ? std::string("policy-publish") : scenario == "image-busy" ? std::string("own-image") : std::string("policy-lock");
         // The fixed diagnostic is the final stderr line; separate ASan fixtures emit stage traces before it.
         require(std::regex_search(diagnostic, std::regex("(^|\n)diag1 " + expectedStage + " " + std::to_string(expectedError) + " [0-9]{1,10} [a-z-]{1,24} [0-9]{1,10}\n$")));
         DWORD available = 0; const auto peeked = PeekNamedPipe(client.output.value, nullptr, 0, nullptr, &available, nullptr); require((peeked || GetLastError() == ERROR_BROKEN_PIPE) && available == 0);
@@ -420,6 +423,20 @@ int wmain(int argc, wchar_t** argv) {
       }
       Child released(broker, L"--game ets2 --discovery-dir \"" + directory.wstring() + L"\""); require(parse(read_frame(released.output.value)).at("type").string() == "waiting"); require(released.wait() == 2);
       require(fs::exists(policyPath));
+    }
+    if (filter.empty() || filter == "policy-readonly") {
+      // A read-only policy also blocks replacement with ACCESS_DENIED, but never clears: it stays a hard rejection.
+      std::cerr << "case policy-readonly\n";
+      const auto directory = base / L"policy-readonly" / "transport" / "v0"; fs::create_directory(directory.parent_path().parent_path());
+      require(CreateDirectoryW(directory.parent_path().c_str(), &security.attributes)); require(CreateDirectoryW(directory.c_str(), &security.attributes));
+      const auto policyPath = directory / "service-policy.json"; auto own = image(GetCurrentProcess());
+      write_file(policyPath, Json{Json::Object{{"schemaVersion", Json{1.0}}, {"userTag", Json{identity.userTag}}, {"windowsSessionId", Json{static_cast<double>(identity.session)}}, {"allowedExecutables", Json{Json::Array{Json{Json::Object{{"path", Json{utf8(final_path(own.value))}}, {"sha256", Json{std::string(64, '0')}}}}}}}}}, identity);
+      const auto before = file_bytes(policyPath); require(SetFileAttributesW(policyPath.c_str(), FILE_ATTRIBUTE_READONLY) != 0);
+      Child client(broker, L"--game ets2 --discovery-dir \"" + directory.wstring() + L"\"", true); client.eof(); const auto code = client.wait();
+      const auto diagnostic = client.diagnostic(); std::cerr << "read-only exit " << code << " diagnostic " << diagnostic;
+      require(SetFileAttributesW(policyPath.c_str(), FILE_ATTRIBUTE_NORMAL) != 0);
+      require(code == 1 && std::regex_search(diagnostic, std::regex("(^|\n)diag1 policy-publish 5 [0-9]{1,10} [a-z-]{1,24} [0-9]{1,10}\n$")) && file_bytes(policyPath) == before);
+      for (const auto& entry : fs::directory_iterator(directory)) require(entry.path().extension() != L".tmp");
     }
     fs::remove_all(base); std::cout << "native authority, stale lifetime filtering, hard security rejection, retryable owned-file contention, bounded partial frames, quiet-source and EOF cancellation passed\n"; return 0;
   } catch (const std::exception& error) {std::cerr << (argc == 5 ? "host: " : "controller: ") << error.what() << "\n"; return 1;}

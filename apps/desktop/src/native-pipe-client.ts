@@ -17,16 +17,29 @@ const DIAGNOSTIC_TAIL_BYTES = 256;
 const DIAGNOSTIC_LINE = /diag1 ([a-z-]{1,24}) (\d{1,10}) (\d{1,10}) ([a-z-]{1,24}) (\d{1,10})\r?\n$/;
 export type BrokerOutcome = 'ended' | 'busy' | 'rejected' | 'startup-deadline' | 'start-failed' | 'control-closed' | 'incomplete-frame' | 'relay-rejected' | 'hello-rejected' | 'duplicate-credit';
 /** Only fixed codes and numbers: never paths, identities, receipts or relayed bytes. */
-export interface BrokerDiagnostic {outcome: BrokerOutcome; exitCode: number | null; stage: string; win32Error: number | null; elapsedMs: number | null; slowStage: string; slowMs: number | null}
+/** serviceMs spans spawn to exit, so launch delay before the broker's own clock starts is visible as serviceMs - elapsedMs. */
+export interface BrokerDiagnostic {outcome: BrokerOutcome; exitCode: number | null; serviceMs: number; stage: string; win32Error: number | null; elapsedMs: number | null; slowStage: string; slowMs: number | null}
 /** A transient failure granted no authority and may be retried after the broker has actually exited. */
 export class NativeClientError extends Error {
   constructor(message: string, readonly outcome: BrokerOutcome, readonly transient = false) {super(message);}
 }
-function brokerDiagnostic(outcome: BrokerOutcome, exitCode: number | null, tail: Buffer): BrokerDiagnostic {
+function brokerDiagnostic(outcome: BrokerOutcome, exitCode: number | null, serviceMs: number, tail: Buffer): BrokerDiagnostic {
   const match = DIAGNOSTIC_LINE.exec(tail.toString('latin1'));
-  if (!match) return {outcome, exitCode, stage: 'unreported', win32Error: null, elapsedMs: null, slowStage: 'unreported', slowMs: null};
+  if (!match) return {outcome, exitCode, serviceMs, stage: 'unreported', win32Error: null, elapsedMs: null, slowStage: 'unreported', slowMs: null};
   const known = (stage: string) => BROKER_STAGES.has(stage) ? stage : 'unrecognized';
-  return {outcome, exitCode, stage: known(match[1]), win32Error: Number(match[2]), elapsedMs: Number(match[3]), slowStage: known(match[4]), slowMs: Number(match[5])};
+  return {outcome, exitCode, serviceMs, stage: known(match[1]), win32Error: Number(match[2]), elapsedMs: Number(match[3]), slowStage: known(match[4]), slowMs: Number(match[5])};
+}
+/**
+ * Bounds log growth while a failure repeats: a run of identical outcome/stage/error is recorded at
+ * occurrences 1, 2, 4, 8, ... with its running count, so the bounded service log keeps room for other events.
+ */
+export function coalesceBrokerDiagnostics(record: (diagnostic: BrokerDiagnostic & {repeats: number}) => void): (diagnostic: BrokerDiagnostic) => void {
+  let key: string | undefined, repeats = 0;
+  return diagnostic => {
+    const next = `${diagnostic.outcome}|${diagnostic.stage}|${String(diagnostic.win32Error)}`;
+    repeats = next === key ? repeats + 1 : 1; key = next;
+    if ((repeats & (repeats - 1)) === 0) record({...diagnostic, repeats});
+  };
 }
 /** An owned fixed native artifact supplies OS authority; stdio credits bound its relay to one frame. */
 export class NativePipeClient extends EventEmitter implements TelemetrySocket {
@@ -43,13 +56,15 @@ export class NativePipeClient extends EventEmitter implements TelemetrySocket {
   private outcome?: BrokerOutcome;
   constructor(configuration: BrokerConfiguration, game: 'ets2' | 'ats', diagnose?: (diagnostic: BrokerDiagnostic) => void) {
     super();
+    const spawned = performance.now();
     this.child = spawn(configuration.executable, ['--game', game, '--discovery-dir', configuration.discoveryDirectory], {windowsHide: true, stdio: 'pipe'});
     this.completion = new Promise(resolve => this.child.once('close', () => resolve()));
     // A slow broker has granted nothing; retrying after its actual exit is safe.
     this.startup = setTimeout(() => this.reject('Native authority deadline exceeded', 'startup-deadline', true), 5000);
     // Retain only a bounded tail; it is parsed into fixed codes and never forwarded as text.
     this.child.stderr.on('data', (bytes: unknown) => {
-      if (bytes instanceof Uint8Array) this.diagnosticTail = Buffer.concat([this.diagnosticTail, bytes]).subarray(-DIAGNOSTIC_TAIL_BYTES);
+      // Copy the tail so it never pins a whole stderr chunk.
+      if (bytes instanceof Uint8Array) this.diagnosticTail = Buffer.from(Buffer.concat([this.diagnosticTail, bytes]).subarray(-DIAGNOSTIC_TAIL_BYTES));
     });
     this.child.stdin.on('error', () => this.reject('Native control pipe closed', 'control-closed'));
     this.child.on('error', () => this.reject('Native client could not start', 'start-failed'));
@@ -65,7 +80,7 @@ export class NativePipeClient extends EventEmitter implements TelemetrySocket {
         this.stopped = true;
       }
       // Routine waiting exits and owner cancellation are not logged.
-      if (this.outcome) diagnose?.(brokerDiagnostic(this.outcome, code, this.diagnosticTail));
+      if (this.outcome) diagnose?.(brokerDiagnostic(this.outcome, code, Math.round(performance.now() - spawned), this.diagnosticTail));
       this.emit('close');
     });
     this.child.stdout.on('data', (bytes: unknown) => {

@@ -243,7 +243,11 @@ void bootstrap_policy(const fs::path& directory, const Identity& identity, HANDL
   stage = "policy-publish";
   if (!MoveFileExW(temporary.c_str(), policyPath.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
     // Replacing the verified owner-only policy while any reader holds it open reports ACCESS_DENIED.
-    const auto error = GetLastError(); DeleteFileW(temporary.c_str()); busy_or_fail(error, {ERROR_ACCESS_DENIED, ERROR_SHARING_VIOLATION, ERROR_LOCK_VIOLATION});
+    const auto error = GetLastError(); DeleteFileW(temporary.c_str());
+    // A read-only policy also reports ACCESS_DENIED but never clears by itself; keep it a visible hard failure.
+    const auto attributes = GetFileAttributesW(policyPath.c_str());
+    if (error == ERROR_ACCESS_DENIED && attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_READONLY)) {SetLastError(error); fail();}
+    busy_or_fail(error, {ERROR_ACCESS_DENIED, ERROR_SHARING_VIOLATION, ERROR_LOCK_VIOLATION});
   }
   test_trace(stage);
 }

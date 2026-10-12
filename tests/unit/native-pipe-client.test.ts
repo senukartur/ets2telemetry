@@ -208,7 +208,7 @@ it('classifies broker contention4 before authority as transient and logs only it
   const diagnose = vi.fn(), f = fixture(diagnose);
   f.child.stderr.write('diag1 policy-publish 5 172 policy-write 172\n'); f.child.emit('close', 4);
   expect(failure(f.error)).toMatchObject({transient: true, outcome: 'busy'}); expect(f.waiting).not.toHaveBeenCalled(); expect(f.end).not.toHaveBeenCalled();
-  expect(diagnose).toHaveBeenCalledExactlyOnceWith({outcome: 'busy', exitCode: 4, stage: 'policy-publish', win32Error: 5, elapsedMs: 172, slowStage: 'policy-write', slowMs: 172});
+  expect(diagnose).toHaveBeenCalledExactlyOnceWith({outcome: 'busy', exitCode: 4, serviceMs: 0, stage: 'policy-publish', win32Error: 5, elapsedMs: 172, slowStage: 'policy-write', slowMs: 172});
   const late = fixture(); late.child.output(relay(authority())); late.child.emit('close', 4);
   expect(failure(late.error)).toMatchObject({transient: false, outcome: 'rejected'});
 });
@@ -227,17 +227,18 @@ it('bounds and sanitizes broker stderr to fixed stage codes and numbers', () => 
   const unknown = fixture(diagnose); unknown.child.stderr.write('diag1 private-stage 1 2 another-stage 4\n'); unknown.child.emit('close', 1);
   const missing = fixture(diagnose); missing.child.stderr.write('C:\\Users\\private\\eurotrucks2.exe\n'); missing.child.emit('close', 1);
   expect(diagnose.mock.calls.map(call => call[0] as BrokerDiagnostic)).toEqual([
-    {outcome: 'busy', exitCode: 4, stage: 'policy-lock', win32Error: 80, elapsedMs: 3, slowStage: 'own-image', slowMs: 2},
-    {outcome: 'rejected', exitCode: 1, stage: 'unrecognized', win32Error: 1, elapsedMs: 2, slowStage: 'unrecognized', slowMs: 4},
-    {outcome: 'rejected', exitCode: 1, stage: 'unreported', win32Error: null, elapsedMs: null, slowStage: 'unreported', slowMs: null}
+    {outcome: 'busy', exitCode: 4, serviceMs: 0, stage: 'policy-lock', win32Error: 80, elapsedMs: 3, slowStage: 'own-image', slowMs: 2},
+    {outcome: 'rejected', exitCode: 1, serviceMs: 0, stage: 'unrecognized', win32Error: 1, elapsedMs: 2, slowStage: 'unrecognized', slowMs: 4},
+    {outcome: 'rejected', exitCode: 1, serviceMs: 0, stage: 'unreported', win32Error: null, elapsedMs: null, slowStage: 'unreported', slowMs: null}
   ]);
   expect(JSON.stringify(diagnose.mock.calls)).not.toMatch(/private|eurotrucks2|Users/);
 });
 it('treats the5s startup deadline as transient and logs the broker stage once it actually exits', async () => {
   const diagnose = vi.fn(), f = fixture(diagnose);
   await vi.advanceTimersByTimeAsync(5000); expect(failure(f.error)).toMatchObject({transient: true, outcome: 'startup-deadline'}); expect(diagnose).not.toHaveBeenCalled();
-  f.child.stderr.write('diag1 hello 0 7300 policy-write 6900\n'); f.child.emit('close', 3);
-  expect(diagnose).toHaveBeenCalledExactlyOnceWith({outcome: 'startup-deadline', exitCode: 3, stage: 'hello', win32Error: 0, elapsedMs: 7300, slowStage: 'policy-write', slowMs: 6900});
+  // serviceMs also covers launch time that the broker's own clock cannot see.
+  await vi.advanceTimersByTimeAsync(10000); f.child.stderr.write('diag1 hello 0 7300 policy-write 6900\n'); f.child.emit('close', 3);
+  expect(diagnose).toHaveBeenCalledExactlyOnceWith({outcome: 'startup-deadline', exitCode: 3, serviceMs: 15000, stage: 'hello', win32Error: 0, elapsedMs: 7300, slowStage: 'policy-write', slowMs: 6900});
 });
 it.each(['contention4', 'deadline'])('retries a transient %s game failure on the normal backoff after actual broker exit instead of becoming incompatible', async trigger => {
   const diagnose = vi.fn(), f = ingestion(diagnose);
@@ -252,4 +253,12 @@ it.each(['contention4', 'deadline'])('retries a transient %s game failure on the
   children[2].emit('close', 1); expect(f.publish.mock.lastCall?.[0]).toMatchObject({status: 'incompatible', fresh: false});
   await vi.advanceTimersByTimeAsync(20000); expect(spawn).toHaveBeenCalledTimes(3);
   expect(diagnose.mock.calls.map(call => (call[0] as BrokerDiagnostic).outcome)).toEqual([trigger === 'deadline' ? 'startup-deadline' : 'busy', 'busy', 'rejected']);
+});
+it('coalesces a repeating identical broker failure at power-of-two occurrences so retries cannot fill the bounded log', async () => {
+  const {coalesceBrokerDiagnostics} = await import('../../apps/desktop/src/native-pipe-client');
+  const record = vi.fn(), diagnose = coalesceBrokerDiagnostics(record);
+  const busy: BrokerDiagnostic = {outcome: 'busy', exitCode: 4, serviceMs: 20, stage: 'policy-publish', win32Error: 5, elapsedMs: 15, slowStage: 'policy-write', slowMs: 15};
+  for (let i = 0; i < 9; i++) diagnose(busy);
+  diagnose({...busy, outcome: 'rejected', exitCode: 1}); diagnose(busy); diagnose({...busy, win32Error: 32});
+  expect(record.mock.calls.map(call => [(call[0] as BrokerDiagnostic).outcome, (call[0] as {repeats: number}).repeats])).toEqual([['busy', 1], ['busy', 2], ['busy', 4], ['busy', 8], ['rejected', 1], ['busy', 1], ['busy', 1]]);
 });
