@@ -91,7 +91,7 @@ describe('coherent hidden-renderer observations', () => {
 });
 
 describe('definite stall-start and independent-observation ordering', () => {
-  async function exercise(mode: 'during' | 'after' | 'before-barrier' | 'no-barrier') {
+  async function exercise(mode: 'during' | 'after' | 'before-barrier' | 'no-barrier' | 'late-metadata' | 'missing-reading-time') {
     const {proveIndependentDuringStall} = await import(observationModule);
     const order: string[] = [], proof: ReturnType<typeof JSON.parse> = {};
     let start!: (event: {text(): string}) => void;
@@ -118,8 +118,11 @@ describe('definite stall-start and independent-observation ordering', () => {
     const observation = async () => {
       if (mode === 'after') {finish({rendererStartedMonotonicMs: 100, rendererCompletedMonotonicMs: 6100}); await Promise.resolve();}
       order.push('independent-observed');
-      if (mode === 'during') setTimeout(() => finish({rendererStartedMonotonicMs: 100, rendererCompletedMonotonicMs: 6100}), 5);
-      return {reading: {status: 'connected: current', speed: 'Speed: 72.0 km/h', fuel: 'Fuel: 71.0 L'}};
+      const observedObserverMonotonicMs = performance.now();
+      if (mode === 'during' || mode === 'missing-reading-time') setTimeout(() => finish({rendererStartedMonotonicMs: 100, rendererCompletedMonotonicMs: 6100}), 5);
+      if (mode === 'late-metadata') {finish({rendererStartedMonotonicMs: 100, rendererCompletedMonotonicMs: 6100}); await Promise.resolve();}
+      return {reading: {status: 'connected: current', speed: 'Speed: 72.0 km/h', fuel: 'Fuel: 71.0 L',
+        ...(mode === 'missing-reading-time' ? {} : {observedObserverMonotonicMs})}};
     };
     const promise = proveIndependentDuringStall(page, 'overlay', observation, source, proof);
     return {promise, proof, order};
@@ -130,6 +133,8 @@ describe('definite stall-start and independent-observation ordering', () => {
     expect(proof).toMatchObject({started: true, completed: true, pendingAtObservation: true, requestedMilliseconds: 6000,
       rendererStartBarrierMonotonicMs: 100, rendererStartedMonotonicMs: 100, rendererCompletedMonotonicMs: 6100});
     expect(proof.observedObserverMonotonicMs).toBeLessThan(proof.completedObserverMonotonicMs);
+    expect(proof.readingObservedObserverMonotonicMs).toBeGreaterThan(proof.readingChangedObserverMonotonicMs);
+    expect(proof.readingObservedObserverMonotonicMs).toBeLessThanOrEqual(proof.observedObserverMonotonicMs);
   });
   it('rejects an observation made after the stalled renderer completed', async () => {
     const {promise, proof} = await exercise('after');
@@ -138,6 +143,17 @@ describe('definite stall-start and independent-observation ordering', () => {
   it('rejects a start barrier delivered after renderer completion without changing source', async () => {
     const {promise, order} = await exercise('before-barrier');
     await expect(promise).rejects.toThrow('Renderer completed before'); expect(order).not.toContain('reading-changed');
+  });
+  it('retains an early DOM timestamp but rejects a composite whose metadata arrived after completion', async () => {
+    const {promise, proof} = await exercise('late-metadata');
+    await expect(promise).rejects.toThrow('Independent reading arrived after');
+    expect(proof.readingObservedObserverMonotonicMs).toBeLessThan(proof.completedObserverMonotonicMs);
+    expect(proof.pendingAtObservation).toBe(false);
+  });
+  it('rejects a missing DOM receipt time without inventing when the reading was observed', async () => {
+    const {promise, proof} = await exercise('missing-reading-time');
+    await expect(promise).rejects.toThrow('Changed DOM reading must precede');
+    expect(proof.readingObservedObserverMonotonicMs).toBeUndefined();
   });
   it('rejects a missing start barrier without inventing a started observation', async () => {
     const {promise, proof, order} = await exercise('no-barrier');
