@@ -189,12 +189,12 @@ else {
     if (performance.now() - lastSelectionRequest < 250) throw new Error('Source selection request limit exceeded');
     lastSelectionRequest = performance.now();
     const child = service!, generation = ++selectionGeneration, epoch = rendererEpoch;
-    selectionPending = true; freshness.invalidate(initialLive(next));
+    selectionPending = true; freshness.invalidate(initialLive(selection));
     try {
       const broker = next === 'ets2' || next === 'ats' ? await selectedBroker(next) : undefined;
       if (!trusted(event) || !serviceReady || supervisor.stopping || service !== child || generation !== selectionGeneration || epoch !== rendererEpoch) throw new Error('Source request was retired');
       child.postMessage({type: 'select', source: next, broker});
-      selection = next;
+      selection = next; freshness.invalidate(initialLive(selection));
     } finally {if (generation === selectionGeneration) selectionPending = false;}
   });
   ipcMain.on('telemetry:subscribe', event => {if (!trusted(event) || subscribed || supervisor.stopping) return; subscribed = true; connectSubscription();});

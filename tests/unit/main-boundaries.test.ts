@@ -149,6 +149,96 @@ function currentGame(): LiveTelemetry {
 }
 const overlayTrusted = () => ({sender: overlayContents, senderFrame: overlayContents.mainFrame});
 function deliver(update: LiveTelemetry, delivery = 1, channel = channels[0]) {channel.port1.emit('message', {data: {type: 'live', delivery, update}});}
+function hydrateConsumers() {
+  ipc.emit('telemetry:unsubscribe', trusted()); ipc.emit('overlay:unsubscribe', overlayTrusted());
+  ipc.emit('telemetry:subscribe', trusted()); const dashboard = channels.at(-1)!;
+  ipc.emit('overlay:subscribe', overlayTrusted()); const overlayChannel = channels.at(-1)!;
+  return {dashboard: dashboard.port1.postMessage.mock.lastCall![0].update, overlay: overlayChannel.port1.postMessage.mock.lastCall![0].update};
+}
+it.each(['reload', 'frame-replacement', 'renderer-crash'])('hydrates the committed source after a quiet selection request is retired by dashboard %s', async reason => {
+  vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2'); await ready();
+  const complete = pendingVerification(), pending = handlers.get('telemetry:select')!(trusted(), 'ats');
+  if (reason === 'reload') contents.emit('did-start-loading');
+  else if (reason === 'renderer-crash') contents.emit('render-process-gone', {}, {reason: 'crashed'});
+  contents.mainFrame = {};
+  complete(); await expect(pending).rejects.toThrow('retired');
+  expect(child.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({type: 'select', source: 'ats'}));
+  expect(hydrateConsumers()).toMatchObject({dashboard: {selection: 'ets2', fresh: false}, overlay: {source: 'ETS2', speed: '—', fuel: '—'}});
+  expect(windows[1].showInactive).not.toHaveBeenCalled();
+});
+it('retains committed blank caches if source dispatch throws on a quiet service', async () => {
+  vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2'); await ready();
+  child.postMessage.mockImplementationOnce(() => {throw new Error('closed IPC');});
+  await expect(handlers.get('telemetry:select')!(trusted(), 'ats')).rejects.toThrow('closed IPC');
+  expect(hydrateConsumers()).toMatchObject({dashboard: {selection: 'ets2', fresh: false}, overlay: {source: 'ETS2', speed: '—', fuel: '—'}});
+  expect(windows[1].showInactive).not.toHaveBeenCalled();
+});
+it('publishes new source labels only after a successful quiet source dispatch', async () => {
+  vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2'); await ready();
+  const complete = pendingVerification(), pending = handlers.get('telemetry:select')!(trusted(), 'ats');
+  expect(hydrateConsumers()).toMatchObject({dashboard: {selection: 'ets2', fresh: false}, overlay: {source: 'ETS2', speed: '—', fuel: '—'}});
+  expect(child.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({type: 'select', source: 'ats'}));
+  complete(); await pending;
+  expect(child.postMessage).toHaveBeenCalledWith({type: 'select', source: 'ats', broker: undefined});
+  expect(hydrateConsumers()).toMatchObject({dashboard: {selection: 'ats', status: 'waiting', fresh: false}, overlay: {source: 'ATS', status: 'waiting', speed: '—', fuel: '—'}});
+  expect(windows[1].showInactive).not.toHaveBeenCalled();
+});
+it('does not let superseded source verification overwrite a newer committed quiet selection', async () => {
+  vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2'); await ready();
+  const complete = pendingVerification(), select = handlers.get('telemetry:select')!, older = select(trusted(), 'ats');
+  await vi.advanceTimersByTimeAsync(250); await select(trusted(), 'replay');
+  const committed = hydrateConsumers(); expect(committed.dashboard).toMatchObject({selection: 'replay', fresh: false});
+  complete(); await expect(older).rejects.toThrow('retired');
+  expect(hydrateConsumers()).toEqual(committed);
+  expect(child.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({type: 'select', source: 'ats'}));
+});
+it('preserves service-failure state when pending source verification finishes after service exit', async () => {
+  vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2'); await ready();
+  const complete = pendingVerification(), pending = handlers.get('telemetry:select')!(trusted(), 'ats');
+  child.emit('exit', 1); const terminal = hydrateConsumers();
+  expect(terminal).toMatchObject({dashboard: {selection: 'ets2', status: 'restarting', fresh: false}, overlay: {source: 'ETS2', status: 'restarting'}});
+  complete(); await expect(pending).rejects.toThrow('retired');
+  expect(hydrateConsumers()).toEqual(terminal);
+  expect(child.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({type: 'select', source: 'ats'}));
+});
+it('does not replace a newer service generation publication when old source verification finishes', async () => {
+  vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2'); await ready();
+  const complete = pendingVerification(), pending = handlers.get('telemetry:select')!(trusted(), 'ats');
+  child.emit('exit', 1); resolveBroker.mockReturnValue(undefined); await vi.advanceTimersByTimeAsync(250);
+  const replacement = children[1]; replacement.emit('message', {type: 'ready'}); await settle();
+  const update: LiveTelemetry = {...initialLive('ets2'), status: 'service-failed', reason: 'Replacement service source failed'};
+  deliver(update, 1, channels.at(-1));
+  complete(); await expect(pending).rejects.toThrow('retired'); const hydrated = hydrateConsumers();
+  expect(hydrated.dashboard).toEqual(update);
+  expect(hydrated.overlay).toMatchObject({source: 'ETS2', status: 'service-failed', speed: '—', fuel: '—'});
+  expect(replacement.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({type: 'select', source: 'ats'}));
+});
+it('keeps application stop final when source verification completes afterwards', async () => {
+  vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2'); await ready(); hydrateConsumers();
+  const complete = pendingVerification(), pending = handlers.get('telemetry:select')!(trusted(), 'ats');
+  app.emit('before-quit', {preventDefault: vi.fn()}); child.emit('exit', 0);
+  const count = channels.length, messages = contents.postMessage.mock.calls.length + overlayContents.postMessage.mock.calls.length;
+  complete(); await expect(pending).rejects.toThrow('retired');
+  ipc.emit('telemetry:subscribe', trusted()); ipc.emit('overlay:subscribe', overlayTrusted());
+  expect(channels).toHaveLength(count); expect(contents.postMessage.mock.calls.length + overlayContents.postMessage.mock.calls.length).toBe(messages);
+  expect(log.mock.calls.filter(call => call[0] === 'APP_STOP_REQUESTED')).toHaveLength(1);
+  expect(child.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({type: 'select', source: 'ats'}));
+  expect(vi.getTimerCount()).toBe(0);
+});
+it('does not renew SDK or window authority when a failed source change leaves committed labels', async () => {
+  vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2'); await ready(); hydrateConsumers(); deliver(currentGame());
+  expect(windows[1].showInactive).toHaveBeenCalledOnce();
+  const complete = pendingVerification(), pending = handlers.get('telemetry:select')!(trusted(), 'ats');
+  expect(windows[1].hide).toHaveBeenCalled(); contents.mainFrame = {};
+  await vi.advanceTimersByTimeAsync(501); complete(); await expect(pending).rejects.toThrow('retired');
+  windows[1].showInactive.mockClear(); deliver(currentGame(), 2); await vi.advanceTimersByTimeAsync(50);
+  expect(windows[1].showInactive).not.toHaveBeenCalled();
+  expect(hydrateConsumers()).toMatchObject({dashboard: {selection: 'ets2', fresh: false, observation: {windowFresh: false}}, overlay: {source: 'ETS2', freshness: 'stale', speed: '—', fuel: '—'}});
+  const current = currentGame(); current.observation!.capture.monotonicNs = '9999999999'; current.observation!.windowReceivedMonotonicMs = 600;
+  deliver(current, 3); await vi.advanceTimersByTimeAsync(50);
+  expect(windows[1].showInactive).toHaveBeenCalledOnce();
+  expect(hydrateConsumers()).toMatchObject({dashboard: {selection: 'ets2', fresh: true, observation: {windowFresh: true}}, overlay: {source: 'ETS2', freshness: 'current'}});
+});
 it('constructs hidden click-through nonfocus sandboxed overlay and retains dashboard-only authority', async () => {
   await ready(); expect(configurations[1]).toMatchObject({show: false, focusable: false, transparent: true, frame: false, skipTaskbar: true, alwaysOnTop: true,
     webPreferences: {sandbox: true, contextIsolation: true, nodeIntegration: false}});
