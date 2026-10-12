@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param([ValidateSet('development','packaged')][string]$Mode,
     [ValidateSet('scaffold','telemetry','overlay')][string]$Scenario = 'scaffold',
+    [switch]$ForceRendererReuse,
     [string]$OutputRoot = (Join-Path $PSScriptRoot '../../.local/ci'))
 $ErrorActionPreference = 'Stop'
 $checkout = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path
@@ -15,6 +16,8 @@ foreach ($name in @('cwd','temp','appdata','localappdata','profile','diagnostics
 $config = $paths.Clone()
 $config.mode = $Mode; $config.output = $output; $config.checkout = $checkout
 $config.scenario = $Scenario
+if ($ForceRendererReuse -and $Scenario -ne 'overlay') { throw 'Renderer reuse control is restricted to the hidden overlay fixture.' }
+$config.forceRendererProcessReuse = [bool]$ForceRendererReuse
 $config.commit = (& git -C $checkout rev-parse HEAD)
 if ($LASTEXITCODE -ne 0) { throw 'Commit identity unavailable.' }
 $config.executable = Join-Path $checkout 'out/ETS2Telemetry Desktop-win32-x64/ETS2TelemetryDesktop.exe'

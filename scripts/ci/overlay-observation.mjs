@@ -75,11 +75,12 @@ export async function rendererPages(application) {
 export async function windowSecurity(application) {
   const windows = await application.evaluate(({BrowserWindow}) => BrowserWindow.getAllWindows().map(window => {
     const preferences = window.webContents.getLastWebPreferences();
-    return {url: window.webContents.mainFrame.url, sandbox: preferences.sandbox, isolation: preferences.contextIsolation,
+    return {url: window.webContents.mainFrame.url, rendererPid: window.webContents.getOSProcessId(), sandbox: preferences.sandbox, isolation: preferences.contextIsolation,
       node: preferences.nodeIntegration, visible: window.isVisible(), focusable: window.isFocusable()};
   }));
   assert.equal(windows.length, 2, 'Exactly the dashboard and overlay must exist');
   for (const window of windows) assert.deepEqual({sandbox: window.sandbox, isolation: window.isolation, node: window.node}, {sandbox: true, isolation: true, node: false});
+  for (const window of windows) assert.ok(Number.isSafeInteger(window.rendererPid) && window.rendererPid > 0, 'Actual renderer PID must be available');
   const overlay = windows.filter(window => new URL(window.url).search === '?view=overlay');
   assert.equal(overlay.length, 1); assert.equal(overlay[0].visible, false); assert.equal(overlay[0].focusable, false);
   return windows;

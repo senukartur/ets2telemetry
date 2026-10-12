@@ -30,7 +30,8 @@ try {
   assert.equal(result.playwright, '1.64.0');
   if (config.scenario === 'telemetry' || config.scenario === 'overlay') telemetrySource = await startLiveSmokeSource(config.checkout);
   application = await electron.launch({timeout: 20000, cwd: config.cwd,
-    ...(config.mode === 'packaged' ? {executablePath: config.executable} : {args: [config.checkout]}),
+    ...(config.mode === 'packaged' ? {executablePath: config.executable, args: config.forceRendererProcessReuse ? ['--renderer-process-limit=1'] : []} :
+      {args: [config.checkout, ...(config.forceRendererProcessReuse ? ['--renderer-process-limit=1'] : [])]}),
     env: {...process.env, TEMP: config.temp, TMP: config.temp, APPDATA: config.appdata,
       LOCALAPPDATA: config.localappdata, ETS2TELEMETRY_PROFILE_DIR: config.profile,
       ETS2TELEMETRY_DIAGNOSTIC_DIR: config.diagnostics,
@@ -43,11 +44,12 @@ try {
     .waitFor({state: 'visible', timeout: 10000});
   result.runtime = await application.evaluate(({app, BrowserWindow}) => {
     const preferences = BrowserWindow.getAllWindows()[0].webContents.getLastWebPreferences();
-    return {versions: process.versions, packaged: app.isPackaged,
+    return {versions: process.versions, packaged: app.isPackaged, rendererProcessLimit: app.commandLine.getSwitchValue('renderer-process-limit'),
       security: {sandbox: preferences.sandbox, isolation: preferences.contextIsolation, node: preferences.nodeIntegration}};
   });
   assert.equal(result.runtime.versions.electron, '44.7.0');
   assert.equal(result.runtime.packaged, config.mode === 'packaged');
+  assert.equal(result.runtime.rendererProcessLimit, config.forceRendererProcessReuse ? '1' : '');
   assert.deepEqual(result.runtime.security, {sandbox: true, isolation: true, node: false});
   result.runtime.windows = await windowSecurity(application);
   result.runtime.rendererStyles = await verifyRendererStyles(window, overlay);
