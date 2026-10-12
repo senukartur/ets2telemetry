@@ -1,0 +1,43 @@
+#pragma once
+#include "pipe-security.hpp"
+#include "sdk-adapter.hpp"
+#include "evidence-queue.hpp"
+#include <atomic>
+#include <mutex>
+#include <thread>
+
+// Opt-in CAP0 evidence endpoint. It is a separate pipe, worker, queue and wire contract from
+// the v0 live server: its I/O can stall or fail without delaying SDK callbacks or v0 frames.
+namespace ets2telemetry::cap0 {
+enum class CaptureStatus { stopped, starting, listening, capturing, failed };
+std::wstring capture_endpoint_name(const sdk::Snapshot&, const transport::UserIdentity&);
+class CaptureServer final {
+ public:
+  CaptureServer(sdk::Adapter& adapter, const char* origin) : adapter_(adapter), origin_(origin) {}
+  ~CaptureServer();
+  CaptureServer(const CaptureServer&) = delete;
+  // SDK initialization context only: attaches the queue to the adapter and starts the worker.
+  // The capture gate stays closed until an authorized client sends a valid CAP0 hello.
+  bool start(std::wstring directory = {}) noexcept;
+  // SDK shutdown context only. Joins the worker, then detaches the queue.
+  void stop() noexcept;
+  CaptureStatus status() const noexcept { return status_.load(); }
+  std::wstring endpoint() const;
+  std::uint64_t shutdown_ms() const noexcept { return shutdown_ms_.load(); }
+  std::uint64_t sessions() const noexcept { return sessions_.load(); }
+  const EvidenceQueue& queue() const noexcept { return queue_; }
+ private:
+  void run(std::wstring directory) noexcept;
+  void serve(HANDLE pipe, const std::wstring& directory, const transport::OwnerSecurity&, const transport::UserIdentity&);
+  bool wait_io(HANDLE pipe, OVERLAPPED&, DWORD& transferred, ULONGLONG deadline, bool honor_stop);
+  bool write(HANDLE pipe, const std::string& payload, ULONGLONG deadline, bool honor_stop);
+  std::uint64_t now_ns() const noexcept;
+  sdk::Adapter& adapter_; const char* origin_;
+  EvidenceQueue queue_;
+  std::thread worker_; transport::Handle stop_event_;
+  std::atomic<CaptureStatus> status_{CaptureStatus::stopped};
+  std::atomic<std::uint64_t> shutdown_ms_{0}, sessions_{0};
+  mutable std::mutex endpoint_mutex_; std::wstring endpoint_;
+  bool image_known_ = false; std::string image_path_, image_sha256_;
+};
+}
