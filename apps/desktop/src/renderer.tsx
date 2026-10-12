@@ -1,6 +1,7 @@
 import React, {useEffect, useState} from 'react';
 import {createRoot} from 'react-dom/client';
 import type {DesktopBridge, LiveTelemetry, OverlayBridge, OverlayPresentation, SourceSelection} from '../../../packages/contracts/src';
+import {dashboardSpeed} from './speed-display';
 declare global {interface Window {desktop: DesktopBridge; overlay: OverlayBridge}}
 function Overlay() {
   const [live, setLive] = useState<OverlayPresentation>();
@@ -25,7 +26,7 @@ function App() {
     </select></label>
     <p data-testid="telemetry-status">{live?.status ?? 'waiting'}: {live?.reason ?? 'Awaiting telemetry service'}</p>
     <p>Origin: {live?.observation?.source.origin ?? (live?.selection === 'synthetic' || live?.selection === 'replay' ? live.selection : 'game')}; {live?.fresh ? 'current' : 'not current'}; interval coverage unknown.</p>
-    <p data-testid="speed">Speed: {live?.fresh && observed?.speed.available ? `${(observed.speed.value * 3.6).toFixed(1)} km/h` : 'unavailable'}</p>
+    <p data-testid="speed">Speed: {dashboardSpeed(live)}</p>
     <p data-testid="fuel">Fuel: {live?.fresh && observed?.fuel.available ? `${observed.fuel.value.toFixed(1)} L` : 'unavailable'}</p>
     <p>Prototype live display. No trip recording or durable history.</p>
   </main>;

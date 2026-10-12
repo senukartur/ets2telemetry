@@ -1,9 +1,5 @@
 import type {LiveTelemetry, OverlayPresentation} from '../../../packages/contracts/src';
-
-function displaySpeed(value: number): string {
-  const rounded = value.toFixed(1);
-  return rounded === '-0.0' ? '0.0' : rounded;
-}
+import {displaySpeed} from './speed-display';
 
 /** Canonical v0 m/s and liters remain unchanged; only this display projection converts. */
 export function overlayPresentation(live: LiveTelemetry): OverlayPresentation {
