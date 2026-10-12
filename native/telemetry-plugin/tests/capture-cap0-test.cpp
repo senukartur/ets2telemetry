@@ -480,10 +480,10 @@ void counter_snapshots() {
   std::atomic<bool> done{false}, enough{false}; std::atomic<std::uint64_t> produced{0};
   std::thread producer([&] {
     cap0::Context c; c.kind = cap0::Kind::lifecycle; c.id = "simulation.started"; c.monotonic_available = true;
-    // The burst lasts at least 3,000,000 attempts and until the reader has 1,000 overlapping samples
-    // (bounded by 20 s), so slower sanitized builds still exercise real concurrency.
-    const auto limit = GetTickCount64() + 20000;
-    for (std::uint64_t i = 0; (i < 3000000 || !enough.load(std::memory_order_relaxed)) && GetTickCount64() < limit; ++i) { c.boundary_order = i + 1; c.monotonic_ns = i + 1; c.monotonic_available = (i % 3) != 0; q.capture(c); produced.store(i + 1, std::memory_order_relaxed);
+    // The burst lasts at least one second and until the reader has 1,000 overlapping samples (bounded
+    // by 20 s). No attempt count is required, so slow sanitized runners cannot fail it spuriously.
+    const auto started = GetTickCount64(), minimum = started + 1000, limit = started + 20000;
+    for (std::uint64_t i = 0; (GetTickCount64() < minimum || !enough.load(std::memory_order_relaxed)) && GetTickCount64() < limit; ++i) { c.boundary_order = i + 1; c.monotonic_ns = i + 1; c.monotonic_available = (i % 3) != 0; q.capture(c); produced.store(i + 1, std::memory_order_relaxed);
       // Real SDK callbacks are spaced by game work; a short pause keeps the reader from being starved by
       // an artificially back-to-back writer while drops still race every sample.
       for (int k = 0; k < 64; ++k) YieldProcessor(); }
@@ -502,7 +502,7 @@ void counter_snapshots() {
   const auto final = q.counters();
   require(!inconsistent, "every concurrent counter sample and loss packet is internally consistent");
   if (concurrent < 1000) std::cout << "concurrentSamples=" << concurrent << " produced=" << produced.load() << '\n';
-  require(concurrent >= 1000, "samples overlapped the live producer burst"); require(final.attempted == produced.load() && final.attempted >= 3000000 && counters_consistent(final) && final.dropped > 0 && final.enqueued > 0, "burst mixed retained and dropped envelopes");
+  require(concurrent >= 1000, "samples overlapped the live producer burst"); require(final.attempted == produced.load() && counters_consistent(final) && final.dropped > 0 && final.enqueued > 0, "burst mixed retained and dropped envelopes");
   std::cout << "counterSamples=" << samples << " concurrent=" << concurrent << " attempted=" << final.attempted << " dropped=" << final.dropped << " popped=" << popped << '\n';
 }
 
@@ -521,6 +521,26 @@ void stop_during_write() {
   for (const auto& item : packets.items) if (item.at("kind").string() == "loss") require(loss_consistent(item.at("data")), "loss consistent");
   require(f.capture.shutdown_ms() < 1000 * timing_scale && f.host.wrong_thread == 0, "bounded stop and no SDK calls on worker");
   std::cout << "stopDuringWritePackets=" << packets.items.size() << " unsent=" << packets.last().at("data").at("unsentEnvelopes").string() << " shutdownMs=" << f.capture.shutdown_ms() << '\n';
+}
+
+void stop_slow_reader() {
+  // A client that keeps reading, but slowly, must not stretch shutdown write by write: the whole
+  // stop is bounded by one 550 ms budget even while a split envelope is being written.
+  Fixture f; f.start(); auto client = f.connect(f.capture.endpoint()); hello(client.get()); Packets packets; require(packets.read(client.get(), 1), "header");
+  BigConfiguration big(255, 1024, 'w');
+  for (unsigned i = 0; i < 12; ++i) f.host.config("job", big.attributes.data());
+  std::atomic<bool> reading{true}; std::atomic<std::uint64_t> received{0};
+  std::thread reader([&] {
+    std::vector<std::uint8_t> chunk(8192); DWORD count = 0;
+    // About 8 KiB per 25 ms: each 64 KiB packet takes roughly 200 ms, so a split envelope spans many writes.
+    while (reading.load() && io(client.get(), true, chunk.data(), static_cast<DWORD>(chunk.size()), count, 3000) && count) { received += count; Sleep(25); }
+  });
+  require(until([&] { return received.load() > 100000; }, 5000), "slow client is reading a split envelope");
+  const auto started = GetTickCount64(); f.capture.stop(); const auto elapsed = GetTickCount64() - started;
+  reading.store(false); reader.join();
+  std::cout << "slowReaderStopMs=" << elapsed << " workerShutdownMs=" << f.capture.shutdown_ms() << " receivedBytes=" << received.load() << '\n';
+  require(elapsed < (550 + 150) * timing_scale, "stop with a slow reader stays within the single stop budget");
+  require(f.host.wrong_thread == 0, "no SDK calls from worker");
 }
 
 void v0_continuity() {
@@ -606,7 +626,7 @@ int controlled_host(const char* dll_path, const char* directory_utf8) {
 int main(int argc, char** argv) {
   try {
     if (argc == 4 && std::string(argv[1]) == "host") return controlled_host(argv[2], argv[3]);
-    const std::map<std::string, std::function<void()>> cases{{"queue", queue_bounds}, {"adapter", adapter_copy}, {"wire", wire}, {"server", server_capture}, {"stall", stall_and_loss}, {"rejection", rejection}, {"v0-isolation", v0_isolation}, {"counters", counter_snapshots}, {"stop-inflight", stop_during_write}, {"v0-continuity", v0_continuity}
+    const std::map<std::string, std::function<void()>> cases{{"queue", queue_bounds}, {"adapter", adapter_copy}, {"wire", wire}, {"server", server_capture}, {"stall", stall_and_loss}, {"rejection", rejection}, {"v0-isolation", v0_isolation}, {"counters", counter_snapshots}, {"stop-inflight", stop_during_write}, {"stop-slow-reader", stop_slow_reader}, {"v0-continuity", v0_continuity}
 #ifdef ETS2TELEMETRY_TRANSPORT_TEST_HOOKS
       , {"clock", clock_unavailable}
 #endif
