@@ -46,12 +46,14 @@ Retain the printed candidate DLL SHA256 with the source commit and chosen path. 
 
 ## Launch and select
 
+Use normal window startup for the interactive desktop application. Hiding its first GUI window makes the close control inaccessible. A background launcher console may remain hidden independently. The G01 comparison in [session evidence](validation/et-008-g01.md) records the distinction.
+
 For development, `npm run dev` rebuilds and starts Forge's desktop app. For the packaged prototype, launch the complete inspected directory, without moving its executable away from `resources`:
 
 ```powershell
 npm run dev
 # Or, after closing the development instance:
-Start-Process -FilePath (Resolve-Path -LiteralPath 'out/ETS2Telemetry Desktop-win32-x64/ETS2TelemetryDesktop.exe').Path -WindowStyle Hidden
+Start-Process -FilePath (Resolve-Path -LiteralPath 'out/ETS2Telemetry Desktop-win32-x64/ETS2TelemetryDesktop.exe').Path -WindowStyle Normal
 ```
 
 These are manual launch instructions, not bounded acceptance harness commands. Use the repository's owned Windows Job wrappers for automated runtime evidence. Select **Euro Truck Simulator 2** or **American Truck Simulator** in the dashboard before the corresponding game launch. Selection resolves the fixed development/packaged broker; the broker provisions its exact-image policy in `%LOCALAPPDATA%\ETS2Telemetry\transport\v0\service-policy.json` with current-user ownership and bounded atomic updates. Do not hand-edit ACLs/policy, approve an arbitrary executable, or grant a general Electron path. Missing/invalid policy or source authority fails closed. If more than one matching live game source exists, close the extra instance; the app does not choose implicitly. Avoid mixed privilege levels; actual elevated-game behavior still requires testing.
