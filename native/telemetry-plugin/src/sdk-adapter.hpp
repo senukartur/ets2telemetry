@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <mutex>
 #include "scssdk_telemetry.h"
+#include "evidence-queue.hpp"
 
 namespace ets2telemetry::sdk {
 // Includes truck wheel/config arrays; scan cap includes the required null terminator.
@@ -95,6 +96,14 @@ class Adapter final {
   void set_consumer(bool connected, bool diagnostics) noexcept;
   bool read_latest(Snapshot& output) noexcept;
   bool read_current(Snapshot& output) noexcept;
+  // SDK initialization/shutdown context only. The queue's own gate decides whether a
+  // callback copies a CAP0 envelope; v0 publication and diagnostics are unaffected.
+  void attach_evidence(cap0::EvidenceQueue* queue) noexcept { evidence_.store(queue, std::memory_order_release); }
+  // Current time in the source monotonic clock domain (Identity::capture_clock_id). The origin is
+  // fixed by initialize(); only workers started after initialization may call this.
+  bool source_monotonic_ns(std::uint64_t& output) const noexcept;
+  // Lock-free source liveness (false after shutdown or counter exhaustion) for worker polling.
+  bool source_live() const noexcept { return source_live_.load(std::memory_order_acquire); }
  private:
   friend struct AdapterTestAccess;
   static SCSAPI_VOID event_callback(scs_event_t, const void*, scs_context_t);
@@ -112,12 +121,14 @@ class Adapter final {
   void clock_restart() noexcept;
   void gate_diagnostics() noexcept;
   bool diagnostics_enabled() const noexcept;
+  void evidence(cap0::Kind, const char* id, const scs_named_value_t* attributes, bool attributes_expected) noexcept;
   Snapshot producer_{}, published_{};
   std::mutex publication_mutex_;
   std::mutex pending_mutex_;
   std::atomic<unsigned> consumer_{0};
   std::atomic<std::uint64_t> discarded_observations_{0};
   std::atomic<bool> source_live_{false};
+  std::atomic<cap0::EvidenceQueue*> evidence_{nullptr};
   bool unread_ = false, initialized_ = false;
   scs_telemetry_init_params_v100_t api_{};
   std::array<bool, 7> registered_events_{};

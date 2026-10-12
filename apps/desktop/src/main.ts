@@ -14,6 +14,7 @@ import {LiveSubscriptions} from './live-subscriptions';
 import {LiveFreshness} from './live-freshness';
 import {OverlayController} from './overlay-controller';
 import {overlayPresentation} from './overlay-presentation';
+import {captureActivation, type CaptureGrant} from './capture-activation';
 
 if (squirrelStartup) app.quit();
 else {
@@ -36,6 +37,18 @@ else {
     if (source !== 'ets2' && source !== 'ats') return undefined;
     try {return await resolveBroker();}
     catch (error) {log('BROKER_UNAVAILABLE', String(error)); return undefined;}
+  }
+  // CAP0 evidence capture is default off. An explicit launch-environment request becomes one
+  // grant attached to the first verified ETS2/ATS selection; it never renews after service restarts.
+  let captureRequest: Omit<CaptureGrant, 'displays'> | undefined;
+  try {captureRequest = captureActivation(process.env); if (captureRequest) log('CAPTURE_ACTIVATION', {format: captureRequest.format, deadlineMs: captureRequest.deadlineMs});}
+  catch (error) {log('CAPTURE_ACTIVATION_REJECTED', String(error));}
+  function selectMessage(source: SourceSelection, broker: Awaited<ReturnType<typeof selectedBroker>>) {
+    if (!captureRequest || !broker || (source !== 'ets2' && source !== 'ats')) return {type: 'select', source, broker};
+    const capture: CaptureGrant = {...captureRequest, displays: screen.getAllDisplays().slice(0, 16).map(display => ({id: String(display.id),
+      bounds: {x: Math.round(display.bounds.x), y: Math.round(display.bounds.y), width: Math.round(display.bounds.width), height: Math.round(display.bounds.height)}, scaleFactor: display.scaleFactor, rotation: display.rotation}))};
+    captureRequest = undefined;
+    return {type: 'select', source, broker, capture};
   }
   let lastSelectionRequest = -Infinity;
   let selectionGeneration = 0;
@@ -157,7 +170,7 @@ else {
         void (async () => {
           const broker = requested === 'ets2' || requested === 'ats' ? await selectedBroker(requested) : undefined;
           if (supervisor.stopping || service !== child || generation !== selectionGeneration) return;
-          child.postMessage({type: 'select', source: requested, broker});
+          child.postMessage(selectMessage(requested, broker));
           serviceReady = true; selectionPending = false; status = {service: 'ready', storage: 'verified', synthetic: true};
           if (!window) {createWindow(); createOverlay();} else connectSubscription();
           connectUpstream();
@@ -193,7 +206,7 @@ else {
     try {
       const broker = next === 'ets2' || next === 'ats' ? await selectedBroker(next) : undefined;
       if (!trusted(event) || !serviceReady || supervisor.stopping || service !== child || generation !== selectionGeneration || epoch !== rendererEpoch) throw new Error('Source request was retired');
-      child.postMessage({type: 'select', source: next, broker});
+      child.postMessage(selectMessage(next, broker));
       selection = next; freshness.invalidate(initialLive(selection));
     } finally {if (generation === selectionGeneration) selectionPending = false;}
   });

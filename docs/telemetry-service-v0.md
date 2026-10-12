@@ -18,7 +18,7 @@ Broker-created security descriptors explicitly set the owner to the current `Tok
 
 ## Native broker control
 
-The broker accepts only `--game ets2|ats --discovery-dir <main-owned-directory>`. Its first stdout frame is a four-byte little-endian length followed by a JSON receipt of at most 4,096 bytes:
+The broker accepts only `--game ets2|ats --discovery-dir <main-owned-directory>` for v0, or the same arguments followed by `--capture cap0` for the separate opt-in [CAP0 evidence mode](protocol/cap0.md); the capture mode connects only to the CAP0 endpoint, marks its receipt with `"evidence":"cap0"` and accepts only a CAP0 hello. Its first stdout frame is a four-byte little-endian length followed by a JSON receipt of at most 4,096 bytes:
 
 ```json
 {"type":"authority","schemaVersion":1,"source":{"game":"ets2","processId":123,"windowsSessionId":1,"processInstanceId":"00112233-4455-6677-8899-aabbccddeeff","pluginSessionId":"11112233-4455-6677-8899-aabbccddeeff","origin":"game"},"processCreationTime":"134000000000000000","userTag":"<64 lowercase hex characters>"}

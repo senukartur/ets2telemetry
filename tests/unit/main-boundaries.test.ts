@@ -461,3 +461,33 @@ it('keeps expired SDK and window authority across upstream cooldown and rejects 
   expect(dashboard.port1.postMessage.mock.lastCall![0].update).toMatchObject({fresh: true, observation: {windowFresh: true}});
   expect(upstreamRequests()).toBe(4); expect(children).toHaveLength(1);
 });
+it('attaches an explicit CAP0 capture grant once, only to a verified ETS2/ATS selection', async () => {
+  const broker = {executable: 'C:\\isolated\\telemetry-pipe-client.exe', discoveryDirectory: 'C:\\isolated\\transport\\v0'};
+  vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2'); vi.stubEnv('ETS2TELEMETRY_CAPTURE', 'cap0'); vi.stubEnv('ETS2TELEMETRY_CAPTURE_MINUTES', '15');
+  resolveBroker.mockImplementation(() => broker);
+  await ready();
+  const selects = () => child.postMessage.mock.calls.map(call => call[0] as Record<string, unknown>).filter(message => message.type === 'select');
+  expect(selects()).toHaveLength(1);
+  expect(selects()[0]).toMatchObject({type: 'select', source: 'ets2', broker, capture: {format: 'cap0', deadlineMs: 900_000, operatorLabel: null}});
+  expect(log).toHaveBeenCalledWith('CAPTURE_ACTIVATION', {format: 'cap0', deadlineMs: 900_000});
+  await vi.advanceTimersByTimeAsync(300); await handlers.get('telemetry:select')!(trusted(), 'ats');
+  expect(selects()).toHaveLength(2); expect(selects()[1]).toEqual({type: 'select', source: 'ats', broker});
+});
+it('keeps capture off by default and rejects an invalid activation without starting capture', async () => {
+  vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2'); vi.stubEnv('ETS2TELEMETRY_CAPTURE', 'cap0'); vi.stubEnv('ETS2TELEMETRY_CAPTURE_MINUTES', '600');
+  resolveBroker.mockImplementation(() => ({executable: 'C:\\isolated\\b.exe', discoveryDirectory: 'C:\\isolated\\t'}));
+  await ready();
+  expect(log).toHaveBeenCalledWith('CAPTURE_ACTIVATION_REJECTED', expect.stringContaining('interval'));
+  expect(child.postMessage.mock.calls.some(call => 'capture' in (call[0] as object))).toBe(false);
+});
+it('does not renew a used capture grant after a supervised service restart', async () => {
+  const broker = {executable: 'C:\\isolated\\telemetry-pipe-client.exe', discoveryDirectory: 'C:\\isolated\\transport\\v0'};
+  vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2'); vi.stubEnv('ETS2TELEMETRY_CAPTURE', 'cap0');
+  resolveBroker.mockImplementation(() => broker);
+  await ready();
+  expect(child.postMessage.mock.calls.filter(call => 'capture' in (call[0] as object))).toHaveLength(1);
+  child.emit('exit', 1); await vi.advanceTimersByTimeAsync(250);
+  const replacement = children[1]; replacement.emit('message', {type: 'ready'}); await settle();
+  const selects = replacement.postMessage.mock.calls.map(call => call[0] as Record<string, unknown>).filter(message => message.type === 'select');
+  expect(selects).toEqual([{type: 'select', source: 'ets2', broker}]);
+});
