@@ -7,10 +7,21 @@ export const EXPORT_FORMAT = 'ets2telemetry-cap0-export';
 const MAX_MANIFEST_BYTES = 1024 * 1024;
 const MAX_PACKETS_BYTES = 20 * 1024 * 1024;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-const PATH = /^(?:\\\\\?\\|\\\\|[A-Za-z]:[\\/])/;
+// Windows extended, UNC and drive paths anywhere in a string. A match runs to the end of the
+// path-like text (spaces included), so redaction errs towards removing trailing context.
+const EMBEDDED_PATH = /(?:\\\\\?\\|\\\\[^\\\s"'<>|]+\\|(?<![A-Za-z0-9])[A-Za-z]:[\\/])[^"'<>|\r\n\t]*/g;
+// User-profile fragments that survive outside a full path, for example "..\Users\name\".
+const USER_FRAGMENT = /([\\/])(Users|home|Documents and Settings)([\\/])([^\\/"'<>|\r\n\t]+)/gi;
+/** JSON text that keeps -0 exactly; JSON.stringify would write it as 0. */
+export function stringify(value: Json): string {
+  if (typeof value === 'number') return Object.is(value, -0) ? '-0' : JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stringify).join(',')}]`;
+  if (value && typeof value === 'object') return `{${Object.entries(value).map(([key, item]) => `${JSON.stringify(key)}:${stringify(item)}`).join(',')}}`;
+  return JSON.stringify(value);
+}
 const sha256 = (bytes: Uint8Array | string) => createHash('sha256').update(bytes).digest('hex');
 type Json = null | boolean | number | string | Json[] | {[key: string]: Json};
-export type Category = 'uuid' | 'processId' | 'windowsSessionId' | 'processCreationTime' | 'userTag' | 'path' | 'displayId';
+export type Category = 'uuid' | 'processId' | 'windowsSessionId' | 'processCreationTime' | 'userTag' | 'path' | 'user' | 'displayId';
 
 /**
  * Replaces identifiers and local paths with first-appearance tokens. Equal inputs map to equal tokens and
@@ -21,7 +32,7 @@ export class Sanitizer {
   private readonly maps = new Map<Category, Map<string, string>>();
   constructor(private readonly utcBase: bigint) {}
   counts(): Record<Category, number> {
-    const categories: Category[] = ['uuid', 'processId', 'windowsSessionId', 'processCreationTime', 'userTag', 'path', 'displayId'];
+    const categories: Category[] = ['uuid', 'processId', 'windowsSessionId', 'processCreationTime', 'userTag', 'path', 'user', 'displayId'];
     return Object.fromEntries(categories.map(category => [category, this.maps.get(category)?.size ?? 0])) as Record<Category, number>;
   }
   private token(category: Category, value: string, make: (index: number) => string): string {
@@ -38,8 +49,9 @@ export class Sanitizer {
     if (key === 'userTag') return this.token('userTag', input, index => index.toString(16).padStart(64, '0'));
     if (key === 'id' && parent === 'displays') return this.token('displayId', input, index => String(index));
     if (UUID.test(input)) return this.token('uuid', input, index => `00000000-0000-4000-8000-${index.toString(16).padStart(12, '0')}`);
-    if (key === 'path' || PATH.test(input)) return this.token('path', input, index => `redacted-path-${index}`);
-    return input;
+    if (key === 'path') return this.token('path', input, index => `redacted-path-${index}`);
+    return input.replace(EMBEDDED_PATH, path => this.token('path', path, index => `redacted-path-${index}`))
+      .replace(USER_FRAGMENT, (_match, before: string, folder: string, after: string, name: string) => `${before}${folder}${after}${this.token('user', name, index => `redacted-user-${index}`)}`);
   }
 }
 async function bounded(filename: string, limit: number): Promise<Buffer> {
@@ -59,13 +71,13 @@ export async function exportCapture(captureDirectory: string, outputDirectory: s
   const sanitizer = new Sanitizer(BigInt(timing.startedUtcUnixMs));
   const sanitizedManifest = sanitizer.value(manifest) as {[key: string]: Json};
   const lines = raw.toString('utf8').split('\n'); if (lines.pop() !== '') throw new Error('Capture packets file is not newline terminated');
-  const packets = lines.map(line => JSON.stringify(sanitizer.value(JSON.parse(line) as Json))).join('\n') + (lines.length ? '\n' : '');
+  const packets = lines.map(line => stringify(sanitizer.value(JSON.parse(line) as Json))).join('\n') + (lines.length ? '\n' : '');
   const output = Buffer.from(packets);
   sanitizedManifest.files = [{name: 'packets.ndjson', bytes: output.length, sha256: sha256(output)}];
   sanitizedManifest.sanitized = true;
   const manifestText = JSON.stringify(sanitizedManifest, null, 2) + '\n';
   const exportRecord = {format: EXPORT_FORMAT, schemaVersion: 1, rawIntegrityVerified: true, counts: sanitizer.counts(),
-    rules: ['UUIDs, process IDs, Windows session IDs, process creation times, user tags, display IDs and local paths are replaced by first-appearance tokens',
+    rules: ['UUIDs, process IDs, Windows session IDs, process creation times, user tags, display IDs, local paths (including paths embedded in text) and user-profile folder names are replaced by first-appearance tokens',
       'UTC receipt labels are rebased to the capture start; monotonic clocks, sequences and copied game data are unchanged',
       'The identifier mapping is not written; raw captures stay local and are never uploaded automatically']};
   await mkdir(path.dirname(outputDirectory), {recursive: true}); await mkdir(outputDirectory);
