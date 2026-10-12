@@ -24,7 +24,7 @@ Owner-approved deferred capabilities are tracked in [technical debt](docs/techni
 
 - The initial platform is **Windows x64**.
 - Both ETS2 and ATS must be supported.
-- **TruckersMP compatibility is required** for the first release. Single-player and the built-in Convoy mode are also part of the validation matrix.
+- **TruckersMP compatibility is required** for the first release. Single-player is also part of the validation matrix. The built-in Convoy mode is deferred from the matrix by owner decision on October 12, 2026; it is neither validated nor claimed as supported.
 - The initial overlay may require windowed mode, including borderless fullscreen. Exclusive fullscreen support is outside the MVP.
 - The main interface and overlay use **React and TypeScript**.
 - The first release includes live metrics, an overlay, and a local trip history.
@@ -240,7 +240,7 @@ The maintained v0 client uses a fixed project-owned native broker for documented
 [TESTING.md](TESTING.md) defines the test layers, permanent regression scenarios, CI/merge policy, historical migration checks, and real-game evidence. ET-001 adds scaffold checks; extend them in every feature PR. Most repeatable feature logic will use simulation, real local transport, and isolated storage; real-game compatibility and input/window behavior require separate evidence. The Windows CI workflow has recorded clean hosted and deliberate failure/restoration evidence; final current-head checks and review remain required, and broader feature suites remain pending.
 
 - Complete job lifecycle in both games: acceptance, driving, stopping, pausing, delivery, and cancellation.
-- A separate compatibility matrix for single-player, Convoy, and TruckersMP, recording tested versions. Documentation alone does not establish compatibility.
+- A separate compatibility matrix for single-player and TruckersMP, recording tested versions. Convoy is deferred (see the October 12, 2026 owner decision). Documentation alone does not establish compatibility.
 - Application launch before and after the game, reconnection, restart, game exit, and plugin reinitialization.
 - Save loading, truck changes, refueling, unavailable channels, timer resets, and partially recorded trips.
 - The ordering of job configuration changes and delivery events must not lose the result. Duplicate events must not create duplicate trips.
@@ -296,3 +296,7 @@ After the conditional code-review merges of PR #10, #12 and #14, the owner instr
 ## ET-008 code-acceptance exception — October 12, 2026
 
 The owner explicitly accepts ET-008 code by exception and authorizes the coordinator to integrate PR #21 with current main, preserve Tailwind/shadcn in the main window and the isolated transparent overlay, obtain independent review and a successful final automatic Windows CI after Ready, then squash merge without another confirmation. This supersedes the earlier implementation-only permission for this package. Mandatory game, environment, CAP-01/SP-01 and performance checks remain pending; a code merge does not establish compatibility or complete those criteria. The card remains in Review until its mandatory criteria are accepted. No protocol v1, durable history, later MVP or server work is authorized.
+
+## Convoy validation deferral — October 12, 2026
+
+The owner removed the built-in Convoy multiplayer mode from the current validation matrix: the owner does not play Convoy and has no procedure to test it. The matrix for SP-01, CAP-01, the full ET-009 gate and later ET-020 is now ETS2 and ATS, each in single-player and TruckersMP, with windowed and borderless modes. Convoy is deferred, not rejected: it is neither validated nor claimed as supported, and the application must not advertise Convoy compatibility. Earlier dated records that list Convoy as pending keep their historical wording; this decision supersedes those pending Convoy checks. TruckersMP still requires actual game evidence; single-player and TruckersMP results do not establish Convoy behavior.
