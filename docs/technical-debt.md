@@ -17,7 +17,7 @@ The future capability should provide game screenshots containing the visible tel
 - Compare an application-owned screenshot that captures or composites the game and overlay with integration that draws the overlay into the game rendering path. The former can provide a combined image without guaranteeing inclusion in Steam's own capture.
 - Determine how Steam captures each supported game and when overlay composition occurs. Do not promise inclusion based only on an injected overlay or a successful desktop screenshot.
 - Evaluate native rendering integration or a supported Electron overlay platform only after an architecture decision. Rendering hooks remain outside the current MVP; recording this debt does not authorize them now.
-- Check the then-current TruckersMP integration rules and validate both games in actual single-player, Convoy and TruckersMP sessions. Preserve click-through, focus, hiding, telemetry isolation and the absence of arbitrary game-memory reads.
+- Check the then-current TruckersMP integration rules and validate both games in actual single-player and TruckersMP sessions (Convoy is deferred by the October 12, 2026 owner decision). Preserve click-through, focus, hiding, telemetry isolation and the absence of arbitrary game-memory reads.
 
 ### Completion evidence
 
