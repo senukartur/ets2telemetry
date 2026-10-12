@@ -92,11 +92,13 @@ bool CaptureServer::wait_io(HANDLE pipe, OVERLAPPED& operation, DWORD& transferr
     WaitForMultipleObjects(stopping || mode == StopMode::ignore ? 1 : 2, handles, FALSE, timeout);
   }
 }
-bool CaptureServer::write(HANDLE pipe, const std::string& payload, ULONGLONG deadline, StopMode mode) {
+bool CaptureServer::write(HANDLE pipe, const std::string& payload, ULONGLONG deadline, StopMode mode, DWORD* sent) {
   const auto bytes = frame(payload); Operation op; DWORD written = 0;
+  if (sent) *sent = 0;
   auto ok = WriteFile(pipe, bytes.data(), static_cast<DWORD>(bytes.size()), &written, &op.overlapped);
   if (!ok && GetLastError() != ERROR_IO_PENDING) return false;
-  if (!ok && !wait_io(pipe, op.overlapped, written, deadline, mode)) return false;
+  if (!ok && !wait_io(pipe, op.overlapped, written, deadline, mode)) { if (sent) *sent = written; return false; }
+  if (sent) *sent = written;
   return written == bytes.size();
 }
 void CaptureServer::serve(HANDLE pipe, const std::wstring& directory, const transport::OwnerSecurity& security, const transport::UserIdentity& user) {
@@ -141,7 +143,8 @@ void CaptureServer::serve(HANDLE pipe, const std::wstring& directory, const tran
   // Both header stamps are taken before the gate opens, so a missing clock never opens it.
   header.open_monotonic_ns = stamp(); const auto header_payload = header_packet(header, 0, stamp());
   queue_.open(); status_.store(CaptureStatus::capturing); ++sessions_;
-  std::uint64_t packet_seq = 0, published = 0, reported_drops = 0; ULONGLONG last_loss = 0, next_source_check = GetTickCount64() + 250;
+  // abandoned: a popped envelope whose first packet was cut before any byte left; reported as unsent.
+  std::uint64_t packet_seq = 0, published = 0, reported_drops = 0, abandoned = 0; ULONGLONG last_loss = 0, next_source_check = GetTickCount64() + 250;
   auto finish = [&](EndReason reason, bool drain) {
     queue_.close();
     // Shutdown drains already copied envelopes for up to 200 ms, then reports loss and the end marker
@@ -149,15 +152,28 @@ void CaptureServer::serve(HANDLE pipe, const std::wstring& directory, const tran
     // On shutdown both deadlines come from the single stop budget (see stop_budget()).
     const auto started = GetTickCount64();
     const auto deadline = reason == EndReason::plugin_shutdown ? stop_budget() : started + 300, drain_deadline = deadline - stop_marker_ms; Envelope envelope;
+    // Drain writes stop at drain_deadline so the last stop_marker_ms stay reserved for the markers. A
+    // drain write cut before any byte of its envelope's first packet left keeps framing and ordering
+    // intact: that envelope is reported as unsent and the markers follow. A frame or split envelope cut
+    // after bytes left cannot be followed by a valid marker, so the stream then ends without one.
     try {
       while (drain && GetTickCount64() < drain_deadline && queue_.pop(envelope)) {
-        for (const auto& payload : envelope_packets(session, envelope, packet_seq, stamp())) if (!write(pipe, payload, deadline, StopMode::ignore)) return;
+        const auto first_seq = packet_seq; const auto packets = envelope_packets(session, envelope, packet_seq, stamp());
+        bool cut = false;
+        for (std::size_t i = 0; i < packets.size(); ++i) {
+          DWORD sent = 0;
+          if (write(pipe, packets[i], drain_deadline, StopMode::ignore, &sent)) continue;
+          if (i != 0 || sent != 0) return;
+          packet_seq = first_seq; abandoned = 1; cut = true; break;
+        }
+        if (cut) break;
         ++published;
       }
-    } catch (...) { reason = EndReason::encoding_failed; }
+    } catch (const ClockUnavailable&) { throw; }
+    catch (...) { reason = EndReason::encoding_failed; }
     const auto counters = queue_.counters();
     if (counters.dropped != reported_drops && !write(pipe, loss_packet(session, counters, packet_seq++, stamp()), deadline, StopMode::ignore)) return;
-    write(pipe, end_packet(session, {reason, counters, published, queue_.queued_envelopes()}, packet_seq++, stamp()), deadline, StopMode::ignore);
+    write(pipe, end_packet(session, {reason, counters, published, queue_.queued_envelopes() + abandoned}, packet_seq++, stamp()), deadline, StopMode::ignore);
   };
   ++packet_seq;
   if (!write(pipe, header_payload, GetTickCount64() + 1000, StopMode::cancel)) return;
@@ -191,7 +207,16 @@ void CaptureServer::serve(HANDLE pipe, const std::wstring& directory, const tran
         try { if (!queue_.pop(envelope)) break; packets = envelope_packets(session, envelope, packet_seq, stamp()); }
         catch (const ClockUnavailable&) { throw; }
         catch (...) { failed = true; break; }
-        for (const auto& payload : packets) if (!write(pipe, payload, GetTickCount64() + 1000, StopMode::grace)) { write_failed = true; break; }
+        const auto first_seq = packet_seq - packets.size(); bool cut_cleanly = false;
+        for (std::size_t p = 0; p < packets.size(); ++p) {
+          DWORD sent = 0;
+          if (write(pipe, packets[p], GetTickCount64() + 1000, StopMode::grace, &sent)) continue;
+          write_failed = true;
+          // A stop-budget cut before any byte of the envelope left keeps the stream valid for markers.
+          if (stopped() && p == 0 && sent == 0) { packet_seq = first_seq; abandoned = 1; cut_cleanly = true; }
+          break;
+        }
+        if (cut_cleanly) { retire_inbound(); finish(EndReason::plugin_shutdown, true); return; }
         if (!write_failed) ++published;
       }
       if (write_failed) { retire_inbound(); return; }
