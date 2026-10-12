@@ -477,15 +477,21 @@ void counter_snapshots() {
   // A live producer bursts drops while the worker-side reader samples; every sample must be one
   // coherent version, and every loss packet built from it must satisfy the decoder.
   cap0::EvidenceQueue q; require(q.prepare(), "prepare"); q.open();
-  std::atomic<bool> done{false}; std::atomic<std::uint64_t> produced{0};
+  std::atomic<bool> done{false}, enough{false}; std::atomic<std::uint64_t> produced{0};
   std::thread producer([&] {
     cap0::Context c; c.kind = cap0::Kind::lifecycle; c.id = "simulation.started"; c.monotonic_available = true;
-    for (std::uint64_t i = 0; i < 3000000; ++i) { c.boundary_order = i + 1; c.monotonic_ns = i + 1; c.monotonic_available = (i % 3) != 0; q.capture(c); produced.store(i + 1, std::memory_order_relaxed); }
+    // The burst lasts at least 3,000,000 attempts and until the reader has 1,000 overlapping samples
+    // (bounded by 20 s), so slower sanitized builds still exercise real concurrency.
+    const auto limit = GetTickCount64() + 20000;
+    for (std::uint64_t i = 0; (i < 3000000 || !enough.load(std::memory_order_relaxed)) && GetTickCount64() < limit; ++i) { c.boundary_order = i + 1; c.monotonic_ns = i + 1; c.monotonic_available = (i % 3) != 0; q.capture(c); produced.store(i + 1, std::memory_order_relaxed);
+      // Real SDK callbacks are spaced by game work; a short pause keeps the reader from being starved by
+      // an artificially back-to-back writer while drops still race every sample.
+      for (int k = 0; k < 64; ++k) YieldProcessor(); }
     done.store(true);
   });
   std::uint64_t samples = 0, concurrent = 0, previous_attempted = 0, previous_dropped = 0, popped = 0; cap0::Envelope e; bool inconsistent = false;
   while (!done.load() || samples < 1000) {
-    const bool live = !done.load(); const auto c = q.counters(); ++samples; if (live) ++concurrent;
+    const bool live = !done.load(); const auto c = q.counters(); ++samples; if (live && ++concurrent >= 1000) enough.store(true, std::memory_order_relaxed);
     if (!counters_consistent(c) || c.attempted < previous_attempted || c.dropped < previous_dropped) inconsistent = true;
     if (!loss_consistent(v0::detail::Parser(cap0::loss_packet(session_id, c, samples, samples)).parse().at("data"))) inconsistent = true;
     previous_attempted = c.attempted; previous_dropped = c.dropped;
@@ -495,7 +501,8 @@ void counter_snapshots() {
   producer.join();
   const auto final = q.counters();
   require(!inconsistent, "every concurrent counter sample and loss packet is internally consistent");
-  require(concurrent >= 1000, "samples overlapped the live producer burst"); require(final.attempted == 3000000 && counters_consistent(final) && final.dropped > 0 && final.enqueued > 0, "burst mixed retained and dropped envelopes");
+  if (concurrent < 1000) std::cout << "concurrentSamples=" << concurrent << " produced=" << produced.load() << '\n';
+  require(concurrent >= 1000, "samples overlapped the live producer burst"); require(final.attempted == produced.load() && final.attempted >= 3000000 && counters_consistent(final) && final.dropped > 0 && final.enqueued > 0, "burst mixed retained and dropped envelopes");
   std::cout << "counterSamples=" << samples << " concurrent=" << concurrent << " attempted=" << final.attempted << " dropped=" << final.dropped << " popped=" << popped << '\n';
 }
 
