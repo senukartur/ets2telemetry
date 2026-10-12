@@ -15,6 +15,12 @@ it('stores structured events, suppressing sensitive details by default', () => {
   expect(record.detail).toBeUndefined();
   expect(record.pid).toBe(process.pid);
 });
+it('always records fixed facts while still suppressing the default detail', () => {
+  const dir = directory();
+  createDiagnostics(dir)('NATIVE_BROKER_EXIT', new Error('private path'), {outcome: 'busy', stage: 'policy-publish', win32Error: 5, elapsedMs: null});
+  const record = JSON.parse(readFileSync(path.join(dir, 'startup.jsonl'), 'utf8'));
+  expect(record.facts).toEqual({outcome: 'busy', stage: 'policy-publish', win32Error: 5, elapsedMs: null}); expect(record.detail).toBeUndefined();
+});
 it('retains opt-in errors and caps file growth and individual messages', () => {
   const dir = directory();
   const log = createDiagnostics(dir, true);

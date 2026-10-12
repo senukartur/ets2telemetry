@@ -1,13 +1,13 @@
 import {randomUUID} from 'node:crypto';
 import net from 'node:net';
-import {NativePipeClient, type TelemetrySocket, type BrokerConfiguration} from './native-pipe-client';
+import {NativeClientError, NativePipeClient, type TelemetrySocket, type BrokerConfiguration, type BrokerDiagnostic} from './native-pipe-client';
 import {FrameDecoder, V0Consumer, encodeFrame, PROTOCOL_V0} from '../../../packages/contracts/src/protocol-v0';
 import type {LiveTelemetry, SourceSelection} from '../../../packages/contracts/src';
 import {initialLive, sourceSelection} from './live-state';
 export {initialLive, sourceSelection} from './live-state';
 
 export const TEST_PIPE_PATTERN = /^\\\\\.\\pipe\\ETS2Telemetry-SYNTHETIC-TEST-v0-[1-9][0-9]*-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-export interface IngestionOptions {now?: () => number; connect?: (endpoint: string) => TelemetrySocket; staleMs?: number; handshakeMs?: number; broker?: BrokerConfiguration; connectGame?: (configuration: BrokerConfiguration, game: 'ets2' | 'ats') => TelemetrySocket}
+export interface IngestionOptions {now?: () => number; connect?: (endpoint: string) => TelemetrySocket; staleMs?: number; handshakeMs?: number; broker?: BrokerConfiguration; connectGame?: (configuration: BrokerConfiguration, game: 'ets2' | 'ats') => TelemetrySocket; diagnose?: (diagnostic: BrokerDiagnostic) => void}
 /** Node pipe I/O is confined to explicitly selected isolated fixtures. Game authentication requires a native helper. */
 export class TelemetryIngestion {
   private readonly clientInstanceId = randomUUID();
@@ -70,7 +70,7 @@ export class TelemetryIngestion {
     const generation = ++this.generation, decoder = new FrameDecoder(), consumer = new V0Consumer(false);
     let closed = false, hydrated = false;
     const selection = this.live.selection;
-    const socket = this.socket = selection === 'ets2' || selection === 'ats' ? (this.options.connectGame ?? ((config, game) => new NativePipeClient(config, game)))(this.options.broker!, selection) : this.connect(this.endpoint!);
+    const socket = this.socket = selection === 'ets2' || selection === 'ats' ? (this.options.connectGame ?? ((config, game) => new NativePipeClient(config, game, this.options.diagnose)))(this.options.broker!, selection) : this.connect(this.endpoint!);
     if (socket.completion) {const completion = socket.completion; this.completions.add(completion); void completion.finally(() => this.completions.delete(completion));}
     const active = () => !closed && !this.disposed && generation === this.generation;
     const close = (status: LiveTelemetry['status'], reason: string, retry: boolean) => {
@@ -128,7 +128,12 @@ export class TelemetryIngestion {
         });
       } catch {close('incompatible', 'Invalid protocol, ordering or selected source identity', false);}
     });
-    socket.on('error', () => close(selection === 'ets2' || selection === 'ats' ? 'incompatible' : 'disconnected', selection === 'ets2' || selection === 'ats' ? 'Native source authority or transport failed' : 'Selected fixture connection failed', selection !== 'ets2' && selection !== 'ats'));
+    socket.on('error', (error: unknown) => {
+      if (selection !== 'ets2' && selection !== 'ats') close('disconnected', 'Selected fixture connection failed', true);
+      // A broker that granted no authority (deadline/local contention) retries on the normal backoff; rejections stay final.
+      else if (error instanceof NativeClientError && error.transient) close('waiting', 'Native authority check did not complete; retrying', true);
+      else close('incompatible', 'Native source authority or transport failed', false);
+    });
     socket.on('waiting', () => close('waiting', 'No selected game discovery record', true));
     socket.on('end', () => {
       try {decoder.end(); close('disconnected', hydrated ? 'Source disconnected; interval coverage unknown' : 'Source ended before checkpoint', true);}

@@ -1,7 +1,7 @@
 import {EventEmitter} from 'node:events';
 import {PassThrough, Writable} from 'node:stream';
 import {afterEach, beforeEach, expect, it, vi} from 'vitest';
-import type {NativePipeClient, BrokerConfiguration} from '../../apps/desktop/src/native-pipe-client';
+import type {NativePipeClient, NativeClientError, BrokerConfiguration, BrokerDiagnostic} from '../../apps/desktop/src/native-pipe-client';
 import type {TelemetryIngestion} from '../../apps/desktop/src/telemetry-ingestion';
 import type {LiveTelemetry} from '../../packages/contracts/src';
 import {encodeFrame, PROTOCOL_V0, type SourceIdentity} from '../../packages/contracts/src/protocol-v0';
@@ -38,14 +38,14 @@ afterEach(async () => {
   for (const child of children) {child.emit('close', 0); child.stdin.destroy(); child.stdout.destroy(); child.stderr.destroy();}
   await Promise.all(stops); vi.clearAllTimers(); vi.useRealTimers(); vi.doUnmock('node:child_process');
 });
-function fixture() {
-  const client = new Client(configuration, 'ets2'); clients.push(client); const child = children.at(-1)!;
+function fixture(diagnose?: (diagnostic: BrokerDiagnostic) => void) {
+  const client = new Client(configuration, 'ets2', diagnose); clients.push(client); const child = children.at(-1)!;
   const error = vi.fn(), data = vi.fn(), connect = vi.fn(), end = vi.fn(), waiting = vi.fn();
   client.on('error', error).on('data', data).on('connect', connect).on('end', end).on('waiting', waiting);
   return {client, child, error, data, connect, end, waiting};
 }
-function ingestion() {
-  const publish = vi.fn<(update: LiveTelemetry) => void>(); const service = new Ingestion(publish, {broker: configuration, now: () => performance.now()});
+function ingestion(diagnose?: (diagnostic: BrokerDiagnostic) => void) {
+  const publish = vi.fn<(update: LiveTelemetry) => void>(); const service = new Ingestion(publish, {broker: configuration, now: () => performance.now(), diagnose});
   ingestions.push(service); service.select('ets2'); return {service, publish, child: children.at(-1)!};
 }
 
@@ -202,4 +202,54 @@ it('retains latest manual selection and stop completion while cancelled child cl
   const stopped = vi.fn(); const stopping = f.service.stop().then(stopped); const second = children[1]; second.emit('exit', 0);
   await vi.advanceTimersByTimeAsync(6000); expect(stopped).not.toHaveBeenCalled(); expect(spawn).toHaveBeenCalledTimes(2);
   second.emit('close', 0); await stopping; expect(stopped).toHaveBeenCalledOnce(); expect(vi.getTimerCount()).toBe(0);
+});
+const failure = (spy: ReturnType<typeof vi.fn>) => spy.mock.calls[0]?.[0] as NativeClientError | undefined;
+it('classifies broker contention4 before authority as transient and logs only its fixed diagnostic codes', () => {
+  const diagnose = vi.fn(), f = fixture(diagnose);
+  f.child.stderr.write('diag1 policy-publish 5 172 policy-write 172\n'); f.child.emit('close', 4);
+  expect(failure(f.error)).toMatchObject({transient: true, outcome: 'busy'}); expect(f.waiting).not.toHaveBeenCalled(); expect(f.end).not.toHaveBeenCalled();
+  expect(diagnose).toHaveBeenCalledExactlyOnceWith({outcome: 'busy', exitCode: 4, stage: 'policy-publish', win32Error: 5, elapsedMs: 172, slowStage: 'policy-write', slowMs: 172});
+  const late = fixture(); late.child.output(relay(authority())); late.child.emit('close', 4);
+  expect(failure(late.error)).toMatchObject({transient: false, outcome: 'rejected'});
+});
+it('keeps authority exit1 hard while recording its stage, and never logs routine waiting or owner cancellation', () => {
+  const diagnose = vi.fn(), hard = fixture(diagnose);
+  hard.child.stderr.write('diag1 server-image 5 40 discovery 30\n'); hard.child.emit('close', 1);
+  expect(failure(hard.error)).toMatchObject({transient: false, outcome: 'rejected'});
+  expect(diagnose).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({outcome: 'rejected', exitCode: 1, stage: 'server-image', win32Error: 5}));
+  const waiting = fixture(diagnose); waiting.child.output(relay({type: 'waiting', schemaVersion: 1})); waiting.child.stderr.write('diag1 discovery 0 20 policy-write 15\n'); waiting.child.emit('close', 2);
+  const cancelled = fixture(diagnose); cancelled.client.destroy(); cancelled.child.emit('close', 3);
+  expect(diagnose).toHaveBeenCalledOnce();
+});
+it('bounds and sanitizes broker stderr to fixed stage codes and numbers', () => {
+  const diagnose = vi.fn();
+  const path = fixture(diagnose); path.child.stderr.write('C:\\Users\\private\\eurotrucks2.exe ' +'x'.repeat(10000) + '\ndiag1 policy-lock 80 3 own-image 2\n'); path.child.emit('close', 4);
+  const unknown = fixture(diagnose); unknown.child.stderr.write('diag1 private-stage 1 2 another-stage 4\n'); unknown.child.emit('close', 1);
+  const missing = fixture(diagnose); missing.child.stderr.write('C:\\Users\\private\\eurotrucks2.exe\n'); missing.child.emit('close', 1);
+  expect(diagnose.mock.calls.map(call => call[0] as BrokerDiagnostic)).toEqual([
+    {outcome: 'busy', exitCode: 4, stage: 'policy-lock', win32Error: 80, elapsedMs: 3, slowStage: 'own-image', slowMs: 2},
+    {outcome: 'rejected', exitCode: 1, stage: 'unrecognized', win32Error: 1, elapsedMs: 2, slowStage: 'unrecognized', slowMs: 4},
+    {outcome: 'rejected', exitCode: 1, stage: 'unreported', win32Error: null, elapsedMs: null, slowStage: 'unreported', slowMs: null}
+  ]);
+  expect(JSON.stringify(diagnose.mock.calls)).not.toMatch(/private|eurotrucks2|Users/);
+});
+it('treats the5s startup deadline as transient and logs the broker stage once it actually exits', async () => {
+  const diagnose = vi.fn(), f = fixture(diagnose);
+  await vi.advanceTimersByTimeAsync(5000); expect(failure(f.error)).toMatchObject({transient: true, outcome: 'startup-deadline'}); expect(diagnose).not.toHaveBeenCalled();
+  f.child.stderr.write('diag1 hello 0 7300 policy-write 6900\n'); f.child.emit('close', 3);
+  expect(diagnose).toHaveBeenCalledExactlyOnceWith({outcome: 'startup-deadline', exitCode: 3, stage: 'hello', win32Error: 0, elapsedMs: 7300, slowStage: 'policy-write', slowMs: 6900});
+});
+it.each(['contention4', 'deadline'])('retries a transient %s game failure on the normal backoff after actual broker exit instead of becoming incompatible', async trigger => {
+  const diagnose = vi.fn(), f = ingestion(diagnose);
+  if (trigger === 'deadline') await vi.advanceTimersByTimeAsync(5000); else f.child.emit('close', 4);
+  expect(f.publish.mock.lastCall?.[0]).toMatchObject({status: 'waiting', reason: 'Native authority check did not complete; retrying', fresh: false});
+  if (trigger === 'deadline') {await vi.advanceTimersByTimeAsync(10000); expect(spawn).toHaveBeenCalledOnce(); f.child.emit('close', 3); await vi.advanceTimersByTimeAsync(0);}
+  else {await vi.advanceTimersByTimeAsync(249); expect(spawn).toHaveBeenCalledOnce(); await vi.advanceTimersByTimeAsync(1);}
+  expect(spawn).toHaveBeenCalledTimes(2);
+  // A second transient failure keeps the existing exponential backoff; a later hard rejection stays final.
+  children[1].emit('close', 4); await vi.advanceTimersByTimeAsync(499); expect(spawn).toHaveBeenCalledTimes(2);
+  await vi.advanceTimersByTimeAsync(1); expect(spawn).toHaveBeenCalledTimes(3);
+  children[2].emit('close', 1); expect(f.publish.mock.lastCall?.[0]).toMatchObject({status: 'incompatible', fresh: false});
+  await vi.advanceTimersByTimeAsync(20000); expect(spawn).toHaveBeenCalledTimes(3);
+  expect(diagnose.mock.calls.map(call => (call[0] as BrokerDiagnostic).outcome)).toEqual([trigger === 'deadline' ? 'startup-deadline' : 'busy', 'busy', 'rejected']);
 });

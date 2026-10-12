@@ -9,6 +9,7 @@
 #include <regex>
 #include <thread>
 #include <atomic>
+#include <cstring>
 
 namespace v0 = ets2telemetry::v0;
 using v0::Json;
@@ -24,17 +25,25 @@ void test_trace(const char* value) {
   (void)value;
 #endif
 }
-struct Disconnected : std::runtime_error {Disconnected() : std::runtime_error("Source disconnected") {}};
-[[noreturn]] void fail() {throw std::runtime_error("Verified pipe client rejected source or transport");}
+// Last Win32 error observed by the failing check; the exit diagnostic reports it only as a number.
+DWORD failureError = ERROR_SUCCESS;
+struct Disconnected : std::runtime_error {explicit Disconnected(DWORD error = GetLastError()) : std::runtime_error("Source disconnected") {failureError = error;}};
+// Contention on a project-owned file before any authority receipt. It grants nothing; a retry re-verifies everything.
+struct Busy : std::runtime_error {explicit Busy(DWORD error) : std::runtime_error("Owned local file busy") {failureError = error;}};
+[[noreturn]] void fail() {failureError = GetLastError(); throw std::runtime_error("Verified pipe client rejected source or transport");}
+[[noreturn]] void busy_or_fail(DWORD error, std::initializer_list<DWORD> retryable) {
+  if (std::find(retryable.begin(), retryable.end(), error) != retryable.end()) throw Busy(error);
+  SetLastError(error); fail();
+}
 [[noreturn]] void process_query_failed(HANDLE process) {
   // Access/security failures stay hard rejections, even if the process exits concurrently.
   const auto error = GetLastError();
-  if ((error == ERROR_INVALID_PARAMETER || error == ERROR_PROCESS_ABORTED || error == ERROR_NO_TOKEN) && WaitForSingleObject(process, 0) == WAIT_OBJECT_0) throw Disconnected();
-  fail();
+  if ((error == ERROR_INVALID_PARAMETER || error == ERROR_PROCESS_ABORTED || error == ERROR_NO_TOKEN) && WaitForSingleObject(process, 0) == WAIT_OBJECT_0) throw Disconnected(error);
+  SetLastError(error); fail();
 }
 [[noreturn]] void pipe_failed(DWORD error) {
-  if (error == ERROR_BROKEN_PIPE || error == ERROR_PIPE_NOT_CONNECTED || error == ERROR_NO_DATA) throw Disconnected();
-  fail();
+  if (error == ERROR_BROKEN_PIPE || error == ERROR_PIPE_NOT_CONNECTED || error == ERROR_NO_DATA) throw Disconnected(error);
+  SetLastError(error); fail();
 }
 struct Handle {
   HANDLE value = INVALID_HANDLE_VALUE;
@@ -139,7 +148,10 @@ Json parse(const std::string& text) {return v0::detail::Parser(text).parse();}
 Handle image(HANDLE process) {
   std::wstring name(32768, L'\0'); DWORD length = static_cast<DWORD>(name.size());
   if (!QueryFullProcessImageNameW(process, 0, name.data(), &length)) process_query_failed(process); name.resize(length);
-  Handle file(CreateFileW(name.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+  const auto raw = CreateFileW(name.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+  // Another writer or deleter holding the image is contention, not authority; access and lookup failures stay hard.
+  if (raw == INVALID_HANDLE_VALUE) busy_or_fail(GetLastError(), {ERROR_SHARING_VIOLATION});
+  Handle file(raw);
   FILE_ATTRIBUTE_TAG_INFO attributes{}; if (!GetFileInformationByHandleEx(file.value, FileAttributeTagInfo, &attributes, sizeof(attributes)) || attributes.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) fail(); return file;
 }
 void reject_reparse_ancestors(fs::path directory) {
@@ -170,9 +182,31 @@ bool provably_missing_image(const std::string& path) {
   }
   return rootVerified;
 }
-void bootstrap_policy(const fs::path& directory, const Identity& identity, HANDLE ownImage, const char*& stage) {
+// Fixed stage names and coarse millisecond timings are the only broker diagnostics: no paths, identities or peer bytes.
+struct Stage {
+  const char* name = "arguments"; const char* slowest = "arguments";
+  ULONGLONG started = GetTickCount64(), entered = started, slowestMs = 0; bool timing = true;
+  void account() {if (!timing) return; const auto spent = GetTickCount64() - entered; if (spent > slowestMs) {slowest = name; slowestMs = spent;}}
+  Stage& operator=(const char* next) {
+    account();
+    // Relay waits follow the source's pacing; only startup and handshake stages are timed.
+    if (std::strcmp(next, "relay") == 0) timing = false;
+    name = next; entered = GetTickCount64(); return *this;
+  }
+  operator const char*() const {return name;}
+};
+int finish(int code, Stage& stage) {
+  stage.account(); stage.timing = false;
+  const auto text = "diag1 " + std::string(stage.name) + " " + std::to_string(failureError) + " " + std::to_string(GetTickCount64() - stage.started) + " " + stage.slowest + " " + std::to_string(stage.slowestMs) + "\n";
+  DWORD written = 0; WriteFile(GetStdHandle(STD_ERROR_HANDLE), text.data(), static_cast<DWORD>(text.size()), &written, nullptr); return code;
+}
+void bootstrap_policy(const fs::path& directory, const Identity& identity, HANDLE ownImage, Stage& stage) {
   OwnerSecurity lockSecurity(identity);
-  Handle policyLock(CreateFileW((directory / "service-policy.lock").c_str(), GENERIC_READ | GENERIC_WRITE | DELETE | READ_CONTROL, 0, &lockSecurity.attributes, CREATE_NEW, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_DELETE_ON_CLOSE, nullptr));
+  const auto rawLock = CreateFileW((directory / "service-policy.lock").c_str(), GENERIC_READ | GENERIC_WRITE | DELETE | READ_CONTROL, 0, &lockSecurity.attributes, CREATE_NEW, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_DELETE_ON_CLOSE, nullptr);
+  // A live holder reports FILE_EXISTS; a released lock still open elsewhere is delete-pending and reports ACCESS_DENIED
+  // in this already verified owner-only directory. Either way this attempt fails closed without publishing.
+  if (rawLock == INVALID_HANDLE_VALUE) busy_or_fail(GetLastError(), {ERROR_FILE_EXISTS, ERROR_ACCESS_DENIED, ERROR_SHARING_VIOLATION});
+  Handle policyLock(rawLock);
   protected_owner(policyLock.value, identity);
   stage = "policy-image";
   test_trace(stage);
@@ -180,9 +214,9 @@ void bootstrap_policy(const fs::path& directory, const Identity& identity, HANDL
   const auto bytes = read_bounded(ownImage, 64 * 1024 * 1024); const auto hash = sha256(std::vector<unsigned char>(bytes.begin(), bytes.end()));
   stage = "policy-existing"; const auto policyPath = directory / "service-policy.json";
   test_trace(stage);
-  Json::Array entries;
+  Json::Array entries; std::string existing;
   if (fs::exists(policyPath)) {
-    auto handle = secure_file(policyPath, identity); const auto policy = parse(read_bounded(handle.value, 16384));
+    auto handle = secure_file(policyPath, identity); existing = read_bounded(handle.value, 16384); const auto policy = parse(existing);
     exact(policy, {"schemaVersion", "userTag", "windowsSessionId", "allowedExecutables"});
     if (integer(policy.at("schemaVersion")) != 1 || policy.at("userTag").string() != identity.userTag || integer(policy.at("windowsSessionId")) != identity.session) fail();
     const auto* list = std::get_if<Json::Array>(&policy.at("allowedExecutables").value); if (!list || list->empty() || list->size() > 4) fail();
@@ -198,12 +232,18 @@ void bootstrap_policy(const fs::path& directory, const Identity& identity, HANDL
   stage = "policy-json"; const auto policy = Json{Json::Object{{"schemaVersion", Json{1.0}}, {"userTag", Json{identity.userTag}}, {"windowsSessionId", Json{static_cast<double>(identity.session)}}, {"allowedExecutables", Json{entries}}}};
   test_trace(stage);
   const auto encoded = v0::detail::serialize(policy); if (encoded.size() > 16384) fail();
+  // An identical policy is not replaced: each replacement races readers such as the plugin's per-connection check.
+  if (encoded == existing) {stage = "policy-current"; test_trace(stage); return;}
   stage = "policy-write"; OwnerSecurity security(identity); const auto temporary = directory / ("policy-" + std::to_string(GetCurrentProcessId()) + "-" + std::to_string(creation(GetCurrentProcess())) + ".tmp");
   {
     Handle file(CreateFileW(temporary.c_str(), GENERIC_WRITE | READ_CONTROL, 0, &security.attributes, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr)); protected_owner(file.value, identity);
     DWORD written = 0; if (!WriteFile(file.value, encoded.data(), static_cast<DWORD>(encoded.size()), &written, nullptr) || written != encoded.size() || !FlushFileBuffers(file.value)) {DeleteFileW(temporary.c_str()); fail();}
   }
-  stage = "policy-publish"; if (!MoveFileExW(temporary.c_str(), policyPath.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {DeleteFileW(temporary.c_str()); fail();}
+  stage = "policy-publish";
+  if (!MoveFileExW(temporary.c_str(), policyPath.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+    // Replacing the verified owner-only policy while any reader holds it open reports ACCESS_DENIED.
+    const auto error = GetLastError(); DeleteFileW(temporary.c_str()); busy_or_fail(error, {ERROR_ACCESS_DENIED, ERROR_SHARING_VIOLATION, ERROR_LOCK_VIOLATION});
+  }
   test_trace(stage);
 }
 // Anonymous stdio uses synchronous handles. Cancel the owned blocked thread, then join actual completion.
@@ -271,16 +311,17 @@ void receipt(const Json& value) {
 }
 int wmain(int argc, wchar_t** argv) {
   test_trace("entry");
-  const char* stage = "arguments";
+  Stage stage;
   try {
     if (argc != 5 || std::wstring(argv[1]) != L"--game" || std::wstring(argv[3]) != L"--discovery-dir") fail();
     const auto game = utf8(argv[2]); if (game != "ets2" && game != "ats") fail();
-    test_trace("current-identity-start"); Identity self(GetCurrentProcess()); test_trace("current-identity-done"); const fs::path directory(argv[4]); if (!directory.is_absolute()) fail();
-    if (!fs::exists(directory)) {receipt(Json{Json::Object{{"type", Json{std::string("waiting")}}, {"schemaVersion", Json{1.0}}}}); return 2;}
+    stage = "identity"; test_trace("current-identity-start"); Identity self(GetCurrentProcess()); test_trace("current-identity-done");
+    stage = "directory"; const fs::path directory(argv[4]); if (!directory.is_absolute()) fail();
+    if (!fs::exists(directory)) {receipt(Json{Json::Object{{"type", Json{std::string("waiting")}}, {"schemaVersion", Json{1.0}}}}); return finish(2, stage);}
     reject_reparse_ancestors(directory);
     // The two owned transport directories must both remain protected and free of reparses.
     auto parent = secure_file(directory.parent_path(), self, true); auto owned = secure_file(directory, self, true);
-    stage = "policy"; auto ownImage = image(GetCurrentProcess()); bootstrap_policy(directory, self, ownImage.value, stage);
+    stage = "own-image"; auto ownImage = image(GetCurrentProcess()); stage = "policy-lock"; bootstrap_policy(directory, self, ownImage.value, stage);
     stage = "discovery"; test_trace(stage); std::optional<Json> selected; std::optional<Handle> selectedProcess; unsigned records = 0, visited = 0;
     for (const auto& entry : fs::directory_iterator(directory)) {
       if (++visited > 256) fail();
@@ -309,7 +350,7 @@ int wmain(int argc, wchar_t** argv) {
       if (_wcsicmp(fs::path(final_path(serverImage.value)).filename().c_str(), expectedName) != 0) fail();
       if (selected) fail(); selected = record; selectedProcess.emplace(std::move(candidate)); stage = "discovery";
     }
-    if (!selected) {receipt(Json{Json::Object{{"type", Json{std::string("waiting")}}, {"schemaVersion", Json{1.0}}}}); return 2;}
+    if (!selected) {receipt(Json{Json::Object{{"type", Json{std::string("waiting")}}, {"schemaVersion", Json{1.0}}}}); return finish(2, stage);}
     const auto& record = *selected; const auto pid = integer(record.at("processId")); if (!pid) fail();
     const auto expectedCreation = v0::parse_uint64(record.at("processCreationTime"));
     const auto endpoint = "\\\\.\\pipe\\ETS2Telemetry-" + game + "-v0-" + self.userTag + "-" + std::to_string(self.session) + "-" + record.at("processInstanceId").string();
@@ -337,6 +378,7 @@ int wmain(int argc, wchar_t** argv) {
       stdio_io(GetStdHandle(STD_OUTPUT_HANDLE), frame.data(), static_cast<DWORD>(frame.size()), true);
     }
     } catch (const Disconnected&) {if (credits.rejected) fail(); throw;}
-  } catch (const Disconnected&) {return 3;}
-  catch (...) {const auto diagnostic = std::string(stage) + ":" + std::to_string(GetLastError()); DWORD written = 0; WriteFile(GetStdHandle(STD_ERROR_HANDLE), diagnostic.data(), static_cast<DWORD>(diagnostic.size()), &written, nullptr); return 1;}
+  } catch (const Disconnected&) {return finish(3, stage);}
+  catch (const Busy&) {return finish(4, stage);}
+  catch (...) {return finish(1, stage);}
 }

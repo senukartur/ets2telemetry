@@ -10,6 +10,24 @@ export interface TelemetrySocket extends Pick<EventEmitter, 'on' | 'once'> {
   destroy(): unknown;
 }
 export interface BrokerConfiguration {executable: string; discoveryDirectory: string}
+/** Fixed broker stage names. Any other diagnostic text is reported only as unrecognized. */
+const BROKER_STAGES = new Set(['arguments', 'identity', 'directory', 'own-image', 'policy-lock', 'policy-image', 'policy-existing', 'policy-json', 'policy-current', 'policy-write',
+  'policy-publish', 'discovery', 'server-process', 'server-image', 'connected-peer', 'authority-receipt', 'hello', 'relay', 'retained-authority', 'wire-frame', 'wire-payload']);
+const DIAGNOSTIC_TAIL_BYTES = 256;
+const DIAGNOSTIC_LINE = /diag1 ([a-z-]{1,24}) (\d{1,10}) (\d{1,10}) ([a-z-]{1,24}) (\d{1,10})\r?\n$/;
+export type BrokerOutcome = 'ended' | 'busy' | 'rejected' | 'startup-deadline' | 'start-failed' | 'control-closed' | 'incomplete-frame' | 'relay-rejected' | 'hello-rejected' | 'duplicate-credit';
+/** Only fixed codes and numbers: never paths, identities, receipts or relayed bytes. */
+export interface BrokerDiagnostic {outcome: BrokerOutcome; exitCode: number | null; stage: string; win32Error: number | null; elapsedMs: number | null; slowStage: string; slowMs: number | null}
+/** A transient failure granted no authority and may be retried after the broker has actually exited. */
+export class NativeClientError extends Error {
+  constructor(message: string, readonly outcome: BrokerOutcome, readonly transient = false) {super(message);}
+}
+function brokerDiagnostic(outcome: BrokerOutcome, exitCode: number | null, tail: Buffer): BrokerDiagnostic {
+  const match = DIAGNOSTIC_LINE.exec(tail.toString('latin1'));
+  if (!match) return {outcome, exitCode, stage: 'unreported', win32Error: null, elapsedMs: null, slowStage: 'unreported', slowMs: null};
+  const known = (stage: string) => BROKER_STAGES.has(stage) ? stage : 'unrecognized';
+  return {outcome, exitCode, stage: known(match[1]), win32Error: Number(match[2]), elapsedMs: Number(match[3]), slowStage: known(match[4]), slowMs: Number(match[5])};
+}
 /** An owned fixed native artifact supplies OS authority; stdio credits bound its relay to one frame. */
 export class NativePipeClient extends EventEmitter implements TelemetrySocket {
   authority?: SourceIdentity;
@@ -21,24 +39,33 @@ export class NativePipeClient extends EventEmitter implements TelemetrySocket {
   private helloSent = false;
   private creditOutstanding = false;
   private startup: ReturnType<typeof setTimeout>;
-  constructor(configuration: BrokerConfiguration, game: 'ets2' | 'ats') {
+  private diagnosticTail = Buffer.alloc(0);
+  private outcome?: BrokerOutcome;
+  constructor(configuration: BrokerConfiguration, game: 'ets2' | 'ats', diagnose?: (diagnostic: BrokerDiagnostic) => void) {
     super();
     this.child = spawn(configuration.executable, ['--game', game, '--discovery-dir', configuration.discoveryDirectory], {windowsHide: true, stdio: 'pipe'});
     this.completion = new Promise(resolve => this.child.once('close', () => resolve()));
-    this.startup = setTimeout(() => this.reject('Native authority deadline exceeded'), 5000);
-    // Drain fixed-error diagnostics without forwarding peer data to logs or accumulating text.
-    this.child.stderr.on('data', () => {});
-    this.child.stdin.on('error', () => this.reject('Native control pipe closed'));
-    this.child.on('error', () => this.reject('Native client could not start'));
+    // A slow broker has granted nothing; retrying after its actual exit is safe.
+    this.startup = setTimeout(() => this.reject('Native authority deadline exceeded', 'startup-deadline', true), 5000);
+    // Retain only a bounded tail; it is parsed into fixed codes and never forwarded as text.
+    this.child.stderr.on('data', (bytes: unknown) => {
+      if (bytes instanceof Uint8Array) this.diagnosticTail = Buffer.concat([this.diagnosticTail, bytes]).subarray(-DIAGNOSTIC_TAIL_BYTES);
+    });
+    this.child.stdin.on('error', () => this.reject('Native control pipe closed', 'control-closed'));
+    this.child.on('error', () => this.reject('Native client could not start', 'start-failed'));
     this.child.once('close', code => {
       clearTimeout(this.startup);
       if (!this.stopped) {
-        if (this.buffer.length) this.reject('Incomplete native relay frame');
+        if (this.buffer.length) this.reject('Incomplete native relay frame', 'incomplete-frame');
         else if (code === 2 && !this.authority) this.emit('waiting');
-        else if (code !== 0 && code !== 3) this.reject('Native authority or connection rejected');
-        else this.emit('end');
+        // Exit 4 reports local contention before any authority receipt; after a receipt it is a contract violation.
+        else if (code === 4 && !this.authority) this.reject('Native authority check met local contention', 'busy', true);
+        else if (code !== 0 && code !== 3) this.reject('Native authority or connection rejected', 'rejected');
+        else {this.outcome = 'ended'; this.emit('end');}
         this.stopped = true;
       }
+      // Routine waiting exits and owner cancellation are not logged.
+      if (this.outcome) diagnose?.(brokerDiagnostic(this.outcome, code, this.diagnosticTail));
       this.emit('close');
     });
     this.child.stdout.on('data', (bytes: unknown) => {
@@ -80,11 +107,11 @@ export class NativePipeClient extends EventEmitter implements TelemetrySocket {
             }
           }
         }
-      } catch {this.reject('Native relay protocol rejected');}
+      } catch {this.reject('Native relay protocol rejected', 'relay-rejected');}
     });
   }
   write(bytes: Uint8Array): void {
-    if (this.stopped || !this.authority || this.helloSent || bytes.length > 4100) {this.reject('Native hello rejected'); return;}
+    if (this.stopped || !this.authority || this.helloSent || bytes.length > 4100) {this.reject('Native hello rejected', 'hello-rejected'); return;}
     this.helloSent = true; this.child.stdin.write(bytes); this.credit();
   }
   destroy(): void {
@@ -93,6 +120,8 @@ export class NativePipeClient extends EventEmitter implements TelemetrySocket {
     // EOF cancels the native owned I/O monitor; completion means the process has actually closed.
     this.child.stdin.end(); this.child.stdout.resume();
   }
-  private credit(): void {if (this.creditOutstanding) {this.reject('Duplicate native relay credit'); return;} this.creditOutstanding = true; this.child.stdin.write(Buffer.from([1]));}
-  private reject(reason: string): void {if (this.stopped) return; this.destroy(); this.emit('error', new Error(reason));}
+  private credit(): void {if (this.creditOutstanding) {this.reject('Duplicate native relay credit', 'duplicate-credit'); return;} this.creditOutstanding = true; this.child.stdin.write(Buffer.from([1]));}
+  private reject(reason: string, outcome: BrokerOutcome, transient = false): void {
+    if (this.stopped) return; this.outcome = outcome; this.destroy(); this.emit('error', new NativeClientError(reason, outcome, transient));
+  }
 }
