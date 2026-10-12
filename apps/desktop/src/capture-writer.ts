@@ -1,5 +1,5 @@
 import {createHash, randomUUID} from 'node:crypto';
-import {mkdir, open, rename, writeFile, type FileHandle} from 'node:fs/promises';
+import {mkdir, open, rename, rm, writeFile, type FileHandle} from 'node:fs/promises';
 import path from 'node:path';
 import {Cap0StreamValidator, type Cap0Authority, type Cap0EndData, type Cap0HeaderData, type Cap0LossData, type Cap0Packet} from '../../../packages/contracts/src/capture-cap0';
 import {CAPTURE_LIMITS} from './capture-activation';
@@ -7,7 +7,12 @@ export {CAPTURE_LIMITS};
 export const PACKETS_FILE = 'packets.ndjson';
 export const MANIFEST_FILE = 'manifest.json';
 const MAX_BOUNDARIES = 1000;
-export type CaptureStopReason = 'source-end' | 'disconnect' | 'deadline' | 'pending-cap' | 'file-cap' | 'write-failure' | 'protocol-error' | 'authority-rejected' | 'service-stop' | 'no-source';
+async function writeManifestFile(directory: string, text: string): Promise<void> {
+  const temporary = path.join(directory, `${MANIFEST_FILE}.tmp`);
+  try { await writeFile(temporary, text, {flag: 'wx'}); await rename(temporary, path.join(directory, MANIFEST_FILE)); }
+  catch (error) { await rm(temporary, {force: true}).catch(() => {}); throw error; }
+}
+export type CaptureStopReason = 'source-end' | 'disconnect' | 'deadline' | 'pending-cap' | 'file-cap' | 'write-failure' | 'protocol-error' | 'authority-rejected' | 'service-stop' | 'no-source' | 'source-unavailable' | 'internal-error';
 
 export interface CaptureContext {
   captureSessionId: string;
@@ -20,6 +25,8 @@ export interface CaptureWriterOptions {
   root: string; context: CaptureContext; limits?: Partial<typeof CAPTURE_LIMITS>;
   now?: () => number; utcNow?: () => number;
   open?: (filename: string) => Promise<Pick<FileHandle, 'write' | 'close' | 'sync'>>;
+  /** Test seam for manifest persistence; the default writes a temporary file and renames it. */
+  writeManifest?: (directory: string, text: string) => Promise<void>;
 }
 export interface CaptureManifest {
   format: 'ets2telemetry-cap0-capture-manifest'; schemaVersion: 1; captureSessionId: string;
@@ -27,13 +34,15 @@ export interface CaptureManifest {
   stop: {reason: CaptureStopReason; detail: string | null};
   activation: CaptureContext['activation']; authority: (Cap0Authority & {processCreationTime: string}) | null; header: Cap0HeaderData | null;
   clockDomains: Record<string, unknown>;
-  timing: {receiptClockId: string; startedMonotonicNs: string; stoppedMonotonicNs: string; startedUtcUnixMs: string; stoppedUtcUnixMs: string};
+  timing: {receiptClockId: string; startedMonotonicNs: string; stoppedMonotonicNs: string | null; startedUtcUnixMs: string; stoppedUtcUnixMs: string};
   counts: {packetsReceived: number; packetsWritten: number; bytesWritten: number; packetsDiscarded: number; bytesDiscarded: number; envelopesCompleted: number};
   loss: {pluginLoss: Cap0LossData | null; end: Cap0EndData | null; endMarkerReceived: boolean; envelopePartial: boolean; lastPacketSeq: string | null; lastEnvelopeSeq: string;
     knownBoundaries: {envelopeSeq: string; droppedBefore: string}[]; boundariesOmitted: number};
   limits: typeof CAPTURE_LIMITS; files: {name: string; bytes: number; sha256: string}[];
   code: CaptureContext['code']; platform: CaptureContext['platform']; displays: unknown[];
   evidence: {durableAck: false; tripEffects: false; history: false; playback: false};
+  /** Present only on the in-memory result when manifest.json could not be written. */
+  manifestWriteError?: string;
 }
 
 /**
@@ -73,23 +82,27 @@ export class CaptureWriter {
     await mkdir(this.directory);
     const filename = path.join(this.directory, PACKETS_FILE);
     this.file = this.options.open ? await this.options.open(filename) : await open(filename, 'wx');
-    this.deadline = setTimeout(() => void this.close('deadline'), this.limits.deadlineMs);
+    this.deadline = setTimeout(() => this.closeQuietly('deadline'), this.limits.deadlineMs);
   }
   bindAuthority(authority: Cap0Authority & {processCreationTime: string}): void { this.authority = authority; this.validator.bindAuthority(authority); }
   get closed(): boolean { return Boolean(this.closing); }
   /**
    * Synchronously validates ordering and admits the packet into bounded pending storage. Returns false
    * once the capture is closed; a cap or invalid packet closes the capture with evidence retained.
+   * `text` is the validated wire payload; it is stored verbatim except that insignificant JSON line
+   * breaks become spaces, so number spellings such as -0 survive exactly.
    */
-  accept(packet: Cap0Packet): boolean {
+  accept(packet: Cap0Packet, text: string = JSON.stringify(packet)): boolean {
     if (this.closing || !this.file) return false;
     this.counts.packetsReceived++;
     try { this.validator.accept(packet); }
-    catch (error) { this.discard(0); void this.close('protocol-error', error instanceof Error ? error.message : 'Invalid CAP0 stream'); return false; }
-    const now = this.monotonicNs();
-    const line = Buffer.from(JSON.stringify({receipt: {seq: this.counts.packetsReceived, monotonicNs: now.toString(), utcUnixMs: String(Math.trunc(this.utcNow()))}, packet}) + '\n');
-    if (this.pendingBytes + line.length > this.limits.pendingBytes) { this.discard(line.length); void this.close('pending-cap'); return false; }
-    if (this.written + this.pendingBytes + line.length > this.limits.fileBytes) { this.discard(line.length); void this.close('file-cap'); return false; }
+    catch (error) { this.discard(0); this.closeQuietly('protocol-error', error instanceof Error ? error.message : 'Invalid CAP0 stream'); return false; }
+    let now: bigint;
+    try { now = this.monotonicNs(); } catch { this.discard(0); this.closeQuietly('internal-error', 'receipt clock invalid'); return false; }
+    const receipt = JSON.stringify({seq: this.counts.packetsReceived, monotonicNs: now.toString(), utcUnixMs: String(Math.trunc(this.utcNow()))});
+    const line = Buffer.from(`{"receipt":${receipt},"packet":${text.replace(/[\r\n]/g, ' ')}}\n`);
+    if (this.pendingBytes + line.length > this.limits.pendingBytes) { this.discard(line.length); this.closeQuietly('pending-cap'); return false; }
+    if (this.written + this.pendingBytes + line.length > this.limits.fileBytes) { this.discard(line.length); this.closeQuietly('file-cap'); return false; }
     if (packet.kind === 'envelope' && packet.data.attributes.final) {
       this.counts.envelopesCompleted++;
       if (packet.data.droppedBefore !== '0') {
@@ -98,24 +111,35 @@ export class CaptureWriter {
     }
     if (packet.kind === 'end') this.lastEnd = packet.data;
     this.pending.push(line); this.pendingBytes += line.length; this.flush();
-    if (packet.kind === 'end') void this.close('source-end');
+    if (packet.kind === 'end') this.closeQuietly('source-end');
     return true;
   }
-  /** Idempotent: stops admission, flushes admitted bytes (unless writing failed) and writes the manifest. */
+  /**
+   * Idempotent and never rejects: stops admission, flushes admitted bytes (unless writing failed),
+   * attempts the manifest write and always invokes onClose. If the manifest cannot be written, the
+   * returned in-memory manifest carries manifestWriteError and no manifest.json exists on disk.
+   */
   close(reason: CaptureStopReason, detail?: string): Promise<CaptureManifest> {
-    this.closing ??= (async () => {
-      clearTimeout(this.deadline);
+    this.closing ??= this.finalize(reason, detail);
+    return this.closing;
+  }
+  private closeQuietly(reason: CaptureStopReason, detail?: string): void { void this.close(reason, detail); }
+  private async finalize(reason: CaptureStopReason, detail?: string): Promise<CaptureManifest> {
+    clearTimeout(this.deadline);
+    let manifest: CaptureManifest;
+    try {
       while (this.writing) await this.writing;
       if (this.failure) { this.discard(this.pendingBytes, this.pending.length); this.pending = []; this.pendingBytes = 0; }
       try { await this.file?.sync(); } catch { /* Close below still releases the handle; the hash covers bytes written. */ }
       try { await this.file?.close(); } catch { this.failure ??= 'close-failed'; }
-      const manifest = this.manifest(this.failure ? 'write-failure' : reason, this.failure ? this.failure : detail ?? null);
-      const temporary = path.join(this.directory, `${MANIFEST_FILE}.tmp`);
-      await writeFile(temporary, JSON.stringify(manifest, null, 2) + '\n', {flag: 'wx'});
-      await rename(temporary, path.join(this.directory, MANIFEST_FILE));
-      this.onClose(manifest); return manifest;
-    })();
-    return this.closing;
+      manifest = this.manifest(this.failure ? 'write-failure' : reason, this.failure ? this.failure : detail ?? null);
+    } catch (error) {
+      manifest = this.manifest('internal-error', `close failed: ${error instanceof Error ? error.message.slice(0, 120) : 'unknown'}`);
+    }
+    try { await (this.options.writeManifest ?? writeManifestFile)(this.directory, JSON.stringify(manifest, null, 2) + '\n'); }
+    catch (error) { manifest = {...manifest, manifestWriteError: error instanceof Error ? error.message.slice(0, 200) : 'manifest write failed'}; }
+    try { this.onClose(manifest); } catch { /* A consumer callback failure cannot reopen or fail the capture. */ }
+    return manifest;
   }
   private flush(): void {
     if (this.writing || !this.pending.length || this.failure || !this.file) return;
@@ -128,13 +152,14 @@ export class CaptureWriter {
       } catch (error) {
         // Bytes already admitted are not acknowledged anywhere; record them as discarded evidence.
         this.failure = error instanceof Error ? `write-failed: ${error.message.slice(0, 120)}` : 'write-failed'; this.discard(length, count);
-        void this.close('write-failure');
+        this.closeQuietly('write-failure');
       } finally { this.pendingBytes -= length; this.writing = undefined; }
       this.flush();
     })();
   }
   private discard(bytes: number, packets = 1): void { this.counts.packetsDiscarded += packets; this.counts.bytesDiscarded += bytes; }
   private monotonicNs(): bigint { const ms = this.now(); if (!Number.isFinite(ms) || ms < 0) throw new Error('Receipt clock invalid'); return BigInt(Math.round(ms * 1e6)); }
+  private safeMonotonicNs(): string | null { try { return this.monotonicNs().toString(); } catch { return null; } }
   private manifest(reason: CaptureStopReason, detail: string | null): CaptureManifest {
     const header = this.validator.header ?? null, endMarkerReceived = this.validator.ended;
     const sha256 = this.hash.copy().digest('hex');
@@ -152,7 +177,7 @@ export class CaptureWriter {
           meaning: 'telemetry service receipt before the file write; independent of the source clock and never subtracted from it'},
         sharedBoundaryOrder: {fields: ['packet.data.sharedBoundaryOrder'], meaning: 'adapter counter shared by every SDK callback; increasing, but not a proven per-callback total order'}
       },
-      timing: {receiptClockId: this.receiptClock, startedMonotonicNs: this.started.monotonic.toString(), stoppedMonotonicNs: this.monotonicNs().toString(),
+      timing: {receiptClockId: this.receiptClock, startedMonotonicNs: this.started.monotonic.toString(), stoppedMonotonicNs: this.safeMonotonicNs(),
         startedUtcUnixMs: String(Math.trunc(this.started.utc)), stoppedUtcUnixMs: String(Math.trunc(this.utcNow()))},
       counts: {...this.counts},
       loss: {pluginLoss: this.validator.loss ?? null, end: this.lastEnd, endMarkerReceived, envelopePartial: this.validator.partial, lastPacketSeq: this.validator.lastPacketSeq ?? null,

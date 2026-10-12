@@ -4,9 +4,12 @@ import {randomUUID} from 'node:crypto';
 import {decodeCap0Payload, encodeCap0Hello, CAP0_MAX_PACKET_BYTES, type Cap0Authority} from '../../../packages/contracts/src/capture-cap0';
 import {isUint64} from '../../../packages/contracts/src/protocol-v0';
 import type {BrokerConfiguration} from './native-pipe-client';
-import {CaptureWriter, type CaptureContext, type CaptureManifest} from './capture-writer';
+import {CaptureWriter, type CaptureContext, type CaptureManifest, type CaptureWriterOptions} from './capture-writer';
+const utf8 = new TextDecoder('utf-8', {fatal: true});
 
 export type CaptureAuthority = Cap0Authority & {processCreationTime: string};
+/** transient: before authority, a retry may succeed (deadline, broker start or exit); false: an explicitly invalid receipt or protocol use. */
+export class CaptureTransportError extends Error { constructor(message: string, readonly transient: boolean) { super(message); } }
 /** Events: authority(CaptureAuthority), packet(Uint8Array), waiting, end, error(Error), close. */
 export interface CaptureTransport extends Pick<EventEmitter, 'on' | 'once'> {
   readonly completion: Promise<void>;
@@ -44,9 +47,9 @@ export class NativeCaptureClient extends EventEmitter implements CaptureTranspor
       clearTimeout(this.startup);
       if (!this.stopped) {
         this.stopped = true;
-        if (this.buffer.length) this.emit('error', new Error('Incomplete capture relay frame'));
+        if (this.buffer.length) this.emit('error', new CaptureTransportError('Incomplete capture relay frame', true));
         else if (code === 2 && !this.authority) this.emit('waiting');
-        else if (code !== 0 && code !== 3) this.emit('error', new Error('Capture authority or connection rejected'));
+        else if (code !== 0 && code !== 3) this.emit('error', new CaptureTransportError('Capture broker exited before or during capture', true));
         else this.emit('end');
       }
       this.emit('close');
@@ -75,30 +78,31 @@ export class NativeCaptureClient extends EventEmitter implements CaptureTranspor
             this.emit('packet', new Uint8Array(payload));
           }
         }
-      } catch { this.reject('Capture relay protocol rejected'); }
+      } catch { this.reject('Capture relay protocol rejected', false); }
     });
   }
   sendHello(frame: Uint8Array): void {
-    if (this.stopped || !this.authority || this.helloSent || frame.length > 4100) { this.reject('Capture hello rejected'); return; }
+    if (this.stopped || !this.authority || this.helloSent || frame.length > 4100) { this.reject('Capture hello rejected', false); return; }
     this.helloSent = true; this.child.stdin.write(frame); this.credit();
   }
   credit(): void {
     if (this.stopped) return;
-    if (this.creditOutstanding || !this.helloSent) { this.reject('Duplicate capture relay credit'); return; }
+    if (this.creditOutstanding || !this.helloSent) { this.reject('Duplicate capture relay credit', false); return; }
     this.creditOutstanding = true; this.child.stdin.write(Buffer.from([1]));
   }
   destroy(): void {
     if (this.stopped) return;
     this.stopped = true; clearTimeout(this.startup); this.buffer = Buffer.alloc(0); this.child.stdin.end(); this.child.stdout.resume();
   }
-  private reject(reason: string): void { if (this.stopped) return; this.destroy(); this.emit('error', new Error(reason)); }
+  private reject(reason: string, transient = true): void { if (this.stopped) return; this.destroy(); this.emit('error', new CaptureTransportError(reason, transient)); }
 }
 
 export interface CaptureSessionOptions {
   root: string; game: 'ets2' | 'ats';
   context: Omit<CaptureContext, 'captureSessionId'>;
   connect: () => CaptureTransport;
-  retryMs?: number; now?: () => number; utcNow?: () => number;
+  retryMs?: number; transientWindowMs?: number; now?: () => number; utcNow?: () => number;
+  writer?: Pick<CaptureWriterOptions, 'open' | 'writeManifest'>;
   captureSessionId?: string;
 }
 /**
@@ -109,13 +113,14 @@ export class CaptureSession {
   readonly captureSessionId: string;
   private writer?: CaptureWriter; private transport?: CaptureTransport; private retry?: ReturnType<typeof setTimeout>;
   private attempts = 0; private connected = false; private finished = false;
+  private transientFailures = 0; private firstTransient?: number; private retryCurrent?: (delayMs: number) => void;
   private readonly completions = new Set<Promise<void>>();
   private resolveDone!: (manifest: CaptureManifest | undefined) => void;
   readonly done = new Promise<CaptureManifest | undefined>(resolve => { this.resolveDone = resolve; });
   constructor(private readonly options: CaptureSessionOptions) { this.captureSessionId = options.captureSessionId ?? randomUUID(); }
   async start(): Promise<void> {
     const writer = this.writer = new CaptureWriter({root: this.options.root, context: {...this.options.context, captureSessionId: this.captureSessionId},
-      now: this.options.now, utcNow: this.options.utcNow}, manifest => this.finish(manifest));
+      now: this.options.now, utcNow: this.options.utcNow, ...this.options.writer}, manifest => this.finish(manifest));
     try { await writer.start(); } catch (error) { this.finished = true; this.resolveDone(undefined); throw error; }
     this.attempt();
   }
@@ -128,29 +133,53 @@ export class CaptureSession {
     const writer = this.writer!;
     if (writer.closed || this.finished) return;
     this.attempts++;
-    const transport = this.transport = this.options.connect(); let authorized = false;
+    let transport: CaptureTransport;
+    try { transport = this.transport = this.options.connect(); }
+    catch (error) { this.transientFailure(error instanceof Error ? error.message : 'Capture transport failed'); return; }
+    let authorized = false;
     const completion = transport.completion; this.completions.add(completion); void completion.finally(() => this.completions.delete(completion));
-    const retry = () => {
+    const retry = (delayMs: number) => {
       transport.destroy(); if (this.transport === transport) this.transport = undefined;
-      if (!writer.closed) this.retry = setTimeout(() => { this.retry = undefined; void completion.then(() => this.attempt()); }, this.options.retryMs ?? 1000);
+      if (!writer.closed && !this.finished) this.retry = setTimeout(() => { this.retry = undefined; void completion.then(() => this.attempt()); }, delayMs);
     };
+    this.retryCurrent = retry;
     transport.on('authority', (authority: CaptureAuthority) => {
       if (writer.closed) return;
-      authorized = this.connected = true; writer.bindAuthority(authority); transport.sendHello(encodeCap0Hello(this.captureSessionId));
+      try { writer.bindAuthority(authority); } catch (error) { void writer.close('authority-rejected', error instanceof Error ? error.message : 'authority'); return; }
+      authorized = this.connected = true; transport.sendHello(encodeCap0Hello(this.captureSessionId));
     });
     transport.on('packet', (payload: Uint8Array) => {
       if (writer.closed) return;
       let packet;
       try { packet = decodeCap0Payload(payload); } catch (error) { void writer.close('protocol-error', error instanceof Error ? error.message : 'Invalid CAP0 packet'); return; }
       // Credit only after synchronous validation and bounded admission: the writer is the backpressure point.
-      if (writer.accept(packet) && !writer.closed) transport.credit();
+      if (writer.accept(packet, utf8.decode(payload)) && !writer.closed) transport.credit();
     });
-    transport.on('waiting', retry);
-    transport.on('end', () => { if (authorized) void writer.close('disconnect', 'source closed before an end marker'); else retry(); });
-    transport.on('error', (error: Error) => { void writer.close(authorized ? 'disconnect' : 'authority-rejected', error.message.slice(0, 120)); });
+    transport.on('waiting', () => retry(this.options.retryMs ?? 1000));
+    transport.on('end', () => { if (authorized) void writer.close('disconnect', 'source closed before an end marker'); else retry(this.options.retryMs ?? 1000); });
+    transport.on('error', (error: Error) => {
+      const message = error.message.slice(0, 120);
+      if (authorized) void writer.close('disconnect', message);
+      // Only an explicitly invalid receipt or protocol use is an authority rejection; deadlines,
+      // broker start failures and broker exits before authority are retried within a bounded window.
+      else if ((error as Partial<CaptureTransportError>).transient === true) this.transientFailure(message);
+      else void writer.close('authority-rejected', message);
+    });
+  }
+  private transientFailure(message: string): void {
+    const writer = this.writer!, now = (this.options.now ?? (() => performance.now()))();
+    this.firstTransient ??= now; this.transientFailures++;
+    if (now - this.firstTransient >= (this.options.transientWindowMs ?? 60_000)) {
+      void writer.close('source-unavailable', `${this.transientFailures} transient pre-authority failures; last: ${message}`); return;
+    }
+    const delay = Math.min(250 * 2 ** Math.min(this.transientFailures - 1, 4), 4000);
+    if (this.retryCurrent) this.retryCurrent(delay);
+    else if (!writer.closed) this.retry = setTimeout(() => { this.retry = undefined; this.attempt(); }, delay);
   }
   private finish(manifest: CaptureManifest): void {
-    clearTimeout(this.retry); this.retry = undefined; this.transport?.destroy(); this.transport = undefined;
+    clearTimeout(this.retry); this.retry = undefined; this.retryCurrent = undefined;
+    try { this.transport?.destroy(); } catch { /* Teardown continues; the broker exits on stdin EOF. */ }
+    this.transport = undefined;
     if (!this.finished) { this.finished = true; this.resolveDone(manifest); }
   }
 }
