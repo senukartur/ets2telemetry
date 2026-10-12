@@ -62,6 +62,28 @@ Rule exceptions, each with its reason:
 | `tests/**` | `@typescript-eslint/unbound-method` off | `expect(mock.method)` passes a mock as a value and never calls it with a lost `this` |
 | `packages/contracts/src/protocol-v0.ts`, `scripts/package-integrity.mjs` | Inline `no-control-regex` | Both regular expressions deliberately reject control characters |
 
+## UI components (shadcn/ui)
+
+The main window uses [shadcn/ui](https://ui.shadcn.com/) with Tailwind CSS v4. shadcn/ui is not a runtime dependency: the CLI copies component source into `apps/desktop/src/components/ui`, where it is project code that is linted, typechecked and edited like any other module. The renderer bundle is built by Vite, so every UI package is a pinned dev dependency: tailwindcss and @tailwindcss/vite 4.3.3, tw-animate-css, radix-ui, class-variance-authority, lucide-react, cn (a Tailwind-aware class-name merge helper published by shadcn, MIT, repository shadcn-ui/cn, described as a drop-in replacement for clsx plus tailwind-merge; generated components import it directly and `apps/desktop/src/lib/utils.ts` re-exports it) and @fontsource-variable/geist. The CLI is not installed; run it through npx.
+
+Add a component from the repository root:
+
+```powershell
+npx shadcn@4.21.4 add <component>
+```
+
+`components.json` holds the CLI configuration (`radix-nova` preset, stylesheet `apps/desktop/src/index.css`). Review `package.json` and `package-lock.json` after each add: the repository pins exact versions through `.npmrc`, and a component may bring new dependencies. Do not run `shadcn init`; the build has no `vite.config` file for it to edit. `index.css` contains the CLI's `shadcn/tailwind.css` inlined, which is what `shadcn eject` produces, so the CLI package stays out of the dependency tree. Re-inline the file when moving to a newer preset.
+
+Constraints that are easy to break:
+
+- **Path alias.** `tsconfig.json` maps `@/*` to `apps/desktop/src/*` and `scripts/build.mjs` repeats it as a Vite alias; keep the two in step. The shadcn documentation tells you to add `baseUrl`, but TypeScript 7.0 removed that option (error TS5102). Use `paths` alone.
+- **Stylesheet typing.** `apps/desktop/src/css.d.ts` declares `*.css` modules. Without it, `import './index.css'` fails typecheck with TS2882.
+- **Content Security Policy.** `index.html` allows only `'self'` sources and no `data:`. The renderer build therefore sets `assetsInlineLimit: 0`, so small fonts and images stay separate files. Do not load fonts or images from the network. `scripts/build.mjs` also fails the build if the emitted renderer page or stylesheet embeds a `data:` URI.
+- **Lint.** Every `apps/desktop/src/**/*.tsx` file, including generated components, must pass the zero-warning ESLint run with the React Hooks rules in [Linting](#linting). Fix generated code that violates them in the component itself and note the change in the PR.
+- **Overlay.** `index.css` sets `body` to an opaque background, which would defeat the transparent overlay window. The overlay needs its own entry page and stylesheet that imports Tailwind utilities without the shadcn base layer.
+
+Verification recorded for this setup (no game or packaged-application run): `npm run typecheck`, `npm run lint`, `npm test` and `node scripts/build.mjs` pass. The built renderer was loaded from `file://` in Electron 44.7.0 (Chromium 152) with a sandboxed, context-isolated window and a stub bridge: the card rendered, the Geist latin subset loaded, and the console reported no errors or CSP violations. Windows CI (packaging and the packaged smoke) must still run on the PR head.
+
 ## PowerShell script analysis
 
 ET-023b runs [PSScriptAnalyzer](https://learn.microsoft.com/en-us/powershell/utility-modules/psscriptanalyzer/overview) 1.25.0 over every Git-tracked `.ps1`, `.psm1` and `.psd1` file. Run from the repository root:

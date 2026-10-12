@@ -53,7 +53,7 @@ Support either launch order: application first or game first. Starting recording
 | Component | Technologies | Responsibility |
 | --- | --- | --- |
 | Desktop shell | Electron, TypeScript | Windows, tray, application lifecycle, plugin connection |
-| Main interface and overlay | React, TypeScript, Vite | Metrics, journal, settings |
+| Main interface and overlay | React, TypeScript, Vite, Tailwind CSS v4, shadcn/ui | Metrics, journal, settings. The overlay is display-only and keeps its own minimal stylesheet |
 | Game plugin | C++17, CMake, MSVC, SCS Telemetry SDK | Data acquisition through the supported game interface |
 | Local transport | Windows Named Pipes | Messages between the plugin and application |
 | Storage | SQLite, better-sqlite3 | Trips, events, samples, migrations |

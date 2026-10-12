@@ -27,7 +27,7 @@ Exclusive fullscreen, rendering hooks, and arbitrary game memory reads are outsi
 
 | Component | Planned technology |
 | --- | --- |
-| Desktop application | Electron, React, TypeScript, Vite |
+| Desktop application | Electron, React, TypeScript, Vite, Tailwind CSS v4, shadcn/ui |
 | Game plugin | Project-owned C++17 DLL, official SCS Telemetry SDK, CMake, MSVC |
 | Local transport | Windows Named Pipes |
 | Storage | SQLite through better-sqlite3 in a dedicated worker |

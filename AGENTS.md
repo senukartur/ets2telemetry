@@ -76,7 +76,7 @@ Owner decision on October 11, 2026: ET-006a implementation and automated evidenc
 
 | Area | Working choice |
 | --- | --- |
-| Desktop and UI | Electron, React, TypeScript, Vite |
+| Desktop and UI | Electron, React, TypeScript, Vite, Tailwind CSS v4, shadcn/ui (Radix) |
 | Game integration | Project-owned C++17 DLL using the official SCS Telemetry SDK; CMake and MSVC |
 | Local transport | Windows Named Pipes |
 | Persistence | SQLite through better-sqlite3 in a dedicated worker |
@@ -109,6 +109,7 @@ The utilityProcess owns ingestion and source validation. A fixed project-owned n
 - Use a transparent window that passes mouse input to the game and does not steal focus while driving.
 - Track the game window and hide the overlay when the game is minimized or another application is foreground. Account for monitor and DPI changes.
 - Keep the display update target of up to **20 Hz** separate from the history sampling rate of **1 Hz**.
+- Build main-window UI from the shadcn/ui components in `apps/desktop/src/components/ui`; see [docs/setup.md](docs/setup.md#ui-components-shadcnui). The transparent overlay must not load the shadcn base stylesheet (it paints an opaque `body` background) and does not need interactive Radix components.
 - Use context isolation, sandboxed renderers, and a narrow preload/IPC API. Do not give React direct Node.js or filesystem access.
 - Closing the main window must not silently end recording. Full application exit must be explicit.
 
