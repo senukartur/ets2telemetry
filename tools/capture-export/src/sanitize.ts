@@ -78,7 +78,7 @@ export async function exportCapture(captureDirectory: string, outputDirectory: s
   const manifestText = JSON.stringify(sanitizedManifest, null, 2) + '\n';
   const exportRecord = {format: EXPORT_FORMAT, schemaVersion: 1, rawIntegrityVerified: true, counts: sanitizer.counts(),
     rules: ['UUIDs, process IDs, Windows session IDs, process creation times, user tags, display IDs, local paths (including paths embedded in text) and user-profile folder names are replaced by first-appearance tokens',
-      'UTC receipt labels are rebased to the capture start; monotonic clocks, sequences and copied game data are unchanged',
+      'UTC receipt labels are rebased to the capture start; monotonic clocks and sequences are unchanged; copied game data are unchanged except path-like text, which is redacted',
       'The identifier mapping is not written; raw captures stay local and are never uploaded automatically']};
   await mkdir(path.dirname(outputDirectory), {recursive: true}); await mkdir(outputDirectory);
   await writeFile(path.join(outputDirectory, 'packets.ndjson'), output, {flag: 'wx'});
