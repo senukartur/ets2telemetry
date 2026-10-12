@@ -14,7 +14,7 @@ export async function startLiveSmokeSource(checkout) {
   checkpoint.data.state.fuel = {available: true, value: 73, unit: 'L'};
   checkpoint.data.state.window = {available: false, reason: 'not-observed'};
   checkpoint.data.continuity = {coalescedSnapshots: '0', lostObservations: '0', offlineTransitions: '0'};
-  let seq = 0n, connections = 0, frames = 0, stopped = false;
+  let seq = 0n, connections = 0, frames = 0, stopped = false, held = false;
   const origin = performance.now(), clients = new Set();
   const frame = value => {
     const payload = Buffer.from(JSON.stringify(value)); assert.ok(payload.length <= 65536);
@@ -37,7 +37,7 @@ export async function startLiveSmokeSource(checkout) {
       if (stopped || socket.destroyed) return;
       socket.write(frame(message(kind)), error => {if (error) socket.destroy(); else {frames++; then();}});
     };
-    const loop = () => {timer = setTimeout(() => send('snapshot', loop), 50);};
+    const loop = () => {timer = setTimeout(() => {if (held) loop(); else send('snapshot', loop);}, 50);};
     socket.on('data', bytes => {
       if (started || hello.length + bytes.length > 4100) {socket.destroy(); return;}
       hello = Buffer.concat([hello, bytes]);
@@ -59,13 +59,20 @@ export async function startLiveSmokeSource(checkout) {
   await new Promise((resolve, reject) => {server.once('error', reject); server.listen(endpoint, resolve);});
   const stop = async () => {
     if (stopped) return; stopped = true;
-    for (const socket of clients) socket.destroy();
-    await new Promise(resolve => server.close(resolve));
+    const closed = [...clients].map(socket => new Promise(resolve => {socket.once('close', resolve); socket.destroy();}));
+    await Promise.all([new Promise(resolve => server.close(resolve)), ...closed]);
   };
   return {endpoint, stop,
     setReading: (speedMps, fuelL) => {
       assert.ok(Number.isFinite(speedMps) && Number.isFinite(fuelL) && fuelL >= 0);
-      checkpoint.data.state.speed.value = speedMps; checkpoint.data.state.fuel.value = fuelL;
+      checkpoint.data.state.speed = {available: true, value: speedMps, unit: 'm/s'};
+      checkpoint.data.state.fuel = {available: true, value: fuelL, unit: 'L'};
     },
-    statistics: () => ({connections, frames, origin: 'synthetic', history: false})};
+    setUnavailable: () => {
+      checkpoint.data.state.speed = {available: false, reason: 'not-observed', unit: 'm/s'};
+      checkpoint.data.state.fuel = {available: false, reason: 'not-observed', unit: 'L'};
+    },
+    hold: () => {held = true;}, resume: () => {held = false;},
+    statistics: () => ({connections, frames, activeClients: clients.size, held, stopped, origin: 'synthetic', history: false,
+      identity: {...checkpoint.source, clockId: checkpoint.capture.clockId}})};
 }

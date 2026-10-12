@@ -28,7 +28,7 @@ for (const filename of files) {
   const packaged = `apps/desktop/dist/${filename}`;
   assert.equal(sha256(read(packaged)), sha256(readFileSync(packaged)), `Stale bundled file: ${filename}`);
 }
-for (const name of ['main', 'preload', 'telemetry-service', 'storage-worker']) {
+for (const name of ['main', 'preload', 'overlay-preload', 'telemetry-service', 'storage-worker']) {
   const filename = `apps/desktop/dist/${name}.cjs`;
   assert.equal(asar.statFile(archive, path.normalize(filename)).unpacked, true, `Entrypoint must be physically unpacked: ${name}`);
   assert.equal(sha256(readFileSync(path.join(`${archive}.unpacked`, filename))), sha256(read(filename)));

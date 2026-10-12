@@ -5,12 +5,13 @@ import {performance} from 'node:perf_hooks';
 import {_electron as electron} from '@playwright/test';
 import {startLiveSmokeSource} from './live-smoke-source.mjs';
 import {waitForCurrentTelemetry} from './renderer-observation.mjs';
+import {rendererPages, runOverlaySmoke, windowSecurity, verifyRendererStyles} from './overlay-observation.mjs';
 // These read-only globals are used only inside serialized Playwright browser callbacks.
 /* global document: readonly, getComputedStyle: readonly, innerHeight: readonly, innerWidth: readonly */
 
 const [configFile] = process.argv.slice(2);
 const config = JSON.parse((await readFile(configFile, 'utf8')).replace(/^\uFEFF/, ''));
-const result = {scenario: config.scenario === 'telemetry' ? 'V0 SOURCE-RENDERER-RECOVERY / partial REG-003, REG-010, REG-011, REG-017' : 'SCAFFOLD-WORKER / partial REG-011, REG-017', passed: false,
+const result = {scenario: config.scenario === 'overlay' ? 'V0 HIDDEN-OVERLAY-PROJECTION / partial REG-009, REG-011, REG-017' : config.scenario === 'telemetry' ? 'V0 SOURCE-RENDERER-RECOVERY / partial REG-003, REG-010, REG-011, REG-017' : 'SCAFFOLD-WORKER / partial REG-011, REG-017', passed: false,
   scenarioKind: config.scenario ?? 'scaffold',
   commit: config.commit, mode: config.mode, node: process.versions, expected: {
     status: {service: 'ready', storage: 'verified', synthetic: true}, exit: 0, probesAfterExit: []},
@@ -27,9 +28,10 @@ try {
   assert.equal(process.versions.node, '24.19.0');
   result.playwright = JSON.parse(await readFile(new URL('../../node_modules/playwright-core/package.json', import.meta.url))).version;
   assert.equal(result.playwright, '1.64.0');
-  if (config.scenario === 'telemetry') telemetrySource = await startLiveSmokeSource(config.checkout);
+  if (config.scenario === 'telemetry' || config.scenario === 'overlay') telemetrySource = await startLiveSmokeSource(config.checkout);
   application = await electron.launch({timeout: 20000, cwd: config.cwd,
-    ...(config.mode === 'packaged' ? {executablePath: config.executable} : {args: [config.checkout]}),
+    ...(config.mode === 'packaged' ? {executablePath: config.executable, args: config.forceRendererProcessReuse ? ['--renderer-process-limit=1'] : []} :
+      {args: [config.checkout, ...(config.forceRendererProcessReuse ? ['--renderer-process-limit=1'] : [])]}),
     env: {...process.env, TEMP: config.temp, TMP: config.temp, APPDATA: config.appdata,
       LOCALAPPDATA: config.localappdata, ETS2TELEMETRY_PROFILE_DIR: config.profile,
       ETS2TELEMETRY_DIAGNOSTIC_DIR: config.diagnostics,
@@ -37,17 +39,20 @@ try {
   launcher = application.process();
   await application.context().tracing.start({screenshots: true, snapshots: true});
   tracing = true;
-  const window = await application.firstWindow({timeout: 10000});
+  const {dashboard: window, overlay} = await rendererPages(application);
   await window.getByText('Telemetry service ready; isolated storage probe verified', {exact: true})
     .waitFor({state: 'visible', timeout: 10000});
   result.runtime = await application.evaluate(({app, BrowserWindow}) => {
     const preferences = BrowserWindow.getAllWindows()[0].webContents.getLastWebPreferences();
-    return {versions: process.versions, packaged: app.isPackaged,
+    return {versions: process.versions, packaged: app.isPackaged, rendererProcessLimit: app.commandLine.getSwitchValue('renderer-process-limit'),
       security: {sandbox: preferences.sandbox, isolation: preferences.contextIsolation, node: preferences.nodeIntegration}};
   });
   assert.equal(result.runtime.versions.electron, '44.7.0');
   assert.equal(result.runtime.packaged, config.mode === 'packaged');
+  assert.equal(result.runtime.rendererProcessLimit, config.forceRendererProcessReuse ? '1' : '');
   assert.deepEqual(result.runtime.security, {sandbox: true, isolation: true, node: false});
+  result.runtime.windows = await windowSecurity(application);
+  result.runtime.rendererStyles = await verifyRendererStyles(window, overlay);
   result.actual = await window.evaluate(async () => ({require: typeof globalThis.require,
     process: typeof globalThis.process, keys: Object.keys(globalThis.desktop),
     frozen: Object.isFrozen(globalThis.desktop), status: await globalThis.desktop.getStatus()}));
@@ -55,7 +60,12 @@ try {
     frozen: true, status: result.expected.status});
   result.probesBeforeExit = (await readdir(config.temp)).filter(name => name.startsWith('ets2telemetry-probe-'));
   assert.equal(result.probesBeforeExit.length, 1);
-  if (telemetrySource) {
+  if (config.scenario === 'overlay') {
+    result.overlay = {};
+    await runOverlaySmoke(application, window, overlay, telemetrySource, result.overlay);
+    await overlay.screenshot({path: path.join(config.output, 'hidden-overlay-dom.png')});
+  }
+  if (config.scenario === 'telemetry') {
     const current = async phase => {
       const observation = await waitForCurrentTelemetry(window);
       (result.rendererObservations ??= []).push({phase, ...observation});

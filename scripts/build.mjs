@@ -6,7 +6,7 @@ import {readdirSync, readFileSync, writeFileSync} from 'node:fs';
 import {sourceHashes} from './source-inputs.mjs';
 const sources = sourceHashes();
 const external = ['electron', 'better-sqlite3', 'electron-squirrel-startup', ...builtinModules, ...builtinModules.map(x => `node:${x}`)];
-for (const name of ['main', 'preload', 'telemetry-service', 'storage-worker']) {
+for (const name of ['main', 'preload', 'overlay-preload', 'telemetry-service', 'storage-worker']) {
   await build({configFile:false, build:{outDir:'apps/desktop/dist',emptyOutDir:name === 'main',lib:{entry:`apps/desktop/src/${name}.ts`,formats:['cjs'],fileName:()=>`${name}.cjs`},rollupOptions:{external}}});
 }
 // Tailwind v4 compiles the renderer stylesheet. The '@' alias mirrors tsconfig.json paths for shadcn/ui components.

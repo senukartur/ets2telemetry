@@ -1,6 +1,6 @@
 # Windows x64 scaffold
 
-ET-001 is a scaffold, not a game integration. Do not install the placeholder DLL in a game. No production schema, protocol, recorder or overlay exists yet. ET-022 defines [Windows CI and bounded worker smokes](ci.md), with clean hosted and deliberate failure/restoration evidence recorded in [ET-022 validation](validation/et-022.md); final current-head checks and owner review remain required.
+The accepted scaffold now includes the v0 SDK adapter, native snapshot transport, telemetry service and game-window metadata. ET-008 adds a candidate [minimal overlay](minimal-overlay.md) and [closed-game manual plugin setup](manual-plugin-setup.md). Use only the maintained SDK DLL identified there; never install the historical placeholder DLL. Production history and durable event delivery remain unimplemented. Required real-game, display and performance acceptance remains pending. [Windows CI and bounded worker smokes](ci.md) provide controlled evidence, not game compatibility.
 
 ## Toolchain
 
@@ -24,7 +24,7 @@ npm run package
 npm run make
 ```
 
-The desktop production build uses Vite to compile four separate CommonJS entrypoints and the React renderer. Forge packages from the repository root so hoisted workspace production dependencies are included. The Squirrel maker identity is `ETS2TelemetryDesktop`; application data uses the separate `ETS2Telemetry` root.
+The desktop production build uses Vite to compile five separate CommonJS entrypoints (main, dashboard preload, overlay preload, telemetry service and storage worker) and the React renderer. Forge packages from the repository root so hoisted workspace production dependencies are included. The Squirrel maker identity is `ETS2TelemetryDesktop`; application data uses the separate `ETS2Telemetry` root.
 
 The existing Electron smoke entrypoint targets a packaged executable from a temporary working directory and packages first. The sequence below is authorized on native Windows following the owner revocation of the application hold; it does not itself provide process containment. The coordinator also ran the existing packaged Playwright test on native Windows through the unchanged Job Object, without rebuilding the frozen artifact. The [packaged guest harness](../tests/vm/README.md) retains historical evidence and its guest identity guards. No desktop-launch environment opt-in is required for these native commands:
 
@@ -183,3 +183,7 @@ All six actual native operations completed with normal root/primary exits and na
 ## ET-006a native client build
 
 The ET-006a candidate extends npm run build to configure and compile the fixed native/telemetry-client Windows x64 executable with CMake/MSVC before bundling desktop source. Keep the documented CMake toolchain on PATH for desktop build/package/make commands. The generated native client and its source-bound receipt remain in ignored native/telemetry-client/build and .local/package-native; Forge copies the owned staged client directory to resources/telemetry-client. This does not install a game DLL or create real history. Exact runtime outcomes and remaining checks are recorded in docs/validation/et-006a.md.
+
+## Main-window and overlay renderer styles
+
+ET-008 preserves the ET-025 Tailwind v4/shadcn main-window theme. The renderer entry dispatches to separate dynamic view modules: only the dashboard imports `index.css` and shadcn Card; only the overlay imports `renderer.css`. Do not add the dashboard stylesheet to HTML or the shared entry because its base body background makes the transparent overlay opaque. Keep the existing `index.html?view=overlay` route and separate preload APIs. The emitted renderer test and bounded Windows runtime journeys check the generated assets and computed styles independently of real game visibility.

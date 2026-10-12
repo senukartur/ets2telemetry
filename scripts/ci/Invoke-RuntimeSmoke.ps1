@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param([ValidateSet('development','packaged')][string]$Mode,
-    [ValidateSet('scaffold','telemetry')][string]$Scenario = 'scaffold',
+    [ValidateSet('scaffold','telemetry','overlay')][string]$Scenario = 'scaffold',
+    [switch]$ForceRendererReuse,
     [string]$OutputRoot = (Join-Path $PSScriptRoot '../../.local/ci'))
 $ErrorActionPreference = 'Stop'
 $checkout = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path
@@ -15,6 +16,8 @@ foreach ($name in @('cwd','temp','appdata','localappdata','profile','diagnostics
 $config = $paths.Clone()
 $config.mode = $Mode; $config.output = $output; $config.checkout = $checkout
 $config.scenario = $Scenario
+if ($ForceRendererReuse -and $Scenario -ne 'overlay') { throw 'Renderer reuse control is restricted to the hidden overlay fixture.' }
+$config.forceRendererProcessReuse = [bool]$ForceRendererReuse
 $config.commit = (& git -C $checkout rev-parse HEAD)
 if ($LASTEXITCODE -ne 0) { throw 'Commit identity unavailable.' }
 $config.executable = Join-Path $checkout 'out/ETS2Telemetry Desktop-win32-x64/ETS2TelemetryDesktop.exe'
@@ -27,7 +30,7 @@ $started = [datetime]::UtcNow
 $code = [ETS2Telemetry.Diagnostics.BoundedProcess]::Run($node,
     [string[]]@((Join-Path $PSScriptRoot 'runtime-smoke.mjs'), $configFile),
     $checkout, (Join-Path $output 'job'), 60000)
-@{mode=$Mode; commit=$config.commit; exitCode=$code; retries=0;
+@{mode=$Mode; scenario=$Scenario; commit=$config.commit; exitCode=$code; retries=0;
   durationSeconds=([datetime]::UtcNow-$started).TotalSeconds;
   limits='60 s; 16 processes; 2 GiB; 25% CPU; kill-on-close';
   descendantsNaturallyDrained=($code -eq 0)} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $output 'job-result.json') -Encoding utf8
