@@ -8,13 +8,13 @@ The local MVP will display live truck metrics in an overlay, maintain a trip jou
 
 **ET-001 scaffold, as of October 11, 2026.** The repository contains a minimal React/Electron window, telemetry utilityProcess and isolated SQLite worker probe, pinned npm workspaces, Forge packaging, and a C++17 x64 placeholder DLL. Build, typecheck, 118 Node tests, native CTest and bounded packaged startup checks passed. Native Windows install, repair, update, both installed worker/security smokes and uninstall completed with normal exits and empty Jobs. Acceptance combines that actual cycle with a separately reviewed correction to the uninstall residue check; the original failed wrapper report is retained. Existing user files and shortcuts were preserved, and owned test files were cleaned up. One earlier Playwright startup timeout remains unexplained flakiness. See [the validation record](docs/validation/et-001.md) for exact artifacts, independent review and evidence limits. Native launches are owner-authorized; no further VM run is required. That merged scaffold baseline did not include protocol, game adapter, recorder, overlay, server or CI.
 
-Compatibility with either game, Convoy, and TruckersMP is required but has not yet been tested. Overlay behavior, resource usage, and display latency also require real-game validation.
+Compatibility with either game in single-player and TruckersMP is required but has not yet been fully tested. The built-in Convoy mode is deferred and not claimed as supported. Overlay behavior, resource usage, and display latency also require real-game validation.
 
 **ET-022 candidate, hosted evidence recorded.** Windows x64 CI connects scaffold checks to pull requests, main pushes and manual runs, with isolated development and packaged worker probes and retained diagnostics. Clean and restored hosted jobs passed all 122 tests, native CTest and both smokes in 199/200 seconds; a deliberate assertion failed the job between them. Final PR-head verification, independent review and owner merge remain required. See [ET-022 validation](docs/validation/et-022.md). See [CI commands and evidence](docs/ci.md) and the [regression registry](docs/regression-registry.md). The preceding ET-001 status describes the merged scaffold baseline.
 
 ## Planned MVP
 
-- Windows x64 support for ETS2 and ATS, including TruckersMP, single-player, and Convoy.
+- Windows x64 support for ETS2 and ATS, including TruckersMP and single-player. Convoy is deferred.
 - Live speed, gear, RPM, fuel, consumption, range, and available job information.
 - A transparent overlay for windowed and borderless fullscreen play, with mouse pass-through and no focus stealing while driving.
 - A local trip journal, gameplay events, one-second samples, and JSON export.
