@@ -102,6 +102,8 @@ class Adapter final {
   // Current time in the source monotonic clock domain (Identity::capture_clock_id). The origin is
   // fixed by initialize(); only workers started after initialization may call this.
   bool source_monotonic_ns(std::uint64_t& output) const noexcept;
+  // Lock-free source liveness (false after shutdown or counter exhaustion) for worker polling.
+  bool source_live() const noexcept { return source_live_.load(std::memory_order_acquire); }
  private:
   friend struct AdapterTestAccess;
   static SCSAPI_VOID event_callback(scs_event_t, const void*, scs_context_t);
