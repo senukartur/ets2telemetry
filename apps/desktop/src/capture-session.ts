@@ -102,7 +102,8 @@ export interface CaptureSessionOptions {
   context: Omit<CaptureContext, 'captureSessionId'>;
   connect: () => CaptureTransport;
   retryMs?: number; transientWindowMs?: number; now?: () => number; utcNow?: () => number;
-  writer?: Pick<CaptureWriterOptions, 'open' | 'writeManifest'>;
+  /** Test seams; `limits` may only narrow the approved bounds (the writer enforces this). */
+  writer?: Pick<CaptureWriterOptions, 'open' | 'writeManifest' | 'limits'>;
   captureSessionId?: string;
 }
 /**
@@ -152,8 +153,10 @@ export class CaptureSession {
       if (writer.closed) return;
       let packet;
       try { packet = decodeCap0Payload(payload); } catch (error) { void writer.close('protocol-error', error instanceof Error ? error.message : 'Invalid CAP0 packet'); return; }
-      // Credit only after synchronous validation and bounded admission: the writer is the backpressure point.
-      if (writer.accept(packet, utf8.decode(payload)) && !writer.closed) transport.credit();
+      // Credit only after synchronous validation and bounded admission, and only while pending storage
+      // has room for another maximum packet. A held-back credit stops the broker reading, so a disk
+      // stall pushes back onto the plugin's bounded evidence queue instead of reaching the pending cap.
+      if (writer.accept(packet, utf8.decode(payload)) && !writer.closed) writer.whenRoom(() => { if (!writer.closed && this.transport === transport) transport.credit(); });
     });
     // A completed discovery round (waiting, or a clean broker exit) is progress: transient failures
     // are only counted within one uninterrupted run of failures.

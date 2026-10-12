@@ -1,12 +1,14 @@
 import {createHash, randomUUID} from 'node:crypto';
 import {mkdir, open, rename, rm, writeFile, type FileHandle} from 'node:fs/promises';
 import path from 'node:path';
-import {Cap0StreamValidator, type Cap0Authority, type Cap0EndData, type Cap0HeaderData, type Cap0LossData, type Cap0Packet} from '../../../packages/contracts/src/capture-cap0';
+import {CAP0_MAX_PACKET_BYTES, Cap0StreamValidator, type Cap0Authority, type Cap0EndData, type Cap0HeaderData, type Cap0LossData, type Cap0Packet} from '../../../packages/contracts/src/capture-cap0';
 import {CAPTURE_LIMITS} from './capture-activation';
 export {CAPTURE_LIMITS};
 export const PACKETS_FILE = 'packets.ndjson';
 export const MANIFEST_FILE = 'manifest.json';
 const MAX_BOUNDARIES = 1000;
+/** Largest stored line: a maximum CAP0 payload plus the receipt wrapper (bounded integers and a newline). */
+export const MAX_LINE_BYTES = CAP0_MAX_PACKET_BYTES + 256;
 async function writeManifestFile(directory: string, text: string): Promise<void> {
   const temporary = path.join(directory, `${MANIFEST_FILE}.tmp`);
   try { await writeFile(temporary, text, {flag: 'wx'}); await rename(temporary, path.join(directory, MANIFEST_FILE)); }
@@ -36,6 +38,8 @@ export interface CaptureManifest {
   clockDomains: Record<string, unknown>;
   timing: {receiptClockId: string; startedMonotonicNs: string; stoppedMonotonicNs: string | null; startedUtcUnixMs: string; stoppedUtcUnixMs: string};
   counts: {packetsReceived: number; packetsWritten: number; bytesWritten: number; packetsDiscarded: number; bytesDiscarded: number; envelopesCompleted: number};
+  /** Broker credits held back while pending storage lacked room for one maximum packet; total and open-at-close time in receipt-clock ms. */
+  flowControl: {creditsWithheld: number; withheldMs: number; withheldAtClose: boolean};
   loss: {pluginLoss: Cap0LossData | null; end: Cap0EndData | null; endMarkerReceived: boolean; envelopePartial: boolean; lastPacketSeq: string | null; lastEnvelopeSeq: string;
     knownBoundaries: {envelopeSeq: string; droppedBefore: string}[]; boundariesOmitted: number};
   limits: typeof CAPTURE_LIMITS; files: {name: string; bytes: number; sha256: string}[];
@@ -62,6 +66,7 @@ export class CaptureWriter {
   private counts = {packetsReceived: 0, packetsWritten: 0, bytesWritten: 0, packetsDiscarded: 0, bytesDiscarded: 0, envelopesCompleted: 0};
   private boundaries: {envelopeSeq: string; droppedBefore: string}[] = []; private boundariesOmitted = 0;
   private lastEnd: Cap0EndData | null = null; private failure?: string;
+  private waiter?: {grant: () => void; since: number}; private flowControl = {creditsWithheld: 0, withheldMs: 0};
   private deadline?: ReturnType<typeof setTimeout>;
   private closing?: Promise<CaptureManifest>;
   private authority: CaptureManifest['authority'] = null;
@@ -115,6 +120,25 @@ export class CaptureWriter {
     return true;
   }
   /**
+   * Flow control for the single outstanding broker credit. Calls `grant` now when pending storage has
+   * room for one more maximum-size line, otherwise once completed writes make that room. While the
+   * credit is held back the broker stops reading, so a burst stays in the plugin's bounded evidence
+   * queue (newest-drop with exact loss counters) instead of reaching the pending cap. Never grants
+   * after close; at most one grant is outstanding.
+   */
+  whenRoom(grant: () => void): void {
+    if (this.closing || this.waiter) return;
+    if (this.hasRoom()) { grant(); return; }
+    this.flowControl.creditsWithheld++; this.waiter = {grant, since: this.now()};
+  }
+  private hasRoom(): boolean { return this.pendingBytes === 0 || this.pendingBytes + MAX_LINE_BYTES <= this.limits.pendingBytes; }
+  private releaseWaiter(): void {
+    const waiter = this.waiter;
+    if (!waiter || this.closing || this.failure || !this.hasRoom()) return;
+    this.waiter = undefined; this.flowControl.withheldMs += this.elapsedMs(waiter.since); waiter.grant();
+  }
+  private elapsedMs(since: number): number { const ms = this.now() - since; return Number.isFinite(ms) && ms > 0 ? Math.round(ms) : 0; }
+  /**
    * Idempotent and never rejects: stops admission, flushes admitted bytes (unless writing failed),
    * attempts the manifest write and always invokes onClose. If the manifest cannot be written, the
    * returned in-memory manifest carries manifestWriteError and no manifest.json exists on disk.
@@ -126,15 +150,18 @@ export class CaptureWriter {
   private closeQuietly(reason: CaptureStopReason, detail?: string): void { void this.close(reason, detail); }
   private async finalize(reason: CaptureStopReason, detail?: string): Promise<CaptureManifest> {
     clearTimeout(this.deadline);
+    // A credit still held back at close is never granted; its time so far is recorded.
+    const withheldAtClose = Boolean(this.waiter);
+    if (this.waiter) { this.flowControl.withheldMs += this.elapsedMs(this.waiter.since); this.waiter = undefined; }
     let manifest: CaptureManifest;
     try {
       while (this.writing) await this.writing;
       if (this.failure) { this.discard(this.pendingBytes, this.pending.length); this.pending = []; this.pendingBytes = 0; }
       try { await this.file?.sync(); } catch { /* Close below still releases the handle; the hash covers bytes written. */ }
       try { await this.file?.close(); } catch { this.failure ??= 'close-failed'; }
-      manifest = this.manifest(this.failure ? 'write-failure' : reason, this.failure ? this.failure : detail ?? null);
+      manifest = this.manifest(this.failure ? 'write-failure' : reason, this.failure ? this.failure : detail ?? null, withheldAtClose);
     } catch (error) {
-      manifest = this.manifest('internal-error', `close failed: ${error instanceof Error ? error.message.slice(0, 120) : 'unknown'}`);
+      manifest = this.manifest('internal-error', `close failed: ${error instanceof Error ? error.message.slice(0, 120) : 'unknown'}`, withheldAtClose);
     }
     try { await (this.options.writeManifest ?? writeManifestFile)(this.directory, JSON.stringify(manifest, null, 2) + '\n'); }
     catch (error) { manifest = {...manifest, manifestWriteError: error instanceof Error ? error.message.slice(0, 200) : 'manifest write failed'}; }
@@ -154,13 +181,13 @@ export class CaptureWriter {
         this.failure = error instanceof Error ? `write-failed: ${error.message.slice(0, 120)}` : 'write-failed'; this.discard(length, count);
         this.closeQuietly('write-failure');
       } finally { this.pendingBytes -= length; this.writing = undefined; }
-      this.flush();
+      this.flush(); this.releaseWaiter();
     })();
   }
   private discard(bytes: number, packets = 1): void { this.counts.packetsDiscarded += packets; this.counts.bytesDiscarded += bytes; }
   private monotonicNs(): bigint { const ms = this.now(); if (!Number.isFinite(ms) || ms < 0) throw new Error('Receipt clock invalid'); return BigInt(Math.round(ms * 1e6)); }
   private safeMonotonicNs(): string | null { try { return this.monotonicNs().toString(); } catch { return null; } }
-  private manifest(reason: CaptureStopReason, detail: string | null): CaptureManifest {
+  private manifest(reason: CaptureStopReason, detail: string | null, withheldAtClose = false): CaptureManifest {
     const header = this.validator.header ?? null, endMarkerReceived = this.validator.ended;
     const sha256 = this.hash.copy().digest('hex');
     const complete = reason === 'source-end' && endMarkerReceived && !this.counts.packetsDiscarded && !this.validator.partial;
@@ -179,7 +206,7 @@ export class CaptureWriter {
       },
       timing: {receiptClockId: this.receiptClock, startedMonotonicNs: this.started.monotonic.toString(), stoppedMonotonicNs: this.safeMonotonicNs(),
         startedUtcUnixMs: String(Math.trunc(this.started.utc)), stoppedUtcUnixMs: String(Math.trunc(this.utcNow()))},
-      counts: {...this.counts},
+      counts: {...this.counts}, flowControl: {...this.flowControl, withheldAtClose},
       loss: {pluginLoss: this.validator.loss ?? null, end: this.lastEnd, endMarkerReceived, envelopePartial: this.validator.partial, lastPacketSeq: this.validator.lastPacketSeq ?? null,
         lastEnvelopeSeq: this.validator.lastEnvelopeSeq, knownBoundaries: [...this.boundaries], boundariesOmitted: this.boundariesOmitted},
       limits: this.limits, files: [{name: PACKETS_FILE, bytes: this.written, sha256}],

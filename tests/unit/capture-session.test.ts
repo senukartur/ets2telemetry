@@ -7,7 +7,7 @@ import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 import {Cap0FrameDecoder} from '../../packages/contracts/src/capture-cap0';
 import {CaptureSession, type CaptureAuthority, type CaptureTransport} from '../../apps/desktop/src/capture-session';
 import {temporaryResources} from '../shared/resources';
-import {AUTHORITY, SESSION, delivered, end, envelope, frame, header, loss, payload} from '../shared/cap0-fixtures';
+import {AUTHORITY, SESSION, delivered, end, envelope, frame, header, loss, observation, payload} from '../shared/cap0-fixtures';
 
 // Actual Windows named pipes with a synthetic CAP0 source standing in for the fake-SDK plugin endpoint.
 class PipeTransport extends EventEmitter implements CaptureTransport {
@@ -151,5 +151,77 @@ describe('CAP0 session failure handling', () => {
     const manifest = await capture.stop(); const attempts = transports.length;
     await new Promise(resolve => setTimeout(resolve, 600));
     expect(manifest).toMatchObject({stop: {reason: 'no-source'}}); expect(transports).toHaveLength(attempts);
+  });
+});
+
+// Credit-honouring broker over a modelled plugin evidence queue: the broker relays one packet per
+// credit, and envelopes produced while it is not reading wait in a bounded queue whose newest entries
+// are dropped with exact counters, as in the native EvidenceQueue.
+class QueueingTransport extends EventEmitter implements CaptureTransport {
+  readonly completion = Promise.resolve(); credits = 0; delivered = 0; destroyed = 0;
+  private outstanding = false; private scheduled = false; private ending = false; private packetSeq = 0;
+  private attempted = 0; private dropped = 0; private lastSent = 0; private queue: number[] = [];
+  constructor(private readonly capacity: number) { super(); setTimeout(() => this.emit('authority', AUTHORITY), 0); }
+  get creditOutstanding(): boolean { return this.outstanding; }
+  get droppedEnvelopes(): number { return this.dropped; }
+  sendHello(): void { this.outstanding = true; this.schedule(); }
+  credit(): void { if (this.outstanding) throw new Error('duplicate credit'); this.outstanding = true; this.credits++; this.schedule(); }
+  destroy(): void { this.destroyed++; }
+  produce(): void { this.attempted++; if (this.queue.length < this.capacity) this.queue.push(this.attempted); else this.dropped++; this.schedule(); }
+  finish(): void { this.ending = true; this.schedule(); }
+  /** Models the plugin's write deadline closing a capture whose reader stopped. */
+  disconnect(): void { this.emit('end'); }
+  private schedule(): void { if (!this.scheduled) { this.scheduled = true; setImmediate(() => { this.scheduled = false; this.pump(); }); } }
+  private send(packet: unknown): void { this.outstanding = false; this.packetSeq++; this.emit('packet', payload(packet)); }
+  private pump(): void {
+    if (!this.outstanding) return;
+    if (this.packetSeq === 0) { this.send(header(0)); return; }
+    const seq = this.queue.shift();
+    if (seq !== undefined) {
+      const observations = Array.from({length: 10}, (_, i) => observation(i, `text${i}`, 'string', 'x'.repeat(1000)));
+      this.send(envelope(this.packetSeq, seq, {droppedBefore: seq - this.lastSent - 1, observations})); this.lastSent = seq; this.delivered++; return;
+    }
+    if (this.ending) { this.ending = false; this.send(loss(this.packetSeq, this.attempted, this.dropped)); this.outstanding = true; this.send(end(this.packetSeq, this.attempted, this.dropped)); }
+  }
+}
+function stallableFile() {
+  let stalled = true, release!: () => void, gate = new Promise<void>(resolve => { release = resolve; });
+  const file = {write: async (buffer: Buffer, offset = 0, length = buffer.length - offset) => { while (stalled) await gate; return {bytesWritten: length, buffer}; }, sync: async () => {}, close: async () => {}};
+  return {open: () => Promise.resolve(file as never), stall: () => { stalled = true; gate = new Promise<void>(resolve => { release = resolve; }); }, resume: () => { stalled = false; release(); }};
+}
+const tick = () => new Promise(resolve => setImmediate(resolve));
+describe('CAP0 session flow control', () => {
+  // 200,000 pending bytes leave room for one maximum line only while about 134 KB are pending.
+  const limits = {pendingBytes: 200_000};
+  it('withholds the broker credit during a writer stall, resumes after flushing and never reaches the pending cap', async () => {
+    const file = stallableFile(); let transport!: QueueingTransport;
+    const capture = new CaptureSession({root: path.join(resources.directory, 'captures'), game: 'ets2', captureSessionId: SESSION, retryMs: 5, context: context(),
+      writer: {open: file.open, limits}, connect: () => transport = new QueueingTransport(8)});
+    await capture.start(); await new Promise(resolve => setTimeout(resolve, 10));
+    for (let i = 0; i < 40; i++) { transport.produce(); await tick(); await tick(); }
+    // Stalled: the writer stopped crediting before its cap, so later envelopes stayed in or were dropped by the plugin queue.
+    expect(transport.creditOutstanding).toBe(false); expect(transport.delivered).toBeGreaterThan(5); expect(transport.delivered).toBeLessThan(20);
+    expect(transport.droppedEnvelopes).toBeGreaterThan(0);
+    const deliveredWhileStalled = transport.delivered;
+    for (let i = 0; i < 5; i++) await tick();
+    expect(transport.delivered).toBe(deliveredWhileStalled);
+    file.resume(); for (let i = 0; i < 10; i++) { transport.produce(); await tick(); await tick(); }
+    transport.finish(); const manifest = await capture.done;
+    expect(manifest).toMatchObject({status: 'complete', stop: {reason: 'source-end'}, counts: {packetsDiscarded: 0, envelopesCompleted: 50 - transport.droppedEnvelopes},
+      flowControl: {withheldAtClose: false}, loss: {endMarkerReceived: true, pluginLoss: {droppedEnvelopes: String(transport.droppedEnvelopes)}}});
+    expect(manifest!.flowControl.creditsWithheld).toBeGreaterThan(0);
+    expect(manifest!.loss.knownBoundaries.length).toBeGreaterThan(0);
+    expect(manifest!.loss.knownBoundaries.reduce((sum, b) => sum + Number(b.droppedBefore), 0)).toBe(transport.droppedEnvelopes);
+  });
+  it('records a credit still withheld when the source closes during a persistent stall', async () => {
+    const file = stallableFile(); let transport!: QueueingTransport; let clock = 0;
+    const capture = new CaptureSession({root: path.join(resources.directory, 'captures'), game: 'ets2', captureSessionId: SESSION, retryMs: 5, context: context(), now: () => clock += 5,
+      writer: {open: file.open, limits}, connect: () => transport = new QueueingTransport(8)});
+    await capture.start(); await new Promise(resolve => setTimeout(resolve, 10));
+    for (let i = 0; i < 30; i++) { transport.produce(); await tick(); await tick(); }
+    expect(transport.creditOutstanding).toBe(false);
+    transport.disconnect(); const pending = capture.done; file.resume(); const manifest = await pending;
+    expect(manifest).toMatchObject({status: 'partial', stop: {reason: 'disconnect'}, counts: {packetsDiscarded: 0}, flowControl: {creditsWithheld: 1, withheldAtClose: true}});
+    expect(manifest!.flowControl.withheldMs).toBeGreaterThan(0);
   });
 });
