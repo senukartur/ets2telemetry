@@ -23,6 +23,7 @@ let configurations: Electron.BrowserWindowConstructorOptions[];
 let log: ReturnType<typeof vi.fn>;
 beforeEach(() => {
   vi.useFakeTimers(); vi.resetModules();
+  const started = Date.now(); vi.spyOn(performance, 'now').mockImplementation(() => Date.now() - started);
   originals = new Map(processEvents.map(name => [name, processEmitter.listeners(name)]));
   app = Object.assign(new EventEmitter(), {exit: vi.fn(), quit: vi.fn(), getPath: () => 'C:\\isolated', setPath: vi.fn(), whenReady: () => Promise.resolve(), isPackaged: false});
   child = Object.assign(new EventEmitter(), {postMessage: vi.fn(), kill: vi.fn(() => true)});
@@ -57,12 +58,22 @@ beforeEach(() => {
 });
 afterEach(() => {
   for (const name of processEvents) for (const listener of processEmitter.listeners(name)) if (!originals.get(name)!.includes(listener)) processEmitter.removeListener(name, listener as (...args: unknown[]) => void);
-  vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllEnvs();
+  vi.clearAllTimers(); vi.restoreAllMocks(); vi.useRealTimers(); vi.unstubAllEnvs();
   for (const name of ['electron', 'electron-squirrel-startup', '../../apps/desktop/src/entrypoints', '../../apps/desktop/src/diagnostics', '../../apps/desktop/src/broker-artifact']) vi.doUnmock(name);
 });
 async function settle() {await Promise.resolve(); await Promise.resolve();}
 async function ready() {await import('../../apps/desktop/src/main'); await Promise.resolve(); child.emit('message', {type: 'ready'}); await settle();}
 const trusted = () => ({sender: contents, senderFrame: contents.mainFrame});
+function upstreamRequests(target = child) {return target.postMessage.mock.calls.filter(call => call[0].type === 'subscribe').length;}
+async function exhaustUpstream() {
+  const retired: typeof channels = [];
+  for (let loss = 0; loss < 3; loss++) {
+    const next = channels.at(-1)!; retired.push(next); next.port1.close();
+    if (loss < 2) await vi.advanceTimersByTimeAsync(250);
+  }
+  expect(upstreamRequests()).toBe(3);
+  return retired;
+}
 
 it('does not inspect an unused broker for explicit synthetic startup', async () => {
   resolveBroker.mockImplementation(() => {throw new Error('provenance');});
@@ -265,4 +276,98 @@ it('requires current window authority and new projected data after a long overla
   current.observation!.capture.monotonicNs = '9999999999'; current.observation!.windowReceivedMonotonicMs = 60050;
   deliver(current, 3); await vi.advanceTimersByTimeAsync(50);
   expect(replacement.port1.postMessage.mock.lastCall![0].update).toMatchObject({freshness: 'current', source: 'ETS2'});
+});
+it('recovers the third upstream loss after a bounded cooldown in the same ready service', async () => {
+  await ready(); await exhaustUpstream();
+  await vi.advanceTimersByTimeAsync(59999); expect(upstreamRequests()).toBe(3);
+  await vi.advanceTimersByTimeAsync(251); expect(upstreamRequests()).toBe(4);
+  expect(children).toHaveLength(1); expect(child.kill).not.toHaveBeenCalled();
+  expect(vi.getTimerCount()).toBe(0);
+});
+it('bounds recurring upstream losses across multiple cooldowns without accumulating recovery timers', async () => {
+  await ready(); const attempts: number[] = [];
+  child.postMessage.mockImplementation((message: {type: string}) => {if (message.type === 'subscribe') attempts.push(performance.now());});
+  for (let loss = 0; loss < 9; loss++) {
+    const current = channels.at(-1)!; current.port1.close();
+    const count = upstreamRequests(), logs = log.mock.calls.length;
+    expect(vi.getTimerCount()).toBe(1);
+    current.port1.emit('close'); deliver(currentGame(), 100, current);
+    expect(log).toHaveBeenCalledTimes(logs); expect(vi.getTimerCount()).toBe(1);
+    expect(current.port1.postMessage).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(250);
+    if (upstreamRequests() === count) await vi.advanceTimersByTimeAsync(60000);
+    expect(upstreamRequests()).toBe(count + 1); expect(vi.getTimerCount()).toBe(0);
+  }
+  expect(attempts).toHaveLength(9);
+  for (const time of attempts) expect(attempts.filter(attempt => attempt <= time && time - attempt < 60000).length).toBeLessThanOrEqual(2);
+  expect(log.mock.calls.filter(call => call[0] === 'MAIN_CHANNEL_CLOSED')).toHaveLength(9);
+  const cooldowns = log.mock.calls.filter(call => call[0] === 'MAIN_CHANNEL_RECOVERY_COOLDOWN');
+  expect(cooldowns.length).toBeGreaterThanOrEqual(3);
+  expect(cooldowns.every(call => call[1].delayMs === 60000)).toBe(true);
+  expect(children).toHaveLength(1); expect(child.kill).not.toHaveBeenCalled();
+});
+it.each(['retry', 'cooldown'])('cancels pending upstream %s on stop and ignores retired deliveries', async phase => {
+  await ready(); const retired = phase === 'cooldown' ? await exhaustUpstream() : [channels[0]];
+  if (phase === 'retry') retired[0].port1.close();
+  expect(vi.getTimerCount()).toBe(1); const count = upstreamRequests();
+  app.emit('before-quit', {preventDefault: vi.fn()}); child.emit('exit', 0);
+  const logs = log.mock.calls.length;
+  for (const old of retired) {old.port1.emit('close'); deliver(currentGame(), 100, old);}
+  await vi.advanceTimersByTimeAsync(61000);
+  expect(upstreamRequests()).toBe(count); expect(log).toHaveBeenCalledTimes(logs);
+  expect(children).toHaveLength(1); expect(vi.getTimerCount()).toBe(0);
+});
+it.each(['retry', 'cooldown'])('cancels old-service upstream %s on generation replacement', async phase => {
+  await ready(); const retired = phase === 'cooldown' ? await exhaustUpstream() : [channels[0]];
+  if (phase === 'retry') retired[0].port1.close();
+  const count = upstreamRequests(); child.emit('exit', 1);
+  await vi.advanceTimersByTimeAsync(250); const replacement = children[1];
+  replacement.emit('message', {type: 'ready'}); await settle();
+  expect(upstreamRequests(replacement)).toBe(1); expect(vi.getTimerCount()).toBe(0);
+  const logs = log.mock.calls.length, total = channels.length;
+  for (const old of retired) {old.port1.emit('close'); deliver(currentGame(), 100, old);}
+  child.emit('message', {type: 'failed'}); await vi.advanceTimersByTimeAsync(61000);
+  expect(log).toHaveBeenCalledTimes(logs); expect(upstreamRequests()).toBe(count);
+  expect(upstreamRequests(replacement)).toBe(1); expect(channels).toHaveLength(total);
+  expect(replacement.kill).not.toHaveBeenCalled(); expect(vi.getTimerCount()).toBe(0);
+});
+it.each(['stop', 'service-exit'])('does not log intentional upstream closure on %s', async reason => {
+  await ready(); const current = channels[0];
+  if (reason === 'stop') {app.emit('before-quit', {preventDefault: vi.fn()}); child.emit('exit', 0);}
+  else child.emit('exit', 1);
+  expect(current.port1.close).toHaveBeenCalled(); current.port1.emit('close');
+  expect(log.mock.calls.filter(call => call[0] === 'MAIN_CHANNEL_CLOSED' || call[0] === 'MAIN_CHANNEL_RECOVERY_COOLDOWN')).toHaveLength(0);
+});
+it('rechecks the upstream budget at cooldown expiry instead of forcing a subscription', async () => {
+  await ready(); await exhaustUpstream(); const clock = vi.spyOn(performance, 'now'); clock.mockReturnValue(NaN);
+  await vi.advanceTimersByTimeAsync(60250); expect(upstreamRequests()).toBe(3); expect(vi.getTimerCount()).toBe(1);
+  expect(log.mock.calls.filter(call => call[0] === 'MAIN_CHANNEL_RECOVERY_COOLDOWN')).toHaveLength(2);
+  clock.mockReturnValue(120500); await vi.advanceTimersByTimeAsync(60000);
+  expect(upstreamRequests()).toBe(4); expect(vi.getTimerCount()).toBe(0);
+});
+it('keeps expired SDK and window authority across upstream cooldown and rejects retired-port publication', async () => {
+  vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2'); await ready(); deliver(currentGame());
+  const retired = await exhaustUpstream(); await vi.advanceTimersByTimeAsync(60250); const recovered = channels.at(-1)!;
+  ipc.emit('telemetry:subscribe', trusted()); const dashboard = channels.at(-1)!;
+  ipc.emit('overlay:subscribe', overlayTrusted()); const overlayChannel = channels.at(-1)!;
+  const consume = (channel: typeof channels[number]) => channel.port1.emit('message', {data: {type: 'consumed', delivery: channel.port1.postMessage.mock.lastCall![0].delivery}});
+  const projection = () => overlayChannel.port1.postMessage.mock.lastCall![0].update;
+  expect(projection()).toMatchObject({freshness: 'stale', speed: '—', fuel: '—'});
+  consume(dashboard); consume(overlayChannel); windows[1].showInactive.mockClear();
+  for (const old of retired) deliver(currentGame(), 100, old);
+  await vi.advanceTimersByTimeAsync(50); expect(windows[1].showInactive).not.toHaveBeenCalled();
+  deliver(currentGame(), 1, recovered); await vi.advanceTimersByTimeAsync(50);
+  expect(windows[1].showInactive).not.toHaveBeenCalled();
+  expect(projection()).toMatchObject({freshness: 'stale', speed: '—', fuel: '—'});
+  expect(dashboard.port1.postMessage.mock.lastCall![0].update).toMatchObject({fresh: false, observation: {windowFresh: false}});
+  consume(dashboard); consume(overlayChannel);
+  const current = currentGame(); current.observation!.windowReceivedMonotonicMs = 61000;
+  deliver(current, 2, recovered); await vi.advanceTimersByTimeAsync(50);
+  expect(windows[1].showInactive).toHaveBeenCalledOnce(); expect(projection().freshness).toBe('stale');
+  consume(dashboard); consume(overlayChannel);
+  current.observation!.capture.monotonicNs = '9999999999'; current.observation!.windowReceivedMonotonicMs = 61050;
+  deliver(current, 3, recovered); await vi.advanceTimersByTimeAsync(50);
+  expect(projection()).toMatchObject({freshness: 'current', source: 'ETS2'});
+  expect(dashboard.port1.postMessage.mock.lastCall![0].update).toMatchObject({fresh: true, observation: {windowFresh: true}});
+  expect(upstreamRequests()).toBe(4); expect(children).toHaveLength(1);
 });

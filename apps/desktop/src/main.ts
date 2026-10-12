@@ -67,14 +67,27 @@ else {
     clearTimeout(upstreamRecovery); upstreamRecovery = undefined;
     const previous = upstream; upstream = undefined; previous?.close();
   }
+  function recoverUpstream(child: UtilityProcess): void {
+    if (service !== child || !serviceReady || supervisor.stopping || upstream || upstreamRecovery !== undefined) return;
+    if (upstreamBudget.take() === undefined) {
+      log('MAIN_CHANNEL_RECOVERY_COOLDOWN', {delayMs: 60000});
+      upstreamRecovery = setTimeout(() => {upstreamRecovery = undefined; recoverUpstream(child);}, 60000);
+      return;
+    }
+    upstreamRecovery = setTimeout(() => {
+      upstreamRecovery = undefined;
+      if (service === child && serviceReady && !supervisor.stopping && !upstream) connectUpstream();
+    }, 250);
+  }
   function connectUpstream(): void {
     if (upstream || !serviceReady || !service || supervisor.stopping) return;
+    clearTimeout(upstreamRecovery); upstreamRecovery = undefined;
     const child = service, {port1, port2} = new MessageChannelMain(); upstream = port1;
     const lost = () => {
-      if (upstream !== port1) return;
+      if (upstream !== port1 || service !== child || !serviceReady || supervisor.stopping) return;
+      log('MAIN_CHANNEL_CLOSED', 'Active service live subscription closed');
       closeUpstream(); freshness.invalidate({...initialLive(selection), status: 'stale', reason: 'Main live subscription closed; current interval is unknown'});
-      if (service === child && serviceReady && !supervisor.stopping && upstreamBudget.take() !== undefined)
-        upstreamRecovery = setTimeout(() => {upstreamRecovery = undefined; connectUpstream();}, 250);
+      recoverUpstream(child);
     };
     port1.on('close', lost);
     port1.on('message', (event: {data: {type?: string; delivery?: number; update?: LiveTelemetry} | undefined}) => {
