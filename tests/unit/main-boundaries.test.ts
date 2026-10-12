@@ -142,11 +142,31 @@ it('constructs hidden click-through nonfocus sandboxed overlay and retains dashb
   await ready(); expect(configurations[1]).toMatchObject({show: false, focusable: false, transparent: true, frame: false, skipTaskbar: true, alwaysOnTop: true,
     webPreferences: {sandbox: true, contextIsolation: true, nodeIntegration: false}});
   expect(configurations[1].webPreferences!.preload).toContain('overlay-preload.cjs');
+  expect(configurations[0].webPreferences).not.toHaveProperty('partition');
+  expect(configurations[0].webPreferences).not.toHaveProperty('session');
+  expect(configurations[1].webPreferences!.partition).toBe('ets2telemetry-overlay');
+  expect(configurations[1].webPreferences!.partition!.startsWith('persist:')).toBe(false);
+  expect(configurations[1].webPreferences).not.toHaveProperty('session');
   await expect(handlers.get('telemetry:select')!(overlayTrusted(), 'ats')).rejects.toThrow('Untrusted');
   ipc.emit('overlay:subscribe', trusted()); ipc.emit('overlay:subscribe', {sender: overlayContents, senderFrame: {}});
   expect(overlayContents.postMessage).not.toHaveBeenCalled();
   ipc.emit('overlay:subscribe', overlayTrusted()); expect(overlayContents.postMessage).toHaveBeenCalledOnce();
   expect(windows[1].showInactive).not.toHaveBeenCalled();
+});
+it('retains the dedicated overlay session construction across reload and renderer recovery', async () => {
+  await ready(); const dashboard = windows[0], overlay = windows[1];
+  const configuration = configurations[1];
+  ipc.emit('overlay:subscribe', overlayTrusted()); const retired = channels[1];
+  overlayContents.emit('did-start-loading'); expect(retired.port1.close).toHaveBeenCalled();
+  ipc.emit('overlay:subscribe', overlayTrusted());
+  overlayContents.emit('render-process-gone', {}, {reason: 'crashed'});
+  expect(loadFile).toHaveBeenLastCalledWith(expect.any(String), {query: {view: 'overlay'}});
+  expect(windows).toEqual([dashboard, overlay]); expect(configurations).toHaveLength(2);
+  expect(configurations[1]).toBe(configuration);
+  expect(configuration.webPreferences).toMatchObject({partition: 'ets2telemetry-overlay', sandbox: true, contextIsolation: true, nodeIntegration: false});
+  expect(configuration.webPreferences).not.toHaveProperty('session');
+  expect(configurations[0].webPreferences).not.toHaveProperty('partition');
+  expect(child.kill).not.toHaveBeenCalled(); expect(child.postMessage).not.toHaveBeenCalledWith({type: 'stop'});
 });
 it('keeps upstream and overlay independent of dashboard unsubscribe/reload and rejects stale renderer credits', async () => {
   vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2'); await ready();

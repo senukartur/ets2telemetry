@@ -1,4 +1,23 @@
 # Pure receipt validation; this file never launches a process.
+function Test-OverlayRendererIsolation {
+    param([object[]]$Windows)
+    if ($Windows.Count -ne 2) { return $false }
+    $overlay = @($Windows | Where-Object { $_.url -cmatch '/renderer/index\.html\?view=overlay$' })
+    $dashboard = @($Windows | Where-Object { $_.url -cmatch '/renderer/index\.html$' })
+    if ($overlay.Count -ne 1 -or $dashboard.Count -ne 1) { return $false }
+    foreach ($window in $Windows) {
+        $rendererId = $window.rendererPid
+        if (($rendererId -isnot [int] -and $rendererId -isnot [long] -and $rendererId -isnot [double] -and $rendererId -isnot [decimal]) -or
+            $rendererId -le 0 -or $rendererId -gt 4294967295 -or [math]::Truncate([double]$rendererId) -ne [double]$rendererId) { return $false }
+        foreach ($flag in @('isDefaultSession','isOverlaySession','sessionPersistent')) {
+            if ($window.$flag -isnot [bool]) { return $false }
+        }
+    }
+    return ($overlay[0].rendererPid -ne $dashboard[0].rendererPid -and
+        !$overlay[0].isDefaultSession -and $overlay[0].isOverlaySession -and !$overlay[0].sessionPersistent -and
+        $dashboard[0].isDefaultSession -and !$dashboard[0].isOverlaySession -and $dashboard[0].sessionPersistent)
+}
+
 function Test-RuntimeReceipt {
     param([string]$DriverResultPath, [string]$ExpectedCommit, [string]$ExpectedMode, [int]$JobExitCode,
         [string]$ExpectedScenario)
@@ -28,6 +47,7 @@ function Test-RuntimeReceipt {
         $valid = $null -ne $overlay -and $overlay.origin -ceq 'synthetic' -and
             $overlay.recording -is [bool] -and $overlay.recording -eq $false -and
             $overlay.scope -ceq 'hidden synthetic renderer; OS visibility, focus and input unverified'
+        if ($driver.runtime.rendererProcessLimit -cne '1' -or !(Test-OverlayRendererIsolation -Windows @($driver.runtime.windows))) { $valid = $false }
         foreach ($field in @('missingDistinctFromZero','silentOpenStale','resumeRecovered','overlayReloadIndependent',
             'overlayCreditRecovered','dashboardReloadIndependent','dashboardCreditIndependent','disconnectUnavailable','sourceIdentityPreserved')) {
             if ($overlay.$field -isnot [bool] -or $overlay.$field -ne $true) { $valid = $false }
@@ -70,6 +90,7 @@ function Test-RuntimeReceipt {
                 $during.origin -cne 'synthetic' -or $during.freshness -cne 'current' -or $during.speed -cne '72.0' -or $during.fuel -cne '71.0' -or
                 $during.speedUnit -cne 'km/h' -or $during.fuelUnit -cne 'L') { $valid = $false }
             $duringWindows = @($proof.independentObservation.windows)
+            if (!(Test-OverlayRendererIsolation -Windows $duringWindows)) { $valid = $false }
             if ($duringWindows.Count -ne 2) { $valid = $false }
             foreach ($window in $duringWindows) {
                 if ($window.sandbox -isnot [bool] -or !$window.sandbox -or $window.isolation -isnot [bool] -or !$window.isolation -or
@@ -100,6 +121,7 @@ function Test-RuntimeReceipt {
                 $row.speed -cne $speed -or $row.fuel -cne $fuel -or $row.freshness -cne $freshness -or $row.status -cnotin $states) { $valid = $false }
             $windowRows = @($overlay.windows | Where-Object { $_.phase -ceq $phase })
             if ($windowRows.Count -ne 1 -or @($windowRows[0].windows).Count -ne 2) { $valid = $false; continue }
+            if (!(Test-OverlayRendererIsolation -Windows @($windowRows[0].windows))) { $valid = $false }
             foreach ($window in $windowRows[0].windows) {
                 if ($window.sandbox -isnot [bool] -or !$window.sandbox -or $window.isolation -isnot [bool] -or !$window.isolation -or
                     $window.node -isnot [bool] -or $window.node) { $valid = $false }

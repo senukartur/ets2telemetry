@@ -90,7 +90,8 @@ else {
   function createOverlay(): void {
     overlay = new BrowserWindow({width: 300, height: 132, show: false, frame: false, transparent: true, backgroundColor: '#00000000',
       focusable: false, skipTaskbar: true, alwaysOnTop: true, resizable: false, movable: false, minimizable: false, maximizable: false, fullscreenable: false,
-      webPreferences: {preload: path.join(__dirname, 'overlay-preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false}});
+      // A dedicated in-memory session separates the overlay's browser context from the dashboard.
+      webPreferences: {partition: 'ets2telemetry-overlay', preload: path.join(__dirname, 'overlay-preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false}});
     overlay.setIgnoreMouseEvents(true); overlay.setFocusable(false);
     overlayController = new OverlayController(overlay, screen);
     overlay.webContents.setWindowOpenHandler(() => ({action: 'deny'}));
