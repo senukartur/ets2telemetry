@@ -4,6 +4,8 @@
 
 Follow this document when the owner asks you to coordinate implementation, manage Trello execution, or launches the [coordinator prompt](docs/prompts/coordinator-start.md). It does not turn every repository task into an orchestration run. Instructions for a delegated worker apply only to its assignment.
 
+This document is runtime-neutral: the coordinator may be Codex or Claude Code. The rules below describe roles, evidence, and ownership. [Runtime mapping](#runtime-mapping) translates them into each runtime's tools. Inspect the tools actually available in the session; do not assume a capability from this document. `AGENTS.md` is the shared instruction file, and `CLAUDE.md` imports it for Claude Code.
+
 Act as the accountable coordinator: select eligible cards, delegate bounded implementation, integrate results, verify acceptance evidence, maintain execution status, and prepare PRs for owner review. Use subagents for implementation and independent review. Routine decisions within the approved scope do not require repeated confirmation.
 
 Read [AGENTS.md](AGENTS.md), [concept.md](concept.md), and [TESTING.md](TESTING.md) before planning. Product requirements and architecture remain in those documents. Discuss requirement or major architecture changes with the owner. Speak Russian with the owner; write internal documentation, handoffs, commit messages, and PR text in English.
@@ -30,7 +32,7 @@ Local `plan.md` and `plan-review.md`, if present, are review drafts rather than 
 3. Read current card briefs and reconcile prerequisites against accepted results and merged PRs. A card in Done with missing required evidence, or a merged PR with incomplete acceptance, does not satisfy its dependency. Report discrepancies and keep dependent work ineligible.
 4. Before new implementation, update a clean local `main` with `git pull --ff-only`, following AGENTS.md. Do not switch a checkout used by another agent. Create each task branch from the verified updated base; enable `.githooks` in each checkout.
 5. Assign one accountable worker per card. Record the assignment before spawning it. Start with one implementation worker and a separate reviewer for ET-001. After the scaffold is accepted, allow at most two implementation workers and one reviewer concurrently, always within the runtime's available slots.
-6. Continue eligible independent work in scope while other cards await review or a manual check. If all remaining work needs owner review, access, or game evidence, save a concrete handoff and yield. Resume on new owner input; this document does not schedule automatic wakeups or authorize recurring automation.
+6. Continue eligible independent work in scope while other cards await review or a manual check. If all remaining work needs owner review, access, or game evidence, save a concrete handoff and yield. Resume on new owner input; this document does not schedule automatic wakeups or authorize recurring automation (no `/loop`, scheduled tasks, cron triggers, or polling of CI or Trello).
 
 The initial prototype dependency snapshot is below. Read live cards at startup and resolve contradictions with repository requirements before implementation. Card numbers are identifiers, not execution order.
 
@@ -67,7 +69,26 @@ Owner decision on October 11, 2026: ET-006a implementation and automated evidenc
 
 ## Delegation and file ownership
 
-Use the session's subagent tools for bounded assignments. Do not create separate user-owned chats or message existing unrelated chats unless the owner explicitly requests that action. Workers must not spawn further agents unless the coordinator explicitly assigns that delegation.
+Use the session's subagent tools for bounded assignments. Do not create separate user-owned chats or sessions, or message existing unrelated chats or sessions, unless the owner explicitly requests that action. Workers must not spawn further agents unless the coordinator explicitly assigns that delegation.
+
+### Runtime mapping
+
+| Need | Codex | Claude Code |
+| --- | --- | --- |
+| Implementation worker | Subagent with the assignment below | `Agent` tool, `general-purpose` type, assignment below as the prompt |
+| Independent reviewer | Separate read-only subagent | `Agent` tool with a prompt that forbids edits, commits, and PR or Trello writes; a read-only type such as `Explore` suits searches but not whole-file review |
+| Worktree isolation | Separate worktree per card | For per-card branches, create the `git worktree` yourself from the verified base and pass its absolute path. `isolation: "worktree"` creates the worktree for you, so you cannot choose its path or base commit up front; read back the created path and base commit and record them in the ledger |
+| Continue or steer a worker | Message the existing subagent | `SendMessage` to the agent's ID or name; a new `Agent` call starts cold without its context |
+| Worker result | Subagent response | The agent's final report is not shown to the owner; relay what matters in your own update |
+| Model and reasoning | Per-role settings from the launch prompt | `model` parameter on `Agent`, which takes aliases (for example `sonnet`, `opus`) rather than full model IDs, so the alias may not resolve to the exact version a prompt names; verify and record the actual model. Reasoning effort is a separate setting, available only where the session's `Agent` tool or agent definition offers it; set it only if the owner asked for a specific level |
+| Attach the PR to the session | Attachment tool, if the app provides one | The desktop app's PR-binding tool, if the session offers one (check the PR's current status first, then bind it if it is not reported); otherwise the PR link in the reply. Tool names are not fixed by this document: check the session's tool list |
+
+Runtime-specific rules:
+
+- A subagent is not isolated by itself. Verify its working directory and branch before it edits anything, and again before you accept its result.
+- Background agents report asynchronously. Do not treat a notification, a tool return, or a "done" message as proof of completion; inspect the commits and diff (see below).
+- Models and reasoning for Claude Code follow this order: a later explicit owner instruction in the chat overrides the owner's launch prompt, and both override the session defaults. Where the owner gave none, inherit the session defaults and record them as the actual settings. Do not invent a mapping, and never claim a setting was applied unless the runtime confirmed it.
+- Read Trello through the connected Trello tools in either runtime. Verify read and write access separately, as described above.
 
 For parallel cards, use a separate task branch and worktree per card. Subagent creation alone does not provide filesystem isolation. Pass the absolute working directory to every worker and reviewer. Inspect existing worktrees before creating another. Keep the coordinator's control checkout and ledger location stable.
 
@@ -106,7 +127,7 @@ Use real pipes and isolated storage for their integration boundaries, determinis
 
 ## PR and board lifecycle
 
-Follow the Git workflow and [.github/pull_request_template.md](.github/pull_request_template.md). Keep one coherent task per PR by default, start the PR title with the package or card ID (`[ET-023b] chore: ...`, see [AGENTS.md](AGENTS.md#commits-and-pull-requests)), link the Trello card, report actual checks on the candidate commit, and state remaining verification. Push the task branch, open a PR targeting `main`, attach it to the Codex chat when supported, and post its link to the card. Recover an existing PR after an uncertain outcome instead of creating a duplicate.
+Follow the Git workflow and [.github/pull_request_template.md](.github/pull_request_template.md). Keep one coherent task per PR by default, start the PR title with the package or card ID (`[ET-023b] chore: ...`, see [AGENTS.md](AGENTS.md#commits-and-pull-requests)), link the Trello card, report actual checks on the candidate commit, and state remaining verification. Push the task branch, open a PR targeting `main`, attach it to the current chat or session when the runtime supports it (see [Runtime mapping](#runtime-mapping)), and post its link to the card. Recover an existing PR after an uncertain outcome instead of creating a duplicate.
 
 Use a draft PR while implementation, required checks, or independent review remain unfinished. Move the card to Review when changes are available for verification and list every unresolved criterion. Mark the PR ready for owner review when required evidence and reviewer findings are resolved. CI skips draft PRs (ET-024): obtain draft-head CI evidence by manual dispatch on the task branch as described in [docs/ci.md](docs/ci.md#triggers-and-draft-checks), and dispatch deliberately rather than after every push. The PR check list does not show dispatch runs; record the run link. Marking the PR ready starts the pull-request run on the merge result; that run on the final head is the merge gate. If it fails, return the PR to draft and record the failure. The owner reviews and merges by default. Never merge, publish a release, rewrite published history, or bypass the main guard without the required explicit owner authorization.
 
@@ -163,8 +184,10 @@ Give concise Russian progress updates focused on outcomes and blockers. At hando
 
 ## Official workflow references
 
-- [OpenAI: Subagents](https://learn.chatgpt.com/docs/agent-configuration/subagents): bounded delegation, context, and review workflows.
-- [OpenAI: Git worktrees](https://learn.chatgpt.com/docs/environments/git-worktrees): independent checkouts for parallel work.
+- [OpenAI: Subagents](https://learn.chatgpt.com/docs/agent-configuration/subagents): bounded delegation, context, and review workflows (Codex).
+- [OpenAI: Git worktrees](https://learn.chatgpt.com/docs/environments/git-worktrees): independent checkouts for parallel work (Codex).
+- [Claude Code: Subagents](https://code.claude.com/docs/en/sub-agents): agent types, tools, and model selection (Claude Code).
+- [Claude Code: Git worktrees](https://code.claude.com/docs/en/common-workflows#run-parallel-claude-code-sessions-with-git-worktrees): parallel sessions with independent checkouts (Claude Code).
 
 These references inform the workflow; available tools and permissions must still be verified in each session. This document does not install tools or configure a Trello integration.
 
