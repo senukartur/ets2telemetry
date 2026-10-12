@@ -8,6 +8,7 @@ import {existsSync} from 'node:fs';
 import {createDiagnostics} from './diagnostics';
 import {TelemetryIngestion, initialLive, sourceSelection} from './telemetry-ingestion';
 import {LiveSubscriptions} from './live-subscriptions';
+import {coalesceBrokerDiagnostics} from './native-pipe-client';
 import {createHash} from 'node:crypto';
 import os from 'node:os';
 import {CaptureController} from './capture-controller';
@@ -16,7 +17,9 @@ if (!port) throw new Error('Missing Electron parent port');
 const log = createDiagnostics(path.join(process.env.ETS2TELEMETRY_DIAGNOSTIC_DIR || path.join(process.env.LOCALAPPDATA || tmpdir(), 'ETS2Telemetry', 'logs'), 'service'), Boolean(process.env.ETS2TELEMETRY_DIAGNOSTIC_DIR));
 log('SERVICE_BOOT');
 const subscriptions = new LiveSubscriptions(initialLive());
-const ingestion = new TelemetryIngestion(update => subscriptions.publish(update));
+// Broker exits are logged as fixed outcome/stage codes and numbers only; routine waiting exits are omitted
+// and repeated identical failures are coalesced so a retry loop cannot fill the bounded log.
+const ingestion = new TelemetryIngestion(update => subscriptions.publish(update), {diagnose: coalesceBrokerDiagnostics(diagnostic => log('NATIVE_BROKER_EXIT', undefined, {...diagnostic}))});
 const fixtureEndpoint = process.env.ETS2TELEMETRY_SOURCE_PIPE;
 async function boundedSha256(filename: string, limit: number): Promise<string | null> {
   try {

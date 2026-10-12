@@ -2,6 +2,8 @@ import {appendFileSync, existsSync, mkdirSync, renameSync, rmSync, statSync} fro
 import path from 'node:path';
 
 const LIMIT = 256 * 1024;
+/** Always-logged fields; callers pass only fixed codes and numbers, never paths, peer data or telemetry. */
+export type DiagnosticFacts = Readonly<Record<string, string | number | null>>;
 // Startup diagnostics only; never log telemetry or credentials. Detailed errors are opt-in.
 export function createDiagnostics(directory: string, detailed = false) {
   let available = true;
@@ -17,14 +19,14 @@ export function createDiagnostics(directory: string, detailed = false) {
       } else bytes = statSync(filename).size;
     }
   } catch {available = false;}
-  return (event: string, detail?: unknown): void => {
+  return (event: string, detail?: unknown, facts?: DiagnosticFacts): void => {
     if (++records > 2000) return;
     const value = detail instanceof Error
       ? {name: detail.name, message: detail.message.slice(0, 2048), stack: detail.stack?.slice(0, 4096)}
       : typeof detail === 'string' ? detail.slice(0, 4096) : detail;
     let line: string;
     try {
-      line = JSON.stringify({time: new Date().toISOString(), pid: process.pid, event,
+      line = JSON.stringify({time: new Date().toISOString(), pid: process.pid, event, ...(facts ? {facts} : {}),
         ...(detailed && value !== undefined ? {detail: value} : {})}) + '\n';
     } catch {return;}
     const size = Buffer.byteLength(line);
