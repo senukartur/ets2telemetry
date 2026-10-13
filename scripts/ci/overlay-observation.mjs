@@ -95,47 +95,88 @@ export async function windowSecurity(application) {
   return windows;
 }
 
-// The owned renderer emits the unique console marker immediately before blocking.
-// Receiving it is the start barrier; awaiting evaluate later is the completion barrier.
-export async function proveIndependentDuringStall(page, kind, independentObservation, source, proof) {
+// The owned renderer is held at a DevTools `debugger` statement. While paused, its main thread runs no
+// page tasks (port messages, credits, timers or rendering) and burns no CPU, so the capped Job cannot starve
+// the independent renderer, service, main process or observer. A CPU-spinning stall did exactly that on a
+// hosted runner (run 38314471366): the reading reached the independent DOM during the stall, but its polled
+// receipt arrived after the spin. Receiving Debugger.paused for our marker frame is the start barrier.
+// Only this observer resumes the renderer, so an observation received before resume is definitely pending.
+// Runtime callers use the defaults; the receipt validator independently requires 6000 ms. Tests may inject
+// the driver's high-resolution clock to prove the hold does not trust millisecond timer granularity.
+export async function proveIndependentDuringStall(page, kind, independentObservation, source, proof,
+  {requestedMilliseconds = 6000, now = () => performance.now()} = {}) {
   const marker = `ETS2TELEMETRY_${kind.toUpperCase()}_STALL_${randomUUID()}`;
-  Object.assign(proof, {kind, marker, requestedMilliseconds: 6000, started: false, completed: false});
-  let completed = false;
-  const started = page.waitForEvent('console', {predicate: message => message.text().startsWith(`${marker} `), timeout: 10000});
-  void started.catch(() => {});
-  const execution = page.evaluate(({marker}) => {
-    const rendererStartedMonotonicMs = performance.now();
-    console.log(`${marker} ${rendererStartedMonotonicMs}`);
-    const until = rendererStartedMonotonicMs + 6000;
-    while (performance.now() < until) { /* controlled owned renderer stall */ }
-    return {rendererStartedMonotonicMs, rendererCompletedMonotonicMs: performance.now()};
-  }, {marker}).then(timing => {
-    completed = true;
-    Object.assign(proof, timing, {completed: true, completedObserverMonotonicMs: performance.now()});
-  });
-  void execution.catch(() => {});
+  Object.assign(proof, {kind, marker, requestedMilliseconds, stallMethod: 'debugger-pause', started: false, completed: false});
+  const session = await page.context().newCDPSession(page);
+  let completed = false, resumed = false, resumeTimer, pauseTimer;
+  // Only the deliberate hold records resumeRequestedObserverMonotonicMs. A failure-path cleanup resume is
+  // recorded separately so retained partial evidence never implies a hold that did not happen.
+  const sendResume = field => {
+    if (resumed) return Promise.resolve();
+    resumed = true; proof[field] = now();
+    return session.send('Debugger.resume');
+  };
+  const resume = () => sendResume('resumeRequestedObserverMonotonicMs');
+  let execution = Promise.resolve();
   try {
-    const event = await started;
-    const rendererStart = Number(event.text().slice(marker.length + 1));
+    const paused = new Promise((resolve, reject) => {
+      pauseTimer = setTimeout(() => reject(new Error('EXPECTED_RENDERER_PAUSE_WITHIN_10_SECONDS')), 10000);
+      session.on('Debugger.paused', event => {clearTimeout(pauseTimer); resolve(event);});
+    });
+    void paused.catch(() => {});
+    await session.send('Debugger.enable');
+    execution = session.send('Runtime.evaluate', {returnByValue: true, expression: `(() => {
+      const marker = ${JSON.stringify(marker)}, rendererStartedMonotonicMs = performance.now();
+      debugger; // controlled owned renderer stall
+      return {marker, rendererStartedMonotonicMs, rendererCompletedMonotonicMs: performance.now()};
+    })()`}).then(response => {
+      if (response.exceptionDetails || response.result?.value?.marker !== marker) throw new Error('Renderer stall evaluation failed');
+      const {rendererStartedMonotonicMs, rendererCompletedMonotonicMs} = response.result.value;
+      completed = true;
+      Object.assign(proof, {rendererStartedMonotonicMs, rendererCompletedMonotonicMs, completed: true, completedObserverMonotonicMs: now()});
+    });
+    void execution.catch(() => {});
+    const event = await paused;
+    const frame = event.callFrames?.[0]?.callFrameId;
+    const barrier = frame === undefined ? undefined : await session.send('Debugger.evaluateOnCallFrame',
+      {callFrameId: frame, returnByValue: true, expression: '({marker, rendererStartedMonotonicMs})'});
+    assert.equal(event.reason, 'other', 'Renderer paused for an unexpected reason');
+    assert.equal(barrier?.result?.value?.marker, marker, 'Renderer paused outside the owned stall frame');
+    const rendererStart = barrier.result.value.rendererStartedMonotonicMs;
     assert.ok(Number.isFinite(rendererStart) && rendererStart >= 0, 'Invalid renderer stall-start barrier');
-    Object.assign(proof, {started: true, rendererStartBarrierMonotonicMs: rendererStart, startedObserverMonotonicMs: performance.now()});
+    Object.assign(proof, {started: true, pauseReason: event.reason, rendererStartBarrierMonotonicMs: rendererStart, startedObserverMonotonicMs: now()});
     assert.equal(completed, false, 'Renderer completed before its start barrier was observed');
-    source.setReading(20, 71); proof.readingChangedObserverMonotonicMs = performance.now();
+    // Hold the pause for the requested duration whether or not the observation arrives. Timers have
+    // millisecond granularity and may fire just before the high-resolution deadline, so recheck it.
+    const resumeAt = proof.startedObserverMonotonicMs + requestedMilliseconds;
+    const held = (async () => {
+      while (now() < resumeAt) await new Promise(resolve => {resumeTimer = setTimeout(resolve, Math.ceil(resumeAt - now()) + 1);});
+      await resume();
+    })();
+    void held.catch(() => {});
+    source.setReading(20, 71); proof.readingChangedObserverMonotonicMs = now();
     proof.independentObservation = await independentObservation();
-    proof.observedObserverMonotonicMs = performance.now();
+    proof.observedObserverMonotonicMs = now();
     proof.readingObservedObserverMonotonicMs = proof.independentObservation.reading.observedObserverMonotonicMs;
     assert.ok(proof.readingChangedObserverMonotonicMs < proof.readingObservedObserverMonotonicMs &&
       proof.readingObservedObserverMonotonicMs <= proof.observedObserverMonotonicMs, 'Changed DOM reading must precede its window metadata receipt');
-    proof.sourceAtObservation = source.statistics(); proof.pendingAtObservation = !completed;
+    proof.sourceAtObservation = source.statistics(); proof.pendingAtObservation = !resumed && !completed;
     assert.equal(proof.pendingAtObservation, true, 'Independent reading arrived after the stalled renderer completed');
     assert.equal(proof.sourceAtObservation.connections, 1, 'Independent observation reconnected the source');
     assert.equal(proof.sourceAtObservation.activeClients, 1);
-    await execution;
+    await held; await execution;
     assert.equal(proof.rendererStartBarrierMonotonicMs, proof.rendererStartedMonotonicMs);
-    assert.ok(proof.rendererCompletedMonotonicMs - proof.rendererStartedMonotonicMs >= 6000);
+    assert.ok(proof.rendererCompletedMonotonicMs - proof.rendererStartedMonotonicMs >= requestedMilliseconds);
+    assert.ok(proof.resumeRequestedObserverMonotonicMs - proof.startedObserverMonotonicMs >= requestedMilliseconds);
     assert.ok(proof.startedObserverMonotonicMs <= proof.readingChangedObserverMonotonicMs &&
-      proof.readingChangedObserverMonotonicMs < proof.observedObserverMonotonicMs && proof.observedObserverMonotonicMs < proof.completedObserverMonotonicMs);
-  } finally {await execution;}
+      proof.readingChangedObserverMonotonicMs < proof.observedObserverMonotonicMs && proof.observedObserverMonotonicMs < proof.resumeRequestedObserverMonotonicMs &&
+      proof.resumeRequestedObserverMonotonicMs <= proof.completedObserverMonotonicMs);
+  } finally {
+    // Never leave an owned renderer paused: resume, then detach (detaching also releases any pause
+    // and rejects a still-pending evaluation instead of waiting on it).
+    clearTimeout(pauseTimer); clearTimeout(resumeTimer);
+    await sendResume('cleanupResumeObserverMonotonicMs').catch(() => {}); await session.detach().catch(() => {}); await execution.catch(() => {});
+  }
 }
 
 export async function runOverlaySmoke(application, dashboard, overlay, source, result) {

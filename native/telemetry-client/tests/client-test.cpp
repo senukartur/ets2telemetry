@@ -101,19 +101,27 @@ void controlled_token_owner_test(const fs::path& base, const Identity& identity)
   require(RevertToSelf() != 0); std::cout << "controlled duplicate TokenOwner mismatch: implicit owner rejected, explicit TokenUser owner and strict DACL passed\n";
 }
 struct Child {
-  Handle process, input, output; DWORD pid = 0;
-  Child(const std::wstring& executable, const std::wstring& arguments) {
+  Handle process, input, output, error; DWORD pid = 0;
+  Child(const std::wstring& executable, const std::wstring& arguments, bool captureError = false) {
     SECURITY_ATTRIBUTES attributes{sizeof(attributes), nullptr, TRUE}; HANDLE inRead = nullptr, inWrite = nullptr, outRead = nullptr, outWrite = nullptr;
     require(CreatePipe(&inRead, &inWrite, &attributes, 0) != 0); Handle childInput(inRead); input.value = inWrite;
     require(CreatePipe(&outRead, &outWrite, &attributes, 0) != 0); Handle childOutput(outWrite); output.value = outRead;
     require(SetHandleInformation(input.value, HANDLE_FLAG_INHERIT, 0) && SetHandleInformation(output.value, HANDLE_FLAG_INHERIT, 0));
-    STARTUPINFOW startup{}; startup.cb = sizeof(startup); startup.dwFlags = STARTF_USESTDHANDLES; startup.hStdInput = childInput.value; startup.hStdOutput = childOutput.value; startup.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+    std::optional<Handle> childError;
+    if (captureError) {HANDLE errRead = nullptr, errWrite = nullptr; require(CreatePipe(&errRead, &errWrite, &attributes, 65536) != 0); childError.emplace(errWrite); error.value = errRead; require(SetHandleInformation(error.value, HANDLE_FLAG_INHERIT, 0) != 0);}
+    STARTUPINFOW startup{}; startup.cb = sizeof(startup); startup.dwFlags = STARTF_USESTDHANDLES; startup.hStdInput = childInput.value; startup.hStdOutput = childOutput.value; startup.hStdError = childError ? childError->value : GetStdHandle(STD_ERROR_HANDLE);
     PROCESS_INFORMATION information{}; auto command = L"\"" + executable + L"\" " + arguments;
     require(CreateProcessW(executable.c_str(), command.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr, nullptr, &startup, &information) != 0);
     process.value = information.hProcess; pid = information.dwProcessId; CloseHandle(information.hThread);
   }
   void eof() {if (input.value != INVALID_HANDLE_VALUE) {CloseHandle(input.value); input.value = INVALID_HANDLE_VALUE;}}
   DWORD wait() {require(WaitForSingleObject(process.value, 6000) == WAIT_OBJECT_0); DWORD code = 0; require(GetExitCodeProcess(process.value, &code) != 0); return code;}
+  // Reads the captured stderr after exit; the bound matches the service's diagnostic tail.
+  std::string diagnostic() {
+    std::string text; char buffer[512]; DWORD read = 0;
+    while (ReadFile(error.value, buffer, sizeof(buffer), &read, nullptr) && read) {text.append(buffer, read); require(text.size() <= 4096);}
+    return text;
+  }
   ~Child() {
     eof();
     // Only this exact owned handle is terminated on a failed assertion; never enumerate host processes.
@@ -362,6 +370,74 @@ int wmain(int argc, wchar_t** argv) {
         require(!provably_missing_image(utf8(final_path(own.value))) && !provably_missing_image("\\\\?\\UNC\\unverified-server\\share\\broker.exe"));
       } else {client.eof(); require(client.wait() == 1); require(file_bytes(directory / "service-policy.json") == v0::detail::serialize(policy));}
     }
-    fs::remove_all(base); std::cout << "native authority, stale lifetime filtering, hard security rejection, bounded partial frames, quiet-source and EOF cancellation passed\n"; return 0;
+    for (const auto* mode : {"policy-lock-busy", "policy-lock-pending", "policy-publish-busy", "image-busy"}) {
+      if (!filter.empty() && filter != mode) continue;
+      std::cerr << "case " << mode << "\n";
+      const std::string scenario(mode);
+      const auto directory = base / wide(mode) / "transport" / "v0"; fs::create_directory(directory.parent_path().parent_path());
+      require(CreateDirectoryW(directory.parent_path().c_str(), &security.attributes)); require(CreateDirectoryW(directory.c_str(), &security.attributes));
+      const auto lock = directory / "service-policy.lock", policyPath = directory / "service-policy.json";
+      const auto lockAccess = GENERIC_READ | GENERIC_WRITE | DELETE | READ_CONTROL;
+      std::optional<Handle> holder; std::string before;
+      if (scenario == "policy-lock-busy") holder.emplace(CreateFileW(lock.c_str(), lockAccess, 0, &security.attributes, CREATE_NEW, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_DELETE_ON_CLOSE, nullptr));
+      else if (scenario == "policy-lock-pending") {
+        // The released lock stays delete-pending while another (scanner-like) handle remains open.
+        Handle creator(CreateFileW(lock.c_str(), lockAccess, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, &security.attributes, CREATE_NEW, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_DELETE_ON_CLOSE, nullptr));
+        holder.emplace(CreateFileW(lock.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, 0, nullptr));
+      } else if (scenario == "image-busy") {
+        // Another holder with DELETE access (an updater or scanner) blocks the broker's deny-write image open, not its launch.
+        holder.emplace(CreateFileW(broker.c_str(), DELETE, FILE_SHARE_READ | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, 0, nullptr));
+      } else {
+        // An existing approved entry forces a replacement; the reader uses the plugin's policy share mode.
+        auto own = image(GetCurrentProcess()); const auto ownPath = utf8(final_path(own.value));
+        write_file(policyPath, Json{Json::Object{{"schemaVersion", Json{1.0}}, {"userTag", Json{identity.userTag}}, {"windowsSessionId", Json{static_cast<double>(identity.session)}}, {"allowedExecutables", Json{Json::Array{Json{Json::Object{{"path", Json{ownPath}}, {"sha256", Json{std::string(64, '0')}}}}}}}}}, identity);
+        before = file_bytes(policyPath);
+        holder.emplace(CreateFileW(policyPath.c_str(), GENERIC_READ | READ_CONTROL, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+      }
+      const DWORD expectedError = scenario == "policy-lock-busy" ? ERROR_FILE_EXISTS : scenario == "image-busy" ? ERROR_SHARING_VIOLATION : ERROR_ACCESS_DENIED;
+      {
+        Child client(broker, L"--game ets2 --discovery-dir \"" + directory.wstring() + L"\"", true); client.eof();
+        const auto code = client.wait(); std::cerr << "contention exit " << code << "\n"; require(code == 4);
+        const auto diagnostic = client.diagnostic(); std::cerr << "contention diagnostic " << diagnostic;
+        const auto expectedStage = scenario == "policy-publish-busy" ? std::string("policy-publish") : scenario == "image-busy" ? std::string("own-image") : std::string("policy-lock");
+        // The fixed diagnostic is the final stderr line; separate ASan fixtures emit stage traces before it.
+        require(std::regex_search(diagnostic, std::regex("(^|\n)diag1 " + expectedStage + " " + std::to_string(expectedError) + " [0-9]{1,10} [a-z-]{1,24} [0-9]{1,10}\n$")));
+        DWORD available = 0; const auto peeked = PeekNamedPipe(client.output.value, nullptr, 0, nullptr, &available, nullptr); require((peeked || GetLastError() == ERROR_BROKEN_PIPE) && available == 0);
+        if (scenario == "policy-publish-busy") require(file_bytes(policyPath) == before); else require(!fs::exists(policyPath));
+        for (const auto& entry : fs::directory_iterator(directory)) require(entry.path().extension() != L".tmp");
+      }
+      if (scenario != "policy-publish-busy") holder.reset();
+      else {
+        // Release the reader for the real update, then prove an unchanged policy is not replaced under that reader.
+        holder.reset();
+        Child updated(broker, L"--game ets2 --discovery-dir \"" + directory.wstring() + L"\"", true); require(parse(read_frame(updated.output.value)).at("type").string() == "waiting"); require(updated.wait() == 2);
+        require(std::regex_search(updated.diagnostic(), std::regex("(^|\n)diag1 discovery 0 [0-9]{1,10} [a-z-]{1,24} [0-9]{1,10}\n$")));
+        const auto current = file_bytes(policyPath); require(current != before && std::get<Json::Array>(parse(current).at("allowedExecutables").value).size() == 2);
+        BY_HANDLE_FILE_INFORMATION first{}, second{};
+        holder.emplace(CreateFileW(policyPath.c_str(), GENERIC_READ | READ_CONTROL, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr)); require(GetFileInformationByHandle(holder->value, &first) != 0);
+        Child unchanged(broker, L"--game ets2 --discovery-dir \"" + directory.wstring() + L"\"", true); require(parse(read_frame(unchanged.output.value)).at("type").string() == "waiting"); require(unchanged.wait() == 2);
+        unchanged.diagnostic(); holder.reset();
+        Handle reopened(CreateFileW(policyPath.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr)); require(GetFileInformationByHandle(reopened.value, &second) != 0);
+        require(first.nFileIndexHigh == second.nFileIndexHigh && first.nFileIndexLow == second.nFileIndexLow && file_bytes(policyPath) == current);
+        continue;
+      }
+      Child released(broker, L"--game ets2 --discovery-dir \"" + directory.wstring() + L"\""); require(parse(read_frame(released.output.value)).at("type").string() == "waiting"); require(released.wait() == 2);
+      require(fs::exists(policyPath));
+    }
+    if (filter.empty() || filter == "policy-readonly") {
+      // A read-only policy also blocks replacement with ACCESS_DENIED, but never clears: it stays a hard rejection.
+      std::cerr << "case policy-readonly\n";
+      const auto directory = base / L"policy-readonly" / "transport" / "v0"; fs::create_directory(directory.parent_path().parent_path());
+      require(CreateDirectoryW(directory.parent_path().c_str(), &security.attributes)); require(CreateDirectoryW(directory.c_str(), &security.attributes));
+      const auto policyPath = directory / "service-policy.json"; auto own = image(GetCurrentProcess());
+      write_file(policyPath, Json{Json::Object{{"schemaVersion", Json{1.0}}, {"userTag", Json{identity.userTag}}, {"windowsSessionId", Json{static_cast<double>(identity.session)}}, {"allowedExecutables", Json{Json::Array{Json{Json::Object{{"path", Json{utf8(final_path(own.value))}}, {"sha256", Json{std::string(64, '0')}}}}}}}}}, identity);
+      const auto before = file_bytes(policyPath); require(SetFileAttributesW(policyPath.c_str(), FILE_ATTRIBUTE_READONLY) != 0);
+      Child client(broker, L"--game ets2 --discovery-dir \"" + directory.wstring() + L"\"", true); client.eof(); const auto code = client.wait();
+      const auto diagnostic = client.diagnostic(); std::cerr << "read-only exit " << code << " diagnostic " << diagnostic;
+      require(SetFileAttributesW(policyPath.c_str(), FILE_ATTRIBUTE_NORMAL) != 0);
+      require(code == 1 && std::regex_search(diagnostic, std::regex("(^|\n)diag1 policy-publish 5 [0-9]{1,10} [a-z-]{1,24} [0-9]{1,10}\n$")) && file_bytes(policyPath) == before);
+      for (const auto& entry : fs::directory_iterator(directory)) require(entry.path().extension() != L".tmp");
+    }
+    fs::remove_all(base); std::cout << "native authority, stale lifetime filtering, hard security rejection, retryable owned-file contention, bounded partial frames, quiet-source and EOF cancellation passed\n"; return 0;
   } catch (const std::exception& error) {std::cerr << (argc == 5 ? "host: " : "controller: ") << error.what() << "\n"; return 1;}
 }

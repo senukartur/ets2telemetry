@@ -62,12 +62,16 @@ function Test-RuntimeReceipt {
             $proof = $overlay.$proofField
             if ($proof.kind -cne $kind -or $proof.marker -cnotmatch ('^ETS2TELEMETRY_' + $kind.ToUpperInvariant() + '_STALL_[0-9a-f-]{36}$') -or
                 $proof.requestedMilliseconds -ne 6000) { $valid = $false }
+            # A debugger pause stalls the renderer without consuming the Job's CPU budget, and only the
+            # observer resumes it; a CPU-spinning stall starved the observer on a hosted runner.
+            if ($proof.stallMethod -cne 'debugger-pause' -or $proof.pauseReason -cne 'other') { $valid = $false }
             foreach ($flag in @('started','completed','pendingAtObservation')) {
                 if ($proof.$flag -isnot [bool] -or !$proof.$flag) { $valid = $false }
             }
             $timesValid = $true
             foreach ($time in @('rendererStartBarrierMonotonicMs','rendererStartedMonotonicMs','rendererCompletedMonotonicMs',
-                'startedObserverMonotonicMs','readingChangedObserverMonotonicMs','observedObserverMonotonicMs','completedObserverMonotonicMs')) {
+                'startedObserverMonotonicMs','readingChangedObserverMonotonicMs','observedObserverMonotonicMs','resumeRequestedObserverMonotonicMs',
+                'completedObserverMonotonicMs')) {
                 $value = $proof.$time
                 if (($value -isnot [int] -and $value -isnot [long] -and $value -isnot [double] -and $value -isnot [decimal]) -or
                     $value -lt 0) { $valid = $false; $timesValid = $false }
@@ -79,7 +83,9 @@ function Test-RuntimeReceipt {
                 ([double]$proof.rendererCompletedMonotonicMs - [double]$proof.rendererStartedMonotonicMs) -lt 6000 -or
                 $proof.startedObserverMonotonicMs -gt $proof.readingChangedObserverMonotonicMs -or
                 $proof.readingChangedObserverMonotonicMs -ge $proof.observedObserverMonotonicMs -or
-                $proof.observedObserverMonotonicMs -ge $proof.completedObserverMonotonicMs)) { $valid = $false }
+                $proof.observedObserverMonotonicMs -ge $proof.resumeRequestedObserverMonotonicMs -or
+                ([double]$proof.resumeRequestedObserverMonotonicMs - [double]$proof.startedObserverMonotonicMs) -lt 6000 -or
+                $proof.resumeRequestedObserverMonotonicMs -gt $proof.completedObserverMonotonicMs)) { $valid = $false }
             $duringSource = $proof.sourceAtObservation
             if ($duringSource.connections -ne 1 -or $duringSource.activeClients -ne 1 -or $duringSource.origin -cne 'synthetic' -or
                 $duringSource.history -isnot [bool] -or $duringSource.history) { $valid = $false }
