@@ -24,6 +24,8 @@ let timer;
 let tracing = false;
 let telemetrySource;
 const failure = error => ({name: error.name, message: error.message, stack: error.stack});
+const diagnosticEvents = async directory => (await readFile(path.join(directory, 'startup.jsonl'), 'utf8'))
+  .trim().split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line));
 try {
   assert.equal(process.platform, 'win32');
   assert.equal(process.arch, 'x64');
@@ -104,7 +106,23 @@ try {
     assert.equal(result.telemetry.invalidSelectionRejected, true);
     await window.reload(); await current('renderer-reload-1');
     await window.reload(); await current('renderer-reload-2');
-    result.telemetry.rendererReloads = 2;
+    // A reload whose commit is late lets the replaced document's 250 ms re-subscribe reach main first (hosted
+    // runs 38324766032 and 38470786173). Hold only the replacement document's request well past that delay, so
+    // this reload always exercises the race, and require main's evidence that it retired that subscription.
+    const commitDelayMilliseconds = 2000;
+    // An unheld reload can also hit the race on a slow host; count only this reload's retirement.
+    const precommitRetirements = async () => (await diagnosticEvents(config.diagnostics)).filter(row => row.event === 'DASHBOARD_PRECOMMIT_SUBSCRIPTION_RETIRED').length;
+    const retiredBefore = await precommitRetirements();
+    await window.route(url => url.protocol === 'file:', async route => {
+      if (route.request().isNavigationRequest()) await new Promise(resolve => setTimeout(resolve, commitDelayMilliseconds));
+      await route.continue();
+    });
+    try {await window.reload();} finally {await window.unrouteAll();}
+    await current('renderer-reload-delayed-commit');
+    const retiredAfter = await precommitRetirements();
+    result.telemetry.delayedCommit = {holdMilliseconds: commitDelayMilliseconds, precommitRetirementsBefore: retiredBefore, precommitRetirementsAfter: retiredAfter};
+    assert.equal(retiredAfter - retiredBefore, 1, 'Delayed-commit reload did not retire the replaced document subscription');
+    result.telemetry.rendererReloads = 3;
     const restartRequested = await application.evaluate(({app}) => app.emit('ets2telemetry:diagnostic-service-exit'));
     assert.equal(restartRequested, true, 'Opt-in diagnostic event unavailable');
     result.telemetry.diagnosticCrashRequested = true;
@@ -139,11 +157,9 @@ finally {
     finally {clearTimeout(timer);}
   }
   try {
-    const logs = async directory => (await readFile(path.join(directory, 'startup.jsonl'), 'utf8'))
-      .trim().split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line));
     // Preserve lifecycle evidence even when a later cleanup assertion fails.
-    result.mainEvents = await logs(config.diagnostics);
-    result.serviceEvents = await logs(path.join(config.diagnostics, 'service'));
+    result.mainEvents = await diagnosticEvents(config.diagnostics);
+    result.serviceEvents = await diagnosticEvents(path.join(config.diagnostics, 'service'));
     result.probesAfterExit = (await readdir(config.temp)).filter(name => name.startsWith('ets2telemetry-probe-'));
     if (telemetrySource && result.telemetry?.serviceRestartRecovered) {
       // A deliberately killed worker's original isolated probe is retained as crash evidence.

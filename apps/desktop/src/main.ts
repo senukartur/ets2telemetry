@@ -127,6 +127,9 @@ else {
     overlay.webContents.on('will-navigate', event => event.preventDefault());
     const retire = () => retireOverlay();
     overlay.webContents.on('did-start-loading', retire);
+    // The replaced document runs until the new one commits, behind the same trusted WebFrameMain, and its
+    // recovery timer can re-subscribe meanwhile. Commit precedes the new document's IPC, so retire that port again.
+    overlay.webContents.on('did-navigate', () => {if (overlayPort) log('OVERLAY_PRECOMMIT_SUBSCRIPTION_RETIRED'); retire();});
     overlay.webContents.on('render-process-gone', (_event, details) => {
       retire(); log('OVERLAY_RENDER_PROCESS_GONE', details);
       if (!supervisor.stopping && overlayBudget.take() !== undefined) loadOverlay(); else fail('OVERLAY_RESTART_EXHAUSTED');
@@ -143,7 +146,11 @@ else {
     window = new BrowserWindow({width: 800, height: 500, webPreferences: {preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false}});
     window.webContents.setWindowOpenHandler(() => ({action: 'deny'}));
     window.webContents.on('will-navigate', event => event.preventDefault());
-    window.webContents.on('did-start-loading', () => {rendererEpoch++; subscribed = false; dashboardSubscriptions.close(); dashboardPort = undefined;});
+    const retireDocument = () => {rendererEpoch++; subscribed = false; dashboardSubscriptions.close(); dashboardPort = undefined;};
+    window.webContents.on('did-start-loading', retireDocument);
+    // As for the overlay: a subscription made before commit belongs to the replaced document. Left in place,
+    // it would make main ignore the new document's subscribe request and leave the dashboard without data.
+    window.webContents.on('did-navigate', () => {if (subscribed) log('DASHBOARD_PRECOMMIT_SUBSCRIPTION_RETIRED'); retireDocument();});
     window.webContents.on('render-process-gone', (_event, details) => {
       rendererEpoch++; subscribed = false; dashboardSubscriptions.close(); dashboardPort = undefined; log('RENDER_PROCESS_GONE', details);
       if (!supervisor.stopping && rendererBudget.take() !== undefined) loadWindow(); else fail('RENDERER_RESTART_EXHAUSTED');
