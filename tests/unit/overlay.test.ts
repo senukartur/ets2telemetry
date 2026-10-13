@@ -101,11 +101,74 @@ it('retains receipt expiry across port invalidation and independently renews a n
   freshness.close(); expect(vi.getTimerCount()).toBe(0);
 });
 function controller() {
-  const window = {isDestroyed: () => false, hide: vi.fn(), setBounds: vi.fn(), showInactive: vi.fn()};
+  // Models Windows: isAlwaysOnTop() reads the HWND's WS_EX_TOPMOST, which external z-order changes can clear.
+  const window = {isDestroyed: () => false, hide: vi.fn(), setBounds: vi.fn(), showInactive: vi.fn(), topmost: true,
+    isAlwaysOnTop: (): boolean => window.topmost, setAlwaysOnTop: vi.fn<(flag: boolean, level: string) => void>(flag => {window.topmost = flag;}), moveTop: vi.fn(),
+    // Never called by the controller: activating or focusing the overlay would steal driving input.
+    show: vi.fn(), focus: vi.fn(), setFocusable: vi.fn(), setIgnoreMouseEvents: vi.fn()};
   const screen = {screenToDipRect: vi.fn((_window: null, bounds: Electron.Rectangle) => ({x: bounds.x / 2, y: bounds.y / 2, width: bounds.width / 2, height: bounds.height / 2})),
     getAllDisplays: () => [{bounds: {x: -960, y: 0, width: 1920, height: 1080}}]};
-  return {window, screen, overlay: new OverlayController(window, screen)};
+  const lost = vi.fn();
+  return {window, screen, lost, overlay: new OverlayController(window, screen, lost)};
 }
+function noActivation(window: ReturnType<typeof controller>['window']) {
+  for (const method of [window.show, window.focus, window.setFocusable, window.setIgnoreMouseEvents]) expect(method).not.toHaveBeenCalled();
+}
+function raisedAfterShow(window: ReturnType<typeof controller>['window']) {
+  expect(window.setAlwaysOnTop).toHaveBeenLastCalledWith(true, 'screen-saver');
+  const shown = window.showInactive.mock.invocationCallOrder.at(-1)!, raised = window.setAlwaysOnTop.mock.invocationCallOrder.at(-1)!;
+  expect(shown).toBeLessThan(raised); expect(raised).toBeLessThan(window.moveTop.mock.invocationCallOrder.at(-1)!);
+}
+it('re-asserts the non-taskbar topmost level after every inactive show, without activation', () => {
+  const {window, lost, overlay} = controller(), current = live(); overlay.loaded(true);
+  overlay.update(current); raisedAfterShow(window);
+  expect(window.setAlwaysOnTop).toHaveBeenCalledOnce(); expect(window.moveTop).toHaveBeenCalledOnce();
+  overlay.update(current); expect(window.setAlwaysOnTop).toHaveBeenCalledOnce(); expect(window.moveTop).toHaveBeenCalledOnce();
+  expect(window.setAlwaysOnTop.mock.calls.every(([, level]) => level === 'screen-saver')).toBe(true);
+  expect(lost).not.toHaveBeenCalled(); noActivation(window);
+});
+it('restores topmost when the game returns to the foreground after the overlay lost it while hidden', () => {
+  const {window, lost, overlay} = controller(), current = live(); overlay.loaded(true); overlay.update(current);
+  const metadata = current.observation!.state.window;
+  if (!metadata.available) throw new Error('Expected metadata');
+  // The owner focuses the dashboard: the game is background and the overlay hides.
+  window.hide.mockClear(); metadata.value.foreground = false; overlay.update(current); expect(window.hide).toHaveBeenCalledOnce();
+  // While hidden, the HWND loses WS_EX_TOPMOST (observed ex-style 0x8280020); moveTop alone would not restore it.
+  window.topmost = false; window.moveTop.mockClear(); expect(window.moveTop).not.toHaveBeenCalled();
+  metadata.value.foreground = true; overlay.update(current);
+  expect(window.showInactive).toHaveBeenCalledTimes(2); raisedAfterShow(window);
+  expect(window.topmost).toBe(true); expect(lost.mock.calls).toEqual([['show']]); noActivation(window);
+});
+it('re-asserts topmost on placement changes while visible', () => {
+  const {window, overlay} = controller(), current = live(); overlay.loaded(true); overlay.update(current);
+  window.setAlwaysOnTop.mockClear(); window.moveTop.mockClear();
+  const metadata = current.observation!.state.window;
+  if (!metadata.available) throw new Error('Expected metadata');
+  metadata.value.x += 200; overlay.update(current);
+  expect(window.setBounds).toHaveBeenCalledTimes(2); expect(window.showInactive).toHaveBeenCalledOnce();
+  expect(window.setAlwaysOnTop.mock.calls).toEqual([[true, 'screen-saver']]); expect(window.moveTop).toHaveBeenCalledOnce();
+  expect(window.setBounds.mock.invocationCallOrder[1]).toBeLessThan(window.setAlwaysOnTop.mock.invocationCallOrder[0]);
+  noActivation(window);
+});
+it('restores a visible overlay whose topmost style was cleared externally and reports once per shown period', () => {
+  const {window, lost, overlay} = controller(), current = live(); overlay.loaded(true); overlay.update(current);
+  window.setAlwaysOnTop.mockClear(); window.moveTop.mockClear();
+  window.topmost = false; overlay.update(current);
+  expect(window.setAlwaysOnTop.mock.calls).toEqual([[true, 'screen-saver']]); expect(window.moveTop).toHaveBeenCalledOnce();
+  expect(window.showInactive).toHaveBeenCalledOnce(); expect(lost.mock.calls).toEqual([['visible']]);
+  window.topmost = false; overlay.update(current);
+  expect(window.setAlwaysOnTop).toHaveBeenCalledTimes(2); expect(lost).toHaveBeenCalledOnce();
+  overlay.loaded(false); window.topmost = false; overlay.loaded(true);
+  expect(lost.mock.calls).toEqual([['visible'], ['show']]); noActivation(window);
+});
+it('never raises a hidden overlay, because moveTop also shows the window', () => {
+  const {window, overlay} = controller(), current = live();
+  overlay.update(current); window.topmost = false;
+  const metadata = current.observation!.state.window;
+  if (!metadata.available) throw new Error('Expected metadata');
+  metadata.value.minimized = true; overlay.loaded(true); overlay.update(current);
+  expect(window.showInactive).not.toHaveBeenCalled(); expect(window.moveTop).not.toHaveBeenCalled(); expect(window.setAlwaysOnTop).not.toHaveBeenCalled();
+});
 it('uses the API for signed physical bounds, stays bounded in client DIP bounds and shows without focus', () => {
   const {window, screen, overlay} = controller(), current = live();
   overlay.update(current); expect(window.showInactive).not.toHaveBeenCalled(); overlay.loaded(true);

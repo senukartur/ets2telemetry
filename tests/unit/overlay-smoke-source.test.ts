@@ -201,9 +201,9 @@ describe('debugger-paused stall start, independent observation and resume orderi
 
 function validReceipt() {
   const windows = [{url: 'file:///fixture/renderer/index.html', rendererPid: 111, isDefaultSession: true, isOverlaySession: false, sessionPersistent: true,
-    sandbox: true, isolation: true, node: false, visible: true, focusable: true},
+    sandbox: true, isolation: true, node: false, visible: true, focusable: true, alwaysOnTop: false},
     {url: 'file:///fixture/renderer/index.html?view=overlay', rendererPid: 222, isDefaultSession: false, isOverlaySession: true, sessionPersistent: false,
-      sandbox: true, isolation: true, node: false, visible: false, focusable: false}];
+      sandbox: true, isolation: true, node: false, visible: false, focusable: false, alwaysOnTop: true}];
   const identity = {origin: 'synthetic', game: 'ets2', processId: 1234, pluginSessionId: '00000000-0000-4000-8000-000000000001',
     processInstanceId: '00000000-0000-4000-8000-000000000002', clockId: '00000000-0000-4000-8000-000000000003'};
   const source = {connections: 1, origin: 'synthetic', history: false, identity, activeClients: 1};
@@ -263,6 +263,11 @@ it('requires the complete current overlay receipt and rejects missing results, m
     {name: 'stale treated as disconnected', mutate: receipt => {receipt.overlay.observations[5].freshness = 'unavailable';}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
     {name: 'native overlay shown', mutate: receipt => {receipt.overlay.windows[0].windows[1].visible = true;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
     {name: 'renderer security absent', mutate: receipt => {delete receipt.overlay.windows[0].windows[1].sandbox;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+    {name: 'overlay lost topmost in one phase', mutate: receipt => {receipt.overlay.windows[7].windows[1].alwaysOnTop = false;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+    {name: 'overlay topmost state absent at startup', mutate: receipt => {delete receipt.runtime.windows[1].alwaysOnTop;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+    {name: 'overlay not topmost during stall', mutate: receipt => {receipt.overlay.dashboardStallProof.independentObservation.windows[1].alwaysOnTop = false;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+    {name: 'dashboard made topmost', mutate: receipt => {receipt.overlay.windows[0].windows[0].alwaysOnTop = true;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+    {name: 'topmost reported as text', mutate: receipt => {receipt.overlay.windows[3].windows[1].alwaysOnTop = 'true';}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
     {name: 'reuse pressure switch absent', mutate: receipt => {delete receipt.runtime.rendererProcessLimit;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
     {name: 'actual renderer PID absent', mutate: receipt => {delete receipt.overlay.windows[0].windows[1].rendererPid;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
     {name: 'renderer reused after overlay reload', mutate: receipt => {receipt.overlay.windows[7].windows[1].rendererPid = 111;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
