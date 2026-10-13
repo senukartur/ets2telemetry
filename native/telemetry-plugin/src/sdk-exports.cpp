@@ -37,6 +37,10 @@ extern "C" __declspec(dllexport) int ets2telemetry_test_write_pending() noexcept
 extern "C" __declspec(dllexport) int ets2telemetry_test_capture_endpoint(wchar_t* output, unsigned capacity) noexcept {
   try { const auto endpoint = capture().endpoint(); if (!output || endpoint.empty() || endpoint.size()+1 > capacity) return 0; wcscpy_s(output,capacity,endpoint.c_str()); return 1; } catch (...) { return 0; }
 }
+#ifdef ETS2TELEMETRY_TRANSPORT_TEST_HOOKS
+// Present only in the separately hooked test DLL: the console test owns the hook until unload.
+extern "C" __declspec(dllexport) void ets2telemetry_test_transport_hook(ets2telemetry::transport::TransportTestHook hook) noexcept { ets2telemetry::transport::set_transport_test_hook(hook); }
+#endif
 #endif
 
 SCSAPI_RESULT scs_telemetry_init(const scs_u32_t version, const scs_telemetry_init_params_t* const params) {
@@ -58,11 +62,15 @@ SCSAPI_RESULT scs_telemetry_init(const scs_u32_t version, const scs_telemetry_in
 #endif
       monitor
     )) failure = transport.await_startup();
-    if (failure != ets2telemetry::transport::StartupFailure::none) {
+    // SDK readme permits game calls only during the direct game caller's invocation.
+    const auto log = static_cast<const scs_telemetry_init_params_v100_t*>(params)->common.log;
+    if (failure == ets2telemetry::transport::StartupFailure::timeout) {
+      // A slow host must not cost the whole session: the game waited its fixed budget, the worker keeps
+      // starting, and the adapter logs its eventual result once from a later SDK callback.
+      if (log) log(SCS_LOG_TYPE_warning,ets2telemetry::transport::startup_pending_message());
+    } else if (failure != ets2telemetry::transport::StartupFailure::none) {
       // Completion/join precedes return even when cancellation exceeds the startup wait budget.
       retire();
-      // SDK readme permits game calls only during the direct game caller's invocation.
-      const auto log = static_cast<const scs_telemetry_init_params_v100_t*>(params)->common.log;
       if (log) log(SCS_LOG_TYPE_error,ets2telemetry::transport::startup_failure_message(failure));
       return SCS_RESULT_generic_error;
     }

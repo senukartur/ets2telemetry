@@ -31,7 +31,7 @@ Capture is off by default. Activation is the narrowest launch-time switch the ap
 
 Main logs `CAPTURE_ACTIVATION` or `CAPTURE_ACTIVATION_REJECTED`. It attaches a one-shot grant (format, interval, label, display summary) to the first verified ETS2/ATS `select` message that carries the fixed broker. Later selections and supervised service restarts never renew it; a new interval requires a new explicit launch. The renderer and preload APIs are unchanged and cannot select paths, endpoints or capture. The service validates the grant independently; a rejected grant never fails live source selection.
 
-The plugin always publishes a passive CAP0 endpoint after v0 startup succeeds. Its creation is asynchronous and its failure never disables v0. The endpoint copies nothing until an authorized client completes the opt-in hello:
+The plugin always publishes a passive CAP0 endpoint after v0 startup succeeds or is still pending when the initialization wait ends. Its creation is asynchronous and its failure never disables v0. The endpoint copies nothing until an authorized client completes the opt-in hello:
 
 ```text
 \\.\pipe\ETS2Telemetry-{game}-cap0-{userTag}-{windowsSessionId}-{processInstanceId}-{pluginSessionId}

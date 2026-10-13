@@ -87,8 +87,10 @@ struct Snapshot {
 };
 
 // SDK calls and mutable producer state belong exclusively to the SDK calling thread.
-// read_latest / read_current / set_consumer are the only methods for a future transport thread.
+// read_latest / read_current / set_consumer / defer_log are the only methods for a transport thread.
 // No SDK-owned pointers or C++ allocations cross the DLL boundary.
+// A fixed game-log entry with static storage duration; only the SDK thread passes it to the logger.
+struct DeferredLog { scs_log_type_t type; const char* message; };
 class Adapter final {
  public:
   scs_result_t initialize(scs_u32_t version, const scs_telemetry_init_params_t* params) noexcept;
@@ -104,6 +106,9 @@ class Adapter final {
   bool source_monotonic_ns(std::uint64_t& output) const noexcept;
   // Lock-free source liveness (false after shutdown or counter exhaustion) for worker polling.
   bool source_live() const noexcept { return source_live_.load(std::memory_order_acquire); }
+  // Any thread: hands one static entry to the SDK thread, replacing an entry not yet logged. A worker
+  // never calls the game logger; the next frame_end callback or explicit shutdown logs it once.
+  void defer_log(const DeferredLog* entry) noexcept { deferred_log_.store(entry, std::memory_order_release); }
  private:
   friend struct AdapterTestAccess;
   static SCSAPI_VOID event_callback(scs_event_t, const void*, scs_context_t);
@@ -122,6 +127,7 @@ class Adapter final {
   void gate_diagnostics() noexcept;
   bool diagnostics_enabled() const noexcept;
   void evidence(cap0::Kind, const char* id, const scs_named_value_t* attributes, bool attributes_expected) noexcept;
+  void flush_deferred_log() noexcept;
   Snapshot producer_{}, published_{};
   std::mutex publication_mutex_;
   std::mutex pending_mutex_;
@@ -129,6 +135,7 @@ class Adapter final {
   std::atomic<std::uint64_t> discarded_observations_{0};
   std::atomic<bool> source_live_{false};
   std::atomic<cap0::EvidenceQueue*> evidence_{nullptr};
+  std::atomic<const DeferredLog*> deferred_log_{nullptr};
   bool unread_ = false, initialized_ = false;
   scs_telemetry_init_params_v100_t api_{};
   std::array<bool, 7> registered_events_{};

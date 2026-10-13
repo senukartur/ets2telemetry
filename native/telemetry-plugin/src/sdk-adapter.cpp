@@ -164,7 +164,7 @@ scs_result_t Adapter::initialize(scs_u32_t version, const scs_telemetry_init_par
     producer_.identity.currency.assign(ets2 ? "EUR" : "USD");
     producer_.identity.currency_source.assign(ets2 ? "scs-sdk-1.15/include/eurotrucks2/scssdk_telemetry_eut2.h#game-specific-units" : "scs-sdk-1.15/include/amtrucks/scssdk_telemetry_ats.h#game-specific-units");
     producer_.state.simulation = Simulation::paused; producer_.active = true; source_live_.store(true, std::memory_order_release);
-    api_ = input; initialized_ = true;
+    api_ = input; initialized_ = true; deferred_log_.store(nullptr, std::memory_order_relaxed);
     for (scs_event_t event_id = SCS_TELEMETRY_EVENT_frame_start; event_id <= SCS_TELEMETRY_EVENT_configuration; ++event_id) {
       const auto result = api_.register_for_event(event_id, event_callback, this);
       if (result != SCS_RESULT_ok) { cleanup(); return result; }
@@ -205,7 +205,14 @@ void Adapter::cleanup() noexcept {
   consumer_.store(0, std::memory_order_release); gate_diagnostics();
   publish();
 }
-void Adapter::shutdown() noexcept { try { if (initialized_) cleanup(); } catch (...) { failure(); } }
+void Adapter::shutdown() noexcept { try { if (initialized_) { flush_deferred_log(); cleanup(); } } catch (...) { failure(); } }
+void Adapter::flush_deferred_log() noexcept {
+  // SDK calling thread only, during a direct game invocation (frame_end callback or shutdown).
+  if (!deferred_log_.load(std::memory_order_relaxed)) return;
+  const auto* entry = deferred_log_.exchange(nullptr, std::memory_order_acquire);
+  // A logger exception loses no telemetry observation, so it is not counted as lost data.
+  try { if (entry && api_.common.log) api_.common.log(entry->type, entry->message); } catch (...) { increment(producer_.continuity.callback_failures); }
+}
 void Adapter::failure() noexcept { increment(producer_.continuity.callback_failures); increment(producer_.continuity.lost_observations); }
 bool Adapter::next_order() noexcept {
   gate_diagnostics();
@@ -352,7 +359,7 @@ void Adapter::event(scs_event_t event_id, const void* info) {
         producer_.state.frame = frame; producer_.state.frame_available = true;
       } else failure(); break;
     case SCS_TELEMETRY_EVENT_frame_end:
-      publish(); observed_in_frame_.fill(false); in_frame_ = false; break;
+      publish(); observed_in_frame_.fill(false); in_frame_ = false; flush_deferred_log(); break;
     default: failure(); break;
   }
 }
