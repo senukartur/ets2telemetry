@@ -104,8 +104,14 @@ void controlled_token_owner_test(const fs::path& base, const Identity& identity)
 // wait out the broker's fixed 5 s frame deadline or the host's 5.5 s quiet window, so these bounds need
 // real slack above those product timings on a loaded host. The former 5-6 s bounds left 0-1 s and
 // failed under CPU contention although the broker exited correctly. Product timing is asserted
-// separately where it matters (quiet: alive after 5.5 s, prompt EOF exit).
+// separately where it matters (quiet: alive after 5.5 s, prompt EOF exit; partial frames: exit after
+// the 5 s deadline, measured).
 constexpr DWORD fixtureWaitMs = 15000;
+// The broker also exits (code 3) when the host process exits. In cases that prove a broker deadline or
+// prompt EOF cancellation, the host therefore outlives every fixture bound by a wide margin, so a
+// regression that removes the deadline or the cancellation cannot pass by riding on host exit. The host
+// still returns as soon as the broker exits, so passing runs are not slower.
+constexpr DWORD hostHoldMs = 3 * fixtureWaitMs;
 struct Child {
   Handle process, input, output, error; DWORD pid = 0;
   Child(const std::wstring& executable, const std::wstring& arguments, bool captureError = false) {
@@ -224,7 +230,7 @@ int host(const fs::path& directory, const fs::path& fixtures, const std::string&
     if (mode == "bad-length") std::fill(incomplete, incomplete + 4, static_cast<unsigned char>(0));
     const DWORD count = mode == "partial-prefix" ? 1 : mode == "bad-length" ? 4 : 5;
     pipe_io(pipe.value, client.value, incomplete, count, true);
-    if (mode != "payload-break") WaitForSingleObject(client.value, 10000);
+    if (mode != "payload-break") WaitForSingleObject(client.value, mode == "bad-length" ? 10000 : hostHoldMs);
     return 0;
   }
   for (const auto* filename : {"welcome.json", "checkpoint.json"}) {
@@ -234,7 +240,7 @@ int host(const fs::path& directory, const fs::path& fixtures, const std::string&
     pipe_io(pipe.value, client.value, const_cast<unsigned char*>(frame.data()), static_cast<DWORD>(frame.size()), true);
   }
   // Remain connected until the owned client exits or cancels while waiting for the next frame.
-  WaitForSingleObject(client.value, mode == "quiet-exit" ? 5500 : 10000); return 0;
+  WaitForSingleObject(client.value, mode == "quiet-exit" ? 5500 : mode == "quiet" ? hostHoldMs : 10000); return 0;
 }
 // CAP0 capture host: publishes the same v0 discovery record but serves only the separate capture endpoint.
 int capture_host(const fs::path& directory, const std::string& mode) {
@@ -328,7 +334,14 @@ int wmain(int argc, wchar_t** argv) {
       auto hello = v0::encode_frame(v0::decode_payload(file_bytes(fixtures / "hello.json"))); stdio_io(client.input.value, hello.data(), static_cast<DWORD>(hello.size()), true);
       if (scenario == "invalid-credit") {unsigned char invalid = 2; stdio_io(client.input.value, &invalid, 1, true); require(client.wait() == 1); server.eof(); require(server.wait() == 0); continue;}
       unsigned char credit = 1; stdio_io(client.input.value, &credit, 1, true);
-      if (scenario == "payload-break" || scenario == "partial-prefix" || scenario == "partial-payload" || scenario == "bad-length") {require(client.wait() == (scenario == "bad-length" ? 1u : 3u)); require(server.wait() == 0); continue;}
+      if (scenario == "partial-prefix" || scenario == "partial-payload") {
+        // The broker's own 5 s partial-frame deadline must end the relay: not early, and long before the
+        // held host would exit. Its clock starts after this credit, when the broker reads the first byte.
+        const auto started = GetTickCount64(); require(client.wait() == 3); const auto elapsed = GetTickCount64() - started;
+        std::cerr << "partial-frame exit after " << elapsed << " ms\n"; require(elapsed >= 4500 && elapsed < 12000);
+        require(server.wait() == 0); continue;
+      }
+      if (scenario == "payload-break" || scenario == "bad-length") {require(client.wait() == (scenario == "bad-length" ? 1u : 3u)); require(server.wait() == 0); continue;}
       auto welcome = v0::decode_payload(read_frame(client.output.value)); require(welcome.kind == "welcome");
       Sleep(100); DWORD available = 0; require(PeekNamedPipe(client.output.value, nullptr, 0, nullptr, &available, nullptr) && available == 0);
       stdio_io(client.input.value, &credit, 1, true); auto checkpoint = v0::decode_payload(read_frame(client.output.value)); v0::Consumer consumer(false); consumer.accept(welcome); require(consumer.accept(checkpoint)->hydration);
