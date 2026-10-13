@@ -32,8 +32,10 @@ struct Host {
   unsigned api_calls = 0, wrong_thread = 0, unregister_calls = 0;
   std::string missing, erroneous;
   scs_event_t fail_event = 0, throw_event = 0;
-  bool throw_cleanup = false;
+  bool throw_cleanup = false, throw_log = false;
+  std::vector<std::pair<scs_log_type_t, std::string>> logs;
   Host() { current = this; }
+  static SCSAPI_VOID log(scs_log_type_t type, scs_string_t message) { current->api_call(); if (current->throw_log) throw std::runtime_error("fake logger failure"); current->logs.emplace_back(type, message); }
   void api_call() { ++api_calls; if (std::this_thread::get_id() != sdk_thread) ++wrong_thread; }
   static SCSAPI_RESULT register_event(scs_event_t event_id, scs_telemetry_event_callback_t cb, scs_context_t ctx) {
     current->api_call(); if (current->throw_event == event_id) throw std::runtime_error("fake host registration failure");
@@ -210,6 +212,28 @@ void failure_cleanup() {
   auto adapter = std::make_unique<Adapter>(); Host host; auto params = host.params(); host.erroneous = "truck.engine.rpm";
   require(adapter->initialize(SCS_TELEMETRY_VERSION_1_01, &params) == SCS_RESULT_generic_error && host.channels.empty() && host.events.empty(), "unexpected channel registration errors fail closed");
 }
+void deferred_log() {
+  static const DeferredLog first{SCS_LOG_TYPE_warning, "first"}, second{SCS_LOG_TYPE_error, "second"};
+  auto adapter = std::make_unique<Adapter>(); Host host; auto params = host.params(); params.common.log = Host::log;
+  require(adapter->initialize(SCS_TELEMETRY_VERSION_1_01, &params) == SCS_RESULT_ok, "deferred log fixture init");
+  host.frame_end(); require(host.logs.empty(), "no entry, no log");
+  // A worker thread hands entries over; the latest unlogged one replaces an earlier one.
+  std::thread([&] { adapter->defer_log(&first); adapter->defer_log(&second); }).join();
+  scs_telemetry_frame_start_t frame{}; host.event(SCS_TELEMETRY_EVENT_frame_start, &frame); require(host.logs.empty(), "only frame_end logs a deferred entry");
+  host.frame_end(); host.frame_end();
+  require(host.logs.size() == 1 && host.logs[0].first == SCS_LOG_TYPE_error && host.logs[0].second == "second" && host.wrong_thread == 0, "latest entry logged once on the SDK thread");
+  adapter->defer_log(&first); adapter->shutdown();
+  require(host.logs.size() == 2 && host.logs[1].second == "first", "explicit shutdown logs a waiting entry");
+  adapter->defer_log(&second); require(adapter->initialize(SCS_TELEMETRY_VERSION_1_01, &params) == SCS_RESULT_ok, "deferred log fixture reinit");
+  host.frame_end(); require(host.logs.size() == 2, "initialization discards an entry from an earlier session");
+  // Control delta: two frame boundaries without a logger failure.
+  host.frame_end(); const auto base = read(*adapter); host.frame_end(); host.frame_end(); const auto control = read(*adapter);
+  host.throw_log = true; adapter->defer_log(&first); host.frame_end(); host.frame_end(); const auto thrown = read(*adapter); host.throw_log = false;
+  require(thrown->continuity.callback_failures == control->continuity.callback_failures + 1 && control->continuity.callback_failures == base->continuity.callback_failures, "throwing game logger counted as one callback failure");
+  require(thrown->continuity.lost_observations - control->continuity.lost_observations == control->continuity.lost_observations - base->continuity.lost_observations, "throwing game logger fabricates no lost observation");
+  host.frame_end(); require(host.logs.size() == 2, "a failed entry is not retried");
+  adapter->shutdown();
+}
 void missing_game_time_reset() {
   auto adapter = std::make_unique<Adapter>(); Host host; host.missing = "game.time"; auto params = host.params();
   require(adapter->initialize(SCS_TELEMETRY_VERSION_1_01, &params) == SCS_RESULT_ok, "missing game-time reset init"); auto initial = read(*adapter);
@@ -277,7 +301,7 @@ int main(int argc, char** argv) {
   try {
     if (argc == 2 && std::string(argv[1]) == "missing-game-time-reset") missing_game_time_reset();
     else if (argc == 2 && std::string(argv[1]) == "callback-order-reset") game_time_reset_callback_orders();
-    else { lifecycle(); config_terminal_and_bounds(); clocks_and_contention(); failure_cleanup(); missing_game_time_reset(); game_time_reset_callback_orders(); game_time_reset_frame_delimitation(); }
+    else { lifecycle(); config_terminal_and_bounds(); clocks_and_contention(); failure_cleanup(); deferred_log(); missing_game_time_reset(); game_time_reset_callback_orders(); game_time_reset_frame_delimitation(); }
     std::cout << "SDK adapter: " << assertions << " checks passed; snapshot bytes=" << sizeof(Snapshot) << ", adapter bytes=" << sizeof(Adapter) << "\n"; return 0;
   }
   catch (const std::exception& error) { std::cerr << "SDK adapter failure: " << error.what() << '\n'; return 1; }
