@@ -15,6 +15,8 @@ Owner-approved deferred capabilities are tracked in [technical debt](docs/techni
 
 When the owner requests an implementation coordinator, also read [COORDINATOR.md](COORDINATOR.md). It defines Trello execution, bounded subagent delegation, worktree ownership, independent review, recovery state, and PR handoff. Use the [launch prompt](docs/prompts/coordinator-start.md) to start that role in a separate chat. This role applies only when requested; delegated workers follow their bounded assignments and the repository rules.
 
+In Claude Code, the owner can run a single task through project subagents (architect, implementer, verifier and independent reviewer) with `/deliver`, which ends with a draft PR. See [the delivery pipeline](docs/delivery-pipeline.md). It grants no authority beyond this file.
+
 ## Documentation Language
 
 **Write all internal documentation that may be committed to Git in English.** This is an explicit owner requirement.
