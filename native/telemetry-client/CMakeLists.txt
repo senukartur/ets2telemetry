@@ -7,6 +7,33 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 include(CTest)
+# One CTest entry per fixture case, so a slow case is named and bounded on its own. Keep this list in
+# the fixture's run order; the case-list entry fails if it differs from tests/client-test.cpp.
+set(CLIENT_TEST_CASES
+  retired-record delete-pending-record denied-record zero-record short-record directory-record reparse-record
+  valid creation dead stale-live dead-live collision session malformed dacl payload-break bad-length invalid-credit quiet quiet-exit partial-prefix partial-payload
+  capture capture-v0-hello capture-bad-arguments
+  policy-prune policy-cap policy-duplicate policy-case-duplicate policy-junction
+  policy-lock-busy policy-lock-pending policy-publish-busy image-busy policy-readonly)
+# These cases wait out the broker's fixed 5 s frame deadline or the fixture's 5.5 s quiet window
+# (about 5-6 s each; every other case takes well under 1 s). Per-entry timeouts are hang backstops
+# above the fixture's own 15 s wait bound; ASan entries get twice the time.
+set(CLIENT_TEST_TIMED_CASES quiet quiet-exit partial-prefix partial-payload)
+function(add_client_test_cases prefix fixture broker scale)
+  foreach(test_case IN LISTS CLIENT_TEST_CASES)
+    if(test_case IN_LIST CLIENT_TEST_TIMED_CASES)
+      math(EXPR timeout "30 * ${scale}")
+    else()
+      math(EXPR timeout "20 * ${scale}")
+    endif()
+    add_test(NAME ${prefix}-${test_case} COMMAND ${fixture} $<TARGET_FILE:${broker}> "${CMAKE_CURRENT_SOURCE_DIR}/../../tests/fixtures/protocol-v0")
+    # The fixture's endpoint names are fixed per user and session, so entries never run concurrently.
+    set_tests_properties(${prefix}-${test_case} PROPERTIES ENVIRONMENT "ETS2TELEMETRY_CLIENT_TEST_CASE=${test_case}" TIMEOUT ${timeout} RESOURCE_LOCK ets2telemetry-client-fixture-endpoints)
+  endforeach()
+  string(JOIN "," joined ${CLIENT_TEST_CASES})
+  add_test(NAME ${prefix}-case-list COMMAND ${fixture} --verify-cases ${joined})
+  set_tests_properties(${prefix}-case-list PROPERTIES TIMEOUT 10)
+endfunction()
 option(ETS2TELEMETRY_CLIENT_ASAN "Build separate AddressSanitizer console fixtures" OFF)
 if(ETS2TELEMETRY_CLIENT_ASAN)
   foreach(target IN ITEMS telemetry-pipe-client-asan telemetry-client-test-asan)
@@ -23,8 +50,7 @@ if(ETS2TELEMETRY_CLIENT_ASAN)
     target_link_libraries(${target} PRIVATE advapi32 bcrypt)
   endforeach()
   set_target_properties(telemetry-client-test-asan PROPERTIES OUTPUT_NAME eurotrucks2 RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/asan-test-fixture")
-  add_test(NAME native-pipe-client-asan COMMAND telemetry-client-test-asan $<TARGET_FILE:telemetry-pipe-client-asan> "${CMAKE_CURRENT_SOURCE_DIR}/../../tests/fixtures/protocol-v0")
-  set_tests_properties(native-pipe-client-asan PROPERTIES TIMEOUT 60)
+  add_client_test_cases(native-pipe-client-asan telemetry-client-test-asan telemetry-pipe-client-asan 2)
 endif()
 add_executable(telemetry-pipe-client src/client.cpp ../telemetry-plugin/src/protocol-v0.cpp)
 target_include_directories(telemetry-pipe-client PRIVATE ../telemetry-plugin/src)
@@ -38,6 +64,5 @@ if(BUILD_TESTING)
   target_compile_options(telemetry-client-test PRIVATE /W4 /WX /EHsc)
   target_link_libraries(telemetry-client-test PRIVATE advapi32 bcrypt)
   set_target_properties(telemetry-client-test PROPERTIES OUTPUT_NAME eurotrucks2 RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/test-fixture")
-  add_test(NAME native-pipe-client COMMAND telemetry-client-test $<TARGET_FILE:telemetry-pipe-client> "${CMAKE_CURRENT_SOURCE_DIR}/../../tests/fixtures/protocol-v0")
-  set_tests_properties(native-pipe-client PROPERTIES TIMEOUT 60)
+  add_client_test_cases(native-pipe-client telemetry-client-test telemetry-pipe-client 1)
 endif()

@@ -100,6 +100,18 @@ void controlled_token_owner_test(const fs::path& base, const Identity& identity)
   } catch (...) {require(RevertToSelf() != 0); throw;}
   require(RevertToSelf() != 0); std::cout << "controlled duplicate TokenOwner mismatch: implicit owner rejected, explicit TokenUser owner and strict DACL passed\n";
 }
+// Hang detection for the fixture's own waits (child exit, frame reads, host connect). Several cases
+// wait out the broker's fixed 5 s frame deadline or the host's 5.5 s quiet window, so these bounds need
+// real slack above those product timings on a loaded host. The former 5-6 s bounds left 0-1 s and
+// failed under CPU contention although the broker exited correctly. Product timing is asserted
+// separately where it matters (quiet: alive after 5.5 s, prompt EOF exit; partial frames: exit after
+// the 5 s deadline, measured).
+constexpr DWORD fixtureWaitMs = 15000;
+// The broker also exits (code 3) when the host process exits. In cases that prove a broker deadline or
+// prompt EOF cancellation, the host therefore outlives every fixture bound by a wide margin, so a
+// regression that removes the deadline or the cancellation cannot pass by riding on host exit. The host
+// still returns as soon as the broker exits, so passing runs are not slower.
+constexpr DWORD hostHoldMs = 3 * fixtureWaitMs;
 struct Child {
   Handle process, input, output, error; DWORD pid = 0;
   Child(const std::wstring& executable, const std::wstring& arguments, bool captureError = false) {
@@ -115,7 +127,7 @@ struct Child {
     process.value = information.hProcess; pid = information.dwProcessId; CloseHandle(information.hThread);
   }
   void eof() {if (input.value != INVALID_HANDLE_VALUE) {CloseHandle(input.value); input.value = INVALID_HANDLE_VALUE;}}
-  DWORD wait() {require(WaitForSingleObject(process.value, 6000) == WAIT_OBJECT_0); DWORD code = 0; require(GetExitCodeProcess(process.value, &code) != 0); return code;}
+  DWORD wait() {require(WaitForSingleObject(process.value, fixtureWaitMs) == WAIT_OBJECT_0); DWORD code = 0; require(GetExitCodeProcess(process.value, &code) != 0); return code;}
   // Reads the captured stderr after exit; the bound matches the service's diagnostic tail.
   std::string diagnostic() {
     std::string text; char buffer[512]; DWORD read = 0;
@@ -129,14 +141,35 @@ struct Child {
   }
 };
 std::string read_frame(HANDLE pipe) {
-  unsigned char prefix[4]; stdio_io(pipe, prefix, 4, false); const auto length = frame_length(prefix); require(length > 0 && length <= 65536);
-  std::string bytes(length, '\0'); stdio_io(pipe, bytes.data(), length, false); return bytes;
+  unsigned char prefix[4]; stdio_io(pipe, prefix, 4, false, fixtureWaitMs); const auto length = frame_length(prefix); require(length > 0 && length <= 65536);
+  std::string bytes(length, '\0'); stdio_io(pipe, bytes.data(), length, false, fixtureWaitMs); return bytes;
 }
 void write_file(const fs::path& filename, const Json& value, const Identity& identity) {
   OwnerSecurity security(identity); Handle file(CreateFileW(filename.c_str(), GENERIC_WRITE, 0, &security.attributes, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr));
   auto encoded = v0::detail::serialize(value); DWORD written = 0; require(WriteFile(file.value, encoded.data(), static_cast<DWORD>(encoded.size()), &written, nullptr) && written == encoded.size());
 }
 std::string file_bytes(const fs::path& filename) {std::ifstream input(filename, std::ios::binary); return std::string(std::istreambuf_iterator<char>(input), {});}
+// Every case in run order. CMakeLists.txt registers one CTest entry per name, selected through
+// ETS2TELEMETRY_CLIENT_TEST_CASE; its --verify-cases entry fails when the two lists diverge.
+const char* const discoveryCases[] = {"retired-record", "delete-pending-record", "denied-record", "zero-record", "short-record", "directory-record", "reparse-record"};
+const char* const hostCases[] = {"valid", "creation", "dead", "stale-live", "dead-live", "collision", "session", "malformed", "dacl", "payload-break", "bad-length", "invalid-credit", "quiet", "quiet-exit", "partial-prefix", "partial-payload"};
+const char* const captureCases[] = {"capture", "capture-v0-hello", "capture-bad-arguments"};
+const char* const policyCases[] = {"policy-prune", "policy-cap", "policy-duplicate", "policy-case-duplicate", "policy-junction"};
+const char* const contentionCases[] = {"policy-lock-busy", "policy-lock-pending", "policy-publish-busy", "image-busy"};
+std::string case_list() {
+  std::string joined;
+  auto add = [&](const auto& names) {for (const auto* name : names) joined += (joined.empty() ? "" : ",") + std::string(name);};
+  add(discoveryCases); add(hostCases); add(captureCases); add(policyCases); add(contentionCases);
+  return joined + ",policy-readonly";
+}
+unsigned casesRun = 0;
+// Reports each case's wall time on stderr (unbuffered), so a slow case is visible even when CTest
+// kills the process at its timeout.
+struct CaseTimer {
+  std::string name; ULONGLONG started = GetTickCount64();
+  explicit CaseTimer(std::string value) : name(std::move(value)) {++casesRun; std::cerr << "case " << name << "\n";}
+  ~CaseTimer() {std::cerr << "case " << name << " ms=" << GetTickCount64() - started << "\n";}
+};
 std::string discoveryCase;
 std::optional<Handle> pendingRecord;
 void discovery_before_open(const fs::path& filename) {
@@ -184,7 +217,7 @@ int host(const fs::path& directory, const fs::path& fixtures, const std::string&
   Credits cancellation;
   test_trace("host-monitor");
   HANDLE waits[] = {connected.value, cancellation.cancelled.value};
-  if (WaitForMultipleObjects(2, waits, FALSE, 5000) != WAIT_OBJECT_0) {test_trace("host-no-client"); CancelIoEx(pipe.value, &operation); DWORD ignored = 0; GetOverlappedResult(pipe.value, &operation, &ignored, TRUE); return 0;}
+  if (WaitForMultipleObjects(2, waits, FALSE, fixtureWaitMs) != WAIT_OBJECT_0) {test_trace("host-no-client"); CancelIoEx(pipe.value, &operation); DWORD ignored = 0; GetOverlappedResult(pipe.value, &operation, &ignored, TRUE); return 0;}
   test_trace("host-connected");
   ULONG clientPid = 0; require(GetNamedPipeClientProcessId(pipe.value, &clientPid) && clientPid != 0); Handle client(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, clientPid)); Identity peer(client.value); require(peer.sid == self.sid && peer.session == self.session);
   auto policy = secure_file(directory / "service-policy.json", self); const auto policyJson = parse(read_bounded(policy.value, 16384)); auto peerImage = image(client.value); const auto peerPath = utf8(final_path(peerImage.value));
@@ -197,7 +230,7 @@ int host(const fs::path& directory, const fs::path& fixtures, const std::string&
     if (mode == "bad-length") std::fill(incomplete, incomplete + 4, static_cast<unsigned char>(0));
     const DWORD count = mode == "partial-prefix" ? 1 : mode == "bad-length" ? 4 : 5;
     pipe_io(pipe.value, client.value, incomplete, count, true);
-    if (mode != "payload-break") WaitForSingleObject(client.value, 10000);
+    if (mode != "payload-break") WaitForSingleObject(client.value, mode == "bad-length" ? 10000 : hostHoldMs);
     return 0;
   }
   for (const auto* filename : {"welcome.json", "checkpoint.json"}) {
@@ -207,7 +240,7 @@ int host(const fs::path& directory, const fs::path& fixtures, const std::string&
     pipe_io(pipe.value, client.value, const_cast<unsigned char*>(frame.data()), static_cast<DWORD>(frame.size()), true);
   }
   // Remain connected until the owned client exits or cancels while waiting for the next frame.
-  WaitForSingleObject(client.value, mode == "quiet-exit" ? 5500 : 10000); return 0;
+  WaitForSingleObject(client.value, mode == "quiet-exit" ? 5500 : mode == "quiet" ? hostHoldMs : 10000); return 0;
 }
 // CAP0 capture host: publishes the same v0 discovery record but serves only the separate capture endpoint.
 int capture_host(const fs::path& directory, const std::string& mode) {
@@ -221,7 +254,7 @@ int capture_host(const fs::path& directory, const std::string& mode) {
   Handle connected(CreateEventW(nullptr, TRUE, FALSE, nullptr)); OVERLAPPED operation{}; operation.hEvent = connected.value;
   const auto success = ConnectNamedPipe(pipe.value, &operation); const auto error = success ? ERROR_SUCCESS : GetLastError();
   if (error == ERROR_PIPE_CONNECTED) SetEvent(connected.value); else if (error != ERROR_IO_PENDING && error != ERROR_SUCCESS) fail();
-  if (WaitForSingleObject(connected.value, 5000) != WAIT_OBJECT_0) {CancelIoEx(pipe.value, &operation); DWORD ignored = 0; GetOverlappedResult(pipe.value, &operation, &ignored, TRUE); return mode == "capture-v0-hello" ? 0 : 1;}
+  if (WaitForSingleObject(connected.value, fixtureWaitMs) != WAIT_OBJECT_0) {CancelIoEx(pipe.value, &operation); DWORD ignored = 0; GetOverlappedResult(pipe.value, &operation, &ignored, TRUE); return mode == "capture-v0-hello" ? 0 : 1;}
   ULONG clientPid = 0; require(GetNamedPipeClientProcessId(pipe.value, &clientPid) && clientPid != 0); Handle client(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, clientPid));
   // The broker must reject a v0 hello locally; nothing reaches the capture endpoint.
   if (mode == "capture-v0-hello") {WaitForSingleObject(client.value, 10000); return 0;}
@@ -241,16 +274,23 @@ int wmain(int argc, wchar_t** argv) {
     }
     if (argc == 5 && std::wstring(argv[1]) == L"--host") return host(argv[2], argv[3], utf8(argv[4]));
     if (argc == 4 && std::wstring(argv[1]) == L"--capture-host") return capture_host(argv[2], utf8(argv[3]));
+    if (argc == 3 && std::wstring(argv[1]) == L"--verify-cases") {
+      const auto registered = utf8(argv[2]), actual = case_list();
+      if (registered != actual) {std::cerr << "registered CTest cases differ from the fixture\nregistered " << registered << "\nfixture    " << actual << "\n"; return 1;}
+      std::cout << "all " << std::count(actual.begin(), actual.end(), ',') + 1 << " fixture cases are registered\n"; return 0;
+    }
     require(argc == 3); const auto broker = std::wstring(argv[1]); const fs::path fixtures(argv[2]);
     descriptor_owner_test(Identity(GetCurrentProcess()));
-    wchar_t temporary[MAX_PATH]; require(GetTempPathW(MAX_PATH, temporary) != 0); const auto base = fs::path(temporary) / (L"ets2telemetry-client-test-" + std::to_wstring(GetCurrentProcessId()));
+    wchar_t temporary[MAX_PATH]; require(GetTempPathW(MAX_PATH, temporary) != 0); // PID plus creation time: a PID alone is reused, and a directory left by a killed run (for example at a
+    // CTest timeout) would then fail the exists check of an unrelated later run.
+    const auto base = fs::path(temporary) / (L"ets2telemetry-client-test-" + std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(creation(GetCurrentProcess())));
     require(!fs::exists(base)); fs::create_directory(base); TestDirectoryCleanup cleanup{base}; Identity identity(GetCurrentProcess()); OwnerSecurity security(identity);
     controlled_token_owner_test(base, identity);
     wchar_t selfName[32768]; const auto selfLength = GetModuleFileNameW(nullptr, selfName, 32768); require(selfLength > 0); const std::wstring self(selfName, selfLength);
     wchar_t filterBuffer[128]{}; const auto filterSize = GetEnvironmentVariableW(L"ETS2TELEMETRY_CLIENT_TEST_CASE", filterBuffer, 128); require(filterSize < 128); const auto filter = filterSize ? utf8(filterBuffer) : std::string();
-    for (const auto* mode : {"retired-record", "delete-pending-record", "denied-record", "zero-record", "short-record", "directory-record", "reparse-record"}) {
+    for (const auto* mode : discoveryCases) {
       if (!filter.empty() && filter != mode) continue;
-      std::cerr << "case " << mode << "\n";
+      CaseTimer timer(mode);
       const auto directory = base / wide(mode) / "transport" / "v0"; fs::create_directory(directory.parent_path().parent_path());
       require(CreateDirectoryW(directory.parent_path().c_str(), &security.attributes)); require(CreateDirectoryW(directory.c_str(), &security.attributes));
       const std::string instance = "00112233-4455-6677-8899-aabbccddeeff";
@@ -277,9 +317,9 @@ int wmain(int argc, wchar_t** argv) {
       DWORD available = 0; const auto peeked = PeekNamedPipe(client.output.value, nullptr, 0, nullptr, &available, nullptr); require((peeked || GetLastError() == ERROR_BROKEN_PIPE) && available == 0);
       if (permissionRestore) require(permissionRestore->restore());
     }
-    for (const auto* mode : {"valid", "creation", "dead", "stale-live", "dead-live", "collision", "session", "malformed", "dacl", "payload-break", "bad-length", "invalid-credit", "quiet", "quiet-exit", "partial-prefix", "partial-payload"}) {
+    for (const auto* mode : hostCases) {
       if (!filter.empty() && filter != mode) continue;
-      std::cerr << "case " << mode << "\n";
+      CaseTimer timer(mode);
       const auto directory = base / wide(mode) / "transport" / "v0"; fs::create_directory(directory.parent_path().parent_path());
       require(CreateDirectoryW(directory.parent_path().c_str(), &security.attributes)); require(CreateDirectoryW(directory.c_str(), &security.attributes));
       Child server(self, L"--host \"" + directory.wstring() + L"\" \"" + fixtures.wstring() + L"\" " + wide(mode));
@@ -293,23 +333,33 @@ int wmain(int argc, wchar_t** argv) {
       std::cerr << "authority received\n";
       auto hello = v0::encode_frame(v0::decode_payload(file_bytes(fixtures / "hello.json"))); stdio_io(client.input.value, hello.data(), static_cast<DWORD>(hello.size()), true);
       if (scenario == "invalid-credit") {unsigned char invalid = 2; stdio_io(client.input.value, &invalid, 1, true); require(client.wait() == 1); server.eof(); require(server.wait() == 0); continue;}
+      // Taken before the credit write: the broker's partial-frame deadline starts only after it receives
+      // this credit, so a correct broker measures at least 5 s here however this thread is scheduled.
+      const auto creditSent = GetTickCount64();
       unsigned char credit = 1; stdio_io(client.input.value, &credit, 1, true);
-      if (scenario == "payload-break" || scenario == "partial-prefix" || scenario == "partial-payload" || scenario == "bad-length") {require(client.wait() == (scenario == "bad-length" ? 1u : 3u)); require(server.wait() == 0); continue;}
+      if (scenario == "partial-prefix" || scenario == "partial-payload") {
+        // The broker's own 5 s partial-frame deadline must end the relay: not early, and long before the
+        // held host would exit.
+        require(client.wait() == 3); const auto elapsed = GetTickCount64() - creditSent;
+        std::cerr << "partial-frame exit after " << elapsed << " ms\n"; require(elapsed >= 4500 && elapsed < 12000);
+        require(server.wait() == 0); continue;
+      }
+      if (scenario == "payload-break" || scenario == "bad-length") {require(client.wait() == (scenario == "bad-length" ? 1u : 3u)); require(server.wait() == 0); continue;}
       auto welcome = v0::decode_payload(read_frame(client.output.value)); require(welcome.kind == "welcome");
       Sleep(100); DWORD available = 0; require(PeekNamedPipe(client.output.value, nullptr, 0, nullptr, &available, nullptr) && available == 0);
       stdio_io(client.input.value, &credit, 1, true); auto checkpoint = v0::decode_payload(read_frame(client.output.value)); v0::Consumer consumer(false); consumer.accept(welcome); require(consumer.accept(checkpoint)->hydration);
       if (scenario == "quiet" || scenario == "quiet-exit") {
         stdio_io(client.input.value, &credit, 1, true);
-        if (scenario == "quiet") {require(WaitForSingleObject(client.process.value, 5500) == WAIT_TIMEOUT); const auto started = GetTickCount64(); client.eof(); require(client.wait() == 3 && GetTickCount64() - started < 2000);}
+        if (scenario == "quiet") {require(WaitForSingleObject(client.process.value, 5500) == WAIT_TIMEOUT); const auto started = GetTickCount64(); client.eof(); require(client.wait() == 3 && GetTickCount64() - started < 4000);} // EOF cancels promptly: well below every 5 s broker deadline.
         else require(client.wait() == 3);
         require(server.wait() == 0); continue;
       }
       client.eof(); require(client.wait() == 3); require(server.wait() == 0);
     }
     // CAP0 broker mode: same authority checks, separate keyed endpoint, marked receipt and CAP0-only hello.
-    for (const auto* mode : {"capture", "capture-v0-hello", "capture-bad-arguments"}) {
+    for (const auto* mode : captureCases) {
       if (!filter.empty() && filter != mode) continue;
-      std::cerr << "case " << mode << "\n";
+      CaseTimer timer(mode);
       const auto directory = base / wide(mode) / "transport" / "v0"; fs::create_directory(directory.parent_path().parent_path());
       require(CreateDirectoryW(directory.parent_path().c_str(), &security.attributes)); require(CreateDirectoryW(directory.c_str(), &security.attributes));
       const std::string scenario(mode);
@@ -335,9 +385,9 @@ int wmain(int argc, wchar_t** argv) {
       client.eof(); require(client.wait() == 3); require(server.wait() == 0);
       std::cerr << "capture relay passed\n";
     }
-    for (const auto* mode : {"policy-prune", "policy-cap", "policy-duplicate", "policy-case-duplicate", "policy-junction"}) {
+    for (const auto* mode : policyCases) {
       if (!filter.empty() && filter != mode) continue;
-      std::cerr << "case " << mode << "\n";
+      CaseTimer timer(mode);
       const auto directory = base / wide(mode) / "transport" / "v0"; fs::create_directory(directory.parent_path().parent_path());
       require(CreateDirectoryW(directory.parent_path().c_str(), &security.attributes)); require(CreateDirectoryW(directory.c_str(), &security.attributes));
       Json::Array entries;
@@ -370,9 +420,9 @@ int wmain(int argc, wchar_t** argv) {
         require(!provably_missing_image(utf8(final_path(own.value))) && !provably_missing_image("\\\\?\\UNC\\unverified-server\\share\\broker.exe"));
       } else {client.eof(); require(client.wait() == 1); require(file_bytes(directory / "service-policy.json") == v0::detail::serialize(policy));}
     }
-    for (const auto* mode : {"policy-lock-busy", "policy-lock-pending", "policy-publish-busy", "image-busy"}) {
+    for (const auto* mode : contentionCases) {
       if (!filter.empty() && filter != mode) continue;
-      std::cerr << "case " << mode << "\n";
+      CaseTimer timer(mode);
       const std::string scenario(mode);
       const auto directory = base / wide(mode) / "transport" / "v0"; fs::create_directory(directory.parent_path().parent_path());
       require(CreateDirectoryW(directory.parent_path().c_str(), &security.attributes)); require(CreateDirectoryW(directory.c_str(), &security.attributes));
@@ -426,7 +476,7 @@ int wmain(int argc, wchar_t** argv) {
     }
     if (filter.empty() || filter == "policy-readonly") {
       // A read-only policy also blocks replacement with ACCESS_DENIED, but never clears: it stays a hard rejection.
-      std::cerr << "case policy-readonly\n";
+      CaseTimer timer("policy-readonly");
       const auto directory = base / L"policy-readonly" / "transport" / "v0"; fs::create_directory(directory.parent_path().parent_path());
       require(CreateDirectoryW(directory.parent_path().c_str(), &security.attributes)); require(CreateDirectoryW(directory.c_str(), &security.attributes));
       const auto policyPath = directory / "service-policy.json"; auto own = image(GetCurrentProcess());
@@ -438,6 +488,8 @@ int wmain(int argc, wchar_t** argv) {
       require(code == 1 && std::regex_search(diagnostic, std::regex("(^|\n)diag1 policy-publish 5 [0-9]{1,10} [a-z-]{1,24} [0-9]{1,10}\n$")) && file_bytes(policyPath) == before);
       for (const auto& entry : fs::directory_iterator(directory)) require(entry.path().extension() != L".tmp");
     }
+    // A filter naming no case would otherwise pass without testing anything.
+    if (!filter.empty() && casesRun != 1) {std::cerr << "case filter " << filter << " matched " << casesRun << " cases\n"; return 1;}
     fs::remove_all(base); std::cout << "native authority, stale lifetime filtering, hard security rejection, retryable owned-file contention, bounded partial frames, quiet-source and EOF cancellation passed\n"; return 0;
   } catch (const std::exception& error) {std::cerr << (argc == 5 ? "host: " : "controller: ") << error.what() << "\n"; return 1;}
 }
