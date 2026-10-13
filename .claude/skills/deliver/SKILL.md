@@ -31,14 +31,15 @@ Talk to the owner in Russian. Write plans, commits, PR text and repository files
    - The run key is the ID in lowercase.
 3. Without an ID:
    - The task text is the brief, and the ID is `NO-CARD`. The PR must explain why there is no card.
-   - The run key is a short lowercase hyphenated summary of the task.
+   - The run key is `nc-` followed by the first six words of the task text, lowercased, with every run of non-alphanumeric characters replaced by one hyphen. For example, `fix the overlay unit label for ATS` becomes `nc-fix-the-overlay-unit-label-for`.
 4. `--review-plan` in the arguments means: always stop after planning for the owner's approval.
 5. The run directory is `.local/deliver/<run key>/` in the repository root. `.local/` is ignored by Git.
-6. If `state.md` already exists there, this is a resume. Read it. Then verify the recorded branch, HEAD, worktree and PR against Git and GitHub; the recorded values alone are not proof. Continue from the recorded step. Agent IDs from an earlier session are gone. Start fresh agents, and give them the plan, the state and the current diff.
+6. If no `state.md` exists for this key, also scan `.local/deliver/*/state.md` for an unfinished run with the same brief. If one exists, ask the owner whether to resume it.
+7. If `state.md` already exists there, this is a resume. Read it. Then verify the recorded branch, HEAD, worktree and PR against Git and GitHub; the recorded values alone are not proof. Continue from the recorded step. Agent IDs from an earlier session are gone. Start fresh agents, and give them the plan, the state and the current diff.
 
 ## 2. Prepare the base
 
-1. In the repository root, inspect `git status`, `git worktree list` and `gh pr list --state open`. Run `gh` and `git push` outside the sandbox, because their credentials live in the Windows keyring. Preserve unrelated local work. If an open PR or worktree obviously belongs to this task, report it and continue there only with the owner's agreement.
+1. In the repository root, inspect `git status`, `git worktree list` and `gh pr list --state open`. Run `gh` and every authenticated Git remote operation (`git fetch`, `git ls-remote`, `git push`) outside the sandbox, because their credentials live in the Windows keyring. Preserve unrelated local work. If an open PR or worktree obviously belongs to this task, report it and continue there only with the owner's agreement.
 2. Run `git fetch origin` and record the SHA of `origin/main` as the base commit. Do not switch the branch of the root checkout.
 3. Resolve the toolchain:
    - Use `node --version` (must be 24.19.0) and `cmake --version` if they work.
@@ -52,7 +53,8 @@ Talk to the owner in Russian. Write plans, commits, PR text and repository files
 
 1. Run the `architect` agent with the brief, the acceptance criteria, the repository root and the base commit.
 2. Save its plan as `plan.md` in the run directory.
-3. Stop and show the plan to the owner when any of these holds:
+3. Confirm that the root checkout's HEAD and `git status` are unchanged by the architect.
+4. Stop and show the plan to the owner when any of these holds:
    - Scope is not `OK`.
    - The plan lists open questions.
    - `--review-plan` was given.

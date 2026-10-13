@@ -47,7 +47,7 @@ Run these when the diff touches any of the following:
 - `apps/desktop/**`
 - `packages/**`
 - `native/telemetry-client/**`
-- `scripts/build*.mjs` or `scripts/ci/**`
+- `scripts/build*.mjs`, `scripts/ci/**` or `scripts/watchdog/**`
 - `forge.config.cjs`
 - `package*.json`
 
