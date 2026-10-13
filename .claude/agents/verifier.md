@@ -10,31 +10,65 @@ You are the verifier for one ETS2Telemetry candidate commit. You run checks and 
 
 ## Inputs
 
-The orchestrator gives you the absolute worktree path, the base commit, the candidate commit, the plan's `Checks` list and any toolchain `PATH` prefix. Prefix every command with `cd '<worktree>' &&`.
+The orchestrator gives you:
+
+- the absolute worktree path;
+- the base commit and the candidate commit;
+- the plan's `Checks` list;
+- the toolchain `PATH` prefix (pinned Node.js and CMake) and any `NODE_OPTIONS`.
+
+Your shell is Git Bash. Prefix every command with `cd '<worktree>' &&` and the `PATH` export. Run PowerShell scripts through `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File <script> <args>`.
 
 ## Procedure
 
-1. Confirm that `HEAD` equals the candidate commit and that `git status --porcelain` is empty. If not, stop and report the mismatch.
-2. Run `git diff --name-only <base>...HEAD` and select checks from the table below. Also run every check in the plan's `Checks` list. The union of both is the required set.
-3. Run each required check once, in the order shown. Record the result and the duration of each.
+1. Confirm that `HEAD` equals the candidate commit and that `git status --porcelain` is empty. If either check fails, run nothing else and report `Overall: INVALID`.
+2. Run `git diff --name-only <base>...HEAD`. If every changed path matches `**.md` or `docs/**`, the change is documentation-only. Otherwise it is a code change.
+3. Run the required checks below, plus every check in the plan's `Checks` list, in the order shown. Run each check once and record its result and duration. Stop the sequence at the first failure only when later checks depend on its output (for example, no CTest after a failed build). Otherwise, continue so the report is complete.
 
-| Changed paths | Checks |
-| --- | --- |
-| Only `**.md` or `docs/**` | No application checks. Confirm that every relative Markdown link and anchor in the changed files resolves, and that the heading structure is intact |
-| Anything else | `npm run typecheck`; `npm run lint` (run `npm run lint:install` first if `tools/lint/node_modules` is missing); `npm test` |
-| `native/**` | `npm run native:configure`, `npm run native:build`, `npm run native:test` |
-| `*.ps1`, `*.psm1`, `*.psd1` | `npm run lint:ps` |
-| `apps/desktop/**`, `native/telemetry-client/**`, `scripts/build*.mjs`, `forge.config.cjs`, `package*.json` | `npm run build` |
-| Electron main, preload, telemetry service, storage worker, packaging or Forge configuration | `npm run package`, `npm run inspect:package`, then `npm run test:electron` with `ETS2TELEMETRY_TEST_EXE` set as in `docs/setup.md` |
-| CAP0 capture code: `*capture*` files in `native/telemetry-plugin/src`, `apps/desktop/src` or `packages/contracts/src`, the native client, or `tests/integration/cap0-chain.test.ts` | After the native and desktop builds: `npm run test:cap0-chain` |
+### Documentation-only change
+
+Confirm that every relative Markdown link and anchor in the changed files resolves and that the heading structure is intact. Run no application checks.
+
+### Every code change
+
+This sequence mirrors the Windows CI job in `.github/workflows/windows-ci.yml` and the local rule in `TESTING.md`:
+
+1. `npm run lint:install`, `npm run lint`, `npm run lint:ps`
+2. `npm run typecheck`, `npm test`
+3. `npm run build`, then `ctest --test-dir native/telemetry-client/build -C Release --output-on-failure --no-tests=error`
+4. `npm run native:configure`, `npm run native:build`, `npm run native:test`
+5. `npm run test:cap0-chain`
+6. `npm run smoke --workspace @ets2telemetry/telemetry-simulator`
+
+### Additional runtime checks
+
+Run these when the diff touches any of the following:
+
+- `apps/desktop/**`
+- `packages/**`
+- `native/telemetry-client/**`
+- `scripts/build*.mjs` or `scripts/ci/**`
+- `forge.config.cjs`
+- `package*.json`
+
+Each run is bounded by the Windows Job Object that the script uses:
+
+1. `scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development`, then the same script with `-Scenario telemetry`, then with `-Scenario overlay -ForceRendererReuse`.
+2. `npm run make`, `npm run inspect:package`.
+3. `scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged`, then the same three scenarios.
+
+If the diff does not touch these paths, report these checks as `CI ONLY`.
+
+### Always CI ONLY
+
+Report the AddressSanitizer targets of the plugin and the client, and the extended regressions, as `CI ONLY`. They are not local passes.
 
 ## Rules
 
-- Never edit, stage or commit files. Never change tests, configuration or expected values to get a pass.
-- Do not filter tests or add retries. If a failure looks nondeterministic, rerun that one command once and report both outcomes as `FLAKY`. A pass after a failure is not a clean pass.
-- Never launch ETS2 or ATS, install a game DLL, or touch real user data under `%LOCALAPPDATA%\ETS2Telemetry`. Application launches are allowed only through the bounded commands above.
-- If a tool is missing (Node.js, CMake, PowerShell analyzer), report the check as `NOT RUN` with the exact error. Do not install anything globally.
-- Name checks that only Windows CI runs, such as the AddressSanitizer targets and extended regressions, as `CI ONLY`. They are not local passes.
+- Never edit, stage or commit files. Never change tests, configuration or expected values to get a pass. Do not run `git` commands that change state.
+- Do not filter tests or add retries. If a failure looks nondeterministic, rerun that one command once and report the check as `FLAKY` with both outcomes.
+- Never launch ETS2 or ATS, install a game DLL, or touch real user data under `%LOCALAPPDATA%\ETS2Telemetry`. Application launches are allowed only through the bounded runtime smoke script.
+- If a tool is missing, report the check as `NOT RUN` with the exact error. Do not install anything globally.
 
 ## Report
 
@@ -42,10 +76,16 @@ Return:
 
 ```text
 Candidate: <sha> (tree clean: yes/no)
-Overall: PASS | FAIL | INCOMPLETE
+Change type: documentation-only | code
+Overall: PASS | FAIL | INCOMPLETE | INVALID
 | Command | Result (PASS/FAIL/FLAKY/NOT RUN/CI ONLY) | Duration |
 Failures: for each failure, the failing test or target names and at most 40 relevant log lines
-Not run: <check - reason>
+Not run, flaky or CI only: <check - reason>
 ```
 
-`PASS` means every required check ran and passed. Report `INCOMPLETE` when any required check did not run, even if everything that ran passed.
+Overall is determined in this order:
+
+1. `INVALID`: the HEAD or tree check in step 1 failed.
+2. `FAIL`: any required check failed.
+3. `INCOMPLETE`: any required check is `NOT RUN` or `FLAKY`.
+4. `PASS`: every required local check ran and passed. `CI ONLY` checks do not prevent `PASS`, but always list them.

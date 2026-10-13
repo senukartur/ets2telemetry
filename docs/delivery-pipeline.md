@@ -8,13 +8,15 @@ This is a Claude Code workflow. Codex does not read these files. The optional [c
 
 | File | Role | Tools |
 | --- | --- | --- |
-| [`.claude/agents/architect.md`](../.claude/agents/architect.md) | Checks scope against owner decisions and writes a plan: branch, owned files, design, tests, checks and remaining verification | Read-only, plus web lookup of primary sources |
-| [`.claude/agents/implementer.md`](../.claude/agents/implementer.md) | Implements the plan with tests in an assigned worktree; commits locally | Read, edit and shell; no push, PR or Trello access |
-| [`.claude/agents/verifier.md`](../.claude/agents/verifier.md) | Selects checks from the diff, runs each once, and returns a compact `PASS`/`FAIL`/`INCOMPLETE` report | Shell and read; no edits |
-| [`.claude/agents/reviewer.md`](../.claude/agents/reviewer.md) | Reviews the candidate diff independently and returns verified findings by severity | Read-only |
+| [`.claude/agents/architect.md`](../.claude/agents/architect.md) | Checks scope against owner decisions and writes a plan: branch, owned files, design, tests, checks and remaining verification | Read, search, shell and web lookup; no edit tools |
+| [`.claude/agents/implementer.md`](../.claude/agents/implementer.md) | Implements the plan with tests in an assigned worktree; commits locally | Read, edit and shell; no Trello or agent tools |
+| [`.claude/agents/verifier.md`](../.claude/agents/verifier.md) | Runs the local equivalent of the Windows CI job (runtime smokes when desktop, packaging or client paths change), runs each check once, and returns a compact `PASS`/`FAIL`/`INCOMPLETE`/`INVALID` report | Shell and read; no edit tools |
+| [`.claude/agents/reviewer.md`](../.claude/agents/reviewer.md) | Reviews the candidate diff independently and returns verified findings by severity | Read, search, shell and web lookup; no edit tools |
 | [`.claude/skills/deliver/SKILL.md`](../.claude/skills/deliver/SKILL.md) | The `/deliver` orchestration steps that the main session follows | The main session's tools |
 
 None of the agents can start further agents. The main session is the only orchestrator.
+
+Tool lists remove the edit tools from the architect, verifier and reviewer. All four agents keep `Bash`, so their remaining limits (no Git state changes, no push, no PR or Trello writes, no game or user-data access) are instructions, not enforcement. The orchestrator compensates by checking the worktree HEAD and status after every agent and by owning every push and PR action.
 
 ## Usage
 
@@ -30,14 +32,30 @@ A card or package ID makes the orchestrator read that Trello card read-only. Fre
 
 ## Flow and limits
 
-1. **Plan:** the architect returns a plan. It is saved to `.local/deliver/<slug>/plan.md`.
-2. **Worktree:** the orchestrator creates `.local/worktrees/<slug>` on a new task branch from `origin/main`. It installs dependencies only for code changes.
-3. **Implement:** the implementer commits on the task branch. The orchestrator checks the commits and diff itself.
-4. **Verify:** the verifier runs the checks. On failure, the same implementer gets the excerpts. The limit is 2 fix rounds.
-5. **Review:** a fresh reviewer examines the diff. The orchestrator accepts or rejects each finding with evidence. Accepted fixes are verified again. The limit is 2 review rounds.
-6. **Publish:** the orchestrator pushes, opens a draft PR from the template and dispatches Windows CI once for code changes, without polling it.
+1. **Plan:**
+   - Run state starts in `.local/deliver/<run key>/state.md`; the run key is the card ID or a short task summary.
+   - The architect returns a plan, saved next to the state as `plan.md`.
+2. **Worktree:**
+   - The orchestrator checks that the planned branch and PR do not exist yet.
+   - It creates `.local/worktrees/<slug>` on a new branch from `origin/main`.
+   - It installs dependencies only for code changes.
+3. **Implement:**
+   - The implementer commits on the task branch.
+   - The orchestrator checks the commits and the diff itself.
+4. **Verify:**
+   - The verifier runs the checks.
+   - On failure, the implementer gets the excerpts.
+   - `INVALID` (unexpected HEAD or tree state) stops the run.
+5. **Review:**
+   - A fresh reviewer examines the diff.
+   - The orchestrator accepts or rejects each finding with evidence.
+   - Every fix, including a minor one, goes through verification again and a review pass over the fix delta.
+6. **Publish:**
+   - Only the commit that was last verified and reviewed is pushed.
+   - The orchestrator opens a draft PR from the template.
+   - For code changes, it dispatches Windows CI once and records the matching run link, without waiting for the result.
 
-Run state is kept in `.local/deliver/<slug>/state.md`, so an interrupted run can be resumed. The run stops for the owner when a limit is reached or a step would need a game launch, real user data, credentials or a destructive Git operation.
+The run has a budget of 2 fix rounds in total, shared by verifier failures and review fixes, and at most 2 review passes. Starting `/deliver` again with the same task resumes from `state.md`. The recorded branch, HEAD and PR are first re-verified against Git and GitHub, and fresh agents are started. The run stops for the owner when a limit is reached or a step would need a game launch, real user data, credentials or a destructive Git operation.
 
 ## What it does not establish
 

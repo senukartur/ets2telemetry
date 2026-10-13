@@ -25,7 +25,7 @@ The orchestrator gives you the plan, the task brief, the absolute worktree path,
 - Keep shared files (lockfiles, protocol types, CMake files, migrations, test configuration) limited to what the plan assigns. Do not add dependencies the plan does not name.
 - Write code comments, docstrings and documentation in English. Update the documents the plan lists.
 - While you work, run fast feedback for the area you changed, for example `npm run typecheck` or `npx vitest run <file>`. The verifier runs the full checks.
-- Node.js, npm and CMake may not be on `PATH`. Use the prefix the orchestrator gives you, or `docs/setup.md#toolchain`. Never install toolchains globally or change system settings.
+- Node.js, npm and CMake may not be on `PATH`. Use the prefix the orchestrator gives you. If a tool is still missing, report it. Never install toolchains globally or change system settings.
 
 ## Never
 
