@@ -352,21 +352,20 @@ The outcome is decided only by the gameplay outcome event, never by the configur
 
 When a different job configuration, restart, discontinuity or gap closes the window without an outcome, that close is unattributable: the trip stays incomplete. Events inside a reported gap or loss interval are not attributed to any trip. They are kept and marked ambiguous.
 
-### Owner-session observations (not independently reviewed)
+### Owner-session observations (independently reviewed October 13, 2026)
 
-The following come from owner CAP-01 sessions. They are recorded locally and have not yet been independently reviewed or committed as fixtures. They are single samples: they establish that these orderings occur, not that they are guaranteed.
+The following come from owner CAP-01 sessions. An independent read-only reviewer verified them against the sanitized exports on October 13, 2026 (see the addendum in `docs/validation/cap-01a.md`, including ordering expectations O1–O9 with sample sizes). The exports are kept locally, not committed as fixtures. Samples are small (four deliveries, one cancellation): they establish that these orderings occur, not that they are guaranteed.
 
 - ATS single-player, run 4, October 13, 2026: four `red_signal` fines occurred before the job configuration appeared, and two fines occurred during the job.
 - ETS2 single-player, run 3, October 12, 2026: two of the five fines occurred before the job configuration appeared.
-- All four observed deliveries (single-player and TruckersMP): `simulation.paused` preceded `job.delivered`, which arrived while paused. On delivery, `job.delivered` arrived before the job configuration cleared.
-- ETS2 single-player, run 2, October 12, 2026: on delivery, `job.delivered` arrived before the configuration cleared.
+- All four observed deliveries (single-player and TruckersMP): `simulation.paused` preceded `job.delivered`, which arrived while paused. On delivery, `job.delivered` arrived before the job configuration cleared.
 - ETS2 single-player, run 3, October 12, 2026: on cancellation, the configuration cleared before `job.cancelled`.
 
 ET-014 implements this attribution and adds replay scenarios for each window boundary and both outcome orderings.
 
 ## Job, cargo, trailer and truck identity in trip records — October 13, 2026
 
-Owner CAP-01 sessions (not yet independently reviewed) show that the SDK provides per-job route, cargo and vehicle configuration. For example, run 4 in ATS reported:
+Owner CAP-01 sessions (independently reviewed October 13, 2026) show that the SDK provides per-job route, cargo and vehicle configuration. For example, run 4 in ATS reported:
 
 - source and destination city and company;
 - cargo id, mass, unit mass and unit count;
@@ -386,7 +385,7 @@ ET-013 and ET-014 own the schema and capture of these fields. Missing attributes
 
 The owner decided that every trip records its game mode, single-player or TruckersMP, because the mode is an important criterion for a trip. Convoy stays deferred, but the attribute must allow it to be added later. If the mode cannot be determined, record it as unknown; never default it to single-player.
 
-The SCS SDK does not report TruckersMP. In CAP-01 run 5 (ETS2 via TruckersMP, October 13, 2026; an owner session, not yet independently reviewed), the capture header was indistinguishable from single-player apart from the operator label.
+The SCS SDK does not report TruckersMP. In CAP-01 run 5 (ETS2 via TruckersMP, October 13, 2026; an owner session, independently reviewed October 13, 2026), the capture header was indistinguishable from single-player apart from the operator label.
 
 Candidate detection methods, in order of preference, still to be verified on real sessions before implementation:
 
@@ -398,7 +397,7 @@ The detected mode, its method and its confidence are trip evidence and travel th
 
 ## Sleep and unannounced game-time jumps — October 13, 2026
 
-SDK 1.15 has no sleep or rest gameplay event. In CAP-01 run 2 (ETS2 single-player, October 12, 2026) the owner slept, and the only trace was a forward game-time jump of about 595 game minutes within a few minutes of active simulation, with no lifecycle or gameplay event. ET-014 must treat a large forward game-time jump without a timer reset as a possible sleep or rest: keep it as an annotated discontinuity of game time, never fabricate samples or game-time intervals across it, and keep real-time accounting unaffected. Game-time-based durations (such as delivery time) must account for such jumps. The `rest.stop` channel and the `avoid_sleeping` fine are additional, unverified hints.
+SDK 1.15 has no sleep or rest gameplay event. In CAP-01 run 2 (ETS2 single-player, October 12, 2026) the owner slept, and the only trace was a forward game-time jump of about 595 game minutes within a few minutes of active simulation, with no lifecycle or gameplay event. ET-014 must treat a large forward game-time jump without a timer reset as a possible sleep or rest: keep it as an annotated discontinuity of game time, never fabricate samples or game-time intervals across it, and keep real-time accounting unaffected. Report game-time durations, such as delivery time, as the plain game-time span including the jump: this matches the game's own `delivery.time` (O4) and its lateness accounting (run 2 was 471 game minutes late across the sleep). Annotate the jump instead of subtracting it. The `rest.stop` channel and the `avoid_sleeping` fine are additional, unverified hints.
 
 ## Bus and car jobs deferred — October 13, 2026
 
