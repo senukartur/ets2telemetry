@@ -378,3 +378,17 @@ The owner decided that trip records keep this data, with two storage rules:
 - **Trailers have no readable name.** SDK 1.15 reports only the internal trailer model id and its body type. Display the body type, or a project-maintained id-to-name mapping; do not invent names. Keep unknown ids visible as ids.
 
 ET-013 and ET-014 own the schema and capture of these fields. Missing attributes remain unavailable, never empty strings or zero.
+
+## Game mode as a trip attribute — October 13, 2026
+
+The owner decided that every trip records its game mode, single-player or TruckersMP, because the mode is an important criterion for a trip. Convoy stays deferred, but the attribute must allow it to be added later. If the mode cannot be determined, record it as unknown; never default it to single-player.
+
+The SCS SDK does not report TruckersMP. In CAP-01 run 5 (ETS2 via TruckersMP, October 13, 2026; an owner session, not yet independently reviewed), the capture header was indistinguishable from single-player apart from the operator label.
+
+Candidate detection methods, in order of preference, still to be verified on real sessions before implementation:
+
+1. **Inside the plugin.** The plugin checks the game process's loaded-module list for the TruckersMP client module. This is an operating-system module enumeration, not a read of game memory, so the MVP exclusion of arbitrary game memory reads still holds. Record the exact module name only after it is observed in a real session. Inside SDK initialization the check is a single bounded call, with no retries or waiting. If the real-session check shows that TruckersMP may inject its module after plugin initialization, re-check from the plugin worker thread, never from an SDK callback, until a positive result or a bounded deadline. Finding the module is strong evidence of TruckersMP. Not finding it is weak evidence: the module may load later or be renamed. Such a result is recorded as single-player with low confidence and must never be presented as a confident single-player label.
+2. **From the application.** Check whether a TruckersMP client process is running. This is weaker, because a client left open during single-player would mislabel the trip.
+3. **Indirect signals,** such as the game version pinned by TruckersMP. These are hints only and must never decide the mode alone.
+
+The detected mode, its method and its confidence are trip evidence and travel through the protocol. Adding the mode to the wire contract belongs to protocol v1 (ET-002b); ET-014 stores the mode on the trip. Switching between single-player and TruckersMP requires restarting the game, which is already a session and plugin restart boundary in the attribution window. The mode is therefore determined per plugin session and is not expected to change within one. If a later re-check ever contradicts the recorded mode, keep both results as evidence and mark the trip mode ambiguous rather than rewriting it.
