@@ -331,21 +331,40 @@ The application must show the plugin state for each game: installed, outdated, m
 The owner decided how gameplay events such as `player.fined` relate to trips:
 
 - Record every gameplay event in the gameplay-event store, including events that occur when no job is active, for example while driving freely before taking a job or after delivery.
-- Attribute an event to a trip only if it occurs while that trip's job is active. A job is active from the first job configuration that defines it until its outcome (`job.delivered`, `job.cancelled`) or until an unattributable end. Use the plugin's shared boundary order (or its successor in protocol v1) to place each event relative to job configuration changes. Do not use wall-clock time.
+- Place every event relative to job configuration changes by the plugin's shared boundary order (or its successor in protocol v1), never by wall-clock time.
 - An unloaded leg to the pickup location counts as part of the trip. Events on it are attributed to the trip and marked as occurring before the cargo was loaded (`cargo.loaded = false`), so reports can separate them.
 - Events outside any active job stay visible as free-driving events. They must not change any trip's totals.
 
-Real-game evidence from CAP-01 run 4 (ATS single-player, October 13, 2026):
+### Attribution window
 
-- four `red_signal` fines occurred before the job configuration appeared, and two fines occurred during the job;
-- on delivery, `job.delivered` arrived before the job configuration cleared;
-- on cancellation (ETS2 run 3), the configuration cleared before `job.cancelled`.
+A job's event window opens at the first job configuration that defines the job. It closes at the earliest of these boundaries:
 
-Outcome attribution must therefore use the gameplay outcome event, not the configuration clear, consistent with the existing completion rule. ET-014 implements this attribution.
+- the job's outcome event (`job.delivered` or `job.cancelled`);
+- the configuration clear for that job;
+- a different job configuration;
+- a session or plugin restart;
+- a timer reset, save load or other discontinuity;
+- the start of a reported gap or loss interval.
+
+Events after the window closes are not attributed to the trip.
+
+The outcome is decided only by the gameplay outcome event, never by the configuration clear, and either order between the two must be handled. An outcome event that follows the clear is attached to the job only when nothing lies between them: no different job configuration, no restart, discontinuity or reported gap. Otherwise the trip keeps no inferred outcome and stays incomplete, consistent with the existing completion rule.
+
+When a different job configuration, restart, discontinuity or gap closes the window without an outcome, that close is unattributable: the trip stays incomplete. Events inside a reported gap or loss interval are not attributed to any trip. They are kept and marked ambiguous.
+
+### Owner-session observations (not independently reviewed)
+
+The following come from owner CAP-01 sessions. They are recorded locally and have not yet been independently reviewed or committed as fixtures. They are single samples: they establish that these orderings occur, not that they are guaranteed.
+
+- ATS single-player, run 4, October 13, 2026: four `red_signal` fines occurred before the job configuration appeared, and two fines occurred during the job. On delivery, `job.delivered` arrived before the job configuration cleared.
+- ETS2 single-player, run 2, October 12, 2026: on delivery, `job.delivered` arrived before the configuration cleared.
+- ETS2 single-player, run 3, October 12, 2026: on cancellation, the configuration cleared before `job.cancelled`.
+
+ET-014 implements this attribution and adds replay scenarios for each window boundary and both outcome orderings.
 
 ## Job, cargo, trailer and truck identity in trip records — October 13, 2026
 
-Real captures show the SDK provides per-job route, cargo and vehicle configuration. For example, CAP-01 run 4 in ATS reported:
+Owner CAP-01 sessions (not yet independently reviewed) show that the SDK provides per-job route, cargo and vehicle configuration. For example, run 4 in ATS reported:
 
 - source and destination city and company;
 - cargo id, mass, unit mass and unit count;
