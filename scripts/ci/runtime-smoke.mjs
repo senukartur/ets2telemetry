@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import path from 'node:path';
+import os from 'node:os';
 import {readFile, readdir, writeFile} from 'node:fs/promises';
 import {performance} from 'node:perf_hooks';
 import {_electron as electron} from '@playwright/test';
@@ -15,7 +16,8 @@ const result = {scenario: config.scenario === 'overlay' ? 'V0 HIDDEN-OVERLAY-PRO
   scenarioKind: config.scenario ?? 'scaffold',
   commit: config.commit, mode: config.mode, node: process.versions, expected: {
     status: {service: 'ready', storage: 'verified', synthetic: true}, exit: 0, probesAfterExit: []},
-  startedUtc: new Date().toISOString()};
+  // The Job's 25% hard CPU cap is relative to all logical processors; record them to size the actual budget.
+  host: {logicalProcessors: os.availableParallelism()}, startedUtc: new Date().toISOString()};
 let application;
 let launcher;
 let timer;
