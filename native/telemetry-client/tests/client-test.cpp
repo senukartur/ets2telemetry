@@ -333,11 +333,14 @@ int wmain(int argc, wchar_t** argv) {
       std::cerr << "authority received\n";
       auto hello = v0::encode_frame(v0::decode_payload(file_bytes(fixtures / "hello.json"))); stdio_io(client.input.value, hello.data(), static_cast<DWORD>(hello.size()), true);
       if (scenario == "invalid-credit") {unsigned char invalid = 2; stdio_io(client.input.value, &invalid, 1, true); require(client.wait() == 1); server.eof(); require(server.wait() == 0); continue;}
+      // Taken before the credit write: the broker's partial-frame deadline starts only after it receives
+      // this credit, so a correct broker measures at least 5 s here however this thread is scheduled.
+      const auto creditSent = GetTickCount64();
       unsigned char credit = 1; stdio_io(client.input.value, &credit, 1, true);
       if (scenario == "partial-prefix" || scenario == "partial-payload") {
         // The broker's own 5 s partial-frame deadline must end the relay: not early, and long before the
-        // held host would exit. Its clock starts after this credit, when the broker reads the first byte.
-        const auto started = GetTickCount64(); require(client.wait() == 3); const auto elapsed = GetTickCount64() - started;
+        // held host would exit.
+        require(client.wait() == 3); const auto elapsed = GetTickCount64() - creditSent;
         std::cerr << "partial-frame exit after " << elapsed << " ms\n"; require(elapsed >= 4500 && elapsed < 12000);
         require(server.wait() == 0); continue;
       }

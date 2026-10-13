@@ -39,7 +39,7 @@ Most likely cause, reproduced locally: the fixture's wait bounds are a test timi
   - The fixture's hang-detection waits (child exit, frame reads, host connect) share one 15 s bound, `fixtureWaitMs`.
   - The `quiet` EOF-promptness bound is 4 s, still below every 5 s broker deadline. Its "alive after 5.5 s" assertion is unchanged.
   - The broker also exits (code 3) when the host process exits. In `quiet`, `partial-prefix` and `partial-payload` the host is therefore held for `hostHoldMs` (45 s, three times the fixture bound) and still returns as soon as the broker exits. This keeps a broker regression from passing by riding on host exit.
-  - `partial-prefix` and `partial-payload` measure the broker's exit from just after the credit and require 4.5-12 s, so the 5 s partial-frame deadline is neither early nor missing. A missing EOF cancellation in `quiet` would now exit only at host exit, about 39 s after EOF, far beyond the 4 s bound and the 15 s wait.
+  - `partial-prefix` and `partial-payload` measure the broker's exit from just before the credit write (the deadline cannot start earlier, so a descheduled fixture thread cannot shorten the measurement) and require 4.5-12 s, so the 5 s partial-frame deadline is neither early nor missing. A missing EOF cancellation in `quiet` would now exit only at host exit, about 39 s after EOF, far beyond the 4 s bound and the 15 s wait.
   - Independent review of `7eb1fc8` found that, without the held host, the 15 s wait let a broker without the partial-frame deadline pass by exiting at the 10 s host exit, and left only about 0.5 s between a prompt and a non-prompt `quiet` exit. This change addresses both findings.
   - The temporary base directory is named by PID plus process creation time, so it cannot collide with a directory left by an earlier killed run.
 - `CMakeLists.txt`:
@@ -73,7 +73,7 @@ Review corrections (held host, measured partial-frame exit), on the corrected te
 - Mutation proofs with temporary broker edits in `src/client.cpp`, each reverted with `git checkout` and rebuilt afterwards:
   - With the `pipe_io` wait forced to `INFINITE`, which removes the partial-frame deadline, `partial-prefix` and `partial-payload` failed after 15.09 s each at the fixture's wait; `quiet` and `quiet-exit` passed.
   - With the Credits reader no longer signalling `cancelled` on stdin EOF, `quiet` failed (20.69 s); the other three timed entries passed.
-- Restored broker: `partial-prefix` exited after 5,000 ms and `partial-payload` after 5,015 ms, measured from just after the credit. Their entry times are unchanged at about 5.1 s, so passing runs are not slower.
+- Restored broker: `partial-prefix` exited after 5,000 ms and `partial-payload` after 5,015 ms, measured from just after the credit (`c4e661b`; the timer has since moved to just before the credit write). Their entry times are unchanged at about 5.1 s, so passing runs are not slower.
 - After the correction (`498b1f7`, on merged main `62c2d0f`):
   - Client Release CTest, 5 runs unconstrained: 37/37 entries passed in every run, total 23.76-23.80 s.
     - Timed entries: `quiet` 5.68-5.70 s, `quiet-exit` 5.58-5.60 s, `partial-prefix` and `partial-payload` 5.08-5.09 s.
@@ -81,6 +81,13 @@ Review corrections (held host, measured partial-frame exit), on the corrected te
   - The same 5 runs on 2 cores: 37/37 entries passed in every run, total 23.90-23.99 s, with the same timed-entry ranges.
   - Client ASan as in the workflow: 37/37 passed in 25.7 s (`quiet` 5.78 s, `partial-*` 5.14-5.16 s).
   - `npm run typecheck`, `npm run lint`, `npm test` (30 files, 557 tests), `npm run build` and the native plugin suite (40/40) passed.
+
+Timer moved before the credit write (re-review of `c4e661b`):
+
+- Release, 5 runs: `partial-prefix` and `partial-payload` measured 5,000-5,016 ms each.
+- 3 runs with four CPU-bound processes on the fixture's single core: 5,578-6,156 ms, all at or above the 4.5 s floor.
+- With the partial-frame deadline removed, both cases failed again (entry time 15,063 ms). With the broker restored, both passed (5,000-5,016 ms).
+- Full client Release CTest 37/37 (23.8 s), client ASan 37/37 (25.6 s) and `npm run build` passed.
 
 Not done here:
 
