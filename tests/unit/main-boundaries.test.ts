@@ -308,6 +308,32 @@ it('keeps upstream and overlay independent of dashboard unsubscribe/reload and r
   expect(overlayChannel.port1.close).not.toHaveBeenCalled();
   expect(channels[0].port1.postMessage).toHaveBeenCalledWith({type: 'consumed', delivery: 1});
 });
+function reloadParticipants(view: 'dashboard' | 'overlay') {
+  return view === 'dashboard' ? {target: contents, sender: trusted, channel: 'telemetry'} : {target: overlayContents, sender: overlayTrusted, channel: 'overlay'};
+}
+it.each(['dashboard', 'overlay'] as const)('retires the %s subscription that the replaced document requests before the reload commits', async view => {
+  await ready(); const {target, sender, channel} = reloadParticipants(view);
+  ipc.emit(`${channel}:subscribe`, sender()); const original = channels.at(-1)!;
+  target.emit('did-start-loading'); expect(original.port1.close).toHaveBeenCalled();
+  // Electron 44 keeps one WebFrameMain across a reload, so the outgoing document's recovery request is trusted.
+  ipc.emit(`${channel}:subscribe`, sender()); const outgoing = channels.at(-1)!;
+  expect(outgoing).not.toBe(original); expect(target.postMessage).toHaveBeenLastCalledWith(`${channel}:port`, null, [outgoing.port2]);
+  target.emit('did-navigate'); expect(outgoing.port1.close).toHaveBeenCalled();
+  expect(log).toHaveBeenCalledWith(`${view.toUpperCase()}_PRECOMMIT_SUBSCRIPTION_RETIRED`);
+  ipc.emit(`${channel}:subscribe`, sender()); const replacement = channels.at(-1)!;
+  expect(replacement).not.toBe(outgoing); expect(replacement.port1.close).not.toHaveBeenCalled();
+  expect(target.postMessage).toHaveBeenLastCalledWith(`${channel}:port`, null, [replacement.port2]);
+  expect(replacement.port1.postMessage).toHaveBeenCalledWith(expect.objectContaining({type: 'live', delivery: expect.any(Number)}));
+});
+it.each(['dashboard', 'overlay'] as const)('keeps one %s subscription after an uncontended reload commit', async view => {
+  await ready(); const {target, sender, channel} = reloadParticipants(view);
+  ipc.emit(`${channel}:subscribe`, sender());
+  target.emit('did-start-loading'); target.emit('did-navigate');
+  ipc.emit(`${channel}:subscribe`, sender()); const replacement = channels.at(-1)!, count = channels.length;
+  ipc.emit(`${channel}:subscribe`, sender()); expect(channels).toHaveLength(count);
+  expect(replacement.port1.close).not.toHaveBeenCalled();
+  expect(log).not.toHaveBeenCalledWith(`${view.toUpperCase()}_PRECOMMIT_SUBSCRIPTION_RETIRED`);
+});
 it('hides while async selection is pending and ignores previous-source or retired-port updates', async () => {
   vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2'); await ready(); ipc.emit('overlay:subscribe', overlayTrusted()); deliver(currentGame());
   const complete = pendingVerification(); const pending = handlers.get('telemetry:select')!(trusted(), 'ats');
