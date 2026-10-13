@@ -101,17 +101,22 @@ export async function windowSecurity(application) {
 // hosted runner (run 38314471366): the reading reached the independent DOM during the stall, but its polled
 // receipt arrived after the spin. Receiving Debugger.paused for our marker frame is the start barrier.
 // Only this observer resumes the renderer, so an observation received before resume is definitely pending.
-// Runtime callers use the default; the receipt validator independently requires 6000 ms.
-export async function proveIndependentDuringStall(page, kind, independentObservation, source, proof, requestedMilliseconds = 6000) {
+// Runtime callers use the defaults; the receipt validator independently requires 6000 ms. Tests may inject
+// the driver's high-resolution clock to prove the hold does not trust millisecond timer granularity.
+export async function proveIndependentDuringStall(page, kind, independentObservation, source, proof,
+  {requestedMilliseconds = 6000, now = () => performance.now()} = {}) {
   const marker = `ETS2TELEMETRY_${kind.toUpperCase()}_STALL_${randomUUID()}`;
   Object.assign(proof, {kind, marker, requestedMilliseconds, stallMethod: 'debugger-pause', started: false, completed: false});
   const session = await page.context().newCDPSession(page);
   let completed = false, resumed = false, resumeTimer, pauseTimer;
-  const resume = () => {
+  // Only the deliberate hold records resumeRequestedObserverMonotonicMs. A failure-path cleanup resume is
+  // recorded separately so retained partial evidence never implies a hold that did not happen.
+  const sendResume = field => {
     if (resumed) return Promise.resolve();
-    resumed = true; proof.resumeRequestedObserverMonotonicMs = performance.now();
+    resumed = true; proof[field] = now();
     return session.send('Debugger.resume');
   };
+  const resume = () => sendResume('resumeRequestedObserverMonotonicMs');
   let execution = Promise.resolve();
   try {
     const paused = new Promise((resolve, reject) => {
@@ -128,7 +133,7 @@ export async function proveIndependentDuringStall(page, kind, independentObserva
       if (response.exceptionDetails || response.result?.value?.marker !== marker) throw new Error('Renderer stall evaluation failed');
       const {rendererStartedMonotonicMs, rendererCompletedMonotonicMs} = response.result.value;
       completed = true;
-      Object.assign(proof, {rendererStartedMonotonicMs, rendererCompletedMonotonicMs, completed: true, completedObserverMonotonicMs: performance.now()});
+      Object.assign(proof, {rendererStartedMonotonicMs, rendererCompletedMonotonicMs, completed: true, completedObserverMonotonicMs: now()});
     });
     void execution.catch(() => {});
     const event = await paused;
@@ -139,19 +144,19 @@ export async function proveIndependentDuringStall(page, kind, independentObserva
     assert.equal(barrier?.result?.value?.marker, marker, 'Renderer paused outside the owned stall frame');
     const rendererStart = barrier.result.value.rendererStartedMonotonicMs;
     assert.ok(Number.isFinite(rendererStart) && rendererStart >= 0, 'Invalid renderer stall-start barrier');
-    Object.assign(proof, {started: true, pauseReason: event.reason, rendererStartBarrierMonotonicMs: rendererStart, startedObserverMonotonicMs: performance.now()});
+    Object.assign(proof, {started: true, pauseReason: event.reason, rendererStartBarrierMonotonicMs: rendererStart, startedObserverMonotonicMs: now()});
     assert.equal(completed, false, 'Renderer completed before its start barrier was observed');
     // Hold the pause for the requested duration whether or not the observation arrives. Timers have
     // millisecond granularity and may fire just before the high-resolution deadline, so recheck it.
     const resumeAt = proof.startedObserverMonotonicMs + requestedMilliseconds;
     const held = (async () => {
-      while (performance.now() < resumeAt) await new Promise(resolve => {resumeTimer = setTimeout(resolve, Math.ceil(resumeAt - performance.now()) + 1);});
+      while (now() < resumeAt) await new Promise(resolve => {resumeTimer = setTimeout(resolve, Math.ceil(resumeAt - now()) + 1);});
       await resume();
     })();
     void held.catch(() => {});
-    source.setReading(20, 71); proof.readingChangedObserverMonotonicMs = performance.now();
+    source.setReading(20, 71); proof.readingChangedObserverMonotonicMs = now();
     proof.independentObservation = await independentObservation();
-    proof.observedObserverMonotonicMs = performance.now();
+    proof.observedObserverMonotonicMs = now();
     proof.readingObservedObserverMonotonicMs = proof.independentObservation.reading.observedObserverMonotonicMs;
     assert.ok(proof.readingChangedObserverMonotonicMs < proof.readingObservedObserverMonotonicMs &&
       proof.readingObservedObserverMonotonicMs <= proof.observedObserverMonotonicMs, 'Changed DOM reading must precede its window metadata receipt');
@@ -170,7 +175,7 @@ export async function proveIndependentDuringStall(page, kind, independentObserva
     // Never leave an owned renderer paused: resume, then detach (detaching also releases any pause
     // and rejects a still-pending evaluation instead of waiting on it).
     clearTimeout(pauseTimer); clearTimeout(resumeTimer);
-    await resume().catch(() => {}); await session.detach().catch(() => {}); await execution.catch(() => {});
+    await sendResume('cleanupResumeObserverMonotonicMs').catch(() => {}); await session.detach().catch(() => {}); await execution.catch(() => {});
   }
 }
 

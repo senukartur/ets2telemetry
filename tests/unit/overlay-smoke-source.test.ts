@@ -93,8 +93,7 @@ describe('coherent hidden-renderer observations', () => {
 describe('debugger-paused stall start, independent observation and resume ordering', () => {
   // The fake DevTools session keeps the renderer "paused" until the code under test sends Debugger.resume.
   type Mode = 'during' | 'after' | 'late-metadata' | 'missing-reading-time' | 'foreign-frame' | 'exception-pause' | 'no-pause';
-  const requested = 40;
-  async function exercise(mode: Mode) {
+  async function exercise(mode: Mode, {requested = 40, now}: {requested?: number; now?: () => number} = {}) {
     const {proveIndependentDuringStall} = await import(observationModule);
     const order: string[] = [], proof: ReturnType<typeof JSON.parse> = {};
     const listeners = new Map<string, (event: unknown) => void>();
@@ -127,16 +126,16 @@ describe('debugger-paused stall start, independent observation and resume orderi
     const observation = async () => {
       if (mode === 'after') await resumeSent;
       order.push('independent-observed');
-      const observedObserverMonotonicMs = performance.now();
+      const observedObserverMonotonicMs = now ? now() : performance.now();
       if (mode === 'late-metadata') await resumeSent;
       return {reading: {status: 'connected: current', speed: 'Speed: 72.0 km/h', fuel: 'Fuel: 71.0 L',
         ...(mode === 'missing-reading-time' ? {} : {observedObserverMonotonicMs})}};
     };
-    const promise = proveIndependentDuringStall(page, 'overlay', observation, source, proof, requested);
+    const promise = proveIndependentDuringStall(page, 'overlay', observation, source, proof, {requestedMilliseconds: requested, ...(now ? {now} : {})});
     return {promise, proof, order};
   }
   it('changes source only after the owned pause barrier, observes before resume and holds the full pause', async () => {
-    const {promise, proof, order} = await exercise('during'); await promise;
+    const requested = 40, {promise, proof, order} = await exercise('during'); await promise;
     expect(order).toEqual(['Debugger.enable','Runtime.evaluate','Debugger.evaluateOnCallFrame','reading-changed','independent-observed','Debugger.resume','detached']);
     expect(proof).toMatchObject({started: true, completed: true, pendingAtObservation: true, requestedMilliseconds: requested, stallMethod: 'debugger-pause',
       pauseReason: 'other', rendererStartBarrierMonotonicMs: 100, rendererStartedMonotonicMs: 100, rendererCompletedMonotonicMs: 100 + requested});
@@ -144,11 +143,29 @@ describe('debugger-paused stall start, independent observation and resume orderi
     expect(proof.resumeRequestedObserverMonotonicMs - proof.startedObserverMonotonicMs).toBeGreaterThanOrEqual(requested);
     expect(proof.resumeRequestedObserverMonotonicMs).toBeLessThanOrEqual(proof.completedObserverMonotonicMs);
     expect(proof.readingObservedObserverMonotonicMs).toBeGreaterThan(proof.readingChangedObserverMonotonicMs);
+    expect(proof.cleanupResumeObserverMonotonicMs).toBeUndefined();
+  });
+  it('keeps the renderer paused when a millisecond timer fires just before the high-resolution deadline', async () => {
+    vi.useFakeTimers({toFake: ['setTimeout', 'clearTimeout']});
+    try {
+      // Every read advances the injected driver clock slightly, as a real monotonic clock would.
+      let clock = 1000;
+      const {promise, proof, order} = await exercise('during', {requested: 6000, now: () => (clock += 0.001)});
+      await vi.advanceTimersByTimeAsync(0);
+      expect(order).toContain('independent-observed'); expect(order).not.toContain('Debugger.resume');
+      const resumeAt = proof.startedObserverMonotonicMs + 6000;
+      clock = resumeAt - 0.05; await vi.advanceTimersByTimeAsync(6001);
+      expect(order).not.toContain('Debugger.resume');
+      clock = resumeAt; await vi.advanceTimersByTimeAsync(2); await promise;
+      expect(order.slice(-2)).toEqual(['Debugger.resume','detached']);
+      expect(proof.resumeRequestedObserverMonotonicMs - proof.startedObserverMonotonicMs).toBeGreaterThanOrEqual(6000);
+    } finally {vi.useRealTimers();}
   });
   it('resumes at the requested time and rejects an observation received after resume', async () => {
     const {promise, proof, order} = await exercise('after');
     await expect(promise).rejects.toThrow('Independent reading arrived after'); expect(proof.pendingAtObservation).toBe(false);
     expect(order.indexOf('Debugger.resume')).toBeLessThan(order.indexOf('independent-observed')); expect(order.at(-1)).toBe('detached');
+    expect(proof.resumeRequestedObserverMonotonicMs).toBeDefined(); expect(proof.cleanupResumeObserverMonotonicMs).toBeUndefined();
   });
   it('retains an early DOM timestamp but rejects a composite whose metadata arrived after resume', async () => {
     const {promise, proof} = await exercise('late-metadata');
@@ -160,12 +177,15 @@ describe('debugger-paused stall start, independent observation and resume orderi
     const {promise, proof, order} = await exercise('missing-reading-time');
     await expect(promise).rejects.toThrow('Changed DOM reading must precede');
     expect(proof.readingObservedObserverMonotonicMs).toBeUndefined(); expect(order.slice(-2)).toEqual(['Debugger.resume','detached']);
+    // The early cleanup resume must not look like a completed six-second hold.
+    expect(proof.resumeRequestedObserverMonotonicMs).toBeUndefined(); expect(proof.cleanupResumeObserverMonotonicMs).toBeDefined();
   });
   it.each([['foreign-frame', 'outside the owned stall frame'], ['exception-pause', 'unexpected reason']] as const)(
     'rejects a %s pause without changing source and never leaves the renderer paused', async (mode, message) => {
       const {promise, proof, order} = await exercise(mode);
       await expect(promise).rejects.toThrow(message);
       expect(proof.started).toBe(false); expect(order).not.toContain('reading-changed'); expect(order.slice(-2)).toEqual(['Debugger.resume','detached']);
+      expect(proof.resumeRequestedObserverMonotonicMs).toBeUndefined(); expect(proof.cleanupResumeObserverMonotonicMs).toBeDefined();
     });
   it('rejects a renderer that never pauses without inventing a started observation', async () => {
     vi.useFakeTimers({toFake: ['setTimeout', 'clearTimeout']});
@@ -174,6 +194,7 @@ describe('debugger-paused stall start, independent observation and resume orderi
       const rejection = expect(promise).rejects.toThrow('EXPECTED_RENDERER_PAUSE_WITHIN_10_SECONDS');
       await vi.advanceTimersByTimeAsync(10000); await rejection;
       expect(proof.started).toBe(false); expect(order).not.toContain('reading-changed'); expect(order.at(-1)).toBe('detached');
+      expect(proof.resumeRequestedObserverMonotonicMs).toBeUndefined(); expect(proof.cleanupResumeObserverMonotonicMs).toBeDefined();
     } finally {vi.useRealTimers();}
   });
 });
