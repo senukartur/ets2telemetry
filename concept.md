@@ -325,3 +325,20 @@ All existing safety rules still apply, made precise for unattended installs:
 - Remove only the owned file on uninstall.
 
 The application must show the plugin state for each game: installed, outdated, missing, excluded by the driver, or blocked (with the reason). ET-017 implements this behaviour; its card title still says "wizard", but this decision governs the user experience.
+
+## Fine and gameplay-event trip attribution — October 13, 2026
+
+The owner decided how gameplay events such as `player.fined` relate to trips:
+
+- Record every gameplay event in the gameplay-event store, including events that occur when no job is active, for example while driving freely before taking a job or after delivery.
+- Attribute an event to a trip only if it occurs while that trip's job is active. A job is active from the first job configuration that defines it until its outcome (`job.delivered`, `job.cancelled`) or until an unattributable end. Use the plugin's shared boundary order (or its successor in protocol v1) to place each event relative to job configuration changes. Do not use wall-clock time.
+- An unloaded leg to the pickup location counts as part of the trip. Events on it are attributed to the trip and marked as occurring before the cargo was loaded (`cargo.loaded = false`), so reports can separate them.
+- Events outside any active job stay visible as free-driving events. They must not change any trip's totals.
+
+Real-game evidence from CAP-01 run 4 (ATS single-player, October 13, 2026):
+
+- four `red_signal` fines occurred before the job configuration appeared, and two fines occurred during the job;
+- on delivery, `job.delivered` arrived before the job configuration cleared;
+- on cancellation (ETS2 run 3), the configuration cleared before `job.cancelled`.
+
+Outcome attribution must therefore use the gameplay outcome event, not the configuration clear, consistent with the existing completion rule. ET-014 implements this attribution.
