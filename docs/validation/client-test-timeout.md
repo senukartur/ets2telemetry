@@ -27,7 +27,7 @@ All runs below used the local Windows 11 host from the CAP-01a record and the Re
   - The monolithic fixture, instrumented with per-case timing but otherwise unchanged, took 34.4 s, 40.2 s and 61.6 s, with every case passing. All three runs would exceed the old 30 s CTest timeout, and one would exceed the current 60 s.
   - With the per-case split but the old bounds, `partial-prefix` and `partial-payload` failed their 6 s `client.wait()` in one of three runs.
 
-Root cause: the 6 s wait itself is a test timing assumption. The hosted kill is the same assumption summed over one executable. About 75 process launches plus four fixed 5-5.7 s windows run in one process under one timeout, so a slower hosted run spreads seconds of delay across cases and exceeds the timeout without any case failing. The old log has no per-case timestamps, so it cannot locate where the hosted run lost its time. The per-case timing added here will in future runs.
+Most likely cause, reproduced locally: the fixture's wait bounds are a test timing assumption, and the hosted kill is that assumption summed over one executable. About 75 process launches plus four fixed 5-5.7 s windows run in one process under one timeout. A slower hosted run spreads seconds of delay across cases and exceeds the timeout without any case failing. This is an inference, not hosted confirmation. The old hosted log has no per-case timestamps, so it cannot locate where that run lost its time. The per-case timing added here will show it in future hosted runs, and that confirmation remains pending.
 
 ## Changes
 
@@ -38,11 +38,14 @@ Root cause: the 6 s wait itself is a test timing assumption. The hosted kill is 
   - A case filter that matches no case now fails instead of passing vacuously.
   - The fixture's hang-detection waits (child exit, frame reads, host connect) share one 15 s bound, `fixtureWaitMs`.
   - The `quiet` EOF-promptness bound is 4 s, still below every 5 s broker deadline. Its "alive after 5.5 s" assertion is unchanged.
+  - The broker also exits (code 3) when the host process exits. In `quiet`, `partial-prefix` and `partial-payload` the host is therefore held for `hostHoldMs` (45 s, three times the fixture bound) and still returns as soon as the broker exits. This keeps a broker regression from passing by riding on host exit.
+  - `partial-prefix` and `partial-payload` measure the broker's exit from just after the credit and require 4.5-12 s, so the 5 s partial-frame deadline is neither early nor missing. A missing EOF cancellation in `quiet` would now exit only at host exit, about 39 s after EOF, far beyond the 4 s bound and the 15 s wait.
+  - Independent review of `7eb1fc8` found that, without the held host, the 15 s wait let a broker without the partial-frame deadline pass by exiting at the 10 s host exit, and left only about 0.5 s between a prompt and a non-prompt `quiet` exit. This change addresses both findings.
   - The temporary base directory is named by PID plus process creation time, so it cannot collide with a directory left by an earlier killed run.
 - `CMakeLists.txt`:
   - One CTest entry per case: `native-pipe-client-<case>`, and `native-pipe-client-asan-<case>` in the ASan build, plus a `*-case-list` entry.
   - Each entry has a 20 s backstop, or 30 s for the four timed cases, doubled under ASan.
-  - All entries share a resource lock, because the fixture's endpoint names are fixed per user and session.
+  - All entries share a resource lock, because the fixture's endpoint names are fixed per user and session. The lock serializes entries only within one `ctest` invocation. Do not run client suites concurrently: the Release and ASan suites, or suites from two worktrees, collide on the same endpoint names.
 - Workflow: the ASan step selects `-R '^native-pipe-client-asan-'`. The ordinary step runs every entry in the client build directory as before.
 
 ## Results
@@ -64,6 +67,20 @@ All checks below ran on the final test source, before merging `origin/main`.
   - `ETS2TELEMETRY_CLIENT_TEST_CASE=no-such-case` exits 1 with `matched 0 cases`.
 - One intermediate 10-run batch failed `reparse-record` once at the fixture's own `require(!fs::exists(base))`, before any case work. The local temp directory still held 17 `ets2telemetry-client-test-<pid>` directories left by earlier killed or failed runs. Running 37 processes per suite instead of one makes reuse of such a PID likelier. The base directory name now also carries the process creation time, and the rerun batches above passed. The 17 old directories were left in place; they are test temp files, not created in this session.
 - `npm run typecheck`, `npm run lint`, `npm test` (30 files, 557 tests), `npm run build`, `npm run native:configure`, `npm run native:build` and `npm run native:test` (plugin, 38/38) all passed.
+
+Review corrections (held host, measured partial-frame exit), on the corrected test source:
+
+- Mutation proofs with temporary broker edits in `src/client.cpp`, each reverted with `git checkout` and rebuilt afterwards:
+  - With the `pipe_io` wait forced to `INFINITE`, which removes the partial-frame deadline, `partial-prefix` and `partial-payload` failed after 15.09 s each at the fixture's wait; `quiet` and `quiet-exit` passed.
+  - With the Credits reader no longer signalling `cancelled` on stdin EOF, `quiet` failed (20.69 s); the other three timed entries passed.
+- Restored broker: `partial-prefix` exited after 5,000 ms and `partial-payload` after 5,015 ms, measured from just after the credit. Their entry times are unchanged at about 5.1 s, so passing runs are not slower.
+- After the correction (`498b1f7`, on merged main `62c2d0f`):
+  - Client Release CTest, 5 runs unconstrained: 37/37 entries passed in every run, total 23.76-23.80 s.
+    - Timed entries: `quiet` 5.68-5.70 s, `quiet-exit` 5.58-5.60 s, `partial-prefix` and `partial-payload` 5.08-5.09 s.
+    - Every other entry took at most 0.20 s.
+  - The same 5 runs on 2 cores: 37/37 entries passed in every run, total 23.90-23.99 s, with the same timed-entry ranges.
+  - Client ASan as in the workflow: 37/37 passed in 25.7 s (`quiet` 5.78 s, `partial-*` 5.14-5.16 s).
+  - `npm run typecheck`, `npm run lint`, `npm test` (30 files, 557 tests), `npm run build` and the native plugin suite (40/40) passed.
 
 Not done here:
 
