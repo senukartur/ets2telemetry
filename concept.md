@@ -342,3 +342,20 @@ Real-game evidence from CAP-01 run 4 (ATS single-player, October 13, 2026):
 - on cancellation (ETS2 run 3), the configuration cleared before `job.cancelled`.
 
 Outcome attribution must therefore use the gameplay outcome event, not the configuration clear, consistent with the existing completion rule. ET-014 implements this attribution.
+
+## Job, cargo, trailer and truck identity in trip records — October 13, 2026
+
+Real captures show the SDK provides per-job route, cargo and vehicle configuration. For example, CAP-01 run 4 in ATS reported:
+
+- source and destination city and company;
+- cargo id, mass, unit mass and unit count;
+- market and income;
+- trailer body type, model id, chain type and plate;
+- truck brand, model and plate.
+
+The owner decided that trip records keep this data, with two storage rules:
+
+- **Store both the stable id and the localized display name.** Store `source.city.id`, `source.company.id`, `destination.city.id`, `destination.company.id`, `cargo.id`, the truck `brand_id` and `id`, and the trailer `id` and `body.type`, together with the localized names the game sent. Names arrive in the game's UI language (for example, a Russian client reports cargo and plate-country names in Russian). Comparisons, aggregation and future company reports use ids, so drivers with different game languages see the same entities. The localized name is display data captured at that time.
+- **Trailers have no readable name.** SDK 1.15 reports only the internal trailer model id and its body type. Display the body type, or a project-maintained id-to-name mapping; do not invent names. Keep unknown ids visible as ids.
+
+ET-013 and ET-014 own the schema and capture of these fields. Missing attributes remain unavailable, never empty strings or zero.
