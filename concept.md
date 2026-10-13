@@ -332,7 +332,7 @@ The owner decided how gameplay events such as `player.fined` relate to trips:
 
 - Record every gameplay event in the gameplay-event store, including events that occur when no job is active, for example while driving freely before taking a job or after delivery.
 - Place every event relative to job configuration changes by the plugin's shared boundary order (or its successor in protocol v1), never by wall-clock time.
-- An unloaded leg to the pickup location counts as part of the trip. Events on it are attributed to the trip and marked as occurring before the cargo was loaded (`cargo.loaded = false`), so reports can separate them.
+- An unloaded leg to the pickup location counts as part of the trip. Events on it are attributed to the trip and marked as occurring before the cargo was loaded, so reports can separate them. Per SDK 1.15, `cargo.loaded` is meaningful only for cargo-market jobs (it is always true for other markets), so this marking applies to cargo-market jobs; no cargo-market job has been observed yet.
 - Events outside any active job stay visible as free-driving events. They must not change any trip's totals.
 
 ### Attribution window
@@ -352,19 +352,20 @@ The outcome is decided only by the gameplay outcome event, never by the configur
 
 When a different job configuration, restart, discontinuity or gap closes the window without an outcome, that close is unattributable: the trip stays incomplete. Events inside a reported gap or loss interval are not attributed to any trip. They are kept and marked ambiguous.
 
-### Owner-session observations (not independently reviewed)
+### Owner-session observations (independently reviewed October 13, 2026)
 
-The following come from owner CAP-01 sessions. They are recorded locally and have not yet been independently reviewed or committed as fixtures. They are single samples: they establish that these orderings occur, not that they are guaranteed.
+The following come from owner CAP-01 sessions. An independent read-only reviewer verified them against the sanitized exports on October 13, 2026 (see the addendum in `docs/validation/cap-01a.md`, including ordering expectations O1–O9 with sample sizes). The exports are kept locally, not committed as fixtures. Samples are small (four deliveries, one cancellation): they establish that these orderings occur, not that they are guaranteed.
 
-- ATS single-player, run 4, October 13, 2026: four `red_signal` fines occurred before the job configuration appeared, and two fines occurred during the job. On delivery, `job.delivered` arrived before the job configuration cleared.
-- ETS2 single-player, run 2, October 12, 2026: on delivery, `job.delivered` arrived before the configuration cleared.
+- ATS single-player, run 4, October 13, 2026: four `red_signal` fines occurred before the job configuration appeared, and two fines occurred during the job.
+- ETS2 single-player, run 3, October 12, 2026: two of the five fines occurred before the job configuration appeared.
+- All four observed deliveries (single-player and TruckersMP): `simulation.paused` preceded `job.delivered`, which arrived while paused. On delivery, `job.delivered` arrived before the job configuration cleared.
 - ETS2 single-player, run 3, October 12, 2026: on cancellation, the configuration cleared before `job.cancelled`.
 
 ET-014 implements this attribution and adds replay scenarios for each window boundary and both outcome orderings.
 
 ## Job, cargo, trailer and truck identity in trip records — October 13, 2026
 
-Owner CAP-01 sessions (not yet independently reviewed) show that the SDK provides per-job route, cargo and vehicle configuration. For example, run 4 in ATS reported:
+Owner CAP-01 sessions (independently reviewed October 13, 2026) show that the SDK provides per-job route, cargo and vehicle configuration. For example, run 4 in ATS reported:
 
 - source and destination city and company;
 - cargo id, mass, unit mass and unit count;
@@ -374,8 +375,9 @@ Owner CAP-01 sessions (not yet independently reviewed) show that the SDK provide
 
 The owner decided that trip records keep this data, with two storage rules:
 
-- **Store both the stable id and the localized display name.** Store `source.city.id`, `source.company.id`, `destination.city.id`, `destination.company.id`, `cargo.id`, the truck `brand_id` and `id`, and the trailer `id` and `body.type`, together with the localized names the game sent. Names arrive in the game's UI language (for example, a Russian client reports cargo and plate-country names in Russian). Comparisons, aggregation and future company reports use ids, so drivers with different game languages see the same entities. The localized name is display data captured at that time.
-- **Trailers have no readable name.** SDK 1.15 reports only the internal trailer model id and its body type. Display the body type, or a project-maintained id-to-name mapping; do not invent names. Keep unknown ids visible as ids.
+- **Store both the stable id and the localized display name.** Store `source.city.id`, `source.company.id`, `destination.city.id`, `destination.company.id`, `cargo.id`, the truck `brand_id` and `id`, and the trailer `id` and `body.type`, together with the localized names the game sent. Names arrive in the game's UI language (for example, a Russian client reported cargo and plate-country names in Russian, while most city and company names arrived untranslated; the SDK does not update localized strings if the in-game language changes). Comparisons, aggregation and future company reports use ids, so drivers with different game languages see the same entities. The localized name is display data captured at that time.
+- **Trailer names may be absent.** SDK 1.15 defines trailer `brand_id`, `brand` and `name`, but they were absent for every job trailer observed (none owned); only the internal model id and body type arrived. Owned trailers are untested. When no name arrives, display the body type or a project-maintained id-to-name mapping; do not invent names. Keep unknown ids visible as ids.
+- **Provided empty values differ from missing values.** The SDK sometimes sends an attribute with an empty string (for example `cargo.accessory.id`). Store it as a provided empty value, distinct from an unavailable (not sent) attribute; the "never empty strings" rule applies to values the game did not send.
 
 ET-013 and ET-014 own the schema and capture of these fields. Missing attributes remain unavailable, never empty strings or zero.
 
@@ -383,7 +385,7 @@ ET-013 and ET-014 own the schema and capture of these fields. Missing attributes
 
 The owner decided that every trip records its game mode, single-player or TruckersMP, because the mode is an important criterion for a trip. Convoy stays deferred, but the attribute must allow it to be added later. If the mode cannot be determined, record it as unknown; never default it to single-player.
 
-The SCS SDK does not report TruckersMP. In CAP-01 run 5 (ETS2 via TruckersMP, October 13, 2026; an owner session, not yet independently reviewed), the capture header was indistinguishable from single-player apart from the operator label.
+The SCS SDK does not report TruckersMP. In CAP-01 run 5 (ETS2 via TruckersMP, October 13, 2026; an owner session, independently reviewed October 13, 2026), the capture header was indistinguishable from single-player apart from the operator label.
 
 Candidate detection methods, in order of preference, still to be verified on real sessions before implementation:
 
@@ -392,3 +394,11 @@ Candidate detection methods, in order of preference, still to be verified on rea
 3. **Indirect signals,** such as the game version pinned by TruckersMP. These are hints only and must never decide the mode alone.
 
 The detected mode, its method and its confidence are trip evidence and travel through the protocol. Adding the mode to the wire contract belongs to protocol v1 (ET-002b); ET-014 stores the mode on the trip. Switching between single-player and TruckersMP requires restarting the game, which is already a session and plugin restart boundary in the attribution window. The mode is therefore determined per plugin session and is not expected to change within one. If a later re-check ever contradicts the recorded mode, keep both results as evidence and mark the trip mode ambiguous rather than rewriting it.
+
+## Sleep and unannounced game-time jumps — October 13, 2026
+
+SDK 1.15 has no sleep or rest gameplay event. In CAP-01 run 2 (ETS2 single-player, October 12, 2026) the owner slept, and the only trace was a forward game-time jump of about 595 game minutes within a few minutes of active simulation, with no lifecycle or gameplay event. ET-014 must treat a large forward game-time jump without a timer reset as a possible sleep or rest: keep it as an annotated discontinuity of game time, never fabricate samples or game-time intervals across it, and keep real-time accounting unaffected. Report game-time durations, such as delivery time, as the plain game-time span including the jump: this matches the game's own `delivery.time` (O4) and its lateness accounting (run 2 was 471 game minutes late across the sleep). Annotate the jump instead of subtracting it. The `rest.stop` channel and the `avoid_sleeping` fine are additional, unverified hints.
+
+## Bus and car jobs deferred — October 13, 2026
+
+The owner deferred bus jobs and car jobs (`bus_job`, `car_job`, `car_job.delivered`, `car_job.cancelled`) from the current validation and trip scope: bus content is not yet released for ETS2, car jobs in ATS are recent, and TruckersMP buses are out of interest for now. They are tracked as technical debt TD-002. Their empty configuration envelopes, observed at every session start, must be tolerated and must not create trips.

@@ -112,7 +112,7 @@ ATS, TruckersMP, the remaining event types and frame-time impact were not observ
 | Capture never blocks v0 | `v0-isolation`: 32 v0 snapshots were received while the capture client was stalled, and the stalled capture was retired independently by its write deadline. `v0-continuity`: v0 continuity counters and boundary order are identical to a reference adapter while a capture worker polls. `stop-inflight`: a stop during a pending frame write still ends with `plugin-shutdown`. `stop-slow-reader`: a slow reader receiving a split envelope cannot extend the stop beyond the single budget (about 454 ms measured). `clock`: no header or further packets without a source clock | Real game load |
 | Application writer bounds and evidence on close | `capture-session.test.ts`: credit held back during a writer stall and resumed after flushing, so plugin drops replace the pending cap; a persistent stall ends as `disconnect` with `withheldAtClose`. `capture-writer.test.ts`: pending cap with a slow write, file cap, controlled-timer deadline, write failure (manifest still written), disconnect inside a split envelope, protocol error, approved-limit enforcement and no directory reuse; manifest hashes match file bytes; output only under `captures\<session>` | None for synthetic inputs |
 | Fixed non-renderer client, default-off activation | `capture-broker-client.test.ts`: fixed broker arguments with `--capture cap0`, v0 receipt rejected, one packet per credit, waiting/exit mapping; activation off by default, interval 1-60, label pattern, grant validation. `main-boundaries.test.ts`: grant attached once to the first verified ETS2 selection, not renewed for later selections; invalid activation rejected and logged | Exercised only through `npm run dev` in the owner's ETS2 sessions; packaged path not run |
-| Real pipe integration with a fake SDK source | `capture-session.test.ts` over actual named pipes (complete, mid-envelope disconnect, malformed frame, absent source until deadline, service stop). `test:cap0-chain`: fake-SDK host and test DLL through the native broker to a complete `synthetic` manifest with 5 packets/3 envelopes and exact values | ETS2 single-player only (owner sessions); ATS and TruckersMP pending |
+| Real pipe integration with a fake SDK source | `capture-session.test.ts` over actual named pipes (complete, mid-envelope disconnect, malformed frame, absent source until deadline, service stop). `test:cap0-chain`: fake-SDK host and test DLL through the native broker to a complete `synthetic` manifest with 5 packets/3 envelopes and exact values | Windowed mode for ATS single-player and for both games under TruckersMP; installed/packaged activation path (owner dev-mode sessions so far: see the October 13 addendum) |
 | Export/sanitize | `capture-export.test.ts` and the chain's CLI run: raw integrity verified; UUIDs, process/session IDs, creation times, user tag, display id and paths replaced by stable first-appearance tokens; values and order kept; tampered input and existing output refused | Reviewer judgement on game-provided strings |
 
 ## PR #26 advisory review threads
@@ -125,7 +125,54 @@ ATS, TruckersMP, the remaining event types and frame-time impact were not observ
 
 ## Pending (not done by this package)
 
-- CAP-01 real-game evidence across the owner's validation matrix: ETS2 and ATS, each in single-player and TruckersMP, in windowed and borderless modes. So far only ETS2 single-player has owner sessions (one windowed and one borderless capture with a manifest). ATS and TruckersMP are not observed. The built-in Convoy mode is deferred by the owner's October 12, 2026 decision: it is neither validated nor claimed as supported. Still needed: accept/deliver/cancel/config-clear/menu/pause/late-attach/reconnect/save-load/ferry/train/refuel observations beyond those recorded above; units, currency and clock behaviour; loss annotations from real sessions. Unobserved events remain synthetic or unverified.
+- CAP-01 real-game evidence across the owner's validation matrix: ETS2 and ATS, each in single-player and TruckersMP, in windowed and borderless modes. Owner sessions now cover ETS2 and ATS, single-player and TruckersMP, borderless, plus ETS2 single-player windowed (see the October 13 addendum below). Still pending: windowed mode for ATS single-player and for both games under TruckersMP. The built-in Convoy mode is deferred by the owner's October 12, 2026 decision: it is neither validated nor claimed as supported. Still needed (accept, deliver, cancel, configuration clear, pause, late attach at session start and sleep are now observed): menu-only states, late attach after a job started, reconnect, save/load, ferry, train and refuel observations; runtime unit and currency observation (currency is only SDK-documented); loss annotations from real sessions (no loss has occurred yet). Unobserved events remain synthetic or unverified.
 - Installed/packaged behaviour of the activation path, which has run only through `npm run dev`, and the measured game frame-time impact of the capture copy.
 - Second-user, remote-client and elevation rejection on actual hosts; a passing Ready-for-review run on the final head; independent review.
 - SP-01: PR #8 was closed unmerged. SP-01 acceptance is the owner's later decision. Every other previously pending gate is unchanged.
+
+## Owner sessions and independent observation review (October 13, 2026 addendum)
+
+These are owner real-game sessions captured with CAP0 (`npm run dev`, `ETS2TELEMETRY_CAPTURE=cap0`). Sanitized exports are kept locally and are not committed (the owner deferred committing fixtures). Game mode and display mode are operator labels; the SDK does not report them.
+
+| Run | Game / mode / display | Plugin build (DLL SHA-256 prefix) | Result |
+| --- | --- | --- | --- |
+| 1 | ETS2 single-player, borderless | PR #26 head `960dff7` (`39B9CD36`) | 33 packets; no manifest because the coordinator hard-stopped the app |
+| 2 | ETS2 single-player, borderless, late attach | `960dff7` (`39B9CD36`) | complete, 69/69 envelopes |
+| 3 | ETS2 single-player, windowed | `960dff7` product code (`39B9CD36`) | complete, 58/58 |
+| 4 | ATS single-player, borderless | main `a7724de` (`B03A6C79`) | complete, 71/71 |
+| 5 | ETS2 via TruckersMP, borderless | `a7724de` (`B03A6C79`) | complete, 61/61 |
+| 6 | ETS2 then ATS via TruckersMP | `a7724de` (`B03A6C79`) | the one-shot grant bound to a short ETS2 session selected first; the ATS trip was not captured (v0 live worked) |
+| 7 | ATS via TruckersMP, borderless | `a7724de` (`B03A6C79`) | complete, 56/56 |
+
+The capture manifests report `sourceCommit: null`; the build mapping above comes from the coordinator ledger. A read-only module listing of the ATS TruckersMP game process showed the TruckersMP client module `core_atsmp.dll` loaded before all SDK plugins; the ETS2 module name is unverified.
+
+An independent read-only reviewer checked the sanitized exports of runs 2, 3, 4, 5 and 7:
+
+- Completeness, identities, values and orderings were verified.
+- Currency is SDK-documented (header comment), not observed at runtime. The versions are SDK game-telemetry versions 1.20 (ETS2) and 1.07 (ATS), not game patch versions.
+- Revenue differences cannot be attributed to fines. In run 5, revenue equalled income despite fines. In run 4, the shortfall is consistent with cargo damage. In run 2, zero revenue is consistent with a delivery 471 game minutes late.
+- The run 2 sleep appears only as an unannounced game-time jump.
+- The sanitized exports retain game strings, including a player-customized licence plate; the owner decided this is acceptable. Hardware geometry and binary hashes form a mild fingerprint.
+
+Proposed ordering expectations (owner sessions, small samples; `sharedBoundaryOrder` shows only the adapter's observation order, not the game's causal order):
+
+| # | Expectation | Samples | Confidence |
+| --- | --- | --- | --- |
+| O1 | At game start: a contiguous configuration burst (job empty, bus/car jobs, controls, hshifter, truck, trailers), then `timers.restart`, then `simulation.started` | 4 runs, both games, single-player and TruckersMP | High for these builds |
+| O2 | A job configuration set arrives while paused, in a burst that re-sends truck and trailers; `simulation.started` follows | 5 jobs | High |
+| O3 | Job configuration does not change between set and clear | 5 jobs (quick and freight market only) | Medium |
+| O4 | Event `delivery.time` equals game time at delivery minus game time at configuration set | 4 deliveries | Medium-high |
+| O5 | `simulation.paused` precedes `job.delivered`; delivery arrives while paused | 4 deliveries | Medium-high |
+| O6 | `job.delivered` precedes the configuration clear | 4 deliveries | Medium-high; the reverse is not excluded |
+| O7 | On cancellation, the configuration clear precedes `job.cancelled` | 1 | Low |
+| O8 | Fines and tolls arrive only while running, inside and outside job windows | 23 fines, 3 tolls | Medium |
+| O9 | Game time did not regress; its clock rotated only at `timers.restart`; a large forward jump (sleep) carried no event | 5 runs, 1 jump | Medium / low |
+
+Still missing for CAP-01 acceptance (in addition to the Pending section above):
+
+- **Display matrix:** windowed mode for ATS single-player and for both games under TruckersMP.
+- **Events:** ferry and train.
+- **Scenarios:** save/load and profile change, reconnect, late attach after a job started, a second job in one session, cargo-market and special jobs, owned trailers, and TruckersMP disconnect.
+- **Performance:** frame-time impact.
+
+Bus and car jobs are deferred (TD-002).

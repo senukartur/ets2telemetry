@@ -26,3 +26,16 @@ Record application/game/client versions, capture tool and hotkey, display mode a
 ### Research boundaries
 
 [Trucky's official 2025 report](https://truckyapp.com/blog/announcements/2025-wrap-up/) identifies Electron, so Electron itself is not an inherent barrier. [Overwolf's Electron API](https://dev.overwolf.com/ow-electron/reference/Overwolf-electron-APIs/overlay/interfaces/GameLaunchEvent/) documents game-overlay injection. Neither source proves the capture mechanism of the owner's installed Trucky or VTSBase versions, or guarantees Steam screenshot inclusion. [Electron desktopCapturer](https://www.electronjs.org/docs/latest/api/desktop-capturer) exposes screen/window capture sources; [Steam screenshots](https://partner.steamgames.com/doc/features/screenshots) describe Steam's capture integration. Recheck these APIs during the future investigation.
+
+## TD-002: Bus and car jobs
+
+Recorded by owner decision on October 13, 2026.
+
+SDK 1.15 defines `bus_job` and `car_job` configurations and the `car_job.delivered` and `car_job.cancelled` events, which include `vehicle.damage`. Every observed session start sends empty `bus_job` and `car_job` configurations. Bus content is not yet released for ETS2, car jobs in ATS are recent, and TruckersMP buses are not of interest for now, so these job types are outside the current validation and trip scope.
+
+**Future work:**
+- Capture real bus and car jobs.
+- Define their trip representation, including vehicle damage and passenger or car-specific attributes.
+- Extend ET-014 attribution and the journal.
+
+**Until then:** tolerate the empty configurations and never create trips from them.
