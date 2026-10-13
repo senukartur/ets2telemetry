@@ -114,6 +114,7 @@ The utilityProcess owns ingestion and source validation. A fixed project-owned n
 ### Overlay and Electron
 
 - Use a transparent window that passes mouse input to the game and does not steal focus while driving.
+- Make the overlay topmost with `setAlwaysOnTop(true, 'screen-saver')`. Never use the constructor's `alwaysOnTop` option or Electron's default `floating` level: on Windows they stack the window behind the taskbar and can lose `WS_EX_TOPMOST` over a borderless game. Re-assert the level without activation after each show; see [the minimal overlay z-order](docs/minimal-overlay.md#z-order).
 - Track the game window and hide the overlay when the game is minimized or another application is foreground. Account for monitor and DPI changes.
 - Keep the display update target of up to **20 Hz** separate from the history sampling rate of **1 Hz**.
 - Build main-window UI from the shadcn/ui components in `apps/desktop/src/components/ui`; see [docs/setup.md](docs/setup.md#ui-components-shadcnui). The transparent overlay must not load the shadcn base stylesheet (it paints an opaque `body` background) and does not need interactive Radix components.

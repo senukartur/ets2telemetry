@@ -80,15 +80,19 @@ export async function windowSecurity(application) {
       isOverlaySession: window.webContents.session === session.fromPartition('ets2telemetry-overlay'),
       sessionPersistent: window.webContents.session.getStoragePath() !== null,
       sandbox: preferences.sandbox, isolation: preferences.contextIsolation,
-      node: preferences.nodeIntegration, visible: window.isVisible(), focusable: window.isFocusable()};
+      node: preferences.nodeIntegration, visible: window.isVisible(), focusable: window.isFocusable(),
+      // On Windows, Chromium derives this from the HWND's actual WS_EX_TOPMOST style, not a cached flag.
+      alwaysOnTop: window.isAlwaysOnTop()};
   }));
   assert.equal(windows.length, 2, 'Exactly the dashboard and overlay must exist');
   for (const window of windows) assert.deepEqual({sandbox: window.sandbox, isolation: window.isolation, node: window.node}, {sandbox: true, isolation: true, node: false});
   for (const window of windows) assert.ok(Number.isSafeInteger(window.rendererPid) && window.rendererPid > 0, 'Actual renderer PID must be available');
   const overlay = windows.filter(window => new URL(window.url).search === '?view=overlay');
   assert.equal(overlay.length, 1); assert.equal(overlay[0].visible, false); assert.equal(overlay[0].focusable, false);
+  // The hidden overlay already holds WS_EX_TOPMOST; Electron's `floating` level could lose it behind the taskbar.
+  assert.equal(overlay[0].alwaysOnTop, true, 'Overlay window must be topmost');
   const dashboard = windows.filter(window => new URL(window.url).search === '');
-  assert.equal(dashboard.length, 1);
+  assert.equal(dashboard.length, 1); assert.equal(dashboard[0].alwaysOnTop, false, 'Dashboard must not be topmost');
   assert.notEqual(overlay[0].rendererPid, dashboard[0].rendererPid, 'Overlay and dashboard must use independent renderer processes');
   assert.deepEqual([overlay[0].isDefaultSession, overlay[0].isOverlaySession, overlay[0].sessionPersistent], [false, true, false]);
   assert.deepEqual([dashboard[0].isDefaultSession, dashboard[0].isOverlaySession, dashboard[0].sessionPersistent], [true, false, true]);

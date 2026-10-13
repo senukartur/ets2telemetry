@@ -17,7 +17,8 @@ let contents: EventEmitter & {mainFrame: object; send: ReturnType<typeof vi.fn>;
 let resolveBroker: ReturnType<typeof vi.fn>;
 let loadFile: ReturnType<typeof vi.fn>;
 let overlayContents: typeof contents;
-let windows: (EventEmitter & {webContents: typeof contents; hide: ReturnType<typeof vi.fn>; showInactive: ReturnType<typeof vi.fn>; setBounds: ReturnType<typeof vi.fn>})[];
+let windows: (EventEmitter & {webContents: typeof contents; hide: ReturnType<typeof vi.fn>; showInactive: ReturnType<typeof vi.fn>; setBounds: ReturnType<typeof vi.fn>;
+  topmost: boolean; setAlwaysOnTop: ReturnType<typeof vi.fn>; moveTop: ReturnType<typeof vi.fn>; setIgnoreMouseEvents: ReturnType<typeof vi.fn>; setFocusable: ReturnType<typeof vi.fn>})[];
 let channels: {port1: EventEmitter & {postMessage: ReturnType<typeof vi.fn>; close: ReturnType<typeof vi.fn<() => void>>; start: ReturnType<typeof vi.fn<() => void>>}; port2: {close: ReturnType<typeof vi.fn<() => void>>}}[];
 let configurations: Electron.BrowserWindowConstructorOptions[];
 let log: ReturnType<typeof vi.fn>;
@@ -43,6 +44,8 @@ beforeEach(() => {
     BrowserWindow: class extends EventEmitter {
       webContents = windows.length === 0 ? contents : overlayContents;
       hide = vi.fn(); showInactive = vi.fn(); setBounds = vi.fn(); setIgnoreMouseEvents = vi.fn(); setFocusable = vi.fn(); destroy = vi.fn(() => this.emit('closed'));
+      // Models Windows: isAlwaysOnTop() reports the HWND style, which external z-order changes can clear.
+      topmost = false; isAlwaysOnTop = () => this.topmost; setAlwaysOnTop = vi.fn((flag: boolean) => {this.topmost = flag;}); moveTop = vi.fn();
       constructor(configuration: Electron.BrowserWindowConstructorOptions) {super(); configurations.push(configuration); windows.push(this);}
       isDestroyed() {return false;} loadFile = loadFile;
     },
@@ -240,8 +243,14 @@ it('does not renew SDK or window authority when a failed source change leaves co
   expect(hydrateConsumers()).toMatchObject({dashboard: {selection: 'ets2', fresh: true, observation: {windowFresh: true}}, overlay: {source: 'ETS2', freshness: 'current'}});
 });
 it('constructs hidden click-through nonfocus sandboxed overlay and retains dashboard-only authority', async () => {
-  await ready(); expect(configurations[1]).toMatchObject({show: false, focusable: false, transparent: true, frame: false, skipTaskbar: true, alwaysOnTop: true,
+  await ready(); expect(configurations[1]).toMatchObject({show: false, focusable: false, transparent: true, frame: false, skipTaskbar: true,
     webPreferences: {sandbox: true, contextIsolation: true, nodeIntegration: false}});
+  // The constructor flag would apply Electron's `floating` level, which stacks the overlay behind the taskbar.
+  expect(configurations[1]).not.toHaveProperty('alwaysOnTop');
+  expect(windows[1].setAlwaysOnTop.mock.calls).toEqual([[true, 'screen-saver']]);
+  expect(windows[1].setIgnoreMouseEvents).toHaveBeenCalledWith(true); expect(windows[1].setFocusable).toHaveBeenCalledWith(false);
+  expect(windows[1].moveTop).not.toHaveBeenCalled();
+  expect(windows[0].setAlwaysOnTop).not.toHaveBeenCalled();
   expect(configurations[1].webPreferences!.preload).toContain('overlay-preload.cjs');
   expect(configurations[0].webPreferences).not.toHaveProperty('partition');
   expect(configurations[0].webPreferences).not.toHaveProperty('session');
@@ -253,6 +262,19 @@ it('constructs hidden click-through nonfocus sandboxed overlay and retains dashb
   expect(overlayContents.postMessage).not.toHaveBeenCalled();
   ipc.emit('overlay:subscribe', overlayTrusted()); expect(overlayContents.postMessage).toHaveBeenCalledOnce();
   expect(windows[1].showInactive).not.toHaveBeenCalled();
+});
+it('re-asserts the overlay topmost level after showing and records a fact-only diagnostic when it was lost', async () => {
+  vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2'); await ready(); ipc.emit('overlay:subscribe', overlayTrusted());
+  const overlay = windows[1]; overlay.setAlwaysOnTop.mockClear();
+  // As observed on 2026-10-13: the HWND lost WS_EX_TOPMOST before it was shown over a borderless game.
+  overlay.topmost = false;
+  deliver(currentGame());
+  expect(overlay.showInactive).toHaveBeenCalledOnce(); expect(overlay.setAlwaysOnTop.mock.calls).toEqual([[true, 'screen-saver']]);
+  expect(overlay.showInactive.mock.invocationCallOrder[0]).toBeLessThan(overlay.setAlwaysOnTop.mock.invocationCallOrder[0]);
+  expect(overlay.setAlwaysOnTop.mock.invocationCallOrder[0]).toBeLessThan(overlay.moveTop.mock.invocationCallOrder[0]);
+  expect(overlay.topmost).toBe(true);
+  expect(log.mock.calls.filter(call => call[0] === 'OVERLAY_TOPMOST_RESTORED')).toEqual([['OVERLAY_TOPMOST_RESTORED', undefined, {phase: 'show'}]]);
+  expect(windows[0].setAlwaysOnTop).not.toHaveBeenCalled();
 });
 it('retains the dedicated overlay session construction across reload and renderer recovery', async () => {
   await ready(); const dashboard = windows[0], overlay = windows[1];

@@ -201,9 +201,9 @@ describe('debugger-paused stall start, independent observation and resume orderi
 
 function validReceipt() {
   const windows = [{url: 'file:///fixture/renderer/index.html', rendererPid: 111, isDefaultSession: true, isOverlaySession: false, sessionPersistent: true,
-    sandbox: true, isolation: true, node: false, visible: true, focusable: true},
+    sandbox: true, isolation: true, node: false, visible: true, focusable: true, alwaysOnTop: false},
     {url: 'file:///fixture/renderer/index.html?view=overlay', rendererPid: 222, isDefaultSession: false, isOverlaySession: true, sessionPersistent: false,
-      sandbox: true, isolation: true, node: false, visible: false, focusable: false}];
+      sandbox: true, isolation: true, node: false, visible: false, focusable: false, alwaysOnTop: true}];
   const identity = {origin: 'synthetic', game: 'ets2', processId: 1234, pluginSessionId: '00000000-0000-4000-8000-000000000001',
     processInstanceId: '00000000-0000-4000-8000-000000000002', clockId: '00000000-0000-4000-8000-000000000003'};
   const source = {connections: 1, origin: 'synthetic', history: false, identity, activeClients: 1};
@@ -248,11 +248,43 @@ function validReceipt() {
       })}};
 }
 
-it('requires the complete current overlay receipt and rejects missing results, mixed phases, visibility and cleanup failures', async () => {
+type OverlayReceiptCase = {name: string; mutate?: (receipt: ReturnType<typeof JSON.parse>) => void; code?: number; reason: string | null};
+
+// Each case starts one PowerShell 5.1 validator, so related cases are split across tests to keep each within its timeout.
+async function expectOverlayReceiptCases(cases: OverlayReceiptCase[]) {
   const resources = await temporaryResources();
   const powershell = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe');
   const valid = validReceipt();
-  const cases: {name: string; mutate?: (receipt: ReturnType<typeof JSON.parse>) => void; code?: number; reason: string | null}[] = [
+  try {
+    for (const [index, scenario] of cases.entries()) {
+      const receipt = structuredClone(valid); scenario.mutate?.(receipt);
+      const file = path.join(resources.directory, `overlay-receipt-${index}.json`), config = path.join(resources.directory, `overlay-config-${index}.json`);
+      // Preserve the exact JSON spelling: Number would erase this fractional Decimal PID before PS5.1 sees it.
+      const original = scenario.name === 'tiny fractional Decimal process identity'
+        ? JSON.stringify(receipt).replace('"rendererPid":222', '"rendererPid":222.00000000000000001') : JSON.stringify(receipt);
+      await writeFile(file, original);
+      await writeFile(config, JSON.stringify({receipt: file, code: scenario.code ?? 0, scenario: 'overlay'}));
+      const output = execFileSync(powershell, ['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',
+        path.resolve('tests/shared/Read-RuntimeReceipt.ps1'), '-Configuration', config],
+      {encoding: 'utf8', timeout: 5000, windowsHide: true, env: {...process.env, PSModulePath: ''}});
+      expect(JSON.parse(output), scenario.name).toMatchObject({passed: scenario.reason === null, driverResultAvailable: true, reason: scenario.reason});
+      expect(await readFile(file, 'utf8')).toBe(original);
+    }
+  } finally {await resources.dispose();}
+}
+
+it('rejects an overlay receipt that loses or misreports the topmost state', async () => {
+  await expectOverlayReceiptCases([
+    {name: 'overlay lost topmost in one phase', mutate: receipt => {receipt.overlay.windows[7].windows[1].alwaysOnTop = false;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+    {name: 'overlay topmost state absent at startup', mutate: receipt => {delete receipt.runtime.windows[1].alwaysOnTop;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+    {name: 'overlay not topmost during stall', mutate: receipt => {receipt.overlay.dashboardStallProof.independentObservation.windows[1].alwaysOnTop = false;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+    {name: 'dashboard made topmost', mutate: receipt => {receipt.overlay.windows[0].windows[0].alwaysOnTop = true;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+    {name: 'topmost reported as text', mutate: receipt => {receipt.overlay.windows[3].windows[1].alwaysOnTop = 'true';}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'}
+  ]);
+}, 30000);
+
+it('requires the complete current overlay receipt and rejects missing results, mixed phases, visibility and cleanup failures', async () => {
+  await expectOverlayReceiptCases([
     {name: 'complete hidden-renderer result with authentic fractional timestamps', reason: null},
     {name: 'overlay result absent', mutate: receipt => {delete receipt.overlay;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
     {name: 'overlay bridge absent', mutate: receipt => {delete receipt.overlay.bridge;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
@@ -299,21 +331,5 @@ it('requires the complete current overlay receipt and rejects missing results, m
     {name: 'symmetric stall proof absent', mutate: receipt => {delete receipt.overlay.dashboardStallProof;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
     {name: 'wrong source scenario', mutate: receipt => {receipt.scenarioKind = 'telemetry';}, reason: 'DRIVER_RESULT_SCENARIO_MISMATCH'},
     {name: 'Job failure overrides intact result', code: 125, reason: 'JOB_FAILED'}
-  ];
-  try {
-    for (const [index, scenario] of cases.entries()) {
-      const receipt = structuredClone(valid); scenario.mutate?.(receipt);
-      const file = path.join(resources.directory, `overlay-receipt-${index}.json`), config = path.join(resources.directory, `overlay-config-${index}.json`);
-      // Preserve the exact JSON spelling: Number would erase this fractional Decimal PID before PS5.1 sees it.
-      const original = scenario.name === 'tiny fractional Decimal process identity'
-        ? JSON.stringify(receipt).replace('"rendererPid":222', '"rendererPid":222.00000000000000001') : JSON.stringify(receipt);
-      await writeFile(file, original);
-      await writeFile(config, JSON.stringify({receipt: file, code: scenario.code ?? 0, scenario: 'overlay'}));
-      const output = execFileSync(powershell, ['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',
-        path.resolve('tests/shared/Read-RuntimeReceipt.ps1'), '-Configuration', config],
-      {encoding: 'utf8', timeout: 5000, windowsHide: true, env: {...process.env, PSModulePath: ''}});
-      expect(JSON.parse(output), scenario.name).toMatchObject({passed: scenario.reason === null, driverResultAvailable: true, reason: scenario.reason});
-      expect(await readFile(file, 'utf8')).toBe(original);
-    }
-  } finally {await resources.dispose();}
+  ]);
 }, 30000);

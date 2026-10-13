@@ -21,6 +21,16 @@ function Test-OverlayRendererIsolation {
         $dashboard[0].isDefaultSession -and !$dashboard[0].isOverlaySession -and $dashboard[0].sessionPersistent)
 }
 
+# isAlwaysOnTop() reports the HWND's actual WS_EX_TOPMOST style on Windows.
+function Test-OverlayTopmost {
+    param([object[]]$Windows)
+    $overlay = @($Windows | Where-Object { $_.url -cmatch '/renderer/index\.html\?view=overlay$' })
+    $dashboard = @($Windows | Where-Object { $_.url -cmatch '/renderer/index\.html$' })
+    if ($overlay.Count -ne 1 -or $dashboard.Count -ne 1) { return $false }
+    return ($overlay[0].alwaysOnTop -is [bool] -and $overlay[0].alwaysOnTop -and
+        $dashboard[0].alwaysOnTop -is [bool] -and !$dashboard[0].alwaysOnTop)
+}
+
 function Test-RuntimeReceipt {
     param([string]$DriverResultPath, [string]$ExpectedCommit, [string]$ExpectedMode, [int]$JobExitCode,
         [string]$ExpectedScenario)
@@ -50,7 +60,8 @@ function Test-RuntimeReceipt {
         $valid = $null -ne $overlay -and $overlay.origin -ceq 'synthetic' -and
             $overlay.recording -is [bool] -and $overlay.recording -eq $false -and
             $overlay.scope -ceq 'hidden synthetic renderer; OS visibility, focus and input unverified'
-        if ($driver.runtime.rendererProcessLimit -cne '1' -or !(Test-OverlayRendererIsolation -Windows @($driver.runtime.windows))) { $valid = $false }
+        if ($driver.runtime.rendererProcessLimit -cne '1' -or !(Test-OverlayRendererIsolation -Windows @($driver.runtime.windows)) -or
+            !(Test-OverlayTopmost -Windows @($driver.runtime.windows))) { $valid = $false }
         foreach ($field in @('missingDistinctFromZero','silentOpenStale','resumeRecovered','overlayReloadIndependent',
             'overlayCreditRecovered','dashboardReloadIndependent','dashboardCreditIndependent','disconnectUnavailable','sourceIdentityPreserved')) {
             if ($overlay.$field -isnot [bool] -or $overlay.$field -ne $true) { $valid = $false }
@@ -99,7 +110,7 @@ function Test-RuntimeReceipt {
                 $during.origin -cne 'synthetic' -or $during.freshness -cne 'current' -or $during.speed -cne '72.0' -or $during.fuel -cne '71.0' -or
                 $during.speedUnit -cne 'km/h' -or $during.fuelUnit -cne 'L') { $valid = $false }
             $duringWindows = @($proof.independentObservation.windows)
-            if (!(Test-OverlayRendererIsolation -Windows $duringWindows)) { $valid = $false }
+            if (!(Test-OverlayRendererIsolation -Windows $duringWindows) -or !(Test-OverlayTopmost -Windows $duringWindows)) { $valid = $false }
             if ($duringWindows.Count -ne 2) { $valid = $false }
             foreach ($window in $duringWindows) {
                 if ($window.sandbox -isnot [bool] -or !$window.sandbox -or $window.isolation -isnot [bool] -or !$window.isolation -or
@@ -130,7 +141,7 @@ function Test-RuntimeReceipt {
                 $row.speed -cne $speed -or $row.fuel -cne $fuel -or $row.freshness -cne $freshness -or $row.status -cnotin $states) { $valid = $false }
             $windowRows = @($overlay.windows | Where-Object { $_.phase -ceq $phase })
             if ($windowRows.Count -ne 1 -or @($windowRows[0].windows).Count -ne 2) { $valid = $false; continue }
-            if (!(Test-OverlayRendererIsolation -Windows @($windowRows[0].windows))) { $valid = $false }
+            if (!(Test-OverlayRendererIsolation -Windows @($windowRows[0].windows)) -or !(Test-OverlayTopmost -Windows @($windowRows[0].windows))) { $valid = $false }
             foreach ($window in $windowRows[0].windows) {
                 if ($window.sandbox -isnot [bool] -or !$window.sandbox -or $window.isolation -isnot [bool] -or !$window.isolation -or
                     $window.node -isnot [bool] -or $window.node) { $valid = $false }

@@ -12,7 +12,7 @@ import {createBrokerResolver} from './broker-artifact';
 import {RecoveryBudget} from './recovery-budget';
 import {LiveSubscriptions} from './live-subscriptions';
 import {LiveFreshness} from './live-freshness';
-import {OverlayController} from './overlay-controller';
+import {OVERLAY_TOPMOST_LEVEL, OverlayController} from './overlay-controller';
 import {overlayPresentation} from './overlay-presentation';
 import {captureActivation, type CaptureGrant} from './capture-activation';
 
@@ -115,11 +115,14 @@ else {
   }
   function createOverlay(): void {
     overlay = new BrowserWindow({width: 300, height: 132, show: false, frame: false, transparent: true, backgroundColor: '#00000000',
-      focusable: false, skipTaskbar: true, alwaysOnTop: true, resizable: false, movable: false, minimizable: false, maximizable: false, fullscreenable: false,
+      focusable: false, skipTaskbar: true, resizable: false, movable: false, minimizable: false, maximizable: false, fullscreenable: false,
       // A dedicated in-memory session separates the overlay's browser context from the dashboard.
       webPreferences: {partition: 'ets2telemetry-overlay', preload: path.join(__dirname, 'overlay-preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false}});
     overlay.setIgnoreMouseEvents(true); overlay.setFocusable(false);
-    overlayController = new OverlayController(overlay, screen);
+    // Not the constructor's alwaysOnTop: its default `floating` level stacks the overlay behind the
+    // taskbar, which drops WS_EX_TOPMOST while a borderless full-screen game is foreground.
+    overlay.setAlwaysOnTop(true, OVERLAY_TOPMOST_LEVEL);
+    overlayController = new OverlayController(overlay, screen, phase => log('OVERLAY_TOPMOST_RESTORED', undefined, {phase}));
     overlay.webContents.setWindowOpenHandler(() => ({action: 'deny'}));
     overlay.webContents.on('will-navigate', event => event.preventDefault());
     const retire = () => retireOverlay();
