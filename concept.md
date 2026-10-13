@@ -358,7 +358,7 @@ The following come from owner CAP-01 sessions. An independent read-only reviewer
 
 - ATS single-player, run 4, October 13, 2026: four `red_signal` fines occurred before the job configuration appeared, and two fines occurred during the job.
 - ETS2 single-player, run 3, October 12, 2026: two of the five fines occurred before the job configuration appeared.
-- All four observed deliveries (single-player and TruckersMP): `simulation.paused` preceded `job.delivered`, which arrived while paused. On delivery, `job.delivered` arrived before the job configuration cleared.
+- All four observed deliveries (single-player and TruckersMP): `simulation.paused` preceded `job.delivered`, which arrived while paused. On delivery, `job.delivered` arrived before the job configuration cleared.
 - ETS2 single-player, run 3, October 12, 2026: on cancellation, the configuration cleared before `job.cancelled`.
 
 ET-014 implements this attribution and adds replay scenarios for each window boundary and both outcome orderings.
