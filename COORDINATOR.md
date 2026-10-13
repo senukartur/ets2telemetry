@@ -85,6 +85,7 @@ Use the session's subagent tools for bounded assignments. Do not create separate
 
 Runtime-specific rules:
 
+- Claude Code also offers the project agent types `implementer`, `verifier` and `reviewer` from `.claude/agents/` (see [the delivery pipeline](docs/delivery-pipeline.md)). They may replace `general-purpose` for these roles. The assignment template and the review requirements below still apply.
 - A subagent is not isolated by itself. Verify its working directory and branch before it edits anything, and again before you accept its result.
 - Background agents report asynchronously. Do not treat a notification, a tool return, or a "done" message as proof of completion; inspect the commits and diff (see below).
 - Models and reasoning for Claude Code follow this order: a later explicit owner instruction in the chat overrides the owner's launch prompt, and both override the session defaults. Where the owner gave none, inherit the session defaults and record them as the actual settings. Do not invent a mapping, and never claim a setting was applied unless the runtime confirmed it.
