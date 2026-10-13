@@ -84,7 +84,7 @@ struct Receiver {
 };
 #ifdef ETS2TELEMETRY_TRANSPORT_TEST_HOOKS
 struct HookState {
-  enum class Mode { none, accept_close, accept_immediate, accept_completion, hash_block, hash_read, cancel_race, startup_hold, startup_until_stop } mode = Mode::none;
+  enum class Mode { none, accept_close, accept_immediate, accept_completion, hash_block, hash_read, cancel_race, startup_hold, startup_until_stop, startup_race } mode = Mode::none;
   Handle ready{CreateEventW(nullptr,TRUE,FALSE,nullptr)}, release{CreateEventW(nullptr,TRUE,FALSE,nullptr)}, first_cancel{CreateEventW(nullptr,TRUE,FALSE,nullptr)}, completed{CreateEventW(nullptr,TRUE,FALSE,nullptr)};
   Handle blocked_read, blocked_write;
   std::atomic<unsigned> accepts{0}, reads{0}, blocks{0};
@@ -97,10 +97,15 @@ struct HookState {
     auto& s=*active;
     if (!stop) return result;
     const std::string name(phase);
-    if(name=="startup-before-endpoint" && (s.mode==Mode::startup_hold || s.mode==Mode::startup_until_stop)) {
+    if(name=="startup-before-endpoint" && (s.mode==Mode::startup_hold || s.mode==Mode::startup_until_stop || s.mode==Mode::startup_race)) {
       // Holds the worker past the 1 s SDK-initialization wait until released or stopped.
       SetEvent(s.ready.get()); HANDLE handles[]{stop,s.release.get()};
-      if(WaitForMultipleObjects(s.mode==Mode::startup_hold?2:1,handles,FALSE,10000)==WAIT_TIMEOUT)s.synchronized.store(false);
+      if(WaitForMultipleObjects(s.mode==Mode::startup_until_stop?1:2,handles,FALSE,10000)==WAIT_TIMEOUT)s.synchronized.store(false);
+      return s.injected;
+    }
+    if(name=="startup-await-timeout" && s.mode==Mode::startup_race) {
+      // The wait has expired; the worker completes before the caller's exchange decides ownership.
+      SetEvent(s.release.get()); if(WaitForSingleObject(object,10000)!=WAIT_OBJECT_0)s.synchronized.store(false);
     }
     if(name=="accept-before-connect") {
       const auto attempt=++s.accepts;
@@ -225,7 +230,7 @@ void hash_cancel_race() {
   require(hooks.synchronized.load()&&!fallback.load()&&hooks.late_read_error.load()==ERROR_OPERATION_ABORTED,"stop cancels real read scheduled after first cancellation");
   require(hooks.reads.load()==1&&hooks.blocks.load()==1&&f.server.status()==Status::stopped&&f.server.endpoint().empty(),"race worker completed joined without further image work");
 }
-const char* late_started="ETS2Telemetry: transport started after the startup wait";
+const std::string late_started="ETS2Telemetry: transport started after the startup wait",late_stopped="ETS2Telemetry: transport startup ended by shutdown";
 // Holds the worker before endpoint creation until await_startup() has given up after its 1 s budget.
 void hold_past_wait(HookState& hooks,Fixture& f) {
   require(f.server.start(f.directory),"held worker start"); require(WaitForSingleObject(hooks.ready.get(),5000)==WAIT_OBJECT_0,"startup held before endpoint");
@@ -257,11 +262,25 @@ void startup_late() {
     Handle replacement(CreateNamedPipeW(name.c_str(),PIPE_ACCESS_DUPLEX|FILE_FLAG_OVERLAPPED|FILE_FLAG_FIRST_PIPE_INSTANCE,PIPE_TYPE_BYTE|PIPE_REJECT_REMOTE_CLIENTS,1,4096,4096,0,f.security.attributes()));
     require(!replacement&&hooks.synchronized.load(),"foreign endpoint preserved");
   }
-  {
-    HookState hooks; Fixture f; hooks.mode=HookState::Mode::startup_until_stop; hooks.enable(); hold_past_wait(hooks,f);
+  for(const DWORD injected:{static_cast<DWORD>(ERROR_SUCCESS),static_cast<DWORD>(ERROR_OPERATION_ABORTED)}) {
+    // Stop during the hold: the worker either still completes or fails as if cancelled. Neither is dropped.
+    HookState hooks; Fixture f; hooks.mode=HookState::Mode::startup_until_stop; hooks.injected=injected; hooks.enable(); hold_past_wait(hooks,f);
     const auto started=GetTickCount64(); f.server.stop(); const auto elapsed=GetTickCount64()-started; std::cout<<"pendingStopMs="<<elapsed<<'\n';
-    require(elapsed<1000&&f.server.endpoint().empty(),"stop joins a pending startup promptly"); f.adapter->shutdown();
-    require(f.host.logs.empty()&&hooks.synchronized.load(),"a startup cancelled by stop is not reported");
+    require(elapsed<1000&&f.server.endpoint().empty(),"stop joins a pending startup promptly"); require(f.host.logs.empty(),"worker never logs"); f.adapter->shutdown();
+    const bool failed=injected!=ERROR_SUCCESS;
+    require(f.host.logs.size()==1&&f.host.log_types[0]==(failed?SCS_LOG_TYPE_warning:SCS_LOG_TYPE_message)&&f.host.logs[0]==(failed?late_stopped:late_started)&&hooks.synchronized.load(),"a startup ending during stop is logged once at shutdown, without a stage reason for a failure");
+  }
+  for(const bool collide:{false,true}) {
+    // The wait expires, then the worker completes before the caller's exchange: the result is the caller's.
+    HookState hooks; Fixture f; hooks.mode=HookState::Mode::startup_race; hooks.enable();
+    sdk::Snapshot source; f.adapter->read_current(source); const auto name=endpoint_name(source,f.user); Handle foreign;
+    if(collide) {foreign.reset(CreateNamedPipeW(name.c_str(),PIPE_ACCESS_DUPLEX|FILE_FLAG_OVERLAPPED|FILE_FLAG_FIRST_PIPE_INSTANCE,PIPE_TYPE_BYTE|PIPE_REJECT_REMOTE_CLIENTS,1,4096,4096,0,f.security.attributes())); require(static_cast<bool>(foreign),"actual foreign endpoint before raced startup");}
+    require(f.server.start(f.directory),"raced worker start");
+    const auto started=GetTickCount64(); const auto result=f.server.await_startup(); const auto waited=GetTickCount64()-started;
+    std::cout<<"raceAwaitMs="<<waited<<" collide="<<collide<<'\n';
+    require(result==(collide?StartupFailure::endpoint_creation:StartupFailure::none)&&waited>=900&&hooks.synchronized.load(),"completion after the wait but before the exchange returns the actual result");
+    for(int i=0;i<3;++i) f.host.frame(1);
+    f.server.stop(); f.adapter->shutdown(); require(f.host.logs.empty(),"a caller-owned result leaves no deferred log");
   }
   {
     // Completion within the wait stays the caller's to report; no deferred entry follows. A loaded
@@ -508,8 +527,11 @@ void dll_startup_reporting(const char* path) {
 // pending warning; the eventual result is logged once by a later SDK callback, never by the worker.
 void dll_late_startup(const char* path) {
   OwnedWindow owned;
-  for(unsigned scenario=0;scenario<3;++scenario) {
-    HookState hooks; hooks.mode=scenario==2?HookState::Mode::startup_until_stop:HookState::Mode::startup_hold;
+  // 0 late success, 1 late failure, 2 shutdown while pending, 3 failure completing after the wait but
+  // before the caller's exchange (caller-owned: generic error, no deferred entry).
+  for(unsigned scenario=0;scenario<4;++scenario) {
+    HookState hooks; hooks.mode=scenario==2?HookState::Mode::startup_until_stop:scenario==3?HookState::Mode::startup_race:HookState::Mode::startup_hold;
+    if(scenario==2) hooks.injected=ERROR_OPERATION_ABORTED;
     Fixture f; sdk::Snapshot source; f.adapter->read_current(source); f.adapter->shutdown(); const auto name=endpoint_name(source,f.user);
     HMODULE module=LoadLibraryA(path); require(module!=nullptr,"hooked test DLL load");
     auto init=reinterpret_cast<decltype(&scs_telemetry_init)>(GetProcAddress(module,"scs_telemetry_init")); auto shutdown=reinterpret_cast<decltype(&scs_telemetry_shutdown)>(GetProcAddress(module,"scs_telemetry_shutdown"));
@@ -518,12 +540,19 @@ void dll_late_startup(const char* path) {
     auto set_hook=reinterpret_cast<SetHook>(GetProcAddress(module,"ets2telemetry_test_transport_hook"));
     require(init&&shutdown&&endpoint&&set_hook&&directory&&directory(f.directory.c_str()),"hooked DLL official SDK/test seams");
     HookState::active=&hooks; set_hook(&HookState::hook);
+    Handle foreign; const auto collide=[&]{foreign.reset(CreateNamedPipeW(name.c_str(),PIPE_ACCESS_DUPLEX|FILE_FLAG_OVERLAPPED|FILE_FLAG_FIRST_PIPE_INSTANCE,PIPE_TYPE_BYTE|PIPE_REJECT_REMOTE_CLIENTS,1,4096,4096,0,f.security.attributes())); require(static_cast<bool>(foreign),"actual foreign endpoint for DLL startup");};
+    if(scenario==3) collide();
     auto params=f.host.params(); const auto started=GetTickCount64(); const auto result=init(SCS_TELEMETRY_VERSION_1_01,&params); const auto elapsed=GetTickCount64()-started;
     std::cout<<"late scenario="<<scenario<<" result="<<result<<" initMs="<<elapsed<<std::endl;
-    require(result==SCS_RESULT_ok&&WaitForSingleObject(hooks.ready.get(),5000)==WAIT_OBJECT_0&&elapsed>=900&&elapsed<2500,"held startup returns ok after the fixed wait");
-    require(f.host.logs.size()==1&&f.host.log_types[0]==SCS_LOG_TYPE_warning&&f.host.logs[0]==std::string(startup_pending_message()),"pending warning logged once on the direct caller");
-    Handle foreign;
-    if(scenario==1) {foreign.reset(CreateNamedPipeW(name.c_str(),PIPE_ACCESS_DUPLEX|FILE_FLAG_OVERLAPPED|FILE_FLAG_FIRST_PIPE_INSTANCE,PIPE_TYPE_BYTE|PIPE_REJECT_REMOTE_CLIENTS,1,4096,4096,0,f.security.attributes())); require(static_cast<bool>(foreign),"actual foreign endpoint during held DLL startup");}
+    const auto failed_reason=std::string(startup_failure_message(StartupFailure::endpoint_creation));
+    if(scenario==3) {
+      require(result==SCS_RESULT_generic_error&&elapsed>=900&&elapsed<2500,"raced failure stays the caller's: generic error after the wait");
+      require(f.host.logs.size()==1&&f.host.log_types[0]==SCS_LOG_TYPE_error&&f.host.logs[0]==failed_reason,"raced failure logged once by the direct caller");
+    } else {
+      require(result==SCS_RESULT_ok&&WaitForSingleObject(hooks.ready.get(),5000)==WAIT_OBJECT_0&&elapsed>=900&&elapsed<2500,"held startup returns ok after the fixed wait");
+      require(f.host.logs.size()==1&&f.host.log_types[0]==SCS_LOG_TYPE_warning&&f.host.logs[0]==std::string(startup_pending_message()),"pending warning logged once on the direct caller");
+    }
+    if(scenario==1) collide();
     if(scenario<2) {SetEvent(hooks.release.get()); require(until([&]{f.host.frame(1); return f.host.logs.size()>=2;},5000),"late result reaches a later frame_end callback");}
     if(scenario==0) {
       std::array<wchar_t,512> pipe{}; require(endpoint(pipe.data(),static_cast<unsigned>(pipe.size()))!=0,"late DLL endpoint published");
@@ -532,10 +561,14 @@ void dll_late_startup(const char* path) {
     }
     const auto stopping=GetTickCount64(); shutdown(); require(GetTickCount64()-stopping<1000,"official shutdown joins under deadline");
     set_hook(nullptr); require(FreeLibrary(module)!=FALSE,"hooked DLL unload after joined worker");
-    const char* late=scenario==0?late_started:scenario==1?startup_failure_message(StartupFailure::endpoint_creation):nullptr;
-    require(f.host.logs.size()==(late?2u:1u)&&(!late||(f.host.logs[1]==late&&f.host.log_types[1]==(scenario==0?SCS_LOG_TYPE_message:SCS_LOG_TYPE_error))),"eventual result logged exactly once with its fixed text and severity");
+    if(scenario==3) require(f.host.logs.size()==1,"caller-owned failure adds no deferred entry at shutdown");
+    else {
+      const std::string late=scenario==0?late_started:scenario==1?failed_reason:late_stopped;
+      const auto severity=scenario==0?SCS_LOG_TYPE_message:scenario==1?SCS_LOG_TYPE_error:SCS_LOG_TYPE_warning;
+      require(f.host.logs.size()==2&&f.host.logs[1]==late&&f.host.log_types[1]==severity,"eventual result logged exactly once with its fixed text and severity");
+    }
     require(f.host.wrong_thread==0&&hooks.synchronized.load(),"all game logging stays on the SDK caller thread");
-    if(scenario==1) {Handle replacement(CreateNamedPipeW(name.c_str(),PIPE_ACCESS_DUPLEX|FILE_FLAG_OVERLAPPED|FILE_FLAG_FIRST_PIPE_INSTANCE,PIPE_TYPE_BYTE|PIPE_REJECT_REMOTE_CLIENTS,1,4096,4096,0,f.security.attributes())); require(!replacement,"foreign endpoint preserved");}
+    if(scenario==1||scenario==3) {Handle replacement(CreateNamedPipeW(name.c_str(),PIPE_ACCESS_DUPLEX|FILE_FLAG_OVERLAPPED|FILE_FLAG_FIRST_PIPE_INSTANCE,PIPE_TYPE_BYTE|PIPE_REJECT_REMOTE_CLIENTS,1,4096,4096,0,f.security.attributes())); require(!replacement,"foreign endpoint preserved");}
   }
 }
 #endif

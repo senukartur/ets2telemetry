@@ -210,7 +210,8 @@ void Adapter::flush_deferred_log() noexcept {
   // SDK calling thread only, during a direct game invocation (frame_end callback or shutdown).
   if (!deferred_log_.load(std::memory_order_relaxed)) return;
   const auto* entry = deferred_log_.exchange(nullptr, std::memory_order_acquire);
-  try { if (entry && api_.common.log) api_.common.log(entry->type, entry->message); } catch (...) { failure(); }
+  // A logger exception loses no telemetry observation, so it is not counted as lost data.
+  try { if (entry && api_.common.log) api_.common.log(entry->type, entry->message); } catch (...) { increment(producer_.continuity.callback_failures); }
 }
 void Adapter::failure() noexcept { increment(producer_.continuity.callback_failures); increment(producer_.continuity.lost_observations); }
 bool Adapter::next_order() noexcept {

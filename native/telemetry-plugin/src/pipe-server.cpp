@@ -23,9 +23,12 @@ const char* startup_failure_message(StartupFailure failure) noexcept {
 }
 const char* startup_pending_message() noexcept { return "ETS2Telemetry: transport startup pending: timeout"; }
 namespace {
-// Fixed entries for a result that arrives after official initialization stopped waiting.
-const sdk::DeferredLog* late_startup_log(StartupFailure failure) noexcept {
+// Fixed entries for a result that arrives after official initialization stopped waiting. A failure that
+// ends after stop() was requested may be a cancellation artifact, so it carries no stage reason.
+const sdk::DeferredLog* late_startup_log(StartupFailure failure, bool stopping) noexcept {
   static const sdk::DeferredLog started{SCS_LOG_TYPE_message,"ETS2Telemetry: transport started after the startup wait"};
+  static const sdk::DeferredLog stopped{SCS_LOG_TYPE_warning,"ETS2Telemetry: transport startup ended by shutdown"};
+  if (failure != StartupFailure::none && stopping) return &stopped;
   static const auto failed = [] {
     std::array<sdk::DeferredLog,static_cast<std::size_t>(StartupFailure::timeout)+1> entries{};
     for (std::size_t i = 0; i < entries.size(); ++i) entries[i] = {SCS_LOG_TYPE_error,startup_failure_message(static_cast<StartupFailure>(i))};
@@ -52,6 +55,9 @@ StartupFailure Server::await_startup() noexcept {
   // Only explicit SDK initialization waits here; no callback or client handshake does.
   if (!startup_event_) return StartupFailure::worker_creation;
   if (WaitForSingleObject(startup_event_.get(),1000) == WAIT_OBJECT_0) return startup_failure_.load();
+#ifdef ETS2TELEMETRY_TRANSPORT_TEST_HOOKS
+  transport_test_hook("startup-await-timeout",startup_event_.get(),stop_event_.get());
+#endif
   // The worker may complete between the wait and this exchange; the result is then still ours.
   auto expected = StartupReport::pending;
   if (!startup_report_.compare_exchange_strong(expected,StartupReport::detached) && expected == StartupReport::completed) return startup_failure_.load();
@@ -60,9 +66,9 @@ StartupFailure Server::await_startup() noexcept {
 void Server::complete_startup(StartupFailure result) noexcept {
   startup_failure_.store(result);
   auto expected = StartupReport::pending;
-  // A detached result is reported on the SDK thread later; one cancelled by stop() is not reported.
-  if (!startup_report_.compare_exchange_strong(expected,StartupReport::completed) && WaitForSingleObject(stop_event_.get(),0) == WAIT_TIMEOUT)
-    adapter_.defer_log(late_startup_log(result));
+  // A detached result is never dropped: the SDK thread logs it from frame_end or from shutdown.
+  if (!startup_report_.compare_exchange_strong(expected,StartupReport::completed))
+    adapter_.defer_log(late_startup_log(result,WaitForSingleObject(stop_event_.get(),0) == WAIT_OBJECT_0));
   SetEvent(startup_event_.get());
 }
 void Server::stop() noexcept {
@@ -221,7 +227,7 @@ void Server::run(std::wstring directory) noexcept {
     const auto name = endpoint_name(current_,user);
 #ifdef ETS2TELEMETRY_TRANSPORT_TEST_HOOKS
     // Holds startup past the SDK-initialization wait to exercise the late-result path.
-    transport_test_hook("startup-before-endpoint",nullptr,stop_event_.get());
+    if (transport_test_hook("startup-before-endpoint",nullptr,stop_event_.get()) != ERROR_SUCCESS) throw std::runtime_error("startup-hook");
 #endif
     startup_stage = StartupFailure::endpoint_creation;
     Handle pipe(CreateNamedPipeW(name.c_str(),PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED | FILE_FLAG_FIRST_PIPE_INSTANCE,
