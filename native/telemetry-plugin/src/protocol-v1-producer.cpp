@@ -237,7 +237,7 @@ std::optional<std::size_t> Encoder::measure_event(const EventRecord& e) const no
 std::vector<std::uint8_t> encode(Json wire) { Message m; m.wire = std::move(wire); return encode_frame(m); }
 
 Ingest ingest_event(EventStore& store, const Encoder& encoder, const EventRecord& record, std::uint64_t now_ns) noexcept {
-  if (store.exhausted() || record.event_seq != store.next_event_seq()) return Ingest::rejected;
+  if (store.exhausted() || !store.ever_connected() || record.event_seq != store.next_event_seq()) return Ingest::rejected;
   if (const auto bytes = encoder.measure_event(record)) {
     switch (store.admit(record, *bytes, now_ns)) {
       case EventStore::Admission::retained: return Ingest::retained;

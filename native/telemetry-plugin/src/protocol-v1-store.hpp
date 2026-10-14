@@ -48,9 +48,11 @@ class EventStore {
   EventStore& operator=(const EventStore&) = delete;
 
   // Retains one event measured at admission with the worst-case envelope (OD-5 S3), or records it as lost with
-  // queueCount (no entry), queueBytes (no bytes; queueCount wins when both apply) or retentionExpired (no durable
-  // consumer and no open retention window). `rejected` means misuse with no effect: an eventSeq other than N, an
-  // exhausted sequence or a size outside 1..16,384 bytes.
+  // queueCount (no entry), queueBytes (no bytes; queueCount wins when both apply) or retentionExpired (copied while a
+  // durable consumer was connected, but stored after its retention window ended; OD-5 S4). `rejected` means misuse
+  // with no effect: an eventSeq other than N, an exhausted sequence, a size outside 1..16,384 bytes, or a store that
+  // never had a durable connection. The capture gate copies events only for a durable consumer; before the first one,
+  // events reach the store as offline or noDurableConsumer loss runs through lose() (OD-4).
   Admission admit(const EventRecord&, std::size_t encoded_bytes, std::uint64_t now_ns);
   // Records the lost range [first, last] with one cause. `first` must equal N, and the lost times are both present
   // (first <= last) or both absent. Extends a trailing gap record in place, otherwise adds one in the reserved entry.
@@ -80,6 +82,8 @@ class EventStore {
   // True once every assignable eventSeq is covered; the producer then ends the session with sequence-exhausted.
   bool exhausted() const noexcept { return next_ > max_event_seq; }
   bool connected() const noexcept { return connected_; }
+  // True once a durable consumer has connected in this plugin session.
+  bool ever_connected() const noexcept { return ever_connected_; }
   std::optional<std::uint64_t> retention_deadline_ns() const noexcept { return deadline_; }
   std::uint64_t next_event_seq() const noexcept { return next_; }
   std::uint64_t release_point() const noexcept { return acked_; }
@@ -105,7 +109,7 @@ class EventStore {
   std::size_t head_ = 0, count_ = 0, bytes_ = 0;
   std::uint64_t acked_ = 0, next_ = 1;
   LossCounts loss_;
-  bool connected_ = false; std::optional<std::uint64_t> deadline_;
+  bool connected_ = false, ever_connected_ = false; std::optional<std::uint64_t> deadline_;
   // Highest eventSeq written on the current connection, and on any connection before it.
   std::uint64_t sent_through_ = 0, written_ = 0, written_before_ = 0;
 };

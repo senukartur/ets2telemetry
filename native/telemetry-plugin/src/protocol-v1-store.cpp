@@ -53,10 +53,11 @@ bool EventStore::push_gap(std::uint64_t first, std::uint64_t last, const LossCou
 }
 
 EventStore::Admission EventStore::admit(const EventRecord& record, std::size_t encoded_bytes, std::uint64_t now_ns) {
-  if (exhausted() || record.event_seq != next_ || encoded_bytes == 0 || encoded_bytes > limits.event_bytes) return Admission::rejected;
+  if (exhausted() || !ever_connected_ || record.event_seq != next_ || encoded_bytes == 0 || encoded_bytes > limits.event_bytes) return Admission::rejected;
   const auto observed = record.occurred.monotonic_ns.available() ? std::optional<std::uint64_t>(record.occurred.monotonic_ns.value) : std::nullopt;
   Admission result;
-  // Without a durable consumer or an open retention window nothing is retained (OD-5 S4 covers only events copied while durable).
+  // After the retention window has ended nothing is retained: an event copied while durable but stored this late is lost
+  // with retentionExpired (OD-5 S4).
   if (!connected_ && !deadline_) result = Admission::lost_retention_expired;
   // Events never take the last entry or the last gap_record_bytes, so a later loss always fits as a gap record.
   // When both bounds apply, queueCount is counted.
@@ -82,7 +83,7 @@ bool EventStore::lose(std::uint64_t first, std::uint64_t last, LossCause cause, 
 }
 
 void EventStore::connect() {
-  connected_ = true; deadline_.reset();
+  connected_ = true; ever_connected_ = true; deadline_.reset();
   // A new connection starts at the release point, which is always the first eventSeq of an entry minus one.
   sent_through_ = acked_; written_before_ = written_;
 }

@@ -248,9 +248,13 @@ void store_case() {
   EventStore fresh; const auto empty = fresh.status();
   check(empty.acked_through_event_seq == 0 && empty.next_event_seq == 1 && empty.retained_entries == 0 && empty.retained_bytes == 0 && !empty.oldest_retained_ns &&
     same(empty.event_loss, {}) && !fresh.exhausted() && !fresh.connected(), "fresh store");
-  // Without a durable consumer or a retention window nothing is retained; the eventSeq still gets coverage.
-  check(fresh.admit(make_event(1, records::JobCleared{}, 5), 100, 6) == EventStore::Admission::lost_retention_expired, "no retention without a consumer");
-  check(fresh.entries() == 1 && fresh.entry(0).gap && fresh.status().event_loss.retention_expired == 1 && fresh.next_event_seq() == 2, "lost event covered");
+  // Before any durable connection events arrive only as offline or noDurableConsumer runs (OD-4): admission is misuse.
+  const Encoder fresh_encoder(identity());
+  check(fresh.admit(make_event(1, records::JobCleared{}, 5), 100, 6) == EventStore::Admission::rejected && !fresh.ever_connected(), "no admission before a durable connection");
+  check(ingest_event(fresh, fresh_encoder, make_event(1, records::JobCleared{}, 5), 6) == Ingest::rejected &&
+    ingest_event(fresh, fresh_encoder, make_event(1, records::TrailerCleared{10}, 5), 6) == Ingest::rejected, "no ingestion before a durable connection");
+  check(fresh.entries() == 0 && fresh.next_event_seq() == 1 && same(fresh.status().event_loss, {}), "rejection has no effect");
+  check(fresh.lose(1, 2, LossCause::offline, 5, 6, 7) && fresh.entries() == 1 && fresh.status().event_loss.offline == 2, "offline run before the first connection");
   check_store(fresh);
 
   EventStore store; store.connect(); Monotone m;
