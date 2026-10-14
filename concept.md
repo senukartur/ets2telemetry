@@ -397,7 +397,7 @@ The detected mode, its method and its confidence are trip evidence and travel th
 
 ## Sleep and unannounced game-time jumps — October 13, 2026
 
-SDK 1.15 has no sleep or rest gameplay event. In CAP-01 run 2 (ETS2 single-player, October 12, 2026) the owner slept, and the only trace was a forward game-time jump of about 595 game minutes within a few minutes of active simulation, with no lifecycle or gameplay event. ET-014 must treat a large forward game-time jump without a timer reset as a possible sleep or rest: keep it as an annotated discontinuity of game time, never fabricate samples or game-time intervals across it, and keep real-time accounting unaffected. Report game-time durations, such as delivery time, as the plain game-time span including the jump: this matches the game's own `delivery.time` (O4) and its lateness accounting (run 2 was 471 game minutes late across the sleep). Annotate the jump instead of subtracting it. The `rest.stop` channel and the `avoid_sleeping` fine are additional, unverified hints.
+SDK 1.15 has no sleep or rest gameplay event. In CAP-01 run 2 (ETS2 single-player, October 12, 2026) the owner slept, and the only trace was a forward game-time jump of about 595 game minutes within a few minutes of active simulation, with no lifecycle or gameplay event. ET-014 must treat a large forward game-time jump without a timer reset as a possible sleep or rest: keep it as an annotated discontinuity of game time, never fabricate samples or game-time intervals across it, and keep real-time accounting unaffected. Report game-time durations, such as delivery time, as the plain game-time span including the jump: this matches the game's own `delivery.time` (O4) and its lateness accounting (run 2 was 471 game minutes late across the sleep). Annotate the jump instead of subtracting it. The `rest.stop` channel and the `avoid_sleeping` fine are additional, unverified hints. Ferry and train crossings also advance game time faster than driving (CAP-01 run 8, October 14, 2026), but they come with an explicit `player.use.ferry` or `player.use.train` event. ET-014 should label a jump next to such an event as a crossing, not as a possible sleep. Because the capture cannot locate the jump relative to the event, this labelling rule is still unverified.
 
 ## Save loading — October 14, 2026
 
@@ -425,6 +425,8 @@ CAP-01 is accepted on owner CAP0 sessions 2–9, two independent observation rev
 - windowed ATS single-player, and both games under TruckersMP in windowed mode;
 - a train crossing and a weigh station;
 - a profile change, a second job in one session, special jobs, owned trailers, a TruckersMP disconnect and menu-only states;
+- late attach after a job started (job configuration at attach);
+- refuel through the fuel channel;
 - runtime currency;
 - values across a save load;
 - the plugin's own frame-time cost.
