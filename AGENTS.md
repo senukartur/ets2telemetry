@@ -253,3 +253,7 @@ The owner removed the built-in Convoy multiplayer mode from the current validati
 ## v0 startup-budget hardening — October 13, 2026
 
 Owner decision: a v0 transport startup that has not finished within the fixed 1 s SDK-initialization wait is pending, not failed. Official init logs one fixed warning and returns `ok`; the worker keeps starting. The adapter logs its eventual result once on the SDK thread, from the next `frame_end` or from shutdown. Failures reported within the wait still return `generic_error` with one fixed error log. The game never waits longer than before. See [the native transport](docs/native-transport-v0.md) and [the startup-budget record](docs/validation/et-004-startup-budget.md). This is ET-004 hardening only; it establishes no game compatibility and authorizes no protocol v1 or later-phase work.
+
+## CAP-01 and SP-01 acceptance — October 14, 2026
+
+The owner accepted CAP-01 with explicit gaps and accepted SP-01 on October 14, 2026. See [concept.md](concept.md#cap-01-and-sp-01-acceptance--october-14-2026) and [CAP-01a validation](docs/validation/cap-01a.md#cap-01-acceptance-october-14-2026). The gaps stay pending, not observed. Neither acceptance establishes TruckersMP, display or performance support, or completes the full ET-009 gate. Authorization for later packages, such as ET-002b, is recorded separately.

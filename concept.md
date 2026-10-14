@@ -401,21 +401,37 @@ SDK 1.15 has no sleep or rest gameplay event. In CAP-01 run 2 (ETS2 single-playe
 
 ## Save loading — October 14, 2026
 
-In CAP-01 run 9 (ETS2 single-player, October 14, 2026; coordinator observation, not yet independently reviewed), a save loaded within one game process produced this sequence:
+In CAP-01 run 9 (ETS2 single-player, October 14, 2026; owner session, independently reviewed October 14, 2026), a save loaded within one game process produced this sequence:
 - `simulation.paused`;
 - the job, controls, truck and trailer configurations cleared;
-- the full configuration set re-sent, including the same job;
+- the configuration set re-sent, except `car_job`;
 - `simulation.started`;
-- `game.time.regression`, with game time back at the saved value and the game-time clock rotated.
+- `game.time.regression`, with game time back at the saved value and the game-time clock rotated. Only this event carries the new time and clock: the re-sent configuration and `simulation.started` still carry the pre-load values.
 
-The plugin stayed loaded and the v0 session continued; there was no `timers.restart`. Distance and fuel may also jump back to the saved state.
+The plugin stayed loaded and the v0 session continued; there was no `timers.restart`. CAP0 carries no channel values, so odometer, distance and fuel across a load are unobserved. ET-014 must not assume they are continuous.
 
 ET-014 must therefore:
-- treat a configuration clear followed by a re-send of the same job, around a game-time regression, as a save load within the same trip, not as a cancellation or a new trip;
-- annotate the discontinuity and never count negative distance or time;
-- keep an ambiguous continuation separate rather than merging it silently.
+- treat a configuration clear and re-send around a game-time regression as a probable save load, and decide only after the regression is observed (it follows `simulation.started`);
+- continue the same trip only when every job attribute is identical to the trip's last known job configuration. A load can restore a different job or no job; otherwise mark the continuation ambiguous and do not merge it;
+- annotate the discontinuity and never count negative distance or time.
 
-A configuration clear alone still does not prove an outcome. Delivery and cancellation come only from their gameplay events. A cargo-market job also re-sends its configuration at pickup with only `cargo.loaded` changed, so a re-send alone is not a new job.
+A save load first clears truck and trailer to empty configurations. A cancellation instead re-sends them with their values and emits `job.cancelled`. A configuration clear alone still does not prove an outcome: delivery and cancellation come only from their gameplay events. A cargo-market job also re-sends its configuration at pickup with only `cargo.loaded` changed, so a re-send alone is not a new job. These rules rest on one save-load sample.
+
+## CAP-01 and SP-01 acceptance — October 14, 2026
+
+The owner accepted CAP-01 on October 14, 2026 with explicit gaps, and SP-01 on the same day.
+
+CAP-01 is accepted on owner CAP0 sessions 2–9, two independent observation reviews, and expectations O1–O11 ([CAP-01a validation](docs/validation/cap-01a.md#cap-01-acceptance-october-14-2026)). Its gaps remain pending, not observed:
+- windowed ATS single-player, and both games under TruckersMP in windowed mode;
+- a train crossing and a weigh station;
+- a profile change, a second job in one session, special jobs, owned trailers, a TruckersMP disconnect and menu-only states;
+- runtime currency;
+- values across a save load;
+- the plugin's own frame-time cost.
+
+SP-01 is accepted as an owner decision. Its early feasibility goal was superseded by the maintained ET-008 path. The windowed retry passed in ETS2 single-player on October 14, 2026 ([ET-008 validation](docs/validation/et-008.md)), and Convoy stays deferred.
+
+Neither acceptance establishes TruckersMP, display or performance support, or completes the full ET-009 gate. Authorization for later packages is recorded separately.
 
 ## Multi-monitor validation deferred — October 14, 2026
 
