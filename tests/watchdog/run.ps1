@@ -44,6 +44,22 @@ try {
     $output = Run-Fixture 'output' 'output' 5000
     Assert ($output.Code -eq 0) 'Output fixture failed.'
     Assert ((Get-Item -LiteralPath (Join-Path $output.Directory 'stdout.log')).Length -eq 1048576) 'Output capture is not capped at 1 MiB.'
+    Assert (!(Test-Path -LiteralPath (Join-Path $normal.Directory 'cpu.jsonl'))) 'CPU samples were written without being requested.'
+    $sampledDirectory = Join-Path $root 'cpu-sampled'
+    New-Item -ItemType Directory -Path $sampledDirectory | Out-Null
+    $sampledCode = [ETS2Telemetry.Diagnostics.BoundedProcess]::Run($NodePath, [string[]]@($fixture, 'spin', $sampledDirectory), $sampledDirectory, $sampledDirectory, 5000, $true)
+    Assert ($sampledCode -eq 0) "Sampled fixture failed (code $sampledCode)."
+    $lines = @(Get-Content -LiteralPath (Join-Path $sampledDirectory 'cpu.jsonl') | ForEach-Object { $_ | ConvertFrom-Json })
+    Assert ($lines[0].type -eq 'start' -and $lines[0].logicalProcessors -eq [Environment]::ProcessorCount -and $lines[0].jobCpuRatePercent -eq 25) 'CPU sample header is wrong.'
+    $samples = @($lines | Select-Object -Skip 1)
+    Assert ($samples.Count -ge 8) "Too few CPU samples ($($samples.Count))."
+    for ($i = 1; $i -lt $samples.Count; $i++) {
+        Assert ($samples[$i].elapsedMs -ge $samples[$i - 1].elapsedMs -and $samples[$i].jobCpuMs -ge $samples[$i - 1].jobCpuMs) 'CPU samples are not cumulative.'
+    }
+    $last = $samples[-1]
+    # A one-second spin under the hard cap: some CPU, but no more than the cap allows plus enforcement slack.
+    Assert ($last.jobCpuMs -gt 50) "Job CPU time was not recorded ($($last.jobCpuMs) ms)."
+    Assert ($last.jobCpuMs -le 0.25 * [Environment]::ProcessorCount * $last.elapsedMs + 250) "Job CPU time exceeds the 25% cap ($($last.jobCpuMs) ms in $($last.elapsedMs) ms)."
     $ownerDirectory = Join-Path $root 'owner-death'
     New-Item -ItemType Directory -Path $ownerDirectory | Out-Null
     $shellPath = (Get-Process -Id $PID).Path
@@ -59,7 +75,7 @@ try {
     Assert ($owner.WaitForExit(5000)) 'Watchdog fixture process did not stop.'
     Assert-Stopped $ownerDirectory
     Assert (!$sentinel.HasExited) 'Watchdog affected an unrelated process.'
-    Write-Output 'PASS: exit codes, argument quoting, stderr, timeout tree cleanup, orphan cleanup, output cap, owner-death cleanup, unrelated process preservation.'
+    Write-Output 'PASS: exit codes, argument quoting, stderr, timeout tree cleanup, orphan cleanup, output cap, opt-in CPU samples, owner-death cleanup, unrelated process preservation.'
     Write-Output "Evidence: $root"
 } finally {
     if ($null -ne $owner -and !$owner.HasExited) { $owner.Kill(); $null = $owner.WaitForExit(5000) }

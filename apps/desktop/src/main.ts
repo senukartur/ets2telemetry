@@ -5,7 +5,7 @@ import path from 'node:path';
 import type {EventEmitter} from 'node:events';
 import type {LiveTelemetry, OverlayPresentation, ScaffoldStatus, SourceSelection} from '../../../packages/contracts/src';
 import {processEntrypoint} from './entrypoints';
-import {createDiagnostics} from './diagnostics';
+import {createDiagnostics, type DiagnosticFacts} from './diagnostics';
 import {ServiceSupervisor} from './service-supervisor';
 import {initialLive, sourceSelection} from './live-state';
 import {createBrokerResolver} from './broker-artifact';
@@ -15,11 +15,23 @@ import {LiveFreshness} from './live-freshness';
 import {OVERLAY_TOPMOST_LEVEL, OverlayController} from './overlay-controller';
 import {overlayPresentation} from './overlay-presentation';
 import {captureActivation, type CaptureGrant} from './capture-activation';
+import {monitorEventLoopLag} from './event-loop-lag';
 
 if (squirrelStartup) app.quit();
 else {
   const diagnosticDirectory = process.env.ETS2TELEMETRY_DIAGNOSTIC_DIR;
   const log = createDiagnostics(diagnosticDirectory || path.join(process.env.LOCALAPPDATA || app.getPath('userData'), 'ETS2Telemetry', 'logs'), Boolean(diagnosticDirectory));
+  // Opt-in startup timeline for diagnosing stalls in isolated smokes: fixed codes and numbers only, never in default logs.
+  const timeline = diagnosticDirectory ? (event: string, facts?: DiagnosticFacts) => log(event, undefined, facts) : undefined;
+  function observeLoads(contents: Electron.WebContents, prefix: 'DASHBOARD' | 'OVERLAY'): void {
+    if (!timeline) return;
+    contents.on('did-start-loading', () => timeline(`${prefix}_LOAD_STARTED`));
+    contents.on('did-finish-load', () => {
+      let rendererPid: number | null = null;
+      try {rendererPid = contents.getOSProcessId();} catch {/* A destroyed renderer has no PID. */}
+      timeline(`${prefix}_LOAD_FINISHED`, {rendererPid});
+    });
+  }
   let window: BrowserWindow | undefined, service: UtilityProcess | undefined, status: ScaffoldStatus | undefined;
   let subscribed = false, serviceReady = false;
   let overlay: BrowserWindow | undefined, overlayController: OverlayController | undefined;
@@ -118,6 +130,7 @@ else {
       focusable: false, skipTaskbar: true, resizable: false, movable: false, minimizable: false, maximizable: false, fullscreenable: false,
       // A dedicated in-memory session separates the overlay's browser context from the dashboard.
       webPreferences: {partition: 'ets2telemetry-overlay', preload: path.join(__dirname, 'overlay-preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false}});
+    timeline?.('OVERLAY_WINDOW_CREATED'); observeLoads(overlay.webContents, 'OVERLAY');
     overlay.setIgnoreMouseEvents(true); overlay.setFocusable(false);
     // Not the constructor's alwaysOnTop: its default `floating` level stacks the overlay behind the
     // taskbar, which drops WS_EX_TOPMOST while a borderless full-screen game is foreground.
@@ -144,6 +157,7 @@ else {
   }
   function createWindow(): void {
     window = new BrowserWindow({width: 800, height: 500, webPreferences: {preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false}});
+    timeline?.('DASHBOARD_WINDOW_CREATED'); observeLoads(window.webContents, 'DASHBOARD');
     window.webContents.setWindowOpenHandler(() => ({action: 'deny'}));
     window.webContents.on('will-navigate', event => event.preventDefault());
     const retireDocument = () => {rendererEpoch++; subscribed = false; dashboardSubscriptions.close(); dashboardPort = undefined;};
@@ -190,6 +204,11 @@ else {
     });
   }
   log('APP_START', {electron: process.versions.electron, node: process.versions.node, packaged: app.isPackaged});
+  if (timeline) {
+    monitorEventLoopLag(facts => timeline('MAIN_EVENT_LOOP_LAG', facts));
+    // Observation only: an unexpected GPU or utility exit is recorded, not treated as a smoke failure here.
+    app.on('child-process-gone', (_event, details) => timeline('CHILD_PROCESS_GONE', {type: details.type, reason: details.reason, exitCode: details.exitCode, name: details.name ?? null}));
+  }
   process.on('uncaughtException', error => fail('UNCAUGHT_EXCEPTION', error));
   process.on('unhandledRejection', error => fail('UNHANDLED_REJECTION', error));
   app.on('before-quit', event => {event.preventDefault(); freshness.close(); closeUpstream(); overlayController?.loaded(false); stop();});

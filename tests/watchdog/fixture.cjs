@@ -8,6 +8,10 @@ if (mode === 'normal') {
   process.exitCode = 7;
 } else if (mode === 'output') {
   process.stdout.write('x'.repeat(2 * 1024 * 1024));
+} else if (mode === 'spin') {
+  // Consumes CPU so the Job's capped CPU accounting has something to measure.
+  const until = Date.now() + 1000;
+  while (Date.now() < until) { /* busy */ }
 } else if (mode === 'leaf') {
   setInterval(() => {}, 1000);
 } else {

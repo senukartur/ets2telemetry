@@ -539,3 +539,30 @@ it('does not renew a used capture grant after a supervised service restart', asy
   const selects = replacement.postMessage.mock.calls.map(call => call[0] as Record<string, unknown>).filter(message => message.type === 'select');
   expect(selects).toEqual([{type: 'select', source: 'ets2', broker}]);
 });
+it('records the opt-in startup timeline and main event-loop stalls only for an explicit diagnostic directory', async () => {
+  vi.stubEnv('ETS2TELEMETRY_DIAGNOSTIC_DIR', 'C:\\isolated\\diagnostics');
+  await ready();
+  const events = () => log.mock.calls.map(call => call[0] as string);
+  expect(events()).toEqual(expect.arrayContaining(['DASHBOARD_WINDOW_CREATED', 'OVERLAY_WINDOW_CREATED']));
+  contents.emit('did-start-loading'); contents.emit('did-finish-load'); overlayContents.emit('did-finish-load');
+  // The mock has no OS renderer process, so the PID is explicitly unavailable rather than invented.
+  expect(log).toHaveBeenCalledWith('DASHBOARD_LOAD_STARTED', undefined, undefined);
+  expect(log).toHaveBeenCalledWith('DASHBOARD_LOAD_FINISHED', undefined, {rendererPid: null});
+  expect(log).toHaveBeenCalledWith('OVERLAY_LOAD_FINISHED', undefined, {rendererPid: null});
+  app.emit('child-process-gone', {}, {type: 'GPU', reason: 'crashed', exitCode: 3, name: 'GPU'});
+  expect(log).toHaveBeenCalledWith('CHILD_PROCESS_GONE', undefined, {type: 'GPU', reason: 'crashed', exitCode: 3, name: 'GPU'});
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(events()).not.toContain('MAIN_EVENT_LOOP_LAG');
+  // A blocked main thread: the clock moves 3 s while no timer runs.
+  vi.setSystemTime(Date.now() + 3000); await vi.advanceTimersByTimeAsync(250);
+  expect(log).toHaveBeenCalledWith('MAIN_EVENT_LOOP_LAG', undefined, {gapMs: 3250, lateMs: 3000});
+  // None of these observations may match the smoke's failure-event pattern.
+  expect(events().filter(name => /FAILED|TIMEOUT|UNCAUGHT|UNHANDLED|INVALID|RENDER_PROCESS_GONE/.test(name))).toEqual([]);
+});
+it('keeps default logs free of the diagnostic timeline and lag monitor', async () => {
+  await ready();
+  contents.emit('did-start-loading'); contents.emit('did-finish-load'); app.emit('child-process-gone', {}, {type: 'GPU', reason: 'crashed', exitCode: 3});
+  vi.setSystemTime(Date.now() + 3000); await vi.advanceTimersByTimeAsync(250);
+  const timeline = ['DASHBOARD_WINDOW_CREATED', 'OVERLAY_WINDOW_CREATED', 'DASHBOARD_LOAD_STARTED', 'DASHBOARD_LOAD_FINISHED', 'CHILD_PROCESS_GONE', 'MAIN_EVENT_LOOP_LAG'];
+  expect(log.mock.calls.map(call => call[0] as string).filter(name => timeline.includes(name))).toEqual([]);
+});
