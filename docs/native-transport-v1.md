@@ -29,9 +29,9 @@ Records keep SDK units: speed in m/s, fuel in L, odometer and range in km, consu
 
 ### Encoder
 
-Each builder returns the wire tree of one message; `encode()` validates it with the contract and adds the length prefix. A message whose `capture.monotonicNs` precedes a source-clock time it carries (an occurrence, lost or retention time) is rejected, never clamped. The endpoint stamps `capture` when it encodes (OD-5 S7).
+Each builder returns the wire tree of one message; `encode()` validates it with the contract and adds the length prefix. A message whose `capture.monotonicNs` precedes a source-clock time it carries (an occurrence, lost or retention time) is rejected, never clamped. The endpoint stamps `capture` when it encodes (OD-5 S7); see the capture rule under [Caller sequence](#caller-sequence).
 
-`measure_event` encodes an event once with the worst-case envelope: the maximum `seq` and capture time and `redelivered: false`, which is one byte longer than `true`. Every later encoding of the record fits within that size (OD-5 S3). A record that the contract rejects, for example a game-time regression whose occurrence is not its `to` time, cannot be sent. `ingest_event` then records it as `encodingFailed` coverage, as it does for a payload over 16,384 bytes. The `event-worst` record, with every text at its D12 limit, measures 6,306 bytes: the fixture's 6,305 plus one for `redelivered: false`.
+`measure_event` encodes an event once with the worst-case envelope: the maximum `seq` and capture time and `redelivered: false`, which is one byte longer than `true`. Every later encoding of the record fits within that size (OD-5 S3). A record that the contract rejects, for example a game-time regression whose occurrence is not its `to` time, cannot be sent. `ingest_event` then records it as `encodingFailed` coverage, as it does for a payload over 16,384 bytes. Any other failure during measurement, such as `std::bad_alloc`, also yields `encodingFailed`: `measure_event` and `ingest_event` never throw, and the store allocates nothing after construction, so every drained `eventSeq` keeps its coverage and no exception can end the transport worker. The `event-worst` record, with every text at its D12 limit, measures 6,306 bytes: the fixture's 6,305 plus one for `redelivered: false`.
 
 Without game-mode detection (OD-3) the welcome lists no `source.gameMode` type and reports mode `unknown`, method `none` and confidence `none`. Without the gameplay-event registration it lists none of the six gameplay types.
 
@@ -54,10 +54,10 @@ Further rules:
 
 - **Lost times** are the first and last lost observation, both present or both absent. Merging keeps the earliest first and the latest last time (OD-5 S1). An event lost at admission uses its `occurred.monotonicNs`; expired events contribute theirs.
 - **Retention time** (`oldestRetainedMonotonicNs`) is the time an entry was admitted. The gap record created by expiry takes the expiry time (OD-5 S2).
-- **No durable consumer**: while no durable consumer is connected and no retention window is open, an admitted event is recorded as `retentionExpired`. The capture handoff normally turns such events into `offline` or `noDurableConsumer` loss runs before they reach the store (OD-4). Events copied while a durable consumer was connected and stored after it disconnected fall inside the window and are retained (OD-5 S4).
+- **No durable consumer**: the capture gate copies events only while a durable consumer is connected; otherwise they reach the store as `offline` or `noDurableConsumer` loss runs through `lose()` (OD-4). Before the first durable connection of a plugin session, `admit()` and `ingest_event` reject an event as misuse. Events copied while a durable consumer was connected and stored after it disconnected fall inside the retention window and are retained (OD-5 S4). Only an event stored after that window has ended is recorded as `retentionExpired`.
 - **Live-only clients** never reach the store's cursor and never start or cancel a retention window.
 - **Written** means that the endpoint issued the write (OD-5 S9). `next_outbound()` marks an item written when it returns it.
-- **Misuse** (an `eventSeq` other than *N*, a size outside 1–16,384 bytes, one lost time without the other, an ACK beyond the written coverage or without a connection) is rejected without any change.
+- **Misuse** (an event before the first durable connection, an `eventSeq` other than *N*, a size outside 1–16,384 bytes, one lost time without the other, an ACK beyond the written coverage or without a connection) is rejected without any change.
 
 ## Caller sequence
 
@@ -65,7 +65,7 @@ The endpoint pull request will drive the store as follows:
 
 1. On a durable hello, call `connect()` before the event gate opens, so that every event copied for the new consumer is retained. Build the checkpoint from `status()`.
 2. On every loop iteration, call `ingest_event` for each drained event, `lose()` for each drained loss run, and `expire(now)`.
-3. While the client keeps up, write the items from `next_outbound()` with `Encoder::outbound`, and record each one with the connection's `AckValidator::sent`.
+3. While the client keeps up, write the items from `next_outbound()` with `Encoder::outbound`, and record each one with the connection's `AckValidator::sent`. Stamp every message with `capture = max(now, last capture on the connection, the latest source-clock time the message carries)`. A retained event's `occurred.monotonicNs` comes from the SDK thread and can be later than the worker's clock reading. Because `encode()` rejects a capture before a carried time and the store cannot skip a retained entry, an unclamped capture would fail on every write and stall delivery.
 4. Pass every ACK through `AckValidator::accept`, then call `release()` with the accepted value.
 5. On disconnect of a durable client, call `disconnect(now)`. At shutdown or exhaustion, send `end` from `end_cursor()`.
 
