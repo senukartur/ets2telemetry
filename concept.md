@@ -474,3 +474,20 @@ The owner accepted all architect recommendations for ET-002b on October 14, 2026
 | D15 | One event per frame; no batching |
 | D16 | Two PRs: the specification, TypeScript and fixtures first, then C++ |
 | D17 | Current-state additions: world placement, navigation distance, boundary order, truck and trailer identity and the status block. The worst-case checkpoint must fit in 64 KiB, proven by a fixture |
+
+## ET-002b acceptance and ET-004b authorization — October 14, 2026
+
+The owner accepted ET-002b on October 14, 2026: PR #42 (`59a2667`, specification, TypeScript and fixtures) and PR #43 (`2d48c9a`, C++17 representation). The owner authorized ET-004b, the plugin's protocol v1 producer, delivered as three PRs: the producer core, callback capture and the v1 endpoint. For ET-004b only, this supersedes the statement in the ET-002b authorization section that ET-004b remains unauthorized. ET-005b, ET-006b, ET-013 and later storage, trip logic and later phases remain unauthorized. The desktop application stays on v0. Synthetic tests establish no game, TruckersMP or performance behavior.
+
+The owner approved the architect recommendations OD-1 to OD-6:
+
+| # | Decision |
+| --- | --- |
+| OD-1 | Three PRs in order: producer core, callback capture, endpoint |
+| OD-2 | Per D2 the production plugin serves v1 beside v0. The v1 endpoint is passive and fail-closed until ET-006b provisions its service policy; its startup is asynchronous and non-fatal and writes no game log |
+| OD-3 | Game mode is `unknown`, method `none`, confidence `none`, and no `source.gameMode` event is emitted. Detection is a separate package |
+| OD-4 | Without a durable consumer, events become `offline` or `noDurableConsumer` gaps; a live-only client starts no retention |
+| OD-5 | Wording clarifications S1–S11 in [protocol v1](docs/protocol/v1.md), with no wire, field or fixture change |
+| OD-6 | State `trailers` always has ten entries; an empty slot is unavailable (`not-observed`) |
+
+The producer's store rules are in [the native v1 transport](docs/native-transport-v1.md).
