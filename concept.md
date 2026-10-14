@@ -395,6 +395,8 @@ Candidate detection methods, in order of preference, still to be verified on rea
 
 The detected mode, its method and its confidence are trip evidence and travel through the protocol. Adding the mode to the wire contract belongs to protocol v1 (ET-002b); ET-014 stores the mode on the trip. Switching between single-player and TruckersMP requires restarting the game, which is already a session and plugin restart boundary in the attribution window. The mode is therefore determined per plugin session and is not expected to change within one. If a later re-check ever contradicts the recorded mode, keep both results as evidence and mark the trip mode ambiguous rather than rewriting it.
 
+Update on October 14, 2026: protocol v1 carries this evidence (mode, method, confidence and module) per plugin session in `welcome` and `status`, and as the durable `source.gameMode` event; see [protocol v1](docs/protocol/v1.md#8-durable-events).
+
 ## Sleep and unannounced game-time jumps — October 13, 2026
 
 SDK 1.15 has no sleep or rest gameplay event. In CAP-01 run 2 (ETS2 single-player, October 12, 2026) the owner slept, and the only trace was a forward game-time jump of about 595 game minutes within a few minutes of active simulation, with no lifecycle or gameplay event. ET-014 must treat a large forward game-time jump without a timer reset as a possible sleep or rest: keep it as an annotated discontinuity of game time, never fabricate samples or game-time intervals across it, and keep real-time accounting unaffected. Report game-time durations, such as delivery time, as the plain game-time span including the jump: this matches the game's own `delivery.time` (O4) and its lateness accounting (run 2 was 471 game minutes late across the sleep). Annotate the jump instead of subtracting it. The `rest.stop` channel and the `avoid_sleeping` fine are additional, unverified hints. Ferry and train crossings also advance game time faster than driving (CAP-01 run 8, October 14, 2026), but they come with an explicit `player.use.ferry` or `player.use.train` event. ET-014 should label a jump next to such an event as a crossing, not as a possible sleep. Because the capture cannot locate the jump relative to the event, this labelling rule is still unverified.
@@ -442,3 +444,33 @@ The owner deferred multi-monitor, mixed-DPI and monitor-removal testing until a 
 ## Bus and car jobs deferred — October 13, 2026
 
 The owner deferred bus jobs and car jobs (`bus_job`, `car_job`, `car_job.delivered`, `car_job.cancelled`) from the current validation and trip scope: bus content is not yet released for ETS2, car jobs in ATS are recent, and TruckersMP buses are out of interest for now. They are tracked as technical debt TD-002. Their empty configuration envelopes, observed at every session start, must be tolerated and must not create trips.
+
+## ET-002b authorization — October 14, 2026
+
+The owner authorized ET-002b on October 14, 2026 as a contract-only package. PR-1 adds the English wire specification [protocol v1](docs/protocol/v1.md), the TypeScript schemas and delivery helpers, and shared fixtures with Vitest. PR-2 adds the matching C++17 representation that reads the same fixtures. For ET-002b only, this supersedes the "no protocol v1" wording in earlier dated paragraphs.
+
+The authorization does not extend to ET-004b (the plugin's v1 endpoint and producer queue), ET-005b (the v1 simulator), ET-006b (v1 ingestion), durable storage, trip logic or later phases; each remains unauthorized. No runtime path changes: the plugin, broker, simulator and desktop service keep speaking v0. Real-game, TruckersMP, display and performance criteria remain pending, and Convoy stays deferred and unclaimed.
+
+## Protocol v1 decisions — October 14, 2026
+
+The owner accepted all architect recommendations for ET-002b on October 14, 2026. [Protocol v1](docs/protocol/v1.md) specifies them in detail.
+
+| # | Decision |
+| --- | --- |
+| D1 | Strict length-prefixed JSON as in v0 and CAP0; no binary encoding |
+| D2 | A separate v1 pipe, discovery directory and service policy. The plugin serves v0 and v1 side by side during ET-004b and ET-006b. A v0-retirement PR lands before ET-015a enables recording; recording never ships on v0 |
+| D3 | v1 drops the v0 `diagnostic` kind; CAP0 is the evidence channel |
+| D4 | The durable event set: job, truck and trailer configuration and clears, simulation pause and start, timer restart, game-time regression, delivery, cancellation, fine, toll, ferry, train and game mode. Bus and car jobs are excluded (TD-002) |
+| D5 | `eventSeq` is assigned to every observed event, including lost ones. Coverage is contiguous: events plus ordered gap messages with counted causes |
+| D6 | The ACK is cumulative only and equals the highest contiguous storage-committed `eventSeq`, gap markers included. No selective ACK, no in-connection retransmission; redelivery only on reconnect |
+| D7 | Retention of 256 entries and 1 MiB with newest-drop; maximum encoded event 16 KiB; disconnect retention 5 minutes; client frames 4 KiB; hello deadline 5 s; write deadline 1 s; snapshots at most 20 Hz |
+| D8 | Durable delivery is opted into with `durableEvents` in hello. A live-only v1 client is allowed; while no durable consumer is connected, events become `no-durable-consumer` gaps |
+| D9 | Game mode is per-session evidence in welcome and status, plus a durable `source.gameMode` event. Convoy is reserved. A weak single-player result is never presented as confident |
+| D10 | `clock.probe`/`clock.reply` and a local-only clock mapping with uncertainty |
+| D11 | Currency status is `sdk-documented` (with the header source) or `unknown`, until runtime observation |
+| D12 | A provided empty string is available `""`. Ids are at most 128 bytes and names at most 256 bytes; text is never truncated |
+| D13 | One event per job or truck configuration callback, including identical re-sends. Trailer slots only when non-empty, or when cleared after being non-empty |
+| D14 | A best-effort `end` at shutdown; the producer never waits for an ACK |
+| D15 | One event per frame; no batching |
+| D16 | Two PRs: the specification, TypeScript and fixtures first, then C++ |
+| D17 | Current-state additions: world placement, navigation distance, boundary order, truck and trailer identity and the status block. The worst-case checkpoint must fit in 64 KiB, proven by a fixture |

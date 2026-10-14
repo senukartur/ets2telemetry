@@ -257,3 +257,7 @@ Owner decision: a v0 transport startup that has not finished within the fixed 1 
 ## CAP-01 and SP-01 acceptance — October 14, 2026
 
 The owner accepted CAP-01 with explicit gaps and accepted SP-01 on October 14, 2026. See [concept.md](concept.md#cap-01-and-sp-01-acceptance--october-14-2026) and [CAP-01a validation](docs/validation/cap-01a.md#cap-01-acceptance-october-14-2026). The gaps stay pending, not observed. Neither acceptance establishes TruckersMP, display or performance support, or completes the full ET-009 gate. Authorization for later packages, such as ET-002b, is recorded separately.
+
+## ET-002b authorization — October 14, 2026
+
+The owner authorized ET-002b on October 14, 2026 as a contract-only package: the durable telemetry protocol v1 wire specification, its TypeScript schemas and delivery helpers and the shared fixtures (PR-1), then the matching C++17 representation that reads the same fixtures (PR-2). For ET-002b only, this supersedes the "no protocol v1" wording in earlier dated paragraphs. ET-004b, ET-005b, ET-006b, durable storage, trip logic and later phases remain unauthorized. No runtime path changes: v0 stays the live protocol until those packages land, and recording never ships on v0. Real-game, TruckersMP, display and performance criteria remain pending, and Convoy stays deferred. The owner accepted all architect recommendations D1–D17; they are recorded in [concept.md](concept.md#protocol-v1-decisions--october-14-2026), and the wire format is [protocol v1](docs/protocol/v1.md).
