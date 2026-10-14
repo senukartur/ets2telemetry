@@ -85,7 +85,7 @@ The worker sets the gate; the SDK thread reads it atomically on every event:
 
 At every `frame_end` the adapter calls `flush_loss()`, which moves an open run into a free slot of its own, so a trailing run reaches the worker without waiting for another record. A full ring keeps the run open, and it keeps extending.
 
-The SDK thread takes no lock, allocates nothing, makes no SDK call and signals no event for v1. The worker polls the ring at least every 10 ms. A run still open when the plugin exits gets no gap (OD-5 S11).
+For v1 the SDK thread never waits for a lock: the ring is lock-free and the v1 slot is only try-locked. It allocates nothing, makes no SDK call and signals no event. The worker polls the ring at least every 10 ms. A run still open when the plugin exits gets no gap (OD-5 S11).
 
 ### Records from the callbacks
 
@@ -103,7 +103,7 @@ The adapter builds the records in SDK units, with the [§6 mapping](protocol/v1.
 | `job.delivered`, `job.cancelled`, `player.fined`, `player.tollgate.paid`, `player.use.ferry`, `player.use.train` | The record of the same type |
 | `car_job.*` and unknown gameplay events | No record and no `eventSeq` |
 
-- **Occurrence.** `occurred` describes the callback moment, after the callback updated the adapter state: the source clock (QPC), the game time and clock, a UTC label from `GetSystemTimePreciseAsFileTime` (OD-5 S8), the simulation state, the v1 configuration revision and the shared callback order.
+- **Occurrence.** `occurred` describes the callback moment, after the callback updated the adapter state: the source clock (QPC), the game time and clock, a UTC label from `GetSystemTimePreciseAsFileTime` (OD-5 S8), the simulation state, the v1 configuration revision and the shared callback order. A `simulation.paused` event therefore carries `paused` and `simulation.started` carries `running` ([§8](protocol/v1.md#8-durable-events), owner decision of October 15, 2026).
 - **Configuration revision.** v1 has its own revision. It counts the job and truck callbacks and the trailer callbacks that emit a record. The v0 revision is unchanged.
 - **Text (D12).** A provided empty string stays available, a value over 128 or 256 bytes is invalid and never truncated, and a null string pointer or a wrong attribute type is invalid. The encoder checks UTF-8 and control characters.
 - **Attribute lists.** The scan stops at the v0 bound of 256 entries including the terminator, and indexed attributes are skipped. After a null or unterminated list, every field that was not seen is invalid, because it may have been sent. A null configuration list is a present configuration, not a clear.
@@ -120,7 +120,7 @@ The adapter publishes a `V1Current` beside the v0 slot: at every `frame_end`, at
 
 The endpoint pull request will drive the channel and the store as follows:
 
-1. Prepare the channel in the SDK initialization context and attach it with `attach_events()` after `Adapter::initialize()`. Start the worker afterwards; `read_v1_current()` is available at once.
+1. Prepare the channel in the SDK initialization context and attach it with `attach_events()` after `Adapter::initialize()`, once per plugin session. Start the worker afterwards; `read_v1_current()` is available at once. `initialize()` detaches a channel still attached from an earlier session, so its `eventSeq` never continues under a new `pluginSessionId` (§9); v1 then stays inert until a freshly prepared channel is attached. When `initialize()` returns `not_now` because the worker holds a slot, it has changed no state.
 2. On a durable hello, call `EventStore::connect()` and only then `set_gate(Gate::durable)`, so that every record copied for the new consumer is retained. Build the checkpoint from `status()` and `read_v1_current()`. A live-only hello sets `Gate::live`; it never connects the store. On the disconnect of a durable client, set the gate to `live` or `none` first, then call `disconnect(now)`.
 3. On every loop iteration, at most 10 ms apart, drain the ring with `front()` and `pop()`. For a slot's `loss_before`, call `lose()` once per nonzero cause, in the fixed order `offline`, `noDurableConsumer`, `queueCount`, each part with the run's lost times. The parts are contiguous, so the store merges them into one gap record with the exact counts and lost times. Then call `ingest_event` for the slot's record. Call `expire(now)` on every iteration.
 4. Treat `rejected` from `ingest_event`, `admit()` or `lose()` as an invariant violation: retire the session with `end` reason `source-retired` and one fixed log entry, deferred to the SDK thread. It cannot happen while the drain order above is kept.
