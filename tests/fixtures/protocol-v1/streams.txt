@@ -1,0 +1,45 @@
+normal 1 C:hello,S:welcome,S:checkpoint,S:event-job-configured,S:snapshot,S:event-truck-configured-e2,S:gap,S:event-simulation-paused-e5,C:ack-5,S:end accept 5
+snapshot-seq-skip 1 S:welcome,S:checkpoint,S:snapshot accept 0
+clock 1 S:welcome,S:checkpoint,C:clock-probe,S:clock-reply accept 0
+clock-unsolicited 1 S:welcome,S:checkpoint,S:clock-reply reject@2
+late-attach 1 S:welcome,S:checkpoint-late,S:gap-offline,S:event-late accept 4
+late-attach-skip 1 S:welcome,S:checkpoint-late,S:event-late reject@2
+reconnect-redelivery 1 S:welcome,S:checkpoint,S:event-job-configured,S:snapshot,S:event-truck-configured-e2,C:ack-1,R,S:welcome-reconnect,S:checkpoint-reconnect,S:event-truck-configured-redelivered,S:event-reconnect-live,C:ack-3 accept 3
+reconnect-live-flagged 1 S:welcome,S:checkpoint,S:event-job-configured,S:snapshot,S:event-truck-configured-e2,C:ack-1,R,S:welcome-reconnect,S:checkpoint-reconnect,S:event-truck-configured-redelivered,S:event-reconnect-live-flagged reject@10
+retention-expired 1 S:welcome,S:checkpoint,S:event-job-configured,S:snapshot,S:event-truck-configured-e2,R,S:welcome-reconnect,S:checkpoint-expired,S:gap-expired,S:event-reconnect-live accept 3
+plugin-restart 1 S:welcome,S:checkpoint,S:event-job-configured,S:snapshot,S:event-truck-configured-e2,R,S:welcome-restart,S:checkpoint-restart,S:event-restart accept 1
+duplicate-event 1 S:welcome,S:checkpoint,S:event-job-configured,S:event-job-configured-repeat reject@3
+event-seq-skip 1 S:welcome,S:checkpoint,S:event-job-configured,S:event-simulation-paused-e5 reject@3
+gap-causes-short 1 S:welcome,S:checkpoint,S:event-job-configured,S:snapshot,S:event-truck-configured-e2,S:gap-causes-short reject@5
+gap-causes-long 1 S:welcome,S:checkpoint,S:event-job-configured,S:snapshot,S:event-truck-configured-e2,S:gap-causes-long reject@5
+first-not-after-ack 1 S:welcome,S:checkpoint,S:event-truck-configured-e2 reject@2
+event-before-checkpoint 1 S:welcome,S:event-job-configured reject@1
+checkpoint-before-welcome 1 S:checkpoint reject@0
+second-checkpoint 1 S:welcome,S:checkpoint,S:checkpoint-reconnect reject@2
+second-welcome 1 S:welcome,S:welcome-reconnect reject@1
+live-only 0 C:hello-live,S:welcome-live,S:checkpoint-live,S:snapshot-live accept 0
+live-only-event 0 C:hello-live,S:welcome-live,S:checkpoint-live,S:event-job-configured reject@3
+unsolicited-durable 0 S:welcome reject@0
+durable-status-mismatch 1 S:welcome,S:checkpoint-live reject@1
+capture-regression 1 S:welcome,S:checkpoint,S:snapshot-capture-regression reject@2
+source-change 1 S:welcome,S:checkpoint,S:snapshot-foreign-source reject@2
+clock-change 1 S:welcome,S:checkpoint,S:snapshot-clock-change reject@2
+counter-regression 1 S:welcome,S:checkpoint-late,S:snapshot-counter-regression reject@2
+end-terminal 1 S:welcome,S:checkpoint,S:event-job-configured,S:snapshot,S:event-truck-configured-e2,S:gap,S:event-simulation-paused-e5,C:ack-5,S:end,S:snapshot-after-end reject@9
+end-before-checkpoint 1 S:welcome,S:end-early accept 0
+end-after-checkpoint 1 S:welcome,S:checkpoint,S:end-early accept 0
+end-claims-unsent-ack 1 S:welcome,S:checkpoint,S:event-job-configured,S:end reject@3
+ack-before-checkpoint 1 S:welcome,C:ack-0 reject@1
+ack-beyond-sent 1 S:welcome,S:checkpoint,S:event-job-configured,C:ack-5 reject@3
+ack-regression 1 S:welcome,S:checkpoint,S:event-job-configured,S:snapshot,S:event-truck-configured-e2,S:gap,S:event-simulation-paused-e5,C:ack-5,C:ack-1 reject@8
+ack-repeat 1 S:welcome,S:checkpoint,S:event-job-configured,S:snapshot,S:event-truck-configured-e2,S:gap,S:event-simulation-paused-e5,C:ack-5,C:ack-5 accept 5
+ack-foreign-session 1 S:welcome,S:checkpoint,S:event-job-configured,C:ack-foreign reject@3
+normal-cursor-ack 1 S:welcome,S:checkpoint,S:event-job-configured,A,S:snapshot,S:event-truck-configured-e2,S:gap,A,S:event-simulation-paused-e5,A,S:end accept 5
+lost-ack-reconnect 1 S:welcome,S:checkpoint,S:event-job-configured,S:snapshot,S:event-truck-configured-e2,C:ack-1,R,S:welcome-reconnect,S:checkpoint-reconnect,A,S:event-truck-configured-redelivered,A,S:event-reconnect-live,A accept 3
+retention-expired-ack 1 S:welcome,S:checkpoint,S:event-job-configured,S:snapshot,S:event-truck-configured-e2,R,S:welcome-reconnect,S:checkpoint-expired,A,S:gap-expired,A,S:event-reconnect-live,A accept 3
+queue-count-overflow 1 S:welcome,S:checkpoint,S:event-job-configured,S:gap-queue-count,S:event-after-queue-count,A accept 4
+queue-bytes-overflow 1 S:welcome,S:checkpoint,S:event-job-configured,S:gap-queue-bytes,S:event-after-queue-bytes,A accept 3
+queue-gap-missing 1 S:welcome,S:checkpoint,S:event-job-configured,S:event-after-queue-count reject@3
+ack-zero-noop 1 S:welcome,S:checkpoint,C:ack-0 accept 0
+live-only-ack 0 C:hello-live,S:welcome-live,S:checkpoint-live,C:ack-0 reject@3
+snapshot-next-below-coverage 1 S:welcome,S:checkpoint,S:event-job-configured,S:event-truck-configured-e2,S:gap,S:snapshot-next-below-coverage reject@5
