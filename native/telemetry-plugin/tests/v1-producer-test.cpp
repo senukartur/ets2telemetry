@@ -3,6 +3,8 @@
 #include "protocol-json.hpp"
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -10,6 +12,7 @@
 #include <iterator>
 #include <limits>
 #include <map>
+#include <new>
 #include <random>
 #include <sstream>
 #include <string>
@@ -19,6 +22,17 @@
 // message is encoded, decoded and accepted by the client-side Consumer; the DurableAckCursor stands in for storage
 // commits and the AckValidator applies the producer's ACK rule before the store releases anything. Expected values are
 // written by hand from docs/protocol/v1.md and docs/native-transport-v1.md, or are the hand-written shared fixtures.
+// Test-only allocation failure: when armed with a countdown, the global operator new throws std::bad_alloc once.
+namespace { long allocation_countdown = -1; bool allocation_failed = false; }
+void* operator new(std::size_t size) {
+  if (allocation_countdown == 0) { allocation_countdown = -1; allocation_failed = true; throw std::bad_alloc(); }
+  if (allocation_countdown > 0) --allocation_countdown;
+  if (void* p = std::malloc(size ? size : 1)) return p;
+  throw std::bad_alloc();
+}
+void operator delete(void* p) noexcept { std::free(p); }
+void operator delete(void* p, std::size_t) noexcept { std::free(p); }
+
 using namespace ets2telemetry::v1;
 namespace v0 = ets2telemetry::v0;
 namespace {
@@ -497,6 +511,25 @@ void encoding_case() {
   // A message whose capture precedes a time it carries is rejected, never silently clamped.
   rejects([&] { encode(encoder.event(1, 1000148999999ULL, job, false)); }, "capture before occurred");
   rejects([&] { encode(encoder.gap(1, 9, GapRange{1, 1, counts(1, 0, 0, 0, 0, 0), 10, 10}, false)); }, "capture before lost time");
+  // A failure other than a contract rejection, here std::bad_alloc at every allocation point in turn, never escapes
+  // ingestion: the eventSeq becomes encodingFailed coverage, and the store itself allocates nothing.
+  EventStore oom; oom.connect(); unsigned failed_allocations = 0;
+  for (long countdown = 0;; ++countdown) {
+    const auto record = make_event(oom.next_event_seq(), synthetic_job(), 1000149000000ULL);
+    allocation_failed = false; allocation_countdown = countdown;
+    const auto result = ingest_event(oom, encoder, record, 1000150000000ULL);
+    const bool failed = allocation_failed; allocation_countdown = -1;
+    check_store(oom);
+    if (!failed) { check(result == Ingest::retained && oom.next_event_seq() == record.event_seq + 1, "retained once nothing fails"); break; }
+    check(result == Ingest::lost_encoding_failed && oom.next_event_seq() == record.event_seq + 1, "allocation failure becomes encodingFailed"); ++failed_allocations;
+  }
+  check(failed_allocations > 10 && oom.status().event_loss.encoding_failed == failed_allocations, "every allocation point covered");
+  const auto plain = make_event(oom.next_event_seq() + 1, records::JobCleared{}, 1);
+  allocation_failed = false; allocation_countdown = 0;
+  const bool no_allocation = oom.lose(oom.next_event_seq(), oom.next_event_seq(), LossCause::offline, 1, 1, 2) && oom.admit(plain, 100, 3) == EventStore::Admission::retained;
+  const bool armed = !allocation_failed; allocation_countdown = -1;
+  check(no_allocation && armed, "loss and admission allocate nothing");
+  std::cout << failed_allocations << " forced allocation failures became encodingFailed; ";
 }
 
 // Builds the fixture checkpoint state from SDK-unit values.

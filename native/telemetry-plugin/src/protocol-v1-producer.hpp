@@ -46,8 +46,9 @@ class Encoder {
   Json end(std::uint64_t seq, std::uint64_t capture_ns, EndReason, const EndCursor&) const;
   // Encoded payload bytes of this event with the worst-case envelope: maximum seq and capture time and
   // `redelivered: false`, the longer literal (OD-5 S3). Every later encoding of the record fits within it. Nullopt
-  // means the record cannot be sent: the contract rejects it, or it exceeds the 16,384-byte event bound.
-  std::optional<std::size_t> measure_event(const EventRecord&) const;
+  // means the record cannot be sent: the contract rejects it, it exceeds the 16,384-byte event bound, or encoding
+  // failed for any other reason, such as allocation. It never throws, so every drained eventSeq gets coverage.
+  std::optional<std::size_t> measure_event(const EventRecord&) const noexcept;
  private:
   Json envelope(const char* kind, std::uint64_t seq, std::uint64_t capture_ns, Json data) const;
   Json state_data(const StatePod&, const StatusInfo&) const;
@@ -58,7 +59,8 @@ class Encoder {
 std::vector<std::uint8_t> encode(Json wire);
 
 // Measures one drained event and retains it, or records it as lost: encodingFailed when it cannot be sent, otherwise
-// the store's admission causes. The lost time of an event is its occurred.monotonicNs (OD-5 S1).
+// the store's admission causes. The lost time of an event is its occurred.monotonicNs (OD-5 S1). It never throws: the
+// store does not allocate, and measurement maps every failure to encodingFailed. `rejected` means misuse with no effect.
 enum class Ingest { retained, lost_queue_count, lost_queue_bytes, lost_retention_expired, lost_encoding_failed, rejected };
-Ingest ingest_event(EventStore&, const Encoder&, const EventRecord&, std::uint64_t now_ns);
+Ingest ingest_event(EventStore&, const Encoder&, const EventRecord&, std::uint64_t now_ns) noexcept;
 } // namespace ets2telemetry::v1

@@ -222,17 +222,21 @@ Json Encoder::end(std::uint64_t seq, std::uint64_t capture_ns, EndReason reason,
   return envelope("end", seq, capture_ns, Json{Object{{"reason", text_value(text)}, {"nextEventSeq", decimal(c.next_event_seq)},
     {"ackedThroughEventSeq", decimal(c.acked_through_event_seq)}, {"retainedUnacked", decimal(c.retained_unacked)}}});
 }
-std::optional<std::size_t> Encoder::measure_event(const EventRecord& e) const {
+std::optional<std::size_t> Encoder::measure_event(const EventRecord& e) const noexcept {
   try {
     // The eventSeq is fixed per record; the envelope fields that change between writes take their longest values.
     const auto frame = encode(event(u64_max, u64_max, e, false));
     return frame.size() - 4;
-  } catch (const ProtocolError&) { return std::nullopt; }
+  } catch (...) {
+    // A contract rejection or any other failure, such as std::bad_alloc, makes the record unsendable. Nothing escapes,
+    // so the transport worker never terminates and the eventSeq still gets encodingFailed coverage.
+    return std::nullopt;
+  }
 }
 
 std::vector<std::uint8_t> encode(Json wire) { Message m; m.wire = std::move(wire); return encode_frame(m); }
 
-Ingest ingest_event(EventStore& store, const Encoder& encoder, const EventRecord& record, std::uint64_t now_ns) {
+Ingest ingest_event(EventStore& store, const Encoder& encoder, const EventRecord& record, std::uint64_t now_ns) noexcept {
   if (store.exhausted() || record.event_seq != store.next_event_seq()) return Ingest::rejected;
   if (const auto bytes = encoder.measure_event(record)) {
     switch (store.admit(record, *bytes, now_ns)) {
