@@ -5,6 +5,7 @@
 #include <mutex>
 #include "scssdk_telemetry.h"
 #include "evidence-queue.hpp"
+#include "event-channel.hpp"
 
 namespace ets2telemetry::sdk {
 // Includes truck wheel/config arrays; scan cap includes the required null terminator.
@@ -85,9 +86,19 @@ struct Snapshot {
   std::array<scs_result_t, static_cast<std::size_t>(Field::count)> channel_results{};
   scs_result_t gameplay_result = SCS_RESULT_unsupported;
 };
+// Protocol v1 current state (ET-004b), published beside the v0 slot while an event channel is attached. Values keep
+// SDK units (protocol-v1-records.hpp). `state.window` stays unavailable: the v1 endpoint adds the window monitor's
+// state. `continuity` counts v1 slot contention and boundaries while no v1 client is connected (OD-5 S10).
+struct V1Current {
+  Identity identity;
+  v1::StatePod state;
+  v1::Continuity continuity;
+  scs_result_t gameplay_result = SCS_RESULT_unsupported;
+  bool active = false, exhausted = false, source_retired = false;
+};
 
 // SDK calls and mutable producer state belong exclusively to the SDK calling thread.
-// read_latest / read_current / set_consumer / defer_log are the only methods for a transport thread.
+// read_latest / read_current / set_consumer / defer_log / read_v1_current are the only methods for a transport thread.
 // No SDK-owned pointers or C++ allocations cross the DLL boundary.
 // A fixed game-log entry with static storage duration; only the SDK thread passes it to the logger.
 struct DeferredLog { scs_log_type_t type; const char* message; };
@@ -101,6 +112,13 @@ class Adapter final {
   // SDK initialization/shutdown context only. The queue's own gate decides whether a
   // callback copies a CAP0 envelope; v0 publication and diagnostics are unaffected.
   void attach_evidence(cap0::EvidenceQueue* queue) noexcept { evidence_.store(queue, std::memory_order_release); }
+  // SDK initialization/shutdown context only, after initialize() and with a prepared channel. Callbacks then hand
+  // protocol v1 event records to the channel, whose gate decides whether a record is copied, and publish the v1 state
+  // slot. Without a channel every v1 path is inert; v0 and CAP0 behavior is identical either way.
+  void attach_events(v1::EventChannel* channel) noexcept;
+  // Transport worker: an owned copy of the current v1 state slot. It consumes nothing, so the v0 read_latest slot keeps
+  // its single consumer. False before the first v1 publication of this plugin session.
+  bool read_v1_current(V1Current& output) noexcept;
   // Current time in the source monotonic clock domain (Identity::capture_clock_id). The origin is
   // fixed by initialize(); only workers started after initialization may call this.
   bool source_monotonic_ns(std::uint64_t& output) const noexcept;
@@ -128,6 +146,13 @@ class Adapter final {
   bool diagnostics_enabled() const noexcept;
   void evidence(cap0::Kind, const char* id, const scs_named_value_t* attributes, bool attributes_expected) noexcept;
   void flush_deferred_log() noexcept;
+  void publish_v0() noexcept;
+  // Protocol v1 capture (ET-004b): SDK thread only, inert without an attached channel, and never touches v0 state.
+  void publish_v1() noexcept;
+  void v1_configuration(const scs_telemetry_configuration_t&) noexcept;
+  void v1_gameplay(const scs_telemetry_gameplay_event_t&) noexcept;
+  void v1_game_time(v1::GameTimePod& output) const noexcept;
+  void v1_emit(bool boundary) noexcept;
   Snapshot producer_{}, published_{};
   std::mutex publication_mutex_;
   std::mutex pending_mutex_;
@@ -136,6 +161,15 @@ class Adapter final {
   std::atomic<bool> source_live_{false};
   std::atomic<cap0::EvidenceQueue*> evidence_{nullptr};
   std::atomic<const DeferredLog*> deferred_log_{nullptr};
+  std::atomic<v1::EventChannel*> events_{nullptr};
+  // v1 producer state: the record being built, the current configuration with its own revision, and v1 continuity.
+  v1::EventRecord v1_record_{};
+  v1::ConfigurationPod v1_configuration_{};
+  v1::Continuity v1_continuity_{};
+  bool v1_configuration_dirty_ = true;
+  // The v1 slot. The SDK thread only try-locks it and copies the configuration only after a configuration boundary.
+  V1Current v1_published_{};
+  std::mutex v1_mutex_;
   bool unread_ = false, initialized_ = false;
   scs_telemetry_init_params_v100_t api_{};
   std::array<bool, 7> registered_events_{};

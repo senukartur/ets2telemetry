@@ -1,10 +1,15 @@
 #include "sdk-adapter.hpp"
+#include "protocol-v1-producer.hpp"
+#include "protocol-v1-delivery.hpp"
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <cstring>
 #include <future>
 #include <iostream>
 #include <map>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -12,10 +17,12 @@
 #include "common/scssdk_telemetry_common_gameplay_events.h"
 
 using namespace ets2telemetry::sdk;
+namespace v1 = ets2telemetry::v1;
 namespace ets2telemetry::sdk {
 struct AdapterTestAccess {
   static std::unique_lock<std::mutex> hold(Adapter& adapter) { return std::unique_lock<std::mutex>(adapter.publication_mutex_); }
   static std::unique_lock<std::mutex> hold_pending(Adapter& adapter) { return std::unique_lock<std::mutex>(adapter.pending_mutex_); }
+  static std::unique_lock<std::mutex> hold_v1(Adapter& adapter) { return std::unique_lock<std::mutex>(adapter.v1_mutex_); }
   static bool no_pending(Adapter& adapter) { auto lock = hold_pending(adapter); return adapter.producer_.observation_count == 0; }
   static void exhaust(Adapter& adapter) { adapter.producer_.boundary_order = UINT64_MAX; }
 };
@@ -296,12 +303,459 @@ void game_time_reset_frame_delimitation() {
   require(reading(unavailable, Field::speed).status == Availability::not_observed && reading(unavailable, Field::fuel).status == Availability::invalid && unavailable->state.world_placement.status == Availability::invalid, "current-frame unavailable/invalid observations retain their meanings after time reset");
   adapter->shutdown();
 }
+
+// Protocol v1 callback capture (ET-004b). The test plays the v1 transport worker: it prepares and attaches the event
+// channel, sets its gate and drains it. Expected values are written by hand from docs/protocol/v1.md §6-§9 and
+// docs/native-transport-v1.md; captured records are checked through the ET-002b contract encoder and decoder.
+scs_value_t boolean(bool value) { scs_value_t v{}; v.type = SCS_VALUE_TYPE_bool; v.value_bool.value = value ? 1 : 0; return v; }
+scs_value_t s32(std::int32_t value) { scs_value_t v{}; v.type = SCS_VALUE_TYPE_s32; v.value_s32.value = value; return v; }
+std::unique_ptr<V1Current> v1_read(Adapter& adapter) { auto output = std::make_unique<V1Current>(); require(adapter.read_v1_current(*output), "v1 slot available"); return output; }
+std::string type_of(const v1::EventRecord& record) { return v1::record_type(record); }
+bool same_clock(const v1::Uuid& a, const v1::Uuid& b) { return std::memcmp(a.text, b.text, sizeof a.text) == 0; }
+// The worker's view of the ring: coverage contiguous from `next`, each loss run before the record that closed it.
+struct V1Ring {
+  std::uint64_t next = 1; v1::LossCounts lost; std::vector<v1::EventRecord> records;
+  std::vector<v1::EventRecord> drain(v1::EventChannel& channel) {
+    std::vector<v1::EventRecord> fresh;
+    while (const auto* slot = channel.front()) {
+      if (slot->has_loss) {
+        const auto& run = slot->loss_before;
+        require(run.first_event_seq == next && run.last_event_seq >= run.first_event_seq, "v1 loss run contiguous");
+        lost.offline += run.causes.offline; lost.no_durable_consumer += run.causes.no_durable_consumer; lost.queue_count += run.causes.queue_count; next = run.last_event_seq + 1;
+      }
+      if (slot->has_record) { require(slot->record.event_seq == next, "v1 record contiguous"); fresh.push_back(slot->record); ++next; }
+      channel.pop();
+    }
+    records.insert(records.end(), fresh.begin(), fresh.end()); return fresh;
+  }
+};
+v1::SessionIdentity v1_identity(const V1Current& current) {
+  const auto& id = current.identity; v1::SessionIdentity output;
+  output.source.game = std::string(id.game.c_str()) == "ats" ? v1::GameId::ats : v1::GameId::ets2;
+  output.source.plugin_session_id = v1::make_uuid(id.plugin_session_id.c_str()); output.source.process_instance_id = v1::make_uuid(id.process_instance_id.c_str());
+  output.source.process_id = id.process_id; output.source.windows_session_id = id.windows_session_id; output.source.origin = v1::Origin::synthetic;
+  output.capture_clock_id = v1::make_uuid(id.capture_clock_id.c_str());
+  output.currency = v1::Currency{v1::Currency::Status::sdk_documented, id.currency.c_str(), id.currency_source.c_str()};
+  return output;
+}
+v1::Message v1_decode(const std::vector<std::uint8_t>& frame) { return v1::decode_payload(std::string(frame.begin() + 4, frame.end()), v1::Sender::server); }
+// The wire record of one captured event. Encoding validates every field against the contract (§6, §8, D12).
+v1::Json v1_record(const v1::Encoder& encoder, const v1::EventRecord& record) { return v1_decode(v1::encode(encoder.event(1, UINT64_MAX, record, false))).wire.at("data").at("record"); }
+bool v1_available(const v1::Json& value) { return value.at("available").boolean(); }
+std::string v1_reason(const v1::Json& value) { return v1_available(value) ? std::string() : value.at("reason").string(); }
+std::string v1_text(const v1::Json& value) { return value.at("value").string(); }
+double v1_number(const v1::Json& value) { return value.at("value").number(); }
+std::string v1_raw(const v1::Json& money) { return money.at("value").at("raw").string(); }
+
+void v1_capture_records() {
+  auto adapter = std::make_unique<Adapter>(); Host host; auto params = host.params();
+  require(adapter->initialize(SCS_TELEMETRY_VERSION_1_01, &params) == SCS_RESULT_ok, "v1 capture init"); read(*adapter);
+  auto channel = std::make_unique<v1::EventChannel>(); require(channel->prepare(), "v1 channel prepared");
+  adapter->attach_events(channel.get()); channel->set_gate(v1::Gate::durable);
+  const v1::Encoder encoder(v1_identity(*v1_read(*adapter))); V1Ring ring;
+  scs_named_value_t empty[]{{}};
+  scs_named_value_t job[]{attribute("source.city.id", text("synthetic_city_a")), attribute("source.city", text("Synthetic City A")),
+    attribute("source.company.id", text("synthetic_company_a")), attribute("source.company", text("Synthetic Company A")),
+    attribute("destination.city.id", text("synthetic_city_b")), attribute("destination.city", text("Synthetic City B")),
+    attribute("destination.company.id", text("synthetic_company_b")), attribute("destination.company", text("Synthetic Company B")),
+    attribute("cargo.id", text("synthetic_cargo")), attribute("cargo", text("")), attribute("cargo.mass", floating(18000)), attribute("cargo.unit.mass", floating(1000)),
+    attribute("cargo.unit.count", u32(18)), attribute("job.market", text("freight_market")), attribute("is.special.job", boolean(false)), attribute("cargo.loaded", boolean(true)),
+    attribute("planned_distance.km", u32(700)), attribute("income", u64(UINT64_MAX)), attribute("delivery.time", u32(13000)), attribute("wheel.radius", floating(0.5F), 0), {}};
+  // D13: one job.configured per callback, including an identical re-send, each with its own v1 revision.
+  host.config("job", job); host.config("job", job); host.frame_end();
+  const auto jobs = ring.drain(*channel);
+  require(jobs.size() == 2 && jobs[0].event_seq == 1 && jobs[1].event_seq == 2 && type_of(jobs[0]) == "job.configured" && type_of(jobs[1]) == "job.configured", "D13: an identical job re-send is a second job.configured");
+  require(jobs[0].occurred.configuration_revision == 1 && jobs[1].occurred.configuration_revision == 2 && jobs[0].occurred.boundary_order < jobs[1].occurred.boundary_order, "v1 revision and callback order per configuration");
+  const auto configured = v1_record(encoder, jobs[0]);
+  require(v1_number(configured.at("plannedDistance")) == 700000 && configured.at("plannedDistance").at("unit").string() == "m", "planned_distance.km x 1,000 on the wire");
+  const auto& income = configured.at("expectedIncome");
+  require(v1_raw(income) == "18446744073709551615" && income.at("value").at("sdkType").string() == "u64" && income.at("value").at("currency").at("code").string() == "EUR", "u64 income exact with the documented currency");
+  require(v1_available(configured.at("cargo")) && v1_text(configured.at("cargo")).empty() && v1_text(configured.at("sourceCity")) == "Synthetic City A" && v1_text(configured.at("destinationCompanyId")) == "synthetic_company_b", "D12: a provided empty name stays available");
+  require(v1_number(configured.at("cargoUnitCount")) == 18 && v1_number(configured.at("cargoMass")) == 18000 && !configured.at("isSpecialJob").at("value").boolean() && configured.at("cargoLoaded").at("value").boolean() && v1_text(configured.at("deliveryDeadline")) == "13000", "job value types");
+  const auto occurred = v1_decode(v1::encode(encoder.event(1, UINT64_MAX, jobs[0], false))).wire.at("data").at("occurred");
+  require(occurred.at("simulation").string() == "paused" && v1_available(occurred.at("monotonicNs")) && std::stoull(v1_text(occurred.at("utcUnixMs"))) > 1600000000000ULL, "occurrence: simulation, source clock and UTC label");
+  host.config("job", empty); auto cleared = ring.drain(*channel);
+  require(cleared.size() == 1 && type_of(cleared[0]) == "job.cleared" && cleared[0].occurred.configuration_revision == 3, "an empty job configuration is job.cleared");
+  // A null list is a present configuration whose fields were not seen; an unterminated list keeps what was seen.
+  host.config("job", nullptr); auto unseen = ring.drain(*channel);
+  require(unseen.size() == 1 && type_of(unseen[0]) == "job.configured", "a null job list is still a configuration");
+  const auto& unseen_job = std::get<v1::records::JobConfigured>(unseen[0].record);
+  require(unseen_job.cargo_id.state == v1::FieldState::invalid && unseen_job.planned_distance_km.state == v1::FieldState::invalid && unseen_job.expected_income.state == v1::FieldState::invalid, "null list: every field invalid");
+  std::array<scs_named_value_t, max_attributes> unterminated{};
+  for (auto& value : unterminated) value = attribute("x", u32(1));
+  unterminated[0] = attribute("cargo.id", text("seen_cargo"));
+  host.config("job", unterminated.data()); auto partial = ring.drain(*channel);
+  const auto& partial_job = std::get<v1::records::JobConfigured>(partial.at(0).record);
+  require(partial_job.cargo_id.state == v1::FieldState::available && partial_job.cargo_id.view() == "seen_cargo" && partial_job.source_city_id.state == v1::FieldState::invalid && partial_job.delivery_deadline_min.state == v1::FieldState::invalid, "unterminated list: seen fields kept, unseen fields invalid");
+  // D12 text: never truncated; wrong types, null strings and invalid UTF-8 are invalid.
+  const std::string long_id(129, 'a'), name_limit(256, 'n'), long_name(257, 'p');
+  scs_named_value_t truck[]{attribute("brand_id", text(long_id.c_str())), attribute("brand", text("Synthetic Brand")), attribute("id", u32(7)), attribute("name", text(name_limit.c_str())),
+    attribute("fuel.capacity", floating(800)), attribute("license.plate", text(long_name.c_str())), attribute("license.plate.country.id", text(nullptr)), attribute("license.plate.country", text("\xc0\x80")), {}};
+  host.config("truck", truck); const auto trucks = ring.drain(*channel); const auto t = v1_record(encoder, trucks.at(0));
+  require(v1_reason(t.at("brandId")) == "invalid" && v1_reason(t.at("licensePlate")) == "invalid", "D12: oversized text is invalid, never truncated");
+  require(v1_text(t.at("name")).size() == 256 && v1_text(t.at("brand")) == "Synthetic Brand", "a 256-byte name fits");
+  require(v1_reason(t.at("id")) == "invalid" && v1_reason(t.at("plateCountryId")) == "invalid" && v1_reason(t.at("plateCountry")) == "invalid", "wrong type, null string and invalid UTF-8 are invalid");
+  require(v1_number(t.at("fuelCapacity")) == 800 && t.at("fuelCapacity").at("unit").string() == "L", "truck fuel capacity in L");
+  host.config("truck", empty); auto truck_cleared = ring.drain(*channel);
+  require(truck_cleared.size() == 1 && type_of(truck_cleared[0]) == "truck.cleared", "an empty truck configuration is truck.cleared");
+  // Trailer slots (D13): legacy and unknown ids, an empty slot that was already empty, bus and car jobs emit nothing.
+  scs_named_value_t trailer[]{attribute("id", text("trailer.synthetic_box")), attribute("body.type", text("dryvan")), attribute("chain.type", text("single")), attribute("cargo.accessory.id", text("")),
+    attribute("brand_id", text("synthetic_brand")), attribute("brand", text("Synthetic Brand")), attribute("name", text("Synthetic Trailer")), attribute("license.plate", text("SYN 0002")),
+    attribute("license.plate.country.id", text("synthetica")), attribute("license.plate.country", text("Synthetica")), attribute("wheel.radius", floating(0.5F), 0), {}};
+  const auto before_unmapped = channel->next_event_seq();
+  host.config("trailer", trailer); host.config("trailer.1", empty); host.config("trailer.10", trailer); host.config("trailer.01", trailer); host.config("trailer.", trailer);
+  host.config("bus_job", job); host.config("car_job", job); host.config("substances", trailer);
+  require(channel->next_event_seq() == before_unmapped && ring.drain(*channel).empty(), "legacy and unknown trailer ids, an empty-after-empty slot, bus and car jobs: no record and no eventSeq");
+  host.config("trailer.0", trailer); host.config("trailer.0", empty); host.config("trailer.0", empty); host.config("trailer.9", trailer);
+  const auto trailers = ring.drain(*channel);
+  require(trailers.size() == 3 && type_of(trailers[0]) == "trailer.configured" && std::get<v1::records::TrailerConfigured>(trailers[0].record).index == 0, "a non-empty trailer slot");
+  require(type_of(trailers[1]) == "trailer.cleared" && std::get<v1::records::TrailerCleared>(trailers[1].record).index == 0 && std::get<v1::records::TrailerConfigured>(trailers[2].record).index == 9, "a clear after a non-empty slot, then slot 9");
+  const auto trailer_wire = v1_record(encoder, trailers[2]);
+  require(trailer_wire.at("index").number() == 9 && v1_text(trailer_wire.at("bodyType")) == "dryvan" && v1_available(trailer_wire.at("cargoAccessoryId")) && v1_text(trailer_wire.at("cargoAccessoryId")).empty(), "trailer fields and slot index");
+  host.frame_end(); const auto current = v1_read(*adapter); const auto& configuration = current->state.configuration;
+  require(configuration.revision == trailers[2].occurred.configuration_revision && configuration.job.available() && configuration.job.value.cargo_id.view() == "seen_cargo" && !configuration.truck.available(), "current configuration follows the records");
+  require(configuration.trailers[9].available() && configuration.trailers[9].value.index == 9 && !configuration.trailers[0].available() && !configuration.trailers[1].available(), "trailer slots in the current configuration");
+  // Lifecycle records at the callback moment.
+  host.event(SCS_TELEMETRY_EVENT_started); host.event(SCS_TELEMETRY_EVENT_paused); const auto lifecycle_records = ring.drain(*channel);
+  require(lifecycle_records.size() == 2 && type_of(lifecycle_records[0]) == "simulation.started" && lifecycle_records[0].occurred.simulation == v1::SimulationState::running, "simulation.started");
+  require(type_of(lifecycle_records[1]) == "simulation.paused" && lifecycle_records[1].occurred.simulation == v1::SimulationState::paused, "simulation.paused");
+  scs_telemetry_frame_start_t frame{}; frame.flags = SCS_TELEMETRY_FRAME_START_FLAG_timer_restart; host.event(SCS_TELEMETRY_EVENT_frame_start, &frame); host.frame_end();
+  const auto restart = ring.drain(*channel); require(restart.size() == 1 && type_of(restart[0]) == "timers.restart", "SDK timer restart is timers.restart");
+  auto minutes = u32(500); host.channel(Field::game_time, &minutes); host.frame_end(); const auto before_regression = v1_read(*adapter);
+  minutes = u32(100); host.channel(Field::game_time, &minutes); const auto regressions = ring.drain(*channel);
+  require(regressions.size() == 1 && type_of(regressions[0]) == "gameTime.regression", "game-time regression record");
+  const auto& regression = std::get<v1::records::GameTimeRegression>(regressions[0].record);
+  require(regression.from.minutes.available() && regression.from.minutes.value == 500 && same_clock(regression.from.clock_id, before_regression->state.game_time.clock_id), "from: the reading and clock before the rotation");
+  require(regression.to.minutes.value == 100 && !same_clock(regression.to.clock_id, regression.from.clock_id), "to: the regressed reading under the rotated clock");
+  require(same_clock(regressions[0].occurred.game_time.clock_id, regression.to.clock_id) && regressions[0].occurred.game_time.minutes.value == 100, "occurred.gameTime equals to");
+  require(v1_record(encoder, regressions[0]).at("to").at("minutes").at("value").string() == "100", "the contract accepts the regression");
+  // Gameplay events (§6): exact s64 money, units and booleans; vehicle.damage has no v1 field.
+  scs_named_value_t delivered[]{attribute("revenue", s64(INT64_MIN)), attribute("earned.xp", s32(250)), attribute("cargo.damage", floating(0.05F)), attribute("distance.km", floating(151.25F)),
+    attribute("delivery.time", u32(300)), attribute("auto.park.used", boolean(true)), attribute("auto.load.used", boolean(false)), attribute("vehicle.damage", floating(0.5F)), {}};
+  scs_named_value_t cancelled[]{attribute("cancel.penalty", s64(1000)), {}};
+  scs_named_value_t fined[]{attribute("fine.offence", text("speeding")), attribute("fine.amount", s64(INT64_MAX)), {}};
+  scs_named_value_t toll[]{attribute("pay.amount", s64(0)), {}};
+  scs_named_value_t ferry[]{attribute("pay.amount", s64(450)), attribute("source.id", text("port_a")), attribute("source.name", text("Port A")), attribute("target.id", text("port_b")), attribute("target.name", text("Port B")), {}};
+  host.gameplay("job.delivered", delivered); host.gameplay("job.cancelled", cancelled); host.gameplay("player.fined", fined); host.gameplay("player.tollgate.paid", toll);
+  host.gameplay("player.use.ferry", ferry); host.gameplay("player.use.train", ferry);
+  const auto before_car = channel->next_event_seq();
+  host.gameplay("car_job.delivered", delivered); host.gameplay("car_job.cancelled", cancelled); host.gameplay("test.unknown", toll); host.gameplay(nullptr, toll);
+  require(channel->next_event_seq() == before_car, "car_job and unknown gameplay events: no eventSeq");
+  const auto gameplay = ring.drain(*channel);
+  require(gameplay.size() == 6 && type_of(gameplay[0]) == "job.delivered" && type_of(gameplay[1]) == "job.cancelled" && type_of(gameplay[2]) == "player.fined" && type_of(gameplay[3]) == "player.tollgate.paid" && type_of(gameplay[4]) == "player.use.ferry" && type_of(gameplay[5]) == "player.use.train", "the six gameplay types");
+  require(gameplay[0].occurred.configuration_revision == configuration.revision, "gameplay events carry the current v1 revision");
+  const auto d = v1_record(encoder, gameplay[0]);
+  require(v1_raw(d.at("revenue")) == "-9223372036854775808" && d.at("revenue").at("value").at("sdkType").string() == "s64" && v1_number(d.at("earnedXp")) == 250, "s64 revenue exact, s32 experience");
+  require(v1_number(d.at("distance")) == 151250 && d.at("distance").at("unit").string() == "m" && v1_number(d.at("cargoDamage")) == static_cast<double>(0.05F) && v1_text(d.at("deliveryDuration")) == "300", "distance.km x 1,000, damage fraction, duration minutes");
+  require(d.at("autoParkUsed").at("value").boolean() && !d.at("autoLoadUsed").at("value").boolean(), "delivery flags");
+  require(v1_raw(v1_record(encoder, gameplay[1]).at("penalty")) == "1000", "cancellation penalty");
+  const auto f = v1_record(encoder, gameplay[2]); require(v1_text(f.at("offence")) == "speeding" && v1_raw(f.at("amount")) == "9223372036854775807", "fine offence and INT64_MAX amount");
+  require(v1_raw(v1_record(encoder, gameplay[3]).at("amount")) == "0", "a zero toll is an available reading");
+  for (std::size_t i = 4; i < 6; ++i) {
+    const auto transfer = v1_record(encoder, gameplay[i]);
+    require(v1_raw(transfer.at("amount")) == "450" && v1_text(transfer.at("sourceId")) == "port_a" && v1_text(transfer.at("sourceName")) == "Port A" && v1_text(transfer.at("targetId")) == "port_b" && v1_text(transfer.at("targetName")) == "Port B", "ferry and train transfers");
+  }
+  host.gameplay("job.cancelled", nullptr);
+  std::array<scs_named_value_t, max_attributes> long_delivery{};
+  for (auto& value : long_delivery) value = attribute("x", u32(1));
+  long_delivery[0] = attribute("revenue", s64(7));
+  host.gameplay("job.delivered", long_delivery.data()); const auto unseen_gameplay = ring.drain(*channel);
+  require(unseen_gameplay.size() == 2 && std::get<v1::records::JobCancelled>(unseen_gameplay[0].record).penalty.state == v1::FieldState::invalid, "null gameplay list: fields invalid");
+  const auto& long_record = std::get<v1::records::JobDelivered>(unseen_gameplay[1].record);
+  require(long_record.revenue.available() && long_record.revenue.value == 7 && long_record.earned_xp.state == v1::FieldState::invalid && long_record.auto_load_used.state == v1::FieldState::invalid, "unterminated gameplay list: unseen fields invalid");
+  require(ring.next == channel->next_event_seq() && ring.lost.offline + ring.lost.no_durable_consumer + ring.lost.queue_count == 0, "every record copied while durable");
+  adapter->shutdown(); const auto retired = v1_read(*adapter);
+  require(!retired->active && retired->source_retired && retired->state.simulation == v1::SimulationState::unavailable, "shutdown publishes a retired v1 slot");
+  adapter->attach_events(nullptr);
+}
+
+void v1_state_and_gate() {
+  {
+    auto inert = std::make_unique<Adapter>(); Host host; auto params = host.params();
+    require(inert->initialize(SCS_TELEMETRY_VERSION_1_01, &params) == SCS_RESULT_ok, "inert init"); host.event(SCS_TELEMETRY_EVENT_started); host.frame_end();
+    V1Current none; require(!inert->read_v1_current(none), "no channel, no v1 slot"); inert->shutdown();
+  }
+  auto adapter = std::make_unique<Adapter>(); Host host; auto params = host.params();
+  require(adapter->initialize(SCS_TELEMETRY_VERSION_1_01, &params) == SCS_RESULT_ok, "v1 state init"); const auto v0_initial = read(*adapter);
+  auto channel = std::make_unique<v1::EventChannel>(); require(channel->prepare(), "v1 channel prepared"); adapter->attach_events(channel.get());
+  const auto initial = v1_read(*adapter);
+  require(std::string(initial->identity.plugin_session_id.c_str()) == v0_initial->identity.plugin_session_id.c_str() && initial->active && initial->gameplay_result == SCS_RESULT_ok, "the v1 slot shares the v0 identity");
+  require(initial->state.simulation == v1::SimulationState::paused && initial->state.boundary_order == v0_initial->boundary_order && initial->state.configuration.revision == 0 && !initial->state.window.available() && initial->state.capture_utc_unix_ms.available(), "the first v1 slot at attachment");
+  // Gate none: lifecycle and configuration boundaries are offline transitions (S10); every event is offline loss.
+  scs_named_value_t job[]{attribute("cargo.id", text("cargo.a")), {}}; scs_named_value_t penalty[]{attribute("cancel.penalty", s64(5)), {}};
+  host.event(SCS_TELEMETRY_EVENT_started); host.config("job", job); host.gameplay("job.cancelled", penalty);
+  require(!channel->front(), "gate none copies nothing");
+  host.frame_end(); V1Ring ring;
+  require(ring.drain(*channel).empty() && ring.lost.offline == 3 && ring.next == 4, "the offline run is flushed at frame_end");
+  const auto offline = v1_read(*adapter);
+  require(offline->continuity.offline_transitions == 2 && offline->state.configuration.revision == 1 && offline->state.configuration.job.available() && offline->state.configuration.job.value.cargo_id.view() == "cargo.a", "S10 boundaries and the current configuration while offline");
+  // Gate live: noDurableConsumer loss, and a live client is connected, so no offline transition.
+  channel->set_gate(v1::Gate::live); host.event(SCS_TELEMETRY_EVENT_paused); host.gameplay("job.cancelled", penalty); host.frame_end();
+  ring.drain(*channel); const auto live = v1_read(*adapter);
+  require(ring.lost.no_durable_consumer == 2 && ring.next == 6 && live->continuity.offline_transitions == 2 && live->state.simulation == v1::SimulationState::paused, "live-only client: noDurableConsumer loss, no offline transition");
+  // Current state in SDK units, at the v0 boundary.
+  host.event(SCS_TELEMETRY_EVENT_started);
+  scs_telemetry_frame_start_t frame{}; frame.render_time = frame.simulation_time = 10; host.event(SCS_TELEMETRY_EVENT_frame_start, &frame);
+  auto speed = floating(-7.5F), fuel = floating(20.5F), rpm = floating(1200), odometer = floating(123.25F), consumption = floating(0.25F), range = floating(500.5F), navigation = floating(1000);
+  auto gear = s32(-1); auto minutes = u32(500);
+  scs_value_t placement{}; placement.type = SCS_VALUE_TYPE_dplacement; placement.value_dplacement.position = {123.5, -4.0, 99.0}; placement.value_dplacement.orientation = {0.25F, 0.1F, -0.1F};
+  host.channel(Field::speed, &speed); host.channel(Field::fuel, &fuel); host.channel(Field::rpm, &rpm); host.channel(Field::odometer, &odometer); host.channel(Field::consumption, &consumption);
+  host.channel(Field::range, &range); host.channel(Field::navigation_distance, &navigation); host.channel(Field::gear, &gear); host.channel(Field::game_time, &minutes); host.channel(Field::world_placement, &placement);
+  host.frame_end(); const auto v0_state = read(*adapter); const auto state = v1_read(*adapter); const auto& s = state->state;
+  require(s.speed_mps.available() && s.speed_mps.value == -7.5 && s.fuel_l.value == 20.5 && s.engine_rpm.value == 1200 && s.gear.available() && s.gear.value == -1, "speed m/s, fuel L, rpm and signed gear");
+  require(s.odometer_km.value == static_cast<double>(123.25F) && s.average_consumption_l_per_km.value == static_cast<double>(0.25F) && s.estimated_range_km.value == static_cast<double>(500.5F) && s.navigation_distance_m.value == 1000, "v1 state keeps SDK units: km and L/km");
+  require(s.game_time.minutes.value == 500 && s.world_placement.available() && s.world_placement.value.x == 123.5 && s.world_placement.value.heading == static_cast<double>(0.25F), "game time and placement");
+  require(s.boundary_order == v0_state->boundary_order && s.simulation == v1::SimulationState::running && s.capture_utc_unix_ms.available(), "the v1 slot shares the v0 boundary");
+  // The adapter's state is a valid checkpoint in wire units, with all ten trailer slots (OD-6).
+  v1::EventStore store; const v1::Encoder encoder(v1_identity(*state)); v1::StatusInfo status; status.delivery = store.status(); status.continuity = state->continuity;
+  const auto checkpoint = v1_decode(v1::encode(encoder.checkpoint(1, UINT64_MAX, s, status))); const auto& wire_state = checkpoint.wire.at("data").at("state");
+  require(v1_number(wire_state.at("odometer")) == 123250 && v1_number(wire_state.at("averageConsumption")) == 25 && v1_number(wire_state.at("estimatedRange")) == 500500 && v1_text(wire_state.at("gameTime")) == "500", "checkpoint from the adapter state in wire units");
+  require(std::get<v1::Json::Array>(wire_state.at("configuration").at("trailers").value).size() == 10 && checkpoint.wire.at("data").at("continuity").at("offlineTransitions").string() == "2", "ten trailer slots and the v1 continuity");
+  // A truck configuration invalidates dynamic truck readings in v1 as it does in v0.
+  scs_named_value_t truck[]{attribute("id", text("truck.model.a")), attribute("fuel.capacity", floating(800)), {}};
+  host.config("truck", truck); host.frame_end(); const auto changed = v1_read(*adapter);
+  require(!changed->state.speed_mps.available() && changed->state.fuel_capacity_l.value == 800 && changed->state.game_time.minutes.available() && changed->state.configuration.truck.available(), "truck boundary invalidates dynamic readings");
+  // A worker holding the v1 slot never stalls a callback: the older slot stays whole, contention is counted, and a
+  // configuration change made meanwhile still reaches the next publication.
+  const auto coherent = v1_read(*adapter);
+  std::promise<void> held, release; auto release_signal = release.get_future();
+  std::thread worker([&] { auto lock = AdapterTestAccess::hold_v1(*adapter); held.set_value(); release_signal.wait(); }); held.get_future().wait();
+  speed = floating(9); host.channel(Field::speed, &speed); scs_named_value_t other_job[]{attribute("cargo.id", text("cargo.b")), {}}; host.config("job", other_job); host.frame_end(); host.frame_end();
+  release.set_value(); worker.join();
+  const auto stale = v1_read(*adapter);
+  require(stale->state.boundary_order == coherent->state.boundary_order && !stale->state.speed_mps.available() && stale->state.configuration.job.value.cargo_id.view() == "cargo.a", "a contended publication keeps the older slot whole");
+  host.frame_end(); const auto recovered = v1_read(*adapter);
+  require(recovered->state.speed_mps.value == 9 && recovered->continuity.coalesced_snapshots == coherent->continuity.coalesced_snapshots + 2 && recovered->state.boundary_order > coherent->state.boundary_order, "v1 slot contention counted");
+  require(recovered->state.configuration.job.value.cargo_id.view() == "cargo.b" && recovered->state.configuration.revision == coherent->state.configuration.revision + 1, "a configuration change survives a contended publication");
+  adapter->shutdown(); adapter->attach_events(nullptr);
+}
+
+void v1_nonblocking() {
+  auto adapter = std::make_unique<Adapter>(); Host host; auto params = host.params();
+  require(adapter->initialize(SCS_TELEMETRY_VERSION_1_01, &params) == SCS_RESULT_ok, "non-blocking init"); read(*adapter);
+  auto channel = std::make_unique<v1::EventChannel>(); require(channel->prepare(), "v1 channel prepared");
+  adapter->attach_events(channel.get()); channel->set_gate(v1::Gate::durable);
+  host.event(SCS_TELEMETRY_EVENT_started); host.frame_end();
+  const auto before = v1_read(*adapter);
+  // A worker that holds the v1 slot lock while it is still reading the oldest ring slot.
+  std::promise<void> held, release; auto release_signal = release.get_future(); std::atomic<bool> oldest_seen{false};
+  std::thread worker([&] {
+    auto lock = AdapterTestAccess::hold_v1(*adapter);
+    const auto* oldest = channel->front(); oldest_seen.store(oldest && oldest->has_record && oldest->record.event_seq == 1);
+    held.set_value(); release_signal.wait(); lock.unlock(); channel->pop();
+  });
+  held.get_future().wait();
+  scs_named_value_t penalty[]{attribute("cancel.penalty", s64(5)), {}};
+  auto callbacks = std::async(std::launch::async, [&] {
+    for (unsigned frame = 0; frame < 200; ++frame) { host.gameplay("job.cancelled", penalty); host.event(frame % 2 ? SCS_TELEMETRY_EVENT_started : SCS_TELEMETRY_EVENT_paused); host.frame_end(); }
+  });
+  const bool completed = callbacks.wait_for(std::chrono::seconds(10)) == std::future_status::ready;
+  release.set_value(); worker.join(); callbacks.get();
+  require(oldest_seen.load(), "the worker held the oldest slot");
+  require(completed, "SDK callbacks complete while the worker holds the v1 slot and a ring slot");
+  // The ring kept 128 records; the rest is one queueCount run that reaches the worker at the next frame_end.
+  V1Ring ring; ring.next = 2; ring.drain(*channel); host.frame_end(); ring.drain(*channel);
+  require(ring.records.size() == v1::channel_slots - 1 && ring.lost.queue_count == 401 - v1::channel_slots && ring.next == 402 && channel->next_event_seq() == 402, "overflow is queueCount with complete coverage");
+  const auto after = v1_read(*adapter);
+  require(after->continuity.coalesced_snapshots == before->continuity.coalesced_snapshots + 200 && after->state.boundary_order > before->state.boundary_order, "every contended frame counted, then the slot recovers");
+  require(read(*adapter)->boundary_order == after->state.boundary_order, "v0 publication continued");
+  adapter->shutdown(); adapter->attach_events(nullptr);
+}
+
+// v0 and CAP0 isolation: one deterministic callback script runs on an adapter without and with an attached v1 channel.
+// Every v0 publication (state, continuity, revision, diagnostics) and every CAP0 envelope must be identical.
+namespace cap0 = ets2telemetry::cap0;
+struct IsolationFrame { std::unique_ptr<Snapshot> snapshot; std::vector<cap0::Envelope> evidence; };
+std::vector<IsolationFrame> isolation_run(bool attach) {
+  auto adapter = std::make_unique<Adapter>(); Host host; auto params = host.params();
+  require(adapter->initialize(SCS_TELEMETRY_VERSION_1_01, &params) == SCS_RESULT_ok, "isolation init"); read(*adapter);
+  auto queue = std::make_unique<cap0::EvidenceQueue>(); require(queue->prepare(), "CAP0 queue prepared"); queue->open(); adapter->attach_evidence(queue.get());
+  auto channel = std::make_unique<v1::EventChannel>(); require(channel->prepare(), "v1 channel prepared");
+  if (attach) { adapter->attach_events(channel.get()); channel->set_gate(v1::Gate::durable); }
+  adapter->set_consumer(true, true);
+  std::vector<IsolationFrame> frames;
+  const auto end_frame = [&] {
+    host.frame_end(); IsolationFrame output; output.snapshot = std::make_unique<Snapshot>(); require(adapter->read_latest(*output.snapshot), "v0 frame published");
+    cap0::Envelope envelope; while (queue->pop(envelope)) output.evidence.push_back(envelope);
+    while (channel->front()) channel->pop();
+    frames.push_back(std::move(output));
+  };
+  scs_named_value_t empty[]{{}};
+  scs_named_value_t truck[]{attribute("id", text("truck.model.a")), attribute("fuel.capacity", floating(800)), attribute("brand", text("Brand")), {}};
+  scs_named_value_t job[]{attribute("cargo.id", text("cargo.a")), attribute("destination.city.id", text("city.b")), attribute("income", u64(UINT64_MAX)), attribute("planned_distance.km", u32(700)), {}};
+  scs_named_value_t trailer[]{attribute("id", text("trailer.a")), attribute("wheel.radius", floating(0.5F), 0), {}};
+  scs_named_value_t delivered[]{attribute("revenue", s64(INT64_MIN)), attribute("distance.km", floating(42.5F)), attribute("source.name", text("")), {}};
+  host.event(SCS_TELEMETRY_EVENT_started); host.config("truck", truck); host.config("job", job); host.config("trailer.0", trailer); host.config("trailer", trailer); host.config("bus_job", job); end_frame();
+  scs_telemetry_frame_start_t frame{}; frame.render_time = frame.simulation_time = 10; host.event(SCS_TELEMETRY_EVENT_frame_start, &frame);
+  auto speed = floating(12.5F), odometer = floating(1000.5F); auto minutes = u32(500);
+  host.channel(Field::speed, &speed); host.channel(Field::odometer, &odometer); host.channel(Field::game_time, &minutes); end_frame();
+  host.gameplay("job.delivered", delivered); host.gameplay("car_job.delivered", delivered); host.config("job", empty); host.config("trailer.0", empty); host.config("job", nullptr); end_frame();
+  frame.render_time = frame.simulation_time = 20; host.event(SCS_TELEMETRY_EVENT_frame_start, &frame); minutes = u32(100); host.channel(Field::game_time, &minutes); host.channel(Field::speed, &speed); end_frame();
+  frame.flags = SCS_TELEMETRY_FRAME_START_FLAG_timer_restart; host.event(SCS_TELEMETRY_EVENT_frame_start, &frame); host.event(SCS_TELEMETRY_EVENT_paused); end_frame();
+  std::array<scs_named_value_t, max_attributes> unterminated{};
+  for (auto& value : unterminated) value = attribute("x", u32(1));
+  host.config("job", unterminated.data()); host.config("truck", empty); end_frame();
+  adapter->set_consumer(false, false); host.gameplay("job.cancelled", delivered); host.event(SCS_TELEMETRY_EVENT_started); end_frame();
+  adapter->shutdown(); frames.push_back({std::make_unique<Snapshot>(), {}}); require(adapter->read_latest(*frames.back().snapshot), "v0 shutdown frame");
+  queue->close(); adapter->attach_evidence(nullptr); adapter->attach_events(nullptr);
+  return frames;
+}
+template<std::size_t N> bool same_text(const Text<N>& a, const Text<N>& b) { return a.status == b.status && a.bytes == b.bytes; }
+bool same_epoch(const ets2telemetry::sdk::Uuid& a, const ets2telemetry::sdk::Uuid& b) { return std::string(a.c_str()).substr(24) == std::string(b.c_str()).substr(24); }
+void same_v0(const Snapshot& a, const Snapshot& b) {
+  require(a.boundary_order == b.boundary_order && a.active == b.active && a.exhausted == b.exhausted && a.source_retired == b.source_retired, "v0 isolation: boundary order and lifecycle");
+  const auto& x = a.state; const auto& y = b.state;
+  require(x.configuration_revision == y.configuration_revision && x.simulation == y.simulation && x.frame_available == y.frame_available && same_epoch(x.game_clock_id, y.game_clock_id), "v0 isolation: revision, simulation and game clock epoch");
+  for (std::size_t i = 0; i < x.channels.size(); ++i) require(x.channels[i].status == y.channels[i].status && x.channels[i].value == y.channels[i].value, "v0 isolation: channel readings");
+  require(x.game_time_minutes.status == y.game_time_minutes.status && x.game_time_minutes.value == y.game_time_minutes.value && x.fuel_capacity_l.status == y.fuel_capacity_l.status && x.fuel_capacity_l.value == y.fuel_capacity_l.value, "v0 isolation: game time and fuel capacity");
+  require(x.world_placement.status == y.world_placement.status && std::memcmp(&x.world_placement.value, &y.world_placement.value, sizeof x.world_placement.value) == 0 && same_text(x.truck_id, y.truck_id), "v0 isolation: placement and truck");
+  const auto& j = x.job; const auto& k = y.job;
+  require(j.status == k.status && same_text(j.cargo_id, k.cargo_id) && same_text(j.destination_city_id, k.destination_city_id) && same_text(j.source_city_id, k.source_city_id) && same_text(j.market, k.market) &&
+    j.planned_distance_m.status == k.planned_distance_m.status && j.planned_distance_m.value == k.planned_distance_m.value && j.expected_income.status == k.expected_income.status && j.expected_income.value == k.expected_income.value, "v0 isolation: job");
+  const auto& c = a.continuity; const auto& d = b.continuity;
+  require(c.coalesced_snapshots == d.coalesced_snapshots && c.lost_observations == d.lost_observations && c.offline_transitions == d.offline_transitions && c.callback_failures == d.callback_failures, "v0 isolation: continuity");
+  require(a.observation_count == b.observation_count, "v0 isolation: diagnostic batch size");
+  for (std::size_t i = 0; i < a.observation_count; ++i) {
+    const auto& o = a.observations[i]; const auto& p = b.observations[i];
+    require(o.kind == p.kind && same_text(o.group, p.group) && same_text(o.name, p.name) && o.index == p.index && o.callback_order == p.callback_order, "v0 isolation: observation identity");
+    require(o.value.type == p.value.type && o.value.status == p.value.status && o.value.boolean == p.value.boolean && o.value.signed_integer == p.value.signed_integer &&
+      o.value.unsigned_integer == p.value.unsigned_integer && o.value.number == p.value.number && same_text(o.value.string, p.value.string), "v0 isolation: observation value");
+  }
+}
+void same_cap0(const cap0::Envelope& a, const cap0::Envelope& b) {
+  require(a.kind == b.kind && a.id.status == b.id.status && a.id.value == b.id.value && a.seq == b.seq && a.dropped_before == b.dropped_before && a.boundary_order == b.boundary_order && a.configuration_revision == b.configuration_revision, "CAP0 isolation: envelope identity and revision");
+  require(a.frame_available == b.frame_available && a.render_us == b.render_us && a.simulation_us == b.simulation_us && a.game_time_status == b.game_time_status && a.game_time_minutes == b.game_time_minutes &&
+    a.simulation == b.simulation && a.game_clock_id.substr(24) == b.game_clock_id.substr(24), "CAP0 isolation: envelope context");
+  require(a.attributes_expected == b.attributes_expected && a.attributes_null == b.attributes_null && a.terminated == b.terminated && a.attributes.size() == b.attributes.size(), "CAP0 isolation: attribute list");
+  for (std::size_t i = 0; i < a.attributes.size(); ++i) {
+    const auto& x = a.attributes[i]; const auto& y = b.attributes[i];
+    require(x.name.value == y.name.value && x.index == y.index && x.value.type == y.value.type && x.value.status == y.value.status && x.value.signed_integer == y.value.signed_integer &&
+      x.value.unsigned_integer == y.value.unsigned_integer && x.value.numbers == y.value.numbers && x.value.text == y.value.text, "CAP0 isolation: attribute values");
+  }
+}
+void v1_isolation() {
+  const auto without = isolation_run(false), with = isolation_run(true);
+  require(without.size() == with.size() && without.size() == 8, "isolation frames");
+  std::size_t observations = 0, envelopes = 0;
+  for (std::size_t i = 0; i < without.size(); ++i) {
+    same_v0(*without[i].snapshot, *with[i].snapshot); observations += without[i].snapshot->observation_count;
+    require(without[i].evidence.size() == with[i].evidence.size(), "CAP0 isolation: envelope count");
+    for (std::size_t e = 0; e < without[i].evidence.size(); ++e) same_cap0(without[i].evidence[e], with[i].evidence[e]);
+    envelopes += without[i].evidence.size();
+  }
+  require(observations > 20 && envelopes > 15 && without.back().snapshot->source_retired, "the script exercised diagnostics, evidence and shutdown");
+}
+
+// End to end: SDK callbacks -> ring -> the PR A EventStore -> encoder -> the ET-002b Consumer, with DurableAckCursor
+// commits and AckValidator releases. This is the drain loop docs/native-transport-v1.md specifies for the endpoint.
+struct V1Worker {
+  Adapter& adapter; v1::EventChannel& channel; v1::Encoder encoder; v1::EventStore store; std::string session;
+  std::optional<v1::Consumer> consumer; std::optional<v1::AckValidator> validator; v1::DurableAckCursor cursor;
+  std::uint64_t seq = 0, capture = 0, events_written = 0, gaps_written = 0;
+  std::vector<std::pair<std::uint64_t, std::uint64_t>> received; std::vector<v1::Ingest> ingested; std::map<std::uint64_t, std::string> drained_types;
+  V1Worker(Adapter& a, v1::EventChannel& c, const V1Current& current)
+    : adapter(a), channel(c), encoder(v1_identity(current)), session(current.identity.plugin_session_id.c_str()), cursor(current.identity.plugin_session_id.c_str()) {}
+  std::uint64_t now() { std::uint64_t ns = 0; require(adapter.source_monotonic_ns(ns), "source clock"); return ns; }
+  // capture = max(now, last capture, the latest source-clock time the message carries).
+  std::uint64_t stamp(std::uint64_t carried = 0) { capture = std::max({now(), capture, carried}); return capture; }
+  // A loss run becomes store coverage one cause at a time in a fixed order; each part carries the run's lost times, so
+  // the merged gap record has the exact counts and the run's earliest and latest lost observation.
+  void record_run(const v1::LossRun& run, std::uint64_t t) {
+    const std::pair<v1::LossCause, std::uint64_t> parts[]{{v1::LossCause::offline, run.causes.offline}, {v1::LossCause::no_durable_consumer, run.causes.no_durable_consumer}, {v1::LossCause::queue_count, run.causes.queue_count}};
+    const auto first_ns = run.times_available ? std::optional<std::uint64_t>(run.first_lost_ns) : std::nullopt, last_ns = run.times_available ? std::optional<std::uint64_t>(run.last_lost_ns) : std::nullopt;
+    auto first = run.first_event_seq;
+    for (const auto& [cause, count] : parts) if (count) { require(store.lose(first, first + count - 1, cause, first_ns, last_ns, t), "a drained loss run is never rejected"); first += count; }
+    require(first == run.last_event_seq + 1, "loss run parts cover the run");
+  }
+  void drain() {
+    while (const auto* slot = channel.front()) {
+      const auto t = now();
+      if (slot->has_loss) record_run(slot->loss_before, t);
+      if (slot->has_record) {
+        drained_types[slot->record.event_seq] = type_of(slot->record);
+        const auto result = v1::ingest_event(store, encoder, slot->record, t); require(result != v1::Ingest::rejected, "a drained record is never rejected"); ingested.push_back(result);
+      }
+      channel.pop();
+    }
+  }
+  v1::Applied send(v1::Json wire) { return consumer->accept(v1_decode(v1::encode(std::move(wire)))); }
+  void open() {
+    // Connect before the gate opens, so that every record copied for this consumer is retained.
+    store.connect(); channel.set_gate(v1::Gate::durable);
+    consumer.emplace(true); validator.emplace(session, true);
+    const auto current = v1_read(adapter);
+    v1::WelcomeInfo welcome; welcome.durable_events = true; welcome.gameplay_events_registered = current->gameplay_result == SCS_RESULT_ok; welcome.telemetry_api = {1, 1}; welcome.game_telemetry = {1, 20};
+    send(encoder.welcome(++seq, stamp(), welcome));
+    drain();
+    v1::StatusInfo info; info.durable = true; info.delivery = store.status(); info.continuity = current->continuity;
+    const auto applied = send(encoder.checkpoint(++seq, stamp(info.delivery.oldest_retained_ns.value_or(0)), current->state, info));
+    require(applied.hydration && !applied.coverage, "the checkpoint hydrates only");
+    validator->checkpoint(info.delivery.acked_through_event_seq); cursor.begin_connection(info.delivery.acked_through_event_seq);
+  }
+  void pump() {
+    while (const auto item = store.next_outbound()) {
+      const auto carried = item->gap ? item->range.last_lost_ns.value_or(0) : item->event.occurred.monotonic_ns.available() ? item->event.occurred.monotonic_ns.value : 0;
+      const auto applied = send(encoder.outbound(++seq, stamp(carried), *item));
+      require(applied.coverage && applied.coverage->first_event_seq == item->first_event_seq() && applied.coverage->last_event_seq == item->last_event_seq(), "written coverage");
+      if (item->gap) ++gaps_written; else { ++events_written; require(drained_types.at(item->event.event_seq) == type_of(item->event), "event identity preserved"); }
+      validator->sent(item->last_event_seq()); cursor.received(item->first_event_seq(), item->last_event_seq()); received.emplace_back(item->first_event_seq(), item->last_event_seq());
+    }
+  }
+  void commit_and_ack() {
+    for (const auto& [first, last] : received) cursor.commit(first, last);
+    received.clear();
+    if (const auto ack = cursor.ack()) if (const auto through = validator->accept(*ack)) require(store.release(*through).has_value(), "release after the validated ACK");
+  }
+  void close() { channel.set_gate(v1::Gate::none); store.disconnect(now()); consumer.reset(); validator.reset(); }
+};
+void v1_drain_into_store() {
+  auto adapter = std::make_unique<Adapter>(); Host host; auto params = host.params();
+  require(adapter->initialize(SCS_TELEMETRY_VERSION_1_01, &params) == SCS_RESULT_ok, "drain init"); read(*adapter);
+  auto channel = std::make_unique<v1::EventChannel>(); require(channel->prepare(), "v1 channel prepared"); adapter->attach_events(channel.get());
+  auto worker = std::make_unique<V1Worker>(*adapter, *channel, *v1_read(*adapter));
+  scs_named_value_t job[]{attribute("cargo.id", text("cargo.a")), attribute("planned_distance.km", u32(700)), {}}; scs_named_value_t penalty[]{attribute("cancel.penalty", s64(5)), {}};
+  // No v1 client: offline. The worker records the run before any durable connection (OD-4).
+  host.event(SCS_TELEMETRY_EVENT_started); host.config("job", job); host.gameplay("job.cancelled", penalty); host.frame_end(); worker->drain();
+  require(worker->store.next_event_seq() == 4 && worker->store.status().event_loss.offline == 3 && worker->store.entries() == 1, "offline run recorded before the first durable connection");
+  // A live-only client: noDurableConsumer, merged into the same trailing gap record.
+  channel->set_gate(v1::Gate::live); host.gameplay("job.cancelled", penalty); host.event(SCS_TELEMETRY_EVENT_paused); host.frame_end(); worker->drain();
+  require(worker->store.status().event_loss.no_durable_consumer == 2 && worker->store.entries() == 1 && worker->store.next_event_seq() == 6, "noDurableConsumer extends the gap record");
+  // A durable consumer: copied records are retained and written in order after the gap.
+  worker->open();
+  host.event(SCS_TELEMETRY_EVENT_started); host.config("job", job); host.gameplay("job.cancelled", penalty); host.gameplay("player.fined", penalty); host.gameplay("job.delivered", penalty); host.frame_end();
+  worker->drain(); worker->pump(); worker->commit_and_ack();
+  require(worker->ingested.size() == 5 && std::all_of(worker->ingested.begin(), worker->ingested.end(), [](v1::Ingest r) { return r == v1::Ingest::retained; }), "copied records retained");
+  require(worker->gaps_written == 1 && worker->events_written == 5 && worker->consumer->next_event_seq() == 11 && worker->store.release_point() == 10, "gap [1, 5] then five events, acknowledged");
+  // Ring overflow while durable: 140 records without a drain. 128 are copied; 12 become one queueCount run, which a
+  // full ring keeps open at the first frame_end and the next frame_end delivers.
+  for (unsigned i = 0; i < 140; ++i) host.gameplay("job.cancelled", penalty);
+  host.frame_end(); worker->drain(); host.frame_end(); worker->drain();
+  require(worker->store.status().event_loss.queue_count == 12 && worker->store.next_event_seq() == 151, "ring overflow is queueCount coverage");
+  worker->pump(); worker->commit_and_ack();
+  // OD-5 S4: records copied while durable and drained after the disconnect are retained for the next connection.
+  host.gameplay("player.tollgate.paid", penalty); host.gameplay("job.cancelled", penalty); worker->close(); worker->drain();
+  require(worker->ingested.size() == 135 && worker->ingested[133] == v1::Ingest::retained && worker->ingested[134] == v1::Ingest::retained, "S4: drained after the disconnect, still retained");
+  worker->open(); host.event(SCS_TELEMETRY_EVENT_paused); host.frame_end(); worker->drain(); worker->pump(); worker->commit_and_ack();
+  const auto status = worker->store.status(); const auto& loss = status.event_loss;
+  require(worker->consumer->next_event_seq() == channel->next_event_seq() && channel->next_event_seq() == 154 && worker->events_written == 136 && worker->gaps_written == 2, "contiguous coverage of every eventSeq accepted by the Consumer");
+  require(loss.offline == 3 && loss.no_durable_consumer == 2 && loss.queue_count == 12 && loss.queue_bytes == 0 && loss.retention_expired == 0 && loss.encoding_failed == 0, "exact loss causes");
+  require(worker->cursor.through_event_seq() == 153 && status.acked_through_event_seq == 153 && status.retained_entries == 0, "every eventSeq committed and released");
+  adapter->shutdown(); adapter->attach_events(nullptr);
+}
 }
 int main(int argc, char** argv) {
   try {
     if (argc == 2 && std::string(argv[1]) == "missing-game-time-reset") missing_game_time_reset();
     else if (argc == 2 && std::string(argv[1]) == "callback-order-reset") game_time_reset_callback_orders();
-    else { lifecycle(); config_terminal_and_bounds(); clocks_and_contention(); failure_cleanup(); deferred_log(); missing_game_time_reset(); game_time_reset_callback_orders(); game_time_reset_frame_delimitation(); }
+    else if (argc == 2 && std::string(argv[1]) == "v1-capture") v1_capture_records();
+    else if (argc == 2 && std::string(argv[1]) == "v1-state") v1_state_and_gate();
+    else if (argc == 2 && std::string(argv[1]) == "v1-nonblocking") v1_nonblocking();
+    else if (argc == 2 && std::string(argv[1]) == "v1-isolation") v1_isolation();
+    else if (argc == 2 && std::string(argv[1]) == "v1-drain") v1_drain_into_store();
+    else {
+      lifecycle(); config_terminal_and_bounds(); clocks_and_contention(); failure_cleanup(); deferred_log(); missing_game_time_reset(); game_time_reset_callback_orders(); game_time_reset_frame_delimitation();
+      v1_capture_records(); v1_state_and_gate(); v1_nonblocking(); v1_isolation(); v1_drain_into_store();
+    }
     std::cout << "SDK adapter: " << assertions << " checks passed; snapshot bytes=" << sizeof(Snapshot) << ", adapter bytes=" << sizeof(Adapter) << "\n"; return 0;
   }
   catch (const std::exception& error) { std::cerr << "SDK adapter failure: " << error.what() << '\n'; return 1; }

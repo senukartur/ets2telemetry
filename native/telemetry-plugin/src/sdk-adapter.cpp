@@ -9,6 +9,7 @@
 #include "common/scssdk_telemetry_common_channels.h"
 #include "common/scssdk_telemetry_truck_common_channels.h"
 #include "common/scssdk_telemetry_common_configs.h"
+#include "common/scssdk_telemetry_common_gameplay_events.h"
 #include "eurotrucks2/scssdk_eut2.h"
 #include "amtrucks/scssdk_ats.h"
 
@@ -105,6 +106,165 @@ void identifier(Identifier& target, const scs_value_t& input) noexcept {
   target.assign(input.value_string.value);
   if (target.status == Availability::available && !target.bytes[0]) target.status = Availability::not_observed;
 }
+
+// Protocol v1 copies (ET-004b). Values stay in SDK units; the v1 encoder applies the §6 mapping, the defensive ranges
+// and the D12 text rules. Field<T> is always returned as a prvalue (see available_field in protocol-v1-records.hpp).
+v1::FieldState v1_state(Availability status) noexcept {
+  switch (status) {
+    case Availability::available: return v1::FieldState::available;
+    case Availability::not_supported: return v1::FieldState::not_supported;
+    case Availability::invalid: return v1::FieldState::invalid;
+    default: return v1::FieldState::not_observed;
+  }
+}
+v1::SimulationState v1_simulation(Simulation simulation) noexcept {
+  return simulation == Simulation::running ? v1::SimulationState::running : simulation == Simulation::paused ? v1::SimulationState::paused : v1::SimulationState::unavailable;
+}
+// v0 readings hold an SDK float or integer scaled by 1, 100 or 1,000. A float times such a factor is exact in double,
+// so the division restores the SDK value exactly; the v1 encoder applies the same factor again.
+v1::Field<double> v1_reading(const Reading<double>& reading, double multiplier) noexcept {
+  return reading.status == Availability::available ? v1::Field<double>{reading.value / multiplier, v1::FieldState::available} : v1::Field<double>{0, v1_state(reading.status)};
+}
+// UTC label (OD-5 S8): unsigned Unix milliseconds from the system clock, which may jump.
+v1::Field<std::uint64_t> utc_unix_ms() noexcept {
+  FILETIME now{}; GetSystemTimePreciseAsFileTime(&now);
+  const std::uint64_t ticks = (static_cast<std::uint64_t>(now.dwHighDateTime) << 32) | now.dwLowDateTime;
+  constexpr std::uint64_t unix_epoch_ticks = 116444736000000000ULL;
+  return ticks >= unix_epoch_ticks ? v1::Field<std::uint64_t>{(ticks - unix_epoch_ticks) / 10000, v1::FieldState::available} : v1::Field<std::uint64_t>{};
+}
+// A sent attribute with an unusable type or value is invalid; only an attribute the game did not send stays
+// not-observed. A provided empty string stays available (D12), unlike the v0 identifier rule.
+template<std::size_t N> void v1_value(v1::FixedText<N>& output, const scs_value_t& input) noexcept {
+  if (input.type == SCS_VALUE_TYPE_string && input.value_string.value) output.assign(input.value_string.value);
+  else { output = {}; output.state = v1::FieldState::invalid; }
+}
+// The union member is read only when the SDK type matches the documented attribute type.
+template<class T> v1::Field<T> v1_invalid() noexcept { return v1::Field<T>{T{}, v1::FieldState::invalid}; }
+template<class T> v1::Field<T> v1_available(T value) noexcept { return v1::Field<T>{value, v1::FieldState::available}; }
+void v1_value(v1::Field<double>& output, const scs_value_t& input) noexcept { output = input.type == SCS_VALUE_TYPE_float ? v1_available<double>(input.value_float.value) : v1_invalid<double>(); }
+void v1_value(v1::Field<float>& output, const scs_value_t& input) noexcept { output = input.type == SCS_VALUE_TYPE_float ? v1_available<float>(input.value_float.value) : v1_invalid<float>(); }
+void v1_value(v1::Field<bool>& output, const scs_value_t& input) noexcept { output = input.type == SCS_VALUE_TYPE_bool ? v1_available<bool>(input.value_bool.value != 0) : v1_invalid<bool>(); }
+void v1_value(v1::Field<std::int32_t>& output, const scs_value_t& input) noexcept { output = input.type == SCS_VALUE_TYPE_s32 ? v1_available<std::int32_t>(input.value_s32.value) : v1_invalid<std::int32_t>(); }
+void v1_value(v1::Field<std::uint32_t>& output, const scs_value_t& input) noexcept { output = input.type == SCS_VALUE_TYPE_u32 ? v1_available<std::uint32_t>(input.value_u32.value) : v1_invalid<std::uint32_t>(); }
+void v1_value(v1::Field<std::int64_t>& output, const scs_value_t& input) noexcept { output = input.type == SCS_VALUE_TYPE_s64 ? v1_available<std::int64_t>(input.value_s64.value) : v1_invalid<std::int64_t>(); }
+void v1_value(v1::Field<std::uint64_t>& output, const scs_value_t& input) noexcept { output = input.type == SCS_VALUE_TYPE_u64 ? v1_available<std::uint64_t>(input.value_u64.value) : v1_invalid<std::uint64_t>(); }
+// After a null or unterminated attribute list, a field that was not seen may still have been sent: it is invalid.
+template<class T> void v1_unseen(T& field) noexcept { if (field.state == v1::FieldState::not_observed) field.state = v1::FieldState::invalid; }
+template<class... F> void v1_unseen_all(F&... fields) noexcept { (v1_unseen(fields), ...); }
+// The v0 scan bound: at most max_attributes entries including the terminator. Indexed attributes (wheel arrays) carry
+// no v1 field. Returns false for a null or unterminated list.
+template<class Apply> bool v1_scan(const scs_named_value_t* attributes, Apply apply) noexcept {
+  if (!attributes) return false;
+  for (std::size_t i = 0; i < max_attributes; ++i) {
+    const auto& attribute = attributes[i];
+    if (!attribute.name) return true;
+    if (attribute.index == SCS_U32_NIL) apply(attribute.name, attribute.value);
+  }
+  return false;
+}
+void v1_job(v1::records::JobConfigured& r, const scs_named_value_t* attributes) noexcept {
+  const bool terminated = v1_scan(attributes, [&](const char* name, const scs_value_t& value) {
+    if (equal(name, SCS_TELEMETRY_CONFIG_ATTRIBUTE_source_city_id)) v1_value(r.source_city_id, value);
+    else if (equal(name, SCS_TELEMETRY_CONFIG_ATTRIBUTE_source_city)) v1_value(r.source_city, value);
+    else if (equal(name, SCS_TELEMETRY_CONFIG_ATTRIBUTE_source_company_id)) v1_value(r.source_company_id, value);
+    else if (equal(name, SCS_TELEMETRY_CONFIG_ATTRIBUTE_source_company)) v1_value(r.source_company, value);
+    else if (equal(name, SCS_TELEMETRY_CONFIG_ATTRIBUTE_destination_city_id)) v1_value(r.destination_city_id, value);
+    else if (equal(name, SCS_TELEMETRY_CONFIG_ATTRIBUTE_destination_city)) v1_value(r.destination_city, value);
+    else if (equal(name, SCS_TELEMETRY_CONFIG_ATTRIBUTE_destination_company_id)) v1_value(r.destination_company_id, value);
+    else if (equal(name, SCS_TELEMETRY_CONFIG_ATTRIBUTE_destination_company)) v1_value(r.destination_company, value);
+    else if (equal(name, SCS_TELEMETRY_CONFIG_ATTRIBUTE_cargo_id)) v1_value(r.cargo_id, value);
+    else if (equal(name, SCS_TELEMETRY_CONFIG_ATTRIBUTE_cargo)) v1_value(r.cargo, value);
+    else if (equal(name, SCS_TELEMETRY_CONFIG_ATTRIBUTE_cargo_mass)) v1_value(r.cargo_mass_kg, value);
+    else if (equal(name, SCS_TELEMETRY_CONFIG_ATTRIBUTE_cargo_unit_mass)) v1_value(r.cargo_unit_mass_kg, value);
+    else if (equal(name, SCS_TELEMETRY_CONFIG_ATTRIBUTE_cargo_unit_count)) v1_value(r.cargo_unit_count, value);
+    else if (equal(name, SCS_TELEMETRY_CONFIG_ATTRIBUTE_job_market)) v1_value(r.market, value);
+    else if (equal(name, SCS_TELEMETRY_CONFIG_ATTRIBUTE_special_job)) v1_value(r.is_special_job, value);
+    else if (equal(name, SCS_TELEMETRY_CONFIG_ATTRIBUTE_is_cargo_loaded)) v1_value(r.cargo_loaded, value);
+    else if (equal(name, SCS_TELEMETRY_CONFIG_ATTRIBUTE_planned_distance_km)) v1_value(r.planned_distance_km, value);
+    else if (equal(name, SCS_TELEMETRY_CONFIG_ATTRIBUTE_income)) v1_value(r.expected_income, value);
+    else if (equal(name, SCS_TELEMETRY_CONFIG_ATTRIBUTE_delivery_time)) v1_value(r.delivery_deadline_min, value);
+  });
+  if (!terminated) v1_unseen_all(r.source_city_id, r.source_city, r.source_company_id, r.source_company, r.destination_city_id, r.destination_city,
+    r.destination_company_id, r.destination_company, r.cargo_id, r.cargo, r.cargo_mass_kg, r.cargo_unit_mass_kg, r.cargo_unit_count, r.market,
+    r.is_special_job, r.cargo_loaded, r.planned_distance_km, r.expected_income, r.delivery_deadline_min);
+}
+void v1_truck(v1::records::TruckConfigured& r, const scs_named_value_t* attributes) noexcept {
+  const bool terminated = v1_scan(attributes, [&](const char* name, const scs_value_t& value) {
+    if (equal(name, SCS_TELEMETRY_CONFIG_ATTRIBUTE_brand_id)) v1_value(r.brand_id, value);
+    else if (equal(name, SCS_TELEMETRY_CONFIG_ATTRIBUTE_brand)) v1_value(r.brand, value);
+    else if (equal(name, SCS_TELEMETRY_CONFIG_ATTRIBUTE_id)) v1_value(r.id, value);
+    else if (equal(name, SCS_TELEMETRY_CONFIG_ATTRIBUTE_name)) v1_value(r.name, value);
+    else if (equal(name, SCS_TELEMETRY_CONFIG_ATTRIBUTE_fuel_capacity)) v1_value(r.fuel_capacity_l, value);
+    else if (equal(name, SCS_TELEMETRY_CONFIG_ATTRIBUTE_license_plate)) v1_value(r.license_plate, value);
+    else if (equal(name, SCS_TELEMETRY_CONFIG_ATTRIBUTE_license_plate_country_id)) v1_value(r.plate_country_id, value);
+    else if (equal(name, SCS_TELEMETRY_CONFIG_ATTRIBUTE_license_plate_country)) v1_value(r.plate_country, value);
+  });
+  if (!terminated) v1_unseen_all(r.brand_id, r.brand, r.id, r.name, r.fuel_capacity_l, r.license_plate, r.plate_country_id, r.plate_country);
+}
+void v1_trailer(v1::records::TrailerConfigured& r, const scs_named_value_t* attributes) noexcept {
+  const bool terminated = v1_scan(attributes, [&](const char* name, const scs_value_t& value) {
+    if (equal(name, SCS_TELEMETRY_CONFIG_ATTRIBUTE_id)) v1_value(r.id, value);
+    else if (equal(name, SCS_TELEMETRY_CONFIG_ATTRIBUTE_body_type)) v1_value(r.body_type, value);
+    else if (equal(name, SCS_TELEMETRY_CONFIG_ATTRIBUTE_chain_type)) v1_value(r.chain_type, value);
+    else if (equal(name, SCS_TELEMETRY_CONFIG_ATTRIBUTE_cargo_accessory_id)) v1_value(r.cargo_accessory_id, value);
+    else if (equal(name, SCS_TELEMETRY_CONFIG_ATTRIBUTE_brand_id)) v1_value(r.brand_id, value);
+    else if (equal(name, SCS_TELEMETRY_CONFIG_ATTRIBUTE_brand)) v1_value(r.brand, value);
+    else if (equal(name, SCS_TELEMETRY_CONFIG_ATTRIBUTE_name)) v1_value(r.name, value);
+    else if (equal(name, SCS_TELEMETRY_CONFIG_ATTRIBUTE_license_plate)) v1_value(r.license_plate, value);
+    else if (equal(name, SCS_TELEMETRY_CONFIG_ATTRIBUTE_license_plate_country_id)) v1_value(r.plate_country_id, value);
+    else if (equal(name, SCS_TELEMETRY_CONFIG_ATTRIBUTE_license_plate_country)) v1_value(r.plate_country, value);
+  });
+  if (!terminated) v1_unseen_all(r.id, r.body_type, r.chain_type, r.cargo_accessory_id, r.brand_id, r.brand, r.name, r.license_plate, r.plate_country_id, r.plate_country);
+}
+void v1_delivered(v1::records::JobDelivered& r, const scs_named_value_t* attributes) noexcept {
+  const bool terminated = v1_scan(attributes, [&](const char* name, const scs_value_t& value) {
+    if (equal(name, SCS_TELEMETRY_GAMEPLAY_EVENT_ATTRIBUTE_revenue)) v1_value(r.revenue, value);
+    else if (equal(name, SCS_TELEMETRY_GAMEPLAY_EVENT_ATTRIBUTE_earned_xp)) v1_value(r.earned_xp, value);
+    else if (equal(name, SCS_TELEMETRY_GAMEPLAY_EVENT_ATTRIBUTE_cargo_damage)) v1_value(r.cargo_damage, value);
+    else if (equal(name, SCS_TELEMETRY_GAMEPLAY_EVENT_ATTRIBUTE_distance_km)) v1_value(r.distance_km, value);
+    else if (equal(name, SCS_TELEMETRY_GAMEPLAY_EVENT_ATTRIBUTE_delivery_time)) v1_value(r.delivery_duration_min, value);
+    else if (equal(name, SCS_TELEMETRY_GAMEPLAY_EVENT_ATTRIBUTE_auto_park_used)) v1_value(r.auto_park_used, value);
+    else if (equal(name, SCS_TELEMETRY_GAMEPLAY_EVENT_ATTRIBUTE_auto_load_used)) v1_value(r.auto_load_used, value);
+  });
+  if (!terminated) v1_unseen_all(r.revenue, r.earned_xp, r.cargo_damage, r.distance_km, r.delivery_duration_min, r.auto_park_used, r.auto_load_used);
+}
+void v1_cancelled(v1::records::JobCancelled& r, const scs_named_value_t* attributes) noexcept {
+  const bool terminated = v1_scan(attributes, [&](const char* name, const scs_value_t& value) {
+    if (equal(name, SCS_TELEMETRY_GAMEPLAY_EVENT_ATTRIBUTE_cancel_penalty)) v1_value(r.penalty, value);
+  });
+  if (!terminated) v1_unseen_all(r.penalty);
+}
+void v1_fined(v1::records::PlayerFined& r, const scs_named_value_t* attributes) noexcept {
+  const bool terminated = v1_scan(attributes, [&](const char* name, const scs_value_t& value) {
+    if (equal(name, SCS_TELEMETRY_GAMEPLAY_EVENT_ATTRIBUTE_fine_offence)) v1_value(r.offence, value);
+    else if (equal(name, SCS_TELEMETRY_GAMEPLAY_EVENT_ATTRIBUTE_fine_amount)) v1_value(r.amount, value);
+  });
+  if (!terminated) v1_unseen_all(r.offence, r.amount);
+}
+void v1_tollgate(v1::records::PlayerTollgatePaid& r, const scs_named_value_t* attributes) noexcept {
+  const bool terminated = v1_scan(attributes, [&](const char* name, const scs_value_t& value) {
+    if (equal(name, SCS_TELEMETRY_GAMEPLAY_EVENT_ATTRIBUTE_pay_amount)) v1_value(r.amount, value);
+  });
+  if (!terminated) v1_unseen_all(r.amount);
+}
+void v1_transfer(v1::records::Transfer& r, const scs_named_value_t* attributes) noexcept {
+  const bool terminated = v1_scan(attributes, [&](const char* name, const scs_value_t& value) {
+    if (equal(name, SCS_TELEMETRY_GAMEPLAY_EVENT_ATTRIBUTE_pay_amount)) v1_value(r.amount, value);
+    else if (equal(name, SCS_TELEMETRY_GAMEPLAY_EVENT_ATTRIBUTE_source_id)) v1_value(r.source_id, value);
+    else if (equal(name, SCS_TELEMETRY_GAMEPLAY_EVENT_ATTRIBUTE_source_name)) v1_value(r.source_name, value);
+    else if (equal(name, SCS_TELEMETRY_GAMEPLAY_EVENT_ATTRIBUTE_target_id)) v1_value(r.target_id, value);
+    else if (equal(name, SCS_TELEMETRY_GAMEPLAY_EVENT_ATTRIBUTE_target_name)) v1_value(r.target_name, value);
+  });
+  if (!terminated) v1_unseen_all(r.amount, r.source_id, r.source_name, r.target_id, r.target_name);
+}
+// Slot of a `trailer.N` configuration, N = 0-9, or -1. The legacy `trailer` id repeats trailer.0 and has no v1 slot.
+int trailer_slot(const char* id) noexcept {
+  static_assert(v1::limits.trailer_slots == 10, "single-digit trailer configuration ids");
+  constexpr char prefix[] = "trailer.";
+  // Compares one byte at a time and stops at the first difference, so a short id is never read past its terminator.
+  for (std::size_t i = 0; i + 1 < sizeof prefix; ++i) if (id[i] != prefix[i]) return -1;
+  return id[8] >= '0' && id[8] <= '9' && !id[9] ? id[8] - '0' : -1;
+}
 }
 template<std::size_t N> bool Text<N>::assign(const char* input) noexcept {
   bytes.fill(0); status = Availability::invalid;
@@ -137,7 +297,12 @@ scs_result_t Adapter::initialize(scs_u32_t version, const scs_telemetry_init_par
       if (!lock.owns_lock()) return SCS_RESULT_not_now;
       published_ = {}; unread_ = false;
       producer_ = {}; consumer_.store(0, std::memory_order_release); discarded_observations_.store(0, std::memory_order_relaxed);
+      // The v1 slot of an earlier plugin session must not outlive it.
+      std::unique_lock<std::mutex> v1_lock(v1_mutex_, std::try_to_lock);
+      if (!v1_lock.owns_lock()) return SCS_RESULT_not_now;
+      v1_published_ = {};
     }
+    v1_configuration_ = {}; v1_continuity_ = {}; v1_configuration_dirty_ = true;
     clock_epoch_ = 0; observed_in_frame_.fill(false); in_frame_ = false;
     producer_.identity.game_id.assign(input.common.game_id); producer_.identity.game.assign(ets2 ? "ets2" : "ats");
     producer_.identity.api_version = version; producer_.identity.game_telemetry_version = input.common.game_version;
@@ -335,15 +500,20 @@ void Adapter::event(scs_event_t event_id, const void* info) {
         const auto& config = *static_cast<const scs_telemetry_configuration_t*>(info);
         configuration(config);
         if (!producer_.exhausted) evidence(cap0::Kind::configuration, config.id, config.attributes, true);
+        if (!producer_.exhausted) v1_configuration(config);
       } else { failure(); evidence(cap0::Kind::configuration, nullptr, nullptr, true); } break;
     case SCS_TELEMETRY_EVENT_gameplay:
-      if (info) { const auto& event_info = *static_cast<const scs_telemetry_gameplay_event_t*>(info); copy_attributes(ObservationKind::gameplay, event_info.id, event_info.attributes); evidence(cap0::Kind::gameplay, event_info.id, event_info.attributes, true); }
+      if (info) { const auto& event_info = *static_cast<const scs_telemetry_gameplay_event_t*>(info); copy_attributes(ObservationKind::gameplay, event_info.id, event_info.attributes); evidence(cap0::Kind::gameplay, event_info.id, event_info.attributes, true); v1_gameplay(event_info); }
       else { failure(); evidence(cap0::Kind::gameplay, nullptr, nullptr, true); } break;
     case SCS_TELEMETRY_EVENT_started: case SCS_TELEMETRY_EVENT_paused:
       producer_.state.simulation = event_id == SCS_TELEMETRY_EVENT_started ? Simulation::running : Simulation::paused;
       if (!(consumer_.load(std::memory_order_acquire) & 1)) increment(producer_.continuity.offline_transitions);
       observe(ObservationKind::lifecycle, "simulation", event_id == SCS_TELEMETRY_EVENT_started ? "started" : "paused", SCS_U32_NIL, nullptr);
-      evidence(cap0::Kind::lifecycle, event_id == SCS_TELEMETRY_EVENT_started ? "simulation.started" : "simulation.paused", nullptr, false); break;
+      evidence(cap0::Kind::lifecycle, event_id == SCS_TELEMETRY_EVENT_started ? "simulation.started" : "simulation.paused", nullptr, false);
+      if (events_.load(std::memory_order_acquire)) {
+        if (event_id == SCS_TELEMETRY_EVENT_started) v1_record_.record.emplace<v1::records::SimulationStarted>(); else v1_record_.record.emplace<v1::records::SimulationPaused>();
+        v1_emit(true);
+      } break;
     case SCS_TELEMETRY_EVENT_frame_start:
       observed_in_frame_.fill(false); in_frame_ = false;
       if (info) {
@@ -355,10 +525,13 @@ void Adapter::event(scs_event_t event_id, const void* info) {
           // Record the new frame times with the restart marker; prior values remain in earlier envelopes.
           producer_.state.frame = frame; producer_.state.frame_available = true;
           evidence(cap0::Kind::lifecycle, "timers.restart", nullptr, false);
+          if (!producer_.exhausted && events_.load(std::memory_order_acquire)) { v1_record_.record.emplace<v1::records::TimersRestart>(); v1_emit(true); }
         }
         producer_.state.frame = frame; producer_.state.frame_available = true;
       } else failure(); break;
     case SCS_TELEMETRY_EVENT_frame_end:
+      // A trailing v1 loss run reaches the worker at least once per frame, even without a later copied record.
+      if (auto* channel = events_.load(std::memory_order_acquire)) channel->flush_loss();
       publish(); observed_in_frame_.fill(false); in_frame_ = false; flush_deferred_log(); break;
     default: failure(); break;
   }
@@ -375,6 +548,8 @@ void Adapter::channel(Field field, const scs_value_t* value) {
   if (in_frame_) observed_in_frame_[i] = true;
   if (field == Field::game_time) {
     if (value && value->type == SCS_VALUE_TYPE_u32 && producer_.state.game_time_minutes.status == Availability::available && value->value_u32.value < producer_.state.game_time_minutes.value) {
+      // v1 gameTime.regression: `from` is the reading and clock before the rotation, `to` the regressed reading after it.
+      v1::GameTimePod from; if (events_.load(std::memory_order_acquire)) v1_game_time(from);
       clock_restart(); observe(ObservationKind::lifecycle, "game.time", "regression", SCS_U32_NIL, nullptr);
       if (!(consumer_.load(std::memory_order_acquire) & 1)) increment(producer_.continuity.offline_transitions);
       producer_.state.channels[i] = measurement(value, spec.type, spec.multiplier, spec.minimum, spec.maximum);
@@ -383,6 +558,10 @@ void Adapter::channel(Field field, const scs_value_t* value) {
       if (producer_.state.game_time_minutes.status == Availability::available) producer_.state.game_time_minutes.value = value->value_u32.value;
       // The envelope carries the regressed reading under the rotated game clock.
       evidence(cap0::Kind::lifecycle, "game.time.regression", nullptr, false);
+      if (!producer_.exhausted && events_.load(std::memory_order_acquire)) {
+        auto& regression = v1_record_.record.emplace<v1::records::GameTimeRegression>();
+        regression.from = from; v1_game_time(regression.to); v1_emit(true);
+      }
     }
     producer_.state.game_time_minutes = {};
     producer_.state.game_time_minutes.status = producer_.state.channels[i].status;
@@ -398,7 +577,8 @@ SCSAPI_VOID Adapter::channel_callback(scs_string_t, scs_u32_t, const scs_value_t
   auto* registered = static_cast<Context*>(context); if (!registered || !registered->owner) return;
   try { registered->owner->channel(registered->field, value); } catch (...) { registered->owner->failure(); }
 }
-void Adapter::publish() noexcept {
+void Adapter::publish() noexcept { publish_v0(); publish_v1(); }
+void Adapter::publish_v0() noexcept {
   try {
     gate_diagnostics();
     add(producer_.continuity.lost_observations, discarded_observations_.exchange(0, std::memory_order_relaxed));
@@ -455,5 +635,109 @@ bool Adapter::read_current(Snapshot& output) noexcept {
     output.observations = {}; output.observation_count = 0;
     return true;
   } catch (...) { return false; }
+}
+void Adapter::attach_events(v1::EventChannel* channel) noexcept {
+  events_.store(channel, std::memory_order_release);
+  // The first v1 slot of the session, so that a worker started after attachment can build its checkpoint at once.
+  if (channel && initialized_) { v1_configuration_dirty_ = true; publish_v1(); }
+}
+bool Adapter::read_v1_current(V1Current& output) noexcept {
+  try {
+    std::lock_guard<std::mutex> lock(v1_mutex_);
+    if (v1_published_.identity.plugin_session_id.status != Availability::available) return false;
+    output = v1_published_; output.source_retired = !source_live_.load(std::memory_order_acquire);
+    return true;
+  } catch (...) { return false; }
+}
+void Adapter::v1_game_time(v1::GameTimePod& output) const noexcept {
+  const auto& minutes = producer_.state.game_time_minutes;
+  output.minutes = v1::Field<std::uint32_t>{minutes.status == Availability::available ? minutes.value : 0, v1_state(minutes.status)};
+  std::memcpy(output.clock_id.text, producer_.state.game_clock_id.bytes.data(), sizeof output.clock_id.text);
+}
+void Adapter::v1_emit(bool boundary) noexcept {
+  auto* channel = events_.load(std::memory_order_acquire);
+  if (!channel) return;
+  // The callback moment (§8), after this callback updated the adapter state: the source clock, the game clock, a UTC
+  // label, the simulation state, the v1 configuration revision and the shared callback order.
+  auto& occurred = v1_record_.occurred;
+  std::uint64_t now = 0;
+  occurred.monotonic_ns = source_monotonic_ns(now) ? v1::Field<std::uint64_t>{now, v1::FieldState::available} : v1::Field<std::uint64_t>{};
+  v1_game_time(occurred.game_time);
+  occurred.utc_unix_ms = utc_unix_ms();
+  occurred.simulation = v1_simulation(producer_.state.simulation);
+  occurred.configuration_revision = v1_configuration_.revision; occurred.boundary_order = producer_.boundary_order;
+  // OD-5 S10: a lifecycle or configuration boundary while no v1 client is connected. Gameplay events are counted as loss.
+  if (boundary && channel->gate() == v1::Gate::none) increment(v1_continuity_.offline_transitions);
+  channel->observe(v1_record_);
+}
+void Adapter::v1_configuration(const scs_telemetry_configuration_t& config) noexcept {
+  if (!events_.load(std::memory_order_acquire) || !config.id) return;
+  const bool job = equal(config.id, SCS_TELEMETRY_CONFIG_job), truck = equal(config.id, SCS_TELEMETRY_CONFIG_truck);
+  const int trailer = trailer_slot(config.id);
+  // bus_job and car_job have no v1 type (TD-002) and the legacy `trailer` id repeats trailer.0: no record, no eventSeq.
+  if (!job && !truck && trailer < 0) return;
+  // An empty attribute list clears the configuration. A null list is a present configuration whose fields are unseen.
+  const bool cleared = config.attributes && !config.attributes[0].name;
+  auto& current = v1_configuration_;
+  // D13: a trailer slot emits only when it is non-empty or when a clear follows a non-empty slot.
+  if (trailer >= 0 && cleared && !current.trailers[static_cast<std::size_t>(trailer)].available()) return;
+  // Separate from the v0 revision. Saturation is unreachable in practice and keeps the revision non-decreasing.
+  if (current.revision != UINT64_MAX) ++current.revision;
+  auto& body = v1_record_.record;
+  if (job && cleared) { body.emplace<v1::records::JobCleared>(); current.job = {}; }
+  else if (job) { auto& r = body.emplace<v1::records::JobConfigured>(); v1_job(r, config.attributes); current.job.value = r; current.job.state = v1::FieldState::available; }
+  else if (truck && cleared) { body.emplace<v1::records::TruckCleared>(); current.truck = {}; }
+  else if (truck) { auto& r = body.emplace<v1::records::TruckConfigured>(); v1_truck(r, config.attributes); current.truck.value = r; current.truck.state = v1::FieldState::available; }
+  else {
+    auto& slot = current.trailers[static_cast<std::size_t>(trailer)];
+    if (cleared) { body.emplace<v1::records::TrailerCleared>().index = static_cast<std::uint8_t>(trailer); slot = {}; }
+    else {
+      auto& r = body.emplace<v1::records::TrailerConfigured>(); r.index = static_cast<std::uint8_t>(trailer);
+      v1_trailer(r, config.attributes); slot.value = r; slot.state = v1::FieldState::available;
+    }
+  }
+  v1_configuration_dirty_ = true;
+  v1_emit(true);
+}
+void Adapter::v1_gameplay(const scs_telemetry_gameplay_event_t& event_info) noexcept {
+  if (!events_.load(std::memory_order_acquire) || !event_info.id) return;
+  auto& body = v1_record_.record; const char* id = event_info.id; const auto* attributes = event_info.attributes;
+  if (equal(id, SCS_TELEMETRY_GAMEPLAY_EVENT_job_delivered)) v1_delivered(body.emplace<v1::records::JobDelivered>(), attributes);
+  else if (equal(id, SCS_TELEMETRY_GAMEPLAY_EVENT_job_cancelled)) v1_cancelled(body.emplace<v1::records::JobCancelled>(), attributes);
+  else if (equal(id, SCS_TELEMETRY_GAMEPLAY_EVENT_player_fined)) v1_fined(body.emplace<v1::records::PlayerFined>(), attributes);
+  else if (equal(id, SCS_TELEMETRY_GAMEPLAY_EVENT_player_tollgate_paid)) v1_tollgate(body.emplace<v1::records::PlayerTollgatePaid>(), attributes);
+  else if (equal(id, SCS_TELEMETRY_GAMEPLAY_EVENT_player_use_ferry)) v1_transfer(body.emplace<v1::records::PlayerUseFerry>(), attributes);
+  else if (equal(id, SCS_TELEMETRY_GAMEPLAY_EVENT_player_use_train)) v1_transfer(body.emplace<v1::records::PlayerUseTrain>(), attributes);
+  // car_job.* and unknown gameplay types have no v1 type (TD-002): no record and no eventSeq.
+  else return;
+  v1_emit(false);
+}
+void Adapter::publish_v1() noexcept {
+  if (!events_.load(std::memory_order_acquire)) return;
+  try {
+    // A worker copying the slot never stalls the SDK thread: the older slot stays intact and the contention is counted.
+    std::unique_lock<std::mutex> lock(v1_mutex_, std::try_to_lock);
+    if (!lock.owns_lock()) { increment(v1_continuity_.coalesced_snapshots); return; }
+    auto& output = v1_published_; const auto& state = producer_.state;
+    output.identity = producer_.identity; output.gameplay_result = producer_.gameplay_result;
+    output.active = producer_.active; output.exhausted = producer_.exhausted; output.continuity = v1_continuity_;
+    auto& s = output.state;
+    const auto sdk_value = [&](Field field) { const auto i = static_cast<std::size_t>(field); return v1_reading(state.channels[i], specs[i].multiplier); };
+    s.simulation = v1_simulation(state.simulation);
+    s.speed_mps = sdk_value(Field::speed); s.fuel_l = sdk_value(Field::fuel); s.engine_rpm = sdk_value(Field::rpm);
+    s.odometer_km = sdk_value(Field::odometer); s.average_consumption_l_per_km = sdk_value(Field::consumption);
+    s.estimated_range_km = sdk_value(Field::range); s.navigation_distance_m = sdk_value(Field::navigation_distance);
+    s.fuel_capacity_l = v1_reading(state.fuel_capacity_l, 1);
+    const auto& gear = state.channels[static_cast<std::size_t>(Field::gear)];
+    s.gear = gear.status == Availability::available ? v1::Field<std::int32_t>{static_cast<std::int32_t>(gear.value), v1::FieldState::available} : v1::Field<std::int32_t>{0, v1_state(gear.status)};
+    v1_game_time(s.game_time); s.capture_utc_unix_ms = utc_unix_ms(); s.boundary_order = producer_.boundary_order;
+    const auto& placement = state.world_placement;
+    if (placement.status == Availability::available) {
+      const auto& p = placement.value;
+      s.world_placement = v1::Field<v1::PlacementPod>{v1::PlacementPod{p.position.x, p.position.y, p.position.z, p.orientation.heading, p.orientation.pitch, p.orientation.roll}, v1::FieldState::available};
+    } else s.world_placement = v1::Field<v1::PlacementPod>{v1::PlacementPod{}, v1_state(placement.status)};
+    // The configuration is copied only after a configuration boundary, not on every frame.
+    if (v1_configuration_dirty_) { s.configuration = v1_configuration_; v1_configuration_dirty_ = false; }
+  } catch (...) { increment(v1_continuity_.coalesced_snapshots); }
 }
 } // namespace ets2telemetry::sdk
