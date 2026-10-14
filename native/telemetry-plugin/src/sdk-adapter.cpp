@@ -295,12 +295,15 @@ scs_result_t Adapter::initialize(scs_u32_t version, const scs_telemetry_init_par
       if (!pending_lock.owns_lock()) return SCS_RESULT_not_now;
       std::unique_lock<std::mutex> lock(publication_mutex_, std::try_to_lock);
       if (!lock.owns_lock()) return SCS_RESULT_not_now;
-      published_ = {}; unread_ = false;
-      producer_ = {}; consumer_.store(0, std::memory_order_release); discarded_observations_.store(0, std::memory_order_relaxed);
-      // The v1 slot of an earlier plugin session must not outlive it.
+      // All three locks are held before any reset, so `not_now` leaves every slot and the producer state unchanged.
       std::unique_lock<std::mutex> v1_lock(v1_mutex_, std::try_to_lock);
       if (!v1_lock.owns_lock()) return SCS_RESULT_not_now;
-      v1_published_ = {};
+      published_ = {}; unread_ = false;
+      producer_ = {}; consumer_.store(0, std::memory_order_release); discarded_observations_.store(0, std::memory_order_relaxed);
+      // The v1 slot of an earlier plugin session must not outlive it. A channel still attached belongs to that session
+      // too: a new session must start at eventSeq 1 (§9), so it is detached and v1 stays inert until the caller prepares
+      // a channel and attaches it again.
+      v1_published_ = {}; events_.store(nullptr, std::memory_order_release);
     }
     v1_configuration_ = {}; v1_continuity_ = {}; v1_configuration_dirty_ = true;
     clock_epoch_ = 0; observed_in_frame_.fill(false); in_frame_ = false;

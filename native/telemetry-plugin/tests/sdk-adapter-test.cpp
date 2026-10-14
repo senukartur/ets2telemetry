@@ -772,6 +772,42 @@ void v1_drain_into_store() {
   require(worker->cursor.through_event_seq() == 289 && status.acked_through_event_seq == 289 && status.retained_entries == 0, "every eventSeq committed and released");
   adapter->shutdown(); adapter->attach_events(nullptr);
 }
+
+// initialize() starts a new plugin session: a contended initialization (`not_now`) changes no state, and a channel left
+// attached from the previous session is detached, so eventSeq never continues under a new pluginSessionId (§9).
+void v1_session_boundary() {
+  auto adapter = std::make_unique<Adapter>(); Host host; auto params = host.params();
+  require(adapter->initialize(SCS_TELEMETRY_VERSION_1_01, &params) == SCS_RESULT_ok, "session boundary init"); read(*adapter);
+  auto channel = std::make_unique<v1::EventChannel>(); require(channel->prepare(), "v1 channel prepared");
+  adapter->attach_events(channel.get()); channel->set_gate(v1::Gate::durable);
+  host.event(SCS_TELEMETRY_EVENT_started); require(channel->next_event_seq() == 2, "the first session assigned eventSeq 1");
+  // The caller shuts down without attach_events(nullptr).
+  adapter->shutdown();
+  auto retired = std::make_unique<Snapshot>(); require(adapter->read_current(*retired) && retired->source_retired, "retired v0 state");
+  const auto retired_v1 = v1_read(*adapter);
+  std::promise<void> held, release; auto release_signal = release.get_future();
+  std::thread worker([&] { auto lock = AdapterTestAccess::hold_v1(*adapter); held.set_value(); release_signal.wait(); }); held.get_future().wait();
+  const auto deferred = adapter->initialize(SCS_TELEMETRY_VERSION_1_01, &params);
+  release.set_value(); worker.join();
+  require(deferred == SCS_RESULT_not_now && host.events.empty() && host.channels.empty(), "a held v1 slot defers initialization before any registration");
+  auto unchanged = std::make_unique<Snapshot>();
+  require(adapter->read_current(*unchanged) && std::string(unchanged->identity.plugin_session_id.c_str()) == retired->identity.plugin_session_id.c_str() && unchanged->boundary_order == retired->boundary_order, "not_now leaves the v0 slot unchanged");
+  const auto unchanged_v1 = v1_read(*adapter);
+  require(std::string(unchanged_v1->identity.plugin_session_id.c_str()) == retired_v1->identity.plugin_session_id.c_str() && !unchanged_v1->active, "not_now leaves the v1 slot unchanged");
+  // The next initialization starts a new session and detaches the stale channel.
+  require(adapter->initialize(SCS_TELEMETRY_VERSION_1_01, &params) == SCS_RESULT_ok, "initialization after the slot is released"); const auto second = read(*adapter);
+  require(std::string(second->identity.plugin_session_id.c_str()) != retired->identity.plugin_session_id.c_str(), "a new plugin session");
+  scs_named_value_t penalty[]{attribute("cancel.penalty", s64(5)), {}};
+  host.event(SCS_TELEMETRY_EVENT_started); host.gameplay("job.cancelled", penalty); host.frame_end();
+  V1Current none;
+  require(channel->next_event_seq() == 2 && !adapter->read_v1_current(none), "the stale channel receives nothing and v1 stays inert");
+  // A prepared channel attached again starts the new session at eventSeq 1.
+  require(channel->prepare(), "channel prepared for the new session"); adapter->attach_events(channel.get()); channel->set_gate(v1::Gate::durable);
+  host.event(SCS_TELEMETRY_EVENT_paused);
+  const auto* first = channel->front();
+  require(first && first->has_record && first->record.event_seq == 1 && v1_read(*adapter)->identity.plugin_session_id.c_str() == std::string(second->identity.plugin_session_id.c_str()), "the new session starts at eventSeq 1");
+  adapter->shutdown(); adapter->attach_events(nullptr);
+}
 }
 int main(int argc, char** argv) {
   try {
@@ -782,9 +818,10 @@ int main(int argc, char** argv) {
     else if (argc == 2 && std::string(argv[1]) == "v1-nonblocking") v1_nonblocking();
     else if (argc == 2 && std::string(argv[1]) == "v1-isolation") v1_isolation();
     else if (argc == 2 && std::string(argv[1]) == "v1-drain") v1_drain_into_store();
+    else if (argc == 2 && std::string(argv[1]) == "v1-session") v1_session_boundary();
     else {
       lifecycle(); config_terminal_and_bounds(); clocks_and_contention(); failure_cleanup(); deferred_log(); missing_game_time_reset(); game_time_reset_callback_orders(); game_time_reset_frame_delimitation();
-      v1_capture_records(); v1_state_and_gate(); v1_nonblocking(); v1_isolation(); v1_drain_into_store();
+      v1_capture_records(); v1_state_and_gate(); v1_nonblocking(); v1_isolation(); v1_drain_into_store(); v1_session_boundary();
     }
     std::cout << "SDK adapter: " << assertions << " checks passed; snapshot bytes=" << sizeof(Snapshot) << ", adapter bytes=" << sizeof(Adapter) << "\n"; return 0;
   }

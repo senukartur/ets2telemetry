@@ -114,7 +114,8 @@ class Adapter final {
   void attach_evidence(cap0::EvidenceQueue* queue) noexcept { evidence_.store(queue, std::memory_order_release); }
   // SDK initialization/shutdown context only, after initialize() and with a prepared channel. Callbacks then hand
   // protocol v1 event records to the channel, whose gate decides whether a record is copied, and publish the v1 state
-  // slot. Without a channel every v1 path is inert; v0 and CAP0 behavior is identical either way.
+  // slot. Without a channel every v1 path is inert; v0 and CAP0 behavior is identical either way. initialize() detaches
+  // a channel left attached from an earlier plugin session, whose eventSeq must not continue under a new session.
   void attach_events(v1::EventChannel* channel) noexcept;
   // Transport worker: an owned copy of the current v1 state slot. It consumes nothing, so the v0 read_latest slot keeps
   // its single consumer. False before the first v1 publication of this plugin session.
