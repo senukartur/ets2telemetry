@@ -40,9 +40,12 @@ export class V1Consumer {
   get durableEvents(): boolean { return this.durable; }
   /** The next eventSeq this connection must cover. */
   get nextEventSeq(): Uint64 { return this.nextEvent.toString(); }
+  /** True while a registered clock probe has not received its reply. */
+  get clockProbeOutstanding(): boolean { return this.probe !== undefined; }
   /**
    * Registers the one outstanding clock probe before it is sent. Probe IDs increase within a connection; an
-   * unsolicited or mismatched reply is a violation. The one-per-second rate and reply deadline belong to the caller.
+   * unsolicited or mismatched reply is a violation. A probe stays outstanding until its reply arrives, even after the
+   * 1 s measurement deadline, so no new probe can be registered before then. The one-per-second rate is the caller's.
    */
   expectClockReply(probeId: Uint64): void {
     try {
@@ -113,27 +116,35 @@ export class V1Consumer {
 /**
  * Client-side cumulative ACK cursor for one plugin session, kept across its connections. `throughEventSeq` is the
  * highest eventSeq T such that storage committed every event and gap marker in [1, T]. Receipt alone never advances it.
+ * An ACK never exceeds the coverage received on the current connection, which the producer's ACK rule requires.
  */
 export class DurableAckCursor {
-  private through: bigint; private receivedThrough: bigint; private lastAck: bigint;
+  private through: bigint; private receivedThrough: bigint;
   private pending: [bigint, bigint][] = [];
+  /** Per-connection marks: the highest eventSeq covered by an event or gap received on it, and the last ACK sent on it. */
+  private connection?: {receivedThrough: bigint; lastAck: bigint};
   /** `committedThroughEventSeq` is the contiguous commit point already in storage for this plugin session. */
   constructor(readonly pluginSessionId: string, committedThroughEventSeq: Uint64 = '0') {
     if (!UUID.test(pluginSessionId)) fail('Invalid plugin session');
-    this.through = uint(committedThroughEventSeq); this.receivedThrough = this.through; this.lastAck = this.through;
+    this.through = uint(committedThroughEventSeq); this.receivedThrough = this.through;
   }
   get throughEventSeq(): Uint64 { return this.through.toString(); }
-  /** Starts a connection from its checkpoint. The producer cannot have acknowledged more than storage committed. */
+  /**
+   * Starts a connection from its checkpoint's `ackedThroughEventSeq` A. Both per-connection marks restart at A, so an
+   * ACK lost on an earlier connection is repeated only after its range has been received again on this one.
+   */
   beginConnection(ackedThroughEventSeq: Uint64): void {
     const acked = uint(ackedThroughEventSeq);
     if (acked > this.through) fail('Producer acknowledged beyond local commits');
-    this.lastAck = acked;
+    this.connection = {receivedThrough: acked, lastAck: acked};
   }
-  /** Records coverage delivered by the consumer; commits are allowed only inside received coverage. */
+  /** Records coverage delivered on the current connection; commits are allowed only inside received coverage. */
   received(first: Uint64, last: Uint64): void {
     const a = uint(first, 1n), b = uint(last, 1n);
-    if (b < a || a > this.receivedThrough + 1n) fail('Received coverage is not contiguous');
+    if (!this.connection) fail('No connection started');
+    if (b < a || a > this.connection.receivedThrough + 1n) fail('Received coverage is not contiguous');
     if (b > this.receivedThrough) this.receivedThrough = b;
+    if (b > this.connection.receivedThrough) this.connection.receivedThrough = b;
   }
   isCommitted(eventSeq: Uint64): boolean {
     const n = uint(eventSeq, 1n); return n <= this.through || this.pending.some(([a, b]) => a <= n && n <= b);
@@ -154,33 +165,51 @@ export class DurableAckCursor {
     while (merged.length && merged[0][0] <= this.through + 1n) { const [, end] = merged.shift()!; if (end > this.through) this.through = end; }
     this.pending = merged; return 'committed';
   }
-  /** The next cumulative ACK, or undefined when it would not advance; an equal ACK is a producer no-op. */
-  ack(): ClientMessage | undefined {
-    if (this.through <= this.lastAck) return undefined;
-    this.lastAck = this.through;
-    return {version: PROTOCOL_V1, kind: 'ack', data: {pluginSessionId: this.pluginSessionId, throughEventSeq: this.through.toString()}};
+  /**
+   * The next cumulative ACK on the current connection: min(contiguous committed eventSeq, highest eventSeq received on
+   * this connection), returned only when it exceeds the last ACK sent on this connection; otherwise undefined.
+   */
+  ack(): Extract<ClientMessage, {kind: 'ack'}> | undefined {
+    if (!this.connection) return undefined;
+    const through = this.through < this.connection.receivedThrough ? this.through : this.connection.receivedThrough;
+    if (through <= this.connection.lastAck) return undefined;
+    this.connection.lastAck = through;
+    return {version: PROTOCOL_V1, kind: 'ack', data: {pluginSessionId: this.pluginSessionId, throughEventSeq: through.toString()}};
   }
 }
 
 /**
- * Producer-side ACK validation for one connection. It rejects a foreign plugin session, an ACK beyond the highest
- * eventSeq sent on this connection and a regressing ACK, and closes on the first violation. An equal ACK is a no-op.
+ * Producer-side ACK validation for one connection, created when the welcome is written. It rejects every ACK from a
+ * live-only client, any ACK before the checkpoint, a foreign plugin session, an ACK beyond the highest eventSeq sent on
+ * this connection and a regressing ACK, and closes on the first violation. An equal ACK is a no-op.
  */
 export class AckValidator {
-  private acked: bigint; private sentThrough: bigint; private closed = false;
-  constructor(private readonly pluginSessionId: string, ackedThroughEventSeq: Uint64) {
+  private acked?: bigint; private sentThrough = 0n; private closed = false;
+  /** `durableEvents` is the grant written in this connection's welcome. */
+  constructor(private readonly pluginSessionId: string, private readonly durableEvents: boolean) {
     if (!UUID.test(pluginSessionId)) fail('Invalid plugin session');
-    this.acked = uint(ackedThroughEventSeq); this.sentThrough = this.acked;
   }
-  get ackedThroughEventSeq(): Uint64 { return this.acked.toString(); }
+  get ackedThroughEventSeq(): Uint64 | undefined { return this.acked?.toString(); }
+  /** Records the checkpoint written on this connection, with its `ackedThroughEventSeq`. */
+  checkpoint(ackedThroughEventSeq: Uint64): void {
+    const acked = uint(ackedThroughEventSeq);
+    if (this.acked !== undefined) { this.closed = true; fail('Second checkpoint'); }
+    this.acked = acked; this.sentThrough = acked;
+  }
   /** Records an event or gap written on this connection, covering eventSeqs through `lastEventSeq`. */
-  sent(lastEventSeq: Uint64): void { const n = uint(lastEventSeq, 1n); if (n > this.sentThrough) this.sentThrough = n; }
+  sent(lastEventSeq: Uint64): void {
+    const n = uint(lastEventSeq, 1n);
+    if (this.acked === undefined || !this.durableEvents) { this.closed = true; fail('Event coverage without a durable checkpoint'); }
+    if (n > this.sentThrough) this.sentThrough = n;
+  }
   /** Returns the new acknowledged eventSeq after an advance; the producer then releases those retained entries. */
   accept(input: unknown): Uint64 | undefined {
     try {
       if (this.closed) fail('ACK validator is closed');
       const m = validateClientMessage(input); if (m.kind !== 'ack') fail('ACK expected');
       const through = BigInt(m.data.throughEventSeq);
+      if (!this.durableEvents) fail('ACK from a live-only client');
+      if (this.acked === undefined) fail('ACK before checkpoint');
       if (m.data.pluginSessionId !== this.pluginSessionId) fail('ACK for a foreign plugin session');
       if (through > this.sentThrough) fail('ACK beyond the sent range');
       if (through < this.acked) fail('ACK regressed');
@@ -197,12 +226,15 @@ export const CLOCK_REPLY_DEADLINE_NS = 1_000_000_000n;
  * Computes `source ≈ client + offsetNs` from one probe round trip, with exact BigInt arithmetic.
  * t0/t3 are the client's probe send and reply receipt; t1/t2 are the source's receipt and reply send.
  * The offset is rounded down and the uncertainty rounded up, so the true offset lies within ±uncertaintyNs (≥ RTT/2).
+ * A reply received more than 1 s after its probe is late: the consumer still accepts it, which ends the outstanding
+ * probe, but the measurement is discarded and this returns undefined.
  */
-export function computeClockMapping(input: {reply: ServerMessage; probeId: Uint64; clientClockId: string; probeSentNs: Uint64; replyReceivedNs: Uint64}): ClockMapping {
+export function computeClockMapping(input: {reply: ServerMessage; probeId: Uint64; clientClockId: string; probeSentNs: Uint64; replyReceivedNs: Uint64}): ClockMapping | undefined {
   const reply = validateServerMessage(input.reply);
   if (reply.kind !== 'clock.reply' || reply.data.probeId !== input.probeId || !UUID.test(input.clientClockId)) fail('Clock reply mismatch');
   const t0 = uint(input.probeSentNs), t3 = uint(input.replyReceivedNs), t1 = BigInt(reply.data.receivedMonotonicNs), t2 = BigInt(reply.data.sentMonotonicNs);
-  if (t3 < t0 || t3 - t0 > CLOCK_REPLY_DEADLINE_NS) fail('Clock reply outside the probe deadline');
+  if (t3 < t0) fail('Clock reply received before its probe was sent');
+  if (t3 - t0 > CLOCK_REPLY_DEADLINE_NS) return undefined;
   const rtt = (t3 - t0) - (t2 - t1); if (rtt < 0n) fail('Negative clock round trip');
   const sum = (t1 - t0) + (t2 - t3); let offset = sum / 2n; if (sum < 0n && sum % 2n !== 0n) offset -= 1n;
   return {sourceClockId: reply.capture.clockId, clientClockId: input.clientClockId, offsetNs: offset.toString(), uncertaintyNs: ((rtt + 1n) / 2n).toString(), measuredAtClientNs: t3.toString()};

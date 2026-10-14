@@ -2,7 +2,7 @@ import {readdirSync, readFileSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {describe, expect, it} from 'vitest';
 import {
-  decodePayload, encodeFrame, EVENT_TYPES, FrameDecoder, fraction, kmToMetersFloat, kmToMetersU32, MAX_EVENT_SEQ, negotiateV1, PROTOCOL_V1,
+  decodePayload, encodeFrame, EVENT_TYPES, FrameDecoder, fraction, GAP_RECORD_BYTES, kmToMetersFloat, kmToMetersU32, MAX_EVENT_SEQ, negotiateV1, PROTOCOL_V1,
   ProtocolError, sdkMoney, sdkText, V1_LIMITS, type ProtocolMessage, type Sender, type ServerMessage
 } from '../../packages/contracts/src/protocol-v1';
 import * as v0 from '../../packages/contracts/src/protocol-v0';
@@ -130,6 +130,12 @@ describe('size bounds', () => {
     expect(() => server('event-oversized')).toThrow(/event size/);
     expect(bytes('hello-exact').length).toBe(4_096); expect(bytes('hello-oversized').length).toBe(4_097);
     expect(() => client('hello-oversized')).toThrow(/size/);
+  });
+  it('fits the worst-case gap into the bytes reserved for one gap record and bounds a full retained store', () => {
+    expect(GAP_RECORD_BYTES).toBe(1_024); expect(bytes('gap-worst').length).toBeLessThanOrEqual(GAP_RECORD_BYTES);
+    const full = server('snapshot-full-store'); if (full.kind !== 'snapshot') throw new Error('fixture');
+    expect(full.data.status.delivery).toMatchObject({retainedEvents: 256, retainedBytes: 1_048_576}); expect(full.data.status.eventLoss.queueCount).toBe('44');
+    expect(() => server('status-full-without-gap-bytes')).toThrow(ProtocolError); expect(() => server('status-bytes-limit')).toThrow(ProtocolError);
   });
   it('declares the approved fixed limits', () => {
     expect(PROTOCOL_V1).toEqual({major: 1, minor: 0});

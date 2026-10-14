@@ -13,6 +13,11 @@ export const V1_LIMITS = {
 /** UTF-8 byte limits of SDK identifiers and localized display text. Longer values become `invalid`, never truncated. */
 export const ID_BYTES = 128;
 export const NAME_BYTES = 256;
+/**
+ * Retained-byte accounting of one gap record, whatever its encoded size. The retained store always reserves one entry
+ * and these bytes for a trailing gap record, so a loss stays representable when the store is full (docs/protocol/v1.md §9).
+ */
+export const GAP_RECORD_BYTES = 1_024;
 /** The last assignable eventSeq, so that `nextEventSeq` stays representable as a uint64 after it. */
 export const MAX_EVENT_SEQ = '18446744073709551614';
 const U32_MAX = 4_294_967_295;
@@ -222,6 +227,8 @@ function gameMode(o: Record<string, unknown>) {
   if ((mode === 'unknown') !== (method === 'none') || (mode === 'unknown') !== (confidence === 'none')) fail();
   if (mode === 'single-player' && confidence === 'strong') fail();
   if (mode === 'truckersmp' && method === 'module-scan' && module.available !== true) fail();
+  // Only a module scan can name a module.
+  if (method !== 'module-scan' && module.available === true) fail();
 }
 const GAME_MODE_KEYS = ['mode', 'method', 'confidence', 'module'];
 const LOSS_KEYS = ['offline', 'noDurableConsumer', 'queueCount', 'queueBytes', 'retentionExpired', 'encodingFailed'];
@@ -259,6 +266,8 @@ function status(v: unknown, captureNs: bigint) {
   const entries = num(d.retainedEvents, 0, V1_LIMITS.retainedEntries, true), bytes = num(d.retainedBytes, 0, V1_LIMITS.retainedBytes, true);
   // Each retained entry (event or gap record) covers at least one unacknowledged eventSeq.
   if (next === 0n || acked >= next || BigInt(entries) > next - 1n - acked || (entries === 0) !== (bytes === 0)) fail();
+  // Events never take the reserved last entry, so a full store holds at least one gap record.
+  if (entries === V1_LIMITS.retainedEntries && bytes < GAP_RECORD_BYTES) fail();
   const oldest = available(d.oldestRetainedMonotonicNs, value => { if (u64(value) > captureNs) fail(); });
   if ((oldest.available === true) !== (entries > 0)) fail();
 }

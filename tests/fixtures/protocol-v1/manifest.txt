@@ -16,6 +16,7 @@ snapshot-capture-regression.json valid
 snapshot-foreign-source.json valid
 snapshot-clock-change.json valid
 snapshot-counter-regression.json valid
+snapshot-full-store.json valid
 event-job-configured.json valid
 event-job-cleared.json valid
 event-truck-configured.json valid
@@ -47,9 +48,14 @@ event-truck-configured-redelivered.json valid
 event-reconnect-live.json valid
 event-reconnect-live-flagged.json valid
 event-restart.json valid
+event-after-queue-count.json valid
+event-after-queue-bytes.json valid
 gap.json valid
 gap-offline.json valid
 gap-expired.json valid
+gap-queue-count.json valid
+gap-queue-bytes.json valid
+gap-worst.json valid
 clock-reply.json valid
 end.json valid
 end-early.json valid
@@ -81,6 +87,8 @@ invalid-utf8.json invalid
 overlong-utf8.json invalid
 lone-surrogate.json invalid
 deep.json invalid
+bom.json invalid
+malformed-number.json invalid
 nonfinite.json invalid
 duplicate-key.json invalid
 escaped-duplicate-key.json invalid
@@ -125,6 +133,7 @@ currency-lowercase-code.json invalid
 game-mode-single-player-strong.json invalid
 game-mode-truckersmp-no-module.json invalid
 game-mode-unknown-weak.json invalid
+game-mode-unknown-with-module.json invalid
 game-mode-convoy.json invalid
 record-bus-job.json invalid
 record-car-job-delivered.json invalid
@@ -142,6 +151,8 @@ trailer-slots-exceeded.json invalid
 status-acked-not-below-next.json invalid
 status-retained-without-oldest.json invalid
 status-retained-limit.json invalid
+status-full-without-gap-bytes.json invalid
+status-bytes-limit.json invalid
 boundary-mismatch.json invalid
 gap-causes-short.json invalid
 gap-causes-long.json invalid
@@ -158,6 +169,7 @@ hello-exact.json valid-client
 ack-1.json valid-client
 ack-3.json valid-client
 ack-5.json valid-client
+ack-0.json valid-client
 ack-foreign.json valid-client
 clock-probe.json valid-client
 hello-oversized.json invalid-client
