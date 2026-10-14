@@ -184,6 +184,12 @@ export class DurableAckCursor {
  * Producer-side ACK validation for one connection, created when the welcome is written. It rejects every ACK from a
  * live-only client, any ACK before the checkpoint, a foreign plugin session, an ACK beyond the highest eventSeq sent on
  * this connection and a regressing ACK, and closes on the first violation. An equal ACK is a no-op.
+ *
+ * An ACK never splits a retained entry (docs/protocol/v1.md §9-10). The producer accepts any T within its rule and
+ * releases exactly the retained entries whose last eventSeq is ≤ T. A gap record with first ≤ T < last stays whole,
+ * with its causes and its 1,024 accounted bytes, and is redelivered whole on the next connection. The producer's
+ * `ackedThroughEventSeq` in status and `end` is therefore its release point: T, or that gap record's first eventSeq
+ * minus one. This validator tracks the accepted T; the release bookkeeping belongs to the producer (ET-004b).
  */
 export class AckValidator {
   private acked?: bigint; private sentThrough = 0n; private closed = false;
@@ -204,7 +210,10 @@ export class AckValidator {
     if (this.acked === undefined || !this.durableEvents) { this.closed = true; fail('Event coverage without a durable checkpoint'); }
     if (n > this.sentThrough) this.sentThrough = n;
   }
-  /** Returns the new acknowledged eventSeq after an advance; the producer then releases those retained entries. */
+  /**
+   * Returns the new acknowledged eventSeq after an advance. The producer then releases the retained entries that end at
+   * or before it, never part of an entry.
+   */
   accept(input: unknown): Uint64 | undefined {
     try {
       if (this.closed) fail('ACK validator is closed');
@@ -229,15 +238,16 @@ export const CLOCK_REPLY_DEADLINE_NS = 1_000_000_000n;
  * t0/t3 are the client's probe send and reply receipt; t1/t2 are the source's receipt and reply send.
  * The offset is rounded down and the uncertainty rounded up, so the true offset lies within ±uncertaintyNs (≥ RTT/2).
  * A reply received more than 1 s after its probe is late: the consumer still accepts it, which ends the outstanding
- * probe, but the measurement is discarded and this returns undefined.
+ * probe, but the measurement is discarded and this returns undefined. A negative round trip is rejected first.
  */
 export function computeClockMapping(input: {reply: ServerMessage; probeId: Uint64; clientClockId: string; probeSentNs: Uint64; replyReceivedNs: Uint64}): ClockMapping | undefined {
   const reply = validateServerMessage(input.reply);
   if (reply.kind !== 'clock.reply' || reply.data.probeId !== input.probeId || !UUID.test(input.clientClockId)) fail('Clock reply mismatch');
   const t0 = uint(input.probeSentNs), t3 = uint(input.replyReceivedNs), t1 = BigInt(reply.data.receivedMonotonicNs), t2 = BigInt(reply.data.sentMonotonicNs);
   if (t3 < t0) fail('Clock reply received before its probe was sent');
-  if (t3 - t0 > CLOCK_REPLY_DEADLINE_NS) return undefined;
+  // An impossible round trip is rejected before the lateness check, so a late reply cannot hide it.
   const rtt = (t3 - t0) - (t2 - t1); if (rtt < 0n) fail('Negative clock round trip');
+  if (t3 - t0 > CLOCK_REPLY_DEADLINE_NS) return undefined;
   const sum = (t1 - t0) + (t2 - t3); let offset = sum / 2n; if (sum < 0n && sum % 2n !== 0n) offset -= 1n;
   return {sourceClockId: reply.capture.clockId, clientClockId: input.clientClockId, offsetNs: offset.toString(), uncertaintyNs: ((rtt + 1n) / 2n).toString(), measuredAtClientNs: t3.toString()};
 }

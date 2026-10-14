@@ -238,6 +238,24 @@ describe('bounded framing', () => {
   });
 });
 
+describe('JSON nesting depth', () => {
+  // The root is depth 0 and the limit is 16. A parsed non-message fails the schema (Invalid); a deeper one fails parsing (Malformed).
+  const decode = (text: string) => () => decodePayload(new TextEncoder().encode(text), 'server');
+  const arrays = (n: number, inner: string) => '['.repeat(n) + inner + ']'.repeat(n);
+  const objects = (n: number, inner: string) => '{"a":'.repeat(n) + inner + '}'.repeat(n);
+  it('accepts 16 nested containers around a scalar and rejects 17', () => {
+    expect(decode(arrays(16, '0'))).toThrow(/^Invalid protocol v1 message$/); expect(decode(arrays(17, '0'))).toThrow(/^Malformed protocol v1 JSON$/);
+    expect(decode(objects(16, '0'))).toThrow(/^Invalid protocol v1 message$/); expect(decode(objects(17, '0'))).toThrow(/^Malformed protocol v1 JSON$/);
+  });
+  it('accepts 17 nested empty containers and rejects 18', () => {
+    expect(decode(arrays(16, '[]'))).toThrow(/^Invalid protocol v1 message$/); expect(decode(arrays(17, '[]'))).toThrow(/^Malformed protocol v1 JSON$/);
+    expect(decode(objects(16, '{}'))).toThrow(/^Invalid protocol v1 message$/); expect(decode(objects(17, '{}'))).toThrow(/^Malformed protocol v1 JSON$/);
+  });
+  it('rejects deep.json while parsing, not in the schema', () => {
+    expect(() => server('deep')).toThrow(/^Malformed protocol v1 JSON$/);
+  });
+});
+
 describe('encoding validates first', () => {
   it('rejects invalid caller-owned values, including lone surrogates and unknown record types', () => {
     const m = structuredClone(server('event-truck-configured')); if (m.kind !== 'event' || m.data.record.type !== 'truck.configured') throw new Error('fixture');

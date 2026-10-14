@@ -1,6 +1,6 @@
 import {readFileSync} from 'node:fs';
 import {resolve} from 'node:path';
-import {describe, expect, it} from 'vitest';
+import {describe, expect, it, vi} from 'vitest';
 import {decodePayload, negotiateV1, ProtocolError, validateClientMessage, type ServerMessage} from '../../packages/contracts/src/protocol-v1';
 import {AckValidator, computeClockMapping, DurableAckCursor, isClockMappingCurrent, V1Consumer, type V1Applied} from '../../packages/contracts/src/protocol-v1-delivery';
 
@@ -15,9 +15,10 @@ const CLIENT_CLOCK = '60000000-0000-4000-8000-000000000001';
 /**
  * Drives one shared stream. `S:` frames go through the consumer, and the harness mirrors them into the producer-side
  * ACK validator (created at welcome, as the producer does). `C:` frames go through negotiation, the ACK validator or
- * the probe registry. `A` sends the cursor's own ACK, if any, to the validator. `R` starts a new connection. Coverage is
- * committed immediately to stand in for a storage transaction; the actual UNIQUE insert belongs to ET-013/ET-015a.
- * Every rejection comes from contract code; harness misuse throws a plain Error, which fails the stream test.
+ * the probe registry. `A:<uint64>` requires the cursor to produce exactly that ACK and sends it to the validator;
+ * `A:-` requires that the cursor produces none. `R` starts a new connection. Coverage is committed immediately to stand
+ * in for a storage transaction; the actual UNIQUE insert belongs to ET-013/ET-015a. Every rejection comes from contract
+ * code; harness misuse and an unexpected cursor ACK throw a plain Error, never a ProtocolError, which fails the stream test.
  */
 function runStream(durable: boolean, steps: string[]): {cursor?: DurableAckCursor; applied: V1Applied[]; failedAt?: number; error?: unknown} {
   let consumer = new V1Consumer(durable), validator: AckValidator | undefined, cursor: DurableAckCursor | undefined;
@@ -26,7 +27,14 @@ function runStream(durable: boolean, steps: string[]): {cursor?: DurableAckCurso
   for (const [index, step] of steps.entries()) {
     try {
       if (step === 'R') { consumer = new V1Consumer(durable); validator = undefined; continue; }
-      if (step === 'A') { const ack = cursor?.ack(); if (ack) producer().accept(ack); continue; }
+      if (step.startsWith('A:')) {
+        const expected = step.slice('A:'.length);
+        if (expected !== '-' && !/^(0|[1-9][0-9]*)$/.test(expected)) throw new Error(`Harness: malformed step ${step}`);
+        const ack = cursor?.ack(), produced = ack?.data.throughEventSeq ?? '-';
+        if (produced !== expected) throw new Error(`Harness: cursor produced ACK ${produced}, expected ${expected}`);
+        if (ack) producer().accept(ack);
+        continue;
+      }
       const [side, name] = step.split(':');
       if (side === 'S') {
         const result = consumer.accept(server(name)), m = result.message; applied.push(result);
@@ -64,6 +72,36 @@ describe('REG-003/005/010 shared v1 delivery streams', () => {
       expect(outcome).toBe('accept'); expect(result.error).toBeUndefined();
       expect(result.cursor?.throughEventSeq ?? '0').toBe(expected);
     }
+  });
+  it('fails every stream with a numeric A: step through the harness when the cursor never acknowledges', () => {
+    const numeric = streams.filter(([, , steps]) => steps.split(',').some(step => /^A:[0-9]+$/.test(step)));
+    expect(numeric.map(([name]) => name)).toEqual(['normal-cursor-ack', 'lost-ack-reconnect', 'retention-expired-ack', 'queue-count-overflow', 'queue-bytes-overflow', 'ack-inside-gap-record']);
+    const never = vi.spyOn(DurableAckCursor.prototype, 'ack').mockReturnValue(undefined);
+    try {
+      for (const [name, durable, steps] of numeric) {
+        const result = runStream(durable === '1', steps.split(','));
+        expect(result.error, name).toBeInstanceOf(Error); expect(result.error, name).not.toBeInstanceOf(ProtocolError);
+        expect(String(result.error), name).toMatch(/^Error: Harness: cursor produced ACK -, expected [0-9]+$/);
+      }
+    } finally { never.mockRestore(); }
+  });
+  it('rejects a bare or malformed A step and an unexpected cursor ACK as harness errors', () => {
+    for (const step of ['A', 'A:', 'A:01', 'A:x']) {
+      const result = runStream(true, ['S:welcome', 'S:checkpoint', step]);
+      expect(result.failedAt).toBe(2); expect(result.error).toBeInstanceOf(Error); expect(result.error).not.toBeInstanceOf(ProtocolError);
+    }
+    const unexpected = runStream(true, 'S:welcome,S:checkpoint,S:event-job-configured,A:-'.split(','));
+    expect(unexpected.failedAt).toBe(3); expect(String(unexpected.error)).toMatch(/produced ACK 1, expected -/);
+  });
+  it('keeps a retained gap record whole when an ACK falls inside it and redelivers it on reconnection', () => {
+    const result = runStream(true, streams.find(([name]) => name === 'ack-inside-gap-record')![2].split(','));
+    expect(result.error).toBeUndefined();
+    const checkpoint = result.applied.find(a => a.message.kind === 'checkpoint' && a.message.seq === '21')!.message;
+    if (checkpoint.kind !== 'checkpoint') throw new Error('fixture');
+    // The producer accepted ACK 3 inside the record [2, 4]; its release point is the record's first eventSeq minus one.
+    expect(checkpoint.data.status.delivery).toMatchObject({ackedThroughEventSeq: '1', nextEventSeq: '5', retainedEvents: 1, retainedBytes: 1_024});
+    expect(result.applied.at(-1)?.coverage).toEqual({firstEventSeq: '2', lastEventSeq: '4'});
+    expect(result.cursor?.throughEventSeq).toBe('4');
   });
   it('reports coverage in stream order, sequence skips and a hydration-only checkpoint', () => {
     const result = runStream(true, 'S:welcome,S:checkpoint,S:event-job-configured,S:snapshot,S:event-truck-configured-e2,S:gap,S:event-simulation-paused-e5'.split(','));
@@ -213,6 +251,22 @@ describe('clock mapping', () => {
     expect(() => map('5000000000', '4999999999')).toThrow(/before its probe/);
     expect(() => map('5000000000', '5000800000', '2')).toThrow(/mismatch/);
     expect(() => computeClockMapping({reply: server('welcome'), probeId: '1', clientClockId: CLIENT_CLOCK, probeSentNs: '0', replyReceivedNs: '1'})).toThrow(ProtocolError);
+  });
+  const withTimes = (received: string, sent: string, capture = '18446744073709551615') => {
+    const m = structuredClone(reply); if (m.kind !== 'clock.reply') throw new Error('fixture');
+    m.capture.monotonicNs = capture; m.data.receivedMonotonicNs = received; m.data.sentMonotonicNs = sent; return m;
+  };
+  it('rejects a negative round trip before the lateness check', () => {
+    // 2 s at the client cannot contain 3 s at the source: impossible, not merely late.
+    const impossible = withTimes('997449900000', '1000449900000', '1000450000000');
+    expect(() => computeClockMapping({reply: impossible, probeId: '1', clientClockId: CLIENT_CLOCK, probeSentNs: '5000000000', replyReceivedNs: '7000000000'})).toThrow(/Negative/);
+  });
+  it('computes exact offsets at the uint64 extremes', () => {
+    const high = withTimes('18446744073709551615', '18446744073709551615'), low = withTimes('0', '0');
+    expect(computeClockMapping({reply: high, probeId: '1', clientClockId: CLIENT_CLOCK, probeSentNs: '0', replyReceivedNs: '0'}))
+      .toMatchObject({offsetNs: '18446744073709551615', uncertaintyNs: '0', measuredAtClientNs: '0'});
+    expect(computeClockMapping({reply: low, probeId: '1', clientClockId: CLIENT_CLOCK, probeSentNs: '18446744073709551615', replyReceivedNs: '18446744073709551615'}))
+      .toMatchObject({offsetNs: '-18446744073709551615', uncertaintyNs: '0', measuredAtClientNs: '18446744073709551615'});
   });
   it('invalidates the mapping when either clock identity changes', () => {
     const mapping = map('5000000000', '5000800000')!;

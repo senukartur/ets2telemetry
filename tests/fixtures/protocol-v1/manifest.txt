@@ -9,6 +9,7 @@ checkpoint-late.json valid
 checkpoint-reconnect.json valid
 checkpoint-expired.json valid
 checkpoint-restart.json valid
+checkpoint-ack-inside-gap.json valid
 snapshot.json valid
 snapshot-live.json valid
 snapshot-after-end.json valid
@@ -57,6 +58,8 @@ gap-expired.json valid
 gap-queue-count.json valid
 gap-queue-bytes.json valid
 gap-worst.json valid
+gap-encoding-failed-e4.json valid
+gap-merged-redelivered.json valid
 clock-reply.json valid
 end.json valid
 end-early.json valid
