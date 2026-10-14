@@ -79,7 +79,7 @@ class DurableAckCursor {
 // live-only client, any ACK before the checkpoint, a foreign plugin session, an ACK beyond the highest eventSeq sent on
 // this connection and a regressing ACK, and closes on the first violation. An equal ACK is a no-op.
 // An ACK never splits a retained entry: the producer releases exactly the entries whose last eventSeq is <= T, and its
-// `ackedThroughEventSeq` is T, or the first eventSeq - 1 of a retained gap record that contains T (ET-004b enforces it).
+// `ackedThroughEventSeq` is T, or the first eventSeq - 1 of a retained gap record with first <= T < last (ET-004b enforces it).
 class AckValidator {
  public:
   // `durable_events` is the grant written in this connection's welcome.

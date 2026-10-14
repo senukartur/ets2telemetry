@@ -243,7 +243,8 @@ describe('clock mapping', () => {
     expect(map('2000000000000', '2000000800000')).toMatchObject({offsetNs: '-999550600000', uncertaintyNs: '300000'});
     expect(map('2000000000000', '2000000800001')).toMatchObject({offsetNs: '-999550600001', uncertaintyNs: '300001'});
   });
-  it('rejects negative round trips, mismatched replies and non-reply messages, and discards late measurements', () => {    expect(() => map('5000000000', '5000100000')).toThrow(/Negative/);
+  it('rejects negative round trips, mismatched replies and non-reply messages, and discards late measurements', () => {
+    expect(() => map('5000000000', '5000100000')).toThrow(/Negative/);
     // The requirement changed in review: a late reply ends the probe but yields no measurement, instead of an error.
     expect(map('5000000000', '6000000001')).toBeUndefined();
     expect(map('5000000000', '6000000000')).toMatchObject({measuredAtClientNs: '6000000000'});
