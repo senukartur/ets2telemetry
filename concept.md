@@ -397,7 +397,47 @@ The detected mode, its method and its confidence are trip evidence and travel th
 
 ## Sleep and unannounced game-time jumps — October 13, 2026
 
-SDK 1.15 has no sleep or rest gameplay event. In CAP-01 run 2 (ETS2 single-player, October 12, 2026) the owner slept, and the only trace was a forward game-time jump of about 595 game minutes within a few minutes of active simulation, with no lifecycle or gameplay event. ET-014 must treat a large forward game-time jump without a timer reset as a possible sleep or rest: keep it as an annotated discontinuity of game time, never fabricate samples or game-time intervals across it, and keep real-time accounting unaffected. Report game-time durations, such as delivery time, as the plain game-time span including the jump: this matches the game's own `delivery.time` (O4) and its lateness accounting (run 2 was 471 game minutes late across the sleep). Annotate the jump instead of subtracting it. The `rest.stop` channel and the `avoid_sleeping` fine are additional, unverified hints.
+SDK 1.15 has no sleep or rest gameplay event. In CAP-01 run 2 (ETS2 single-player, October 12, 2026) the owner slept, and the only trace was a forward game-time jump of about 595 game minutes within a few minutes of active simulation, with no lifecycle or gameplay event. ET-014 must treat a large forward game-time jump without a timer reset as a possible sleep or rest: keep it as an annotated discontinuity of game time, never fabricate samples or game-time intervals across it, and keep real-time accounting unaffected. Report game-time durations, such as delivery time, as the plain game-time span including the jump: this matches the game's own `delivery.time` (O4) and its lateness accounting (run 2 was 471 game minutes late across the sleep). Annotate the jump instead of subtracting it. The `rest.stop` channel and the `avoid_sleeping` fine are additional, unverified hints. Ferry and train crossings also advance game time faster than driving (CAP-01 run 8, October 14, 2026), but they come with an explicit `player.use.ferry` or `player.use.train` event. ET-014 should label a jump next to such an event as a crossing, not as a possible sleep. Because the capture cannot locate the jump relative to the event, this labelling rule is still unverified.
+
+## Save loading — October 14, 2026
+
+In CAP-01 run 9 (ETS2 single-player, October 14, 2026; owner session, independently reviewed October 14, 2026), a save loaded within one game process produced this sequence:
+- `simulation.paused`;
+- the job, controls, truck and trailer configurations cleared;
+- the configuration set re-sent, except `car_job`;
+- `simulation.started`;
+- `game.time.regression`, with game time back at the saved value and the game-time clock rotated. Only this event carries the new time and clock: the re-sent configuration and `simulation.started` still carry the pre-load values.
+
+The plugin stayed loaded and the v0 session continued; there was no `timers.restart`. CAP0 carries no channel values, so odometer, distance and fuel across a load are unobserved. ET-014 must not assume they are continuous.
+
+ET-014 must therefore:
+- treat a configuration clear and re-send around a game-time regression as a probable save load, and decide only after the regression is observed (it follows `simulation.started`);
+- continue the same trip only when every job attribute is identical to the trip's last known job configuration. A load can restore a different job or no job; otherwise mark the continuation ambiguous and do not merge it;
+- annotate the discontinuity and never count negative distance or time.
+
+A save load first clears truck and trailer to empty configurations. A cancellation instead re-sends them with their values and emits `job.cancelled`. A configuration clear alone still does not prove an outcome: delivery and cancellation come only from their gameplay events. A cargo-market job also re-sends its configuration at pickup with only `cargo.loaded` changed, so a re-send alone is not a new job. These rules rest on one save-load sample.
+
+## CAP-01 and SP-01 acceptance — October 14, 2026
+
+The owner accepted CAP-01 on October 14, 2026 with explicit gaps, and SP-01 on the same day.
+
+CAP-01 is accepted on owner CAP0 sessions 2–9, two independent observation reviews, and expectations O1–O11 ([CAP-01a validation](docs/validation/cap-01a.md#cap-01-acceptance-october-14-2026)). Its gaps remain pending, not observed:
+- windowed ATS single-player, and both games under TruckersMP in windowed mode;
+- a train crossing and a weigh station;
+- a profile change, a second job in one session, special jobs, owned trailers, a TruckersMP disconnect and menu-only states;
+- late attach after a job started (job configuration at attach);
+- refuel through the fuel channel;
+- runtime currency;
+- values across a save load;
+- the plugin's own frame-time cost.
+
+SP-01 is accepted as an owner decision. Its early feasibility goal was superseded by the maintained ET-008 path. The windowed retry passed in ETS2 single-player on October 14, 2026 ([ET-008 validation](docs/validation/et-008.md)), and Convoy stays deferred.
+
+Neither acceptance establishes TruckersMP, display or performance support, or completes the full ET-009 gate. Authorization for later packages is recorded separately.
+
+## Multi-monitor validation deferred — October 14, 2026
+
+The owner deferred multi-monitor, mixed-DPI and monitor-removal testing until a distributable installer exists, to be performed on another computer. The overlay requirements for monitor and DPI changes are unchanged. Their validation for ET-008, ET-009 and ET-020 is deferred, not waived, and no multi-monitor support is claimed until it is tested.
 
 ## Bus and car jobs deferred — October 13, 2026
 
