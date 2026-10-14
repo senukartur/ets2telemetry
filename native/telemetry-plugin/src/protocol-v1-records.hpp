@@ -19,6 +19,8 @@ template<class T> struct Field {
   T value{}; FieldState state = FieldState::not_observed;
   bool available() const noexcept { return state == FieldState::available; }
 };
+// Returns a prvalue on purpose. With a named local (NRVO), MSVC 19.51 AddressSanitizer reports a false
+// stack-use-after-scope on the tail padding of Field<std::uint32_t>; docs/validation/et-004b.md records the reduction.
 template<class T> Field<T> available_field(T value) noexcept { return Field<T>{value, FieldState::available}; }
 
 // Text copied from a borrowed SDK string. It is never truncated: a value longer than N bytes becomes invalid. UTF-8,
