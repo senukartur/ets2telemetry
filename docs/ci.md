@@ -58,7 +58,7 @@ Hosted smoke failures are compared in [the smoke failure record](validation/ci-s
 
 Pushes to `main` and manual dispatch with `extended: true` add actual existing watchdog fixtures and uninstall-residue regressions. These do not run an installer. ET-003 adds isolated AddressSanitizer console targets for the accepted v0 parser corpus and the fake-host SDK adapter. CI configures a separate `native/telemetry-plugin/build-asan` tree, builds only those two instrumented test targets and runs their bounded CTest cases; the game DLL remains uninstrumented. CTest diagnostics from both build trees are uploaded. Local and current hosted outcomes belong in [ET-003 validation](validation/et-003.md); adding the workflow step alone is not a passed hosted check. Production crash/ACK recovery, historical migrations, capture replay, fuzzing, sustained recording and full domain/protocol branch coverage remain pending. The [scenario registry](regression-registry.md) distinguishes pending feature requirements from partial protection.
 
-ET-002b PR-2 adds the `protocol-v1-asan-test` console target to that ASan build list, so the existing `-R asan-contract` selection also runs `protocol-v1-asan-contract` on the shared protocol v1 corpus.
+ET-002b PR-2 adds the `protocol-v1-asan-test` console target to that ASan build list, so the existing `-R asan-contract` selection also runs `protocol-v1-asan-contract` on the shared protocol v1 corpus. ET-004b adds the `v1-producer-asan-test` console target in the same way, so that selection also runs the `v1-producer-asan-contract-*` cases. ET-004b callback capture adds the `event-channel-asan-test` console target, so the selection also runs the `event-channel-asan-contract-*` cases; the new protocol v1 adapter cases run inside the existing `sdk-adapter-asan-contract`, whose console target now also links `v1-producer-asan`.
 
 Job timeout is 20 minutes. The clean and restored hosted jobs measured 199 and 200 seconds respectively; feedback under 10 minutes remains a target for future runs. `versions.json` records elapsed time from toolchain verification through final collection. GitHub job duration includes earlier checkout/setup overhead and is the end-to-end timing source. Always-uploaded 14-day evidence includes JUnit results, runtime runs, package inspection and CTest diagnostics; workflow command logs contain build/install/vendor output. Current private-repository protection limitations still apply. Superseded runs are cancelled; cancellation is not a passed check.
 
@@ -104,6 +104,38 @@ Each stall holds the owned renderer at a DevTools `debugger` statement through a
 The overlay receipt additionally requires every phase, security/window observation, source identity, both stall-start/order/timing proofs, recovery result, normal app/service exit and zero remaining probes; a successful Job or missing overlay result cannot pass it. Its pure validator, barrier orchestration, coherent observations and isolated pipe controls are tested in `tests/unit/overlay-smoke-source.test.ts`. Observations made only after a stall or after its resume request, absent barriers, malformed timing, a missing resume time, a CPU-spinning or non-`debugger` pause, stalls or holds shorter than six seconds and source reconnection cannot satisfy the receipt. Original scaffold/telemetry receipt rules are unchanged. The wrapper binds the scenario into the Job receipt as well as driver/wrapper receipts.
 
 These are hidden-renderer projection and isolation checks. `hidden-overlay-dom.png` captures that DOM; it does not establish an OS-visible overlay, game-following placement, click-through, foreground/focus behavior, mixed DPI, monitor removal, real game compatibility, display latency or frame-time performance. Those checks remain pending against the real-game candidate. Adding this harness/workflow is not an executed or passed UI/hosted check; actual runs and their candidate identities must be recorded separately before acceptance.
+
+## PowerShell validator test budgets
+
+Five Node test files run production or fixture rules under Windows PowerShell 5.1 (`powershell.exe`). Starting that process dominates their cost: locally a bare `-NoProfile` start takes about 0.2 s, and dot-sourcing `RuntimeReceipt.ps1` and validating one receipt about 0.45 s per process. Hosted runners are slower and vary by runner: the installer helper fixture takes 1.2 s locally and 2.1–2.4 s hosted. Two tests intermittently failed on slow runners in October 2026:
+
+- `overlay-smoke-source.test.ts` started one validator process per receipt case: 46 cases sequentially under a 30 s Vitest timeout. PR #39 had already split the five topmost cases into their own test for the same reason.
+- `installer-helper-provenance.test.ts` runs every fixture case in one process, but kept Vitest's default 5 s timeout although its own `execFileSync` bound was 10 s. The test therefore failed before the child's own bound could apply.
+
+Hosted durations from the retained Vitest output (milliseconds):
+
+| Run | Head | Overlay receipt, 46 cases (30 s) | Topmost, 5 cases (30 s) | Runtime receipt, 12 cases (15 s) | Installer helper (5 s) | Installer driver (5 s) |
+| --- | --- | --- | --- | --- | --- | --- |
+| [38608316230](https://github.com/senukartur/ets2telemetry/actions/runs/38608316230) | PR #42 `9e4cfd8` | 25362 | 3004 | 4189 | 2168 | 639 |
+| [38610993355](https://github.com/senukartur/ets2telemetry/actions/runs/38610993355) | PR #42 `eb005b9` | 20055 | 2665 | 3315 | 2059 | 562 |
+| [38613850826](https://github.com/senukartur/ets2telemetry/actions/runs/38613850826) | `main` `59a2667` | 28280 | 3358 | 4624 | 2427 | 732 |
+| [38619571436](https://github.com/senukartur/ets2telemetry/actions/runs/38619571436) | PR #43 `05a8a5c` | 26591 | 3206 | 4271 | 2271 | 692 |
+
+PR #43 reported that [38621863393](https://github.com/senukartur/ets2telemetry/actions/runs/38621863393) on the same head `05a8a5c` failed the overlay receipt test at 30.1 s and the installer helper test at 5.2 s. That run is now recorded as cancelled, and its retained job log does not contain the Vitest output, so those two values come from the PR report rather than from the retained log. Per receipt case, the hosted cost was 0.44–0.67 s, almost all of it process startup. The 46-case test used 67–94% of its timeout on successful runs.
+
+Changes:
+
+- **Receipt validators run as one batch.** `tests/shared/Read-RuntimeReceipt.ps1` now loads `RuntimeReceipt.ps1` once and calls the unchanged production `Test-RuntimeReceipt` for every case, in order, returning one result per case. The function keeps no state between calls, and each case still reads its own receipt file, so the Decimal-spelling and missing-file cases are unchanged. A case that throws or yields other than exactly one result is reported for that case. `tests/shared/runtime-receipt-validator.ts` writes the batch, checks that the result count matches and returns the results. The overlay receipt tests and `runtime-receipt.test.ts` keep every case and assertion, including the per-case check that each receipt file is unchanged; a mismatch names the failing case. Locally one batch costs about 0.5 s to start and 13 ms per case. The child bound is 10 s plus 250 ms per case, roughly 20 times those costs, and each Vitest timeout is that bound plus 5 s for writing and rereading receipt files. That gives 21.5 s for 46 cases, 11.25 s for 5 and 13 s for 12.
+- **Installer provenance tests get coherent bounds.** Both already run all their fixture cases in one process, so batching cannot help. The helper child bound is now 20 s, about eight times its slowest normal hosted run (2.4 s) and four times the 5.2 s outlier. The driver keeps its 10 s child bound, about 14 times its slowest hosted run (0.73 s). Each Vitest timeout is the child bound plus 5 s, so a hang is reported by the child's own timeout instead of a shorter Vitest default. The fixtures and assertions are unchanged.
+
+Local results on the owner workstation after the change: the overlay receipt test 1.0–1.2 s (was 20.1 s), topmost 0.53–0.57 s (was 2.3 s), runtime receipt 0.37–0.48 s (was 4.1 s), installer helper 1.3–1.4 s and driver 0.57–0.65 s (unchanged). The full Vitest corpus of 844 tests took 9.1 s. A deliberately wrong expected reason still failed with the case name in the assertion message. Hosted results on the final head belong in the PR's CI record.
+
+Audit of the other PowerShell-spawning tests:
+
+- `package-integrity.test.ts` starts one or two validator processes per test, with a 15 s child bound under a 20 s Vitest timeout. The whole file took 7.4–8.0 s for 10 tests on the runs above, so each test has a wide margin and the bounds are already coherent. It is unchanged.
+- No other Node test starts PowerShell. The native pipe and capture broker client tests replace `node:child_process` with mocks, and the CAP0 chain integration test starts a project-built native host.
+
+Add new PowerShell-backed cases to an existing batch rather than starting a process per case, and keep each Vitest timeout above its child's bound.
 
 ## Advisory AI review
 

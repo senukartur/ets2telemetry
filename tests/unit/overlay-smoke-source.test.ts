@@ -1,11 +1,11 @@
 import {describe, expect, it, vi} from 'vitest';
 import net from 'node:net';
-import {execFileSync} from 'node:child_process';
 import {readFile, writeFile} from 'node:fs/promises';
 import {pathToFileURL} from 'node:url';
 import {runInNewContext} from 'node:vm';
 import path from 'node:path';
 import {temporaryResources} from '../shared/resources';
+import {receiptBatchTimeout, validateRuntimeReceipts, type RuntimeReceiptCase} from '../shared/runtime-receipt-validator';
 
 // Runtime helpers are JavaScript outside the application TypeScript project.
 const sourceModule = pathToFileURL(path.resolve('scripts/ci/live-smoke-source.mjs')).href;
@@ -250,86 +250,93 @@ function validReceipt() {
 
 type OverlayReceiptCase = {name: string; mutate?: (receipt: ReturnType<typeof JSON.parse>) => void; code?: number; reason: string | null};
 
-// Each case starts one PowerShell 5.1 validator, so related cases are split across tests to keep each within its timeout.
+// All cases share one PowerShell 5.1 validator process; a process per case pushed this file past its timeouts on hosted runners.
 async function expectOverlayReceiptCases(cases: OverlayReceiptCase[]) {
   const resources = await temporaryResources();
-  const powershell = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe');
   const valid = validReceipt();
   try {
+    const originals: string[] = [], batch: RuntimeReceiptCase[] = [];
     for (const [index, scenario] of cases.entries()) {
       const receipt = structuredClone(valid); scenario.mutate?.(receipt);
-      const file = path.join(resources.directory, `overlay-receipt-${index}.json`), config = path.join(resources.directory, `overlay-config-${index}.json`);
+      const file = path.join(resources.directory, `overlay-receipt-${index}.json`);
       // Preserve the exact JSON spelling: Number would erase this fractional Decimal PID before PS5.1 sees it.
       const original = scenario.name === 'tiny fractional Decimal process identity'
         ? JSON.stringify(receipt).replace('"rendererPid":222', '"rendererPid":222.00000000000000001') : JSON.stringify(receipt);
       await writeFile(file, original);
-      await writeFile(config, JSON.stringify({receipt: file, code: scenario.code ?? 0, scenario: 'overlay'}));
-      const output = execFileSync(powershell, ['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',
-        path.resolve('tests/shared/Read-RuntimeReceipt.ps1'), '-Configuration', config],
-      {encoding: 'utf8', timeout: 5000, windowsHide: true, env: {...process.env, PSModulePath: ''}});
-      expect(JSON.parse(output), scenario.name).toMatchObject({passed: scenario.reason === null, driverResultAvailable: true, reason: scenario.reason});
-      expect(await readFile(file, 'utf8')).toBe(original);
+      originals.push(original); batch.push({receipt: file, code: scenario.code ?? 0, scenario: 'overlay'});
+    }
+    const results = await validateRuntimeReceipts(resources.directory, batch);
+    for (const [index, scenario] of cases.entries()) {
+      expect(results[index], scenario.name).toMatchObject({passed: scenario.reason === null, driverResultAvailable: true, reason: scenario.reason});
+      expect(await readFile(batch[index].receipt, 'utf8'), scenario.name).toBe(originals[index]);
     }
   } finally {await resources.dispose();}
 }
 
+const topmostCases: OverlayReceiptCase[] = [
+  {name: 'overlay lost topmost in one phase', mutate: receipt => {receipt.overlay.windows[7].windows[1].alwaysOnTop = false;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+  {name: 'overlay topmost state absent at startup', mutate: receipt => {delete receipt.runtime.windows[1].alwaysOnTop;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+  {name: 'overlay not topmost during stall', mutate: receipt => {receipt.overlay.dashboardStallProof.independentObservation.windows[1].alwaysOnTop = false;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+  {name: 'dashboard made topmost', mutate: receipt => {receipt.overlay.windows[0].windows[0].alwaysOnTop = true;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+  {name: 'topmost reported as text', mutate: receipt => {receipt.overlay.windows[3].windows[1].alwaysOnTop = 'true';}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'}
+];
+
+const completeCases: OverlayReceiptCase[] = [
+  {name: 'complete hidden-renderer result with authentic fractional timestamps', reason: null},
+  {name: 'overlay result absent', mutate: receipt => {delete receipt.overlay;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+  {name: 'overlay bridge absent', mutate: receipt => {delete receipt.overlay.bridge;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+  {name: 'raw geometry exposed', mutate: receipt => {receipt.overlay.bridge.keys.push('setBounds');}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+  {name: 'one expected phase absent', mutate: receipt => {receipt.overlay.observations.pop();}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+  {name: 'mixed old/current values', mutate: receipt => {receipt.overlay.observations[1].fuel = '73.0';}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+  {name: 'missing treated as zero', mutate: receipt => {receipt.overlay.observations[2].speed = '0.0';}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+  {name: 'stale treated as disconnected', mutate: receipt => {receipt.overlay.observations[5].freshness = 'unavailable';}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+  {name: 'native overlay shown', mutate: receipt => {receipt.overlay.windows[0].windows[1].visible = true;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+  {name: 'renderer security absent', mutate: receipt => {delete receipt.overlay.windows[0].windows[1].sandbox;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+  {name: 'reuse pressure switch absent', mutate: receipt => {delete receipt.runtime.rendererProcessLimit;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+  {name: 'actual renderer PID absent', mutate: receipt => {delete receipt.overlay.windows[0].windows[1].rendererPid;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+  {name: 'renderer reused after overlay reload', mutate: receipt => {receipt.overlay.windows[7].windows[1].rendererPid = 111;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+  {name: 'renderer reused during stall', mutate: receipt => {receipt.overlay.overlayStallProof.independentObservation.windows[1].rendererPid = 111;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+  {name: 'overlay session persists to disk', mutate: receipt => {receipt.overlay.windows[0].windows[1].sessionPersistent = true;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+  {name: 'overlay uses dashboard session', mutate: receipt => {receipt.overlay.windows[0].windows[1].isDefaultSession = true;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+  {name: 'fractional process identity', mutate: receipt => {receipt.runtime.windows[0].rendererPid = 111.5;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+  {name: 'tiny fractional Decimal process identity', reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+  {name: 'fixture reconnected', mutate: receipt => {receipt.overlay.sourceAfter.connections = 2;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+  {name: 'silent pipe was closed', mutate: receipt => {receipt.overlay.silentOpenSource.activeClients = 0;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+  {name: 'identity changed', mutate: receipt => {receipt.overlay.sourceAfter.identity.clockId = '00000000-0000-4000-8000-000000000099';}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+  {name: 'one shutdown event absent', mutate: receipt => {receipt.mainEvents.pop();}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+  {name: 'probe remains', mutate: receipt => {receipt.probesAfterExit.push('ets2telemetry-probe-unexpected');}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+  {name: 'one recovery result absent', mutate: receipt => {delete receipt.overlay.overlayCreditRecovered;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+  {name: 'stall proof absent', mutate: receipt => {delete receipt.overlay.overlayStallProof;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+  {name: 'missing start barrier', mutate: receipt => {receipt.overlay.overlayStallProof.started = false;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+  {name: 'observation after completion', mutate: receipt => {receipt.overlay.overlayStallProof.pendingAtObservation = false;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+  {name: 'observation timestamp after completion', mutate: receipt => {receipt.overlay.overlayStallProof.observedObserverMonotonicMs = receipt.overlay.overlayStallProof.completedObserverMonotonicMs + 1;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+  {name: 'observation timestamp after resume request', mutate: receipt => {receipt.overlay.dashboardStallProof.observedObserverMonotonicMs = receipt.overlay.dashboardStallProof.resumeRequestedObserverMonotonicMs;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+  {name: 'renderer resumed before the requested pause', mutate: receipt => {receipt.overlay.overlayStallProof.resumeRequestedObserverMonotonicMs = receipt.overlay.overlayStallProof.startedObserverMonotonicMs + 5999;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+  {name: 'completion before resume request', mutate: receipt => {receipt.overlay.overlayStallProof.resumeRequestedObserverMonotonicMs = receipt.overlay.overlayStallProof.completedObserverMonotonicMs + 1;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+  {name: 'resume request time absent', mutate: receipt => {delete receipt.overlay.dashboardStallProof.resumeRequestedObserverMonotonicMs;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+  {name: 'CPU-spinning stall method', mutate: receipt => {receipt.overlay.overlayStallProof.stallMethod = 'busy-loop';}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+  {name: 'pause outside the debugger statement', mutate: receipt => {receipt.overlay.dashboardStallProof.pauseReason = 'exception';}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+  {name: 'reading changed before start barrier', mutate: receipt => {receipt.overlay.overlayStallProof.readingChangedObserverMonotonicMs = 199;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+  {name: 'actual stall too short', mutate: receipt => {receipt.overlay.overlayStallProof.rendererCompletedMonotonicMs = 1300;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+  {name: 'overlay stall one millisecond below strict minimum', mutate: receipt => {receipt.overlay.overlayStallProof.rendererCompletedMonotonicMs = receipt.overlay.overlayStallProof.rendererStartedMonotonicMs + 5999;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+  {name: 'dashboard stall one millisecond below strict minimum', mutate: receipt => {receipt.overlay.dashboardStallProof.rendererCompletedMonotonicMs = receipt.overlay.dashboardStallProof.rendererStartedMonotonicMs + 5999;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+  {name: 'representably shorter fractional overlay stall', mutate: receipt => {receipt.overlay.overlayStallProof.rendererCompletedMonotonicMs = receipt.overlay.overlayStallProof.rendererStartedMonotonicMs + 5999.999999;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+  {name: 'malformed time value', mutate: receipt => {receipt.overlay.overlayStallProof.rendererCompletedMonotonicMs = 'invalid';}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+  {name: 'barrier timing differs from actual execution', mutate: receipt => {receipt.overlay.overlayStallProof.rendererStartBarrierMonotonicMs = 99;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+  {name: 'source reconnected during stall', mutate: receipt => {receipt.overlay.overlayStallProof.sourceAtObservation.connections = 2;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+  {name: 'dashboard reading during overlay stall incorrect', mutate: receipt => {receipt.overlay.overlayStallProof.independentObservation.reading.speed = 'Speed: 90.0 km/h';}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+  {name: 'symmetric stall proof absent', mutate: receipt => {delete receipt.overlay.dashboardStallProof;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+  {name: 'wrong source scenario', mutate: receipt => {receipt.scenarioKind = 'telemetry';}, reason: 'DRIVER_RESULT_SCENARIO_MISMATCH'},
+  {name: 'Job failure overrides intact result', code: 125, reason: 'JOB_FAILED'}
+];
+
+// The batch timeout bounds the PowerShell child; the margin covers writing and rereading every receipt file.
+const receiptTestTimeout = (cases: OverlayReceiptCase[]) => receiptBatchTimeout(cases.length) + 5000;
+
 it('rejects an overlay receipt that loses or misreports the topmost state', async () => {
-  await expectOverlayReceiptCases([
-    {name: 'overlay lost topmost in one phase', mutate: receipt => {receipt.overlay.windows[7].windows[1].alwaysOnTop = false;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
-    {name: 'overlay topmost state absent at startup', mutate: receipt => {delete receipt.runtime.windows[1].alwaysOnTop;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
-    {name: 'overlay not topmost during stall', mutate: receipt => {receipt.overlay.dashboardStallProof.independentObservation.windows[1].alwaysOnTop = false;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
-    {name: 'dashboard made topmost', mutate: receipt => {receipt.overlay.windows[0].windows[0].alwaysOnTop = true;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
-    {name: 'topmost reported as text', mutate: receipt => {receipt.overlay.windows[3].windows[1].alwaysOnTop = 'true';}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'}
-  ]);
-}, 30000);
+  await expectOverlayReceiptCases(topmostCases);
+}, receiptTestTimeout(topmostCases));
 
 it('requires the complete current overlay receipt and rejects missing results, mixed phases, visibility and cleanup failures', async () => {
-  await expectOverlayReceiptCases([
-    {name: 'complete hidden-renderer result with authentic fractional timestamps', reason: null},
-    {name: 'overlay result absent', mutate: receipt => {delete receipt.overlay;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
-    {name: 'overlay bridge absent', mutate: receipt => {delete receipt.overlay.bridge;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
-    {name: 'raw geometry exposed', mutate: receipt => {receipt.overlay.bridge.keys.push('setBounds');}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
-    {name: 'one expected phase absent', mutate: receipt => {receipt.overlay.observations.pop();}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
-    {name: 'mixed old/current values', mutate: receipt => {receipt.overlay.observations[1].fuel = '73.0';}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
-    {name: 'missing treated as zero', mutate: receipt => {receipt.overlay.observations[2].speed = '0.0';}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
-    {name: 'stale treated as disconnected', mutate: receipt => {receipt.overlay.observations[5].freshness = 'unavailable';}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
-    {name: 'native overlay shown', mutate: receipt => {receipt.overlay.windows[0].windows[1].visible = true;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
-    {name: 'renderer security absent', mutate: receipt => {delete receipt.overlay.windows[0].windows[1].sandbox;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
-    {name: 'reuse pressure switch absent', mutate: receipt => {delete receipt.runtime.rendererProcessLimit;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
-    {name: 'actual renderer PID absent', mutate: receipt => {delete receipt.overlay.windows[0].windows[1].rendererPid;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
-    {name: 'renderer reused after overlay reload', mutate: receipt => {receipt.overlay.windows[7].windows[1].rendererPid = 111;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
-    {name: 'renderer reused during stall', mutate: receipt => {receipt.overlay.overlayStallProof.independentObservation.windows[1].rendererPid = 111;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
-    {name: 'overlay session persists to disk', mutate: receipt => {receipt.overlay.windows[0].windows[1].sessionPersistent = true;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
-    {name: 'overlay uses dashboard session', mutate: receipt => {receipt.overlay.windows[0].windows[1].isDefaultSession = true;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
-    {name: 'fractional process identity', mutate: receipt => {receipt.runtime.windows[0].rendererPid = 111.5;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
-    {name: 'tiny fractional Decimal process identity', reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
-    {name: 'fixture reconnected', mutate: receipt => {receipt.overlay.sourceAfter.connections = 2;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
-    {name: 'silent pipe was closed', mutate: receipt => {receipt.overlay.silentOpenSource.activeClients = 0;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
-    {name: 'identity changed', mutate: receipt => {receipt.overlay.sourceAfter.identity.clockId = '00000000-0000-4000-8000-000000000099';}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
-    {name: 'one shutdown event absent', mutate: receipt => {receipt.mainEvents.pop();}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
-    {name: 'probe remains', mutate: receipt => {receipt.probesAfterExit.push('ets2telemetry-probe-unexpected');}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
-    {name: 'one recovery result absent', mutate: receipt => {delete receipt.overlay.overlayCreditRecovered;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
-    {name: 'stall proof absent', mutate: receipt => {delete receipt.overlay.overlayStallProof;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
-    {name: 'missing start barrier', mutate: receipt => {receipt.overlay.overlayStallProof.started = false;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
-    {name: 'observation after completion', mutate: receipt => {receipt.overlay.overlayStallProof.pendingAtObservation = false;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
-    {name: 'observation timestamp after completion', mutate: receipt => {receipt.overlay.overlayStallProof.observedObserverMonotonicMs = receipt.overlay.overlayStallProof.completedObserverMonotonicMs + 1;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
-    {name: 'observation timestamp after resume request', mutate: receipt => {receipt.overlay.dashboardStallProof.observedObserverMonotonicMs = receipt.overlay.dashboardStallProof.resumeRequestedObserverMonotonicMs;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
-    {name: 'renderer resumed before the requested pause', mutate: receipt => {receipt.overlay.overlayStallProof.resumeRequestedObserverMonotonicMs = receipt.overlay.overlayStallProof.startedObserverMonotonicMs + 5999;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
-    {name: 'completion before resume request', mutate: receipt => {receipt.overlay.overlayStallProof.resumeRequestedObserverMonotonicMs = receipt.overlay.overlayStallProof.completedObserverMonotonicMs + 1;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
-    {name: 'resume request time absent', mutate: receipt => {delete receipt.overlay.dashboardStallProof.resumeRequestedObserverMonotonicMs;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
-    {name: 'CPU-spinning stall method', mutate: receipt => {receipt.overlay.overlayStallProof.stallMethod = 'busy-loop';}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
-    {name: 'pause outside the debugger statement', mutate: receipt => {receipt.overlay.dashboardStallProof.pauseReason = 'exception';}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
-    {name: 'reading changed before start barrier', mutate: receipt => {receipt.overlay.overlayStallProof.readingChangedObserverMonotonicMs = 199;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
-    {name: 'actual stall too short', mutate: receipt => {receipt.overlay.overlayStallProof.rendererCompletedMonotonicMs = 1300;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
-    {name: 'overlay stall one millisecond below strict minimum', mutate: receipt => {receipt.overlay.overlayStallProof.rendererCompletedMonotonicMs = receipt.overlay.overlayStallProof.rendererStartedMonotonicMs + 5999;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
-    {name: 'dashboard stall one millisecond below strict minimum', mutate: receipt => {receipt.overlay.dashboardStallProof.rendererCompletedMonotonicMs = receipt.overlay.dashboardStallProof.rendererStartedMonotonicMs + 5999;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
-    {name: 'representably shorter fractional overlay stall', mutate: receipt => {receipt.overlay.overlayStallProof.rendererCompletedMonotonicMs = receipt.overlay.overlayStallProof.rendererStartedMonotonicMs + 5999.999999;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
-    {name: 'malformed time value', mutate: receipt => {receipt.overlay.overlayStallProof.rendererCompletedMonotonicMs = 'invalid';}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
-    {name: 'barrier timing differs from actual execution', mutate: receipt => {receipt.overlay.overlayStallProof.rendererStartBarrierMonotonicMs = 99;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
-    {name: 'source reconnected during stall', mutate: receipt => {receipt.overlay.overlayStallProof.sourceAtObservation.connections = 2;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
-    {name: 'dashboard reading during overlay stall incorrect', mutate: receipt => {receipt.overlay.overlayStallProof.independentObservation.reading.speed = 'Speed: 90.0 km/h';}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
-    {name: 'symmetric stall proof absent', mutate: receipt => {delete receipt.overlay.dashboardStallProof;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
-    {name: 'wrong source scenario', mutate: receipt => {receipt.scenarioKind = 'telemetry';}, reason: 'DRIVER_RESULT_SCENARIO_MISMATCH'},
-    {name: 'Job failure overrides intact result', code: 125, reason: 'JOB_FAILED'}
-  ]);
-}, 30000);
+  await expectOverlayReceiptCases(completeCases);
+}, receiptTestTimeout(completeCases));
