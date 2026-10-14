@@ -399,6 +399,28 @@ The detected mode, its method and its confidence are trip evidence and travel th
 
 SDK 1.15 has no sleep or rest gameplay event. In CAP-01 run 2 (ETS2 single-player, October 12, 2026) the owner slept, and the only trace was a forward game-time jump of about 595 game minutes within a few minutes of active simulation, with no lifecycle or gameplay event. ET-014 must treat a large forward game-time jump without a timer reset as a possible sleep or rest: keep it as an annotated discontinuity of game time, never fabricate samples or game-time intervals across it, and keep real-time accounting unaffected. Report game-time durations, such as delivery time, as the plain game-time span including the jump: this matches the game's own `delivery.time` (O4) and its lateness accounting (run 2 was 471 game minutes late across the sleep). Annotate the jump instead of subtracting it. The `rest.stop` channel and the `avoid_sleeping` fine are additional, unverified hints.
 
+## Save loading — October 14, 2026
+
+In CAP-01 run 9 (ETS2 single-player, October 14, 2026; coordinator observation, not yet independently reviewed), a save loaded within one game process produced this sequence:
+- `simulation.paused`;
+- the job, controls, truck and trailer configurations cleared;
+- the full configuration set re-sent, including the same job;
+- `simulation.started`;
+- `game.time.regression`, with game time back at the saved value and the game-time clock rotated.
+
+The plugin stayed loaded and the v0 session continued; there was no `timers.restart`. Distance and fuel may also jump back to the saved state.
+
+ET-014 must therefore:
+- treat a configuration clear followed by a re-send of the same job, around a game-time regression, as a save load within the same trip, not as a cancellation or a new trip;
+- annotate the discontinuity and never count negative distance or time;
+- keep an ambiguous continuation separate rather than merging it silently.
+
+A configuration clear alone still does not prove an outcome. Delivery and cancellation come only from their gameplay events. A cargo-market job also re-sends its configuration at pickup with only `cargo.loaded` changed, so a re-send alone is not a new job.
+
+## Multi-monitor validation deferred — October 14, 2026
+
+The owner deferred multi-monitor, mixed-DPI and monitor-removal testing until a distributable installer exists, to be performed on another computer. The overlay requirements for monitor and DPI changes are unchanged. Their validation for ET-008, ET-009 and ET-020 is deferred, not waived, and no multi-monitor support is claimed until it is tested.
+
 ## Bus and car jobs deferred — October 13, 2026
 
 The owner deferred bus jobs and car jobs (`bus_job`, `car_job`, `car_job.delivered`, `car_job.cancelled`) from the current validation and trip scope: bus content is not yet released for ETS2, car jobs in ATS are recent, and TruckersMP buses are out of interest for now. They are tracked as technical debt TD-002. Their empty configuration envelopes, observed at every session start, must be tolerated and must not create trips.

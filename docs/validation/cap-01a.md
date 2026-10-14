@@ -125,7 +125,7 @@ ATS, TruckersMP, the remaining event types and frame-time impact were not observ
 
 ## Pending (not done by this package)
 
-- CAP-01 real-game evidence across the owner's validation matrix: ETS2 and ATS, each in single-player and TruckersMP, in windowed and borderless modes. Owner sessions now cover ETS2 and ATS, single-player and TruckersMP, borderless, plus ETS2 single-player windowed (see the October 13 addendum below). Still pending: windowed mode for ATS single-player and for both games under TruckersMP. The built-in Convoy mode is deferred by the owner's October 12, 2026 decision: it is neither validated nor claimed as supported. Still needed (accept, deliver, cancel, configuration clear, pause, late attach at session start and sleep are now observed): menu-only states, late attach after a job started, reconnect, save/load, ferry, train and refuel observations; runtime unit and currency observation (currency is only SDK-documented); loss annotations from real sessions (no loss has occurred yet). Unobserved events remain synthetic or unverified.
+- CAP-01 real-game evidence across the owner's validation matrix: ETS2 and ATS, each in single-player and TruckersMP, in windowed and borderless modes. Owner sessions now cover ETS2 and ATS, single-player and TruckersMP, borderless, plus ETS2 single-player windowed (see the October 13 addendum below). Still pending: windowed mode for ATS single-player and for both games under TruckersMP. The built-in Convoy mode is deferred by the owner's October 12, 2026 decision: it is neither validated nor claimed as supported. Still needed (accept, deliver, cancel, configuration clear, pause, late attach at session start and sleep are now observed; save load, application reconnect, a ferry and a cargo-market job were added on October 14, see that addendum): menu-only states, a train, refuel observations and profile change; runtime unit and currency observation (currency is only SDK-documented); loss annotations from real sessions (no loss has occurred yet). Unobserved events remain synthetic or unverified.
 - Installed/packaged behaviour of the activation path, which has run only through `npm run dev`, and the measured game frame-time impact of the capture copy.
 - Second-user, remote-client and elevation rejection on actual hosts; a passing Ready-for-review run on the final head; independent review.
 - SP-01: PR #8 was closed unmerged. SP-01 acceptance is the owner's later decision. Every other previously pending gate is unchanged.
@@ -176,3 +176,79 @@ Still missing for CAP-01 acceptance (in addition to the Pending section above):
 - **Performance:** frame-time impact.
 
 Bus and car jobs are deferred (TD-002).
+
+## Owner session, ETS2 single-player windowed (October 14, 2026 addendum)
+
+**Setup**
+- One ETS2 1.61.1.1s single-player session in a windowed game window (2311 × 1000 physical), on the same machine and settings as the earlier sessions.
+- Application and plugin from `main` `aa67956` (DLL `B03A6C79`, unchanged since `a7724de`), started with `npm run dev`.
+- The session produced two CAP0 captures. Sanitized exports are kept locally, as before.
+
+| Run | Game / mode / display | Plugin build (DLL SHA-256 prefix) | Result |
+| --- | --- | --- | --- |
+| 8 | ETS2 single-player, windowed, cargo-market job, ferry | `aa67956` (`B03A6C79`) | complete, 29/29 envelopes, no loss; the source ended with the plugin end marker (`plugin-shutdown`) |
+| 9 | ETS2 single-player, windowed, application relaunched while the game ran (attached mid-job), save load, cancellation | `aa67956` (`B03A6C79`) | complete, 54/54, no loss; ended with the plugin end marker at game exit |
+
+### Observations
+
+These are coordinator observations from the raw captures and logs. They have not been independently reviewed yet.
+
+**Cargo-market job (run 8).**
+- The job configuration (19 attributes, `job.market` `cargo_market`) arrived while paused, with `cargo.loaded` false.
+- At pickup, about 50 s later, it arrived again while paused, together with truck and trailer configuration. The only changed attribute was `cargo.loaded`, now true.
+- This is the first observation of `cargo.loaded` false, and it refines O3.
+
+**Ferry (run 8).**
+- `player.use.ferry` arrived while paused, between a `simulation.paused` and a `simulation.started`. It carried `pay.amount` 677 and the source and target port names and ids, with names in the game's UI language.
+- Game time advanced faster than driving across the crossing. Without periodic samples, the capture cannot locate the jump.
+
+**Game process end (run 8).**
+- At 15:40:41 UTC the plugin sent its end marker after SDK shutdown, with no loss and no unsent envelopes.
+- Within the same second, Windows Error Reporting recorded an access violation in `eurotrucks2.exe` in `MSVCR120.dll`, followed 8 s later by a second fault in ASUS `AacAmbientHal_x64.dll`.
+- The project plugin links its C runtime statically and imports no `MSVCR120.dll`. In the game's plugin folder, only a third-party plugin from 2019 imports it. The cause is not established. The owner may have closed a third-party telemetry companion application at that time.
+- The owner restarted the game about 20 s later. The still-running application's v0 live connection attached to the new game process without intervention, and the overlay followed the new window.
+- The one-shot capture grant had been consumed by the first process, so the new process was not captured until the application was relaunched (run 9).
+
+**Application relaunch while the game ran (run 9).**
+- The owner closed the dashboard window. The application stopped cleanly: `APP_STOP_REQUESTED`, `SERVICE_EXIT`, `APP_EXIT`.
+- After a relaunch, the owner selected ETS2 again, and the overlay showed live data.
+- The capture attached while a job was active. CAP0 copies only callbacks after its broker authenticates, so the capture held no job configuration until the game sent configuration again. v0 live is unaffected, because its checkpoint carries current configuration ([v0](../protocol/v0.md)).
+
+**Save load within one game process (run 9)**, in adapter observation order:
+- `simulation.paused`;
+- the job, controls, truck and trailer configurations cleared (0 attributes);
+- about 3 s later, configuration set again: job (19 attributes, same cargo-market job), `bus_job` empty, controls, `hshifter`, truck and trailers;
+- `simulation.started`;
+- immediately afterwards, `game.time.regression`: game time went back from 251808 to 251789 game minutes, the saved time, and the game-time `clockId` rotated.
+- The plugin stayed loaded and the v0 session continued; there was no `timers.restart`.
+
+**Cancellation (run 9).**
+- `simulation.paused`, then the job configuration cleared together with a truck and trailer re-send, then `job.cancelled` with `cancel.penalty` 12000.
+- This is the second sample for O7.
+
+**Fine.** One `player.fined` (`crash`, 400) arrived while running, consistent with O8.
+
+### Expectation updates
+
+| # | Change | Samples now |
+| --- | --- | --- |
+| O3 | Refined: a cargo-market job re-sends its configuration at pickup, changing only `cargo.loaded` from false to true. Quick and freight-market jobs did not change between set and clear | 6 jobs |
+| O7 | Unchanged expectation, second sample (run 9) | 2 |
+| O9 | Refined: game time regresses on save load. The adapter reports `game.time.regression` and rotates the game-time clock right after `simulation.started`, without `timers.restart` | 7 runs, 1 regression, 1 jump |
+| O10 (new) | Save load clears job, controls, truck and trailer configuration while paused, re-sends the full configuration set, then `simulation.started` and `game.time.regression` follow | 1 |
+| O11 (new) | `player.use.ferry` arrives while paused, between a pause and the next start | 1 |
+
+### Still missing for CAP-01 acceptance
+
+This replaces the earlier list.
+- **Display matrix:** windowed mode for ATS single-player and for both games under TruckersMP.
+- **Events:** a train crossing, refuel (no SDK event exists in 1.15; already recorded as absent), weigh station.
+- **Scenarios:**
+  - profile change;
+  - a second job in one session;
+  - special jobs;
+  - owned trailers;
+  - TruckersMP disconnect;
+  - menu-only states.
+- **Performance:** the [ET-009 frame-time record](et-009-frame-time-2026-10-13.md) found no FPS change from the application, the overlay and CAP0 capture in one scene. The plugin's own cost is not measured.
+- **Review:** independent review of runs 8 and 9.
