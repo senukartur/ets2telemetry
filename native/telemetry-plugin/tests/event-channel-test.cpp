@@ -1,5 +1,6 @@
 #include "event-channel.hpp"
 #include <atomic>
+#include <cstdint>
 #include <cstring>
 #include <iostream>
 #include <random>
@@ -14,6 +15,11 @@
 namespace ets2telemetry::v1 {
 struct EventChannelTestAccess {
   static void start_at(EventChannel& channel, std::uint64_t event_seq) { channel.assigned_next_.store(event_seq); }
+  // The consumer-written head shares no cache line with the producer-written tail, eventSeq or the gate.
+  static bool head_alone(const EventChannel& c) {
+    const auto line = [](const void* p) { return reinterpret_cast<std::uintptr_t>(p) / cache_line; };
+    return line(&c.head_) != line(&c.tail_) && line(&c.head_) != line(&c.assigned_next_) && line(&c.head_) != line(&c.gate_);
+  }
 };
 }
 using namespace ets2telemetry::v1;
@@ -65,6 +71,7 @@ struct Drain {
 
 void ring_case() {
   EventChannel channel;
+  check(EventChannelTestAccess::head_alone(channel), "head on its own cache line");
   check(!channel.prepared() && !channel.front() && channel.observe(observation(1)) == 0 && channel.next_event_seq() == 1, "nothing is assigned before prepare");
   check(channel.prepare() && channel.prepared() && channel.gate() == Gate::none && channel.next_event_seq() == 1, "prepared at eventSeq 1 with the gate closed");
   channel.set_gate(Gate::durable);

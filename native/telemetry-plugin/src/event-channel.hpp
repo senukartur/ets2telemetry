@@ -31,6 +31,10 @@ struct LossRun {
 // flush_loss(); a slot never holds neither.
 struct ChannelSlot { bool has_loss = false, has_record = false; LossRun loss_before; EventRecord record; };
 
+constexpr std::size_t cache_line = 64;
+// alignas below pads the class on purpose; MSVC reports that padding as warning C4324.
+#pragma warning(push)
+#pragma warning(disable : 4324)
 // Single SDK-thread producer, single transport-worker consumer. The ring is allocated once by prepare() and never
 // reallocated while the adapter holds the channel. The producer never blocks, allocates, calls the SDK or signals an
 // event: the worker polls front() at least every 10 ms.
@@ -72,9 +76,15 @@ class EventChannel final {
   void lose(std::uint64_t event_seq, LossCause cause, const Field<std::uint64_t>& observed_ns) noexcept;
   bool push(const EventRecord* record, std::uint64_t event_seq) noexcept;
   std::unique_ptr<ChannelSlot[]> slots_;
-  std::atomic<std::uint64_t> head_{0}, tail_{0}, assigned_next_{1};
+  // The consumer-written head has a cache line of its own, apart from the producer-written tail and eventSeq. The
+  // gate is written by the worker only on connection changes.
+  alignas(cache_line) std::atomic<std::uint64_t> head_{0};
+  alignas(cache_line) std::atomic<std::uint64_t> tail_{0};
+  std::atomic<std::uint64_t> assigned_next_{1};
   std::atomic<Gate> gate_{Gate::none};
   // SDK thread only: the loss run not yet handed to the worker.
   LossRun open_; bool has_open_ = false;
 };
+#pragma warning(pop)
+static_assert(alignof(EventChannel) == cache_line && sizeof(EventChannel) <= 4 * cache_line, "cache-line separated, four lines at most");
 } // namespace ets2telemetry::v1
