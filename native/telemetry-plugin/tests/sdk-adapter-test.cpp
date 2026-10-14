@@ -652,6 +652,8 @@ struct V1Worker {
   Adapter& adapter; v1::EventChannel& channel; v1::Encoder encoder; v1::EventStore store; std::string session;
   std::optional<v1::Consumer> consumer; std::optional<v1::AckValidator> validator; v1::DurableAckCursor cursor;
   std::uint64_t seq = 0, capture = 0, events_written = 0, gaps_written = 0;
+  // Every loss run drained from the ring and every gap the Consumer accepted, in order.
+  std::vector<v1::LossRun> runs; std::vector<v1::GapView> gaps;
   std::vector<std::pair<std::uint64_t, std::uint64_t>> received; std::vector<v1::Ingest> ingested; std::map<std::uint64_t, std::string> drained_types;
   V1Worker(Adapter& a, v1::EventChannel& c, const V1Current& current)
     : adapter(a), channel(c), encoder(v1_identity(current)), session(current.identity.plugin_session_id.c_str()), cursor(current.identity.plugin_session_id.c_str()) {}
@@ -661,6 +663,7 @@ struct V1Worker {
   // A loss run becomes store coverage one cause at a time in a fixed order; each part carries the run's lost times, so
   // the merged gap record has the exact counts and the run's earliest and latest lost observation.
   void record_run(const v1::LossRun& run, std::uint64_t t) {
+    runs.push_back(run);
     const std::pair<v1::LossCause, std::uint64_t> parts[]{{v1::LossCause::offline, run.causes.offline}, {v1::LossCause::no_durable_consumer, run.causes.no_durable_consumer}, {v1::LossCause::queue_count, run.causes.queue_count}};
     const auto first_ns = run.times_available ? std::optional<std::uint64_t>(run.first_lost_ns) : std::nullopt, last_ns = run.times_available ? std::optional<std::uint64_t>(run.last_lost_ns) : std::nullopt;
     auto first = run.first_event_seq;
@@ -678,7 +681,11 @@ struct V1Worker {
       channel.pop();
     }
   }
-  v1::Applied send(v1::Json wire) { return consumer->accept(v1_decode(v1::encode(std::move(wire)))); }
+  v1::Applied send(v1::Json wire, v1::Message* accepted = nullptr) {
+    const auto message = v1_decode(v1::encode(std::move(wire))); const auto applied = consumer->accept(message);
+    if (accepted) *accepted = message;
+    return applied;
+  }
   void open() {
     // Connect before the gate opens, so that every record copied for this consumer is retained.
     store.connect(); channel.set_gate(v1::Gate::durable);
@@ -695,9 +702,9 @@ struct V1Worker {
   void pump() {
     while (const auto item = store.next_outbound()) {
       const auto carried = item->gap ? item->range.last_lost_ns.value_or(0) : item->event.occurred.monotonic_ns.available() ? item->event.occurred.monotonic_ns.value : 0;
-      const auto applied = send(encoder.outbound(++seq, stamp(carried), *item));
+      v1::Message message; const auto applied = send(encoder.outbound(++seq, stamp(carried), *item), &message);
       require(applied.coverage && applied.coverage->first_event_seq == item->first_event_seq() && applied.coverage->last_event_seq == item->last_event_seq(), "written coverage");
-      if (item->gap) ++gaps_written; else { ++events_written; require(drained_types.at(item->event.event_seq) == type_of(item->event), "event identity preserved"); }
+      if (item->gap) { ++gaps_written; gaps.push_back(*message.gap); } else { ++events_written; require(drained_types.at(item->event.event_seq) == type_of(item->event), "event identity preserved"); }
       validator->sent(item->last_event_seq()); cursor.received(item->first_event_seq(), item->last_event_seq()); received.emplace_back(item->first_event_seq(), item->last_event_seq());
     }
   }
@@ -732,14 +739,37 @@ void v1_drain_into_store() {
   host.frame_end(); worker->drain(); host.frame_end(); worker->drain();
   require(worker->store.status().event_loss.queue_count == 12 && worker->store.next_event_seq() == 151, "ring overflow is queueCount coverage");
   worker->pump(); worker->commit_and_ack();
+  // One run with several causes: within one frame and without a flush, a full ring (queueCount 279-282), then a
+  // live-only gate (noDurableConsumer 283-284), then no client (offline 285). The next copied record (286) carries it.
+  for (unsigned i = 0; i < v1::channel_slots; ++i) host.gameplay("job.cancelled", penalty);
+  const auto before_queue = worker->now();
+  for (unsigned i = 0; i < 4; ++i) host.gameplay("job.cancelled", penalty);
+  const auto after_queue = worker->now(); channel->set_gate(v1::Gate::live);
+  host.gameplay("player.fined", penalty); host.gameplay("job.cancelled", penalty);
+  channel->set_gate(v1::Gate::none); const auto before_offline = worker->now();
+  host.event(SCS_TELEMETRY_EVENT_paused);
+  const auto after_offline = worker->now();
+  worker->drain();
+  require(worker->runs.size() == 3 && worker->store.next_event_seq() == 279, "the run stays open until a record or a flush carries it");
+  channel->set_gate(v1::Gate::durable); host.gameplay("job.cancelled", penalty); worker->drain();
+  const auto& run = worker->runs.back();
+  require(run.first_event_seq == 279 && run.last_event_seq == 285 && run.causes.queue_count == 4 && run.causes.no_durable_consumer == 2 && run.causes.offline == 1, "one run with three causes");
+  worker->pump(); worker->commit_and_ack();
+  const auto& gap = worker->gaps.back();
+  require(worker->gaps_written == 3 && gap.first_event_seq == 279 && gap.last_event_seq == 285 && !gap.redelivered, "the Consumer receives one gap for the whole run");
+  require(gap.causes.queue_count == 4 && gap.causes.no_durable_consumer == 2 && gap.causes.offline == 1 && gap.causes.queue_bytes == 0 && gap.causes.retention_expired == 0 && gap.causes.encoding_failed == 0, "exact per-cause counts in one gap");
+  require(gap.first_lost_monotonic_ns.value && gap.last_lost_monotonic_ns.value && *gap.first_lost_monotonic_ns.value == run.first_lost_ns && *gap.last_lost_monotonic_ns.value == run.last_lost_ns, "the gap keeps the run's lost times");
+  require(before_queue <= run.first_lost_ns && run.first_lost_ns <= after_queue && before_offline <= run.last_lost_ns && run.last_lost_ns <= after_offline, "S1: the first queueCount and the last offline observation");
+  const auto merged = worker->store.status().event_loss;
+  require(merged.offline == 4 && merged.no_durable_consumer == 4 && merged.queue_count == 16 && worker->consumer->next_event_seq() == 287, "store loss counters include every cause of the run");
   // OD-5 S4: records copied while durable and drained after the disconnect are retained for the next connection.
   host.gameplay("player.tollgate.paid", penalty); host.gameplay("job.cancelled", penalty); worker->close(); worker->drain();
-  require(worker->ingested.size() == 135 && worker->ingested[133] == v1::Ingest::retained && worker->ingested[134] == v1::Ingest::retained, "S4: drained after the disconnect, still retained");
+  require(worker->ingested.size() == 264 && worker->ingested[262] == v1::Ingest::retained && worker->ingested[263] == v1::Ingest::retained, "S4: drained after the disconnect, still retained");
   worker->open(); host.event(SCS_TELEMETRY_EVENT_paused); host.frame_end(); worker->drain(); worker->pump(); worker->commit_and_ack();
   const auto status = worker->store.status(); const auto& loss = status.event_loss;
-  require(worker->consumer->next_event_seq() == channel->next_event_seq() && channel->next_event_seq() == 154 && worker->events_written == 136 && worker->gaps_written == 2, "contiguous coverage of every eventSeq accepted by the Consumer");
-  require(loss.offline == 3 && loss.no_durable_consumer == 2 && loss.queue_count == 12 && loss.queue_bytes == 0 && loss.retention_expired == 0 && loss.encoding_failed == 0, "exact loss causes");
-  require(worker->cursor.through_event_seq() == 153 && status.acked_through_event_seq == 153 && status.retained_entries == 0, "every eventSeq committed and released");
+  require(worker->consumer->next_event_seq() == channel->next_event_seq() && channel->next_event_seq() == 290 && worker->events_written == 265 && worker->gaps_written == 3, "contiguous coverage of every eventSeq accepted by the Consumer");
+  require(loss.offline == 4 && loss.no_durable_consumer == 4 && loss.queue_count == 16 && loss.queue_bytes == 0 && loss.retention_expired == 0 && loss.encoding_failed == 0, "exact loss causes");
+  require(worker->cursor.through_event_seq() == 289 && status.acked_through_event_seq == 289 && status.retained_entries == 0, "every eventSeq committed and released");
   adapter->shutdown(); adapter->attach_events(nullptr);
 }
 }
