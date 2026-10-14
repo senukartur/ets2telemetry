@@ -782,7 +782,11 @@ struct Mutator {
       std::numeric_limits<double>::max(), -0.0, 1e-300, 1e12 + 1, -1e9 - 1, 0.5};
     f.state = state(); if (random() % 2) f.value = values[random() % std::size(values)]; else { const auto bits = random(); std::memcpy(&f.value, &bits, sizeof bits); }
   }
-  void operator()(Field<float>& f) { Field<double> d; (*this)(d); f.state = d.state; f.value = static_cast<float>(d.value); }
+  // A finite double outside the float range cannot be converted (undefined behavior), so it saturates at the float limit.
+  void operator()(Field<float>& f) {
+    Field<double> d; (*this)(d); f.state = d.state; constexpr float limit = std::numeric_limits<float>::max();
+    f.value = !std::isfinite(d.value) || std::fabs(d.value) <= limit ? static_cast<float>(d.value) : d.value > 0 ? limit : -limit;
+  }
   void operator()(Field<bool>& f) { f.state = state(); f.value = random() % 2 != 0; }
   template<class T> void operator()(Field<T>& f) { f.state = state(); f.value = static_cast<T>(random()); }
   void operator()(GameTimePod& g) { (*this)(g.minutes); if (random() % 8 == 0) g.clock_id.text[random() % 36] = static_cast<char>(random()); }
