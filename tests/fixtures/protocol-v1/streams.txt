@@ -42,3 +42,4 @@ queue-bytes-overflow 1 S:welcome,S:checkpoint,S:event-job-configured,S:gap-queue
 queue-gap-missing 1 S:welcome,S:checkpoint,S:event-job-configured,S:event-after-queue-count reject@3
 ack-zero-noop 1 S:welcome,S:checkpoint,C:ack-0 accept 0
 live-only-ack 0 C:hello-live,S:welcome-live,S:checkpoint-live,C:ack-0 reject@3
+snapshot-next-below-coverage 1 S:welcome,S:checkpoint,S:event-job-configured,S:event-truck-configured-e2,S:gap,S:snapshot-next-below-coverage reject@5

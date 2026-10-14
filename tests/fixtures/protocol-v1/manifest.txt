@@ -12,6 +12,7 @@ checkpoint-restart.json valid
 snapshot.json valid
 snapshot-live.json valid
 snapshot-after-end.json valid
+snapshot-next-below-coverage.json valid
 snapshot-capture-regression.json valid
 snapshot-foreign-source.json valid
 snapshot-clock-change.json valid

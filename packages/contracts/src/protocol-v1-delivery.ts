@@ -105,6 +105,8 @@ export class V1Consumer {
     const acked = BigInt(s.delivery.ackedThroughEventSeq), previous = this.status;
     // The producer accepts an ACK only for eventSeqs already sent on this connection.
     if (acked > this.nextEvent - 1n) fail('Acknowledged beyond delivered coverage');
+    // Every eventSeq already covered on this connection was assigned, so nextEventSeq cannot be below it (as for `end`).
+    if (BigInt(s.delivery.nextEventSeq) < this.nextEvent) fail('nextEventSeq below delivered coverage');
     if (previous && (acked < BigInt(previous.delivery.ackedThroughEventSeq) || BigInt(s.delivery.nextEventSeq) < BigInt(previous.delivery.nextEventSeq) ||
       LOSS_KEYS.some(key => BigInt(s.eventLoss[key]) < BigInt(previous.eventLoss[key])))) fail('Status counters regressed');
     if (this.continuity && (BigInt(continuity.coalescedSnapshots) < BigInt(this.continuity.coalescedSnapshots) ||
