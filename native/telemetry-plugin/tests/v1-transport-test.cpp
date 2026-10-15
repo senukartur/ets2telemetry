@@ -259,9 +259,40 @@ std::string type_of(const v1::Message& m) { return m.event ? m.event->record_typ
 std::vector<const v1::Message*> coverage_messages(const Client& c) { std::vector<const v1::Message*> out; for (const auto& m : c.messages) if (m.event || m.gap) out.push_back(&m); return out; }
 std::string serialize(const v1::Json& j) { return v0::detail::serialize(j); }
 
+// v1::window_field keeps the v0 identity and freshness rules of transport::current_window: both agree on every
+// mutation of one valid window and at both age limits, and an available window keeps the exact physical geometry.
+void window_mapping(Fixture& f) {
+  sdk::Snapshot source; require(f.adapter->read_current(source), "v0 slot"); const auto c = f.current();
+  window::Snapshot w{}; w.status = window::Status::available; w.process_id = c->identity.process_id; w.windows_session_id = c->identity.windows_session_id;
+  w.process_creation_time = 42; w.plugin_session_id = c->identity.plugin_session_id.bytes; w.per_monitor_v2 = w.visible = w.client_bounds_available = true;
+  w.handle = UINT64_MAX; w.client = {-400, -300, 640, 480}; w.dpi = 144; w.capture_monotonic_ms = 1000; w.foreground = true;
+  auto agree = [&](const window::Snapshot& candidate, std::uint64_t creation, std::uint64_t now) {
+    const auto v0_window = transport::current_window(source, &candidate, creation, now); const auto v1_window = v1::window_field(*c, &candidate, creation, now);
+    require(v0_window.value.has_value() == v1_window.available(), "v0 and v1 window availability agree");
+    if (v1_window.available()) {
+      const auto& a = *v0_window.value; const auto& b = v1_window.value;
+      require(a.handle == b.handle && a.x == b.x && a.y == b.y && a.width == b.width && a.height == b.height && a.dpi == b.dpi && a.foreground == b.foreground && a.minimized == b.minimized && b.display_mode == v1::DisplayMode::unknown, "exact geometry");
+    }
+    return v1_window.available();
+  };
+  require(agree(w, 42, 1250) && agree(w, 42, 1000) && !agree(w, 42, 1251) && !agree(w, 42, 999), "age limits");
+  for (unsigned i = 0; i < 13; ++i) {
+    auto bad = w;
+    switch (i) {
+      case 0: bad.process_id++; break; case 1: bad.windows_session_id++; break; case 2: bad.process_creation_time++; break; case 3: bad.plugin_session_id[0] = 'x'; break;
+      case 4: bad.handle = 0; break; case 5: bad.dpi = 0; break; case 6: bad.client.width = 0; break; case 7: bad.client.height = 0; break; case 8: bad.visible = false; break;
+      case 9: bad.minimized = true; bad.client = {}; bad.client_bounds_available = false; break; case 10: bad.per_monitor_v2 = false; break;
+      case 11: bad.status = window::Status::ambiguous; break; default: bad.status = window::Status::stopped; break;
+    }
+    require(!agree(bad, 42, 1000), "every identity or availability mismatch is unavailable in both");
+  }
+  require(!agree(w, 0, 1000), "an unknown process creation time is unavailable");
+  require(v1::window_field(*c, nullptr, 42, 1000).state == v1::FieldState::not_supported && transport::current_window(source, nullptr, 42, 1000).reason == v0::AvailabilityReason::not_supported, "no monitor: not-supported in both");
+}
+
 // Discovery, DACL, naming and the welcome capabilities on an actual pipe.
 void handshake() {
-  Fixture f; f.start();
+  Fixture f; window_mapping(f); f.start();
   const auto c = f.current(); sdk::Snapshot source; require(f.adapter->read_current(source), "v0 slot");
   const auto expected = L"\\\\.\\pipe\\ETS2Telemetry-ets2-v1-" + wide(f.user.tag) + L"-" + std::to_wstring(f.user.session) + L"-" + wide(c->identity.process_instance_id.c_str());
   require(f.server->endpoint() == expected, "v1 pipe name: game, v1, userTag, Windows session, process instance");
