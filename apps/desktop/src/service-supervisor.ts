@@ -5,10 +5,20 @@ export interface SupervisedService {
 }
 
 // Independent from Electron so shutdown races can be tested without launching the desktop.
+export interface SupervisorRecovery {
+  restart(): void;
+  state(state: 'service-failed' | 'restarting'): void;
+  exhausted(): void;
+  /** A post-readiness service failure is being recovered by terminating the current service. */
+  failure?(code: string): void;
+}
 export class ServiceSupervisor {
   private service: SupervisedService | undefined;
   private timers: ReturnType<typeof setTimeout>[] = [];
   private readySeen = false;
+  /** The application has completed first readiness; later failures are recovered, not fatal. */
+  private everReady = false;
+  private recovering = false;
   private exited = false;
   private finished = false;
   private exitCode = 0;
@@ -17,21 +27,39 @@ export class ServiceSupervisor {
 
   constructor(private readonly log: (event: string, detail?: unknown) => void,
     private readonly exit: (code: number) => void,
-    private readonly recovery?: {restart(): void; state(state: 'service-failed' | 'restarting'): void; exhausted(): void}) {}
+    private readonly recovery?: SupervisorRecovery) {}
 
   attach(service: SupervisedService): void {
-    this.exited = false; this.readySeen = false;
+    this.exited = false; this.readySeen = false; this.recovering = false;
     this.service = service;
-    this.timers.push(setTimeout(() => this.fail('SERVICE_START_TIMEOUT'), 15000));
+    this.timers.push(setTimeout(() => this.serviceFailed('SERVICE_START_TIMEOUT'), 15000));
     this.log('SERVICE_START_REQUESTED');
   }
 
   ready(): boolean {
-    if (this.stopping || this.readySeen) return false;
-    this.readySeen = true;
+    if (this.stopping || this.readySeen || this.recovering) return false;
+    this.readySeen = true; this.everReady = true;
     this.clearTimers();
     this.log('SERVICE_READY');
     return true;
+  }
+
+  /**
+   * A service failure report or start timeout. Before first readiness it remains fatal, as before.
+   * Afterwards, with recovery configured, the current service is terminated and its exit drives the
+   * existing bounded restart; an exit that does not follow within 3000 ms is fatal.
+   */
+  serviceFailed(code: string, detail?: unknown): void {
+    if (this.finished || this.stopping) return;
+    if (!this.recovery || !this.everReady || !this.service || this.exited) {this.fail(code, detail); return;}
+    if (this.recovering) return;
+    this.recovering = true; this.readySeen = false;
+    this.clearTimers();
+    this.log(code, detail);
+    this.recovery.failure?.(code);
+    this.timers.push(setTimeout(() => this.fail('SERVICE_RECOVERY_TIMEOUT'), 3000));
+    try {if (!this.service.kill()) this.log('SERVICE_KILL_REJECTED');}
+    catch (error) {this.log('SERVICE_KILL_FAILED', error);}
   }
 
   fail(code: string, detail?: unknown): void {
@@ -45,7 +73,7 @@ export class ServiceSupervisor {
     this.exited = true;
     this.log('SERVICE_EXIT', {code});
     if (!this.stopping && this.recovery) {
-      this.clearTimers(); this.readySeen = false; this.recovery.state('service-failed');
+      this.clearTimers(); this.readySeen = false; this.recovering = false; this.recovery.state('service-failed');
       const attempt = this.restartBudget.take();
       if (attempt !== undefined) {
         const delay = attempt === 1 ? 250 : 1000;

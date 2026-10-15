@@ -81,3 +81,64 @@ it('recovers widely separated crashes but bounds three crashes within a minute',
   expect(restart).toHaveBeenCalledTimes(6); expect(exhausted).toHaveBeenCalledOnce();
   supervisor.stop(); expect(vi.getTimerCount()).toBe(0);
 });
+
+function recovering() {
+  const log = vi.fn(), exit = vi.fn(), restart = vi.fn(), state = vi.fn(), exhausted = vi.fn(), failure = vi.fn();
+  const service = {postMessage: vi.fn(), kill: vi.fn(() => true)};
+  const supervisor = new ServiceSupervisor(log, exit, {restart, state, exhausted, failure});
+  supervisor.attach(service);
+  return {log, exit, restart, state, exhausted, failure, service, supervisor};
+}
+it.each(['SERVICE_START_FAILED', 'STORAGE_WORKER_EXIT'])('recovers a post-readiness %s report by terminating and restarting the service', async code => {
+  const f = recovering(); expect(f.supervisor.ready()).toBe(true);
+  f.supervisor.serviceFailed(code); f.supervisor.serviceFailed(code);
+  expect(f.service.kill).toHaveBeenCalledOnce(); expect(f.failure).toHaveBeenCalledExactlyOnceWith(code);
+  expect(f.exit).not.toHaveBeenCalled(); expect(f.supervisor.stopping).toBe(false);
+  // A late readiness message from the terminated service is not accepted.
+  expect(f.supervisor.ready()).toBe(false);
+  f.supervisor.serviceExited(1);
+  expect(f.state.mock.calls).toEqual([['service-failed'], ['restarting']]);
+  await vi.advanceTimersByTimeAsync(250); expect(f.restart).toHaveBeenCalledOnce();
+  f.supervisor.attach(f.service); expect(f.supervisor.ready()).toBe(true);
+  expect(f.exit).not.toHaveBeenCalled();
+  f.supervisor.stop(); f.supervisor.serviceExited(0); expect(f.exit).toHaveBeenCalledExactlyOnceWith(0);
+  expect(vi.getTimerCount()).toBe(0);
+});
+it('recovers a restarted service that misses its start deadline instead of exiting', async () => {
+  const f = recovering(); f.supervisor.ready(); f.supervisor.serviceExited(1);
+  await vi.advanceTimersByTimeAsync(250); f.supervisor.attach(f.service);
+  await vi.advanceTimersByTimeAsync(15000);
+  expect(f.failure).toHaveBeenCalledExactlyOnceWith('SERVICE_START_TIMEOUT'); expect(f.service.kill).toHaveBeenCalledOnce();
+  expect(f.exit).not.toHaveBeenCalled();
+  f.supervisor.serviceExited(1); await vi.advanceTimersByTimeAsync(1000); expect(f.restart).toHaveBeenCalledTimes(2);
+  f.supervisor.stop(); expect(vi.getTimerCount()).toBe(0);
+});
+it.each([false, true])('fails when a post-readiness kill is not followed by an exit within 3000 ms (kill throws: %s)', async throws => {
+  const f = recovering(); f.supervisor.ready();
+  if (throws) f.service.kill.mockImplementation(() => {throw new Error('kill failed');});
+  f.supervisor.serviceFailed('SERVICE_START_FAILED');
+  await vi.advanceTimersByTimeAsync(2999); expect(f.exit).not.toHaveBeenCalled(); expect(f.supervisor.stopping).toBe(false);
+  await vi.advanceTimersByTimeAsync(1);
+  expect(f.log).toHaveBeenCalledWith('SERVICE_RECOVERY_TIMEOUT', undefined); expect(f.supervisor.stopping).toBe(true);
+  expect(f.service.postMessage).toHaveBeenCalledExactlyOnceWith({type: 'stop'});
+  await vi.advanceTimersByTimeAsync(5000); expect(f.exit).toHaveBeenCalledExactlyOnceWith(1);
+  expect(vi.getTimerCount()).toBe(0);
+});
+it('keeps restart exhaustion visible without exiting after post-readiness failures', async () => {
+  const f = recovering();
+  for (let index = 0; index < 3; index++) {
+    if (index) f.supervisor.attach(f.service);
+    f.supervisor.ready(); f.supervisor.serviceFailed('SERVICE_START_FAILED'); f.supervisor.serviceExited(1);
+    await vi.advanceTimersByTimeAsync(1000);
+  }
+  expect(f.restart).toHaveBeenCalledTimes(2); expect(f.exhausted).toHaveBeenCalledOnce();
+  expect(f.exit).not.toHaveBeenCalled(); expect(vi.getTimerCount()).toBe(0);
+  f.supervisor.stop(); expect(f.exit).toHaveBeenCalledOnce();
+});
+it.each(['report', 'timeout'])('keeps pre-readiness %s failures fatal even with recovery configured', async kind => {
+  const f = recovering();
+  if (kind === 'report') f.supervisor.serviceFailed('SERVICE_START_FAILED'); else await vi.advanceTimersByTimeAsync(15000);
+  expect(f.failure).not.toHaveBeenCalled(); expect(f.service.kill).not.toHaveBeenCalled();
+  expect(f.supervisor.stopping).toBe(true); expect(f.service.postMessage).toHaveBeenCalledExactlyOnceWith({type: 'stop'});
+  f.supervisor.serviceExited(0); expect(f.exit).toHaveBeenCalledExactlyOnceWith(1);
+});
