@@ -1,25 +1,33 @@
 // Readings accounting for trips (ET-014 PR-2, T16 and T17). Pure classification of one step between two readings, built
-// on the derived.ts step primitives, plus the per-trip accumulation of observed distance, fuel used and refuels. The
-// reducer decides which trip a step belongs to and turns the findings into effects; see docs/trips.md.
-import {MAX_PLAUSIBLE_SPEED_MPS, fuelStep, odometerStep, type FuelStep, type OdometerStep, type StepSample} from '../derived';
+// on the derived.ts step primitives, a sliding window of game-time advance, and the per-trip accumulation of observed
+// distance, fuel used and refuels. The reducer decides which trip a step belongs to and turns the findings into
+// effects; see docs/trips.md.
+import {MAX_PLAUSIBLE_SPEED_MPS, fuelStep, odometerStep, truckKey, type FuelStep, type OdometerStep, type StepSample} from '../derived';
 import {NOT_CARRIED, type Distance, type LiveTruck, type Reading} from '../readings';
 
 /**
  * T17 provisional thresholds, to be checked against real sessions (docs/validation/et-014.md). A game-time jump is a
- * forward step on one game clock of at least GAME_TIME_JUMP_MINUTES that also runs faster than
- * GAME_TIME_JUMP_RATE game minutes per real minute: normal driving runs at about 19 and a ferry at about 90.
+ * forward advance on one game clock of at least GAME_TIME_JUMP_MINUTES that runs faster than GAME_TIME_JUMP_RATE game
+ * minutes per real minute, measured from any reading at most GAME_TIME_WINDOW_SECONDS earlier: normal driving runs at
+ * about 19 and a ferry at about 90, so both a single-step sleep and a ferry spread over many readings are found.
  */
 export const GAME_TIME_JUMP_MINUTES = 30;
 export const GAME_TIME_JUMP_RATE = 60;
+export const GAME_TIME_WINDOW_SECONDS = 60;
+/** A ferry or train event at most this long before a jump starts, or during it, labels the jump a crossing. Provisional. */
+export const CROSSING_WINDOW_SECONDS = 300;
 /** A position step longer than MAX_PLAUSIBLE_SPEED_MPS × elapsed source seconds + this margin is a jump. Provisional. */
 export const POSITION_JUMP_MARGIN_METERS = 50;
-/** Readings at least this far apart while connected, with the simulation running at both ends, are a hole. Provisional. */
+/** At least this much running simulation time between two readings of one connection is a reading hole. Provisional. */
 export const READING_HOLE_SECONDS = 5;
-const READING_HOLE_NS = BigInt(READING_HOLE_SECONDS) * 1_000_000_000n;
+const NS_PER_SECOND = 1_000_000_000n;
+const READING_HOLE_NS = BigInt(READING_HOLE_SECONDS) * NS_PER_SECOND;
+const WINDOW_NS = BigInt(GAME_TIME_WINDOW_SECONDS) * NS_PER_SECOND;
+const CROSSING_NS = BigInt(CROSSING_WINDOW_SECONDS) * NS_PER_SECOND;
 
 /**
  * The part of a reading that accounting keeps until the next reading. Plain JSON-safe data: game minutes stay a
- * decimal string. `utcMs` is the reading's UTC label, if any.
+ * decimal string. `utcMs` is the reading's UTC label, if it is a non-negative safe integer.
  */
 export interface ReadingPoint {
   source: StepSample['source']; capture: StepSample['capture'];
@@ -30,13 +38,15 @@ export interface ReadingPoint {
   utcMs: number | null;
 }
 export function readingPoint(sample: StepSample & {utcMs?: number}): ReadingPoint {
-  const s = sample.state, minutes = s.gameTime.minutes, placement = s.worldPlacement;
+  const s = sample.state, minutes = s.gameTime.minutes, placement = s.worldPlacement, utc = sample.utcMs;
   return {
     source: {game: sample.source.game, origin: sample.source.origin, pluginSessionId: sample.source.pluginSessionId, processInstanceId: sample.source.processInstanceId},
     capture: {clockId: sample.capture.clockId, monotonicNs: sample.capture.monotonicNs}, simulation: s.simulation,
     odometer: structuredClone(s.odometer), fuel: structuredClone(s.fuel), truck: structuredClone(s.truck),
     gameTime: {minutes: minutes.state === 'value' ? minutes.value.toString() : null, clockId: s.gameTime.clockId},
-    position: placement.state === 'value' ? {...placement.value.position} : null, utcMs: sample.utcMs ?? null
+    position: placement.state === 'value' ? {...placement.value.position} : null,
+    // A label that could not be a storage UTC value is treated as absent, as for event labels.
+    utcMs: utc !== undefined && Number.isSafeInteger(utc) && utc >= 0 ? utc : null
   };
 }
 /** The step primitives read only identity, truck, game clock, odometer and fuel; everything else is not carried here. */
@@ -51,39 +61,105 @@ function sampleOf(point: ReadingPoint): StepSample {
 
 /** A step across a source, truck or game-clock boundary: nothing else is compared across it. */
 const BOUNDARY = new Set(['source-changed', 'truck-changed', 'game-clock-rotated']);
-/** Whether a ferry or train event lies between the two readings (T17 label), else an inference. */
+/** `crossing` when a ferry or train event is next to the jump (T17), else an inference. */
 export type JumpLabel = 'crossing' | 'possible-sleep' | 'possible-teleport';
 export interface ReadingStep {
   odometer: OdometerStep; fuel: FuelStep;
   /** Source nanoseconds between the readings, or null across capture clocks or out of order. */
   elapsedNs: bigint | null;
-  /** T17: at least READING_HOLE_SECONDS apart with the simulation running at both ends. */
-  hole: boolean;
-  gameTimeJump: {fromMinutes: string; toMinutes: string; label: JumpLabel} | null;
-  positionJump: {meters: number; label: JumpLabel} | null;
+  /** A boundary step compares nothing beyond the primitives. */
+  boundary: boolean;
+  /** The straight-line position step, when it exceeds the plausible speed. */
+  positionJump: {meters: number} | null;
 }
-/** Classifies one step between consecutive readings of one connection. `transfer`: a ferry or train event lies between them. */
-export function classifyStep(prev: ReadingPoint, next: ReadingPoint, transfer: boolean): ReadingStep {
+/** Classifies one step between consecutive readings of one connection. */
+export function classifyStep(prev: ReadingPoint, next: ReadingPoint): ReadingStep {
   const a = sampleOf(prev), b = sampleOf(next), odometer = odometerStep(a, b), fuel = fuelStep(a, b);
   const sameClock = prev.capture.clockId === next.capture.clockId && prev.source.pluginSessionId === next.source.pluginSessionId;
   const ns = sameClock ? BigInt(next.capture.monotonicNs) - BigInt(prev.capture.monotonicNs) : null, elapsedNs = ns !== null && ns >= 0n ? ns : null;
-  const step: ReadingStep = {odometer, fuel, elapsedNs, hole: false, gameTimeJump: null, positionJump: null};
-  if (elapsedNs === null) return step;
-  step.hole = elapsedNs >= READING_HOLE_NS && prev.simulation === 'running' && next.simulation === 'running';
-  if (odometer.kind === 'discontinuity' && BOUNDARY.has(odometer.cause)) return step;
-  const from = prev.gameTime.minutes, to = next.gameTime.minutes;
-  if (from !== null && to !== null) {
-    const minutes = BigInt(to) - BigInt(from);
-    // More than GAME_TIME_JUMP_RATE game minutes per real minute: minutes × 60 s × 1e9 > rate × elapsed ns.
-    if (minutes >= BigInt(GAME_TIME_JUMP_MINUTES) && minutes * 60_000_000_000n > BigInt(GAME_TIME_JUMP_RATE) * elapsedNs) {
-      step.gameTimeJump = {fromMinutes: from, toMinutes: to, label: transfer ? 'crossing' : 'possible-sleep'};
-    }
-  }
+  const boundary = odometer.kind === 'discontinuity' && BOUNDARY.has(odometer.cause);
+  const step: ReadingStep = {odometer, fuel, elapsedNs, boundary, positionJump: null};
+  if (elapsedNs === null || boundary) return step;
   if (prev.position !== null && next.position !== null) {
     const p = prev.position, q = next.position, meters = Math.hypot(q.x - p.x, q.y - p.y, q.z - p.z);
-    if (meters > MAX_PLAUSIBLE_SPEED_MPS * (Number(elapsedNs) / 1e9) + POSITION_JUMP_MARGIN_METERS) step.positionJump = {meters, label: transfer ? 'crossing' : 'possible-teleport'};
+    if (meters > MAX_PLAUSIBLE_SPEED_MPS * (Number(elapsedNs) / 1e9) + POSITION_JUMP_MARGIN_METERS) step.positionJump = {meters};
   }
   return step;
+}
+
+/**
+ * Running simulation time since the last reading, split by the stream's simulation states: it starts from the
+ * reading's own state, and each event's `occurred.simulation` switches it at the event's source time.
+ */
+export interface RunClock {clockId: string; running: boolean; markNs: string; runningNs: string}
+export function startRunClock(next: ReadingPoint): RunClock {
+  return {clockId: next.capture.clockId, running: next.simulation === 'running', markNs: next.capture.monotonicNs, runningNs: '0'};
+}
+/** Applies an event's simulation state at its source time; times before the mark count from the mark. */
+export function switchRunClock(clock: RunClock, clockId: string, atNs: string, simulation: 'running' | 'paused' | 'unavailable'): RunClock {
+  if (clockId !== clock.clockId) return clock;
+  const at = BigInt(atNs) > BigInt(clock.markNs) ? atNs : clock.markNs, running = simulation === 'running';
+  if (clock.running && !running) return {...clock, running, markNs: at, runningNs: (BigInt(clock.runningNs) + BigInt(at) - BigInt(clock.markNs)).toString()};
+  if (!clock.running && running) return {...clock, running, markNs: at};
+  return clock;
+}
+/** T17: whether at least READING_HOLE_SECONDS of running simulation lie between the clock's reading and `next`. */
+export function isReadingHole(clock: RunClock, next: ReadingPoint): boolean {
+  if (clock.clockId !== next.capture.clockId) return false;
+  const end = BigInt(next.capture.monotonicNs), mark = BigInt(clock.markNs);
+  return BigInt(clock.runningNs) + (clock.running && end > mark ? end - mark : 0n) >= READING_HOLE_NS;
+}
+
+/** Recent game-time readings of one game clock and capture clock, at most one per real second, for the jump rate. */
+export interface GameTimeWindow {gameClockId: string; captureClockId: string; points: {ns: string; minutes: string}[]}
+export interface GameTimeJump {fromMinutes: string; toMinutes: string; fromNs: string}
+/**
+ * Adds a reading to the window and reports a game-time jump (T17): an advance of at least GAME_TIME_JUMP_MINUTES at
+ * more than GAME_TIME_JUMP_RATE per real minute from any window point or the previous reading. The latest such point is
+ * its start, so a single-step sleep starts at the reading before it and a ferry where the fast advance began.
+ */
+export function advanceGameTime(window: GameTimeWindow | null, prev: ReadingPoint | null, next: ReadingPoint): {window: GameTimeWindow | null; jump: GameTimeJump | null} {
+  if (next.gameTime.minutes === null) return {window, jump: null};
+  const nextNs = BigInt(next.capture.monotonicNs), minutes = BigInt(next.gameTime.minutes);
+  let points = window !== null && window.gameClockId === next.gameTime.clockId && window.captureClockId === next.capture.clockId ? window.points : [];
+  if (points.length && BigInt(points[points.length - 1].minutes) > minutes) points = [];
+  points = points.filter(p => BigInt(p.ns) >= nextNs - WINDOW_NS && BigInt(p.ns) <= nextNs);
+  // The previous reading always counts, however long ago it was: a single step is judged on its own rate.
+  const candidates: {ns: string; minutes: string; prev?: true}[] = [...points];
+  if (prev !== null && prev.gameTime.minutes !== null && prev.gameTime.clockId === next.gameTime.clockId && prev.capture.clockId === next.capture.clockId) {
+    candidates.push({ns: prev.capture.monotonicNs, minutes: prev.gameTime.minutes, prev: true});
+  }
+  let jump: GameTimeJump | null = null;
+  for (const p of candidates) {
+    const advance = minutes - BigInt(p.minutes), span = nextNs - BigInt(p.ns);
+    if (span < 0n || (span > WINDOW_NS && p.prev !== true)) continue;
+    // More than the rate per real minute: advance × 60 s × 1e9 > rate × span ns.
+    if (advance >= BigInt(GAME_TIME_JUMP_MINUTES) && advance * 60n * NS_PER_SECOND > BigInt(GAME_TIME_JUMP_RATE) * span && (jump === null || BigInt(p.ns) > BigInt(jump.fromNs))) {
+      jump = {fromMinutes: p.minutes, toMinutes: next.gameTime.minutes, fromNs: p.ns};
+    }
+  }
+  if (!points.length || nextNs - BigInt(points[points.length - 1].ns) >= NS_PER_SECOND) points = [...points, {ns: next.capture.monotonicNs, minutes: next.gameTime.minutes}];
+  return {window: {gameClockId: next.gameTime.clockId, captureClockId: next.capture.clockId, points}, jump};
+}
+/**
+ * Whether game time advanced faster than GAME_TIME_JUMP_RATE from an earlier reading to `next`. A jump that is already
+ * annotated grows only by such advances, so normal driving after a sleep, still inside the window, does not extend it.
+ */
+export function isFastAdvance(fromNs: string, fromMinutes: string, next: ReadingPoint): boolean {
+  if (next.gameTime.minutes === null) return false;
+  const advance = BigInt(next.gameTime.minutes) - BigInt(fromMinutes), span = BigInt(next.capture.monotonicNs) - BigInt(fromNs);
+  return advance > 0n && span >= 0n && advance * 60n * NS_PER_SECOND > BigInt(GAME_TIME_JUMP_RATE) * span;
+}
+/** The last ferry or train event of the session: its source time on its capture clock. */
+export interface TransferMark {clockId: string; monotonicNs: string}
+/**
+ * T17 label: a jump is a crossing when a ferry or train event lies at most CROSSING_WINDOW_SECONDS before the jump's
+ * start, or between its start and `next`; otherwise `otherwise`, an inference.
+ */
+export function jumpLabel(transfer: TransferMark | null, startNs: string, next: ReadingPoint, otherwise: 'possible-sleep' | 'possible-teleport'): JumpLabel {
+  if (transfer === null || transfer.clockId !== next.capture.clockId) return otherwise;
+  const at = BigInt(transfer.monotonicNs);
+  return at >= BigInt(startNs) - CROSSING_NS && at <= BigInt(next.capture.monotonicNs) ? 'crossing' : otherwise;
 }
 
 /**
@@ -144,10 +220,10 @@ export function distanceUpdate(tripUuid: string, acc: TripAccounting): {kind: 't
 }
 /**
  * The odometer change across a connection hole, recorded in its not-connected interval and never added to a trip:
- * null unless both readings have an odometer of the same truck.
+ * null unless both readings have an odometer of the same truck (derived.ts truck identity: brand, model and plate).
  */
 export function odometerDeltaM(before: ReadingPoint | null, after: ReadingPoint): number | null {
   if (before === null || before.odometer.state !== 'value' || after.odometer.state !== 'value') return null;
-  if (JSON.stringify(before.truck) !== JSON.stringify(after.truck)) return null;
+  if (truckKey(before) !== truckKey(after)) return null;
   return after.odometer.value.meters - before.odometer.value.meters;
 }

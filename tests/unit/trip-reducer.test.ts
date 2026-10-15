@@ -385,7 +385,7 @@ describe('hydration, gaps and connections', () => {
     state = play([[sessionInput(welcome, '7')],
       [e.event(r.fined()), [partial(trip), {kind: 'completeness.add', interval: {tripUuid: trip, kind: 'not-connected', startUtcMs: at(7),
         startMonotonicNs: (lastEts2.data.occurred.monotonicNs as {value: string}).value, endMonotonicNs: welcome.capture.monotonicNs, sourceClockId: e.clockId,
-        detail: {cause: 'disconnected'}}}, attr(trip, 'trip')]]], state);
+        detail: {cause: 'disconnected', odometerDeltaM: null}}}, attr(trip, 'trip')]]], state);
     expect(tripView(state, 'ets2').current).toMatchObject({tripUuid: trip, recordingCompleteness: 'partial'});
     expect(tripView(state, 'ats').current).toMatchObject({tripUuid: atsTrip, recordingCompleteness: 'unknown'});
   });
@@ -479,7 +479,7 @@ describe('cold start (TripSeed) and effect bounds (T11, T18)', () => {
   it('a queued not-connected interval of an earlier session drops its monotonic bounds before a later session commits it (T11) [synthetic-inference]', () => {
     const a = new Script(ETS2_A), b = new Script(ETS2_B, 'ets2', {utcMs: BASE_UTC + 100_000}), {rows, trip} = acceptedJob(a);
     play([...rows, [{kind: 'disconnected'}], [sessionInput(a.welcome(), '7')], [{kind: 'disconnected'}], [sessionInput(b.welcome())],
-      [b.event(r.truckConfigured(), paused), [partial(trip), {kind: 'completeness.add', interval: {tripUuid: trip, kind: 'not-connected', startUtcMs: at(7), detail: {cause: 'disconnected'}}},
+      [b.event(r.truckConfigured(), paused), [partial(trip), {kind: 'completeness.add', interval: {tripUuid: trip, kind: 'not-connected', startUtcMs: at(7), detail: {cause: 'disconnected', odometerDeltaM: null}}},
         close(trip, 'none', 'restart', 'partial', at(7))]]]);
   });
   it('resumes a stored open trip of the same session as partial: the consumer was not running (T13) [synthetic-inference]', () => {

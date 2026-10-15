@@ -30,6 +30,8 @@ export type StoredInterval = CompletenessInterval & {pluginSessionId: string};
 export class TripStorageModel {
   private coverage = new Map<string, {game: 'ets2' | 'ats'; through: bigint; lastUtcMs: number | null}>();
   private jobs = new Map<string, Extract<EventRecord, {type: 'job.configured'}>>();
+  /** The last job.configured or job.cleared event per session, to tell whether an open trip's job was cleared. */
+  private lastJobEvent = new Map<string, {type: string; eventSeq: bigint}>();
   private trucks = new Set<string>();
   private trailers = new Set<string>();
   readonly trips: StoredTrip[] = [];
@@ -39,12 +41,17 @@ export class TripStorageModel {
 
   committedThrough(session: string): string { return (this.coverage.get(session)?.through ?? 0n).toString(); }
   /** The stored open trips of a game, as a cold start reads them (TripSeed). */
+  /** An open trip whose session's last stored job event, after the trip opened, is a clear: it awaits its outcome. */
+  private cleared(t: StoredTrip): boolean {
+    const last = this.lastJobEvent.get(t.pluginSessionId);
+    return last !== undefined && last.type === 'job.cleared' && last.eventSeq > BigInt(t.openedEventSeq);
+  }
   seeds(game: 'ets2' | 'ats'): TripSeed[] {
     return this.trips.filter(t => t.outcome === 'open' && t.game === game).map(t => {
       const job = this.jobs.get(`${t.pluginSessionId}:${t.jobConfigurationEventSeq}`), last = this.coverage.get(t.pluginSessionId)?.lastUtcMs ?? null;
       return {tripUuid: t.tripUuid, pluginSessionId: t.pluginSessionId, game: t.game, jobKey: job === undefined ? null : jobKey(job), startedUtcMs: t.startedUtcMs,
         recordingCompleteness: t.recordingCompleteness as TripSeed['recordingCompleteness'], ...(last !== null ? {lastObservedUtcMs: last} : {}),
-        ...(t.observedDistanceM.available ? {observedDistanceM: t.observedDistanceM.value} : {})};
+        ...(t.observedDistanceM.available ? {observedDistanceM: t.observedDistanceM.value} : {}), ...(this.cleared(t) ? {awaitingOutcome: true} : {})};
     });
   }
   private session(m: Of<'event'> | Of<'gap'>) {
@@ -61,6 +68,7 @@ export class TripStorageModel {
     if (seq !== s.through + 1n) throw new Error(`Non-contiguous event ${seq}`);
     const key = `${m.source.pluginSessionId}:${m.data.eventSeq}`, record = m.data.record;
     if (record.type === 'job.configured') this.jobs.set(key, record);
+    if (record.type === 'job.configured' || record.type === 'job.cleared') this.lastJobEvent.set(m.source.pluginSessionId, {type: record.type, eventSeq: seq});
     if (record.type === 'truck.configured') this.trucks.add(key);
     if (record.type === 'trailer.configured') this.trailers.add(key);
     this.apply(m, effects);
@@ -175,10 +183,10 @@ export interface TripReplay {
  * consumer start), `checkpoint` and then its state as a reading, each snapshot as a reading, and each event or gap as a
  * carrier with the storage coverage read right before the commit. A connection that ends normally ends with
  * `disconnected`; a client crash loses the reducer state, as a process crash would. A carrier the scripted client does
- * not commit (`none`, or the `failAt` item) is not committed: the old state is kept and the connection's remaining
- * carriers are not stepped, because durable delivery stops there.
+ * not commit (`none`, or the `failAt` item) is not committed: the old state is kept and nothing more of that connection,
+ * reading or carrier, is fed, because durable delivery closes the connection on a failed commit (ET-006b).
  */
-export function replayTrips(result: ReplayResult): TripReplay {
+export function replayTrips(result: Pick<ReplayResult, 'transcript' | 'connections'>): TripReplay {
   const storage = new TripStorageModel(), records = new Map(result.connections.map(c => [c.connection, c]));
   const out: TripReplay = {state: initialTripState(), storage, readings: 0, carriers: 0, consumerStarts: 1};
   let fresh = true, connection: number | null = null, stopped = false;
@@ -191,6 +199,7 @@ export function replayTrips(result: ReplayResult): TripReplay {
   for (const line of result.transcript) {
     if (line.direction !== 'server') continue;
     if (line.connection !== connection) { end(); connection = line.connection; stopped = false; }
+    if (stopped) continue;
     const m = line.message as ServerMessage, record = records.get(connection)!;
     if (!record.durableRequested || record.policy === undefined) throw new Error('Trip replay needs durable scripted connections');
     switch (m.kind) {
@@ -202,7 +211,6 @@ export function replayTrips(result: ReplayResult): TripReplay {
       case 'checkpoint': out.state = adopt(adopt(out.state, {kind: 'checkpoint', message: m}), reading(m)); out.readings++; break;
       case 'snapshot': out.state = adopt(out.state, reading(m)); out.readings++; break;
       case 'event': case 'gap': {
-        if (stopped) break;
         const coveredThrough = storage.committedThrough(m.source.pluginSessionId), receivedUtcMs = UTC_BASE_MS + line.atMs;
         const input: TripInput = m.kind === 'event' ? {kind: 'event', message: m, coveredThrough, receivedUtcMs} : {kind: 'gap', message: m, coveredThrough, receivedUtcMs};
         const stepped = stepTrip(out.state, input);
