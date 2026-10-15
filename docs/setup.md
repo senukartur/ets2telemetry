@@ -212,3 +212,13 @@ The ET-006a candidate extends npm run build to configure and compile the fixed n
 ## Main-window and overlay renderer styles
 
 ET-008 preserves the ET-025 Tailwind v4/shadcn main-window theme. The renderer entry dispatches to separate dynamic view modules: only the dashboard imports `index.css` and shadcn Card; only the overlay imports `renderer.css`. Do not add the dashboard stylesheet to HTML or the shared entry because its base body background makes the transparent overlay opaque. Keep the existing `index.html?view=overlay` route and separate preload APIs. The emitted renderer test and bounded Windows runtime journeys check the generated assets and computed styles independently of real game visibility.
+
+## Durable storage tests (ET-013)
+
+ET-013 PR-1 adds the storage core in `packages/storage` ([storage](storage.md)). Run its suite from the repository root after `npm ci`:
+
+```powershell
+npm run test:storage
+```
+
+The command runs `node scripts/run-electron-node.mjs node_modules/vitest/vitest.mjs run --config vitest.storage.config.mts`. Vitest then runs inside the pinned Electron executable with `ELECTRON_RUN_AS_NODE=1`, so better-sqlite3 loads under the same runtime and module ABI as the telemetry service. The command prints the observed runtime and fails under any other one. Arguments after `--` reach Vitest, for example `npm run test:storage -- tests/storage/migrations.test.ts`. The suite writes only to temporary directories. The production history database, the `synthetic` directory and the storage size measurement arrive with ET-013 PR-2; until then no production history file is created.

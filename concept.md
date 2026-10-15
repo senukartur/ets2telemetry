@@ -514,3 +514,7 @@ The coordinator adopted these decisions under that delegation; the owner has not
 | CD-10 | In pipe mode, events, gaps, checkpoints and `end` are byte-identical to replay, snapshots equal in state and continuity, and clock replies are checked separately |
 | CD-11 | Retention runs in scenario time; pipe mode fast-forwards offline segments |
 | CD-12 | A system suspend is modeled both with and without the source clock advancing |
+
+## ET-013 authorization — October 15, 2026
+
+The owner authorized ET-013 (the SQLite storage worker and schema) on October 15, 2026, in parallel with ET-004b PR C, granted the coordinator merge authority after independent review and a successful final Windows CI, and delegated the ET-013 design decisions to the coordinator. The coordinator adopted the architect's recommendations OD-1 to OD-10 as coordinator decisions under owner delegation; [storage](docs/storage.md#decisions-october-15-2026) records them with the schema, durability, migration and backup rules. For ET-013 only, this supersedes the October 14, 2026 statements that ET-013 remains unauthorized; earlier dated text is unchanged. ET-014, ET-015a, ET-015b, ET-015c, ET-006b and ET-016 remain unauthorized by this paragraph; ET-005b is authorized separately in the paragraph above. The desktop application stays on protocol v0, records nothing and sends no ACK. The §7 storage estimate remains a model until ET-013 PR-2 measures the actual schema. No game, TruckersMP or performance claim follows from this authorization or from synthetic storage tests.
