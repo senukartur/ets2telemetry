@@ -13,3 +13,8 @@ export * from './normalize-v1';
 export * from './format';
 export * from './derived';
 export * from './live-view';
+// Pure trip lifecycle and completeness reducer (ET-014); see docs/trips.md.
+export * from './trips/identity';
+export * from './trips/types';
+export * from './trips/reducer';
+export * from './trips/view';
