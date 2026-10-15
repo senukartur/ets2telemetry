@@ -1,4 +1,5 @@
 import type {AppErrorCode, ServiceHealth, SettingsSaveError, SettingsState, StorageHealth, UnitGame, UnitProfile} from '../../../packages/contracts/src';
+import type {FieldNote, LiveFieldId, LiveSectionId, ViewReason} from '../../../packages/telemetry-core/src/live-view';
 
 /**
  * User-visible English text for the dashboard and tray. There is no i18n framework yet; keeping the
@@ -29,7 +30,11 @@ export const STRINGS = Object.freeze({
   trayExiting: 'Exiting',
   serviceFailedTitle: 'Telemetry service problem',
   unitsTitle: 'Display units',
-  unitsSaveFailed: 'The unit change was not saved; the previous units stay in use.'
+  unitsSaveFailed: 'The unit change was not saved; the previous units stay in use.',
+  liveTitle: 'Live telemetry',
+  livePaused: 'Game paused',
+  liveNoJob: 'No job reported',
+  liveJobUnavailable: 'Job unavailable'
 });
 export type StringKey = keyof typeof STRINGS;
 
@@ -66,4 +71,31 @@ export const SETTINGS_STATE_TEXT: Readonly<Record<SettingsState, string>> = Obje
   'newer-version': 'Settings were written by a newer version and are read-only; defaults are in use.',
   'unreadable': 'Settings could not be read safely; defaults are in use and changes cannot be saved.',
   'unavailable': 'No settings location is available; defaults are in use and changes cannot be saved.'
+});
+
+// Live dashboard labels (ET-010 N5). Each map covers every telemetry-core id, so a new id fails to compile until it
+// has a text. Values themselves are formatted by telemetry-core; these maps hold only labels, reasons and notes.
+export const LIVE_FIELD_TEXT: Readonly<Record<LiveFieldId, string>> = Object.freeze({
+  'speed': 'Speed', 'gear': 'Gear', 'engine-rpm': 'Engine RPM', 'fuel': 'Fuel', 'fuel-capacity': 'Fuel capacity', 'fuel-level': 'Fuel level',
+  'sdk-average-consumption': 'SDK average consumption', 'estimated-range': 'Estimated range', 'odometer': 'Odometer',
+  'route-remaining': 'Route remaining', 'game-time': 'Game time', 'deadline': 'Delivery deadline', 'cargo': 'Cargo', 'source-city': 'Source city',
+  'source-company': 'Source company', 'destination-city': 'Destination city', 'destination-company': 'Destination company',
+  'cargo-mass': 'Cargo mass', 'market': 'Job market', 'special-job': 'Special job', 'cargo-loaded': 'Cargo loaded',
+  'planned-distance': 'Planned distance', 'expected-income': 'Expected income', 'truck': 'Truck', 'truck-plate': 'License plate',
+  'trailers': 'Trailers', 'position': 'World position', 'bearing': 'Heading', 'game-mode': 'Game mode', 'event-loss': 'Lost events'
+});
+/** Why a row shows `unavailable` (or `none`). `not-carried` rows are hidden, so that text is never rendered. */
+export const VIEW_REASON_TEXT: Readonly<Record<ViewReason, string>> = Object.freeze({
+  'not-observed': 'not yet observed', 'not-supported': 'not provided by the game', 'invalid': 'invalid reading',
+  'not-carried': 'not carried by this protocol', 'not-current': 'not current', 'zero-consumption': 'no consumption recorded',
+  'no-trailer': 'no trailer attached'
+});
+/** Context shown beside a label; the SDK average is never presented as a trip average. */
+export const FIELD_NOTE_TEXT: Readonly<Record<FieldNote, string>> = Object.freeze({
+  'sdk-mean': 'SDK mean, not a trip average', 'ats-mostly-static': 'mostly static in ATS per the SDK header',
+  'game-estimate': "the game's estimate", 'job-offer-excludes-ferry': 'from the job offer, excludes ferries', 'game-time': 'game time',
+  'game-world-coordinates': 'game-world coordinates, not GPS', 'cargo-market-only': 'cargo market jobs only'
+});
+export const LIVE_SECTION_TEXT: Readonly<Record<LiveSectionId, string>> = Object.freeze({
+  motion: 'Driving', fuel: 'Fuel', distance: 'Distance', time: 'Time', job: 'Job', vehicle: 'Vehicle', position: 'Position'
 });
