@@ -8,7 +8,7 @@ For readers new to desktop development: the *main process* is Electron's Node.js
 
 Only one ETS2Telemetry process tree runs per profile. On startup, main first handles Squirrel installer arguments, then applies the `ETS2TELEMETRY_PROFILE_DIR` override (an absolute diagnostic profile used by isolated tests), and only then asks Electron for the [single-instance lock](https://www.electronjs.org/docs/latest/api/app#apprequestsingleinstancelockadditionaldata). Electron keys the lock by the `userData` directory, so the override must come first.
 
-- **Second launch.** When the lock is held, the new process calls `app.quit()` before it creates a log, registers any listener, starts the service or opens a window or tray icon, and exits with code 0. It writes nothing.
+- **Second launch.** When the lock is held, the new process calls `app.quit()` before it creates a log, registers any listener, starts the service or opens a window or tray icon, and exits with code 0. It writes no diagnostic log and starts no service, window or tray; only the diagnostic profile directory may be created when the override is set. If that override fails, the process requests no lock at all and exits 1 with `PROFILE_SETUP_FAILED`, so a misconfigured diagnostic launch never signals the running instance.
 - **Running instance.** It receives Electron's `second-instance` event and ignores the second process's command line, working directory and additional data. It logs `SECOND_INSTANCE` with a fixed `action`:
 
 | State of the running instance | Action |
@@ -29,7 +29,7 @@ Closing the dashboard window destroys that window and retires only its document 
 
 Reopening (tray icon click, the tray's **Open ETS2Telemetry**, or a second launch) creates a new window that subscribes again through the existing bridge; main reuses the single upstream channel. A service restart while the window is closed recreates no window and no second overlay: windows are created once, on first readiness.
 
-The overlay window refuses close requests until the application exits. If the notification area is unavailable (creating the tray icon throws), main logs `TRAY_UNAVAILABLE` and closing the dashboard minimizes it instead, because there would be no way back.
+The overlay window refuses close requests until the application exits. If creating the tray icon throws, main logs `TRAY_UNAVAILABLE` and closing the dashboard minimizes it instead. This fallback covers only a constructor that throws: on Windows, Electron does not throw or report it when the shell rejects the icon registration (`Shell_NotifyIcon`), so the application cannot detect a missing icon and the dashboard still closes to the tray. Launching ETS2Telemetry again is the guaranteed way back in every case, because the second launch reopens the dashboard. Whether the real icon appears is a manual check.
 
 `window-all-closed` does nothing: the tray keeps the application running.
 
@@ -69,7 +69,7 @@ The service stops through an ordered sequence (`apps/desktop/src/shutdown-sequen
 | `flush` | none yet; ET-015 adds recording flush |
 | `storage` | `storage-probe` (1000 ms); ET-013 adds closing history storage |
 
-Steps of one phase run in parallel; each is bounded by its own budget, so a phase takes at most its largest budget. Registration fails if the sum of phase maxima exceeds `SERVICE_STOP_BUDGET_MS` (2500 ms), which keeps the sequence inside main's 3000 ms kill deadline. A failed or late step logs `SHUTDOWN_STEP` with fixed `phase`, `name`, `outcome` (`ok`, `failed` or `timeout`) and `ms` facts, and the sequence continues. The service then sends exactly one `{type: 'stopped', clean}` message and exits 0 when clean or 1 otherwise.
+Steps of one phase run in parallel; each is bounded by its own budget, so a phase takes at most its largest budget. Registration fails if the sum of phase maxima exceeds `SERVICE_STOP_BUDGET_MS` (2500 ms), which keeps the sequence inside main's 3000 ms kill deadline. Every step, successful ones included, logs `SHUTDOWN_STEP` with fixed `phase`, `name`, `outcome` (`ok`, `failed` or `timeout`) and `ms` facts; a failed or late step does not stop the sequence. The service then sends exactly one `{type: 'stopped', clean}` message and exits 0 when clean or 1 otherwise.
 
 ## Service failures after readiness
 
@@ -79,7 +79,7 @@ Before the first readiness, a service failure report or start timeout still stop
 
 Main owns `AppState` (`packages/contracts/src/app-state.ts`). Its `health` has only fixed values: `service` (`starting`, `ready`, `restarting`, `failed`, `stopping`), `storage` for the isolated self-test (`pending`, `verified`, `failed`), `recording` (always `unavailable` in this version) and `lastError` (`SERVICE_EXITED`, `SERVICE_RESTART_EXHAUSTED`, `STORAGE_FAILED`, `SERVICE_START_TIMEOUT`, and the ET-011b settings codes). A pure reducer (`apps/desktop/src/app-health.ts`) reports `ready` only after a new readiness, and an exit request is final.
 
-The preload bridge appends three methods after the original three: `getAppState()`, `subscribeAppState(listener)` (one listener per document; main pushes the full state on every change after the document subscribes) and `exitApplication()`. Every handler checks the sender and its main frame; the overlay has no access. The dashboard shows a status card with the service, storage self-test and recording state, a shadcn `Alert` while the service is failed or restarting, a permanent close-to-tray explanation and the Exit button. User-visible text lives in `apps/desktop/src/strings.ts`; there is no localization framework yet.
+The preload bridge appends three methods after the original three: `getAppState()`, `subscribeAppState(listener)` (one listener per document; main pushes the full state on every change after the document subscribes) and `exitApplication()`. Every handler checks the sender and its main frame; the overlay has no access. The dashboard shows a status card with the service, storage self-test and recording state, a shadcn `Alert` while the service is failed or restarting, a permanent close-to-tray explanation and the Exit button. `getStatus()` answers `null` while the service is not ready instead of failing, so a dashboard opened during a restart or after restart exhaustion shows `Waiting for the telemetry service` and queries again whenever the pushed health enters `ready` (`apps/desktop/src/dashboard-startup.ts`). User-visible text lives in `apps/desktop/src/strings.ts`; there is no localization framework yet.
 
 ## Isolated smoke diagnostics
 
