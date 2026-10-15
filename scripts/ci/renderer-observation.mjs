@@ -51,7 +51,7 @@ export const SYNTHETIC_V0_HIDDEN_ROWS = Object.freeze([
 
 // Self-contained browser callback. Every expected element exists exactly once, is visible with a non-empty box and has
 // the exact text; card rows may lie below the fold, so they need no viewport intersection (decision B6). A value row
-// without an expected reason has no reason element, and no hidden element exists.
+// has no reason or note element unless one is expected, and no hidden element exists.
 export function completeLiveObservation({rows, hidden}) {
   const observation = {};
   const shown = element => {
@@ -63,7 +63,8 @@ export function completeLiveObservation({rows, hidden}) {
     const elements = globalThis.document.querySelectorAll(`[data-testid="${id}"]`);
     if (elements.length !== 1 || !shown(elements[0]) || elements[0].innerText !== text) return false;
     observation[id] = text;
-    if (!/-(reason|note)$/.test(id) && !expected.has(`${id}-reason`) && globalThis.document.querySelectorAll(`[data-testid="${id}-reason"]`).length) return false;
+    if (/-(reason|note)$/.test(id)) continue;
+    for (const extra of [`${id}-reason`, `${id}-note`]) if (!expected.has(extra) && globalThis.document.querySelectorAll(`[data-testid="${extra}"]`).length) return false;
   }
   for (const id of hidden) if (globalThis.document.querySelectorAll(`[data-testid="${id}"]`).length) return false;
   return observation;

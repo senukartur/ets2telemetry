@@ -6,6 +6,7 @@ import {describe, expect, it} from 'vitest';
 import type {LiveTelemetry} from '../../packages/contracts/src';
 import * as v0 from '../../packages/contracts/src/protocol-v0';
 import {LEGACY_ROW_IDS, liveDashboardText, type LiveDashboardText} from '../../apps/desktop/src/live-dashboard-text';
+import {initialLive} from '../../apps/desktop/src/live-state';
 import {FIELD_NOTE_TEXT, LIVE_FIELD_TEXT} from '../../apps/desktop/src/strings';
 import {SYNTHETIC_V0_HIDDEN_ROWS, SYNTHETIC_V0_LIVE_ROWS, SYNTHETIC_V0_VALUE_IDS} from '../../scripts/ci/renderer-observation.mjs';
 
@@ -116,13 +117,20 @@ describe('ET-010b units and notes', () => {
 
 describe('ET-010b non-current, paused and missing input', () => {
   const FIXTURE_VALUES = /R1|cargo\.logs|truck\.volvo|city\.warszawa|1234\.6|600 rpm|Day 8574/;
-  it('shows every row as not current without any update', () => {
-    const text = liveDashboardText(undefined);
+  // Fix round 1: before the first observation the card shows only the fields v0 carries (review finding 1). The 15 v0
+  // fields minus speed and fuel leave 13 rows; without the deadline the Time section keeps game time, and no Position.
+  it.each([
+    ['without any update', undefined],
+    ['while waiting for an ATS source', initialLive('ats')],
+    ['after a service restart without an observation', {...initialLive('synthetic'), status: 'restarting' as const}]
+  ])('shows only the v0 rows, each not current, %s', (_name, telemetry) => {
+    const text = liveDashboardText(telemetry);
     const rows = text.sections.flatMap(section => section.rows);
-    // No normalized state: every section field except speed and fuel (30 ids, minus game mode, event loss, speed, fuel).
-    expect(rows).toHaveLength(26);
-    expect(text.sections.map(section => section.id)).toEqual(['motion', 'fuel', 'distance', 'time', 'job', 'vehicle', 'position']);
+    expect(rows.map(entry => entry.testId)).toEqual(SYNTHETIC_V0_VALUE_IDS);
+    expect(rows).toHaveLength(13);
+    expect(text.sections.map(section => section.id)).toEqual(['motion', 'fuel', 'distance', 'time', 'job', 'vehicle']);
     for (const entry of rows) expect(entry).toMatchObject({value: 'unavailable', reason: 'not current'});
+    for (const id of SYNTHETIC_V0_HIDDEN_ROWS) expect(rendered(text).map(([testId]) => testId)).not.toContain(id);
     expect(text.paused).toBe(false);
   });
   it.each(['waiting', 'stale', 'incompatible', 'disconnected', 'unavailable', 'service-failed', 'restarting'] as const)(

@@ -1,6 +1,6 @@
 import type {LiveTelemetry, UnitProfiles} from '../../../packages/contracts/src';
 import {resolveDisplayUnits} from '../../../packages/telemetry-core/src/display-profile';
-import {buildLiveView, type LiveFieldId, type LiveSectionId} from '../../../packages/telemetry-core/src/live-view';
+import {buildLiveView, carriesField, type LiveFieldId, type LiveSectionId} from '../../../packages/telemetry-core/src/live-view';
 import {normalizeV0State} from '../../../packages/telemetry-core/src/normalize-v0';
 import {initialLive} from './live-state';
 import {FIELD_NOTE_TEXT, LIVE_FIELD_TEXT, LIVE_SECTION_TEXT, STRINGS, VIEW_REASON_TEXT} from './strings';
@@ -39,7 +39,9 @@ export interface LiveDashboardText {paused: boolean; sections: LiveSectionText[]
 /**
  * Builds the card text for one bridge update. The units follow the same rule as the speed and fuel lines: the displayed
  * game's profile, or metric without a game. The bridge carries protocol v0 only; ET-010c adds v1. Rows the protocol does
- * not carry or that do not apply are not rendered, and a section without rows or a missing subject is omitted.
+ * not carry or that do not apply are not rendered, and a section without rows or a missing subject is omitted. Before
+ * the first observation telemetry-core knows no protocol and reports every field as not current; the card still shows
+ * only the fields v0 carries, so the Position section never appears under v0.
  */
 export function liveDashboardText(live: LiveTelemetry | undefined, units: UnitProfiles = DEFAULT_UNIT_PROFILES): LiveDashboardText {
   const telemetry = live ?? initialLive();
@@ -50,7 +52,7 @@ export function liveDashboardText(live: LiveTelemetry | undefined, units: UnitPr
   for (const section of view.sections) {
     const rows: LiveRowText[] = [];
     for (const field of section.fields) {
-      if (field.state === 'hidden' || LEGACY_ROW_IDS.has(field.id)) continue;
+      if (field.state === 'hidden' || LEGACY_ROW_IDS.has(field.id) || (!state && !carriesField('v0', field.id))) continue;
       const reason = (field.state === 'missing' || field.state === 'absent') && field.reason ? VIEW_REASON_TEXT[field.reason] : undefined;
       const note = field.notes?.length ? field.notes.map(id => FIELD_NOTE_TEXT[id]).join('; ') : undefined;
       rows.push({id: field.id, testId: `live-${field.id}`, label: LIVE_FIELD_TEXT[field.id], value: field.text,

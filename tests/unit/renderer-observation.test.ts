@@ -108,6 +108,7 @@ describe('ET-010b complete live card observation', () => {
     ['a hidden element', (elements: Record<string, FakeElement[]>) => {elements['live-cargo'] = one('cargo.logs', {visibility: 'hidden'});}],
     ['a zero box', (elements: Record<string, FakeElement[]>) => {elements['live-engine-rpm'] = one('600 rpm', {box: {width: 0, height: 20, top: 10}});}],
     ['a reason on a value row', (elements: Record<string, FakeElement[]>) => {elements['live-gear-reason'] = one('not current');}],
+    ['a note on a row without an expected note', (elements: Record<string, FakeElement[]>) => {elements['live-odometer-note'] = one('game time');}],
     ...SYNTHETIC_V0_HIDDEN_ROWS.map((id): [string, Change] => [`the hidden element ${id}`, (elements: Record<string, FakeElement[]>) => {elements[id] = one('x');}])
   ])('rejects %s', (_name, change) => {
     const elements = completeElements(); change(elements); stubDocument(elements);
