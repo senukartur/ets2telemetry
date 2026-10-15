@@ -10,7 +10,7 @@ import {
 } from './format';
 import {missing, valueOf, type GameModeView, type LiveTrailer, type LiveTruck, type MissingReason, type NamedEntity, type NormalizedLiveState, type Reading} from './readings';
 
-export type ViewReason = MissingReason | 'not-current' | 'zero-consumption';
+export type ViewReason = MissingReason | 'not-current' | 'zero-consumption' | 'no-trailer';
 /** Context a label must carry. `sdk-mean`: the SDK's own average, never a trip average. */
 export type FieldNote =
   'sdk-mean' | 'ats-mostly-static' | 'game-estimate' | 'job-offer-excludes-ferry' | 'game-time' | 'game-world-coordinates' | 'cargo-market-only';
@@ -22,8 +22,9 @@ export type LiveFieldId =
 /**
  * `value`: a current formatted value. `missing`: the row shows "unavailable" with a reason. `hidden`: the row is not
  * shown, because the protocol in use does not carry the field or the field does not apply (for example no job).
+ * `absent`: the current source reports that the subject is not there (no trailer attached); the row shows `none`.
  */
-export interface LiveField {id: LiveFieldId; state: 'value' | 'missing' | 'hidden'; text: string; reason?: ViewReason; notes?: readonly FieldNote[]}
+export interface LiveField {id: LiveFieldId; state: 'value' | 'missing' | 'hidden' | 'absent'; text: string; reason?: ViewReason; notes?: readonly FieldNote[]}
 export type LiveSectionId = 'motion' | 'fuel' | 'distance' | 'time' | 'job' | 'vehicle' | 'position';
 /** `missing` is set when the section's subject is absent while current, such as no job reported. */
 export interface LiveSection {id: LiveSectionId; fields: LiveField[]; missing?: MissingReason}
@@ -46,6 +47,19 @@ export interface LiveConnectionView {
   eventLoss: LiveField;
 }
 export interface LiveDashboardView {connection: LiveConnectionView; sections: LiveSection[]}
+
+/**
+ * Fields that protocol v0 transports. Carriage is a static property of the protocol, never inferred from nested
+ * readings, so a v0 row such as the truck plate stays hidden even when its parent job or truck reading is missing.
+ * Protocol v1 carries every field.
+ */
+export const V0_CARRIED_FIELDS: ReadonlySet<LiveFieldId> = new Set<LiveFieldId>([
+  'speed', 'gear', 'engine-rpm', 'fuel', 'fuel-capacity', 'fuel-level', 'sdk-average-consumption', 'estimated-range', 'odometer', 'game-time',
+  'cargo', 'destination-city', 'planned-distance', 'expected-income', 'truck'
+]);
+export function carriesField(protocol: NormalizedLiveState['protocol'], id: LiveFieldId): boolean {
+  return protocol === 'v1' || V0_CARRIED_FIELDS.has(id);
+}
 
 /** Current means fresh, connected or paused, and backed by an observation. Stale values are never shown as current. */
 export function isCurrent(live: LiveTelemetry): boolean {
@@ -84,13 +98,26 @@ export function truckText(truck: LiveTruck): Reading<string> {
 /** Trailer name, else body type, else id: job trailers usually arrive without a name (concept.md, October 13, 2026). */
 export const trailerText = (trailer: LiveTrailer): Reading<string> => firstText(trailer.model.name, trailer.bodyType, trailer.model.id);
 
-/** Occupied trailer slots in slot order, joined by ", "; empty slots are skipped. */
-function trailersText(trailers: Reading<Reading<LiveTrailer>[]>): Reading<string> {
+/**
+ * Trailer slots in slot order, joined by ", ". An occupied slot shows its trailer text; an `invalid` slot stays visible
+ * as `(invalid)`; an empty (`not-observed`) slot is skipped. With no occupied or invalid slot the result is `absent`
+ * (no trailer attached), unless a slot is `not-supported`. Only invalid slots make the reading `invalid`.
+ */
+function trailersReading(trailers: Reading<Reading<LiveTrailer>[]>): Reading<string> | 'absent' {
   if (trailers.state === 'missing') return trailers;
-  const names = trailers.value.flatMap(slot => slot.state === 'value' ? [trailerText(slot.value)] : []);
-  if (!names.length) return missing('not-observed');
-  if (names.every(name => name.state === 'missing')) return names[0];
-  return valueOf(names.map(name => name.state === 'value' ? text(name.value) : 'unavailable').join(', '));
+  const parts: string[] = [];
+  let invalid = 0;
+  for (const slot of trailers.value) {
+    if (slot.state === 'value') {
+      const name = trailerText(slot.value);
+      parts.push(name.state === 'value' ? text(name.value) : 'unavailable');
+    } else if (slot.reason === 'invalid') {
+      parts.push('(invalid)');
+      invalid++;
+    }
+  }
+  if (!parts.length) return trailers.value.some(slot => slot.state === 'missing' && slot.reason === 'not-supported') ? missing('not-supported') : 'absent';
+  return invalid === parts.length ? missing('invalid') : valueOf(parts.join(', '));
 }
 
 function gameModeText(mode: GameModeView): string {
@@ -122,6 +149,7 @@ export function buildLiveView(live: LiveTelemetry, state: NormalizedLiveState | 
   const cargoMarket = market?.state === 'value' && market.value === 'cargo_market';
 
   const truck = s.truck;
+  const trailers = trailersReading(s.trailers);
   const averageNotes: FieldNote[] = game === 'ats' ? ['sdk-mean', 'ats-mostly-static'] : ['sdk-mean'];
   const placement = s.worldPlacement;
   const sections: LiveSection[] = [
@@ -167,7 +195,9 @@ export function buildLiveView(live: LiveTelemetry, state: NormalizedLiveState | 
     {id: 'vehicle', fields: [
       f('truck', truck.state === 'value' ? truckText(truck.value) : truck, text),
       f('truck-plate', truck.state === 'value' ? truck.value.licensePlate : truck, text),
-      f('trailers', trailersText(s.trailers), value => value)
+      trailers === 'absent'
+        ? current ? {id: 'trailers', state: 'absent', text: 'none', reason: 'no-trailer'} : f('trailers', missing<string>('not-observed'), value => value)
+        : f('trailers', trailers, value => value)
     ]},
     {id: 'position', fields: [
       f('position', placement, value => formatPosition(value.position), ['game-world-coordinates']),
@@ -175,15 +205,17 @@ export function buildLiveView(live: LiveTelemetry, state: NormalizedLiveState | 
     ]}
   ];
 
+  // Rows the protocol in use does not transport are hidden by protocol, whatever their parent readings say.
+  const carried = (built: LiveField): LiveField => state && !carriesField(state.protocol, built.id) ? hidden(built.id, 'not-carried', built.notes) : built;
   return {
     connection: {
       status: live.status, current, paused: current && (live.status === 'paused' || s.simulation === 'paused'),
       simulation: state?.simulation, origin, flagged: origin === 'synthetic' || origin === 'replay', game, profile: units.profile,
       protocol: state?.protocol,
-      gameMode: f('game-mode', s.gameMode, gameModeText),
-      eventLoss: f('event-loss', s.eventLoss, counts => Object.values(counts).reduce((sum, count) => sum + count, 0n).toString())
+      gameMode: carried(f('game-mode', s.gameMode, gameModeText)),
+      eventLoss: carried(f('event-loss', s.eventLoss, counts => Object.values(counts).reduce((sum, count) => sum + count, 0n).toString()))
     },
-    sections
+    sections: sections.map(section => ({...section, fields: section.fields.map(carried)}))
   };
 }
 

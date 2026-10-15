@@ -59,7 +59,7 @@ Exact constants: mile 1,609.344 m; US gallon 3.785411784 L; pound 0.45359237 kg;
 | Expected income | money u64 | job `income` | v0 `{rawValue, currency}`, v1 money | Exact raw digits, no grouping or symbol; `12345 EUR (SDK-documented)` or `12345 (currency unknown)` |
 | Revenue, penalty | money s64 | `job.delivered`, `job.cancelled` | v1 events | Normalized only; a zero revenue stays `0` |
 | Truck | text | truck config | v0 `truckId`; v1 brand, name, id, plate | Brand and model name, else model name, else model id; plate separately |
-| Trailers | text | `trailer.N` config | v1, 10 slots | Per occupied slot: name, else body type, else id; joined by `, ` |
+| Trailers | text | `trailer.N` config | v1, 10 slots | Per occupied slot: name, else body type, else id; an `invalid` slot shows `(invalid)`; joined by `, `. No occupied or invalid slot while current is the `absent` state `none` ("no trailer attached"); only invalid slots make the row `invalid` |
 | World position | game coordinates | `truck.world.placement` | v1 | `x …, y …, z …` 1 dp; game-world coordinates, not GPS (`game-world-coordinates`) |
 | Bearing | degrees | placement heading | v1 | ((1 − heading) mod 1) × 360°, integer; 0° north, 90° east. The SDK heading is counterclockwise from north (`scssdk_value.h`) |
 | Source | — | — | `LiveTelemetry`, v1 status | Game, origin (synthetic and replay flagged), status, current or paused, protocol; v1 game mode with method and confidence, and the total event loss |
@@ -82,10 +82,11 @@ Money and distance values carry a kind. Money: `expected-income`, `revenue`, `pe
 | `paused` status or paused simulation while current | Values shown; `connection.paused` drives a "game paused" banner |
 | A road stop (unchanged fresh state) | Still current; speed `0.0 km/h` |
 | `waiting`, `stale`, `incompatible`, `disconnected`, `unavailable`, `service-failed`, `restarting`, or not fresh | Every carried row `unavailable` with reason `not-current`; no dimmed last-known values. Without any normalized state, every row reads this way |
-| Field not carried by the protocol in use | Row hidden |
+| Field not carried by the protocol in use | Row hidden. Carriage is a static table per protocol (`V0_CARRIED_FIELDS`; v1 carries every field), never inferred from a missing parent job or truck reading |
 | No job while current | Job rows hidden; the job section carries the job's missing reason ("no job reported") |
+| No trailer attached while current (v1: every slot empty) | Trailers row in the `absent` state with text `none` and reason `no-trailer`. Per OD-6 an empty slot arrives as `not-observed`, so a current checkpoint with every slot empty counts as no trailer |
 
-The application maps reasons to text: `not-observed` "not yet observed", `not-supported` "not provided by the game", `invalid` "invalid reading", `zero-consumption` "no consumption recorded". A row reads `<Label>: <text>` or `<Label>: unavailable`, so the existing `Speed: unavailable` text is unchanged. Staleness comes from the existing ingestion and main-process freshness; telemetry-core adds no timer.
+The application maps reasons to text: `not-observed` "not yet observed", `not-supported` "not provided by the game", `invalid` "invalid reading", `zero-consumption` "no consumption recorded", `no-trailer` "no trailer attached". A row reads `<Label>: <text>` or `<Label>: unavailable`, so the existing `Speed: unavailable` text is unchanged. Staleness comes from the existing ingestion and main-process freshness; telemetry-core adds no timer.
 
 Hydrated checkpoint configuration is current state only. The view shows the job and never derives a delivery, cancellation or other gameplay effect from it.
 

@@ -210,3 +210,38 @@ describe('REG-009 v1 dashboard values', () => {
     expect(fields(viewOf(live('snapshot'), normalizeV1State(data.state)))['game-mode']).toMatchObject({state: 'missing', reason: 'not-observed'});
   });
 });
+
+describe('fix round 1: carriage by protocol and trailer presence', () => {
+  const V0_HIDDEN = ['route-remaining', 'deadline', 'source-city', 'source-company', 'destination-company', 'cargo-mass', 'market', 'special-job',
+    'cargo-loaded', 'truck-plate', 'trailers', 'position', 'bearing', 'game-mode', 'event-loss'];
+  it('keeps v0-uncarried rows hidden when the v0 truck and job readings are missing (unavailable fixture)', () => {
+    const all = fields(v0View(live('unavailable')));
+    expect(all.truck).toEqual({id: 'truck', state: 'missing', text: 'unavailable', reason: 'not-observed'});
+    for (const id of V0_HIDDEN) expect(all[id]).toMatchObject({state: 'hidden', reason: 'not-carried'});
+  });
+  it('keeps v0-uncarried rows hidden while stale without a job, and shows carried job rows as not current', () => {
+    const telemetry = live('snapshot', {status: 'stale', fresh: false});
+    telemetry.observation!.state.configuration.job = {available: false, reason: 'not-observed'};
+    const all = fields(v0View(telemetry));
+    for (const id of V0_HIDDEN) expect(all[id]).toMatchObject({state: 'hidden', reason: 'not-carried'});
+    for (const id of ['cargo', 'destination-city', 'planned-distance', 'expected-income']) expect(all[id]).toMatchObject({state: 'missing', reason: 'not-current'});
+  });
+  const data = v1Data('snapshot');
+  const state = normalizeV1State(data.state, data.status);
+  const notObserved = {state: 'missing' as const, reason: 'not-observed' as const};
+  const invalid = {state: 'missing' as const, reason: 'invalid' as const};
+  if (state.trailers.state !== 'value' || state.trailers.value[0].state !== 'value') throw new Error('trailer expected');
+  const dryvan = state.trailers.value[0];
+  it('reports a bobtail truck as no trailer attached, distinct from not yet observed', () => {
+    const bobtail = {...state, trailers: value(Array.from({length: 10}, () => notObserved))};
+    expect(fields(viewOf(live('snapshot'), bobtail)).trailers).toEqual({id: 'trailers', state: 'absent', text: 'none', reason: 'no-trailer'});
+    expect(fields(viewOf(live('snapshot'), {...state, trailers: value([])})).trailers.state).toBe('absent');
+    expect(fields(viewOf(live('snapshot', {status: 'stale', fresh: false}), bobtail)).trailers).toMatchObject({state: 'missing', reason: 'not-current'});
+  });
+  it('keeps invalid trailer slots visible as invalid', () => {
+    const mixed = {...state, trailers: value([dryvan, invalid, notObserved])};
+    expect(fields(viewOf(live('snapshot'), mixed)).trailers).toEqual({id: 'trailers', state: 'value', text: 'dryvan, (invalid)'});
+    const allInvalid = {...state, trailers: value([invalid, notObserved, invalid])};
+    expect(fields(viewOf(live('snapshot'), allInvalid)).trailers).toEqual({id: 'trailers', state: 'missing', text: 'unavailable', reason: 'invalid'});
+  });
+});
