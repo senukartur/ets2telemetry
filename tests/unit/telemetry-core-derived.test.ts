@@ -18,12 +18,13 @@ function snapshotOf<M extends {kind: string}>(message: M): Extract<M, {kind: 'sn
 const v0Snapshot = snapshotOf(v0.decodePayload(new Uint8Array(readFileSync('tests/fixtures/protocol-v0/snapshot.json'))));
 const v1Snapshot = snapshotOf(v1.decodePayload(new Uint8Array(readFileSync('tests/fixtures/protocol-v1/snapshot.json')), 'server'));
 
-const SECOND = 1_000_000_000n;
+const MS = 1_000_000n;
+/** A sample at a whole number of source milliseconds after a fixed origin, `seconds` written in seconds. */
 function sample(seconds: number, patch: Partial<NormalizedLiveState> = {}, from: 'v0' | 'v1' = 'v0'): StepSample {
   const base = from === 'v0' ? normalizeV0State(v0Snapshot.data.state) : normalizeV1State(v1Snapshot.data.state, v1Snapshot.data.status);
   const message = from === 'v0' ? v0Snapshot : v1Snapshot;
   return {
-    source: {...message.source}, capture: {clockId: message.capture.clockId, monotonicNs: (1_000n * SECOND + BigInt(seconds) * SECOND).toString()},
+    source: {...message.source}, capture: {clockId: message.capture.clockId, monotonicNs: (1_000_000n * MS + BigInt(Math.round(seconds * 1000)) * MS).toString()},
     state: {...base, ...patch}
   };
 }
@@ -95,10 +96,31 @@ describe('REG-008 fuel steps', () => {
   it('reports a refuel of 200 L as refuelled, never as negative consumption', () => {
     expect(fuelStep(sample(0, fuel(100)), sample(1, fuel(300)))).toEqual({kind: 'refuelled', addedLiters: 200});
   });
-  it('treats changes within 0.01 L as unchanged noise', () => {
-    expect(fuelStep(sample(0, fuel(410.5)), sample(1, fuel(410.509)))).toEqual({kind: 'unchanged'});
-    expect(fuelStep(sample(0, fuel(410.5)), sample(1, fuel(410.491)))).toEqual({kind: 'unchanged'});
-    expect(fuelStep(sample(0, fuel(410.5)), sample(1, fuel(410.5)))).toEqual({kind: 'unchanged'});
+  // Requirement changed in fix round 1: small decreases are real consumption, not noise. About 30–35 L/100 km at
+  // 80–90 km/h burns roughly 0.0075 L per second, well inside the 0.01 L refuel band.
+  it('reports a 1 Hz cruise step of 0.0075 L as consumed', () => {
+    const step = fuelStep(sample(0, fuel(410.5)), sample(1, fuel(410.4925)));
+    expect(step.kind).toBe('consumed');
+    expect(step.kind === 'consumed' && step.liters).toBeCloseTo(0.0075, 9);
+  });
+  it('keeps every 20 Hz step as consumption so the steps add up to the observed drop', () => {
+    let total = 0;
+    for (let i = 0; i < 20; i++) {
+      const step = fuelStep(sample(i * 0.05, fuel(410.5 - i * 0.000375)), sample((i + 1) * 0.05, fuel(410.5 - (i + 1) * 0.000375)));
+      if (step.kind !== 'consumed') throw new Error(`step ${i} was ${step.kind}`);
+      expect(step.liters).toBeGreaterThan(0);
+      total += step.liters;
+    }
+    expect(total).toBeCloseTo(0.0075, 9);
+  });
+  it('treats an increase of at most 0.01 L as unchanged with its amount, and a larger one as a refuel', () => {
+    const small = fuelStep(sample(0, fuel(410.5)), sample(1, fuel(410.509)));
+    expect(small.kind).toBe('unchanged');
+    expect(small.kind === 'unchanged' && small.increaseLiters).toBeCloseTo(0.009, 9);
+    expect(fuelStep(sample(0, fuel(410.5)), sample(1, fuel(410.5)))).toEqual({kind: 'unchanged', increaseLiters: 0});
+    const refuel = fuelStep(sample(0, fuel(410.5)), sample(1, fuel(410.511)));
+    expect(refuel.kind).toBe('refuelled');
+    expect(refuel.kind === 'refuelled' && refuel.addedLiters).toBeCloseTo(0.011, 9);
   });
   it('is unavailable with missing fuel and discontinuous across the same boundaries', () => {
     expect(fuelStep(sample(0), sample(1))).toEqual({kind: 'unavailable'});
@@ -112,7 +134,9 @@ describe('derived live values', () => {
   it('computes the fuel level only from a valid fuel and a positive capacity', () => {
     expect(fuelLevel(value(410.5), value(1000))).toEqual(value(0.4105));
     expect(fuelLevel(value(0), value(1000))).toEqual(value(0));
-    expect(fuelLevel(value(410.5), value(0))).toEqual(missing('not-supported'));
+    // Requirement changed in fix round 1: a provided zero capacity is an invalid denominator, not an unsupported field.
+    expect(fuelLevel(value(410.5), value(0))).toEqual(missing('invalid'));
+    expect(fuelLevel(value(0), value(0))).toEqual(missing('invalid'));
     expect(fuelLevel(value(410.5), missing('not-observed'))).toEqual(missing('not-observed'));
     expect(fuelLevel(missing('invalid'), value(1000))).toEqual(missing('invalid'));
     expect(fuelLevel(value(1000.01), value(1000))).toEqual(missing('invalid'));

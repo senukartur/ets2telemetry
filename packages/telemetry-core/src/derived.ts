@@ -7,20 +7,21 @@ export const FUEL_CAPACITY_TOLERANCE = 1e-6;
 /**
  * Provisional step thresholds, to be checked against real sessions (docs/validation/et-010.md). An odometer step
  * longer than MAX_PLAUSIBLE_SPEED_MPS × elapsed source seconds + ODOMETER_JUMP_MARGIN_METERS is a jump, such as a
- * teleport or a ferry/train transfer. A fuel change within FUEL_NOISE_LITERS is unchanged.
+ * teleport or a ferry/train transfer. A fuel increase of at most FUEL_NOISE_LITERS is not a refuel; decreases are
+ * always consumption, because ordinary 1 Hz and 20 Hz steps are far smaller than that band.
  */
 export const MAX_PLAUSIBLE_SPEED_MPS = 100;
 export const ODOMETER_JUMP_MARGIN_METERS = 50;
 export const FUEL_NOISE_LITERS = 0.01;
 
 /**
- * Fuel level as a fraction of capacity. Missing fuel or capacity keeps its reason. A zero capacity has no level
- * (`not-supported`); fuel above capacity is `invalid`.
+ * Fuel level as a fraction of capacity. Missing fuel or capacity keeps its reason. A provided capacity of zero cannot
+ * be a denominator and makes the level `invalid`; fuel above capacity is `invalid` too.
  */
 export function fuelLevel(fuel: Reading<number>, capacity: Reading<number>): Reading<number> {
   if (fuel.state === 'missing') return fuel;
   if (capacity.state === 'missing') return capacity;
-  if (capacity.value <= 0) return missing('not-supported');
+  if (capacity.value <= 0) return missing('invalid');
   if (fuel.value > capacity.value * (1 + FUEL_CAPACITY_TOLERANCE)) return missing('invalid');
   return valueOf(fuel.value / capacity.value);
 }
@@ -49,7 +50,7 @@ export type OdometerStep =
   {kind: 'continuous'; meters: number} | {kind: 'unavailable'} |
   {kind: 'discontinuity'; cause: StepDiscontinuity | 'odometer-regressed' | 'odometer-jump'};
 export type FuelStep =
-  {kind: 'consumed'; liters: number} | {kind: 'unchanged'} | {kind: 'refuelled'; addedLiters: number} | {kind: 'unavailable'} |
+  {kind: 'consumed'; liters: number} | {kind: 'unchanged'; increaseLiters: number} | {kind: 'refuelled'; addedLiters: number} | {kind: 'unavailable'} |
   {kind: 'discontinuity'; cause: StepDiscontinuity};
 
 /** Truck identity: v0 truck id and its availability; v1 brand id, model id and plate. */
@@ -85,13 +86,18 @@ export function odometerStep(prev: StepSample, next: StepSample): OdometerStep {
   if (meters > MAX_PLAUSIBLE_SPEED_MPS * elapsed + ODOMETER_JUMP_MARGIN_METERS) return {kind: 'discontinuity', cause: 'odometer-jump'};
   return {kind: 'continuous', meters};
 }
-/** Classifies one fuel step. Consumption and refuelling amounts are never negative. */
+/**
+ * Classifies one fuel step. Every decrease is `consumed` with its exact amount, however small, so summing the
+ * consumed amounts of consecutive steps equals the observed fuel drop. An increase above FUEL_NOISE_LITERS is
+ * `refuelled`. A smaller increase is `unchanged`, not a refuel; it reports its exact `increaseLiters` so a caller can
+ * net it against consumption. No amount is ever negative.
+ */
 export function fuelStep(prev: StepSample, next: StepSample): FuelStep {
   const cause = boundary(prev, next);
   if (cause) return {kind: 'discontinuity', cause};
   const a = prev.state.fuel, b = next.state.fuel;
   if (a.state === 'missing' || b.state === 'missing' || elapsedSeconds(prev, next) === undefined) return {kind: 'unavailable'};
   const delta = b.value - a.value;
-  if (Math.abs(delta) <= FUEL_NOISE_LITERS) return {kind: 'unchanged'};
-  return delta < 0 ? {kind: 'consumed', liters: -delta} : {kind: 'refuelled', addedLiters: delta};
+  if (delta < 0) return {kind: 'consumed', liters: -delta};
+  return delta > FUEL_NOISE_LITERS ? {kind: 'refuelled', addedLiters: delta} : {kind: 'unchanged', increaseLiters: delta};
 }

@@ -42,7 +42,7 @@ Exact constants: mile 1,609.344 m; US gallon 3.785411784 L; pound 0.45359237 kg;
 | Engine RPM | rpm | `truck.engine.rpm` | v0, v1 | integer, `600 rpm` |
 | Fuel | L | `truck.fuel.amount` | v0, v1 | L or US gal, 1 dp |
 | Fuel capacity | L | truck config `fuel.capacity` | v0, v1 | L or US gal, 0 dp |
-| Fuel level (derived) | fraction | fuel / capacity | — | integer %; missing with the capacity's reason, `not-supported` for capacity 0, `invalid` above capacity × (1 + 10⁻⁶) |
+| Fuel level (derived) | fraction | fuel / capacity | — | integer %; missing with the fuel's or capacity's reason; `invalid` for a provided capacity of 0 (no valid denominator) and above capacity × (1 + 10⁻⁶) |
 | SDK average consumption | L/100 km | `truck.fuel.consumption.average` L/km × 100 | v0, v1 | L/100 km 1 dp; US mpg 1 dp for values above zero. Zero is `0.0 L/100 km` in metric and the reason `zero-consumption` in US mpg. Always the SDK mean (`sdk-mean` note), never a trip average. In ATS it also carries the `ats-mostly-static` note: the value is expected to change rarely there, which is unverified until the real-source checks |
 | Estimated range | m | `truck.fuel.range` km × 1,000 | v0, v1 | km or mi, 0 dp; the game's estimate (`game-estimate`), never computed here |
 | Odometer | m | `truck.odometer` km × 1,000 | v0, v1 | km or mi, 1 dp |
@@ -102,10 +102,13 @@ Hydrated checkpoint configuration is current state only. The view shows the job 
 | `odometer-regressed` | The odometer decreases |
 | `odometer-jump` | The step exceeds 100 m/s × elapsed source seconds + 50 m (teleport, ferry, train) |
 | `continuous` | Otherwise, with metres ≥ 0; a road stop is 0 m |
-| Fuel `unchanged` | \|Δ\| ≤ 0.01 L |
-| Fuel `consumed` / `refuelled` | A decrease or an increase, always as a positive amount |
+| Fuel `consumed` | Any decrease, with its exact amount in litres (> 0) |
+| Fuel `refuelled` | An increase above 0.01 L, with its exact amount |
+| Fuel `unchanged` | No change or an increase of at most 0.01 L, with that exact `increaseLiters` (≥ 0) |
 
 Checks run in that order, so a save load that also regresses the odometer reports `game-clock-rotated`. The thresholds are named constants (`MAX_PLAUSIBLE_SPEED_MPS`, `ODOMETER_JUMP_MARGIN_METERS`, `FUEL_NOISE_LITERS`) and are provisional until real sessions confirm them. ET-014 decides what each result means for a trip.
+
+Caller contract for fuel: the 0.01 L band applies to refuel detection only. Ordinary steps are far smaller than the band (about 0.0075 L per second at 30–35 L/100 km and 80–90 km/h, and a twentieth of that at 20 Hz), so every decrease is reported as consumption. Summing `consumed` over consecutive steps without a discontinuity or `unavailable` equals the observed fuel drop; a caller that wants a net figure subtracts the `increaseLiters` of `unchanged` steps. A `refuelled` step is never consumption, and a discontinuity or `unavailable` step contributes nothing.
 
 ## Field set and deferrals
 
