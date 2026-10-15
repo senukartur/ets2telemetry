@@ -6,7 +6,7 @@ import {existsSync} from 'node:fs';
 import {performance} from 'node:perf_hooks';
 import {_electron as electron} from '@playwright/test';
 import {startLiveSmokeSource} from './live-smoke-source.mjs';
-import {waitForCurrentTelemetry} from './renderer-observation.mjs';
+import {SYNTHETIC_V0_HIDDEN_ROWS, SYNTHETIC_V0_LIVE_ROWS, SYNTHETIC_V0_VALUE_IDS, waitForCompleteLive, waitForCurrentTelemetry, waitForNotCurrentLive} from './renderer-observation.mjs';
 import {rendererPages, runOverlaySmoke, windowSecurity, verifyRendererStyles} from './overlay-observation.mjs';
 import {runLifecycleSmoke, seedLifecycleSettings, verifyLifecycleRestart} from './lifecycle-observation.mjs';
 // These read-only globals are used only inside serialized Playwright browser callbacks.
@@ -120,6 +120,16 @@ try {
     };
     await current('initial');
     result.telemetry = {origin: 'synthetic', speedKmh: 90, fuelL: 73, recording: false};
+    // ET-010b: the live card shows the complete v0 field set of the same observation.
+    result.telemetry.liveFields = await waitForCompleteLive(window, SYNTHETIC_V0_LIVE_ROWS, SYNTHETIC_V0_HIDDEN_ROWS);
+    // Hold the source on the same connection until main's freshness expiry: every card value must become not current,
+    // then return after resume. The later single-connection assertion proves the hold did not reconnect.
+    telemetrySource.hold();
+    try {result.telemetry.liveStale = await waitForNotCurrentLive(window, SYNTHETIC_V0_VALUE_IDS, '^stale:', SYNTHETIC_V0_HIDDEN_ROWS);}
+    finally {telemetrySource.resume();}
+    await waitForCurrentTelemetry(window);
+    await waitForCompleteLive(window, SYNTHETIC_V0_LIVE_ROWS, SYNTHETIC_V0_HIDDEN_ROWS);
+    result.telemetry.liveStaleHidden = true;
     // Stall only this owned renderer beyond the five-second consumption-credit deadline.
     // Change the source while it is stalled: a stranded cached reading cannot pass recovery.
     let changedDuringStall = false;
@@ -178,6 +188,8 @@ try {
     await window.getByText('Speed: unavailable', {exact: true}).waitFor({state: 'visible', timeout: 5000});
     assert.match(await window.getByTestId('telemetry-status').innerText(), /^(disconnected|waiting):/);
     result.telemetry.staleAfterDisconnect = true;
+    await waitForNotCurrentLive(window, ['live-gear', 'live-cargo', 'live-odometer'], '^(disconnected|waiting):');
+    result.telemetry.liveDisconnectedHidden = true;
   }
   if (config.scenario === 'lifecycle') {
     result.lifecycle = {};
