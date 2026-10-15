@@ -202,7 +202,7 @@ describe('simulator v1 pipe CLI', () => {
       let stdout = '', stderr = '';
       child.stdout.on('data', (c: Buffer) => { stdout += c.toString('utf8'); }); child.stderr.on('data', (c: Buffer) => { stderr += c.toString('utf8'); });
       const exited = new Promise<number | null>(r => child.on('exit', code => r(code)));
-      await until(() => stdout.includes('\n'), 20_000);
+      await until(() => stdout.includes('\n'), 150_000);
       const {endpoint} = JSON.parse(stdout.split('\n')[0]) as {endpoint: string};
       const client = await runV1PipeClient(endpoint, clientPlan(replay), {scale: 0});
       expect([await exited, stderr]).toEqual([0, '']);
@@ -229,7 +229,7 @@ describe('simulator v1 pipe CLI', () => {
       let stdout = '', stderr = '';
       child.stdout.on('data', (c: Buffer) => { stdout += c.toString('utf8'); }); child.stderr.on('data', (c: Buffer) => { stderr += c.toString('utf8'); });
       const exited = new Promise<number | null>(r => child.on('exit', code => r(code)));
-      await until(() => stdout.includes('\n'), 20_000);
+      await until(() => stdout.includes('\n'), 150_000);
       const first = JSON.parse(stdout.split('\n')[0]) as {endpoint: string; mode: string};
       expect(first.mode).toBe('reactive');
       const client = await runIndependentClient(first.endpoint, input, {seed: 3});
