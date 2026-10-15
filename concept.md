@@ -574,6 +574,19 @@ ET-010 changes no v0 wire, preload/IPC, storage, trip logic, recording or later-
 | N15 | Per-quantity unit overrides as a seam; no settings migration |
 | N16 | A boundary test instead of a lint-config edit keeps telemetry-core free of Node.js, Electron and React |
 
+ET-010b implementation update on October 15, 2026: the main window shows the complete protocol v0 live field set in a **Live telemetry** card built from telemetry-core's view model, with labels, reasons and notes from the application strings ([dashboard rules](docs/live-telemetry-fields.md#dashboard)). The coordinator adopted the following decisions under the owner's delegation; the owner did not review them individually.
+
+| # | Decision |
+| --- | --- |
+| B1 | Speed and fuel stay in the existing `Speed: …` and `Fuel: …` lines and are not repeated in the card |
+| B2 | New rows are label and value pairs (`<dt>`/`<dd>`); the N6 `<Label>: <text>` wording keeps applying to the existing speed and fuel lines |
+| B3 | A reason is a sibling element `live-<id>-reason` and a note `live-<id>-note` |
+| B4 | No React component tests (no jsdom or Testing Library); the card is a thin map over a tested pure builder, checked end to end by the runtime smokes |
+| B5 | The card uses the same game and profile rule as the speed and fuel lines; under "Select a game" the units are metric while the ATS note may follow the source game |
+| B6 | Smoke checks of card rows below the fold require one visible element with a non-empty box but no viewport intersection or scrolling; the existing speed and fuel checks keep their viewport requirement |
+
+ET-010b changes no telemetry-core, contracts, wire, fixtures, preload/IPC, overlay, storage or receipt code, and makes no game, TruckersMP, display or performance claim; see [ET-010 validation](docs/validation/et-010.md#et-010b-dashboard).
+
 ## ET-006b authorization — October 15, 2026
 
 On October 15, 2026 the owner wrote (translated from Russian): "Overall, keep doing other tasks until you hit tests in the real game. Make optimal decisions. I want you to close as many tasks as possible without my involvement. If there are flaky tests, delegate their fixes to subagents." Under this standing delegation the coordinator started ET-006b (protocol v1 ingestion in the telemetry service) and adopted the architect's recommendations E1–E14 below. They are coordinator decisions under the owner's delegation and were not individually reviewed by the owner; the owner may revise them. For ET-006b only, this supersedes the earlier statements that ET-006b remains unauthorized; earlier dated text is unchanged. ET-004b and ET-005b are merged but not owner-accepted, and their real-game checks remain pending. ET-014, ET-015a, ET-015b, ET-015c, ET-010c and later phases are not authorized by this section. No game, TruckersMP or performance claim follows from synthetic or local tests. The ingestion is described in [the telemetry service v1 ingestion](docs/telemetry-service-v1.md); checks are in [ET-006b validation](docs/validation/et-006b.md).

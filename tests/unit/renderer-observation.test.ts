@@ -1,7 +1,10 @@
 import type {Page} from '@playwright/test';
 import {runInNewContext} from 'node:vm';
 import {afterEach, describe, expect, it, vi} from 'vitest';
-import {currentTelemetryObservation, waitForCurrentTelemetry, type RendererObservation} from '../../scripts/ci/renderer-observation.mjs';
+import {
+  completeLiveObservation, currentTelemetryObservation, notCurrentLiveObservation, SYNTHETIC_V0_HIDDEN_ROWS, SYNTHETIC_V0_LIVE_ROWS, SYNTHETIC_V0_VALUE_IDS,
+  waitForCompleteLive, waitForCurrentTelemetry, waitForNotCurrentLive, type RendererObservation
+} from '../../scripts/ci/renderer-observation.mjs';
 
 const current = {status: 'connected: Validated current observation', speed: 'Speed: 90.0 km/h', fuel: 'Fuel: 73.0 L'};
 const stale = {status: 'stale: No recent current observation', speed: 'Speed: unavailable', fuel: 'Fuel: unavailable'};
@@ -67,5 +70,85 @@ describe('coherent renderer acceptance', () => {
       return visibility === 'missing' ? [] : visibility === 'duplicate' ? [element, element] : [element];
     }});
     expect(currentTelemetryObservation()).toBe(false);
+  });
+});
+
+// ET-010b live card predicates. The fake document returns elements by exact data-testid.
+interface FakeElement {innerText: string; visibility?: string; box?: {width: number; height: number; top: number}}
+type Change = (elements: Record<string, FakeElement[]>) => void;
+function fakeGlobals(elements: Record<string, FakeElement[]>) {
+  return {innerWidth: 784, innerHeight: 435, getComputedStyle: (element: {visibility: string}) => ({visibility: element.visibility}), document: {querySelectorAll: (selector: string) => {
+    const id = /^\[data-testid="([^"]+)"\]$/.exec(selector)?.[1];
+    if (!id) throw new Error(`unexpected selector ${selector}`);
+    return (elements[id] ?? []).map(element => {
+      const box = element.box ?? {width: 100, height: 20, top: 10};
+      return {innerText: element.innerText, visibility: element.visibility ?? 'visible',
+        getBoundingClientRect: () => ({...box, left: 10, right: 10 + box.width, bottom: box.top + box.height})};
+    });
+  }}};
+}
+function stubDocument(elements: Record<string, FakeElement[]>) {
+  for (const [name, value] of Object.entries(fakeGlobals(elements))) vi.stubGlobal(name, value);
+}
+const one = (innerText: string, extra: Partial<FakeElement> = {}) => [{innerText, ...extra}];
+// Every live row offscreen (top 900, below the 435 px viewport): rows need no viewport intersection (B6).
+const completeElements = (): Record<string, FakeElement[]> =>
+  Object.fromEntries(SYNTHETIC_V0_LIVE_ROWS.map(([id, text]) => [id, one(text, {box: {width: 100, height: 20, top: 900}})]));
+const expected = {rows: SYNTHETIC_V0_LIVE_ROWS, hidden: SYNTHETIC_V0_HIDDEN_ROWS};
+describe('ET-010b complete live card observation', () => {
+  it('accepts every row with its exact text, including rows below the fold', () => {
+    stubDocument(completeElements());
+    expect(completeLiveObservation(expected)).toEqual(Object.fromEntries(SYNTHETIC_V0_LIVE_ROWS));
+    expect(completeLiveObservation(expected)).toMatchObject({'live-gear': 'R1', 'live-sdk-average-consumption-note': 'SDK mean, not a trip average'});
+  });
+  it.each<[string, Change]>([
+    ['a wrong value', (elements: Record<string, FakeElement[]>) => {elements['live-gear'] = one('R2');}],
+    ['a duplicate element', (elements: Record<string, FakeElement[]>) => {elements['live-odometer'] = [...elements['live-odometer'], ...elements['live-odometer']];}],
+    ['a missing element', (elements: Record<string, FakeElement[]>) => {delete elements['live-truck'];}],
+    ['a hidden element', (elements: Record<string, FakeElement[]>) => {elements['live-cargo'] = one('cargo.logs', {visibility: 'hidden'});}],
+    ['a zero box', (elements: Record<string, FakeElement[]>) => {elements['live-engine-rpm'] = one('600 rpm', {box: {width: 0, height: 20, top: 10}});}],
+    ['a reason on a value row', (elements: Record<string, FakeElement[]>) => {elements['live-gear-reason'] = one('not current');}],
+    ['a note on a row without an expected note', (elements: Record<string, FakeElement[]>) => {elements['live-odometer-note'] = one('game time');}],
+    ...SYNTHETIC_V0_HIDDEN_ROWS.map((id): [string, Change] => [`the hidden element ${id}`, (elements: Record<string, FakeElement[]>) => {elements[id] = one('x');}])
+  ])('rejects %s', (_name, change) => {
+    const elements = completeElements(); change(elements); stubDocument(elements);
+    expect(completeLiveObservation(expected)).toBe(false);
+  });
+  it('waits within the unchanged 10000 ms bound and passes the expected rows as the Playwright argument', async () => {
+    const calls: {argument: unknown; timeout: number}[] = [];
+    const page = {waitForFunction: (predicate: (argument: unknown) => unknown, argument: unknown, options: {timeout: number}) => {
+      calls.push({argument, timeout: options.timeout});
+      // Recreate the callback from source with a JSON argument, as Playwright does: imported closures cannot help it.
+      const value: unknown = runInNewContext(`(${predicate.toString()})(${JSON.stringify(argument)})`, fakeGlobals(completeElements()));
+      return value ? Promise.resolve({jsonValue: () => Promise.resolve(value), dispose: () => Promise.resolve()}) : Promise.reject(new Error('timeout'));
+    }} as unknown as Page;
+    expect(await waitForCompleteLive(page)).toEqual(Object.fromEntries(SYNTHETIC_V0_LIVE_ROWS));
+    expect(calls).toEqual([{argument: expected, timeout: 10000}]);
+    const stale = {values: SYNTHETIC_V0_VALUE_IDS, status: '^stale:', hidden: []};
+    await expect(waitForNotCurrentLive(page, SYNTHETIC_V0_VALUE_IDS, '^stale:')).rejects.toThrow('timeout');
+    expect(calls[1]).toEqual({argument: stale, timeout: 10000});
+  });
+});
+
+const notCurrentElements = (status = 'stale: No recent SDK capture'): Record<string, FakeElement[]> => ({
+  'telemetry-status': one(status), 'speed': one('Speed: unavailable'), 'fuel': one('Fuel: unavailable'),
+  ...Object.fromEntries(SYNTHETIC_V0_VALUE_IDS.flatMap(id => [[id, one('unavailable', {box: {width: 100, height: 20, top: 900}})], [`${id}-reason`, one('not current')]]))
+});
+describe('ET-010b not-current live card observation', () => {
+  const stale = {values: SYNTHETIC_V0_VALUE_IDS, status: '^stale:', hidden: SYNTHETIC_V0_HIDDEN_ROWS};
+  it('accepts a stale dashboard whose every row is unavailable and not current', () => {
+    stubDocument(notCurrentElements());
+    expect(notCurrentLiveObservation(stale)).toMatchObject({status: 'stale: No recent SDK capture', speed: 'Speed: unavailable', 'live-gear': 'unavailable'});
+  });
+  it.each<[string, Change]>([
+    ['a connected status', (elements: Record<string, FakeElement[]>) => {elements['telemetry-status'] = one('connected: Validated current observation');}],
+    ['a current legacy speed', (elements: Record<string, FakeElement[]>) => {elements.speed = one('Speed: 90.0 km/h');}],
+    ['an offscreen legacy speed', (elements: Record<string, FakeElement[]>) => {elements.speed = one('Speed: unavailable', {box: {width: 100, height: 20, top: 500}});}],
+    ['a row still showing R1', (elements: Record<string, FakeElement[]>) => {elements['live-gear'] = one('R1'); delete elements['live-gear-reason'];}],
+    ['a row with another reason', (elements: Record<string, FakeElement[]>) => {elements['live-cargo-reason'] = one('not yet observed');}],
+    ['a hidden row present', (elements: Record<string, FakeElement[]>) => {elements['live-position'] = one('unavailable');}]
+  ])('rejects %s', (_name, change) => {
+    const elements = notCurrentElements(); change(elements); stubDocument(elements);
+    expect(notCurrentLiveObservation(stale)).toBe(false);
   });
 });

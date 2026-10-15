@@ -154,12 +154,14 @@ std::string file_bytes(const fs::path& filename) {std::ifstream input(filename, 
 const char* const discoveryCases[] = {"retired-record", "delete-pending-record", "denied-record", "zero-record", "short-record", "directory-record", "reparse-record"};
 const char* const hostCases[] = {"valid", "creation", "dead", "stale-live", "dead-live", "collision", "session", "malformed", "dacl", "payload-break", "bad-length", "invalid-credit", "quiet", "quiet-exit", "partial-prefix", "partial-payload"};
 const char* const captureCases[] = {"capture", "capture-v0-hello", "capture-bad-arguments"};
+const char* const v1Cases[] = {"v1-valid", "v1-policy", "v1-major-mismatch", "v1-name-mismatch", "v1-collision", "v1-v0-hello", "v1-cap0-hello",
+  "v1-client-kind", "v1-client-oversize", "v1-bad-tag", "v1-partial-length", "v1-partial-payload", "v1-zero-length", "v1-ack-while-quiet", "v1-write-deadline", "v1-capture-conflict"};
 const char* const policyCases[] = {"policy-prune", "policy-cap", "policy-duplicate", "policy-case-duplicate", "policy-junction"};
 const char* const contentionCases[] = {"policy-lock-busy", "policy-lock-pending", "policy-publish-busy", "image-busy"};
 std::string case_list() {
   std::string joined;
   auto add = [&](const auto& names) {for (const auto* name : names) joined += (joined.empty() ? "" : ",") + std::string(name);};
-  add(discoveryCases); add(hostCases); add(captureCases); add(policyCases); add(contentionCases);
+  add(discoveryCases); add(hostCases); add(captureCases); add(v1Cases); add(policyCases); add(contentionCases);
   return joined + ",policy-readonly";
 }
 unsigned casesRun = 0;
@@ -265,6 +267,65 @@ int capture_host(const fs::path& directory, const std::string& mode) {
   pipe_io(pipe.value, client.value, prefix, 4, true); pipe_io(pipe.value, client.value, const_cast<char*>(packet.data()), n, true);
   WaitForSingleObject(client.value, 10000); return 0;
 }
+// A four-byte little-endian length prefix followed by the payload.
+std::string framed(const std::string& payload) {
+  const auto n = static_cast<DWORD>(payload.size());
+  return std::string{static_cast<char>(n & 255), static_cast<char>((n >> 8) & 255), static_cast<char>((n >> 16) & 255), static_cast<char>((n >> 24) & 255)} + payload;
+}
+// One length-prefixed frame from the host's pipe, waiting for its first byte until the client exits.
+std::string pipe_frame(HANDLE pipe, HANDLE client) {
+  unsigned char header[4]; pipe_io(pipe, client, header, 4, false, nullptr, true); const auto length = frame_length(header); require(length > 0 && length <= 4096);
+  std::string payload(length, '\0'); pipe_io(pipe, client, payload.data(), length, false); return framed(payload);
+}
+// After the broker has exited, nothing more may be readable: a forwarded byte would complete this read instead of EOF.
+bool silent(HANDLE pipe, HANDLE client) {
+  unsigned char byte = 0;
+  try {pipe_io(pipe, client, &byte, 1, false);} catch (const Disconnected&) {return true;}
+  return false;
+}
+// Protocol v1 host: publishes a v1 discovery record and serves the v1 endpoint with v1 fixture frames. Like the plugin it
+// authorizes the broker against the policy in the v1 directory, and it requires that exactly the v1 hello and the client
+// frames the controller sent reach the pipe, byte for byte and in order.
+int v1_host(const fs::path& directory, const fs::path& fixtures, const std::string& mode) {
+  Identity self(GetCurrentProcess()); OwnerSecurity security(self);
+  const std::string instance = "00112233-4455-6677-8899-aabbccddeeff", plugin = "11112233-4455-6677-8899-aabbccddeeff";
+  const auto name = [&](const char* segment, const std::string& id) {return "\\\\.\\pipe\\ETS2Telemetry-ets2-" + std::string(segment) + "-" + self.userTag + "-" + std::to_string(self.session) + "-" + id;};
+  const auto endpoint = name("v1", instance);
+  // Without inbound quota a client write stays pending until the host reads it, which the deadline case never does.
+  const DWORD inbound = mode == "v1-write-deadline" ? 0 : 65540;
+  Handle pipe(CreateNamedPipeW(wide(endpoint).c_str(), PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE | FILE_FLAG_OVERLAPPED, PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS, 1, 65540, inbound, 0, &security.attributes));
+  auto record = Json{Json::Object{{"schemaVersion", Json{1.0}}, {"protocolMajor", Json{mode == "v1-major-mismatch" ? 0.0 : 1.0}}, {"game", Json{std::string("ets2")}}, {"userTag", Json{self.userTag}}, {"windowsSessionId", Json{static_cast<double>(self.session)}}, {"processId", Json{static_cast<double>(GetCurrentProcessId())}}, {"processCreationTime", Json{std::to_string(creation(GetCurrentProcess()))}}, {"processInstanceId", Json{instance}}, {"pluginSessionId", Json{plugin}}, {"pipeName", Json{mode == "v1-name-mismatch" ? name("v0", instance) : endpoint}}}};
+  write_file(directory / (instance + ".json"), record, self);
+  if (mode == "v1-collision") {
+    const std::string second = "22112233-4455-6677-8899-aabbccddeeff";
+    auto duplicate = record; auto& fields = std::get<Json::Object>(duplicate.value);
+    fields["processInstanceId"] = Json{second}; fields["pipeName"] = Json{name("v1", second)};
+    write_file(directory / (second + ".json"), duplicate, self);
+  }
+  receipt(Json{Json::Object{{"type", Json{std::string("ready")}}}});
+  Handle connected(CreateEventW(nullptr, TRUE, FALSE, nullptr)); OVERLAPPED operation{}; operation.hEvent = connected.value;
+  const auto success = ConnectNamedPipe(pipe.value, &operation); const auto error = success ? ERROR_SUCCESS : GetLastError();
+  if (error == ERROR_PIPE_CONNECTED) SetEvent(connected.value); else if (error != ERROR_IO_PENDING && error != ERROR_SUCCESS) fail();
+  Credits cancellation;
+  HANDLE waits[] = {connected.value, cancellation.cancelled.value};
+  if (WaitForMultipleObjects(2, waits, FALSE, fixtureWaitMs) != WAIT_OBJECT_0) {CancelIoEx(pipe.value, &operation); DWORD ignored = 0; GetOverlappedResult(pipe.value, &operation, &ignored, TRUE); return 0;}
+  ULONG clientPid = 0; require(GetNamedPipeClientProcessId(pipe.value, &clientPid) && clientPid != 0); Handle client(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, clientPid)); Identity peer(client.value); require(peer.sid == self.sid && peer.session == self.session);
+  auto policy = secure_file(directory / "service-policy.json", self); const auto policyJson = parse(read_bounded(policy.value, 16384)); auto peerImage = image(client.value); const auto peerPath = utf8(final_path(peerImage.value));
+  bool allowed = false; for (const auto& entry : std::get<Json::Array>(policyJson.at("allowedExecutables").value)) if (entry.at("path").string() == peerPath) {const auto bytes = read_bounded(peerImage.value, 64 * 1024 * 1024); allowed = entry.at("sha256").string() == sha256(std::vector<unsigned char>(bytes.begin(), bytes.end()));}
+  require(allowed);
+  // A rejected hello never reaches the endpoint.
+  if (mode == "v1-v0-hello" || mode == "v1-cap0-hello") {WaitForSingleObject(client.value, 10000); return silent(pipe.value, client.value) ? 0 : 1;}
+  const auto hello = pipe_frame(pipe.value, client.value); require(hello == framed(file_bytes(fixtures / "hello.json")));
+  for (const auto* filename : {"welcome.json", "checkpoint.json"}) {auto frame = framed(file_bytes(fixtures / filename)); pipe_io(pipe.value, client.value, frame.data(), static_cast<DWORD>(frame.size()), true);}
+  if (mode == "v1-write-deadline") {WaitForSingleObject(client.value, hostHoldMs); return silent(pipe.value, client.value) ? 0 : 1;}
+  if (mode == "v1-valid" || mode == "v1-ack-while-quiet") {
+    // The host stays quiet until the ACK arrives; the reply proves that the relay still runs after the client frames.
+    require(pipe_frame(pipe.value, client.value) == framed(file_bytes(fixtures / "ack-1.json")));
+    if (mode == "v1-valid") require(pipe_frame(pipe.value, client.value) == framed(file_bytes(fixtures / "clock-probe.json")));
+    auto reply = framed(file_bytes(fixtures / "clock-reply.json")); pipe_io(pipe.value, client.value, reply.data(), static_cast<DWORD>(reply.size()), true);
+  }
+  WaitForSingleObject(client.value, 10000); return silent(pipe.value, client.value) ? 0 : 1;
+}
 int wmain(int argc, wchar_t** argv) {
   try {
     if (argc == 4 && std::wstring(argv[1]) == L"--discovery-case") {
@@ -274,6 +335,7 @@ int wmain(int argc, wchar_t** argv) {
     }
     if (argc == 5 && std::wstring(argv[1]) == L"--host") return host(argv[2], argv[3], utf8(argv[4]));
     if (argc == 4 && std::wstring(argv[1]) == L"--capture-host") return capture_host(argv[2], utf8(argv[3]));
+    if (argc == 5 && std::wstring(argv[1]) == L"--v1-host") return v1_host(argv[2], argv[3], utf8(argv[4]));
     if (argc == 3 && std::wstring(argv[1]) == L"--verify-cases") {
       const auto registered = utf8(argv[2]), actual = case_list();
       if (registered != actual) {std::cerr << "registered CTest cases differ from the fixture\nregistered " << registered << "\nfixture    " << actual << "\n"; return 1;}
@@ -384,6 +446,112 @@ int wmain(int argc, wchar_t** argv) {
       // The v0 endpoint named by the record is never opened in capture mode.
       client.eof(); require(client.wait() == 3); require(server.wait() == 0);
       std::cerr << "capture relay passed\n";
+    }
+    // Protocol v1 broker mode: v1 records and endpoint, a six-key receipt, a v1-only hello and the tagged control stream
+    // whose client frames reach the pipe beside the relay. Fixtures are the shared protocol v1 payloads.
+    const auto v1Fixtures = fixtures.parent_path() / "protocol-v1"; require(fs::exists(v1Fixtures / "hello.json"));
+    const auto diagnosed = [](Child& child, const std::string& stage, const std::string& error) {
+      const auto diagnostic = child.diagnostic(); std::cerr << "broker diagnostic " << diagnostic;
+      return std::regex_search(diagnostic, std::regex("(^|\n)diag1 " + stage + " " + error + " [0-9]{1,10} [a-z-]{1,24} [0-9]{1,10}\n$"));
+    };
+    const auto noOutput = [](Child& child) {DWORD available = 0; const auto peeked = PeekNamedPipe(child.output.value, nullptr, 0, nullptr, &available, nullptr); return (peeked || GetLastError() == ERROR_BROKEN_PIPE) && available == 0;};
+    for (const auto* mode : v1Cases) {
+      if (!filter.empty() && filter != mode) continue;
+      CaseTimer timer(mode);
+      const auto transport = base / wide(mode) / "transport", directory = transport / "v1"; fs::create_directory(transport.parent_path());
+      require(CreateDirectoryW(transport.c_str(), &security.attributes));
+      const std::string scenario(mode);
+      const auto v1Arguments = L"--game ets2 --discovery-dir \"" + directory.wstring() + L"\" --protocol v1";
+      if (scenario == "v1-capture-conflict") {
+        // v1 is never combined with capture, and only the exact value v1 selects it.
+        for (const auto* extra : {L" --protocol v1 --capture cap0", L" --capture cap0 --protocol v1", L" --protocol v2", L" --protocol"}) {
+          Child client(broker, L"--game ets2 --discovery-dir \"" + directory.wstring() + L"\"" + extra, true); client.eof();
+          require(client.wait() == 1 && diagnosed(client, "arguments", "[0-9]{1,10}") && noOutput(client));
+        }
+        continue;
+      }
+      if (scenario == "v1-policy") {
+        const auto v0Directory = transport / "v0"; require(CreateDirectoryW(v0Directory.c_str(), &security.attributes));
+        // The plugin creates transport\v1. Until it exists the broker only reports waiting and creates nothing.
+        {Child client(broker, v1Arguments); require(parse(read_frame(client.output.value)).at("type").string() == "waiting"); require(client.wait() == 2);}
+        require(!fs::exists(directory));
+        require(CreateDirectoryW(directory.c_str(), &security.attributes));
+        {Child client(broker, v1Arguments); require(parse(read_frame(client.output.value)).at("type").string() == "waiting"); require(client.wait() == 2);}
+        const auto policyPath = directory / "service-policy.json"; const auto written = file_bytes(policyPath); const auto policy = parse(written);
+        exact(policy, {"schemaVersion", "userTag", "windowsSessionId", "allowedExecutables"});
+        require(integer(policy.at("schemaVersion")) == 1 && policy.at("userTag").string() == identity.userTag && integer(policy.at("windowsSessionId")) == identity.session);
+        const auto& entries = std::get<Json::Array>(policy.at("allowedExecutables").value); require(entries.size() == 1); exact(entries[0], {"path", "sha256"});
+        {
+          Handle brokerImage(CreateFileW(broker.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr)); const auto bytes = read_bounded(brokerImage.value, 64 * 1024 * 1024);
+          require(entries[0].at("path").string() == utf8(final_path(brokerImage.value)) && entries[0].at("sha256").string() == sha256(std::vector<unsigned char>(bytes.begin(), bytes.end())));
+        }
+        // The v0 directory is a separate policy scope; the v1 mode never writes it.
+        require(fs::is_empty(v0Directory));
+        for (const auto& entry : fs::directory_iterator(directory)) require(entry.path().extension() != L".tmp");
+        // An identical policy is not replaced: the same file and bytes after another run.
+        const auto fileIndex = [&] {
+          Handle file(CreateFileW(policyPath.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+          BY_HANDLE_FILE_INFORMATION information{}; require(GetFileInformationByHandle(file.value, &information) != 0);
+          return (static_cast<std::uint64_t>(information.nFileIndexHigh) << 32) | information.nFileIndexLow;
+        };
+        const auto before = fileIndex();
+        {Child client(broker, v1Arguments); require(parse(read_frame(client.output.value)).at("type").string() == "waiting"); require(client.wait() == 2);}
+        require(fileIndex() == before && file_bytes(policyPath) == written);
+        continue;
+      }
+      require(CreateDirectoryW(directory.c_str(), &security.attributes));
+      Child server(self, L"--v1-host \"" + directory.wstring() + L"\" \"" + v1Fixtures.wstring() + L"\" " + wide(mode));
+      require(parse(read_frame(server.output.value)).at("type").string() == "ready");
+      Child client(broker, v1Arguments, true);
+      if (scenario == "v1-major-mismatch" || scenario == "v1-name-mismatch" || scenario == "v1-collision") {
+        // Each rejection must come from its own discovery check: a wrong major or pipe name fails while the record is
+        // validated, and a second live record fails only after both passed the image check.
+        client.eof(); require(client.wait() == 1 && noOutput(client) && diagnosed(client, scenario == "v1-collision" ? "server-image" : "discovery", "[0-9]{1,10}"));
+        server.eof(); require(server.wait() == 0); continue;
+      }
+      const auto authority = parse(read_frame(client.output.value));
+      exact(authority, {"type", "schemaVersion", "source", "processCreationTime", "userTag", "protocolMajor"});
+      require(authority.at("type").string() == "authority" && integer(authority.at("protocolMajor")) == 1 && integer(authority.at("schemaVersion")) == 1);
+      require(integer(authority.at("source").at("processId")) == server.pid && authority.at("source").at("origin").string() == "game" && authority.at("source").at("pluginSessionId").string() == "11112233-4455-6677-8899-aabbccddeeff");
+      const auto send = [&](const std::string& bytes) {stdio_io(client.input.value, const_cast<char*>(bytes.data()), static_cast<DWORD>(bytes.size()), true);};
+      const auto clientFrame = [](const std::string& payload) {return std::string(1, '\x02') + framed(payload);};
+      const std::string credit(1, '\x01');
+      if (scenario == "v1-v0-hello" || scenario == "v1-cap0-hello") {
+        send(framed(scenario == "v1-v0-hello" ? file_bytes(fixtures / "hello.json") : ets2telemetry::cap0::hello_payload("0cab0000-0000-4000-8000-0000000000a1")));
+        require(client.wait() == 1 && diagnosed(client, "hello", "[0-9]{1,10}")); server.eof(); require(server.wait() == 0); continue;
+      }
+      send(framed(file_bytes(v1Fixtures / "hello.json")));
+      send(credit); require(v1::decode_payload(read_frame(client.output.value), v1::Sender::server).kind == "welcome");
+      Sleep(100); require(noOutput(client));
+      send(credit); require(v1::decode_payload(read_frame(client.output.value), v1::Sender::server).kind == "checkpoint");
+      if (scenario == "v1-valid" || scenario == "v1-ack-while-quiet") {
+        if (scenario == "v1-valid") send(clientFrame(file_bytes(v1Fixtures / "ack-1.json")) + clientFrame(file_bytes(v1Fixtures / "clock-probe.json")) + credit);
+        // The credit first: the broker is then waiting on its pending pipe read when the ACK must still reach the quiet host.
+        else {send(credit); Sleep(300); send(clientFrame(file_bytes(v1Fixtures / "ack-1.json")));}
+        require(read_frame(client.output.value) == file_bytes(v1Fixtures / "clock-reply.json"));
+        client.eof(); require(client.wait() == 3); require(server.wait() == 0); continue;
+      }
+      if (scenario == "v1-write-deadline") {
+        // The host never reads the ACK: the broker's own 5 s client-write deadline must end the relay. The credit comes
+        // first, so the relay waits on its pending pipe read, which has no idle deadline, instead of the 5 s credit wait.
+        const auto sent = GetTickCount64(); send(credit + clientFrame(file_bytes(v1Fixtures / "ack-1.json")));
+        require(client.wait() == 3); const auto elapsed = GetTickCount64() - sent;
+        std::cerr << "client-write exit after " << elapsed << " ms\n"; require(elapsed >= 4500 && elapsed < 12000 && diagnosed(client, "client-write", "[0-9]{1,10}"));
+        require(server.wait() == 0); continue;
+      }
+      if (scenario == "v1-partial-length" || scenario == "v1-partial-payload") {
+        // EOF inside a record is cancellation: exit 3 at the relay stage, never client-frame, and nothing reaches the host.
+        const auto payload = file_bytes(v1Fixtures / "ack-1.json"); require(payload.size() < 256);
+        send(scenario == "v1-partial-length" ? std::string{'\x02', static_cast<char>(payload.size()), '\x00'} : clientFrame(payload).substr(0, 5 + payload.size() / 2));
+        client.eof(); require(client.wait() == 3 && diagnosed(client, "relay", "[0-9]{1,10}")); require(server.wait() == 0); continue;
+      }
+      // Rejected control records: a client message of another kind, an oversize or zero length and an unknown tag.
+      if (scenario == "v1-client-kind") send(clientFrame(file_bytes(v1Fixtures / "hello.json")));
+      else if (scenario == "v1-client-oversize") send(std::string{'\x02', '\x01', '\x10', '\x00', '\x00'});
+      else if (scenario == "v1-zero-length") send(std::string{'\x02', '\x00', '\x00', '\x00', '\x00'});
+      else send(std::string(1, '\x03'));
+      require(client.wait() == 1 && diagnosed(client, scenario == "v1-bad-tag" ? "relay" : "client-frame", scenario == "v1-bad-tag" ? "[0-9]{1,10}" : "0"));
+      require(server.wait() == 0);
     }
     for (const auto* mode : policyCases) {
       if (!filter.empty() && filter != mode) continue;
