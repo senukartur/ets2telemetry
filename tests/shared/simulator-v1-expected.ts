@@ -25,7 +25,10 @@ function stateSummary(atMs: number, m: Snapshot) {
     eventLoss: nonzero(m.data.status.eventLoss as unknown as Record<string, string>), gameMode: m.data.status.gameMode, continuity: m.data.continuity, state: m.data.state};
 }
 
-/** A normalized, label-substituted view of one replay: per connection, then the ledger and the producer store. */
+/**
+ * A normalized, label-substituted view of one replay: per connection, then the ledger and the producer store. Fault
+ * bytes appear per connection as `faults` (direction and name), never as messages.
+ */
 export function summarize(result: ReplayResult): unknown {
   const seed = result.scenario.seed, labels = new Map<string, string>();
   for (const label of ['plugin-session', 'process-instance', 'capture-clock']) labels.set(seededId(seed, label), label);
@@ -37,12 +40,14 @@ export function summarize(result: ReplayResult): unknown {
     const acks = lines.flatMap(l => l.message.kind === 'ack' ? [l.message.data.throughEventSeq] : []);
     const welcome = server.find(s => s.m.kind === 'welcome')?.m, checkpoint = server.find(s => s.m.kind === 'checkpoint'), end = server.find(s => s.m.kind === 'end')?.m;
     if (!instances.includes(rec.clientInstanceId)) instances.push(rec.clientInstanceId);
+    const faults = result.faults.filter(f => f.connection === rec.connection).map(f => ({atMs: f.atMs, direction: f.direction, fault: f.fault}));
     return {
       durableRequested: rec.durableRequested, closedBy: rec.closedBy, clientInstance: instances.indexOf(rec.clientInstanceId) + 1,
+      helloFault: rec.helloFault ?? null, faults, refusedClients: rec.refusedClients, rejection: rec.rejection ?? null,
       welcome: welcome?.kind === 'welcome' ? {atMs: server[0].atMs, game: welcome.source.game, origin: welcome.source.origin, ...welcome.data} : null,
       checkpoint: checkpoint && checkpoint.m.kind === 'checkpoint' ? stateSummary(checkpoint.atMs, checkpoint.m) : null,
-      coverage: server.flatMap(({atMs, m}): unknown[] => m.kind === 'event' ? [{atMs, event: m.data.eventSeq, type: m.data.record.type, redelivered: m.data.redelivered, occurred: m.data.occurred, record: m.data.record}]
-        : m.kind === 'gap' ? [{atMs, gap: [m.data.firstEventSeq, m.data.lastEventSeq], causes: nonzero(m.data.causes as unknown as Record<string, string>), redelivered: m.data.redelivered,
+      coverage: server.flatMap(({atMs, m}): unknown[] => m.kind === 'event' ? [{atMs, seq: m.seq, event: m.data.eventSeq, type: m.data.record.type, redelivered: m.data.redelivered, occurred: m.data.occurred, record: m.data.record}]
+        : m.kind === 'gap' ? [{atMs, seq: m.seq, gap: [m.data.firstEventSeq, m.data.lastEventSeq], causes: nonzero(m.data.causes as unknown as Record<string, string>), redelivered: m.data.redelivered,
           firstLost: lost(m.data.firstLostMonotonicNs), lastLost: lost(m.data.lastLostMonotonicNs)}] : []),
       snapshots: server.flatMap(({atMs, m}) => m.kind === 'snapshot' ? [stateSummary(atMs, m)] : []),
       acks, ackCount: acks.length, lastAck: acks.at(-1) ?? null,

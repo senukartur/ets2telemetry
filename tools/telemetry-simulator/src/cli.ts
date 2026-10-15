@@ -1,8 +1,26 @@
+import {createHash} from 'node:crypto';
 import {readFixtureFile} from './fixture-file';
 import {replay,validateScenario} from './scenario';
 import {startPipe,consumePipe} from './pipe';
 import {checkCadence} from './cadence';
 import {replayV1,transcriptLines} from './v1/replay';
+import {clientPlan,pipeDifferences,runV1PipeClient,serveV1} from './v1/pipe';
+import {checkStateRate,checkV1Cadence} from './v1/cadence';
+import {reactiveDifferences,runIndependentClient,serveV1Reactive} from './v1/reactive';
+
+/** `<file> [--scale <real ms per scenario ms>] [--lockstep | --reactive]` of the v1 pipe commands. */
+function v1Args(command:string,args:string[]):{file:string;scale:number;flag:boolean} {
+  const flagName=command==='serve-v1'?'--lockstep':'--reactive',usage=`Usage: cli.cjs ${command} <simulator-v1-scenario.json> [--scale <0-10>] [${flagName}]`;
+  const [file,...rest]=args;let scale=1,flag=false;
+  for(let i=0;i<rest.length;i++) {
+    if(rest[i]==='--scale'&&/^(0|[1-9][0-9]*)(\.[0-9]+)?$/.test(rest[i+1]??''))scale=Number(rest[++i]);
+    else if(rest[i]===flagName&&!flag)flag=true;
+    else throw new Error(usage);
+  }
+  if(!file)throw new Error(usage);
+  return {file,scale,flag};
+}
+const sha256=(lines:string[])=>createHash('sha256').update(lines.map(l=>l+'\n').join('')).digest('hex');
 
 async function main():Promise<void> {
   const [command,file,...extra]=process.argv.slice(2);
@@ -10,6 +28,60 @@ async function main():Promise<void> {
   if(command==='replay-v1') {
     if(!file||extra.length)throw new Error('Usage: cli.cjs replay-v1 <simulator-v1-scenario.json>');
     process.stdout.write(transcriptLines(replayV1(readFixtureFile(file))).map(l=>l+'\n').join(''));return;
+  }
+  // Protocol v1 on an actual synthetic named pipe (ET-005b PR-2). serve-v1 serves any consumer in reactive mode, or only
+  // the scenario's scripted client with --lockstep. smoke-v1 runs the scripted client against a lockstep server, or an
+  // independent consumer against a reactive server with --reactive, and checks the run against replay-v1.
+  if(command==='serve-v1'||command==='smoke-v1') {
+    const {file:path,scale,flag}=v1Args(command,process.argv.slice(3)),input=readFixtureFile(path);
+    const reactive=command==='serve-v1'?!flag:flag;
+    const controller=new AbortController();const cancel=()=>controller.abort();process.once('SIGINT',cancel);process.once('SIGTERM',cancel);
+    let stop:(()=>Promise<void>)|undefined;
+    try {
+      if(reactive) {
+        const server=await serveV1Reactive(input,{scale,signal:controller.signal});stop=server.stop;
+        if(command==='serve-v1') {
+          console.log(JSON.stringify({origin:'synthetic',mode:'reactive',endpoint:server.endpoint,history:false}));
+          const report=await server.done;
+          // The verdict of plan item 7 against replay-v1; a cancelled run is not compared.
+          const differences=report.cancelled?[]:reactiveDifferences(replayV1(input),report);
+          console.log(JSON.stringify({origin:'synthetic',mode:'reactive',scenario:report.scenario.id,cancelled:report.cancelled,connections:report.connections,
+            messages:report.transcript.length,refusedClients:report.refusedClients,matchesReplay:report.cancelled?null:differences.length===0,differences,history:false}));
+          if(differences.length)process.exitCode=1;
+          return;
+        }
+        const expected=replayV1(input);
+        const [client,report]=await Promise.all([runIndependentClient(server.endpoint,input,{seed:1,probe:true,signal:controller.signal}),server.done]);
+        if(report.cancelled)throw new Error('Synthetic v1 smoke cancelled');
+        const differences=reactiveDifferences(expected,report);
+        if(JSON.stringify(client.ledger)!==JSON.stringify(expected.ledger))differences.push('independent client ledger differs from the replay');
+        if(differences.length)throw new Error(`Reactive pipe run differs from the deterministic replay: ${differences.join('; ')}`);
+        console.log(JSON.stringify({origin:'synthetic',mode:'reactive',scenario:expected.scenario.id,messages:report.transcript.length,connections:report.connections.length,
+          clockReplies:client.sessions.reduce((n,s)=>n+s.replies,0),attempts:client.attempts,ledger:client.ledger,history:false}));
+        return;
+      }
+      const server=await serveV1(input,{scale,signal:controller.signal});stop=server.stop;
+      if(command==='serve-v1') {
+        console.log(JSON.stringify({origin:'synthetic',mode:'lockstep',endpoint:server.endpoint,history:false}));
+        const report=await server.done;
+        console.log(JSON.stringify({origin:'synthetic',mode:'lockstep',scenario:report.result.scenario.id,cancelled:report.cancelled,connections:report.result.connections.length,
+          messages:report.result.transcript.length,transcriptSha256:sha256(transcriptLines(report.result)),refusedClients:report.refusedClients,history:false}));
+        return;
+      }
+      const expected=replayV1(input),plan=clientPlan(expected);
+      const [client,report]=await Promise.all([runV1PipeClient(server.endpoint,plan,{scale,signal:controller.signal}),server.done]);
+      if(report.cancelled)throw new Error('Synthetic v1 smoke cancelled');
+      const differences=pipeDifferences(expected,report.result,client);
+      if(differences.length)throw new Error(`Pipe run differs from the deterministic replay: ${differences.join('; ')}`);
+      const cadence=scale>0?checkV1Cadence(report.writes,report.result.transcript,new Map(client.connections.map(c=>[c.connection,c.arrivalsMs]))):undefined;
+      const mappings=client.connections.flatMap(c=>c.mappings.map(m=>({connection:c.connection,probeId:m.probeId,offsetNs:m.mapping?.offsetNs??null,uncertaintyNs:m.mapping?.uncertaintyNs??null,roundTripNs:m.roundTripNs})));
+      const probes=plan.connections.reduce((n,c)=>n+c.actions.filter(a=>a.action==='probe').length,0);
+      if(mappings.length!==probes)throw new Error('A clock probe received no reply');
+      console.log(JSON.stringify({origin:'synthetic',mode:'lockstep',scenario:expected.scenario.id,messages:report.result.transcript.length,connections:client.connections.length,
+        transcriptSha256:sha256(transcriptLines(report.result)),cadence:cadence??null,minStateIntervalNs:checkStateRate(report.result.transcript),mappings,
+        refusedClients:report.refusedClients,ledger:client.ledger,history:false}));
+    }finally {await stop?.();process.removeListener('SIGINT',cancel);process.removeListener('SIGTERM',cancel);}
+    return;
   }
   if(!['replay','serve','smoke'].includes(command)||!file||extra.length)throw new Error('Usage: cli.cjs replay|serve|smoke <synthetic-fixture.json>');
   const scenario=validateScenario(readFixtureFile(file)),emissions=replay(scenario);

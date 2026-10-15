@@ -2,7 +2,7 @@ import {readFileSync} from 'node:fs';
 import {EventEmitter} from 'node:events';
 import net from 'node:net';
 import {randomUUID} from 'node:crypto';
-import {afterEach, describe, expect, it, vi} from 'vitest';
+import {afterEach, beforeAll, beforeEach, describe, expect, it, vi} from 'vitest';
 import {TelemetryIngestion, TEST_PIPE_PATTERN, initialLive, sourceSelection} from '../../apps/desktop/src/telemetry-ingestion';
 import {LiveSubscriptions, type LivePort} from '../../apps/desktop/src/live-subscriptions';
 import {ServiceSupervisor} from '../../apps/desktop/src/service-supervisor';
@@ -29,7 +29,31 @@ class TestPort extends EventEmitter implements LivePort {
   close(): void {if (!this.closed) {this.closed = true; this.emit('close');}}
   consume(): void {this.emit('message', {data: {type: 'consumed', delivery: this.messages.at(-1)!.delivery}});}
 }
-afterEach(() => vi.useRealTimers());
+// Every import of the telemetry-service entry point that a case starts. An import that outlives its case (for
+// example after a timeout) finishes its startup side effects before the next case starts. The rest of a timed-out
+// case body can still resume later; the beforeEach guard only proves no entry-point import is still loading.
+const loadingService = new Set<Promise<unknown>>();
+function loadService(): Promise<unknown> {
+  const loading = import('../../apps/desktop/src/telemetry-service');
+  loadingService.add(loading); void loading.finally(() => loadingService.delete(loading)).catch(() => undefined);
+  return loading;
+}
+// Captured before any fake timers are installed; afterEach uses it to cross one real macrotask boundary.
+const realSetImmediate = setImmediate;
+// One-time module-graph load. The first import of telemetry-service.ts transforms it and its dependencies that
+// this file does not import statically; that took up to 4 s of the first case's 5 s timeout when all default
+// Vitest workers competed for the transform pipeline on a 24-thread host. Pay it here through one clean stop,
+// so no case's own timeout measures module transformation. This budget is a load allowance, not a behaviour bound.
+const MODULE_GRAPH_LOAD_BUDGET_MS = 60_000;
+beforeAll(async () => {
+  const service = await stoppedService(report => {report({type: 'stopped'}); return Promise.resolve();});
+  try {service.stop(); await vi.advanceTimersByTimeAsync(0);} finally {service.restore(); vi.useRealTimers();}
+}, MODULE_GRAPH_LOAD_BUDGET_MS);
+beforeEach(() => {expect(loadingService.size, 'a previous case left telemetry-service loading').toBe(0);});
+afterEach(async () => {
+  await Promise.allSettled(loadingService); await new Promise(resolve => realSetImmediate(resolve));
+  vi.useRealTimers();
+});
 it('boots transport only after the parent selection and retains it across renderer subscriptions', async () => {
   vi.useFakeTimers(); const sockets: TestSocket[] = [];
   const connect = vi.spyOn(net, 'connect').mockImplementation(() => {const socket = new TestSocket(); sockets.push(socket); return socket as unknown as net.Socket;});
@@ -49,7 +73,7 @@ it('boots transport only after the parent selection and retains it across render
   vi.doMock('../../apps/desktop/src/history-storage', () => ({HISTORY_CLOSE_BUDGET_MS: 1000, historyWorker: vi.fn(), HistoryStorage: class {start() {} close() {return Promise.resolve();}}}));
   const command = (type: string, ports: TestPort[] = []) => parent.emit('message', {data: {type, source: 'synthetic'}, ports});
   try {
-    await import('../../apps/desktop/src/telemetry-service');
+    await loadService();
     expect(parent.postMessage).toHaveBeenCalledWith({type: 'ready'}); expect(connect).not.toHaveBeenCalled();
     for (const broker of [null, [], {executable: 123, discoveryDirectory: 'isolated'}, {executable: 'isolated', discoveryDirectory: []}]) {
       parent.emit('message', {data: {type: 'select', source: 'synthetic', broker}, ports: []});
@@ -262,7 +286,7 @@ async function stoppedService(stopProbe: (report: ProbeDependencies['report']) =
   }}));
   const history = {start: vi.fn(), close: vi.fn(closeHistory)};
   vi.doMock('../../apps/desktop/src/history-storage', () => ({HISTORY_CLOSE_BUDGET_MS: 1000, historyWorker: vi.fn(), HistoryStorage: class {start() {history.start();} close() {return history.close();}}}));
-  await import('../../apps/desktop/src/telemetry-service');
+  await loadService();
   const restore = () => {
     if (previousPort) Object.defineProperty(process, 'parentPort', previousPort); else Reflect.deleteProperty(process, 'parentPort');
     exit.mockRestore(); vi.doUnmock('../../apps/desktop/src/diagnostics'); vi.doUnmock('../../apps/desktop/src/service-probe'); vi.doUnmock('../../apps/desktop/src/history-storage'); vi.resetModules();

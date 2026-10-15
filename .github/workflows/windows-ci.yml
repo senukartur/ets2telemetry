@@ -105,6 +105,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Isolated synthetic v0 CLI pipe smoke
         run: npm run smoke --workspace @ets2telemetry/telemetry-simulator
+      - name: Isolated synthetic v1 CLI pipe smoke
+        run: npm run smoke:v1 --workspace @ets2telemetry/telemetry-simulator
       - name: Bounded development Electron worker smoke
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development
       - name: Bounded development telemetry source and recovery smoke

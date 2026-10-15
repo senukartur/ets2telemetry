@@ -4,7 +4,7 @@ import {join,resolve} from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {builtinModules} from 'node:module';
 import net from 'node:net';
-import {describe,it,expect,vi} from 'vitest';
+import {afterAll,beforeAll,describe,it,expect,vi} from 'vitest';
 import {FrameDecoder,encodeFrame,PROTOCOL_V0,type ServerMessage} from '../../packages/contracts/src/protocol-v0';
 import {replay,seededId,validateScenario,type Scenario,type Reading} from '../../tools/telemetry-simulator/src/scenario';
 import {SnapshotProbe} from '../../tools/telemetry-simulator/src/consumer';
@@ -165,6 +165,13 @@ async function buildCli(directory:string):Promise<string> {
   await build({configFile:false,logLevel:'silent',build:{outDir:bundle,emptyOutDir:true,lib:{entry:resolve('tools/telemetry-simulator/src/cli.ts'),formats:['cjs'],fileName:()=> 'cli.cjs'},rollupOptions:{external:[...builtinModules,...builtinModules.map(x=>`node:${x}`)]}}});
   return join(bundle,'cli.cjs');
 }
+// The three CLI cases share one bundle of the current CLI source. Bundling is CPU-heavy one-time preparation (about 1 s
+// alone, several seconds when every core is busy), so it runs once here under its own budget instead of inside each case's
+// timeout. Each case still spawns the bundled CLI against its own isolated fixture directory.
+const CLI_BUILD_BUDGET_MS=60_000;
+let cliDirectory:string|undefined,builtCli='';
+beforeAll(async()=>{cliDirectory=mkdtempSync(join(tmpdir(),'ETS2Telemetry-SYNTHETIC-TEST-cli-'));builtCli=await buildCli(cliDirectory);},CLI_BUILD_BUDGET_MS);
+afterAll(()=>{if(cliDirectory)rmSync(cliDirectory,{recursive:true,force:true});});
 describe('fixture filesystem boundary',()=>{
   it('rejects duplicate keys that JSON.parse would silently collapse',()=>{
     const directory=mkdtempSync(join(tmpdir(),'ETS2Telemetry-SYNTHETIC-TEST-fixture-'));
@@ -181,11 +188,11 @@ describe('fixture filesystem boundary',()=>{
       writeFileSync(path,Buffer.from([0xff]));expect(()=>readFixtureFile(path)).toThrow();
     }finally{rmSync(directory,{recursive:true,force:true});}
   });
-  it('rejects a fixture that grows beyond 2 MiB between metadata/open and the actual byte read',async()=>{
+  it('rejects a fixture that grows beyond 2 MiB between metadata/open and the actual byte read',()=>{
     const directory=mkdtempSync(join(tmpdir(),'ETS2Telemetry-SYNTHETIC-TEST-fixture-'));
     try {
       const path=join(directory,'fixture.json'),preload=join(directory,'grow.cjs'),marker=join(directory,'grew.txt');writeFileSync(path,JSON.stringify(fixture));
-      const cli=await buildCli(directory);
+      const cli=builtCli;
       // An actual filesystem mutation at a deterministic boundary, not mocked read bytes.
       writeFileSync(preload,`const fs=require('node:fs');const path=process.env.SIMULATOR_FIXTURE;let grown=false;function grow(p){if(!grown&&String(p)===path){grown=true;fs.appendFileSync(path,' '.repeat(3*1024*1024));fs.writeFileSync(process.env.SIMULATOR_GROWTH_MARKER,'actual-file-grew');}}const stat=fs.statSync;fs.statSync=function(p,...args){const result=stat.call(this,p,...args);grow(p);return result;};const open=fs.openSync;fs.openSync=function(p,...args){const result=open.call(this,p,...args);grow(p);return result;};`);
       const result=spawnSync(process.execPath,['--require',preload,cli,'replay',path],{env:{...process.env,SIMULATOR_FIXTURE:path,SIMULATOR_GROWTH_MARKER:marker},encoding:'utf8',timeout:5000,maxBuffer:65536,windowsHide:true});
@@ -194,10 +201,10 @@ describe('fixture filesystem boundary',()=>{
   });
 });
 describe('isolated actual Windows pipe boundary',()=>{
-  it('CLI smoke accepts late diagnostics without refreshing snapshot freshness',async()=>{
+  it('CLI smoke accepts late diagnostics without refreshing snapshot freshness',()=>{
     const directory=mkdtempSync(join(tmpdir(),'ETS2Telemetry-SYNTHETIC-TEST-late-diagnostic-'));
     try {
-      const cli=await buildCli(directory),path=join(directory,'late-diagnostic.json');writeFileSync(path,JSON.stringify(lateDiagnostic));
+      const cli=builtCli,path=join(directory,'late-diagnostic.json');writeFileSync(path,JSON.stringify(lateDiagnostic));
       const result=spawnSync(process.execPath,[cli,'smoke',path],{encoding:'utf8',timeout:10_000,maxBuffer:65536,windowsHide:true});
       expect(result.error).toBeUndefined();expect(result.stderr).toBe('');expect(result.status).toBe(0);
       expect(JSON.parse(result.stdout).freshness).toEqual([{connection:1,freshAtSnapshot:true,freshBeforeTimeout:true,freshAtLastMessage:false,staleAfterTimeout:true,staleAfterDisconnect:true}]);
@@ -226,10 +233,10 @@ describe('isolated actual Windows pipe boundary',()=>{
       expect(spanMs).toBeGreaterThanOrEqual(950);expect(spanMs).toBeLessThan(1150);
     }finally{await run.stop();}
   });
-  it('CLI smoke accepts a correctly delivered fixture whose gaps are below the measurable threshold',async()=>{
+  it('CLI smoke accepts a correctly delivered fixture whose gaps are below the measurable threshold',()=>{
     const directory=mkdtempSync(join(tmpdir(),'ETS2Telemetry-SYNTHETIC-TEST-fixture-'));
     try {
-      const cli=await buildCli(directory),path=join(directory,'short-gaps.json');
+      const cli=builtCli,path=join(directory,'short-gaps.json');
       const reading:Reading={atMs:5,speedMps:1,fuelL:1,simulation:'running',revision:'1',truck:null,gameMinute:'0'};
       writeFileSync(path,JSON.stringify({...fixture,steps:[{action:'connect',atMs:0},{action:'reading',reading},{action:'reading',reading:{...reading,atMs:10}},{action:'disconnect',atMs:15}]}));
       const result=spawnSync(process.execPath,[cli,'smoke',path],{encoding:'utf8',timeout:10_000,maxBuffer:65536,windowsHide:true});

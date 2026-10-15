@@ -1,0 +1,39 @@
+{
+  "format": "ets2telemetry-simulator-v1", "schemaVersion": 1, "id": "client-control-faults",
+  "purpose": "A client that breaks the rules after its checkpoint is disconnected without an error frame and changes nothing: an equal ACK is a no-op, and a repeated or early probe, a regressing, beyond-sent, foreign-session or live-only ACK, a second hello, an unknown kind, an oversized or malformed frame and a cut frame at EOF each end only their own connection; every following checkpoint keeps the acknowledged point.",
+  "reg": ["REG-005", "REG-010"], "origin": "synthetic", "game": "ets2", "seed": "et005b-client-control-faults", "provenance": null,
+  "source": {"versions": {"telemetryApi": {"major": 1, "minor": 1}, "gameTelemetry": {"major": 1, "minor": 19}, "sdkArchive": "scs-sdk-1.15"}, "gameplayEvents": "registered", "currency": "unknown", "gameMode": "unknown"},
+  "steps": [
+    {"atMs": 10, "action": "lifecycle", "event": "simulation.started"},
+    {"atMs": 20, "action": "lifecycle", "event": "simulation.paused"},
+    {"atMs": 110, "action": "lifecycle", "event": "simulation.started"},
+    {"atMs": 1710, "action": "lifecycle", "event": "simulation.paused"}
+  ],
+  "transport": [
+    {"atMs": 0, "action": "connect", "client": {"durable": true, "probes": [500]}},
+    {"atMs": 100, "action": "clientFault", "fault": "ackDuplicate"},
+    {"atMs": 600, "action": "clientFault", "fault": "probeRepeat"},
+    {"atMs": 700, "action": "connect", "client": {"durable": true}},
+    {"atMs": 710, "action": "clientFault", "fault": "ackRegressing"},
+    {"atMs": 800, "action": "connect", "client": {"durable": true}},
+    {"atMs": 810, "action": "clientFault", "fault": "ackBeyondSent"},
+    {"atMs": 900, "action": "connect", "client": {"durable": true}},
+    {"atMs": 910, "action": "clientFault", "fault": "ackForeignSession"},
+    {"atMs": 1000, "action": "connect", "client": {"durable": true}},
+    {"atMs": 1010, "action": "clientFault", "fault": "secondHello"},
+    {"atMs": 1100, "action": "connect", "client": {"durable": true}},
+    {"atMs": 1110, "action": "clientFault", "fault": "unknownKind"},
+    {"atMs": 1200, "action": "connect", "client": {"durable": true}},
+    {"atMs": 1210, "action": "clientFault", "fault": "oversizedFrame"},
+    {"atMs": 1300, "action": "connect", "client": {"durable": true}},
+    {"atMs": 1310, "action": "clientFault", "fault": "malformedFrame"},
+    {"atMs": 1400, "action": "connect", "client": {"durable": true, "probes": [1410]}},
+    {"atMs": 1420, "action": "clientFault", "fault": "probeWhileReplyUnsent"},
+    {"atMs": 1500, "action": "connect", "client": {"durable": true}},
+    {"atMs": 1510, "action": "clientFault", "fault": "partialFrameEof"},
+    {"atMs": 1600, "action": "connect", "client": {"durable": false}},
+    {"atMs": 1610, "action": "clientFault", "fault": "ackLiveOnly"},
+    {"atMs": 1700, "action": "connect", "client": {"durable": true}},
+    {"atMs": 1800, "action": "disconnect"}
+  ]
+}
