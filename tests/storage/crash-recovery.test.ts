@@ -50,7 +50,9 @@ async function runChild(mode: 'before-commit' | 'after-commit' | 'worker', items
   const config = path.join(ws.directory, `crash-${mode}.json`);
   writeFileSync(config, JSON.stringify({open: {path: ws.database, purpose: 'synthetic', backupsDirectory: ws.backups, appVersion: '0.1.0-test'}, welcome: v1('welcome'), stream: items, killAt}));
   const child = spawn(process.execPath, [CHILD, mode, config], {env: {...process.env, ELECTRON_RUN_AS_NODE: '1'}, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true});
-  const exited = once(child, 'exit');
+  // 'close' comes after the process exited and its stdout and stderr ended, so the last ack line and any late error output
+  // are always read; 'exit' can arrive while piped output is still unread.
+  const closed = once(child, 'close');
   const acks: {last: bigint; through: bigint}[] = [];
   let stdout = '', stderr = '', done = false;
   child.stderr.on('data', chunk => { stderr += String(chunk); });
@@ -66,7 +68,7 @@ async function runChild(mode: 'before-commit' | 'after-commit' | 'worker', items
       if (acks.length === terminateAfterAck) child.kill();
     }
   });
-  const [code] = await exited as [number | null];
+  const [code] = await closed as [number | null];
   expect(stderr).toBe('');
   return {code, acks, done};
 }
