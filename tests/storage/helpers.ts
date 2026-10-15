@@ -13,6 +13,14 @@ import {temporaryResources} from '../shared/resources';
 export const PROTOCOL_V1 = path.resolve('tests/fixtures/protocol-v1');
 export const STORAGE_FIXTURES = path.resolve('tests/fixtures/storage');
 export const P1 = '10000000-0000-4000-8000-000000000001';
+/**
+ * Close grace of every real-worker StorageClient in this suite. It bounds a hung close inside the case timeouts and is
+ * not a latency check: the cases assert the close protocol (answer, then exit code 0). With the 2 s production default,
+ * one close on a loaded shared host took longer than 2 s and was reported `{clean: false}` (docs/validation/et-013.md,
+ * October 15, 2026). Grace expiry itself is checked with fake timers in tests/unit/storage-client.test.ts and with a
+ * held close in worker.test.ts. The crash-test child processes keep the default: they are killed and never close.
+ */
+export const TEST_CLOSE_GRACE_MS = 15_000;
 
 /** A decoded protocol v1 fixture, validated by the contract decoder. */
 export const v1 = (name: string) => decodePayload(new Uint8Array(readFileSync(path.join(PROTOCOL_V1, `${name}.json`))), 'server') as ServerMessage;

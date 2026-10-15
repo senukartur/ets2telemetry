@@ -15,7 +15,7 @@ import {readFixtureFile} from '../../tools/telemetry-simulator/src/fixture-file'
 import {reactiveConflicts, reactiveDifferences, serveV1Reactive, type ReactiveReport} from '../../tools/telemetry-simulator/src/v1/reactive';
 import {replayV1, scenarioSource} from '../../tools/telemetry-simulator/src/v1/replay';
 import {scenarioPath} from '../shared/simulator-v1-expected';
-import {ok, readOnly, workspace} from './helpers';
+import {ok, readOnly, TEST_CLOSE_GRACE_MS, workspace} from './helpers';
 
 const bundles = process.env.ETS2TELEMETRY_STORAGE_TEST_BUNDLES;
 if (!bundles) throw new Error('Storage test bundles are missing; run npm run test:storage.');
@@ -77,7 +77,7 @@ async function run(input: Json, plan: Plan) {
   };
   const start = async () => {
     const worker = new Worker(WORKER, {workerData: {kind: 'storage'}}); workers.push(worker);
-    const exit = once(worker, 'exit').then(([code]) => code as number), client = new StorageClient(workerHandle(worker));
+    const exit = once(worker, 'exit').then(([code]) => code as number), client = new StorageClient(workerHandle(worker), {closeGraceMs: TEST_CLOSE_GRACE_MS});
     ok(await client.open({path: ws.database, purpose: 'synthetic', backupsDirectory: ws.backups, appVersion: '0.1.0-test'}));
     const storage: DurableStorageClient = {
       upsertSession: input => client.upsertSession(input),
