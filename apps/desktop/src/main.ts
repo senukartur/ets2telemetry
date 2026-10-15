@@ -3,7 +3,7 @@ import squirrelStartup from 'electron-squirrel-startup';
 import {existsSync, mkdirSync} from 'node:fs';
 import path from 'node:path';
 import type {EventEmitter} from 'node:events';
-import type {AppHealth, AppState, LiveTelemetry, OverlayPresentation, OverlaySettings, ScaffoldStatus, SettingsView, SourceSelection, UnitProfiles} from '../../../packages/contracts/src';
+import type {AppHealth, AppState, LiveTelemetry, OverlayEditState, OverlayPresentation, OverlaySettings, ScaffoldStatus, SettingsView, SourceSelection, UnitProfiles} from '../../../packages/contracts/src';
 import {SettingsBusyError, SettingsError, SettingsStore, settingsDirectory} from './settings-store';
 import {isUnitGame, isUnitProfile} from './unit-profiles';
 import {processEntrypoint} from './entrypoints';
@@ -18,6 +18,8 @@ import {OVERLAY_TOPMOST_LEVEL, OverlayController} from './overlay-controller';
 import {overlayPresentation} from './overlay-presentation';
 import {OVERLAY_NOMINAL_SIZE} from './overlay-geometry';
 import {isOverlayLayout, parseOverlaySections} from './overlay-sections';
+import {isOverlayEditOutcome, parseOverlayEditScale, type OverlayEditOutcome} from './overlay-placement';
+import {OwnForegroundGate} from './overlay-edit';
 import {captureActivation, type CaptureGrant} from './capture-activation';
 import {monitorEventLoopLag} from './event-loop-lag';
 import {ExitCoordinator, secondInstanceAction, type ExitReason} from './app-lifecycle';
@@ -76,8 +78,10 @@ function runApplication(profileError: unknown): void {
   // The last projection main published: a non-current projection keeps its shape (ET-012a decision L5).
   let lastOverlay = overlayPresentation(initialLive());
   const overlaySubscriptions = new LiveSubscriptions<OverlayPresentation>(lastOverlay, 1, 500);
+  // ET-012b: the overlay edit mode lives in main's memory only; every start is in driving mode (decision M5).
+  let overlayEdit: OverlayEditState = {active: false};
   function publishOverlay(live: LiveTelemetry, units: UnitProfiles, settings: OverlaySettings): void {
-    lastOverlay = overlayPresentation(live, units, settings, lastOverlay);
+    lastOverlay = overlayPresentation(live, units, settings, lastOverlay, overlayEdit.active);
     overlaySubscriptions.publish(lastOverlay);
   }
   const freshness = new LiveFreshness(update => {
@@ -139,7 +143,7 @@ function runApplication(profileError: unknown): void {
       const update: LiveTelemetry = {...initialLive(selection), status: 'restarting', reason: 'Telemetry service failed; current interval is unknown'};
       freshness.invalidate(update); dashboardSubscriptions.close(); dashboardPort = undefined; window?.webContents.send('telemetry:service-state', update);}
   });
-  function appState(): AppState {return {health: {...health}, settings: settingsStore.view()};}
+  function appState(): AppState {return {health: {...health}, settings: settingsStore.view(), overlayEdit};}
   function pushAppState(): void {if (appStateSubscribed && window && !window.isDestroyed()) window.webContents.send('app:state', appState());}
   function updateHealth(event: HealthEvent, immediate = false): void {
     const next = reduceHealth(health, event);
@@ -150,19 +154,60 @@ function runApplication(profileError: unknown): void {
   }
   // A saved unit profile or overlay setting, or a late startup read being applied, pushes the settings view and
   // republishes main's stored freshness output in the current units, layout and sections, then re-places the overlay
-  // for its layout. It accepts no observation and renews no SDK or window authority: freshness and its expiry timers
-  // are untouched, and the placement uses the last observation the controller already holds.
+  // for its layout and saved placement. It accepts no observation and renews no SDK or window authority: freshness and
+  // its expiry timers are untouched, and the placement uses the last observation the controller already holds.
   function settingsChanged(): void {
     pushAppState();
     if (lifecycle.exiting) return;
     const view = settingsStore.view();
     publishOverlay(lastLive, view.units, view.overlay);
-    overlayController?.setLayout(view.overlay.layout);
+    overlayController?.setLayout(view.overlay.layout, view.overlay.placements[view.overlay.layout]);
+  }
+  // ET-012b edit mode. The controller reports every change of its edit state; main pushes it to the dashboard and,
+  // when the mode itself changes, republishes the overlay projection with its `editing` flag (no authority renewed).
+  const focusGate = new OwnForegroundGate(foreground => overlayController?.setOwnForeground(foreground));
+  function overlayEditChanged(state: OverlayEditState): void {
+    const toggled = state.active !== overlayEdit.active;
+    overlayEdit = state;
+    if (!state.active) focusGate.stop();
+    pushAppState();
+    if (toggled && !lifecycle.exiting) {const view = settingsStore.view(); publishOverlay(lastLive, view.units, view.overlay);}
+  }
+  /** True while the dashboard or the overlay window has the keyboard focus. */
+  function ownFocused(): boolean {
+    return Boolean((window && !window.isDestroyed() && window.isFocused()) || (overlay && !overlay.isDestroyed() && overlay.isFocused()));
+  }
+  function focusChanged(): void {if (overlayEdit.active) focusGate.update(ownFocused());}
+  /** Leaves edit mode (hidden and click-through again first) and returns the draft; nothing is written here. */
+  function endOverlayEdit(): ReturnType<OverlayController['endEdit']> {
+    focusGate.stop();
+    return overlayController?.endEdit();
+  }
+  /** Discards an active edit without writing (decision M5); a no-op in driving mode. */
+  function cancelOverlayEdit(reason: string): void {
+    if (!overlayEdit.active) return;
+    timeline?.('OVERLAY_EDIT_CANCELLED', {reason});
+    endOverlayEdit();
+  }
+  /**
+   * Done/Enter and Cancel/Esc (decision M11): edit mode ends first, so the overlay is hidden and click-through before
+   * anything is written. A save then persists the draft through the shared settings queue and applies it only after the
+   * durable write; a failed save keeps the previous placement and reports `saveError`. Cancel writes nothing.
+   */
+  async function finishOverlayEdit(outcome: OverlayEditOutcome): Promise<SettingsView> {
+    if (lifecycle.exiting) throw new Error('Overlay edit request was retired');
+    if (!overlayEdit.active) throw new Error('Overlay edit mode is not active');
+    const layout = overlayEdit.layout, draft = endOverlayEdit();
+    timeline?.('OVERLAY_EDIT_FINISHED', {outcome});
+    if (outcome === 'cancel' || !draft) return settingsStore.view();
+    return saveSettings(() => settingsStore.setOverlayPlacement(layout, draft));
   }
   function presentTray(immediate = false): void {
     trayPresenter?.update({health, exiting: lifecycle.exiting, source: {selection: lastLive.selection, status: lastLive.status}}, immediate);
   }
-  function retireOverlay(): void {overlayPort = undefined; overlayController?.loaded(false); overlaySubscriptions.close();}
+  // The overlay is marked not loaded first, so an edit in progress hides it before the edit is cancelled; that order avoids
+  // a needless show on the retired document.
+  function retireOverlay(): void {overlayPort = undefined; overlayController?.loaded(false); cancelOverlayEdit('overlay-retired'); overlaySubscriptions.close();}
   function retireLive(): void {freshness.close(); closeUpstream(); retireOverlay(); dashboardSubscriptions.close(); dashboardPort = undefined;}
   function stop(): void {retireLive(); supervisor.stop();}
   function fail(code: string, error?: unknown): void {retireLive(); supervisor.fail(code, error);}
@@ -214,20 +259,41 @@ function runApplication(profileError: unknown): void {
     try {port1.start(); child.postMessage({type: 'subscribe'}, [port2]);} catch (error) {port2.close(); lost(); log('MAIN_SUBSCRIPTION_FAILED', String(error));}
   }
   function createOverlay(): void {
-    // Created at the saved layout's nominal size; the controller sets the actual bounds inside the game's client area.
-    const settings = settingsStore.view(), size = OVERLAY_NOMINAL_SIZE[settings.overlay.layout];
-    const created = overlay = new BrowserWindow({width: size.width, height: size.height, show: false, frame: false, transparent: true, backgroundColor: '#00000000',
+    // Created at the saved layout's nominal size times its saved scale; the controller sets the actual bounds inside the
+    // game's client area. The scale is also the document's zoom factor (ET-012b decision M4); the overlay's own session
+    // keeps that zoom away from the dashboard, whose file:// origin it would otherwise share.
+    const settings = settingsStore.view(), layout = settings.overlay.layout, placement = settings.overlay.placements[layout], size = OVERLAY_NOMINAL_SIZE[layout];
+    const created = overlay = new BrowserWindow({width: Math.round(size.width * placement.scale), height: Math.round(size.height * placement.scale), show: false, frame: false,
+      transparent: true, backgroundColor: '#00000000',
       focusable: false, skipTaskbar: true, resizable: false, movable: false, minimizable: false, maximizable: false, fullscreenable: false,
       // A dedicated in-memory session separates the overlay's browser context from the dashboard.
-      webPreferences: {partition: 'ets2telemetry-overlay', preload: path.join(__dirname, 'overlay-preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false}});
+      webPreferences: {partition: 'ets2telemetry-overlay', preload: path.join(__dirname, 'overlay-preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false,
+        zoomFactor: placement.scale}});
     timeline?.('OVERLAY_WINDOW_CREATED'); observeLoads(created.webContents, 'OVERLAY');
     created.setIgnoreMouseEvents(true); created.setFocusable(false);
     // Not the constructor's alwaysOnTop: its default `floating` level stacks the overlay behind the
     // taskbar, which drops WS_EX_TOPMOST while a borderless full-screen game is foreground.
     created.setAlwaysOnTop(true, OVERLAY_TOPMOST_LEVEL);
-    overlayController = new OverlayController(created, screen, phase => log('OVERLAY_TOPMOST_RESTORED', undefined, {phase}), settings.overlay.layout);
+    overlayController = new OverlayController(created, screen, phase => log('OVERLAY_TOPMOST_RESTORED', undefined, {phase}), layout,
+      {placement, editChanged: overlayEditChanged});
     created.webContents.setWindowOpenHandler(() => ({action: 'deny'}));
     created.webContents.on('will-navigate', event => event.preventDefault());
+    // A loaded document starts at the default zoom; the scale in use applies again.
+    created.webContents.on('did-finish-load', () => overlayController?.restoreZoom());
+    // ET-012b edit mode (decisions M6, M8 and M9). Focus feeds the own-foreground gate. A drag of the edit overlay's
+    // native drag region holds placement until it ends; the dropped DIP bounds become clamped fractions and the window
+    // snaps inside the client area. Keys never reach the overlay document: in edit mode Enter saves and Escape cancels.
+    // The system menu of the drag region is never shown. Outside edit mode the window is not movable or focusable.
+    created.on('focus', focusChanged); created.on('blur', focusChanged);
+    created.on('will-move', () => overlayController?.moveStarted());
+    created.on('moved', () => {if (!created.isDestroyed()) overlayController?.moved(created.getBounds());});
+    created.on('system-context-menu', event => event.preventDefault());
+    created.webContents.on('before-input-event', (event, input) => {
+      event.preventDefault();
+      if (!overlayEdit.active || input.type !== 'keyDown') return;
+      if (input.key === 'Enter') void finishOverlayEdit('save').catch(() => undefined);
+      else if (input.key === 'Escape') void finishOverlayEdit('cancel').catch(() => undefined);
+    });
     const retire = () => retireOverlay();
     created.webContents.on('did-start-loading', retire);
     // The replaced document runs until the new one commits, behind the same trusted WebFrameMain, and its
@@ -250,13 +316,21 @@ function runApplication(profileError: unknown): void {
   function loadOverlay(): void {
     void overlay!.loadFile(path.join(__dirname, 'renderer', 'index.html'), {query: {view: 'overlay'}}).catch(error => fail('OVERLAY_LOAD_FAILED', error));
   }
-  // Retires only dashboard document state. Upstream, freshness, the overlay and the service are unaffected.
-  function retireDashboard(): void {rendererEpoch++; subscribed = false; appStateSubscribed = false; dashboardSubscriptions.close(); dashboardPort = undefined;}
+  // Retires only dashboard document state. Upstream, freshness, the overlay and the service are unaffected; an overlay
+  // edit started from the retired document is cancelled without writing.
+  function retireDashboard(): void {
+    cancelOverlayEdit('dashboard-retired');
+    rendererEpoch++; subscribed = false; appStateSubscribed = false; dashboardSubscriptions.close(); dashboardPort = undefined;
+  }
   function createWindow(): void {
     const created = window = new BrowserWindow({width: 800, height: 500, webPreferences: {preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false}});
     timeline?.('DASHBOARD_WINDOW_CREATED'); observeLoads(created.webContents, 'DASHBOARD');
     created.webContents.setWindowOpenHandler(() => ({action: 'deny'}));
     created.webContents.on('will-navigate', event => event.preventDefault());
+    created.on('focus', focusChanged); created.on('blur', focusChanged);
+    // Minimizing the dashboard ends an edit without saving, as closing it to the tray does: edit mode suppresses the
+    // driving overlay, which would otherwise stay hidden over the game until the dashboard came back (ET-012b M5).
+    created.on('minimize', () => {if (window === created) cancelOverlayEdit('dashboard-minimized');});
     const retireDocument = () => {if (window === created) retireDashboard();};
     created.webContents.on('did-start-loading', retireDocument);
     // As for the overlay: a subscription made before commit belongs to the replaced document. Left in place,
@@ -416,6 +490,8 @@ function runApplication(profileError: unknown): void {
     if (!trusted(event)) throw new Error('Untrusted settings request');
     const [layout] = request;
     if (request.length !== 1 || !isOverlayLayout(layout)) throw new Error('Invalid overlay layout request');
+    // The edited placement belongs to the current layout (ET-012b decision M5); finish the edit first.
+    if (overlayEdit.active) throw new Error('The overlay layout cannot change while its position is edited');
     return saveSettings(() => settingsStore.setOverlayLayout(layout));
   });
   // Exactly one complete section record: the fourteen ids, booleans only, at least one enabled; stored as a fresh copy.
@@ -424,6 +500,40 @@ function runApplication(profileError: unknown): void {
     const sections = request.length === 1 ? parseOverlaySections(request[0]) : undefined;
     if (!sections) throw new Error('Invalid overlay sections request');
     return saveSettings(() => settingsStore.setOverlaySections(sections));
+  });
+  // ET-012b overlay edit mode (decision M10): four fixed-shape channels, from the trusted dashboard main frame only.
+  // Entering needs writable settings and an application that is not exiting; drag, scale and reset write nothing.
+  function editRequest(event: IpcMainInvokeEvent, valid: boolean): OverlayController {
+    if (!trusted(event)) throw new Error('Untrusted overlay edit request');
+    if (!valid) throw new Error('Invalid overlay edit request');
+    if (lifecycle.exiting) throw new Error('Overlay edit request was retired');
+    if (!overlayController) throw new Error('Overlay edit mode is not available');
+    return overlayController;
+  }
+  ipcMain.handle('overlay-edit:begin', (event, ...request: unknown[]) => {
+    const controller = editRequest(event, request.length === 0);
+    if (overlayEdit.active) return overlayEdit;
+    if (!settingsStore.view().writable) throw new Error('Overlay edit mode needs writable settings');
+    focusGate.start(ownFocused());
+    timeline?.('OVERLAY_EDIT_STARTED');
+    return controller.beginEdit(focusGate.inFront);
+  });
+  // Exactly one finite scale in [0.5, 2], rounded to two decimals.
+  ipcMain.handle('overlay-edit:set-scale', (event, ...request: unknown[]) => {
+    const scale = request.length === 1 ? parseOverlayEditScale(request[0]) : undefined;
+    const controller = editRequest(event, scale !== undefined);
+    if (!overlayEdit.active) throw new Error('Overlay edit mode is not active');
+    return controller.setEditScale(scale!);
+  });
+  ipcMain.handle('overlay-edit:reset', (event, ...request: unknown[]) => {
+    const controller = editRequest(event, request.length === 0);
+    if (!overlayEdit.active) throw new Error('Overlay edit mode is not active');
+    return controller.resetEdit();
+  });
+  // Exactly `save` or `cancel`.
+  ipcMain.handle('overlay-edit:finish', async (event, ...request: unknown[]) => {
+    editRequest(event, request.length === 1 && isOverlayEditOutcome(request[0]));
+    return finishOverlayEdit(request[0] as OverlayEditOutcome);
   });
   ipcMain.handle('telemetry:select', async (event, source: unknown) => {
     if (!trusted(event) || !serviceReady) throw new Error('Untrusted source request');

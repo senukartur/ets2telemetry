@@ -16,22 +16,35 @@ let delays: number[];
 const failurePattern = /FAILED|TIMEOUT|UNCAUGHT|UNHANDLED|INVALID|RENDER_PROCESS_GONE/;
 // 2026-10-15T09:41:07.123Z is the clock of every quarantine below.
 const now = () => new Date(Date.UTC(2026, 9, 15, 9, 41, 7, 123));
-// ET-012a: every save writes format v2, which adds the overlay block (hand-written below); v1 files are migrated in
-// memory and stay unchanged on disk until the first save.
+// ET-012a added the overlay block (format v2); ET-012b adds its placements, so every save now writes format v3
+// (hand-written below). v1 and v2 files are migrated in memory and stay unchanged on disk until the first save.
 const ALL_ON = {'speed': true, 'gear': true, 'rpm': true, 'fuel': true, 'range': true, 'sdk-consumption': true, 'cargo': true, 'origin': true,
   'destination': true, 'distance-driven': true, 'distance-remaining': true, 'deadline': true, 'expected-income': true, 'game-time': true};
-const DEFAULT_OVERLAY = {layout: 'strip', sections: ALL_ON};
-/** The exact v2 lines of the overlay block, closing the document. */
-const overlayText = (layout: string, rpm = true) => ['  "overlay": {', `    "layout": "${layout}",`, '    "sections": {', '      "speed": true,', '      "gear": true,',
+// The ET-012a anchors at scale 1, in canonical layout order.
+const PLACEMENTS = {strip: {x: 0.5, y: 0, scale: 1}, card: {x: 1, y: 0, scale: 1}, cluster: {x: 0, y: 1, scale: 1}, hud: {x: 0, y: 0, scale: 1}};
+const DEFAULT_OVERLAY = {layout: 'strip', sections: ALL_ON, placements: PLACEMENTS};
+type Placements = typeof PLACEMENTS;
+/** The exact v3 lines of one layout's placement. */
+const placementText = (layout: keyof Placements, placements: Placements, last = false) => {
+  const {x, y, scale} = placements[layout];
+  return [`      "${layout}": {`, `        "x": ${x},`, `        "y": ${y},`, `        "scale": ${scale}`, last ? '      }' : '      },'];
+};
+/** The exact v3 lines of the overlay block, closing the document. */
+const overlayText = (layout: string, rpm = true, placements: Placements = PLACEMENTS) => ['  "overlay": {', `    "layout": "${layout}",`, '    "sections": {',
+  '      "speed": true,', '      "gear": true,',
   `      "rpm": ${rpm},`, '      "fuel": true,', '      "range": true,', '      "sdk-consumption": true,', '      "cargo": true,', '      "origin": true,',
   '      "destination": true,', '      "distance-driven": true,', '      "distance-remaining": true,', '      "deadline": true,', '      "expected-income": true,',
-  '      "game-time": true', '    }', '  }', '}', ''].join('\n');
-const v2Text = (ets2: string, ats: string, layout = 'strip', rpm = true) =>
-  `{\n  "format": "ets2telemetry.settings",\n  "version": 2,\n  "units": {\n    "ets2": "${ets2}",\n    "ats": "${ats}"\n  },\n` + overlayText(layout, rpm);
-const EXPECTED_US_ETS2 = v2Text('us-customary', 'us-customary');
+  '      "game-time": true', '    },', '    "placements": {', ...placementText('strip', placements), ...placementText('card', placements),
+  ...placementText('cluster', placements), ...placementText('hud', placements, true), '    }', '  }', '}', ''].join('\n');
+const v3Text = (ets2: string, ats: string, layout = 'strip', rpm = true, placements: Placements = PLACEMENTS) =>
+  `{\n  "format": "ets2telemetry.settings",\n  "version": 3,\n  "units": {\n    "ets2": "${ets2}",\n    "ats": "${ats}"\n  },\n` + overlayText(layout, rpm, placements);
+const EXPECTED_US_ETS2 = v3Text('us-customary', 'us-customary');
 const VALID_METRIC = '{"format":"ets2telemetry.settings","version":1,"units":{"ets2":"metric","ats":"metric"}}';
 const VALID_V2 = '{"format":"ets2telemetry.settings","version":2,"units":{"ets2":"metric","ats":"metric"},"overlay":{"layout":"hud","sections":' +
   JSON.stringify({...ALL_ON, rpm: false}) + '}}';
+const MOVED: Placements = {...PLACEMENTS, card: {x: 0.25, y: 0.75, scale: 1.5}};
+const VALID_V3 = '{"format":"ets2telemetry.settings","version":3,"units":{"ets2":"metric","ats":"metric"},"overlay":{"layout":"hud","sections":' +
+  JSON.stringify({...ALL_ON, rpm: false}) + ',"placements":' + JSON.stringify(MOVED) + '}}';
 const MIGRATED = {migratedFrom: 1};
 const CORRUPT = '{"format":"ets2telemetry.settings","version":1,"units":{"ets2":"metric",';
 
@@ -81,7 +94,7 @@ it('loads a valid file without rewriting it', async () => {
   expect((await read()).toString('utf8')).toBe(VALID_METRIC); expect(await list()).toEqual(['settings.json']);
 });
 
-it('writes the exact v2 content, synced before the rename, and applies it only afterwards', async () => {
+it('writes the exact v3 content, synced before the rename, and applies it only afterwards', async () => {
   const order: string[] = [];
   let settings!: SettingsStore;
   const fileSystem = wrapped({
@@ -190,7 +203,7 @@ it('keeps only the newest three quarantined files and leaves unrelated files alo
 });
 
 it('never modifies a newer-version file and refuses saves as read-only', async () => {
-  const newer = '{"format":"ets2telemetry.settings","version":3,"units":{"ets2":"us-customary","ats":"metric"},"layout":{}}';
+  const newer = '{"format":"ets2telemetry.settings","version":4,"units":{"ets2":"us-customary","ats":"metric"},"layout":{}}';
   await seed(newer);
   const settings = store();
   expect(await settings.load()).toEqual({units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'newer-version', writable: false, saveError: null});
@@ -207,7 +220,7 @@ it('rewrites a file with fallbacks completely without quarantining it', async ()
   expect(events[0]).toEqual({event: 'SETTINGS_FALLBACK', facts: {state: 'loaded-with-fallbacks', fields: 'units.ets2', ...MIGRATED}});
   await settings.setUnitProfile('ats', 'us-customary');
   expect(await list()).toEqual(['settings.json']);
-  expect((await read()).toString('utf8')).toBe(v2Text('metric', 'us-customary'));
+  expect((await read()).toString('utf8')).toBe(v3Text('metric', 'us-customary'));
 });
 
 it('refuses a settings directory that is a junction, without reading or writing through it', async () => {
@@ -254,7 +267,7 @@ it('serializes concurrent saves and applies them in request order', async () => 
   const results = await Promise.all([settings.setUnitProfile('ets2', 'us-customary'), settings.setUnitProfile('ats', 'metric'), settings.setUnitProfile('ets2', 'metric')]);
   expect(results.map(view => view.units)).toEqual([{ets2: 'us-customary', ats: 'us-customary'}, {ets2: 'us-customary', ats: 'metric'}, {ets2: 'metric', ats: 'metric'}]);
   expect(maximum).toBe(1);
-  expect(JSON.parse((await read()).toString('utf8'))).toEqual({format: 'ets2telemetry.settings', version: 2, units: {ets2: 'metric', ats: 'metric'}, overlay: DEFAULT_OVERLAY});
+  expect(JSON.parse((await read()).toString('utf8'))).toEqual({format: 'ets2telemetry.settings', version: 3, units: {ets2: 'metric', ats: 'metric'}, overlay: DEFAULT_OVERLAY});
 });
 
 it('bounds outstanding saves to four and reports idle work until they settle', async () => {
@@ -371,7 +384,7 @@ it.each([
     view: {units: {ets2: 'us-customary', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loaded-with-fallbacks', writable: true}, event: {event: 'SETTINGS_FALLBACK', facts: {state: 'loaded-with-fallbacks', fields: 'units.ats', ...MIGRATED}}},
   {name: 'an unsupported older file', content: '{"format":"ets2telemetry.settings","units":{"ets2":"us-customary","ats":"metric"}}',
     view: {units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'unsupported-older', writable: true}, event: {event: 'SETTINGS_FALLBACK', facts: {state: 'unsupported-older'}}},
-  {name: 'a newer-version file', content: '{"format":"ets2telemetry.settings","version":3,"units":{"ets2":"us-customary","ats":"metric"}}',
+  {name: 'a newer-version file', content: '{"format":"ets2telemetry.settings","version":4,"units":{"ets2":"us-customary","ats":"metric"}}',
     view: {units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'newer-version', writable: false}, event: {event: 'SETTINGS_FALLBACK', facts: {state: 'newer-version'}}}
 ])('applies a late read of $name with its own state and writability, writing nothing', async ({content, view, event}) => {
   await seed(content);
@@ -473,37 +486,99 @@ it('reports a failed save in the view and clears it with the next successful sav
   expect(await settings.setUnitProfile('ets2', 'us-customary')).toEqual({units: {ets2: 'us-customary', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null});
 });
 
-// ET-012a: settings format v2 with the overlay block.
-it('keeps a v1 file byte-identical at startup and writes v2 with its units on the first overlay save', async () => {
+// ET-012a: the overlay block (format v2, since ET-012b written as v3).
+it('keeps a v1 file byte-identical at startup and writes v3 with its units on the first overlay save', async () => {
   const v1 = '{"format":"ets2telemetry.settings","version":1,"units":{"ets2":"us-customary","ats":"metric"}}';
   await seed(v1);
   const settings = store();
   expect(await settings.load()).toEqual({units: {ets2: 'us-customary', ats: 'metric'}, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null});
   expect(events).toEqual([{event: 'SETTINGS_LOADED', facts: {state: 'loaded', migratedFrom: 1}}]);
   expect((await read()).toString('utf8')).toBe(v1); expect(await list()).toEqual(['settings.json']);
-  expect(await settings.setOverlayLayout('card')).toEqual({units: {ets2: 'us-customary', ats: 'metric'}, overlay: {layout: 'card', sections: ALL_ON},
+  expect(await settings.setOverlayLayout('card')).toEqual({units: {ets2: 'us-customary', ats: 'metric'}, overlay: {layout: 'card', sections: ALL_ON, placements: PLACEMENTS},
     state: 'loaded', writable: true, saveError: null});
-  expect((await read()).toString('utf8')).toBe(v2Text('us-customary', 'metric', 'card'));
+  expect((await read()).toString('utf8')).toBe(v3Text('us-customary', 'metric', 'card'));
   // A migrated file is not quarantined: it was valid.
   expect(await list()).toEqual(['settings.json']);
   expect(events.at(-1)).toEqual({event: 'SETTINGS_SAVED', facts: {overlayLayout: 'card'}});
 });
 
-it('loads a v2 overlay block and reports no migration', async () => {
+// ET-012b (REG-017): settings format v3 with the overlay placements.
+it('keeps a v2 file byte-identical at startup with default placements, and rewrites it as v3 on the first save', async () => {
   await seed(VALID_V2);
-  expect(await store().load()).toEqual({units: {ets2: 'metric', ats: 'metric'}, overlay: {layout: 'hud', sections: {...ALL_ON, rpm: false}},
+  const settings = store();
+  expect(await settings.load()).toEqual({units: {ets2: 'metric', ats: 'metric'}, overlay: {layout: 'hud', sections: {...ALL_ON, rpm: false}, placements: PLACEMENTS},
     state: 'loaded', writable: true, saveError: null});
-  expect(events).toEqual([{event: 'SETTINGS_LOADED', facts: {state: 'loaded'}}]);
-  expect((await read()).toString('utf8')).toBe(VALID_V2);
+  expect(events).toEqual([{event: 'SETTINGS_LOADED', facts: {state: 'loaded', migratedFrom: 2}}]);
+  expect((await read()).toString('utf8')).toBe(VALID_V2); expect(await list()).toEqual(['settings.json']);
+  await settings.setUnitProfile('ets2', 'us-customary');
+  expect((await read()).toString('utf8')).toBe(v3Text('us-customary', 'metric', 'hud', false));
+  expect(await list()).toEqual(['settings.json']);
 });
 
-it('saves overlay sections as exact v2 bytes, applied only after the rename, with the enabled count as its fact', async () => {
+it('loads a v3 file with its placements and reports no migration', async () => {
+  await seed(VALID_V3);
+  expect(await store().load()).toEqual({units: {ets2: 'metric', ats: 'metric'}, overlay: {layout: 'hud', sections: {...ALL_ON, rpm: false}, placements: MOVED},
+    state: 'loaded', writable: true, saveError: null});
+  expect(events).toEqual([{event: 'SETTINGS_LOADED', facts: {state: 'loaded'}}]);
+  expect((await read()).toString('utf8')).toBe(VALID_V3);
+});
+
+it('saves one layout placement as exact v3 bytes, applied only after the rename, with the layout and scale as facts', async () => {
+  await seed(VALID_V3);
+  // The rename checks that nothing was applied before it; `settings` is assigned before any save runs.
+  const settings: SettingsStore = store(wrapped({rename: async (from, to) => {expect(settings.view().overlay.placements.strip).toEqual(PLACEMENTS.strip); await fs.rename(from, to);}}));
+  await settings.load();
+  const view = await settings.setOverlayPlacement('strip', {x: 0.123456, y: 1, scale: 1.25});
+  const saved = {...MOVED, strip: {x: 0.1235, y: 1, scale: 1.25}};
+  expect(view).toEqual({units: {ets2: 'metric', ats: 'metric'}, overlay: {layout: 'hud', sections: {...ALL_ON, rpm: false}, placements: saved},
+    state: 'loaded', writable: true, saveError: null});
+  expect((await read()).toString('utf8')).toBe(v3Text('metric', 'metric', 'hud', false, saved));
+  expect(events.at(-1)).toEqual({event: 'SETTINGS_SAVED', facts: {overlayPlacement: 'strip', overlayScale: 1.25}});
+  expect(await store().load()).toMatchObject({state: 'loaded', overlay: {placements: saved}});
+});
+
+it('keeps the previous placement when a placement save fails and refuses it while read-only', async () => {
+  await seed(VALID_V3);
+  const settings = store(wrapped({rename: () => Promise.reject(errno('EIO'))}));
+  await settings.load();
+  await expect(settings.setOverlayPlacement('card', {x: 0, y: 0, scale: 2})).rejects.toMatchObject({code: 'SETTINGS_WRITE_FAILED'});
+  expect(settings.view()).toMatchObject({overlay: {placements: MOVED}, saveError: 'SETTINGS_WRITE_FAILED'});
+  expect((await read()).toString('utf8')).toBe(VALID_V3); expect(await list()).toEqual(['settings.json']);
+  const newer = '{"format":"ets2telemetry.settings","version":4,"overlay":{"placements":{}}}';
+  await seed(newer);
+  const readOnly = store(); await readOnly.load();
+  await expect(readOnly.setOverlayPlacement('card', {x: 0, y: 0, scale: 2})).rejects.toMatchObject({code: 'SETTINGS_READ_ONLY'});
+  expect((await read()).toString('utf8')).toBe(newer); expect(readOnly.view().overlay.placements).toEqual(PLACEMENTS);
+  const gated = delayedRead();
+  const pending = await loadPastBudget(gated.fs);
+  await expect(pending.settings.setOverlayPlacement('hud', {x: 0, y: 0, scale: 1})).rejects.toMatchObject({code: 'SETTINGS_WRITE_FAILED'});
+  gated.release();
+  await vi.waitFor(() => expect(pending.changed).toHaveBeenCalledOnce());
+});
+
+it('serializes placement saves with unit and overlay saves in one queue and one four-request bound', async () => {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => {release = resolve;});
+  const settings = store(wrapped({rename: async (from, to) => {await gate; await fs.rename(from, to);}}));
+  await settings.load();
+  const accepted = [settings.setOverlayPlacement('card', {x: 0.25, y: 0.75, scale: 1.5}), settings.setUnitProfile('ets2', 'us-customary'),
+    settings.setOverlaySections({...ALL_ON, rpm: false}), settings.setOverlayPlacement('strip', {x: 0, y: 0, scale: 0.5})];
+  await expect(settings.setOverlayPlacement('hud', {x: 0, y: 0, scale: 1})).rejects.toBeInstanceOf(SettingsBusyError);
+  release(); await Promise.all(accepted);
+  const saved = {...MOVED, strip: {x: 0, y: 0, scale: 0.5}};
+  expect(settings.view()).toMatchObject({units: {ets2: 'us-customary', ats: 'us-customary'}, overlay: {layout: 'strip', sections: {...ALL_ON, rpm: false}, placements: saved}});
+  expect((await read()).toString('utf8')).toBe(v3Text('us-customary', 'us-customary', 'strip', false, saved));
+  expect(events.filter(row => row.event === 'SETTINGS_SAVED').map(row => row.facts)).toEqual([
+    {overlayPlacement: 'card', overlayScale: 1.5}, {game: 'ets2', profile: 'us-customary'}, {overlaySections: 13}, {overlayPlacement: 'strip', overlayScale: 0.5}]);
+});
+
+it('saves overlay sections as exact v3 bytes, applied only after the rename, with the enabled count as its fact', async () => {
   // The rename checks that nothing was applied before it; `settings` is assigned before any save runs.
   const settings: SettingsStore = store(wrapped({rename: async (from, to) => {expect(settings.view().overlay.sections.rpm).toBe(true); await fs.rename(from, to);}}));
   await settings.load();
   const view = await settings.setOverlaySections({...ALL_ON, rpm: false});
-  expect(view.overlay).toEqual({layout: 'strip', sections: {...ALL_ON, rpm: false}});
-  expect((await read()).toString('utf8')).toBe(v2Text('metric', 'us-customary', 'strip', false));
+  expect(view.overlay).toEqual({layout: 'strip', sections: {...ALL_ON, rpm: false}, placements: PLACEMENTS});
+  expect((await read()).toString('utf8')).toBe(v3Text('metric', 'us-customary', 'strip', false));
   expect(events.at(-1)).toEqual({event: 'SETTINGS_SAVED', facts: {overlaySections: 13}});
   expect(await store().load()).toMatchObject({state: 'loaded', overlay: {layout: 'strip', sections: {...ALL_ON, rpm: false}}});
 });
@@ -514,13 +589,13 @@ it('keeps the previous overlay settings in use when an overlay save fails', asyn
   await settings.load();
   await expect(settings.setOverlayLayout('cluster')).rejects.toMatchObject({code: 'SETTINGS_WRITE_FAILED'});
   await expect(settings.setOverlaySections(ALL_ON)).rejects.toMatchObject({code: 'SETTINGS_WRITE_FAILED'});
-  expect(settings.view()).toEqual({units: {ets2: 'metric', ats: 'metric'}, overlay: {layout: 'hud', sections: {...ALL_ON, rpm: false}},
+  expect(settings.view()).toEqual({units: {ets2: 'metric', ats: 'metric'}, overlay: {layout: 'hud', sections: {...ALL_ON, rpm: false}, placements: PLACEMENTS},
     state: 'loaded', writable: true, saveError: 'SETTINGS_WRITE_FAILED'});
   expect((await read()).toString('utf8')).toBe(VALID_V2); expect(await list()).toEqual(['settings.json']);
 });
 
 it('refuses overlay saves for a newer-version file and while the startup read is pending', async () => {
-  const newer = '{"format":"ets2telemetry.settings","version":3,"overlay":{"layout":"card"}}';
+  const newer = '{"format":"ets2telemetry.settings","version":4,"overlay":{"layout":"card"}}';
   await seed(newer);
   const settings = store(); await settings.load();
   await expect(settings.setOverlayLayout('card')).rejects.toMatchObject({code: 'SETTINGS_READ_ONLY'});
@@ -548,7 +623,7 @@ it('serializes unit and overlay saves in one queue so that every change survives
   expect(results.map(view => [view.units, view.overlay.layout, view.overlay.sections.rpm])).toEqual([
     [{ets2: 'us-customary', ats: 'us-customary'}, 'strip', true], [{ets2: 'us-customary', ats: 'us-customary'}, 'cluster', true],
     [{ets2: 'us-customary', ats: 'us-customary'}, 'cluster', false], [{ets2: 'us-customary', ats: 'metric'}, 'cluster', false]]);
-  expect((await read()).toString('utf8')).toBe(v2Text('us-customary', 'metric', 'cluster', false));
+  expect((await read()).toString('utf8')).toBe(v3Text('us-customary', 'metric', 'cluster', false));
   expect(events.filter(row => row.event === 'SETTINGS_SAVED').map(row => row.facts)).toEqual([
     {game: 'ets2', profile: 'us-customary'}, {overlayLayout: 'cluster'}, {overlaySections: 13}, {game: 'ats', profile: 'metric'}]);
 });

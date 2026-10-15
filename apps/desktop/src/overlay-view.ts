@@ -43,11 +43,13 @@ export interface OverlayView {
   gauge?: {speed?: OverlayItem; gear?: OverlayItem; rpm?: OverlayItem};
   /** Items outside the cluster gauge, in order. */
   panel: OverlayItem[];
+  /** The overlay edit mode (ET-012b): the renderer outlines the overlay and makes it a drag region. */
+  editing: boolean;
 }
 
 /** What the overlay shows before main's first delivery: no signal, no sections. */
 export const OVERLAY_PLACEHOLDER: OverlayPresentation = Object.freeze({source: 'No game', origin: 'none', status: 'waiting', speed: '—', speedUnit: 'km/h',
-  fuel: '—', fuelUnit: 'L', freshness: 'unavailable', layout: 'strip', paused: false, sections: Object.freeze([])});
+  fuel: '—', fuelUnit: 'L', freshness: 'unavailable', layout: 'strip', paused: false, sections: Object.freeze([]), editing: false});
 const GAUGE_SECTIONS: ReadonlySet<OverlaySectionId> = new Set<OverlaySectionId>(['speed', 'gear', 'rpm']);
 const DASH = '—';
 
@@ -77,6 +79,7 @@ export function overlayView(presentation: OverlayPresentation = OVERLAY_PLACEHOL
     layout: presentation.layout, source: presentation.source, origin: presentation.origin, status: presentation.status, freshness: presentation.freshness,
     paused: presentation.paused, dim: presentation.freshness !== 'current', tags, items, groups,
     ...(gaugeShown ? {gauge: {speed: byId.get('speed'), gear: byId.get('gear'), rpm: byId.get('rpm')}} : {}),
-    panel: gaugeShown ? items.filter(item => !GAUGE_SECTIONS.has(item.id)) : items
+    panel: gaugeShown ? items.filter(item => !GAUGE_SECTIONS.has(item.id)) : items,
+    editing: presentation.editing === true
   };
 }
