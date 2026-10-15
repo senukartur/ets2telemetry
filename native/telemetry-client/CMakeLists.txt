@@ -13,12 +13,14 @@ set(CLIENT_TEST_CASES
   retired-record delete-pending-record denied-record zero-record short-record directory-record reparse-record
   valid creation dead stale-live dead-live collision session malformed dacl payload-break bad-length invalid-credit quiet quiet-exit partial-prefix partial-payload
   capture capture-v0-hello capture-bad-arguments
+  v1-valid v1-policy v1-major-mismatch v1-name-mismatch v1-collision v1-v0-hello v1-cap0-hello
+  v1-client-kind v1-client-oversize v1-bad-tag v1-partial-length v1-partial-payload v1-zero-length v1-ack-while-quiet v1-write-deadline v1-capture-conflict
   policy-prune policy-cap policy-duplicate policy-case-duplicate policy-junction
   policy-lock-busy policy-lock-pending policy-publish-busy image-busy policy-readonly)
-# These cases wait out the broker's fixed 5 s frame deadline or the fixture's 5.5 s quiet window
-# (about 5-6 s each; every other case takes well under 1 s). Per-entry timeouts are hang backstops
-# above the fixture's own 15 s wait bound; ASan entries get twice the time.
-set(CLIENT_TEST_TIMED_CASES quiet quiet-exit partial-prefix partial-payload)
+# These cases wait out the broker's fixed 5 s frame or client-write deadline or the fixture's 5.5 s
+# quiet window (about 5-6 s each; every other case takes well under 1 s). Per-entry timeouts are hang
+# backstops above the fixture's own 15 s wait bound; ASan entries get twice the time.
+set(CLIENT_TEST_TIMED_CASES quiet quiet-exit partial-prefix partial-payload v1-write-deadline)
 function(add_client_test_cases prefix fixture broker scale)
   foreach(test_case IN LISTS CLIENT_TEST_CASES)
     if(test_case IN_LIST CLIENT_TEST_TIMED_CASES)
@@ -42,7 +44,7 @@ if(ETS2TELEMETRY_CLIENT_ASAN)
     else()
       set(entry tests/client-test.cpp)
     endif()
-    add_executable(${target} ${entry} ../telemetry-plugin/src/protocol-v0.cpp)
+    add_executable(${target} ${entry} ../telemetry-plugin/src/protocol-v0.cpp ../telemetry-plugin/src/protocol-v1.cpp)
     target_include_directories(${target} PRIVATE ../telemetry-plugin/src)
     target_compile_definitions(${target} PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE ETS2TELEMETRY_CLIENT_ASAN_DIAGNOSTICS)
     target_compile_options(${target} PRIVATE /W4 /WX /EHsc /fsanitize=address /Zi)
@@ -52,13 +54,13 @@ if(ETS2TELEMETRY_CLIENT_ASAN)
   set_target_properties(telemetry-client-test-asan PROPERTIES OUTPUT_NAME eurotrucks2 RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/asan-test-fixture")
   add_client_test_cases(native-pipe-client-asan telemetry-client-test-asan telemetry-pipe-client-asan 2)
 endif()
-add_executable(telemetry-pipe-client src/client.cpp ../telemetry-plugin/src/protocol-v0.cpp)
+add_executable(telemetry-pipe-client src/client.cpp ../telemetry-plugin/src/protocol-v0.cpp ../telemetry-plugin/src/protocol-v1.cpp)
 target_include_directories(telemetry-pipe-client PRIVATE ../telemetry-plugin/src)
 target_compile_definitions(telemetry-pipe-client PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
 target_compile_options(telemetry-pipe-client PRIVATE /W4 /WX /EHsc)
 target_link_libraries(telemetry-pipe-client PRIVATE advapi32 bcrypt)
 if(BUILD_TESTING)
-  add_executable(telemetry-client-test tests/client-test.cpp ../telemetry-plugin/src/protocol-v0.cpp)
+  add_executable(telemetry-client-test tests/client-test.cpp ../telemetry-plugin/src/protocol-v0.cpp ../telemetry-plugin/src/protocol-v1.cpp)
   target_include_directories(telemetry-client-test PRIVATE ../telemetry-plugin/src)
   target_compile_definitions(telemetry-client-test PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
   target_compile_options(telemetry-client-test PRIVATE /W4 /WX /EHsc)
