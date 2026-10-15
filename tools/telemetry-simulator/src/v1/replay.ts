@@ -209,7 +209,7 @@ export class V1Driver {
     switch (step.action) {
       case 'connect': yield* this.connect(atMs, connection, step.client); break;
       case 'disconnect': if (this.open) yield* this.closeClient(atMs, 'disconnect', 'server', true); break;
-      case 'clientFault': yield* isHelloFault(step.fault) ? this.helloFault(atMs, connection, step.fault) : this.liveFault(atMs, step.fault as LiveFault); break;
+      case 'clientFault': yield* isHelloFault(step.fault) ? this.helloFault(atMs, connection, step.fault) : this.liveFault(atMs, step.fault); break;
       case 'wireFault': yield* this.wireFault(atMs, step.fault); break;
       case 'secondClient': {
         const o = this.open; if (!o || o.stalled) throw new Error('A second client needs an open, reading connection');
