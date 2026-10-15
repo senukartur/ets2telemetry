@@ -7,3 +7,6 @@ export function isScaffoldStatus(value: unknown): boolean {
 // tests/unit/telemetry-core-boundaries.test.ts.
 export * from './units';
 export * from './display-profile';
+export * from './readings';
+export * from './normalize-v0';
+export * from './normalize-v1';
