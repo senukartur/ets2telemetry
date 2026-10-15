@@ -89,7 +89,7 @@ struct HookState {
   Handle blocked_read, blocked_write;
   std::atomic<unsigned> accepts{0}, reads{0}, blocks{0};
   std::atomic<DWORD> observed_error{ERROR_SUCCESS}, late_read_error{ERROR_SUCCESS};
-  std::atomic<bool> synchronized{true}; DWORD injected = ERROR_SUCCESS;
+  std::atomic<bool> synchronized{true}; DWORD injected = ERROR_SUCCESS; bool cancel_startup_read = false;
   static HookState* active;
   ~HookState() { set_transport_test_hook(nullptr); active=nullptr; }
   void enable() { active=this; set_transport_test_hook(hook); }
@@ -101,6 +101,18 @@ struct HookState {
       // Holds the worker past the 1 s SDK-initialization wait until released or stopped.
       SetEvent(s.ready.get()); HANDLE handles[]{stop,s.release.get()};
       if(WaitForMultipleObjects(s.mode==Mode::startup_until_stop?1:2,handles,FALSE,10000)==WAIT_TIMEOUT)s.synchronized.store(false);
+      if(s.mode==Mode::startup_until_stop) {
+        // stop() has signalled; resume only after its first CancelSynchronousIo request has returned.
+        // Otherwise that request can abort the endpoint/discovery I/O that follows, which turns an
+        // injected success into a genuine failure (hosted run 38643076212).
+        if(WaitForSingleObject(s.first_cancel.get(),2000)!=WAIT_OBJECT_0)s.synchronized.store(false);
+        if(s.cancel_startup_read) {
+          // A real synchronous startup read pending on the worker; stop's repeated cancellation aborts it.
+          char byte=0; DWORD count=0; const auto ok=ReadFile(s.blocked_read.get(),&byte,1,&count,nullptr);
+          s.late_read_error.store(ok?ERROR_SUCCESS:GetLastError()); SetEvent(s.completed.get());
+          return ok?ERROR_SUCCESS:s.late_read_error.load();
+        }
+      }
       return s.injected;
     }
     if(name=="startup-await-timeout" && s.mode==Mode::startup_race) {
@@ -138,7 +150,12 @@ struct HookState {
         s.late_read_error.store(ok?ERROR_SUCCESS:GetLastError()); SetEvent(s.completed.get());
       } else if(WaitForSingleObject(stop,2000)!=WAIT_OBJECT_0)s.synchronized.store(false);
     }
-    if(name=="stop-after-cancel")SetEvent(s.first_cancel.get());
+    if(name=="stop-after-cancel") {
+      SetEvent(s.first_cancel.get());
+      // An injected outcome must not meet stop's repeated cancellation either: hold that loop until the
+      // released worker has finished. The real-read variant needs the repetition and is not held.
+      if(s.mode==Mode::startup_until_stop && !s.cancel_startup_read && WaitForSingleObject(object,10000)!=WAIT_OBJECT_0)s.synchronized.store(false);
+    }
     return result;
   }
 };
@@ -262,13 +279,24 @@ void startup_late() {
     Handle replacement(CreateNamedPipeW(name.c_str(),PIPE_ACCESS_DUPLEX|FILE_FLAG_OVERLAPPED|FILE_FLAG_FIRST_PIPE_INSTANCE,PIPE_TYPE_BYTE|PIPE_REJECT_REMOTE_CLIENTS,1,4096,4096,0,f.security.attributes()));
     require(!replacement&&hooks.synchronized.load(),"foreign endpoint preserved");
   }
-  for(const DWORD injected:{static_cast<DWORD>(ERROR_SUCCESS),static_cast<DWORD>(ERROR_OPERATION_ABORTED)}) {
-    // Stop during the hold: the worker either still completes or fails as if cancelled. Neither is dropped.
-    HookState hooks; Fixture f; hooks.mode=HookState::Mode::startup_until_stop; hooks.injected=injected; hooks.enable(); hold_past_wait(hooks,f);
-    const auto started=GetTickCount64(); f.server.stop(); const auto elapsed=GetTickCount64()-started; std::cout<<"pendingStopMs="<<elapsed<<'\n';
-    require(elapsed<1000&&f.server.endpoint().empty(),"stop joins a pending startup promptly"); require(f.host.logs.empty(),"worker never logs"); f.adapter->shutdown();
-    const bool failed=injected!=ERROR_SUCCESS;
-    require(f.host.logs.size()==1&&f.host.log_types[0]==(failed?SCS_LOG_TYPE_warning:SCS_LOG_TYPE_message)&&f.host.logs[0]==(failed?late_stopped:late_started)&&hooks.synchronized.load(),"a startup ending during stop is logged once at shutdown, without a stage reason for a failure");
+  for(const int variant:{0,1,2}) {
+    // Stop during the hold: the worker either still completes (0), fails as if cancelled (1), or has a real
+    // synchronous startup read aborted by stop's cancellation (2). Neither outcome is dropped. The hook
+    // orders 0 and 1 after stop's cancellation requests, so each run reaches the outcome it asserts.
+    HookState hooks; Fixture f; hooks.mode=HookState::Mode::startup_until_stop; hooks.injected=variant==1?static_cast<DWORD>(ERROR_OPERATION_ABORTED):static_cast<DWORD>(ERROR_SUCCESS);
+    std::atomic<bool> fallback{false}; std::thread guard;
+    if(variant==2) {
+      HANDLE read=nullptr,write=nullptr; require(CreatePipe(&read,&write,nullptr,0)!=FALSE,"owned synchronous startup read fixture"); hooks.blocked_read.reset(read); hooks.blocked_write.reset(write); hooks.cancel_startup_read=true;
+    }
+    hooks.enable(); hold_past_wait(hooks,f);
+    // A bounded fallback releases a read that cancellation never reached, so a regression fails instead of hanging.
+    if(variant==2) guard=std::thread([&]{if(WaitForSingleObject(hooks.completed.get(),2000)!=WAIT_OBJECT_0){fallback.store(true); char byte=1; DWORD written=0; WriteFile(hooks.blocked_write.get(),&byte,1,&written,nullptr);}});
+    const auto started=GetTickCount64(); f.server.stop(); const auto elapsed=GetTickCount64()-started; if(guard.joinable())guard.join();
+    const bool failed=variant!=0, silent=f.host.logs.empty(); const auto status=f.server.status(); f.adapter->shutdown();
+    std::cout<<"pendingStopMs="<<elapsed<<" variant="<<variant<<" failed="<<(status==Status::failed)<<" lateReadError="<<hooks.late_read_error.load()<<" log="<<(f.host.logs.empty()?std::string("none"):f.host.logs[0])<<'\n';
+    require(elapsed<1000&&f.server.endpoint().empty()&&!fallback.load(),"stop joins a pending startup promptly"); require(silent,"worker never logs");
+    require(status==(failed?Status::failed:Status::stopped)&&(variant!=2||hooks.late_read_error.load()==ERROR_OPERATION_ABORTED),"stop-time startup outcome is the one each variant forces");
+    require(f.host.logs.size()==1&&f.host.log_types[0]==(failed?SCS_LOG_TYPE_warning:SCS_LOG_TYPE_message)&&f.host.logs[0]==(failed?late_stopped:late_started)&&f.host.wrong_thread==0&&hooks.synchronized.load(),"a startup ending during stop is logged once at shutdown, without a stage reason for a failure");
   }
   for(const bool collide:{false,true}) {
     // The wait expires, then the worker completes before the caller's exchange: the result is the caller's.
