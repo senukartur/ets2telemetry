@@ -123,7 +123,7 @@ Restrict named pipe access to the local user and reject remote connections. Expo
 
 ### Main Application
 
-The minimum sections are connection and diagnostics, live metrics, the trip journal, trip details, and settings. The application runs in the system tray. Closing the main window must not silently stop recording; fully exiting the application must be an explicit action.
+The minimum sections are connection and diagnostics, live metrics, the trip journal, trip details, and settings. The application runs in the system tray. Closing the main window must not silently stop recording; fully exiting the application must be an explicit action. ET-011a implements tray operation, a single instance and explicit exit; see [ET-011 authorization](#et-011-authorization--october-15-2026) and [the application lifecycle](docs/app-lifecycle.md).
 
 Distinguish waiting for a connection, active simulation, pause, lost connection, and version incompatibility. Stale readings must not appear to be current.
 
@@ -491,3 +491,29 @@ The owner approved the architect recommendations OD-1 to OD-6:
 | OD-6 | State `trailers` always has ten entries; an empty slot is unavailable (`not-observed`) |
 
 The producer's store rules are in [the native v1 transport](docs/native-transport-v1.md).
+
+## ET-011 authorization — October 15, 2026
+
+On October 15, 2026 the owner wrote (translated from Russian): "Overall, keep doing other tasks until you hit tests in the real game. Make optimal decisions. I want you to close as many tasks as possible without my involvement. If there are flaky tests, delegate their fixes to subagents." Under this standing delegation the coordinator started ET-011 (application tray lifecycle and persistent settings) and adopted the architect's recommendations C1–C17 below as coordinator decisions. The owner has not reviewed them individually; they can be revisited like any other recorded decision. This section covers ET-011 only; other packages started under the same delegation are recorded in their own sections.
+
+| # | Decision |
+| --- | --- |
+| C1 | Two PRs: ET-011a (tray lifecycle, single instance, explicit exit, health, service shutdown hooks), then ET-011b (persistent settings and unit profiles) from `main` after ET-011a merges |
+| C2 | Closing the main window destroys it and retires only its document state; reopening creates a new window that subscribes again |
+| C3 | The overlay survives main-window close and keeps following the game; it closes only on exit |
+| C4 | Single instance after the diagnostic profile override; a second launch exits 0 silently before any log, service or window; its arguments, working directory and data are ignored |
+| C5 | A generated multi-resolution PNG tray icon without a fixed GUID; menu with status, recording notice, Open and Exit; click opens; no balloons; without a notification area, closing minimizes |
+| C6 | One idempotent exit for the tray, the renderer, `app.quit()` and Windows session end; existing 3 s kill and 5 s final exit bounds unchanged |
+| C7 | Service shutdown in ordered intake, flush and storage phases with per-step budgets and a 2500 ms total |
+| C8 | Post-readiness service failures use the existing supervised restart with visible state instead of exiting; pre-readiness failures stay fatal |
+| C9 | Main-owned application health with fixed codes only; recording is reported unavailable |
+| C10 | Settings live in `%LOCALAPPDATA%\ETS2Telemetry\settings\settings.json` (ET-011b) |
+| C11 | Settings format v1 with validation, migration of older versions, read-only handling of newer versions, quarantine of invalid files and atomic writes (ET-011b) |
+| C12 | Per-game unit profiles `metric` and `us-customary`, defaulting to ETS2 metric and ATS US customary (ET-011b) |
+| C13 | English user interface text centralized in one module; no localization framework yet |
+| C14 | A narrow preload extension with sender and main-frame checks on every handler; no paths, details or generic patch API |
+| C15 | No autostart, auto-update or cloud synchronization |
+| C16 | A bounded lifecycle smoke in development and packaged modes under the unchanged Job limits, split into a separate restart scenario only if the 60 s Job is too tight |
+| C17 | Work packages ET-011a and ET-011b; the card stays in Review until its manual Windows and real-game checks are accepted |
+
+ET-011a changes the earlier behavior in which closing the dashboard stopped the v0 service and closed the overlay. Recording survival across close-to-tray (REG-012) still requires ET-015. Manual checks of the real notification-area icon, display scaling, Explorer restart, Start-menu relaunch and sign-out, and real-game overlay behavior while the main window is closed, remain pending; see [ET-011 validation](docs/validation/et-011.md). No autostart, auto-update, cloud synchronization or recording is authorized, and no game, TruckersMP, display or performance claim follows from synthetic or local checks.
