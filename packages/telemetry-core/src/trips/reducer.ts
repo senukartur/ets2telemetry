@@ -94,7 +94,7 @@ function queueAnnotations(slot: GameSlot, annotations: TripEffect[]) {
 }
 /**
  * The effects of one commit carrier (T18): queued lifecycle effects first, then the carrier's own effects, then at most
- * eight annotations, never more than MAX_EFFECTS in total. The carrier's own effects always fit (at most six by
+ * eight annotations, never more than MAX_EFFECTS in total. The carrier's own effects always fit (at most five by
  * construction) because they may reference `this-event`; queued effects never do, so they can wait.
  */
 function assemble(slot: GameSlot, own: TripEffect[], annotations: TripEffect[]): TripEffect[] {
