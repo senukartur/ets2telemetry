@@ -4,7 +4,8 @@
 import type Database from 'better-sqlite3';
 import {validateServerMessage, type Available, type EventRecord, type GapData, type ServerMessage, type SourceIdentity} from '../../../contracts/src/protocol-v1';
 import {
-  MAX_EFFECTS, MAX_SAMPLE_BATCH, type CommitOptions, type CommitResult, type CompletenessInterval, type EventReference, type SampleInput, type TripEffect, type Uint64
+  MAX_EFFECTS, MAX_SAMPLE_BATCH, type CommitOptions, type CommitResult, type CompletenessInterval, type CompletenessOptions, type EventReference, type SampleInput, type TripEffect,
+  type Uint64
 } from '../api';
 import {
   AMOUNT_FIELD, availabilityColumns, canonicalJson, DELIVERY_FIELDS, fromU64Key, isUuid, JOB_FIELDS, maskBits, moneyColumns, SAMPLE_FIELDS, sampleMonotonicNs,
@@ -149,18 +150,28 @@ function addTrailers(c: EffectContext, trip: bigint, refs: unknown) {
   if (!Array.isArray(refs) || refs.length > 10) fail('INVALID_INPUT');
   for (const ref of refs as EventReference[]) statement(c.db, 'INSERT OR IGNORE INTO trip_trailers (trip_ref, trailer_configuration_ref) VALUES (?, ?)').run(trip, configurationRef(c, 'trailer_configurations', ref));
 }
-function addInterval(c: EffectContext, interval: CompletenessInterval) {
+/**
+ * Inserts one completeness interval. With `ifAbsent` (recordCompleteness only, ET-015a) every value is validated first,
+ * then nothing is written, not even the clock row, when the session already holds an interval with the same trip
+ * reference, kind, first and last eventSeq and canonical detail.
+ */
+function addInterval(c: EffectContext, interval: CompletenessInterval, ifAbsent = false) {
   const trip = interval.tripUuid === undefined || interval.tripUuid === null ? null : tripRow(c, interval.tripUuid).id;
   const optionalUtc = (value: unknown) => value === undefined ? null : utcMs(value);
   const optionalKey = (value: unknown) => value === undefined ? null : u64Key(value as Uint64);
   const hasMonotonic = interval.startMonotonicNs !== undefined || interval.endMonotonicNs !== undefined;
-  const clock = interval.sourceClockId === undefined ? null : clockRef(c.db, c.session.id, 'source-monotonic', interval.sourceClockId);
-  if (hasMonotonic && clock === null) fail('INVALID_INPUT');
+  if (interval.sourceClockId !== undefined && !isUuid(interval.sourceClockId)) fail('INVALID_INPUT');
+  if (hasMonotonic && interval.sourceClockId === undefined) fail('INVALID_INPUT');
   let detail: string | null = null;
   if (interval.detail !== undefined) { if (typeof interval.detail !== 'object' || interval.detail === null || Array.isArray(interval.detail)) fail('INVALID_INPUT'); detail = canonicalJson(interval.detail); }
+  const kind = enumValue(interval.kind, INTERVAL_KINDS), startUtc = optionalUtc(interval.startUtcMs), endUtc = optionalUtc(interval.endUtcMs);
+  const startMonotonic = optionalKey(interval.startMonotonicNs), endMonotonic = optionalKey(interval.endMonotonicNs);
+  const first = optionalKey(interval.firstEventSeq), last = optionalKey(interval.lastEventSeq);
+  if (ifAbsent && statement(c.db, `SELECT 1 FROM completeness_intervals WHERE plugin_session_ref = ? AND trip_ref IS ? AND kind = ? AND first_event_seq IS ? AND last_event_seq IS ?
+    AND detail_json IS ? LIMIT 1`).pluck().get(c.session.id, trip, kind, first, last, detail) !== undefined) return;
+  const clock = interval.sourceClockId === undefined ? null : clockRef(c.db, c.session.id, 'source-monotonic', interval.sourceClockId);
   statement(c.db, insert('completeness_intervals', ['plugin_session_ref', 'trip_ref', 'kind', 'start_utc_ms', 'end_utc_ms', 'start_monotonic_ns', 'end_monotonic_ns', 'source_clock_ref', 'first_event_seq', 'last_event_seq', 'detail_json', 'created_utc_ms']))
-    .run(c.session.id, trip, enumValue(interval.kind, INTERVAL_KINDS), optionalUtc(interval.startUtcMs), optionalUtc(interval.endUtcMs), optionalKey(interval.startMonotonicNs),
-      optionalKey(interval.endMonotonicNs), clock, optionalKey(interval.firstEventSeq), optionalKey(interval.lastEventSeq), detail, c.now);
+    .run(c.session.id, trip, kind, startUtc, endUtc, startMonotonic, endMonotonic, clock, first, last, detail, c.now);
 }
 
 /** Applies typed trip effects in order. Every reference is resolved inside the transaction; any failure aborts it. */
@@ -383,8 +394,13 @@ export function appendSamples(conn: StorageConnection, pluginSessionId: string, 
   });
 }
 
-/** Records a known missing or discontinuous interval outside an event commit, for example while storage was unavailable. */
-export function recordCompleteness(conn: StorageConnection, pluginSessionId: string, interval: CompletenessInterval): void {
+/**
+ * Records a known missing or discontinuous interval outside an event commit, for example while storage was unavailable.
+ * With `ifAbsent` an interval that the session already holds is not stored again (CompletenessOptions).
+ */
+export function recordCompleteness(conn: StorageConnection, pluginSessionId: string, interval: CompletenessInterval, options: CompletenessOptions = {}): void {
   if (typeof interval !== 'object' || interval === null) fail('INVALID_INPUT');
-  transact(conn, db => { const session = sessionByUuid(db, pluginSessionId); addInterval({db, session, game: session.game, now: conn.now()}, interval); });
+  if (typeof options !== 'object' || options === null || Array.isArray(options) || (options.ifAbsent !== undefined && typeof options.ifAbsent !== 'boolean')) fail('INVALID_INPUT');
+  const ifAbsent = options.ifAbsent === true;
+  transact(conn, db => { const session = sessionByUuid(db, pluginSessionId); addInterval({db, session, game: session.game, now: conn.now()}, interval, ifAbsent); });
 }

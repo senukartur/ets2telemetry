@@ -3,7 +3,10 @@
 // A worker failure, a missed deadline or a malformed response fails the client closed: the command in flight and every
 // queued command get an error, later commands fail at once, and no success is reported afterwards. See docs/storage.md.
 import type {Worker} from 'node:worker_threads';
-import type {CommitResult, CompletenessInterval, EventRow, OpenSummary, Result, SampleInput, SampleRecord, SessionRecord, StorageError, StorageErrorCode, StorageInfo, TripEffect, TripRecord, Uint64} from './api';
+import type {
+  CommitResult, CompletenessInterval, CompletenessOptions, EventRow, OpenSummary, Result, SampleInput, SampleRecord, SessionRecord, StorageError, StorageErrorCode, StorageInfo,
+  TripEffect, TripList, TripPage, TripRecord, Uint64
+} from './api';
 import {storageError} from './errors';
 import {parseResponse, type CommandName, type CommandValue, type StorageCommand, type StorageRequest, type WorkerOpenOptions} from './worker/protocol';
 
@@ -82,13 +85,21 @@ export class StorageClient {
   commitEvent(input: {message: unknown; effects?: TripEffect[]}): Promise<Result<CommitResult>> { return this.#request({name: 'commitEvent', input}); }
   commitGap(input: {message: unknown; effects?: TripEffect[]}): Promise<Result<CommitResult>> { return this.#request({name: 'commitGap', input}); }
   appendSamples(pluginSessionId: string, rows: SampleInput[]): Promise<Result<{appended: number}>> { return this.#request({name: 'appendSamples', pluginSessionId, rows}); }
-  recordCompleteness(pluginSessionId: string, interval: CompletenessInterval): Promise<Result<undefined>> { return this.#request({name: 'recordCompleteness', pluginSessionId, interval}); }
+  /** Only `ifAbsent` of the options crosses the worker boundary. */
+  recordCompleteness(pluginSessionId: string, interval: CompletenessInterval, options?: CompletenessOptions): Promise<Result<undefined>> {
+    return this.#request(options === undefined ? {name: 'recordCompleteness', pluginSessionId, interval}
+      : {name: 'recordCompleteness', pluginSessionId, interval, options: {ifAbsent: options.ifAbsent}});
+  }
   committedThrough(pluginSessionId: string): Promise<Result<Uint64>> { return this.#request({name: 'committedThrough', pluginSessionId}); }
   getSession(pluginSessionId: string): Promise<Result<SessionRecord>> { return this.#request({name: 'getSession', pluginSessionId}); }
   getEvent(pluginSessionId: string, eventSeq: Uint64): Promise<Result<EventRow | undefined>> { return this.#request({name: 'getEvent', pluginSessionId, eventSeq}); }
   listEvents(pluginSessionId: string, page?: {afterEventSeq?: Uint64; limit?: number}): Promise<Result<EventRow[]>> { return this.#request({name: 'listEvents', pluginSessionId, page}); }
   getTrip(tripUuid: string): Promise<Result<TripRecord | undefined>> { return this.#request({name: 'getTrip', tripUuid}); }
-  listTrips(page?: {cursor?: string; limit?: number}) { return this.#request({name: 'listTrips', page}); }
+  /** The page is copied field by field: only the cursor, limit and the `game` and `outcome` filter cross the boundary. */
+  listTrips(page?: TripPage): Promise<Result<TripList>> {
+    return this.#request(page === undefined ? {name: 'listTrips'}
+      : {name: 'listTrips', page: {cursor: page.cursor, limit: page.limit, game: page.game, outcome: page.outcome}});
+  }
   listSamples(scope: {tripUuid: string} | {pluginSessionId: string}, page?: {afterId?: string; limit?: number}): Promise<Result<SampleRecord[]>> { return this.#request({name: 'listSamples', scope, page}); }
   storageInfo(): Promise<Result<StorageInfo>> { return this.#request({name: 'storageInfo'}); }
 

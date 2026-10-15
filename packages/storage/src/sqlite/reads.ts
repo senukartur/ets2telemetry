@@ -3,7 +3,8 @@
 import type Database from 'better-sqlite3';
 import type {GameMode} from '../../../contracts/src/protocol-v1';
 import {
-  ACCEPTED_ORIGIN, MAX_EVENT_PAGE, MAX_SAMPLE_BATCH, MAX_TRIP_PAGE, type EventRow, type Purpose, type SampleRecord, type SessionRecord, type StorageInfo, type TripRecord, type Uint64
+  ACCEPTED_ORIGIN, MAX_EVENT_PAGE, MAX_SAMPLE_BATCH, MAX_TRIP_PAGE, type EventRow, type Purpose, type SampleRecord, type SessionRecord, type StorageInfo, type TripList,
+  type TripPage, type TripRecord, type Uint64
 } from '../api';
 import {fromAvailability, fromMask, fromU64Key, isUuid, SAMPLE_FIELDS, toReal, toSafeNumber, u64Key} from '../codec';
 import {fail} from '../errors';
@@ -84,12 +85,20 @@ export function getTrip(conn: StorageConnection, tripUuid: string): TripRecord |
   const r = statement(db, 'SELECT * FROM trips WHERE trip_uuid = ?').get(tripUuid) as Record<string, unknown> | undefined;
   return r && tripRecord(db, r);
 }
-/** Trips in creation order; `cursor` is the opaque `nextCursor` of the previous page. */
-export function listTrips(conn: StorageConnection, page: {cursor?: string; limit?: number} = {}): {trips: TripRecord[]; nextCursor: string | null} {
+const TRIP_GAMES: readonly unknown[] = ['ets2', 'ats'], TRIP_OUTCOMES: readonly unknown[] = ['open', 'delivered', 'cancelled', 'none'];
+/**
+ * Trips in creation order; `cursor` is the opaque `nextCursor` of the previous page. The optional `game` and `outcome`
+ * filter is applied in SQL before the limit, so a filtered page is full whenever more matching trips exist (ET-015a).
+ */
+export function listTrips(conn: StorageConnection, page: TripPage = {}): TripList {
   plainObject(page);
   const db = conn.reader(), max = limit(page.limit, MAX_TRIP_PAGE);
   if (page.cursor !== undefined && !/^(0|[1-9][0-9]{0,18})$/.test(page.cursor)) fail('INVALID_INPUT');
-  const rows = statement(db, 'SELECT * FROM trips WHERE id > ? ORDER BY id LIMIT ?').all(BigInt(page.cursor ?? '0'), max) as Record<string, unknown>[];
+  if (page.game !== undefined && !TRIP_GAMES.includes(page.game)) fail('INVALID_INPUT');
+  if (page.outcome !== undefined && !TRIP_OUTCOMES.includes(page.outcome)) fail('INVALID_INPUT');
+  const game = page.game ?? null, outcome = page.outcome ?? null;
+  const rows = statement(db, 'SELECT * FROM trips WHERE id > ? AND (? IS NULL OR game = ?) AND (? IS NULL OR outcome = ?) ORDER BY id LIMIT ?')
+    .all(BigInt(page.cursor ?? '0'), game, game, outcome, outcome, max) as Record<string, unknown>[];
   return {trips: rows.map(r => tripRecord(db, r)), nextCursor: rows.length === max ? String(rows[rows.length - 1].id) : null};
 }
 

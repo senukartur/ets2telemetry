@@ -88,6 +88,62 @@ describe('StorageClient command flow', () => {
   });
 });
 
+describe('ET-015a trip filter and completeness options at the worker boundary', () => {
+  const INTERVAL = {kind: 'restore-loss' as const, firstEventSeq: '3', lastEventSeq: '5'};
+  const request = (command: Record<string, unknown>) => ({type: 'storage.request', id: 1, command});
+  it('sends the listTrips filter and copies only the page fields', () => {
+    const f = fixture();
+    void f.client.listTrips({game: 'ats', outcome: 'open', cursor: '5', limit: 10, testHooks: {}} as Parameters<StorageClient['listTrips']>[0]);
+    expect(f.sent[0].command).toEqual({name: 'listTrips', page: {game: 'ats', outcome: 'open', cursor: '5', limit: 10}});
+    expect(Object.keys((f.sent[0].command as {page: object}).page).sort()).toEqual(['cursor', 'game', 'limit', 'outcome']);
+    expect(parseRequest(f.sent[0]).ok).toBe(true);
+  });
+  it('sends ifAbsent and nothing else of the completeness options, and no options when none are given', async () => {
+    const f = fixture();
+    const first = f.client.recordCompleteness(P1, INTERVAL, {ifAbsent: true, testHooks: {}} as Parameters<StorageClient['recordCompleteness']>[2]);
+    expect(f.sent[0].command).toEqual({name: 'recordCompleteness', pluginSessionId: P1, interval: INTERVAL, options: {ifAbsent: true}});
+    f.ok(1, undefined);
+    await expect(first).resolves.toEqual({ok: true, value: undefined});
+    void f.client.recordCompleteness(P1, INTERVAL);
+    expect(f.sent[1].command).toEqual({name: 'recordCompleteness', pluginSessionId: P1, interval: INTERVAL});
+    expect(Object.hasOwn(f.sent[1].command, 'options')).toBe(false);
+    for (const sent of f.sent) expect(parseRequest(sent).ok).toBe(true);
+  });
+  it.each([
+    ['no page', undefined],
+    ['an empty page', {}],
+    ['every field', {cursor: '7', limit: 100, game: 'ets2', outcome: 'cancelled'}],
+    ['undefined fields', {cursor: undefined, limit: undefined, game: undefined, outcome: undefined}],
+    ['outcome none', {outcome: 'none'}],
+    ['outcome delivered', {outcome: 'delivered'}]
+  ])('accepts a listTrips page with %s', (_name, page) => {
+    expect(parseRequest(request({name: 'listTrips', page}))).toMatchObject({ok: true, id: 1});
+  });
+  it.each([
+    ['an unknown key', {game: 'ets2', testHooks: {}}],
+    ['an unknown game', {game: 'ETS2'}],
+    ['an unknown outcome', {outcome: 'closed'}],
+    ['a numeric cursor', {cursor: 5}],
+    ['a text limit', {limit: '10'}],
+    ['an array', []],
+    ['null', null]
+  ])('refuses a listTrips page with %s', (_name, page) => {
+    expect(parseRequest(request({name: 'listTrips', page}))).toEqual({ok: false, id: 1});
+  });
+  it.each([
+    ['no options', undefined, true],
+    ['ifAbsent true', {ifAbsent: true}, true],
+    ['ifAbsent false', {ifAbsent: false}, true],
+    ['ifAbsent undefined', {ifAbsent: undefined}, true],
+    ['a text ifAbsent', {ifAbsent: 'yes'}, false],
+    ['an unknown key', {ifAbsent: true, testHooks: {}}, false],
+    ['an array', [], false],
+    ['null', null, false]
+  ])('checks recordCompleteness options strictly: %s', (_name, options, accepted) => {
+    expect(parseRequest(request({name: 'recordCompleteness', pluginSessionId: P1, interval: INTERVAL, options})).ok).toBe(accepted);
+  });
+});
+
 describe('StorageClient deadlines and worker failures', () => {
   it(`times out a command after ${COMMAND_DEADLINE_MS} ms, terminates the worker and never reports a later success`, async () => {
     const f = fixture();
