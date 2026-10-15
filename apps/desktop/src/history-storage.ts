@@ -70,6 +70,8 @@ export class HistoryStorage {
       if (this.#state === 'opening') this.#state = 'open';
       const summary = result.value;
       this.options.log('HISTORY_STORAGE_OPENED', undefined, {schemaVersion: summary.schemaVersion, created: summary.created, migratedFrom: summary.migratedFrom ?? null});
+      // Leftovers of a backup that an earlier shutdown terminated; the count only, never a file name.
+      if (summary.removedPartialBackups) this.options.log('HISTORY_BACKUP_PARTIALS_REMOVED', undefined, {count: summary.removedPartialBackups});
     });
   }
 

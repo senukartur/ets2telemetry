@@ -54,6 +54,12 @@ describe('history storage at service start (OD-2)', () => {
     f.history.start(); await vi.advanceTimersByTimeAsync(0);
     expect(f.events()).toEqual([['HISTORY_STORAGE_OPENED', {schemaVersion: 2, created: false, migratedFrom: 1}]]);
   });
+  it('reports how many stale partial backup files the open removed, as a count only', async () => {
+    const f = fixture('C:\\isolated', {ok: true, value: {...SUMMARY, created: false, removedPartialBackups: 3}});
+    f.history.start(); await vi.advanceTimersByTimeAsync(0);
+    expect(f.events()).toEqual([['HISTORY_STORAGE_OPENED', {schemaVersion: 1, created: false, migratedFrom: null}], ['HISTORY_BACKUP_PARTIALS_REMOVED', {count: 3}]]);
+    expect('HISTORY_BACKUP_PARTIALS_REMOVED').not.toMatch(/FAILED|TIMEOUT|UNCAUGHT|UNHANDLED|INVALID|RENDER_PROCESS_GONE/);
+  });
   it.each([['missing', null], ['empty', ''], ['relative', 'relative\\profile'], ['drive-relative', 'C:profile']])(
     'never falls back to TEMP or the working directory when LOCALAPPDATA is %s', async (_name, localAppData) => {
       const f = fixture(localAppData);
