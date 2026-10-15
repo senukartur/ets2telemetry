@@ -102,12 +102,12 @@ describe('simulator v1 reactive serving for any contract consumer', () => {
     } finally { await server.stop(); }
   }, 60_000);
 
-  // A client crash on the last item of a step, with a snapshot due before the next step and a reconnection 10 ms after
+  // A client crash on the last item of a step, with a snapshot due before the next step and a reconnection exactly at
   // the replay's retention deadline: the crashed client gets no snapshot, and the connection is closed at the crash's
   // own scenario time (30 ms), so the retained event has expired when the next client connects.
   for (const scale of [1, 0]) it(`closes a crashed client at its step and writes it no pending snapshot (scale ${scale})`, async () => {
     const s = inline([{atMs: 10, action: 'lifecycle', event: 'simulation.started'}, {atMs: 20, action: 'frame', channels: {speed: 1}}, {atMs: 30, action: 'lifecycle', event: 'simulation.paused'}],
-      [{atMs: 0, action: 'connect', client: {durable: true, commit: 'failAt:2'}}, {atMs: 100, action: 'disconnect'}, {atMs: 300_040, action: 'connect', client: {durable: true}}, {atMs: 300_100, action: 'disconnect'}]);
+      [{atMs: 0, action: 'connect', client: {durable: true, commit: 'failAt:2'}}, {atMs: 100, action: 'disconnect'}, {atMs: 300_030, action: 'connect', client: {durable: true}}, {atMs: 300_100, action: 'disconnect'}]);
     const replay = replayV1(s);
     expect(replay.transcript.filter(l => l.connection === 1 && l.message.kind === 'snapshot')).toHaveLength(0);
     expect(replay.store.eventLoss.retentionExpired).toBe('1');
