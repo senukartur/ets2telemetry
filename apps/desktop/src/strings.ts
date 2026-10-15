@@ -9,6 +9,7 @@ export const STRINGS = Object.freeze({
   startupPending: 'Starting',
   startupReady: 'Telemetry service ready; isolated storage probe verified',
   startupFailed: 'Startup failed',
+  startupWaiting: 'Waiting for the telemetry service',
   sourceSelectionFailed: 'Source selection failed',
   prototypeNotice: 'Prototype live display. No trip recording or durable history.',
   healthTitle: 'Application status',

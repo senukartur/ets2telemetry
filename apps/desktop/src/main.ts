@@ -33,7 +33,8 @@ else {
     }
   } catch (error) {profileError = error;}
   // A second launch hands over to the running instance and exits 0 before any log, listener, service or window.
-  if (!app.requestSingleInstanceLock()) app.quit();
+  // A failed profile override never requests the lock: it must not signal the real instance, only fail.
+  if (profileError === undefined && !app.requestSingleInstanceLock()) app.quit();
   else runApplication(profileError);
 }
 
@@ -224,7 +225,8 @@ function runApplication(profileError: unknown): void {
       if (!supervisor.stopping && rendererBudget.take() !== undefined) loadWindow(created); else fail('RENDERER_RESTART_EXHAUSTED');
     });
     // Close-to-tray: the window is destroyed and recreated on reopen; recording state lives outside it.
-    // Without a tray there is no way back, so closing minimizes instead.
+    // If creating the tray threw there is no tray way back, so closing minimizes instead. Electron does not report a
+    // notification-area registration failure that does not throw; a second launch always reopens the dashboard.
     created.on('close', event => {if (!lifecycle.exiting && !tray) {event.preventDefault(); created.minimize();}});
     created.on('session-end', () => requestExit('session-end'));
     created.on('closed', () => {if (window !== created) return; retireDashboard(); window = undefined; timeline?.('DASHBOARD_WINDOW_CLOSED');});
@@ -332,7 +334,9 @@ function runApplication(profileError: unknown): void {
     });
   }
   if (profileError) fail('PROFILE_SETUP_FAILED', profileError);
-  ipcMain.handle('scaffold:status', event => {if (!trusted(event) || !status) throw new Error('Untrusted status request'); return status;});
+  // A dashboard opened while the service restarts or after restart exhaustion gets `null`, not an error; it queries
+  // again when the pushed health reports readiness. Untrusted senders still fail.
+  ipcMain.handle('scaffold:status', event => {if (!trusted(event)) throw new Error('Untrusted status request'); return status ?? null;});
   ipcMain.handle('app:get-state', event => {if (!trusted(event)) throw new Error('Untrusted application state request'); return appState();});
   ipcMain.handle('app:exit', event => {if (!trusted(event)) throw new Error('Untrusted exit request'); requestExit('renderer');});
   ipcMain.on('app:subscribe-state', event => {

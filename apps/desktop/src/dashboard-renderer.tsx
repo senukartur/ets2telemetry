@@ -4,6 +4,7 @@ import {Card, CardContent, CardHeader, CardTitle} from '@/components/ui/card';
 import {Alert, AlertDescription, AlertTitle} from '@/components/ui/alert';
 import {Button} from '@/components/ui/button';
 import {dashboardSpeed} from './speed-display';
+import {createStartupLine} from './dashboard-startup';
 import {APP_ERROR_TEXT, SERVICE_HEALTH_TEXT, STORAGE_HEALTH_TEXT, STRINGS} from './strings';
 import './index.css';
 
@@ -12,11 +13,12 @@ export default function App() {
   const [live, setLive] = useState<LiveTelemetry>();
   const [app, setApp] = useState<AppState>();
   const [exit, setExit] = useState<'idle' | 'pending' | 'failed'>('idle');
+  const [startupLine] = useState(() => createStartupLine(() => window.desktop.getStatus(), setStartup));
   useEffect(() => {
-    window.desktop.getStatus().then(() => setStartup(STRINGS.startupReady)).catch(() => setStartup(STRINGS.startupFailed));
+    startupLine.start();
     return window.desktop.subscribeLive(setLive);
-  }, []);
-  useEffect(() => window.desktop.subscribeAppState(setApp), []);
+  }, [startupLine]);
+  useEffect(() => window.desktop.subscribeAppState(state => {setApp(state); startupLine.health(state.health);}), [startupLine]);
   const observed = live?.observation?.state;
   const health = app?.health;
   const problem = health && (health.service === 'failed' || health.service === 'restarting') && health.lastError;

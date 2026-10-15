@@ -16,7 +16,8 @@ export interface LiveTelemetry {
     receivedMonotonicMs: number; windowReceivedMonotonicMs: number; windowFresh: boolean; applied: AppliedState};
 }
 export interface DesktopBridge {
-  getStatus(): Promise<ScaffoldStatus>;
+  /** `null` while the telemetry service is not ready, for example during a supervised restart. */
+  getStatus(): Promise<ScaffoldStatus | null>;
   selectSource(source: SourceSelection): Promise<void>;
   subscribeLive(listener: (update: LiveTelemetry) => void): () => void;
   /** Current main-owned application state: fixed health codes only. */

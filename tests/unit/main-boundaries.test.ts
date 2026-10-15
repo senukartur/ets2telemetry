@@ -770,3 +770,28 @@ it('opens and exits through the gated diagnostic tray action and reports read-on
   child.emit('exit', 0); expect(app.exit).toHaveBeenCalledExactlyOnceWith(0);
   expect(log.mock.calls.map(call => call[0] as string).filter(name => failurePattern.test(name))).toEqual([]);
 }));
+// ET-011a fix round 1.
+it('answers a dashboard opened during a service restart with a not-ready status, then the status after readiness', async () => {
+  trayAvailable = true; await ready(); closeDashboard();
+  child.emit('exit', 1); trays[0].emit('click'); expect(windows).toHaveLength(3);
+  const reopened = extraContents[0], sender = {sender: reopened, senderFrame: reopened.mainFrame};
+  expect(handlers.get('scaffold:status')!(sender)).toBeNull();
+  expect(() => handlers.get('scaffold:status')!(trusted())).toThrow('Untrusted');
+  ipc.emit('app:subscribe-state', sender);
+  expect(reopened.send).toHaveBeenLastCalledWith('app:state', {health: expect.objectContaining({service: 'restarting'})});
+  // When the pushed health reports ready, the status query already answers with the ready status.
+  let statusAtReadyPush: unknown;
+  reopened.send.mockImplementation((channel: string, state: {health: {service: string}}) => {
+    if (channel === 'app:state' && state.health.service === 'ready') statusAtReadyPush = handlers.get('scaffold:status')!(sender);
+  });
+  await vi.advanceTimersByTimeAsync(250); children[1].emit('message', {type: 'ready'}); await settle();
+  expect(statusAtReadyPush).toEqual({service: 'ready', storage: 'verified', synthetic: true});
+});
+it('never requests the instance lock when the diagnostic profile override fails', async () => {
+  vi.stubEnv('ETS2TELEMETRY_PROFILE_DIR', 'relative\\profile'); trayAvailable = true;
+  await import('../../apps/desktop/src/main'); await settle();
+  expect(app.requestSingleInstanceLock).not.toHaveBeenCalled(); expect(app.quit).not.toHaveBeenCalled();
+  expect(log).toHaveBeenCalledWith('PROFILE_SETUP_FAILED', expect.any(Error));
+  expect(app.exit).toHaveBeenCalledExactlyOnceWith(1);
+  expect(windows).toHaveLength(0); expect(trays).toHaveLength(0); expect(child.listenerCount('message')).toBe(0);
+});
