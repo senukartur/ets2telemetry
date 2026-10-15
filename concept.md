@@ -515,6 +515,10 @@ The coordinator adopted these decisions under that delegation; the owner has not
 | CD-11 | Retention runs in scenario time; pipe mode fast-forwards offline segments |
 | CD-12 | A system suspend is modeled both with and without the source clock advancing |
 
+## ET-013 authorization — October 15, 2026
+
+The owner authorized ET-013 (the SQLite storage worker and schema) on October 15, 2026, in parallel with ET-004b PR C, granted the coordinator merge authority after independent review and a successful final Windows CI, and delegated the ET-013 design decisions to the coordinator. The coordinator adopted the architect's recommendations OD-1 to OD-10 as coordinator decisions under owner delegation; [storage](docs/storage.md#decisions-october-15-2026) records them with the schema, durability, migration and backup rules. For ET-013 only, this supersedes the October 14, 2026 statements that ET-013 remains unauthorized; earlier dated text is unchanged. ET-014, ET-015a, ET-015b, ET-015c, ET-006b and ET-016 remain unauthorized by this paragraph; ET-005b is authorized separately in the paragraph above. The desktop application stays on protocol v0, records nothing and sends no ACK. The §7 storage estimate remains a model until ET-013 PR-2 measures the actual schema. No game, TruckersMP or performance claim follows from this authorization or from synthetic storage tests.
+
 ## ET-011 authorization — October 15, 2026
 
 On October 15, 2026 the owner wrote (translated from Russian): "Overall, keep doing other tasks until you hit tests in the real game. Make optimal decisions. I want you to close as many tasks as possible without my involvement. If there are flaky tests, delegate their fixes to subagents." Under this standing delegation the coordinator started ET-011 (application tray lifecycle and persistent settings) and adopted the architect's recommendations C1–C17 below as coordinator decisions. The owner has not reviewed them individually; they can be revisited like any other recorded decision. This section covers ET-011 only; other packages started under the same delegation are recorded in their own sections.

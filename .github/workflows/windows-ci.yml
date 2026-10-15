@@ -78,6 +78,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm test -- --reporter=default --reporter=junit --outputFile=.local/ci/vitest.xml
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      # Loads native better-sqlite3 only under the pinned Electron executable in Node mode, never plain Node (docs/storage.md).
+      - name: Storage suite under the pinned Electron runtime
+        timeout-minutes: 5
+        run: |
+          npm run test:storage -- --reporter=default --reporter=junit --outputFile=.local/ci/vitest-storage.xml
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build desktop and native x64
         run: |
           npm run build

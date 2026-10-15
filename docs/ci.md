@@ -165,3 +165,7 @@ Add new PowerShell-backed cases to an existing batch rather than starting a proc
 ## Advisory AI review
 
 A separate [Claude code review](ai-review.md) workflow comments on non-draft PRs and on owner `@claude` requests. It runs on Ubuntu, needs a Claude secret, and is not part of the Windows CI result.
+
+## ET-013 storage suite
+
+ET-013 PR-1 adds the step "Storage suite under the pinned Electron runtime" right after "Full Node-safe suite and typecheck". It runs `npm run test:storage`, which loads native better-sqlite3 inside the pinned Electron 44.7.0 executable in Node mode, writes `.local/ci/vitest-storage.xml` and has a 5-minute step limit. The earlier statement that Vitest never imports native SQLite applies to the Node-safe suite (`npm test`); the storage suite is the one Vitest run that does, and only under Electron. Locally the suite took about 7 seconds; a hosted duration is recorded once a run exists, and adding the step is not a passed hosted check. It does not test the storage worker, the packaged application or production history (ET-013 PR-2 and later packages). See [storage](storage.md#tests).
