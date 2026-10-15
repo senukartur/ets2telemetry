@@ -28,6 +28,8 @@ export interface OpenOptions {
 export interface OpenTestHooks extends BackupHooks {
   /** Replaces a durability read-back value before it is compared, to prove that a mismatch is refused. */
   readBack?: (pragma: 'locking_mode' | 'journal_mode' | 'synchronous' | 'foreign_keys', value: unknown) => unknown;
+  /** Runs after the read-only inspection and before the writer takes its lock, to simulate a concurrent change. */
+  afterInspect?: (file: string) => void;
 }
 
 const DURABILITY: Durability = Object.freeze({journalMode: 'wal', synchronous: 'full', lockingMode: 'exclusive', foreignKeys: true});
@@ -110,7 +112,18 @@ function inspect(file: string, purpose: Purpose, supported: number): Inspection 
 }
 
 /** Sets and reads back every durability setting on a new read-write connection; any mismatch is refused. */
-function openWriter(file: string, hooks: OpenTestHooks | undefined): Database.Database {
+/**
+ * Repeats the inspection's classification on the locked writer connection, before any write. Another process could
+ * have changed the file between the read-only inspection and the lock; the locked values are authoritative.
+ */
+function recheck(db: Database.Database, inspection: Inspection, supported: number): void {
+  const applicationId = Number(db.pragma('application_id', {simple: true})), userVersion = Number(db.pragma('user_version', {simple: true}));
+  const tables = Number(db.prepare("SELECT count(*) FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\'").pluck().get());
+  if (applicationId === APPLICATION_ID && userVersion > supported) fail('SCHEMA_NEWER');
+  if (inspection.fresh ? applicationId !== 0 || userVersion !== 0 || tables !== 0 : applicationId !== APPLICATION_ID || userVersion !== inspection.version) fail('DATABASE_UNRECOGNIZED');
+}
+
+function openWriter(file: string, hooks: OpenTestHooks | undefined, check: (db: Database.Database) => void): Database.Database {
   // SQLite silently falls back to a read-only handle for a read-only file and fails only at the first lock or write,
   // with a misleading I/O code. Checking write access first reports the actual cause.
   try { accessSync(file, constants.W_OK); } catch (error) { if ((error as {code?: string}).code !== 'ENOENT') fail('PERMISSION_DENIED'); }
@@ -121,6 +134,8 @@ function openWriter(file: string, hooks: OpenTestHooks | undefined): Database.Da
     const read = (name: Parameters<NonNullable<OpenTestHooks['readBack']>>[0], value: unknown) => hooks?.readBack ? hooks.readBack(name, value) : value;
     // Exclusive locking before the first WAL access: one writer, and no shared-memory (-shm) index at all.
     if (read('locking_mode', db.pragma('locking_mode = EXCLUSIVE', {simple: true})) !== 'exclusive') fail('DURABILITY_UNVERIFIED');
+    // In exclusive mode this first read takes the file lock and keeps it, so the values cannot change again.
+    check(db);
     if (read('journal_mode', db.pragma('journal_mode = WAL', {simple: true})) !== 'wal') fail('DURABILITY_UNVERIFIED');
     // Set after WAL on purpose: better-sqlite3 13.0.3 compiles SQLITE_DEFAULT_WAL_SYNCHRONOUS=1 (NORMAL), which can
     // lose the last commits on power loss. FULL (2) syncs the WAL on every commit.
@@ -149,7 +164,8 @@ export async function openConnection(options: OpenOptions): Promise<StorageConne
   validatePath(options.path, options.purpose);
   if (typeof options.backupsDirectory !== 'string' || !path.isAbsolute(options.backupsDirectory)) fail('DATA_PATH_INVALID');
   const inspection = inspect(options.path, options.purpose, supported);
-  const db = openWriter(options.path, options.testHooks);
+  options.testHooks?.afterInspect?.(options.path);
+  const db = openWriter(options.path, options.testHooks, locked => recheck(locked, inspection, supported));
   try {
     let migratedFrom: number | undefined, backupFileName: string | undefined;
     if (inspection.fresh) {

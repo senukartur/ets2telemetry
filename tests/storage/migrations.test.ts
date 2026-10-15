@@ -74,6 +74,31 @@ describe('REG-013 schema migrations', () => {
   it('refuses to open a database for another purpose', async () => {
     await expectRefused(ws.copyFixture(REPRESENTATIVE), 'PURPOSE_MISMATCH', 'history');
   });
+  describe('a change between the read-only inspection and the writer lock', () => {
+    /** Runs `change` on the file after inspection, records its bytes, and returns them for comparison after the refusal. */
+    function changeAfterInspect(change: (db: Database.Database) => void) {
+      const state = {hash: ''};
+      return {state, afterInspect: (file: string) => { const db = new Database(file); try { change(db); } finally { db.close(); } state.hash = sha256(file); }};
+    }
+    it('refuses a schema made newer after inspection, before any write', async () => {
+      const copy = ws.copyFixture(REPRESENTATIVE), hook = changeAfterInspect(db => db.pragma('user_version = 999'));
+      failed(await openStorage(ws.options({path: copy, testHooks: {afterInspect: hook.afterInspect}})), 'SCHEMA_NEWER');
+      expect(sha256(copy)).toBe(hook.state.hash);
+      expect(existsSync(ws.backups)).toBe(false);
+    });
+    it('refuses a version changed after inspection even when it is supported, without migrating or backing up', async () => {
+      const copy = ws.copyFixture(REPRESENTATIVE), hook = changeAfterInspect(db => db.pragma('user_version = 2'));
+      failed(await openStorage(ws.options({path: copy, migrations: [...MIGRATIONS, v2], testHooks: {afterInspect: hook.afterInspect}})), 'DATABASE_UNRECOGNIZED');
+      expect(sha256(copy)).toBe(hook.state.hash);
+      expect(existsSync(ws.backups)).toBe(false);
+    });
+    it('refuses a new file that gained foreign tables after inspection instead of creating the schema in it', async () => {
+      const hook = changeAfterInspect(db => db.exec('CREATE TABLE other_application (id INTEGER PRIMARY KEY)'));
+      failed(await openStorage(ws.options({testHooks: {afterInspect: hook.afterInspect}})), 'DATABASE_UNRECOGNIZED');
+      expect(sha256(ws.database)).toBe(hook.state.hash);
+      expect(readOnly(ws.database, db => db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table'").pluck().all())).toEqual(['other_application']);
+    });
+  });
   it('creates a new database in an existing empty file', async () => {
     writeFileSync(ws.database, '');
     expect((await ws.open()).summary).toMatchObject({created: true, schemaVersion: 1});
