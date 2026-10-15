@@ -40,7 +40,8 @@ export interface DesktopBridge {
  * One overlay section, formatted by main in the displayed game's unit profile. `value`: current text with an optional
  * secondary `detail` (such as the fuel level) and, for engine RPM, a `ring` fraction in [0, 1] of the fixed 0-3000 rpm
  * display scale. `unavailable`: rendered as a dash, never as zero or a last-known value. A disabled section, one the
- * protocol in use does not carry, or (except speed and fuel) one without data while current is left out of the list.
+ * protocol in use does not carry, (except speed and fuel) one without data while current, or, while not current, one
+ * the previous projection did not show is left out of the list.
  */
 export type OverlaySectionView =
   | {id: OverlaySectionId; state: 'value'; text: string; detail?: string; ring?: number}

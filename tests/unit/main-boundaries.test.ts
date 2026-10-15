@@ -1107,11 +1107,15 @@ it('applies an overlay layout only after the durable save, then republishes and 
   expect(windows[1].setAlwaysOnTop.mock.calls).toEqual([[true, 'screen-saver']]); expect(windows[1].moveTop).toHaveBeenCalledOnce();
   expect(windows[1].showInactive).toHaveBeenCalledOnce();
   await vi.advanceTimersByTimeAsync(50);
-  expect(overlayProjection(overlayChannel)).toMatchObject({layout: 'card', speed: '90.0', freshness: 'current'});
+  const currentProjection = overlayProjection(overlayChannel);
+  expect(currentProjection).toMatchObject({layout: 'card', speed: '90.0', freshness: 'current'});
   consumeOverlay(overlayChannel);
   // The original 500 ms SDK deadline still applies; a renewal at the save (t = 150 ms) would end after this window.
   await drainOverlay(overlayChannel, 400);
   expect(overlayProjection(overlayChannel)).toMatchObject({layout: 'card', speed: '—', freshness: 'stale'});
+  // The stale projection keeps the last published shape (decision L5): main passes its previous projection along.
+  expect(sectionIds(currentProjection).length).toBeGreaterThan(2);
+  expect(overlayProjection(overlayChannel).sections).toEqual(sectionIds(currentProjection).map(id => ({id, state: 'unavailable'})));
   expect(windows[1].showInactive).toHaveBeenCalledOnce();
 });
 it('applies overlay sections after the durable save and hands the store only a validated fresh copy', async () => {
