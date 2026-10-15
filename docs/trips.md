@@ -42,6 +42,8 @@ Inputs (`TripInput`):
 
 On a retryable or failed commit the caller keeps the old state. When the item is redelivered, the reducer then returns the same effects. Non-carrier inputs (session, checkpoint, disconnected) are adopted immediately. An `ok: false` result fails closed: durable delivery must stop, as for any other contract violation.
 
+**Connections.** Every connection ends with a `disconnected` input before the next connection's `session` input, including a reconnection to the same plugin session, a switch to the other game and a new plugin session. The reducer takes the interval in which the consumer was not connected from that input; an item of a session that is not the current connection's is refused.
+
 **Coverage (T5).** The reducer keeps a processed point per plugin session:
 
 - every carrier's `coveredThrough` must equal it, or the result is `COVERAGE_MISMATCH`;
@@ -81,7 +83,9 @@ Each game has one slot with at most one open trip. Without an open trip the slot
 
 A newly opened trip also has a **load window**. If its job was configured outside a running simulation, the window lasts until the next `simulation.started` and for the one event right after it. A `timers.restart` or `gameTime.regression` inside the window is the load that restored this job (O1, O10), so it does not close the trip.
 
-The session's **load state** is `loading` from a fresh session until its first `simulation.started`, and again after `timers.restart` or `gameTime.regression`. It is `unknown` after a gap or when the reducer joins a session that already has committed events.
+The session's **load state** is `loading` from a fresh session until its first `simulation.started`, and again after `timers.restart` until the next start (O1). A `gameTime.regression` never starts a load: it follows the start of the load it ends (O10), so it leaves the state unchanged, or sets `running` when it occurred while running. The state is `unknown` after a gap or when the reducer joins a session that already has committed events.
+
+A job is **untracked** when it is known or likely active but no trip tracks it: a checkpoint job seen while idle (T9), or the job of a trip that a gap closed before its clear or outcome. It stays untracked until `job.cleared`, an outcome or a new trip.
 
 | From | Trigger | To | Effects |
 | --- | --- | --- | --- |
@@ -89,7 +93,8 @@ The session's **load state** is `loading` from a fresh session until its first `
 | active | same-key `job.configured` | active | none; `cargoLoaded` is updated (O3) |
 | active | different-key `job.configured` | active (new) | close `{none, different-job, partial}`; open the new trip |
 | active | `job.cleared` | awaiting-outcome | none |
-| awaiting-outcome | same-key `job.configured` | reload-check | none |
+| awaiting-outcome | same-key `job.configured` with the trip's last `cargoLoaded` | reload-check | none |
+| awaiting-outcome or reload-check | same-key `job.configured` with a different `cargoLoaded`, such as a save from before a cargo-market pickup | active (new) | close `{none, configuration-cleared, partial}`; open a new trip at this event with a `reload` continuation interval. The closed trip keeps its `cargoLoaded` (concept.md, October 14, 2026: continue only when every attribute is identical) |
 | awaiting-outcome or reload-check | different-key `job.configured` | active (new) | close `{none, configuration-cleared, partial}`; open the new trip |
 | active or awaiting-outcome | `job.delivered` / `job.cancelled` | idle | attribute `trip`; close `{outcome, this-event}`, `complete` after a clean window, else `partial` |
 | active, in its load window before the start | `job.delivered` / `job.cancelled` | active | attribute `ambiguous`; the trip stays open (T14) |
@@ -99,21 +104,39 @@ The session's **load state** is `loading` from a fresh session until its first `
 | reload-check | `gameTime.regression` | active (same trip) | trip.update `partial`; a `save-load` interval (O10) |
 | reload-check | `job.cleared` | awaiting-outcome | none |
 | reload-check | truck/trailer configure or clear, pause or start, same-key re-send, `source.gameMode` | reload-check | as in active |
-| reload-check | `timers.restart`, a fine, toll, ferry, train or outcome | active (new) | close `{none, configuration-cleared, partial}`; open a new trip from the re-send (`jobConfiguration: {eventSeq}`) with a `reload` continuation interval. A gameplay event is attributed `ambiguous`, and an outcome does not close the new trip. After a timer restart the new trip keeps a load window |
-| any open | gap with a new suffix | idle | close `{none, gap, partial}` and the gap interval (T10) |
+| reload-check | `timers.restart`, a fine, toll, ferry or train | active (new) | close `{none, configuration-cleared, partial}`; open a new trip from the re-send (`jobConfiguration: {eventSeq}`) with a `reload` continuation interval. A gameplay event is attributed `ambiguous`. After a timer restart the new trip keeps a load window |
+| reload-check | `job.delivered` / `job.cancelled` | idle | close `{none, configuration-cleared, partial}`; attribute `ambiguous`; no new trip opens, because the outcome ended whichever job it was |
+| any open | gap with a new suffix | idle | close `{none, gap, partial}` and the gap interval (T10). Unless the trip was awaiting its outcome, its job becomes untracked |
 | idle | gap with a new suffix | idle | a session-level gap interval |
 | any open | `truck.configured` with different values | unchanged | trip.update `truckConfiguration: this-event`; a `truck-change` annotation unless it is the first truck reference |
 | any open | `trailer.configured` with different values for its slot | unchanged | trip.update `trailerConfigurations: [this-event]` |
 | any open | `source.gameMode` that differs from the trip's mode | unchanged | trip.update `gameModeAmbiguous: true`, once |
-| open trip of an earlier session of the game | new session | idle | close `{none, restart, partial}` at the new session's first commit |
+| open trip of an earlier session of the game | new session | idle | close `{none, restart, partial}` at the new session's first commit. A continuation candidate left by an earlier close is relabelled `restart` |
 | open trip of this session | reconnection after `disconnected` | unchanged | trip.update `partial`; a `not-connected` interval from the last item before the disconnection |
 | any | checkpoint | unchanged | none; an idle slot records the checkpoint job as untracked (T9) |
 
 Cause intervals on `trip.open` make the new trip partial:
 
 - `opened-at-load` (`discontinuity`): the session is loading (T12);
-- `late-attach` (`not-connected`): an identical job was untracked (T9);
-- `{cause, continuationOf, decision: 'not-merged'}` (`discontinuity`): the last trip of this game closed without an outcome and had the same job key. Its close reason is the cause: `restart` (T11), `gap`, `discontinuity` or `configuration-cleared`. Identical jobs are never merged.
+- `late-attach` (`not-connected`): an identical job was untracked since a checkpoint (T9);
+- `{cause, continuationOf, decision: 'not-merged'}` (`discontinuity`): the last trip of this game closed without an outcome and had the same job key. Its close reason is the cause: `restart` (T11), `gap`, `discontinuity` or `configuration-cleared`. A candidate that crosses a plugin restart is `restart`, and an outcome clears it. Identical jobs are never merged.
+
+### Interval detail keys
+
+Every `completeness.add` of the reducer carries a `detail` object (storage keeps it as JSON). Event sequence numbers in it are uint64 decimal strings.
+
+| `detail.cause` | Interval kind | Other keys |
+| --- | --- | --- |
+| `opened-at-load` | `discontinuity` | `atEventSeq`: the event that opened the trip, or the timer restart inside its load window |
+| `late-attach` | `not-connected` | `atEventSeq`: the opening event |
+| `restart`, `gap`, `discontinuity`, `configuration-cleared` | `discontinuity` | `continuationOf`: the earlier trip's UUID; `decision`: `not-merged`; `atEventSeq`: the opening event |
+| `reload` | `discontinuity` | `continuationOf`, `decision: 'not-merged'`; `atEventSeq`: the decisive event |
+| `save-load` | `discontinuity` | `fromClockId`, `toClockId`: the game clocks of the `gameTime.regression`; `atEventSeq`: the regression |
+| `gap` (an interval of the gap itself) | `event-loss` or `not-connected` | `causes`: the record's six loss counters; `firstEventSeq`, `lastEventSeq`: the whole record's range (the interval's own range is the new suffix); `redelivered` |
+| `disconnected` | `not-connected` | none; the interval carries `startUtcMs` and, on the same source clock, `startMonotonicNs`, `endMonotonicNs` and `sourceClockId` |
+| `consumer-restart` | `not-connected` | none |
+| `truck-change` (annotation) | `discontinuity` | `annotation: true`; `atEventSeq`; after merging also `count` and `lastAtEventSeq` |
+| `utc-label-jump` (annotation) | `discontinuity` | `annotation: true`; `labelUtcMs`: the label that preceded the start; `clampedToUtcMs`: the trip start; `atEventSeq`, null for a restart close |
 
 ## Attribution (T14)
 
@@ -123,10 +146,12 @@ Each gameplay event (`job.delivered`, `job.cancelled`, `player.fined`, `player.t
 | --- | --- |
 | `trip` | An active trip's window, including an outcome that attaches after the clear |
 | `trip-before-loaded` | An active `cargo_market` job whose `cargoLoaded` is available and false (O3) |
-| `free-driving` | No open trip, or a fine, toll or transfer after the clear |
-| `ambiguous` | A gameplay event that resolves a reload check; the outcome of an untracked job or with no attachable trip; an outcome before the first start of a replaced or loaded configuration |
+| `free-driving` | No open trip and no untracked job, or a fine, toll or transfer after the clear: outside any active job (concept.md, October 13, 2026) |
+| `ambiguous` | A gameplay event that resolves a reload check; a fine, toll or transfer while a job is untracked; the outcome of an untracked job or with no attachable trip; an outcome before the first start of a replaced or loaded configuration |
 
 Money is summed per trip as exact BigInt digits per currency and SDK type. Fines before loading are kept apart from other fines. Free-driving and ambiguous events change no trip totals.
+
+**Residual risk.** The outcome guard covers only a job configured outside a running simulation, whose load window lasts until the next start. If job B is configured while running and job A's late outcome then arrives, the outcome attaches to B and closes it. No real trace shows a job configured while running (O2: accepts arrive while paused), so this stays a pending real-game check.
 
 ## Identity
 
@@ -186,15 +211,20 @@ A queued interval of an earlier session loses its monotonic bounds when a new se
 | Outcome after the clear attaches when nothing lies between | concept.md, October 13, 2026 (not observed; O6 does not exclude it) |
 | Game mode change marks the trip ambiguous | concept.md, October 13, 2026 |
 | Save load of a different job or no job; load window absorbing the regression | concept.md, October 14, 2026, and synthetic inference |
+| A save from before a cargo-market pickup is not continued (`cargoLoaded` differs) | concept.md, October 14, 2026, with O3 and O10; the sequence itself is synthetic |
+| Fines while a job is untracked are ambiguous | concept.md, October 13, 2026 |
 | Train crossing, profile switch, quick-job replacement, mid-trip timer restart, late attach after a job started, plugin restart, reconnection, UTC set back | Synthetic inference |
 
 ## PR-1 interpretations of the plan
 
 The plan's transitions table leaves these cases open. They are listed here for review:
 
-- **Load window.** It extends T12 to trips opened while paused and running: a regression right after the first start, or a timer restart before it, belongs to the load that restored the job. Without it, the O1 start burst and a save load of a different job would close the trip they just loaded.
+- **Load window.** It extends T12 to every trip opened outside a running simulation: a regression right after the first start, or a timer restart before it, belongs to the load that restored the job. Without it, the O1 start burst and a save load of a different job would close the trip they just loaded.
+- **Regression and load state.** A regression never starts a session load (fix round 1). Otherwise the job accepted after a save load would open with a false `opened-at-load` cause.
 - **Reload check, `job.cleared`.** It returns to awaiting-outcome; it is treated as part of the load burst.
 - **Reload check, different job.** It opens the new trip from the different configuration, not from the superseded re-send.
 - **Reload check, `timers.restart`.** It resolves as "other decisive event", but the new trip keeps a load window instead of closing again at once.
+- **Reload check, outcome.** It closes the old trip and opens none (fix round 1).
+- **Re-send with a different `cargoLoaded` after a clear.** It is a not-merged continuation, never a reload check (fix round 1).
 - **Outcome guard.** It applies after any replacement or load, not only after a clear.
-- **Untracked jobs.** Fines while hydration shows an untracked job are `free-driving`, following T14 literally: no window is open.
+- **Untracked jobs.** Fines, tolls and transfers while a job is untracked are `ambiguous`, not `free-driving` (fix round 1, replacing the PR-1 reading of T14).
