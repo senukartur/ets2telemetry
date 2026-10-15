@@ -5,7 +5,7 @@ import {describe, expect, it} from 'vitest';
 import * as v0 from '../../packages/contracts/src/protocol-v0';
 import * as v1 from '../../packages/contracts/src/protocol-v1';
 import {
-  bearingDegrees, deadlineRemaining, fuelLevel, fuelStep, normalizeV0State, normalizeV1State, odometerStep, type NormalizedLiveState,
+  bearingDegrees, deadlineRemaining, float32Quantum, fuelLevel, fuelStep, normalizeV0State, odometerJumpMargin, normalizeV1State, odometerStep, type NormalizedLiveState,
   type Reading, type StepSample
 } from '../../packages/telemetry-core/src';
 
@@ -42,6 +42,41 @@ describe('REG-008 odometer steps', () => {
     expect(odometerStep(sample(0, odometer(1000)), sample(1, odometer(1150)))).toEqual({kind: 'continuous', meters: 150});
     expect(odometerStep(sample(0, odometer(1000)), sample(1, odometer(1150.5)))).toEqual({kind: 'discontinuity', cause: 'odometer-jump'});
     expect(odometerStep(sample(0, odometer(1000)), sample(10, odometer(2000)))).toEqual({kind: 'continuous', meters: 1000});
+  });
+  // PR #53 advisory review: truck.odometer is an SDK float32 in km, quantized to 1/16 km (62.5 m) from 2^19 km and to
+  // 1/8 km (125 m) from 2^20 km, which exceeds the fixed 55 m threshold of a 50 ms (20 Hz) step.
+  it('measures the float32 quantum exactly at and around the power-of-two boundaries', () => {
+    expect(float32Quantum(1)).toBe(2 ** -23);
+    expect(float32Quantum(524287.5)).toBe(0.03125);
+    expect(float32Quantum(524288)).toBe(0.0625);
+    expect(float32Quantum(600000)).toBe(0.0625);
+    expect(float32Quantum(1048576)).toBe(0.125);
+    expect(float32Quantum(-524288)).toBe(0.0625);
+    expect(odometerJumpMargin(1_000_000, 1_000_055)).toBe(50);
+    expect(odometerJumpMargin(524_288_000, 524_288_062.5)).toBe(125);
+    expect(odometerJumpMargin(1_048_575_000, 1_048_576_000)).toBe(250);
+  });
+  it('keeps a one-quantum 20 Hz step of a 600,000 km odometer continuous', () => {
+    expect(odometerStep(sample(0, odometer(600_000_000)), sample(0.05, odometer(600_000_062.5)))).toEqual({kind: 'continuous', meters: 62.5});
+  });
+  it('still reports a teleport of a high-mileage truck as a jump', () => {
+    expect(odometerStep(sample(0, odometer(600_000_000)), sample(0.05, odometer(600_005_000)))).toEqual({kind: 'discontinuity', cause: 'odometer-jump'});
+    expect(odometerStep(sample(0, odometer(1_048_576_000)), sample(1, odometer(1_048_586_000)))).toEqual({kind: 'discontinuity', cause: 'odometer-jump'});
+  });
+  it('widens the 20 Hz threshold to 5 m + two quanta at 2^19 km and at 2^20 km', () => {
+    const at = (km: number, plus: number) => odometerStep(sample(0, odometer(km * 1000)), sample(0.05, odometer(km * 1000 + plus)));
+    expect(at(524288, 62.5)).toEqual({kind: 'continuous', meters: 62.5});
+    expect(at(524288, 130)).toEqual({kind: 'continuous', meters: 130});
+    expect(at(524288, 130.5)).toEqual({kind: 'discontinuity', cause: 'odometer-jump'});
+    expect(at(1048576, 125)).toEqual({kind: 'continuous', meters: 125});
+    expect(at(1048576, 255)).toEqual({kind: 'continuous', meters: 255});
+    expect(at(1048576, 255.5)).toEqual({kind: 'discontinuity', cause: 'odometer-jump'});
+    // Low mileage keeps the fixed 50 m margin: 5 m + 50 m.
+    expect(at(1000, 55)).toEqual({kind: 'continuous', meters: 55});
+    expect(at(1000, 55.5)).toEqual({kind: 'discontinuity', cause: 'odometer-jump'});
+  });
+  it('reports a one-quantum decrease as a regression, because float32 rounding is monotonic', () => {
+    expect(odometerStep(sample(0, odometer(600_000_062.5)), sample(0.05, odometer(600_000_000)))).toEqual({kind: 'discontinuity', cause: 'odometer-regressed'});
   });
   it('classifies a teleport as a jump and never as distance', () => {
     expect(odometerStep(sample(0, odometer(1234567.5)), sample(1, odometer(1334567.5)))).toEqual({kind: 'discontinuity', cause: 'odometer-jump'});

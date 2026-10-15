@@ -82,9 +82,30 @@ export function odometerStep(prev: StepSample, next: StepSample): OdometerStep {
   const elapsed = elapsedSeconds(prev, next);
   if (a.state === 'missing' || b.state === 'missing' || elapsed === undefined) return {kind: 'unavailable'};
   const meters = b.value.meters - a.value.meters;
+  // Round-to-nearest float32 is monotonic, so quantization alone never turns a non-decreasing odometer into a
+  // decrease: any decrease is a real regression.
   if (meters < 0) return {kind: 'discontinuity', cause: 'odometer-regressed'};
-  if (meters > MAX_PLAUSIBLE_SPEED_MPS * elapsed + ODOMETER_JUMP_MARGIN_METERS) return {kind: 'discontinuity', cause: 'odometer-jump'};
+  if (meters > MAX_PLAUSIBLE_SPEED_MPS * elapsed + odometerJumpMargin(a.value.meters, b.value.meters)) return {kind: 'discontinuity', cause: 'odometer-jump'};
   return {kind: 'continuous', meters};
+}
+/**
+ * The gap from |value| (rounded to float32) to the next larger float32, exactly: one quantization step of an SDK
+ * float32 channel at that magnitude. For example 1/16 at 2^19 and 1/8 at 2^20.
+ */
+export function float32Quantum(value: number): number {
+  const view = new DataView(new ArrayBuffer(4));
+  view.setFloat32(0, Math.abs(value));
+  const rounded = view.getFloat32(0);
+  view.setUint32(0, view.getUint32(0) + 1);
+  return view.getFloat32(0) - rounded;
+}
+/**
+ * The jump margin in metres for an odometer step. `truck.odometer` is an SDK float32 in km, so at high mileage one
+ * quantized increment exceeds the fixed margin (62.5 m from 2^19 km, 125 m from 2^20 km). The margin is therefore at
+ * least two float32 steps of the larger reading.
+ */
+export function odometerJumpMargin(prevMeters: number, nextMeters: number): number {
+  return Math.max(ODOMETER_JUMP_MARGIN_METERS, 2 * float32Quantum(Math.max(prevMeters, nextMeters) / 1000) * 1000);
 }
 /**
  * Classifies one fuel step. Every decrease is `consumed` with its exact amount, however small, so the sum of
