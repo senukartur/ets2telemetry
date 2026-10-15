@@ -29,7 +29,7 @@ pipe bytes -> FrameDecoder('server') -> V1Consumer -> identity check -> live sta
 
 ## Live state (E2)
 
-`V1SourceState` is service-internal: no preload, IPC or renderer receives it, and the dashboard and overlay stay on v0. ET-010c exposes it, and the v0-retirement PR switches the live path.
+`V1SourceState` is service-internal. Since ET-010c only its whitelisted live projection leaves the service (see [Live projection](#live-projection-et-010c)); the clock mapping, the last `end`, the delivery cursor, continuity and durable status never do. The v0-retirement PR switches the live path.
 
 | Field | Meaning |
 | --- | --- |
@@ -89,13 +89,29 @@ The durable path is proven only against temporary synthetic-purpose databases in
 
 PR-3 (E2, E9, E12) runs one `V1Ingestion` in the telemetry service beside the v0 `TelemetryIngestion`:
 
-- **Live-only (E2).** The service passes no durable sink. Every hello asks for `durableEvents: false`, so the plugin copies no event and counts each one it observes as `noDurableConsumer` loss (OD-4); the service sends no ACK and writes no history row, and `durable` stays `off`. Clock probes run as described above. `V1SourceState` stays inside the service: no preload, IPC, renderer, overlay or main-process message changed, and the dashboard and overlay show only v0.
+- **Live-only (E2).** The service passes no durable sink. Every hello asks for `durableEvents: false`, so the plugin copies no event and counts each one it observes as `noDurableConsumer` loss (OD-4); the service sends no ACK and writes no history row, and `durable` stays `off`. Clock probes run as described above. `V1SourceState` stays inside the service; since ET-010c its whitelisted projection rides on the live update (see [Live projection](#live-projection-et-010c)).
 - **Selection.** Each `select` command, after the v0 ingestion has accepted it, also selects the same source for v1. A v1 failure is logged as `V1_SELECT_REJECTED` and never fails the v0 selection.
 - **Game sources.** Only through the verified native broker in its v1 mode (`--protocol v1`), started by `NativePipeClient` in v1 mode ([native broker control](telemetry-service-v0.md#protocol-v1-mode)). The client accepts only the six-key receipt marked `protocolMajor: 1` and rejects a v0 receipt, and a v0 client rejects a v1 receipt. It sends the hello raw and every later client frame (`clock.probe` here; `ack` only with a sink) as tag `0x02` followed by the frame, apart from the `0x01` credits. A client frame whose length prefix does not match it or whose payload is outside 1–4,096 bytes closes the connection with the outcome `client-frame-rejected` before anything reaches the broker. The broker stages `client-frame` and `client-write` are known stage names. No Node code opens a game pipe.
 - **Discovery directory (E12).** The v1 directory is derived from the validated v0 broker configuration that main sends with a selection: a directory named `v0` under a parent named `transport` gives its sibling `v1` (`%LOCALAPPDATA%\ETS2Telemetry\transport\v1`) with the same verified executable. Any other shape gives no configuration, so a v1 game source stays `unavailable` instead of guessing a directory. The main-to-service message is unchanged.
 - **Fixtures.** A `synthetic` or `replay` selection connects v1 only to `ETS2TELEMETRY_SOURCE_PIPE_V1`, which must match `TEST_PIPE_PATTERN_V1`; without it v1 is `unavailable`. The envelope origin must equal the selection.
 - **Two brokers.** A game selection now runs two broker processes, one per protocol, each with its own directory, policy and lock. A v1 broker that finds no `transport\v1` directory (a plugin without v1) reports `waiting` and exits 2; the ingestion retries on the backoff above.
 - **Shutdown.** The `v1-ingestion` step runs in the `intake` phase beside `ingestion` and `capture` with a 1,000 ms budget; it ends the source and waits for the broker process. The phase maxima are unchanged: 1,000 ms for `intake`, none registered for `flush` and 1,000 ms for `storage`, 2,000 ms in total against `SERVICE_STOP_BUDGET_MS` of 2,500 ms.
+
+## Live projection (ET-010c)
+
+The service keeps the latest v0 update and the latest v1 projection and publishes `withV1(v0, v1)` through the existing live subscriptions, which coalesce to at most 20 Hz (decision F1). The projection ([live-v1.ts](../apps/desktop/src/live-v1.ts), `liveV1Projection`) is an explicit whitelist (F2):
+
+| Field | Content |
+| --- | --- |
+| `selection`, `status`, `reason`, `fresh` | As in `V1SourceState` |
+| `observation.source`, `seq`, `capture` | The latest checkpoint's or snapshot's envelope fields |
+| `observation.state` | The wire state's keys except `window` (fifteen of sixteen), listed one by one, so a new wire key never leaks by default |
+| `observation.sourceStatus` | `gameMode` and `eventLoss` only; never the delivery cursor |
+| `observation.receivedMonotonicMs`, `hydration` | The service receive time (advances only with a new SDK boundary) and the checkpoint flag |
+
+It never carries the window or its handle, the message kind, continuity, the clock mapping, the last `end` or durable status. The projection is attached only to a v0 update of the same selection. The service republishes only for a change the projection shows: the selection, status, reason, freshness or a new observation object; a clock mapping or durable status update alone republishes nothing.
+
+Main validates the projection in the upstream handler, before freshness and the overlay see it, and the dashboard preload validates it again (`parseLiveV1`: exact keys, the update's selection, one of the seven v1 statuses, a reason of 1–256 characters without control characters, `fresh` only with an observation and a `connected` or `paused` status, and `validateLiveObservationV1`, which applies the wire state rules and rejects a window). An invalid projection is stripped and the v0 update kept; main logs `LIVE_V1_REJECTED {count}` at occurrences 1, 2, 4, 8, … and never closes the channel for it. Main and the preload expire the projection 500 ms after its last new receipt key (plugin session, process instance, capture clock, SDK boundary and receipt time), independently of v0 (F3). Display rules are in [live telemetry fields](live-telemetry-fields.md#protocol-v1-rows-et-010c).
 
 ## Diagnostics
 
@@ -111,7 +127,9 @@ Fixed codes and numbers only, through the `diagnose` option: `V1_DURABLE_RETRY {
 | `tests/storage/v1-durable-ingestion.test.ts` | The bundled storage worker, `StorageClient` and `StorageDurableSink` under Electron, against the reactive simulator: hand-written rows and ACKs, a restart with a new worker, a terminated worker |
 | `tests/storage/v1-ingestion-crash.test.ts` | A child process with the bundled ingestion and worker terminated at commit barriers, then a new process on the same database |
 | `tests/unit/native-pipe-client.test.ts` | The broker's v1 mode with a mocked child process: spawn arguments, the six-key receipt and the rejected v0/v1 receipt mix, the raw hello, tagged client frames and their bounds, the new stages, the E12 directory derivation, and `V1Ingestion` through the v1 client (a hello with `durableEvents: false`, a tagged probe, credits, no ACK) |
-| `tests/unit/telemetry-service-v0.test.ts` | The service entry point with a recorded `V1Ingestion` stand-in: no sink, the selection followed with the fixture endpoint and the derived directory, isolation from the v0 selection, the coalesced status log and the bounded `v1-ingestion` shutdown step |
+| `tests/unit/telemetry-service-v0.test.ts` | The service entry point with a recorded `V1Ingestion` stand-in: no sink, the selection followed with the fixture endpoint and the derived directory, isolation from the v0 selection, the coalesced status log and the bounded `v1-ingestion` shutdown step; since ET-010c the projection on the live update of the same selection and no republish for a clock mapping alone |
+| `tests/unit/live-v1.test.ts` | ET-010c: the projection whitelist, `parseLiveV1` and `validateLiveObservationV1` rejections, `withV1` and the receipt key |
+| `tests/unit/live-smoke-source-v1.test.ts` | ET-010c: the synthetic v1 smoke source over an actual Windows pipe through `V1Ingestion`: hydration, stale while held on the same connection, disconnect on stop |
 | `tests/integration/v1-chain.test.ts` (`npm run test:v1-chain`) | E14: the fake-SDK host and the test plugin DLL with the real broker in v1 mode; the broker-provisioned policy, an ACK from a test-level durable driver releasing entries, and `V1Ingestion` failing closed on the synthetic origin under game authority |
 
 Expected values are written by hand from the specification, the shared fixtures and the simulator expectations. Timing never decides an outcome: the backlog and barriers are counted in items and commits, unit tests use controlled clocks, and real-time waits are liveness bounds.
