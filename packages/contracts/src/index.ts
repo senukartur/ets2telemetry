@@ -1,7 +1,7 @@
 // Scaffold status only. The telemetry wire protocol belongs to ET-002a.
 export interface ScaffoldStatus { service: 'ready'; storage: 'verified'; synthetic: true }
 import type {CurrentState, SourceIdentity, AppliedState, CaptureTime} from './protocol-v0';
-import type {AppState} from './app-state';
+import type {AppState, SettingsView, UnitGame, UnitProfile} from './app-state';
 export type SourceSelection = 'game' | 'ets2' | 'ats' | 'synthetic' | 'replay';
 export interface LiveTelemetry {
   selection: SourceSelection;
@@ -26,6 +26,11 @@ export interface DesktopBridge {
   subscribeAppState(listener: (state: AppState) => void): () => void;
   /** Explicit, orderly application exit; closing the window only hides it to the tray. */
   exitApplication(): Promise<void>;
+  /**
+   * Persists one game's display unit profile and resolves with the settings that now apply. Main applies the change only
+   * after the durable write; it rejects a newer-version (read-only) file, a failed write and invalid values.
+   */
+  setUnitProfile(game: UnitGame, profile: UnitProfile): Promise<SettingsView>;
 }
 /** Read-only display projection: no source selection, HWND or native placement authority. */
 export interface OverlayPresentation {

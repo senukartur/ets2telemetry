@@ -1,6 +1,6 @@
 # Minimal overlay (ET-008)
 
-The prototype adds a separate transparent speed/fuel/source-status window. It is a bounded 300 × 132 DIP widget anchored inside the selected game's client rectangle. ETS2 defaults to km/h and liters; ATS defaults to mph and US gallons (3.785411784 L). Canonical v0 values remain m/s and L. Missing readings are `—`; stale captures blank both metrics and show `stale`. These conversions follow the contract and ET-000 defaults; real SDK units still require CAP-01 evidence.
+The prototype adds a separate transparent speed/fuel/source-status window. It is a bounded 300 × 132 DIP widget anchored inside the selected game's client rectangle. ETS2 defaults to km/h and liters; ATS defaults to mph and US gallons (3.785411784 L). Canonical v0 values remain m/s and L. Missing readings are `—`; stale captures blank both metrics and show `stale`. These conversions follow the contract and ET-000 defaults; real SDK units still require CAP-01 evidence. Since ET-011b the units come from the persisted per-game profile (`metric` or `us-customary`, with the same defaults) and the conversions from `packages/telemetry-core`. A saved profile change republishes the overlay from main's stored freshness output without renewing SDK or window freshness; see [settings](settings.md#dashboard-and-overlay).
 
 ## Ownership and authorization
 
