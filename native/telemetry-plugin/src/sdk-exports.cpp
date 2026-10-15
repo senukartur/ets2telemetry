@@ -26,8 +26,6 @@ ets2telemetry::v1::Server& v1_endpoint() noexcept {
 #endif
   return value;
 }
-// True while the adapter holds the v1 channel of this plugin session.
-bool v1_attached = false;
 void retire() noexcept {
   // v1 first learns of the stop, so its `end` is written while the CAP0 drain and end marker run; then CAP0 joins, then
   // v1, then v0. The adapter shuts down after every worker has joined, and the channel is detached last (Caller
@@ -38,7 +36,7 @@ void retire() noexcept {
   ets2telemetry::transport::server().stop();
   if (monitor) { monitor->stop(); delete monitor; monitor = nullptr; }
   ets2telemetry::sdk::adapter().shutdown();
-  ets2telemetry::sdk::adapter().attach_events(nullptr); v1_attached = false;
+  ets2telemetry::sdk::adapter().attach_events(nullptr);
 }
 }
 
@@ -64,7 +62,8 @@ extern "C" __declspec(dllexport) int ets2telemetry_test_v1_endpoint(wchar_t* out
   try { const auto endpoint = v1_endpoint().endpoint(); if (!output || endpoint.empty() || endpoint.size()+1 > capacity) return 0; wcscpy_s(output,capacity,endpoint.c_str()); return 1; } catch (...) { return 0; }
 }
 extern "C" __declspec(dllexport) int ets2telemetry_test_v1_write_pending() noexcept { return v1_endpoint().write_pending() ? 1 : 0; }
-extern "C" __declspec(dllexport) int ets2telemetry_test_v1_attached() noexcept { return v1_attached ? 1 : 0; }
+// Reads the adapter's own channel pointer, so the seam shows what the callbacks would actually use.
+extern "C" __declspec(dllexport) int ets2telemetry_test_v1_attached() noexcept { return ets2telemetry::sdk::adapter().events_attached() ? 1 : 0; }
 #ifdef ETS2TELEMETRY_TRANSPORT_TEST_HOOKS
 // Present only in the separately hooked test DLL: the console test owns the hook until unload.
 extern "C" __declspec(dllexport) void ets2telemetry_test_transport_hook(ets2telemetry::transport::TransportTestHook hook) noexcept { ets2telemetry::transport::set_transport_test_hook(hook); }
@@ -85,6 +84,7 @@ SCSAPI_RESULT scs_telemetry_init(const scs_u32_t version, const scs_telemetry_in
 #else
     const bool serve_v1 = true;
 #endif
+    bool v1_attached = false;
     if (serve_v1) if (auto* channel = v1_endpoint().prepare()) { ets2telemetry::sdk::adapter().attach_events(channel); v1_attached = true; }
     if (!monitor) monitor = new ets2telemetry::window::Monitor();
     // Identity rejection leaves telemetry available and window metadata unavailable.
@@ -125,7 +125,7 @@ SCSAPI_RESULT scs_telemetry_init(const scs_u32_t version, const scs_telemetry_in
 #else
       {},
 #endif
-      monitor)) { ets2telemetry::sdk::adapter().attach_events(nullptr); v1_attached = false; }
+      monitor)) ets2telemetry::sdk::adapter().attach_events(nullptr);
     return result;
   }
   catch (...) { retire(); return SCS_RESULT_generic_error; }
