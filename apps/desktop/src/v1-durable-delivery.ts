@@ -35,6 +35,8 @@ export interface DurableLink {
   write(bytes: Uint8Array): void;
   /** Ends this connection when it is still current; a no-op otherwise. */
   close(kind: DurableCloseKind, code: string): void;
+  /** Optional: called after each successful commit result of this connection while it is current, before its ACK. */
+  committed?(): void;
 }
 export interface DurableDeliveryOptions {
   maxPendingCommits?: number;
@@ -171,6 +173,8 @@ export class DurableDelivery {
     const connection = op.connection;
     if (op.kind === 'open') {
       const result = await this.call(() => this.sink.openSession(op.welcome));
+      // A session that opens after stop() or after its connection was dropped changes nothing.
+      if (connection.dropped || this.stopped) return;
       if (!result.ok) { this.failure(connection, result.error); return; }
       const through = result.value?.committedThroughEventSeq;
       if (!isUint64(through)) { this.failure(connection, internal()); return; }
@@ -207,6 +211,7 @@ export class DurableDelivery {
     if (value.committedThroughEventSeq !== cursor.throughEventSeq) { this.unavailable(connection, 'COVERAGE_MISMATCH'); return; }
     // E8: only the connection that received the coverage, while current, open and before `end`.
     if (!connection.link.current()) return;
+    connection.link.committed?.();
     const ack = cursor.ack();
     if (ack) connection.link.write(encodeFrame(ack));
   }

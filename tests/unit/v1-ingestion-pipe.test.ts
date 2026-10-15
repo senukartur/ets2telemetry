@@ -91,11 +91,16 @@ async function runScenario(id: string, scale: number) {
   const states: V1SourceState[] = [];
   let ingestion: V1Ingestion | undefined, finished!: () => void;
   const allClosed = new Promise<void>(r => { finished = r; });
+  // Work started from socket callbacks is tracked; its first rejection fails the run instead of being lost.
+  let fail!: (error: unknown) => void;
+  const failed = new Promise<never>((_, reject) => { fail = reject; }), background: Promise<unknown>[] = [];
+  failed.catch(() => undefined);
+  const track = (work: Promise<unknown> | undefined) => { if (work) background.push(work.catch(error => fail(error))); };
   const run: Run = new Run(policies, index => {
     const owner = ingestion, next = policies[index + 1];
     // A stopped ingestion never connects again: its pending reconnection checks that it was stopped.
-    if (!next) { void owner?.stop(); finished(); return; }
-    if (next.durable !== policies[index].durable) { void owner?.stop(); ingestion = start(next.durable); }
+    if (!next) { track(owner?.stop()); finished(); return; }
+    if (next.durable !== policies[index].durable) { track(owner?.stop()); ingestion = start(next.durable); }
   });
   const start = (durable: boolean) => {
     const next = new V1Ingestion({connect: run.connect, sink: durable ? new LedgerSink(ledger, run) : undefined, onState: s => states.push(s)});
@@ -103,8 +108,11 @@ async function runScenario(id: string, scale: number) {
   };
   try {
     ingestion = start(policies[0].durable);
-    const report = await server.done;
-    await allClosed;
+    const report = await Promise.race([server.done, failed]);
+    await Promise.race([allClosed, failed]);
+    await Promise.all(background);
+    // A failure of tracked work that settled after the races above still fails the run.
+    await Promise.race([failed, Promise.resolve()]);
     return {replay, report, ledger, states, run};
   } finally { await ingestion?.stop(); await server.stop(); }
 }

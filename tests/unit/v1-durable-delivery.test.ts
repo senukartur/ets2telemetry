@@ -177,7 +177,9 @@ describe('ET-006b storage-commit ACK pipeline', () => {
     connection.checkpoint('0');
     return {delivery, link, connection, logs};
   }
-  it('never acknowledges on receipt, only after the sink resolves, and never beyond contiguous commits', async () => {
+  // One FIFO with one command in flight cannot commit eventSeq 4 before 3, so commits {1, 2, 4} never arise in the
+  // pipeline; the contract cursor cases in protocol-v1-delivery.test.ts cover that case. Here 3 is in flight, then fails.
+  it('never acknowledges on receipt, only after the sink resolves, and not past a commit in flight or a failed one', async () => {
     const sink = new MemorySink(); sink.paused = true;
     const {link, connection} = started(sink);
     for (const n of [1, 2, 3, 4]) connection.enqueue(range(event(n)), event(n));
@@ -310,6 +312,16 @@ describe('ET-006b storage-commit ACK pipeline', () => {
     sink.paused = false; sink.releaseOne(); await delivery.idle();
     // The open completed; no queued item of the closed connection was committed or acknowledged.
     expect([sink.log, link.acks]).toEqual([[`open ${P1}`], []]);
+  });
+  it('ignores a session open that completes after stop', async () => {
+    const sink = new MemorySink(); sink.paused = true;
+    const statuses: unknown[] = [], delivery = new DurableDelivery(sink, {onStatus: status => statuses.push(status)});
+    const link = new Link(sink.log); delivery.connect(welcome(), link);
+    await flush(); expect(sink.waitingCommands).toBe(1);
+    const before = [...statuses];
+    const stopped = delivery.stop(); sink.releaseOne(); await stopped;
+    // The open reached storage, but the stopped pipeline reports no active session and builds no cursor.
+    expect([sink.log, delivery.status, statuses]).toEqual([[`open ${P1}`], {state: 'pending'}, before]);
   });
   it('drops queued work on stop and waits for the command in flight', async () => {
     const sink = new MemorySink(); sink.paused = true;

@@ -169,7 +169,13 @@ describe('ET-006b protocol v1 ingestion', () => {
     expect(ingestion.current.status).toBe('unavailable');
   });
 
-  it('reconnects after 250, 500, 1000, 2000, 4000 and 4000 ms and resets after a hydrated checkpoint (E9)', async () => {
+  /** Waits in 50 ms steps until the ingestion opens its next socket and returns the delay. */
+  async function nextDelay() {
+    const before = sockets.length; let waited = 0;
+    while (sockets.length === before) { await advance(50); waited += 50; if (waited > 10_000) throw new Error('no reconnection'); }
+    return waited;
+  }
+  it('reconnects after 250, 500, 1000, 2000, 4000 and 4000 ms and resets after the first commit of a durable connection (E9)', async () => {
     start({sink: new Sink()});
     const delays: number[] = [];
     for (let i = 0; i < 6; i++) {
@@ -179,10 +185,68 @@ describe('ET-006b protocol v1 ingestion', () => {
       delays.push(waited);
     }
     expect(delays).toEqual([250, 500, 1000, 2000, 4000, 4000]);
-    connectLatest(); latest().feed(frame('welcome'), frame('checkpoint'));
+    // A durable checkpoint alone does not prove the connection healthy; the backoff keeps its step.
+    connectLatest(); latest().feed(frame('welcome'), frame('checkpoint')); await settle();
     latest().emit('end');
     expect(state().status).toBe('disconnected');
-    const before = sockets.length; await advance(200); expect(sockets.length).toBe(before); await advance(50); expect(sockets.length).toBe(before + 1);
+    expect(await nextDelay()).toBe(4000);
+    // The first successful commit does: the next reconnection waits 250 ms again.
+    connectLatest(); latest().feed(frame('welcome'), frame('checkpoint'), frame('event-job-configured')); await settle();
+    expect(latest().acks).toEqual(['1']);
+    latest().emit('end');
+    expect(await nextDelay()).toBe(250);
+  });
+
+  it('resets the backoff at the checkpoint of a live-only connection (E9)', async () => {
+    start();
+    for (const expected of [250, 500]) { latest().emit('close'); expect(await nextDelay()).toBe(expected); }
+    connectLatest(); latest().feed(frame('welcome-live'), frame('checkpoint-live'));
+    latest().emit('end');
+    expect(await nextDelay()).toBe(250);
+  });
+
+  it('keeps backing off while a retryable storage failure persists, instead of reconnecting every 250 ms (E7, E9)', async () => {
+    const sink = new Sink(); sink.fail = 'DISK_FULL'; start({sink});
+    const delays: number[] = [];
+    for (let i = 0; i < 6; i++) {
+      connectLatest();
+      latest().feed(frame('welcome'), frame('checkpoint'), frame('event-job-configured')); await settle();
+      expect([latest().destroyed, latest().acks]).toEqual([true, []]);
+      delays.push(await nextDelay());
+    }
+    // Hand-written from E9: each hydrated connection is closed by the failed commit before it proves healthy.
+    expect(delays).toEqual([250, 500, 1000, 2000, 4000, 4000]);
+    sink.fail = undefined;
+    connectLatest(); latest().feed(frame('welcome'), frame('checkpoint'), frame('event-job-configured')); await settle();
+    expect(latest().acks).toEqual(['1']);
+    latest().emit('close');
+    expect(await nextDelay()).toBe(250);
+  });
+
+  it('reports a receive clock regression as a clock failure, not a protocol violation', () => {
+    start({sink: new Sink()}); connectLatest();
+    clock.ms = 10; latest().feed(frame('welcome'), frame('checkpoint'));
+    clock.ms = 5; latest().feed(frame('snapshot'));
+    expect([state().status, state().reason]).toEqual(['incompatible', 'Receive clock failure']);
+  });
+
+  it('chooses the hello durability from the broker authority that arrives with connect (ACK_AHEAD_OF_STORAGE)', async () => {
+    const asGame = (name: string) => edited(name, m => { m.source.origin = 'game'; });
+    const sessions = [P1, P2, P1], games: FakeSocket[] = [];
+    // Like NativePipeClient, the authority receipt is set only when the broker reports it, right before 'connect'.
+    const arrive = (socket: FakeSocket, pluginSessionId: string) => { socket.authority = {...server('welcome').source, origin: 'game', pluginSessionId}; socket.emit('connect'); };
+    const connectGame = () => { const s = new FakeSocket(); games.push(s); return s; };
+    start({broker: {executable: 'broker.exe', discoveryDirectory: 'transport'}, connectGame, sink: new Sink()}, 'ets2');
+    expect(games[0].authority).toBeUndefined();
+    arrive(games[0], sessions[0]);
+    expect(games[0].hello.durableEvents).toBe(true);
+    // Storage holds nothing (C = 0) while the producer released through 1 (A = 1): P1 continues live-only.
+    games[0].feed(asGame('welcome'), asGame('checkpoint-reconnect')); await settle();
+    expect(state().durable).toEqual({state: 'failed', code: 'ACK_AHEAD_OF_STORAGE'});
+    await advance(250); arrive(games[1], sessions[1]);
+    expect(games[1].hello.durableEvents).toBe(true);
+    games[1].emit('close'); await advance(500); arrive(games[2], sessions[2]);
+    expect(games[2].hello.durableEvents).toBe(false);
   });
 
   it('keeps the end marker, disconnects and reconnects', async () => {

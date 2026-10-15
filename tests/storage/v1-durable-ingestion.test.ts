@@ -45,6 +45,11 @@ async function run(input: Json, plan: Plan) {
   const services: Service[] = [];
   let connection = -1, commits = 0, finished!: () => void;
   const allClosed = new Promise<void>(r => { finished = r; });
+  // Work started from socket callbacks is tracked; its first rejection fails the run instead of being lost.
+  let fail!: (error: unknown) => void;
+  const failed = new Promise<never>((_, reject) => { fail = reject; }), background: Promise<unknown>[] = [];
+  failed.catch(() => undefined);
+  const track = (work: Promise<unknown>) => { background.push(work.catch(error => fail(error))); };
   const connect = (endpoint: string) => {
     const socket = net.connect(endpoint), write = socket.write.bind(socket), decoder = new FrameDecoder('server');
     let index: number | undefined;
@@ -56,8 +61,9 @@ async function run(input: Json, plan: Plan) {
           const own = index = ++connection; commits = 0;
           socket.once('close', () => {
             // A stopped ingestion never reconnects: its pending reconnection checks that it was stopped.
-            if (own === sessions - 1) { void services.at(-1)!.ingestion.stop(); finished(); }
-            else if (plan.restart) { const old = services.at(-1)!; void old.ingestion.stop().then(() => old.client.close()); void start(); }
+            if (own === sessions - 1) { track(services.at(-1)!.ingestion.stop()); finished(); }
+            // The next service opens the file only after the old worker closed it and released its exclusive lock.
+            else if (plan.restart) { const old = services.at(-1)!; track(old.ingestion.stop().then(() => old.client.close()).then(() => start())); }
           });
         });
       } catch { /* the ingestion's own decoder reports the violation */ }
@@ -91,8 +97,11 @@ async function run(input: Json, plan: Plan) {
   };
   try {
     await start();
-    const report = await server.done;
-    await allClosed;
+    const report = await Promise.race([server.done, failed]);
+    await Promise.race([allClosed, failed]);
+    await Promise.all(background);
+    // A failure of tracked work that settled after the races above still fails the run.
+    await Promise.race([failed, Promise.resolve()]);
     for (const service of services) await service.ingestion.stop();
     return {replay, report, services};
   } finally { await server.stop(); }

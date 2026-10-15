@@ -60,6 +60,9 @@ export interface V1IngestionOptions {
   onState?: (state: V1SourceState) => void;
 }
 
+/** The service receive clock went backwards or is not finite; not a protocol violation of the source. */
+class ReceiveClockError extends Error {}
+
 function initialState(selection: SourceSelection, durable: DurableStatus): V1SourceState {
   return {selection, status: 'waiting', reason: 'Awaiting selected source', fresh: false, durable};
 }
@@ -148,8 +151,9 @@ export class V1Ingestion {
     const socket = this.socket = game ? this.options.connectGame!(this.options.broker!, selection) : this.connect(this.endpoint!);
     if (socket.completion) { const completion = socket.completion; this.completions.add(completion); void completion.finally(() => this.completions.delete(completion)); }
     const active = () => !closed && !this.disposed && generation === this.generation;
-    // The broker's receipt names the plugin session before the hello; a fixture socket does not.
-    const requested = Boolean(this.delivery?.durableAllowed(socket.authority?.pluginSessionId)), consumer = new V1Consumer(requested);
+    // Fixed at 'connect', when the hello is written: the native client sets its authority receipt, which names the plugin
+    // session, just before it emits 'connect'; a fixture socket has no authority.
+    let requested = false, consumer: V1Consumer | undefined;
     const close = (status: V1Status, reason: string, retry: boolean) => {
       if (!active()) return; closed = true;
       clearTimeout(this.handshake); clearInterval(this.freshness); clearInterval(this.probes);
@@ -162,19 +166,25 @@ export class V1Ingestion {
         void Promise.all(this.completions).then(() => { if (!this.disposed && generation === this.generation) this.open(); });
       }, V1_BACKOFF_MS[Math.min(this.attempt++, V1_BACKOFF_MS.length - 1)]);
     };
+    // E9: a durable connection proves itself healthy with its first successful commit, a live-only one with its checkpoint;
+    // only then does the reconnect backoff restart, so a persistent retryable storage failure keeps backing off.
+    const healthy = () => { if (active()) this.attempt = 0; };
     const link = {
+      committed: healthy,
       current: () => active() && !ended,
       write: (bytes: Uint8Array) => { if (active() && !ended) socket.write(bytes); },
       close: (kind: DurableCloseKind, code: string) => close('disconnected', kind === 'retryable' ? `Durable commit not completed (${code}); retrying` : `Durable delivery stopped (${code}); reconnecting live-only`, true)
     };
     const sendProbe = () => {
-      if (!active() || ended || consumer.clockProbeOutstanding) return;
+      if (!active() || ended || !consumer || consumer.clockProbeOutstanding) return;
       // At most one outstanding probe; a late reply still ends it, and no new probe is sent before it arrives (§11).
       probeId++; consumer.expectClockReply(probeId.toString()); probeSentNs = this.nowNs();
       socket.write(encodeFrame({version: PROTOCOL_V1, kind: 'clock.probe', data: {probeId: probeId.toString()}}));
     };
     const observe = (message: Extract<ServerMessage, {kind: 'checkpoint' | 'snapshot'}>) => {
-      const receipt = this.clock(), previous = this.state.observation;
+      let receipt: number;
+      try { receipt = this.clock(); } catch { throw new ReceiveClockError(); }
+      const previous = this.state.observation;
       // A new SDK boundary is a new observation; a resent state keeps its original receipt time.
       const newBoundary = !hydrated || !previous || BigInt(message.data.state.boundaryOrder) > BigInt(previous.state.boundaryOrder);
       const receivedMonotonicMs = newBoundary || !previous ? receipt : previous.receivedMonotonicMs;
@@ -196,6 +206,7 @@ export class V1Ingestion {
     this.handshake = setTimeout(() => close('disconnected', 'Hello/checkpoint deadline exceeded', true), this.options.handshakeMs ?? V1_HANDSHAKE_MS);
     socket.once('connect', () => {
       if (!active()) return;
+      requested = Boolean(this.delivery?.durableAllowed(socket.authority?.pluginSessionId)); consumer = new V1Consumer(requested);
       socket.write(encodeFrame({version: PROTOCOL_V1, kind: 'hello', data: {clientInstanceId: this.clientInstanceId, minMinor: 0, maxMinor: 0, durableEvents: requested}}));
     });
     socket.on('data', (bytes: unknown) => {
@@ -206,6 +217,7 @@ export class V1Ingestion {
           // A connection the pipeline or a previous message closed applies nothing more from this read.
           if (!active()) return;
           if (decoded.kind === 'hello' || decoded.kind === 'ack' || decoded.kind === 'clock.probe') throw new Error('Unexpected client direction');
+          if (!consumer) throw new Error('Server bytes before the hello');
           const message = decoded;
           if (game) {
             const expected = socket.authority;
@@ -222,7 +234,8 @@ export class V1Ingestion {
               return;
             }
             case 'checkpoint':
-              this.attempt = 0; clearTimeout(this.handshake); this.handshake = undefined;
+              if (!durable) healthy();
+              clearTimeout(this.handshake); this.handshake = undefined;
               durable?.checkpoint(message.data.status.delivery.ackedThroughEventSeq);
               observe(message);
               this.probes ??= setInterval(sendProbe, this.options.probeIntervalMs ?? V1_PROBE_INTERVAL_MS);
@@ -247,7 +260,7 @@ export class V1Ingestion {
           }
         });
         if (ended) close('disconnected', `Source ended (${this.state.lastEnd!.reason})`, true);
-      } catch { close('incompatible', 'Invalid protocol, ordering or selected source identity', false); }
+      } catch (error) { close('incompatible', error instanceof ReceiveClockError ? 'Receive clock failure' : 'Invalid protocol, ordering or selected source identity', false); }
     });
     socket.on('error', (error: unknown) => {
       if (!game) close('disconnected', 'Selected fixture connection failed', true);

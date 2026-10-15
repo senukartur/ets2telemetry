@@ -21,8 +21,8 @@ pipe bytes -> FrameDecoder('server') -> V1Consumer -> identity check -> live sta
 
 ## Connection and validation
 
-- **Hello.** One hello per connection with the service's `clientInstanceId` (one UUID per `V1Ingestion`, that is per service process). `durableEvents` is true only when a sink is configured and durable delivery is allowed (below). A live-only connection never sends `ack`.
-- **Validation.** Every frame passes the v1 `FrameDecoder` and `V1Consumer`: welcome, then exactly one checkpoint, then snapshots, events, gaps, clock replies and `end`. Any violation closes the connection as `incompatible` without a reconnection until the user selects a source again (E9). This includes v0 and CAP0 frames, a duplicate or skipped `eventSeq`, an event on a live-only connection, a client message from the server and any frame after `end` in the same read.
+- **Hello.** One hello per connection with the service's `clientInstanceId` (one UUID per `V1Ingestion`, that is per service process). `durableEvents` is true only when a sink is configured and durable delivery is allowed (below). It is decided at `connect`, when the hello is written: the native client sets its authority receipt, which names the plugin session, just before it emits `connect`. A live-only connection never sends `ack`.
+- **Validation.** Every frame passes the v1 `FrameDecoder` and `V1Consumer`: welcome, then exactly one checkpoint, then snapshots, events, gaps, clock replies and `end`. Any violation closes the connection as `incompatible` without a reconnection until the user selects a source again (E9). A service receive clock that runs backwards closes it the same way with the reason "Receive clock failure". This includes v0 and CAP0 frames, a duplicate or skipped `eventSeq`, an event on a live-only connection, a client message from the server and any frame after `end` in the same read.
 - **Identity.** A game selection requires every envelope to equal the native broker's authority receipt (game, process ID, Windows session, process instance, plugin session) with origin `game`. A synthetic or replay selection requires the envelope origin to equal the selection, and the endpoint must match `TEST_PIPE_PATTERN_V1`, a desktop-local copy of the simulator's `\\.\pipe\ETS2Telemetry-SYNTHETIC-TEST-v1-{pid}-{uuid}` pattern (a test checks that the two stay identical).
 - **Game connections.** PR-1 has no default native client: a game selection without the `connectGame` option stays `unavailable`. PR-3 supplies the broker's v1 mode.
 - **Credit (E5).** The broker relays one frame per credit. Each frame is decoded, validated and applied synchronously, and its event or gap is queued, before the listener returns and the credit is granted. A credit never waits for storage.
@@ -54,7 +54,7 @@ pipe bytes -> FrameDecoder('server') -> V1Consumer -> identity check -> live sta
 | Retryable durable failure, `ACK_AHEAD_OF_STORAGE`, durable unavailable | `disconnected` | Reconnect (durable, or live-only) |
 | Schema, order or identity violation; other broker rejections | `incompatible` | None until a new selection |
 
-Reconnection delays are 250, 500, 1000, 2000 and then 4000 ms. A hydrated checkpoint resets them. A reconnection waits for the previous broker process to exit.
+Reconnection delays are 250, 500, 1000, 2000 and then 4000 ms. They restart only once a connection proves healthy: a live-only connection at its hydrated checkpoint, a durable connection at its first successful commit. A persistent retryable storage failure, which closes each durable connection before its first commit, therefore keeps backing off instead of making the plugin redeliver its retained store every 250 ms. A reconnection waits for the previous broker process to exit.
 
 ## Clock probes (E10)
 
@@ -66,7 +66,7 @@ After each checkpoint the ingestion sends one `clock.probe`, then at most one pe
 - **Cursor (E6).** At each durable welcome the pipeline queues `openSession` behind earlier work. `openSession` stores the session (`upsertSession`) and returns the stored contiguous coverage C, and a new `DurableAckCursor(pluginSessionId, C)` starts. The checkpoint's `ackedThroughEventSeq` A begins the connection. If A > C (for example a restored database), durable delivery stops for that plugin session with `ACK_AHEAD_OF_STORAGE`: the ingestion reconnects live-only, and a live-only welcome of another plugin session lifts the block and reconnects durable. ET-015a defines the `restore-loss` marker.
 - **Commit.** Each item is `cursor.received` and then committed by the sink. `committed`, `duplicate` and `covered` commit the range in the cursor. `conflict` keeps the stored row (§9); the key counts as committed and `V1_EVENT_CONFLICT` is logged at counts 1, 2, 4, 8, …. After every commit the storage's `committedThroughEventSeq` must equal the cursor's `throughEventSeq`; otherwise durable delivery fails with `COVERAGE_MISMATCH` and nothing is acknowledged.
 - **ACK (E8).** `cursor.ack()` runs only after the commit, and its frame is written only while the connection that received the coverage is current, open and before `end`. A commit that finishes after a disconnect or `end` writes nothing; the next connection acknowledges the range again once it has been redelivered (§10). Receipt, parsing or validation is never grounds for an ACK.
-- **Stop.** `stop()` drops queued work, waits for the one command in flight and writes nothing afterwards.
+- **Stop.** `stop()` drops queued work, waits for the one command in flight and writes nothing afterwards; a session open that completes after it changes no status.
 
 ### Failure classes (E7)
 
