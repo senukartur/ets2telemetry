@@ -547,6 +547,8 @@ On October 15, 2026 the owner wrote (translated from Russian): "Overall, keep do
 
 ET-011a changes the earlier behavior in which closing the dashboard stopped the v0 service and closed the overlay. Recording survival across close-to-tray (REG-012) still requires ET-015. Manual checks of the real notification-area icon, display scaling, Explorer restart, Start-menu relaunch and sign-out, and real-game overlay behavior while the main window is closed, remain pending; see [ET-011 validation](docs/validation/et-011.md). No autostart, auto-update, cloud synchronization or recording is authorized, and no game, TruckersMP, display or performance claim follows from synthetic or local checks.
 
+ET-011b implementation update on October 15, 2026: per-game display unit profiles are saved in `%LOCALAPPDATA%\ETS2Telemetry\settings\settings.json` (format v1, no startup write, byte-identical quarantine of invalid files, read-only newer versions, synced atomic saves) and applied to the dashboard and overlay through telemetry-core conversions only after a durable save; see [settings](docs/settings.md). The ET-011 manual and real-game checks remain pending.
+
 ## ET-010 authorization — October 15, 2026
 
 On October 15, 2026 the owner gave the coordinator standing autonomy: "Overall, keep doing other tasks until you hit tests in the real game. Make optimal decisions. I want you to close as many tasks as possible without my involvement. If there are flaky tests, delegate their fixes to subagents." Under that delegation the coordinator started ET-010 (live telemetry) and adopted the architect recommendations N1–N16 below. They are coordinator decisions under the owner's delegation and were not individually reviewed by the owner; the owner may revise them.
