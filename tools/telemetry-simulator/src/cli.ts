@@ -2,9 +2,15 @@ import {readFixtureFile} from './fixture-file';
 import {replay,validateScenario} from './scenario';
 import {startPipe,consumePipe} from './pipe';
 import {checkCadence} from './cadence';
+import {replayV1,transcriptLines} from './v1/replay';
 
 async function main():Promise<void> {
   const [command,file,...extra]=process.argv.slice(2);
+  // Protocol v1 deterministic replay (ET-005b); the v0 commands below are unchanged.
+  if(command==='replay-v1') {
+    if(!file||extra.length)throw new Error('Usage: cli.cjs replay-v1 <simulator-v1-scenario.json>');
+    process.stdout.write(transcriptLines(replayV1(readFixtureFile(file))).map(l=>l+'\n').join(''));return;
+  }
   if(!['replay','serve','smoke'].includes(command)||!file||extra.length)throw new Error('Usage: cli.cjs replay|serve|smoke <synthetic-fixture.json>');
   const scenario=validateScenario(readFixtureFile(file)),emissions=replay(scenario);
   if(command==='replay') {for(const {connection,atMs,message} of emissions)console.log(JSON.stringify({scenario:scenario.id,origin:'synthetic',connection,atMs,message}));return;}
