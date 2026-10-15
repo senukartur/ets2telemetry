@@ -50,11 +50,15 @@ export async function openStorage(options: OpenOptions): Promise<Result<Storage>
  * Restores a verified pre-migration backup into a new database file, then opens it through the normal durability path,
  * which migrates it when it is older. The target path and the backup's purpose are checked before anything is written;
  * the target and its sidecar files must not exist. If the follow-up open fails, the restored file this call created is
- * removed again.
+ * removed again on a best-effort basis: a removal that fails (for example EBUSY from a scanner) is ignored, and the
+ * open's error is still returned as a Result.
  */
 export async function restoreBackup(manifestPath: string, options: OpenOptions): Promise<Result<Storage>> {
   try { checkPath(options.path, options.purpose); await restoreCopy(manifestPath, options.path, options.purpose); } catch (error) { return {ok: false, error: classifyError(error)}; }
   const opened = await openStorage(options);
-  if (!opened.ok) for (const suffix of ['', '-wal', '-shm', '-journal']) rmSync(options.path + suffix, {force: true});
+  if (!opened.ok) {
+    const remove = options.testHooks?.removeFile ?? ((file: string) => rmSync(file, {force: true}));
+    for (const suffix of ['', '-wal', '-shm', '-journal']) { try { remove(options.path + suffix); } catch { /* best effort; the open error is reported */ } }
+  }
   return opened;
 }

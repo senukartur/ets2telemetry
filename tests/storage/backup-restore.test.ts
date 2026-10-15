@@ -105,6 +105,15 @@ describe('REG-013 restore into a new file', () => {
     failed(await restoreBackup(manifest, ws.options({path: target, backupsDirectory: path.join(ws.directory, 'restore-backups'), migrations: [...upTo(2), failingStep(3)]})), 'MIGRATION_FAILED');
     expect(files(ws.directory).filter(name => name.startsWith('restore-then-fail'))).toEqual([]);
   });
+  it('still returns the open error as a result when removing the failed restore fails', async () => {
+    const manifest = await migratedWithBackup(), target = path.join(ws.directory, 'restore-busy.sqlite');
+    const attempted: string[] = [];
+    const removeFile = (file: string) => { attempted.push(path.basename(file)); throw Object.assign(new Error('EBUSY: resource busy or locked'), {code: 'EBUSY'}); };
+    const result = await restoreBackup(manifest, ws.options({path: target, backupsDirectory: path.join(ws.directory, 'restore-busy-backups'),
+      migrations: [...upTo(2), failingStep(3)], testHooks: {removeFile}}));
+    failed(result, 'MIGRATION_FAILED');
+    expect(attempted).toEqual(['restore-busy.sqlite', 'restore-busy.sqlite-wal', 'restore-busy.sqlite-shm', 'restore-busy.sqlite-journal']);
+  });
   it('refuses an existing target or a stray WAL file, and a backup whose bytes changed', async () => {
     const manifest = await migratedWithBackup();
     const existing = ws.copyFixture('foreign-application.sqlite'), before = sha256(existing);

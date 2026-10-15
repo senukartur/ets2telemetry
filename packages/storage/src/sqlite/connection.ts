@@ -30,6 +30,8 @@ export interface OpenTestHooks extends BackupHooks {
   readBack?: (pragma: 'locking_mode' | 'journal_mode' | 'synchronous' | 'foreign_keys', value: unknown) => unknown;
   /** Runs after the read-only inspection and before the writer takes its lock, to simulate a concurrent change. */
   afterInspect?: (file: string) => void;
+  /** Replaces the file removal of a failed restore's cleanup, to prove that a removal failure is not thrown. */
+  removeFile?: (file: string) => void;
 }
 
 const DURABILITY: Durability = Object.freeze({journalMode: 'wal', synchronous: 'full', lockingMode: 'exclusive', foreignKeys: true});
