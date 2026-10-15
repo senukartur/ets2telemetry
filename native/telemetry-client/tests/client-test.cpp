@@ -529,8 +529,9 @@ int wmain(int argc, wchar_t** argv) {
         client.eof(); require(client.wait() == 3); require(server.wait() == 0); continue;
       }
       if (scenario == "v1-write-deadline") {
-        // The host never reads the ACK: the broker's own 5 s client-write deadline must end the relay.
-        const auto sent = GetTickCount64(); send(clientFrame(file_bytes(v1Fixtures / "ack-1.json")));
+        // The host never reads the ACK: the broker's own 5 s client-write deadline must end the relay. The credit comes
+        // first, so the relay waits on its pending pipe read, which has no idle deadline, instead of the 5 s credit wait.
+        const auto sent = GetTickCount64(); send(credit + clientFrame(file_bytes(v1Fixtures / "ack-1.json")));
         require(client.wait() == 3); const auto elapsed = GetTickCount64() - sent;
         std::cerr << "client-write exit after " << elapsed << " ms\n"; require(elapsed >= 4500 && elapsed < 12000 && diagnosed(client, "client-write", "[0-9]{1,10}"));
         require(server.wait() == 0); continue;
