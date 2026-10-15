@@ -29,8 +29,8 @@ const nodeSafeFiles = ['tests/unit/**', 'tests/shared/**', 'apps/desktop/src/**/
 const sqliteMessage = 'Native SQLite loads only in packages/storage/src/sqlite, the storage worker and tests/storage (docs/storage.md).';
 // The SQLite core, the in-process storage index that re-exports it and the storage worker host that runs it, also as a
 // relative import inside the package: `./index`, `../index`, `./sqlite/*`, `../sqlite/*`, `./host`, `./worker/host` and
-// `../worker/host` from the Node-safe storage modules.
-const storageCoreRegex = String.raw`(^|/)storage/src(/index|/sqlite(/.*)?|/worker/host)?(\.[cm]?[jt]s)?$|^@ets2telemetry/storage(/.*)?$|^\.\.?/(index|sqlite)(/.*)?(\.[cm]?[jt]s)?$|^\.\.?/(worker/)?host(\.[cm]?[jt]s)?$`;
+// `../worker/host` from the Node-safe storage modules, plus the bare directory specifiers `.`, `./`, `..` and `../`.
+const storageCoreRegex = String.raw`(^|/)storage/src(/index|/sqlite(/.*)?|/worker/host)?(\.[cm]?[jt]s)?$|^@ets2telemetry/storage(/.*)?$|^\.\.?/(index|sqlite)(/.*)?(\.[cm]?[jt]s)?$|^\.\.?/(worker/)?host(\.[cm]?[jt]s)?$|^\.\.?/?$`;
 // The Electron-runtime suite's helpers load native SQLite.
 const storageSuiteRegex = String.raw`(^|/)tests/storage(/.*)?$|^\.\./storage(/.*)?$`;
 const storageCorePatterns = [
