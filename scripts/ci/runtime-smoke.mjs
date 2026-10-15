@@ -133,11 +133,13 @@ try {
       const observation = await waitForCurrentTelemetry(window);
       (result.rendererObservations ??= []).push({phase, ...observation});
     };
-    const resizeOverlay = (width, height) => application.evaluate(({BrowserWindow}, size) => {
+    // `zoom` mirrors ET-012b's scale, which the controller applies as the overlay document's zoom factor.
+    const resizeOverlay = (width, height, zoom = 1) => application.evaluate(({BrowserWindow}, size) => {
       const target = BrowserWindow.getAllWindows().find(candidate => candidate.webContents.getURL().includes('view=overlay'));
       if (!target) return null;
-      target.setBounds({...target.getBounds(), width: size.width, height: size.height}); return target.getBounds();
-    }, {width, height});
+      target.webContents.setZoomFactor(size.zoom);
+      target.setBounds({...target.getBounds(), width: size.width, height: size.height}); return {...target.getBounds(), zoom: target.webContents.getZoomFactor()};
+    }, {width, height, zoom});
     const overlayState = () => overlay.evaluate(() => ({layout: globalThis.document.querySelector('[data-testid="overlay-root"]')?.getAttribute('data-layout') ?? null,
       width: globalThis.innerWidth, height: globalThis.innerHeight, sections: globalThis.document.querySelectorAll('[data-testid^="overlay-section-"]').length}));
     // A short bound for the review-only layouts keeps two missed waits well inside the Job's 60 s limit; the strip
@@ -155,16 +157,18 @@ try {
       let sections = null;
       try {
         sections = await overlay.evaluate(() => globalThis.document.querySelectorAll('[data-testid^="overlay-section-"]').length);
-        for (const [layout, width, height] of layouts) {
+        for (const [layout, width, height, zoom = 1] of layouts) {
+          const key = zoom === 1 ? layout : `${layout}@${zoom}`;
           const saved = await window.evaluate(value => globalThis.desktop.setOverlayLayout(value), layout);
-          record[layout] = {saved: saved.overlay.layout, resized: await resizeOverlay(width, height)};
-          await renderedLayout(layout, width, sections, 3000);
-          record[layout].overflow = await overlay.evaluate(overlayOverflow);
+          record[key] = {saved: saved.overlay.layout, resized: await resizeOverlay(width, height, zoom)};
+          // The document's CSS width is the window's DIP width divided by the zoom factor.
+          await renderedLayout(layout, width / zoom, sections, 3000);
+          record[key].overflow = await overlay.evaluate(overlayOverflow);
         }
       } catch (error) {record.error = failure(error); record.stateAtError = await overlayState().catch(() => null);}
       try {
         await window.evaluate(() => globalThis.desktop.setOverlayLayout('strip'));
-        await resizeOverlay(1280, 38); await renderedLayout('strip', 1280, sections, 10000);
+        await resizeOverlay(1280, 38, 1); await renderedLayout('strip', 1280, sections, 10000);
         record.restored = 'strip';
       } catch (error) {record.restoreError = failure(error);}
       return record;
@@ -181,9 +185,10 @@ try {
     // Also for review only, recorded and never asserted (docs/validation/et-012a.md asked for it): the card and HUD
     // layouts with every section filled. Without a game window the controller never places the overlay, so the hidden
     // window is sized here to each layout's nominal size (overlay-geometry.ts) and restored to the strip afterwards.
+    // The strip is also measured at ET-012b's largest scale, 2: a 2560 x 76 DIP window with a document zoom of 2.
     // The layout saves are real settings writes in the isolated profile: a failed write logs SETTINGS_WRITE_FAILED,
     // which the strict diagnostic postcondition below rejects, so it fails the run as a product failure.
-    result.telemetry.overlayLayoutOverflow = await measureLayouts([['card', 300, 360], ['hud', 320, 320]]);
+    result.telemetry.overlayLayoutOverflow = await measureLayouts([['card', 300, 360], ['hud', 320, 320], ['strip', 2560, 76, 2]]);
     // Hold the v0 source on the same connection until main's freshness expiry: every v0 card value must become not
     // current while the v1 rows stay current and the overlay keeps only dashes; then return after resume. The later
     // single-connection assertion proves the hold did not reconnect.
