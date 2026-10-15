@@ -1,6 +1,6 @@
 import {readFileSync} from 'node:fs';
 import {afterEach, beforeEach, expect, it, vi} from 'vitest';
-import type {LiveTelemetry} from '../../packages/contracts/src';
+import type {LiveTelemetry, OverlayLayout} from '../../packages/contracts/src';
 import {validateMessage} from '../../packages/contracts/src/protocol-v0';
 import {initialLive} from '../../apps/desktop/src/live-state';
 import {LiveFreshness} from '../../apps/desktop/src/live-freshness';
@@ -100,7 +100,7 @@ it('retains receipt expiry across port invalidation and independently renews a n
   expect(publish.mock.lastCall?.[0]).toMatchObject({fresh: true, observation: {windowFresh: true}});
   freshness.close(); expect(vi.getTimerCount()).toBe(0);
 });
-function controller() {
+function controller(layout?: OverlayLayout) {
   // Models Windows: isAlwaysOnTop() reads the HWND's WS_EX_TOPMOST, which external z-order changes can clear.
   const window = {isDestroyed: () => false, hide: vi.fn(), setBounds: vi.fn(), showInactive: vi.fn(), topmost: true,
     isAlwaysOnTop: (): boolean => window.topmost, setAlwaysOnTop: vi.fn<(flag: boolean, level: string) => void>(flag => {window.topmost = flag;}), moveTop: vi.fn(),
@@ -109,7 +109,7 @@ function controller() {
   const screen = {screenToDipRect: vi.fn((_window: null, bounds: Electron.Rectangle) => ({x: bounds.x / 2, y: bounds.y / 2, width: bounds.width / 2, height: bounds.height / 2})),
     getAllDisplays: () => [{bounds: {x: -960, y: 0, width: 1920, height: 1080}}]};
   const lost = vi.fn();
-  return {window, screen, lost, overlay: new OverlayController(window, screen, lost)};
+  return {window, screen, lost, overlay: new OverlayController(window, screen, lost, layout)};
 }
 function noActivation(window: ReturnType<typeof controller>['window']) {
   for (const method of [window.show, window.focus, window.setFocusable, window.setIgnoreMouseEvents]) expect(method).not.toHaveBeenCalled();
@@ -173,7 +173,8 @@ it('uses the API for signed physical bounds, stays bounded in client DIP bounds 
   const {window, screen, overlay} = controller(), current = live();
   overlay.update(current); expect(window.showInactive).not.toHaveBeenCalled(); overlay.loaded(true);
   expect(screen.screenToDipRect).toHaveBeenCalledWith(null, {x: -1920, y: 0, width: 1920, height: 1080});
-  expect(window.setBounds).toHaveBeenCalledWith({x: -944, y: 16, width: 300, height: 132});
+  // ET-012a: the default strip layout replaces ET-008's fixed 300 x 132 box at the top left (decision L10).
+  expect(window.setBounds).toHaveBeenCalledWith({x: -944, y: 8, width: 928, height: 38});
   expect(window.showInactive).toHaveBeenCalledOnce(); overlay.update(current);
   expect(window.showInactive).toHaveBeenCalledOnce(); expect(window.setBounds).toHaveBeenCalledOnce(); expect(screen.screenToDipRect).toHaveBeenCalledOnce();
 });
@@ -229,4 +230,49 @@ it('keeps metric without a game and the fixture game profile for synthetic sourc
   const current = live(); current.selection = 'synthetic'; current.observation!.source.origin = 'synthetic';
   current.observation!.state.speed = {available: true, value: 25, unit: 'm/s'}; current.observation!.state.fuel = {available: true, value: 73, unit: 'L'};
   expect(overlayPresentation(current, units)).toMatchObject({source: 'ETS2', origin: 'synthetic', speed: '55.9', speedUnit: 'mph', fuel: '19.3', fuelUnit: 'US gal'});
+});
+// ET-012a: each layout has its own anchor and size in the game's client area (DIP -960, 0, 960 x 540 here).
+it.each([
+  {layout: 'strip' as const, bounds: {x: -944, y: 8, width: 928, height: 38}},
+  {layout: 'card' as const, bounds: {x: -316, y: 16, width: 300, height: 360}},
+  {layout: 'cluster' as const, bounds: {x: -944, y: 304, width: 440, height: 220}},
+  {layout: 'hud' as const, bounds: {x: -944, y: 16, width: 320, height: 320}}
+])('places the $layout layout at its own anchor and shows it without focus', ({layout, bounds}) => {
+  const {window, overlay} = controller(layout); overlay.loaded(true); overlay.update(live());
+  expect(window.setBounds.mock.calls).toEqual([[bounds]]); raisedAfterShow(window); noActivation(window);
+});
+it('re-places a visible overlay for a new layout and re-asserts topmost without showing or focusing it again', () => {
+  const {window, screen, overlay} = controller(); overlay.loaded(true); overlay.update(live());
+  window.setAlwaysOnTop.mockClear(); window.moveTop.mockClear();
+  overlay.setLayout('card');
+  expect(window.setBounds.mock.calls).toEqual([[{x: -944, y: 8, width: 928, height: 38}], [{x: -316, y: 16, width: 300, height: 360}]]);
+  expect(window.setAlwaysOnTop.mock.calls).toEqual([[true, 'screen-saver']]); expect(window.moveTop).toHaveBeenCalledOnce();
+  expect(window.setBounds.mock.invocationCallOrder[1]).toBeLessThan(window.setAlwaysOnTop.mock.invocationCallOrder[0]);
+  expect(window.showInactive).toHaveBeenCalledOnce(); expect(screen.screenToDipRect).toHaveBeenCalledTimes(2); noActivation(window);
+  // The same layout again changes nothing.
+  overlay.setLayout('card');
+  expect(window.setBounds).toHaveBeenCalledTimes(2); expect(window.setAlwaysOnTop).toHaveBeenCalledOnce(); expect(screen.screenToDipRect).toHaveBeenCalledTimes(2);
+});
+it('never shows or raises a hidden overlay when the layout changes', () => {
+  const {window, overlay} = controller(), current = live();
+  const metadata = current.observation!.state.window;
+  if (!metadata.available) throw new Error('Expected metadata');
+  metadata.value.foreground = false; overlay.loaded(true); overlay.update(current);
+  overlay.setLayout('hud'); overlay.setLayout('cluster');
+  expect(window.showInactive).not.toHaveBeenCalled(); expect(window.moveTop).not.toHaveBeenCalled(); expect(window.setAlwaysOnTop).not.toHaveBeenCalled();
+  expect(window.setBounds).not.toHaveBeenCalled(); expect(window.hide).toHaveBeenCalled();
+});
+it('hides when the chosen layout does not fit the client area and shows again when one fits', () => {
+  // 1920 x 700 physical is 960 x 350 DIP: the strip and cluster fit; the card (392 DIP) and HUD (352 DIP) do not.
+  const {window, overlay} = controller(), current = live();
+  const metadata = current.observation!.state.window;
+  if (!metadata.available) throw new Error('Expected metadata');
+  metadata.value.height = 700; overlay.loaded(true); overlay.update(current);
+  expect(window.showInactive).toHaveBeenCalledOnce();
+  window.hide.mockClear(); overlay.setLayout('card'); expect(window.hide).toHaveBeenCalledOnce();
+  overlay.update(current); expect(window.showInactive).toHaveBeenCalledOnce();
+  overlay.setLayout('hud'); expect(window.showInactive).toHaveBeenCalledOnce();
+  overlay.setLayout('cluster');
+  expect(window.setBounds).toHaveBeenLastCalledWith({x: -944, y: 114, width: 440, height: 220});
+  expect(window.showInactive).toHaveBeenCalledTimes(2); raisedAfterShow(window); noActivation(window);
 });

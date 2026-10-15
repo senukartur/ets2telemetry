@@ -1,6 +1,6 @@
 # Live telemetry fields and display rules
 
-ET-010a adds pure live-telemetry normalization and per-game display profiles to `packages/telemetry-core`. This document is the field catalogue and the rule set those modules implement. ET-010b shows the complete v0 field set on the dashboard through them (see [Dashboard](#dashboard)); v1 rows on the dashboard are ET-010c. Nothing here changes the v0 or v1 wire, the preload/IPC bridge, storage, trip logic or recording. Real-source checks are pending; see [ET-010 validation](validation/et-010.md).
+ET-010a adds pure live-telemetry normalization and per-game display profiles to `packages/telemetry-core`. This document is the field catalogue and the rule set those modules implement. ET-010b shows the complete v0 field set on the dashboard through them (see [Dashboard](#dashboard)); v1 rows on the dashboard are ET-010c. Since ET-012a the overlay sections are formatted through the same view model in main (see [Overlay](#overlay)). Nothing here changes the v0 or v1 wire, the preload/IPC bridge, storage, trip logic or recording. Real-source checks are pending; see [ET-010 validation](validation/et-010.md).
 
 ## Modules
 
@@ -103,6 +103,29 @@ ET-010b adds the **Live telemetry** card ([live-dashboard.tsx](../apps/desktop/s
 - **Units** use the same rule as the speed and fuel lines: the displayed game's saved profile ([settings](settings.md)), or its ET-000 default before the settings arrive, and metric without a game. The ATS "mostly static" note follows the observation's source game instead. Under "Select a game" with an ATS source the card therefore shows metric units with the ATS note; this inconsistency is accepted and documented (decision B5).
 
 Decisions B1–B6 are coordinator decisions under the owner's delegation of October 15, 2026 ([concept.md](../concept.md#et-010-authorization--october-15-2026)). Final styling and localization are not part of ET-010b.
+
+## Overlay
+
+ET-012a builds the overlay's sections in main from the same `normalizeV0State` and `buildLiveView` calls as the dashboard card, in the same per-game unit profile, so a value reads the same on both. The renderer receives only the formatted text ([overlay-presentation.ts](../apps/desktop/src/overlay-presentation.ts)); no `LiveTelemetry` reaches the overlay renderer (ET-008 boundary, decision L7).
+
+| Section | Fields | Under protocol v0 today |
+| --- | --- | --- |
+| Speed | `speed` | Shown |
+| Gear | `gear` | Shown |
+| RPM | `engine-rpm`, plus a ring fraction on a fixed 0–3000 rpm scale (L12) | Shown |
+| Fuel | `fuel`, with `fuel-level` as detail | Shown; the percentage only while the capacity is known |
+| Range | `estimated-range` (the game's estimate) | Shown |
+| SDK consumption | `sdk-average-consumption` (the SDK mean, labelled "SDK mean", never a trip average) | Shown |
+| Cargo | `cargo`, with `cargo-mass` as detail | Shown as the cargo id; the mass needs v1 |
+| Origin | `source-city`, `source-company` | Hidden: v0 does not carry them |
+| Destination | `destination-city`, `destination-company` | Shown as the destination city id; the company needs v1 |
+| Distance driven | none | Always hidden: it needs trip accounting (ET-014); the odometer is never a stand-in (REG-008, decision L8) |
+| Distance remaining | `route-remaining` | Hidden: v0 does not carry the navigation distance |
+| Deadline | `deadline` | Hidden: v0 does not carry the delivery deadline |
+| Expected income | `expected-income` (exact raw digits, no grouping, SDK-documented or unknown currency; never revenue) | Shown |
+| Game time | `game-time` | Shown |
+
+A section with several fields joins the fields that have a value with ", ". Carriage is decided by `carriesField` for the protocol in use, so the v1 sections appear without an overlay change once the bridge carries v1 (ET-010c and v0 retirement). The section states while current and while not current are described in [the minimal overlay](minimal-overlay.md#section-states).
 
 ## Step primitives (REG-008)
 

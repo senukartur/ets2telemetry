@@ -58,32 +58,50 @@ it('holds an actual isolated synthetic pipe open, resumes fresh/missing/zero rea
 }, 6000);
 
 describe('coherent hidden-renderer observations', () => {
-  async function observe(sample: typeof current, alteration?: string) {
-    const {overlayObservation} = await import(observationModule);
-    const document = {querySelectorAll: (selector: string) => {
-      const field = selector.includes('status') ? 'status' : selector.includes('speed') ? 'speed' : 'fuel';
-      const value = field === 'status' ? `${sample.source} · ${sample.origin} · ${sample.status} · ${sample.freshness}` : sample[field];
-      const node = {innerText: value, parentElement: {lastElementChild: {innerText: field === 'speed' ? sample.speedUnit : sample.fuelUnit}},
-        getBoundingClientRect: () => ({width: alteration === 'zero-box' ? 0 : 100, height: 20, top: 10, bottom: 30, left: 10, right: 110})};
-      return alteration === 'missing' ? [] : alteration === 'duplicate' ? [node, node] : [node];
+  // ET-012a DOM contract: the layout root's data attributes and separate speed/fuel number and unit elements.
+  // `affected` limits an alteration to one test id, so each required element is shown to be required.
+  function fakeDocument(sample: typeof current, alteration?: string, affected?: string) {
+    const elements: Record<string, {text?: string; data?: Record<string, string>}> = {
+      'overlay-root': {data: {'data-source': sample.source, 'data-origin': sample.origin, 'data-status': sample.status, 'data-freshness': sample.freshness}},
+      'overlay-speed': {text: sample.speed}, 'overlay-speed-unit': {text: sample.speedUnit},
+      'overlay-fuel': {text: sample.fuel}, 'overlay-fuel-unit': {text: sample.fuelUnit}
+    };
+    return {querySelectorAll: (selector: string) => {
+      const id = /data-testid="([^"]+)"/.exec(selector)?.[1] ?? '';
+      const element = elements[id];
+      if (!element) return [];
+      const altered = alteration !== undefined && (affected === undefined || affected === id);
+      const node = {innerText: element.text, getAttribute: (name: string) => element.data?.[name] ?? null,
+        getBoundingClientRect: () => ({width: altered && alteration === 'zero-box' ? 0 : 100, height: 20, top: altered && alteration === 'below' ? 38 : 10,
+          bottom: 30, left: 10, right: 110}), hidden: altered && alteration === 'hidden'};
+      return altered && alteration === 'missing' ? [] : altered && alteration === 'duplicate' ? [node, node] : [node];
     }};
+  }
+  async function observe(sample: typeof current, alteration?: string, affected?: string) {
+    const {overlayObservation} = await import(observationModule);
     return runInNewContext(`(${overlayObservation.toString()})(expected)`, {expected: {...current, statuses: ['connected']},
-      document, innerWidth: 300, innerHeight: 132, getComputedStyle: () => ({visibility: alteration === 'hidden' ? 'hidden' : 'visible'})});
+      document: fakeDocument(sample, alteration, affected), innerWidth: 1280, innerHeight: 38,
+      getComputedStyle: (node: {hidden: boolean}) => ({visibility: node.hidden ? 'hidden' : 'visible'})});
   }
   it('accepts one complete current observation with explicit origin and units', async () => {
     const {overlayObservation} = await import(observationModule);
     expect(typeof overlayObservation).toBe('function');
     // The exact-state form also protects the callback from requiring module closures.
-    const fakeDocument = {querySelectorAll: (selector: string) => {
-      const field = selector.includes('status') ? 'status' : selector.includes('speed') ? 'speed' : 'fuel';
-      return [{innerText: field === 'status' ? 'ETS2 · synthetic · connected · current' : current[field],
-        parentElement: {lastElementChild: {innerText: field === 'speed' ? 'km/h' : 'L'}},
-        getBoundingClientRect: () => ({width: 100, height: 20, top: 10, bottom: 30, left: 10, right: 110})}];
-    }};
-    expect(runInNewContext(`(${overlayObservation.toString()})(expected)`, {expected: current, document: fakeDocument, innerWidth: 300, innerHeight: 132,
+    expect(runInNewContext(`(${overlayObservation.toString()})(expected)`, {expected: current, document: fakeDocument(current), innerWidth: 1280, innerHeight: 38,
       getComputedStyle: () => ({visibility: 'visible'})})).toEqual(current);
   });
-  it.each(['missing','duplicate','hidden','zero-box'])('rejects %s DOM fields', async alteration => {expect(await observe(current, alteration)).toBe(false);});
+  it.each(['missing','duplicate','hidden','zero-box','below'])('rejects %s DOM fields', async alteration => {expect(await observe(current, alteration)).toBe(false);});
+  it.each(['overlay-root', 'overlay-speed', 'overlay-speed-unit', 'overlay-fuel', 'overlay-fuel-unit'])('requires exactly one visible %s', async id => {
+    for (const alteration of ['missing', 'duplicate', 'hidden', 'zero-box']) expect(await observe(current, alteration, id), alteration).toBe(false);
+  });
+  it('rejects a root without the state attributes', async () => {
+    const {overlayObservation} = await import(observationModule);
+    const document = fakeDocument(current), select = document.querySelectorAll;
+    document.querySelectorAll = (selector: string) => selector.includes('overlay-root')
+      ? select(selector).map(node => ({...node, getAttribute: (name: string) => name === 'data-status' ? null : node.getAttribute(name)})) : select(selector);
+    expect(runInNewContext(`(${overlayObservation.toString()})(expected)`, {expected: {speed: '90.0'}, document, innerWidth: 1280, innerHeight: 38,
+      getComputedStyle: () => ({visibility: 'visible'})})).toBe(false);
+  });
   it.each([
     {...current, status: 'stale', freshness: 'stale'}, {...current, origin: 'game'}, {...current, speed: '72.0'},
     {...current, fuel: '71.0'}, {...current, speedUnit: 'mph'}, {...current, fuelUnit: 'US gal'}

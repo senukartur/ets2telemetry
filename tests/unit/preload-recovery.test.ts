@@ -110,7 +110,7 @@ it('does not expose the previous observation as current while a replacement port
   stop();
 });
 it('preserves the frozen narrow bridge and rejects privileged source values before IPC', async () => {
-  expect(Object.isFrozen(bridge)).toBe(true); expect(Object.keys(bridge).sort()).toEqual(['exitApplication', 'getAppState', 'getStatus', 'selectSource', 'setUnitProfile', 'subscribeAppState', 'subscribeLive']);
+  expect(Object.isFrozen(bridge)).toBe(true); expect(Object.keys(bridge).sort()).toEqual(['exitApplication', 'getAppState', 'getStatus', 'selectSource', 'setOverlayLayout', 'setOverlaySections', 'setUnitProfile', 'subscribeAppState', 'subscribeLive']);
   await expect(bridge.selectSource('C:\\arbitrary.exe' as never)).rejects.toThrow('Invalid source selection');
   expect(ipc.invoke).not.toHaveBeenCalled();
   await bridge.selectSource('ats'); expect(ipc.invoke).toHaveBeenCalledWith('telemetry:select', 'ats');
@@ -146,7 +146,9 @@ it('does not reassert service subscription after the callback unsubscribes its o
   expect(subscriptions()).toBe(1); expect(vi.getTimerCount()).toBe(0);
 });
 it('appends the application state and exit methods after the original three bridge keys', () => {
-  expect(Object.keys(bridge)).toEqual(['getStatus', 'selectSource', 'subscribeLive', 'getAppState', 'subscribeAppState', 'exitApplication', 'setUnitProfile']);
+  // ET-012a appends the two overlay settings methods.
+  expect(Object.keys(bridge)).toEqual(['getStatus', 'selectSource', 'subscribeLive', 'getAppState', 'subscribeAppState', 'exitApplication', 'setUnitProfile',
+    'setOverlayLayout', 'setOverlaySections']);
 });
 it('allows one application state listener, forwards pushed state and unsubscribes once', () => {
   const listener = vi.fn(); const stop = bridge.subscribeAppState(listener);
@@ -173,4 +175,28 @@ it('validates unit profile requests before IPC and forwards exactly a game and a
   ipc.invoke.mockResolvedValueOnce(view);
   await expect(Reflect.apply(bridge.setUnitProfile, bridge, ['ets2', 'us-customary', {path: 'C:\\arbitrary'}])).resolves.toEqual(view);
   expect(ipc.invoke.mock.calls).toEqual([['settings:set-unit-profile', 'ets2', 'us-customary']]);
+});
+// ET-012a: two appended overlay settings methods; each validates before IPC and forwards only the validated value.
+const ALL_ON = {'speed': true, 'gear': true, 'rpm': true, 'fuel': true, 'range': true, 'sdk-consumption': true, 'cargo': true, 'origin': true,
+  'destination': true, 'distance-driven': true, 'distance-remaining': true, 'deadline': true, 'expected-income': true, 'game-time': true};
+const without = (record: Record<string, boolean>, key: string) => Object.fromEntries(Object.entries(record).filter(([name]) => name !== key));
+it('validates overlay layout requests before IPC and forwards exactly one layout id', async () => {
+  for (const layout of ['Strip', 'bar', '', undefined, null, 1, ['card'], {layout: 'card'}]) {
+    await expect(bridge.setOverlayLayout(layout as never)).rejects.toThrow('Invalid overlay layout request');
+  }
+  expect(ipc.invoke).not.toHaveBeenCalled();
+  ipc.invoke.mockResolvedValueOnce({state: 'loaded'});
+  await expect(Reflect.apply(bridge.setOverlayLayout, bridge, ['cluster', {path: 'C:\\arbitrary'}])).resolves.toEqual({state: 'loaded'});
+  expect(ipc.invoke.mock.calls).toEqual([['settings:set-overlay-layout', 'cluster']]);
+});
+it('validates overlay section records strictly before IPC and forwards a fresh copy only', async () => {
+  const invalid = [{...ALL_ON, extra: true}, without(ALL_ON, 'rpm'), {...ALL_ON, rpm: 'false'},
+    Object.fromEntries(Object.keys(ALL_ON).map(id => [id, false])), [true], null, 'all', Object.assign(Object.create({x: 1}) as object, ALL_ON)];
+  for (const sections of invalid) await expect(bridge.setOverlaySections(sections as never)).rejects.toThrow('Invalid overlay sections request');
+  expect(ipc.invoke).not.toHaveBeenCalled();
+  const input = {...ALL_ON, rpm: false};
+  ipc.invoke.mockResolvedValueOnce({state: 'loaded'});
+  await expect(Reflect.apply(bridge.setOverlaySections, bridge, [input, 'extra'])).resolves.toEqual({state: 'loaded'});
+  expect(ipc.invoke.mock.calls).toEqual([['settings:set-overlay-sections', {...ALL_ON, rpm: false}]]);
+  expect(ipc.invoke.mock.calls[0][1]).not.toBe(input);
 });

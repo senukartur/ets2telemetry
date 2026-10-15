@@ -33,9 +33,25 @@ export type SettingsState = 'loading' | 'defaults' | 'loaded' | 'loaded-with-fal
   | 'newer-version' | 'unreadable' | 'unavailable';
 /** Why the last settings save was refused: it could not be written, or the file is read-only (newer version). */
 export type SettingsSaveError = 'SETTINGS_WRITE_FAILED' | 'SETTINGS_READ_ONLY';
+/**
+ * Overlay layouts (ET-012a): a 38 px strip at the top centre, a card at the top right, a cluster with a round speed
+ * gauge at the bottom left, or a minimal text HUD at the top left of the game's client area.
+ */
+export type OverlayLayout = 'strip' | 'card' | 'cluster' | 'hud';
+/** The fourteen overlay sections in canonical order; apps/desktop/src/overlay-sections.ts groups them. */
+export type OverlaySectionId = 'speed' | 'gear' | 'rpm' | 'fuel' | 'range' | 'sdk-consumption' | 'cargo' | 'origin' | 'destination'
+  | 'distance-driven' | 'distance-remaining' | 'deadline' | 'expected-income' | 'game-time';
+/** Which overlay sections are enabled: always all fourteen keys, at least one of them true. */
+export type OverlaySections = Readonly<Record<OverlaySectionId, boolean>>;
+export interface OverlaySettings {
+  layout: OverlayLayout;
+  sections: OverlaySections;
+}
 /** The settings that apply now. Never carries paths, file content or error text. */
 export interface SettingsView {
   units: UnitProfiles;
+  /** The saved overlay layout and sections, or their defaults (strip, every section). */
+  overlay: OverlaySettings;
   state: SettingsState;
   /** False when a change cannot be saved: a pending read, or a newer-version, unreadable or unavailable settings file. */
   writable: boolean;

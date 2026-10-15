@@ -1,4 +1,5 @@
-import type {LiveTelemetry} from '../../../packages/contracts/src';
+import type {LiveTelemetry, OverlayLayout} from '../../../packages/contracts/src';
+import {overlayBounds} from './overlay-geometry';
 import {currentGameClientBounds, type PhysicalClientBounds} from './window-placement';
 
 /**
@@ -31,8 +32,18 @@ export class OverlayController {
   private bounds?: PhysicalClientBounds;
   private physical?: PhysicalClientBounds;
   private topologyReceipt?: string;
-  constructor(private readonly window: OverlayWindow, private readonly screen: OverlayScreen, private readonly topmostLost: (phase: 'show' | 'visible') => void = () => {}) {}
+  constructor(private readonly window: OverlayWindow, private readonly screen: OverlayScreen, private readonly topmostLost: (phase: 'show' | 'visible') => void = () => {},
+    private layout: OverlayLayout = 'strip') {}
   update(live: LiveTelemetry): void {this.live = live; this.place();}
+  /**
+   * A saved layout change re-places the window from the last observation; it renews no SDK or window freshness. A moved
+   * visible overlay re-asserts topmost without activation; a hidden one stays hidden.
+   */
+  setLayout(layout: OverlayLayout): void {
+    if (layout === this.layout) return;
+    this.layout = layout; this.bounds = this.physical = undefined;
+    this.place();
+  }
   loaded(ready: boolean): void {this.ready = ready; this.place();}
   topologyChanged(): void {
     // A removed/reconfigured monitor invalidates the previous coordinate observation.
@@ -65,9 +76,9 @@ export class OverlayController {
     try {
       const client = this.screen.screenToDipRect(null, physical);
       if (![client.x, client.y, client.width, client.height].every(Number.isFinite) || client.width <= 0 || client.height <= 0) {this.hide(); return;}
-      const bounds = {x: Math.round(client.x + Math.min(16, client.width / 8)), y: Math.round(client.y + Math.min(16, client.height / 8)),
-        width: Math.min(300, Math.floor(client.width - Math.min(16, client.width / 8))), height: Math.min(132, Math.floor(client.height - Math.min(16, client.height / 8)))};
-      if (bounds.width < 180 || bounds.height < 100 || !this.screen.getAllDisplays().some(({bounds: display}) =>
+      // Each layout has its own anchor and size inside the client area (overlay-geometry.ts); a layout that does not fit hides.
+      const bounds = overlayBounds(this.layout, client);
+      if (!bounds || !this.screen.getAllDisplays().some(({bounds: display}) =>
         bounds.x >= display.x && bounds.y >= display.y && bounds.x + bounds.width <= display.x + display.width && bounds.y + bounds.height <= display.y + display.height)) {this.hide(); return;}
       const moved = !this.bounds || Object.keys(bounds).some(key => bounds[key as keyof PhysicalClientBounds] !== this.bounds![key as keyof PhysicalClientBounds]);
       if (moved) {this.window.setBounds(bounds); this.bounds = bounds;}
