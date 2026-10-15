@@ -507,23 +507,34 @@ void capture_clamp(Fixture& f) {
 // 1 s, and the store, the ring and private memory stay bounded.
 void stalled_reader() {
   Fixture f; f.start(); auto client = f.client(true); client->handshake();
+  // The worker marks the connection connected only after it has issued the checkpoint, which the client may already
+  // have read; the loop below relies on that state, so it is awaited first.
+  require(until([&] { return f.server->status() == v1::ServerStatus::connected; }), "connection established");
   PROCESS_MEMORY_COUNTERS_EX before{}; require(GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&before), sizeof(before)), "memory before");
   scs_named_value_t big[]{named("cargo.id", text(long_id.c_str())), named("cargo", text(long_name_n.c_str())), named("source.city", text(long_name_s.c_str())),
     named("destination.city", text(long_name_d.c_str())), named("source.company", text(long_name_o.c_str())), scs_named_value_t{}};
-  ULONGLONG slowest = 0, pending_at = 0; unsigned frames = 0;
+  // Kernel backpressure is observed from the client side, not by sampling the worker: the bytes waiting in the client's
+  // pipe reach 48 KiB of the 65,540-byte quota and nothing reads them. Callbacks keep producing, so a later server write
+  // stays pending, and only the 1 s write deadline can then close the connection of a client that is alive and silent.
+  constexpr DWORD backpressure_bytes = 48 * 1024;
+  auto buffered = [&] { DWORD n = 0; return PeekNamedPipe(client->pipe.get(), nullptr, 0, nullptr, &n, nullptr) ? n : 0ul; };
+  ULONGLONG slowest = 0, full_at = 0; DWORD peak = 0; unsigned frames = 0; bool pending_seen = false;
   const auto end = GetTickCount64() + 6000 * timing_scale;
   while (GetTickCount64() < end && f.server->status() == v1::ServerStatus::connected) {
     const auto t = GetTickCount64();
     for (int i = 0; i < 4; ++i) f.host.config("job", big);
     cancelled(f.host, 20); f.host.frame(static_cast<float>(frames++ % 50));
     slowest = (std::max)(slowest, GetTickCount64() - t);
-    if (!pending_at && f.server->write_pending()) pending_at = GetTickCount64();
+    const auto bytes = buffered(); peak = (std::max)(peak, bytes);
+    if (!full_at && bytes >= backpressure_bytes) full_at = GetTickCount64();
+    pending_seen = pending_seen || f.server->write_pending();
     Sleep(1);
   }
-  require(pending_at != 0, "actual kernel backpressure: a write stays pending");
+  require(full_at != 0, "actual kernel backpressure: 48 KiB wait unread in the client's pipe");
   require(f.listening(), "the write deadline closes the stalled connection");
-  const auto closed_after = GetTickCount64() - pending_at; std::cout << "stalledCloseMs=" << closed_after << " slowestFrameMs=" << slowest << " frames=" << frames << '\n';
-  require(closed_after <= 2000 * timing_scale, "closed about 1 s after the write stalled");
+  const auto closed_after = GetTickCount64() - full_at;
+  std::cout << "stalledCloseMs=" << closed_after << " peakBufferedBytes=" << peak << " pendingSampled=" << pending_seen << " slowestFrameMs=" << slowest << " frames=" << frames << '\n';
+  require(closed_after <= 2000 * timing_scale, "closed about 1 s after the pipe filled");
   require(slowest < 200 * timing_scale, "callbacks never wait for the stalled client");
   PROCESS_MEMORY_COUNTERS_EX after{}; require(GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&after), sizeof(after)), "memory after");
   const auto growth = after.PrivateUsage > before.PrivateUsage ? after.PrivateUsage - before.PrivateUsage : 0; std::cout << "privateGrowthBytes=" << growth << '\n';
@@ -546,9 +557,12 @@ void stalled_reader() {
 void overflow() {
   Fixture f; Hold hold; f.start(); auto client = f.client(true); client->handshake();
   v1::DurableAckCursor cursor(client->session()); cursor.begin_connection(0); std::size_t committed = 0;
-  // Batches smaller than the ring, paced so the worker drains each: only the store overflows here.
-  for (int batch = 0; batch < 15; ++batch) { cancelled(f.host, 20); f.host.frame(); Sleep(20); }
-  require(client->pump(f.host, [&] { return client->covered() >= 300; }), "300 eventSeqs covered");
+  // Only the store may overflow here, whatever the host's speed: each batch of 100 is below the 128-slot ring, and the
+  // next one starts only after the client has received coverage of every eventSeq so far, so the ring is empty again.
+  for (std::uint64_t through = 100; through <= 300; through += 100) {
+    cancelled(f.host, 100); f.host.frame();
+    require(client->pump(f.host, [&] { return client->covered() >= through; }), "batch covered before the next one");
+  }
   std::uint64_t events = 0, queue_count = 0;
   for (const auto* m : coverage_messages(*client)) { if (m->event) ++events; else queue_count += m->gap->causes.queue_count; }
   require(events == 255 && queue_count == 45, "255 events retained (one entry reserved), 45 lost as queueCount");
@@ -917,8 +931,12 @@ void cap0_isolation() {
   require(until([&] { read_cap0(50); return !kinds.empty(); }), "CAP0 header");
   auto client = f.client(true); client->handshake();
   // The v1 client stops reading; 600 gameplay events are captured by both endpoints' queues.
-  // Paced so that the CAP0 worker keeps up even in the sanitized build: any drop would then come from interference.
-  for (int i = 0; i < 120; ++i) { cancelled(f.host, 5); f.host.frame(); read_cap0(5); Sleep(5); }
+  // Batches of 60 stay below the 128-envelope CAP0 queue, and each starts only after the CAP0 worker has emptied the queue,
+  // whatever the host's speed: any drop would then come from interference with the stalled v1 client.
+  for (int batch = 0; batch < 10; ++batch) {
+    cancelled(f.host, 60); f.host.frame();
+    require(until([&] { read_cap0(5); return capture.queue().queued_envelopes() == 0; }, 5000), "CAP0 queue emptied before the next batch");
+  }
   require(until([&] { read_cap0(20); return capture.queue().counters().attempted >= 600 && capture.queue().queued_envelopes() == 0; }, 5000), "CAP0 drained every envelope");
   const auto counters = capture.queue().counters();
   std::cout << "cap0Attempted=" << counters.attempted << " dropped=" << counters.dropped << " packets=" << kinds.size() << '\n';
