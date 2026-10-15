@@ -43,8 +43,11 @@ async function main():Promise<void> {
         if(command==='serve-v1') {
           console.log(JSON.stringify({origin:'synthetic',mode:'reactive',endpoint:server.endpoint,history:false}));
           const report=await server.done;
+          // The verdict of plan item 7 against replay-v1; a cancelled run is not compared.
+          const differences=report.cancelled?[]:reactiveDifferences(replayV1(input),report);
           console.log(JSON.stringify({origin:'synthetic',mode:'reactive',scenario:report.scenario.id,cancelled:report.cancelled,connections:report.connections,
-            messages:report.transcript.length,refusedClients:report.refusedClients,history:false}));
+            messages:report.transcript.length,refusedClients:report.refusedClients,matchesReplay:report.cancelled?null:differences.length===0,differences,history:false}));
+          if(differences.length)process.exitCode=1;
           return;
         }
         const expected=replayV1(input);

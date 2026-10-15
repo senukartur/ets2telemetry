@@ -11,14 +11,14 @@
 // only in lockstep mode (pipe.ts).
 import net from 'node:net';
 import {randomUUID} from 'node:crypto';
-import {FrameDecoder, ProtocolError, V1_LIMITS, type ProtocolMessage, type ServerMessage} from '../../../../packages/contracts/src/protocol-v1';
+import {FrameDecoder, GAP_RECORD_BYTES, ProtocolError, V1_LIMITS, type ProtocolMessage, type ServerMessage} from '../../../../packages/contracts/src/protocol-v1';
 import {type DurableAckCursor} from '../../../../packages/contracts/src/protocol-v1-delivery';
 import {CommitLedger, ScriptedClient, type ClientPolicy} from './client';
 import {Cancelled, Link, PipeHost, REPLY_DEADLINE_MS, TEST_PIPE_PATTERN_V1, bounded} from './pipe-host';
 import {V1Producer, type Out} from './producer';
 import {timeline, validateScenario, type Scenario, type SourceStep, type TimelineEntry} from './scenario';
 import {AdapterModel, ScenarioClock, seededId} from './source';
-import {MAX_TRANSCRIPT_MESSAGES, scenarioSource, type ReplayResult, type TranscriptLine} from './replay';
+import {MAX_TRANSCRIPT_MESSAGES, V1Driver, scenarioSource, type ReplayResult, type TranscriptLine} from './replay';
 
 export interface ReactiveServeOptions {
   /** Real milliseconds per scenario millisecond while a client is connected (0 to 10, default 1). */
@@ -42,6 +42,8 @@ class Reactive extends PipeHost {
   readonly scenario: Scenario; private readonly clock = new ScenarioClock(); private readonly producer: V1Producer;
   private readonly transcript: TranscriptLine[] = []; private readonly connections: ReactiveConnection[] = [];
   private pending: Link[] = []; private live?: {link: Link; record: ReactiveConnection; recorder: FrameDecoder; helloDone: boolean; endWritten: boolean};
+  // `unsettled`: an event or gap was written since the last quiesce, so a client reaction (ACK, crash) may be pending.
+  private unsettled = false;
   private refused = 0; private atMs = 0; private target = 0; private segment?: {realMs: number; atMs: number};
   private readonly scale: number; private readonly helloMs: number; private readonly writeMs: number; private readonly quiesceMs: number; private readonly connectMs: number;
   constructor(input: unknown, options: ReactiveServeOptions) {
@@ -49,6 +51,8 @@ class Reactive extends PipeHost {
     const s = this.scenario = validateScenario(input);
     const scripted = s.transport.find(t => t.action === 'clientFault' || t.action === 'wireFault' || t.action === 'writeDeadline');
     if (scripted) throw new Error(`Reactive serving cannot run ${scripted.action} steps, which script the client; use lockstep mode`);
+    const conflicts = reactiveConflicts(input);
+    if (conflicts.length) throw new Error(`Reactive serving cannot reproduce this scenario; use lockstep mode: ${conflicts.join('; ')}`);
     this.producer = new V1Producer(new AdapterModel({game: s.game, seed: s.seed, ...s.source}, this.clock), scenarioSource(s), seededId(s.seed, 'capture-clock'));
     this.scale = bounded(options.scale, 1, 0, 10, 'scale', false);
     this.helloMs = bounded(options.helloTimeoutMs, V1_LIMITS.helloTimeoutMs, 1, V1_LIMITS.helloTimeoutMs, 'hello timeout');
@@ -76,10 +80,12 @@ class Reactive extends PipeHost {
     const l = this.live; if (!l) throw new Error('Server message without a client');
     this.line(atMs, 'server', out.message); l.link.write(out.frame, () => this.changed());
     if (out.message.kind === 'end') l.endWritten = true;
+    if (out.message.kind === 'event' || out.message.kind === 'gap') this.unsettled = true;
   }
   private closeLive(closedBy: ReactiveClosedBy, graceful: boolean): void {
     const l = this.live; if (!l) return;
-    this.producer.close(this.ns(this.progressAtMs()));
+    // The replay closes at the action that caused the closure; the server is still at that action until it paces on.
+    this.producer.close(this.ns(this.atMs));
     l.record.closedBy = closedBy; this.live = undefined; this.segment = undefined;
     if (graceful) l.link.socket.end(); else l.link.socket.destroy();
   }
@@ -169,7 +175,7 @@ class Reactive extends PipeHost {
       const at = Math.min(expiryAt, snapshotAt); if (at > untilMs) return;
       await this.pace(at);
       if (expiryAt === at) this.producer.expire(this.ns(at));
-      else { const out = this.producer.fireSnapshot(this.ns(at)); if (out) this.write(out, at); await this.flush(); }
+      else { const out = this.producer.fireSnapshot(this.ns(at)); if (out) this.write(out, at); await this.flush(); await this.quiesce(); }
     }
   }
   /** A scripted connect: the next client with a valid hello, any client instance, within the connect timeout. */
@@ -196,7 +202,8 @@ class Reactive extends PipeHost {
   /** A scripted disconnect: bounded wait for the ACKs of everything written, then a graceful close. */
   /** Waits up to the quiesce bound until the live client has acknowledged everything written to it, or has left. */
   private async quiesce(): Promise<void> {
-    const l = this.live; if (!l) return;
+    const l = this.live; if (!l || !this.unsettled) return;
+    this.unsettled = false;
     await this.wait(() => this.live !== l || l.link.gone || ((s => s === undefined || s.acked >= s.sent)(this.producer.ackState())), this.quiesceMs);
   }
   private async disconnect(): Promise<void> {
@@ -214,15 +221,16 @@ class Reactive extends PipeHost {
         await this.fireTimers(e.atMs);
         await this.pace(e.atMs);
         if (this.stopError) throw this.stopError;
-        // Before a source step a durable client may first acknowledge what it received, or leave (bounded), so ACKs and
-        // client-initiated closes take effect at the same step boundaries as in the replay.
-        if (e.lane === 'source') { if (this.live?.helloDone) await this.quiesce(); await this.apply(e.step); }
+        if (e.lane === 'source') await this.apply(e.step);
         else if (e.lane === 'transport') {
           // A second client needs no action here: arrivals are refused while a client is connected.
           if (e.step.action === 'connect') await this.accept(e.connection, e.step.client);
           else if (e.step.action === 'disconnect') await this.disconnect();
         }
         await this.flush();
+        // After an action that wrote an event or gap, the client may first acknowledge it, or leave (bounded), before the
+        // server paces on, so ACKs and client closes take effect at the same action boundaries as in the replay.
+        await this.quiesce();
         if (this.failure) throw this.failure;
       }
       if (entries.length) await this.fireTimers(entries.at(-1)!.atMs);
@@ -249,6 +257,46 @@ class Reactive extends PipeHost {
   private report(cancelled: boolean): ReactiveReport {
     return {scenario: this.scenario, transcript: this.transcript, connections: this.connections, refusedClients: this.refused, cancelled};
   }
+}
+
+/**
+ * Why reactive serving cannot reproduce a scenario, or an empty list. Reactive mode lets a client react (ACK release,
+ * crash) only at action boundaries, while the replay applies each reaction right after the message that caused it. The
+ * two agree unless, inside one action (a step, a timer or a connect), (A) a release the replay performs changes whether
+ * a later event of the same action is admitted at the 256-entry or 1 MiB store bound, or (B) a client crashes on an item
+ * while the store already holds later eventSeqs or the same action assigns more, which reactive mode would still write
+ * to the departing client. Both are detected conservatively by stepping the replay driver.
+ */
+export function reactiveConflicts(input: unknown): string[] {
+  const driver = new V1Driver(input), run = driver.run(), out: string[] = [], store = driver.producer.store, channel = driver.producer.adapter.channel;
+  let atMs = 0, startEntries = 0, startBytes = 0, newEntries = 0, newBytes = 0, acked = false, admittedAfterAck = false, crashChannel: bigint | undefined;
+  const begin = (at: number) => { const st = store.status(); atMs = at; startEntries = st.retainedEntries; startBytes = st.retainedBytes; newEntries = 0; newBytes = 0; acked = false; admittedAfterAck = false; crashChannel = undefined; };
+  const end = () => {
+    // Only an admission after a release can differ: without releases both sides hold the same entries.
+    if (admittedAfterAck && (startEntries + newEntries + 1 >= V1_LIMITS.retainedEntries || startBytes + newBytes + GAP_RECORD_BYTES > V1_LIMITS.retainedBytes))
+      out.push(`An ACK at ${atMs} ms releases entries the same action may need at the store bound (A)`);
+    if (crashChannel !== undefined && channel.nextEventSeq !== crashChannel) out.push(`A client crash at ${atMs} ms is followed by more events of the same action (B)`);
+  };
+  const seen = new Set<number>();
+  for (let r = run.next(); !r.done; r = run.next()) {
+    const e = r.value, last = driver.transcript.at(-1)?.message;
+    if (e.kind === 'time') { end(); begin(e.atMs); }
+    else if (e.kind === 'write' && e.message && last && (last.kind === 'event' || last.kind === 'gap') && !last.data.redelivered) {
+      // A worst-case measure exceeds the written frame by less than 64 bytes; a new gap entry reserves 1,024.
+      newEntries++; newBytes += last.kind === 'gap' ? GAP_RECORD_BYTES : e.bytes.length + 64; if (acked) admittedAfterAck = true;
+    } else if (e.kind === 'expect' && last?.kind === 'ack') acked = true;
+    else if (e.kind === 'close' && e.by === 'client') {
+      const record = driver.connections.find(c => c.closedBy === 'crash' && !seen.has(c.connection));
+      if (!record) continue;
+      seen.add(record.connection);
+      const item = [...driver.transcript].reverse().find(l => l.connection === record.connection && l.direction === 'server' && (l.message.kind === 'event' || l.message.kind === 'gap'))?.message;
+      const through = item?.kind === 'event' ? BigInt(item.data.eventSeq) : item?.kind === 'gap' ? BigInt(item.data.lastEventSeq) : 0n;
+      if (store.nextEventSeq - 1n > through) out.push(`A client crash at ${atMs} ms leaves later eventSeqs the reactive server would still write to it (B)`);
+      crashChannel = channel.nextEventSeq;
+    }
+  }
+  end();
+  return [...new Set(out)];
 }
 
 /** Serves one scenario in reactive mode; see the module comment. */

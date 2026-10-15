@@ -225,17 +225,29 @@ describe('simulator v1 pipe CLI', () => {
     const directory = mkdtempSync(join(tmpdir(), 'ETS2Telemetry-SYNTHETIC-TEST-v1-reactive-cli-'));
     try {
       const cli = await buildCli(directory), path = scenarioPath('reconnect-lost-ack'), input = load('reconnect-lost-ack'), replay = replayV1(input);
-      const child = spawn(process.execPath, [cli, 'serve-v1', path], {windowsHide: true});
-      let stdout = '', stderr = '';
-      child.stdout.on('data', (c: Buffer) => { stdout += c.toString('utf8'); }); child.stderr.on('data', (c: Buffer) => { stderr += c.toString('utf8'); });
-      const exited = new Promise<number | null>(r => child.on('exit', code => r(code)));
-      await until(() => stdout.includes('\n'), 150_000);
-      const first = JSON.parse(stdout.split('\n')[0]) as {endpoint: string; mode: string};
-      expect(first.mode).toBe('reactive');
-      const client = await runIndependentClient(first.endpoint, input, {seed: 3});
-      expect([await exited, stderr]).toEqual([0, '']);
-      expect(client.ledger).toEqual(replay.ledger);
-      expect(JSON.parse(stdout.trim().split('\n')[1])).toMatchObject({mode: 'reactive', scenario: 'reconnect-lost-ack', cancelled: false, refusedClients: 0});
+      // serve-v1 in a child process; the consumer follows the scenario (verdict: matches) or acknowledges every item
+      // where the scenario loses later ACKs (verdict: differs, exit code 1).
+      const serve = async (consumer: unknown) => {
+        const child = spawn(process.execPath, [cli, 'serve-v1', path], {windowsHide: true});
+        let stdout = '', stderr = '';
+        child.stdout.on('data', (c: Buffer) => { stdout += c.toString('utf8'); }); child.stderr.on('data', (c: Buffer) => { stderr += c.toString('utf8'); });
+        const exited = new Promise<number | null>(r => child.on('exit', code => r(code)));
+        await until(() => stdout.includes('\n'), 150_000);
+        const first = JSON.parse(stdout.split('\n')[0]) as {endpoint: string; mode: string};
+        expect(first.mode).toBe('reactive');
+        const client = await runIndependentClient(first.endpoint, consumer, {seed: 3});
+        return {client, code: await exited, stderr, summary: JSON.parse(stdout.trim().split('\n')[1]) as Record<string, unknown>};
+      };
+      const good = await serve(input);
+      expect([good.code, good.stderr]).toEqual([0, '']);
+      expect(good.client.ledger).toEqual(replay.ledger);
+      expect(good.summary).toMatchObject({mode: 'reactive', scenario: 'reconnect-lost-ack', cancelled: false, refusedClients: 0, matchesReplay: true, differences: []});
+      const acksAll = structuredClone(input) as {transport: {client?: {ack?: string}}[]};
+      acksAll.transport[0].client!.ack = 'each';
+      const bad = await serve(acksAll);
+      expect(bad.code).toBe(1);
+      expect(bad.summary).toMatchObject({matchesReplay: false});
+      expect((bad.summary.differences as string[]).length).toBeGreaterThan(0);
       const smoke = await runCli([cli, 'smoke-v1', scenarioPath('pipe-reconnect'), '--reactive']);
       expect([smoke.status, smoke.stderr]).toEqual([0, '']);
       expect(JSON.parse(smoke.stdout)).toMatchObject({mode: 'reactive', scenario: 'pipe-reconnect', connections: 2, ledger: replayV1(load('pipe-reconnect')).ledger});

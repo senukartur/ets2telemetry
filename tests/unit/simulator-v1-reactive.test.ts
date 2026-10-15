@@ -5,7 +5,7 @@ import {FrameDecoder, PROTOCOL_V1, encodeFrame, type ServerMessage} from '../../
 import {V1Consumer} from '../../packages/contracts/src/protocol-v1-delivery';
 import {readFixtureFile} from '../../tools/telemetry-simulator/src/fixture-file';
 import {rawFrame} from '../../tools/telemetry-simulator/src/v1/faults';
-import {reactiveDifferences, runIndependentClient, serveV1Reactive} from '../../tools/telemetry-simulator/src/v1/reactive';
+import {reactiveConflicts, reactiveDifferences, runIndependentClient, serveV1Reactive} from '../../tools/telemetry-simulator/src/v1/reactive';
 import {replayV1} from '../../tools/telemetry-simulator/src/v1/replay';
 import {seededId} from '../../tools/telemetry-simulator/src/v1/source';
 import {scenarioPath} from '../shared/simulator-v1-expected';
@@ -85,19 +85,58 @@ describe('simulator v1 reactive serving for any contract consumer', () => {
 
   it('accepts any client instance, refuses a second client at once and keeps the first', async () => {
     const s = inline([{atMs: 10, action: 'frame', channels: {speed: 1}}, {atMs: 300, action: 'frame', channels: {speed: 2}}],
-      [{atMs: 0, action: 'connect', client: {durable: false}}, {atMs: 400, action: 'disconnect'}]);
+      [{atMs: 0, action: 'connect', client: {durable: false}}, {atMs: 600_000, action: 'disconnect'}]);
     const server = await serveV1Reactive(s, {scale: 1});
     try {
+      // The first connection stays open for ten minutes of scenario time, so the second client always meets it.
       const first = rawClient(server.endpoint, hello(false));
       await until(() => first.messages.length >= 2);
       const second = rawClient(server.endpoint, hello(false));
       expect(await second.closed).toEqual({bytes: 0, messages: []});
+      await until(() => first.messages.length >= 4);
+      await server.stop();
       const {messages} = await first.closed;
-      expect(messages.map(m => m.kind === 'snapshot' && m.data.state.speed.available ? m.data.state.speed.value : m.kind)).toEqual(['welcome', 'checkpoint', 1, 2]);
+      expect(messages.map(m => m.kind === 'snapshot' && m.data.state.speed.available ? m.data.state.speed.value : m.kind)).toEqual(['welcome', 'checkpoint', 1, 2, 'end']);
       const report = await server.done;
-      expect([report.refusedClients, report.connections.map(c => c.closedBy)]).toEqual([1, ['disconnect']]);
+      expect([report.refusedClients, report.cancelled, report.connections.map(c => c.closedBy)]).toEqual([1, true, ['end']]);
     } finally { await server.stop(); }
   }, 60_000);
+
+  // A client crash on the last item of a step, with a snapshot due before the next step and a reconnection 10 ms after
+  // the replay's retention deadline: the crashed client gets no snapshot, and the connection is closed at the crash's
+  // own scenario time (30 ms), so the retained event has expired when the next client connects.
+  for (const scale of [1, 0]) it(`closes a crashed client at its step and writes it no pending snapshot (scale ${scale})`, async () => {
+    const s = inline([{atMs: 10, action: 'lifecycle', event: 'simulation.started'}, {atMs: 20, action: 'frame', channels: {speed: 1}}, {atMs: 30, action: 'lifecycle', event: 'simulation.paused'}],
+      [{atMs: 0, action: 'connect', client: {durable: true, commit: 'failAt:2'}}, {atMs: 100, action: 'disconnect'}, {atMs: 300_040, action: 'connect', client: {durable: true}}, {atMs: 300_100, action: 'disconnect'}]);
+    const replay = replayV1(s);
+    expect(replay.transcript.filter(l => l.connection === 1 && l.message.kind === 'snapshot')).toHaveLength(0);
+    expect(replay.store.eventLoss.retentionExpired).toBe('1');
+    const server = await serveV1Reactive(s, {scale});
+    try {
+      const [client, report] = await Promise.all([runIndependentClient(server.endpoint, s, {seed: 11}), server.done]);
+      expect(reactiveDifferences(replay, report)).toEqual([]);
+      expect(client.ledger).toEqual(replay.ledger);
+      expect(report.connections.map(c => c.closedBy)).toEqual(['client', 'disconnect']);
+    } finally { await server.stop(); }
+  }, 60_000);
+
+  it('rejects scenarios whose client reactions inside one action change the outcome', async () => {
+    const tollgates = (repeat: number) => ({atMs: 10, action: 'gameplay', id: 'player.tollgate.paid', attributes: [{name: 'pay.amount', sdkType: 's64', value: '1'}], repeat});
+    // (A) Releases between the writes of one step keep 300 events within the 256-entry store bound in the replay only.
+    const bound = inline([tollgates(300)], [{atMs: 0, action: 'connect', client: {durable: true}}, {atMs: 100, action: 'disconnect'}]);
+    expect(replayV1(bound).store.eventLoss.queueCount).toBe('0');
+    expect(reactiveConflicts(bound).join()).toMatch(/store bound \(A\)/);
+    await expect(serveV1Reactive(bound)).rejects.toThrow(/lockstep mode.*\(A\)/);
+    // (B) A crash on the first of two events of one step, and a crash on the first redelivered of three.
+    const midStep = inline([tollgates(2)], [{atMs: 0, action: 'connect', client: {durable: true, commit: 'failAt:1'}}, {atMs: 100, action: 'disconnect'}]);
+    expect(reactiveConflicts(midStep).join()).toMatch(/\(B\)/);
+    await expect(serveV1Reactive(midStep)).rejects.toThrow(/lockstep mode.*\(B\)/);
+    const redelivery = inline([tollgates(3)], [{atMs: 0, action: 'connect', client: {durable: true, ack: 'withhold'}}, {atMs: 100, action: 'disconnect'},
+      {atMs: 200, action: 'connect', client: {durable: true, commit: 'failAt:1'}}, {atMs: 300, action: 'disconnect'}]);
+    expect(reactiveConflicts(redelivery).join()).toMatch(/\(B\)/);
+    // Every corpus scenario the reactive tests run is accepted.
+    for (const id of ids) expect(reactiveConflicts(load(id))).toEqual([]);
+  });
 
   it('ends a rejected hello attempt only, and requires the scripted durability', async () => {
     const s = inline([], [{atMs: 0, action: 'connect', client: {durable: true}}, {atMs: 10, action: 'disconnect'}]);
