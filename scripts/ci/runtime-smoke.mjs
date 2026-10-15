@@ -7,12 +7,13 @@ import {_electron as electron} from '@playwright/test';
 import {startLiveSmokeSource} from './live-smoke-source.mjs';
 import {waitForCurrentTelemetry} from './renderer-observation.mjs';
 import {rendererPages, runOverlaySmoke, windowSecurity, verifyRendererStyles} from './overlay-observation.mjs';
+import {runLifecycleSmoke, verifyLifecycleRestart} from './lifecycle-observation.mjs';
 // These read-only globals are used only inside serialized Playwright browser callbacks.
 /* global document: readonly, getComputedStyle: readonly, innerHeight: readonly, innerWidth: readonly */
 
 const [configFile] = process.argv.slice(2);
 const config = JSON.parse((await readFile(configFile, 'utf8')).replace(/^\uFEFF/, ''));
-const result = {scenario: config.scenario === 'overlay' ? 'V0 HIDDEN-OVERLAY-PROJECTION / partial REG-009, REG-011, REG-017' : config.scenario === 'telemetry' ? 'V0 SOURCE-RENDERER-RECOVERY / partial REG-003, REG-010, REG-011, REG-017' : 'SCAFFOLD-WORKER / partial REG-011, REG-017', passed: false,
+const result = {scenario: config.scenario === 'lifecycle' ? 'V0 TRAY-LIFECYCLE / partial REG-011, REG-012, REG-017' : config.scenario === 'overlay' ? 'V0 HIDDEN-OVERLAY-PROJECTION / partial REG-009, REG-011, REG-017' : config.scenario === 'telemetry' ? 'V0 SOURCE-RENDERER-RECOVERY / partial REG-003, REG-010, REG-011, REG-017' : 'SCAFFOLD-WORKER / partial REG-011, REG-017', passed: false,
   scenarioKind: config.scenario ?? 'scaffold',
   commit: config.commit, mode: config.mode, node: process.versions, expected: {
     status: {service: 'ready', storage: 'verified', synthetic: true}, exit: 0, probesAfterExit: []},
@@ -29,21 +30,24 @@ result.phases = [];
 const phase = name => result.phases.push({phase: name, utc: new Date().toISOString(), monotonicMs: Math.round(performance.now() * 10) / 10});
 const diagnosticEvents = async directory => (await readFile(path.join(directory, 'startup.jsonl'), 'utf8'))
   .trim().split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line));
+// Every launch of one run shares the isolated profile, TEMP, APPDATA and LOCALAPPDATA; only the diagnostic directory may differ.
+const environment = diagnostics => ({...process.env, TEMP: config.temp, TMP: config.temp, APPDATA: config.appdata,
+  LOCALAPPDATA: config.localappdata, ETS2TELEMETRY_PROFILE_DIR: config.profile,
+  ETS2TELEMETRY_DIAGNOSTIC_DIR: diagnostics,
+  ...(telemetrySource ? {ETS2TELEMETRY_LIVE_SMOKE: '1', ETS2TELEMETRY_SOURCE_KIND: 'synthetic', ETS2TELEMETRY_SOURCE_PIPE: telemetrySource.endpoint} : {})});
+const launchOptions = diagnostics => ({timeout: 20000, cwd: config.cwd,
+  ...(config.mode === 'packaged' ? {executablePath: config.executable, args: config.forceRendererProcessReuse ? ['--renderer-process-limit=1'] : []} :
+    {args: [config.checkout, ...(config.forceRendererProcessReuse ? ['--renderer-process-limit=1'] : [])]}),
+  env: environment(diagnostics)});
 try {
   assert.equal(process.platform, 'win32');
   assert.equal(process.arch, 'x64');
   assert.equal(process.versions.node, '24.19.0');
   result.playwright = JSON.parse(await readFile(new URL('../../node_modules/playwright-core/package.json', import.meta.url))).version;
   assert.equal(result.playwright, '1.64.0');
-  if (config.scenario === 'telemetry' || config.scenario === 'overlay') telemetrySource = await startLiveSmokeSource(config.checkout);
+  if (config.scenario === 'telemetry' || config.scenario === 'overlay' || config.scenario === 'lifecycle') telemetrySource = await startLiveSmokeSource(config.checkout);
   phase('launch-requested');
-  application = await electron.launch({timeout: 20000, cwd: config.cwd,
-    ...(config.mode === 'packaged' ? {executablePath: config.executable, args: config.forceRendererProcessReuse ? ['--renderer-process-limit=1'] : []} :
-      {args: [config.checkout, ...(config.forceRendererProcessReuse ? ['--renderer-process-limit=1'] : [])]}),
-    env: {...process.env, TEMP: config.temp, TMP: config.temp, APPDATA: config.appdata,
-      LOCALAPPDATA: config.localappdata, ETS2TELEMETRY_PROFILE_DIR: config.profile,
-      ETS2TELEMETRY_DIAGNOSTIC_DIR: config.diagnostics,
-      ...(telemetrySource ? {ETS2TELEMETRY_LIVE_SMOKE: '1', ETS2TELEMETRY_SOURCE_KIND: 'synthetic', ETS2TELEMETRY_SOURCE_PIPE: telemetrySource.endpoint} : {})}});
+  application = await electron.launch(launchOptions(config.diagnostics));
   launcher = application.process();
   phase('launch-returned');
   await application.context().tracing.start({screenshots: true, snapshots: true});
@@ -72,7 +76,7 @@ try {
   result.actual = await window.evaluate(async () => ({require: typeof globalThis.require,
     process: typeof globalThis.process, keys: Object.keys(globalThis.desktop),
     frozen: Object.isFrozen(globalThis.desktop), status: await globalThis.desktop.getStatus()}));
-  assert.deepEqual(result.actual, {require: 'undefined', process: 'undefined', keys: ['getStatus', 'selectSource', 'subscribeLive'],
+  assert.deepEqual(result.actual, {require: 'undefined', process: 'undefined', keys: ['getStatus', 'selectSource', 'subscribeLive', 'getAppState', 'subscribeAppState', 'exitApplication'],
     frozen: true, status: result.expected.status});
   result.probesBeforeExit = (await readdir(config.temp)).filter(name => name.startsWith('ets2telemetry-probe-'));
   assert.equal(result.probesBeforeExit.length, 1);
@@ -147,8 +151,20 @@ try {
     assert.match(await window.getByTestId('telemetry-status').innerText(), /^(disconnected|waiting):/);
     result.telemetry.staleAfterDisconnect = true;
   }
+  if (config.scenario === 'lifecycle') {
+    result.lifecycle = {};
+    await runLifecycleSmoke({application, launcher, dashboard: window, overlay, source: telemetrySource, config,
+      environment: environment(config.diagnostics), events: diagnosticEvents, record: result.lifecycle,
+      stopTracing: async () => {tracing = false; await application.context().tracing.stop({path: path.join(config.output, 'trace.zip')}); phase('tracing-stopped');}});
+    // Run A exited on its own; the shared close path below now owns run B.
+    application = undefined; phase('explicit-exit-complete');
+    application = await electron.launch(launchOptions(config.diagnosticsRestart));
+    launcher = application.process(); phase('restart-launch-returned');
+    await verifyLifecycleRestart({application, record: result.lifecycle, rendererPages});
+    phase('restart-ready');
+  }
   phase('journey-complete');
-  await window.screenshot({path: path.join(config.output, 'ready.png')});
+  if (config.scenario !== 'lifecycle') await window.screenshot({path: path.join(config.output, 'ready.png')});
 } catch (error) {result.failure = failure(error); phase('failed');}
 finally {
   try {await telemetrySource?.stop();} catch (error) {result.sourceCloseFailure = failure(error);}
@@ -193,6 +209,26 @@ finally {
     assert.ok(result.serviceEvents.some(row => row.event === 'SERVICE_REPORT' && row.detail?.type === 'stopped'));
     assert.ok(![...result.mainEvents, ...result.serviceEvents].some(row =>
       /FAILED|TIMEOUT|UNCAUGHT|UNHANDLED|INVALID|RENDER_PROCESS_GONE/.test(row.event)));
+    if (config.scenario === 'lifecycle') {
+      // Run B wrote to its own diagnostic directory; both runs need the same orderly, clean shutdown.
+      const lifecycle = result.lifecycle ??= {};
+      lifecycle.restartMainEvents = await diagnosticEvents(config.diagnosticsRestart);
+      lifecycle.restartServiceEvents = await diagnosticEvents(path.join(config.diagnosticsRestart, 'service'));
+      for (const [main, service] of [[result.mainEvents, result.serviceEvents], [lifecycle.restartMainEvents, lifecycle.restartServiceEvents]]) {
+        for (const name of ['APP_EXIT', 'SERVICE_EXIT']) {
+          const rows = main.filter(row => row.event === name);
+          assert.equal(rows.length, 1); assert.equal(rows[0].detail.code, 0);
+        }
+        assert.ok(service.some(row => row.event === 'STORAGE_VERIFIED'));
+        assert.deepEqual(service.filter(row => row.event === 'SERVICE_REPORT' && row.detail?.type === 'stopped').map(row => row.detail), [{type: 'stopped', clean: true}]);
+        const steps = service.filter(row => row.event === 'SHUTDOWN_STEP');
+        assert.ok(steps.length >= 3 && steps.every(row => row.facts?.outcome === 'ok'), 'Every service shutdown step must finish cleanly');
+        assert.ok(![...main, ...service].some(row => /FAILED|TIMEOUT|UNCAUGHT|UNHANDLED|INVALID|RENDER_PROCESS_GONE/.test(row.event)));
+      }
+      assert.deepEqual(lifecycle.restartMainEvents.filter(row => row.event === 'APP_EXIT_REQUESTED').map(row => row.facts?.reason), ['app-quit']);
+      lifecycle.restartLauncherExit = result.launcherExit;
+      lifecycle.shutdownClean = true;
+    }
   } catch (error) {result.postconditionFailure = failure(error);}
   result.passed = !result.failure && !result.closeFailure && !result.traceFailure && !result.postconditionFailure && !result.sourceCloseFailure;
   result.finishedUtc = new Date().toISOString();

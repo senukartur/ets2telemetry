@@ -1,7 +1,12 @@
-# Synthetic protocol v0 simulator
+# Synthetic protocol simulators
 
-ET-005a provides deterministic current-state replay, a Windows Named Pipe server,
+ET-005a provides deterministic protocol v0 current-state replay, a Windows Named Pipe server,
 and a bounded test consumer. See [usage and scope](../../docs/simulator-v0.md)
 and [validation](../../docs/validation/et-005a.md).
 
-No SDK, desktop bridge, database, durable events, or game acceptance is provided.
+ET-005b adds a deterministic protocol v1 event and fault model in `src/v1`: an event-store
+mirror of the native ET-004b rules, an SDK adapter model, the producer caller sequence, a
+scripted ET-002b contract client and the `replay-v1` command. See
+[usage and scope](../../docs/simulator-v1.md) and [validation](../../docs/validation/et-005b.md).
+
+No SDK, desktop bridge, database, history, discovery file or game acceptance is provided.

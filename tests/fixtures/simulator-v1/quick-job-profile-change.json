@@ -1,0 +1,23 @@
+{
+  "format": "ets2telemetry-simulator-v1", "schemaVersion": 1, "id": "quick-job-profile-change",
+  "purpose": "A quick job followed by a synthetic profile change: pause, job and truck clears, a timer restart with a new game time, a different truck and a restart of simulation. Profile change and quick-job behavior are synthetic and unverified in a real game.",
+  "reg": ["REG-004", "REG-008"], "origin": "synthetic", "game": "ets2", "seed": "et005b-quick-job-profile-change", "provenance": null,
+  "source": {"versions": {"telemetryApi": {"major": 1, "minor": 1}, "gameTelemetry": {"major": 1, "minor": 19}, "sdkArchive": "scs-sdk-1.15"}, "gameplayEvents": "registered", "currency": "unknown", "gameMode": "unknown"},
+  "steps": [
+    {"atMs": 10, "action": "configuration", "id": "truck", "attributes": [{"name": "id", "sdkType": "string", "value": "vehicle.synthetic_quick"}, {"name": "license.plate", "sdkType": "string", "value": "QJ 0001"}]},
+    {"atMs": 20, "action": "configuration", "id": "job", "attributes": [{"name": "job.market", "sdkType": "string", "value": "quick_job"},
+      {"name": "cargo.id", "sdkType": "string", "value": "synthetic_cargo_q"}, {"name": "is.special.job", "sdkType": "bool", "value": false}]},
+    {"atMs": 30, "action": "lifecycle", "event": "simulation.started"},
+    {"atMs": 40, "action": "frame", "channels": {"game.time": 800}},
+    {"atMs": 100, "action": "lifecycle", "event": "simulation.paused"},
+    {"atMs": 110, "action": "configuration", "id": "job", "attributes": []},
+    {"atMs": 111, "action": "configuration", "id": "truck", "attributes": []},
+    {"atMs": 120, "action": "frame", "timerRestart": true, "channels": {"game.time": 200}},
+    {"atMs": 130, "action": "configuration", "id": "truck", "attributes": [{"name": "id", "sdkType": "string", "value": "vehicle.synthetic_profile_b"}]},
+    {"atMs": 140, "action": "lifecycle", "event": "simulation.started"}
+  ],
+  "transport": [
+    {"atMs": 0, "action": "connect", "client": {"durable": true}},
+    {"atMs": 200, "action": "disconnect"}
+  ]
+}

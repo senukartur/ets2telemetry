@@ -1,0 +1,17 @@
+{
+  "format": "ets2telemetry-simulator-v1", "schemaVersion": 1, "id": "game-mode",
+  "purpose": "Synthetic game-mode detection (D9 only; the real plugin reports unknown under OD-3): a weak single-player result, an unchanged repeat that emits nothing, then a strong TruckersMP module result carried by events, welcome and status.",
+  "reg": ["REG-009"], "origin": "synthetic", "game": "ets2", "seed": "et005b-game-mode", "provenance": null,
+  "source": {"versions": {"telemetryApi": {"major": 1, "minor": 1}, "gameTelemetry": {"major": 1, "minor": 19}, "sdkArchive": "scs-sdk-1.15"}, "gameplayEvents": "registered", "currency": "unknown", "gameMode": "synthetic-detection"},
+  "steps": [
+    {"atMs": 10, "action": "gameMode", "mode": "single-player", "method": "module-scan", "confidence": "weak"},
+    {"atMs": 20, "action": "gameMode", "mode": "single-player", "method": "module-scan", "confidence": "weak"},
+    {"atMs": 30, "action": "gameMode", "mode": "truckersmp", "method": "module-scan", "confidence": "strong", "module": "synthetic_mp_module.dll"}
+  ],
+  "transport": [
+    {"atMs": 0, "action": "connect", "client": {"durable": true}},
+    {"atMs": 100, "action": "disconnect"},
+    {"atMs": 110, "action": "connect", "client": {"durable": true}},
+    {"atMs": 200, "action": "disconnect"}
+  ]
+}

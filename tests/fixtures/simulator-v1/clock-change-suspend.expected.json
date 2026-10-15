@@ -1,0 +1,41 @@
+{
+  "scenario": "clock-change-suspend",
+  "authoredFrom": [
+    "docs/protocol/v1.md §5: UTC is a label only and may jump; real monotonic time is the source clock; the domains are never mixed",
+    "docs/protocol/v1.md §9 and I5: disconnect retention is 300,000 ms of source monotonic time; a durable reconnection inside the window cancels it",
+    "CD-12 (docs/simulator-v1.md): a suspend either stops the source clock (deadline shifted by the suspend) or advances it (expiry processed at resume, retention time = the resume time 1,000,000,000,000 + 660,000 x 1,000,000 ns)",
+    "OD-5 S1/S2: expired events contribute their occurrence times; the merged record is retained from the expiry time"
+  ],
+  "connections": [
+    {
+      "durableRequested": true, "closedBy": "disconnect", "clientInstance": 1,
+      "coverage": [
+        {"event": "1", "type": "simulation.started", "redelivered": false,
+          "occurred": {"monotonicNs": {"available": true, "value": "1000010000000"}, "utcUnixMs": {"available": true, "value": "1800000000010"}}},
+        {"event": "2", "type": "simulation.paused", "redelivered": false,
+          "occurred": {"monotonicNs": {"available": true, "value": "1000030000000"}, "utcUnixMs": {"available": true, "value": "1799996400030"}}}
+      ],
+      "acks": [], "end": null
+    },
+    {
+      "durableRequested": true, "closedBy": "disconnect", "clientInstance": 1,
+      "checkpoint": {"atMs": 1200000, "capture": "1200000000000", "ackedThroughEventSeq": "0", "nextEventSeq": "3", "retainedEvents": 2, "oldestRetainedMonotonicNs": "1000010000000", "eventLoss": {},
+        "state": {"captureUtcUnixMs": {"available": true, "value": "1799997500000"}}},
+      "coverage": [
+        {"event": "1", "type": "simulation.started", "redelivered": true, "occurred": {"utcUnixMs": {"available": true, "value": "1800000000010"}}},
+        {"event": "2", "type": "simulation.paused", "redelivered": true, "occurred": {"utcUnixMs": {"available": true, "value": "1799996400030"}}}
+      ],
+      "acks": [], "end": null
+    },
+    {
+      "durableRequested": true, "closedBy": "disconnect", "clientInstance": 1,
+      "checkpoint": {"atMs": 1700000, "capture": "1700000000000", "ackedThroughEventSeq": "0", "nextEventSeq": "3", "retainedEvents": 1, "retainedBytes": 1024,
+        "oldestRetainedMonotonicNs": "1660000000000", "eventLoss": {"retentionExpired": "2"}},
+      "coverage": [{"gap": ["1", "2"], "causes": {"retentionExpired": "2"}, "redelivered": true, "firstLost": "1000010000000", "lastLost": "1000030000000"}],
+      "acks": ["2"], "end": null
+    }
+  ],
+  "ledger": {"committedThroughEventSeq": "2", "committedEvents": 2, "committedGapMarkers": "0", "duplicates": 3},
+  "store": {"ackedThroughEventSeq": "2", "nextEventSeq": "3", "retainedEntries": 0, "eventLoss": {"retentionExpired": "2"}},
+  "retired": null
+}

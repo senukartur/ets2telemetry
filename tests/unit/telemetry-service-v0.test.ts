@@ -244,3 +244,50 @@ it('closes malformed input over a real Windows pipe', async () => {
   try {ingestion.select('synthetic', pipe); await vi.waitFor(() => expect(states.at(-1)?.status).toBe('incompatible')); expect(states.at(-1)?.fresh).toBe(false);}
   finally {await ingestion.stop(); for (const socket of sockets) socket.destroy(); await new Promise<void>(resolve => server.close(() => resolve()));}
 });
+async function stoppedService(stopProbe: (report: ProbeDependencies['report']) => Promise<void>) {
+  vi.useFakeTimers();
+  const exit = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+  const previousPort = Object.getOwnPropertyDescriptor(process, 'parentPort');
+  const parent = Object.assign(new EventEmitter(), {postMessage: vi.fn()});
+  Object.defineProperty(process, 'parentPort', {configurable: true, value: parent});
+  const log = vi.fn();
+  vi.doMock('../../apps/desktop/src/diagnostics', () => ({createDiagnostics: () => log}));
+  vi.doMock('../../apps/desktop/src/service-probe', () => ({ServiceProbe: class {
+    constructor(private readonly dependencies: ProbeDependencies) {}
+    start() {this.dependencies.report({type: 'ready'}); return Promise.resolve();}
+    stop() {return stopProbe(message => this.dependencies.report(message));}
+  }}));
+  await import('../../apps/desktop/src/telemetry-service');
+  const restore = () => {
+    if (previousPort) Object.defineProperty(process, 'parentPort', previousPort); else Reflect.deleteProperty(process, 'parentPort');
+    exit.mockRestore(); vi.doUnmock('../../apps/desktop/src/diagnostics'); vi.doUnmock('../../apps/desktop/src/service-probe'); vi.resetModules();
+  };
+  const stops = () => parent.postMessage.mock.calls.map(call => call[0] as {type: string}).filter(message => message.type === 'stopped');
+  const steps = () => log.mock.calls.filter(call => call[0] === 'SHUTDOWN_STEP').map(call => call[2] as Record<string, unknown>);
+  return {exit, parent, log, restore, stops, steps, stop: () => parent.emit('message', {data: {type: 'stop'}, ports: []})};
+}
+it('runs the ordered shutdown once and reports exactly one clean stopped message before exit 0', async () => {
+  const f = await stoppedService(report => {report({type: 'stopped'}); return Promise.resolve();});
+  try {
+    f.stop(); f.stop(); await vi.advanceTimersByTimeAsync(0);
+    expect(f.stops()).toEqual([{type: 'stopped', clean: true}]);
+    expect(f.exit).toHaveBeenCalledExactlyOnceWith(0);
+    expect(f.steps().map(step => [step.phase, step.name, step.outcome])).toEqual([['intake', 'ingestion', 'ok'], ['intake', 'capture', 'ok'], ['storage', 'storage-probe', 'ok']]);
+    expect(f.log).toHaveBeenCalledWith('SERVICE_REPORT', {type: 'stopped', clean: true});
+    expect(vi.getTimerCount()).toBe(0);
+  } finally {f.restore();}
+});
+it.each(['hanging', 'failed'])('reports a %s storage step within its budget as an unclean stop and exits 1', async mode => {
+  const f = await stoppedService(report => {
+    if (mode === 'hanging') return new Promise<void>(() => undefined);
+    report({type: 'failed', code: 'SERVICE_STOP_FAILED'}); return Promise.resolve();
+  });
+  try {
+    f.stop(); await vi.advanceTimersByTimeAsync(mode === 'hanging' ? 999 : 0);
+    if (mode === 'hanging') {expect(f.stops()).toEqual([]); await vi.advanceTimersByTimeAsync(1);}
+    else expect(f.parent.postMessage).toHaveBeenCalledWith({type: 'failed', code: 'SERVICE_STOP_FAILED'});
+    expect(f.stops()).toEqual([{type: 'stopped', clean: false}]);
+    expect(f.exit).toHaveBeenCalledExactlyOnceWith(1);
+    expect(f.steps().find(step => step.name === 'storage-probe')).toMatchObject({outcome: mode === 'hanging' ? 'timeout' : 'failed'});
+  } finally {f.restore();}
+});

@@ -74,6 +74,8 @@ npx shadcn@4.21.4 add <component>
 
 `components.json` holds the CLI configuration (`radix-nova` preset, stylesheet `apps/desktop/src/index.css`). Review `package.json` and `package-lock.json` after each add: the repository pins exact versions through `.npmrc`, and a component may bring new dependencies. Do not run `shadcn init`; the build has no `vite.config` file for it to edit. `index.css` contains the CLI's `shadcn/tailwind.css` inlined, which is what `shadcn eject` produces, so the CLI package stays out of the dependency tree. Re-inline the file when moving to a newer preset.
 
+Components in use: `card` and `button` (ET-025) and `alert` (ET-011a, added with `npx shadcn@4.21.4 add alert`, which left `package.json` and `package-lock.json` unchanged). The dashboard's Exit button imports `button.tsx`, whose `radix-ui` import makes the renderer build print Vite `MODULE_LEVEL_DIRECTIVE` warnings about Radix's `"use client"` directives; they are harmless in a client-only bundle.
+
 Constraints that are easy to break:
 
 - **Path alias.** `tsconfig.json` maps `@/*` to `apps/desktop/src/*` and `scripts/build.mjs` repeats it as a Vite alias; keep the two in step. The shadcn documentation tells you to add `baseUrl`, but TypeScript 7.0 removed that option (error TS5102). Use `paths` alone.
@@ -115,6 +117,8 @@ Findings fixed instead of excepted: a function that assigned the automatic `$arg
 Resolve `%LOCALAPPDATA%` at runtime. The application root is `%LOCALAPPDATA%\ETS2Telemetry`; planned locations are `data\telemetry.sqlite`, `settings\`, `logs\`, `backups\`, and `plugins\` for project-owned plugin metadata. Opt-in CAP0 evidence captures use the separate `captures\` directory. Binary installation has an independent Squirrel identity/root. The scaffold creates startup logs only, with a separate temporary SQLite probe. No production history, updater, migration, production backup, or uninstall deletion is implemented.
 
 Normal diagnostics use stable error codes. Opt-in diagnostic runs retain bounded error details and child output; see the recovery procedure below for file limits, privacy and paths. Startup has a 15-second deadline; the storage probe has 10 seconds; orderly service stop allows 3 seconds before forced termination and 5 seconds before failed application exit. These application timers require a responsive event loop, so the external watchdog provides a separate deadline.
+
+Since ET-011a the application is single-instance and lives in the notification area. Closing the main window hides it to the tray; use the tray's or the dashboard's **Exit ETS2Telemetry** to stop it. A second launch writes no diagnostic log, starts no service, window or tray, exits 0 and brings the running dashboard forward; it is also the guaranteed way back if the tray icon does not appear. The instance lock is keyed by Electron's `userData` directory, so a development launch beside an installed copy only focuses the installed one; give it a separate absolute `ETS2TELEMETRY_PROFILE_DIR` to run both. See [the application lifecycle](app-lifecycle.md).
 
 Squirrel lifecycle arguments are handled before service/window creation through electron-squirrel-startup. The [native ownership harness](../tests/windows/README.md) verified install, repair, local synthetic update, both installed worker/security smokes and uninstall with preserved owner files. Acceptance combines six normal operations with separately reviewed corrected Squirrel residue postconditions and exact test cleanup; the original failed wrapper report is retained. The synthetic installer version 0.1.1 retains application 0.1.0 bytes and does not test production migrations/releases. Uninstall retains the separate data root; optional owned-data deletion belongs to ET-018. Squirrel may leave its sealed helper binaries and .dead marker; the test reports that residue explicitly. Do not install/remove against pre-existing owner state through this fresh-install harness.
 
@@ -212,3 +216,13 @@ The ET-006a candidate extends npm run build to configure and compile the fixed n
 ## Main-window and overlay renderer styles
 
 ET-008 preserves the ET-025 Tailwind v4/shadcn main-window theme. The renderer entry dispatches to separate dynamic view modules: only the dashboard imports `index.css` and shadcn Card; only the overlay imports `renderer.css`. Do not add the dashboard stylesheet to HTML or the shared entry because its base body background makes the transparent overlay opaque. Keep the existing `index.html?view=overlay` route and separate preload APIs. The emitted renderer test and bounded Windows runtime journeys check the generated assets and computed styles independently of real game visibility.
+
+## Durable storage tests (ET-013)
+
+ET-013 PR-1 adds the storage core in `packages/storage` ([storage](storage.md)). Run its suite from the repository root after `npm ci`:
+
+```powershell
+npm run test:storage
+```
+
+The command runs `node scripts/run-electron-node.mjs node_modules/vitest/vitest.mjs run --config vitest.storage.config.mts`. Vitest then runs inside the pinned Electron executable with `ELECTRON_RUN_AS_NODE=1`, so better-sqlite3 loads under the same runtime and module ABI as the telemetry service. The command prints the observed runtime and fails under any other one. Arguments after `--` reach Vitest, for example `npm run test:storage -- tests/storage/migrations.test.ts`. The suite writes only to temporary directories. The production history database, the `synthetic` directory and the storage size measurement arrive with ET-013 PR-2; until then no production history file is created.

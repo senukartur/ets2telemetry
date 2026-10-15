@@ -1,0 +1,18 @@
+{
+  "format": "ets2telemetry-simulator-v1", "schemaVersion": 1, "id": "crash-before-commit",
+  "purpose": "The client process crashes before committing eventSeq 2; no ACK covers it, the producer retains it and a new client instance receives it again as a first commit, followed by the offline loss observed while no client was connected.",
+  "reg": ["REG-006"], "origin": "synthetic", "game": "ets2", "seed": "et005b-crash-before-commit", "provenance": null,
+  "source": {"versions": {"telemetryApi": {"major": 1, "minor": 1}, "gameTelemetry": {"major": 1, "minor": 19}, "sdkArchive": "scs-sdk-1.15"}, "gameplayEvents": "registered", "currency": "unknown", "gameMode": "unknown"},
+  "steps": [
+    {"atMs": 10, "action": "configuration", "id": "job", "attributes": [{"name": "cargo.id", "sdkType": "string", "value": "synthetic_cargo"}]},
+    {"atMs": 20, "action": "lifecycle", "event": "simulation.started"},
+    {"atMs": 30, "action": "lifecycle", "event": "simulation.paused"},
+    {"atMs": 40, "action": "frame"}
+  ],
+  "transport": [
+    {"atMs": 0, "action": "connect", "client": {"durable": true, "commit": "failAt:2", "ack": "each"}},
+    {"atMs": 50, "action": "disconnect"},
+    {"atMs": 100, "action": "connect", "client": {"durable": true}},
+    {"atMs": 150, "action": "disconnect"}
+  ]
+}
