@@ -78,11 +78,12 @@ export class HistoryStorage {
    * to end. Rejects when the worker had to be terminated, so the step reports a failed outcome.
    */
   async close(): Promise<void> {
-    const client = this.#client, wasOpen = () => this.#state === 'open';
+    const client = this.#client;
     if (!client) { this.#state = 'closed'; return; }
     const {clean} = await client.close();
     await this.#opening;
-    const opened = wasOpen();
+    // Still open here only when the database opened and no failure followed.
+    const opened = this.#state === 'open';
     this.#state = 'closed';
     if (!clean) throw new Error('History storage did not close cleanly');
     if (opened) this.options.log('HISTORY_STORAGE_CLOSED');
