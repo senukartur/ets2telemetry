@@ -213,10 +213,19 @@ describe('StorageClient close', () => {
     expect(second.value).toEqual({clean: false});
     expect(refused.handle.terminate).toHaveBeenCalledOnce();
   });
-  it('after a failure, close only waits for the terminated thread', async () => {
+  // Requirement change (PR #60 review): an earlier failure means the database was not closed in order, so the close of
+  // a failed client is never clean, after a worker error and after a missed deadline alike.
+  it('after a worker failure, close waits for the terminated thread and reports an unclean close', async () => {
     const f = fixture();
     f.error();
-    await expect(f.client.close()).resolves.toEqual({clean: true});
+    await expect(f.client.close()).resolves.toEqual({clean: false});
     await expect(f.client.commitEvent({message: {}})).resolves.toEqual(error('STORAGE_CLOSED'));
+  });
+  it('after a missed deadline, close reports an unclean close', async () => {
+    const f = fixture();
+    void f.client.commitEvent({message: {}});
+    await vi.advanceTimersByTimeAsync(COMMAND_DEADLINE_MS);
+    expect(f.client.state).toBe('failed');
+    await expect(f.client.close()).resolves.toEqual({clean: false});
   });
 });

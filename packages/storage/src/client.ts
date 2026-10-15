@@ -96,15 +96,16 @@ export class StorageClient {
    * Orderly close: queued commands get STORAGE_CLOSED, the command in flight finishes with its real result, then the
    * worker closes the database (SQLite checkpoints the WAL) and its thread exits. Resolves `{clean: true}` only after
    * the worker acknowledged the close and exited. After `closeGraceMs` the worker is terminated, the command in flight
-   * gets WORKER_FAILED and the result is `{clean: false}`. A worker that already failed has nothing left to close.
+   * gets WORKER_FAILED and the result is `{clean: false}`. A client that already failed (worker error or exit, missed
+   * deadline, malformed answer) never closed its database in order: closing waits for the terminated thread, within the
+   * grace, and always resolves `{clean: false}`.
    */
   close(): Promise<{clean: boolean}> {
     if (this.#close) return this.#close;
     this.#close = new Promise(resolve => { this.#finishClose = clean => { this.#timers.clearTimeout(this.#closeTimer); resolve({clean}); }; });
     if (this.#state === 'failed') {
-      // The failure was reported when it happened; closing only waits for the terminated thread, within the grace.
       this.#closeTimer = this.#timers.setTimeout(() => this.#finishClose?.(false), this.#options.closeGraceMs);
-      void this.#terminate().then(() => this.#finishClose?.(true));
+      void this.#terminate().then(() => this.#finishClose?.(false));
       return this.#close;
     }
     this.#state = 'closing';

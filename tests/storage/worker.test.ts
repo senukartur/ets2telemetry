@@ -116,7 +116,8 @@ describe('storage worker', () => {
     expect(outcomes.slice(firstFailure).every(outcome => outcome === 'WORKER_FAILED')).toBe(true);
     expect(outcomes.slice(0, firstFailure).every(outcome => outcome === 'ok')).toBe(true);
     refused(await client.committedThrough(P1), 'WORKER_FAILED');
-    expect(await client.close()).toEqual({clean: true});
+    // The terminated worker never closed the database in order.
+    expect(await client.close()).toEqual({clean: false});
     // Every reported commit is durable: the reopened database covers at least the last acknowledged eventSeq.
     const reopened = startWorker();
     ok(await reopened.client.open(options()));

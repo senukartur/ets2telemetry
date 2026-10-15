@@ -84,8 +84,18 @@ describe('history storage at service start (OD-2)', () => {
     f.history.start(); await vi.advanceTimersByTimeAsync(0);
     f.crash(); f.crash();
     expect(f.history.state).toBe('unavailable');
-    await f.history.close();
+    // The database was not closed in order, so the shutdown step must not report success (PR #60 review).
+    await expect(f.history.close()).rejects.toThrow('History storage did not close cleanly');
     expect(f.events()).toEqual([['HISTORY_STORAGE_OPENED', {schemaVersion: 1, created: true, migratedFrom: null}], ['HISTORY_STORAGE_UNAVAILABLE', {code: 'WORKER_FAILED'}]]);
+  });
+  it('fails the shutdown step after a worker crash earlier in the session', async () => {
+    const f = fixture();
+    f.history.start(); await vi.advanceTimersByTimeAsync(0);
+    f.crash();
+    const sequence = new ShutdownSequence(f.log, {...timers, now: () => Date.now()});
+    sequence.register('storage', {name: 'history-storage', budgetMs: HISTORY_CLOSE_BUDGET_MS, run: () => f.history.close()});
+    await expect(sequence.run()).resolves.toEqual({clean: false});
+    expect(f.log.mock.calls.find(call => call[0] === 'SHUTDOWN_STEP')?.[2]).toMatchObject({phase: 'storage', name: 'history-storage', outcome: 'failed'});
   });
   it('uses fixed event names that the smoke diagnostics never treat as failures', async () => {
     const opened = fixture(), refused = fixture('C:\\isolated', {ok: false, error: storageError('DATABASE_LOCKED')});

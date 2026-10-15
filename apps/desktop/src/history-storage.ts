@@ -75,7 +75,8 @@ export class HistoryStorage {
 
   /**
    * The `history-storage` shutdown step: waits for a running open, closes the database and waits for the worker thread
-   * to end. Rejects when the worker had to be terminated, so the step reports a failed outcome.
+   * to end. Rejects when the worker had to be terminated or had failed earlier in the session, so the step reports a
+   * failed outcome.
    */
   async close(): Promise<void> {
     const client = this.#client;
