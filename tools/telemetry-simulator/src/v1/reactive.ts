@@ -212,7 +212,6 @@ class Reactive extends PipeHost {
     }
     this.pumpAll(this.atMs);
   }
-  /** A scripted disconnect: bounded wait for the ACKs of everything written, then a graceful close. */
   /**
    * Waits up to the quiesce bound until the live client has acknowledged everything written to it, or has left. With
    * `awaitScriptedAcks`, a client scripted to acknowledge every commit is waited for without that bound, so how long
@@ -225,6 +224,7 @@ class Reactive extends PipeHost {
     if (!this.awaitScriptedAcks || !l.policy.durable || l.policy.ack.kind !== 'each' || l.policy.commit.kind === 'none') { await this.wait(settled, this.quiesceMs); return; }
     if (!await this.wait(settled, this.settleMs)) throw new Error(`Connection ${l.record.connection}: the client neither acknowledged everything written to it nor left within ${this.settleMs} ms`);
   }
+  /** A scripted disconnect: wait (see quiesce) for the ACKs of everything written, then a graceful close. */
   private async disconnect(): Promise<void> {
     const l = this.live; if (!l) return;
     await this.quiesce();
