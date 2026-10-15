@@ -101,13 +101,15 @@ Hydrated checkpoint configuration is current state only. The view shows the job 
 | `game-clock-rotated` | The game-time clock id differs (timer restart or save load) |
 | `unavailable` | A value is missing, or the capture time runs backwards |
 | `odometer-regressed` | The odometer decreases |
-| `odometer-jump` | The step exceeds 100 m/s × elapsed source seconds + 50 m (teleport, ferry, train) |
+| `odometer-jump` | The step exceeds 100 m/s × elapsed source seconds + the margin (teleport, ferry, train). The margin is the larger of 50 m and two float32 quanta of the larger reading (`odometerJumpMargin`) |
 | `continuous` | Otherwise, with metres ≥ 0; a road stop is 0 m |
 | Fuel `consumed` | Any decrease, with its exact amount in litres (> 0) |
 | Fuel `refuelled` | An increase above 0.01 L, with its exact amount |
 | Fuel `unchanged` | No change or an increase of at most 0.01 L, with that exact `increaseLiters` (≥ 0) |
 
 Checks run in that order, so a save load that also regresses the odometer reports `game-clock-rotated`. The thresholds are named constants (`MAX_PLAUSIBLE_SPEED_MPS`, `ODOMETER_JUMP_MARGIN_METERS`, `FUEL_NOISE_LITERS`) and are provisional until real sessions confirm them. ET-014 decides what each result means for a trip.
+
+Odometer precision: `truck.odometer` is an SDK float32 in km, so readings are quantized. One step (`float32Quantum`) is 1/16 km (62.5 m) from 2^19 = 524,288 km and 1/8 km (125 m) from 2^20 = 1,048,576 km. A 20 Hz step (50 ms) has a fixed threshold of 5 m + 50 m = 55 m, so without the precision-aware margin every increment of a high-mileage truck would be a jump. With it, the threshold at 2^19 km is 5 m + 125 m = 130 m, and at 2^20 km 5 m + 250 m = 255 m; at 1 Hz the fixed margin already covered one step. Round-to-nearest float32 is monotonic, so quantization alone never turns a non-decreasing odometer into a decrease, and any decrease stays `odometer-regressed`.
 
 Caller contract for fuel: the 0.01 L band applies to refuel detection only. Ordinary steps are far smaller than the band (about 0.0075 L per second at 30–35 L/100 km and 80–90 km/h, and a twentieth of that at 20 Hz), so every decrease is reported as consumption. Over consecutive steps without a discontinuity or `unavailable`, the sum of `consumed` equals the sum of all decreases, and the net fuel drop is that sum minus the summed `increaseLiters` of `unchanged` steps. A `refuelled` step is never consumption, and a discontinuity or `unavailable` step contributes nothing.
 
