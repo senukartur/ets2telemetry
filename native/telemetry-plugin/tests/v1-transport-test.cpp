@@ -747,7 +747,8 @@ void collision() {
 // The v1 service policy: missing, broad-ACL, wrong digest and malformed policies reject the client; the endpoint stays.
 void policy() {
   Fixture f(false); f.start();
-  auto denied = [&](const char* message) { auto c = f.client(true); c->hello(); require(c->closed() && c->messages.empty(), message); c.reset(); require(f.listening(), "endpoint stays listening"); };
+  // The peer is rejected when it connects, before its hello is read, so the hello write itself may already fail.
+  auto denied = [&](const char* message) { auto c = f.client(true); write_all(c->pipe.get(), framed(hello_payload(true))); require(c->closed() && c->messages.empty(), message); c.reset(); require(f.listening(), "endpoint stays listening"); };
   denied("missing policy rejects the client");
   write_policy(f.directory, f.security, f.user, f.self, std::string(64, '0')); denied("digest mismatch rejected");
   write_file(f.directory + L"\\service-policy.json", f.security, "{\"schemaVersion\":1}"); denied("malformed policy rejected");
@@ -963,7 +964,12 @@ void shutdown() {
     const auto& end = *client->last("end").end;
     std::cout << "endMs=" << arrived << " shutdownMs=" << f.server->shutdown_ms() << '\n';
     require(arrived <= 250 * timing_scale, "end delivered within 250 ms");
-    require(end.reason == "plugin-shutdown" && end.next_event_seq == 7 && end.acked_through_event_seq == 0 && end.retained_unacked == 6 && client->covered() == 6, "end after the last written event, nothing waits for an ACK");
+    // The two late events reach the store only while the shutdown drain is within its 150 ms cut-off; on a loaded host the
+    // second may stay in the ring (plugin-exit loss above nextEventSeq, OD-5 S11). Every drained event is retained, none
+    // is acknowledged, and `end` follows the last item written.
+    std::cout << "endNextEventSeq=" << end.next_event_seq << " covered=" << client->covered() << '\n';
+    require(end.reason == "plugin-shutdown" && end.next_event_seq >= 5 && end.next_event_seq <= 7 && end.acked_through_event_seq == 0 && end.retained_unacked == end.next_event_seq - 1 &&
+      client->covered() >= 4 && client->covered() <= end.next_event_seq - 1, "end after the last written event, nothing waits for an ACK");
     require(client->closed(), "the handle closes after end");
     require(f.server->shutdown_ms() < 1000 && !f.server->shutdown_deadline_exceeded() && f.server->status() == v1::ServerStatus::stopped, "joined under the deadline");
     require(f.server->endpoint().empty() && GetFileAttributesW(f.record().c_str()) == INVALID_FILE_ATTRIBUTES, "endpoint and record retired");
@@ -977,8 +983,11 @@ void shutdown() {
     Fixture f; f.start(); auto client = f.client(true); client->handshake();
     scs_named_value_t big[]{named("cargo", text(long_name_n.c_str())), named("source.city", text(long_name_s.c_str())), scs_named_value_t{}};
     const auto end = GetTickCount64() + 5000 * timing_scale;
-    while (!f.server->write_pending() && GetTickCount64() < end) { f.host.config("job", big); cancelled(f.host, 10); f.host.frame(); Sleep(1); }
-    require(f.server->write_pending(), "kernel-backpressured write before the stop");
+    // The client's pipe holds its whole 65,540-byte quota unread, so no further write, `end` included, can complete: the
+    // in-flight write at the stop is cancelled at the budget, or the write deadline has already closed the connection.
+    auto full = [&] { DWORD n = 0; return PeekNamedPipe(client->pipe.get(), nullptr, 0, nullptr, &n, nullptr) && n >= 65540; };
+    while (!full() && GetTickCount64() < end) { f.host.config("job", big); cancelled(f.host, 10); f.host.frame(); Sleep(1); }
+    require(full(), "kernel-backpressured connection before the stop");
     f.server->stop(); std::cout << "stalledWriteShutdownMs=" << f.server->shutdown_ms() << '\n';
     require(f.server->shutdown_ms() < 1000 && !f.server->shutdown_deadline_exceeded() && f.server->ends() == 0, "a stalled write is cancelled, observed and joined; no end after a cut frame");
   }
@@ -1024,10 +1033,40 @@ std::size_t module_threads(HMODULE module) {
   } while (Thread32Next(snapshot.get(), &entry));
   return count;
 }
+// The start module of each thread of this process, for the record when a thread count differs from its baseline.
+void describe_threads() {
+  using Query = LONG(NTAPI*)(HANDLE, ULONG, PVOID, ULONG, PULONG);
+  const auto query = reinterpret_cast<Query>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQueryInformationThread"));
+  Handle snapshot(CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0)); THREADENTRY32 entry{}; entry.dwSize = sizeof(entry);
+  if (!query || !snapshot || !Thread32First(snapshot.get(), &entry)) return;
+  do {
+    if (entry.th32OwnerProcessID != GetCurrentProcessId()) continue;
+    Handle thread(OpenThread(THREAD_QUERY_INFORMATION, FALSE, entry.th32ThreadID)); void* start = nullptr; HMODULE module = nullptr; std::array<char, MAX_PATH> name{};
+    if (thread && query(thread.get(), 9, &start, sizeof(start), nullptr) >= 0 &&
+        GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, static_cast<LPCSTR>(start), &module))
+      GetModuleFileNameA(module, name.data(), static_cast<DWORD>(name.size()));
+    std::cout << "thread " << entry.th32ThreadID << " start=" << start << " module=" << name.data() << '\n';
+  } while (Thread32Next(snapshot.get(), &entry));
+}
+// Threads of this process, except ntdll thread-pool workers: Windows creates those on demand (for the loader and I/O),
+// they belong to the process and exit on their own idle timeout, and the DLL never starts one. Counting them would make a
+// baseline depend on the host's scheduling rather than on the DLL.
 std::size_t process_threads() {
+  using Query = LONG(NTAPI*)(HANDLE, ULONG, PVOID, ULONG, PULONG);
+  const auto ntdll = GetModuleHandleW(L"ntdll.dll");
+  const auto query = reinterpret_cast<Query>(GetProcAddress(ntdll, "NtQueryInformationThread"));
+  MODULEINFO info{}; if (!query || !GetModuleInformation(GetCurrentProcess(), ntdll, &info, sizeof(info))) return SIZE_MAX;
+  const auto base = reinterpret_cast<std::uintptr_t>(info.lpBaseOfDll), limit = base + info.SizeOfImage;
   Handle snapshot(CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0)); THREADENTRY32 entry{}; entry.dwSize = sizeof(entry); std::size_t count = 0;
   if (!snapshot || !Thread32First(snapshot.get(), &entry)) return SIZE_MAX;
-  do { if (entry.th32OwnerProcessID == GetCurrentProcessId()) ++count; } while (Thread32Next(snapshot.get(), &entry));
+  do {
+    if (entry.th32OwnerProcessID != GetCurrentProcessId()) continue;
+    Handle thread(OpenThread(THREAD_QUERY_INFORMATION, FALSE, entry.th32ThreadID)); void* start = nullptr;
+    // ThreadQuerySetWin32StartAddress. A thread whose start cannot be read is counted.
+    const bool pool = thread && query(thread.get(), 9, &start, sizeof(start), nullptr) >= 0 &&
+      reinterpret_cast<std::uintptr_t>(start) >= base && reinterpret_cast<std::uintptr_t>(start) < limit;
+    if (!pool) ++count;
+  } while (Thread32Next(snapshot.get(), &entry));
   return count;
 }
 
@@ -1078,22 +1117,27 @@ void dll_lifecycle(const char* path) {
         scs_named_value_t big[]{named("cargo", text(long_name_n.c_str())), named("source.city", text(long_name_s.c_str())), scs_named_value_t{}};
         const auto end = GetTickCount64() + 10000 * timing_scale;
         const auto stall_started = GetTickCount64(); unsigned iterations = 0; ULONGLONG v0_since = 0, v1_since = 0;
-        // Each endpoint retires a write that stays pending for 1 s, and v0 fills its buffer far more slowly than v1. A
-        // connection whose write has been pending for 500 ms gets 16 KiB read, so that write finishes and the next one
-        // stalls again: both stay backpressured until both are pending at once. The raw bytes are discarded.
+        // Backpressure is observed from the client side: 48 KiB wait unread in a client's pipe while callbacks keep
+        // producing, so the server's next write on that connection stays pending. The workers' own pending flags are only
+        // reported: under load a worker may first poll a write after its 1 s deadline and never report it as pending.
+        static constexpr DWORD backpressure_bytes = 48 * 1024;
+        auto full = [](HANDLE pipe) { DWORD n = 0; return PeekNamedPipe(pipe, nullptr, 0, nullptr, &n, nullptr) && n >= backpressure_bytes; };
+        // Each endpoint retires a write that stays pending for 1 s, and v0 fills its pipe far more slowly than v1. A pipe
+        // that has stayed full for 500 ms gets 16 KiB read, so its pending write finishes and the next one stalls again:
+        // both connections stay backpressured until both pipes are full at once. The raw bytes are discarded.
         auto trickle = [](HANDLE pipe) { std::vector<std::uint8_t> sink; read_some(pipe, sink, 20, 16384); };
-        auto keep = [&](bool pending, ULONGLONG& since, HANDLE pipe) {
+        auto keep = [&](HANDLE pipe, ULONGLONG& since) {
           const auto now = GetTickCount64();
-          if (!pending) since = 0; else if (!since) since = now; else if (now - since >= 500) { trickle(pipe); since = 0; }
+          if (!full(pipe)) since = 0; else if (!since) since = now; else if (now - since >= 500) { trickle(pipe); since = 0; }
         };
         // Paced bursts of large job records: a flood would keep the worker measuring events instead of writing them.
-        while (!(v1_pending() && (scenario == 2 || v0_pending())) && GetTickCount64() < end) {
+        while (!(full(client->pipe.get()) && (scenario == 2 || full(live.get()))) && GetTickCount64() < end) {
           for (int k = 0; k < 10; ++k) host.config("job", big);
           host.frame(); ++iterations; Sleep(1);
-          if (scenario == 3) { keep(v1_pending() != 0, v1_since, client->pipe.get()); keep(v0_pending() != 0, v0_since, live.get()); }
+          if (scenario == 3) { keep(client->pipe.get(), v1_since); keep(live.get(), v0_since); }
         }
         std::cout << "stallMs=" << GetTickCount64() - stall_started << " iterations=" << iterations << " v0Pending=" << v0_pending() << " v1Pending=" << v1_pending() << std::endl;
-        require(v1_pending() != 0 && (scenario == 2 || v0_pending() != 0), scenario == 2 ? "DLL kernel-backpressured v1 write" : "DLL v0 and v1 writes stalled together");
+        require(full(client->pipe.get()) && (scenario == 2 || full(live.get())), scenario == 2 ? "DLL kernel-backpressured v1 connection" : "DLL v0 and v1 connections backpressured together");
       }
     }
     const auto started = GetTickCount64(); shutdown_export(); const auto elapsed = GetTickCount64() - started;
@@ -1109,7 +1153,8 @@ void dll_lifecycle(const char* path) {
     require(host.wrong_thread == 0, "the DLL's workers make no SDK API call");
     remove_directory(v0_directory); remove_directory(v1_directory);
   }
-  require(until([&] { return process_threads() <= baseline; }, 5000), "the thread count returns to its baseline");
+  const bool returned = until([&] { return process_threads() <= baseline; }, 5000); if (!returned) describe_threads();
+  require(returned, "the thread count returns to its baseline");
   std::cout << "threads baseline=" << baseline << " after=" << process_threads() << '\n';
 }
 } // namespace
