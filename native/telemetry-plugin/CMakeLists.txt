@@ -153,6 +153,9 @@ target_link_libraries(game-window-monitor-test PRIVATE game-window-monitor-test-
 target_compile_options(game-window-monitor-test PRIVATE /W4 /WX)
 add_test(NAME game-window-monitor-contract COMMAND game-window-monitor-test)
 set_tests_properties(game-window-monitor-contract PROPERTIES TIMEOUT 20)
+# The peer starts 2.5 s late, beyond the former 1.5 s readiness deadline (ET-007 flake record).
+add_test(NAME game-window-monitor-contract-slow-peer COMMAND game-window-monitor-test --peer-startup-delay-ms 2500)
+set_tests_properties(game-window-monitor-contract-slow-peer PROPERTIES TIMEOUT 20)
 
 # CAP0 evidence capture: queue/wire/server controls over actual local pipes with a fake SDK host.
 add_executable(capture-cap0-test tests/capture-cap0-test.cpp)
@@ -248,6 +251,8 @@ if(ETS2TELEMETRY_ASAN_TESTS)
   target_link_options(game-window-monitor-asan-test PRIVATE /INCREMENTAL:NO /DEBUG)
   add_test(NAME game-window-monitor-asan-contract COMMAND game-window-monitor-asan-test)
   set_tests_properties(game-window-monitor-asan-contract PROPERTIES TIMEOUT 20)
+  add_test(NAME game-window-monitor-asan-contract-slow-peer COMMAND game-window-monitor-asan-test --peer-startup-delay-ms 2500)
+  set_tests_properties(game-window-monitor-asan-contract-slow-peer PROPERTIES TIMEOUT 20)
   add_library(snapshot-transport-asan STATIC src/snapshot-wire.cpp src/pipe-security.cpp src/pipe-discovery.cpp src/pipe-server.cpp src/capture-wire.cpp src/capture-server.cpp src/v1-state.cpp src/v1-server.cpp)
   target_link_libraries(snapshot-transport-asan PUBLIC sdk-adapter-asan protocol-v0-asan v1-producer-asan game-window-monitor-asan advapi32 shell32 ole32)
   target_compile_options(snapshot-transport-asan PRIVATE /W4 /WX /fsanitize=address /Zi)
