@@ -25,7 +25,8 @@ export const ERROR_MESSAGES: Readonly<Record<StorageErrorCode, string>> = {
   PURPOSE_MISMATCH: 'The database holds a different kind of data than requested.',
   DURABILITY_UNVERIFIED: 'The required durability settings could not be verified.',
   BACKUP_FAILED: 'A verified backup could not be created or read.',
-  MIGRATION_FAILED: 'The database schema could not be upgraded; the database is unchanged.'
+  MIGRATION_FAILED: 'The database schema could not be upgraded; the database is unchanged.',
+  INTERNAL: 'An unexpected storage failure occurred.'
 };
 /** Codes that a caller may retry unchanged after the condition clears. */
 const RETRYABLE: ReadonlySet<StorageErrorCode> = new Set(['DATABASE_LOCKED', 'DISK_FULL', 'IO_ERROR', 'STORAGE_BUSY', 'TIMEOUT']);
@@ -62,8 +63,13 @@ const ERRNO: Readonly<Record<string, StorageErrorCode>> = {
   EIO: 'IO_ERROR'
 };
 
-/** Classifies any thrown value. Unknown failures become IO_ERROR rather than leaking their message. */
-export function classifyError(error: unknown, fallback: StorageErrorCode = 'IO_ERROR'): StorageError {
+/**
+ * Classifies any thrown value without leaking its message. A failure that is neither a known SQLite result code nor a
+ * known operating-system error is a defect in the storage code (for example a TypeError, or a RangeError that
+ * better-sqlite3 throws for a wrong parameter count): it becomes the non-retryable INTERNAL unless the caller names a
+ * more specific fallback. Inputs are validated before they reach SQLite, so a range problem is never inferred here.
+ */
+export function classifyError(error: unknown, fallback: StorageErrorCode = 'INTERNAL'): StorageError {
   if (error instanceof StorageFailure) return error.error;
   const code = typeof error === 'object' && error !== null && typeof (error as {code?: unknown}).code === 'string' ? (error as {code: string}).code : undefined;
   if (code?.startsWith('SQLITE_')) {
@@ -71,7 +77,5 @@ export function classifyError(error: unknown, fallback: StorageErrorCode = 'IO_E
     return storageError(match ? match[1] : fallback, {sqliteCode: code});
   }
   if (code && ERRNO[code]) return storageError(ERRNO[code]);
-  // better-sqlite3 rejects an out-of-range BigInt parameter with a RangeError before SQLite sees it.
-  if (error instanceof RangeError) return storageError('VALUE_OUT_OF_RANGE');
   return storageError(fallback);
 }

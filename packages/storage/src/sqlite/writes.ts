@@ -58,7 +58,7 @@ const transact = <T>(conn: StorageConnection, body: (db: Database.Database) => T
  * first evidence; later changes arrive as durable `source.gameMode` events and are kept beside it.
  */
 export function upsertSession(conn: StorageConnection, input: {message: unknown}): {created: boolean; committedThroughEventSeq: Uint64} {
-  const m = serverMessage(input.message, 'welcome');
+  const m = serverMessage(input?.message, 'welcome');
   if (m.kind !== 'welcome') fail('INVALID_INPUT');
   const s = m.source, d = m.data, eventTypes = JSON.stringify(d.capabilities.eventTypes);
   const [module, moduleState] = availabilityColumns(d.gameMode.module, value => value);

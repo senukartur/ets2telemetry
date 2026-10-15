@@ -13,7 +13,9 @@ export type StorageErrorCode =
   | 'DATABASE_LOCKED' | 'PERMISSION_DENIED' | 'DISK_FULL' | 'IO_ERROR' | 'DATABASE_CORRUPT' | 'CONSTRAINT_VIOLATION'
   | 'INVALID_INPUT' | 'UNKNOWN_SESSION' | 'UNKNOWN_TRIP' | 'SESSION_CONFLICT' | 'VALUE_OUT_OF_RANGE'
   | 'STORAGE_CLOSED' | 'STORAGE_BUSY' | 'WORKER_FAILED' | 'TIMEOUT' | 'DATA_PATH_INVALID'
-  | 'DATABASE_UNRECOGNIZED' | 'SCHEMA_NEWER' | 'PURPOSE_MISMATCH' | 'DURABILITY_UNVERIFIED' | 'BACKUP_FAILED' | 'MIGRATION_FAILED';
+  | 'DATABASE_UNRECOGNIZED' | 'SCHEMA_NEWER' | 'PURPOSE_MISMATCH' | 'DURABILITY_UNVERIFIED' | 'BACKUP_FAILED' | 'MIGRATION_FAILED'
+  // An unexpected failure inside the storage code itself; never retried automatically.
+  | 'INTERNAL';
 /**
  * A failed command. `message` is fixed text for the code and never contains a filesystem path or SQLite message.
  * `cause` refines BACKUP_FAILED and MIGRATION_FAILED; `backupFileName` is a bare file name, never a path.

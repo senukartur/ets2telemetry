@@ -16,6 +16,8 @@ function limit(value: unknown, max: number): number {
   if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > max) fail('INVALID_INPUT');
   return value;
 }
+/** Page and scope arguments must be plain objects; anything else is INVALID_INPUT rather than a TypeError. */
+function plainObject(value: unknown): void { if (value === null || typeof value !== 'object' || Array.isArray(value)) fail('INVALID_INPUT'); }
 function sessionId(db: Database.Database, pluginSessionId: unknown): bigint {
   if (!isUuid(pluginSessionId)) fail('INVALID_INPUT');
   const id = statement(db, 'SELECT id FROM plugin_sessions WHERE plugin_session_uuid = ?').pluck().get(pluginSessionId) as bigint | undefined;
@@ -55,6 +57,7 @@ export function getEvent(conn: StorageConnection, pluginSessionId: string, event
 }
 /** Events of a session in eventSeq order after `afterEventSeq` (exclusive), at most 500 per page. */
 export function listEvents(conn: StorageConnection, pluginSessionId: string, page: {afterEventSeq?: Uint64; limit?: number} = {}): EventRow[] {
+  plainObject(page);
   const db = conn.reader(), id = sessionId(db, pluginSessionId);
   return (statement(db, `SELECT ${EVENT_COLUMNS} FROM events WHERE plugin_session_id = ? AND event_seq > ? ORDER BY event_seq LIMIT ?`)
     .all(id, u64Key(page.afterEventSeq ?? '0'), limit(page.limit, MAX_EVENT_PAGE)) as Record<string, unknown>[]).map(eventRow);
@@ -83,6 +86,7 @@ export function getTrip(conn: StorageConnection, tripUuid: string): TripRecord |
 }
 /** Trips in creation order; `cursor` is the opaque `nextCursor` of the previous page. */
 export function listTrips(conn: StorageConnection, page: {cursor?: string; limit?: number} = {}): {trips: TripRecord[]; nextCursor: string | null} {
+  plainObject(page);
   const db = conn.reader(), max = limit(page.limit, MAX_TRIP_PAGE);
   if (page.cursor !== undefined && !/^(0|[1-9][0-9]{0,18})$/.test(page.cursor)) fail('INVALID_INPUT');
   const rows = statement(db, 'SELECT * FROM trips WHERE id > ? ORDER BY id LIMIT ?').all(BigInt(page.cursor ?? '0'), max) as Record<string, unknown>[];
@@ -91,6 +95,7 @@ export function listTrips(conn: StorageConnection, page: {cursor?: string; limit
 
 /** Samples of one trip or one session in insertion order, at most 3,600 per page. `afterId` is the last `id` read. */
 export function listSamples(conn: StorageConnection, scope: {tripUuid: string} | {pluginSessionId: string}, page: {afterId?: string; limit?: number} = {}): SampleRecord[] {
+  plainObject(scope); plainObject(page);
   const db = conn.reader(), max = limit(page.limit, MAX_SAMPLE_BATCH);
   if (page.afterId !== undefined && !/^(0|[1-9][0-9]{0,18})$/.test(page.afterId)) fail('INVALID_INPUT');
   const after = BigInt(page.afterId ?? '0');

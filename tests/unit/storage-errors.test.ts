@@ -4,7 +4,7 @@ import {classifyError, ERROR_MESSAGES, fail, StorageFailure, storageError} from 
 
 const ALL: StorageErrorCode[] = ['DATABASE_LOCKED', 'PERMISSION_DENIED', 'DISK_FULL', 'IO_ERROR', 'DATABASE_CORRUPT', 'CONSTRAINT_VIOLATION', 'INVALID_INPUT',
   'UNKNOWN_SESSION', 'UNKNOWN_TRIP', 'SESSION_CONFLICT', 'VALUE_OUT_OF_RANGE', 'STORAGE_CLOSED', 'STORAGE_BUSY', 'WORKER_FAILED', 'TIMEOUT', 'DATA_PATH_INVALID',
-  'DATABASE_UNRECOGNIZED', 'SCHEMA_NEWER', 'PURPOSE_MISMATCH', 'DURABILITY_UNVERIFIED', 'BACKUP_FAILED', 'MIGRATION_FAILED'];
+  'DATABASE_UNRECOGNIZED', 'SCHEMA_NEWER', 'PURPOSE_MISMATCH', 'DURABILITY_UNVERIFIED', 'BACKUP_FAILED', 'MIGRATION_FAILED', 'INTERNAL'];
 const RETRYABLE: StorageErrorCode[] = ['DATABASE_LOCKED', 'DISK_FULL', 'IO_ERROR', 'STORAGE_BUSY', 'TIMEOUT'];
 const sqlite = (code: string) => Object.assign(new Error(`SQLite failure at C:\\Users\\someone\\AppData\\Local\\ETS2Telemetry\\data\\telemetry.sqlite`), {code});
 
@@ -29,7 +29,9 @@ describe('storage error codes', () => {
     ];
     for (const [sqliteCode, code] of cases) expect(classifyError(sqlite(sqliteCode)), sqliteCode).toEqual({...storageError(code), sqliteCode});
     // A prefix of another family name is not that family.
-    expect(classifyError(sqlite('SQLITE_FULLNESS')).code).toBe('IO_ERROR');
+    expect(classifyError(sqlite('SQLITE_FULLNESS')).code).toBe('INTERNAL');
+    // A generic SQL error (for example a missing table) is a defect, not a retryable disk failure.
+    expect(classifyError(sqlite('SQLITE_ERROR'))).toEqual({...storageError('INTERNAL'), sqliteCode: 'SQLITE_ERROR'});
   });
   it('maps operating-system errors and never copies their messages', () => {
     const cases: [string, StorageErrorCode][] = [['EACCES', 'PERMISSION_DENIED'], ['EPERM', 'PERMISSION_DENIED'], ['ENOSPC', 'DISK_FULL'], ['EBUSY', 'DATABASE_LOCKED'],
@@ -45,8 +47,11 @@ describe('storage error codes', () => {
     try { fail('MIGRATION_FAILED', {backupFileName: 'telemetry-f0000000-v1-20261015T120000000Z.sqlite', cause: 'CONSTRAINT_VIOLATION'}); } catch (error) {
       expect(classifyError(error)).toEqual({...storageError('MIGRATION_FAILED'), backupFileName: 'telemetry-f0000000-v1-20261015T120000000Z.sqlite', cause: 'CONSTRAINT_VIOLATION'});
     }
-    expect(classifyError(new Error('C:\\private\\path'))).toEqual(storageError('IO_ERROR'));
+    expect(classifyError(new Error('C:\\private\\path'))).toEqual(storageError('INTERNAL'));
     expect(classifyError('string thrown', 'DATABASE_CORRUPT')).toEqual(storageError('DATABASE_CORRUPT'));
-    expect(classifyError(new RangeError('BigInt too large'))).toEqual(storageError('VALUE_OUT_OF_RANGE'));
+    // better-sqlite3 throws RangeError for programming errors such as a wrong parameter count.
+    expect(classifyError(new RangeError('Too few parameter values were provided'))).toEqual(storageError('INTERNAL'));
+    expect(classifyError(new TypeError('Cannot read properties of undefined'))).toEqual(storageError('INTERNAL'));
+    expect(storageError('INTERNAL').retryable).toBe(false);
   });
 });
