@@ -3,7 +3,7 @@ import squirrelStartup from 'electron-squirrel-startup';
 import {existsSync, mkdirSync} from 'node:fs';
 import path from 'node:path';
 import type {EventEmitter} from 'node:events';
-import type {AppHealth, AppState, LiveTelemetry, OverlayPresentation, ScaffoldStatus, SourceSelection} from '../../../packages/contracts/src';
+import type {AppHealth, AppState, LiveTelemetry, OverlayPresentation, OverlaySettings, ScaffoldStatus, SettingsView, SourceSelection, UnitProfiles} from '../../../packages/contracts/src';
 import {SettingsBusyError, SettingsError, SettingsStore, settingsDirectory} from './settings-store';
 import {isUnitGame, isUnitProfile} from './unit-profiles';
 import {processEntrypoint} from './entrypoints';
@@ -16,6 +16,8 @@ import {LiveSubscriptions} from './live-subscriptions';
 import {LiveFreshness} from './live-freshness';
 import {OVERLAY_TOPMOST_LEVEL, OverlayController} from './overlay-controller';
 import {overlayPresentation} from './overlay-presentation';
+import {OVERLAY_NOMINAL_SIZE} from './overlay-geometry';
+import {isOverlayLayout, parseOverlaySections} from './overlay-sections';
 import {captureActivation, type CaptureGrant} from './capture-activation';
 import {monitorEventLoopLag} from './event-loop-lag';
 import {ExitCoordinator, secondInstanceAction, type ExitReason} from './app-lifecycle';
@@ -71,9 +73,16 @@ function runApplication(profileError: unknown): void {
   let failureReported = false, reportedFailureCode: unknown;
   const upstreamBudget = new RecoveryBudget(), overlayBudget = new RecoveryBudget();
   const dashboardSubscriptions = new LiveSubscriptions(initialLive(), 1);
-  const overlaySubscriptions = new LiveSubscriptions<OverlayPresentation>(overlayPresentation(initialLive()), 1, 500);
+  // The last projection main published: a non-current projection keeps its shape (ET-012a decision L5).
+  let lastOverlay = overlayPresentation(initialLive());
+  const overlaySubscriptions = new LiveSubscriptions<OverlayPresentation>(lastOverlay, 1, 500);
+  function publishOverlay(live: LiveTelemetry, units: UnitProfiles, settings: OverlaySettings): void {
+    lastOverlay = overlayPresentation(live, units, settings, lastOverlay);
+    overlaySubscriptions.publish(lastOverlay);
+  }
   const freshness = new LiveFreshness(update => {
-    dashboardSubscriptions.publish(update); overlaySubscriptions.publish(overlayPresentation(update, settingsStore.view().units)); overlayController?.update(update);
+    const view = settingsStore.view();
+    dashboardSubscriptions.publish(update); publishOverlay(update, view.units, view.overlay); overlayController?.update(update);
     lastLive = update; presentTray();
   });
   const rendererBudget = new RecoveryBudget();
@@ -139,12 +148,16 @@ function runApplication(profileError: unknown): void {
     pushAppState();
     presentTray(immediate);
   }
-  // A saved unit profile, or a late startup read being applied, pushes the settings view and republishes main's stored
-  // freshness output in the current units. It accepts no observation and renews no SDK or window authority: freshness,
-  // its expiry timers and the overlay placement are untouched.
+  // A saved unit profile or overlay setting, or a late startup read being applied, pushes the settings view and
+  // republishes main's stored freshness output in the current units, layout and sections, then re-places the overlay
+  // for its layout. It accepts no observation and renews no SDK or window authority: freshness and its expiry timers
+  // are untouched, and the placement uses the last observation the controller already holds.
   function settingsChanged(): void {
     pushAppState();
-    if (!lifecycle.exiting) overlaySubscriptions.publish(overlayPresentation(lastLive, settingsStore.view().units));
+    if (lifecycle.exiting) return;
+    const view = settingsStore.view();
+    publishOverlay(lastLive, view.units, view.overlay);
+    overlayController?.setLayout(view.overlay.layout);
   }
   function presentTray(immediate = false): void {
     trayPresenter?.update({health, exiting: lifecycle.exiting, source: {selection: lastLive.selection, status: lastLive.status}}, immediate);
@@ -201,7 +214,9 @@ function runApplication(profileError: unknown): void {
     try {port1.start(); child.postMessage({type: 'subscribe'}, [port2]);} catch (error) {port2.close(); lost(); log('MAIN_SUBSCRIPTION_FAILED', String(error));}
   }
   function createOverlay(): void {
-    const created = overlay = new BrowserWindow({width: 300, height: 132, show: false, frame: false, transparent: true, backgroundColor: '#00000000',
+    // Created at the saved layout's nominal size; the controller sets the actual bounds inside the game's client area.
+    const settings = settingsStore.view(), size = OVERLAY_NOMINAL_SIZE[settings.overlay.layout];
+    const created = overlay = new BrowserWindow({width: size.width, height: size.height, show: false, frame: false, transparent: true, backgroundColor: '#00000000',
       focusable: false, skipTaskbar: true, resizable: false, movable: false, minimizable: false, maximizable: false, fullscreenable: false,
       // A dedicated in-memory session separates the overlay's browser context from the dashboard.
       webPreferences: {partition: 'ets2telemetry-overlay', preload: path.join(__dirname, 'overlay-preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false}});
@@ -210,7 +225,7 @@ function runApplication(profileError: unknown): void {
     // Not the constructor's alwaysOnTop: its default `floating` level stacks the overlay behind the
     // taskbar, which drops WS_EX_TOPMOST while a borderless full-screen game is foreground.
     created.setAlwaysOnTop(true, OVERLAY_TOPMOST_LEVEL);
-    overlayController = new OverlayController(created, screen, phase => log('OVERLAY_TOPMOST_RESTORED', undefined, {phase}));
+    overlayController = new OverlayController(created, screen, phase => log('OVERLAY_TOPMOST_RESTORED', undefined, {phase}), settings.overlay.layout);
     created.webContents.setWindowOpenHandler(() => ({action: 'deny'}));
     created.webContents.on('will-navigate', event => event.preventDefault());
     const retire = () => retireOverlay();
@@ -228,6 +243,8 @@ function runApplication(profileError: unknown): void {
     created.on('closed', () => {retire(); overlay = undefined; overlayController = undefined; if (!supervisor.stopping) stop();});
     const changed = () => overlayController?.topologyChanged();
     screen.on('display-added', changed); screen.on('display-removed', changed); screen.on('display-metrics-changed', changed);
+    // The first delivery to the new document already carries the saved layout and sections.
+    publishOverlay(lastLive, settings.units, settings.overlay);
     loadOverlay();
   }
   function loadOverlay(): void {
@@ -372,14 +389,12 @@ function runApplication(profileError: unknown): void {
     appStateSubscribed = true; window!.webContents.send('app:state', appState());
   });
   ipcMain.on('app:unsubscribe-state', event => {if (trusted(event)) appStateSubscribed = false;});
-  // Exactly a game and a profile id; the store serializes saves and refuses more than four outstanding ones.
-  ipcMain.handle('settings:set-unit-profile', async (event, ...request: unknown[]) => {
-    if (!trusted(event)) throw new Error('Untrusted settings request');
-    const [game, profile] = request;
-    if (request.length !== 2 || !isUnitGame(game) || !isUnitProfile(profile)) throw new Error('Invalid unit profile request');
+  // Runs one validated settings save and applies its result only after the durable write. Shared by every settings
+  // channel, so all of them map errors and refuse requests while exiting in the same way.
+  async function saveSettings(save: () => Promise<SettingsView>): Promise<SettingsView> {
     if (lifecycle.exiting) throw new Error('Settings request was retired');
     try {
-      const view = await settingsStore.setUnitProfile(game, profile);
+      const view = await save();
       settingsChanged();
       return view;
     } catch (error) {
@@ -388,6 +403,27 @@ function runApplication(profileError: unknown): void {
       // Fixed messages only; the store's errors never carry paths. Electron sends the renderer only the message.
       throw new Error(error instanceof SettingsError || error instanceof SettingsBusyError ? error.message : 'Settings could not be saved', {cause: error});
     }
+  }
+  // Exactly a game and a profile id; the store serializes saves and refuses more than four outstanding ones.
+  ipcMain.handle('settings:set-unit-profile', async (event, ...request: unknown[]) => {
+    if (!trusted(event)) throw new Error('Untrusted settings request');
+    const [game, profile] = request;
+    if (request.length !== 2 || !isUnitGame(game) || !isUnitProfile(profile)) throw new Error('Invalid unit profile request');
+    return saveSettings(() => settingsStore.setUnitProfile(game, profile));
+  });
+  // Exactly one layout id. There is no generic settings patch: each channel accepts one fixed, validated shape.
+  ipcMain.handle('settings:set-overlay-layout', async (event, ...request: unknown[]) => {
+    if (!trusted(event)) throw new Error('Untrusted settings request');
+    const [layout] = request;
+    if (request.length !== 1 || !isOverlayLayout(layout)) throw new Error('Invalid overlay layout request');
+    return saveSettings(() => settingsStore.setOverlayLayout(layout));
+  });
+  // Exactly one complete section record: the fourteen ids, booleans only, at least one enabled; stored as a fresh copy.
+  ipcMain.handle('settings:set-overlay-sections', async (event, ...request: unknown[]) => {
+    if (!trusted(event)) throw new Error('Untrusted settings request');
+    const sections = request.length === 1 ? parseOverlaySections(request[0]) : undefined;
+    if (!sections) throw new Error('Invalid overlay sections request');
+    return saveSettings(() => settingsStore.setOverlaySections(sections));
   });
   ipcMain.handle('telemetry:select', async (event, source: unknown) => {
     if (!trusted(event) || !serviceReady) throw new Error('Untrusted source request');

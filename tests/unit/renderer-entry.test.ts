@@ -48,8 +48,12 @@ describe('renderer stylesheet isolation', () => {
       expect(overlayCss).toMatch(/\.overlay-body\s*\{[^}]*background:\s*(?:transparent|0 0)[;}]/);
       expect(overlayCss).toMatch(/html:has\(\.overlay-body\)\s*\{[^}]*background:\s*(?:transparent|0 0)[;}]/);
       expect(overlayCss).not.toMatch(/@font-face|--background|--tw-|--radix-/);
+      // ET-012a: the transparent overlay never blurs what is behind it (no backdrop-filter, decision L6/brief).
+      expect(overlayCss).not.toMatch(/backdrop-filter/);
       const overlayModules = staticClosure('src/overlay-renderer.tsx').flatMap(key => chunkModules.get(manifest[key].file) ?? []).join('\n').replaceAll('\\', '/');
-      expect(overlayModules).not.toMatch(/\/components\/ui\/|\/radix-ui\/|\/index\.css|\/dashboard-renderer\.tsx/);
+      expect(overlayModules).not.toMatch(/\/components\/ui\/|\/radix-ui\/|\/@radix-ui\/|\/index\.css|\/dashboard-renderer\.tsx|\/overlay-settings-card\.tsx/);
+      // The layouts' icons are inline SVG from lucide-react, bundled into the overlay's own closure.
+      expect(overlayModules).toMatch(/\/lucide-react\//);
       const dashboardCss = (await Promise.all(dashboardStyles.map(style => readFile(path.join(outputDirectory, style), 'utf8')))).join('\n');
       expect(dashboardCss).toContain('@font-face');
       expect(dashboardCss).toContain('--background');

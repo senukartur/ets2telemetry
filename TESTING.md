@@ -244,6 +244,10 @@ PR-2 adds the native broker's v1 mode with its client CTest cases ([ET-006b brok
 
 The production durable path and every real-game, TruckersMP and performance check remain pending; see [ET-006b validation](docs/validation/et-006b.md).
 
+### ET-012a overlay layouts and sections
+
+ET-012a adds pure, hand-checked tests for the per-layout geometry (`overlay-geometry.test.ts`), the overlay section projection over the v0 fixture (`overlay-presentation.test.ts`), the renderer's view model (`overlay-view.test.ts`) and the section and preset definitions (`overlay-sections.test.ts`), and extends the settings, controller, preload and main-boundary suites for settings format v2 and the two overlay IPC channels. React components are not unit-tested (decision L14). The overlay smoke reads a new DOM contract and saves a layout in its final step; the receipt and `RuntimeReceipt.ps1` are unchanged. Real-game visibility, readability, click-through and focus of each layout remain pending; see [ET-012a validation](docs/validation/et-012a.md).
+
 ## ET-014 trip reducer — October 15, 2026
 
 Under the owner's standing delegation of October 15, 2026 the coordinator started ET-014 with decisions T1–T20 ([concept.md](concept.md#et-014-authorization--october-15-2026)), which the owner did not review individually. PR-1 adds the pure trip lifecycle and completeness reducer ([trips](docs/trips.md)). Its tests:

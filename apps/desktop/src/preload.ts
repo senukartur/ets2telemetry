@@ -2,6 +2,7 @@ import {contextBridge, ipcRenderer} from 'electron';
 import type {AppState, DesktopBridge, LiveTelemetry} from '../../../packages/contracts/src';
 import {initialLive, sourceSelection} from './live-state';
 import {RecoveryBudget} from './recovery-budget';
+import {isOverlayLayout, parseOverlaySections} from './overlay-sections';
 import {isUnitGame, isUnitProfile} from './unit-profiles';
 let listener: ((update: LiveTelemetry) => void) | undefined;
 let port: MessagePort | undefined;
@@ -106,6 +107,15 @@ const bridge: DesktopBridge = {
   // Only the two fixed enums reach main, which validates them again; nothing else is forwarded.
   setUnitProfile: (game, profile) => isUnitGame(game) && isUnitProfile(profile)
     ? ipcRenderer.invoke('settings:set-unit-profile', game, profile)
-    : Promise.reject(new Error('Invalid unit profile request'))
+    : Promise.reject(new Error('Invalid unit profile request')),
+  // One fixed layout id only; main validates it again.
+  setOverlayLayout: layout => isOverlayLayout(layout)
+    ? ipcRenderer.invoke('settings:set-overlay-layout', layout)
+    : Promise.reject(new Error('Invalid overlay layout request')),
+  // Only a fresh copy of a complete, strictly validated section record is forwarded; main validates it again.
+  setOverlaySections: sections => {
+    const copy = parseOverlaySections(sections);
+    return copy ? ipcRenderer.invoke('settings:set-overlay-sections', {...copy}) : Promise.reject(new Error('Invalid overlay sections request'));
+  }
 };
 contextBridge.exposeInMainWorld('desktop', Object.freeze(bridge));

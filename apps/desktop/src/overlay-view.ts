@@ -1,0 +1,82 @@
+import type {OverlayLayout, OverlayPresentation, OverlaySectionId} from '../../../packages/contracts/src';
+import {OVERLAY_GROUPS, type OverlayGroupId} from './overlay-sections';
+import {OVERLAY_SECTION_SHORT_TEXT, OVERLAY_SECTION_TEXT, STRINGS} from './strings';
+
+// The overlay renderer's view model (ET-012a). Pure, safe for the overlay bundle and plain Node tests. It only arranges
+// the text main already formatted; it converts, rounds and formats nothing (unit-profiles.test.ts scans it for that).
+
+export interface OverlayItem {
+  id: OverlaySectionId;
+  testId: `overlay-${OverlaySectionId}`;
+  /** Full label for the card layout. */
+  label: string;
+  /** Short label for the strip, cluster panel and HUD. */
+  short: string;
+  /** The formatted text, or a dash while unavailable. Speed and fuel hold the number only; `unit` holds the unit. */
+  value: string;
+  unit?: string;
+  detail?: string;
+  detailTestId?: string;
+  /** Context that must stay beside the value, such as "SDK mean" (never a trip average). */
+  caption?: string;
+  /** Engine RPM ring fraction in [0, 1]. */
+  ring?: number;
+  unavailable: boolean;
+}
+export type OverlayTagId = 'paused' | 'no-signal' | 'origin';
+export interface OverlayTag {id: OverlayTagId; testId: `overlay-tag-${OverlayTagId}`; text: string}
+export interface OverlayItemGroup {id: OverlayGroupId; items: OverlayItem[]}
+export interface OverlayView {
+  layout: OverlayLayout;
+  source: OverlayPresentation['source'];
+  origin: OverlayPresentation['origin'];
+  status: OverlayPresentation['status'];
+  freshness: OverlayPresentation['freshness'];
+  paused: boolean;
+  /** Not current: placeholders and icons are dimmed. Values are never kept, so nothing dimmed is a last-known value. */
+  dim: boolean;
+  tags: OverlayTag[];
+  items: OverlayItem[];
+  /** Groups with at least one item, in order; the strip draws a divider between neighbours. */
+  groups: OverlayItemGroup[];
+  /** Cluster gauge parts; set only when speed, gear or RPM is shown. */
+  gauge?: {speed?: OverlayItem; gear?: OverlayItem; rpm?: OverlayItem};
+  /** Items outside the cluster gauge, in order. */
+  panel: OverlayItem[];
+}
+
+/** What the overlay shows before main's first delivery: no signal, no sections. */
+export const OVERLAY_PLACEHOLDER: OverlayPresentation = Object.freeze({source: 'No game', origin: 'none', status: 'waiting', speed: '—', speedUnit: 'km/h',
+  fuel: '—', fuelUnit: 'L', freshness: 'unavailable', layout: 'strip', paused: false, sections: Object.freeze([])});
+const GAUGE_SECTIONS: ReadonlySet<OverlaySectionId> = new Set<OverlaySectionId>(['speed', 'gear', 'rpm']);
+const DASH = '—';
+
+export function overlayView(presentation: OverlayPresentation = OVERLAY_PLACEHOLDER): OverlayView {
+  const items = presentation.sections.map((section): OverlayItem => {
+    const available = section.state === 'value';
+    const base = {id: section.id, testId: `overlay-${section.id}` as const, label: OVERLAY_SECTION_TEXT[section.id], short: OVERLAY_SECTION_SHORT_TEXT[section.id],
+      unavailable: !available};
+    // Speed and fuel keep the separate number and unit of the ET-008 smoke contract; the unit stays visible beside a dash.
+    if (section.id === 'speed') return {...base, value: available ? presentation.speed : DASH, unit: presentation.speedUnit};
+    if (section.id === 'fuel') return {...base, value: available ? presentation.fuel : DASH, unit: presentation.fuelUnit,
+      ...(available && section.detail ? {detail: section.detail, detailTestId: 'overlay-fuel-level'} : {})};
+    return {...base, value: available ? section.text : DASH,
+      ...(available && section.detail ? {detail: section.detail, detailTestId: `overlay-${section.id}-detail`} : {}),
+      ...(available && section.ring !== undefined ? {ring: section.ring} : {}),
+      ...(section.id === 'sdk-consumption' ? {caption: STRINGS.overlaySdkMean} : {})};
+  });
+  const byId = new Map(items.map(item => [item.id, item]));
+  const groups = OVERLAY_GROUPS.map(group => ({id: group.id, items: group.sections.flatMap(id => byId.get(id) ?? [])})).filter(group => group.items.length > 0);
+  const gaugeShown = items.some(item => GAUGE_SECTIONS.has(item.id));
+  const tags: OverlayTag[] = [];
+  if (presentation.paused) tags.push({id: 'paused', testId: 'overlay-tag-paused', text: STRINGS.overlayPaused});
+  if (presentation.freshness === 'unavailable') tags.push({id: 'no-signal', testId: 'overlay-tag-no-signal', text: STRINGS.overlayNoSignal});
+  if (presentation.origin === 'synthetic' || presentation.origin === 'replay')
+    tags.push({id: 'origin', testId: 'overlay-tag-origin', text: presentation.origin === 'synthetic' ? STRINGS.overlaySynthetic : STRINGS.overlayReplay});
+  return {
+    layout: presentation.layout, source: presentation.source, origin: presentation.origin, status: presentation.status, freshness: presentation.freshness,
+    paused: presentation.paused, dim: presentation.freshness !== 'current', tags, items, groups,
+    ...(gaugeShown ? {gauge: {speed: byId.get('speed'), gear: byId.get('gear'), rpm: byId.get('rpm')}} : {}),
+    panel: gaugeShown ? items.filter(item => !GAUGE_SECTIONS.has(item.id)) : items
+  };
+}

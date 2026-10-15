@@ -13,13 +13,14 @@ export function overlayObservation(expected) {
       bounds.bottom <= 0 || bounds.right <= 0 || bounds.top >= globalThis.innerHeight || bounds.left >= globalThis.innerWidth) return undefined;
     return node;
   };
-  const status = read('overlay-status'), speed = read('overlay-speed'), fuel = read('overlay-fuel');
-  if (!status || !speed || !fuel) return false;
-  const fields = status.innerText.split(' · ');
-  if (fields.length !== 4) return false;
-  const observation = {source: fields[0], origin: fields[1], status: fields[2], freshness: fields[3],
-    speed: speed.innerText, fuel: fuel.innerText,
-    speedUnit: speed.parentElement?.lastElementChild?.innerText, fuelUnit: fuel.parentElement?.lastElementChild?.innerText};
+  // ET-012a DOM contract: the visible layout root carries the source, origin, status and freshness as data attributes;
+  // speed and fuel keep their number and unit in separate elements whatever the layout.
+  const root = read('overlay-root'), speed = read('overlay-speed'), fuel = read('overlay-fuel');
+  const speedUnit = read('overlay-speed-unit'), fuelUnit = read('overlay-fuel-unit');
+  if (!root || !speed || !fuel || !speedUnit || !fuelUnit) return false;
+  const observation = {source: root.getAttribute('data-source'), origin: root.getAttribute('data-origin'), status: root.getAttribute('data-status'),
+    freshness: root.getAttribute('data-freshness'), speed: speed.innerText, fuel: fuel.innerText, speedUnit: speedUnit.innerText, fuelUnit: fuelUnit.innerText};
+  if (Object.values(observation).some(value => typeof value !== 'string')) return false;
   return Object.entries(expected).every(([key, value]) => key === 'statuses' ? value.includes(observation.status) : observation[key] === value) ? observation : false;
 }
 
@@ -32,19 +33,21 @@ export async function waitForOverlay(page, expected) {
 // Inspect the CSS actually loaded by each isolated renderer, including dynamic Vite chunks.
 // A hidden DOM check protects style isolation; it does not establish real game visibility.
 export async function verifyRendererStyles(dashboard, overlay) {
-  await overlay.getByTestId('overlay-status').waitFor({state: 'attached', timeout: 10000});
+  await overlay.getByTestId('overlay-root').waitFor({state: 'attached', timeout: 10000});
   const read = () => {
     const document = globalThis.document;
     const style = node => globalThis.getComputedStyle(node);
     const card = document.querySelector('[data-slot="card"]');
-    const widget = document.querySelector('.overlay');
+    // ET-012a: the overlay root is transparent; each layout's first visible surface paints the background.
+    const widget = document.querySelector('.overlay-surface');
     return {htmlBackground: style(document.documentElement).backgroundColor,
       bodyBackground: style(document.body).backgroundColor,
       themeBackground: style(document.documentElement).getPropertyValue('--background').trim(),
       fontFaces: Array.from(document.fonts).map(font => font.family),
       stylesheets: Array.from(document.styleSheets).map(sheet => sheet.href),
       cardBackground: card ? style(card).backgroundColor : null,
-      widgetBackground: widget ? style(widget).backgroundColor : null};
+      widgetBackground: widget ? style(widget).backgroundColor : null,
+      widgetBackdropFilter: widget ? style(widget).backdropFilter : null};
   };
   const mainStyles = await dashboard.evaluate(read);
   const overlayStyles = await overlay.evaluate(read);
@@ -55,6 +58,7 @@ export async function verifyRendererStyles(dashboard, overlay) {
   assert.equal(overlayStyles.themeBackground, '', 'Overlay must not load the main theme');
   assert.deepEqual(overlayStyles.fontFaces, [], 'Overlay must not load main-window font faces');
   assert.equal(overlayStyles.widgetBackground, 'rgba(10, 17, 24, 0.88)');
+  assert.equal(overlayStyles.widgetBackdropFilter, 'none', 'Overlay must not blur the game behind it');
   assert.ok(mainStyles.stylesheets.length > 0 && overlayStyles.stylesheets.length > 0);
   assert.ok(overlayStyles.stylesheets.every(href => href && !mainStyles.stylesheets.includes(href)), 'Renderer CSS assets must be separate');
   return {dashboard: mainStyles, overlay: overlayStyles};
@@ -237,5 +241,19 @@ export async function runOverlaySmoke(application, dashboard, overlay, source, r
   assert.equal(result.sourceAfter.connections, 1); assert.equal(result.sourceAfter.activeClients, 0); assert.equal(result.sourceAfter.stopped, true);
   assert.deepEqual(result.sourceBefore.identity, result.sourceAfter.identity);
   result.sourceIdentityPreserved = true;
+  // ET-012a: a saved layout reaches the overlay document through main. The settings file lives in the run's isolated
+  // LOCALAPPDATA. Recorded for review only; RuntimeReceipt.ps1 does not validate this field.
+  const deadline = performance.now() + 10000;
+  while (!(await dashboard.evaluate(() => globalThis.desktop.getAppState())).settings.writable) {
+    if (performance.now() >= deadline) throw new Error('EXPECTED_WRITABLE_SETTINGS_WITHIN_10_SECONDS');
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  const saved = await dashboard.evaluate(() => globalThis.desktop.setOverlayLayout('card'));
+  assert.equal(saved.overlay.layout, 'card');
+  const rendered = await overlay.waitForFunction(() => {
+    const roots = globalThis.document.querySelectorAll('[data-testid="overlay-root"]');
+    return roots.length === 1 && roots[0].getAttribute('data-layout') === 'card' ? roots[0].getAttribute('data-layout') : false;
+  }, undefined, {timeout: 10000, polling: 50});
+  try {result.layoutSwitch = {requested: 'card', saved: saved.overlay.layout, rendered: await rendered.jsonValue()};} finally {await rendered.dispose();}
   return result;
 }
