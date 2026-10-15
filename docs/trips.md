@@ -60,7 +60,7 @@ Because the reducer applies effects only for new coverage and queues them otherw
 - `jobKey` is `jobKey()` of the trip's stored job configuration. With null, no later job ever matches it;
 - `lastObservedUtcMs` is the label of the session's last stored item;
 - a seed of another plugin session closes as `restart` at the new session's first commit (T11);
-- a seed of the same session resumes as an active trip and becomes partial with a `not-connected` interval (`consumer-restart`): the consumer was not running for part of it. Its phase, load window and money totals are not rebuilt.
+- a seed of the same session resumes as an active trip and becomes partial with a `not-connected` interval (`consumer-restart`): the consumer was not running for part of it. Its phase, load window and money totals are not rebuilt. Its `cargoLoaded` is unknown too, so after a clear its identical re-send never matches: an O10 save load then closes the resumed trip and opens a not-merged continuation, which is the conservative result.
 
 **Storage gaps (T19).** No storage change is part of ET-014. These gaps go to ET-015a or ET-016:
 
@@ -85,7 +85,14 @@ A newly opened trip also has a **load window**. If its job was configured outsid
 
 The session's **load state** is `loading` from a fresh session until its first `simulation.started`, and again after `timers.restart` until the next start (O1). A `gameTime.regression` never starts a load: it follows the start of the load it ends (O10), so it leaves the state unchanged, or sets `running` when it occurred while running. The state is `unknown` after a gap or when the reducer joins a session that already has committed events.
 
-A job is **untracked** when it is known or likely active but no trip tracks it: a checkpoint job seen while idle (T9), or the job of a trip that a gap closed before its clear or outcome. It stays untracked until `job.cleared`, an outcome or a new trip.
+A job is **untracked** when it is known or likely active but no trip tracks it: a checkpoint job seen while idle (T9), or the job of a trip that a gap closed before its clear or outcome. It stays untracked until `job.cleared`, an outcome or a new trip. A later checkpoint while idle replaces it, or clears it when that checkpoint shows no job. A new plugin session starts with none.
+
+**Replayed events.** A checkpoint describes the state at its `status.delivery.nextEventSeq`. The producer's retained events below that point arrive after the checkpoint but happened before it, while the consumer was not attached (protocol v1 §7, §9). The reducer keeps that point per session and treats a replayed event as an ordinary stream event:
+
+- a checkpoint job applies only from the point on, so a replayed fine with no open trip is `free-driving`, and a replayed clear or outcome does not end the untracked checkpoint job;
+- a replayed `job.configured` opens an ordinary trip from its real configuration event, never a `late-attach` match. It is partial with a `not-connected` interval `opened-before-attach`, because the consumer has no readings from before it attached. `late-attach` stays reserved for a job whose configuration event the consumer never receives.
+
+A gap-sourced untracked job is unaffected: a gap is itself a stream item in order.
 
 | From | Trigger | To | Effects |
 | --- | --- | --- | --- |
@@ -113,12 +120,13 @@ A job is **untracked** when it is known or likely active but no trip tracks it: 
 | any open | `source.gameMode` that differs from the trip's mode | unchanged | trip.update `gameModeAmbiguous: true`, once |
 | open trip of an earlier session of the game | new session | idle | close `{none, restart, partial}` at the new session's first commit. A continuation candidate left by an earlier close is relabelled `restart` |
 | open trip of this session | reconnection after `disconnected` | unchanged | trip.update `partial`; a `not-connected` interval from the last item before the disconnection |
-| any | checkpoint | unchanged | none; an idle slot records the checkpoint job as untracked (T9) |
+| any | checkpoint | unchanged | none; the session keeps the checkpoint's `nextEventSeq`, and an idle slot records the checkpoint job as untracked from that point on (T9) |
 
 Cause intervals on `trip.open` make the new trip partial:
 
 - `opened-at-load` (`discontinuity`): the session is loading (T12);
-- `late-attach` (`not-connected`): an identical job was untracked since a checkpoint (T9);
+- `late-attach` (`not-connected`): an identical job was untracked since a checkpoint, and this configuration is not replayed (T9);
+- `opened-before-attach` (`not-connected`): the configuration is replayed from before the connection's checkpoint;
 - `{cause, continuationOf, decision: 'not-merged'}` (`discontinuity`): the last trip of this game closed without an outcome and had the same job key. Its close reason is the cause: `restart` (T11), `gap`, `discontinuity` or `configuration-cleared`. A candidate that crosses a plugin restart is `restart`, and an outcome clears it. Identical jobs are never merged.
 
 ### Interval detail keys
@@ -129,6 +137,7 @@ Every `completeness.add` of the reducer carries a `detail` object (storage keeps
 | --- | --- | --- |
 | `opened-at-load` | `discontinuity` | `atEventSeq`: the event that opened the trip, or the timer restart inside its load window |
 | `late-attach` | `not-connected` | `atEventSeq`: the opening event |
+| `opened-before-attach` | `not-connected` | `atEventSeq`: the replayed opening event |
 | `restart`, `gap`, `discontinuity`, `configuration-cleared` | `discontinuity` | `continuationOf`: the earlier trip's UUID; `decision`: `not-merged`; `atEventSeq`: the opening event |
 | `reload` | `discontinuity` | `continuationOf`, `decision: 'not-merged'`; `atEventSeq`: the decisive event |
 | `save-load` | `discontinuity` | `fromClockId`, `toClockId`: the game clocks of the `gameTime.regression`; `atEventSeq`: the regression |
@@ -175,7 +184,7 @@ A trip opens `unknown` and stays `unknown` while nothing is known to be missing.
 - a reconnection or consumer restart;
 - a save load;
 - an ambiguous or not-merged continuation;
-- a late attach;
+- a late attach, or a configuration replayed from before the attach;
 - an opening during a load;
 - a close without an outcome;
 - a reading hole (PR-2).
@@ -228,3 +237,4 @@ The plan's transitions table leaves these cases open. They are listed here for r
 - **Re-send with a different `cargoLoaded` after a clear.** It is a not-merged continuation, never a reload check (fix round 1).
 - **Outcome guard.** It applies after any replacement or load, not only after a clear.
 - **Untracked jobs.** Fines, tolls and transfers while a job is untracked are `ambiguous`, not `free-driving` (fix round 1, replacing the PR-1 reading of T14).
+- **Replayed events.** A checkpoint job applies only from the checkpoint's `nextEventSeq` on, and a replayed configuration opens a partial trip with `opened-before-attach` rather than `late-attach` (fix round 2).
