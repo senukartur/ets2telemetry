@@ -323,6 +323,57 @@ describe('game-time and position jumps (T17)', () => {
   });
 });
 
+describe('fix round 2', () => {
+  const sleep = (trip: string, extra: Record<string, unknown> = {}): TripEffect =>
+    note(trip, {cause: 'game-time-jump', label: 'possible-sleep', fromMinutes: '1000', toMinutes: '1595', atMonotonicNs: ns(2050), ...extra});
+  it('an ordinary minute tick within 1 s after a 20 Hz sleep neither grows nor repeats the jump [synthetic-inference]', () => {
+    const clock = (s: Script, ms: number, minutes: number) => reading(s, {ms, minutes, simulation: 'paused'});
+    // Without a carrier in between: the waiting annotation keeps 1595.
+    const a = opened();
+    play([...a.rows, [clock(a.s, 2000, 1000)], [clock(a.s, 2050, 1595)], [clock(a.s, 2600, 1596)], [clock(a.s, 3050, 1596)],
+      [a.s.event(r.paused(), {...paused, advanceMs: 1100}), [sleep(a.trip)]]]);
+    // With a carrier in between: no second annotation follows.
+    const b = opened(new Script(ETS2_B));
+    play([...b.rows, [clock(b.s, 2000, 1000)], [clock(b.s, 2050, 1595)], [b.s.event(r.paused(), {...paused, advanceMs: 100}), [sleep(b.trip)]],
+      [clock(b.s, 2600, 1596)], [clock(b.s, 3050, 1596)], [b.s.event(r.started(), {advanceMs: 1000})]]);
+  });
+  it('a continuation starts where the sent annotation ended, so the ranges do not overlap [O11 shape, synthetic-inference]', () => {
+    const {s, trip, rows} = opened();
+    const k = (n: number): Row => [reading(s, {ms: 2000 + n * 1000, minutes: 1000 + Math.floor(1.5 * n), simulation: 'paused'})];
+    const jump = (detail: Record<string, unknown>) => note(trip, {cause: 'game-time-jump', label: 'crossing', ...detail});
+    play([...rows, [s.event(r.ferry(), {...paused, advanceMs: 0}), [attr(trip, 'trip')]], ...Array.from({length: 21}, (_, n) => k(n)),
+      [s.event(r.paused(), {...paused, advanceMs: 20_100}), [jump({fromMinutes: '1000', toMinutes: '1030', atMonotonicNs: ns(22_000)})]],
+      // Growth at k = 22 (3 minutes in 2 s) and k = 24 continues from 1030.
+      k(21), k(22), k(23), k(24),
+      [s.event(r.paused(), {...paused, advanceMs: 4000}), [jump({fromMinutes: '1030', toMinutes: '1036', atMonotonicNs: ns(24_000), lastAtMonotonicNs: ns(26_000), continues: true})]]]);
+  });
+  it('a jump and a refuel grow in place while another annotation waits behind them [synthetic-inference]', () => {
+    const a = opened(), at0 = {x: 0, y: 0, z: 0}, far = {x: 10_000, y: 0, z: 0};
+    play([...a.rows, [reading(a.s, {ms: 2000, minutes: 1000, position: at0, simulation: 'paused'})],
+      // One step queues the game-time jump and then a position jump; the next fast step grows the first in place.
+      [reading(a.s, {ms: 2050, minutes: 1595, position: far, simulation: 'paused'})], [reading(a.s, {ms: 3100, minutes: 1700, position: far, simulation: 'paused'})],
+      [a.s.event(r.paused(), {...paused, advanceMs: 1200}), [sleep(a.trip, {toMinutes: '1700', lastAtMonotonicNs: ns(3100)}),
+        note(a.trip, {cause: 'position-jump', label: 'possible-teleport', meters: 10_000, atMonotonicNs: ns(2050)})]]]);
+    const b = opened(new Script(ETS2_B));
+    play([...b.rows, [reading(b.s, {ms: 2000, fuel: 400, position: at0})], [reading(b.s, {ms: 3000, fuel: 450, position: at0})],
+      [reading(b.s, {ms: 3050, fuel: 460, position: far})], [reading(b.s, {ms: 3100, fuel: 470, position: far})],
+      [b.s.event(r.paused(), {...paused, advanceMs: 1200}), [note(b.trip, {cause: 'refuel', addedLiters: 70, atMonotonicNs: ns(3000), lastAtMonotonicNs: ns(3100)}),
+        note(b.trip, {cause: 'position-jump', label: 'possible-teleport', meters: 10_000, atMonotonicNs: ns(3050)})]]]);
+  });
+  it('a hole never extends a waiting hole of an earlier connection [synthetic-inference]', () => {
+    const {s, trip, rows} = opened();
+    const hole = (fromMs: number, toMs: number): TripEffect => ({kind: 'completeness.add', interval: {tripUuid: trip, kind: 'sample-loss', startUtcMs: BASE_UTC + fromMs,
+      endUtcMs: BASE_UTC + toMs, startMonotonicNs: ns(fromMs), endMonotonicNs: ns(toMs), sourceClockId: s.clockId, detail: {cause: 'reading-hole'}}});
+    const separated: Row[] = [[reading(s, {ms: 2000})]];
+    for (let i = 0; i < 4; i++) separated.push([reading(s, {ms: 8000 + i * 7000})], [reading(s, {ms: 9000 + i * 7000})]);
+    // Four holes wait (the last reading, at 30,000 ms, is no hole); the fifth, after a reconnection, is its own interval.
+    play([...rows, ...separated, [{kind: 'disconnected'}], [sessionInput(s.welcome(), '2')], [reading(s, {ms: 40_000})], [reading(s, {ms: 46_000})],
+      [s.event(r.paused(), {...paused, advanceMs: 45_000}), [partial(trip), hole(2000, 8000), hole(9000, 15_000), hole(16_000, 22_000), hole(23_000, 29_000),
+        {kind: 'completeness.add', interval: {tripUuid: trip, kind: 'not-connected', startUtcMs: at(2), startMonotonicNs: '1001999000000', endMonotonicNs: '1002000000000',
+          sourceClockId: s.clockId, detail: {cause: 'disconnected', odometerDeltaM: null}}}, hole(40_000, 46_000)]]]);
+  });
+});
+
 describe('effect bounds (T18)', () => {
   it('sends at most 8 reading annotations per carrier and defers the rest in order [synthetic-inference]', () => {
     const {s, trip, rows} = opened();

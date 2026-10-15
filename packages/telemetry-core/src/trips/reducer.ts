@@ -65,7 +65,7 @@ function freshSession(welcome: WelcomeMessage, coveredThrough: Uint64): SessionS
     // A session first seen at coverage 0 starts with the load burst of O1; joining later, the load state is unknown.
     load: coveredThrough === '0' ? 'loading' : 'unknown', gameMode: modeOf(welcome.data.gameMode), clockId: welcome.capture.clockId,
     lastUtcMs: null, lastMonotonicNs: null, truck: null, trailers: new Array<null>(TRAILER_SLOTS).fill(null), untrackedJob: null, attachedFromEventSeq: null, disconnected: null,
-    lastReading: null, lastTransfer: null, runClock: null, gameTimeWindow: null, jumpEpisode: null, bridge: null
+    lastReading: null, connectionSinceNs: null, lastTransfer: null, runClock: null, gameTimeWindow: null, jumpEpisode: null, bridge: null
   };
 }
 function seedTrip(seed: TripSeed): OpenTrip {
@@ -539,7 +539,7 @@ function stepDisconnected(state: TripState): TripStepResult {
   if (session !== undefined) {
     session.disconnected = {utcMs: session.lastUtcMs, monotonicNs: session.lastMonotonicNs, clockId: session.clockId, reading: session.lastReading};
     // The next connection starts its own readings: no step crosses a connection hole (T16).
-    session.lastReading = null; session.runClock = null; session.gameTimeWindow = null; session.jumpEpisode = null; session.bridge = null;
+    session.lastReading = null; session.connectionSinceNs = null; session.runClock = null; session.gameTimeWindow = null; session.jumpEpisode = null; session.bridge = null;
   }
   return {ok: true, state: draft, effects: []};
 }
@@ -555,6 +555,7 @@ function stepReading(state: TripState, sample: StepSample & {utcMs?: number}): T
   if (state.connection !== id || !has(state.sessions, id) || state.sessions[id].game !== sample.source.game) return {ok: false, code: 'UNKNOWN_SESSION'};
   const draft = structuredClone(state), session = draft.sessions[id], slot = draft.games[session.game], next = readingPoint(sample), prev = session.lastReading;
   if (session.bridge !== null) { recordBridge(slot, session.bridge, next); session.bridge = null; }
+  session.connectionSinceNs ??= next.capture.monotonicNs;
   // The game-time window and the running time belong to the session's readings, whatever trip is open.
   const advanced = advanceGameTime(session.gameTimeWindow, prev, next), episode = session.jumpEpisode;
   session.gameTimeWindow = advanced.window;
@@ -569,7 +570,7 @@ function stepReading(state: TripState, sample: StepSample & {utcMs?: number}): T
     // A step belongs to the trip only when its earlier reading was taken while the trip was open; it counts towards
     // distance and fuel only when the trip was active at both readings.
     if (prev !== null && acc.lastReading !== 'none') {
-      if (hole) queueHole(slot, trip, prev, next);
+      if (hole) queueHole(slot, trip, prev, next, session.connectionSinceNs);
       if (acc.lastReading === 'active' && trip.phase === 'active') {
         accountStep(slot, trip, session, prev, next, classifyStep(prev, next), jump);
         if (jump !== null) annotated = trip.tripUuid;
@@ -595,10 +596,16 @@ function recordBridge(slot: GameSlot, bridge: NonNullable<SessionState['bridge']
 function readingNote(tripUuid: string, next: ReadingPoint, detail: Record<string, unknown>): TripEffect {
   return annotation(tripUuid, {...detail, atMonotonicNs: next.capture.monotonicNs});
 }
-/** The last waiting annotation, when it is this trip's annotation of `cause`: an episode still growing in place. */
+/**
+ * This trip's latest waiting annotation of `cause`, wherever it waits: the episode still growing in place. Annotations
+ * leave in order, so an annotation of an earlier episode cannot still wait once a later one was sent.
+ */
 function waitingNote(slot: GameSlot, tripUuid: string, cause: string): Extract<TripEffect, {kind: 'completeness.add'}> | undefined {
-  const last = slot.pendingAnnotations.at(-1);
-  return last?.kind === 'completeness.add' && last.interval.tripUuid === tripUuid && last.interval.detail?.cause === cause ? last : undefined;
+  for (let i = slot.pendingAnnotations.length - 1; i >= 0; i--) {
+    const effect = slot.pendingAnnotations[i];
+    if (effect.kind === 'completeness.add' && effect.interval.tripUuid === tripUuid && effect.interval.detail?.cause === cause) return effect;
+  }
+  return undefined;
 }
 /** Accumulates one counted step on the active trip and annotates its discontinuities (T13, T16, T17). */
 function accountStep(slot: GameSlot, trip: OpenTrip, session: SessionState, prev: ReadingPoint, next: ReadingPoint, step: ReadingStep, jump: GameJump | null) {
@@ -609,13 +616,16 @@ function accountStep(slot: GameSlot, trip: OpenTrip, session: SessionState, prev
   }
   if (jump !== null) {
     // One game-time jump is one annotation while it keeps growing: its end and label follow the jump. Once the
-    // annotation has been sent, a jump that still continues gets a new one marked `continues`.
-    const label = jumpLabel(session.lastTransfer, jump.fromNs, next, 'possible-sleep'), continuing = jump.grows === 'extend' && session.jumpEpisode?.tripUuid === trip.tripUuid;
+    // annotation has been sent, a jump that still continues gets a new one marked `continues`, starting where the sent
+    // one ended, so the ranges never overlap.
+    const episode = session.jumpEpisode, continuing = jump.grows === 'extend' && episode?.tripUuid === trip.tripUuid;
+    const from = continuing ? {ns: episode.lastNs, minutes: episode.lastMinutes} : {ns: jump.fromNs, minutes: jump.fromMinutes};
+    const label = jumpLabel(session.lastTransfer, from.ns, next, 'possible-sleep');
     const waiting = continuing ? waitingNote(slot, trip.tripUuid, 'game-time-jump') : undefined;
     if (waiting !== undefined) {
       const detail = waiting.interval.detail!;
       waiting.interval.detail = {...detail, toMinutes: jump.toMinutes, lastAtMonotonicNs: next.capture.monotonicNs, ...(label === 'crossing' ? {label} : {})};
-    } else notes.push(readingNote(trip.tripUuid, next, {cause: 'game-time-jump', label, fromMinutes: jump.fromMinutes, toMinutes: jump.toMinutes, ...(continuing ? {continues: true} : {})}));
+    } else notes.push(readingNote(trip.tripUuid, next, {cause: 'game-time-jump', label, fromMinutes: from.minutes, toMinutes: jump.toMinutes, ...(continuing ? {continues: true} : {})}));
   }
   if (step.positionJump !== null) {
     notes.push(readingNote(trip.tripUuid, next, {cause: 'position-jump', label: jumpLabel(session.lastTransfer, prev.capture.monotonicNs, next, 'possible-teleport'), meters: step.positionJump.meters}));
@@ -636,12 +646,14 @@ const MAX_WAITING_HOLES = 4;
 /**
  * Queues a reading hole of the open trip (T17): it makes the trip partial with a `sample-loss` interval between the two
  * readings. A hole that starts where the last waiting one ended extends it; beyond MAX_WAITING_HOLES waiting holes, a
- * further one extends the last one too and marks that the interval now includes readings (`includesReadings`).
+ * further one extends the last one too and marks that the interval now includes readings (`includesReadings`). Only
+ * holes of the current connection (from `sinceNs` on) count, so no interval is ever extended across a disconnection.
  */
-function queueHole(slot: GameSlot, trip: OpenTrip, prev: ReadingPoint, next: ReadingPoint) {
+function queueHole(slot: GameSlot, trip: OpenTrip, prev: ReadingPoint, next: ReadingPoint, sinceNs: string | null) {
   let waiting = 0, last: Extract<TripEffect, {kind: 'completeness.add'}> | undefined;
   for (const effect of slot.pending) {
-    if (effect.kind === 'completeness.add' && effect.interval.tripUuid === trip.tripUuid && effect.interval.detail?.cause === 'reading-hole') { waiting += 1; last = effect; }
+    if (effect.kind === 'completeness.add' && effect.interval.tripUuid === trip.tripUuid && effect.interval.detail?.cause === 'reading-hole' &&
+      sinceNs !== null && effect.interval.startMonotonicNs !== undefined && BigInt(effect.interval.startMonotonicNs) >= BigInt(sinceNs)) { waiting += 1; last = effect; }
   }
   const contiguous = last?.interval.endMonotonicNs === prev.capture.monotonicNs;
   if (last !== undefined && last.interval.sourceClockId === next.capture.clockId && (contiguous || waiting >= MAX_WAITING_HOLES)) {

@@ -14,6 +14,8 @@ import {NOT_CARRIED, type Distance, type LiveTruck, type Reading} from '../readi
 export const GAME_TIME_JUMP_MINUTES = 30;
 export const GAME_TIME_JUMP_RATE = 60;
 export const GAME_TIME_WINDOW_SECONDS = 60;
+/** A jump grows only by a fast advance measured over at least this much real time since its last growth. Provisional. */
+export const GAME_TIME_GROWTH_SECONDS = 1;
 /** A ferry or train event at most this long before a jump starts, or during it, labels the jump a crossing. Provisional. */
 export const CROSSING_WINDOW_SECONDS = 300;
 /** A position step longer than MAX_PLAUSIBLE_SPEED_MPS × elapsed source seconds + this margin is a jump. Provisional. */
@@ -23,6 +25,7 @@ export const READING_HOLE_SECONDS = 5;
 const NS_PER_SECOND = 1_000_000_000n;
 const READING_HOLE_NS = BigInt(READING_HOLE_SECONDS) * NS_PER_SECOND;
 const WINDOW_NS = BigInt(GAME_TIME_WINDOW_SECONDS) * NS_PER_SECOND;
+const GROWTH_NS = BigInt(GAME_TIME_GROWTH_SECONDS) * NS_PER_SECOND;
 const CROSSING_NS = BigInt(CROSSING_WINDOW_SECONDS) * NS_PER_SECOND;
 
 /**
@@ -142,13 +145,15 @@ export function advanceGameTime(window: GameTimeWindow | null, prev: ReadingPoin
   return {window: {gameClockId: next.gameTime.clockId, captureClockId: next.capture.clockId, points}, jump};
 }
 /**
- * Whether game time advanced faster than GAME_TIME_JUMP_RATE from an earlier reading to `next`. A jump that is already
- * annotated grows only by such advances, so normal driving after a sleep, still inside the window, does not extend it.
+ * Whether game time advanced faster than GAME_TIME_JUMP_RATE from an earlier reading to `next`, over at least
+ * GAME_TIME_GROWTH_SECONDS of real time. A jump that is already annotated grows only by such advances, so normal driving
+ * after a sleep, still inside the window, does not extend it: one ordinary minute tick right after the jump is never
+ * fast over a whole second (normal driving runs at about 0.3 game minutes per real second).
  */
 export function isFastAdvance(fromNs: string, fromMinutes: string, next: ReadingPoint): boolean {
   if (next.gameTime.minutes === null) return false;
   const advance = BigInt(next.gameTime.minutes) - BigInt(fromMinutes), span = BigInt(next.capture.monotonicNs) - BigInt(fromNs);
-  return advance > 0n && span >= 0n && advance * 60n * NS_PER_SECOND > BigInt(GAME_TIME_JUMP_RATE) * span;
+  return advance > 0n && span >= GROWTH_NS && advance * 60n * NS_PER_SECOND > BigInt(GAME_TIME_JUMP_RATE) * span;
 }
 /** The last ferry or train event of the session: its source time on its capture clock. */
 export interface TransferMark {clockId: string; monotonicNs: string}

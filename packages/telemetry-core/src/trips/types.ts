@@ -122,6 +122,8 @@ export interface SessionState {
   disconnected: {utcMs: number | null; monotonicNs: Uint64 | null; clockId: string | null; reading: ReadingPoint | null} | null;
   /** The current connection's last reading; null before its first. Steps never bridge connections (T16). */
   lastReading: ReadingPoint | null;
+  /** The source time of the current connection's first reading: waiting reading holes from before it belong to an earlier connection. */
+  connectionSinceNs: string | null;
   /** The session's last ferry or train event, which labels a jump next to it a crossing (T17). */
   lastTransfer: TransferMark | null;
   /** Running simulation time since the current connection's last reading, for reading holes (T17). */
