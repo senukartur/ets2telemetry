@@ -39,3 +39,16 @@ SDK 1.15 defines `bus_job` and `car_job` configurations and the `car_job.deliver
 - Extend ET-014 attribution and the journal.
 
 **Until then:** tolerate the empty configurations and never create trips from them.
+
+## TD-003: Live driving controls and navigation fields
+
+Recorded October 15, 2026 by the coordinator during ET-010 planning. **This entry is a coordinator decision under the owner's standing delegation of October 15, 2026, not an individually owner-approved deferral** (see the ET-010 authorization in [concept.md](../concept.md#et-010-authorization--october-15-2026)). The owner may revise it.
+
+Protocol v1 minor 0 does not carry cruise control, throttle, brake and clutch inputs, navigation time, the navigation speed limit, the parking brake or lights. The ET-010 live dashboard therefore covers the MVP field set only: the concept §6 overlay metrics, the §7 sample fields, job, truck and trailer identity and source validity ([live telemetry fields](live-telemetry-fields.md)).
+
+**Future work:**
+- Add these channels in a v1 minor revision with fixtures, in both the TypeScript and C++ representations.
+- Capture and review them in real sessions before showing them.
+- Extend telemetry-core normalization and the dashboard.
+
+**Until then:** do not show or infer these values; nothing in the current protocol carries them.
