@@ -288,6 +288,27 @@ describe('hydration, gaps and connections', () => {
     ], state);
     expect(tripView(state, 'ets2')).toMatchObject({phase: 'active', untrackedJob: false, current: {tripUuid: t, recordingCompleteness: 'partial'}});
   });
+  it('a checkpoint job applies only from the checkpoint on: replayed earlier events are ordinary stream events (T9) [synthetic-inference]', () => {
+    // While the consumer was absent: the player started, got a fine while driving freely, paused and accepted job K. The
+    // four events are retained, so they arrive after the checkpoint, which already shows K (protocol v1 §7, §9).
+    const s = new Script(ETS2_A), t = uuid(ETS2_A, '4');
+    const retained = [s.event(r.started()), s.event(r.fined()), s.event(r.paused(), paused), s.event(r.jobConfigured(), paused)];
+    const checkpoint = s.checkpoint(job(), 4);
+    const state = play([[sessionInput(s.welcome())], [{kind: 'checkpoint', message: checkpoint}],
+      [retained[0]], [retained[1], [attr(null, 'free-driving')]], [retained[2]],
+      // K's own configuration event is replayed: a real start, but the consumer has no readings from before it attached.
+      [retained[3], [open(t, at(4), {recordingCompleteness: 'partial'}), cause(t, 'not-connected', {cause: 'opened-before-attach', atEventSeq: '4'})]],
+      [s.event(r.started())], [s.event(r.fined()), [attr(t, 'trip')]]]);
+    expect(tripView(state, 'ets2')).toMatchObject({phase: 'active', untrackedJob: false, current: {tripUuid: t, recordingCompleteness: 'partial'}});
+  });
+  it('a replayed clear does not end a checkpoint job; live events after the checkpoint are ambiguous until a live clear (T9, T14) [synthetic-inference]', () => {
+    const s = new Script(ETS2_A);
+    const retained = [s.event(r.started()), s.event(r.fined()), s.event(r.jobCleared())];
+    const checkpoint = s.checkpoint(job(), 3);
+    play([[sessionInput(s.welcome())], [{kind: 'checkpoint', message: checkpoint}],
+      [retained[0]], [retained[1], [attr(null, 'free-driving')]], [retained[2]],
+      [s.event(r.fined()), [attr(null, 'ambiguous')]], [s.event(r.jobCleared())], [s.event(r.fined()), [attr(null, 'free-driving')]]]);
+  });
   it('16b. the outcome of an untracked job is ambiguous (T9, T14) [synthetic-inference]', () => {
     const s = new Script(ETS2_A);
     let state = play([[sessionInput(s.welcome())], [{kind: 'checkpoint', message: s.checkpoint(job())}]]);

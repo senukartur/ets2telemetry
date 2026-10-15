@@ -60,7 +60,7 @@ function freshSession(welcome: WelcomeMessage, coveredThrough: Uint64): SessionS
     pluginSessionId: welcome.source.pluginSessionId, game: welcome.source.game, processedThrough: coveredThrough,
     // A session first seen at coverage 0 starts with the load burst of O1; joining later, the load state is unknown.
     load: coveredThrough === '0' ? 'loading' : 'unknown', gameMode: modeOf(welcome.data.gameMode), clockId: welcome.capture.clockId,
-    lastUtcMs: null, lastMonotonicNs: null, truck: null, trailers: new Array<null>(TRAILER_SLOTS).fill(null), untrackedJob: null, disconnected: null
+    lastUtcMs: null, lastMonotonicNs: null, truck: null, trailers: new Array<null>(TRAILER_SLOTS).fill(null), untrackedJob: null, attachedFromEventSeq: null, disconnected: null
   };
 }
 function seedTrip(seed: TripSeed): OpenTrip {
@@ -137,6 +137,15 @@ interface OpenOptions {
   /** A reload-check continuation replaces the load, late-attach and continuation causes (T8). */
   reloadOf?: string; loadCheck: OpenTrip['loadCheck'];
 }
+/** An event replayed from the producer's retention: it happened before the current connection's checkpoint. */
+const replayed = (c: Carrier) => c.eventSeq !== null && c.session.attachedFromEventSeq !== null && BigInt(c.eventSeq) < BigInt(c.session.attachedFromEventSeq);
+/** The untracked job that applies to the carrier's event. A checkpoint job describes the checkpoint, so it applies only from it on. */
+function untrackedFor(c: Carrier): SessionState['untrackedJob'] {
+  const job = c.session.untrackedJob;
+  return job !== null && job.source === 'checkpoint' && replayed(c) ? null : job;
+}
+/** Ends the untracked job at a clear, an outcome or a new trip, unless the event is replayed from before its checkpoint. */
+function endUntracked(c: Carrier) { if (untrackedFor(c) !== null) c.session.untrackedJob = null; }
 /** Opens a trip at the carrier event with its cause intervals (T9, T11, T12, T8). */
 function openTrip(c: Carrier, o: OpenOptions) {
   const s = c.session, uuid = tripUuidFor(s.pluginSessionId, o.jobEventSeq);
@@ -146,12 +155,17 @@ function openTrip(c: Carrier, o: OpenOptions) {
   if (o.reloadOf !== undefined) causes.push({kind: 'discontinuity', detail: {cause: 'reload', continuationOf: o.reloadOf, decision: 'not-merged'}});
   else {
     if (s.load === 'loading') causes.push({kind: 'discontinuity', detail: {cause: 'opened-at-load'}});
-    if (s.untrackedJob?.source === 'checkpoint' && s.untrackedJob.key === o.key) causes.push({kind: 'not-connected', detail: {cause: 'late-attach'}});
+    // A configuration replayed from before the checkpoint is a real start, but the consumer was not attached then and has
+    // no readings for that time. A checkpoint job without its configuration event is a late attach (T9).
+    const untracked = untrackedFor(c);
+    if (replayed(c)) causes.push({kind: 'not-connected', detail: {cause: 'opened-before-attach'}});
+    else if (untracked?.source === 'checkpoint' && untracked.key === o.key) causes.push({kind: 'not-connected', detail: {cause: 'late-attach'}});
     if (continuation !== null && continuation.jobKey !== null && continuation.jobKey === o.key) {
       causes.push({kind: 'discontinuity', detail: {cause: continuation.cause, continuationOf: continuation.tripUuid, decision: 'not-merged'}});
     }
   }
-  s.untrackedJob = null;
+  // The untracked job is now tracked; a replayed different job leaves the later checkpoint job in place.
+  if (s.untrackedJob?.key === o.key) s.untrackedJob = null; else endUntracked(c);
   const completeness: RecordingCompleteness = causes.length ? 'partial' : 'unknown';
   const trailers = s.trailers.flatMap(t => t === null ? [] : [{eventSeq: t.eventSeq}]);
   c.own.push({kind: 'trip.open', tripUuid: uuid, game: c.game, gameMode: modeOf(s.gameMode), jobConfiguration: o.jobRef,
@@ -229,7 +243,7 @@ function onOutcome(c: Carrier, record: Extract<EventRecord, {type: 'job.delivere
   if (trip === null) {
     // No attachable trip, or the outcome of a job that hydration showed or a gap hid, which no trip tracks (T9, T14).
     // The job has ended, so it is neither untracked nor a continuation candidate any more.
-    attribute(c, null, 'ambiguous'); c.session.untrackedJob = null; c.slot.continuation = null; return;
+    attribute(c, null, 'ambiguous'); endUntracked(c); c.slot.continuation = null; return;
   }
   if (trip.phase === 'reload-check') {
     // An outcome right after an identical re-send may belong to either trip (T8, T14). The old trip closes and no new
@@ -246,7 +260,7 @@ function onGameplay(c: Carrier, record: Extract<EventRecord, {type: 'player.fine
   const trip = c.slot.trip;
   // Free driving only outside any active job (concept.md, October 13, 2026): a job that is known or likely active but
   // untracked makes the event ambiguous.
-  if (trip === null) { attribute(c, null, c.session.untrackedJob !== null ? 'ambiguous' : 'free-driving'); return; }
+  if (trip === null) { attribute(c, null, untrackedFor(c) !== null ? 'ambiguous' : 'free-driving'); return; }
   if (trip.phase === 'awaiting-outcome') { attribute(c, null, 'free-driving'); return; }
   if (trip.phase === 'reload-check') { resolveReload(c, 'other'); attribute(c, null, 'ambiguous'); return; }
   const early = beforeLoaded(trip);
@@ -330,7 +344,7 @@ function stepEvent(state: TripState, message: EventMessage, coveredThrough: Uint
   switch (record.type) {
     case 'job.configured': onJobConfigured(c, record); break;
     case 'job.cleared':
-      session.untrackedJob = null;
+      endUntracked(c);
       // T7: the trip waits for an outcome. A clear inside a reload check undoes the re-send and waits again.
       if (c.slot.trip !== null) { c.slot.trip.phase = 'awaiting-outcome'; c.slot.trip.reloadEventSeq = null; }
       break;
@@ -476,6 +490,7 @@ function stepCheckpoint(state: TripState, message: CheckpointMessage): TripStepR
   const id = message.source.pluginSessionId;
   if (state.connection !== id || !has(state.sessions, id) || state.sessions[id].game !== message.source.game) return {ok: false, code: 'UNKNOWN_SESSION'};
   const draft = structuredClone(state), session = draft.sessions[id], job = message.data.state.configuration.job;
+  session.attachedFromEventSeq = message.data.status.delivery.nextEventSeq;
   if (draft.games[session.game].trip === null) session.untrackedJob = job.available ? {key: jobKey(job.value), source: 'checkpoint'} : null;
   return {ok: true, state: draft, effects: []};
 }

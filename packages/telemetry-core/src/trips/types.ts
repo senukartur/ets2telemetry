@@ -97,9 +97,16 @@ export interface SessionState {
   /**
    * A job that is known or likely active but that no trip tracks: a checkpoint job seen while idle (T9), or the job of
    * a trip a gap closed before its clear or outcome. Gameplay events meanwhile are ambiguous, never free driving
-   * (concept.md, October 13, 2026). Cleared by `job.cleared`, an outcome or a new trip.
+   * (concept.md, October 13, 2026). Cleared by `job.cleared`, an outcome or a new trip; a later checkpoint while idle
+   * replaces or clears it, and a new plugin session starts with none. A checkpoint job describes the state at the
+   * checkpoint, so it applies only from `attachedFromEventSeq` on: replayed events below it happened earlier.
    */
   untrackedJob: {key: string; source: 'checkpoint' | 'gap'} | null;
+  /**
+   * The current connection's checkpoint `nextEventSeq`. Events below it are replayed from the producer's retention: they
+   * happened before the consumer attached (protocol v1 §7, §9). Null before the connection's checkpoint.
+   */
+  attachedFromEventSeq: Uint64 | null;
   /** Where the last connection of this session ended, for the not-connected interval of an open trip. */
   disconnected: {utcMs: number | null; monotonicNs: Uint64 | null; clockId: string | null} | null;
 }

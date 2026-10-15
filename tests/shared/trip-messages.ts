@@ -108,12 +108,18 @@ export class Script {
     const data = fixture<Of<'welcome'>>('welcome').data;
     return this.envelope('welcome', {...data, gameMode});
   }
-  checkpoint(checkpointJob: JobConfiguration | null): CheckpointMessage {
+  /**
+   * A checkpoint at the script's current point: `nextEventSeq` is the next eventSeq. With `retained` > 0 the last
+   * `retained` events already built are unacknowledged and retained, so a consumer receives them after the checkpoint
+   * as replayed events (protocol v1 §7, §9).
+   */
+  checkpoint(checkpointJob: JobConfiguration | null, retained = 0): CheckpointMessage {
     const data = structuredClone(fixture<Of<'checkpoint'>>('checkpoint').data);
     data.boundarySeq = this.seq.toString();
     data.state.configuration.job = checkpointJob === null ? {available: false, reason: 'not-observed'} : {available: true, value: checkpointJob};
-    data.status.delivery = {...data.status.delivery, ackedThroughEventSeq: (this.next - 1n).toString(), nextEventSeq: this.next.toString(), retainedEvents: 0, retainedBytes: 0,
-      oldestRetainedMonotonicNs: {available: false, reason: 'not-observed'}};
+    data.status.delivery = {...data.status.delivery, ackedThroughEventSeq: (this.next - 1n - BigInt(retained)).toString(), nextEventSeq: this.next.toString(),
+      retainedEvents: retained, retainedBytes: retained * 1_024,
+      oldestRetainedMonotonicNs: retained > 0 ? {available: true, value: (this.ns - 1_000_000n).toString()} : {available: false, reason: 'not-observed'}};
     return this.envelope('checkpoint', data);
   }
   event(record: EventRecord, options: EventOptions = {}): EventMessage {
