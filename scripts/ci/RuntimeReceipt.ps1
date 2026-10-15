@@ -116,6 +116,14 @@ function Test-LifecycleSettingsReceipt {
         if ($null -eq $row -or $row.speed -cne 'Speed: 55.9 mph' -or $row.fuel -cne 'Fuel: 19.3 US gal') { return $false }
     }
     # Diagnostics: run A falls back from the invalid file, quarantines it once and saves once; run B only loads.
+    # A read past the 1000 ms load budget adds one SETTINGS_LOAD_PENDING row before any other settings row of that run.
+    foreach ($rows in @(@($Driver.mainEvents), @($lifecycle.restartMainEvents))) {
+        $settingsRows = @($rows | Where-Object { $_.event -cmatch '^SETTINGS_' })
+        $pendingRows = @($settingsRows | Where-Object { $_.event -ceq 'SETTINGS_LOAD_PENDING' })
+        if ($pendingRows.Count -gt 1) { return $false }
+        if ($pendingRows.Count -eq 1 -and ($settingsRows[0].event -cne 'SETTINGS_LOAD_PENDING' -or
+            $settingsRows[0].facts.state -cne 'loading' -or $settingsRows[0].facts.reason -cne 'load-budget')) { return $false }
+    }
     $fallback = @($Driver.mainEvents | Where-Object { $_.event -ceq 'SETTINGS_FALLBACK' })
     if ($fallback.Count -ne 1 -or $fallback[0].facts.state -cne 'invalid-file') { return $false }
     foreach ($eventName in @('SETTINGS_QUARANTINED','SETTINGS_SAVED')) {
@@ -123,7 +131,7 @@ function Test-LifecycleSettingsReceipt {
     }
     $loaded = @($lifecycle.restartMainEvents | Where-Object { $_.event -ceq 'SETTINGS_LOADED' })
     if ($loaded.Count -ne 1 -or $loaded[0].facts.state -cne 'loaded') { return $false }
-    if (@($lifecycle.restartMainEvents | Where-Object { $_.event -cmatch '^SETTINGS_' }).Count -ne 1) { return $false }
+    if (@($lifecycle.restartMainEvents | Where-Object { $_.event -cmatch '^SETTINGS_' -and $_.event -cne 'SETTINGS_LOAD_PENDING' }).Count -ne 1) { return $false }
     return $true
 }
 

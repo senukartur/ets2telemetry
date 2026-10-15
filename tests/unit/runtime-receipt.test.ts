@@ -56,6 +56,17 @@ function lifecycleReceipt(path: (string | number)[] = [], replacement?: Json): s
   }
   return JSON.stringify(value);
 }
+// Clean late read (October 15, 2026): the intact receipt with one SETTINGS_LOAD_PENDING row before the first settings
+// row of each run (index 4 in run A's main events, index 3 in run B's), then an optional corruption.
+function pendingRow(): Json {return {event: 'SETTINGS_LOAD_PENDING', facts: {state: 'loading', reason: 'load-budget'}};}
+type LateReceipt = {mainEvents: Json[]; lifecycle: {restartMainEvents: Json[]}};
+type LateCorruption = (value: LateReceipt) => void;
+function lateLifecycleReceipt(corrupt?: LateCorruption): string {
+  const value = JSON.parse(lifecycleReceipt()) as LateReceipt;
+  value.mainEvents.splice(4, 0, pendingRow()); value.lifecycle.restartMainEvents.splice(3, 0, pendingRow());
+  corrupt?.(value);
+  return JSON.stringify(value);
+}
 function lifecycleCases() {
   const invalid = (name: string, path: (string | number)[], replacement?: Json) =>
     ({name: `lifecycle ${name}`, body: lifecycleReceipt(path, replacement), scenario: 'lifecycle', code: 0, available: true, reason: 'LIFECYCLE_RESULT_INCOMPLETE_OR_INVALID'});
@@ -109,6 +120,15 @@ function lifecycleCases() {
     invalid('second save', ['mainEvents', MAIN_EVENTS_APPEND], {event: 'SETTINGS_SAVED', facts: {game: 'ats', profile: 'metric'}}),
     invalid('restart loaded another state', ['lifecycle', 'restartMainEvents', 3, 'facts', 'state'], 'defaults'),
     invalid('restart wrote settings', ['lifecycle', 'restartMainEvents', 4], {event: 'SETTINGS_SAVED', facts: {game: 'ets2', profile: 'us-customary'}}),
+    // Clean late read: one leading pending row per run is accepted; anything else about it is not.
+    {name: 'intact lifecycle receipt with late settings reads in both runs', body: lateLifecycleReceipt(), scenario: 'lifecycle', code: 0, available: true, reason: null},
+    ...([
+      ['two pending rows in run B', value => {value.lifecycle.restartMainEvents.splice(3, 0, pendingRow());}],
+      ['pending row after the load in run B', value => {value.lifecycle.restartMainEvents.push(value.lifecycle.restartMainEvents.splice(3, 1)[0]);}],
+      ['pending row after the fallback in run A', value => {value.mainEvents.splice(5, 0, value.mainEvents.splice(4, 1)[0]);}],
+      ['pending row with another reason in run A', value => {value.mainEvents[4] = {event: 'SETTINGS_LOAD_PENDING', facts: {state: 'loading', reason: 'load-limit'}};}],
+      ['late read that ended unreadable in run B', value => {value.lifecycle.restartMainEvents[4] = {event: 'SETTINGS_FALLBACK', facts: {state: 'unreadable', reason: 'load-limit'}};}]
+    ] satisfies [string, LateCorruption][]).map(([name, corrupt]) => ({name: `lifecycle ${name}`, body: lateLifecycleReceipt(corrupt), scenario: 'lifecycle', code: 0, available: true, reason: 'LIFECYCLE_RESULT_INCOMPLETE_OR_INVALID'})),
     {name: 'lifecycle two quarantined files with Int64 integers', body: lifecycleReceipt(['lifecycle', 'settingsQuarantined'], 2), scenario: 'lifecycle', numbers: 'int64' as const, code: 0, available: true, reason: 'LIFECYCLE_RESULT_INCOMPLETE_OR_INVALID'}
   ];
 }

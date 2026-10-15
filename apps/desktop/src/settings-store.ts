@@ -10,7 +10,14 @@ import {DEFAULT_SETTINGS, MAX_SETTINGS_BYTES, parseSettings, serializeSettings, 
 // instance. Loading never writes; a change is applied in memory only after its atomic write and rename succeeded.
 
 export const SETTINGS_FILE = 'settings.json';
+/** `load()` returns within this budget; a read still pending then continues in the `loading` state. */
 export const SETTINGS_LOAD_BUDGET_MS = 1000;
+/**
+ * From the start of loading: a read that has not settled by then is treated as hung. The session stays `unreadable`
+ * and the read's later result is ignored. A bounded read of a file of at most 64 KiB that takes this long is not
+ * CPU starvation (in hosted run 38755116140 both windows had loaded about 6 s after start) but a stuck file system.
+ */
+export const SETTINGS_READ_LIMIT_MS = 30_000;
 /** Delays before each retry of the final rename; five retries within 300 ms. */
 export const RENAME_RETRY_DELAYS_MS: readonly number[] = Object.freeze([20, 40, 60, 80, 100]);
 /** Outstanding writes, including the one in progress; further requests are refused at once. */
@@ -57,6 +64,11 @@ export interface SettingsStoreOptions {
   /** Waits between rename retries. */
   delay?: (milliseconds: number) => Promise<void>;
   now?: () => Date;
+  /**
+   * Called once when a read that outlasted the load budget is applied: its own result, or `unreadable` at the read
+   * limit. Never called for a load that finished within the budget, or for a save.
+   */
+  changed?: () => void;
 }
 const systemTimers: SettingsTimers = {
   setTimeout: (callback, milliseconds) => setTimeout(callback, milliseconds),
@@ -70,13 +82,13 @@ export function settingsDirectory(localAppData: string | undefined): string | un
 }
 
 const errorCode = (error: unknown) => error && typeof error === 'object' && 'code' in error ? String(error.code) : undefined;
-const READ_ONLY_STATES: readonly SettingsState[] = ['newer-version', 'unreadable', 'unavailable'];
+const READ_ONLY_STATES: readonly SettingsState[] = ['loading', 'newer-version', 'unreadable', 'unavailable'];
 const QUARANTINED_STATES: readonly SettingsState[] = ['invalid-file', 'unsupported-older'];
 type Loaded = {state: SettingsState; settings: Settings; facts?: DiagnosticFacts};
 
 export class SettingsStore {
   private settings: Settings = DEFAULT_SETTINGS;
-  private state: SettingsState = 'defaults';
+  private state: SettingsState = 'loading';
   private quarantinePending = false;
   private loadSettled = false;
   private saveError: SettingsSaveError | null = null;
@@ -87,45 +99,66 @@ export class SettingsStore {
   private readonly delay: (milliseconds: number) => Promise<void>;
   private readonly now: () => Date;
   private readonly log: NonNullable<SettingsStoreOptions['log']>;
+  private readonly changed: () => void;
   constructor(private readonly directory: string | undefined, options: SettingsStoreOptions = {}) {
     this.fs = options.fs ?? nodeFs;
     this.timers = options.timers ?? systemTimers;
     this.delay = options.delay ?? (milliseconds => new Promise(resolve => this.timers.setTimeout(resolve, milliseconds)));
     this.now = options.now ?? (() => new Date());
     this.log = options.log ?? (() => undefined);
+    this.changed = options.changed ?? (() => undefined);
   }
 
-  /** True once `load()` has applied its result, including a budget or read fallback. */
+  /** True once `load()` has returned: with the read's result, or with the pending `loading` state after the budget. */
   get settled(): boolean {return this.loadSettled;}
 
   view(): SettingsView {
     return {units: this.settings.units, state: this.state, writable: !READ_ONLY_STATES.includes(this.state), saveError: this.saveError};
   }
 
-  /** Reads and classifies the file within 1000 ms; never creates, changes or removes anything. */
-  async load(): Promise<SettingsView> {
-    const read = this.classify();
-    // Saves queue behind the load, even when its budget expires first.
-    this.tail = read.catch(() => undefined);
-    let timer: unknown, budgetExpired = false;
-    const expired = new Promise<Loaded>(resolve => {timer = this.timers.setTimeout(() => {
-      budgetExpired = true; resolve({state: 'unreadable', settings: DEFAULT_SETTINGS, facts: {reason: 'load-budget'}});
-    }, SETTINGS_LOAD_BUDGET_MS);});
-    const loaded = await Promise.race([read.catch((): Loaded => ({state: 'unreadable', settings: DEFAULT_SETTINGS, facts: {reason: 'read'}})), expired]);
-    this.timers.clearTimeout(timer);
-    // A read that still hangs must not hold later saves or the exit; the unreadable state refuses saves anyway.
-    if (budgetExpired) this.tail = Promise.resolve();
-    this.settings = loaded.settings; this.state = loaded.state;
-    this.quarantinePending = QUARANTINED_STATES.includes(loaded.state);
-    this.loadSettled = true;
-    // Neither event name may look like a failure: a fallback is a supported outcome, not an error.
-    this.log(loaded.state === 'defaults' || loaded.state === 'loaded' ? 'SETTINGS_LOADED' : 'SETTINGS_FALLBACK', undefined, {state: loaded.state, ...loaded.facts});
-    return this.view();
+  /**
+   * Reads and classifies the file; never creates, changes or removes anything. Returns within 1000 ms: with the read's
+   * result, or with the read-only `loading` state while the read continues. That same read is applied when it settles
+   * (reported through `changed`), unless the 30 s read limit made the session `unreadable` first.
+   */
+  load(): Promise<SettingsView> {
+    let phase: 'budget' | 'late' | 'done' = 'budget', budget: unknown, limit: unknown;
+    let returned!: (view: SettingsView) => void, applied!: () => void;
+    const result = new Promise<SettingsView>(resolve => {returned = resolve;});
+    // Saves requested before load() returned queue until the read is applied or declared hung. Later saves meet the
+    // loading state and are refused at once, so neither they nor the exit wait for a pending read.
+    this.tail = new Promise<void>(resolve => {applied = resolve;});
+    const apply = (loaded: Loaded) => {
+      const late = phase === 'late';
+      phase = 'done';
+      this.settings = loaded.settings; this.state = loaded.state;
+      this.quarantinePending = QUARANTINED_STATES.includes(loaded.state);
+      this.loadSettled = true;
+      // Neither event name may look like a failure: a fallback is a supported outcome, not an error.
+      this.log(loaded.state === 'defaults' || loaded.state === 'loaded' ? 'SETTINGS_LOADED' : 'SETTINGS_FALLBACK', undefined, {state: loaded.state, ...loaded.facts});
+      applied();
+      if (late) this.changed(); else returned(this.view());
+    };
+    void this.classify().catch((): Loaded => ({state: 'unreadable', settings: DEFAULT_SETTINGS, facts: {reason: 'read'}})).then(loaded => {
+      // A read that settles after the read limit is ignored: the session already reported it as unreadable.
+      if (phase === 'done') return;
+      this.timers.clearTimeout(phase === 'budget' ? budget : limit);
+      apply(loaded);
+    });
+    budget = this.timers.setTimeout(() => {
+      if (phase !== 'budget') return;
+      phase = 'late'; this.loadSettled = true;
+      this.log('SETTINGS_LOAD_PENDING', undefined, {state: 'loading', reason: 'load-budget'});
+      limit = this.timers.setTimeout(() => {if (phase === 'late') apply({state: 'unreadable', settings: DEFAULT_SETTINGS, facts: {reason: 'load-limit'}});},
+        SETTINGS_READ_LIMIT_MS - SETTINGS_LOAD_BUDGET_MS);
+      returned(this.view());
+    }, SETTINGS_LOAD_BUDGET_MS);
+    return result;
   }
 
   /** Serialized save of one game's profile. Resolves with the applied settings only after the durable rename. */
   async setUnitProfile(game: UnitGame, profile: UnitProfile): Promise<SettingsView> {
-    // After the load, a read-only state is refused at once instead of queuing behind other work.
+    // Once load() returned, a read-only state, including a pending read, is refused at once instead of queuing.
     if (this.loadSettled && READ_ONLY_STATES.includes(this.state)) throw this.refusal();
     if (this.pending >= MAX_PENDING_SETTINGS_WRITES) throw new SettingsBusyError();
     this.pending++;
@@ -190,7 +223,7 @@ export class SettingsStore {
 
   private async write(game: UnitGame, profile: UnitProfile): Promise<SettingsView> {
     const directory = this.directory;
-    // A save queued before the load finished meets the loaded state here.
+    // A save queued before load() returned meets the applied state here, or `unreadable` at the read limit.
     if (!directory || READ_ONLY_STATES.includes(this.state)) throw this.refusal();
     const next: Settings = {units: Object.freeze({...this.settings.units, [game]: profile})};
     const target = path.join(directory, SETTINGS_FILE);
