@@ -504,7 +504,10 @@ int wmain(int argc, wchar_t** argv) {
       require(parse(read_frame(server.output.value)).at("type").string() == "ready");
       Child client(broker, v1Arguments, true);
       if (scenario == "v1-major-mismatch" || scenario == "v1-name-mismatch" || scenario == "v1-collision") {
-        client.eof(); require(client.wait() == 1 && noOutput(client)); server.eof(); require(server.wait() == 0); continue;
+        // Each rejection must come from its own discovery check: a wrong major or pipe name fails while the record is
+        // validated, and a second live record fails only after both passed the image check.
+        client.eof(); require(client.wait() == 1 && noOutput(client) && diagnosed(client, scenario == "v1-collision" ? "server-image" : "discovery", "[0-9]{1,10}"));
+        server.eof(); require(server.wait() == 0); continue;
       }
       const auto authority = parse(read_frame(client.output.value));
       exact(authority, {"type", "schemaVersion", "source", "processCreationTime", "userTag", "protocolMajor"});
