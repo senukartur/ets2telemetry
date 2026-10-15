@@ -605,7 +605,7 @@ ET-010c implementation update on October 15, 2026: the dashboard and ET-012a's o
 | F10 | IPC: no new channel or bridge key; the payload gains the validated optional `v1`. For ET-010c only this supersedes N4's "no bridge, preload or IPC change" |
 | C1 | For ET-010c, ET-012a L7's statement that the bridge carries v0 only is superseded; `LiveTelemetry` still never reaches the overlay renderer |
 | C2 | F4(c) is adopted: v1's localized names replace game ids for the same job |
-| C3 | ET-012a's geometry and styles are kept (ET-012b owns them). The telemetry smoke records strip overflow: with all fourteen sections on, the strip clips destination, distance remaining, deadline, expected income and game time onto its hidden second line; this is an ET-012 follow-up |
+| C3 | ET-012a's geometry and styles are kept (ET-012b owns them). The telemetry smoke records overflow for review only. With all sections on and v1 present, the Strip shows twelve sections and keeps seven on its visible line: v1 newly hides destination, distance remaining and deadline, while expected income and game time are already clipped without v1 in the synthetic fixture. The Card fits but cuts off long origin, destination and income values; the HUD fits; the Cluster was not measured. This default-configuration regression is owned by ET-012b, and ET-010c is not merged until it is resolved there |
 | C4 | Section marker strings only: `protocol-v1` reads "needs the plugin's protocol v1 data", `ids-until-v1` "shows game ids without protocol v1"; the section requirement map is unchanged |
 | C5 | The field documentation drops "without an overlay change" for v1 fields |
 
