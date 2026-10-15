@@ -52,6 +52,8 @@ export function workerHandle(worker: Worker): StorageWorkerHandle {
 
 interface Pending {command: StorageCommand; resolve: (result: Result<unknown>) => void}
 interface InFlight extends Pending {id: number; timer: unknown}
+/** Whether an argument is an object whose fields can be copied; anything else is forwarded for the parser to refuse. */
+const isObject = (value: unknown): value is object => typeof value === 'object' && value !== null;
 const failure = (code: StorageErrorCode): {ok: false; error: StorageError} => ({ok: false, error: storageError(code)});
 
 export class StorageClient {
@@ -85,20 +87,26 @@ export class StorageClient {
   commitEvent(input: {message: unknown; effects?: TripEffect[]}): Promise<Result<CommitResult>> { return this.#request({name: 'commitEvent', input}); }
   commitGap(input: {message: unknown; effects?: TripEffect[]}): Promise<Result<CommitResult>> { return this.#request({name: 'commitGap', input}); }
   appendSamples(pluginSessionId: string, rows: SampleInput[]): Promise<Result<{appended: number}>> { return this.#request({name: 'appendSamples', pluginSessionId, rows}); }
-  /** Only `ifAbsent` of the options crosses the worker boundary. */
+  /**
+   * Only `ifAbsent` of the options crosses the worker boundary. A value that is not an object is forwarded as given, so
+   * the worker's request parser refuses it with INVALID_INPUT instead of the client throwing.
+   */
   recordCompleteness(pluginSessionId: string, interval: CompletenessInterval, options?: CompletenessOptions): Promise<Result<undefined>> {
-    return this.#request(options === undefined ? {name: 'recordCompleteness', pluginSessionId, interval}
-      : {name: 'recordCompleteness', pluginSessionId, interval, options: {ifAbsent: options.ifAbsent}});
+    if (options === undefined) return this.#request({name: 'recordCompleteness', pluginSessionId, interval});
+    return this.#request({name: 'recordCompleteness', pluginSessionId, interval, options: isObject(options) ? {ifAbsent: options.ifAbsent} : options});
   }
   committedThrough(pluginSessionId: string): Promise<Result<Uint64>> { return this.#request({name: 'committedThrough', pluginSessionId}); }
   getSession(pluginSessionId: string): Promise<Result<SessionRecord>> { return this.#request({name: 'getSession', pluginSessionId}); }
   getEvent(pluginSessionId: string, eventSeq: Uint64): Promise<Result<EventRow | undefined>> { return this.#request({name: 'getEvent', pluginSessionId, eventSeq}); }
   listEvents(pluginSessionId: string, page?: {afterEventSeq?: Uint64; limit?: number}): Promise<Result<EventRow[]>> { return this.#request({name: 'listEvents', pluginSessionId, page}); }
   getTrip(tripUuid: string): Promise<Result<TripRecord | undefined>> { return this.#request({name: 'getTrip', tripUuid}); }
-  /** The page is copied field by field: only the cursor, limit and the `game` and `outcome` filter cross the boundary. */
+  /**
+   * The page is copied field by field: only the cursor, limit and the `game` and `outcome` filter cross the boundary.
+   * A page that is not an object is forwarded as given, so the worker's request parser refuses it with INVALID_INPUT.
+   */
   listTrips(page?: TripPage): Promise<Result<TripList>> {
-    return this.#request(page === undefined ? {name: 'listTrips'}
-      : {name: 'listTrips', page: {cursor: page.cursor, limit: page.limit, game: page.game, outcome: page.outcome}});
+    if (page === undefined) return this.#request({name: 'listTrips'});
+    return this.#request({name: 'listTrips', page: isObject(page) ? {cursor: page.cursor, limit: page.limit, game: page.game, outcome: page.outcome} : page});
   }
   listSamples(scope: {tripUuid: string} | {pluginSessionId: string}, page?: {afterId?: string; limit?: number}): Promise<Result<SampleRecord[]>> { return this.#request({name: 'listSamples', scope, page}); }
   storageInfo(): Promise<Result<StorageInfo>> { return this.#request({name: 'storageInfo'}); }

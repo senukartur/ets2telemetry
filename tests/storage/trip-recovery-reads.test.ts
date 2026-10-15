@@ -143,9 +143,14 @@ describe('recordCompleteness ifAbsent (R12)', () => {
     ok(await second.client.recordCompleteness(ETS2_A, {...RESTORE_LOSS, kind: 'event-loss'}, {ifAbsent: true}));
     ok(await second.client.recordCompleteness(ETS2_A, {...RESTORE_LOSS, tripUuid: T(1)}, {ifAbsent: true}));
     ok(await second.client.recordCompleteness(ETS2_A, {...RESTORE_LOSS, tripUuid: T(1)}, {ifAbsent: true}));
-    // An interval without eventSeq bounds or detail is matched on the absent values too.
-    ok(await second.client.recordCompleteness(ETS2_A, {kind: 'not-connected', startUtcMs: BASE_UTC}, {ifAbsent: true}));
-    ok(await second.client.recordCompleteness(ETS2_A, {kind: 'not-connected', startUtcMs: BASE_UTC + 5_000}, {ifAbsent: true}));
+    // Review pass 1: ifAbsent needs both eventSeq bounds. Without them two distinct outages (here two not-connected
+    // intervals that differ only in their labels) would compare equal and the second would be dropped, so it is refused.
+    failed(await second.client.recordCompleteness(ETS2_A, {kind: 'not-connected', startUtcMs: BASE_UTC}, {ifAbsent: true}), 'INVALID_INPUT');
+    failed(await second.client.recordCompleteness(ETS2_A, {kind: 'not-connected', startUtcMs: BASE_UTC + 5_000, firstEventSeq: '3'}, {ifAbsent: true}), 'INVALID_INPUT');
+    failed(await second.client.recordCompleteness(ETS2_A, {kind: 'not-connected', startUtcMs: BASE_UTC + 5_000, lastEventSeq: '5'}, {ifAbsent: true}), 'INVALID_INPUT');
+    // Without ifAbsent both outages are stored.
+    ok(await second.client.recordCompleteness(ETS2_A, {kind: 'not-connected', startUtcMs: BASE_UTC}));
+    ok(await second.client.recordCompleteness(ETS2_A, {kind: 'not-connected', startUtcMs: BASE_UTC + 5_000}));
     await second.close();
     expect(intervals()).toEqual([
       {kind: 'restore-loss', trip: null, first: 3, last: 5, startUtc: null, detail},
@@ -155,7 +160,8 @@ describe('recordCompleteness ifAbsent (R12)', () => {
       {kind: 'restore-loss', trip: null, first: 3, last: 5, startUtc: null, detail: '{"cause":"ack-ahead-of-storage"}'},
       {kind: 'event-loss', trip: null, first: 3, last: 5, startUtc: null, detail},
       {kind: 'restore-loss', trip: T(1), first: 3, last: 5, startUtc: null, detail},
-      {kind: 'not-connected', trip: null, first: null, last: null, startUtc: BASE_UTC, detail: null}
+      {kind: 'not-connected', trip: null, first: null, last: null, startUtc: BASE_UTC, detail: null},
+      {kind: 'not-connected', trip: null, first: null, last: null, startUtc: BASE_UTC + 5_000, detail: null}
     ]);
   });
 
@@ -176,6 +182,10 @@ describe('recordCompleteness ifAbsent (R12)', () => {
     expect(intervals()).toEqual([{kind: 'restore-loss', trip: null, first: 3, last: 5, startUtc: null, detail}]);
     const storage = await ws.open();
     failed(storage.recordCompleteness(ETS2_A, RESTORE_LOSS, {ifAbsent: 1} as unknown as {ifAbsent: boolean}), 'INVALID_INPUT');
+    // The in-process core refuses an unbounded ifAbsent interval too, and stores nothing for it.
+    failed(storage.recordCompleteness(ETS2_A, {kind: 'not-connected', startUtcMs: BASE_UTC}, {ifAbsent: true}), 'INVALID_INPUT');
+    storage.close();
+    expect(intervals()).toEqual([{kind: 'restore-loss', trip: null, first: 3, last: 5, startUtc: null, detail}]);
   });
 });
 

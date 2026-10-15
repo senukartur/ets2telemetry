@@ -1,5 +1,5 @@
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
-import type {Result, StorageError, StorageErrorCode} from '../../packages/storage/src/api';
+import type {CompletenessOptions, Result, StorageError, StorageErrorCode, TripPage} from '../../packages/storage/src/api';
 import {COMMAND_DEADLINE_MS, MAX_QUEUED_COMMANDS, OPEN_DEADLINE_MS, StorageClient, type StorageClientOptions, type StorageWorkerHandle} from '../../packages/storage/src/client';
 import {storageError} from '../../packages/storage/src/errors';
 import {parseRequest, type StorageRequest} from '../../packages/storage/src/worker/protocol';
@@ -108,6 +108,25 @@ describe('ET-015a trip filter and completeness options at the worker boundary', 
     expect(f.sent[1].command).toEqual({name: 'recordCompleteness', pluginSessionId: P1, interval: INTERVAL});
     expect(Object.hasOwn(f.sent[1].command, 'options')).toBe(false);
     for (const sent of f.sent) expect(parseRequest(sent).ok).toBe(true);
+  });
+  // Review pass 1: a non-object page or options value used to throw a TypeError in the client. It is forwarded as given,
+  // so the strict worker parser refuses it and the caller gets an INVALID_INPUT result.
+  it.each([['null', null], ['a number', 5], ['a string', 'ets2']])('forwards %s as the page or options value instead of throwing', (_name, value) => {
+    const f = fixture();
+    expect(() => f.client.listTrips(value as unknown as TripPage)).not.toThrow();
+    expect(() => f.client.recordCompleteness(P1, INTERVAL, value as unknown as CompletenessOptions)).not.toThrow();
+    expect(f.sent[0].command).toEqual({name: 'listTrips', page: value});
+    expect(parseRequest(f.sent[0])).toEqual({ok: false, id: 1});
+    f.reply(1, error('INVALID_INPUT') as Result<unknown>);
+    expect(f.sent).toHaveLength(2);
+    expect(f.sent[1].command).toEqual({name: 'recordCompleteness', pluginSessionId: P1, interval: INTERVAL, options: value});
+    expect(parseRequest(f.sent[1])).toEqual({ok: false, id: 2});
+  });
+  it('returns the INVALID_INPUT answer of a refused page to the caller', async () => {
+    const f = fixture();
+    const listed = f.client.listTrips(null as unknown as TripPage);
+    f.reply(1, error('INVALID_INPUT') as Result<unknown>);
+    await expect(listed).resolves.toEqual(error('INVALID_INPUT'));
   });
   it.each([
     ['no page', undefined],

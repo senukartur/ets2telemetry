@@ -153,7 +153,8 @@ function addTrailers(c: EffectContext, trip: bigint, refs: unknown) {
 /**
  * Inserts one completeness interval. With `ifAbsent` (recordCompleteness only, ET-015a) every value is validated first,
  * then nothing is written, not even the clock row, when the session already holds an interval with the same trip
- * reference, kind, first and last eventSeq and canonical detail.
+ * reference, kind, first and last eventSeq and canonical detail. `ifAbsent` requires both eventSeq bounds: labels are
+ * not compared, so two distinct outages without bounds would otherwise look equal and the second would be dropped.
  */
 function addInterval(c: EffectContext, interval: CompletenessInterval, ifAbsent = false) {
   const trip = interval.tripUuid === undefined || interval.tripUuid === null ? null : tripRow(c, interval.tripUuid).id;
@@ -167,6 +168,7 @@ function addInterval(c: EffectContext, interval: CompletenessInterval, ifAbsent 
   const kind = enumValue(interval.kind, INTERVAL_KINDS), startUtc = optionalUtc(interval.startUtcMs), endUtc = optionalUtc(interval.endUtcMs);
   const startMonotonic = optionalKey(interval.startMonotonicNs), endMonotonic = optionalKey(interval.endMonotonicNs);
   const first = optionalKey(interval.firstEventSeq), last = optionalKey(interval.lastEventSeq);
+  if (ifAbsent && (first === null || last === null)) fail('INVALID_INPUT');
   if (ifAbsent && statement(c.db, `SELECT 1 FROM completeness_intervals WHERE plugin_session_ref = ? AND trip_ref IS ? AND kind = ? AND first_event_seq IS ? AND last_event_seq IS ?
     AND detail_json IS ? LIMIT 1`).pluck().get(c.session.id, trip, kind, first, last, detail) !== undefined) return;
   const clock = interval.sourceClockId === undefined ? null : clockRef(c.db, c.session.id, 'source-monotonic', interval.sourceClockId);
