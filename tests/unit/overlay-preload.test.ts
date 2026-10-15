@@ -14,7 +14,8 @@ class Port {
 }
 let bridge: OverlayBridge;
 let ipc: EventEmitter & {send: ReturnType<typeof vi.fn>};
-const projected: OverlayPresentation = {source: 'ETS2', origin: 'synthetic', status: 'connected', speed: '90.0', fuel: '73.0', speedUnit: 'km/h', fuelUnit: 'L', freshness: 'current'};
+const projected: OverlayPresentation = {source: 'ETS2', origin: 'synthetic', status: 'connected', speed: '90.0', fuel: '73.0', speedUnit: 'km/h', fuelUnit: 'L', freshness: 'current',
+  layout: 'card', paused: true, sections: [{id: 'speed', state: 'value', text: '90.0 km/h'}, {id: 'rpm', state: 'value', text: '1500 rpm', ring: 0.5}, {id: 'fuel', state: 'unavailable'}]};
 beforeEach(async () => {
   vi.useFakeTimers(); vi.resetModules(); ipc = Object.assign(new EventEmitter(), {send: vi.fn()});
   const started = Date.now(); vi.spyOn(performance, 'now').mockImplementation(() => Date.now() - started);
@@ -143,4 +144,12 @@ it('rechecks the monotonic budget at cooldown expiry and waits again if the cloc
   await vi.advanceTimersByTimeAsync(60250); expect(subscriptions()).toBe(3); expect(vi.getTimerCount()).toBe(1);
   clock.mockReturnValue(120500);
   await vi.advanceTimersByTimeAsync(60000); expect(subscriptions()).toBe(4); expect(vi.getTimerCount()).toBe(0); stop();
+});
+// ET-012a: the quiet deadline blanks every section but keeps the layout and section list, so the overlay does not jump.
+it('blanks every section on quiet transport expiry and keeps the layout and units', async () => {
+  const receive = vi.fn(), stop = bridge.subscribeOverlay(receive), port = attach(); port.deliver(projected);
+  await vi.advanceTimersByTimeAsync(500);
+  expect(receive.mock.lastCall?.[0]).toEqual({source: 'ETS2', origin: 'synthetic', status: 'stale', speed: '—', fuel: '—', speedUnit: 'km/h', fuelUnit: 'L',
+    freshness: 'stale', layout: 'card', paused: false, sections: [{id: 'speed', state: 'unavailable'}, {id: 'rpm', state: 'unavailable'}, {id: 'fuel', state: 'unavailable'}]});
+  stop();
 });

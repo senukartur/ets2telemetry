@@ -56,7 +56,13 @@ beforeAll(async () => {
 // readiness timing is unchanged. `settingsWrite` controls each save; `settingsView` is what the store reports.
 class FakeSettingsError extends Error {constructor(readonly code: 'SETTINGS_WRITE_FAILED' | 'SETTINGS_READ_ONLY') {super(code === 'SETTINGS_READ_ONLY' ? 'Settings are read-only' : 'Settings could not be saved');}}
 class FakeSettingsBusyError extends Error {}
-let settingsView: {units: {ets2: string; ats: string}; state: string; writable: boolean; saveError: string | null};
+// ET-012a: the view carries the overlay layout and sections; `overlayWrite` controls each overlay save.
+const ALL_SECTIONS = {'speed': true, 'gear': true, 'rpm': true, 'fuel': true, 'range': true, 'sdk-consumption': true, 'cargo': true, 'origin': true,
+  'destination': true, 'distance-driven': true, 'distance-remaining': true, 'deadline': true, 'expected-income': true, 'game-time': true};
+const DEFAULT_OVERLAY = {layout: 'strip', sections: ALL_SECTIONS};
+let settingsView: {units: {ets2: string; ats: string}; overlay: {layout: string; sections: Record<string, boolean>}; state: string; writable: boolean; saveError: string | null};
+type OverlayWrite = (kind: 'layout' | 'sections', value: unknown) => Promise<unknown>;
+let overlayWrite: ReturnType<typeof vi.fn<OverlayWrite>>;
 type SettingsWrite = (game: string, profile: string) => Promise<unknown>;
 let settingsWrite: ReturnType<typeof vi.fn<SettingsWrite>>;
 let settingsIdle: Promise<void> | undefined;
@@ -118,8 +124,8 @@ function installFixture() {
   log = vi.fn(); vi.doMock('../../apps/desktop/src/diagnostics', () => ({createDiagnostics: () => log}));
   vi.doMock('../../apps/desktop/src/broker-artifact', () => ({brokerConfiguration: resolveBroker, createBrokerResolver: () => resolveBroker}));
   vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'synthetic');
-  settingsView = {units: {ets2: 'metric', ats: 'us-customary'}, state: 'defaults', writable: true, saveError: null};
-  settingsWrite = vi.fn<SettingsWrite>(); settingsIdle = undefined; settingsDirectories = []; settingsLoaded = true; settingsLoading = Promise.resolve();
+  settingsView = {units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: null};
+  settingsWrite = vi.fn<SettingsWrite>(); overlayWrite = vi.fn<OverlayWrite>(); settingsIdle = undefined; settingsDirectories = []; settingsLoaded = true; settingsLoading = Promise.resolve();
   settingsChanged = undefined;
   vi.doMock('../../apps/desktop/src/settings-store', () => ({
     settingsDirectory: (localAppData: unknown) => typeof localAppData === 'string' ? `${localAppData}\\ETS2Telemetry\\settings` : undefined, SettingsError: FakeSettingsError, SettingsBusyError: FakeSettingsBusyError,
@@ -129,6 +135,8 @@ function installFixture() {
       view() {return settingsView;}
       load() {return settingsLoading.then(() => {settingsLoaded = true; return settingsView;});}
       setUnitProfile(game: string, profile: string) {return settingsWrite(game, profile);}
+      setOverlayLayout(layout: string) {return overlayWrite('layout', layout);}
+      setOverlaySections(sections: unknown) {return overlayWrite('sections', sections);}
       idle() {return settingsIdle;}
     }}));
 }
@@ -697,7 +705,7 @@ it('reopens a new dashboard from the tray that resubscribes without a second ups
   ipc.emit('telemetry:subscribe', reopenedSender);
   expect(reopened.postMessage).toHaveBeenCalledWith('telemetry:port', null, [channels.at(-1)!.port2]);
   expect(upstreamRequests()).toBe(1); expect(children).toHaveLength(1);
-  expect(handlers.get('app:get-state')!(reopenedSender)).toEqual({health: {service: 'ready', storage: 'verified', recording: 'unavailable', lastError: null}, settings: {units: {ets2: 'metric', ats: 'us-customary'}, state: 'defaults', writable: true, saveError: null}});
+  expect(handlers.get('app:get-state')!(reopenedSender)).toEqual({health: {service: 'ready', storage: 'verified', recording: 'unavailable', lastError: null}, settings: {units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: null}});
   // A second tray open focuses the existing window instead of creating another.
   trays[0].emit('click'); expect(windows).toHaveLength(3); expect(windows[2].show).toHaveBeenCalledOnce(); expect(windows[2].focus).toHaveBeenCalledOnce();
 });
@@ -802,7 +810,7 @@ it('shows restart exhaustion in health and the tray and stays running until an e
     children.at(-1)!.emit('exit', 1); await vi.advanceTimersByTimeAsync(1000);
     if (crash < 2) {children.at(-1)!.emit('message', {type: 'ready'}); await settle();}
   }
-  expect(handlers.get('app:get-state')!(trusted())).toEqual({health: {service: 'failed', storage: 'pending', recording: 'unavailable', lastError: 'SERVICE_RESTART_EXHAUSTED'}, settings: {units: {ets2: 'metric', ats: 'us-customary'}, state: 'defaults', writable: true, saveError: null}});
+  expect(handlers.get('app:get-state')!(trusted())).toEqual({health: {service: 'failed', storage: 'pending', recording: 'unavailable', lastError: 'SERVICE_RESTART_EXHAUSTED'}, settings: {units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: null}});
   await vi.advanceTimersByTimeAsync(500);
   expect(trays[0].setImage).toHaveBeenCalled(); expect(trays[0].setToolTip).toHaveBeenLastCalledWith('ETS2Telemetry\nService failed');
   expect(app.exit).not.toHaveBeenCalled();
@@ -833,7 +841,7 @@ it('answers a dashboard opened during a service restart with a not-ready status,
   expect(handlers.get('scaffold:status')!(sender)).toBeNull();
   expect(() => handlers.get('scaffold:status')!(trusted())).toThrow('Untrusted');
   ipc.emit('app:subscribe-state', sender);
-  expect(reopened.send).toHaveBeenLastCalledWith('app:state', {health: expect.objectContaining({service: 'restarting'}), settings: {units: {ets2: 'metric', ats: 'us-customary'}, state: 'defaults', writable: true, saveError: null}});
+  expect(reopened.send).toHaveBeenLastCalledWith('app:state', {health: expect.objectContaining({service: 'restarting'}), settings: {units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: null}});
   // When the pushed health reports ready, the status query already answers with the ready status.
   let statusAtReadyPush: unknown;
   reopened.send.mockImplementation((channel: string, state: {health: {service: string}}) => {
@@ -929,7 +937,7 @@ it('loads settings from LOCALAPPDATA and opens the first windows only after the 
 // state, and the late read's result reaches the dashboard and the overlay as a save's does.
 it('applies a settings read that settles after the load budget to the dashboard and the overlay without renewing authority', async () => {
   trayAvailable = true; vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2');
-  const pending = {units: {ets2: 'metric', ats: 'us-customary'}, state: 'loading', writable: false, saveError: null};
+  const pending = {units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loading', writable: false, saveError: null};
   settingsView = pending; await ready();
   expect(windows).toHaveLength(2);
   ipc.emit('app:subscribe-state', trusted()); ipc.emit('overlay:subscribe', overlayTrusted()); const overlayChannel = channels[1];
@@ -940,7 +948,7 @@ it('applies a settings read that settles after the load budget to the dashboard 
   expect(windows[1].showInactive).toHaveBeenCalledOnce(); consumeOverlay(overlayChannel);
   await drainOverlay(overlayChannel, 150);
   // The store applies the late read (t = 200 ms) and reports it; main reads the new view from the store.
-  settingsView = {units: {ets2: 'us-customary', ats: 'us-customary'}, state: 'loaded', writable: true, saveError: null};
+  settingsView = {units: {ets2: 'us-customary', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null};
   expect(settingsChanged).toBeTypeOf('function'); settingsChanged!();
   expect(pushes().at(-1)).toEqual({health: {service: 'ready', storage: 'verified', recording: 'unavailable', lastError: null}, settings: settingsView});
   expect(handlers.get('app:get-state')!(trusted())).toMatchObject({settings: settingsView});
@@ -976,7 +984,7 @@ it('applies a unit profile only after the durable save and republishes the overl
   // Not durable yet: nothing applied, pushed or republished.
   expect(settingsWrite).toHaveBeenCalledExactlyOnceWith('ets2', 'us-customary');
   expect(pushes()).toHaveLength(before); expect(overlayProjection(overlayChannel)).toMatchObject({speedUnit: 'km/h'});
-  settingsView = {units: {ets2: 'us-customary', ats: 'us-customary'}, state: 'loaded', writable: true, saveError: null}; saved.resolve(settingsView);
+  settingsView = {units: {ets2: 'us-customary', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null}; saved.resolve(settingsView);
   await expect(request).resolves.toEqual(settingsView);
   expect(pushes().at(-1)).toEqual({health: {service: 'ready', storage: 'verified', recording: 'unavailable', lastError: null}, settings: settingsView});
   await vi.advanceTimersByTimeAsync(50);
@@ -1006,14 +1014,14 @@ it.each(['SETTINGS_WRITE_FAILED', 'SETTINGS_READ_ONLY'] as const)('keeps the uni
   // The store records the refusal in its view, as the real store does.
   settingsWrite.mockImplementation(() => {settingsView = {...settingsView, saveError: code}; return Promise.reject(new FakeSettingsError(code));});
   await expect(saveUnits(trusted(), 'ets2', 'us-customary')).rejects.toThrow(code === 'SETTINGS_READ_ONLY' ? 'Settings are read-only' : 'Settings could not be saved');
-  const refused = {health, settings: {units: {ets2: 'metric', ats: 'us-customary'}, state: 'defaults', writable: true, saveError: code}};
+  const refused = {health, settings: {units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: code}};
   expect(handlers.get('app:get-state')!(trusted())).toEqual(refused);
   expect(contents.send).toHaveBeenLastCalledWith('app:state', refused);
   await vi.advanceTimersByTimeAsync(50); expect(overlayChannel.port1.postMessage.mock.calls).toHaveLength(deliveries);
   // A later successful save clears the settings error and still leaves the service problem in place.
-  settingsWrite.mockImplementation(() => {settingsView = {units: {ets2: 'metric', ats: 'us-customary'}, state: 'loaded', writable: true, saveError: null}; return Promise.resolve(settingsView);});
+  settingsWrite.mockImplementation(() => {settingsView = {units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null}; return Promise.resolve(settingsView);});
   await saveUnits(trusted(), 'ats', 'us-customary');
-  const saved = {health, settings: {units: {ets2: 'metric', ats: 'us-customary'}, state: 'loaded', writable: true, saveError: null}};
+  const saved = {health, settings: {units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null}};
   expect(handlers.get('app:get-state')!(trusted())).toEqual(saved);
   expect(contents.send).toHaveBeenLastCalledWith('app:state', saved);
 });
@@ -1036,8 +1044,121 @@ it('exits after at most 1000 ms when an in-flight settings save does not settle'
 it('reports the settings view in the gated lifecycle facts', () => isolatedProfile(async profile => {
   vi.stubEnv('ETS2TELEMETRY_LIVE_SMOKE', '1'); vi.stubEnv('ETS2TELEMETRY_DIAGNOSTIC_DIR', 'C:\\isolated\\diagnostics');
   vi.stubEnv('ETS2TELEMETRY_PROFILE_DIR', profile); trayAvailable = true;
-  settingsView = {units: {ets2: 'metric', ats: 'us-customary'}, state: 'invalid-file', writable: true, saveError: null}; await ready();
+  settingsView = {units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'invalid-file', writable: true, saveError: null}; await ready();
   let facts: Record<string, unknown> | undefined;
   app.emit('ets2telemetry:diagnostic-lifecycle-state', (state: Record<string, unknown>) => {facts = state;});
-  expect(facts).toMatchObject({settings: {units: {ets2: 'metric', ats: 'us-customary'}, state: 'invalid-file', writable: true, saveError: null}});
+  expect(facts).toMatchObject({settings: {units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'invalid-file', writable: true, saveError: null}});
 }));
+// ET-012a: overlay layouts and sections. The snapshot's game client is 1920 x 1080 at (-1920, 0) and the fixture's
+// screen conversion is the identity, so the strip is {-1600, 8, 1280, 38} and the card {-316, 16, 300, 360}.
+const saveOverlay = (channel: 'settings:set-overlay-layout' | 'settings:set-overlay-sections', event: unknown, ...request: unknown[]) =>
+  Promise.resolve(handlers.get(channel)!(event, ...request as [unknown]));
+const sectionIds = (projection: Record<string, unknown>) => (projection.sections as {id: string}[]).map(section => section.id);
+it('creates the overlay window at the strip nominal size by default', async () => {
+  await ready(); expect(configurations[1]).toMatchObject({width: 1280, height: 38});
+});
+it('creates the overlay window at the nominal size of the saved layout', async () => {
+  settingsView = {...settingsView, overlay: {layout: 'cluster', sections: ALL_SECTIONS}}; await ready();
+  expect(configurations[1]).toMatchObject({width: 440, height: 220});
+});
+it('delivers the saved layout and sections in the overlay document first projection', async () => {
+  settingsView = {...settingsView, overlay: {layout: 'card', sections: {...ALL_SECTIONS, rpm: false, cargo: false}}}; await ready();
+  ipc.emit('overlay:subscribe', overlayTrusted());
+  const first = overlayProjection(channels.at(-1)!);
+  expect(first).toMatchObject({layout: 'card', freshness: 'unavailable', paused: false});
+  expect(sectionIds(first)).toEqual(['speed', 'gear', 'fuel', 'range', 'sdk-consumption', 'destination', 'expected-income', 'game-time']);
+});
+it('rejects overlay settings requests from untrusted senders, frames and the overlay, and invalid shapes', async () => {
+  trayAvailable = true; await ready();
+  for (const event of [{sender: {}, senderFrame: contents.mainFrame}, {sender: contents, senderFrame: {}}, overlayTrusted()]) {
+    await expect(saveOverlay('settings:set-overlay-layout', event, 'card')).rejects.toThrow('Untrusted');
+    await expect(saveOverlay('settings:set-overlay-sections', event, ALL_SECTIONS)).rejects.toThrow('Untrusted');
+  }
+  for (const request of [['bar'], ['Card'], [], ['card', 'hud'], [{layout: 'card'}]])
+    await expect(saveOverlay('settings:set-overlay-layout', trusted(), ...request)).rejects.toThrow('Invalid overlay layout request');
+  for (const request of [[], [ALL_SECTIONS, 'extra'], [{...ALL_SECTIONS, theme: true}], [{...ALL_SECTIONS, rpm: 1}],
+    [Object.fromEntries(Object.keys(ALL_SECTIONS).map(id => [id, false]))], [[true]], ['all']])
+    await expect(saveOverlay('settings:set-overlay-sections', trusted(), ...request)).rejects.toThrow('Invalid overlay sections request');
+  expect(overlayWrite).not.toHaveBeenCalled();
+  expect(contents.send).not.toHaveBeenCalledWith('app:state', expect.anything());
+});
+it('applies an overlay layout only after the durable save, then republishes and re-places the overlay without renewing authority', async () => {
+  trayAvailable = true; vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2'); await ready();
+  ipc.emit('app:subscribe-state', trusted()); ipc.emit('overlay:subscribe', overlayTrusted()); const overlayChannel = channels[1];
+  consumeOverlay(overlayChannel); deliver(currentReading()); await vi.advanceTimersByTimeAsync(50);
+  expect(overlayProjection(overlayChannel)).toMatchObject({layout: 'strip', speed: '90.0', freshness: 'current'});
+  expect(windows[1].setBounds.mock.calls).toEqual([[{x: -1600, y: 8, width: 1280, height: 38}]]);
+  expect(windows[1].showInactive).toHaveBeenCalledOnce(); consumeOverlay(overlayChannel);
+  windows[1].setAlwaysOnTop.mockClear(); windows[1].moveTop.mockClear();
+  const pushes = () => contents.send.mock.calls.filter(call => call[0] === 'app:state').map(call => call[1] as {settings: unknown});
+  const before = pushes().length, saved = deferred<typeof settingsView>();
+  overlayWrite.mockReturnValue(saved.promise);
+  const request = saveOverlay('settings:set-overlay-layout', trusted(), 'card');
+  await vi.advanceTimersByTimeAsync(100);
+  // Not durable yet: nothing applied, pushed, republished or moved.
+  expect(overlayWrite).toHaveBeenCalledExactlyOnceWith('layout', 'card');
+  expect(pushes()).toHaveLength(before); expect(windows[1].setBounds).toHaveBeenCalledOnce();
+  expect(overlayProjection(overlayChannel)).toMatchObject({layout: 'strip'});
+  settingsView = {...settingsView, overlay: {layout: 'card', sections: ALL_SECTIONS}, state: 'loaded'}; saved.resolve(settingsView);
+  await expect(request).resolves.toEqual(settingsView);
+  expect(pushes().at(-1)).toMatchObject({settings: settingsView});
+  expect(windows[1].setBounds).toHaveBeenLastCalledWith({x: -316, y: 16, width: 300, height: 360});
+  expect(windows[1].setAlwaysOnTop.mock.calls).toEqual([[true, 'screen-saver']]); expect(windows[1].moveTop).toHaveBeenCalledOnce();
+  expect(windows[1].showInactive).toHaveBeenCalledOnce();
+  await vi.advanceTimersByTimeAsync(50);
+  expect(overlayProjection(overlayChannel)).toMatchObject({layout: 'card', speed: '90.0', freshness: 'current'});
+  consumeOverlay(overlayChannel);
+  // The original 500 ms SDK deadline still applies; a renewal at the save (t = 150 ms) would end after this window.
+  await drainOverlay(overlayChannel, 400);
+  expect(overlayProjection(overlayChannel)).toMatchObject({layout: 'card', speed: '—', freshness: 'stale'});
+  expect(windows[1].showInactive).toHaveBeenCalledOnce();
+});
+it('applies overlay sections after the durable save and hands the store only a validated fresh copy', async () => {
+  trayAvailable = true; vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2'); await ready();
+  ipc.emit('overlay:subscribe', overlayTrusted()); const overlayChannel = channels[1];
+  consumeOverlay(overlayChannel); deliver(currentReading()); await vi.advanceTimersByTimeAsync(50); consumeOverlay(overlayChannel);
+  expect(sectionIds(overlayProjection(overlayChannel))).toContain('rpm');
+  const input = {...ALL_SECTIONS, rpm: false, cargo: false};
+  overlayWrite.mockImplementation((_kind, value) => {
+    settingsView = {...settingsView, overlay: {layout: 'strip', sections: value as Record<string, boolean>}, state: 'loaded'}; return Promise.resolve(settingsView);
+  });
+  await saveOverlay('settings:set-overlay-sections', trusted(), input);
+  const [kind, forwarded] = overlayWrite.mock.calls[0];
+  expect(kind).toBe('sections'); expect(forwarded).toEqual(input); expect(forwarded).not.toBe(input); expect(Object.isFrozen(forwarded)).toBe(true);
+  await vi.advanceTimersByTimeAsync(50);
+  expect(sectionIds(overlayProjection(overlayChannel))).toEqual(['speed', 'gear', 'fuel', 'sdk-consumption', 'destination', 'expected-income', 'game-time']);
+  // The same layout is not re-placed.
+  expect(windows[1].setBounds).toHaveBeenCalledOnce();
+});
+it('keeps the overlay settings and maps refusals like a unit save', async () => {
+  trayAvailable = true; await ready(); ipc.emit('app:subscribe-state', trusted());
+  overlayWrite.mockImplementation(() => {settingsView = {...settingsView, saveError: 'SETTINGS_READ_ONLY'}; return Promise.reject(new FakeSettingsError('SETTINGS_READ_ONLY'));});
+  await expect(saveOverlay('settings:set-overlay-layout', trusted(), 'hud')).rejects.toThrow('Settings are read-only');
+  expect(contents.send).toHaveBeenLastCalledWith('app:state', expect.objectContaining({settings: expect.objectContaining({overlay: DEFAULT_OVERLAY, saveError: 'SETTINGS_READ_ONLY'})}));
+  overlayWrite.mockImplementation(() => Promise.reject(new FakeSettingsBusyError('Settings request limit exceeded')));
+  await expect(saveOverlay('settings:set-overlay-sections', trusted(), ALL_SECTIONS)).rejects.toThrow('Settings request limit exceeded');
+  overlayWrite.mockImplementation(() => Promise.reject(new Error('private detail')));
+  await expect(saveOverlay('settings:set-overlay-sections', trusted(), ALL_SECTIONS)).rejects.toThrow(/^Settings could not be saved$/);
+});
+it('refuses overlay settings requests once exiting', async () => {
+  trayAvailable = true; await ready();
+  settingsIdle = deferred().promise;
+  void handlers.get('app:exit')!(trusted());
+  await expect(saveOverlay('settings:set-overlay-layout', trusted(), 'card')).rejects.toThrow('retired');
+  await expect(saveOverlay('settings:set-overlay-sections', trusted(), ALL_SECTIONS)).rejects.toThrow('retired');
+  expect(overlayWrite).not.toHaveBeenCalled();
+});
+it('re-places the overlay when a late settings read brings another layout', async () => {
+  trayAvailable = true; vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2');
+  settingsView = {...settingsView, state: 'loading', writable: false}; await ready();
+  expect(configurations[1]).toMatchObject({width: 1280, height: 38});
+  ipc.emit('overlay:subscribe', overlayTrusted()); const overlayChannel = channels[1];
+  consumeOverlay(overlayChannel); deliver(currentReading()); await vi.advanceTimersByTimeAsync(50); consumeOverlay(overlayChannel);
+  expect(windows[1].setBounds.mock.calls).toEqual([[{x: -1600, y: 8, width: 1280, height: 38}]]);
+  settingsView = {...settingsView, overlay: {layout: 'hud', sections: ALL_SECTIONS}, state: 'loaded', writable: true};
+  settingsChanged!();
+  expect(windows[1].setBounds).toHaveBeenLastCalledWith({x: -1904, y: 16, width: 320, height: 320});
+  await vi.advanceTimersByTimeAsync(50);
+  expect(overlayProjection(overlayChannel)).toMatchObject({layout: 'hud', freshness: 'current'});
+  expect(windows[1].showInactive).toHaveBeenCalledOnce();
+});

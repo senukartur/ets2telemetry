@@ -1,7 +1,8 @@
 import {randomUUID} from 'node:crypto';
 import * as nodeFs from 'node:fs/promises';
 import path from 'node:path';
-import type {SettingsSaveError, SettingsState, SettingsView, UnitGame, UnitProfile} from '../../../packages/contracts/src';
+import type {OverlayLayout, OverlaySections, SettingsSaveError, SettingsState, SettingsView, UnitGame, UnitProfile} from '../../../packages/contracts/src';
+import {enabledSectionCount} from './overlay-sections';
 import type {DiagnosticFacts} from './diagnostics';
 import {dataPaths} from './paths';
 import {DEFAULT_SETTINGS, MAX_SETTINGS_BYTES, parseSettings, serializeSettings, type Settings} from './settings-schema';
@@ -113,7 +114,7 @@ export class SettingsStore {
   get settled(): boolean {return this.loadSettled;}
 
   view(): SettingsView {
-    return {units: this.settings.units, state: this.state, writable: !READ_ONLY_STATES.includes(this.state), saveError: this.saveError};
+    return {units: this.settings.units, overlay: this.settings.overlay, state: this.state, writable: !READ_ONLY_STATES.includes(this.state), saveError: this.saveError};
   }
 
   /**
@@ -157,12 +158,32 @@ export class SettingsStore {
   }
 
   /** Serialized save of one game's profile. Resolves with the applied settings only after the durable rename. */
-  async setUnitProfile(game: UnitGame, profile: UnitProfile): Promise<SettingsView> {
+  setUnitProfile(game: UnitGame, profile: UnitProfile): Promise<SettingsView> {
+    return this.enqueue(settings => ({next: {...settings, units: Object.freeze({...settings.units, [game]: profile})}, facts: {game, profile}}));
+  }
+
+  /** Serialized save of the overlay layout; the sections and units stay as they are at the time of the write. */
+  setOverlayLayout(layout: OverlayLayout): Promise<SettingsView> {
+    return this.enqueue(settings => ({next: {...settings, overlay: Object.freeze({...settings.overlay, layout})}, facts: {overlayLayout: layout}}));
+  }
+
+  /** Serialized save of a complete, already validated section record (main checks it with `parseOverlaySections`). */
+  setOverlaySections(sections: OverlaySections): Promise<SettingsView> {
+    const copy: OverlaySections = Object.freeze({...sections});
+    return this.enqueue(settings => ({next: {...settings, overlay: Object.freeze({...settings.overlay, sections: copy})},
+      facts: {overlaySections: enabledSectionCount(copy)}}));
+  }
+
+  /**
+   * Queues one save. Every kind of change shares the queue and its four-request bound, and each computes its new
+   * settings from those that apply when its write starts, so a unit save and an overlay save never undo each other.
+   */
+  private async enqueue(change: (settings: Settings) => {next: Settings; facts: DiagnosticFacts}): Promise<SettingsView> {
     // Once load() returned, a read-only state, including a pending read, is refused at once instead of queuing.
     if (this.loadSettled && READ_ONLY_STATES.includes(this.state)) throw this.refusal();
     if (this.pending >= MAX_PENDING_SETTINGS_WRITES) throw new SettingsBusyError();
     this.pending++;
-    const run = this.tail.then(() => this.write(game, profile));
+    const run = this.tail.then(() => this.save(change));
     this.tail = run.catch(() => undefined);
     try {return await run;} finally {this.pending--;}
   }
@@ -183,8 +204,11 @@ export class SettingsStore {
     let bytes: Uint8Array;
     try {bytes = await this.readBounded(file);} catch {return {state: 'unreadable', settings: DEFAULT_SETTINGS, facts: {reason: 'read'}};}
     const parsed = parseSettings(bytes);
-    if (parsed.state === 'loaded') return {state: 'loaded', settings: parsed.settings};
-    if (parsed.state === 'loaded-with-fallbacks') return {state: parsed.state, settings: parsed.settings, facts: {fields: parsed.fallbackFields.join(',')}};
+    // A migrated older file is reported as such; it stays unchanged on disk until the first save writes the current format.
+    const migrated = parsed.state === 'loaded' || parsed.state === 'loaded-with-fallbacks' ? parsed.migratedFrom : undefined;
+    const migration: DiagnosticFacts = migrated === undefined ? {} : {migratedFrom: migrated};
+    if (parsed.state === 'loaded') return {state: 'loaded', settings: parsed.settings, ...(migrated === undefined ? {} : {facts: migration})};
+    if (parsed.state === 'loaded-with-fallbacks') return {state: parsed.state, settings: parsed.settings, facts: {fields: parsed.fallbackFields.join(','), ...migration}};
     return {state: parsed.state, settings: DEFAULT_SETTINGS};
   }
 
@@ -221,11 +245,11 @@ export class SettingsStore {
     return new SettingsError(this.saveError);
   }
 
-  private async write(game: UnitGame, profile: UnitProfile): Promise<SettingsView> {
+  private async save(change: (settings: Settings) => {next: Settings; facts: DiagnosticFacts}): Promise<SettingsView> {
     const directory = this.directory;
     // A save queued before load() returned meets the applied state here, or `unreadable` at the read limit.
     if (!directory || READ_ONLY_STATES.includes(this.state)) throw this.refusal();
-    const next: Settings = {units: Object.freeze({...this.settings.units, [game]: profile})};
+    const {next, facts} = change(this.settings);
     const target = path.join(directory, SETTINGS_FILE);
     let temporary: string | undefined;
     let step = 'directory';
@@ -259,7 +283,7 @@ export class SettingsStore {
       throw new SettingsError('SETTINGS_WRITE_FAILED');
     }
     this.settings = next; this.state = 'loaded'; this.saveError = null;
-    this.log('SETTINGS_SAVED', undefined, {game, profile});
+    this.log('SETTINGS_SAVED', undefined, facts);
     return this.view();
   }
 

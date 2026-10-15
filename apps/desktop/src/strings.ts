@@ -1,5 +1,6 @@
-import type {AppErrorCode, ServiceHealth, SettingsSaveError, SettingsState, StorageHealth, UnitGame, UnitProfile} from '../../../packages/contracts/src';
+import type {AppErrorCode, OverlayLayout, OverlaySectionId, ServiceHealth, SettingsSaveError, SettingsState, StorageHealth, UnitGame, UnitProfile} from '../../../packages/contracts/src';
 import type {FieldNote, LiveFieldId, LiveSectionId, ViewReason} from '../../../packages/telemetry-core/src/live-view';
+import type {OverlayGroupId, OverlayPresetId, OverlayRequirement} from './overlay-sections';
 
 /**
  * User-visible English text for the dashboard and tray. There is no i18n framework yet; keeping the
@@ -34,7 +35,19 @@ export const STRINGS = Object.freeze({
   liveTitle: 'Live telemetry',
   livePaused: 'Game paused',
   liveNoJob: 'No job reported',
-  liveJobUnavailable: 'Job unavailable'
+  liveJobUnavailable: 'Job unavailable',
+  overlayTitle: 'Overlay',
+  overlayLayoutLabel: 'Layout',
+  overlaySectionsLabel: 'Sections',
+  overlayPresetsLabel: 'Presets',
+  overlayPaused: 'Paused',
+  overlayNoSignal: 'No signal',
+  overlaySynthetic: 'Synthetic',
+  overlayReplay: 'Replay',
+  overlaySdkMean: 'SDK mean',
+  overlaySaveFailed: 'The overlay change was not saved; the previous overlay settings stay in use.',
+  overlayLastSection: 'At least one section stays on.',
+  overlayHiddenNote: 'While telemetry is current, a section without data is hidden (speed and fuel show a dash). While it is not current, every shown section is a dash.'
 });
 export type StringKey = keyof typeof STRINGS;
 
@@ -50,10 +63,13 @@ export const APP_ERROR_TEXT: Readonly<Record<AppErrorCode, string>> = Object.fre
   STORAGE_FAILED: 'The isolated storage self-test failed.',
   SERVICE_START_TIMEOUT: 'The telemetry service did not start in time.'
 });
-/** Shown in the units card for the last refused save; never part of the service's last problem. */
+/**
+ * Shown in the units card and the overlay card for the last refused save; never part of the service's last problem.
+ * Neutral wording: either card's change may have been refused.
+ */
 export const SETTINGS_SAVE_ERROR_TEXT: Readonly<Record<SettingsSaveError, string>> = Object.freeze({
-  SETTINGS_WRITE_FAILED: 'The unit change could not be saved; the previous units stay in use.',
-  SETTINGS_READ_ONLY: 'Settings were written by a newer version and are read-only; the unit change was not saved.'
+  SETTINGS_WRITE_FAILED: 'The change could not be saved; the previous settings stay in use.',
+  SETTINGS_READ_ONLY: 'Settings were written by a newer version and are read-only; the change was not saved.'
 });
 export const UNIT_GAME_TEXT: Readonly<Record<UnitGame, string>> = Object.freeze({
   ets2: 'Euro Truck Simulator 2', ats: 'American Truck Simulator'
@@ -64,9 +80,9 @@ export const UNIT_PROFILE_TEXT: Readonly<Record<UnitProfile, string>> = Object.f
 /** How the persisted settings were obtained; shown under the unit choices. Never contains a path. */
 export const SETTINGS_STATE_TEXT: Readonly<Record<SettingsState, string>> = Object.freeze({
   'loading': 'Saved settings are still being read; defaults are in use and changes cannot be saved yet.',
-  'defaults': 'Default units. A change is saved for later launches.',
-  'loaded': 'Saved units loaded.',
-  'loaded-with-fallbacks': 'Some saved units were invalid; their defaults are in use until the next change.',
+  'defaults': 'Default settings. A change is saved for later launches.',
+  'loaded': 'Saved settings loaded.',
+  'loaded-with-fallbacks': 'Some saved settings were invalid; their defaults are in use until the next change.',
   'invalid-file': 'The settings file is invalid; defaults are in use. The file is kept and set aside when you save a change.',
   'unsupported-older': 'The settings file has an unsupported older format; defaults are in use. The file is kept and set aside when you save a change.',
   'newer-version': 'Settings were written by a newer version and are read-only; defaults are in use.',
@@ -99,4 +115,34 @@ export const FIELD_NOTE_TEXT: Readonly<Record<FieldNote, string>> = Object.freez
 });
 export const LIVE_SECTION_TEXT: Readonly<Record<LiveSectionId, string>> = Object.freeze({
   motion: 'Driving', fuel: 'Fuel', distance: 'Distance', time: 'Time', job: 'Job', vehicle: 'Vehicle', position: 'Position'
+});
+
+// Overlay labels (ET-012a). Each map covers every id, so a new layout, section, group, preset or requirement fails to
+// compile until it has a text. Values are formatted by telemetry-core in main; these maps hold only labels.
+export const OVERLAY_LAYOUT_TEXT: Readonly<Record<OverlayLayout, string>> = Object.freeze({
+  strip: 'Strip (top centre)', card: 'Card (top right)', cluster: 'Cluster (bottom left)', hud: 'Minimal HUD (top left)'
+});
+/** Full labels for the settings card and the overlay card layout. Income is expected income, never revenue. */
+export const OVERLAY_SECTION_TEXT: Readonly<Record<OverlaySectionId, string>> = Object.freeze({
+  'speed': 'Speed', 'gear': 'Gear', 'rpm': 'Engine RPM', 'fuel': 'Fuel', 'range': 'Estimated range', 'sdk-consumption': 'SDK average consumption',
+  'cargo': 'Cargo', 'origin': 'Origin', 'destination': 'Destination', 'distance-driven': 'Distance driven', 'distance-remaining': 'Distance remaining',
+  'deadline': 'Delivery deadline', 'expected-income': 'Expected income', 'game-time': 'Game time'
+});
+/** Short labels for the strip, cluster panel and HUD. */
+export const OVERLAY_SECTION_SHORT_TEXT: Readonly<Record<OverlaySectionId, string>> = Object.freeze({
+  'speed': 'Speed', 'gear': 'Gear', 'rpm': 'RPM', 'fuel': 'Fuel', 'range': 'Range', 'sdk-consumption': 'SDK mean',
+  'cargo': 'Cargo', 'origin': 'From', 'destination': 'To', 'distance-driven': 'Driven', 'distance-remaining': 'Remaining',
+  'deadline': 'Due', 'expected-income': 'Expected', 'game-time': 'Time'
+});
+export const OVERLAY_GROUP_TEXT: Readonly<Record<OverlayGroupId, string>> = Object.freeze({
+  driving: 'Driving', fuel: 'Fuel', job: 'Job', time: 'Time'
+});
+export const OVERLAY_PRESET_TEXT: Readonly<Record<OverlayPresetId, string>> = Object.freeze({
+  'everything': 'Everything', 'job-focus': 'Job focus', 'driving-only': 'Driving only'
+});
+/** Why a section may stay hidden in this version; shown beside its switch. */
+export const OVERLAY_REQUIREMENT_TEXT: Readonly<Record<OverlayRequirement, string>> = Object.freeze({
+  'protocol-v1': 'needs protocol v1; hidden for now',
+  'trip-tracking': 'needs trip tracking; hidden for now',
+  'ids-until-v1': 'shows game ids until protocol v1'
 });

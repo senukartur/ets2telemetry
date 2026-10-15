@@ -1,5 +1,5 @@
 import React, {useEffect, useState} from 'react';
-import type {AppState, LiveTelemetry, SourceSelection, UnitGame} from '../../../packages/contracts/src';
+import type {AppState, LiveTelemetry, SettingsView, SourceSelection, UnitGame} from '../../../packages/contracts/src';
 import {Card, CardContent, CardHeader, CardTitle} from '@/components/ui/card';
 import {Alert, AlertDescription, AlertTitle} from '@/components/ui/alert';
 import {Button} from '@/components/ui/button';
@@ -8,6 +8,7 @@ import {RadioGroup, RadioGroupItem} from '@/components/ui/radio-group';
 import {dashboardFuel, dashboardSpeed} from './speed-display';
 import {createStartupLine} from './dashboard-startup';
 import {LiveDashboard} from './live-dashboard';
+import {OverlaySettingsCard} from './overlay-settings-card';
 import {DEFAULT_UNIT_PROFILES, displayProfile, isUnitProfile, UNIT_GAMES, UNIT_PROFILE_IDS} from './unit-profiles';
 import {APP_ERROR_TEXT, SERVICE_HEALTH_TEXT, SETTINGS_SAVE_ERROR_TEXT, SETTINGS_STATE_TEXT, STORAGE_HEALTH_TEXT, STRINGS, UNIT_GAME_TEXT, UNIT_PROFILE_TEXT} from './strings';
 import './index.css';
@@ -18,6 +19,8 @@ export default function App() {
   const [app, setApp] = useState<AppState>();
   const [exit, setExit] = useState<'idle' | 'pending' | 'failed'>('idle');
   const [units, setUnits] = useState<'idle' | 'saving' | 'failed'>('idle');
+  // Main reports one `saveError` for the whole settings file; it is shown in the card whose request caused it.
+  const [lastCard, setLastCard] = useState<'units' | 'overlay'>('units');
   const [startupLine] = useState(() => createStartupLine(() => window.desktop.getStatus(), setStartup));
   useEffect(() => {
     startupLine.start();
@@ -29,11 +32,12 @@ export default function App() {
   const settings = app?.settings;
   // Main pushes the saved settings; until the first push the ET-000 defaults apply.
   const profile = displayProfile(live, settings?.units);
+  const saved = (view: SettingsView) => setApp(current => current && {...current, settings: view});
   const choose = (game: UnitGame, value: string) => {
     if (!isUnitProfile(value)) return;
-    setUnits('saving');
+    setLastCard('units'); setUnits('saving');
     void window.desktop.setUnitProfile(game, value).then(view => {
-      setApp(current => current && {...current, settings: view}); setUnits('idle');
+      saved(view); setUnits('idle');
     }, () => setUnits('failed'));
   };
   return <main className="mx-auto max-w-xl space-y-4 p-4"><Card><CardHeader><CardTitle><h1>ETS2Telemetry</h1></CardTitle></CardHeader><CardContent className="space-y-2"><p>{startup}</p>
@@ -75,7 +79,8 @@ export default function App() {
     </div>)}
     <p data-testid="settings-state">{settings ? SETTINGS_STATE_TEXT[settings.state] : '—'}</p>
     {/* A refused save is reported by main in the settings view; other request failures only locally. */}
-    {settings?.saveError ? <p role="status" data-testid="settings-error">{SETTINGS_SAVE_ERROR_TEXT[settings.saveError]}</p>
+    {settings?.saveError && lastCard === 'units' ? <p role="status" data-testid="settings-error">{SETTINGS_SAVE_ERROR_TEXT[settings.saveError]}</p>
       : units === 'failed' ? <p role="status" data-testid="settings-error">{STRINGS.unitsSaveFailed}</p> : null}
-  </CardContent></Card></main>;
+  </CardContent></Card>
+  <OverlaySettingsCard settings={settings} onSaved={saved} onRequest={() => setLastCard('overlay')} showSaveError={lastCard === 'overlay'} /></main>;
 }

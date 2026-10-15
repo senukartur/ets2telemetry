@@ -9,7 +9,13 @@ import {waitForOverlay} from './overlay-observation.mjs';
 // ET-011b settings evidence. Run A starts with a deliberately truncated settings file, which must stay byte-identical
 // until the first save quarantines it; run B must load the saved file without writing.
 const SETTINGS_SEED = '{"format":"ets2telemetry.settings","version":1,"units":{"ets2":"metric",';
-const SETTINGS_SAVED = '{\n  "format": "ets2telemetry.settings",\n  "version": 1,\n  "units": {\n    "ets2": "us-customary",\n    "ats": "us-customary"\n  }\n}\n';
+// ET-012a: every save writes settings format v2 with the overlay block (strip layout and every section by default).
+const SETTINGS_SAVED = ['{', '  "format": "ets2telemetry.settings",', '  "version": 2,', '  "units": {', '    "ets2": "us-customary",', '    "ats": "us-customary"', '  },',
+  '  "overlay": {', '    "layout": "strip",', '    "sections": {', '      "speed": true,', '      "gear": true,', '      "rpm": true,', '      "fuel": true,',
+  '      "range": true,', '      "sdk-consumption": true,', '      "cargo": true,', '      "origin": true,', '      "destination": true,', '      "distance-driven": true,',
+  '      "distance-remaining": true,', '      "deadline": true,', '      "expected-income": true,', '      "game-time": true', '    }', '  }', '}', ''].join('\n');
+const DEFAULT_OVERLAY = {layout: 'strip', sections: {'speed': true, 'gear': true, 'rpm': true, 'fuel': true, 'range': true, 'sdk-consumption': true, 'cargo': true,
+  'origin': true, 'destination': true, 'distance-driven': true, 'distance-remaining': true, 'deadline': true, 'expected-income': true, 'game-time': true}};
 const QUARANTINE_NAME = /^settings\.rejected-\d{8}T\d{6}Z\.json$/;
 // 25 m/s and 73 L in the us-customary profile.
 const US_DASHBOARD = {speed: 'Speed: 55.9 mph', fuel: 'Fuel: 19.3 US gal'};
@@ -126,7 +132,7 @@ export async function runLifecycleSmoke({application, launcher, dashboard, overl
   const stateText = await until(() => dashboard.getByTestId('settings-state').innerText(),
     text => !text.startsWith('Saved settings are still being read'), 'DASHBOARD_SETTINGS_STILL_PENDING');
   record.settingsInitial = {view: settled.settings, files: await settingsFiles(config), stateText};
-  assert.deepEqual(settled.settings, {units: {ets2: 'metric', ats: 'us-customary'}, state: 'invalid-file', writable: true, saveError: null});
+  assert.deepEqual(settled.settings, {units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'invalid-file', writable: true, saveError: null});
   record.settingsSeededInvalidFile = true;
   assert.deepEqual(record.settingsInitial.files, [{name: 'settings.json', content: SETTINGS_SEED}]);
   assert.match(record.settingsInitial.stateText, /^The settings file is invalid; defaults are in use\./);
@@ -180,7 +186,7 @@ export async function runLifecycleSmoke({application, launcher, dashboard, overl
   // 3b. Saving ETS2's US customary profile quarantines the seeded file unchanged, writes the exact v1 content and
   // switches both the dashboard and the overlay to mph and US gallons.
   record.settingsSaveView = await trayDashboard.evaluate(() => globalThis.desktop.setUnitProfile('ets2', 'us-customary'));
-  assert.deepEqual(record.settingsSaveView, {units: {ets2: 'us-customary', ats: 'us-customary'}, state: 'loaded', writable: true, saveError: null});
+  assert.deepEqual(record.settingsSaveView, {units: {ets2: 'us-customary', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null});
   const saved = await settingsFiles(config);
   record.settingsAfterSave = saved.map(({name}) => name);
   const quarantined = saved.filter(file => QUARANTINE_NAME.test(file.name));
@@ -223,7 +229,7 @@ export async function verifyLifecycleRestart({application, record, rendererPages
   assert.notEqual(state.servicePid, record.servicePid);
   record.restartRecovered = true;
   record.restart.settingsState = state.settings.state;
-  assert.deepEqual(state.settings, {units: {ets2: 'us-customary', ats: 'us-customary'}, state: 'loaded', writable: true, saveError: null});
+  assert.deepEqual(state.settings, {units: {ets2: 'us-customary', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null});
   // Loading wrote nothing: the saved file and the single quarantined file are unchanged.
   const files = await settingsFiles(config);
   assert.deepEqual(files.map(file => file.name), record.settingsAfterSave);

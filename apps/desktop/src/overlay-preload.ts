@@ -1,5 +1,6 @@
 import {contextBridge, ipcRenderer} from 'electron';
 import type {OverlayBridge, OverlayPresentation} from '../../../packages/contracts/src';
+import {staleOverlay} from './overlay-sections';
 import {RecoveryBudget} from './recovery-budget';
 
 let listener: ((update: OverlayPresentation) => void) | undefined;
@@ -8,10 +9,12 @@ let owner = Symbol();
 let recovery: ReturnType<typeof setTimeout> | undefined;
 let expiry: ReturnType<typeof setTimeout> | undefined;
 let budget = new RecoveryBudget();
-const unavailable: OverlayPresentation = {source: 'No game', origin: 'none', status: 'waiting', speed: '—', fuel: '—', speedUnit: 'km/h', fuelUnit: 'L', freshness: 'unavailable'};
+const unavailable: OverlayPresentation = {source: 'No game', origin: 'none', status: 'waiting', speed: '—', fuel: '—', speedUnit: 'km/h', fuelUnit: 'L', freshness: 'unavailable',
+  layout: 'strip', paused: false, sections: []};
 let current = unavailable;
 function close(): void {const previous = port; port = undefined; previous?.close(); clearTimeout(expiry); expiry = undefined;}
-function invalidate(): void {current = {...current, status: 'stale', speed: '—', fuel: '—', freshness: 'stale'}; listener?.(current);}
+// Stale keeps the layout and the section list, each section as an unavailable placeholder, so nothing old looks current.
+function invalidate(): void {current = staleOverlay(current); listener?.(current);}
 function recover(generation: symbol): void {
   if (generation !== owner || !listener || port || recovery !== undefined) return;
   if (budget.take() === undefined) {
