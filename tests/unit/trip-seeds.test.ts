@@ -71,6 +71,11 @@ describe('seedFromStored (R4)', () => {
     // A clear at or before the trip's opening event is not the trip's clear.
     const earlier = [event('1', 'job.cleared', null), configured('2', null)];
     expect(seedFromStored(trip(), earlier[1], earlier)).not.toHaveProperty('awaitingOutcome');
+    // The rule counts from the opening event, not the job event: a trip opened at 4 for the job configured at 2 is not
+    // awaiting its outcome because of the clear at 3.
+    const openedLater = [configured('2', null), event('3', 'job.cleared', null), event('4', 'simulation.started', null)];
+    expect(seedFromStored(trip({openedEventSeq: '4'}), openedLater[0], openedLater)).not.toHaveProperty('awaitingOutcome');
+    expect(seedFromStored(trip({openedEventSeq: '2'}), openedLater[0], openedLater).awaitingOutcome).toBe(true);
     // Rows in another order give the same answer.
     expect(seedFromStored(trip(), cleared[0], [...cleared].reverse()).awaitingOutcome).toBe(true);
     expect(seedFromStored(trip(), resent[0], [...resent].reverse())).not.toHaveProperty('awaitingOutcome');
