@@ -235,20 +235,21 @@ struct Fixture {
 
 #ifdef ETS2TELEMETRY_TRANSPORT_TEST_HOOKS
 // Holds the v1 worker at the start of its loop iteration ("v1-tick") until released or stopped, so SDK callbacks can
-// fill the ring while nothing drains it. Other phases are ignored.
+// fill the ring while nothing drains it. Other phases are ignored. With phase "v1-finish" it holds the worker after a
+// stop request, before the shutdown drain; the stop event is then already set, so only the release ends that hold.
 struct Hold {
   static Hold* active;
   Handle held{CreateEventW(nullptr, TRUE, FALSE, nullptr)}, release{CreateEventW(nullptr, TRUE, FALSE, nullptr)};
-  std::atomic<bool> holding{false}, timed_out{false};
+  std::atomic<bool> holding{false}, timed_out{false}; std::string phase = "v1-tick";
   Hold() { active = this; transport::set_transport_test_hook(hook); }
   ~Hold() { SetEvent(release.get()); transport::set_transport_test_hook(nullptr); active = nullptr; }
   void engage() { ResetEvent(held.get()); ResetEvent(release.get()); holding.store(true); }
   void disengage() { holding.store(false); SetEvent(release.get()); }
-  static DWORD hook(const char* phase, HANDLE, HANDLE stop, DWORD result) {
+  static DWORD hook(const char* at, HANDLE, HANDLE stop, DWORD result) {
     auto* self = active;
-    if (!self || !stop || std::string(phase) != "v1-tick" || !self->holding.load()) return result;
-    SetEvent(self->held.get()); HANDLE waits[]{stop, self->release.get()};
-    if (WaitForMultipleObjects(2, waits, FALSE, 10000) == WAIT_TIMEOUT) self->timed_out.store(true);
+    if (!self || !stop || self->phase != at || !self->holding.load()) return result;
+    SetEvent(self->held.get()); HANDLE waits[]{self->release.get(), stop};
+    if (WaitForMultipleObjects(self->phase == "v1-finish" ? 1 : 2, waits, FALSE, 10000) == WAIT_TIMEOUT) self->timed_out.store(true);
     return result;
   }
 };
@@ -774,6 +775,50 @@ void invariant() {
   require(read_some(live.get(), bytes, 3000 * timing_scale) == ReadResult::data, "v0 serves after the v1 retirement");
   live.reset(); v0.stop();
 }
+
+// A violation found by the shutdown drain itself: `end` carries source-retired, the endpoint retires, and its fixed entry
+// is logged beside a v0 transport entry that arrived in the same frame interval (separate deferred-log slots).
+void invariant_at_shutdown() {
+  static const sdk::DeferredLog v0_entry{SCS_LOG_TYPE_message, "ETS2Telemetry: transport started after the startup wait"};
+  Fixture f; Hold hold; hold.phase = "v1-finish";
+  require(f.server->skip_store_for_test(5), "store at 5, channel at 1");
+  f.start(); auto client = f.client(true); client->handshake();
+  require(client->read_until([&] { return client->covered() >= 4; }), "gap [1, 4]");
+  hold.engage(); f.server->signal_stop();
+  require(WaitForSingleObject(hold.held.get(), static_cast<DWORD>(3000 * timing_scale)) == WAIT_OBJECT_0, "worker held before its shutdown drain");
+  // Copied for the durable consumer after the last loop drain: only the shutdown drain sees it, and rejects it.
+  cancelled(f.host, 1); f.adapter->defer_log(&v0_entry);
+  hold.disengage();
+  require(client->read_until([&] { return client->count("end") == 1; }), "end at shutdown");
+  const auto& end = *client->last("end").end;
+  require(end.reason == "source-retired" && end.next_event_seq == 5 && end.retained_unacked == 0, "end(source-retired) with the store's cursor");
+  f.server->stop();
+  require(f.server->status() == v1::ServerStatus::retired && f.server->shutdown_ms() < 1000 && !hold.timed_out.load(), "retired and joined");
+  require(f.host.logs.empty(), "workers never log");
+  f.host.frame();
+  require(f.host.logs.size() == 2 && f.host.logs[0] == v0_entry.message && f.host.log_types[0] == SCS_LOG_TYPE_message &&
+    f.host.logs[1] == "ETS2Telemetry: protocol v1 endpoint retired: invariant violation" && f.host.log_types[1] == SCS_LOG_TYPE_error && f.host.wrong_thread == 0,
+    "both deferred entries logged once on the SDK thread, in slot order");
+  f.host.frame(); require(f.host.logs.size() == 2, "logged once");
+}
+
+// A violation after a stop request keeps the 250 ms `end` budget: with the client's buffer full, the endpoint gives up the
+// `end` write at the stop budget instead of the 1 s write deadline.
+void invariant_stop_budget() {
+  Fixture f; Hold hold;
+  require(f.server->skip_store_for_test(5), "store at 5, channel at 1");
+  f.start(); auto client = f.client(true); client->handshake();
+  // Snapshots alone fill the kernel buffer of a client that no longer reads; no event is observed yet.
+  const auto deadline = GetTickCount64() + 10000 * timing_scale; unsigned frames = 0;
+  while (!f.server->write_pending() && GetTickCount64() < deadline) { f.host.frame(static_cast<float>(frames++ % 50)); Sleep(1); }
+  require(f.server->write_pending(), "kernel-backpressured write");
+  hold.engage(); require(WaitForSingleObject(hold.held.get(), static_cast<DWORD>(3000 * timing_scale)) == WAIT_OBJECT_0, "worker held");
+  cancelled(f.host, 1); f.server->signal_stop(); hold.disengage();
+  f.server->stop(); std::cout << "retireAfterStopShutdownMs=" << f.server->shutdown_ms() << '\n';
+  require(f.server->status() == v1::ServerStatus::retired && f.server->ends() == 0, "retired; no end after the stalled write");
+  require(f.server->shutdown_ms() < 700, "the stop budget, not the 1 s write deadline, bounds the retirement's end");
+  f.host.frame(); require(f.host.logs.size() == 1 && f.host.logs[0] == "ETS2Telemetry: protocol v1 endpoint retired: invariant violation", "logged once");
+}
 #endif
 
 // v0 frames continue at their cadence while a v1 client is active and then stalled; the contracts reject each other.
@@ -992,7 +1037,7 @@ int main(int argc, char** argv) {
       {"handshake", handshake}, {"live-only", live_only}, {"durable", durable_delivery}, {"redelivery", redelivery}, {"stalled-reader", stalled_reader},
       {"fuzz", fuzz}, {"rejection", rejection}, {"collision", collision}, {"policy", policy}, {"v0-isolation", v0_isolation}, {"cap0-isolation", cap0_isolation}, {"shutdown", shutdown}
 #ifdef ETS2TELEMETRY_TRANSPORT_TEST_HOOKS
-      , {"retention", [] { retention(); Fixture clamp; clamp.start(); capture_clamp(clamp); }}, {"overflow", overflow}, {"ack-control", ack_control}, {"exhaustion", exhaustion}, {"invariant", invariant}
+      , {"retention", [] { retention(); Fixture clamp; clamp.start(); capture_clamp(clamp); }}, {"overflow", overflow}, {"ack-control", ack_control}, {"exhaustion", exhaustion}, {"invariant", [] { invariant(); invariant_at_shutdown(); invariant_stop_budget(); }}
 #endif
     };
     auto timed = [](const std::string& name, const std::function<void()>& fn) { const auto start = GetTickCount64(); std::cout << name << '\n' << std::flush; fn(); std::cout << name << " elapsedMs=" << GetTickCount64() - start << '\n' << std::flush; };

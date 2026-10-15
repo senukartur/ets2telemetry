@@ -115,7 +115,7 @@ struct Server::Connection {
   std::array<std::uint8_t, limits.client_frame_bytes + 4> input{};
   Io inbound, outbound;
   CaptureStamp capture;
-  Phase phase = Phase::welcome; bool gate_open = false;
+  Phase phase = Phase::welcome; bool gate_open = false, ended = false;
   // The probe whose reply is unsent, with its receipt time, and the last probe ID of this connection.
   std::optional<std::pair<std::uint64_t, std::uint64_t>> probe; std::uint64_t last_probe = 0;
   // One replaceable unsent snapshot (§7), and a scratch copy of the v1 slot.
@@ -134,15 +134,26 @@ Server::Outcome Server::Connection::run() {
   try { return loop(); }
   catch (const Retire& retire) {
     // An invariant violation or sequence exhaustion: `end` where the connection can carry it, then the endpoint retires.
+    // A stop already requested keeps its 250 ms `end` budget.
     const auto now = GetTickCount64();
-    try { finish(retire.reason, now + write_deadline_ms, now + write_deadline_ms - end_reserve_ms); } catch (...) {}
-    throw;
+    auto deadline = now + write_deadline_ms, items_until = deadline - end_reserve_ms;
+    if (const auto requested = server.stop_requested_.load()) {
+      deadline = (std::min)(deadline, requested + end_budget_ms); items_until = (std::min)(items_until, requested + end_items_ms);
+    }
+    // A violation found while ending (the final drain) still logs.
+    bool log = retire.log;
+    try { finish(retire.reason, deadline, items_until); } catch (const Retire& later) { log = log || later.log; } catch (...) {}
+    throw Retire(retire.reason, log);
   }
 }
 
 Server::Outcome Server::Connection::loop() {
   for (;;) {
     if (server.stopped()) {
+#ifdef ETS2TELEMETRY_TRANSPORT_TEST_HOOKS
+      // Console tests hold the worker here, after its last loop drain and before the shutdown drain in finish().
+      transport::transport_test_hook("v1-finish", nullptr, server.stop_event_.get());
+#endif
       const auto requested = server.stop_requested_.load();
       return finish(EndReason::plugin_shutdown, requested + end_budget_ms, requested + end_items_ms);
     }
@@ -284,29 +295,40 @@ bool Server::Connection::complete_write(ULONGLONG deadline) {
 }
 
 Server::Outcome Server::Connection::finish(EndReason reason, ULONGLONG deadline, ULONGLONG items_until) {
+  // `end` is terminal: a second call after a written `end` sends nothing more.
+  if (ended) return Outcome::ended;
   // An in-flight write may complete within the budget. A cancelled write may have cut a frame, so then nothing follows.
   if (!complete_write(deadline)) return Outcome::reset;
   // Before the welcome there is nothing to end; `end` may replace the checkpoint (§4).
   if (phase == Phase::welcome) return Outcome::reset;
   // Records already in the ring become store coverage; a run still open in the channel is plugin-exit loss (OD-5 S11).
-  try { server.drain(server.now_ns()); } catch (...) {}
-  auto& store = *server.store_; const auto& encoder = *server.encoder_;
-  if (durable && phase == Phase::live && reason != EndReason::source_retired) {
-    // Best effort: retained items the consumer has not received yet, while the budget allows. Never waits for an ACK (D14).
-    while (GetTickCount64() < items_until) {
-      const auto item = store.next_outbound();
-      if (!item) break;
-      std::vector<std::uint8_t> frame;
-      try { frame = encode(encoder.outbound(server.next_seq(), capture.stamp(server.now_ns(), carried_ns(*item)), *item)); } catch (...) { break; }
-      if (!outbound.write(std::move(frame), deadline)) return Outcome::reset;
-      validator.sent(item->last_event_seq());
-      if (!complete_write(deadline)) return Outcome::reset;
+  // A violation found by this final drain still retires the endpoint and logs: `end` then carries source-retired, and
+  // no further item is written, because the store's coverage stopped before the rejected record.
+  std::optional<Retire> violation;
+  try { server.drain(server.now_ns()); }
+  catch (const Retire& retire) { violation = retire; reason = EndReason::source_retired; }
+  catch (...) {}
+  const auto outcome = [&] {
+    auto& store = *server.store_; const auto& encoder = *server.encoder_;
+    if (durable && phase == Phase::live && reason != EndReason::source_retired) {
+      // Best effort: retained items the consumer has not received yet, while the budget allows. Never waits for an ACK (D14).
+      while (GetTickCount64() < items_until) {
+        const auto item = store.next_outbound();
+        if (!item) break;
+        std::vector<std::uint8_t> frame;
+        try { frame = encode(encoder.outbound(server.next_seq(), capture.stamp(server.now_ns(), carried_ns(*item)), *item)); } catch (...) { break; }
+        if (!outbound.write(std::move(frame), deadline)) return Outcome::reset;
+        validator.sent(item->last_event_seq());
+        if (!complete_write(deadline)) return Outcome::reset;
+      }
     }
-  }
-  if (!outbound.write(encode(encoder.end(server.next_seq(), capture.stamp(server.now_ns()), reason, store.end_cursor())), deadline) || !complete_write(deadline))
-    return Outcome::reset;
-  server.ends_.fetch_add(1);
-  return Outcome::ended;
+    if (!outbound.write(encode(encoder.end(server.next_seq(), capture.stamp(server.now_ns()), reason, store.end_cursor())), deadline) || !complete_write(deadline))
+      return Outcome::reset;
+    ended = true; server.ends_.fetch_add(1);
+    return Outcome::ended;
+  }();
+  if (violation) throw *violation;
+  return outcome;
 }
 
 void Server::Connection::close() noexcept {
@@ -540,7 +562,7 @@ void Server::run(std::wstring directory) noexcept {
   } catch (const Retire& retire) {
     // Only this endpoint retires; v0 and CAP0 continue. The fixed log entry is written by the SDK thread.
     status_.store(ServerStatus::retired);
-    if (retire.log) adapter_.defer_log(&invariant_log);
+    if (retire.log) adapter_.defer_log(&invariant_log, sdk::DeferredLogSlot::transport_v1);
   } catch (const SequenceSpent&) {
     status_.store(ServerStatus::retired);
   } catch (...) {
