@@ -11,7 +11,7 @@ import {FrameDecoder, encodeFrame} from '../../packages/contracts/src/protocol-v
 import type {SourceIdentity} from '../../packages/contracts/src/protocol-v0';
 import type {LiveTelemetry} from '../../packages/contracts/src';
 import type {V1IngestionOptions, V1SourceState} from '../../apps/desktop/src/v1-ingestion';
-import type {BrokerConfiguration} from '../../apps/desktop/src/native-pipe-client';
+import type {BrokerConfiguration, BrokerDiagnostic} from '../../apps/desktop/src/native-pipe-client';
 import {replay, type Scenario} from '../../tools/telemetry-simulator/src/scenario';
 import {startPipe} from '../../tools/telemetry-simulator/src/pipe';
 const scenario = JSON.parse(readFileSync('tests/fixtures/simulator-v0/reconnect.json', 'utf8')) as Scenario;
@@ -299,15 +299,19 @@ async function stoppedService(stopProbe: (report: ProbeDependencies['report']) =
     select(selection: string, endpoint?: string) {v1.select(selection, endpoint);}
     stop() {return v1.stop();}
   }}));
+  // The native client is replaced by a recorder so the production connectGame closures can be called without a broker.
+  const pipeClients: unknown[][] = [];
+  vi.doMock('../../apps/desktop/src/native-pipe-client', async importOriginal => ({...await importOriginal<typeof import('../../apps/desktop/src/native-pipe-client')>(),
+    NativePipeClient: class extends EventEmitter {readonly completion = Promise.resolve(); constructor(...args: unknown[]) {super(); pipeClients.push(args);}}}));
   await loadService();
   const restore = () => {
     if (previousPort) Object.defineProperty(process, 'parentPort', previousPort); else Reflect.deleteProperty(process, 'parentPort');
     exit.mockRestore(); vi.doUnmock('../../apps/desktop/src/diagnostics'); vi.doUnmock('../../apps/desktop/src/service-probe'); vi.doUnmock('../../apps/desktop/src/history-storage');
-    vi.doUnmock('../../apps/desktop/src/v1-ingestion'); vi.resetModules();
+    vi.doUnmock('../../apps/desktop/src/v1-ingestion'); vi.doUnmock('../../apps/desktop/src/native-pipe-client'); vi.resetModules();
   };
   const stops = () => parent.postMessage.mock.calls.map(call => call[0] as {type: string}).filter(message => message.type === 'stopped');
   const steps = () => log.mock.calls.filter(call => call[0] === 'SHUTDOWN_STEP').map(call => call[2] as Record<string, unknown>);
-  return {exit, parent, log, history, v1, restore, stops, steps, probeReport: (message: Parameters<ProbeDependencies['report']>[0]) => probeReport(message),
+  return {exit, parent, log, history, v1, pipeClients, restore, stops, steps, probeReport: (message: Parameters<ProbeDependencies['report']>[0]) => probeReport(message),
     stop: () => parent.emit('message', {data: {type: 'stop'}, ports: []})};
 }
 it('runs the ordered shutdown once and reports exactly one clean stopped message before exit 0', async () => {
@@ -358,6 +362,15 @@ it('runs protocol v1 beside v0 without a durable sink, following each selection 
       {status: 'disconnected', selection: 'ets2', durable: 'off', count: 1}, {status: 'waiting', selection: 'ets2', durable: 'off', count: 2},
       {status: 'disconnected', selection: 'ets2', durable: 'off', count: 2}, {status: 'waiting', selection: 'ets2', durable: 'off', count: 4}
     ]);
+    // The production closure starts the broker in its v1 mode and reports its exits under the v1 code, not the v0 one.
+    const configuration = {executable, discoveryDirectory: 'C:\\Users\\owner\\AppData\\Local\\ETS2Telemetry\\transport\\v1'};
+    f.v1.options[0].connectGame!(configuration, 'ats');
+    expect(f.pipeClients).toHaveLength(1);
+    const [passedConfiguration, game, diagnoseBroker, mode] = f.pipeClients[0];
+    expect([passedConfiguration, game, mode]).toEqual([configuration, 'ats', 'v1']);
+    const exit: BrokerDiagnostic = {outcome: 'ended', exitCode: 3, serviceMs: 10, stage: 'relay', win32Error: 0, elapsedMs: 5, slowStage: 'relay', slowMs: 5};
+    (diagnoseBroker as (diagnostic: BrokerDiagnostic) => void)(exit);
+    expect(f.log).toHaveBeenLastCalledWith('NATIVE_BROKER_V1_EXIT', undefined, {...exit, repeats: 1});
     f.v1.options[0].diagnose!('V1_DURABLE_UNAVAILABLE', {code: 'WORKER_FAILED'});
     expect(f.log).toHaveBeenLastCalledWith('V1_DURABLE_UNAVAILABLE', undefined, {code: 'WORKER_FAILED'});
   } finally {f.stop(); await vi.advanceTimersByTimeAsync(0); f.restore(); vi.unstubAllEnvs();}
