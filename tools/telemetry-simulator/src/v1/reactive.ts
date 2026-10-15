@@ -85,7 +85,14 @@ class Reactive extends PipeHost {
   }
   /** Client bytes as they arrive, one read at a time, exactly as the native endpoint receives them. */
   private receive(chunk: Buffer): void {
+    try { this.read(chunk); }
+    // A model defect fails the run visibly instead of escaping from a socket callback.
+    catch (error) { this.failure ??= error instanceof Error ? error : new Error('Reactive server failed'); this.changed(); }
+  }
+  private read(chunk: Buffer): void {
     const l = this.live; if (!l) return;
+    // After `end` the connection only drains toward its close; like the native endpoint, nothing more is read from it.
+    if (l.endWritten) return;
     // The hello is handled at the connect step's own time; afterwards a reply carries the paced segment's progress.
     const at = l.helloDone ? this.progressAtMs() : this.atMs;
     let outs: Out[];
@@ -110,19 +117,34 @@ class Reactive extends PipeHost {
     }
   }
   private pumpAll(atMs: number): void { for (let out = this.producer.pump(this.ns(atMs)); out; out = this.producer.pump(this.ns(atMs))) this.write(out, atMs); }
-  private settle(atMs: number): void { this.producer.drain(this.ns(atMs)); this.pumpAll(atMs); }
-  private apply(step: SourceStep): void {
+  /**
+   * Drain and write. Once the eventSeq space is exhausted, each further write first lets the client acknowledge what it
+   * received, so the `end` that follows carries the same release point as in the replay. Until then nothing awaits, so no
+   * ACK can be read between the writes of one step, as in the replay.
+   */
+  private async settle(atMs: number): Promise<void> {
+    this.producer.drain(this.ns(atMs));
+    for (;;) {
+      if (this.producer.store.exhausted && this.live?.helloDone) await this.quiesce();
+      const out = this.producer.pump(this.ns(atMs)); if (!out) return;
+      this.write(out, atMs);
+    }
+  }
+  private async apply(step: SourceStep): Promise<void> {
     const at = step.atMs, adapter = this.producer.adapter;
     switch (step.action) {
-      case 'configuration': case 'gameplay': for (let i = 0; i < step.repeat; i++) { adapter[step.action](step.id, step.attributes, step.list, at); this.settle(at); } break;
-      case 'lifecycle': adapter.lifecycle(step.event, at); this.settle(at); break;
-      case 'frame': { adapter.frame(step.timerRestart, step.channels, at); this.settle(at); const out = this.producer.publication(this.ns(at)); if (out) this.write(out, at); break; }
-      case 'gameMode': adapter.determineGameMode(step.mode, at); this.settle(at); break;
-      case 'encodingFailure': for (let i = 0; i < step.count; i++) { adapter.unencodable(1, at); this.settle(at); } break;
+      case 'configuration': case 'gameplay': for (let i = 0; i < step.repeat; i++) { adapter[step.action](step.id, step.attributes, step.list, at); await this.settle(at); } break;
+      case 'lifecycle': adapter.lifecycle(step.event, at); await this.settle(at); break;
+      case 'frame': { adapter.frame(step.timerRestart, step.channels, at); await this.settle(at); const out = this.producer.publication(this.ns(at)); if (out) this.write(out, at); break; }
+      case 'gameMode': adapter.determineGameMode(step.mode, at); await this.settle(at); break;
+      case 'encodingFailure': for (let i = 0; i < step.count; i++) { adapter.unencodable(1, at); await this.settle(at); } break;
       case 'handoff': adapter.channel.full = step.full; break;
       case 'utcJump': this.clock.utcJump(step.deltaMs); break;
       case 'suspend': this.clock.suspend(at, step.durationMs, step.sourceClockAdvances); break;
-      case 'shutdown': { this.settle(at); const out = this.producer.shutdown(step.reason, this.ns(at)); if (out && this.live) this.write(out, at); break; }
+      case 'shutdown': {
+        // `end` carries the release point, so the client may first acknowledge what it received (bounded), as at a disconnect.
+        await this.settle(at); if (this.live?.helloDone) await this.quiesce();
+        const out = this.producer.shutdown(step.reason, this.ns(at)); if (out && this.live) this.write(out, at); break; }
     }
   }
   private async pace(atMs: number): Promise<void> {
@@ -172,9 +194,14 @@ class Reactive extends PipeHost {
     this.pumpAll(this.atMs);
   }
   /** A scripted disconnect: bounded wait for the ACKs of everything written, then a graceful close. */
-  private async disconnect(): Promise<void> {
+  /** Waits up to the quiesce bound until the live client has acknowledged everything written to it, or has left. */
+  private async quiesce(): Promise<void> {
     const l = this.live; if (!l) return;
     await this.wait(() => this.live !== l || l.link.gone || ((s => s === undefined || s.acked >= s.sent)(this.producer.ackState())), this.quiesceMs);
+  }
+  private async disconnect(): Promise<void> {
+    const l = this.live; if (!l) return;
+    await this.quiesce();
     if (this.live === l) this.closeLive('disconnect', true);
   }
   private clientGone(): void { const l = this.live; if (l?.helloDone && l.link.gone) this.closeLive('client', false); }
@@ -187,7 +214,9 @@ class Reactive extends PipeHost {
         await this.fireTimers(e.atMs);
         await this.pace(e.atMs);
         if (this.stopError) throw this.stopError;
-        if (e.lane === 'source') this.apply(e.step);
+        // Before a source step a durable client may first acknowledge what it received, or leave (bounded), so ACKs and
+        // client-initiated closes take effect at the same step boundaries as in the replay.
+        if (e.lane === 'source') { if (this.live?.helloDone) await this.quiesce(); await this.apply(e.step); }
         else if (e.lane === 'transport') {
           // A second client needs no action here: arrivals are refused while a client is connected.
           if (e.step.action === 'connect') await this.accept(e.connection, e.step.client);
