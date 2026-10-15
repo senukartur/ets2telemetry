@@ -1,0 +1,9 @@
+# SHA-256 of every committed storage fixture. Fixtures are immutable: tests copy them to temporary directories
+# and fail if any listed file changes or an unlisted file appears. Format: <sha256> <file>.
+16ca16d7abb6020ead15167322cfb22e710b4c346a5d549fb49a0004f54b20d4 foreign-application.sql
+037ea931b8731743142fdbe5c148497af773664606c757b387ff3ef86390e46f foreign-application.sqlite
+89aac0fc195ec2f773610aea9d730ebb90f1091d0fb613f95fafed1bb341baee schema-newer-999.sql
+25588c340d06ef351b6c03cb7cf987fa315b7463e8b67bfcb0b50226eae25331 schema-newer-999.sqlite
+730223d9976c578817edc3a5cfa6886d441f036536b9ead62d2e636c1cce0ddf schema-v1-representative.expected.json
+02f4d189ce868add1e03791a66a94bb8554837f70d430077888d05e7810bf702 schema-v1-representative.sql
+aaebf121af758dd92f56dd2283cf832df25bae12957a5c729b121fa8600f80fd schema-v1-representative.sqlite

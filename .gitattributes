@@ -16,3 +16,8 @@ tests/fixtures/protocol-v1/event-size-limit.json -whitespace
 tests/fixtures/protocol-v1/event-oversized.json -whitespace
 tests/fixtures/protocol-v1/hello-exact.json -whitespace
 tests/fixtures/protocol-v1/hello-oversized.json -whitespace
+# Storage fixtures are immutable historical databases checked by SHA-256 (tests/fixtures/storage/manifest.txt).
+tests/fixtures/storage/*.sqlite binary
+tests/fixtures/storage/*.sql text eol=lf
+tests/fixtures/storage/*.json text eol=lf
+tests/fixtures/storage/manifest.txt text eol=lf
