@@ -1,0 +1,18 @@
+{
+  "format": "ets2telemetry-simulator-v1", "schemaVersion": 1, "id": "live-only",
+  "purpose": "A live-only client receives state but no events and never acknowledges; events become noDurableConsumer coverage without starting retention, and a later durable client receives one merged gap.",
+  "reg": ["REG-003"], "origin": "synthetic", "game": "ets2", "seed": "et005b-live-only", "provenance": null,
+  "source": {"versions": {"telemetryApi": {"major": 1, "minor": 1}, "gameTelemetry": {"major": 1, "minor": 19}, "sdkArchive": "scs-sdk-1.15"}, "gameplayEvents": "registered", "currency": "unknown", "gameMode": "unknown"},
+  "steps": [
+    {"atMs": 10, "action": "lifecycle", "event": "simulation.started"},
+    {"atMs": 20, "action": "frame", "channels": {"speed": 10}},
+    {"atMs": 100, "action": "configuration", "id": "job", "attributes": []},
+    {"atMs": 200, "action": "frame"}
+  ],
+  "transport": [
+    {"atMs": 0, "action": "connect", "client": {"durable": false}},
+    {"atMs": 150, "action": "disconnect"},
+    {"atMs": 250, "action": "connect", "client": {"durable": true}},
+    {"atMs": 300, "action": "disconnect"}
+  ]
+}

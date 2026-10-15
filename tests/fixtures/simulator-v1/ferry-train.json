@@ -1,0 +1,21 @@
+{
+  "format": "ets2telemetry-simulator-v1", "schemaVersion": 1, "id": "ferry-train",
+  "purpose": "Ferry, train and toll payments with SDK-documented ETS2 currency; a forward game-time jump between them keeps the game clock. The train crossing is synthetic and unverified in a real game.",
+  "reg": ["REG-008", "REG-009"], "origin": "synthetic", "game": "ets2", "seed": "et005b-ferry-train", "provenance": null,
+  "source": {"versions": {"telemetryApi": {"major": 1, "minor": 1}, "gameTelemetry": {"major": 1, "minor": 19}, "sdkArchive": "scs-sdk-1.15"}, "gameplayEvents": "registered", "currency": "sdk-documented", "gameMode": "unknown"},
+  "steps": [
+    {"atMs": 10, "action": "gameplay", "id": "player.use.ferry", "attributes": [{"name": "pay.amount", "sdkType": "s64", "value": "230"},
+      {"name": "source.id", "sdkType": "string", "value": "synthetic_port_a"}, {"name": "source.name", "sdkType": "string", "value": "Synthetic Port A"},
+      {"name": "target.id", "sdkType": "string", "value": "synthetic_port_b"}, {"name": "target.name", "sdkType": "string", "value": "Synthetic Port B"}]},
+    {"atMs": 20, "action": "frame", "channels": {"game.time": 1000}},
+    {"atMs": 30, "action": "frame", "channels": {"game.time": 1400}},
+    {"atMs": 40, "action": "gameplay", "id": "player.use.train", "attributes": [{"name": "pay.amount", "sdkType": "s64", "value": "120"},
+      {"name": "source.id", "sdkType": "string", "value": "synthetic_station_a"}, {"name": "source.name", "sdkType": "string", "value": "Synthetic Station A"},
+      {"name": "target.id", "sdkType": "string", "value": "synthetic_station_b"}, {"name": "target.name", "sdkType": "string", "value": "Synthetic Station B"}]},
+    {"atMs": 50, "action": "gameplay", "id": "player.tollgate.paid", "attributes": [{"name": "pay.amount", "sdkType": "s64", "value": "15"}]}
+  ],
+  "transport": [
+    {"atMs": 0, "action": "connect", "client": {"durable": true}},
+    {"atMs": 100, "action": "disconnect"}
+  ]
+}

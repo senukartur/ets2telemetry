@@ -1,0 +1,31 @@
+{
+  "scenario": "ferry-train",
+  "authoredFrom": [
+    "docs/protocol/v1.md §6 and §8: ferry and train carry pay.amount as raw s64 money with source and target id and name; the toll carries its amount",
+    "D11: SDK 1.15 documents Euro for ETS2 in scssdk_telemetry_eut2.h; currency is sdk-documented with that header source",
+    "concept.md 'Sleep and unannounced game-time jumps': a forward jump keeps the game clock; §7 snapshot coalescing keeps one replaceable snapshot and counts the replaced one"
+  ],
+  "connections": [
+    {
+      "durableRequested": true, "closedBy": "disconnect", "clientInstance": 1,
+      "coverage": [
+        {"event": "1", "type": "player.use.ferry", "redelivered": false,
+          "record": {"amount": {"available": true, "value": {"raw": "230", "sdkType": "s64",
+              "currency": {"status": "sdk-documented", "code": "EUR", "source": "scs-sdk-1.15/include/eurotrucks2/scssdk_telemetry_eut2.h#game-specific-units"}}},
+            "sourceId": {"available": true, "value": "synthetic_port_a"}, "sourceName": {"available": true, "value": "Synthetic Port A"},
+            "targetId": {"available": true, "value": "synthetic_port_b"}, "targetName": {"available": true, "value": "Synthetic Port B"}}},
+        {"event": "2", "type": "player.use.train", "redelivered": false,
+          "occurred": {"gameTime": {"minutes": {"available": true, "value": "1400"}, "clockId": "game-clock-0"}},
+          "record": {"amount": {"available": true, "value": {"raw": "120", "sdkType": "s64"}}, "targetName": {"available": true, "value": "Synthetic Station B"}}},
+        {"event": "3", "type": "player.tollgate.paid", "redelivered": false, "record": {"amount": {"available": true, "value": {"raw": "15", "sdkType": "s64"}}}}
+      ],
+      "acks": ["1", "2", "3"],
+      "snapshots": [
+        {"atMs": 50, "continuity": {"coalescedSnapshots": "1", "offlineTransitions": "0"}, "state": {"gameTime": {"available": true, "value": "1400", "unit": "min", "clockId": "game-clock-0"}}}
+      ],
+      "end": null
+    }
+  ],
+  "store": {"nextEventSeq": "4", "eventLoss": {}},
+  "retired": null
+}

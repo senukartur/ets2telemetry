@@ -1,0 +1,75 @@
+{
+  "scenario": "normal-delivery",
+  "authoredFrom": [
+    "docs/protocol/v1.md §4 welcome capabilities without gameplay-mode detection (OD-3) and §7 checkpoint before any event",
+    "docs/protocol/v1.md §6 mapping: planned_distance.km x 1,000, distance.km x 1,000, odometer x 1,000, raw s64/u64 money with unknown currency",
+    "docs/protocol/v1.md §8 occurred.simulation is the state after the callback (owner decision, October 15, 2026); D13 re-send of the job configuration at pickup",
+    "docs/protocol/v1.md §10 consumer rule: commit each item, then ACK min(C, R); §11 mapping offset = floor(((t1 - t0) + (t2 - t3)) / 2)",
+    "docs/native-transport-v1.md: every SDK callback, including frame_start, each channel and frame_end, advances boundaryOrder; v1 revision counts job and truck callbacks and emitting trailer callbacks",
+    "docs/simulator-v1.md clocks: source ns = 1,000,000,000,000 + atMs x 1,000,000; client ns = 5,000,000,000,000 + atMs x 1,000,000; UTC = 1,800,000,000,000 + atMs"
+  ],
+  "connections": [
+    {
+      "durableRequested": true, "closedBy": "disconnect", "clientInstance": 1,
+      "welcome": {
+        "durableEvents": true,
+        "capabilities": {"gameplayEvents": "registered", "eventTypes": ["job.configured", "job.cleared", "truck.configured", "truck.cleared", "trailer.configured", "trailer.cleared",
+          "simulation.paused", "simulation.started", "timers.restart", "gameTime.regression", "job.delivered", "job.cancelled", "player.fined", "player.tollgate.paid",
+          "player.use.ferry", "player.use.train"]},
+        "versions": {"telemetryApi": {"major": 1, "minor": 1}, "gameTelemetry": {"major": 1, "minor": 19}, "sdkArchive": "scs-sdk-1.15"},
+        "gameMode": {"mode": "unknown", "method": "none", "confidence": "none", "module": {"available": false, "reason": "not-observed"}}
+      },
+      "checkpoint": {
+        "atMs": 0, "seq": "2", "capture": "1000000000000", "ackedThroughEventSeq": "0", "nextEventSeq": "1", "durable": true,
+        "retainedEvents": 0, "retainedBytes": 0, "oldestRetainedMonotonicNs": null, "eventLoss": {},
+        "continuity": {"coalescedSnapshots": "0", "offlineTransitions": "0"},
+        "state": {
+          "simulation": "unavailable", "boundaryOrder": "0", "captureUtcUnixMs": {"available": true, "value": "1800000000000"},
+          "speed": {"available": false, "reason": "not-observed", "unit": "m/s"},
+          "gameTime": {"available": false, "reason": "not-observed", "unit": "min", "clockId": "game-clock-0"},
+          "configuration": {"revision": "0", "job": {"available": false, "reason": "not-observed"}, "truck": {"available": false, "reason": "not-observed"}},
+          "window": {"available": false, "reason": "not-supported"}
+        }
+      },
+      "coverage": [
+        {"event": "1", "type": "truck.configured", "redelivered": false,
+          "occurred": {"monotonicNs": {"available": true, "value": "1000010000000"}, "utcUnixMs": {"available": true, "value": "1800000000010"}, "simulation": "unavailable",
+            "configurationRevision": "1", "boundaryOrder": "1", "gameTime": {"minutes": {"available": false, "reason": "not-observed"}, "clockId": "game-clock-0"}},
+          "record": {"brandId": {"available": true, "value": "synthetic_brand"}, "id": {"available": true, "value": "vehicle.synthetic_truck"},
+            "fuelCapacity": {"available": true, "value": 800, "unit": "L"}, "licensePlate": {"available": false, "reason": "not-observed"}}},
+        {"event": "2", "type": "trailer.configured", "redelivered": false, "occurred": {"configurationRevision": "2", "boundaryOrder": "2"},
+          "record": {"index": 0, "id": {"available": true, "value": "trailer.synthetic_box"}, "bodyType": {"available": true, "value": "dryvan"}, "chainType": {"available": false, "reason": "not-observed"}}},
+        {"event": "3", "type": "job.configured", "redelivered": false, "occurred": {"configurationRevision": "3", "boundaryOrder": "3"},
+          "record": {"plannedDistance": {"available": true, "value": 152000, "unit": "m"}, "expectedIncome": {"available": true, "value": {"raw": "12345", "sdkType": "u64", "currency": {"status": "unknown"}}},
+            "cargoLoaded": {"available": true, "value": false}, "deliveryDeadline": {"available": false, "reason": "not-observed", "unit": "min"}, "cargo": {"available": false, "reason": "not-observed"}}},
+        {"event": "4", "type": "simulation.started", "redelivered": false, "occurred": {"simulation": "running", "boundaryOrder": "4", "configurationRevision": "3"}},
+        {"event": "5", "type": "job.configured", "redelivered": false,
+          "occurred": {"configurationRevision": "4", "boundaryOrder": "14", "gameTime": {"minutes": {"available": true, "value": "602"}, "clockId": "game-clock-0"}},
+          "record": {"cargoLoaded": {"available": true, "value": true}}},
+        {"event": "6", "type": "simulation.paused", "redelivered": false, "occurred": {"simulation": "paused", "boundaryOrder": "15"}},
+        {"event": "7", "type": "simulation.started", "redelivered": false, "occurred": {"simulation": "running", "boundaryOrder": "16"}},
+        {"event": "8", "type": "job.delivered", "redelivered": false, "occurred": {"configurationRevision": "4", "boundaryOrder": "17", "monotonicNs": {"available": true, "value": "1000600000000"}},
+          "record": {"revenue": {"available": true, "value": {"raw": "12000", "sdkType": "s64", "currency": {"status": "unknown"}}}, "earnedXp": {"available": true, "value": 250},
+            "cargoDamage": {"available": true, "value": 0.03125, "unit": "fraction"}, "distance": {"available": true, "value": 152500, "unit": "m"},
+            "deliveryDuration": {"available": true, "value": "300", "unit": "min"}, "autoParkUsed": {"available": true, "value": false}, "autoLoadUsed": {"available": true, "value": false}}},
+        {"event": "9", "type": "job.cleared", "redelivered": false, "occurred": {"configurationRevision": "5", "boundaryOrder": "18"}}
+      ],
+      "acks": ["1", "2", "3", "4", "5", "6", "7", "8", "9"],
+      "snapshots": [
+        {"atMs": 100, "seq": "7", "ackedThroughEventSeq": "4", "nextEventSeq": "5",
+          "state": {"simulation": "running", "boundaryOrder": "9", "speed": {"available": true, "value": 25.5, "unit": "m/s"}, "odometer": {"available": true, "value": 1000500, "unit": "m"},
+            "fuelCapacity": {"available": true, "value": 800, "unit": "L"}, "gameTime": {"available": true, "value": "601", "unit": "min", "clockId": "game-clock-0"},
+            "configuration": {"revision": "3"}}},
+        {"atMs": 200, "seq": "8", "ackedThroughEventSeq": "4",
+          "state": {"boundaryOrder": "13", "speed": {"available": true, "value": 0, "unit": "m/s"}, "odometer": {"available": true, "value": 1000500, "unit": "m"},
+            "gameTime": {"available": true, "value": "602", "unit": "min", "clockId": "game-clock-0"}}}
+      ],
+      "clockReplies": 1,
+      "mappings": [{"probeId": "1", "offsetNs": "-4000000000000", "uncertaintyNs": "0"}],
+      "end": null
+    }
+  ],
+  "ledger": {"committedThroughEventSeq": "9", "committedEvents": 9, "committedGapMarkers": "0", "duplicates": 0},
+  "store": {"ackedThroughEventSeq": "9", "nextEventSeq": "10", "retainedEntries": 0, "eventLoss": {}},
+  "retired": null
+}

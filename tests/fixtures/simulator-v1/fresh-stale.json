@@ -1,0 +1,19 @@
+{
+  "format": "ets2telemetry-simulator-v1", "schemaVersion": 1, "id": "fresh-stale",
+  "purpose": "State freshness is the publication boundary: a configuration change after the last frame is absent from the checkpoint until the next frame publishes it, coalesced snapshots are counted, and a session without gameplay registration lists no gameplay types.",
+  "reg": ["REG-003", "REG-009"], "origin": "synthetic", "game": "ets2", "seed": "et005b-fresh-stale", "provenance": null,
+  "source": {"versions": {"telemetryApi": {"major": 1, "minor": 1}, "gameTelemetry": {"major": 1, "minor": 19}, "sdkArchive": "scs-sdk-1.15"}, "gameplayEvents": "not-supported", "currency": "unknown", "gameMode": "unknown"},
+  "steps": [
+    {"atMs": 0, "action": "frame", "channels": {"speed": 10}},
+    {"atMs": 10, "action": "configuration", "id": "truck", "attributes": [{"name": "id", "sdkType": "string", "value": "vehicle.synthetic_a"}]},
+    {"atMs": 30, "action": "frame"},
+    {"atMs": 40, "action": "frame", "channels": {"speed": 12}},
+    {"atMs": 110, "action": "frame", "channels": {"speed": 11}}
+  ],
+  "transport": [
+    {"atMs": 20, "action": "connect", "client": {"durable": true}},
+    {"atMs": 100, "action": "disconnect"},
+    {"atMs": 120, "action": "connect", "client": {"durable": true}},
+    {"atMs": 200, "action": "disconnect"}
+  ]
+}

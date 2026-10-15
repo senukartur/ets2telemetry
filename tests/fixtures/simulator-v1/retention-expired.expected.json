@@ -1,0 +1,26 @@
+{
+  "scenario": "retention-expired",
+  "authoredFrom": [
+    "docs/protocol/v1.md §9 and I5: disconnect retention is 300,000 ms of real monotonic time; afterwards every retained event becomes retentionExpired coverage merged into one gap record over [A + 1, N)",
+    "OD-5 S2: the gap record that expiry creates is retained from the expiry time, here 1,000,000,000,000 + (50 + 300,000) x 1,000,000 ns",
+    "OD-5 S1: expired events contribute their occurrence times as the lost times; §9: the gap is redelivered because its eventSeqs were written before",
+    "docs/protocol/v1.md §10: an uncommitted event is never acknowledged; a committed gap marker is"
+  ],
+  "connections": [
+    {
+      "durableRequested": true, "closedBy": "disconnect", "clientInstance": 1,
+      "coverage": [{"event": "1", "type": "job.configured", "redelivered": false}, {"event": "2", "type": "truck.configured", "redelivered": false}],
+      "acks": [], "end": null
+    },
+    {
+      "durableRequested": true, "closedBy": "disconnect", "clientInstance": 1,
+      "checkpoint": {"atMs": 400100, "capture": "1400100000000", "ackedThroughEventSeq": "0", "nextEventSeq": "3", "retainedEvents": 1, "retainedBytes": 1024,
+        "oldestRetainedMonotonicNs": "1300050000000", "eventLoss": {"retentionExpired": "2"}},
+      "coverage": [{"gap": ["1", "2"], "causes": {"retentionExpired": "2"}, "redelivered": true, "firstLost": "1000010000000", "lastLost": "1000020000000"}],
+      "acks": ["2"], "end": null
+    }
+  ],
+  "ledger": {"committedThroughEventSeq": "2", "committedEvents": 0, "committedGapMarkers": "2", "duplicates": 0},
+  "store": {"ackedThroughEventSeq": "2", "nextEventSeq": "3", "retainedEntries": 0, "eventLoss": {"retentionExpired": "2"}},
+  "retired": null
+}

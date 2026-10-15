@@ -1,0 +1,17 @@
+{
+  "format": "ets2telemetry-simulator-v1", "schemaVersion": 1, "id": "retention-expired",
+  "purpose": "A durable client never commits and disconnects; after 300,000 ms of source time the retained events become one retentionExpired gap record, which the next connection receives as redelivered coverage.",
+  "reg": ["REG-003", "REG-011"], "origin": "synthetic", "game": "ets2", "seed": "et005b-retention-expired", "provenance": null,
+  "source": {"versions": {"telemetryApi": {"major": 1, "minor": 1}, "gameTelemetry": {"major": 1, "minor": 19}, "sdkArchive": "scs-sdk-1.15"}, "gameplayEvents": "registered", "currency": "unknown", "gameMode": "unknown"},
+  "steps": [
+    {"atMs": 10, "action": "configuration", "id": "job", "attributes": [{"name": "cargo.id", "sdkType": "string", "value": "synthetic_cargo"}]},
+    {"atMs": 20, "action": "configuration", "id": "truck", "attributes": [{"name": "id", "sdkType": "string", "value": "vehicle.synthetic_truck"}]},
+    {"atMs": 400000, "action": "frame"}
+  ],
+  "transport": [
+    {"atMs": 0, "action": "connect", "client": {"durable": true, "commit": "none"}},
+    {"atMs": 50, "action": "disconnect"},
+    {"atMs": 400100, "action": "connect", "client": {"durable": true}},
+    {"atMs": 400200, "action": "disconnect"}
+  ]
+}
