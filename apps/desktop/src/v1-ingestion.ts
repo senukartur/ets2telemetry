@@ -17,7 +17,7 @@ import {DurableDelivery, type DurableCloseKind, type DurableConnection, type Dur
 
 /** Desktop-local copy of the simulator's synthetic endpoint pattern: `\\.\pipe\ETS2Telemetry-SYNTHETIC-TEST-v1-{pid}-{uuid}`. */
 export const TEST_PIPE_PATTERN_V1 = /^\\\\\.\\pipe\\ETS2Telemetry-SYNTHETIC-TEST-v1-[1-9][0-9]*-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-/** E9: reconnect delays 250, 500, 1000, 2000, then 4000 ms; a hydrated checkpoint resets them. */
+/** E9: reconnect delays 250, 500, 1000, 2000, then 4000 ms; they restart at a live-only checkpoint or a durable connection's first commit. */
 export const V1_BACKOFF_MS = [250, 500, 1000, 2000, 4000] as const;
 export const V1_STALE_MS = 500;
 export const V1_HANDSHAKE_MS = 5000;
