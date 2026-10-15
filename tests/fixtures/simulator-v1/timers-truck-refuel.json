@@ -1,0 +1,19 @@
+{
+  "format": "ets2telemetry-simulator-v1", "schemaVersion": 1, "id": "timers-truck-refuel",
+  "purpose": "A timer restart rotates the game clock and invalidates unobserved channels, a truck change invalidates dynamic values and changes fuel capacity, and refuelling appears only as a state change with no event.",
+  "reg": ["REG-008", "REG-009"], "origin": "synthetic", "game": "ets2", "seed": "et005b-timers-truck-refuel", "provenance": null,
+  "source": {"versions": {"telemetryApi": {"major": 1, "minor": 1}, "gameTelemetry": {"major": 1, "minor": 19}, "sdkArchive": "scs-sdk-1.15"}, "gameplayEvents": "registered", "currency": "unknown", "gameMode": "unknown"},
+  "steps": [
+    {"atMs": 0, "action": "frame", "channels": {"fuel.amount": 100, "odometer": 5000, "game.time": 1000}},
+    {"atMs": 10, "action": "configuration", "id": "truck", "attributes": [{"name": "id", "sdkType": "string", "value": "vehicle.synthetic_a"}, {"name": "fuel.capacity", "sdkType": "float", "value": 400}]},
+    {"atMs": 100, "action": "frame", "channels": {"fuel.amount": 90, "odometer": 5010, "game.time": 1010}},
+    {"atMs": 200, "action": "frame", "timerRestart": true, "channels": {"fuel.amount": 90}},
+    {"atMs": 300, "action": "configuration", "id": "truck", "attributes": [{"name": "id", "sdkType": "string", "value": "vehicle.synthetic_b"}, {"name": "fuel.capacity", "sdkType": "float", "value": 600}]},
+    {"atMs": 400, "action": "frame", "channels": {"fuel.amount": 50, "odometer": 20000, "game.time": 1500}},
+    {"atMs": 500, "action": "frame", "channels": {"fuel.amount": 550}}
+  ],
+  "transport": [
+    {"atMs": 0, "action": "connect", "client": {"durable": true}},
+    {"atMs": 600, "action": "disconnect"}
+  ]
+}

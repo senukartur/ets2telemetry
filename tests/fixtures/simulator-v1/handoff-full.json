@@ -1,0 +1,19 @@
+{
+  "format": "ets2telemetry-simulator-v1", "schemaVersion": 1, "id": "handoff-full",
+  "purpose": "The SDK-thread handoff ring is full while a durable client is connected: two events become one queueCount loss run that stays open across a frame and reaches the store before the next copied event.",
+  "reg": ["REG-005", "REG-011"], "origin": "synthetic", "game": "ets2", "seed": "et005b-handoff-full", "provenance": null,
+  "source": {"versions": {"telemetryApi": {"major": 1, "minor": 1}, "gameTelemetry": {"major": 1, "minor": 19}, "sdkArchive": "scs-sdk-1.15"}, "gameplayEvents": "registered", "currency": "unknown", "gameMode": "unknown"},
+  "steps": [
+    {"atMs": 10, "action": "lifecycle", "event": "simulation.started"},
+    {"atMs": 20, "action": "handoff", "full": true},
+    {"atMs": 30, "action": "gameplay", "id": "player.tollgate.paid", "attributes": [{"name": "pay.amount", "sdkType": "s64", "value": "15"}]},
+    {"atMs": 40, "action": "configuration", "id": "job", "attributes": [{"name": "cargo.id", "sdkType": "string", "value": "synthetic_cargo"}]},
+    {"atMs": 50, "action": "frame", "channels": {"speed": 10}},
+    {"atMs": 60, "action": "handoff", "full": false},
+    {"atMs": 70, "action": "lifecycle", "event": "simulation.paused"}
+  ],
+  "transport": [
+    {"atMs": 0, "action": "connect", "client": {"durable": true}},
+    {"atMs": 100, "action": "disconnect"}
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "format": "ets2telemetry-simulator-v1", "schemaVersion": 1, "id": "sleep-teleport",
+  "purpose": "A sleep appears only as a forward game-time jump of 595 minutes and a teleport only as a position jump; neither emits an event or rotates the game clock.",
+  "reg": ["REG-008"], "origin": "synthetic", "game": "ets2", "seed": "et005b-sleep-teleport", "provenance": null,
+  "source": {"versions": {"telemetryApi": {"major": 1, "minor": 1}, "gameTelemetry": {"major": 1, "minor": 19}, "sdkArchive": "scs-sdk-1.15"}, "gameplayEvents": "registered", "currency": "unknown", "gameMode": "unknown"},
+  "steps": [
+    {"atMs": 0, "action": "frame", "channels": {"speed": 0, "game.time": 1000, "world.placement": {"x": 100.5, "y": 10, "z": -200.25, "heading": 0.5, "pitch": 0, "roll": 0}}},
+    {"atMs": 10, "action": "lifecycle", "event": "simulation.started"},
+    {"atMs": 100, "action": "frame", "channels": {"game.time": 1001, "world.placement": {"x": 101.5, "y": 10, "z": -200.25, "heading": 0.5, "pitch": 0, "roll": 0}}},
+    {"atMs": 200, "action": "frame", "channels": {"game.time": 1596}},
+    {"atMs": 300, "action": "frame", "channels": {"world.placement": {"x": 25000.5, "y": 15, "z": 9000.75, "heading": -0.25, "pitch": 0, "roll": 0}}},
+    {"atMs": 400, "action": "lifecycle", "event": "simulation.paused"}
+  ],
+  "transport": [
+    {"atMs": 0, "action": "connect", "client": {"durable": true}},
+    {"atMs": 500, "action": "disconnect"}
+  ]
+}

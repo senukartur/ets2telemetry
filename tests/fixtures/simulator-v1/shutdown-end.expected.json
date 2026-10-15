@@ -1,0 +1,19 @@
+{
+  "scenario": "shutdown-end",
+  "authoredFrom": [
+    "docs/protocol/v1.md §9 and D14: end is best effort at shutdown and the producer never waits for an ACK; retainedUnacked counts retained events, not gap records (OD-5 S5)",
+    "OD-5 S11: a loss run that the plugin has not recorded in its store when it exits is plugin-exit loss and gets no gap, so nextEventSeq stays 3",
+    "docs/protocol/v1.md §10: committing without acknowledging leaves ackedThroughEventSeq at 0"
+  ],
+  "connections": [
+    {
+      "durableRequested": true, "closedBy": "end", "clientInstance": 1,
+      "coverage": [{"event": "1", "type": "job.cleared", "redelivered": false}, {"event": "2", "type": "simulation.started", "redelivered": false}],
+      "acks": [],
+      "end": {"reason": "plugin-shutdown", "nextEventSeq": "3", "ackedThroughEventSeq": "0", "retainedUnacked": "2"}
+    }
+  ],
+  "ledger": {"committedThroughEventSeq": "2", "committedEvents": 2, "duplicates": 0},
+  "store": {"ackedThroughEventSeq": "0", "nextEventSeq": "3", "retainedEntries": 2, "eventLoss": {}},
+  "retired": "plugin-shutdown"
+}

@@ -1,0 +1,34 @@
+{
+  "scenario": "queue-count-overflow",
+  "authoredFrom": [
+    "docs/protocol/v1.md §9 full store: an event is retained only if one entry stays free, so events use at most 255 entries; otherwise it is lost as queueCount",
+    "docs/protocol/v1.md §9 and I3: a lost eventSeq extends the trailing gap record in place; while connected each newly lost range is written as a gap (delta), and a reconnection redelivers the merged record once",
+    "docs/protocol/v1.md §10: ACKs are cumulative; the withholding client sends none, the next client acknowledges after each redelivered item"
+  ],
+  "connections": [
+    {
+      "durableRequested": true, "closedBy": "disconnect", "clientInstance": 1,
+      "coverage": [
+        {"eventRange": ["1", "255"], "type": "player.tollgate.paid", "redelivered": false},
+        {"gap": ["256", "256"], "causes": {"queueCount": "1"}, "redelivered": false, "firstLost": "1000010000000", "lastLost": "1000010000000"},
+        {"gap": ["257", "257"], "causes": {"queueCount": "1"}, "redelivered": false},
+        {"gap": ["258", "258"], "causes": {"queueCount": "1"}, "redelivered": false},
+        {"gap": ["259", "259"], "causes": {"queueCount": "1"}, "redelivered": false},
+        {"gap": ["260", "260"], "causes": {"queueCount": "1"}, "redelivered": false}
+      ],
+      "acks": [], "end": null
+    },
+    {
+      "durableRequested": true, "closedBy": "disconnect", "clientInstance": 1,
+      "checkpoint": {"atMs": 200, "ackedThroughEventSeq": "0", "nextEventSeq": "261", "retainedEvents": 256, "oldestRetainedMonotonicNs": "1000010000000", "eventLoss": {"queueCount": "5"}},
+      "coverage": [
+        {"eventRange": ["1", "255"], "type": "player.tollgate.paid", "redelivered": true},
+        {"gap": ["256", "260"], "causes": {"queueCount": "5"}, "redelivered": true, "firstLost": "1000010000000", "lastLost": "1000010000000"}
+      ],
+      "ackCount": 256, "lastAck": "260", "end": null
+    }
+  ],
+  "ledger": {"committedThroughEventSeq": "260", "committedEvents": 255, "committedGapMarkers": "5", "duplicates": 256},
+  "store": {"ackedThroughEventSeq": "260", "nextEventSeq": "261", "retainedEntries": 0, "eventLoss": {"queueCount": "5"}},
+  "retired": null
+}

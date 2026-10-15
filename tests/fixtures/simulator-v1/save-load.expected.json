@@ -1,0 +1,48 @@
+{
+  "scenario": "save-load",
+  "authoredFrom": [
+    "concept.md 'Save loading — October 14, 2026' (CAP-01 run 9, O10): paused, clears, re-send except car_job, started, then game.time.regression; only the regression carries the new time and clock",
+    "docs/protocol/v1.md §8 gameTime.regression: from and to differ in clock, to precedes from and occurred.gameTime equals to",
+    "docs/native-transport-v1.md records table: an empty trailer slot clears only after a non-empty one; controls and bus_job get no record (TD-002); truck boundaries invalidate dynamic values",
+    "docs/native-transport-v1.md: channels not observed in the frame of a clock rotation are invalidated; boundaryOrder counts every callback"
+  ],
+  "connections": [
+    {
+      "durableRequested": true, "closedBy": "disconnect", "clientInstance": 1,
+      "checkpoint": {"atMs": 0, "state": {"boundaryOrder": "4", "gameTime": {"available": true, "value": "5000", "unit": "min", "clockId": "game-clock-0"}}},
+      "coverage": [
+        {"event": "1", "type": "truck.configured", "redelivered": false},
+        {"event": "2", "type": "trailer.configured", "redelivered": false},
+        {"event": "3", "type": "job.configured", "redelivered": false},
+        {"event": "4", "type": "simulation.started", "redelivered": false},
+        {"event": "5", "type": "simulation.paused", "redelivered": false, "occurred": {"simulation": "paused", "boundaryOrder": "13"}},
+        {"event": "6", "type": "job.cleared", "redelivered": false, "occurred": {"configurationRevision": "4"}},
+        {"event": "7", "type": "truck.cleared", "redelivered": false, "occurred": {"configurationRevision": "5", "boundaryOrder": "16"}},
+        {"event": "8", "type": "trailer.cleared", "redelivered": false, "record": {"index": 0}, "occurred": {"configurationRevision": "6"}},
+        {"event": "9", "type": "job.configured", "redelivered": false,
+          "occurred": {"configurationRevision": "7", "gameTime": {"minutes": {"available": true, "value": "5100"}, "clockId": "game-clock-0"}},
+          "record": {"cargoId": {"available": true, "value": "synthetic_cargo"}, "plannedDistance": {"available": true, "value": 300000, "unit": "m"}}},
+        {"event": "10", "type": "truck.configured", "redelivered": false, "occurred": {"configurationRevision": "8", "boundaryOrder": "20"}},
+        {"event": "11", "type": "trailer.configured", "redelivered": false, "occurred": {"configurationRevision": "9"}},
+        {"event": "12", "type": "simulation.started", "redelivered": false,
+          "occurred": {"simulation": "running", "boundaryOrder": "23", "gameTime": {"minutes": {"available": true, "value": "5100"}, "clockId": "game-clock-0"}}},
+        {"event": "13", "type": "gameTime.regression", "redelivered": false,
+          "occurred": {"boundaryOrder": "25", "configurationRevision": "9", "gameTime": {"minutes": {"available": true, "value": "4900"}, "clockId": "game-clock-1"}},
+          "record": {"type": "gameTime.regression", "from": {"minutes": {"available": true, "value": "5100"}, "clockId": "game-clock-0"},
+            "to": {"minutes": {"available": true, "value": "4900"}, "clockId": "game-clock-1"}}}
+      ],
+      "ackCount": 13, "lastAck": "13",
+      "snapshots": [
+        {"atMs": 100, "state": {"boundaryOrder": "12", "speed": {"available": true, "value": 20, "unit": "m/s"}, "fuelCapacity": {"available": true, "value": 600, "unit": "L"},
+          "gameTime": {"available": true, "value": "5100", "unit": "min", "clockId": "game-clock-0"}}},
+        {"atMs": 240, "state": {"boundaryOrder": "26", "simulation": "running", "speed": {"available": false, "reason": "not-observed", "unit": "m/s"},
+          "fuelCapacity": {"available": true, "value": 600, "unit": "L"}, "gameTime": {"available": true, "value": "4900", "unit": "min", "clockId": "game-clock-1"},
+          "configuration": {"revision": "9"}}}
+      ],
+      "end": null
+    }
+  ],
+  "ledger": {"committedThroughEventSeq": "13", "committedEvents": 13, "duplicates": 0},
+  "store": {"ackedThroughEventSeq": "13", "nextEventSeq": "14", "eventLoss": {}},
+  "retired": null
+}
