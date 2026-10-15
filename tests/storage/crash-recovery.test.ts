@@ -73,9 +73,16 @@ async function runChild(mode: 'before-commit' | 'after-commit' | 'worker', items
   return {code, acks, done};
 }
 
+/**
+ * The child stamps its rows with the real clock, which the worker cannot replace. The reopening test process must use
+ * the real clock as well: the workspace's fixed clock would date a redelivered trip update before the trip's creation by
+ * the child (trips CHECK updated_utc_ms >= created_utc_ms) whenever the suite runs after that fixed time.
+ */
+const parentOptions = () => ws.options({now: () => Date.now()});
+
 /** Reopens the database in this process and checks every crash-recovery invariant against the stream. */
 async function verify(items: Item[]) {
-  const storage = ok(await openStorage(ws.options()));
+  const storage = ok(await openStorage(parentOptions()));
   const through = BigInt(ok(storage.committedThrough(P1)));
   storage.close();
   const facts = readOnly(ws.database, db => ({
@@ -115,7 +122,7 @@ async function verify(items: Item[]) {
 
 /** Redelivers the whole stream in order, as a reconnected producer would, and checks the completed database. */
 async function redeliver(items: Item[], stored: Set<bigint>) {
-  const storage = ok(await openStorage(ws.options()));
+  const storage = ok(await openStorage(parentOptions()));
   for (const item of items) {
     const input = {message: item.message, effects: item.effects};
     const result = ok(item.kind === 'gap' ? storage.commitGap(input) : storage.commitEvent(input));
