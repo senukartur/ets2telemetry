@@ -169,8 +169,12 @@ describe('simulator v1 event store (I1-I8 mirror)', () => {
       expect(st.retainedEntries).toBeLessThanOrEqual(256); expect(st.retainedBytes).toBeLessThanOrEqual(1_048_576);
       if (st.retainedEntries === 256) expect(st.retainedBytes).toBeGreaterThanOrEqual(1_024);
       expect(LOSS_CAUSES.reduce((sum, k) => sum + st.eventLoss[k], 0n)).toBe(lost);
-      let expect1 = st.ackedThroughEventSeq + 1n;
-      for (let i = 0; i < s.entryCount; i++) { const e = s.entry(i); expect(e.first).toBe(expect1); expect1 = e.last + 1n; }
+      // Every retained entry starts right after the previous one. The run checks about 678,000 entry boundaries,
+      // so compare them directly and assert the first break once per step: one expect() per boundary cost ~1.5 s
+      // of assertion overhead and timed out under CPU contention. The checked condition is unchanged.
+      let expect1 = st.ackedThroughEventSeq + 1n, firstBreak: {step: number; entry: number; first: bigint; expected: bigint} | undefined;
+      for (let i = 0; i < s.entryCount && !firstBreak; i++) { const e = s.entry(i); if (e.first !== expect1) firstBreak = {step, entry: i, first: e.first, expected: expect1}; expect1 = e.last + 1n; }
+      expect(firstBreak).toBeUndefined();
       expect(expect1).toBe(st.nextEventSeq);
     }
     // Deliver everything: the last delivered form of every eventSeq is a gap exactly for the counted losses.

@@ -16,6 +16,10 @@ const transport = (s: Json) => s.transport as Json[];
 const source = (s: Json) => s.source as Json;
 function variant(edit: (s: Json) => void): Json { const s = base(); edit(s); return s; }
 const job = (atMs: number, extra: Json = {}): Json => ({atMs, action: 'configuration', id: 'job', attributes: [], ...extra});
+// Reaching the transcript limit needs 20,000 real encoded and decoded messages: up to about 1.5 s of CPU work in a
+// default-worker run and more than 5 s when every core is busy. This budget bounds that computation; the case asserts
+// no timing.
+const TRANSCRIPT_LIMIT_REPLAY_BUDGET_MS = 30_000;
 
 describe('simulator v1 scenario schema', () => {
   it('accepts the corpus format and rebuilds it without aliasing the input', () => {
@@ -85,7 +89,7 @@ describe('simulator v1 scenario schema', () => {
     const big = variant(s => { s.steps = Array.from({length: 11}, (_, i) => ({atMs: i, action: 'gameplay', id: 'player.tollgate.paid', attributes: [], repeat: 1_000})); });
     expect(MAX_TRANSCRIPT_MESSAGES).toBe(20_000);
     expect(() => replayV1(big)).toThrow(/transcript limit/);
-  });
+  }, TRANSCRIPT_LIMIT_REPLAY_BUDGET_MS);
 
   it('rejects duplicate keys through the bounded strict reader', () => {
     const directory = mkdtempSync(join(tmpdir(), 'ETS2Telemetry-SYNTHETIC-TEST-v1-scenario-'));
