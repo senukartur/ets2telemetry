@@ -62,8 +62,8 @@ const probe = new ServiceProbe({
     log('SERVICE_REPORT', message);
     port.postMessage(message);
     if (stopping) return;
-    if (message.type === 'stopped') process.exit(0);
-    if (message.code === 'SERVICE_STOP_FAILED') process.exit(1);
+    if (message.type === 'stopped') exitAfterHistory(0);
+    if (message.code === 'SERVICE_STOP_FAILED') exitAfterHistory(1);
   }
 });
 // The durable history database (ET-013, OD-2): opened at start in its own storage worker without delaying
@@ -71,7 +71,18 @@ const probe = new ServiceProbe({
 const history = new HistoryStorage({localAppData: process.env.LOCALAPPDATA, log, createWorker: () => historyWorker(__dirname)});
 // Ordered, bounded service shutdown. Later packages register their own steps here (ET-015 a flush
 // step); the total stays within SERVICE_STOP_BUDGET_MS.
-let stopping = false, storageStopped = false;
+let stopping = false, storageStopped = false, exiting = false;
+/**
+ * A failed probe ends the service from its report, outside the orderly sequence. Close the history database first,
+ * bounded by the same budget as its shutdown step, then exit with the probe's code; a late close never delays the exit.
+ */
+function exitAfterHistory(code: number): void {
+  if (exiting) return;
+  exiting = true;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const bound = new Promise<void>(resolve => {timer = setTimeout(resolve, HISTORY_CLOSE_BUDGET_MS);});
+  void Promise.race([history.close().catch(() => undefined), bound]).then(() => {clearTimeout(timer); process.exit(code);});
+}
 const shutdown = new ShutdownSequence(log);
 shutdown.register('intake', {name: 'ingestion', budgetMs: 1000, run: () => ingestion.stop()});
 shutdown.register('intake', {name: 'capture', budgetMs: 1000, run: () => captures.stop()});

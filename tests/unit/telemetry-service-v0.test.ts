@@ -254,8 +254,9 @@ async function stoppedService(stopProbe: (report: ProbeDependencies['report']) =
   Object.defineProperty(process, 'parentPort', {configurable: true, value: parent});
   const log = vi.fn();
   vi.doMock('../../apps/desktop/src/diagnostics', () => ({createDiagnostics: () => log}));
+  let probeReport: ProbeDependencies['report'] = () => undefined;
   vi.doMock('../../apps/desktop/src/service-probe', () => ({ServiceProbe: class {
-    constructor(private readonly dependencies: ProbeDependencies) {}
+    constructor(private readonly dependencies: ProbeDependencies) {probeReport = message => dependencies.report(message);}
     start() {this.dependencies.report({type: 'ready'}); return Promise.resolve();}
     stop() {return stopProbe(message => this.dependencies.report(message));}
   }}));
@@ -268,7 +269,8 @@ async function stoppedService(stopProbe: (report: ProbeDependencies['report']) =
   };
   const stops = () => parent.postMessage.mock.calls.map(call => call[0] as {type: string}).filter(message => message.type === 'stopped');
   const steps = () => log.mock.calls.filter(call => call[0] === 'SHUTDOWN_STEP').map(call => call[2] as Record<string, unknown>);
-  return {exit, parent, log, history, restore, stops, steps, stop: () => parent.emit('message', {data: {type: 'stop'}, ports: []})};
+  return {exit, parent, log, history, restore, stops, steps, probeReport: (message: Parameters<ProbeDependencies['report']>[0]) => probeReport(message),
+    stop: () => parent.emit('message', {data: {type: 'stop'}, ports: []})};
 }
 it('runs the ordered shutdown once and reports exactly one clean stopped message before exit 0', async () => {
   const f = await stoppedService(report => {report({type: 'stopped'}); return Promise.resolve();});
@@ -300,6 +302,27 @@ it('waits for the history database to close before the single stopped report, an
     expect(failed.stops()).toEqual([{type: 'stopped', clean: false}]); expect(failed.exit).toHaveBeenCalledExactlyOnceWith(1);
     expect(failed.steps().find(step => step.name === 'history-storage')).toMatchObject({phase: 'storage', outcome: 'failed'});
   } finally {failed.restore();}
+});
+it.each([['stopped', 0], ['SERVICE_STOP_FAILED', 1]] as const)('closes the history database before a probe failure ends the service (%s, exit %i)', async (outcome, code) => {
+  let finish!: () => void;
+  const f = await stoppedService(() => Promise.resolve(), () => new Promise<void>(resolve => {finish = resolve;}));
+  try {
+    f.probeReport({type: 'failed', code: 'STORAGE_WORKER_FAILED'});
+    f.probeReport(outcome === 'stopped' ? {type: 'stopped'} : {type: 'failed', code: 'SERVICE_STOP_FAILED'});
+    await vi.advanceTimersByTimeAsync(500);
+    expect(f.history.close).toHaveBeenCalledOnce(); expect(f.exit).not.toHaveBeenCalled();
+    finish(); await vi.advanceTimersByTimeAsync(0);
+    expect(f.exit).toHaveBeenCalledExactlyOnceWith(code);
+    expect(vi.getTimerCount()).toBe(0);
+  } finally {f.restore();}
+});
+it('exits after a probe failure within the history close budget when the close hangs', async () => {
+  const f = await stoppedService(() => Promise.resolve(), () => new Promise<void>(() => undefined));
+  try {
+    f.probeReport({type: 'failed', code: 'STORAGE_WORKER_FAILED'}); f.probeReport({type: 'stopped'});
+    await vi.advanceTimersByTimeAsync(999); expect(f.exit).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1); expect(f.exit).toHaveBeenCalledExactlyOnceWith(0);
+  } finally {f.restore();}
 });
 it.each(['hanging', 'failed'])('reports a %s storage step within its budget as an unclean stop and exits 1', async mode => {
   const f = await stoppedService(report => {
