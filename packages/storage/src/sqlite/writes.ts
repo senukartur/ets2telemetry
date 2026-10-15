@@ -132,10 +132,16 @@ function configurationRef(c: EffectContext, table: 'job_configurations' | 'truck
   if (id === undefined) fail('INVALID_INPUT');
   return id;
 }
+/**
+ * A stored trip of the current session's game. Every trip reference (update, close, attribution, completeness and
+ * samples) goes through here, so an ATS session can never bind data to an ETS2 trip or the reverse. A trip of an
+ * earlier plugin session of the same game is allowed: ET-014 closes it with close_reason 'restart' from the new session.
+ */
 function tripRow(c: EffectContext, tripUuid: unknown): {id: bigint; outcome: string} {
   if (!isUuid(tripUuid)) fail('INVALID_INPUT');
-  const row = statement(c.db, 'SELECT id, outcome FROM trips WHERE trip_uuid = ?').get(tripUuid) as {id: bigint; outcome: string} | undefined;
+  const row = statement(c.db, 'SELECT id, outcome, game FROM trips WHERE trip_uuid = ?').get(tripUuid) as {id: bigint; outcome: string; game: string} | undefined;
   if (!row) fail('UNKNOWN_TRIP');
+  if (row.game !== c.game) fail('INVALID_INPUT');
   return row;
 }
 function addTrailers(c: EffectContext, trip: bigint, refs: unknown) {
@@ -179,7 +185,10 @@ function applyEffects(c: EffectContext, effects: unknown): void {
       case 'trip.update': {
         const trip = tripRow(c, effect.tripUuid), set = effect.set;
         if (typeof set !== 'object' || set === null) fail('INVALID_INPUT');
-        const allowed = ['recordingCompleteness', 'gameModeAmbiguous', 'observedDistanceM', 'truckConfiguration', 'trailerConfigurations'];
+        // A closed trip may still learn about its recording (a late gap can downgrade completeness, a final distance can
+        // arrive), but its configuration and game-mode evidence are fixed once it is closed.
+        const allowed = trip.outcome === 'open' ? ['recordingCompleteness', 'gameModeAmbiguous', 'observedDistanceM', 'truckConfiguration', 'trailerConfigurations']
+          : ['recordingCompleteness', 'observedDistanceM'];
         if (Object.keys(set).some(key => !allowed.includes(key))) fail('INVALID_INPUT');
         if (set.recordingCompleteness !== undefined) statement(c.db, 'UPDATE trips SET recording_completeness = ? WHERE id = ?').run(enumValue(set.recordingCompleteness, COMPLETENESS), trip.id);
         const ambiguous = optionalBoolean(set.gameModeAmbiguous);

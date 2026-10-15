@@ -137,6 +137,56 @@ describe('REG-005/REG-006 idempotent commits and atomic effects', () => {
   });
 });
 
+describe('trips belong to one game', () => {
+  const P2 = '10000000-0000-4000-8000-000000000002', P3 = '10000000-0000-4000-8000-000000000003';
+  /** A welcome and events of another plugin session, optionally of the other game. */
+  const sourceOf = (pluginSessionId: string, game: 'ets2' | 'ats') => ({...v1('welcome').source, pluginSessionId, game});
+  const welcome = (pluginSessionId: string, game: 'ets2' | 'ats') => ({...v1('welcome'), source: sourceOf(pluginSessionId, game)});
+  const event = (pluginSessionId: string, game: 'ets2' | 'ats', seq: bigint, fixture = 'event-job-cleared') => ({...withEventSeq(fixture, seq), source: sourceOf(pluginSessionId, game)});
+  const close: TripEffect = {kind: 'trip.close', tripUuid: T1, outcome: 'none', closeReason: 'restart', recordingCompleteness: 'partial', endedUtcMs: 1_791_676_900_000};
+  async function ets2Trip() {
+    const storage = await session();
+    ok(storage.commitEvent({message: v1('event-job-configured'), effects: [openTrip(T1)]}));
+    return storage;
+  }
+  it('refuses every reference from an ATS session to an ETS2 trip and rolls the event back', async () => {
+    const storage = await ets2Trip();
+    ok(storage.upsertSession({message: welcome(P2, 'ats')}));
+    const refused: TripEffect[] = [
+      {kind: 'event.attribute', tripUuid: T1, attribution: 'trip'},
+      {kind: 'completeness.add', interval: {tripUuid: T1, kind: 'discontinuity'}},
+      {kind: 'trip.update', tripUuid: T1, set: {recordingCompleteness: 'partial'}},
+      close
+    ];
+    for (const effect of refused) failed(storage.commitEvent({message: event(P2, 'ats', 1n), effects: [effect]}), 'INVALID_INPUT');
+    const sample = {tripUuid: T1, utcMs: 1_791_676_800_000, sourceClockId: '30000000-0000-4000-8000-000000000001', monotonicNs: '1000149000000', gameTime: null,
+      speed: {available: true as const, value: 1}, fuel: {available: false as const, reason: 'not-observed' as const}, averageConsumption: {available: false as const, reason: 'not-observed' as const},
+      estimatedRange: {available: false as const, reason: 'not-observed' as const}, engineRpm: {available: false as const, reason: 'not-observed' as const},
+      gear: {available: false as const, reason: 'not-observed' as const}, odometer: {available: false as const, reason: 'not-observed' as const}, position: {available: false as const, reason: 'not-observed' as const}};
+    failed(storage.appendSamples(P2, [sample]), 'INVALID_INPUT');
+    expect(ok(storage.getEvent(P2, '1'))).toBeUndefined();
+    expect(ok(storage.committedThrough(P2))).toBe('0');
+    expect(ok(storage.listSamples({tripUuid: T1}))).toEqual([]);
+    expect(ok(storage.getTrip(T1))).toMatchObject({outcome: 'open', recordingCompleteness: 'complete'});
+    // The same sample from the trip's own session is accepted.
+    expect(ok(storage.appendSamples(P1, [sample]))).toEqual({appended: 1});
+  });
+  it('lets a later plugin session of the same game close the trip on restart', async () => {
+    const storage = await ets2Trip();
+    ok(storage.upsertSession({message: welcome(P3, 'ets2')}));
+    expect(ok(storage.commitEvent({message: event(P3, 'ets2', 1n), effects: [close]})).status).toBe('committed');
+    expect(ok(storage.getTrip(T1))).toMatchObject({pluginSessionId: P1, outcome: 'none', closeReason: 'restart', recordingCompleteness: 'partial'});
+  });
+  it('keeps only recording completeness and observed distance mutable after a trip is closed', async () => {
+    const storage = await ets2Trip();
+    ok(storage.commitEvent({message: withEventSeq('event-job-cleared', 2n), effects: [{...close, closeReason: 'configuration-cleared'}]}));
+    failed(storage.commitEvent({message: withEventSeq('event-job-cleared', 3n), effects: [{kind: 'trip.update', tripUuid: T1, set: {gameModeAmbiguous: true}}]}), 'INVALID_INPUT');
+    failed(storage.commitEvent({message: withEventSeq('event-truck-configured', 3n), effects: [{kind: 'trip.update', tripUuid: T1, set: {truckConfiguration: 'this-event'}}]}), 'INVALID_INPUT');
+    ok(storage.commitEvent({message: withEventSeq('event-job-cleared', 3n), effects: [{kind: 'trip.update', tripUuid: T1, set: {recordingCompleteness: 'unknown', observedDistanceM: {available: true, value: 1200.5}}}]}));
+    expect(ok(storage.getTrip(T1))).toMatchObject({outcome: 'none', recordingCompleteness: 'unknown', gameModeAmbiguous: false, truckConfigurationEventSeq: null, observedDistanceM: {available: true, value: 1200.5}});
+  });
+});
+
 describe('REG-006 committed coverage', () => {
   it('advances coverage over events and gap markers in any order', async () => {
     const storage = await session();
