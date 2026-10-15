@@ -49,6 +49,8 @@ class Server final {
   // Connections that received a checkpoint, and connections that ended with `end`.
   std::uint64_t hydrations() const noexcept { return hydrations_.load(); }
   std::uint64_t ends() const noexcept { return ends_.load(); }
+  // `end` writes issued, whether or not they completed.
+  std::uint64_t end_attempts() const noexcept { return end_attempts_.load(); }
   // The prepared channel; tests use it to inspect the SDK-thread side.
   EventChannel* channel() noexcept { return channel_.get(); }
 #ifdef ETS2TELEMETRY_TRANSPORT_TEST_HOOKS
@@ -84,7 +86,7 @@ class Server final {
   std::string plugin_session_id_;
   std::thread worker_; transport::Handle stop_event_;
   std::atomic<ServerStatus> status_{ServerStatus::stopped};
-  std::atomic<std::uint64_t> shutdown_ms_{0}, stop_requested_{0}, hydrations_{0}, ends_{0};
+  std::atomic<std::uint64_t> shutdown_ms_{0}, stop_requested_{0}, hydrations_{0}, ends_{0}, end_attempts_{0};
   std::atomic<bool> deadline_exceeded_{false}, write_pending_{false};
   mutable std::mutex endpoint_mutex_; std::wstring endpoint_;
   // Borrowed provider; it stays alive until stop() has joined the worker.

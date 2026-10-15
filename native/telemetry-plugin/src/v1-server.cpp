@@ -115,7 +115,7 @@ struct Server::Connection {
   std::array<std::uint8_t, limits.client_frame_bytes + 4> input{};
   Io inbound, outbound;
   CaptureStamp capture;
-  Phase phase = Phase::welcome; bool gate_open = false, ended = false;
+  Phase phase = Phase::welcome; bool gate_open = false, finished = false, ended = false;
   // The probe whose reply is unsent, with its receipt time, and the last probe ID of this connection.
   std::optional<std::pair<std::uint64_t, std::uint64_t>> probe; std::uint64_t last_probe = 0;
   // One replaceable unsent snapshot (§7), and a scratch copy of the v1 slot.
@@ -288,15 +288,20 @@ bool Server::Connection::complete_write(ULONGLONG deadline) {
     if (state == Io::State::idle) return true;
     if (state == Io::State::done) return outbound.whole(transferred);
     if (state == Io::State::failed) return false;
+    // Once a stop is requested, the 250 ms `end` budget bounds every wait, also one that started before the request.
+    auto limit = deadline;
+    if (const auto requested = server.stop_requested_.load()) limit = (std::min)(limit, requested + end_budget_ms);
     const auto now = GetTickCount64();
-    if (now >= deadline) { outbound.cancel(); return false; }
-    WaitForSingleObject(outbound.event(), static_cast<DWORD>((std::min)(deadline - now, poll_ms)));
+    if (now >= limit) { outbound.cancel(); return false; }
+    WaitForSingleObject(outbound.event(), static_cast<DWORD>((std::min)(limit - now, poll_ms)));
   }
 }
 
 Server::Outcome Server::Connection::finish(EndReason reason, ULONGLONG deadline, ULONGLONG items_until) {
-  // `end` is terminal: a second call after a written `end` sends nothing more.
-  if (ended) return Outcome::ended;
+  // finish() runs once per connection: a later call never writes again, whether the first one wrote `end`, cut a frame
+  // or wrote nothing. A cancelled write may have left a partial frame, and nothing may follow it.
+  if (finished) return ended ? Outcome::ended : Outcome::reset;
+  finished = true;
   // An in-flight write may complete within the budget. A cancelled write may have cut a frame, so then nothing follows.
   if (!complete_write(deadline)) return Outcome::reset;
   // Before the welcome there is nothing to end; `end` may replace the checkpoint (§4).
@@ -322,7 +327,9 @@ Server::Outcome Server::Connection::finish(EndReason reason, ULONGLONG deadline,
         if (!complete_write(deadline)) return Outcome::reset;
       }
     }
-    if (!outbound.write(encode(encoder.end(server.next_seq(), capture.stamp(server.now_ns()), reason, store.end_cursor())), deadline) || !complete_write(deadline))
+    auto end = encode(encoder.end(server.next_seq(), capture.stamp(server.now_ns()), reason, store.end_cursor()));
+    server.end_attempts_.fetch_add(1);
+    if (!outbound.write(std::move(end), deadline) || !complete_write(deadline))
       return Outcome::reset;
     ended = true; server.ends_.fetch_add(1);
     return Outcome::ended;

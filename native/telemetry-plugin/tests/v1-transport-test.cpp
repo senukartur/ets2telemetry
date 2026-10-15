@@ -818,12 +818,32 @@ void invariant_at_shutdown() {
   require(end.reason == "source-retired" && end.next_event_seq == 5 && end.retained_unacked == 0, "end(source-retired) with the store's cursor");
   f.server->stop();
   require(f.server->status() == v1::ServerStatus::retired && f.server->shutdown_ms() < 1000 && !hold.timed_out.load(), "retired and joined");
+  // The retirement calls finish() again after the written `end`; nothing more is written. A second `end` would also make
+  // the client's Consumer reject the stream while it reads to the close.
+  require(client->closed() && client->count("end") == 1 && f.server->ends() == 1 && f.server->end_attempts() == 1, "exactly one end, then the pipe closes");
   require(f.host.logs.empty(), "workers never log");
   f.host.frame();
   require(f.host.logs.size() == 2 && f.host.logs[0] == v0_entry.message && f.host.log_types[0] == SCS_LOG_TYPE_message &&
     f.host.logs[1] == "ETS2Telemetry: protocol v1 endpoint retired: invariant violation" && f.host.log_types[1] == SCS_LOG_TYPE_error && f.host.wrong_thread == 0,
     "both deferred entries logged once on the SDK thread, in slot order");
   f.host.frame(); require(f.host.logs.size() == 2, "logged once");
+}
+
+// A shutdown-drain violation whose `end` write fails: the retirement's second finish() call writes nothing, so no `end`
+// can follow a frame that may have been cut. The client closes its pipe while the worker is held, so the write fails.
+void invariant_end_failed() {
+  Fixture f; Hold hold; hold.phase = "v1-finish";
+  require(f.server->skip_store_for_test(5), "store at 5, channel at 1");
+  f.start(); auto client = f.client(true); client->handshake();
+  require(client->read_until([&] { return client->covered() >= 4; }), "gap [1, 4]");
+  hold.engage(); f.server->signal_stop();
+  require(WaitForSingleObject(hold.held.get(), static_cast<DWORD>(3000 * timing_scale)) == WAIT_OBJECT_0, "worker held before its shutdown drain");
+  cancelled(f.host, 1); client.reset();
+  hold.disengage(); f.server->stop();
+  std::cout << "failedEndAttempts=" << f.server->end_attempts() << " ends=" << f.server->ends() << '\n';
+  require(f.server->end_attempts() == 1 && f.server->ends() == 0, "one end attempt, which failed, and no second one");
+  require(f.server->status() == v1::ServerStatus::retired && !hold.timed_out.load(), "retired");
+  f.host.frame(); require(f.host.logs.size() == 1 && f.host.logs[0] == "ETS2Telemetry: protocol v1 endpoint retired: invariant violation", "logged once");
 }
 
 // A violation after a stop request keeps the 250 ms `end` budget: with the client's buffer full, the endpoint gives up the
@@ -1082,7 +1102,7 @@ int main(int argc, char** argv) {
       {"handshake", handshake}, {"live-only", live_only}, {"durable", durable_delivery}, {"redelivery", redelivery}, {"stalled-reader", stalled_reader},
       {"fuzz", fuzz}, {"rejection", rejection}, {"collision", collision}, {"policy", policy}, {"v0-isolation", v0_isolation}, {"cap0-isolation", cap0_isolation}, {"shutdown", shutdown}
 #ifdef ETS2TELEMETRY_TRANSPORT_TEST_HOOKS
-      , {"retention", [] { retention(); Fixture clamp; clamp.start(); capture_clamp(clamp); }}, {"overflow", overflow}, {"ack-control", ack_control}, {"exhaustion", exhaustion}, {"invariant", [] { invariant(); invariant_at_shutdown(); invariant_stop_budget(); }}
+      , {"retention", [] { retention(); Fixture clamp; clamp.start(); capture_clamp(clamp); }}, {"overflow", overflow}, {"ack-control", ack_control}, {"exhaustion", exhaustion}, {"invariant", [] { invariant(); invariant_at_shutdown(); invariant_end_failed(); invariant_stop_budget(); }}
 #endif
     };
     auto timed = [](const std::string& name, const std::function<void()>& fn) { const auto start = GetTickCount64(); std::cout << name << '\n' << std::flush; fn(); std::cout << name << " elapsedMs=" << GetTickCount64() - start << '\n' << std::flush; };
