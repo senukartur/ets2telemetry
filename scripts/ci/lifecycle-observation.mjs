@@ -183,7 +183,7 @@ export async function runLifecycleSmoke({application, launcher, dashboard, overl
   assert.equal(source.statistics().connections, 1);
   record.trayOpenRestoredDashboard = true;
 
-  // 3b. Saving ETS2's US customary profile quarantines the seeded file unchanged, writes the exact v1 content and
+  // 3b. Saving ETS2's US customary profile quarantines the seeded file unchanged, writes the exact v2 content and
   // switches both the dashboard and the overlay to mph and US gallons.
   record.settingsSaveView = await trayDashboard.evaluate(() => globalThis.desktop.setUnitProfile('ets2', 'us-customary'));
   assert.deepEqual(record.settingsSaveView, {units: {ets2: 'us-customary', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null});

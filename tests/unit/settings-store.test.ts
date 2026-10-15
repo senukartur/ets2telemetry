@@ -81,7 +81,7 @@ it('loads a valid file without rewriting it', async () => {
   expect((await read()).toString('utf8')).toBe(VALID_METRIC); expect(await list()).toEqual(['settings.json']);
 });
 
-it('writes the exact v1 content, synced before the rename, and applies it only afterwards', async () => {
+it('writes the exact v2 content, synced before the rename, and applies it only afterwards', async () => {
   const order: string[] = [];
   let settings!: SettingsStore;
   const fileSystem = wrapped({
