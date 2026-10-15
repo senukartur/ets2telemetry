@@ -2,7 +2,7 @@
 
 ## Scope
 
-This record covers ET-006b PR-2, the protocol v1 mode of the native pipe broker, on branch `feat/v1-broker-mode` based on `864272b`. ET-006b is described in [AGENTS.md](../../AGENTS.md); this PR implements coordinator decisions E3 (v1 service-policy provisioning) and E4 (the broker's v1 mode). The behavior is documented in [native broker control](../telemetry-service-v0.md#protocol-v1-mode) and [the native v1 transport](../native-transport-v1.md#pipe-discovery-and-policy).
+This record covers ET-006b PR-2, the protocol v1 mode of the native pipe broker, on branch `feat/v1-broker-mode` based on `864272b`. This PR implements coordinator decisions E3 (v1 service-policy provisioning) and E4 (the broker's v1 mode), which the coordinator adopted under the owner's standing delegation of October 15, 2026; the owner has not reviewed them individually. The dated "ET-006b authorization — October 15, 2026" paragraphs in `AGENTS.md` and `concept.md` record that authority; on October 15, 2026 the owner explicitly approved the coordinator writing them into this PR, so it does not depend on PR-1. The behavior is documented in [native broker control](../telemetry-service-v0.md#protocol-v1-mode) and [the native v1 transport](../native-transport-v1.md#pipe-discovery-and-policy).
 
 Changed files: `native/telemetry-client/src/client.cpp`, `native/telemetry-client/CMakeLists.txt` (the broker and both fixtures link `protocol-v1.cpp`; new CTest cases), `native/telemetry-client/tests/client-test.cpp`, `scripts/source-inputs.mjs` (the broker build evidence now covers `native/telemetry-plugin/src/protocol-v1.cpp` and `.hpp`), and the documents linked above, [the native boundary](../native-transport-boundary-v0.md) and [CI](../ci.md).
 
@@ -10,7 +10,7 @@ The service does not launch the v1 mode yet: that is ET-006b PR-3. The v0 and CA
 
 ## Cases
 
-All 36 existing fixture cases are unchanged. Thirteen cases are new, each registered as `native-pipe-client-<case>` and as its AddressSanitizer twin `native-pipe-client-asan-<case>` through the same `CLIENT_TEST_CASES` list. The `*-case-list` entry checks that the CMake list and the fixture agree.
+All 36 existing fixture cases are unchanged. Sixteen cases are new, each registered as `native-pipe-client-<case>` and as its AddressSanitizer twin `native-pipe-client-asan-<case>` through the same `CLIENT_TEST_CASES` list. The `*-case-list` entry checks that the CMake list and the fixture agree.
 
 | Case | Checks |
 | --- | --- |
@@ -24,6 +24,11 @@ All 36 existing fixture cases are unchanged. Thirteen cases are new, each regist
 | `v1-ack-while-quiet` | With a credit outstanding and the host silent, so the relay waits on its pending pipe read, an ACK still reaches the host, and the host's reply is relayed |
 | `v1-write-deadline` | The host's pipe has no inbound quota and the host never reads, so the ACK write stays pending. With a credit outstanding, the broker exits 3 at `client-write` 5,016 ms after the ACK was sent (bound 4,500–12,000 ms), with error 995 (`ERROR_OPERATION_ABORTED`) from the observed cancellation; the host then reads EOF |
 | `v1-capture-conflict` | `--protocol v1 --capture cap0`, `--capture cap0 --protocol v1`, `--protocol v2` and a bare `--protocol` each exit 1 at stage `arguments` with no stdout |
+| `v1-partial-length` | Tag `0x02` followed by two of the four length bytes, then stdin EOF: exit 3 at stage `relay` (cancellation), never `client-frame`; nothing after the hello reaches the host |
+| `v1-partial-payload` | Tag `0x02`, a full length and half of the `ack-1.json` payload, then stdin EOF: exit 3 at stage `relay`, never `client-frame`; nothing after the hello reaches the host |
+| `v1-zero-length` | Tag `0x02` with length 0 exits 1 at `client-frame` with Win32 error 0 |
+
+The last three cases were added in fix round 1 after independent review (pass 1) found that these documented control-stream promises had no test.
 
 `v1-write-deadline` waits out the broker's 5 s client-write deadline and is registered with the timed cases (30 s backstop, 60 s under ASan). The plan's case list did not include it; it was added because the deadline and its cancellation are E4 requirements that no other case reaches.
 
@@ -57,6 +62,27 @@ Each mutation was applied to `client.cpp`, the affected targets were rebuilt and
 | `CancelIoEx` and `GetOverlappedResult(TRUE)` removed from the client write (ASan build) | **Not detected**: `v1-write-deadline`, `v1-valid` and `v1-ack-while-quiet` passed. The pending write completes in the kernel when the handle closes, and AddressSanitizer does not observe kernel-mode writes into the released `OVERLAPPED` or buffer. The rule is enforced by review and documented, not by a test |
 
 The ordering of client frames after the hello (`helloSent`) and the join of the reader before the pipe handle closes have no mutation that a test can observe deterministically; they are covered by review.
+
+## Fix round 1
+
+Independent review pass 1 on `5cdb3f4` approved with two minor findings and two nits:
+
+- The documents pointed to `AGENTS.md` for ET-006b, which at that head still called ET-006b unauthorized. The dated authorization paragraphs are now part of this PR (see Scope).
+- The control-stream promises for EOF inside a record and for length 0 had no test: `v1-partial-length`, `v1-partial-payload` and `v1-zero-length` were added.
+- After the `helloSent`/`stop` wait, the reader now returns when `stop` is already set, so a decoded frame is never written while the broker shuts down.
+- On `WAIT_FAILED` the client write saves `GetLastError()` before `CancelIoEx` and `GetOverlappedResult`, so the reported error is the wait failure.
+
+Checks on the fixed tree, run one at a time on the same host:
+
+| Command | Result |
+| --- | --- |
+| `npm run build` | Exit 0, no MSVC warnings |
+| Client CTest Release, two runs | 53/53 passed each time (52 cases and the case list) |
+| Client ASan configure, build and `ctest -R '^native-pipe-client-asan-'` | 53/53 passed in 34.1 s |
+
+RED: both frame reads in the tagged reader were changed so that an EOF sets a `client-frame` failure. `v1-partial-length` and `v1-partial-payload` failed; `v1-zero-length` and `v1-valid` passed. The file was restored from a byte-identical backup (confirmed with `cmp`) and rebuilt before the results above.
+
+The coordinator's lint, `npm test` and `git diff --check` results for the final head are listed in the PR.
 
 ## Pending
 
