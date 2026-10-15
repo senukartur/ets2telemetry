@@ -6,7 +6,12 @@ import {existsSync} from 'node:fs';
 import {performance} from 'node:perf_hooks';
 import {_electron as electron} from '@playwright/test';
 import {startLiveSmokeSource} from './live-smoke-source.mjs';
-import {SYNTHETIC_V0_HIDDEN_ROWS, SYNTHETIC_V0_LIVE_ROWS, SYNTHETIC_V0_VALUE_IDS, waitForCompleteLive, waitForCurrentTelemetry, waitForNotCurrentLive} from './renderer-observation.mjs';
+import {startLiveSmokeSourceV1} from './live-smoke-source-v1.mjs';
+import {
+  overlayOverflow, SYNTHETIC_V0_VALUE_IDS, SYNTHETIC_V0V1_HIDDEN_ROWS, SYNTHETIC_V0V1_LIVE_ROWS, SYNTHETIC_V1_LIVE_ROWS, SYNTHETIC_V1_OVERLAY_CURRENT,
+  SYNTHETIC_V1_OVERLAY_STOPPED, SYNTHETIC_V1_OVERLAY_V0_STALE, SYNTHETIC_V1_OVERLAY_V1_STALE, SYNTHETIC_V1_VALUE_IDS, waitForCompleteLive, waitForCurrentTelemetry,
+  waitForNotCurrentLive, waitForOverlayV1, waitForV1NotCurrentLive
+} from './renderer-observation.mjs';
 import {rendererPages, runOverlaySmoke, windowSecurity, verifyRendererStyles} from './overlay-observation.mjs';
 import {runLifecycleSmoke, seedLifecycleSettings, verifyLifecycleRestart} from './lifecycle-observation.mjs';
 // These read-only globals are used only inside serialized Playwright browser callbacks.
@@ -25,6 +30,8 @@ let launcher;
 let timer;
 let tracing = false;
 let telemetrySource;
+// ET-010c: the telemetry scenario also serves synthetic protocol v1 data; every other scenario stays v0-only.
+let telemetrySourceV1;
 const failure = error => ({name: error.name, message: error.message, stack: error.stack});
 // Driver timeline on its own wall and monotonic clocks, to align with app diagnostics and the Job CPU series.
 result.phases = [];
@@ -60,7 +67,8 @@ const verifyHistoryFile = async () => {
 const environment = diagnostics => ({...process.env, TEMP: config.temp, TMP: config.temp, APPDATA: config.appdata,
   LOCALAPPDATA: config.localappdata, ETS2TELEMETRY_PROFILE_DIR: config.profile,
   ETS2TELEMETRY_DIAGNOSTIC_DIR: diagnostics,
-  ...(telemetrySource ? {ETS2TELEMETRY_LIVE_SMOKE: '1', ETS2TELEMETRY_SOURCE_KIND: 'synthetic', ETS2TELEMETRY_SOURCE_PIPE: telemetrySource.endpoint} : {})});
+  ...(telemetrySource ? {ETS2TELEMETRY_LIVE_SMOKE: '1', ETS2TELEMETRY_SOURCE_KIND: 'synthetic', ETS2TELEMETRY_SOURCE_PIPE: telemetrySource.endpoint} : {}),
+  ...(telemetrySourceV1 ? {ETS2TELEMETRY_SOURCE_PIPE_V1: telemetrySourceV1.endpoint} : {})});
 const launchOptions = diagnostics => ({timeout: 20000, cwd: config.cwd,
   ...(config.mode === 'packaged' ? {executablePath: config.executable, args: config.forceRendererProcessReuse ? ['--renderer-process-limit=1'] : []} :
     {args: [config.checkout, ...(config.forceRendererProcessReuse ? ['--renderer-process-limit=1'] : [])]}),
@@ -72,6 +80,7 @@ try {
   result.playwright = JSON.parse(await readFile(new URL('../../node_modules/playwright-core/package.json', import.meta.url))).version;
   assert.equal(result.playwright, '1.64.0');
   if (config.scenario === 'telemetry' || config.scenario === 'overlay' || config.scenario === 'lifecycle') telemetrySource = await startLiveSmokeSource(config.checkout);
+  if (config.scenario === 'telemetry') telemetrySourceV1 = await startLiveSmokeSourceV1(config.checkout);
   // ET-011b: the lifecycle journey starts from a deliberately invalid settings file in the isolated LOCALAPPDATA.
   if (config.scenario === 'lifecycle') await seedLifecycleSettings(config);
   phase('launch-requested');
@@ -125,16 +134,36 @@ try {
     };
     await current('initial');
     result.telemetry = {origin: 'synthetic', speedKmh: 90, fuelL: 73, recording: false};
-    // ET-010b: the live card shows the complete v0 field set of the same observation.
-    result.telemetry.liveFields = await waitForCompleteLive(window, SYNTHETIC_V0_LIVE_ROWS, SYNTHETIC_V0_HIDDEN_ROWS);
-    // Hold the source on the same connection until main's freshness expiry: every card value must become not current,
-    // then return after resume. The later single-connection assertion proves the hold did not reconnect.
+    // ET-010b/ET-010c: the live card shows the complete v0 field set with the v1 rows of the same job beside it, and the
+    // hidden overlay document the v1 sections, all from the same pair of observations.
+    result.telemetry.liveFields = await waitForCompleteLive(window, SYNTHETIC_V0V1_LIVE_ROWS, SYNTHETIC_V0V1_HIDDEN_ROWS);
+    result.telemetry.v1Fields = Object.fromEntries(SYNTHETIC_V1_LIVE_ROWS.map(([id]) => [id, result.telemetry.liveFields[id]]));
+    result.telemetry.overlayV1 = {current: await waitForOverlayV1(overlay, SYNTHETIC_V1_OVERLAY_CURRENT)};
+    // For review only (coordinator decision C3): which strip sections lie outside the overlay root.
+    result.telemetry.overlayOverflow = await overlay.evaluate(overlayOverflow);
+    // Hold the v0 source on the same connection until main's freshness expiry: every v0 card value must become not
+    // current while the v1 rows stay current and the overlay keeps only dashes; then return after resume. The later
+    // single-connection assertion proves the hold did not reconnect.
     telemetrySource.hold();
-    try {await atTop(); result.telemetry.liveStale = await waitForNotCurrentLive(window, SYNTHETIC_V0_VALUE_IDS, '^stale:', SYNTHETIC_V0_HIDDEN_ROWS);}
-    finally {telemetrySource.resume();}
+    try {
+      await atTop(); result.telemetry.liveStale = await waitForNotCurrentLive(window, SYNTHETIC_V0_VALUE_IDS, '^stale:', SYNTHETIC_V0V1_HIDDEN_ROWS);
+      result.telemetry.v1CurrentWhileV0Stale = await waitForCompleteLive(window, SYNTHETIC_V1_LIVE_ROWS, []);
+      result.telemetry.overlayV1.v0Stale = await waitForOverlayV1(overlay, SYNTHETIC_V1_OVERLAY_V0_STALE);
+    } finally {telemetrySource.resume();}
     await atTop(); await waitForCurrentTelemetry(window);
-    await waitForCompleteLive(window, SYNTHETIC_V0_LIVE_ROWS, SYNTHETIC_V0_HIDDEN_ROWS);
+    await waitForCompleteLive(window, SYNTHETIC_V0V1_LIVE_ROWS, SYNTHETIC_V0V1_HIDDEN_ROWS);
     result.telemetry.liveStaleHidden = true;
+    // Hold the v1 source the same way: the v1 rows and the v1 overlay sections expire while v0 stays current.
+    telemetrySourceV1.hold();
+    try {
+      await atTop(); result.telemetry.v1Stale = await waitForV1NotCurrentLive(window, SYNTHETIC_V1_VALUE_IDS, '^stale:', 'Speed: 90.0 km/h');
+      result.telemetry.overlayV1.v1Stale = await waitForOverlayV1(overlay, SYNTHETIC_V1_OVERLAY_V1_STALE);
+    } finally {telemetrySourceV1.resume();}
+    await atTop(); await waitForCurrentTelemetry(window);
+    await waitForCompleteLive(window, SYNTHETIC_V0V1_LIVE_ROWS, SYNTHETIC_V0V1_HIDDEN_ROWS);
+    await waitForOverlayV1(overlay, SYNTHETIC_V1_OVERLAY_CURRENT);
+    assert.equal(telemetrySourceV1.statistics().connections, 1, 'The v1 hold reconnected the v1 source');
+    result.telemetry.v1StaleRecovered = true;
     // Stall only this owned renderer beyond the five-second consumption-credit deadline.
     // Change the source while it is stalled: a stranded cached reading cannot pass recovery.
     let changedDuringStall = false;
@@ -190,12 +219,20 @@ try {
     await current('service-restart'); result.telemetry.serviceRestartRecovered = true;
     result.telemetry.source = telemetrySource.statistics();
     assert.equal(result.telemetry.source.connections, 2, 'Expected one initial source connection and one service-restart connection');
+    // The replacement service connects v1 again; the card shows both sources once more.
+    await atTop(); await waitForCompleteLive(window, SYNTHETIC_V0V1_LIVE_ROWS, SYNTHETIC_V0V1_HIDDEN_ROWS);
+    result.telemetry.sourceV1 = telemetrySourceV1.statistics();
+    assert.equal(result.telemetry.sourceV1.connections, 2, 'Expected one initial v1 source connection and one service-restart connection');
     await telemetrySource.stop();
     await window.getByText('Speed: unavailable', {exact: true}).waitFor({state: 'visible', timeout: 5000});
     assert.match(await window.getByTestId('telemetry-status').innerText(), /^(disconnected|waiting):/);
     result.telemetry.staleAfterDisconnect = true;
     await atTop(); await waitForNotCurrentLive(window, ['live-gear', 'live-cargo', 'live-odometer'], '^(disconnected|waiting):');
     result.telemetry.liveDisconnectedHidden = true;
+    await telemetrySourceV1.stop();
+    await atTop(); await waitForV1NotCurrentLive(window, SYNTHETIC_V1_VALUE_IDS, '^(disconnected|waiting):', 'Speed: unavailable');
+    result.telemetry.overlayV1.stopped = await waitForOverlayV1(overlay, SYNTHETIC_V1_OVERLAY_STOPPED);
+    result.telemetry.v1DisconnectedHidden = true;
   }
   if (config.scenario === 'lifecycle') {
     result.lifecycle = {};
@@ -214,6 +251,7 @@ try {
 } catch (error) {result.failure = failure(error); phase('failed');}
 finally {
   try {await telemetrySource?.stop();} catch (error) {result.sourceCloseFailure = failure(error);}
+  try {await telemetrySourceV1?.stop();} catch (error) {result.sourceV1CloseFailure = failure(error);}
   if (application) {
     if (tracing) {
       try {await application.context().tracing.stop({path: path.join(config.output, 'trace.zip')});}
@@ -292,7 +330,7 @@ finally {
     }
     result.history.file = await verifyHistoryFile();
   } catch (error) {result.postconditionFailure = failure(error);}
-  result.passed = !result.failure && !result.closeFailure && !result.traceFailure && !result.postconditionFailure && !result.sourceCloseFailure;
+  result.passed = !result.failure && !result.closeFailure && !result.traceFailure && !result.postconditionFailure && !result.sourceCloseFailure && !result.sourceV1CloseFailure;
   result.finishedUtc = new Date().toISOString();
   await writeFile(path.join(config.output, 'result.json'), JSON.stringify(result, null, 2) + '\n');
 }
