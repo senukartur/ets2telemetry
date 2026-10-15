@@ -3,7 +3,8 @@
 // revenue, and planned distance is not observed or delivered distance (concept.md §7).
 import type {Available, Money} from '../../../contracts/src/protocol-v1';
 import {moneyReading} from '../normalize-v1';
-import {fromAvailable, mapReading, missing, type Distance, type MoneyCurrency, type MoneyKind, type MoneyValue, type Reading} from '../readings';
+import {fromAvailable, mapReading, missing, valueOf, type Distance, type MoneyCurrency, type MoneyKind, type MoneyValue, type Reading} from '../readings';
+import {fuelUsedL} from './accounting';
 import type {ClosedTrip, GameModeEvidence, MoneyTotals, OpenTrip, RecordingCompleteness, TripGame, TripPhase, TripState} from './types';
 
 /** One exact total per currency and SDK type; `unavailable` counts amounts the game did not provide. */
@@ -16,6 +17,15 @@ export interface TripSummaryView {
   plannedDistance: Reading<Distance<'planned'>>; expectedIncome: Reading<MoneyValue<'expected-income'>>;
   /** Fines while the cargo of a cargo-market job was not loaded yet are kept apart (T14). */
   fines: MoneySummary<'fine'>; finesBeforeLoaded: MoneySummary<'fine'>; tolls: MoneySummary<'toll'>; transfers: MoneySummary<'transfer'>;
+  /** Metres from continuous odometer steps while active (T16); `not-observed` before the first step. Not planned or delivered distance. */
+  observedDistanceM: Reading<number>;
+  /**
+   * Litres consumed minus small increases over continuous fuel steps while active (T16); `not-observed` before the first
+   * step. Refuels are excluded and reported apart. Not stored yet (S-1), and never the SDK's average consumption.
+   */
+  fuelUsedL: Reading<number>;
+  /** Litres added by refuels while active, and the number of refuel episodes. */
+  refuelledL: number; refuels: number;
 }
 export interface ClosedTripView extends TripSummaryView {
   outcome: ClosedTrip['outcome']; closeReason: ClosedTrip['closeReason']; endedUtcMs: number;
@@ -47,12 +57,15 @@ function duration(start: string | null, end: string | null): string | null {
   return ns < 0n ? null : ns.toString();
 }
 function tripSummary(trip: OpenTrip | ClosedTrip, endNs: string | null): TripSummaryView {
+  const used = fuelUsedL(trip.accounting);
   return {
     tripUuid: trip.tripUuid, recordingCompleteness: trip.completeness, gameMode: {...trip.gameMode}, gameModeAmbiguous: trip.gameModeAmbiguous,
     startedUtcMs: trip.startedUtcMs, realDurationNs: duration(trip.startedMonotonicNs, endNs), cargoLoaded: optional(trip.cargoLoaded),
     plannedDistance: mapReading(optional(trip.plannedDistance), meters => ({kind: 'planned' as const, meters})),
     expectedIncome: trip.expectedIncome === null ? NOT_OBSERVED : moneyReading('expected-income', trip.expectedIncome),
-    fines: summary('fine', trip.fines), finesBeforeLoaded: summary('fine', trip.finesBeforeLoaded), tolls: summary('toll', trip.tolls), transfers: summary('transfer', trip.transfers)
+    fines: summary('fine', trip.fines), finesBeforeLoaded: summary('fine', trip.finesBeforeLoaded), tolls: summary('toll', trip.tolls), transfers: summary('transfer', trip.transfers),
+    observedDistanceM: trip.accounting.observedDistanceM === null ? NOT_OBSERVED : valueOf(trip.accounting.observedDistanceM),
+    fuelUsedL: used === null ? NOT_OBSERVED : valueOf(used), refuelledL: trip.accounting.refuelledL, refuels: trip.accounting.refuels
   };
 }
 

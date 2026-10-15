@@ -1,0 +1,13 @@
+{
+  "scenario": "timers-truck-refuel",
+  "basis": ["synthetic-inference"],
+  "authoredFrom": [
+    "timers-truck-refuel.json and its expectation: truck.configured (1), timers.restart (2), truck.configured (3); no job event, so no trip",
+    "docs/trips.md T16 (PR-2): readings accumulate only on an open trip; the refuel to 550 L at atMs 500 and the odometer changes belong to no trip and add no effect (REG-008: no false fuel usage or distance outside a trip)"
+  ],
+  "trips": [],
+  "attributions": [],
+  "intervals": [],
+  "coverage": {"committedThroughEventSeq": "3", "committed": 3, "duplicate": 0, "covered": 0},
+  "view": {"phase": "idle", "untrackedJob": false, "current": null, "lastClosed": null}
+}

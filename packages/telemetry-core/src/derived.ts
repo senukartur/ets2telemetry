@@ -54,7 +54,7 @@ export type FuelStep =
   {kind: 'discontinuity'; cause: StepDiscontinuity};
 
 /** Truck identity: v0 truck id and its availability; v1 brand id, model id and plate. */
-function truckKey(state: NormalizedLiveState): string {
+export function truckKey(state: Pick<NormalizedLiveState, 'truck'>): string {
   const truck = state.truck;
   return truck.state === 'missing' ? `missing:${truck.reason}` : JSON.stringify([truck.value.brand.id, truck.value.model.id, truck.value.licensePlate]);
 }

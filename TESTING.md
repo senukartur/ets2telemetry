@@ -63,7 +63,7 @@ Use the same scenario identity across relevant domain, integration, and UI check
 | REG-005 | Duplicate/redelivered events and ordering violations | No duplicate trip/accounting; unsupported ordering is rejected or represented as a gap under the protocol | ET-002, ET-004, ET-014, ET-015 |
 | REG-006 | Process terminates before commit or after commit but before ACK | Retry recovers uncommitted work or deduplicates committed work; no ACK for a failed transaction | ET-004, ET-013, ET-015 |
 | REG-007 | Disk/permission/write failure | Failure is visible, uncommitted events are not acknowledged, buffering is bounded, game input remains independent | ET-013, ET-015 |
-| REG-008 | Save load, timer/odometer reset, truck change, refueling | No negative accumulated distance, false fuel usage, or unjustified merging of ambiguous trips | ET-010, ET-014 |
+| REG-008 | Save load, timer/odometer reset, truck change or quick-job/truck replacement, refueling, ferry/train crossing, sleep, road-service teleport, profile switch, clock adjustment, suspend/resume | No negative accumulated distance, false fuel usage, distance across a teleport or connection hole, or unjustified merging of ambiguous trips; jumps are annotated, not hidden | ET-010, ET-014 |
 | REG-009 | Missing/invalid channels, zero speed, and unit conversion | Unavailable differs from zero; liters/km conversion is correct; SDK average is not mislabeled as trip average | ET-003, ET-010 |
 | REG-010 | Split/coalesced/malformed/oversized frames, large identifiers, incompatible version | Both implementations enforce the contract and bounds without crashing or silently changing identity | ET-002, ET-004, ET-006 |
 | REG-011 | Stalled reader, full event queue, reconnect, shutdown | Callback work and memory stay bounded; any loss is explicit; processes terminate cleanly | ET-004, ET-006 |
@@ -259,4 +259,12 @@ Under the owner's standing delegation of October 15, 2026 the coordinator starte
 
 `tests/unit/telemetry-core-boundaries.test.ts` now allows telemetry-core a type-only import of exactly `packages/storage/src/api.ts`.
 
-Expected effects and rows come from the specification, the observations and the decisions, never from reducer output. The tests give partial domain protection to REG-001 to REG-006 and REG-008 ([registry](docs/regression-registry.md)). Readings accounting and the simulator replay (PR-2) extend REG-008 and its text. All of this is synthetic evidence: no game, TruckersMP, display or performance behaviour follows; see [ET-014 validation](docs/validation/et-014.md).
+Expected effects and rows come from the specification, the observations and the decisions, never from reducer output. The tests give partial domain protection to REG-001 to REG-006 and REG-008 ([registry](docs/regression-registry.md)).
+
+PR-2 adds readings accounting (T16) and the provisional thresholds (T17) and widens the REG-008 text above. Its tests:
+
+- `tests/unit/trip-accounting.test.ts`: observed distance (road stop, pause, regression and jump, float32 margin, truck, source and game-clock boundaries, steps across an opening or a clear, the flush before a close and a restart close, a resumed seed), connection holes with `odometerDeltaM`, fuel used and refuel episodes, reading holes, game-time and position jumps with their labels, the T18 annotation cap, and prefix rebuilds with readings.
+- `tests/unit/trip-simulator-replay.test.ts` with `tests/shared/trip-replay.ts`: twelve ET-005b scenarios replayed through the reducer and a first-insert storage model under the T3 adoption rule, compared with hand-written `tests/fixtures/simulator-v1/<id>.trip.expected.json`, plus one test-only transcript whose active trip has a moving odometer, a refuel, a reading hole and a game-time jump (fix round 1).
+- `tests/storage/trip-accounting-effects.test.ts` (`npm run test:storage`): the observed-distance update, a reading-hole interval and reading annotations committed through the real storage core.
+
+All of this is synthetic evidence: no game, TruckersMP, display or performance behaviour follows, and the T17 and `derived.ts` thresholds stay provisional; see [ET-014 validation](docs/validation/et-014.md).

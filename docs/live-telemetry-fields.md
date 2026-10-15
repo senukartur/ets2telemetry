@@ -49,7 +49,7 @@ Exact constants: mile 1,609.344 m; US gallon 3.785411784 L; pound 0.45359237 kg;
 | Route remaining | m | `truck.navigation.distance` | v1 | km or mi, 1 dp |
 | Planned distance | m | job `planned_distance.km` × 1,000 | v0, v1 | km or mi, 0 dp; job offer, excludes ferry (`job-offer-excludes-ferry`) |
 | Game-delivered distance | m | `job.delivered` `distance.km` | v1 event | Normalized only; the journal (ET-016) shows it |
-| Observed distance | m | odometer steps | — | Step primitive only; ET-014 accumulates |
+| Observed distance | m | odometer steps | — | Step primitive; ET-014 accumulates per trip |
 | Game time | game minutes | `game.time`, u32 | v0, v1 | `Day N, HH:MM`, N = ⌊minutes / 1,440⌋ + 1 (`game-time`) |
 | Deadline | game minutes | job `delivery.time` − `game.time` | v1 | `in 5 h 12 min` or `late by 5 h 12 min`; missing when either is missing |
 | Cargo, origin, destination | text | job config | v0 ids; v1 ids and names | Localized name, else id; a provided empty name falls through to the id |
@@ -146,7 +146,7 @@ A section with several fields joins the fields that have a value with ", ". Carr
 
 Checks run in that order, so a save load that also regresses the odometer reports `game-clock-rotated`. The thresholds are named constants (`MAX_PLAUSIBLE_SPEED_MPS`, `ODOMETER_JUMP_MARGIN_METERS`, `FUEL_NOISE_LITERS`) and are provisional until real sessions confirm them. ET-014 decides what each result means for a trip.
 
-Observed distance: ET-014 accumulates these steps into trips in its PR-2; the trip lifecycle that decides which trip a step belongs to is in [trips](trips.md).
+Observed distance: ET-014 PR-2 accumulates these steps into trips, and fuel used and refuels from the fuel steps; which trip a step belongs to and how it is persisted are in [trips](trips.md#readings-accounting-t16-t17).
 
 Odometer precision: `truck.odometer` is an SDK float32 in km, so readings are quantized. One step (`float32Quantum`) is 1/16 km (62.5 m) from 2^19 = 524,288 km and 1/8 km (125 m) from 2^20 = 1,048,576 km. A 20 Hz step (50 ms) has a fixed threshold of 5 m + 50 m = 55 m, so without the precision-aware margin every increment of a high-mileage truck would be a jump. With it, the threshold at 2^19 km is 5 m + 125 m = 130 m, and at 2^20 km 5 m + 250 m = 255 m; at 1 Hz the fixed margin already covered one step. Round-to-nearest float32 is monotonic, so quantization alone never turns a non-decreasing odometer into a decrease, and any decrease stays `odometer-regressed`.
 

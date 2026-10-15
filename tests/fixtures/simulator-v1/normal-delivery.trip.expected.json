@@ -1,0 +1,21 @@
+{
+  "scenario": "normal-delivery",
+  "basis": ["synthetic-inference", "O1 (opened-at-load inference)"],
+  "authoredFrom": [
+    "normal-delivery.json and normal-delivery.expected.json: events 1-9 at atMs 10, 20, 30, 40, 300, 400, 500, 600 and 610; snapshots at 100 and 200 with odometer 1,000,500 m; UTC label = 1,800,000,000,000 + atMs",
+    "docs/trips.md T12: the job is configured (eventSeq 3) before the session's first simulation.started, so the trip opens partial with an opened-at-load interval; the burst's truck (1) and trailer (2) are its references",
+    "docs/trips.md T14/T13: the delivery attributes to the trip and closes it with its outcome; an outcome close stays partial after an opened-at-load cause",
+    "docs/trips.md T16 (PR-2): the snapshot at 100 is the trip's first reading; the road stop 100 -> 200 is a continuous 0 m step, so observed distance becomes 0 and is persisted at the next carrier (eventSeq 5) and not again; no fuel channel, so fuel used is not observed (REG-001)"
+  ],
+  "trips": [
+    {"trip": "trip@3", "jobConfigurationEventSeq": "3", "truckConfigurationEventSeq": "1", "trailerConfigurationEventSeqs": ["2"], "openedEventSeq": "3",
+      "gameMode": {"mode": "unknown", "method": "none", "confidence": "none"}, "gameModeAmbiguous": false, "outcome": "delivered", "outcomeEventSeq": "8", "closeReason": "outcome",
+      "recordingCompleteness": "partial", "startedUtcMs": 1800000000030, "endedUtcMs": 1800000000600, "observedDistanceM": {"available": true, "value": 0}}
+  ],
+  "attributions": [{"eventSeq": "8", "trip": "trip@3", "attribution": "trip"}],
+  "intervals": [{"trip": "trip@3", "kind": "discontinuity", "detail": {"cause": "opened-at-load", "atEventSeq": "3"}}],
+  "coverage": {"committedThroughEventSeq": "9", "committed": 9, "duplicate": 0, "covered": 0},
+  "view": {"phase": "idle", "untrackedJob": false, "current": null,
+    "lastClosed": {"trip": "trip@3", "recordingCompleteness": "partial", "observedDistanceM": {"state": "value", "value": 0}, "fuelUsedL": {"state": "missing", "reason": "not-observed"},
+      "refuelledL": 0, "refuels": 0, "outcome": "delivered", "closeReason": "outcome"}}
+}

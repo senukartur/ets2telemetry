@@ -385,7 +385,7 @@ describe('hydration, gaps and connections', () => {
     state = play([[sessionInput(welcome, '7')],
       [e.event(r.fined()), [partial(trip), {kind: 'completeness.add', interval: {tripUuid: trip, kind: 'not-connected', startUtcMs: at(7),
         startMonotonicNs: (lastEts2.data.occurred.monotonicNs as {value: string}).value, endMonotonicNs: welcome.capture.monotonicNs, sourceClockId: e.clockId,
-        detail: {cause: 'disconnected'}}}, attr(trip, 'trip')]]], state);
+        detail: {cause: 'disconnected', odometerDeltaM: null}}}, attr(trip, 'trip')]]], state);
     expect(tripView(state, 'ets2').current).toMatchObject({tripUuid: trip, recordingCompleteness: 'partial'});
     expect(tripView(state, 'ats').current).toMatchObject({tripUuid: atsTrip, recordingCompleteness: 'unknown'});
   });
@@ -458,8 +458,11 @@ describe('delivery semantics (T3, T5)', () => {
     const gone = run(state, [{kind: 'disconnected'}]).state;
     expect(stepTrip(gone, carrier(gone, third))).toEqual({ok: false, code: 'UNKNOWN_SESSION'});
     expect(state).toEqual(snapshot);
-    expect(stepTrip(state, {kind: 'reading', sample: {source: {game: 'ets2', origin: 'synthetic', pluginSessionId: ETS2_A, processInstanceId: ETS2_A},
-      capture: {clockId: s.clockId, monotonicNs: '1'}, state: {} as never}})).toEqual({ok: true, state, effects: []});
+    // PR-2: readings are accounted, so only the current connection's readings are accepted (docs/trips.md).
+    const reading = (pluginSessionId: string): TripInput => ({kind: 'reading', sample: {source: {game: 'ets2', origin: 'synthetic', pluginSessionId, processInstanceId: pluginSessionId},
+      capture: {clockId: s.clockId, monotonicNs: '1'}, state: {} as never}});
+    expect(stepTrip(state, reading(ETS2_B))).toEqual({ok: false, code: 'UNKNOWN_SESSION'});
+    expect(stepTrip(gone, reading(ETS2_A))).toEqual({ok: false, code: 'UNKNOWN_SESSION'});
   });
 });
 
@@ -476,7 +479,7 @@ describe('cold start (TripSeed) and effect bounds (T11, T18)', () => {
   it('a queued not-connected interval of an earlier session drops its monotonic bounds before a later session commits it (T11) [synthetic-inference]', () => {
     const a = new Script(ETS2_A), b = new Script(ETS2_B, 'ets2', {utcMs: BASE_UTC + 100_000}), {rows, trip} = acceptedJob(a);
     play([...rows, [{kind: 'disconnected'}], [sessionInput(a.welcome(), '7')], [{kind: 'disconnected'}], [sessionInput(b.welcome())],
-      [b.event(r.truckConfigured(), paused), [partial(trip), {kind: 'completeness.add', interval: {tripUuid: trip, kind: 'not-connected', startUtcMs: at(7), detail: {cause: 'disconnected'}}},
+      [b.event(r.truckConfigured(), paused), [partial(trip), {kind: 'completeness.add', interval: {tripUuid: trip, kind: 'not-connected', startUtcMs: at(7), detail: {cause: 'disconnected', odometerDeltaM: null}}},
         close(trip, 'none', 'restart', 'partial', at(7))]]]);
   });
   it('resumes a stored open trip of the same session as partial: the consumer was not running (T13) [synthetic-inference]', () => {
