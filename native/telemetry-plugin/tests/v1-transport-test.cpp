@@ -1,0 +1,973 @@
+// Protocol v1 endpoint controls (ET-004b). Fake SDK callbacks, isolated temporary directories and actual local Windows
+// pipes only; no game, game directory or user history is touched, and %LOCALAPPDATA% is never used. The controlled client
+// is the ET-002b C++ Consumer and DurableAckCursor; expected values are written by hand from docs/protocol/v1.md and
+// docs/native-transport-v1.md.
+#include "v1-server.hpp"
+#include "pipe-server.hpp"
+#include "capture-server.hpp"
+#include "capture-wire.hpp"
+#include "snapshot-wire.hpp"
+#include "protocol-json.hpp"
+#include "common/scssdk_telemetry_common_gameplay_events.h"
+#include <psapi.h>
+#include <tlhelp32.h>
+#include <objbase.h>
+#include <sddl.h>
+#include <array>
+#include <functional>
+#include <iostream>
+#include <map>
+#include <memory>
+#include <set>
+#include <string>
+#include <thread>
+#include <vector>
+
+using namespace ets2telemetry;
+using transport::Handle;
+
+namespace ets2telemetry::v1 {
+// Test-only access to the SDK-thread side of the channel: moves the next eventSeq close to the end of the range.
+struct EventChannelTestAccess {
+  static void set_next(EventChannel& channel, std::uint64_t next) { channel.assigned_next_.store(next); }
+};
+}
+
+namespace {
+unsigned assertions = 0;
+// Sanitized builds on small hosted runners are slower; functional assertions are unchanged, only wall-clock bounds widen.
+#if defined(__SANITIZE_ADDRESS__)
+constexpr ULONGLONG timing_scale = 3;
+#else
+constexpr ULONGLONG timing_scale = 1;
+#endif
+void require(bool condition, const char* message) { ++assertions; if (!condition) throw std::runtime_error(message); }
+bool until(const std::function<bool()>& predicate, ULONGLONG ms = 3000) {
+  const auto end = GetTickCount64() + ms * timing_scale; do { if (predicate()) return true; Sleep(2); } while (GetTickCount64() < end); return false;
+}
+
+// Fake official SDK host. Every SDK API entry records whether it ran on the SDK caller thread.
+struct Host {
+  static Host* active;
+  std::thread::id caller = std::this_thread::get_id(); std::atomic<unsigned> wrong_thread{0};
+  std::vector<std::string> logs; std::vector<scs_log_type_t> log_types;
+  std::map<scs_event_t, std::pair<scs_telemetry_event_callback_t, scs_context_t>> events;
+  struct Channel { scs_telemetry_channel_callback_t cb; scs_context_t ctx; };
+  std::map<std::string, Channel> channels; std::uint64_t frames = 0;
+  Host() { active = this; }
+  static void check() { if (active->caller != std::this_thread::get_id()) ++active->wrong_thread; }
+  static SCSAPI_VOID log(scs_log_type_t type, scs_string_t message) { check(); active->log_types.push_back(type); active->logs.emplace_back(message); }
+  static SCSAPI_RESULT reg_event(scs_event_t id, scs_telemetry_event_callback_t cb, scs_context_t ctx) { check(); active->events[id] = {cb, ctx}; return SCS_RESULT_ok; }
+  static SCSAPI_RESULT unreg_event(scs_event_t id) { check(); active->events.erase(id); return SCS_RESULT_ok; }
+  static SCSAPI_RESULT reg_channel(scs_string_t name, scs_u32_t, scs_value_type_t, scs_u32_t, scs_telemetry_channel_callback_t cb, scs_context_t ctx) { check(); active->channels[name] = {cb, ctx}; return SCS_RESULT_ok; }
+  static SCSAPI_RESULT unreg_channel(scs_string_t name, scs_u32_t, scs_value_type_t) { check(); active->channels.erase(name); return SCS_RESULT_ok; }
+  scs_telemetry_init_params_v100_t params(const char* game = "eut2") {
+    scs_telemetry_init_params_v100_t p{}; p.common.game_id = game; p.common.game_version = SCS_MAKE_VERSION(1, 20); p.common.log = log;
+    p.register_for_event = reg_event; p.unregister_from_event = unreg_event; p.register_for_channel = reg_channel; p.unregister_from_channel = unreg_channel; return p;
+  }
+  void event(scs_event_t id, const void* value = nullptr) { auto entry = events.at(id); entry.first(id, value, entry.second); }
+  void channel(const char* name, const scs_value_t& v) { const auto entry = channels.at(name); entry.cb(name, SCS_U32_NIL, &v, entry.ctx); }
+  // One frame: frame_start, the speed channel and frame_end, which flushes an open loss run and publishes both slots.
+  void frame(float speed = 10) {
+    scs_telemetry_frame_start_t f{}; f.render_time = f.simulation_time = f.paused_simulation_time = ++frames * 50000;
+    event(SCS_TELEMETRY_EVENT_frame_start, &f);
+    scs_value_t v{}; v.type = SCS_VALUE_TYPE_float; v.value_float.value = speed; channel("truck.speed", v); event(SCS_TELEMETRY_EVENT_frame_end);
+  }
+  void config(const char* id, const scs_named_value_t* attributes) { scs_telemetry_configuration_t c{id, attributes}; event(SCS_TELEMETRY_EVENT_configuration, &c); }
+  void gameplay(const char* id, const scs_named_value_t* attributes) { scs_telemetry_gameplay_event_t g{id, attributes}; event(SCS_TELEMETRY_EVENT_gameplay, &g); }
+};
+Host* Host::active = nullptr;
+scs_value_t value_of(scs_value_type_t type) { scs_value_t v{}; v.type = type; return v; }
+scs_value_t text(const char* s) { auto v = value_of(SCS_VALUE_TYPE_string); v.value_string.value = s; return v; }
+scs_value_t s64(std::int64_t n) { auto v = value_of(SCS_VALUE_TYPE_s64); v.value_s64.value = n; return v; }
+scs_value_t u32(std::uint32_t n) { auto v = value_of(SCS_VALUE_TYPE_u32); v.value_u32.value = n; return v; }
+scs_named_value_t named(const char* name, scs_value_t value) { scs_named_value_t n{}; n.name = name; n.index = SCS_U32_NIL; n.value = value; return n; }
+// Gameplay events of one fixed shape: job.cancelled with a penalty.
+struct Penalty { scs_named_value_t attributes[2]; explicit Penalty(std::int64_t amount) : attributes{named("cancel.penalty", s64(amount)), scs_named_value_t{}} {} };
+void cancelled(Host& host, unsigned count, std::int64_t amount = 5) { Penalty p(amount); for (unsigned i = 0; i < count; ++i) host.gameplay(SCS_TELEMETRY_GAMEPLAY_EVENT_job_cancelled, p.attributes); }
+// Text at the D12 limits for large configuration records; the borrowed SDK strings must outlive every callback.
+const std::string long_id(128, 'c'), long_name_n(256, 'n'), long_name_s(256, 's'), long_name_d(256, 'd'), long_name_o(256, 'o');
+
+std::string utf8(const std::wstring& w) { const auto n = WideCharToMultiByte(CP_UTF8, 0, w.data(), static_cast<int>(w.size()), nullptr, 0, nullptr, nullptr); std::string s(static_cast<std::size_t>(n), '\0'); WideCharToMultiByte(CP_UTF8, 0, w.data(), static_cast<int>(w.size()), s.data(), n, nullptr, nullptr); return s; }
+std::wstring wide(const std::string& s) { return std::wstring(s.begin(), s.end()); }
+void write_file(const std::wstring& path, const transport::OwnerSecurity& security, const std::string& bytes) {
+  Handle f(CreateFileW(path.c_str(), GENERIC_WRITE, 0, security.attributes(), CREATE_ALWAYS, FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+  require(static_cast<bool>(f), "fixture file create"); DWORD written = 0; require(WriteFile(f.get(), bytes.data(), static_cast<DWORD>(bytes.size()), &written, nullptr) && written == bytes.size(), "fixture file write");
+}
+void write_policy(const std::wstring& directory, const transport::OwnerSecurity& security, const transport::UserIdentity& user, const transport::PeerIdentity& peer, const std::string& digest = "") {
+  v0::Json j{v0::Json::Object{{"schemaVersion", v0::Json{1.0}}, {"userTag", v0::Json{user.tag}}, {"windowsSessionId", v0::Json{static_cast<double>(user.session)}},
+    {"allowedExecutables", v0::Json{v0::Json::Array{v0::Json{v0::Json::Object{{"path", v0::Json{utf8(peer.image)}}, {"sha256", v0::Json{digest.empty() ? peer.sha256 : digest}}}}}}}}};
+  write_file(directory + L"\\service-policy.json", security, v0::detail::serialize(j));
+}
+std::wstring temporary_directory(const transport::OwnerSecurity& security, const wchar_t* prefix) {
+  WCHAR temporary[MAX_PATH]{}; require(GetTempPathW(MAX_PATH, temporary) > 0, "temp path"); GUID id{}; require(CoCreateGuid(&id) == S_OK, "guid"); WCHAR label[40]{}; StringFromGUID2(id, label, 40);
+  const auto directory = std::wstring(temporary) + prefix + label; security.ensure_directory(directory); return directory;
+}
+// Removes the files of one owned temporary directory, then the directory.
+void remove_directory(const std::wstring& directory) {
+  WIN32_FIND_DATAW data{}; const auto find = FindFirstFileW((directory + L"\\*").c_str(), &data);
+  if (find != INVALID_HANDLE_VALUE) {
+    do { const std::wstring name = data.cFileName; if (name != L"." && name != L"..") DeleteFileW((directory + L"\\" + name).c_str()); } while (FindNextFileW(find, &data));
+    FindClose(find);
+  }
+  RemoveDirectoryW(directory.c_str());
+}
+std::vector<std::uint8_t> framed(const std::string& payload) {
+  const auto n = static_cast<std::uint32_t>(payload.size());
+  std::vector<std::uint8_t> out{static_cast<std::uint8_t>(n), static_cast<std::uint8_t>(n >> 8), static_cast<std::uint8_t>(n >> 16), static_cast<std::uint8_t>(n >> 24)};
+  out.insert(out.end(), payload.begin(), payload.end()); return out;
+}
+std::string hello_payload(bool durable) {
+  return std::string("{\"version\":{\"major\":1,\"minor\":0},\"kind\":\"hello\",\"data\":{\"clientInstanceId\":\"50000000-0000-4000-8000-000000000001\",\"minMinor\":0,\"maxMinor\":0,\"durableEvents\":") + (durable ? "true" : "false") + "}}";
+}
+std::string ack_payload(const std::string& session, std::uint64_t through) {
+  return "{\"version\":{\"major\":1,\"minor\":0},\"kind\":\"ack\",\"data\":{\"pluginSessionId\":\"" + session + "\",\"throughEventSeq\":\"" + std::to_string(through) + "\"}}";
+}
+std::string probe_payload(std::uint64_t id) { return "{\"version\":{\"major\":1,\"minor\":0},\"kind\":\"clock.probe\",\"data\":{\"probeId\":\"" + std::to_string(id) + "\"}}"; }
+const char* v0_hello = "{\"version\":{\"major\":0,\"minor\":0},\"kind\":\"hello\",\"data\":{\"clientInstanceId\":\"00000000-0000-4000-8000-000000000001\",\"minMinor\":0,\"maxMinor\":0,\"diagnostics\":true}}";
+
+enum class ReadResult { data, timeout, closed };
+// One overlapped read with a deadline. Bytes of a read that completes while it is cancelled are still reported.
+ReadResult read_some(HANDLE pipe, std::vector<std::uint8_t>& out, ULONGLONG ms, DWORD limit = 65540) {
+  out.assign(limit, 0); Handle event(CreateEventW(nullptr, TRUE, FALSE, nullptr)); OVERLAPPED op{}; op.hEvent = event.get(); DWORD count = 0;
+  if (!ReadFile(pipe, out.data(), static_cast<DWORD>(out.size()), nullptr, &op) && GetLastError() != ERROR_IO_PENDING) { out.clear(); return ReadResult::closed; }
+  if (WaitForSingleObject(event.get(), static_cast<DWORD>(ms)) != WAIT_OBJECT_0) {
+    CancelIoEx(pipe, &op);
+    if (GetOverlappedResult(pipe, &op, &count, TRUE) && count) { out.resize(count); return ReadResult::data; }
+    out.clear(); return GetLastError() == ERROR_OPERATION_ABORTED ? ReadResult::timeout : ReadResult::closed;
+  }
+  if (!GetOverlappedResult(pipe, &op, &count, FALSE) || !count) { out.clear(); return ReadResult::closed; }
+  out.resize(count); return ReadResult::data;
+}
+bool write_all(HANDLE pipe, const std::vector<std::uint8_t>& bytes) {
+  Handle event(CreateEventW(nullptr, TRUE, FALSE, nullptr)); OVERLAPPED op{}; op.hEvent = event.get(); DWORD count = 0;
+  if (!WriteFile(pipe, bytes.data(), static_cast<DWORD>(bytes.size()), nullptr, &op) && GetLastError() != ERROR_IO_PENDING) return false;
+  if (WaitForSingleObject(event.get(), 3000) != WAIT_OBJECT_0) { CancelIoEx(pipe, &op); GetOverlappedResult(pipe, &op, &count, TRUE); return false; }
+  return GetOverlappedResult(pipe, &op, &count, FALSE) && count == bytes.size();
+}
+void send(HANDLE pipe, const std::vector<std::uint8_t>& bytes) { require(write_all(pipe, bytes), "client write"); }
+Handle open_pipe(const std::wstring& name) {
+  Handle h; require(until([&] { h.reset(CreateFileW(name.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr)); return static_cast<bool>(h); }), "client connect"); return h;
+}
+
+// The controlled v1 client: every server message passes through the ET-002b Consumer, which enforces identity, order,
+// contiguous eventSeq coverage, the durable grant and a terminal `end`.
+struct Client {
+  Handle pipe; v1::FrameDecoder decoder{v1::Sender::server}; v1::Consumer consumer; bool durable; bool eof = false;
+  std::vector<v1::Message> messages; std::vector<v1::Applied> applied;
+  Client(Handle h, bool durable_events) : pipe(std::move(h)), consumer(durable_events), durable(durable_events) {}
+  void hello() { send(pipe.get(), framed(hello_payload(durable))); }
+  // Reads until `predicate` holds; false on timeout or EOF.
+  bool read_until(const std::function<bool()>& predicate, ULONGLONG ms = 3000) {
+    const auto end = GetTickCount64() + ms * timing_scale; std::vector<std::uint8_t> bytes;
+    while (!predicate()) {
+      const auto now = GetTickCount64(); if (now >= end || eof) return false;
+      const auto result = read_some(pipe.get(), bytes, end - now);
+      if (result == ReadResult::closed) { eof = true; return predicate(); }
+      if (result == ReadResult::timeout) continue;
+      decoder.push(bytes.data(), bytes.size(), [&](v1::Message m) { applied.push_back(consumer.accept(m)); messages.push_back(std::move(m)); });
+    }
+    return true;
+  }
+  bool read(std::size_t count, ULONGLONG ms = 3000) { return read_until([&] { return messages.size() >= count; }, ms); }
+  // Reads while frames keep running, as in a game: a loss run left open by a full ring reaches the worker at a later frame_end.
+  bool pump(Host& host, const std::function<bool()>& predicate, ULONGLONG ms = 5000) {
+    const auto end = GetTickCount64() + ms * timing_scale;
+    while (!predicate()) { if (GetTickCount64() >= end || eof) return false; host.frame(); read_until(predicate, 20); }
+    return true;
+  }
+  // True when the server closes the connection within `ms`; messages before the close still pass through the Consumer.
+  bool closed(ULONGLONG ms = 3000) { read_until([] { return false; }, ms); return eof; }
+  void handshake() { hello(); require(read(2), "welcome and checkpoint"); require(messages[0].kind == "welcome" && messages[1].kind == "checkpoint" && applied[1].hydration, "welcome, then a hydrating checkpoint"); }
+  const v1::Message& last(const char* kind) const { for (auto i = messages.size(); i-- > 0;) if (messages[i].kind == kind) return messages[i]; throw std::runtime_error(std::string("no message ") + kind); }
+  std::size_t count(const char* kind) const { std::size_t n = 0; for (const auto& m : messages) if (m.kind == kind) ++n; return n; }
+  // The highest eventSeq covered by an event or gap on this connection, 0 before any.
+  std::uint64_t covered() const { std::uint64_t n = 0; for (const auto& a : applied) if (a.coverage) n = a.coverage->last_event_seq; return n; }
+  const std::string& session() const { return *consumer.plugin_session_id(); }
+  void ack(std::uint64_t through) { send(pipe.get(), framed(ack_payload(session(), through))); }
+  // Waits for a snapshot whose status satisfies `predicate`; frames are published meanwhile so snapshots keep coming.
+  bool status_until(Host& host, const std::function<bool(const v1::StateView&)>& predicate, ULONGLONG ms = 3000) {
+    const auto end = GetTickCount64() + ms * timing_scale; std::size_t seen = messages.size();
+    while (GetTickCount64() < end) {
+      host.frame();
+      read_until([&] { return messages.size() > seen; }, 100);
+      for (; seen < messages.size(); ++seen) if (messages[seen].kind == "snapshot" && predicate(*messages[seen].state)) return true;
+      if (eof) return false;
+    }
+    return false;
+  }
+};
+// Commits every coverage item received so far and sends the cursor's cumulative ACK, as ET-006b will after its storage
+// transaction. Returns the ACK sent, or 0.
+std::uint64_t commit_and_ack(Client& client, v1::DurableAckCursor& cursor, std::size_t& committed) {
+  for (; committed < client.applied.size(); ++committed) if (const auto& c = client.applied[committed].coverage) { cursor.received(c->first_event_seq, c->last_event_seq); cursor.commit(c->first_event_seq, c->last_event_seq); }
+  if (auto ack = cursor.ack()) { send(client.pipe.get(), v1::encode_frame(*ack)); return ack->ack->through_event_seq; }
+  return 0;
+}
+
+struct Fixture {
+  transport::UserIdentity user = transport::current_user(); transport::OwnerSecurity security{user.sid}; transport::PeerIdentity self = transport::inspect_peer(GetCurrentProcessId());
+  Host host; std::unique_ptr<sdk::Adapter> adapter = std::make_unique<sdk::Adapter>();
+  std::unique_ptr<v1::Server> server; std::wstring directory, v0_directory;
+  explicit Fixture(bool policy = true) {
+    directory = temporary_directory(security, L"ET004b-v1-"); v0_directory = temporary_directory(security, L"ET004b-v0-");
+    auto p = host.params(); require(adapter->initialize(SCS_TELEMETRY_VERSION_1_01, &p) == SCS_RESULT_ok, "SDK initialize");
+    // The endpoint's lifecycle in sdk-exports.cpp: initialize, prepare, attach, then start.
+    server = std::make_unique<v1::Server>(*adapter, v1::Origin::synthetic);
+    auto* channel = server->prepare(); require(channel != nullptr, "v1 channel prepared"); adapter->attach_events(channel);
+    if (policy) write_policy(directory, security, user, self);
+    write_policy(v0_directory, security, user, self);
+  }
+  ~Fixture() {
+    server->stop(); adapter->shutdown(); adapter->attach_events(nullptr);
+#ifdef ETS2TELEMETRY_TRANSPORT_TEST_HOOKS
+    v1::set_clock_offset_for_test(0); transport::set_transport_test_hook(nullptr);
+#endif
+    remove_directory(directory); remove_directory(v0_directory);
+  }
+  void start() { require(server->start(directory), "v1 worker start"); require(until([&] { return server->status() == v1::ServerStatus::listening; }), "v1 listening"); }
+  Handle connect() { return open_pipe(server->endpoint()); }
+  std::unique_ptr<Client> client(bool durable) { auto c = std::make_unique<Client>(connect(), durable); return c; }
+  std::unique_ptr<sdk::V1Current> current() const { auto c = std::make_unique<sdk::V1Current>(); require(adapter->read_v1_current(*c), "v1 slot"); return c; }
+  std::wstring record() const { const auto c = current(); return directory + L"\\" + wide(c->identity.process_instance_id.c_str()) + L".json"; }
+  bool listening() const { return until([&] { return server->status() == v1::ServerStatus::listening; }); }
+};
+
+#ifdef ETS2TELEMETRY_TRANSPORT_TEST_HOOKS
+// Holds the v1 worker at the start of its loop iteration ("v1-tick") until released or stopped, so SDK callbacks can
+// fill the ring while nothing drains it. Other phases are ignored.
+struct Hold {
+  static Hold* active;
+  Handle held{CreateEventW(nullptr, TRUE, FALSE, nullptr)}, release{CreateEventW(nullptr, TRUE, FALSE, nullptr)};
+  std::atomic<bool> holding{false}, timed_out{false};
+  Hold() { active = this; transport::set_transport_test_hook(hook); }
+  ~Hold() { SetEvent(release.get()); transport::set_transport_test_hook(nullptr); active = nullptr; }
+  void engage() { ResetEvent(held.get()); ResetEvent(release.get()); holding.store(true); }
+  void disengage() { holding.store(false); SetEvent(release.get()); }
+  static DWORD hook(const char* phase, HANDLE, HANDLE stop, DWORD result) {
+    auto* self = active;
+    if (!self || !stop || std::string(phase) != "v1-tick" || !self->holding.load()) return result;
+    SetEvent(self->held.get()); HANDLE waits[]{stop, self->release.get()};
+    if (WaitForMultipleObjects(2, waits, FALSE, 10000) == WAIT_TIMEOUT) self->timed_out.store(true);
+    return result;
+  }
+};
+Hold* Hold::active = nullptr;
+#endif
+
+std::string type_of(const v1::Message& m) { return m.event ? m.event->record_type : std::string(); }
+std::vector<const v1::Message*> coverage_messages(const Client& c) { std::vector<const v1::Message*> out; for (const auto& m : c.messages) if (m.event || m.gap) out.push_back(&m); return out; }
+std::string serialize(const v1::Json& j) { return v0::detail::serialize(j); }
+
+// Discovery, DACL, naming and the welcome capabilities on an actual pipe.
+void handshake() {
+  Fixture f; f.start();
+  const auto c = f.current(); sdk::Snapshot source; require(f.adapter->read_current(source), "v0 slot");
+  const auto expected = L"\\\\.\\pipe\\ETS2Telemetry-ets2-v1-" + wide(f.user.tag) + L"-" + std::to_wstring(f.user.session) + L"-" + wide(c->identity.process_instance_id.c_str());
+  require(f.server->endpoint() == expected, "v1 pipe name: game, v1, userTag, Windows session, process instance");
+  require(transport::endpoint_name(source, f.user) == L"\\\\.\\pipe\\ETS2Telemetry-ets2-v0-" + wide(f.user.tag) + L"-" + std::to_wstring(f.user.session) + L"-" + wide(c->identity.process_instance_id.c_str()),
+    "v0 pipe name unchanged by the defaulted protocol parameter");
+  // The discovery record: exact v0 schema with protocolMajor 1, owner-only, in the v1 directory.
+  const auto record = f.record(); f.security.verify_owner_only(record);
+  Handle file(CreateFileW(record.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, 0, nullptr)); require(static_cast<bool>(file), "v1 discovery record readable");
+  std::array<char, 4096> bytes{}; DWORD read = 0; require(ReadFile(file.get(), bytes.data(), 4096, &read, nullptr) && read > 0, "v1 discovery bytes"); file.reset();
+  const auto j = v0::detail::Parser(std::string(bytes.data(), read)).parse();
+  require(std::get<v0::Json::Object>(j.value).size() == 10 && j.at("schemaVersion").number() == 1 && j.at("protocolMajor").number() == 1 && j.at("game").string() == "ets2" &&
+    j.at("userTag").string() == f.user.tag && j.at("windowsSessionId").number() == f.user.session && j.at("processId").number() == GetCurrentProcessId() &&
+    j.at("processCreationTime").string() == std::to_string(transport::creation_time(GetCurrentProcess())) && j.at("processInstanceId").string() == c->identity.process_instance_id.c_str() &&
+    j.at("pluginSessionId").string() == c->identity.plugin_session_id.c_str() && j.at("pipeName").string() == utf8(expected), "v1 discovery: exact fields, protocolMajor 1");
+  // The v0 record bytes from the defaulted parameter equal the pre-ET-004b serialization, built here by hand.
+  {
+    const auto v0_name = transport::endpoint_name(source, f.user);
+    { transport::Discovery v0_record(f.v0_directory, f.security, f.user, source, v0_name);
+      Handle v0_file(CreateFileW((f.v0_directory + L"\\" + wide(c->identity.process_instance_id.c_str()) + L".json").c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, 0, nullptr));
+      require(static_cast<bool>(v0_file), "v0 record readable"); std::array<char, 4096> v0_bytes{}; DWORD v0_read = 0; require(ReadFile(v0_file.get(), v0_bytes.data(), 4096, &v0_read, nullptr), "v0 record bytes");
+      using J = v0::Json;
+      const J legacy{J::Object{{"schemaVersion", J{1.0}}, {"protocolMajor", J{0.0}}, {"game", J{std::string("ets2")}}, {"userTag", J{f.user.tag}},
+        {"windowsSessionId", J{static_cast<double>(f.user.session)}}, {"processId", J{static_cast<double>(GetCurrentProcessId())}},
+        {"processCreationTime", J{std::to_string(transport::creation_time(GetCurrentProcess()))}}, {"processInstanceId", J{std::string(c->identity.process_instance_id.c_str())}},
+        {"pluginSessionId", J{std::string(c->identity.plugin_session_id.c_str())}}, {"pipeName", J{utf8(v0_name)}}}};
+      require(std::string(v0_bytes.data(), v0_read) == v0::detail::serialize(legacy), "v0 discovery bytes identical with the defaulted parameter"); }
+    require(GetFileAttributesW((f.v0_directory + L"\\" + wide(c->identity.process_instance_id.c_str()) + L".json").c_str()) == INVALID_FILE_ATTRIBUTES, "v0 record retired");
+  }
+  auto client = f.client(true);
+  // The pipe's own security descriptor, read from the connected handle: protected, owned by and granting only the current user.
+  f.security.verify_handle(client->pipe.get());
+  ULONG flags = 0, instances = 0; require(GetNamedPipeInfo(client->pipe.get(), &flags, nullptr, nullptr, &instances) && instances == 1 && (flags & PIPE_TYPE_MESSAGE) == 0, "one byte-mode instance");
+  Handle second(CreateFileW(f.server->endpoint().c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr));
+  require(!second && GetLastError() == ERROR_PIPE_BUSY, "a second client is refused, not displacing the first");
+  client->handshake();
+  const auto& welcome = client->messages[0]; const auto& w = *welcome.welcome;
+  require(welcome.source->origin == "synthetic" && welcome.source->game == "ets2" && welcome.source->plugin_session_id == c->identity.plugin_session_id.c_str() &&
+    welcome.source->process_id == GetCurrentProcessId() && welcome.capture.clock_id == c->identity.capture_clock_id.c_str(), "welcome source identity and clock");
+  std::set<std::string> types(w.event_types.begin(), w.event_types.end());
+  require(w.durable_events && w.gameplay_events_registered && types.size() == 16 && !types.count("source.gameMode") && types.count("job.delivered") && types.count("trailer.cleared"), "OD-3 event types: all but source.gameMode");
+  require(w.game_mode.mode == "unknown" && w.game_mode.method == "none" && w.game_mode.confidence == "none" && !w.game_mode.module.value, "OD-3 game mode unknown/none/none");
+  const auto& versions = welcome.wire.at("data").at("versions");
+  require(versions.at("telemetryApi").at("major").number() == 1 && versions.at("telemetryApi").at("minor").number() == 1 && versions.at("gameTelemetry").at("major").number() == 1 &&
+    versions.at("gameTelemetry").at("minor").number() == 20 && versions.at("sdkArchive").string() == "scs-sdk-1.15", "versions from the SDK identity; archive distinct");
+  const auto& checkpoint = *client->messages[1].state;
+  require(checkpoint.status.delivery.durable && checkpoint.status.delivery.acked_through_event_seq == 0 && checkpoint.status.delivery.next_event_seq == 1 && checkpoint.status.delivery.retained_events == 0,
+    "checkpoint delivery: durable, A = 0, N = 1, nothing retained");
+  require(client->messages[1].wire.at("data").at("state").at("configuration").at("trailers").value.index() == 5 && std::get<v0::Json::Array>(client->messages[1].wire.at("data").at("state").at("configuration").at("trailers").value).size() == 10, "OD-6: ten trailer slots");
+  // Snapshots at most every 50 ms while frames run continuously.
+  const auto before = client->count("snapshot"); const auto started = GetTickCount64();
+  while (GetTickCount64() - started < 1000) { f.host.frame(); client->read_until([] { return false; }, 5); }
+  client->read_until([] { return false; }, 100);
+  const auto snapshots = client->count("snapshot") - before; std::cout << "snapshotsPerSecond=" << snapshots << '\n';
+  require(snapshots >= 5 && snapshots <= 22, "snapshot cadence bounded at 20 Hz");
+  require(f.host.wrong_thread == 0, "the worker never calls the SDK");
+}
+
+void live_only() {
+  Fixture f; Penalty penalty(7);
+  scs_named_value_t job[]{named("cargo.id", text("synthetic_cargo")), named("planned_distance.km", u32(700)), scs_named_value_t{}};
+  // Without a client: three events become offline loss; only state and counters are kept.
+  f.host.event(SCS_TELEMETRY_EVENT_started); f.host.config("job", job); f.host.gameplay(SCS_TELEMETRY_GAMEPLAY_EVENT_job_cancelled, penalty.attributes); f.host.frame();
+  f.start();
+  auto live = f.client(false); live->handshake();
+  require(!live->messages[0].welcome->durable_events && !live->messages[1].state->status.delivery.durable, "live-only grant");
+  require(live->messages[1].state->status.delivery.next_event_seq == 4 && live->messages[1].state->status.event_loss.offline == 3, "N = 4 after three offline events");
+  // A live-only client receives state only: no event and no gap, and its events count as noDurableConsumer loss.
+  cancelled(f.host, 5); f.host.frame();
+  require(live->status_until(f.host, [](const v1::StateView& s) { return s.status.event_loss.no_durable_consumer == 5 && s.status.delivery.next_event_seq == 9; }), "noDurableConsumer counted on snapshots");
+  require(live->count("event") == 0 && live->count("gap") == 0, "no event or gap reaches a live-only client");
+  // A live-only client never ACKs; even A is rejected and closes the connection.
+  live->ack(0); require(live->closed(), "live-only ACK closes the connection");
+  require(f.listening(), "endpoint relistens");
+  // Late attach: the durable checkpoint hydrates the earlier job without an event, then one gap covers [1, 8].
+  auto durable = f.client(true); durable->handshake();
+  const auto& state = durable->messages[1].wire.at("data").at("state");
+  require(state.at("configuration").at("job").at("available").boolean() && state.at("configuration").at("job").at("value").at("cargoId").at("value").string() == "synthetic_cargo", "hydration carries the job");
+  require(durable->applied[1].hydration && !durable->applied[1].coverage, "hydration has no coverage");
+  require(durable->read_until([&] { return durable->count("gap") >= 1; }), "late-attach gap");
+  const auto& gap = *durable->last("gap").gap;
+  require(gap.first_event_seq == 1 && gap.last_event_seq == 8 && gap.causes.offline == 3 && gap.causes.no_durable_consumer == 5 && !gap.redelivered, "one gap: offline 3, noDurableConsumer 5");
+  require(durable->count("event") == 0, "no job event derived from the checkpoint");
+  require(f.host.wrong_thread == 0, "no SDK calls from the worker");
+}
+
+void durable_delivery() {
+  Fixture f; f.start(); auto client = f.client(true); client->handshake();
+  v1::DurableAckCursor cursor(client->session()); cursor.begin_connection(0); std::size_t committed = 0;
+  scs_named_value_t job[]{named("cargo.id", text("cargo")), scs_named_value_t{}}, truck[]{named("brand_id", text("brand")), scs_named_value_t{}}, trailer[]{named("id", text("trailer")), scs_named_value_t{}};
+  Penalty penalty(9); scs_named_value_t fine[]{named("fine.offence", text("speeding")), named("fine.amount", s64(-1)), scs_named_value_t{}};
+  f.host.event(SCS_TELEMETRY_EVENT_started); f.host.config("job", job); f.host.config("truck", truck); f.host.config("trailer.0", trailer);
+  for (int i = 0; i < 5; ++i) f.host.gameplay(SCS_TELEMETRY_GAMEPLAY_EVENT_job_cancelled, penalty.attributes);
+  f.host.gameplay(SCS_TELEMETRY_GAMEPLAY_EVENT_player_fined, fine); f.host.event(SCS_TELEMETRY_EVENT_paused); f.host.frame();
+  require(client->read_until([&] { return client->covered() >= 11; }), "eleven events delivered");
+  const std::vector<std::string> expected{"simulation.started", "job.configured", "truck.configured", "trailer.configured", "job.cancelled", "job.cancelled", "job.cancelled", "job.cancelled", "job.cancelled", "player.fined", "simulation.paused"};
+  const auto items = coverage_messages(*client); require(items.size() == 11, "eleven coverage items");
+  for (std::size_t i = 0; i < items.size(); ++i) require(items[i]->event && items[i]->event->event_seq == i + 1 && type_of(*items[i]) == expected[i] && !items[i]->event->redelivered, "callback order, identity and type");
+  require(items[10]->event->occurred.simulation == "paused" && items[0]->event->occurred.simulation == "running", "occurred.simulation after the callback");
+  // Receipt is never an ACK: everything stays retained until the cursor commits.
+  require(client->status_until(f.host, [](const v1::StateView& s) { return s.status.delivery.retained_events == 11 && s.status.delivery.acked_through_event_seq == 0; }), "received but unacknowledged events stay retained");
+  require(commit_and_ack(*client, cursor, committed) == 11, "cumulative ACK 11");
+  require(client->status_until(f.host, [](const v1::StateView& s) { return s.status.delivery.retained_events == 0 && s.status.delivery.acked_through_event_seq == 11 && s.status.delivery.next_event_seq == 12; }), "ACK releases");
+  // An equal ACK is a no-op; the connection continues.
+  client->ack(11); cancelled(f.host, 1); f.host.frame();
+  require(client->read_until([&] { return client->covered() >= 12; }), "equal ACK keeps the connection");
+  require(f.host.wrong_thread == 0, "no SDK calls from the worker");
+}
+
+// Reconnection redelivers retained events whole and in order with the redelivered flag; offline events become a gap.
+void redelivery() {
+  Fixture f; f.start(); auto first = f.client(true); first->handshake();
+  v1::DurableAckCursor cursor(first->session()); cursor.begin_connection(0); std::size_t committed = 0;
+  for (std::int64_t i = 1; i <= 6; ++i) { Penalty p(i * 100); f.host.gameplay(SCS_TELEMETRY_GAMEPLAY_EVENT_job_cancelled, p.attributes); }
+  f.host.frame(); require(first->read_until([&] { return first->covered() >= 6; }), "six events");
+  std::map<std::uint64_t, std::string> records;
+  for (const auto* m : coverage_messages(*first)) records[m->event->event_seq] = serialize(m->wire.at("data").at("record")) + serialize(m->wire.at("data").at("occurred"));
+  // Commit everything but acknowledge only through 3: the ACK of 4..6 is lost with the connection.
+  for (; committed < first->applied.size(); ++committed) if (const auto& c = first->applied[committed].coverage) { cursor.received(c->first_event_seq, c->last_event_seq); cursor.commit(c->first_event_seq, c->last_event_seq); }
+  first->ack(3);
+  require(first->status_until(f.host, [](const v1::StateView& s) { return s.status.delivery.acked_through_event_seq == 3 && s.status.delivery.retained_events == 3; }), "release point 3");
+  first.reset(); require(f.listening(), "relisten after disconnect");
+  // Two events while no client is connected: offline coverage.
+  cancelled(f.host, 2); f.host.frame();
+  auto second = f.client(true); second->handshake();
+  require(second->messages[1].state->status.delivery.acked_through_event_seq == 3 && second->messages[1].state->status.delivery.next_event_seq == 9, "checkpoint A = 3, N = 9");
+  cursor.begin_connection(3); committed = 0;
+  cancelled(f.host, 1); f.host.frame();
+  require(second->read_until([&] { return second->covered() >= 9; }), "redelivery, gap and a live event");
+  const auto items = coverage_messages(*second);
+  require(items.size() == 5 && items[0]->event && items[0]->event->event_seq == 4, "coverage starts at A + 1");
+  for (std::size_t i = 0; i < 3; ++i) {
+    const auto& e = *items[i]->event;
+    require(e.redelivered && records.at(e.event_seq) == serialize(items[i]->wire.at("data").at("record")) + serialize(items[i]->wire.at("data").at("occurred")), "redelivered whole, identical and flagged");
+  }
+  require(items[3]->gap && items[3]->gap->first_event_seq == 7 && items[3]->gap->last_event_seq == 8 && items[3]->gap->causes.offline == 2 && !items[3]->gap->redelivered, "offline gap at its position");
+  require(items[4]->event && items[4]->event->event_seq == 9 && !items[4]->event->redelivered, "new event not flagged");
+  // The cursor reports the redelivered, already committed events as duplicates and acknowledges once they are received again.
+  require(commit_and_ack(*second, cursor, committed) == 9 && cursor.through_event_seq() == 9, "lost ACK repeated after redelivery");
+  require(second->status_until(f.host, [](const v1::StateView& s) { return s.status.delivery.acked_through_event_seq == 9 && s.status.delivery.retained_events == 0; }), "all released");
+}
+
+#ifdef ETS2TELEMETRY_TRANSPORT_TEST_HOOKS
+// The 300 s disconnect retention, driven by the worker's clock offset; gap records never age.
+void retention() {
+  Fixture f; f.start(); auto first = f.client(true); first->handshake();
+  cancelled(f.host, 4); f.host.frame(); require(first->read_until([&] { return first->covered() >= 4; }), "four events");
+  std::uint64_t first_ns = UINT64_MAX, last_ns = 0;
+  for (const auto* m : coverage_messages(*first)) { const auto t = *m->event->occurred.monotonic_ns.value; first_ns = (std::min)(first_ns, t); last_ns = (std::max)(last_ns, t); }
+  first.reset(); require(f.listening(), "relisten");
+  // Just inside the window nothing expires.
+  v1::set_clock_offset_for_test(299LL * 1000 * 1000 * 1000); Sleep(50);
+  auto inside = f.client(true); inside->handshake();
+  require(inside->messages[1].state->status.delivery.retained_events == 4 && inside->messages[1].state->status.event_loss.retention_expired == 0, "inside the window: retained");
+  require(inside->read_until([&] { return inside->covered() >= 4; }) && coverage_messages(*inside)[0]->event->redelivered, "redelivered after reconnection inside the window");
+  inside.reset(); require(f.listening(), "relisten");
+  // The reconnection cancelled the window; a new one starts at this disconnect. Past it, every retained event expires.
+  v1::set_clock_offset_for_test(299LL * 1000 * 1000 * 1000 + 301LL * 1000 * 1000 * 1000); Sleep(100);
+  auto after = f.client(true); after->handshake();
+  const auto& status = after->messages[1].state->status;
+  require(status.delivery.retained_events == 1 && status.delivery.retained_bytes == 1024 && status.event_loss.retention_expired == 4 && status.delivery.acked_through_event_seq == 0 && status.delivery.next_event_seq == 5, "expiry: one gap record of 1,024 bytes");
+  require(after->read_until([&] { return after->covered() >= 4; }), "expired coverage delivered");
+  const auto& gap = *coverage_messages(*after)[0]->gap;
+  require(gap.first_event_seq == 1 && gap.last_event_seq == 4 && gap.causes.retention_expired == 4 && gap.redelivered, "retentionExpired gap, redelivered range");
+  require(*gap.first_lost_monotonic_ns.value == first_ns && *gap.last_lost_monotonic_ns.value == last_ns, "S1: lost times of the first and last expired event");
+  // Gap records never age: another window passes without a connection, and the gap record stays.
+  after.reset(); require(f.listening(), "relisten");
+  v1::set_clock_offset_for_test(299LL * 1000 * 1000 * 1000 + 700LL * 1000 * 1000 * 1000); Sleep(100);
+  auto last = f.client(true); last->handshake();
+  require(last->messages[1].state->status.delivery.retained_events == 1 && last->messages[1].state->status.event_loss.retention_expired == 4, "the gap record never ages");
+  // The capture clamp is exercised next, on a fresh session (one Fixture at a time: the fake host is process-global).
+  last.reset();
+}
+
+// A worker clock behind the SDK clock: retained events and gaps carry later source times than the worker's reading. The
+// capture clamp keeps every write valid (docs/native-transport-v1.md, Caller sequence step 5).
+void capture_clamp(Fixture& f) {
+  v1::set_clock_offset_for_test(-5LL * 1000 * 1000 * 1000);
+  auto client = f.client(true); client->handshake();
+  cancelled(f.host, 3); f.host.frame();
+  require(client->read_until([&] { return client->covered() >= 3; }, 2000), "events carrying later source times are written");
+  for (const auto* m : coverage_messages(*client)) require(m->capture.monotonic_ns >= *m->event->occurred.monotonic_ns.value, "capture not before the occurrence");
+  client.reset(); require(f.listening(), "relisten"); v1::set_clock_offset_for_test(0);
+}
+#endif
+
+// A durable client that never reads: callbacks stay non-blocking, the write deadline closes the connection after about
+// 1 s, and the store, the ring and private memory stay bounded.
+void stalled_reader() {
+  Fixture f; f.start(); auto client = f.client(true); client->handshake();
+  PROCESS_MEMORY_COUNTERS_EX before{}; require(GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&before), sizeof(before)), "memory before");
+  scs_named_value_t big[]{named("cargo.id", text(long_id.c_str())), named("cargo", text(long_name_n.c_str())), named("source.city", text(long_name_s.c_str())),
+    named("destination.city", text(long_name_d.c_str())), named("source.company", text(long_name_o.c_str())), scs_named_value_t{}};
+  ULONGLONG slowest = 0, pending_at = 0; unsigned frames = 0;
+  const auto end = GetTickCount64() + 6000 * timing_scale;
+  while (GetTickCount64() < end && f.server->status() == v1::ServerStatus::connected) {
+    const auto t = GetTickCount64();
+    for (int i = 0; i < 4; ++i) f.host.config("job", big);
+    cancelled(f.host, 20); f.host.frame(static_cast<float>(frames++ % 50));
+    slowest = (std::max)(slowest, GetTickCount64() - t);
+    if (!pending_at && f.server->write_pending()) pending_at = GetTickCount64();
+    Sleep(1);
+  }
+  require(pending_at != 0, "actual kernel backpressure: a write stays pending");
+  require(f.listening(), "the write deadline closes the stalled connection");
+  const auto closed_after = GetTickCount64() - pending_at; std::cout << "stalledCloseMs=" << closed_after << " slowestFrameMs=" << slowest << " frames=" << frames << '\n';
+  require(closed_after <= 2000 * timing_scale, "closed about 1 s after the write stalled");
+  require(slowest < 200 * timing_scale, "callbacks never wait for the stalled client");
+  PROCESS_MEMORY_COUNTERS_EX after{}; require(GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&after), sizeof(after)), "memory after");
+  const auto growth = after.PrivateUsage > before.PrivateUsage ? after.PrivateUsage - before.PrivateUsage : 0; std::cout << "privateGrowthBytes=" << growth << '\n';
+#if defined(__SANITIZE_ADDRESS__)
+  // AddressSanitizer keeps freed memory in quarantine and maps shadow memory, so its private bytes do not measure the
+  // endpoint; the bound is asserted in the uninstrumented build only.
+#else
+  require(growth < 32u * 1024 * 1024, "private bytes stay bounded");
+#endif
+  // Reconnect: the store stayed within its bounds and the overflow is counted.
+  client.reset(); auto again = f.client(true); again->handshake();
+  const auto& s = again->messages[1].state->status;
+  std::cout << "retained=" << s.delivery.retained_events << " bytes=" << s.delivery.retained_bytes << " queueCount=" << s.event_loss.queue_count << " queueBytes=" << s.event_loss.queue_bytes << '\n';
+  require(s.delivery.retained_events <= 256 && s.delivery.retained_bytes <= 1048576 && s.event_loss.queue_count + s.event_loss.queue_bytes > 0, "store bounded, overflow counted");
+  require(f.host.wrong_thread == 0, "no SDK calls from the worker");
+}
+
+#ifdef ETS2TELEMETRY_TRANSPORT_TEST_HOOKS
+// Store overflow without ACKs, then ring overflow while the worker is held: both are gap coverage at their position.
+void overflow() {
+  Fixture f; Hold hold; f.start(); auto client = f.client(true); client->handshake();
+  v1::DurableAckCursor cursor(client->session()); cursor.begin_connection(0); std::size_t committed = 0;
+  // Batches smaller than the ring, paced so the worker drains each: only the store overflows here.
+  for (int batch = 0; batch < 15; ++batch) { cancelled(f.host, 20); f.host.frame(); Sleep(20); }
+  require(client->pump(f.host, [&] { return client->covered() >= 300; }), "300 eventSeqs covered");
+  std::uint64_t events = 0, queue_count = 0;
+  for (const auto* m : coverage_messages(*client)) { if (m->event) ++events; else queue_count += m->gap->causes.queue_count; }
+  require(events == 255 && queue_count == 45, "255 events retained (one entry reserved), 45 lost as queueCount");
+  const auto& first_gap = *client->last("gap").gap;
+  require(coverage_messages(*client)[255]->gap && coverage_messages(*client)[255]->gap->first_event_seq == 256 && first_gap.last_event_seq == 300, "gap at its stream position");
+  require(client->status_until(f.host, [](const v1::StateView& s) { return s.status.delivery.retained_events == 256 && s.status.event_loss.queue_count == 45; }), "full store: 256 entries");
+  require(commit_and_ack(*client, cursor, committed) == 300, "ACK 300");
+  require(client->status_until(f.host, [](const v1::StateView& s) { return s.status.delivery.retained_events == 0 && s.status.delivery.acked_through_event_seq == 300; }), "released");
+  // Ring overflow: the worker is held while 200 events are observed; 128 fit the ring and 72 become one queueCount run.
+  hold.engage(); require(WaitForSingleObject(hold.held.get(), static_cast<DWORD>(3000 * timing_scale)) == WAIT_OBJECT_0, "worker held");
+  const auto t = GetTickCount64(); cancelled(f.host, 200); f.host.frame(); const auto elapsed = GetTickCount64() - t;
+  require(elapsed < 500 * timing_scale, "callbacks complete while the worker is held");
+  hold.disengage(); require(!hold.timed_out.load(), "hold released");
+  require(client->pump(f.host, [&] { return client->covered() >= 500; }), "500 eventSeqs covered");
+  events = 0; queue_count = 0;
+  const auto items = coverage_messages(*client);
+  for (std::size_t i = 0; i < items.size(); ++i) if (items[i]->event ? items[i]->event->event_seq > 300 : items[i]->gap->first_event_seq > 300) { if (items[i]->event) ++events; else queue_count += items[i]->gap->causes.queue_count; }
+  require(events == 128 && queue_count == 72, "ring: 128 copied, 72 queueCount in one run");
+}
+
+// ACK and control framing: every violation closes the connection, and the endpoint relistens.
+void ack_control() {
+  Fixture f; Hold hold; f.start();
+  auto relisten = [&] { require(f.listening(), "endpoint relistens"); };
+  // (a) S6: a clock probe sent right after the hello, before the checkpoint. A probe is otherwise valid, so only the S6
+  // rule closes this connection (an early ACK would also fail the validator).
+  {
+    hold.engage(); auto c = f.client(true); send(c->pipe.get(), framed(hello_payload(true))); Sleep(20); send(c->pipe.get(), framed(probe_payload(1)));
+    hold.disengage(); require(c->closed() && c->count("checkpoint") == 0, "bytes before the checkpoint close the connection"); relisten();
+  }
+  // (b) A live-only ACK, (c) a foreign session and (d) an ACK beyond the written coverage.
+  {
+    auto c = f.client(false); c->handshake(); c->ack(0); require(c->closed(), "live-only ACK rejected"); relisten();
+  }
+  {
+    auto c = f.client(true); c->handshake(); send(c->pipe.get(), framed(ack_payload("10000000-0000-4000-8000-000000000001", 0))); require(c->closed(), "foreign session ACK rejected"); relisten();
+  }
+  {
+    auto c = f.client(true); c->handshake(); c->ack(1); require(c->closed(), "ACK beyond the written coverage rejected"); relisten();
+  }
+  // (e) A regressing ACK and (f) an equal one.
+  {
+    auto c = f.client(true); c->handshake(); const auto base = c->messages[1].state->status.delivery.acked_through_event_seq;
+    cancelled(f.host, 3); f.host.frame(); require(c->read_until([&] { return c->covered() >= base + 3; }), "three events");
+    c->ack(base + 3); c->ack(base + 3);
+    require(c->status_until(f.host, [&](const v1::StateView& s) { return s.status.delivery.acked_through_event_seq == base + 3; }), "ACK and equal ACK accepted");
+    c->ack(base + 2); require(c->closed(), "regressing ACK rejected"); relisten();
+  }
+  // (g) An ACK inside a retained gap record keeps it whole; the release point is its first eventSeq - 1 (decision (c)).
+  {
+    auto c = f.client(true); c->handshake(); const auto a = c->messages[1].state->status.delivery.acked_through_event_seq;
+    c.reset(); relisten(); cancelled(f.host, 3); f.host.frame();
+    auto d = f.client(true); d->handshake(); require(d->read_until([&] { return d->covered() >= a + 3; }), "offline gap");
+    d->ack(a + 2);
+    require(d->status_until(f.host, [&](const v1::StateView& s) { return s.status.delivery.acked_through_event_seq == a && s.status.delivery.retained_events == 1; }), "release point stays before the gap record");
+    d.reset(); relisten();
+    auto e = f.client(true); e->handshake();
+    require(e->messages[1].state->status.delivery.acked_through_event_seq == a && e->read_until([&] { return e->covered() >= a + 3; }), "checkpoint carries the release point");
+    const auto& gap = *coverage_messages(*e)[0]->gap; require(gap.first_event_seq == a + 1 && gap.last_event_seq == a + 3 && gap.redelivered && gap.causes.offline == 3, "the gap record is redelivered whole");
+    e->ack(a + 3); require(e->status_until(f.host, [&](const v1::StateView& s) { return s.status.delivery.acked_through_event_seq == a + 3; }), "released at its last eventSeq"); e.reset(); relisten();
+  }
+  // (h) A clock probe: received <= sent <= capture, and a mapping from the client's QPC clock.
+  {
+    auto c = f.client(true); c->handshake();
+    auto qpc_ns = [] { LARGE_INTEGER n{}, q{}; QueryPerformanceCounter(&n); QueryPerformanceFrequency(&q); return static_cast<std::uint64_t>(static_cast<long double>(n.QuadPart) * 1e9L / static_cast<long double>(q.QuadPart)); };
+    c->consumer.expect_clock_reply(1); const auto t0 = qpc_ns(); send(c->pipe.get(), framed(probe_payload(1)));
+    require(c->read_until([&] { return c->count("clock.reply") == 1; }), "clock reply"); const auto t3 = qpc_ns();
+    const auto& reply = c->last("clock.reply");
+    require(reply.clock_reply->probe_id == 1 && reply.clock_reply->received_monotonic_ns <= reply.clock_reply->sent_monotonic_ns && reply.clock_reply->sent_monotonic_ns <= reply.capture.monotonic_ns, "received <= sent <= capture");
+    const auto mapping = v1::compute_clock_mapping(reply, 1, "60000000-0000-4000-8000-000000000001", t0, t3);
+    require(mapping && mapping->uncertainty_ns < 1000000000ULL * timing_scale, "a mapping with bounded uncertainty");
+    // (i) A probe ID that does not increase closes the connection.
+    send(c->pipe.get(), framed(probe_payload(1))); require(c->closed(), "non-increasing probe ID rejected"); relisten();
+  }
+  {
+    // (j) A second probe while the reply to the first is unsent: both arrive in one read.
+    auto c = f.client(true); c->handshake(); auto two = framed(probe_payload(2)); const auto three = framed(probe_payload(3)); two.insert(two.end(), three.begin(), three.end());
+    send(c->pipe.get(), two); require(c->closed(), "probe while a reply is unsent rejected"); relisten();
+  }
+  // (k) Any other client kind after the checkpoint and (l) an oversized client frame prefix.
+  {
+    auto c = f.client(true); c->handshake(); c->hello(); require(c->closed(), "a second hello closes"); relisten();
+  }
+  {
+    auto c = f.client(true); c->handshake(); send(c->pipe.get(), {1, 16, 0, 0}); require(c->closed(), "client frame over 4,096 bytes closes"); relisten();
+  }
+  auto valid = f.client(true); valid->handshake(); require(f.server->hydrations() >= 11, "every valid handshake hydrated");
+}
+#endif
+
+// Seeded mutations of the hello and of post-checkpoint client frames: each closes or is a valid frame; the endpoint relistens.
+void fuzz() {
+  Fixture f; f.start(); std::uint32_t random = 0x5a17c0de; auto next = [&] { random = random * 1664525U + 1013904223U; return random; };
+  unsigned hello_closed = 0, hello_served = 0;
+  for (unsigned i = 0; i < 40; ++i) {
+    auto bytes = framed(hello_payload(true)); const auto offset = 4 + next() % (bytes.size() - 4);
+    switch (next() % 3) { case 0: bytes[offset] = static_cast<std::uint8_t>(1 + next() % 7); break; case 1: bytes[offset] ^= static_cast<std::uint8_t>(1u << (next() % 8)); break; default: bytes.resize(offset); bytes[0] = static_cast<std::uint8_t>(bytes.size() - 4); break; }
+    auto c = f.client(true); send(c->pipe.get(), bytes);
+    if (c->closed(1500)) ++hello_closed; else ++hello_served;
+    c.reset(); require(f.listening(), "relisten after a mutated hello");
+  }
+  unsigned frame_closed = 0, frame_kept = 0;
+  for (unsigned i = 0; i < 40; ++i) {
+    auto c = f.client(true); c->handshake();
+    auto bytes = framed(i % 2 ? ack_payload(c->session(), 0) : probe_payload(1 + i)); const auto offset = next() % bytes.size();
+    bytes[offset] ^= static_cast<std::uint8_t>(1u << (next() % 8));
+    // The client is no longer a strict Consumer for a reply it did not register, so only closure is observed.
+    std::vector<std::uint8_t> sink; send(c->pipe.get(), bytes);
+    const auto end = GetTickCount64() + 400 * timing_scale; bool closed = false;
+    while (GetTickCount64() < end) { const auto r = read_some(c->pipe.get(), sink, 50); if (r == ReadResult::closed) { closed = true; break; } }
+    if (closed) ++frame_closed; else ++frame_kept;
+    c.reset(); require(f.listening(), "relisten after a mutated frame");
+  }
+  std::cout << "mutatedHelloClosed=" << hello_closed << " served=" << hello_served << " mutatedFrameClosed=" << frame_closed << " kept=" << frame_kept << '\n';
+  require(hello_closed > 0 && frame_closed > 0, "mutations are rejected");
+  auto valid = f.client(true); valid->handshake(); cancelled(f.host, 2); f.host.frame();
+  require(valid->read_until([&] { return valid->covered() == valid->messages[1].state->status.delivery.next_event_seq + 1; }), "a valid client is served after the fuzz");
+}
+
+// Handshake rejection: sizes, versions, other contracts, a duplicate hello and the real 5 s hello deadline.
+void rejection() {
+  Fixture f; f.start();
+  auto rejected = [&](std::vector<std::uint8_t> bytes, const char* message) { auto c = f.client(true); send(c->pipe.get(), bytes); require(c->closed() && c->messages.empty(), message); c.reset(); require(f.listening(), "relisten after rejection"); };
+  auto exact = hello_payload(true); exact.resize(4096, ' ');
+  { auto c = f.client(true); send(c->pipe.get(), framed(exact)); require(c->read(2), "exact 4,096-byte hello accepted"); }
+  require(f.listening(), "relisten");
+  auto over = hello_payload(true); over.resize(4097, ' '); rejected(framed(over), "4,097-byte hello rejected");
+  { auto c = f.client(true); const auto t = GetTickCount64(); send(c->pipe.get(), {1, 16, 0, 0}); require(c->closed(1000) && GetTickCount64() - t < 1000 * timing_scale, "oversized prefix rejected without waiting for the payload"); }
+  require(f.listening(), "relisten");
+  rejected({0, 0, 0, 0}, "empty hello rejected");
+  rejected(framed(v0_hello), "v0 hello rejected");
+  auto major2 = hello_payload(true); major2.replace(major2.find("\"major\":1"), 9, "\"major\":2"); rejected(framed(major2), "major 2 rejected");
+  auto minor1 = hello_payload(true); minor1.replace(minor1.find("\"minor\":0"), 9, "\"minor\":1"); rejected(framed(minor1), "envelope minor 1 rejected");
+  rejected(cap0::frame(cap0::hello_payload("0cab0000-0000-4000-8000-0000000000a1")), "CAP0 hello rejected");
+  rejected(framed("{"), "malformed hello rejected");
+  auto extra = hello_payload(true); extra.insert(extra.size() - 2, ",\"extra\":true"); rejected(framed(extra), "unknown field rejected");
+  auto twice = framed(hello_payload(true)); const auto copy = twice; twice.insert(twice.end(), copy.begin(), copy.end()); rejected(twice, "a duplicate hello rejected (S6)");
+  rejected(framed(ack_payload("50000000-0000-4000-8000-000000000001", 0)), "an ACK instead of the hello rejected");
+  {
+    auto c = f.client(true); const auto t = GetTickCount64(); require(c->closed(7000) && c->messages.empty(), "no hello: closed"); const auto elapsed = GetTickCount64() - t;
+    std::cout << "helloTimeoutMs=" << elapsed << '\n'; require(elapsed >= 4900 && elapsed < 5900 * timing_scale, "real 5 s hello deadline");
+  }
+  require(f.listening(), "relisten after the deadline");
+  auto valid = f.client(true); valid->handshake();
+}
+
+// A foreign pipe, a foreign record and a broad-ACL directory make v1 fail closed; v0 still serves.
+void collision() {
+  for (unsigned scenario = 0; scenario < 3; ++scenario) {
+    Fixture f; transport::Server v0{*f.adapter};
+    sdk::Snapshot source; require(f.adapter->read_current(source), "v0 slot"); const auto name = transport::endpoint_name(source, f.user, 1);
+    Handle foreign_pipe, foreign_record; const auto record = f.record();
+    if (scenario == 0) { foreign_pipe.reset(CreateNamedPipeW(name.c_str(), PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED | FILE_FLAG_FIRST_PIPE_INSTANCE, PIPE_TYPE_BYTE | PIPE_REJECT_REMOTE_CLIENTS, 1, 4096, 4096, 0, f.security.attributes())); require(static_cast<bool>(foreign_pipe), "foreign v1 pipe"); }
+    if (scenario == 1) {
+      foreign_record.reset(CreateFileW(record.c_str(), GENERIC_READ | GENERIC_WRITE | DELETE, FILE_SHARE_READ, f.security.attributes(), CREATE_NEW, 0, nullptr)); require(static_cast<bool>(foreign_record), "foreign v1 record");
+      DWORD written = 0; require(WriteFile(foreign_record.get(), "foreign", 7, &written, nullptr) && written == 7, "foreign sentinel");
+    }
+    if (scenario == 2) {
+      PSECURITY_DESCRIPTOR insecure = nullptr; require(ConvertStringSecurityDescriptorToSecurityDescriptorW(L"D:P(A;;GA;;;WD)", SDDL_REVISION_1, &insecure, nullptr) != FALSE, "broad ACL descriptor");
+      require(SetFileSecurityW(f.directory.c_str(), DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, insecure) != FALSE, "broad ACL v1 directory"); LocalFree(insecure);
+    }
+    require(f.server->start(f.directory), "v1 worker starts");
+    require(until([&] { return f.server->status() == v1::ServerStatus::failed; }), "v1 fails closed");
+    require(f.server->endpoint().empty(), "no v1 endpoint published");
+    require(v0.start(f.v0_directory) && v0.await_startup() != transport::StartupFailure::endpoint_creation, "v0 starts beside the failed v1 endpoint");
+    require(until([&] { return v0.status() == transport::Status::listening; }, 10000), "v0 listening");
+    auto live = open_pipe(v0.endpoint()); send(live.get(), framed(v0_hello)); v0::FrameDecoder decoder; std::vector<v0::Message> messages; std::vector<std::uint8_t> bytes;
+    const auto end = GetTickCount64() + 3000 * timing_scale;
+    while (messages.size() < 2 && GetTickCount64() < end) if (read_some(live.get(), bytes, 500) == ReadResult::data) decoder.push(bytes.data(), bytes.size(), [&](v0::Message m) { messages.push_back(std::move(m)); });
+    require(messages.size() >= 2 && messages[0].kind == "welcome" && messages[1].kind == "checkpoint", "v0 serves while v1 failed closed");
+    live.reset(); v0.stop(); f.server->stop();
+    if (scenario == 0) { Handle replacement(CreateNamedPipeW(name.c_str(), PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED | FILE_FLAG_FIRST_PIPE_INSTANCE, PIPE_TYPE_BYTE, 1, 4096, 4096, 0, f.security.attributes())); require(!replacement, "foreign pipe preserved, never adopted"); }
+    if (scenario == 1) {
+      std::array<char, 7> sentinel{}; LARGE_INTEGER zero{}; DWORD read = 0;
+      require(SetFilePointerEx(foreign_record.get(), zero, nullptr, FILE_BEGIN) && ReadFile(foreign_record.get(), sentinel.data(), 7, &read, nullptr) && read == 7 && std::string(sentinel.data(), 7) == "foreign", "foreign record never overwritten");
+      FILE_DISPOSITION_INFO remove{TRUE}; SetFileInformationByHandle(foreign_record.get(), FileDispositionInfo, &remove, sizeof(remove)); foreign_record.reset();
+    }
+    std::cout << "collision scenario=" << scenario << " v1 failed closed, v0 served\n";
+  }
+}
+
+// The v1 service policy: missing, broad-ACL, wrong digest and malformed policies reject the client; the endpoint stays.
+void policy() {
+  Fixture f(false); f.start();
+  auto denied = [&](const char* message) { auto c = f.client(true); c->hello(); require(c->closed() && c->messages.empty(), message); c.reset(); require(f.listening(), "endpoint stays listening"); };
+  denied("missing policy rejects the client");
+  write_policy(f.directory, f.security, f.user, f.self, std::string(64, '0')); denied("digest mismatch rejected");
+  write_file(f.directory + L"\\service-policy.json", f.security, "{\"schemaVersion\":1}"); denied("malformed policy rejected");
+  write_policy(f.directory, f.security, f.user, f.self);
+  PSECURITY_DESCRIPTOR insecure = nullptr; require(ConvertStringSecurityDescriptorToSecurityDescriptorW(L"D:P(A;;GA;;;WD)", SDDL_REVISION_1, &insecure, nullptr) != FALSE, "broad ACL descriptor");
+  require(SetFileSecurityW((f.directory + L"\\service-policy.json").c_str(), DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, insecure) != FALSE, "broad ACL policy"); LocalFree(insecure);
+  denied("broad-ACL policy rejected");
+  require(DeleteFileW((f.directory + L"\\service-policy.json").c_str()) != FALSE, "remove broad policy");
+  // The v0 policy in its own directory does not authorize the v1 endpoint.
+  denied("the v0 directory's policy does not apply to v1");
+  write_policy(f.directory, f.security, f.user, f.self);
+  auto valid = f.client(true); valid->handshake();
+  require(f.server->hydrations() == 1, "only the authorized client hydrated");
+  // v0, with its own valid policy, serves throughout.
+  transport::Server v0{*f.adapter}; require(v0.start(f.v0_directory) && until([&] { return v0.status() == transport::Status::listening; }, 10000), "v0 listening");
+  auto live = open_pipe(v0.endpoint()); send(live.get(), framed(v0_hello)); std::vector<std::uint8_t> bytes;
+  require(read_some(live.get(), bytes, 3000 * timing_scale) == ReadResult::data, "v0 serves beside the v1 policy rejections"); live.reset(); v0.stop();
+}
+
+#ifdef ETS2TELEMETRY_TRANSPORT_TEST_HOOKS
+// The last assignable eventSeqs, then end(sequence-exhausted); the endpoint retires and v0 is unaffected.
+void exhaustion() {
+  Fixture f; constexpr auto max = v1::max_event_seq;
+  v1::EventChannelTestAccess::set_next(*f.server->channel(), max - 1); require(f.server->skip_store_for_test(max - 1), "store at max - 1");
+  f.start(); auto client = f.client(true); client->handshake();
+  require(client->messages[1].state->status.delivery.next_event_seq == max - 1 && client->messages[1].state->status.event_loss.offline == max - 2, "checkpoint near the end of the range");
+  cancelled(f.host, 3); f.host.frame();
+  require(f.server->channel()->exhausted(), "the channel assigned its last eventSeq");
+  require(client->read_until([&] { return client->count("end") == 1; }, 5000), "end received");
+  const auto items = coverage_messages(*client);
+  require(items.size() == 3 && items[0]->gap && items[0]->gap->last_event_seq == max - 2 && items[1]->event->event_seq == max - 1 && items[2]->event->event_seq == max, "the last two events precede end");
+  const auto& end = *client->last("end").end;
+  require(end.reason == "sequence-exhausted" && end.next_event_seq == UINT64_MAX && end.acked_through_event_seq == 0 && end.retained_unacked == 2, "end(sequence-exhausted) with N = 2^64 - 1");
+  require(client->closed(), "the connection ends after end");
+  require(until([&] { return f.server->status() == v1::ServerStatus::retired && f.server->endpoint().empty(); }), "v1 retires");
+  require(GetFileAttributesW(f.record().c_str()) == INVALID_FILE_ATTRIBUTES, "v1 discovery record retired");
+  for (int i = 0; i < 3; ++i) f.host.frame();
+  require(f.host.logs.empty(), "exhaustion is not logged");
+  require(f.server->ends() == 1, "one end written");
+}
+
+// `rejected` from the store is an invariant violation: end(source-retired), one deferred fixed log entry, v1 retires.
+void invariant() {
+  Fixture f; transport::Server v0{*f.adapter};
+  // The store moves ahead of the channel, so the next drained eventSeq is not the store's N.
+  require(f.server->skip_store_for_test(5), "store at 5, channel at 1");
+  f.start(); auto client = f.client(true); client->handshake();
+  require(client->read_until([&] { return client->covered() >= 4; }), "gap [1, 4]");
+  cancelled(f.host, 1); f.host.frame();
+  require(client->read_until([&] { return client->count("end") == 1; }), "end after the violation");
+  const auto& end = *client->last("end").end;
+  require(end.reason == "source-retired" && end.next_event_seq == 5, "end(source-retired) with the store's cursor");
+  require(until([&] { return f.server->status() == v1::ServerStatus::retired && f.server->endpoint().empty(); }), "v1 retires");
+  require(f.host.logs.empty(), "the worker never logs");
+  f.host.frame();
+  require(f.host.logs.size() == 1 && f.host.log_types[0] == SCS_LOG_TYPE_error && f.host.logs[0] == "ETS2Telemetry: protocol v1 endpoint retired: invariant violation" && f.host.wrong_thread == 0,
+    "one fixed log entry, written by the SDK thread at frame_end");
+  for (int i = 0; i < 3; ++i) f.host.frame();
+  require(f.host.logs.size() == 1, "logged once");
+  // v0 is unaffected.
+  require(v0.start(f.v0_directory) && until([&] { return v0.status() == transport::Status::listening; }, 10000), "v0 listening after the v1 retirement");
+  auto live = open_pipe(v0.endpoint()); send(live.get(), framed(v0_hello)); std::vector<std::uint8_t> bytes;
+  require(read_some(live.get(), bytes, 3000 * timing_scale) == ReadResult::data, "v0 serves after the v1 retirement");
+  live.reset(); v0.stop();
+}
+#endif
+
+// v0 frames continue at their cadence while a v1 client is active and then stalled; the contracts reject each other.
+void v0_isolation() {
+  Fixture f; transport::Server v0{*f.adapter}; f.start();
+  require(v0.start(f.v0_directory) && until([&] { return v0.status() == transport::Status::listening; }, 10000), "v0 listening");
+  auto live = open_pipe(v0.endpoint()); send(live.get(), framed(v0_hello)); v0::FrameDecoder decoder; v0::Consumer consumer(true);
+  std::vector<v0::Message> messages; std::vector<std::uint8_t> bytes;
+  auto read_v0 = [&](ULONGLONG ms) { if (read_some(live.get(), bytes, ms) == ReadResult::data) decoder.push(bytes.data(), bytes.size(), [&](v0::Message m) { consumer.accept(m); messages.push_back(std::move(m)); }); };
+  while (messages.size() < 2) read_v0(500);
+  auto client = f.client(true); client->handshake();
+  // The v1 client reads for one second, then stops reading entirely.
+  unsigned v0_snapshots = 0; std::uint64_t offline = UINT64_MAX; bool stalled_seen = false;
+  const auto end = GetTickCount64() + 3000;
+  while (GetTickCount64() < end) {
+    cancelled(f.host, 5); f.host.frame(static_cast<float>(v0_snapshots % 40));
+    if (GetTickCount64() + 2000 < end) client->read_until([] { return false; }, 5);
+    const auto before = messages.size(); read_v0(20);
+    for (auto i = before; i < messages.size(); ++i) if (messages[i].kind == "snapshot") {
+      ++v0_snapshots; if (offline == UINT64_MAX) offline = messages[i].continuity.offline_transitions;
+      require(messages[i].continuity.offline_transitions == offline, "v0 continuity unaffected by v1");
+    }
+    stalled_seen = stalled_seen || f.server->write_pending();
+    Sleep(10);
+  }
+  std::cout << "v0SnapshotsDuringV1=" << v0_snapshots << " v1Stalled=" << stalled_seen << '\n';
+  require(v0_snapshots >= 15, "v0 snapshots continue while v1 is active and stalled");
+  require(f.listening(), "the stalled v1 connection retires independently");
+  live.reset(); require(until([&] { return v0.status() == transport::Status::listening; }), "v0 listening");
+  // Mutual rejection of the handshakes.
+  { auto on_v0 = open_pipe(v0.endpoint()); send(on_v0.get(), framed(hello_payload(true))); std::vector<std::uint8_t> sink; require(read_some(on_v0.get(), sink, 2000 * timing_scale) == ReadResult::closed, "v0 rejects a v1 hello"); }
+  { auto on_v1 = f.client(true); send(on_v1->pipe.get(), framed(v0_hello)); require(on_v1->closed() && on_v1->messages.empty(), "v1 rejects a v0 hello"); }
+  v0.stop(); require(f.host.wrong_thread == 0, "no SDK calls from either worker");
+}
+
+// CAP0 captures every callback without loss while a v1 client is stalled; the contracts reject each other.
+void cap0_isolation() {
+  Fixture f; cap0::CaptureServer capture{*f.adapter, "synthetic"}; f.start();
+  require(capture.start(f.v0_directory) && until([&] { return capture.status() == cap0::CaptureStatus::listening; }), "CAP0 listening");
+  const std::string session = "0cab0000-0000-4000-8000-0000000000a1";
+  auto evidence = open_pipe(capture.endpoint()); send(evidence.get(), cap0::frame(cap0::hello_payload(session)));
+  std::vector<std::uint8_t> buffer, bytes; std::vector<std::string> kinds;
+  auto read_cap0 = [&](ULONGLONG ms) {
+    if (read_some(evidence.get(), bytes, ms) != ReadResult::data) return;
+    buffer.insert(buffer.end(), bytes.begin(), bytes.end());
+    while (buffer.size() >= 4) {
+      const auto n = static_cast<std::uint32_t>(buffer[0]) | (static_cast<std::uint32_t>(buffer[1]) << 8) | (static_cast<std::uint32_t>(buffer[2]) << 16) | (static_cast<std::uint32_t>(buffer[3]) << 24);
+      if (buffer.size() < n + 4) break;
+      kinds.push_back(v0::detail::Parser(std::string(buffer.begin() + 4, buffer.begin() + 4 + n)).parse().at("kind").string()); buffer.erase(buffer.begin(), buffer.begin() + 4 + n);
+    }
+  };
+  require(until([&] { read_cap0(50); return !kinds.empty(); }), "CAP0 header");
+  auto client = f.client(true); client->handshake();
+  // The v1 client stops reading; 600 gameplay events are captured by both endpoints' queues.
+  // Paced so that the CAP0 worker keeps up even in the sanitized build: any drop would then come from interference.
+  for (int i = 0; i < 120; ++i) { cancelled(f.host, 5); f.host.frame(); read_cap0(5); Sleep(5); }
+  require(until([&] { read_cap0(20); return capture.queue().counters().attempted >= 600 && capture.queue().queued_envelopes() == 0; }, 5000), "CAP0 drained every envelope");
+  const auto counters = capture.queue().counters();
+  std::cout << "cap0Attempted=" << counters.attempted << " dropped=" << counters.dropped << " packets=" << kinds.size() << '\n';
+  require(counters.dropped == 0, "CAP0 drops nothing while v1 is stalled");
+  client.reset(); require(f.listening(), "v1 relistens");
+  { auto on_v1 = f.client(true); send(on_v1->pipe.get(), cap0::frame(cap0::hello_payload(session))); require(on_v1->closed() && on_v1->messages.empty(), "v1 rejects a CAP0 hello"); }
+  require(f.listening(), "v1 relistens");
+  evidence.reset(); require(until([&] { return capture.status() == cap0::CaptureStatus::listening; }), "CAP0 listening");
+  { auto on_cap0 = open_pipe(capture.endpoint()); send(on_cap0.get(), framed(hello_payload(true))); std::vector<std::uint8_t> sink; require(read_some(on_cap0.get(), sink, 2000 * timing_scale) == ReadResult::closed, "CAP0 rejects a v1 hello"); }
+  capture.stop(); require(f.host.wrong_thread == 0, "no SDK calls from either worker");
+}
+
+// Deterministic shutdown: `end` within 250 ms to a reading client, bounded joins with a pending hello read, a stalled write
+// and no client.
+void shutdown() {
+  {
+    Fixture f; f.start(); auto client = f.client(true); client->handshake();
+    cancelled(f.host, 4); f.host.frame(); require(client->read_until([&] { return client->covered() >= 4; }), "four events");
+    // Two more are observed but not yet written when the stop arrives; `end` follows them within the budget.
+    cancelled(f.host, 2);
+    const auto t = GetTickCount64(); f.server->signal_stop();
+    require(client->read_until([&] { return client->count("end") == 1; }, 1000), "end received");
+    const auto arrived = GetTickCount64() - t; f.server->stop();
+    const auto& end = *client->last("end").end;
+    std::cout << "endMs=" << arrived << " shutdownMs=" << f.server->shutdown_ms() << '\n';
+    require(arrived <= 250 * timing_scale, "end delivered within 250 ms");
+    require(end.reason == "plugin-shutdown" && end.next_event_seq == 7 && end.acked_through_event_seq == 0 && end.retained_unacked == 6 && client->covered() == 6, "end after the last written event, nothing waits for an ACK");
+    require(client->closed(), "the handle closes after end");
+    require(f.server->shutdown_ms() < 1000 && !f.server->shutdown_deadline_exceeded() && f.server->status() == v1::ServerStatus::stopped, "joined under the deadline");
+    require(f.server->endpoint().empty() && GetFileAttributesW(f.record().c_str()) == INVALID_FILE_ATTRIBUTES, "endpoint and record retired");
+  }
+  {
+    Fixture f; f.start(); auto pending = f.connect(); Sleep(100);
+    f.server->stop(); std::cout << "pendingHelloShutdownMs=" << f.server->shutdown_ms() << '\n';
+    require(f.server->shutdown_ms() < 1000 && !f.server->shutdown_deadline_exceeded(), "pending hello read cancelled and joined");
+  }
+  {
+    Fixture f; f.start(); auto client = f.client(true); client->handshake();
+    scs_named_value_t big[]{named("cargo", text(long_name_n.c_str())), named("source.city", text(long_name_s.c_str())), scs_named_value_t{}};
+    const auto end = GetTickCount64() + 5000 * timing_scale;
+    while (!f.server->write_pending() && GetTickCount64() < end) { f.host.config("job", big); cancelled(f.host, 10); f.host.frame(); Sleep(1); }
+    require(f.server->write_pending(), "kernel-backpressured write before the stop");
+    f.server->stop(); std::cout << "stalledWriteShutdownMs=" << f.server->shutdown_ms() << '\n';
+    require(f.server->shutdown_ms() < 1000 && !f.server->shutdown_deadline_exceeded() && f.server->ends() == 0, "a stalled write is cancelled, observed and joined; no end after a cut frame");
+  }
+  {
+    Fixture f; f.start(); f.server->stop(); require(f.server->shutdown_ms() < 1000 && f.server->status() == v1::ServerStatus::stopped, "idle endpoint joins");
+  }
+}
+
+// Threads of this process whose start address lies inside `module`.
+std::size_t module_threads(HMODULE module) {
+  using Query = LONG(NTAPI*)(HANDLE, ULONG, PVOID, ULONG, PULONG);
+  const auto query = reinterpret_cast<Query>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQueryInformationThread"));
+  MODULEINFO info{}; if (!query || !GetModuleInformation(GetCurrentProcess(), module, &info, sizeof(info))) return SIZE_MAX;
+  const auto base = reinterpret_cast<std::uintptr_t>(info.lpBaseOfDll), limit = base + info.SizeOfImage;
+  Handle snapshot(CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0)); THREADENTRY32 entry{}; entry.dwSize = sizeof(entry); std::size_t count = 0;
+  if (!snapshot || !Thread32First(snapshot.get(), &entry)) return SIZE_MAX;
+  do {
+    if (entry.th32OwnerProcessID != GetCurrentProcessId()) continue;
+    Handle thread(OpenThread(THREAD_QUERY_INFORMATION, FALSE, entry.th32ThreadID)); void* start = nullptr;
+    // ThreadQuerySetWin32StartAddress.
+    if (thread && query(thread.get(), 9, &start, sizeof(start), nullptr) >= 0) { const auto address = reinterpret_cast<std::uintptr_t>(start); if (address >= base && address < limit) ++count; }
+  } while (Thread32Next(snapshot.get(), &entry));
+  return count;
+}
+std::size_t process_threads() {
+  Handle snapshot(CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0)); THREADENTRY32 entry{}; entry.dwSize = sizeof(entry); std::size_t count = 0;
+  if (!snapshot || !Thread32First(snapshot.get(), &entry)) return SIZE_MAX;
+  do { if (entry.th32OwnerProcessID == GetCurrentProcessId()) ++count; } while (Thread32Next(snapshot.get(), &entry));
+  return count;
+}
+
+// The official SDK lifecycle in the isolated test DLL: shutdown with a pending hello read, a live read, a kernel-
+// backpressured v1 write, and v0 and v1 stalled together, each under 1,000 ms, then FreeLibrary and a reload.
+void dll_lifecycle(const char* path) {
+  Host host; const auto user = transport::current_user(); transport::OwnerSecurity security(user.sid); const auto self = transport::inspect_peer(GetCurrentProcessId());
+  const auto baseline = process_threads(); std::set<std::string> sessions;
+  for (unsigned scenario = 0; scenario < 4; ++scenario) {
+    const auto v0_directory = temporary_directory(security, L"ET004b-dll-v0-"), v1_directory = temporary_directory(security, L"ET004b-dll-v1-");
+    write_policy(v0_directory, security, user, self); write_policy(v1_directory, security, user, self);
+    HMODULE module = LoadLibraryA(path); require(module != nullptr, "isolated test DLL load");
+    auto init = reinterpret_cast<decltype(&scs_telemetry_init)>(GetProcAddress(module, "scs_telemetry_init"));
+    auto shutdown_export = reinterpret_cast<decltype(&scs_telemetry_shutdown)>(GetProcAddress(module, "scs_telemetry_shutdown"));
+    using SetDirectory = int (*)(const wchar_t*); using GetEndpoint = int (*)(wchar_t*, unsigned); using Flag = int (*)();
+    auto set_v0 = reinterpret_cast<SetDirectory>(GetProcAddress(module, "ets2telemetry_test_directory"));
+    auto set_v1 = reinterpret_cast<SetDirectory>(GetProcAddress(module, "ets2telemetry_test_v1_directory"));
+    auto v0_endpoint = reinterpret_cast<GetEndpoint>(GetProcAddress(module, "ets2telemetry_test_endpoint"));
+    auto v1_endpoint = reinterpret_cast<GetEndpoint>(GetProcAddress(module, "ets2telemetry_test_v1_endpoint"));
+    auto v0_pending = reinterpret_cast<Flag>(GetProcAddress(module, "ets2telemetry_test_write_pending"));
+    auto v1_pending = reinterpret_cast<Flag>(GetProcAddress(module, "ets2telemetry_test_v1_write_pending"));
+    auto attached = reinterpret_cast<Flag>(GetProcAddress(module, "ets2telemetry_test_v1_attached"));
+    require(init && shutdown_export && set_v0 && set_v1 && v0_endpoint && v1_endpoint && v0_pending && v1_pending && attached, "official exports and test-only seams");
+    require(set_v0(v0_directory.c_str()) && set_v1(v1_directory.c_str()), "isolated DLL directories");
+    const auto before_init = process_threads(); auto params = host.params(); require(init(SCS_TELEMETRY_VERSION_1_01, &params) == SCS_RESULT_ok, "official initialization");
+    require(attached() == 1, "the channel is attached after initialize");
+    std::array<wchar_t, 512> name{}; require(until([&] { return v1_endpoint(name.data(), static_cast<unsigned>(name.size())) != 0; }), "v1 endpoint ready");
+    const auto owned = module_threads(module); std::cout << "dllOwnedThreads=" << owned << " processThreads=" << process_threads() << " beforeInit=" << before_init << '\n';
+    require(process_threads() >= before_init + 3 && (owned == 0 || owned >= 3), "the DLL runs its workers");
+    std::unique_ptr<Client> client; Handle live;
+    if (scenario == 0) { client = std::make_unique<Client>(open_pipe(name.data()), true); Sleep(50); } // The hello read stays pending.
+    else {
+      client = std::make_unique<Client>(open_pipe(name.data()), true); client->handshake();
+      require(sessions.insert(client->session()).second, "a new pluginSessionId per reload");
+      cancelled(host, 2); host.frame();
+      require(client->read_until([&] { return client->covered() >= 2; }), "events from the DLL");
+      require(coverage_messages(*client)[0]->event && coverage_messages(*client)[0]->event->event_seq == 1, "eventSeq starts at 1 in the new plugin session");
+      if (scenario == 1) {
+        // A second initialization of the same session fails in the adapter; the channel is neither re-prepared nor re-attached.
+        require(init(SCS_TELEMETRY_VERSION_1_01, &params) == SCS_RESULT_already_registered && attached() == 1, "no second initialization in one session");
+        cancelled(host, 1); host.frame(); require(client->read_until([&] { return client->covered() >= 3; }) && coverage_messages(*client)[2]->event->event_seq == 3, "the session continues");
+      }
+      if (scenario == 3) {
+        std::array<wchar_t, 512> v0_name{}; require(until([&] { return v0_endpoint(v0_name.data(), static_cast<unsigned>(v0_name.size())) != 0; }), "v0 endpoint ready");
+        live = open_pipe(v0_name.data()); send(live.get(), framed(v0_hello));
+      }
+      if (scenario >= 2) {
+        scs_named_value_t big[]{named("cargo", text(long_name_n.c_str())), named("source.city", text(long_name_s.c_str())), scs_named_value_t{}};
+        const auto end = GetTickCount64() + 10000 * timing_scale;
+        const auto stall_started = GetTickCount64(); unsigned iterations = 0; ULONGLONG v0_since = 0, v1_since = 0;
+        // Each endpoint retires a write that stays pending for 1 s, and v0 fills its buffer far more slowly than v1. A
+        // connection whose write has been pending for 500 ms gets 16 KiB read, so that write finishes and the next one
+        // stalls again: both stay backpressured until both are pending at once. The raw bytes are discarded.
+        auto trickle = [](HANDLE pipe) { std::vector<std::uint8_t> sink; read_some(pipe, sink, 20, 16384); };
+        auto keep = [&](bool pending, ULONGLONG& since, HANDLE pipe) {
+          const auto now = GetTickCount64();
+          if (!pending) since = 0; else if (!since) since = now; else if (now - since >= 500) { trickle(pipe); since = 0; }
+        };
+        // Paced bursts of large job records: a flood would keep the worker measuring events instead of writing them.
+        while (!(v1_pending() && (scenario == 2 || v0_pending())) && GetTickCount64() < end) {
+          for (int k = 0; k < 10; ++k) host.config("job", big);
+          host.frame(); ++iterations; Sleep(1);
+          if (scenario == 3) { keep(v1_pending() != 0, v1_since, client->pipe.get()); keep(v0_pending() != 0, v0_since, live.get()); }
+        }
+        std::cout << "stallMs=" << GetTickCount64() - stall_started << " iterations=" << iterations << " v0Pending=" << v0_pending() << " v1Pending=" << v1_pending() << std::endl;
+        require(v1_pending() != 0 && (scenario == 2 || v0_pending() != 0), scenario == 2 ? "DLL kernel-backpressured v1 write" : "DLL v0 and v1 writes stalled together");
+      }
+    }
+    const auto started = GetTickCount64(); shutdown_export(); const auto elapsed = GetTickCount64() - started;
+    std::cout << "dll scenario=" << scenario << " shutdownMs=" << elapsed << '\n';
+    require(elapsed < 1000, "official shutdown joins every worker under 1,000 ms");
+    require(attached() == 0, "explicit attach_events(nullptr) before shutdown returns");
+    // Every worker the DLL started has exited. Where the sanitizer intercepts thread creation, start addresses are not
+    // attributable to the module, and the process thread count is the evidence.
+    if (owned) require(module_threads(module) == 0, "no DLL-owned thread survives shutdown");
+    require(until([&] { return process_threads() <= before_init; }, 2000), "the process thread count returns to its value before initialization");
+    client.reset(); live.reset();
+    require(FreeLibrary(module) != FALSE, "test DLL unload after joined workers");
+    require(host.wrong_thread == 0, "the DLL's workers make no SDK API call");
+    remove_directory(v0_directory); remove_directory(v1_directory);
+  }
+  require(until([&] { return process_threads() <= baseline; }, 5000), "the thread count returns to its baseline");
+  std::cout << "threads baseline=" << baseline << " after=" << process_threads() << '\n';
+}
+} // namespace
+
+int main(int argc, char** argv) {
+  try {
+    const std::map<std::string, std::function<void()>> cases{
+      {"handshake", handshake}, {"live-only", live_only}, {"durable", durable_delivery}, {"redelivery", redelivery}, {"stalled-reader", stalled_reader},
+      {"fuzz", fuzz}, {"rejection", rejection}, {"collision", collision}, {"policy", policy}, {"v0-isolation", v0_isolation}, {"cap0-isolation", cap0_isolation}, {"shutdown", shutdown}
+#ifdef ETS2TELEMETRY_TRANSPORT_TEST_HOOKS
+      , {"retention", [] { retention(); Fixture clamp; clamp.start(); capture_clamp(clamp); }}, {"overflow", overflow}, {"ack-control", ack_control}, {"exhaustion", exhaustion}, {"invariant", invariant}
+#endif
+    };
+    auto timed = [](const std::string& name, const std::function<void()>& fn) { const auto start = GetTickCount64(); std::cout << name << '\n' << std::flush; fn(); std::cout << name << " elapsedMs=" << GetTickCount64() - start << '\n' << std::flush; };
+    if (argc == 3 && std::string(argv[1]) == "dll") timed("dll", [&] { dll_lifecycle(argv[2]); });
+    else if (argc == 2) timed(argv[1], cases.at(argv[1]));
+    else for (const auto& entry : cases) timed(entry.first, entry.second);
+    std::cout << "Actual Windows protocol v1 endpoint: " << assertions << " assertions passed; second-user/remote/game checks pending\n"; return 0;
+  } catch (const std::exception& e) { std::cerr << "v1 transport failure after " << assertions << " assertions: " << e.what() << '\n'; return 1; }
+}
