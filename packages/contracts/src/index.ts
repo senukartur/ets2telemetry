@@ -1,7 +1,7 @@
 // Scaffold status only. The telemetry wire protocol belongs to ET-002a.
 export interface ScaffoldStatus { service: 'ready'; storage: 'verified'; synthetic: true }
 import type {CurrentState, SourceIdentity, AppliedState, CaptureTime} from './protocol-v0';
-import type {AppState, OverlayLayout, OverlaySectionId, OverlaySections, SettingsView, UnitGame, UnitProfile} from './app-state';
+import type {AppState, OverlayEditState, OverlayLayout, OverlaySectionId, OverlaySections, SettingsView, UnitGame, UnitProfile} from './app-state';
 export type SourceSelection = 'game' | 'ets2' | 'ats' | 'synthetic' | 'replay';
 export interface LiveTelemetry {
   selection: SourceSelection;
@@ -35,6 +35,17 @@ export interface DesktopBridge {
   setOverlayLayout(layout: OverlayLayout): Promise<SettingsView>;
   /** Persists the complete overlay section set: exactly the fourteen ids, booleans only, at least one enabled. */
   setOverlaySections(sections: OverlaySections): Promise<SettingsView>;
+  /**
+   * Enters the overlay edit mode for the saved layout (ET-012b): the overlay becomes draggable while this application is
+   * in front. Refused while settings are read-only or the application exits. Nothing is saved until `finishOverlayEdit`.
+   */
+  beginOverlayEdit(): Promise<OverlayEditState>;
+  /** Sets the edited scale: exactly one finite number in [0.5, 2], rounded to two decimals. */
+  setOverlayEditScale(scale: number): Promise<OverlayEditState>;
+  /** Moves the edited placement back to the layout's default anchor at scale 1. */
+  resetOverlayEditPlacement(): Promise<OverlayEditState>;
+  /** Leaves edit mode: `save` persists the edited placement (applied after the durable write), `cancel` discards it. */
+  finishOverlayEdit(outcome: 'save' | 'cancel'): Promise<SettingsView>;
 }
 /**
  * One overlay section, formatted by main in the displayed game's unit profile. `value`: current text with an optional
@@ -62,6 +73,8 @@ export interface OverlayPresentation {
   paused: boolean;
   /** The sections to render, in canonical order. */
   sections: readonly OverlaySectionView[];
+  /** The overlay edit mode (ET-012b): the renderer outlines the overlay and marks it as a drag region. Display only. */
+  editing: boolean;
 }
 export interface OverlayBridge {
   subscribeOverlay(listener: (update: OverlayPresentation) => void): () => void;

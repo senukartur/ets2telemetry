@@ -43,9 +43,11 @@ const BASELINE_SECTIONS: ReadonlySet<OverlaySectionId> = new Set<OverlaySectionI
  * overlay keeps the shape of `previous`, the projection main published last: each remaining section it showed, plus
  * speed and fuel, becomes `unavailable`, so the layout does not jump and no stale value looks current. Sections that
  * were hidden stay hidden until the data is current again, as in the overlay preload's own expiry (`staleOverlay`).
+ *
+ * `editing` (ET-012b) only marks the overlay edit mode for the renderer; it changes no section or value.
  */
 export function overlayPresentation(live: LiveTelemetry, units: UnitProfiles = DEFAULT_UNIT_PROFILES, overlay: OverlaySettings = DEFAULT_OVERLAY_SETTINGS,
-  previous?: OverlayPresentation): OverlayPresentation {
+  previous?: OverlayPresentation, editing = false): OverlayPresentation {
   const observation = live.observation;
   const explicitFixture = isExplicitFixture(live);
   const game = displayGame(live), profile = profileFor(units, game);
@@ -85,6 +87,7 @@ export function overlayPresentation(live: LiveTelemetry, units: UnitProfiles = D
     freshness: current ? 'current' : live.status === 'stale' ? 'stale' : 'unavailable',
     layout: overlay.layout,
     paused: current && view.connection.paused,
-    sections
+    sections,
+    editing
   };
 }

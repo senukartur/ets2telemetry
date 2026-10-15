@@ -15,7 +15,8 @@ class Port {
 let bridge: OverlayBridge;
 let ipc: EventEmitter & {send: ReturnType<typeof vi.fn>};
 const projected: OverlayPresentation = {source: 'ETS2', origin: 'synthetic', status: 'connected', speed: '90.0', fuel: '73.0', speedUnit: 'km/h', fuelUnit: 'L', freshness: 'current',
-  layout: 'card', paused: true, sections: [{id: 'speed', state: 'value', text: '90.0 km/h'}, {id: 'rpm', state: 'value', text: '1500 rpm', ring: 0.5}, {id: 'fuel', state: 'unavailable'}]};
+  layout: 'card', paused: true, sections: [{id: 'speed', state: 'value', text: '90.0 km/h'}, {id: 'rpm', state: 'value', text: '1500 rpm', ring: 0.5}, {id: 'fuel', state: 'unavailable'}],
+  editing: false};
 beforeEach(async () => {
   vi.useFakeTimers(); vi.resetModules(); ipc = Object.assign(new EventEmitter(), {send: vi.fn()});
   const started = Date.now(); vi.spyOn(performance, 'now').mockImplementation(() => Date.now() - started);
@@ -150,6 +151,17 @@ it('blanks every section on quiet transport expiry and keeps the layout and unit
   const receive = vi.fn(), stop = bridge.subscribeOverlay(receive), port = attach(); port.deliver(projected);
   await vi.advanceTimersByTimeAsync(500);
   expect(receive.mock.lastCall?.[0]).toEqual({source: 'ETS2', origin: 'synthetic', status: 'stale', speed: '—', fuel: '—', speedUnit: 'km/h', fuelUnit: 'L',
-    freshness: 'stale', layout: 'card', paused: false, sections: [{id: 'speed', state: 'unavailable'}, {id: 'rpm', state: 'unavailable'}, {id: 'fuel', state: 'unavailable'}]});
+    freshness: 'stale', layout: 'card', paused: false, sections: [{id: 'speed', state: 'unavailable'}, {id: 'rpm', state: 'unavailable'}, {id: 'fuel', state: 'unavailable'}], editing: false});
+  stop();
+});
+
+// ET-012b: the quiet deadline keeps main's edit mode flag; only main's next delivery changes it.
+it('keeps the edit mode flag on quiet transport expiry and starts each subscription in driving mode', async () => {
+  const receive = vi.fn(), stop = bridge.subscribeOverlay(receive), port = attach();
+  expect(receive.mock.lastCall?.[0]).toMatchObject({editing: false});
+  port.deliver({...projected, editing: true}); expect(receive.mock.lastCall?.[0]).toMatchObject({editing: true, freshness: 'current'});
+  await vi.advanceTimersByTimeAsync(500);
+  expect(receive.mock.lastCall?.[0]).toMatchObject({editing: true, freshness: 'stale', speed: '—'});
+  port.deliver({...projected, editing: false}, 2); expect(receive.mock.lastCall?.[0]).toMatchObject({editing: false});
   stop();
 });

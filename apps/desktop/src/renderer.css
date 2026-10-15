@@ -69,3 +69,8 @@ html:has(.overlay-body) { background: transparent; }
 .overlay-hud-line { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
 .overlay-hud .overlay-icon { filter: drop-shadow(0 1px 1px #000); align-self: center; }
 .overlay-hud .overlay-value { font-size: 16px; }
+
+/* Edit mode (ET-012b): the whole overlay is a native drag region with a dashed outline and a light fill, so the user
+   can see and grab it over the game. Main makes the window movable and interactive only while it shows it for editing;
+   in driving mode nothing here receives input. No hint text: the dashboard explains the controls. */
+.overlay.is-editing { pointer-events: auto; cursor: move; app-region: drag; -webkit-app-region: drag; outline: 2px dashed rgba(79, 179, 246, .95); outline-offset: -2px; background: rgba(79, 179, 246, .14); }

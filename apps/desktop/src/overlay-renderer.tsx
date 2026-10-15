@@ -5,7 +5,8 @@ import {overlayView, type OverlayItem, type OverlayTag, type OverlayView} from '
 import './renderer.css';
 
 // Display-only overlay (ET-008, layouts ET-012a). It renders main's formatted projection and holds no source, window,
-// file or settings authority. Every layout has its own minimal CSS in renderer.css; no Tailwind or shadcn styles.
+// file or settings authority. Every layout has its own minimal CSS in renderer.css; no Tailwind or shadcn styles. The edit
+// mode (ET-012b) only adds an outline and a drag region; it shows no hint text and has no controls.
 
 /** Ring geometry of the cluster's RPM gauge in SVG user units. */
 const RING_RADIUS = 52, RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
@@ -90,9 +91,10 @@ export default function Overlay() {
   const [live, setLive] = useState<OverlayPresentation>();
   useEffect(() => window.overlay.subscribeOverlay(setLive), []);
   const view = useMemo(() => overlayView(live), [live]);
-  return <main data-testid="overlay-root" className={`overlay overlay-${view.layout}${view.dim ? ' is-dim' : ''}`} aria-label="Telemetry overlay"
+  // While editing (ET-012b) the whole root is a native drag region; main alone makes the window movable and interactive.
+  return <main data-testid="overlay-root" className={`overlay overlay-${view.layout}${view.dim ? ' is-dim' : ''}${view.editing ? ' is-editing' : ''}`} aria-label="Telemetry overlay"
     data-layout={view.layout} data-source={view.source} data-origin={view.origin} data-status={view.status} data-freshness={view.freshness}
-    data-paused={String(view.paused)}>
+    data-paused={String(view.paused)} data-editing={String(view.editing)}>
     {view.layout === 'card' ? <CardLayout view={view} /> : view.layout === 'cluster' ? <Cluster view={view} /> : view.layout === 'hud' ? <Hud view={view} /> : <Strip view={view} />}
   </main>;
 }

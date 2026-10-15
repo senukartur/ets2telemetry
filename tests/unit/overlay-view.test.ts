@@ -8,7 +8,7 @@ const base: OverlayPresentation = {source: 'ETS2', origin: 'game', status: 'conn
   freshness: 'current', layout: 'strip', paused: false, sections: [
     {id: 'speed', state: 'value', text: '90.0 km/h'}, {id: 'rpm', state: 'value', text: '1500 rpm', ring: 0.5},
     {id: 'fuel', state: 'value', text: '250.0 L', detail: '25%'}, {id: 'sdk-consumption', state: 'value', text: '25.0 L/100 km'},
-    {id: 'cargo', state: 'value', text: 'cargo.logs'}, {id: 'game-time', state: 'value', text: 'Day 1, 08:00'}]};
+    {id: 'cargo', state: 'value', text: 'cargo.logs'}, {id: 'game-time', state: 'value', text: 'Day 1, 08:00'}], editing: false};
 
 it('keeps the speed and fuel number apart from their unit and labels the SDK mean', () => {
   const view = overlayView(base);
@@ -55,4 +55,13 @@ it('dims stale placeholders and tags no signal, paused and non-game origins', ()
 it('shows no signal and no sections before the first delivery', () => {
   expect(overlayView()).toMatchObject({layout: 'strip', source: 'No game', dim: true, items: [], groups: [], panel: [],
     tags: [{id: 'no-signal', testId: 'overlay-tag-no-signal', text: 'No signal'}]});
+});
+
+// ET-012b: the renderer only outlines the overlay and marks it as a drag region while editing.
+it('passes the edit mode through and starts in driving mode before the first delivery', () => {
+  expect(overlayView(base).editing).toBe(false);
+  expect(overlayView({...base, editing: true}).editing).toBe(true);
+  expect(overlayView().editing).toBe(false);
+  // The arrangement is the same in both modes.
+  expect({...overlayView({...base, editing: true}), editing: false}).toEqual(overlayView(base));
 });

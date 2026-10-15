@@ -10,7 +10,7 @@ let recovery: ReturnType<typeof setTimeout> | undefined;
 let expiry: ReturnType<typeof setTimeout> | undefined;
 let budget = new RecoveryBudget();
 const unavailable: OverlayPresentation = {source: 'No game', origin: 'none', status: 'waiting', speed: '—', fuel: '—', speedUnit: 'km/h', fuelUnit: 'L', freshness: 'unavailable',
-  layout: 'strip', paused: false, sections: []};
+  layout: 'strip', paused: false, sections: [], editing: false};
 let current = unavailable;
 function close(): void {const previous = port; port = undefined; previous?.close(); clearTimeout(expiry); expiry = undefined;}
 // Stale keeps the layout and the section list, each section as an unavailable placeholder, so nothing old looks current.

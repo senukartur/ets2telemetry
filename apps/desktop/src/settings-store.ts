@@ -1,7 +1,8 @@
 import {randomUUID} from 'node:crypto';
 import * as nodeFs from 'node:fs/promises';
 import path from 'node:path';
-import type {OverlayLayout, OverlaySections, SettingsSaveError, SettingsState, SettingsView, UnitGame, UnitProfile} from '../../../packages/contracts/src';
+import type {OverlayLayout, OverlayPlacement, OverlaySections, SettingsSaveError, SettingsState, SettingsView, UnitGame, UnitProfile} from '../../../packages/contracts/src';
+import {withPlacement} from './overlay-placement';
 import {enabledSectionCount} from './overlay-sections';
 import type {DiagnosticFacts} from './diagnostics';
 import {dataPaths} from './paths';
@@ -172,6 +173,18 @@ export class SettingsStore {
     const copy: OverlaySections = Object.freeze({...sections});
     return this.enqueue(settings => ({next: {...settings, overlay: Object.freeze({...settings.overlay, sections: copy})},
       facts: {overlaySections: enabledSectionCount(copy)}}));
+  }
+
+  /**
+   * Serialized save of one layout's placement from the overlay edit mode (ET-012b), already validated by main. Only that
+   * layout's placement changes, normalised to four decimals for x and y and two for the scale; the facts name the layout
+   * and the scale, never a position.
+   */
+  setOverlayPlacement(layout: OverlayLayout, placement: OverlayPlacement): Promise<SettingsView> {
+    return this.enqueue(settings => {
+      const placements = withPlacement(settings.overlay.placements, layout, placement);
+      return {next: {...settings, overlay: Object.freeze({...settings.overlay, placements})}, facts: {overlayPlacement: layout, overlayScale: placements[layout].scale}};
+    });
   }
 
   /**

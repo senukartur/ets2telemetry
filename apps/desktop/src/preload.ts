@@ -3,6 +3,7 @@ import type {AppState, DesktopBridge, LiveTelemetry} from '../../../packages/con
 import {initialLive, sourceSelection} from './live-state';
 import {RecoveryBudget} from './recovery-budget';
 import {isOverlayLayout, parseOverlaySections} from './overlay-sections';
+import {isOverlayEditOutcome, parseOverlayEditScale} from './overlay-placement';
 import {isUnitGame, isUnitProfile} from './unit-profiles';
 let listener: ((update: LiveTelemetry) => void) | undefined;
 let port: MessagePort | undefined;
@@ -116,6 +117,16 @@ const bridge: DesktopBridge = {
   setOverlaySections: sections => {
     const copy = parseOverlaySections(sections);
     return copy ? ipcRenderer.invoke('settings:set-overlay-sections', {...copy}) : Promise.reject(new Error('Invalid overlay sections request'));
-  }
+  },
+  // ET-012b overlay edit mode: fixed channels; only a validated scale or outcome is forwarded, and main validates again.
+  beginOverlayEdit: () => ipcRenderer.invoke('overlay-edit:begin'),
+  setOverlayEditScale: scale => {
+    const value = parseOverlayEditScale(scale);
+    return value === undefined ? Promise.reject(new Error('Invalid overlay edit request')) : ipcRenderer.invoke('overlay-edit:set-scale', value);
+  },
+  resetOverlayEditPlacement: () => ipcRenderer.invoke('overlay-edit:reset'),
+  finishOverlayEdit: outcome => isOverlayEditOutcome(outcome)
+    ? ipcRenderer.invoke('overlay-edit:finish', outcome)
+    : Promise.reject(new Error('Invalid overlay edit request'))
 };
 contextBridge.exposeInMainWorld('desktop', Object.freeze(bridge));

@@ -255,5 +255,55 @@ export async function runOverlaySmoke(application, dashboard, overlay, source, r
     return roots.length === 1 && roots[0].getAttribute('data-layout') === 'card' ? roots[0].getAttribute('data-layout') : false;
   }, undefined, {timeout: 10000, polling: 50});
   try {result.layoutSwitch = {requested: 'card', saved: saved.overlay.layout, rendered: await rendered.jsonValue()};} finally {await rendered.dispose();}
+  result.editMode = await runEditStep(application, dashboard, overlay);
   return result;
+}
+
+// Self-contained browser callback: the overlay root's edit marker and the styles that make it a visible drag region.
+function overlayEditing(expected) {
+  const roots = globalThis.document.querySelectorAll('[data-testid="overlay-root"]');
+  if (roots.length !== 1 || roots[0].getAttribute('data-editing') !== expected) return false;
+  const style = globalThis.getComputedStyle(roots[0]);
+  return {editing: expected, cursor: style.cursor, outlineStyle: style.outlineStyle, pointerEvents: style.pointerEvents};
+}
+async function waitForEditing(page, expected) {
+  const handle = await page.waitForFunction(overlayEditing, expected, {timeout: 10000, polling: 50});
+  try {return await handle.jsonValue();} finally {await handle.dispose();}
+}
+async function zoomFactors(application) {
+  const windows = await application.evaluate(({BrowserWindow}) => BrowserWindow.getAllWindows().map(window =>
+    ({url: window.webContents.mainFrame.url, zoom: window.webContents.getZoomFactor()})));
+  const of = search => windows.filter(window => new URL(window.url).search === search).map(window => window.zoom);
+  return {overlay: of('?view=overlay'), dashboard: of('')};
+}
+
+// ET-012b edit mode (REG-016, REG-017). The synthetic source has no game window, so edit mode waits for the game: the
+// overlay never shows, never becomes focusable and stays topmost while its document is marked as editing. A saved scale
+// reaches only the overlay's zoom factor; the dashboard keeps 1 in its own session. Recorded for review only;
+// RuntimeReceipt.ps1 does not validate this field.
+async function runEditStep(application, dashboard, overlay) {
+  const step = {};
+  step.zoomBefore = await zoomFactors(application);
+  assert.deepEqual(step.zoomBefore, {overlay: [1], dashboard: [1]});
+  step.begun = await dashboard.evaluate(() => globalThis.desktop.beginOverlayEdit());
+  assert.deepEqual(step.begun, {active: true, layout: 'card', scale: 1, placement: 'waiting-for-game'});
+  step.renderedWhileEditing = await waitForEditing(overlay, 'true');
+  assert.deepEqual(step.renderedWhileEditing, {editing: 'true', cursor: 'move', outlineStyle: 'dashed', pointerEvents: 'auto'});
+  // windowSecurity requires the overlay hidden, not focusable and topmost.
+  step.windowsWhileEditing = await windowSecurity(application);
+  await assert.rejects(dashboard.evaluate(() => globalThis.desktop.setOverlayLayout('hud')), /cannot change while its position is edited/);
+  step.layoutLocked = true;
+  step.scaled = await dashboard.evaluate(() => globalThis.desktop.setOverlayEditScale(1.5));
+  assert.deepEqual(step.scaled, {active: true, layout: 'card', scale: 1.5, placement: 'waiting-for-game'});
+  step.saved = await dashboard.evaluate(() => globalThis.desktop.finishOverlayEdit('save'));
+  assert.equal(step.saved.overlay.layout, 'card');
+  assert.deepEqual(step.saved.overlay.placements.card, {x: 1, y: 0, scale: 1.5});
+  step.renderedAfterSave = await waitForEditing(overlay, 'false');
+  assert.equal(step.renderedAfterSave.outlineStyle, 'none');
+  step.appState = (await dashboard.evaluate(() => globalThis.desktop.getAppState())).overlayEdit;
+  assert.deepEqual(step.appState, {active: false});
+  step.windowsAfterSave = await windowSecurity(application);
+  step.zoomAfterSave = await zoomFactors(application);
+  assert.deepEqual(step.zoomAfterSave, {overlay: [1.5], dashboard: [1]});
+  return step;
 }
