@@ -110,6 +110,10 @@ function runApplication(profileError: unknown): void {
     exhausted: () => {updateHealth({type: 'service-restart-exhausted'});
       const update: LiveTelemetry = {...initialLive(selection), status: 'service-failed', reason: 'Automatic service restart limit reached'};
       freshness.invalidate(update); window?.webContents.send('telemetry:service-state', update);},
+    // Every stop that did not start as an exit request is fatal (renderer or overlay exhaustion, configuration or
+    // load failure, recovery timeout, ...): mark the application exiting at once so nothing reopens a window, the
+    // overlay may close and the tray shows the exiting state. Exit codes and bounds are unchanged.
+    stopping: () => {if (lifecycle.abort()) {updateHealth({type: 'exit-requested'}, true); retireLive();}},
     // The failed service is being terminated: retire its readiness, status and live channels now rather than when
     // its exit arrives (up to 3000 ms later). The later state callback finds them already retired.
     failure: code => {failureReported = true; serviceReady = false; selectionPending = false; status = undefined; closeUpstream();

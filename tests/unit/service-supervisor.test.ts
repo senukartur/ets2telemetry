@@ -142,3 +142,12 @@ it.each(['report', 'timeout'])('keeps pre-readiness %s failures fatal even with 
   expect(f.supervisor.stopping).toBe(true); expect(f.service.postMessage).toHaveBeenCalledExactlyOnceWith({type: 'stop'});
   f.supervisor.serviceExited(0); expect(f.exit).toHaveBeenCalledExactlyOnceWith(1);
 });
+it.each(['orderly', 'fatal'])('reports the start of an %s stop once, before the stop can finish', kind => {
+  const order: string[] = [];
+  const exit = vi.fn(() => order.push('exit')), stopping = vi.fn(() => order.push('stopping'));
+  const supervisor = new ServiceSupervisor(vi.fn(), exit, {restart: vi.fn(), state: vi.fn(), exhausted: vi.fn(), stopping});
+  if (kind === 'orderly') supervisor.stop(); else supervisor.fail('RENDERER_RESTART_EXHAUSTED');
+  supervisor.stop(); supervisor.fail('OVERLAY_LOAD_FAILED');
+  expect(stopping).toHaveBeenCalledOnce(); expect(order).toEqual(['stopping', 'exit']);
+  expect(exit).toHaveBeenCalledExactlyOnceWith(kind === 'orderly' ? 0 : 1);
+});

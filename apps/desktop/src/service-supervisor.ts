@@ -11,6 +11,8 @@ export interface SupervisorRecovery {
   exhausted(): void;
   /** A post-readiness service failure is being recovered by terminating the current service. */
   failure?(code: string): void;
+  /** The supervisor starts stopping, orderly or fatal; called once, before the stop can finish. */
+  stopping?(): void;
 }
 export class ServiceSupervisor {
   private service: SupervisedService | undefined;
@@ -91,6 +93,7 @@ export class ServiceSupervisor {
     this.stopping = true;
     this.clearTimers();
     this.log('APP_STOP_REQUESTED');
+    this.recovery?.stopping?.();
     if (!this.service || this.exited) {this.finish(); return;}
     // Arm both deadlines before IPC. A failed send/kill cannot cancel the final deadline.
     this.timers.push(setTimeout(() => {

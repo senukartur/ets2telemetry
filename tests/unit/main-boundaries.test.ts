@@ -820,3 +820,21 @@ it('retires readiness, status and live channels as soon as a post-readiness fail
   expect(children[1].postMessage).toHaveBeenCalledWith({type: 'select', source: 'ats', broker: undefined});
   expect(app.exit).not.toHaveBeenCalled();
 });
+it.each(['overlay-restart-exhausted', 'service-recovery-timeout'] as const)('marks the application exiting at the start of a fatal %s stop', async trigger => {
+  trayAvailable = true; await ready();
+  if (trigger === 'overlay-restart-exhausted') for (let crash = 0; crash < 3; crash++) overlayContents.emit('render-process-gone', {}, {reason: 'crashed'});
+  else {child.emit('message', {type: 'failed', code: 'SERVICE_START_FAILED'}); await vi.advanceTimersByTimeAsync(3000);}
+  expect(child.postMessage).toHaveBeenCalledWith({type: 'stop'}); expect(app.exit).not.toHaveBeenCalled();
+  // During the stop window: the dashboard may close, nothing reopens it, the overlay may close and the tray is disabled.
+  expect(closeDashboard().preventDefault).not.toHaveBeenCalled();
+  const count = windows.length;
+  app.emit('second-instance', {}, [], 'C:\\isolated'); trays[0].emit('click');
+  expect(windows).toHaveLength(count); expect(log).toHaveBeenCalledWith('SECOND_INSTANCE', undefined, {action: 'ignored-exiting'});
+  const overlayClose = {preventDefault: vi.fn()}; windows[1].emit('close', overlayClose); expect(overlayClose.preventDefault).not.toHaveBeenCalled();
+  expect(trayMenuItem('Open ETS2Telemetry').enabled).toBe(false); expect(trayMenuItem('Exit ETS2Telemetry').enabled).toBe(false);
+  expect(trays[0].setToolTip).toHaveBeenLastCalledWith('ETS2Telemetry\nExiting');
+  expect(log).not.toHaveBeenCalledWith('APP_EXIT_REQUESTED', undefined, expect.anything());
+  child.emit('exit', trigger === 'overlay-restart-exhausted' ? 0 : 1);
+  expect(app.exit).toHaveBeenCalledExactlyOnceWith(1);
+  expect(trays[0].destroy.mock.invocationCallOrder[0]).toBeLessThan(app.exit.mock.invocationCallOrder[0]);
+});

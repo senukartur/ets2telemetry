@@ -50,11 +50,22 @@ export class ExitCoordinator {
   private idleTimer: unknown;
   private idleDone = true;
   private finishing = false;
+  private aborted = false;
   private exitCode?: number;
   constructor(private readonly hooks: ExitHooks, private readonly timers: ExitTimers = systemTimers) {}
 
-  /** True once any exit has started, including a fatal supervisor exit. */
-  get exiting(): boolean {return this.requested !== undefined || this.finishing;}
+  /** True once any exit has started, including a fatal stop that is still running. */
+  get exiting(): boolean {return this.requested !== undefined || this.aborted || this.finishing;}
+
+  /**
+   * A fatal stop that did not come through `request`: from now on the application is exiting, so nothing
+   * reopens or keeps a window. Logs no exit request and calls no hook; returns whether it newly started exiting.
+   */
+  abort(): boolean {
+    if (this.exiting) return false;
+    this.aborted = true;
+    return true;
+  }
   get reason(): ExitReason | undefined {return this.requested;}
 
   request(reason: ExitReason): boolean {

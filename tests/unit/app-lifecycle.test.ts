@@ -65,3 +65,14 @@ it('still exits when removing the tray icon throws', () => {
   f.coordinator.request('tray'); f.coordinator.finish(0);
   expect(f.hooks.exit).toHaveBeenCalledExactlyOnceWith(0); expect(f.hooks.log).toHaveBeenCalledWith('TRAY_DESTROY_REJECTED', expect.any(String));
 });
+
+it('marks a fatal stop as exiting at once without logging an exit request or running exit hooks', () => {
+  const f = fixture();
+  expect(f.coordinator.abort()).toBe(true); expect(f.coordinator.abort()).toBe(false);
+  expect(f.coordinator.exiting).toBe(true); expect(f.coordinator.reason).toBeUndefined();
+  expect(f.coordinator.request('tray')).toBe(false);
+  expect(f.order).toEqual([]); expect(f.hooks.log).not.toHaveBeenCalled();
+  f.coordinator.finish(1); expect(f.order).toEqual(['tray', 'exit 1']);
+  const requested = fixture(); requested.coordinator.request('renderer');
+  expect(requested.coordinator.abort()).toBe(false);
+});
