@@ -130,6 +130,19 @@ The notification-area icon itself cannot be clicked by the harness, so the journ
 
 Measured local durations on the owner workstation (24 logical processors, so the 25% cap is 6 processors), October 15, 2026: development lifecycle Job 2.35–2.37 s, packaged 2.25–2.31 s; second-instance exit 137–165 ms; explicit exit 96–184 ms; run B close 120–145 ms. Hosted runners have two logical processors and a 0.5-processor cap; hosted durations belong in the PR's CI record. The pre-authorized split into a separate restart scenario was not needed locally.
 
+## ET-011b settings in the lifecycle smoke
+
+ET-011b extends the same `lifecycle` journey in both modes; the Job limits, deadlines and zero retries are unchanged and no scenario was added. Before run A launches, the driver writes a deliberately truncated `settings.json` into the isolated `LOCALAPPDATA` (`ETS2Telemetry\settings`).
+
+- Run A start: the read-only lifecycle facts must report `invalid-file` with the default units (ETS2 `metric`, ATS `us-customary`), the dashboard must show the invalid-file explanation, and the settings directory must still contain only the seeded file, byte-identical.
+- After the tray reopen (step 4), the dashboard calls `setUnitProfile('ets2', 'us-customary')`. It must resolve with `loaded`; the directory must then hold exactly one `settings.rejected-<UTC>.json` with the seeded bytes and a `settings.json` with the exact v1 content. The dashboard must show `Speed: 55.9 mph` and `Fuel: 19.3 US gal`, and the hidden overlay `55.9` mph and `19.3` US gal as current, for the unchanged 25 m/s and 73 L source.
+- Run B must report `loaded` with ETS2 `us-customary`, show the same mph and US gallon readings, and leave both files unchanged.
+- Diagnostics: run A logs exactly `SETTINGS_FALLBACK` (`invalid-file`), `SETTINGS_QUARANTINED` and `SETTINGS_SAVED`; run B logs only `SETTINGS_LOADED` (`loaded`).
+
+The additive `Test-LifecycleSettingsReceipt` rules in `RuntimeReceipt.ps1` reject a missing, false or non-boolean settings flag, a quarantine count other than 1 (checked with `Test-ReceiptInteger`, so PowerShell 7's Int64 values pass), unconverted or stale overlay readings, a dashboard without mph or US gallons in either run, a restart that did not load the saved file and missing, extra or wrong settings diagnostics, including a save in run B. Their negative cases, one with Int64 integers, run in the existing PowerShell batch of `tests/unit/runtime-receipt.test.ts`.
+
+Measured local durations on the owner workstation (24 logical processors), October 15, 2026, on `18b8348`: development lifecycle Job 2.82 s and 2.84 s, packaged 2.62 s, up from about 2.3–2.4 s for ET-011a. Hosted durations belong in the PR's CI record.
+
 ## PowerShell validator test budgets
 
 Five Node test files run production or fixture rules under Windows PowerShell 5.1 (`powershell.exe`). Starting that process dominates their cost: locally a bare `-NoProfile` start takes about 0.2 s, and dot-sourcing `RuntimeReceipt.ps1` and validating one receipt about 0.45 s per process. Hosted runners are slower and vary by runner: the installer helper fixture takes 1.2 s locally and 2.1–2.4 s hosted. Two tests intermittently failed on slow runners in October 2026:
