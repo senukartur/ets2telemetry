@@ -247,3 +247,16 @@ The production durable path and every real-game, TruckersMP and performance chec
 ### ET-012a overlay layouts and sections
 
 ET-012a adds pure, hand-checked tests for the per-layout geometry (`overlay-geometry.test.ts`), the overlay section projection over the v0 fixture (`overlay-presentation.test.ts`), the renderer's view model (`overlay-view.test.ts`) and the section and preset definitions (`overlay-sections.test.ts`), and extends the settings, controller, preload and main-boundary suites for settings format v2 and the two overlay IPC channels. React components are not unit-tested (decision L14). The overlay smoke reads a new DOM contract and saves a layout in its final step; the receipt and `RuntimeReceipt.ps1` are unchanged. Real-game visibility, readability, click-through and focus of each layout remain pending; see [ET-012a validation](docs/validation/et-012a.md).
+
+## ET-014 trip reducer — October 15, 2026
+
+Under the owner's standing delegation of October 15, 2026 the coordinator started ET-014 with decisions T1–T20 ([concept.md](concept.md#et-014-authorization--october-15-2026)), which the owner did not review individually. PR-1 adds the pure trip lifecycle and completeness reducer ([trips](docs/trips.md)). Its tests:
+
+- `tests/unit/trip-identity.test.ts`: SHA-256 against NIST vectors and `node:crypto`, the trip UUID derivation, and the job key without `cargoLoaded`.
+- `tests/unit/trip-reducer.test.ts`: a table of transitions with hand-written effects. Each case names its basis: an observation O1–O11, an October 13–14 concept decision, or synthetic inference.
+- `tests/unit/trip-reducer-replay.test.ts`: prefix rebuild equals the single run, redelivery changes nothing, and seeded random streams are checked against a model of the storage effect rules.
+- `tests/storage/trip-effects.test.ts` (`npm run test:storage`): reducer effects committed through the real storage core to temporary synthetic databases.
+
+`tests/unit/telemetry-core-boundaries.test.ts` now allows telemetry-core a type-only import of exactly `packages/storage/src/api.ts`.
+
+Expected effects and rows come from the specification, the observations and the decisions, never from reducer output. The tests give partial domain protection to REG-001 to REG-006 and REG-008 ([registry](docs/regression-registry.md)). Readings accounting and the simulator replay (PR-2) extend REG-008 and its text. All of this is synthetic evidence: no game, TruckersMP, display or performance behaviour follows; see [ET-014 validation](docs/validation/et-014.md).
