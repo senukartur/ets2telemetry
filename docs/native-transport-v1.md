@@ -159,7 +159,7 @@ The endpoint follows the v0 security model ([protocol v1 §12](protocol/v1.md#12
 
 Each iteration, at most 10 ms apart:
 
-1. drain the ring into the store and call `expire(now)` (Caller sequence steps 3–4);
+1. drain the ring into the store and call `expire(now)` (Caller sequence steps 3–4). A drain takes at most one ring's worth and, after its first slot, yields as soon as a stop is requested, because each record is measured by a full encode;
 2. track the one write in flight; a write still pending after 1 s closes the connection;
 3. read the client: an `ack` passes through `AckValidator::accept` and then `release()`; a `clock.probe` must have a strictly increasing `probeId` and arrive while no reply is unsent. Its receipt time is taken when the read completion is observed. Anything else, and any decoding error, closes the connection;
 4. write, while writes complete at once and at most 32 per iteration: an unsent clock reply first (its send time is the encode time, so received ≤ sent ≤ capture), then the replaceable snapshot at most every 50 ms, then on durable connections the next store item with `AckValidator::sent`.
@@ -184,17 +184,17 @@ The snapshot slot holds the latest v1 slot copy that differs from the last one s
 
 1. `v1.signal_stop()`, so `end` is written while CAP0 drains;
 2. CAP0 `stop()`;
-3. `v1.stop()`: repeated `CancelSynchronousIo` on the worker until it exits, then join;
+3. `v1.stop()`: repeated `CancelSynchronousIo` on the worker until it exits, then join. A cancellation is issued only while the worker is inside its inspection window (the peer image and policy reads), under a mutex that orders it with the window's open and close. Outside it, above all while the exit path deletes the discovery record, nothing is cancelled: a cancelled `SetFileInformationByHandle` fails with `STATUS_CANCELLED` and would leave the record behind;
 4. v0 `stop()`;
 5. the window monitor;
 6. `Adapter::shutdown()`;
 7. `attach_events(nullptr)`.
 
-At shutdown the worker lets an in-flight write finish, drains the ring, writes retained items the client has not received during the first 150 ms of the stop request and `end` with `plugin-shutdown` by 250 ms. A write that cannot finish by then is cancelled and no `end` follows a possibly cut frame. Every `CancelIoEx` is followed by `GetOverlappedResult` with `bWait` before the OVERLAPPED or its buffer is released. `shutdown_ms` and the 1,000 ms `shutdown_deadline_exceeded` flag are recorded after the mandatory join; the join is never skipped. There is no `DllMain` and no detached thread.
+At shutdown the worker lets an in-flight write finish, drains the ring until the 150 ms item cut-off (a record left in the ring is plugin-exit loss at or above the reported `nextEventSeq`, OD-5 S11), writes retained items the client has not received during the first 150 ms of the stop request and `end` with `plugin-shutdown` by 250 ms. A write that cannot finish by then is cancelled and no `end` follows a possibly cut frame: once a stop is requested every write wait is bounded by the 250 ms budget, and `finish()` runs once per connection, so a retirement that follows it never writes again. Every `CancelIoEx` is followed by `GetOverlappedResult` with `bWait` before the OVERLAPPED or its buffer is released. `shutdown_ms` and the 1,000 ms `shutdown_deadline_exceeded` flag are recorded after the mandatory join; the join is never skipped. There is no `DllMain` and no detached thread.
 
 ### Test seams
 
-The test DLL (`ETS2TELEMETRY_TRANSPORT_TEST_DLL`) exports `ets2telemetry_test_v1_directory`, `ets2telemetry_test_v1_endpoint`, `ets2telemetry_test_v1_write_pending` and `ets2telemetry_test_v1_attached`, which reads the adapter's own channel pointer (`Adapter::events_attached()`); `sdk-exports-contract` checks that none of these seams exists in the production DLL. It prepares, attaches and starts v1 only after a v1 directory is set, so the earlier DLL and CAP0 tests load a DLL whose v1 endpoint stays unused. The console cores built with `ETS2TELEMETRY_TRANSPORT_TEST_HOOKS` add `set_clock_offset_for_test` (a signed offset on every worker clock reading), `Server::skip_store_for_test` (offline coverage recorded in the store without the channel) and the hook points `v1-tick`, which can hold the worker at the start of an iteration, and `v1-finish`, which can hold it after a stop request and before the shutdown drain. The production DLL contains none of them.
+The test DLL (`ETS2TELEMETRY_TRANSPORT_TEST_DLL`) exports `ets2telemetry_test_v1_directory`, `ets2telemetry_test_v1_endpoint`, `ets2telemetry_test_v1_write_pending` and `ets2telemetry_test_v1_attached`, which reads the adapter's own channel pointer (`Adapter::events_attached()`); `sdk-exports-contract` checks that none of these seams exists in the production DLL. It prepares, attaches and starts v1 only after a v1 directory is set, so the earlier DLL and CAP0 tests load a DLL whose v1 endpoint stays unused. The console cores built with `ETS2TELEMETRY_TRANSPORT_TEST_HOOKS` add `set_clock_offset_for_test` (a signed offset on every worker clock reading), `Server::skip_store_for_test` (offline coverage recorded in the store without the channel) and the hook points `v1-tick`, which can hold the worker at the start of an iteration, `v1-finish`, which can hold it after a stop request and before the shutdown drain, and `v1-exit`, where a test performs synchronous I/O in the exit path to prove that `stop()` does not cancel it. `Server::end_attempts()` counts issued `end` writes. The production DLL contains none of them.
 
 ## Evidence
 
