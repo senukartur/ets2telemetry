@@ -7,6 +7,7 @@ import {Label} from '@/components/ui/label';
 import {RadioGroup, RadioGroupItem} from '@/components/ui/radio-group';
 import {dashboardFuel, dashboardSpeed} from './speed-display';
 import {createStartupLine} from './dashboard-startup';
+import {LiveDashboard} from './live-dashboard';
 import {DEFAULT_UNIT_PROFILES, displayProfile, isUnitProfile, UNIT_GAMES, UNIT_PROFILE_IDS} from './unit-profiles';
 import {APP_ERROR_TEXT, SERVICE_HEALTH_TEXT, SETTINGS_SAVE_ERROR_TEXT, SETTINGS_STATE_TEXT, STORAGE_HEALTH_TEXT, STRINGS, UNIT_GAME_TEXT, UNIT_PROFILE_TEXT} from './strings';
 import './index.css';
@@ -45,6 +46,7 @@ export default function App() {
     <p data-testid="fuel">Fuel: {dashboardFuel(live, profile)}</p>
     <p>{STRINGS.prototypeNotice}</p>
   </CardContent></Card>
+  <LiveDashboard live={live} units={settings?.units} />
   <Card size="sm"><CardHeader><CardTitle><h2>{STRINGS.healthTitle}</h2></CardTitle></CardHeader><CardContent className="space-y-2">
     {problem ? <Alert variant="destructive" data-testid="health-alert"><AlertTitle>{STRINGS.serviceFailedTitle}</AlertTitle><AlertDescription>{APP_ERROR_TEXT[problem]}</AlertDescription></Alert> : null}
     <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1" data-testid="app-health">

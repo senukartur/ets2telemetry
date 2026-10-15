@@ -1,6 +1,6 @@
 # Live telemetry fields and display rules
 
-ET-010a adds pure live-telemetry normalization and per-game display profiles to `packages/telemetry-core`. This document is the field catalogue and the rule set those modules implement. The live dashboard that uses them is ET-010b; v1 rows on the dashboard are ET-010c. Nothing here changes the v0 or v1 wire, the preload/IPC bridge, storage, trip logic or recording. Real-source checks are pending; see [ET-010 validation](validation/et-010.md).
+ET-010a adds pure live-telemetry normalization and per-game display profiles to `packages/telemetry-core`. This document is the field catalogue and the rule set those modules implement. ET-010b shows the complete v0 field set on the dashboard through them (see [Dashboard](#dashboard)); v1 rows on the dashboard are ET-010c. Nothing here changes the v0 or v1 wire, the preload/IPC bridge, storage, trip logic or recording. Real-source checks are pending; see [ET-010 validation](validation/et-010.md).
 
 ## Modules
 
@@ -15,7 +15,7 @@ ET-010a adds pure live-telemetry normalization and per-game display profiles to 
 | [derived.ts](../packages/telemetry-core/src/derived.ts) | Fuel level, deadline, bearing, odometer and fuel step primitives |
 | [live-view.ts](../packages/telemetry-core/src/live-view.ts) | `isCurrent` and `buildLiveView` |
 
-The package is pure TypeScript. It imports only its own modules and type-only declarations from `packages/contracts/src`; [telemetry-core-boundaries.test.ts](../tests/unit/telemetry-core-boundaries.test.ts) enforces this instead of a lint-config rule. The renderer calls these functions on each bridge update, at most 20 Hz. Labels and reason texts belong to the application (`apps/desktop/src/strings.ts`, ET-010b); `buildLiveView` returns formatted values, reason codes and notes.
+The package is pure TypeScript. It imports only its own modules and type-only declarations from `packages/contracts/src`; [telemetry-core-boundaries.test.ts](../tests/unit/telemetry-core-boundaries.test.ts) enforces this instead of a lint-config rule. The renderer calls these functions on each bridge update, at most 20 Hz. Labels, reason texts and note texts belong to the application (`apps/desktop/src/strings.ts`); `buildLiveView` returns formatted values, reason codes and notes.
 
 ## Canonical units and display profiles
 
@@ -86,9 +86,23 @@ Money and distance values carry a kind. Money: `expected-income`, `revenue`, `pe
 | No job while current | Job rows hidden; the job section carries the job's missing reason ("no job reported") |
 | No trailer attached while current (v1: every slot empty, and no slot `not-supported`) | Trailers row in the `absent` state with text `none` and reason `no-trailer`. Per OD-6 an empty slot arrives as `not-observed`. The SDK delivers the initial configuration after `scs_telemetry_init()` succeeds and before any other callback ([scssdk_telemetry_event.h](../native/telemetry-plugin/vendor/scs-sdk-1.15/include/scssdk_telemetry_event.h) lines 63–69), so an empty slot in a current checkpoint is taken as no trailer. Bobtail versus a coupled trailer, including late attach, is still unverified in real sessions |
 
-The application maps reasons to text: `not-observed` "not yet observed", `not-supported` "not provided by the game", `invalid` "invalid reading", `zero-consumption` "no consumption recorded", `no-trailer` "no trailer attached". A row reads `<Label>: <text>` or `<Label>: unavailable`, so the existing `Speed: unavailable` text is unchanged. Staleness comes from the existing ingestion and main-process freshness; telemetry-core adds no timer.
+The application maps reasons to text: `not-observed` "not yet observed", `not-supported` "not provided by the game", `invalid` "invalid reading", `not-current` "not current", `zero-consumption` "no consumption recorded", `no-trailer` "no trailer attached". The existing speed and fuel lines read `<Label>: <text>` or `<Label>: unavailable`, so the `Speed: unavailable` text is unchanged; the other rows use a label and value pair with the reason in parentheses (see [Dashboard](#dashboard)). Staleness comes from the existing ingestion and main-process freshness; telemetry-core adds no timer.
 
 Hydrated checkpoint configuration is current state only. The view shows the job and never derives a delivery, cancellation or other gameplay effect from it.
+
+## Dashboard
+
+ET-010b adds the **Live telemetry** card ([live-dashboard.tsx](../apps/desktop/src/live-dashboard.tsx)) between the status card and the application status card of the main window. It is a thin map over the pure builder [live-dashboard-text.ts](../apps/desktop/src/live-dashboard-text.ts), which runs `normalizeV0State` and `buildLiveView` on each bridge update and adds the application's texts. The bridge carries protocol v0 only, so the card shows the v0 field set; v1 rows, game mode and event loss arrive with ET-010c. No bridge, preload, IPC or overlay code changes.
+
+- **Speed and fuel** stay in the existing `Speed: …` and `Fuel: …` lines of the status card, with the same test ids and order; the card does not repeat them (`LEGACY_ROW_IDS`, decision B1). Their freshness gate is `live.fresh`, which equals `isCurrent` in practice.
+- **Sections** follow `buildLiveView`: Driving, Fuel, Distance, Time, Job, Vehicle and Position. A section is omitted when it has no rows and no missing subject, so Position never appears under v0. Before the first observation telemetry-core reports every field as not current; the card still shows only the fields v0 carries (`carriesField`). A current update whose job reading was never reported shows the Job section with "No job reported"; a job reading that was rejected or is not provided keeps its reason instead, for example "Job unavailable (invalid reading)", so an unavailable job is never presented as the absence of a job.
+- **Rows** are `<dt>`/`<dd>` pairs in one grid per section, like the application status card (decision B2). The label carries the note in parentheses; the value carries the reason in parentheses. Hidden rows (`hidden` state: not carried by the protocol in use or not applicable) are not rendered at all.
+- **Paused**: current values stay visible under a "Game paused" status line.
+- **Test ids**: the card is `live-telemetry`; each section `live-section-<section id>`; each value `live-<field id>`, with its reason in `live-<field id>-reason` and its note in `live-<field id>-note` (decision B3); the paused line `live-paused` and the no-job line `live-job-missing`. Each id element holds only its text, without parentheses, so the smokes compare exact texts.
+- **Strings**: `LIVE_FIELD_TEXT`, `VIEW_REASON_TEXT`, `FIELD_NOTE_TEXT` and `LIVE_SECTION_TEXT` in [strings.ts](../apps/desktop/src/strings.ts) are exhaustive records over telemetry-core's ids, so a new id does not compile without a text. The consumption label is "SDK average consumption" with the note "SDK mean, not a trip average"; no label or note calls a value a trip value.
+- **Units** use the same rule as the speed and fuel lines: the displayed game's saved profile ([settings](settings.md)), or its ET-000 default before the settings arrive, and metric without a game. The ATS "mostly static" note follows the observation's source game instead. Under "Select a game" with an ATS source the card therefore shows metric units with the ATS note; this inconsistency is accepted and documented (decision B5).
+
+Decisions B1–B6 are coordinator decisions under the owner's delegation of October 15, 2026 ([concept.md](../concept.md#et-010-authorization--october-15-2026)). Final styling and localization are not part of ET-010b.
 
 ## Step primitives (REG-008)
 
