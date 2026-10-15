@@ -84,6 +84,14 @@ RED: both frame reads in the tagged reader were changed so that an EOF sets a `c
 
 The coordinator's lint, `npm test` and `git diff --check` results for the final head are listed in the PR.
 
+## Post-review fix (PR #63 advisory review)
+
+The advisory review noted that `v1-major-mismatch`, `v1-name-mismatch` and `v1-collision` asserted only exit 1, which an earlier failure in v1 mode would also produce. They now also require the broker diagnostic stage: `discovery` for the wrong major and the wrong pipe name, and `server-image` for the second live record, which is rejected only after both records passed the image check (`12dbce7`, after merging `main` `b238863` in `2d2e0b7`).
+
+- `npm run build`: exit 0, no warnings. Client CTest Release: 53/53. Client ASan build and `ctest -R ^native-pipe-client-asan-`: 53/53.
+- RED: expecting `discovery` for `v1-collision` made that case fail while the other two passed; restored, the 16 v1 cases passed.
+- `npx vitest run`: 61 files, 1,482 tests passed; `git diff --check`: clean.
+
 ## Pending
 
 - ET-006b PR-3: the service launching the v1 mode, the six-key receipt check, the tagged writer and the `client-frame`/`client-write` stages in the service's known-stage list, and the chain test against the plugin's real v1 endpoint, which reads the broker-provisioned policy with `read_service_policy`.
