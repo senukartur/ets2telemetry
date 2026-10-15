@@ -123,7 +123,7 @@ Restrict named pipe access to the local user and reject remote connections. Expo
 
 ### Main Application
 
-The minimum sections are connection and diagnostics, live metrics, the trip journal, trip details, and settings. The application runs in the system tray. Closing the main window must not silently stop recording; fully exiting the application must be an explicit action.
+The minimum sections are connection and diagnostics, live metrics, the trip journal, trip details, and settings. The application runs in the system tray. Closing the main window must not silently stop recording; fully exiting the application must be an explicit action. ET-011a implements tray operation, a single instance and explicit exit; see [ET-011 authorization](#et-011-authorization--october-15-2026) and [the application lifecycle](docs/app-lifecycle.md).
 
 Distinguish waiting for a connection, active simulation, pause, lost connection, and version incompatibility. Stale readings must not appear to be current.
 
@@ -514,3 +514,58 @@ The coordinator adopted these decisions under that delegation; the owner has not
 | CD-10 | In pipe mode, events, gaps, checkpoints and `end` are byte-identical to replay, snapshots equal in state and continuity, and clock replies are checked separately |
 | CD-11 | Retention runs in scenario time; pipe mode fast-forwards offline segments |
 | CD-12 | A system suspend is modeled both with and without the source clock advancing |
+
+## ET-013 authorization — October 15, 2026
+
+The owner authorized ET-013 (the SQLite storage worker and schema) on October 15, 2026, in parallel with ET-004b PR C, granted the coordinator merge authority after independent review and a successful final Windows CI, and delegated the ET-013 design decisions to the coordinator. The coordinator adopted the architect's recommendations OD-1 to OD-10 as coordinator decisions under owner delegation; [storage](docs/storage.md#decisions-october-15-2026) records them with the schema, durability, migration and backup rules. For ET-013 only, this supersedes the October 14, 2026 statements that ET-013 remains unauthorized; earlier dated text is unchanged. ET-014, ET-015a, ET-015b, ET-015c, ET-006b and ET-016 remain unauthorized by this paragraph; ET-005b is authorized separately in the paragraph above. The desktop application stays on protocol v0, records nothing and sends no ACK. The §7 storage estimate remains a model until ET-013 PR-2 measures the actual schema. No game, TruckersMP or performance claim follows from this authorization or from synthetic storage tests.
+
+## ET-011 authorization — October 15, 2026
+
+On October 15, 2026 the owner wrote (translated from Russian): "Overall, keep doing other tasks until you hit tests in the real game. Make optimal decisions. I want you to close as many tasks as possible without my involvement. If there are flaky tests, delegate their fixes to subagents." Under this standing delegation the coordinator started ET-011 (application tray lifecycle and persistent settings) and adopted the architect's recommendations C1–C17 below as coordinator decisions. The owner has not reviewed them individually; they can be revisited like any other recorded decision. This section covers ET-011 only; other packages started under the same delegation are recorded in their own sections.
+
+| # | Decision |
+| --- | --- |
+| C1 | Two PRs: ET-011a (tray lifecycle, single instance, explicit exit, health, service shutdown hooks), then ET-011b (persistent settings and unit profiles) from `main` after ET-011a merges |
+| C2 | Closing the main window destroys it and retires only its document state; reopening creates a new window that subscribes again |
+| C3 | The overlay survives main-window close and keeps following the game; it closes only on exit |
+| C4 | Single instance after the diagnostic profile override; a second launch exits 0 silently before any log, service or window; its arguments, working directory and data are ignored |
+| C5 | A generated multi-resolution PNG tray icon without a fixed GUID; menu with status, recording notice, Open and Exit; click opens; no balloons; without a notification area, closing minimizes |
+| C6 | One idempotent exit for the tray, the renderer, `app.quit()` and Windows session end; existing 3 s kill and 5 s final exit bounds unchanged |
+| C7 | Service shutdown in ordered intake, flush and storage phases with per-step budgets and a 2500 ms total |
+| C8 | Post-readiness service failures use the existing supervised restart with visible state instead of exiting; pre-readiness failures stay fatal |
+| C9 | Main-owned application health with fixed codes only; recording is reported unavailable |
+| C10 | Settings live in `%LOCALAPPDATA%\ETS2Telemetry\settings\settings.json` (ET-011b) |
+| C11 | Settings format v1 with validation, migration of older versions, read-only handling of newer versions, quarantine of invalid files and atomic writes (ET-011b) |
+| C12 | Per-game unit profiles `metric` and `us-customary`, defaulting to ETS2 metric and ATS US customary (ET-011b) |
+| C13 | English user interface text centralized in one module; no localization framework yet |
+| C14 | A narrow preload extension with sender and main-frame checks on every handler; no paths, details or generic patch API |
+| C15 | No autostart, auto-update or cloud synchronization |
+| C16 | A bounded lifecycle smoke in development and packaged modes under the unchanged Job limits, split into a separate restart scenario only if the 60 s Job is too tight |
+| C17 | Work packages ET-011a and ET-011b; the card stays in Review until its manual Windows and real-game checks are accepted |
+
+ET-011a changes the earlier behavior in which closing the dashboard stopped the v0 service and closed the overlay. Recording survival across close-to-tray (REG-012) still requires ET-015. Manual checks of the real notification-area icon, display scaling, Explorer restart, Start-menu relaunch and sign-out, and real-game overlay behavior while the main window is closed, remain pending; see [ET-011 validation](docs/validation/et-011.md). No autostart, auto-update, cloud synchronization or recording is authorized, and no game, TruckersMP, display or performance claim follows from synthetic or local checks.
+
+## ET-010 authorization — October 15, 2026
+
+On October 15, 2026 the owner gave the coordinator standing autonomy: "Overall, keep doing other tasks until you hit tests in the real game. Make optimal decisions. I want you to close as many tasks as possible without my involvement. If there are flaky tests, delegate their fixes to subagents." Under that delegation the coordinator started ET-010 (live telemetry) and adopted the architect recommendations N1–N16 below. They are coordinator decisions under the owner's delegation and were not individually reviewed by the owner; the owner may revise them.
+
+ET-010 changes no v0 wire, preload/IPC, storage, trip logic, recording or later-phase scope. It makes no game, TruckersMP, display or performance claim; real-source dashboard checks are pending in [ET-010 validation](docs/validation/et-010.md). The field catalogue and rules are in [live telemetry fields](docs/live-telemetry-fields.md).
+
+| # | Decision |
+| --- | --- |
+| N1 | Three packages in order: ET-010a normalization and display profiles in telemetry-core; ET-010b the complete live field set on the dashboard, after ET-011a and ET-011b; ET-010c protocol v1 fields on the dashboard, after ET-006b |
+| N2 | telemetry-core is the single numeric source for unit conversion; ET-011b delegates its numerics to it |
+| N3 | A source-agnostic normalized state with v0 and v1 adapters; the internal `not-carried` reason marks fields the protocol in use does not transport and never reaches the wire or storage |
+| N4 | The renderer builds the view from pure functions per bridge update; no bridge, preload or IPC change |
+| N5 | Labels and reason texts live in the application strings (`apps/desktop/src/strings.ts`) |
+| N6 | Missing, stale and paused rules: missing values show `unavailable` with a reason; every non-current status hides all values; paused current values stay visible with a banner; no dimmed last-known values |
+| N7 | A fixed rounding table, with one decimal for speed and fuel; no signed zero |
+| N8 | Consumption: the exact US mpg constant, the SDK-mean label, and no own trip average or range |
+| N9 | Money stays exact raw digits with an SDK-documented or unknown currency; no symbols and no conversion |
+| N10 | Four distance kinds: planned, navigation remaining, game-delivered and odometer |
+| N11 | REG-008 stateless step primitives with provisional thresholds |
+| N12 | Mass in t or lb, compass bearing, `Day N, HH:MM` game time and signed deadline formats; zero L/100 km is numeric in metric only |
+| N13 | The MVP field set; driving controls and navigation extras deferred as TD-003; gameplay events go to the journal |
+| N14 | Text fallback: localized name, then id; trailers use the body type before the id |
+| N15 | Per-quantity unit overrides as a seam; no settings migration |
+| N16 | A boundary test instead of a lint-config edit keeps telemetry-core free of Node.js, Electron and React |

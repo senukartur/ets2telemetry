@@ -5,8 +5,26 @@ $ErrorActionPreference = 'Stop'
 # Test-RuntimeReceipt keeps no state between calls; each case reads its own receipt file.
 $config = Get-Content -LiteralPath $Configuration -Raw | ConvertFrom-Json
 $results = New-Object System.Collections.Generic.List[object]
+# PowerShell 7, which runs the CI steps, parses every JSON integer as Int64; Windows PowerShell 5.1 uses Int32.
+# An `int64` case retypes the parsed lifecycle receipt the way PowerShell 7 would before validating it.
+function ConvertTo-Int64Number {
+    param([object]$Value)
+    if ($Value -is [int]) { return [long]$Value }
+    if ($Value -is [array]) { return ,@($Value | ForEach-Object { ConvertTo-Int64Number -Value $_ }) }
+    if ($Value -is [System.Management.Automation.PSCustomObject]) {
+        foreach ($property in $Value.PSObject.Properties) { $property.Value = ConvertTo-Int64Number -Value $property.Value }
+    }
+    return $Value
+}
 foreach ($case in @($config.cases)) {
     try {
+        if ($case.numbers -ceq 'int64') {
+            $driver = ConvertTo-Int64Number -Value (Get-Content -LiteralPath $case.receipt -Raw | ConvertFrom-Json)
+            if ($driver.lifecycle.secondInstance.exitCode -isnot [long] -or $driver.lifecycle.restartLauncherExit -isnot [long]) { throw 'Int64 conversion failed.' }
+            $valid = [bool](Test-LifecycleReceipt -Driver $driver)
+            $results.Add([ordered]@{passed = $valid; driverResultAvailable = $true; reason = $(if ($valid) { $null } else { 'LIFECYCLE_RESULT_INCOMPLETE_OR_INVALID' })})
+            continue
+        }
         $output = @(Test-RuntimeReceipt -DriverResultPath $case.receipt -ExpectedCommit 'candidate' -ExpectedMode 'packaged' `
             -ExpectedScenario $case.scenario -JobExitCode $case.code)
         # Exactly one result object per case, as when each case ran in its own process.

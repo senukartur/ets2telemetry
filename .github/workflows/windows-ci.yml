@@ -78,6 +78,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm test -- --reporter=default --reporter=junit --outputFile=.local/ci/vitest.xml
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      # Loads native better-sqlite3 only under the pinned Electron executable in Node mode, never plain Node (docs/storage.md).
+      - name: Storage suite under the pinned Electron runtime
+        timeout-minutes: 5
+        run: |
+          npm run test:storage -- --reporter=default --reporter=junit --outputFile=.local/ci/vitest-storage.xml
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build desktop and native x64
         run: |
           npm run build
@@ -107,7 +113,7 @@ jobs:
           Write-Output "ASan runtime: $sdkAsanBin"
           cmake -S native/telemetry-plugin -B native/telemetry-plugin/build-asan -G 'Visual Studio 17 2022' -A x64 -DETS2TELEMETRY_ASAN_TESTS=ON
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cmake --build native/telemetry-plugin/build-asan --config Release --target protocol-v0-asan-test protocol-v1-asan-test v1-producer-asan-test sdk-adapter-asan-test event-channel-asan-test snapshot-transport-asan-test snapshot-transport-test-plugin snapshot-transport-hooked-test-plugin game-window-monitor-asan-test snapshot-transport-game-host-asan capture-cap0-asan-test
+          cmake --build native/telemetry-plugin/build-asan --config Release --target protocol-v0-asan-test protocol-v1-asan-test v1-producer-asan-test sdk-adapter-asan-test event-channel-asan-test snapshot-transport-asan-test snapshot-transport-test-plugin snapshot-transport-hooked-test-plugin game-window-monitor-asan-test snapshot-transport-game-host-asan capture-cap0-asan-test v1-transport-asan-test
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ctest --test-dir native/telemetry-plugin/build-asan -C Release --output-on-failure -R asan-contract
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -136,6 +142,8 @@ jobs:
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario telemetry
       - name: Bounded development hidden overlay projection and isolation smoke
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario overlay -ForceRendererReuse
+      - name: Bounded development tray lifecycle, single instance and explicit exit smoke
+        run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario lifecycle
       - name: Forge maker and static native package inspection
         run: |
           npm run make
@@ -148,6 +156,8 @@ jobs:
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged -Scenario telemetry
       - name: Bounded packaged hidden overlay projection and isolation smoke
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged -Scenario overlay -ForceRendererReuse
+      - name: Bounded packaged tray lifecycle, single instance and explicit exit smoke
+        run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged -Scenario lifecycle
       - name: Extended existing safety regressions
         if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.extended)
         run: ./scripts/ci/Invoke-Extended.ps1

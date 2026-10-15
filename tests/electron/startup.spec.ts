@@ -36,7 +36,7 @@ test('Electron supervises service and SQLite worker with a sandboxed renderer',a
     application = await electron.launch({...executablePath ? {executablePath,cwd:temporary} : {args:[path.resolve('.') ]},timeout:20000,env:{...process.env,TEMP:temporary,TMP:temporary,APPDATA:temporary,LOCALAPPDATA:temporary,ETS2TELEMETRY_PROFILE_DIR:path.join(temporary,'profile'),ETS2TELEMETRY_DIAGNOSTIC_DIR:path.join(temporary,'diagnostics')}});
     const window = await application.firstWindow();
     await expect(window.getByText('Telemetry service ready; isolated storage probe verified')).toBeVisible();
-    expect(await window.evaluate(() => {const browserGlobal=globalThis as unknown as {require?:unknown;desktop:DesktopBridge};return {node:typeof browserGlobal.require,keys:Object.keys(browserGlobal.desktop)};})).toEqual({node:'undefined',keys:['getStatus','selectSource','subscribeLive']});
+    expect(await window.evaluate(() => {const browserGlobal=globalThis as unknown as {require?:unknown;desktop:DesktopBridge};return {node:typeof browserGlobal.require,keys:Object.keys(browserGlobal.desktop)};})).toEqual({node:'undefined',keys:['getStatus','selectSource','subscribeLive','getAppState','subscribeAppState','exitApplication']});
     expect(await application.evaluate(({BrowserWindow}) => {const contents=BrowserWindow.getAllWindows()[0].webContents as unknown as {getLastWebPreferences():Electron.WebPreferences};const preferences=contents.getLastWebPreferences();return {sandbox:preferences.sandbox,isolation:preferences.contextIsolation,node:preferences.nodeIntegration};})).toEqual({sandbox:true,isolation:true,node:false});
   } finally {
     try {

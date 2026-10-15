@@ -151,12 +151,12 @@ void OwnerSecurity::verify_handle(HANDLE file, HANDLE stop_event) const {
 void OwnerSecurity::ensure_directory(const std::wstring& path) const {
   if (!CreateDirectoryW(path.c_str(),const_cast<SECURITY_ATTRIBUTES*>(&attributes_)) && GetLastError() != ERROR_ALREADY_EXISTS) fail("owner-directory"); verify_owner_only(path);
 }
-std::wstring local_transport_directory(const OwnerSecurity& security) {
+std::wstring local_transport_directory(const OwnerSecurity& security, const wchar_t* leaf) {
   PWSTR raw = nullptr; if (SHGetKnownFolderPath(FOLDERID_LocalAppData,KF_FLAG_DEFAULT,nullptr,&raw) != S_OK) fail("local-appdata");
   std::wstring path(raw); CoTaskMemFree(raw);
   // Existing application root has historical default ACLs; only the dedicated transport subtree is authority.
   path += L"\\ETS2Telemetry"; if (!CreateDirectoryW(path.c_str(),nullptr) && GetLastError() != ERROR_ALREADY_EXISTS) fail("application-directory");
   if (GetFileAttributesW(path.c_str()) & FILE_ATTRIBUTE_REPARSE_POINT) fail("application-reparse");
-  path += L"\\transport"; security.ensure_directory(path); path += L"\\v0"; security.ensure_directory(path); return path;
+  path += L"\\transport"; security.ensure_directory(path); path += L"\\"; path += leaf; security.ensure_directory(path); return path;
 }
 }

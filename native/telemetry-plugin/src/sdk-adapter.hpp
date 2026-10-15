@@ -102,6 +102,8 @@ struct V1Current {
 // No SDK-owned pointers or C++ allocations cross the DLL boundary.
 // A fixed game-log entry with static storage duration; only the SDK thread passes it to the logger.
 struct DeferredLog { scs_log_type_t type; const char* message; };
+// One fixed slot per producer of deferred entries: the v0 transport's late startup result and the protocol v1 endpoint.
+enum class DeferredLogSlot : std::uint8_t { transport_v0 = 0, transport_v1 = 1, count = 2 };
 class Adapter final {
  public:
   scs_result_t initialize(scs_u32_t version, const scs_telemetry_init_params_t* params) noexcept;
@@ -125,9 +127,14 @@ class Adapter final {
   bool source_monotonic_ns(std::uint64_t& output) const noexcept;
   // Lock-free source liveness (false after shutdown or counter exhaustion) for worker polling.
   bool source_live() const noexcept { return source_live_.load(std::memory_order_acquire); }
-  // Any thread: hands one static entry to the SDK thread, replacing an entry not yet logged. A worker
-  // never calls the game logger; the next frame_end callback or explicit shutdown logs it once.
-  void defer_log(const DeferredLog* entry) noexcept { deferred_log_.store(entry, std::memory_order_release); }
+  // Any thread: hands one static entry to the SDK thread, replacing an entry not yet logged in the same slot. A worker
+  // never calls the game logger; the next frame_end callback or explicit shutdown logs it once. Each producer has its
+  // own slot, so entries of different producers never replace each other; the SDK thread logs the slots in order.
+  void defer_log(const DeferredLog* entry, DeferredLogSlot slot = DeferredLogSlot::transport_v0) noexcept {
+    deferred_logs_[static_cast<std::size_t>(slot)].store(entry, std::memory_order_release);
+  }
+  // Any thread: whether a protocol v1 event channel is attached, for diagnostics and tests only.
+  bool events_attached() const noexcept { return events_.load(std::memory_order_acquire) != nullptr; }
  private:
   friend struct AdapterTestAccess;
   static SCSAPI_VOID event_callback(scs_event_t, const void*, scs_context_t);
@@ -161,7 +168,7 @@ class Adapter final {
   std::atomic<std::uint64_t> discarded_observations_{0};
   std::atomic<bool> source_live_{false};
   std::atomic<cap0::EvidenceQueue*> evidence_{nullptr};
-  std::atomic<const DeferredLog*> deferred_log_{nullptr};
+  std::array<std::atomic<const DeferredLog*>, static_cast<std::size_t>(DeferredLogSlot::count)> deferred_logs_{};
   std::atomic<v1::EventChannel*> events_{nullptr};
   // v1 producer state: the record being built, the current configuration with its own revision, and v1 continuity.
   v1::EventRecord v1_record_{};
