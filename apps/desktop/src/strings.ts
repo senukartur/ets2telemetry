@@ -1,4 +1,4 @@
-import type {AppErrorCode, OverlayLayout, OverlaySectionId, ServiceHealth, SettingsSaveError, SettingsState, StorageHealth, UnitGame, UnitProfile} from '../../../packages/contracts/src';
+import type {AppErrorCode, OverlayEditPlacement, OverlayLayout, OverlaySectionId, ServiceHealth, SettingsSaveError, SettingsState, StorageHealth, UnitGame, UnitProfile} from '../../../packages/contracts/src';
 import type {FieldNote, LiveFieldId, LiveSectionId, ViewReason} from '../../../packages/telemetry-core/src/live-view';
 import type {OverlayGroupId, OverlayPresetId, OverlayRequirement} from './overlay-sections';
 
@@ -49,7 +49,17 @@ export const STRINGS = Object.freeze({
   overlaySdkMean: 'SDK mean',
   overlaySaveFailed: 'The overlay change was not saved; the previous overlay settings stay in use.',
   overlayLastSection: 'At least one section stays on.',
-  overlayHiddenNote: 'While telemetry is current, a section without data is hidden (speed and fuel show a dash). While it is not current, every shown section is a dash.'
+  overlayHiddenNote: 'While telemetry is current, a section without data is hidden (speed and fuel show a dash). While it is not current, every shown section is a dash.',
+  overlayPlacementLabel: 'Position and size',
+  overlayScaleLabel: 'Scale',
+  overlayEditAction: 'Edit position',
+  overlayScaleDown: 'Smaller',
+  overlayScaleUp: 'Larger',
+  overlayResetPlacement: 'Reset to default',
+  overlayEditDone: 'Done',
+  overlayEditCancel: 'Cancel',
+  overlayEditHelp: 'Drag the outlined overlay over the game to move it. Enter on the overlay saves, Esc cancels. The layout cannot change while you edit.',
+  overlayEditFailed: 'The overlay edit request failed; the saved position and size stay in use.'
 });
 export type StringKey = keyof typeof STRINGS;
 
@@ -141,6 +151,13 @@ export const OVERLAY_GROUP_TEXT: Readonly<Record<OverlayGroupId, string>> = Obje
 });
 export const OVERLAY_PRESET_TEXT: Readonly<Record<OverlayPresetId, string>> = Object.freeze({
   'everything': 'Everything', 'job-focus': 'Job focus', 'driving-only': 'Driving only'
+});
+/** Where the overlay is while its position is edited (ET-012b); shown in the overlay card. */
+export const OVERLAY_EDIT_PLACEMENT_TEXT: Readonly<Record<OverlayEditPlacement, string>> = Object.freeze({
+  'visible': 'Editing: the overlay is outlined over the game. Drag it to move it.',
+  'waiting-for-game': 'Editing: waiting for the game window. Start the game in windowed or borderless mode and keep it open, not minimized.',
+  'too-large': 'Editing: at this scale the overlay does not fit the game window. Make it smaller.',
+  'not-foreground': 'Editing: the overlay is hidden while another application or the game is in front. Click this window to show it again.'
 });
 /** Why a section may stay hidden in this version; shown beside its switch. */
 export const OVERLAY_REQUIREMENT_TEXT: Readonly<Record<OverlayRequirement, string>> = Object.freeze({

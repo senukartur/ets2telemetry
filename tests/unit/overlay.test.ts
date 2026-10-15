@@ -1,6 +1,6 @@
 import {readFileSync} from 'node:fs';
 import {afterEach, beforeEach, expect, it, vi} from 'vitest';
-import type {LiveTelemetry, OverlayLayout} from '../../packages/contracts/src';
+import type {LiveTelemetry, OverlayEditState, OverlayLayout, OverlayPlacement} from '../../packages/contracts/src';
 import {validateMessage} from '../../packages/contracts/src/protocol-v0';
 import {initialLive} from '../../apps/desktop/src/live-state';
 import {LiveFreshness} from '../../apps/desktop/src/live-freshness';
@@ -151,14 +151,16 @@ function controller(layout?: OverlayLayout) {
   const window = {isDestroyed: () => false, hide: vi.fn(), setBounds: vi.fn(), showInactive: vi.fn(), topmost: true,
     isAlwaysOnTop: (): boolean => window.topmost, setAlwaysOnTop: vi.fn<(flag: boolean, level: string) => void>(flag => {window.topmost = flag;}), moveTop: vi.fn(),
     // Never called by the controller: activating or focusing the overlay would steal driving input.
-    show: vi.fn(), focus: vi.fn(), setFocusable: vi.fn(), setIgnoreMouseEvents: vi.fn()};
+    show: vi.fn(), focus: vi.fn(), setFocusable: vi.fn(), setIgnoreMouseEvents: vi.fn(),
+    // ET-012b: edit mode only; driving cases never change the scale, so the zoom factor is never set.
+    setSkipTaskbar: vi.fn(), setMovable: vi.fn(), webContents: {setZoomFactor: vi.fn()}};
   const screen = {screenToDipRect: vi.fn((_window: null, bounds: Electron.Rectangle) => ({x: bounds.x / 2, y: bounds.y / 2, width: bounds.width / 2, height: bounds.height / 2})),
     getAllDisplays: () => [{bounds: {x: -960, y: 0, width: 1920, height: 1080}}]};
   const lost = vi.fn();
   return {window, screen, lost, overlay: new OverlayController(window, screen, lost, layout)};
 }
 function noActivation(window: ReturnType<typeof controller>['window']) {
-  for (const method of [window.show, window.focus, window.setFocusable, window.setIgnoreMouseEvents]) expect(method).not.toHaveBeenCalled();
+  for (const method of [window.show, window.focus, window.setFocusable, window.setIgnoreMouseEvents, window.setSkipTaskbar, window.setMovable]) expect(method).not.toHaveBeenCalled();
 }
 function raisedAfterShow(window: ReturnType<typeof controller>['window']) {
   expect(window.setAlwaysOnTop).toHaveBeenLastCalledWith(true, 'screen-saver');
@@ -321,4 +323,219 @@ it('hides when the chosen layout does not fit the client area and shows again wh
   overlay.setLayout('cluster');
   expect(window.setBounds).toHaveBeenLastCalledWith({x: -944, y: 114, width: 440, height: 220});
   expect(window.showInactive).toHaveBeenCalledTimes(2); raisedAfterShow(window); noActivation(window);
+});
+
+// ET-012b edit mode (REG-016). The tracked window models Electron 44 on Windows, where setFocusable(focusable) also
+// sets SetSkipTaskbar(!focusable). The game client is 1920 x 1080 physical at (-1920, 0), which the half-scale screen
+// converts to 960 x 540 DIP at (-960, 0): the cluster's free space is 488 x 288 DIP at scale 1.
+function trackedController(layout: OverlayLayout = 'cluster', placement?: OverlayPlacement) {
+  const state = {visible: false, ignoreMouse: true, focusable: false, movable: false, skipTaskbar: true, topmost: true};
+  const calls: string[] = [];
+  const record = (name: string) => {calls.push(name);};
+  const window = {isDestroyed: () => false,
+    hide: vi.fn(() => {record('hide'); state.visible = false;}),
+    setBounds: vi.fn(() => record('setBounds')),
+    showInactive: vi.fn(() => {record('showInactive'); state.visible = true;}),
+    isAlwaysOnTop: () => state.topmost,
+    setAlwaysOnTop: vi.fn((flag: boolean) => {record('setAlwaysOnTop'); state.topmost = flag;}),
+    moveTop: vi.fn(() => record('moveTop')),
+    setIgnoreMouseEvents: vi.fn((ignore: boolean) => {record(`setIgnoreMouseEvents(${ignore})`); state.ignoreMouse = ignore;}),
+    setFocusable: vi.fn((focusable: boolean) => {record(`setFocusable(${focusable})`); state.focusable = focusable; state.skipTaskbar = !focusable;}),
+    setSkipTaskbar: vi.fn((skip: boolean) => {record(`setSkipTaskbar(${skip})`); state.skipTaskbar = skip;}),
+    setMovable: vi.fn((movable: boolean) => {record(`setMovable(${movable})`); state.movable = movable;}),
+    show: vi.fn(), focus: vi.fn(),
+    webContents: {setZoomFactor: vi.fn((factor: number) => record(`zoom(${factor})`))}};
+  const screen = {screenToDipRect: vi.fn((_window: null, bounds: Electron.Rectangle) => ({x: bounds.x / 2, y: bounds.y / 2, width: bounds.width / 2, height: bounds.height / 2})),
+    getAllDisplays: () => [{bounds: {x: -960, y: 0, width: 1920, height: 1080}}]};
+  const editChanged = vi.fn<(state: OverlayEditState) => void>();
+  const current = live(), metadata = current.observation!.state.window;
+  if (!metadata.available) throw new Error('Expected metadata');
+  return {window, state, calls, screen, editChanged, current, metadata: metadata.value,
+    overlay: new OverlayController(window, screen, vi.fn(), layout, {...(placement ? {placement} : {}), editChanged})};
+}
+type Tracked = ReturnType<typeof trackedController>;
+/** The REG-016 invariant after every controller call: never a taskbar tab; hidden or driving means click-through. */
+function assertInvariant({state, overlay, metadata}: Tracked, ownForeground: boolean) {
+  expect(state.skipTaskbar, 'taskbar tab').toBe(true);
+  const editing = overlay.editState().active;
+  if (!state.visible || !editing) {
+    expect({ignoreMouse: state.ignoreMouse, focusable: state.focusable, movable: state.movable}).toEqual({ignoreMouse: true, focusable: false, movable: false});
+  }
+  if (state.visible && !editing) expect(metadata.foreground, 'driving needs the game in front').toBe(true);
+  if (state.visible && editing) {
+    expect({ownForeground, gameForeground: metadata.foreground}).toEqual({ownForeground: true, gameForeground: false});
+    expect({ignoreMouse: state.ignoreMouse, focusable: state.focusable, movable: state.movable}).toEqual({ignoreMouse: false, focusable: true, movable: true});
+  }
+}
+/** Starts edit mode over a background game while the dashboard is in front. */
+function editing(tracked: Tracked) {
+  tracked.overlay.loaded(true); tracked.metadata.foreground = false; tracked.overlay.update(tracked.current);
+  tracked.calls.length = 0;
+  return tracked.overlay.beginEdit(true);
+}
+const order = (calls: string[], names: string[]) => names.map(name => calls.indexOf(name));
+
+it('makes the edit overlay interactive before an inactive show and raises it afterwards, without show or focus', () => {
+  const tracked = trackedController(), {window, calls} = tracked;
+  expect(editing(tracked)).toEqual({active: true, layout: 'cluster', scale: 1, placement: 'visible'});
+  const sequence = order(calls, ['setIgnoreMouseEvents(false)', 'setFocusable(true)', 'setSkipTaskbar(true)', 'setMovable(true)', 'setBounds', 'showInactive',
+    'setAlwaysOnTop', 'moveTop']);
+  expect(sequence.every(index => index >= 0)).toBe(true);
+  expect([...sequence].sort((left, right) => left - right)).toEqual(sequence);
+  expect(window.setBounds).toHaveBeenLastCalledWith({x: -944, y: 304, width: 440, height: 220});
+  expect(window.show).not.toHaveBeenCalled(); expect(window.focus).not.toHaveBeenCalled();
+  assertInvariant(tracked, true);
+});
+it.each([
+  {name: 'own focus loss', act: (tracked: Tracked) => tracked.overlay.setOwnForeground(false), placement: 'not-foreground', own: false},
+  {name: 'the game in front', act: (tracked: Tracked) => {tracked.metadata.foreground = true; tracked.overlay.update(tracked.current);}, placement: 'not-foreground', own: true},
+  {name: 'a minimized game', act: (tracked: Tracked) => {tracked.metadata.minimized = true; tracked.overlay.update(tracked.current);}, placement: 'waiting-for-game', own: true},
+  {name: 'an expired window report', act: (tracked: Tracked) => tracked.overlay.update({...tracked.current, observation: {...tracked.current.observation!, windowFresh: false}}),
+    placement: 'waiting-for-game', own: true},
+  {name: 'a monitor change', act: (tracked: Tracked) => tracked.overlay.topologyChanged(), placement: 'waiting-for-game', own: true},
+  {name: 'an overlay that is not loaded', act: (tracked: Tracked) => tracked.overlay.loaded(false), placement: 'waiting-for-game', own: true}
+])('hides the edit overlay before restoring click-through on $name', ({act, placement, own}) => {
+  const tracked = trackedController(); editing(tracked); tracked.calls.length = 0;
+  act(tracked);
+  expect(tracked.calls).toEqual(['hide', 'setMovable(false)', 'setIgnoreMouseEvents(true)', 'setFocusable(false)', 'setSkipTaskbar(true)']);
+  expect(tracked.overlay.editState()).toEqual({active: true, layout: 'cluster', scale: 1, placement});
+  assertInvariant(tracked, own);
+});
+it('needs a game window report for edit mode, but not a foreground game', () => {
+  const tracked = trackedController();
+  tracked.overlay.loaded(true); expect(tracked.overlay.beginEdit(true)).toMatchObject({placement: 'waiting-for-game'});
+  tracked.current.selection = 'synthetic'; tracked.overlay.update(tracked.current);
+  expect(tracked.overlay.editState()).toMatchObject({placement: 'waiting-for-game'}); expect(tracked.window.showInactive).not.toHaveBeenCalled();
+  tracked.current.selection = 'ets2'; tracked.metadata.foreground = false; tracked.overlay.update(tracked.current);
+  expect(tracked.overlay.editState()).toMatchObject({placement: 'visible'}); expect(tracked.window.showInactive).toHaveBeenCalledOnce();
+  assertInvariant(tracked, true);
+});
+it('leaves edit mode hidden and click-through, then shows for driving only with the game in front and never interactive', () => {
+  const tracked = trackedController(), {overlay, window} = tracked; editing(tracked); tracked.calls.length = 0;
+  expect(overlay.endEdit()).toEqual({x: 0, y: 1, scale: 1});
+  expect(tracked.calls.slice(0, 5)).toEqual(['hide', 'setMovable(false)', 'setIgnoreMouseEvents(true)', 'setFocusable(false)', 'setSkipTaskbar(true)']);
+  expect(tracked.state.visible).toBe(false); expect(overlay.editState()).toEqual({active: false}); assertInvariant(tracked, true);
+  // The dashboard is still in front: driving mode keeps the overlay hidden until the game is the foreground window.
+  window.showInactive.mockClear(); overlay.update(tracked.current); expect(window.showInactive).not.toHaveBeenCalled();
+  tracked.metadata.foreground = true; overlay.update(tracked.current);
+  expect(window.showInactive).toHaveBeenCalledOnce(); assertInvariant(tracked, false);
+  expect(overlay.endEdit()).toBeUndefined();
+});
+it('keeps the REG-016 invariant after every step of a deterministic driving and editing sequence', () => {
+  const tracked = trackedController(), {overlay, metadata, current} = tracked;
+  let own = false;
+  const steps: [string, () => void][] = [
+    ['driving with the game in front', () => {overlay.loaded(true); overlay.update(current);}],
+    ['dashboard in front', () => {own = true; metadata.foreground = false; overlay.update(current);}],
+    ['begin edit', () => {overlay.beginEdit(own);}],
+    ['own focus lost', () => {own = false; overlay.setOwnForeground(false);}],
+    ['own focus regained', () => {own = true; overlay.setOwnForeground(true);}],
+    ['game in front while editing', () => {metadata.foreground = true; overlay.update(current);}],
+    ['game in the background again', () => {metadata.foreground = false; overlay.update(current);}],
+    ['game minimized', () => {metadata.minimized = true; overlay.update(current);}],
+    ['game restored', () => {metadata.minimized = false; overlay.update(current);}],
+    ['monitor change', () => overlay.topologyChanged()],
+    ['new window report', () => {current.observation!.windowReceivedMonotonicMs = 1; overlay.update(current);}],
+    ['drag started', () => overlay.moveStarted()],
+    ['drag ended', () => overlay.moved({x: -700, y: 100, width: 440, height: 220})],
+    ['larger', () => {overlay.setEditScale(1.5);}],
+    ['reset', () => {overlay.resetEdit();}],
+    ['overlay reloading', () => overlay.loaded(false)],
+    ['overlay loaded', () => overlay.loaded(true)],
+    ['done', () => {overlay.endEdit();}],
+    ['game in front for driving', () => {own = false; metadata.foreground = true; overlay.update(current);}],
+    ['dashboard in front again', () => {own = true; metadata.foreground = false; overlay.update(current);}],
+    ['edit again and cancel', () => {overlay.beginEdit(own); overlay.endEdit();}]
+  ];
+  const shown: string[] = [];
+  for (const [name, step] of steps) {
+    step();
+    try {assertInvariant(tracked, own);} catch (error) {throw new Error(`After step "${name}": ${String(error)}`, {cause: error});}
+    if (tracked.state.visible) shown.push(`${overlay.editState().active ? 'edit' : 'drive'}: ${name}`);
+  }
+  // The sequence exercises both shown modes, not only hidden states.
+  expect(shown).toEqual(['drive: driving with the game in front', 'edit: begin edit', 'edit: own focus regained', 'edit: game in the background again',
+    'edit: game restored', 'edit: new window report', 'edit: drag started', 'edit: drag ended', 'edit: larger', 'edit: reset', 'edit: overlay loaded',
+    'drive: game in front for driving']);
+  expect(tracked.state.visible).toBe(false);
+  expect(tracked.window.show).not.toHaveBeenCalled(); expect(tracked.window.focus).not.toHaveBeenCalled();
+});
+it('does not move the window while it is dragged and snaps a drop past the edges inside the client area', () => {
+  const tracked = trackedController('cluster', {x: 0.5, y: 0.5, scale: 1}), {overlay, window} = tracked;
+  editing(tracked);
+  expect(window.setBounds).toHaveBeenLastCalledWith({x: -700, y: 160, width: 440, height: 220});
+  overlay.moveStarted(); window.setBounds.mockClear();
+  // The game window moves while the user drags: nothing is placed until the drag ends.
+  tracked.metadata.x += 200; overlay.update(tracked.current); tracked.metadata.x -= 200; overlay.update(tracked.current);
+  expect(window.setBounds).not.toHaveBeenCalled();
+  overlay.moved({x: -2000, y: 9999, width: 440, height: 220});
+  expect(window.setBounds.mock.calls).toEqual([[{x: -944, y: 304, width: 440, height: 220}]]);
+  expect(overlay.endEdit()).toEqual({x: 0, y: 1, scale: 1});
+});
+it('keeps a drop inside the client area where it was dropped', () => {
+  const tracked = trackedController('cluster', {x: 0.5, y: 0.5, scale: 1}), {overlay, window} = tracked;
+  editing(tracked); overlay.moveStarted(); window.setBounds.mockClear();
+  overlay.moved({x: -600, y: 200, width: 440, height: 220});
+  // (-600 + 944) / 488 = 0.70492 and (200 - 16) / 288 = 0.63889, rounded to four decimals; the window stays where it was dropped.
+  expect(window.setBounds).not.toHaveBeenCalled();
+  expect(overlay.endEdit()).toEqual({x: 0.7049, y: 0.6389, scale: 1});
+});
+it('applies the edited scale as zoom factor and size, and reports a scale that does not fit as too large', () => {
+  const tracked = trackedController('cluster', {x: 0.5, y: 0.5, scale: 1}), {overlay, window} = tracked;
+  editing(tracked); tracked.calls.length = 0;
+  expect(overlay.setEditScale(1.5)).toEqual({active: true, layout: 'cluster', scale: 1.5, placement: 'visible'});
+  // 660 x 330 leaves 268 x 178 DIP of free space.
+  expect(window.setBounds).toHaveBeenLastCalledWith({x: -810, y: 105, width: 660, height: 330});
+  expect(tracked.calls.indexOf('zoom(1.5)')).toBeLessThan(tracked.calls.indexOf('setBounds'));
+  // A 350 DIP high client area has no room for 330 + 32.
+  tracked.metadata.height = 700; overlay.update(tracked.current);
+  expect(overlay.editState()).toEqual({active: true, layout: 'cluster', scale: 1.5, placement: 'too-large'});
+  expect(tracked.state.visible).toBe(false); assertInvariant(tracked, true);
+  expect(overlay.resetEdit()).toEqual({active: true, layout: 'cluster', scale: 1, placement: 'visible'});
+  expect(window.webContents.setZoomFactor.mock.calls).toEqual([[1.5], [1]]);
+  // Cancel returns to the saved scale, which is applied even while the overlay stays hidden.
+  overlay.setEditScale(0.5); overlay.endEdit();
+  expect(window.webContents.setZoomFactor.mock.lastCall).toEqual([1]);
+  overlay.restoreZoom(); expect(window.webContents.setZoomFactor.mock.lastCall).toEqual([1]);
+});
+it('reports each edit state change once', () => {
+  const tracked = trackedController(), {overlay, editChanged} = tracked;
+  editing(tracked); overlay.update(tracked.current); overlay.update(tracked.current);
+  overlay.setOwnForeground(false); overlay.setOwnForeground(false); overlay.setEditScale(1.2); overlay.endEdit();
+  expect(editChanged.mock.calls.map(([state]) => state)).toEqual([
+    {active: true, layout: 'cluster', scale: 1, placement: 'visible'}, {active: true, layout: 'cluster', scale: 1, placement: 'not-foreground'},
+    {active: true, layout: 'cluster', scale: 1.2, placement: 'not-foreground'}, {active: false}]);
+});
+it('re-places a visible driving overlay for a new saved placement and scale of the same layout without showing it again', () => {
+  const tracked = trackedController(), {overlay, window} = tracked;
+  overlay.loaded(true); overlay.update(tracked.current); tracked.calls.length = 0;
+  overlay.setLayout('cluster', {x: 0.5, y: 0.5, scale: 1.5});
+  expect(tracked.calls).toEqual(['zoom(1.5)', 'setBounds', 'setAlwaysOnTop', 'moveTop']);
+  expect(window.setBounds).toHaveBeenLastCalledWith({x: -810, y: 105, width: 660, height: 330});
+  overlay.setLayout('cluster', {x: 0.5, y: 0.5, scale: 1.5}); expect(tracked.calls).toHaveLength(4);
+  expect(window.showInactive).toHaveBeenCalledOnce(); assertInvariant(tracked, false);
+  for (const method of [window.setFocusable, window.setIgnoreMouseEvents, window.setSkipTaskbar, window.setMovable]) expect(method).not.toHaveBeenCalled();
+});
+it('keeps the draft while a saved placement arrives during editing, and cancels the edit for another layout', () => {
+  const tracked = trackedController(), {overlay} = tracked;
+  editing(tracked); overlay.setEditScale(1.2);
+  overlay.setLayout('cluster', {x: 0.25, y: 0.25, scale: 1});
+  expect(overlay.editState()).toMatchObject({active: true, scale: 1.2});
+  overlay.setLayout('hud');
+  expect(overlay.editState()).toEqual({active: false}); expect(tracked.state.visible).toBe(false); assertInvariant(tracked, true);
+});
+it('places a restarted overlay at its saved non-default placement in driving mode without changing the zoom it was created with', () => {
+  // As after a restart: the window was created at the saved scale 1.5 and zoom 1.5. The cluster is then 660 x 330 DIP;
+  // the 960 x 540 client leaves 960 - 32 - 660 = 268 by 540 - 32 - 330 = 178 DIP free, and half of each is 134 and 89:
+  // x = -960 + 16 + 134 = -810 and y = 0 + 16 + 89 = 105.
+  const tracked = trackedController('cluster', {x: 0.5, y: 0.5, scale: 1.5}), {overlay, window} = tracked;
+  overlay.loaded(true); overlay.update(tracked.current);
+  expect(window.setBounds.mock.calls).toEqual([[{x: -810, y: 105, width: 660, height: 330}]]);
+  expect(window.showInactive).toHaveBeenCalledOnce(); assertInvariant(tracked, false);
+  expect(window.webContents.setZoomFactor).not.toHaveBeenCalled();
+  // A reloaded document gets the saved zoom again; the default placement returns the zoom to 1.
+  overlay.restoreZoom(); expect(window.webContents.setZoomFactor.mock.calls).toEqual([[1.5]]);
+  overlay.setLayout('cluster');
+  expect(window.webContents.setZoomFactor.mock.calls).toEqual([[1.5], [1]]);
+  expect(window.setBounds).toHaveBeenLastCalledWith({x: -944, y: 304, width: 440, height: 220});
 });

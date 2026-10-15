@@ -49,9 +49,11 @@ const BASELINE_SECTIONS: ReadonlySet<OverlaySectionId> = new Set<OverlaySectionI
  * is current, the v1 data is current and, for job parts, both describe the same job. A section shown before whose v1
  * data is no longer eligible becomes `unavailable`; one never shown stays out; a mixed section keeps its v0 part. v1
  * never authorizes placement or visibility: main places the overlay from the v0 observation's window only.
+ *
+ * `editing` (ET-012b) only marks the overlay edit mode for the renderer; it changes no section or value.
  */
 export function overlayPresentation(live: LiveTelemetry, units: UnitProfiles = DEFAULT_UNIT_PROFILES, overlay: OverlaySettings = DEFAULT_OVERLAY_SETTINGS,
-  previous?: OverlayPresentation): OverlayPresentation {
+  previous?: OverlayPresentation, editing = false): OverlayPresentation {
   const observation = live.observation;
   const explicitFixture = isExplicitFixture(live);
   const game = displayGame(live), profile = profileFor(units, game);
@@ -95,6 +97,7 @@ export function overlayPresentation(live: LiveTelemetry, units: UnitProfiles = D
     freshness: current ? 'current' : live.status === 'stale' ? 'stale' : 'unavailable',
     layout: overlay.layout,
     paused: current && sources.v0View.connection.paused,
-    sections
+    sections,
+    editing
   };
 }

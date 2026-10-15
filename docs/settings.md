@@ -1,17 +1,17 @@
-# Persistent settings, unit profiles and overlay settings (ET-011b, ET-012a)
+# Persistent settings, unit profiles and overlay settings (ET-011b, ET-012a, ET-012b)
 
-ET-011b stores the user's settings in a small JSON file and uses them to choose the display units of each game. ET-012a adds the overlay layout and the overlay sections in format v2. The decisions behind the file are C10–C12 in [concept.md](../concept.md#et-011-authorization--october-15-2026) and, for the overlay settings, L2, L3 and L13 in [concept.md](../concept.md#et-012a-authorization--october-15-2026); numeric conversion follows ET-010 decision N2 (telemetry-core is the single numeric source).
+ET-011b stores the user's settings in a small JSON file and uses them to choose the display units of each game. ET-012a adds the overlay layout and the overlay sections in format v2. ET-012b adds the saved position and scale of every overlay layout in format v3. The decisions behind the file are C10–C12 in [concept.md](../concept.md#et-011-authorization--october-15-2026) and, for the overlay settings, L2, L3 and L13 in [concept.md](../concept.md#et-012a-authorization--october-15-2026) and M2, M3, M10, M11 and M12 in [concept.md](../concept.md#et-012b-authorization--october-15-2026); numeric conversion follows ET-010 decision N2 (telemetry-core is the single numeric source).
 
 ## Location
 
 The file is `%LOCALAPPDATA%\ETS2Telemetry\settings\settings.json`. Main resolves `%LOCALAPPDATA%` at runtime through `dataPaths(LOCALAPPDATA).settings` (`apps/desktop/src/paths.ts`), separately from the application binaries and from `telemetry.sqlite`, so an application update does not replace it. When `LOCALAPPDATA` is missing or not an absolute path, there is no settings location: defaults apply and nothing can be saved (`unavailable`). Preserving the file across a real installed update and an optional uninstall removal belong to ET-018.
 
-## Format v2 (ET-012a)
+## Format v3 (ET-012b)
 
 ```json
 {
   "format": "ets2telemetry.settings",
-  "version": 2,
+  "version": 3,
   "units": {
     "ets2": "metric",
     "ats": "us-customary"
@@ -33,33 +33,67 @@ The file is `%LOCALAPPDATA%\ETS2Telemetry\settings\settings.json`. Main resolves
       "deadline": true,
       "expected-income": true,
       "game-time": true
+    },
+    "placements": {
+      "strip": {
+        "x": 0.5,
+        "y": 0,
+        "scale": 1
+      },
+      "card": {
+        "x": 1,
+        "y": 0,
+        "scale": 1
+      },
+      "cluster": {
+        "x": 0,
+        "y": 1,
+        "scale": 1
+      },
+      "hud": {
+        "x": 0,
+        "y": 0,
+        "scale": 1
+      }
     }
   }
 }
 ```
 
-The application writes exactly this shape: UTF-8 without a byte order mark, two-space indentation, a trailing newline and all fourteen section keys in this canonical order. When reading it:
+The application writes exactly this shape: UTF-8 without a byte order mark, two-space indentation, a trailing newline, all fourteen section keys in this canonical order and the placements of all four layouts in the canonical layout order (`strip`, `card`, `cluster`, `hud`), each with `x`, `y` and `scale` in this order. When reading it:
 
 - a leading UTF-8 byte order mark is accepted and unknown keys are ignored;
 - a file larger than 64 KiB, bytes that are not UTF-8, anything other than a JSON object, a missing or different `format` marker, or a `version` that is not an integer makes the file **invalid**;
-- a version 1 file is migrated in memory ([below](#migration-from-v1)) and then read as v2;
+- a version 1 or 2 file is migrated in memory ([below](#migration-from-v1-and-v2)) and then read as v3;
 - a missing `version` or a version below 1 is **unsupported-older**: there is no migration path, so such a file uses defaults;
-- a version above 2 is **newer-version**: written by a later application version;
+- a version above 3 is **newer-version**: written by a later application version;
 - each `units.ets2` and `units.ats` value must be exactly `metric` or `us-customary`;
 - `overlay.layout` must be exactly `strip`, `card`, `cluster` or `hud`;
-- `overlay.sections` must be an object of booleans that enables at least one section.
+- `overlay.sections` must be an object of booleans that enables at least one section;
+- `overlay.placements` must be an object; each layout's placement must have `x` and `y` that are finite numbers in [0, 1] and a `scale` that is a finite number in [0.5, 2]. Values are rounded to four decimals (`x`, `y`) and two decimals (`scale`) when read and when written.
 
-An invalid or missing value falls back to its default on its own (**loaded-with-fallbacks**); the other values still apply. The fallback field paths are `units.ets2`, `units.ats`, `overlay.layout`, `overlay.sections` and `overlay.sections.<id>`:
+An invalid or missing value falls back to its default on its own (**loaded-with-fallbacks**); the other values still apply. The fallback field paths are `units.ets2`, `units.ats`, `overlay.layout`, `overlay.sections`, `overlay.sections.<id>`, `overlay.placements` and `overlay.placements.<layout>`:
 
-- A missing or non-object `overlay` block falls back as `overlay.layout` and `overlay.sections`.
+- A missing or non-object `overlay` block falls back as `overlay.layout`, `overlay.sections` and `overlay.placements`.
 - A missing or non-object `sections` value, or one that enables no section, falls back as a whole to every section (`overlay.sections`).
 - A single missing or non-boolean section falls back to its default, enabled (`overlay.sections.<id>`).
+- A missing or non-object `placements` value falls back as a whole to the default placements (`overlay.placements`).
+- One layout's placement that is missing, not an object, or has an `x`, `y` or `scale` that is missing, not a finite number or outside its range falls back alone to that layout's default (`overlay.placements.<layout>`). An out-of-range value is never clamped.
 
-### Migration from v1
+### Format v2 (ET-012a)
 
-Format v1 (ET-011b) had only the `units` block. The migration chain in `apps/desktop/src/settings-schema.ts` has one pure step, v1 to v2, which never mutates its input. It adds the overlay block with its defaults (the strip layout and every section). The v1 units then pass the normal v2 validation, so an invalid v1 unit still falls back alone. A migrated file loads as `loaded` (or `loaded-with-fallbacks`) and its load row carries `migratedFrom: 1`. Nothing is written at startup: the file stays v1 on disk until the first save of any setting writes the complete v2 document. A migrated file is valid, so it is never quarantined.
+Format v2, written by ET-012a builds, is the v3 document above without `overlay.placements` and with `"version": 2`. This version reads it through the migration below and writes it back only as v3.
 
-**Downgrade.** An ET-011b build reads a v2 file as `newer-version`: it uses default units, never modifies the file and refuses to save (`SETTINGS_READ_ONLY`). Going back to that build therefore shows default units until a newer build runs again.
+### Migration from v1 and v2
+
+Format v1 (ET-011b) had only the `units` block; format v2 (ET-012a) added the overlay layout and sections. The migration chain in `apps/desktop/src/settings-schema.ts` has two pure steps, which never mutate their input:
+
+- v1 to v2 adds the overlay block with its defaults (the strip layout and every section). The v1 units then pass the normal validation, so an invalid v1 unit still falls back alone.
+- v2 to v3 (ET-012b) adds the default placements of all four layouts to the overlay block; the layout and sections are kept. A v2 file never had placements, so a stray `placements` key in it is replaced by the defaults. A v2 overlay that is not an object stays as it is and falls back as a whole.
+
+A v1 file passes both steps. A migrated file loads as `loaded` (or `loaded-with-fallbacks`) and its load row carries `migratedFrom: 1` or `migratedFrom: 2`. Nothing is written at startup: the file stays v1 or v2 on disk until the first save of any setting writes the complete v3 document. A migrated file is valid, so it is never quarantined.
+
+**Downgrade.** An ET-011b build reads a v2 or v3 file, and an ET-012a build a v3 file, as `newer-version`: it uses defaults, never modifies the file and refuses to save (`SETTINGS_READ_ONLY`). Going back to such a build therefore shows default units and overlay settings until a newer build runs again. Making `placements` an optional key in v2 instead was rejected (decision M2), so that an older build never rewrites a file and silently drops the placements.
 
 ## Overlay settings (ET-012a)
 
@@ -67,8 +101,28 @@ Format v1 (ET-011b) had only the `units` block. The migration chain in `apps/des
 | --- | --- | --- |
 | `overlay.layout` | `strip` (one 38 px row at the top centre), `card` (top right), `cluster` (round speed gauge and side panel at the bottom left), `hud` (shadowed text at the top left) | `strip` |
 | `overlay.sections.<id>` | `true` or `false` for each of the fourteen sections; at least one `true` | all `true` |
+| `overlay.placements.<layout>` (ET-012b) | `x` and `y` in [0, 1], `scale` in [0.5, 2]; see [overlay placements](#overlay-placements-and-edit-mode-et-012b) | the ET-012a anchor of each layout at scale 1: strip `0.5, 0`, card `1, 0`, cluster `0, 1`, HUD `0, 0` |
 
 The settings card groups the sections as Driving (`speed`, `gear`, `rpm`), Fuel (`fuel`, `range`, `sdk-consumption`), Job (`cargo`, `origin`, `destination`, `distance-driven`, `distance-remaining`, `deadline`, `expected-income`) and Time (`game-time`). Which sections the live bridge can fill today, and how a section without data appears, is described in [live telemetry fields](live-telemetry-fields.md#overlay) and [the minimal overlay](minimal-overlay.md#layouts-and-sections-et-012a).
+
+### Overlay placements and edit mode (ET-012b)
+
+Each layout has its own placement, so switching layouts keeps every layout where the user put it. A placement is not a pixel position: `x` and `y` are fractions of the free space left inside the game's client area once the margins and the scaled overlay window are taken away (0 is the left or top margin, 1 the right or bottom one), and `scale` multiplies the layout's size and content. A saved placement therefore stays inside any client area the scaled layout fits, by construction; a layout that does not fit at its scale hides the overlay as before (see [the minimal overlay](minimal-overlay.md#geometry-and-placements-et-012b)). Multi-monitor, mixed-DPI, monitor-removal and off-screen recovery stay deferred.
+
+Placements change only through the overlay **edit mode** (decisions M5 and M10–M12). The mode lives in main's memory only: it is never saved, and every start is in driving mode. The **Overlay** card's **Position and size** block shows the saved scale of the current layout and an **Edit position** button, enabled while settings can be saved. In edit mode the block shows where the overlay is (`visible`, waiting for the game window, too large for it, or hidden while another application or the game is in front), **Smaller** and **Larger** (10 % steps within 50–200 %), **Reset to default**, **Done**, **Cancel** and a help line: drag the outlined overlay over the game; Enter on the overlay saves and Esc cancels. The layout radio group is disabled while editing; section, preset and unit changes stay possible. Dragging, scaling and resetting change only main's draft and write nothing.
+
+The preload bridge appends four methods, each over its own fixed-shape invoke channel. Main accepts them only from the trusted dashboard main frame (never from the overlay), validates them again and refuses them once the exit has started:
+
+| Method | Channel | Request | Result |
+| --- | --- | --- | --- |
+| `beginOverlayEdit()` | `overlay-edit:begin` | no argument; refused while settings cannot be saved (`writable` false) | the edit state; a second call returns the current state |
+| `setOverlayEditScale(scale)` | `overlay-edit:set-scale` | exactly one finite number in [0.5, 2], rounded to two decimals; only while editing | the edit state |
+| `resetOverlayEditPlacement()` | `overlay-edit:reset` | no argument; the layout's default placement at scale 1; only while editing | the edit state |
+| `finishOverlayEdit(outcome)` | `overlay-edit:finish` | exactly `save` or `cancel`; only while editing | the settings view |
+
+`AppState.overlayEdit` is `{active: false}` or `{active: true, layout, scale, placement}`, with `placement` one of `visible`, `waiting-for-game`, `too-large` and `not-foreground`; main pushes it whenever it changes. While editing, `settings:set-overlay-layout` is refused with a fixed message (`The overlay layout cannot change while its position is edited`).
+
+**Done** (or Enter on the focused overlay) leaves edit mode first, so the overlay is hidden and click-through again before anything is written. It then saves the draft through the shared settings queue (`setOverlayPlacement(layout, placement)` in the store) like any other change: it applies only after the durable rename, and a failed or refused save keeps the previous placement and reports `saveError` in the card. **Cancel** (or Esc) discards the draft and writes nothing. Edit mode is also cancelled without writing when the dashboard closes to the tray, is minimized, or its document is reloaded, replaced or crashes, when the overlay's subscription or document is retired (an unsubscribe, including the one the overlay preload sends after a lost channel, a reload, a crash or a close), and when the exit begins. The overlay can thus end an edit only by cancelling it; it cannot start, change or save one. While edit mode is active the driving overlay stays hidden, even with the game in front, until Done or Cancel.
 
 ## Unit profiles
 
@@ -91,11 +145,11 @@ Loading happens once at startup, in parallel with the service start. Loading nev
 | --- | --- | --- | --- |
 | `loading` | The read outlasted the 1000 ms budget and has not settled yet | Defaults | No (`SETTINGS_WRITE_FAILED`); refused at once, never queued |
 | `defaults` | No settings file (or no settings directory) | Defaults | Yes; the first save creates the file |
-| `loaded` | A valid v2 file, or a valid v1 file migrated in memory | From the file (overlay defaults for a v1 file) | Yes; a migrated v1 file is rewritten as v2 by the first save |
-| `loaded-with-fallbacks` | A v2 (or migrated v1) file with some invalid fields | Valid fields from the file, defaults for the others | Yes; the save rewrites the whole file |
+| `loaded` | A valid v3 file, or a valid v1 or v2 file migrated in memory | From the file (overlay defaults for a v1 file, default placements for a v2 file) | Yes; a migrated file is rewritten as v3 by the first save |
+| `loaded-with-fallbacks` | A v3 (or migrated v1 or v2) file with some invalid fields | Valid fields from the file, defaults for the others | Yes; the save rewrites the whole file |
 | `invalid-file` | Not a usable settings file | Defaults | Yes; the first save quarantines the file |
 | `unsupported-older` | An older format without a migration path | Defaults | Yes; the first save quarantines the file |
-| `newer-version` | Written by a newer version (version 3 or later) | Defaults | No (`SETTINGS_READ_ONLY`); the file is never modified |
+| `newer-version` | Written by a newer version (version 4 or later) | Defaults | No (`SETTINGS_READ_ONLY`); the file is never modified |
 | `unreadable` | The file or directory is a symbolic link or junction, not a plain file or directory, or could not be read, or the read had not settled within the read limit (about 30 s) | Defaults | No (`SETTINGS_WRITE_FAILED`) |
 | `unavailable` | No valid settings location | Defaults | No (`SETTINGS_WRITE_FAILED`) |
 
@@ -103,7 +157,7 @@ The settings directory and file are inspected with `lstat`, which does not follo
 
 ## Saving
 
-A change of a unit profile, the overlay layout or the overlay sections is saved in this order; the new settings apply in memory only after the final rename succeeded:
+A change of a unit profile, the overlay layout, the overlay sections or an overlay placement is saved in this order; the new settings apply in memory only after the final rename succeeded:
 
 1. Create the settings directory if needed and check again that it is a plain directory.
 2. Remove stale temporary files of the store's own pattern `settings.json.<pid>.<uuid>.tmp`, left by an interrupted earlier save. No other file is touched.
@@ -113,7 +167,7 @@ A change of a unit profile, the overlay layout or the overlay sections is saved 
 
 If any step fails, the temporary file is removed, the previous file and the settings in use stay as they were, the request is rejected and the settings view's `saveError` becomes `SETTINGS_WRITE_FAILED` (`SETTINGS_READ_ONLY` for a newer-version file) until the next successful save clears it. Settings errors never change the service's health or its last problem. A failure after the quarantine rename leaves no `settings.json`, which the next start reads as defaults. Node.js cannot flush a directory entry on Windows, so the rename itself is not separately flushed.
 
-Saves of every kind share one serialized queue, and each save computes its new settings from those in use when its write starts, so a unit save and an overlay save never undo each other. Every save writes the complete v2 document. At most four may be outstanding, including the one in progress; a fifth request is refused at once without changing the settings view. Once the load has returned, a read-only state (`loading`, `newer-version`, `unreadable`, `unavailable`) refuses a save at once instead of queuing it, so neither later saves nor the exit's wait depend on a read that is still pending. Because nothing is saved while the read is pending, a late `invalid-file` or `unsupported-older` file is quarantined only by a save after its state was applied. A save requested before the load returned (no window exists then) waits for the read's result, or at most until the 30 s read limit, which refuses it. An explicit exit waits for an in-flight save for at most 1000 ms (`EXIT_IDLE_BUDGET_MS`, see [the application lifecycle](app-lifecycle.md#explicit-exit)); new saves are refused once the exit has started. A save cut short by the exit leaves at most a temporary file, which the next save removes.
+Saves of every kind share one serialized queue, and each save computes its new settings from those in use when its write starts, so a unit save and an overlay save never undo each other. Every save writes the complete v3 document. At most four may be outstanding, including the one in progress; a fifth request is refused at once without changing the settings view. Once the load has returned, a read-only state (`loading`, `newer-version`, `unreadable`, `unavailable`) refuses a save at once instead of queuing it, so neither later saves nor the exit's wait depend on a read that is still pending. Because nothing is saved while the read is pending, a late `invalid-file` or `unsupported-older` file is quarantined only by a save after its state was applied. A save requested before the load returned (no window exists then) waits for the read's result, or at most until the 30 s read limit, which refuses it. An explicit exit waits for an in-flight save for at most 1000 ms (`EXIT_IDLE_BUDGET_MS`, see [the application lifecycle](app-lifecycle.md#explicit-exit)); new saves are refused once the exit has started. A save cut short by the exit leaves at most a temporary file, which the next save removes.
 
 ## Dashboard and overlay
 
@@ -130,15 +184,15 @@ Both are refused for an untrusted sender or frame (including the overlay), for a
 
 ## Diagnostics
 
-Startup logs `SETTINGS_LOADED` (`state` `defaults` or `loaded`) or `SETTINGS_FALLBACK` (any other state, with `fields` for fallbacks or a fixed `reason` such as `reparse-point`, `read` or `load-limit`). A v1 file migrated in memory adds `migratedFrom: 1` to its `SETTINGS_LOADED` or `loaded-with-fallbacks` row. A read that outlasts the 1000 ms budget first logs `SETTINGS_LOAD_PENDING` (`state` `loading`, `reason` `load-budget`); the `SETTINGS_LOADED` or `SETTINGS_FALLBACK` row that follows when it settles, or at the 30 s limit, has the same facts as for a read within the budget. Saves log `SETTINGS_QUARANTINED` and `SETTINGS_SAVED` with `game` and `profile` for a unit save, `overlayLayout` for a layout save, or `overlaySections` (the number of enabled sections) for a sections save. None of these names match the smoke failure pattern `FAILED|TIMEOUT|UNCAUGHT|UNHANDLED|INVALID|RENDER_PROCESS_GONE`. A refused newer-version save logs `SETTINGS_SAVE_REFUSED`; a failed save logs `SETTINGS_WRITE_FAILED` with the failing `step` and the error `code`. Facts carry fixed codes only, never paths or file content.
+Startup logs `SETTINGS_LOADED` (`state` `defaults` or `loaded`) or `SETTINGS_FALLBACK` (any other state, with `fields` for fallbacks or a fixed `reason` such as `reparse-point`, `read` or `load-limit`). A v1 or v2 file migrated in memory adds `migratedFrom: 1` or `migratedFrom: 2` to its `SETTINGS_LOADED` or `loaded-with-fallbacks` row. A read that outlasts the 1000 ms budget first logs `SETTINGS_LOAD_PENDING` (`state` `loading`, `reason` `load-budget`); the `SETTINGS_LOADED` or `SETTINGS_FALLBACK` row that follows when it settles, or at the 30 s limit, has the same facts as for a read within the budget. Saves log `SETTINGS_QUARANTINED` and `SETTINGS_SAVED` with `game` and `profile` for a unit save, `overlayLayout` for a layout save, `overlaySections` (the number of enabled sections) for a sections save, or `overlayPlacement` (the layout) and `overlayScale` for a placement save; a position is never logged. With a diagnostic directory, main also records the timeline rows `OVERLAY_EDIT_STARTED`, `OVERLAY_EDIT_FINISHED` (`outcome`) and `OVERLAY_EDIT_CANCELLED` (`reason`). None of these names match the smoke failure pattern `FAILED|TIMEOUT|UNCAUGHT|UNHANDLED|INVALID|RENDER_PROCESS_GONE`. A refused newer-version save logs `SETTINGS_SAVE_REFUSED`; a failed save logs `SETTINGS_WRITE_FAILED` with the failing `step` and the error `code`. Facts carry fixed codes only, never paths or file content.
 
 ## Tests
 
-- `tests/unit/settings-schema.test.ts`: every load classification, the 64 KiB boundary, the byte order mark and the exact serialized bytes. Since ET-012a: a v2 file, the pure v1-to-v2 migration (units kept, an invalid v1 unit falling back alone, `migratedFrom`, the input not mutated), version 3 as the first newer version, each overlay fallback including a record that enables nothing, and the canonical section order of the v2 bytes and their round trip.
-- `tests/unit/settings-store.test.ts`, ET-012a cases: a v1 file byte-identical at startup and rewritten as v2 with its units by the first overlay save; a v2 overlay block loaded without a migration fact; exact v2 bytes for a sections save, applied only after the rename; a failed overlay save keeping the previous overlay settings; overlay saves refused for a newer-version file and during a pending read; unit and overlay saves serialized in one queue with every change surviving and their facts; and the shared four-request bound. The existing cases now expect the overlay defaults in each view and v2 bytes after a save, and the newer-version cases use version 3.
+- `tests/unit/settings-schema.test.ts`: every load classification, the 64 KiB boundary, the byte order mark and the exact serialized bytes. Since ET-012a: a v2 file, the pure v1-to-v2 migration (units kept, an invalid v1 unit falling back alone, `migratedFrom`, the input not mutated), version 3 as the first newer version, each overlay fallback including a record that enables nothing, and the canonical section order of the v2 bytes and their round trip. Since ET-012b (REG-017): a v3 file with its placements, the pure v2-to-v3 migration (layout and sections kept, default placements, `migratedFrom: 2`, the input not mutated, a stray v2 `placements` key replaced) and the v1-to-v3 chain (`migratedFrom: 1`), each placement fallback (missing or non-object record, a missing layout, `x` or `y` outside [0, 1], a scale outside [0.5, 2], non-numbers) with no clamping, normalisation on read and write, version 4 as the first newer version, and the exact v3 bytes with sections and placements in canonical order and their round trip. The current-format cases moved from v2 to v3 inputs.
+- `tests/unit/settings-store.test.ts`, ET-012a cases: a v1 file byte-identical at startup and rewritten (as v3 since ET-012b) with its units by the first overlay save; exact bytes for a sections save, applied only after the rename; a failed overlay save keeping the previous overlay settings; overlay saves refused for a newer-version file and during a pending read; unit and overlay saves serialized in one queue with every change surviving and their facts; and the shared four-request bound. ET-012b cases (REG-017): a v2 file byte-identical at startup with default placements and `migratedFrom: 2`, rewritten as v3 by the first save; a v3 file loaded with its placements and no migration fact; a placement save written as exact v3 bytes, normalised, applied only after the rename, with `overlayPlacement` and `overlayScale` facts; a failed placement save keeping the previous placement; placement saves refused for a newer-version file and during a pending read; and placement saves sharing the queue, the four-request bound and the facts with unit and section saves. The existing cases now expect the default placements in each view and v3 bytes after a save, and the newer-version cases use version 4 (version 3 is now the current format).
 - `tests/unit/settings-store.test.ts` (real temporary directories; failures injected by wrapping the real file operations): no write on startup, exact bytes, `sync` before the rename, EPERM/EACCES/EBUSY retry, a persistent EPERM that keeps the previous file and removes the temporary file, failures at write, sync and rename that leave the old file valid, byte-identical quarantine on the first save only, keeping the newest three quarantined files, newer-version untouched and read-only, a junction directory and a symbolic-link file refused, only matching temporary files removed, serialized saves, the four-request bound and the idle hook, the unavailable location and the 1000 ms load budget, a prompt refusal with no idle work after the budget expired over a read that never settles, and `saveError` set by a failed save and cleared by the next one. Since October 15, 2026, with controlled timers and a gated real read (clean late read): the pending `loading` view and its log row; a late corrupt file applied as `invalid-file` and quarantined byte-identically only by a later save (the hosted run 38755116140 regression); late `loaded`, `loaded-with-fallbacks`, `unsupported-older` and `newer-version` files applied with their own writability and nothing written; a save during the pending read refused at once without queuing or quarantine; a late read error staying `unreadable`; a hung read declared `unreadable` at the 30 s limit with its later result ignored; and a save requested before the load returned refused at the limit.
 - `tests/unit/unit-profiles.test.ts`, `overlay.test.ts`, `speed-display.test.ts`: profile mapping, both profiles in the overlay and dashboard, and the dashboard's profile choice with the ATS US customary default; the existing overlay and dashboard cases are unchanged, and the one that calls `dashboardSpeed` without a profile is titled for its implicit metric default. A source check keeps conversion constants and `toFixed` out of the desktop display modules.
-- `tests/unit/main-boundaries.test.ts`: trusted sender and frame only, invalid values rejected, the change applied only after the save, the overlay republished without renewed authority, refused saves reported in the settings view while a service problem stays the last problem, the exit waiting for an in-flight save within 1000 ms, the first windows opening only after the load returned, and a late read pushed to the dashboard and republished to the overlay in the new units without a save or renewed freshness. `preload-recovery.test.ts` covers the bridge validation. ET-012a adds the two overlay channels to both: trust, argument count and shape validation, the fresh frozen copy handed to the store, apply after the save with republication and re-placement without renewed freshness, the shared error mapping, refusal while exiting, and a late read that changes the layout.
-- The development and packaged `lifecycle` runtime smokes seed an invalid file and check quarantine, exact content (v2 since ET-012a), mph and US gallons, and the restart; a pending read is waited for before the exact checks. See [CI](ci.md#et-011b-settings-in-the-lifecycle-smoke). The overlay smoke's final step saves the `card` layout and waits for the overlay document to render it.
+- `tests/unit/main-boundaries.test.ts`: trusted sender and frame only, invalid values rejected, the change applied only after the save, the overlay republished without renewed authority, refused saves reported in the settings view while a service problem stays the last problem, the exit waiting for an in-flight save within 1000 ms, the first windows opening only after the load returned, and a late read pushed to the dashboard and republished to the overlay in the new units without a save or renewed freshness. `preload-recovery.test.ts` covers the bridge validation. ET-012a adds the two overlay channels to both: trust, argument count and shape validation, the fresh frozen copy handed to the store, apply after the save with republication and re-placement without renewed freshness, the shared error mapping, refusal while exiting, and a late read that changes the layout. ET-012b adds the four overlay edit channels: trust (the overlay is rejected), argument count and shape, refusal while settings are read-only, when not editing and once exiting; the layout channel refused while editing; edit mode interactive only while shown over a background game; a scale applied as the overlay zoom factor and window size; a drag snapped inside the client area; Done handing the store the draft only after edit mode ended and applying it after the save; a failed save keeping the previous placement; Cancel, Esc, dashboard close, reload and crash, overlay reload and crash, and exit discarding the draft without writing; every key prevented on the overlay with Enter saving only in edit mode; the system menu prevented; the 150 ms focus grace across the dashboard and the overlay; `waiting-for-game` without a game window; and the overlay created at its saved scale with that zoom re-applied after each load. `preload-recovery.test.ts` checks the four appended methods and their validation.
+- The development and packaged `lifecycle` runtime smokes seed an invalid file and check quarantine, exact content (v3 since ET-012b), mph and US gallons, and the restart; a pending read is waited for before the exact checks. Since ET-012b run B also checks the restored default placements (run A saves only the units), driving mode after the restart and the overlay zoom factor of the saved scale (1); a non-default placement's restore is covered by unit tests. See [CI](ci.md#et-011b-settings-in-the-lifecycle-smoke). The overlay smoke saves the `card` layout and waits for the overlay document to render it, then enters edit mode, saves the card at scale 1.5 and checks the overlay and dashboard zoom factors (see [CI](ci.md#overlay-edit-step-et-012b)).
 
-Evidence and pending manual checks are in [ET-011 validation](validation/et-011.md#et-011b-persistent-settings-and-unit-profiles) and [ET-012a validation](validation/et-012a.md).
+Evidence and pending manual checks are in [ET-011 validation](validation/et-011.md#et-011b-persistent-settings-and-unit-profiles), [ET-012a validation](validation/et-012a.md) and [ET-012b validation](validation/et-012b.md).

@@ -1,0 +1,13 @@
+{
+  "scenario": "sleep-teleport",
+  "basis": ["synthetic-inference"],
+  "authoredFrom": [
+    "sleep-teleport.json and its expectation: simulation.started (1) and simulation.paused (2) only; no job, so no trip",
+    "docs/trips.md T17 (PR-2): the 595-minute game-time jump and the position jump have no open trip to annotate, so they add no effect and no event is fabricated"
+  ],
+  "trips": [],
+  "attributions": [],
+  "intervals": [],
+  "coverage": {"committedThroughEventSeq": "2", "committed": 2, "duplicate": 0, "covered": 0},
+  "view": {"phase": "idle", "untrackedJob": false, "current": null, "lastClosed": null}
+}

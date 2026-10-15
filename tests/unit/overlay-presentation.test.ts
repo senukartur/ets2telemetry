@@ -5,6 +5,7 @@ import {validateMessage} from '../../packages/contracts/src/protocol-v0';
 import {initialLive} from '../../apps/desktop/src/live-state';
 import {overlayPresentation} from '../../apps/desktop/src/overlay-presentation';
 import {OVERLAY_PRESETS} from '../../apps/desktop/src/overlay-sections';
+import {DEFAULT_OVERLAY_PLACEMENTS} from '../../apps/desktop/src/overlay-placement';
 import {overlayView} from '../../apps/desktop/src/overlay-view';
 import {
   SYNTHETIC_V1_OVERLAY_CURRENT, SYNTHETIC_V1_OVERLAY_STOPPED, SYNTHETIC_V1_OVERLAY_V0_STALE, SYNTHETIC_V1_OVERLAY_V1_STALE
@@ -25,6 +26,8 @@ function live(): LiveTelemetry {
   }};
 }
 const ALL = OVERLAY_PRESETS['everything'];
+// ET-012b: the placements do not affect the projection; only main's window placement uses them.
+const PLACEMENTS = DEFAULT_OVERLAY_PLACEMENTS;
 const ids = (sections: readonly OverlaySectionView[]) => sections.map(section => section.id);
 
 it('shows the v0 sections of the fixture in metric for ETS2, in canonical order, with absent ones left out', () => {
@@ -137,7 +140,7 @@ it('shows only the speed and fuel placeholders while not current without a previ
   expect(overlayPresentation(stale).sections).toEqual([{id: 'speed', state: 'unavailable'}, {id: 'fuel', state: 'unavailable'}]);
   // A section disabled since the previous projection is left out.
   const previous = overlayPresentation(live());
-  expect(ids(overlayPresentation(stale, undefined, {layout: 'strip', sections: {...ALL, gear: false, fuel: false}}, previous).sections))
+  expect(ids(overlayPresentation(stale, undefined, {layout: 'strip', sections: {...ALL, gear: false, fuel: false}, placements: PLACEMENTS}, previous).sections))
     .toEqual(['speed', 'rpm', 'sdk-consumption', 'cargo', 'destination', 'expected-income', 'game-time']);
 });
 
@@ -147,15 +150,15 @@ it('shows placeholders before the first observation', () => {
 });
 
 it('leaves disabled sections out and passes the layout through', () => {
-  const presentation = overlayPresentation(live(), undefined, {layout: 'cluster', sections: OVERLAY_PRESETS['driving-only']});
+  const presentation = overlayPresentation(live(), undefined, {layout: 'cluster', sections: OVERLAY_PRESETS['driving-only'], placements: PLACEMENTS});
   expect(presentation.layout).toBe('cluster');
   expect(ids(presentation.sections)).toEqual(['speed', 'gear', 'rpm', 'fuel']);
   const stale = {...live(), fresh: false, status: 'stale' as const};
-  const jobFocus = {layout: 'hud' as const, sections: OVERLAY_PRESETS['job-focus']};
+  const jobFocus = {layout: 'hud' as const, sections: OVERLAY_PRESETS['job-focus'], placements: PLACEMENTS};
   expect(ids(overlayPresentation(stale, undefined, jobFocus, overlayPresentation(live(), undefined, jobFocus)).sections))
     .toEqual(['speed', 'gear', 'fuel', 'cargo', 'destination']);
   // The legacy speed and fuel fields stay in the projection whatever the sections are.
-  expect(overlayPresentation(live(), undefined, {layout: 'strip', sections: {...ALL, speed: false, fuel: false}})).toMatchObject({speed: '0.0', fuel: '—'});
+  expect(overlayPresentation(live(), undefined, {layout: 'strip', sections: {...ALL, speed: false, fuel: false}, placements: PLACEMENTS})).toMatchObject({speed: '0.0', fuel: '—'});
 });
 
 it('reports a paused game only while current', () => {
@@ -301,9 +304,19 @@ it('produces the overlay texts the telemetry smoke expects for the smoke pair', 
     {status: 'disconnected', fresh: false}), undefined, undefined, current), SYNTHETIC_V1_OVERLAY_STOPPED);
 });
 it('leaves disabled v1 sections out and passes no source identity, boundary, window or clock data to the renderer', () => {
-  expect(ids(overlayPresentation(withV1(), undefined, {layout: 'hud', sections: OVERLAY_PRESETS['job-focus']}).sections))
+  expect(ids(overlayPresentation(withV1(), undefined, {layout: 'hud', sections: OVERLAY_PRESETS['job-focus'], placements: PLACEMENTS}).sections))
     .toEqual(['speed', 'gear', 'fuel', 'cargo', 'destination', 'distance-remaining', 'deadline']);
   const json = JSON.stringify(overlayPresentation(withV1()));
   for (const text of ['10000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000001', 'pluginSessionId', 'boundaryOrder', 'handle', '65538', 'clockMapping'])
     expect(json).not.toContain(text);
+});
+// ET-012b: the edit mode flag is display-only and changes no section, value or freshness.
+it('marks the edit mode without changing any section or value, and defaults to driving mode', () => {
+  const driving = overlayPresentation(live());
+  expect(driving.editing).toBe(false);
+  const editing = overlayPresentation(live(), undefined, undefined, undefined, true);
+  expect(editing).toEqual({...driving, editing: true});
+  const stale = {...live(), fresh: false, status: 'stale' as const};
+  expect(overlayPresentation(stale, undefined, undefined, editing, true)).toMatchObject({freshness: 'stale', editing: true, speed: '—'});
+  expect(overlayPresentation(initialLive('game'), undefined, undefined, undefined, true)).toMatchObject({source: 'No game', freshness: 'unavailable', editing: true});
 });
