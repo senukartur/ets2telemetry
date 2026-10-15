@@ -4,8 +4,8 @@ ET-014 adds a pure, deterministic trip reducer in [packages/telemetry-core/src/t
 
 Status (October 15, 2026):
 
-- **PR-1** (this document): the event-driven lifecycle, identity, attribution and completeness. It covers T1–T15 and T18–T20 as they apply to events.
-- **PR-2**: readings accounting (T16, T17): observed distance, fuel used, refuels, game-time jumps, crossings and reading holes, plus replay of the ET-005b simulator scenarios. Until then the reducer accepts the `reading` input and ignores it.
+- **PR-1**: the event-driven lifecycle, identity, attribution and completeness. It covers T1–T15 and T18–T20 as they apply to events.
+- **PR-2**: [readings accounting](#readings-accounting-t16-t17) (T16, T17): observed distance, fuel used, refuels, game-time jumps, crossings, position jumps and reading holes, plus replay of the ET-005b simulator scenarios against hand-written trip expectations.
 - Nothing records yet. No storage schema, wire, preload/IPC, renderer or native code changes. ET-015a wires the reducer into commits.
 - Behaviour seen in real traces rests only on the reviewed CAP-01 observations O1–O11 ([CAP-01a validation](validation/cap-01a.md)). Everything else is synthetic inference and stays pending until real-game sessions ([ET-014 validation](validation/et-014.md)).
 
@@ -28,7 +28,7 @@ Inputs (`TripInput`):
 | `session` | The validated welcome, the coverage `upsertSession` returned, and `openTrips` (`TripSeed[]`) on a cold start | None; decided effects wait in the game's queue |
 | `checkpoint` | The connection's checkpoint | None (hydration only, T9) |
 | `event`, `gap` | The message, `coveredThrough` read right before the commit, and `receivedUtcMs` | The effects for that message's commit |
-| `reading` | A normalized sample | None until PR-2 |
+| `reading` | A normalized state of the current connection (the checkpoint's and each snapshot's), with its source identity, capture time and UTC label | None; distance and fuel accumulate, and annotations or a reading-hole downgrade wait for the game's next carrier |
 | `disconnected` | — | None |
 
 ## Caller contract for ET-015a
@@ -42,7 +42,9 @@ Inputs (`TripInput`):
 
 On a retryable or failed commit the caller keeps the old state. When the item is redelivered, the reducer then returns the same effects. Non-carrier inputs (session, checkpoint, disconnected) are adopted immediately. An `ok: false` result fails closed: durable delivery must stop, as for any other contract violation.
 
-**Connections.** Every connection ends with a `disconnected` input before the next connection's `session` input, including a reconnection to the same plugin session, a switch to the other game and a new plugin session. The reducer takes the interval in which the consumer was not connected from that input; an item of a session that is not the current connection's is refused.
+**Connections.** Every connection ends with a `disconnected` input before the next connection's `session` input, including a reconnection to the same plugin session, a switch to the other game and a new plugin session. The reducer takes the interval in which the consumer was not connected from that input; an item or a reading of a session that is not the current connection's is refused.
+
+**Readings.** The caller feeds the checkpoint's state as a reading right after the `checkpoint` input, and each snapshot's state as a reading, in stream order with the events and gaps. A reading is adopted at once, like other non-carrier inputs.
 
 **Coverage (T5).** The reducer keeps a processed point per plugin session:
 
@@ -59,6 +61,7 @@ Because the reducer applies effects only for new coverage and queues them otherw
 - `{tripUuid, pluginSessionId, game, jobKey, startedUtcMs, recordingCompleteness, lastObservedUtcMs?}`;
 - `jobKey` is `jobKey()` of the trip's stored job configuration. With null, no later job ever matches it;
 - `lastObservedUtcMs` is the label of the session's last stored item;
+- `observedDistanceM` (PR-2) is the trip's stored observed distance when it is available; a resumed trip accumulates from it, so its next update never replaces the stored value with a smaller one;
 - a seed of another plugin session closes as `restart` at the new session's first commit (T11);
 - a seed of the same session resumes as an active trip and becomes partial with a `not-connected` interval (`consumer-restart`): the consumer was not running for part of it. Its phase, load window and money totals are not rebuilt. Its `cargoLoaded` is unknown too, so after a clear its identical re-send never matches: an O10 save load then closes the resumed trip and opens a not-merged continuation, which is the conservative result.
 
@@ -66,7 +69,7 @@ Because the reducer applies effects only for new coverage and queues them otherw
 
 | # | Gap | Proposed owner |
 | --- | --- | --- |
-| S-1 | No fuel-used column on trips; PR-2 reports fuel used in the view only | Schema v2 `observed_fuel_used_l`, ET-015a |
+| S-1 | No fuel-used column on trips; PR-2 reports fuel used, refuelled litres and refuel episodes in the view only. `trip.close` has no detail, so the close carries none of them | Schema v2 `observed_fuel_used_l`, ET-015a |
 | S-2 | A late-attached job cannot open a trip from the checkpoint: storage opens trips only at a job configuration event, and hydration stores no configuration rows. The job stays untracked until an identical `job.configured` arrives | Schema v2 and concept §7 wording, decided at ET-015a or ET-016 |
 | S-3 | The current synchronous `EffectsHook` of the durable sink gets no commit result, so it cannot follow T3 | ET-015a replaces it with step, commit, then adopt |
 | S-4 | Continuations have no column; they live in completeness `detail` JSON (`continuationOf`) | Acceptable as is |
@@ -142,10 +145,15 @@ Every `completeness.add` of the reducer carries a `detail` object (storage keeps
 | `reload` | `discontinuity` | `continuationOf`, `decision: 'not-merged'`; `atEventSeq`: the decisive event |
 | `save-load` | `discontinuity` | `fromClockId`, `toClockId`: the game clocks of the `gameTime.regression`; `atEventSeq`: the regression |
 | `gap` (an interval of the gap itself) | `event-loss` or `not-connected` | `causes`: the record's six loss counters; `firstEventSeq`, `lastEventSeq`: the whole record's range (the interval's own range is the new suffix); `redelivered` |
-| `disconnected` | `not-connected` | none; the interval carries `startUtcMs` and, on the same source clock, `startMonotonicNs`, `endMonotonicNs` and `sourceClockId` |
+| `disconnected` | `not-connected` | `odometerDeltaM` (PR-2), added by the first reading of the new connection while the interval still waits: metres from the last reading before the disconnection to it, or null without an odometer at either end or after a truck change. The interval carries `startUtcMs` and, on the same source clock, `startMonotonicNs`, `endMonotonicNs` and `sourceClockId` |
 | `consumer-restart` | `not-connected` | none |
+| `reading-hole` (PR-2) | `sample-loss` | none; the interval carries the two readings' `startMonotonicNs`, `endMonotonicNs` and `sourceClockId`, and their UTC labels when the later one is not earlier |
 | `truck-change` (annotation) | `discontinuity` | `annotation: true`; `atEventSeq`; after merging also `count` and `lastAtEventSeq` |
 | `utc-label-jump` (annotation) | `discontinuity` | `annotation: true`; `labelUtcMs`: the label that preceded the start; `clampedToUtcMs`: the trip start; `atEventSeq`, null for a restart close |
+| `odometer-regressed`, `odometer-jump` (annotations, PR-2) | `discontinuity` | `annotation: true`; `deltaM`: the excluded odometer change; `atMonotonicNs`: the later reading's capture time; after merging also `count` and `lastAtMonotonicNs` |
+| `game-time-jump` (annotation, PR-2) | `discontinuity` | `annotation: true`; `label`: `crossing` or `possible-sleep`; `fromMinutes`, `toMinutes`: game minutes as decimal strings; `atMonotonicNs`; after merging also `count` and `lastAtMonotonicNs` |
+| `position-jump` (annotation, PR-2) | `discontinuity` | `annotation: true`; `label`: `crossing` or `possible-teleport`; `meters`: the straight-line step; `atMonotonicNs`; after merging also `count` and `lastAtMonotonicNs` |
+| `refuel` (annotation, PR-2) | `discontinuity` | `annotation: true`; `addedLiters`: the episode's litres so far; `atMonotonicNs`: its first step; `lastAtMonotonicNs` once the episode grows. Never merged with another episode |
 
 ## Attribution (T14)
 
@@ -173,8 +181,8 @@ Money is summed per trip as exact BigInt digits per currency and SDK type. Fines
 - **UTC label.** `occurred.utcUnixMs`, else the session's last label, else `receivedUtcMs`. A gap carries no UTC, so a gap close uses the session's last label. A restart close uses the old session's last observed label, a lower bound.
 - **Clamp.** Storage requires `ended_utc_ms >= started_utc_ms`, and a violation would fail the commit and stop durable delivery. An end before the start is therefore clamped to the start and annotated `utc-label-jump`.
 - **Real duration.** Real time comes from `occurred.monotonicNs` within one session's source clock (`realDurationNs` in the view). Trips never span plugin sessions.
-- **Game time.** Game-time spans stay within one game clock. Sleeps and crossings are included and annotated, never subtracted (PR-2).
-- **Money and distance.** Planned distance and expected income come from the job; revenue, delivered distance and the cancellation penalty from the outcome event. They are never converted, netted or mixed. Observed distance is PR-2.
+- **Game time.** Game-time spans stay within one game clock. Sleeps and crossings are included and annotated, never subtracted.
+- **Money and distance.** Planned distance and expected income come from the job; revenue, delivered distance and the cancellation penalty from the outcome event. They are never converted, netted or mixed. Observed distance comes from readings ([below](#readings-accounting-t16-t17)).
 
 ## What "complete" means (T13)
 
@@ -187,21 +195,46 @@ A trip opens `unknown` and stays `unknown` while nothing is known to be missing.
 - a late attach, or a configuration replayed from before the attach;
 - an opening during a load;
 - a close without an outcome;
-- a reading hole (PR-2).
+- a reading hole.
 
-It is `complete` only when its gameplay outcome closes it after a clean window. Annotations (`truck-change`, `utc-label-jump`, and the PR-2 game-time and position annotations) are `discontinuity` intervals with `detail.annotation: true` and never downgrade.
+It is `complete` only when its gameplay outcome closes it after a clean window. Annotations (`truck-change`, `utc-label-jump`, and the readings annotations `odometer-regressed`, `odometer-jump`, `game-time-jump`, `position-jump` and `refuel`) are `discontinuity` intervals with `detail.annotation: true` and never downgrade.
 
-A delivered trip can be partial, and a complete trip says nothing about readings until PR-2. Completion status and recording completeness stay separate (concept.md §7).
+A delivered trip can be partial. Completion status and recording completeness stay separate (concept.md §7).
+
+## Readings accounting (T16, T17)
+
+[`accounting.ts`](../packages/telemetry-core/src/trips/accounting.ts) classifies each step between two consecutive readings of one connection with the [step primitives](live-telemetry-fields.md) `odometerStep` and `fuelStep` of `derived.ts`, then the reducer applies the result to the open trip of the reading's game. The trip keeps only plain data: the totals and where the session's last reading was taken. The last reading itself is kept per session as a JSON-safe point.
+
+**Which steps count.** A step belongs to the open trip only when its earlier reading was taken while the trip was open. It counts towards distance and fuel, and can be annotated, only when the trip was active at both readings. A step across the trip's opening, its `job.cleared` or a connection hole therefore never counts, even when the trip is active again before the next reading. A step across a source, truck or game-clock boundary (a plugin session, a capture clock, a truck change, a timer restart or a save load) counts nothing and is not annotated: the events that caused it are recorded already.
+
+| Quantity | Rule |
+| --- | --- |
+| Observed distance | The sum of `continuous` odometer steps in metres; a road stop adds 0 m and makes the distance available. A regression or a jump beyond `MAX_PLAUSIBLE_SPEED_MPS` × elapsed + the float32-aware margin is excluded and annotated `odometer-regressed` or `odometer-jump` with its `deltaM` |
+| Fuel used | The summed `consumed` litres minus the summed `increaseLiters` of `unchanged` steps (increases of at most `FUEL_NOISE_LITERS`), over continuous fuel steps. Not observed before the first one. No storage column (S-1): it is in the view only |
+| Refuels | A `refuelled` step is never consumption. Consecutive refuelled steps form one episode with one `refuel` annotation whose litres grow while it waits; the view reports refuelled litres and the number of episodes |
+| Connection hole | `disconnected` drops the session's last reading, so the first step of the next connection starts fresh. The reconnection's `not-connected` interval records `odometerDeltaM` from the first reading of the new connection; that change is never added to the trip |
+
+**Persistence.** Observed distance is persisted with `trip.update observedDistanceM` on each commit carrier when it changed since the last update, and right before every close (outcome, gap, discontinuity, different job, configuration cleared and restart), so a close never leaves a change unsent. A distance that was never observed is not written: storage keeps `not-observed`.
+
+**Provisional thresholds (T17).** They are named constants in `accounting.ts` and stay provisional until real sessions confirm them ([ET-014 validation](validation/et-014.md)):
+
+| Constant | Value | Rule |
+| --- | --- | --- |
+| `GAME_TIME_JUMP_MINUTES`, `GAME_TIME_JUMP_RATE` | 30 game minutes; 60 game minutes per real minute | A forward step on one game clock of at least 30 minutes that runs faster than 60 minutes per real minute is a `game-time-jump` (normal driving runs at about 19, a ferry at about 90). It is labelled `crossing` when a ferry or train event lies between its two readings, else `possible-sleep`, an inference |
+| `MAX_PLAUSIBLE_SPEED_MPS`, `POSITION_JUMP_MARGIN_METERS` | 100 m/s; 50 m | A straight-line position step longer than 100 m/s × elapsed + 50 m is a `position-jump`, labelled `crossing` or `possible-teleport` the same way |
+| `READING_HOLE_SECONDS` | 5 s | Readings at least 5 s apart on one connection, with the simulation running at both, are a reading hole: the trip becomes partial with a `sample-loss` interval. Coalesced snapshots never create an interval, because only elapsed time between readings counts, never skipped message `seq` values |
+
+Readings without an open trip of their session change no trip and add no effect: no annotation is session-level.
 
 ## Effect bounds (T18)
 
 A commit carries at most 16 effects, in this order:
 
-1. queued lifecycle effects (restart closes and not-connected updates decided at a session input);
-2. the carrier's own effects;
-3. at most 8 annotations.
+1. queued lifecycle effects (restart closes and not-connected updates decided at a session input, reading-hole downgrades decided at a reading, and the observed-distance update before a restart close);
+2. the carrier's own effects, ending with the open trip's observed-distance update when it changed;
+3. at most 8 annotations, including those decided at readings.
 
-The carrier's own effects always fit (at most five) because they may reference `this-event`. Queued effects never reference `this-event`, so they wait in order for the game's next commit. Consecutive queued annotations of the same trip and cause merge into one with `count` and `lastAtEventSeq`.
+The carrier's own effects always fit (at most six: an observed-distance update and a close, then an open with three cause intervals) because they may reference `this-event`. Queued effects never reference `this-event`, so they wait in order for the game's next commit. Consecutive queued annotations of the same trip, cause and label merge into one with `count` and `lastAtEventSeq` (`lastAtMonotonicNs` for a reading annotation); a refuel never merges, because each episode keeps its own litres.
 
 A queued interval of an earlier session loses its monotonic bounds when a new session of the game starts. Storage scopes source clocks to the committing session (T11).
 
@@ -223,6 +256,8 @@ A queued interval of an earlier session loses its monotonic bounds when a new se
 | A save from before a cargo-market pickup is not continued (`cargoLoaded` differs) | concept.md, October 14, 2026, with O3 and O10; the sequence itself is synthetic |
 | Fines while a job is untracked are ambiguous | concept.md, October 13, 2026 |
 | Train crossing, profile switch, quick-job replacement, mid-trip timer restart, late attach after a job started, plugin restart, reconnection, UTC set back | Synthetic inference |
+| A sleep appears only as a forward game-time jump on the same clock | CAP-01 run 2 (concept.md, "Sleep and unannounced game-time jumps"); the T17 thresholds are inference |
+| Odometer, fuel and refuels through readings; road-service teleport; reading holes; position jumps; crossings labelled from a transfer between readings | Synthetic inference (PR-2); no real trace of readings was reviewed for these rules |
 
 ## PR-1 interpretations of the plan
 
@@ -238,3 +273,17 @@ The plan's transitions table leaves these cases open. They are listed here for r
 - **Outcome guard.** It applies after any replacement or load, not only after a clear.
 - **Untracked jobs.** Fines, tolls and transfers while a job is untracked are `ambiguous`, not `free-driving` (fix round 1, replacing the PR-1 reading of T14).
 - **Replayed events.** A checkpoint job applies only from the checkpoint's `nextEventSeq` on, and a replayed configuration opens a partial trip with `opened-before-attach` rather than `late-attach` (fix round 2).
+
+## PR-2 interpretations of the plan
+
+T16 and T17 leave these cases open. They are listed here for review:
+
+- **Active at both readings.** A step counts only when the trip was active at both of its readings, and `job.cleared` ends the run of active readings. The distance between the last reading and the opening, a clear or a disconnection is therefore not counted; at 20 Hz snapshots that is at most one 50 ms step.
+- **Reading holes.** A hole downgrades any open trip whose window contains both readings, whatever its phase, while distance and fuel count only while active. The odometer step across a hole is still counted when it is continuous: the odometer is cumulative, so the distance is observed, not fabricated; only the samples are missing.
+- **Annotations need a trip.** A jump, refuel or odometer discontinuity with no open trip, or while the trip is not active, adds no effect; no annotation is session-level.
+- **Position jumps.** They reuse the crossing label of T17 and add `possible-teleport` as the inference otherwise. The margin is the separate `POSITION_JUMP_MARGIN_METERS` (50 m).
+- **Refuel episodes.** Consecutive refuelled steps are one annotation with growing litres, and different episodes never merge, so the litres are never lost to merging. Fuel used is not clamped at zero: small increases larger than the consumption would make it negative and stay visible.
+- **"Always before a close".** The close carries an observed-distance update whenever the value changed since the last one, so no close leaves a change unsent; an unchanged value is not written again.
+- **`odometerDeltaM`.** Only the reconnection's `disconnected` interval records it, from the first reading of the new connection while the interval still waits; gaps close the trip and carry none. It is null without an odometer at either end or after a truck change.
+- **Replayed transfers.** A ferry or train replayed from before the checkpoint does not label the next jump a crossing, because it happened before the connection's first reading.
+- **Readings of another session.** A reading of a session that is not the current connection's is refused with `UNKNOWN_SESSION`, like an item; PR-1 ignored every reading.
