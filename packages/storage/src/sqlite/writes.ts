@@ -2,7 +2,7 @@
 // exists only after COMMIT returned. Events and gaps are keyed UNIQUE(plugin session, eventSeq range): a redelivery
 // is a no-op whose effects are never applied again (protocol v1 §10, docs/storage.md "Write commands").
 import type Database from 'better-sqlite3';
-import {validateServerMessage, type EventRecord, type GapData, type ServerMessage, type SourceIdentity} from '../../../contracts/src/protocol-v1';
+import {validateServerMessage, type Available, type EventRecord, type GapData, type ServerMessage, type SourceIdentity} from '../../../contracts/src/protocol-v1';
 import {
   MAX_EFFECTS, MAX_SAMPLE_BATCH, type CommitOptions, type CommitResult, type CompletenessInterval, type EventReference, type SampleInput, type TripEffect, type Uint64
 } from '../api';
@@ -185,7 +185,7 @@ function applyEffects(c: EffectContext, effects: unknown): void {
         const ambiguous = optionalBoolean(set.gameModeAmbiguous);
         if (ambiguous !== undefined) statement(c.db, 'UPDATE trips SET game_mode_ambiguous = ? WHERE id = ?').run(ambiguous, trip.id);
         if (set.observedDistanceM !== undefined) {
-          const [value, state] = availabilityColumns(set.observedDistanceM, v => { if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) fail('INVALID_INPUT'); return v; });
+          const [value, state] = availabilityColumns(availability(set.observedDistanceM) as Available<number>, v => { if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) fail('INVALID_INPUT'); return v; });
           statement(c.db, 'UPDATE trips SET observed_distance_m = ?, observed_distance_m_state = ? WHERE id = ?').run(value, state, trip.id);
         }
         if (set.truckConfiguration !== undefined) statement(c.db, 'UPDATE trips SET truck_configuration_ref = ? WHERE id = ?').run(configurationRef(c, 'truck_configurations', set.truckConfiguration), trip.id);
@@ -302,22 +302,39 @@ function finiteNumber(value: unknown, integer = false): number {
   if (typeof value !== 'number' || !Number.isFinite(value) || (integer && !Number.isInteger(value))) fail('INVALID_INPUT');
   return value;
 }
+const REASONS = ['not-observed', 'not-supported', 'invalid'];
+/**
+ * A strictly shaped availability object: exactly `{available: true, value}` with a present value, or exactly
+ * `{available: false, reason}` with a known reason. Anything else is INVALID_INPUT, never a silent not-observed.
+ */
+function availability(input: unknown): Available<unknown> {
+  if (typeof input !== 'object' || input === null || Array.isArray(input)) fail('INVALID_INPUT');
+  const o = input as Record<string, unknown>, keys = Object.keys(o).sort().join(',');
+  if (o.available === true) { if (keys !== 'available,value' || o.value === null || o.value === undefined) fail('INVALID_INPUT'); }
+  else if (o.available !== false || keys !== 'available,reason' || !REASONS.includes(o.reason as string)) fail('INVALID_INPUT');
+  return o as Available<unknown>;
+}
 /** Validates one sample and returns its column values; nothing is written for a batch with any invalid sample. */
 function sampleColumns(row: SampleInput): {trip: string | null; clock: string; gameClock: string | null; values: unknown[]} {
   if (typeof row !== 'object' || row === null || !isUuid(row.sourceClockId)) fail('INVALID_INPUT');
   if (row.tripUuid !== undefined && row.tripUuid !== null && !isUuid(row.tripUuid)) fail('INVALID_INPUT');
   let notSupported = 0, invalid = 0;
   const values: unknown[] = [utcMs(row.utcMs), sampleMonotonicNs(row.monotonicNs)];
-  const gameTime = row.gameTime;
-  if (gameTime !== null && (typeof gameTime !== 'object' || !isUuid(gameTime?.clockId))) fail('INVALID_INPUT');
+  // Game time is either absent (null) or a game clock with an availability object for its minutes.
+  const gameTime = row.gameTime as unknown;
+  if (gameTime !== null && (typeof gameTime !== 'object' || Object.keys(gameTime).sort().join(',') !== 'clockId,minutes' || !isUuid((gameTime as {clockId: unknown}).clockId))) fail('INVALID_INPUT');
+  const game = gameTime as SampleInput['gameTime'];
   for (const {field, bit, integer} of SAMPLE_FIELDS) {
-    const input = field === 'gameTime' ? gameTime?.minutes ?? {available: false as const, reason: 'not-observed' as const} : row[field];
-    if (typeof input !== 'object' || input === null || typeof input.available !== 'boolean') fail('INVALID_INPUT');
-    if (!input.available && !['not-observed', 'not-supported', 'invalid'].includes(input.reason)) fail('INVALID_INPUT');
+    const input = availability(field === 'gameTime' ? game?.minutes ?? {available: false, reason: 'not-observed'} : row[field]);
     const mask = maskBits(input, bit); notSupported |= mask.notSupported; invalid |= mask.invalid;
     if (field === 'position') {
-      const p = input.available ? input.value as {x: unknown; y: unknown; z: unknown} : undefined;
-      values.push(...(p ? [finiteNumber(p.x), finiteNumber(p.y), finiteNumber(p.z)] : [null, null, null]));
+      let p: unknown[] = [null, null, null];
+      if (input.available) {
+        const value = input.value as Record<string, unknown>;
+        if (typeof value !== 'object' || Object.keys(value).sort().join(',') !== 'x,y,z') fail('INVALID_INPUT');
+        p = [finiteNumber(value.x), finiteNumber(value.y), finiteNumber(value.z)];
+      }
+      values.push(...p);
     } else if (field === 'gameTime') {
       const minutes = input.available ? finiteNumber(input.value, true) : null;
       if (minutes !== null && (minutes < 0 || minutes > 4_294_967_295)) fail('INVALID_INPUT');
@@ -328,7 +345,7 @@ function sampleColumns(row: SampleInput): {trip: string | null; clock: string; g
     }
   }
   values.push(BigInt(notSupported), BigInt(invalid));
-  return {trip: row.tripUuid ?? null, clock: row.sourceClockId, gameClock: gameTime === null ? null : gameTime.clockId, values};
+  return {trip: row.tripUuid ?? null, clock: row.sourceClockId, gameClock: game === null ? null : game.clockId, values};
 }
 const SAMPLE_COLUMNS = ['utc_ms', 'monotonic_ns', ...SAMPLE_FIELDS.flatMap(f => f.columns), 'not_supported_mask', 'invalid_mask'];
 /** Appends up to 3,600 samples of one session in one transaction: all of them, or none. */

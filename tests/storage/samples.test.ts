@@ -54,6 +54,22 @@ describe('REG-009 one-second samples', () => {
     expect(ok(storage.listSamples({pluginSessionId: P1}))).toEqual([]);
     expect(ok(storage.appendSamples(P1, Array.from({length: 3_600}, (_, i) => sample({utcMs: 1_791_676_800_000 + i * 1_000}))))).toEqual({appended: 3_600});
   });
+  it('refuses a malformed availability object instead of storing it as not observed', () => {
+    const malformed = (value: unknown) => value as never;
+    const cases: Partial<SampleInput>[] = [
+      {position: malformed({available: true, value: null})},
+      {position: malformed({available: true})},
+      {position: malformed({available: true, value: {x: 1, y: 2}})},
+      {gameTime: malformed({clockId: GAME_CLOCK})},
+      {gameTime: malformed({minutes: {available: true, value: null}, clockId: GAME_CLOCK})},
+      {speed: malformed({available: false})},
+      {speed: malformed({available: false, reason: 'unknown'})},
+      {speed: malformed({available: true, value: 1, reason: 'invalid'})},
+      {speed: malformed({available: 'yes', value: 1})}
+    ];
+    for (const overrides of cases) failed(storage.appendSamples(P1, [sample(overrides)]), 'INVALID_INPUT');
+    expect(ok(storage.listSamples({pluginSessionId: P1}))).toEqual([]);
+  });
   it('associates samples with a trip and pages them in insertion order', () => {
     ok(storage.commitEvent({message: v1('event-job-configured'), effects: [{kind: 'trip.open', tripUuid: TRIP, game: 'ets2', gameMode: {mode: 'unknown', method: 'none', confidence: 'none'},
       jobConfiguration: 'this-event', recordingCompleteness: 'complete', startedUtcMs: 1_791_676_800_000}]}));

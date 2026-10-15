@@ -119,6 +119,8 @@ describe('REG-005/REG-006 idempotent commits and atomic effects', () => {
     const storage = await session();
     ok(storage.commitEvent({message: v1('event-job-configured'), effects: [openTrip(T1)]}));
     const delivered = withEventSeq('event-job-delivered', 2n);
+    // A malformed availability object is refused, not stored as not observed.
+    failed(storage.commitEvent({message: delivered, effects: [{kind: 'trip.update', tripUuid: T1, set: {observedDistanceM: {available: true} as never}}]}), 'INVALID_INPUT');
     failed(storage.commitEvent({message: withEventSeq('event-job-cleared', 2n), effects: [{kind: 'trip.close', tripUuid: T1, outcome: 'delivered', closeReason: 'outcome', outcomeEvent: 'this-event', recordingCompleteness: 'complete', endedUtcMs: 1_791_676_900_000}]}), 'INVALID_INPUT');
     ok(storage.commitEvent({message: delivered, effects: [{kind: 'event.attribute', tripUuid: T1, attribution: 'trip'},
       {kind: 'trip.close', tripUuid: T1, outcome: 'delivered', closeReason: 'outcome', outcomeEvent: 'this-event', recordingCompleteness: 'complete', endedUtcMs: 1_791_676_900_000}]}));
