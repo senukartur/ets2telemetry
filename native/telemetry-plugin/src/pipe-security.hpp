@@ -49,5 +49,6 @@ class OwnerSecurity final {
   std::wstring sid_; PSECURITY_DESCRIPTOR descriptor_ = nullptr; SECURITY_ATTRIBUTES attributes_{};
 };
 std::wstring final_path(HANDLE, HANDLE stop_event = nullptr);
-std::wstring local_transport_directory(const OwnerSecurity&);
+// `leaf` names the protocol directory below the protected transport subtree: v0, or v1 for the protocol v1 endpoint.
+std::wstring local_transport_directory(const OwnerSecurity&, const wchar_t* leaf = L"v0");
 }

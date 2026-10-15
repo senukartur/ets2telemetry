@@ -28,8 +28,8 @@ std::string bounded_file(HANDLE f, std::size_t limit, HANDLE stop_event) {
   if (!ReadFile(f,result.data(),static_cast<DWORD>(result.size()),&read,nullptr) || read != result.size()) fail(); inspection_running(stop_event); return result;
 }
 }
-std::wstring endpoint_name(const sdk::Snapshot& s, const UserIdentity& user) {
-  return L"\\\\.\\pipe\\ETS2Telemetry-" + widen(s.identity.game.c_str()) + L"-v0-" + widen(user.tag) + L"-" + std::to_wstring(user.session) + L"-" + widen(s.identity.process_instance_id.c_str());
+std::wstring endpoint_name(const sdk::Snapshot& s, const UserIdentity& user, unsigned protocol_major) {
+  return L"\\\\.\\pipe\\ETS2Telemetry-" + widen(s.identity.game.c_str()) + L"-v" + std::to_wstring(protocol_major) + L"-" + widen(user.tag) + L"-" + std::to_wstring(user.session) + L"-" + widen(s.identity.process_instance_id.c_str());
 }
 std::vector<AllowedPeer> read_service_policy(const std::wstring& directory, const OwnerSecurity& security, const UserIdentity& user, HANDLE stop_event) {
   inspection_running(stop_event); security.verify_owner_only(directory,stop_event);
@@ -52,10 +52,10 @@ std::vector<AllowedPeer> read_service_policy(const std::wstring& directory, cons
   }
   inspection_running(stop_event); return result;
 }
-Discovery::Discovery(const std::wstring& directory, const OwnerSecurity& security, const UserIdentity& user, const sdk::Snapshot& s, const std::wstring& pipe) {
+Discovery::Discovery(const std::wstring& directory, const OwnerSecurity& security, const UserIdentity& user, const sdk::Snapshot& s, const std::wstring& pipe, unsigned protocol_major) {
   security.verify_owner_only(directory); path_ = directory + L"\\" + widen(s.identity.process_instance_id.c_str()) + L".json";
   const auto temporary = path_ + L"." + widen(s.identity.plugin_session_id.c_str()) + L".tmp";
-  J record{J::Object{{"schemaVersion",J{1.0}}, {"protocolMajor",J{0.0}}, {"game",J{std::string(s.identity.game.c_str())}}, {"userTag",J{user.tag}},
+  J record{J::Object{{"schemaVersion",J{1.0}}, {"protocolMajor",J{static_cast<double>(protocol_major)}}, {"game",J{std::string(s.identity.game.c_str())}}, {"userTag",J{user.tag}},
     {"windowsSessionId",J{static_cast<double>(user.session)}}, {"processId",J{static_cast<double>(s.identity.process_id)}},
     {"processCreationTime",J{std::to_string(creation_time(GetCurrentProcess()))}}, {"processInstanceId",J{std::string(s.identity.process_instance_id.c_str())}},
     {"pluginSessionId",J{std::string(s.identity.plugin_session_id.c_str())}}, {"pipeName",J{narrow(pipe)}}}};
