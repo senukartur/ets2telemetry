@@ -1,6 +1,6 @@
 # Technical Debt and Deferred Capabilities
 
-These entries record owner-approved deferrals. They do not expand the current milestone or establish an implementation choice.
+These entries record owner-approved deferrals, or coordinator decisions under the owner's delegation when an entry is explicitly labelled as such. They do not expand the current milestone or establish an implementation choice.
 
 ## TD-001: Game screenshots containing the telemetry overlay
 
