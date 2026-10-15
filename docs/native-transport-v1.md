@@ -3,10 +3,10 @@
 ET-004b implements the plugin side of [protocol v1](protocol/v1.md) in three pull requests:
 
 1. **Producer core** (PR A, merged as `f6829fc`): the copied event records, the encoder and the retained event store. They are SDK-free and I/O-free.
-2. **Callback capture** (this revision): the SDK-thread handoff that assigns `eventSeq` and copies records without blocking, and the v1 state slot. The plugin DLL compiles it, but nothing attaches an event channel yet, so it is inert in production.
-3. **Endpoint**: the v1 pipe, handshake, live loop and shutdown.
+2. **Callback capture** (PR B, merged as `99a2b32`): the SDK-thread handoff that assigns `eventSeq` and copies records without blocking, and the v1 state slot.
+3. **Endpoint** (PR C, this revision): the v1 pipe, its discovery and policy, the handshake, the live loop and shutdown. The production plugin now serves v1 beside v0 and CAP0 (OD-2). It stays passive and fail-closed until ET-006b provisions the v1 service policy: without that policy no client is authorized, and the callbacks keep only state and loss counters.
 
-The endpoint pull request extends this document. The v0 endpoint, its wire format and the desktop application are unchanged. Nothing here establishes game, TruckersMP, display or performance support.
+The v0 endpoint, its wire format and the desktop application are unchanged. Nothing here establishes game, TruckersMP, display or performance support.
 
 ## Components
 
@@ -17,6 +17,9 @@ The endpoint pull request extends this document. The v0 endpoint, its wire forma
 | [protocol-v1-store.hpp](../native/telemetry-plugin/src/protocol-v1-store.hpp) | `EventStore`: the retained entries of one plugin session, its loss counters and the outbound cursor |
 | [event-channel.hpp](../native/telemetry-plugin/src/event-channel.hpp) | `EventChannel`: the lock-free handoff ring from the SDK callback thread to the transport worker, its gate and the loss runs |
 | [sdk-adapter.hpp](../native/telemetry-plugin/src/sdk-adapter.hpp) | `attach_events`, the v1 records built in the SDK callbacks, and the v1 state slot `V1Current`, read with `read_v1_current` |
+| [v1-state.hpp](../native/telemetry-plugin/src/v1-state.hpp) | Pure mappings for the endpoint: the session identity and welcome capabilities from the SDK identity, the game window under the v0 freshness rules, continuity, and `CaptureStamp`, the per-connection capture clamp |
+| [v1-server.hpp](../native/telemetry-plugin/src/v1-server.hpp) | `v1::Server`: the pipe, discovery, policy check, handshake, live loop, `end` and shutdown, on one owned worker |
+| [sdk-exports.cpp](../native/telemetry-plugin/src/sdk-exports.cpp) | The SDK lifecycle: prepare and attach the channel, start the endpoint, and stop it in the retirement order |
 
 The transport worker owns the encoder and the store. Both are single-threaded, never block and take every time as an explicit argument in the source monotonic clock. The store allocates its 256 entries once, at construction.
 
@@ -118,7 +121,7 @@ The adapter publishes a `V1Current` beside the v0 slot: at every `frame_end`, at
 
 ## Caller sequence
 
-The endpoint pull request will drive the channel and the store as follows:
+The endpoint ([v1-server.cpp](../native/telemetry-plugin/src/v1-server.cpp)) drives the channel and the store as follows:
 
 1. Prepare the channel in the SDK initialization context and attach it with `attach_events()` after `Adapter::initialize()`, once per plugin session. Start the worker afterwards; `read_v1_current()` is available at once. `initialize()` detaches a channel still attached from an earlier session, so its `eventSeq` never continues under a new `pluginSessionId` (§9); v1 then stays inert until a freshly prepared channel is attached. When `initialize()` returns `not_now` because the worker holds a slot, it has changed no state.
 2. On a durable hello, call `EventStore::connect()` and only then `set_gate(Gate::durable)`, so that every record copied for the new consumer is retained. Build the checkpoint from `status()` and `read_v1_current()`. A live-only hello sets `Gate::live`; it never connects the store. On the disconnect of a durable client, set the gate to `live` or `none` first, then call `disconnect(now)`.
@@ -128,8 +131,75 @@ The endpoint pull request will drive the channel and the store as follows:
 6. Pass every ACK through `AckValidator::accept`, then call `release()` with the accepted value.
 7. At shutdown, or when the channel or the store is exhausted, send `end` from `end_cursor()`. Detach the channel with `attach_events(nullptr)` only after the worker has stopped.
 
+## Endpoint
+
+### Pipe, discovery and policy
+
+The endpoint follows the v0 security model ([protocol v1 §12](protocol/v1.md#12-security-and-transport), [native transport v0](native-transport-v0.md#authentication-and-discovery-abi)); the deltas are the `v1` segment, `protocolMajor: 1` and a separate directory and policy:
+
+```text
+\\.\pipe\ETS2Telemetry-{game}-v1-{userTag}-{windowsSessionId}-{processInstanceId}
+%LOCALAPPDATA%\ETS2Telemetry\transport\v1\{processInstanceId}.json
+%LOCALAPPDATA%\ETS2Telemetry\transport\v1\service-policy.json
+```
+
+- The pipe has one instance, `FILE_FLAG_FIRST_PIPE_INSTANCE`, `PIPE_REJECT_REMOTE_CLIENTS`, the protected current-user DACL of `OwnerSecurity` and a non-inheritable handle. The v0 helpers take a defaulted protocol major (`endpoint_name`, `Discovery`) or directory leaf (`local_transport_directory`), so every v0 name, path and record byte is unchanged.
+- A pre-existing pipe of that name, a foreign discovery record or a directory with a broad ACL or a reparse point stops the v1 worker before it serves anything: status `failed`, no endpoint, nothing adopted or overwritten. v0 and CAP0 are unaffected.
+- Each connection is authorized like v0: the connected peer's PID, a retained process handle, its creation time, token user and Windows session, and the SHA-256 of its held image, which must match the protected `transport\v1\service-policy.json`. A missing, malformed, broad-ACL or mismatching policy rejects the client and leaves the endpoint listening. The retained process is rechecked on every loop iteration; an exit or a reused PID ends the connection. ET-006b provisions this policy; until then every client is rejected.
+
+### Handshake
+
+- The hello has five real seconds and at most 4,096 payload bytes, enforced at the length prefix before the payload is retained. Any byte after the hello in the same read, any client byte before the checkpoint is issued, another major, another envelope minor or any other kind closes the connection without an error frame (OD-5 S6, §2). A second client gets `ERROR_PIPE_BUSY` and never displaces the first.
+- The inbound read is posted right after the hello, so a byte sent before the checkpoint is observed.
+- A **durable** hello calls `EventStore::connect()`, then sets the gate to `durable`, then writes the welcome, then the checkpoint, built from one `read_v1_current()` copy, the window monitor's latest state and the store's `status()` (S11). `AckValidator::checkpoint(A)` follows the checkpoint.
+- A **live-only** hello sets the gate to `live`. The store is never connected and no event or gap is written; the events become `noDurableConsumer` coverage.
+- The welcome repeats the §9 limits, reports `scs-sdk-1.15` and the SDK's telemetry API and game versions, `gameplayEvents` from the registration result, and the OD-3 event types and game mode (no `source.gameMode`; `unknown`, `none`, `none`). The source `origin` is fixed per artifact: `game` in the production DLL, `synthetic` in test DLLs and console fixtures.
+
+### Live loop
+
+Each iteration, at most 10 ms apart:
+
+1. drain the ring into the store and call `expire(now)` (Caller sequence steps 3–4). A drain takes at most one ring's worth and, after its first slot, yields as soon as a stop is requested, because each record is measured by a full encode;
+2. track the one write in flight; a write still pending after 1 s closes the connection;
+3. read the client: an `ack` passes through `AckValidator::accept` and then `release()`; a `clock.probe` must have a strictly increasing `probeId` and arrive while no reply is unsent. Its receipt time is taken when the read completion is observed. Anything else, and any decoding error, closes the connection;
+4. write, while writes complete at once and at most 32 per iteration: an unsent clock reply first (its send time is the encode time, so received ≤ sent ≤ capture), then the replaceable snapshot at most every 50 ms, then on durable connections the next store item with `AckValidator::sent`.
+
+The snapshot slot holds the latest v1 slot copy that differs from the last one sent (boundary order, window revision or window availability). A newer publication replaces an unsent one and is counted in `coalescedSnapshots`, together with the adapter's slot contention. Window availability follows the v0 identity and 250 ms freshness rules.
+
+`capture.monotonicNs` is `max(now, last capture on this connection, the latest source-clock time the message carries)`: an event's `occurred.monotonicNs`, a gap's last lost time, a status's `oldestRetainedMonotonicNs` or a probe's receipt time (OD-5 S7, Caller sequence step 5).
+
+### Disconnect, retirement and end
+
+- A connection ends by closing the gate to `none`, then calling `disconnect(now)` for a durable consumer, which starts the 300 s retention window, then observing the completion of its I/O, then `DisconnectNamedPipe`. The endpoint listens again.
+- `rejected` from the store (Caller sequence step 4) writes `end` with `source-retired` where the connection has a welcome, hands the fixed entry `ETS2Telemetry: protocol v1 endpoint retired: invariant violation` to the `transport_v1` slot of the adapter's deferred SDK-thread log, so it never replaces a v0 entry, and retires the v1 endpoint only. A violation found by the final drain at shutdown is handled the same way: `end` then carries `source-retired` and no further item. A retirement after a stop request keeps the 250 ms `end` budget. A retained item that cannot be encoded is treated the same way, because skipping it would leave a hole in the connection's coverage.
+- When the channel has assigned the last `eventSeq` (`exhausted()`), the worker waits up to 250 ms for the store to record the channel's last loss run, writes the remaining retained items and `end` with `sequence-exhausted`, and retires the endpoint. Events observed afterwards get no `eventSeq` (§9); the consumer learns of the end of the session from `end`. Nothing is logged.
+- After any `end` the pipe handle is closed without `DisconnectNamedPipe`, which would discard bytes the client has not read yet.
+- A startup or runtime failure is fail-closed and never logged to the game (OD-2). Without a worker the channel stays attached with the gate `none`, so the callbacks keep only state and bounded loss runs.
+
+### Lifecycle and shutdown
+
+`scs_telemetry_init` calls `Adapter::initialize()`, then `Server::prepare()` (a fresh store, and the channel restarted at `eventSeq` 1, while no worker runs), then `attach_events()`. After the v0 result it starts CAP0 and then the v1 worker. A v1 start failure detaches the channel and never fails initialization. A second `scs_telemetry_init` in the same plugin session returns `already_registered` from the adapter before the channel could be prepared or attached again.
+
+`scs_telemetry_shutdown` retires in this order:
+
+1. `v1.signal_stop()`, so `end` is written while CAP0 drains;
+2. CAP0 `stop()`;
+3. `v1.stop()`: repeated `CancelSynchronousIo` on the worker until it exits, then join. A cancellation is issued only while the worker is inside its inspection window (the peer image and policy reads), under a mutex that orders it with the window's open and close. Outside it, above all while the exit path deletes the discovery record, nothing is cancelled: a cancelled `SetFileInformationByHandle` fails with `STATUS_CANCELLED` and would leave the record behind;
+4. v0 `stop()`;
+5. the window monitor;
+6. `Adapter::shutdown()`;
+7. `attach_events(nullptr)`.
+
+At shutdown the worker lets an in-flight write finish, drains the ring until the 150 ms item cut-off (a record left in the ring is plugin-exit loss at or above the reported `nextEventSeq`, OD-5 S11), writes retained items the client has not received during the first 150 ms of the stop request and `end` with `plugin-shutdown` by 250 ms. A write that cannot finish by then is cancelled and no `end` follows a possibly cut frame: once a stop is requested every write wait is bounded by the 250 ms budget, and `finish()` runs once per connection, so a retirement that follows it never writes again. Every `CancelIoEx` is followed by `GetOverlappedResult` with `bWait` before the OVERLAPPED or its buffer is released. `shutdown_ms` and the 1,000 ms `shutdown_deadline_exceeded` flag are recorded after the mandatory join; the join is never skipped. There is no `DllMain` and no detached thread.
+
+### Test seams
+
+The test DLL (`ETS2TELEMETRY_TRANSPORT_TEST_DLL`) exports `ets2telemetry_test_v1_directory`, `ets2telemetry_test_v1_endpoint`, `ets2telemetry_test_v1_write_pending` and `ets2telemetry_test_v1_attached`, which reads the adapter's own channel pointer (`Adapter::events_attached()`); `sdk-exports-contract` checks that none of these seams exists in the production DLL. It prepares, attaches and starts v1 only after a v1 directory is set, so the earlier DLL and CAP0 tests load a DLL whose v1 endpoint stays unused. The console cores built with `ETS2TELEMETRY_TRANSPORT_TEST_HOOKS` add `set_clock_offset_for_test` (a signed offset on every worker clock reading), `Server::skip_store_for_test` (offline coverage recorded in the store without the channel) and the hook points `v1-tick`, which can hold the worker at the start of an iteration, `v1-finish`, which can hold it after a stop request and before the shutdown drain, and `v1-exit`, where a test performs synchronous I/O in the exit path to prove that `stop()` does not cancel it. The production DLL contains none of these hooks or exports. `Server::end_attempts()`, like `ends()`, is a diagnostic counter compiled into every build; it counts issued `end` writes.
+
 ## Evidence
 
 The console test [v1-producer-test.cpp](../native/telemetry-plugin/tests/v1-producer-test.cpp) runs as CTest `v1-producer-contract-{store,release,retention,overflow,encoding,messages,streams,randomized,fuzz}` and, in the AddressSanitizer build, as `v1-producer-asan-contract-*`. It drives the store and encoder through the ET-002b `Consumer`, `DurableAckCursor` and `AckValidator` and compares built messages with the hand-written shared fixtures.
 
-The console test [event-channel-test.cpp](../native/telemetry-plugin/tests/event-channel-test.cpp) runs as `event-channel-contract-{ring,gate,loss-runs,flush,concurrency,exhaustion}` and `event-channel-asan-contract-*`. The adapter cases in [sdk-adapter-test.cpp](../native/telemetry-plugin/tests/sdk-adapter-test.cpp) run inside `sdk-adapter-contract` and `sdk-adapter-asan-contract`: record mapping through the contract encoder, the gate and state slot, non-blocking callbacks, v0 and CAP0 isolation, and the drain into the event store in the order above, accepted by the ET-002b `Consumer`. Results and pending checks are in [ET-004b validation](validation/et-004b.md).
+The console test [event-channel-test.cpp](../native/telemetry-plugin/tests/event-channel-test.cpp) runs as `event-channel-contract-{ring,gate,loss-runs,flush,concurrency,exhaustion}` and `event-channel-asan-contract-*`. The adapter cases in [sdk-adapter-test.cpp](../native/telemetry-plugin/tests/sdk-adapter-test.cpp) run inside `sdk-adapter-contract` and `sdk-adapter-asan-contract`: record mapping through the contract encoder, the gate and state slot, non-blocking callbacks, v0 and CAP0 isolation, and the drain into the event store in the order above, accepted by the ET-002b `Consumer`.
+
+The console test [v1-transport-test.cpp](../native/telemetry-plugin/tests/v1-transport-test.cpp) exercises the endpoint over actual Windows named pipes with isolated temporary directories, as CTest `v1-transport-contract-{handshake,live-only,durable,redelivery,retention,stalled-reader,overflow,ack-control,fuzz,rejection,collision,policy,exhaustion,invariant,v0-isolation,cap0-isolation,shutdown}` and `v1-transport-dll-contract`, and in the AddressSanitizer build as `v1-transport-asan-contract-*`. The controlled client is the ET-002b C++ `Consumer` with the `DurableAckCursor`; the DLL case loads the uninstrumented test DLL through the official SDK exports. Results and pending checks are in [ET-004b validation](validation/et-004b.md).
