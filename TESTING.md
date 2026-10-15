@@ -260,7 +260,7 @@ Expected effects and rows come from the specification, the observations and the 
 PR-2 adds readings accounting (T16) and the provisional thresholds (T17) and widens the REG-008 text above. Its tests:
 
 - `tests/unit/trip-accounting.test.ts`: observed distance (road stop, pause, regression and jump, float32 margin, truck, source and game-clock boundaries, steps across an opening or a clear, the flush before a close and a restart close, a resumed seed), connection holes with `odometerDeltaM`, fuel used and refuel episodes, reading holes, game-time and position jumps with their labels, the T18 annotation cap, and prefix rebuilds with readings.
-- `tests/unit/trip-simulator-replay.test.ts` with `tests/shared/trip-replay.ts`: twelve ET-005b scenarios replayed through the reducer and a first-insert storage model under the T3 adoption rule, compared with hand-written `tests/fixtures/simulator-v1/<id>.trip.expected.json`.
+- `tests/unit/trip-simulator-replay.test.ts` with `tests/shared/trip-replay.ts`: twelve ET-005b scenarios replayed through the reducer and a first-insert storage model under the T3 adoption rule, compared with hand-written `tests/fixtures/simulator-v1/<id>.trip.expected.json`, plus one test-only transcript whose active trip has a moving odometer, a refuel, a reading hole and a game-time jump (fix round 1).
 - `tests/storage/trip-accounting-effects.test.ts` (`npm run test:storage`): the observed-distance update, a reading-hole interval and reading annotations committed through the real storage core.
 
 All of this is synthetic evidence: no game, TruckersMP, display or performance behaviour follows, and the T17 and `derived.ts` thresholds stay provisional; see [ET-014 validation](docs/validation/et-014.md).
