@@ -110,7 +110,7 @@ it('does not expose the previous observation as current while a replacement port
   stop();
 });
 it('preserves the frozen narrow bridge and rejects privileged source values before IPC', async () => {
-  expect(Object.isFrozen(bridge)).toBe(true); expect(Object.keys(bridge).sort()).toEqual(['getStatus', 'selectSource', 'subscribeLive']);
+  expect(Object.isFrozen(bridge)).toBe(true); expect(Object.keys(bridge).sort()).toEqual(['exitApplication', 'getAppState', 'getStatus', 'selectSource', 'subscribeAppState', 'subscribeLive']);
   await expect(bridge.selectSource('C:\\arbitrary.exe' as never)).rejects.toThrow('Invalid source selection');
   expect(ipc.invoke).not.toHaveBeenCalled();
   await bridge.selectSource('ats'); expect(ipc.invoke).toHaveBeenCalledWith('telemetry:select', 'ats');
@@ -144,4 +144,22 @@ it('does not reassert service subscription after the callback unsubscribes its o
   ipc.emit('telemetry:service-state', {}, {...initialLive(), status: 'restarting'});
   old.close(); ipc.emit('telemetry:service-state', {}, {...initialLive(), status: 'service-failed'});
   expect(subscriptions()).toBe(1); expect(vi.getTimerCount()).toBe(0);
+});
+it('appends the application state and exit methods after the original three bridge keys', () => {
+  expect(Object.keys(bridge)).toEqual(['getStatus', 'selectSource', 'subscribeLive', 'getAppState', 'subscribeAppState', 'exitApplication']);
+});
+it('allows one application state listener, forwards pushed state and unsubscribes once', () => {
+  const listener = vi.fn(); const stop = bridge.subscribeAppState(listener);
+  expect(ipc.send).toHaveBeenCalledExactlyOnceWith('app:subscribe-state');
+  expect(() => bridge.subscribeAppState(vi.fn())).toThrow('One application state subscription');
+  expect(() => bridge.subscribeAppState('not a function' as never)).toThrow();
+  const state = {health: {service: 'ready', storage: 'verified', recording: 'unavailable', lastError: null}};
+  ipc.emit('app:state', {}, state); expect(listener).toHaveBeenCalledExactlyOnceWith(state);
+  stop(); stop(); expect(ipc.send.mock.calls.filter(call => call[0] === 'app:unsubscribe-state')).toHaveLength(1);
+  ipc.emit('app:state', {}, state); expect(listener).toHaveBeenCalledOnce();
+  const next = vi.fn(); bridge.subscribeAppState(next); ipc.emit('app:state', {}, state); expect(next).toHaveBeenCalledOnce();
+});
+it('requests state and exit through fixed invoke channels without forwarding renderer arguments', async () => {
+  await bridge.getAppState(); await Reflect.apply(bridge.exitApplication, bridge, ['C:\\arbitrary', {force: true}]);
+  expect(ipc.invoke.mock.calls).toEqual([['app:get-state'], ['app:exit']]);
 });
