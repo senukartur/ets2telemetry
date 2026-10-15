@@ -1,6 +1,7 @@
 using System;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -46,6 +47,40 @@ namespace ETS2Telemetry.Diagnostics {
     [DllImport("kernel32.dll", SetLastError=true)] static extern bool CreatePipe(out IntPtr read, out IntPtr write, ref Security security, uint size);
     [DllImport("kernel32.dll", SetLastError=true)] static extern bool SetHandleInformation(IntPtr handle, uint mask, uint flags);
     [DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Unicode)] static extern IntPtr CreateFile(string name, uint access, uint share, ref Security security, uint mode, uint flags, IntPtr template);
+    [DllImport("kernel32.dll", SetLastError=true)] static extern bool GetSystemTimes(out long idle, out long kernel, out long user);
+
+    // Optional evidence: cumulative Job CPU time and whole-system busy/idle time, one JSON line per wake.
+    // It reads accounting only. A failed query or write ends the series and never cancels containment.
+    sealed class CpuSampler : IDisposable {
+      readonly IntPtr job; readonly Stopwatch elapsed; StreamWriter writer; long idleStart, busyStart;
+      public CpuSampler(IntPtr job, string path, Stopwatch elapsed, uint ratePercent) {
+        this.job=job; this.elapsed=elapsed;
+        long idle, kernel, user;
+        if (!GetSystemTimes(out idle,out kernel,out user)) return;
+        idleStart=idle; busyStart=kernel+user-idle; // Kernel time includes idle time.
+        try {writer=new StreamWriter(new FileStream(path,FileMode.CreateNew,FileAccess.Write,FileShare.Read),new UTF8Encoding(false));}
+        catch (IOException) {return;} catch (UnauthorizedAccessException) {return;}
+        // utc and elapsedMs anchor the series to the wall-clock times in application diagnostics.
+        Write(String.Format(CultureInfo.InvariantCulture,"{{\"type\":\"start\",\"utc\":\"{0}\",\"elapsedMs\":{1},\"logicalProcessors\":{2},\"jobCpuRatePercent\":{3},\"intervalMs\":100}}",
+          DateTime.UtcNow.ToString("o",CultureInfo.InvariantCulture),elapsed.ElapsedMilliseconds,Environment.ProcessorCount,ratePercent));
+      }
+      public void Sample() {
+        if (writer==null) return;
+        Accounting value; long idle, kernel, user;
+        if (!QueryInformationJobObject(job,1,out value,(uint)Marshal.SizeOf(typeof(Accounting)),IntPtr.Zero) || !GetSystemTimes(out idle,out kernel,out user)) {Dispose(); return;}
+        // Times are 100 ns units. System busy/idle are summed over all logical processors since the first line.
+        Write(String.Format(CultureInfo.InvariantCulture,"{{\"elapsedMs\":{0},\"jobCpuMs\":{1:0.0},\"activeProcesses\":{2},\"systemBusyMs\":{3:0.0},\"systemIdleMs\":{4:0.0}}}",
+          elapsed.ElapsedMilliseconds,(value.UserTime+value.KernelTime)/10000.0,value.ActiveProcesses,(kernel+user-idle-busyStart)/10000.0,(idle-idleStart)/10000.0));
+      }
+      void Write(string line) {
+        try {writer.WriteLine(line); writer.Flush();}
+        catch (IOException) {Dispose();} catch (UnauthorizedAccessException) {Dispose();}
+      }
+      public void Dispose() {
+        var current=writer; writer=null;
+        if (current!=null) try {current.Dispose();} catch (IOException) { /* A failed diagnostic disk does not affect containment. */ }
+      }
+    }
 
     static void Check(bool ok) {if (!ok) throw new Win32Exception(Marshal.GetLastWin32Error());}
     static void Close(ref IntPtr handle) {if (handle != IntPtr.Zero && handle != new IntPtr(-1)) CloseHandle(handle); handle=IntPtr.Zero;}
@@ -80,11 +115,15 @@ namespace ETS2Telemetry.Diagnostics {
       return value.ActiveProcesses;
     }
     public static int Run(string executable, string[] args, string cwd, string output, int timeoutMs) {
+      return Run(executable, args, cwd, output, timeoutMs, false);
+    }
+    // sampleCpu adds output/cpu.jsonl; limits, deadlines and cleanup are identical either way.
+    public static int Run(string executable, string[] args, string cwd, string output, int timeoutMs, bool sampleCpu) {
       if (timeoutMs<100 || timeoutMs>60000) throw new ArgumentOutOfRangeException("timeoutMs");
       if (!Path.IsPathRooted(executable) || !Path.IsPathRooted(cwd) || !Path.IsPathRooted(output)) throw new ArgumentException("Absolute paths required");
       Directory.CreateDirectory(output);
       IntPtr job=IntPtr.Zero, stdoutRead=IntPtr.Zero, stdoutWrite=IntPtr.Zero, stderrRead=IntPtr.Zero, stderrWrite=IntPtr.Zero, input=IntPtr.Zero;
-      ProcessInfo process=new ProcessInfo(); Thread stdout=null, stderr=null;
+      ProcessInfo process=new ProcessInfo(); Thread stdout=null, stderr=null; CpuSampler sampler=null;
       try {
         job=CreateJobObject(IntPtr.Zero,null); Check(job!=IntPtr.Zero);
         var limits=new ExtendedLimits();
@@ -110,17 +149,19 @@ namespace ETS2Telemetry.Diagnostics {
         stderr=Drain(stderrRead,Path.Combine(output,"stderr.log")); stderrRead=IntPtr.Zero;
         Check(ResumeThread(process.Thread)!=UInt32.MaxValue);
         var elapsed=Stopwatch.StartNew();
+        if (sampleCpu) {sampler=new CpuSampler(job,Path.Combine(output,"cpu.jsonl"),elapsed,cpu.Rate/100); sampler.Sample();}
         uint wait;
-        do {wait=WaitForSingleObject(process.Process,100); if (wait==UInt32.MaxValue) Check(false);}
+        do {wait=WaitForSingleObject(process.Process,100); if (wait==UInt32.MaxValue) Check(false); if (sampler!=null) sampler.Sample();}
         while (wait==258 && elapsed.ElapsedMilliseconds<timeoutMs);
         if (wait==258) {Check(TerminateJobObject(job,124)); return 124;}
         uint code; Check(GetExitCodeProcess(process.Process,out code));
         // Root exit must not leave orphaned service/renderer processes behind.
-        for (int i=0;i<10 && Active(job)>0;i++) Thread.Sleep(100);
+        for (int i=0;i<10 && Active(job)>0;i++) {Thread.Sleep(100); if (sampler!=null) sampler.Sample();}
         if (Active(job)>0) {Check(TerminateJobObject(job,125)); return 125;}
         return unchecked((int)code);
       } finally {
         // Fail closed, including assignment/resume failures. Only held handles identify processes.
+        if (sampler!=null) sampler.Dispose();
         if (process.Process!=IntPtr.Zero && WaitForSingleObject(process.Process,0)==258) TerminateProcess(process.Process,126);
         if (job!=IntPtr.Zero) TerminateJobObject(job,126);
         Close(ref job);

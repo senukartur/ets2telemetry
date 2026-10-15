@@ -29,11 +29,22 @@ Add-Type -Path (Join-Path $checkout 'scripts/watchdog/BoundedProcess.cs')
 $started = [datetime]::UtcNow
 $code = [ETS2Telemetry.Diagnostics.BoundedProcess]::Run($node,
     [string[]]@((Join-Path $PSScriptRoot 'runtime-smoke.mjs'), $configFile),
-    $checkout, (Join-Path $output 'job'), 60000)
+    $checkout, (Join-Path $output 'job'), 60000, $true)
+$durationSeconds = ([datetime]::UtcNow-$started).TotalSeconds
+# Diagnostic only: Job/system CPU use separates starvation under the cap from outside load or a block
+# inside the application. A missing or malformed series is recorded and never changes the smoke result.
+$cpu = [ordered]@{error='CPU_SERIES_UNAVAILABLE'}
+$cpuSeries = Join-Path $output 'job/cpu.jsonl'
+if (Test-Path -LiteralPath $cpuSeries -PathType Leaf) {
+    try {
+        $summary = & $node (Join-Path $PSScriptRoot 'job-cpu-summary.mjs') $cpuSeries 2>$null
+        if ($LASTEXITCODE -eq 0) { $cpu = $summary | ConvertFrom-Json } else { $cpu.error = 'CPU_SERIES_INVALID' }
+    } catch { $cpu.error = 'CPU_SERIES_INVALID' }
+}
 @{mode=$Mode; scenario=$Scenario; commit=$config.commit; exitCode=$code; retries=0;
-  durationSeconds=([datetime]::UtcNow-$started).TotalSeconds;
+  durationSeconds=$durationSeconds;
   limits='60 s; 16 processes; 2 GiB; 25% CPU; kill-on-close';
-  descendantsNaturallyDrained=($code -eq 0)} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $output 'job-result.json') -Encoding utf8
+  descendantsNaturallyDrained=($code -eq 0); cpu=$cpu} | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $output 'job-result.json') -Encoding utf8
 $validation = Test-RuntimeReceipt -DriverResultPath (Join-Path $output 'result.json') -ExpectedCommit $config.commit -ExpectedMode $Mode -ExpectedScenario $Scenario -JobExitCode $code
 $ownedPidPath = Join-Path $output 'job/owned-pid.txt'
 $ownedPid = if (Test-Path -LiteralPath $ownedPidPath -PathType Leaf) { (Get-Content -LiteralPath $ownedPidPath -Raw).Trim() } else { $null }

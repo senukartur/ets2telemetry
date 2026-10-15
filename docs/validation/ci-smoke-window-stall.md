@@ -9,7 +9,7 @@ The four runs named for this investigation do not share one cause:
 - Three failed for causes that are already recorded and fixed: the CPU-spinning overlay stall (two runs) and the renderer reload subscription race (one run).
 - The newest, [38624116941](https://github.com/senukartur/ets2telemetry/actions/runs/38624116941), is a different failure. The Electron main (browser) process stopped dispatching events for about 17.7 s, starting right after it created the dashboard and overlay windows. During that time Playwright saw no page and the dashboard load could not finish. Among all 443 retained hosted launches it is the only window load slower than 1.7 s.
 
-The cause of that stall is **unknown**. The existing evidence places it in the Electron main process and rules out a slow telemetry service or storage worker. It cannot tell CPU starvation under the Job's 25% cap from a native block inside the process, because no CPU accounting or event-loop timing is recorded. [Proposed diagnostics](#proposed-diagnostics) would answer that on the next occurrence. They are proposals only and are not implemented.
+The cause of that stall is **unknown**. The existing evidence places it in the Electron main process and rules out a slow telemetry service or storage worker. It cannot tell CPU starvation under the Job's 25% cap from a native block inside the process, because no CPU accounting or event-loop timing is recorded. [Proposed diagnostics](#proposed-diagnostics) would answer that on the next occurrence. The owner approved them, and they are now collected; see [Implemented diagnostics](#implemented-diagnostics).
 
 ## Evidence per run
 
@@ -90,3 +90,20 @@ These proposals are for owner decision. None is implemented. They change no dead
 Expected cost: one 250 ms timer in the main process during smokes, and up to 600 accounting samples per launch from a thread that already wakes at that rate. The ordinary test suite would need unit cases for the new receipt fields and the lag monitor. With these in place, the next occurrence would distinguish starvation, outside load and a native block, and would give the stall interval directly instead of by inference.
 
 Changing a deadline, adding a retry or raising the CPU cap is not proposed: without the measurements above, any of them would hide the stall rather than explain it.
+
+## Implemented diagnostics
+
+Added October 14, 2026 on branch `chore/smoke-stall-diagnostics`, after owner approval. The proposal above is kept as written. The implementation differs only in names and detail:
+
+- `BoundedProcess.Run` gained an opt-in overload. Only the smoke wrapper uses it. The series header also records the wall-clock start, so the series can be aligned with application diagnostics. `scripts/ci/job-cpu-summary.mjs` adds a per-second summary to `job-result.json` under `cpu`.
+- The window events are `DASHBOARD_WINDOW_CREATED`, `OVERLAY_WINDOW_CREATED`, `<DASHBOARD|OVERLAY>_LOAD_STARTED` and `<DASHBOARD|OVERLAY>_LOAD_FINISHED`. The last includes the renderer PID, or `null` when it cannot be read. `CHILD_PROCESS_GONE` is observation only: it does not fail the smoke.
+- `result.json` gains `phases`, and `pagesAtRendererPagesFailure` when page discovery fails.
+
+[CI](../ci.md#bounded-runtime-checks) describes how to read the evidence. First hosted evidence, from dispatch run [38637611832](https://github.com/senukartur/ets2telemetry/actions/runs/38637611832) on head `4f68182`, where all six smokes passed:
+
+- Every launch reported two logical processors and a 0.5-processor cap.
+- Average Job use was 0.22-0.55 processors. Both scaffold startups ran at about the cap (0.50 and 0.55). So starvation remains a plausible cause of the 38624116941 stall, but it is not shown.
+- The busiest single second reached 0.57-0.99 processors. Windows enforces the hard rate over its own interval, so read the cap over several seconds, not one.
+- Window creation to load took 582-1105 ms. No launch logged `MAIN_EVENT_LOOP_LAG` or `CHILD_PROCESS_GONE`.
+
+The stall has not recurred with these diagnostics in place, so its cause is still unknown.

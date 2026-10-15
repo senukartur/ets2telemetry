@@ -24,6 +24,9 @@ let timer;
 let tracing = false;
 let telemetrySource;
 const failure = error => ({name: error.name, message: error.message, stack: error.stack});
+// Driver timeline on its own wall and monotonic clocks, to align with app diagnostics and the Job CPU series.
+result.phases = [];
+const phase = name => result.phases.push({phase: name, utc: new Date().toISOString(), monotonicMs: Math.round(performance.now() * 10) / 10});
 const diagnosticEvents = async directory => (await readFile(path.join(directory, 'startup.jsonl'), 'utf8'))
   .trim().split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line));
 try {
@@ -33,6 +36,7 @@ try {
   result.playwright = JSON.parse(await readFile(new URL('../../node_modules/playwright-core/package.json', import.meta.url))).version;
   assert.equal(result.playwright, '1.64.0');
   if (config.scenario === 'telemetry' || config.scenario === 'overlay') telemetrySource = await startLiveSmokeSource(config.checkout);
+  phase('launch-requested');
   application = await electron.launch({timeout: 20000, cwd: config.cwd,
     ...(config.mode === 'packaged' ? {executablePath: config.executable, args: config.forceRendererProcessReuse ? ['--renderer-process-limit=1'] : []} :
       {args: [config.checkout, ...(config.forceRendererProcessReuse ? ['--renderer-process-limit=1'] : [])]}),
@@ -41,11 +45,19 @@ try {
       ETS2TELEMETRY_DIAGNOSTIC_DIR: config.diagnostics,
       ...(telemetrySource ? {ETS2TELEMETRY_LIVE_SMOKE: '1', ETS2TELEMETRY_SOURCE_KIND: 'synthetic', ETS2TELEMETRY_SOURCE_PIPE: telemetrySource.endpoint} : {})}});
   launcher = application.process();
+  phase('launch-returned');
   await application.context().tracing.start({screenshots: true, snapshots: true});
   tracing = true;
-  const {dashboard: window, overlay} = await rendererPages(application);
+  phase('tracing-started');
+  const {dashboard: window, overlay} = await rendererPages(application).catch(error => {
+    // Playwright's own view of the windows, read locally without a protocol round trip.
+    result.pagesAtRendererPagesFailure = application.windows().map(page => page.url());
+    throw error;
+  });
+  phase('renderer-pages-found');
   await window.getByText('Telemetry service ready; isolated storage probe verified', {exact: true})
     .waitFor({state: 'visible', timeout: 10000});
+  phase('dashboard-ready-visible');
   result.runtime = await application.evaluate(({app, BrowserWindow}) => {
     const preferences = BrowserWindow.getAllWindows()[0].webContents.getLastWebPreferences();
     return {versions: process.versions, packaged: app.isPackaged, rendererProcessLimit: app.commandLine.getSwitchValue('renderer-process-limit'),
@@ -135,16 +147,19 @@ try {
     assert.match(await window.getByTestId('telemetry-status').innerText(), /^(disconnected|waiting):/);
     result.telemetry.staleAfterDisconnect = true;
   }
+  phase('journey-complete');
   await window.screenshot({path: path.join(config.output, 'ready.png')});
-} catch (error) {result.failure = failure(error);}
+} catch (error) {result.failure = failure(error); phase('failed');}
 finally {
   try {await telemetrySource?.stop();} catch (error) {result.sourceCloseFailure = failure(error);}
   if (application) {
     if (tracing) {
       try {await application.context().tracing.stop({path: path.join(config.output, 'trace.zip')});}
       catch (error) {result.traceFailure = failure(error);}
+      phase('tracing-stopped');
     }
     const start = performance.now();
+    phase('close-requested');
     try {
       await Promise.race([application.close(), new Promise((_, reject) => {
         timer = setTimeout(() => reject(new Error('APP_CLOSE_TIMEOUT_8_SECONDS')), 8000);
@@ -154,7 +169,7 @@ finally {
       assert.equal(result.launcherExit, 0);
       assert.equal(launcher.signalCode, null);
     } catch (error) {result.closeFailure = failure(error);}
-    finally {clearTimeout(timer);}
+    finally {clearTimeout(timer); phase('close-settled');}
   }
   try {
     // Preserve lifecycle evidence even when a later cleanup assertion fails.
