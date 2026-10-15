@@ -22,7 +22,9 @@ if (!script) {
 // the application's worker resolves from node_modules.
 const sqlite = path.dirname(require.resolve('better-sqlite3/package.json')).replaceAll('\\', '/');
 const external = ['better-sqlite3', ...builtinModules, ...builtinModules.map(name => `node:${name}`)];
-const entries = {'storage-worker': 'apps/desktop/src/storage-worker.ts', 'storage-core': 'packages/storage/src/index.ts', 'storage-client': 'packages/storage/src/client.ts'};
+// The protocol v1 ingestion and its durable sink run in the ingestion crash child (tests/storage/v1-ingestion-crash.test.ts).
+const entries = {'storage-worker': 'apps/desktop/src/storage-worker.ts', 'storage-core': 'packages/storage/src/index.ts', 'storage-client': 'packages/storage/src/client.ts',
+  'v1-ingestion': 'apps/desktop/src/v1-ingestion.ts', 'durable-sink': 'apps/desktop/src/durable-sink.ts'};
 const directory = await mkdtemp(path.join(tmpdir(), 'ets2telemetry-storage-bundles-'));
 let code;
 try {
