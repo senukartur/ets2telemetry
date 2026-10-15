@@ -58,8 +58,9 @@ async function copyDatabase(source: Database.Database, target: string): Promise<
 }
 
 /**
- * Takes the pre-migration backup: checks free space, copies through the backup API, verifies the copy against the
- * source digest, syncs and renames it, then writes the manifest last. Any failure removes the partial copy and is
+ * Takes the pre-migration backup: reuses an intact backup of exactly this content when one exists (a migration that
+ * failed earlier), otherwise checks free space, copies through the backup API, verifies the copy against the source
+ * digest, syncs and renames it, then writes the manifest last. Any failure removes the partial copy and is
  * BACKUP_FAILED; the caller then migrates nothing.
  */
 export async function backupBeforeMigration(db: Database.Database, context: {file: string; backupsDirectory: string; databaseUuid: string; fromVersion: number; now: () => number; appVersion: string; hooks?: BackupHooks}): Promise<{fileName: string; sha256: string}> {
@@ -70,12 +71,15 @@ export async function backupBeforeMigration(db: Database.Database, context: {fil
   try { mkdirSync(directory, {recursive: true}); if (!statSync(directory).isDirectory()) throw new Error('not a directory'); } catch (error) {
     fail('BACKUP_FAILED', {cause: classifyError(error, 'DATA_PATH_INVALID').code === 'PERMISSION_DENIED' ? 'PERMISSION_DENIED' : 'DATA_PATH_INVALID'});
   }
+  const source = contentDigest(db);
+  // A migration that fails the same way on every open must not leave a new full-size copy each time.
+  const existing = reusableBackup(directory, context.databaseUuid, context.fromVersion, source);
+  if (existing) return existing;
   const needed = (sizeOf(context.file) + sizeOf(`${context.file}-wal`)) * FREE_SPACE_FACTOR;
   let free: number;
   try { free = context.hooks?.freeBytes ? context.hooks.freeBytes(directory) : (({bavail, bsize}) => Number(bavail) * Number(bsize))(statfsSync(directory)); } catch (error) { fail('BACKUP_FAILED', {cause: classifyError(error).code}); }
   if (free < needed) fail('BACKUP_FAILED', {cause: 'DISK_FULL'});
   if ([finalPath, partial, manifestPath].some(existsSync)) fail('BACKUP_FAILED', {cause: 'DATA_PATH_INVALID'});
-  const source = contentDigest(db);
   try {
     await copyDatabase(db, partial);
     context.hooks?.afterCopy?.(partial);
@@ -98,6 +102,20 @@ export async function backupBeforeMigration(db: Database.Database, context: {fil
 }
 
 /** Parses a manifest strictly; anything else is not a backup of this application. */
+/**
+ * An existing pre-migration backup of exactly this content: same database, source version, logical digest and row
+ * counts, with a backup file whose size and SHA-256 still match its manifest. A damaged or partial backup is never reused.
+ */
+function reusableBackup(directory: string, databaseUuid: string, fromVersion: number, source: ContentDigest): {fileName: string; sha256: string} | undefined {
+  for (const name of readdirSync(directory).filter(entry => entry.endsWith('.json')).sort()) {
+    const manifest = readManifest(path.join(directory, name)), backup = manifest && path.join(directory, manifest.fileName);
+    if (!manifest || !backup || manifest.databaseUuid !== databaseUuid || manifest.fromVersion !== fromVersion || manifest.logicalDigest !== source.logicalDigest ||
+      JSON.stringify(manifest.rowCounts) !== JSON.stringify(source.rowCounts) || sizeOf(backup) !== manifest.size) continue;
+    try { if (fileSha256(backup) === manifest.fileSha256) return {fileName: manifest.fileName, sha256: manifest.fileSha256}; } catch { /* unreadable: not reusable */ }
+  }
+  return undefined;
+}
+
 export function readManifest(manifestPath: string): BackupManifest | undefined {
   try {
     const m = JSON.parse(readFileSync(manifestPath, 'utf8')) as Partial<BackupManifest>;
