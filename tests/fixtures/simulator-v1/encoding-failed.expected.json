@@ -1,0 +1,23 @@
+{
+  "scenario": "encoding-failed",
+  "authoredFrom": [
+    "docs/protocol/v1.md §9: an event that cannot be encoded becomes a gap with cause encodingFailed",
+    "docs/native-transport-v1.md Encoder: a record the contract rejects cannot be sent and ingest_event records it as encodingFailed coverage with its occurrence time",
+    "docs/protocol/v1.md §10: an ACK releases the gap record before the next loss, so the second failure starts a new record"
+  ],
+  "connections": [
+    {
+      "durableRequested": true, "closedBy": "disconnect", "clientInstance": 1,
+      "coverage": [
+        {"event": "1", "type": "job.cleared", "redelivered": false},
+        {"gap": ["2", "2"], "causes": {"encodingFailed": "1"}, "redelivered": false, "firstLost": "1000020000000", "lastLost": "1000020000000"},
+        {"gap": ["3", "3"], "causes": {"encodingFailed": "1"}, "redelivered": false, "firstLost": "1000020000000", "lastLost": "1000020000000"},
+        {"event": "4", "type": "simulation.started", "redelivered": false, "occurred": {"boundaryOrder": "4"}}
+      ],
+      "acks": ["1", "2", "3", "4"], "end": null
+    }
+  ],
+  "ledger": {"committedThroughEventSeq": "4", "committedEvents": 2, "committedGapMarkers": "2", "duplicates": 0},
+  "store": {"ackedThroughEventSeq": "4", "nextEventSeq": "5", "retainedEntries": 0, "eventLoss": {"encodingFailed": "2"}},
+  "retired": null
+}

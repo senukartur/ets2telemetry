@@ -1,0 +1,15 @@
+{
+  "format": "ets2telemetry-simulator-v1", "schemaVersion": 1, "id": "queue-count-overflow",
+  "purpose": "A connected durable client commits but withholds ACKs while 260 events arrive: 255 are retained, the rest are newest-drop queueCount losses written as delta gaps, and the reconnection redelivers the events and one merged gap record.",
+  "reg": ["REG-011"], "origin": "synthetic", "game": "ets2", "seed": "et005b-queue-count-overflow", "provenance": null,
+  "source": {"versions": {"telemetryApi": {"major": 1, "minor": 1}, "gameTelemetry": {"major": 1, "minor": 19}, "sdkArchive": "scs-sdk-1.15"}, "gameplayEvents": "registered", "currency": "unknown", "gameMode": "unknown"},
+  "steps": [
+    {"atMs": 10, "action": "gameplay", "id": "player.tollgate.paid", "attributes": [{"name": "pay.amount", "sdkType": "s64", "value": "5"}], "repeat": 260}
+  ],
+  "transport": [
+    {"atMs": 0, "action": "connect", "client": {"durable": true, "commit": "each", "ack": "withhold"}},
+    {"atMs": 100, "action": "disconnect"},
+    {"atMs": 200, "action": "connect", "client": {"durable": true}},
+    {"atMs": 300, "action": "disconnect"}
+  ]
+}

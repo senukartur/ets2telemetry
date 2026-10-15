@@ -1,0 +1,25 @@
+{
+  "format": "ets2telemetry-simulator-v1", "schemaVersion": 1, "id": "units-currency",
+  "purpose": "ATS with SDK-documented US dollars: zero versus unavailable channels, kilometre and L/km conversion, reverse speed, provided-empty versus missing versus invalid text, zero and extreme raw money, and bus/car/controls callbacks that yield nothing.",
+  "reg": ["REG-009"], "origin": "synthetic", "game": "ats", "seed": "et005b-units-currency", "provenance": null,
+  "source": {"versions": {"telemetryApi": {"major": 1, "minor": 1}, "gameTelemetry": {"major": 1, "minor": 6}, "sdkArchive": "scs-sdk-1.15"}, "gameplayEvents": "registered", "currency": "sdk-documented", "gameMode": "unknown"},
+  "steps": [
+    {"atMs": 0, "action": "frame", "channels": {"speed": 0, "fuel.amount": 0, "displayed.gear": 0, "odometer": 0.5, "fuel.consumption.average": 0.25, "fuel.range": "invalid",
+      "navigation.distance": null, "game.time": 0}},
+    {"atMs": 10, "action": "configuration", "id": "job", "attributes": [{"name": "cargo.id", "sdkType": "string", "value": ""}, {"name": "cargo", "sdkType": "string", "value": "Synthetic Cargo"},
+      {"name": "source.city.id", "sdkType": "string", "value": "synthetic\u0007city"}, {"name": "planned_distance.km", "sdkType": "u32", "value": 0},
+      {"name": "income", "sdkType": "u64", "value": "0"}, {"name": "cargo.mass", "sdkType": "float", "value": 0}, {"name": "is.special.job", "sdkType": "s32", "value": 1}]},
+    {"atMs": 20, "action": "configuration", "id": "bus_job", "attributes": []},
+    {"atMs": 21, "action": "configuration", "id": "car_job", "attributes": [{"name": "cargo.id", "sdkType": "string", "value": "synthetic_car"}]},
+    {"atMs": 22, "action": "configuration", "id": "controls", "attributes": []},
+    {"atMs": 30, "action": "gameplay", "id": "car_job.delivered", "attributes": []},
+    {"atMs": 40, "action": "gameplay", "id": "job.delivered", "attributes": [{"name": "revenue", "sdkType": "s64", "value": "0"}, {"name": "distance.km", "sdkType": "float", "value": 0},
+      {"name": "earned.xp", "sdkType": "s32", "value": 0}]},
+    {"atMs": 50, "action": "gameplay", "id": "job.cancelled", "attributes": [{"name": "cancel.penalty", "sdkType": "s64", "value": "-9223372036854775808"}]},
+    {"atMs": 100, "action": "frame", "channels": {"speed": -2.5}}
+  ],
+  "transport": [
+    {"atMs": 0, "action": "connect", "client": {"durable": true}},
+    {"atMs": 200, "action": "disconnect"}
+  ]
+}

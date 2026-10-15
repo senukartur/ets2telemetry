@@ -1,0 +1,39 @@
+{
+  "scenario": "queue-bytes-overflow",
+  "authoredFrom": [
+    "docs/protocol/v1.md §9 full store: an event is retained only if 1,024 bytes (GAP_RECORD_BYTES) stay free afterwards within 1,048,576; otherwise it is lost as queueBytes",
+    "docs/native-transport-v1.md Encoder and OD-5 S3: each event is measured once with the worst-case envelope (maximum seq and capture, redelivered false); event-worst measures 6,306 bytes",
+    "Hand derivation from event-worst (6,306 with redelivered false): processId 1 and windowsSessionId 0 (-9 each), occurred monotonicNs and utcUnixMs of 13 digits (-7 each), cargoMass and cargoUnitMass 18000 instead of 1.2345678901234568e-300 (-18 each), the ETS2 header source of 76 bytes instead of 256 escaped bytes (-180), and eventSeq k, revision k and boundaryOrder k + 3 instead of 20 digits each: m(k) = 5,998 + 2 digits(k) + digits(k + 3)",
+    "m = 6,001 (k 1-6), 6,002 (7-9), 6,004 (10-96), 6,005 (97-99), 6,007 (100+); the sum through k = 174 is 1,044,900 and 1,044,900 + 6,007 + 1,024 > 1,048,576, so eventSeq 175 is the first queueBytes loss and the store then holds 1,044,900 + 1,024 = 1,045,924 bytes",
+    "docs/protocol/v1.md §9 and I3: while connected each newly lost range is written as a delta gap; the reconnection redelivers the merged record once"
+  ],
+  "notes": "The plan's 166/167 split assumed every event measures the documented 6,306 bytes. This scenario's worst achievable job.configured measures less (fixed simulator identity, short clocks, header currency source), so the split derived above is 174/175; simulator-v1-store.test.ts keeps the 166/167 split for records that measure exactly 6,306 bytes.",
+  "connections": [
+    {
+      "durableRequested": true, "closedBy": "disconnect", "clientInstance": 1,
+      "coverage": [
+        {"eventRange": ["1", "174"], "type": "job.configured", "redelivered": false},
+        {"gap": ["175", "175"], "causes": {"queueBytes": "1"}, "redelivered": false, "firstLost": "1000010000000", "lastLost": "1000010000000"},
+        {"gap": ["176", "176"], "causes": {"queueBytes": "1"}, "redelivered": false},
+        {"gap": ["177", "177"], "causes": {"queueBytes": "1"}, "redelivered": false},
+        {"gap": ["178", "178"], "causes": {"queueBytes": "1"}, "redelivered": false},
+        {"gap": ["179", "179"], "causes": {"queueBytes": "1"}, "redelivered": false},
+        {"gap": ["180", "180"], "causes": {"queueBytes": "1"}, "redelivered": false}
+      ],
+      "acks": [], "end": null
+    },
+    {
+      "durableRequested": true, "closedBy": "disconnect", "clientInstance": 1,
+      "checkpoint": {"atMs": 200, "ackedThroughEventSeq": "0", "nextEventSeq": "181", "retainedEvents": 175, "retainedBytes": 1045924,
+        "oldestRetainedMonotonicNs": "1000010000000", "eventLoss": {"queueBytes": "6"}},
+      "coverage": [
+        {"eventRange": ["1", "174"], "type": "job.configured", "redelivered": true},
+        {"gap": ["175", "180"], "causes": {"queueBytes": "6"}, "redelivered": true, "firstLost": "1000010000000", "lastLost": "1000010000000"}
+      ],
+      "ackCount": 175, "lastAck": "180", "end": null
+    }
+  ],
+  "ledger": {"committedThroughEventSeq": "180", "committedEvents": 174, "committedGapMarkers": "6", "duplicates": 175},
+  "store": {"ackedThroughEventSeq": "180", "nextEventSeq": "181", "retainedEntries": 0, "eventLoss": {"queueBytes": "6"}},
+  "retired": null
+}

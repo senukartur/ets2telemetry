@@ -1,0 +1,29 @@
+{
+  "scenario": "sleep-teleport",
+  "authoredFrom": [
+    "concept.md 'Sleep and unannounced game-time jumps' (CAP-01 run 2): SDK 1.15 has no sleep event; a forward jump is the only trace and is not a regression",
+    "docs/protocol/v1.md §8: gameTime.regression only for a game time below the previous one; §6: world placement is game-world coordinates, copied",
+    "docs/native-transport-v1.md: values persist until a later callback or an invalidating boundary"
+  ],
+  "connections": [
+    {
+      "durableRequested": true, "closedBy": "disconnect", "clientInstance": 1,
+      "coverage": [
+        {"event": "1", "type": "simulation.started", "redelivered": false},
+        {"event": "2", "type": "simulation.paused", "redelivered": false, "occurred": {"simulation": "paused", "gameTime": {"minutes": {"available": true, "value": "1596"}, "clockId": "game-clock-0"}}}
+      ],
+      "acks": ["1", "2"],
+      "snapshots": [
+        {"atMs": 100, "state": {"gameTime": {"available": true, "value": "1001", "unit": "min", "clockId": "game-clock-0"},
+          "worldPlacement": {"available": true, "value": {"position": {"x": 101.5, "y": 10, "z": -200.25}, "orientation": {"heading": 0.5, "pitch": 0, "roll": 0}}}}},
+        {"atMs": 200, "state": {"gameTime": {"available": true, "value": "1596", "unit": "min", "clockId": "game-clock-0"},
+          "worldPlacement": {"available": true, "value": {"position": {"x": 101.5, "y": 10, "z": -200.25}}}}},
+        {"atMs": 300, "state": {"gameTime": {"available": true, "value": "1596", "unit": "min", "clockId": "game-clock-0"},
+          "worldPlacement": {"available": true, "value": {"position": {"x": 25000.5, "y": 15, "z": 9000.75}, "orientation": {"heading": -0.25, "pitch": 0, "roll": 0}}}}}
+      ],
+      "end": null
+    }
+  ],
+  "store": {"nextEventSeq": "3", "eventLoss": {}},
+  "retired": null
+}

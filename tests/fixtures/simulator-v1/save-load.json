@@ -1,0 +1,32 @@
+{
+  "format": "ets2telemetry-simulator-v1", "schemaVersion": 1, "id": "save-load",
+  "purpose": "The CAP-01 run 9 save-load order in synthetic form: pause, configuration clears, re-sent configuration without car_job, start, then a game-time regression that alone carries the restored time and the rotated game clock.",
+  "reg": ["REG-004", "REG-008"], "origin": "synthetic", "game": "ets2", "seed": "et005b-save-load", "provenance": null,
+  "source": {"versions": {"telemetryApi": {"major": 1, "minor": 1}, "gameTelemetry": {"major": 1, "minor": 19}, "sdkArchive": "scs-sdk-1.15"}, "gameplayEvents": "registered", "currency": "unknown", "gameMode": "unknown"},
+  "steps": [
+    {"atMs": 0, "action": "frame", "channels": {"speed": 0, "game.time": 5000}},
+    {"atMs": 10, "action": "configuration", "id": "truck", "attributes": [{"name": "id", "sdkType": "string", "value": "vehicle.synthetic_truck"}, {"name": "fuel.capacity", "sdkType": "float", "value": 600}]},
+    {"atMs": 20, "action": "configuration", "id": "trailer.0", "attributes": [{"name": "id", "sdkType": "string", "value": "trailer.synthetic_box"}]},
+    {"atMs": 30, "action": "configuration", "id": "job", "attributes": [{"name": "cargo.id", "sdkType": "string", "value": "synthetic_cargo"},
+      {"name": "destination.city.id", "sdkType": "string", "value": "synthetic_city_b"}, {"name": "planned_distance.km", "sdkType": "u32", "value": 300}]},
+    {"atMs": 40, "action": "lifecycle", "event": "simulation.started"},
+    {"atMs": 100, "action": "frame", "channels": {"speed": 20, "game.time": 5100}},
+    {"atMs": 200, "action": "lifecycle", "event": "simulation.paused"},
+    {"atMs": 210, "action": "configuration", "id": "job", "attributes": []},
+    {"atMs": 211, "action": "configuration", "id": "controls", "attributes": []},
+    {"atMs": 212, "action": "configuration", "id": "truck", "attributes": []},
+    {"atMs": 213, "action": "configuration", "id": "trailer.0", "attributes": []},
+    {"atMs": 220, "action": "configuration", "id": "job", "attributes": [{"name": "cargo.id", "sdkType": "string", "value": "synthetic_cargo"},
+      {"name": "destination.city.id", "sdkType": "string", "value": "synthetic_city_b"}, {"name": "planned_distance.km", "sdkType": "u32", "value": 300}]},
+    {"atMs": 221, "action": "configuration", "id": "controls", "attributes": [{"name": "shifter.type", "sdkType": "string", "value": "automatic"}]},
+    {"atMs": 222, "action": "configuration", "id": "truck", "attributes": [{"name": "id", "sdkType": "string", "value": "vehicle.synthetic_truck"}, {"name": "fuel.capacity", "sdkType": "float", "value": 600}]},
+    {"atMs": 223, "action": "configuration", "id": "trailer.0", "attributes": [{"name": "id", "sdkType": "string", "value": "trailer.synthetic_box"}]},
+    {"atMs": 224, "action": "configuration", "id": "bus_job", "attributes": []},
+    {"atMs": 230, "action": "lifecycle", "event": "simulation.started"},
+    {"atMs": 240, "action": "frame", "channels": {"game.time": 4900}}
+  ],
+  "transport": [
+    {"atMs": 0, "action": "connect", "client": {"durable": true}},
+    {"atMs": 300, "action": "disconnect"}
+  ]
+}

@@ -1,0 +1,30 @@
+{
+  "scenario": "sequence-exhausted",
+  "authoredFrom": [
+    "docs/protocol/v1.md §8-§9: eventSeq ranges 1-18,446,744,073,709,551,614 and never wraps; afterwards the producer sends end with sequence-exhausted and retires the session",
+    "docs/native-transport-v1.md I8 and caller sequence step 7: the store accepts nothing after the last eventSeq and end reports N = 18,446,744,073,709,551,615",
+    "docs/protocol/v1.md §4: end may replace the checkpoint; end is terminal for the connection",
+    "docs/simulator-v1.md: startEventSeq above 1 marks [1, start) as acknowledged and committed (synthetic affordance)"
+  ],
+  "connections": [
+    {
+      "durableRequested": true, "closedBy": "end", "clientInstance": 1,
+      "checkpoint": {"atMs": 0, "ackedThroughEventSeq": "18446744073709551612", "nextEventSeq": "18446744073709551613"},
+      "coverage": [
+        {"event": "18446744073709551613", "type": "simulation.started", "redelivered": false},
+        {"event": "18446744073709551614", "type": "simulation.paused", "redelivered": false}
+      ],
+      "acks": ["18446744073709551613", "18446744073709551614"],
+      "end": {"reason": "sequence-exhausted", "nextEventSeq": "18446744073709551615", "ackedThroughEventSeq": "18446744073709551614", "retainedUnacked": "0"}
+    },
+    {
+      "durableRequested": true, "closedBy": "end", "clientInstance": 1,
+      "welcome": {"durableEvents": true},
+      "checkpoint": null, "coverage": [], "acks": [],
+      "end": {"reason": "sequence-exhausted", "nextEventSeq": "18446744073709551615", "ackedThroughEventSeq": "18446744073709551614", "retainedUnacked": "0"}
+    }
+  ],
+  "ledger": {"committedThroughEventSeq": "18446744073709551614", "committedEvents": 2, "duplicates": 0},
+  "store": {"ackedThroughEventSeq": "18446744073709551614", "nextEventSeq": "18446744073709551615", "retainedEntries": 0},
+  "retired": "sequence-exhausted"
+}
