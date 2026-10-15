@@ -100,3 +100,163 @@ export async function waitForNotCurrentLive(page, values, status, hidden = []) {
   const handle = await page.waitForFunction(notCurrentLiveObservation, {values, status, hidden}, {timeout: 10000});
   try {return await handle.jsonValue();} finally {await handle.dispose();}
 }
+
+// ET-010c protocol v1 rows. Expected texts are written by hand from tests/fixtures/protocol-v1/snapshot-live.json with
+// the job's cargo and destination city ids set to the v0 checkpoint's (cargo.logs, city.warszawa), as the v1 smoke source
+// serves it, in the ETS2 metric profile: 151000 m remaining, deadline minute 13000 at game minute 12345 (10 h 55 min),
+// 18000 kg, plate SYN 0001, an unnamed dryvan trailer, heading 0.25 (bearing 270°) and two events lost without a durable
+// consumer. live-dashboard-text.test.ts ties them to the card builder.
+export const SYNTHETIC_V1_LIVE_ROWS = Object.freeze([
+  ['live-route-remaining', '151.0 km'],
+  ['live-deadline', 'in 10 h 55 min'],
+  ['live-deadline-note', 'game time'],
+  ['live-source-city', 'Synthetic City A'],
+  ['live-source-company', 'Synthetic Company A'],
+  ['live-destination-company', 'Synthetic Company B'],
+  ['live-cargo-mass', '18.0 t'],
+  ['live-market', 'freight_market'],
+  ['live-special-job', 'no'],
+  ['live-truck-plate', 'SYN 0001'],
+  ['live-trailers', 'dryvan'],
+  ['live-position', 'x -31234.5, y 42.3, z 18800.8'],
+  ['live-position-note', 'game-world coordinates, not GPS'],
+  ['live-bearing', '270°'],
+  ['live-bearing-note', 'game-world coordinates, not GPS'],
+  ['live-v1-status', 'connected: Validated current observation'],
+  ['live-game-mode', 'single-player (weak evidence, module-scan)'],
+  ['live-event-loss', '2'],
+  ['live-event-loss-note', 'this version records no gameplay events']
+].map(row => Object.freeze(row)));
+/** The v1-only value elements above, without reason, note and status elements. */
+export const SYNTHETIC_V1_VALUE_IDS = Object.freeze(SYNTHETIC_V1_LIVE_ROWS.map(([id]) => id).filter(id => !/-(reason|note)$/.test(id) && id !== 'live-v1-status'));
+/**
+ * The card for the v0 smoke checkpoint with that v1 projection (decision F4): rows v0 carries stay v0's, in section
+ * order, except that cargo and destination city show v1's names for the same job; the v1 rows follow in their sections
+ * and the Protocol v1 source section comes last.
+ */
+export const SYNTHETIC_V0V1_LIVE_ROWS = Object.freeze([
+  ['live-gear', 'R1'],
+  ['live-engine-rpm', '600 rpm'],
+  ['live-fuel-capacity', '1000 L'],
+  ['live-fuel-level', '7%'],
+  ['live-sdk-average-consumption', '25.0 L/100 km'],
+  ['live-sdk-average-consumption-note', 'SDK mean, not a trip average'],
+  ['live-estimated-range', 'unavailable'],
+  ['live-estimated-range-reason', 'not yet observed'],
+  ['live-estimated-range-note', "the game's estimate"],
+  ['live-odometer', '1234.6 km'],
+  ['live-route-remaining', '151.0 km'],
+  ['live-game-time', 'Day 8574, 09:18'],
+  ['live-game-time-note', 'game time'],
+  ['live-deadline', 'in 10 h 55 min'],
+  ['live-deadline-note', 'game time'],
+  ['live-cargo', 'Synthetic Cargo'],
+  ['live-source-city', 'Synthetic City A'],
+  ['live-source-company', 'Synthetic Company A'],
+  ['live-destination-city', 'Synthetic City B'],
+  ['live-destination-company', 'Synthetic Company B'],
+  ['live-cargo-mass', '18.0 t'],
+  ['live-market', 'freight_market'],
+  ['live-special-job', 'no'],
+  ['live-planned-distance', '200 km'],
+  ['live-planned-distance-note', 'from the job offer, excludes ferries'],
+  ['live-expected-income', '9007199254740993.123456 (currency unknown)'],
+  ['live-truck', 'truck.volvo'],
+  ['live-truck-plate', 'SYN 0001'],
+  ['live-trailers', 'dryvan'],
+  ['live-position', 'x -31234.5, y 42.3, z 18800.8'],
+  ['live-position-note', 'game-world coordinates, not GPS'],
+  ['live-bearing', '270°'],
+  ['live-bearing-note', 'game-world coordinates, not GPS'],
+  ['live-v1-status', 'connected: Validated current observation'],
+  ['live-game-mode', 'single-player (weak evidence, module-scan)'],
+  ['live-event-loss', '2'],
+  ['live-event-loss-note', 'this version records no gameplay events']
+].map(row => Object.freeze(row)));
+/** Elements that must not exist for that pair: the legacy rows, cargo loaded outside the cargo market, no pause, a job. */
+export const SYNTHETIC_V0V1_HIDDEN_ROWS = Object.freeze(['live-speed', 'live-fuel', 'live-cargo-loaded', 'live-paused', 'live-job-missing']);
+
+// Self-contained browser callback for a dashboard whose v1 data is not current while v0 still is: the v1 status line
+// matches `status` (a RegExp source), the legacy speed line reads exactly `speed` in the viewport, and every listed v1
+// value row reads `unavailable` with the reason `not current`.
+export function v1NotCurrentObservation({values, status, speed}) {
+  const read = (id, viewport) => {
+    const elements = globalThis.document.querySelectorAll(`[data-testid="${id}"]`);
+    if (elements.length !== 1) return undefined;
+    const element = elements[0], bounds = element.getBoundingClientRect();
+    if (globalThis.getComputedStyle(element).visibility !== 'visible' || bounds.width <= 0 || bounds.height <= 0) return undefined;
+    if (viewport && (bounds.bottom <= 0 || bounds.right <= 0 || bounds.top >= globalThis.innerHeight || bounds.left >= globalThis.innerWidth)) return undefined;
+    return element.innerText;
+  };
+  const observation = {status: read('live-v1-status', false), speed: read('speed', true)};
+  if (!new RegExp(status).test(observation.status ?? '') || observation.speed !== speed) return false;
+  for (const id of values) {
+    if (read(id, false) !== 'unavailable' || read(`${id}-reason`, false) !== 'not current') return false;
+    observation[id] = 'unavailable';
+  }
+  return observation;
+}
+export async function waitForV1NotCurrentLive(page, values, status, speed) {
+  const handle = await page.waitForFunction(v1NotCurrentObservation, {values, status, speed}, {timeout: 10000});
+  try {return await handle.jsonValue();} finally {await handle.dispose();}
+}
+
+// ET-010c overlay sections that need protocol v1, read from the hidden overlay document (the strip by default). Expected
+// texts are written by hand from the same pair; a dash is an unavailable section, never zero (REG-009).
+export const SYNTHETIC_V1_OVERLAY_CURRENT = Object.freeze({
+  'overlay-origin': 'Synthetic City A, Synthetic Company A', 'overlay-distance-remaining': '151.0 km', 'overlay-deadline': 'in 10 h 55 min',
+  'overlay-cargo': 'Synthetic Cargo', 'overlay-cargo-detail': '18.0 t', 'overlay-destination': 'Synthetic City B, Synthetic Company B',
+  'overlay-speed': '90.0', 'freshness': 'current'
+});
+/** v0 not current: every shown section is a dash and no detail remains. */
+export const SYNTHETIC_V1_OVERLAY_V0_STALE = Object.freeze({
+  'overlay-origin': '—', 'overlay-distance-remaining': '—', 'overlay-deadline': '—', 'overlay-cargo': '—', 'overlay-cargo-detail': null,
+  'overlay-destination': '—', 'overlay-speed': '—', 'freshness': 'stale'
+});
+/** v1 not current while v0 is: the v1 sections are dashes, the mixed sections keep their v0 part (game ids, no mass). */
+export const SYNTHETIC_V1_OVERLAY_V1_STALE = Object.freeze({
+  'overlay-origin': '—', 'overlay-distance-remaining': '—', 'overlay-deadline': '—', 'overlay-cargo': 'cargo.logs', 'overlay-cargo-detail': null,
+  'overlay-destination': 'city.warszawa', 'overlay-speed': '90.0', 'freshness': 'current'
+});
+/** Both sources stopped: dashes only; the freshness depends on which status arrives first, so it is not compared. */
+export const SYNTHETIC_V1_OVERLAY_STOPPED = Object.freeze({
+  'overlay-origin': '—', 'overlay-distance-remaining': '—', 'overlay-deadline': '—', 'overlay-cargo': '—', 'overlay-cargo-detail': null,
+  'overlay-destination': '—', 'overlay-speed': '—'
+});
+
+// Self-contained browser callback for the overlay document. Each listed element exists once with exactly the expected
+// text, or not at all for `null`; `freshness`, when given, is overlay-root's data-freshness. No geometry is required:
+// the overlay window is hidden without a game.
+export function overlayV1Observation(expected) {
+  const observation = {};
+  for (const [key, text] of Object.entries(expected)) {
+    if (key === 'freshness') {
+      const roots = globalThis.document.querySelectorAll('[data-testid="overlay-root"]');
+      if (roots.length !== 1 || roots[0].getAttribute('data-freshness') !== text) return false;
+      observation.freshness = text;
+      continue;
+    }
+    const elements = globalThis.document.querySelectorAll(`[data-testid="${key}"]`);
+    if (text === null ? elements.length !== 0 : elements.length !== 1 || elements[0].textContent !== text) return false;
+    observation[key] = text;
+  }
+  return observation;
+}
+export async function waitForOverlayV1(page, expected) {
+  const handle = await page.waitForFunction(overlayV1Observation, expected, {timeout: 10000});
+  try {return await handle.jsonValue();} finally {await handle.dispose();}
+}
+
+// Self-contained browser callback, for review only (coordinator decision C3): the sections whose box is not fully inside
+// the overlay root, such as strip items wrapped onto its clipped second line.
+export function overlayOverflow() {
+  const root = globalThis.document.querySelector('[data-testid="overlay-root"]');
+  if (!root) return {layout: null, root: null, sections: [], outside: []};
+  const bounds = root.getBoundingClientRect(), sections = [], outside = [];
+  for (const element of globalThis.document.querySelectorAll('[data-testid^="overlay-section-"]')) {
+    const id = element.getAttribute('data-testid').slice('overlay-section-'.length), box = element.getBoundingClientRect();
+    sections.push(id);
+    if (box.left < bounds.left || box.top < bounds.top || box.right > bounds.right || box.bottom > bounds.bottom) outside.push(id);
+  }
+  return {layout: root.getAttribute('data-layout'), root: {width: Math.round(bounds.width), height: Math.round(bounds.height)}, sections, outside};
+}

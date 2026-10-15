@@ -2,7 +2,24 @@
 export interface ScaffoldStatus { service: 'ready'; storage: 'verified'; synthetic: true }
 import type {CurrentState, SourceIdentity, AppliedState, CaptureTime} from './protocol-v0';
 import type {AppState, OverlayLayout, OverlaySectionId, OverlaySections, SettingsView, UnitGame, UnitProfile} from './app-state';
+import type {LiveObservationV1} from './protocol-v1';
 export type SourceSelection = 'game' | 'ets2' | 'ats' | 'synthetic' | 'replay';
+/** Statuses of the v1 source; service failure and restart belong to the update that carries the projection. */
+export type LiveV1Status = 'waiting' | 'connected' | 'paused' | 'stale' | 'incompatible' | 'disconnected' | 'unavailable';
+/**
+ * The telemetry service's whitelisted protocol v1 live projection (ET-010c). It follows the same selection as the update
+ * that carries it, is validated again in main and in the preload, and expires there on its own 500 ms clock,
+ * independently of the v0 observation. It never carries the game window, clock mapping, delivery cursor or durable status.
+ */
+export interface LiveTelemetryV1 {
+  selection: SourceSelection;
+  status: LiveV1Status;
+  reason: string;
+  /** Fresh connected or paused v1 data backed by an observation. */
+  fresh: boolean;
+  /** The latest v1 observation of this selection; kept after a disconnect, so its values read as not current. */
+  observation?: LiveObservationV1;
+}
 export interface LiveTelemetry {
   selection: SourceSelection;
   status: 'waiting' | 'connected' | 'paused' | 'stale' | 'incompatible' | 'disconnected' | 'unavailable' | 'service-failed' | 'restarting';
@@ -14,6 +31,8 @@ export interface LiveTelemetry {
   observation?: {source: SourceIdentity; state: CurrentState; seq: string; capture: CaptureTime;
     // SDK receipt advances only with a new capture; window receipt has its own conservative TTL.
     receivedMonotonicMs: number; windowReceivedMonotonicMs: number; windowFresh: boolean; applied: AppliedState};
+  /** Protocol v1 fields beside the v0 observation (ET-010c); absent without a v1 source state for this selection. */
+  v1?: LiveTelemetryV1;
 }
 export interface DesktopBridge {
   /** `null` while the telemetry service is not ready, for example during a supervised restart. */
@@ -68,3 +87,4 @@ export interface OverlayBridge {
 }
 export * from './protocol-v0';
 export * from './app-state';
+export type {LiveObservationV1, LiveStateV1} from './protocol-v1';

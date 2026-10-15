@@ -61,8 +61,19 @@ export function carriesField(protocol: NormalizedLiveState['protocol'], id: Live
   return protocol === 'v1' || V0_CARRIED_FIELDS.has(id);
 }
 
+/**
+ * The part of a live update the view model reads. Both `LiveTelemetry` and its protocol v1 projection provide it
+ * (ET-010c, decision F6), so one builder serves either protocol's observation.
+ */
+export interface LiveViewSource {
+  selection: LiveTelemetry['selection'];
+  status: LiveTelemetry['status'];
+  fresh: boolean;
+  observation?: {source: {origin: 'game' | 'synthetic' | 'replay'; game: GameId}};
+}
+
 /** Current means fresh, connected or paused, and backed by an observation. Stale values are never shown as current. */
-export function isCurrent(live: LiveTelemetry): boolean {
+export function isCurrent(live: LiveViewSource): boolean {
   return live.fresh && (live.status === 'connected' || live.status === 'paused') && !!live.observation;
 }
 
@@ -126,7 +137,7 @@ function gameModeText(mode: GameModeView): string {
   return `${mode.mode === 'truckersmp' ? 'TruckersMP' : 'single-player'} (${mode.confidence} evidence, ${mode.method})`;
 }
 
-export function buildLiveView(live: LiveTelemetry, state: NormalizedLiveState | undefined, units: DisplayUnits): LiveDashboardView {
+export function buildLiveView(live: LiveViewSource, state: NormalizedLiveState | undefined, units: DisplayUnits): LiveDashboardView {
   const current = isCurrent(live) && state !== undefined;
   const observation = live.observation;
   const origin = observation?.source.origin ?? 'none';

@@ -5,6 +5,7 @@ import {validateMessage} from '../../packages/contracts/src/protocol-v0';
 import {initialLive} from '../../apps/desktop/src/live-state';
 import {overlayPresentation} from '../../apps/desktop/src/overlay-presentation';
 import {OVERLAY_PRESETS} from '../../apps/desktop/src/overlay-sections';
+import {v1Projection, type V1Options} from '../shared/live-v1-fixtures';
 
 // REG-009 partial (ET-012a): the overlay sections over the v0 snapshot fixture. Expected texts are hand-computed from the
 // fixture: speed 0 m/s, fuel not observed, capacity 1000 L, 600 rpm, gear -1, SDK mean 25 L/100 km, range not observed,
@@ -178,4 +179,99 @@ it('keeps the exact raw income digits without grouping and states a documented c
   job.value.expectedIncome = {rawValue: '1234567', currency: {status: 'verified', code: 'EUR', source: 'scssdk_telemetry_job.h'}};
   expect(overlayPresentation(current).sections.find(section => section.id === 'expected-income')).toEqual(
     {id: 'expected-income', state: 'value', text: '1234567 EUR (SDK-documented)'});
+});
+
+// ET-010c decision F7: protocol v1 sections from the same combiner as the card. The v1 input is the hand projection of
+// tests/fixtures/protocol-v1/snapshot-live.json with the v0 job ids (cargo.logs, city.warszawa), under the same ETS2
+// game origin: 151000 m remaining, deadline minute 13000 at game minute 12345 (10 h 55 min), 18000 kg of Synthetic
+// Cargo from Synthetic City A (Synthetic Company A) to Synthetic City B (Synthetic Company B).
+function withV1(options: V1Options = {}, v0 = live()): LiveTelemetry {
+  return {...v0, v1: v1Projection('snapshot-live', {selection: v0.selection, origin: 'game', ...options})};
+}
+const V1_STALE: V1Options = {status: 'stale', fresh: false, reason: 'Main has no recent v1 SDK capture'};
+const FULL: OverlaySectionView[] = [
+  {id: 'speed', state: 'value', text: '0.0 km/h'},
+  {id: 'gear', state: 'value', text: 'R1'},
+  {id: 'rpm', state: 'value', text: '600 rpm', ring: 0.2},
+  {id: 'fuel', state: 'unavailable'},
+  {id: 'sdk-consumption', state: 'value', text: '25.0 L/100 km'},
+  {id: 'cargo', state: 'value', text: 'Synthetic Cargo', detail: '18.0 t'},
+  {id: 'origin', state: 'value', text: 'Synthetic City A, Synthetic Company A'},
+  {id: 'destination', state: 'value', text: 'Synthetic City B, Synthetic Company B'},
+  {id: 'distance-remaining', state: 'value', text: '151.0 km'},
+  {id: 'deadline', state: 'value', text: 'in 10 h 55 min'},
+  {id: 'expected-income', state: 'value', text: '9007199254740993.123456 (currency unknown)'},
+  {id: 'game-time', state: 'value', text: 'Day 8574, 09:18'}
+];
+it('shows the v1 sections and names beside the v0 sections while both are current (ET-010c)', () => {
+  const presentation = overlayPresentation(withV1());
+  expect(presentation.sections).toEqual(FULL);
+  expect(presentation).toMatchObject({source: 'ETS2', origin: 'game', freshness: 'current', speed: '0.0', paused: false});
+});
+it('formats the v1 sections in the ATS US customary profile: 18000 kg is 39683 lb', () => {
+  const current = live(); current.selection = 'ats'; current.observation!.source.game = 'ats';
+  const sections = overlayPresentation(withV1({game: 'ats'}, current)).sections;
+  expect(sections.find(section => section.id === 'cargo')).toEqual({id: 'cargo', state: 'value', text: 'Synthetic Cargo', detail: '39683 lb'});
+  expect(sections.find(section => section.id === 'distance-remaining')).toEqual({id: 'distance-remaining', state: 'value', text: '93.8 mi'});
+});
+it('keeps v1 sections as dashes when v1, then v0, stops being current, and drops them without v1 (ET-010c)', () => {
+  const first = overlayPresentation(withV1());
+  const v1Stale = overlayPresentation(withV1(V1_STALE), undefined, undefined, first);
+  expect(v1Stale.sections).toEqual([
+    {id: 'speed', state: 'value', text: '0.0 km/h'},
+    {id: 'gear', state: 'value', text: 'R1'},
+    {id: 'rpm', state: 'value', text: '600 rpm', ring: 0.2},
+    {id: 'fuel', state: 'unavailable'},
+    {id: 'sdk-consumption', state: 'value', text: '25.0 L/100 km'},
+    // Mixed sections keep their v0 part: the game ids, without the v1 mass and company.
+    {id: 'cargo', state: 'value', text: 'cargo.logs'},
+    {id: 'origin', state: 'unavailable'},
+    {id: 'destination', state: 'value', text: 'city.warszawa'},
+    {id: 'distance-remaining', state: 'unavailable'},
+    {id: 'deadline', state: 'unavailable'},
+    {id: 'expected-income', state: 'value', text: '9007199254740993.123456 (currency unknown)'},
+    {id: 'game-time', state: 'value', text: 'Day 8574, 09:18'}
+  ]);
+  expect(v1Stale.freshness).toBe('current');
+  const v0Stale = overlayPresentation(withV1(V1_STALE, {...live(), fresh: false, status: 'stale'}), undefined, undefined, v1Stale);
+  expect(v0Stale).toMatchObject({freshness: 'stale', speed: '—', fuel: '—', paused: false});
+  expect(v0Stale.sections).toEqual(['speed', 'gear', 'rpm', 'fuel', 'sdk-consumption', 'cargo', 'origin', 'destination', 'distance-remaining', 'deadline',
+    'expected-income', 'game-time'].map(id => ({id, state: 'unavailable'})));
+  // A new selection clears the v1 projection: v1 sections are no longer carried, even as placeholders.
+  const cleared = overlayPresentation(initialLive('ats'), undefined, undefined, v0Stale);
+  expect(cleared.sections).toEqual(['speed', 'gear', 'rpm', 'fuel', 'sdk-consumption', 'cargo', 'destination', 'expected-income', 'game-time']
+    .map(id => ({id, state: 'unavailable'})));
+});
+it('shows no v1 value while v0 is not current, even with current v1 data', () => {
+  const stale = overlayPresentation(withV1({}, {...live(), fresh: false, status: 'stale'}), undefined, undefined, overlayPresentation(withV1()));
+  expect(stale.sections.every(section => section.state === 'unavailable')).toBe(true);
+  expect(ids(stale.sections)).toEqual(ids(FULL));
+  // Without a previous projection only the baseline placeholders appear.
+  expect(overlayPresentation(withV1({}, {...live(), fresh: false, status: 'stale'})).sections).toEqual([{id: 'speed', state: 'unavailable'}, {id: 'fuel', state: 'unavailable'}]);
+});
+it('leaves out v1 job sections for another job unless they were shown, and keeps distance remaining', () => {
+  const mismatch = overlayPresentation(withV1({ids: 'fixture'}));
+  expect(ids(mismatch.sections)).toEqual(['speed', 'gear', 'rpm', 'fuel', 'sdk-consumption', 'cargo', 'destination', 'distance-remaining', 'expected-income', 'game-time']);
+  expect(mismatch.sections.find(section => section.id === 'cargo')).toEqual({id: 'cargo', state: 'value', text: 'cargo.logs'});
+  expect(mismatch.sections.find(section => section.id === 'distance-remaining')).toEqual({id: 'distance-remaining', state: 'value', text: '151.0 km'});
+  const afterShown = overlayPresentation(withV1({ids: 'fixture'}), undefined, undefined, overlayPresentation(withV1()));
+  expect(afterShown.sections.find(section => section.id === 'origin')).toEqual({id: 'origin', state: 'unavailable'});
+  expect(afterShown.sections.find(section => section.id === 'deadline')).toEqual({id: 'deadline', state: 'unavailable'});
+});
+it('leaves the v1 job sections out once v0 reports no job, without keeping dashes', () => {
+  const noJob = withV1();
+  noJob.observation!.state.configuration = {...noJob.observation!.state.configuration, job: {available: false, reason: 'not-observed'}};
+  const presentation = overlayPresentation(noJob, undefined, undefined, overlayPresentation(withV1()));
+  expect(ids(presentation.sections)).toEqual(['speed', 'gear', 'rpm', 'fuel', 'sdk-consumption', 'distance-remaining', 'game-time']);
+});
+it('uses no v1 data of another origin or selection', () => {
+  for (const telemetry of [{...live(), v1: v1Projection('snapshot-live', {selection: 'ets2'})}, {...live(), v1: v1Projection('snapshot-live', {selection: 'ats', origin: 'game'})}])
+    expect(overlayPresentation(telemetry)).toEqual(overlayPresentation(live()));
+});
+it('leaves disabled v1 sections out and passes no source identity, boundary, window or clock data to the renderer', () => {
+  expect(ids(overlayPresentation(withV1(), undefined, {layout: 'hud', sections: OVERLAY_PRESETS['job-focus']}).sections))
+    .toEqual(['speed', 'gear', 'fuel', 'cargo', 'destination', 'distance-remaining', 'deadline']);
+  const json = JSON.stringify(overlayPresentation(withV1()));
+  for (const text of ['10000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000001', 'pluginSessionId', 'boundaryOrder', 'handle', '65538', 'clockMapping'])
+    expect(json).not.toContain(text);
 });

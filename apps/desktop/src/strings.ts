@@ -36,6 +36,8 @@ export const STRINGS = Object.freeze({
   livePaused: 'Game paused',
   liveNoJob: 'No job reported',
   liveJobUnavailable: 'Job unavailable',
+  liveSourceTitle: 'Protocol v1 source',
+  liveEventLossNote: 'this version records no gameplay events',
   overlayTitle: 'Overlay',
   overlayLayoutLabel: 'Layout',
   overlaySectionsLabel: 'Sections',
@@ -142,7 +144,7 @@ export const OVERLAY_PRESET_TEXT: Readonly<Record<OverlayPresetId, string>> = Ob
 });
 /** Why a section may stay hidden in this version; shown beside its switch. */
 export const OVERLAY_REQUIREMENT_TEXT: Readonly<Record<OverlayRequirement, string>> = Object.freeze({
-  'protocol-v1': 'needs protocol v1; hidden for now',
+  'protocol-v1': "needs the plugin's protocol v1 data",
   'trip-tracking': 'needs trip tracking; hidden for now',
-  'ids-until-v1': 'shows game ids until protocol v1'
+  'ids-until-v1': 'shows game ids without protocol v1'
 });

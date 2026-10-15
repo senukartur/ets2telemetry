@@ -14,6 +14,7 @@ import {createBrokerResolver} from './broker-artifact';
 import {RecoveryBudget} from './recovery-budget';
 import {LiveSubscriptions} from './live-subscriptions';
 import {LiveFreshness} from './live-freshness';
+import {parseLiveV1} from './live-v1';
 import {OVERLAY_TOPMOST_LEVEL, OverlayController} from './overlay-controller';
 import {overlayPresentation} from './overlay-presentation';
 import {OVERLAY_NOMINAL_SIZE} from './overlay-geometry';
@@ -192,6 +193,16 @@ function runApplication(profileError: unknown): void {
       if (service === child && serviceReady && !supervisor.stopping && !upstream) connectUpstream();
     }, 250);
   }
+  // ET-010c decision F2: the v1 projection must match the update's selection and pass strict validation. A rejected
+  // projection is logged at its occurrences 1, 2, 4, 8, ... and dropped; the v0 update and the channel are unaffected.
+  let rejectedV1 = 0;
+  function acceptedV1(update: LiveTelemetry): LiveTelemetry {
+    if (update.v1 === undefined || parseLiveV1(update.v1, update.selection)) return update;
+    const count = ++rejectedV1;
+    if ((count & (count - 1)) === 0) log('LIVE_V1_REJECTED', undefined, {count});
+    const stripped = {...update}; delete stripped.v1;
+    return stripped;
+  }
   function connectUpstream(): void {
     if (upstream || !serviceReady || !service || supervisor.stopping) return;
     clearTimeout(upstreamRecovery); upstreamRecovery = undefined;
@@ -207,8 +218,9 @@ function runApplication(profileError: unknown): void {
       if (upstream !== port1 || service !== child || !serviceReady || supervisor.stopping) return;
       const data = event.data;
       if (!data || data.type !== 'live' || !Number.isSafeInteger(data.delivery) || data.delivery! < 1 || !data.update) {lost(); return;}
-      // The single typed utilityProcess publisher is trusted; renderers never reach this port.
-      if (!selectionPending && data.update.selection === selection) freshness.accept(data.update);
+      // The single typed utilityProcess publisher is trusted; renderers never reach this port. Its protocol v1 projection
+      // is still validated here, before freshness and the overlay see it: an invalid one is stripped, never the update.
+      if (!selectionPending && data.update.selection === selection) freshness.accept(acceptedV1(data.update));
       try {if (upstream === port1) port1.postMessage({type: 'consumed', delivery: data.delivery});} catch {lost();}
     });
     try {port1.start(); child.postMessage({type: 'subscribe'}, [port2]);} catch (error) {port2.close(); lost(); log('MAIN_SUBSCRIPTION_FAILED', String(error));}

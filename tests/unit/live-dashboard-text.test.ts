@@ -8,7 +8,16 @@ import * as v0 from '../../packages/contracts/src/protocol-v0';
 import {LEGACY_ROW_IDS, liveDashboardText, type LiveDashboardText} from '../../apps/desktop/src/live-dashboard-text';
 import {initialLive} from '../../apps/desktop/src/live-state';
 import {FIELD_NOTE_TEXT, LIVE_FIELD_TEXT} from '../../apps/desktop/src/strings';
-import {SYNTHETIC_V0_HIDDEN_ROWS, SYNTHETIC_V0_LIVE_ROWS, SYNTHETIC_V0_VALUE_IDS} from '../../scripts/ci/renderer-observation.mjs';
+import * as v1 from '../../packages/contracts/src/protocol-v1';
+import {liveV1Projection} from '../../apps/desktop/src/live-v1';
+import {readFixtureFile} from '../../tools/telemetry-simulator/src/fixture-file';
+import {replayV1} from '../../tools/telemetry-simulator/src/v1/replay';
+import {
+  SYNTHETIC_V0_HIDDEN_ROWS, SYNTHETIC_V0_LIVE_ROWS, SYNTHETIC_V0_VALUE_IDS, SYNTHETIC_V0V1_HIDDEN_ROWS, SYNTHETIC_V0V1_LIVE_ROWS, SYNTHETIC_V1_LIVE_ROWS,
+  SYNTHETIC_V1_VALUE_IDS
+} from '../../scripts/ci/renderer-observation.mjs';
+import {smokePair, smokeV0, v0Live, v1Projection} from '../shared/live-v1-fixtures';
+import {scenarioPath} from '../shared/simulator-v1-expected';
 
 type V0State = Extract<v0.ServerMessage, {kind: 'checkpoint' | 'snapshot'}>;
 function v0Message(name: string): V0State {
@@ -204,6 +213,167 @@ describe('ET-010b non-current, paused and missing input', () => {
     const us = liveDashboardText(telemetry, {ets2: 'us-customary', ats: 'us-customary'});
     expect(row(us, 'sdk-average-consumption')).toMatchObject({value: 'unavailable', reason: 'no consumption recorded', note: 'SDK mean, not a trip average'});
     expect(values(us)).toMatchObject({'odometer': '0.0 mi', 'estimated-range': '0 mi'});
+  });
+});
+
+// ET-010c: protocol v1 rows (decisions F4 and F5). Expected texts are written by hand from the v0 checkpoint and
+// tests/fixtures/protocol-v1/snapshot-live.json (see scripts/ci/renderer-observation.mjs), or from the ET-005b scenario
+// files and their hand-written expectations for the transcripts.
+/** Rendered elements with the v1 status line before its section's rows, as the card renders them. */
+function renderedWithStatus(text: LiveDashboardText): [string, string][] {
+  return text.sections.flatMap(section => [
+    ...(section.status ? [['live-v1-status', section.status] as [string, string]] : []),
+    ...rendered({paused: text.paused, sections: [section]})
+  ]);
+}
+describe('ET-010c card with the v1 smoke projection', () => {
+  const text = liveDashboardText(smokePair());
+  it('renders exactly the combined smoke rows, in section order with the source section last', () => {
+    expect(renderedWithStatus(text)).toEqual(SYNTHETIC_V0V1_LIVE_ROWS.map(([id, value]) => [id, value]));
+    expect(text.sections.map(section => [section.testId, section.title])).toEqual([
+      ['live-section-motion', 'Driving'], ['live-section-fuel', 'Fuel'], ['live-section-distance', 'Distance'], ['live-section-time', 'Time'],
+      ['live-section-job', 'Job'], ['live-section-vehicle', 'Vehicle'], ['live-section-position', 'Position'], ['live-section-source', 'Protocol v1 source']
+    ]);
+    const ids = renderedWithStatus(text).map(([id]) => id);
+    for (const id of SYNTHETIC_V0V1_HIDDEN_ROWS) expect(ids).not.toContain(id);
+    expect(text.paused).toBe(false);
+  });
+  it('lists the v1 rows of the smoke as the combined rows that v0 does not carry', () => {
+    const v0Ids = new Set(SYNTHETIC_V0_LIVE_ROWS.map(([id]) => id));
+    expect(SYNTHETIC_V0V1_LIVE_ROWS.filter(([id]) => !v0Ids.has(id))).toEqual(SYNTHETIC_V1_LIVE_ROWS);
+    expect(SYNTHETIC_V1_VALUE_IDS).toEqual(['live-route-remaining', 'live-deadline', 'live-source-city', 'live-source-company', 'live-destination-company',
+      'live-cargo-mass', 'live-market', 'live-special-job', 'live-truck-plate', 'live-trailers', 'live-position', 'live-bearing', 'live-game-mode', 'live-event-loss']);
+  });
+  it('labels the v1 rows', () => {
+    const source = text.sections.find(section => section.id === 'source')!;
+    expect(source).toMatchObject({status: 'connected: Validated current observation'});
+    expect(source.rows.map(entry => [entry.label, entry.value])).toEqual([['Game mode', 'single-player (weak evidence, module-scan)'], ['Lost events', '2']]);
+    expect(row(text, 'route-remaining')!.label).toBe('Route remaining');
+    expect(row(text, 'truck-plate')!.label).toBe('License plate');
+  });
+});
+
+describe('ET-010c v1 rows under each source state', () => {
+  it('shows no v0 row from v1 without a v0 observation, while the v1 rows stay current', () => {
+    const text = liveDashboardText({...initialLive('synthetic'), v1: v1Projection()});
+    expect(row(text, 'gear')).toMatchObject({value: 'unavailable', reason: 'not current'});
+    expect(row(text, 'cargo')).toMatchObject({value: 'unavailable', reason: 'not current'});
+    expect(row(text, 'route-remaining')).toMatchObject({value: '151.0 km'});
+    expect(row(text, 'position')).toMatchObject({value: 'x -31234.5, y 42.3, z 18800.8'});
+    // Without a v0 job the v1 job rows do not apply.
+    for (const id of ['deadline', 'source-city', 'cargo-mass']) expect(row(text, id)).toBeUndefined();
+    expect(text.sections.find(section => section.id === 'source')).toMatchObject({status: 'connected: Validated current observation'});
+  });
+  it.each([
+    ['without a v1 projection', undefined],
+    ['with a projection of another selection', v1Projection('snapshot-live', {selection: 'replay'})],
+    ['before the first v1 observation', {...v1Projection(), observation: undefined, fresh: false, status: 'waiting' as const, reason: 'Awaiting selected source'}],
+    ['with v1 data of another origin', v1Projection('snapshot-live', {origin: 'replay'})]
+  ])('equals the ET-010b card %s', (_name, v1) => {
+    expect(liveDashboardText({...smokeV0(), ...(v1 ? {v1} : {})})).toEqual(liveDashboardText(smokeV0()));
+    const stale = smokeV0({status: 'stale', fresh: false});
+    expect(liveDashboardText({...stale, ...(v1 ? {v1} : {})})).toEqual(liveDashboardText(stale));
+  });
+  it.each([
+    ['stale', {status: 'stale' as const, fresh: false, reason: 'Main has no recent v1 SDK capture'}, 'stale: Main has no recent v1 SDK capture'],
+    ['disconnected', {status: 'disconnected' as const, fresh: false, reason: 'Source closed; interval coverage unknown'}, 'disconnected: Source closed; interval coverage unknown']
+  ])('shows every v1 row as not current while v1 is %s and leaves the v0 rows alone', (_name, options, status) => {
+    const text = liveDashboardText(smokePair(options));
+    for (const id of SYNTHETIC_V1_VALUE_IDS) expect(rendered(text)).toContainEqual([id, 'unavailable']);
+    for (const id of SYNTHETIC_V1_VALUE_IDS) expect(rendered(text)).toContainEqual([`${id}-reason`, 'not current']);
+    expect(text.sections.find(section => section.id === 'source')!.status).toBe(status);
+    // The v0 rows are those of the v0-only card, with game ids because v1 is not current.
+    const v0Rows = rendered(text).filter(([id]) => SYNTHETIC_V0_LIVE_ROWS.some(([v0Id]) => v0Id === id));
+    expect(v0Rows).toEqual(SYNTHETIC_V0_LIVE_ROWS.map(([id, value]) => [id, value]));
+    expect(JSON.stringify(text)).not.toMatch(/Synthetic City|Synthetic Cargo|SYN 0001|151\.0|270°|dryvan/);
+  });
+  it('keeps the v1 rows current while only v0 is stale', () => {
+    const text = liveDashboardText(smokePair({}, {status: 'stale', fresh: false}));
+    const v1Rows = renderedWithStatus(text).filter(([id]) => SYNTHETIC_V1_LIVE_ROWS.some(([v1Id]) => v1Id === id));
+    expect(v1Rows).toEqual(SYNTHETIC_V1_LIVE_ROWS.map(([id, value]) => [id, value]));
+    for (const id of SYNTHETIC_V0_VALUE_IDS) expect(row(text, id.slice('live-'.length))).toMatchObject({value: 'unavailable', reason: 'not current'});
+  });
+  it('shows no v1 job row while v0 reports no job', () => {
+    const telemetry = {...v0Live('unavailable', 'synthetic'), v1: v1Projection()};
+    const text = liveDashboardText(telemetry);
+    expect(text.sections.find(section => section.id === 'job')).toEqual({id: 'job', testId: 'live-section-job', title: 'Job', missing: 'No job reported', rows: []});
+    expect(text.sections.find(section => section.id === 'time')!.rows.map(entry => entry.id)).toEqual(['game-time']);
+    expect(row(text, 'route-remaining')).toMatchObject({value: '151.0 km'});
+  });
+  it('shows the v1 job rows of another job as not current', () => {
+    const text = liveDashboardText(smokePair({ids: 'fixture'}));
+    for (const id of ['deadline', 'source-city', 'source-company', 'destination-company', 'cargo-mass', 'market', 'special-job'])
+      expect(row(text, id), id).toMatchObject({value: 'unavailable', reason: 'not current'});
+    expect(row(text, 'cargo')!.value).toBe('cargo.logs');
+    expect(row(text, 'trailers')!.value).toBe('dryvan');
+  });
+  it('shows the paused banner from current v1 data only while v0 is not current', () => {
+    expect(liveDashboardText(smokePair({status: 'paused'})).paused).toBe(false);
+    expect(liveDashboardText(smokePair({status: 'paused'}, {status: 'stale', fresh: false})).paused).toBe(true);
+  });
+});
+
+// ET-005b transcripts through the projection (base plan step (f)). Expected texts are derived by hand from the scenario
+// files and the rules their hand-written expectations cite: an unset channel is `not-observed`, world placement is
+// copied, and the SDK heading is a counterclockwise unit fraction (bearing = ((1 - heading) mod 1) x 360°).
+function transcriptLive(id: string, atMs: number, v0: LiveTelemetry): LiveTelemetry {
+  const result = replayV1(readFixtureFile(scenarioPath(id)));
+  const line = result.transcript.filter(entry => entry.direction === 'server' && entry.atMs <= atMs &&
+    (entry.message.kind === 'checkpoint' || entry.message.kind === 'snapshot')).at(-1)!;
+  const message = line.message as Extract<v1.ServerMessage, {kind: 'checkpoint' | 'snapshot'}>;
+  const projection = liveV1Projection({selection: v0.selection, status: 'connected', reason: 'Validated current observation', fresh: true, durable: {state: 'off'},
+    observation: {kind: message.kind, source: message.source, seq: message.seq, capture: message.capture, state: message.data.state, status: message.data.status,
+      continuity: message.data.continuity, receivedMonotonicMs: atMs, hydration: message.kind === 'checkpoint'}});
+  return {...v0, v1: projection};
+}
+/** A v0 observation whose job has the given ids; game and origin follow the transcript. */
+function v0WithJob(game: 'ets2' | 'ats', cargoId: string, destinationCityId: string): LiveTelemetry {
+  const telemetry = v0Live(game === 'ats' ? 'ats' : 'snapshot', 'synthetic', {}, 'synthetic');
+  const job = telemetry.observation!.state.configuration.job;
+  if (!job.available) throw new Error('Expected a v0 job');
+  job.value.cargoId = cargoId; job.value.destinationCityId = destinationCityId;
+  return telemetry;
+}
+describe('ET-010c v1 rows from ET-005b transcripts', () => {
+  it('sleep-teleport: shows the copied world placement before and after the teleport, without a job', () => {
+    const before = liveDashboardText(transcriptLive('sleep-teleport', 100, v0Live('snapshot', 'synthetic')));
+    expect(row(before, 'position')).toMatchObject({value: 'x 101.5, y 10.0, z -200.3', note: 'game-world coordinates, not GPS'});
+    expect(row(before, 'bearing')).toMatchObject({value: '180°'});
+    const after = liveDashboardText(transcriptLive('sleep-teleport', 300, v0Live('snapshot', 'synthetic')));
+    expect(row(after, 'position')).toMatchObject({value: 'x 25000.5, y 15.0, z 9000.8'});
+    expect(row(after, 'bearing')).toMatchObject({value: '90°'});
+    expect(row(after, 'route-remaining')).toMatchObject({value: 'unavailable', reason: 'not yet observed'});
+    expect(row(after, 'game-mode')).toMatchObject({value: 'unknown'});
+    expect(row(after, 'event-loss')).toMatchObject({value: '0', note: 'this version records no gameplay events'});
+    // The v0 job (cargo.logs to city.warszawa) is not the transcript's, which has none.
+    expect(row(after, 'source-city')).toMatchObject({value: 'unavailable', reason: 'not current'});
+  });
+  it('save-load: shows the job rows for the same job before and after the reload', () => {
+    for (const atMs of [100, 240]) {
+      const text = liveDashboardText(transcriptLive('save-load', atMs, v0WithJob('ets2', 'synthetic_cargo', 'synthetic_city_b')));
+      expect(row(text, 'cargo')!.value, `${atMs}`).toBe('synthetic_cargo');
+      expect(row(text, 'destination-city')!.value).toBe('synthetic_city_b');
+      expect(row(text, 'source-city')).toMatchObject({value: 'unavailable', reason: 'not yet observed'});
+      expect(row(text, 'deadline')).toMatchObject({value: 'unavailable', reason: 'not yet observed', note: 'game time'});
+      expect(row(text, 'cargo-mass')).toMatchObject({value: 'unavailable', reason: 'not yet observed'});
+      // No market observed: cargo loaded is defined for the cargo market only and stays hidden.
+      expect(row(text, 'cargo-loaded')).toBeUndefined();
+      expect(row(text, 'trailers')!.value).toBe('trailer.synthetic_box');
+      expect(row(text, 'truck-plate')).toMatchObject({value: 'unavailable', reason: 'not yet observed'});
+    }
+  });
+  it('timers-truck-refuel: shows no plate and no trailer after the truck change', () => {
+    const text = liveDashboardText(transcriptLive('timers-truck-refuel', 500, v0Live('snapshot', 'synthetic')));
+    expect(row(text, 'truck-plate')).toMatchObject({value: 'unavailable', reason: 'not yet observed'});
+    expect(row(text, 'trailers')).toMatchObject({value: 'none', reason: 'no trailer attached'});
+  });
+  it('units-currency (ATS): keeps the guard for a job whose destination city is not observed', () => {
+    const text = liveDashboardText(transcriptLive('units-currency', 100, v0WithJob('ats', 'cargo.logs', 'city.warszawa')));
+    // The transcript's cargo id is the provided empty string and its destination city is not observed, so no v0 job can
+    // be the same job: the 0 kg cargo mass is not current rather than "0 lb" (difference from the base plan, reported).
+    for (const id of ['cargo-mass', 'source-city', 'special-job']) expect(row(text, id), id).toMatchObject({value: 'unavailable', reason: 'not current'});
+    expect(row(text, 'route-remaining')).toMatchObject({value: 'unavailable', reason: 'not yet observed'});
+    expect(row(text, 'game-mode')).toMatchObject({value: 'unknown'});
   });
 });
 
