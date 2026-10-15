@@ -122,7 +122,8 @@ function Test-LifecycleSettingsReceipt {
         $pendingRows = @($settingsRows | Where-Object { $_.event -ceq 'SETTINGS_LOAD_PENDING' })
         if ($pendingRows.Count -gt 1) { return $false }
         if ($pendingRows.Count -eq 1 -and ($settingsRows[0].event -cne 'SETTINGS_LOAD_PENDING' -or
-            $settingsRows[0].facts.state -cne 'loading' -or $settingsRows[0].facts.reason -cne 'load-budget')) { return $false }
+            $settingsRows[0].facts.state -cne 'loading' -or $settingsRows[0].facts.reason -cne 'load-budget' -or
+            ((@($settingsRows[0].facts.PSObject.Properties.Name) | Sort-Object) -join ',') -cne 'reason,state')) { return $false }
     }
     $fallback = @($Driver.mainEvents | Where-Object { $_.event -ceq 'SETTINGS_FALLBACK' })
     if ($fallback.Count -ne 1 -or $fallback[0].facts.state -cne 'invalid-file') { return $false }

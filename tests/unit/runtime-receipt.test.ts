@@ -126,6 +126,7 @@ function lifecycleCases() {
       ['two pending rows in run B', value => {value.lifecycle.restartMainEvents.splice(3, 0, pendingRow());}],
       ['pending row after the load in run B', value => {value.lifecycle.restartMainEvents.push(value.lifecycle.restartMainEvents.splice(3, 1)[0]);}],
       ['pending row after the fallback in run A', value => {value.mainEvents.splice(5, 0, value.mainEvents.splice(4, 1)[0]);}],
+      ['pending row with an extra fact in run A', value => {value.mainEvents[4] = {event: 'SETTINGS_LOAD_PENDING', facts: {state: 'loading', reason: 'load-budget', fields: 'x'}};}],
       ['pending row with another reason in run A', value => {value.mainEvents[4] = {event: 'SETTINGS_LOAD_PENDING', facts: {state: 'loading', reason: 'load-limit'}};}],
       ['late read that ended unreadable in run B', value => {value.lifecycle.restartMainEvents[4] = {event: 'SETTINGS_FALLBACK', facts: {state: 'unreadable', reason: 'load-limit'}};}]
     ] satisfies [string, LateCorruption][]).map(([name, corrupt]) => ({name: `lifecycle ${name}`, body: lateLifecycleReceipt(corrupt), scenario: 'lifecycle', code: 0, available: true, reason: 'LIFECYCLE_RESULT_INCOMPLETE_OR_INVALID'})),
