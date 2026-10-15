@@ -1,4 +1,4 @@
-import type {AppErrorCode, ServiceHealth, SettingsState, StorageHealth, UnitGame, UnitProfile} from '../../../packages/contracts/src';
+import type {AppErrorCode, ServiceHealth, SettingsSaveError, SettingsState, StorageHealth, UnitGame, UnitProfile} from '../../../packages/contracts/src';
 
 /**
  * User-visible English text for the dashboard and tray. There is no i18n framework yet; keeping the
@@ -43,9 +43,12 @@ export const APP_ERROR_TEXT: Readonly<Record<AppErrorCode, string>> = Object.fre
   SERVICE_EXITED: 'The telemetry service stopped unexpectedly.',
   SERVICE_RESTART_EXHAUSTED: 'Automatic service restart limit reached. Exit and start ETS2Telemetry again.',
   STORAGE_FAILED: 'The isolated storage self-test failed.',
-  SERVICE_START_TIMEOUT: 'The telemetry service did not start in time.',
-  SETTINGS_WRITE_FAILED: 'Settings could not be saved.',
-  SETTINGS_READ_ONLY: 'Settings were written by a newer version and are read-only.'
+  SERVICE_START_TIMEOUT: 'The telemetry service did not start in time.'
+});
+/** Shown in the units card for the last refused save; never part of the service's last problem. */
+export const SETTINGS_SAVE_ERROR_TEXT: Readonly<Record<SettingsSaveError, string>> = Object.freeze({
+  SETTINGS_WRITE_FAILED: 'The unit change could not be saved; the previous units stay in use.',
+  SETTINGS_READ_ONLY: 'Settings were written by a newer version and are read-only; the unit change was not saved.'
 });
 export const UNIT_GAME_TEXT: Readonly<Record<UnitGame, string>> = Object.freeze({
   ets2: 'Euro Truck Simulator 2', ats: 'American Truck Simulator'

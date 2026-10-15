@@ -36,7 +36,7 @@ let extraContents: typeof contents[];
 // readiness timing is unchanged. `settingsWrite` controls each save; `settingsView` is what the store reports.
 class FakeSettingsError extends Error {constructor(readonly code: 'SETTINGS_WRITE_FAILED' | 'SETTINGS_READ_ONLY') {super(code === 'SETTINGS_READ_ONLY' ? 'Settings are read-only' : 'Settings could not be saved');}}
 class FakeSettingsBusyError extends Error {}
-let settingsView: {units: {ets2: string; ats: string}; state: string; writable: boolean};
+let settingsView: {units: {ets2: string; ats: string}; state: string; writable: boolean; saveError: string | null};
 type SettingsWrite = (game: string, profile: string) => Promise<unknown>;
 let settingsWrite: ReturnType<typeof vi.fn<SettingsWrite>>;
 let settingsIdle: Promise<void> | undefined;
@@ -91,7 +91,7 @@ beforeEach(() => {
   log = vi.fn(); vi.doMock('../../apps/desktop/src/diagnostics', () => ({createDiagnostics: () => log}));
   vi.doMock('../../apps/desktop/src/broker-artifact', () => ({brokerConfiguration: resolveBroker, createBrokerResolver: () => resolveBroker}));
   vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'synthetic');
-  settingsView = {units: {ets2: 'metric', ats: 'us-customary'}, state: 'defaults', writable: true};
+  settingsView = {units: {ets2: 'metric', ats: 'us-customary'}, state: 'defaults', writable: true, saveError: null};
   settingsWrite = vi.fn<SettingsWrite>(); settingsIdle = undefined; settingsDirectories = []; settingsLoaded = true; settingsLoading = Promise.resolve();
   vi.doMock('../../apps/desktop/src/settings-store', () => ({
     settingsDirectory: (localAppData: unknown) => typeof localAppData === 'string' ? `${localAppData}\\ETS2Telemetry\\settings` : undefined, SettingsError: FakeSettingsError, SettingsBusyError: FakeSettingsBusyError,
@@ -666,7 +666,7 @@ it('reopens a new dashboard from the tray that resubscribes without a second ups
   ipc.emit('telemetry:subscribe', reopenedSender);
   expect(reopened.postMessage).toHaveBeenCalledWith('telemetry:port', null, [channels.at(-1)!.port2]);
   expect(upstreamRequests()).toBe(1); expect(children).toHaveLength(1);
-  expect(handlers.get('app:get-state')!(reopenedSender)).toEqual({health: {service: 'ready', storage: 'verified', recording: 'unavailable', lastError: null}, settings: {units: {ets2: 'metric', ats: 'us-customary'}, state: 'defaults', writable: true}});
+  expect(handlers.get('app:get-state')!(reopenedSender)).toEqual({health: {service: 'ready', storage: 'verified', recording: 'unavailable', lastError: null}, settings: {units: {ets2: 'metric', ats: 'us-customary'}, state: 'defaults', writable: true, saveError: null}});
   // A second tray open focuses the existing window instead of creating another.
   trays[0].emit('click'); expect(windows).toHaveLength(3); expect(windows[2].show).toHaveBeenCalledOnce(); expect(windows[2].focus).toHaveBeenCalledOnce();
 });
@@ -771,7 +771,7 @@ it('shows restart exhaustion in health and the tray and stays running until an e
     children.at(-1)!.emit('exit', 1); await vi.advanceTimersByTimeAsync(1000);
     if (crash < 2) {children.at(-1)!.emit('message', {type: 'ready'}); await settle();}
   }
-  expect(handlers.get('app:get-state')!(trusted())).toEqual({health: {service: 'failed', storage: 'pending', recording: 'unavailable', lastError: 'SERVICE_RESTART_EXHAUSTED'}, settings: {units: {ets2: 'metric', ats: 'us-customary'}, state: 'defaults', writable: true}});
+  expect(handlers.get('app:get-state')!(trusted())).toEqual({health: {service: 'failed', storage: 'pending', recording: 'unavailable', lastError: 'SERVICE_RESTART_EXHAUSTED'}, settings: {units: {ets2: 'metric', ats: 'us-customary'}, state: 'defaults', writable: true, saveError: null}});
   await vi.advanceTimersByTimeAsync(500);
   expect(trays[0].setImage).toHaveBeenCalled(); expect(trays[0].setToolTip).toHaveBeenLastCalledWith('ETS2Telemetry\nService failed');
   expect(app.exit).not.toHaveBeenCalled();
@@ -802,7 +802,7 @@ it('answers a dashboard opened during a service restart with a not-ready status,
   expect(handlers.get('scaffold:status')!(sender)).toBeNull();
   expect(() => handlers.get('scaffold:status')!(trusted())).toThrow('Untrusted');
   ipc.emit('app:subscribe-state', sender);
-  expect(reopened.send).toHaveBeenLastCalledWith('app:state', {health: expect.objectContaining({service: 'restarting'}), settings: {units: {ets2: 'metric', ats: 'us-customary'}, state: 'defaults', writable: true}});
+  expect(reopened.send).toHaveBeenLastCalledWith('app:state', {health: expect.objectContaining({service: 'restarting'}), settings: {units: {ets2: 'metric', ats: 'us-customary'}, state: 'defaults', writable: true, saveError: null}});
   // When the pushed health reports ready, the status query already answers with the ready status.
   let statusAtReadyPush: unknown;
   reopened.send.mockImplementation((channel: string, state: {health: {service: string}}) => {
@@ -917,7 +917,7 @@ it('applies a unit profile only after the durable save and republishes the overl
   // Not durable yet: nothing applied, pushed or republished.
   expect(settingsWrite).toHaveBeenCalledExactlyOnceWith('ets2', 'us-customary');
   expect(pushes()).toHaveLength(before); expect(overlayProjection(overlayChannel)).toMatchObject({speedUnit: 'km/h'});
-  settingsView = {units: {ets2: 'us-customary', ats: 'us-customary'}, state: 'loaded', writable: true}; saved.resolve(settingsView);
+  settingsView = {units: {ets2: 'us-customary', ats: 'us-customary'}, state: 'loaded', writable: true, saveError: null}; saved.resolve(settingsView);
   await expect(request).resolves.toEqual(settingsView);
   expect(pushes().at(-1)).toEqual({health: {service: 'ready', storage: 'verified', recording: 'unavailable', lastError: null}, settings: settingsView});
   await vi.advanceTimersByTimeAsync(50);
@@ -933,22 +933,30 @@ it('applies a unit profile only after the durable save and republishes the overl
   ipc.emit('telemetry:subscribe', trusted());
   expect(channels.at(-1)!.port1.postMessage.mock.lastCall![0].update.observation.state.speed).toEqual({available: true, value: 25, unit: 'm/s'});
 });
-it.each(['SETTINGS_WRITE_FAILED', 'SETTINGS_READ_ONLY'] as const)('keeps the previous units and reports %s when the save is refused', async code => {
+it.each(['SETTINGS_WRITE_FAILED', 'SETTINGS_READ_ONLY'] as const)('keeps the units and the service problem and reports %s in the settings view', async code => {
   trayAvailable = true; vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2'); await ready();
-  ipc.emit('app:subscribe-state', trusted()); ipc.emit('overlay:subscribe', overlayTrusted()); const overlayChannel = channels[1];
-  consumeOverlay(overlayChannel); deliver(currentReading()); await vi.advanceTimersByTimeAsync(50); consumeOverlay(overlayChannel);
+  // A recovered post-readiness storage failure stays the service's last problem.
+  child.emit('message', {type: 'failed', code: 'STORAGE_WORKER_EXIT'}); child.emit('exit', 1);
+  await vi.advanceTimersByTimeAsync(250); children[1].emit('message', {type: 'ready'}); await settle();
+  const upstream = channels.at(-1)!;
+  ipc.emit('app:subscribe-state', trusted()); ipc.emit('overlay:subscribe', overlayTrusted()); const overlayChannel = channels.at(-1)!;
+  consumeOverlay(overlayChannel); deliver(currentReading(), 1, upstream); await vi.advanceTimersByTimeAsync(50); consumeOverlay(overlayChannel);
+  const health = {service: 'ready', storage: 'verified', recording: 'unavailable', lastError: 'STORAGE_FAILED'};
+  expect(handlers.get('app:get-state')!(trusted())).toMatchObject({health});
   const deliveries = overlayChannel.port1.postMessage.mock.calls.length;
-  settingsWrite.mockRejectedValue(new FakeSettingsError(code));
+  // The store records the refusal in its view, as the real store does.
+  settingsWrite.mockImplementation(() => {settingsView = {...settingsView, saveError: code}; return Promise.reject(new FakeSettingsError(code));});
   await expect(saveUnits(trusted(), 'ets2', 'us-customary')).rejects.toThrow(code === 'SETTINGS_READ_ONLY' ? 'Settings are read-only' : 'Settings could not be saved');
-  expect(handlers.get('app:get-state')!(trusted())).toEqual({health: {service: 'ready', storage: 'verified', recording: 'unavailable', lastError: code},
-    settings: {units: {ets2: 'metric', ats: 'us-customary'}, state: 'defaults', writable: true}});
-  expect(contents.send).toHaveBeenLastCalledWith('app:state', expect.objectContaining({health: expect.objectContaining({lastError: code})}));
+  const refused = {health, settings: {units: {ets2: 'metric', ats: 'us-customary'}, state: 'defaults', writable: true, saveError: code}};
+  expect(handlers.get('app:get-state')!(trusted())).toEqual(refused);
+  expect(contents.send).toHaveBeenLastCalledWith('app:state', refused);
   await vi.advanceTimersByTimeAsync(50); expect(overlayChannel.port1.postMessage.mock.calls).toHaveLength(deliveries);
-  // A later successful save clears the settings error.
-  settingsWrite.mockResolvedValue(settingsView);
+  // A later successful save clears the settings error and still leaves the service problem in place.
+  settingsWrite.mockImplementation(() => {settingsView = {units: {ets2: 'metric', ats: 'us-customary'}, state: 'loaded', writable: true, saveError: null}; return Promise.resolve(settingsView);});
   await saveUnits(trusted(), 'ats', 'us-customary');
-  expect(handlers.get('app:get-state')!(trusted())).toMatchObject({health: {lastError: null}});
-  expect(log.mock.calls.map(call => call[0] as string).filter(name => failurePattern.test(name))).toEqual([]);
+  const saved = {health, settings: {units: {ets2: 'metric', ats: 'us-customary'}, state: 'loaded', writable: true, saveError: null}};
+  expect(handlers.get('app:get-state')!(trusted())).toEqual(saved);
+  expect(contents.send).toHaveBeenLastCalledWith('app:state', saved);
 });
 it('waits for an in-flight settings save before exiting and refuses new saves once exiting', async () => {
   trayAvailable = true; await ready();
@@ -969,8 +977,8 @@ it('exits after at most 1000 ms when an in-flight settings save does not settle'
 it('reports the settings view in the gated lifecycle facts', () => isolatedProfile(async profile => {
   vi.stubEnv('ETS2TELEMETRY_LIVE_SMOKE', '1'); vi.stubEnv('ETS2TELEMETRY_DIAGNOSTIC_DIR', 'C:\\isolated\\diagnostics');
   vi.stubEnv('ETS2TELEMETRY_PROFILE_DIR', profile); trayAvailable = true;
-  settingsView = {units: {ets2: 'metric', ats: 'us-customary'}, state: 'invalid-file', writable: true}; await ready();
+  settingsView = {units: {ets2: 'metric', ats: 'us-customary'}, state: 'invalid-file', writable: true, saveError: null}; await ready();
   let facts: Record<string, unknown> | undefined;
   app.emit('ets2telemetry:diagnostic-lifecycle-state', (state: Record<string, unknown>) => {facts = state;});
-  expect(facts).toMatchObject({settings: {units: {ets2: 'metric', ats: 'us-customary'}, state: 'invalid-file', writable: true}});
+  expect(facts).toMatchObject({settings: {units: {ets2: 'metric', ats: 'us-customary'}, state: 'invalid-file', writable: true, saveError: null}});
 }));

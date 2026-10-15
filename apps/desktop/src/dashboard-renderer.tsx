@@ -7,11 +7,9 @@ import {Label} from '@/components/ui/label';
 import {RadioGroup, RadioGroupItem} from '@/components/ui/radio-group';
 import {dashboardFuel, dashboardSpeed} from './speed-display';
 import {createStartupLine} from './dashboard-startup';
-import {DEFAULT_UNIT_PROFILES, displayGame, isUnitProfile, profileFor, UNIT_GAMES} from './unit-profiles';
-import {APP_ERROR_TEXT, SERVICE_HEALTH_TEXT, SETTINGS_STATE_TEXT, STORAGE_HEALTH_TEXT, STRINGS, UNIT_GAME_TEXT, UNIT_PROFILE_TEXT} from './strings';
+import {DEFAULT_UNIT_PROFILES, displayProfile, isUnitProfile, UNIT_GAMES, UNIT_PROFILE_IDS} from './unit-profiles';
+import {APP_ERROR_TEXT, SERVICE_HEALTH_TEXT, SETTINGS_SAVE_ERROR_TEXT, SETTINGS_STATE_TEXT, STORAGE_HEALTH_TEXT, STRINGS, UNIT_GAME_TEXT, UNIT_PROFILE_TEXT} from './strings';
 import './index.css';
-
-const PROFILES = ['metric', 'us-customary'] as const;
 
 export default function App() {
   const [startup, setStartup] = useState<string>(STRINGS.startupPending);
@@ -29,7 +27,7 @@ export default function App() {
   const problem = health && (health.service === 'failed' || health.service === 'restarting') && health.lastError;
   const settings = app?.settings;
   // Main pushes the saved settings; until the first push the ET-000 defaults apply.
-  const profile = profileFor(settings?.units ?? DEFAULT_UNIT_PROFILES, live ? displayGame(live) : undefined);
+  const profile = displayProfile(live, settings?.units);
   const choose = (game: UnitGame, value: string) => {
     if (!isUnitProfile(value)) return;
     setUnits('saving');
@@ -68,12 +66,14 @@ export default function App() {
       {/* A choice shows as selected only after main saved it; a failed save leaves the previous one. */}
       <RadioGroup aria-labelledby={`units-${game}-label`} data-testid={`units-${game}`} value={settings?.units[game] ?? DEFAULT_UNIT_PROFILES[game]}
         disabled={!settings?.writable || units === 'saving'} onValueChange={value => choose(game, value)}>
-        {PROFILES.map(option => <div key={option} className="flex items-center gap-2">
+        {UNIT_PROFILE_IDS.map(option => <div key={option} className="flex items-center gap-2">
           <RadioGroupItem value={option} id={`units-${game}-${option}`} /><Label htmlFor={`units-${game}-${option}`}>{UNIT_PROFILE_TEXT[option]}</Label>
         </div>)}
       </RadioGroup>
     </div>)}
     <p data-testid="settings-state">{settings ? SETTINGS_STATE_TEXT[settings.state] : '—'}</p>
-    {units === 'failed' ? <p role="status" data-testid="settings-error">{STRINGS.unitsSaveFailed}</p> : null}
+    {/* A refused save is reported by main in the settings view; other request failures only locally. */}
+    {settings?.saveError ? <p role="status" data-testid="settings-error">{SETTINGS_SAVE_ERROR_TEXT[settings.saveError]}</p>
+      : units === 'failed' ? <p role="status" data-testid="settings-error">{STRINGS.unitsSaveFailed}</p> : null}
   </CardContent></Card></main>;
 }

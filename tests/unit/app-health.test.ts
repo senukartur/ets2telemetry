@@ -44,21 +44,3 @@ it('compares health by value', () => {
   expect(sameHealth(initialHealth(), initialHealth())).toBe(true);
   expect(sameHealth(initialHealth(), run({type: 'service-ready'}))).toBe(false);
 });
-
-// ET-011b settings errors.
-it('reports a refused settings save as the last problem and clears it after the next save', () => {
-  const ready = run({type: 'service-ready'});
-  for (const code of ['SETTINGS_WRITE_FAILED', 'SETTINGS_READ_ONLY'] as const) {
-    const refused = reduceHealth(ready, {type: 'settings-failure', code});
-    expect(refused).toEqual({service: 'ready', storage: 'verified', recording: 'unavailable', lastError: code});
-    expect(reduceHealth(refused, {type: 'settings-saved'})).toEqual({service: 'ready', storage: 'verified', recording: 'unavailable', lastError: null});
-  }
-  // A save never clears a service problem, and a settings error never hides one.
-  const restarting = run({type: 'service-ready'}, {type: 'service-failure', code: 'STORAGE_FAILED'});
-  expect(reduceHealth(restarting, {type: 'settings-saved'})).toBe(restarting);
-  expect(reduceHealth(restarting, {type: 'settings-failure', code: 'SETTINGS_WRITE_FAILED'})).toBe(restarting);
-  const exited = run({type: 'service-ready'}, {type: 'service-exited', afterFailure: false});
-  expect(reduceHealth(exited, {type: 'settings-failure', code: 'SETTINGS_READ_ONLY'}).lastError).toBe('SERVICE_EXITED');
-  const stopping = reduceHealth(ready, {type: 'exit-requested'});
-  expect(reduceHealth(stopping, {type: 'settings-failure', code: 'SETTINGS_WRITE_FAILED'})).toBe(stopping);
-});

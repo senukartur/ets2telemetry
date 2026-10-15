@@ -131,19 +131,17 @@ function runApplication(profileError: unknown): void {
   });
   function appState(): AppState {return {health: {...health}, settings: settingsStore.view()};}
   function pushAppState(): void {if (appStateSubscribed && window && !window.isDestroyed()) window.webContents.send('app:state', appState());}
-  /** Returns whether the health changed; a change is pushed to a subscribed dashboard. */
-  function updateHealth(event: HealthEvent, immediate = false): boolean {
+  function updateHealth(event: HealthEvent, immediate = false): void {
     const next = reduceHealth(health, event);
-    if (sameHealth(next, health)) return false;
+    if (sameHealth(next, health)) return;
     health = next;
     pushAppState();
     presentTray(immediate);
-    return true;
   }
   // A saved unit profile republishes main's stored freshness output in the new units. It accepts no observation and
   // renews no SDK or window authority: freshness, its expiry timers and the overlay placement are untouched.
   function settingsSaved(): void {
-    if (!updateHealth({type: 'settings-saved'})) pushAppState();
+    pushAppState();
     if (!lifecycle.exiting) overlaySubscriptions.publish(overlayPresentation(lastLive, settingsStore.view().units));
   }
   function presentTray(immediate = false): void {
@@ -383,7 +381,8 @@ function runApplication(profileError: unknown): void {
       settingsSaved();
       return view;
     } catch (error) {
-      if (error instanceof SettingsError) updateHealth({type: 'settings-failure', code: error.code});
+      // The refusal lives in the settings view's `saveError`; the service's health and last problem are unchanged.
+      if (error instanceof SettingsError) pushAppState();
       // Fixed messages only; the store's errors never carry paths. Electron sends the renderer only the message.
       throw new Error(error instanceof SettingsError || error instanceof SettingsBusyError ? error.message : 'Settings could not be saved', {cause: error});
     }

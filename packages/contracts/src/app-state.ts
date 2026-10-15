@@ -1,6 +1,8 @@
-/** Fixed application error codes. They never carry paths, error text or other runtime details. */
-export type AppErrorCode = 'SERVICE_EXITED' | 'SERVICE_RESTART_EXHAUSTED' | 'STORAGE_FAILED' | 'SERVICE_START_TIMEOUT'
-  | 'SETTINGS_WRITE_FAILED' | 'SETTINGS_READ_ONLY';
+/**
+ * Fixed service and storage error codes. They never carry paths, error text or other runtime details. Settings save
+ * errors are separate (`SettingsSaveError`), so they never replace a service problem.
+ */
+export type AppErrorCode = 'SERVICE_EXITED' | 'SERVICE_RESTART_EXHAUSTED' | 'STORAGE_FAILED' | 'SERVICE_START_TIMEOUT';
 export type ServiceHealth = 'starting' | 'ready' | 'restarting' | 'failed' | 'stopping';
 export type StorageHealth = 'pending' | 'verified' | 'failed';
 export interface AppHealth {
@@ -27,12 +29,16 @@ export type UnitProfiles = Readonly<Record<UnitGame, UnitProfile>>;
  */
 export type SettingsState = 'defaults' | 'loaded' | 'loaded-with-fallbacks' | 'invalid-file' | 'unsupported-older'
   | 'newer-version' | 'unreadable' | 'unavailable';
+/** Why the last settings save was refused: it could not be written, or the file is read-only (newer version). */
+export type SettingsSaveError = 'SETTINGS_WRITE_FAILED' | 'SETTINGS_READ_ONLY';
 /** The settings that apply now. Never carries paths, file content or error text. */
 export interface SettingsView {
   units: UnitProfiles;
   state: SettingsState;
   /** False when a change cannot be saved: a newer-version, unreadable or unavailable settings file. */
   writable: boolean;
+  /** The last save's refusal, cleared by the next successful save. Independent of the service's `lastError`. */
+  saveError: SettingsSaveError | null;
 }
 /** Main-owned application state pushed to the dashboard. */
 export interface AppState {

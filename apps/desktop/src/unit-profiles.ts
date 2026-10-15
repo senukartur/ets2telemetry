@@ -1,5 +1,5 @@
 import type {LiveTelemetry, UnitGame, UnitProfile, UnitProfiles} from '../../../packages/contracts/src';
-import {DEFAULT_DISPLAY_PROFILE, DISPLAY_PROFILES, isDisplayProfileId, type DisplayProfileId, type GameId} from '../../../packages/telemetry-core/src/display-profile';
+import {DEFAULT_DISPLAY_PROFILE, DISPLAY_PROFILE_IDS, DISPLAY_PROFILES, isDisplayProfileId, type DisplayProfileId, type GameId} from '../../../packages/telemetry-core/src/display-profile';
 import {fixed} from '../../../packages/telemetry-core/src/format';
 import {convertSpeed, convertVolume, type SpeedUnit, type VolumeUnit} from '../../../packages/telemetry-core/src/units';
 
@@ -13,6 +13,8 @@ export const PROFILE_IDS_MATCH_TELEMETRY_CORE: Same<UnitProfile, DisplayProfileI
 export const GAMES_MATCH_TELEMETRY_CORE: Same<UnitGame, GameId> = true;
 
 export const UNIT_GAMES: readonly UnitGame[] = Object.freeze(['ets2', 'ats']);
+/** telemetry-core's profile ids, in its order. */
+export const UNIT_PROFILE_IDS: readonly UnitProfile[] = DISPLAY_PROFILE_IDS;
 /** ET-000 defaults from telemetry-core: ETS2 metric, ATS US customary. */
 export const DEFAULT_UNIT_PROFILES: UnitProfiles = DEFAULT_DISPLAY_PROFILE;
 
@@ -28,14 +30,23 @@ export function isUnitProfile(value: unknown): value is UnitProfile {
  * source identity; otherwise only an ETS2 or ATS selection selects a game.
  */
 export function displayGame(live: LiveTelemetry): UnitGame | undefined {
-  const observation = live.observation;
-  const explicitFixture = (live.selection === 'synthetic' || live.selection === 'replay') && observation?.source.origin === live.selection;
-  const game = explicitFixture ? observation.source.game : live.selection;
+  const game = isExplicitFixture(live) ? live.observation?.source.game : live.selection;
   return isUnitGame(game) ? game : undefined;
+}
+/** A synthetic or replay selection whose observation carries that same origin. */
+export function isExplicitFixture(live: LiveTelemetry): boolean {
+  return (live.selection === 'synthetic' || live.selection === 'replay') && live.observation?.source.origin === live.selection;
 }
 /** Without a game the metric profile applies, as in telemetry-core's `resolveDisplayUnits`. */
 export function profileFor(units: UnitProfiles, game: UnitGame | undefined): UnitProfile {
   return game ? units[game] : 'metric';
+}
+/**
+ * The profile for displaying a live update: the displayed game's persisted profile, or its ET-000 default before the
+ * settings arrive (so an ATS dashboard shows mph and US gallons by default). Metric without an update or a game.
+ */
+export function displayProfile(live: LiveTelemetry | undefined, units: UnitProfiles = DEFAULT_UNIT_PROFILES): UnitProfile {
+  return profileFor(units, live ? displayGame(live) : undefined);
 }
 export function speedUnit(profile: UnitProfile): SpeedUnit {
   return DISPLAY_PROFILES[profile].speed;

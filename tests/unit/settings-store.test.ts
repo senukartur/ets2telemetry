@@ -52,7 +52,7 @@ it('resolves the directory from LOCALAPPDATA and refuses a relative or missing l
 
 it('uses defaults without creating anything when no settings exist', async () => {
   const settings = store();
-  expect(await settings.load()).toEqual({units: {ets2: 'metric', ats: 'us-customary'}, state: 'defaults', writable: true});
+  expect(await settings.load()).toEqual({units: {ets2: 'metric', ats: 'us-customary'}, state: 'defaults', writable: true, saveError: null});
   expect(existsSync(path.join(resources.directory, 'ETS2Telemetry'))).toBe(false);
   await fs.mkdir(directory, {recursive: true});
   expect(await store().load()).toMatchObject({state: 'defaults'});
@@ -62,7 +62,7 @@ it('uses defaults without creating anything when no settings exist', async () =>
 
 it('loads a valid file without rewriting it', async () => {
   await seed(VALID_METRIC);
-  expect(await store().load()).toEqual({units: {ets2: 'metric', ats: 'metric'}, state: 'loaded', writable: true});
+  expect(await store().load()).toEqual({units: {ets2: 'metric', ats: 'metric'}, state: 'loaded', writable: true, saveError: null});
   expect((await read()).toString('utf8')).toBe(VALID_METRIC); expect(await list()).toEqual(['settings.json']);
 });
 
@@ -83,11 +83,11 @@ it('writes the exact v1 content, synced before the rename, and applies it only a
     }
   });
   settings = store(fileSystem); await settings.load();
-  expect(await settings.setUnitProfile('ets2', 'us-customary')).toEqual({units: {ets2: 'us-customary', ats: 'us-customary'}, state: 'loaded', writable: true});
+  expect(await settings.setUnitProfile('ets2', 'us-customary')).toEqual({units: {ets2: 'us-customary', ats: 'us-customary'}, state: 'loaded', writable: true, saveError: null});
   expect(order).toEqual(['open', 'write', 'sync', 'close', 'rename']);
   expect((await read()).toString('utf8')).toBe(EXPECTED_US_ETS2);
   expect(await list()).toEqual(['settings.json']);
-  expect(await store().load()).toEqual({units: {ets2: 'us-customary', ats: 'us-customary'}, state: 'loaded', writable: true});
+  expect(await store().load()).toEqual({units: {ets2: 'us-customary', ats: 'us-customary'}, state: 'loaded', writable: true, saveError: null});
   expect(events.map(row => row.event).filter(name => failurePattern.test(name))).toEqual([]);
 });
 
@@ -109,7 +109,7 @@ it('keeps the previous file and settings and removes its temporary after a persi
   expect((failure as Error).message).not.toContain(resources.directory);
   expect(attempts).toBe(6); expect(delays).toEqual([...RENAME_RETRY_DELAYS_MS]); expect(delays.reduce((sum, value) => sum + value, 0)).toBe(300);
   expect((await read()).toString('utf8')).toBe(VALID_METRIC); expect(await list()).toEqual(['settings.json']);
-  expect(settings.view()).toEqual({units: {ets2: 'metric', ats: 'metric'}, state: 'loaded', writable: true});
+  expect(settings.view()).toEqual({units: {ets2: 'metric', ats: 'metric'}, state: 'loaded', writable: true, saveError: 'SETTINGS_WRITE_FAILED'});
   expect(events.at(-1)).toEqual({event: 'SETTINGS_WRITE_FAILED', facts: {step: 'rename', code: 'EPERM'}});
 });
 
@@ -135,7 +135,7 @@ it.each(['write', 'sync', 'rename'] as const)('leaves the old file valid when th
 it('keeps a corrupt file byte-identical until the first save, then quarantines it unchanged', async () => {
   await seed(CORRUPT);
   const settings = store();
-  expect(await settings.load()).toEqual({units: {ets2: 'metric', ats: 'us-customary'}, state: 'invalid-file', writable: true});
+  expect(await settings.load()).toEqual({units: {ets2: 'metric', ats: 'us-customary'}, state: 'invalid-file', writable: true, saveError: null});
   expect((await read()).toString('utf8')).toBe(CORRUPT); expect(await list()).toEqual(['settings.json']);
   await settings.setUnitProfile('ets2', 'us-customary');
   expect(await list()).toEqual(['settings.json', 'settings.rejected-20261015T094107Z.json']);
@@ -153,7 +153,7 @@ it('quarantines an unsupported older file and an oversized file the same way', a
   const older = '{"format":"ets2telemetry.settings","version":0,"units":{"ets2":"metric","ats":"metric"}}';
   await seed(older);
   const settings = store();
-  expect(await settings.load()).toMatchObject({state: 'unsupported-older', units: {ets2: 'metric', ats: 'us-customary'}, writable: true});
+  expect(await settings.load()).toMatchObject({state: 'unsupported-older', units: {ets2: 'metric', ats: 'us-customary'}, writable: true, saveError: null});
   await settings.setUnitProfile('ets2', 'us-customary');
   expect((await read('settings.rejected-20261015T094107Z.json')).toString('utf8')).toBe(older);
   const oversized = new Uint8Array(64 * 1024 + 1).fill(0x20);
@@ -178,17 +178,17 @@ it('never modifies a newer-version file and refuses saves as read-only', async (
   const newer = '{"format":"ets2telemetry.settings","version":2,"units":{"ets2":"us-customary","ats":"metric"},"layout":{}}';
   await seed(newer);
   const settings = store();
-  expect(await settings.load()).toEqual({units: {ets2: 'metric', ats: 'us-customary'}, state: 'newer-version', writable: false});
+  expect(await settings.load()).toEqual({units: {ets2: 'metric', ats: 'us-customary'}, state: 'newer-version', writable: false, saveError: null});
   await expect(settings.setUnitProfile('ets2', 'us-customary')).rejects.toMatchObject({code: 'SETTINGS_READ_ONLY'});
   expect((await read()).toString('utf8')).toBe(newer); expect(await list()).toEqual(['settings.json']);
-  expect(settings.view()).toMatchObject({state: 'newer-version', units: {ets2: 'metric'}});
+  expect(settings.view()).toMatchObject({state: 'newer-version', units: {ets2: 'metric'}, saveError: 'SETTINGS_READ_ONLY'});
   expect(events.map(row => row.event)).toEqual(['SETTINGS_FALLBACK', 'SETTINGS_SAVE_REFUSED']);
 });
 
 it('rewrites a file with fallbacks completely without quarantining it', async () => {
   await seed('{"format":"ets2telemetry.settings","version":1,"units":{"ets2":"imperial","ats":"metric"},"extra":true}');
   const settings = store();
-  expect(await settings.load()).toEqual({units: {ets2: 'metric', ats: 'metric'}, state: 'loaded-with-fallbacks', writable: true});
+  expect(await settings.load()).toEqual({units: {ets2: 'metric', ats: 'metric'}, state: 'loaded-with-fallbacks', writable: true, saveError: null});
   expect(events[0]).toEqual({event: 'SETTINGS_FALLBACK', facts: {state: 'loaded-with-fallbacks', fields: 'units.ets2'}});
   await settings.setUnitProfile('ats', 'us-customary');
   expect(await list()).toEqual(['settings.json']);
@@ -200,7 +200,7 @@ it('refuses a settings directory that is a junction, without reading or writing 
   await fs.mkdir(elsewhere); await fs.writeFile(path.join(elsewhere, 'settings.json'), VALID_METRIC);
   await fs.mkdir(path.dirname(directory), {recursive: true}); await fs.symlink(elsewhere, directory, 'junction');
   const settings = store();
-  expect(await settings.load()).toEqual({units: {ets2: 'metric', ats: 'us-customary'}, state: 'unreadable', writable: false});
+  expect(await settings.load()).toEqual({units: {ets2: 'metric', ats: 'us-customary'}, state: 'unreadable', writable: false, saveError: null});
   expect(events[0]).toEqual({event: 'SETTINGS_FALLBACK', facts: {state: 'unreadable', reason: 'reparse-point'}});
   await expect(settings.setUnitProfile('ets2', 'us-customary')).rejects.toMatchObject({code: 'SETTINGS_WRITE_FAILED'});
   expect(await fs.readdir(elsewhere)).toEqual(['settings.json']); expect((await fs.readFile(path.join(elsewhere, 'settings.json'), 'utf8')).toString()).toBe(VALID_METRIC);
@@ -212,7 +212,7 @@ it('refuses a settings file that is a symbolic link without opening it', async (
   const fileSystem = wrapped({open,
     lstat: async file => {const stats = await fs.lstat(file); return file === target ? Object.assign(Object.create(stats) as typeof stats, {isSymbolicLink: () => true, isFile: () => false}) : stats;}});
   const settings = store(fileSystem);
-  expect(await settings.load()).toMatchObject({state: 'unreadable', writable: false});
+  expect(await settings.load()).toMatchObject({state: 'unreadable', writable: false, saveError: null});
   expect(open).not.toHaveBeenCalled();
   await expect(settings.setUnitProfile('ets2', 'us-customary')).rejects.toMatchObject({code: 'SETTINGS_WRITE_FAILED'});
   expect((await read()).toString('utf8')).toBe(VALID_METRIC);
@@ -260,7 +260,7 @@ it('bounds outstanding saves to four and reports idle work until they settle', a
 
 it('is read-only with defaults when there is no valid settings location', async () => {
   const settings = new SettingsStore(undefined, {log: (event, _detail, facts) => events.push({event, ...(facts ? {facts: {...facts}} : {})})});
-  expect(await settings.load()).toEqual({units: {ets2: 'metric', ats: 'us-customary'}, state: 'unavailable', writable: false});
+  expect(await settings.load()).toEqual({units: {ets2: 'metric', ats: 'us-customary'}, state: 'unavailable', writable: false, saveError: null});
   await expect(settings.setUnitProfile('ets2', 'us-customary')).rejects.toMatchObject({code: 'SETTINGS_WRITE_FAILED'});
   expect(events[0]).toEqual({event: 'SETTINGS_FALLBACK', facts: {state: 'unavailable'}});
 });
@@ -273,6 +273,33 @@ it('falls back read-only when loading exceeds its 1000 ms budget', async () => {
   await new Promise(resolve => setImmediate(resolve));
   expect(timers.map(timer => timer.milliseconds)).toEqual([1000]);
   timers[0].callback();
-  expect(await loading).toEqual({units: {ets2: 'metric', ats: 'us-customary'}, state: 'unreadable', writable: false});
+  expect(await loading).toEqual({units: {ets2: 'metric', ats: 'us-customary'}, state: 'unreadable', writable: false, saveError: null});
   expect(events).toEqual([{event: 'SETTINGS_FALLBACK', facts: {state: 'unreadable', reason: 'load-budget'}}]);
+});
+
+// Fix round 1.
+it('refuses saves at once and stays idle after the load budget expired with a read that never settles', async () => {
+  const timers: {callback: () => void}[] = [];
+  const settings = store(wrapped({lstat: () => new Promise(() => undefined)}), {timers: {
+    setTimeout: callback => {timers.push({callback}); return timers.length;}, clearTimeout: () => undefined}});
+  const loading = settings.load();
+  await new Promise(resolve => setImmediate(resolve));
+  timers[0].callback(); await loading;
+  const outcome = await Promise.race([settings.setUnitProfile('ets2', 'us-customary').then(() => 'resolved', (error: unknown) => error),
+    new Promise(resolve => setTimeout(() => resolve('still pending after 100 ms'), 100))]);
+  expect(outcome).toBeInstanceOf(SettingsError); expect((outcome as SettingsError).code).toBe('SETTINGS_WRITE_FAILED');
+  expect(settings.idle()).toBeUndefined();
+  expect(settings.view()).toEqual({units: {ets2: 'metric', ats: 'us-customary'}, state: 'unreadable', writable: false, saveError: 'SETTINGS_WRITE_FAILED'});
+  // Further requests are refused too, never queued toward the four-request bound.
+  for (let attempt = 0; attempt < 5; attempt++) await expect(settings.setUnitProfile('ats', 'metric')).rejects.toBeInstanceOf(SettingsError);
+});
+
+it('reports a failed save in the view and clears it with the next successful save', async () => {
+  let failing = true;
+  const settings = store(wrapped({rename: async (from, to) => {if (failing) throw errno('EIO'); await fs.rename(from, to);}}));
+  await settings.load();
+  await expect(settings.setUnitProfile('ets2', 'us-customary')).rejects.toMatchObject({code: 'SETTINGS_WRITE_FAILED'});
+  expect(settings.view()).toEqual({units: {ets2: 'metric', ats: 'us-customary'}, state: 'defaults', writable: true, saveError: 'SETTINGS_WRITE_FAILED'});
+  failing = false;
+  expect(await settings.setUnitProfile('ets2', 'us-customary')).toEqual({units: {ets2: 'us-customary', ats: 'us-customary'}, state: 'loaded', writable: true, saveError: null});
 });

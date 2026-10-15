@@ -169,7 +169,7 @@ it('validates unit profile requests before IPC and forwards exactly a game and a
     await expect(bridge.setUnitProfile(game as never, profile as never)).rejects.toThrow('Invalid unit profile request');
   }
   expect(ipc.invoke).not.toHaveBeenCalled();
-  const view = {units: {ets2: 'us-customary', ats: 'us-customary'}, state: 'loaded', writable: true};
+  const view = {units: {ets2: 'us-customary', ats: 'us-customary'}, state: 'loaded', writable: true, saveError: null};
   ipc.invoke.mockResolvedValueOnce(view);
   await expect(Reflect.apply(bridge.setUnitProfile, bridge, ['ets2', 'us-customary', {path: 'C:\\arbitrary'}])).resolves.toEqual(view);
   expect(ipc.invoke.mock.calls).toEqual([['settings:set-unit-profile', 'ets2', 'us-customary']]);

@@ -45,7 +45,9 @@ it.each(['not-started', 'no-observation', 'missing-channel', 'stale'] as const)(
   expect(dashboardSpeed(current)).toBe('unavailable');
 });
 
-it.each(['ets2', 'ats', 'synthetic', 'replay'] as const)('retains diagnostic km/h for fresh %s telemetry', selection => {
+// dashboardSpeed without a profile argument defaults to metric for every source; the dashboard itself passes the
+// displayed game's profile (see unit-profiles.test.ts for the ATS US customary default).
+it.each(['ets2', 'ats', 'synthetic', 'replay'] as const)('defaults dashboardSpeed to metric when no profile is given for fresh %s telemetry', selection => {
   const current = live();
   current.selection = selection;
   current.observation!.source.game = selection === 'ats' ? 'ats' : 'ets2';

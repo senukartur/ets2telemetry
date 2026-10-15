@@ -1,5 +1,5 @@
 import type {LiveTelemetry, OverlayPresentation, UnitProfiles} from '../../../packages/contracts/src';
-import {DEFAULT_UNIT_PROFILES, displayGame, profileFor, speedNumber, speedUnit, volumeNumber, volumeUnit} from './unit-profiles';
+import {DEFAULT_UNIT_PROFILES, displayGame, isExplicitFixture, profileFor, speedNumber, speedUnit, volumeNumber, volumeUnit} from './unit-profiles';
 
 /**
  * Canonical v0 m/s and liters remain unchanged; only this display projection converts, in the persisted profile of
@@ -7,7 +7,7 @@ import {DEFAULT_UNIT_PROFILES, displayGame, profileFor, speedNumber, speedUnit, 
  */
 export function overlayPresentation(live: LiveTelemetry, units: UnitProfiles = DEFAULT_UNIT_PROFILES): OverlayPresentation {
   const observation = live.observation;
-  const explicitFixture = (live.selection === 'synthetic' || live.selection === 'replay') && observation?.source.origin === live.selection;
+  const explicitFixture = isExplicitFixture(live);
   const game = displayGame(live), profile = profileFor(units, game);
   const current = live.fresh && (live.status === 'connected' || live.status === 'paused') &&
     (explicitFixture || (observation?.source.origin === 'game' && observation.source.game === live.selection));

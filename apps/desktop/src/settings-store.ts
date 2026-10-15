@@ -1,7 +1,7 @@
 import {randomUUID} from 'node:crypto';
 import * as nodeFs from 'node:fs/promises';
 import path from 'node:path';
-import type {SettingsState, SettingsView, UnitGame, UnitProfile} from '../../../packages/contracts/src';
+import type {SettingsSaveError, SettingsState, SettingsView, UnitGame, UnitProfile} from '../../../packages/contracts/src';
 import type {DiagnosticFacts} from './diagnostics';
 import {dataPaths} from './paths';
 import {DEFAULT_SETTINGS, MAX_SETTINGS_BYTES, parseSettings, serializeSettings, type Settings} from './settings-schema';
@@ -20,12 +20,12 @@ const RETRYABLE_RENAME = new Set(['EPERM', 'EACCES', 'EBUSY']);
 const TEMPORARY_FILE = /^settings\.json\.\d+\.[0-9a-f-]{36}\.tmp$/;
 const QUARANTINE_FILE = /^settings\.rejected-(\d{8}T\d{6}Z)(?:-(\d+))?\.json$/;
 
-export type SettingsErrorCode = 'SETTINGS_WRITE_FAILED' | 'SETTINGS_READ_ONLY';
-/** A rejected save with a fixed application error code; it never carries a path. */
+export type SettingsErrorCode = SettingsSaveError;
+/** A rejected save with a fixed settings error code; it never carries a path. */
 export class SettingsError extends Error {
   constructor(readonly code: SettingsErrorCode) {super(code === 'SETTINGS_READ_ONLY' ? 'Settings are read-only' : 'Settings could not be saved'); this.name = 'SettingsError';}
 }
-/** A request refused because too many saves are outstanding; health is unchanged. */
+/** A request refused because too many saves are outstanding; the settings view is unchanged. */
 export class SettingsBusyError extends Error {
   constructor() {super('Settings request limit exceeded'); this.name = 'SettingsBusyError';}
 }
@@ -79,6 +79,7 @@ export class SettingsStore {
   private state: SettingsState = 'defaults';
   private quarantinePending = false;
   private loadSettled = false;
+  private saveError: SettingsSaveError | null = null;
   private tail: Promise<unknown> = Promise.resolve();
   private pending = 0;
   private readonly fs: SettingsFileSystem;
@@ -98,7 +99,7 @@ export class SettingsStore {
   get settled(): boolean {return this.loadSettled;}
 
   view(): SettingsView {
-    return {units: this.settings.units, state: this.state, writable: !READ_ONLY_STATES.includes(this.state)};
+    return {units: this.settings.units, state: this.state, writable: !READ_ONLY_STATES.includes(this.state), saveError: this.saveError};
   }
 
   /** Reads and classifies the file within 1000 ms; never creates, changes or removes anything. */
@@ -106,10 +107,14 @@ export class SettingsStore {
     const read = this.classify();
     // Saves queue behind the load, even when its budget expires first.
     this.tail = read.catch(() => undefined);
-    let timer: unknown;
-    const expired = new Promise<Loaded>(resolve => {timer = this.timers.setTimeout(() => resolve({state: 'unreadable', settings: DEFAULT_SETTINGS, facts: {reason: 'load-budget'}}), SETTINGS_LOAD_BUDGET_MS);});
+    let timer: unknown, budgetExpired = false;
+    const expired = new Promise<Loaded>(resolve => {timer = this.timers.setTimeout(() => {
+      budgetExpired = true; resolve({state: 'unreadable', settings: DEFAULT_SETTINGS, facts: {reason: 'load-budget'}});
+    }, SETTINGS_LOAD_BUDGET_MS);});
     const loaded = await Promise.race([read.catch((): Loaded => ({state: 'unreadable', settings: DEFAULT_SETTINGS, facts: {reason: 'read'}})), expired]);
     this.timers.clearTimeout(timer);
+    // A read that still hangs must not hold later saves or the exit; the unreadable state refuses saves anyway.
+    if (budgetExpired) this.tail = Promise.resolve();
     this.settings = loaded.settings; this.state = loaded.state;
     this.quarantinePending = QUARANTINED_STATES.includes(loaded.state);
     this.loadSettled = true;
@@ -120,6 +125,8 @@ export class SettingsStore {
 
   /** Serialized save of one game's profile. Resolves with the applied settings only after the durable rename. */
   async setUnitProfile(game: UnitGame, profile: UnitProfile): Promise<SettingsView> {
+    // After the load, a read-only state is refused at once instead of queuing behind other work.
+    if (this.loadSettled && READ_ONLY_STATES.includes(this.state)) throw this.refusal();
     if (this.pending >= MAX_PENDING_SETTINGS_WRITES) throw new SettingsBusyError();
     this.pending++;
     const run = this.tail.then(() => this.write(game, profile));
@@ -173,16 +180,18 @@ export class SettingsStore {
     } finally {await handle.close();}
   }
 
+  /** The refusal for a read-only state: `SETTINGS_READ_ONLY` for a newer version, otherwise `SETTINGS_WRITE_FAILED`. */
+  private refusal(): SettingsError {
+    if (this.state === 'newer-version') this.log('SETTINGS_SAVE_REFUSED', undefined, {state: this.state});
+    else this.log('SETTINGS_WRITE_FAILED', undefined, {step: 'unavailable', state: this.state});
+    this.saveError = this.state === 'newer-version' ? 'SETTINGS_READ_ONLY' : 'SETTINGS_WRITE_FAILED';
+    return new SettingsError(this.saveError);
+  }
+
   private async write(game: UnitGame, profile: UnitProfile): Promise<SettingsView> {
-    if (this.state === 'newer-version') {
-      this.log('SETTINGS_SAVE_REFUSED', undefined, {state: this.state});
-      throw new SettingsError('SETTINGS_READ_ONLY');
-    }
     const directory = this.directory;
-    if (!directory || READ_ONLY_STATES.includes(this.state)) {
-      this.log('SETTINGS_WRITE_FAILED', undefined, {step: 'unavailable', state: this.state});
-      throw new SettingsError('SETTINGS_WRITE_FAILED');
-    }
+    // A save queued before the load finished meets the loaded state here.
+    if (!directory || READ_ONLY_STATES.includes(this.state)) throw this.refusal();
     const next: Settings = {units: Object.freeze({...this.settings.units, [game]: profile})};
     const target = path.join(directory, SETTINGS_FILE);
     let temporary: string | undefined;
@@ -213,9 +222,10 @@ export class SettingsStore {
     } catch (error) {
       if (temporary) await this.fs.unlink(temporary).catch(() => undefined);
       this.log('SETTINGS_WRITE_FAILED', error, {step, code: errorCode(error) ?? null});
+      this.saveError = 'SETTINGS_WRITE_FAILED';
       throw new SettingsError('SETTINGS_WRITE_FAILED');
     }
-    this.settings = next; this.state = 'loaded';
+    this.settings = next; this.state = 'loaded'; this.saveError = null;
     this.log('SETTINGS_SAVED', undefined, {game, profile});
     return this.view();
   }
