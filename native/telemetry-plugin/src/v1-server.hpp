@@ -1,4 +1,5 @@
 #pragma once
+#include "cancel-window.hpp"
 #include "pipe-discovery.hpp"
 #include "v1-state.hpp"
 #include <atomic>
@@ -79,9 +80,7 @@ class Server final {
   // stop() cancels the worker's synchronous I/O only inside an inspection window (peer image and policy reads, which can
   // be long). Elsewhere, above all in the exit path that deletes the discovery record, a cancelled synchronous call
   // would fail silently, so it is never cancelled. The mutex orders each cancellation with the window's open and close.
-  struct InspectionWindow;
-  void cancel_inspection() noexcept;
-  std::mutex cancel_mutex_; bool inspecting_ = false;
+  transport::CancelWindow cancel_window_;
 
   sdk::Adapter& adapter_; const Origin origin_;
   std::unique_ptr<EventChannel> channel_; std::unique_ptr<EventStore> store_; std::optional<Encoder> encoder_;

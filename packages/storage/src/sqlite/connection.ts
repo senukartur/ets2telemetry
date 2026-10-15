@@ -7,7 +7,7 @@ import path from 'node:path';
 import Database from 'better-sqlite3';
 import {ACCEPTED_ORIGIN, type Durability, type OpenSummary, type Purpose} from '../api';
 import {classifyError, fail, StorageFailure} from '../errors';
-import {backupBeforeMigration, pruneBackups, type BackupHooks} from './backup';
+import {backupBeforeMigration, pruneBackups, sweepStalePartials, type BackupHooks} from './backup';
 import {applySteps, APPLICATION_ID, checkIntegrity, MIGRATIONS, supportedVersion, type Migration} from './migrations';
 
 export const BUSY_TIMEOUT_MS = 2_000;
@@ -174,7 +174,9 @@ export async function openConnection(options: OpenOptions): Promise<StorageConne
   options.testHooks?.afterInspect?.(options.path);
   const db = openWriter(options.path, options.testHooks, locked => recheck(locked, inspection, supported));
   try {
-    let migratedFrom: number | undefined, backupFileName: string | undefined;
+    let migratedFrom: number | undefined, backupFileName: string | undefined, removedPartialBackups = 0;
+    // Only now, with the exclusive lock held, can no other writer own a partial backup of this database.
+    if (!inspection.fresh) removedPartialBackups = sweepStalePartials(options.backupsDirectory, String(db.prepare('SELECT database_uuid FROM database_info WHERE id = 1').pluck().get()));
     if (inspection.fresh) {
       db.transaction(() => {
         db.pragma(`application_id = ${APPLICATION_ID}`);
@@ -203,6 +205,7 @@ export async function openConnection(options: OpenOptions): Promise<StorageConne
     if (info.purpose !== options.purpose) fail('PURPOSE_MISMATCH');
     const summary: OpenSummary = {schemaVersion: supported, created: inspection.fresh, databaseUuid: info.database_uuid, purpose: info.purpose};
     if (migratedFrom !== undefined) { summary.migratedFrom = migratedFrom; summary.backupFileName = backupFileName; }
+    if (removedPartialBackups > 0) summary.removedPartialBackups = removedPartialBackups;
     return new StorageConnection(db, DURABILITY, summary, now);
   } catch (error) {
     db.close();

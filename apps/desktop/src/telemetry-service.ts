@@ -13,6 +13,7 @@ import {createHash} from 'node:crypto';
 import os from 'node:os';
 import {CaptureController} from './capture-controller';
 import {ShutdownSequence} from './shutdown-sequence';
+import {HistoryStorage, HISTORY_CLOSE_BUDGET_MS, historyWorker} from './history-storage';
 const port = process.parentPort;
 if (!port) throw new Error('Missing Electron parent port');
 const log = createDiagnostics(path.join(process.env.ETS2TELEMETRY_DIAGNOSTIC_DIR || path.join(process.env.LOCALAPPDATA || tmpdir(), 'ETS2Telemetry', 'logs'), 'service'), Boolean(process.env.ETS2TELEMETRY_DIAGNOSTIC_DIR));
@@ -45,7 +46,7 @@ const probe = new ServiceProbe({
   createWorker: directory => {
     const entrypoint = processEntrypoint(__dirname, 'storage-worker');
     if (!existsSync(entrypoint)) throw new Error('Missing physical storage worker entrypoint');
-    const worker = new Worker(entrypoint, {workerData: {filename: path.join(directory, 'probe.sqlite')}});
+    const worker = new Worker(entrypoint, {workerData: {kind: 'probe', filename: path.join(directory, 'probe.sqlite')}});
     return {
       onMessage: listener => {worker.once('message', listener);},
       onError: listener => {worker.once('error', listener);},
@@ -61,13 +62,27 @@ const probe = new ServiceProbe({
     log('SERVICE_REPORT', message);
     port.postMessage(message);
     if (stopping) return;
-    if (message.type === 'stopped') process.exit(0);
-    if (message.code === 'SERVICE_STOP_FAILED') process.exit(1);
+    if (message.type === 'stopped') exitAfterHistory(0);
+    if (message.code === 'SERVICE_STOP_FAILED') exitAfterHistory(1);
   }
 });
+// The durable history database (ET-013, OD-2): opened at start in its own storage worker without delaying
+// readiness or live telemetry. The ET-001 temporary probe above stays the readiness gate. Nothing records yet.
+const history = new HistoryStorage({localAppData: process.env.LOCALAPPDATA, log, createWorker: () => historyWorker(__dirname)});
 // Ordered, bounded service shutdown. Later packages register their own steps here (ET-015 a flush
-// step, ET-013 the history store close); the total stays within SERVICE_STOP_BUDGET_MS.
-let stopping = false, storageStopped = false;
+// step); the total stays within SERVICE_STOP_BUDGET_MS.
+let stopping = false, storageStopped = false, exiting = false;
+/**
+ * A failed probe ends the service from its report, outside the orderly sequence. Close the history database first,
+ * bounded by the same budget as its shutdown step, then exit with the probe's code; a late close never delays the exit.
+ */
+function exitAfterHistory(code: number): void {
+  if (exiting) return;
+  exiting = true;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const bound = new Promise<void>(resolve => {timer = setTimeout(resolve, HISTORY_CLOSE_BUDGET_MS);});
+  void Promise.race([history.close().catch(() => undefined), bound]).then(() => {clearTimeout(timer); process.exit(code);});
+}
 const shutdown = new ShutdownSequence(log);
 shutdown.register('intake', {name: 'ingestion', budgetMs: 1000, run: () => ingestion.stop()});
 shutdown.register('intake', {name: 'capture', budgetMs: 1000, run: () => captures.stop()});
@@ -75,6 +90,7 @@ shutdown.register('storage', {name: 'storage-probe', budgetMs: 1000, run: async 
   await probe.stop();
   if (!storageStopped) throw new Error('Storage probe did not stop cleanly');
 }});
+shutdown.register('storage', {name: 'history-storage', budgetMs: HISTORY_CLOSE_BUDGET_MS, run: () => history.close()});
 function stop(): void {
   if (stopping) return;
   stopping = true; subscriptions.close();
@@ -109,3 +125,4 @@ port.on('message', event => {
   } else {for (const transferred of event.ports) transferred.close();}
 });
 void probe.start();
+history.start();

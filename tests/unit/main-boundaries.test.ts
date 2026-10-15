@@ -52,6 +52,17 @@ beforeAll(async () => {
   installFixture();
   try {await loadMain(); await settle();} finally {await removeFixture();}
 }, MODULE_GRAPH_LOAD_BUDGET_MS);
+// ET-011b fixture addition: a settled in-memory settings store, so main never touches the real %LOCALAPPDATA% and
+// readiness timing is unchanged. `settingsWrite` controls each save; `settingsView` is what the store reports.
+class FakeSettingsError extends Error {constructor(readonly code: 'SETTINGS_WRITE_FAILED' | 'SETTINGS_READ_ONLY') {super(code === 'SETTINGS_READ_ONLY' ? 'Settings are read-only' : 'Settings could not be saved');}}
+class FakeSettingsBusyError extends Error {}
+let settingsView: {units: {ets2: string; ats: string}; state: string; writable: boolean; saveError: string | null};
+type SettingsWrite = (game: string, profile: string) => Promise<unknown>;
+let settingsWrite: ReturnType<typeof vi.fn<SettingsWrite>>;
+let settingsIdle: Promise<void> | undefined;
+let settingsDirectories: unknown[];
+let settingsLoaded: boolean;
+let settingsLoading: Promise<unknown>;
 beforeEach(() => {
   expect(loadingMain.size, 'a previous case left main.ts loading').toBe(0);
   installFixture();
@@ -105,6 +116,18 @@ function installFixture() {
   log = vi.fn(); vi.doMock('../../apps/desktop/src/diagnostics', () => ({createDiagnostics: () => log}));
   vi.doMock('../../apps/desktop/src/broker-artifact', () => ({brokerConfiguration: resolveBroker, createBrokerResolver: () => resolveBroker}));
   vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'synthetic');
+  settingsView = {units: {ets2: 'metric', ats: 'us-customary'}, state: 'defaults', writable: true, saveError: null};
+  settingsWrite = vi.fn<SettingsWrite>(); settingsIdle = undefined; settingsDirectories = []; settingsLoaded = true; settingsLoading = Promise.resolve();
+  vi.doMock('../../apps/desktop/src/settings-store', () => ({
+    settingsDirectory: (localAppData: unknown) => typeof localAppData === 'string' ? `${localAppData}\\ETS2Telemetry\\settings` : undefined, SettingsError: FakeSettingsError, SettingsBusyError: FakeSettingsBusyError,
+    SettingsStore: class {
+      get settled() {return settingsLoaded;}
+      constructor(directory: unknown) {settingsDirectories.push(directory);}
+      view() {return settingsView;}
+      load() {return settingsLoading.then(() => {settingsLoaded = true; return settingsView;});}
+      setUnitProfile(game: string, profile: string) {return settingsWrite(game, profile);}
+      idle() {return settingsIdle;}
+    }}));
 }
 async function removeFixture() {
   // Let an import that outlived its case finish, and its startup microtasks run, against this case's fixture
@@ -112,7 +135,8 @@ async function removeFixture() {
   await Promise.allSettled(loadingMain); await new Promise(resolve => realSetImmediate(resolve));
   for (const name of processEvents) for (const listener of processEmitter.listeners(name)) if (!originals.get(name)!.includes(listener)) processEmitter.removeListener(name, listener as (...args: unknown[]) => void);
   vi.clearAllTimers(); vi.restoreAllMocks(); vi.useRealTimers(); vi.unstubAllEnvs();
-  for (const name of ['electron', 'electron-squirrel-startup', '../../apps/desktop/src/entrypoints', '../../apps/desktop/src/diagnostics', '../../apps/desktop/src/broker-artifact']) vi.doUnmock(name);
+  for (const name of ['electron', 'electron-squirrel-startup', '../../apps/desktop/src/entrypoints', '../../apps/desktop/src/diagnostics', '../../apps/desktop/src/broker-artifact',
+    '../../apps/desktop/src/settings-store']) vi.doUnmock(name);
 }
 async function settle() {await Promise.resolve(); await Promise.resolve();}
 async function ready() {await loadMain(); await Promise.resolve(); child.emit('message', {type: 'ready'}); await settle();}
@@ -670,7 +694,7 @@ it('reopens a new dashboard from the tray that resubscribes without a second ups
   ipc.emit('telemetry:subscribe', reopenedSender);
   expect(reopened.postMessage).toHaveBeenCalledWith('telemetry:port', null, [channels.at(-1)!.port2]);
   expect(upstreamRequests()).toBe(1); expect(children).toHaveLength(1);
-  expect(handlers.get('app:get-state')!(reopenedSender)).toEqual({health: {service: 'ready', storage: 'verified', recording: 'unavailable', lastError: null}});
+  expect(handlers.get('app:get-state')!(reopenedSender)).toEqual({health: {service: 'ready', storage: 'verified', recording: 'unavailable', lastError: null}, settings: {units: {ets2: 'metric', ats: 'us-customary'}, state: 'defaults', writable: true, saveError: null}});
   // A second tray open focuses the existing window instead of creating another.
   trays[0].emit('click'); expect(windows).toHaveLength(3); expect(windows[2].show).toHaveBeenCalledOnce(); expect(windows[2].focus).toHaveBeenCalledOnce();
 });
@@ -775,7 +799,7 @@ it('shows restart exhaustion in health and the tray and stays running until an e
     children.at(-1)!.emit('exit', 1); await vi.advanceTimersByTimeAsync(1000);
     if (crash < 2) {children.at(-1)!.emit('message', {type: 'ready'}); await settle();}
   }
-  expect(handlers.get('app:get-state')!(trusted())).toEqual({health: {service: 'failed', storage: 'pending', recording: 'unavailable', lastError: 'SERVICE_RESTART_EXHAUSTED'}});
+  expect(handlers.get('app:get-state')!(trusted())).toEqual({health: {service: 'failed', storage: 'pending', recording: 'unavailable', lastError: 'SERVICE_RESTART_EXHAUSTED'}, settings: {units: {ets2: 'metric', ats: 'us-customary'}, state: 'defaults', writable: true, saveError: null}});
   await vi.advanceTimersByTimeAsync(500);
   expect(trays[0].setImage).toHaveBeenCalled(); expect(trays[0].setToolTip).toHaveBeenLastCalledWith('ETS2Telemetry\nService failed');
   expect(app.exit).not.toHaveBeenCalled();
@@ -806,7 +830,7 @@ it('answers a dashboard opened during a service restart with a not-ready status,
   expect(handlers.get('scaffold:status')!(sender)).toBeNull();
   expect(() => handlers.get('scaffold:status')!(trusted())).toThrow('Untrusted');
   ipc.emit('app:subscribe-state', sender);
-  expect(reopened.send).toHaveBeenLastCalledWith('app:state', {health: expect.objectContaining({service: 'restarting'})});
+  expect(reopened.send).toHaveBeenLastCalledWith('app:state', {health: expect.objectContaining({service: 'restarting'}), settings: {units: {ets2: 'metric', ats: 'us-customary'}, state: 'defaults', writable: true, saveError: null}});
   // When the pushed health reports ready, the status query already answers with the ready status.
   let statusAtReadyPush: unknown;
   reopened.send.mockImplementation((channel: string, state: {health: {service: string}}) => {
@@ -866,3 +890,123 @@ it.each(['overlay-restart-exhausted', 'service-recovery-timeout'] as const)('mar
   expect(app.exit).toHaveBeenCalledExactlyOnceWith(1);
   expect(trays[0].destroy.mock.invocationCallOrder[0]).toBeLessThan(app.exit.mock.invocationCallOrder[0]);
 });
+// ET-011b: persisted settings and per-game unit profiles.
+function deferred<T = void>() {
+  let resolve!: (value: T) => void, reject!: (error: unknown) => void;
+  const promise = new Promise<T>((done, fail) => {resolve = done; reject = fail;});
+  return {promise, resolve, reject};
+}
+/** A current ETS2 game reading of 25 m/s and 73 L. */
+function currentReading(): LiveTelemetry {
+  const current = currentGame(), state = current.observation!.state;
+  state.speed = {available: true, value: 25, unit: 'm/s'}; state.fuel = {available: true, value: 73, unit: 'L'};
+  return current;
+}
+const saveUnits = (event: unknown, ...request: unknown[]) => Promise.resolve(handlers.get('settings:set-unit-profile')!(event, ...request as [unknown]));
+const overlayProjection = (channel: typeof channels[number]) => channel.port1.postMessage.mock.lastCall![0].update as Record<string, unknown>;
+const consumeOverlay = (channel: typeof channels[number]) => channel.port1.emit('message', {data: {type: 'consumed', delivery: channel.port1.postMessage.mock.lastCall![0].delivery}});
+/** Advances in 50 ms steps and acknowledges each new overlay delivery, as the renderer would. */
+async function drainOverlay(channel: typeof channels[number], milliseconds: number) {
+  for (let elapsed = 0; elapsed < milliseconds; elapsed += 50) {
+    const count = channel.port1.postMessage.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(50);
+    if (channel.port1.postMessage.mock.calls.length > count) consumeOverlay(channel);
+  }
+}
+it('loads settings from LOCALAPPDATA and opens the first windows only after the load settled', async () => {
+  vi.stubEnv('LOCALAPPDATA', 'C:\\isolated\\local');
+  settingsLoaded = false; const load = deferred(); settingsLoading = load.promise;
+  await ready();
+  expect(settingsDirectories).toEqual(['C:\\isolated\\local\\ETS2Telemetry\\settings']);
+  expect(windows).toHaveLength(0); expect(child.postMessage).not.toHaveBeenCalled();
+  load.resolve(); await settle(); await settle();
+  expect(windows).toHaveLength(2); expect(child.postMessage).toHaveBeenCalledWith({type: 'select', source: 'synthetic', broker: undefined});
+});
+it('rejects unit profile requests from untrusted senders, frames and the overlay, and invalid values', async () => {
+  trayAvailable = true; await ready();
+  for (const event of [{sender: {}, senderFrame: contents.mainFrame}, {sender: contents, senderFrame: {}}, overlayTrusted()])
+    await expect(saveUnits(event, 'ets2', 'us-customary')).rejects.toThrow('Untrusted');
+  for (const request of [['ets2', 'imperial'], ['synthetic', 'metric'], ['ETS2', 'metric'], ['ats'], ['ats', 'metric', 'C:\\settings.json'], [{}, 'metric']])
+    await expect(saveUnits(trusted(), ...request)).rejects.toThrow('Invalid unit profile request');
+  expect(settingsWrite).not.toHaveBeenCalled();
+  expect(contents.send).not.toHaveBeenCalledWith('app:state', expect.anything());
+});
+it('applies a unit profile only after the durable save and republishes the overlay without renewing authority', async () => {
+  trayAvailable = true; vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2'); await ready();
+  ipc.emit('app:subscribe-state', trusted()); ipc.emit('overlay:subscribe', overlayTrusted()); const overlayChannel = channels[1];
+  consumeOverlay(overlayChannel); deliver(currentReading()); await vi.advanceTimersByTimeAsync(50);
+  expect(overlayProjection(overlayChannel)).toMatchObject({source: 'ETS2', speed: '90.0', speedUnit: 'km/h', fuel: '73.0', fuelUnit: 'L', freshness: 'current'});
+  expect(windows[1].showInactive).toHaveBeenCalledOnce(); consumeOverlay(overlayChannel);
+  const pushes = () => contents.send.mock.calls.filter(call => call[0] === 'app:state').map(call => call[1] as {settings: unknown; health: {lastError: unknown}});
+  const before = pushes().length, saved = deferred<typeof settingsView>();
+  settingsWrite.mockReturnValue(saved.promise);
+  const request = saveUnits(trusted(), 'ets2', 'us-customary');
+  await vi.advanceTimersByTimeAsync(100);
+  // Not durable yet: nothing applied, pushed or republished.
+  expect(settingsWrite).toHaveBeenCalledExactlyOnceWith('ets2', 'us-customary');
+  expect(pushes()).toHaveLength(before); expect(overlayProjection(overlayChannel)).toMatchObject({speedUnit: 'km/h'});
+  settingsView = {units: {ets2: 'us-customary', ats: 'us-customary'}, state: 'loaded', writable: true, saveError: null}; saved.resolve(settingsView);
+  await expect(request).resolves.toEqual(settingsView);
+  expect(pushes().at(-1)).toEqual({health: {service: 'ready', storage: 'verified', recording: 'unavailable', lastError: null}, settings: settingsView});
+  await vi.advanceTimersByTimeAsync(50);
+  expect(overlayProjection(overlayChannel)).toMatchObject({source: 'ETS2', speed: '55.9', speedUnit: 'mph', fuel: '19.3', fuelUnit: 'US gal', freshness: 'current'});
+  consumeOverlay(overlayChannel);
+  // The republication renewed neither SDK nor window receipts: both still expire from the original delivery.
+  expect(windows[1].showInactive).toHaveBeenCalledOnce();
+  // Main's original 500 ms SDK deadline falls inside this window; a renewal at the save (t = 150 ms) would end after it.
+  await drainOverlay(overlayChannel, 400);
+  expect(overlayProjection(overlayChannel)).toMatchObject({speed: '—', fuel: '—', speedUnit: 'mph', fuelUnit: 'US gal', freshness: 'stale'});
+  expect(windows[1].showInactive).toHaveBeenCalledOnce(); expect(windows[1].hide).toHaveBeenCalled();
+  // The dashboard derives its units from the pushed settings; its live update stays canonical.
+  ipc.emit('telemetry:subscribe', trusted());
+  expect(channels.at(-1)!.port1.postMessage.mock.lastCall![0].update.observation.state.speed).toEqual({available: true, value: 25, unit: 'm/s'});
+});
+it.each(['SETTINGS_WRITE_FAILED', 'SETTINGS_READ_ONLY'] as const)('keeps the units and the service problem and reports %s in the settings view', async code => {
+  trayAvailable = true; vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2'); await ready();
+  // A recovered post-readiness storage failure stays the service's last problem.
+  child.emit('message', {type: 'failed', code: 'STORAGE_WORKER_EXIT'}); child.emit('exit', 1);
+  await vi.advanceTimersByTimeAsync(250); children[1].emit('message', {type: 'ready'}); await settle();
+  const upstream = channels.at(-1)!;
+  ipc.emit('app:subscribe-state', trusted()); ipc.emit('overlay:subscribe', overlayTrusted()); const overlayChannel = channels.at(-1)!;
+  consumeOverlay(overlayChannel); deliver(currentReading(), 1, upstream); await vi.advanceTimersByTimeAsync(50); consumeOverlay(overlayChannel);
+  const health = {service: 'ready', storage: 'verified', recording: 'unavailable', lastError: 'STORAGE_FAILED'};
+  expect(handlers.get('app:get-state')!(trusted())).toMatchObject({health});
+  const deliveries = overlayChannel.port1.postMessage.mock.calls.length;
+  // The store records the refusal in its view, as the real store does.
+  settingsWrite.mockImplementation(() => {settingsView = {...settingsView, saveError: code}; return Promise.reject(new FakeSettingsError(code));});
+  await expect(saveUnits(trusted(), 'ets2', 'us-customary')).rejects.toThrow(code === 'SETTINGS_READ_ONLY' ? 'Settings are read-only' : 'Settings could not be saved');
+  const refused = {health, settings: {units: {ets2: 'metric', ats: 'us-customary'}, state: 'defaults', writable: true, saveError: code}};
+  expect(handlers.get('app:get-state')!(trusted())).toEqual(refused);
+  expect(contents.send).toHaveBeenLastCalledWith('app:state', refused);
+  await vi.advanceTimersByTimeAsync(50); expect(overlayChannel.port1.postMessage.mock.calls).toHaveLength(deliveries);
+  // A later successful save clears the settings error and still leaves the service problem in place.
+  settingsWrite.mockImplementation(() => {settingsView = {units: {ets2: 'metric', ats: 'us-customary'}, state: 'loaded', writable: true, saveError: null}; return Promise.resolve(settingsView);});
+  await saveUnits(trusted(), 'ats', 'us-customary');
+  const saved = {health, settings: {units: {ets2: 'metric', ats: 'us-customary'}, state: 'loaded', writable: true, saveError: null}};
+  expect(handlers.get('app:get-state')!(trusted())).toEqual(saved);
+  expect(contents.send).toHaveBeenLastCalledWith('app:state', saved);
+});
+it('waits for an in-flight settings save before exiting and refuses new saves once exiting', async () => {
+  trayAvailable = true; await ready();
+  const idle = deferred(); settingsIdle = idle.promise;
+  void handlers.get('app:exit')!(trusted()); child.emit('exit', 0);
+  expect(app.exit).not.toHaveBeenCalled(); expect(trays[0].destroy).not.toHaveBeenCalled();
+  await expect(saveUnits(trusted(), 'ets2', 'us-customary')).rejects.toThrow('retired'); expect(settingsWrite).not.toHaveBeenCalled();
+  idle.resolve(); await settle();
+  expect(app.exit).toHaveBeenCalledExactlyOnceWith(0); expect(trays[0].destroy).toHaveBeenCalledOnce();
+});
+it('exits after at most 1000 ms when an in-flight settings save does not settle', async () => {
+  trayAvailable = true; await ready();
+  settingsIdle = new Promise(() => undefined);
+  void handlers.get('app:exit')!(trusted()); child.emit('exit', 0);
+  await vi.advanceTimersByTimeAsync(999); expect(app.exit).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(1); expect(app.exit).toHaveBeenCalledExactlyOnceWith(0);
+});
+it('reports the settings view in the gated lifecycle facts', () => isolatedProfile(async profile => {
+  vi.stubEnv('ETS2TELEMETRY_LIVE_SMOKE', '1'); vi.stubEnv('ETS2TELEMETRY_DIAGNOSTIC_DIR', 'C:\\isolated\\diagnostics');
+  vi.stubEnv('ETS2TELEMETRY_PROFILE_DIR', profile); trayAvailable = true;
+  settingsView = {units: {ets2: 'metric', ats: 'us-customary'}, state: 'invalid-file', writable: true, saveError: null}; await ready();
+  let facts: Record<string, unknown> | undefined;
+  app.emit('ets2telemetry:diagnostic-lifecycle-state', (state: Record<string, unknown>) => {facts = state;});
+  expect(facts).toMatchObject({settings: {units: {ets2: 'metric', ats: 'us-customary'}, state: 'invalid-file', writable: true, saveError: null}});
+}));

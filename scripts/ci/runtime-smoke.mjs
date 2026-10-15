@@ -1,19 +1,20 @@
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import os from 'node:os';
-import {readFile, readdir, writeFile} from 'node:fs/promises';
+import {open, readFile, readdir, writeFile} from 'node:fs/promises';
+import {existsSync} from 'node:fs';
 import {performance} from 'node:perf_hooks';
 import {_electron as electron} from '@playwright/test';
 import {startLiveSmokeSource} from './live-smoke-source.mjs';
 import {waitForCurrentTelemetry} from './renderer-observation.mjs';
 import {rendererPages, runOverlaySmoke, windowSecurity, verifyRendererStyles} from './overlay-observation.mjs';
-import {runLifecycleSmoke, verifyLifecycleRestart} from './lifecycle-observation.mjs';
+import {runLifecycleSmoke, seedLifecycleSettings, verifyLifecycleRestart} from './lifecycle-observation.mjs';
 // These read-only globals are used only inside serialized Playwright browser callbacks.
 /* global document: readonly, getComputedStyle: readonly, innerHeight: readonly, innerWidth: readonly */
 
 const [configFile] = process.argv.slice(2);
 const config = JSON.parse((await readFile(configFile, 'utf8')).replace(/^\uFEFF/, ''));
-const result = {scenario: config.scenario === 'lifecycle' ? 'V0 TRAY-LIFECYCLE / partial REG-011, REG-012, REG-017' : config.scenario === 'overlay' ? 'V0 HIDDEN-OVERLAY-PROJECTION / partial REG-009, REG-011, REG-017' : config.scenario === 'telemetry' ? 'V0 SOURCE-RENDERER-RECOVERY / partial REG-003, REG-010, REG-011, REG-017' : 'SCAFFOLD-WORKER / partial REG-011, REG-017', passed: false,
+const result = {scenario: config.scenario === 'lifecycle' ? 'V0 TRAY-LIFECYCLE-SETTINGS / partial REG-009, REG-011, REG-012, REG-017' : config.scenario === 'overlay' ? 'V0 HIDDEN-OVERLAY-PROJECTION / partial REG-009, REG-011, REG-017' : config.scenario === 'telemetry' ? 'V0 SOURCE-RENDERER-RECOVERY / partial REG-003, REG-010, REG-011, REG-017' : 'SCAFFOLD-WORKER / partial REG-011, REG-017', passed: false,
   scenarioKind: config.scenario ?? 'scaffold',
   commit: config.commit, mode: config.mode, node: process.versions, expected: {
     status: {service: 'ready', storage: 'verified', synthetic: true}, exit: 0, probesAfterExit: []},
@@ -30,6 +31,31 @@ result.phases = [];
 const phase = name => result.phases.push({phase: name, utc: new Date().toISOString(), monotonicMs: Math.round(performance.now() * 10) / 10});
 const diagnosticEvents = async directory => (await readFile(path.join(directory, 'startup.jsonl'), 'utf8'))
   .trim().split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line));
+// ET-013: one service run opens the history database once per service process (`created` per opening, in order),
+// never reports it unavailable, and closes it in its storage shutdown step before its single stopped report.
+const verifyHistoryEvents = (service, created) => {
+  const opened = service.filter(row => row.event === 'HISTORY_STORAGE_OPENED').map(row => row.facts);
+  assert.deepEqual(opened, created.map(value => ({schemaVersion: 1, created: value, migratedFrom: null})));
+  assert.ok(!service.some(row => row.event === 'HISTORY_STORAGE_UNAVAILABLE'), 'History storage was unavailable');
+  const closed = service.flatMap((row, index) => row.event === 'HISTORY_STORAGE_CLOSED' ? [index] : []);
+  const stopped = service.findLastIndex(row => row.event === 'SERVICE_REPORT' && row.detail?.type === 'stopped');
+  assert.equal(closed.length, 1); assert.ok(closed[0] < stopped, 'History storage closed after the stopped report');
+  assert.deepEqual(service.filter(row => row.event === 'SHUTDOWN_STEP' && row.facts?.name === 'history-storage').map(row => row.facts.outcome), ['ok']);
+  return {opened, closed: closed.length};
+};
+// The database is in the isolated LOCALAPPDATA, checkpointed and closed: a SQLite file of this application at schema
+// version 1 without WAL, shared-memory or journal files, and no pre-migration backup for a new database.
+const verifyHistoryFile = async () => {
+  const database = path.join(config.localappdata, 'ETS2Telemetry', 'data', 'telemetry.sqlite');
+  const file = await open(database, 'r');
+  const header = Buffer.alloc(100);
+  try {await file.read(header, 0, 100, 0);} finally {await file.close();}
+  const facts = {magic: header.subarray(0, 15).toString('latin1'), applicationId: header.readInt32BE(68), userVersion: header.readUInt32BE(60),
+    sidecars: ['-wal', '-shm', '-journal'].filter(suffix => existsSync(database + suffix)),
+    backups: existsSync(path.join(config.localappdata, 'ETS2Telemetry', 'backups'))};
+  assert.deepEqual(facts, {magic: 'SQLite format 3', applicationId: 1163154226, userVersion: 1, sidecars: [], backups: false});
+  return facts;
+};
 // Every launch of one run shares the isolated profile, TEMP, APPDATA and LOCALAPPDATA; only the diagnostic directory may differ.
 const environment = diagnostics => ({...process.env, TEMP: config.temp, TMP: config.temp, APPDATA: config.appdata,
   LOCALAPPDATA: config.localappdata, ETS2TELEMETRY_PROFILE_DIR: config.profile,
@@ -46,6 +72,8 @@ try {
   result.playwright = JSON.parse(await readFile(new URL('../../node_modules/playwright-core/package.json', import.meta.url))).version;
   assert.equal(result.playwright, '1.64.0');
   if (config.scenario === 'telemetry' || config.scenario === 'overlay' || config.scenario === 'lifecycle') telemetrySource = await startLiveSmokeSource(config.checkout);
+  // ET-011b: the lifecycle journey starts from a deliberately invalid settings file in the isolated LOCALAPPDATA.
+  if (config.scenario === 'lifecycle') await seedLifecycleSettings(config);
   phase('launch-requested');
   application = await electron.launch(launchOptions(config.diagnostics));
   launcher = application.process();
@@ -76,7 +104,7 @@ try {
   result.actual = await window.evaluate(async () => ({require: typeof globalThis.require,
     process: typeof globalThis.process, keys: Object.keys(globalThis.desktop),
     frozen: Object.isFrozen(globalThis.desktop), status: await globalThis.desktop.getStatus()}));
-  assert.deepEqual(result.actual, {require: 'undefined', process: 'undefined', keys: ['getStatus', 'selectSource', 'subscribeLive', 'getAppState', 'subscribeAppState', 'exitApplication'],
+  assert.deepEqual(result.actual, {require: 'undefined', process: 'undefined', keys: ['getStatus', 'selectSource', 'subscribeLive', 'getAppState', 'subscribeAppState', 'exitApplication', 'setUnitProfile'],
     frozen: true, status: result.expected.status});
   result.probesBeforeExit = (await readdir(config.temp)).filter(name => name.startsWith('ets2telemetry-probe-'));
   assert.equal(result.probesBeforeExit.length, 1);
@@ -160,7 +188,7 @@ try {
     application = undefined; phase('explicit-exit-complete');
     application = await electron.launch(launchOptions(config.diagnosticsRestart));
     launcher = application.process(); phase('restart-launch-returned');
-    await verifyLifecycleRestart({application, record: result.lifecycle, rendererPages});
+    await verifyLifecycleRestart({application, record: result.lifecycle, rendererPages, config});
     phase('restart-ready');
   }
   phase('journey-complete');
@@ -207,6 +235,8 @@ finally {
     }
     assert.ok(result.serviceEvents.some(row => row.event === 'STORAGE_VERIFIED'));
     assert.ok(result.serviceEvents.some(row => row.event === 'SERVICE_REPORT' && row.detail?.type === 'stopped'));
+    // A deliberately killed service never closed its database; its replacement reopens the existing file.
+    result.history = verifyHistoryEvents(result.serviceEvents, telemetrySource && result.telemetry?.serviceRestartRecovered ? [true, false] : [true]);
     assert.ok(![...result.mainEvents, ...result.serviceEvents].some(row =>
       /FAILED|TIMEOUT|UNCAUGHT|UNHANDLED|INVALID|RENDER_PROCESS_GONE/.test(row.event)));
     if (config.scenario === 'lifecycle') {
@@ -226,9 +256,18 @@ finally {
         assert.ok(![...main, ...service].some(row => /FAILED|TIMEOUT|UNCAUGHT|UNHANDLED|INVALID|RENDER_PROCESS_GONE/.test(row.event)));
       }
       assert.deepEqual(lifecycle.restartMainEvents.filter(row => row.event === 'APP_EXIT_REQUESTED').map(row => row.facts?.reason), ['app-quit']);
+      // Run B reopens the history database that run A created.
+      lifecycle.restartHistory = verifyHistoryEvents(lifecycle.restartServiceEvents, [false]);
+      // Settings diagnostics: run A falls back from the invalid file, quarantines it and saves once; run B only loads.
+      const settingsEvents = rows => rows.filter(row => row.event.startsWith('SETTINGS_')).map(row => ({event: row.event, facts: row.facts ?? null}));
+      lifecycle.settingsEvents = {runA: settingsEvents(result.mainEvents), runB: settingsEvents(lifecycle.restartMainEvents)};
+      assert.deepEqual(lifecycle.settingsEvents.runA, [{event: 'SETTINGS_FALLBACK', facts: {state: 'invalid-file'}}, {event: 'SETTINGS_QUARANTINED', facts: {state: 'invalid-file'}},
+        {event: 'SETTINGS_SAVED', facts: {game: 'ets2', profile: 'us-customary'}}]);
+      assert.deepEqual(lifecycle.settingsEvents.runB, [{event: 'SETTINGS_LOADED', facts: {state: 'loaded'}}]);
       lifecycle.restartLauncherExit = result.launcherExit;
       lifecycle.shutdownClean = true;
     }
+    result.history.file = await verifyHistoryFile();
   } catch (error) {result.postconditionFailure = failure(error);}
   result.passed = !result.failure && !result.closeFailure && !result.traceFailure && !result.postconditionFailure && !result.sourceCloseFailure;
   result.finishedUtc = new Date().toISOString();

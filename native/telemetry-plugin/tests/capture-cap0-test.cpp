@@ -123,13 +123,15 @@ void send(HANDLE h, const std::vector<std::uint8_t>& bytes) { DWORD written = 0;
 const std::string session_id = "0cab0000-0000-4000-8000-0000000000a1";
 struct Packets {
   std::vector<std::uint8_t> buffer; std::vector<v0::Json> items; std::vector<std::size_t> sizes;
-  // Reads until `minimum` packets are complete; returns false on EOF/timeout.
+  // Reads until `minimum` packets are complete; returns false on EOF/timeout. With INFINITE there is no
+  // wall-clock bound: it returns false only when the pipe fails or the server closes it.
   bool read(HANDLE h, std::size_t minimum, DWORD ms = 3000) {
     const auto deadline = GetTickCount64() + ms;
     while (items.size() < minimum) {
-      const auto now = GetTickCount64(); if (now >= deadline) return false;
+      DWORD wait = INFINITE;
+      if (ms != INFINITE) { const auto now = GetTickCount64(); if (now >= deadline) return false; wait = static_cast<DWORD>(deadline - now); }
       std::vector<std::uint8_t> chunk(65540); DWORD count = 0;
-      if (!io(h, true, chunk.data(), static_cast<DWORD>(chunk.size()), count, static_cast<DWORD>(deadline - now)) || !count) return false;
+      if (!io(h, true, chunk.data(), static_cast<DWORD>(chunk.size()), count, wait) || !count) return false;
       buffer.insert(buffer.end(), chunk.begin(), chunk.begin() + count);
       while (buffer.size() >= 4) {
         const auto n = static_cast<std::uint32_t>(buffer[0]) | (static_cast<std::uint32_t>(buffer[1]) << 8) | (static_cast<std::uint32_t>(buffer[2]) << 16) | (static_cast<std::uint32_t>(buffer[3]) << 24);
@@ -390,10 +392,14 @@ void stall_and_loss() {
   require(counters.attempted == 60 && counters.dropped > 0 && counters.dropped_full_bytes > 0, "newest-drop loss counted while client stalled");
   require(produced_ms < 600 * timing_scale && worst_ms < 100.0 * timing_scale, "callbacks bounded and nonblocking under stalled capture client");
   require(f.capture.queue().queued_bytes() <= cap0::queue_bytes && f.capture.queue().queued_envelopes() <= cap0::queue_envelopes, "queue bounds hold");
-  // Resume reading within the 1 s write deadline and account for every attempted envelope.
+  // Resume reading within the 1 s write deadline and account for every attempted envelope. Production has
+  // ended, so the counters are final and a loss packet carrying them must follow. The client reads without
+  // a wall-clock bound: while it keeps reading, the server either delivers every packet or retires the
+  // capture, which closes the pipe and fails the read. A loaded host only slows delivery (about 48 packets
+  // of 64 KiB, each a worker/client handoff) and can no longer end the check before the stream is complete;
+  // a server that never sends the loss packet fails at the CTest timeout.
   std::set<std::uint64_t> seen; std::uint64_t dropped_marked = 0, previous = 0; bool loss = false;
-  require(until([&] {
-    packets.read(client.get(), packets.items.size() + 1, 300);
+  const auto complete = [&] {
     std::uint64_t finals = 0; bool complete_loss = false;
     for (const auto& item : packets.items) {
       const auto kind = item.at("kind").string();
@@ -401,7 +407,9 @@ void stall_and_loss() {
       if (kind == "loss" && std::stoull(item.at("data").at("droppedEnvelopes").string()) == counters.dropped) complete_loss = true;
     }
     return complete_loss && finals == counters.enqueued;
-  }, 5000), "every retained envelope and the complete loss count received");
+  };
+  bool open = true; while (open && !complete()) open = packets.read(client.get(), packets.items.size() + 1, INFINITE);
+  require(open, "every retained envelope and the complete loss count received before the stream closed");
   for (const auto& item : packets.items) {
     const auto kind = item.at("kind").string();
     if (kind == "loss") { loss = true; require(loss_consistent(item.at("data")), "every emitted loss packet is internally consistent"); }

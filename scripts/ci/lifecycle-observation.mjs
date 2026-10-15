@@ -1,9 +1,43 @@
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
+import {mkdir, readFile, readdir, writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import {performance} from 'node:perf_hooks';
 import {waitForCurrentTelemetry} from './renderer-observation.mjs';
 import {waitForOverlay} from './overlay-observation.mjs';
+
+// ET-011b settings evidence. Run A starts with a deliberately truncated settings file, which must stay byte-identical
+// until the first save quarantines it; run B must load the saved file without writing.
+const SETTINGS_SEED = '{"format":"ets2telemetry.settings","version":1,"units":{"ets2":"metric",';
+const SETTINGS_SAVED = '{\n  "format": "ets2telemetry.settings",\n  "version": 1,\n  "units": {\n    "ets2": "us-customary",\n    "ats": "us-customary"\n  }\n}\n';
+const QUARANTINE_NAME = /^settings\.rejected-\d{8}T\d{6}Z\.json$/;
+// 25 m/s and 73 L in the us-customary profile.
+const US_DASHBOARD = {speed: 'Speed: 55.9 mph', fuel: 'Fuel: 19.3 US gal'};
+const settingsDirectory = config => path.join(config.localappdata, 'ETS2Telemetry', 'settings');
+
+/** Seeds the isolated LOCALAPPDATA before run A launches. */
+export async function seedLifecycleSettings(config) {
+  await mkdir(settingsDirectory(config), {recursive: true});
+  await writeFile(path.join(settingsDirectory(config), 'settings.json'), SETTINGS_SEED);
+}
+async function settingsFiles(config) {
+  const directory = settingsDirectory(config), names = (await readdir(directory)).sort();
+  return Promise.all(names.map(async name => ({name, content: await readFile(path.join(directory, name), 'utf8')})));
+}
+
+// Self-contained browser callback: the dashboard's current speed and fuel rows in the expected units.
+function dashboardReadings(expected) {
+  const read = id => {
+    const nodes = globalThis.document.querySelectorAll(`[data-testid="${id}"]`);
+    return nodes.length === 1 ? nodes[0].innerText : undefined;
+  };
+  const observation = {status: read('telemetry-status'), speed: read('speed'), fuel: read('fuel')};
+  return /^connected:/.test(observation.status ?? '') && observation.speed === expected.speed && observation.fuel === expected.fuel ? observation : false;
+}
+async function waitForDashboardUnits(page, expected) {
+  const handle = await page.waitForFunction(dashboardReadings, expected, {timeout: 10000, polling: 50});
+  try {return await handle.jsonValue();} finally {await handle.dispose();}
+}
 
 // ET-011a tray lifecycle journey against the isolated synthetic source. The tray icon itself cannot be
 // clicked here: the gated diagnostic tray action calls the same main handlers as the tray menu.
@@ -84,6 +118,14 @@ export async function runLifecycleSmoke({application, launcher, dashboard, overl
   assert.equal(initial.started, true); assert.equal(initial.tray, true); assert.equal(initial.overlay, true);
   assert.ok(Number.isSafeInteger(initial.servicePid) && initial.servicePid > 0, 'Service PID unavailable');
   record.servicePid = initial.servicePid;
+  // 0. The seeded invalid settings file yields defaults and is neither changed nor joined by any file on startup.
+  record.settingsInitial = {view: initial.settings, files: await settingsFiles(config),
+    stateText: await dashboard.getByTestId('settings-state').innerText()};
+  assert.deepEqual(initial.settings, {units: {ets2: 'metric', ats: 'us-customary'}, state: 'invalid-file', writable: true, saveError: null});
+  record.settingsSeededInvalidFile = true;
+  assert.deepEqual(record.settingsInitial.files, [{name: 'settings.json', content: SETTINGS_SEED}]);
+  assert.match(record.settingsInitial.stateText, /^The settings file is invalid; defaults are in use\./);
+  record.settingsStartupUnchanged = true;
   const retired = [dashboard];
 
   // 1. Closing the main window keeps the application, service, source connection, overlay and tray.
@@ -130,6 +172,23 @@ export async function runLifecycleSmoke({application, launcher, dashboard, overl
   assert.equal(source.statistics().connections, 1);
   record.trayOpenRestoredDashboard = true;
 
+  // 3b. Saving ETS2's US customary profile quarantines the seeded file unchanged, writes the exact v1 content and
+  // switches both the dashboard and the overlay to mph and US gallons.
+  record.settingsSaveView = await trayDashboard.evaluate(() => globalThis.desktop.setUnitProfile('ets2', 'us-customary'));
+  assert.deepEqual(record.settingsSaveView, {units: {ets2: 'us-customary', ats: 'us-customary'}, state: 'loaded', writable: true, saveError: null});
+  const saved = await settingsFiles(config);
+  record.settingsAfterSave = saved.map(({name}) => name);
+  const quarantined = saved.filter(file => QUARANTINE_NAME.test(file.name));
+  record.settingsQuarantined = quarantined.length;
+  assert.equal(quarantined.length, 1); assert.equal(quarantined[0].content, SETTINGS_SEED);
+  record.settingsQuarantinePreserved = true;
+  assert.deepEqual(saved.filter(file => !QUARANTINE_NAME.test(file.name)), [{name: 'settings.json', content: SETTINGS_SAVED}]);
+  record.settingsSavedExact = true;
+  record.dashboardUnits = await waitForDashboardUnits(trayDashboard, US_DASHBOARD);
+  record.overlayUnits = await waitForOverlay(overlay, {...expected, speed: '55.9', fuel: '19.3', speedUnit: 'mph', fuelUnit: 'US gal'});
+  assert.equal((await lifecycleState(application)).settings.units.ets2, 'us-customary');
+  record.unitsApplied = true;
+
   // 4. Explicit exit from the renderer: one orderly sequence, normal service stop, exit 0.
   await trayDashboard.screenshot({path: path.join(config.output, 'ready.png')});
   await stopTracing();
@@ -147,12 +206,23 @@ export async function runLifecycleSmoke({application, launcher, dashboard, overl
 }
 
 /** Run B: the same profile and LOCALAPPDATA start again after the orderly exit. */
-export async function verifyLifecycleRestart({application, record, rendererPages}) {
+export async function verifyLifecycleRestart({application, record, rendererPages, config}) {
   const {dashboard} = await rendererPages(application);
-  record.restart = {ready: await readyDashboard(dashboard)};
+  await dashboard.getByText(READY_TEXT, {exact: true}).waitFor({state: 'visible', timeout: 10000});
+  // The saved ETS2 profile applies from the first current reading.
+  record.restart = {ready: await waitForDashboardUnits(dashboard, US_DASHBOARD)};
+  record.restart.dashboardUnits = {speed: record.restart.ready.speed, fuel: record.restart.ready.fuel};
   const state = await lifecycleState(application);
   assert.equal(state.started, true); assert.equal(state.tray, true);
   record.restart.servicePid = state.servicePid;
   assert.notEqual(state.servicePid, record.servicePid);
   record.restartRecovered = true;
+  record.restart.settingsState = state.settings.state;
+  assert.deepEqual(state.settings, {units: {ets2: 'us-customary', ats: 'us-customary'}, state: 'loaded', writable: true, saveError: null});
+  // Loading wrote nothing: the saved file and the single quarantined file are unchanged.
+  const files = await settingsFiles(config);
+  assert.deepEqual(files.map(file => file.name), record.settingsAfterSave);
+  assert.equal(files.find(file => file.name === 'settings.json').content, SETTINGS_SAVED);
+  assert.equal(files.find(file => QUARANTINE_NAME.test(file.name)).content, SETTINGS_SEED);
+  record.settingsRestartLoaded = true;
 }

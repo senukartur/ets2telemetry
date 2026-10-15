@@ -24,14 +24,17 @@ const sqliteFiles = ['packages/storage/src/sqlite/**', 'apps/desktop/src/storage
 // Modules that plain Node or a sandboxed renderer must be able to load: Node-safe tests and their shared helpers, every
 // desktop .ts module except the storage worker, and the Node-safe storage modules. Renderers and preloads have own blocks.
 const nodeSafeFiles = ['tests/unit/**', 'tests/shared/**', 'apps/desktop/src/**/*.ts',
-  'packages/storage/src/api.ts', 'packages/storage/src/codec.ts', 'packages/storage/src/errors.ts', 'packages/storage/src/retention.ts'];
+  'packages/storage/src/api.ts', 'packages/storage/src/codec.ts', 'packages/storage/src/errors.ts', 'packages/storage/src/retention.ts',
+  'packages/storage/src/client.ts', 'packages/storage/src/worker/protocol.ts'];
 const sqliteMessage = 'Native SQLite loads only in packages/storage/src/sqlite, the storage worker and tests/storage (docs/storage.md).';
-// The SQLite core and the in-process storage index that re-exports it, also as a relative import inside the package.
-const storageCoreRegex = String.raw`(^|/)storage/src(/index|/sqlite(/.*)?)?(\.[cm]?[jt]s)?$|^@ets2telemetry/storage(/.*)?$|^\./(index|sqlite)(/.*)?(\.[cm]?[jt]s)?$`;
+// The SQLite core, the in-process storage index that re-exports it and the storage worker host that runs it, also as a
+// relative import inside the package: `./index`, `../index`, `./sqlite/*`, `../sqlite/*`, `./host`, `./worker/host` and
+// `../worker/host` from the Node-safe storage modules, plus the bare directory specifiers `.`, `./`, `..` and `../`.
+const storageCoreRegex = String.raw`(^|/)storage/src(/index|/sqlite(/.*)?|/worker/host)?(\.[cm]?[jt]s)?$|^@ets2telemetry/storage(/.*)?$|^\.\.?/(index|sqlite)(/.*)?(\.[cm]?[jt]s)?$|^\.\.?/(worker/)?host(\.[cm]?[jt]s)?$|^\.\.?/?$`;
 // The Electron-runtime suite's helpers load native SQLite.
 const storageSuiteRegex = String.raw`(^|/)tests/storage(/.*)?$|^\.\./storage(/.*)?$`;
 const storageCorePatterns = [
-  {regex: storageCoreRegex, message: 'Import the Node-safe storage modules (api, codec, errors, retention), not the SQLite core; see docs/storage.md.'},
+  {regex: storageCoreRegex, message: 'Import the Node-safe storage modules (api, codec, errors, retention, client, worker/protocol), not the SQLite core, the storage index or the worker host; see docs/storage.md.'},
   {regex: storageSuiteRegex, message: 'tests/storage loads native SQLite under Electron; Node-safe code must not import it (docs/storage.md).'}
 ];
 // Loads that no-restricted-imports cannot see. The same module set as above (better-sqlite3, the SQLite core and storage
