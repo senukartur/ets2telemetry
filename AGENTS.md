@@ -321,3 +321,5 @@ ET-015a is four PRs: storage recovery reads, the trip recorder in the v1 ingesti
 Production game sources stay live-only (`GAME_HISTORY_RECORDING` false, `durableEvents: false`, no history row) until a separate enablement PR. That PR comes after the v0 retirement (D2), real-game v1 evidence, ET-015b, ET-015c, and the S-1/S-2 decision in ET-016. `ETS2TELEMETRY_RECORDING=synthetic:<name>` or `replay:<name>` records synthetic or replay sources into a separate database in the synthetic directory, never into history.
 
 ET-015a makes no schema, wire, preload/IPC or renderer change. ET-015b, ET-015c, ET-016 and later phases are not authorized by this paragraph. No game, TruckersMP, display or performance claim follows.
+
+ET-015a PR-1 implementation update on October 16, 2026: storage gains a  filter on `listTrips` and an `ifAbsent` option on `recordCompleteness`; `apps/desktop/src/trip-seeds.ts` derives cold-start `TripSeed`s from stored rows (not yet called); and a test-only fault storage worker injects disk-full, permission and lock failures inside the real transaction. No production behaviour changes; see [ET-015a validation](docs/validation/et-015a.md).
