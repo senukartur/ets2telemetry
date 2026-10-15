@@ -52,6 +52,10 @@ function lifecycleCases() {
     ({name: `lifecycle ${name}`, body: lifecycleReceipt(path, replacement), scenario: 'lifecycle', code: 0, available: true, reason: 'LIFECYCLE_RESULT_INCOMPLETE_OR_INVALID'});
   return [
     {name: 'intact lifecycle receipt', body: lifecycleReceipt(), scenario: 'lifecycle', code: 0, available: true, reason: null},
+    // Hosted run 38666784946: PowerShell 7 parses JSON integers as Int64, and `-isnot [int]` rejected an intact receipt.
+    {name: 'intact lifecycle receipt with PowerShell 7 Int64 integers', body: lifecycleReceipt(), scenario: 'lifecycle', numbers: 'int64' as const, code: 0, available: true, reason: null},
+    {name: 'lifecycle second instance exit 1 with Int64 integers', body: lifecycleReceipt(['lifecycle', 'secondInstance', 'exitCode'], 1), scenario: 'lifecycle', numbers: 'int64' as const, code: 0, available: true, reason: 'LIFECYCLE_RESULT_INCOMPLETE_OR_INVALID'},
+    {name: 'lifecycle restart closed nonzero with Int64 integers', body: lifecycleReceipt(['lifecycle', 'restartLauncherExit'], 1), scenario: 'lifecycle', numbers: 'int64' as const, code: 0, available: true, reason: 'LIFECYCLE_RESULT_INCOMPLETE_OR_INVALID'},
     {name: 'scaffold receipt cannot prove lifecycle', body: lifecycleReceipt(['scenarioKind'], 'scaffold'), scenario: 'lifecycle', code: 0, available: true, reason: 'DRIVER_RESULT_SCENARIO_MISMATCH'},
     invalid('result missing', ['lifecycle']),
     invalid('flag missing', ['lifecycle', 'trayOpenRestoredDashboard']),
@@ -86,7 +90,8 @@ it('requires an intact current driver receipt and normal Job exit without overwr
     for (const [index, scenario] of cases.entries()) if (scenario.body !== undefined) await writeFile(receipts[index], scenario.body);
     // All cases share one PowerShell 5.1 validator process; see tests/shared/runtime-receipt-validator.ts.
     const results = await validateRuntimeReceipts(resources.directory, cases.map((scenario, index) =>
-      ({receipt: receipts[index], code: scenario.code, ...('scenario' in scenario ? {scenario: scenario.scenario} : {})})));
+      ({receipt: receipts[index], code: scenario.code, ...('scenario' in scenario ? {scenario: scenario.scenario} : {}),
+        ...('numbers' in scenario ? {numbers: scenario.numbers} : {})})));
     for (const [index, scenario] of cases.entries()) {
       expect(results[index], scenario.name).toMatchObject({passed: scenario.reason === null,
         driverResultAvailable: scenario.available, reason: scenario.reason});

@@ -77,15 +77,16 @@ function Test-LifecycleReceipt {
             $row.speed -cne $reading.speed -or $row.fuel -cne $reading.fuel) { return $false }
     }
     $second = $lifecycle.secondInstance
-    if ($null -eq $second -or $second.exitCode -isnot [int] -or $second.exitCode -ne 0 -or $null -ne $second.signal -or
+    # Integer fields go through Test-ReceiptInteger: PowerShell 7 (the CI shell) parses JSON integers as Int64, 5.1 as Int32.
+    if ($null -eq $second -or !(Test-ReceiptInteger -Value $second.exitCode -Minimum 0 -Maximum 0) -or $null -ne $second.signal -or
         $second.wroteLog -isnot [bool] -or $second.wroteLog -or
         !(Test-ReceiptInteger -Value $second.exitMilliseconds -Minimum 0 -Maximum 10000) -or
         @($second.primaryActions).Count -ne 1 -or @($second.primaryActions)[0] -cne 'created') { return $false }
     $exit = $lifecycle.explicitExit
-    if ($null -eq $exit -or $exit.launcherExit -isnot [int] -or $exit.launcherExit -ne 0 -or $null -ne $exit.signal -or
+    if ($null -eq $exit -or !(Test-ReceiptInteger -Value $exit.launcherExit -Minimum 0 -Maximum 0) -or $null -ne $exit.signal -or
         !(Test-ReceiptInteger -Value $exit.exitMilliseconds -Minimum 0 -Maximum 8000) -or
         @($exit.requests).Count -ne 1 -or @($exit.requests)[0] -cne 'renderer') { return $false }
-    if ($lifecycle.restartLauncherExit -isnot [int] -or $lifecycle.restartLauncherExit -ne 0 -or $Driver.launcherExit -ne 0 -or
+    if (!(Test-ReceiptInteger -Value $lifecycle.restartLauncherExit -Minimum 0 -Maximum 0) -or $Driver.launcherExit -ne 0 -or
         $null -eq $Driver.probesAfterExit -or @($Driver.probesAfterExit).Count -ne 0) { return $false }
     $restartRequests = @($lifecycle.restartMainEvents | Where-Object { $_.event -ceq 'APP_EXIT_REQUESTED' })
     if ($restartRequests.Count -ne 1 -or $restartRequests[0].facts.reason -cne 'app-quit') { return $false }
