@@ -1,0 +1,19 @@
+{
+  "format": "ets2telemetry-simulator-v1", "schemaVersion": 1, "id": "reconnect-lost-ack",
+  "purpose": "ACKs after the first are lost; the producer keeps its release point, the reconnection redelivers the committed events as duplicates and the cursor acknowledges them again after the redelivered range.",
+  "reg": ["REG-005", "REG-006"], "origin": "synthetic", "game": "ets2", "seed": "et005b-reconnect-lost-ack", "provenance": null,
+  "source": {"versions": {"telemetryApi": {"major": 1, "minor": 1}, "gameTelemetry": {"major": 1, "minor": 19}, "sdkArchive": "scs-sdk-1.15"}, "gameplayEvents": "registered", "currency": "unknown", "gameMode": "unknown"},
+  "steps": [
+    {"atMs": 10, "action": "configuration", "id": "job", "attributes": [{"name": "cargo.id", "sdkType": "string", "value": "synthetic_cargo"}]},
+    {"atMs": 20, "action": "lifecycle", "event": "simulation.started"},
+    {"atMs": 30, "action": "lifecycle", "event": "simulation.paused"},
+    {"atMs": 50, "action": "gameplay", "id": "player.tollgate.paid", "attributes": [{"name": "pay.amount", "sdkType": "s64", "value": "15"}]},
+    {"atMs": 60, "action": "frame"}
+  ],
+  "transport": [
+    {"atMs": 0, "action": "connect", "client": {"durable": true, "commit": "each", "ack": "dropAfter:1"}},
+    {"atMs": 40, "action": "disconnect"},
+    {"atMs": 100, "action": "connect", "client": {"durable": true}},
+    {"atMs": 200, "action": "disconnect"}
+  ]
+}

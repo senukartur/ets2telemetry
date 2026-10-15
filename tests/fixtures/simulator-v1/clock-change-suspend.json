@@ -1,0 +1,22 @@
+{
+  "format": "ets2telemetry-simulator-v1", "schemaVersion": 1, "id": "clock-change-suspend",
+  "purpose": "A UTC change moves only labels; a suspend that stops the source clock delays the retention deadline so a reconnection still finds the events; a suspend that advances the source clock lets retention expire at resume.",
+  "reg": ["REG-003", "REG-011"], "origin": "synthetic", "game": "ets2", "seed": "et005b-clock-change-suspend", "provenance": null,
+  "source": {"versions": {"telemetryApi": {"major": 1, "minor": 1}, "gameTelemetry": {"major": 1, "minor": 19}, "sdkArchive": "scs-sdk-1.15"}, "gameplayEvents": "registered", "currency": "unknown", "gameMode": "unknown"},
+  "steps": [
+    {"atMs": 10, "action": "lifecycle", "event": "simulation.started"},
+    {"atMs": 20, "action": "utcJump", "deltaMs": -3600000},
+    {"atMs": 30, "action": "lifecycle", "event": "simulation.paused"},
+    {"atMs": 50, "action": "suspend", "durationMs": 1000000, "sourceClockAdvances": false},
+    {"atMs": 1100000, "action": "frame"},
+    {"atMs": 1260000, "action": "suspend", "durationMs": 400000, "sourceClockAdvances": true}
+  ],
+  "transport": [
+    {"atMs": 0, "action": "connect", "client": {"durable": true, "commit": "each", "ack": "withhold"}},
+    {"atMs": 40, "action": "disconnect"},
+    {"atMs": 1200000, "action": "connect", "client": {"durable": true, "commit": "each", "ack": "withhold"}},
+    {"atMs": 1250000, "action": "disconnect"},
+    {"atMs": 1700000, "action": "connect", "client": {"durable": true}},
+    {"atMs": 1800000, "action": "disconnect"}
+  ]
+}

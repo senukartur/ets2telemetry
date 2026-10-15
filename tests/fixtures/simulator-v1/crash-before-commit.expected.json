@@ -1,0 +1,32 @@
+{
+  "scenario": "crash-before-commit",
+  "authoredFrom": [
+    "TESTING.md REG-006 and docs/protocol/v1.md §10: receipt is never grounds for an ACK; no ACK for an uncommitted event",
+    "OD-5 S9: an event counts as written once the producer issued its write, so the redelivery is flagged even though it was never committed",
+    "I5: the disconnect starts retention and a reconnection inside the window cancels it; OD-5 S10: the paused callback with no client is an offline transition",
+    "docs/simulator-v1.md: a crash closes the connection, the scripted disconnect after it is a no-op and the next connection uses a new client instance whose cursor starts from the ledger"
+  ],
+  "connections": [
+    {
+      "durableRequested": true, "closedBy": "crash", "clientInstance": 1,
+      "coverage": [
+        {"event": "1", "type": "job.configured", "redelivered": false},
+        {"event": "2", "type": "simulation.started", "redelivered": false}
+      ],
+      "acks": ["1"], "end": null
+    },
+    {
+      "durableRequested": true, "closedBy": "disconnect", "clientInstance": 2,
+      "checkpoint": {"atMs": 100, "ackedThroughEventSeq": "1", "nextEventSeq": "4", "retainedEvents": 2, "oldestRetainedMonotonicNs": "1000020000000", "eventLoss": {"offline": "1"},
+        "continuity": {"coalescedSnapshots": "0", "offlineTransitions": "1"}},
+      "coverage": [
+        {"event": "2", "type": "simulation.started", "redelivered": true},
+        {"gap": ["3", "3"], "causes": {"offline": "1"}, "redelivered": false, "firstLost": "1000030000000", "lastLost": "1000030000000"}
+      ],
+      "acks": ["2", "3"], "end": null
+    }
+  ],
+  "ledger": {"committedThroughEventSeq": "3", "committedEvents": 2, "committedGapMarkers": "1", "duplicates": 0},
+  "store": {"ackedThroughEventSeq": "3", "nextEventSeq": "4", "retainedEntries": 0},
+  "retired": null
+}

@@ -1,0 +1,18 @@
+{
+  "format": "ets2telemetry-simulator-v1", "schemaVersion": 1, "id": "sequence-exhausted",
+  "purpose": "A synthetic session starts two eventSeqs before the last assignable value; after 18,446,744,073,709,551,614 the producer sends end with sequence-exhausted, assigns nothing more and answers a later client with welcome and end.",
+  "reg": ["REG-005", "REG-011"], "origin": "synthetic", "game": "ets2", "seed": "et005b-sequence-exhausted", "provenance": null,
+  "source": {"versions": {"telemetryApi": {"major": 1, "minor": 1}, "gameTelemetry": {"major": 1, "minor": 19}, "sdkArchive": "scs-sdk-1.15"}, "gameplayEvents": "registered", "currency": "unknown", "gameMode": "unknown",
+    "startEventSeq": "18446744073709551613"},
+  "steps": [
+    {"atMs": 10, "action": "lifecycle", "event": "simulation.started"},
+    {"atMs": 20, "action": "lifecycle", "event": "simulation.paused"},
+    {"atMs": 30, "action": "lifecycle", "event": "simulation.started"}
+  ],
+  "transport": [
+    {"atMs": 0, "action": "connect", "client": {"durable": true}},
+    {"atMs": 50, "action": "disconnect"},
+    {"atMs": 100, "action": "connect", "client": {"durable": true}},
+    {"atMs": 150, "action": "disconnect"}
+  ]
+}

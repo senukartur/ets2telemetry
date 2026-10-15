@@ -1,0 +1,37 @@
+{
+  "scenario": "units-currency",
+  "authoredFrom": [
+    "docs/protocol/v1.md §6: speed m/s (negative is reverse), odometer and range km x 1,000, consumption L/km x 100, measures carry their unit, zero is a real reading",
+    "docs/protocol/v1.md §8 D12: a provided empty string is available, a missing one not-observed, a C0 character makes it invalid; a wrong attribute type is invalid (docs/native-transport-v1.md)",
+    "docs/protocol/v1.md §8 money: exact raw decimal strings, s64 down to -9,223,372,036,854,775,808; D11: ATS currency is USD from scssdk_telemetry_ats.h",
+    "TD-002 and docs/native-transport-v1.md records table: bus_job, car_job, controls and car_job.* yield no record and no eventSeq"
+  ],
+  "connections": [
+    {
+      "durableRequested": true, "closedBy": "disconnect", "clientInstance": 1,
+      "welcome": {"game": "ats", "origin": "synthetic", "versions": {"gameTelemetry": {"major": 1, "minor": 6}}},
+      "checkpoint": {"atMs": 0, "state": {
+        "speed": {"available": true, "value": 0, "unit": "m/s"}, "fuel": {"available": true, "value": 0, "unit": "L"}, "gear": {"available": true, "value": 0, "unit": "index"},
+        "odometer": {"available": true, "value": 500, "unit": "m"}, "averageConsumption": {"available": true, "value": 25, "unit": "L/100km"},
+        "estimatedRange": {"available": false, "reason": "invalid", "unit": "m"}, "navigationDistance": {"available": false, "reason": "not-observed", "unit": "m"},
+        "engineRpm": {"available": false, "reason": "not-observed", "unit": "rpm"}, "gameTime": {"available": true, "value": "0", "unit": "min", "clockId": "game-clock-0"}}},
+      "coverage": [
+        {"event": "1", "type": "job.configured", "redelivered": false, "record": {
+          "cargoId": {"available": true, "value": ""}, "cargo": {"available": true, "value": "Synthetic Cargo"}, "sourceCityId": {"available": false, "reason": "invalid"},
+          "destinationCityId": {"available": false, "reason": "not-observed"}, "plannedDistance": {"available": true, "value": 0, "unit": "m"},
+          "cargoMass": {"available": true, "value": 0, "unit": "kg"}, "isSpecialJob": {"available": false, "reason": "invalid"},
+          "expectedIncome": {"available": true, "value": {"raw": "0", "sdkType": "u64",
+            "currency": {"status": "sdk-documented", "code": "USD", "source": "scs-sdk-1.15/include/amtrucks/scssdk_telemetry_ats.h#game-specific-units"}}}}},
+        {"event": "2", "type": "job.delivered", "redelivered": false, "record": {
+          "revenue": {"available": true, "value": {"raw": "0", "sdkType": "s64"}}, "distance": {"available": true, "value": 0, "unit": "m"},
+          "earnedXp": {"available": true, "value": 0}, "cargoDamage": {"available": false, "reason": "not-observed", "unit": "fraction"}}},
+        {"event": "3", "type": "job.cancelled", "redelivered": false, "record": {"penalty": {"available": true, "value": {"raw": "-9223372036854775808", "sdkType": "s64"}}}}
+      ],
+      "acks": ["1", "2", "3"],
+      "snapshots": [{"atMs": 100, "state": {"speed": {"available": true, "value": -2.5, "unit": "m/s"}, "odometer": {"available": true, "value": 500, "unit": "m"}}}],
+      "end": null
+    }
+  ],
+  "store": {"nextEventSeq": "4", "eventLoss": {}},
+  "retired": null
+}
