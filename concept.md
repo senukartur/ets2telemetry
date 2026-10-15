@@ -573,3 +573,16 @@ ET-010 changes no v0 wire, preload/IPC, storage, trip logic, recording or later-
 | N14 | Text fallback: localized name, then id; trailers use the body type before the id |
 | N15 | Per-quantity unit overrides as a seam; no settings migration |
 | N16 | A boundary test instead of a lint-config edit keeps telemetry-core free of Node.js, Electron and React |
+
+ET-010b implementation update on October 15, 2026: the main window shows the complete protocol v0 live field set in a **Live telemetry** card built from telemetry-core's view model, with labels, reasons and notes from the application strings ([dashboard rules](docs/live-telemetry-fields.md#dashboard)). The coordinator adopted the following decisions under the owner's delegation; the owner did not review them individually.
+
+| # | Decision |
+| --- | --- |
+| B1 | Speed and fuel stay in the existing `Speed: …` and `Fuel: …` lines and are not repeated in the card |
+| B2 | New rows are label and value pairs (`<dt>`/`<dd>`); the N6 `<Label>: <text>` wording keeps applying to the existing speed and fuel lines |
+| B3 | A reason is a sibling element `live-<id>-reason` and a note `live-<id>-note` |
+| B4 | No React component tests (no jsdom or Testing Library); the card is a thin map over a tested pure builder, checked end to end by the runtime smokes |
+| B5 | The card uses the same game and profile rule as the speed and fuel lines; under "Select a game" the units are metric while the ATS note may follow the source game |
+| B6 | Smoke checks of card rows below the fold require one visible element with a non-empty box but no viewport intersection or scrolling; the existing speed and fuel checks keep their viewport requirement |
+
+ET-010b changes no telemetry-core, contracts, wire, fixtures, preload/IPC, overlay, storage or receipt code, and makes no game, TruckersMP, display or performance claim; see [ET-010 validation](docs/validation/et-010.md#et-010b-dashboard).
