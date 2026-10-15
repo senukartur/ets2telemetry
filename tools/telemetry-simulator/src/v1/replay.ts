@@ -50,7 +50,7 @@ export interface ReplayResult {
  */
 export type Effect =
   {kind: 'time'; atMs: number} | {kind: 'accept'; connection: number} | {kind: 'expect'; bytes: Uint8Array; endsInput: boolean} | {kind: 'helloTimeout'} |
-  {kind: 'write'; bytes: Uint8Array; endsOutput: boolean} | {kind: 'stall'} | {kind: 'secondClient'} | {kind: 'flush'; expectDeadline: boolean} |
+  {kind: 'write'; bytes: Uint8Array; endsOutput: boolean; atMs: number; message: boolean} | {kind: 'stall'} | {kind: 'secondClient'} | {kind: 'flush'; expectDeadline: boolean} |
   {kind: 'close'; by: 'server' | 'client'; graceful: boolean};
 
 /** The fixed synthetic source identity of a scenario; every identifier derives from its seed. */
@@ -104,7 +104,7 @@ export class V1Driver {
     o.last = out.message;
     if (out.message.kind === 'checkpoint' || out.message.kind === 'snapshot') o.lastState = out.message;
     if (out.message.kind === 'event') o.lastEvent = out.message;
-    yield {kind: 'write', bytes: out.frame, endsOutput: false};
+    yield {kind: 'write', bytes: out.frame, endsOutput: false, atMs, message: true};
     // A stalled client reads nothing more; its connection ends at the scripted write deadline.
     if (!o.stalled) yield* this.fromClient(o.client.receive(out.frame, CLIENT_BASE_NS + BigInt(atMs) * 1_000_000n), atMs);
     if (out.message.kind === 'end' && this.open === o) yield* this.closeClient(atMs, 'end', 'server', true);
@@ -119,7 +119,7 @@ export class V1Driver {
     for (;;) {
       const due = this.producer.dueNs(), expiryAt = due.expiry === undefined ? Infinity : this.clock.atMsFor(due.expiry), snapshotAt = due.snapshot === undefined ? Infinity : this.clock.atMsFor(due.snapshot);
       const at = Math.min(expiryAt, snapshotAt); if (at > untilMs) return;
-      this.atMs = at; yield {kind: 'time', atMs: at};
+      yield {kind: 'time', atMs: at}; this.atMs = at;
       if (expiryAt === at) this.producer.expire(this.ns(at));
       else { const out = this.producer.fireSnapshot(this.ns(at)); if (out) { yield* this.deliver(out, at); yield* this.flush(); } }
     }
@@ -198,7 +198,7 @@ export class V1Driver {
     const {bytes, endsOutput} = wireFaultBytes(fault, {last: o.last, lastState: o.lastState, lastEvent: o.lastEvent, nextEventSeq: BigInt(o.client.consumer.nextEventSeq),
       end: endData('plugin-shutdown', this.producer.store.endCursor()), foreignSessionId: foreignSession(this.scenario.seed)});
     this.line(atMs, 'server', {fault, bytesHex: hex(bytes)});
-    yield {kind: 'write', bytes, endsOutput};
+    yield {kind: 'write', bytes, endsOutput, atMs, message: false};
     // The client's FrameDecoder or V1Consumer must reject the fault: at once, or at the EOF that follows a cut frame.
     try { o.client.receive(bytes, CLIENT_BASE_NS + BigInt(atMs) * 1_000_000n); if (endsOutput) o.client.end(); }
     catch (error) { o.record.rejection = error instanceof Error ? error.message : 'rejected'; }
@@ -228,7 +228,7 @@ export class V1Driver {
     const s = this.scenario, entries = timeline(s.steps, s.transport);
     for (const e of entries) {
       yield* this.fireTimers(e.atMs);
-      this.atMs = e.atMs; yield {kind: 'time', atMs: e.atMs};
+      yield {kind: 'time', atMs: e.atMs}; this.atMs = e.atMs;
       if (e.lane === 'source') yield* this.apply(e.step);
       else if (e.lane === 'probe') {
         const o = this.open;
@@ -243,13 +243,15 @@ export class V1Driver {
     return this.result();
   }
   /**
-   * Cancellation of a pipe run: a live connection receives `end` with reason plugin-shutdown at the current scenario
-   * time (D14). Returns the frame to write, if any.
+   * Cancellation of a pipe run: a live connection receives `end` with reason plugin-shutdown (D14). `atMs` is the
+   * scenario time the paced segment had reached, between the last action and the next one; it defaults to the last
+   * action. Returns the frame to write, if any.
    */
-  cancel(): Out | undefined {
+  cancel(atMs = this.atMs): Out | undefined {
     const o = this.open; if (!o || !this.producer.connected) return undefined;
-    const out = this.producer.shutdown('plugin-shutdown', this.ns(this.atMs)); if (!out) return undefined;
-    this.line(this.atMs, 'server', {message: out.message}); o.record.closedBy = 'end'; o.record.mappings = o.client.mappings; this.open = undefined;
+    const at = Math.max(this.atMs, Math.floor(atMs));
+    const out = this.producer.shutdown('plugin-shutdown', this.ns(at)); if (!out) return undefined;
+    this.line(at, 'server', {message: out.message}); o.record.closedBy = 'end'; o.record.mappings = o.client.mappings; this.open = undefined;
     return out;
   }
   /** The result so far: the transcript, the connections, the ledger and the producer store. */

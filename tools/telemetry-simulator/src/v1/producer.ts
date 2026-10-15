@@ -46,6 +46,8 @@ interface Connection {
   /** The hello read so far, at most one 4,096-byte frame and its prefix. */
   helloBytes: Uint8Array;
   lastCapture: bigint; lastStateNs: bigint; pendingDueNs?: bigint; lastProbe: bigint;
+  /** The highest eventSeq written on this connection; starts at the checkpoint's acknowledged point. */
+  sentThrough: bigint;
 }
 
 /** The producer of one plugin session. Store misuse is an invariant violation and throws (the native retires the session). */
@@ -58,10 +60,15 @@ export class V1Producer {
     this.store = new EventStore(adapter.config.startEventSeq);
   }
   get connected(): boolean { return this.conn?.phase === 'live'; }
+  /** A live durable connection's accepted ACK point and the highest eventSeq written to it; undefined otherwise. */
+  ackState(): {acked: bigint; sent: bigint} | undefined {
+    const c = this.conn; if (c?.phase !== 'live' || !c.durable) return undefined;
+    return {acked: BigInt(c.validator!.ackedThroughEventSeq ?? '0'), sent: c.sentThrough};
+  }
   /** A client opened the pipe. One client per endpoint; the caller refuses a second one. */
   open(): void {
     if (this.conn) throw new Error('A client is already connected');
-    this.conn = {phase: 'hello', durable: false, decoder: new FrameDecoder('client'), helloBytes: new Uint8Array(0), lastCapture: 0n, lastStateNs: 0n, lastProbe: 0n};
+    this.conn = {phase: 'hello', durable: false, decoder: new FrameDecoder('client'), helloBytes: new Uint8Array(0), sentThrough: 0n, lastCapture: 0n, lastStateNs: 0n, lastProbe: 0n};
   }
   /** The client is gone: the gate closes first, then a durable connection starts the store's retention window. */
   close(nowNs: bigint): void {
@@ -168,7 +175,7 @@ export class V1Producer {
     this.adapter.channel.gate = c.durable ? 'durable' : 'live';
     const {data, oldest} = this.stateData();
     out.push(this.envelope('checkpoint', {boundarySeq: (this.seq + 1n).toString(), ...data}, nowNs, [oldest]));
-    c.validator.checkpoint(data.status.delivery.ackedThroughEventSeq); c.lastStateNs = BigInt(out.at(-1)!.message.capture.monotonicNs);
+    c.validator.checkpoint(data.status.delivery.ackedThroughEventSeq); c.sentThrough = BigInt(data.status.delivery.ackedThroughEventSeq); c.lastStateNs = BigInt(out.at(-1)!.message.capture.monotonicNs);
     return out;
   }
   /** Fault-injection control: the next written message skips one `seq`, which a consumer accepts (§5). */
@@ -180,7 +187,10 @@ export class V1Producer {
     const c = this.conn;
     if (c?.phase === 'live' && c.durable) {
       const item = this.store.nextOutbound();
-      if (item) { const out = this.outbound(item, nowNs); c.validator!.sent((item.gap ? item.range.last : item.event.eventSeq).toString()); return out; }
+      if (item) {
+        const out = this.outbound(item, nowNs), last = item.gap ? item.range.last : item.event.eventSeq;
+        c.validator!.sent(last.toString()); if (last > c.sentThrough) c.sentThrough = last; return out;
+      }
     }
     return this.store.exhausted ? this.end('sequence-exhausted', nowNs) : undefined;
   }

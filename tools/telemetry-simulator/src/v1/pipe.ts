@@ -1,29 +1,21 @@
-// Serves the protocol v1 simulator on a real Windows named pipe, and the scripted pipe client (ET-005b).
+// Serves the protocol v1 simulator on a real Windows named pipe in LOCKSTEP mode, and the scripted pipe client (ET-005b).
 //
-// The server runs the replay driver (replay.ts) and answers its transport effects with real I/O in lockstep: after each
+// The lockstep server runs the replay driver (replay.ts) and answers its transport effects with real I/O: after each
 // server frame it waits for exactly the bytes the scenario's scripted client sends in reply, compares them and only then
 // lets the producer process them. The producer's source clock is scenario time, so the server's transcript is
 // byte-identical to `replay-v1` by construction; real time only paces connected segments (offline segments are
-// fast-forwarded). The client is built from the same ScriptedClient, i.e. only the ET-002b FrameDecoder, V1Consumer,
-// DurableAckCursor and computeClockMapping plus the in-memory CommitLedger.
-//
-// Node is only a synthetic test server: it has no protected DACL, no peer authentication and no discovery record or
-// service policy. Native endpoint security belongs to ET-004b and is not evidenced here.
-import net, {type Socket} from 'node:net';
-import {randomUUID} from 'node:crypto';
+// fast-forwarded). Only the scripted client (`runV1PipeClient`) can follow it; any other consumer, such as the desktop
+// telemetry service, uses the reactive mode in reactive.ts.
+import {type Socket} from 'node:net';
+import net from 'node:net';
 import {V1_LIMITS, encodeFrame, type ServerMessage} from '../../../../packages/contracts/src/protocol-v1';
 import {type DurableAckCursor} from '../../../../packages/contracts/src/protocol-v1-delivery';
 import {CommitLedger, ScriptedClient, type AfterMessage, type ClientPolicy, type MappingResult} from './client';
 import {helloFaultBytes, hex, liveFaultBytes, type HelloFault} from './faults';
+import {Cancelled, Link, PipeHost, REPLY_DEADLINE_MS, TEST_PIPE_PATTERN_V1, bounded} from './pipe-host';
 import {V1Driver, foreignSession, orderedLines, replayV1, scenarioSource, type ClientAction, type ClosedBy, type Effect, type ReplayResult} from './replay';
 
-export const TEST_PIPE_PREFIX_V1 = '\\\\.\\pipe\\ETS2Telemetry-SYNTHETIC-TEST-v1-';
-/** The only endpoints the simulator serves or connects to: `\\.\pipe\ETS2Telemetry-SYNTHETIC-TEST-v1-{pid}-{uuid}`. */
-export const TEST_PIPE_PATTERN_V1 = /^\\\\\.\\pipe\\ETS2Telemetry-SYNTHETIC-TEST-v1-[1-9][0-9]*-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-/** Liveness bound for a cooperative client's scripted reply, connection or close; only a broken client reaches it. */
-export const REPLY_DEADLINE_MS = 5_000;
-// Client bytes the script has not consumed yet; a scripted client never has more than a few frames in flight.
-const MAX_INBOUND_BYTES = 65_536;
+export {REPLY_DEADLINE_MS, TEST_PIPE_PATTERN_V1, TEST_PIPE_PREFIX_V1} from './pipe-host';
 
 export interface V1ServeOptions {
   /** Real milliseconds per scenario millisecond while a client is connected; 0 replays without pacing. Default 1. */
@@ -36,126 +28,87 @@ export interface V1ServeOptions {
   replyDeadlineMs?: number;
   signal?: AbortSignal;
 }
-export interface V1ServeReport {result: ReplayResult; cancelled: boolean; refusedClients: number}
-export interface V1PipeServer {endpoint: string; done: Promise<V1ServeReport>; stop(): Promise<void>}
-
-class Cancelled extends Error {}
-function bounded(value: number | undefined, fallback: number, min: number, max: number, name: string, integer = true): number {
-  const v = value ?? fallback;
-  if (!Number.isFinite(v) || v < min || v > max || (integer && !Number.isSafeInteger(v))) throw new Error(`Invalid ${name}`);
-  return v;
-}
-
-/** One accepted pipe connection and its unread client bytes. */
-class Link {
-  inbound = Buffer.alloc(0); ended = false; closed = false; pendingWrites = 0; writeError?: Error;
-  /** Expected to end (closed, stalled or failing); a client arriving meanwhile is queued, not refused. */
-  ending = false; overflow = false;
-  constructor(readonly socket: Socket, changed: () => void) {
-    socket.on('data', chunk => {
-      this.inbound = Buffer.concat([this.inbound, chunk]);
-      if (this.inbound.length > MAX_INBOUND_BYTES) { this.overflow = true; socket.pause(); }
-      changed();
-    });
-    socket.on('end', () => { this.ended = true; changed(); });
-    socket.on('close', () => { this.closed = true; changed(); });
-    // A departed client is observed through close and failed writes.
-    socket.on('error', () => undefined);
-  }
-}
+/**
+ * A paced server write: its scenario offset from the connection's hello (`scheduledMs`, scaled) and the real time it was
+ * written at (`actualMs`), both measured from the hello's receipt on the server. Pacing makes actual ≥ scheduled.
+ */
+export interface PacedWrite {connection: number; atMs: number; scheduledMs: number; actualMs: number}
+export interface V1ServeReport {result: ReplayResult; cancelled: boolean; refusedClients: number; writes: PacedWrite[]}
+export interface V1PipeServer {endpoint: string; done: Promise<V1ServeReport>; stop: () => Promise<void>}
 
 /** The lockstep server of one scenario run. */
-class Server {
-  readonly endpoint = TEST_PIPE_PREFIX_V1 + String(process.pid) + '-' + randomUUID();
-  private readonly server = net.createServer(socket => this.connection(socket));
-  private readonly links = new Set<Link>(); private pending: Link[] = []; private active?: Link;
-  private refused = 0; private refusalsExpected = 0; private readonly listeners = new Set<() => void>();
-  private stopError?: Error; private stopping = false; private failure?: Error;
-  private atMs = 0; private segment?: {realMs: number; atMs: number}; private helloDeadline?: number;
+class Server extends PipeHost {
+  // Every arrival is queued in order. The script decides what each one is: the next connection, or a second client to
+  // refuse while the open one continues (§4). A client never makes the next connection before its previous one ended,
+  // so the order is the script's order whatever the pacing.
+  private pending: Link[] = []; private active?: Link; private refused = 0; private connections = 0;
+  private atMs = 0; private target = 0; private segment?: {realMs: number; atMs: number}; private helloDeadline?: number;
+  private readonly writes: PacedWrite[] = [];
   private readonly scale: number; private readonly helloMs: number; private readonly writeMs: number; private readonly replyMs: number;
   constructor(private readonly driver: V1Driver, options: V1ServeOptions) {
+    super();
     this.scale = bounded(options.scale, 1, 0, 10, 'scale', false);
     this.helloMs = bounded(options.helloTimeoutMs, V1_LIMITS.helloTimeoutMs, 1, V1_LIMITS.helloTimeoutMs, 'hello timeout');
     this.writeMs = bounded(options.writeDeadlineMs, V1_LIMITS.writeDeadlineMs, 1, V1_LIMITS.writeDeadlineMs, 'write deadline');
     this.replyMs = bounded(options.replyDeadlineMs, REPLY_DEADLINE_MS, 1, 60_000, 'reply deadline');
   }
-  async listen(): Promise<void> {
-    await new Promise<void>((resolve, reject) => { this.server.once('error', reject); this.server.listen(this.endpoint, () => { this.server.removeListener('error', reject); resolve(); }); });
-    this.server.on('error', error => { this.failure ??= error; this.changed(); });
-  }
-  private changed(): void { for (const check of [...this.listeners]) check(); }
-  /**
-   * Resolves true once `ready` holds, or false at the deadline. A deadline is judged only after one more I/O poll
-   * (setImmediate after the timer), so a completion that was already queued when a starved process woke still counts.
-   */
-  private wait(ready: () => boolean, ms: number, abortable = true): Promise<boolean> {
-    return new Promise<boolean>((resolve, reject) => {
-      const finish = (f: () => void) => { clearTimeout(timer); this.listeners.delete(check); f(); };
-      const check = () => {
-        if (abortable && this.stopError) finish(() => reject(this.stopError!));
-        else if (this.failure) finish(() => reject(this.failure!));
-        else if (ready()) finish(() => resolve(true));
-      };
-      this.listeners.add(check);
-      const timer = setTimeout(() => setImmediate(() => { if (!this.listeners.has(check)) return; check(); if (this.listeners.has(check)) finish(() => resolve(false)); }), ms);
-      check();
-    });
-  }
-  private connection(socket: Socket): void {
-    if (this.stopping) { socket.destroy(); return; }
-    const link = new Link(socket, () => this.changed()); this.links.add(link);
-    // One client at a time: a second client is refused while the first continues (§4).
-    if (this.active && !this.active.ending) { socket.destroy(); this.refused++; }
-    else this.pending.push(link);
-    this.changed();
-  }
+  protected connection(link: Link): void { this.pending.push(link); }
   private drained(link: Link): void {
     if (link.overflow || link.inbound.length) throw new Error('The client sent bytes its script does not contain');
+  }
+  /** The scenario time a paced segment has reached: between the last action and the one it is waiting for. */
+  private progressAtMs(): number {
+    if (!this.segment || this.scale === 0) return this.atMs;
+    return Math.min(this.target, Math.max(this.atMs, this.segment.atMs + (performance.now() - this.segment.realMs) / this.scale));
   }
 
   private async effect(e: Effect): Promise<void> {
     switch (e.kind) {
       case 'time': {
-        this.atMs = e.atMs;
+        this.target = e.atMs;
         // Connected segments are paced from their start, so wait and write latency do not accumulate.
         if (this.segment && this.scale > 0) {
           const delay = this.segment.realMs + (e.atMs - this.segment.atMs) * this.scale - performance.now();
           if (delay > 0) await this.wait(() => false, delay);
         }
+        this.atMs = e.atMs;
         return;
       }
       case 'accept':
         if (!await this.wait(() => this.pending.length > 0, this.replyMs)) throw new Error(`No client connected for connection ${e.connection}`);
-        this.active = this.pending.shift(); this.helloDeadline = performance.now() + this.helloMs; return;
+        this.active = this.pending.shift(); this.connections = e.connection; this.helloDeadline = performance.now() + this.helloMs; return;
       case 'expect': {
         const link = this.active!, n = e.bytes.length, hello = this.helloDeadline !== undefined;
         const ms = hello ? Math.max(0, this.helloDeadline! - performance.now()) : this.replyMs;
-        if (!await this.wait(() => link.inbound.length >= n || link.ended || link.closed || link.overflow, ms)) throw new Error(hello ? 'Hello deadline exceeded' : 'Client reply deadline exceeded');
+        if (!await this.wait(() => link.inbound.length >= n || link.gone || link.overflow, ms)) throw new Error(hello ? 'Hello deadline exceeded' : 'Client reply deadline exceeded');
         if (link.inbound.length < n) throw new Error('The client left before sending its scripted bytes');
         if (!link.inbound.subarray(0, n).equals(e.bytes)) throw new Error('Client bytes differ from its script');
         link.inbound = link.inbound.subarray(n);
         if (hello) { this.helloDeadline = undefined; this.segment = {realMs: performance.now(), atMs: this.atMs}; }
         if (e.endsInput) {
-          if (!await this.wait(() => link.ended || link.closed, this.replyMs)) throw new Error('The client did not end its side');
+          if (!await this.wait(() => link.gone, this.replyMs)) throw new Error('The client did not end its side');
           this.drained(link);
         }
         return;
       }
       case 'helloTimeout': {
         const link = this.active!;
-        if (await this.wait(() => link.inbound.length > 0 || link.ended || link.closed, Math.max(0, this.helloDeadline! - performance.now()))) throw new Error('A silent client sent bytes or left before the hello deadline');
+        if (await this.wait(() => link.inbound.length > 0 || link.gone, Math.max(0, this.helloDeadline! - performance.now()))) throw new Error('A silent client sent bytes or left before the hello deadline');
         this.helloDeadline = undefined; return;
       }
       case 'write': {
-        const link = this.active!; link.pendingWrites++;
-        link.socket.write(e.bytes, error => { link.pendingWrites--; if (error) link.writeError ??= error; this.changed(); });
+        const link = this.active!;
+        if (e.message && this.segment) this.writes.push({connection: this.connections, atMs: e.atMs, scheduledMs: (e.atMs - this.segment.atMs) * this.scale, actualMs: performance.now() - this.segment.realMs});
+        link.write(e.bytes, () => this.changed());
         return;
       }
-      case 'stall': this.active!.ending = true; return;
-      case 'secondClient':
-        this.refusalsExpected++;
-        if (!await this.wait(() => this.refused >= this.refusalsExpected, this.replyMs)) throw new Error('No second client was refused');
+      case 'stall': return;
+      case 'secondClient': {
+        // The next arrival is the second client: refused without a byte; the open connection is not touched.
+        if (!await this.wait(() => this.pending.length > 0, this.replyMs)) throw new Error('No second client arrived');
+        this.pending.shift()!.socket.destroy(); this.refused++;
         return;
+      }
       case 'flush': {
         const link = this.active; if (!link) return;
         const done = await this.wait(() => link.pendingWrites === 0 || link.writeError !== undefined || link.closed, this.writeMs);
@@ -165,9 +118,9 @@ class Server {
         return;
       }
       case 'close': {
-        const link = this.active!; this.active = undefined; this.segment = undefined; this.helloDeadline = undefined; link.ending = true;
+        const link = this.active!; this.active = undefined; this.segment = undefined; this.helloDeadline = undefined;
         if (e.by === 'client') {
-          if (!await this.wait(() => link.ended || link.closed, this.replyMs)) throw new Error('The client did not close its connection');
+          if (!await this.wait(() => link.gone, this.replyMs)) throw new Error('The client did not close its connection');
           this.drained(link); link.socket.destroy();
         } else if (e.graceful) {
           // end() returns only after the client has read every written byte (Windows FlushFileBuffers in libuv).
@@ -183,47 +136,40 @@ class Server {
     try {
       for (let r = run.next(); ; r = run.next()) {
         if (this.stopError) throw this.stopError;
-        if (r.done) { await this.finish(); return {result: r.value, cancelled: false, refusedClients: this.refused}; }
+        if (r.done) { await this.finish(); return {result: r.value, cancelled: false, refusedClients: this.refused, writes: this.writes}; }
         await this.effect(r.value);
       }
     } catch (error) {
       if (!(error instanceof Cancelled)) throw error;
       await this.cancel();
-      return {result: this.driver.result(), cancelled: true, refusedClients: this.refused};
+      return {result: this.driver.result(), cancelled: true, refusedClients: this.refused, writes: this.writes};
     } finally { await this.teardown(); }
   }
   private async finish(): Promise<void> {
     const link = this.active;
-    if (link) { this.active = undefined; link.ending = true; this.drained(link); link.socket.end(); }
+    if (link) { this.active = undefined; this.drained(link); link.socket.end(); }
     if (this.pending.length) throw new Error('A client connected that the scenario does not contain');
     for (const l of this.links) if (!await this.wait(() => l.closed, this.replyMs)) throw new Error('A client did not close its connection');
   }
   private async cancel(): Promise<void> {
     this.stopping = true;
-    const out = this.driver.cancel(), link = this.active;
+    // `end` carries the scenario time the paced segment reached, never a later step's time.
+    const out = this.driver.cancel(this.progressAtMs()), link = this.active;
     if (!out || !link) return;
-    link.pendingWrites++;
-    link.socket.write(out.frame, error => { link.pendingWrites--; if (error) link.writeError ??= error; this.changed(); });
+    link.write(out.frame, () => this.changed());
     // Best effort within the write deadline; never waits for an ACK.
     await this.wait(() => link.pendingWrites === 0 || link.closed, this.writeMs, false).catch(() => false);
     link.socket.end();
     await this.wait(() => link.closed, this.writeMs, false).catch(() => false);
   }
-  private async teardown(): Promise<void> {
-    this.stopping = true;
-    for (const l of this.links) l.socket.destroy();
-    await new Promise<void>(resolve => this.server.close(() => resolve()));
-  }
-  stop(): void { this.stopError ??= new Cancelled('Simulator pipe cancelled'); this.changed(); }
 }
 
 /**
- * Serves one scenario on a new synthetic endpoint. The scenario's transport steps script the client: a client that
- * deviates (other bytes, other timing of connections) fails the run visibly. Faults injected by the scenario close
+ * Serves one scenario on a new synthetic endpoint in lockstep mode. The scenario's transport steps script the client: a
+ * client that deviates (other bytes, other connections) fails the run visibly. Faults injected by the scenario close
  * connections as the native endpoint would, without an error frame.
  */
 export async function serveV1(input: unknown, options: V1ServeOptions = {}): Promise<V1PipeServer> {
-  if (process.platform !== 'win32') throw new Error('The v1 pipe simulator requires actual Windows named pipes');
   const server = new Server(new V1Driver(input), options);
   await server.listen();
   const done = server.run(); void done.catch(() => undefined);

@@ -12,6 +12,7 @@ import {V1Consumer} from '../../packages/contracts/src/protocol-v1-delivery';
 import {readFixtureFile} from '../../tools/telemetry-simulator/src/fixture-file';
 import {checkStateRate, checkV1Cadence} from '../../tools/telemetry-simulator/src/v1/cadence';
 import {TEST_PIPE_PATTERN_V1, TEST_PIPE_PREFIX_V1, clientPlan, pipeDifferences, pipeRoundTrip, runV1PipeClient, serveV1} from '../../tools/telemetry-simulator/src/v1/pipe';
+import {runIndependentClient} from '../../tools/telemetry-simulator/src/v1/reactive';
 import {replayV1, transcriptLines} from '../../tools/telemetry-simulator/src/v1/replay';
 import {seededId} from '../../tools/telemetry-simulator/src/v1/source';
 import {expectedPath, manifest, mismatches, scenarioPath, type Expected} from '../shared/simulator-v1-expected';
@@ -52,9 +53,10 @@ async function buildCli(directory: string): Promise<string> {
 describe('simulator v1 over an actual Windows named pipe', () => {
   // Every corpus scenario, unpaced: the served transcript is byte-identical to the replay, the scripted client wrote and
   // applied exactly the replayed bytes and messages, its ledger equals the replay's, and the served run meets the
-  // scenario's hand-written expectation. A 200 ms hello deadline is injected for the silent-client attempt.
+  // scenario's hand-written expectation. Only the scenario with a silent client gets a shorter, 200 ms hello deadline;
+  // every other connection keeps the 5,000 ms default.
   for (const id of manifest()) it(`serves ${id} exactly as replayed and as expected`, async () => {
-    const run = await pipeRoundTrip(load(id), {scale: 0, helloTimeoutMs: 200});
+    const run = await pipeRoundTrip(load(id), {scale: 0, ...(id === 'client-hello-faults' ? {helloTimeoutMs: 200} : {})});
     expect(run.differences).toEqual([]);
     expect(run.served.cancelled).toBe(false);
     expect(mismatches(run.served.result, JSON.parse(readFileSync(expectedPath(id), 'utf8')) as Expected)).toEqual([]);
@@ -63,9 +65,12 @@ describe('simulator v1 over an actual Windows named pipe', () => {
   it('paces connected segments in real time within the smoke cadence, at no more than 20 state messages per second', async () => {
     const run = await pipeRoundTrip(load('pipe-reconnect'), {scale: 1});
     expect(run.differences).toEqual([]);
-    // checkCadence throws outside [expected / 2, expected + 1,000 ms]; the first measurable gap is the 50 ms snapshot.
-    const cadence = checkV1Cadence(run.served.result.transcript, new Map(run.client.connections.map(c => [c.connection, c.arrivalsMs])));
+    // No message is written before its schedule (server clock, by construction); the first measurable gap, the 50 ms
+    // snapshot, arrives no more than 1,000 ms late (client clock).
+    const cadence = checkV1Cadence(run.served.writes, run.served.result.transcript, new Map(run.client.connections.map(c => [c.connection, c.arrivalsMs])));
     expect(cadence?.expectedMs).toBe(50);
+    expect(run.served.writes.length).toBe(run.served.result.transcript.filter(l => l.direction === 'server').length);
+    for (const w of run.served.writes) expect(w.actualMs).toBeGreaterThanOrEqual(w.scheduledMs);
     expect(BigInt(checkStateRate(run.served.result.transcript)!)).toBeGreaterThanOrEqual(50_000_000n);
   }, 30_000);
 
@@ -121,6 +126,7 @@ describe('simulator v1 over an actual Windows named pipe', () => {
     const s = inline([], [{atMs: 0, action: 'clientFault', fault: 'helloTimeout'}, {atMs: 10, action: 'connect', client: {durable: true}}, {atMs: 20, action: 'disconnect'}]);
     const server = await serveV1(s, {scale: 0, helloTimeoutMs: 300});
     try {
+      // The server measures its deadline on performance.now() from accepting the connection, which follows `start`.
       const start = performance.now(), silent = rawClient(server.endpoint);
       expect(await silent.closed).toEqual({bytes: 0, messages: []});
       expect(performance.now() - start).toBeGreaterThanOrEqual(300);
@@ -147,6 +153,26 @@ describe('simulator v1 over an actual Windows named pipe', () => {
     } finally { await server.stop(); }
   }, 30_000);
 
+  it('paces a stalled reader: the next connection queues until the write deadline ends the stalled one', async () => {
+    const run = await pipeRoundTrip(load('pipe-stalled-reader'), {scale: 1});
+    expect(run.differences).toEqual([]);
+    expect(run.served.result.connections.map(c => c.closedBy)).toEqual(['writeDeadline', 'disconnect']);
+    expect(mismatches(run.served.result, JSON.parse(readFileSync(expectedPath('pipe-stalled-reader'), 'utf8')) as Expected)).toEqual([]);
+  }, 30_000);
+
+  it('stamps the end of a cancelled connection at the paced progress, not at the next step', async () => {
+    const s = inline([{atMs: 60_000, action: 'lifecycle', event: 'simulation.started'}], [{atMs: 0, action: 'connect', client: {durable: true}}, {atMs: 61_000, action: 'disconnect'}]);
+    const server = await serveV1(s, {scale: 1});
+    const client = rawClient(server.endpoint, hello());
+    await until(() => client.messages.length === 2);
+    await server.stop();
+    const end = (await client.closed).messages[2], capture = BigInt(end.capture.monotonicNs) - 1_000_000_000_000n;
+    expect(end.kind).toBe('end');
+    // The segment reached some point after the checkpoint but far before the step at 60,000 ms.
+    expect(capture).toBeGreaterThanOrEqual(0n);
+    expect(capture).toBeLessThan(30_000_000_000n);
+  }, 30_000);
+
   it('fails visibly when the client deviates from its script', async () => {
     const server = await serveV1(load('normal-delivery'), {scale: 0});
     try {
@@ -159,12 +185,12 @@ describe('simulator v1 over an actual Windows named pipe', () => {
 });
 
 describe('simulator v1 pipe CLI', () => {
-  it('serves in one process and checks the scripted client of another; smoke-v1 reports the same transcript', async () => {
+  it('serves in lockstep in one process for the scripted client of another; smoke-v1 reports the same transcript', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'ETS2Telemetry-SYNTHETIC-TEST-v1-pipe-cli-'));
     try {
       const cli = await buildCli(directory), path = scenarioPath('pipe-reconnect'), replay = replayV1(load('pipe-reconnect'));
       const hash = createHash('sha256').update(transcriptLines(replay).map(l => `${l}\n`).join('')).digest('hex');
-      const child = spawn(process.execPath, [cli, 'serve-v1', path, '--scale', '0'], {windowsHide: true});
+      const child = spawn(process.execPath, [cli, 'serve-v1', path, '--scale', '0', '--lockstep'], {windowsHide: true});
       let stdout = '', stderr = '';
       child.stdout.on('data', (c: Buffer) => { stdout += c.toString('utf8'); }); child.stderr.on('data', (c: Buffer) => { stderr += c.toString('utf8'); });
       const exited = new Promise<number | null>(r => child.on('exit', code => r(code)));
@@ -173,15 +199,38 @@ describe('simulator v1 pipe CLI', () => {
       const client = await runV1PipeClient(endpoint, clientPlan(replay), {scale: 0});
       expect([await exited, stderr]).toEqual([0, '']);
       const report = JSON.parse(stdout.trim().split('\n')[1]) as {transcriptSha256: string; refusedClients: number; cancelled: boolean};
-      expect(report).toMatchObject({transcriptSha256: hash, refusedClients: 1, cancelled: false});
+      expect(report).toMatchObject({mode: 'lockstep', transcriptSha256: hash, refusedClients: 1, cancelled: false});
       // The served transcript hashes equal, so the replay stands for it in the client comparison.
       expect(pipeDifferences(replay, replay, client)).toEqual([]);
       const smoke = spawnSync(process.execPath, [cli, 'smoke-v1', path], {encoding: 'utf8', timeout: 20_000, maxBuffer: 1024 * 1024, windowsHide: true});
       expect([smoke.status, smoke.stderr]).toEqual([0, '']);
-      expect(JSON.parse(smoke.stdout)).toMatchObject({origin: 'synthetic', scenario: 'pipe-reconnect', transcriptSha256: hash, connections: 2, refusedClients: 1, history: false,
+      expect(JSON.parse(smoke.stdout)).toMatchObject({origin: 'synthetic', mode: 'lockstep', scenario: 'pipe-reconnect', transcriptSha256: hash, connections: 2, refusedClients: 1, history: false,
         ledger: replay.ledger, cadence: {expectedMs: 50}});
       const usage = spawnSync(process.execPath, [cli, 'smoke-v1', path, '--scale'], {encoding: 'utf8', timeout: 10_000, windowsHide: true});
       expect([usage.status, usage.stdout]).toEqual([1, '']);
+      const wrongFlag = spawnSync(process.execPath, [cli, 'serve-v1', path, '--reactive'], {encoding: 'utf8', timeout: 10_000, windowsHide: true});
+      expect([wrongFlag.status, wrongFlag.stdout]).toEqual([1, '']);
+    } finally { rmSync(directory, {recursive: true, force: true}); }
+  }, 60_000);
+
+  it('serves reactively by default to an independent consumer in another process; smoke-v1 --reactive checks it', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ETS2Telemetry-SYNTHETIC-TEST-v1-reactive-cli-'));
+    try {
+      const cli = await buildCli(directory), path = scenarioPath('reconnect-lost-ack'), input = load('reconnect-lost-ack'), replay = replayV1(input);
+      const child = spawn(process.execPath, [cli, 'serve-v1', path], {windowsHide: true});
+      let stdout = '', stderr = '';
+      child.stdout.on('data', (c: Buffer) => { stdout += c.toString('utf8'); }); child.stderr.on('data', (c: Buffer) => { stderr += c.toString('utf8'); });
+      const exited = new Promise<number | null>(r => child.on('exit', code => r(code)));
+      await until(() => stdout.includes('\n'), 20_000);
+      const first = JSON.parse(stdout.split('\n')[0]) as {endpoint: string; mode: string};
+      expect(first.mode).toBe('reactive');
+      const client = await runIndependentClient(first.endpoint, input, {seed: 3});
+      expect([await exited, stderr]).toEqual([0, '']);
+      expect(client.ledger).toEqual(replay.ledger);
+      expect(JSON.parse(stdout.trim().split('\n')[1])).toMatchObject({mode: 'reactive', scenario: 'reconnect-lost-ack', cancelled: false, refusedClients: 0});
+      const smoke = spawnSync(process.execPath, [cli, 'smoke-v1', scenarioPath('pipe-reconnect'), '--reactive'], {encoding: 'utf8', timeout: 30_000, maxBuffer: 1024 * 1024, windowsHide: true});
+      expect([smoke.status, smoke.stderr]).toEqual([0, '']);
+      expect(JSON.parse(smoke.stdout)).toMatchObject({mode: 'reactive', scenario: 'pipe-reconnect', connections: 2, ledger: replayV1(load('pipe-reconnect')).ledger});
     } finally { rmSync(directory, {recursive: true, force: true}); }
   }, 60_000);
 });
