@@ -478,3 +478,18 @@ it('keeps the draft while a saved placement arrives during editing, and cancels 
   overlay.setLayout('hud');
   expect(overlay.editState()).toEqual({active: false}); expect(tracked.state.visible).toBe(false); assertInvariant(tracked, true);
 });
+it('places a restarted overlay at its saved non-default placement in driving mode without changing the zoom it was created with', () => {
+  // As after a restart: the window was created at the saved scale 1.5 and zoom 1.5. The cluster is then 660 x 330 DIP;
+  // the 960 x 540 client leaves 960 - 32 - 660 = 268 by 540 - 32 - 330 = 178 DIP free, and half of each is 134 and 89:
+  // x = -960 + 16 + 134 = -810 and y = 0 + 16 + 89 = 105.
+  const tracked = trackedController('cluster', {x: 0.5, y: 0.5, scale: 1.5}), {overlay, window} = tracked;
+  overlay.loaded(true); overlay.update(tracked.current);
+  expect(window.setBounds.mock.calls).toEqual([[{x: -810, y: 105, width: 660, height: 330}]]);
+  expect(window.showInactive).toHaveBeenCalledOnce(); assertInvariant(tracked, false);
+  expect(window.webContents.setZoomFactor).not.toHaveBeenCalled();
+  // A reloaded document gets the saved zoom again; the default placement returns the zoom to 1.
+  overlay.restoreZoom(); expect(window.webContents.setZoomFactor.mock.calls).toEqual([[1.5]]);
+  overlay.setLayout('cluster');
+  expect(window.webContents.setZoomFactor.mock.calls).toEqual([[1.5], [1]]);
+  expect(window.setBounds).toHaveBeenLastCalledWith({x: -944, y: 304, width: 440, height: 220});
+});

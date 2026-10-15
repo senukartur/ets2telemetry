@@ -205,7 +205,9 @@ function runApplication(profileError: unknown): void {
   function presentTray(immediate = false): void {
     trayPresenter?.update({health, exiting: lifecycle.exiting, source: {selection: lastLive.selection, status: lastLive.status}}, immediate);
   }
-  function retireOverlay(): void {cancelOverlayEdit('overlay-retired'); overlayPort = undefined; overlayController?.loaded(false); overlaySubscriptions.close();}
+  // The overlay is marked not loaded first, so an edit in progress hides it before the edit is cancelled; that order avoids
+  // a needless show on the retired document.
+  function retireOverlay(): void {overlayPort = undefined; overlayController?.loaded(false); cancelOverlayEdit('overlay-retired'); overlaySubscriptions.close();}
   function retireLive(): void {freshness.close(); closeUpstream(); retireOverlay(); dashboardSubscriptions.close(); dashboardPort = undefined;}
   function stop(): void {retireLive(); supervisor.stop();}
   function fail(code: string, error?: unknown): void {retireLive(); supervisor.fail(code, error);}
@@ -326,6 +328,9 @@ function runApplication(profileError: unknown): void {
     created.webContents.setWindowOpenHandler(() => ({action: 'deny'}));
     created.webContents.on('will-navigate', event => event.preventDefault());
     created.on('focus', focusChanged); created.on('blur', focusChanged);
+    // Minimizing the dashboard ends an edit without saving, as closing it to the tray does: edit mode suppresses the
+    // driving overlay, which would otherwise stay hidden over the game until the dashboard came back (ET-012b M5).
+    created.on('minimize', () => {if (window === created) cancelOverlayEdit('dashboard-minimized');});
     const retireDocument = () => {if (window === created) retireDashboard();};
     created.webContents.on('did-start-loading', retireDocument);
     // As for the overlay: a subscription made before commit belongs to the replaced document. Left in place,

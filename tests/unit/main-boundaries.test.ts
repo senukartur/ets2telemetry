@@ -1287,13 +1287,14 @@ it('keeps the previous placement when the edit save fails and reports the refusa
   expect(handlers.get('app:get-state')!(trusted())).toMatchObject({overlayEdit: {active: false}, settings: {overlay: DEFAULT_OVERLAY, saveError: 'SETTINGS_WRITE_FAILED'}});
   expect(overlayContents.setZoomFactor).toHaveBeenLastCalledWith(1); expect(interactive()).toEqual(CLICK_THROUGH);
 });
-it.each(['cancel', 'escape', 'dashboard-closed', 'dashboard-reload', 'dashboard-crash', 'overlay-reload', 'overlay-crash', 'exit'])(
+it.each(['cancel', 'escape', 'dashboard-closed', 'dashboard-minimized', 'dashboard-reload', 'dashboard-crash', 'overlay-reload', 'overlay-crash', 'exit'])(
   'discards the draft without writing on %s', async reason => {
     await editableOverlay(); await edit('overlay-edit:begin', trusted()); await edit('overlay-edit:set-scale', trusted(), 1.5);
     expect(interactive()).toEqual(EDITABLE);
     if (reason === 'cancel') await expect(edit('overlay-edit:finish', trusted(), 'cancel')).resolves.toEqual(settingsView);
     else if (reason === 'escape') overlayContents.emit('before-input-event', {preventDefault: vi.fn()}, {type: 'keyDown', key: 'Escape'});
     else if (reason === 'dashboard-closed') closeDashboard();
+    else if (reason === 'dashboard-minimized') {windows[0].minimized = true; windows[0].emit('minimize');}
     else if (reason === 'dashboard-reload') contents.emit('did-start-loading');
     else if (reason === 'dashboard-crash') contents.emit('render-process-gone', {}, {reason: 'crashed'});
     else if (reason === 'overlay-reload') overlayContents.emit('did-start-loading');
@@ -1306,6 +1307,24 @@ it.each(['cancel', 'escape', 'dashboard-closed', 'dashboard-reload', 'dashboard-
     // The saved scale applies again.
     expect(overlayContents.setZoomFactor).toHaveBeenLastCalledWith(1);
   });
+it('retires a reloading overlay before cancelling its edit, so the retired document is never shown for driving', async () => {
+  await editableOverlay(); await edit('overlay-edit:begin', trusted());
+  // The game comes to the front while editing: the edit overlay hides; driving would show it once edit mode ends.
+  renew(true); expect(handlers.get('app:get-state')!(trusted())).toMatchObject({overlayEdit: {placement: 'not-foreground'}});
+  windows[1].showInactive.mockClear();
+  overlayContents.emit('did-start-loading');
+  expect(windows[1].showInactive).not.toHaveBeenCalled(); expect(interactive()).toEqual(CLICK_THROUGH);
+  expect(editPushes().at(-1)).toEqual({active: false}); expect(overlayWrite).not.toHaveBeenCalled();
+});
+it('returns to driving after the dashboard is minimized during an edit, so the overlay shows over the game', async () => {
+  await editableOverlay(); await edit('overlay-edit:begin', trusted());
+  windows[0].focused = false; windows[0].minimized = true; windows[0].emit('minimize');
+  expect(editPushes().at(-1)).toEqual({active: false}); expect(overlayWrite).not.toHaveBeenCalled();
+  windows[1].showInactive.mockClear(); renew(true);
+  expect(windows[1].showInactive).toHaveBeenCalledOnce(); expect(interactive()).toEqual(CLICK_THROUGH);
+  // A minimize while not editing changes nothing.
+  const pushes = editPushes().length; windows[0].emit('minimize'); expect(editPushes()).toHaveLength(pushes);
+});
 it('prevents every key and the system menu on the overlay and saves with Enter only in edit mode', async () => {
   await editableOverlay();
   const key = (input: {type: string; key: string}) => {const event = {preventDefault: vi.fn()}; overlayContents.emit('before-input-event', event, input); return event.preventDefault;};
