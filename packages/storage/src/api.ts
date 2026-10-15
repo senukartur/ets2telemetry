@@ -87,8 +87,16 @@ export type CommitStatus = 'committed' | 'duplicate' | 'conflict' | 'covered';
  * `covered`: a gap whose whole range is already inside committed coverage, such as a merged gap record redelivered
  * after an ACK inside it; nothing is stored and its effects are not applied, because rows for that range already exist.
  * `committedThroughEventSeq` is the session's contiguous coverage after the transaction, the input of DurableAckCursor.
+ *
+ * Gap rows may overlap other gap rows. The producer extends a retained gap record in place, so after an ACK inside it
+ * the record is redelivered with a larger range that contains ranges already stored as separate rows (protocol v1 §9).
+ * Each row keeps the cause counts of its own message: counts are per message, not additive across overlapping rows.
+ * `previouslyCoveredThrough`, returned for every gap commit, is the coverage before this transaction. A stored gap is
+ * new information only for (previouslyCoveredThrough, lastEventSeq]. Caller rule: effects supplied with a gap are
+ * applied once, when its row is first stored, so derive them only for that suffix. Read committedThrough() right before
+ * committing (the single writer keeps it unchanged until the commit) and check it against previouslyCoveredThrough.
  */
-export interface CommitResult {status: CommitStatus; committedThroughEventSeq: Uint64}
+export interface CommitResult {status: CommitStatus; committedThroughEventSeq: Uint64; previouslyCoveredThrough?: Uint64}
 /** In-process test hooks only; never part of a worker message. */
 export interface CommitOptions {testHooks?: {beforeCommit?: () => void}}
 

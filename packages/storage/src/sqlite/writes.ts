@@ -264,7 +264,8 @@ const CAUSES: [keyof GapData['causes'], string][] = [['offline', 'cause_offline'
 /**
  * Commits one gap marker (an eventSeq range the producer no longer holds) with its effects. The same range is a
  * duplicate or conflict; a new range wholly inside committed coverage is `covered` and stores nothing; a new range that
- * extends beyond coverage is stored, and events already committed inside it keep their rows.
+ * extends beyond coverage is stored with its own cause counts, even where it overlaps earlier gap rows, and events
+ * already committed inside it keep their rows. Every result carries `previouslyCoveredThrough` (see CommitResult).
  */
 export function commitGap(conn: StorageConnection, input: {message: unknown; effects?: TripEffect[]}, options: CommitOptions = {}): CommitResult {
   const m = serverMessage(input?.message, 'gap');
@@ -272,7 +273,7 @@ export function commitGap(conn: StorageConnection, input: {message: unknown; eff
   const d = m.data, firstKey = u64Key(d.firstEventSeq), lastKey = u64Key(d.lastEventSeq);
   const payload = canonicalJson({causes: d.causes, firstLostMonotonicNs: d.firstLostMonotonicNs, lastLostMonotonicNs: d.lastLostMonotonicNs});
   return transact(conn, db => {
-    const session = requireSession(db, m.source);
+    const session = requireSession(db, m.source), previouslyCoveredThrough = fromU64Key(session.committed_through_event_seq);
     const stored = statement(db, `SELECT ${CAUSES.map(([, c]) => c).join(', ')}, first_lost_monotonic_ns, first_lost_monotonic_ns_state, last_lost_monotonic_ns, last_lost_monotonic_ns_state
       FROM event_gaps WHERE plugin_session_ref = ? AND first_event_seq = ? AND last_event_seq = ?`).get(session.id, firstKey, lastKey) as Record<string, string | null> | undefined;
     if (stored) {
@@ -280,13 +281,13 @@ export function commitGap(conn: StorageConnection, input: {message: unknown; eff
       const storedPayload = canonicalJson({causes: Object.fromEntries(CAUSES.map(([key, c]) => [key, fromU64Key(stored[c])])),
         firstLostMonotonicNs: lost('first_lost_monotonic_ns'), lastLostMonotonicNs: lost('last_lost_monotonic_ns')});
       options.testHooks?.beforeCommit?.();
-      return {status: storedPayload === payload ? 'duplicate' : 'conflict', committedThroughEventSeq: fromU64Key(session.committed_through_event_seq)};
+      return {status: storedPayload === payload ? 'duplicate' : 'conflict', committedThroughEventSeq: previouslyCoveredThrough, previouslyCoveredThrough};
     }
     // A range already inside committed coverage adds no information: its events and earlier gap markers are stored, and
     // its effects were applied when they were committed. Storing it again would count the same losses twice.
     if (BigInt(d.lastEventSeq) <= BigInt(fromU64Key(session.committed_through_event_seq))) {
       options.testHooks?.beforeCommit?.();
-      return {status: 'covered', committedThroughEventSeq: fromU64Key(session.committed_through_event_seq)};
+      return {status: 'covered', committedThroughEventSeq: previouslyCoveredThrough, previouslyCoveredThrough};
     }
     const now = conn.now(), clock = clockRef(db, session.id, 'source-monotonic', m.capture.clockId);
     const [firstLost, firstLostState] = availabilityColumns(d.firstLostMonotonicNs, u64Key), [lastLost, lastLostState] = availabilityColumns(d.lastLostMonotonicNs, u64Key);
@@ -296,7 +297,7 @@ export function commitGap(conn: StorageConnection, input: {message: unknown; eff
     applyEffects({db, session, game: session.game, now}, input.effects);
     const through = advanceCoverage(db, session, BigInt(d.firstEventSeq), BigInt(d.lastEventSeq));
     options.testHooks?.beforeCommit?.();
-    return {status: 'committed', committedThroughEventSeq: through};
+    return {status: 'committed', committedThroughEventSeq: through, previouslyCoveredThrough};
   });
 }
 

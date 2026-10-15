@@ -144,8 +144,8 @@ describe('REG-006 committed coverage', () => {
     expect(ok(storage.commitGap({message: v1('gap-encoding-failed-e4')})).committedThroughEventSeq).toBe('0');
     expect(ok(storage.commitEvent({message: v1('event-job-configured')})).committedThroughEventSeq).toBe('4');
     // A merged redelivered record wholly inside committed coverage stores nothing; committed rows keep their content.
-    expect(ok(storage.commitGap({message: v1('gap-merged-redelivered')}))).toEqual({status: 'covered', committedThroughEventSeq: '4'});
-    expect(ok(storage.commitGap({message: v1('gap-merged-redelivered')}))).toEqual({status: 'covered', committedThroughEventSeq: '4'});
+    expect(ok(storage.commitGap({message: v1('gap-merged-redelivered')}))).toEqual({status: 'covered', committedThroughEventSeq: '4', previouslyCoveredThrough: '4'});
+    expect(ok(storage.commitGap({message: v1('gap-merged-redelivered')}))).toEqual({status: 'covered', committedThroughEventSeq: '4', previouslyCoveredThrough: '4'});
     expect(ok(storage.getEvent(P1, '1'))?.type).toBe('job.configured');
   });
   it('never reapplies effects of a merged gap record redelivered after an ACK inside it', async () => {
@@ -156,7 +156,7 @@ describe('REG-006 committed coverage', () => {
     expect(ok(storage.commitGap({message: v1('gap-queue-count'), effects: [close]})).status).toBe('committed');
     ok(storage.commitGap({message: v1('gap-encoding-failed-e4')}));
     // Reconnection: the record [2, 4] is redelivered whole. Closing the closed trip again would fail with INVALID_INPUT.
-    expect(ok(storage.commitGap({message: v1('gap-merged-redelivered'), effects: [close]}))).toEqual({status: 'covered', committedThroughEventSeq: '4'});
+    expect(ok(storage.commitGap({message: v1('gap-merged-redelivered'), effects: [close]}))).toEqual({status: 'covered', committedThroughEventSeq: '4', previouslyCoveredThrough: '4'});
     expect(ok(storage.getTrip(T1))).toMatchObject({outcome: 'none', closeReason: 'gap'});
     storage.close();
     expect(readOnly(ws.database, db => db.prepare('SELECT count(*) AS n FROM event_gaps').get())).toEqual({n: 2});
@@ -164,7 +164,40 @@ describe('REG-006 committed coverage', () => {
   it('stores a gap that extends beyond committed coverage and applies its effects', async () => {
     const storage = await session();
     ok(storage.commitEvent({message: v1('event-job-configured')}));
-    expect(ok(storage.commitGap({message: withEventSeq('gap', 1n, 3n)}))).toEqual({status: 'committed', committedThroughEventSeq: '3'});
+    expect(ok(storage.commitGap({message: withEventSeq('gap', 1n, 3n)}))).toEqual({status: 'committed', committedThroughEventSeq: '3', previouslyCoveredThrough: '1'});
+  });
+  it('stores a redelivered merged gap record that extends past coverage once, beside the rows it overlaps', async () => {
+    // Producer side (protocol v1 §9): event 1, gap [2, 2] queueCount and gap [3, 4] encodingFailed extend one trailing
+    // record to [2, 4]; an ACK of 3 falls inside it (release point 1); offline events 5 and 6 extend it to [2, 6], which
+    // the next connection redelivers whole.
+    const storage = await session(), gap = (first: bigint, last: bigint, causes: Record<string, string>, redelivered = false) => {
+      const m = withEventSeq('gap', first, last) as ServerMessage & {data: Record<string, unknown>};
+      m.data.causes = {offline: '0', noDurableConsumer: '0', queueCount: '0', queueBytes: '0', retentionExpired: '0', encodingFailed: '0', ...causes};
+      m.data.redelivered = redelivered;
+      return m;
+    };
+    ok(storage.commitEvent({message: v1('event-job-configured'), effects: [openTrip(T1)]}));
+    expect(ok(storage.commitGap({message: gap(2n, 2n, {queueCount: '1'})})).previouslyCoveredThrough).toBe('1');
+    expect(ok(storage.commitGap({message: gap(3n, 4n, {encodingFailed: '2'})}))).toEqual({status: 'committed', committedThroughEventSeq: '4', previouslyCoveredThrough: '2'});
+    // Caller rule: read coverage before committing and derive effects only for the new suffix (4, 6].
+    const before = ok(storage.committedThrough(P1));
+    const suffix: TripEffect = {kind: 'completeness.add', interval: {tripUuid: T1, kind: 'event-loss', firstEventSeq: (BigInt(before) + 1n).toString(), lastEventSeq: '6'}};
+    const merged = gap(2n, 6n, {queueCount: '1', encodingFailed: '2', offline: '2'}, true);
+    expect(ok(storage.commitGap({message: merged, effects: [suffix]}))).toEqual({status: 'committed', committedThroughEventSeq: '6', previouslyCoveredThrough: before});
+    expect(before).toBe('4');
+    // A further redelivery of the same record is a duplicate and applies nothing again.
+    expect(ok(storage.commitGap({message: merged, effects: [suffix]}))).toEqual({status: 'duplicate', committedThroughEventSeq: '6', previouslyCoveredThrough: '6'});
+    storage.close();
+    readOnly(ws.database, db => {
+      // Each row keeps its own message's counts; the overlapping prefix [2, 4] is counted in two rows.
+      expect(db.prepare('SELECT first_event_seq AS f, last_event_seq AS l, cause_queue_count AS q, cause_encoding_failed AS e, cause_offline AS o, redelivered AS r FROM event_gaps ORDER BY id').all()).toEqual([
+        {f: '00000000000000000002', l: '00000000000000000002', q: '00000000000000000001', e: '00000000000000000000', o: '00000000000000000000', r: 0},
+        {f: '00000000000000000003', l: '00000000000000000004', q: '00000000000000000000', e: '00000000000000000002', o: '00000000000000000000', r: 0},
+        {f: '00000000000000000002', l: '00000000000000000006', q: '00000000000000000001', e: '00000000000000000002', o: '00000000000000000002', r: 1}
+      ]);
+      expect(db.prepare('SELECT first_event_seq AS f, last_event_seq AS l FROM completeness_intervals').all()).toEqual([{f: '00000000000000000005', l: '00000000000000000006'}]);
+      expect(db.prepare('SELECT committed_through_event_seq AS c FROM plugin_sessions').get()).toEqual({c: '00000000000000000006'});
+    });
   });
   it('matches a BigInt reference for seeded random commit orders with redeliveries', async () => {
     for (const seed of [1, 7, 42, 1_234, 99_991]) {
