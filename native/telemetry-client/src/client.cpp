@@ -3,6 +3,7 @@
 #include <sddl.h>
 #include <bcrypt.h>
 #include "protocol-json.hpp"
+#include "protocol-v1.hpp"
 #include "capture-hello.hpp"
 #include <algorithm>
 #include <filesystem>
@@ -13,6 +14,7 @@
 #include <cstring>
 
 namespace v0 = ets2telemetry::v0;
+namespace v1 = ets2telemetry::v1;
 using v0::Json;
 namespace fs = std::filesystem;
 #ifdef ETS2TELEMETRY_CLIENT_DISCOVERY_TEST
@@ -262,19 +264,31 @@ void stdio_io(HANDLE handle, void* buffer, DWORD size, bool write, DWORD timeout
   }
   worker.join(); if (waited == WAIT_TIMEOUT) throw Disconnected(); if (waited != WAIT_OBJECT_0) fail(); if (!ok) pipe_failed(error);
 }
+// How a protocol v1 client frame ended the relay: rejected before it reached the pipe, or a write that disconnected or
+// failed. v0 and CAP0 control streams never set it.
+enum class ClientFailure {none, frame, disconnected, failed};
 struct Credits {
   Handle ready{CreateSemaphoreW(nullptr, 0, 1, nullptr)}, cancelled{CreateEventW(nullptr, TRUE, FALSE, nullptr)}, done{CreateEventW(nullptr, TRUE, FALSE, nullptr)};
-  std::atomic<bool> stopping{false}, rejected{false}; std::thread reader;
-  Credits() : reader([this] {
+  // Protocol v1 only: `helloSent` orders client frames after the hello on the pipe, and `stop` ends a pending client write.
+  Handle helloSent{CreateEventW(nullptr, TRUE, FALSE, nullptr)}, stop{CreateEventW(nullptr, TRUE, FALSE, nullptr)};
+  std::atomic<bool> stopping{false}, rejected{false}; std::atomic<ClientFailure> client{ClientFailure::none}; std::atomic<DWORD> clientError{ERROR_SUCCESS};
+  std::thread reader;
+  // Without a pipe the control stream is v0/CAP0 credit bytes; with one it is the protocol v1 tagged stream.
+  explicit Credits(HANDLE pipe = nullptr, HANDLE process = nullptr) : reader([this, pipe, process] {
+    if (pipe) tagged(pipe, process); else credit_bytes();
+    SetEvent(cancelled.value); SetEvent(done.value);
+  }) {}
+  void credit_bytes() {
     while (!stopping) {
       unsigned char credit = 0; DWORD read = 0;
       if (!ReadFile(GetStdHandle(STD_INPUT_HANDLE), &credit, 1, &read, nullptr) || read != 1) break;
       if (credit != 1 || !ReleaseSemaphore(ready.value, 1, nullptr)) {rejected = true; break;}
     }
-    SetEvent(cancelled.value); SetEvent(done.value);
-  }) {}
+  }
+  void tagged(HANDLE pipe, HANDLE process);
+  // The reader, and with it any client write, is joined before the owner closes the pipe and process handles.
   ~Credits() {
-    stopping = true;
+    stopping = true; SetEvent(stop.value);
     while (WaitForSingleObject(done.value, 0) == WAIT_TIMEOUT) {CancelSynchronousIo(reader.native_handle()); WaitForSingleObject(done.value, 25);}
     reader.join();
   }
@@ -309,6 +323,59 @@ void pipe_io(HANDLE pipe, HANDLE process, void* buffer, DWORD size, bool write, 
   }
 }
 DWORD frame_length(const unsigned char* prefix) {return static_cast<DWORD>(prefix[0]) | (static_cast<DWORD>(prefix[1]) << 8) | (static_cast<DWORD>(prefix[2]) << 16) | (static_cast<DWORD>(prefix[3]) << 24);}
+// Reads exactly `size` control bytes; false on EOF, cancellation or a read error.
+bool read_control(unsigned char* buffer, DWORD size) {
+  DWORD transferred = 0;
+  while (transferred < size) {DWORD count = 0; if (!ReadFile(GetStdHandle(STD_INPUT_HANDLE), buffer + transferred, size - transferred, &count, nullptr) || !count) return false; transferred += count;}
+  return true;
+}
+// Writes one protocol v1 client frame on the reader thread with its own OVERLAPPED, beside the relay's pending read,
+// under a 5 s deadline. A write that is not complete is cancelled and its completion observed before the frame buffer
+// is released. Errors are returned, not thrown: the relay thread reports them.
+ClientFailure client_write(HANDLE pipe, HANDLE process, HANDLE stop, const unsigned char* data, DWORD size, DWORD& error) {
+  const auto deadline = GetTickCount64() + 5000; DWORD transferred = 0;
+  while (transferred < size) {
+    Handle event; event.value = CreateEventW(nullptr, TRUE, FALSE, nullptr); if (!event.value) {error = GetLastError(); return ClientFailure::failed;}
+    OVERLAPPED operation{}; operation.hEvent = event.value; DWORD count = 0;
+    bool ok = WriteFile(pipe, data + transferred, size - transferred, &count, &operation) != 0;
+    error = ok ? ERROR_SUCCESS : GetLastError();
+    if (!ok && error == ERROR_IO_PENDING) {
+      HANDLE waits[] = {event.value, process, stop}; const auto now = GetTickCount64();
+      const auto waited = WaitForMultipleObjects(3, waits, FALSE, deadline > now ? static_cast<DWORD>(deadline - now) : 0);
+      if (waited != WAIT_OBJECT_0) {
+        CancelIoEx(pipe, &operation); GetOverlappedResult(pipe, &operation, &count, TRUE); error = GetLastError();
+        return waited == WAIT_TIMEOUT || waited == WAIT_OBJECT_0 + 1 || waited == WAIT_OBJECT_0 + 2 ? ClientFailure::disconnected : ClientFailure::failed;
+      }
+      ok = GetOverlappedResult(pipe, &operation, &count, FALSE) != 0;
+      error = ok ? ERROR_SUCCESS : GetLastError();
+    }
+    if (!ok) return error == ERROR_BROKEN_PIPE || error == ERROR_PIPE_NOT_CONNECTED || error == ERROR_NO_DATA ? ClientFailure::disconnected : ClientFailure::failed;
+    if (!count) {error = GetLastError(); return ClientFailure::disconnected;}
+    transferred += count;
+  }
+  return ClientFailure::none;
+}
+// Protocol v1 control stream: tagged records. 0x01 is one relay credit. 0x02, a u32 little-endian length of
+// 1-4,096 and that many bytes are exactly one v1 client frame of kind ack or clock.probe; it is validated, then
+// written to the pipe after the hello, in stdin order. Any other tag, length or message ends the relay.
+void Credits::tagged(HANDLE pipe, HANDLE process) {
+  try {
+    while (!stopping) {
+      unsigned char tag = 0; if (!read_control(&tag, 1)) return;
+      if (tag == 1) {if (!ReleaseSemaphore(ready.value, 1, nullptr)) {rejected = true; return;} continue;}
+      if (tag != 2) {rejected = true; return;}
+      std::vector<unsigned char> frame(4); if (!read_control(frame.data(), 4)) return;
+      const auto length = frame_length(frame.data());
+      if (!length || length > v1::limits.client_frame_bytes) {client = ClientFailure::frame; return;}
+      frame.resize(length + 4); if (!read_control(frame.data() + 4, length)) return;
+      const auto message = v1::decode_payload(std::string(reinterpret_cast<const char*>(frame.data() + 4), length), v1::Sender::client);
+      if (message.kind != "ack" && message.kind != "clock.probe") {client = ClientFailure::frame; return;}
+      HANDLE waits[] = {helloSent.value, stop.value}; if (WaitForMultipleObjects(2, waits, FALSE, INFINITE) != WAIT_OBJECT_0) return;
+      DWORD error = ERROR_SUCCESS; const auto result = client_write(pipe, process, stop.value, frame.data(), static_cast<DWORD>(frame.size()), error);
+      if (result != ClientFailure::none) {clientError = error; client = result; return;}
+    }
+  } catch (...) {client = ClientFailure::frame;}
+}
 void receipt(const Json& value) {
   auto text = v0::detail::serialize(value); if (text.empty() || text.size() > 4096) fail(); const auto n = static_cast<DWORD>(text.size());
   unsigned char prefix[] = {static_cast<unsigned char>(n), static_cast<unsigned char>(n >> 8), static_cast<unsigned char>(n >> 16), static_cast<unsigned char>(n >> 24)};
@@ -320,7 +387,11 @@ int wmain(int argc, wchar_t** argv) {
   try {
     // CAP0 evidence capture is a separate explicit mode: distinct endpoint, receipt marker and hello.
     const bool capture = argc == 7 && std::wstring(argv[5]) == L"--capture" && std::wstring(argv[6]) == L"cap0";
-    if ((argc != 5 && !capture) || std::wstring(argv[1]) != L"--game" || std::wstring(argv[3]) != L"--discovery-dir") fail();
+    // Protocol v1 is another explicit mode, never combined with capture: v1 discovery records and endpoint, a marked
+    // receipt, a v1 hello and a tagged control stream that also carries client frames.
+    const bool protocolV1 = argc == 7 && std::wstring(argv[5]) == L"--protocol" && std::wstring(argv[6]) == L"v1";
+    if ((argc != 5 && !capture && !protocolV1) || std::wstring(argv[1]) != L"--game" || std::wstring(argv[3]) != L"--discovery-dir") fail();
+    const DWORD protocolMajor = protocolV1 ? 1 : 0; const std::string segment = protocolV1 ? "-v1-" : "-v0-";
     const auto game = utf8(argv[2]); if (game != "ets2" && game != "ats") fail();
     stage = "identity"; test_trace("current-identity-start"); Identity self(GetCurrentProcess()); test_trace("current-identity-done");
     stage = "directory"; const fs::path directory(argv[4]); if (!directory.is_absolute()) fail();
@@ -340,12 +411,12 @@ int wmain(int argc, wchar_t** argv) {
       auto file = enumerated_discovery_file(entry.path(), self); if (!file) continue;
       auto record = parse(read_bounded(file->value, 16384));
       exact(record, {"schemaVersion", "protocolMajor", "game", "userTag", "windowsSessionId", "processId", "processCreationTime", "processInstanceId", "pluginSessionId", "pipeName"});
-      if (integer(record.at("schemaVersion")) != 1 || integer(record.at("protocolMajor")) != 0 || record.at("userTag").string() != self.userTag || integer(record.at("windowsSessionId")) != self.session || record.at("processInstanceId").string() != stem || !uuid(record.at("pluginSessionId").string())) fail();
+      if (integer(record.at("schemaVersion")) != 1 || integer(record.at("protocolMajor")) != protocolMajor || record.at("userTag").string() != self.userTag || integer(record.at("windowsSessionId")) != self.session || record.at("processInstanceId").string() != stem || !uuid(record.at("pluginSessionId").string())) fail();
       if (record.at("game").string() != "ets2" && record.at("game").string() != "ats") fail();
       if (record.at("game").string() != game) continue;
       const auto pid = integer(record.at("processId")); if (!pid) fail();
       const auto expectedCreation = v0::parse_uint64(record.at("processCreationTime"));
-      const auto endpoint = "\\\\.\\pipe\\ETS2Telemetry-" + game + "-v0-" + self.userTag + "-" + std::to_string(self.session) + "-" + stem;
+      const auto endpoint = "\\\\.\\pipe\\ETS2Telemetry-" + game + segment + self.userTag + "-" + std::to_string(self.session) + "-" + stem;
       if (record.at("pipeName").string() != endpoint) fail();
       stage = "server-process";
       const auto raw = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, pid);
@@ -360,7 +431,7 @@ int wmain(int argc, wchar_t** argv) {
     if (!selected) {receipt(Json{Json::Object{{"type", Json{std::string("waiting")}}, {"schemaVersion", Json{1.0}}}}); return finish(2, stage);}
     const auto& record = *selected; const auto pid = integer(record.at("processId")); if (!pid) fail();
     const auto expectedCreation = v0::parse_uint64(record.at("processCreationTime"));
-    const auto endpoint = "\\\\.\\pipe\\ETS2Telemetry-" + game + "-v0-" + self.userTag + "-" + std::to_string(self.session) + "-" + record.at("processInstanceId").string();
+    const auto endpoint = "\\\\.\\pipe\\ETS2Telemetry-" + game + segment + self.userTag + "-" + std::to_string(self.session) + "-" + record.at("processInstanceId").string();
     if (record.at("pipeName").string() != endpoint) fail();
     // The capture endpoint is keyed to the same verified process instance and its plugin session.
     const auto connectTo = capture ? "\\\\.\\pipe\\ETS2Telemetry-" + game + "-cap0-" + self.userTag + "-" + std::to_string(self.session) + "-" + record.at("processInstanceId").string() + "-" + record.at("pluginSessionId").string() : endpoint;
@@ -375,21 +446,38 @@ int wmain(int argc, wchar_t** argv) {
     Json source{Json::Object{{"game", Json{game}}, {"processId", Json{static_cast<double>(pid)}}, {"windowsSessionId", Json{static_cast<double>(self.session)}}, {"processInstanceId", record.at("processInstanceId")}, {"pluginSessionId", record.at("pluginSessionId")}, {"origin", Json{std::string("game")}}}};
     Json::Object authority{{"type", Json{std::string("authority")}}, {"schemaVersion", Json{1.0}}, {"source", source}, {"processCreationTime", record.at("processCreationTime")}, {"userTag", Json{self.userTag}}};
     if (capture) authority["evidence"] = Json{std::string("cap0")};
+    if (protocolV1) authority["protocolMajor"] = Json{1.0};
     stage = "authority-receipt"; receipt(Json{authority});
     stage = "hello"; unsigned char prefix[4]; stdio_io(GetStdHandle(STD_INPUT_HANDLE), prefix, 4, false); const auto helloLength = frame_length(prefix); if (!helloLength || helloLength > 4096) fail();
     std::vector<unsigned char> hello(helloLength + 4); std::copy(prefix, prefix + 4, hello.begin()); stdio_io(GetStdHandle(STD_INPUT_HANDLE), hello.data() + 4, helloLength, false);
     const std::string helloPayload(reinterpret_cast<char*>(hello.data() + 4), helloLength);
-    if (capture) ets2telemetry::cap0::validate_hello(helloPayload); else v0::negotiate(v0::decode_payload(helloPayload));
-    stage = "relay"; Credits credits;
+    if (capture) ets2telemetry::cap0::validate_hello(helloPayload);
+    else if (protocolV1) v1::negotiate(v1::decode_payload(helloPayload, v1::Sender::client));
+    else v0::negotiate(v0::decode_payload(helloPayload));
+    const std::size_t frameBound = protocolV1 ? v1::limits.server_frame_bytes : v0::max_frame_bytes;
+    // Declared after the pipe and process handles, so its reader (and any v1 client write) is joined before they close.
+    stage = "relay"; Credits credits(protocolV1 ? pipe.value : nullptr, protocolV1 ? process.value : nullptr);
     try {
     pipe_io(pipe.value, process.value, hello.data(), static_cast<DWORD>(hello.size()), true, credits.cancelled.value);
+    SetEvent(credits.helloSent.value);
     for (;;) {
       stage = "relay"; credits.take(process.value); stage = "retained-authority"; verify(); stage = "relay";
-      pipe_io(pipe.value, process.value, prefix, 4, false, credits.cancelled.value, true); stage = "wire-frame"; const auto length = frame_length(prefix); if (!length || length > v0::max_frame_bytes) fail(); stage = "relay";
+      pipe_io(pipe.value, process.value, prefix, 4, false, credits.cancelled.value, true); stage = "wire-frame"; const auto length = frame_length(prefix); if (!length || length > frameBound) fail(); stage = "relay";
       stage = "wire-payload"; std::vector<unsigned char> frame(length + 4); std::copy(prefix, prefix + 4, frame.begin()); pipe_io(pipe.value, process.value, frame.data() + 4, length, false, credits.cancelled.value); stage = "retained-authority"; verify(); stage = "relay";
       stdio_io(GetStdHandle(STD_OUTPUT_HANDLE), frame.data(), static_cast<DWORD>(frame.size()), true);
     }
-    } catch (const Disconnected&) {if (credits.rejected) fail(); throw;}
+    } catch (const Disconnected&) {
+      if (credits.rejected) fail();
+      // A protocol v1 client frame ended the relay through the reader: a rejected frame is a hard failure with no Win32
+      // error, and a failed write keeps the pipe's disconnect or failure classification.
+      switch (credits.client.load()) {
+        case ClientFailure::none: break;
+        case ClientFailure::frame: stage = "client-frame"; SetLastError(ERROR_SUCCESS); fail();
+        case ClientFailure::disconnected: stage = "client-write"; throw Disconnected(credits.clientError.load());
+        case ClientFailure::failed: stage = "client-write"; SetLastError(credits.clientError.load()); fail();
+      }
+      throw;
+    }
   } catch (const Disconnected&) {return finish(3, stage);}
   catch (const Busy&) {return finish(4, stage);}
   catch (...) {return finish(1, stage);}
