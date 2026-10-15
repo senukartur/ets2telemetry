@@ -29,6 +29,15 @@ export interface ReactiveServeOptions {
   writeDeadlineMs?: number;
   /** How long a scripted disconnect waits for the client to acknowledge what was written: 0 to 5,000 ms, default 1,000. */
   quiesceMs?: number;
+  /**
+   * For a consumer that follows the script (default false). A connection whose scripted client commits and acknowledges
+   * every item (`ack: each`, any commit policy but `none`) is then waited for at each quiesce point until it has
+   * acknowledged everything written to it or has left, however long its commits take; other connections keep the
+   * `quiesceMs` bound. Missing that wait within `settleTimeoutMs` fails the run instead of pacing on.
+   */
+  awaitScriptedAcks?: boolean;
+  /** Liveness bound of an `awaitScriptedAcks` wait: 1 to 600,000 ms, default 30,000. */
+  settleTimeoutMs?: number;
   /** How long a scripted connect waits for a client: 1 to 600,000 ms, default 30,000. */
   connectTimeoutMs?: number;
   signal?: AbortSignal;
@@ -41,11 +50,12 @@ export interface ReactivePipeServer {endpoint: string; done: Promise<ReactiveRep
 class Reactive extends PipeHost {
   readonly scenario: Scenario; private readonly clock = new ScenarioClock(); private readonly producer: V1Producer;
   private readonly transcript: TranscriptLine[] = []; private readonly connections: ReactiveConnection[] = [];
-  private pending: Link[] = []; private live?: {link: Link; record: ReactiveConnection; recorder: FrameDecoder; helloDone: boolean; endWritten: boolean};
+  private pending: Link[] = []; private live?: {link: Link; record: ReactiveConnection; policy: ClientPolicy; recorder: FrameDecoder; helloDone: boolean; endWritten: boolean};
   // `unsettled`: an event or gap was written since the last quiesce, so a client reaction (ACK, crash) may be pending.
   private unsettled = false;
   private refused = 0; private atMs = 0; private target = 0; private segment?: {realMs: number; atMs: number};
   private readonly scale: number; private readonly helloMs: number; private readonly writeMs: number; private readonly quiesceMs: number; private readonly connectMs: number;
+  private readonly awaitScriptedAcks: boolean; private readonly settleMs: number;
   constructor(input: unknown, options: ReactiveServeOptions) {
     super();
     const s = this.scenario = validateScenario(input);
@@ -59,6 +69,9 @@ class Reactive extends PipeHost {
     this.writeMs = bounded(options.writeDeadlineMs, V1_LIMITS.writeDeadlineMs, 1, V1_LIMITS.writeDeadlineMs, 'write deadline');
     this.quiesceMs = bounded(options.quiesceMs, 1_000, 0, 5_000, 'quiesce bound');
     this.connectMs = bounded(options.connectTimeoutMs, 30_000, 1, 600_000, 'connect timeout');
+    if (options.awaitScriptedAcks !== undefined && typeof options.awaitScriptedAcks !== 'boolean') throw new Error('Invalid scripted ACK wait');
+    this.awaitScriptedAcks = options.awaitScriptedAcks ?? false;
+    this.settleMs = bounded(options.settleTimeoutMs, 30_000, 1, 600_000, 'settle timeout');
   }
   private ns(atMs: number): bigint { return this.clock.sourceNs(atMs); }
   /** The scenario time a paced segment has reached: between the last action and the one it is waiting for. */
@@ -186,7 +199,7 @@ class Reactive extends PipeHost {
     while (!this.live?.helloDone) {
       if (!await this.wait(() => this.pending.length > 0, Math.max(0, deadline - performance.now()))) throw new Error(`No client completed a hello for connection ${connection}`);
       const link = this.pending.shift()!; if (link.gone) continue;
-      const l = this.live = {link, record, recorder: new FrameDecoder('client'), helloDone: false, endWritten: false};
+      const l = this.live = {link, record, policy, recorder: new FrameDecoder('client'), helloDone: false, endWritten: false};
       this.producer.open();
       const buffered = link.inbound; link.inbound = Buffer.alloc(0); link.onData = chunk => { if (this.live?.link === link) this.receive(chunk); };
       if (buffered.length) this.receive(buffered);
@@ -199,13 +212,19 @@ class Reactive extends PipeHost {
     }
     this.pumpAll(this.atMs);
   }
-  /** A scripted disconnect: bounded wait for the ACKs of everything written, then a graceful close. */
-  /** Waits up to the quiesce bound until the live client has acknowledged everything written to it, or has left. */
+  /**
+   * Waits up to the quiesce bound until the live client has acknowledged everything written to it, or has left. With
+   * `awaitScriptedAcks`, a client scripted to acknowledge every commit is waited for without that bound, so how long
+   * its commits take cannot change what the server writes or records; only a broken client reaches the liveness bound.
+   */
   private async quiesce(): Promise<void> {
     const l = this.live; if (!l || !this.unsettled) return;
     this.unsettled = false;
-    await this.wait(() => this.live !== l || l.link.gone || ((s => s === undefined || s.acked >= s.sent)(this.producer.ackState())), this.quiesceMs);
+    const settled = () => this.live !== l || l.link.gone || ((s => s === undefined || s.acked >= s.sent)(this.producer.ackState()));
+    if (!this.awaitScriptedAcks || !l.policy.durable || l.policy.ack.kind !== 'each' || l.policy.commit.kind === 'none') { await this.wait(settled, this.quiesceMs); return; }
+    if (!await this.wait(settled, this.settleMs)) throw new Error(`Connection ${l.record.connection}: the client neither acknowledged everything written to it nor left within ${this.settleMs} ms`);
   }
+  /** A scripted disconnect: wait (see quiesce) for the ACKs of everything written, then a graceful close. */
   private async disconnect(): Promise<void> {
     const l = this.live; if (!l) return;
     await this.quiesce();
