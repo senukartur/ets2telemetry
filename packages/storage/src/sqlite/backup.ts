@@ -103,7 +103,6 @@ export async function backupBeforeMigration(db: Database.Database, context: {fil
   }
 }
 
-/** Parses a manifest strictly; anything else is not a backup of this application. */
 /**
  * An existing pre-migration backup of exactly this content: same database, source version, logical digest and row
  * counts, with a backup file whose size and SHA-256 still match its manifest. A damaged or partial backup is never reused.
@@ -118,6 +117,7 @@ function reusableBackup(directory: string, databaseUuid: string, fromVersion: nu
   return undefined;
 }
 
+/** Parses a manifest strictly; anything else is not a backup of this application. */
 export function readManifest(manifestPath: string): BackupManifest | undefined {
   try {
     const m = JSON.parse(readFileSync(manifestPath, 'utf8')) as Partial<BackupManifest>;

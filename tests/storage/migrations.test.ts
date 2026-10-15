@@ -99,6 +99,14 @@ describe('REG-013 schema migrations', () => {
       expect(readOnly(ws.database, db => db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table'").pluck().all())).toEqual(['other_application']);
     });
   });
+  it('refuses an empty SQLite file with a user version at inspection, before the writer opens', async () => {
+    const file = path.join(ws.directory, 'versioned-empty.sqlite');
+    const db = new Database(file); db.pragma('user_version = 7'); db.close();
+    let writerReached = false;
+    await expectRefused(file, 'DATABASE_UNRECOGNIZED');
+    failed(await openStorage(ws.options({path: file, testHooks: {afterInspect: () => { writerReached = true; }}})), 'DATABASE_UNRECOGNIZED');
+    expect(writerReached).toBe(false);
+  });
   it('creates a new database in an existing empty file', async () => {
     writeFileSync(ws.database, '');
     expect((await ws.open()).summary).toMatchObject({created: true, schemaVersion: 1});

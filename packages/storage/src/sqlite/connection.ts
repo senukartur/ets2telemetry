@@ -94,7 +94,8 @@ function inspect(file: string, purpose: Purpose, supported: number): Inspection 
     db = new Database(file, {readonly: true, fileMustExist: true, timeout: BUSY_TIMEOUT_MS});
     const applicationId = Number(db.pragma('application_id', {simple: true})), userVersion = Number(db.pragma('user_version', {simple: true}));
     const tables = Number(db.prepare("SELECT count(*) FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\'").pluck().get());
-    if (applicationId !== APPLICATION_ID) { if (applicationId === 0 && tables === 0) return {fresh: true, version: 0}; fail('DATABASE_UNRECOGNIZED'); }
+    // New means an empty SQLite file: no application id, no user tables and no user version, as the locked re-check requires.
+    if (applicationId !== APPLICATION_ID) { if (applicationId === 0 && tables === 0 && userVersion === 0) return {fresh: true, version: 0}; fail('DATABASE_UNRECOGNIZED'); }
     if (userVersion === 0) fail('DATABASE_UNRECOGNIZED');
     if (userVersion > supported) fail('SCHEMA_NEWER');
     const stored = db.prepare("SELECT purpose FROM database_info WHERE id = 1").pluck().get();
@@ -115,7 +116,6 @@ function inspect(file: string, purpose: Purpose, supported: number): Inspection 
   }
 }
 
-/** Sets and reads back every durability setting on a new read-write connection; any mismatch is refused. */
 /**
  * Repeats the inspection's classification on the locked writer connection, before any write. Another process could
  * have changed the file between the read-only inspection and the lock; the locked values are authoritative.
@@ -127,6 +127,7 @@ function recheck(db: Database.Database, inspection: Inspection, supported: numbe
   if (inspection.fresh ? applicationId !== 0 || userVersion !== 0 || tables !== 0 : applicationId !== APPLICATION_ID || userVersion !== inspection.version) fail('DATABASE_UNRECOGNIZED');
 }
 
+/** Sets and reads back every durability setting on a new read-write connection; any mismatch is refused. */
 function openWriter(file: string, hooks: OpenTestHooks | undefined, check: (db: Database.Database) => void): Database.Database {
   // SQLite silently falls back to a read-only handle for a read-only file and fails only at the first lock or write,
   // with a misleading I/O code. Checking write access first reports the actual cause.
