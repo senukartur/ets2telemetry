@@ -31,6 +31,71 @@ function Test-OverlayTopmost {
         $dashboard[0].alwaysOnTop -is [bool] -and !$dashboard[0].alwaysOnTop)
 }
 
+function Test-ReceiptInteger {
+    param([object]$Value, [double]$Minimum, [double]$Maximum)
+    if ($Value -isnot [int] -and $Value -isnot [long] -and $Value -isnot [double] -and $Value -isnot [decimal]) { return $false }
+    if ([double]::IsNaN([double]$Value) -or [double]::IsInfinity([double]$Value)) { return $false }
+    return ([math]::Truncate([decimal]$Value) -eq [decimal]$Value -and [double]$Value -ge $Minimum -and [double]$Value -le $Maximum)
+}
+
+# Exactly one APP_EXIT and SERVICE_EXIT with code 0, the service's single clean stopped report and only clean shutdown steps.
+function Test-OrderlyRunEvent {
+    param([object[]]$MainEvents, [object[]]$ServiceEvents)
+    foreach ($eventName in @('APP_EXIT','SERVICE_EXIT')) {
+        $events = @($MainEvents | Where-Object { $_.event -ceq $eventName })
+        if ($events.Count -ne 1 -or $null -eq $events[0].detail.code -or $events[0].detail.code -ne 0) { return $false }
+    }
+    $stopped = @($ServiceEvents | Where-Object { $_.event -ceq 'SERVICE_REPORT' -and $_.detail.type -ceq 'stopped' })
+    if ($stopped.Count -ne 1 -or $stopped[0].detail.clean -isnot [bool] -or !$stopped[0].detail.clean) { return $false }
+    $steps = @($ServiceEvents | Where-Object { $_.event -ceq 'SHUTDOWN_STEP' })
+    if ($steps.Count -lt 3) { return $false }
+    foreach ($step in $steps) { if ($step.facts.outcome -cne 'ok') { return $false } }
+    if (@($ServiceEvents | Where-Object { $_.event -ceq 'STORAGE_VERIFIED' }).Count -lt 1) { return $false }
+    foreach ($row in @($MainEvents) + @($ServiceEvents)) {
+        if ($row.event -cmatch 'FAILED|TIMEOUT|UNCAUGHT|UNHANDLED|INVALID|RENDER_PROCESS_GONE') { return $false }
+    }
+    return $true
+}
+
+# ET-011a lifecycle journey: close-to-tray, second launch, tray reopen, explicit exit and restart.
+function Test-LifecycleReceipt {
+    param([object]$Driver)
+    $lifecycle = $Driver.lifecycle
+    if ($null -eq $lifecycle) { return $false }
+    foreach ($field in @('dashboardClosedServiceAlive','overlayAliveAfterClose','trayPresentAfterClose','overlayCurrentAfterClose',
+        'sourceConnectionPreserved','secondInstanceRestoredDashboard','trayOpenRestoredDashboard','explicitExitOrderly','restartRecovered','shutdownClean')) {
+        if ($lifecycle.$field -isnot [bool] -or $lifecycle.$field -ne $true) { return $false }
+    }
+    if (!(Test-ReceiptInteger -Value $lifecycle.servicePid -Minimum 1 -Maximum 4294967295) -or
+        !(Test-ReceiptInteger -Value $lifecycle.restart.servicePid -Minimum 1 -Maximum 4294967295) -or
+        $lifecycle.restart.servicePid -eq $lifecycle.servicePid -or $lifecycle.afterClose.servicePid -ne $lifecycle.servicePid) { return $false }
+    foreach ($flag in @('dashboard','exiting')) { if ($lifecycle.afterClose.$flag -isnot [bool] -or $lifecycle.afterClose.$flag) { return $false } }
+    foreach ($flag in @('overlay','tray','upstream')) { if ($lifecycle.afterClose.$flag -isnot [bool] -or !$lifecycle.afterClose.$flag) { return $false } }
+    foreach ($reading in @(@{row=$lifecycle.overlayChanged; speed='72.0'; fuel='71.0'}, @{row=$lifecycle.overlayRestored; speed='90.0'; fuel='73.0'})) {
+        $row = $reading.row
+        if ($null -eq $row -or $row.source -cne 'ETS2' -or $row.origin -cne 'synthetic' -or $row.freshness -cne 'current' -or $row.status -cne 'connected' -or
+            $row.speed -cne $reading.speed -or $row.fuel -cne $reading.fuel) { return $false }
+    }
+    $second = $lifecycle.secondInstance
+    if ($null -eq $second -or $second.exitCode -isnot [int] -or $second.exitCode -ne 0 -or $null -ne $second.signal -or
+        $second.wroteLog -isnot [bool] -or $second.wroteLog -or
+        !(Test-ReceiptInteger -Value $second.exitMilliseconds -Minimum 0 -Maximum 10000) -or
+        @($second.primaryActions).Count -ne 1 -or @($second.primaryActions)[0] -cne 'created') { return $false }
+    $exit = $lifecycle.explicitExit
+    if ($null -eq $exit -or $exit.launcherExit -isnot [int] -or $exit.launcherExit -ne 0 -or $null -ne $exit.signal -or
+        !(Test-ReceiptInteger -Value $exit.exitMilliseconds -Minimum 0 -Maximum 8000) -or
+        @($exit.requests).Count -ne 1 -or @($exit.requests)[0] -cne 'renderer') { return $false }
+    if ($lifecycle.restartLauncherExit -isnot [int] -or $lifecycle.restartLauncherExit -ne 0 -or $Driver.launcherExit -ne 0 -or
+        $null -eq $Driver.probesAfterExit -or @($Driver.probesAfterExit).Count -ne 0) { return $false }
+    $restartRequests = @($lifecycle.restartMainEvents | Where-Object { $_.event -ceq 'APP_EXIT_REQUESTED' })
+    if ($restartRequests.Count -ne 1 -or $restartRequests[0].facts.reason -cne 'app-quit') { return $false }
+    if (!(Test-OrderlyRunEvent -MainEvents @($Driver.mainEvents) -ServiceEvents @($Driver.serviceEvents)) -or
+        !(Test-OrderlyRunEvent -MainEvents @($lifecycle.restartMainEvents) -ServiceEvents @($lifecycle.restartServiceEvents))) { return $false }
+    $actions = @($Driver.mainEvents | Where-Object { $_.event -ceq 'SECOND_INSTANCE' })
+    if ($actions.Count -ne 1 -or $actions[0].facts.action -cne 'created') { return $false }
+    return $true
+}
+
 function Test-RuntimeReceipt {
     param([string]$DriverResultPath, [string]$ExpectedCommit, [string]$ExpectedMode, [int]$JobExitCode,
         [string]$ExpectedScenario)
@@ -171,6 +236,10 @@ function Test-RuntimeReceipt {
         if (@($driver.serviceEvents | Where-Object { $_.event -ceq 'STORAGE_VERIFIED' }).Count -lt 1 -or
             @($driver.serviceEvents | Where-Object { $_.event -ceq 'SERVICE_REPORT' -and $_.detail.type -ceq 'stopped' }).Count -lt 1) { $valid = $false }
         if (!$valid) { $validation.reason = 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'; return $validation }
+    }
+    # Lifecycle is additive as well; earlier scenario rules are unchanged.
+    if ($ExpectedScenario -ceq 'lifecycle' -and !(Test-LifecycleReceipt -Driver $driver)) {
+        $validation.reason = 'LIFECYCLE_RESULT_INCOMPLETE_OR_INVALID'; return $validation
     }
     $validation.passed = $true
     return $validation
