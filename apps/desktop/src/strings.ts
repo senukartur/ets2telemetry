@@ -33,7 +33,8 @@ export const STRINGS = Object.freeze({
   unitsSaveFailed: 'The unit change was not saved; the previous units stay in use.',
   liveTitle: 'Live telemetry',
   livePaused: 'Game paused',
-  liveNoJob: 'No job reported'
+  liveNoJob: 'No job reported',
+  liveJobUnavailable: 'Job unavailable'
 });
 export type StringKey = keyof typeof STRINGS;
 

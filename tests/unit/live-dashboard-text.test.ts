@@ -179,6 +179,15 @@ describe('ET-010b non-current, paused and missing input', () => {
     expect(text.sections.find(section => section.id === 'job')).toMatchObject({missing: 'No job reported', rows: []});
     expect(text.sections.find(section => section.id === 'time')!.rows.map(entry => entry.id)).toEqual(['game-time']);
   });
+  it('keeps the reason of a job reading that was rejected or not provided instead of reporting no job', () => {
+    for (const [reason, expected] of [['invalid', 'Job unavailable (invalid reading)'], ['not-supported', 'Job unavailable (not provided by the game)']] as const) {
+      const telemetry = live('snapshot', 'synthetic');
+      telemetry.observation!.state.configuration.job = {available: false, reason};
+      const job = liveDashboardText(telemetry).sections.find(section => section.id === 'job');
+      expect(job).toMatchObject({missing: expected, rows: []});
+      expect(JSON.stringify(job)).not.toContain('No job reported');
+    }
+  });
   it('rejects the zero-with-unavailable fixture before display and keeps legitimate zero values distinct from unavailable', () => {
     expect(() => v0Message('zero-unavailable')).toThrow();
     const telemetry = smokeCheckpoint();

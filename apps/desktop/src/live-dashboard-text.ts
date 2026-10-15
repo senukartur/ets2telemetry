@@ -2,6 +2,7 @@ import type {LiveTelemetry, UnitProfiles} from '../../../packages/contracts/src'
 import {resolveDisplayUnits} from '../../../packages/telemetry-core/src/display-profile';
 import {buildLiveView, carriesField, type LiveFieldId, type LiveSectionId} from '../../../packages/telemetry-core/src/live-view';
 import {normalizeV0State} from '../../../packages/telemetry-core/src/normalize-v0';
+import type {MissingReason} from '../../../packages/telemetry-core/src/readings';
 import {initialLive} from './live-state';
 import {FIELD_NOTE_TEXT, LIVE_FIELD_TEXT, LIVE_SECTION_TEXT, STRINGS, VIEW_REASON_TEXT} from './strings';
 import {DEFAULT_UNIT_PROFILES, displayGame, profileFor} from './unit-profiles';
@@ -60,7 +61,15 @@ export function liveDashboardText(live: LiveTelemetry | undefined, units: UnitPr
     }
     if (!rows.length && !section.missing) continue;
     sections.push({id: section.id, testId: `live-section-${section.id}`, title: LIVE_SECTION_TEXT[section.id],
-      ...(section.missing ? {missing: STRINGS.liveNoJob} : {}), rows});
+      ...(section.missing ? {missing: missingSubjectText(section.missing)} : {}), rows});
   }
   return {paused: view.connection.paused, sections};
+}
+
+/**
+ * Only a job that was never reported reads as "No job reported". A job reading that was rejected or is not provided
+ * keeps its reason, so the card never presents an unavailable job as the absence of a job.
+ */
+function missingSubjectText(reason: MissingReason): string {
+  return reason === 'not-observed' ? STRINGS.liveNoJob : `${STRINGS.liveJobUnavailable} (${VIEW_REASON_TEXT[reason]})`;
 }
