@@ -43,14 +43,40 @@ export type OverlaySectionId = 'speed' | 'gear' | 'rpm' | 'fuel' | 'range' | 'sd
   | 'distance-driven' | 'distance-remaining' | 'deadline' | 'expected-income' | 'game-time';
 /** Which overlay sections are enabled: always all fourteen keys, at least one of them true. */
 export type OverlaySections = Readonly<Record<OverlaySectionId, boolean>>;
+/**
+ * One layout's saved position and size (ET-012b). `x` and `y` are fractions in [0, 1] of the free space left inside the
+ * game's client area once the margins and the scaled overlay are taken away: 0 is the left or top margin, 1 the right
+ * or bottom one. `scale` multiplies the layout's size and content, in [0.5, 2]. Never pixels, so a placement stays
+ * inside any client area it fits by construction.
+ */
+export interface OverlayPlacement {
+  x: number;
+  y: number;
+  scale: number;
+}
+/** One placement per layout: always all four keys. */
+export type OverlayPlacements = Readonly<Record<OverlayLayout, OverlayPlacement>>;
 export interface OverlaySettings {
   layout: OverlayLayout;
   sections: OverlaySections;
+  /** The saved position and scale of every layout (ET-012b). */
+  placements: OverlayPlacements;
 }
+/**
+ * Why the overlay is or is not shown while its position is edited (ET-012b). `visible`: shown over the game and
+ * draggable. `waiting-for-game`: no usable game window (no game source, the game minimized, a stale window report or
+ * an overlay that is not loaded). `too-large`: the layout at this scale does not fit the game's client area.
+ * `not-foreground`: neither of this application's windows is focused, or the game itself is in front.
+ */
+export type OverlayEditPlacement = 'visible' | 'waiting-for-game' | 'too-large' | 'not-foreground';
+/** Main-owned overlay edit mode. It lives in memory only: every start is in driving mode. */
+export type OverlayEditState =
+  | {active: false}
+  | {active: true; layout: OverlayLayout; scale: number; placement: OverlayEditPlacement};
 /** The settings that apply now. Never carries paths, file content or error text. */
 export interface SettingsView {
   units: UnitProfiles;
-  /** The saved overlay layout and sections, or their defaults (strip, every section). */
+  /** The saved overlay layout, sections and placements, or their defaults (strip, every section, the default anchors). */
   overlay: OverlaySettings;
   state: SettingsState;
   /** False when a change cannot be saved: a pending read, or a newer-version, unreadable or unavailable settings file. */
@@ -62,4 +88,6 @@ export interface SettingsView {
 export interface AppState {
   health: AppHealth;
   settings: SettingsView;
+  /** The overlay edit mode; pushed whenever it changes. */
+  overlayEdit: OverlayEditState;
 }

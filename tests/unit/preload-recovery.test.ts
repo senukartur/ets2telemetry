@@ -110,7 +110,8 @@ it('does not expose the previous observation as current while a replacement port
   stop();
 });
 it('preserves the frozen narrow bridge and rejects privileged source values before IPC', async () => {
-  expect(Object.isFrozen(bridge)).toBe(true); expect(Object.keys(bridge).sort()).toEqual(['exitApplication', 'getAppState', 'getStatus', 'selectSource', 'setOverlayLayout', 'setOverlaySections', 'setUnitProfile', 'subscribeAppState', 'subscribeLive']);
+  expect(Object.isFrozen(bridge)).toBe(true); expect(Object.keys(bridge).sort()).toEqual(['beginOverlayEdit', 'exitApplication', 'finishOverlayEdit', 'getAppState', 'getStatus',
+    'resetOverlayEditPlacement', 'selectSource', 'setOverlayEditScale', 'setOverlayLayout', 'setOverlaySections', 'setUnitProfile', 'subscribeAppState', 'subscribeLive']);
   await expect(bridge.selectSource('C:\\arbitrary.exe' as never)).rejects.toThrow('Invalid source selection');
   expect(ipc.invoke).not.toHaveBeenCalled();
   await bridge.selectSource('ats'); expect(ipc.invoke).toHaveBeenCalledWith('telemetry:select', 'ats');
@@ -146,9 +147,9 @@ it('does not reassert service subscription after the callback unsubscribes its o
   expect(subscriptions()).toBe(1); expect(vi.getTimerCount()).toBe(0);
 });
 it('appends the application state and exit methods after the original three bridge keys', () => {
-  // ET-012a appends the two overlay settings methods.
+  // ET-012a appends the two overlay settings methods, ET-012b the four overlay edit methods.
   expect(Object.keys(bridge)).toEqual(['getStatus', 'selectSource', 'subscribeLive', 'getAppState', 'subscribeAppState', 'exitApplication', 'setUnitProfile',
-    'setOverlayLayout', 'setOverlaySections']);
+    'setOverlayLayout', 'setOverlaySections', 'beginOverlayEdit', 'setOverlayEditScale', 'resetOverlayEditPlacement', 'finishOverlayEdit']);
 });
 it('allows one application state listener, forwards pushed state and unsubscribes once', () => {
   const listener = vi.fn(); const stop = bridge.subscribeAppState(listener);
@@ -199,4 +200,22 @@ it('validates overlay section records strictly before IPC and forwards a fresh c
   await expect(Reflect.apply(bridge.setOverlaySections, bridge, [input, 'extra'])).resolves.toEqual({state: 'loaded'});
   expect(ipc.invoke.mock.calls).toEqual([['settings:set-overlay-sections', {...ALL_ON, rpm: false}]]);
   expect(ipc.invoke.mock.calls[0][1]).not.toBe(input);
+});
+// ET-012b: four appended overlay edit methods; each validates before IPC and forwards only fixed or validated values.
+it('requests the overlay edit mode through fixed channels and forwards only a validated scale or outcome', async () => {
+  for (const scale of [Number.NaN, Number.POSITIVE_INFINITY, 0.49, 2.01, '1.5', null, undefined, [1], {scale: 1}]) {
+    await expect(bridge.setOverlayEditScale(scale as never)).rejects.toThrow('Invalid overlay edit request');
+  }
+  for (const outcome of ['Save', 'done', '', undefined, null, 1, {outcome: 'save'}]) {
+    await expect(bridge.finishOverlayEdit(outcome as never)).rejects.toThrow('Invalid overlay edit request');
+  }
+  expect(ipc.invoke).not.toHaveBeenCalled();
+  ipc.invoke.mockResolvedValue({active: true});
+  await Reflect.apply(bridge.beginOverlayEdit, bridge, ['card', {path: 'C:\\arbitrary'}]);
+  await Reflect.apply(bridge.setOverlayEditScale, bridge, [1.234, 'extra']);
+  await Reflect.apply(bridge.resetOverlayEditPlacement, bridge, [{x: 0}]);
+  await Reflect.apply(bridge.finishOverlayEdit, bridge, ['save', {x: 0}]);
+  await bridge.finishOverlayEdit('cancel');
+  expect(ipc.invoke.mock.calls).toEqual([['overlay-edit:begin'], ['overlay-edit:set-scale', 1.23], ['overlay-edit:reset'], ['overlay-edit:finish', 'save'],
+    ['overlay-edit:finish', 'cancel']]);
 });

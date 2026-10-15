@@ -16,13 +16,14 @@ let ipc: EventEmitter;
 let handlers: Map<string, (event: unknown, source?: unknown) => unknown>;
 let child: EventEmitter & {postMessage: ReturnType<typeof vi.fn>; kill: ReturnType<typeof vi.fn>};
 let children: typeof child[];
-let contents: EventEmitter & {mainFrame: object; send: ReturnType<typeof vi.fn>; postMessage: ReturnType<typeof vi.fn>};
+let contents: EventEmitter & {mainFrame: object; send: ReturnType<typeof vi.fn>; postMessage: ReturnType<typeof vi.fn>; setZoomFactor: ReturnType<typeof vi.fn>};
 let resolveBroker: ReturnType<typeof vi.fn>;
 let loadFile: ReturnType<typeof vi.fn>;
 let overlayContents: typeof contents;
 let windows: (EventEmitter & {webContents: typeof contents; hide: ReturnType<typeof vi.fn>; showInactive: ReturnType<typeof vi.fn>; setBounds: ReturnType<typeof vi.fn>;
   topmost: boolean; setAlwaysOnTop: ReturnType<typeof vi.fn>; moveTop: ReturnType<typeof vi.fn>; setIgnoreMouseEvents: ReturnType<typeof vi.fn>; setFocusable: ReturnType<typeof vi.fn>;
-  minimized: boolean; minimize: ReturnType<typeof vi.fn>; restore: ReturnType<typeof vi.fn>; show: ReturnType<typeof vi.fn>; focus: ReturnType<typeof vi.fn>})[];
+  minimized: boolean; minimize: ReturnType<typeof vi.fn>; restore: ReturnType<typeof vi.fn>; show: ReturnType<typeof vi.fn>; focus: ReturnType<typeof vi.fn>;
+  focused: boolean; setMovable: ReturnType<typeof vi.fn>; setSkipTaskbar: ReturnType<typeof vi.fn>; bounds: Electron.Rectangle})[];
 let channels: {port1: EventEmitter & {postMessage: ReturnType<typeof vi.fn>; close: ReturnType<typeof vi.fn<() => void>>; start: ReturnType<typeof vi.fn<() => void>>}; port2: {close: ReturnType<typeof vi.fn<() => void>>}}[];
 let configurations: Electron.BrowserWindowConstructorOptions[];
 let log: ReturnType<typeof vi.fn>;
@@ -59,9 +60,13 @@ class FakeSettingsBusyError extends Error {}
 // ET-012a: the view carries the overlay layout and sections; `overlayWrite` controls each overlay save.
 const ALL_SECTIONS = {'speed': true, 'gear': true, 'rpm': true, 'fuel': true, 'range': true, 'sdk-consumption': true, 'cargo': true, 'origin': true,
   'destination': true, 'distance-driven': true, 'distance-remaining': true, 'deadline': true, 'expected-income': true, 'game-time': true};
-const DEFAULT_OVERLAY = {layout: 'strip', sections: ALL_SECTIONS};
-let settingsView: {units: {ets2: string; ats: string}; overlay: {layout: string; sections: Record<string, boolean>}; state: string; writable: boolean; saveError: string | null};
-type OverlayWrite = (kind: 'layout' | 'sections', value: unknown) => Promise<unknown>;
+// ET-012b: the overlay settings carry the placements of every layout (the ET-012a anchors at scale 1 by default).
+const PLACEMENTS = {strip: {x: 0.5, y: 0, scale: 1}, card: {x: 1, y: 0, scale: 1}, cluster: {x: 0, y: 1, scale: 1}, hud: {x: 0, y: 0, scale: 1}};
+const DEFAULT_OVERLAY = {layout: 'strip', sections: ALL_SECTIONS, placements: PLACEMENTS};
+// ET-012b: the application state carries the overlay edit mode, which every start leaves in driving mode.
+const DRIVING = {active: false};
+let settingsView: {units: {ets2: string; ats: string}; overlay: {layout: string; sections: Record<string, boolean>; placements: Record<string, {x: number; y: number; scale: number}>}; state: string; writable: boolean; saveError: string | null};
+type OverlayWrite = (kind: 'layout' | 'sections' | 'placement', value: unknown) => Promise<unknown>;
 let overlayWrite: ReturnType<typeof vi.fn<OverlayWrite>>;
 type SettingsWrite = (game: string, profile: string) => Promise<unknown>;
 let settingsWrite: ReturnType<typeof vi.fn<SettingsWrite>>;
@@ -85,8 +90,8 @@ function installFixture() {
     requestSingleInstanceLock: vi.fn(() => lockGranted)});
   child = Object.assign(new EventEmitter(), {postMessage: vi.fn(), kill: vi.fn(() => true)});
   children = [child]; let forks = 0;
-  contents = Object.assign(new EventEmitter(), {mainFrame: {}, send: vi.fn(), postMessage: vi.fn(), setWindowOpenHandler: vi.fn()});
-  overlayContents = Object.assign(new EventEmitter(), {mainFrame: {}, send: vi.fn(), postMessage: vi.fn(), setWindowOpenHandler: vi.fn()});
+  contents = Object.assign(new EventEmitter(), {mainFrame: {}, send: vi.fn(), postMessage: vi.fn(), setWindowOpenHandler: vi.fn(), setZoomFactor: vi.fn()});
+  overlayContents = Object.assign(new EventEmitter(), {mainFrame: {}, send: vi.fn(), postMessage: vi.fn(), setWindowOpenHandler: vi.fn(), setZoomFactor: vi.fn()});
   windows = []; channels = []; configurations = [];
   loadFile = vi.fn(() => Promise.resolve());
   handlers = new Map(); ipc = new EventEmitter();
@@ -99,10 +104,12 @@ function installFixture() {
     screen: Object.assign(new EventEmitter(), {screenToDipRect: (_window: null, bounds: Electron.Rectangle) => bounds, getAllDisplays: () => [{bounds: {x: -1920, y: 0, width: 3840, height: 1080}}]}),
     BrowserWindow: class extends EventEmitter {
       webContents = windows.length === 0 ? contents : windows.length === 1 ? overlayContents : (() => {
-        const next = Object.assign(new EventEmitter(), {mainFrame: {}, send: vi.fn(), postMessage: vi.fn(), setWindowOpenHandler: vi.fn()}); extraContents.push(next); return next;
+        const next = Object.assign(new EventEmitter(), {mainFrame: {}, send: vi.fn(), postMessage: vi.fn(), setWindowOpenHandler: vi.fn(), setZoomFactor: vi.fn()}); extraContents.push(next); return next;
       })();
       minimized = false; isMinimized = () => this.minimized; minimize = vi.fn(() => {this.minimized = true;}); restore = vi.fn(() => {this.minimized = false;}); show = vi.fn(); focus = vi.fn();
       hide = vi.fn(); showInactive = vi.fn(); setBounds = vi.fn(); setIgnoreMouseEvents = vi.fn(); setFocusable = vi.fn(); destroy = vi.fn(() => this.emit('closed'));
+      // ET-012b: focus feeds the edit mode's own-foreground gate; the overlay becomes movable only while edited.
+      focused = false; isFocused = () => this.focused; setMovable = vi.fn(); setSkipTaskbar = vi.fn(); bounds = {x: 0, y: 0, width: 0, height: 0}; getBounds = () => ({...this.bounds});
       // Models Windows: isAlwaysOnTop() reports the HWND style, which external z-order changes can clear.
       topmost = false; isAlwaysOnTop = () => this.topmost; setAlwaysOnTop = vi.fn((flag: boolean) => {this.topmost = flag;}); moveTop = vi.fn();
       constructor(configuration: Electron.BrowserWindowConstructorOptions) {super(); configurations.push(configuration); windows.push(this);}
@@ -137,6 +144,7 @@ function installFixture() {
       setUnitProfile(game: string, profile: string) {return settingsWrite(game, profile);}
       setOverlayLayout(layout: string) {return overlayWrite('layout', layout);}
       setOverlaySections(sections: unknown) {return overlayWrite('sections', sections);}
+      setOverlayPlacement(layout: string, placement: unknown) {return overlayWrite('placement', [layout, placement]);}
       idle() {return settingsIdle;}
     }}));
 }
@@ -705,7 +713,7 @@ it('reopens a new dashboard from the tray that resubscribes without a second ups
   ipc.emit('telemetry:subscribe', reopenedSender);
   expect(reopened.postMessage).toHaveBeenCalledWith('telemetry:port', null, [channels.at(-1)!.port2]);
   expect(upstreamRequests()).toBe(1); expect(children).toHaveLength(1);
-  expect(handlers.get('app:get-state')!(reopenedSender)).toEqual({health: {service: 'ready', storage: 'verified', recording: 'unavailable', lastError: null}, settings: {units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: null}});
+  expect(handlers.get('app:get-state')!(reopenedSender)).toEqual({health: {service: 'ready', storage: 'verified', recording: 'unavailable', lastError: null}, settings: {units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: null}, overlayEdit: DRIVING});
   // A second tray open focuses the existing window instead of creating another.
   trays[0].emit('click'); expect(windows).toHaveLength(3); expect(windows[2].show).toHaveBeenCalledOnce(); expect(windows[2].focus).toHaveBeenCalledOnce();
 });
@@ -810,7 +818,7 @@ it('shows restart exhaustion in health and the tray and stays running until an e
     children.at(-1)!.emit('exit', 1); await vi.advanceTimersByTimeAsync(1000);
     if (crash < 2) {children.at(-1)!.emit('message', {type: 'ready'}); await settle();}
   }
-  expect(handlers.get('app:get-state')!(trusted())).toEqual({health: {service: 'failed', storage: 'pending', recording: 'unavailable', lastError: 'SERVICE_RESTART_EXHAUSTED'}, settings: {units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: null}});
+  expect(handlers.get('app:get-state')!(trusted())).toEqual({health: {service: 'failed', storage: 'pending', recording: 'unavailable', lastError: 'SERVICE_RESTART_EXHAUSTED'}, settings: {units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: null}, overlayEdit: DRIVING});
   await vi.advanceTimersByTimeAsync(500);
   expect(trays[0].setImage).toHaveBeenCalled(); expect(trays[0].setToolTip).toHaveBeenLastCalledWith('ETS2Telemetry\nService failed');
   expect(app.exit).not.toHaveBeenCalled();
@@ -841,7 +849,7 @@ it('answers a dashboard opened during a service restart with a not-ready status,
   expect(handlers.get('scaffold:status')!(sender)).toBeNull();
   expect(() => handlers.get('scaffold:status')!(trusted())).toThrow('Untrusted');
   ipc.emit('app:subscribe-state', sender);
-  expect(reopened.send).toHaveBeenLastCalledWith('app:state', {health: expect.objectContaining({service: 'restarting'}), settings: {units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: null}});
+  expect(reopened.send).toHaveBeenLastCalledWith('app:state', {health: expect.objectContaining({service: 'restarting'}), settings: {units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: null}, overlayEdit: DRIVING});
   // When the pushed health reports ready, the status query already answers with the ready status.
   let statusAtReadyPush: unknown;
   reopened.send.mockImplementation((channel: string, state: {health: {service: string}}) => {
@@ -950,7 +958,7 @@ it('applies a settings read that settles after the load budget to the dashboard 
   // The store applies the late read (t = 200 ms) and reports it; main reads the new view from the store.
   settingsView = {units: {ets2: 'us-customary', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null};
   expect(settingsChanged).toBeTypeOf('function'); settingsChanged!();
-  expect(pushes().at(-1)).toEqual({health: {service: 'ready', storage: 'verified', recording: 'unavailable', lastError: null}, settings: settingsView});
+  expect(pushes().at(-1)).toEqual({health: {service: 'ready', storage: 'verified', recording: 'unavailable', lastError: null}, settings: settingsView, overlayEdit: DRIVING});
   expect(handlers.get('app:get-state')!(trusted())).toMatchObject({settings: settingsView});
   await vi.advanceTimersByTimeAsync(50);
   expect(overlayProjection(overlayChannel)).toMatchObject({source: 'ETS2', speed: '55.9', speedUnit: 'mph', fuel: '19.3', fuelUnit: 'US gal', freshness: 'current'});
@@ -986,7 +994,7 @@ it('applies a unit profile only after the durable save and republishes the overl
   expect(pushes()).toHaveLength(before); expect(overlayProjection(overlayChannel)).toMatchObject({speedUnit: 'km/h'});
   settingsView = {units: {ets2: 'us-customary', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null}; saved.resolve(settingsView);
   await expect(request).resolves.toEqual(settingsView);
-  expect(pushes().at(-1)).toEqual({health: {service: 'ready', storage: 'verified', recording: 'unavailable', lastError: null}, settings: settingsView});
+  expect(pushes().at(-1)).toEqual({health: {service: 'ready', storage: 'verified', recording: 'unavailable', lastError: null}, settings: settingsView, overlayEdit: DRIVING});
   await vi.advanceTimersByTimeAsync(50);
   expect(overlayProjection(overlayChannel)).toMatchObject({source: 'ETS2', speed: '55.9', speedUnit: 'mph', fuel: '19.3', fuelUnit: 'US gal', freshness: 'current'});
   consumeOverlay(overlayChannel);
@@ -1014,14 +1022,14 @@ it.each(['SETTINGS_WRITE_FAILED', 'SETTINGS_READ_ONLY'] as const)('keeps the uni
   // The store records the refusal in its view, as the real store does.
   settingsWrite.mockImplementation(() => {settingsView = {...settingsView, saveError: code}; return Promise.reject(new FakeSettingsError(code));});
   await expect(saveUnits(trusted(), 'ets2', 'us-customary')).rejects.toThrow(code === 'SETTINGS_READ_ONLY' ? 'Settings are read-only' : 'Settings could not be saved');
-  const refused = {health, settings: {units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: code}};
+  const refused = {health, settings: {units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: code}, overlayEdit: DRIVING};
   expect(handlers.get('app:get-state')!(trusted())).toEqual(refused);
   expect(contents.send).toHaveBeenLastCalledWith('app:state', refused);
   await vi.advanceTimersByTimeAsync(50); expect(overlayChannel.port1.postMessage.mock.calls).toHaveLength(deliveries);
   // A later successful save clears the settings error and still leaves the service problem in place.
   settingsWrite.mockImplementation(() => {settingsView = {units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null}; return Promise.resolve(settingsView);});
   await saveUnits(trusted(), 'ats', 'us-customary');
-  const saved = {health, settings: {units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null}};
+  const saved = {health, settings: {units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null}, overlayEdit: DRIVING};
   expect(handlers.get('app:get-state')!(trusted())).toEqual(saved);
   expect(contents.send).toHaveBeenLastCalledWith('app:state', saved);
 });
@@ -1058,11 +1066,11 @@ it('creates the overlay window at the strip nominal size by default', async () =
   await ready(); expect(configurations[1]).toMatchObject({width: 1280, height: 38});
 });
 it('creates the overlay window at the nominal size of the saved layout', async () => {
-  settingsView = {...settingsView, overlay: {layout: 'cluster', sections: ALL_SECTIONS}}; await ready();
+  settingsView = {...settingsView, overlay: {layout: 'cluster', sections: ALL_SECTIONS, placements: PLACEMENTS}}; await ready();
   expect(configurations[1]).toMatchObject({width: 440, height: 220});
 });
 it('delivers the saved layout and sections in the overlay document first projection', async () => {
-  settingsView = {...settingsView, overlay: {layout: 'card', sections: {...ALL_SECTIONS, rpm: false, cargo: false}}}; await ready();
+  settingsView = {...settingsView, overlay: {layout: 'card', sections: {...ALL_SECTIONS, rpm: false, cargo: false}, placements: PLACEMENTS}}; await ready();
   ipc.emit('overlay:subscribe', overlayTrusted());
   const first = overlayProjection(channels.at(-1)!);
   expect(first).toMatchObject({layout: 'card', freshness: 'unavailable', paused: false});
@@ -1100,7 +1108,7 @@ it('applies an overlay layout only after the durable save, then republishes and 
   expect(overlayWrite).toHaveBeenCalledExactlyOnceWith('layout', 'card');
   expect(pushes()).toHaveLength(before); expect(windows[1].setBounds).toHaveBeenCalledOnce();
   expect(overlayProjection(overlayChannel)).toMatchObject({layout: 'strip'});
-  settingsView = {...settingsView, overlay: {layout: 'card', sections: ALL_SECTIONS}, state: 'loaded'}; saved.resolve(settingsView);
+  settingsView = {...settingsView, overlay: {layout: 'card', sections: ALL_SECTIONS, placements: PLACEMENTS}, state: 'loaded'}; saved.resolve(settingsView);
   await expect(request).resolves.toEqual(settingsView);
   expect(pushes().at(-1)).toMatchObject({settings: settingsView});
   expect(windows[1].setBounds).toHaveBeenLastCalledWith({x: -316, y: 16, width: 300, height: 360});
@@ -1125,7 +1133,7 @@ it('applies overlay sections after the durable save and hands the store only a v
   expect(sectionIds(overlayProjection(overlayChannel))).toContain('rpm');
   const input = {...ALL_SECTIONS, rpm: false, cargo: false};
   overlayWrite.mockImplementation((_kind, value) => {
-    settingsView = {...settingsView, overlay: {layout: 'strip', sections: value as Record<string, boolean>}, state: 'loaded'}; return Promise.resolve(settingsView);
+    settingsView = {...settingsView, overlay: {layout: 'strip', sections: value as Record<string, boolean>, placements: PLACEMENTS}, state: 'loaded'}; return Promise.resolve(settingsView);
   });
   await saveOverlay('settings:set-overlay-sections', trusted(), input);
   const [kind, forwarded] = overlayWrite.mock.calls[0];
@@ -1160,10 +1168,191 @@ it('re-places the overlay when a late settings read brings another layout', asyn
   ipc.emit('overlay:subscribe', overlayTrusted()); const overlayChannel = channels[1];
   consumeOverlay(overlayChannel); deliver(currentReading()); await vi.advanceTimersByTimeAsync(50); consumeOverlay(overlayChannel);
   expect(windows[1].setBounds.mock.calls).toEqual([[{x: -1600, y: 8, width: 1280, height: 38}]]);
-  settingsView = {...settingsView, overlay: {layout: 'hud', sections: ALL_SECTIONS}, state: 'loaded', writable: true};
+  settingsView = {...settingsView, overlay: {layout: 'hud', sections: ALL_SECTIONS, placements: PLACEMENTS}, state: 'loaded', writable: true};
   settingsChanged!();
   expect(windows[1].setBounds).toHaveBeenLastCalledWith({x: -1904, y: 16, width: 320, height: 320});
   await vi.advanceTimersByTimeAsync(50);
   expect(overlayProjection(overlayChannel)).toMatchObject({layout: 'hud', freshness: 'current'});
   expect(windows[1].showInactive).toHaveBeenCalledOnce();
+});
+// ET-012b overlay edit mode (REG-016, REG-017). The snapshot's game client is 1920 x 1080 at (-1920, 0) and the screen
+// conversion is the identity. The edit handlers may throw synchronously, as ipcMain.handle turns that into a rejection.
+const edit = (channel: string, event: unknown, ...request: unknown[]) => new Promise<unknown>(resolve => resolve(handlers.get(channel)!(event, ...request as [unknown])));
+let receipt = 0;
+/** A current ETS2 reading with a new SDK capture and window report; `foreground` false while the dashboard is in front. */
+function renew(foreground = false) {
+  receipt++;
+  const current = currentReading(), window = current.observation!.state.window;
+  if (!window.available) throw new Error('Expected window');
+  window.value.foreground = foreground; current.observation!.windowReceivedMonotonicMs = receipt * 100;
+  current.observation!.capture = {...current.observation!.capture, monotonicNs: String(5_000_000_000 + receipt)};
+  deliver(current, receipt);
+}
+const editPushes = () => contents.send.mock.calls.filter(call => call[0] === 'app:state').map(call => (call[1] as {overlayEdit: unknown}).overlayEdit);
+/** The dashboard is focused and the game runs behind it; the overlay subscribed and holds a current reading. */
+async function editableOverlay(view: Partial<typeof settingsView> = {}) {
+  trayAvailable = true; vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2'); settingsView = {...settingsView, ...view}; receipt = 0; await ready();
+  ipc.emit('app:subscribe-state', trusted()); ipc.emit('overlay:subscribe', overlayTrusted()); const overlayChannel = channels[1];
+  consumeOverlay(overlayChannel); renew(); await vi.advanceTimersByTimeAsync(50); consumeOverlay(overlayChannel);
+  windows[0].focused = true;
+  return overlayChannel;
+}
+function interactive(target = windows[1]) {
+  return {ignoreMouse: target.setIgnoreMouseEvents.mock.lastCall?.[0], focusable: target.setFocusable.mock.lastCall?.[0],
+    movable: target.setMovable.mock.lastCall?.[0] ?? false, skipTaskbar: target.setSkipTaskbar.mock.lastCall?.[0] ?? true};
+}
+const CLICK_THROUGH = {ignoreMouse: true, focusable: false, movable: false, skipTaskbar: true};
+/** The overlay was hidden after it last became focusable and before it became click-through again. */
+function hiddenBeforeClickThrough(target = windows[1]) {
+  const restored = target.setIgnoreMouseEvents.mock.invocationCallOrder.at(-1)!;
+  const enabled = target.setFocusable.mock.invocationCallOrder.filter((_order, index) => target.setFocusable.mock.calls[index][0] === true).at(-1)!;
+  expect(target.hide.mock.invocationCallOrder.some(order => order > enabled && order < restored)).toBe(true);
+}
+const EDITABLE = {ignoreMouse: false, focusable: true, movable: true, skipTaskbar: true};
+
+it('creates the overlay window at the saved scale of its layout and applies that zoom after every load', async () => {
+  settingsView = {...settingsView, overlay: {layout: 'cluster', sections: ALL_SECTIONS, placements: {...PLACEMENTS, cluster: {x: 0, y: 1, scale: 1.5}}}}; await ready();
+  expect(configurations[1]).toMatchObject({width: 660, height: 330, webPreferences: {zoomFactor: 1.5, partition: 'ets2telemetry-overlay'}});
+  expect(configurations[0].webPreferences).not.toHaveProperty('zoomFactor');
+  overlayContents.emit('did-finish-load'); expect(overlayContents.setZoomFactor).toHaveBeenLastCalledWith(1.5);
+  expect(contents.setZoomFactor).not.toHaveBeenCalled();
+});
+it('accepts overlay edit requests only from the trusted dashboard in their fixed shapes, with writable settings and before exit', async () => {
+  await editableOverlay();
+  const requests: [string, unknown[]][] = [['overlay-edit:begin', []], ['overlay-edit:set-scale', [1.5]], ['overlay-edit:reset', []], ['overlay-edit:finish', ['save']]];
+  for (const event of [{sender: {}, senderFrame: contents.mainFrame}, {sender: contents, senderFrame: {}}, overlayTrusted()])
+    for (const [channel, request] of requests) await expect(edit(channel, event, ...request)).rejects.toThrow('Untrusted');
+  const invalid: [string, unknown[]][] = [['overlay-edit:begin', [1]], ['overlay-edit:begin', ['strip']], ['overlay-edit:set-scale', []], ['overlay-edit:set-scale', [0.49]],
+    ['overlay-edit:set-scale', [2.01]], ['overlay-edit:set-scale', ['1.5']], ['overlay-edit:set-scale', [Number.NaN]], ['overlay-edit:set-scale', [Number.POSITIVE_INFINITY]],
+    ['overlay-edit:set-scale', [1, 2]], ['overlay-edit:reset', [true]], ['overlay-edit:finish', []], ['overlay-edit:finish', ['done']], ['overlay-edit:finish', ['save', 'x']],
+    ['overlay-edit:finish', [{outcome: 'save'}]]];
+  for (const [channel, request] of invalid) await expect(edit(channel, trusted(), ...request)).rejects.toThrow('Invalid overlay edit request');
+  for (const [channel, request] of requests.slice(1)) await expect(edit(channel, trusted(), ...request)).rejects.toThrow('Overlay edit mode is not active');
+  settingsView = {...settingsView, state: 'newer-version', writable: false};
+  await expect(edit('overlay-edit:begin', trusted())).rejects.toThrow('Overlay edit mode needs writable settings');
+  settingsView = {...settingsView, state: 'loaded', writable: true};
+  settingsIdle = deferred().promise; void handlers.get('app:exit')!(trusted());
+  for (const [channel, request] of requests) await expect(edit(channel, trusted(), ...request)).rejects.toThrow('retired');
+  expect(overlayWrite).not.toHaveBeenCalled(); expect(windows[1].setFocusable.mock.calls).toEqual([[false]]); expect(windows[1].setMovable).not.toHaveBeenCalled();
+  expect(editPushes().every(state => (state as {active: boolean}).active === false)).toBe(true);
+});
+it('edits over a background game: interactive only while shown, the layout locked, and the draft saved only through the settings queue', async () => {
+  const overlayChannel = await editableOverlay(), overlay = windows[1];
+  expect(overlay.showInactive).not.toHaveBeenCalled();
+  const begun = await edit('overlay-edit:begin', trusted());
+  expect(begun).toEqual({active: true, layout: 'strip', scale: 1, placement: 'visible'});
+  expect(editPushes().at(-1)).toEqual(begun); expect(handlers.get('app:get-state')!(trusted())).toMatchObject({overlayEdit: begun});
+  expect(interactive()).toEqual(EDITABLE);
+  expect(overlay.setBounds).toHaveBeenLastCalledWith({x: -1600, y: 8, width: 1280, height: 38});
+  expect(overlay.showInactive).toHaveBeenCalledOnce(); expect(overlay.show).not.toHaveBeenCalled(); expect(overlay.focus).not.toHaveBeenCalled();
+  expect(overlay.setFocusable.mock.invocationCallOrder.at(-1)).toBeLessThan(overlay.showInactive.mock.invocationCallOrder[0]);
+  expect(overlay.showInactive.mock.invocationCallOrder[0]).toBeLessThan(overlay.setAlwaysOnTop.mock.invocationCallOrder.at(-1)!);
+  // A second begin returns the same state; the projection marks the edit mode for the renderer.
+  expect(await edit('overlay-edit:begin', trusted())).toEqual(begun);
+  await vi.advanceTimersByTimeAsync(50); expect(overlayProjection(overlayChannel)).toMatchObject({editing: true, layout: 'strip'}); consumeOverlay(overlayChannel);
+  await expect(saveOverlay('settings:set-overlay-layout', trusted(), 'card')).rejects.toThrow('The overlay layout cannot change while its position is edited');
+  // The scale is rounded to two decimals; the strip at 1.23 is floor(1280 × 1.23) = 1574 wide and round(38 × 1.23) = 47 high.
+  expect(await edit('overlay-edit:set-scale', trusted(), 1.234)).toEqual({active: true, layout: 'strip', scale: 1.23, placement: 'visible'});
+  expect(overlayContents.setZoomFactor).toHaveBeenLastCalledWith(1.23); expect(contents.setZoomFactor).not.toHaveBeenCalled();
+  expect(overlay.setBounds).toHaveBeenLastCalledWith({x: -1747, y: 8, width: 1574, height: 47});
+  // A drag past the left edge snaps inside: x = 0; y = (500 − 8) / (1080 − 16 − 47) = 0.4838.
+  overlay.emit('will-move'); overlay.setBounds.mockClear();
+  renew(); expect(overlay.setBounds).not.toHaveBeenCalled();
+  overlay.bounds = {x: -5000, y: 500, width: 1574, height: 47}; overlay.emit('moved');
+  expect(overlay.setBounds.mock.calls).toEqual([[{x: -1904, y: 500, width: 1574, height: 47}]]);
+  // Unit and section saves stay allowed while editing.
+  overlayWrite.mockImplementationOnce(() => Promise.resolve(settingsView));
+  await saveOverlay('settings:set-overlay-sections', trusted(), ALL_SECTIONS);
+  const saved = deferred<typeof settingsView>(); overlayWrite.mockReturnValueOnce(saved.promise);
+  const finishing = edit('overlay-edit:finish', trusted(), 'save');
+  // Edit mode ended first: hidden, then click-through again, before the write completes; nothing is applied yet.
+  expect(overlayWrite).toHaveBeenLastCalledWith('placement', ['strip', {x: 0, y: 0.4838, scale: 1.23}]);
+  expect(interactive()).toEqual(CLICK_THROUGH);
+  hiddenBeforeClickThrough();
+  expect(editPushes().at(-1)).toEqual({active: false});
+  const placements = {...PLACEMENTS, strip: {x: 0, y: 0.4838, scale: 1.23}};
+  settingsView = {...settingsView, overlay: {...DEFAULT_OVERLAY, placements}, state: 'loaded'}; saved.resolve(settingsView);
+  await expect(finishing).resolves.toEqual(settingsView);
+  expect(overlayContents.setZoomFactor).toHaveBeenLastCalledWith(1.23);
+  await vi.advanceTimersByTimeAsync(50); expect(overlayProjection(overlayChannel)).toMatchObject({editing: false}); consumeOverlay(overlayChannel);
+  // Driving mode: the saved placement shows only with the game in front, still click-through.
+  overlay.showInactive.mockClear(); renew(true);
+  expect(overlay.showInactive).toHaveBeenCalledOnce(); expect(overlay.setBounds).toHaveBeenLastCalledWith({x: -1904, y: 500, width: 1574, height: 47});
+  expect(interactive()).toEqual(CLICK_THROUGH);
+});
+it('keeps the previous placement when the edit save fails and reports the refusal in the settings view', async () => {
+  await editableOverlay(); await edit('overlay-edit:begin', trusted()); await edit('overlay-edit:set-scale', trusted(), 1.5);
+  overlayWrite.mockImplementation(() => {settingsView = {...settingsView, saveError: 'SETTINGS_WRITE_FAILED'}; return Promise.reject(new FakeSettingsError('SETTINGS_WRITE_FAILED'));});
+  await expect(edit('overlay-edit:finish', trusted(), 'save')).rejects.toThrow('Settings could not be saved');
+  expect(handlers.get('app:get-state')!(trusted())).toMatchObject({overlayEdit: {active: false}, settings: {overlay: DEFAULT_OVERLAY, saveError: 'SETTINGS_WRITE_FAILED'}});
+  expect(overlayContents.setZoomFactor).toHaveBeenLastCalledWith(1); expect(interactive()).toEqual(CLICK_THROUGH);
+});
+it.each(['cancel', 'escape', 'dashboard-closed', 'dashboard-reload', 'dashboard-crash', 'overlay-reload', 'overlay-crash', 'exit'])(
+  'discards the draft without writing on %s', async reason => {
+    await editableOverlay(); await edit('overlay-edit:begin', trusted()); await edit('overlay-edit:set-scale', trusted(), 1.5);
+    expect(interactive()).toEqual(EDITABLE);
+    if (reason === 'cancel') await expect(edit('overlay-edit:finish', trusted(), 'cancel')).resolves.toEqual(settingsView);
+    else if (reason === 'escape') overlayContents.emit('before-input-event', {preventDefault: vi.fn()}, {type: 'keyDown', key: 'Escape'});
+    else if (reason === 'dashboard-closed') closeDashboard();
+    else if (reason === 'dashboard-reload') contents.emit('did-start-loading');
+    else if (reason === 'dashboard-crash') contents.emit('render-process-gone', {}, {reason: 'crashed'});
+    else if (reason === 'overlay-reload') overlayContents.emit('did-start-loading');
+    else if (reason === 'overlay-crash') overlayContents.emit('render-process-gone', {}, {reason: 'crashed'});
+    else app.emit('before-quit', {preventDefault: vi.fn()});
+    await settle();
+    expect(overlayWrite).not.toHaveBeenCalled(); expect(interactive()).toEqual(CLICK_THROUGH);
+    hiddenBeforeClickThrough();
+    expect(editPushes().at(-1)).toEqual({active: false});
+    // The saved scale applies again.
+    expect(overlayContents.setZoomFactor).toHaveBeenLastCalledWith(1);
+  });
+it('prevents every key and the system menu on the overlay and saves with Enter only in edit mode', async () => {
+  await editableOverlay();
+  const key = (input: {type: string; key: string}) => {const event = {preventDefault: vi.fn()}; overlayContents.emit('before-input-event', event, input); return event.preventDefault;};
+  for (const input of [{type: 'keyDown', key: 'Enter'}, {type: 'keyDown', key: 'Escape'}, {type: 'keyDown', key: 'a'}]) expect(key(input)).toHaveBeenCalledOnce();
+  const menu = {preventDefault: vi.fn()}; windows[1].emit('system-context-menu', menu); expect(menu.preventDefault).toHaveBeenCalledOnce();
+  expect(overlayWrite).not.toHaveBeenCalled(); expect(editPushes().every(state => (state as {active: boolean}).active === false)).toBe(true);
+  await edit('overlay-edit:begin', trusted());
+  for (const input of [{type: 'keyDown', key: 'a'}, {type: 'keyUp', key: 'Enter'}, {type: 'char', key: 'Enter'}]) expect(key(input)).toHaveBeenCalledOnce();
+  expect(handlers.get('app:get-state')!(trusted())).toMatchObject({overlayEdit: {active: true}});
+  overlayWrite.mockImplementation((_kind, value) => {
+    const [layout, placement] = value as [string, {x: number; y: number; scale: number}];
+    settingsView = {...settingsView, overlay: {...DEFAULT_OVERLAY, placements: {...PLACEMENTS, [layout]: placement}}, state: 'loaded'}; return Promise.resolve(settingsView);
+  });
+  expect(key({type: 'keyDown', key: 'Enter'})).toHaveBeenCalledOnce(); await settle();
+  expect(overlayWrite.mock.calls).toEqual([['placement', ['strip', {x: 0.5, y: 0, scale: 1}]]]);
+  expect(editPushes().at(-1)).toEqual({active: false}); expect(interactive()).toEqual(CLICK_THROUGH);
+  // A repeated Enter after the save does nothing.
+  key({type: 'keyDown', key: 'Enter'}); await settle(); expect(overlayWrite).toHaveBeenCalledOnce();
+});
+it('gates the edit overlay on the focus of either own window with a 150 ms grace for losses', async () => {
+  const overlayChannel = await editableOverlay(), [dashboard, overlay] = windows;
+  await edit('overlay-edit:begin', trusted()); expect(overlay.showInactive).toHaveBeenCalledOnce(); overlay.hide.mockClear();
+  const placement = () => (handlers.get('app:get-state')!(trusted()) as {overlayEdit: {placement?: string}}).overlayEdit.placement;
+  // A click from the dashboard onto the overlay: the dashboard blurs before the overlay gains focus.
+  dashboard.focused = false; dashboard.emit('blur'); await drainOverlay(overlayChannel, 100); renew();
+  overlay.focused = true; overlay.emit('focus'); await drainOverlay(overlayChannel, 100); renew();
+  expect(placement()).toBe('visible'); expect(overlay.hide).not.toHaveBeenCalled();
+  // Another application comes to the front: hidden 150 ms later, click-through again.
+  overlay.focused = false; overlay.emit('blur'); await drainOverlay(overlayChannel, 100); renew();
+  expect(placement()).toBe('visible');
+  await drainOverlay(overlayChannel, 50);
+  expect(placement()).toBe('not-foreground'); expect(overlay.hide).toHaveBeenCalled(); expect(interactive()).toEqual(CLICK_THROUGH);
+  // Back to the dashboard: shown again at once.
+  dashboard.focused = true; dashboard.emit('focus');
+  expect(placement()).toBe('visible'); expect(overlay.showInactive).toHaveBeenCalledTimes(2); expect(interactive()).toEqual(EDITABLE);
+  // The game itself in front hides the edit overlay whatever the own focus is.
+  renew(true); expect(placement()).toBe('not-foreground'); expect(interactive()).toEqual(CLICK_THROUGH);
+  await edit('overlay-edit:finish', trusted(), 'cancel'); expect(interactive()).toEqual(CLICK_THROUGH);
+});
+it('reports waiting for the game while no game window can be placed, and never shows the overlay then', async () => {
+  trayAvailable = true; await ready(); windows[0].focused = true;
+  ipc.emit('app:subscribe-state', trusted()); ipc.emit('overlay:subscribe', overlayTrusted());
+  expect(await edit('overlay-edit:begin', trusted())).toEqual({active: true, layout: 'strip', scale: 1, placement: 'waiting-for-game'});
+  expect(await edit('overlay-edit:set-scale', trusted(), 2)).toEqual({active: true, layout: 'strip', scale: 2, placement: 'waiting-for-game'});
+  expect(await edit('overlay-edit:reset', trusted())).toEqual({active: true, layout: 'strip', scale: 1, placement: 'waiting-for-game'});
+  expect(windows[1].showInactive).not.toHaveBeenCalled(); expect(windows[1].setFocusable.mock.calls).toEqual([[false]]);
+  expect(windows[1].setMovable).not.toHaveBeenCalled();
+  expect(editPushes()).toEqual([{active: false}, {active: true, layout: 'strip', scale: 1, placement: 'waiting-for-game'},
+    {active: true, layout: 'strip', scale: 2, placement: 'waiting-for-game'}, {active: true, layout: 'strip', scale: 1, placement: 'waiting-for-game'}]);
 });

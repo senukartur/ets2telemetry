@@ -9,13 +9,18 @@ import {waitForOverlay} from './overlay-observation.mjs';
 // ET-011b settings evidence. Run A starts with a deliberately truncated settings file, which must stay byte-identical
 // until the first save quarantines it; run B must load the saved file without writing.
 const SETTINGS_SEED = '{"format":"ets2telemetry.settings","version":1,"units":{"ets2":"metric",';
-// ET-012a: every save writes settings format v2 with the overlay block (strip layout and every section by default).
-const SETTINGS_SAVED = ['{', '  "format": "ets2telemetry.settings",', '  "version": 2,', '  "units": {', '    "ets2": "us-customary",', '    "ats": "us-customary"', '  },',
+// ET-012a: every save writes the overlay block (strip layout and every section by default). ET-012b: the block also
+// holds the placements of all four layouts (the ET-012a anchors at scale 1 by default), so the format is v3.
+const placementLines = (layout, x, y, last = false) => [`      "${layout}": {`, `        "x": ${x},`, `        "y": ${y},`, '        "scale": 1', last ? '      }' : '      },'];
+const SETTINGS_SAVED = ['{', '  "format": "ets2telemetry.settings",', '  "version": 3,', '  "units": {', '    "ets2": "us-customary",', '    "ats": "us-customary"', '  },',
   '  "overlay": {', '    "layout": "strip",', '    "sections": {', '      "speed": true,', '      "gear": true,', '      "rpm": true,', '      "fuel": true,',
   '      "range": true,', '      "sdk-consumption": true,', '      "cargo": true,', '      "origin": true,', '      "destination": true,', '      "distance-driven": true,',
-  '      "distance-remaining": true,', '      "deadline": true,', '      "expected-income": true,', '      "game-time": true', '    }', '  }', '}', ''].join('\n');
+  '      "distance-remaining": true,', '      "deadline": true,', '      "expected-income": true,', '      "game-time": true', '    },', '    "placements": {',
+  ...placementLines('strip', 0.5, 0), ...placementLines('card', 1, 0), ...placementLines('cluster', 0, 1), ...placementLines('hud', 0, 0, true),
+  '    }', '  }', '}', ''].join('\n');
 const DEFAULT_OVERLAY = {layout: 'strip', sections: {'speed': true, 'gear': true, 'rpm': true, 'fuel': true, 'range': true, 'sdk-consumption': true, 'cargo': true,
-  'origin': true, 'destination': true, 'distance-driven': true, 'distance-remaining': true, 'deadline': true, 'expected-income': true, 'game-time': true}};
+  'origin': true, 'destination': true, 'distance-driven': true, 'distance-remaining': true, 'deadline': true, 'expected-income': true, 'game-time': true},
+placements: {strip: {x: 0.5, y: 0, scale: 1}, card: {x: 1, y: 0, scale: 1}, cluster: {x: 0, y: 1, scale: 1}, hud: {x: 0, y: 0, scale: 1}}};
 const QUARANTINE_NAME = /^settings\.rejected-\d{8}T\d{6}Z\.json$/;
 // 25 m/s and 73 L in the us-customary profile.
 const US_DASHBOARD = {speed: 'Speed: 55.9 mph', fuel: 'Fuel: 19.3 US gal'};
@@ -236,4 +241,14 @@ export async function verifyLifecycleRestart({application, record, rendererPages
   assert.equal(files.find(file => file.name === 'settings.json').content, SETTINGS_SAVED);
   assert.equal(files.find(file => QUARANTINE_NAME.test(file.name)).content, SETTINGS_SEED);
   record.settingsRestartLoaded = true;
+  // ET-012b: the restart restores the saved placements, starts in driving mode and gives the overlay document the saved
+  // scale of its layout as zoom factor, without writing. Run A saves only once (the receipt requires exactly one
+  // SETTINGS_SAVED row), so the saved placements are the defaults here; the overlay smoke saves an edited scale.
+  record.restart.placements = state.settings.overlay.placements;
+  record.restart.overlayEdit = (await dashboard.evaluate(() => globalThis.desktop.getAppState())).overlayEdit;
+  assert.deepEqual(record.restart.overlayEdit, {active: false});
+  record.restart.zoom = await application.evaluate(({BrowserWindow}) => BrowserWindow.getAllWindows().map(window =>
+    ({url: window.webContents.mainFrame.url, zoom: window.webContents.getZoomFactor()})).map(({url, zoom}) => ({view: new URL(url).search, zoom})));
+  assert.deepEqual(record.restart.zoom.sort((left, right) => left.view.localeCompare(right.view)), [{view: '', zoom: 1}, {view: '?view=overlay', zoom: 1}]);
+  record.restartPlacementsRestored = true;
 }

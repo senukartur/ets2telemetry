@@ -82,5 +82,5 @@ export default function App() {
     {settings?.saveError && lastCard === 'units' ? <p role="status" data-testid="settings-error">{SETTINGS_SAVE_ERROR_TEXT[settings.saveError]}</p>
       : units === 'failed' ? <p role="status" data-testid="settings-error">{STRINGS.unitsSaveFailed}</p> : null}
   </CardContent></Card>
-  <OverlaySettingsCard settings={settings} onSaved={saved} onRequest={() => setLastCard('overlay')} showSaveError={lastCard === 'overlay'} /></main>;
+  <OverlaySettingsCard settings={settings} edit={app?.overlayEdit} onSaved={saved} onRequest={() => setLastCard('overlay')} showSaveError={lastCard === 'overlay'} /></main>;
 }
