@@ -1,0 +1,97 @@
+import {inflateSync} from 'node:zlib';
+import {afterEach, beforeEach, expect, it, vi} from 'vitest';
+import type {AppHealth} from '../../packages/contracts/src';
+import {TRAY_TOOLTIP_LIMIT, TrayPresenter, trayModel, trayTone, type TrayInput} from '../../apps/desktop/src/tray-model';
+import {TRAY_ICON_REPRESENTATIONS, TRAY_TONE_RGB, crc32, trayIconPng, type TrayTone} from '../../apps/desktop/src/tray-icon';
+
+beforeEach(() => vi.useFakeTimers());
+afterEach(() => vi.useRealTimers());
+const health = (service: AppHealth['service'], storage: AppHealth['storage'] = 'verified'): AppHealth => ({service, storage, recording: 'unavailable', lastError: null});
+const ready: TrayInput = {health: health('ready'), exiting: false, source: {selection: 'ets2', status: 'connected'}};
+
+it('builds the status, recording, open and exit menu and disables actions while exiting', () => {
+  expect(trayModel(ready).menu).toEqual([
+    {kind: 'status', label: 'Service: ready · Storage self-test: verified'},
+    {kind: 'status', label: 'Recording: not available in this version'},
+    {kind: 'separator'},
+    {kind: 'open', label: 'Open ETS2Telemetry', enabled: true},
+    {kind: 'separator'},
+    {kind: 'exit', label: 'Exit ETS2Telemetry', enabled: true}
+  ]);
+  const exiting = trayModel({...ready, exiting: true});
+  expect(exiting.menu.filter(item => item.kind === 'open' || item.kind === 'exit').every(item => 'enabled' in item && !item.enabled)).toBe(true);
+  expect(exiting.tooltip).toBe('ETS2Telemetry\nExiting');
+});
+
+it('keeps tooltips within the notification-area limit and free of readings or paths', () => {
+  expect(trayModel({...ready, health: health('starting', 'pending')}).tooltip).toBe('ETS2Telemetry\nStarting');
+  expect(trayModel(ready).tooltip).toBe('ETS2Telemetry\nService ready · Source: ETS2 (connected)');
+  expect(trayModel({...ready, health: health('restarting', 'pending')}).tooltip).toBe('ETS2Telemetry\nService restarting');
+  for (const service of ['starting', 'ready', 'restarting', 'failed', 'stopping'] as const) for (const selection of ['game', 'ets2', 'ats', 'synthetic', 'replay'] as const)
+    for (const status of ['waiting', 'connected', 'service-failed', 'incompatible'] as const) for (const exiting of [false, true])
+      expect(trayModel({health: health(service), exiting, source: {selection, status}}).tooltip.length).toBeLessThanOrEqual(TRAY_TOOLTIP_LIMIT);
+});
+
+it('selects ready, busy and failed tones from health', () => {
+  expect(trayTone(health('ready'), false)).toBe('ready');
+  for (const service of ['starting', 'restarting', 'stopping'] as const) expect(trayTone(health(service), false)).toBe('busy');
+  expect(trayTone(health('failed'), false)).toBe('failed');
+  expect(trayTone(health('ready'), true)).toBe('busy');
+});
+
+it('applies only changed parts at most twice per second, ending with the latest state', async () => {
+  const view = {setToolTip: vi.fn(), setMenu: vi.fn(), setTone: vi.fn()};
+  const presenter = new TrayPresenter(view, {setTimeout: (callback, ms) => setTimeout(callback, ms), clearTimeout: handle => clearTimeout(handle as ReturnType<typeof setTimeout>), now: () => Date.now()});
+  presenter.update(ready);
+  expect(view.setToolTip).toHaveBeenCalledOnce(); expect(view.setMenu).toHaveBeenCalledOnce(); expect(view.setTone).toHaveBeenCalledExactlyOnceWith('ready');
+  presenter.update(ready); await vi.advanceTimersByTimeAsync(1000);
+  expect(view.setToolTip).toHaveBeenCalledOnce(); expect(view.setMenu).toHaveBeenCalledOnce();
+  // Twenty status flips within one second produce at most two tooltip writes and end on the final state.
+  for (let flip = 0; flip < 20; flip++) {
+    presenter.update({...ready, source: {selection: 'ets2', status: flip % 2 ? 'connected' : 'stale'}}); await vi.advanceTimersByTimeAsync(50);
+  }
+  presenter.update({...ready, source: {selection: 'ets2', status: 'stale'}}); await vi.advanceTimersByTimeAsync(500);
+  expect(view.setToolTip.mock.calls.length).toBeLessThanOrEqual(1 + 3);
+  expect(view.setToolTip).toHaveBeenLastCalledWith('ETS2Telemetry\nService ready · Source: ETS2 (stale)');
+  // Source status changes alter neither the menu nor the icon.
+  expect(view.setMenu).toHaveBeenCalledOnce(); expect(view.setTone).toHaveBeenCalledOnce();
+  presenter.update({...ready, health: health('failed', 'pending')}); presenter.update({...ready, exiting: true}, true);
+  expect(view.setToolTip).toHaveBeenLastCalledWith('ETS2Telemetry\nExiting'); expect(view.setTone).toHaveBeenLastCalledWith('busy');
+  presenter.dispose(); presenter.update(ready); await vi.advanceTimersByTimeAsync(1000);
+  expect(view.setToolTip).toHaveBeenLastCalledWith('ETS2Telemetry\nExiting'); expect(vi.getTimerCount()).toBe(0);
+});
+
+function chunks(png: Buffer) {
+  const result: {type: string; data: Buffer; crcValid: boolean}[] = [];
+  for (let offset = 8; offset < png.length;) {
+    const length = png.readUInt32BE(offset), type = png.toString('ascii', offset + 4, offset + 8), data = png.subarray(offset + 8, offset + 8 + length);
+    result.push({type, data, crcValid: png.readUInt32BE(offset + 8 + length) === crc32(png.subarray(offset + 4, offset + 8 + length))});
+    offset += 12 + length;
+  }
+  return result;
+}
+it('generates valid RGBA PNG representations for every notification-area scale', () => {
+  // The CRC-32 check value from the PNG specification's reference algorithm.
+  expect(crc32(Buffer.from('123456789'))).toBe(0xcbf43926);
+  expect(TRAY_ICON_REPRESENTATIONS.map(entry => [entry.size, entry.scaleFactor])).toEqual([[16, 1], [20, 1.25], [24, 1.5], [32, 2]]);
+  for (const {size} of TRAY_ICON_REPRESENTATIONS) for (const tone of Object.keys(TRAY_TONE_RGB) as TrayTone[]) {
+    const png = trayIconPng(size, tone);
+    expect([...png.subarray(0, 8)]).toEqual([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const parsed = chunks(png);
+    expect(parsed.map(entry => entry.type)).toEqual(['IHDR', 'IDAT', 'IEND']);
+    expect(parsed.every(entry => entry.crcValid)).toBe(true);
+    const header = parsed[0].data;
+    expect([header.readUInt32BE(0), header.readUInt32BE(4), header[8], header[9], header[10], header[11], header[12]]).toEqual([size, size, 8, 6, 0, 0, 0]);
+    const pixels = inflateSync(parsed[1].data);
+    expect(pixels.length).toBe(size * (1 + size * 4));
+    const pixel = (x: number, y: number) => [...pixels.subarray(y * (1 + size * 4) + 1 + x * 4, y * (1 + size * 4) + 1 + x * 4 + 4)];
+    expect(pixel(0, 0)[3]).toBe(0);
+    expect(pixel(size / 2, size / 2)).toEqual([...TRAY_TONE_RGB[tone], 255]);
+  }
+  expect(() => trayIconPng(4, 'ready')).toThrow(); expect(() => trayIconPng(16.5, 'ready')).toThrow();
+});
+it('uses visibly distinct colours for each health tone', () => {
+  const tones = Object.values(TRAY_TONE_RGB);
+  for (const [index, left] of tones.entries()) for (const right of tones.slice(index + 1))
+    expect(Math.hypot(left[0] - right[0], left[1] - right[1], left[2] - right[2])).toBeGreaterThan(80);
+});

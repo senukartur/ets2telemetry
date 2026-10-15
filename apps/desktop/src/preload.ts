@@ -1,5 +1,5 @@
 import {contextBridge, ipcRenderer} from 'electron';
-import type {DesktopBridge, LiveTelemetry} from '../../../packages/contracts/src';
+import type {AppState, DesktopBridge, LiveTelemetry} from '../../../packages/contracts/src';
 import {initialLive, sourceSelection} from './live-state';
 import {RecoveryBudget} from './recovery-budget';
 let listener: ((update: LiveTelemetry) => void) | undefined;
@@ -78,6 +78,9 @@ ipcRenderer.on('telemetry:service-state', (_event, update: LiveTelemetry) => {
   // Remote close can clear main's intent before its failure notification arrives. Reassert only the active owner.
   if (listener && subscription === owner && (update.status === 'service-failed' || update.status === 'restarting')) ipcRenderer.send('telemetry:subscribe');
 });
+let appStateListener: ((state: AppState) => void) | undefined;
+// Main pushes fixed health codes only after this document subscribed through the trusted main frame.
+ipcRenderer.on('app:state', (_event, state: AppState) => {appStateListener?.(state);});
 const bridge: DesktopBridge = {
   getStatus: () => ipcRenderer.invoke('scaffold:status'),
   selectSource: source => {
@@ -89,6 +92,15 @@ const bridge: DesktopBridge = {
     subscription = Symbol(); listener = callback; current = initialLive(); sdkReceiptKey = windowReceiptKey = undefined; recoveryBudget = new RecoveryBudget(); ipcRenderer.send('telemetry:subscribe');
     let active = true;
     return () => {if (!active) return; active = false; subscription = Symbol(); listener = undefined; clearFreshness(); clearRecovery(); closePort(); ipcRenderer.send('telemetry:unsubscribe');};
-  }
+  },
+  getAppState: () => ipcRenderer.invoke('app:get-state'),
+  subscribeAppState: callback => {
+    if (typeof callback !== 'function' || appStateListener) throw new Error('One application state subscription is allowed');
+    appStateListener = callback; ipcRenderer.send('app:subscribe-state');
+    let active = true;
+    return () => {if (!active) return; active = false; appStateListener = undefined; ipcRenderer.send('app:unsubscribe-state');};
+  },
+  // Exit takes no arguments: the reason is fixed by main as a renderer request.
+  exitApplication: () => ipcRenderer.invoke('app:exit')
 };
 contextBridge.exposeInMainWorld('desktop', Object.freeze(bridge));

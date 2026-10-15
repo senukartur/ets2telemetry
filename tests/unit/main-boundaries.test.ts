@@ -1,5 +1,8 @@
 import {EventEmitter} from 'node:events';
 import {readFileSync} from 'node:fs';
+import {mkdtemp, rm} from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import {afterEach, beforeEach, expect, it, vi} from 'vitest';
 import type {LiveTelemetry} from '../../packages/contracts/src';
 import {validateMessage} from '../../packages/contracts/src/protocol-v0';
@@ -8,7 +11,7 @@ import {initialLive} from '../../apps/desktop/src/live-state';
 const processEvents = ['uncaughtException', 'unhandledRejection'] as const;
 const processEmitter: EventEmitter = process;
 let originals: Map<string, ReturnType<EventEmitter['listeners']>>;
-let app: EventEmitter & {exit: ReturnType<typeof vi.fn>};
+let app: EventEmitter & {exit: ReturnType<typeof vi.fn>; quit: ReturnType<typeof vi.fn>; setPath: ReturnType<typeof vi.fn>; requestSingleInstanceLock: ReturnType<typeof vi.fn>};
 let ipc: EventEmitter;
 let handlers: Map<string, (event: unknown, source?: unknown) => unknown>;
 let child: EventEmitter & {postMessage: ReturnType<typeof vi.fn>; kill: ReturnType<typeof vi.fn>};
@@ -18,15 +21,24 @@ let resolveBroker: ReturnType<typeof vi.fn>;
 let loadFile: ReturnType<typeof vi.fn>;
 let overlayContents: typeof contents;
 let windows: (EventEmitter & {webContents: typeof contents; hide: ReturnType<typeof vi.fn>; showInactive: ReturnType<typeof vi.fn>; setBounds: ReturnType<typeof vi.fn>;
-  topmost: boolean; setAlwaysOnTop: ReturnType<typeof vi.fn>; moveTop: ReturnType<typeof vi.fn>; setIgnoreMouseEvents: ReturnType<typeof vi.fn>; setFocusable: ReturnType<typeof vi.fn>})[];
+  topmost: boolean; setAlwaysOnTop: ReturnType<typeof vi.fn>; moveTop: ReturnType<typeof vi.fn>; setIgnoreMouseEvents: ReturnType<typeof vi.fn>; setFocusable: ReturnType<typeof vi.fn>;
+  minimized: boolean; minimize: ReturnType<typeof vi.fn>; restore: ReturnType<typeof vi.fn>; show: ReturnType<typeof vi.fn>; focus: ReturnType<typeof vi.fn>})[];
 let channels: {port1: EventEmitter & {postMessage: ReturnType<typeof vi.fn>; close: ReturnType<typeof vi.fn<() => void>>; start: ReturnType<typeof vi.fn<() => void>>}; port2: {close: ReturnType<typeof vi.fn<() => void>>}}[];
 let configurations: Electron.BrowserWindowConstructorOptions[];
 let log: ReturnType<typeof vi.fn>;
+// ET-011a fixture additions. The tray is unavailable unless a test enables it, so earlier tests keep their
+// timer and log expectations; windows after the first dashboard and overlay get their own web contents.
+let lockGranted: boolean;
+let trayAvailable: boolean;
+let trays: (EventEmitter & {setToolTip: ReturnType<typeof vi.fn>; setContextMenu: ReturnType<typeof vi.fn>; setImage: ReturnType<typeof vi.fn>; destroy: ReturnType<typeof vi.fn>; destroyed: boolean})[];
+let extraContents: typeof contents[];
 beforeEach(() => {
   vi.useFakeTimers(); vi.resetModules();
   const started = Date.now(); vi.spyOn(performance, 'now').mockImplementation(() => Date.now() - started);
   originals = new Map(processEvents.map(name => [name, processEmitter.listeners(name)]));
-  app = Object.assign(new EventEmitter(), {exit: vi.fn(), quit: vi.fn(), getPath: () => 'C:\\isolated', setPath: vi.fn(), whenReady: () => Promise.resolve(), isPackaged: false});
+  lockGranted = true; trayAvailable = false; trays = []; extraContents = [];
+  app = Object.assign(new EventEmitter(), {exit: vi.fn(), quit: vi.fn(), getPath: () => 'C:\\isolated', setPath: vi.fn(), whenReady: () => Promise.resolve(), isPackaged: false,
+    requestSingleInstanceLock: vi.fn(() => lockGranted)});
   child = Object.assign(new EventEmitter(), {postMessage: vi.fn(), kill: vi.fn(() => true)});
   children = [child]; let forks = 0;
   contents = Object.assign(new EventEmitter(), {mainFrame: {}, send: vi.fn(), postMessage: vi.fn(), setWindowOpenHandler: vi.fn()});
@@ -42,7 +54,10 @@ beforeEach(() => {
   }},
     screen: Object.assign(new EventEmitter(), {screenToDipRect: (_window: null, bounds: Electron.Rectangle) => bounds, getAllDisplays: () => [{bounds: {x: -1920, y: 0, width: 3840, height: 1080}}]}),
     BrowserWindow: class extends EventEmitter {
-      webContents = windows.length === 0 ? contents : overlayContents;
+      webContents = windows.length === 0 ? contents : windows.length === 1 ? overlayContents : (() => {
+        const next = Object.assign(new EventEmitter(), {mainFrame: {}, send: vi.fn(), postMessage: vi.fn(), setWindowOpenHandler: vi.fn()}); extraContents.push(next); return next;
+      })();
+      minimized = false; isMinimized = () => this.minimized; minimize = vi.fn(() => {this.minimized = true;}); restore = vi.fn(() => {this.minimized = false;}); show = vi.fn(); focus = vi.fn();
       hide = vi.fn(); showInactive = vi.fn(); setBounds = vi.fn(); setIgnoreMouseEvents = vi.fn(); setFocusable = vi.fn(); destroy = vi.fn(() => this.emit('closed'));
       // Models Windows: isAlwaysOnTop() reports the HWND style, which external z-order changes can clear.
       topmost = false; isAlwaysOnTop = () => this.topmost; setAlwaysOnTop = vi.fn((flag: boolean) => {this.topmost = flag;}); moveTop = vi.fn();
@@ -52,7 +67,14 @@ beforeEach(() => {
     MessageChannelMain: class {
       port1 = Object.assign(new EventEmitter(), {postMessage: vi.fn(), start: vi.fn(), close: vi.fn()}); port2 = {close: vi.fn()};
       constructor() {let closed = false; this.port1.close.mockImplementation(() => {if (!closed) {closed = true; this.port1.emit('close');}}); channels.push(this);}
-    }}));
+    },
+    Tray: class extends EventEmitter {
+      setToolTip = vi.fn(); setContextMenu = vi.fn(); setImage = vi.fn(); destroyed = false; destroy = vi.fn(() => {this.destroyed = true;});
+      constructor() {super(); if (!trayAvailable) throw new Error('Notification area unavailable in this fixture'); trays.push(this);}
+      isDestroyed() {return this.destroyed;}
+    },
+    Menu: {buildFromTemplate: (template: unknown[]) => ({template})},
+    nativeImage: {createFromBuffer: () => ({addRepresentation: vi.fn()})}}));
   vi.doMock('electron-squirrel-startup', () => ({default: false}));
   vi.doMock('../../apps/desktop/src/entrypoints', () => ({processEntrypoint: () => 'package.json'}));
   log = vi.fn(); vi.doMock('../../apps/desktop/src/diagnostics', () => ({createDiagnostics: () => log}));
@@ -343,14 +365,15 @@ it('hides while async selection is pending and ignores previous-source or retire
   const original = channels[0]; original.port1.close(); await vi.advanceTimersByTimeAsync(250); deliver(currentGame(), 4, original);
   expect(windows[1].showInactive).not.toHaveBeenCalled(); expect(channels).toHaveLength(3);
 });
-it('hides on upstream loss, window expiry, overlay reload and credit timeout; dashboard close stops owned processes', async () => {
+// ET-011a changed the requirement: closing the dashboard hides it to the tray, and only an explicit exit stops owned processes.
+it('hides on upstream loss, window expiry, overlay reload and credit timeout; explicit exit stops owned processes', async () => {
   vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2'); await ready(); ipc.emit('overlay:subscribe', overlayTrusted()); deliver(currentGame());
   windows[1].hide.mockClear(); await vi.advanceTimersByTimeAsync(250); expect(windows[1].hide).toHaveBeenCalled();
   channels[0].port1.close(); expect(windows[1].hide).toHaveBeenCalled();
   overlayContents.emit('did-start-loading'); expect(channels[1].port1.close).toHaveBeenCalled();
   ipc.emit('overlay:subscribe', overlayTrusted()); await vi.advanceTimersByTimeAsync(500);
   expect(channels[2].port1.close).toHaveBeenCalled();
-  windows[0].emit('closed'); expect(child.postMessage).toHaveBeenCalledWith({type: 'stop'});
+  app.emit('before-quit', {preventDefault: vi.fn()}); expect(child.postMessage).toHaveBeenCalledWith({type: 'stop'});
   expect(channels.every(channel => channel.port1.close.mock.calls.length > 0)).toBe(true);
   const count = channels.length; ipc.emit('telemetry:subscribe', trusted()); ipc.emit('overlay:subscribe', overlayTrusted());
   expect(channels).toHaveLength(count);
@@ -384,13 +407,14 @@ it.each(['credit-timeout', 'port-loss', 'invalid-credit'])('logs factual current
   expect(windows[1].hide).not.toHaveBeenCalled();
   expect(log.mock.calls.filter(call => call[0] === 'OVERLAY_CHANNEL_CLOSED')).toHaveLength(1);
 });
-it.each(['unsubscribe', 'reload', 'overlay-crash', 'overlay-close', 'dashboard-close', 'stop'])('does not label intentional overlay %s as unexpected closure', async reason => {
+// ET-011a: a dashboard close no longer closes the overlay channel, so that case now exits after the close.
+it.each(['unsubscribe', 'reload', 'overlay-crash', 'overlay-close', 'exit-after-dashboard-close', 'stop'])('does not label intentional overlay %s as unexpected closure', async reason => {
   await ready(); ipc.emit('overlay:subscribe', overlayTrusted()); const current = channels[1];
   if (reason === 'unsubscribe') ipc.emit('overlay:unsubscribe', overlayTrusted());
   else if (reason === 'reload') overlayContents.emit('did-start-loading');
   else if (reason === 'overlay-crash') overlayContents.emit('render-process-gone', {}, {reason: 'crashed'});
   else if (reason === 'overlay-close') windows[1].emit('closed');
-  else if (reason === 'dashboard-close') windows[0].emit('closed');
+  else if (reason === 'exit-after-dashboard-close') {windows[0].emit('closed'); expect(current.port1.close).not.toHaveBeenCalled(); app.emit('before-quit', {preventDefault: vi.fn()});}
   else app.emit('before-quit', {preventDefault: vi.fn()});
   expect(current.port1.close).toHaveBeenCalled(); current.port1.emit('close');
   expect(log.mock.calls.filter(call => call[0] === 'OVERLAY_CHANNEL_CLOSED')).toHaveLength(0);
@@ -566,3 +590,183 @@ it('keeps default logs free of the diagnostic timeline and lag monitor', async (
   const timeline = ['DASHBOARD_WINDOW_CREATED', 'OVERLAY_WINDOW_CREATED', 'DASHBOARD_LOAD_STARTED', 'DASHBOARD_LOAD_FINISHED', 'CHILD_PROCESS_GONE', 'MAIN_EVENT_LOOP_LAG'];
   expect(log.mock.calls.map(call => call[0] as string).filter(name => timeline.includes(name))).toEqual([]);
 });
+
+// ET-011a lifecycle: single instance, close-to-tray, tray, explicit exit and health.
+const trayMenuItem = (label: string) => (trays[0].setContextMenu.mock.lastCall![0] as {template: {label?: string; enabled?: boolean; click?: () => void}[]}).template.find(item => item.label === label)!;
+const failurePattern = /FAILED|TIMEOUT|UNCAUGHT|UNHANDLED|INVALID|RENDER_PROCESS_GONE/;
+function closeDashboard(target = windows[0]) {const event = {preventDefault: vi.fn()}; target.emit('close', event); if (!event.preventDefault.mock.calls.length) target.emit('closed'); return event;}
+async function isolatedProfile(run: (profile: string) => Promise<void>) {
+  const profile = await mkdtemp(path.join(os.tmpdir(), 'ets2telemetry-lifecycle-profile-'));
+  try {await run(profile);} finally {await rm(profile, {recursive: true, force: true});}
+}
+it('exits a second process before diagnostics, listeners, service, windows or tray when the instance lock is held', async () => {
+  lockGranted = false; trayAvailable = true;
+  await import('../../apps/desktop/src/main'); await settle();
+  expect(app.quit).toHaveBeenCalledOnce(); expect(log).not.toHaveBeenCalled();
+  expect(windows).toHaveLength(0); expect(trays).toHaveLength(0); expect(loadFile).not.toHaveBeenCalled(); expect(handlers.size).toBe(0);
+  for (const name of ['before-quit', 'window-all-closed', 'second-instance']) expect(app.listenerCount(name)).toBe(0);
+  expect(child.listenerCount('message')).toBe(0); expect(app.exit).not.toHaveBeenCalled();
+});
+it('applies the diagnostic profile before requesting the instance lock that it scopes', () => isolatedProfile(async profile => {
+  vi.stubEnv('ETS2TELEMETRY_PROFILE_DIR', profile); await ready();
+  expect(app.setPath).toHaveBeenCalledWith('userData', profile);
+  expect(app.setPath.mock.invocationCallOrder[0]).toBeLessThan(app.requestSingleInstanceLock.mock.invocationCallOrder[0]);
+}));
+it('closes the dashboard to the tray without stopping the service, upstream or overlay', async () => {
+  trayAvailable = true; vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2'); await ready();
+  ipc.emit('overlay:subscribe', overlayTrusted()); const overlayChannel = channels[1];
+  ipc.emit('telemetry:subscribe', trusted()); const dashboard = channels[2];
+  expect(closeDashboard().preventDefault).not.toHaveBeenCalled();
+  expect(dashboard.port1.close).toHaveBeenCalled(); expect(channels[0].port1.close).not.toHaveBeenCalled(); expect(overlayChannel.port1.close).not.toHaveBeenCalled();
+  expect(child.postMessage).not.toHaveBeenCalledWith({type: 'stop'}); expect(child.kill).not.toHaveBeenCalled(); expect(app.exit).not.toHaveBeenCalled();
+  app.emit('window-all-closed'); expect(child.postMessage).not.toHaveBeenCalledWith({type: 'stop'});
+  // The overlay still follows live data while the main window is closed.
+  overlayChannel.port1.emit('message', {data: {type: 'consumed', delivery: overlayChannel.port1.postMessage.mock.lastCall![0].delivery}});
+  deliver(currentGame()); await vi.advanceTimersByTimeAsync(50);
+  expect(windows[1].showInactive).toHaveBeenCalledOnce();
+  expect(overlayChannel.port1.postMessage.mock.lastCall![0].update).toMatchObject({freshness: 'current', source: 'ETS2'});
+  // The closed document's sender loses every authority.
+  await expect(handlers.get('telemetry:select')!(trusted(), 'ats')).rejects.toThrow('Untrusted');
+  expect(() => handlers.get('app:get-state')!(trusted())).toThrow('Untrusted');
+  expect(trays[0].destroy).not.toHaveBeenCalled();
+});
+it('reopens a new dashboard from the tray that resubscribes without a second upstream subscription', async () => {
+  trayAvailable = true; await ready(); ipc.emit('telemetry:subscribe', trusted());
+  const complete = pendingVerification(), pending = handlers.get('telemetry:select')!(trusted(), 'ets2');
+  closeDashboard(); trays[0].emit('click');
+  expect(windows).toHaveLength(3); expect(configurations[2].webPreferences).toMatchObject({sandbox: true, contextIsolation: true, nodeIntegration: false});
+  const reopened = extraContents[0], reopenedSender = {sender: reopened, senderFrame: reopened.mainFrame};
+  complete(); await expect(pending).rejects.toThrow('retired');
+  expect(child.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({type: 'select', source: 'ets2'}));
+  ipc.emit('telemetry:subscribe', trusted()); expect(reopened.postMessage).not.toHaveBeenCalled();
+  ipc.emit('telemetry:subscribe', reopenedSender);
+  expect(reopened.postMessage).toHaveBeenCalledWith('telemetry:port', null, [channels.at(-1)!.port2]);
+  expect(upstreamRequests()).toBe(1); expect(children).toHaveLength(1);
+  expect(handlers.get('app:get-state')!(reopenedSender)).toEqual({health: {service: 'ready', storage: 'verified', recording: 'unavailable', lastError: null}});
+  // A second tray open focuses the existing window instead of creating another.
+  trays[0].emit('click'); expect(windows).toHaveLength(3); expect(windows[2].show).toHaveBeenCalledOnce(); expect(windows[2].focus).toHaveBeenCalledOnce();
+});
+it('does not recreate the dashboard or a second overlay when the service restarts while the window is closed', async () => {
+  trayAvailable = true; await ready(); closeDashboard();
+  child.emit('exit', 1); await vi.advanceTimersByTimeAsync(250);
+  children[1].emit('message', {type: 'ready'}); await settle();
+  expect(windows).toHaveLength(2); expect(configurations).toHaveLength(2); expect(loadFile).toHaveBeenCalledTimes(2);
+  expect(upstreamRequests(children[1])).toBe(1); expect(app.exit).not.toHaveBeenCalled();
+  trays[0].emit('click'); expect(windows).toHaveLength(3); expect(configurations[2].webPreferences).not.toHaveProperty('partition');
+});
+it.each([
+  ['before first readiness', 'ignored-starting'], ['with a visible dashboard', 'focused'], ['with a minimized dashboard', 'restored'],
+  ['after the dashboard closed', 'created'], ['while exiting', 'ignored-exiting']
+] as const)('answers a second launch %s without reading its arguments', async (state, action) => {
+  trayAvailable = true;
+  if (state === 'before first readiness') {await import('../../apps/desktop/src/main'); await settle();}
+  else {
+    await ready();
+    if (state === 'with a minimized dashboard') windows[0].minimized = true;
+    if (state === 'after the dashboard closed') closeDashboard();
+    if (state === 'while exiting') app.emit('before-quit', {preventDefault: vi.fn()});
+  }
+  const count = windows.length;
+  app.emit('second-instance', {}, ['electron.exe', '--inspect', 'C:\\attacker\\path'], 'C:\\attacker', {payload: 'ignored'});
+  expect(log).toHaveBeenCalledWith('SECOND_INSTANCE', undefined, {action});
+  expect(windows).toHaveLength(action === 'created' ? count + 1 : count);
+  if (action === 'restored') expect(windows[0].restore).toHaveBeenCalledOnce();
+  if (action === 'focused' || action === 'restored') {expect(windows[0].show).toHaveBeenCalledOnce(); expect(windows[0].focus).toHaveBeenCalledOnce();}
+  if (action === 'ignored-exiting' || action === 'ignored-starting') expect(windows.every(target => target.show.mock.calls.length === 0)).toBe(true);
+  expect(JSON.stringify(log.mock.calls)).not.toContain('attacker');
+});
+it.each(['tray', 'renderer', 'app-quit', 'session-end'] as const)('runs one orderly exit for a %s request and removes the tray before exiting', async reason => {
+  trayAvailable = true; await ready(); ipc.emit('overlay:subscribe', overlayTrusted());
+  const request = () => {
+    if (reason === 'tray') trayMenuItem('Exit ETS2Telemetry').click!();
+    else if (reason === 'renderer') void handlers.get('app:exit')!(trusted());
+    else if (reason === 'app-quit') {const event = {preventDefault: vi.fn()}; app.emit('before-quit', event); expect(event.preventDefault).toHaveBeenCalled();}
+    else windows[1].emit('session-end');
+  };
+  request(); request(); app.emit('before-quit', {preventDefault: vi.fn()}); windows[0].emit('session-end');
+  expect(log.mock.calls.filter(call => call[0] === 'APP_EXIT_REQUESTED')).toEqual([['APP_EXIT_REQUESTED', undefined, {reason}]]);
+  expect(child.postMessage.mock.calls.filter(call => call[0].type === 'stop')).toHaveLength(1);
+  expect(channels.every(channel => channel.port1.close.mock.calls.length > 0)).toBe(true);
+  expect(windows[1].hide).toHaveBeenCalled();
+  expect(trays[0].setToolTip).toHaveBeenLastCalledWith('ETS2Telemetry\nExiting');
+  expect(trayMenuItem('Exit ETS2Telemetry').enabled).toBe(false); expect(trayMenuItem('Open ETS2Telemetry').enabled).toBe(false);
+  // Exiting is final: tray and overlay close requests no longer reopen or keep anything.
+  trays[0].emit('click'); expect(windows).toHaveLength(2);
+  const overlayClose = {preventDefault: vi.fn()}; windows[1].emit('close', overlayClose); expect(overlayClose.preventDefault).not.toHaveBeenCalled();
+  expect(app.exit).not.toHaveBeenCalled(); expect(trays[0].destroy).not.toHaveBeenCalled();
+  child.emit('exit', 0);
+  expect(app.exit).toHaveBeenCalledExactlyOnceWith(0);
+  expect(trays[0].destroy).toHaveBeenCalledOnce();
+  expect(trays[0].destroy.mock.invocationCallOrder[0]).toBeLessThan(app.exit.mock.invocationCallOrder[0]);
+  expect(log.mock.calls.map(call => call[0] as string).filter(name => failurePattern.test(name))).toEqual([]);
+  expect(vi.getTimerCount()).toBe(0);
+});
+it('rejects application exit and state requests from untrusted senders, frames and the overlay', async () => {
+  trayAvailable = true; await ready();
+  for (const event of [{sender: {}, senderFrame: contents.mainFrame}, {sender: contents, senderFrame: {}}, overlayTrusted()]) {
+    expect(() => handlers.get('app:exit')!(event)).toThrow('Untrusted'); expect(() => handlers.get('app:get-state')!(event)).toThrow('Untrusted');
+    ipc.emit('app:subscribe-state', event);
+  }
+  expect(child.postMessage).not.toHaveBeenCalledWith({type: 'stop'}); expect(log).not.toHaveBeenCalledWith('APP_EXIT_REQUESTED', undefined, expect.anything());
+  expect(contents.send).not.toHaveBeenCalledWith('app:state', expect.anything()); expect(overlayContents.send).not.toHaveBeenCalled();
+});
+it('keeps the overlay open against close requests until exit and ignores window-all-closed', async () => {
+  trayAvailable = true; await ready();
+  const event = {preventDefault: vi.fn()}; windows[1].emit('close', event); expect(event.preventDefault).toHaveBeenCalledOnce();
+  app.emit('window-all-closed'); expect(child.postMessage).not.toHaveBeenCalledWith({type: 'stop'}); expect(app.exit).not.toHaveBeenCalled();
+});
+it('minimizes instead of closing the dashboard when the notification area is unavailable', async () => {
+  await ready(); expect(log).toHaveBeenCalledWith('TRAY_UNAVAILABLE', expect.any(String));
+  const event = closeDashboard(); expect(event.preventDefault).toHaveBeenCalledOnce(); expect(windows[0].minimize).toHaveBeenCalledOnce();
+  expect(handlers.get('app:get-state')!(trusted())).toMatchObject({health: {service: 'ready'}});
+  void handlers.get('app:exit')!(trusted()); const exitClose = {preventDefault: vi.fn()}; windows[0].emit('close', exitClose);
+  expect(exitClose.preventDefault).not.toHaveBeenCalled();
+});
+it('recovers a post-readiness service failure report with a supervised restart and visible health', async () => {
+  trayAvailable = true; await ready(); ipc.emit('app:subscribe-state', trusted());
+  const states = () => contents.send.mock.calls.filter(call => call[0] === 'app:state').map(call => (call[1] as {health: Record<string, unknown>}).health);
+  expect(states().at(-1)).toEqual({service: 'ready', storage: 'verified', recording: 'unavailable', lastError: null});
+  child.emit('message', {type: 'failed', code: 'STORAGE_WORKER_EXIT'});
+  expect(child.kill).toHaveBeenCalledOnce(); expect(child.postMessage).not.toHaveBeenCalledWith({type: 'stop'}); expect(app.exit).not.toHaveBeenCalled();
+  expect(states().at(-1)).toEqual({service: 'restarting', storage: 'failed', recording: 'unavailable', lastError: 'STORAGE_FAILED'});
+  child.emit('exit', 1); expect(states().at(-1)).toMatchObject({service: 'restarting', lastError: 'STORAGE_FAILED'});
+  await vi.advanceTimersByTimeAsync(250); children[1].emit('message', {type: 'ready'}); await settle();
+  expect(states().at(-1)).toEqual({service: 'ready', storage: 'verified', recording: 'unavailable', lastError: 'STORAGE_FAILED'});
+  await vi.advanceTimersByTimeAsync(500); expect(trays[0].setToolTip).toHaveBeenLastCalledWith(expect.stringMatching(/^ETS2Telemetry\nService ready/));
+  expect(app.exit).not.toHaveBeenCalled(); expect(windows).toHaveLength(2);
+});
+it('keeps a pre-readiness service failure report fatal', async () => {
+  trayAvailable = true; await import('../../apps/desktop/src/main'); await settle();
+  child.emit('message', {type: 'failed', code: 'STORAGE_TIMEOUT'});
+  expect(child.kill).not.toHaveBeenCalled(); expect(child.postMessage).toHaveBeenCalledWith({type: 'stop'});
+  child.emit('exit', 0); expect(app.exit).toHaveBeenCalledExactlyOnceWith(1); expect(trays[0].destroy).toHaveBeenCalledOnce();
+});
+it('shows restart exhaustion in health and the tray and stays running until an explicit exit', async () => {
+  trayAvailable = true; await ready();
+  for (let crash = 0; crash < 3; crash++) {
+    children.at(-1)!.emit('exit', 1); await vi.advanceTimersByTimeAsync(1000);
+    if (crash < 2) {children.at(-1)!.emit('message', {type: 'ready'}); await settle();}
+  }
+  expect(handlers.get('app:get-state')!(trusted())).toEqual({health: {service: 'failed', storage: 'pending', recording: 'unavailable', lastError: 'SERVICE_RESTART_EXHAUSTED'}});
+  await vi.advanceTimersByTimeAsync(500);
+  expect(trays[0].setImage).toHaveBeenCalled(); expect(trays[0].setToolTip).toHaveBeenLastCalledWith('ETS2Telemetry\nService failed');
+  expect(app.exit).not.toHaveBeenCalled();
+  trayMenuItem('Exit ETS2Telemetry').click!(); expect(app.exit).toHaveBeenCalledOnce(); expect(trays[0].destroy).toHaveBeenCalledOnce();
+});
+it('registers no diagnostic lifecycle events outside the isolated live smoke configuration', async () => {
+  trayAvailable = true; await ready();
+  for (const name of ['ets2telemetry:diagnostic-tray-action', 'ets2telemetry:diagnostic-lifecycle-state', 'ets2telemetry:diagnostic-service-exit']) expect(app.listenerCount(name)).toBe(0);
+});
+it('opens and exits through the gated diagnostic tray action and reports read-only lifecycle facts', () => isolatedProfile(async profile => {
+  vi.stubEnv('ETS2TELEMETRY_LIVE_SMOKE', '1'); vi.stubEnv('ETS2TELEMETRY_DIAGNOSTIC_DIR', 'C:\\isolated\\diagnostics');
+  vi.stubEnv('ETS2TELEMETRY_PROFILE_DIR', profile); trayAvailable = true; await ready();
+  const facts = () => {let value: Record<string, unknown> | undefined; app.emit('ets2telemetry:diagnostic-lifecycle-state', (state: Record<string, unknown>) => {value = state;}); return value;};
+  expect(facts()).toMatchObject({started: true, exiting: false, serviceReady: true, tray: true, dashboard: true, overlay: true, upstream: true, health: {service: 'ready'}});
+  closeDashboard(); expect(facts()).toMatchObject({dashboard: false, overlay: true, upstream: true});
+  app.emit('ets2telemetry:diagnostic-tray-action', 'C:\\anything'); expect(windows).toHaveLength(2);
+  app.emit('ets2telemetry:diagnostic-tray-action', 'open'); expect(windows).toHaveLength(3); expect(facts()).toMatchObject({dashboard: true});
+  app.emit('ets2telemetry:diagnostic-tray-action', 'exit');
+  expect(log).toHaveBeenCalledWith('APP_EXIT_REQUESTED', undefined, {reason: 'tray'}); expect(facts()).toMatchObject({exiting: true, health: {service: 'stopping'}});
+  child.emit('exit', 0); expect(app.exit).toHaveBeenCalledExactlyOnceWith(0);
+  expect(log.mock.calls.map(call => call[0] as string).filter(name => failurePattern.test(name))).toEqual([]);
+}));
