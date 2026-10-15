@@ -114,7 +114,12 @@ try {
     await overlay.screenshot({path: path.join(config.output, 'hidden-overlay-dom.png')});
   }
   if (config.scenario === 'telemetry') {
+    // The dashboard is taller than the smoke window, and outside wheel input on a shared desktop can scroll it, also
+    // during the renderer stall (compositor scrolling). Return to the top right before each wait that requires the
+    // status, speed and fuel lines inside the viewport; the predicates themselves are unchanged.
+    const atTop = () => window.evaluate(() => globalThis.scrollTo(0, 0));
     const current = async phase => {
+      await atTop();
       const observation = await waitForCurrentTelemetry(window);
       (result.rendererObservations ??= []).push({phase, ...observation});
     };
@@ -125,9 +130,9 @@ try {
     // Hold the source on the same connection until main's freshness expiry: every card value must become not current,
     // then return after resume. The later single-connection assertion proves the hold did not reconnect.
     telemetrySource.hold();
-    try {result.telemetry.liveStale = await waitForNotCurrentLive(window, SYNTHETIC_V0_VALUE_IDS, '^stale:', SYNTHETIC_V0_HIDDEN_ROWS);}
+    try {await atTop(); result.telemetry.liveStale = await waitForNotCurrentLive(window, SYNTHETIC_V0_VALUE_IDS, '^stale:', SYNTHETIC_V0_HIDDEN_ROWS);}
     finally {telemetrySource.resume();}
-    await waitForCurrentTelemetry(window);
+    await atTop(); await waitForCurrentTelemetry(window);
     await waitForCompleteLive(window, SYNTHETIC_V0_LIVE_ROWS, SYNTHETIC_V0_HIDDEN_ROWS);
     result.telemetry.liveStaleHidden = true;
     // Stall only this owned renderer beyond the five-second consumption-credit deadline.
@@ -138,6 +143,7 @@ try {
       await window.evaluate(() => {const until = performance.now() + 6000; while (performance.now() < until) { /* controlled renderer stall */ }});
     } finally {clearTimeout(changeReading);}
     assert.equal(changedDuringStall, true, 'Source did not change during controlled renderer stall');
+    await atTop();
     const recovered = await window.waitForFunction(() => {
       const read = id => {
         const nodes = document.querySelectorAll(`[data-testid="${id}"]`);
@@ -153,7 +159,7 @@ try {
     result.telemetry.rendererStallMilliseconds = 6000;
     result.telemetry.changedReadingAfterStall = {speedKmh: 72, fuelL: 71};
     telemetrySource.setReading(25, 73);
-    await waitForCurrentTelemetry(window);
+    await atTop(); await waitForCurrentTelemetry(window);
     result.telemetry.invalidSelectionRejected = await window.evaluate(async () => {
       try {await globalThis.desktop.selectSource('../arbitrary-path'); return false;} catch {return true;}
     });
@@ -188,7 +194,7 @@ try {
     await window.getByText('Speed: unavailable', {exact: true}).waitFor({state: 'visible', timeout: 5000});
     assert.match(await window.getByTestId('telemetry-status').innerText(), /^(disconnected|waiting):/);
     result.telemetry.staleAfterDisconnect = true;
-    await waitForNotCurrentLive(window, ['live-gear', 'live-cargo', 'live-odometer'], '^(disconnected|waiting):');
+    await atTop(); await waitForNotCurrentLive(window, ['live-gear', 'live-cargo', 'live-odometer'], '^(disconnected|waiting):');
     result.telemetry.liveDisconnectedHidden = true;
   }
   if (config.scenario === 'lifecycle') {
