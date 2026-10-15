@@ -94,7 +94,7 @@ The advisory review noted that `v1-major-mismatch`, `v1-name-mismatch` and `v1-c
 
 ## Pending
 
-- ET-006b PR-3: the service launching the v1 mode, the six-key receipt check, the tagged writer and the `client-frame`/`client-write` stages in the service's known-stage list, and the chain test against the plugin's real v1 endpoint, which reads the broker-provisioned policy with `read_service_policy`.
+- ET-006b PR-3: the service launching the v1 mode, the six-key receipt check, the tagged writer and the `client-frame`/`client-write` stages in the service's known-stage list, and the chain test against the plugin's real v1 endpoint, which reads the broker-provisioned policy with `read_service_policy`. Implemented by PR-3; see [ET-006b validation](et-006b.md#pr-3-service-wiring).
 - Hosted Windows CI, independent review and the merge gate.
 - Packaged broker v1 mode in an installed application; second-user and remote-client rejection.
 - Every real-game, TruckersMP and performance check. Convoy stays deferred.

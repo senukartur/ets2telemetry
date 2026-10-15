@@ -737,26 +737,43 @@ void clock_unavailable() {
 }
 #endif
 
-// Tests-only fake SDK host for the cross-package chain check (broker capture mode + TypeScript).
-int controlled_host(const char* dll_path, const char* directory_utf8) {
+// Tests-only fake SDK host for the cross-package chain checks: broker capture mode + TypeScript, and with a v1
+// directory (ET-006b E14) the broker's protocol v1 mode against the test DLL's v1 endpoint. The host creates only the
+// transport parent and the v0 directory; the DLL creates its v1 directory itself, as the production plugin does.
+std::wstring wide_argument(const char* value_utf8) {
+  const auto length = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value_utf8, -1, nullptr, 0); require(length > 1 && length < 4096, "directory encoding");
+  std::wstring value(static_cast<std::size_t>(length), L'\0'); MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value_utf8, -1, value.data(), length); value.resize(static_cast<std::size_t>(length - 1));
+  return value;
+}
+int controlled_host(const char* dll_path, const char* directory_utf8, const char* v1_directory_utf8 = nullptr) {
   const HANDLE input = GetStdHandle(STD_INPUT_HANDLE); require(GetFileType(input) == FILE_TYPE_PIPE, "piped stdin");
-  const auto length = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, directory_utf8, -1, nullptr, 0); require(length > 1 && length < 4096, "directory encoding");
-  std::wstring directory(static_cast<std::size_t>(length), L'\0'); MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, directory_utf8, -1, directory.data(), length); directory.resize(static_cast<std::size_t>(length - 1));
+  const auto directory = wide_argument(directory_utf8);
+  const auto v1_directory = v1_directory_utf8 ? wide_argument(v1_directory_utf8) : std::wstring();
   auto user = transport::current_user(); transport::OwnerSecurity security(user.sid);
   const auto parent = directory.substr(0, directory.find_last_of(L'\\')); security.ensure_directory(parent); security.ensure_directory(directory);
+  if (!v1_directory.empty()) security.ensure_directory(v1_directory.substr(0, v1_directory.find_last_of(L'\\')));
   Host host; HMODULE module = LoadLibraryA(dll_path); require(module != nullptr, "controlled DLL load");
   auto init = reinterpret_cast<decltype(&scs_telemetry_init)>(GetProcAddress(module, "scs_telemetry_init"));
   auto shutdown = reinterpret_cast<decltype(&scs_telemetry_shutdown)>(GetProcAddress(module, "scs_telemetry_shutdown"));
   using SetDirectory = int (*)(const wchar_t*); using GetEndpoint = int (*)(wchar_t*, unsigned);
   auto set_directory = reinterpret_cast<SetDirectory>(GetProcAddress(module, "ets2telemetry_test_directory"));
   auto capture_endpoint = reinterpret_cast<GetEndpoint>(GetProcAddress(module, "ets2telemetry_test_capture_endpoint"));
+  auto set_v1_directory = reinterpret_cast<SetDirectory>(GetProcAddress(module, "ets2telemetry_test_v1_directory"));
+  auto v1_endpoint = reinterpret_cast<GetEndpoint>(GetProcAddress(module, "ets2telemetry_test_v1_endpoint"));
   bool initialized = false;
   try {
     require(init && shutdown && set_directory && capture_endpoint && set_directory(directory.c_str()), "controlled exports");
+    // Without a v1 directory the DLL never prepares or starts its v1 endpoint, so the CAP0 chain is unchanged.
+    if (!v1_directory.empty()) require(set_v1_directory && v1_endpoint && set_v1_directory(v1_directory.c_str()), "controlled v1 seam");
     auto p = host.params(); require(init(SCS_TELEMETRY_VERSION_1_01, &p) == SCS_RESULT_ok, "controlled init"); initialized = true;
     host.event(SCS_TELEMETRY_EVENT_started); host.frame(10);
     std::array<wchar_t, 512> endpoint{}; require(until([&] { return capture_endpoint(endpoint.data(), static_cast<unsigned>(endpoint.size())) != 0; }), "capture endpoint publication");
-    v0::Json ready{v0::Json::Object{{"ready", v0::Json{true}}, {"fixture", v0::Json{std::string("fake-sdk-host")}}, {"processId", v0::Json{static_cast<double>(GetCurrentProcessId())}}, {"captureEndpoint", v0::Json{utf8(endpoint.data())}}}};
+    v0::Json::Object fields{{"ready", v0::Json{true}}, {"fixture", v0::Json{std::string("fake-sdk-host")}}, {"processId", v0::Json{static_cast<double>(GetCurrentProcessId())}}, {"captureEndpoint", v0::Json{utf8(endpoint.data())}}};
+    if (!v1_directory.empty()) {
+      std::array<wchar_t, 512> v1_name{}; require(until([&] { return v1_endpoint(v1_name.data(), static_cast<unsigned>(v1_name.size())) != 0; }), "v1 endpoint publication");
+      fields["v1Endpoint"] = v0::Json{utf8(v1_name.data())};
+    }
+    v0::Json ready{fields};
     std::cout << v0::detail::serialize(ready) << '\n' << std::flush;
     std::vector<scs_named_value_t> job{named("cargo.id", text("cargo.fixture")), named("income", u64(UINT64_MAX)), named("planned_distance.km", u32(321)), scs_named_value_t{}};
     std::vector<scs_named_value_t> delivered{named("revenue", s64(INT64_MIN)), named("distance.km", f32(12.5F)), scs_named_value_t{}};
@@ -787,6 +804,7 @@ int controlled_host(const char* dll_path, const char* directory_utf8) {
 int main(int argc, char** argv) {
   try {
     if (argc == 4 && std::string(argv[1]) == "host") return controlled_host(argv[2], argv[3]);
+    if (argc == 5 && std::string(argv[1]) == "host") return controlled_host(argv[2], argv[3], argv[4]);
     const std::map<std::string, std::function<void()>> cases{{"queue", queue_bounds}, {"adapter", adapter_copy}, {"wire", wire}, {"server", server_capture}, {"stall", stall_and_loss}, {"rejection", rejection}, {"v0-isolation", v0_isolation}, {"counters", counter_snapshots}, {"stop-inflight", stop_during_write}, {"stop-slow-reader", stop_slow_reader}, {"stop-drain-boundary", stop_drain_boundary}, {"stop-clean-markers", stop_clean_markers}, {"stop-stalled-partial", stop_stalled_partial}, {"stream-verifier", stream_verifier}, {"v0-continuity", v0_continuity}
 #ifdef ETS2TELEMETRY_TRANSPORT_TEST_HOOKS
       , {"clock", clock_unavailable}

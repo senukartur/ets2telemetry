@@ -10,6 +10,8 @@ import type {ProbeDependencies} from '../../apps/desktop/src/service-probe';
 import {FrameDecoder, encodeFrame} from '../../packages/contracts/src/protocol-v0';
 import type {SourceIdentity} from '../../packages/contracts/src/protocol-v0';
 import type {LiveTelemetry} from '../../packages/contracts/src';
+import type {V1IngestionOptions, V1SourceState} from '../../apps/desktop/src/v1-ingestion';
+import type {BrokerConfiguration, BrokerDiagnostic} from '../../apps/desktop/src/native-pipe-client';
 import {replay, type Scenario} from '../../tools/telemetry-simulator/src/scenario';
 import {startPipe} from '../../tools/telemetry-simulator/src/pipe';
 const scenario = JSON.parse(readFileSync('tests/fixtures/simulator-v0/reconnect.json', 'utf8')) as Scenario;
@@ -46,6 +48,8 @@ const realSetImmediate = setImmediate;
 // so no case's own timeout measures module transformation. This budget is a load allowance, not a behaviour bound.
 const MODULE_GRAPH_LOAD_BUDGET_MS = 60_000;
 beforeAll(async () => {
+  // stoppedService replaces the v1 ingestion with a stand-in; transform the real module here too, since the first case loads it.
+  await import('../../apps/desktop/src/v1-ingestion');
   const service = await stoppedService(report => {report({type: 'stopped'}); return Promise.resolve();});
   try {service.stop(); await vi.advanceTimersByTimeAsync(0);} finally {service.restore(); vi.useRealTimers();}
 }, MODULE_GRAPH_LOAD_BUDGET_MS);
@@ -286,14 +290,28 @@ async function stoppedService(stopProbe: (report: ProbeDependencies['report']) =
   }}));
   const history = {start: vi.fn(), close: vi.fn(closeHistory)};
   vi.doMock('../../apps/desktop/src/history-storage', () => ({HISTORY_CLOSE_BUDGET_MS: 1000, historyWorker: vi.fn(), HistoryStorage: class {start() {history.start();} close() {return history.close();}}}));
+  // The protocol v1 ingestion (ET-006b) is replaced like the history database: its options and calls are recorded.
+  const v1 = {options: [] as V1IngestionOptions[], configureBroker: vi.fn<(configuration: BrokerConfiguration | undefined) => void>(),
+    select: vi.fn<(selection: string, endpoint?: string) => void>(), stop: vi.fn(() => Promise.resolve())};
+  vi.doMock('../../apps/desktop/src/v1-ingestion', () => ({V1Ingestion: class {
+    constructor(options: V1IngestionOptions) {v1.options.push(options);}
+    configureBroker(configuration: BrokerConfiguration | undefined) {v1.configureBroker(configuration);}
+    select(selection: string, endpoint?: string) {v1.select(selection, endpoint);}
+    stop() {return v1.stop();}
+  }}));
+  // The native client is replaced by a recorder so the production connectGame closures can be called without a broker.
+  const pipeClients: unknown[][] = [];
+  vi.doMock('../../apps/desktop/src/native-pipe-client', async importOriginal => ({...await importOriginal<typeof import('../../apps/desktop/src/native-pipe-client')>(),
+    NativePipeClient: class extends EventEmitter {readonly completion = Promise.resolve(); constructor(...args: unknown[]) {super(); pipeClients.push(args);}}}));
   await loadService();
   const restore = () => {
     if (previousPort) Object.defineProperty(process, 'parentPort', previousPort); else Reflect.deleteProperty(process, 'parentPort');
-    exit.mockRestore(); vi.doUnmock('../../apps/desktop/src/diagnostics'); vi.doUnmock('../../apps/desktop/src/service-probe'); vi.doUnmock('../../apps/desktop/src/history-storage'); vi.resetModules();
+    exit.mockRestore(); vi.doUnmock('../../apps/desktop/src/diagnostics'); vi.doUnmock('../../apps/desktop/src/service-probe'); vi.doUnmock('../../apps/desktop/src/history-storage');
+    vi.doUnmock('../../apps/desktop/src/v1-ingestion'); vi.doUnmock('../../apps/desktop/src/native-pipe-client'); vi.resetModules();
   };
   const stops = () => parent.postMessage.mock.calls.map(call => call[0] as {type: string}).filter(message => message.type === 'stopped');
   const steps = () => log.mock.calls.filter(call => call[0] === 'SHUTDOWN_STEP').map(call => call[2] as Record<string, unknown>);
-  return {exit, parent, log, history, restore, stops, steps, probeReport: (message: Parameters<ProbeDependencies['report']>[0]) => probeReport(message),
+  return {exit, parent, log, history, v1, pipeClients, restore, stops, steps, probeReport: (message: Parameters<ProbeDependencies['report']>[0]) => probeReport(message),
     stop: () => parent.emit('message', {data: {type: 'stop'}, ports: []})};
 }
 it('runs the ordered shutdown once and reports exactly one clean stopped message before exit 0', async () => {
@@ -302,13 +320,70 @@ it('runs the ordered shutdown once and reports exactly one clean stopped message
     f.stop(); f.stop(); await vi.advanceTimersByTimeAsync(0);
     expect(f.stops()).toEqual([{type: 'stopped', clean: true}]);
     expect(f.exit).toHaveBeenCalledExactlyOnceWith(0);
-    // ET-013 adds the history database close beside the probe in the storage phase; steps of one phase finish in any order.
+    // ET-013 adds the history database close beside the probe in the storage phase, and ET-006b the v1 ingestion beside
+    // the v0 ingestion and capture in the intake phase; steps of one phase finish in any order.
     const steps = f.steps().map(step => [step.phase, step.name, step.outcome]);
-    expect(steps.slice(0, 2)).toEqual([['intake', 'ingestion', 'ok'], ['intake', 'capture', 'ok']]);
-    expect(steps.slice(2).sort()).toEqual([['storage', 'history-storage', 'ok'], ['storage', 'storage-probe', 'ok']]);
-    expect(f.history.start).toHaveBeenCalledOnce(); expect(f.history.close).toHaveBeenCalledOnce();
+    expect(steps.slice(0, 3).sort()).toEqual([['intake', 'capture', 'ok'], ['intake', 'ingestion', 'ok'], ['intake', 'v1-ingestion', 'ok']]);
+    expect(steps.slice(3).sort()).toEqual([['storage', 'history-storage', 'ok'], ['storage', 'storage-probe', 'ok']]);
+    expect(f.history.start).toHaveBeenCalledOnce(); expect(f.history.close).toHaveBeenCalledOnce(); expect(f.v1.stop).toHaveBeenCalledOnce();
     expect(f.log).toHaveBeenCalledWith('SERVICE_REPORT', {type: 'stopped', clean: true});
     expect(vi.getTimerCount()).toBe(0);
+  } finally {f.restore();}
+});
+it('runs protocol v1 beside v0 without a durable sink, following each selection with the v1 fixture endpoint and the derived broker directory', async () => {
+  const v1Endpoint = '\\\\.\\pipe\\ETS2Telemetry-SYNTHETIC-TEST-v1-123-' + randomUUID();
+  vi.stubEnv('ETS2TELEMETRY_SOURCE_PIPE_V1', v1Endpoint);
+  const f = await stoppedService(report => {report({type: 'stopped'}); return Promise.resolve();});
+  const select = (source: string, broker?: BrokerConfiguration) => f.parent.emit('message', {data: {type: 'select', source, broker}, ports: []});
+  try {
+    // E2: live-only. No sink means a durableEvents false hello, no ACK and no history row.
+    expect(f.v1.options).toHaveLength(1);
+    expect(Object.keys(f.v1.options[0]).sort()).toEqual(['connectGame', 'diagnose', 'onState']);
+    expect(f.v1.select).not.toHaveBeenCalled();
+    const executable = 'C:\\fixed\\telemetry-pipe-client.exe';
+    select('synthetic', {executable, discoveryDirectory: 'C:\\Users\\owner\\AppData\\Local\\ETS2Telemetry\\transport\\v0'});
+    expect(f.v1.configureBroker).toHaveBeenLastCalledWith({executable, discoveryDirectory: 'C:\\Users\\owner\\AppData\\Local\\ETS2Telemetry\\transport\\v1'});
+    expect(f.v1.select).toHaveBeenLastCalledWith('synthetic', v1Endpoint);
+    select('game'); expect(f.v1.configureBroker).toHaveBeenLastCalledWith(undefined); expect(f.v1.select).toHaveBeenLastCalledWith('game', v1Endpoint);
+    // An unexpected v0 directory shape gives v1 no broker rather than a guessed directory (E12).
+    select('replay', {executable, discoveryDirectory: 'C:\\isolated\\transport'}); expect(f.v1.configureBroker).toHaveBeenLastCalledWith(undefined);
+    // A v1 failure never fails the selection the v0 ingestion accepted.
+    f.v1.select.mockImplementationOnce(() => {throw new Error('v1 rejected');});
+    select('synthetic');
+    expect(f.parent.postMessage).not.toHaveBeenCalledWith({type: 'failed', code: 'INVALID_SOURCE_COMMAND'}); expect(f.log).toHaveBeenCalledWith('V1_SELECT_REJECTED');
+    expect(f.v1.select).toHaveBeenCalledTimes(4);
+    // An invalid selection is rejected before either ingestion sees it.
+    select('C:\\untrusted'); expect(f.parent.postMessage).toHaveBeenLastCalledWith({type: 'failed', code: 'INVALID_SOURCE_COMMAND'}); expect(f.v1.select).toHaveBeenCalledTimes(4);
+    // Only fixed status codes are logged, on a change of status, at occurrences 1, 2, 4, 8, ... of each status.
+    const state = (status: V1SourceState['status']): V1SourceState => ({selection: 'ets2', status, reason: 'fixed', fresh: false, durable: {state: 'off'}});
+    for (const status of ['waiting', 'connected', 'connected', 'disconnected', 'waiting', 'disconnected', 'waiting', 'disconnected', 'waiting'] as const) f.v1.options[0].onState!(state(status));
+    expect(f.log.mock.calls.filter(call => call[0] === 'V1_SOURCE_STATUS').map(call => call[2] as Record<string, unknown>)).toEqual([
+      {status: 'waiting', selection: 'ets2', durable: 'off', count: 1}, {status: 'connected', selection: 'ets2', durable: 'off', count: 1},
+      {status: 'disconnected', selection: 'ets2', durable: 'off', count: 1}, {status: 'waiting', selection: 'ets2', durable: 'off', count: 2},
+      {status: 'disconnected', selection: 'ets2', durable: 'off', count: 2}, {status: 'waiting', selection: 'ets2', durable: 'off', count: 4}
+    ]);
+    // The production closure starts the broker in its v1 mode and reports its exits under the v1 code, not the v0 one.
+    const configuration = {executable, discoveryDirectory: 'C:\\Users\\owner\\AppData\\Local\\ETS2Telemetry\\transport\\v1'};
+    f.v1.options[0].connectGame!(configuration, 'ats');
+    expect(f.pipeClients).toHaveLength(1);
+    const [passedConfiguration, game, diagnoseBroker, mode] = f.pipeClients[0];
+    expect([passedConfiguration, game, mode]).toEqual([configuration, 'ats', 'v1']);
+    const exit: BrokerDiagnostic = {outcome: 'ended', exitCode: 3, serviceMs: 10, stage: 'relay', win32Error: 0, elapsedMs: 5, slowStage: 'relay', slowMs: 5};
+    (diagnoseBroker as (diagnostic: BrokerDiagnostic) => void)(exit);
+    expect(f.log).toHaveBeenLastCalledWith('NATIVE_BROKER_V1_EXIT', undefined, {...exit, repeats: 1});
+    f.v1.options[0].diagnose!('V1_DURABLE_UNAVAILABLE', {code: 'WORKER_FAILED'});
+    expect(f.log).toHaveBeenLastCalledWith('V1_DURABLE_UNAVAILABLE', undefined, {code: 'WORKER_FAILED'});
+  } finally {f.stop(); await vi.advanceTimersByTimeAsync(0); f.restore(); vi.unstubAllEnvs();}
+});
+it('bounds the v1 ingestion stop by its 1,000 ms intake budget and reports a late stop as unclean', async () => {
+  const f = await stoppedService(report => {report({type: 'stopped'}); return Promise.resolve();});
+  try {
+    f.v1.stop.mockImplementation(() => new Promise<void>(() => undefined));
+    f.stop(); await vi.advanceTimersByTimeAsync(999);
+    expect(f.stops()).toEqual([]); expect(f.history.close).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(f.steps().find(step => step.name === 'v1-ingestion')).toMatchObject({phase: 'intake', outcome: 'timeout'});
+    expect(f.stops()).toEqual([{type: 'stopped', clean: false}]); expect(f.exit).toHaveBeenCalledExactlyOnceWith(1);
   } finally {f.restore();}
 });
 it('waits for the history database to close before the single stopped report, and reports a failed close as unclean', async () => {

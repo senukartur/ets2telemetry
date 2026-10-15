@@ -2,8 +2,8 @@
 // welcome, checkpoint, snapshots, events, gaps, clock replies and `end` through the ET-002b V1Consumer, checks every
 // envelope against the selected source, keeps service-internal live state, measures the source clock and, when a
 // durable sink is configured, hands events and gaps to the storage-commit ACK pipeline (v1-durable-delivery.ts).
-// Nothing here is wired into the telemetry service yet (PR-3); production will run it without a sink, so it records
-// nothing and sends no ACK. See docs/telemetry-service-v1.md.
+// The telemetry service runs it beside v0 without a sink (PR-3), so in production it records nothing and sends no ACK.
+// See docs/telemetry-service-v1.md.
 import {randomUUID} from 'node:crypto';
 import net from 'node:net';
 import {FrameDecoder, PROTOCOL_V1, encodeFrame, type CaptureTime, type Continuity, type CurrentState, type EndData, type ServerMessage, type SourceIdentity, type SourceStatus, type Uint64} from '../../../packages/contracts/src/protocol-v1';
@@ -49,7 +49,7 @@ export interface V1IngestionOptions {
   nowNs?: () => bigint;
   /** Fixture sockets for explicitly selected synthetic or replay endpoints. */
   connect?: (endpoint: string) => TelemetrySocket;
-  /** The native broker in v1 mode for game selections (PR-3); without it a game selection stays unavailable. */
+  /** The native broker in v1 mode for game selections; without it a game selection stays unavailable. */
   connectGame?: (configuration: BrokerConfiguration, game: 'ets2' | 'ats') => TelemetrySocket;
   broker?: BrokerConfiguration;
   /** Durable storage. Without it every hello is live-only and nothing is acknowledged. */

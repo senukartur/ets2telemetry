@@ -149,6 +149,16 @@ npm run test:cap0-chain
 
 It is not part of `npm test` because CI runs Vitest before the native build; Windows CI runs it as a separate bounded step after the native build. It is controlled synthetic evidence, not a game session.
 
+The protocol v1 chain (ET-006b) uses the same fake-SDK host with a v1 directory, the test plugin DLL and the native broker in its `--protocol v1` mode, again in isolated temporary directories and after the same three build commands:
+
+```powershell
+npm run test:v1-chain
+```
+
+It checks that the plugin accepts the service policy the broker provisions, that an ACK relayed through the broker releases retained entries, and that the service's v1 ingestion fails closed on the test DLL's synthetic origin under game authority ([telemetry service v1](telemetry-service-v1.md#service-wiring)). Windows CI runs it right after the CAP0 chain.
+
+The telemetry service runs protocol v1 beside v0, live-only. For a `synthetic` or `replay` selection it connects v1 only to an endpoint given in `ETS2TELEMETRY_SOURCE_PIPE_V1`, which must match `\\.\pipe\ETS2Telemetry-SYNTHETIC-TEST-v1-{pid}-{uuid}`, for example one served by the [v1 simulator](simulator-v1.md#named-pipe-serving). It is the v1 counterpart of `ETS2TELEMETRY_SOURCE_PIPE` and is read by the service at start; without it, a fixture selection leaves v1 unavailable. The v1 state stays inside the service: the dashboard and overlay still show v0.
+
 ## Official SDK acquisition
 
 Download the official [SCS Telemetry SDK 1.15 archive](https://download.eurotrucksimulator2.com/scs_sdk_1_15.zip) from the source linked in `concept.md`. Review and retain its license before use or redistribution. Do not assume archive 1.15 is a telemetry API or game version. ET-003 will pin archive checksum, included API versions, headers, and license treatment. ET-001 has no SDK dependency and does not vendor SDK files or expose SCS initialization exports.
