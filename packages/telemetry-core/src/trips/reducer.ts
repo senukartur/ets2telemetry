@@ -60,7 +60,7 @@ function freshSession(welcome: WelcomeMessage, coveredThrough: Uint64): SessionS
     pluginSessionId: welcome.source.pluginSessionId, game: welcome.source.game, processedThrough: coveredThrough,
     // A session first seen at coverage 0 starts with the load burst of O1; joining later, the load state is unknown.
     load: coveredThrough === '0' ? 'loading' : 'unknown', gameMode: modeOf(welcome.data.gameMode), clockId: welcome.capture.clockId,
-    lastUtcMs: null, lastMonotonicNs: null, truck: null, trailers: new Array<null>(TRAILER_SLOTS).fill(null), untrackedJobKey: null, disconnected: null
+    lastUtcMs: null, lastMonotonicNs: null, truck: null, trailers: new Array<null>(TRAILER_SLOTS).fill(null), untrackedJob: null, disconnected: null
   };
 }
 function seedTrip(seed: TripSeed): OpenTrip {
@@ -146,12 +146,12 @@ function openTrip(c: Carrier, o: OpenOptions) {
   if (o.reloadOf !== undefined) causes.push({kind: 'discontinuity', detail: {cause: 'reload', continuationOf: o.reloadOf, decision: 'not-merged'}});
   else {
     if (s.load === 'loading') causes.push({kind: 'discontinuity', detail: {cause: 'opened-at-load'}});
-    if (s.untrackedJobKey !== null && s.untrackedJobKey === o.key) causes.push({kind: 'not-connected', detail: {cause: 'late-attach'}});
+    if (s.untrackedJob?.source === 'checkpoint' && s.untrackedJob.key === o.key) causes.push({kind: 'not-connected', detail: {cause: 'late-attach'}});
     if (continuation !== null && continuation.jobKey !== null && continuation.jobKey === o.key) {
       causes.push({kind: 'discontinuity', detail: {cause: continuation.cause, continuationOf: continuation.tripUuid, decision: 'not-merged'}});
     }
   }
-  s.untrackedJobKey = null;
+  s.untrackedJob = null;
   const completeness: RecordingCompleteness = causes.length ? 'partial' : 'unknown';
   const trailers = s.trailers.flatMap(t => t === null ? [] : [{eventSeq: t.eventSeq}]);
   c.own.push({kind: 'trip.open', tripUuid: uuid, game: c.game, gameMode: modeOf(s.gameMode), jobConfiguration: o.jobRef,
@@ -206,9 +206,18 @@ function onJobConfigured(c: Carrier, record: Extract<EventRecord, {type: 'job.co
   const key = jobKey(record), trip = c.slot.trip;
   if (trip === null) { openFromEvent(c, record, key); return; }
   if (trip.jobKey === key) {
-    // The same job: a re-send, such as the cargo-market pickup that changes only cargoLoaded (O3).
-    trip.cargoLoaded = plain(record.cargoLoaded);
-    if (trip.phase === 'awaiting-outcome') { trip.phase = 'reload-check'; trip.reloadEventSeq = c.eventSeq; }
+    const loaded = plain(record.cargoLoaded);
+    // The same job while active: a re-send, such as the cargo-market pickup that changes only cargoLoaded (O3).
+    if (trip.phase === 'active') { trip.cargoLoaded = loaded; return; }
+    // After a clear, a re-send continues the trip only when every attribute, cargoLoaded included, is identical
+    // (concept.md, October 14, 2026); a reload check then decides (T8).
+    if (canonicalJson(loaded) === canonicalJson(trip.cargoLoaded)) {
+      if (trip.phase === 'awaiting-outcome') { trip.phase = 'reload-check'; trip.reloadEventSeq = c.eventSeq; }
+      return;
+    }
+    // A changed cargoLoaded, such as a save from before the pickup, is a not-merged continuation. The closed trip keeps its value.
+    closeTrip(c, 'none', 'configuration-cleared');
+    openTrip(c, {jobEventSeq: c.eventSeq!, jobRef: 'this-event', key, job: jobFields(record), reloadOf: trip.tripUuid, loadCheck: c.simulation === 'running' ? null : 'before-start'});
     return;
   }
   // A different job closes the trip: without a clear it replaced the job, after a clear the configuration was cleared.
@@ -218,10 +227,15 @@ function onJobConfigured(c: Carrier, record: Extract<EventRecord, {type: 'job.co
 function onOutcome(c: Carrier, record: Extract<EventRecord, {type: 'job.delivered' | 'job.cancelled'}>) {
   const trip = c.slot.trip;
   if (trip === null) {
-    // No attachable trip, or the outcome of a job that hydration showed but no trip tracks (T9, T14).
-    attribute(c, null, 'ambiguous'); c.session.untrackedJobKey = null; return;
+    // No attachable trip, or the outcome of a job that hydration showed or a gap hid, which no trip tracks (T9, T14).
+    // The job has ended, so it is neither untracked nor a continuation candidate any more.
+    attribute(c, null, 'ambiguous'); c.session.untrackedJob = null; c.slot.continuation = null; return;
   }
-  if (trip.phase === 'reload-check') { resolveReload(c, 'other'); attribute(c, null, 'ambiguous'); return; }
+  if (trip.phase === 'reload-check') {
+    // An outcome right after an identical re-send may belong to either trip (T8, T14). The old trip closes and no new
+    // trip opens, because the outcome ended whichever job it was.
+    closeTrip(c, 'none', 'configuration-cleared'); c.slot.continuation = null; attribute(c, null, 'ambiguous'); return;
+  }
   // T14: after a replaced or loaded configuration, an outcome before the first start may belong to the earlier job.
   if (trip.phase === 'active' && trip.loadCheck === 'before-start') { attribute(c, null, 'ambiguous'); return; }
   attribute(c, trip.tripUuid, trip.phase === 'active' && beforeLoaded(trip) ? 'trip-before-loaded' : 'trip');
@@ -230,7 +244,10 @@ function onOutcome(c: Carrier, record: Extract<EventRecord, {type: 'job.delivere
 }
 function onGameplay(c: Carrier, record: Extract<EventRecord, {type: 'player.fined' | 'player.tollgate.paid' | 'player.use.ferry' | 'player.use.train'}>) {
   const trip = c.slot.trip;
-  if (trip === null || trip.phase === 'awaiting-outcome') { attribute(c, null, 'free-driving'); return; }
+  // Free driving only outside any active job (concept.md, October 13, 2026): a job that is known or likely active but
+  // untracked makes the event ambiguous.
+  if (trip === null) { attribute(c, null, c.session.untrackedJob !== null ? 'ambiguous' : 'free-driving'); return; }
+  if (trip.phase === 'awaiting-outcome') { attribute(c, null, 'free-driving'); return; }
   if (trip.phase === 'reload-check') { resolveReload(c, 'other'); attribute(c, null, 'ambiguous'); return; }
   const early = beforeLoaded(trip);
   attribute(c, trip.tripUuid, early ? 'trip-before-loaded' : 'trip');
@@ -254,7 +271,8 @@ function onTimersRestart(c: Carrier) {
 /** gameTime.regression (O9, O10): a save load. It continues a reload-checked or just-loaded trip as partial, else closes it. */
 function onRegression(c: Carrier, record: Extract<EventRecord, {type: 'gameTime.regression'}>) {
   const trip = c.slot.trip;
-  c.session.load = 'loading';
+  // A regression follows the start of the load it ends (O10), so it never starts a load (T12).
+  if (c.simulation === 'running') c.session.load = 'running';
   if (trip === null) return;
   const detail = {cause: 'save-load', fromClockId: record.from.clockId, toClockId: record.to.clockId};
   if (trip.phase === 'reload-check') {
@@ -312,7 +330,7 @@ function stepEvent(state: TripState, message: EventMessage, coveredThrough: Uint
   switch (record.type) {
     case 'job.configured': onJobConfigured(c, record); break;
     case 'job.cleared':
-      session.untrackedJobKey = null;
+      session.untrackedJob = null;
       // T7: the trip waits for an outcome. A clear inside a reload check undoes the re-send and waits again.
       if (c.slot.trip !== null) { c.slot.trip.phase = 'awaiting-outcome'; c.slot.trip.reloadEventSeq = null; }
       break;
@@ -365,8 +383,12 @@ function stepGap(state: TripState, message: GapMessage, coveredThrough: Uint64, 
     ...(d.lastLostMonotonicNs.available ? {endMonotonicNs: d.lastLostMonotonicNs.value} : {}),
     sourceClockId: message.capture.clockId
   } : {};
-  const tripUuid = c.slot.trip?.tripUuid ?? null;
-  if (c.slot.trip !== null) closeTrip(c, 'none', 'gap');
+  const closing = c.slot.trip, tripUuid = closing?.tripUuid ?? null;
+  if (closing !== null) {
+    closeTrip(c, 'none', 'gap');
+    // The job was not cleared before the gap, so it is likely still active: untracked until a clear or an outcome.
+    if (closing.phase !== 'awaiting-outcome' && closing.jobKey !== null) session.untrackedJob = {key: closing.jobKey, source: 'gap'};
+  }
   c.own.push({kind: 'completeness.add', interval: {tripUuid, kind: gapKind(message), firstEventSeq: suffixFirst.toString(), lastEventSeq: d.lastEventSeq, ...bounds,
     detail: {cause: 'gap', causes: {...d.causes}, firstEventSeq: d.firstEventSeq, lastEventSeq: d.lastEventSeq, redelivered: d.redelivered}}});
   // Events inside the gap are unknown: a hidden start, restart or regression leaves the load state unknown.
@@ -417,6 +439,8 @@ function stepSession(state: TripState, welcome: WelcomeMessage, coveredThrough: 
     return {ok: true, state: draft, effects: []};
   }
   const draft = structuredClone(state), slot = draft.games[game];
+  // A continuation candidate of the earlier session now lies across a plugin restart, whatever closed its trip (T11).
+  if (slot.continuation !== null) slot.continuation = {...slot.continuation, cause: 'restart'};
   // An earlier plugin session of this game has ended: its open trip closes at the new session's first carrier (T11).
   const previous = slot.trip !== null && has(draft.sessions, slot.trip.pluginSessionId) ? draft.sessions[slot.trip.pluginSessionId] : null;
   if (slot.trip !== null) { restartClose(slot, slot.trip, previous?.lastUtcMs ?? null); slot.trip = null; }
@@ -452,7 +476,7 @@ function stepCheckpoint(state: TripState, message: CheckpointMessage): TripStepR
   const id = message.source.pluginSessionId;
   if (state.connection !== id || !has(state.sessions, id) || state.sessions[id].game !== message.source.game) return {ok: false, code: 'UNKNOWN_SESSION'};
   const draft = structuredClone(state), session = draft.sessions[id], job = message.data.state.configuration.job;
-  if (draft.games[session.game].trip === null) session.untrackedJobKey = job.available ? jobKey(job.value) : null;
+  if (draft.games[session.game].trip === null) session.untrackedJob = job.available ? {key: jobKey(job.value), source: 'checkpoint'} : null;
   return {ok: true, state: draft, effects: []};
 }
 

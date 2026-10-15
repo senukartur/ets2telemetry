@@ -4,7 +4,7 @@
 // below is written from docs/storage.md and docs/trips.md, not from the reducer.
 import {describe, expect, it} from 'vitest';
 import {GAMEPLAY_EVENT_TYPES, type EventRecord, type LossCounts} from '../../packages/contracts/src/protocol-v1';
-import {initialTripState, stepTrip, type EventMessage, type GapMessage, type TripEffect, type TripInput, type TripSeed, type TripState} from '../../packages/telemetry-core/src/index';
+import {initialTripState, jobKey, stepTrip, type EventMessage, type GapMessage, type TripEffect, type TripInput, type TripSeed, type TripState} from '../../packages/telemetry-core/src/index';
 import {
   ATS_A, BASE_UTC, ETS2_A, ETS2_B, Script, cargoMarketJob, carrier, job, otherJob, r, sessionInput, trailer, truck
 } from '../shared/trip-messages';
@@ -95,15 +95,31 @@ describe('replay (T3)', () => {
 
 /** Storage's effect rules (docs/storage.md, "Trip effects") plus the ET-014 invariants, checked against applied effects. */
 class EffectModel {
-  trips = new Map<string, {game: string; session: string; closed: boolean; startedUtcMs: number}>();
-  jobEvents = new Set<string>();
+  trips = new Map<string, {game: string; session: string; closed: boolean; startedUtcMs: number; jobKey: string | null; completeness: 'unknown' | 'partial'}>();
+  /** Job keys of every job.configured event, and the truck and trailer configuration events, by "session:eventSeq". */
+  jobEvents = new Map<string, string>();
+  truckEvents = new Set<string>();
+  trailerEvents = new Set<string>();
+  /** The open trips of a game as a cold start would read them from storage (TripSeed). */
+  seeds(game: string): TripSeed[] {
+    return [...this.trips.entries()].filter(([, t]) => !t.closed && t.game === game).map(([tripUuid, t]) => ({tripUuid, pluginSessionId: t.session, game: t.game as 'ets2' | 'ats',
+      jobKey: t.jobKey, startedUtcMs: t.startedUtcMs, recordingCompleteness: t.completeness}));
+  }
   check(message: EventMessage | GapMessage, effects: TripEffect[]) {
     const game = message.source.game, session = message.source.pluginSessionId, record = message.kind === 'event' ? message.data.record : null;
     expect(effects.length).toBeLessThanOrEqual(16);
     expect(effects.filter(e => e.kind === 'completeness.add' && e.interval.detail?.annotation === true).length).toBeLessThanOrEqual(8);
     const gameplay = record !== null && GAMEPLAY_EVENT_TYPES.includes(record.type);
     expect(effects.filter(e => e.kind === 'event.attribute').length, 'one attribution per gameplay event').toBe(gameplay ? 1 : 0);
-    if (record?.type === 'job.configured') this.jobEvents.add(`${session}:${(message as EventMessage).data.eventSeq}`);
+    const here = message.kind === 'event' ? `${session}:${message.data.eventSeq}` : '';
+    if (record?.type === 'job.configured') this.jobEvents.set(here, jobKey(record));
+    if (record?.type === 'truck.configured') this.truckEvents.add(here);
+    if (record?.type === 'trailer.configured') this.trailerEvents.add(here);
+    // A configuration reference names a configuration event of the committing session (storage resolves it there).
+    const configuration = (ref: 'this-event' | {eventSeq: string}, type: 'truck.configured' | 'trailer.configured') => {
+      if (ref === 'this-event') expect(record?.type).toBe(type);
+      else expect((type === 'truck.configured' ? this.truckEvents : this.trailerEvents).has(`${session}:${ref.eventSeq}`), `${type} reference of this session`).toBe(true);
+    };
     const known = (uuid: string | null | undefined) => {
       if (uuid === null || uuid === undefined) return;
       const trip = this.trips.get(uuid);
@@ -119,8 +135,10 @@ class EffectModel {
           expect(effect.game).toBe(game);
           if (effect.jobConfiguration === 'this-event') expect(record!.type).toBe('job.configured');
           else expect(this.jobEvents.has(`${session}:${effect.jobConfiguration.eventSeq}`), 'job reference of this session').toBe(true);
-          if (effect.truckConfiguration === 'this-event') expect(record!.type).toBe('truck.configured');
-          this.trips.set(effect.tripUuid, {game, session, closed: false, startedUtcMs: effect.startedUtcMs});
+          if (effect.truckConfiguration !== undefined) configuration(effect.truckConfiguration, 'truck.configured');
+          for (const ref of effect.trailerConfigurations ?? []) configuration(ref, 'trailer.configured');
+          const key = this.jobEvents.get(effect.jobConfiguration === 'this-event' ? here : `${session}:${effect.jobConfiguration.eventSeq}`) ?? null;
+          this.trips.set(effect.tripUuid, {game, session, closed: false, startedUtcMs: effect.startedUtcMs, jobKey: key, completeness: effect.recordingCompleteness === 'partial' ? 'partial' : 'unknown'});
           break;
         }
         case 'trip.close': {
@@ -140,9 +158,10 @@ class EffectModel {
         case 'trip.update': {
           const trip = known(effect.tripUuid)!;
           if (trip.closed) expect(Object.keys(effect.set).every(key => key === 'recordingCompleteness' || key === 'observedDistanceM')).toBe(true);
-          if (effect.set.truckConfiguration === 'this-event') expect(record?.type).toBe('truck.configured');
-          if (effect.set.trailerConfigurations !== undefined) expect(record?.type).toBe('trailer.configured');
+          if (effect.set.truckConfiguration !== undefined) configuration(effect.set.truckConfiguration, 'truck.configured');
+          for (const ref of effect.set.trailerConfigurations ?? []) configuration(ref, 'trailer.configured');
           expect(effect.set.recordingCompleteness === undefined || effect.set.recordingCompleteness === 'partial').toBe(true);
+          if (effect.set.recordingCompleteness === 'partial') trip.completeness = 'partial';
           break;
         }
         case 'event.attribute':
@@ -179,6 +198,7 @@ const CAUSES: (keyof LossCounts)[] = ['offline', 'noDurableConsumer', 'queueCoun
 
 describe('seeded random streams (T18, REG-005)', () => {
   it('never exceed 16 effects, never close a trip twice and never give an outcome without its event', () => {
+    const seeded = {resumed: 0, restarted: 0};
     for (let seed = 1; seed <= 150; seed++) {
       const next = random(seed), model = new EffectModel();
       let state = initialTripState(), sessionCounter = 0;
@@ -193,10 +213,17 @@ describe('seeded random streams (T18, REG-005)', () => {
         else expect(result.effects).toEqual([]);
         state = result.state;
       };
-      const send = (message: EventMessage | GapMessage) => { (sent[message.source.pluginSessionId] ??= []).push(message); step(carrier(state, message)); };
+      // Committed coverage per session, as storage would report it after a service restart.
+      const covered: Record<string, string> = {};
+      const send = (message: EventMessage | GapMessage) => {
+        const id = message.source.pluginSessionId;
+        (sent[id] ??= []).push(message); step(carrier(state, message)); covered[id] = state.sessions[id].processedThrough;
+      };
+      // A session the reducer does not know gets the stored coverage and the stored open trips of its game (TripSeed).
       const connect = () => {
-        const s = scripts[game], known = Object.hasOwn(state.sessions, s.session);
-        step(sessionInput(s.welcome(), known ? state.sessions[s.session].processedThrough : '0'));
+        const s = scripts[game], known = Object.hasOwn(state.sessions, s.session), seeds = known ? [] : model.seeds(game);
+        for (const x of seeds) seeded[x.pluginSessionId === s.session ? 'resumed' : 'restarted'] += 1;
+        step(sessionInput(s.welcome(), known ? state.sessions[s.session].processedThrough : covered[s.session] ?? '0', seeds));
       };
       connect();
       for (let i = 0; i < 120; i++) {
@@ -208,12 +235,14 @@ describe('seeded random streams (T18, REG-005)', () => {
         } else if (roll < 0.78) send(s.gap(1 + Math.floor(next() * 3), CAUSES[Math.floor(next() * CAUSES.length)]));
         else if (roll < 0.83) step({kind: 'checkpoint', message: s.checkpoint(next() < 0.5 ? job() : null)});
         else if (roll < 0.88) { step({kind: 'disconnected'}); connect(); }
-        else if (roll < 0.92) { step({kind: 'disconnected'}); game = game === 'ets2' ? 'ats' : 'ets2'; connect(); }
+        else if (roll < 0.91) { step({kind: 'disconnected'}); game = game === 'ets2' ? 'ats' : 'ets2'; connect(); }
+        else if (roll < 0.93) { step({kind: 'disconnected'}); scripts[game] = newScript(game); connect(); }
         else if (roll < 0.95) {
-          // A plugin restart: a new session of the same game, with the stored open trips a cold start would pass.
-          step({kind: 'disconnected'}); scripts[game] = newScript(game);
-          const seeds: TripSeed[] = [];
-          step({...sessionInput(scripts[game].welcome()), openTrips: seeds} as TripInput);
+          // A service restart: the reducer state is lost, so stored open trips come back as seeds (same-session resume
+          // or restart close); with a plugin restart half of the time.
+          state = initialTripState();
+          if (next() < 0.5) scripts[game] = newScript(game);
+          connect();
         } else {
           const history = sent[s.session] ?? [];
           if (history.length) {
@@ -224,6 +253,9 @@ describe('seeded random streams (T18, REG-005)', () => {
       }
       expect(JSON.parse(JSON.stringify(state))).toEqual(state);
     }
+    // The streams exercise both cold-start seed paths.
+    expect(seeded.resumed).toBeGreaterThan(5);
+    expect(seeded.restarted).toBeGreaterThan(5);
   });
 });
 

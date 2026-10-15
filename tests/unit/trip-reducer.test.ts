@@ -232,6 +232,37 @@ describe('loads, restarts and continuations', () => {
         cause(next, 'discontinuity', {cause: 'reload', continuationOf: trip, decision: 'not-merged', atEventSeq: '12'}), attr(null, 'ambiguous')]]]);
     expect(tripView(state, 'ets2')).toMatchObject({phase: 'active', current: {tripUuid: next, recordingCompleteness: 'partial'}});
   });
+  it('after a save load, the next job accepted while paused opens unknown and closes complete (T12: a regression starts no load) [O2, O10]', () => {
+    const s = new Script(ETS2_A), {rows, trip} = acceptedJob(s), next = uuid(ETS2_A, '17');
+    play([...rows, [s.event(r.paused(), paused)], [s.event(r.jobCleared(), paused)], [s.event(r.truckCleared(), paused)], [s.event(r.trailerCleared(0), paused)],
+      [s.event(r.truckConfigured(), paused)], [s.event(r.trailerConfigured(), paused)], [s.event(r.started())],
+      [s.event(r.regression('12345', '12000')), [close(trip, 'none', 'discontinuity', 'partial', at(15))]],
+      [s.event(r.paused(), paused)],
+      [s.event(r.jobConfigured(otherJob()), paused), [open(next, at(17), {truckConfiguration: {eventSeq: '12'}, trailerConfigurations: [{eventSeq: '13'}]})]],
+      [s.event(r.started())], [s.event(r.paused(), paused)],
+      [s.event(r.delivered(), paused), [attr(next, 'trip'), close(next, 'delivered', 'outcome', 'complete', at(20))]]]);
+  });
+  it('an outcome that resolves a reload check closes the old trip and opens none (T8, T14) [synthetic-inference]', () => {
+    const s = new Script(ETS2_A), {rows, trip} = acceptedJob(s);
+    const state = play([...rows, [s.event(r.paused(), paused)], [s.event(r.jobCleared(), paused)], [s.event(r.jobConfigured(), paused)],
+      [s.event(r.delivered(), paused), [close(trip, 'none', 'configuration-cleared', 'partial', at(11)), attr(null, 'ambiguous')]],
+      [s.event(r.started())], [s.event(r.fined()), [attr(null, 'free-driving')]]]);
+    expect(tripView(state, 'ets2')).toMatchObject({phase: 'idle', untrackedJob: false, current: null});
+  });
+  it('a save from before a cargo-market pickup is not continued: cargoLoaded differs (T8) [O3, O10, concept-2026-10-14]', () => {
+    const s = new Script(ETS2_A), {rows, trip} = acceptedJob(s, cargoMarketJob(false)), next = uuid(ETS2_A, '13');
+    const state = play([...rows, [s.event(r.paused(), paused)],
+      // Pickup while active: the same job with cargoLoaded now true (O3).
+      [s.event(r.jobConfigured(cargoMarketJob(true)), paused)], [s.event(r.started())], [s.event(r.paused(), paused)], [s.event(r.jobCleared(), paused)],
+      // The save restores the job from before the pickup: every attribute but cargoLoaded is identical.
+      [s.event(r.jobConfigured(cargoMarketJob(false)), paused), [close(trip, 'none', 'configuration-cleared', 'partial', at(13)),
+        open(next, at(13), {...BURST_REFS, recordingCompleteness: 'partial'}), cause(next, 'discontinuity', {cause: 'reload', continuationOf: trip, decision: 'not-merged', atEventSeq: '13'})]],
+      [s.event(r.started())],
+      [s.event(r.regression('12345', '12000')), [cause(next, 'discontinuity', {cause: 'save-load', fromClockId: GAME_CLOCK_1, toClockId: GAME_CLOCK_2, atEventSeq: '15'})]],
+      [s.event(r.fined()), [attr(next, 'trip-before-loaded')]]]);
+    // The closed trip keeps the value it had: loaded at the pickup.
+    expect(tripView(state, 'ets2')).toMatchObject({current: {tripUuid: next, cargoLoaded: {state: 'value', value: false}}, lastClosed: {tripUuid: trip, cargoLoaded: {state: 'value', value: true}}});
+  });
   it('a clear inside a reload check returns to waiting for the outcome [synthetic-inference]', () => {
     const s = new Script(ETS2_A), {rows, trip} = acceptedJob(s);
     const state = play([...rows, [s.event(r.paused(), paused)], [s.event(r.jobCleared(), paused)], [s.event(r.jobConfigured(), paused)],
@@ -250,7 +281,9 @@ describe('hydration, gaps and connections', () => {
     state = play([
       // The consumer was absent for eventSeq 1–20 (offline): a session-level not-connected interval (T10).
       [gap, gapEffects(gap, null, '1', '20')],
-      [s.event(r.fined()), [attr(null, 'free-driving')]], [s.event(r.paused(), paused)],
+      // The checkpoint showed a job: a fine meanwhile is inside a job no trip tracks, so ambiguous, never free driving
+      // (concept.md, October 13, 2026; fix round 1 finding 2 changed this requirement from free-driving).
+      [s.event(r.fined()), [attr(null, 'ambiguous')]], [s.event(r.paused(), paused)],
       [s.event(r.jobConfigured(), paused), [open(t, at(4), {recordingCompleteness: 'partial'}), cause(t, 'not-connected', {cause: 'late-attach', atEventSeq: '23'})]]
     ], state);
     expect(tripView(state, 'ets2')).toMatchObject({phase: 'active', untrackedJob: false, current: {tripUuid: t, recordingCompleteness: 'partial'}});
@@ -273,6 +306,26 @@ describe('hydration, gaps and connections', () => {
       // The gap carries no UTC label: the close uses the session's last label, eventSeq 7 (T15).
       [gap, [close(trip, 'none', 'gap', 'partial', at(7)), ...gapEffects(gap, trip, '8', '9')]],
       [s.event(r.paused(), paused)], [s.event(r.delivered(), paused), [attr(null, 'ambiguous')]]]);
+  });
+  it('after a gap closes an active trip, gameplay events are ambiguous until a clear or an outcome (T14) [concept-2026-10-13, synthetic-inference]', () => {
+    const s = new Script(ETS2_A), {rows, trip} = acceptedJob(s), gap = s.gap(2);
+    let state = play([...rows, [gap, [close(trip, 'none', 'gap', 'partial', at(7)), ...gapEffects(gap, trip, '8', '9')]]]);
+    expect(tripView(state, 'ets2')).toMatchObject({phase: 'idle', untrackedJob: true});
+    state = play([[s.event(r.fined()), [attr(null, 'ambiguous')]], [s.event(r.toll()), [attr(null, 'ambiguous')]], [s.event(r.paused(), paused)],
+      [s.event(r.jobCleared(), paused)], [s.event(r.started())], [s.event(r.fined()), [attr(null, 'free-driving')]]], state);
+    expect(tripView(state, 'ets2').untrackedJob).toBe(false);
+  });
+  it('after a gap, the identical job re-sent opens a gap continuation, not a late attach [synthetic-inference]', () => {
+    const s = new Script(ETS2_A), {rows, trip} = acceptedJob(s), gap = s.gap(2), next = uuid(ETS2_A, '11');
+    play([...rows, [gap, [close(trip, 'none', 'gap', 'partial', at(7)), ...gapEffects(gap, trip, '8', '9')]], [s.event(r.paused(), paused)],
+      [s.event(r.jobConfigured(), paused), [open(next, at(10), {...BURST_REFS, recordingCompleteness: 'partial'}),
+        cause(next, 'discontinuity', {cause: 'gap', continuationOf: trip, decision: 'not-merged', atEventSeq: '11'})]]]);
+  });
+  it('a continuation candidate of an earlier session is relabelled restart in the new session (T11) [synthetic-inference]', () => {
+    const a = new Script(ETS2_A), b = new Script(ETS2_B, 'ets2', {utcMs: BASE_UTC + 100_000}), {rows, trip} = acceptedJob(a), gap = a.gap(2), next = uuid(ETS2_B, '1');
+    play([...rows, [gap, [close(trip, 'none', 'gap', 'partial', at(7)), ...gapEffects(gap, trip, '8', '9')]], [{kind: 'disconnected'}], [sessionInput(b.welcome())],
+      [b.event(r.jobConfigured(), paused), [open(next, BASE_UTC + 101_000, {recordingCompleteness: 'partial'}), cause(next, 'discontinuity', {cause: 'opened-at-load', atEventSeq: '1'}),
+        cause(next, 'discontinuity', {cause: 'restart', continuationOf: trip, decision: 'not-merged', atEventSeq: '1'})]]]);
   });
   it('9. an overlapping merged gap applies only its suffix beyond the processed point (T5) [synthetic-inference]', () => {
     const s = new Script(ETS2_A), {rows, trip} = acceptedJob(s), gap = s.gap(2);

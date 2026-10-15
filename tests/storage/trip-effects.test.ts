@@ -5,8 +5,9 @@
 import {createHash} from 'node:crypto';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 import type {Storage} from '../../packages/storage/src/index';
-import {initialTripState, stepTrip, type EventMessage, type GapMessage, type TripInput, type TripState} from '../../packages/telemetry-core/src/index';
-import {BASE_UTC, ETS2_A, ETS2_B, GAME_CLOCK_1, GAME_CLOCK_2, RECEIVED_UTC, Script, job, r, run, sessionInput} from '../shared/trip-messages';
+import type {JobConfiguration} from '../../packages/contracts/src/protocol-v1';
+import {initialTripState, jobKey, stepTrip, type EventMessage, type GapMessage, type TripInput, type TripSeed, type TripState} from '../../packages/telemetry-core/src/index';
+import {ATS_A, BASE_UTC, ETS2_A, ETS2_B, GAME_CLOCK_1, GAME_CLOCK_2, RECEIVED_UTC, Script, job, r, run, sessionInput} from '../shared/trip-messages';
 import {failed, ok, readOnly, workspace} from './helpers';
 
 let ws: Awaited<ReturnType<typeof workspace>>;
@@ -54,8 +55,9 @@ function rows(file: string): Rows {
     attributions: db.prepare(`SELECT s.plugin_session_uuid AS session, CAST(e.event_seq AS INTEGER) AS eventSeq, t.trip_uuid AS trip, a.attribution FROM event_attributions a
       JOIN events e ON e.id = a.event_ref JOIN plugin_sessions s ON s.id = e.plugin_session_id LEFT JOIN trips t ON t.id = a.trip_ref ORDER BY a.event_ref`).all(),
     intervals: (db.prepare(`SELECT c.kind, t.trip_uuid AS trip, CAST(c.first_event_seq AS INTEGER) AS first, CAST(c.last_event_seq AS INTEGER) AS last,
-      CAST(c.start_monotonic_ns AS INTEGER) AS startNs, CAST(c.end_monotonic_ns AS INTEGER) AS endNs, c.start_utc_ms AS startUtc, c.detail_json
-      FROM completeness_intervals c LEFT JOIN trips t ON t.id = c.trip_ref ORDER BY c.id`).all() as {detail_json: string | null}[])
+      CAST(c.start_monotonic_ns AS INTEGER) AS startNs, CAST(c.end_monotonic_ns AS INTEGER) AS endNs, c.start_utc_ms AS startUtc, ks.plugin_session_uuid AS clockSession, c.detail_json
+      FROM completeness_intervals c LEFT JOIN trips t ON t.id = c.trip_ref LEFT JOIN clocks k ON k.id = c.source_clock_ref LEFT JOIN plugin_sessions ks ON ks.id = k.plugin_session_ref
+      ORDER BY c.id`).all() as {detail_json: string | null}[])
       .map(({detail_json, ...row}) => ({...row, detail: detail_json === null ? null : JSON.parse(detail_json)})),
     counts: Object.fromEntries(['events', 'event_gaps', 'trips', 'trip_trailers', 'event_attributions', 'completeness_intervals']
       .map(table => [table, db.prepare(`SELECT count(*) AS n FROM ${table}`).get() as {n: number}]).map(([table, row]) => [table, (row as {n: number}).n]))
@@ -66,6 +68,19 @@ const trips = (storage: Storage) => ok(storage.listTrips()).trips.map(t => ({
   startedUtcMs: t.startedUtcMs, endedUtcMs: t.endedUtcMs, jobConfigurationEventSeq: t.jobConfigurationEventSeq, openedEventSeq: t.openedEventSeq,
   outcomeEventSeq: t.outcomeEventSeq, truckConfigurationEventSeq: t.truckConfigurationEventSeq, trailerConfigurationEventSeqs: t.trailerConfigurationEventSeqs
 }));
+
+/**
+ * The cold-start seeds a T3 caller (ET-015a) builds from storage: every open trip of the game, the job key of its stored
+ * job configuration and the UTC label of its session's last stored event.
+ */
+function storedSeeds(storage: Storage, game: 'ets2' | 'ats'): TripSeed[] {
+  return ok(storage.listTrips()).trips.filter(t => t.outcome === 'open' && t.game === game).map(t => {
+    const record = ok(storage.getEvent(t.pluginSessionId, t.jobConfigurationEventSeq))!.record as JobConfiguration;
+    const last = ok(storage.listEvents(t.pluginSessionId)).at(-1)!.occurred as {utcUnixMs: {available: boolean; value?: string}};
+    return {tripUuid: t.tripUuid, pluginSessionId: t.pluginSessionId, game, jobKey: jobKey(record), startedUtcMs: t.startedUtcMs,
+      recordingCompleteness: t.recordingCompleteness, ...(last.utcUnixMs.available ? {lastObservedUtcMs: Number(last.utcUnixMs.value)} : {})};
+  });
+}
 
 describe('ET-014 reducer effects through real commits', () => {
   it('1. normal delivery: one complete delivered trip with its fine and outcome attributed (REG-001) [O1, O2, O5, O6, O8]', async () => {
@@ -171,6 +186,55 @@ describe('ET-014 reducer effects through real commits', () => {
       attributions: [{eventSeq: 9, trip: t, attribution: 'trip'}],
       intervals: [{kind: 'discontinuity', trip: t, detail: {annotation: true, cause: 'utc-label-jump', labelUtcMs: back + 1_000, clampedToUtcMs: at(6), atEventSeq: '9'}}],
       counts: {trips: 1, events: 9}
+    });
+  });
+  it('22. a reconnection marks the open trip partial with a bounded not-connected interval on its own session clock (T13) [synthetic-inference]', async () => {
+    const storage = await ws.open(), e = new Script(ETS2_A), a = new Script(ATS_A, 'ats', {utcMs: BASE_UTC + 50_000}), t = uuid(ETS2_A, '6'), atsTrip = uuid(ATS_A, '3');
+    const first = accepted(e);
+    const {statuses} = drive(storage, [...first, {kind: 'disconnected'}, sessionInput(a.welcome()), a.event(r.started()), a.event(r.paused(), paused),
+      a.event(r.jobConfigured(), paused), a.event(r.started()), a.event(r.fined()), {kind: 'disconnected'}, sessionInput(e.welcome()), e.event(r.fined())]);
+    expect(statuses).toEqual(Array(13).fill('committed'));
+    expect(trips(storage)).toMatchObject([{tripUuid: t, pluginSessionId: ETS2_A, outcome: 'open', recordingCompleteness: 'partial'},
+      {tripUuid: atsTrip, pluginSessionId: ATS_A, outcome: 'open', recordingCompleteness: 'unknown', startedUtcMs: BASE_UTC + 53_000}]);
+    storage.close();
+    expect(rows(ws.database)).toMatchObject({
+      attributions: [{session: ATS_A, eventSeq: 5, trip: atsTrip, attribution: 'trip'}, {session: ETS2_A, eventSeq: 8, trip: t, attribution: 'trip'}],
+      // From the last ETS2 event before the disconnection (eventSeq 7, 1 ms before its capture) to the reconnection's welcome capture.
+      intervals: [{kind: 'not-connected', trip: t, startNs: 1_006_999_000_000, endNs: 1_007_000_000_000, startUtc: at(7), clockSession: ETS2_A, detail: {cause: 'disconnected'}}]
+    });
+  });
+  it('23. a reload check resolved by a running fine opens from the stored re-send (jobConfiguration {eventSeq}) (T8) [synthetic-inference]', async () => {
+    const storage = await ws.open(), s = new Script(ETS2_A), t = uuid(ETS2_A, '6'), next = uuid(ETS2_A, '10');
+    drive(storage, [...accepted(s), s.event(r.paused(), paused), s.event(r.jobCleared(), paused), s.event(r.jobConfigured(), paused), s.event(r.started()), s.event(r.fined())]);
+    expect(trips(storage)).toEqual([
+      {tripUuid: t, pluginSessionId: ETS2_A, outcome: 'none', closeReason: 'configuration-cleared', recordingCompleteness: 'partial', startedUtcMs: at(6), endedUtcMs: at(12),
+        jobConfigurationEventSeq: '6', openedEventSeq: '6', outcomeEventSeq: null, truckConfigurationEventSeq: '1', trailerConfigurationEventSeqs: ['2']},
+      {tripUuid: next, pluginSessionId: ETS2_A, outcome: 'open', closeReason: null, recordingCompleteness: 'partial', startedUtcMs: at(12), endedUtcMs: null,
+        jobConfigurationEventSeq: '10', openedEventSeq: '12', outcomeEventSeq: null, truckConfigurationEventSeq: '1', trailerConfigurationEventSeqs: ['2']}]);
+    storage.close();
+    expect(rows(ws.database)).toMatchObject({attributions: [{eventSeq: 12, trip: null, attribution: 'ambiguous'}],
+      intervals: [{kind: 'discontinuity', trip: next, detail: {cause: 'reload', continuationOf: t, decision: 'not-merged', atEventSeq: '12'}}]});
+  });
+  it('cold start: a stored open trip of an earlier session closes as restart from the new session (T11) [synthetic-inference]', async () => {
+    const storage = await ws.open(), a = new Script(ETS2_A), b = new Script(ETS2_B, 'ets2', {utcMs: BASE_UTC + 100_000}), t = uuid(ETS2_A, '6');
+    drive(storage, accepted(a));
+    // The service restarts: its reducer state is gone, and the caller reads the open trips from storage.
+    const seeds = storedSeeds(storage, 'ets2');
+    expect(seeds).toEqual([{tripUuid: t, pluginSessionId: ETS2_A, game: 'ets2', jobKey: jobKey(job()), startedUtcMs: at(6), recordingCompleteness: 'unknown', lastObservedUtcMs: at(7)}]);
+    const {statuses} = drive(storage, [sessionInput(b.welcome(), '0', seeds), b.event(r.truckConfigured(), paused)]);
+    expect(statuses).toEqual(['committed']);
+    expect(trips(storage)).toMatchObject([{tripUuid: t, pluginSessionId: ETS2_A, outcome: 'none', closeReason: 'restart', recordingCompleteness: 'partial', endedUtcMs: at(7)}]);
+  });
+  it('cold start: a stored open trip of the same session resumes as partial with a consumer-restart interval (T13) [synthetic-inference]', async () => {
+    const storage = await ws.open(), a = new Script(ETS2_A), t = uuid(ETS2_A, '6');
+    drive(storage, accepted(a));
+    const {statuses} = drive(storage, [sessionInput(a.welcome(), '0', storedSeeds(storage, 'ets2')), a.event(r.fined()), a.event(r.paused(), paused), a.event(r.delivered(), paused)]);
+    expect(statuses).toEqual(['committed', 'committed', 'committed']);
+    expect(trips(storage)).toMatchObject([{tripUuid: t, outcome: 'delivered', closeReason: 'outcome', recordingCompleteness: 'partial', endedUtcMs: at(10), outcomeEventSeq: '10'}]);
+    storage.close();
+    expect(rows(ws.database)).toMatchObject({
+      attributions: [{eventSeq: 8, trip: t, attribution: 'trip'}, {eventSeq: 10, trip: t, attribution: 'trip'}],
+      intervals: [{kind: 'not-connected', trip: t, startNs: null, clockSession: null, detail: {cause: 'consumer-restart'}}]
     });
   });
 });

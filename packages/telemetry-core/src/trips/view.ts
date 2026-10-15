@@ -24,7 +24,7 @@ export interface ClosedTripView extends TripSummaryView {
 export interface TripView {
   game: TripGame;
   phase: 'idle' | TripPhase;
-  /** A checkpoint showed a job that no trip tracks: the consumer attached after it was configured (T9). */
+  /** A job is known or likely active but no trip tracks it: a checkpoint job seen while idle (T9), or the job of a trip a gap closed. */
   untrackedJob: boolean;
   current: TripSummaryView | null;
   lastClosed: ClosedTripView | null;
@@ -62,7 +62,7 @@ export function tripView(state: TripState, game: TripGame): TripView {
   const session = slot.sessionId !== null && Object.hasOwn(state.sessions, slot.sessionId) ? state.sessions[slot.sessionId] : null;
   const closed = slot.lastClosed;
   return {
-    game, phase: trip?.phase ?? 'idle', untrackedJob: trip === null && session?.untrackedJobKey != null,
+    game, phase: trip?.phase ?? 'idle', untrackedJob: trip === null && session !== null && session.untrackedJob !== null,
     current: trip === null ? null
       : tripSummary(trip, session !== null && trip.clockId !== null && trip.clockId === session.clockId ? session.lastMonotonicNs : null),
     lastClosed: closed === null ? null : {

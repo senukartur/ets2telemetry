@@ -56,8 +56,9 @@ export type TripStepResult = {ok: true; state: TripState; effects: TripEffect[]}
 export type TripPhase = 'active' | 'awaiting-outcome' | 'reload-check';
 /**
  * Whether the session is inside a load: `loading` from the session start until its first `simulation.started` (O1),
- * and again after `timers.restart` or `gameTime.regression`; `unknown` after a gap or when the reducer joins a session
- * that already has committed events.
+ * and again after `timers.restart` until the next start. A `gameTime.regression` never starts a load, because it
+ * follows the start of the load it ends (O10): it leaves the state unchanged, or sets `running` when it occurred while
+ * running. `unknown` after a gap or when the reducer joins a session that already has committed events.
  */
 export type LoadState = 'loading' | 'running' | 'unknown';
 
@@ -93,8 +94,12 @@ export interface SessionState {
   pluginSessionId: string; game: TripGame; processedThrough: Uint64; load: LoadState; gameMode: GameModeEvidence;
   clockId: string | null; lastUtcMs: number | null; lastMonotonicNs: Uint64 | null;
   truck: ConfigurationRef | null; trailers: (ConfigurationRef | null)[];
-  /** The job key of a checkpoint job that no trip tracks (T9). */
-  untrackedJobKey: string | null;
+  /**
+   * A job that is known or likely active but that no trip tracks: a checkpoint job seen while idle (T9), or the job of
+   * a trip a gap closed before its clear or outcome. Gameplay events meanwhile are ambiguous, never free driving
+   * (concept.md, October 13, 2026). Cleared by `job.cleared`, an outcome or a new trip.
+   */
+  untrackedJob: {key: string; source: 'checkpoint' | 'gap'} | null;
   /** Where the last connection of this session ended, for the not-connected interval of an open trip. */
   disconnected: {utcMs: number | null; monotonicNs: Uint64 | null; clockId: string | null} | null;
 }
