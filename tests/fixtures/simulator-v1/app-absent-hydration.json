@@ -1,0 +1,20 @@
+{
+  "format": "ets2telemetry-simulator-v1", "schemaVersion": 1, "id": "app-absent-hydration",
+  "purpose": "The application attaches mid-job: events observed with no client become offline gap coverage from eventSeq 1, the checkpoint hydrates the current job without any event, and a loss run still open at attach reaches the store at the next frame end.",
+  "reg": ["REG-003", "REG-004"], "origin": "synthetic", "game": "ets2", "seed": "et005b-app-absent-hydration", "provenance": null,
+  "source": {"versions": {"telemetryApi": {"major": 1, "minor": 1}, "gameTelemetry": {"major": 1, "minor": 19}, "sdkArchive": "scs-sdk-1.15"}, "gameplayEvents": "registered", "currency": "unknown", "gameMode": "unknown"},
+  "steps": [
+    {"atMs": 0, "action": "configuration", "id": "truck", "attributes": [{"name": "id", "sdkType": "string", "value": "vehicle.synthetic_truck"}]},
+    {"atMs": 10, "action": "configuration", "id": "job", "attributes": [{"name": "cargo.id", "sdkType": "string", "value": "synthetic_cargo"},
+      {"name": "destination.city.id", "sdkType": "string", "value": "synthetic_city_b"}, {"name": "planned_distance.km", "sdkType": "u32", "value": 300}]},
+    {"atMs": 20, "action": "lifecycle", "event": "simulation.started"},
+    {"atMs": 30, "action": "frame", "channels": {"speed": 20, "game.time": 700}},
+    {"atMs": 40, "action": "gameplay", "id": "player.fined", "attributes": [{"name": "fine.offence", "sdkType": "string", "value": "speeding"}, {"name": "fine.amount", "sdkType": "s64", "value": "150"}]},
+    {"atMs": 150, "action": "frame", "channels": {"speed": 21}},
+    {"atMs": 200, "action": "configuration", "id": "job", "attributes": []}
+  ],
+  "transport": [
+    {"atMs": 100, "action": "connect", "client": {"durable": true}},
+    {"atMs": 300, "action": "disconnect"}
+  ]
+}

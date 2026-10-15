@@ -1,0 +1,25 @@
+{
+  "scenario": "handoff-full",
+  "authoredFrom": [
+    "docs/native-transport-v1.md gate table and OD-5 S4: with the gate durable and the ring full an observed event is lost as queueCount",
+    "docs/native-transport-v1.md callback capture: a full ring keeps the run open at frame_end; the next copied record carries it as loss_before, so the gap precedes that event",
+    "OD-5 S11: the snapshot's nextEventSeq is the store's coverage, which does not include a run the store has not received; D5: every observed event, including a lost one, takes an eventSeq",
+    "docs/native-transport-v1.md: every SDK callback advances boundaryOrder and the lost job callback still advances the v1 revision"
+  ],
+  "connections": [
+    {
+      "durableRequested": true, "closedBy": "disconnect", "clientInstance": 1,
+      "coverage": [
+        {"event": "1", "type": "simulation.started", "redelivered": false},
+        {"atMs": 70, "gap": ["2", "3"], "causes": {"queueCount": "2"}, "redelivered": false, "firstLost": "1000030000000", "lastLost": "1000040000000"},
+        {"atMs": 70, "event": "4", "type": "simulation.paused", "redelivered": false, "occurred": {"simulation": "paused", "boundaryOrder": "7", "configurationRevision": "1"}}
+      ],
+      "acks": ["1", "3", "4"],
+      "snapshots": [{"atMs": 50, "ackedThroughEventSeq": "1", "nextEventSeq": "2", "eventLoss": {}, "state": {"boundaryOrder": "6", "configuration": {"revision": "1"}}}],
+      "end": null
+    }
+  ],
+  "ledger": {"committedThroughEventSeq": "4", "committedEvents": 2, "committedGapMarkers": "2", "duplicates": 0},
+  "store": {"ackedThroughEventSeq": "4", "nextEventSeq": "5", "retainedEntries": 0, "eventLoss": {"queueCount": "2"}},
+  "retired": null
+}

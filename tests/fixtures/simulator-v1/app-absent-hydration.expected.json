@@ -1,0 +1,37 @@
+{
+  "scenario": "app-absent-hydration",
+  "authoredFrom": [
+    "docs/protocol/v1.md §7: hydration replaces current state only; with no client the producer keeps no offline event contents",
+    "docs/protocol/v1.md §9 coverage invariant: after a checkpoint with A = 0 the first item starts at eventSeq 1; offline events become offline gaps",
+    "docs/native-transport-v1.md callback capture: a run open at attach reaches the store at the next frame_end flush (OD-5 S11: nextEventSeq is the store's coverage)",
+    "OD-5 S10: offlineTransitions counts lifecycle and configuration boundaries while no v1 client is connected; gameplay events count as loss",
+    "OD-5 S1/S2: lost times are the observation times; a gap record's retention time is its admission time"
+  ],
+  "connections": [
+    {
+      "durableRequested": true, "closedBy": "disconnect", "clientInstance": 1,
+      "checkpoint": {
+        "atMs": 100, "capture": "1000100000000", "ackedThroughEventSeq": "0", "nextEventSeq": "4", "retainedEvents": 1, "retainedBytes": 1024,
+        "oldestRetainedMonotonicNs": "1000030000000", "eventLoss": {"offline": "3"}, "continuity": {"coalescedSnapshots": "0", "offlineTransitions": "3"},
+        "state": {"simulation": "running", "boundaryOrder": "7", "speed": {"available": true, "value": 20, "unit": "m/s"},
+          "gameTime": {"available": true, "value": "700", "unit": "min", "clockId": "game-clock-0"},
+          "configuration": {"revision": "2", "job": {"available": true, "value": {"cargoId": {"available": true, "value": "synthetic_cargo"}, "plannedDistance": {"available": true, "value": 300000, "unit": "m"}}},
+            "truck": {"available": true, "value": {"id": {"available": true, "value": "vehicle.synthetic_truck"}}}}}
+      },
+      "coverage": [
+        {"gap": ["1", "3"], "causes": {"offline": "3"}, "redelivered": false, "firstLost": "1000000000000", "lastLost": "1000020000000"},
+        {"atMs": 150, "gap": ["4", "4"], "causes": {"offline": "1"}, "redelivered": false, "firstLost": "1000040000000", "lastLost": "1000040000000"},
+        {"atMs": 200, "event": "5", "type": "job.cleared", "redelivered": false, "occurred": {"configurationRevision": "3", "boundaryOrder": "12"}}
+      ],
+      "acks": ["3", "4", "5"],
+      "snapshots": [
+        {"atMs": 150, "ackedThroughEventSeq": "4", "nextEventSeq": "5", "retainedEvents": 0, "eventLoss": {"offline": "4"},
+          "continuity": {"coalescedSnapshots": "0", "offlineTransitions": "3"}, "state": {"boundaryOrder": "11", "speed": {"available": true, "value": 21, "unit": "m/s"}}}
+      ],
+      "end": null
+    }
+  ],
+  "ledger": {"committedThroughEventSeq": "5", "committedEvents": 1, "committedGapMarkers": "4", "duplicates": 0},
+  "store": {"ackedThroughEventSeq": "5", "nextEventSeq": "6", "retainedEntries": 0, "eventLoss": {"offline": "4"}},
+  "retired": null
+}

@@ -1,0 +1,36 @@
+{
+  "scenario": "timers-truck-refuel",
+  "authoredFrom": [
+    "docs/native-transport-v1.md records table: a frame start with a timer restart emits timers.restart; occurred describes the moment after the clock rotation, with game time not observed",
+    "docs/native-transport-v1.md: a timer restart invalidates registered channels not yet observed in the frame; a truck boundary invalidates dynamic values except game time",
+    "docs/protocol/v1.md §6: odometer km x 1,000; fuel and fuel capacity in L; §8: refuelling has no event type",
+    "docs/protocol/v1.md §7: snapshots at most every 50 ms"
+  ],
+  "connections": [
+    {
+      "durableRequested": true, "closedBy": "disconnect", "clientInstance": 1,
+      "checkpoint": {"atMs": 0, "state": {"boundaryOrder": "5", "fuel": {"available": true, "value": 100, "unit": "L"}, "odometer": {"available": true, "value": 5000000, "unit": "m"},
+        "gameTime": {"available": true, "value": "1000", "unit": "min", "clockId": "game-clock-0"}}},
+      "coverage": [
+        {"event": "1", "type": "truck.configured", "redelivered": false, "record": {"fuelCapacity": {"available": true, "value": 400, "unit": "L"}}},
+        {"event": "2", "type": "timers.restart", "redelivered": false,
+          "occurred": {"boundaryOrder": "12", "gameTime": {"minutes": {"available": false, "reason": "not-observed"}, "clockId": "game-clock-1"}}},
+        {"event": "3", "type": "truck.configured", "redelivered": false, "record": {"id": {"available": true, "value": "vehicle.synthetic_b"}, "fuelCapacity": {"available": true, "value": 600, "unit": "L"}}}
+      ],
+      "acks": ["1", "2", "3"],
+      "snapshots": [
+        {"atMs": 100, "state": {"boundaryOrder": "11", "fuel": {"available": true, "value": 90, "unit": "L"}, "fuelCapacity": {"available": true, "value": 400, "unit": "L"},
+          "odometer": {"available": true, "value": 5010000, "unit": "m"}, "gameTime": {"available": true, "value": "1010", "unit": "min", "clockId": "game-clock-0"}}},
+        {"atMs": 200, "state": {"boundaryOrder": "14", "fuel": {"available": true, "value": 90, "unit": "L"}, "fuelCapacity": {"available": true, "value": 400, "unit": "L"},
+          "odometer": {"available": false, "reason": "not-observed", "unit": "m"}, "gameTime": {"available": false, "reason": "not-observed", "unit": "min", "clockId": "game-clock-1"}}},
+        {"atMs": 400, "state": {"fuel": {"available": true, "value": 50, "unit": "L"}, "fuelCapacity": {"available": true, "value": 600, "unit": "L"},
+          "odometer": {"available": true, "value": 20000000, "unit": "m"}, "gameTime": {"available": true, "value": "1500", "unit": "min", "clockId": "game-clock-1"}}},
+        {"atMs": 500, "state": {"boundaryOrder": "23", "fuel": {"available": true, "value": 550, "unit": "L"}, "odometer": {"available": true, "value": 20000000, "unit": "m"}}}
+      ],
+      "end": null
+    }
+  ],
+  "ledger": {"committedThroughEventSeq": "3", "committedEvents": 3},
+  "store": {"nextEventSeq": "4", "eventLoss": {}},
+  "retired": null
+}

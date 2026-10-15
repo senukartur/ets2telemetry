@@ -1,0 +1,24 @@
+{
+  "scenario": "crash-after-commit",
+  "authoredFrom": [
+    "TESTING.md REG-006: a crash after commit but before ACK deduplicates committed work on retry",
+    "docs/protocol/v1.md §10: a redelivered event whose eventSeq is already committed is a duplicate, its insert is a no-op, and the cursor then acknowledges it",
+    "docs/protocol/v1.md §8: redelivered is true because the event was written to an earlier connection"
+  ],
+  "connections": [
+    {
+      "durableRequested": true, "closedBy": "crash", "clientInstance": 1,
+      "coverage": [{"event": "1", "type": "job.configured", "redelivered": false}, {"event": "2", "type": "simulation.started", "redelivered": false}],
+      "acks": ["1"], "end": null
+    },
+    {
+      "durableRequested": true, "closedBy": "disconnect", "clientInstance": 2,
+      "checkpoint": {"atMs": 100, "ackedThroughEventSeq": "1", "nextEventSeq": "3", "retainedEvents": 1, "oldestRetainedMonotonicNs": "1000020000000", "eventLoss": {}},
+      "coverage": [{"event": "2", "type": "simulation.started", "redelivered": true}],
+      "acks": ["2"], "end": null
+    }
+  ],
+  "ledger": {"committedThroughEventSeq": "2", "committedEvents": 2, "committedGapMarkers": "0", "duplicates": 1},
+  "store": {"ackedThroughEventSeq": "2", "nextEventSeq": "3", "retainedEntries": 0, "eventLoss": {}},
+  "retired": null
+}
