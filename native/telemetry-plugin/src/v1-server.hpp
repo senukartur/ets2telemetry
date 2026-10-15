@@ -37,7 +37,8 @@ class Server final {
   bool start(std::wstring directory = {}, const window::Monitor* monitor = nullptr) noexcept;
   // SDK shutdown context: asks the worker to end its connection, so `end` is written while the CAP0 endpoint stops.
   void signal_stop() noexcept;
-  // SDK shutdown context: requests synchronous I/O cancellation until the worker exits, then joins it. The measured
+  // SDK shutdown context: cancels synchronous I/O only inside the worker's peer-inspection window until the worker
+  // exits, so exit-path file operations are never cancelled, then joins it. The measured
   // shutdown time and the deadline flag are recorded after the mandatory join.
   void stop() noexcept;
   ServerStatus status() const noexcept { return status_.load(); }
@@ -49,7 +50,7 @@ class Server final {
   // Connections that received a checkpoint, and connections that ended with `end`.
   std::uint64_t hydrations() const noexcept { return hydrations_.load(); }
   std::uint64_t ends() const noexcept { return ends_.load(); }
-  // `end` writes issued, whether or not they completed.
+  // Diagnostic counter, compiled into every build: `end` writes issued, whether or not they completed.
   std::uint64_t end_attempts() const noexcept { return end_attempts_.load(); }
   // The prepared channel; tests use it to inspect the SDK-thread side.
   EventChannel* channel() noexcept { return channel_.get(); }
