@@ -8,7 +8,11 @@ export type HealthEvent =
   | {type: 'service-exited'; afterFailure: boolean}
   | {type: 'service-restarting'}
   | {type: 'service-restart-exhausted'}
-  | {type: 'exit-requested'};
+  | {type: 'exit-requested'}
+  /** A unit profile change was refused or could not be saved; the previous settings stay in effect. */
+  | {type: 'settings-failure'; code: 'SETTINGS_WRITE_FAILED' | 'SETTINGS_READ_ONLY'}
+  /** A settings change was saved; it clears an earlier settings error. */
+  | {type: 'settings-saved'};
 
 export function initialHealth(): AppHealth {
   return {service: 'starting', storage: 'pending', recording: 'unavailable', lastError: null};
@@ -37,6 +41,9 @@ export function reduceHealth(health: AppHealth, event: HealthEvent): AppHealth {
     case 'service-restarting': return {...health, service: 'restarting', storage: health.storage === 'failed' ? 'failed' : 'pending'};
     case 'service-restart-exhausted': return {...health, service: 'failed', lastError: 'SERVICE_RESTART_EXHAUSTED'};
     case 'exit-requested': return {...health, service: 'stopping'};
+    // A settings error never hides the cause of a service that is failed or restarting.
+    case 'settings-failure': return (health.service === 'failed' || health.service === 'restarting') && health.lastError ? health : {...health, lastError: event.code};
+    case 'settings-saved': return health.lastError === 'SETTINGS_WRITE_FAILED' || health.lastError === 'SETTINGS_READ_ONLY' ? {...health, lastError: null} : health;
   }
 }
 

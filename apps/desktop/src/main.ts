@@ -4,6 +4,8 @@ import {existsSync, mkdirSync} from 'node:fs';
 import path from 'node:path';
 import type {EventEmitter} from 'node:events';
 import type {AppHealth, AppState, LiveTelemetry, OverlayPresentation, ScaffoldStatus, SourceSelection} from '../../../packages/contracts/src';
+import {SettingsBusyError, SettingsError, SettingsStore, settingsDirectory} from './settings-store';
+import {isUnitGame, isUnitProfile} from './unit-profiles';
 import {processEntrypoint} from './entrypoints';
 import {createDiagnostics, type DiagnosticFacts} from './diagnostics';
 import {ServiceSupervisor} from './service-supervisor';
@@ -52,6 +54,10 @@ function runApplication(profileError: unknown): void {
       timeline(`${prefix}_LOAD_FINISHED`, {rendererPid});
     });
   }
+  // Settings load in parallel with the service start and never write. The store's view is the only settings state in
+  // main; it changes only after a durable save. The first windows open after the load settled (at most 1000 ms).
+  const settingsStore = new SettingsStore(settingsDirectory(process.env.LOCALAPPDATA), {log});
+  const settingsLoad = settingsStore.load().then(() => undefined, (error: unknown) => {log('SETTINGS_LOAD_REJECTED', String(error));});
   let window: BrowserWindow | undefined, service: UtilityProcess | undefined, status: ScaffoldStatus | undefined;
   let subscribed = false, serviceReady = false;
   // First readiness creates the dashboard and overlay once; later service restarts never recreate them.
@@ -66,7 +72,7 @@ function runApplication(profileError: unknown): void {
   const dashboardSubscriptions = new LiveSubscriptions(initialLive(), 1);
   const overlaySubscriptions = new LiveSubscriptions<OverlayPresentation>(overlayPresentation(initialLive()), 1, 500);
   const freshness = new LiveFreshness(update => {
-    dashboardSubscriptions.publish(update); overlaySubscriptions.publish(overlayPresentation(update)); overlayController?.update(update);
+    dashboardSubscriptions.publish(update); overlaySubscriptions.publish(overlayPresentation(update, settingsStore.view().units)); overlayController?.update(update);
     lastLive = update; presentTray();
   });
   const rendererBudget = new RecoveryBudget();
@@ -97,6 +103,8 @@ function runApplication(profileError: unknown): void {
     log,
     begin: () => {updateHealth({type: 'exit-requested'}, true); retireLive();},
     stopService: () => supervisor.stop(),
+    // An in-flight settings save may delay the final exit by at most EXIT_IDLE_BUDGET_MS (1000 ms).
+    idle: () => settingsStore.idle(),
     destroyTray: () => {trayPresenter?.dispose(); const previous = tray; tray = undefined; previous?.destroy();},
     exit: code => app.exit(code)
   });
@@ -121,13 +129,22 @@ function runApplication(profileError: unknown): void {
       const update: LiveTelemetry = {...initialLive(selection), status: 'restarting', reason: 'Telemetry service failed; current interval is unknown'};
       freshness.invalidate(update); dashboardSubscriptions.close(); dashboardPort = undefined; window?.webContents.send('telemetry:service-state', update);}
   });
-  function appState(): AppState {return {health: {...health}};}
-  function updateHealth(event: HealthEvent, immediate = false): void {
+  function appState(): AppState {return {health: {...health}, settings: settingsStore.view()};}
+  function pushAppState(): void {if (appStateSubscribed && window && !window.isDestroyed()) window.webContents.send('app:state', appState());}
+  /** Returns whether the health changed; a change is pushed to a subscribed dashboard. */
+  function updateHealth(event: HealthEvent, immediate = false): boolean {
     const next = reduceHealth(health, event);
-    if (sameHealth(next, health)) return;
+    if (sameHealth(next, health)) return false;
     health = next;
-    if (appStateSubscribed && window && !window.isDestroyed()) window.webContents.send('app:state', appState());
+    pushAppState();
     presentTray(immediate);
+    return true;
+  }
+  // A saved unit profile republishes main's stored freshness output in the new units. It accepts no observation and
+  // renews no SDK or window authority: freshness, its expiry timers and the overlay placement are untouched.
+  function settingsSaved(): void {
+    if (!updateHealth({type: 'settings-saved'})) pushAppState();
+    if (!lifecycle.exiting) overlaySubscriptions.publish(overlayPresentation(lastLive, settingsStore.view().units));
   }
   function presentTray(immediate = false): void {
     trayPresenter?.update({health, exiting: lifecycle.exiting, source: {selection: lastLive.selection, status: lastLive.status}}, immediate);
@@ -299,6 +316,7 @@ function runApplication(profileError: unknown): void {
         const requested = selection, generation = ++selectionGeneration;
         void (async () => {
           const broker = requested === 'ets2' || requested === 'ats' ? await selectedBroker(requested) : undefined;
+          if (!settingsStore.settled) await settingsLoad;
           if (supervisor.stopping || service !== child || generation !== selectionGeneration) return;
           child.postMessage(selectMessage(requested, broker));
           serviceReady = true; selectionPending = false; status = {service: 'ready', storage: 'verified', synthetic: true};
@@ -339,7 +357,8 @@ function runApplication(profileError: unknown): void {
       if (typeof receive !== 'function') return;
       (receive as (state: unknown) => void)({started, exiting: lifecycle.exiting, serviceReady, servicePid: service?.pid ?? null,
         tray: Boolean(tray && !tray.isDestroyed()), trayUnavailable, dashboard: Boolean(window && !window.isDestroyed()),
-        overlay: Boolean(overlay && !overlay.isDestroyed()), overlayChannel: Boolean(overlayPort), upstream: Boolean(upstream), health: {...health}});
+        overlay: Boolean(overlay && !overlay.isDestroyed()), overlayChannel: Boolean(overlayPort), upstream: Boolean(upstream), health: {...health},
+        settings: settingsStore.view()});
     });
   }
   if (profileError) fail('PROFILE_SETUP_FAILED', profileError);
@@ -353,6 +372,22 @@ function runApplication(profileError: unknown): void {
     appStateSubscribed = true; window!.webContents.send('app:state', appState());
   });
   ipcMain.on('app:unsubscribe-state', event => {if (trusted(event)) appStateSubscribed = false;});
+  // Exactly a game and a profile id; the store serializes saves and refuses more than four outstanding ones.
+  ipcMain.handle('settings:set-unit-profile', async (event, ...request: unknown[]) => {
+    if (!trusted(event)) throw new Error('Untrusted settings request');
+    const [game, profile] = request;
+    if (request.length !== 2 || !isUnitGame(game) || !isUnitProfile(profile)) throw new Error('Invalid unit profile request');
+    if (lifecycle.exiting) throw new Error('Settings request was retired');
+    try {
+      const view = await settingsStore.setUnitProfile(game, profile);
+      settingsSaved();
+      return view;
+    } catch (error) {
+      if (error instanceof SettingsError) updateHealth({type: 'settings-failure', code: error.code});
+      // Fixed messages only; the store's errors never carry paths. Electron sends the renderer only the message.
+      throw new Error(error instanceof SettingsError || error instanceof SettingsBusyError ? error.message : 'Settings could not be saved', {cause: error});
+    }
+  });
   ipcMain.handle('telemetry:select', async (event, source: unknown) => {
     if (!trusted(event) || !serviceReady) throw new Error('Untrusted source request');
     const next = sourceSelection(source);

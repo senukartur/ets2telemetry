@@ -3,7 +3,7 @@ import {expect, it} from 'vitest';
 import type {LiveTelemetry} from '../../packages/contracts/src';
 import {validateMessage} from '../../packages/contracts/src/protocol-v0';
 import {initialLive} from '../../apps/desktop/src/live-state';
-import {dashboardSpeed} from '../../apps/desktop/src/speed-display';
+import {dashboardFuel, dashboardSpeed} from '../../apps/desktop/src/speed-display';
 
 function live(): LiveTelemetry {
   const snapshot = validateMessage(JSON.parse(readFileSync('tests/fixtures/protocol-v0/snapshot.json', 'utf8')));
@@ -54,4 +54,26 @@ it.each(['ets2', 'ats', 'synthetic', 'replay'] as const)('retains diagnostic km/
   expect(dashboardSpeed(current)).toBe('36.0 km/h');
   current.status = 'paused';
   expect(dashboardSpeed(current)).toBe('36.0 km/h');
+});
+
+// ET-011b: the dashboard follows the persisted profile of the displayed game.
+it.each([
+  {profile: 'metric' as const, raw: 25, liters: 73, speed: '90.0 km/h', fuel: '73.0 L'},
+  {profile: 'us-customary' as const, raw: 25, liters: 73, speed: '55.9 mph', fuel: '19.3 US gal'},
+  {profile: 'us-customary' as const, raw: -0.001, liters: -0, speed: '0.0 mph', fuel: '0.0 US gal'},
+  {profile: 'us-customary' as const, raw: -2, liters: 0, speed: '-4.5 mph', fuel: '0.0 US gal'}
+])('projects dashboard speed $raw m/s and fuel $liters L in $profile', ({profile, raw, liters, speed, fuel}) => {
+  const current = live();
+  current.observation!.state.speed = {available: true, value: raw, unit: 'm/s'};
+  current.observation!.state.fuel = {available: true, value: liters, unit: 'L'};
+  expect(dashboardSpeed(current, profile)).toBe(speed);
+  expect(dashboardFuel(current, profile)).toBe(fuel);
+});
+
+it.each(['not-started', 'missing-channel', 'stale'] as const)('keeps %s dashboard fuel unavailable in every profile', fault => {
+  const current = live();
+  current.observation!.state.fuel = {available: true, value: 0, unit: 'L'};
+  if (fault === 'missing-channel') current.observation!.state.fuel = {available: false, reason: 'not-observed', unit: 'L'};
+  if (fault === 'stale') {current.fresh = false; current.status = 'stale';}
+  for (const profile of ['metric', 'us-customary'] as const) expect(dashboardFuel(fault === 'not-started' ? undefined : current, profile)).toBe('unavailable');
 });
