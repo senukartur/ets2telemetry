@@ -3,7 +3,7 @@ import {readFileSync} from 'node:fs';
 import {mkdtemp, rm} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import {afterEach, beforeEach, expect, it, vi} from 'vitest';
+import {afterEach, beforeAll, beforeEach, expect, it, vi} from 'vitest';
 import type {LiveTelemetry} from '../../packages/contracts/src';
 import {validateMessage} from '../../packages/contracts/src/protocol-v0';
 import {initialLive} from '../../apps/desktop/src/live-state';
@@ -32,6 +32,26 @@ let lockGranted: boolean;
 let trayAvailable: boolean;
 let trays: (EventEmitter & {setToolTip: ReturnType<typeof vi.fn>; setContextMenu: ReturnType<typeof vi.fn>; setImage: ReturnType<typeof vi.fn>; destroy: ReturnType<typeof vi.fn>; destroyed: boolean})[];
 let extraContents: typeof contents[];
+// Every import of main.ts that a case starts. main.ts is an entry point with startup side effects, so each
+// case evaluates a fresh instance after vi.resetModules(). An instance still loading when its case ends (for
+// example after a timeout) would otherwise finish against the next case's fixture: extra windows and loads.
+const loadingMain = new Set<Promise<unknown>>();
+function loadMain(): Promise<unknown> {
+  const loading = import('../../apps/desktop/src/main');
+  loadingMain.add(loading); void loading.finally(() => loadingMain.delete(loading)).catch(() => undefined);
+  return loading;
+}
+// Captured before any fake timers are installed; removeFixture uses it to cross one real macrotask boundary.
+const realSetImmediate = setImmediate;
+// One-time module-graph load. The first import of main.ts transforms it and every non-mocked dependency, which
+// took 4-5 s when all default Vitest workers competed for the transform pipeline on a 24-thread host. Pay that
+// cost here, under the same fixture, so no case's own timeout measures module transformation; later cases only
+// re-evaluate the already transformed graph. This budget is a load allowance, not a behaviour bound.
+const MODULE_GRAPH_LOAD_BUDGET_MS = 60_000;
+beforeAll(async () => {
+  installFixture();
+  try {await loadMain(); await settle();} finally {await removeFixture();}
+}, MODULE_GRAPH_LOAD_BUDGET_MS);
 // ET-011b fixture addition: a settled in-memory settings store, so main never touches the real %LOCALAPPDATA% and
 // readiness timing is unchanged. `settingsWrite` controls each save; `settingsView` is what the store reports.
 class FakeSettingsError extends Error {constructor(readonly code: 'SETTINGS_WRITE_FAILED' | 'SETTINGS_READ_ONLY') {super(code === 'SETTINGS_READ_ONLY' ? 'Settings are read-only' : 'Settings could not be saved');}}
@@ -44,6 +64,11 @@ let settingsDirectories: unknown[];
 let settingsLoaded: boolean;
 let settingsLoading: Promise<unknown>;
 beforeEach(() => {
+  expect(loadingMain.size, 'a previous case left main.ts loading').toBe(0);
+  installFixture();
+});
+afterEach(() => removeFixture());
+function installFixture() {
   vi.useFakeTimers(); vi.resetModules();
   const started = Date.now(); vi.spyOn(performance, 'now').mockImplementation(() => Date.now() - started);
   originals = new Map(processEvents.map(name => [name, processEmitter.listeners(name)]));
@@ -103,15 +128,18 @@ beforeEach(() => {
       setUnitProfile(game: string, profile: string) {return settingsWrite(game, profile);}
       idle() {return settingsIdle;}
     }}));
-});
-afterEach(() => {
+}
+async function removeFixture() {
+  // Let an import that outlived its case finish, and its startup microtasks run, against this case's fixture
+  // while its fake timers are still installed, so nothing it starts can reach the next case.
+  await Promise.allSettled(loadingMain); await new Promise(resolve => realSetImmediate(resolve));
   for (const name of processEvents) for (const listener of processEmitter.listeners(name)) if (!originals.get(name)!.includes(listener)) processEmitter.removeListener(name, listener as (...args: unknown[]) => void);
   vi.clearAllTimers(); vi.restoreAllMocks(); vi.useRealTimers(); vi.unstubAllEnvs();
   for (const name of ['electron', 'electron-squirrel-startup', '../../apps/desktop/src/entrypoints', '../../apps/desktop/src/diagnostics', '../../apps/desktop/src/broker-artifact',
     '../../apps/desktop/src/settings-store']) vi.doUnmock(name);
-});
+}
 async function settle() {await Promise.resolve(); await Promise.resolve();}
-async function ready() {await import('../../apps/desktop/src/main'); await Promise.resolve(); child.emit('message', {type: 'ready'}); await settle();}
+async function ready() {await loadMain(); await Promise.resolve(); child.emit('message', {type: 'ready'}); await settle();}
 const trusted = () => ({sender: contents, senderFrame: contents.mainFrame});
 function upstreamRequests(target = child) {return target.postMessage.mock.calls.filter(call => call[0].type === 'subscribe').length;}
 async function exhaustUpstream() {
@@ -625,7 +653,7 @@ async function isolatedProfile(run: (profile: string) => Promise<void>) {
 }
 it('exits a second process before diagnostics, listeners, service, windows or tray when the instance lock is held', async () => {
   lockGranted = false; trayAvailable = true;
-  await import('../../apps/desktop/src/main'); await settle();
+  await loadMain(); await settle();
   expect(app.quit).toHaveBeenCalledOnce(); expect(log).not.toHaveBeenCalled();
   expect(windows).toHaveLength(0); expect(trays).toHaveLength(0); expect(loadFile).not.toHaveBeenCalled(); expect(handlers.size).toBe(0);
   for (const name of ['before-quit', 'window-all-closed', 'second-instance']) expect(app.listenerCount(name)).toBe(0);
@@ -683,7 +711,7 @@ it.each([
   ['after the dashboard closed', 'created'], ['while exiting', 'ignored-exiting']
 ] as const)('answers a second launch %s without reading its arguments', async (state, action) => {
   trayAvailable = true;
-  if (state === 'before first readiness') {await import('../../apps/desktop/src/main'); await settle();}
+  if (state === 'before first readiness') {await loadMain(); await settle();}
   else {
     await ready();
     if (state === 'with a minimized dashboard') windows[0].minimized = true;
@@ -760,7 +788,7 @@ it('recovers a post-readiness service failure report with a supervised restart a
   expect(app.exit).not.toHaveBeenCalled(); expect(windows).toHaveLength(2);
 });
 it('keeps a pre-readiness service failure report fatal', async () => {
-  trayAvailable = true; await import('../../apps/desktop/src/main'); await settle();
+  trayAvailable = true; await loadMain(); await settle();
   child.emit('message', {type: 'failed', code: 'STORAGE_TIMEOUT'});
   expect(child.kill).not.toHaveBeenCalled(); expect(child.postMessage).toHaveBeenCalledWith({type: 'stop'});
   child.emit('exit', 0); expect(app.exit).toHaveBeenCalledExactlyOnceWith(1); expect(trays[0].destroy).toHaveBeenCalledOnce();
@@ -813,7 +841,7 @@ it('answers a dashboard opened during a service restart with a not-ready status,
 });
 it('never requests the instance lock when the diagnostic profile override fails', async () => {
   vi.stubEnv('ETS2TELEMETRY_PROFILE_DIR', 'relative\\profile'); trayAvailable = true;
-  await import('../../apps/desktop/src/main'); await settle();
+  await loadMain(); await settle();
   expect(app.requestSingleInstanceLock).not.toHaveBeenCalled(); expect(app.quit).not.toHaveBeenCalled();
   expect(log).toHaveBeenCalledWith('PROFILE_SETUP_FAILED', expect.any(Error));
   expect(app.exit).toHaveBeenCalledExactlyOnceWith(1);
