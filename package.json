@@ -26,7 +26,7 @@
     "lint:ps": "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/Invoke-ScriptAnalysis.ps1",
     "test": "vitest run",
     "test:cap0-chain": "vitest run --config vitest.cap0-chain.config.mts",
-    "test:storage": "node scripts/run-electron-node.mjs node_modules/vitest/vitest.mjs run --config vitest.storage.config.mts",
+    "test:storage": "node scripts/build-storage-test-bundles.mjs node_modules/vitest/vitest.mjs run --config vitest.storage.config.mts",
     "test:electron": "npm run package && playwright test",
     "inspect:package": "node scripts/inspect-package.mjs",
     "postinstall": "install-electron",
