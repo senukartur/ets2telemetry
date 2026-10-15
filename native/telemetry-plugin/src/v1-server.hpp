@@ -69,7 +69,9 @@ class Server final {
   // Drains the channel into the store in the documented caller sequence and expires retention. Throws Retire on an
   // invariant violation (`rejected`) or at sequence exhaustion.
   void tick();
-  void drain(std::uint64_t now_ns);
+  // Drains at most one ring's worth, and at least one slot. After that it stops at `until` or, with `yield_to_stop`, as soon
+  // as a stop is requested, so a full ring of large records never delays the shutdown budget.
+  void drain(std::uint64_t now_ns, ULONGLONG until, bool yield_to_stop);
   std::uint64_t now_ns() const;
   std::uint64_t next_seq();
   bool stopped() const noexcept;

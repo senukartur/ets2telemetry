@@ -306,11 +306,12 @@ Server::Outcome Server::Connection::finish(EndReason reason, ULONGLONG deadline,
   if (!complete_write(deadline)) return Outcome::reset;
   // Before the welcome there is nothing to end; `end` may replace the checkpoint (§4).
   if (phase == Phase::welcome) return Outcome::reset;
-  // Records already in the ring become store coverage; a run still open in the channel is plugin-exit loss (OD-5 S11).
+  // Records already in the ring become store coverage until the item cut-off; a record still in the ring after it, like a
+  // run still open in the channel, is plugin-exit loss at or above the reported nextEventSeq (OD-5 S11).
   // A violation found by this final drain still retires the endpoint and logs: `end` then carries source-retired, and
   // no further item is written, because the store's coverage stopped before the rejected record.
   std::optional<Retire> violation;
-  try { server.drain(server.now_ns()); }
+  try { server.drain(server.now_ns(), items_until, false); }
   catch (const Retire& retire) { violation = retire; reason = EndReason::source_retired; }
   catch (...) {}
   const auto outcome = [&] {
@@ -442,9 +443,11 @@ std::uint64_t Server::now_ns() const {
 
 std::uint64_t Server::next_seq() { if (seq_ == UINT64_MAX) throw SequenceSpent(); return ++seq_; }
 
-void Server::drain(std::uint64_t now) {
-  // At most one ring's worth per call, so the loop still services its I/O every poll interval.
+void Server::drain(std::uint64_t now, ULONGLONG until, bool yield_to_stop) {
+  // At most one ring's worth per call, so the loop still services its I/O every poll interval. Each drained record is
+  // measured by a full encode, so the stop and time bounds are checked between slots, after the first one.
   for (std::size_t i = 0; i < channel_slots; ++i) {
+    if (i && ((yield_to_stop && stopped()) || GetTickCount64() >= until)) return;
     const auto* slot = channel_->front();
     if (!slot) return;
     if (slot->has_loss) {
@@ -474,7 +477,7 @@ void Server::tick() {
   transport::transport_test_hook("v1-tick", nullptr, stop_event_.get());
 #endif
   const auto now = now_ns();
-  drain(now);
+  drain(now, UINT64_MAX, true);
   store_->expire(now);
   if (channel_->exhausted()) {
     // §9: after the last eventSeq the session ends with sequence-exhausted. The store is given a short time to record the
