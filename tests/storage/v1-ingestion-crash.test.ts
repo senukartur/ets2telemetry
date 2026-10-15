@@ -57,7 +57,9 @@ function service(endpoint: string, barrier: Barrier, name: string) {
 async function crash(id: string, barrier: NonNullable<Barrier>) {
   const input = readFixtureFile(scenarioPath(id)) as Record<string, unknown>, replay = replayV1(input);
   expect(reactiveConflicts(input)).toEqual([]);
-  const server = await serveV1Reactive(input, {scale: 0}), children: ReturnType<typeof service>[] = [];
+  // Each connection is awaited until its process acknowledged everything written or left (was terminated), never for a
+  // fixed bound: a termination or a commit slower than the 1,000 ms quiesce bound must not change what the server writes.
+  const server = await serveV1Reactive(input, {scale: 0, awaitScriptedAcks: true}), children: ReturnType<typeof service>[] = [];
   try {
     const first = service(server.endpoint, barrier, 'first'); children.push(first);
     await first.until(line => line.startsWith('barrier '));

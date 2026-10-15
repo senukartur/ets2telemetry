@@ -28,7 +28,9 @@ beforeEach(async () => { ws = await workspace(); });
 afterEach(async () => { await Promise.all(workers.splice(0).map(worker => worker.terminate())); await ws.dispose(); });
 
 /** One telemetry-service instance: its own storage worker on the shared database file and its own ingestion. */
-interface Service {ingestion: V1Ingestion; client: StorageClient; worker: Worker; exit: Promise<number>; states: V1SourceState[]}
+interface Service {ingestion: V1Ingestion; client: StorageClient; worker: Worker; exit: Promise<number>; states: V1SourceState[]; progress: Progress}
+/** Coverage items (events and gap markers) the service's connection delivered, and its commit commands that settled. */
+interface Progress {received: number; settled: number; waiters: (() => void)[]}
 interface Plan {
   /** Connections (0-based, in welcome order) whose ACKs are lost on the way to the pipe. */
   dropAcks?: number[];
@@ -41,7 +43,9 @@ interface Plan {
 async function run(input: Json, plan: Plan) {
   expect(reactiveConflicts(input)).toEqual([]);
   const replay = replayV1(input), sessions = replay.connections.filter(c => !c.helloFault).length;
-  const server = await serveV1Reactive(input, {scale: 0});
+  // A connection scripted to acknowledge each commit is awaited until it did or left, however long the real storage
+  // worker takes: the 1,000 ms quiesce bound alone let a slow commit decide which ACKs the server recorded.
+  const server = await serveV1Reactive(input, {scale: 0, awaitScriptedAcks: true});
   const services: Service[] = [];
   let connection = -1, commits = 0, finished!: () => void;
   const allClosed = new Promise<void>(r => { finished = r; });
@@ -50,20 +54,29 @@ async function run(input: Json, plan: Plan) {
   const failed = new Promise<never>((_, reject) => { fail = reject; }), background: Promise<unknown>[] = [];
   failed.catch(() => undefined);
   const track = (work: Promise<unknown>) => { background.push(work.catch(error => fail(error))); };
-  const connect = (endpoint: string) => {
+  const connect = (endpoint: string, progress: Progress) => {
     const socket = net.connect(endpoint), write = socket.write.bind(socket), decoder = new FrameDecoder('server');
     let index: number | undefined;
     // Registered before the ingestion's listeners: a welcome is numbered before the ingestion applies it.
     socket.on('data', (chunk: Buffer) => {
       try {
         decoder.push(chunk, m => {
+          if (m.kind === 'event' || m.kind === 'gap') progress.received++;
           if (m.kind !== 'welcome' || index !== undefined) return;
           const own = index = ++connection; commits = 0;
           socket.once('close', () => {
             // A stopped ingestion never reconnects: its pending reconnection checks that it was stopped.
             if (own === sessions - 1) { track(services.at(-1)!.ingestion.stop()); finished(); }
-            // The next service opens the file only after the old worker closed it and released its exclusive lock.
-            else if (plan.restart) { const old = services.at(-1)!; track(old.ingestion.stop().then(() => old.client.close()).then(() => start())); }
+            else if (plan.restart) {
+              const old = services.at(-1)!;
+              // Selecting no source cancels the old service's pending reconnection at once, while its durable pipeline
+              // keeps committing what this connection delivered. It is stopped once every delivered item's commit
+              // command has settled, counted in commands, never in time, so the coverage the restarted service reads
+              // does not depend on how fast storage was. The next service opens the file only after the old worker
+              // closed it and released its exclusive lock.
+              old.ingestion.select('game');
+              track(drained(old).then(() => old.ingestion.stop()).then(() => old.client.close()).then(() => start()));
+            }
           });
         });
       } catch { /* the ingestion's own decoder reports the violation */ }
@@ -79,21 +92,29 @@ async function run(input: Json, plan: Plan) {
     const worker = new Worker(WORKER, {workerData: {kind: 'storage'}}); workers.push(worker);
     const exit = once(worker, 'exit').then(([code]) => code as number), client = new StorageClient(workerHandle(worker), {closeGraceMs: TEST_CLOSE_GRACE_MS});
     ok(await client.open({path: ws.database, purpose: 'synthetic', backupsDirectory: ws.backups, appVersion: '0.1.0-test'}));
+    const progress: Progress = {received: 0, settled: 0, waiters: []};
+    const notify = () => { for (const waiter of progress.waiters.splice(0)) waiter(); };
+    const settled = <T>(command: Promise<T>) => command.finally(() => { progress.settled++; notify(); });
     const storage: DurableStorageClient = {
       upsertSession: input => client.upsertSession(input),
       committedThrough: session => client.committedThrough(session),
-      commitGap: input => client.commitGap(input),
+      commitGap: input => settled(client.commitGap(input)),
       commitEvent: async input => {
         commits++;
         // Counted in commit commands, never in time: the worker is gone before this command is sent.
         if (plan.terminate && connection === plan.terminate.connection && commits === plan.terminate.commit) await worker.terminate();
-        return client.commitEvent(input);
+        return settled(client.commitEvent(input));
       }
     };
     const states: V1SourceState[] = [];
-    const ingestion = new V1Ingestion({connect, sink: new StorageDurableSink(storage), onState: s => states.push(s)});
-    services.push({ingestion, client, worker, exit, states});
+    const ingestion = new V1Ingestion({connect: endpoint => connect(endpoint, progress), sink: new StorageDurableSink(storage), onState: s => { states.push(s); notify(); }});
+    services.push({ingestion, client, worker, exit, states, progress});
     ingestion.select('synthetic', server.endpoint);
+  };
+  /** Every delivered item's commit command settled, or a durable failure dropped what was still queued. */
+  const drained = async ({progress, states}: Service) => {
+    const dropped = () => { const s = states.at(-1)?.durable; return s?.state === 'failed' || (s?.state === 'pending' && s.retryCode !== undefined); };
+    while (progress.settled < progress.received && !dropped()) await new Promise<void>(resolve => progress.waiters.push(resolve));
   };
   try {
     await start();
