@@ -3,7 +3,7 @@ import squirrelStartup from 'electron-squirrel-startup';
 import {existsSync, mkdirSync} from 'node:fs';
 import path from 'node:path';
 import type {EventEmitter} from 'node:events';
-import type {AppHealth, AppState, LiveTelemetry, OverlayPresentation, ScaffoldStatus, SettingsView, SourceSelection} from '../../../packages/contracts/src';
+import type {AppHealth, AppState, LiveTelemetry, OverlayPresentation, OverlaySettings, ScaffoldStatus, SettingsView, SourceSelection, UnitProfiles} from '../../../packages/contracts/src';
 import {SettingsBusyError, SettingsError, SettingsStore, settingsDirectory} from './settings-store';
 import {isUnitGame, isUnitProfile} from './unit-profiles';
 import {processEntrypoint} from './entrypoints';
@@ -73,10 +73,16 @@ function runApplication(profileError: unknown): void {
   let failureReported = false, reportedFailureCode: unknown;
   const upstreamBudget = new RecoveryBudget(), overlayBudget = new RecoveryBudget();
   const dashboardSubscriptions = new LiveSubscriptions(initialLive(), 1);
-  const overlaySubscriptions = new LiveSubscriptions<OverlayPresentation>(overlayPresentation(initialLive()), 1, 500);
+  // The last projection main published: a non-current projection keeps its shape (ET-012a decision L5).
+  let lastOverlay = overlayPresentation(initialLive());
+  const overlaySubscriptions = new LiveSubscriptions<OverlayPresentation>(lastOverlay, 1, 500);
+  function publishOverlay(live: LiveTelemetry, units: UnitProfiles, settings: OverlaySettings): void {
+    lastOverlay = overlayPresentation(live, units, settings, lastOverlay);
+    overlaySubscriptions.publish(lastOverlay);
+  }
   const freshness = new LiveFreshness(update => {
     const view = settingsStore.view();
-    dashboardSubscriptions.publish(update); overlaySubscriptions.publish(overlayPresentation(update, view.units, view.overlay)); overlayController?.update(update);
+    dashboardSubscriptions.publish(update); publishOverlay(update, view.units, view.overlay); overlayController?.update(update);
     lastLive = update; presentTray();
   });
   const rendererBudget = new RecoveryBudget();
@@ -150,7 +156,7 @@ function runApplication(profileError: unknown): void {
     pushAppState();
     if (lifecycle.exiting) return;
     const view = settingsStore.view();
-    overlaySubscriptions.publish(overlayPresentation(lastLive, view.units, view.overlay));
+    publishOverlay(lastLive, view.units, view.overlay);
     overlayController?.setLayout(view.overlay.layout);
   }
   function presentTray(immediate = false): void {
@@ -238,7 +244,7 @@ function runApplication(profileError: unknown): void {
     const changed = () => overlayController?.topologyChanged();
     screen.on('display-added', changed); screen.on('display-removed', changed); screen.on('display-metrics-changed', changed);
     // The first delivery to the new document already carries the saved layout and sections.
-    overlaySubscriptions.publish(overlayPresentation(lastLive, settings.units, settings.overlay));
+    publishOverlay(lastLive, settings.units, settings.overlay);
     loadOverlay();
   }
   function loadOverlay(): void {

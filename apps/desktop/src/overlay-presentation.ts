@@ -38,11 +38,14 @@ const BASELINE_SECTIONS: ReadonlySet<OverlaySectionId> = new Set<OverlaySectionI
  * default; metric without a game), exactly as the dashboard's live telemetry card formats them.
  *
  * Section rules (ET-012a decisions L5 and L6): a disabled section, or one whose fields the protocol in use does not
- * carry, is left out. While not current (stale, no signal, disconnected or an origin/game mismatch) every remaining
- * section is `unavailable`, so the layout keeps its shape and no stale value looks current. While current a section
- * with a value shows it; one without data is left out, except speed and fuel, which stay `unavailable`.
+ * carry, is left out. While current a section with a value shows it; one without data is left out, except speed and
+ * fuel, which stay `unavailable`. While not current (stale, no signal, disconnected or an origin/game mismatch) the
+ * overlay keeps the shape of `previous`, the projection main published last: each remaining section it showed, plus
+ * speed and fuel, becomes `unavailable`, so the layout does not jump and no stale value looks current. Sections that
+ * were hidden stay hidden until the data is current again, as in the overlay preload's own expiry (`staleOverlay`).
  */
-export function overlayPresentation(live: LiveTelemetry, units: UnitProfiles = DEFAULT_UNIT_PROFILES, overlay: OverlaySettings = DEFAULT_OVERLAY_SETTINGS): OverlayPresentation {
+export function overlayPresentation(live: LiveTelemetry, units: UnitProfiles = DEFAULT_UNIT_PROFILES, overlay: OverlaySettings = DEFAULT_OVERLAY_SETTINGS,
+  previous?: OverlayPresentation): OverlayPresentation {
   const observation = live.observation;
   const explicitFixture = isExplicitFixture(live);
   const game = displayGame(live), profile = profileFor(units, game);
@@ -54,11 +57,15 @@ export function overlayPresentation(live: LiveTelemetry, units: UnitProfiles = D
   const fields = new Map<LiveFieldId, LiveField>(view.sections.flatMap(section => section.fields.map(field => [field.id, field] as const)));
   const valueOf = (id: LiveFieldId) => {const field = fields.get(id); return field?.state === 'value' ? field.text : undefined;};
   const protocol = normalized?.protocol ?? 'v0';
+  const shown = new Set<OverlaySectionId>(previous?.sections.map(section => section.id) ?? []);
   const sections: OverlaySectionView[] = [];
   for (const id of OVERLAY_SECTION_IDS) {
     const {parts, detail} = SECTION_FIELDS[id];
     if (!overlay.sections[id] || !parts.some(part => carriesField(protocol, part))) continue;
-    if (!current) {sections.push({id, state: 'unavailable'}); continue;}
+    if (!current) {
+      if (shown.has(id) || BASELINE_SECTIONS.has(id)) sections.push({id, state: 'unavailable'});
+      continue;
+    }
     const texts = parts.map(valueOf).filter((text): text is string => text !== undefined);
     if (!texts.length) {
       if (BASELINE_SECTIONS.has(id)) sections.push({id, state: 'unavailable'});

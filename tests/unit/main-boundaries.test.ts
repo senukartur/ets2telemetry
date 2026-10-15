@@ -1066,7 +1066,8 @@ it('delivers the saved layout and sections in the overlay document first project
   ipc.emit('overlay:subscribe', overlayTrusted());
   const first = overlayProjection(channels.at(-1)!);
   expect(first).toMatchObject({layout: 'card', freshness: 'unavailable', paused: false});
-  expect(sectionIds(first)).toEqual(['speed', 'gear', 'fuel', 'range', 'sdk-consumption', 'destination', 'expected-income', 'game-time']);
+  // Before any current data only the baseline placeholders show (decision L5); disabled sections never do.
+  expect(sectionIds(first)).toEqual(['speed', 'fuel']);
 });
 it('rejects overlay settings requests from untrusted senders, frames and the overlay, and invalid shapes', async () => {
   trayAvailable = true; await ready();

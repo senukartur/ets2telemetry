@@ -103,12 +103,37 @@ it.each([
   ['disconnected', (current: LiveTelemetry) => {current.status = 'disconnected';}, 'unavailable'],
   ['a game origin mismatch', (current: LiveTelemetry) => {current.observation!.source.game = 'ats';}, 'unavailable'],
   ['a synthetic origin under a game selection', (current: LiveTelemetry) => {current.observation!.source.origin = 'synthetic';}, 'unavailable']
-])('shows every carried, enabled section as unavailable while %s (decision L6)', (_name, fault, freshness) => {
+])('keeps the previous shape with every shown section unavailable while %s (decisions L5 and L6)', (_name, fault, freshness) => {
+  const previous = overlayPresentation(live());
   const current = live(); fault(current);
-  const presentation = overlayPresentation(current);
+  const presentation = overlayPresentation(current, undefined, undefined, previous);
   expect(presentation).toMatchObject({freshness, paused: false, speed: '—', fuel: '—'});
-  expect(presentation.sections).toEqual(['speed', 'gear', 'rpm', 'fuel', 'range', 'sdk-consumption', 'cargo', 'destination', 'expected-income', 'game-time']
+  // Range was hidden while current (not observed in the fixture), so it stays hidden.
+  expect(presentation.sections).toEqual(['speed', 'gear', 'rpm', 'fuel', 'sdk-consumption', 'cargo', 'destination', 'expected-income', 'game-time']
     .map(id => ({id, state: 'unavailable'})));
+});
+
+it('keeps hidden sections hidden when current data with no job goes stale', () => {
+  // Advisory review on PR #70: the stale projection must not add back the sections hidden while current.
+  const noJob = live();
+  noJob.observation!.state.configuration = {...noJob.observation!.state.configuration, job: {available: false, reason: 'not-observed'}};
+  const previous = overlayPresentation(noJob);
+  expect(ids(previous.sections)).toEqual(['speed', 'gear', 'rpm', 'fuel', 'sdk-consumption', 'game-time']);
+  const stale = {...noJob, fresh: false, status: 'stale' as const};
+  const presentation = overlayPresentation(stale, undefined, undefined, previous);
+  expect(presentation.sections).toEqual(['speed', 'gear', 'rpm', 'fuel', 'sdk-consumption', 'game-time'].map(id => ({id, state: 'unavailable'})));
+  // A further stale delivery keeps the same shape, and current data with a job shows the job sections again.
+  expect(overlayPresentation(stale, undefined, undefined, presentation).sections).toEqual(presentation.sections);
+  expect(ids(overlayPresentation(live(), undefined, undefined, presentation).sections)).toContain('cargo');
+});
+
+it('shows only the speed and fuel placeholders while not current without a previous projection', () => {
+  const stale = {...live(), fresh: false, status: 'stale' as const};
+  expect(overlayPresentation(stale).sections).toEqual([{id: 'speed', state: 'unavailable'}, {id: 'fuel', state: 'unavailable'}]);
+  // A section disabled since the previous projection is left out.
+  const previous = overlayPresentation(live());
+  expect(ids(overlayPresentation(stale, undefined, {layout: 'strip', sections: {...ALL, gear: false, fuel: false}}, previous).sections))
+    .toEqual(['speed', 'rpm', 'sdk-consumption', 'cargo', 'destination', 'expected-income', 'game-time']);
 });
 
 it('shows placeholders before the first observation', () => {
@@ -121,7 +146,9 @@ it('leaves disabled sections out and passes the layout through', () => {
   expect(presentation.layout).toBe('cluster');
   expect(ids(presentation.sections)).toEqual(['speed', 'gear', 'rpm', 'fuel']);
   const stale = {...live(), fresh: false, status: 'stale' as const};
-  expect(ids(overlayPresentation(stale, undefined, {layout: 'hud', sections: OVERLAY_PRESETS['job-focus']}).sections)).toEqual(['speed', 'gear', 'fuel', 'cargo', 'destination']);
+  const jobFocus = {layout: 'hud' as const, sections: OVERLAY_PRESETS['job-focus']};
+  expect(ids(overlayPresentation(stale, undefined, jobFocus, overlayPresentation(live(), undefined, jobFocus)).sections))
+    .toEqual(['speed', 'gear', 'fuel', 'cargo', 'destination']);
   // The legacy speed and fuel fields stay in the projection whatever the sections are.
   expect(overlayPresentation(live(), undefined, {layout: 'strip', sections: {...ALL, speed: false, fuel: false}})).toMatchObject({speed: '0.0', fuel: '—'});
 });
