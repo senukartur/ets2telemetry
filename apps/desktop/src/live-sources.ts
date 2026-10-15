@@ -16,8 +16,11 @@ export const V1_JOB_FIELDS: ReadonlySet<LiveFieldId> = new Set<LiveFieldId>([
 /** v0-carried fields that show v1's localized name for the same job (decision F4(c)). */
 const NAMED_FIELDS: ReadonlySet<LiveFieldId> = new Set<LiveFieldId>(['cargo', 'destination-city']);
 
-/** `none`: v0 reports no job (or no observation yet). `mismatch`: v1 reports no job or another cargo or destination city. */
-export type JobIdentity = 'none' | 'match' | 'mismatch';
+/**
+ * `none`: v0 reports no job (or no observation yet). `no-v1`: v0 reports a job but no v1 observation is carried, so
+ * nothing is compared. `mismatch`: a carried v1 observation reports no job or another cargo or destination city.
+ */
+export type JobIdentity = 'none' | 'no-v1' | 'match' | 'mismatch';
 export interface LiveSources {
   v0View: LiveDashboardView;
   v0State?: NormalizedLiveState;
@@ -40,7 +43,8 @@ export interface LiveSources {
 const sameValue = (left: Reading<string>, right: Reading<string>) => left.state === 'value' && right.state === 'value' && left.value === right.value;
 function jobIdentity(v0: LiveJob | undefined, v1: NormalizedLiveState['job'] | undefined): JobIdentity {
   if (!v0) return 'none';
-  if (v1?.state !== 'value') return 'mismatch';
+  if (!v1) return 'no-v1';
+  if (v1.state !== 'value') return 'mismatch';
   return sameValue(v0.cargo.id, v1.value.cargo.id) && sameValue(v0.destinationCity.id, v1.value.destinationCity.id) ? 'match' : 'mismatch';
 }
 function fieldsOf(view: LiveDashboardView): Map<LiveFieldId, LiveField> {

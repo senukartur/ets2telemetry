@@ -268,6 +268,14 @@ it('leaves the v1 job sections out once v0 reports no job, without keeping dashe
   const presentation = overlayPresentation(noJob, undefined, undefined, overlayPresentation(withV1()));
   expect(ids(presentation.sections)).toEqual(['speed', 'gear', 'rpm', 'fuel', 'sdk-consumption', 'distance-remaining', 'game-time']);
 });
+it('equals the v0-only projection once v1 data is gone, whatever v1 sections were shown before (fix round 1)', () => {
+  const shownWithV1 = overlayPresentation(withV1());
+  for (const telemetry of [live(), {...live(), v1: v1Projection('snapshot-live', {selection: 'ats', origin: 'game'})}]) {
+    const presentation = overlayPresentation(telemetry, undefined, undefined, shownWithV1);
+    expect(presentation).toEqual(overlayPresentation(live(), undefined, undefined, overlayPresentation(live())));
+    expect(ids(presentation.sections)).toEqual(['speed', 'gear', 'rpm', 'fuel', 'sdk-consumption', 'cargo', 'destination', 'expected-income', 'game-time']);
+  }
+});
 it('uses no v1 data of another origin or selection', () => {
   for (const telemetry of [{...live(), v1: v1Projection('snapshot-live', {selection: 'ets2'})}, {...live(), v1: v1Projection('snapshot-live', {selection: 'ats', origin: 'game'})}])
     expect(overlayPresentation(telemetry)).toEqual(overlayPresentation(live()));

@@ -95,6 +95,14 @@ describe('job identity guard (decision F4(b))', () => {
     expect(combined.field('source-city')).toMatchObject(NOT_CURRENT);
     expect(combined.field('cargo-loaded')).toMatchObject(NOT_CURRENT);
   });
+  it('reports no job comparison, never another job, without a carried v1 observation (fix round 1)', () => {
+    for (const live of [smokeV0(), {...smokeV0(), v1: v1Projection('snapshot-live', {selection: 'replay'})},
+      {...smokeV0(), v1: {...v1Projection(), observation: undefined, fresh: false, status: 'waiting' as const}}]) {
+      const combined = sources(live);
+      expect(combined.job).toBe('no-v1');
+      expect(combined.field('cargo')).toMatchObject({state: 'value', text: 'cargo.logs'});
+    }
+  });
   it('hides v1 job fields without a v0 job, without a v0 observation, and keeps the non-job fields', () => {
     const noJob = smokePair();
     noJob.observation!.state.configuration.job = {available: false, reason: 'not-observed'};
