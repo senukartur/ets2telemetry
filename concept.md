@@ -491,3 +491,24 @@ The owner approved the architect recommendations OD-1 to OD-6:
 | OD-6 | State `trailers` always has ten entries; an empty slot is unavailable (`not-observed`) |
 
 The producer's store rules are in [the native v1 transport](docs/native-transport-v1.md).
+
+## ET-005b authorization — October 15, 2026
+
+The owner gave the coordinator standing autonomy on October 15, 2026: continue through the authorized packages, decide routine questions optimally, merge under the standard gate and stop at real-game tests. Under that delegation the coordinator started ET-005b, the protocol v1 simulator, as three PRs. For ET-005b only, this supersedes the statements in the ET-002b authorization and ET-004b authorization sections that ET-005b remains unauthorized. The simulator opens no database, writes no history, discovery or service-policy file, calls no SDK function and emits only synthetic or replay origins. The desktop application stays on v0, and nothing here establishes game, TruckersMP, display or performance behavior.
+
+The coordinator adopted these decisions under the owner's delegation:
+
+| # | Decision |
+| --- | --- |
+| CD-1 | Three PRs in order: the deterministic simulator core, pipe serving with fault injection, then CAP-01 replay |
+| CD-2 | A TypeScript producer model that mirrors the native store invariants I1–I8 and the endpoint caller sequence; the ET-002b contract helpers are reused unchanged |
+| CD-3 | One SDK-callback vocabulary for synthetic scenarios and CAP-01-derived sequences |
+| CD-4 | Only `synthetic` and `replay` origins; the simulator never emits `game` |
+| CD-5 | A `SYNTHETIC-TEST-v1` pipe endpoint without discovery records or service-policy files |
+| CD-6 | An in-memory commit ledger stands in for storage; it is not storage |
+| CD-7 | Minimized, tokenized fixtures derived from CAP-01 may be committed with provenance; lossy captures are rejected and raw or sanitized exports stay local. This reverses the earlier deferral of committing CAP-01 fixtures for these derived fixtures only, is flagged to the owner and lands last |
+| CD-8 | Game mode is `unknown` by default (OD-3); a synthetic override exists only to exercise D9 |
+| CD-9 | Currency status is chosen per scenario: `unknown` or the SDK-documented EUR or USD |
+| CD-10 | In pipe mode, events, gaps, checkpoints and `end` are byte-identical to replay, snapshots equal in state and continuity, and clock replies are checked separately |
+| CD-11 | Retention runs in scenario time; pipe mode fast-forwards offline segments |
+| CD-12 | A system suspend is modeled both with and without the source clock advancing |
