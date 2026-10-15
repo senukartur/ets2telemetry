@@ -400,8 +400,8 @@ void Server::stop() noexcept {
     // Policy and image inspection may perform synchronous reads on this owned worker only. A read can start after a
     // cancellation request, so the request is repeated until this exact worker exits; join still owns its lifetime.
     // Outside an inspection window nothing is cancelled: the exit path's record deletion must complete.
-    cancel_inspection();
-    while (WaitForSingleObject(worker_.native_handle(), 10) == WAIT_TIMEOUT) cancel_inspection();
+    cancel_window_.cancel(worker_.native_handle());
+    while (WaitForSingleObject(worker_.native_handle(), 10) == WAIT_TIMEOUT) cancel_window_.cancel(worker_.native_handle());
     worker_.join();
     // Diagnostics only, recorded after the mandatory join: the deadline never releases ownership early.
     const auto elapsed = GetTickCount64() - stop_requested_.load();
@@ -413,20 +413,6 @@ void Server::stop() noexcept {
 }
 
 std::wstring Server::endpoint() const { std::lock_guard<std::mutex> lock(endpoint_mutex_); return endpoint_; }
-
-// The worker holds the window open while it inspects a peer. A cancellation request is issued only under the mutex and only
-// while the window is open, so it can never reach synchronous I/O issued after the window has closed.
-struct Server::InspectionWindow {
-  Server& server;
-  explicit InspectionWindow(Server& s) : server(s) { std::lock_guard<std::mutex> lock(s.cancel_mutex_); s.inspecting_ = true; }
-  ~InspectionWindow() { std::lock_guard<std::mutex> lock(server.cancel_mutex_); server.inspecting_ = false; }
-  InspectionWindow(const InspectionWindow&) = delete;
-  InspectionWindow& operator=(const InspectionWindow&) = delete;
-};
-
-void Server::cancel_inspection() noexcept {
-  try { std::lock_guard<std::mutex> lock(cancel_mutex_); if (inspecting_) CancelSynchronousIo(worker_.native_handle()); } catch (...) {}
-}
 
 bool Server::stopped() const noexcept { return WaitForSingleObject(stop_event_.get(), 0) == WAIT_OBJECT_0; }
 
@@ -513,7 +499,7 @@ Server::Outcome Server::serve(HANDLE pipe, const std::wstring& directory, const 
   // are the worker's only synchronous I/O that stop() cancels.
   transport::PeerIdentity peer; std::vector<transport::AllowedPeer> policy;
   {
-    InspectionWindow window(*this);
+    transport::CancelWindow::Scope window(cancel_window_);
     peer = transport::inspect_peer(pid, stop_event_.get());
     if (peer.sid != user.sid || peer.session != user.session) return Outcome::reset;
     policy = transport::read_service_policy(directory, security, user, stop_event_.get());

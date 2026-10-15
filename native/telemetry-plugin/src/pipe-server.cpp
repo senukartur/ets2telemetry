@@ -74,15 +74,16 @@ void Server::complete_startup(StartupFailure result) noexcept {
 void Server::stop() noexcept {
   try {
     if (!worker_.joinable()) return; auto started = GetTickCount64(); SetEvent(stop_event_.get());
-    // File policy/image inspection may have synchronous reads. Only this owned worker is cancelled.
-    CancelSynchronousIo(worker_.native_handle());
+    // Startup checks and policy/image inspection may have synchronous reads. Only this owned worker is cancelled, and
+    // only inside its cancel window: endpoint creation, discovery publication and the record deletion must complete.
+    cancel_window_.cancel(worker_.native_handle());
 #ifdef ETS2TELEMETRY_TRANSPORT_TEST_HOOKS
     transport_test_hook("stop-after-cancel",worker_.native_handle(),stop_event_.get());
 #endif
     // A read can start after the first cancellation request. Keep requesting
     // cancellation until this exact worker terminates; join still owns its lifetime.
     while (WaitForSingleObject(worker_.native_handle(),10) == WAIT_TIMEOUT)
-      CancelSynchronousIo(worker_.native_handle());
+      cancel_window_.cancel(worker_.native_handle());
     worker_.join();
     shutdown_ms_.store(GetTickCount64() - started); monitor_ = nullptr; stop_event_.reset(); startup_event_.reset();
     if (shutdown_ms_.load() > 1000) status_.store(Status::shutdown_deadline_exceeded);
@@ -147,11 +148,17 @@ bool Server::write_frame(HANDLE pipe, const std::vector<std::uint8_t>& frame, bo
 }
 void Server::serve(HANDLE pipe, const std::wstring& directory, const OwnerSecurity& security, const UserIdentity& user) {
   const auto handshake_deadline = GetTickCount64()+5000;
-  inspection_running(stop_event_.get());
-  ULONG pid = 0; if (!GetNamedPipeClientProcessId(pipe,&pid)) return;
-  auto peer = inspect_peer(pid,stop_event_.get()); if (peer.sid != user.sid || peer.session != user.session) return;
-  inspection_running(stop_event_.get());
-  auto policy = read_service_policy(directory,security,user,stop_event_.get()); inspection_running(stop_event_.get()); bool allowed = false;
+  // Peer and policy inspection are the connection's only synchronous I/O that stop() cancels.
+  PeerIdentity peer; std::vector<AllowedPeer> policy;
+  {
+    CancelWindow::Scope window(cancel_window_);
+    inspection_running(stop_event_.get());
+    ULONG pid = 0; if (!GetNamedPipeClientProcessId(pipe,&pid)) return;
+    peer = inspect_peer(pid,stop_event_.get()); if (peer.sid != user.sid || peer.session != user.session) return;
+    inspection_running(stop_event_.get());
+    policy = read_service_policy(directory,security,user,stop_event_.get()); inspection_running(stop_event_.get());
+  }
+  bool allowed = false;
   for (const auto& candidate : policy) if (!_wcsicmp(candidate.image.c_str(),peer.image.c_str()) && candidate.sha256 == peer.sha256) allowed = true;
   inspection_running(stop_event_.get());
   if (!allowed || GetTickCount64() >= handshake_deadline) return;
@@ -220,6 +227,9 @@ void Server::run(std::wstring directory) noexcept {
   auto startup_stage = StartupFailure::identity_security;
   bool startup_complete = false;
   try {
+    // A stop may cancel the startup checks, which create nothing that could be left behind; the window closes before
+    // endpoint creation and discovery publication.
+    std::optional<CancelWindow::Scope> startup_window; startup_window.emplace(cancel_window_);
     auto user = current_user(); OwnerSecurity security(user.sid);
     if (directory.empty()) directory = local_transport_directory(security); else security.ensure_directory(directory);
     startup_stage = StartupFailure::source_identity;
@@ -229,6 +239,7 @@ void Server::run(std::wstring directory) noexcept {
     // Holds startup past the SDK-initialization wait to exercise the late-result path.
     if (transport_test_hook("startup-before-endpoint",nullptr,stop_event_.get()) != ERROR_SUCCESS) throw std::runtime_error("startup-hook");
 #endif
+    startup_window.reset();
     startup_stage = StartupFailure::endpoint_creation;
     Handle pipe(CreateNamedPipeW(name.c_str(),PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED | FILE_FLAG_FIRST_PIPE_INSTANCE,
       PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,1,65540,65540,0,security.attributes()));
