@@ -119,9 +119,14 @@ export async function runLifecycleSmoke({application, launcher, dashboard, overl
   assert.ok(Number.isSafeInteger(initial.servicePid) && initial.servicePid > 0, 'Service PID unavailable');
   record.servicePid = initial.servicePid;
   // 0. The seeded invalid settings file yields defaults and is neither changed nor joined by any file on startup.
-  record.settingsInitial = {view: initial.settings, files: await settingsFiles(config),
-    stateText: await dashboard.getByTestId('settings-state').innerText()};
-  assert.deepEqual(initial.settings, {units: {ets2: 'metric', ats: 'us-customary'}, state: 'invalid-file', writable: true, saveError: null});
+  // A CPU-starved start (hosted run 38755116140) may open the windows while the read is still pending (`loading`,
+  // read-only defaults); main applies the same read when it settles, so wait for that before the exact checks.
+  record.settingsInitialPending = initial.settings.state === 'loading';
+  const settled = await until(() => lifecycleState(application), state => state.settings.state !== 'loading', 'SETTINGS_READ_STILL_PENDING');
+  const stateText = await until(() => dashboard.getByTestId('settings-state').innerText(),
+    text => !text.startsWith('Saved settings are still being read'), 'DASHBOARD_SETTINGS_STILL_PENDING');
+  record.settingsInitial = {view: settled.settings, files: await settingsFiles(config), stateText};
+  assert.deepEqual(settled.settings, {units: {ets2: 'metric', ats: 'us-customary'}, state: 'invalid-file', writable: true, saveError: null});
   record.settingsSeededInvalidFile = true;
   assert.deepEqual(record.settingsInitial.files, [{name: 'settings.json', content: SETTINGS_SEED}]);
   assert.match(record.settingsInitial.stateText, /^The settings file is invalid; defaults are in use\./);

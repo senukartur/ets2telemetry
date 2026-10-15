@@ -8,12 +8,14 @@ import {existsSync} from 'node:fs';
 import {createDiagnostics} from './diagnostics';
 import {TelemetryIngestion, initialLive, sourceSelection} from './telemetry-ingestion';
 import {LiveSubscriptions} from './live-subscriptions';
-import {coalesceBrokerDiagnostics} from './native-pipe-client';
+import {NativePipeClient, coalesceBrokerDiagnostics, v1BrokerConfiguration, type BrokerConfiguration} from './native-pipe-client';
 import {createHash} from 'node:crypto';
 import os from 'node:os';
 import {CaptureController} from './capture-controller';
 import {ShutdownSequence} from './shutdown-sequence';
 import {HistoryStorage, HISTORY_CLOSE_BUDGET_MS, historyWorker} from './history-storage';
+import {V1Ingestion, type V1SourceState} from './v1-ingestion';
+import type {SourceSelection} from '../../../packages/contracts/src';
 const port = process.parentPort;
 if (!port) throw new Error('Missing Electron parent port');
 const log = createDiagnostics(path.join(process.env.ETS2TELEMETRY_DIAGNOSTIC_DIR || path.join(process.env.LOCALAPPDATA || tmpdir(), 'ETS2Telemetry', 'logs'), 'service'), Boolean(process.env.ETS2TELEMETRY_DIAGNOSTIC_DIR));
@@ -23,6 +25,31 @@ const subscriptions = new LiveSubscriptions(initialLive());
 // and repeated identical failures are coalesced so a retry loop cannot fill the bounded log.
 const ingestion = new TelemetryIngestion(update => subscriptions.publish(update), {diagnose: coalesceBrokerDiagnostics(diagnostic => log('NATIVE_BROKER_EXIT', undefined, {...diagnostic}))});
 const fixtureEndpoint = process.env.ETS2TELEMETRY_SOURCE_PIPE;
+// Protocol v1 (ET-006b, E2) runs beside v0 and follows every selection. It is live-only: no durable sink, so each hello
+// asks for durableEvents false, nothing is acknowledged and no history row is written; the dashboard and overlay stay on
+// v0. Game sources are reached only through the verified broker in its v1 mode; fixtures only through an endpoint that
+// matches the synthetic v1 test pipe pattern (ETS2TELEMETRY_SOURCE_PIPE_V1). Its state stays in this service and only
+// fixed codes are logged: status changes per status at occurrences 1, 2, 4, 8, ..., and broker exits like v0's.
+const v1FixtureEndpoint = process.env.ETS2TELEMETRY_SOURCE_PIPE_V1;
+const diagnoseV1Broker = coalesceBrokerDiagnostics(diagnostic => log('NATIVE_BROKER_V1_EXIT', undefined, {...diagnostic}));
+const v1StatusCounts = new Map<string, number>();
+let v1Status: string | undefined;
+function recordV1State(state: V1SourceState): void {
+  if (state.status === v1Status) return;
+  v1Status = state.status;
+  const count = (v1StatusCounts.get(state.status) ?? 0) + 1; v1StatusCounts.set(state.status, count);
+  if ((count & (count - 1)) === 0) log('V1_SOURCE_STATUS', undefined, {status: state.status, selection: state.selection, durable: state.durable.state, count});
+}
+const v1 = new V1Ingestion({
+  connectGame: (configuration, game) => new NativePipeClient(configuration, game, diagnoseV1Broker, 'v1'),
+  diagnose: (event, facts) => log(event, undefined, facts),
+  onState: recordV1State
+});
+/** A v1 failure never fails the v0 selection it follows. */
+function selectV1(selection: SourceSelection, broker: BrokerConfiguration | undefined): void {
+  try {v1.configureBroker(v1BrokerConfiguration(broker)); v1.select(selection, v1FixtureEndpoint);}
+  catch {log('V1_SELECT_REJECTED');}
+}
 async function boundedSha256(filename: string, limit: number): Promise<string | null> {
   try {
     const file = await open(filename, 'r');
@@ -86,6 +113,8 @@ function exitAfterHistory(code: number): void {
 const shutdown = new ShutdownSequence(log);
 shutdown.register('intake', {name: 'ingestion', budgetMs: 1000, run: () => ingestion.stop()});
 shutdown.register('intake', {name: 'capture', budgetMs: 1000, run: () => captures.stop()});
+// Ends the v1 source and waits for its broker process; with no sink there is no storage command to wait for.
+shutdown.register('intake', {name: 'v1-ingestion', budgetMs: 1000, run: () => v1.stop()});
 shutdown.register('storage', {name: 'storage-probe', budgetMs: 1000, run: async () => {
   await probe.stop();
   if (!storageStopped) throw new Error('Storage probe did not stop cleanly');
@@ -118,6 +147,7 @@ port.on('message', event => {
         broker = {executable: configuration.executable, discoveryDirectory: configuration.discoveryDirectory};
       }
       ingestion.configureBroker(broker); ingestion.select(selection, fixtureEndpoint);
+      selectV1(selection, broker);
       // Evidence capture is independent of live ingestion: a rejected grant never fails selection.
       if (command.capture !== undefined) captures.offer(command.capture, selection, broker);
     }

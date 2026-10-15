@@ -103,6 +103,12 @@ jobs:
         run: |
           npm run test:cap0-chain
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      # The same fake-SDK host, test plugin DLL and broker in its protocol v1 mode (ET-006b E14). Synthetic only.
+      - name: Protocol v1 controlled broker chain
+        timeout-minutes: 3
+        run: |
+          npm run test:v1-chain
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Isolated synthetic v0 CLI pipe smoke
         run: npm run smoke --workspace @ets2telemetry/telemetry-simulator
       - name: Isolated synthetic v1 CLI pipe smoke
