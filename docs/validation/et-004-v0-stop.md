@@ -84,6 +84,34 @@ Node 24.19.0 and npm 11.17.0 (portable pinned copy).
 
 The local ASan build used the Visual Studio 18 generator; Windows CI uses Visual Studio 17 2022.
 
+## Post-review and CI fix (October 15, 2026)
+
+**Hosted failure.** The Ready run [38719984311](https://github.com/senukartur/ets2telemetry/actions/runs/38719984311) on `42fdfe6` failed `v1-transport-asan-contract-policy` with "only the authorized client hydrated". All other 68 ASan cases passed.
+
+**Root cause: a race in the test, already on `main`.** The v1 worker increments `hydrations()` and then stores `connected`, both after the checkpoint write has completed. The client can read the checkpoint and return from `handshake()` before the worker runs that increment, so reading the count right away could see 0. The policy case does not call `stop()` before that read, so no cancellation happens there. The `CancelWindow` refactor does not change v1: the window wraps the same two calls, and `stop()` still takes the same mutex and checks the same flag. The worker handle is now read before the lock, but only the SDK thread that calls `start()` and `stop()` changes it. One CPU, two busy loops:
+
+| Build | `main` `ceba919` | This branch before the fix | After `21175ce` |
+| --- | --- | --- | --- |
+| Release `policy` | 14 of 100 failed | 10 of 100 failed | 0 of 200 failed |
+| ASan `policy` | 11 of 50 failed | 17 of 50 failed | `ctest --repeat until-fail:200` passed |
+
+All failures had the hosted message. As a RED check, a temporary 200 ms sleep before the increment made the old `policy` case fail 3 of 3, and the fixed case passed 3 of 3.
+
+**Fix (`21175ce`, test only).** The new `Fixture::hydrated()` waits for `connected` and then reads the count. Seeing `connected` guarantees that the count includes this connection and every earlier one. The `policy` check and the same pattern at the end of `ack-control` use it. No timeout or expected count changed.
+
+**Exit-path fallback (`6c08b94`).** An advisory review noted that the exit-path block started its 750 ms fallback timer before `stop()`. On a slow host the fallback byte could already be in the pipe when the worker reached `v0-exit`. The read would then complete at once, and an unfixed `stop()` would have nothing to cancel. The guard thread now starts the timer only after the hook's `reached` event, as the publication blocks do. Against the unfixed `stop()`, the block failed 3 of 3 runs without load and 20 of 20 on one CPU with two busy loops.
+
+**Checks on `6c08b94`:**
+
+- `native:build` was clean.
+- The first `native:test` had 73 of 75 passing. `event-channel-contract-concurrency` and `capture-cap0-contract-counters` hit their 60 s timeouts while other agents loaded the host. Both cases are unchanged by this branch, and the cause is unknown. A rerun of the suite passed 75 of 75, and 100 repeats of the two cases passed.
+- ASan `-R asan-contract` passed 69 of 69.
+- `ctest --repeat until-fail` under contention: ASan `policy` passed 200, `stop-discovery` passed 200 in Release and 20 in ASan, and ASan `ack-control` passed 20.
+- Two other cases failed once each in these loops, at assertions this branch did not change:
+  - Release `policy` failed "v1 listening": `Fixture::start` has a 3 s bound, with one CPU and two busy loops.
+  - Release `ack-control` failed "release point stays before the gap record" (block g), with CPUs 0–1 and three busy loops.
+- Neither failure recurred on retest. With CPUs 0–1 and three busy loops, `ack-control` passed 100 of 100 on `main` and 100 of 100 on this branch. They are recorded here as possible flakes outside this change.
+
 ## Remaining
 
 - Endpoint creation and discovery publication are no longer cancellable. They are short local file operations, but a stop that arrives during them now waits for them; a pathological file system filter could extend shutdown, as any non-cancellable call already could. The mandatory join is unchanged.
