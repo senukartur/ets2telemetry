@@ -110,7 +110,12 @@ function runApplication(profileError: unknown): void {
     exhausted: () => {updateHealth({type: 'service-restart-exhausted'});
       const update: LiveTelemetry = {...initialLive(selection), status: 'service-failed', reason: 'Automatic service restart limit reached'};
       freshness.invalidate(update); window?.webContents.send('telemetry:service-state', update);},
-    failure: code => {failureReported = true; updateHealth({type: 'service-failure', code: failureCode(code, reportedFailureCode)}); reportedFailureCode = undefined;}
+    // The failed service is being terminated: retire its readiness, status and live channels now rather than when
+    // its exit arrives (up to 3000 ms later). The later state callback finds them already retired.
+    failure: code => {failureReported = true; serviceReady = false; selectionPending = false; status = undefined; closeUpstream();
+      updateHealth({type: 'service-failure', code: failureCode(code, reportedFailureCode)}); reportedFailureCode = undefined;
+      const update: LiveTelemetry = {...initialLive(selection), status: 'restarting', reason: 'Telemetry service failed; current interval is unknown'};
+      freshness.invalidate(update); dashboardSubscriptions.close(); dashboardPort = undefined; window?.webContents.send('telemetry:service-state', update);}
   });
   function appState(): AppState {return {health: {...health}};}
   function updateHealth(event: HealthEvent, immediate = false): void {

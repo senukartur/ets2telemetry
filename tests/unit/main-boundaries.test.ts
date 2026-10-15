@@ -795,3 +795,28 @@ it('never requests the instance lock when the diagnostic profile override fails'
   expect(app.exit).toHaveBeenCalledExactlyOnceWith(1);
   expect(windows).toHaveLength(0); expect(trays).toHaveLength(0); expect(child.listenerCount('message')).toBe(0);
 });
+// PR #52 advisory review fixes.
+it('retires readiness, status and live channels as soon as a post-readiness failure is reported', async () => {
+  trayAvailable = true; vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2'); await ready();
+  ipc.emit('overlay:subscribe', overlayTrusted()); ipc.emit('telemetry:subscribe', trusted());
+  const upstream = channels[0], dashboard = channels[2];
+  child.emit('message', {type: 'failed', code: 'STORAGE_WORKER_EXIT'});
+  expect(child.kill).toHaveBeenCalledOnce();
+  // Until the killed service's exit arrives (up to 3000 ms) nothing may treat it as ready.
+  await expect(handlers.get('telemetry:select')!(trusted(), 'ats')).rejects.toThrow('Untrusted');
+  expect(handlers.get('scaffold:status')!(trusted())).toBeNull();
+  expect(upstream.port1.close).toHaveBeenCalled(); expect(dashboard.port1.close).toHaveBeenCalled();
+  expect(contents.send).toHaveBeenCalledWith('telemetry:service-state', expect.objectContaining({status: 'restarting', fresh: false}));
+  windows[1].showInactive.mockClear(); deliver(currentGame(), 1, upstream); await vi.advanceTimersByTimeAsync(50);
+  expect(windows[1].showInactive).not.toHaveBeenCalled();
+  expect(child.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({type: 'select', source: 'ats'}));
+  // The killed service's exit then follows the ordinary supervised restart without closing anything twice.
+  const closes = upstream.port1.close.mock.calls.length;
+  child.emit('exit', 1); expect(upstream.port1.close.mock.calls.length).toBe(closes);
+  await vi.advanceTimersByTimeAsync(250); children[1].emit('message', {type: 'ready'}); await settle();
+  expect(upstreamRequests(children[1])).toBe(1);
+  expect(handlers.get('scaffold:status')!(trusted())).toEqual({service: 'ready', storage: 'verified', synthetic: true});
+  await vi.advanceTimersByTimeAsync(250); await handlers.get('telemetry:select')!(trusted(), 'ats');
+  expect(children[1].postMessage).toHaveBeenCalledWith({type: 'select', source: 'ats', broker: undefined});
+  expect(app.exit).not.toHaveBeenCalled();
+});
