@@ -544,3 +544,28 @@ On October 15, 2026 the owner wrote (translated from Russian): "Overall, keep do
 | C17 | Work packages ET-011a and ET-011b; the card stays in Review until its manual Windows and real-game checks are accepted |
 
 ET-011a changes the earlier behavior in which closing the dashboard stopped the v0 service and closed the overlay. Recording survival across close-to-tray (REG-012) still requires ET-015. Manual checks of the real notification-area icon, display scaling, Explorer restart, Start-menu relaunch and sign-out, and real-game overlay behavior while the main window is closed, remain pending; see [ET-011 validation](docs/validation/et-011.md). No autostart, auto-update, cloud synchronization or recording is authorized, and no game, TruckersMP, display or performance claim follows from synthetic or local checks.
+
+## ET-010 authorization — October 15, 2026
+
+On October 15, 2026 the owner gave the coordinator standing autonomy: "Overall, keep doing other tasks until you hit tests in the real game. Make optimal decisions. I want you to close as many tasks as possible without my involvement. If there are flaky tests, delegate their fixes to subagents." Under that delegation the coordinator started ET-010 (live telemetry) and adopted the architect recommendations N1–N16 below. They are coordinator decisions under the owner's delegation and were not individually reviewed by the owner; the owner may revise them.
+
+ET-010 changes no v0 wire, preload/IPC, storage, trip logic, recording or later-phase scope. It makes no game, TruckersMP, display or performance claim; real-source dashboard checks are pending in [ET-010 validation](docs/validation/et-010.md). The field catalogue and rules are in [live telemetry fields](docs/live-telemetry-fields.md).
+
+| # | Decision |
+| --- | --- |
+| N1 | Three packages in order: ET-010a normalization and display profiles in telemetry-core; ET-010b the complete live field set on the dashboard, after ET-011a and ET-011b; ET-010c protocol v1 fields on the dashboard, after ET-006b |
+| N2 | telemetry-core is the single numeric source for unit conversion; ET-011b delegates its numerics to it |
+| N3 | A source-agnostic normalized state with v0 and v1 adapters; the internal `not-carried` reason marks fields the protocol in use does not transport and never reaches the wire or storage |
+| N4 | The renderer builds the view from pure functions per bridge update; no bridge, preload or IPC change |
+| N5 | Labels and reason texts live in the application strings (`apps/desktop/src/strings.ts`) |
+| N6 | Missing, stale and paused rules: missing values show `unavailable` with a reason; every non-current status hides all values; paused current values stay visible with a banner; no dimmed last-known values |
+| N7 | A fixed rounding table, with one decimal for speed and fuel; no signed zero |
+| N8 | Consumption: the exact US mpg constant, the SDK-mean label, and no own trip average or range |
+| N9 | Money stays exact raw digits with an SDK-documented or unknown currency; no symbols and no conversion |
+| N10 | Four distance kinds: planned, navigation remaining, game-delivered and odometer |
+| N11 | REG-008 stateless step primitives with provisional thresholds |
+| N12 | Mass in t or lb, compass bearing, `Day N, HH:MM` game time and signed deadline formats; zero L/100 km is numeric in metric only |
+| N13 | The MVP field set; driving controls and navigation extras deferred as TD-003; gameplay events go to the journal |
+| N14 | Text fallback: localized name, then id; trailers use the body type before the id |
+| N15 | Per-quantity unit overrides as a seam; no settings migration |
+| N16 | A boundary test instead of a lint-config edit keeps telemetry-core free of Node.js, Electron and React |
