@@ -132,6 +132,39 @@ try {
       const observation = await waitForCurrentTelemetry(window);
       (result.rendererObservations ??= []).push({phase, ...observation});
     };
+    const resizeOverlay = (width, height) => application.evaluate(({BrowserWindow}, size) => {
+      const target = BrowserWindow.getAllWindows().find(candidate => candidate.webContents.getURL().includes('view=overlay'));
+      if (!target) return null;
+      target.setBounds({...target.getBounds(), width: size.width, height: size.height}); return target.getBounds();
+    }, {width, height});
+    const overlayState = () => overlay.evaluate(() => ({layout: globalThis.document.querySelector('[data-testid="overlay-root"]')?.getAttribute('data-layout') ?? null,
+      width: globalThis.innerWidth, height: globalThis.innerHeight, sections: globalThis.document.querySelectorAll('[data-testid^="overlay-section-"]').length}));
+    const renderedLayout = async (layout, width, sections) => {
+      const handle = await overlay.waitForFunction(expected => {
+        const root = globalThis.document.querySelector('[data-testid="overlay-root"]');
+        return root?.getAttribute('data-layout') === expected.layout && Math.abs(globalThis.innerWidth - expected.width) <= 1 &&
+          globalThis.document.querySelectorAll('[data-testid^="overlay-section-"]').length === expected.sections;
+      }, {layout, width, sections}, {timeout: 10000});
+      await handle.dispose();
+    };
+    const measureLayouts = async layouts => {
+      const record = {};
+      const sections = await overlay.evaluate(() => globalThis.document.querySelectorAll('[data-testid^="overlay-section-"]').length);
+      try {
+        for (const [layout, width, height] of layouts) {
+          const saved = await window.evaluate(value => globalThis.desktop.setOverlayLayout(value), layout);
+          record[layout] = {saved: saved.overlay.layout, resized: await resizeOverlay(width, height)};
+          await renderedLayout(layout, width, sections);
+          record[layout].overflow = await overlay.evaluate(overlayOverflow);
+        }
+      } catch (error) {record.error = failure(error); record.stateAtError = await overlayState().catch(() => null);}
+      try {
+        await window.evaluate(() => globalThis.desktop.setOverlayLayout('strip'));
+        await resizeOverlay(1280, 38); await renderedLayout('strip', 1280, sections);
+        record.restored = 'strip';
+      } catch (error) {record.restoreError = failure(error);}
+      return record;
+    };
     await current('initial');
     result.telemetry = {origin: 'synthetic', speedKmh: 90, fuelL: 73, recording: false};
     // ET-010b/ET-010c: the live card shows the complete v0 field set with the v1 rows of the same job beside it, and the
@@ -141,6 +174,10 @@ try {
     result.telemetry.overlayV1 = {current: await waitForOverlayV1(overlay, SYNTHETIC_V1_OVERLAY_CURRENT)};
     // For review only (coordinator decision C3): which strip sections lie outside the overlay root.
     result.telemetry.overlayOverflow = await overlay.evaluate(overlayOverflow);
+    // Also for review only, recorded and never asserted (docs/validation/et-012a.md asked for it): the card and HUD
+    // layouts with every section filled. Without a game window the controller never places the overlay, so the hidden
+    // window is sized here to each layout's nominal size (overlay-geometry.ts) and restored to the strip afterwards.
+    result.telemetry.overlayLayoutOverflow = await measureLayouts([['card', 300, 360], ['hud', 320, 320]]);
     // Hold the v0 source on the same connection until main's freshness expiry: every v0 card value must become not
     // current while the v1 rows stay current and the overlay keeps only dashes; then return after resume. The later
     // single-connection assertion proves the hold did not reconnect.

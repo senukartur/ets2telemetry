@@ -248,15 +248,17 @@ export async function waitForOverlayV1(page, expected) {
 }
 
 // Self-contained browser callback, for review only (coordinator decision C3): the sections whose box is not fully inside
-// the overlay root, such as strip items wrapped onto its clipped second line.
+// the overlay root, such as strip items wrapped onto its clipped second line, and the sections whose value text is cut
+// off inside its own box (an ellipsis in the card or cluster rows).
 export function overlayOverflow() {
   const root = globalThis.document.querySelector('[data-testid="overlay-root"]');
-  if (!root) return {layout: null, root: null, sections: [], outside: []};
-  const bounds = root.getBoundingClientRect(), sections = [], outside = [];
+  if (!root) return {layout: null, root: null, sections: [], outside: [], truncated: []};
+  const bounds = root.getBoundingClientRect(), sections = [], outside = [], truncated = [];
   for (const element of globalThis.document.querySelectorAll('[data-testid^="overlay-section-"]')) {
     const id = element.getAttribute('data-testid').slice('overlay-section-'.length), box = element.getBoundingClientRect();
     sections.push(id);
     if (box.left < bounds.left || box.top < bounds.top || box.right > bounds.right || box.bottom > bounds.bottom) outside.push(id);
+    if ([...element.querySelectorAll('.overlay-value')].some(value => value.scrollWidth > value.clientWidth)) truncated.push(id);
   }
-  return {layout: root.getAttribute('data-layout'), root: {width: Math.round(bounds.width), height: Math.round(bounds.height)}, sections, outside};
+  return {layout: root.getAttribute('data-layout'), root: {width: Math.round(bounds.width), height: Math.round(bounds.height)}, sections, outside, truncated};
 }

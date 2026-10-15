@@ -228,13 +228,15 @@ describe('ET-010c overlay v1 observation', () => {
     stubOverlay(texts, special === 'freshness' ? 'stale' : 'current', special === 'freshness' ? undefined : special);
     expect(overlayV1Observation(SYNTHETIC_V1_OVERLAY_V1_STALE)).toBe(false);
   });
-  it('records the sections outside the overlay root for review', () => {
+  it('records the sections outside the overlay root and those with cut-off values for review', () => {
     const box = (left: number, top: number, width: number, height: number) => ({left, top, right: left + width, bottom: top + height, width, height});
-    const section = (id: string, bounds: ReturnType<typeof box>) => ({getAttribute: () => `overlay-section-${id}`, getBoundingClientRect: () => bounds});
+    const section = (id: string, bounds: ReturnType<typeof box>, cut = false) => ({getAttribute: () => `overlay-section-${id}`, getBoundingClientRect: () => bounds,
+      querySelectorAll: () => [{scrollWidth: cut ? 240 : 80, clientWidth: 80}]});
     vi.stubGlobal('document', {
       querySelector: () => ({getAttribute: () => 'strip', getBoundingClientRect: () => box(0, 0, 1280, 38)}),
-      querySelectorAll: () => [section('speed', box(10, 1, 80, 36)), section('origin', box(10, 39, 300, 36)), section('deadline', box(1200, 1, 120, 36))]
+      querySelectorAll: () => [section('speed', box(10, 1, 80, 36)), section('origin', box(10, 39, 300, 36)), section('deadline', box(1200, 1, 120, 36)), section('cargo', box(100, 1, 80, 36), true)]
     });
-    expect(overlayOverflow()).toEqual({layout: 'strip', root: {width: 1280, height: 38}, sections: ['speed', 'origin', 'deadline'], outside: ['origin', 'deadline']});
+    expect(overlayOverflow()).toEqual({layout: 'strip', root: {width: 1280, height: 38}, sections: ['speed', 'origin', 'deadline', 'cargo'],
+      outside: ['origin', 'deadline'], truncated: ['cargo']});
   });
 });

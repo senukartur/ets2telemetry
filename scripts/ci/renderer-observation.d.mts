@@ -24,5 +24,5 @@ export const SYNTHETIC_V1_OVERLAY_V1_STALE: OverlayV1Expectation;
 export const SYNTHETIC_V1_OVERLAY_STOPPED: OverlayV1Expectation;
 export function overlayV1Observation(expected: OverlayV1Expectation): Record<string, string | null> | false;
 export function waitForOverlayV1(page: Page, expected: OverlayV1Expectation): Promise<Record<string, string | null>>;
-export interface OverlayOverflow {layout: string | null; root: {width: number; height: number} | null; sections: string[]; outside: string[]}
+export interface OverlayOverflow {layout: string | null; root: {width: number; height: number} | null; sections: string[]; outside: string[]; truncated: string[]}
 export function overlayOverflow(): OverlayOverflow;
