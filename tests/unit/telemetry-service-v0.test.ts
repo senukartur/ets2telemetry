@@ -30,7 +30,8 @@ class TestPort extends EventEmitter implements LivePort {
   consume(): void {this.emit('message', {data: {type: 'consumed', delivery: this.messages.at(-1)!.delivery}});}
 }
 // Every import of the telemetry-service entry point that a case starts. An import that outlives its case (for
-// example after a timeout) finishes, and its case's cleanup runs, before the next case starts.
+// example after a timeout) finishes its startup side effects before the next case starts. The rest of a timed-out
+// case body can still resume later; the beforeEach guard only proves no entry-point import is still loading.
 const loadingService = new Set<Promise<unknown>>();
 function loadService(): Promise<unknown> {
   const loading = import('../../apps/desktop/src/telemetry-service');
