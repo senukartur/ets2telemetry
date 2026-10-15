@@ -110,7 +110,7 @@ it('does not expose the previous observation as current while a replacement port
   stop();
 });
 it('preserves the frozen narrow bridge and rejects privileged source values before IPC', async () => {
-  expect(Object.isFrozen(bridge)).toBe(true); expect(Object.keys(bridge).sort()).toEqual(['exitApplication', 'getAppState', 'getStatus', 'selectSource', 'subscribeAppState', 'subscribeLive']);
+  expect(Object.isFrozen(bridge)).toBe(true); expect(Object.keys(bridge).sort()).toEqual(['exitApplication', 'getAppState', 'getStatus', 'selectSource', 'setUnitProfile', 'subscribeAppState', 'subscribeLive']);
   await expect(bridge.selectSource('C:\\arbitrary.exe' as never)).rejects.toThrow('Invalid source selection');
   expect(ipc.invoke).not.toHaveBeenCalled();
   await bridge.selectSource('ats'); expect(ipc.invoke).toHaveBeenCalledWith('telemetry:select', 'ats');
@@ -146,7 +146,7 @@ it('does not reassert service subscription after the callback unsubscribes its o
   expect(subscriptions()).toBe(1); expect(vi.getTimerCount()).toBe(0);
 });
 it('appends the application state and exit methods after the original three bridge keys', () => {
-  expect(Object.keys(bridge)).toEqual(['getStatus', 'selectSource', 'subscribeLive', 'getAppState', 'subscribeAppState', 'exitApplication']);
+  expect(Object.keys(bridge)).toEqual(['getStatus', 'selectSource', 'subscribeLive', 'getAppState', 'subscribeAppState', 'exitApplication', 'setUnitProfile']);
 });
 it('allows one application state listener, forwards pushed state and unsubscribes once', () => {
   const listener = vi.fn(); const stop = bridge.subscribeAppState(listener);
@@ -162,4 +162,15 @@ it('allows one application state listener, forwards pushed state and unsubscribe
 it('requests state and exit through fixed invoke channels without forwarding renderer arguments', async () => {
   await bridge.getAppState(); await Reflect.apply(bridge.exitApplication, bridge, ['C:\\arbitrary', {force: true}]);
   expect(ipc.invoke.mock.calls).toEqual([['app:get-state'], ['app:exit']]);
+});
+// ET-011b: one appended settings method that forwards only the two validated enums.
+it('validates unit profile requests before IPC and forwards exactly a game and a profile', async () => {
+  for (const [game, profile] of [['ets2', 'imperial'], ['ETS2', 'metric'], ['synthetic', 'metric'], ['ats', 'C:\\settings.json'], [undefined, undefined], [{}, 'metric']]) {
+    await expect(bridge.setUnitProfile(game as never, profile as never)).rejects.toThrow('Invalid unit profile request');
+  }
+  expect(ipc.invoke).not.toHaveBeenCalled();
+  const view = {units: {ets2: 'us-customary', ats: 'us-customary'}, state: 'loaded', writable: true, saveError: null};
+  ipc.invoke.mockResolvedValueOnce(view);
+  await expect(Reflect.apply(bridge.setUnitProfile, bridge, ['ets2', 'us-customary', {path: 'C:\\arbitrary'}])).resolves.toEqual(view);
+  expect(ipc.invoke.mock.calls).toEqual([['settings:set-unit-profile', 'ets2', 'us-customary']]);
 });

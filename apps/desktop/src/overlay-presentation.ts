@@ -1,21 +1,23 @@
-import type {LiveTelemetry, OverlayPresentation} from '../../../packages/contracts/src';
-import {displaySpeed} from './speed-display';
+import type {LiveTelemetry, OverlayPresentation, UnitProfiles} from '../../../packages/contracts/src';
+import {DEFAULT_UNIT_PROFILES, displayGame, isExplicitFixture, profileFor, speedNumber, speedUnit, volumeNumber, volumeUnit} from './unit-profiles';
 
-/** Canonical v0 m/s and liters remain unchanged; only this display projection converts. */
-export function overlayPresentation(live: LiveTelemetry): OverlayPresentation {
+/**
+ * Canonical v0 m/s and liters remain unchanged; only this display projection converts, in the persisted profile of
+ * the displayed game (ETS2 metric and ATS US customary by default; metric without a game).
+ */
+export function overlayPresentation(live: LiveTelemetry, units: UnitProfiles = DEFAULT_UNIT_PROFILES): OverlayPresentation {
   const observation = live.observation;
-  const explicitFixture = (live.selection === 'synthetic' || live.selection === 'replay') && observation?.source.origin === live.selection;
-  const game = explicitFixture ? observation.source.game : live.selection;
-  const ats = game === 'ats';
+  const explicitFixture = isExplicitFixture(live);
+  const game = displayGame(live), profile = profileFor(units, game);
   const current = live.fresh && (live.status === 'connected' || live.status === 'paused') &&
     (explicitFixture || (observation?.source.origin === 'game' && observation.source.game === live.selection));
   const state = observation?.state;
   return {
-    source: ats ? 'ATS' : game === 'ets2' ? 'ETS2' : 'No game', origin: observation?.source.origin ?? 'none', status: live.status,
-    speed: current && state?.speed.available ? displaySpeed(state.speed.value * (ats ? 2.2369362920544 : 3.6)) : '—',
-    speedUnit: ats ? 'mph' : 'km/h',
-    fuel: current && state?.fuel.available ? (state.fuel.value / (ats ? 3.785411784 : 1)).toFixed(1) : '—',
-    fuelUnit: ats ? 'US gal' : 'L',
+    source: game === 'ats' ? 'ATS' : game === 'ets2' ? 'ETS2' : 'No game', origin: observation?.source.origin ?? 'none', status: live.status,
+    speed: current && state?.speed.available ? speedNumber(state.speed.value, profile) : '—',
+    speedUnit: speedUnit(profile),
+    fuel: current && state?.fuel.available ? volumeNumber(state.fuel.value, profile) : '—',
+    fuelUnit: volumeUnit(profile),
     freshness: current ? 'current' : live.status === 'stale' ? 'stale' : 'unavailable'
   };
 }

@@ -4,6 +4,8 @@ import path from 'node:path';
 import {temporaryResources} from '../shared/resources';
 import {receiptBatchTimeout, validateRuntimeReceipts} from '../shared/runtime-receipt-validator';
 
+// The index that appends a row to run A's lifecycle main events; ET-011b added three settings rows after the original four.
+const MAIN_EVENTS_APPEND = 7;
 const cases = [
   {name: 'missing despite exit zero', body: undefined, code: 0, available: false, reason: 'DRIVER_RESULT_MISSING'},
   {name: 'missing after process failure', body: undefined, code: 1, available: false, reason: 'DRIVER_RESULT_MISSING'},
@@ -28,7 +30,10 @@ function lifecycleReceipt(path: (string | number)[] = [], replacement?: Json): s
     {event: 'SERVICE_REPORT', detail: {type: 'stopped', clean: true}}];
   const reading = (speed: string, fuel: string) => ({source: 'ETS2', origin: 'synthetic', status: 'connected', freshness: 'current', speed, fuel});
   const value: Json = {passed: true, commit: 'candidate', mode: 'packaged', scenarioKind: 'lifecycle', launcherExit: 0, probesAfterExit: [],
-    mainEvents: [...orderlyMain(), {event: 'SECOND_INSTANCE', facts: {action: 'created'}}, {event: 'APP_EXIT_REQUESTED', facts: {reason: 'renderer'}}],
+    mainEvents: [...orderlyMain(), {event: 'SECOND_INSTANCE', facts: {action: 'created'}}, {event: 'APP_EXIT_REQUESTED', facts: {reason: 'renderer'}},
+      // ET-011b settings diagnostics of run A; MAIN_EVENTS_APPEND below is the index after them.
+      {event: 'SETTINGS_FALLBACK', facts: {state: 'invalid-file'}}, {event: 'SETTINGS_QUARANTINED', facts: {state: 'invalid-file'}},
+      {event: 'SETTINGS_SAVED', facts: {game: 'ets2', profile: 'us-customary'}}],
     serviceEvents: orderlyService(),
     lifecycle: {dashboardClosedServiceAlive: true, overlayAliveAfterClose: true, trayPresentAfterClose: true, overlayCurrentAfterClose: true,
       sourceConnectionPreserved: true, secondInstanceRestoredDashboard: true, trayOpenRestoredDashboard: true, explicitExitOrderly: true,
@@ -37,8 +42,12 @@ function lifecycleReceipt(path: (string | number)[] = [], replacement?: Json): s
       overlayChanged: reading('72.0', '71.0'), overlayRestored: reading('90.0', '73.0'),
       secondInstance: {pid: 4200, exitCode: 0, signal: null, exitMilliseconds: 164, wroteLog: false, primaryActions: ['created']},
       explicitExit: {launcherExit: 0, signal: null, exitMilliseconds: 179, requests: ['renderer']},
-      restart: {servicePid: 4300}, restartLauncherExit: 0,
-      restartMainEvents: [...orderlyMain(), {event: 'APP_EXIT_REQUESTED', facts: {reason: 'app-quit'}}], restartServiceEvents: orderlyService()}};
+      restart: {servicePid: 4300, settingsState: 'loaded', dashboardUnits: {speed: 'Speed: 55.9 mph', fuel: 'Fuel: 19.3 US gal'}}, restartLauncherExit: 0,
+      settingsSeededInvalidFile: true, settingsStartupUnchanged: true, settingsQuarantinePreserved: true, settingsSavedExact: true, unitsApplied: true,
+      settingsRestartLoaded: true, settingsQuarantined: 1, dashboardUnits: {speed: 'Speed: 55.9 mph', fuel: 'Fuel: 19.3 US gal'},
+      overlayUnits: {...reading('55.9', '19.3'), speedUnit: 'mph', fuelUnit: 'US gal'},
+      restartMainEvents: [...orderlyMain(), {event: 'APP_EXIT_REQUESTED', facts: {reason: 'app-quit'}}, {event: 'SETTINGS_LOADED', facts: {state: 'loaded'}}],
+      restartServiceEvents: orderlyService()}};
   if (path.length) {
     let target = value as Record<string | number, Json>;
     for (const key of path.slice(0, -1)) target = target[key] as Record<string | number, Json>;
@@ -74,12 +83,33 @@ function lifecycleCases() {
     invalid('explicit exit through another path', ['lifecycle', 'explicitExit', 'requests'], ['app-quit']),
     invalid('unclean service stop', ['serviceEvents', 4, 'detail', 'clean'], false),
     invalid('shutdown step timed out', ['serviceEvents', 1, 'facts', 'outcome'], 'timeout'),
-    invalid('second application exit event', ['mainEvents', 4], {event: 'APP_EXIT', detail: {code: 0}}),
-    invalid('failure event', ['mainEvents', 4], {event: 'SERVICE_START_FAILED'}),
+    invalid('second application exit event', ['mainEvents', MAIN_EVENTS_APPEND], {event: 'APP_EXIT', detail: {code: 0}}),
+    invalid('failure event', ['mainEvents', MAIN_EVENTS_APPEND], {event: 'SERVICE_START_FAILED'}),
     invalid('restart reused the service', ['lifecycle', 'restart', 'servicePid'], 4100),
     invalid('restart events missing', ['lifecycle', 'restartMainEvents']),
     invalid('restart closed nonzero', ['lifecycle', 'restartLauncherExit'], 1),
-    invalid('probe left behind', ['probesAfterExit', 0], 'ets2telemetry-probe-x')
+    invalid('probe left behind', ['probesAfterExit', 0], 'ets2telemetry-probe-x'),
+    // ET-011b settings evidence.
+    invalid('settings seed flag missing', ['lifecycle', 'settingsSeededInvalidFile']),
+    invalid('startup changed the settings file', ['lifecycle', 'settingsStartupUnchanged'], false),
+    invalid('quarantine not preserved', ['lifecycle', 'settingsQuarantinePreserved'], false),
+    invalid('saved content not exact', ['lifecycle', 'settingsSavedExact'], 'true'),
+    invalid('units not applied', ['lifecycle', 'unitsApplied'], false),
+    invalid('restart flag missing', ['lifecycle', 'settingsRestartLoaded']),
+    invalid('two quarantined files', ['lifecycle', 'settingsQuarantined'], 2),
+    invalid('quarantine count as string', ['lifecycle', 'settingsQuarantined'], '1'),
+    invalid('overlay still metric after the change', ['lifecycle', 'overlayUnits', 'speedUnit'], 'km/h'),
+    invalid('overlay fuel not converted', ['lifecycle', 'overlayUnits', 'fuel'], '73.0'),
+    invalid('overlay units stale', ['lifecycle', 'overlayUnits', 'freshness'], 'stale'),
+    invalid('dashboard still metric after the change', ['lifecycle', 'dashboardUnits', 'speed'], 'Speed: 90.0 km/h'),
+    invalid('restart dashboard back to metric', ['lifecycle', 'restart', 'dashboardUnits', 'fuel'], 'Fuel: 73.0 L'),
+    invalid('restart settings not loaded', ['lifecycle', 'restart', 'settingsState'], 'defaults'),
+    invalid('fallback row missing', ['mainEvents', 4], {event: 'SETTINGS_LOADED', facts: {state: 'defaults'}}),
+    invalid('fallback for another state', ['mainEvents', 4, 'facts', 'state'], 'loaded-with-fallbacks'),
+    invalid('second save', ['mainEvents', MAIN_EVENTS_APPEND], {event: 'SETTINGS_SAVED', facts: {game: 'ats', profile: 'metric'}}),
+    invalid('restart loaded another state', ['lifecycle', 'restartMainEvents', 3, 'facts', 'state'], 'defaults'),
+    invalid('restart wrote settings', ['lifecycle', 'restartMainEvents', 4], {event: 'SETTINGS_SAVED', facts: {game: 'ets2', profile: 'us-customary'}}),
+    {name: 'lifecycle two quarantined files with Int64 integers', body: lifecycleReceipt(['lifecycle', 'settingsQuarantined'], 2), scenario: 'lifecycle', numbers: 'int64' as const, code: 0, available: true, reason: 'LIFECYCLE_RESULT_INCOMPLETE_OR_INVALID'}
   ];
 }
 

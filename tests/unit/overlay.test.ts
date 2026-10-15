@@ -208,3 +208,25 @@ it('recovers an unchanged rectangle after a transient conversion failure without
   overlay.update(current); expect(window.showInactive).not.toHaveBeenCalled();
   overlay.update(current); expect(window.showInactive).toHaveBeenCalledOnce(); expect(screen.screenToDipRect).toHaveBeenCalledTimes(2);
 });
+// ET-011b: the overlay follows the persisted profile of the displayed game.
+it.each([
+  {game: 'ets2' as const, units: {ets2: 'us-customary', ats: 'us-customary'} as const, speed: '55.9', speedUnit: 'mph', fuel: '19.3', fuelUnit: 'US gal'},
+  {game: 'ats' as const, units: {ets2: 'metric', ats: 'metric'} as const, speed: '90.0', speedUnit: 'km/h', fuel: '73.0', fuelUnit: 'L'},
+  {game: 'ets2' as const, units: {ets2: 'metric', ats: 'metric'} as const, speed: '90.0', speedUnit: 'km/h', fuel: '73.0', fuelUnit: 'L'}
+])('projects $game in its persisted profile $units', ({game, units, speed, speedUnit, fuel, fuelUnit}) => {
+  const current = live(), state = current.observation!.state;
+  current.selection = game; current.observation!.source.game = game;
+  state.speed = {available: true, value: 25, unit: 'm/s'}; state.fuel = {available: true, value: 73, unit: 'L'};
+  const before = structuredClone(current);
+  expect(overlayPresentation(current, units)).toMatchObject({source: game.toUpperCase(), speed, speedUnit, fuel, fuelUnit, freshness: 'current'});
+  expect(current).toStrictEqual(before);
+  current.fresh = false; current.status = 'stale';
+  expect(overlayPresentation(current, units)).toMatchObject({speed: '—', fuel: '—', speedUnit, fuelUnit, freshness: 'stale'});
+});
+it('keeps metric without a game and the fixture game profile for synthetic sources', () => {
+  const units = {ets2: 'us-customary', ats: 'us-customary'} as const;
+  expect(overlayPresentation(initialLive('game'), units)).toMatchObject({source: 'No game', speedUnit: 'km/h', fuelUnit: 'L'});
+  const current = live(); current.selection = 'synthetic'; current.observation!.source.origin = 'synthetic';
+  current.observation!.state.speed = {available: true, value: 25, unit: 'm/s'}; current.observation!.state.fuel = {available: true, value: 73, unit: 'L'};
+  expect(overlayPresentation(current, units)).toMatchObject({source: 'ETS2', origin: 'synthetic', speed: '55.9', speedUnit: 'mph', fuel: '19.3', fuelUnit: 'US gal'});
+});

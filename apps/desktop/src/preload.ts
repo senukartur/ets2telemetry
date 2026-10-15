@@ -2,6 +2,7 @@ import {contextBridge, ipcRenderer} from 'electron';
 import type {AppState, DesktopBridge, LiveTelemetry} from '../../../packages/contracts/src';
 import {initialLive, sourceSelection} from './live-state';
 import {RecoveryBudget} from './recovery-budget';
+import {isUnitGame, isUnitProfile} from './unit-profiles';
 let listener: ((update: LiveTelemetry) => void) | undefined;
 let port: MessagePort | undefined;
 let current: LiveTelemetry = initialLive();
@@ -101,6 +102,10 @@ const bridge: DesktopBridge = {
     return () => {if (!active) return; active = false; appStateListener = undefined; ipcRenderer.send('app:unsubscribe-state');};
   },
   // Exit takes no arguments: the reason is fixed by main as a renderer request.
-  exitApplication: () => ipcRenderer.invoke('app:exit')
+  exitApplication: () => ipcRenderer.invoke('app:exit'),
+  // Only the two fixed enums reach main, which validates them again; nothing else is forwarded.
+  setUnitProfile: (game, profile) => isUnitGame(game) && isUnitProfile(profile)
+    ? ipcRenderer.invoke('settings:set-unit-profile', game, profile)
+    : Promise.reject(new Error('Invalid unit profile request'))
 };
 contextBridge.exposeInMainWorld('desktop', Object.freeze(bridge));
