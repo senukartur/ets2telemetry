@@ -129,6 +129,9 @@ function sourceStep(v: unknown, path: string, source: Scenario['source']): Sourc
       const attributes = arr(o.attributes, `${path}.attributes`, 255).map((a, i) => attribute(a, `${path}.attributes[${i}]`));
       const list = opt<AttributeList>(o, 'list', raw => oneOf(raw, `${path}.list`, ['terminated', 'null', 'unterminated'] as const), 'terminated');
       if (list === 'null' && attributes.length) fail(path, 'a null attribute list has no attributes');
+      // The native scan reports an unterminated list only after 255 named entries; the scenario form is a shorthand for
+      // such a cut list and must still carry at least one attribute.
+      if (list === 'unterminated' && !attributes.length) fail(path, 'an unterminated attribute list has at least one attribute');
       return {atMs: at(o), action, id, attributes, list, repeat: opt(o, 'repeat', raw => int(raw, `${path}.repeat`, 1, 1_000), 1)};
     }
     case 'lifecycle': { const o = obj(v, path, ['atMs', 'action', 'event']); return {atMs: at(o), action, event: oneOf(o.event, `${path}.event`, ['simulation.started', 'simulation.paused'] as const)}; }

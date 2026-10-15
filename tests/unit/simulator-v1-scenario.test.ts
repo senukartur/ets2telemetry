@@ -63,6 +63,8 @@ describe('simulator v1 scenario schema', () => {
     expect(() => validateScenario(attr({name: 'revenue', sdkType: 's64', value: '-0'}))).toThrow(/s64/);
     expect(() => validateScenario(attr({name: 'revenue', sdkType: 's64', value: 12}))).toThrow(/s64/);
     expect(() => validateScenario(variant(s => { steps(s)[0].list = 'null'; }))).toThrow(/null attribute list/);
+    expect(() => validateScenario(variant(s => { steps(s)[10].list = 'unterminated'; }))).toThrow(/unterminated attribute list/);
+    expect(validateScenario(variant(s => { steps(s)[0].list = 'unterminated'; })).steps[0]).toMatchObject({list: 'unterminated'});
     expect(() => validateScenario(variant(s => { transport(s)[0].client = {durable: false, commit: 'each'}; }))).toThrow(/live-only/);
     expect(() => validateScenario(variant(s => { (transport(s)[0].client as Json).commit = 'failAt:0'; }))).toThrow(/commit/);
     expect(() => validateScenario(variant(s => { source(s).gameplayEvents = 'not-supported'; }))).toThrow(/not registered/);
