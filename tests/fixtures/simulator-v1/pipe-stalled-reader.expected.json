@@ -1,0 +1,33 @@
+{
+  "scenario": "pipe-stalled-reader",
+  "authoredFrom": [
+    "docs/protocol/v1.md §9: a write that does not complete within the 1,000 ms write deadline ends the connection; the durable consumer's disconnection starts the 300,000 ms retention window",
+    "docs/native-transport-v1.md I1-I2 and OD-5 S3: 100 worst-case job events fit the 256-entry and 1 MiB bounds, so all are retained; each is written to the connection once (I6), whether or not the reader takes it",
+    "OD-5 S2 and I5: at the end of the window every retained event becomes retentionExpired coverage merged in place into one gap record from A + 1, timed at its observations and retained since the expiry",
+    "docs/protocol/v1.md §8 and OD-5 S9: an item written to an earlier connection is redelivered whole with redelivered true",
+    "docs/protocol/v1.md §10: an ACK covers gap markers as well as events"
+  ],
+  "connections": [
+    {
+      "durableRequested": true, "closedBy": "writeDeadline", "clientInstance": 1, "faults": [{"atMs": 20, "direction": "client", "fault": "stallRead"}],
+      "checkpoint": {"atMs": 0, "seq": "2", "ackedThroughEventSeq": "0", "nextEventSeq": "1"},
+      "coverage": [
+        {"atMs": 10, "seq": "3", "event": "1", "type": "simulation.started", "redelivered": false},
+        {"eventRange": ["2", "101"], "atMs": 30, "type": "job.configured", "redelivered": false}
+      ],
+      "acks": ["1"], "end": null
+    },
+    {
+      "durableRequested": true, "closedBy": "disconnect", "clientInstance": 1, "faults": [],
+      "checkpoint": {"atMs": 400000, "seq": "105", "ackedThroughEventSeq": "1", "nextEventSeq": "102", "retainedEvents": 1, "oldestRetainedMonotonicNs": "1300030000000",
+        "eventLoss": {"retentionExpired": "100"}, "continuity": {"coalescedSnapshots": "0", "offlineTransitions": "0"}},
+      "coverage": [
+        {"atMs": 400000, "seq": "106", "gap": ["2", "101"], "causes": {"retentionExpired": "100"}, "redelivered": true, "firstLost": "1000030000000", "lastLost": "1000030000000"}
+      ],
+      "acks": ["101"], "end": null
+    }
+  ],
+  "ledger": {"committedThroughEventSeq": "101", "committedEvents": 1, "committedGapMarkers": "100", "duplicates": 0},
+  "store": {"ackedThroughEventSeq": "101", "nextEventSeq": "102", "retainedEntries": 0, "eventLoss": {"retentionExpired": "100"}},
+  "retired": null
+}

@@ -1,0 +1,53 @@
+{
+  "scenario": "client-control-faults",
+  "authoredFrom": [
+    "docs/protocol/v1.md §10 and AckValidator: an ACK from a live-only client, for another plugin session, beyond the highest eventSeq sent (T > S) or regressing (T < A') closes the connection; an equal T is a no-op",
+    "docs/protocol/v1.md §11 and OD-5 S6: a probe whose probeId does not exceed the previous one, or that arrives while the previous reply is unsent, closes the connection",
+    "docs/protocol/v1.md §4 and OD-5 S6: after the checkpoint the client sends only ack and clock.probe; §3: an oversized or malformed client frame fails closed",
+    "docs/protocol/v1.md §2-§4 and OD-5 S6: a client that breaks the rules is closed without an error frame; docs/native-transport-v1.md caller sequence step 2: closing the connection closes the gate and starts the durable retention window; that a rejection or EOF ends only that connection follows ET-004b PR C (PR #54, merged as ceba919): native/telemetry-plugin/src/v1-server.cpp at ceba919",
+    "docs/protocol/v1.md §7 and §10: ackedThroughEventSeq persists across connections of the plugin session"
+  ],
+  "connections": [
+    {
+      "durableRequested": true, "closedBy": "serverRejected", "clientInstance": 1,
+      "faults": [{"atMs": 100, "direction": "client", "fault": "ackDuplicate"}, {"atMs": 600, "direction": "client", "fault": "probeRepeat"}],
+      "checkpoint": {"atMs": 0, "seq": "2", "ackedThroughEventSeq": "0", "nextEventSeq": "1", "durable": true, "eventLoss": {}},
+      "coverage": [
+        {"atMs": 10, "seq": "3", "event": "1", "type": "simulation.started", "redelivered": false},
+        {"atMs": 20, "seq": "4", "event": "2", "type": "simulation.paused", "redelivered": false},
+        {"atMs": 110, "seq": "5", "event": "3", "type": "simulation.started", "redelivered": false}
+      ],
+      "acks": ["1", "2", "3"], "clockReplies": 1, "end": null
+    },
+    {"durableRequested": true, "closedBy": "serverRejected", "faults": [{"atMs": 710, "direction": "client", "fault": "ackRegressing"}],
+      "checkpoint": {"atMs": 700, "seq": "8", "ackedThroughEventSeq": "3", "nextEventSeq": "4", "durable": true}, "coverage": [], "acks": [], "end": null},
+    {"durableRequested": true, "closedBy": "serverRejected", "faults": [{"atMs": 810, "direction": "client", "fault": "ackBeyondSent"}],
+      "checkpoint": {"atMs": 800, "seq": "10", "ackedThroughEventSeq": "3", "nextEventSeq": "4", "durable": true}, "coverage": [], "acks": [], "end": null},
+    {"durableRequested": true, "closedBy": "serverRejected", "faults": [{"atMs": 910, "direction": "client", "fault": "ackForeignSession"}],
+      "checkpoint": {"atMs": 900, "seq": "12", "ackedThroughEventSeq": "3", "nextEventSeq": "4", "durable": true}, "coverage": [], "acks": [], "end": null},
+    {"durableRequested": true, "closedBy": "serverRejected", "faults": [{"atMs": 1010, "direction": "client", "fault": "secondHello"}],
+      "checkpoint": {"atMs": 1000, "seq": "14", "ackedThroughEventSeq": "3", "nextEventSeq": "4", "durable": true}, "coverage": [], "acks": [], "end": null},
+    {"durableRequested": true, "closedBy": "serverRejected", "faults": [{"atMs": 1110, "direction": "client", "fault": "unknownKind"}],
+      "checkpoint": {"atMs": 1100, "seq": "16", "ackedThroughEventSeq": "3", "nextEventSeq": "4", "durable": true}, "coverage": [], "acks": [], "end": null},
+    {"durableRequested": true, "closedBy": "serverRejected", "faults": [{"atMs": 1210, "direction": "client", "fault": "oversizedFrame"}],
+      "checkpoint": {"atMs": 1200, "seq": "18", "ackedThroughEventSeq": "3", "nextEventSeq": "4", "durable": true}, "coverage": [], "acks": [], "end": null},
+    {"durableRequested": true, "closedBy": "serverRejected", "faults": [{"atMs": 1310, "direction": "client", "fault": "malformedFrame"}],
+      "checkpoint": {"atMs": 1300, "seq": "20", "ackedThroughEventSeq": "3", "nextEventSeq": "4", "durable": true}, "coverage": [], "acks": [], "end": null},
+    {"durableRequested": true, "closedBy": "serverRejected", "faults": [{"atMs": 1420, "direction": "client", "fault": "probeWhileReplyUnsent"}],
+      "checkpoint": {"atMs": 1400, "seq": "22", "ackedThroughEventSeq": "3", "nextEventSeq": "4", "durable": true}, "coverage": [], "acks": [], "clockReplies": 1, "end": null},
+    {"durableRequested": true, "closedBy": "clientEof", "faults": [{"atMs": 1510, "direction": "client", "fault": "partialFrameEof"}],
+      "checkpoint": {"atMs": 1500, "seq": "25", "ackedThroughEventSeq": "3", "nextEventSeq": "4", "durable": true}, "coverage": [], "acks": [], "end": null},
+    {"durableRequested": false, "closedBy": "serverRejected", "faults": [{"atMs": 1610, "direction": "client", "fault": "ackLiveOnly"}],
+      "welcome": {"durableEvents": false},
+      "checkpoint": {"atMs": 1600, "seq": "27", "ackedThroughEventSeq": "3", "nextEventSeq": "4", "durable": false}, "coverage": [], "acks": [], "end": null},
+    {
+      "durableRequested": true, "closedBy": "disconnect", "clientInstance": 1, "faults": [],
+      "checkpoint": {"atMs": 1700, "seq": "29", "ackedThroughEventSeq": "3", "nextEventSeq": "4", "durable": true, "eventLoss": {}, "continuity": {"coalescedSnapshots": "0", "offlineTransitions": "0"}},
+      "coverage": [{"atMs": 1710, "seq": "30", "event": "4", "type": "simulation.paused", "redelivered": false}],
+      "acks": ["4"], "end": null
+    }
+  ],
+  "ledger": {"committedThroughEventSeq": "4", "committedEvents": 4, "committedGapMarkers": "0", "duplicates": 0},
+  "store": {"ackedThroughEventSeq": "4", "nextEventSeq": "5", "retainedEntries": 0, "eventLoss": {}},
+  "retired": null
+}

@@ -1,0 +1,26 @@
+{
+  "format": "ets2telemetry-simulator-v1", "schemaVersion": 1, "id": "client-hello-faults",
+  "purpose": "Twelve connection attempts that never complete a valid hello are closed without a byte from the endpoint and leave the producer untouched: the next valid connection still starts at message seq 1 and receives the offline gap of an event observed before the attempts.",
+  "reg": ["REG-010", "REG-011"], "origin": "synthetic", "game": "ets2", "seed": "et005b-client-hello-faults", "provenance": null,
+  "source": {"versions": {"telemetryApi": {"major": 1, "minor": 1}, "gameTelemetry": {"major": 1, "minor": 19}, "sdkArchive": "scs-sdk-1.15"}, "gameplayEvents": "registered", "currency": "unknown", "gameMode": "unknown"},
+  "steps": [
+    {"atMs": 10, "action": "configuration", "id": "job", "attributes": [{"name": "cargo.id", "sdkType": "string", "value": "synthetic_cargo"}]},
+    {"atMs": 20, "action": "frame"}
+  ],
+  "transport": [
+    {"atMs": 100, "action": "clientFault", "fault": "helloOversized"},
+    {"atMs": 110, "action": "clientFault", "fault": "helloMalformed"},
+    {"atMs": 120, "action": "clientFault", "fault": "helloV0"},
+    {"atMs": 130, "action": "clientFault", "fault": "helloCap0"},
+    {"atMs": 140, "action": "clientFault", "fault": "helloOtherMajor"},
+    {"atMs": 150, "action": "clientFault", "fault": "helloOtherMinor"},
+    {"atMs": 160, "action": "clientFault", "fault": "helloUnknownKind"},
+    {"atMs": 170, "action": "clientFault", "fault": "ackBeforeHello"},
+    {"atMs": 180, "action": "clientFault", "fault": "helloExtraBytes"},
+    {"atMs": 190, "action": "clientFault", "fault": "ackBeforeCheckpoint"},
+    {"atMs": 200, "action": "clientFault", "fault": "helloPartialEof"},
+    {"atMs": 210, "action": "clientFault", "fault": "helloTimeout"},
+    {"atMs": 300, "action": "connect", "client": {"durable": true}},
+    {"atMs": 400, "action": "disconnect"}
+  ]
+}

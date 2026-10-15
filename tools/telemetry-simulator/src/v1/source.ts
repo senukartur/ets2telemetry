@@ -135,6 +135,8 @@ export class EventChannel {
   private nextSeq: bigint; private run?: LossRun; private slots: ChannelSlot[] = [];
   constructor(start: bigint) { this.nextSeq = start; }
   get exhausted(): boolean { return this.nextSeq > MAX_SEQ; }
+  /** The eventSeq the next observed record receives. */
+  get nextEventSeq(): bigint { return this.nextSeq; }
   /** Assigns the next eventSeq (D5), then copies the record or extends the open loss run. */
   observe(o: Observed): void {
     if (this.exhausted) return;

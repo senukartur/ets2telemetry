@@ -1,0 +1,55 @@
+{
+  "scenario": "wire-faults",
+  "authoredFrom": [
+    "docs/protocol/v1.md §5 and V1Consumer: within a connection the source identity, capture clock, increasing seq and non-decreasing capture are enforced; a seq skip is legal (coalescing), not lost data",
+    "docs/protocol/v1.md §9 and V1Consumer: event and gap coverage is contiguous; a duplicate or skipped eventSeq within one connection is a violation, never a silent loss",
+    "docs/protocol/v1.md §3: malformed JSON, a prefix above 65,536 bytes, a partial frame at EOF and another protocol version fail closed; after `end` nothing may follow",
+    "docs/protocol/v1.md §10: receipt is never an ACK, so a rejected stream commits and acknowledges nothing; ackedThroughEventSeq persists across connections",
+    "Contract error texts: packages/contracts/src/protocol-v1.ts (FrameDecoder, decodePayload, version) and protocol-v1-delivery.ts (V1Consumer)"
+  ],
+  "connections": [
+    {
+      "durableRequested": true, "closedBy": "clientRejected", "rejection": "eventSeq coverage violation",
+      "faults": [{"atMs": 30, "direction": "server", "fault": "seqSkip"}, {"atMs": 100, "direction": "server", "fault": "duplicateEventSeq"}],
+      "welcome": {"atMs": 0, "game": "ats", "origin": "synthetic", "durableEvents": true},
+      "checkpoint": {"atMs": 0, "seq": "2", "ackedThroughEventSeq": "0", "nextEventSeq": "1"},
+      "coverage": [
+        {"atMs": 10, "seq": "3", "event": "1", "type": "simulation.started", "redelivered": false},
+        {"atMs": 20, "seq": "4", "event": "2", "type": "simulation.paused", "redelivered": false},
+        {"atMs": 40, "seq": "6", "event": "3", "type": "simulation.started", "redelivered": false}
+      ],
+      "acks": ["1", "2", "3"], "end": null
+    },
+    {
+      "closedBy": "clientRejected", "rejection": "eventSeq coverage violation", "faults": [{"atMs": 210, "direction": "server", "fault": "skippedEventSeq"}],
+      "checkpoint": {"atMs": 200, "seq": "8", "ackedThroughEventSeq": "3", "nextEventSeq": "4"},
+      "coverage": [{"atMs": 205, "seq": "9", "event": "4", "type": "simulation.paused", "redelivered": false}],
+      "acks": ["4"], "end": null
+    },
+    {"closedBy": "clientRejected", "rejection": "Source identity, clock or order violation", "faults": [{"atMs": 310, "direction": "server", "fault": "seqRegression"}],
+      "checkpoint": {"atMs": 300, "seq": "11", "ackedThroughEventSeq": "4", "nextEventSeq": "5"}, "coverage": [], "acks": [], "end": null},
+    {"closedBy": "clientRejected", "rejection": "Source identity, clock or order violation", "faults": [{"atMs": 410, "direction": "server", "fault": "captureRegression"}],
+      "checkpoint": {"atMs": 400, "seq": "13", "ackedThroughEventSeq": "4", "nextEventSeq": "5"}, "coverage": [], "acks": [], "end": null},
+    {"closedBy": "clientRejected", "rejection": "Source identity, clock or order violation", "faults": [{"atMs": 510, "direction": "server", "fault": "foreignSource"}],
+      "checkpoint": {"atMs": 500, "seq": "15", "ackedThroughEventSeq": "4", "nextEventSeq": "5"}, "coverage": [], "acks": [], "end": null},
+    {"closedBy": "clientRejected", "rejection": "Malformed protocol v1 JSON", "faults": [{"atMs": 610, "direction": "server", "fault": "malformedJson"}],
+      "checkpoint": {"atMs": 600, "seq": "17", "ackedThroughEventSeq": "4", "nextEventSeq": "5"}, "coverage": [], "acks": [], "end": null},
+    {"closedBy": "clientRejected", "rejection": "Protocol v1 payload size rejected", "faults": [{"atMs": 710, "direction": "server", "fault": "oversizedPrefix"}],
+      "checkpoint": {"atMs": 700, "seq": "19", "ackedThroughEventSeq": "4", "nextEventSeq": "5"}, "coverage": [], "acks": [], "end": null},
+    {"closedBy": "clientRejected", "rejection": "Truncated or failed stream", "faults": [{"atMs": 810, "direction": "server", "fault": "partialEof"}],
+      "checkpoint": {"atMs": 800, "seq": "21", "ackedThroughEventSeq": "4", "nextEventSeq": "5"}, "coverage": [], "acks": [], "end": null},
+    {"closedBy": "clientRejected", "rejection": "Unsupported protocol version", "faults": [{"atMs": 910, "direction": "server", "fault": "v0Frame"}],
+      "checkpoint": {"atMs": 900, "seq": "23", "ackedThroughEventSeq": "4", "nextEventSeq": "5"}, "coverage": [], "acks": [], "end": null},
+    {"closedBy": "clientRejected", "rejection": "Consumer is closed", "faults": [{"atMs": 1010, "direction": "server", "fault": "frameAfterEnd"}],
+      "checkpoint": {"atMs": 1000, "seq": "25", "ackedThroughEventSeq": "4", "nextEventSeq": "5"}, "coverage": [], "acks": [], "end": null},
+    {
+      "closedBy": "disconnect", "rejection": null, "faults": [],
+      "checkpoint": {"atMs": 1100, "seq": "27", "ackedThroughEventSeq": "4", "nextEventSeq": "5"},
+      "coverage": [{"atMs": 1110, "seq": "28", "event": "5", "type": "simulation.started", "redelivered": false}],
+      "acks": ["5"], "end": null
+    }
+  ],
+  "ledger": {"committedThroughEventSeq": "5", "committedEvents": 5, "committedGapMarkers": "0", "duplicates": 0},
+  "store": {"ackedThroughEventSeq": "5", "nextEventSeq": "6", "retainedEntries": 0, "eventLoss": {}},
+  "retired": null
+}
