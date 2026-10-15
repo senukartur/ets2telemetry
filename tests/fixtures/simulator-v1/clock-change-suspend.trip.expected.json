@@ -1,0 +1,14 @@
+{
+  "scenario": "clock-change-suspend",
+  "basis": ["synthetic-inference"],
+  "authoredFrom": [
+    "clock-change-suspend.expected.json: connection 1 commits events 1 and 2 without ACKs; connection 2 receives them again as redelivered duplicates; connection 3 receives the retentionExpired gap 1-2, already inside committed coverage",
+    "docs/storage.md caller rule and docs/trips.md T5: a redelivered event at or below the processed point and a gap whose range is covered add nothing (duplicate, covered)",
+    "docs/trips.md T15: the UTC jump moves labels only; with no job there is no trip to clamp or annotate"
+  ],
+  "trips": [],
+  "attributions": [],
+  "intervals": [],
+  "coverage": {"committedThroughEventSeq": "2", "committed": 2, "duplicate": 2, "covered": 1},
+  "view": {"phase": "idle", "untrackedJob": false, "current": null, "lastClosed": null}
+}

@@ -200,7 +200,7 @@ describe('ET-014 reducer effects through real commits', () => {
     expect(rows(ws.database)).toMatchObject({
       attributions: [{session: ATS_A, eventSeq: 5, trip: atsTrip, attribution: 'trip'}, {session: ETS2_A, eventSeq: 8, trip: t, attribution: 'trip'}],
       // From the last ETS2 event before the disconnection (eventSeq 7, 1 ms before its capture) to the reconnection's welcome capture.
-      intervals: [{kind: 'not-connected', trip: t, startNs: 1_006_999_000_000, endNs: 1_007_000_000_000, startUtc: at(7), clockSession: ETS2_A, detail: {cause: 'disconnected'}}]
+      intervals: [{kind: 'not-connected', trip: t, startNs: 1_006_999_000_000, endNs: 1_007_000_000_000, startUtc: at(7), clockSession: ETS2_A, detail: {cause: 'disconnected', odometerDeltaM: null}}]
     });
   });
   it('23. a reload check resolved by a running fine opens from the stored re-send (jobConfiguration {eventSeq}) (T8) [synthetic-inference]', async () => {

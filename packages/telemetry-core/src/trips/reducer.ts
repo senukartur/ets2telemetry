@@ -1,9 +1,14 @@
 // The pure trip lifecycle and completeness reducer (ET-014 PR-1). It turns committed protocol v1 events and gaps,
 // session changes and checkpoint hydration into storage TripEffect lists. It is deterministic and never mutates its
 // inputs; the caller adopts the returned state only after storage reports the commit (T3). Rules, evidence and the
-// caller contract are in docs/trips.md; readings accounting (T16, T17) is PR-2.
+// caller contract are in docs/trips.md; readings accounting (T16, T17, PR-2) builds on accounting.ts.
 import type {Available, EventRecord, Money, Uint64} from '../../../contracts/src/protocol-v1';
 import type {CompletenessInterval} from '../../../storage/src/api';
+import type {StepSample} from '../derived';
+import {
+  accumulate, advanceGameTime, classifyStep, distanceUpdate, isFastAdvance, isReadingHole, jumpLabel, newAccounting, odometerDeltaM, readingPoint, startRunClock, switchRunClock,
+  type GameTimeJump, type ReadingPoint, type ReadingStep
+} from './accounting';
 import {canonicalJson, jobKey, tripUuidFor} from './identity';
 import {
   MAX_ANNOTATIONS_PER_COMMIT, MAX_EFFECTS, type ClosedTrip, type ContinuationCandidate, type EventMessage, type GameModeEvidence, type GameSlot, type GapMessage,
@@ -32,8 +37,7 @@ export function stepTrip(state: TripState, input: TripInput): TripStepResult {
     case 'checkpoint': return stepCheckpoint(state, input.message);
     case 'event': return stepEvent(state, input.message, input.coveredThrough, input.receivedUtcMs);
     case 'gap': return stepGap(state, input.message, input.coveredThrough, input.receivedUtcMs);
-    // Readings accounting (observed distance, fuel, reading holes) arrives with PR-2.
-    case 'reading': return {ok: true, state, effects: []};
+    case 'reading': return stepReading(state, input.sample);
     case 'disconnected': return stepDisconnected(state);
   }
 }
@@ -60,16 +64,17 @@ function freshSession(welcome: WelcomeMessage, coveredThrough: Uint64): SessionS
     pluginSessionId: welcome.source.pluginSessionId, game: welcome.source.game, processedThrough: coveredThrough,
     // A session first seen at coverage 0 starts with the load burst of O1; joining later, the load state is unknown.
     load: coveredThrough === '0' ? 'loading' : 'unknown', gameMode: modeOf(welcome.data.gameMode), clockId: welcome.capture.clockId,
-    lastUtcMs: null, lastMonotonicNs: null, truck: null, trailers: new Array<null>(TRAILER_SLOTS).fill(null), untrackedJob: null, attachedFromEventSeq: null, disconnected: null
+    lastUtcMs: null, lastMonotonicNs: null, truck: null, trailers: new Array<null>(TRAILER_SLOTS).fill(null), untrackedJob: null, attachedFromEventSeq: null, disconnected: null,
+    lastReading: null, connectionSinceNs: null, lastTransfer: null, runClock: null, gameTimeWindow: null, jumpEpisode: null, bridge: null
   };
 }
 function seedTrip(seed: TripSeed): OpenTrip {
   return {
-    tripUuid: seed.tripUuid, pluginSessionId: seed.pluginSessionId, jobKey: seed.jobKey, jobEventSeq: null, phase: 'active', reloadEventSeq: null, loadCheck: null,
+    tripUuid: seed.tripUuid, pluginSessionId: seed.pluginSessionId, jobKey: seed.jobKey, jobEventSeq: null, phase: seed.awaitingOutcome === true ? 'awaiting-outcome' : 'active', reloadEventSeq: null, loadCheck: null,
     completeness: seed.recordingCompleteness, gameMode: {mode: 'unknown', method: 'none', confidence: 'none'}, gameModeAmbiguous: false,
     startedUtcMs: seed.startedUtcMs, startedMonotonicNs: null, clockId: null, market: null, cargoLoaded: null, truckKey: null,
     trailerKeys: new Array<null>(TRAILER_SLOTS).fill(null), plannedDistance: null, expectedIncome: null,
-    fines: emptyMoney(), finesBeforeLoaded: emptyMoney(), tolls: emptyMoney(), transfers: emptyMoney()
+    fines: emptyMoney(), finesBeforeLoaded: emptyMoney(), tolls: emptyMoney(), transfers: emptyMoney(), accounting: newAccounting(seed.observedDistanceM ?? null)
   };
 }
 function closedFrom(trip: OpenTrip, close: Pick<ClosedTrip, 'outcome' | 'closeReason' | 'endedUtcMs' | 'endedMonotonicNs' | 'completeness'>,
@@ -81,21 +86,30 @@ function closedFrom(trip: OpenTrip, close: Pick<ClosedTrip, 'outcome' | 'closeRe
 function annotation(tripUuid: string, detail: Record<string, unknown>): TripEffect {
   return {kind: 'completeness.add', interval: {tripUuid, kind: 'discontinuity', detail: {annotation: true, ...detail}}};
 }
-/** Queues annotations; consecutive ones of the same trip and cause merge into one with a count (T18). */
+/**
+ * Queues annotations; consecutive ones of the same trip, cause and label merge into one with a count (T18). The first
+ * keeps its values; the merged one adds the last position (`lastAtEventSeq`, or `lastAtMonotonicNs` for a reading).
+ * A refuel or a game-time jump never merges: each is a separate episode with its own litres or range, which may still
+ * grow in place, so merging would lend one episode's growth to another. This only lengthens the waiting queue; the
+ * per-carrier cap of MAX_ANNOTATIONS_PER_COMMIT still holds, and episodes are bounded by real refuels and jumps.
+ */
 function queueAnnotations(slot: GameSlot, annotations: TripEffect[]) {
   for (const effect of annotations) {
     const last = slot.pendingAnnotations.at(-1);
     if (last?.kind === 'completeness.add' && effect.kind === 'completeness.add' && last.interval.tripUuid === effect.interval.tripUuid &&
-      last.interval.detail?.cause === effect.interval.detail?.cause) {
-      const detail = last.interval.detail!;
-      last.interval.detail = {...detail, count: (typeof detail.count === 'number' ? detail.count : 1) + 1, lastAtEventSeq: effect.interval.detail?.atEventSeq};
+      last.interval.detail?.cause === effect.interval.detail?.cause && last.interval.detail?.label === effect.interval.detail?.label &&
+      effect.interval.detail?.cause !== 'refuel' && effect.interval.detail?.cause !== 'game-time-jump') {
+      const detail = last.interval.detail!, next = effect.interval.detail!;
+      last.interval.detail = {...detail, count: (typeof detail.count === 'number' ? detail.count : 1) + 1,
+        ...(next.atMonotonicNs !== undefined ? {lastAtMonotonicNs: next.atMonotonicNs} : {lastAtEventSeq: next.atEventSeq})};
     } else slot.pendingAnnotations.push(effect);
   }
 }
 /**
  * The effects of one commit carrier (T18): queued lifecycle effects first, then the carrier's own effects, then at most
- * eight annotations, never more than MAX_EFFECTS in total. The carrier's own effects always fit (at most five by
- * construction) because they may reference `this-event`; queued effects never do, so they can wait.
+ * eight annotations, never more than MAX_EFFECTS in total. The carrier's own effects always fit (at most six by
+ * construction: a distance update and a close, then an open with three cause intervals) because they may reference
+ * `this-event`; queued effects never do, so they can wait.
  */
 function assemble(slot: GameSlot, own: TripEffect[], annotations: TripEffect[]): TripEffect[] {
   if (own.length > MAX_EFFECTS) throw new Error('Trip reducer invariant: too many effects for one event');
@@ -115,6 +129,9 @@ interface Carrier {
 /** Closes the open trip of the carrier's game. A non-outcome close is always partial; an outcome close is complete only after a clean window (T13). */
 function closeTrip(c: Carrier, outcome: ClosedTrip['outcome'], closeReason: ClosedTrip['closeReason'], extra: Partial<Pick<ClosedTrip, 'revenue' | 'penalty' | 'deliveredDistance'>> = {}) {
   const trip = c.slot.trip!;
+  // The observed distance is persisted before every close (T16).
+  const distance = distanceUpdate(trip.tripUuid, trip.accounting);
+  if (distance !== null) c.own.push(distance);
   let ended = c.label;
   // UTC is a label and can be set back; the schema requires ended >= started, so clamp and annotate (T15).
   if (ended < trip.startedUtcMs) {
@@ -176,7 +193,7 @@ function openTrip(c: Carrier, o: OpenOptions) {
     tripUuid: uuid, pluginSessionId: s.pluginSessionId, jobKey: o.key, jobEventSeq: o.jobEventSeq, phase: 'active', reloadEventSeq: null, loadCheck: o.loadCheck,
     completeness, gameMode: modeOf(s.gameMode), gameModeAmbiguous: false, startedUtcMs: c.label, startedMonotonicNs: c.monotonicNs, clockId: s.clockId,
     ...o.job, truckKey: s.truck?.key ?? null, trailerKeys: s.trailers.map(t => t?.key ?? null),
-    fines: emptyMoney(), finesBeforeLoaded: emptyMoney(), tolls: emptyMoney(), transfers: emptyMoney()
+    fines: emptyMoney(), finesBeforeLoaded: emptyMoney(), tolls: emptyMoney(), transfers: emptyMoney(), accounting: newAccounting()
   };
 }
 const jobFields = (record: Extract<EventRecord, {type: 'job.configured'}>): OpenOptions['job'] => ({
@@ -346,10 +363,19 @@ function stepEvent(state: TripState, message: EventMessage, coveredThrough: Uint
     case 'job.cleared':
       endUntracked(c);
       // T7: the trip waits for an outcome. A clear inside a reload check undoes the re-send and waits again.
-      if (c.slot.trip !== null) { c.slot.trip.phase = 'awaiting-outcome'; c.slot.trip.reloadEventSeq = null; }
+      if (c.slot.trip !== null) {
+        const trip = c.slot.trip;
+        trip.phase = 'awaiting-outcome'; trip.reloadEventSeq = null;
+        // T16: the trip stops being active, so the next step is not counted even if it becomes active again before it.
+        if (trip.accounting.lastReading === 'active') trip.accounting.lastReading = 'open';
+      }
       break;
     case 'job.delivered': case 'job.cancelled': onOutcome(c, record); break;
-    case 'player.fined': case 'player.tollgate.paid': case 'player.use.ferry': case 'player.use.train': onGameplay(c, record); break;
+    case 'player.use.ferry': case 'player.use.train':
+      // T17: a game-time or position jump next to a transfer, by source time, is labelled a crossing.
+      if (c.monotonicNs !== null) session.lastTransfer = {clockId: message.capture.clockId, monotonicNs: c.monotonicNs};
+      onGameplay(c, record); break;
+    case 'player.fined': case 'player.tollgate.paid': onGameplay(c, record); break;
     case 'truck.configured': onTruck(c, record); break;
     case 'truck.cleared': session.truck = null; break;
     case 'trailer.configured': onTrailer(c, record); break;
@@ -373,7 +399,16 @@ function stepEvent(state: TripState, message: EventMessage, coveredThrough: Uint
   }
   session.processedThrough = message.data.eventSeq; session.lastUtcMs = label; session.clockId = message.capture.clockId;
   if (c.monotonicNs !== null) session.lastMonotonicNs = c.monotonicNs;
+  // T17: each live event's simulation state splits the running time since the last reading. A replayed event happened
+  // before the connection's first reading.
+  if (session.runClock !== null && c.monotonicNs !== null && !replayed(c)) session.runClock = switchRunClock(session.runClock, message.capture.clockId, c.monotonicNs, occurred.simulation);
+  flushDistance(c);
   return {ok: true, state: draft, effects: assemble(c.slot, c.own, c.annotations)};
+}
+/** T16: every commit carrier persists the open trip's observed distance when it changed. */
+function flushDistance(c: Carrier) {
+  const trip = c.slot.trip, update = trip === null ? null : distanceUpdate(trip.tripUuid, trip.accounting);
+  if (update !== null) c.own.push(update);
 }
 
 /** Every loss cause is the consumer's absence (offline, no durable consumer, retention expiry): not connected; else event loss (T10). */
@@ -408,11 +443,15 @@ function stepGap(state: TripState, message: GapMessage, coveredThrough: Uint64, 
   // Events inside the gap are unknown: a hidden start, restart or regression leaves the load state unknown.
   session.load = 'unknown';
   session.processedThrough = d.lastEventSeq; session.lastUtcMs = c.label; session.clockId = message.capture.clockId;
+  flushDistance(c);
   return {ok: true, state: draft, effects: assemble(c.slot, c.own, c.annotations)};
 }
 
 /** Queues a restart close of a trip of an earlier session (T11), at its last observed label as a lower bound (T15). */
 function restartClose(slot: GameSlot, trip: OpenTrip, lastUtcMs: number | null) {
+  // The observed distance is persisted before every close (T16).
+  const distance = distanceUpdate(trip.tripUuid, trip.accounting);
+  if (distance !== null) slot.pending.push(distance);
   let ended = lastUtcMs ?? trip.startedUtcMs;
   if (ended < trip.startedUtcMs) {
     slot.pendingAnnotations.push(annotation(trip.tripUuid, {cause: 'utc-label-jump', labelUtcMs: ended, clampedToUtcMs: trip.startedUtcMs, atEventSeq: null}));
@@ -427,8 +466,7 @@ function withoutBounds(effect: Extract<TripEffect, {kind: 'completeness.add'}>):
 }
 /** Queues a partial downgrade and a not-connected interval for an open trip outside a commit carrier. */
 function queueNotConnected(slot: GameSlot, trip: OpenTrip, interval: Omit<CompletenessInterval, 'tripUuid' | 'kind'>) {
-  if (trip.completeness !== 'partial') { slot.pending.push({kind: 'trip.update', tripUuid: trip.tripUuid, set: {recordingCompleteness: 'partial'}}); trip.completeness = 'partial'; }
-  slot.pending.push({kind: 'completeness.add', interval: {tripUuid: trip.tripUuid, kind: 'not-connected', ...interval}});
+  queueDowngrade(slot, trip, {kind: 'not-connected', ...interval});
 }
 
 function stepSession(state: TripState, welcome: WelcomeMessage, coveredThrough: Uint64, seeds: TripSeed[]): TripStepResult {
@@ -447,8 +485,10 @@ function stepSession(state: TripState, welcome: WelcomeMessage, coveredThrough: 
       queueNotConnected(slot, slot.trip, {
         ...(gone.utcMs !== null ? {startUtcMs: gone.utcMs} : {}),
         ...(sameClock ? {startMonotonicNs: gone.monotonicNs!, ...(BigInt(end) >= BigInt(gone.monotonicNs!) ? {endMonotonicNs: end} : {}), sourceClockId: gone.clockId!} : {}),
-        detail: {cause: 'disconnected'}
+        detail: {cause: 'disconnected', odometerDeltaM: null}
       });
+      // Nothing is bridged across the hole (T16); the first reading of this connection records the odometer change.
+      session.bridge = {tripUuid: slot.trip.tripUuid, before: gone.reading};
     }
     return {ok: true, state: draft, effects: []};
   }
@@ -499,6 +539,143 @@ function stepDisconnected(state: TripState): TripStepResult {
   if (state.connection === null) return {ok: true, state, effects: []};
   const draft = structuredClone(state), session = draft.sessions[draft.connection!];
   draft.connection = null;
-  if (session !== undefined) session.disconnected = {utcMs: session.lastUtcMs, monotonicNs: session.lastMonotonicNs, clockId: session.clockId};
+  if (session !== undefined) {
+    session.disconnected = {utcMs: session.lastUtcMs, monotonicNs: session.lastMonotonicNs, clockId: session.clockId, reading: session.lastReading};
+    // The next connection starts its own readings: no step crosses a connection hole (T16).
+    session.lastReading = null; session.connectionSinceNs = null; session.runClock = null; session.gameTimeWindow = null; session.jumpEpisode = null; session.bridge = null;
+  }
   return {ok: true, state: draft, effects: []};
+}
+
+/** A game-time jump at a reading: a new episode, or an episode that grew by a fast advance (T17). */
+type GameJump = GameTimeJump & {grows: 'new' | 'extend'};
+/**
+ * One reading of the current connection (T16, T17). It changes only state: distance, fuel and refuels accumulate on
+ * the open trip, and annotations or a reading-hole downgrade wait for the game's next commit carrier.
+ */
+function stepReading(state: TripState, sample: StepSample & {utcMs?: number}): TripStepResult {
+  const id = sample.source.pluginSessionId;
+  if (state.connection !== id || !has(state.sessions, id) || state.sessions[id].game !== sample.source.game) return {ok: false, code: 'UNKNOWN_SESSION'};
+  const draft = structuredClone(state), session = draft.sessions[id], slot = draft.games[session.game], next = readingPoint(sample), prev = session.lastReading;
+  if (session.bridge !== null) { recordBridge(slot, session.bridge, next); session.bridge = null; }
+  session.connectionSinceNs ??= next.capture.monotonicNs;
+  // The game-time window and the running time belong to the session's readings, whatever trip is open.
+  const advanced = advanceGameTime(session.gameTimeWindow, prev, next), episode = session.jumpEpisode;
+  session.gameTimeWindow = advanced.window;
+  // A detected jump starts an episode; while it holds, the episode grows only by fast advances (isFastAdvance).
+  const jump: GameJump | null = advanced.jump === null ? null : episode === null ? {...advanced.jump, grows: 'new'}
+    : isFastAdvance(episode.lastNs, episode.lastMinutes, next) ? {...advanced.jump, grows: 'extend'} : null;
+  const hole = prev !== null && session.runClock !== null && isReadingHole(session.runClock, next);
+  let annotated: string | null = null;
+  const trip = slot.trip;
+  if (trip !== null && trip.pluginSessionId === id) {
+    const acc = trip.accounting;
+    // A step belongs to the trip only when its earlier reading was taken while the trip was open; it counts towards
+    // distance and fuel only when the trip was active at both readings.
+    if (prev !== null && acc.lastReading !== 'none') {
+      if (hole) queueHole(slot, trip, prev, next, session.connectionSinceNs);
+      if (acc.lastReading === 'active' && trip.phase === 'active') {
+        accountStep(slot, trip, session, prev, next, classifyStep(prev, next), jump);
+        if (jump !== null) annotated = trip.tripUuid;
+      }
+    }
+    // A refuel episode continues only over counted steps: after a step that is not counted (the first reading of a
+    // connection, an opening, a clear) the next refuel starts a new episode.
+    if (prev === null || acc.lastReading !== 'active' || trip.phase !== 'active') acc.refuelling = false;
+    acc.lastReading = trip.phase === 'active' ? 'active' : 'open';
+  }
+  session.jumpEpisode = advanced.jump === null ? null : jump === null ? episode
+    : {tripUuid: annotated ?? (jump.grows === 'extend' ? episode?.tripUuid ?? null : null), lastNs: next.capture.monotonicNs, lastMinutes: next.gameTime.minutes!};
+  session.lastReading = next; session.runClock = startRunClock(next);
+  return {ok: true, state: draft, effects: []};
+}
+/** Records the odometer change across a connection hole in its not-connected interval, while that interval still waits. */
+function recordBridge(slot: GameSlot, bridge: NonNullable<SessionState['bridge']>, next: ReadingPoint) {
+  for (let i = slot.pending.length - 1; i >= 0; i--) {
+    const effect = slot.pending[i];
+    if (effect.kind === 'completeness.add' && effect.interval.tripUuid === bridge.tripUuid && effect.interval.detail?.cause === 'disconnected') {
+      effect.interval.detail = {...effect.interval.detail, odometerDeltaM: odometerDeltaM(bridge.before, next)};
+      return;
+    }
+  }
+}
+function readingNote(tripUuid: string, next: ReadingPoint, detail: Record<string, unknown>): TripEffect {
+  return annotation(tripUuid, {...detail, atMonotonicNs: next.capture.monotonicNs});
+}
+/**
+ * This trip's latest waiting annotation of `cause`, wherever it waits: the episode still growing in place. Annotations
+ * leave in order, so an annotation of an earlier episode cannot still wait once a later one was sent.
+ */
+function waitingNote(slot: GameSlot, tripUuid: string, cause: string): Extract<TripEffect, {kind: 'completeness.add'}> | undefined {
+  for (let i = slot.pendingAnnotations.length - 1; i >= 0; i--) {
+    const effect = slot.pendingAnnotations[i];
+    if (effect.kind === 'completeness.add' && effect.interval.tripUuid === tripUuid && effect.interval.detail?.cause === cause) return effect;
+  }
+  return undefined;
+}
+/** Accumulates one counted step on the active trip and annotates its discontinuities (T13, T16, T17). */
+function accountStep(slot: GameSlot, trip: OpenTrip, session: SessionState, prev: ReadingPoint, next: ReadingPoint, step: ReadingStep, jump: GameJump | null) {
+  const {refuel} = accumulate(trip.accounting, step), notes: TripEffect[] = [];
+  const odometer = step.odometer;
+  if (odometer.kind === 'discontinuity' && (odometer.cause === 'odometer-regressed' || odometer.cause === 'odometer-jump') && prev.odometer.state === 'value' && next.odometer.state === 'value') {
+    notes.push(readingNote(trip.tripUuid, next, {cause: odometer.cause, deltaM: next.odometer.value.meters - prev.odometer.value.meters}));
+  }
+  if (jump !== null) {
+    // One game-time jump is one annotation while it keeps growing: its end and label follow the jump. Once the
+    // annotation has been sent, a jump that still continues gets a new one marked `continues`, starting where the sent
+    // one ended, so the ranges never overlap.
+    const episode = session.jumpEpisode, continuing = jump.grows === 'extend' && episode?.tripUuid === trip.tripUuid;
+    const from = continuing ? {ns: episode.lastNs, minutes: episode.lastMinutes} : {ns: jump.fromNs, minutes: jump.fromMinutes};
+    const label = jumpLabel(session.lastTransfer, from.ns, next, 'possible-sleep');
+    const waiting = continuing ? waitingNote(slot, trip.tripUuid, 'game-time-jump') : undefined;
+    if (waiting !== undefined) {
+      const detail = waiting.interval.detail!;
+      waiting.interval.detail = {...detail, toMinutes: jump.toMinutes, lastAtMonotonicNs: next.capture.monotonicNs, ...(label === 'crossing' ? {label} : {})};
+    } else notes.push(readingNote(trip.tripUuid, next, {cause: 'game-time-jump', label, fromMinutes: from.minutes, toMinutes: jump.toMinutes, ...(continuing ? {continues: true} : {})}));
+  }
+  if (step.positionJump !== null) {
+    notes.push(readingNote(trip.tripUuid, next, {cause: 'position-jump', label: jumpLabel(session.lastTransfer, prev.capture.monotonicNs, next, 'possible-teleport'), meters: step.positionJump.meters}));
+  }
+  if (refuel !== null) {
+    // One refuel episode is one annotation: its litres grow while the annotation still waits to be sent; an episode
+    // that continues after it was sent gets a new one marked `continues`.
+    const waiting = refuel.episode ? undefined : waitingNote(slot, trip.tripUuid, 'refuel');
+    if (waiting !== undefined) {
+      const detail = waiting.interval.detail!;
+      waiting.interval.detail = {...detail, addedLiters: (detail.addedLiters as number) + refuel.addedLiters, lastAtMonotonicNs: next.capture.monotonicNs};
+    } else notes.push(readingNote(trip.tripUuid, next, {cause: 'refuel', addedLiters: refuel.addedLiters, ...(refuel.episode ? {} : {continues: true})}));
+  }
+  queueAnnotations(slot, notes);
+}
+/** At most this many reading-hole intervals of one trip wait for a carrier; a further hole extends the last one. */
+const MAX_WAITING_HOLES = 4;
+/**
+ * Queues a reading hole of the open trip (T17): it makes the trip partial with a `sample-loss` interval between the two
+ * readings. A hole that starts where the last waiting one ended extends it; beyond MAX_WAITING_HOLES waiting holes, a
+ * further one extends the last one too and marks that the interval now includes readings (`includesReadings`). Only
+ * holes of the current connection (from `sinceNs` on) count, so no interval is ever extended across a disconnection.
+ */
+function queueHole(slot: GameSlot, trip: OpenTrip, prev: ReadingPoint, next: ReadingPoint, sinceNs: string | null) {
+  let waiting = 0, last: Extract<TripEffect, {kind: 'completeness.add'}> | undefined;
+  for (const effect of slot.pending) {
+    if (effect.kind === 'completeness.add' && effect.interval.tripUuid === trip.tripUuid && effect.interval.detail?.cause === 'reading-hole' &&
+      effect.interval.sourceClockId === next.capture.clockId && sinceNs !== null && effect.interval.startMonotonicNs !== undefined && BigInt(effect.interval.startMonotonicNs) >= BigInt(sinceNs)) { waiting += 1; last = effect; }
+  }
+  const contiguous = last?.interval.endMonotonicNs === prev.capture.monotonicNs;
+  if (last !== undefined && last.interval.sourceClockId === next.capture.clockId && (contiguous || waiting >= MAX_WAITING_HOLES)) {
+    const {startUtcMs, endUtcMs: _end, detail, ...rest} = last.interval;
+    void _end;
+    const utc = startUtcMs !== undefined && next.utcMs !== null && next.utcMs >= startUtcMs ? {startUtcMs, endUtcMs: next.utcMs} : {};
+    last.interval = {...rest, ...utc, endMonotonicNs: next.capture.monotonicNs,
+      detail: {...detail, holes: (typeof detail?.holes === 'number' ? detail.holes : 1) + 1, ...(contiguous ? {} : {includesReadings: true})}};
+    return;
+  }
+  const utc = prev.utcMs !== null && next.utcMs !== null && next.utcMs >= prev.utcMs ? {startUtcMs: prev.utcMs, endUtcMs: next.utcMs} : {};
+  queueDowngrade(slot, trip, {kind: 'sample-loss', ...utc, startMonotonicNs: prev.capture.monotonicNs, endMonotonicNs: next.capture.monotonicNs,
+    sourceClockId: next.capture.clockId, detail: {cause: 'reading-hole'}});
+}
+/** Queues a partial downgrade and a missing or discontinuous interval for an open trip outside a commit carrier. */
+function queueDowngrade(slot: GameSlot, trip: OpenTrip, interval: Omit<CompletenessInterval, 'tripUuid'>) {
+  if (trip.completeness !== 'partial') { slot.pending.push({kind: 'trip.update', tripUuid: trip.tripUuid, set: {recordingCompleteness: 'partial'}}); trip.completeness = 'partial'; }
+  slot.pending.push({kind: 'completeness.add', interval: {tripUuid: trip.tripUuid, ...interval}});
 }

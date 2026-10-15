@@ -1,0 +1,21 @@
+{
+  "scenario": "crash-after-commit",
+  "basis": ["synthetic-inference", "O1 (opened-at-load inference)"],
+  "authoredFrom": [
+    "crash-after-commit.expected.json: connection 1 commits job.configured (1) and the start (2), then crashes before the start's ACK; connection 2 receives the start again as a duplicate",
+    "docs/trips.md T3 and T5: the committed start is adopted; its redelivery is at the processed point, so it adds no effects",
+    "docs/trips.md cold start: the stored open trip of the same session resumes as active and partial; its consumer-restart interval waits in the queue because no new item arrives to carry it",
+    "docs/trips.md T12: the job opened partial with opened-at-load"
+  ],
+  "trips": [
+    {"trip": "trip@1", "jobConfigurationEventSeq": "1", "truckConfigurationEventSeq": null, "trailerConfigurationEventSeqs": [], "openedEventSeq": "1",
+      "gameMode": {"mode": "unknown", "method": "none", "confidence": "none"}, "gameModeAmbiguous": false, "outcome": "open", "outcomeEventSeq": null, "closeReason": null,
+      "recordingCompleteness": "partial", "startedUtcMs": 1800000000010, "endedUtcMs": null, "observedDistanceM": {"available": false, "reason": "not-observed"}}
+  ],
+  "attributions": [],
+  "intervals": [{"trip": "trip@1", "kind": "discontinuity", "detail": {"cause": "opened-at-load", "atEventSeq": "1"}}],
+  "coverage": {"committedThroughEventSeq": "2", "committed": 2, "duplicate": 1, "covered": 0},
+  "view": {"phase": "active", "untrackedJob": false, "lastClosed": null,
+    "current": {"trip": "trip@1", "recordingCompleteness": "partial", "observedDistanceM": {"state": "missing", "reason": "not-observed"},
+      "fuelUsedL": {"state": "missing", "reason": "not-observed"}, "refuelledL": 0, "refuels": 0}}
+}

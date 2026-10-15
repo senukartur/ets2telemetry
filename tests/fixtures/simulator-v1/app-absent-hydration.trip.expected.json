@@ -1,0 +1,22 @@
+{
+  "scenario": "app-absent-hydration",
+  "basis": ["synthetic-inference"],
+  "authoredFrom": [
+    "app-absent-hydration.expected.json: the checkpoint at 100 hydrates the job with nextEventSeq 4; gaps 1-3 and 4-4 are offline only; event 5 is job.cleared",
+    "docs/trips.md T9: a checkpoint never opens a trip; its job is untracked from eventSeq 4 on and the live clear (eventSeq 5) ends it",
+    "docs/trips.md T10: a gap with no open trip is a session-level not-connected interval over its new suffix, with the record's monotonic bounds because the suffix is the whole record",
+    "docs/trips.md T16 (PR-2): readings without an open trip accumulate nothing and add no effect"
+  ],
+  "trips": [],
+  "attributions": [],
+  "intervals": [
+    {"trip": null, "kind": "not-connected", "firstEventSeq": "1", "lastEventSeq": "3", "startMonotonicNs": "1000000000000", "endMonotonicNs": "1000020000000", "sourceClockId": "capture-clock",
+      "detail": {"cause": "gap", "causes": {"offline": "3", "noDurableConsumer": "0", "queueCount": "0", "queueBytes": "0", "retentionExpired": "0", "encodingFailed": "0"},
+        "firstEventSeq": "1", "lastEventSeq": "3", "redelivered": false}},
+    {"trip": null, "kind": "not-connected", "firstEventSeq": "4", "lastEventSeq": "4", "startMonotonicNs": "1000040000000", "endMonotonicNs": "1000040000000", "sourceClockId": "capture-clock",
+      "detail": {"cause": "gap", "causes": {"offline": "1", "noDurableConsumer": "0", "queueCount": "0", "queueBytes": "0", "retentionExpired": "0", "encodingFailed": "0"},
+        "firstEventSeq": "4", "lastEventSeq": "4", "redelivered": false}}
+  ],
+  "coverage": {"committedThroughEventSeq": "5", "committed": 3, "duplicate": 0, "covered": 0},
+  "view": {"phase": "idle", "untrackedJob": false, "current": null, "lastClosed": null}
+}
