@@ -374,6 +374,41 @@ describe('fix round 2', () => {
   });
 });
 
+describe('fix round 3', () => {
+  const OTHER_CLOCK = '30000000-0000-4000-8000-0000000000ee';
+  const notConnected = (s: Script, trip: string): TripEffect => ({kind: 'completeness.add', interval: {tripUuid: trip, kind: 'not-connected', startUtcMs: at(2),
+    startMonotonicNs: '1001999000000', endMonotonicNs: '1002000000000', sourceClockId: s.clockId, detail: {cause: 'disconnected', odometerDeltaM: null}}});
+  it('two same-label sleeps between carriers keep separate annotations, and the second grows only itself [synthetic-inference]', () => {
+    const {s, trip, rows} = opened();
+    const clock = (ms: number, minutes: number): Row => [reading(s, {ms, minutes, simulation: 'paused'})];
+    const sleep = (detail: Record<string, unknown>) => note(trip, {cause: 'game-time-jump', label: 'possible-sleep', ...detail});
+    // The first sleep ends once no window point qualifies (68 s later); the second follows without a carrier between.
+    play([...rows, clock(2000, 1000), clock(2050, 1595), clock(70_000, 1596), clock(70_050, 2200), clock(71_100, 2300),
+      [s.event(r.paused(), {...paused, advanceMs: 70_000}), [sleep({fromMinutes: '1000', toMinutes: '1595', atMonotonicNs: ns(2050)}),
+        sleep({fromMinutes: '1596', toMinutes: '2300', atMonotonicNs: ns(70_050), lastAtMonotonicNs: ns(71_100)})]]]);
+  });
+  it('waiting holes on another capture clock never count towards the cap of the current connection [synthetic-inference]', () => {
+    const {s, trip, rows} = opened();
+    const hole = (fromMs: number, toMs: number, clockId: string): TripEffect => ({kind: 'completeness.add', interval: {tripUuid: trip, kind: 'sample-loss',
+      startUtcMs: BASE_UTC + fromMs, endUtcMs: BASE_UTC + toMs, startMonotonicNs: ns(fromMs), endMonotonicNs: ns(toMs), sourceClockId: clockId, detail: {cause: 'reading-hole'}}});
+    const other = (ms: number): Row => [reading(s, {ms, captureClock: OTHER_CLOCK})];
+    play([...rows, [reading(s, {ms: 100_000})], [reading(s, {ms: 106_000})], [reading(s, {ms: 107_000})], [reading(s, {ms: 113_000})],
+      [{kind: 'disconnected'}], [sessionInput(s.welcome(), '2')],
+      // Two holes wait on the first clock; three holes on the other clock all stay separate.
+      other(2000), other(8000), other(9000), other(15_000), other(16_000), other(22_000),
+      [s.event(r.paused(), {...paused, advanceMs: 120_000}), [partial(trip), hole(100_000, 106_000, s.clockId), hole(107_000, 113_000, s.clockId), notConnected(s, trip),
+        hole(2000, 8000, OTHER_CLOCK), hole(9000, 15_000, OTHER_CLOCK), hole(16_000, 22_000, OTHER_CLOCK)]]]);
+  });
+  it('a refuel after a step that is not counted starts a new episode instead of growing a waiting one [synthetic-inference]', () => {
+    const {s, trip, rows} = opened();
+    const state = play([...rows, [reading(s, {ms: 2000, fuel: 400})], [reading(s, {ms: 3000, fuel: 450})],
+      [{kind: 'disconnected'}], [sessionInput(s.welcome(), '2')], [reading(s, {ms: 60_000, fuel: 600})], [reading(s, {ms: 61_000, fuel: 650})],
+      [s.event(r.paused(), {...paused, advanceMs: 60_000}), [partial(trip), notConnected(s, trip),
+        note(trip, {cause: 'refuel', addedLiters: 50, atMonotonicNs: ns(3000)}), note(trip, {cause: 'refuel', addedLiters: 50, atMonotonicNs: ns(61_000)})]]]);
+    expect(tripView(state, 'ets2').current).toMatchObject({refuelledL: 100, refuels: 2});
+  });
+});
+
 describe('effect bounds (T18)', () => {
   it('sends at most 8 reading annotations per carrier and defers the rest in order [synthetic-inference]', () => {
     const {s, trip, rows} = opened();

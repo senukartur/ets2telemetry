@@ -89,13 +89,16 @@ function annotation(tripUuid: string, detail: Record<string, unknown>): TripEffe
 /**
  * Queues annotations; consecutive ones of the same trip, cause and label merge into one with a count (T18). The first
  * keeps its values; the merged one adds the last position (`lastAtEventSeq`, or `lastAtMonotonicNs` for a reading).
- * A refuel never merges: each one is a separate episode with its own litres.
+ * A refuel or a game-time jump never merges: each is a separate episode with its own litres or range, which may still
+ * grow in place, so merging would lend one episode's growth to another. This only lengthens the waiting queue; the
+ * per-carrier cap of MAX_ANNOTATIONS_PER_COMMIT still holds, and episodes are bounded by real refuels and jumps.
  */
 function queueAnnotations(slot: GameSlot, annotations: TripEffect[]) {
   for (const effect of annotations) {
     const last = slot.pendingAnnotations.at(-1);
     if (last?.kind === 'completeness.add' && effect.kind === 'completeness.add' && last.interval.tripUuid === effect.interval.tripUuid &&
-      last.interval.detail?.cause === effect.interval.detail?.cause && last.interval.detail?.label === effect.interval.detail?.label && effect.interval.detail?.cause !== 'refuel') {
+      last.interval.detail?.cause === effect.interval.detail?.cause && last.interval.detail?.label === effect.interval.detail?.label &&
+      effect.interval.detail?.cause !== 'refuel' && effect.interval.detail?.cause !== 'game-time-jump') {
       const detail = last.interval.detail!, next = effect.interval.detail!;
       last.interval.detail = {...detail, count: (typeof detail.count === 'number' ? detail.count : 1) + 1,
         ...(next.atMonotonicNs !== undefined ? {lastAtMonotonicNs: next.atMonotonicNs} : {lastAtEventSeq: next.atEventSeq})};
@@ -576,6 +579,9 @@ function stepReading(state: TripState, sample: StepSample & {utcMs?: number}): T
         if (jump !== null) annotated = trip.tripUuid;
       }
     }
+    // A refuel episode continues only over counted steps: after a step that is not counted (the first reading of a
+    // connection, an opening, a clear) the next refuel starts a new episode.
+    if (prev === null || acc.lastReading !== 'active' || trip.phase !== 'active') acc.refuelling = false;
     acc.lastReading = trip.phase === 'active' ? 'active' : 'open';
   }
   session.jumpEpisode = advanced.jump === null ? null : jump === null ? episode
@@ -653,7 +659,7 @@ function queueHole(slot: GameSlot, trip: OpenTrip, prev: ReadingPoint, next: Rea
   let waiting = 0, last: Extract<TripEffect, {kind: 'completeness.add'}> | undefined;
   for (const effect of slot.pending) {
     if (effect.kind === 'completeness.add' && effect.interval.tripUuid === trip.tripUuid && effect.interval.detail?.cause === 'reading-hole' &&
-      sinceNs !== null && effect.interval.startMonotonicNs !== undefined && BigInt(effect.interval.startMonotonicNs) >= BigInt(sinceNs)) { waiting += 1; last = effect; }
+      effect.interval.sourceClockId === next.capture.clockId && sinceNs !== null && effect.interval.startMonotonicNs !== undefined && BigInt(effect.interval.startMonotonicNs) >= BigInt(sinceNs)) { waiting += 1; last = effect; }
   }
   const contiguous = last?.interval.endMonotonicNs === prev.capture.monotonicNs;
   if (last !== undefined && last.interval.sourceClockId === next.capture.clockId && (contiguous || waiting >= MAX_WAITING_HOLES)) {
