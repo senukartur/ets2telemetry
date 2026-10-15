@@ -12,6 +12,7 @@ import {coalesceBrokerDiagnostics} from './native-pipe-client';
 import {createHash} from 'node:crypto';
 import os from 'node:os';
 import {CaptureController} from './capture-controller';
+import {ShutdownSequence} from './shutdown-sequence';
 const port = process.parentPort;
 if (!port) throw new Error('Missing Electron parent port');
 const log = createDiagnostics(path.join(process.env.ETS2TELEMETRY_DIAGNOSTIC_DIR || path.join(process.env.LOCALAPPDATA || tmpdir(), 'ETS2Telemetry', 'logs'), 'service'), Boolean(process.env.ETS2TELEMETRY_DIAGNOSTIC_DIR));
@@ -54,16 +55,39 @@ const probe = new ServiceProbe({
   },
   removeDirectory: directory => rm(directory, {recursive: true, force: true}),
   report: message => {
+    // During an orderly stop the probe's completion belongs to the storage step; the
+    // sequence sends the single final `stopped` message after every phase.
+    if (stopping && message.type === 'stopped') {storageStopped = true; return;}
     log('SERVICE_REPORT', message);
     port.postMessage(message);
+    if (stopping) return;
     if (message.type === 'stopped') process.exit(0);
     if (message.code === 'SERVICE_STOP_FAILED') process.exit(1);
   }
 });
+// Ordered, bounded service shutdown. Later packages register their own steps here (ET-015 a flush
+// step, ET-013 the history store close); the total stays within SERVICE_STOP_BUDGET_MS.
+let stopping = false, storageStopped = false;
+const shutdown = new ShutdownSequence(log);
+shutdown.register('intake', {name: 'ingestion', budgetMs: 1000, run: () => ingestion.stop()});
+shutdown.register('intake', {name: 'capture', budgetMs: 1000, run: () => captures.stop()});
+shutdown.register('storage', {name: 'storage-probe', budgetMs: 1000, run: async () => {
+  await probe.stop();
+  if (!storageStopped) throw new Error('Storage probe did not stop cleanly');
+}});
+function stop(): void {
+  if (stopping) return;
+  stopping = true; subscriptions.close();
+  void shutdown.run().then(({clean}) => {
+    const message = {type: 'stopped', clean};
+    log('SERVICE_REPORT', message); port.postMessage(message);
+    process.exit(clean ? 0 : 1);
+  });
+}
 port.on('message', event => {
   const incoming: unknown = event.data;
   const command = incoming && typeof incoming === 'object' && !Array.isArray(incoming) ? incoming as Record<string, unknown> : undefined;
-  if (command?.type === 'stop') {subscriptions.close(); void Promise.all([ingestion.stop(), captures.stop()]).then(() => probe.stop());}
+  if (command?.type === 'stop') stop();
   else if (command?.type === 'unsubscribe') subscriptions.close();
   else if (command?.type === 'subscribe' && event.ports.length === 1) subscriptions.attach(event.ports[0]);
   else if (command?.type === 'select') {

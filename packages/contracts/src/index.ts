@@ -1,6 +1,7 @@
 // Scaffold status only. The telemetry wire protocol belongs to ET-002a.
 export interface ScaffoldStatus { service: 'ready'; storage: 'verified'; synthetic: true }
 import type {CurrentState, SourceIdentity, AppliedState, CaptureTime} from './protocol-v0';
+import type {AppState} from './app-state';
 export type SourceSelection = 'game' | 'ets2' | 'ats' | 'synthetic' | 'replay';
 export interface LiveTelemetry {
   selection: SourceSelection;
@@ -15,9 +16,16 @@ export interface LiveTelemetry {
     receivedMonotonicMs: number; windowReceivedMonotonicMs: number; windowFresh: boolean; applied: AppliedState};
 }
 export interface DesktopBridge {
-  getStatus(): Promise<ScaffoldStatus>;
+  /** `null` while the telemetry service is not ready, for example during a supervised restart. */
+  getStatus(): Promise<ScaffoldStatus | null>;
   selectSource(source: SourceSelection): Promise<void>;
   subscribeLive(listener: (update: LiveTelemetry) => void): () => void;
+  /** Current main-owned application state: fixed health codes only. */
+  getAppState(): Promise<AppState>;
+  /** One listener per document; main pushes the full state on every change. */
+  subscribeAppState(listener: (state: AppState) => void): () => void;
+  /** Explicit, orderly application exit; closing the window only hides it to the tray. */
+  exitApplication(): Promise<void>;
 }
 /** Read-only display projection: no source selection, HWND or native placement authority. */
 export interface OverlayPresentation {
@@ -34,3 +42,4 @@ export interface OverlayBridge {
   subscribeOverlay(listener: (update: OverlayPresentation) => void): () => void;
 }
 export * from './protocol-v0';
+export * from './app-state';
