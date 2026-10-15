@@ -155,7 +155,7 @@ const char* const discoveryCases[] = {"retired-record", "delete-pending-record",
 const char* const hostCases[] = {"valid", "creation", "dead", "stale-live", "dead-live", "collision", "session", "malformed", "dacl", "payload-break", "bad-length", "invalid-credit", "quiet", "quiet-exit", "partial-prefix", "partial-payload"};
 const char* const captureCases[] = {"capture", "capture-v0-hello", "capture-bad-arguments"};
 const char* const v1Cases[] = {"v1-valid", "v1-policy", "v1-major-mismatch", "v1-name-mismatch", "v1-collision", "v1-v0-hello", "v1-cap0-hello",
-  "v1-client-kind", "v1-client-oversize", "v1-bad-tag", "v1-ack-while-quiet", "v1-write-deadline", "v1-capture-conflict"};
+  "v1-client-kind", "v1-client-oversize", "v1-bad-tag", "v1-partial-length", "v1-partial-payload", "v1-zero-length", "v1-ack-while-quiet", "v1-write-deadline", "v1-capture-conflict"};
 const char* const policyCases[] = {"policy-prune", "policy-cap", "policy-duplicate", "policy-case-duplicate", "policy-junction"};
 const char* const contentionCases[] = {"policy-lock-busy", "policy-lock-pending", "policy-publish-busy", "image-busy"};
 std::string case_list() {
@@ -536,9 +536,16 @@ int wmain(int argc, wchar_t** argv) {
         std::cerr << "client-write exit after " << elapsed << " ms\n"; require(elapsed >= 4500 && elapsed < 12000 && diagnosed(client, "client-write", "[0-9]{1,10}"));
         require(server.wait() == 0); continue;
       }
-      // Rejected control records: a client message of another kind, an oversize length and an unknown tag.
+      if (scenario == "v1-partial-length" || scenario == "v1-partial-payload") {
+        // EOF inside a record is cancellation: exit 3 at the relay stage, never client-frame, and nothing reaches the host.
+        const auto payload = file_bytes(v1Fixtures / "ack-1.json"); require(payload.size() < 256);
+        send(scenario == "v1-partial-length" ? std::string{'\x02', static_cast<char>(payload.size()), '\x00'} : clientFrame(payload).substr(0, 5 + payload.size() / 2));
+        client.eof(); require(client.wait() == 3 && diagnosed(client, "relay", "[0-9]{1,10}")); require(server.wait() == 0); continue;
+      }
+      // Rejected control records: a client message of another kind, an oversize or zero length and an unknown tag.
       if (scenario == "v1-client-kind") send(clientFrame(file_bytes(v1Fixtures / "hello.json")));
       else if (scenario == "v1-client-oversize") send(std::string{'\x02', '\x01', '\x10', '\x00', '\x00'});
+      else if (scenario == "v1-zero-length") send(std::string{'\x02', '\x00', '\x00', '\x00', '\x00'});
       else send(std::string(1, '\x03'));
       require(client.wait() == 1 && diagnosed(client, scenario == "v1-bad-tag" ? "relay" : "client-frame", scenario == "v1-bad-tag" ? "[0-9]{1,10}" : "0"));
       require(server.wait() == 0);

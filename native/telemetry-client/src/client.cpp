@@ -343,7 +343,9 @@ ClientFailure client_write(HANDLE pipe, HANDLE process, HANDLE stop, const unsig
       HANDLE waits[] = {event.value, process, stop}; const auto now = GetTickCount64();
       const auto waited = WaitForMultipleObjects(3, waits, FALSE, deadline > now ? static_cast<DWORD>(deadline - now) : 0);
       if (waited != WAIT_OBJECT_0) {
-        CancelIoEx(pipe, &operation); GetOverlappedResult(pipe, &operation, &count, TRUE); error = GetLastError();
+        // A failed wait reports its own error, captured before the cancellation changes the last error.
+        const auto waitError = waited == WAIT_FAILED ? GetLastError() : ERROR_SUCCESS;
+        CancelIoEx(pipe, &operation); GetOverlappedResult(pipe, &operation, &count, TRUE); error = waited == WAIT_FAILED ? waitError : GetLastError();
         return waited == WAIT_TIMEOUT || waited == WAIT_OBJECT_0 + 1 || waited == WAIT_OBJECT_0 + 2 ? ClientFailure::disconnected : ClientFailure::failed;
       }
       ok = GetOverlappedResult(pipe, &operation, &count, FALSE) != 0;
@@ -370,7 +372,8 @@ void Credits::tagged(HANDLE pipe, HANDLE process) {
       frame.resize(length + 4); if (!read_control(frame.data() + 4, length)) return;
       const auto message = v1::decode_payload(std::string(reinterpret_cast<const char*>(frame.data() + 4), length), v1::Sender::client);
       if (message.kind != "ack" && message.kind != "clock.probe") {client = ClientFailure::frame; return;}
-      HANDLE waits[] = {helloSent.value, stop.value}; if (WaitForMultipleObjects(2, waits, FALSE, INFINITE) != WAIT_OBJECT_0) return;
+      // Both events can be set at once, and the wait then reports helloSent: a stop is checked again before writing.
+      HANDLE waits[] = {helloSent.value, stop.value}; if (WaitForMultipleObjects(2, waits, FALSE, INFINITE) != WAIT_OBJECT_0 || WaitForSingleObject(stop.value, 0) == WAIT_OBJECT_0) return;
       DWORD error = ERROR_SUCCESS; const auto result = client_write(pipe, process, stop.value, frame.data(), static_cast<DWORD>(frame.size()), error);
       if (result != ClientFailure::none) {clientError = error; client = result; return;}
     }
