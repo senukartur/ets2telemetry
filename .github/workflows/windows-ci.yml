@@ -28,6 +28,7 @@ jobs:
     # A skipped draft run is not a passed check; use workflow_dispatch on the branch to check a draft head.
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: windows-2022
+    # The AddressSanitizer builds run in the parallel windows-asan job below, so each job keeps headroom (docs/ci.md#job-layout).
     timeout-minutes: 20
     defaults:
       run:
@@ -102,36 +103,6 @@ jobs:
         run: |
           npm run test:cap0-chain
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: SDK-independent console AddressSanitizer checks
-        run: |
-          $sdkVsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
-          if ($LASTEXITCODE -ne 0 -or -not $sdkVsPath) { throw 'MSVC installation not found for ASan runtime.' }
-          $sdkVcVersion = (Get-Content -LiteralPath (Join-Path $sdkVsPath 'VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt') -Raw).Trim()
-          $sdkAsanBin = Join-Path $sdkVsPath "VC\Tools\MSVC\$sdkVcVersion\bin\Hostx64\x64"
-          if (-not (Test-Path -LiteralPath (Join-Path $sdkAsanBin 'clang_rt.asan_dynamic-x86_64.dll'))) { throw 'MSVC AddressSanitizer runtime not found.' }
-          $env:PATH = "$sdkAsanBin;$env:PATH"
-          Write-Output "ASan runtime: $sdkAsanBin"
-          cmake -S native/telemetry-plugin -B native/telemetry-plugin/build-asan -G 'Visual Studio 17 2022' -A x64 -DETS2TELEMETRY_ASAN_TESTS=ON
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cmake --build native/telemetry-plugin/build-asan --config Release --target protocol-v0-asan-test protocol-v1-asan-test v1-producer-asan-test sdk-adapter-asan-test event-channel-asan-test snapshot-transport-asan-test snapshot-transport-test-plugin snapshot-transport-hooked-test-plugin game-window-monitor-asan-test snapshot-transport-game-host-asan capture-cap0-asan-test v1-transport-asan-test
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          ctest --test-dir native/telemetry-plugin/build-asan -C Release --output-on-failure -R asan-contract
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Separate native client AddressSanitizer controls
-        run: |
-          $clientVsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
-          if ($LASTEXITCODE -ne 0 -or -not $clientVsPath) { throw 'MSVC installation not found for client ASan runtime.' }
-          $clientVcVersion = (Get-Content -LiteralPath (Join-Path $clientVsPath 'VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt') -Raw).Trim()
-          $clientAsanBin = Join-Path $clientVsPath "VC\Tools\MSVC\$clientVcVersion\bin\Hostx64\x64"
-          if (-not (Test-Path -LiteralPath (Join-Path $clientAsanBin 'clang_rt.asan_dynamic-x86_64.dll'))) { throw 'MSVC AddressSanitizer runtime not found.' }
-          $env:PATH = "$clientAsanBin;$env:PATH"
-          Write-Output "Client ASan runtime: $clientAsanBin"
-          cmake -S native/telemetry-client -B native/telemetry-client/build-asan -G 'Visual Studio 17 2022' -A x64 -DETS2TELEMETRY_CLIENT_ASAN=ON
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cmake --build native/telemetry-client/build-asan --config Release --target telemetry-pipe-client-asan telemetry-client-test-asan
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          ctest --test-dir native/telemetry-client/build-asan -C Release --output-on-failure --no-tests=error -R '^native-pipe-client-asan-'
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Isolated synthetic v0 CLI pipe smoke
         run: npm run smoke --workspace @ets2telemetry/telemetry-simulator
       - name: Bounded development Electron worker smoke
@@ -170,8 +141,78 @@ jobs:
             .local/ci
             .local/diagnostics/package-inspection.json
             native/telemetry-plugin/build/Testing/Temporary
-            native/telemetry-plugin/build-asan/Testing/Temporary
             native/telemetry-client/build/Testing/Temporary
+          retention-days: 14
+          if-no-files-found: error
+          include-hidden-files: true
+  windows-asan:
+    name: Windows x64 native AddressSanitizer
+    # Runs in parallel with the scaffold job on its own runner; same draft skip, triggers and concurrency group.
+    # It needs only the checkout, pinned CMake, MSVC and Node for the version record; it builds its own
+    # build-asan trees and uses no output of the scaffold job (docs/ci.md#job-layout).
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: windows-2022
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      ETS2TELEMETRY_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: '24.19.0'
+          architecture: x64
+          package-manager-cache: false
+      - name: Acquire checksum-pinned CMake 4.3.1 x64
+        run: ./scripts/ci/Install-CMake.ps1
+      - name: Record host versions
+        run: |
+          node scripts/ci/versions.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --version
+          & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products '*' -format json
+      - name: SDK-independent console AddressSanitizer checks
+        run: |
+          $sdkVsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if ($LASTEXITCODE -ne 0 -or -not $sdkVsPath) { throw 'MSVC installation not found for ASan runtime.' }
+          $sdkVcVersion = (Get-Content -LiteralPath (Join-Path $sdkVsPath 'VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt') -Raw).Trim()
+          $sdkAsanBin = Join-Path $sdkVsPath "VC\Tools\MSVC\$sdkVcVersion\bin\Hostx64\x64"
+          if (-not (Test-Path -LiteralPath (Join-Path $sdkAsanBin 'clang_rt.asan_dynamic-x86_64.dll'))) { throw 'MSVC AddressSanitizer runtime not found.' }
+          $env:PATH = "$sdkAsanBin;$env:PATH"
+          Write-Output "ASan runtime: $sdkAsanBin"
+          cmake -S native/telemetry-plugin -B native/telemetry-plugin/build-asan -G 'Visual Studio 17 2022' -A x64 -DETS2TELEMETRY_ASAN_TESTS=ON
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build native/telemetry-plugin/build-asan --config Release --target protocol-v0-asan-test protocol-v1-asan-test v1-producer-asan-test sdk-adapter-asan-test event-channel-asan-test snapshot-transport-asan-test snapshot-transport-test-plugin snapshot-transport-hooked-test-plugin game-window-monitor-asan-test snapshot-transport-game-host-asan capture-cap0-asan-test v1-transport-asan-test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ctest --test-dir native/telemetry-plugin/build-asan -C Release --output-on-failure -R asan-contract
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Separate native client AddressSanitizer controls
+        run: |
+          $clientVsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if ($LASTEXITCODE -ne 0 -or -not $clientVsPath) { throw 'MSVC installation not found for client ASan runtime.' }
+          $clientVcVersion = (Get-Content -LiteralPath (Join-Path $clientVsPath 'VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt') -Raw).Trim()
+          $clientAsanBin = Join-Path $clientVsPath "VC\Tools\MSVC\$clientVcVersion\bin\Hostx64\x64"
+          if (-not (Test-Path -LiteralPath (Join-Path $clientAsanBin 'clang_rt.asan_dynamic-x86_64.dll'))) { throw 'MSVC AddressSanitizer runtime not found.' }
+          $env:PATH = "$clientAsanBin;$env:PATH"
+          Write-Output "Client ASan runtime: $clientAsanBin"
+          cmake -S native/telemetry-client -B native/telemetry-client/build-asan -G 'Visual Studio 17 2022' -A x64 -DETS2TELEMETRY_CLIENT_ASAN=ON
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build native/telemetry-client/build-asan --config Release --target telemetry-pipe-client-asan telemetry-client-test-asan
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ctest --test-dir native/telemetry-client/build-asan -C Release --output-on-failure --no-tests=error -R '^native-pipe-client-asan-'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Record final versions and duration
+        if: always()
+        run: node scripts/ci/versions.mjs
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: windows-asan-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .local/ci
+            native/telemetry-plugin/build-asan/Testing/Temporary
             native/telemetry-client/build-asan/Testing/Temporary
           retention-days: 14
           if-no-files-found: error
