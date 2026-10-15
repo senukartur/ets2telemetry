@@ -137,6 +137,10 @@ Audit of the other PowerShell-spawning tests:
 
 Add new PowerShell-backed cases to an existing batch rather than starting a process per case, and keep each Vitest timeout above its child's bound.
 
+## ET-005b protocol v1 simulator pipe smoke
+
+ET-005b PR-2 adds the step **Isolated synthetic v1 CLI pipe smoke** right after the v0 simulator smoke. It runs `npm run smoke:v1 --workspace @ets2telemetry/telemetry-simulator`, which serves `tests/fixtures/simulator-v1/pipe-reconnect.json` on a private `\\.\pipe\ETS2Telemetry-SYNTHETIC-TEST-v1-{pid}-{uuid}` endpoint at real-time pace and runs the scenario's scripted client in the same process. It fails unless the served transcript equals the deterministic replay byte for byte, every client byte and applied message equals the replay's, the client's in-memory ledger matches, the first measurable message gap arrives within half to one second beyond its 50 ms schedule, state messages are at least 50 ms apart and the clock probe gets its reply. The run takes about one second. It writes no file, opens no database and uses no game; Node pipes are not DACL or peer-authentication evidence. The same checks for every corpus scenario, unpaced, run inside the Vitest suite (`simulator-v1-pipe.test.ts`). See [the simulator v1 guide](simulator-v1.md#named-pipe-serving).
+
 ## Advisory AI review
 
 A separate [Claude code review](ai-review.md) workflow comments on non-draft PRs and on owner `@claude` requests. It runs on Ubuntu, needs a Claude secret, and is not part of the Windows CI result.
