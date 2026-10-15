@@ -2,8 +2,8 @@ import {appendFileSync, existsSync, mkdirSync, renameSync, rmSync, statSync} fro
 import path from 'node:path';
 
 const LIMIT = 256 * 1024;
-/** Always-logged fields; callers pass only fixed codes and numbers, never paths, peer data or telemetry. */
-export type DiagnosticFacts = Readonly<Record<string, string | number | null>>;
+/** Always-logged fields; callers pass only fixed codes, numbers and flags, never paths, peer data or telemetry. */
+export type DiagnosticFacts = Readonly<Record<string, string | number | boolean | null>>;
 // Startup diagnostics only; never log telemetry or credentials. Detailed errors are opt-in.
 export function createDiagnostics(directory: string, detailed = false) {
   let available = true;

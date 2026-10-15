@@ -45,6 +45,8 @@ it('boots transport only after the parent selection and retains it across render
     start() {this.dependencies.report({type: 'ready'}); return Promise.resolve();}
     stop() {this.dependencies.report({type: 'stopped'}); return Promise.resolve();}
   }}));
+  // The history database is opened by its own worker; never touch the real LOCALAPPDATA from a Node unit test.
+  vi.doMock('../../apps/desktop/src/history-storage', () => ({HISTORY_CLOSE_BUDGET_MS: 1000, historyWorker: vi.fn(), HistoryStorage: class {start() {} close() {return Promise.resolve();}}}));
   const command = (type: string, ports: TestPort[] = []) => parent.emit('message', {data: {type, source: 'synthetic'}, ports});
   try {
     await import('../../apps/desktop/src/telemetry-service');
@@ -67,7 +69,7 @@ it('boots transport only after the parent selection and retains it across render
     command('stop'); await vi.advanceTimersByTimeAsync(0); expect(exit).toHaveBeenCalledWith(0);
     if (previousPort) Object.defineProperty(process, 'parentPort', previousPort); else Reflect.deleteProperty(process, 'parentPort');
     connect.mockRestore(); exit.mockRestore(); vi.unstubAllEnvs();
-    vi.doUnmock('../../apps/desktop/src/diagnostics'); vi.doUnmock('../../apps/desktop/src/service-probe'); vi.resetModules();
+    vi.doUnmock('../../apps/desktop/src/diagnostics'); vi.doUnmock('../../apps/desktop/src/service-probe'); vi.doUnmock('../../apps/desktop/src/history-storage'); vi.resetModules();
   }
 });
 function fixture() {
@@ -244,7 +246,7 @@ it('closes malformed input over a real Windows pipe', async () => {
   try {ingestion.select('synthetic', pipe); await vi.waitFor(() => expect(states.at(-1)?.status).toBe('incompatible')); expect(states.at(-1)?.fresh).toBe(false);}
   finally {await ingestion.stop(); for (const socket of sockets) socket.destroy(); await new Promise<void>(resolve => server.close(() => resolve()));}
 });
-async function stoppedService(stopProbe: (report: ProbeDependencies['report']) => Promise<void>) {
+async function stoppedService(stopProbe: (report: ProbeDependencies['report']) => Promise<void>, closeHistory: () => Promise<void> = () => Promise.resolve()) {
   vi.useFakeTimers();
   const exit = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
   const previousPort = Object.getOwnPropertyDescriptor(process, 'parentPort');
@@ -257,14 +259,16 @@ async function stoppedService(stopProbe: (report: ProbeDependencies['report']) =
     start() {this.dependencies.report({type: 'ready'}); return Promise.resolve();}
     stop() {return stopProbe(message => this.dependencies.report(message));}
   }}));
+  const history = {start: vi.fn(), close: vi.fn(closeHistory)};
+  vi.doMock('../../apps/desktop/src/history-storage', () => ({HISTORY_CLOSE_BUDGET_MS: 1000, historyWorker: vi.fn(), HistoryStorage: class {start() {history.start();} close() {return history.close();}}}));
   await import('../../apps/desktop/src/telemetry-service');
   const restore = () => {
     if (previousPort) Object.defineProperty(process, 'parentPort', previousPort); else Reflect.deleteProperty(process, 'parentPort');
-    exit.mockRestore(); vi.doUnmock('../../apps/desktop/src/diagnostics'); vi.doUnmock('../../apps/desktop/src/service-probe'); vi.resetModules();
+    exit.mockRestore(); vi.doUnmock('../../apps/desktop/src/diagnostics'); vi.doUnmock('../../apps/desktop/src/service-probe'); vi.doUnmock('../../apps/desktop/src/history-storage'); vi.resetModules();
   };
   const stops = () => parent.postMessage.mock.calls.map(call => call[0] as {type: string}).filter(message => message.type === 'stopped');
   const steps = () => log.mock.calls.filter(call => call[0] === 'SHUTDOWN_STEP').map(call => call[2] as Record<string, unknown>);
-  return {exit, parent, log, restore, stops, steps, stop: () => parent.emit('message', {data: {type: 'stop'}, ports: []})};
+  return {exit, parent, log, history, restore, stops, steps, stop: () => parent.emit('message', {data: {type: 'stop'}, ports: []})};
 }
 it('runs the ordered shutdown once and reports exactly one clean stopped message before exit 0', async () => {
   const f = await stoppedService(report => {report({type: 'stopped'}); return Promise.resolve();});
@@ -272,10 +276,30 @@ it('runs the ordered shutdown once and reports exactly one clean stopped message
     f.stop(); f.stop(); await vi.advanceTimersByTimeAsync(0);
     expect(f.stops()).toEqual([{type: 'stopped', clean: true}]);
     expect(f.exit).toHaveBeenCalledExactlyOnceWith(0);
-    expect(f.steps().map(step => [step.phase, step.name, step.outcome])).toEqual([['intake', 'ingestion', 'ok'], ['intake', 'capture', 'ok'], ['storage', 'storage-probe', 'ok']]);
+    // ET-013 adds the history database close beside the probe in the storage phase; steps of one phase finish in any order.
+    const steps = f.steps().map(step => [step.phase, step.name, step.outcome]);
+    expect(steps.slice(0, 2)).toEqual([['intake', 'ingestion', 'ok'], ['intake', 'capture', 'ok']]);
+    expect(steps.slice(2).sort()).toEqual([['storage', 'history-storage', 'ok'], ['storage', 'storage-probe', 'ok']]);
+    expect(f.history.start).toHaveBeenCalledOnce(); expect(f.history.close).toHaveBeenCalledOnce();
     expect(f.log).toHaveBeenCalledWith('SERVICE_REPORT', {type: 'stopped', clean: true});
     expect(vi.getTimerCount()).toBe(0);
   } finally {f.restore();}
+});
+it('waits for the history database to close before the single stopped report, and reports a failed close as unclean', async () => {
+  let finish!: () => void;
+  const f = await stoppedService(report => {report({type: 'stopped'}); return Promise.resolve();}, () => new Promise<void>(resolve => {finish = resolve;}));
+  try {
+    f.stop(); await vi.advanceTimersByTimeAsync(500);
+    expect(f.stops()).toEqual([]); expect(f.exit).not.toHaveBeenCalled();
+    finish(); await vi.advanceTimersByTimeAsync(0);
+    expect(f.stops()).toEqual([{type: 'stopped', clean: true}]); expect(f.exit).toHaveBeenCalledExactlyOnceWith(0);
+  } finally {f.restore();}
+  const failed = await stoppedService(report => {report({type: 'stopped'}); return Promise.resolve();}, () => Promise.reject(new Error('History storage did not close cleanly')));
+  try {
+    failed.stop(); await vi.advanceTimersByTimeAsync(0);
+    expect(failed.stops()).toEqual([{type: 'stopped', clean: false}]); expect(failed.exit).toHaveBeenCalledExactlyOnceWith(1);
+    expect(failed.steps().find(step => step.name === 'history-storage')).toMatchObject({phase: 'storage', outcome: 'failed'});
+  } finally {failed.restore();}
 });
 it.each(['hanging', 'failed'])('reports a %s storage step within its budget as an unclean stop and exits 1', async mode => {
   const f = await stoppedService(report => {
