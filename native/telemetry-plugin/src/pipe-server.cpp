@@ -227,8 +227,8 @@ void Server::run(std::wstring directory) noexcept {
   auto startup_stage = StartupFailure::identity_security;
   bool startup_complete = false;
   try {
-    // A stop may cancel the startup checks, which create nothing that could be left behind; the window closes before
-    // endpoint creation and discovery publication.
+    // A stop may cancel the startup checks, which create nothing transient (only the persistent owner-only directories,
+    // atomically); the window closes before endpoint creation and discovery publication.
     std::optional<CancelWindow::Scope> startup_window; startup_window.emplace(cancel_window_);
     auto user = current_user(); OwnerSecurity security(user.sid);
     if (directory.empty()) directory = local_transport_directory(security); else security.ensure_directory(directory);
