@@ -149,7 +149,7 @@ int main(int argc, char** argv) {
     PeerWindows peer_list{peer.dwProcessId};
     if (startup_result == WAIT_OBJECT_0) EnumWindows(peer_windows, reinterpret_cast<LPARAM>(&peer_list));
     check(peer_list.count == 1, "unrelated process shows one eligible-shape window");
-    // The worker publishes once per scan. Revision R read here may be followed by R+1
+    // The worker publishes once per loop iteration (normally after one scan). Revision R read here may be followed by R+1
     // from a scan that enumerated windows before the peer showed its window and was
     // then preempted. Revision R+2 comes from a scan that began after R+1 was
     // published, which is after this read and therefore after the window was shown.
