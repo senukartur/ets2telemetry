@@ -4,7 +4,8 @@ import {createHash} from 'node:crypto';
 import {closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statfsSync, statSync, writeFileSync} from 'node:fs';
 import path from 'node:path';
 import Database from 'better-sqlite3';
-import {classifyError, fail} from '../errors';
+import type {Purpose} from '../api';
+import {classifyError, fail, StorageFailure} from '../errors';
 import {backupsToDelete, type BackupEntry} from '../retention';
 import {contentDigest, type ContentDigest} from './digest';
 import {APPLICATION_ID, checkIntegrity} from './migrations';
@@ -37,7 +38,7 @@ function removeQuietly(...files: string[]) { for (const file of files) { try { r
  * database UUID, per-table row counts and the logical digest. The file must be in rollback-journal mode, so the
  * read-only connection creates no sidecar files.
  */
-export function verifyCopy(file: string, expected: Pick<ContentDigest, 'rowCounts' | 'logicalDigest'> & {userVersion: number}, databaseUuid: string): void {
+export function verifyCopy(file: string, expected: Pick<ContentDigest, 'rowCounts' | 'logicalDigest'> & {userVersion: number}, databaseUuid: string, purpose?: Purpose): void {
   let db: Database.Database | undefined;
   try {
     db = new Database(file, {readonly: true, fileMustExist: true});
@@ -46,6 +47,7 @@ export function verifyCopy(file: string, expected: Pick<ContentDigest, 'rowCount
     const uuid = db.prepare('SELECT database_uuid FROM database_info WHERE id = 1').pluck().get();
     if (actual.applicationId !== APPLICATION_ID || actual.userVersion !== expected.userVersion || uuid !== databaseUuid ||
       actual.logicalDigest !== expected.logicalDigest || JSON.stringify(actual.rowCounts) !== JSON.stringify(expected.rowCounts)) throw new Error('Backup content differs');
+    if (purpose !== undefined && db.prepare('SELECT purpose FROM database_info WHERE id = 1').pluck().get() !== purpose) fail('PURPOSE_MISMATCH');
   } finally { db?.close(); }
 }
 
@@ -150,11 +152,13 @@ export function pruneBackups(directory: string, databaseUuid: string, latestFile
 }
 
 /**
- * Restores a verified backup into a new file: checks the manifest, the file hash and integrity, copies it through the
- * backup API into `<target>.partial`, verifies the copy and renames it. The target and its sidecars must not exist;
- * in-place replacement of a live database is deferred to ET-018. The caller then opens the target normally.
+ * Restores a verified backup into a new file: checks the manifest, the file hash, integrity and that the backup holds
+ * data of the requested purpose, and only then creates the target directory, copies the backup through the backup API
+ * into `<target>.partial`, verifies the copy and renames it. The caller checks the target path first. The target and its
+ * sidecars must not exist; in-place replacement of a live database is deferred to ET-018. The caller then opens the
+ * target normally.
  */
-export async function restoreCopy(manifestPath: string, target: string): Promise<void> {
+export async function restoreCopy(manifestPath: string, target: string, purpose: Purpose): Promise<void> {
   if (!path.isAbsolute(manifestPath) || !path.isAbsolute(target)) fail('DATA_PATH_INVALID');
   if (['', '-wal', '-shm', '-journal', '.partial'].some(suffix => existsSync(target + suffix))) fail('DATA_PATH_INVALID');
   const manifest = readManifest(manifestPath);
@@ -162,8 +166,12 @@ export async function restoreCopy(manifestPath: string, target: string): Promise
   const backupPath = path.join(path.dirname(manifestPath), manifest.fileName), partial = `${target}.partial`;
   try {
     if (statSync(backupPath).size !== manifest.size || fileSha256(backupPath) !== manifest.fileSha256) throw new Error('Backup file hash differs');
-    verifyCopy(backupPath, {...manifest, userVersion: manifest.fromVersion}, manifest.databaseUuid);
-  } catch (error) { fail('BACKUP_FAILED', {cause: classifyError(error, 'DATABASE_CORRUPT').code}); }
+    verifyCopy(backupPath, {...manifest, userVersion: manifest.fromVersion}, manifest.databaseUuid, purpose);
+  } catch (error) {
+    const classified = classifyError(error, 'DATABASE_CORRUPT');
+    if (classified.code === 'PURPOSE_MISMATCH') throw new StorageFailure(classified);
+    fail('BACKUP_FAILED', {cause: classified.code});
+  }
   try { mkdirSync(path.dirname(target), {recursive: true}); } catch { fail('DATA_PATH_INVALID'); }
   let source: Database.Database | undefined;
   try {

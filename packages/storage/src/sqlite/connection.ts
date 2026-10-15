@@ -49,9 +49,13 @@ export class StorageConnection {
   close(): void { const db = this.#db; this.#db = undefined; db?.close(); }
 }
 
-function validatePath(file: string, purpose: Purpose): void {
+/** Checks a database path for a purpose without touching the filesystem. */
+export function checkPath(file: string, purpose: Purpose): void {
   if (typeof file !== 'string' || !file || file.includes('\0') || !path.isAbsolute(file) || path.resolve(file) !== path.normalize(file) || file.startsWith('file:')) fail('DATA_PATH_INVALID');
   if (purpose !== 'history' && PRODUCTION_HISTORY.test(path.normalize(file))) fail('DATA_PATH_INVALID');
+}
+function validatePath(file: string, purpose: Purpose): void {
+  checkPath(file, purpose);
   try { mkdirSync(path.dirname(file), {recursive: true}); } catch (error) { fail(classifyError(error, 'DATA_PATH_INVALID').code === 'PERMISSION_DENIED' ? 'PERMISSION_DENIED' : 'DATA_PATH_INVALID'); }
   if (!statSync(path.dirname(file)).isDirectory()) fail('DATA_PATH_INVALID');
 }

@@ -1,4 +1,4 @@
-import {closeSync, mkdirSync, openSync, readFileSync, writeFileSync, writeSync} from 'node:fs';
+import {closeSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync, writeSync} from 'node:fs';
 import path from 'node:path';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 import {MIGRATIONS, openStorage, restoreBackup, type Migration} from '../../packages/storage/src/index';
@@ -89,6 +89,21 @@ describe('REG-013 restore into a new file', () => {
     const storage = ok(await restoreBackup(manifest, ws.options({path: target, backupsDirectory: path.join(ws.directory, 'restored-backups'), migrations: upTo(2)})));
     expect(storage.summary).toMatchObject({schemaVersion: 2, migratedFrom: 1});
     expectRepresentative(storage, target, {schema_migrations: 2, test_v2: 0});
+  });
+  it('refuses synthetic data at the production history path before writing anything', async () => {
+    const manifest = await migratedWithBackup(), root = path.join(ws.directory, 'ETS2Telemetry');
+    failed(await restoreBackup(manifest, ws.options({path: path.join(root, 'data', 'telemetry.sqlite'), purpose: 'synthetic'})), 'DATA_PATH_INVALID');
+    expect(existsSync(root)).toBe(false);
+  });
+  it('refuses a backup of another purpose before creating the target or its directory', async () => {
+    const manifest = await migratedWithBackup(), directory = path.join(ws.directory, 'history-restore');
+    failed(await restoreBackup(manifest, ws.options({path: path.join(directory, 'telemetry.sqlite'), purpose: 'history'})), 'PURPOSE_MISMATCH');
+    expect(existsSync(directory)).toBe(false);
+  });
+  it('removes the restored file again when the follow-up open fails', async () => {
+    const manifest = await migratedWithBackup(), target = path.join(ws.directory, 'restore-then-fail.sqlite');
+    failed(await restoreBackup(manifest, ws.options({path: target, backupsDirectory: path.join(ws.directory, 'restore-backups'), migrations: [...upTo(2), failingStep(3)]})), 'MIGRATION_FAILED');
+    expect(files(ws.directory).filter(name => name.startsWith('restore-then-fail'))).toEqual([]);
   });
   it('refuses an existing target or a stray WAL file, and a backup whose bytes changed', async () => {
     const manifest = await migratedWithBackup();
