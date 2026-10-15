@@ -491,3 +491,7 @@ The owner approved the architect recommendations OD-1 to OD-6:
 | OD-6 | State `trailers` always has ten entries; an empty slot is unavailable (`not-observed`) |
 
 The producer's store rules are in [the native v1 transport](docs/native-transport-v1.md).
+
+## ET-013 authorization — October 15, 2026
+
+The owner authorized ET-013 (the SQLite storage worker and schema) on October 15, 2026, in parallel with ET-004b PR C, granted the coordinator merge authority after independent review and a successful final Windows CI, and delegated the ET-013 design decisions to the coordinator. The coordinator adopted the architect's recommendations OD-1 to OD-10 as coordinator decisions under owner delegation; [storage](docs/storage.md#decisions-october-15-2026) records them with the schema, durability, migration and backup rules. For ET-013 only, this supersedes the October 14, 2026 statements that ET-013 remains unauthorized; earlier dated text is unchanged. ET-014, ET-015a, ET-015b, ET-015c, ET-005b, ET-006b and ET-016 remain unauthorized. The desktop application stays on protocol v0, records nothing and sends no ACK. The §7 storage estimate remains a model until ET-013 PR-2 measures the actual schema. No game, TruckersMP or performance claim follows from this authorization or from synthetic storage tests.

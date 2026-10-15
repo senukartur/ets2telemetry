@@ -1,3 +1,14 @@
 # Storage boundary
 
-The ET-001 isolated SQLite probe runs in the desktop storage worker under Electron. No production schema or migration exists yet. The pinned better-sqlite3 uses platform N-API prebuilds; Node unit tests still must never import the native storage addon. Actual Electron/package checks own that boundary.
+The durable history database of ET-013: schema version 1, verified durability settings, forward-only migrations with verified backups, restore into a new file, and typed write and read commands. The design, schema and error codes are in [docs/storage.md](../../docs/storage.md).
+
+| Module | Loads native SQLite | Purpose |
+| --- | --- | --- |
+| `src/api.ts` | No | Command, result, error and trip-effect types |
+| `src/codec.ts` | No | Exact encodings: 20-digit uint64 keys, raw money, availability columns, canonical JSON, sample masks |
+| `src/errors.ts` | No | SQLite and operating-system failures mapped to stable, path-free error codes |
+| `src/retention.ts` | No | Which pre-migration backups may be deleted |
+| `src/sqlite/*` | Yes | Connection and durability, schema v1, migrations, backup and restore, logical digest, writes and reads |
+| `src/index.ts` | Yes | In-process API (`openStorage`, `Storage`, `restoreBackup`) |
+
+better-sqlite3 13.0.3 ships an N-API prebuild that the telemetry service loads under Electron. Only `src/sqlite`, the desktop storage worker and the Electron-runtime suite `tests/storage` (`npm run test:storage`) may import it; ESLint enforces this. Node unit tests import only the Node-safe modules. The ET-001 isolated probe in `apps/desktop/src/storage-worker.ts` is unchanged; running this core in the storage worker is ET-013 PR-2.
