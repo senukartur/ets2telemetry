@@ -139,28 +139,31 @@ try {
     }, {width, height});
     const overlayState = () => overlay.evaluate(() => ({layout: globalThis.document.querySelector('[data-testid="overlay-root"]')?.getAttribute('data-layout') ?? null,
       width: globalThis.innerWidth, height: globalThis.innerHeight, sections: globalThis.document.querySelectorAll('[data-testid^="overlay-section-"]').length}));
-    const renderedLayout = async (layout, width, sections) => {
+    // A short bound for the review-only layouts keeps two missed waits well inside the Job's 60 s limit; the strip
+    // restore keeps the usual 10 s. `sections` is null when the count could not be read, and is then not compared.
+    const renderedLayout = async (layout, width, sections, timeout) => {
       const handle = await overlay.waitForFunction(expected => {
         const root = globalThis.document.querySelector('[data-testid="overlay-root"]');
         return root?.getAttribute('data-layout') === expected.layout && Math.abs(globalThis.innerWidth - expected.width) <= 1 &&
-          globalThis.document.querySelectorAll('[data-testid^="overlay-section-"]').length === expected.sections;
-      }, {layout, width, sections}, {timeout: 10000});
+          (expected.sections === null || globalThis.document.querySelectorAll('[data-testid^="overlay-section-"]').length === expected.sections);
+      }, {layout, width, sections}, {timeout});
       await handle.dispose();
     };
     const measureLayouts = async layouts => {
       const record = {};
-      const sections = await overlay.evaluate(() => globalThis.document.querySelectorAll('[data-testid^="overlay-section-"]').length);
+      let sections = null;
       try {
+        sections = await overlay.evaluate(() => globalThis.document.querySelectorAll('[data-testid^="overlay-section-"]').length);
         for (const [layout, width, height] of layouts) {
           const saved = await window.evaluate(value => globalThis.desktop.setOverlayLayout(value), layout);
           record[layout] = {saved: saved.overlay.layout, resized: await resizeOverlay(width, height)};
-          await renderedLayout(layout, width, sections);
+          await renderedLayout(layout, width, sections, 3000);
           record[layout].overflow = await overlay.evaluate(overlayOverflow);
         }
       } catch (error) {record.error = failure(error); record.stateAtError = await overlayState().catch(() => null);}
       try {
         await window.evaluate(() => globalThis.desktop.setOverlayLayout('strip'));
-        await resizeOverlay(1280, 38); await renderedLayout('strip', 1280, sections);
+        await resizeOverlay(1280, 38); await renderedLayout('strip', 1280, sections, 10000);
         record.restored = 'strip';
       } catch (error) {record.restoreError = failure(error);}
       return record;
@@ -177,6 +180,8 @@ try {
     // Also for review only, recorded and never asserted (docs/validation/et-012a.md asked for it): the card and HUD
     // layouts with every section filled. Without a game window the controller never places the overlay, so the hidden
     // window is sized here to each layout's nominal size (overlay-geometry.ts) and restored to the strip afterwards.
+    // The layout saves are real settings writes in the isolated profile: a failed write logs SETTINGS_WRITE_FAILED,
+    // which the strict diagnostic postcondition below rejects, so it fails the run as a product failure.
     result.telemetry.overlayLayoutOverflow = await measureLayouts([['card', 300, 360], ['hud', 320, 320]]);
     // Hold the v0 source on the same connection until main's freshness expiry: every v0 card value must become not
     // current while the v1 rows stay current and the overlay keeps only dashes; then return after resume. The later
