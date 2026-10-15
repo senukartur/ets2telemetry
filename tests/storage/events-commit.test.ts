@@ -143,10 +143,28 @@ describe('REG-006 committed coverage', () => {
     expect(ok(storage.commitGap({message: v1('gap-queue-count')})).committedThroughEventSeq).toBe('0');
     expect(ok(storage.commitGap({message: v1('gap-encoding-failed-e4')})).committedThroughEventSeq).toBe('0');
     expect(ok(storage.commitEvent({message: v1('event-job-configured')})).committedThroughEventSeq).toBe('4');
-    // A merged redelivered record that ends inside committed coverage is stored; committed rows keep their content.
-    expect(ok(storage.commitGap({message: v1('gap-merged-redelivered')}))).toEqual({status: 'committed', committedThroughEventSeq: '4'});
-    expect(ok(storage.commitGap({message: v1('gap-merged-redelivered')}))).toEqual({status: 'duplicate', committedThroughEventSeq: '4'});
+    // A merged redelivered record wholly inside committed coverage stores nothing; committed rows keep their content.
+    expect(ok(storage.commitGap({message: v1('gap-merged-redelivered')}))).toEqual({status: 'covered', committedThroughEventSeq: '4'});
+    expect(ok(storage.commitGap({message: v1('gap-merged-redelivered')}))).toEqual({status: 'covered', committedThroughEventSeq: '4'});
     expect(ok(storage.getEvent(P1, '1'))?.type).toBe('job.configured');
+  });
+  it('never reapplies effects of a merged gap record redelivered after an ACK inside it', async () => {
+    const storage = await session();
+    ok(storage.commitEvent({message: v1('event-job-configured'), effects: [openTrip(T1)]}));
+    const close: TripEffect = {kind: 'trip.close', tripUuid: T1, outcome: 'none', closeReason: 'gap', recordingCompleteness: 'partial', endedUtcMs: 1_791_676_900_000};
+    // First connection of stream ack-inside-gap-record: the gap closes the trip once.
+    expect(ok(storage.commitGap({message: v1('gap-queue-count'), effects: [close]})).status).toBe('committed');
+    ok(storage.commitGap({message: v1('gap-encoding-failed-e4')}));
+    // Reconnection: the record [2, 4] is redelivered whole. Closing the closed trip again would fail with INVALID_INPUT.
+    expect(ok(storage.commitGap({message: v1('gap-merged-redelivered'), effects: [close]}))).toEqual({status: 'covered', committedThroughEventSeq: '4'});
+    expect(ok(storage.getTrip(T1))).toMatchObject({outcome: 'none', closeReason: 'gap'});
+    storage.close();
+    expect(readOnly(ws.database, db => db.prepare('SELECT count(*) AS n FROM event_gaps').get())).toEqual({n: 2});
+  });
+  it('stores a gap that extends beyond committed coverage and applies its effects', async () => {
+    const storage = await session();
+    ok(storage.commitEvent({message: v1('event-job-configured')}));
+    expect(ok(storage.commitGap({message: withEventSeq('gap', 1n, 3n)}))).toEqual({status: 'committed', committedThroughEventSeq: '3'});
   });
   it('matches a BigInt reference for seeded random commit orders with redeliveries', async () => {
     for (const seed of [1, 7, 42, 1_234, 99_991]) {

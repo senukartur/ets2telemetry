@@ -80,10 +80,12 @@ export const MAX_SAMPLE_BATCH = 3_600;
 export const MAX_EVENT_PAGE = 500;
 export const MAX_TRIP_PAGE = 100;
 
-export type CommitStatus = 'committed' | 'duplicate' | 'conflict';
+export type CommitStatus = 'committed' | 'duplicate' | 'conflict' | 'covered';
 /**
  * `committed`: the row and its effects were inserted. `duplicate`: the same key already held an identical payload, and
  * effects were not applied again. `conflict`: the key held a different payload; the stored row is kept (protocol v1 §9).
+ * `covered`: a gap whose whole range is already inside committed coverage, such as a merged gap record redelivered
+ * after an ACK inside it; nothing is stored and its effects are not applied, because rows for that range already exist.
  * `committedThroughEventSeq` is the session's contiguous coverage after the transaction, the input of DurableAckCursor.
  */
 export interface CommitResult {status: CommitStatus; committedThroughEventSeq: Uint64}

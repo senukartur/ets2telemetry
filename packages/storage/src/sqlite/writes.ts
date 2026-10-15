@@ -263,7 +263,8 @@ const CAUSES: [keyof GapData['causes'], string][] = [['offline', 'cause_offline'
   ['queueBytes', 'cause_queue_bytes'], ['retentionExpired', 'cause_retention_expired'], ['encodingFailed', 'cause_encoding_failed']];
 /**
  * Commits one gap marker (an eventSeq range the producer no longer holds) with its effects. The same range is a
- * duplicate or conflict; an overlapping new range is stored, and events already committed inside it keep their rows.
+ * duplicate or conflict; a new range wholly inside committed coverage is `covered` and stores nothing; a new range that
+ * extends beyond coverage is stored, and events already committed inside it keep their rows.
  */
 export function commitGap(conn: StorageConnection, input: {message: unknown; effects?: TripEffect[]}, options: CommitOptions = {}): CommitResult {
   const m = serverMessage(input?.message, 'gap');
@@ -280,6 +281,12 @@ export function commitGap(conn: StorageConnection, input: {message: unknown; eff
         firstLostMonotonicNs: lost('first_lost_monotonic_ns'), lastLostMonotonicNs: lost('last_lost_monotonic_ns')});
       options.testHooks?.beforeCommit?.();
       return {status: storedPayload === payload ? 'duplicate' : 'conflict', committedThroughEventSeq: fromU64Key(session.committed_through_event_seq)};
+    }
+    // A range already inside committed coverage adds no information: its events and earlier gap markers are stored, and
+    // its effects were applied when they were committed. Storing it again would count the same losses twice.
+    if (BigInt(d.lastEventSeq) <= BigInt(fromU64Key(session.committed_through_event_seq))) {
+      options.testHooks?.beforeCommit?.();
+      return {status: 'covered', committedThroughEventSeq: fromU64Key(session.committed_through_event_seq)};
     }
     const now = conn.now(), clock = clockRef(db, session.id, 'source-monotonic', m.capture.clockId);
     const [firstLost, firstLostState] = availabilityColumns(d.firstLostMonotonicNs, u64Key), [lastLost, lastLostState] = availabilityColumns(d.lastLostMonotonicNs, u64Key);
