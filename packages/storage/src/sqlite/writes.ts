@@ -332,7 +332,8 @@ function sampleColumns(row: SampleInput): {trip: string | null; clock: string; g
   if (gameTime !== null && (typeof gameTime !== 'object' || Object.keys(gameTime).sort().join(',') !== 'clockId,minutes' || !isUuid((gameTime as {clockId: unknown}).clockId))) fail('INVALID_INPUT');
   const game = gameTime as SampleInput['gameTime'];
   for (const {field, bit, integer} of SAMPLE_FIELDS) {
-    const input = availability(field === 'gameTime' ? game?.minutes ?? {available: false, reason: 'not-observed'} : row[field]);
+    // Only an absent game time (null) defaults to not observed; a present game time must carry valid minutes.
+    const input = availability(field !== 'gameTime' ? row[field] : game === null ? {available: false, reason: 'not-observed'} : game.minutes);
     const mask = maskBits(input, bit); notSupported |= mask.notSupported; invalid |= mask.invalid;
     if (field === 'position') {
       let p: unknown[] = [null, null, null];

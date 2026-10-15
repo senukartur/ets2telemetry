@@ -62,6 +62,8 @@ describe('REG-009 one-second samples', () => {
       {position: malformed({available: true, value: {x: 1, y: 2}})},
       {gameTime: malformed({clockId: GAME_CLOCK})},
       {gameTime: malformed({minutes: {available: true, value: null}, clockId: GAME_CLOCK})},
+      {gameTime: malformed({minutes: null, clockId: GAME_CLOCK})},
+      {gameTime: malformed({minutes: undefined, clockId: GAME_CLOCK})},
       {speed: malformed({available: false})},
       {speed: malformed({available: false, reason: 'unknown'})},
       {speed: malformed({available: true, value: 1, reason: 'invalid'})},
