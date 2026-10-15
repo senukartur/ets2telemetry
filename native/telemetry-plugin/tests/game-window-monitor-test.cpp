@@ -42,7 +42,19 @@ bool same_physical(HWND hwnd, Snapshot value) {
 constexpr DWORD peer_ready_guard_ms = 10000, peer_exit_guard_ms = 5000;
 // The peer outlives any CTest-permitted run unless stopped or orphaned first.
 constexpr ULONGLONG peer_backstop_ms = 30000;
-enum PeerExit : int { peer_stopped = 0, peer_setup_failed = 2, peer_orphaned = 3, peer_backstop = 4 };
+// Peer exit codes: 0 stopped by the parent's event (the only normal result); 2 setup
+// failed (events, parent handle or window); 3 the parent exited first; 4 the backstop
+// expired; 5 the stop wait itself failed or returned an unexpected result.
+enum PeerExit : int { peer_stopped = 0, peer_setup_failed = 2, peer_orphaned = 3, peer_backstop = 4, peer_wait_failed = 5 };
+// Optional fault injection: the peer sleeps this long before any set-up, standing in for
+// a slow process start. It reproduces the hosted failure against a fixed start-up
+// deadline and stays well below the readiness hang guard.
+constexpr const char* peer_delay_option = "--peer-startup-delay-ms";
+constexpr unsigned long peer_delay_limit_ms = 5000;
+bool parse_delay(const char* text, unsigned long& value) {
+  char* end = nullptr; value = std::strtoul(text, &end, 10);
+  return end != text && *end == '\0' && value <= peer_delay_limit_ms;
+}
 // Same top-level shape the monitor accepts for its own process: visible, root, unowned, not a tool window.
 bool monitor_shaped(HWND hwnd, DWORD pid) {
   DWORD owner = 0;
@@ -67,9 +79,12 @@ int main(int argc, char** argv) {
   if (!previous) return 1;
   WNDCLASSW wc{}; wc.lpfnWndProc = procedure; wc.hInstance = GetModuleHandleW(nullptr); wc.lpszClassName = L"ETS2TelemetryControlledWindow";
   if (!RegisterClassW(&wc)) return 1;
-  if (argc == 4 && std::string(argv[1]) == "--peer") {
+  if (argc == 5 && std::string(argv[1]) == "--peer") {
     // The window stays until the parent stops it or exits, so it cannot vanish during
     // the parent's unrelated-window observation however slowly either process runs.
+    unsigned long delay = 0;
+    if (!parse_delay(argv[4], delay)) return peer_setup_failed;
+    if (delay) Sleep(delay);
     const auto event = OpenEventA(SYNCHRONIZE, FALSE, argv[2]);
     const auto ready = OpenEventA(EVENT_MODIFY_STATE, FALSE, (std::string(argv[2]) + "-ready").c_str());
     const auto parent = OpenProcess(SYNCHRONIZE, FALSE, std::strtoul(argv[3], nullptr, 10));
@@ -83,10 +98,16 @@ int main(int argc, char** argv) {
       const auto wait = MsgWaitForMultipleObjects(2, waits, FALSE, static_cast<DWORD>(deadline - now), QS_ALLINPUT);
       if (wait == WAIT_OBJECT_0) { result = peer_stopped; break; }
       if (wait == WAIT_OBJECT_0 + 1) { result = peer_orphaned; break; }
-      if (wait != WAIT_OBJECT_0 + 2) break;
+      if (wait == WAIT_TIMEOUT) break;
+      if (wait != WAIT_OBJECT_0 + 2) { result = peer_wait_failed; break; }
       pump();
     }
     DestroyWindow(hwnd); CloseHandle(parent); CloseHandle(event); return result;
+  }
+  unsigned long peer_delay_ms = 0;
+  if (argc != 1 && !(argc == 3 && std::string(argv[1]) == peer_delay_option && parse_delay(argv[2], peer_delay_ms))) {
+    std::cerr << "usage: game-window-monitor-test [" << peer_delay_option << " <0-" << peer_delay_limit_ms << ">]\n";
+    return 64;
   }
   Monitor production;
   check(!production.start("eut2", session) && production.latest().status == Status::identity_rejected, "SDK claim does not authenticate foreign executable");
@@ -105,7 +126,7 @@ int main(int argc, char** argv) {
   const bool fresh_ready = peer_ready && GetLastError() != ERROR_ALREADY_EXISTS;
   wchar_t executable[32768]{}; GetModuleFileNameW(nullptr, executable, 32768);
   std::wstring command = L"\"" + std::wstring(executable) + L"\" --peer " + std::wstring(event_name.begin(), event_name.end()) +
-    L" " + std::to_wstring(GetCurrentProcessId());
+    L" " + std::to_wstring(GetCurrentProcessId()) + L" " + std::to_wstring(peer_delay_ms);
   STARTUPINFOW startup{}; startup.cb = sizeof(startup); PROCESS_INFORMATION peer{};
   const bool launched = fresh_stop && fresh_ready && CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &startup, &peer);
   check(launched, "owned unrelated-process fixture starts");
@@ -118,14 +139,22 @@ int main(int argc, char** argv) {
     const auto startup_result = WaitForMultipleObjects(2, startup_waits, FALSE, peer_ready_guard_ms);
     check(startup_result != WAIT_OBJECT_0 + 1, "owned peer alive until readiness");
     check(startup_result == WAIT_OBJECT_0, "unrelated actual window readiness");
-    std::cout << "Peer readiness ms=" << GetTickCount64() - ready_started << '\n';
+    std::cout << "Peer readiness ms=" << GetTickCount64() - ready_started << " injected delay ms=" << peer_delay_ms << '\n';
+    if (startup_result == WAIT_OBJECT_0 + 1) {
+      DWORD early = STILL_ACTIVE; GetExitCodeProcess(peer.hProcess, &early);
+      std::cerr << "Peer exited before readiness with code " << early << '\n';
+    }
     // Ignoring a window proves nothing unless it exists: require exactly one window of
     // the peer that has the shape the monitor would select, before and after observing.
     PeerWindows peer_list{peer.dwProcessId};
     if (startup_result == WAIT_OBJECT_0) EnumWindows(peer_windows, reinterpret_cast<LPARAM>(&peer_list));
     check(peer_list.count == 1, "unrelated process shows one eligible-shape window");
+    // The worker publishes once per scan. Revision R read here may be followed by R+1
+    // from a scan that enumerated windows before the peer showed its window and was
+    // then preempted. Revision R+2 comes from a scan that began after R+1 was
+    // published, which is after this read and therefore after the window was shown.
     const auto revision = monitor.latest().revision;
-    check(await(monitor, [&](Snapshot s) { return s.revision > revision && s.status == Status::unavailable; }), "unrelated process publication remains unavailable");
+    check(await(monitor, [&](Snapshot s) { return s.revision > revision + 1 && s.status == Status::unavailable; }), "unrelated process publication remains unavailable");
     check(monitor.latest().status == Status::unavailable, "unrelated process window ignored");
     check(peer_list.count == 1 && monitor_shaped(peer_list.found, peer.dwProcessId), "unrelated window still present after observation");
   }
