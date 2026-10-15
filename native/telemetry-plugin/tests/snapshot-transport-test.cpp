@@ -318,6 +318,87 @@ void startup_late() {
     if(result==StartupFailure::none) { for(int i=0;i<3;++i) f.host.frame(1); f.server.stop(); f.adapter->shutdown(); require(f.host.logs.empty(),"prompt startup leaves no deferred log"); }
   }
 }
+// A synchronous one-byte read on the worker at one hook point. Only CancelSynchronousIo or the test's fallback write
+// ends it, so the result tells whether stop() cancelled synchronous I/O at that point. A failed read fails the hook.
+struct BlockedRead {
+  static BlockedRead* active;
+  std::string at; Handle read_end,write_end,reached{CreateEventW(nullptr,TRUE,FALSE,nullptr)},done{CreateEventW(nullptr,TRUE,FALSE,nullptr)};
+  std::atomic<bool> fired{false}; std::atomic<DWORD> error{ERROR_INVALID_FUNCTION};
+  explicit BlockedRead(std::string phase):at(std::move(phase)) {
+    HANDLE r=nullptr,w=nullptr; require(CreatePipe(&r,&w,nullptr,0)!=FALSE,"owned synchronous read fixture");
+    read_end.reset(r); write_end.reset(w); active=this; set_transport_test_hook(hook);
+  }
+  ~BlockedRead() { set_transport_test_hook(nullptr); active=nullptr; }
+  // Ends the read after `ms` unless it already ended; returns whether this fallback was needed.
+  bool fallback(DWORD ms) { if(WaitForSingleObject(done.get(),ms)==WAIT_OBJECT_0)return false; char byte=1; DWORD n=0; WriteFile(write_end.get(),&byte,1,&n,nullptr); return true; }
+  static DWORD hook(const char* phase,HANDLE,HANDLE stop,DWORD result) {
+    auto* self=active;
+    if(!self||!stop||self->at!=phase||self->fired.exchange(true))return result;
+    SetEvent(self->reached.get()); char byte=0; DWORD n=0;
+    const auto ok=ReadFile(self->read_end.get(),&byte,1,&n,nullptr);
+    self->error.store(ok?ERROR_SUCCESS:GetLastError()); SetEvent(self->done.get());
+    return ok?result:self->error.load();
+  }
+};
+BlockedRead* BlockedRead::active=nullptr;
+// Names in the protected test directory other than the service policy and an optional expected record.
+std::vector<std::wstring> stray_entries(const std::wstring& directory,const std::wstring& expected=L"") {
+  std::vector<std::wstring> names; WIN32_FIND_DATAW data{}; const HANDLE find=FindFirstFileW((directory+L"\\*").c_str(),&data);
+  if(find==INVALID_HANDLE_VALUE)return names;
+  do { const std::wstring name(data.cFileName); if(name!=L"."&&name!=L".."&&name!=L"service-policy.json"&&name!=expected)names.push_back(name); } while(FindNextFileW(find,&data));
+  FindClose(find); return names;
+}
+// stop() must never cancel the worker's synchronous I/O outside its cancellation windows: a cancelled deletion leaves the
+// discovery record (exit path) or its temporary file (failed publication) behind. Each read below ends only through the
+// 750 ms fallback write when nothing cancels it, so these outcomes do not depend on scheduling.
+void stop_discovery() {
+  const auto record_name=[](Fixture& f){ sdk::Snapshot current; require(f.adapter->read_current(current),"source for the record name"); return std::wstring(current.identity.process_instance_id.bytes.begin(),current.identity.process_instance_id.bytes.begin()+36)+L".json"; };
+  {
+    // Exit path: the worker has left the accept loop and next deletes the published record.
+    Fixture f; f.start(); const auto record=f.directory+L"\\"+record_name(f);
+    require(GetFileAttributesW(record.c_str())!=INVALID_FILE_ATTRIBUTES,"discovery record published");
+    // The worker reaches the hook only after stop() has signalled, and stop() blocks until it exits, so the guard thread
+    // starts the fallback timer only once the read is about to be issued. A timer started earlier could put the byte in
+    // the pipe first; the read would then complete at once and leave nothing for an unconditional cancel to abort.
+    BlockedRead exit("v0-exit"); bool reached=false,fallback=false;
+    std::thread guard([&]{reached=WaitForSingleObject(exit.reached.get(),10000)==WAIT_OBJECT_0; fallback=exit.fallback(750);});
+    f.server.stop(); guard.join();
+    std::cout<<"exitReadError="<<exit.error.load()<<" fallback="<<fallback<<" shutdownMs="<<f.server.shutdown_ms()<<'\n';
+    require(reached&&exit.fired.load()&&exit.error.load()==ERROR_SUCCESS&&fallback,"stop never cancels synchronous I/O in the v0 exit path");
+    require(f.server.endpoint().empty()&&f.server.status()!=Status::failed&&GetFileAttributesW(record.c_str())==INVALID_FILE_ATTRIBUTES,"the record is deleted and the worker joined");
+    require(stray_entries(f.directory).empty(),"no discovery file is left after stop");
+  }
+  {
+    // Stop while startup is about to publish: publication completes, then the exit path deletes the record.
+    Fixture f; const auto record=f.directory+L"\\"+record_name(f); BlockedRead publish("startup-before-discovery");
+    require(f.server.start(f.directory),"publishing worker start"); require(WaitForSingleObject(publish.reached.get(),10000)==WAIT_OBJECT_0,"worker before discovery publication");
+    bool fallback=false; std::thread guard([&]{fallback=publish.fallback(750);});
+    f.server.stop(); guard.join();
+    std::cout<<"publishReadError="<<publish.error.load()<<" fallback="<<fallback<<" shutdownMs="<<f.server.shutdown_ms()<<'\n';
+    require(publish.error.load()==ERROR_SUCCESS&&fallback,"stop never cancels synchronous I/O during discovery publication");
+    require(f.server.endpoint().empty()&&f.server.status()!=Status::failed&&GetFileAttributesW(record.c_str())==INVALID_FILE_ATTRIBUTES,"a startup ending by stop publishes and then deletes its record");
+    require(stray_entries(f.directory).empty(),"no record or temporary file is left after a stop during startup");
+  }
+  {
+    // An actual foreign record makes the rename fail, so the publication's catch path deletes its temporary file while
+    // stop() is waiting for the worker.
+    Fixture f; const auto name=record_name(f); const auto record=f.directory+L"\\"+name;
+    Handle foreign(CreateFileW(record.c_str(),GENERIC_READ|GENERIC_WRITE|DELETE,FILE_SHARE_READ,f.security.attributes(),CREATE_NEW,0,nullptr)); require(static_cast<bool>(foreign),"actual foreign discovery record");
+    DWORD written=0; require(WriteFile(foreign.get(),"foreign",7,&written,nullptr)&&written==7,"foreign discovery sentinel");
+    BlockedRead publish("startup-before-discovery");
+    require(f.server.start(f.directory),"colliding worker start"); require(WaitForSingleObject(publish.reached.get(),10000)==WAIT_OBJECT_0,"worker before failing publication");
+    bool fallback=false; std::thread guard([&]{fallback=publish.fallback(750);});
+    f.server.stop(); guard.join();
+    const auto strays=stray_entries(f.directory,name);
+    std::array<char,7> sentinel{}; LARGE_INTEGER zero{}; DWORD read=0;
+    const bool preserved=SetFilePointerEx(foreign.get(),zero,nullptr,FILE_BEGIN)&&ReadFile(foreign.get(),sentinel.data(),7,&read,nullptr)&&read==7&&std::string(sentinel.data(),7)=="foreign";
+    FILE_DISPOSITION_INFO remove{TRUE}; SetFileInformationByHandle(foreign.get(),FileDispositionInfo,&remove,sizeof(remove)); foreign.reset();
+    std::cout<<"collisionReadError="<<publish.error.load()<<" fallback="<<fallback<<" strays="<<strays.size()<<" shutdownMs="<<f.server.shutdown_ms()<<'\n';
+    require(publish.error.load()==ERROR_SUCCESS&&fallback,"stop never cancels synchronous I/O before a failing publication");
+    require(f.server.endpoint().empty()&&f.server.status()!=Status::stopped,"the foreign record fails publication");
+    require(preserved,"foreign discovery record preserved"); require(strays.empty(),"the failed publication leaves no temporary file");
+  }
+}
 #endif
 void serialization() {
   OutboundSequence sequences(UINT64_MAX-1); require(sequences.reserve()==UINT64_MAX,"last sequence represented exactly"); bool exhausted=false; try{sequences.reserve();}catch(const SessionExhausted&){exhausted=true;} require(exhausted,"sequence exhaustion never wraps");
@@ -642,7 +723,7 @@ int main(int argc,char** argv) {
   try { if(argc==4&&(std::string(argv[1])=="host"||std::string(argv[1])=="host-window"))return controlled_host(argv[2],argv[3],std::string(argv[1])=="host-window");
     const std::map<std::string,std::function<void()>> cases{{"serialization",serialization},{"live",live_reconnect_security},{"rejection",rejection_and_timeout},{"collision",collision_and_discovery},{"coalescing",coalescing_and_stalled_shutdown},{"policy",policy_and_exhaustion},{"fuzz",seeded_transport_fuzz},{"window",window_binding}
 #ifdef ETS2TELEMETRY_TRANSPORT_TEST_HOOKS
-    ,{"accept-disconnect",accept_disconnect},{"accept-failure",accept_failure},{"hash-cancel",hash_cancel},{"hash-cancel-race",hash_cancel_race},{"startup-late",startup_late}
+    ,{"accept-disconnect",accept_disconnect},{"accept-failure",accept_failure},{"hash-cancel",hash_cancel},{"hash-cancel-race",hash_cancel_race},{"startup-late",startup_late},{"stop-discovery",stop_discovery}
 #endif
     };
     auto timed=[](const std::string& name,const std::function<void()>& fn){const auto start=GetTickCount64(); std::cout<<name<<'\n'<<std::flush; fn(); std::cout<<name<<" elapsedMs="<<GetTickCount64()-start<<'\n'<<std::flush;};

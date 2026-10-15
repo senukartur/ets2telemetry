@@ -231,6 +231,10 @@ struct Fixture {
   std::unique_ptr<sdk::V1Current> current() const { auto c = std::make_unique<sdk::V1Current>(); require(adapter->read_v1_current(*c), "v1 slot"); return c; }
   std::wstring record() const { const auto c = current(); return directory + L"\\" + wide(c->identity.process_instance_id.c_str()) + L".json"; }
   bool listening() const { return until([&] { return server->status() == v1::ServerStatus::listening; }); }
+  // The worker counts a hydration and then stores `connected`, both after the checkpoint write has completed, so a client
+  // can read the checkpoint before either happens. Once `connected` is observed, the count of this and every earlier
+  // connection is visible: read hydrations() only after this.
+  bool hydrated() const { return until([&] { return server->status() == v1::ServerStatus::connected; }); }
 };
 
 #ifdef ETS2TELEMETRY_TRANSPORT_TEST_HOOKS
@@ -649,7 +653,7 @@ void ack_control() {
   {
     auto c = f.client(true); c->handshake(); send(c->pipe.get(), {1, 16, 0, 0}); require(c->closed(), "client frame over 4,096 bytes closes"); relisten();
   }
-  auto valid = f.client(true); valid->handshake(); require(f.server->hydrations() >= 11, "every valid handshake hydrated");
+  auto valid = f.client(true); valid->handshake(); require(f.hydrated() && f.server->hydrations() >= 11, "every valid handshake hydrated");
 }
 #endif
 
@@ -761,7 +765,7 @@ void policy() {
   denied("the v0 directory's policy does not apply to v1");
   write_policy(f.directory, f.security, f.user, f.self);
   auto valid = f.client(true); valid->handshake();
-  require(f.server->hydrations() == 1, "only the authorized client hydrated");
+  require(f.hydrated() && f.server->hydrations() == 1, "only the authorized client hydrated");
   // v0, with its own valid policy, serves throughout.
   transport::Server v0{*f.adapter}; require(v0.start(f.v0_directory) && until([&] { return v0.status() == transport::Status::listening; }, 10000), "v0 listening");
   auto live = open_pipe(v0.endpoint()); send(live.get(), framed(v0_hello)); std::vector<std::uint8_t> bytes;
