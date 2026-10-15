@@ -239,6 +239,11 @@ void deferred_log() {
   require(thrown->continuity.callback_failures == control->continuity.callback_failures + 1 && control->continuity.callback_failures == base->continuity.callback_failures, "throwing game logger counted as one callback failure");
   require(thrown->continuity.lost_observations - control->continuity.lost_observations == control->continuity.lost_observations - base->continuity.lost_observations, "throwing game logger fabricates no lost observation");
   host.frame_end(); require(host.logs.size() == 2, "a failed entry is not retried");
+  // The v0 transport and the protocol v1 endpoint have separate slots: entries that both arrive before one frame_end
+  // are both logged, in slot order, and neither replaces the other.
+  std::thread([&] { adapter->defer_log(&second, DeferredLogSlot::transport_v1); adapter->defer_log(&first); }).join();
+  host.frame_end();
+  require(host.logs.size() == 4 && host.logs[2].second == "first" && host.logs[3].second == "second" && host.wrong_thread == 0, "both slots logged once, in slot order");
   adapter->shutdown();
 }
 void missing_game_time_reset() {
