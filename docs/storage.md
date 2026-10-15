@@ -1,8 +1,8 @@
 # Durable history storage
 
-ET-013 adds the local history database: a SQLite file written through [better-sqlite3](https://github.com/WiseLibs/better-sqlite3) by one connection that the telemetry service's storage worker will own. This document describes the schema, the durability rules, migrations, backups and the storage API.
+ET-013 adds the local history database: a SQLite file written through [better-sqlite3](https://github.com/WiseLibs/better-sqlite3) by one connection that the telemetry service's storage worker owns. This document describes the schema, the durability rules, migrations, backups, the storage API and the worker that runs it.
 
-Status (October 15, 2026): PR-1 adds the in-process storage core in [packages/storage](../packages/storage) and its tests. Nothing calls it yet. PR-2 runs it in the storage worker of the telemetry utilityProcess, opens the production database at service start and measures storage size. The desktop application stays on protocol v0, records nothing and sends no ACK; recording starts with ET-015a. See [ET-013 validation](validation/et-013.md) for the checks performed.
+Status (October 15, 2026): PR-1 added the in-process storage core in [packages/storage](../packages/storage) and its tests. PR-2 runs it in the storage worker of the telemetry utilityProcess, opens the production database at service start ([below](#history-database-in-the-telemetry-service)) and measured its size ([disk budgets](#disk-budgets)). The desktop application stays on protocol v0, records nothing and sends no ACK; recording starts with ET-015a. See [ET-013 validation](validation/et-013.md) for the checks performed.
 
 ## Files and purposes
 
@@ -12,7 +12,7 @@ Status (October 15, 2026): PR-1 adds the in-process storage core in [packages/st
 | `synthetic` | `%LOCALAPPDATA%\ETS2Telemetry\synthetic\<name>.sqlite`, name `[a-z0-9-]{1,64}`, backups in `synthetic\backups\` | `synthetic` only |
 | `replay` | same directory rules as `synthetic` | `replay` only |
 
-The paths are resolved at runtime from `LOCALAPPDATA` (PR-2); the application never falls back to TEMP or the working directory. Each database stamps its purpose in `database_info` when it is created, and a schema trigger refuses a plugin session whose origin differs from the one its purpose accepts. Synthetic and replay data therefore never enter history. A synthetic or replay database may not use the production history path at all. Tests use only temporary directories from `tests/shared/resources.ts`.
+The paths are resolved at runtime from `LOCALAPPDATA` (`dataPaths` in [paths.ts](../apps/desktop/src/paths.ts), which also names the `synthetic` directory); the application never falls back to TEMP or the working directory. Each database stamps its purpose in `database_info` when it is created, and a schema trigger refuses a plugin session whose origin differs from the one its purpose accepts. Synthetic and replay data therefore never enter history. A synthetic or replay database may not use the production history path at all. Tests use only temporary directories from `tests/shared/resources.ts`.
 
 The database path must be absolute and normalized; `:memory:`, relative, drive-relative and `file:` paths are refused with `DATA_PATH_INVALID`. A missing parent directory is created; a file in its place is refused.
 
@@ -111,11 +111,46 @@ Indexes: samples by session and by trip, attributions and completeness intervals
 | `DATABASE_CORRUPT` | `SQLITE_CORRUPT`, `SQLITE_NOTADB`, an impossible stored value | No |
 | `CONSTRAINT_VIOLATION` | `SQLITE_CONSTRAINT*`, for example a synthetic session in history | No |
 | `INVALID_INPUT`, `UNKNOWN_SESSION`, `UNKNOWN_TRIP`, `SESSION_CONFLICT`, `VALUE_OUT_OF_RANGE` | Command input | No |
-| `STORAGE_CLOSED`, `STORAGE_BUSY`, `WORKER_FAILED`, `TIMEOUT` | Connection and worker state; the worker codes are used from PR-2 | `STORAGE_BUSY`, `TIMEOUT` |
+| `STORAGE_CLOSED`, `STORAGE_BUSY`, `WORKER_FAILED`, `TIMEOUT` | Connection and worker state ([storage worker](#storage-worker)) | `STORAGE_BUSY`, `TIMEOUT` |
 | `DATA_PATH_INVALID` | Invalid path or blocked directory | No |
 | `DATABASE_UNRECOGNIZED`, `SCHEMA_NEWER`, `PURPOSE_MISMATCH`, `DURABILITY_UNVERIFIED` | Refused opens; the file is unchanged | No |
 | `BACKUP_FAILED`, `MIGRATION_FAILED` | `cause` gives the underlying code; `backupFileName` names the backup | No |
 | `INTERNAL` | Any other failure, including other SQLite result codes such as `SQLITE_ERROR`, a `TypeError` and a better-sqlite3 `RangeError` (for example a wrong parameter count): a defect in the storage code. Input ranges are validated before SQLite, so a `RangeError` is never read as `VALUE_OUT_OF_RANGE`. Malformed command arguments are `INVALID_INPUT` | No |
+
+## Storage worker
+
+The database runs on a Node.js worker thread of the telemetry utilityProcess, never in Electron main or a renderer:
+
+```text
+Electron main -> telemetry utilityProcess -> storage worker thread (storage-worker.cjs) -> one better-sqlite3 connection
+```
+
+[apps/desktop/src/storage-worker.ts](../apps/desktop/src/storage-worker.ts) has two modes. Started with `workerData {kind: 'storage'}`, it runs the host in [worker/host.ts](../packages/storage/src/worker/host.ts) on the in-process storage core; every other start is the unchanged ET-001 readiness probe (`{kind: 'probe', filename}`). It is the only desktop module that loads better-sqlite3.
+
+The service talks to the worker through [StorageClient](../packages/storage/src/client.ts), which is Node-safe: it never loads native SQLite. The messages are defined in [worker/protocol.ts](../packages/storage/src/worker/protocol.ts): `{type: 'storage.request', id, command}` and `{type: 'storage.response', id, result}`, where `command` names one storage method (`open`, `upsertSession`, `commitEvent`, `commitGap`, `appendSamples`, `recordCompleteness`, `committedThrough`, the bounded reads, `storageInfo` and `close`) and `result` is the method's Result. Open options cross the boundary as exactly `{path, purpose, backupsDirectory, appVersion}`; the host copies them field by field and forwards only the message and effects of a commit, so injected migrations, clocks and `testHooks` never reach the worker. A malformed request with an id is answered with `INVALID_INPUT`.
+
+| Rule | Value |
+| --- | --- |
+| Commands in flight | One at a time, in order; request ids are monotonic positive integers |
+| Queue | At most 64 commands behind the one in flight; the next is refused at once with retryable `STORAGE_BUSY` |
+| Deadline per command | 10 s after it was sent; `open` 120 s, because it can include a verified backup and a migration |
+| Missed deadline | The command gets retryable `TIMEOUT`, the worker is terminated and every queued and later command gets `WORKER_FAILED` |
+| Worker error or unexpected exit | The command in flight and every queued command get `WORKER_FAILED`; later commands too |
+| Malformed answer | An answer for another id, an unknown error code or a commit result without a canonical decimal `committedThroughEventSeq` and a known status fails the client the same way |
+| Close | Queued commands get `STORAGE_CLOSED`, the command in flight finishes with its real result, then the worker closes the database (SQLite checkpoints the WAL) and its thread exits with code 0. Without that within the close grace, the worker is terminated and the command in flight gets `WORKER_FAILED`. Closing a client that had already failed (worker error or exit, missed deadline, malformed answer) only waits for the terminated thread and is never clean |
+
+**No success after a failure.** A worker failure, a missed deadline or a malformed answer fails the client closed. The command in flight may or may not have committed, so it is reported as `TIMEOUT` or `WORKER_FAILED`, never as a commit result, and an answer arriving later is ignored. A durable ACK may be built only from a commit result (protocol v1 §10), so a lost answer can delay an ACK but never advance one past stored coverage; after a restart the producer redelivers and storage answers `duplicate`. A storage error such as `DISK_FULL` is an ordinary result: the worker keeps serving and a retry can commit.
+
+## History database in the telemetry service
+
+OD-2: the telemetry service opens the production history database when it starts, without waiting for it ([history-storage.ts](../apps/desktop/src/history-storage.ts)). The ET-001 temporary probe stays the readiness gate, so live telemetry and the overlay never depend on the database.
+
+- **Path.** `dataPaths(%LOCALAPPDATA%).database`, that is `%LOCALAPPDATA%\ETS2Telemetry\data\telemetry.sqlite`, with purpose `history` and backups in `%LOCALAPPDATA%\ETS2Telemetry\backups\`. A missing, empty, relative or drive-relative `LOCALAPPDATA` leaves history unavailable with `DATA_PATH_INVALID`; there is no TEMP or working-directory fallback.
+- **Diagnostics.** The service log receives only fixed codes and numbers: `HISTORY_STORAGE_OPENED` with facts `{schemaVersion, created, migratedFrom}` (`migratedFrom` is `null` unless a migration ran), `HISTORY_STORAGE_UNAVAILABLE` with `{code}` at most once per service, `HISTORY_BACKUP_PARTIALS_REMOVED` with `{count}` after an open that removed stale partial backup files ([below](#backups-and-restore-od-5)), and `HISTORY_STORAGE_CLOSED` after an orderly close. A refused open (for example `SCHEMA_NEWER`, `DATABASE_LOCKED` or `DATABASE_UNRECOGNIZED`) ends the worker at once; history then stays unavailable until the service starts again. Nothing retries yet.
+- **Shutdown.** The step `history-storage` (1000 ms) runs in the `storage` phase of the [service shutdown sequence](app-lifecycle.md#service-shutdown), in parallel with `storage-probe`. It waits for a running open, closes the database and waits for the worker thread to end; the close grace is 800 ms, after which the worker is terminated and the step fails, so the service reports `{type: 'stopped', clean: false}`. The step also fails when the worker had failed earlier in the session (a crash or a missed deadline), because the database was then not closed in order. Phase maxima are now 1000 (intake) + 0 (flush) + 1000 (storage) = 2000 ms of the 2500 ms `SERVICE_STOP_BUDGET_MS`, which leaves 500 ms for the ET-015 flush step.
+- **A failed probe** ends the service from its report, outside the orderly sequence (exit code 0 after the probe's own `stopped`, 1 after `SERVICE_STOP_FAILED`). The service first closes the history database, bounded by the same 1000 ms, and then exits with that code. After first readiness this close is best effort: the preceding `failed` report makes the supervisor kill the service at once, so the killed-service rule (WAL replay on the next open, no data loss) usually applies instead.
+- **A killed service** does not close the database; SQLite replays committed WAL frames and discards the rest when the next service opens it. The exclusive lock ends with the process.
+- **Second instance.** A second service process (which ET-011a's single-instance lock already prevents) would get `DATABASE_LOCKED`.
 
 ## Migrations (OD-4)
 
@@ -136,7 +171,7 @@ The pre-migration backup is made with SQLite's online backup API (`db.backup()`)
 4. Verify the copy read-only: `integrity_check`, `foreign_key_check`, `application_id`, `user_version`, database UUID, row counts and logical digest.
 5. Flush it, rename it to `.sqlite`, and write the manifest `.json` last: `{format, databaseUuid, fromVersion, fileName, fileSha256, size, rowCounts, logicalDigest, createdUtcMs, appVersion, reason: 'pre-migration'}`.
 
-Any failure removes the partial files. **Retention:** after the new backup is verified and its migration committed, the three newest verified pre-migration backups of that database are kept and older ones are deleted, the backup first and its manifest last. Files without a valid manifest of this application, backups of other databases and history rows are never touched. Budget backups at up to three times the database size.
+Any failure removes the partial files. A writer that is terminated during the copy (for example when the service's bounded shutdown ends the storage worker) cannot do that, so every writer open of an existing database, once it holds the exclusive lock, removes that database's leftovers: regular files named exactly `telemetry-<uuid8>-v<n>-<timestamp>.sqlite.partial` with `-journal`, `-wal` or `-shm`, and `telemetry-<uuid8>-v<n>-<timestamp>.json.partial`. Finished backups, manifests, other databases' files and anything else are never touched; a removal that fails is retried at the next open. The open summary reports the number as `removedPartialBackups` (PR #60 review). **Retention:** after the new backup is verified and its migration committed, the three newest verified pre-migration backups of that database are kept and older ones are deleted, the backup first and its manifest last. Files without a valid manifest of this application, backups of other databases and history rows are never touched. Budget backups at up to three times the database size.
 
 **Restore** (`restoreBackup`) writes only to a new path. Before writing anything it checks the target path for the requested purpose (a synthetic or replay restore to the production history path is `DATA_PATH_INVALID`), refuses an existing target or any `-wal`, `-shm`, `-journal` or `.partial` file beside it, and checks the manifest, the file SHA-256, the logical digest and that the backup's `database_info.purpose` is the requested one (`PURPOSE_MISMATCH`). Only then does it create the target directory, copy through the backup API into `<target>.partial`, verify the copy, rename it and open it through the normal durability path, which migrates it when it is older. If that open fails, the restored file and its sidecars are removed again on a best-effort basis: a removal that fails (for example `EBUSY` from a scanner) is ignored, and the open's error is still returned as a result. In-place replacement of the live database is deferred to ET-018. Open question for ET-015a: a restored database can hold less coverage than the producer has already acknowledged; ET-015a defines the `restore-loss` completeness marker.
 
@@ -146,17 +181,42 @@ These are separate allowances, not a total disk guarantee:
 
 | Item | Bound |
 | --- | --- |
-| Database | Measured in PR-2 against the planning allowance of about 100 MB per 100 hours of 1 Hz samples |
-| WAL | Checkpointed automatically about every 1,000 pages (about 4 MB) and on close |
+| Database | Measured: about 53 MB per 100 hours of 1 Hz samples with this schema (below), within the planning allowance of about 100 MB |
+| WAL | Checkpointed automatically about every 1,000 pages and on close; measured peak 4.2 MB (4,173,592 bytes) |
 | Pre-migration backups | Up to three copies of the database |
 | Logs, CAP0 captures, binaries | Their own bounds: 256 KiB plus one rotation per log; 20 MiB per capture file; the installed application |
 
+### Measured size (ET-013 PR-2)
+
+`npm run measure:storage` ([storage-size.measure.ts](../tests/measurement/storage-size.measure.ts)) writes 100 hours of 1 Hz history through the real storage core with its verified durability settings into a temporary database, under the pinned Electron runtime: 50 plugin sessions of 2 hours, 360,000 samples (every reading available, float32 values as the SDK gives them, about 92% of them in trips), 100 trips with truck and trailer references, 950 gameplay events with attributions, 100 trip closes and 50 gaps with completeness intervals. Samples are written in transactions of 60 rows; 300 further one-row transactions measure the worst case of a 1 Hz writer. Result on the implementer's Windows machine, October 15, 2026 (Electron 44.7.0, better-sqlite3 13.0.3, page size 4,096):
+
+| Measure | Value |
+| --- | --- |
+| Database after close | 53,436,416 bytes (13,046 pages, empty freelist): **53.4 MB per 100 hours** |
+| WAL peak during the load | 4,173,592 bytes |
+| `samples` table | 41,078,784 bytes |
+| `samples_session` index | 5,693,440 bytes |
+| `samples_trip` index (partial) | 5,218,304 bytes |
+| Samples with both indexes | 144.3 bytes per sample |
+| `events` table and its UNIQUE index | 1,028,096 and 36,864 bytes |
+| Every other table and index | under 60 KB each |
+| Event commit (with effects) | median 2.4 ms, 95th percentile 3.5 ms |
+| 60-sample commit | median 2.5 ms, 95th percentile 3.8 ms |
+| One-sample commit | median 1.9 ms, 95th percentile 2.4 ms |
+| `listSamples` of one trip (3,300 rows) | median 24.1 ms |
+| `listTrips` (100), `listEvents`, `getTrip`, `committedThrough`, `storageInfo` | median 2.0, 0.15, 0.03, 0.01 and 0.05 ms |
+
+The October 10 in-memory model (60–120 MB per 100 hours, about 52 MB with numeric references) is superseded by this measurement of the actual schema. The figures are one synthetic run, not a guarantee: samples with unavailable readings are smaller, longer localized texts or more events per hour are larger, timings depend on the disk, and real one-hour growth, CPU use and frame time remain REG-018/ET-019/ET-020 work. Pre-migration backups add up to three database copies.
+
 ## Tests
 
-The storage suite loads native SQLite and runs only under the pinned Electron executable in Node mode, the runtime of the telemetry service: `npm run test:storage` starts [run-electron-node.mjs](../scripts/run-electron-node.mjs), which runs Vitest inside `electron.exe` with `ELECTRON_RUN_AS_NODE=1`. [vitest.storage.config.mts](../vitest.storage.config.mts) and `tests/storage/setup.ts` refuse any runtime other than Electron 44.7.0. The Node-safe suite (`npm test`) tests the codec, error mapping and retention policy without native SQLite. What enforces the split:
+The storage suite loads native SQLite and runs only under the pinned Electron executable in Node mode, the runtime of the telemetry service: `npm run test:storage` first runs [build-storage-test-bundles.mjs](../scripts/build-storage-test-bundles.mjs), which bundles the storage worker entrypoint, the storage core and the client with Vite under plain Node into a new temporary directory, then starts [run-electron-node.mjs](../scripts/run-electron-node.mjs) with `ETS2TELEMETRY_STORAGE_TEST_BUNDLES` naming that directory; it runs Vitest inside `electron.exe` with `ELECTRON_RUN_AS_NODE=1` and removes the bundles afterwards. [vitest.storage.config.mts](../vitest.storage.config.mts) and `tests/storage/setup.ts` refuse any runtime other than Electron 44.7.0. The Node-safe suite (`npm test`) tests the codec, error mapping and retention policy without native SQLite. What enforces the split:
 
-- **ESLint, statically.** Only `packages/storage/src/sqlite`, `apps/desktop/src/storage-worker.ts` and `tests/storage` may import `better-sqlite3`. The Node-safe set (`tests/unit`, `tests/shared`, every `apps/desktop/src` `.ts` module except the storage worker, and `packages/storage/src/{api,codec,errors,retention}.ts`) and the preloads and renderers may also not import the SQLite core, the in-process storage index that re-exports it, or `tests/storage`. In the Node-safe set, the preloads and the renderers, `no-restricted-syntax` also reports a dynamic `import()` or a `require()` of any of those modules or of `better-sqlite3` when the module name is a string literal or a template literal without expressions, any call whose first argument is the literal `'better-sqlite3'`, and any `createRequire` call. These selectors are built from the same regular expressions as the import restrictions, so the static and dynamic sets are identical. A computed module name, or a module outside these lists that loads SQLite and is then imported, is not detected statically.
+- **ESLint, statically.** Only `packages/storage/src/sqlite`, `apps/desktop/src/storage-worker.ts` and `tests/storage` may import `better-sqlite3`. The Node-safe set (`tests/unit`, `tests/shared`, every `apps/desktop/src` `.ts` module except the storage worker, and `packages/storage/src/{api,codec,errors,retention,client}.ts` and `worker/protocol.ts`) and the preloads and renderers may also not import the SQLite core, the in-process storage index that re-exports it, the storage worker host (`worker/host.ts`, which runs that index), or `tests/storage`. Relative names inside the package count too: `./index`, `../index`, `./sqlite/…`, `../sqlite/…`, `./host`, `./worker/host` and `../worker/host`, plus the bare directory specifiers `.`, `./`, `..` and `../`; only the storage worker entrypoint may import the host. In the Node-safe set, the preloads and the renderers, `no-restricted-syntax` also reports a dynamic `import()` or a `require()` of any of those modules or of `better-sqlite3` when the module name is a string literal or a template literal without expressions, any call whose first argument is the literal `'better-sqlite3'`, and any `createRequire` call. These selectors are built from the same regular expressions as the import restrictions, so the static and dynamic sets are identical. A computed module name, or a module outside these lists that loads SQLite and is then imported, is not detected statically.
+- **Worker and process tests.** `tests/storage/worker.test.ts` drives the bundled worker in a real worker thread through `StorageClient`: open, commits with effects, reads, close with exit code 0 and no WAL left, reopen by a new worker, refused opens (`DATA_PATH_INVALID`, `SCHEMA_NEWER`, `DATABASE_UNRECOGNIZED`, `DATABASE_LOCKED`, `PERMISSION_DENIED`) and command errors as path-free results, and a terminated worker. `tests/storage/crash-recovery.test.ts` runs [crash-child.cjs](../tests/storage/fixtures/crash-child.cjs) as a separate Electron process and ends it with `TerminateProcess`: inside a commit transaction (in-process `beforeCommit` hook), through the worker after `COMMIT` but before the ack line, and through the worker at five seeded acks. After each kill the database must pass `integrity_check` and `foreign_key_check`, coverage must equal the longest stored prefix and be at least every reported commit, every stored event must have exactly its attribution, every stored gap its completeness interval and every trip its open, close and completeness exactly when the causing rows are stored, and redelivering the whole stream must answer `duplicate` for stored items and complete the rest.
 - **The storage suite's runtime check.** `vitest.storage.config.mts` and `tests/storage/setup.ts` fail unless the process is Electron 44.7.0, so the native suite never runs under plain Node. They do not stop a Node-safe test from loading SQLite at run time; that is the lint rule's job, and `vitest.config.mts` includes only `tests/unit`.
+
+`npm run measure:storage` is a separate measurement ([vitest.storage-measure.config.mts](../vitest.storage-measure.config.mts)) with the same runtime check; it is not part of a check suite. Set `ETS2TELEMETRY_MEASURE_REPORT` to an absolute path outside the checkout to keep its JSON report.
 
 Fixtures in [tests/fixtures/storage](../tests/fixtures/storage) are immutable: each `.sqlite` file has the SQL it was created from, `manifest.txt` lists every file's SHA-256, and the representative database's expected content is written by hand. Tests copy fixtures into temporary directories and check that the originals are unchanged. Never regenerate a fixture: add a new one for a new schema version.
 

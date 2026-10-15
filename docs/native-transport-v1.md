@@ -184,7 +184,7 @@ The snapshot slot holds the latest v1 slot copy that differs from the last one s
 
 1. `v1.signal_stop()`, so `end` is written while CAP0 drains;
 2. CAP0 `stop()`;
-3. `v1.stop()`: repeated `CancelSynchronousIo` on the worker until it exits, then join. A cancellation is issued only while the worker is inside its inspection window (the peer image and policy reads), under a mutex that orders it with the window's open and close. Outside it, above all while the exit path deletes the discovery record, nothing is cancelled: a cancelled `SetFileInformationByHandle` fails with `STATUS_CANCELLED` and would leave the record behind;
+3. `v1.stop()`: repeated `CancelSynchronousIo` on the worker until it exits, then join. A cancellation is issued only while the worker is inside its inspection window (the peer image and policy reads), under a mutex that orders it with the window's open and close (`transport::CancelWindow`, which v0 `stop()` also uses). Outside it, above all while the exit path deletes the discovery record, nothing is cancelled: a cancelled `SetFileInformationByHandle` fails with `STATUS_CANCELLED` and would leave the record behind;
 4. v0 `stop()`;
 5. the window monitor;
 6. `Adapter::shutdown()`;

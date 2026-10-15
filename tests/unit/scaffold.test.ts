@@ -10,6 +10,8 @@ describe('Scaffold boundaries',() => {
   });
   it('keeps production data independent from installation identity',() => {
     expect(dataPaths('C:\\isolated').database).toBe('C:\\isolated\\ETS2Telemetry\\data\\telemetry.sqlite');
+    // Synthetic and replay databases live apart from history (OD-10).
+    expect(dataPaths('C:\\isolated').synthetic).toBe('C:\\isolated\\ETS2Telemetry\\synthetic');
     expect(() => dataPaths('relative')).toThrow();
   });
   it('uses physical unpacked entrypoints for packaged child processes',() => {

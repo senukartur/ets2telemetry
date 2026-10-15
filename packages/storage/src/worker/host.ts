@@ -1,0 +1,79 @@
+// Storage worker host (ET-013): serves StorageClient requests on the worker thread that owns the one SQLite connection.
+// It runs the in-process storage core and therefore loads native SQLite; only the desktop storage worker imports it.
+// Requests are handled one at a time in arrival order. Open options are copied field by field, so test hooks, injected
+// migrations and clocks never cross the worker boundary. See docs/storage.md.
+import type {Result} from '../api';
+import {classifyError, storageError} from '../errors';
+import {openStorage, type Storage} from '../index';
+import {parseRequest, type StorageCommand, type StorageResponse} from './protocol';
+
+/** The worker side of the port: worker_threads' parentPort satisfies it. */
+export interface HostPort {
+  on(event: 'message', listener: (message: unknown) => void): unknown;
+  off(event: 'message', listener: (message: unknown) => void): unknown;
+  postMessage(message: StorageResponse): void;
+  unref?(): void;
+}
+
+const failed = (code: Parameters<typeof storageError>[0]): Result<never> => ({ok: false, error: storageError(code)});
+
+/**
+ * Serves requests until a `close` request: it closes the database, answers, stops listening and releases the port so
+ * the worker thread can end with exit code 0. Commands before a successful `open` or after `close` get STORAGE_CLOSED.
+ */
+export function serveStorage(port: HostPort): void {
+  let storage: Storage | undefined;
+  let closed = false;
+  let queue = Promise.resolve();
+
+  async function execute(command: StorageCommand): Promise<Result<unknown>> {
+    if (command.name === 'close') {
+      closed = true;
+      const open = storage;
+      storage = undefined;
+      return open ? open.close() : {ok: true, value: undefined};
+    }
+    if (closed) return failed('STORAGE_CLOSED');
+    if (command.name === 'open') {
+      if (storage) return failed('INVALID_INPUT');
+      const {path, purpose, backupsDirectory, appVersion} = command.options;
+      const opened = await openStorage({path, purpose, backupsDirectory, appVersion});
+      if (!opened.ok) return opened;
+      // A close that arrived while the open was running is impossible: requests are handled one at a time.
+      storage = opened.value;
+      return {ok: true, value: opened.value.summary};
+    }
+    if (!storage) return failed('STORAGE_CLOSED');
+    switch (command.name) {
+    case 'upsertSession': return storage.upsertSession({message: command.input.message});
+    // Only the message and its effects are forwarded; in-process commit options never come from a message.
+    case 'commitEvent': return storage.commitEvent({message: command.input.message, effects: command.input.effects});
+    case 'commitGap': return storage.commitGap({message: command.input.message, effects: command.input.effects});
+    case 'appendSamples': return storage.appendSamples(command.pluginSessionId, command.rows);
+    case 'recordCompleteness': return storage.recordCompleteness(command.pluginSessionId, command.interval);
+    case 'committedThrough': return storage.committedThrough(command.pluginSessionId);
+    case 'getSession': return storage.getSession(command.pluginSessionId);
+    case 'getEvent': return storage.getEvent(command.pluginSessionId, command.eventSeq);
+    case 'listEvents': return storage.listEvents(command.pluginSessionId, command.page);
+    case 'getTrip': return storage.getTrip(command.tripUuid);
+    case 'listTrips': return storage.listTrips(command.page);
+    case 'listSamples': return storage.listSamples(command.scope, command.page);
+    case 'storageInfo': return storage.storageInfo();
+    }
+  }
+
+  async function handle(message: unknown): Promise<void> {
+    const request = parseRequest(message);
+    if (!request.ok) {
+      if (request.id !== undefined) port.postMessage({type: 'storage.response', id: request.id, result: failed('INVALID_INPUT')});
+      return;
+    }
+    let result: Result<unknown>;
+    try { result = await execute(request.command); } catch (error) { result = {ok: false, error: classifyError(error)}; }
+    port.postMessage({type: 'storage.response', id: request.id, result});
+    if (request.command.name === 'close') { port.off('message', listener); port.unref?.(); }
+  }
+
+  const listener = (message: unknown) => { queue = queue.then(() => handle(message)); };
+  port.on('message', listener);
+}

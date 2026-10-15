@@ -24,6 +24,8 @@ The owner chose a hybrid with a deferred game log:
 - A late success logs the message `ETS2Telemetry: transport started after the startup wait`. A late failure logs the same fixed error as an early one, keeps `failed` status and publishes no endpoint. This matches the existing runtime failure after startup. No detached result is dropped. A startup that ends after SDK shutdown has requested stop is logged at shutdown: a success with the same message, and a failure with the fixed warning `ETS2Telemetry: transport startup ended by shutdown`. That warning names no stage, because the stage may be an artifact of cancellation. A game-logger exception in the deferred path counts one callback failure and no lost observation.
 - Shutdown during a pending startup uses the existing stop path: stop event, repeated `CancelSynchronousIo`, join.
 
+Update, October 15, 2026: since the [v0 stop fix](et-004-v0-stop.md), that cancellation reaches only the startup checks and peer inspection; endpoint creation, discovery publication and record deletion are no longer cancelled.
+
 Rejected alternatives: a longer synchronous budget would block the game longer. A fully asynchronous startup would drop the synchronous ET-004a failure report for common local failures (collisions, insecure ACLs, foreign discovery records).
 
 ## Tests

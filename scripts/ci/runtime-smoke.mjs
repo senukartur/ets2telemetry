@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import os from 'node:os';
-import {readFile, readdir, writeFile} from 'node:fs/promises';
+import {open, readFile, readdir, writeFile} from 'node:fs/promises';
+import {existsSync} from 'node:fs';
 import {performance} from 'node:perf_hooks';
 import {_electron as electron} from '@playwright/test';
 import {startLiveSmokeSource} from './live-smoke-source.mjs';
@@ -30,6 +31,31 @@ result.phases = [];
 const phase = name => result.phases.push({phase: name, utc: new Date().toISOString(), monotonicMs: Math.round(performance.now() * 10) / 10});
 const diagnosticEvents = async directory => (await readFile(path.join(directory, 'startup.jsonl'), 'utf8'))
   .trim().split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line));
+// ET-013: one service run opens the history database once per service process (`created` per opening, in order),
+// never reports it unavailable, and closes it in its storage shutdown step before its single stopped report.
+const verifyHistoryEvents = (service, created) => {
+  const opened = service.filter(row => row.event === 'HISTORY_STORAGE_OPENED').map(row => row.facts);
+  assert.deepEqual(opened, created.map(value => ({schemaVersion: 1, created: value, migratedFrom: null})));
+  assert.ok(!service.some(row => row.event === 'HISTORY_STORAGE_UNAVAILABLE'), 'History storage was unavailable');
+  const closed = service.flatMap((row, index) => row.event === 'HISTORY_STORAGE_CLOSED' ? [index] : []);
+  const stopped = service.findLastIndex(row => row.event === 'SERVICE_REPORT' && row.detail?.type === 'stopped');
+  assert.equal(closed.length, 1); assert.ok(closed[0] < stopped, 'History storage closed after the stopped report');
+  assert.deepEqual(service.filter(row => row.event === 'SHUTDOWN_STEP' && row.facts?.name === 'history-storage').map(row => row.facts.outcome), ['ok']);
+  return {opened, closed: closed.length};
+};
+// The database is in the isolated LOCALAPPDATA, checkpointed and closed: a SQLite file of this application at schema
+// version 1 without WAL, shared-memory or journal files, and no pre-migration backup for a new database.
+const verifyHistoryFile = async () => {
+  const database = path.join(config.localappdata, 'ETS2Telemetry', 'data', 'telemetry.sqlite');
+  const file = await open(database, 'r');
+  const header = Buffer.alloc(100);
+  try {await file.read(header, 0, 100, 0);} finally {await file.close();}
+  const facts = {magic: header.subarray(0, 15).toString('latin1'), applicationId: header.readInt32BE(68), userVersion: header.readUInt32BE(60),
+    sidecars: ['-wal', '-shm', '-journal'].filter(suffix => existsSync(database + suffix)),
+    backups: existsSync(path.join(config.localappdata, 'ETS2Telemetry', 'backups'))};
+  assert.deepEqual(facts, {magic: 'SQLite format 3', applicationId: 1163154226, userVersion: 1, sidecars: [], backups: false});
+  return facts;
+};
 // Every launch of one run shares the isolated profile, TEMP, APPDATA and LOCALAPPDATA; only the diagnostic directory may differ.
 const environment = diagnostics => ({...process.env, TEMP: config.temp, TMP: config.temp, APPDATA: config.appdata,
   LOCALAPPDATA: config.localappdata, ETS2TELEMETRY_PROFILE_DIR: config.profile,
@@ -209,6 +235,8 @@ finally {
     }
     assert.ok(result.serviceEvents.some(row => row.event === 'STORAGE_VERIFIED'));
     assert.ok(result.serviceEvents.some(row => row.event === 'SERVICE_REPORT' && row.detail?.type === 'stopped'));
+    // A deliberately killed service never closed its database; its replacement reopens the existing file.
+    result.history = verifyHistoryEvents(result.serviceEvents, telemetrySource && result.telemetry?.serviceRestartRecovered ? [true, false] : [true]);
     assert.ok(![...result.mainEvents, ...result.serviceEvents].some(row =>
       /FAILED|TIMEOUT|UNCAUGHT|UNHANDLED|INVALID|RENDER_PROCESS_GONE/.test(row.event)));
     if (config.scenario === 'lifecycle') {
@@ -228,6 +256,8 @@ finally {
         assert.ok(![...main, ...service].some(row => /FAILED|TIMEOUT|UNCAUGHT|UNHANDLED|INVALID|RENDER_PROCESS_GONE/.test(row.event)));
       }
       assert.deepEqual(lifecycle.restartMainEvents.filter(row => row.event === 'APP_EXIT_REQUESTED').map(row => row.facts?.reason), ['app-quit']);
+      // Run B reopens the history database that run A created.
+      lifecycle.restartHistory = verifyHistoryEvents(lifecycle.restartServiceEvents, [false]);
       // Settings diagnostics: run A falls back from the invalid file, quarantines it and saves once; run B only loads.
       const settingsEvents = rows => rows.filter(row => row.event.startsWith('SETTINGS_')).map(row => ({event: row.event, facts: row.facts ?? null}));
       lifecycle.settingsEvents = {runA: settingsEvents(result.mainEvents), runB: settingsEvents(lifecycle.restartMainEvents)};
@@ -237,6 +267,7 @@ finally {
       lifecycle.restartLauncherExit = result.launcherExit;
       lifecycle.shutdownClean = true;
     }
+    result.history.file = await verifyHistoryFile();
   } catch (error) {result.postconditionFailure = failure(error);}
   result.passed = !result.failure && !result.closeFailure && !result.traceFailure && !result.postconditionFailure && !result.sourceCloseFailure;
   result.finishedUtc = new Date().toISOString();

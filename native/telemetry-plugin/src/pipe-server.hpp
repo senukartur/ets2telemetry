@@ -1,4 +1,5 @@
 #pragma once
+#include "cancel-window.hpp"
 #include "pipe-discovery.hpp"
 #include "protocol-v0.hpp"
 #include "game-window-monitor.hpp"
@@ -43,6 +44,10 @@ class Server final {
   bool wait_io(HANDLE pipe, OVERLAPPED&, DWORD& transferred, ULONGLONG deadline, bool capture_updates);
   bool write_frame(HANDLE pipe, const std::vector<std::uint8_t>&, bool capture_updates);
   void serve(HANDLE pipe, const std::wstring& directory, const OwnerSecurity&, const UserIdentity&);
+  // stop() cancels the worker's synchronous I/O only inside a window: the startup checks before endpoint creation, and
+  // peer and policy inspection. Endpoint creation, discovery publication and the exit path that deletes the record are
+  // never cancelled, because a cancelled file operation there fails silently and leaves the record or its temporary file.
+  CancelWindow cancel_window_;
   sdk::Adapter& adapter_; std::thread worker_; Handle stop_event_, startup_event_;
   std::atomic<StartupFailure> startup_failure_{StartupFailure::worker_creation};
   std::atomic<StartupReport> startup_report_{StartupReport::pending};
