@@ -494,9 +494,11 @@ The producer's store rules are in [the native v1 transport](docs/native-transpor
 
 ## ET-005b authorization — October 15, 2026
 
-The owner gave the coordinator standing autonomy on October 15, 2026: continue through the authorized packages, decide routine questions optimally, merge under the standard gate and stop at real-game tests. Under that delegation the coordinator started ET-005b, the protocol v1 simulator, as three PRs. For ET-005b only, this supersedes the statements in the ET-002b authorization and ET-004b authorization sections that ET-005b remains unauthorized. The simulator opens no database, writes no history, discovery or service-policy file, calls no SDK function and emits only synthetic or replay origins. The desktop application stays on v0, and nothing here establishes game, TruckersMP, display or performance behavior.
+On October 15, 2026 the owner wrote (translated from Russian): "Overall, keep doing other tasks until you hit tests in the real game. Make optimal decisions. I want you to close as many tasks as possible without my involvement. If there are flaky tests, delegate their fixes to subagents."
 
-The coordinator adopted these decisions under the owner's delegation:
+Coordinator interpretation: this instruction is what authorizes starting ET-005b, the protocol v1 simulator, as three PRs. For ET-005b only, it supersedes the statements in the ET-002b authorization and ET-004b authorization sections that ET-005b remains unauthorized. The merge gate (a verifier pass, independent review, no unresolved review threads and a successful Windows CI after Ready on the final head) is the coordinator's self-imposed standard. The simulator opens no database, writes no history, discovery or service-policy file, calls no SDK function and emits only synthetic or replay origins. The desktop application stays on v0, and nothing here establishes game, TruckersMP, display or performance behavior.
+
+The coordinator adopted these decisions under that delegation; the owner has not reviewed them individually:
 
 | # | Decision |
 | --- | --- |
@@ -506,7 +508,7 @@ The coordinator adopted these decisions under the owner's delegation:
 | CD-4 | Only `synthetic` and `replay` origins; the simulator never emits `game` |
 | CD-5 | A `SYNTHETIC-TEST-v1` pipe endpoint without discovery records or service-policy files |
 | CD-6 | An in-memory commit ledger stands in for storage; it is not storage |
-| CD-7 | Minimized, tokenized fixtures derived from CAP-01 may be committed with provenance; lossy captures are rejected and raw or sanitized exports stay local. This reverses the earlier deferral of committing CAP-01 fixtures for these derived fixtures only, is flagged to the owner and lands last |
+| CD-7 | Minimized, tokenized fixtures derived from CAP-01 may be committed with provenance; lossy captures are rejected and raw or sanitized exports stay local. Adopted, pending owner acknowledgement before PR-3: it reverses the owner's earlier deferral of committing CAP-01 fixtures ([CAP-01a validation](docs/validation/cap-01a.md)), for these derived fixtures only. PR-3 lands last and records the owner's response |
 | CD-8 | Game mode is `unknown` by default (OD-3); a synthetic override exists only to exercise D9 |
 | CD-9 | Currency status is chosen per scenario: `unknown` or the SDK-documented EUR or USD |
 | CD-10 | In pipe mode, events, gaps, checkpoints and `end` are byte-identical to replay, snapshots equal in state and continuity, and clock replies are checked separately |

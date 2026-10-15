@@ -46,7 +46,7 @@ Source steps use the SDK-callback vocabulary (CD-3):
 
 | `action` | Fields | Model |
 | --- | --- | --- |
-| `configuration` | `id`, `attributes`, `list?`, `repeat?` | `job`, `truck` and `trailer.0`–`trailer.9` emit records (D13); `bus_job`, `car_job`, `controls`, `hshifter`, `substances` and the legacy `trailer` only advance the boundary order (TD-002). An empty terminated list is a clear. `list: "null"` (no attributes) and `"unterminated"` make every unseen field invalid |
+| `configuration` | `id`, `attributes`, `list?`, `repeat?` | `job`, `truck` and `trailer.0`–`trailer.9` emit records (D13); `bus_job`, `car_job`, `controls`, `hshifter`, `substances` and the legacy `trailer` only advance the boundary order (TD-002). An empty terminated list is a clear. `list: "null"` (no attributes) and `"unterminated"` (a shorthand for a list cut at the native 255-entry scan bound, with at least one attribute) make every unseen field invalid |
 | `gameplay` | `id`, `attributes`, `list?`, `repeat?` | The six v1 gameplay types; `car_job.*` and unknown ids yield nothing |
 | `lifecycle` | `event` | `simulation.started` or `simulation.paused`; `occurred.simulation` is the state after the callback |
 | `frame` | `timerRestart?`, `channels?` | frame_start (a timer restart rotates the game clock and emits `timers.restart`), each listed channel in registration order, then frame_end: the loss-run flush and the state publication |
