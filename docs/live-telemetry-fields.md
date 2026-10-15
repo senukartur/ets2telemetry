@@ -59,7 +59,7 @@ Exact constants: mile 1,609.344 m; US gallon 3.785411784 L; pound 0.45359237 kg;
 | Expected income | money u64 | job `income` | v0 `{rawValue, currency}`, v1 money | Exact raw digits, no grouping or symbol; `12345 EUR (SDK-documented)` or `12345 (currency unknown)` |
 | Revenue, penalty | money s64 | `job.delivered`, `job.cancelled` | v1 events | Normalized only; a zero revenue stays `0` |
 | Truck | text | truck config | v0 `truckId`; v1 brand, name, id, plate | Brand and model name, else model name, else model id; plate separately |
-| Trailers | text | `trailer.N` config | v1, 10 slots | Per occupied slot: name, else body type, else id; an `invalid` slot shows `(invalid)`; joined by `, `. No occupied or invalid slot while current is the `absent` state `none` ("no trailer attached"); only invalid slots make the row `invalid` |
+| Trailers | text | `trailer.N` config | v1, 10 slots | Per occupied slot: name, else body type, else id; an `invalid` slot shows `(invalid)`; joined by `, `. No occupied or invalid slot while current is the `absent` state `none` ("no trailer attached"), unless a slot is `not-supported`, which makes the row `not-supported`; only invalid slots make the row `invalid` |
 | World position | game coordinates | `truck.world.placement` | v1 | `x …, y …, z …` 1 dp; game-world coordinates, not GPS (`game-world-coordinates`) |
 | Bearing | degrees | placement heading | v1 | ((1 − heading) mod 1) × 360°, integer; 0° north, 90° east. The SDK heading is counterclockwise from north (`scssdk_value.h`) |
 | Source | — | — | `LiveTelemetry`, v1 status | Game, origin (synthetic and replay flagged), status, current or paused, protocol; v1 game mode with method and confidence, and the total event loss |
@@ -84,7 +84,7 @@ Money and distance values carry a kind. Money: `expected-income`, `revenue`, `pe
 | `waiting`, `stale`, `incompatible`, `disconnected`, `unavailable`, `service-failed`, `restarting`, or not fresh | Every carried row `unavailable` with reason `not-current`; no dimmed last-known values. Without any normalized state, every row reads this way |
 | Field not carried by the protocol in use | Row hidden. Carriage is a static table per protocol (`V0_CARRIED_FIELDS`; v1 carries every field), never inferred from a missing parent job or truck reading |
 | No job while current | Job rows hidden; the job section carries the job's missing reason ("no job reported") |
-| No trailer attached while current (v1: every slot empty) | Trailers row in the `absent` state with text `none` and reason `no-trailer`. Per OD-6 an empty slot arrives as `not-observed`, so a current checkpoint with every slot empty counts as no trailer |
+| No trailer attached while current (v1: every slot empty, and no slot `not-supported`) | Trailers row in the `absent` state with text `none` and reason `no-trailer`. Per OD-6 an empty slot arrives as `not-observed`. The SDK delivers the initial configuration after `scs_telemetry_init()` succeeds and before any other callback ([scssdk_telemetry_event.h](../native/telemetry-plugin/vendor/scs-sdk-1.15/include/scssdk_telemetry_event.h) lines 63–69), so an empty slot in a current checkpoint is taken as no trailer. Bobtail versus a coupled trailer, including late attach, is still unverified in real sessions |
 
 The application maps reasons to text: `not-observed` "not yet observed", `not-supported` "not provided by the game", `invalid` "invalid reading", `zero-consumption` "no consumption recorded", `no-trailer` "no trailer attached". A row reads `<Label>: <text>` or `<Label>: unavailable`, so the existing `Speed: unavailable` text is unchanged. Staleness comes from the existing ingestion and main-process freshness; telemetry-core adds no timer.
 
@@ -109,7 +109,7 @@ Hydrated checkpoint configuration is current state only. The view shows the job 
 
 Checks run in that order, so a save load that also regresses the odometer reports `game-clock-rotated`. The thresholds are named constants (`MAX_PLAUSIBLE_SPEED_MPS`, `ODOMETER_JUMP_MARGIN_METERS`, `FUEL_NOISE_LITERS`) and are provisional until real sessions confirm them. ET-014 decides what each result means for a trip.
 
-Caller contract for fuel: the 0.01 L band applies to refuel detection only. Ordinary steps are far smaller than the band (about 0.0075 L per second at 30–35 L/100 km and 80–90 km/h, and a twentieth of that at 20 Hz), so every decrease is reported as consumption. Summing `consumed` over consecutive steps without a discontinuity or `unavailable` equals the observed fuel drop; a caller that wants a net figure subtracts the `increaseLiters` of `unchanged` steps. A `refuelled` step is never consumption, and a discontinuity or `unavailable` step contributes nothing.
+Caller contract for fuel: the 0.01 L band applies to refuel detection only. Ordinary steps are far smaller than the band (about 0.0075 L per second at 30–35 L/100 km and 80–90 km/h, and a twentieth of that at 20 Hz), so every decrease is reported as consumption. Over consecutive steps without a discontinuity or `unavailable`, the sum of `consumed` equals the sum of all decreases, and the net fuel drop is that sum minus the summed `increaseLiters` of `unchanged` steps. A `refuelled` step is never consumption, and a discontinuity or `unavailable` step contributes nothing.
 
 ## Field set and deferrals
 

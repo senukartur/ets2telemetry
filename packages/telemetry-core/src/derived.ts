@@ -87,10 +87,10 @@ export function odometerStep(prev: StepSample, next: StepSample): OdometerStep {
   return {kind: 'continuous', meters};
 }
 /**
- * Classifies one fuel step. Every decrease is `consumed` with its exact amount, however small, so summing the
- * consumed amounts of consecutive steps equals the observed fuel drop. An increase above FUEL_NOISE_LITERS is
- * `refuelled`. A smaller increase is `unchanged`, not a refuel; it reports its exact `increaseLiters` so a caller can
- * net it against consumption. No amount is ever negative.
+ * Classifies one fuel step. Every decrease is `consumed` with its exact amount, however small, so the sum of
+ * `consumed` over consecutive steps equals the sum of all decreases. An increase above FUEL_NOISE_LITERS is
+ * `refuelled`. A smaller increase is `unchanged`, not a refuel, with its exact `increaseLiters`; the net fuel drop is
+ * the summed `consumed` minus the summed `increaseLiters`. No amount is ever negative.
  */
 export function fuelStep(prev: StepSample, next: StepSample): FuelStep {
   const cause = boundary(prev, next);
