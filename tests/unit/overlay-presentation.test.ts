@@ -1,11 +1,15 @@
 import {readFileSync} from 'node:fs';
 import {expect, it} from 'vitest';
-import type {LiveTelemetry, OverlaySectionView} from '../../packages/contracts/src';
+import type {LiveTelemetry, OverlayPresentation, OverlaySectionView} from '../../packages/contracts/src';
 import {validateMessage} from '../../packages/contracts/src/protocol-v0';
 import {initialLive} from '../../apps/desktop/src/live-state';
 import {overlayPresentation} from '../../apps/desktop/src/overlay-presentation';
 import {OVERLAY_PRESETS} from '../../apps/desktop/src/overlay-sections';
-import {v1Projection, type V1Options} from '../shared/live-v1-fixtures';
+import {overlayView} from '../../apps/desktop/src/overlay-view';
+import {
+  SYNTHETIC_V1_OVERLAY_CURRENT, SYNTHETIC_V1_OVERLAY_STOPPED, SYNTHETIC_V1_OVERLAY_V0_STALE, SYNTHETIC_V1_OVERLAY_V1_STALE
+} from '../../scripts/ci/renderer-observation.mjs';
+import {smokePair, v1Projection, type V1Options} from '../shared/live-v1-fixtures';
 
 // REG-009 partial (ET-012a): the overlay sections over the v0 snapshot fixture. Expected texts are hand-computed from the
 // fixture: speed 0 m/s, fuel not observed, capacity 1000 L, 600 rpm, gear -1, SDK mean 25 L/100 km, range not observed,
@@ -267,6 +271,26 @@ it('leaves the v1 job sections out once v0 reports no job, without keeping dashe
 it('uses no v1 data of another origin or selection', () => {
   for (const telemetry of [{...live(), v1: v1Projection('snapshot-live', {selection: 'ets2'})}, {...live(), v1: v1Projection('snapshot-live', {selection: 'ats', origin: 'game'})}])
     expect(overlayPresentation(telemetry)).toEqual(overlayPresentation(live()));
+});
+// The telemetry smoke's overlay constants (scripts/ci/renderer-observation.mjs) against the projection and the overlay
+// renderer's view for the same smoke pair, so a wrong constant fails here rather than only in the Electron smoke.
+function rendered(presentation: OverlayPresentation): Record<string, string | null> {
+  const view = overlayView(presentation), texts: Record<string, string | null> = {freshness: view.freshness};
+  for (const item of view.items) {texts[item.testId] = item.value; if (item.detailTestId) texts[item.detailTestId] = item.detail ?? null;}
+  return texts;
+}
+const expectRendered = (presentation: OverlayPresentation, expected: Readonly<Record<string, string | null>>) => {
+  const texts = rendered(presentation);
+  for (const [key, text] of Object.entries(expected)) expect(texts[key] ?? null, key).toBe(text);
+};
+it('produces the overlay texts the telemetry smoke expects for the smoke pair', () => {
+  const current = overlayPresentation(smokePair());
+  expectRendered(current, SYNTHETIC_V1_OVERLAY_CURRENT);
+  expectRendered(overlayPresentation(smokePair({}, {status: 'stale', fresh: false}), undefined, undefined, current), SYNTHETIC_V1_OVERLAY_V0_STALE);
+  expectRendered(overlayPresentation(smokePair({status: 'stale', fresh: false, reason: 'Main has no recent v1 SDK capture'}), undefined, undefined, current),
+    SYNTHETIC_V1_OVERLAY_V1_STALE);
+  expectRendered(overlayPresentation(smokePair({status: 'disconnected', fresh: false, reason: 'Source closed; interval coverage unknown'},
+    {status: 'disconnected', fresh: false}), undefined, undefined, current), SYNTHETIC_V1_OVERLAY_STOPPED);
 });
 it('leaves disabled v1 sections out and passes no source identity, boundary, window or clock data to the renderer', () => {
   expect(ids(overlayPresentation(withV1(), undefined, {layout: 'hud', sections: OVERLAY_PRESETS['job-focus']}).sections))
