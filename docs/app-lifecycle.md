@@ -67,7 +67,7 @@ The service stops through an ordered sequence (`apps/desktop/src/shutdown-sequen
 | --- | --- |
 | `intake` | `ingestion` (1000 ms), `capture` (1000 ms) |
 | `flush` | none yet; ET-015 adds recording flush |
-| `storage` | `storage-probe` (1000 ms); ET-013 adds closing history storage |
+| `storage` | `storage-probe` (1000 ms), `history-storage` (1000 ms, closes the history database; ET-013 PR-2) |
 
 Steps of one phase run in parallel; each is bounded by its own budget, so a phase takes at most its largest budget. Registration fails if the sum of phase maxima exceeds `SERVICE_STOP_BUDGET_MS` (2500 ms), which keeps the sequence inside main's 3000 ms kill deadline. Every step, successful ones included, logs `SHUTDOWN_STEP` with fixed `phase`, `name`, `outcome` (`ok`, `failed` or `timeout`) and `ms` facts; a failed or late step does not stop the sequence. The service then sends exactly one `{type: 'stopped', clean}` message and exits 0 when clean or 1 otherwise.
 
