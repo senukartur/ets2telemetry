@@ -5,7 +5,7 @@ import {once} from 'node:events';
 import path from 'node:path';
 import {Worker} from 'node:worker_threads';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
-import {StorageClient, workerHandle} from '../../packages/storage/src/client';
+import {CLOSE_GRACE_MS, StorageClient, workerHandle} from '../../packages/storage/src/client';
 import type {Result, StorageErrorCode, TripEffect} from '../../packages/storage/src/index';
 import type {WorkerOpenOptions} from '../../packages/storage/src/worker/protocol';
 import {ok, P1, readOnly, v1, withEventSeq, workspace} from './helpers';
@@ -22,11 +22,40 @@ afterEach(async () => {
   await ws.dispose();
 });
 
-function startWorker() {
-  const worker = new Worker(WORKER, {workerData: {kind: 'storage'}});
+/**
+ * The bundled worker with each `close` request held on the worker thread for `closeDelayMs` before the host receives it,
+ * as a stalled host or disk would hold the close. Only the delivery is delayed; the worker code is unchanged.
+ */
+const DELAYED_CLOSE_WORKER = `
+const {parentPort, workerData} = require('node:worker_threads');
+const held = new Map(), on = parentPort.on.bind(parentPort), off = parentPort.off.bind(parentPort);
+parentPort.on = (event, listener) => {
+  if (event !== 'message') return on(event, listener);
+  const hold = message => {
+    if (message && message.command && message.command.name === 'close') Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, workerData.closeDelayMs);
+    listener(message);
+  };
+  held.set(listener, hold);
+  return on(event, hold);
+};
+parentPort.off = (event, listener) => off(event, held.get(listener) ?? listener);
+require(workerData.entry);
+`;
+
+/**
+ * Close grace of the clients in this file. It bounds a hung close inside the 30 s case timeout and is not a latency
+ * check: these tests assert the close protocol (answer, then exit code 0). With the 2 s production default, one close
+ * on a loaded shared host took longer than 2 s and was reported `{clean: false}` (docs/validation/et-013.md, October 15,
+ * 2026). Grace expiry itself is checked with fake timers in storage-client.test.ts and with a held close below.
+ */
+const TEST_CLOSE_GRACE_MS = 15_000;
+
+function startWorker({closeGraceMs = TEST_CLOSE_GRACE_MS, closeDelayMs}: {closeGraceMs?: number; closeDelayMs?: number} = {}) {
+  const worker = closeDelayMs === undefined ? new Worker(WORKER, {workerData: {kind: 'storage'}})
+    : new Worker(DELAYED_CLOSE_WORKER, {eval: true, workerData: {kind: 'storage', entry: WORKER, closeDelayMs}});
   started.push(worker);
   const exit = once(worker, 'exit').then(([code]) => code as number);
-  return {worker, client: new StorageClient(workerHandle(worker)), exit};
+  return {worker, client: new StorageClient(workerHandle(worker), {closeGraceMs}), exit};
 }
 const options = (overrides: Partial<WorkerOpenOptions> = {}): WorkerOpenOptions =>
   ({path: ws.database, purpose: 'synthetic', backupsDirectory: ws.backups, appVersion: '0.1.0-test', ...overrides});
@@ -93,7 +122,9 @@ describe('storage worker', () => {
     refused(locked, 'DATABASE_LOCKED');
     expect(!locked.ok && locked.error.retryable).toBe(true);
     expect(await holder.client.close()).toEqual({clean: true});
+    expect(await holder.exit).toBe(0);
     expect(await second.client.close()).toEqual({clean: true});
+    expect(await second.exit).toBe(0);
     chmodSync(ws.database, 0o444);
     try {
       const reader = startWorker();
@@ -123,6 +154,33 @@ describe('storage worker', () => {
     ok(await reopened.client.open(options()));
     expect(BigInt(ok(await reopened.client.committedThrough(P1)))).toBeGreaterThanOrEqual(BigInt(firstFailure));
     expect(await reopened.client.close()).toEqual({clean: true});
+  });
+
+  // Regression (October 15, 2026): with the 2 s default grace in these tests, this close and the holder's close in the
+  // second-writer case were reported `{clean: false}`.
+  it('reports an orderly close that a stall delays past the default close grace as clean', async () => {
+    const {client, exit} = startWorker({closeDelayMs: CLOSE_GRACE_MS + 500});
+    ok(await client.open(options()));
+    ok(await client.upsertSession({message: v1('welcome')}));
+    expect(await client.close()).toEqual({clean: true});
+    expect(await exit).toBe(0);
+  });
+
+  it('terminates a worker whose close outlasts the grace, reports it unclean and keeps every committed event', async () => {
+    const held = startWorker({closeGraceMs: 200, closeDelayMs: 20_000});
+    ok(await held.client.open(options()));
+    ok(await held.client.upsertSession({message: v1('welcome')}));
+    expect(ok(await held.client.commitEvent({message: v1('event-job-configured'), effects: [openTrip]})).status).toBe('committed');
+    expect(await held.client.close()).toEqual({clean: false});
+    // Terminated before its host received the close: worker_threads reports exit code 1.
+    expect(await held.exit).toBe(1);
+    // The terminated thread released the exclusive lock, and the commit it reported is stored.
+    const reopened = startWorker();
+    ok(await reopened.client.open(options()));
+    expect(ok(await reopened.client.committedThrough(P1))).toBe('1');
+    expect(ok(await reopened.client.getTrip(T1))).toMatchObject({tripUuid: T1, outcome: 'open'});
+    expect(await reopened.client.close()).toEqual({clean: true});
+    expect(await reopened.exit).toBe(0);
   });
 
   it('answers a malformed request with INVALID_INPUT', async () => {
