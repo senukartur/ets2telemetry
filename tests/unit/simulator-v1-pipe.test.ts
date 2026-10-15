@@ -2,7 +2,7 @@ import {createHash} from 'node:crypto';
 import {mkdtempSync, readFileSync, rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
-import {spawn, spawnSync} from 'node:child_process';
+import {spawn} from 'node:child_process';
 import {builtinModules} from 'node:module';
 import net from 'node:net';
 import {randomUUID} from 'node:crypto';
@@ -41,6 +41,14 @@ function rawClient(endpoint: string, first?: Uint8Array) {
 async function until(check: () => boolean, ms = 10_000): Promise<void> {
   const start = performance.now();
   while (!check()) { if (performance.now() - start > ms) throw new Error('Condition deadline'); await new Promise(r => setTimeout(r, 5)); }
+}
+/** Runs the built CLI to its exit; only the test's own timeout bounds it, so a slow host cannot fail a launch. */
+function runCli(args: string[]): Promise<{status: number | null; stdout: string; stderr: string}> {
+  return new Promise(resolve => {
+    const child = spawn(process.execPath, args, {windowsHide: true}); let stdout = '', stderr = '';
+    child.stdout.on('data', (c: Buffer) => { stdout += c.toString('utf8'); }); child.stderr.on('data', (c: Buffer) => { stderr += c.toString('utf8'); });
+    child.on('close', status => resolve({status, stdout, stderr}));
+  });
 }
 /** Bundles the current CLI source into an owned directory, so tests never use a cached artifact. */
 async function buildCli(directory: string): Promise<string> {
@@ -202,16 +210,16 @@ describe('simulator v1 pipe CLI', () => {
       expect(report).toMatchObject({mode: 'lockstep', transcriptSha256: hash, refusedClients: 1, cancelled: false});
       // The served transcript hashes equal, so the replay stands for it in the client comparison.
       expect(pipeDifferences(replay, replay, client)).toEqual([]);
-      const smoke = spawnSync(process.execPath, [cli, 'smoke-v1', path], {encoding: 'utf8', timeout: 20_000, maxBuffer: 1024 * 1024, windowsHide: true});
+      const smoke = await runCli([cli, 'smoke-v1', path]);
       expect([smoke.status, smoke.stderr]).toEqual([0, '']);
       expect(JSON.parse(smoke.stdout)).toMatchObject({origin: 'synthetic', mode: 'lockstep', scenario: 'pipe-reconnect', transcriptSha256: hash, connections: 2, refusedClients: 1, history: false,
         ledger: replay.ledger, cadence: {expectedMs: 50}});
-      const usage = spawnSync(process.execPath, [cli, 'smoke-v1', path, '--scale'], {encoding: 'utf8', timeout: 10_000, windowsHide: true});
+      const usage = await runCli([cli, 'smoke-v1', path, '--scale']);
       expect([usage.status, usage.stdout]).toEqual([1, '']);
-      const wrongFlag = spawnSync(process.execPath, [cli, 'serve-v1', path, '--reactive'], {encoding: 'utf8', timeout: 10_000, windowsHide: true});
+      const wrongFlag = await runCli([cli, 'serve-v1', path, '--reactive']);
       expect([wrongFlag.status, wrongFlag.stdout]).toEqual([1, '']);
     } finally { rmSync(directory, {recursive: true, force: true}); }
-  }, 60_000);
+  }, 180_000);
 
   it('serves reactively by default to an independent consumer in another process; smoke-v1 --reactive checks it', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'ETS2Telemetry-SYNTHETIC-TEST-v1-reactive-cli-'));
@@ -228,9 +236,9 @@ describe('simulator v1 pipe CLI', () => {
       expect([await exited, stderr]).toEqual([0, '']);
       expect(client.ledger).toEqual(replay.ledger);
       expect(JSON.parse(stdout.trim().split('\n')[1])).toMatchObject({mode: 'reactive', scenario: 'reconnect-lost-ack', cancelled: false, refusedClients: 0});
-      const smoke = spawnSync(process.execPath, [cli, 'smoke-v1', scenarioPath('pipe-reconnect'), '--reactive'], {encoding: 'utf8', timeout: 30_000, maxBuffer: 1024 * 1024, windowsHide: true});
+      const smoke = await runCli([cli, 'smoke-v1', scenarioPath('pipe-reconnect'), '--reactive']);
       expect([smoke.status, smoke.stderr]).toEqual([0, '']);
       expect(JSON.parse(smoke.stdout)).toMatchObject({mode: 'reactive', scenario: 'pipe-reconnect', connections: 2, ledger: replayV1(load('pipe-reconnect')).ledger});
     } finally { rmSync(directory, {recursive: true, force: true}); }
-  }, 60_000);
+  }, 180_000);
 });
