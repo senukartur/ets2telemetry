@@ -17,6 +17,10 @@ int main(int argc, char** argv) {
   auto init = reinterpret_cast<Init>(GetProcAddress(module, "scs_telemetry_init"));
   auto shutdown = reinterpret_cast<Shutdown>(GetProcAddress(module, "scs_telemetry_shutdown"));
   bool passed = init && shutdown && !GetProcAddress(module, "ets2telemetry_test_directory") && !GetProcAddress(module, "ets2telemetry_test_endpoint") && !GetProcAddress(module, "ets2telemetry_test_write_pending");
+  // Every other test-DLL seam (CAP0, the transport hook and protocol v1) is absent from the production DLL as well.
+  for (const char* seam : {"ets2telemetry_test_capture_endpoint", "ets2telemetry_test_transport_hook", "ets2telemetry_test_v1_directory",
+         "ets2telemetry_test_v1_endpoint", "ets2telemetry_test_v1_write_pending", "ets2telemetry_test_v1_attached"})
+    passed = passed && !GetProcAddress(module, seam);
   if (passed) {
     passed = init(SCS_MAKE_VERSION(2,0), nullptr) == SCS_RESULT_unsupported && init(SCS_TELEMETRY_VERSION_1_01, nullptr) == SCS_RESULT_invalid_parameter;
     scs_telemetry_init_params_v100_t params{}; params.common.game_id = "eut2"; params.common.game_version = SCS_MAKE_VERSION(1,20);
