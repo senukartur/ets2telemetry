@@ -1,0 +1,19 @@
+{
+  "scenario": "retention-expired",
+  "basis": ["synthetic-inference"],
+  "authoredFrom": [
+    "retention-expired.expected.json: connection 1 never commits job.configured (1) or truck.configured (2); connection 2's checkpoint at 400,100 shows the job and is followed by the redelivered retentionExpired gap 1-2",
+    "docs/trips.md T3: uncommitted items leave the reducer state as it was, so no trip opens from the never-committed configuration",
+    "docs/trips.md T9: the checkpoint job is untracked; T10: the gap with no open trip is a session-level not-connected interval (retentionExpired is the consumer's absence) with the record's monotonic bounds",
+    "docs/trips.md T16 (PR-2): readings without an open trip add nothing"
+  ],
+  "trips": [],
+  "attributions": [],
+  "intervals": [
+    {"trip": null, "kind": "not-connected", "firstEventSeq": "1", "lastEventSeq": "2", "startMonotonicNs": "1000010000000", "endMonotonicNs": "1000020000000", "sourceClockId": "capture-clock",
+      "detail": {"cause": "gap", "causes": {"offline": "0", "noDurableConsumer": "0", "queueCount": "0", "queueBytes": "0", "retentionExpired": "2", "encodingFailed": "0"},
+        "firstEventSeq": "1", "lastEventSeq": "2", "redelivered": true}}
+  ],
+  "coverage": {"committedThroughEventSeq": "2", "committed": 1, "duplicate": 0, "covered": 0},
+  "view": {"phase": "idle", "untrackedJob": true, "current": null, "lastClosed": null}
+}

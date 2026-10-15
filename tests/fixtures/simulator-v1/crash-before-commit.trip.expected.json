@@ -1,0 +1,27 @@
+{
+  "scenario": "crash-before-commit",
+  "basis": ["synthetic-inference", "O1 (opened-at-load inference)"],
+  "authoredFrom": [
+    "crash-before-commit.expected.json: connection 1 commits job.configured (1) and crashes before committing the start (2); connection 2 (a new client instance) commits the redelivered start (2) and the offline gap 3-3 (the pause)",
+    "docs/trips.md T3: the uncommitted start leaves the reducer state as it was; the crash then loses the consumer's state",
+    "docs/trips.md cold start: the stored open trip of the same session resumes as active with a queued consumer-restart not-connected interval, committed with the next new item (the redelivered start)",
+    "docs/trips.md T10/T15: the gap closes the trip {none, gap, partial} at the session's last label, the start's UTC 1,800,000,000,020; the job stays untracked"
+  ],
+  "trips": [
+    {"trip": "trip@1", "jobConfigurationEventSeq": "1", "truckConfigurationEventSeq": null, "trailerConfigurationEventSeqs": [], "openedEventSeq": "1",
+      "gameMode": {"mode": "unknown", "method": "none", "confidence": "none"}, "gameModeAmbiguous": false, "outcome": "none", "outcomeEventSeq": null, "closeReason": "gap",
+      "recordingCompleteness": "partial", "startedUtcMs": 1800000000010, "endedUtcMs": 1800000000020, "observedDistanceM": {"available": false, "reason": "not-observed"}}
+  ],
+  "attributions": [],
+  "intervals": [
+    {"trip": "trip@1", "kind": "discontinuity", "detail": {"cause": "opened-at-load", "atEventSeq": "1"}},
+    {"trip": "trip@1", "kind": "not-connected", "detail": {"cause": "consumer-restart"}},
+    {"trip": "trip@1", "kind": "not-connected", "firstEventSeq": "3", "lastEventSeq": "3", "startMonotonicNs": "1000030000000", "endMonotonicNs": "1000030000000", "sourceClockId": "capture-clock",
+      "detail": {"cause": "gap", "causes": {"offline": "1", "noDurableConsumer": "0", "queueCount": "0", "queueBytes": "0", "retentionExpired": "0", "encodingFailed": "0"},
+        "firstEventSeq": "3", "lastEventSeq": "3", "redelivered": false}}
+  ],
+  "coverage": {"committedThroughEventSeq": "3", "committed": 3, "duplicate": 0, "covered": 0},
+  "view": {"phase": "idle", "untrackedJob": true, "current": null,
+    "lastClosed": {"trip": "trip@1", "recordingCompleteness": "partial", "observedDistanceM": {"state": "missing", "reason": "not-observed"},
+      "fuelUsedL": {"state": "missing", "reason": "not-observed"}, "refuelledL": 0, "refuels": 0, "outcome": "none", "closeReason": "gap"}}
+}

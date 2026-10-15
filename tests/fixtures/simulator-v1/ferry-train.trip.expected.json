@@ -1,0 +1,18 @@
+{
+  "scenario": "ferry-train",
+  "basis": ["synthetic-inference", "O8 (gameplay events outside job windows)"],
+  "authoredFrom": [
+    "ferry-train.json and its expectation: ferry (1), train (2) and toll (3) with no job configured",
+    "docs/trips.md T14: with no open trip and no untracked job each gameplay event is free-driving",
+    "docs/trips.md T17 (PR-2): the forward game-time jump 1000 -> 1400 has no open trip to annotate, so it adds no effect"
+  ],
+  "trips": [],
+  "attributions": [
+    {"eventSeq": "1", "trip": null, "attribution": "free-driving"},
+    {"eventSeq": "2", "trip": null, "attribution": "free-driving"},
+    {"eventSeq": "3", "trip": null, "attribution": "free-driving"}
+  ],
+  "intervals": [],
+  "coverage": {"committedThroughEventSeq": "3", "committed": 3, "duplicate": 0, "covered": 0},
+  "view": {"phase": "idle", "untrackedJob": false, "current": null, "lastClosed": null}
+}
