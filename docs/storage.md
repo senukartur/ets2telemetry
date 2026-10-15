@@ -2,7 +2,7 @@
 
 ET-013 adds the local history database: a SQLite file written through [better-sqlite3](https://github.com/WiseLibs/better-sqlite3) by one connection that the telemetry service's storage worker owns. This document describes the schema, the durability rules, migrations, backups, the storage API and the worker that runs it.
 
-Status (October 15, 2026): PR-1 added the in-process storage core in [packages/storage](../packages/storage) and its tests. PR-2 runs it in the storage worker of the telemetry utilityProcess, opens the production database at service start ([below](#history-database-in-the-telemetry-service)) and measured its size ([disk budgets](#disk-budgets)). The desktop application stays on protocol v0, records nothing and sends no ACK; recording starts with ET-015a. See [ET-013 validation](validation/et-013.md) for the checks performed.
+Status (October 15, 2026): PR-1 added the in-process storage core in [packages/storage](../packages/storage) and its tests. PR-2 runs it in the storage worker of the telemetry utilityProcess, opens the production database at service start ([below](#history-database-in-the-telemetry-service)) and measured its size ([disk budgets](#disk-budgets)). The desktop application stays on protocol v0, records nothing and sends no ACK; recording starts with ET-015a. ET-006b PR-1 adds a [durable sink](#durable-sink-for-protocol-v1-ingestion-et-006b) for protocol v1 ingestion that only tests use with temporary synthetic databases; production durable delivery stays off. See [ET-013 validation](validation/et-013.md) for the checks performed.
 
 ## Files and purposes
 
@@ -151,6 +151,12 @@ OD-2: the telemetry service opens the production history database when it starts
 - **A failed probe** ends the service from its report, outside the orderly sequence (exit code 0 after the probe's own `stopped`, 1 after `SERVICE_STOP_FAILED`). The service first closes the history database, bounded by the same 1000 ms, and then exits with that code. After first readiness this close is best effort: the preceding `failed` report makes the supervisor kill the service at once, so the killed-service rule (WAL replay on the next open, no data loss) usually applies instead.
 - **A killed service** does not close the database; SQLite replays committed WAL frames and discards the rest when the next service opens it. The exclusive lock ends with the process.
 - **Second instance.** A second service process (which ET-011a's single-instance lock already prevents) would get `DATABASE_LOCKED`.
+
+## Durable sink for protocol v1 ingestion (ET-006b)
+
+ET-006b PR-1 adds `StorageDurableSink` ([durable-sink.ts](../apps/desktop/src/durable-sink.ts)), the bridge from [protocol v1 ingestion](telemetry-service-v1.md) to this API: `openSession` is `upsertSession` with the validated welcome and returns `committedThroughEventSeq`, the `DurableAckCursor` input; `commit` is `commitEvent` or `commitGap`. An optional effects hook reads `committedThrough()` right before each commit, as the caller rule above requires; the default supplies no effects. The ACK pipeline acknowledges only after a commit result and requires the result's coverage to equal its cursor. It classifies every error code in the table above as retryable (`DATABASE_LOCKED`, `DISK_FULL`, `IO_ERROR`, `STORAGE_BUSY`) or as stopping durable delivery for the service lifetime (every other code, including `TIMEOUT`, because a missed deadline fails the client closed); see [failure classes](telemetry-service-v1.md#failure-classes-e7).
+
+The sink is exercised only against temporary synthetic-purpose databases in tests (`tests/storage/v1-durable-ingestion.test.ts`, `tests/storage/v1-ingestion-crash.test.ts`). **Production durable delivery is off:** the service passes no sink, so it still writes no history row and sends no ACK until ET-015a supplies trip effects and the v0-retirement PR lands.
 
 ## Migrations (OD-4)
 
