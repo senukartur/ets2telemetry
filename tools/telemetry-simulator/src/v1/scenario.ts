@@ -5,6 +5,7 @@ import {MAX_EVENT_SEQ, PROTOCOL_V1, validateServerMessage, type GameMode} from '
 import {isUint64} from '../../../../packages/contracts/src/protocol-v0';
 import {CHANNELS, type AttributeList, type FrameChannels, type SdkAttribute, type SdkType, type SourceConfig} from './source';
 import {type AckPolicy, type ClientPolicy, type CommitPolicy} from './client';
+import {DURABLE_ONLY, HELLO_FAULTS, KEEPS_CONNECTION, LIVE_FAULTS, WIRE_FAULTS, isHelloFault, type ClientFault, type LiveFault, type WireFault} from './faults';
 
 export const SCENARIO_FORMAT = 'ets2telemetry-simulator-v1';
 export const MAX_AT_MS = 86_400_000;
@@ -20,9 +21,15 @@ export type SourceStep = At & (
   {action: 'utcJump'; deltaMs: number} |
   {action: 'suspend'; durationMs: number; sourceClockAdvances: boolean} |
   {action: 'shutdown'; reason: 'plugin-shutdown' | 'source-retired'});
-export type TransportStep = At & ({action: 'connect'; client: ClientPolicy & {probes: number[]}} | {action: 'disconnect'});
+/**
+ * Transport steps. `clientFault` with a hello fault is a connection attempt of its own; with a live fault it acts on the
+ * open connection. `wireFault` needs `faultInjection: true`. `secondClient` is refused while the open one continues.
+ * `writeDeadline` ends a connection whose client stalled (`clientFault: stallRead`) at the server's 1 s write deadline.
+ */
+export type TransportStep = At & ({action: 'connect'; client: ClientPolicy & {probes: number[]}} | {action: 'disconnect'} | {action: 'clientFault'; fault: ClientFault} |
+  {action: 'wireFault'; fault: WireFault} | {action: 'secondClient'} | {action: 'writeDeadline'});
 export interface Scenario {
-  id: string; purpose: string; reg: string[]; origin: 'synthetic'; game: 'ets2' | 'ats'; seed: string;
+  id: string; purpose: string; reg: string[]; origin: 'synthetic'; game: 'ets2' | 'ats'; seed: string; faultInjection: boolean;
   source: Omit<SourceConfig, 'game' | 'seed'>; steps: SourceStep[]; transport: TransportStep[];
 }
 
@@ -159,17 +166,24 @@ function sourceStep(v: unknown, path: string, source: Scenario['source']): Sourc
     case 'shutdown': { const o = obj(v, path, ['atMs', 'action', 'reason']); return {atMs: at(o), action, reason: oneOf(o.reason, `${path}.reason`, ['plugin-shutdown', 'source-retired'] as const)}; }
   }
 }
-function transportStep(v: unknown, path: string): TransportStep {
-  const o = obj(v, path, ['atMs', 'action'], ['client']), atMs = int(o.atMs, `${path}.atMs`, 0, MAX_AT_MS);
-  const action = oneOf(o.action, `${path}.action`, ['connect', 'disconnect'] as const);
-  if (action === 'disconnect') { obj(v, path, ['atMs', 'action']); return {atMs, action}; }
-  obj(v, path, ['atMs', 'action', 'client']);
-  return {atMs, action, client: policy(o.client, `${path}.client`, atMs)};
+function transportStep(v: unknown, path: string, faultInjection: boolean): TransportStep {
+  const o = obj(v, path, ['atMs', 'action'], ['client', 'fault']), atMs = int(o.atMs, `${path}.atMs`, 0, MAX_AT_MS);
+  const action = oneOf(o.action, `${path}.action`, ['connect', 'disconnect', 'clientFault', 'wireFault', 'secondClient', 'writeDeadline'] as const);
+  switch (action) {
+    case 'connect': obj(v, path, ['atMs', 'action', 'client']); return {atMs, action, client: policy(o.client, `${path}.client`, atMs)};
+    case 'clientFault': obj(v, path, ['atMs', 'action', 'fault']); return {atMs, action, fault: oneOf(o.fault, `${path}.fault`, [...HELLO_FAULTS, ...LIVE_FAULTS])};
+    case 'wireFault':
+      obj(v, path, ['atMs', 'action', 'fault']);
+      // A wire fault makes the simulator emit protocol-invalid bytes, so a scenario must opt in explicitly.
+      if (!faultInjection) fail(path, 'wire faults require faultInjection: true');
+      return {atMs, action, fault: oneOf(o.fault, `${path}.fault`, WIRE_FAULTS)};
+    default: obj(v, path, ['atMs', 'action']); return {atMs, action};
+  }
 }
 
 /** Validates one scenario and rebuilds it from declared, validated values only. */
 export function validateScenario(input: unknown): Scenario {
-  const o = obj(input, '$', ['format', 'schemaVersion', 'id', 'purpose', 'reg', 'origin', 'game', 'seed', 'provenance', 'source', 'steps', 'transport']);
+  const o = obj(input, '$', ['format', 'schemaVersion', 'id', 'purpose', 'reg', 'origin', 'game', 'seed', 'provenance', 'source', 'steps', 'transport'], ['faultInjection']);
   if (o.format !== SCENARIO_FORMAT || o.schemaVersion !== 1) fail('$.format', `${SCENARIO_FORMAT} schema 1 expected`);
   // The simulator never emits `game` (CD-4). Replay origins require CAP-01 provenance, which a later ET-005b PR adds.
   if (o.origin === 'game') fail('$.origin', 'the simulator never emits origin game');
@@ -190,19 +204,24 @@ export function validateScenario(input: unknown): Scenario {
     startEventSeq: opt(s, 'startEventSeq', raw => { if (!isUint64(raw) || BigInt(raw) < 1n || BigInt(raw) > BigInt(MAX_EVENT_SEQ)) fail('$.source.startEventSeq'); return BigInt(raw); }, 1n)
   };
   const steps = arr(o.steps, '$.steps', MAX_STEPS).map((x, i) => sourceStep(x, `$.steps[${i}]`, source));
-  const transport = arr(o.transport, '$.transport', MAX_STEPS).map((x, i) => transportStep(x, `$.transport[${i}]`));
+  const faultInjection = opt(o, 'faultInjection', raw => bool(raw, '$.faultInjection'), false);
+  const transport = arr(o.transport, '$.transport', MAX_STEPS).map((x, i) => transportStep(x, `$.transport[${i}]`, faultInjection));
   if (steps.length + transport.length > MAX_STEPS) fail('$', `at most ${MAX_STEPS} steps`);
+  if (faultInjection && !transport.some(t => t.action === 'wireFault')) fail('$.faultInjection', 'only a scenario with wire faults enables fault injection');
   checkTimeline(steps, transport);
-  return {id: str(o.id, '$.id'), purpose: str(o.purpose, '$.purpose', 1_024), reg, origin: 'synthetic', game: oneOf(o.game, '$.game', ['ets2', 'ats'] as const), seed: str(o.seed, '$.seed'), source, steps, transport};
+  return {id: str(o.id, '$.id'), purpose: str(o.purpose, '$.purpose', 1_024), reg, origin: 'synthetic', game: oneOf(o.game, '$.game', ['ets2', 'ats'] as const), seed: str(o.seed, '$.seed'),
+    faultInjection, source, steps, transport};
 }
 
 /** One ordered timeline: at equal times source steps precede probes, which precede transport steps. */
 export type TimelineEntry = {atMs: number} & ({lane: 'source'; step: SourceStep} | {lane: 'probe'; connection: number} | {lane: 'transport'; step: TransportStep; connection: number});
+/** A transport step that opens a connection attempt: `connect`, or a client fault before the hello completes. */
+const opensAttempt = (step: TransportStep) => step.action === 'connect' || (step.action === 'clientFault' && isHelloFault(step.fault));
 export function timeline(steps: readonly SourceStep[], transport: readonly TransportStep[]): TimelineEntry[] {
   const entries: TimelineEntry[] = steps.map(step => ({atMs: step.atMs, lane: 'source', step}));
   let connection = 0;
   for (const step of transport) {
-    if (step.action === 'connect') connection++;
+    if (opensAttempt(step)) connection++;
     entries.push({atMs: step.atMs, lane: 'transport', step, connection});
     if (step.action === 'connect') for (const atMs of step.client.probes) entries.push({atMs, lane: 'probe', connection});
   }
@@ -213,17 +232,41 @@ export function timeline(steps: readonly SourceStep[], transport: readonly Trans
 function checkTimeline(steps: readonly SourceStep[], transport: readonly TransportStep[]): void {
   for (const [name, list] of [['steps', steps], ['transport', transport]] as const) list.forEach((s, i) => { if (i && s.atMs < list[i - 1].atMs) fail(`$.${name}[${i}].atMs`, 'steps must be ordered by atMs'); });
   const entries = timeline(steps, transport);
-  let connected = false, open = -1, asleepUntil = -1, ended = false;
+  // `stalled`: the open client stopped reading; only its write deadline may end it. `awaitingConnect`: a stalled client
+  // learns that its connection ended only from the server's next accepted connection, so one must follow.
+  let connected = false, open = -1, durable = false, stalled = false, awaitingConnect = false, asleepUntil = -1, ended = false;
   entries.forEach((e, i) => {
-    if (ended) fail(`$ entry ${i}`, 'nothing may follow shutdown');
-    if (e.atMs < asleepUntil) fail(`$ entry ${i}`, 'no step may run while the machine is suspended');
-    if (e.lane === 'probe') { if (!connected || e.connection !== open) fail(`$ entry ${i}`, 'a probe needs its connection'); return; }
-    if (e.lane === 'transport') {
-      if (e.step.action === 'connect') { if (connected) fail(`$ entry ${i}`, 'one client at a time'); connected = true; open = e.connection; }
-      else { if (!connected) fail(`$ entry ${i}`, 'disconnect without a connection'); connected = false; }
+    const at = `$ entry ${i}`;
+    if (ended) fail(at, 'nothing may follow shutdown');
+    if (e.atMs < asleepUntil) fail(at, 'no step may run while the machine is suspended');
+    if (e.lane === 'probe') { if (!connected || stalled || e.connection !== open) fail(at, 'a probe needs its connection'); return; }
+    if (e.lane === 'source') {
+      if (e.step.action === 'suspend') asleepUntil = e.atMs + e.step.durationMs;
+      if (e.step.action === 'shutdown') { if (stalled) fail(at, 'a stalled connection ends at its write deadline'); ended = true; }
       return;
     }
-    if (e.step.action === 'suspend') asleepUntil = e.atMs + e.step.durationMs;
-    if (e.step.action === 'shutdown') ended = true;
+    const step = e.step;
+    if (opensAttempt(step)) {
+      if (connected) fail(at, 'one client at a time');
+      awaitingConnect = false;
+      if (step.action === 'connect') { connected = true; open = e.connection; durable = step.client.durable; }
+      return;
+    }
+    if (!connected) fail(at, `${step.action} without a connection`);
+    switch (step.action) {
+      case 'disconnect': if (stalled) fail(at, 'a stalled connection ends at its write deadline'); connected = false; break;
+      case 'writeDeadline': if (!stalled) fail(at, 'a write deadline needs a stalled client'); connected = stalled = false; awaitingConnect = true; break;
+      case 'clientFault': {
+        const fault = step.fault as LiveFault;
+        if (stalled) fail(at, 'a stalled client sends nothing');
+        if (DURABLE_ONLY.includes(fault) && !durable) fail(at, `${fault} needs a durable connection`);
+        if (fault === 'ackLiveOnly' && durable) fail(at, 'ackLiveOnly needs a live-only connection');
+        if (fault === 'stallRead') stalled = true; else if (!KEEPS_CONNECTION.includes(fault)) connected = false;
+        break;
+      }
+      case 'wireFault': if (stalled) fail(at, 'a stalled client reads nothing'); if (step.fault !== 'seqSkip') connected = false; break;
+      case 'secondClient': if (stalled) fail(at, 'a second client needs a reading connection'); break;
+    }
   });
+  if (stalled || awaitingConnect) fail('$.transport', 'a stalled connection ends at its write deadline, and another connection follows it');
 }

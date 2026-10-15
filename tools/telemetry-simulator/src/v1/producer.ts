@@ -3,7 +3,7 @@
 // docs/native-transport-v1.md#caller-sequence), answers one client at a time and builds every server message through the
 // unchanged ET-002b encoder, AckValidator and FrameDecoder. Every time is an explicit source-clock argument.
 import {
-  FrameDecoder, PROTOCOL_V1, V1_LIMITS, encodeFrame, negotiateV1, ProtocolError,
+  FrameDecoder, PROTOCOL_V1, V1_LIMITS, decodePayload, encodeFrame, negotiateV1, ProtocolError,
   type Available, type DeliveryStatus, type EndData, type GapData, type ServerMessage, type SourceIdentity, type SourceStatus, type Uint64
 } from '../../../../packages/contracts/src/protocol-v1';
 import {AckValidator} from '../../../../packages/contracts/src/protocol-v1-delivery';
@@ -43,6 +43,8 @@ export function deliveryStatus(s: StoreStatus, durable: boolean): DeliveryStatus
 
 interface Connection {
   phase: 'hello' | 'live' | 'closed'; durable: boolean; decoder: FrameDecoder; validator?: AckValidator;
+  /** The hello read so far, at most one 4,096-byte frame and its prefix. */
+  helloBytes: Uint8Array;
   lastCapture: bigint; lastStateNs: bigint; pendingDueNs?: bigint; lastProbe: bigint;
 }
 
@@ -59,7 +61,7 @@ export class V1Producer {
   /** A client opened the pipe. One client per endpoint; the caller refuses a second one. */
   open(): void {
     if (this.conn) throw new Error('A client is already connected');
-    this.conn = {phase: 'hello', durable: false, decoder: new FrameDecoder('client'), lastCapture: 0n, lastStateNs: 0n, lastProbe: 0n};
+    this.conn = {phase: 'hello', durable: false, decoder: new FrameDecoder('client'), helloBytes: new Uint8Array(0), lastCapture: 0n, lastStateNs: 0n, lastProbe: 0n};
   }
   /** The client is gone: the gate closes first, then a durable connection starts the store's retention window. */
   close(nowNs: bigint): void {
@@ -122,36 +124,55 @@ export class V1Producer {
     this.conn.phase = 'closed'; return out;
   }
 
-  /** Client frames. Steps 2 and 6: hello, then only `ack` (through AckValidator, then release) and `clock.probe` (S6). */
+  /**
+   * Client bytes that arrived together, as one read. Steps 2 and 6: the hello is read as the native endpoint reads it
+   * (the 4,096-byte bound at the prefix, a byte beyond the hello in the same read rejected, any other first message
+   * rejected, OD-5 S6); afterwards only `ack` (through AckValidator, then release) and `clock.probe`. A violation throws
+   * ProtocolError before anything of this read is written; the caller then closes the connection without an error frame.
+   */
   receive(bytes: Uint8Array, nowNs: bigint): Out[] {
     const c = this.conn; if (!c || c.phase === 'closed') throw new Error('No open connection');
-    const out: Out[] = [];
+    if (c.phase === 'hello') return this.hello(c, bytes, nowNs);
+    const out: Out[] = []; let probe: {id: string} | undefined;
     c.decoder.push(bytes, m => {
-      if (m.kind === 'hello') {
-        if (c.phase !== 'hello') throw new ProtocolError('Second hello');
-        c.durable = negotiateV1(m).durableEvents; c.phase = 'live';
-        out.push(this.envelope('welcome', {minor: 0, durableEvents: c.durable, limits: {...V1_LIMITS}, capabilities: {gameplayEvents: this.adapter.config.gameplayEvents, eventTypes: this.adapter.eventTypes()},
-          versions: structuredClone(this.adapter.config.versions), gameMode: this.adapter.gameMode}, nowNs));
-        c.validator = new AckValidator(this.source.pluginSessionId, c.durable);
-        if (this.retired) { out.push(this.end(this.retired, nowNs)!); return; }
-        // Connect the store before the gate opens, so that every record copied for this consumer is retained.
-        if (c.durable) this.store.connect();
-        this.adapter.channel.gate = c.durable ? 'durable' : 'live';
-        const {data, oldest} = this.stateData();
-        out.push(this.envelope('checkpoint', {boundarySeq: (this.seq + 1n).toString(), ...data}, nowNs, [oldest]));
-        c.validator.checkpoint(data.status.delivery.ackedThroughEventSeq); c.lastStateNs = BigInt(out.at(-1)!.message.capture.monotonicNs);
-      } else if (c.phase !== 'live') throw new ProtocolError('Client message before hello');
-      else if (m.kind === 'ack') {
+      if (m.kind === 'ack') {
         const through = c.validator!.accept(m);
         if (through !== undefined && this.store.release(BigInt(through)) === undefined) throw new Error('Producer invariant violation: release');
       } else if (m.kind === 'clock.probe') {
-        const id = BigInt(m.data.probeId); if (id <= c.lastProbe) throw new ProtocolError('Clock probe order');
-        c.lastProbe = id;
-        out.push(this.envelope('clock.reply', {probeId: m.data.probeId, receivedMonotonicNs: nowNs.toString(), sentMonotonicNs: nowNs.toString()}, nowNs));
-      } else throw new ProtocolError('Server message from client');
+        // OD-5 S6: probe IDs strictly increase, and no probe may arrive while the reply to the previous one is unsent.
+        const id = BigInt(m.data.probeId); if (id <= c.lastProbe || probe) throw new ProtocolError('Clock probe order');
+        c.lastProbe = id; probe = {id: m.data.probeId};
+      } else throw new ProtocolError('Only ack and clock.probe follow the checkpoint');
     });
+    // The reply is built after the whole read was accepted, so a rejected read consumes no message seq.
+    if (probe) out.push(this.envelope('clock.reply', {probeId: probe.id, receivedMonotonicNs: nowNs.toString(), sentMonotonicNs: nowNs.toString()}, nowNs));
     return out;
   }
+  private hello(c: Connection, bytes: Uint8Array, nowNs: bigint): Out[] {
+    const buffer = new Uint8Array(c.helloBytes.length + bytes.length); buffer.set(c.helloBytes); buffer.set(bytes, c.helloBytes.length); c.helloBytes = buffer;
+    if (buffer.length < 4) return [];
+    const length = new DataView(buffer.buffer, buffer.byteOffset, 4).getUint32(0, true);
+    if (!length || length > V1_LIMITS.clientFrameBytes) throw new ProtocolError('Client frame size rejected');
+    if (buffer.length > length + 4) throw new ProtocolError('Client bytes beyond the hello before the checkpoint');
+    if (buffer.length < length + 4) return [];
+    // Another major, another envelope minor or any other kind closes the connection without an error frame (§2).
+    const m = decodePayload(buffer.subarray(4), 'client'); c.helloBytes = new Uint8Array(0);
+    if (m.kind !== 'hello') throw new ProtocolError('Hello expected');
+    c.durable = negotiateV1(m).durableEvents; c.phase = 'live';
+    const out: Out[] = [this.envelope('welcome', {minor: 0, durableEvents: c.durable, limits: {...V1_LIMITS}, capabilities: {gameplayEvents: this.adapter.config.gameplayEvents, eventTypes: this.adapter.eventTypes()},
+      versions: structuredClone(this.adapter.config.versions), gameMode: this.adapter.gameMode}, nowNs)];
+    c.validator = new AckValidator(this.source.pluginSessionId, c.durable);
+    if (this.retired) { out.push(this.end(this.retired, nowNs)!); return out; }
+    // Connect the store before the gate opens, so that every record copied for this consumer is retained.
+    if (c.durable) this.store.connect();
+    this.adapter.channel.gate = c.durable ? 'durable' : 'live';
+    const {data, oldest} = this.stateData();
+    out.push(this.envelope('checkpoint', {boundarySeq: (this.seq + 1n).toString(), ...data}, nowNs, [oldest]));
+    c.validator.checkpoint(data.status.delivery.ackedThroughEventSeq); c.lastStateNs = BigInt(out.at(-1)!.message.capture.monotonicNs);
+    return out;
+  }
+  /** Fault-injection control: the next written message skips one `seq`, which a consumer accepts (§5). */
+  skipSeq(): void { this.seq++; }
 
   /** Step 5: the next coverage item for a durable consumer, or `end` once the sequence is exhausted. */
   pump(nowNs: bigint): Out | undefined {
