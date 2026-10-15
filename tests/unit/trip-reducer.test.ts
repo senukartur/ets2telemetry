@@ -458,8 +458,11 @@ describe('delivery semantics (T3, T5)', () => {
     const gone = run(state, [{kind: 'disconnected'}]).state;
     expect(stepTrip(gone, carrier(gone, third))).toEqual({ok: false, code: 'UNKNOWN_SESSION'});
     expect(state).toEqual(snapshot);
-    expect(stepTrip(state, {kind: 'reading', sample: {source: {game: 'ets2', origin: 'synthetic', pluginSessionId: ETS2_A, processInstanceId: ETS2_A},
-      capture: {clockId: s.clockId, monotonicNs: '1'}, state: {} as never}})).toEqual({ok: true, state, effects: []});
+    // PR-2: readings are accounted, so only the current connection's readings are accepted (docs/trips.md).
+    const reading = (pluginSessionId: string): TripInput => ({kind: 'reading', sample: {source: {game: 'ets2', origin: 'synthetic', pluginSessionId, processInstanceId: pluginSessionId},
+      capture: {clockId: s.clockId, monotonicNs: '1'}, state: {} as never}});
+    expect(stepTrip(state, reading(ETS2_B))).toEqual({ok: false, code: 'UNKNOWN_SESSION'});
+    expect(stepTrip(gone, reading(ETS2_A))).toEqual({ok: false, code: 'UNKNOWN_SESSION'});
   });
 });
 

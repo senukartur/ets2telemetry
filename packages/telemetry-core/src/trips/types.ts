@@ -4,6 +4,7 @@
 import type {Available, Currency, GameMode, Money, ServerMessage, Uint64} from '../../../contracts/src/protocol-v1';
 import type {RecordingCompleteness, TripEffect, TripOutcome, CloseReason} from '../../../storage/src/api';
 import type {StepSample} from '../derived';
+import type {ReadingPoint, TripAccounting} from './accounting';
 
 export type {RecordingCompleteness, TripEffect};
 /** Equals storage's MAX_EFFECTS (tests/unit/trip-reducer.test.ts checks it): the most effects one commit may carry. */
@@ -24,17 +25,20 @@ export type GameModeEvidence = Pick<GameMode, 'mode' | 'method' | 'confidence'>;
  * session resumes as active and becomes partial, because the consumer was not running for part of it. `jobKey` is
  * `jobKey()` of the trip's stored job configuration; null when it cannot be rebuilt, so no later job matches it.
  * `lastObservedUtcMs` is the label of the trip session's last stored item, the lower bound of a restart close.
+ * `observedDistanceM` is the trip's stored observed distance when it is available; a resumed trip accumulates from it.
  */
 export interface TripSeed {
   tripUuid: string; pluginSessionId: string; game: TripGame; jobKey: string | null;
-  startedUtcMs: number; recordingCompleteness: RecordingCompleteness; lastObservedUtcMs?: number;
+  startedUtcMs: number; recordingCompleteness: RecordingCompleteness; lastObservedUtcMs?: number; observedDistanceM?: number;
 }
 
 /**
  * One reducer input. `event` and `gap` are commit carriers: their effects go into the storage commit of that message.
  * `coveredThrough` is the session's committed coverage read right before that commit (docs/storage.md, caller rule);
  * for `session` it is the coverage that upsertSession returned. `receivedUtcMs` is the consumer's UTC label at receipt,
- * used only when the session has no earlier label. `reading` is accepted and ignored until PR-2 adds accounting.
+ * used only when the session has no earlier label. `reading` is one normalized state of the current connection (the
+ * checkpoint's and each snapshot's), in stream order with the events; `utcMs` is its capture UTC label. Readings are
+ * not commit carriers: what they decide waits for the game's next carrier (T16, T17).
  */
 export type TripInput =
   | {kind: 'session'; welcome: WelcomeMessage; coveredThrough: Uint64; openTrips: TripSeed[]}
@@ -84,6 +88,8 @@ export interface OpenTrip {
   truckKey: string | null; trailerKeys: (string | null)[];
   plannedDistance: Available<number> | null; expectedIncome: Available<Money> | null;
   fines: MoneyTotals; finesBeforeLoaded: MoneyTotals; tolls: MoneyTotals; transfers: MoneyTotals;
+  /** Observed distance, fuel used and refuels from readings (T16). */
+  accounting: TripAccounting;
 }
 export interface ClosedTrip extends Omit<OpenTrip, 'phase' | 'reloadEventSeq' | 'loadCheck'> {
   outcome: Exclude<TripOutcome, 'open'>; closeReason: CloseReason; endedUtcMs: number; endedMonotonicNs: Uint64 | null;
@@ -107,8 +113,20 @@ export interface SessionState {
    * happened before the consumer attached (protocol v1 §7, §9). Null before the connection's checkpoint.
    */
   attachedFromEventSeq: Uint64 | null;
-  /** Where the last connection of this session ended, for the not-connected interval of an open trip. */
-  disconnected: {utcMs: number | null; monotonicNs: Uint64 | null; clockId: string | null} | null;
+  /**
+   * Where the last connection of this session ended, for the not-connected interval of an open trip; `reading` is the
+   * connection's last reading, from which the interval's odometerDeltaM is measured.
+   */
+  disconnected: {utcMs: number | null; monotonicNs: Uint64 | null; clockId: string | null; reading: ReadingPoint | null} | null;
+  /** The current connection's last reading; null before its first. Steps never bridge connections (T16). */
+  lastReading: ReadingPoint | null;
+  /** A ferry or train event arrived since the last reading, so a jump in the next step is labelled a crossing (T17). */
+  transferSinceReading: boolean;
+  /**
+   * After a reconnection with an open trip: its not-connected interval and the reading before the disconnection. The
+   * connection's first reading records the odometer change in the interval while the interval still waits to be sent.
+   */
+  bridge: {tripUuid: string; before: ReadingPoint | null} | null;
 }
 /** The last trip closed without an outcome, so an identical job opened next is marked as a continuation, never merged. */
 export interface ContinuationCandidate {tripUuid: string; jobKey: string | null; cause: string}
