@@ -234,6 +234,10 @@ void Server::run(std::wstring directory) noexcept {
       PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,1,65540,65540,0,security.attributes()));
     if (!pipe) throw std::runtime_error("endpoint-collision");
     startup_stage = StartupFailure::discovery_publication;
+#ifdef ETS2TELEMETRY_TRANSPORT_TEST_HOOKS
+    // Console tests run synchronous I/O here, just before the discovery record is published.
+    if (transport_test_hook("startup-before-discovery",nullptr,stop_event_.get()) != ERROR_SUCCESS) throw std::runtime_error("startup-hook");
+#endif
     Discovery discovery(directory,security,user,current_,name);
     { std::lock_guard<std::mutex> lock(endpoint_mutex_); endpoint_ = name; }
     startup_complete = true; complete_startup(StartupFailure::none);
@@ -274,6 +278,10 @@ void Server::run(std::wstring directory) noexcept {
       if (pending_) lost_ = lost_ > UINT64_MAX - pending_->snapshot.observation_count ? UINT64_MAX : lost_ + pending_->snapshot.observation_count;
       pending_.reset(); current_.observations = {}; current_.observation_count = 0; diagnostics_ = false; CancelIoEx(pipe.get(),nullptr); DisconnectNamedPipe(pipe.get());
     }
+#ifdef ETS2TELEMETRY_TRANSPORT_TEST_HOOKS
+    // Console tests run synchronous I/O here, in the exit path that next deletes the discovery record.
+    transport_test_hook("v0-exit",nullptr,stop_event_.get());
+#endif
     adapter_.set_consumer(false,false);
   } catch (...) {
     adapter_.set_consumer(false,false); status_.store(Status::failed);
