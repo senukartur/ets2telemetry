@@ -1164,8 +1164,8 @@ it('refuses overlay settings requests once exiting', async () => {
 });
 // ET-010c decisions F2, F3 and F7: main validates the v1 projection before freshness and the overlay see it, expires it
 // on its own clock and feeds it into the overlay projection. The v1 input is snapshot-live with the v0 job ids under the
-// ETS2 game origin; the overlay origin text is written by hand from it.
-const OVERLAY_KEYS = ['source', 'origin', 'status', 'speed', 'speedUnit', 'fuel', 'fuelUnit', 'freshness', 'layout', 'paused', 'sections'];
+// ETS2 game origin; the overlay origin text is written by hand from it. Since ET-012b the projection also carries `editing`.
+const OVERLAY_KEYS = ['source', 'origin', 'status', 'speed', 'speedUnit', 'fuel', 'fuelUnit', 'freshness', 'layout', 'paused', 'sections', 'editing'];
 const ORIGIN_VALUE = {id: 'origin', state: 'value', text: 'Synthetic City A, Synthetic Company A'};
 const sectionOf = (projection: Record<string, unknown>, id: string) => (projection.sections as {id: string}[]).find(section => section.id === id);
 function readingWithV1(options: V1Options = {}): LiveTelemetry {
