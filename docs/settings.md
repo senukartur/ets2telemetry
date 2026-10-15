@@ -42,7 +42,7 @@ Loading happens once at startup, in parallel with the service start. Loading nev
 
 - If the read finishes within the budget, its state applies at once, as in the table below.
 - If it is still running when the budget expires (for example on a CPU-starved start, as in hosted run 38755116140), the windows open with defaults in the read-only `loading` state and the same read keeps running. When it settles, its own result applies (state, units and whether saving is possible) and is pushed to the dashboard and the overlay as a save is (see [below](#dashboard-and-overlay)). A read error then still means `unreadable`.
-- A read that has not settled 30 s after the start (`SETTINGS_READ_LIMIT_MS`) is treated as hung: the session becomes `unreadable` and the read's later result is ignored. A bounded read of a file of at most 64 KiB that takes this long is not CPU starvation but a stuck file system, for example an unreachable redirected folder; in run 38755116140 the whole startup, both windows included, took about 6 s. The limit keeps the units card from saying "still being read" indefinitely.
+- A read that has not settled within `SETTINGS_READ_LIMIT_MS` (about 30 s after the start: the limit timer is armed for the remaining 29 s when the 1,000 ms budget expires, so a CPU-starved start can push the cutoff slightly later) is treated as hung: the session becomes `unreadable` and the read's later result is ignored. A bounded read of a file of at most 64 KiB that takes this long is not CPU starvation but a stuck file system, for example an unreachable redirected folder; in run 38755116140 the whole startup, both windows included, took about 6 s. The limit keeps the units card from saying "still being read" indefinitely.
 
 | State | Meaning | Units in use | Can save |
 | --- | --- | --- | --- |
@@ -53,7 +53,7 @@ Loading happens once at startup, in parallel with the service start. Loading nev
 | `invalid-file` | Not a usable settings file | Defaults | Yes; the first save quarantines the file |
 | `unsupported-older` | An older format without a migration path | Defaults | Yes; the first save quarantines the file |
 | `newer-version` | Written by a newer version | Defaults | No (`SETTINGS_READ_ONLY`); the file is never modified |
-| `unreadable` | The file or directory is a symbolic link or junction, not a plain file or directory, or could not be read, or the read had not settled 30 s after the start | Defaults | No (`SETTINGS_WRITE_FAILED`) |
+| `unreadable` | The file or directory is a symbolic link or junction, not a plain file or directory, or could not be read, or the read had not settled within the read limit (about 30 s) | Defaults | No (`SETTINGS_WRITE_FAILED`) |
 | `unavailable` | No valid settings location | Defaults | No (`SETTINGS_WRITE_FAILED`) |
 
 The settings directory and file are inspected with `lstat`, which does not follow links: a symbolic link or junction is refused and never read or written through.
