@@ -280,24 +280,35 @@ export async function runIndependentClient(endpoint: string, input: unknown, opt
       if (options.signal?.aborted) throw new Error('Independent client cancelled');
       const result = await new Promise<{welcomed: boolean; crashed: boolean; client: ScriptedClient}>((resolve, reject) => {
         const socket = net.connect(endpoint), client = new ScriptedClient(ledger, step.client, instance, randomUUID(), cursors);
-        let settled = false, crashed = false, probed = false; attempts++;
-        let last = Promise.resolve();
-        // Writes leave strictly in order, each after its own random delay once the previous one left, as a storage-paced
-        // consumer would send them. Each delay is chained to the previous write, so timer rounding cannot reorder them.
-        const queue = (bytes: Uint8Array | (() => Uint8Array[])) => last.then(() => new Promise<void>(done => setTimeout(() => {
-          if (!socket.destroyed) for (const b of typeof bytes === 'function' ? bytes() : [bytes]) socket.write(b);
-          done();
-        }, random() * maxDelay)));
+        let settled = false, crashed = false, probed = false, writing = false; attempts++;
+        // Writes leave strictly in order, one at a time, each after its own random delay, as a storage-paced consumer sends
+        // them. ACKs are cumulative: a new ACK replaces one still waiting behind it, so a burst costs one ACK, not one each.
+        const pending: {ack: boolean; bytes: Uint8Array | (() => Uint8Array[])}[] = [], idle: (() => void)[] = [];
+        const enqueue = (bytes: Uint8Array | (() => Uint8Array[]), ack = false) => {
+          if (ack && pending.at(-1)?.ack) pending[pending.length - 1] = {ack, bytes}; else pending.push({ack, bytes});
+          if (writing) return;
+          writing = true;
+          const next = () => {
+            const item = pending.shift();
+            if (!item) { writing = false; for (const f of idle.splice(0)) f(); return; }
+            setTimeout(() => {
+              if (!socket.destroyed) for (const b of typeof item.bytes === 'function' ? item.bytes() : [item.bytes]) socket.write(b);
+              next();
+            }, random() * maxDelay);
+          };
+          next();
+        };
         socket.on('error', () => undefined);
-        socket.on('connect', () => { for (const f of client.hello().frames) last = queue(f); });
+        socket.on('connect', () => { for (const f of client.hello().frames) enqueue(f); });
         socket.on('data', chunk => {
           if (crashed) return;
           let out;
           try { out = client.receive(chunk, () => process.hrtime.bigint()); } catch (error) { settled = true; socket.destroy(); reject(error instanceof Error ? error : new Error('Client failed')); return; }
-          for (const f of out.frames) last = queue(f);
-          if (options.probe && !probed && client.received.some(m => m.kind === 'checkpoint')) { probed = true; last = queue(() => client.probe('1', process.hrtime.bigint()).frames); }
-          // A crash loses nothing already sent: queued earlier writes leave first.
-          if (out.crashed) { crashed = true; void last.then(() => socket.destroy()); }
+          // ScriptedClient.receive returns only ACK frames.
+          for (const f of out.frames) enqueue(f, true);
+          if (options.probe && !probed && client.received.some(m => m.kind === 'checkpoint')) { probed = true; enqueue(() => client.probe('1', process.hrtime.bigint()).frames); }
+          // A crash loses nothing already queued: earlier writes leave first.
+          if (out.crashed) { crashed = true; if (writing) idle.push(() => socket.destroy()); else socket.destroy(); }
         });
         socket.on('close', () => {
           if (settled) return; settled = true;

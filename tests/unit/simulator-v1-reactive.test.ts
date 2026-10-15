@@ -39,8 +39,10 @@ describe('simulator v1 reactive serving for any contract consumer', () => {
   // events, gaps, checkpoints and `end` must equal replay-v1 except the message seq, its snapshots must equal in state
   // and continuity, and the consumer's ledger must equal the replay's.
   const ids = ['normal-delivery', 'reconnect-lost-ack', 'ack-inside-gap', 'queue-count-overflow', 'crash-after-commit', 'pipe-reconnect'];
-  ids.forEach((id, i) => it(`serves ${id} to an independent consumer as replayed`, async () => {
-    const input = load(id), replay = replayV1(input), server = await serveV1Reactive(input, {scale: 1});
+  // Paced, and unpaced: then every step runs before any ACK can arrive, and only the bounded quiesce at each scripted
+  // disconnect lets the client's ACKs reach the producer before the next connection's checkpoint.
+  for (const scale of [1, 0]) ids.forEach((id, i) => it(`serves ${id} to an independent consumer as replayed (scale ${scale})`, async () => {
+    const input = load(id), replay = replayV1(input), server = await serveV1Reactive(input, {scale});
     try {
       const [client, report] = await Promise.all([runIndependentClient(server.endpoint, input, {seed: 1_000 + i, maxDelayMs: 5, probe: true}), server.done]);
       expect(reactiveDifferences(replay, report)).toEqual([]);
