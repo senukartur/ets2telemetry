@@ -1,6 +1,6 @@
 # ET-004 v0 stop and discovery record validation record
 
-Recorded October 15, 2026. This is a transport lifecycle bug fix in the v0 pipe server, not a wire change. Pipe names, discovery records and their bytes, the v0 protocol, the CAP0 contract and the [October 13, 2026 startup budget](et-004-startup-budget.md) (1 s SDK-initialization wait, pending rather than failed, one deferred log) are unchanged. No game was launched and no DLL was installed into a game directory. The branch is stacked on ET-004b PR C (`c284a6b`), whose `1d73b29` fixed the same defect for the v1 endpoint.
+Recorded October 15, 2026. This is a transport lifecycle bug fix in the v0 pipe server, not a wire change. Pipe names, discovery records and their bytes, the v0 protocol, the CAP0 contract and the [October 13, 2026 startup budget](et-004-startup-budget.md) (1 s SDK-initialization wait, pending rather than failed, one deferred log) are unchanged. No game was launched and no DLL was installed into a game directory. The fix was developed on top of ET-004b PR C (`c284a6b`), whose `1d73b29` fixed the same defect for the v1 endpoint, and was cherry-picked onto `main` after PR C merged as `ceba919` (#54).
 
 ## Problem
 
@@ -28,7 +28,7 @@ CAP0 (`capture-server.cpp`) uses the same repeated cancellation but publishes no
 
 Local machine: Windows 11 Home 10.0.26200 x64, 24 logical processors, Visual Studio 18 Community, MSVC 14.51.36231, CMake 4.3.1-msvc1.
 
-Natural reproduction on the unfixed code (`c284a6b`, Release `snapshot-transport-test`):
+Natural reproduction on the unfixed code (`c284a6b`, the ET-004b PR C head before its squash merge as `ceba919`; Release `snapshot-transport-test`):
 
 | Run | Result |
 | --- | --- |
@@ -39,7 +39,7 @@ The deterministic case `stop-discovery` adds two console-only hook points to `pi
 
 | Check | Result |
 | --- | --- |
-| `stop-discovery` on the unfixed `stop()` (`0d6cf6a`), exit-path block | Failed: `exitReadError=995 fallback=0`, "stop never cancels synchronous I/O in the v0 exit path" |
+| `stop-discovery` on the unfixed `stop()` (`0d6cf6a`, cherry-picked to `main` as `f14b797`), exit-path block | Failed: `exitReadError=995 fallback=0`, "stop never cancels synchronous I/O in the v0 exit path" |
 | Same, exit-path block skipped (temporary local edit) | Failed: `publishReadError=995 fallback=0`, "stop never cancels synchronous I/O during discovery publication" |
 | Same, first two blocks skipped | Failed: `collisionReadError=995 fallback=0`, "stop never cancels synchronous I/O before a failing publication" |
 | Fixed code, startup window left open for the whole run | `stop-discovery` failed in the exit-path block (995) |
@@ -49,7 +49,7 @@ The deterministic case `stop-discovery` adds two console-only hook points to `pi
 
 ## Stress results on the fixed code
 
-Repeat runs of the fixed code (`946d6ea`). "4 parallel" means four loops at once on the 24-CPU host. "Loaded" means the test and three busy loops pinned to two CPUs, as in the [ET-004b fix round 2](et-004b.md#fix-round-2-october-15-2026) runs.
+Repeat runs of the fixed code (`946d6ea`, cherry-picked to `main` as `0001557` with identical content). "4 parallel" means four loops at once on the 24-CPU host. "Loaded" means the test and three busy loops pinned to two CPUs, as in the [ET-004b fix round 2](et-004b.md#fix-round-2-october-15-2026) runs.
 
 | Case | Build | Runs | Mode | Failures |
 | --- | --- | --- | --- | --- |
