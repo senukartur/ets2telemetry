@@ -39,12 +39,12 @@ const NONE = {state: 'missing', reason: 'not-observed'} as const;
 const value = <T>(v: T) => ({state: 'value' as const, value: v});
 interface At {
   ms: number; odometer?: number; fuel?: number; minutes?: number; clock?: string; simulation?: 'running' | 'paused';
-  position?: {x: number; y: number; z: number}; plate?: string; country?: string; captureClock?: string; utc?: boolean; utcMs?: number;
+  position?: {x: number; y: number; z: number}; plate?: string; country?: string; noTruck?: boolean; captureClock?: string; utc?: boolean; utcMs?: number;
 }
 /** One reading of script `s`'s session. Fields not given are not observed. */
 function reading(s: Script, a: At): TripInput {
   const base = BASE.truck.state === 'value' ? BASE.truck.value : undefined;
-  const truck = base === undefined ? BASE.truck : value({...base, ...(a.plate !== undefined ? {licensePlate: value(a.plate)} : {}),
+  const truck = a.noTruck === true ? NONE : base === undefined ? BASE.truck : value({...base, ...(a.plate !== undefined ? {licensePlate: value(a.plate)} : {}),
     ...(a.country !== undefined ? {plateCountry: {id: value(a.country), name: value(a.country)}} : {})});
   const state: NormalizedLiveState = {...BASE, simulation: a.simulation ?? 'running', truck,
     odometer: a.odometer === undefined ? NONE : value({kind: 'odometer' as const, meters: a.odometer}), fuel: a.fuel === undefined ? NONE : value(a.fuel),
@@ -161,6 +161,14 @@ describe('resumed cleared trips (fix round 1)', () => {
 });
 
 describe('connection holes (T16)', () => {
+  it('records no odometer change across a disconnection when the truck is unknown at both readings (advisory review) [synthetic-inference]', () => {
+    const {s, trip, rows} = opened();
+    // The truck is not observed on both sides for the same reason: its identity is unknown, so no change is recorded.
+    play([...rows, [reading(s, {ms: 2000, odometer: 1000, noTruck: true})], [{kind: 'disconnected'}], [sessionInput(s.welcome(), '2')],
+      [reading(s, {ms: 60_000, odometer: 1300, noTruck: true})],
+      [s.event(r.paused(), paused), [partial(trip), {kind: 'completeness.add', interval: {tripUuid: trip, kind: 'not-connected', startUtcMs: at(2),
+        startMonotonicNs: '1001999000000', endMonotonicNs: '1002000000000', sourceClockId: s.clockId, detail: {cause: 'disconnected', odometerDeltaM: null}}}]]]);
+  });
   it('compares trucks by brand, model and plate for the odometer change, and always records the key (fix round 1) [synthetic-inference]', () => {
     const {s, trip, rows} = opened();
     const notConnected = (odometerDeltaM: number | null): TripEffect => ({kind: 'completeness.add', interval: {tripUuid: trip, kind: 'not-connected', startUtcMs: at(2),

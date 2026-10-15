@@ -225,10 +225,12 @@ export function distanceUpdate(tripUuid: string, acc: TripAccounting): {kind: 't
 }
 /**
  * The odometer change across a connection hole, recorded in its not-connected interval and never added to a trip:
- * null unless both readings have an odometer of the same truck (derived.ts truck identity: brand, model and plate).
+ * null unless both readings have an odometer and a known truck, and it is the same truck (derived.ts truck identity:
+ * brand, model and plate). An unavailable truck at either end is unknown, even when both are unavailable for the same
+ * reason: no change between possibly different trucks is recorded.
  */
 export function odometerDeltaM(before: ReadingPoint | null, after: ReadingPoint): number | null {
   if (before === null || before.odometer.state !== 'value' || after.odometer.state !== 'value') return null;
-  if (truckKey(before) !== truckKey(after)) return null;
+  if (before.truck.state !== 'value' || after.truck.state !== 'value' || truckKey(before) !== truckKey(after)) return null;
   return after.odometer.value.meters - before.odometer.value.meters;
 }
