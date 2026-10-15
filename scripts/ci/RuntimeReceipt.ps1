@@ -94,6 +94,36 @@ function Test-LifecycleReceipt {
         !(Test-OrderlyRunEvent -MainEvents @($lifecycle.restartMainEvents) -ServiceEvents @($lifecycle.restartServiceEvents))) { return $false }
     $actions = @($Driver.mainEvents | Where-Object { $_.event -ceq 'SECOND_INSTANCE' })
     if ($actions.Count -ne 1 -or $actions[0].facts.action -cne 'created') { return $false }
+    if (!(Test-LifecycleSettingsReceipt -Driver $Driver)) { return $false }
+    return $true
+}
+
+# ET-011b settings in the lifecycle journey: invalid seed kept, quarantined on save, exact content, units applied,
+# and a restart that loads without writing.
+function Test-LifecycleSettingsReceipt {
+    param([object]$Driver)
+    $lifecycle = $Driver.lifecycle
+    foreach ($field in @('settingsSeededInvalidFile','settingsStartupUnchanged','settingsQuarantinePreserved','settingsSavedExact',
+        'unitsApplied','settingsRestartLoaded')) {
+        if ($lifecycle.$field -isnot [bool] -or $lifecycle.$field -ne $true) { return $false }
+    }
+    if (!(Test-ReceiptInteger -Value $lifecycle.settingsQuarantined -Minimum 1 -Maximum 1) -or $lifecycle.restart.settingsState -cne 'loaded') { return $false }
+    $units = $lifecycle.overlayUnits
+    if ($null -eq $units -or $units.source -cne 'ETS2' -or $units.origin -cne 'synthetic' -or $units.status -cne 'connected' -or
+        $units.freshness -cne 'current' -or $units.speed -cne '55.9' -or $units.speedUnit -cne 'mph' -or
+        $units.fuel -cne '19.3' -or $units.fuelUnit -cne 'US gal') { return $false }
+    foreach ($row in @($lifecycle.dashboardUnits, $lifecycle.restart.dashboardUnits)) {
+        if ($null -eq $row -or $row.speed -cne 'Speed: 55.9 mph' -or $row.fuel -cne 'Fuel: 19.3 US gal') { return $false }
+    }
+    # Diagnostics: run A falls back from the invalid file, quarantines it once and saves once; run B only loads.
+    $fallback = @($Driver.mainEvents | Where-Object { $_.event -ceq 'SETTINGS_FALLBACK' })
+    if ($fallback.Count -ne 1 -or $fallback[0].facts.state -cne 'invalid-file') { return $false }
+    foreach ($eventName in @('SETTINGS_QUARANTINED','SETTINGS_SAVED')) {
+        if (@($Driver.mainEvents | Where-Object { $_.event -ceq $eventName }).Count -ne 1) { return $false }
+    }
+    $loaded = @($lifecycle.restartMainEvents | Where-Object { $_.event -ceq 'SETTINGS_LOADED' })
+    if ($loaded.Count -ne 1 -or $loaded[0].facts.state -cne 'loaded') { return $false }
+    if (@($lifecycle.restartMainEvents | Where-Object { $_.event -cmatch '^SETTINGS_' }).Count -ne 1) { return $false }
     return $true
 }
 

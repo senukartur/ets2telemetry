@@ -1,13 +1,17 @@
-import type {LiveTelemetry} from '../../../packages/contracts/src';
+import type {LiveTelemetry, UnitProfile} from '../../../packages/contracts/src';
+import {speedNumber, speedUnit, volumeNumber, volumeUnit} from './unit-profiles';
 
-/** Round in the chosen display unit without changing canonical signed speed. */
-export function displaySpeed(value: number): string {
-  const rounded = value.toFixed(1);
-  return rounded === '-0.0' ? '0.0' : rounded;
+/**
+ * Dashboard speed in the displayed game's profile, with the existing freshness gate. Canonical signed speed is not
+ * changed; a negative value means reverse. The default profile is metric.
+ */
+export function dashboardSpeed(live: LiveTelemetry | undefined, profile: UnitProfile = 'metric'): string {
+  const speed = live?.observation?.state.speed;
+  return live?.fresh && speed?.available ? `${speedNumber(speed.value, profile)} ${speedUnit(profile)}` : 'unavailable';
 }
 
-/** The diagnostic dashboard retains its existing freshness gate and km/h unit. */
-export function dashboardSpeed(live: LiveTelemetry | undefined): string {
-  const speed = live?.observation?.state.speed;
-  return live?.fresh && speed?.available ? `${displaySpeed(speed.value * 3.6)} km/h` : 'unavailable';
+/** Dashboard fuel in the displayed game's profile, with the same freshness gate. */
+export function dashboardFuel(live: LiveTelemetry | undefined, profile: UnitProfile = 'metric'): string {
+  const fuel = live?.observation?.state.fuel;
+  return live?.fresh && fuel?.available ? `${volumeNumber(fuel.value, profile)} ${volumeUnit(profile)}` : 'unavailable';
 }
