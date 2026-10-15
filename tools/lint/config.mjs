@@ -26,22 +26,29 @@ const sqliteFiles = ['packages/storage/src/sqlite/**', 'apps/desktop/src/storage
 const nodeSafeFiles = ['tests/unit/**', 'tests/shared/**', 'apps/desktop/src/**/*.ts',
   'packages/storage/src/api.ts', 'packages/storage/src/codec.ts', 'packages/storage/src/errors.ts', 'packages/storage/src/retention.ts'];
 const sqliteMessage = 'Native SQLite loads only in packages/storage/src/sqlite, the storage worker and tests/storage (docs/storage.md).';
-const storageCorePatterns = [{
-  // The SQLite core and the in-process storage index that re-exports it, also as a relative import inside the package.
-  regex: '(^|/)storage/src(/index|/sqlite(/.*)?)?(\\.[cm]?[jt]s)?$|^@ets2telemetry/storage(/.*)?$|^\\./(index|sqlite)(/.*)?(\\.[cm]?[jt]s)?$',
-  message: 'Import the Node-safe storage modules (api, codec, errors, retention), not the SQLite core; see docs/storage.md.'
-}, {
-  // The Electron-runtime suite's helpers load native SQLite.
-  regex: '(^|/)tests/storage(/.*)?$|^\\.\\./storage(/.*)?$',
-  message: 'tests/storage loads native SQLite under Electron; Node-safe code must not import it (docs/storage.md).'
-}];
-// Loads that no-restricted-imports cannot see: a dynamic import(), and require() or createRequire with a literal module
-// name. A computed module name cannot be checked statically. esquery regex literals cannot contain "/", hence \x2F.
-const sqliteLoadSelectors = [
-  {selector: 'ImportExpression[source.value=/^better-sqlite3$|storage\\x2Fsrc($|\\x2F(index|sqlite))|tests\\x2Fstorage/]', message: sqliteMessage},
-  {selector: "CallExpression[arguments.0.value='better-sqlite3']", message: sqliteMessage},
-  {selector: "CallExpression[callee.name='createRequire'], CallExpression[callee.property.name='createRequire']", message: 'createRequire can load native modules past the import checks; Node-safe code must not use it (docs/storage.md).'}
+// The SQLite core and the in-process storage index that re-exports it, also as a relative import inside the package.
+const storageCoreRegex = String.raw`(^|/)storage/src(/index|/sqlite(/.*)?)?(\.[cm]?[jt]s)?$|^@ets2telemetry/storage(/.*)?$|^\./(index|sqlite)(/.*)?(\.[cm]?[jt]s)?$`;
+// The Electron-runtime suite's helpers load native SQLite.
+const storageSuiteRegex = String.raw`(^|/)tests/storage(/.*)?$|^\.\./storage(/.*)?$`;
+const storageCorePatterns = [
+  {regex: storageCoreRegex, message: 'Import the Node-safe storage modules (api, codec, errors, retention), not the SQLite core; see docs/storage.md.'},
+  {regex: storageSuiteRegex, message: 'tests/storage loads native SQLite under Electron; Node-safe code must not import it (docs/storage.md).'}
 ];
+// Loads that no-restricted-imports cannot see. The same module set as above (better-sqlite3, the SQLite core and storage
+// index, tests/storage) is refused as a dynamic import() or a require() whose module name is a string literal or a
+// template literal without expressions; a computed module name cannot be checked statically. Any call with
+// 'better-sqlite3' as its first argument and any createRequire call are refused too. esquery regex literals cannot
+// contain "/", so it is written \x2F there.
+const restrictedModule = `/${[String.raw`^better-sqlite3$`, storageCoreRegex, storageSuiteRegex].join('|').replaceAll('/', String.raw`\x2F`)}/`;
+const literalArgument = (path, test) => [`[${path}.value=${test}]`, `[${path}.type='TemplateLiteral'][${path}.expressions.length=0][${path}.quasis.0.value.cooked=${test}]`];
+const sqliteLoadSelectors = [
+  ...literalArgument('source', restrictedModule).map(attribute => `ImportExpression${attribute}`),
+  ...literalArgument('arguments.0', restrictedModule).map(attribute => `CallExpression[callee.name='require']${attribute}`),
+  ...literalArgument('arguments.0', `'better-sqlite3'`).map(attribute => `CallExpression${attribute}`)
+].map(selector => ({selector, message: sqliteMessage})).concat({
+  selector: "CallExpression[callee.name='createRequire'], CallExpression[callee.property.name='createRequire']",
+  message: 'createRequire can load native modules past the import checks; Node-safe code must not use it (docs/storage.md).'
+});
 
 export default tseslint.config(
   {
