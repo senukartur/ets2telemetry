@@ -1,13 +1,16 @@
-// telemetry-core is pure TypeScript shared by renderer and service code. It may import only its own modules and
-// type-only declarations from packages/contracts/src. Node.js, Electron, React, any runtime package, Node globals and
-// triple-slash type references are forbidden. This test replaces a lint-config rule (decision N16), so tools/lint and
-// the root tsconfig stay unchanged.
+// telemetry-core is pure TypeScript shared by renderer and service code. It may import only its own modules,
+// type-only declarations from packages/contracts/src and, for the trip reducer's effect types (ET-014, T2), type-only
+// declarations from exactly packages/storage/src/api.ts. Node.js, Electron, React, any runtime package, any other
+// storage module, Node globals and triple-slash type references are forbidden. This test replaces a lint-config rule
+// (decision N16), so tools/lint and the root tsconfig stay unchanged.
 import {readdirSync, readFileSync} from 'node:fs';
 import {dirname, join, relative, resolve, sep} from 'node:path';
 import {describe, expect, it} from 'vitest';
 
 const coreDir = resolve('packages/telemetry-core/src');
 const contractsDir = resolve('packages/contracts/src');
+/** The one storage module telemetry-core may name, and only in a type-only import. */
+const storageApi = resolve('packages/storage/src/api');
 const files = readdirSync(coreDir, {recursive: true, encoding: 'utf8'}).filter(file => file.endsWith('.ts')).map(file => join(coreDir, file));
 const STATIC = /\b(import|export)\s+(type\s+)?([^'";]*?)\s*from\s*['"]([^'"]+)['"]/g;
 const BARE = /\bimport\s+['"]([^'"]+)['"]/g;
@@ -106,7 +109,10 @@ function violations(source: string, file: string): string[] {
     const target = resolve(dirname(file), specifier);
     if (inside(target, coreDir)) continue;
     if (inside(target, contractsDir) && typeOnly) continue;
-    problems.push(inside(target, contractsDir) ? `runtime contracts import ${specifier}` : `import outside the allowed modules ${specifier}`);
+    const isStorageApi = target.replace(/\.ts$/, '') === storageApi;
+    if (isStorageApi && typeOnly) continue;
+    problems.push(inside(target, contractsDir) ? `runtime contracts import ${specifier}`
+      : isStorageApi ? `runtime storage import ${specifier}` : `import outside the allowed modules ${specifier}`);
   }
   return problems;
 }
@@ -114,12 +120,16 @@ function violations(source: string, file: string): string[] {
 describe('telemetry-core import boundary', () => {
   it('finds the expected modules and their imports', () => {
     const names = files.map(file => relative(coreDir, file).split(sep).join('/')).sort();
-    expect(names).toEqual(['derived.ts', 'display-profile.ts', 'format.ts', 'index.ts', 'live-view.ts', 'normalize-v0.ts', 'normalize-v1.ts', 'readings.ts', 'units.ts']);
+    expect(names).toEqual(['derived.ts', 'display-profile.ts', 'format.ts', 'index.ts', 'live-view.ts', 'normalize-v0.ts', 'normalize-v1.ts', 'readings.ts',
+      'trips/identity.ts', 'trips/reducer.ts', 'trips/types.ts', 'trips/view.ts', 'units.ts']);
     const all = files.flatMap(file => specifiers(readFileSync(file, 'utf8'))).map(({specifier, typeOnly}) => `${typeOnly ? 'type ' : ''}${specifier}`);
     expect(all).toContain('type ../../contracts/src/protocol-v0');
     expect(all).toContain('type ../../contracts/src/protocol-v1');
     expect(all).toContain('type ../../contracts/src');
+    expect(all).toContain('type ../../../storage/src/api');
     expect(all).toContain('./units');
+    // The storage API is the only storage module named anywhere in telemetry-core, and only by type.
+    expect(all.filter(name => name.includes('storage/'))).toEqual(all.filter(name => name === 'type ../../../storage/src/api'));
   });
   it.each(files.map(file => [relative(coreDir, file), file]))('%s imports only telemetry-core modules and contracts types', (_name, file) => {
     expect(violations(readFileSync(file, 'utf8'), file)).toEqual([]);
@@ -133,6 +143,11 @@ describe('telemetry-core import boundary', () => {
       ['a side-effect import', "import 'node:path';", ['package import node:path']],
       ['a runtime contracts import', "import {decodePayload} from '../../contracts/src/protocol-v0';", ['runtime contracts import ../../contracts/src/protocol-v0']],
       ['an escape from the allowed modules', "import type {LiveTelemetry} from '../../../apps/desktop/src/live-state';", ['import outside the allowed modules ../../../apps/desktop/src/live-state']],
+      ['a runtime storage API import', "import {MAX_EFFECTS} from '../../storage/src/api';", ['runtime storage import ../../storage/src/api']],
+      ['a runtime storage API re-export', "export {ACCEPTED_ORIGIN} from '../../storage/src/api.ts';", ['runtime storage import ../../storage/src/api.ts']],
+      ['a type import of another storage module', "import type {Storage} from '../../storage/src/index';", ['import outside the allowed modules ../../storage/src/index']],
+      ['a type import of the storage directory', "import type {TripEffect} from '../../storage/src';", ['import outside the allowed modules ../../storage/src']],
+      ['a type import of the SQLite core', "import type {StorageConnection} from '../../storage/src/sqlite/connection';", ['import outside the allowed modules ../../storage/src/sqlite/connection']],
       ['a dynamic import', "const m = await import('./units');", ['dynamic import()']],
       ['require', "const fs = require('fs');", ['Node global require']],
       ['process', 'const home = process.env.HOME;', ['Node global process']],
@@ -156,6 +171,10 @@ describe('telemetry-core import boundary', () => {
     });
     it('allows type-only contracts imports and own modules', () => {
       expect(violations("import type {CurrentState} from '../../contracts/src/protocol-v0';\nimport {fixed} from './format';", at)).toEqual([]);
+    });
+    it('allows a type-only import of exactly the storage API', () => {
+      expect(violations("import type {TripEffect} from '../../storage/src/api';\nexport type {RecordingCompleteness} from '../../storage/src/api.ts';", at)).toEqual([]);
+      expect(violations("import type {TripEffect} from '../../../storage/src/api';", join(coreDir, 'trips', 'probe.ts'))).toEqual([]);
     });
   });
 });

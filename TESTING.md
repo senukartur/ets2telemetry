@@ -243,3 +243,16 @@ PR-2 adds the native broker's v1 mode with its client CTest cases ([ET-006b brok
 | E14 controlled chain (REG-005, REG-010) | `npm run test:v1-chain` (`tests/integration/v1-chain.test.ts`, Windows CI after the CAP0 chain): the fake-SDK host and the test plugin DLL with the real broker in v1 mode; the plugin accepts the broker-provisioned policy; a test-level durable driver's ACK relayed through the broker releases the retained entries in a later snapshot; `V1Ingestion` with an `ets2` selection fails closed on the test DLL's synthetic origin under game authority | Synthetic test DLL and fake SDK host; production sends no ACK, so the ACK comes from the test |
 
 The production durable path and every real-game, TruckersMP and performance check remain pending; see [ET-006b validation](docs/validation/et-006b.md).
+
+## ET-014 trip reducer — October 15, 2026
+
+Under the owner's standing delegation of October 15, 2026 the coordinator started ET-014 with decisions T1–T20 ([concept.md](concept.md#et-014-authorization--october-15-2026)), which the owner did not review individually. PR-1 adds the pure trip lifecycle and completeness reducer ([trips](docs/trips.md)). Its tests:
+
+- `tests/unit/trip-identity.test.ts`: SHA-256 against NIST vectors and `node:crypto`, the trip UUID derivation, and the job key without `cargoLoaded`.
+- `tests/unit/trip-reducer.test.ts`: a table of transitions with hand-written effects. Each case names its basis: an observation O1–O11, an October 13–14 concept decision, or synthetic inference.
+- `tests/unit/trip-reducer-replay.test.ts`: prefix rebuild equals the single run, redelivery changes nothing, and seeded random streams are checked against a model of the storage effect rules.
+- `tests/storage/trip-effects.test.ts` (`npm run test:storage`): reducer effects committed through the real storage core to temporary synthetic databases.
+
+`tests/unit/telemetry-core-boundaries.test.ts` now allows telemetry-core a type-only import of exactly `packages/storage/src/api.ts`.
+
+Expected effects and rows come from the specification, the observations and the decisions, never from reducer output. The tests give partial domain protection to REG-001 to REG-006 and REG-008 ([registry](docs/regression-registry.md)). Readings accounting and the simulator replay (PR-2) extend REG-008 and its text. All of this is synthetic evidence: no game, TruckersMP, display or performance behaviour follows; see [ET-014 validation](docs/validation/et-014.md).
