@@ -31,11 +31,12 @@ Every writer open, including reopen, the open after a migration and the open aft
 3. Refuse a file of another application, or one without this application's schema but with user tables (`DATABASE_UNRECOGNIZED`), a newer schema (`SCHEMA_NEWER`), another purpose (`PURPOSE_MISMATCH`) and a locked file (`DATABASE_LOCKED`). An existing file without write access is `PERMISSION_DENIED`; SQLite would otherwise fall back to a read-only handle and fail later with a misleading I/O code.
 4. Open read-write with a 2,000 ms busy timeout.
 5. `PRAGMA locking_mode = EXCLUSIVE`, read back `exclusive`.
-6. `PRAGMA journal_mode = WAL`, read back `wal`.
-7. `PRAGMA synchronous = FULL`, read back `2`. This comes after WAL on purpose: better-sqlite3 13.0.3 compiles `SQLITE_DEFAULT_WAL_SYNCHRONOUS=1` (`node_modules/better-sqlite3/deps/defines.gypi`), so a WAL database reopened without this setting runs at `NORMAL`. A test proves that a plain connection to the same file reads `1`.
-8. `PRAGMA foreign_keys = ON`, read back `1`.
-9. `BEGIN IMMEDIATE; COMMIT` to take the lock now, so a second writer fails at open rather than at its first write.
-10. Read integers as BigInt (`defaultSafeIntegers`), so no integer is silently rounded.
+6. Re-read `application_id`, `user_version` and the user tables on this connection. In exclusive mode this first read takes the file lock and keeps it. Another process could have changed the file since step 2: a schema that became newer is refused with `SCHEMA_NEWER`, and any other change (a different version or id, or tables in a file inspected as new) with `DATABASE_UNRECOGNIZED`, before any write.
+7. `PRAGMA journal_mode = WAL`, read back `wal`.
+8. `PRAGMA synchronous = FULL`, read back `2`. This comes after WAL on purpose: better-sqlite3 13.0.3 compiles `SQLITE_DEFAULT_WAL_SYNCHRONOUS=1` (`node_modules/better-sqlite3/deps/defines.gypi`), so a WAL database reopened without this setting runs at `NORMAL`. A test proves that a plain connection to the same file reads `1`.
+9. `PRAGMA foreign_keys = ON`, read back `1`.
+10. `BEGIN IMMEDIATE; COMMIT` to take the write lock now, so a second writer fails at open rather than at its first write.
+11. Read integers as BigInt (`defaultSafeIntegers`), so no integer is silently rounded.
 
 Any mismatch closes the connection with `DURABILITY_UNVERIFIED`. Only a connection that passed every step carries the durability record `{journalMode: 'wal', synchronous: 'full', lockingMode: 'exclusive', foreignKeys: true}`, and every write asserts it. A commit result exists only after `COMMIT` returned on that connection.
 
@@ -65,7 +66,7 @@ Conventions (OD-3, OD-6, OD-7):
 
 - **Exact 64-bit identifiers.** Wire uint64 values in sessions, events and gaps (`eventSeq`, monotonic nanoseconds, UTC milliseconds, revisions, boundary order, loss counts) are stored as 20-digit zero-padded decimal TEXT. That is exact, and text order equals numeric order, so range queries and the UNIQUE key work. Sample `monotonic_ns` is an INTEGER; a value above 2^63-1 is refused with `VALUE_OUT_OF_RANGE`, never truncated.
 - **Exact money.** Money is the raw canonical decimal TEXT with its SDK type (`s64` or `u64`) and currency status, never a REAL. A `GLOB` check enforces the shape and the codec checks the range with BigInt; `-0` and leading zeros are refused.
-- **Availability.** Each SDK attribute has a value column and a `_state` column (`available`, `not-observed`, `not-supported`, `invalid`); the value is present exactly when the state is `available`. Zero is a value, and a provided empty string is an available `''`. Samples keep one NULL per unavailable reading plus `not_supported_mask` and `invalid_mask` bits; a NULL without a bit is not observed.
+- **Availability.** Each SDK attribute has a value column and a `_state` column (`available`, `not-observed`, `not-supported`, `invalid`); the value is present exactly when the state is `available`. Zero is a value, and a provided empty string is an available `''`. Samples keep one NULL per unavailable reading plus `not_supported_mask` and `invalid_mask` bits; a NULL without a bit is not observed. Commands accept only exactly `{available: true, value}` with a present value or `{available: false, reason}` with a known reason; any other shape is `INVALID_INPUT`, never a silent not-observed.
 - **Floats.** SDK float32 values are stored as float64 REAL copies, which is exact. One exception: SQLite keeps integral REAL values in integer form, so negative zero reads back as zero. The canonical event payload keeps `-0`.
 - **Raw payload.** Each event row keeps `payload_json`, canonical JSON (sorted keys, no whitespace) of the validated `{occurred, record}`, beside its normalized columns. A redelivered event compares by this text.
 - **Time.** Real time (source monotonic nanoseconds with their clock, UTC milliseconds as labels) and game time (minutes with their game clock) are separate columns and are never mixed.
@@ -81,14 +82,14 @@ Indexes: samples by session and by trip, attributions and completeness intervals
 | --- | --- |
 | `openStorage(options)` | The durability sequence, then creation or migration |
 | `upsertSession({message})` | Stores the session from a validated welcome. Repeating it changes nothing; a changed identity, version or capability is `SESSION_CONFLICT`. Later game-mode changes arrive as `source.gameMode` events and are kept beside the welcome's evidence |
-| `commitEvent({message, effects?})`, `commitGap({message, effects?})` | Validates the message again with the protocol v1 schema and requires a stored session with the same identity. One `BEGIN IMMEDIATE` transaction inserts the row keyed UNIQUE(session, eventSeq or range), its normalized rows and the effects, and advances coverage. Returns `committed`, `duplicate` (same canonical payload; effects not applied again) or `conflict` (different payload; the stored row is kept, protocol v1 §9), with `committedThroughEventSeq` |
+| `commitEvent({message, effects?})`, `commitGap({message, effects?})` | Validates the message again with the protocol v1 schema and requires a stored session with the same identity. One `BEGIN IMMEDIATE` transaction inserts the row keyed UNIQUE(session, eventSeq or range), its normalized rows and the effects, and advances coverage. Returns `committed`, `duplicate` (same canonical payload; effects not applied again), `conflict` (different payload; the stored row is kept, protocol v1 §9) or, for a gap only, `covered` (its whole range is already inside committed coverage; nothing is stored and effects are not applied), with `committedThroughEventSeq` |
 | `committedThrough(pluginSessionId)` | The contiguous committed coverage: the `committedThroughEventSeq` input of `DurableAckCursor` |
 | `appendSamples(pluginSessionId, rows)` | Up to 3,600 samples in one transaction: all of them or none |
 | `recordCompleteness(pluginSessionId, interval)` | A known missing interval outside an event commit |
 | `getSession`, `getEvent`, `listEvents` (≤ 500), `getTrip`, `listTrips` (≤ 100), `listSamples` (≤ 3,600 per trip or session), `storageInfo` | Bounded reads |
 | `restoreBackup(manifest, options)` | Restore into a new file (below) |
 
-**Coverage.** `committed_through_event_seq` is advanced in the same transaction as the commit. A range that starts at or before coverage + 1 extends it, and stored events and gaps that continue from there are absorbed, so commits {1, 2, 4} give 2 and committing 3 later gives 4. A gap range may overlap committed events; those keep their rows (protocol v1 §9). An ACK may be built only from this value after the transaction returned (protocol v1 §10).
+**Coverage.** `committed_through_event_seq` is advanced in the same transaction as the commit. A range that starts at or before coverage + 1 extends it, and stored events and gaps that continue from there are absorbed, so commits {1, 2, 4} give 2 and committing 3 later gives 4. A gap range may overlap committed events; those keep their rows (protocol v1 §9). A gap that lies wholly inside coverage, such as a merged gap record redelivered after an ACK inside it (stream `ack-inside-gap-record`), is `covered`: storing it again would count the same losses twice and reapply its effects. An ACK may be built only from this value after the transaction returned (protocol v1 §10).
 
 **Trip effects (OD-9).** The domain (ET-014) computes typed effects; storage applies them in the same transaction, in order, only when the event or gap is inserted for the first time. At most 16 per commit: `trip.open` (at a job configuration event), `trip.update` (whitelisted fields), `trip.close` (delivered or cancelled only with the matching gameplay outcome event), `event.attribute` and `completeness.add`. References to configuration events are resolved inside the transaction. Any failure rolls back the event as well and returns an explicit error, never a commit result. ET-013 tests effects only with synthetic examples. An in-process `testHooks.beforeCommit` exists for tests and is never part of a worker message.
 
@@ -99,7 +100,7 @@ Indexes: samples by session and by trip, attributions and completeness intervals
 | `DATABASE_LOCKED` | `SQLITE_BUSY`/`LOCKED`, `EBUSY`, or another writer holds the file | Yes |
 | `PERMISSION_DENIED` | `SQLITE_READONLY*`, `PERM`, `AUTH`, `CANTOPEN`, `EACCES`, `EPERM`, a read-only file | No |
 | `DISK_FULL` | `SQLITE_FULL`, `ENOSPC` | Yes |
-| `IO_ERROR` | `SQLITE_IOERR*`, `EIO`, and unknown failures | Yes |
+| `IO_ERROR` | `SQLITE_IOERR*`, `EIO` | Yes |
 | `DATABASE_CORRUPT` | `SQLITE_CORRUPT`, `SQLITE_NOTADB`, an impossible stored value | No |
 | `CONSTRAINT_VIOLATION` | `SQLITE_CONSTRAINT*`, for example a synthetic session in history | No |
 | `INVALID_INPUT`, `UNKNOWN_SESSION`, `UNKNOWN_TRIP`, `SESSION_CONFLICT`, `VALUE_OUT_OF_RANGE` | Command input | No |
@@ -107,6 +108,7 @@ Indexes: samples by session and by trip, attributions and completeness intervals
 | `DATA_PATH_INVALID` | Invalid path or blocked directory | No |
 | `DATABASE_UNRECOGNIZED`, `SCHEMA_NEWER`, `PURPOSE_MISMATCH`, `DURABILITY_UNVERIFIED` | Refused opens; the file is unchanged | No |
 | `BACKUP_FAILED`, `MIGRATION_FAILED` | `cause` gives the underlying code; `backupFileName` names the backup | No |
+| `INTERNAL` | Any other failure, including other SQLite result codes such as `SQLITE_ERROR`, a `TypeError` and a better-sqlite3 `RangeError` (for example a wrong parameter count): a defect in the storage code. Input ranges are validated before SQLite, so a `RangeError` is never read as `VALUE_OUT_OF_RANGE`. Malformed command arguments are `INVALID_INPUT` | No |
 
 ## Migrations (OD-4)
 
@@ -121,15 +123,15 @@ Migrations are forward-only and frozen once released: `MIGRATIONS = [{version: 1
 
 The pre-migration backup is made with SQLite's online backup API (`db.backup()`), never a file copy: the writer connection copies pages under its exclusive lock, so the copy is consistent even with a live WAL. Steps:
 
-1. Require free space of at least (database + WAL) × 1.1 in the backup directory, otherwise `BACKUP_FAILED` with cause `DISK_FULL`. A file in place of the directory is cause `DATA_PATH_INVALID`.
-2. Compute the source's logical digest: SHA-256 over the schema, the header versions and every row of every table in rowid order with type-tagged exact values, plus per-table row counts.
+1. Compute the source's logical digest: SHA-256 over the schema, the header versions and every row of every table in rowid order with type-tagged exact values, plus per-table row counts. A file in place of the backup directory is `BACKUP_FAILED` with cause `DATA_PATH_INVALID`.
+2. Reuse an existing backup of exactly this content: a manifest with the same database UUID, source version, logical digest and row counts whose backup file still has the recorded size and SHA-256. A migration that fails the same way on every open therefore keeps one backup instead of a new full-size copy each time; a damaged backup is never reused. Otherwise require free space of at least (database + WAL) × 1.1, else `BACKUP_FAILED` with cause `DISK_FULL`.
 3. Copy into `telemetry-<first 8 characters of the database UUID>-v<from version>-<UTC timestamp>.sqlite.partial`, then switch the copy to rollback-journal mode so it is one self-contained file.
 4. Verify the copy read-only: `integrity_check`, `foreign_key_check`, `application_id`, `user_version`, database UUID, row counts and logical digest.
 5. Flush it, rename it to `.sqlite`, and write the manifest `.json` last: `{format, databaseUuid, fromVersion, fileName, fileSha256, size, rowCounts, logicalDigest, createdUtcMs, appVersion, reason: 'pre-migration'}`.
 
 Any failure removes the partial files. **Retention:** after the new backup is verified and its migration committed, the three newest verified pre-migration backups of that database are kept and older ones are deleted, the backup first and its manifest last. Files without a valid manifest of this application, backups of other databases and history rows are never touched. Budget backups at up to three times the database size.
 
-**Restore** (`restoreBackup`) writes only to a new path. It refuses an existing target or any `-wal`, `-shm`, `-journal` or `.partial` file beside it, checks the manifest, the file SHA-256 and the logical digest, copies through the backup API into `<target>.partial`, verifies the copy, renames it and opens it through the normal durability path, which migrates it when it is older. In-place replacement of the live database is deferred to ET-018. Open question for ET-015a: a restored database can hold less coverage than the producer has already acknowledged; ET-015a defines the `restore-loss` completeness marker.
+**Restore** (`restoreBackup`) writes only to a new path. Before writing anything it checks the target path for the requested purpose (a synthetic or replay restore to the production history path is `DATA_PATH_INVALID`), refuses an existing target or any `-wal`, `-shm`, `-journal` or `.partial` file beside it, and checks the manifest, the file SHA-256, the logical digest and that the backup's `database_info.purpose` is the requested one (`PURPOSE_MISMATCH`). Only then does it create the target directory, copy through the backup API into `<target>.partial`, verify the copy, rename it and open it through the normal durability path, which migrates it when it is older. If that open fails, the restored file and its sidecars are removed again. In-place replacement of the live database is deferred to ET-018. Open question for ET-015a: a restored database can hold less coverage than the producer has already acknowledged; ET-015a defines the `restore-loss` completeness marker.
 
 ## Disk budgets
 
@@ -144,7 +146,10 @@ These are separate allowances, not a total disk guarantee:
 
 ## Tests
 
-The storage suite loads native SQLite and runs only under the pinned Electron executable in Node mode, the runtime of the telemetry service: `npm run test:storage` starts [run-electron-node.mjs](../scripts/run-electron-node.mjs), which runs Vitest inside `electron.exe` with `ELECTRON_RUN_AS_NODE=1`. [vitest.storage.config.mts](../vitest.storage.config.mts) and `tests/storage/setup.ts` refuse any runtime other than Electron 44.7.0. The Node-safe suite (`npm test`) never loads native SQLite; it tests the codec, error mapping and retention policy. ESLint keeps `better-sqlite3` inside `packages/storage/src/sqlite`, the storage worker and `tests/storage`, and keeps the SQLite core out of Node-safe tests, main, the service, preloads and renderers.
+The storage suite loads native SQLite and runs only under the pinned Electron executable in Node mode, the runtime of the telemetry service: `npm run test:storage` starts [run-electron-node.mjs](../scripts/run-electron-node.mjs), which runs Vitest inside `electron.exe` with `ELECTRON_RUN_AS_NODE=1`. [vitest.storage.config.mts](../vitest.storage.config.mts) and `tests/storage/setup.ts` refuse any runtime other than Electron 44.7.0. The Node-safe suite (`npm test`) tests the codec, error mapping and retention policy without native SQLite. What enforces the split:
+
+- **ESLint, statically.** Only `packages/storage/src/sqlite`, `apps/desktop/src/storage-worker.ts` and `tests/storage` may import `better-sqlite3`. The Node-safe set (`tests/unit`, `tests/shared`, every `apps/desktop/src` `.ts` module except the storage worker, and `packages/storage/src/{api,codec,errors,retention}.ts`) and the preloads and renderers may also not import the SQLite core, the in-process storage index that re-exports it, or `tests/storage`. In the Node-safe set and renderers, `no-restricted-syntax` also reports a dynamic `import()` of those modules, a call whose first argument is the literal `'better-sqlite3'` (such as `require`) and any `createRequire` call. A computed module name, or a module outside these lists that loads SQLite and is then imported, is not detected statically.
+- **The storage suite's runtime check.** `vitest.storage.config.mts` and `tests/storage/setup.ts` fail unless the process is Electron 44.7.0, so the native suite never runs under plain Node. They do not stop a Node-safe test from loading SQLite at run time; that is the lint rule's job, and `vitest.config.mts` includes only `tests/unit`.
 
 Fixtures in [tests/fixtures/storage](../tests/fixtures/storage) are immutable: each `.sqlite` file has the SQL it was created from, `manifest.txt` lists every file's SHA-256, and the representative database's expected content is written by hand. Tests copy fixtures into temporary directories and check that the originals are unchanged. Never regenerate a fixture: add a new one for a new schema version.
 
