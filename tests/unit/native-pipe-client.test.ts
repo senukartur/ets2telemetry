@@ -3,8 +3,11 @@ import {PassThrough, Writable} from 'node:stream';
 import {afterEach, beforeEach, expect, it, vi} from 'vitest';
 import type {NativePipeClient, NativeClientError, BrokerConfiguration, BrokerDiagnostic} from '../../apps/desktop/src/native-pipe-client';
 import type {TelemetryIngestion} from '../../apps/desktop/src/telemetry-ingestion';
+import type {V1Ingestion} from '../../apps/desktop/src/v1-ingestion';
 import type {LiveTelemetry} from '../../packages/contracts/src';
 import {encodeFrame, PROTOCOL_V0, type SourceIdentity} from '../../packages/contracts/src/protocol-v0';
+import {decodePayload, encodeFrame as encodeV1Frame, PROTOCOL_V1, type ServerMessage} from '../../packages/contracts/src/protocol-v1';
+import {readFileSync} from 'node:fs';
 import {replay, type Scenario} from '../../tools/telemetry-simulator/src/scenario';
 
 class Child extends EventEmitter {
@@ -23,18 +26,19 @@ const scenario: Scenario = {id: 'isolated-adapter-hydration', origin: 'synthetic
   {action: 'reading', reading: {atMs: 0, speedMps: 25, fuelL: 73, simulation: 'running', revision: '1', truck: 'fixture', gameMinute: '1'}}, {action: 'connect', atMs: 1}
 ]};
 const frames = replay(scenario).map(emission => Buffer.from(encodeFrame({...emission.message, source})));
-let children: Child[], clients: NativePipeClient[], ingestions: TelemetryIngestion[];
+let children: Child[], clients: NativePipeClient[], ingestions: TelemetryIngestion[], v1Ingestions: V1Ingestion[];
 let spawn: ReturnType<typeof vi.fn>;
-let Client: typeof NativePipeClient, Ingestion: typeof TelemetryIngestion;
+let Client: typeof NativePipeClient, Ingestion: typeof TelemetryIngestion, V1: typeof V1Ingestion;
 beforeEach(async () => {
-  vi.useFakeTimers(); vi.resetModules(); children = []; clients = []; ingestions = [];
+  vi.useFakeTimers(); vi.resetModules(); children = []; clients = []; ingestions = []; v1Ingestions = [];
   spawn = vi.fn(() => {const child = new Child(); children.push(child); return child;});
   vi.doMock('node:child_process', () => ({spawn}));
   ({NativePipeClient: Client} = await import('../../apps/desktop/src/native-pipe-client'));
   ({TelemetryIngestion: Ingestion} = await import('../../apps/desktop/src/telemetry-ingestion'));
+  ({V1Ingestion: V1} = await import('../../apps/desktop/src/v1-ingestion'));
 });
 afterEach(async () => {
-  const stops = ingestions.map(ingestion => ingestion.stop()); for (const client of clients) client.destroy();
+  const stops = [...ingestions, ...v1Ingestions].map(ingestion => ingestion.stop()); for (const client of clients) client.destroy();
   for (const child of children) {child.emit('close', 0); child.stdin.destroy(); child.stdout.destroy(); child.stderr.destroy();}
   await Promise.all(stops); vi.clearAllTimers(); vi.useRealTimers(); vi.doUnmock('node:child_process');
 });
@@ -261,4 +265,108 @@ it('coalesces a repeating identical broker failure at power-of-two occurrences s
   for (let i = 0; i < 9; i++) diagnose(busy);
   diagnose({...busy, outcome: 'rejected', exitCode: 1}); diagnose(busy); diagnose({...busy, win32Error: 32});
   expect(record.mock.calls.map(call => [(call[0] as BrokerDiagnostic).outcome, (call[0] as {repeats: number}).repeats])).toEqual([['busy', 1], ['busy', 2], ['busy', 4], ['busy', 8], ['rejected', 1], ['busy', 1], ['busy', 1]]);
+});
+
+// ET-006b PR-3: the broker's protocol v1 mode (docs/telemetry-service-v0.md, Protocol v1 mode).
+const v1Configuration: BrokerConfiguration = {executable: 'C:\\isolated\\telemetry-pipe-client.exe', discoveryDirectory: 'C:\\isolated\\ETS2Telemetry\\transport\\v1'};
+const v1Fixture = (name: string) => decodePayload(new Uint8Array(readFileSync(`tests/fixtures/protocol-v1/${name}.json`)), 'server') as ServerMessage;
+/** The broker reports the plugin's identity with origin game; the shared fixture source is used so envelopes can match. */
+const v1Source = {...v1Fixture('welcome-live').source, origin: 'game' as const};
+const v1Authority = () => ({type: 'authority', schemaVersion: 1, protocolMajor: 1, source: {...v1Source}, processCreationTime: '123456789', userTag: 'a'.repeat(64)});
+const asGame = (name: string) => Buffer.from(encodeV1Frame({...v1Fixture(name), source: v1Source}));
+const helloV1 = Buffer.from(encodeV1Frame({version: PROTOCOL_V1, kind: 'hello', data: {clientInstanceId: '33333333-3333-4333-8333-333333333333', minMinor: 0, maxMinor: 0, durableEvents: false}}));
+const ackV1 = Buffer.from(encodeV1Frame({version: PROTOCOL_V1, kind: 'ack', data: {pluginSessionId: v1Source.pluginSessionId, throughEventSeq: '1'}}));
+function fixtureV1(diagnose?: (diagnostic: BrokerDiagnostic) => void) {
+  const client = new Client(v1Configuration, 'ets2', diagnose, 'v1'); clients.push(client); const child = children.at(-1)!;
+  const error = vi.fn(), data = vi.fn(), connect = vi.fn(), end = vi.fn();
+  client.on('error', error).on('data', data).on('connect', connect).on('end', end);
+  return {client, child, error, data, connect, end};
+}
+it('spawns the v1 broker mode, sends the hello raw and tags every later client frame 0x02 apart from 0x01 credits', () => {
+  const f = fixtureV1();
+  expect(spawn).toHaveBeenCalledWith(v1Configuration.executable, ['--game', 'ets2', '--discovery-dir', v1Configuration.discoveryDirectory, '--protocol', 'v1'], {windowsHide: true, stdio: 'pipe'});
+  f.child.output(relay(v1Authority())); expect(f.connect).toHaveBeenCalledOnce(); expect(f.client.authority).toEqual(v1Source);
+  f.client.write(helloV1); expect(f.child.writes).toEqual([helloV1, Buffer.from([1])]);
+  f.child.output(asGame('welcome-live')); expect(f.data).toHaveBeenCalledOnce();
+  f.client.write(ackV1);
+  // Tag, then the frame unchanged: its own u32 little-endian length prefix and payload.
+  expect(f.child.writes).toEqual([helloV1, Buffer.from([1]), Buffer.from([1]), Buffer.concat([Buffer.from([2]), ackV1])]);
+  expect(f.child.writes[3].readUInt32LE(1)).toBe(ackV1.length - 4);
+  expect(f.error).not.toHaveBeenCalled();
+});
+const mismatchedReceipts = [
+  ['a five-key v0 receipt in v1 mode', 'v1', () => authority()],
+  ['protocolMajor 0 in v1 mode', 'v1', () => ({...v1Authority(), protocolMajor: 0})],
+  ['protocolMajor 2 in v1 mode', 'v1', () => ({...v1Authority(), protocolMajor: 2})],
+  ['a string protocolMajor in v1 mode', 'v1', () => ({...v1Authority(), protocolMajor: '1'})],
+  ['a CAP0 evidence marker in v1 mode', 'v1', () => ({...authority(), evidence: 'cap0'})],
+  ['a six-key v1 receipt in v0 mode', 'v0', () => ({...authority(), protocolMajor: 1})]
+] as const;
+it.each(mismatchedReceipts)('fails closed for %s before connect or any hello', (_label, mode, receipt) => {
+  const f = mode === 'v1' ? fixtureV1() : fixture(); f.child.output(relay(receipt()));
+  expect(f.error).toHaveBeenCalledOnce(); expect(f.connect).not.toHaveBeenCalled(); expect(f.client.authority).toBeUndefined(); expect(f.child.writes).toEqual([]);
+});
+const invalidClientFrames = [
+  ['a frame without a length prefix', () => Buffer.from([1, 0, 0])],
+  ['an empty payload', () => Buffer.alloc(4)],
+  ['a 4,097-byte payload', () => {const bytes = Buffer.alloc(4101); bytes.writeUInt32LE(4097); return bytes;}],
+  ['a prefix longer than the payload', () => {const bytes = Buffer.from(ackV1); bytes.writeUInt32LE(ackV1.length - 3); return bytes;}],
+  ['a prefix shorter than the payload', () => Buffer.concat([ackV1, Buffer.from([0x20])])]
+] as const;
+it.each(invalidClientFrames)('rejects %s after the v1 hello without writing it', (_label, bytes) => {
+  const f = fixtureV1(); f.child.output(relay(v1Authority())); f.client.write(helloV1);
+  f.client.write(bytes());
+  expect((f.error.mock.calls[0]?.[0] as NativeClientError | undefined)?.outcome).toBe('client-frame-rejected');
+  expect(f.child.writes).toEqual([helloV1, Buffer.from([1])]); expect(f.child.stdin.writableEnded).toBe(true);
+});
+it('accepts a 4,096-byte client payload and still rejects a second hello-sized write in v0 mode', () => {
+  const f = fixtureV1(); f.child.output(relay(v1Authority())); f.client.write(helloV1);
+  const largest = Buffer.alloc(4100); largest.writeUInt32LE(4096); f.client.write(largest);
+  expect(f.error).not.toHaveBeenCalled(); expect(f.child.writes.at(-1)).toEqual(Buffer.concat([Buffer.from([2]), largest]));
+  const v0 = fixture(); v0.child.output(relay(authority())); v0.client.write(hello); v0.client.write(ackV1);
+  expect((v0.error.mock.calls[0]?.[0] as NativeClientError | undefined)?.outcome).toBe('hello-rejected'); expect(v0.child.writes).toEqual([Buffer.from(hello), Buffer.from([1])]);
+});
+it('recognizes the v1 broker stages client-frame and client-write in exit diagnostics', () => {
+  const diagnose = vi.fn();
+  const frame = fixtureV1(diagnose); frame.child.output(relay(v1Authority())); frame.client.write(helloV1);
+  frame.child.stderr.write('diag1 client-frame 0 40 hello 12\n'); frame.child.emit('close', 1);
+  const write = fixtureV1(diagnose); write.child.output(relay(v1Authority())); write.client.write(helloV1);
+  write.child.stderr.write('diag1 client-write 232 900 policy-write 30\n'); write.child.emit('close', 3);
+  expect(diagnose.mock.calls.map(call => call[0] as BrokerDiagnostic)).toEqual([
+    {outcome: 'rejected', exitCode: 1, serviceMs: 0, stage: 'client-frame', win32Error: 0, elapsedMs: 40, slowStage: 'hello', slowMs: 12},
+    {outcome: 'ended', exitCode: 3, serviceMs: 0, stage: 'client-write', win32Error: 232, elapsedMs: 900, slowStage: 'policy-write', slowMs: 30}
+  ]);
+});
+it.each([
+  ['C:\\Users\\owner\\AppData\\Local\\ETS2Telemetry\\transport\\v0', 'C:\\Users\\owner\\AppData\\Local\\ETS2Telemetry\\transport\\v1'],
+  ['C:\\Users\\owner\\AppData\\Local\\ETS2Telemetry\\transport\\v0\\', 'C:\\Users\\owner\\AppData\\Local\\ETS2Telemetry\\transport\\v1'],
+  ['C:\\isolated\\transport', undefined],
+  ['C:\\isolated\\transport\\v1', undefined],
+  ['C:\\isolated\\other\\v0', undefined],
+  ['C:\\isolated\\transport\\V0', undefined],
+  ['transport\\v0', undefined]
+] as const)('derives the v1 discovery directory from the v0 directory %s (E12)', async (v0Directory, expected) => {
+  const {v1BrokerConfiguration} = await import('../../apps/desktop/src/native-pipe-client');
+  expect(v1BrokerConfiguration({executable: 'C:\\fixed\\telemetry-pipe-client.exe', discoveryDirectory: v0Directory}))
+    .toEqual(expected === undefined ? undefined : {executable: 'C:\\fixed\\telemetry-pipe-client.exe', discoveryDirectory: expected});
+  expect(v1BrokerConfiguration(undefined)).toBeUndefined();
+});
+it('connects V1Ingestion live-only through the v1 broker: a durableEvents false hello, tagged clock probes, credits and never an ACK', () => {
+  const states: string[] = [];
+  const service = new V1({now: () => 0, nowNs: () => 1_000_000_000n, connectGame: (configuration, game) => new Client(configuration, game, undefined, 'v1'), broker: v1Configuration,
+    onState: state => states.push(state.status)});
+  v1Ingestions.push(service); service.select('ets2');
+  expect(spawn).toHaveBeenCalledExactlyOnceWith(v1Configuration.executable, ['--game', 'ets2', '--discovery-dir', v1Configuration.discoveryDirectory, '--protocol', 'v1'], {windowsHide: true, stdio: 'pipe'});
+  const child = children[0]; child.output(relay(v1Authority()));
+  expect(child.writes).toHaveLength(2); expect(child.writes[1]).toEqual(Buffer.from([1]));
+  expect(decodePayload(child.writes[0].subarray(4), 'client')).toEqual({version: PROTOCOL_V1, kind: 'hello', data: {clientInstanceId: service.clientInstanceId, minMinor: 0, maxMinor: 0, durableEvents: false}});
+  child.output(asGame('welcome-live')); child.output(asGame('checkpoint-live')); child.output(asGame('snapshot-live'));
+  // The welcome's credit; the checkpoint's probe goes out tagged before that frame's credit; the snapshot's credit.
+  expect(child.writes.slice(1).map(bytes => bytes[0])).toEqual([1, 1, 2, 1, 1]);
+  const probe = child.writes[3];
+  expect(probe.readUInt32LE(1)).toBe(probe.length - 5);
+  expect(decodePayload(probe.subarray(5), 'client')).toEqual({version: PROTOCOL_V1, kind: 'clock.probe', data: {probeId: '1'}});
+  expect(service.current).toMatchObject({status: 'connected', fresh: true, durable: {state: 'off'}});
+  // Every observation publishes; the status only ever went from waiting to connected.
+  expect([...new Set(states)]).toEqual(['waiting', 'connected']);
 });
