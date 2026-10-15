@@ -52,7 +52,6 @@ async function main():Promise<void> {
         if(report.cancelled)throw new Error('Synthetic v1 smoke cancelled');
         const differences=reactiveDifferences(expected,report);
         if(JSON.stringify(client.ledger)!==JSON.stringify(expected.ledger))differences.push('independent client ledger differs from the replay');
-        
         if(differences.length)throw new Error(`Reactive pipe run differs from the deterministic replay: ${differences.join('; ')}`);
         console.log(JSON.stringify({origin:'synthetic',mode:'reactive',scenario:expected.scenario.id,messages:report.transcript.length,connections:report.connections.length,
           clockReplies:client.sessions.reduce((n,s)=>n+s.replies,0),attempts:client.attempts,ledger:client.ledger,history:false}));
