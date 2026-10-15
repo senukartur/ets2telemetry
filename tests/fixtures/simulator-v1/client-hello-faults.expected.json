@@ -1,0 +1,37 @@
+{
+  "scenario": "client-hello-faults",
+  "authoredFrom": [
+    "docs/protocol/v1.md §3: client payloads are 1-4,096 bytes; fail closed on prefix, UTF-8, JSON, schema and version errors; a partial payload at EOF is an error",
+    "docs/protocol/v1.md §4 and OD-5 S6: exactly one hello first; after it the client sends nothing until the checkpoint; another major, envelope minor or kind closes without an error frame (§2)",
+    "docs/native-transport-v1.md and v1-server.cpp serve(): the 4,096-byte bound is enforced at the prefix, a byte beyond the hello in the same read resets the connection, and no connection state (gate, store, message seq) exists before a valid hello",
+    "docs/protocol/v1.md §4: the hello is due within 5 s of connecting (D8)",
+    "OD-4 and OD-5 S10: an event observed with no v1 client is offline loss; a configuration boundary then counts as an offline transition"
+  ],
+  "connections": [
+    {"helloFault": "helloOversized", "closedBy": "serverRejected", "clientInstance": 1, "welcome": null, "checkpoint": null, "coverage": [], "acks": [], "end": null, "faults": [{"atMs": 100, "direction": "client", "fault": "helloOversized"}]},
+    {"helloFault": "helloMalformed", "closedBy": "serverRejected", "clientInstance": 1, "welcome": null, "checkpoint": null, "coverage": [], "acks": [], "end": null, "faults": [{"atMs": 110, "direction": "client", "fault": "helloMalformed"}]},
+    {"helloFault": "helloV0", "closedBy": "serverRejected", "clientInstance": 1, "welcome": null, "checkpoint": null, "coverage": [], "acks": [], "end": null, "faults": [{"atMs": 120, "direction": "client", "fault": "helloV0"}]},
+    {"helloFault": "helloCap0", "closedBy": "serverRejected", "clientInstance": 1, "welcome": null, "checkpoint": null, "coverage": [], "acks": [], "end": null, "faults": [{"atMs": 130, "direction": "client", "fault": "helloCap0"}]},
+    {"helloFault": "helloOtherMajor", "closedBy": "serverRejected", "clientInstance": 1, "welcome": null, "checkpoint": null, "coverage": [], "acks": [], "end": null, "faults": [{"atMs": 140, "direction": "client", "fault": "helloOtherMajor"}]},
+    {"helloFault": "helloOtherMinor", "closedBy": "serverRejected", "clientInstance": 1, "welcome": null, "checkpoint": null, "coverage": [], "acks": [], "end": null, "faults": [{"atMs": 150, "direction": "client", "fault": "helloOtherMinor"}]},
+    {"helloFault": "helloUnknownKind", "closedBy": "serverRejected", "clientInstance": 1, "welcome": null, "checkpoint": null, "coverage": [], "acks": [], "end": null, "faults": [{"atMs": 160, "direction": "client", "fault": "helloUnknownKind"}]},
+    {"helloFault": "ackBeforeHello", "closedBy": "serverRejected", "clientInstance": 1, "welcome": null, "checkpoint": null, "coverage": [], "acks": [], "end": null, "faults": [{"atMs": 170, "direction": "client", "fault": "ackBeforeHello"}]},
+    {"helloFault": "helloExtraBytes", "closedBy": "serverRejected", "clientInstance": 1, "welcome": null, "checkpoint": null, "coverage": [], "acks": [], "end": null, "faults": [{"atMs": 180, "direction": "client", "fault": "helloExtraBytes"}]},
+    {"helloFault": "ackBeforeCheckpoint", "closedBy": "serverRejected", "clientInstance": 1, "welcome": null, "checkpoint": null, "coverage": [], "acks": [], "end": null, "faults": [{"atMs": 190, "direction": "client", "fault": "ackBeforeCheckpoint"}]},
+    {"helloFault": "helloPartialEof", "closedBy": "clientEof", "clientInstance": 1, "welcome": null, "checkpoint": null, "coverage": [], "acks": [], "end": null, "faults": [{"atMs": 200, "direction": "client", "fault": "helloPartialEof"}]},
+    {"helloFault": "helloTimeout", "closedBy": "helloTimeout", "clientInstance": 1, "welcome": null, "checkpoint": null, "coverage": [], "acks": [], "end": null, "faults": [{"atMs": 210, "direction": "client", "fault": "helloTimeout"}]},
+    {
+      "helloFault": null, "durableRequested": true, "closedBy": "disconnect", "clientInstance": 1, "faults": [],
+      "welcome": {"atMs": 300, "game": "ets2", "origin": "synthetic", "durableEvents": true},
+      "checkpoint": {"atMs": 300, "seq": "2", "ackedThroughEventSeq": "0", "nextEventSeq": "2", "durable": true, "eventLoss": {"offline": "1"},
+        "continuity": {"coalescedSnapshots": "0", "offlineTransitions": "1"}},
+      "coverage": [
+        {"atMs": 300, "seq": "3", "gap": ["1", "1"], "causes": {"offline": "1"}, "redelivered": false, "firstLost": "1000010000000", "lastLost": "1000010000000"}
+      ],
+      "acks": ["1"], "end": null
+    }
+  ],
+  "ledger": {"committedThroughEventSeq": "1", "committedEvents": 0, "committedGapMarkers": "1", "duplicates": 0},
+  "store": {"ackedThroughEventSeq": "1", "nextEventSeq": "2", "retainedEntries": 0, "eventLoss": {"offline": "1"}},
+  "retired": null
+}

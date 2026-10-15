@@ -21,3 +21,8 @@ clock-change-suspend
 units-currency
 fresh-stale
 game-mode
+client-hello-faults
+client-control-faults
+wire-faults
+pipe-reconnect
+pipe-stalled-reader

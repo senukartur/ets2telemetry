@@ -1,0 +1,24 @@
+{
+  "format": "ets2telemetry-simulator-v1", "schemaVersion": 1, "id": "pipe-reconnect",
+  "purpose": "The pipe smoke: a durable client receives events and paced snapshots, probes the clock, sees a second client refused while it stays connected and loses its third ACK; after an offline event it reconnects, receives the unacknowledged event again as redelivered, then the offline gap, and acknowledges both.",
+  "reg": ["REG-003", "REG-005", "REG-011"], "origin": "synthetic", "game": "ets2", "seed": "et005b-pipe-reconnect", "provenance": null,
+  "source": {"versions": {"telemetryApi": {"major": 1, "minor": 1}, "gameTelemetry": {"major": 1, "minor": 19}, "sdkArchive": "scs-sdk-1.15"}, "gameplayEvents": "registered", "currency": "unknown", "gameMode": "unknown"},
+  "steps": [
+    {"atMs": 10, "action": "lifecycle", "event": "simulation.started"},
+    {"atMs": 20, "action": "frame", "channels": {"speed": 10, "fuel.amount": 400}},
+    {"atMs": 100, "action": "frame", "channels": {"speed": 12}},
+    {"atMs": 120, "action": "gameplay", "id": "player.tollgate.paid", "attributes": [{"name": "pay.amount", "sdkType": "s64", "value": "15"}]},
+    {"atMs": 200, "action": "frame", "channels": {"speed": 0}},
+    {"atMs": 250, "action": "lifecycle", "event": "simulation.paused"},
+    {"atMs": 450, "action": "lifecycle", "event": "simulation.started"},
+    {"atMs": 600, "action": "frame", "channels": {"speed": 5}},
+    {"atMs": 650, "action": "lifecycle", "event": "simulation.paused"}
+  ],
+  "transport": [
+    {"atMs": 0, "action": "connect", "client": {"durable": true, "commit": "each", "ack": "dropAfter:2", "probes": [300]}},
+    {"atMs": 150, "action": "secondClient"},
+    {"atMs": 400, "action": "disconnect"},
+    {"atMs": 500, "action": "connect", "client": {"durable": true}},
+    {"atMs": 800, "action": "disconnect"}
+  ]
+}

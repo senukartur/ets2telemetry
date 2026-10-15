@@ -1,0 +1,46 @@
+{
+  "scenario": "pipe-reconnect",
+  "authoredFrom": [
+    "docs/protocol/v1.md §4: one client per endpoint; a second client is refused rather than displacing the first",
+    "docs/protocol/v1.md §7 and OD-5 S7: one replaceable unsent snapshot at most every 50 ms from the checkpoint; state is the slot published at the last frame_end, so the reconnection's checkpoint still shows the offline-transition count of the frame at 200 ms",
+    "docs/protocol/v1.md §10 consumer rule: a commit whose ACK was lost is acknowledged again once its range has been redelivered; the redelivered insert is a duplicate",
+    "docs/protocol/v1.md §8 and OD-5 S9: redelivered is true for an item written to an earlier connection and false for a gap first written now",
+    "OD-4 and the caller sequence: an event observed with no client is offline loss; its run reaches the store at the next frame_end",
+    "docs/protocol/v1.md §11: with zero latency the mapping offset is source minus client clock (-4,000,000,000,000 ns) and the uncertainty 0"
+  ],
+  "connections": [
+    {
+      "durableRequested": true, "closedBy": "disconnect", "clientInstance": 1, "refusedClients": 1, "faults": [],
+      "checkpoint": {"atMs": 0, "seq": "2", "ackedThroughEventSeq": "0", "nextEventSeq": "1", "eventLoss": {}},
+      "coverage": [
+        {"atMs": 10, "seq": "3", "event": "1", "type": "simulation.started", "redelivered": false},
+        {"atMs": 120, "seq": "6", "event": "2", "type": "player.tollgate.paid", "redelivered": false},
+        {"atMs": 250, "seq": "8", "event": "3", "type": "simulation.paused", "redelivered": false}
+      ],
+      "snapshots": [
+        {"atMs": 50, "seq": "4", "ackedThroughEventSeq": "1", "state": {"simulation": "running", "speed": {"available": true, "value": 10, "unit": "m/s"}}, "continuity": {"coalescedSnapshots": "0"}},
+        {"atMs": 100, "seq": "5", "ackedThroughEventSeq": "1", "state": {"speed": {"available": true, "value": 12, "unit": "m/s"}}},
+        {"atMs": 200, "seq": "7", "ackedThroughEventSeq": "2", "state": {"speed": {"available": true, "value": 0, "unit": "m/s"}}}
+      ],
+      "acks": ["1", "2"], "clockReplies": 1, "mappings": [{"probeId": "1", "offsetNs": "-4000000000000", "uncertaintyNs": "0"}], "end": null
+    },
+    {
+      "durableRequested": true, "closedBy": "disconnect", "clientInstance": 1, "refusedClients": 0, "faults": [],
+      "checkpoint": {"atMs": 500, "seq": "11", "ackedThroughEventSeq": "2", "nextEventSeq": "4", "retainedEvents": 1, "oldestRetainedMonotonicNs": "1000250000000", "eventLoss": {},
+        "continuity": {"coalescedSnapshots": "0", "offlineTransitions": "0"}},
+      "coverage": [
+        {"atMs": 500, "seq": "12", "event": "3", "type": "simulation.paused", "redelivered": true},
+        {"atMs": 600, "seq": "13", "gap": ["4", "4"], "causes": {"offline": "1"}, "redelivered": false, "firstLost": "1000450000000", "lastLost": "1000450000000"},
+        {"atMs": 650, "seq": "15", "event": "5", "type": "simulation.paused", "redelivered": false}
+      ],
+      "snapshots": [
+        {"atMs": 600, "seq": "14", "ackedThroughEventSeq": "4", "nextEventSeq": "5", "eventLoss": {"offline": "1"}, "state": {"simulation": "running", "speed": {"available": true, "value": 5, "unit": "m/s"}},
+          "continuity": {"coalescedSnapshots": "0", "offlineTransitions": "1"}}
+      ],
+      "acks": ["3", "4", "5"], "clockReplies": 0, "end": null
+    }
+  ],
+  "ledger": {"committedThroughEventSeq": "5", "committedEvents": 4, "committedGapMarkers": "1", "duplicates": 1},
+  "store": {"ackedThroughEventSeq": "5", "nextEventSeq": "6", "retainedEntries": 0, "eventLoss": {"offline": "1"}},
+  "retired": null
+}
