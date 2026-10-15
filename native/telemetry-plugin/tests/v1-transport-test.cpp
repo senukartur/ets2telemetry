@@ -254,6 +254,30 @@ struct Hold {
   }
 };
 Hold* Hold::active = nullptr;
+
+// A synchronous one-byte read on the v1 worker at one hook point. Only CancelSynchronousIo or the test's fallback write
+// ends it, so the result tells whether stop() cancelled synchronous I/O at that point.
+struct BlockedRead {
+  static BlockedRead* active;
+  std::string at; Handle read_end, write_end, reached{CreateEventW(nullptr, TRUE, FALSE, nullptr)}, done{CreateEventW(nullptr, TRUE, FALSE, nullptr)};
+  std::atomic<bool> fired{false}; std::atomic<DWORD> error{ERROR_INVALID_FUNCTION};
+  explicit BlockedRead(std::string phase) : at(std::move(phase)) {
+    HANDLE r = nullptr, w = nullptr; require(CreatePipe(&r, &w, nullptr, 0) != FALSE, "owned synchronous read fixture");
+    read_end.reset(r); write_end.reset(w); active = this; transport::set_transport_test_hook(hook);
+  }
+  ~BlockedRead() { transport::set_transport_test_hook(nullptr); active = nullptr; }
+  // Ends the read after `ms` unless it already ended; returns whether this fallback was needed.
+  bool fallback(DWORD ms) { if (WaitForSingleObject(done.get(), ms) == WAIT_OBJECT_0) return false; char byte = 1; DWORD n = 0; WriteFile(write_end.get(), &byte, 1, &n, nullptr); return true; }
+  static DWORD hook(const char* phase, HANDLE, HANDLE stop, DWORD result) {
+    auto* self = active;
+    if (!self || !stop || self->at != phase || self->fired.exchange(true)) return result;
+    SetEvent(self->reached.get()); char byte = 0; DWORD n = 0;
+    const auto ok = ReadFile(self->read_end.get(), &byte, 1, &n, nullptr);
+    self->error.store(ok ? ERROR_SUCCESS : GetLastError()); SetEvent(self->done.get());
+    return result;
+  }
+};
+BlockedRead* BlockedRead::active = nullptr;
 #endif
 
 std::string type_of(const v1::Message& m) { return m.event ? m.event->record_type : std::string(); }
@@ -923,6 +947,27 @@ void shutdown() {
   {
     Fixture f; f.start(); f.server->stop(); require(f.server->shutdown_ms() < 1000 && f.server->status() == v1::ServerStatus::stopped, "idle endpoint joins");
   }
+#ifdef ETS2TELEMETRY_TRANSPORT_TEST_HOOKS
+  {
+    // stop() must not cancel synchronous I/O in the worker's exit path: a cancelled record deletion would leave the
+    // discovery record behind. The read here ends only through the 750 ms fallback write.
+    Fixture f; f.start(); const auto record = f.record(); BlockedRead exit("v1-exit");
+    bool fallback = false; std::thread guard([&] { fallback = exit.fallback(750); });
+    f.server->stop(); guard.join();
+    std::cout << "exitReadError=" << exit.error.load() << " fallback=" << fallback << " shutdownMs=" << f.server->shutdown_ms() << '\n';
+    require(exit.fired.load() && exit.error.load() == ERROR_SUCCESS && fallback, "stop never cancels synchronous I/O in the exit path");
+    require(f.server->endpoint().empty() && GetFileAttributesW(record.c_str()) == INVALID_FILE_ATTRIBUTES && f.server->shutdown_ms() < 1000, "the record is deleted and the worker joined");
+  }
+  {
+    // stop() still cancels a synchronous read while the worker inspects a connecting peer's image.
+    Fixture f; f.start(); BlockedRead inspect("hash-before-read"); auto client = f.connect();
+    require(WaitForSingleObject(inspect.reached.get(), static_cast<DWORD>(3000 * timing_scale)) == WAIT_OBJECT_0, "worker inspecting the peer");
+    bool fallback = false; std::thread guard([&] { fallback = inspect.fallback(750); });
+    f.server->stop(); guard.join();
+    std::cout << "inspectReadError=" << inspect.error.load() << " fallback=" << fallback << " shutdownMs=" << f.server->shutdown_ms() << '\n';
+    require(!fallback && inspect.error.load() == ERROR_OPERATION_ABORTED && f.server->shutdown_ms() < 1000, "stop cancels a synchronous read during peer inspection");
+  }
+#endif
 }
 
 // Threads of this process whose start address lies inside `module`.

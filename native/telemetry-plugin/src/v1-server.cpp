@@ -391,8 +391,9 @@ void Server::stop() noexcept {
     signal_stop();
     // Policy and image inspection may perform synchronous reads on this owned worker only. A read can start after a
     // cancellation request, so the request is repeated until this exact worker exits; join still owns its lifetime.
-    CancelSynchronousIo(worker_.native_handle());
-    while (WaitForSingleObject(worker_.native_handle(), 10) == WAIT_TIMEOUT) CancelSynchronousIo(worker_.native_handle());
+    // Outside an inspection window nothing is cancelled: the exit path's record deletion must complete.
+    cancel_inspection();
+    while (WaitForSingleObject(worker_.native_handle(), 10) == WAIT_TIMEOUT) cancel_inspection();
     worker_.join();
     // Diagnostics only, recorded after the mandatory join: the deadline never releases ownership early.
     const auto elapsed = GetTickCount64() - stop_requested_.load();
@@ -404,6 +405,20 @@ void Server::stop() noexcept {
 }
 
 std::wstring Server::endpoint() const { std::lock_guard<std::mutex> lock(endpoint_mutex_); return endpoint_; }
+
+// The worker holds the window open while it inspects a peer. A cancellation request is issued only under the mutex and only
+// while the window is open, so it can never reach synchronous I/O issued after the window has closed.
+struct Server::InspectionWindow {
+  Server& server;
+  explicit InspectionWindow(Server& s) : server(s) { std::lock_guard<std::mutex> lock(s.cancel_mutex_); s.inspecting_ = true; }
+  ~InspectionWindow() { std::lock_guard<std::mutex> lock(server.cancel_mutex_); server.inspecting_ = false; }
+  InspectionWindow(const InspectionWindow&) = delete;
+  InspectionWindow& operator=(const InspectionWindow&) = delete;
+};
+
+void Server::cancel_inspection() noexcept {
+  try { std::lock_guard<std::mutex> lock(cancel_mutex_); if (inspecting_) CancelSynchronousIo(worker_.native_handle()); } catch (...) {}
+}
 
 bool Server::stopped() const noexcept { return WaitForSingleObject(stop_event_.get(), 0) == WAIT_OBJECT_0; }
 
@@ -484,10 +499,15 @@ Server::Outcome Server::serve(HANDLE pipe, const std::wstring& directory, const 
   const auto hello_deadline = GetTickCount64() + limits.hello_timeout_ms;
   ULONG pid = 0;
   if (!GetNamedPipeClientProcessId(pipe, &pid)) return Outcome::reset;
-  // The v0 connected-peer authority (§12): token user, Windows session and the protected v1 service policy.
-  auto peer = transport::inspect_peer(pid, stop_event_.get());
-  if (peer.sid != user.sid || peer.session != user.session) return Outcome::reset;
-  const auto policy = transport::read_service_policy(directory, security, user, stop_event_.get());
+  // The v0 connected-peer authority (§12): token user, Windows session and the protected v1 service policy. These reads
+  // are the worker's only synchronous I/O that stop() cancels.
+  transport::PeerIdentity peer; std::vector<transport::AllowedPeer> policy;
+  {
+    InspectionWindow window(*this);
+    peer = transport::inspect_peer(pid, stop_event_.get());
+    if (peer.sid != user.sid || peer.session != user.session) return Outcome::reset;
+    policy = transport::read_service_policy(directory, security, user, stop_event_.get());
+  }
   bool allowed = false;
   for (const auto& candidate : policy) if (!_wcsicmp(candidate.image.c_str(), peer.image.c_str()) && candidate.sha256 == peer.sha256) allowed = true;
   if (!allowed || GetTickCount64() >= hello_deadline) return Outcome::reset;
@@ -559,6 +579,10 @@ void Server::run(std::wstring directory) noexcept {
       if (outcome == Outcome::ended || stopped()) break;
       if (!DisconnectNamedPipe(pipe.get()) && GetLastError() != ERROR_PIPE_NOT_CONNECTED) throw std::runtime_error("v1-endpoint-reset");
     }
+#ifdef ETS2TELEMETRY_TRANSPORT_TEST_HOOKS
+    // Console tests run synchronous I/O here, in the exit path that next deletes the discovery record.
+    transport::transport_test_hook("v1-exit", nullptr, stop_event_.get());
+#endif
   } catch (const Retire& retire) {
     // Only this endpoint retires; v0 and CAP0 continue. The fixed log entry is written by the SDK thread.
     status_.store(ServerStatus::retired);
