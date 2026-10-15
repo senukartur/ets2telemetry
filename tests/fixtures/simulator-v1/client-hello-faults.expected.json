@@ -3,7 +3,7 @@
   "authoredFrom": [
     "docs/protocol/v1.md §3: client payloads are 1-4,096 bytes; fail closed on prefix, UTF-8, JSON, schema and version errors; a partial payload at EOF is an error",
     "docs/protocol/v1.md §4 and OD-5 S6: exactly one hello first; after it the client sends nothing until the checkpoint; another major, envelope minor or kind closes without an error frame (§2)",
-    "docs/native-transport-v1.md and v1-server.cpp serve(): the 4,096-byte bound is enforced at the prefix, a byte beyond the hello in the same read resets the connection, and no connection state (gate, store, message seq) exists before a valid hello",
+    "docs/protocol/v1.md §3 (client payloads of 1-4,096 bytes, checked at the prefix), §4 and OD-5 S6 (one hello first, nothing else before the checkpoint, closed without an error frame); the per-read hello handling (a byte beyond the hello in the same read resets the connection) and the absence of connection state (gate, store, message seq) before a valid hello follow ET-004b PR C, PR #54 on branch feat/v1-plugin-endpoint (native/telemetry-plugin/src/v1-server.cpp serve()), not yet merged",
     "docs/protocol/v1.md §4: the hello is due within 5 s of connecting (D8)",
     "OD-4 and OD-5 S10: an event observed with no v1 client is offline loss; a configuration boundary then counts as an offline transition"
   ],
