@@ -625,13 +625,13 @@ On October 15, 2026 the owner wrote (translated from Russian): "Overall, keep do
 | T5 | Per-session processed point: duplicates are no-ops, gaps apply only their suffix, a skipped `eventSeq` or coverage mismatch fails closed |
 | T6 | Job identity is every `job.configured` field except `cargoLoaded` (O3) |
 | T7 | `job.cleared` waits for an outcome; truck/trailer, pause/start, fines, tolls, transfers and game mode may intervene (O7); a different job, timer restart, regression, gap or session change disqualifies |
-| T8 | Save load (O10): clear plus an identical re-send waits for the first decisive event; a game-time regression continues the trip as partial, anything else closes it and opens a new ambiguous continuation |
+| T8 | Save load (O10): clear plus an identical re-send (including the same `cargoLoaded`) waits for the first decisive event; a game-time regression continues the trip as partial; a clear returns to waiting; a different job closes it and opens a trip from that event; an outcome closes it and opens nothing (attributed ambiguous); other decisive events close it and open an ambiguous continuation. See [trips](docs/trips.md) for the PR-1 interpretations |
 | T9 | Hydration never opens, closes or attributes a trip; a late-attached job is untracked until an identical `job.configured` opens a partial trip |
 | T10 | A gap while a trip is open closes it as partial and records a `not-connected` or `event-loss` interval |
 | T11 | A new plugin session closes the previous session's open trip as `restart`; identical jobs are not merged |
-| T12 | A job configured during a load (before the session's first start, or after a restart or regression) opens partial (inference from O1) |
+| T12 | A job configured during a load (before the session's first start, or after a timer restart and before the next start) opens partial (inference from O1); a game-time regression does not start a load |
 | T13 | Trips open `unknown`, become `partial` on any loss or ambiguity, and become `complete` only on an outcome close with a clean window; annotations do not downgrade |
-| T14 | Exactly one attribution per gameplay event: `trip`, `trip-before-loaded`, `free-driving` or `ambiguous` |
+| T14 | Exactly one attribution per gameplay event: `trip`, `trip-before-loaded`, `free-driving` (no job known or likely active) or `ambiguous` (including fines, tolls and transfers while a late-attached or gap-closed job is still untracked) |
 | T15 | Real duration from monotonic time within one session; UTC is a label and an end before the start is clamped and annotated; game time only within one game clock |
 | T16 | Observed distance and fuel used from continuous steps only; refuels reported separately; nothing bridged across a connection hole |
 | T17 | Provisional named thresholds for game-time jumps, crossings, position jumps and reading holes |
