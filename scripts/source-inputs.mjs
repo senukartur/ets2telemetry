@@ -13,6 +13,6 @@ export function sourceHashes(root = '.') {
   }
   walk('apps/desktop/src');
   walk('native/telemetry-client/src');
-  for (const name of ['contracts', 'telemetry-core']) walk(`packages/${name}/src`);
+  for (const name of ['contracts', 'telemetry-core', 'storage']) walk(`packages/${name}/src`);
   return Object.fromEntries(inputs.sort().map(filename => [filename, sha256(readFileSync(path.join(root, filename)))]));
 }

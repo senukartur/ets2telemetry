@@ -1,7 +1,7 @@
 // Verified backups through SQLite's online backup API, never a file copy: the copy is made by the writer connection
 // under its exclusive lock, so it is a consistent snapshot even with an active WAL. See docs/storage.md, "Backups".
 import {createHash} from 'node:crypto';
-import {closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statfsSync, statSync, writeFileSync} from 'node:fs';
+import {closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statfsSync, statSync, writeFileSync} from 'node:fs';
 import path from 'node:path';
 import Database from 'better-sqlite3';
 import type {Purpose} from '../api';
@@ -32,6 +32,29 @@ export function fileSha256(file: string): string {
 function fsyncFile(file: string) { const fd = openSync(file, 'r+'); try { fsyncSync(fd); } finally { closeSync(fd); } }
 const sizeOf = (file: string) => { try { return statSync(file).size; } catch { return 0; } };
 function removeQuietly(...files: string[]) { for (const file of files) { try { rmSync(file, {force: true}); } catch { /* best effort */ } } }
+
+/**
+ * Removes the partial files a writer left behind when it was terminated during a pre-migration backup of this database
+ * (for example by the service's bounded shutdown): `telemetry-<uuid8>-v<n>-<timestamp>.sqlite.partial` with its
+ * `-journal`, `-wal` and `-shm` files, and `telemetry-<uuid8>-v<n>-<timestamp>.json.partial`. Call it only while holding
+ * the database's exclusive lock, so no other writer can own them. Only regular files with exactly these names for this
+ * database are removed; finished backups, manifests (which describe `.sqlite` names only), other databases' files and
+ * anything else are never touched. Best effort: a missing directory or a failed removal is skipped and retried at the
+ * next open. Returns the number of files removed.
+ */
+export function sweepStalePartials(directory: string, databaseUuid: string): number {
+  const uuid8 = databaseUuid.slice(0, 8);
+  if (!/^[0-9a-f]{8}$/.test(uuid8)) return 0;
+  const pattern = new RegExp(String.raw`^telemetry-${uuid8}-v[0-9]+-[0-9]{8}T[0-9]{9}Z\.(sqlite\.partial(-journal|-wal|-shm)?|json\.partial)$`);
+  let names: string[];
+  try { names = readdirSync(directory); } catch { return 0; }
+  let removed = 0;
+  for (const name of names.filter(entry => pattern.test(entry))) {
+    const file = path.join(directory, name);
+    try { if (!lstatSync(file).isFile()) continue; rmSync(file); removed++; } catch { /* best effort */ }
+  }
+  return removed;
+}
 
 /**
  * Verifies a database file read-only against an expected digest: integrity_check, foreign keys, header versions,

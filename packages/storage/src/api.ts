@@ -28,7 +28,8 @@ export type Result<T> = {ok: true; value: T} | {ok: false; error: StorageError};
 
 /** Read back on every writer open; a write is refused unless every value matched. */
 export interface Durability {journalMode: 'wal'; synchronous: 'full'; lockingMode: 'exclusive'; foreignKeys: true}
-export interface OpenSummary {schemaVersion: number; created: boolean; migratedFrom?: number; backupFileName?: string; databaseUuid: string; purpose: Purpose}
+/** `removedPartialBackups` is present only when the open removed stale partial backup files of this database. */
+export interface OpenSummary {schemaVersion: number; created: boolean; migratedFrom?: number; backupFileName?: string; databaseUuid: string; purpose: Purpose; removedPartialBackups?: number}
 
 export type SampleField = 'speed' | 'fuel' | 'averageConsumption' | 'estimatedRange' | 'engineRpm' | 'gear' | 'odometer' | 'position' | 'gameTime';
 /**
