@@ -155,6 +155,40 @@ describe('simulator v1 reactive serving for any contract consumer', () => {
     } finally { await strict.stop(); }
   }, 60_000);
 
+  // A consumer that follows the script but commits slower than the quiesce bound, as the real storage worker on a
+  // stalled host did (ET-006b storage suite, October 15, 2026): with `awaitScriptedAcks` its late ACK is still awaited
+  // and recorded before the scripted disconnect, a client that neither acknowledges nor leaves fails the run, and a
+  // connection scripted to withhold its ACKs keeps the bounded wait.
+  it('awaits a scripted ACK slower than the quiesce bound when asked to', async () => {
+    const steps = [{atMs: 10, action: 'lifecycle', event: 'simulation.started'}];
+    const s = inline(steps, [{atMs: 0, action: 'connect', client: {durable: true}}, {atMs: 100, action: 'disconnect'}]);
+    const ack = (welcome: ServerMessage) => encodeFrame({version: PROTOCOL_V1, kind: 'ack', data: {pluginSessionId: welcome.source.pluginSessionId, throughEventSeq: '1'}});
+    const slow = await serveV1Reactive(s, {scale: 0, quiesceMs: 20, awaitScriptedAcks: true});
+    try {
+      const client = rawClient(slow.endpoint, hello(true));
+      await until(() => client.messages.some(m => m.kind === 'event'));
+      // Ten quiesce bounds after the event was written.
+      await new Promise(resolve => setTimeout(resolve, 200));
+      client.socket.write(ack(client.messages[0]));
+      const report = await slow.done;
+      expect(report.transcript.filter(l => l.direction === 'client' && l.message.kind === 'ack').map(l => l.message.kind === 'ack' && l.message.data.throughEventSeq)).toEqual(['1']);
+      expect(report.connections.map(c => c.closedBy)).toEqual(['disconnect']);
+      expect(reactiveDifferences(replayV1(s), report)).toEqual([]);
+    } finally { await slow.stop(); }
+    const silent = await serveV1Reactive(s, {scale: 0, awaitScriptedAcks: true, settleTimeoutMs: 100});
+    try {
+      rawClient(silent.endpoint, hello(true));
+      await expect(silent.done).rejects.toThrow(/Connection 1: the client neither acknowledged everything written to it nor left within 100 ms/);
+    } finally { await silent.stop(); }
+    const withheld = inline(steps, [{atMs: 0, action: 'connect', client: {durable: true, ack: 'withhold'}}, {atMs: 100, action: 'disconnect'}]);
+    const bounded = await serveV1Reactive(withheld, {scale: 0, quiesceMs: 20, awaitScriptedAcks: true, settleTimeoutMs: 1});
+    try {
+      rawClient(bounded.endpoint, hello(true));
+      expect((await bounded.done).connections.map(c => c.closedBy)).toEqual(['disconnect']);
+    } finally { await bounded.stop(); }
+    await expect(serveV1Reactive(s, {settleTimeoutMs: 0})).rejects.toThrow(/Invalid settle timeout/);
+  }, 60_000);
+
   it('runs only scenarios whose client is not scripted', async () => {
     await expect(serveV1Reactive(load('wire-faults'))).rejects.toThrow(/lockstep/);
     await expect(serveV1Reactive(load('pipe-stalled-reader'))).rejects.toThrow(/lockstep/);
