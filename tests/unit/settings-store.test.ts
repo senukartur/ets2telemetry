@@ -265,7 +265,9 @@ it('is read-only with defaults when there is no valid settings location', async 
   expect(events[0]).toEqual({event: 'SETTINGS_FALLBACK', facts: {state: 'unavailable'}});
 });
 
-it('falls back read-only when loading exceeds its 1000 ms budget', async () => {
+// Changed on October 15, 2026 (clean late read): an expired budget now returns the pending `loading` state instead of
+// `unreadable`; only the 30 s read limit makes a read that never settles `unreadable` (see the cases below).
+it('returns a pending read-only state when loading exceeds its 1000 ms budget', async () => {
   const timers: {callback: () => void; milliseconds: number}[] = [];
   const settings = store(wrapped({lstat: () => new Promise(() => undefined)}), {timers: {
     setTimeout: (callback, milliseconds) => {timers.push({callback, milliseconds}); return timers.length;}, clearTimeout: () => undefined}});
@@ -273,8 +275,8 @@ it('falls back read-only when loading exceeds its 1000 ms budget', async () => {
   await new Promise(resolve => setImmediate(resolve));
   expect(timers.map(timer => timer.milliseconds)).toEqual([1000]);
   timers[0].callback();
-  expect(await loading).toEqual({units: {ets2: 'metric', ats: 'us-customary'}, state: 'unreadable', writable: false, saveError: null});
-  expect(events).toEqual([{event: 'SETTINGS_FALLBACK', facts: {state: 'unreadable', reason: 'load-budget'}}]);
+  expect(await loading).toEqual({units: {ets2: 'metric', ats: 'us-customary'}, state: 'loading', writable: false, saveError: null});
+  expect(events).toEqual([{event: 'SETTINGS_LOAD_PENDING', facts: {state: 'loading', reason: 'load-budget'}}]);
 });
 
 // Fix round 1.
@@ -289,9 +291,161 @@ it('refuses saves at once and stays idle after the load budget expired with a re
     new Promise(resolve => setTimeout(() => resolve('still pending after 100 ms'), 100))]);
   expect(outcome).toBeInstanceOf(SettingsError); expect((outcome as SettingsError).code).toBe('SETTINGS_WRITE_FAILED');
   expect(settings.idle()).toBeUndefined();
-  expect(settings.view()).toEqual({units: {ets2: 'metric', ats: 'us-customary'}, state: 'unreadable', writable: false, saveError: 'SETTINGS_WRITE_FAILED'});
+  // `loading` since the clean late read (October 15, 2026); it was `unreadable` when the budget ended the read.
+  expect(settings.view()).toEqual({units: {ets2: 'metric', ats: 'us-customary'}, state: 'loading', writable: false, saveError: 'SETTINGS_WRITE_FAILED'});
   // Further requests are refused too, never queued toward the four-request bound.
   for (let attempt = 0; attempt < 5; attempt++) await expect(settings.setUnitProfile('ats', 'metric')).rejects.toBeInstanceOf(SettingsError);
+});
+
+// Clean late read (October 15, 2026). Hosted run 38755116140 starved startup under the smoke's 25 % CPU cap: the read
+// outlasted the 1000 ms budget and the session kept read-only defaults although the file was readable. A read that
+// outlasts the budget is now applied when it settles, unless the 30 s read limit declared it hung first.
+interface ControlledTimer {callback: () => void; milliseconds: number; cleared: boolean}
+function controlledTimers() {
+  const started: ControlledTimer[] = [];
+  return {started, timers: {
+    setTimeout: (callback: () => void, milliseconds: number) => {const timer = {callback, milliseconds, cleared: false}; started.push(timer); return timer;},
+    clearTimeout: (handle: unknown) => {(handle as ControlledTimer).cleared = true;}
+  }};
+}
+/** Real file operations whose `lstat` calls wait until `release()`. */
+function delayedRead(overrides: Partial<SettingsFileSystem> = {}) {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => {release = resolve;});
+  return {release, fs: wrapped({lstat: async target => {await gate; return fs.lstat(target);}, ...overrides})};
+}
+/** Starts a load over a delayed read and lets its 1000 ms budget expire. */
+async function loadPastBudget(fileSystem: SettingsFileSystem) {
+  const {started, timers} = controlledTimers(), changed = vi.fn();
+  const settings = store(fileSystem, {timers, changed});
+  const loading = settings.load();
+  await new Promise(resolve => setImmediate(resolve));
+  expect(started.map(timer => timer.milliseconds)).toEqual([1000]);
+  started[0].callback();
+  const pending = await loading;
+  return {settings, started, changed, pending};
+}
+const PENDING_VIEW = {units: {ets2: 'metric', ats: 'us-customary'}, state: 'loading', writable: false, saveError: null};
+const PENDING_EVENT = {event: 'SETTINGS_LOAD_PENDING', facts: {state: 'loading', reason: 'load-budget'}};
+
+it('applies a corrupt file read that outlasts the load budget once it settles (hosted run 38755116140)', async () => {
+  await seed(CORRUPT);
+  const gated = delayedRead();
+  const {settings, started, changed, pending} = await loadPastBudget(gated.fs);
+  expect(pending).toEqual(PENDING_VIEW);
+  expect(events).toEqual([PENDING_EVENT]);
+  // The pending read is bounded by the read limit, 30 s after the load started.
+  expect(started.map(timer => timer.milliseconds)).toEqual([1000, 29000]);
+  gated.release();
+  await vi.waitFor(() => expect(changed).toHaveBeenCalledOnce());
+  expect(settings.view()).toEqual({units: {ets2: 'metric', ats: 'us-customary'}, state: 'invalid-file', writable: true, saveError: null});
+  expect(started[1].cleared).toBe(true);
+  expect(events).toEqual([PENDING_EVENT, {event: 'SETTINGS_FALLBACK', facts: {state: 'invalid-file'}}]);
+  // Applying the late result wrote nothing; the first save then quarantines the file byte-identically.
+  expect((await read()).toString('utf8')).toBe(CORRUPT); expect(await list()).toEqual(['settings.json']);
+  expect(await settings.setUnitProfile('ets2', 'us-customary')).toEqual({units: {ets2: 'us-customary', ats: 'us-customary'}, state: 'loaded', writable: true, saveError: null});
+  expect(await list()).toEqual(['settings.json', 'settings.rejected-20261015T094107Z.json']);
+  expect((await read('settings.rejected-20261015T094107Z.json')).toString('utf8')).toBe(CORRUPT);
+  expect((await read()).toString('utf8')).toBe(EXPECTED_US_ETS2);
+  expect(changed).toHaveBeenCalledOnce();
+});
+
+it.each([
+  {name: 'a valid file', content: VALID_METRIC, view: {units: {ets2: 'metric', ats: 'metric'}, state: 'loaded', writable: true}, event: {event: 'SETTINGS_LOADED', facts: {state: 'loaded'}}},
+  {name: 'a file with fallbacks', content: '{"format":"ets2telemetry.settings","version":1,"units":{"ets2":"us-customary","ats":"imperial"}}',
+    view: {units: {ets2: 'us-customary', ats: 'us-customary'}, state: 'loaded-with-fallbacks', writable: true}, event: {event: 'SETTINGS_FALLBACK', facts: {state: 'loaded-with-fallbacks', fields: 'units.ats'}}},
+  {name: 'an unsupported older file', content: '{"format":"ets2telemetry.settings","units":{"ets2":"us-customary","ats":"metric"}}',
+    view: {units: {ets2: 'metric', ats: 'us-customary'}, state: 'unsupported-older', writable: true}, event: {event: 'SETTINGS_FALLBACK', facts: {state: 'unsupported-older'}}},
+  {name: 'a newer-version file', content: '{"format":"ets2telemetry.settings","version":2,"units":{"ets2":"us-customary","ats":"metric"}}',
+    view: {units: {ets2: 'metric', ats: 'us-customary'}, state: 'newer-version', writable: false}, event: {event: 'SETTINGS_FALLBACK', facts: {state: 'newer-version'}}}
+])('applies a late read of $name with its own state and writability, writing nothing', async ({content, view, event}) => {
+  await seed(content);
+  const gated = delayedRead();
+  const {settings, changed, pending} = await loadPastBudget(gated.fs);
+  expect(pending).toEqual(PENDING_VIEW);
+  gated.release();
+  await vi.waitFor(() => expect(changed).toHaveBeenCalledOnce());
+  expect(settings.view()).toEqual({...view, saveError: null});
+  expect(events).toEqual([PENDING_EVENT, event]);
+  expect((await read()).toString('utf8')).toBe(content); expect(await list()).toEqual(['settings.json']);
+  if (view.state === 'newer-version') {
+    await expect(settings.setUnitProfile('ets2', 'us-customary')).rejects.toMatchObject({code: 'SETTINGS_READ_ONLY'});
+    expect((await read()).toString('utf8')).toBe(content); expect(await list()).toEqual(['settings.json']);
+  }
+});
+
+it('refuses a save during the pending read at once and quarantines a late invalid file only after applying it', async () => {
+  await seed(CORRUPT);
+  const gated = delayedRead();
+  const {settings, changed} = await loadPastBudget(gated.fs);
+  const outcome = await Promise.race([settings.setUnitProfile('ets2', 'us-customary').then(() => 'resolved', (error: unknown) => error),
+    new Promise(resolve => setTimeout(() => resolve('still pending after 100 ms'), 100))]);
+  expect(outcome).toBeInstanceOf(SettingsError); expect((outcome as SettingsError).code).toBe('SETTINGS_WRITE_FAILED');
+  expect(settings.idle()).toBeUndefined();
+  expect(settings.view()).toEqual({...PENDING_VIEW, saveError: 'SETTINGS_WRITE_FAILED'});
+  expect(events.at(-1)).toEqual({event: 'SETTINGS_WRITE_FAILED', facts: {step: 'unavailable', state: 'loading'}});
+  // Refused requests are never queued toward the four-request bound.
+  for (let attempt = 0; attempt < 5; attempt++) await expect(settings.setUnitProfile('ats', 'metric')).rejects.toBeInstanceOf(SettingsError);
+  gated.release();
+  await vi.waitFor(() => expect(changed).toHaveBeenCalledOnce());
+  // Nothing was written, renamed or quarantined while the read was pending.
+  expect((await read()).toString('utf8')).toBe(CORRUPT); expect(await list()).toEqual(['settings.json']);
+  expect(settings.view()).toEqual({units: {ets2: 'metric', ats: 'us-customary'}, state: 'invalid-file', writable: true, saveError: 'SETTINGS_WRITE_FAILED'});
+  expect(await settings.setUnitProfile('ats', 'metric')).toEqual({units: {ets2: 'metric', ats: 'metric'}, state: 'loaded', writable: true, saveError: null});
+  expect((await read('settings.rejected-20261015T094107Z.json')).toString('utf8')).toBe(CORRUPT);
+});
+
+it('keeps a late read error read-only', async () => {
+  await seed(VALID_METRIC);
+  const gated = delayedRead({open: async (file, flags) => {if (flags === 'r') throw errno('EIO'); return fs.open(file, flags);}});
+  const {settings, started, changed} = await loadPastBudget(gated.fs);
+  gated.release();
+  await vi.waitFor(() => expect(changed).toHaveBeenCalledOnce());
+  expect(started[1].cleared).toBe(true);
+  expect(settings.view()).toEqual({units: {ets2: 'metric', ats: 'us-customary'}, state: 'unreadable', writable: false, saveError: null});
+  expect(events).toEqual([PENDING_EVENT, {event: 'SETTINGS_FALLBACK', facts: {state: 'unreadable', reason: 'read'}}]);
+  await expect(settings.setUnitProfile('ets2', 'us-customary')).rejects.toMatchObject({code: 'SETTINGS_WRITE_FAILED'});
+  expect((await read()).toString('utf8')).toBe(VALID_METRIC); expect(await list()).toEqual(['settings.json']);
+});
+
+it('declares a read hung at the 30 s limit, stays read-only and ignores its later result', async () => {
+  await seed(VALID_METRIC);
+  const gated = delayedRead();
+  const {settings, started, changed} = await loadPastBudget(gated.fs);
+  expect(changed).not.toHaveBeenCalled();
+  started[1].callback();
+  expect(changed).toHaveBeenCalledOnce();
+  expect(settings.view()).toEqual({units: {ets2: 'metric', ats: 'us-customary'}, state: 'unreadable', writable: false, saveError: null});
+  expect(events).toEqual([PENDING_EVENT, {event: 'SETTINGS_FALLBACK', facts: {state: 'unreadable', reason: 'load-limit'}}]);
+  await expect(settings.setUnitProfile('ets2', 'us-customary')).rejects.toMatchObject({code: 'SETTINGS_WRITE_FAILED'});
+  // The read finishing after the limit changes nothing and is not reported again.
+  const seen = events.length;
+  gated.release();
+  await new Promise(resolve => setTimeout(resolve, 50));
+  expect(changed).toHaveBeenCalledOnce();
+  expect(settings.view()).toMatchObject({state: 'unreadable', writable: false, units: {ets2: 'metric', ats: 'us-customary'}});
+  expect(events).toHaveLength(seen);
+  expect((await read()).toString('utf8')).toBe(VALID_METRIC); expect(await list()).toEqual(['settings.json']);
+});
+
+it('lets a save requested before the load returned wait at most until the read limit', async () => {
+  await seed(VALID_METRIC);
+  const gated = delayedRead();
+  const {started, timers} = controlledTimers();
+  const settings = store(gated.fs, {timers});
+  const loading = settings.load();
+  // Requested before load() returned: it queues behind the read's outcome, as before.
+  const early = settings.setUnitProfile('ets2', 'us-customary').then(() => 'resolved', (error: unknown) => error);
+  await new Promise(resolve => setImmediate(resolve));
+  started[0].callback(); expect(await loading).toEqual(PENDING_VIEW);
+  expect(settings.idle()).toBeInstanceOf(Promise);
+  started[1].callback();
+  const outcome = await early;
+  expect(outcome).toBeInstanceOf(SettingsError); expect((outcome as SettingsError).code).toBe('SETTINGS_WRITE_FAILED');
+  expect(settings.idle()).toBeUndefined();
+  gated.release();
+  await new Promise(resolve => setTimeout(resolve, 50));
+  expect((await read()).toString('utf8')).toBe(VALID_METRIC); expect(await list()).toEqual(['settings.json']);
 });
 
 it('reports a failed save in the view and clears it with the next successful save', async () => {

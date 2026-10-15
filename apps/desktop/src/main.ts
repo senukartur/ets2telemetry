@@ -55,8 +55,9 @@ function runApplication(profileError: unknown): void {
     });
   }
   // Settings load in parallel with the service start and never write. The store's view is the only settings state in
-  // main; it changes only after a durable save. The first windows open after the load settled (at most 1000 ms).
-  const settingsStore = new SettingsStore(settingsDirectory(process.env.LOCALAPPDATA), {log});
+  // main; it changes only after a durable save or when a startup read that outlasted its budget is applied. The first
+  // windows open after the load returned (at most 1000 ms), if need be with defaults in the read-only `loading` state.
+  const settingsStore = new SettingsStore(settingsDirectory(process.env.LOCALAPPDATA), {log, changed: () => settingsChanged()});
   const settingsLoad = settingsStore.load().then(() => undefined, (error: unknown) => {log('SETTINGS_LOAD_REJECTED', String(error));});
   let window: BrowserWindow | undefined, service: UtilityProcess | undefined, status: ScaffoldStatus | undefined;
   let subscribed = false, serviceReady = false;
@@ -138,9 +139,10 @@ function runApplication(profileError: unknown): void {
     pushAppState();
     presentTray(immediate);
   }
-  // A saved unit profile republishes main's stored freshness output in the new units. It accepts no observation and
-  // renews no SDK or window authority: freshness, its expiry timers and the overlay placement are untouched.
-  function settingsSaved(): void {
+  // A saved unit profile, or a late startup read being applied, pushes the settings view and republishes main's stored
+  // freshness output in the current units. It accepts no observation and renews no SDK or window authority: freshness,
+  // its expiry timers and the overlay placement are untouched.
+  function settingsChanged(): void {
     pushAppState();
     if (!lifecycle.exiting) overlaySubscriptions.publish(overlayPresentation(lastLive, settingsStore.view().units));
   }
@@ -378,7 +380,7 @@ function runApplication(profileError: unknown): void {
     if (lifecycle.exiting) throw new Error('Settings request was retired');
     try {
       const view = await settingsStore.setUnitProfile(game, profile);
-      settingsSaved();
+      settingsChanged();
       return view;
     } catch (error) {
       // The refusal lives in the settings view's `saveError`; the service's health and last problem are unchanged.

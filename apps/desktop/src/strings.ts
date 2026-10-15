@@ -63,6 +63,7 @@ export const UNIT_PROFILE_TEXT: Readonly<Record<UnitProfile, string>> = Object.f
 });
 /** How the persisted settings were obtained; shown under the unit choices. Never contains a path. */
 export const SETTINGS_STATE_TEXT: Readonly<Record<SettingsState, string>> = Object.freeze({
+  'loading': 'Saved settings are still being read; defaults are in use and changes cannot be saved yet.',
   'defaults': 'Default units. A change is saved for later launches.',
   'loaded': 'Saved units loaded.',
   'loaded-with-fallbacks': 'Some saved units were invalid; their defaults are in use until the next change.',

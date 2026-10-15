@@ -279,9 +279,14 @@ finally {
       // Settings diagnostics: run A falls back from the invalid file, quarantines it and saves once; run B only loads.
       const settingsEvents = rows => rows.filter(row => row.event.startsWith('SETTINGS_')).map(row => ({event: row.event, facts: row.facts ?? null}));
       lifecycle.settingsEvents = {runA: settingsEvents(result.mainEvents), runB: settingsEvents(lifecycle.restartMainEvents)};
-      assert.deepEqual(lifecycle.settingsEvents.runA, [{event: 'SETTINGS_FALLBACK', facts: {state: 'invalid-file'}}, {event: 'SETTINGS_QUARANTINED', facts: {state: 'invalid-file'}},
-        {event: 'SETTINGS_SAVED', facts: {game: 'ets2', profile: 'us-customary'}}]);
-      assert.deepEqual(lifecycle.settingsEvents.runB, [{event: 'SETTINGS_LOADED', facts: {state: 'loaded'}}]);
+      // A read that outlasted its 1000 ms load budget under CPU starvation is preceded by exactly one pending row; the
+      // rows after it are the same as for a read within the budget.
+      const pending = {event: 'SETTINGS_LOAD_PENDING', facts: {state: 'loading', reason: 'load-budget'}};
+      const late = rows => rows[0]?.event === pending.event ? [pending] : [];
+      lifecycle.settingsLateRead = {runA: late(lifecycle.settingsEvents.runA).length === 1, runB: late(lifecycle.settingsEvents.runB).length === 1};
+      assert.deepEqual(lifecycle.settingsEvents.runA, [...late(lifecycle.settingsEvents.runA), {event: 'SETTINGS_FALLBACK', facts: {state: 'invalid-file'}},
+        {event: 'SETTINGS_QUARANTINED', facts: {state: 'invalid-file'}}, {event: 'SETTINGS_SAVED', facts: {game: 'ets2', profile: 'us-customary'}}]);
+      assert.deepEqual(lifecycle.settingsEvents.runB, [...late(lifecycle.settingsEvents.runB), {event: 'SETTINGS_LOADED', facts: {state: 'loaded'}}]);
       lifecycle.restartLauncherExit = result.launcherExit;
       lifecycle.shutdownClean = true;
     }

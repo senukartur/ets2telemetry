@@ -25,9 +25,11 @@ export type UnitProfiles = Readonly<Record<UnitGame, UnitProfile>>;
  * How the persisted settings were obtained at startup or by the last save. `defaults`: no file. `loaded-with-fallbacks`:
  * some fields were invalid and use defaults. `invalid-file`, `unsupported-older`: the file is kept unchanged until the
  * first save quarantines it. `newer-version`: written by a newer version; read-only. `unreadable`: the file or its
- * directory could not be read safely; `unavailable`: no valid settings location. Both of the last two are read-only.
+ * directory could not be read safely, or the read hung; `unavailable`: no valid settings location. Both are read-only.
+ * `loading`: the startup read outlasted its 1000 ms budget and is still pending; defaults apply and saving is refused
+ * until the read's own result replaces this state.
  */
-export type SettingsState = 'defaults' | 'loaded' | 'loaded-with-fallbacks' | 'invalid-file' | 'unsupported-older'
+export type SettingsState = 'loading' | 'defaults' | 'loaded' | 'loaded-with-fallbacks' | 'invalid-file' | 'unsupported-older'
   | 'newer-version' | 'unreadable' | 'unavailable';
 /** Why the last settings save was refused: it could not be written, or the file is read-only (newer version). */
 export type SettingsSaveError = 'SETTINGS_WRITE_FAILED' | 'SETTINGS_READ_ONLY';
@@ -35,7 +37,7 @@ export type SettingsSaveError = 'SETTINGS_WRITE_FAILED' | 'SETTINGS_READ_ONLY';
 export interface SettingsView {
   units: UnitProfiles;
   state: SettingsState;
-  /** False when a change cannot be saved: a newer-version, unreadable or unavailable settings file. */
+  /** False when a change cannot be saved: a pending read, or a newer-version, unreadable or unavailable settings file. */
   writable: boolean;
   /** The last save's refusal, cleared by the next successful save. Independent of the service's `lastError`. */
   saveError: SettingsSaveError | null;

@@ -63,6 +63,8 @@ let settingsIdle: Promise<void> | undefined;
 let settingsDirectories: unknown[];
 let settingsLoaded: boolean;
 let settingsLoading: Promise<unknown>;
+// Clean late read (October 15, 2026): the `changed` callback main hands to the store, which reports a late read.
+let settingsChanged: (() => void) | undefined;
 beforeEach(() => {
   expect(loadingMain.size, 'a previous case left main.ts loading').toBe(0);
   installFixture();
@@ -118,11 +120,12 @@ function installFixture() {
   vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'synthetic');
   settingsView = {units: {ets2: 'metric', ats: 'us-customary'}, state: 'defaults', writable: true, saveError: null};
   settingsWrite = vi.fn<SettingsWrite>(); settingsIdle = undefined; settingsDirectories = []; settingsLoaded = true; settingsLoading = Promise.resolve();
+  settingsChanged = undefined;
   vi.doMock('../../apps/desktop/src/settings-store', () => ({
     settingsDirectory: (localAppData: unknown) => typeof localAppData === 'string' ? `${localAppData}\\ETS2Telemetry\\settings` : undefined, SettingsError: FakeSettingsError, SettingsBusyError: FakeSettingsBusyError,
     SettingsStore: class {
       get settled() {return settingsLoaded;}
-      constructor(directory: unknown) {settingsDirectories.push(directory);}
+      constructor(directory: unknown, options?: {changed?: () => void}) {settingsDirectories.push(directory); settingsChanged = options?.changed;}
       view() {return settingsView;}
       load() {return settingsLoading.then(() => {settingsLoaded = true; return settingsView;});}
       setUnitProfile(game: string, profile: string) {return settingsWrite(game, profile);}
@@ -921,6 +924,34 @@ it('loads settings from LOCALAPPDATA and opens the first windows only after the 
   expect(windows).toHaveLength(0); expect(child.postMessage).not.toHaveBeenCalled();
   load.resolve(); await settle(); await settle();
   expect(windows).toHaveLength(2); expect(child.postMessage).toHaveBeenCalledWith({type: 'select', source: 'synthetic', broker: undefined});
+});
+// Clean late read (October 15, 2026; hosted run 38755116140): the windows open with defaults in the pending `loading`
+// state, and the late read's result reaches the dashboard and the overlay as a save's does.
+it('applies a settings read that settles after the load budget to the dashboard and the overlay without renewing authority', async () => {
+  trayAvailable = true; vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2');
+  const pending = {units: {ets2: 'metric', ats: 'us-customary'}, state: 'loading', writable: false, saveError: null};
+  settingsView = pending; await ready();
+  expect(windows).toHaveLength(2);
+  ipc.emit('app:subscribe-state', trusted()); ipc.emit('overlay:subscribe', overlayTrusted()); const overlayChannel = channels[1];
+  const pushes = () => contents.send.mock.calls.filter(call => call[0] === 'app:state').map(call => call[1] as {settings: unknown});
+  expect(pushes().at(-1)!.settings).toEqual(pending);
+  consumeOverlay(overlayChannel); deliver(currentReading()); await vi.advanceTimersByTimeAsync(50);
+  expect(overlayProjection(overlayChannel)).toMatchObject({source: 'ETS2', speed: '90.0', speedUnit: 'km/h', fuel: '73.0', fuelUnit: 'L', freshness: 'current'});
+  expect(windows[1].showInactive).toHaveBeenCalledOnce(); consumeOverlay(overlayChannel);
+  await drainOverlay(overlayChannel, 150);
+  // The store applies the late read (t = 200 ms) and reports it; main reads the new view from the store.
+  settingsView = {units: {ets2: 'us-customary', ats: 'us-customary'}, state: 'loaded', writable: true, saveError: null};
+  expect(settingsChanged).toBeTypeOf('function'); settingsChanged!();
+  expect(pushes().at(-1)).toEqual({health: {service: 'ready', storage: 'verified', recording: 'unavailable', lastError: null}, settings: settingsView});
+  expect(handlers.get('app:get-state')!(trusted())).toMatchObject({settings: settingsView});
+  await vi.advanceTimersByTimeAsync(50);
+  expect(overlayProjection(overlayChannel)).toMatchObject({source: 'ETS2', speed: '55.9', speedUnit: 'mph', fuel: '19.3', fuelUnit: 'US gal', freshness: 'current'});
+  consumeOverlay(overlayChannel);
+  // Nothing was saved, and neither SDK nor window freshness was renewed: the reading still expires 500 ms after its
+  // delivery, inside this window; a renewal when the read was applied would end after it.
+  expect(settingsWrite).not.toHaveBeenCalled(); expect(windows[1].showInactive).toHaveBeenCalledOnce();
+  await drainOverlay(overlayChannel, 300);
+  expect(overlayProjection(overlayChannel)).toMatchObject({speed: '—', fuel: '—', speedUnit: 'mph', fuelUnit: 'US gal', freshness: 'stale'});
 });
 it('rejects unit profile requests from untrusted senders, frames and the overlay, and invalid values', async () => {
   trayAvailable = true; await ready();
