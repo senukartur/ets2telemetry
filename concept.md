@@ -611,3 +611,30 @@ On October 15, 2026 the owner wrote (translated from Russian): "Overall, keep do
 | E14 | Chain test: a fake-SDK host loads the test DLL with a v1 directory seam and the real broker in v1 mode runs against it; it proves that the plugin accepts the broker-provisioned policy and that ACKs relay and release entries, and that V1Ingestion with a game selection fails closed on the test DLL's synthetic origin under game authority |
 
 ET-006b PR-3 implementation update (October 15, 2026): per E2, E12 and E14 the service connects to the plugin's v1 endpoint through the broker's v1 mode, live-only and without a durable sink; v1 state stays service-internal and is logged only as fixed codes. A game selection now runs two broker processes, one per protocol. The controlled chain test is synthetic; real-game, TruckersMP and performance evidence remain pending ([ET-006b validation](docs/validation/et-006b.md#pr-3-service-wiring)).
+
+## ET-014 authorization — October 15, 2026
+
+On October 15, 2026 the owner wrote (translated from Russian): "Overall, keep doing other tasks until you hit tests in the real game. Make optimal decisions. I want you to close as many tasks as possible without my involvement. If there are flaky tests, delegate their fixes to subagents." Under this standing delegation the coordinator started ET-014 and adopted the architect's decisions T1–T20 below. They are coordinator decisions and were not individually reviewed by the owner. ET-014 adds a pure, deterministic trip reducer in `packages/telemetry-core` that turns committed protocol v1 events and gaps, session changes, checkpoint hydration and normalized readings into the existing storage `TripEffect` contract; ET-015a wires it into commits. Behaviour seen in real traces rests only on the reviewed CAP-01 observations O1–O11; everything else is labelled synthetic inference and stays pending until real-game sessions. See [trips](docs/trips.md).
+
+| # | Decision |
+| --- | --- |
+| T1 | Two PRs: the event-driven lifecycle reducer, then readings accounting with simulator replay |
+| T2 | Code in `packages/telemetry-core/src/trips`; the boundary test allows a type-only import of `packages/storage/src/api.ts` |
+| T3 | A pure step; the caller adopts the new state only after storage reports `committed`, `duplicate`, `covered` or `conflict`, and keeps the old state on a retryable or failed commit (ET-015a replaces the synchronous effects hook) |
+| T4 | Trip ID = SHA-256 of `ets2telemetry-trip-v1:` + plugin session + configuring `eventSeq`, shaped as a UUID; a pure TypeScript SHA-256 checked against NIST vectors and `node:crypto` |
+| T5 | Per-session processed point: duplicates are no-ops, gaps apply only their suffix, a skipped `eventSeq` or coverage mismatch fails closed |
+| T6 | Job identity is every `job.configured` field except `cargoLoaded` (O3) |
+| T7 | `job.cleared` waits for an outcome; truck/trailer, pause/start, fines, tolls, transfers and game mode may intervene (O7); a different job, timer restart, regression, gap or session change disqualifies |
+| T8 | Save load (O10): clear plus an identical re-send waits for the first decisive event; a game-time regression continues the trip as partial, anything else closes it and opens a new ambiguous continuation |
+| T9 | Hydration never opens, closes or attributes a trip; a late-attached job is untracked until an identical `job.configured` opens a partial trip |
+| T10 | A gap while a trip is open closes it as partial and records a `not-connected` or `event-loss` interval |
+| T11 | A new plugin session closes the previous session's open trip as `restart`; identical jobs are not merged |
+| T12 | A job configured during a load (before the session's first start, or after a restart or regression) opens partial (inference from O1) |
+| T13 | Trips open `unknown`, become `partial` on any loss or ambiguity, and become `complete` only on an outcome close with a clean window; annotations do not downgrade |
+| T14 | Exactly one attribution per gameplay event: `trip`, `trip-before-loaded`, `free-driving` or `ambiguous` |
+| T15 | Real duration from monotonic time within one session; UTC is a label and an end before the start is clamped and annotated; game time only within one game clock |
+| T16 | Observed distance and fuel used from continuous steps only; refuels reported separately; nothing bridged across a connection hole |
+| T17 | Provisional named thresholds for game-time jumps, crossings, position jumps and reading holes |
+| T18 | At most 16 effects per commit; annotations merged, capped and deferred |
+| T19 | No storage change; gaps S-1 (fuel-used column), S-2 (late-attached job trips), S-3 (effects hook), S-4 (continuation in detail JSON) go to ET-015a or ET-016 |
+| T20 | Every test case is tagged with its evidence basis: O1–O11, the October 13–14 decisions, or synthetic inference; no capture bytes are committed |
