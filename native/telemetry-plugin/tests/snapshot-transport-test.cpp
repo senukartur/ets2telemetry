@@ -357,10 +357,14 @@ void stop_discovery() {
     // Exit path: the worker has left the accept loop and next deletes the published record.
     Fixture f; f.start(); const auto record=f.directory+L"\\"+record_name(f);
     require(GetFileAttributesW(record.c_str())!=INVALID_FILE_ATTRIBUTES,"discovery record published");
-    BlockedRead exit("v0-exit"); bool fallback=false; std::thread guard([&]{fallback=exit.fallback(750);});
+    // The worker reaches the hook only after stop() has signalled, and stop() blocks until it exits, so the guard thread
+    // starts the fallback timer only once the read is about to be issued. A timer started earlier could put the byte in
+    // the pipe first; the read would then complete at once and leave nothing for an unconditional cancel to abort.
+    BlockedRead exit("v0-exit"); bool reached=false,fallback=false;
+    std::thread guard([&]{reached=WaitForSingleObject(exit.reached.get(),10000)==WAIT_OBJECT_0; fallback=exit.fallback(750);});
     f.server.stop(); guard.join();
     std::cout<<"exitReadError="<<exit.error.load()<<" fallback="<<fallback<<" shutdownMs="<<f.server.shutdown_ms()<<'\n';
-    require(exit.fired.load()&&exit.error.load()==ERROR_SUCCESS&&fallback,"stop never cancels synchronous I/O in the v0 exit path");
+    require(reached&&exit.fired.load()&&exit.error.load()==ERROR_SUCCESS&&fallback,"stop never cancels synchronous I/O in the v0 exit path");
     require(f.server.endpoint().empty()&&f.server.status()!=Status::failed&&GetFileAttributesW(record.c_str())==INVALID_FILE_ATTRIBUTES,"the record is deleted and the worker joined");
     require(stray_entries(f.directory).empty(),"no discovery file is left after stop");
   }
