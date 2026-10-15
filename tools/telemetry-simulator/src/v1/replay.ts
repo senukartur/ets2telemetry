@@ -25,10 +25,10 @@ export type TranscriptLine = LineBase & {message: ProtocolMessage};
  */
 export type FaultLine = LineBase & {fault: ClientFault | WireFault; bytesHex: string; beforeLine: number};
 export type ClosedBy = 'disconnect' | 'crash' | 'end' | 'open' | 'serverRejected' | 'clientRejected' | 'clientEof' | 'helloTimeout' | 'writeDeadline';
-/** A client action at a point of the server stream: after the server message with this `seq` on the connection. */
-export interface ClientAction {afterSeq: string; action: 'probe' | 'fault' | 'secondClient'; fault?: LiveFault}
+/** A client action at scenario time `atMs`, at a point of the server stream: after the server message with this `seq`. */
+export interface ClientAction {afterSeq: string; atMs: number; action: 'probe' | 'fault' | 'secondClient'; fault?: LiveFault}
 export interface ConnectionRecord {
-  connection: number; durableRequested: boolean; clientInstanceId: string; closedBy: ClosedBy; mappings: MappingResult[];
+  connection: number; openedAtMs: number; durableRequested: boolean; clientInstanceId: string; clientClockId: string; closedBy: ClosedBy; mappings: MappingResult[];
   /** The scripted policy of a session, or the fault of a connection attempt that never completed its hello. */
   policy?: ClientPolicy; helloFault?: HelloFault;
   /** Client actions in stream order, the second clients refused while this connection was open, and a client rejection. */
@@ -152,8 +152,8 @@ export class V1Driver {
   }
   private *connect(atMs: number, connection: number, policy: ClientPolicy): Generator<Effect, void, void> {
     const clientInstanceId = this.beginAttempt();
-    const client = new ScriptedClient(this.ledger, policy, clientInstanceId, seededId(this.scenario.seed, `client-clock-${this.instance}`), this.cursors);
-    const record: ConnectionRecord = {connection, durableRequested: policy.durable, clientInstanceId, closedBy: 'open', mappings: client.mappings, policy, actions: [], refusedClients: 0};
+    const clientClockId = seededId(this.scenario.seed, `client-clock-${this.instance}`), client = new ScriptedClient(this.ledger, policy, clientInstanceId, clientClockId, this.cursors);
+    const record: ConnectionRecord = {connection, openedAtMs: atMs, durableRequested: policy.durable, clientInstanceId, clientClockId, closedBy: 'open', mappings: client.mappings, policy, actions: [], refusedClients: 0};
     this.connections.push(record); this.open = {client, record, stalled: false}; this.probeId = 0;
     this.producer.open(); yield {kind: 'accept', connection};
     yield* this.fromClient(client.hello(), atMs);
@@ -162,7 +162,8 @@ export class V1Driver {
   // A connection attempt whose hello never completes: the producer opens no v1 connection (gate, store and seq unchanged).
   private *helloFault(atMs: number, connection: number, fault: HelloFault): Generator<Effect, void, void> {
     const clientInstanceId = this.beginAttempt();
-    const record: ConnectionRecord = {connection, durableRequested: true, clientInstanceId, closedBy: 'open', mappings: [], helloFault: fault, actions: [], refusedClients: 0};
+    const record: ConnectionRecord = {connection, openedAtMs: atMs, durableRequested: true, clientInstanceId, clientClockId: seededId(this.scenario.seed, `client-clock-${this.instance}`), closedBy: 'open', mappings: [],
+      helloFault: fault, actions: [], refusedClients: 0};
     this.connections.push(record);
     const {bytes, endsInput} = helloFaultBytes(fault, {clientInstanceId, pluginSessionId: this.producer.source.pluginSessionId});
     this.line(atMs, 'client', {fault, bytesHex: hex(bytes)}, connection);
@@ -179,7 +180,7 @@ export class V1Driver {
   }
   private *liveFault(atMs: number, fault: LiveFault): Generator<Effect, void, void> {
     const o = this.open; if (!o) throw new Error(`Client fault ${fault} needs an open connection`);
-    o.record.actions.push({afterSeq: this.lastSeq(), action: 'fault', fault});
+    o.record.actions.push({afterSeq: this.lastSeq(), atMs, action: 'fault', fault});
     const {bytes, endsInput} = liveFaultBytes(fault, o.client.faultContext(foreignSession(this.scenario.seed)));
     this.line(atMs, 'client', {fault, bytesHex: hex(bytes)});
     if (fault === 'stallRead') { o.stalled = true; yield {kind: 'stall'}; return; }
@@ -212,7 +213,7 @@ export class V1Driver {
       case 'wireFault': yield* this.wireFault(atMs, step.fault); break;
       case 'secondClient': {
         const o = this.open; if (!o || o.stalled) throw new Error('A second client needs an open, reading connection');
-        o.record.actions.push({afterSeq: this.lastSeq(), action: 'secondClient'}); o.record.refusedClients++;
+        o.record.actions.push({afterSeq: this.lastSeq(), atMs, action: 'secondClient'}); o.record.refusedClients++;
         yield {kind: 'secondClient'}; break;
       }
       case 'writeDeadline': {
@@ -232,7 +233,7 @@ export class V1Driver {
       else if (e.lane === 'probe') {
         const o = this.open;
         if (o?.record.connection === e.connection && !o.stalled) {
-          o.record.actions.push({afterSeq: this.lastSeq(), action: 'probe'});
+          o.record.actions.push({afterSeq: this.lastSeq(), atMs: e.atMs, action: 'probe'});
           yield* this.fromClient(o.client.probe(String(++this.probeId), CLIENT_BASE_NS + BigInt(e.atMs) * 1_000_000n), e.atMs);
         }
       } else yield* this.transport(e.atMs, e.step, e.connection);
@@ -267,13 +268,15 @@ export function replayV1(input: unknown): ReplayResult {
   for (let r = run.next(); ; r = run.next()) if (r.done) return r.value;
 }
 
-/** JSON lines of the transcript with each fault line at its place, as written by `cli.cjs replay-v1`. */
-export function transcriptLines(result: ReplayResult): string[] {
-  const out: string[] = []; let f = 0;
+/** The transcript with each fault line at its place. */
+export function orderedLines(result: Pick<ReplayResult, 'transcript' | 'faults'>): (TranscriptLine | Omit<FaultLine, 'beforeLine'>)[] {
+  const out: (TranscriptLine | Omit<FaultLine, 'beforeLine'>)[] = []; let f = 0;
   const faults = (written: number) => {
-    for (; f < result.faults.length && result.faults[f].beforeLine === written; f++) { const {beforeLine: _b, ...line} = result.faults[f]; void _b; out.push(JSON.stringify(line)); }
+    for (; f < result.faults.length && result.faults[f].beforeLine === written; f++) { const {beforeLine: _b, ...line} = result.faults[f]; void _b; out.push(line); }
   };
-  result.transcript.forEach((l, i) => { faults(i); out.push(JSON.stringify(l)); });
+  result.transcript.forEach((l, i) => { faults(i); out.push(l); });
   faults(result.transcript.length);
   return out;
 }
+/** JSON lines of the transcript with each fault line at its place, as written by `cli.cjs replay-v1`. */
+export function transcriptLines(result: ReplayResult): string[] { return orderedLines(result).map(l => JSON.stringify(l)); }
