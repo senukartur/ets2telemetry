@@ -87,9 +87,12 @@ describe('seedFromStored (R4)', () => {
   });
 });
 
-/** A scripted reader: trips are served from `pages`, events of each session in pages of at most `limit`. */
+/**
+ * A scripted reader: trips are served from `pages`, events of each session in pages of at most `limit`. `served`
+ * records the eventSeq of every event row a listEvents page returned.
+ */
 function reader(pages: TripRecord[][], events: Record<string, EventRow[]>) {
-  const calls: unknown[][] = [];
+  const calls: unknown[][] = [], served: bigint[] = [];
   const failures: Partial<Record<'listTrips' | 'listEvents' | 'getEvent', Result<never>>> = {};
   const fake: TripSeedReader = {
     listTrips(page?: TripPage): Promise<Result<TripList>> {
@@ -102,7 +105,9 @@ function reader(pages: TripRecord[][], events: Record<string, EventRow[]>) {
       calls.push(['listEvents', pluginSessionId, page]);
       if (failures.listEvents) return Promise.resolve(failures.listEvents);
       const after = BigInt(page?.afterEventSeq ?? '0');
-      return Promise.resolve({ok: true, value: (events[pluginSessionId] ?? []).filter(row => BigInt(row.eventSeq) > after).slice(0, page?.limit ?? 500)});
+      const rows = (events[pluginSessionId] ?? []).filter(row => BigInt(row.eventSeq) > after).slice(0, page?.limit ?? 500);
+      served.push(...rows.map(row => BigInt(row.eventSeq)));
+      return Promise.resolve({ok: true, value: rows});
     },
     getEvent(pluginSessionId: string, eventSeq: string): Promise<Result<EventRow | undefined>> {
       calls.push(['getEvent', pluginSessionId, eventSeq]);
@@ -110,8 +115,14 @@ function reader(pages: TripRecord[][], events: Record<string, EventRow[]>) {
       return Promise.resolve({ok: true, value: (events[pluginSessionId] ?? []).find(row => row.eventSeq === eventSeq)});
     }
   };
-  return {reader: fake, calls, failures};
+  return {reader: fake, calls, failures, served};
 }
+/** The seeds the pure rule gives with every stored event of each trip's session: what readTripSeeds must return. */
+const pureSeeds = (trips: TripRecord[], events: Record<string, EventRow[]>) => trips.map(t =>
+  seedFromStored(t, events[t.pluginSessionId].find(row => row.eventSeq === t.jobConfigurationEventSeq), events[t.pluginSessionId]));
+/** `count` events from `first`; `labelled` decides which carry the label UTC + eventSeq seconds. */
+const run = (first: number, count: number, labelled: (eventSeq: number) => boolean = () => false) => Array.from({length: count}, (_, i) =>
+  event(String(first + i), 'player.fined', labelled(first + i) ? String(UTC + (first + i) * 1_000) : null));
 
 describe('readTripSeeds', () => {
   it('lists the open trips of the game with the storage filter, page by page, and reads each session once', async () => {
@@ -131,13 +142,51 @@ describe('readTripSeeds', () => {
     expect(f.calls).toEqual([
       ['listTrips', {game: 'ets2', outcome: 'open', limit: 100}],
       ['listTrips', {game: 'ets2', outcome: 'open', limit: 100, cursor: '1'}],
-      ['listEvents', S1, {limit: 500}],
+      // Advisory review: each session is read from its earliest open trip's opening event (eventSeq 1 for S1, 7 for S2).
+      ['listEvents', S1, {limit: 500, afterEventSeq: '0'}],
       ['listEvents', S1, {limit: 500, afterEventSeq: '500'}],
       ['getEvent', S1, '1'],
       ['getEvent', S1, '503'],
-      ['listEvents', S2, {limit: 500}],
+      ['listEvents', S2, {limit: 500, afterEventSeq: '6'}],
+      // S2 has no usable label at or after eventSeq 7, so the earlier range is read for the label only.
+      ['listEvents', S2, {limit: 500, afterEventSeq: '0'}],
       ['getEvent', S2, '7']
     ]);
+    expect(result).toEqual({ok: true, value: pureSeeds([trip({jobConfigurationEventSeq: '1', openedEventSeq: '1'}),
+      trip({tripUuid: T2, jobConfigurationEventSeq: '503', openedEventSeq: '503'}), trip({tripUuid: T3, pluginSessionId: S2, jobConfigurationEventSeq: '7', openedEventSeq: '7'})],
+    {[S1]: s1, [S2]: s2})});
+  });
+
+  it('reads a session from its earliest opening event and never reads the 699 events before it when a label follows', async () => {
+    // T1 opens at 900 and T2 at 700 (listed in that order); 1-699 are labelled fines, a clear at 950 is the last label.
+    const s1 = [...run(1, 699, () => true), configured('700', String(UTC + 700_000)), ...run(701, 199), configured('900', String(UTC + 900_000), otherJob()),
+      ...run(901, 49), event('950', 'job.cleared', String(UTC + 950_000)), ...run(951, 250)];
+    const trips = [trip({jobConfigurationEventSeq: '900', openedEventSeq: '900'}), trip({tripUuid: T2, jobConfigurationEventSeq: '700', openedEventSeq: '700'})];
+    const f = reader([trips], {[S1]: s1});
+    const result = await readTripSeeds(f.reader, 'ets2');
+    expect(result).toEqual({ok: true, value: [
+      {tripUuid: T1, pluginSessionId: S1, game: 'ets2', jobKey: jobKey(otherJob()), startedUtcMs: UTC, recordingCompleteness: 'complete', lastObservedUtcMs: UTC + 950_000, awaitingOutcome: true},
+      {tripUuid: T2, pluginSessionId: S1, game: 'ets2', jobKey: jobKey(job()), startedUtcMs: UTC, recordingCompleteness: 'complete', lastObservedUtcMs: UTC + 950_000, awaitingOutcome: true}
+    ]});
+    expect(result).toEqual({ok: true, value: pureSeeds(trips, {[S1]: s1})});
+    expect(f.calls.filter(call => call[0] === 'listEvents')).toEqual([['listEvents', S1, {limit: 500, afterEventSeq: '699'}], ['listEvents', S1, {limit: 500, afterEventSeq: '1199'}]]);
+    expect(f.served.every(eventSeq => eventSeq >= 700n)).toBe(true);
+    expect(f.served).toHaveLength(501);
+  });
+
+  it('falls back to the events before the opening for the label only when none at or after it is usable', async () => {
+    // The trip opens at 600; the last usable label is at 550, before it. 10 has an older label; nothing after 550 is labelled.
+    const s1 = [...run(1, 599, eventSeq => eventSeq === 10 || eventSeq === 550), configured('600', null), ...run(601, 500)];
+    const trips = [trip({jobConfigurationEventSeq: '600', openedEventSeq: '600'})];
+    const f = reader([trips], {[S1]: s1});
+    const result = await readTripSeeds(f.reader, 'ets2');
+    expect(result).toEqual({ok: true, value: [
+      {tripUuid: T1, pluginSessionId: S1, game: 'ets2', jobKey: jobKey(job()), startedUtcMs: UTC, recordingCompleteness: 'complete', lastObservedUtcMs: UTC + 550_000}
+    ]});
+    expect(result).toEqual({ok: true, value: pureSeeds(trips, {[S1]: s1})});
+    // The forward read from 599, then the earlier range from the start until a page reaches the opening event.
+    expect(f.calls.filter(call => call[0] === 'listEvents')).toEqual([['listEvents', S1, {limit: 500, afterEventSeq: '599'}], ['listEvents', S1, {limit: 500, afterEventSeq: '1099'}],
+      ['listEvents', S1, {limit: 500, afterEventSeq: '0'}], ['listEvents', S1, {limit: 500, afterEventSeq: '500'}]]);
   });
 
   it('asks for the requested game and returns no seeds when it has no open trip', async () => {
