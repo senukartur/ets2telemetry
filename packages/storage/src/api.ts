@@ -64,6 +64,11 @@ export type EventReference = 'this-event' | {eventSeq: Uint64};
 /**
  * Trip changes computed by the domain (ET-014) and applied in the same transaction as the event or gap that caused
  * them, only when that event or gap is inserted for the first time. Any failure rolls back the event as well.
+ *
+ * Every trip reference (trip.update, trip.close, event.attribute, completeness.add and sample tripUuid) must name a
+ * trip of the current session's game; otherwise the command is INVALID_INPUT. A trip of an earlier plugin session of
+ * the same game is allowed, because a new session closes it with close_reason 'restart'. A closed trip accepts only
+ * trip.update of recordingCompleteness and observedDistanceM.
  */
 export type TripEffect =
   | {kind: 'trip.open'; tripUuid: string; game: 'ets2' | 'ats'; gameMode: Pick<GameMode, 'mode' | 'method' | 'confidence'>; gameModeAmbiguous?: boolean;
