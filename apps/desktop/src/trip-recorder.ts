@@ -48,6 +48,9 @@ function reading(message: ReadingMessage): TripInput {
  *   item is stepped again from it: no effect of an earlier commit is lost or repeated, and effects queued by the
  *   reconnection (such as its not-connected interval) may be added (R7). A gap whose `previouslyCoveredThrough` differs
  *   from the coverage read before the commit, or is missing, is not adopted and fails with TRIP_COVERAGE_MISMATCH.
+ *   This is detection after the commit, not prevention: the gap row and its effects are already stored. The failure
+ *   stops durable delivery (no ACK, live-only), and a later cold start seeds from those rows. Under the single-writer
+ *   rule it should never happen.
  * - `observe` (R5): a checkpoint steps `checkpoint` and then its state as a reading; a snapshot steps a reading.
  * - `restoreLoss` (R9): one session-level `restore-loss` interval for the eventSeq range the producer released beyond
  *   storage, recorded with `ifAbsent` so a service restart in the same plugin session adds no second row.
