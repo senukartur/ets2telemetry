@@ -424,3 +424,24 @@ ET-015b PR-3 implementation update on October 16, 2026:
 - **Production is unchanged.** `GAME_HISTORY_RECORDING` stays `false`. See [the telemetry service v1 ingestion](docs/telemetry-service-v1.md) and [ET-015b validation](docs/validation/et-015b.md).
 
 ET-015b PR-4 implementation update on October 16, 2026: the development and packaged `recording` runtime smokes now assert exact one-second sample rows written by the running application. The restarted service and the run-B service each store one hand-written row after their checkpoint baselines, written by their explicit exits' `recording-flush` unless the 5 s flush wrote it first, and a paused second gets no row. The killed first service's second-1000 row stays optional. No product code changed. The 5 s flush, batches, backlog drops and storage skips are covered only by unit and storage tests, and every real-game check remains pending ([ET-015b validation](docs/validation/et-015b.md)).
+
+## ET-015c authorization — October 16, 2026
+
+Under the owner's standing delegation of October 15, 2026 (quoted in the ET-015a authorization above), the coordinator started ET-015c, integrated recovery. It adopted the architect's decisions G1–G20 ([concept.md](concept.md#et-015c-authorization--october-16-2026)) as coordinator decisions; the owner did not review them individually. For ET-015c only, this supersedes three earlier statements; earlier dated text is unchanged:
+- that ET-015c is not authorized;
+- ET-011 C9's statement that recording is always reported as unavailable;
+- ET-015a's statement that it makes no preload/IPC or renderer change.
+
+ET-015c is four PRs:
+- the recording runtime extracted from the service, with real-worker proofs of the flush wait and the R10 upgrade;
+- a commit backlog bound of 512 items, so that a full redelivery is never refused;
+- a validated recording status from the service to main in `AppState.health.recording`;
+- its dashboard and tray presentation, with runtime smoke assertions.
+
+No IPC channel, bridge method or preload code is added; only the `AppState` payload type is wider. There is no wire, schema, migration, native, overlay or settings change, and `GAME_HISTORY_RECORDING` stays `false`.
+
+ET-015c settles two items of the enablement list:
+- the backlog bound (G11);
+- `TRIP_COVERAGE_MISMATCH`, which stays detection after the commit (G15).
+
+The enablement PR still needs the v0 retirement, real-game v1 evidence and the S-1/S-2 decision in ET-016. ET-016 and later phases are not authorized by this paragraph. No game, TruckersMP, display or performance claim follows.

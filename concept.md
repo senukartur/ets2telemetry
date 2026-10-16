@@ -813,3 +813,37 @@ Under the owner's standing delegation of October 15, 2026 (quoted in the ET-015a
 | H17 | Expected rows are written by hand. Tests use controlled clocks and fake timers, the real storage worker, actual pipes and the reactive simulator |
 
 Recording of real game history stays gated until the separate enablement PR described in the ET-015a authorization. ET-015c, ET-016 and later phases are not authorized by this section. No game, TruckersMP, display or performance claim follows from synthetic or local tests.
+
+## ET-015c authorization — October 16, 2026
+
+Under the owner's standing delegation of October 15, 2026 (quoted in the ET-015a authorization above), the coordinator started ET-015c, integrated recovery. It adopted the architect's decisions G1–G20 below as coordinator decisions; the owner did not review them individually and may revise them. For ET-015c only, this supersedes three earlier statements; earlier dated text is unchanged:
+- that ET-015c is not authorized;
+- C9's statement that recording is always reported as unavailable;
+- ET-015a's statement that it makes no preload/IPC or renderer change.
+
+ET-015c shows the user a truthful recording status. It fixes a queue-pressure defect that lost events during reconnections. It also proves, with real pipes and the real storage worker, the recovery paths that only unit tests covered before.
+
+| # | Decision |
+| --- | --- |
+| G1 | Four PRs:<br>• PR-1 extracts the recording runtime and adds integration proofs, with no behaviour change;<br>• PR-2 fixes the backlog bound;<br>• PR-3 reports the recording status from the service to main;<br>• PR-4 adds the dashboard and tray presentation and the smokes.<br>PR-2 may run beside PR-1 |
+| G2 | `AppHealth.recording` becomes a discriminated union with fixed enums only, and no text, paths or identifiers:<br>• `disabled`, `unknown`, or a state (`opening`, `waiting`, `recording`, `paused`, `interrupted`, `retrying`, `not-recorded-source`, `live-only`, `stopped`);<br>• with that state, the target (`history`, `synthetic`, `replay`), a code from a closed set, the committed loss counts and the current trip's phase and completeness.<br>`LiveTelemetry.recording` stays `false` |
+| G3 | The service derives the status with a pure, ordered rule set. `recording` needs all three: the database open, the durable cursor active and fresh v1 data. Main never derives it, and the live projection still carries no durable status (F2) |
+| G4 | The service posts `{type: 'recording', status}` on its parent port. Main accepts it only from the current child and validates it strictly. An invalid payload sets `unknown` and logs `RECORDING_STATUS_REJECTED`; it is not fatal. Main pushes the status through the existing `app:state` path. No channel, bridge method or preload code is added |
+| G5 | Event-driven: state changes are coalesced to at most four per second, and loss changes are sent at once. Main sets `unknown` initially and whenever the service fails, exits or restarts. There is no heartbeat, so a hung service stays pending for ET-019 |
+| G6 | Losses count only committed effects:<br>• new gap coverage, and restore-loss ranges;<br>• the interval kinds;<br>• dropped samples.<br>Duplicates, covered and conflict results never count. Main adds the totals across service restarts, giving totals since the application started. The database stays authoritative, and the journal is ET-016 |
+| G7 | No `storage-unavailable` interval is written. An outage reaches history through the producer's gap causes, and the live status shows it as it happens |
+| G8 | The dashboard's Application status card and the tray show a headline from a pure text builder. The card adds a target note, a current-trip line and loss lines that appear only when non-zero, plus an alert for `retrying`, `stopped` and `live-only`. The overlay is unchanged |
+| G9 | `DISK_FULL`, `IO_ERROR` and `DATABASE_LOCKED` stay retryable. A retry code is set by a retryable commit or sample failure and cleared only by a successful write. Recovery uses the existing backoff and the 5 s sample timer |
+| G10 | Permission and the other unavailable codes give `stopped` for the service lifetime, with no automatic re-open. Recovery is a restart (ET-019) |
+| G11 | `MAX_PENDING_COMMITS` goes from 256 to 512, twice the producer's retained entries, so an ended connection's leftover work plus a full redelivery fits. A true stall still closes the connection as retryable `BACKLOG_FULL` |
+| G12 | After a service restart the status is `unknown` until the new service reports. A renderer reload or crash gets the full `AppState` on subscribe. Port reattachment cannot change the status |
+| G13 | Shutdown phases and budgets are unchanged. The flush wait is proven with the real worker and the real shutdown sequence. The packaged runtime cannot hold a commit at exit, and that limit is recorded |
+| G14 | R10 is proven through the production wiring with an open held by the test. The live-only window's events arrive as a committed `noDurableConsumer` gap |
+| G15 | `TRIP_COVERAGE_MISMATCH` stays detection after the commit. The exclusive lock, the single worker, one command in flight and the single-instance lock make a coverage change between the read and the commit impossible. The item leaves the enablement list |
+| G16 | Plugin exit writes no new interval. T11 keeps the uncertainty: the next plugin session closes the open trip as `restart`, partial |
+| G17 | With the application absent there is no spool and no offline history. The checkpoint hydrates and the offline gap is committed and counted |
+| G18 | The storage close stall over 2 s is deferred to ET-019 |
+| G19 | The recording gate is unchanged. The enablement PR still needs the v0 retirement, real-game v1 evidence, S-1/S-2 in ET-016, and real full-volume and ACL evidence |
+| G20 | Tests use hand-written tables and rows, fake timers, the production wiring in process with the real or fault worker, the reactive simulator on real pipes, and runtime smoke assertions. Waits count commits, ACKs or holds; real-time bounds are only named hang guards |
+
+`GAME_HISTORY_RECORDING` stays `false`. ET-016 and later phases are not authorized by this section. No game, TruckersMP, display or performance claim follows from synthetic or local tests.
