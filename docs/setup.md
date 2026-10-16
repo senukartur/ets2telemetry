@@ -159,6 +159,16 @@ It checks that the plugin accepts the service policy the broker provisions, that
 
 The telemetry service runs protocol v1 beside v0, live-only. For a `synthetic` or `replay` selection it connects v1 only to an endpoint given in `ETS2TELEMETRY_SOURCE_PIPE_V1`, which must match `\\.\pipe\ETS2Telemetry-SYNTHETIC-TEST-v1-{pid}-{uuid}`, for example one served by the [v1 simulator](simulator-v1.md#named-pipe-serving). It is the v1 counterpart of `ETS2TELEMETRY_SOURCE_PIPE` and is read by the service at start; without it, a fixture selection leaves v1 unavailable. The v1 state stays inside the service: the dashboard and overlay still show v0.
 
+Since ET-015a PR-3 the service can record synthetic or replay sources into a separate database. Set `ETS2TELEMETRY_RECORDING` in the shell that launches the application, together with `ETS2TELEMETRY_SOURCE_PIPE_V1`:
+
+```powershell
+$env:ETS2TELEMETRY_RECORDING = 'synthetic:my-run'   # or 'replay:<name>'; name [a-z0-9-]{1,64}
+npm run dev
+Remove-Item Env:ETS2TELEMETRY_RECORDING
+```
+
+The service then opens `%LOCALAPPDATA%\ETS2Telemetry\synthetic\<name>.sqlite` with that purpose **instead of** the history database, and only the matching `synthetic` or `replay` selection requests durable v1 delivery, once that database is open. Game selections stay live-only, the history database is neither opened nor created, and the dashboard and overlay are unchanged. Any other value (for example `history`, an upper-case name or a path) logs `RECORDING_TARGET_REJECTED` and keeps the default: history opened, nothing recorded. Real game history is not recorded in this version. See [the recording gate](telemetry-service-v1.md#recording-gate-et-015a).
+
 ## Official SDK acquisition
 
 Download the official [SCS Telemetry SDK 1.15 archive](https://download.eurotrucksimulator2.com/scs_sdk_1_15.zip) from the source linked in `concept.md`. Review and retain its license before use or redistribution. Do not assume archive 1.15 is a telemetry API or game version. ET-003 will pin archive checksum, included API versions, headers, and license treatment. ET-001 has no SDK dependency and does not vendor SDK files or expose SCS initialization exports.

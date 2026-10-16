@@ -65,11 +65,11 @@ The service stops through an ordered sequence (`apps/desktop/src/shutdown-sequen
 
 | Phase | Steps (budget) |
 | --- | --- |
-| `intake` | `ingestion` (1000 ms), `capture` (1000 ms) |
-| `flush` | none yet; ET-015 adds recording flush |
+| `intake` | `ingestion` (1000 ms), `capture` (1000 ms), `v1-ingestion` (1000 ms; ends the protocol v1 source and waits for its broker, ET-006b; it never waits for storage, which is the `recording-flush` step's job) |
+| `flush` | `recording-flush` (500 ms, ET-015a PR-3): drops queued durable v1 work and waits for the one storage command in flight, so the database closes after it and no ACK is written after the source stopped; with no recording target it has nothing to wait for |
 | `storage` | `storage-probe` (1000 ms), `history-storage` (1000 ms, closes the history database; ET-013 PR-2) |
 
-Steps of one phase run in parallel; each is bounded by its own budget, so a phase takes at most its largest budget. Registration fails if the sum of phase maxima exceeds `SERVICE_STOP_BUDGET_MS` (2500 ms), which keeps the sequence inside main's 3000 ms kill deadline. Every step, successful ones included, logs `SHUTDOWN_STEP` with fixed `phase`, `name`, `outcome` (`ok`, `failed` or `timeout`) and `ms` facts; a failed or late step does not stop the sequence. The service then sends exactly one `{type: 'stopped', clean}` message and exits 0 when clean or 1 otherwise.
+Steps of one phase run in parallel; each is bounded by its own budget, so a phase takes at most its largest budget. Registration fails if the sum of phase maxima exceeds `SERVICE_STOP_BUDGET_MS` (2500 ms), which keeps the sequence inside main's 3000 ms kill deadline. Since ET-015a PR-3 the maxima are 1000 (`intake`) + 500 (`flush`) + 1000 (`storage`) = 2500 ms, the whole budget; a further step must fit inside an existing phase maximum. Every step, successful ones included, logs `SHUTDOWN_STEP` with fixed `phase`, `name`, `outcome` (`ok`, `failed` or `timeout`) and `ms` facts; a failed or late step does not stop the sequence. The service then sends exactly one `{type: 'stopped', clean}` message and exits 0 when clean or 1 otherwise.
 
 ## Service failures after readiness
 

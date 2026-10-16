@@ -5,6 +5,7 @@ import type {DesktopBridge, LiveTelemetry} from '../../packages/contracts/src';
 import {initialLive} from '../../apps/desktop/src/live-state';
 import {LiveSubscriptions} from '../../apps/desktop/src/live-subscriptions';
 import {validateMessage} from '../../packages/contracts/src/protocol-v0';
+import {smokePair} from '../shared/live-v1-fixtures';
 
 class RendererPort {
   onmessage?: (event: {data: unknown}) => void;
@@ -108,6 +109,53 @@ it('does not expose the previous observation as current while a replacement port
   const replacement = attach(); expect(consume.mock.lastCall?.[0].fresh).toBe(false);
   replacement.deliver(connected()); expect(consume.mock.lastCall?.[0].fresh).toBe(true);
   stop();
+});
+// ET-010c decisions F2 and F3: the preload validates the v1 projection again and expires it on its own clock.
+function v0Renewed(update: LiveTelemetry, monotonicNs: number): LiveTelemetry {
+  return {...update, observation: {...update.observation!, receivedMonotonicMs: monotonicNs, capture: {...update.observation!.capture, monotonicNs: String(monotonicNs)}}};
+}
+it('expires v1 data 500 ms after its last new boundary although new v0 captures keep arriving', async () => {
+  const consume = vi.fn(); const stop = bridge.subscribeLive(consume); const port = attach();
+  port.deliver(smokePair());
+  for (let step = 1; step <= 4; step++) {await vi.advanceTimersByTimeAsync(100); port.deliver(v0Renewed(smokePair(), step * 100), step + 1);}
+  await vi.advanceTimersByTimeAsync(99);
+  expect(consume.mock.lastCall?.[0]).toMatchObject({fresh: true, v1: {fresh: true, status: 'connected'}});
+  await vi.advanceTimersByTimeAsync(1);
+  expect(consume.mock.lastCall?.[0]).toMatchObject({fresh: true, status: 'connected', v1: {fresh: false, status: 'stale', reason: 'Renderer has no recent v1 SDK capture'}});
+  // A new v1 boundary renews it; the expired v0 clock is not renewed by it.
+  await vi.advanceTimersByTimeAsync(400);
+  expect(consume.mock.lastCall?.[0]).toMatchObject({fresh: false, reason: 'Renderer has no recent SDK capture'});
+  const renewed = v0Renewed(smokePair({receivedMonotonicMs: 900}), 400);
+  port.deliver(renewed, 6);
+  expect(consume.mock.lastCall?.[0]).toMatchObject({fresh: false, v1: {fresh: true, status: 'connected'}});
+  stop(); expect(vi.getTimerCount()).toBe(0);
+});
+it('never passes an invalid or foreign v1 projection to the listener and keeps the v0 update', () => {
+  const consume = vi.fn(); const stop = bridge.subscribeLive(consume); const port = attach();
+  const withWindow = smokePair();
+  (withWindow.v1!.observation!.state as unknown as Record<string, unknown>).window = {available: false, reason: 'not-observed'};
+  const foreign = smokePair({selection: 'replay'});
+  const extra = smokePair(); (extra.v1 as unknown as Record<string, unknown>).durable = {state: 'off'};
+  [withWindow, foreign, extra].forEach((update, index) => {
+    port.deliver(update, index + 1);
+    expect(consume.mock.lastCall?.[0]).not.toHaveProperty('v1');
+    expect(consume.mock.lastCall?.[0]).toMatchObject({selection: 'synthetic', status: 'connected', fresh: true});
+  });
+  expect(port.closed).toBe(false);
+  stop();
+});
+it('marks v1 data stale when the subscription closes or a replacement port awaits data', () => {
+  const consume = vi.fn(); const stop = bridge.subscribeLive(consume);
+  const first = attach(); first.deliver(smokePair()); first.close();
+  expect(consume.mock.lastCall?.[0]).toMatchObject({fresh: false, v1: {fresh: false, status: 'stale', reason: 'Live subscription closed; current interval is unknown'}});
+  // Only v1 is fresh: the replacement port stales it and leaves the v0 status alone.
+  const waiting = smokePair({}, {status: 'waiting', fresh: false, reason: 'Awaiting selected source'}); waiting.observation!.windowFresh = false;
+  const second = attach(); second.deliver(waiting);
+  expect(consume.mock.lastCall?.[0]).toMatchObject({status: 'waiting', v1: {fresh: true}});
+  attach();
+  expect(consume.mock.lastCall?.[0]).toMatchObject({status: 'waiting', reason: 'Awaiting selected source',
+    v1: {fresh: false, status: 'stale', reason: 'Replacement live subscription awaits a current observation'}});
+  stop(); expect(vi.getTimerCount()).toBe(0);
 });
 it('preserves the frozen narrow bridge and rejects privileged source values before IPC', async () => {
   expect(Object.isFrozen(bridge)).toBe(true); expect(Object.keys(bridge).sort()).toEqual(['beginOverlayEdit', 'exitApplication', 'finishOverlayEdit', 'getAppState', 'getStatus',

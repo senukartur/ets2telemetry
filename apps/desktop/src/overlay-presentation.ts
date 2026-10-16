@@ -1,7 +1,7 @@
 import type {LiveTelemetry, OverlayPresentation, OverlaySectionId, OverlaySectionView, OverlaySettings, UnitProfiles} from '../../../packages/contracts/src';
 import {resolveDisplayUnits} from '../../../packages/telemetry-core/src/display-profile';
-import {buildLiveView, carriesField, type LiveField, type LiveFieldId} from '../../../packages/telemetry-core/src/live-view';
-import {normalizeV0State} from '../../../packages/telemetry-core/src/normalize-v0';
+import {carriesField, type LiveFieldId} from '../../../packages/telemetry-core/src/live-view';
+import {liveSources, V1_JOB_FIELDS} from './live-sources';
 import {DEFAULT_OVERLAY_SETTINGS, OVERLAY_SECTION_IDS} from './overlay-sections';
 import {DEFAULT_UNIT_PROFILES, displayGame, isExplicitFixture, profileFor, speedNumber, speedUnit, volumeNumber, volumeUnit} from './unit-profiles';
 
@@ -44,6 +44,13 @@ const BASELINE_SECTIONS: ReadonlySet<OverlaySectionId> = new Set<OverlaySectionI
  * speed and fuel, becomes `unavailable`, so the layout does not jump and no stale value looks current. Sections that
  * were hidden stay hidden until the data is current again, as in the overlay preload's own expiry (`staleOverlay`).
  *
+ * Protocol v1 (ET-010c decision F7): parts v0 does not carry come from the v1 projection through the same combiner as
+ * the dashboard card (live-sources.ts). The overall state stays v0's, and a v1 part has a value only while the v0 data
+ * is current, the v1 data is current and, for job parts, both describe the same job. A section shown before whose v1
+ * data is no longer eligible becomes `unavailable`, also when its v1 projection is lost while the same v0 source
+ * continues; an update without a v0 observation clears it. One never shown stays out; a mixed section keeps its v0 part. v1
+ * never authorizes placement or visibility: main places the overlay from the v0 observation's window only.
+ *
  * `editing` (ET-012b) only marks the overlay edit mode for the renderer; it changes no section or value.
  */
 export function overlayPresentation(live: LiveTelemetry, units: UnitProfiles = DEFAULT_UNIT_PROFILES, overlay: OverlaySettings = DEFAULT_OVERLAY_SETTINGS,
@@ -54,27 +61,39 @@ export function overlayPresentation(live: LiveTelemetry, units: UnitProfiles = D
   const current = live.fresh && (live.status === 'connected' || live.status === 'paused') &&
     (explicitFixture || (observation?.source.origin === 'game' && observation.source.game === live.selection));
   const state = observation?.state;
-  const normalized = state ? normalizeV0State(state) : undefined;
-  const view = buildLiveView(live, normalized, resolveDisplayUnits(game, {profile}));
-  const fields = new Map<LiveFieldId, LiveField>(view.sections.flatMap(section => section.fields.map(field => [field.id, field] as const)));
-  const valueOf = (id: LiveFieldId) => {const field = fields.get(id); return field?.state === 'value' ? field.text : undefined;};
-  const protocol = normalized?.protocol ?? 'v0';
+  const sources = liveSources(live, resolveDisplayUnits(game, {profile}));
+  const valueOf = (id: LiveFieldId) => {const field = sources.field(id); return field.state === 'value' ? field.text : undefined;};
+  // A part protocol v0 does not carry needs a v1 observation of this selection and origin (decision F7).
+  const carried = (part: LiveFieldId) => carriesField('v0', part) || sources.v1Carried;
+  // A v1 part that would have a value were v1 current and, for the job, the same job as v0's. Without a v0 job the job
+  // parts have no data, so their section is left out rather than kept as a dash.
+  const ineligible = (part: LiveFieldId) => !carriesField('v0', part) &&
+    (V1_JOB_FIELDS.has(part) ? sources.job === 'mismatch' || (sources.job === 'match' && !sources.v1Current) : !sources.v1Current);
   const shown = new Set<OverlaySectionId>(previous?.sections.map(section => section.id) ?? []);
   const sections: OverlaySectionView[] = [];
   for (const id of OVERLAY_SECTION_IDS) {
     const {parts, detail} = SECTION_FIELDS[id];
-    if (!overlay.sections[id] || !parts.some(part => carriesField(protocol, part))) continue;
+    if (!overlay.sections[id]) continue;
+    if (!parts.some(carried)) {
+      // A shown v1 section whose v1 carriage is lost while the same v0 source continues (main stripped an invalid
+      // projection, or the v1 origin or game stopped matching) keeps its dash (ET-012a L5). An update without a v0
+      // observation (a selection change, a service failure or restart, a lost channel) clears it, as do v1 data never
+      // carried and a disabled section.
+      if (shown.has(id) && observation) sections.push({id, state: 'unavailable'});
+      continue;
+    }
     if (!current) {
       if (shown.has(id) || BASELINE_SECTIONS.has(id)) sections.push({id, state: 'unavailable'});
       continue;
     }
     const texts = parts.map(valueOf).filter((text): text is string => text !== undefined);
     if (!texts.length) {
-      if (BASELINE_SECTIONS.has(id)) sections.push({id, state: 'unavailable'});
+      // A section shown before keeps a dash while its v1 data is not current or describes another job.
+      if (BASELINE_SECTIONS.has(id) || (shown.has(id) && parts.some(ineligible))) sections.push({id, state: 'unavailable'});
       continue;
     }
     const detailText = detail ? valueOf(detail) : undefined;
-    const rpm = normalized?.engineRpm;
+    const rpm = sources.v0State?.engineRpm;
     const ring = id === 'rpm' && rpm?.state === 'value' && Number.isFinite(rpm.value) ? Math.min(1, Math.max(0, rpm.value / RPM_RING_FULL_SCALE)) : undefined;
     sections.push({id, state: 'value', text: texts.join(', '), ...(detailText ? {detail: detailText} : {}), ...(ring === undefined ? {} : {ring})});
   }
@@ -86,7 +105,7 @@ export function overlayPresentation(live: LiveTelemetry, units: UnitProfiles = D
     fuelUnit: volumeUnit(profile),
     freshness: current ? 'current' : live.status === 'stale' ? 'stale' : 'unavailable',
     layout: overlay.layout,
-    paused: current && view.connection.paused,
+    paused: current && sources.v0View.connection.paused,
     sections,
     editing
   };

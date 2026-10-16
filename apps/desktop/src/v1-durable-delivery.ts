@@ -23,9 +23,11 @@ type SnapshotMessage = Extract<ReadingMessage, {kind: 'snapshot'}>;
 /** Fixed codes of failures that do not come from the sink. */
 export type DeliveryFailureCode = 'COVERAGE_MISMATCH' | 'ACK_AHEAD_OF_STORAGE' | 'BACKLOG_FULL';
 /**
- * `off`: no sink, or this connection is live-only. `pending`: a durable connection waits for its session to open, or
- * reconnects after a retryable failure. `active`: the current session's cursor is open. `failed`: durable delivery is
- * unavailable for the service lifetime, or (ACK_AHEAD_OF_STORAGE) for one plugin session.
+ * `off`: no sink, or the current connection did not request durable delivery (its selection is not durable, storage is
+ * not ready, or no hello was sent yet); V1Ingestion reports it, the pipeline itself never does. `pending`: a durable
+ * connection waits for its session to open, or reconnects after a retryable failure. `active`: the current session's
+ * cursor is open. `failed`: durable delivery is unavailable for the service lifetime, or (ACK_AHEAD_OF_STORAGE) for one
+ * plugin session; it is reported on the live-only connections that follow as well.
  */
 export type DurableStatus = {state: 'off'} | {state: 'pending'; retryCode?: string} | {state: 'active'} | {state: 'failed'; code: string};
 /**

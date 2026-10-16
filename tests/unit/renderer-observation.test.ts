@@ -2,8 +2,10 @@ import type {Page} from '@playwright/test';
 import {runInNewContext} from 'node:vm';
 import {afterEach, describe, expect, it, vi} from 'vitest';
 import {
-  completeLiveObservation, currentTelemetryObservation, notCurrentLiveObservation, SYNTHETIC_V0_HIDDEN_ROWS, SYNTHETIC_V0_LIVE_ROWS, SYNTHETIC_V0_VALUE_IDS,
-  waitForCompleteLive, waitForCurrentTelemetry, waitForNotCurrentLive, type RendererObservation
+  completeLiveObservation, currentTelemetryObservation, notCurrentLiveObservation, overlayOverflow, overlayV1Observation, SYNTHETIC_V0_HIDDEN_ROWS,
+  SYNTHETIC_V0_LIVE_ROWS, SYNTHETIC_V0_VALUE_IDS, SYNTHETIC_V0V1_HIDDEN_ROWS, SYNTHETIC_V0V1_LIVE_ROWS, SYNTHETIC_V1_OVERLAY_CURRENT, SYNTHETIC_V1_OVERLAY_STOPPED,
+  SYNTHETIC_V1_OVERLAY_V0_STALE, SYNTHETIC_V1_OVERLAY_V1_STALE, SYNTHETIC_V1_VALUE_IDS, v1NotCurrentObservation, waitForCompleteLive, waitForCurrentTelemetry,
+  waitForNotCurrentLive, type RendererObservation
 } from '../../scripts/ci/renderer-observation.mjs';
 
 const current = {status: 'connected: Validated current observation', speed: 'Speed: 90.0 km/h', fuel: 'Fuel: 73.0 L'};
@@ -150,5 +152,91 @@ describe('ET-010b not-current live card observation', () => {
   ])('rejects %s', (_name, change) => {
     const elements = notCurrentElements(); change(elements); stubDocument(elements);
     expect(notCurrentLiveObservation(stale)).toBe(false);
+  });
+});
+
+// ET-010c: the v1 card and overlay predicates.
+describe('ET-010c combined live card observation', () => {
+  it('accepts the combined rows with the v1 status line and rejects a v1 row left over in the v0-only expectation', () => {
+    const elements = Object.fromEntries(SYNTHETIC_V0V1_LIVE_ROWS.map(([id, text]) => [id, one(text, {box: {width: 100, height: 20, top: 900}})]));
+    stubDocument(elements);
+    expect(completeLiveObservation({rows: SYNTHETIC_V0V1_LIVE_ROWS, hidden: SYNTHETIC_V0V1_HIDDEN_ROWS})).toMatchObject({
+      'live-cargo': 'Synthetic Cargo', 'live-v1-status': 'connected: Validated current observation', 'live-event-loss-note': 'this version records no gameplay events'});
+    expect(completeLiveObservation({rows: SYNTHETIC_V0_LIVE_ROWS, hidden: SYNTHETIC_V0_HIDDEN_ROWS})).toBe(false);
+  });
+});
+const v1NotCurrentElements = (): Record<string, FakeElement[]> => ({
+  'live-v1-status': one('stale: Renderer has no recent v1 SDK capture', {box: {width: 100, height: 20, top: 900}}), 'speed': one('Speed: 90.0 km/h'),
+  ...Object.fromEntries(SYNTHETIC_V1_VALUE_IDS.flatMap(id => [[id, one('unavailable', {box: {width: 100, height: 20, top: 900}})], [`${id}-reason`, one('not current')]]))
+});
+describe('ET-010c not-current v1 observation', () => {
+  const expectedV1 = {values: SYNTHETIC_V1_VALUE_IDS, status: '^stale:', speed: 'Speed: 90.0 km/h'};
+  it('accepts unavailable v1 rows below the fold beside a current legacy speed line', () => {
+    stubDocument(v1NotCurrentElements());
+    expect(v1NotCurrentObservation(expectedV1)).toMatchObject({status: 'stale: Renderer has no recent v1 SDK capture', speed: 'Speed: 90.0 km/h', 'live-route-remaining': 'unavailable'});
+  });
+  it.each<[string, Change]>([
+    ['a connected v1 status', (elements: Record<string, FakeElement[]>) => {elements['live-v1-status'] = one('connected: Validated current observation');}],
+    ['a missing v1 status', (elements: Record<string, FakeElement[]>) => {delete elements['live-v1-status'];}],
+    ['an unavailable legacy speed', (elements: Record<string, FakeElement[]>) => {elements.speed = one('Speed: unavailable');}],
+    ['an offscreen legacy speed', (elements: Record<string, FakeElement[]>) => {elements.speed = one('Speed: 90.0 km/h', {box: {width: 100, height: 20, top: 500}});}],
+    ['a v1 row still showing its value', (elements: Record<string, FakeElement[]>) => {elements['live-route-remaining'] = one('151.0 km'); delete elements['live-route-remaining-reason'];}],
+    ['a v1 row with another reason', (elements: Record<string, FakeElement[]>) => {elements['live-position-reason'] = one('not yet observed');}],
+    ['a missing v1 row', (elements: Record<string, FakeElement[]>) => {delete elements['live-game-mode'];}]
+  ])('rejects %s', (_name, change) => {
+    const elements = v1NotCurrentElements(); change(elements); stubDocument(elements);
+    expect(v1NotCurrentObservation(expectedV1)).toBe(false);
+  });
+});
+
+/** A fake overlay document: text by test id, and the root's data attributes. */
+function stubOverlay(texts: Record<string, string>, freshness = 'current', duplicate?: string) {
+  vi.stubGlobal('document', {querySelectorAll: (selector: string) => {
+    const id = /^\[data-testid="([^"]+)"\]$/.exec(selector)?.[1];
+    if (!id) throw new Error(`unexpected selector ${selector}`);
+    if (id === 'overlay-root') return [{getAttribute: (name: string) => name === 'data-freshness' ? freshness : null}];
+    if (!(id in texts)) return [];
+    const element = {textContent: texts[id]};
+    return id === duplicate ? [element, element] : [element];
+  }});
+}
+const overlayTexts = (expected: Readonly<Record<string, string | null>>) =>
+  Object.fromEntries(Object.entries(expected).filter(([key, text]) => key !== 'freshness' && text !== null)) as Record<string, string>;
+describe('ET-010c overlay v1 observation', () => {
+  it.each([
+    ['current', SYNTHETIC_V1_OVERLAY_CURRENT, 'current'],
+    ['v0 stale', SYNTHETIC_V1_OVERLAY_V0_STALE, 'stale'],
+    ['v1 stale', SYNTHETIC_V1_OVERLAY_V1_STALE, 'current'],
+    ['stopped', SYNTHETIC_V1_OVERLAY_STOPPED, 'unavailable']
+  ])('accepts the %s overlay', (_name, expected, freshness) => {
+    stubOverlay(overlayTexts(expected), freshness);
+    expect(overlayV1Observation(expected)).toEqual({...expected});
+  });
+  it('writes a dash, never zero, for every unavailable v1 section', () => {
+    for (const expected of [SYNTHETIC_V1_OVERLAY_V0_STALE, SYNTHETIC_V1_OVERLAY_STOPPED]) {
+      for (const id of ['overlay-origin', 'overlay-distance-remaining', 'overlay-deadline']) expect(expected[id]).toBe('—');
+    }
+  });
+  it.each<[string, (texts: Record<string, string>) => string | undefined]>([
+    ['a wrong text', texts => {texts['overlay-origin'] = 'Synthetic City A'; return undefined;}],
+    ['a missing section', texts => {delete texts['overlay-deadline']; return undefined;}],
+    ['a detail that should be absent', texts => {texts['overlay-cargo-detail'] = '18.0 t'; return undefined;}],
+    ['a duplicate element', () => 'overlay-destination'],
+    ['another freshness', () => 'freshness']
+  ])('rejects %s', (_name, change) => {
+    const texts = overlayTexts(SYNTHETIC_V1_OVERLAY_V1_STALE), special = change(texts);
+    stubOverlay(texts, special === 'freshness' ? 'stale' : 'current', special === 'freshness' ? undefined : special);
+    expect(overlayV1Observation(SYNTHETIC_V1_OVERLAY_V1_STALE)).toBe(false);
+  });
+  it('records the sections outside the overlay root and those with cut-off values for review', () => {
+    const box = (left: number, top: number, width: number, height: number) => ({left, top, right: left + width, bottom: top + height, width, height});
+    const section = (id: string, bounds: ReturnType<typeof box>, cut = false) => ({getAttribute: () => `overlay-section-${id}`, getBoundingClientRect: () => bounds,
+      querySelectorAll: () => [{scrollWidth: cut ? 240 : 80, clientWidth: 80}]});
+    vi.stubGlobal('document', {
+      querySelector: () => ({getAttribute: () => 'strip', getBoundingClientRect: () => box(0, 0, 1280, 38)}),
+      querySelectorAll: () => [section('speed', box(10, 1, 80, 36)), section('origin', box(10, 39, 300, 36)), section('deadline', box(1200, 1, 120, 36)), section('cargo', box(100, 1, 80, 36), true)]
+    });
+    expect(overlayOverflow()).toEqual({layout: 'strip', root: {width: 1280, height: 38}, sections: ['speed', 'origin', 'deadline', 'cargo'],
+      outside: ['origin', 'deadline'], truncated: ['cargo']});
   });
 });

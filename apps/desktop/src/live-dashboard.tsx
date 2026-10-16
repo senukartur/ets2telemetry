@@ -5,8 +5,8 @@ import {liveDashboardText} from './live-dashboard-text';
 import {STRINGS} from './strings';
 
 /**
- * The complete live field set (ET-010b), a thin map over `liveDashboardText`. Values update at the bridge rate (at most
- * 20 Hz), so they carry no live region; the paused banner is a status.
+ * The complete live field set (ET-010b, protocol v1 rows ET-010c), a thin map over `liveDashboardText`. Values update at
+ * the bridge rate (at most 20 Hz), so they carry no live region; the paused banner is a status.
  */
 export function LiveDashboard({live, units}: {live: LiveTelemetry | undefined; units: UnitProfiles | undefined}) {
   const text = useMemo(() => liveDashboardText(live, units), [live, units]);
@@ -16,6 +16,7 @@ export function LiveDashboard({live, units}: {live: LiveTelemetry | undefined; u
       {text.sections.map(section => <section key={section.id} data-testid={section.testId} className="space-y-1">
         <h3 className="font-medium">{section.title}</h3>
         {section.missing ? <p data-testid="live-job-missing">{section.missing}</p> : null}
+        {section.status ? <p data-testid="live-v1-status">{section.status}</p> : null}
         {section.rows.length ? <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1">
           {section.rows.map(row => <div key={row.id} className="contents">
             <dt>{row.label}{row.note ? <span className="text-xs text-muted-foreground"> (<span data-testid={`${row.testId}-note`}>{row.note}</span>)</span> : null}</dt>

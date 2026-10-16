@@ -375,6 +375,37 @@ export function validateServerMessage(v: unknown): ServerMessage {
   }
   return v as ServerMessage;
 }
+/** v1 current state without the game window, as the live display receives it (ET-010c). */
+export type LiveStateV1 = Omit<CurrentState, 'window'>;
+/**
+ * The whitelisted v1 observation the telemetry service projects for live display (ET-010c, decision F2). It is not a
+ * wire message: it omits the game window and its handle, the message kind, the delivery cursor, continuity, the clock
+ * mapping and durable status, and keeps only the game mode and event loss of the source status.
+ */
+export interface LiveObservationV1 {
+  source: SourceIdentity; seq: Uint64; capture: CaptureTime; state: LiveStateV1;
+  sourceStatus: {gameMode: GameMode; eventLoss: LossCounts};
+  /** Service receive time in milliseconds; it advances only with a new SDK boundary. */
+  receivedMonotonicMs: number;
+  /** True for a connection's hydrating checkpoint: current state only, never a gameplay effect. */
+  hydration: boolean;
+}
+const NOT_OBSERVED_WINDOW = Object.freeze({available: false, reason: 'not-observed'});
+/**
+ * Strict validation of a live v1 observation with the same rules as the wire state. A state that still carries a
+ * window, or any key outside the whitelist, is rejected.
+ */
+export function validateLiveObservationV1(v: unknown): LiveObservationV1 {
+  const o = record(v, ['source', 'seq', 'capture', 'state', 'sourceStatus', 'receivedMonotonicMs', 'hydration']);
+  source(o.source); u64(o.seq); const cap = record(o.capture, ['clockId', 'monotonicNs']); uuid(cap.clockId); u64(cap.monotonicNs);
+  const s = o.state;
+  if (s === null || typeof s !== 'object' || Array.isArray(s) || Object.hasOwn(s, 'window')) fail();
+  // The wire state validator with a not-observed placeholder in place of the omitted window.
+  state({...(s as Record<string, unknown>), window: NOT_OBSERVED_WINDOW});
+  const status = record(o.sourceStatus, ['gameMode', 'eventLoss']); gameMode(record(status.gameMode, GAME_MODE_KEYS)); lossCounts(status.eventLoss);
+  num(o.receivedMonotonicMs, 0, Number.MAX_VALUE); bool(o.hydration);
+  return v as LiveObservationV1;
+}
 /** Strict validation of one client-to-server message. */
 export function validateClientMessage(v: unknown): ClientMessage {
   const o = record(v, ['version', 'kind', 'data']); version(o.version);

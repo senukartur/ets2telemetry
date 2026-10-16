@@ -1,6 +1,6 @@
 # Live telemetry fields and display rules
 
-ET-010a adds pure live-telemetry normalization and per-game display profiles to `packages/telemetry-core`. This document is the field catalogue and the rule set those modules implement. ET-010b shows the complete v0 field set on the dashboard through them (see [Dashboard](#dashboard)); v1 rows on the dashboard are ET-010c. Since ET-012a the overlay sections are formatted through the same view model in main (see [Overlay](#overlay)). Nothing here changes the v0 or v1 wire, the preload/IPC bridge, storage, trip logic or recording. Real-source checks are pending; see [ET-010 validation](validation/et-010.md).
+ET-010a adds pure live-telemetry normalization and per-game display profiles to `packages/telemetry-core`. This document is the field catalogue and the rule set those modules implement. ET-010b shows the complete v0 field set on the dashboard through them (see [Dashboard](#dashboard)). ET-010c adds the fields only protocol v1 carries, from a whitelisted v1 projection on the same live update, to the dashboard card and the overlay sections (see [Protocol v1 rows](#protocol-v1-rows-et-010c)). Since ET-012a the overlay sections are formatted through the same view model in main (see [Overlay](#overlay)); since ET-010c the card and the overlay read every field through one combiner. Nothing here changes the v0 or v1 wire, the bridge methods or IPC channels, storage, trip logic or recording; ET-010c only adds the optional validated `v1` field to the live update payload. Real-source checks are pending; see [ET-010 validation](validation/et-010.md).
 
 ## Modules
 
@@ -92,40 +92,57 @@ Hydrated checkpoint configuration is current state only. The view shows the job 
 
 ## Dashboard
 
-ET-010b adds the **Live telemetry** card ([live-dashboard.tsx](../apps/desktop/src/live-dashboard.tsx)) between the status card and the application status card of the main window. It is a thin map over the pure builder [live-dashboard-text.ts](../apps/desktop/src/live-dashboard-text.ts), which runs `normalizeV0State` and `buildLiveView` on each bridge update and adds the application's texts. The bridge carries protocol v0 only, so the card shows the v0 field set; v1 rows, game mode and event loss arrive with ET-010c. No bridge, preload, IPC or overlay code changes.
+ET-010b adds the **Live telemetry** card ([live-dashboard.tsx](../apps/desktop/src/live-dashboard.tsx)) between the status card and the application status card of the main window. It is a thin map over the pure builder [live-dashboard-text.ts](../apps/desktop/src/live-dashboard-text.ts), which builds the view on each bridge update and adds the application's texts. ET-010b showed the v0 field set only; ET-010c adds the v1 rows, game mode and event loss through the combiner [live-sources.ts](../apps/desktop/src/live-sources.ts) (see [Protocol v1 rows](#protocol-v1-rows-et-010c)). Without a v1 observation for the current selection the card is exactly the ET-010b card.
 
 - **Speed and fuel** stay in the existing `Speed: …` and `Fuel: …` lines of the status card, with the same test ids and order; the card does not repeat them (`LEGACY_ROW_IDS`, decision B1). Their freshness gate is `live.fresh`, which equals `isCurrent` in practice.
-- **Sections** follow `buildLiveView`: Driving, Fuel, Distance, Time, Job, Vehicle and Position. A section is omitted when it has no rows and no missing subject, so Position never appears under v0. Before the first observation telemetry-core reports every field as not current; the card still shows only the fields v0 carries (`carriesField`). A current update whose job reading was never reported shows the Job section with "No job reported"; a job reading that was rejected or is not provided keeps its reason instead, for example "Job unavailable (invalid reading)", so an unavailable job is never presented as the absence of a job.
+- **Sections** follow `buildLiveView`: Driving, Fuel, Distance, Time, Job, Vehicle and Position, then the Protocol v1 source section (ET-010c). A section is omitted when it has no rows and no missing subject, so Position never appears under v0 alone. Before the first observation telemetry-core reports every field as not current; the card still shows only the fields v0 carries (`carriesField`). A current update whose job reading was never reported shows the Job section with "No job reported"; a job reading that was rejected or is not provided keeps its reason instead, for example "Job unavailable (invalid reading)", so an unavailable job is never presented as the absence of a job.
 - **Rows** are `<dt>`/`<dd>` pairs in one grid per section, like the application status card (decision B2). The label carries the note in parentheses; the value carries the reason in parentheses. Hidden rows (`hidden` state: not carried by the protocol in use or not applicable) are not rendered at all.
 - **Paused**: current values stay visible under a "Game paused" status line.
-- **Test ids**: the card is `live-telemetry`; each section `live-section-<section id>`; each value `live-<field id>`, with its reason in `live-<field id>-reason` and its note in `live-<field id>-note` (decision B3); the paused line `live-paused` and the no-job line `live-job-missing`. Each id element holds only its text, without parentheses, so the smokes compare exact texts.
+- **Test ids**: the card is `live-telemetry`; each section `live-section-<section id>`; each value `live-<field id>`, with its reason in `live-<field id>-reason` and its note in `live-<field id>-note` (decision B3); the paused line `live-paused`, the no-job line `live-job-missing` and, since ET-010c, the v1 status line `live-v1-status`. Each id element holds only its text, without parentheses, so the smokes compare exact texts.
 - **Strings**: `LIVE_FIELD_TEXT`, `VIEW_REASON_TEXT`, `FIELD_NOTE_TEXT` and `LIVE_SECTION_TEXT` in [strings.ts](../apps/desktop/src/strings.ts) are exhaustive records over telemetry-core's ids, so a new id does not compile without a text. The consumption label is "SDK average consumption" with the note "SDK mean, not a trip average"; no label or note calls a value a trip value.
 - **Units** use the same rule as the speed and fuel lines: the displayed game's saved profile ([settings](settings.md)), or its ET-000 default before the settings arrive, and metric without a game. The ATS "mostly static" note follows the observation's source game instead. Under "Select a game" with an ATS source the card therefore shows metric units with the ATS note; this inconsistency is accepted and documented (decision B5).
 
 Decisions B1–B6 are coordinator decisions under the owner's delegation of October 15, 2026 ([concept.md](../concept.md#et-010-authorization--october-15-2026)). Final styling and localization are not part of ET-010b.
 
+## Protocol v1 rows (ET-010c)
+
+The telemetry service runs protocol v1 beside v0, live-only ([service wiring](telemetry-service-v1.md#service-wiring)). Since ET-010c it attaches a whitelisted projection of its v1 source state to the existing coalesced live update as the optional field `LiveTelemetry.v1` (decision F1): selection, status, reason, freshness and, once observed, the source identity, seq, capture time, the current state without the game window, the game mode, the event-loss counts, the receipt time and the hydration flag (F2). It never carries the window or its handle, the clock mapping, the delivery cursor, continuity, the last `end` or durable status. Main and the dashboard preload validate the projection again with `parseLiveV1` and strip it when it is invalid or names another selection; the v0 update is kept and main logs `LIVE_V1_REJECTED` at occurrences 1, 2, 4, 8, … Each layer expires it on its own 500 ms clock (F3): the service's v1 ingestion ("No recent SDK capture"), main ("Main has no recent v1 SDK capture") and the preload ("Renderer has no recent v1 SDK capture"). New v0 data never renews v1 data and new v1 data never renews v0 data. A selection change, a service failure or restart and a replacement subscription clear or stale it. Bridge methods and IPC channels are unchanged (F10).
+
+Every row has one source ([live-sources.ts](../apps/desktop/src/live-sources.ts), decision F4):
+
+- **(a) One combiner.** `liveSources(live, units)` returns the v0 view, the v1 view, `v1Current`, the job identity and the paused state, and `field(id)` picks each field's source. The card and main's overlay projection both use it.
+- **v0 rows stay on v0.** Every field v0 carries (`V0_CARRIED_FIELDS`) comes from the v0 observation, with v0's presence and currentness, even when v1 reports another value (for example the gear). Without a v0 observation those rows are not current although v1 is.
+- **v1-only rows** (route remaining, deadline, source city and company, destination company, cargo mass, market, special job, cargo loaded, license plate, trailers, world position, heading, game mode, lost events) come from the v1 view under v1's own currentness. Without a v1 observation for the current selection they are hidden, as before ET-010c. After a v1 disconnect the observation is kept, so they read `unavailable` with "not current".
+- **(b) Job identity guard.** The v1 job rows (deadline, source city and company, destination company, cargo mass, market, special job, cargo loaded) count only for the job v0 reports: v0 has a job and v1's cargo id and destination city id equal v0's. Another job, or no v1 job, makes them `unavailable` with "not current" (cargo loaded stays hidden when v1's own job is not a cargo-market job). Without a v0 job they are hidden. The non-job v1 rows are not guarded.
+- **(c) Names.** Cargo and destination city keep v0's presence and currentness; while both sources are current and the job matches they show v1's localized name (else its id) instead of the game id.
+- **(d) Paused.** v0 decides while it is current; otherwise current v1 data may report a paused game.
+- **(e) Origin.** v1 data counts only when its origin and game equal the v0 observation's, whenever v0 has an observation.
+- **Units** (F9) are the card's: the displayed game's profile, so 18,000 kg reads `18.0 t` or `39683 lb`.
+
+The **Protocol v1 source** section (`live-section-source`, F5) appears last once a v1 observation exists for the current selection. Its status line `live-v1-status` reads `<status>: <reason>`, for example `connected: Validated current observation`; its rows are the game mode (`live-game-mode`, with method and confidence, or `unknown` until OD-3) and the total of lost events (`live-event-loss`, with the note "this version records no gameplay events": the live-only connection loses every event to the missing durable consumer).
+
 ## Overlay
 
-ET-012a builds the overlay's sections in main from the same `normalizeV0State` and `buildLiveView` calls as the dashboard card, in the same per-game unit profile, so a value reads the same on both. The renderer receives only the formatted text ([overlay-presentation.ts](../apps/desktop/src/overlay-presentation.ts)); no `LiveTelemetry` reaches the overlay renderer (ET-008 boundary, decision L7).
+ET-012a builds the overlay's sections in main through the same view model as the dashboard card, in the same per-game unit profile, so a value reads the same on both; since ET-010c both read every field through the combiner [live-sources.ts](../apps/desktop/src/live-sources.ts). The renderer receives only the formatted text ([overlay-presentation.ts](../apps/desktop/src/overlay-presentation.ts)); no `LiveTelemetry` reaches the overlay renderer (ET-008 boundary, decision L7). For ET-010c only, coordinator decision C1 supersedes L7's statement that the bridge carries v0 only; `OverlayPresentation`, the overlay preload and the overlay IPC are unchanged.
 
-| Section | Fields | Under protocol v0 today |
-| --- | --- | --- |
-| Speed | `speed` | Shown |
-| Gear | `gear` | Shown |
-| RPM | `engine-rpm`, plus a ring fraction on a fixed 0–3000 rpm scale (L12) | Shown |
-| Fuel | `fuel`, with `fuel-level` as detail | Shown; the percentage only while the capacity is known |
-| Range | `estimated-range` (the game's estimate) | Shown |
-| SDK consumption | `sdk-average-consumption` (the SDK mean, labelled "SDK mean", never a trip average) | Shown |
-| Cargo | `cargo`, with `cargo-mass` as detail | Shown as the cargo id; the mass needs v1 |
-| Origin | `source-city`, `source-company` | Hidden: v0 does not carry them |
-| Destination | `destination-city`, `destination-company` | Shown as the destination city id; the company needs v1 |
-| Distance driven | none | Always hidden: it needs trip accounting (ET-014); the odometer is never a stand-in (REG-008, decision L8) |
-| Distance remaining | `route-remaining` | Hidden: v0 does not carry the navigation distance |
-| Deadline | `deadline` | Hidden: v0 does not carry the delivery deadline |
-| Expected income | `expected-income` (exact raw digits, no grouping, SDK-documented or unknown currency; never revenue) | Shown |
-| Game time | `game-time` | Shown |
+| Section | Fields | Under protocol v0 alone | With protocol v1 (ET-010c) |
+| --- | --- | --- | --- |
+| Speed | `speed` | Shown | Unchanged (v0) |
+| Gear | `gear` | Shown | Unchanged (v0) |
+| RPM | `engine-rpm`, plus a ring fraction on a fixed 0–3000 rpm scale (L12) | Shown | Unchanged (v0) |
+| Fuel | `fuel`, with `fuel-level` as detail | Shown; the percentage only while the capacity is known | Unchanged (v0) |
+| Range | `estimated-range` (the game's estimate) | Shown | Unchanged (v0) |
+| SDK consumption | `sdk-average-consumption` (the SDK mean, labelled "SDK mean", never a trip average) | Shown | Unchanged (v0) |
+| Cargo | `cargo`, with `cargo-mass` as detail | Shown as the cargo id; the mass needs v1 | v1's cargo name and the mass for the same job; otherwise the v0 id without a mass |
+| Origin | `source-city`, `source-company` | Hidden: v0 does not carry them | Shown for the same job |
+| Destination | `destination-city`, `destination-company` | Shown as the destination city id; the company needs v1 | v1's city name and the company for the same job; otherwise the v0 id |
+| Distance driven | none | Always hidden: it needs trip accounting (ET-014); the odometer is never a stand-in (REG-008, decision L8) | Unchanged: hidden |
+| Distance remaining | `route-remaining` | Hidden: v0 does not carry the navigation distance | Shown, not job-guarded |
+| Deadline | `deadline` | Hidden: v0 does not carry the delivery deadline | Shown for the same job, from v1's own game time |
+| Expected income | `expected-income` (exact raw digits, no grouping, SDK-documented or unknown currency; never revenue) | Shown | Unchanged (v0) |
+| Game time | `game-time` | Shown | Unchanged (v0) |
 
-A section with several fields joins the fields that have a value with ", ". Carriage is decided by `carriesField` for the protocol in use, so the v1 sections appear without an overlay change once the bridge carries v1 (ET-010c and v0 retirement). The section states while current and while not current are described in [the minimal overlay](minimal-overlay.md#section-states).
+A section with several fields joins the fields that have a value with ", ". A part v0 does not carry counts as carried only while a v1 observation of the current selection and origin exists. A shown v1 section whose v1 carriage is lost while the same v0 source continues (main stripped an invalid projection, or the v1 origin or game stopped matching) keeps an `unavailable` dash, current or not (L5); an update without a v0 observation (a selection change, a service failure or restart, a lost channel) clears it. A v1 part has a value only while the v0 data is current, the v1 data is current and, for job parts, both describe the same job; the overlay's overall state, freshness, source, paused state and placement stay v0's. The section states while current and while not current are described in [the minimal overlay](minimal-overlay.md#section-states).
 
 ## Step primitives (REG-008)
 
