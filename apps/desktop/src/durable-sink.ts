@@ -38,15 +38,16 @@ export interface CommitContext {receivedUtcMs: number}
 /**
  * ET-015b (H2, H8, H11, H12): the sink's pending one-second samples, written only by DurableDelivery's `samples` op and
  * by its final write at `stop()`; it never produces or advances an ACK.
- * - `pending()`: rows and loss intervals waiting to be written.
- * - `write(maxRows)`: stores the next batch of one plugin session (its loss intervals, then at most `maxRows` rows) and
- *   drops them from the pending set only once stored; a failure keeps them.
+ * - `pending()`: the rows and the loss intervals (dropped runs) waiting to be written.
+ * - `write(maxRows, final?)`: stores the next batch of one plugin session (its ended loss intervals, then at most
+ *   `maxRows` rows) and drops them from the pending set only once stored; a failure keeps them. With `final` (the last
+ *   write at `stop()`) loss runs that could still grow are written too.
  * - `discard()`: drops everything pending and returns the number of rows dropped.
  * - `dropped()`: rows dropped by the pending bound in the sink's lifetime.
  */
 export interface SampleSink {
-  pending(): number;
-  write(maxRows: number): Promise<SinkResult<SampleAppendResult>>;
+  pending(): {rows: number; losses: number};
+  write(maxRows: number, final?: boolean): Promise<SinkResult<SampleAppendResult>>;
   discard(): number;
   dropped(): number;
 }

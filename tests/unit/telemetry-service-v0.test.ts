@@ -567,7 +567,7 @@ describe('ET-015a recording gate in the service (R3, R10, R14)', () => {
       expect(appended).toEqual([[ETS2_A, ['1001000000000', '1002000000000'], {uniqueSeconds: true}]]);
       expect(order).toEqual(['appendSamples', 'history-close']);
       expect(f.steps().find(step => step.name === 'recording-flush')).toMatchObject({phase: 'flush', outcome: 'ok'});
-      expect(f.log.mock.calls.filter(call => call[0] === 'V1_SAMPLES_EXIT').map(call => call[2] as unknown)).toEqual([{rows: 2, code: 'WRITTEN'}]);
+      expect(f.log.mock.calls.filter(call => call[0] === 'V1_SAMPLES_EXIT').map(call => call[2] as unknown)).toEqual([{rows: 2, losses: 0, code: 'WRITTEN'}]);
       expect(f.stops()).toEqual([{type: 'stopped', clean: true}]); expect(f.exit).toHaveBeenCalledExactlyOnceWith(0);
     } finally {connect.mockRestore(); f.restore(); vi.unstubAllEnvs();}
   });

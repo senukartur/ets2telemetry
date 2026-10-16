@@ -464,6 +464,9 @@ class SamplingSink extends MemorySink {
   readonly writeSizes: number[] = [];
   readonly sampleFailures: (StorageErrorCode | 'reject')[] = [];
   holdSamples = false; skipPerWrite = 0; droppedRows = 0;
+  /** Loss intervals pending; only a final write stores them, logging `losses <n>`. */
+  pendingLosses = 0;
+  readonly finals: boolean[] = [];
   private nextRow = 0;
   private readonly heldSamples: (() => void)[] = [];
   get heldWrites(): number { return this.heldSamples.length; }
@@ -473,13 +476,14 @@ class SamplingSink extends MemorySink {
     return {ok: true, value: undefined};
   }
   readonly samples: SampleSink = {
-    pending: () => this.pendingRows.length,
-    write: async maxRows => {
-      this.writeSizes.push(maxRows);
+    pending: () => ({rows: this.pendingRows.length, losses: this.pendingLosses}),
+    write: async (maxRows, final) => {
+      this.writeSizes.push(maxRows); this.finals.push(final === true);
       if (this.holdSamples) await new Promise<void>(r => this.heldSamples.push(r));
       const failure = this.sampleFailures.shift();
       if (failure === 'reject') throw new Error('sink defect');
       if (failure) { this.log.push(`samples failed ${failure}`); return {ok: false, error: storageError(failure)}; }
+      if (final && this.pendingLosses) { this.log.push(`losses ${this.pendingLosses}`); this.pendingLosses = 0; }
       const batch = this.pendingRows.splice(0, maxRows), skipped = Math.min(this.skipPerWrite, batch.length);
       this.log.push(`samples ${batch[0]}-${batch.at(-1)}`);
       return {ok: true, value: {appended: batch.length - skipped, skipped}};
@@ -600,7 +604,8 @@ describe('ET-015b samples op in the storage-commit pipeline', () => {
     expect([done, vi.getTimerCount(), sink.writeSizes]).toEqual([false, 0, []]);
     sink.releaseOne(); await stopped;
     // Commit 1 completed in storage without an ACK; event 2 and the two queued snapshots were dropped, not observed.
-    expect([sink.log, link.acks, sink.writeSizes, logs]).toEqual([[`open ${P1}`, 'committed 1', 'samples 1-5'], [], [300], [['V1_SAMPLES_EXIT', {rows: 5, code: 'WRITTEN'}]]]);
+    expect([sink.log, link.acks, sink.writeSizes, logs]).toEqual([[`open ${P1}`, 'committed 1', 'samples 1-5'], [], [300], [['V1_SAMPLES_EXIT', {rows: 5, losses: 0, code: 'WRITTEN'}]]]);
+    expect(sink.finals).toEqual([true]);
     // A second stop returns the same promise and writes nothing more.
     expect(delivery.stop()).toBe(stopped);
   });
@@ -608,7 +613,11 @@ describe('ET-015b samples op in the storage-commit pipeline', () => {
   it('stop() reports a failed final write and writes nothing after durable delivery failed (H11)', async () => {
     const one = sampling(); one.sink.sampleFailures.push('DISK_FULL');
     one.readings(5); await settle(); await one.delivery.stop();
-    expect([one.writes(), one.logs]).toEqual([['samples failed DISK_FULL'], [['V1_SAMPLES_EXIT', {rows: 5, code: 'DISK_FULL'}]]]);
+    expect([one.writes(), one.logs]).toEqual([['samples failed DISK_FULL'], [['V1_SAMPLES_EXIT', {rows: 5, losses: 0, code: 'DISK_FULL'}]]]);
+    // Loss intervals still pending are written by the final write too and reported apart from the rows.
+    const three = sampling(); three.sink.pendingLosses = 1;
+    three.readings(2); await settle(); await three.delivery.stop();
+    expect([three.sink.log.slice(-2), three.logs]).toEqual([['losses 1', 'samples 1-2'], [['V1_SAMPLES_EXIT', {rows: 2, losses: 1, code: 'WRITTEN'}]]]);
     // An unavailable commit failure discards the pending rows; stop() then writes nothing and logs no exit.
     const two = sampling(); two.sink.failures.push('PERMISSION_DENIED');
     two.readings(5); await settle();

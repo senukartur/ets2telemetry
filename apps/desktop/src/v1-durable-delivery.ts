@@ -10,7 +10,7 @@ import {DurableAckCursor} from '../../../packages/contracts/src/protocol-v1-deli
 import {isUint64} from '../../../packages/contracts/src/protocol-v0';
 import type {CommitResult} from '../../../packages/storage/src/api';
 import type {DiagnosticFacts} from './diagnostics';
-import {failureClass, type CoverageMessage, type DurableSink, type ReadingMessage, type SinkError, type SinkResult, type WelcomeMessage} from './durable-sink';
+import {failureClass, type CoverageMessage, type DurableSink, type ReadingMessage, type SampleSink, type SinkError, type SinkResult, type WelcomeMessage} from './durable-sink';
 import {MAX_PENDING_SAMPLES} from './sample-buffer';
 
 /** E5: coverage items queued or in flight across every connection. One more closes its connection as retryable. */
@@ -82,6 +82,8 @@ function validCounts(value: unknown): boolean {
   const counts = value as Partial<Record<'appended' | 'skipped', unknown>>;
   return isCount(counts.appended) && isCount(counts.skipped);
 }
+/** Rows and loss intervals a sample sink holds. */
+function total(samples: SampleSink): number { const pending = samples.pending(); return pending.rows + pending.losses; }
 /** Whether a running total that grew from `before` to `after` reached or passed a power of two (1, 2, 4, 8, ...). */
 function reachesPowerOfTwo(before: number, after: number): boolean {
   let next = 1;
@@ -198,7 +200,7 @@ export class DurableDelivery {
   /**
    * Drops queued work, including a queued `samples` op, and waits for the one command in flight; no commit, observation
    * or ACK follows. Then, unless durable delivery failed, it writes every pending sample row (H11): one write per plugin
-   * session of at most MAX_PENDING_SAMPLES rows, its loss intervals first, and logs V1_SAMPLES_EXIT {rows, code} once
+   * session of at most MAX_PENDING_SAMPLES rows, its loss intervals first, and logs V1_SAMPLES_EXIT {rows, losses, code} once
    * when anything was pending. A second call returns the first call's promise.
    */
   stop(): Promise<void> { return this.stopping ??= this.stopAll(); }
@@ -351,19 +353,19 @@ export class DurableDelivery {
 
   /**
    * H8: queues the `samples` op at once when a full batch is pending (unless a retryable failure is backing off), or arms
-   * the flush timer while rows are pending. Nothing happens while a `samples` op is queued or running, after `stop()` or
+   * the flush timer while rows or loss intervals are pending. Nothing happens while a `samples` op is queued or running, after `stop()` or
    * after durable delivery failed.
    */
   private scheduleSamples(): void {
     const samples = this.sink.samples;
     if (!samples || this.sampleOp || this.stopped || this.failedCode !== undefined) return;
     const pending = samples.pending();
-    if (pending === 0) { this.clearSampleTimer(); return; }
-    if (pending >= this.sampleBatchRows && !this.sampleBackoff) { this.queueSamples(); return; }
+    if (pending.rows + pending.losses === 0) { this.clearSampleTimer(); return; }
+    if (pending.rows >= this.sampleBatchRows && !this.sampleBackoff) { this.queueSamples(); return; }
     this.sampleTimer ??= setTimeout(() => { this.sampleTimer = undefined; this.sampleBackoff = false; this.queueSamples(); }, this.sampleFlushMs);
   }
   private queueSamples(): void {
-    if (!this.sink.samples || this.sampleOp || this.stopped || this.failedCode !== undefined || this.sink.samples.pending() === 0) return;
+    if (!this.sink.samples || this.sampleOp || this.stopped || this.failedCode !== undefined || total(this.sink.samples) === 0) return;
     this.clearSampleTimer();
     this.sampleOp = true;
     this.push({kind: 'samples'});
@@ -401,20 +403,20 @@ export class DurableDelivery {
   private async writeRemainingSamples(): Promise<void> {
     const samples = this.sink.samples;
     if (!samples || this.failedCode !== undefined) return;
-    const rows = samples.pending();
-    if (rows === 0) return;
+    const {rows, losses} = samples.pending();
+    if (rows + losses === 0) return;
     let code = 'WRITTEN';
-    for (let left = rows; left > 0;) {
-      const result = await this.call(() => samples.write(MAX_PENDING_SAMPLES));
+    for (let left = rows + losses; left > 0;) {
+      const result = await this.call(() => samples.write(MAX_PENDING_SAMPLES, true));
       if (!result.ok) { code = result.error.code; break; }
       if (!validCounts(result.value)) { code = 'INTERNAL'; break; }
       this.countSkipped(result.value.skipped);
       // Each write stores one plugin session's batch; a write that stored nothing would never end.
-      const now = samples.pending();
+      const now = total(samples);
       if (now >= left) { code = 'INTERNAL'; break; }
       left = now;
     }
-    this.options.log?.('V1_SAMPLES_EXIT', {rows, code});
+    this.options.log?.('V1_SAMPLES_EXIT', {rows, losses, code});
   }
   private failure(connection: DurableConnection, error: Pick<SinkError, 'code'>): void {
     if (failureClass(error) === 'retryable') {

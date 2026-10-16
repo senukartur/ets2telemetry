@@ -62,8 +62,9 @@ function reading(message: ReadingMessage): TripInput {
  *   joins the pending SampleBuffer.
  * - `restoreLoss` (R9): one session-level `restore-loss` interval for the eventSeq range the producer released beyond
  *   storage, recorded with `ifAbsent` so a service restart in the same plugin session adds no second row.
- * - `samples` (ET-015b): the pending rows for DurableDelivery. `write` stores one session's loss intervals and then its
- *   rows with `appendSamples(…, {uniqueSeconds: true})` (H6); each part leaves the buffer only once stored.
+ * - `samples` (ET-015b): the pending rows for DurableDelivery. `write` stores one session's ended loss intervals (every
+ *   one at the final write) and then its rows with `appendSamples(…, {uniqueSeconds: true})` (H6); each part leaves the
+ *   buffer only once stored.
  * - `view(game)` (R17): the read-only trip view, for ET-015b.
  *
  * A reducer `ok: false` result becomes a RecorderErrorCode and changes no state.
@@ -73,8 +74,8 @@ export class TripRecorderSink implements DurableSink {
   private sampler: SamplerState = initialSamplerState();
   private readonly buffer = new SampleBuffer();
   readonly samples: SampleSink = {
-    pending: () => this.buffer.pending,
-    write: maxRows => this.writeSamples(maxRows),
+    pending: () => ({rows: this.buffer.rowCount, losses: this.buffer.lossCount}),
+    write: (maxRows, final) => this.writeSamples(maxRows, final),
     discard: () => this.buffer.discard(),
     dropped: () => this.buffer.dropped
   };
@@ -139,9 +140,12 @@ export class TripRecorderSink implements DurableSink {
     return {ok: true, value: undefined};
   }
 
-  /** The `samples` write: one plugin session's loss intervals, then at most `maxRows` of its rows (H8, H9). */
-  private async writeSamples(maxRows: number): Promise<SinkResult<SampleAppendResult>> {
-    const batch = this.buffer.nextBatch(maxRows);
+  /**
+   * The `samples` write: one plugin session's ended loss intervals (every one with `final`), then at most `maxRows` of
+   * its rows (H8, H9).
+   */
+  private async writeSamples(maxRows: number, final = false): Promise<SinkResult<SampleAppendResult>> {
+    const batch = this.buffer.nextBatch(maxRows, final);
     if (!batch) return {ok: true, value: {appended: 0, skipped: 0}};
     for (const loss of batch.losses) {
       const recorded = await this.client.recordCompleteness(batch.pluginSessionId, loss);
