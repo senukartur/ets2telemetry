@@ -1,8 +1,9 @@
 // Scaffold status only. The telemetry wire protocol belongs to ET-002a.
 export interface ScaffoldStatus { service: 'ready'; storage: 'verified'; synthetic: true }
 import type {CurrentState, SourceIdentity, AppliedState, CaptureTime} from './protocol-v0';
-import type {AppState, OverlayEditState, OverlayLayout, OverlaySectionId, OverlaySections, SettingsView, UnitGame, UnitProfile} from './app-state';
-import type {LiveObservationV1} from './protocol-v1';
+import type {AppState, OverlayEditState, OverlayLayout, OverlaySectionId, OverlaySections, RecordingCode, SettingsView, UnitGame, UnitProfile} from './app-state';
+import type {Available, LiveObservationV1, Uint64} from './protocol-v1';
+import type {JournalDatabase} from './journal';
 export type SourceSelection = 'game' | 'ets2' | 'ats' | 'synthetic' | 'replay';
 /** Statuses of the v1 source; service failure and restart belong to the update that carries the projection. */
 export type LiveV1Status = 'waiting' | 'connected' | 'paused' | 'stale' | 'incompatible' | 'disconnected' | 'unavailable';
@@ -66,6 +67,35 @@ export interface DesktopBridge {
   /** Leaves edit mode: `save` persists the edited placement (applied after the durable write), `cancel` discards it. */
   finishOverlayEdit(outcome: 'save' | 'cancel'): Promise<SettingsView>;
 }
+/**
+ * The fixed refusal codes of a journal call (ET-016, J11). `SERVICE_UNAVAILABLE`: no ready telemetry service, or it is
+ * stopping, failed or restarting. `DATABASE_OPENING`: the service is still opening its database. `DATABASE_UNAVAILABLE`:
+ * the database could not be opened or failed later, with the storage code that made it unavailable. `BUSY`: too many
+ * journal calls are waiting. `TIMEOUT`: no answer within the deadline. `NOT_FOUND`: the trip is not in the database.
+ * `FAILED`: anything else, including an answer that broke the journal contract. Never text, paths or identifiers.
+ */
+export type JournalCallCode = 'SERVICE_UNAVAILABLE' | 'DATABASE_OPENING' | 'DATABASE_UNAVAILABLE' | 'BUSY' | 'TIMEOUT' | 'NOT_FOUND' | 'FAILED';
+/** The storage error codes, without the recorder and ACK pipeline codes of RecordingCode; checked in journal-contract.ts. */
+export type JournalStorageCode = Exclude<RecordingCode, 'TRIP_ORDER_VIOLATION' | 'TRIP_COVERAGE_MISMATCH' | 'TRIP_UNKNOWN_SESSION' | 'BACKLOG_FULL' | 'COVERAGE_MISMATCH' | 'ACK_AHEAD_OF_STORAGE'>;
+/** The result of a journal call: a value, or a fixed refusal code (J11). */
+export type JournalCallResult<T> =
+  | {ok: true; value: T}
+  | {ok: false; code: Exclude<JournalCallCode, 'DATABASE_UNAVAILABLE'>}
+  | {ok: false; code: 'DATABASE_UNAVAILABLE'; storageCode: JournalStorageCode};
+/**
+ * One stored one-second sample of a trip (ET-015b) in canonical units: m/s, L, L/100 km (the SDK mean), m, rpm, gear
+ * index, odometer metres and game-world coordinates. `monotonicNs` is in the source clock `sourceClockId`; `utcMs` is a
+ * label only. Not observed, not supported and invalid readings stay distinct from zero.
+ */
+export interface JournalSample {
+  id: string; tripUuid: string | null; utcMs: number; sourceClockId: string; monotonicNs: Uint64;
+  gameTime: {minutes: Available<number>; clockId: string} | null;
+  speed: Available<number>; fuel: Available<number>; averageConsumption: Available<number>; estimatedRange: Available<number>;
+  engineRpm: Available<number>; gear: Available<number>; odometer: Available<number>;
+  position: Available<{x: number; y: number; z: number}>;
+}
+/** One page of a trip's samples in id order, and the cursor of the next page when this one is full. */
+export interface JournalSamplePage {database: JournalDatabase; samples: JournalSample[]; nextCursor: string | null}
 /**
  * One overlay section, formatted by main in the displayed game's unit profile. `value`: current text with an optional
  * secondary `detail` (such as the fuel level) and, for engine RPM, a `ring` fraction in [0, 1] of the fixed 0-3000 rpm

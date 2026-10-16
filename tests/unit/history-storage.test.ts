@@ -34,7 +34,7 @@ function fixture(localAppData: string | null = 'C:\\isolated',openResult: Result
   // null stands for an unset variable, since an omitted argument takes the default.
   const history = new HistoryStorage({localAppData: localAppData ?? undefined, appVersion: '0.1.0-test', log, createWorker, timers, ...extra});
   const events = () => log.mock.calls.map(call => [call[0], call[2]]);
-  return {history, sent, log, events, createWorker, worker, crash: () => listeners.error?.(new Error('worker crashed'))};
+  return {history, sent, log, events, createWorker, worker, respond, crash: () => listeners.error?.(new Error('worker crashed'))};
 }
 
 describe('history storage at service start (OD-2)', () => {
@@ -260,5 +260,39 @@ describe('history storage state for the recording status (ET-015c)', () => {
     f.history.start(); await vi.advanceTimersByTimeAsync(0);
     f.crash(); f.crash();
     expect([states, f.history.failureCode]).toEqual([['opening', 'open', 'unavailable'], 'WORKER_FAILED']);
+  });
+});
+
+describe('the database the journal reads (ET-016 PR-3, J3, J4)', () => {
+  it('names the open database purpose and schema version only while it is open', async () => {
+    const f = fixture('C:\\isolated', {ok: true, value: {...SUMMARY, purpose: 'synthetic', schemaVersion: 2}}, true, {target: {purpose: 'synthetic', name: 't'}});
+    expect(f.history.database).toBeUndefined();
+    f.history.start();
+    expect(f.history.database).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.history.database).toEqual({purpose: 'synthetic', schemaVersion: 2});
+    await f.history.close();
+    expect(f.history.database).toBeUndefined();
+  });
+  it('names no database after a failure', async () => {
+    const f = fixture();
+    f.history.start(); await vi.advanceTimersByTimeAsync(0);
+    f.crash();
+    expect([f.history.state, f.history.database]).toEqual(['unavailable', undefined]);
+  });
+  it('logs a journal answer that broke the contract as a counted fixed code and keeps the database open', async () => {
+    const f = fixture();
+    f.history.start(); await vi.advanceTimersByTimeAsync(0);
+    for (let read = 0; read < 3; read++) {
+      const answer = f.history.client!.journalTrips();
+      const request = f.sent.at(-1)!;
+      expect(request.command).toEqual({name: 'journalTrips'});
+      // A well-framed answer whose page carries a field the contract does not list.
+      f.respond(request.id, {ok: true, value: {database: {purpose: 'history', schemaVersion: 1}, trips: [], nextCursor: null, path: 'C:\\Users\\owner'}});
+      await expect(answer).resolves.toMatchObject({ok: false, error: {code: 'JOURNAL_ANSWER_INVALID'}});
+    }
+    expect(f.events().filter(([event]) => event === 'JOURNAL_ANSWER_INVALID')).toEqual([['JOURNAL_ANSWER_INVALID', {command: 'journalTrips', count: 1}],
+      ['JOURNAL_ANSWER_INVALID', {command: 'journalTrips', count: 2}]]);
+    expect([f.history.state, f.history.failureCode, f.history.client?.state]).toEqual(['open', null, 'running']);
   });
 });
