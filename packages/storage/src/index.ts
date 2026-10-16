@@ -3,8 +3,8 @@
 // failures; error results carry fixed text and never a filesystem path. See docs/storage.md.
 import {rmSync} from 'node:fs';
 import type {
-  CommitOptions, CommitResult, CompletenessInterval, CompletenessOptions, EventRow, OpenSummary, Result, SampleInput, SampleRecord, SessionRecord, StorageInfo, TripEffect, TripList,
-  TripPage, TripRecord, Uint64
+  CommitOptions, CommitResult, CompletenessInterval, CompletenessOptions, EventRow, OpenSummary, Result, SampleAppendOptions, SampleAppendResult, SampleInput, SampleRecord,
+  SessionRecord, StorageInfo, TripEffect, TripList, TripPage, TripRecord, Uint64
 } from './api';
 import {classifyError} from './errors';
 import {restoreCopy} from './sqlite/backup';
@@ -28,7 +28,9 @@ export class Storage {
   upsertSession(input: {message: unknown}) { return attempt(() => writes.upsertSession(this.connection, input)); }
   commitEvent(input: {message: unknown; effects?: TripEffect[]}, options?: CommitOptions): Result<CommitResult> { return attempt(() => writes.commitEvent(this.connection, input, options)); }
   commitGap(input: {message: unknown; effects?: TripEffect[]}, options?: CommitOptions): Result<CommitResult> { return attempt(() => writes.commitGap(this.connection, input, options)); }
-  appendSamples(pluginSessionId: string, rows: SampleInput[]) { return attempt(() => writes.appendSamples(this.connection, pluginSessionId, rows)); }
+  appendSamples(pluginSessionId: string, rows: SampleInput[], options?: SampleAppendOptions, commitOptions?: CommitOptions): Result<SampleAppendResult> {
+    return attempt(() => writes.appendSamples(this.connection, pluginSessionId, rows, options, commitOptions));
+  }
   recordCompleteness(pluginSessionId: string, interval: CompletenessInterval, options?: CompletenessOptions): Result<void> {
     return attempt(() => writes.recordCompleteness(this.connection, pluginSessionId, interval, options));
   }

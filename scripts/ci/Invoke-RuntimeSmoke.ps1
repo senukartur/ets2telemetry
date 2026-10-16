@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param([ValidateSet('development','packaged')][string]$Mode,
-    [ValidateSet('scaffold','telemetry','overlay','lifecycle')][string]$Scenario = 'scaffold',
+    [ValidateSet('scaffold','telemetry','overlay','lifecycle','recording')][string]$Scenario = 'scaffold',
     [switch]$ForceRendererReuse,
     [string]$OutputRoot = (Join-Path $PSScriptRoot '../../.local/ci'))
 $ErrorActionPreference = 'Stop'
@@ -13,8 +13,8 @@ foreach ($name in @('cwd','temp','appdata','localappdata','profile','diagnostics
     $paths[$name] = Join-Path $output $name
     New-Item -ItemType Directory -Path $paths[$name] | Out-Null
 }
-# The lifecycle restart run reuses the profile and LOCALAPPDATA but writes its own diagnostics.
-if ($Scenario -eq 'lifecycle') {
+# The lifecycle and recording restart runs reuse the profile and LOCALAPPDATA but write their own diagnostics.
+if ($Scenario -eq 'lifecycle' -or $Scenario -eq 'recording') {
     $paths.diagnosticsRestart = Join-Path $output 'diagnostics-restart'
     New-Item -ItemType Directory -Path $paths.diagnosticsRestart | Out-Null
 }
@@ -51,13 +51,25 @@ if (Test-Path -LiteralPath $cpuSeries -PathType Leaf) {
   limits='60 s; 16 processes; 2 GiB; 25% CPU; kill-on-close';
   descendantsNaturallyDrained=($code -eq 0); cpu=$cpu} | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $output 'job-result.json') -Encoding utf8
 $validation = Test-RuntimeReceipt -DriverResultPath (Join-Path $output 'result.json') -ExpectedCommit $config.commit -ExpectedMode $Mode -ExpectedScenario $Scenario -JobExitCode $code
+# ET-015a PR-4: recorded, never asserted. Live-only hellos the recording proxy refused while storage was still opening
+# (the R10 window the journey does not exercise), holds that expired before admission and the slowest event-to-ACK time.
+# Read only a receipt that Test-RuntimeReceipt accepted for reading (size bound, no reparse point, parsed); otherwise fail closed.
+$recordingFacts = $null
+if ($Scenario -eq 'recording' -and $validation.driverResultAvailable -ne $true) { $recordingFacts = [ordered]@{error='RECORDING_FACTS_UNAVAILABLE'} }
+elseif ($Scenario -eq 'recording') {
+    try {
+        $driverResult = Get-Content -LiteralPath (Join-Path $output 'result.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+        $recordingFacts = [ordered]@{refusedLiveOnly=$driverResult.recording.refusedLiveOnly; expiredHolds=$driverResult.recording.expiredHolds;
+            maxAckLatencyMs=$driverResult.recording.maxAckLatencyMs}
+    } catch { $recordingFacts = [ordered]@{error='RECORDING_FACTS_UNAVAILABLE'} }
+}
 $ownedPidPath = Join-Path $output 'job/owned-pid.txt'
 $ownedPid = if (Test-Path -LiteralPath $ownedPidPath -PathType Leaf) { (Get-Content -LiteralPath $ownedPidPath -Raw).Trim() } else { $null }
 $receipt = [ordered]@{passed=$validation.passed; scenario=$Scenario;
     mode=$Mode; commit=$config.commit; validation=$validation; actualJobExitCode=$code;
     expected=@{jobExitCode=0; driverPassed=$true; status='ready; isolated storage verified; orderly exit'};
     driverResultPath=(Join-Path $output 'result.json'); stdoutPath=(Join-Path $output 'job/stdout.log');
-    stderrPath=(Join-Path $output 'job/stderr.log'); ownedPidPath=$ownedPidPath; ownedPid=$ownedPid;
+    stderrPath=(Join-Path $output 'job/stderr.log'); ownedPidPath=$ownedPidPath; ownedPid=$ownedPid; recordingFacts=$recordingFacts;
     observedNodeVersion=(& $node --version); actualElectronRuntimeVersion=$null;
     playwrightMetadataVersion=(Get-Content -LiteralPath (Join-Path $checkout 'node_modules/playwright-core/package.json') -Raw | ConvertFrom-Json).version;
     finishedUtc=[datetime]::UtcNow.ToString('o')}

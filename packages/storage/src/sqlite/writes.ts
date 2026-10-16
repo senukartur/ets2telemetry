@@ -4,8 +4,8 @@
 import type Database from 'better-sqlite3';
 import {validateServerMessage, type Available, type EventRecord, type GapData, type ServerMessage, type SourceIdentity} from '../../../contracts/src/protocol-v1';
 import {
-  MAX_EFFECTS, MAX_SAMPLE_BATCH, type CommitOptions, type CommitResult, type CompletenessInterval, type CompletenessOptions, type EventReference, type SampleInput, type TripEffect,
-  type Uint64
+  MAX_EFFECTS, MAX_SAMPLE_BATCH, type CommitOptions, type CommitResult, type CompletenessInterval, type CompletenessOptions, type EventReference, type SampleAppendOptions,
+  type SampleAppendResult, type SampleInput, type TripEffect, type Uint64
 } from '../api';
 import {
   AMOUNT_FIELD, availabilityColumns, canonicalJson, DELIVERY_FIELDS, fromU64Key, isUuid, JOB_FIELDS, maskBits, moneyColumns, SAMPLE_FIELDS, sampleMonotonicNs,
@@ -345,11 +345,12 @@ function availability(input: unknown): Available<unknown> {
   return o as Available<unknown>;
 }
 /** Validates one sample and returns its column values; nothing is written for a batch with any invalid sample. */
-function sampleColumns(row: SampleInput): {trip: string | null; clock: string; gameClock: string | null; values: unknown[]} {
+function sampleColumns(row: SampleInput): {trip: string | null; clock: string; gameClock: string | null; monotonic: bigint; values: unknown[]} {
   if (typeof row !== 'object' || row === null || !isUuid(row.sourceClockId)) fail('INVALID_INPUT');
   if (row.tripUuid !== undefined && row.tripUuid !== null && !isUuid(row.tripUuid)) fail('INVALID_INPUT');
   let notSupported = 0, invalid = 0;
-  const values: unknown[] = [utcMs(row.utcMs), sampleMonotonicNs(row.monotonicNs)];
+  const monotonic = sampleMonotonicNs(row.monotonicNs);
+  const values: unknown[] = [utcMs(row.utcMs), monotonic];
   // Game time is either absent (null) or a game clock with an availability object for its minutes.
   const gameTime = row.gameTime as unknown;
   if (gameTime !== null && (typeof gameTime !== 'object' || Object.keys(gameTime).sort().join(',') !== 'clockId,minutes' || !isUuid((gameTime as {clockId: unknown}).clockId))) fail('INVALID_INPUT');
@@ -376,23 +377,46 @@ function sampleColumns(row: SampleInput): {trip: string | null; clock: string; g
     }
   }
   values.push(BigInt(notSupported), BigInt(invalid));
-  return {trip: row.tripUuid ?? null, clock: row.sourceClockId, gameClock: game === null ? null : game.clockId, values};
+  return {trip: row.tripUuid ?? null, clock: row.sourceClockId, gameClock: game === null ? null : game.clockId, monotonic, values};
 }
 const SAMPLE_COLUMNS = ['utc_ms', 'monotonic_ns', ...SAMPLE_FIELDS.flatMap(f => f.columns), 'not_supported_mask', 'invalid_mask'];
-/** Appends up to 3,600 samples of one session in one transaction: all of them, or none. */
-export function appendSamples(conn: StorageConnection, pluginSessionId: string, rows: SampleInput[]): {appended: number} {
+const NS_PER_SECOND = 1_000_000_000n;
+/**
+ * Appends up to 3,600 samples of one session in one transaction: all of them, or none. With `uniqueSeconds` (ET-015b,
+ * H6) a row whose source second is not after the last accepted second of its clock is skipped (SampleAppendOptions);
+ * the comparison starts from the session's latest stored row, read through the samples_session index.
+ */
+export function appendSamples(conn: StorageConnection, pluginSessionId: string, rows: SampleInput[], options: SampleAppendOptions = {}, commitOptions: CommitOptions = {}): SampleAppendResult {
   if (!Array.isArray(rows) || rows.length > MAX_SAMPLE_BATCH) fail('INVALID_INPUT');
+  if (typeof options !== 'object' || options === null || Array.isArray(options) || (options.uniqueSeconds !== undefined && typeof options.uniqueSeconds !== 'boolean')) fail('INVALID_INPUT');
+  const uniqueSeconds = options.uniqueSeconds === true;
   const prepared = rows.map(sampleColumns);
   return transact(conn, db => {
     const session = sessionByUuid(db, pluginSessionId), trips = new Map<string, bigint>();
     const c: EffectContext = {db, session, game: session.game, now: conn.now()};
     const sql = insert('samples', ['plugin_session_ref', 'trip_ref', 'source_clock_ref', 'game_clock_ref', ...SAMPLE_COLUMNS]);
+    // The last accepted source second per source clock UUID, seeded with the session's latest stored row.
+    const lastSecond = new Map<string, bigint>();
+    if (uniqueSeconds) {
+      const last = statement(db, `SELECT samples.monotonic_ns AS monotonic, clocks.clock_uuid AS clock FROM samples JOIN clocks ON clocks.id = samples.source_clock_ref
+        WHERE samples.plugin_session_ref = ? ORDER BY samples.id DESC LIMIT 1`).get(session.id) as {monotonic: bigint; clock: string} | undefined;
+      if (last) lastSecond.set(last.clock, BigInt(last.monotonic) / NS_PER_SECOND);
+    }
+    let appended = 0;
     for (const row of prepared) {
+      // The trip is resolved for a skipped row too, so an unknown or foreign trip refuses the batch either way.
       let trip: bigint | null = null;
       if (row.trip !== null) { trip = trips.get(row.trip) ?? tripRow(c, row.trip).id; trips.set(row.trip, trip); }
+      if (uniqueSeconds) {
+        const second = row.monotonic / NS_PER_SECOND, previous = lastSecond.get(row.clock);
+        if (previous !== undefined && second <= previous) continue;
+        lastSecond.set(row.clock, second);
+      }
       statement(db, sql).run(session.id, trip, clockRef(db, session.id, 'source-monotonic', row.clock), row.gameClock === null ? null : clockRef(db, session.id, 'game', row.gameClock), ...row.values);
+      appended++;
     }
-    return {appended: prepared.length};
+    commitOptions.testHooks?.beforeCommit?.();
+    return {appended, skipped: prepared.length - appended};
   });
 }
 

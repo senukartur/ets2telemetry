@@ -787,3 +787,29 @@ No game, TruckersMP, display or performance claim follows from synthetic checks.
 **Invariant.** The overlay window geometry is a function only of the layout, placement, enabled sections, client rectangle and display topology. Every enabled section that the projection shows lies inside the window, in every layout.
 
 No game, TruckersMP, display or performance claim follows from synthetic checks.
+
+## ET-015b authorization — October 16, 2026
+
+Under the owner's standing delegation of October 15, 2026 (quoted in the ET-015a authorization above), the coordinator started ET-015b, one-second history. It adopted the architect's decisions H1–H17 below as coordinator decisions; the owner did not review them individually and may revise them. For ET-015b only, this supersedes earlier statements that ET-015b is not authorized; earlier dated text is unchanged.
+
+| # | Decision |
+| --- | --- |
+| H1 | Four PRs. PR-1, the storage guard, and PR-2, the pure sampler, both start from `main`. PR-3, the recording pipeline, follows both. PR-4, the runtime journey, follows PR-3 and the ET-015a journey |
+| H2 | The pure `sampleReading` lives in `packages/telemetry-core/src/history-samples.ts`. The trip recorder calls it in `observe`, at the head of the DurableDelivery FIFO, so a sample sees only committed trip state. Pending rows sit in a recorder-owned `SampleBuffer`, and DurableDelivery stays the only scheduler (R2) |
+| H3 | The tick is the absolute source second, `floor(capture.monotonicNs / 1e9)`, per plugin session and capture clock. The first qualifying reading in each second is sampled. Neither a service timer nor game time is used |
+| H4 | A reading is fresh only when its `boundaryOrder` is strictly greater than that of the plugin session's previous reading, across connections. It qualifies only when it is fresh, `simulation` is `running`, its second is new on its clock and its capture is at most 2^63−1 ns. The first reading of a plugin session in a recorder lifetime is a baseline and is never sampled |
+| H5 | Paused and unavailable readings produce no row. After a resume or a reconnection the next qualifying second is sampled, and missed seconds are never filled. Source holes add no new interval; the reducer already records trip `sample-loss` and `not-connected` intervals |
+| H6 | One row per plugin session, source clock and source second. The sampler enforces it in memory. Storage enforces it inside the transaction through `appendSamples(…, {uniqueSeconds: true})`, which skips a row whose second is at or below the last stored second on the same clock and reports `{appended, skipped}`. A UNIQUE index is deferred to ET-016's schema v2 |
+| H7 | A sample references `view.current.tripUuid` only while the trip view's phase is `active`. It is null when idle, awaiting the outcome, during a reload check, and for an untracked job (free driving or ambiguous) |
+| H8 | A low-priority `samples` op in the FIFO writes at most 60 rows of one session per `appendSamples`. It is queued when the oldest pending row is 5 s old or 60 rows are pending, and at most one such op is queued or running |
+| H9 | Loss budget. In steady state, at most 5 s plus one batch command is uncommitted. A kill loses at most those rows; an open trip records this only through its `consumer-restart` interval. An orderly exit loses none unless its step expires. Under a storage backlog at most 300 rows are held; newer rows are dropped, and each dropped run becomes one session-level `sample-loss` interval with `cause: 'sample-backlog'` |
+| H10 | A coverage item waits behind at most one bounded batch. Samples never count against the 256-item and 512-reading bounds |
+| H11 | `recording-flush` keeps its 500 ms. After the commit in flight, it writes every pending row (at most 300 per session) unless delivery has failed, and logs `V1_SAMPLES_EXIT` once. The 2500 ms stop total is unchanged |
+| H12 | Sample write failures follow the E7 classes. A retryable failure keeps the rows and retries them at the next timer, and the connection stays open. An unavailable failure makes the service live-only for its lifetime and discards pending rows. Diagnostics are the `V1_SAMPLES_*` codes, logged at counts 1, 2, 4, … |
+| H13 | Readings carry the receipt UTC label taken at decode (as R8). A sample's `utcMs` is the reading's `captureUtcUnixMs` when it is available and safe, and otherwise this label |
+| H14 | Wire canonical units are copied unchanged, and position comes from `worldPlacement.position`. Availability objects lose their `unit` key, and game time keeps its own clock. UTC, game time and real time stay in separate columns |
+| H15 | Samples are written only through the recorder, which exists only for a synthetic or replay recording target (R3). The gate is unchanged |
+| H16 | No schema or migration change. Storage adds only the `uniqueSeconds` option, the `skipped` count and an in-process test hook |
+| H17 | Expected rows are written by hand. Tests use controlled clocks and fake timers, the real storage worker, actual pipes and the reactive simulator |
+
+Recording of real game history stays gated until the separate enablement PR described in the ET-015a authorization. ET-015c, ET-016 and later phases are not authorized by this section. No game, TruckersMP, display or performance claim follows from synthetic or local tests.

@@ -2,8 +2,8 @@
 // data only, so the client and its tests never load native SQLite. Messages cross a worker port by structured clone.
 // The client sends one request at a time; the host answers every request exactly once, in order. See docs/storage.md.
 import type {
-  CommitResult, CompletenessInterval, CompletenessOptions, EventRow, OpenSummary, Purpose, Result, SampleInput, SampleRecord, SessionRecord, StorageError, StorageInfo,
-  TripEffect, TripList, TripPage, TripRecord, Uint64
+  CommitResult, CompletenessInterval, CompletenessOptions, EventRow, OpenSummary, Purpose, Result, SampleAppendOptions, SampleAppendResult, SampleInput, SampleRecord, SessionRecord,
+  StorageError, StorageInfo, TripEffect, TripList, TripPage, TripRecord, Uint64
 } from '../api';
 import {ERROR_MESSAGES} from '../errors';
 
@@ -19,7 +19,7 @@ export interface StorageCommands {
   upsertSession: {args: {input: {message: unknown}}; value: {created: boolean; committedThroughEventSeq: Uint64}};
   commitEvent: {args: {input: {message: unknown; effects?: TripEffect[]}}; value: CommitResult};
   commitGap: {args: {input: {message: unknown; effects?: TripEffect[]}}; value: CommitResult};
-  appendSamples: {args: {pluginSessionId: string; rows: SampleInput[]}; value: {appended: number}};
+  appendSamples: {args: {pluginSessionId: string; rows: SampleInput[]; options?: SampleAppendOptions}; value: SampleAppendResult};
   recordCompleteness: {args: {pluginSessionId: string; interval: CompletenessInterval; options?: CompletenessOptions}; value: undefined};
   committedThrough: {args: {pluginSessionId: string}; value: Uint64};
   getSession: {args: {pluginSessionId: string}; value: SessionRecord};
@@ -64,11 +64,15 @@ const oneOf = (options: readonly string[]) => (field: unknown) => typeof field =
 const TRIP_PAGE_ARGS = {cursor: (field: unknown) => typeof field === 'string', limit: (field: unknown) => typeof field === 'number',
   game: oneOf(['ets2', 'ats']), outcome: oneOf(['open', 'delivered', 'cancelled', 'none'])};
 const COMPLETENESS_OPTIONS_ARGS = {ifAbsent: (field: unknown) => typeof field === 'boolean'};
+/** ET-015b: the `appendSamples` options, checked strictly like the completeness options. */
+const SAMPLE_OPTIONS_ARGS = {uniqueSeconds: (field: unknown) => typeof field === 'boolean'};
+const isCount = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 
 /**
  * Checks the envelope and the argument shapes a command needs to reach the storage core. The core validates every
- * argument value itself; this refuses messages that are not storage requests at all, and checks the `listTrips` page
- * and the `recordCompleteness` options strictly, so only their listed fields cross the worker boundary.
+ * argument value itself; this refuses messages that are not storage requests at all, and checks the `listTrips` page,
+ * the `recordCompleteness` options and the `appendSamples` options strictly, so only their listed fields cross the
+ * worker boundary.
  */
 export function parseRequest(message: unknown): {ok: true; id: number; command: StorageCommand} | {ok: false; id?: number} {
   if (!isRecord(message) || message.type !== 'storage.request' || !isId(message.id)) return {ok: false};
@@ -82,6 +86,7 @@ export function parseRequest(message: unknown): {ok: true; id: number; command: 
   if ((name === 'upsertSession' || name === 'commitEvent' || name === 'commitGap') && !isRecord(command.input)) return {ok: false, id};
   if (name === 'listTrips' && !optionalArgs(command.page, TRIP_PAGE_ARGS)) return {ok: false, id};
   if (name === 'recordCompleteness' && !optionalArgs(command.options, COMPLETENESS_OPTIONS_ARGS)) return {ok: false, id};
+  if (name === 'appendSamples' && !optionalArgs(command.options, SAMPLE_OPTIONS_ARGS)) return {ok: false, id};
   return {ok: true, id, command: command as StorageCommand};
 }
 
@@ -90,11 +95,13 @@ function isStorageError(value: unknown): value is StorageError {
 }
 
 /**
- * A commit result is what a later durable ACK is built from (protocol v1 §10), so its shape is checked exactly; any other
- * success value is passed through from the host, which returns only what the storage core produced.
+ * A commit result is what a later durable ACK is built from (protocol v1 §10), so its shape is checked exactly, and so are
+ * the sample counts by which a caller keeps or drops its pending rows (ET-015b); any other success value is passed
+ * through from the host, which returns only what the storage core produced.
  */
 function validValue(name: CommandName, value: unknown): boolean {
   switch (name) {
+  case 'appendSamples': return isRecord(value) && isCount(value.appended) && isCount(value.skipped);
   case 'commitEvent': case 'commitGap':
     return isRecord(value) && ['committed', 'duplicate', 'conflict', 'covered'].includes(value.status as string) && isUint64(value.committedThroughEventSeq)
       && (value.previouslyCoveredThrough === undefined || isUint64(value.previouslyCoveredThrough)) && (name === 'commitGap' || value.status !== 'covered');

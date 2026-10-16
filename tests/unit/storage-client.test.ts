@@ -1,5 +1,5 @@
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
-import type {CompletenessOptions, Result, StorageError, StorageErrorCode, TripPage} from '../../packages/storage/src/api';
+import type {CompletenessOptions, Result, SampleAppendOptions, SampleInput, StorageError, StorageErrorCode, TripPage} from '../../packages/storage/src/api';
 import {COMMAND_DEADLINE_MS, MAX_QUEUED_COMMANDS, OPEN_DEADLINE_MS, StorageClient, type StorageClientOptions, type StorageWorkerHandle} from '../../packages/storage/src/client';
 import {storageError} from '../../packages/storage/src/errors';
 import {parseRequest, type StorageRequest} from '../../packages/storage/src/worker/protocol';
@@ -160,6 +160,69 @@ describe('ET-015a trip filter and completeness options at the worker boundary', 
     ['null', null, false]
   ])('checks recordCompleteness options strictly: %s', (_name, options, accepted) => {
     expect(parseRequest(request({name: 'recordCompleteness', pluginSessionId: P1, interval: INTERVAL, options})).ok).toBe(accepted);
+  });
+});
+
+describe('ET-015b sample options and counts at the worker boundary', () => {
+  const ROWS: SampleInput[] = [];
+  const request = (options: unknown) => ({type: 'storage.request', id: 1, command: {name: 'appendSamples', pluginSessionId: P1, rows: ROWS, options}});
+  it('sends uniqueSeconds and nothing else of the sample options, and no options when none are given', async () => {
+    const f = fixture();
+    const first = f.client.appendSamples(P1, ROWS, {uniqueSeconds: true, testHooks: {beforeCommit: () => undefined}} as Parameters<StorageClient['appendSamples']>[2]);
+    expect(f.sent[0].command).toEqual({name: 'appendSamples', pluginSessionId: P1, rows: ROWS, options: {uniqueSeconds: true}});
+    expect(Object.keys((f.sent[0].command as {options: object}).options)).toEqual(['uniqueSeconds']);
+    f.ok(1, {appended: 0, skipped: 0});
+    await expect(first).resolves.toEqual({ok: true, value: {appended: 0, skipped: 0}});
+    void f.client.appendSamples(P1, ROWS);
+    expect(f.sent[1].command).toEqual({name: 'appendSamples', pluginSessionId: P1, rows: ROWS});
+    expect(Object.hasOwn(f.sent[1].command, 'options')).toBe(false);
+    for (const sent of f.sent) expect(parseRequest(sent).ok).toBe(true);
+  });
+  it('forwards sample options that are not an object as given, so the worker parser refuses them', () => {
+    const f = fixture();
+    expect(() => f.client.appendSamples(P1, ROWS, null as unknown as SampleAppendOptions)).not.toThrow();
+    expect(f.sent[0].command).toEqual({name: 'appendSamples', pluginSessionId: P1, rows: ROWS, options: null});
+    expect(parseRequest(f.sent[0])).toEqual({ok: false, id: 1});
+  });
+  it.each([
+    ['no options', undefined, true],
+    ['uniqueSeconds true', {uniqueSeconds: true}, true],
+    ['uniqueSeconds false', {uniqueSeconds: false}, true],
+    ['uniqueSeconds undefined', {uniqueSeconds: undefined}, true],
+    ['an empty object', {}, true],
+    ['a text uniqueSeconds', {uniqueSeconds: 'true'}, false],
+    ['a numeric uniqueSeconds', {uniqueSeconds: 1}, false],
+    ['an unknown key', {uniqueSeconds: true, testHooks: {}}, false],
+    ['an array', [], false],
+    ['null', null, false]
+  ])('checks appendSamples options strictly: %s', (_name, options, accepted) => {
+    expect(parseRequest(request(options)).ok).toBe(accepted);
+  });
+  it.each([
+    ['both counts zero', {appended: 0, skipped: 0}],
+    ['a full batch', {appended: 3_600, skipped: 0}],
+    ['skipped rows', {appended: 59, skipped: 1}]
+  ])('accepts a sample answer with %s', async (_name, value) => {
+    const f = fixture();
+    const append = f.client.appendSamples(P1, ROWS, {uniqueSeconds: true});
+    f.ok(1, value);
+    await expect(append).resolves.toEqual({ok: true, value});
+    expect(f.client.state).toBe('running');
+  });
+  it.each([
+    ['no skipped count', {appended: 1}],
+    ['a negative skipped count', {appended: 1, skipped: -1}],
+    ['a fractional appended count', {appended: 1.5, skipped: 0}],
+    ['a text count', {appended: '1', skipped: 0}],
+    ['an unsafe count', {appended: 2 ** 53, skipped: 0}],
+    ['a count that is not finite', {appended: Number.POSITIVE_INFINITY, skipped: 0}],
+    ['no value object', 1]
+  ])('fails closed on a sample answer with %s', async (_name, value) => {
+    const f = fixture();
+    const append = f.client.appendSamples(P1, ROWS, {uniqueSeconds: true});
+    f.ok(1, value);
+    await expect(append).resolves.toEqual(error('WORKER_FAILED'));
+    expect(f.client.state).toBe('failed');
   });
 });
 

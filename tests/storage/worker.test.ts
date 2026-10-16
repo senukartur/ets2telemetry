@@ -5,9 +5,9 @@ import {chmodSync, existsSync} from 'node:fs';
 import {once} from 'node:events';
 import path from 'node:path';
 import {MessageChannel, Worker} from 'node:worker_threads';
-import {afterEach, beforeEach, describe, expect, it} from 'vitest';
+import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import {CLOSE_GRACE_MS, StorageClient, workerHandle} from '../../packages/storage/src/client';
-import type {Result, StorageErrorCode, TripEffect} from '../../packages/storage/src/index';
+import type {Result, SampleInput, StorageErrorCode, TripEffect} from '../../packages/storage/src/index';
 import type {WorkerOpenOptions} from '../../packages/storage/src/worker/protocol';
 import {ok, P1, readOnly, TEST_CLOSE_GRACE_MS, v1, withEventSeq, workspace} from './helpers';
 
@@ -60,6 +60,11 @@ function refused<T>(result: Result<T>, code: StorageErrorCode) {
 const T1 = '70000000-0000-4000-8000-000000000001';
 const openTrip: TripEffect = {kind: 'trip.open', tripUuid: T1, game: 'ets2', gameMode: {mode: 'unknown', method: 'none', confidence: 'none'},
   jobConfiguration: 'this-event', recordingCompleteness: 'complete', startedUtcMs: 1_791_676_800_000};
+const notObserved = {available: false as const, reason: 'not-observed' as const};
+/** A one-second sample on the session's source clock, identified by its monotonic time. */
+const sampleAt = (monotonicNs: string): SampleInput => ({utcMs: 1_791_676_800_000, sourceClockId: '30000000-0000-4000-8000-000000000001', monotonicNs, gameTime: null,
+  speed: {available: true, value: 0}, fuel: notObserved, averageConsumption: notObserved, estimatedRange: notObserved, engineRpm: notObserved, gear: notObserved,
+  odometer: notObserved, position: notObserved});
 
 describe('storage worker', () => {
   it('opens, commits, reads and closes through the real worker, and a new worker reopens the same history', async () => {
@@ -185,6 +190,37 @@ describe('storage worker', () => {
     const [response] = await answer;
     expect(response).toMatchObject({type: 'storage.response', id: 7, result: {ok: false, error: {code: 'INVALID_INPUT'}}});
   });
+
+  it('applies uniqueSeconds through the real worker, and a new worker skips the stored second (ET-015b, REG-005)', async () => {
+    const first = startWorker();
+    ok(await first.client.open(options()));
+    ok(await first.client.upsertSession({message: v1('welcome')}));
+    expect(ok(await first.client.appendSamples(P1, [sampleAt('1000000000000'), sampleAt('1000900000000'), sampleAt('1001000000000')], {uniqueSeconds: true})))
+      .toEqual({appended: 2, skipped: 1});
+    // Without the option the worker appends every row, as before ET-015b.
+    expect(ok(await first.client.appendSamples(P1, [sampleAt('1001500000000')]))).toEqual({appended: 1, skipped: 0});
+    expect(await first.client.close()).toEqual({clean: true});
+    const second = startWorker();
+    ok(await second.client.open(options()));
+    expect(ok(await second.client.appendSamples(P1, [sampleAt('1001999999999'), sampleAt('1002000000000')], {uniqueSeconds: true}))).toEqual({appended: 1, skipped: 1});
+    expect(ok(await second.client.listSamples({pluginSessionId: P1})).map(s => s.monotonicNs)).toEqual(['1000000000000', '1001000000000', '1001500000000', '1002000000000']);
+    expect(await second.client.close()).toEqual({clean: true});
+  });
+
+  it('refuses appendSamples options with an unknown key or a non-boolean value with INVALID_INPUT', async () => {
+    const worker = new Worker(WORKER, {workerData: {kind: 'storage'}});
+    started.push(worker);
+    const answers: unknown[] = [];
+    worker.on('message', message => answers.push(message));
+    const request = (id: number, sampleOptions: unknown) => ({type: 'storage.request', id, command: {name: 'appendSamples', pluginSessionId: P1, rows: [], options: sampleOptions}});
+    worker.postMessage(request(1, {uniqueSeconds: true, testHooks: {}}));
+    worker.postMessage(request(2, {uniqueSeconds: 'yes'}));
+    worker.postMessage(request(3, null));
+    // A well-formed request passes the parser and reaches the host, which has no open database yet.
+    worker.postMessage(request(4, {uniqueSeconds: true}));
+    await vi.waitFor(() => expect(answers).toHaveLength(4));
+    expect(answers.map(answer => (answer as {result: {error: {code: string}}}).result.error.code)).toEqual(['INVALID_INPUT', 'INVALID_INPUT', 'INVALID_INPUT', 'STORAGE_CLOSED']);
+  });
 });
 
 /**
@@ -193,7 +229,7 @@ describe('storage worker', () => {
  */
 describe('fault storage worker', () => {
   const FAULT_WORKER = path.join(bundles, 'fault-storage-worker.cjs');
-  function startFaultWorker(data: {fault?: {eventSeq: string; code: string; times: number}; hold?: {eventSeq: string}}) {
+  function startFaultWorker(data: {fault?: {eventSeq: string; code: string; times: number}; hold?: {eventSeq: string}; samplesFault?: {code: string; times: number} | {hold: true}}) {
     const channel = new MessageChannel();
     const worker = new Worker(FAULT_WORKER, {workerData: {kind: 'storage', ...data, control: channel.port2}, transferList: [channel.port2]});
     started.push(worker);
@@ -253,6 +289,46 @@ describe('fault storage worker', () => {
     control.postMessage({type: 'release'});
     expect(ok(await commit)).toEqual({status: 'committed', committedThroughEventSeq: '1'});
     expect(ok(await queued)).toBe('1');
+    control.close();
+    expect(await client.close()).toEqual({clean: true});
+    expect(await exit).toBe(0);
+  });
+
+  it('an injected SQLITE_FULL in appendSamples is DISK_FULL, stores no row, and the retry appends once (ET-015b, REG-007)', async () => {
+    const {client, exit} = startFaultWorker({samplesFault: {code: 'SQLITE_FULL', times: 1}});
+    ok(await client.open(options()));
+    ok(await client.upsertSession({message: v1('welcome')}));
+    const batch = [sampleAt('1000000000000'), sampleAt('1001000000000')];
+    const full = await client.appendSamples(P1, batch, {uniqueSeconds: true});
+    expect(full).toEqual({ok: false, error: {code: 'DISK_FULL', retryable: true, message: 'The disk or the database size limit is full.', sqliteCode: 'SQLITE_FULL'}});
+    // The transaction rolled back both rows.
+    expect(ok(await client.listSamples({pluginSessionId: P1}))).toEqual([]);
+    // The worker keeps serving: the retry stores the batch once, and a second retry finds both seconds stored.
+    expect(ok(await client.appendSamples(P1, batch, {uniqueSeconds: true}))).toEqual({appended: 2, skipped: 0});
+    expect(ok(await client.appendSamples(P1, batch, {uniqueSeconds: true}))).toEqual({appended: 0, skipped: 2});
+    expect(await client.close()).toEqual({clean: true});
+    expect(await exit).toBe(0);
+    readOnly(ws.database, db => {
+      expect(db.prepare('SELECT monotonic_ns AS ns FROM samples ORDER BY id').all()).toEqual([{ns: 1_000_000_000_000}, {ns: 1_001_000_000_000}]);
+      expect(db.prepare("PRAGMA integrity_check").pluck().get()).toBe('ok');
+    });
+  });
+
+  it('holds an appendSamples batch inside its transaction until the release message (ET-015b)', async () => {
+    const {client, control, exit} = startFaultWorker({samplesFault: {hold: true}});
+    ok(await client.open(options()));
+    ok(await client.upsertSession({message: v1('welcome')}));
+    const held = once(control, 'message');
+    let answered = false;
+    const append = client.appendSamples(P1, [sampleAt('1000000000000')], {uniqueSeconds: true}).then(result => { answered = true; return result; });
+    const queued = client.listSamples({pluginSessionId: P1});
+    expect((await held)[0]).toEqual({type: 'held', command: 'appendSamples'});
+    expect(answered).toBe(false);
+    control.postMessage({type: 'release'});
+    expect(ok(await append)).toEqual({appended: 1, skipped: 0});
+    expect(ok(await queued).map(s => s.monotonicNs)).toEqual(['1000000000000']);
+    // Only the first batch is held.
+    expect(ok(await client.appendSamples(P1, [sampleAt('1001000000000')], {uniqueSeconds: true}))).toEqual({appended: 1, skipped: 0});
     control.close();
     expect(await client.close()).toEqual({clean: true});
     expect(await exit).toBe(0);
