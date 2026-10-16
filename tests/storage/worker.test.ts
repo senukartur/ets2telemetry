@@ -9,6 +9,8 @@ import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import {CLOSE_GRACE_MS, StorageClient, workerHandle} from '../../packages/storage/src/client';
 import type {Result, SampleInput, StorageErrorCode, TripEffect} from '../../packages/storage/src/index';
 import type {WorkerOpenOptions} from '../../packages/storage/src/worker/protocol';
+import {JOURNAL_TRIPS as T, seedJournalAnchors} from '../shared/journal-seed';
+import {BASE_UTC, ETS2_A} from '../shared/trip-messages';
 import {ok, P1, readOnly, TEST_CLOSE_GRACE_MS, v1, withEventSeq, workspace} from './helpers';
 
 const bundles = process.env.ETS2TELEMETRY_STORAGE_TEST_BUNDLES;
@@ -220,6 +222,61 @@ describe('storage worker', () => {
     worker.postMessage(request(4, {uniqueSeconds: true}));
     await vi.waitFor(() => expect(answers).toHaveLength(4));
     expect(answers.map(answer => (answer as {result: {error: {code: string}}}).result.error.code)).toEqual(['INVALID_INPUT', 'INVALID_INPUT', 'INVALID_INPUT', 'STORAGE_CLOSED']);
+  });
+
+  it('serves the journal reads through the real worker and the validating client (ET-016, REG-014)', async () => {
+    const {client, exit} = startWorker();
+    ok(await client.open(options()));
+    // The seed writes the anchors through the client, as a later seeding script would.
+    await seedJournalAnchors(client);
+    const page = ok(await client.journalTrips());
+    expect(page.database).toEqual({purpose: 'synthetic', schemaVersion: 2});
+    expect(page.trips.map(trip => trip.tripUuid)).toEqual([T.manySamples, T.zeroValues, T.open, T.restartClosed, T.gapClosed, T.differentJob, T.cancelled, T.delivered]);
+    expect(page.nextCursor).toBeNull();
+    expect(ok(await client.journalTrips({game: 'ats', outcome: 'delivered', completeness: 'complete'})).trips.map(trip => trip.tripUuid)).toEqual([T.zeroValues]);
+    expect(ok(await client.journalTrips({cursor: '2'})).trips.map(trip => trip.tripUuid)).toEqual([T.delivered]);
+    const detail = ok(await client.journalTrip(T.delivered));
+    expect(detail.window).toEqual({known: true, pluginSessionId: ETS2_A, fromEventSeq: '4', throughEventSeq: '9', end: 'close-event'});
+    expect(detail.money.totals.map(total => [total.category, total.raw])).toEqual([['fine', '401'], ['toll', '35'], ['ferry', '677']]);
+    expect(detail.samples).toEqual({count: 3, firstUtcMs: BASE_UTC + 5_000, lastUtcMs: BASE_UTC + 8_000});
+    expect(ok(await client.journalEvents(T.delivered, {limit: 100})).events.map(event => event.eventSeq)).toEqual(['4', '5', '6', '7', '8', '9']);
+    expect(ok(await client.journalEvents(T.delivered, {limit: 500, cursor: '7'})).events.map(event => event.eventSeq)).toEqual(['8', '9']);
+    expect(ok(await client.journalIntervals(T.gapClosed, {limit: 100})).intervals.map(i => [i.kind, i.annotation])).toEqual([
+      ['discontinuity', true], ['sample-loss', false], ['event-loss', false]]);
+    expect(ok(await client.listSamples({tripUuid: T.manySamples}, {limit: 300}))).toHaveLength(300);
+    refused(await client.journalTrip('7a000000-0000-4000-8000-0000000000ff'), 'UNKNOWN_TRIP');
+    refused(await client.journalEvents(T.delivered, {limit: 51}), 'INVALID_INPUT');
+    // A refused argument is an ordinary result: the client keeps serving.
+    expect(client.state).toBe('running');
+    expect(await client.close()).toEqual({clean: true});
+    expect(await exit).toBe(0);
+  });
+
+  it('refuses journal commands with unknown fields, other page sizes or malformed cursors with INVALID_INPUT', async () => {
+    const worker = new Worker(WORKER, {workerData: {kind: 'storage'}});
+    started.push(worker);
+    const answers: unknown[] = [];
+    worker.on('message', message => answers.push(message));
+    const commands: Record<string, unknown>[] = [
+      {name: 'journalTrips', query: {limit: 50}},
+      {name: 'journalTrips', query: {cursor: '0'}},
+      {name: 'journalTrips', query: {game: 'ETS2'}},
+      {name: 'journalTrips', query: null},
+      {name: 'journalTrips', testHooks: {}},
+      {name: 'journalTrip', tripUuid: 'not-a-uuid'},
+      {name: 'journalTrip', tripUuid: T.delivered, page: {limit: 100}},
+      {name: 'journalEvents', tripUuid: T.delivered, page: {limit: 51}},
+      {name: 'journalEvents', tripUuid: T.delivered, page: {limit: 100, cursor: '18446744073709551615'}},
+      {name: 'journalEvents', tripUuid: T.delivered},
+      {name: 'journalIntervals', tripUuid: T.delivered, page: {limit: 3_600}},
+      {name: 'journalIntervals', tripUuid: T.delivered, page: {limit: 100, cursor: '01'}},
+      // Well-formed requests pass the parser and reach the host, which has no open database yet.
+      {name: 'journalTrips', query: {cursor: '9223372036854775807', game: 'ats', outcome: 'open', completeness: 'unknown'}},
+      {name: 'journalEvents', tripUuid: T.delivered, page: {limit: 500, cursor: '18446744073709551614'}}
+    ];
+    commands.forEach((command, index) => worker.postMessage({type: 'storage.request', id: index + 1, command}));
+    await vi.waitFor(() => expect(answers).toHaveLength(commands.length));
+    expect(answers.map(answer => (answer as {result: {error: {code: string}}}).result.error.code)).toEqual([...Array(12).fill('INVALID_INPUT'), 'STORAGE_CLOSED', 'STORAGE_CLOSED']);
   });
 });
 
