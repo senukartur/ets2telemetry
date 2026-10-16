@@ -88,6 +88,15 @@ it('describes the current trip and an untracked job', () => {
     .toEqual(['Synthetic test database (never game history)', 'Current trip is partial']);
 });
 
+// PR-4 advisory review (TD-005): main's `unknown` status carries no totals, although main keeps them in its loss base, so
+// the loss lines disappear while the status is unknown and come back with the next service's report.
+it('shows no loss lines while the status is unknown or disabled', () => {
+  expect(recordingStatusText({state: 'unknown'}).losses).toEqual([]);
+  expect(recordingStatusText({state: 'disabled'}).losses).toEqual([]);
+  expect(recordingStatusText(status('waiting', {losses: {notConnected: 2}})).losses)
+    .toEqual(['Gaps recorded since ETS2Telemetry started', 'Intervals without a connection: 2']);
+});
+
 it('shows a loss line only for each non-zero total, since ETS2Telemetry started', () => {
   expect(recordingStatusText(status('recording')).losses).toEqual([]);
   expect(recordingStatusText(status('recording', {losses: {notConnected: 1}})).losses)
