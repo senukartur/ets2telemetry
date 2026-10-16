@@ -454,3 +454,11 @@ ET-015c PR-1 implementation update on October 16, 2026: the service's recording 
 - a stop during a retryable backoff ends within the stop budget, and a stop while a restore-loss row is in flight waits for that row and acknowledges nothing.
 
 No behaviour changed. See [the telemetry service v1 ingestion](docs/telemetry-service-v1.md) and [ET-015c validation](docs/validation/et-015c.md).
+
+ET-015c PR-3 implementation update on October 16, 2026: the telemetry service now sends main a validated recording status:
+- the state and target;
+- a fixed cause code;
+- the current trip's phase and completeness;
+- the committed loss counts.
+
+Main keeps it in `AppState.health.recording`. It resets the status to `unknown` while the service is not running, and adds the totals across service restarts. A restore loss counted again after a service restart in the same plugin session overstates the totals (TD-004); the database stays correct. No IPC channel, bridge method or preload code changed; only the payload type is wider. Production reports `disabled`, and the dashboard and tray text follow in PR-4. See [the telemetry service v1 ingestion](docs/telemetry-service-v1.md) and [ET-015c validation](docs/validation/et-015c.md).
