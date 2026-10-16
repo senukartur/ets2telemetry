@@ -52,3 +52,15 @@ Protocol v1 minor 0 does not carry cruise control, throttle, brake and clutch in
 - Extend telemetry-core normalization and the dashboard.
 
 **Until then:** do not show or infer these values; nothing in the current protocol carries them.
+
+## TD-004: Restore loss counted once in the live loss totals
+
+Recorded October 16, 2026 by the coordinator after the ET-015c PR-3 review. **This entry is a coordinator decision under the owner's standing delegation of October 15, 2026, not an individually owner-approved deferral** (see the ET-015c authorization in [concept.md](../concept.md#et-015c-authorization--october-16-2026)). The owner may revise it.
+
+`recordCompleteness(…, {ifAbsent: true})` reports success both when it inserts the `restore-loss` interval and when an equal row already exists. A telemetry service that records the restore loss of a plugin session therefore cannot tell whether an earlier service in the same plugin session already recorded it, and counts it again. After a service restart in the same plugin session, main's totals since the application started show `restoreLoss` 2 and `lostEvents` twice A − C, while the database holds one row ([recording status](telemetry-service-v1.md#recording-status-et-015c)). The database is correct.
+
+**Future work:**
+- `recordCompleteness` with `ifAbsent` should report whether it inserted, so the live loss totals count a restore loss once.
+- The trip recorder then counts a restore loss only when it was inserted.
+
+**Until then:** a service restart in the same plugin session overstates `restoreLoss` and `lostEvents` in the live recording status; the totals shown by ET-015c PR-4 are an upper bound in that case. No storage API change is authorized by this entry.
