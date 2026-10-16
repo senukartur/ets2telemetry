@@ -392,7 +392,7 @@ describe('ET-016 journal reads at the worker boundary', () => {
   const PAGE = {database: DATABASE, trips: [LIST_ITEM], nextCursor: null};
   const EVENTS = {database: DATABASE, window: WINDOW, events: [EVENT, {...EVENT, eventSeq: '2', attribution: {kind: 'ambiguous', tripUuid: null}}], nextCursor: null};
   const INTERVALS = {database: DATABASE, intervals: [INTERVAL], total: 1, nextCursor: null};
-  const DETAIL = {database: DATABASE, trip: {...LIST_ITEM, pluginSessionId: P1, openedEventSeq: '1', outcomeEventSeq: null, closedBy: null},
+  const DETAIL = {database: DATABASE, trip: {...LIST_ITEM, pluginSessionId: P1, openedBy: 'event', openedEventSeq: '1', outcomeEventSeq: null, closedBy: null},
     job: {source: 'event', eventSeq: '1', checkpointNextEventSeq: null, values: job()}, truck: {eventSeq: '2', values: truck()}, trailers: [{eventSeq: '3', values: trailer(0)}],
     outcomeDetails: null,
     money: {incomplete: false, totals: [{category: 'fine', sdkType: 's64', currency: {status: 'unknown'}, raw: '-18446744073709551616', count: 2}],
@@ -483,6 +483,8 @@ describe('ET-016 journal reads at the worker boundary', () => {
     ['a money total that is not an integer', 'trip', changed(DETAIL, p => { p.money.totals[0].raw = '1.5'; })],
     ['a sample label without samples', 'trip', changed(DETAIL, p => { (p.samples as {firstUtcMs: unknown}).firstUtcMs = 1; })],
     ['export bounds that disagree with the intervals', 'trip', changed(DETAIL, p => { (p.exportBounds as {lastIntervalId: unknown}).lastIntervalId = null; })],
+    ['an event-opened trip without its opening event', 'trip', changed(DETAIL, p => { (p.trip as {openedEventSeq: unknown}).openedEventSeq = null; })],
+    ['a checkpoint-opened trip with an opening event', 'trip', changed(DETAIL, p => { p.trip.openedBy = 'checkpoint'; })],
     ['a missing value', 'trip', undefined]
   ])('fails closed on a journal answer with %s', async (_name, name, value) => {
     const f = fixture();

@@ -33,7 +33,7 @@ The contract is [packages/contracts/src/journal.ts](../packages/contracts/src/jo
 
 **The trip detail** (`JournalTripDetail`) holds:
 
-- the list fields (game, game-mode evidence, outcome, close reason, recording completeness, UTC labels, observed distance, fuel used, a job summary), the plugin session, the opening and outcome eventSeqs, and the close carrier (`closedBy`, null while open and for trips closed under schema version 1);
+- the list fields (game, game-mode evidence, outcome, close reason, recording completeness, UTC labels, observed distance, fuel used, a job summary), the plugin session, how the trip opened (`openedBy` `event` with its `openedEventSeq`, or `checkpoint` with `openedEventSeq` null), the outcome eventSeq, and the close carrier (`closedBy`, null while open and for trips closed under schema version 1);
 - the job values in canonical units from the normalized job row, with its source (`event` with its eventSeq, or `checkpoint` with the checkpoint's nextEventSeq);
 - the truck and trailers from their configuration events, and the gameplay outcome record (`job.delivered` with its revenue or `job.cancelled` with its penalty);
 - money totals (below), the timeline window (below), the first 50 completeness intervals with the trip's total and the next cursor;
@@ -55,6 +55,8 @@ A trip's timeline lists events of the trip's own plugin session in eventSeq orde
 | Closed by a gap of its own session | just before the first eventSeq the gap newly covered | `close-gap` |
 | Closed from another plugin session (a restart) | the end of the trip's session | `end-of-session` |
 | Closed under schema version 1 (no carrier) | unknown: the timeline lists only the events of its session attributed to it or referenced by it (its job, truck and trailer configurations, its opening and its outcome) | `known: false` |
+
+**Checkpoint-opened trips.** Schema version 2 allows a trip opened from a checkpoint (`opened_by` `checkpoint`, `opened_event_ref` NULL), but nothing writes one until ET-016b PR-7. If one exists, the journal reads return it rather than refusing it: the list shows it like any trip, the detail has `openedBy: 'checkpoint'`, `openedEventSeq: null` and a `checkpoint` job with its nextEventSeq, and the window starts at that nextEventSeq and ends by the rules above. `tests/storage/journal-reads.test.ts` inserts such a trip directly and checks the list, the detail (also against the contract validator), the window and the timeline. The other storage reads (`getTrip`, `listTrips`) still expect an opening event and are adapted in PR-7.
 
 An event row at the carrier's eventSeq marks an event close; otherwise a gap closed the trip. Every event carries its stored record, its occurrence and its attribution (`trip`, `trip-before-loaded`, `free-driving`, `ambiguous` with the attributed trip, or none), so an event of the window that belongs to another trip or to no trip is still shown as such. Events of other plugin sessions are never listed.
 

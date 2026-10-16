@@ -66,7 +66,8 @@ export interface JournalTripPage {database: JournalDatabase; trips: JournalTripL
 
 /**
  * The trip's timeline window (J7). A known window lists the events of the trip's own plugin session from
- * `fromEventSeq` through `throughEventSeq`; `null` means no upper bound: the trip is open, or another plugin session
+ * `fromEventSeq` through `throughEventSeq`. It starts at the earlier of the opening event and the job configuration;
+ * for a trip opened from a checkpoint, at the checkpoint's nextEventSeq. `null` means no upper bound: the trip is open, or another plugin session
  * closed it (`end-of-session`). `close-event` includes the event that closed the trip; `close-gap` ends just before
  * the first eventSeq a gap newly covered. A trip closed before schema version 2 recorded no close carrier: its window
  * is unknown, and its timeline lists only the events of its session attributed to it or referenced by it.
@@ -109,7 +110,12 @@ export type JournalOutcomeRecord = Extract<EventRecord, {type: 'job.delivered'} 
 export interface JournalTripDetail {
   database: JournalDatabase;
   trip: JournalTripListItem & {
-    pluginSessionId: string; openedEventSeq: Uint64; outcomeEventSeq: Uint64 | null;
+    pluginSessionId: string;
+    /**
+     * How the trip opened (schema version 2): at its `job.configured` event (`openedEventSeq`), or from a checkpoint
+     * without an opening event (`openedEventSeq` null). Checkpoint openings are written only from ET-016b PR-7 on.
+     */
+    openedBy: 'event' | 'checkpoint'; openedEventSeq: Uint64 | null; outcomeEventSeq: Uint64 | null;
     /** The plugin session and eventSeq of the item that closed the trip; null while open and for trips closed before schema version 2. */
     closedBy: {pluginSessionId: string; eventSeq: Uint64} | null;
   };
@@ -336,8 +342,9 @@ export function validateJournalIntervalPage(value: unknown): JournalIntervalPage
 export function validateJournalTripDetail(value: unknown): JournalTripDetail {
   const o = exact(value, ['database', 'trip', 'job', 'truck', 'trailers', 'outcomeDetails', 'money', 'window', 'intervals', 'samples', 'exportBounds']);
   database(o.database);
-  const trip = exact(o.trip, [...LIST_KEYS, 'pluginSessionId', 'openedEventSeq', 'outcomeEventSeq', 'closedBy']);
-  listItem(trip); uuid(trip.pluginSessionId); eventSeq(trip.openedEventSeq); nullable(trip.outcomeEventSeq, eventSeq);
+  const trip = exact(o.trip, [...LIST_KEYS, 'pluginSessionId', 'openedBy', 'openedEventSeq', 'outcomeEventSeq', 'closedBy']);
+  listItem(trip); uuid(trip.pluginSessionId); oneOf(trip.openedBy, ['event', 'checkpoint']); nullable(trip.openedEventSeq, eventSeq); nullable(trip.outcomeEventSeq, eventSeq);
+  if ((trip.openedBy === 'event') !== (trip.openedEventSeq !== null)) bad();
   if ((trip.outcomeEventSeq === null) !== (trip.outcome !== 'delivered' && trip.outcome !== 'cancelled')) bad();
   nullable(trip.closedBy, closedBy => { const c = exact(closedBy, ['pluginSessionId', 'eventSeq']); uuid(c.pluginSessionId); eventSeq(c.eventSeq); });
   if (trip.outcome === 'open' && trip.closedBy !== null) bad();

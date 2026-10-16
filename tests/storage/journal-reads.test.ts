@@ -3,8 +3,9 @@
 // then seeded with the hand-written anchors and 110 filler trips of tests/shared/journal-seed.ts. Every expected value
 // is written by hand from that seed, the version 1 and 2 fixture SQL and J5/J7; none is read back from the code under
 // test. Runs under npm run test:storage.
+import Database from 'better-sqlite3';
 import {afterAll, beforeAll, describe, expect, it} from 'vitest';
-import {JOURNAL_DETAIL_INTERVALS, JOURNAL_TRIP_PAGE, type JournalTripListItem, type JournalTripsQuery} from '../../packages/contracts/src/journal';
+import {JOURNAL_DETAIL_INTERVALS, JOURNAL_TRIP_PAGE, validateJournalTripDetail, type JournalTripListItem, type JournalTripsQuery} from '../../packages/contracts/src/journal';
 import type {Storage, TripEffect} from '../../packages/storage/src/index';
 import {
   ANCHOR_GAME_MODE, ANCHOR_JOBS, CHANGED_TRUCK, EUR, JOURNAL_TRIPS as T, MIGRATED_V1_SESSION, MIGRATED_V1_TRIP, seedJournalAnchors, seedJournalFillers, SESSION_B_UTC,
@@ -130,7 +131,7 @@ describe('journal trip detail (J5, J13; REG-009, REG-014)', () => {
         job: {source: 'event', sourceCity: text('Synthetic City A'), sourceCompany: text('Synthetic Company A'), destinationCity: text('Synthetic City B'),
           destinationCompany: text('Synthetic Company B'), cargo: text('Synthetic Cargo'), plannedDistance: {available: true, value: 152_000, unit: 'm'},
           expectedIncome: {available: true, value: {raw: '12345', sdkType: 'u64', currency: UNKNOWN_CURRENCY}}},
-        pluginSessionId: ETS2_A, openedEventSeq: '4', outcomeEventSeq: '9', closedBy: {pluginSessionId: ETS2_A, eventSeq: '9'}
+        pluginSessionId: ETS2_A, openedBy: 'event', openedEventSeq: '4', outcomeEventSeq: '9', closedBy: {pluginSessionId: ETS2_A, eventSeq: '9'}
       },
       job: {source: 'event', eventSeq: '4', checkpointNextEventSeq: null, values: job()},
       truck: {eventSeq: '1', values: truck()},
@@ -158,7 +159,7 @@ describe('journal trip detail (J5, J13; REG-009, REG-014)', () => {
         job: {source: 'event', sourceCity: text(''), sourceCompany: text('Synthetic Company A'), destinationCity: {available: false, reason: 'not-supported'},
           destinationCompany: text('Synthetic Company B'), cargo: NOT_OBSERVED, plannedDistance: {available: true, value: 0, unit: 'm'},
           expectedIncome: {available: true, value: {raw: '0', sdkType: 'u64', currency: USD}}},
-        pluginSessionId: ATS_A, openedEventSeq: '3', outcomeEventSeq: '4', closedBy: {pluginSessionId: ATS_A, eventSeq: '4'}
+        pluginSessionId: ATS_A, openedBy: 'event', openedEventSeq: '3', outcomeEventSeq: '4', closedBy: {pluginSessionId: ATS_A, eventSeq: '4'}
       },
       job: {source: 'event', eventSeq: '3', checkpointNextEventSeq: null, values: ANCHOR_JOBS.zeroValues},
       truck: {eventSeq: '1', values: truck()},
@@ -217,7 +218,7 @@ describe('journal trip detail (J5, J13; REG-009, REG-014)', () => {
   });
   it('reads the migrated version 1 trip: no close carrier, an unknown window, its penalty and its fixture interval', () => {
     const detail = ok(storage.journalTrip(MIGRATED_V1_TRIP));
-    expect(detail.trip).toMatchObject({pluginSessionId: MIGRATED_V1_SESSION, openedEventSeq: '1', outcomeEventSeq: '6', closedBy: null});
+    expect(detail.trip).toMatchObject({pluginSessionId: MIGRATED_V1_SESSION, openedBy: 'event', openedEventSeq: '1', outcomeEventSeq: '6', closedBy: null});
     expect(detail.window).toEqual({known: false, pluginSessionId: MIGRATED_V1_SESSION});
     expect(detail.outcomeDetails).toEqual({eventSeq: '6', record: {type: 'job.cancelled',
       penalty: {available: true, value: {raw: '-9223372036854775808', sdkType: 's64', currency: UNKNOWN_CURRENCY}}}});
@@ -343,6 +344,47 @@ describe('journal reads of the version 2 fixture (S-1, J7)', () => {
       expect(ok(v2.journalEvents(trip(3), {limit: 100})).events.map(e => e.eventSeq)).toEqual(['6']);
       expect(ok(v2.journalTrip(trip(4))).intervals.items.map(i => [i.kind, i.cause, i.annotation])).toEqual([['discontinuity', 'restart', false]]);
     } finally { await fixture.dispose(); }
+  });
+});
+
+describe('a trip opened from a checkpoint (schema version 2, J7; written only from ET-016b PR-7 on)', () => {
+  it('reads it with no opening event, its checkpoint job and a window from the checkpoint\'s nextEventSeq', async () => {
+    const cp = await workspace();
+    try {
+      let st = await cp.open();
+      await seedJournalAnchors(st);
+      st.close();
+      // No write command produces such a trip before ET-016b PR-7, so it is inserted directly: a checkpoint job of
+      // session B at nextEventSeq 2 with the open anchor's job values, and an open trip opened by that checkpoint.
+      const tripUuid = '7c000000-0000-4000-8000-000000000001';
+      const db = new Database(cp.database);
+      try {
+        const columns = (db.prepare('SELECT name FROM pragma_table_info(\'job_configurations\')').pluck().all() as string[])
+          .filter(name => !['id', 'source', 'event_ref', 'checkpoint_next_event_seq'].includes(name));
+        const job = db.prepare(`INSERT INTO job_configurations (source, event_ref, checkpoint_next_event_seq, ${columns.join(', ')})
+          SELECT 'checkpoint', NULL, '00000000000000000002', ${columns.map(name => `j.${name}`).join(', ')} FROM job_configurations j JOIN events e ON e.id = j.event_ref
+          JOIN plugin_sessions s ON s.id = e.plugin_session_id WHERE s.plugin_session_uuid = ? AND e.event_seq = '00000000000000000001'`).run(ETS2_B).lastInsertRowid;
+        db.prepare(`INSERT INTO trips (trip_uuid, plugin_session_ref, game, game_mode, game_mode_method, game_mode_confidence, job_configuration_ref, opened_event_ref, opened_by,
+          outcome, recording_completeness, started_utc_ms, observed_distance_m_state, created_utc_ms, updated_utc_ms)
+          SELECT ?, id, 'ets2', 'unknown', 'none', 'none', ?, NULL, 'checkpoint', 'open', 'partial', ?, 'not-observed', ?, ? FROM plugin_sessions WHERE plugin_session_uuid = ?`)
+          .run(tripUuid, job, SESSION_B_UTC + 1_500, SESSION_B_UTC + 1_500, SESSION_B_UTC + 1_500, ETS2_B);
+      } finally { db.close(); }
+      st = await cp.open();
+      const listed = ok(st.journalTrips()).trips[0];
+      expect(listed).toMatchObject({tripUuid, outcome: 'open', recordingCompleteness: 'partial', job: {source: 'checkpoint', cargo: text('Synthetic Cargo')}});
+      const detail = ok(st.journalTrip(tripUuid));
+      // The answer passes the same contract check the storage client applies.
+      expect(validateJournalTripDetail(detail)).toBe(detail);
+      expect(detail.trip).toMatchObject({openedBy: 'checkpoint', openedEventSeq: null, outcomeEventSeq: null, closedBy: null, pluginSessionId: ETS2_B});
+      expect(detail.job).toEqual({source: 'checkpoint', eventSeq: null, checkpointNextEventSeq: '2', values: ANCHOR_JOBS.open});
+      expect([detail.truck, detail.trailers, detail.outcomeDetails]).toEqual([null, [], null]);
+      const window = {known: true, pluginSessionId: ETS2_B, fromEventSeq: '2', throughEventSeq: null, end: 'open'};
+      expect(detail.window).toEqual(window);
+      const events = ok(st.journalEvents(tripUuid, {limit: 100}));
+      expect(events.window).toEqual(window);
+      expect(events.events.map(event => [event.eventSeq, event.attribution])).toEqual([['2', {kind: 'trip', tripUuid: T.open}], ['3', null]]);
+      expect(ok(st.journalIntervals(tripUuid, {limit: 100}))).toMatchObject({intervals: [], total: 0, nextCursor: null});
+    } finally { await cp.dispose(); }
   });
 });
 

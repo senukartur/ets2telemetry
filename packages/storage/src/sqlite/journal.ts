@@ -135,8 +135,8 @@ export function journalTrips(conn: StorageConnection, query: JournalTripsQuery =
 
 interface Window {dto: JournalWindow; session: bigint; from: bigint; through: bigint | null}
 /**
- * The trip's timeline window (J7). It starts at the earlier of the opening event and the job configuration (its event,
- * or the checkpoint's nextEventSeq) and ends at the close carrier: through an event of the trip's own session, before a
+ * The trip's timeline window (J7). It starts at the earlier of the opening event, if any, and the job configuration (its
+ * event, or the checkpoint's nextEventSeq) and ends at the close carrier: through an event of the trip's own session, before a
  * gap's first newly covered eventSeq, or at the end of the session when another plugin session closed it. An open trip
  * has no end. A closed trip without a carrier (closed before schema version 2) has no known window.
  */
@@ -145,9 +145,11 @@ function windowOf(db: Database.Database, trip: Row): Window {
   const pluginSessionId = String(get(db, JOURNAL_QUERIES.session, session)?.plugin_session_uuid);
   const job = get(db, JOURNAL_QUERIES.job, trip.job_configuration_ref);
   if (!job) fail('DATABASE_CORRUPT');
-  const opened = BigInt(fromU64Key(get(db, JOURNAL_QUERIES.eventById, trip.opened_event_ref)?.event_seq));
+  // A trip opened from a checkpoint (opened_by 'checkpoint', ET-016b PR-7) has no opening event; its window starts at
+  // its job configuration, the checkpoint's nextEventSeq.
+  const opened = trip.opened_event_ref === null ? null : BigInt(fromU64Key(get(db, JOURNAL_QUERIES.eventById, trip.opened_event_ref)?.event_seq));
   const configured = job.source === 'event' ? BigInt(fromU64Key(get(db, JOURNAL_QUERIES.eventById, job.event_ref)?.event_seq)) : BigInt(fromU64Key(job.checkpoint_next_event_seq));
-  const from = configured < opened ? configured : opened;
+  const from = opened === null || configured < opened ? configured : opened;
   const known = (end: 'open' | 'close-event' | 'close-gap' | 'end-of-session', through: bigint | null): Window =>
     ({dto: {known: true, pluginSessionId, fromEventSeq: from.toString(), throughEventSeq: through === null ? null : through.toString(), end}, session, from, through});
   if (trip.outcome === 'open') return known('open', null);
@@ -257,7 +259,8 @@ export function journalTrip(conn: StorageConnection, tripUuid: string): JournalT
   const label = (ref: unknown) => ref === null ? null : toSafeNumber(get(db, JOURNAL_QUERIES.sampleLabel, ref)?.utc_ms, Number.MAX_SAFE_INTEGER, 0);
   return {
     database: database(db),
-    trip: {...listItem(db, trip), pluginSessionId: String(session.plugin_session_uuid), openedEventSeq: fromU64Key(event(trip.opened_event_ref).event_seq),
+    trip: {...listItem(db, trip), pluginSessionId: String(session.plugin_session_uuid), openedBy: trip.opened_by as 'event' | 'checkpoint',
+      openedEventSeq: trip.opened_event_ref === null ? null : fromU64Key(event(trip.opened_event_ref).event_seq),
       outcomeEventSeq: outcome === null ? null : fromU64Key(outcome.event_seq), closedBy},
     job: {source: job.source as 'event' | 'checkpoint', eventSeq: job.source === 'event' ? fromU64Key(event(job.event_ref).event_seq) : null,
       checkpointNextEventSeq: job.source === 'checkpoint' ? fromU64Key(job.checkpoint_next_event_seq) : null, values: jobValues(job)},
