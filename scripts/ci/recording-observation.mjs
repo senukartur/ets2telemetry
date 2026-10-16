@@ -19,6 +19,8 @@ import {startRecordingProxy} from './recording-proxy.mjs';
 // dashboard shows current data. Every
 // ACK it sees is written by the service only after the storage commit (E8), so ACKs are the in-run commit evidence; the
 // rows are compared after exit with the hand-written tests/fixtures/recording/normal-delivery-runtime-journey.rows.expected.json.
+// ET-015b PR-4: frames on connections 2 and 3 make the restarted service and run B each store one one-second sample,
+// which their explicit exits flush (recording-flush) unless the 5 s sample flush already wrote it.
 
 export const RECORDING_TARGET = 'synthetic:smoke';
 export const RECORDING_SCENARIO = 'normal-delivery-runtime-journey';
@@ -36,11 +38,38 @@ export const JOURNEY_TRANSPORT = Object.freeze([
   {atMs: 360, action: 'connect', client: durable},
   {atMs: 2000, action: 'disconnect'},
   {atMs: 2010, action: 'connect', client: durable},
-  {atMs: 3000, action: 'disconnect'}
+  {atMs: 4000, action: 'disconnect'}
 ]);
-const JOURNEY_STEPS = Object.freeze([{atMs: 2100, action: 'lifecycle', event: 'simulation.paused'}]);
+/**
+ * ET-015b PR-4: the steps appended to normal-delivery. The source second of a snapshot is 1000 + floor(atMs / 1000), and
+ * each connection's checkpoint is the baseline of a new recorder (H4). Connection 2 (the restarted service): second 1001
+ * is sampled at 1,100 ms; 1,600 ms is the same second; the pause (eventSeq 10) is the tray exit's gate. Connection 3
+ * (run B): after the resume (11), second 1002 is sampled at 2,100 ms; the frame at 3,100 ms is paused (12), so second
+ * 1003 has no row; the resume (13) is run B's gate. Each gate is a connection's last step before its scripted
+ * disconnect, so an exit right after its ACK cannot change what the simulator serves (matchesReplay), and that ACK, sent
+ * after the commit, follows the observation of every earlier reading in the FIFO.
+ */
+const JOURNEY_STEPS = Object.freeze([
+  {atMs: 1100, action: 'frame', channels: {speed: 0}},
+  {atMs: 1600, action: 'frame', channels: {speed: 2.5}},
+  {atMs: 1700, action: 'lifecycle', event: 'simulation.paused'},
+  {atMs: 2050, action: 'lifecycle', event: 'simulation.started'},
+  {atMs: 2100, action: 'frame', channels: {speed: 12.25, odometer: 1000.53125}},
+  {atMs: 2900, action: 'lifecycle', event: 'simulation.paused'},
+  {atMs: 3100, action: 'frame'},
+  {atMs: 3200, action: 'lifecycle', event: 'simulation.started'}
+]);
 /** ACKs the proxy delivers per connection, as JOURNEY_TRANSPORT scripts them; later ones are lost on the way. */
 const DELIVERED_ACKS = [4, Infinity, Infinity];
+/** The last eventSeq of connections 2 and 3: the gates before the tray exit and before run B's exit. */
+const TRAY_EXIT_GATE = '10', RUN_B_GATE = '13';
+/**
+ * H8: a pending sample is written by the 5 s flush at the earliest SAMPLE_FLUSH_MS after it was sampled. A service whose
+ * recording-flush step was logged less than this long after its first connection (both from its own clock) sampled its
+ * row later than that connection and stopped before the timer could fire, so its exit flush must have written the row.
+ * The 500 ms below SAMPLE_FLUSH_MS absorb timer and clock granularity.
+ */
+const EXIT_FLUSH_CERTAIN_MS = 4500;
 
 /** A wire uint64 or a stored 20-digit key in canonical decimal form. */
 const key = value => value === null || value === undefined ? null : String(value).replace(/^0+(?=.)/, '');
@@ -163,18 +192,19 @@ export async function runRecordingSmoke({application, launcher, dashboard, recor
   record.afterRestart = await waitForCurrentTelemetry(dashboard);
   record.serviceRestartRecovered = true;
 
-  // 3. Close the main window to the tray, then admit the restarted service's durable connection: the redelivery and the
-  // rest of the job are recorded while no dashboard exists.
+  // 3. Close the main window to the tray, then admit the restarted service's durable connection: the redelivery, the
+  // rest of the job and the sampled frames are recorded while no dashboard exists. The ACK of the gate (eventSeq 10)
+  // follows the observation of the frames before it.
   const afterClose = await closeDashboard(application, dashboard);
   record.afterClose = afterClose;
   assert.equal(launcher.exitCode, null, 'Application exited after closing the dashboard');
   assert.equal(afterClose.servicePid, restarted.servicePid); assert.equal(afterClose.tray, true); assert.equal(afterClose.exiting, false);
   recording.admit();
-  const second = (await recording.waitFor(s => s.connections[1]?.forwardedAcks.includes('9'), 'SECOND_CONNECTION_DID_NOT_COMMIT_THE_JOB', 20000)).connections[1];
+  const second = (await recording.waitFor(s => s.connections[1]?.forwardedAcks.includes(TRAY_EXIT_GATE), 'SECOND_CONNECTION_DID_NOT_COMMIT_THE_JOB', 20000)).connections[1];
   record.secondConnection = second;
   assert.equal(second.checkpointAckedThrough, '4');
-  assert.deepEqual(second.events, [{eventSeq: '5', redelivered: true}, ...['6', '7', '8', '9'].map(eventSeq => ({eventSeq, redelivered: false}))]);
-  assert.deepEqual(second.forwardedAcks, ['5', '6', '7', '8', '9']);
+  assert.deepEqual(second.events, [{eventSeq: '5', redelivered: true}, ...['6', '7', '8', '9', '10'].map(eventSeq => ({eventSeq, redelivered: false}))]);
+  assert.deepEqual(second.forwardedAcks, ['5', '6', '7', '8', '9', '10']);
   record.redelivered = second.events.filter(event => event.redelivered).map(event => event.eventSeq);
   record.restartedServiceDurable = await durableActiveRow(events, config.diagnostics, restarted.servicePid);
   const during = await lifecycleState(application);
@@ -183,7 +213,8 @@ export async function runRecordingSmoke({application, launcher, dashboard, recor
   assert.equal((await mainEvents()).filter(row => row.event === 'SERVICE_EXIT').length, 1, 'Only the terminated service may have exited');
   record.dashboardClosedRecordingContinued = true;
 
-  // 4. Explicit exit from the tray: the service's ordered stop runs `recording-flush`, then closes the database.
+  // 4. Explicit exit from the tray: the service's ordered stop runs `recording-flush`, which writes the pending sample of
+  // second 1001 (H11), then closes the database.
   await stopTracing();
   const exitStarted = performance.now();
   const exited = waitForExit(launcher, 8000, 'TRAY_EXIT_DID_NOT_FINISH_WITHIN_8_SECONDS');
@@ -197,7 +228,10 @@ export async function runRecordingSmoke({application, launcher, dashboard, recor
   record.trayExitOrderly = true;
 }
 
-/** Run B: the same profile and LOCALAPPDATA start again; the third connection appends to the same database. */
+/**
+ * Run B: the same profile and LOCALAPPDATA start again; the third connection appends to the same database. The ACK of its
+ * gate (eventSeq 13) follows the observation of the frames before it, so the exit that follows flushes second 1002.
+ */
 export async function verifyRecordingRestart({application, record, rendererPages, recording, events, config}) {
   const {dashboard} = await rendererPages(application);
   await dashboard.getByText(READY_TEXT, {exact: true}).waitFor({state: 'visible', timeout: 10000});
@@ -207,17 +241,19 @@ export async function verifyRecordingRestart({application, record, rendererPages
   assert.ok(Number.isSafeInteger(state.servicePid) && state.servicePid !== record.servicePid && state.servicePid !== record.restartedServicePid, 'Run B reused a service');
   // Run A has exited, so no earlier service can take this admission.
   recording.admit();
-  const third = (await recording.waitFor(s => s.connections[2]?.forwardedAcks.includes('10'), 'THIRD_CONNECTION_DID_NOT_COMMIT', 20000)).connections[2];
+  const third = (await recording.waitFor(s => s.connections[2]?.forwardedAcks.includes(RUN_B_GATE), 'THIRD_CONNECTION_DID_NOT_COMMIT', 20000)).connections[2];
   record.thirdConnection = third;
-  assert.equal(third.checkpointAckedThrough, '9');
-  assert.deepEqual(third.events, [{eventSeq: '10', redelivered: false}]); assert.deepEqual(third.forwardedAcks, ['10']);
+  assert.equal(third.checkpointAckedThrough, '10');
+  assert.deepEqual(third.events, ['11', '12', '13'].map(eventSeq => ({eventSeq, redelivered: false})));
+  assert.deepEqual(third.forwardedAcks, ['11', '12', '13']);
   record.restart.durable = await durableActiveRow(events, config.diagnosticsRestart, state.servicePid);
   record.restartRecovered = true;
 }
 
 const FAILURE_EVENTS = /FAILED|TIMEOUT|UNCAUGHT|UNHANDLED|INVALID|RENDER_PROCESS_GONE/;
+// ET-015b PR-4: no sample write is retried, dropped by the pending bound, discarded after a failure or skipped as stored.
 const RECORDING_FAILURES = new Set(['V1_DURABLE_RETRY', 'V1_DURABLE_UNAVAILABLE', 'V1_DURABLE_ACK_AHEAD', 'V1_DURABLE_RESTORE_LOSS', 'V1_EVENT_CONFLICT',
-  'RECORDING_TARGET_REJECTED', 'HISTORY_STORAGE_UNAVAILABLE']);
+  'RECORDING_TARGET_REJECTED', 'HISTORY_STORAGE_UNAVAILABLE', 'V1_SAMPLES_RETRY', 'V1_SAMPLES_DROPPED', 'V1_SAMPLES_DISCARDED', 'V1_SAMPLES_SKIPPED']);
 /** Recording diagnostics of one run's service processes: target, openings, the flush step and no durable failure. */
 function verifyServiceRecording(service, created) {
   assert.deepEqual(service.filter(row => row.event === 'RECORDING_TARGET').map(row => row.facts), created.map(() => ({purpose: 'synthetic'})));
@@ -226,6 +262,25 @@ function verifyServiceRecording(service, created) {
   assert.deepEqual(service.filter(row => row.event === 'SHUTDOWN_STEP' && row.facts?.name === 'history-storage').map(row => row.facts.outcome), ['ok']);
   assert.equal(service.filter(row => row.event === 'HISTORY_STORAGE_CLOSED').length, 1);
   assert.deepEqual(service.filter(row => RECORDING_FAILURES.has(row.event)).map(row => row.event), []);
+}
+
+/**
+ * ET-015b PR-4 (H8, H11): the V1_SAMPLES_EXIT rows of one service process that stopped in order with one sample row
+ * pending since its connection. Its exit flush must have written that row, logging {rows: 1, losses: 0, code: WRITTEN},
+ * when its recording-flush step was logged less than EXIT_FLUSH_CERTAIN_MS after its first connection; later, the 5 s
+ * flush may have written the row first and the exit then logs nothing. Both times come from the service's own log.
+ */
+function sampleExit(service, pid) {
+  const rows = service.filter(row => row.pid === pid);
+  const connected = rows.find(row => row.event === 'V1_SOURCE_STATUS' && row.facts?.status === 'connected');
+  const flush = rows.find(row => row.event === 'SHUTDOWN_STEP' && row.facts?.name === 'recording-flush');
+  assert.ok(connected && flush, `Service ${pid}: connection or recording-flush step not logged`);
+  const flushAfterConnectMs = Date.parse(flush.time) - Date.parse(connected.time);
+  assert.ok(Number.isFinite(flushAfterConnectMs), `Service ${pid}: diagnostic times unavailable`);
+  const exits = rows.filter(row => row.event === 'V1_SAMPLES_EXIT').map(row => row.facts);
+  const required = flushAfterConnectMs < EXIT_FLUSH_CERTAIN_MS;
+  if (required || exits.length) assert.deepEqual(exits, [{rows: 1, losses: 0, code: 'WRITTEN'}], `Service ${pid}: the exit flush did not write the pending sample`);
+  return {pid, required, flushAfterConnectMs, exits};
 }
 
 /** Reads a copy of the database with the checkout's Electron in Node mode (scripts/ci/recording-database.cjs). */
@@ -265,8 +320,9 @@ function rowsOf(raw, session) {
     }),
     events: raw.events.map(e => ({eventSeq: key(e.eventSeq), type: e.type, utcMs: e.utcMs === null ? null : Number(e.utcMs), firstRedelivered: e.firstRedelivered === 1})),
     gaps: raw.gaps, samples: raw.samples, coverage: {committedThroughEventSeq: key(raw.sessions[0]?.committedThrough)},
-    // ET-015b PR-3: each stored sample as its source second, floor(monotonicNs / 1e9), and its trip label.
-    sampleRows: raw.sampleRows.map(s => ({second: (BigInt(s.monotonicNs) / 1_000_000_000n).toString(), trip: label(s.trip)}))
+    // ET-015b: each stored sample with its source second, floor(monotonicNs / 1e9), and its trip label.
+    sampleRows: raw.sampleRows.map(s => ({second: (BigInt(s.monotonicNs) / 1_000_000_000n).toString(), trip: label(s.trip), monotonicNs: key(s.monotonicNs),
+      utcMs: s.utcMs, speedMps: s.speedMps, odometerM: s.odometerM}))
   };
 }
 
@@ -333,17 +389,23 @@ export async function verifyRecordingRun({config, record, recording, mainEvents,
   assert.deepEqual(raw.integrity, ['ok']); assert.equal(raw.foreignKeyViolations, 0);
   assert.deepEqual({purpose: raw.purpose, acceptedOrigin: raw.acceptedOrigin, applicationId: raw.applicationId, userVersion: raw.userVersion},
     {purpose: 'synthetic', acceptedOrigin: 'synthetic', applicationId: 1163154226, userVersion: 1});
-  assert.deepEqual(record.database.sessions, [{game: 'ets2', origin: 'synthetic', committedThrough: '10', endReason: null, simulatorSession: true}]);
+  assert.deepEqual(record.database.sessions, [{game: 'ets2', origin: 'synthetic', committedThrough: '13', endReason: null, simulatorSession: true}]);
   assert.ok(raw.events.every(event => event.session === session) && raw.trips.every(trip => trip.session === session && trip.game === 'ets2'));
+  assert.ok(raw.sampleRows.every(sample => sample.session === session), 'A sample belongs to another plugin session');
   const actual = record.database.rows = rowsOf(raw, session);
   const expected = JSON.parse(await readFile(path.join(config.checkout, 'tests/fixtures/recording', `${RECORDING_SCENARIO}.rows.expected.json`), 'utf8'));
   for (const name of ['trips', 'attributions', 'intervals', 'events', 'gaps', 'coverage']) assert.deepEqual(actual[name], expected[name], `Stored ${name} differ from the expectation`);
-  // ET-015b PR-3: whether the one optional sample row was flushed before the diagnostic kill depends on timing, so its
-  // count is recorded, and every stored row must be one of the expectation's optional rows, each at most once.
+  // ET-015b PR-4: the sample rows in insertion order. Whether the optional second-1000 row was flushed before the
+  // diagnostic kill depends on timing, so it may lead (its count is recorded); the required rows follow exactly.
   record.database.samples = actual.samples;
   assert.equal(actual.sampleRows.length, actual.samples);
-  assert.equal(new Set(actual.sampleRows.map(row => row.second)).size, actual.sampleRows.length, 'A sample second is stored twice');
-  for (const row of actual.sampleRows) assert.ok(expected.samples.optional.some(allowed => allowed.second === row.second && allowed.trip === row.trip), `Unexpected stored sample ${JSON.stringify(row)}`);
+  const optionalSamples = record.database.optionalSamples = actual.sampleRows.length - expected.samples.required.length;
+  assert.ok(optionalSamples >= 0 && optionalSamples <= expected.samples.optional.length, `Unexpected sample count ${actual.sampleRows.length}`);
+  assert.deepEqual(actual.sampleRows, [...expected.samples.optional.slice(0, optionalSamples), ...expected.samples.required], 'Stored samples differ from the expectation');
+  // H11: run A's replacement service and run B's service each had one row pending at their explicit exits.
+  record.sampleExits = [sampleExit(serviceEvents, record.restartedServicePid), sampleExit(restartServiceEvents, record.restart.servicePid)];
+  assert.deepEqual(serviceEvents.filter(row => row.pid === record.servicePid && row.event === 'V1_SAMPLES_EXIT'), [], 'The terminated service logged an exit flush');
+  record.samplesRecorded = true;
   // Each event once, and coverage at least every ACK the simulator received.
   assert.equal(new Set(actual.events.map(event => event.eventSeq)).size, actual.events.length);
   const acknowledged = record.proxy.connections.flatMap(c => c.forwardedAcks).reduce((max, through) => BigInt(through) > max ? BigInt(through) : max, 0n);
