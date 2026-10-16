@@ -31,7 +31,6 @@ export const STRINGS = Object.freeze({
   exitFailed: 'Exit request failed',
   trayOpen: 'Open ETS2Telemetry',
   trayExit: 'Exit ETS2Telemetry',
-  trayRecording: 'Recording: not available in this version',
   trayStarting: 'Starting',
   trayExiting: 'Exiting',
   serviceFailedTitle: 'Telemetry service problem',

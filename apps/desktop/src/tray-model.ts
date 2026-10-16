@@ -1,8 +1,9 @@
 import type {AppHealth, LiveTelemetry} from '../../../packages/contracts/src';
+import {recordingStatusText} from './recording-status-text';
 import {SERVICE_HEALTH_TEXT, STORAGE_HEALTH_TEXT, STRINGS} from './strings';
 import type {TrayTone} from './tray-icon';
 
-/** Windows truncates notification-area tooltips longer than 127 characters. */
+/** Windows truncates notification-area tooltips longer than 127 characters; menu status lines keep the same limit. */
 export const TRAY_TOOLTIP_LIMIT = 127;
 /** Tooltip, menu and icon changes are applied at most twice per second. */
 export const TRAY_MIN_UPDATE_INTERVAL_MS = 500;
@@ -41,7 +42,8 @@ export function trayModel(input: TrayInput): TrayModel {
   const tooltip = `${STRINGS.appName}\n${detail}`.slice(0, TRAY_TOOLTIP_LIMIT);
   return {tooltip, tone: trayTone(health, exiting), menu: [
     {kind: 'status', label: exiting ? STRINGS.trayExiting : statusLine(health)},
-    {kind: 'status', label: STRINGS.trayRecording},
+    // ET-015c PR-4 (G8): the recording status in its short form; the tooltip does not carry it.
+    {kind: 'status', label: `${STRINGS.recordingTrayPrefix}${recordingStatusText(health.recording).short}`.slice(0, TRAY_TOOLTIP_LIMIT)},
     {kind: 'separator'},
     {kind: 'open', label: STRINGS.trayOpen, enabled: !exiting},
     {kind: 'separator'},

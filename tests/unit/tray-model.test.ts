@@ -2,6 +2,8 @@ import {inflateSync} from 'node:zlib';
 import {afterEach, beforeEach, expect, it, vi} from 'vitest';
 import type {AppHealth} from '../../packages/contracts/src';
 import {TRAY_TOOLTIP_LIMIT, TrayPresenter, trayModel, trayTone, type TrayInput} from '../../apps/desktop/src/tray-model';
+import {RECORDING_CODES} from '../../apps/desktop/src/recording-status';
+import type {RecordingHealth, RecordingLosses, RecordingState} from '../../packages/contracts/src';
 import {TRAY_ICON_REPRESENTATIONS, TRAY_TONE_RGB, crc32, trayIconPng, type TrayTone} from '../../apps/desktop/src/tray-icon';
 
 beforeEach(() => vi.useFakeTimers());
@@ -12,7 +14,7 @@ const ready: TrayInput = {health: health('ready'), exiting: false, source: {sele
 it('builds the status, recording, open and exit menu and disables actions while exiting', () => {
   expect(trayModel(ready).menu).toEqual([
     {kind: 'status', label: 'Service: ready · Storage self-test: verified'},
-    {kind: 'status', label: 'Recording: not available in this version'},
+    {kind: 'status', label: 'Recording: off in this version'},
     {kind: 'separator'},
     {kind: 'open', label: 'Open ETS2Telemetry', enabled: true},
     {kind: 'separator'},
@@ -30,6 +32,39 @@ it('keeps tooltips within the notification-area limit and free of readings or pa
   for (const service of ['starting', 'ready', 'restarting', 'failed', 'stopping'] as const) for (const selection of ['game', 'ets2', 'ats', 'synthetic', 'replay'] as const)
     for (const status of ['waiting', 'connected', 'service-failed', 'incompatible'] as const) for (const exiting of [false, true])
       expect(trayModel({health: health(service), exiting, source: {selection, status}}).tooltip.length).toBeLessThanOrEqual(TRAY_TOOLTIP_LIMIT);
+});
+
+// ET-015c PR-4 (G8): the second status line shows the recording status; the expected lines are written by hand.
+const NO_LOSSES: RecordingLosses = {lostEvents: 0, eventLoss: 0, notConnected: 0, sampleLoss: 0, restoreLoss: 0, droppedSamples: 0};
+const withRecording = (recording: RecordingHealth): TrayInput => ({...ready, health: {...ready.health, recording}});
+const recordingLine = (input: TrayInput) => trayModel(input).menu[1];
+it('shows the recording status as the second status line', () => {
+  expect(recordingLine(withRecording({state: 'unknown'}))).toEqual({kind: 'status', label: 'Recording: not known'});
+  expect(recordingLine(withRecording({state: 'recording', target: 'synthetic', code: null, losses: NO_LOSSES, trip: null})))
+    .toEqual({kind: 'status', label: 'Recording: on · synthetic test database'});
+  expect(recordingLine(withRecording({state: 'retrying', target: 'history', code: 'DISK_FULL', losses: {...NO_LOSSES, lostEvents: 3}, trip: null})))
+    .toEqual({kind: 'status', label: 'Recording: retrying, the disk is full'});
+  expect(recordingLine(withRecording({state: 'live-only', target: 'replay', code: 'ACK_AHEAD_OF_STORAGE', losses: NO_LOSSES, trip: null})))
+    .toEqual({kind: 'status', label: 'Recording: not this game session · replay test database'});
+  // The line stays while exiting; only the actions are disabled. The tooltip never carries it.
+  expect(recordingLine({...withRecording({state: 'unknown'}), exiting: true})).toEqual({kind: 'status', label: 'Recording: not known'});
+  expect(trayModel(withRecording({state: 'unknown'})).tooltip).toBe('ETS2Telemetry\nService ready · Source: ETS2 (connected)');
+});
+it('keeps every recording line within the notification-area limit', () => {
+  const states: RecordingState[] = ['opening', 'waiting', 'recording', 'paused', 'interrupted', 'retrying', 'not-recorded-source', 'live-only', 'stopped'];
+  for (const state of states) for (const target of ['history', 'synthetic', 'replay'] as const) for (const code of [null, ...RECORDING_CODES]) {
+    const label = recordingLine(withRecording({state, target, code, losses: NO_LOSSES, trip: null}));
+    expect(label.kind === 'status' && label.label.startsWith('Recording: ') && label.label.length <= TRAY_TOOLTIP_LIMIT).toBe(true);
+  }
+});
+it('rebuilds only the menu when the recording status changes', async () => {
+  const view = {setToolTip: vi.fn(), setMenu: vi.fn(), setTone: vi.fn()};
+  const presenter = new TrayPresenter(view, {setTimeout: (callback, ms) => setTimeout(callback, ms), clearTimeout: handle => clearTimeout(handle as ReturnType<typeof setTimeout>), now: () => Date.now()});
+  presenter.update(ready);
+  presenter.update(withRecording({state: 'recording', target: 'synthetic', code: null, losses: NO_LOSSES, trip: null})); await vi.advanceTimersByTimeAsync(500);
+  expect(view.setMenu).toHaveBeenCalledTimes(2); expect(view.setToolTip).toHaveBeenCalledOnce(); expect(view.setTone).toHaveBeenCalledOnce();
+  expect(view.setMenu.mock.lastCall?.[0][1]).toEqual({kind: 'status', label: 'Recording: on · synthetic test database'});
+  presenter.dispose();
 });
 
 it('selects ready, busy and failed tones from health', () => {
