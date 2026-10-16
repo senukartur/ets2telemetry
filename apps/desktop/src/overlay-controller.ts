@@ -1,6 +1,7 @@
-import type {LiveTelemetry, OverlayEditPlacement, OverlayEditState, OverlayLayout, OverlayPlacement} from '../../../packages/contracts/src';
+import type {LiveTelemetry, OverlayEditPlacement, OverlayEditState, OverlayLayout, OverlayPlacement, OverlaySections} from '../../../packages/contracts/src';
 import {overlayBounds, placementFromBounds, type DipRect} from './overlay-geometry';
 import {DEFAULT_OVERLAY_PLACEMENTS, samePlacement} from './overlay-placement';
+import {DEFAULT_OVERLAY_SECTIONS, sameSections} from './overlay-sections';
 import {currentGameClientBounds, gameForeground, visibleGameClientBounds, type PhysicalClientBounds} from './window-placement';
 
 /**
@@ -33,6 +34,8 @@ export interface OverlayScreen {
 export interface OverlayControllerOptions {
   /** The saved placement of the initial layout; the overlay window was created at its scale. */
   placement?: OverlayPlacement;
+  /** The saved enabled sections; the strip reserves rows for them (ET-012c). Defaults to every section. */
+  sections?: OverlaySections;
   /** Receives every change of the edit state. */
   editChanged?: (state: OverlayEditState) => void;
 }
@@ -59,6 +62,7 @@ export class OverlayController {
   private physical?: PhysicalClientBounds;
   private topologyReceipt?: string;
   private placement: OverlayPlacement;
+  private sections: OverlaySections;
   private zoom: number;
   private readonly editChanged: (state: OverlayEditState) => void;
   private edit?: EditDraft;
@@ -72,23 +76,29 @@ export class OverlayController {
   constructor(private readonly window: OverlayWindow, private readonly screen: OverlayScreen, private readonly topmostLost: (phase: 'show' | 'visible') => void = () => {},
     private layout: OverlayLayout = 'strip', options: OverlayControllerOptions = {}) {
     this.placement = options.placement ?? DEFAULT_OVERLAY_PLACEMENTS[layout];
+    this.sections = options.sections ?? DEFAULT_OVERLAY_SECTIONS;
     this.zoom = this.placement.scale;
     this.editChanged = options.editChanged ?? (() => {});
     this.reportedEdit = {active: false};
   }
   update(live: LiveTelemetry): void {this.live = live; this.place();}
   /**
-   * A saved layout or placement change re-places the window from the last observation; it renews no SDK or window
-   * freshness. A moved visible overlay re-asserts topmost without activation; a hidden one stays hidden. While editing,
-   * the saved placement is only remembered: the draft stays until edit mode ends.
+   * A saved layout, placement or sections change re-places the window from the last observation; it renews no SDK or
+   * window freshness. A moved visible overlay re-asserts topmost without activation; a hidden one stays hidden. Sections
+   * alone change only the strip's reserved rows (ET-012c decision S7): the window moves and is raised only when its
+   * rectangle changed. While editing, the saved placement is only remembered: the draft stays until edit mode ends, but
+   * changed sections re-size the draft from its unchanged fractions, which may no longer fit.
    */
-  setLayout(layout: OverlayLayout, placement: OverlayPlacement = DEFAULT_OVERLAY_PLACEMENTS[layout]): void {
-    if (layout === this.layout && samePlacement(placement, this.placement)) return;
-    this.layout = layout; this.placement = placement;
+  setLayout(layout: OverlayLayout, placement: OverlayPlacement = DEFAULT_OVERLAY_PLACEMENTS[layout], sections: OverlaySections = this.sections): void {
+    const placed = layout === this.layout && samePlacement(placement, this.placement), sectionsChanged = !sameSections(sections, this.sections);
+    if (placed && !sectionsChanged) return;
+    this.layout = layout; this.placement = placement; this.sections = sections;
     // Main refuses a layout change while editing; should one arrive anyway, the edit is cancelled.
     if (this.edit && this.edit.layout !== layout) {this.endEdit(); return;}
-    if (this.edit) return;
-    this.bounds = this.physical = undefined;
+    if (this.edit) {if (sectionsChanged) this.place(); return;}
+    // A new layout or placement always moves the window; new sections only invalidate the cached client observation.
+    if (placed) this.physical = undefined;
+    else this.bounds = this.physical = undefined;
     this.place();
   }
   loaded(ready: boolean): void {this.ready = ready; this.place();}
@@ -147,7 +157,7 @@ export class OverlayController {
     if (!this.edit) return;
     this.moving = false;
     if (this.visible && this.client) {
-      this.edit.draft = placementFromBounds(this.edit.layout, this.client, bounds, this.edit.draft);
+      this.edit.draft = placementFromBounds(this.edit.layout, this.client, bounds, this.edit.draft, this.sections);
       this.bounds = {x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height};
     }
     this.place();
@@ -208,7 +218,7 @@ export class OverlayController {
       const client = this.screen.screenToDipRect(null, physical);
       if (!validArea(client)) {this.hide(); return;}
       // Each layout has its own placement and size inside the client area (overlay-geometry.ts); a layout that does not fit hides.
-      const bounds = overlayBounds(this.layout, client, this.placement);
+      const bounds = overlayBounds(this.layout, client, this.placement, this.sections);
       if (!bounds || !this.onDisplay(bounds)) {this.hide(); return;}
       const moved = !this.bounds || !sameRect(bounds, this.bounds);
       if (moved) {this.window.setBounds(bounds); this.bounds = bounds;}
@@ -228,7 +238,7 @@ export class OverlayController {
     if (this.ready && physical && !this.topologyPending()) {
       let client: DipRect | undefined;
       try {client = this.screen.screenToDipRect(null, physical);} catch {client = undefined;}
-      const placed = client && validArea(client) ? overlayBounds(edit.layout, client, edit.draft) : undefined;
+      const placed = client && validArea(client) ? overlayBounds(edit.layout, client, edit.draft, this.sections) : undefined;
       if (client && validArea(client) && !placed) status = 'too-large';
       else if (client && placed && this.onDisplay(placed)) {
         this.client = client; bounds = placed;

@@ -30,6 +30,54 @@ export async function waitForOverlay(page, expected) {
   try {return await handle.jsonValue();} finally {await handle.dispose();}
 }
 
+// ET-012c strip containment. The synthetic checkpoint fixture (tests/fixtures/protocol-v0/checkpoint.json) carries
+// current values for these sections, in canonical order; range stays hidden because its estimate is not observed.
+export const STRIP_SMOKE_SECTIONS = Object.freeze(['speed', 'gear', 'rpm', 'fuel', 'sdk-consumption', 'cargo', 'destination', 'expected-income', 'game-time']);
+// The hidden overlay window is created at the strip's reserved size for every section at scale 1 (overlay-geometry.ts).
+export const STRIP_SMOKE_VIEWPORT = Object.freeze({innerWidth: 1280, innerHeight: 110});
+
+// Self-contained browser callback: false until exactly one current strip root shows exactly the expected sections, then
+// one coherent read of where they lie. `outside` lists sections with an empty box or one not fully inside both the root
+// (the window's viewport) and the strip row, which clips its overflow. `uncapped` lists strip items without a maximum
+// width. `truncated` (values that end in an ellipsis) and `rows` (distinct section tops) are recorded for review only.
+export function stripLayoutObservation(expected) {
+  const roots = globalThis.document.querySelectorAll('[data-testid="overlay-root"]');
+  if (roots.length !== 1) return false;
+  const root = roots[0];
+  if (root.getAttribute('data-layout') !== 'strip' || root.getAttribute('data-freshness') !== 'current') return false;
+  const nodes = Array.from(root.querySelectorAll('[data-testid^="overlay-section-"]'));
+  const sections = nodes.map(node => String(node.getAttribute('data-testid')).slice('overlay-section-'.length));
+  if (sections.length !== expected.sections.length || sections.some((id, index) => id !== expected.sections[index])) return false;
+  const row = root.querySelector('.overlay-strip-row');
+  if (!row) return false;
+  const rootBox = root.getBoundingClientRect(), rowBox = row.getBoundingClientRect();
+  const within = (box, outer) => box.left >= outer.left && box.top >= outer.top && box.right <= outer.right && box.bottom <= outer.bottom;
+  const outside = [], truncated = [], tops = new Set();
+  nodes.forEach((node, index) => {
+    const box = node.getBoundingClientRect();
+    if (!(box.width > 0 && box.height > 0) || !within(box, rootBox) || !within(box, rowBox)) outside.push(sections[index]);
+    tops.add(Math.round(box.top));
+    const value = node.querySelector('.overlay-value');
+    if (value && value.scrollWidth > value.clientWidth) truncated.push(sections[index]);
+  });
+  const uncapped = Array.from(row.children).filter(child => globalThis.getComputedStyle(child).maxWidth === 'none')
+    .map(child => child.getAttribute('data-testid') ?? String(child.className));
+  return {viewport: {innerWidth: globalThis.innerWidth, innerHeight: globalThis.innerHeight}, sections, outside, uncapped, truncated, rows: tops.size};
+}
+
+/** Every shown strip section lies inside the overlay window, the window has the reserved size, and every item is capped. */
+export function verifyStripLayout(observation) {
+  assert.deepEqual(observation.outside, [], 'Enabled strip sections lie outside the overlay window');
+  assert.deepEqual(observation.viewport, {...STRIP_SMOKE_VIEWPORT}, 'The strip overlay window must have its reserved size');
+  assert.deepEqual(observation.uncapped, [], 'Every strip item must have a maximum width');
+  return observation;
+}
+
+export async function waitForStripLayout(page, expected) {
+  const handle = await page.waitForFunction(stripLayoutObservation, expected, {timeout: 10000, polling: 50});
+  try {return await handle.jsonValue();} finally {await handle.dispose();}
+}
+
 // Inspect the CSS actually loaded by each isolated renderer, including dynamic Vite chunks.
 // A hidden DOM check protects style isolation; it does not establish real game visibility.
 export async function verifyRendererStyles(dashboard, overlay) {
@@ -209,6 +257,9 @@ export async function runOverlaySmoke(application, dashboard, overlay, source, r
     desktop: typeof globalThis.desktop, keys: Object.getOwnPropertyNames(globalThis.overlay), frozen: Object.isFrozen(globalThis.overlay)}));
   assert.deepEqual(result.bridge, {require: 'undefined', process: 'undefined', desktop: 'undefined', keys: ['subscribeOverlay'], frozen: true});
   await observe('initial'); result.sourceBefore = source.statistics();
+  // ET-012c (REG-016): every enabled strip section with data lies inside the overlay window. The observation is stored
+  // before it is verified, so a failed receipt keeps it. Recorded for review; RuntimeReceipt.ps1 does not validate it.
+  verifyStripLayout(result.stripLayout = await waitForStripLayout(overlay, {sections: STRIP_SMOKE_SECTIONS}));
   source.setReading(20, 71); await observe('changed', {speed: '72.0', fuel: '71.0'}); await dashboardReading('72.0', '71.0');
   result.changedReading = {speedKmh: 72, fuelL: 71};
   source.setUnavailable(); await observe('missing', {speed: '—', fuel: '—'});
