@@ -140,7 +140,11 @@ function runApplication(profileError: unknown): void {
       else updateHealth({type: 'service-restarting'});
       const update: LiveTelemetry = {...initialLive(selection), status: state, reason: 'Telemetry service exited; current interval is unknown'};
       freshness.invalidate(update); dashboardSubscriptions.close(); dashboardPort = undefined; window?.webContents.send('telemetry:service-state', update);},
+    // A service that failed or exited before its first readiness completed (the readiness was retired while awaiting its
+    // broker or settings) never created the windows; create them now, so the dashboard shows the exhausted state and
+    // the tray and a second launch can open it (ET-016 PR-3 delta review).
     exhausted: () => {retireRecording(); journal.retire(); updateHealth({type: 'service-restart-exhausted'});
+      if (!started && !supervisor.stopping && !lifecycle.exiting) {started = true; createWindow(); createOverlay();}
       const update: LiveTelemetry = {...initialLive(selection), status: 'service-failed', reason: 'Automatic service restart limit reached'};
       freshness.invalidate(update); window?.webContents.send('telemetry:service-state', update);},
     // Every stop that did not start as an exit request is fatal (renderer or overlay exhaustion, configuration or
