@@ -1063,7 +1063,7 @@ it('reports the settings view in the gated lifecycle facts', () => isolatedProfi
 const saveOverlay = (channel: 'settings:set-overlay-layout' | 'settings:set-overlay-sections', event: unknown, ...request: unknown[]) =>
   Promise.resolve(handlers.get(channel)!(event, ...request as [unknown]));
 const sectionIds = (projection: Record<string, unknown>) => (projection.sections as {id: string}[]).map(section => section.id);
-it('creates the overlay window at the strip nominal size by default', async () => {
+it('creates the overlay window at the strip size reserved for every section by default', async () => {
   await ready(); expect(configurations[1]).toMatchObject({width: 1280, height: 110});
 });
 it('creates the overlay window at the nominal size of the saved layout', async () => {
