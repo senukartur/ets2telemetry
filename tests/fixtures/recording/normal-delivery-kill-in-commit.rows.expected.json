@@ -1,0 +1,20 @@
+{
+  "scenario": "normal-delivery-kill-in-commit",
+  "authoredFrom": [
+    "Why a separate expectation: normal-delivery.trip.expected.json describes one uninterrupted consumer. Here the transport of normal-delivery.json is replaced by a second durable connection at 606 ms, so a new process receives the redelivery after the first process is terminated inside the transaction of job.delivered (eventSeq 8); the lockstep replay has no such reconnection.",
+    "The first process commits eventSeq 1-7 as in normal-delivery: the job (3) opens trip@3 partial with opened-at-load (T12), truck 1 and trailer 2 are its references, and the road stop 100 -> 200 persists observed distance 0 m at eventSeq 5 (T16). The kill inside the transaction rolls back event 8 with its attribution and close (storage: event and effects in one transaction).",
+    "docs/trips.md cold start (R4): the second process seeds the stored open trip of the same plugin session (job key of eventSeq 3, last label 1,800,000,000,500 of eventSeq 7, stored distance 0, not cleared), resumes it active and queues a consumer-restart not-connected interval; the trip is already partial, so no trip.update.",
+    "The redelivered job.delivered (8) carries the queued interval first, then attribution trip and the close {delivered, outcome, partial} at its label 1,800,000,000,600; the distance is unchanged (0 m), so no update. The live job.cleared (9) adds nothing."
+  ],
+  "trips": [
+    {"trip": "trip@3", "jobConfigurationEventSeq": "3", "truckConfigurationEventSeq": "1", "trailerConfigurationEventSeqs": ["2"], "openedEventSeq": "3",
+      "gameMode": {"mode": "unknown", "method": "none", "confidence": "none"}, "gameModeAmbiguous": false, "outcome": "delivered", "outcomeEventSeq": "8", "closeReason": "outcome",
+      "recordingCompleteness": "partial", "startedUtcMs": 1800000000030, "endedUtcMs": 1800000000600, "observedDistanceM": {"available": true, "value": 0}}
+  ],
+  "attributions": [{"eventSeq": "8", "trip": "trip@3", "attribution": "trip"}],
+  "intervals": [
+    {"trip": "trip@3", "kind": "discontinuity", "detail": {"cause": "opened-at-load", "atEventSeq": "3"}},
+    {"trip": "trip@3", "kind": "not-connected", "detail": {"cause": "consumer-restart"}}
+  ],
+  "coverage": {"committedThroughEventSeq": "9"}
+}

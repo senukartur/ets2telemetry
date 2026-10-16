@@ -1,0 +1,24 @@
+{
+  "scenario": "normal-delivery-permission-denied",
+  "authoredFrom": [
+    "Why a separate expectation: the transport of normal-delivery.json is replaced by a durable connection, a live-only one at 606 ms (the failed service reconnects live-only) and a durable one at 800 ms for a new service; the first commit of job.delivered (eventSeq 8) fails inside its transaction with SQLITE_READONLY, which storage classifies as PERMISSION_DENIED and the pipeline as unavailable (E7).",
+    "Events 1-7 commit as in normal-delivery: trip@3 opens partial with opened-at-load (T12) with truck 1 and trailer 2; observed distance 0 m is persisted at eventSeq 5 (T16). Nothing from eventSeq 8 on is stored by the first service, and the trip stays open.",
+    "The live-only connection is open when the job is cleared (9), so the producer copies no event and counts it as a noDurableConsumer loss (OD-4); a frame appended at 650 ms ends that SDK frame, so the loss run becomes the gap record 9-9 (docs/simulator-v1.md, frame_end). Event 8, sent to the first durable connection and never acknowledged, stays retained (5 minutes).",
+    "docs/trips.md cold start (R4): the new service seeds the stored open trip of the same plugin session (job key of eventSeq 3, last label 1,800,000,000,500, stored distance 0, not cleared), resumes it active and queues a consumer-restart not-connected interval; the trip is already partial, so no trip.update.",
+    "The redelivered job.delivered (8) carries the queued interval, then attribution trip and the close {delivered, outcome, partial} at 1,800,000,000,600; the distance is unchanged. The gap 9-9 then finds no open trip: a session-level not-connected interval (T10: noDurableConsumer is the consumer's absence) over its whole record, with the lost event's source time (atMs 610) as both bounds; it is its first delivery, so not redelivered. Nine first commits (events 1-8 and the gap 9-9); no duplicate."
+  ],
+  "trips": [
+    {"trip": "trip@3", "jobConfigurationEventSeq": "3", "truckConfigurationEventSeq": "1", "trailerConfigurationEventSeqs": ["2"], "openedEventSeq": "3",
+      "gameMode": {"mode": "unknown", "method": "none", "confidence": "none"}, "gameModeAmbiguous": false, "outcome": "delivered", "outcomeEventSeq": "8", "closeReason": "outcome",
+      "recordingCompleteness": "partial", "startedUtcMs": 1800000000030, "endedUtcMs": 1800000000600, "observedDistanceM": {"available": true, "value": 0}}
+  ],
+  "attributions": [{"eventSeq": "8", "trip": "trip@3", "attribution": "trip"}],
+  "intervals": [
+    {"trip": "trip@3", "kind": "discontinuity", "detail": {"cause": "opened-at-load", "atEventSeq": "3"}},
+    {"trip": "trip@3", "kind": "not-connected", "detail": {"cause": "consumer-restart"}},
+    {"trip": null, "kind": "not-connected", "firstEventSeq": "9", "lastEventSeq": "9", "startMonotonicNs": "1000610000000", "endMonotonicNs": "1000610000000", "sourceClockId": "capture-clock",
+      "detail": {"cause": "gap", "causes": {"offline": "0", "noDurableConsumer": "1", "queueCount": "0", "queueBytes": "0", "retentionExpired": "0", "encodingFailed": "0"},
+        "firstEventSeq": "9", "lastEventSeq": "9", "redelivered": false}}
+  ],
+  "coverage": {"committedThroughEventSeq": "9", "committed": 9, "duplicate": 0, "covered": 0}
+}
