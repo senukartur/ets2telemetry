@@ -14,7 +14,10 @@ import {performance} from 'node:perf_hooks';
 // - records each connection's checkpoint, events, ACKs and the time from each event to the ACK that covers it.
 // Server bytes pass unchanged; only whole client frames are forwarded or dropped.
 
-/** About half the service's 5 s handshake deadline, so an admitted hello keeps at least 2.5 s for its checkpoint. */
+/**
+ * About half the service's 5 s handshake deadline. That deadline starts at the service's `open()`, before its hello reaches
+ * the proxy, so an admitted hello keeps about 3 s for its checkpoint, less the time from open to hello.
+ */
 export const HOLD_LIMIT_MS = 2000;
 const CLIENT_FRAME_BYTES = 4096, SERVER_FRAME_BYTES = 65536;
 

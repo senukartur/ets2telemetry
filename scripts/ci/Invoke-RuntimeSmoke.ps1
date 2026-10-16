@@ -53,8 +53,10 @@ if (Test-Path -LiteralPath $cpuSeries -PathType Leaf) {
 $validation = Test-RuntimeReceipt -DriverResultPath (Join-Path $output 'result.json') -ExpectedCommit $config.commit -ExpectedMode $Mode -ExpectedScenario $Scenario -JobExitCode $code
 # ET-015a PR-4: recorded, never asserted. Live-only hellos the recording proxy refused while storage was still opening
 # (the R10 window the journey does not exercise), holds that expired before admission and the slowest event-to-ACK time.
+# Read only a receipt that Test-RuntimeReceipt accepted for reading (size bound, no reparse point, parsed); otherwise fail closed.
 $recordingFacts = $null
-if ($Scenario -eq 'recording') {
+if ($Scenario -eq 'recording' -and $validation.driverResultAvailable -ne $true) { $recordingFacts = [ordered]@{error='RECORDING_FACTS_UNAVAILABLE'} }
+elseif ($Scenario -eq 'recording') {
     try {
         $driverResult = Get-Content -LiteralPath (Join-Path $output 'result.json') -Raw -Encoding UTF8 | ConvertFrom-Json
         $recordingFacts = [ordered]@{refusedLiveOnly=$driverResult.recording.refusedLiveOnly; expiredHolds=$driverResult.recording.expiredHolds;

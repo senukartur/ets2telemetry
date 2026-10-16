@@ -106,7 +106,8 @@ it('does not admit a hold that is already older than its limit when the admissio
 });
 
 it('delivers the scripted number of ACKs, records the lost ones and each event-to-ACK latency, and serves one connection at a time', async () => {
-  const {upstream, proxy} = await setup({deliveredAcks: [1]});
+  // The second hello stays held across several waits; a long hold limit keeps this case off the wall clock (cases 2 and 3 cover expiry).
+  const {upstream, proxy} = await setup({deliveredAcks: [1], holdLimitMs: 60000});
   proxy.admit(); proxy.admit();
   const first = client(proxy.endpoint, hello(true));
   await vi.waitFor(() => expect(upstream.connections).toHaveLength(1), {timeout: 2000, interval: 10});
