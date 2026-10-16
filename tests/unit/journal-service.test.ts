@@ -6,7 +6,10 @@ import type {JournalCallResult} from '../../packages/contracts/src';
 import type {JournalResult, StorageErrorCode} from '../../packages/storage/src/api';
 import {JOURNAL_ANSWER_INVALID} from '../../packages/storage/src/api';
 import {storageError} from '../../packages/storage/src/errors';
-import type {HistoryState} from '../../apps/desktop/src/history-storage';
+import type {StorageWorkerHandle} from '../../packages/storage/src/client';
+import type {StorageRequest} from '../../packages/storage/src/worker/protocol';
+import {recorderClient, type HistoryState} from '../../apps/desktop/src/history-storage';
+import {createRecordingRuntime} from '../../apps/desktop/src/recording-runtime';
 import {JournalService, type JournalClient, type JournalHistory, type JournalReplyMessage} from '../../apps/desktop/src/journal-service';
 import type {JournalQuery} from '../../apps/desktop/src/journal-contract';
 import {DETAIL, EVENT_PAGE, INTERVAL_PAGE, SAMPLE, TRIP, TRIP_PAGE} from '../shared/journal-replies';
@@ -116,7 +119,6 @@ describe('storage results map to fixed J11 codes (J11)', () => {
     ['UNKNOWN_TRIP', failed('UNKNOWN_TRIP'), {ok: false, code: 'NOT_FOUND'}],
     ['JOURNAL_ANSWER_INVALID (a bad page fails only this read)', {ok: false, error: {...JOURNAL_ANSWER_INVALID}}, {ok: false, code: 'FAILED'}],
     ['STORAGE_BUSY', failed('STORAGE_BUSY'), {ok: false, code: 'BUSY'}],
-    ['TIMEOUT', failed('TIMEOUT'), {ok: false, code: 'TIMEOUT'}],
     ['INVALID_INPUT', failed('INVALID_INPUT'), {ok: false, code: 'FAILED'}],
     ['DATABASE_CORRUPT', failed('DATABASE_CORRUPT'), {ok: false, code: 'FAILED'}],
     ['INTERNAL', failed('INTERNAL'), {ok: false, code: 'FAILED'}]
@@ -134,12 +136,77 @@ describe('storage results map to fixed J11 codes (J11)', () => {
     f.answer(0, failed('WORKER_FAILED'));
     await expect(answer).resolves.toEqual({ok: false, code: 'DATABASE_UNAVAILABLE', storageCode: 'TIMEOUT'});
   });
+  it('reports a storage TIMEOUT as DATABASE_UNAVAILABLE with TIMEOUT, never as a retryable TIMEOUT, because the client failed closed', async () => {
+    const f = fixture();
+    const answer = f.service.query(TRIPS);
+    // The read itself missed the 10 s deadline: the client failed closed and the database became unavailable.
+    f.history.state = 'unavailable'; f.history.failureCode = 'TIMEOUT';
+    f.answer(0, failed('TIMEOUT'));
+    await expect(answer).resolves.toEqual({ok: false, code: 'DATABASE_UNAVAILABLE', storageCode: 'TIMEOUT'});
+    // Without a recorded failure code yet, the result's own code is named.
+    const g = fixture(), next = g.service.query(TRIPS);
+    g.answer(0, failed('TIMEOUT'));
+    await expect(next).resolves.toEqual({ok: false, code: 'DATABASE_UNAVAILABLE', storageCode: 'TIMEOUT'});
+    // While the service stops, it is SERVICE_UNAVAILABLE like any closed client.
+    const h = fixture(), stopping = h.service.query(TRIPS);
+    h.stop(); h.answer(0, failed('TIMEOUT'));
+    await expect(stopping).resolves.toEqual({ok: false, code: 'SERVICE_UNAVAILABLE'});
+  });
   it('reports a client closed by the orderly stop as SERVICE_UNAVAILABLE', async () => {
     const f = fixture();
     const answer = f.service.query(TRIPS);
     f.stop();
     f.answer(0, failed('STORAGE_CLOSED'));
     await expect(answer).resolves.toEqual({ok: false, code: 'SERVICE_UNAVAILABLE'});
+  });
+});
+
+describe('a journal read past the 10 s storage deadline (PR #97 review)', () => {
+  /** A storage worker that opens the database and never answers a journal read. */
+  function silentJournalWorker() {
+    const sent: StorageRequest[] = [];
+    let listener: ((message: unknown) => void) | undefined, exitListener: ((code: number) => void) | undefined;
+    const worker: StorageWorkerHandle = {
+      postMessage: request => {
+        sent.push(request);
+        if (request.command.name === 'open') queueMicrotask(() => listener?.({type: 'storage.response', id: request.id,
+          result: {ok: true, value: {schemaVersion: 2, created: true, databaseUuid: '50000000-0000-4000-8000-000000000001', purpose: 'synthetic'}}}));
+      },
+      onMessage: next => { listener = next; }, onError: () => undefined, onExit: next => { exitListener = next; },
+      terminate: vi.fn(() => { exitListener?.(1); return Promise.resolve(1); })
+    };
+    return {worker, sent};
+  }
+  it('fails the storage client closed: the read answers DATABASE_UNAVAILABLE TIMEOUT, the database stays unavailable and recording stops', async () => {
+    vi.useFakeTimers();
+    try {
+      const {worker, sent} = silentJournalWorker(), logs: unknown[][] = [];
+      // The production recording wiring for a synthetic target, so the recording status is derived as the service does it.
+      const runtime = createRecordingRuntime({env: {ETS2TELEMETRY_RECORDING: 'synthetic:t'}, gameHistory: false, localAppData: 'C:\\isolated',
+        log: (event, _detail, facts) => { logs.push([event, facts]); }, createWorker: () => worker, onV1State: () => undefined,
+        historyOverrides: {appVersion: '0.1.0-test'}});
+      const journal = new JournalService({history: runtime.history, stopping: () => false, log: vi.fn()});
+      runtime.start();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(runtime.history.state).toBe('open');
+      const read = journal.query(TRIPS);
+      expect(sent.map(request => request.command.name)).toEqual(['open', 'journalTrips']);
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(runtime.history.state).toBe('open');
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(read).resolves.toEqual({ok: false, code: 'DATABASE_UNAVAILABLE', storageCode: 'TIMEOUT'});
+      // The client failed closed and its worker was terminated; the database is unavailable for this service.
+      expect([runtime.history.state, runtime.history.failureCode, runtime.history.client]).toEqual(['unavailable', 'TIMEOUT', undefined]);
+      expect(worker.terminate).toHaveBeenCalledOnce();
+      expect(logs).toContainEqual(['HISTORY_STORAGE_UNAVAILABLE', {code: 'TIMEOUT'}]);
+      // Recording stops: the recorder's storage refuses every command, and the status is stopped with the same code.
+      await expect(recorderClient(runtime.history).committedThrough('10000000-0000-4000-8000-000000000001')).resolves.toMatchObject({ok: false, error: {code: 'STORAGE_CLOSED'}});
+      expect(runtime.recordingStatus()).toMatchObject({state: 'stopped', target: 'synthetic', code: 'TIMEOUT'});
+      // A retry is not answered TIMEOUT again: the database stays unavailable until the service restarts.
+      await expect(journal.query(TRIPS)).resolves.toEqual({ok: false, code: 'DATABASE_UNAVAILABLE', storageCode: 'TIMEOUT'});
+      expect(sent).toHaveLength(2);
+      runtime.stopStatus();
+    } finally { vi.useRealTimers(); }
   });
 });
 

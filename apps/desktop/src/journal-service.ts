@@ -107,9 +107,10 @@ export class JournalService {
     switch (code) {
     case 'UNKNOWN_TRIP': return refusal('NOT_FOUND');
     case 'STORAGE_BUSY': return refusal('BUSY');
-    case 'TIMEOUT': return refusal('TIMEOUT');
-    // The client failed or closed: the database is no longer readable in this service.
-    case 'WORKER_FAILED': case 'STORAGE_CLOSED':
+    // The client failed or closed: the database is no longer readable in this service. A storage TIMEOUT is one of these:
+    // the client produces it only when a command missed its deadline, and then fails itself closed, so the database stays
+    // unavailable and recording stops until the service restarts; it is never a retryable TIMEOUT (PR #97 review).
+    case 'TIMEOUT': case 'WORKER_FAILED': case 'STORAGE_CLOSED':
       return this.options.stopping() ? refusal('SERVICE_UNAVAILABLE')
         : {ok: false, code: 'DATABASE_UNAVAILABLE', storageCode: this.options.history.failureCode ?? code};
     // JOURNAL_ANSWER_INVALID (logged by the history storage) and every other storage error.
