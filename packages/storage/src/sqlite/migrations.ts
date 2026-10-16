@@ -13,7 +13,8 @@ export interface Migration {
 }
 export const MIGRATIONS: readonly Migration[] = Object.freeze([
   Object.freeze({version: 1, name: '0001-initial', up(db: Database.Database) { for (const statement of SCHEMA_V1) db.exec(statement); }}),
-  // ET-016 (J6): fuel used, the trip close carrier and checkpoint job configurations; rebuilds job_configurations.
+  // ET-016 (J6): fuel used, the trip close carrier, checkpoint job configurations and checkpoint-opened trips; rebuilds
+  // job_configurations and trips.
   Object.freeze({version: 2, name: '0002-journal', foreignKeysOff: true, up(db: Database.Database) { for (const statement of SCHEMA_V2) db.exec(statement); }})
 ]);
 
