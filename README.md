@@ -69,7 +69,7 @@ Enable the local guard in each checkout:
 git config --local core.hooksPath .githooks
 ```
 
-The hook blocks direct pushes to remote `main`. Server-side branch protection is not configured, so the local guard and working rules currently enforce the process within this checkout. Windows CI is implemented with hosted clean/failure/restoration evidence; final current-head validation and owner review still gate merging.
+The hook blocks direct pushes to remote `main`. On GitHub, the `Protect main` ruleset requires squash-merged pull requests, resolved review threads, linear history and passing Windows CI jobs, and blocks force pushes and deletion of `main`; see [branch protection](AGENTS.md#branch-protection--october-16-2026). Windows CI is implemented with hosted clean/failure/restoration evidence; final current-head validation and owner review still gate merging.
 
 See [Git workflow rules](AGENTS.md#git-workflow) for branch, PR, history, validation, and release policies.
 
