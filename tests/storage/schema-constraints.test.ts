@@ -68,6 +68,61 @@ describe('schema version 1 constraints', () => {
   });
 });
 
+// ET-016 PR-1 (J6): the version 2 columns. Each row below is inserted by hand next to the job configuration that the
+// beforeEach commit stored (id 1, event 1 of plugin session 1).
+describe('schema version 2 constraints', () => {
+  const TRIP = `INSERT INTO trips (trip_uuid, plugin_session_ref, game, game_mode, game_mode_method, game_mode_confidence, job_configuration_ref, opened_event_ref, outcome,
+    close_reason, recording_completeness, started_utc_ms, ended_utc_ms, observed_distance_m_state, created_utc_ms, updated_utc_ms, fuel_used_l, fuel_used_l_state,
+    closed_by_session_ref, closed_by_event_seq) VALUES (?, 1, 'ets2', 'unknown', 'none', 'none', 1, 1, ?, ?, 'unknown', 0, ?, 'not-observed', 0, 0, ?, ?, ?, ?)`;
+  const tripUuid = (n: number) => `70000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+  /** A closed (gap) trip with the given fuel used and carrier. */
+  const closed = (n: number, fuel: unknown, state: unknown, session: unknown, eventSeq: unknown) => [tripUuid(n), 'none', 'gap', 0, fuel, state, session, eventSeq];
+  const open = (n: number, session: unknown, eventSeq: unknown) => [tripUuid(n), 'open', null, null, null, 'not-observed', session, eventSeq];
+  const SEQ_1 = '00000000000000000001';
+
+  it('keeps fuel used with its availability state: not observed by default, zero is a value, nothing negative or without a state', () => {
+    sql("INSERT INTO trips (trip_uuid, plugin_session_ref, game, game_mode, game_mode_method, game_mode_confidence, job_configuration_ref, opened_event_ref, outcome, recording_completeness, started_utc_ms, observed_distance_m_state, created_utc_ms, updated_utc_ms) VALUES (?, 1, 'ets2', 'unknown', 'none', 'none', 1, 1, 'open', 'unknown', 0, 'not-observed', 0, 0)", tripUuid(1));
+    expect(connection.reader().prepare('SELECT fuel_used_l, fuel_used_l_state, closed_by_session_ref, closed_by_event_seq FROM trips WHERE trip_uuid = ?').get(tripUuid(1)))
+      .toEqual({fuel_used_l: null, fuel_used_l_state: 'not-observed', closed_by_session_ref: null, closed_by_event_seq: null});
+    sql(TRIP, ...closed(2, 0, 'available', 1n, SEQ_1));
+    rejected(TRIP, 'SQLITE_CONSTRAINT_CHECK', ...closed(3, -0.5, 'available', 1n, SEQ_1));
+    rejected(TRIP, 'SQLITE_CONSTRAINT_CHECK', ...closed(3, 5, 'not-observed', 1n, SEQ_1));
+    rejected(TRIP, 'SQLITE_CONSTRAINT_CHECK', ...closed(3, null, 'available', 1n, SEQ_1));
+    rejected(TRIP, 'SQLITE_CONSTRAINT_CHECK', ...closed(3, null, 'unknown', 1n, SEQ_1));
+    rejected(TRIP, 'SQLITE_CONSTRAINT_NOTNULL', ...closed(3, null, null, 1n, SEQ_1));
+    rejected(TRIP, 'SQLITE_CONSTRAINT_DATATYPE', ...closed(3, 'many', 'available', 1n, SEQ_1));
+  });
+  it('records a close carrier only as a stored session with an eventSeq key, and never on an open trip', () => {
+    sql(TRIP, ...open(1, null, null));
+    sql(TRIP, ...closed(2, null, 'not-observed', null, null));
+    rejected(TRIP, 'SQLITE_CONSTRAINT_CHECK', ...open(3, 1n, SEQ_1));
+    rejected(TRIP, 'SQLITE_CONSTRAINT_CHECK', ...closed(3, null, 'not-observed', 1n, null));
+    rejected(TRIP, 'SQLITE_CONSTRAINT_CHECK', ...closed(3, null, 'not-observed', null, SEQ_1));
+    for (const eventSeq of ['1', '00000000000000000000', '18446744073709551615', '0000000000000000000a']) rejected(TRIP, 'SQLITE_CONSTRAINT_CHECK', ...closed(3, null, 'not-observed', 1n, eventSeq));
+    rejected(TRIP, 'SQLITE_CONSTRAINT_FOREIGNKEY', ...closed(3, null, 'not-observed', 999n, SEQ_1));
+    sql(TRIP, ...closed(3, null, 'not-observed', 1n, '18446744073709551614'));
+  });
+  it('ties a job configuration to exactly one event or checkpoint reference of its plugin session', () => {
+    const states = specColumns(JOB_FIELDS).filter(column => column.endsWith('_state'));
+    const job = `INSERT INTO job_configurations (plugin_session_ref, source, event_ref, checkpoint_next_event_seq, ${states.join(', ')})
+      VALUES (?, ?, ?, ?, ${states.map(() => "'not-observed'").join(', ')})`;
+    expect(connection.reader().prepare('SELECT plugin_session_ref, source, event_ref, checkpoint_next_event_seq FROM job_configurations').all())
+      .toEqual([{plugin_session_ref: 1n, source: 'event', event_ref: 1n, checkpoint_next_event_seq: null}]);
+    sql(job, 1n, 'checkpoint', null, '00000000000000000002');
+    rejected(job, 'SQLITE_CONSTRAINT_UNIQUE', 1n, 'checkpoint', null, '00000000000000000002');
+    rejected(job, 'SQLITE_CONSTRAINT_UNIQUE', 1n, 'event', 1n, null);
+    rejected(job, 'SQLITE_CONSTRAINT_CHECK', 1n, 'checkpoint', 1n, '00000000000000000003');
+    rejected(job, 'SQLITE_CONSTRAINT_CHECK', 1n, 'event', null, null);
+    rejected(job, 'SQLITE_CONSTRAINT_CHECK', 1n, 'event', null, '00000000000000000003');
+    rejected(job, 'SQLITE_CONSTRAINT_CHECK', 1n, 'checkpoint', null, null);
+    rejected(job, 'SQLITE_CONSTRAINT_CHECK', 1n, 'replay', null, '00000000000000000003');
+    for (const next of ['3', '00000000000000000000', '18446744073709551616']) rejected(job, 'SQLITE_CONSTRAINT_CHECK', 1n, 'checkpoint', null, next);
+    rejected(job, 'SQLITE_CONSTRAINT_NOTNULL', null, 'checkpoint', null, '00000000000000000003');
+    rejected(job, 'SQLITE_CONSTRAINT_FOREIGNKEY', 999n, 'checkpoint', null, '00000000000000000003');
+    rejected(job, 'SQLITE_CONSTRAINT_FOREIGNKEY', 1n, 'event', 999n, null);
+  });
+});
+
 describe('synthetic and replay data never enter history', () => {
   it('accepts only the origin of the database purpose', async () => {
     const history = await ws.open({path: `${ws.directory}\\history.sqlite`, purpose: 'history'});

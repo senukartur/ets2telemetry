@@ -2,6 +2,7 @@
 // PRAGMA user_version; all pending versions run in one transaction. Released migrations are frozen.
 import type Database from 'better-sqlite3';
 import {SCHEMA_V1} from './schema-v1';
+import {SCHEMA_V2} from './schema-v2';
 
 /** PRAGMA application_id of every database this application creates: the ASCII bytes 'ETS2'. */
 export const APPLICATION_ID = 0x45545332;
@@ -11,7 +12,9 @@ export interface Migration {
   foreignKeysOff?: boolean;
 }
 export const MIGRATIONS: readonly Migration[] = Object.freeze([
-  Object.freeze({version: 1, name: '0001-initial', up(db: Database.Database) { for (const statement of SCHEMA_V1) db.exec(statement); }})
+  Object.freeze({version: 1, name: '0001-initial', up(db: Database.Database) { for (const statement of SCHEMA_V1) db.exec(statement); }}),
+  // ET-016 (J6): fuel used, the trip close carrier and checkpoint job configurations; rebuilds job_configurations.
+  Object.freeze({version: 2, name: '0002-journal', foreignKeysOff: true, up(db: Database.Database) { for (const statement of SCHEMA_V2) db.exec(statement); }})
 ]);
 
 /** The schema version a migration list produces; versions must be 1, 2, ... without gaps. */

@@ -7,7 +7,7 @@ import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 import type {Storage} from '../../packages/storage/src/index';
 import type {JobConfiguration} from '../../packages/contracts/src/protocol-v1';
 import {initialTripState, jobKey, stepTrip, type EventMessage, type GapMessage, type TripInput, type TripSeed, type TripState} from '../../packages/telemetry-core/src/index';
-import {ATS_A, BASE_UTC, ETS2_A, ETS2_B, GAME_CLOCK_1, GAME_CLOCK_2, RECEIVED_UTC, Script, job, r, run, sessionInput} from '../shared/trip-messages';
+import {ATS_A, BASE_UTC, ETS2_A, ETS2_B, GAME_CLOCK_1, GAME_CLOCK_2, RECEIVED_UTC, Script, job, otherJob, r, run, sessionInput} from '../shared/trip-messages';
 import {failed, ok, readOnly, workspace} from './helpers';
 
 let ws: Awaited<ReturnType<typeof workspace>>;
@@ -68,6 +68,10 @@ const trips = (storage: Storage) => ok(storage.listTrips()).trips.map(t => ({
   startedUtcMs: t.startedUtcMs, endedUtcMs: t.endedUtcMs, jobConfigurationEventSeq: t.jobConfigurationEventSeq, openedEventSeq: t.openedEventSeq,
   outcomeEventSeq: t.outcomeEventSeq, truckConfigurationEventSeq: t.truckConfigurationEventSeq, trailerConfigurationEventSeqs: t.trailerConfigurationEventSeqs
 }));
+
+/** The close carrier of every trip (schema version 2, J7): the plugin session and eventSeq of the item that closed it. */
+const carriers = (file: string) => readOnly(file, db => db.prepare(`SELECT t.trip_uuid AS trip, t.outcome, t.close_reason AS closeReason, s.plugin_session_uuid AS session,
+  CAST(t.closed_by_event_seq AS INTEGER) AS eventSeq FROM trips t LEFT JOIN plugin_sessions s ON s.id = t.closed_by_session_ref ORDER BY t.id`).all());
 
 /**
  * The cold-start seeds a T3 caller (ET-015a) builds from storage: every open trip of the game, the job key of its stored
@@ -236,5 +240,60 @@ describe('ET-014 reducer effects through real commits', () => {
       attributions: [{eventSeq: 8, trip: t, attribution: 'trip'}, {eventSeq: 10, trip: t, attribution: 'trip'}],
       intervals: [{kind: 'not-connected', trip: t, startNs: null, clockSession: null, detail: {cause: 'consumer-restart'}}]
     });
+  });
+});
+
+// ET-016 PR-1 (J7): trip.close records the item whose commit closed the trip. Expected carriers are written by hand from
+// J7: an event closes at its own eventSeq, a gap at the first eventSeq it newly covers, and a restart close from a later
+// plugin session records that session.
+describe('ET-016 trip close carriers (REG-013, REG-005)', () => {
+  it('an outcome event is the carrier of the delivered trip', async () => {
+    const storage = await ws.open(), s = new Script(ETS2_A), t = uuid(ETS2_A, '6');
+    drive(storage, [...accepted(s), s.event(r.fined('400')), s.event(r.paused(), paused), s.event(r.delivered(), paused), s.event(r.jobCleared(), paused)]);
+    storage.close();
+    expect(carriers(ws.database)).toEqual([{trip: t, outcome: 'delivered', closeReason: 'outcome', session: ETS2_A, eventSeq: 10}]);
+  });
+  it('a different job closes the trip at its job.configured event, and the new trip stays open without a carrier', async () => {
+    const storage = await ws.open(), s = new Script(ETS2_A), t = uuid(ETS2_A, '6'), next = uuid(ETS2_A, '8');
+    drive(storage, [...accepted(s), s.event(r.jobConfigured(otherJob()))]);
+    storage.close();
+    expect(carriers(ws.database)).toEqual([{trip: t, outcome: 'none', closeReason: 'different-job', session: ETS2_A, eventSeq: 8},
+      {trip: next, outcome: 'open', closeReason: null, session: null, eventSeq: null}]);
+  });
+  it('a gap closes the trip at the first eventSeq it newly covers', async () => {
+    const storage = await ws.open(), s = new Script(ETS2_A), t = uuid(ETS2_A, '6');
+    drive(storage, [...accepted(s), s.gap(2), s.event(r.paused(), paused), s.event(r.delivered(), paused)]);
+    storage.close();
+    // Coverage was 7, so the gap [8, 9] carries the close at 8; the later delivery does not touch the closed trip.
+    expect(carriers(ws.database)).toEqual([{trip: t, outcome: 'none', closeReason: 'gap', session: ETS2_A, eventSeq: 8}]);
+  });
+  it('a gap that overlaps coverage carries the close at coverage + 1; one beyond coverage + 1 at its own first eventSeq', async () => {
+    const close = (tripUuid: string, endedUtcMs: number) => [{kind: 'trip.close' as const, tripUuid, outcome: 'none' as const, closeReason: 'gap' as const, recordingCompleteness: 'partial' as const, endedUtcMs}];
+    const storage = await ws.open(), a = new Script(ETS2_A), b = new Script(ATS_A, 'ats', {utcMs: BASE_UTC + 100_000});
+    // Two games, so the ATS session does not close the ETS2 trip as a restart: both trips are open, each at coverage 7.
+    drive(storage, [...accepted(a), {kind: 'disconnected'}, ...accepted(b)]);
+    // A merged record redelivered over committed eventSeqs 5–7 is new information only from 8 on.
+    expect(ok(storage.commitGap({message: a.gapRange(5n, 9n, {queueCount: '5'}), effects: close(uuid(ETS2_A, '6'), at(9))}))).toMatchObject({status: 'committed', previouslyCoveredThrough: '7'});
+    // A record that starts beyond coverage + 1 (eventSeq 8 not yet committed) newly covers 9 first.
+    expect(ok(storage.commitGap({message: b.gapRange(9n, 9n, {queueCount: '1'}), effects: close(uuid(ATS_A, '6'), BASE_UTC + 109_000)}))).toEqual({status: 'committed', committedThroughEventSeq: '7', previouslyCoveredThrough: '7'});
+    storage.close();
+    expect(carriers(ws.database)).toEqual([{trip: uuid(ETS2_A, '6'), outcome: 'none', closeReason: 'gap', session: ETS2_A, eventSeq: 8},
+      {trip: uuid(ATS_A, '6'), outcome: 'none', closeReason: 'gap', session: ATS_A, eventSeq: 9}]);
+  });
+  it('a plugin restart records the new session and its eventSeq as the carrier of the earlier session\'s trip', async () => {
+    const storage = await ws.open(), a = new Script(ETS2_A), b = new Script(ETS2_B, 'ets2', {utcMs: BASE_UTC + 100_000});
+    const t = uuid(ETS2_A, '6'), next = uuid(ETS2_B, '1');
+    drive(storage, [...accepted(a), a.event(r.fined()), {kind: 'disconnected'}, sessionInput(b.welcome()), b.event(r.jobConfigured(), paused)]);
+    storage.close();
+    expect(carriers(ws.database)).toEqual([{trip: t, outcome: 'none', closeReason: 'restart', session: ETS2_B, eventSeq: 1},
+      {trip: next, outcome: 'open', closeReason: null, session: null, eventSeq: null}]);
+  });
+  it('records the plugin session and source of every job configuration written from an event', async () => {
+    const storage = await ws.open(), a = new Script(ETS2_A), b = new Script(ETS2_B, 'ets2', {utcMs: BASE_UTC + 100_000});
+    drive(storage, [...accepted(a), {kind: 'disconnected'}, sessionInput(b.welcome()), b.event(r.jobConfigured(), paused)]);
+    storage.close();
+    expect(readOnly(ws.database, db => db.prepare(`SELECT s.plugin_session_uuid AS session, j.source, CAST(e.event_seq AS INTEGER) AS eventSeq, j.checkpoint_next_event_seq AS checkpoint
+      FROM job_configurations j JOIN plugin_sessions s ON s.id = j.plugin_session_ref JOIN events e ON e.id = j.event_ref ORDER BY j.id`).all()))
+      .toEqual([{session: ETS2_A, source: 'event', eventSeq: 6, checkpoint: null}, {session: ETS2_B, source: 'event', eventSeq: 1, checkpoint: null}]);
   });
 });
