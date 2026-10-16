@@ -135,7 +135,7 @@ describe('journal trip detail (J5, J13; REG-009, REG-014)', () => {
       },
       job: {source: 'event', eventSeq: '4', checkpointNextEventSeq: null, values: job()},
       truck: {eventSeq: '1', values: truck()},
-      trailers: [{eventSeq: '2', values: trailer(0)}],
+      trailers: {items: [{eventSeq: '2', values: trailer(0)}], total: 1},
       outcomeDetails: {eventSeq: '9', record: {type: 'job.delivered', revenue: money('15000', 's64', EUR), earnedXp: {available: true, value: 250},
         cargoDamage: {available: true, value: 0.0125, unit: 'fraction'}, distance: {available: true, value: 151_250.5, unit: 'm'},
         deliveryDuration: {available: true, value: '471', unit: 'min'}, autoParkUsed: {available: true, value: false}, autoLoadUsed: {available: true, value: true}}},
@@ -163,7 +163,7 @@ describe('journal trip detail (J5, J13; REG-009, REG-014)', () => {
       },
       job: {source: 'event', eventSeq: '3', checkpointNextEventSeq: null, values: ANCHOR_JOBS.zeroValues},
       truck: {eventSeq: '1', values: truck()},
-      trailers: [{eventSeq: '2', values: trailer(0)}],
+      trailers: {items: [{eventSeq: '2', values: trailer(0)}], total: 1},
       outcomeDetails: {eventSeq: '4', record: ZERO_DELIVERY},
       money: {incomplete: false, totals: [], unavailable: []},
       window: {known: true, pluginSessionId: ATS_A, fromEventSeq: '3', throughEventSeq: '4', end: 'close-event'},
@@ -198,7 +198,7 @@ describe('journal trip detail (J5, J13; REG-009, REG-014)', () => {
     expect(detail.trip).toMatchObject({outcome: 'none', closeReason: 'gap', recordingCompleteness: 'partial', endedUtcMs: BASE_UTC + 24_000, outcomeEventSeq: null,
       closedBy: {pluginSessionId: ETS2_A, eventSeq: '25'}});
     expect(detail.truck).toEqual({eventSeq: '23', values: CHANGED_TRUCK});
-    expect(detail.trailers).toEqual([]);
+    expect(detail.trailers).toEqual({items: [], total: 0});
     expect(detail.outcomeDetails).toBeNull();
     expect(detail.money).toEqual({incomplete: false, totals: [{category: 'fine', sdkType: 's64', currency: EUR, raw: '70', count: 1}], unavailable: []});
     // The fixture's interval is id 1; this trip's three intervals are ids 2–4, in insertion order.
@@ -377,7 +377,7 @@ describe('a trip opened from a checkpoint (schema version 2, J7; written only fr
       expect(validateJournalTripDetail(detail)).toBe(detail);
       expect(detail.trip).toMatchObject({openedBy: 'checkpoint', openedEventSeq: null, outcomeEventSeq: null, closedBy: null, pluginSessionId: ETS2_B});
       expect(detail.job).toEqual({source: 'checkpoint', eventSeq: null, checkpointNextEventSeq: '2', values: ANCHOR_JOBS.open});
-      expect([detail.truck, detail.trailers, detail.outcomeDetails]).toEqual([null, [], null]);
+      expect([detail.truck, detail.trailers, detail.outcomeDetails]).toEqual([null, {items: [], total: 0}, null]);
       const window = {known: true, pluginSessionId: ETS2_B, fromEventSeq: '2', throughEventSeq: null, end: 'open'};
       expect(detail.window).toEqual(window);
       const events = ok(st.journalEvents(tripUuid, {limit: 100}));

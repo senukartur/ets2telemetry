@@ -4,7 +4,7 @@
 // EXPLAIN QUERY PLAN. Values keep their availability and exact money; nothing is converted. See docs/journal.md.
 import type Database from 'better-sqlite3';
 import {
-  isJournalPageQuery, isJournalTripsQuery, JOURNAL_DETAIL_INTERVALS, JOURNAL_EVENT_LIMITS, JOURNAL_INTERVAL_LIMITS, JOURNAL_MONEY_AMOUNTS, JOURNAL_TRIP_PAGE,
+  isJournalPageQuery, isJournalTripsQuery, JOURNAL_DETAIL_INTERVALS, JOURNAL_DETAIL_TRAILERS, JOURNAL_EVENT_LIMITS, JOURNAL_INTERVAL_LIMITS, JOURNAL_MONEY_AMOUNTS, JOURNAL_TRIP_PAGE,
   type JournalDatabase, type JournalEvent, type JournalEventPage, type JournalInterval, type JournalIntervalPage, type JournalMoneyCategory, type JournalMoneyTotal,
   type JournalMoneyTotals, type JournalMoneyUnavailable, type JournalOutcomeRecord, type JournalPageQuery, type JournalTripDetail, type JournalTripListItem,
   type JournalTripPage, type JournalTripsQuery, type JournalWindow
@@ -37,8 +37,10 @@ export const JOURNAL_QUERIES = {
   eventById: 'SELECT event_seq, type, payload_json FROM events WHERE id = ?',
   eventExists: 'SELECT 1 FROM events WHERE plugin_session_id = ? AND event_seq = ?',
   truck: 'SELECT event_ref FROM truck_configurations WHERE id = ?',
+  /** The trip's latest trailer configurations, newest first, at most JOURNAL_DETAIL_TRAILERS (review pass 1). */
   trailers: `SELECT e.event_seq, e.payload_json FROM trip_trailers x JOIN trailer_configurations c ON c.id = x.trailer_configuration_ref JOIN events e ON e.id = c.event_ref
-    WHERE x.trip_ref = ? ORDER BY e.event_seq`,
+    WHERE x.trip_ref = ? ORDER BY e.event_seq DESC LIMIT ?`,
+  trailerTotal: 'SELECT count(*) AS total FROM trip_trailers WHERE trip_ref = ?',
   /** The trip's attributed money events in event order, one more than the bound so an overflow is detected. */
   amounts: `SELECT e.type, m.amount_raw, m.amount_sdk_type, m.amount_currency_status, m.amount_currency_code, m.amount_currency_source, m.amount_state
     FROM event_attributions a JOIN events e ON e.id = a.event_ref JOIN event_amounts m ON m.event_ref = a.event_ref
@@ -231,7 +233,7 @@ function moneyTotals(db: Database.Database, trip: bigint): JournalMoneyTotals {
     const key = `${category}|${m.sdkType}|${currency}`, entry = totals.get(key);
     if (entry) { entry.sum += BigInt(m.raw); entry.count++; } else totals.set(key, {category, sdkType: m.sdkType, currency: m.currency, raw: '', count: 1, sum: BigInt(m.raw)});
   }
-  // Fixed order: category, then SDK-documented currencies by code and source, then an unknown currency, then SDK type.
+  // Fixed order: category, then SDK type, then SDK-documented currencies by code and source, then an unknown currency.
   const order = (category: JournalMoneyCategory) => CATEGORY_ORDER.indexOf(category);
   const sorted = [...totals.entries()].sort(([a, x], [b, y]) => order(x.category) - order(y.category) || (a < b ? -1 : a > b ? 1 : 0));
   const reasons: readonly UnavailableReason[] = ['not-observed', 'not-supported', 'invalid'];
@@ -265,7 +267,9 @@ export function journalTrip(conn: StorageConnection, tripUuid: string): JournalT
     job: {source: job.source as 'event' | 'checkpoint', eventSeq: job.source === 'event' ? fromU64Key(event(job.event_ref).event_seq) : null,
       checkpointNextEventSeq: job.source === 'checkpoint' ? fromU64Key(job.checkpoint_next_event_seq) : null, values: jobValues(job)},
     truck: truck === null ? null : {eventSeq: fromU64Key(truck.event_seq), values: valuesOf<TruckConfiguration>(payloadOf(truck).record)},
-    trailers: all(db, JOURNAL_QUERIES.trailers, id).map(r => ({eventSeq: fromU64Key(r.event_seq), values: valuesOf<TrailerConfiguration>(payloadOf(r).record)})),
+    trailers: {items: all(db, JOURNAL_QUERIES.trailers, id, JOURNAL_DETAIL_TRAILERS).reverse()
+      .map(r => ({eventSeq: fromU64Key(r.event_seq), values: valuesOf<TrailerConfiguration>(payloadOf(r).record)})),
+      total: toSafeNumber(get(db, JOURNAL_QUERIES.trailerTotal, id)?.total, Number.MAX_SAFE_INTEGER, 0)},
     outcomeDetails: outcome === null ? null : {eventSeq: fromU64Key(outcome.event_seq), record: payloadOf(outcome).record as JournalOutcomeRecord},
     money: moneyTotals(db, id),
     window: windowOf(db, trip).dto,

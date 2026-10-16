@@ -16,6 +16,11 @@ export const JOURNAL_INTERVAL_LIMITS: readonly number[] = Object.freeze([100, 50
 export const JOURNAL_SAMPLE_LIMITS: readonly number[] = Object.freeze([300, 3_600]);
 /** Completeness intervals included in a trip detail; later ones are read with `journalIntervals` and its cursor. */
 export const JOURNAL_DETAIL_INTERVALS = 50;
+/**
+ * Trailer configurations included in a trip detail: the latest ones by eventSeq. A trip keeps every trailer
+ * configuration it was given, so it can hold more; the detail then still carries the total (review pass 1).
+ */
+export const JOURNAL_DETAIL_TRAILERS = 10;
 /** Money amounts summed for one trip detail; with more, the totals are reported as incomplete instead. */
 export const JOURNAL_MONEY_AMOUNTS = 5_000;
 
@@ -122,7 +127,11 @@ export interface JournalTripDetail {
   /** The job values in canonical units: from its `job.configured` event, or from a checkpoint (`checkpointNextEventSeq`). */
   job: {source: 'event' | 'checkpoint'; eventSeq: Uint64 | null; checkpointNextEventSeq: Uint64 | null; values: JobConfiguration};
   truck: {eventSeq: Uint64; values: TruckConfiguration} | null;
-  trailers: {eventSeq: Uint64; values: TrailerConfiguration}[];
+  /**
+   * The latest JOURNAL_DETAIL_TRAILERS trailer configurations of the trip in eventSeq order, and how many the trip holds.
+   * A trip that was given more (a trailer re-sent or changed while it was open) shows only the latest ones here.
+   */
+  trailers: {items: {eventSeq: Uint64; values: TrailerConfiguration}[]; total: number};
   /** The gameplay outcome event with its revenue or penalty; null unless the trip was delivered or cancelled. */
   outcomeDetails: {eventSeq: Uint64; record: JournalOutcomeRecord} | null;
   money: JournalMoneyTotals;
@@ -190,6 +199,7 @@ const rowId = (value: unknown) => { if (!isJournalRowCursor(value)) bad(); };
 const U64 = /^(0|[1-9][0-9]{0,19})$/;
 const uint64 = (value: unknown) => { if (typeof value !== 'string' || !U64.test(value) || BigInt(value) > 18_446_744_073_709_551_615n) bad(); };
 const eventSeq = (value: unknown) => { if (!isJournalEventCursor(value)) bad(); };
+const positiveUint64 = (value: unknown) => { uint64(value); if (value === '0') bad(); };
 const REASONS: readonly unknown[] = ['not-supported', 'not-observed', 'invalid'];
 function available(value: unknown, check: (value: unknown) => void): void {
   if (isRecord(value) && value.available === true) { check(exact(value, ['available', 'value']).value); return; }
@@ -265,7 +275,8 @@ function window(value: unknown): void {
   if (isRecord(value) && value.known === false) { uuid(exact(value, ['known', 'pluginSessionId']).pluginSessionId); return; }
   const o = exact(value, ['known', 'pluginSessionId', 'fromEventSeq', 'throughEventSeq', 'end']);
   if (o.known !== true) bad();
-  uuid(o.pluginSessionId); eventSeq(o.fromEventSeq); nullable(o.throughEventSeq, uint64);
+  // The window can start at a checkpoint's nextEventSeq, which the schema allows up to 2^64 - 1.
+  uuid(o.pluginSessionId); positiveUint64(o.fromEventSeq); nullable(o.throughEventSeq, uint64);
   oneOf(o.end, ['open', 'close-event', 'close-gap', 'end-of-session']);
   if ((o.throughEventSeq === null) !== (o.end === 'open' || o.end === 'end-of-session')) bad();
 }
@@ -274,7 +285,8 @@ function interval(value: unknown): void {
   const o = exact(value, ['id', 'kind', 'annotation', 'cause', 'startUtcMs', 'endUtcMs', 'startMonotonicNs', 'endMonotonicNs', 'sourceClockId', 'firstEventSeq', 'lastEventSeq', 'detail']);
   rowId(o.id); oneOf(o.kind, INTERVAL_KINDS); boolean(o.annotation); nullable(o.cause, text);
   nullable(o.startUtcMs, utcMs); nullable(o.endUtcMs, utcMs); nullable(o.startMonotonicNs, uint64); nullable(o.endMonotonicNs, uint64); nullable(o.sourceClockId, uuid);
-  nullable(o.firstEventSeq, eventSeq); nullable(o.lastEventSeq, eventSeq);
+  // Interval eventSeq bounds are any 20-digit key in the schema, so 0 and 2^64 - 1 are accepted here too.
+  nullable(o.firstEventSeq, uint64); nullable(o.lastEventSeq, uint64);
   nullable(o.detail, detail => { if (!isRecord(detail)) bad(); });
   // The flags are read from the detail, so they must agree with it.
   const d = o.detail as Record<string, unknown> | null;
@@ -296,7 +308,8 @@ const CATEGORIES: readonly unknown[] = ['fine', 'toll', 'ferry', 'train'];
 function moneyTotals(value: unknown): void {
   const o = exact(value, ['incomplete', 'totals', 'unavailable']);
   boolean(o.incomplete);
-  if (!Array.isArray(o.totals) || !Array.isArray(o.unavailable)) bad();
+  // Each total and each unavailable count stands for at least one of at most JOURNAL_MONEY_AMOUNTS amounts.
+  if (!Array.isArray(o.totals) || !Array.isArray(o.unavailable) || o.totals.length + o.unavailable.length > JOURNAL_MONEY_AMOUNTS) bad();
   const totals = o.totals as unknown[], unavailable = o.unavailable as unknown[];
   if (o.incomplete === true && (totals.length > 0 || unavailable.length > 0)) bad();
   for (const total of totals) {
@@ -311,31 +324,44 @@ function moneyTotals(value: unknown): void {
   }
 }
 
+/**
+ * One page of rows: at most `limit` rows, and a next cursor exactly when the page is full, as every journal read
+ * builds it. An answer longer than the request is invalid, so a caller can rely on one page (review pass 1).
+ */
+function page(rows: unknown, limit: number, cursor: unknown, check: (value: unknown) => void): unknown[] {
+  if (!Array.isArray(rows) || rows.length > limit) bad();
+  const list = rows as unknown[];
+  nullable(cursor, check);
+  if ((cursor !== null) !== (list.length === limit)) bad();
+  return list;
+}
 /** Validates a `journalTrips` answer exactly; throws JournalContractError otherwise. */
 export function validateJournalTripPage(value: unknown): JournalTripPage {
   const o = exact(value, ['database', 'trips', 'nextCursor']);
   database(o.database);
-  if (!Array.isArray(o.trips) || o.trips.length > JOURNAL_TRIP_PAGE) bad();
-  for (const trip of o.trips as unknown[]) listItem(exact(trip, LIST_KEYS));
-  nullable(o.nextCursor, rowId);
+  for (const trip of page(o.trips, JOURNAL_TRIP_PAGE, o.nextCursor, rowId)) listItem(exact(trip, LIST_KEYS));
   return value as JournalTripPage;
 }
-/** Validates a `journalEvents` answer exactly; throws JournalContractError otherwise. */
-export function validateJournalEventPage(value: unknown): JournalEventPage {
+/**
+ * Validates a `journalEvents` answer to a request of `limit` events exactly; throws JournalContractError otherwise.
+ * Without a limit the largest allowed page applies.
+ */
+export function validateJournalEventPage(value: unknown, limit = Math.max(...JOURNAL_EVENT_LIMITS)): JournalEventPage {
   const o = exact(value, ['database', 'window', 'events', 'nextCursor']);
   database(o.database); window(o.window);
-  if (!Array.isArray(o.events) || o.events.length > Math.max(...JOURNAL_EVENT_LIMITS)) bad();
-  for (const item of o.events as unknown[]) event(item);
-  nullable(o.nextCursor, eventSeq);
+  for (const item of page(o.events, limit, o.nextCursor, eventSeq)) event(item);
   return value as JournalEventPage;
 }
-/** Validates a `journalIntervals` answer exactly; throws JournalContractError otherwise. */
-export function validateJournalIntervalPage(value: unknown): JournalIntervalPage {
+/**
+ * Validates a `journalIntervals` answer to a request of `limit` intervals exactly; throws JournalContractError otherwise.
+ * Without a limit the largest allowed page applies.
+ */
+export function validateJournalIntervalPage(value: unknown, limit = Math.max(...JOURNAL_INTERVAL_LIMITS)): JournalIntervalPage {
   const o = exact(value, ['database', 'intervals', 'total', 'nextCursor']);
   database(o.database); count(o.total);
-  if (!Array.isArray(o.intervals) || o.intervals.length > Math.max(...JOURNAL_INTERVAL_LIMITS)) bad();
-  for (const item of o.intervals as unknown[]) interval(item);
-  nullable(o.nextCursor, rowId);
+  const list = page(o.intervals, limit, o.nextCursor, rowId);
+  if (list.length > (o.total as number)) bad();
+  for (const item of list) interval(item);
   return value as JournalIntervalPage;
 }
 /** Validates a `journalTrip` answer exactly; throws JournalContractError otherwise. */
@@ -354,8 +380,10 @@ export function validateJournalTripDetail(value: unknown): JournalTripDetail {
   if (job.source !== (trip.job as Record<string, unknown>).source) bad();
   configuration(job.values, 'job.configured');
   nullable(o.truck, truck => { const t = exact(truck, ['eventSeq', 'values']); eventSeq(t.eventSeq); configuration(t.values, 'truck.configured'); });
-  if (!Array.isArray(o.trailers) || o.trailers.length > 10) bad();
-  for (const trailer of o.trailers as unknown[]) { const t = exact(trailer, ['eventSeq', 'values']); eventSeq(t.eventSeq); configuration(t.values, 'trailer.configured'); }
+  const trailers = exact(o.trailers, ['items', 'total']);
+  count(trailers.total);
+  if (!Array.isArray(trailers.items) || trailers.items.length !== Math.min(JOURNAL_DETAIL_TRAILERS, trailers.total as number)) bad();
+  for (const trailer of trailers.items as unknown[]) { const t = exact(trailer, ['eventSeq', 'values']); eventSeq(t.eventSeq); configuration(t.values, 'trailer.configured'); }
   nullable(o.outcomeDetails, details => {
     const d = exact(details, ['eventSeq', 'record']); eventSeq(d.eventSeq);
     if (!isRecord(d.record) || d.record.type !== (trip.outcome === 'delivered' ? 'job.delivered' : 'job.cancelled')) bad();
@@ -366,9 +394,9 @@ export function validateJournalTripDetail(value: unknown): JournalTripDetail {
   if ((o.window as Record<string, unknown>).pluginSessionId !== trip.pluginSessionId) bad();
   const intervals = exact(o.intervals, ['items', 'total', 'nextCursor']);
   count(intervals.total);
-  if (!Array.isArray(intervals.items) || intervals.items.length > JOURNAL_DETAIL_INTERVALS || intervals.items.length > (intervals.total as number)) bad();
-  for (const item of intervals.items as unknown[]) interval(item);
-  nullable(intervals.nextCursor, rowId);
+  const items = page(intervals.items, JOURNAL_DETAIL_INTERVALS, intervals.nextCursor, rowId);
+  if (items.length !== Math.min(JOURNAL_DETAIL_INTERVALS, intervals.total as number)) bad();
+  for (const item of items) interval(item);
   const samples = exact(o.samples, ['count', 'firstUtcMs', 'lastUtcMs']);
   count(samples.count); nullable(samples.firstUtcMs, utcMs); nullable(samples.lastUtcMs, utcMs);
   if ((samples.count === 0) !== (samples.firstUtcMs === null) || (samples.firstUtcMs === null) !== (samples.lastUtcMs === null)) bad();

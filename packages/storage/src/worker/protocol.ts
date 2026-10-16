@@ -6,10 +6,11 @@ import {
   validateJournalTripDetail, validateJournalTripPage
 } from '../../../contracts/src/journal';
 import type {
-  CommitResult, CompletenessInterval, CompletenessOptions, EventRow, JournalEventPage, JournalIntervalPage, JournalPageQuery, JournalTripDetail, JournalTripPage, JournalTripsQuery,
+  CommitResult, CompletenessInterval, CompletenessOptions, EventRow, JournalAnswerError, JournalEventPage, JournalIntervalPage, JournalPageQuery, JournalTripDetail, JournalTripPage, JournalTripsQuery,
   OpenSummary, Purpose, Result, SampleAppendOptions, SampleAppendResult, SampleInput, SampleRecord, SessionRecord, StorageError, StorageInfo, TripEffect, TripList, TripPage,
   TripRecord, Uint64
 } from '../api';
+import {JOURNAL_ANSWER_INVALID} from '../api';
 import {ERROR_MESSAGES} from '../errors';
 
 /**
@@ -48,6 +49,11 @@ export type CommandValue<K extends CommandName> = StorageCommands[K]['value'];
 
 export interface StorageRequest {type: 'storage.request'; id: number; command: StorageCommand}
 export interface StorageResponse {type: 'storage.response'; id: number; result: Result<unknown>}
+/**
+ * A parsed response. `journalAnswerInvalid` marks a well-framed journal answer whose value broke the journal contract:
+ * its result was replaced by a JOURNAL_ANSWER_INVALID error for that command alone (ET-016 review pass 1).
+ */
+export type ParsedResponse = StorageResponse | {type: 'storage.response'; id: number; result: {ok: false; error: JournalAnswerError}; journalAnswerInvalid: true};
 
 export const COMMAND_NAMES: readonly CommandName[] = Object.freeze([
   'open', 'upsertSession', 'commitEvent', 'commitGap', 'appendSamples', 'recordCompleteness', 'committedThrough', 'getSession', 'getEvent',
@@ -77,7 +83,7 @@ const COMPLETENESS_OPTIONS_ARGS = {ifAbsent: (field: unknown) => typeof field ==
 /** ET-015b: the `appendSamples` options, checked strictly like the completeness options. */
 const SAMPLE_OPTIONS_ARGS = {uniqueSeconds: (field: unknown) => typeof field === 'boolean'};
 const isCount = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
-type JournalCommandName = 'journalTrips' | 'journalTrip' | 'journalEvents' | 'journalIntervals';
+export type JournalCommandName = 'journalTrips' | 'journalTrip' | 'journalEvents' | 'journalIntervals';
 const JOURNAL_COMMAND_KEYS: Readonly<Record<JournalCommandName, readonly string[]>> = {
   journalTrips: ['name', 'query'], journalTrip: ['name', 'tripUuid'], journalEvents: ['name', 'tripUuid', 'page'], journalIntervals: ['name', 'tripUuid', 'page']
 };
@@ -96,9 +102,20 @@ function journalArgs(name: JournalCommandName, command: Record<string, unknown>)
   }
 }
 const isJournalCommand = (name: CommandName): name is JournalCommandName => Object.hasOwn(JOURNAL_COMMAND_KEYS, name);
-/** Whether a journal answer has exactly the documented shape (packages/contracts/src/journal.ts). */
-function validJournal(validate: (value: unknown) => unknown, value: unknown): boolean {
-  try { validate(value); return true; } catch { return false; }
+/**
+ * Whether a journal answer has exactly the documented shape (packages/contracts/src/journal.ts) for the request that was
+ * sent: a page holds at most the requested number of rows.
+ */
+function validJournal(command: Extract<StorageCommand, {name: JournalCommandName}>, value: unknown): boolean {
+  try {
+    switch (command.name) {
+    case 'journalTrips': validateJournalTripPage(value); break;
+    case 'journalTrip': validateJournalTripDetail(value); break;
+    case 'journalEvents': validateJournalEventPage(value, command.page.limit); break;
+    case 'journalIntervals': validateJournalIntervalPage(value, command.page.limit); break;
+    }
+    return true;
+  } catch { return false; }
 }
 
 /**
@@ -134,8 +151,9 @@ function isStorageError(value: unknown): value is StorageError {
  * which leaves the service; any other success value is passed through from the host, which returns only what the
  * storage core produced.
  */
-function validValue(name: CommandName, value: unknown): boolean {
-  switch (name) {
+function validValue(command: StorageCommand, value: unknown): boolean {
+  const name = command.name;
+  switch (command.name) {
   case 'appendSamples': return isRecord(value) && isCount(value.appended) && isCount(value.skipped);
   case 'commitEvent': case 'commitGap':
     return isRecord(value) && ['committed', 'duplicate', 'conflict', 'covered'].includes(value.status as string) && isUint64(value.committedThroughEventSeq)
@@ -144,20 +162,29 @@ function validValue(name: CommandName, value: unknown): boolean {
   case 'open': return isRecord(value) && typeof value.schemaVersion === 'number' && typeof value.created === 'boolean' && isText(value.databaseUuid) && isText(value.purpose);
   case 'upsertSession': return isRecord(value) && typeof value.created === 'boolean' && isUint64(value.committedThroughEventSeq);
   case 'close': case 'recordCompleteness': return value === undefined;
-  // ET-016: a journal page reaches main and the renderer, so a malformed answer fails the client closed like a malformed commit.
-  case 'journalTrips': return validJournal(validateJournalTripPage, value);
-  case 'journalTrip': return validJournal(validateJournalTripDetail, value);
-  case 'journalEvents': return validJournal(validateJournalEventPage, value);
-  case 'journalIntervals': return validJournal(validateJournalIntervalPage, value);
+  // ET-016: a journal page reaches main and the renderer, so its value is checked exactly; parseResponse turns a
+  // mismatch into a per-command error rather than a client failure.
+  case 'journalTrips': case 'journalTrip': case 'journalEvents': case 'journalIntervals':
+    return validJournal(command, value);
   default: return true;
   }
 }
 
-/** Accepts only a well-formed response with a known error code or a success value of the right shape for its command. */
-export function parseResponse(message: unknown, name: CommandName): StorageResponse | undefined {
+/**
+ * Accepts only a well-formed response with a known error code or a success value of the right shape for the command
+ * that was sent; anything else is undefined and fails the client closed. One exception (ET-016 review pass 1): a
+ * well-framed success answer to a journal command whose value breaks the journal contract becomes a JOURNAL_ANSWER_INVALID
+ * error for that command alone. Journal reads are off the commit and ACK path, and the worker answered in order with
+ * the right id, so this is a bad page, not a lost worker; the client and the recorder keep running.
+ */
+export function parseResponse(message: unknown, command: StorageCommand): ParsedResponse | undefined {
   if (!isRecord(message) || message.type !== 'storage.response' || !isId(message.id) || !isRecord(message.result)) return undefined;
   const result = message.result;
-  if (result.ok === true && Object.hasOwn(result, 'value') && validValue(name, result.value)) return {type: 'storage.response', id: message.id, result: {ok: true, value: result.value}};
+  if (result.ok === true && Object.hasOwn(result, 'value')) {
+    if (validValue(command, result.value)) return {type: 'storage.response', id: message.id, result: {ok: true, value: result.value}};
+    if (isJournalCommand(command.name)) return {type: 'storage.response', id: message.id, result: {ok: false, error: {...JOURNAL_ANSWER_INVALID}}, journalAnswerInvalid: true};
+    return undefined;
+  }
   if (result.ok === false && isStorageError(result.error)) return {type: 'storage.response', id: message.id, result: {ok: false, error: result.error}};
   return undefined;
 }

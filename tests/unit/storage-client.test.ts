@@ -1,7 +1,7 @@
 import {readFileSync} from 'node:fs';
 import path from 'node:path';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
-import type {CompletenessOptions, Result, SampleAppendOptions, SampleInput, StorageError, StorageErrorCode, TripPage} from '../../packages/storage/src/api';
+import type {CompletenessOptions, JournalResult, Result, SampleAppendOptions, SampleInput, StorageError, StorageErrorCode, TripPage} from '../../packages/storage/src/api';
 import {COMMAND_DEADLINE_MS, MAX_QUEUED_COMMANDS, OPEN_DEADLINE_MS, StorageClient, type StorageClientOptions, type StorageWorkerHandle} from '../../packages/storage/src/client';
 import {storageError} from '../../packages/storage/src/errors';
 import {parseRequest, type StorageRequest} from '../../packages/storage/src/worker/protocol';
@@ -393,13 +393,13 @@ describe('ET-016 journal reads at the worker boundary', () => {
   const EVENTS = {database: DATABASE, window: WINDOW, events: [EVENT, {...EVENT, eventSeq: '2', attribution: {kind: 'ambiguous', tripUuid: null}}], nextCursor: null};
   const INTERVALS = {database: DATABASE, intervals: [INTERVAL], total: 1, nextCursor: null};
   const DETAIL = {database: DATABASE, trip: {...LIST_ITEM, pluginSessionId: P1, openedBy: 'event', openedEventSeq: '1', outcomeEventSeq: null, closedBy: null},
-    job: {source: 'event', eventSeq: '1', checkpointNextEventSeq: null, values: job()}, truck: {eventSeq: '2', values: truck()}, trailers: [{eventSeq: '3', values: trailer(0)}],
+    job: {source: 'event', eventSeq: '1', checkpointNextEventSeq: null, values: job()}, truck: {eventSeq: '2', values: truck()}, trailers: {items: [{eventSeq: '3', values: trailer(0)}], total: 1},
     outcomeDetails: null,
     money: {incomplete: false, totals: [{category: 'fine', sdkType: 's64', currency: {status: 'unknown'}, raw: '-18446744073709551616', count: 2}],
       unavailable: [{category: 'toll', reason: 'invalid', count: 1}]},
     window: WINDOW, intervals: {items: [INTERVAL], total: 1, nextCursor: null}, samples: {count: 0, firstUtcMs: null, lastUtcMs: null},
     exportBounds: {committedThroughEventSeq: '3', lastSampleId: null, lastIntervalId: '1'}};
-  type Call = (client: StorageClient) => Promise<Result<unknown>>;
+  type Call = (client: StorageClient) => Promise<JournalResult<unknown>>;
   const CALLS: Record<'trips' | 'trip' | 'events' | 'intervals', Call> = {
     trips: client => client.journalTrips(), trip: client => client.journalTrip(TRIP),
     events: client => client.journalEvents(TRIP, {limit: 100}), intervals: client => client.journalIntervals(TRIP, {limit: 100})
@@ -460,6 +460,14 @@ describe('ET-016 journal reads at the worker boundary', () => {
     await expect(read).resolves.toEqual({ok: true, value: VALID[name]});
     expect(f.client.state).toBe('running');
   });
+  it('accepts a detail with the latest ten of twelve trailer configurations', async () => {
+    const f = fixture();
+    const detail = changed(DETAIL, p => { p.trailers = {items: Array(10).fill(p.trailers.items[0]) as typeof p.trailers.items, total: 12}; });
+    const read = f.client.journalTrip(TRIP);
+    f.ok(1, detail);
+    await expect(read).resolves.toEqual({ok: true, value: detail});
+  });
+  const COMMANDS = {trips: 'journalTrips', trip: 'journalTrip', events: 'journalEvents', intervals: 'journalIntervals'} as const;
   it.each<[string, keyof typeof CALLS, unknown]>([
     ['51 trips on a page', 'trips', changed(PAGE, p => { p.trips = Array<typeof LIST_ITEM>(51).fill(LIST_ITEM); })],
     ['an unknown database purpose', 'trips', changed(PAGE, p => { p.database.purpose = 'game'; })],
@@ -485,12 +493,48 @@ describe('ET-016 journal reads at the worker boundary', () => {
     ['export bounds that disagree with the intervals', 'trip', changed(DETAIL, p => { (p.exportBounds as {lastIntervalId: unknown}).lastIntervalId = null; })],
     ['an event-opened trip without its opening event', 'trip', changed(DETAIL, p => { (p.trip as {openedEventSeq: unknown}).openedEventSeq = null; })],
     ['a checkpoint-opened trip with an opening event', 'trip', changed(DETAIL, p => { p.trip.openedBy = 'checkpoint'; })],
-    ['a missing value', 'trip', undefined]
-  ])('fails closed on a journal answer with %s', async (_name, name, value) => {
-    const f = fixture();
+    ['a missing value', 'trip', undefined],
+    // Review pass 1: lists bounded like the storage reads, and pages tied to the requested limit.
+    ['eleven trailer configurations', 'trip', changed(DETAIL, p => { p.trailers = {items: Array(11).fill(p.trailers.items[0]) as typeof p.trailers.items, total: 11}; })],
+    ['fewer trailer configurations than the total allows', 'trip', changed(DETAIL, p => { p.trailers.total = 5; })],
+    ['101 events for a page of 100', 'events', changed(EVENTS, p => { p.events = Array<typeof EVENT>(101).fill(EVENT); })],
+    ['a full page of 100 events without a cursor', 'events', changed(EVENTS, p => { p.events = Array<typeof EVENT>(100).fill(EVENT); })],
+    ['a cursor on a short page', 'trips', changed(PAGE, p => { (p as {nextCursor: unknown}).nextCursor = '5'; })],
+    ['101 intervals for a page of 100', 'intervals', changed(INTERVALS, p => { p.intervals = Array<typeof INTERVAL>(101).fill(INTERVAL); p.total = 101; })]
+  ])('refuses a journal answer with %s for that read alone, and the client keeps serving (review pass 1)', async (_name, name, value) => {
+    const refusals: unknown[] = [];
+    const f = fixture({onJournalAnswerInvalid: facts => refusals.push(facts)});
     const read = CALLS[name](f.client);
     f.ok(1, value);
+    await expect(read).resolves.toEqual({ok: false, error: {code: 'JOURNAL_ANSWER_INVALID', retryable: false,
+      message: 'The storage worker returned a journal page that does not match the journal contract.'}});
+    expect(refusals).toEqual([{command: COMMANDS[name]}]);
+    expect(f.client.state).toBe('running');
+    expect(f.failures).toEqual([]);
+    expect(f.handle.terminate).not.toHaveBeenCalled();
+    // The recorder's next command is sent and answered as usual.
+    const next = f.client.commitEvent({message: {}});
+    expect(f.sent.map(sent => sent.command.name)).toEqual([COMMANDS[name], 'commitEvent']);
+    f.ok(2, COMMITTED);
+    await expect(next).resolves.toEqual({ok: true, value: COMMITTED});
+  });
+  it.each<[string, (f: ReturnType<typeof fixture>) => void]>([
+    ['a success without a value', f => f.raw({type: 'storage.response', id: 1, result: {ok: true}})],
+    ['an error with an unknown code', f => f.reply(1, {ok: false, error: {code: 'JOURNAL_ANSWER_INVALID', retryable: false, message: 'x'}} as unknown as Result<unknown>)],
+    ['an answer for another id', f => f.ok(2, PAGE)],
+    ['a frame of another type', f => f.raw({type: 'storage.request', id: 1, result: {ok: true, value: PAGE}})]
+  ])('still fails the client closed on a malformed journal frame: %s', async (_name, answer) => {
+    const f = fixture();
+    const read = f.client.journalTrips();
+    answer(f);
     await expect(read).resolves.toEqual(error('WORKER_FAILED'));
+    expect(f.client.state).toBe('failed');
+  });
+  it('still fails the client closed on an invalid answer to a recorder command', async () => {
+    const f = fixture({onJournalAnswerInvalid: () => { throw new Error('not a journal command'); }});
+    const commit = f.client.commitEvent({message: {}});
+    f.ok(1, {status: 'committed', committedThroughEventSeq: '01'});
+    await expect(commit).resolves.toEqual(error('WORKER_FAILED'));
     expect(f.client.state).toBe('failed');
   });
 });
