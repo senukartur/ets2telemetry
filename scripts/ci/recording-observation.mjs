@@ -6,8 +6,8 @@ import {copyFile, mkdir, open, readFile, writeFile} from 'node:fs/promises';
 import {createRequire} from 'node:module';
 import path from 'node:path';
 import {performance} from 'node:perf_hooks';
-import {waitForCurrentTelemetry} from './renderer-observation.mjs';
-import {closeDashboard, lifecycleState, until, waitForExit} from './lifecycle-observation.mjs';
+import {recordingTextLog, startRecordingTextLog, waitForCurrentTelemetry, waitForRecordingText} from './renderer-observation.mjs';
+import {closeDashboard, lifecycleState, newDashboardPage, until, waitForExit} from './lifecycle-observation.mjs';
 import {startRecordingProxy} from './recording-proxy.mjs';
 
 // ET-015a PR-4: the recording runtime journey. The service records the synthetic protocol v1 source into
@@ -21,6 +21,9 @@ import {startRecordingProxy} from './recording-proxy.mjs';
 // rows are compared after exit with the hand-written tests/fixtures/recording/normal-delivery-runtime-journey.rows.expected.json.
 // ET-015b PR-4: frames on connections 2 and 3 make the restarted service and run B each store one one-second sample,
 // which their explicit exits flush (recording-flush) unless the 5 s sample flush already wrote it.
+// ET-015c PR-4: the dashboard, the gated lifecycle state and main's opt-in RECORDING_STATUS timeline rows show the
+// recording status along the journey (RECORDING_STATUS_* below); after the redelivery, run A's closed dashboard is
+// reopened from the tray to show its loss totals before the tray exit.
 
 export const RECORDING_TARGET = 'synthetic:smoke';
 export const RECORDING_SCENARIO = 'normal-delivery-runtime-journey';
@@ -79,6 +82,36 @@ const seededId = (seed, label) => uuidOf(createHash('sha256').update(`simulator-
 /** T4: a trip UUID is derived from its plugin session and its job configuration eventSeq; labelled `trip@<eventSeq>`. */
 const tripLabels = session => new Map(Array.from({length: 20}, (_, index) =>
   [uuidOf(createHash('sha256').update(`ets2telemetry-trip-v1:${session}:${index + 1}`, 'utf8').digest('hex')), `trip@${index + 1}`]));
+
+// ET-015c PR-4: the recording status along the journey, written by hand. Totals count since ETS2Telemetry started.
+const NO_LOSSES = Object.freeze({lostEvents: 0, eventLoss: 0, notConnected: 0, sampleLoss: 0, restoreLoss: 0, droppedSamples: 0});
+const SYNTHETIC_NOTE = 'Synthetic test database (never game history)';
+const TEST_NOTICE = 'Prototype live display. Only a test database is recorded, never game history.';
+/** A service whose connection has not recorded yet: before each admission, and after the service restart. */
+const RECORDING_STATUS_WAITING = Object.freeze({state: 'waiting', target: 'synthetic', code: null, losses: NO_LOSSES, trip: null});
+const RECORDING_TEXT_WAITING = Object.freeze({headline: 'Waiting for the recorded source to connect', detail: [SYNTHETIC_NOTE], losses: null, alert: null, notice: TEST_NOTICE});
+/** Connection 1 recorded events 1-5 (the trip opened at eventSeq 3 at load, so it is partial) and ended. */
+const RECORDING_STATUS_INTERRUPTED = Object.freeze({state: 'interrupted', target: 'synthetic', code: null, losses: NO_LOSSES,
+  trip: {phase: 'active', completeness: 'partial', untrackedJob: false}});
+const RECORDING_TEXT_INTERRUPTED = Object.freeze({headline: 'Connection lost; recording resumes on reconnection, and the missing time is recorded as a gap',
+  detail: [SYNTHETIC_NOTE, 'Current trip is partial'], losses: null, alert: null, notice: TEST_NOTICE});
+/**
+ * After connection 2: the restarted service committed the trip's consumer-restart interval (one not-connected interval);
+ * the redelivered eventSeq 5 is a duplicate, not a loss, so no event is lost.
+ */
+const RECORDING_LOSSES_AFTER_REDELIVERY = Object.freeze({...NO_LOSSES, notConnected: 1});
+const RECORDING_TEXT_LOSSES_AFTER_REDELIVERY = Object.freeze(['Gaps recorded since ETS2Telemetry started', 'Intervals without a connection: 1']);
+/** The states in which the durable cursor is active with fresh v1 data: recording, or recording a paused game. */
+const RECORDED_STATES = Object.freeze(['recording', 'paused']);
+const RECORDED_HEADLINES = Object.freeze(['Recording', 'Game paused; recording continues when it resumes']);
+/** Main's RECORDING_STATUS timeline rows as facts. */
+const statusRows = rows => rows.filter(row => row.event === 'RECORDING_STATUS').map(row => row.facts);
+/** main's current recording status once `accept` holds; a hang guard only. */
+async function recordingHealth(application, accept, message) {
+  return (await until(() => lifecycleState(application), state => accept(state.health.recording), message)).health.recording;
+}
+/** The dashboard's distinct recording texts since startRecordingTextLog once one satisfies `accept`; a hang guard only. */
+const shownText = (page, accept, message) => until(() => recordingTextLog(page), texts => texts.some(accept), message, 5000);
 
 /**
  * Starts the reactive simulator (`serve-v1`, the built CLI) on the journey scenario and the recording proxy
@@ -170,6 +203,12 @@ export async function runRecordingSmoke({application, launcher, dashboard, recor
   assert.equal(initial.started, true); assert.equal(initial.tray, true); assert.equal(initial.serviceReady, true);
   assert.ok(Number.isSafeInteger(initial.servicePid) && initial.servicePid > 0, 'Service PID unavailable');
   record.servicePid = initial.servicePid;
+  // ET-015c PR-4: before any connection the service waits for its recorded source, writing to the synthetic database.
+  record.status = {beforeAdmission: {dashboard: await waitForRecordingText(dashboard, RECORDING_TEXT_WAITING, 'RECORDING_NOT_WAITING_BEFORE_ADMISSION'),
+    health: await recordingHealth(application, status => status.state === 'waiting', 'RECORDING_NOT_WAITING_BEFORE_ADMISSION')}};
+  assert.deepEqual(record.status.beforeAdmission.health, RECORDING_STATUS_WAITING);
+  record.statusWaitingShown = true;
+  await startRecordingTextLog(dashboard);
   // Connection 1 is admitted only now, with both windows up and current data shown, so the simulator's 1 s ACK waits
   // (quiesce) do not overlap the application's own startup.
   recording.admit();
@@ -184,6 +223,19 @@ export async function runRecordingSmoke({application, launcher, dashboard, recor
   assert.deepEqual(first.forwardedAcks, ['1', '2', '3', '4']); assert.deepEqual(first.withheldAcks, ['5']);
   record.firstServiceDurable = await durableActiveRow(events, config.diagnostics, initial.servicePid);
   record.commitsActive = true;
+  // ET-015c PR-4: connection 1 recorded, and the dashboard showed it with the synthetic target note; once it ended, the
+  // status reads interrupted with the partial trip. Recording lasts only as long as the scenario's frames stay fresh, so
+  // the dashboard's text log and main's timeline prove it rather than a poll.
+  record.status.afterFirstConnection = {dashboard: await waitForRecordingText(dashboard, RECORDING_TEXT_INTERRUPTED, 'RECORDING_NOT_INTERRUPTED_AFTER_FIRST_CONNECTION'),
+    health: await recordingHealth(application, status => status.state === 'interrupted', 'RECORDING_NOT_INTERRUPTED_AFTER_FIRST_CONNECTION')};
+  assert.deepEqual(record.status.afterFirstConnection.health, RECORDING_STATUS_INTERRUPTED);
+  record.status.firstConnectionTexts = await shownText(dashboard, text => text.headline === 'Recording' && text.detail?.[0] === SYNTHETIC_NOTE && text.notice === TEST_NOTICE,
+    'RECORDING_NOT_SHOWN_DURING_FIRST_CONNECTION');
+  record.status.firstConnectionRows = statusRows(await mainEvents());
+  assert.ok(record.status.firstConnectionRows.some(row => row.state === 'recording' && row.target === 'synthetic' && row.code === null && row.lostEvents === 0),
+    'Main never received recording during connection 1');
+  record.statusRecordingShown = true;
+  const beforeServiceExit = (await mainEvents()).length;
 
   // 2. A diagnostic service exit; main's supervisor restarts the service, which cold-starts its recorder from seeds.
   assert.equal(await application.evaluate(({app}) => app.emit('ets2telemetry:diagnostic-service-exit')), true, 'Opt-in diagnostic event unavailable');
@@ -191,6 +243,25 @@ export async function runRecordingSmoke({application, launcher, dashboard, recor
   record.restartedServicePid = restarted.servicePid;
   record.afterRestart = await waitForCurrentTelemetry(dashboard);
   record.serviceRestartRecovered = true;
+  // ET-015c PR-4: main reported unknown from the service exit until the restarted service's first status; the restarted
+  // service waits again, with connection 1's totals (none) carried over.
+  record.status.afterRestart = {dashboard: await waitForRecordingText(dashboard, RECORDING_TEXT_WAITING, 'RECORDING_NOT_WAITING_AFTER_SERVICE_RESTART'),
+    health: await recordingHealth(application, status => status.state === 'waiting', 'RECORDING_NOT_WAITING_AFTER_SERVICE_RESTART')};
+  assert.deepEqual(record.status.afterRestart.health, RECORDING_STATUS_WAITING);
+  const restartRows = record.status.serviceRestartRows = statusRows((await mainEvents()).slice(beforeServiceExit));
+  const unknownAt = restartRows.findIndex(row => row.state === 'unknown');
+  assert.ok(unknownAt >= 0 && restartRows.slice(unknownAt + 1).some(row => row.state === 'waiting' && row.target === 'synthetic'),
+    'Main did not report unknown between the terminated and the restarted service');
+  record.status.serviceRestartTexts = await shownText(dashboard, text => text.headline === 'Not known while the telemetry service is not running' && text.detail === null,
+    'RECORDING_UNKNOWN_NOT_SHOWN_AFTER_SERVICE_EXIT');
+  record.statusUnknownAfterServiceExit = true;
+  // A dashboard reload subscribes again and gets the same status.
+  await dashboard.reload();
+  await waitForCurrentTelemetry(dashboard);
+  record.status.afterReload = await waitForRecordingText(dashboard, RECORDING_TEXT_WAITING, 'RECORDING_STATUS_NOT_KEPT_AFTER_RELOAD');
+  assert.deepEqual(record.status.afterReload, record.status.afterRestart.dashboard);
+  assert.deepEqual((await lifecycleState(application)).health.recording, RECORDING_STATUS_WAITING);
+  record.statusReloadKept = true;
 
   // 3. Close the main window to the tray, then admit the restarted service's durable connection: the redelivery, the
   // rest of the job and the sampled frames are recorded while no dashboard exists. The ACK of the gate (eventSeq 10)
@@ -199,6 +270,7 @@ export async function runRecordingSmoke({application, launcher, dashboard, recor
   record.afterClose = afterClose;
   assert.equal(launcher.exitCode, null, 'Application exited after closing the dashboard');
   assert.equal(afterClose.servicePid, restarted.servicePid); assert.equal(afterClose.tray, true); assert.equal(afterClose.exiting, false);
+  const beforeSecondConnection = (await mainEvents()).length;
   recording.admit();
   const second = (await recording.waitFor(s => s.connections[1]?.forwardedAcks.includes(TRAY_EXIT_GATE), 'SECOND_CONNECTION_DID_NOT_COMMIT_THE_JOB', 20000)).connections[1];
   record.secondConnection = second;
@@ -212,6 +284,27 @@ export async function runRecordingSmoke({application, launcher, dashboard, recor
   assert.equal(during.dashboard, false); assert.equal(during.servicePid, restarted.servicePid); assert.equal(during.exiting, false);
   assert.equal((await mainEvents()).filter(row => row.event === 'SERVICE_EXIT').length, 1, 'Only the terminated service may have exited');
   record.dashboardClosedRecordingContinued = true;
+  // ET-015c PR-4: while the dashboard was closed, main received recording from the restarted service, and its totals
+  // after the redelivery count the consumer-restart interval and no lost event.
+  const closedRows = await until(mainEvents, rows => statusRows(rows.slice(beforeSecondConnection)).some(row => RECORDED_STATES.includes(row.state)),
+    'RECORDING_NOT_REPORTED_WHILE_CLOSED');
+  record.status.whileClosedRows = statusRows(closedRows.slice(beforeSecondConnection));
+  assert.ok(record.status.whileClosedRows.some(row => row.state === 'recording' && row.target === 'synthetic' && row.code === null),
+    'Main never received recording while the dashboard was closed');
+  record.statusRecordedWhileClosed = true;
+  const whileClosed = record.status.whileClosed = await recordingHealth(application,
+    status => JSON.stringify(status.losses) === JSON.stringify(RECORDING_LOSSES_AFTER_REDELIVERY), 'RECORDING_LOSSES_NOT_REPORTED_AFTER_REDELIVERY');
+  assert.deepEqual({target: whileClosed.target, code: whileClosed.code, losses: whileClosed.losses}, {target: 'synthetic', code: null, losses: RECORDING_LOSSES_AFTER_REDELIVERY});
+  assert.ok(['recording', 'paused', 'interrupted'].includes(whileClosed.state), `Unexpected state ${whileClosed.state} after the redelivery`);
+  assert.ok(statusRows(await mainEvents()).every(row => !('lostEvents' in row) || row.lostEvents === 0), 'A run A status counted a lost event');
+  record.statusNoEventLoss = true;
+  // The dashboard reopened from the tray gets the current status with the totals since ETS2Telemetry started.
+  assert.equal(await application.evaluate(({app}) => app.emit('ets2telemetry:diagnostic-tray-action', 'open')), true, 'Diagnostic tray action unavailable');
+  const reopened = await newDashboardPage(application, [dashboard]);
+  record.status.reopened = await waitForRecordingText(reopened, {losses: RECORDING_TEXT_LOSSES_AFTER_REDELIVERY, notice: TEST_NOTICE, alert: null},
+    'RECORDING_LOSSES_NOT_SHOWN_AFTER_REOPEN');
+  assert.equal(record.status.reopened.detail?.[0], SYNTHETIC_NOTE);
+  record.statusReopenedLosses = true;
 
   // 4. Explicit exit from the tray: the service's ordered stop runs `recording-flush`, which writes the pending sample of
   // second 1001 (H11), then closes the database.
@@ -239,6 +332,11 @@ export async function verifyRecordingRestart({application, record, rendererPages
   const state = await lifecycleState(application);
   record.restart.servicePid = state.servicePid;
   assert.ok(Number.isSafeInteger(state.servicePid) && state.servicePid !== record.servicePid && state.servicePid !== record.restartedServicePid, 'Run B reused a service');
+  // ET-015c PR-4: an application restart starts new totals: run B waits with none.
+  record.restart.status = {beforeAdmission: {dashboard: await waitForRecordingText(dashboard, RECORDING_TEXT_WAITING, 'RUN_B_RECORDING_NOT_WAITING'),
+    health: await recordingHealth(application, status => status.state === 'waiting', 'RUN_B_RECORDING_NOT_WAITING')}};
+  assert.deepEqual(record.restart.status.beforeAdmission.health, RECORDING_STATUS_WAITING);
+  await startRecordingTextLog(dashboard);
   // Run A has exited, so no earlier service can take this admission.
   recording.admit();
   const third = (await recording.waitFor(s => s.connections[2]?.forwardedAcks.includes(RUN_B_GATE), 'THIRD_CONNECTION_DID_NOT_COMMIT', 20000)).connections[2];
@@ -248,6 +346,15 @@ export async function verifyRecordingRestart({application, record, rendererPages
   assert.deepEqual(third.forwardedAcks, ['11', '12', '13']);
   record.restart.durable = await durableActiveRow(events, config.diagnosticsRestart, state.servicePid);
   record.restartRecovered = true;
+  // ET-015c PR-4: run B recorded again (its v1 data is fresh only while the game is paused, so it reads paused) with
+  // fresh totals: no status of run B carries a loss, and its dashboard shows no loss line.
+  const rows = await until(() => events(config.diagnosticsRestart), list => statusRows(list).some(row => RECORDED_STATES.includes(row.state)), 'RUN_B_NOT_RECORDED');
+  record.restart.status.rows = statusRows(rows);
+  assert.ok(record.restart.status.rows.every(row => !('lostEvents' in row) || Object.keys(NO_LOSSES).every(key => row[key] === 0)), 'Run B carried losses');
+  record.restart.status.texts = await shownText(dashboard, text => RECORDED_HEADLINES.includes(text.headline) && text.detail?.[0] === SYNTHETIC_NOTE,
+    'RUN_B_RECORDING_NOT_SHOWN');
+  assert.ok(record.restart.status.texts.every(text => text.losses === null), 'Run B showed a loss line');
+  record.statusRunBFresh = true;
 }
 
 const FAILURE_EVENTS = /FAILED|TIMEOUT|UNCAUGHT|UNHANDLED|INVALID|RENDER_PROCESS_GONE/;
