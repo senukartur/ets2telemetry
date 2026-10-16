@@ -1,8 +1,8 @@
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
-import {HISTORY_CLOSE_BUDGET_MS, HISTORY_CLOSE_GRACE_MS, HistoryStorage} from '../../apps/desktop/src/history-storage';
+import {HISTORY_CLOSE_BUDGET_MS, HISTORY_CLOSE_GRACE_MS, HistoryStorage, recorderClient, type HistoryStorageOptions} from '../../apps/desktop/src/history-storage';
 import {SERVICE_STOP_BUDGET_MS, ShutdownSequence} from '../../apps/desktop/src/shutdown-sequence';
 import type {Result, StorageErrorCode} from '../../packages/storage/src/api';
-import type {StorageWorkerHandle} from '../../packages/storage/src/client';
+import type {StorageClient, StorageWorkerHandle} from '../../packages/storage/src/client';
 import {storageError} from '../../packages/storage/src/errors';
 import type {StorageRequest} from '../../packages/storage/src/worker/protocol';
 
@@ -13,7 +13,7 @@ const SUMMARY = {schemaVersion: 1, created: true, databaseUuid: '50000000-0000-4
 const timers = {setTimeout: (callback: () => void, ms: number) => setTimeout(callback, ms), clearTimeout: (handle: unknown) => clearTimeout(handle as ReturnType<typeof setTimeout>)};
 
 /** A scripted storage worker. `open` answers with `openResult`; `close` is answered only when `answerClose` is true. */
-function fixture(localAppData: string | null = 'C:\\isolated', openResult: Result<unknown> = {ok: true, value: SUMMARY}, answerClose = true) {
+function fixture(localAppData: string | null = 'C:\\isolated',openResult: Result<unknown> = {ok: true, value: SUMMARY}, answerClose = true, extra: Pick<HistoryStorageOptions, 'target' | 'onOpened'> = {}) {
   const sent: StorageRequest[] = [], log = vi.fn();
   const listeners: {message?: (message: unknown) => void; error?: (error: unknown) => void; exit?: (code: number) => void} = {};
   let exited = false;
@@ -32,7 +32,7 @@ function fixture(localAppData: string | null = 'C:\\isolated', openResult: Resul
   };
   const createWorker = vi.fn(() => worker);
   // null stands for an unset variable, since an omitted argument takes the default.
-  const history = new HistoryStorage({localAppData: localAppData ?? undefined, appVersion: '0.1.0-test', log, createWorker, timers});
+  const history = new HistoryStorage({localAppData: localAppData ?? undefined, appVersion: '0.1.0-test', log, createWorker, timers, ...extra});
   const events = () => log.mock.calls.map(call => [call[0], call[2]]);
   return {history, sent, log, events, createWorker, worker, crash: () => listeners.error?.(new Error('worker crashed'))};
 }
@@ -151,5 +151,79 @@ describe('history storage shutdown step', () => {
     expect(f.worker.terminate).toHaveBeenCalledOnce();
     expect(f.log.mock.calls.find(call => call[0] === 'SHUTDOWN_STEP')?.[2]).toEqual({phase: 'storage', name: 'history-storage', outcome: 'failed', ms: HISTORY_CLOSE_GRACE_MS});
     expect(f.events().map(([name]) => name)).not.toContain('HISTORY_STORAGE_CLOSED');
+  });
+});
+
+describe('recording target and the trip recorder client (ET-015a, R3, R10)', () => {
+  it.each([['synthetic', 't'], ['replay', 'smoke-01']] as const)('opens the %s target %s in the synthetic directory instead of history', async (purpose, name) => {
+    const f = fixture('C:\\isolated', {ok: true, value: {...SUMMARY, purpose}}, true, {target: {purpose, name}});
+    f.history.start();
+    expect(f.sent.map(request => request.command)).toEqual([{name: 'open', options: {
+      path: `C:\\isolated\\ETS2Telemetry\\synthetic\\${name}.sqlite`, purpose, backupsDirectory: 'C:\\isolated\\ETS2Telemetry\\synthetic\\backups', appVersion: '0.1.0-test'}}]);
+    await vi.advanceTimersByTimeAsync(0);
+    await f.history.close();
+    // The target's purpose first, then the same fixed codes and facts as history mode.
+    expect(f.events()).toEqual([['RECORDING_TARGET', {purpose}], ['HISTORY_STORAGE_OPENED', {schemaVersion: 1, created: true, migratedFrom: null}], ['HISTORY_STORAGE_CLOSED', undefined]]);
+  });
+  it('keeps history mode unchanged with an explicit history target', async () => {
+    const f = fixture('C:\\isolated', {ok: true, value: SUMMARY}, true, {target: {purpose: 'history'}});
+    f.history.start();
+    expect(f.sent.map(request => request.command)).toEqual([{name: 'open', options: {
+      path: 'C:\\isolated\\ETS2Telemetry\\data\\telemetry.sqlite', purpose: 'history', backupsDirectory: 'C:\\isolated\\ETS2Telemetry\\backups', appVersion: '0.1.0-test'}}]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.events()).toEqual([['HISTORY_STORAGE_OPENED', {schemaVersion: 1, created: true, migratedFrom: null}]]);
+  });
+  it.each(['', 'A', '..', '../data/telemetry', 'telemetry.sqlite', 'a\\b', 'a'.repeat(65)])('refuses a target name %j that the policy would never produce, without a worker', async name => {
+    const f = fixture('C:\\isolated', {ok: true, value: SUMMARY}, true, {target: {purpose: 'synthetic', name}});
+    f.history.start(); await vi.advanceTimersByTimeAsync(0);
+    expect(f.createWorker).not.toHaveBeenCalled();
+    expect([f.history.state, f.history.client]).toEqual(['unavailable', undefined]);
+    expect(f.events()).toEqual([['RECORDING_TARGET', {purpose: 'synthetic'}], ['HISTORY_STORAGE_UNAVAILABLE', {code: 'DATA_PATH_INVALID'}]]);
+  });
+  it('refuses a synthetic target without LOCALAPPDATA like history', async () => {
+    const f = fixture(null, {ok: true, value: SUMMARY}, true, {target: {purpose: 'synthetic', name: 't'}});
+    f.history.start(); await vi.advanceTimersByTimeAsync(0);
+    expect(f.createWorker).not.toHaveBeenCalled();
+    expect(f.events()).toEqual([['RECORDING_TARGET', {purpose: 'synthetic'}], ['HISTORY_STORAGE_UNAVAILABLE', {code: 'DATA_PATH_INVALID'}]]);
+  });
+  it('exposes the client only while the database is open and reports the open once', async () => {
+    const onOpened = vi.fn(), f = fixture('C:\\isolated', {ok: true, value: SUMMARY}, true, {onOpened});
+    expect(f.history.client).toBeUndefined();
+    f.history.start();
+    expect([f.history.state, f.history.client, onOpened.mock.calls.length]).toEqual(['opening', undefined, 0]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.history.state).toBe('open'); expect(f.history.client).toBeDefined(); expect(onOpened).toHaveBeenCalledOnce();
+    // The open is reported after HISTORY_STORAGE_OPENED, so the log shows the open before any durable reconnection.
+    expect(onOpened.mock.invocationCallOrder[0]).toBeGreaterThan(f.log.mock.invocationCallOrder[0]);
+    await f.history.close();
+    expect([f.history.state, f.history.client, onOpened.mock.calls.length]).toEqual(['closed', undefined, 1]);
+  });
+  it('never reports a refused open or a crashed worker as open', async () => {
+    const onOpened = vi.fn(), refused = fixture('C:\\isolated', {ok: false, error: storageError('PERMISSION_DENIED')}, true, {target: {purpose: 'synthetic', name: 't'}, onOpened});
+    refused.history.start(); await vi.advanceTimersByTimeAsync(0);
+    expect([refused.history.state, refused.history.client]).toEqual(['unavailable', undefined]);
+    expect(refused.events()).toEqual([['RECORDING_TARGET', {purpose: 'synthetic'}], ['HISTORY_STORAGE_UNAVAILABLE', {code: 'PERMISSION_DENIED'}]]);
+    expect(onOpened).not.toHaveBeenCalled();
+    const crashed = fixture('C:\\isolated', {ok: true, value: SUMMARY}, true, {onOpened});
+    crashed.history.start(); await vi.advanceTimersByTimeAsync(0); crashed.crash();
+    expect([crashed.history.state, crashed.history.client, onOpened.mock.calls.length]).toEqual(['unavailable', undefined, 1]);
+  });
+  it('answers every recorder command with STORAGE_CLOSED while no database is open, and forwards it while one is', async () => {
+    const source: {client: StorageClient | undefined} = {client: undefined}, client = recorderClient(source);
+    const welcome = {kind: 'welcome'}, interval = {kind: 'restore-loss' as const, firstEventSeq: '3', lastEventSeq: '5'};
+    const calls = () => [
+      client.upsertSession({message: welcome}), client.committedThrough('s'), client.commitEvent({message: {kind: 'event'}}), client.commitGap({message: {kind: 'gap'}}),
+      client.recordCompleteness('s', interval, {ifAbsent: true}), client.listTrips({game: 'ets2', outcome: 'open'}), client.getEvent('s', '1'), client.listEvents('s', {afterEventSeq: '0', limit: 500})
+    ];
+    for (const result of await Promise.all(calls())) expect(result).toEqual({ok: false, error: storageError('STORAGE_CLOSED')});
+    const received: unknown[][] = [];
+    const answer = (name: string) => (...args: unknown[]) => { received.push([name, ...args]); return Promise.resolve({ok: true, value: name}); };
+    source.client = Object.fromEntries(['upsertSession', 'committedThrough', 'commitEvent', 'commitGap', 'recordCompleteness', 'listTrips', 'getEvent', 'listEvents']
+      .map(name => [name, answer(name)])) as unknown as StorageClient;
+    expect((await Promise.all(calls())).map(result => result.ok && result.value)).toEqual(['upsertSession', 'committedThrough', 'commitEvent', 'commitGap', 'recordCompleteness', 'listTrips', 'getEvent', 'listEvents']);
+    expect(received).toEqual([
+      ['upsertSession', {message: welcome}], ['committedThrough', 's'], ['commitEvent', {message: {kind: 'event'}}], ['commitGap', {message: {kind: 'gap'}}],
+      ['recordCompleteness', 's', interval, {ifAbsent: true}], ['listTrips', {game: 'ets2', outcome: 'open'}], ['getEvent', 's', '1'], ['listEvents', 's', {afterEventSeq: '0', limit: 500}]
+    ]);
   });
 });

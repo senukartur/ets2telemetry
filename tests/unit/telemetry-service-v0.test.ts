@@ -9,8 +9,12 @@ import {ServiceSupervisor} from '../../apps/desktop/src/service-supervisor';
 import type {ProbeDependencies} from '../../apps/desktop/src/service-probe';
 import {FrameDecoder, encodeFrame} from '../../packages/contracts/src/protocol-v0';
 import type {SourceIdentity} from '../../packages/contracts/src/protocol-v0';
+import {decodePayload as decodePayloadV1, encodeFrame as encodeFrameV1, type ClientMessage} from '../../packages/contracts/src/protocol-v1';
+import {ETS2_A, Script, r} from '../shared/trip-messages';
 import type {LiveTelemetry} from '../../packages/contracts/src';
 import type {V1IngestionOptions, V1SourceState} from '../../apps/desktop/src/v1-ingestion';
+import type {HistoryState, HistoryStorageOptions} from '../../apps/desktop/src/history-storage';
+import type {StorageClient} from '../../packages/storage/src/client';
 import type {BrokerConfiguration, BrokerDiagnostic} from '../../apps/desktop/src/native-pipe-client';
 import {replay, type Scenario} from '../../tools/telemetry-simulator/src/scenario';
 import {startPipe} from '../../tools/telemetry-simulator/src/pipe';
@@ -274,7 +278,7 @@ it('closes malformed input over a real Windows pipe', async () => {
   try {ingestion.select('synthetic', pipe); await vi.waitFor(() => expect(states.at(-1)?.status).toBe('incompatible')); expect(states.at(-1)?.fresh).toBe(false);}
   finally {await ingestion.stop(); for (const socket of sockets) socket.destroy(); await new Promise<void>(resolve => server.close(() => resolve()));}
 });
-async function stoppedService(stopProbe: (report: ProbeDependencies['report']) => Promise<void>, closeHistory: () => Promise<void> = () => Promise.resolve()) {
+async function stoppedService(stopProbe: (report: ProbeDependencies['report']) => Promise<void>, closeHistory: () => Promise<void> = () => Promise.resolve(), options: {realV1?: boolean} = {}) {
   vi.useFakeTimers();
   const exit = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
   const previousPort = Object.getOwnPropertyDescriptor(process, 'parentPort');
@@ -288,16 +292,27 @@ async function stoppedService(stopProbe: (report: ProbeDependencies['report']) =
     start() {this.dependencies.report({type: 'ready'}); return Promise.resolve();}
     stop() {return stopProbe(message => this.dependencies.report(message));}
   }}));
-  const history = {start: vi.fn(), close: vi.fn(closeHistory)};
-  vi.doMock('../../apps/desktop/src/history-storage', () => ({HISTORY_CLOSE_BUDGET_MS: 1000, historyWorker: vi.fn(), HistoryStorage: class {start() {history.start();} close() {return history.close();}}}));
+  // The history database is replaced too: its constructor options are recorded, and a case sets its state and client.
+  const history = {start: vi.fn(), close: vi.fn(closeHistory), options: [] as HistoryStorageOptions[], state: 'idle' as HistoryState, client: undefined as StorageClient | undefined};
+  vi.doMock('../../apps/desktop/src/history-storage', async importOriginal => ({...await importOriginal<typeof import('../../apps/desktop/src/history-storage')>(), HistoryStorage: class {
+    constructor(options: HistoryStorageOptions) {history.options.push(options);}
+    get state() {return history.state;}
+    get client() {return history.client;}
+    start() {history.start();}
+    close() {return history.close();}
+  }}));
   // The protocol v1 ingestion (ET-006b) is replaced like the history database: its options and calls are recorded.
   const v1 = {options: [] as V1IngestionOptions[], configureBroker: vi.fn<(configuration: BrokerConfiguration | undefined) => void>(),
-    select: vi.fn<(selection: string, endpoint?: string) => void>(), stop: vi.fn(() => Promise.resolve())};
-  vi.doMock('../../apps/desktop/src/v1-ingestion', () => ({V1Ingestion: class {
+    select: vi.fn<(selection: string, endpoint?: string) => void>(), stopSource: vi.fn(() => Promise.resolve()), flush: vi.fn(() => Promise.resolve()),
+    durableAvailabilityChanged: vi.fn()};
+  // A case that needs the real ingestion and trip recorder (the flush step) keeps the module.
+  if (!options.realV1) vi.doMock('../../apps/desktop/src/v1-ingestion', () => ({V1Ingestion: class {
     constructor(options: V1IngestionOptions) {v1.options.push(options);}
     configureBroker(configuration: BrokerConfiguration | undefined) {v1.configureBroker(configuration);}
     select(selection: string, endpoint?: string) {v1.select(selection, endpoint);}
-    stop() {return v1.stop();}
+    stopSource() {return v1.stopSource();}
+    flush() {return v1.flush();}
+    durableAvailabilityChanged() {v1.durableAvailabilityChanged();}
   }}));
   // The native client is replaced by a recorder so the production connectGame closures can be called without a broker.
   const pipeClients: unknown[][] = [];
@@ -320,12 +335,18 @@ it('runs the ordered shutdown once and reports exactly one clean stopped message
     f.stop(); f.stop(); await vi.advanceTimersByTimeAsync(0);
     expect(f.stops()).toEqual([{type: 'stopped', clean: true}]);
     expect(f.exit).toHaveBeenCalledExactlyOnceWith(0);
-    // ET-013 adds the history database close beside the probe in the storage phase, and ET-006b the v1 ingestion beside
-    // the v0 ingestion and capture in the intake phase; steps of one phase finish in any order.
+    // ET-013 adds the history database close beside the probe in the storage phase, ET-006b the v1 ingestion beside the
+    // v0 ingestion and capture in the intake phase, and ET-015a (R14) the recording flush as the only flush step; steps
+    // of one phase finish in any order.
     const steps = f.steps().map(step => [step.phase, step.name, step.outcome]);
     expect(steps.slice(0, 3).sort()).toEqual([['intake', 'capture', 'ok'], ['intake', 'ingestion', 'ok'], ['intake', 'v1-ingestion', 'ok']]);
-    expect(steps.slice(3).sort()).toEqual([['storage', 'history-storage', 'ok'], ['storage', 'storage-probe', 'ok']]);
-    expect(f.history.start).toHaveBeenCalledOnce(); expect(f.history.close).toHaveBeenCalledOnce(); expect(f.v1.stop).toHaveBeenCalledOnce();
+    expect(steps[3]).toEqual(['flush', 'recording-flush', 'ok']);
+    expect(steps.slice(4).sort()).toEqual([['storage', 'history-storage', 'ok'], ['storage', 'storage-probe', 'ok']]);
+    expect(f.history.start).toHaveBeenCalledOnce(); expect(f.history.close).toHaveBeenCalledOnce();
+    // R14: the intake step ends only the source; the flush step then waits for the storage command in flight.
+    expect(f.v1.stopSource).toHaveBeenCalledOnce(); expect(f.v1.flush).toHaveBeenCalledOnce();
+    expect(f.v1.stopSource.mock.invocationCallOrder[0]).toBeLessThan(f.v1.flush.mock.invocationCallOrder[0]);
+    expect(f.v1.flush.mock.invocationCallOrder[0]).toBeLessThan(f.history.close.mock.invocationCallOrder[0]);
     expect(f.log).toHaveBeenCalledWith('SERVICE_REPORT', {type: 'stopped', clean: true});
     expect(vi.getTimerCount()).toBe(0);
   } finally {f.restore();}
@@ -378,13 +399,116 @@ it('runs protocol v1 beside v0 without a durable sink, following each selection 
 it('bounds the v1 ingestion stop by its 1,000 ms intake budget and reports a late stop as unclean', async () => {
   const f = await stoppedService(report => {report({type: 'stopped'}); return Promise.resolve();});
   try {
-    f.v1.stop.mockImplementation(() => new Promise<void>(() => undefined));
+    f.v1.stopSource.mockImplementation(() => new Promise<void>(() => undefined));
     f.stop(); await vi.advanceTimersByTimeAsync(999);
     expect(f.stops()).toEqual([]); expect(f.history.close).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
     expect(f.steps().find(step => step.name === 'v1-ingestion')).toMatchObject({phase: 'intake', outcome: 'timeout'});
     expect(f.stops()).toEqual([{type: 'stopped', clean: false}]); expect(f.exit).toHaveBeenCalledExactlyOnceWith(1);
   } finally {f.restore();}
+});
+describe('ET-015a recording gate in the service (R3, R10, R14)', () => {
+  const stopProbe = (report: ProbeDependencies['report']) => {report({type: 'stopped'}); return Promise.resolve();};
+  const v1Endpoint = '\\\\.\\pipe\\ETS2Telemetry-SYNTHETIC-TEST-v1-123-' + randomUUID();
+  it('keeps the default plan: the history database, no sink and a live-only v1 ingestion (E2)', async () => {
+    const f = await stoppedService(stopProbe);
+    try {
+      expect(Object.keys(f.v1.options[0]).sort()).toEqual(['connectGame', 'diagnose', 'onState']);
+      expect(f.history.options).toHaveLength(1);
+      expect(f.history.options[0].target).toEqual({purpose: 'history'});
+      expect(f.history.options[0].onOpened).toBeUndefined();
+      expect(f.log.mock.calls.map(call => call[0])).not.toContain('RECORDING_TARGET_REJECTED');
+    } finally {f.stop(); await vi.advanceTimersByTimeAsync(0); f.restore();}
+  });
+  it('records into the synthetic target only for the synthetic selection, once its database is open', async () => {
+    vi.stubEnv('ETS2TELEMETRY_RECORDING', 'synthetic:t');
+    const f = await stoppedService(stopProbe);
+    try {
+      const options = f.v1.options[0];
+      expect(Object.keys(options).sort()).toEqual(['connectGame', 'diagnose', 'durableReady', 'durableSelections', 'onState', 'sink']);
+      expect(options.durableSelections).toEqual(['synthetic']);
+      // A fresh module instance per case, so the recorder is identified by its class name rather than instanceof.
+      expect(options.sink?.constructor.name).toBe('TripRecorderSink');
+      expect(f.history.options[0].target).toEqual({purpose: 'synthetic', name: 't'});
+      // R10: durable only while the database is open; its open lets the live-only connection reconnect durable.
+      for (const [state, ready] of [['idle', false], ['opening', false], ['open', true], ['unavailable', false], ['closed', false]] as const) {
+        f.history.state = state; expect(options.durableReady!()).toBe(ready);
+      }
+      expect(f.v1.durableAvailabilityChanged).not.toHaveBeenCalled();
+      f.history.options[0].onOpened!();
+      expect(f.v1.durableAvailabilityChanged).toHaveBeenCalledOnce();
+      expect(f.log.mock.calls.map(call => call[0])).not.toContain('RECORDING_TARGET_REJECTED');
+    } finally {f.stop(); await vi.advanceTimersByTimeAsync(0); f.restore(); vi.unstubAllEnvs();}
+  });
+  it.each(['history', 'synthetic:A', 'synthetic:../x', 'game:x'])('rejects ETS2TELEMETRY_RECORDING=%j once and keeps the default plan', async value => {
+    vi.stubEnv('ETS2TELEMETRY_RECORDING', value);
+    const f = await stoppedService(stopProbe);
+    try {
+      expect(f.log.mock.calls.filter(call => call[0] === 'RECORDING_TARGET_REJECTED')).toEqual([['RECORDING_TARGET_REJECTED']]);
+      expect(Object.keys(f.v1.options[0]).sort()).toEqual(['connectGame', 'diagnose', 'onState']);
+      expect(f.history.options[0].target).toEqual({purpose: 'history'});
+      expect(f.history.options[0].onOpened).toBeUndefined();
+    } finally {f.stop(); await vi.advanceTimersByTimeAsync(0); f.restore(); vi.unstubAllEnvs();}
+  });
+  it('bounds the stop by 1,000 (intake) + 500 (flush) + 1,000 (storage) = 2,500 ms when every step hangs', async () => {
+    const f = await stoppedService(stopProbe, () => new Promise<void>(() => undefined));
+    try {
+      const hang = () => new Promise<void>(() => undefined);
+      f.v1.stopSource.mockImplementation(hang); f.v1.flush.mockImplementation(hang);
+      f.stop(); await vi.advanceTimersByTimeAsync(1000);
+      expect(f.v1.flush).toHaveBeenCalledOnce(); expect(f.history.close).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(499); expect(f.history.close).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1); expect(f.history.close).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(999); expect(f.stops()).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(f.stops()).toEqual([{type: 'stopped', clean: false}]); expect(f.exit).toHaveBeenCalledExactlyOnceWith(1);
+      expect(f.steps().filter(step => step.outcome !== 'ok').map(step => [step.phase, step.name, step.outcome])).toEqual([
+        ['intake', 'v1-ingestion', 'timeout'], ['flush', 'recording-flush', 'timeout'], ['storage', 'history-storage', 'timeout']]);
+    } finally {f.restore();}
+  });
+  it('flushes after the source stopped: waits for the commit in flight, writes no ACK after the stop, then closes the database', async () => {
+    vi.stubEnv('ETS2TELEMETRY_RECORDING', 'synthetic:t'); vi.stubEnv('ETS2TELEMETRY_SOURCE_PIPE_V1', v1Endpoint);
+    const sockets: TestSocket[] = [], endpoints: unknown[] = [];
+    const connect = vi.spyOn(net, 'connect').mockImplementation((endpoint: unknown) => {endpoints.push(endpoint); const socket = new TestSocket(); sockets.push(socket); return socket as unknown as net.Socket;});
+    // The recorder's storage: a session at coverage 0 with no stored trip, and a commit held until `release`.
+    let release: (() => void) | undefined;
+    const commits: string[] = [];
+    const answer = (value: unknown) => Promise.resolve({ok: true, value});
+    const client = {
+      upsertSession: () => answer({created: true, committedThroughEventSeq: '0'}), committedThrough: () => answer('0'),
+      listTrips: () => answer({trips: [], nextCursor: null}), getEvent: () => answer(undefined), listEvents: () => answer([]), recordCompleteness: () => answer(undefined),
+      commitGap: () => answer({status: 'committed', committedThroughEventSeq: '0'}),
+      commitEvent: (input: {message: {data: {eventSeq: string}}}) => {
+        commits.push(input.message.data.eventSeq);
+        return new Promise(resolve => {release = () => resolve({ok: true, value: {status: 'committed', committedThroughEventSeq: '1'}});});
+      }
+    } as unknown as StorageClient;
+    const f = await stoppedService(stopProbe, undefined, {realV1: true});
+    try {
+      f.history.state = 'open'; f.history.client = client;
+      f.parent.emit('message', {data: {type: 'select', source: 'synthetic'}, ports: []});
+      expect(endpoints).toEqual([v1Endpoint]);
+      const socket = sockets[0], sent = () => socket.writes.map(bytes => decodePayloadV1(bytes.subarray(4), 'client') as ClientMessage);
+      socket.emit('connect');
+      expect(sent()).toMatchObject([{kind: 'hello', data: {durableEvents: true}}]);
+      const s = new Script(ETS2_A);
+      for (const message of [s.welcome(), s.checkpoint(null), s.event(r.jobConfigured())]) socket.emit('data', encodeFrameV1(message));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(commits).toEqual(['1']);
+      f.stop(); await vi.advanceTimersByTimeAsync(0);
+      // The intake phase ended the source; the flush step waits for the commit in flight and the database stays open.
+      expect(socket.destroyed).toBe(true);
+      await vi.advanceTimersByTimeAsync(499);
+      expect(f.steps().map(step => step.name)).not.toContain('recording-flush'); expect(f.history.close).not.toHaveBeenCalled();
+      release!(); await vi.advanceTimersByTimeAsync(0);
+      expect(f.steps().find(step => step.name === 'recording-flush')).toMatchObject({phase: 'flush', outcome: 'ok'});
+      expect(f.history.close).toHaveBeenCalledOnce();
+      expect(f.stops()).toEqual([{type: 'stopped', clean: true}]); expect(f.exit).toHaveBeenCalledExactlyOnceWith(0);
+      // The commit completed in storage, but nothing was acknowledged after the source stopped; the producer redelivers.
+      expect(sent().map(message => message.kind).filter(kind => kind === 'ack')).toEqual([]);
+      expect(sockets).toHaveLength(1);
+    } finally {connect.mockRestore(); f.restore(); vi.unstubAllEnvs();}
+  });
 });
 it('waits for the history database to close before the single stopped report, and reports a failed close as unclean', async () => {
   let finish!: () => void;

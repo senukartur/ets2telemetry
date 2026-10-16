@@ -13,8 +13,10 @@ import {createHash} from 'node:crypto';
 import os from 'node:os';
 import {CaptureController} from './capture-controller';
 import {ShutdownSequence} from './shutdown-sequence';
-import {HistoryStorage, HISTORY_CLOSE_BUDGET_MS, historyWorker} from './history-storage';
+import {HistoryStorage, HISTORY_CLOSE_BUDGET_MS, historyWorker, recorderClient} from './history-storage';
 import {V1Ingestion, type V1SourceState} from './v1-ingestion';
+import {GAME_HISTORY_RECORDING, recordingPlan} from './recording-policy';
+import {TripRecorderSink} from './trip-recorder';
 import type {SourceSelection} from '../../../packages/contracts/src';
 const port = process.parentPort;
 if (!port) throw new Error('Missing Electron parent port');
@@ -25,11 +27,12 @@ const subscriptions = new LiveSubscriptions(initialLive());
 // and repeated identical failures are coalesced so a retry loop cannot fill the bounded log.
 const ingestion = new TelemetryIngestion(update => subscriptions.publish(update), {diagnose: coalesceBrokerDiagnostics(diagnostic => log('NATIVE_BROKER_EXIT', undefined, {...diagnostic}))});
 const fixtureEndpoint = process.env.ETS2TELEMETRY_SOURCE_PIPE;
-// Protocol v1 (ET-006b, E2) runs beside v0 and follows every selection. It is live-only: no durable sink, so each hello
-// asks for durableEvents false, nothing is acknowledged and no history row is written; the dashboard and overlay stay on
-// v0. Game sources are reached only through the verified broker in its v1 mode; fixtures only through an endpoint that
-// matches the synthetic v1 test pipe pattern (ETS2TELEMETRY_SOURCE_PIPE_V1). Its state stays in this service and only
-// fixed codes are logged: status changes per status at occurrences 1, 2, 4, 8, ..., and broker exits like v0's.
+// Protocol v1 (ET-006b, E2) runs beside v0 and follows every selection. Unless the recording gate below gives it a sink,
+// it is live-only: each hello asks for durableEvents false, nothing is acknowledged and no history row is written; the
+// dashboard and overlay stay on v0. Game sources are reached only through the verified broker in its v1 mode; fixtures
+// only through an endpoint that matches the synthetic v1 test pipe pattern (ETS2TELEMETRY_SOURCE_PIPE_V1). Its state
+// stays in this service and only fixed codes are logged: status changes per status at occurrences 1, 2, 4, 8, ..., and
+// broker exits like v0's.
 const v1FixtureEndpoint = process.env.ETS2TELEMETRY_SOURCE_PIPE_V1;
 const diagnoseV1Broker = coalesceBrokerDiagnostics(diagnostic => log('NATIVE_BROKER_V1_EXIT', undefined, {...diagnostic}));
 const v1StatusCounts = new Map<string, number>();
@@ -40,10 +43,16 @@ function recordV1State(state: V1SourceState): void {
   const count = (v1StatusCounts.get(state.status) ?? 0) + 1; v1StatusCounts.set(state.status, count);
   if ((count & (count - 1)) === 0) log('V1_SOURCE_STATUS', undefined, {status: state.status, selection: state.selection, durable: state.durable.state, count});
 }
+// ET-015a recording gate (R3, R10): game selections stay live-only while GAME_HISTORY_RECORDING is false. Only
+// ETS2TELEMETRY_RECORDING=synthetic:<name>|replay:<name> constructs the trip recorder, over a database in the synthetic
+// directory that replaces history, and makes only the matching selection durable once that database is open.
+const recording = recordingPlan(process.env, {gameHistory: GAME_HISTORY_RECORDING, log: event => log(event)});
+const recorder = recording.durableSelections.length ? new TripRecorderSink(recorderClient({get client() {return history.client;}})) : undefined;
 const v1 = new V1Ingestion({
   connectGame: (configuration, game) => new NativePipeClient(configuration, game, diagnoseV1Broker, 'v1'),
   diagnose: (event, facts) => log(event, undefined, facts),
-  onState: recordV1State
+  onState: recordV1State,
+  ...(recorder ? {sink: recorder, durableSelections: recording.durableSelections, durableReady: () => history.state === 'open'} : {})
 });
 /** A v1 failure never fails the v0 selection it follows. */
 function selectV1(selection: SourceSelection, broker: BrokerConfiguration | undefined): void {
@@ -94,10 +103,11 @@ const probe = new ServiceProbe({
   }
 });
 // The durable history database (ET-013, OD-2): opened at start in its own storage worker without delaying
-// readiness or live telemetry. The ET-001 temporary probe above stays the readiness gate. Nothing records yet.
-const history = new HistoryStorage({localAppData: process.env.LOCALAPPDATA, log, createWorker: () => historyWorker(__dirname)});
-// Ordered, bounded service shutdown. Later packages register their own steps here (ET-015 a flush
-// step); the total stays within SERVICE_STOP_BUDGET_MS.
+// readiness or live telemetry. The ET-001 temporary probe above stays the readiness gate. A recording target replaces it
+// with its synthetic or replay database; opening that database lets the live-only v1 connection reconnect durable (R10).
+const history: HistoryStorage = new HistoryStorage({localAppData: process.env.LOCALAPPDATA, log, createWorker: () => historyWorker(__dirname),
+  target: recording.database, ...(recorder ? {onOpened: () => v1.durableAvailabilityChanged()} : {})});
+// Ordered, bounded service shutdown: 1000 (intake) + 500 (flush) + 1000 (storage) = SERVICE_STOP_BUDGET_MS.
 let stopping = false, storageStopped = false, exiting = false;
 /**
  * A failed probe ends the service from its report, outside the orderly sequence. Close the history database first,
@@ -113,8 +123,10 @@ function exitAfterHistory(code: number): void {
 const shutdown = new ShutdownSequence(log);
 shutdown.register('intake', {name: 'ingestion', budgetMs: 1000, run: () => ingestion.stop()});
 shutdown.register('intake', {name: 'capture', budgetMs: 1000, run: () => captures.stop()});
-// Ends the v1 source and waits for its broker process; with no sink there is no storage command to wait for.
-shutdown.register('intake', {name: 'v1-ingestion', budgetMs: 1000, run: () => v1.stop()});
+// Ends the v1 source and waits for its broker process; nothing is acknowledged afterwards (R14).
+shutdown.register('intake', {name: 'v1-ingestion', budgetMs: 1000, run: () => v1.stopSource()});
+// Drops queued durable work and waits for the one storage command in flight before the database closes (R14).
+shutdown.register('flush', {name: 'recording-flush', budgetMs: 500, run: () => v1.flush()});
 shutdown.register('storage', {name: 'storage-probe', budgetMs: 1000, run: async () => {
   await probe.stop();
   if (!storageStopped) throw new Error('Storage probe did not stop cleanly');
