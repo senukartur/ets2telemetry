@@ -50,7 +50,7 @@ ET-015a PR-2 implements this contract in [trip-recorder.ts](../apps/desktop/src/
 3. commits the message with the returned effects;
 4. adopts the returned state only when storage reports `committed`, `duplicate`, `covered` or `conflict`.
 
-On a retryable or failed commit the caller keeps the old state. When the item is redelivered, the reducer then returns the same effects. Non-carrier inputs (session, checkpoint, disconnected) are adopted immediately. An `ok: false` result fails closed: durable delivery must stop, as for any other contract violation.
+On a retryable or failed commit the caller keeps the old state. When the item is redelivered, it is stepped from that kept state, so no effect of an earlier commit is lost or repeated. Effects queued by the reconnection, such as its `not-connected` interval, or a replayed configuration's `opened-before-attach` cause, may be added to it. Non-carrier inputs (session, checkpoint, disconnected) are adopted immediately. An `ok: false` result fails closed: durable delivery must stop, as for any other contract violation.
 
 **Connections.** Every connection ends with a `disconnected` input before the next connection's `session` input, including a reconnection to the same plugin session, a switch to the other game and a new plugin session. The reducer takes the interval in which the consumer was not connected from that input; an item or a reading of a session that is not the current connection's is refused.
 
@@ -70,7 +70,7 @@ Because the reducer applies effects only for new coverage and queues them otherw
 
 - `{tripUuid, pluginSessionId, game, jobKey, startedUtcMs, recordingCompleteness, lastObservedUtcMs?}`;
 - `jobKey` is `jobKey()` of the trip's stored job configuration. With null, no later job ever matches it;
-- `lastObservedUtcMs` is the label of the session's last stored item;
+- `lastObservedUtcMs` is the label of the session's last stored item that has a usable label;
 - `observedDistanceM` (PR-2) is the trip's stored observed distance when it is available; a resumed trip accumulates from it, so its next update never replaces the stored value with a smaller one;
 - `awaitingOutcome` (PR-2 fix round 1) is true when the trip's job was cleared before the stop: the session's last stored `job.configured` or `job.cleared` event after the trip's opening event (`openedEventSeq`, which can follow the job configuration, for example for a reload trip) is a `job.cleared`. The trip then resumes awaiting its outcome, so free driving after the clear adds no distance, and a later outcome still attaches;
 - a seed of another plugin session closes as `restart` at the new session's first commit (T11);
@@ -80,11 +80,13 @@ Because the reducer applies effects only for new coverage and queues them otherw
 
 - the open trips of the welcome's game come from `listTrips({game, outcome: 'open'})`, page by page;
 - `jobKey` is `jobKey()` of the stored `job.configured` record at the trip's job configuration eventSeq, or null when that row is missing or of another type;
-- `lastObservedUtcMs` is the usable label (`occurred.utcUnixMs`, a safe integer) of the session's stored event with the highest eventSeq;
+- `lastObservedUtcMs` is the label of the session's stored event with the highest eventSeq that has a usable label (`occurred.utcUnixMs`, available and a safe integer);
 - `observedDistanceM` is the stored value when it is available;
 - `awaitingOutcome` is true when the session's last `job.configured` or `job.cleared` event after the trip's opening event is a `job.cleared`.
 
 The seeds are read only when the reducer has no session of the welcome's game, that is at the first durable welcome per game in the recorder's lifetime (R15). Later welcomes rely on the reducer's own memory, which never closes a trip twice.
+
+**Truck and trailer references after a restart.** Seeds carry trips, not the session's current configuration. After a service restart, the reducer starts the session at the stored coverage and does not know the truck and trailer references of events committed before it. A trip opened later in that session therefore gets no truck or trailer reference until a `truck.configured` or `trailer.configured` is committed again. A redelivered duplicate does not count, because the reducer skips an eventSeq at or below its processed point. Example: in `tests/fixtures/recording/normal-delivery-backlog.rows.expected.json`, the truck (eventSeq 1) was committed by the first service, so the restarted service opens trip@3 with `truckConfigurationEventSeq: null` but with trailer 2, which it committed itself.
 
 **Storage gaps (T19).** No storage change is part of ET-014. Their dispositions, decided in ET-015a (R11):
 
