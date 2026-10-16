@@ -1,7 +1,7 @@
 import type {OverlayLayout, OverlayPlacement, OverlaySections} from '../../../packages/contracts/src';
 import {clampFraction, DEFAULT_OVERLAY_PLACEMENTS, normalizeFraction} from './overlay-placement';
 import {DEFAULT_OVERLAY_SECTIONS} from './overlay-sections';
-import {stripCssHeight, stripRowCount} from './overlay-strip';
+import {STRIP_BORDER_CSS, STRIP_ROW_HEIGHT_CSS, stripCssHeight, stripRowCount} from './overlay-strip';
 
 // Overlay window geometry per layout (ET-012a decision L10, placements ET-012b decisions M3 and M4, strip rows ET-012c
 // decisions S2-S6). Pure: the input is the game's client area already converted from physical pixels to Electron DIP by
@@ -36,14 +36,18 @@ export function overlayMargins(layout: OverlayLayout): {x: number; y: number} {
 }
 
 const validArea = (client: DipRect) => [client.x, client.y, client.width, client.height].every(Number.isFinite) && client.width > 0 && client.height > 0;
-/** The strip's DIP height for its reserved rows at this scale: ceil((36 × rows + 2) × scale). */
-const stripHeight = (rows: number, scale: number) => Math.ceil(stripCssHeight(rows) * scale - STRIP_HEIGHT_EPSILON);
+/**
+ * The strip's DIP height for its reserved rows at this scale: ceil(36 × rows × scale + 2 × max(1, scale)). Below zoom 1
+ * each border stays one device pixel (overlay-strip.ts); at scale 1 and above this is ceil((36 × rows + 2) × scale).
+ */
+const stripHeight = (rows: number, scale: number) =>
+  Math.ceil(STRIP_ROW_HEIGHT_CSS * rows * scale + 2 * STRIP_BORDER_CSS * Math.max(1, scale) - STRIP_HEIGHT_EPSILON);
 
 /**
  * The scaled window size of a layout in this client area, or undefined when it does not fit inside the margins. The
  * card, cluster and HUD are their nominal size times the scale. The strip is floor(min(1280 × scale, client width − 32))
- * wide, at least round(480 × scale), and ceil((36 × rows + 2) × scale) high, where `rows` is what its enabled sections
- * need at its CSS width floor(width / scale) (overlay-strip.ts). Nothing shrinks automatically: a scaled layout that
+ * wide, at least round(480 × scale), and ceil(36 × rows × scale + 2 × max(1, scale)) high, where `rows` is what its
+ * enabled sections need at its CSS width floor(width / scale) and zoom (overlay-strip.ts). Nothing shrinks automatically: a scaled layout that
  * does not fit hides as a whole. `sections` defaults to every section, which reserves the most rows.
  */
 export function overlaySize(layout: OverlayLayout, client: DipRect, scale: number, sections: OverlaySections = DEFAULT_OVERLAY_SECTIONS):
@@ -53,7 +57,7 @@ export function overlaySize(layout: OverlayLayout, client: DipRect, scale: numbe
   if (layout === 'strip') {
     const width = Math.floor(Math.min(STRIP_MAX_WIDTH_DIP * scale, client.width - 2 * margin.x));
     if (width < Math.round(STRIP_MIN_WIDTH_DIP * scale)) return undefined;
-    const rows = stripRowCount(sections, Math.floor(width / scale));
+    const rows = stripRowCount(sections, Math.floor(width / scale), scale);
     if (rows === undefined) return undefined;
     const height = stripHeight(rows, scale);
     if (client.height < height + 2 * margin.y) return undefined;
@@ -74,7 +78,7 @@ export function overlayWindowSize(layout: OverlayLayout, scale: number, sections
   const nominal = OVERLAY_NOMINAL_SIZE[layout];
   if (layout !== 'strip') return {width: Math.round(nominal.width * scale), height: Math.round(nominal.height * scale)};
   // Every strip item fits a 1280 px row (overlay-strip.ts), so the row count is always defined here.
-  return {width: Math.round(STRIP_MAX_WIDTH_DIP * scale), height: stripHeight(stripRowCount(sections, STRIP_MAX_WIDTH_DIP) ?? 1, scale)};
+  return {width: Math.round(STRIP_MAX_WIDTH_DIP * scale), height: stripHeight(stripRowCount(sections, STRIP_MAX_WIDTH_DIP, scale) ?? 1, scale)};
 }
 
 /**

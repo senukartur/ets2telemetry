@@ -107,8 +107,10 @@ it.each([
   {layout: 'cluster' as const, scale: 2, size: {width: 880, height: 440}},
   {layout: 'hud' as const, scale: 1.25, size: {width: 400, height: 400}},
   // The strip with every section: floor(min(1280 × scale, 1920 − 32)) wide; its CSS width floor(width / scale) is 1280
-  // at 0.5 (3 rows), 1258 at 1.5 (3 rows) and 944 at 2 (4 rows), and it is ceil((36 × rows + 2) × scale) high.
-  {layout: 'strip' as const, scale: 0.5, size: {width: 640, height: 55}},
+  // at 0.5 (3 rows), 1258 at 1.5 (3 rows) and 944 at 2 (4 rows), and it is ceil(36 × rows × scale + 2 × max(1, scale))
+  // high: below zoom 1 the border stays one device pixel. At 0.5: ceil(36 × 3 × 0.5 + 2) = 56 (not 55); at 1.5:
+  // 162 + 3 = 165; at 2: 288 + 4 = 292.
+  {layout: 'strip' as const, scale: 0.5, size: {width: 640, height: 56}},
   {layout: 'strip' as const, scale: 1.5, size: {width: 1888, height: 165}},
   {layout: 'strip' as const, scale: 2, size: {width: 1888, height: 292}},
   // 1408 / 1.1 is just below 1280, so the CSS width is 1279 (3 rows); 110 × 1.1 is 121.00000000000001 in binary floating
@@ -116,6 +118,16 @@ it.each([
   {layout: 'strip' as const, scale: 1.1, size: {width: 1408, height: 121}}
 ])('scales the $layout layout to $size.width x $size.height at $scale', ({layout, scale, size}) => {
   expect(overlaySize(layout, client(0, 0, 1920, 1080), scale)).toEqual(size);
+});
+
+it('keeps the snapped one-device-pixel border inside the strip below zoom 1', () => {
+  // Speed only at 0.5: one 18 DIP row plus two 1 DIP borders is drawn 20 high, where ceil(38 × 0.5) reserved 19.
+  expect(overlaySize('strip', client(0, 0, 1920, 1080), 0.5, SPEED_ONLY)).toEqual({width: 640, height: 20});
+  // The reviewer's case: an 800 x 600 client at 0.75 gives a 768 DIP strip, CSS width 1024. Cargo, origin and distance
+  // driven with two tags take 998 CSS px, more than the inner width floor(1024 − 2 × 1.3333 − 24) = 997, so two rows:
+  // ceil(36 × 2 × 0.75 + 2) = ceil(56) = 56 high. With a 1 CSS px border it would be one row, ceil(38 × 0.75) = 29.
+  const sections = only('cargo', 'origin', 'distance-driven');
+  expect(overlaySize('strip', client(0, 0, 800, 600), 0.75, sections)).toEqual({width: 768, height: 56});
 });
 
 it('rounds a scaled strip height up, never down', () => {
@@ -131,9 +143,11 @@ it.each([
   // 362 × 2 + 16 = 740 high. With speed only it needs one row: 38 × 2 + 16 = 92.
   {layout: 'strip' as const, scale: 2, fits: client(0, 0, 992, 740), narrow: client(0, 0, 991, 740), short: client(0, 0, 992, 739)},
   {layout: 'strip' as const, scale: 2, sections: SPEED_ONLY, fits: client(0, 0, 992, 92), narrow: client(0, 0, 991, 92), short: client(0, 0, 992, 91)},
-  // The strip at 0.5 needs 240 + 32 = 272 wide and ceil(362 × 0.5) + 16 = 197 high; speed only 19 + 16 = 35.
-  {layout: 'strip' as const, scale: 0.5, fits: client(0, 0, 272, 197), narrow: client(0, 0, 271, 197), short: client(0, 0, 272, 196)},
-  {layout: 'strip' as const, scale: 0.5, sections: SPEED_ONLY, fits: client(0, 0, 272, 35), narrow: client(0, 0, 271, 35), short: client(0, 0, 272, 34)}
+  // The strip at 0.5 needs 240 + 32 = 272 wide. Its CSS width 480 with 2 CSS px borders leaves an inner width of
+  // 480 − 4 − 24 = 452, where every section still needs ten rows: ceil(36 × 10 × 0.5 + 2) + 16 = 198 high. Speed only
+  // needs one row: ceil(18 + 2) + 16 = 36.
+  {layout: 'strip' as const, scale: 0.5, fits: client(0, 0, 272, 198), narrow: client(0, 0, 271, 198), short: client(0, 0, 272, 197)},
+  {layout: 'strip' as const, scale: 0.5, sections: SPEED_ONLY, fits: client(0, 0, 272, 36), narrow: client(0, 0, 271, 36), short: client(0, 0, 272, 35)}
 ])('applies the scaled fit threshold of the $layout layout at $scale', ({layout, scale, sections, fits, narrow, short}) => {
   const placement = {x: 0, y: 0, scale};
   expect(overlayBounds(layout, fits, placement, sections)).toBeDefined();

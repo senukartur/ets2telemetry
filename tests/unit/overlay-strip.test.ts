@@ -59,6 +59,24 @@ it('reserves nothing when one item could not fit a row', () => {
   for (const width of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, 0]) expect(stripRowCount(ALL, width)).toBeUndefined();
 });
 
+it('models the surface border as at least one device pixel below zoom 1', () => {
+  // Chromium snaps a nonzero border thinner than one device pixel up to one device pixel, so below zoom 1 the 1 px
+  // border takes 1 / scale CSS px: the inner width is floor(CSS width − 2 × max(1, 1 / scale) − 24).
+  // The reviewer's case: an 800 x 600 client at scale 0.75 gives a 768 DIP strip, CSS width floor(768 / 0.75) = 1024.
+  // Two 96 px tags, cargo 300, origin 300 and distance driven 150 with four 14 px gaps take 998. At zoom 1 the inner
+  // width is 1024 − 2 − 24 = 998: one row. At 0.75 it is floor(1024 − 2 × 1.3333 − 24) = floor(997.33) = 997: two rows.
+  const sections = only('cargo', 'origin', 'distance-driven');
+  expect(stripRowCount(sections, 1024)).toBe(1);
+  expect(stripRowCount(sections, 1024, 0.75)).toBe(2);
+  // At 0.5 the border is 2 CSS px: every section at 1280 has an inner width of 1280 − 4 − 24 = 1252, still three rows
+  // (1210, 1092, then distance remaining would reach 1256); at 480 it is 452, still ten rows.
+  expect(stripRowCount(ALL, 1280, 0.5)).toBe(3);
+  expect(stripRowCount(ALL, 480, 0.5)).toBe(10);
+  // At zoom 1 and above the border stays 1 CSS px: the exact fit of driving-only at 992 holds at scale 2.
+  expect(stripRowCount(OVERLAY_PRESETS['driving-only'], 992, 2)).toBe(1);
+  expect(stripRowCount(OVERLAY_PRESETS['driving-only'], 992, 0.99)).toBe(2);
+});
+
 it('never reserves more rows for a subset of the sections than for all of them', () => {
   const widths = [480, 640, 768, 928, 992, 1248, 1280], all = widths.map(width => stripRowCount(ALL, width)!);
   for (let mask = 1; mask < 1 << OVERLAY_SECTION_IDS.length; mask++) {
@@ -106,6 +124,23 @@ it('reserves at least as many rows as any rendered strip with values up to their
   }
 });
 
+it('reserves at least as many rows as any rendered strip needs at every scale, with the snapped border', () => {
+  const next = random(0x0750);
+  for (let run = 0; run < 5000; run++) {
+    // A DIP width and a scale with two decimals; the real CSS inner width is width / scale minus the snapped borders.
+    const scale = Math.round((0.5 + next() * 1.5) * 100) / 100, width = Math.round(480 * scale) + Math.floor(next() * 801 * scale);
+    const inner = width / scale - 2 * Math.max(1, 1 / scale) - 24;
+    let enabled = OVERLAY_SECTION_IDS.filter(() => next() < 0.5);
+    if (!enabled.length) enabled = [OVERLAY_SECTION_IDS[Math.floor(next() * OVERLAY_SECTION_IDS.length)]];
+    // Values at their maximum width half of the time, so lines land on the boundary.
+    const size = (cap: number) => next() < 0.5 ? cap : next() * cap;
+    const items = [...Array.from({length: Math.floor(next() * 3)}, () => size(STRIP_TAG_MAX_WIDTH_CSS)), ...enabled.map(id => size(STRIP_ITEM_MAX_WIDTH_CSS[id]))];
+    const reserved = stripRowCount(only(...enabled), Math.floor(width / scale), scale);
+    if (reserved === undefined || flexLines(items, inner) > reserved)
+      throw new Error(`run ${run}: ${enabled.join(',')} at ${width} DIP and ${scale} needs ${flexLines(items, inner)} > ${String(reserved)}`);
+  }
+});
+
 it('matches the strip rules in renderer.css', () => {
   const css = readFileSync('apps/desktop/src/renderer.css', 'utf8');
   const rule = (selector: string) => {
@@ -114,7 +149,11 @@ it('matches the strip rules in renderer.css', () => {
     if (!match) throw new Error(`Missing rule ${selector}`);
     return match[1];
   };
+  // Every maximum width and the border model assume border-box sizing.
+  expect(rule('.overlay *, .overlay *::before, .overlay *::after')).toContain('box-sizing: border-box;');
   const row = rule('.overlay-strip-row');
+  expect(row).toContain('flex-wrap: wrap;');
+  expect(row).toContain('max-width: 100%;');
   expect(row).toContain(`column-gap: ${STRIP_COLUMN_GAP_CSS}px;`);
   expect(row).toContain(`padding: 0 ${STRIP_PADDING_X_CSS}px;`);
   // The surface takes its content height; a fixed height would clip the reserved rows.

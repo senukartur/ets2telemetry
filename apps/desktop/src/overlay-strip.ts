@@ -7,7 +7,7 @@ import {OVERLAY_SECTION_IDS} from './overlay-sections';
 
 /** Height of one strip row: every strip item is 36 px high. */
 export const STRIP_ROW_HEIGHT_CSS = 36;
-/** The strip surface's border on each side. */
+/** The strip surface's border on each side at zoom 1 and above; see `stripBorderWidthCss` below zoom 1. */
 export const STRIP_BORDER_CSS = 1;
 /** The strip row's horizontal padding on each side. */
 export const STRIP_PADDING_X_CSS = 12;
@@ -27,13 +27,23 @@ export const STRIP_ITEM_MAX_WIDTH_CSS: Readonly<Record<OverlaySectionId, number>
 });
 
 /**
- * The number of rows the strip reserves for these enabled sections at this CSS width, or undefined when one item could
- * not fit a row. It packs the worst case greedily in DOM order, as flex-wrap collects lines: both tag slots, then every
- * enabled section in canonical order, each at its maximum width with the column gap between neighbours. Real items are
- * never wider than their maximum and tags may be absent, so the rendered strip never needs more lines than this.
+ * The surface border's width in CSS px at this zoom. Chromium snaps a nonzero border thinner than one device pixel up to
+ * one device pixel, so below zoom 1 the 1 px border takes 1 / scale CSS px. At a device scale factor above 1 the snapped
+ * border is thinner than that, so this stays conservative.
  */
-export function stripRowCount(sections: OverlaySections, cssWidth: number): number | undefined {
-  const inner = cssWidth - 2 * STRIP_BORDER_CSS - 2 * STRIP_PADDING_X_CSS;
+export function stripBorderWidthCss(scale: number): number {
+  return Math.max(STRIP_BORDER_CSS, STRIP_BORDER_CSS / scale);
+}
+
+/**
+ * The number of rows the strip reserves for these enabled sections at this CSS width and zoom (the overlay's scale), or
+ * undefined when one item could not fit a row. The inner width is floor(CSS width − 2 × border − 24), rounded down to
+ * stay conservative. It packs the worst case greedily in DOM order, as flex-wrap collects lines: both tag slots, then
+ * every enabled section in canonical order, each at its maximum width with the column gap between neighbours. Real
+ * items are never wider than their maximum and tags may be absent, so the rendered strip never needs more lines.
+ */
+export function stripRowCount(sections: OverlaySections, cssWidth: number, scale = 1): number | undefined {
+  const inner = Math.floor(cssWidth - 2 * stripBorderWidthCss(scale) - 2 * STRIP_PADDING_X_CSS);
   const widths = [...Array.from({length: STRIP_TAG_SLOTS}, () => STRIP_TAG_MAX_WIDTH_CSS), ...OVERLAY_SECTION_IDS.filter(id => sections[id]).map(id => STRIP_ITEM_MAX_WIDTH_CSS[id])];
   if (!Number.isFinite(inner) || widths.some(width => width > inner)) return undefined;
   let rows = 1, line = 0;
@@ -45,7 +55,7 @@ export function stripRowCount(sections: OverlaySections, cssWidth: number): numb
   return rows;
 }
 
-/** The strip surface's CSS height for this many rows, borders included. */
+/** The strip surface's CSS height for this many rows at zoom 1 and above, borders included. */
 export function stripCssHeight(rows: number): number {
   return STRIP_ROW_HEIGHT_CSS * rows + 2 * STRIP_BORDER_CSS;
 }
