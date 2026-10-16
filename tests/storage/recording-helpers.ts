@@ -10,7 +10,9 @@ import path from 'node:path';
 import {MessageChannel, Worker, type MessagePort} from 'node:worker_threads';
 import {expect} from 'vitest';
 import {FrameDecoder, decodePayload, type ClientMessage} from '../../packages/contracts/src/protocol-v1';
-import {StorageClient, workerHandle} from '../../packages/storage/src/client';
+import {StorageClient, workerHandle, type StorageWorkerHandle} from '../../packages/storage/src/client';
+import type {CommandName, StorageRequest} from '../../packages/storage/src/worker/protocol';
+import {ShutdownSequence} from '../../apps/desktop/src/shutdown-sequence';
 import {storageError} from '../../packages/storage/src/errors';
 import type {TripSummaryView, TripView} from '../../packages/telemetry-core/src/index';
 import {TripRecorderSink, type TripRecorderClient} from '../../apps/desktop/src/trip-recorder';
@@ -324,4 +326,120 @@ export async function storedSamples(ws: {open(): Promise<Storage>}, seed: string
   const map = labels(seed);
   const shaped = rows.map(({id, tripUuid, ...row}) => { void id; return {...row, trip: tripUuid}; });
   return JSON.parse(JSON.stringify(shaped), (_key, v: unknown) => typeof v === 'string' && map.has(v) ? map.get(v) : v) as unknown[];
+}
+
+// ET-015c (G13, G14, G20): helpers of tests/storage/recording-runtime.test.ts, which drives the telemetry service's
+// recording runtime (apps/desktop/src/recording-runtime.ts) in process. The test writes the order of what it observes
+// into one timeline of fixed lines, so each case asserts an order of events rather than a duration.
+
+/** Resolves with `work`, or rejects naming `what` once the hang guard `ms` passed; the guard is never an outcome. */
+export async function guarded<T>(work: Promise<T>, what: string, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const guard = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`Hang guard: ${what} did not happen within ${ms} ms`)), ms); });
+  try { return await Promise.race([work, guard]); } finally { clearTimeout(timer); }
+}
+/** Polls every 5 ms until `ready` holds; rejects naming `what` once the hang guard `ms` passed. */
+export async function until(ready: () => boolean, what: string, ms: number): Promise<void> {
+  const deadline = performance.now() + ms;
+  while (!ready()) {
+    if (performance.now() > deadline) throw new Error(`Hang guard: ${what} did not happen within ${ms} ms`);
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+}
+
+/** A storage worker for a recording runtime: the production entry, or the fault worker with its control port. */
+export function storageWorker(fault?: Record<string, unknown>): {handle: StorageWorkerHandle; exit: Promise<number>; control?: MessagePort} {
+  const channel = fault ? new MessageChannel() : undefined;
+  const worker = channel ? new Worker(FAULT_WORKER, {workerData: {kind: 'storage', ...fault, control: channel.port2}, transferList: [channel.port2]})
+    : new Worker(WORKER, {workerData: {kind: 'storage'}});
+  live.add(worker); void once(worker, 'exit').then(() => live.delete(worker));
+  return {handle: workerHandle(worker), exit: once(worker, 'exit').then(([code]) => code as number), control: channel?.port1};
+}
+
+/** The fixed timeline label of a storage request: its command, with the eventSeq of an event commit (`commitEvent 4`). */
+function requestLabel(request: StorageRequest): string {
+  const command = request.command;
+  if (command.name !== 'commitEvent') return command.name;
+  const message = command.input.message as {data?: {eventSeq?: unknown}} | undefined;
+  return `commitEvent ${String(message?.data?.eventSeq)}`;
+}
+/**
+ * A test-side wrapper of the StorageWorkerHandle a HistoryStorage gets (no worker change). Each answer of the worker is
+ * written to `timeline` as `done <label>` before the client sees it. With `hold`, the first request of that command is
+ * not passed to the worker until `release()`: the timeline gets `held <command>` and `held` resolves. The client counts
+ * the request as sent, so its deadline runs (120 s for `open`, 10 s for other commands).
+ */
+export function tracedHandle(handle: StorageWorkerHandle, timeline: string[], hold?: CommandName) {
+  const labels = new Map<number, string>();
+  let withheld: StorageRequest | undefined, holding = hold !== undefined, notify!: () => void;
+  const held = new Promise<void>(resolve => { notify = resolve; });
+  const traced: StorageWorkerHandle = {
+    postMessage: request => {
+      labels.set(request.id, requestLabel(request));
+      if (holding && request.command.name === hold) { holding = false; withheld = request; timeline.push(`held ${hold}`); notify(); return; }
+      handle.postMessage(request);
+    },
+    onMessage: listener => handle.onMessage(message => {
+      const id = (message as {id?: unknown} | null)?.id;
+      if (typeof id === 'number' && labels.has(id)) { timeline.push(`done ${labels.get(id)}`); labels.delete(id); }
+      listener(message);
+    }),
+    onError: listener => handle.onError(listener),
+    onExit: listener => handle.onExit(listener),
+    terminate: () => handle.terminate()
+  };
+  const release = () => { const request = withheld; withheld = undefined; if (request) { timeline.push('release'); handle.postMessage(request); } };
+  return {handle: traced, held, release};
+}
+
+/** One SHUTDOWN_STEP line of the service log. */
+export interface LoggedStep {phase: string; name: string; outcome: string}
+/**
+ * The real ShutdownSequence with its production timers. Its SHUTDOWN_STEP log goes to `steps` and to `timeline` as
+ * `step <phase> <name> <outcome>`; each step registered through `registrar` writes `start <name>` when it starts and
+ * then calls `onStart` with its name.
+ */
+export function tracedShutdown(timeline: string[], onStart?: (name: string) => void) {
+  const steps: LoggedStep[] = [];
+  const sequence = new ShutdownSequence((event, _detail, facts) => {
+    if (event !== 'SHUTDOWN_STEP' || !facts) return;
+    const step = {phase: String(facts.phase), name: String(facts.name), outcome: String(facts.outcome)};
+    steps.push(step); timeline.push(`step ${step.phase} ${step.name} ${step.outcome}`);
+  });
+  const registrar: Pick<ShutdownSequence, 'register'> = {
+    register: (phase, step) => sequence.register(phase, {...step, run: () => { timeline.push(`start ${step.name}`); onStart?.(step.name); return step.run(); }})
+  };
+  return {sequence, registrar, steps};
+}
+
+/**
+ * The fixture `connect` of a recording runtime: an actual pipe socket whose ACK frames are written to `timeline` as
+ * `ack <throughEventSeq>` when the ingestion writes them; `sockets()` counts the connections it opened.
+ */
+export function tracedConnect(timeline: string[]) {
+  let sockets = 0;
+  const connect = (endpoint: string): net.Socket => {
+    sockets++;
+    const socket = net.connect(endpoint), write = socket.write.bind(socket) as (...args: unknown[]) => boolean;
+    socket.write = (bytes: Uint8Array, ...rest: unknown[]) => {
+      const m = decodePayload(bytes.subarray(4), 'client') as ClientMessage;
+      if (m.kind === 'ack') timeline.push(`ack ${m.data.throughEventSeq}`);
+      return write(bytes, ...rest);
+    };
+    return socket;
+  };
+  return {connect, sockets: () => sockets};
+}
+/** The ACKs the reactive server received on a 0-based connection. */
+export const servedAcks = (report: ReactiveReport, connection: number) => report.transcript
+  .filter(l => l.connection === connection + 1 && l.direction === 'client' && l.message.kind === 'ack')
+  .map(l => (l.message as Extract<ClientMessage, {kind: 'ack'}>).data.throughEventSeq);
+/** The stored gap records in insertion order: range, six loss counters and the redelivered flag. The database must be closed. */
+export function storedGaps(file: string): unknown[] {
+  const rows = readOnly(file, db => db.prepare(`SELECT first_event_seq AS first, last_event_seq AS last, cause_offline AS offline, cause_no_durable_consumer AS noDurableConsumer,
+    cause_queue_count AS queueCount, cause_queue_bytes AS queueBytes, cause_retention_expired AS retentionExpired, cause_encoding_failed AS encodingFailed, redelivered
+    FROM event_gaps ORDER BY id`).all() as Record<string, string | number>[]);
+  return rows.map(r => ({firstEventSeq: key(String(r.first)), lastEventSeq: key(String(r.last)),
+    causes: Object.fromEntries(['offline', 'noDurableConsumer', 'queueCount', 'queueBytes', 'retentionExpired', 'encodingFailed'].map(name => [name, key(String(r[name]))])),
+    redelivered: r.redelivered === 1}));
 }
