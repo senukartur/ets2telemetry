@@ -142,7 +142,7 @@ ET-012a builds the overlay's sections in main through the same view model as the
 | Expected income | `expected-income` (exact raw digits, no grouping, SDK-documented or unknown currency; never revenue) | Shown | Unchanged (v0) |
 | Game time | `game-time` | Shown | Unchanged (v0) |
 
-A section with several fields joins the fields that have a value with ", ". A part v0 does not carry counts as carried only while a v1 observation of the current selection and origin exists. A v1 part has a value only while the v0 data is current, the v1 data is current and, for job parts, both describe the same job; the overlay's overall state, freshness, source, paused state and placement stay v0's. The section states while current and while not current are described in [the minimal overlay](minimal-overlay.md#section-states).
+A section with several fields joins the fields that have a value with ", ". A part v0 does not carry counts as carried only while a v1 observation of the current selection and origin exists. A shown v1 section whose v1 carriage is lost while the same v0 source continues (main stripped an invalid projection, or the v1 origin or game stopped matching) keeps an `unavailable` dash, current or not (L5); an update without a v0 observation (a selection change, a service failure or restart, a lost channel) clears it. A v1 part has a value only while the v0 data is current, the v1 data is current and, for job parts, both describe the same job; the overlay's overall state, freshness, source, paused state and placement stay v0's. The section states while current and while not current are described in [the minimal overlay](minimal-overlay.md#section-states).
 
 ## Step primitives (REG-008)
 
