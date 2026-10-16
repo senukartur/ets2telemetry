@@ -319,6 +319,20 @@ describe('ET-006b protocol v1 ingestion', () => {
     latest().feed(frame('welcome'), frame('checkpoint'), frame('event-job-configured')); await settle();
     expect([latest().acks, latest().destroyed, state().durable]).toEqual([[], true, {state: 'failed', code: 'WORKER_FAILED'}]);
     await advance(500); connectLatest(); expect(latest().hello.durableEvents).toBe(false);
+    // The live-only connections after a failure for the service lifetime keep reporting it, never `off`.
+    latest().feed(frame('welcome-live'), frame('checkpoint-live'));
+    expect([state().status, state().durable]).toEqual(['connected', {state: 'failed', code: 'WORKER_FAILED'}]);
+  });
+
+  it('reports `off`, never `pending`, while storage never becomes ready, as after a refused open (R10, PR-3 review pass 1)', async () => {
+    start({sink: new Sink(), durableSelections: ['synthetic'], durableReady: () => false}); connectLatest();
+    expect(latest().hello.durableEvents).toBe(false);
+    latest().feed(frame('welcome-live'), frame('checkpoint-live'));
+    latest().emit('close'); await advance(250); connectLatest();
+    expect(latest().hello.durableEvents).toBe(false);
+    latest().feed(frame('welcome-live'), frame('checkpoint-live'));
+    expect(state().status).toBe('connected');
+    expect([...new Set(states.map(s => s.durable.state))]).toEqual(['off']);
   });
 
   it('continues live-only after ACK_AHEAD_OF_STORAGE until another plugin session appears', async () => {
@@ -343,7 +357,8 @@ describe('ET-006b protocol v1 ingestion', () => {
     start({sink: new Sink(), durableReady: () => ready}); connectLatest();
     expect(latest().hello.durableEvents).toBe(false);
     latest().feed(frame('welcome-live'), frame('checkpoint-live'));
-    expect([state().status, state().durable]).toEqual(['connected', {state: 'pending'}]);
+    // The connection did not request durable delivery, so it reports `off` (PR-3 review pass 1), not `pending`.
+    expect([state().status, state().durable]).toEqual(['connected', {state: 'off'}]);
     // Nothing is possible yet: the live-only connection stays.
     ingestion!.durableAvailabilityChanged();
     expect([latest().destroyed, sockets]).toEqual([false, [latest()]]);
@@ -352,15 +367,19 @@ describe('ET-006b protocol v1 ingestion', () => {
     // Exactly one reconnection, on the shortest backoff, with a durable hello.
     expect(await nextDelay()).toBe(250);
     connectLatest(); expect(latest().hello.durableEvents).toBe(true);
+    expect(state().durable).toEqual({state: 'pending'});
     latest().feed(frame('welcome'), frame('checkpoint'));
     ingestion!.durableAvailabilityChanged();
     await advance(5_000);
-    expect([sockets.length, latest().destroyed]).toEqual([2, false]);
+    expect([sockets.length, latest().destroyed, state().durable]).toEqual([2, false, {state: 'active'}]);
   });
 
   it('keeps a selection that is not durable live-only, also for a game source (R10)', async () => {
-    start({sink: new Sink(), durableSelections: ['synthetic']}, 'replay'); connectLatest();
-    expect(latest().hello.durableEvents).toBe(false);
+    start({sink: new Sink(), durableSelections: ['synthetic']}, 'replay');
+    expect(state().durable).toEqual({state: 'off'});
+    connectLatest();
+    // A selection that is not durable reports `off` although a sink exists (PR-3 review pass 1).
+    expect([latest().hello.durableEvents, state().durable]).toEqual([false, {state: 'off'}]);
     ingestion!.durableAvailabilityChanged();
     expect(latest().destroyed).toBe(false);
     void ingestion!.stop();
@@ -369,7 +388,7 @@ describe('ET-006b protocol v1 ingestion', () => {
     start({broker: {executable: 'broker.exe', discoveryDirectory: 'transport'}, connectGame: () => { const s = new FakeSocket(); s.authority = authority; games.push(s); return s; },
       sink: new Sink(), durableSelections: ['synthetic']}, 'ets2');
     games[0].emit('connect');
-    expect(games[0].hello.durableEvents).toBe(false);
+    expect([games[0].hello.durableEvents, state().durable]).toEqual([false, {state: 'off'}]);
     void ingestion!.stop();
     start({sink: new Sink(), durableSelections: ['synthetic']}); connectLatest();
     expect(latest().hello.durableEvents).toBe(true);
