@@ -451,6 +451,6 @@ ET-015c PR-2 implementation update on October 16, 2026: the commit backlog bound
 ET-015c PR-1 implementation update on October 16, 2026: the service's recording wiring moved unchanged into `apps/desktop/src/recording-runtime.ts`. With it, the storage suite proves the following with the real storage worker and the real shutdown sequence:
 - `recording-flush` waits for a commit in flight;
 - a live-only connection made while storage is opening reconnects durable once it opens, and its window's events are committed as a `noDurableConsumer` gap (R10);
-- a stop during a retryable backoff, or while a restore-loss row is in flight, ends within the stop budget.
+- a stop during a retryable backoff ends within the stop budget, and a stop while a restore-loss row is in flight waits for that row and acknowledges nothing.
 
 No behaviour changed. See [the telemetry service v1 ingestion](docs/telemetry-service-v1.md) and [ET-015c validation](docs/validation/et-015c.md).
