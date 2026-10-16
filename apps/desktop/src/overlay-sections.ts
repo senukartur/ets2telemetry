@@ -19,6 +19,11 @@ export const OVERLAY_GROUPS: readonly OverlayGroup[] = Object.freeze([
   group('job', ['cargo', 'origin', 'destination', 'distance-driven', 'distance-remaining', 'deadline', 'expected-income']),
   group('time', ['game-time'])
 ]);
+/**
+ * The sections the cluster's round gauge shows (ET-012a); every other enabled section goes to its side panel. The
+ * view model and the cluster's reserved rows (overlay-rows.ts, ET-012d) share this one definition.
+ */
+export const CLUSTER_GAUGE_SECTIONS: ReadonlySet<OverlaySectionId> = new Set<OverlaySectionId>(['speed', 'gear', 'rpm']);
 const GROUP_OF: ReadonlyMap<OverlaySectionId, OverlayGroupId> = new Map(OVERLAY_GROUPS.flatMap(group => group.sections.map(id => [id, group.id] as const)));
 export function overlayGroupOf(id: OverlaySectionId): OverlayGroupId {
   return GROUP_OF.get(id)!;

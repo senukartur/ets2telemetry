@@ -1,7 +1,7 @@
 import {expect, it} from 'vitest';
 import type {OverlayPresentation} from '../../packages/contracts/src';
 import {
-  DEFAULT_OVERLAY_SETTINGS, enabledSectionCount, isOverlayLayout, OVERLAY_GROUPS, OVERLAY_PRESETS, OVERLAY_SECTION_IDS, OVERLAY_SECTION_REQUIREMENTS,
+  CLUSTER_GAUGE_SECTIONS, DEFAULT_OVERLAY_SETTINGS, enabledSectionCount, isOverlayLayout, OVERLAY_GROUPS, OVERLAY_PRESETS, OVERLAY_SECTION_IDS, OVERLAY_SECTION_REQUIREMENTS,
   parseOverlaySections, sameSections, staleOverlay
 } from '../../apps/desktop/src/overlay-sections';
 
@@ -20,6 +20,10 @@ it('lists fourteen sections in canonical order and groups each exactly once', ()
     ['job', ['cargo', 'origin', 'destination', 'distance-driven', 'distance-remaining', 'deadline', 'expected-income']],
     ['time', ['game-time']]
   ]);
+});
+
+it('shows speed, gear and RPM in the cluster gauge and nothing else (ET-012d decision K7)', () => {
+  expect([...CLUSTER_GAUGE_SECTIONS]).toEqual(['speed', 'gear', 'rpm']);
 });
 
 it('defaults to the strip layout with every section and the default placements, and defines three complete presets', () => {

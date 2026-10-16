@@ -1,5 +1,5 @@
 import type {OverlayLayout, OverlayPresentation, OverlaySectionId} from '../../../packages/contracts/src';
-import {OVERLAY_GROUPS, type OverlayGroupId} from './overlay-sections';
+import {CLUSTER_GAUGE_SECTIONS, OVERLAY_GROUPS, type OverlayGroupId} from './overlay-sections';
 import {OVERLAY_SECTION_SHORT_TEXT, OVERLAY_SECTION_TEXT, STRINGS} from './strings';
 
 // The overlay renderer's view model (ET-012a). Pure, safe for the overlay bundle and plain Node tests. It only arranges
@@ -50,7 +50,6 @@ export interface OverlayView {
 /** What the overlay shows before main's first delivery: no signal, no sections. */
 export const OVERLAY_PLACEHOLDER: OverlayPresentation = Object.freeze({source: 'No game', origin: 'none', status: 'waiting', speed: '—', speedUnit: 'km/h',
   fuel: '—', fuelUnit: 'L', freshness: 'unavailable', layout: 'strip', paused: false, sections: Object.freeze([]), editing: false});
-const GAUGE_SECTIONS: ReadonlySet<OverlaySectionId> = new Set<OverlaySectionId>(['speed', 'gear', 'rpm']);
 const DASH = '—';
 
 export function overlayView(presentation: OverlayPresentation = OVERLAY_PLACEHOLDER): OverlayView {
@@ -69,7 +68,7 @@ export function overlayView(presentation: OverlayPresentation = OVERLAY_PLACEHOL
   });
   const byId = new Map(items.map(item => [item.id, item]));
   const groups = OVERLAY_GROUPS.map(group => ({id: group.id, items: group.sections.flatMap(id => byId.get(id) ?? [])})).filter(group => group.items.length > 0);
-  const gaugeShown = items.some(item => GAUGE_SECTIONS.has(item.id));
+  const gaugeShown = items.some(item => CLUSTER_GAUGE_SECTIONS.has(item.id));
   const tags: OverlayTag[] = [];
   if (presentation.paused) tags.push({id: 'paused', testId: 'overlay-tag-paused', text: STRINGS.overlayPaused});
   if (presentation.freshness === 'unavailable') tags.push({id: 'no-signal', testId: 'overlay-tag-no-signal', text: STRINGS.overlayNoSignal});
@@ -79,7 +78,7 @@ export function overlayView(presentation: OverlayPresentation = OVERLAY_PLACEHOL
     layout: presentation.layout, source: presentation.source, origin: presentation.origin, status: presentation.status, freshness: presentation.freshness,
     paused: presentation.paused, dim: presentation.freshness !== 'current', tags, items, groups,
     ...(gaugeShown ? {gauge: {speed: byId.get('speed'), gear: byId.get('gear'), rpm: byId.get('rpm')}} : {}),
-    panel: gaugeShown ? items.filter(item => !GAUGE_SECTIONS.has(item.id)) : items,
+    panel: gaugeShown ? items.filter(item => !CLUSTER_GAUGE_SECTIONS.has(item.id)) : items,
     editing: presentation.editing === true
   };
 }

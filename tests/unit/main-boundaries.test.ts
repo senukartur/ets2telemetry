@@ -1060,19 +1060,23 @@ it('reports the settings view in the gated lifecycle facts', () => isolatedProfi
 }));
 // ET-012a: overlay layouts and sections. The snapshot's game client is 1920 x 1080 at (-1920, 0) and the fixture's
 // screen conversion is the identity, so the strip is {-1600, 8, 1280, 110} with every section (ET-012c: three 36 px
-// rows at 1280 DIP wide; it was one 38 px row before the requirement changed) and the card {-316, 16, 300, 360}.
+// rows at 1280 DIP wide; it was one 38 px row before the requirement changed) and the card {-316, 16, 300, 384} with
+// every section (ET-012d: 48 + 24 × 14 CSS px; it was 360 before the requirement changed). The cluster is created
+// 440 × 267 (36 + 21 × 11) and the HUD placed {-1904, 16, 320, 354} (18 + 24 × 14).
 const saveOverlay = (channel: 'settings:set-overlay-layout' | 'settings:set-overlay-sections', event: unknown, ...request: unknown[]) =>
   Promise.resolve(handlers.get(channel)!(event, ...request as [unknown]));
 const sectionIds = (projection: Record<string, unknown>) => (projection.sections as {id: string}[]).map(section => section.id);
 it('creates the overlay window at the strip size reserved for every section by default', async () => {
   await ready(); expect(configurations[1]).toMatchObject({width: 1280, height: 110});
 });
-it('creates the overlay window at the nominal size of the saved layout', async () => {
+it('creates the overlay window at the size the saved layout reserves for its sections', async () => {
   settingsView = {...settingsView, overlay: {layout: 'cluster', sections: ALL_SECTIONS, placements: PLACEMENTS}}; await ready();
-  expect(configurations[1]).toMatchObject({width: 440, height: 220});
+  expect(configurations[1]).toMatchObject({width: 440, height: 267});
 });
 it('delivers the saved layout and sections in the overlay document first projection', async () => {
   settingsView = {...settingsView, overlay: {layout: 'card', sections: {...ALL_SECTIONS, rpm: false, cargo: false}, placements: PLACEMENTS}}; await ready();
+  // Twelve sections reserve 48 + 24 × 12 = 336 CSS px, below the card's nominal 360.
+  expect(configurations[1]).toMatchObject({width: 300, height: 360});
   ipc.emit('overlay:subscribe', overlayTrusted());
   const first = overlayProjection(channels.at(-1)!);
   expect(first).toMatchObject({layout: 'card', freshness: 'unavailable', paused: false});
@@ -1113,7 +1117,7 @@ it('applies an overlay layout only after the durable save, then republishes and 
   settingsView = {...settingsView, overlay: {layout: 'card', sections: ALL_SECTIONS, placements: PLACEMENTS}, state: 'loaded'}; saved.resolve(settingsView);
   await expect(request).resolves.toEqual(settingsView);
   expect(pushes().at(-1)).toMatchObject({settings: settingsView});
-  expect(windows[1].setBounds).toHaveBeenLastCalledWith({x: -316, y: 16, width: 300, height: 360});
+  expect(windows[1].setBounds).toHaveBeenLastCalledWith({x: -316, y: 16, width: 300, height: 384});
   expect(windows[1].setAlwaysOnTop.mock.calls).toEqual([[true, 'screen-saver']]); expect(windows[1].moveTop).toHaveBeenCalledOnce();
   expect(windows[1].showInactive).toHaveBeenCalledOnce();
   await vi.advanceTimersByTimeAsync(50);
@@ -1285,7 +1289,7 @@ it('re-places the overlay when a late settings read brings another layout', asyn
   expect(windows[1].setBounds.mock.calls).toEqual([[{x: -1600, y: 8, width: 1280, height: 110}]]);
   settingsView = {...settingsView, overlay: {layout: 'hud', sections: ALL_SECTIONS, placements: PLACEMENTS}, state: 'loaded', writable: true};
   settingsChanged!();
-  expect(windows[1].setBounds).toHaveBeenLastCalledWith({x: -1904, y: 16, width: 320, height: 320});
+  expect(windows[1].setBounds).toHaveBeenLastCalledWith({x: -1904, y: 16, width: 320, height: 354});
   await vi.advanceTimersByTimeAsync(50);
   expect(overlayProjection(overlayChannel)).toMatchObject({layout: 'hud', freshness: 'current'});
   expect(windows[1].showInactive).toHaveBeenCalledOnce();
@@ -1327,7 +1331,8 @@ const EDITABLE = {ignoreMouse: false, focusable: true, movable: true, skipTaskba
 
 it('creates the overlay window at the saved scale of its layout and applies that zoom after every load', async () => {
   settingsView = {...settingsView, overlay: {layout: 'cluster', sections: ALL_SECTIONS, placements: {...PLACEMENTS, cluster: {x: 0, y: 1, scale: 1.5}}}}; await ready();
-  expect(configurations[1]).toMatchObject({width: 660, height: 330, webPreferences: {zoomFactor: 1.5, partition: 'ets2telemetry-overlay'}});
+  // ET-012d: the cluster with every section at 1.5 is ceil(265 × 1.5 + 3) = 401 high (330 before).
+  expect(configurations[1]).toMatchObject({width: 660, height: 401, webPreferences: {zoomFactor: 1.5, partition: 'ets2telemetry-overlay'}});
   expect(configurations[0].webPreferences).not.toHaveProperty('zoomFactor');
   overlayContents.emit('did-finish-load'); expect(overlayContents.setZoomFactor).toHaveBeenLastCalledWith(1.5);
   expect(contents.setZoomFactor).not.toHaveBeenCalled();

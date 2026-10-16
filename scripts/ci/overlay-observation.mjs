@@ -87,6 +87,67 @@ export async function waitForStripLayout(page, expected) {
   try {return await handle.jsonValue();} finally {await handle.dispose();}
 }
 
+// ET-012d containment of the card, cluster and HUD (decisions K10 and K11). Without a game window main never places the
+// hidden overlay, so the telemetry smoke sizes it to each layout's reserved window for every section at scale 1
+// (overlayWindowSize in overlay-geometry.ts; a unit test ties these hand-written sizes to it). All three are smaller
+// than the hosted runner's 1024 x 768 screen, so Windows does not narrow them.
+export const LAYOUT_SMOKE_WINDOWS = Object.freeze({
+  card: Object.freeze({width: 300, height: 384}),
+  cluster: Object.freeze({width: 440, height: 267}),
+  hud: Object.freeze({width: 320, height: 354})
+});
+
+// Self-contained browser callback: false until exactly one current root of the expected layout shows exactly the
+// expected sections, then one coherent read of where they lie. `outside` lists sections with an empty box or one not
+// fully inside the root (the window's viewport) and every ancestor up to the root that clips its overflow, such as the
+// cluster's side panel. `clipped` lists sections whose value box is not vertically inside the section's fixed row.
+// `truncated` (values that end in an ellipsis) is recorded for review only. Both comparisons allow 0.01 CSS px, less
+// than one 1/64 px layout unit: Chromium reports a box flush with its row's edge with float noise, such as the cluster's
+// RPM value ending at 221.3229217529297 in a row ending at 221.32291793823242.
+export function layoutContainmentObservation(expected) {
+  const roots = globalThis.document.querySelectorAll('[data-testid="overlay-root"]');
+  if (roots.length !== 1) return false;
+  const root = roots[0];
+  if (root.getAttribute('data-layout') !== expected.layout || root.getAttribute('data-freshness') !== 'current') return false;
+  const nodes = Array.from(root.querySelectorAll('[data-testid^="overlay-section-"]'));
+  const sections = nodes.map(node => String(node.getAttribute('data-testid')).slice('overlay-section-'.length));
+  if (sections.length !== expected.sections.length || sections.some((id, index) => id !== expected.sections[index])) return false;
+  const rootBox = root.getBoundingClientRect(), noise = 0.01;
+  const within = (box, outer) => box.left >= outer.left - noise && box.top >= outer.top - noise && box.right <= outer.right + noise && box.bottom <= outer.bottom + noise;
+  const outside = [], clipped = [], truncated = [];
+  nodes.forEach((node, index) => {
+    const box = node.getBoundingClientRect();
+    let inside = box.width > 0 && box.height > 0 && within(box, rootBox);
+    for (let ancestor = node.parentElement; inside && ancestor && ancestor !== root; ancestor = ancestor.parentElement)
+      if (globalThis.getComputedStyle(ancestor).overflow !== 'visible' && !within(box, ancestor.getBoundingClientRect())) inside = false;
+    if (!inside) outside.push(sections[index]);
+    const value = node.querySelector('.overlay-value');
+    if (!value) return;
+    const valueBox = value.getBoundingClientRect();
+    if (valueBox.top < box.top - noise || valueBox.bottom > box.bottom + noise) clipped.push(sections[index]);
+    if (value.scrollWidth > value.clientWidth) truncated.push(sections[index]);
+  });
+  return {layout: expected.layout, viewport: {innerWidth: globalThis.innerWidth, innerHeight: globalThis.innerHeight}, sections, outside, clipped, truncated};
+}
+
+/**
+ * Every shown section lies inside the overlay window and its clipping ancestors, no value is clipped by its row, and
+ * the viewport has the reserved size, allowing one DIP of rounding (getBounds can round a window up by one DIP).
+ */
+export function verifyLayoutContainment(observation, window) {
+  assert.deepEqual(observation.outside, [], 'Enabled overlay sections lie outside the overlay window');
+  assert.deepEqual(observation.clipped, [], 'Overlay section values are clipped by their rows');
+  const {innerWidth, innerHeight} = observation.viewport;
+  const reserved = (actual, expected) => Number.isFinite(actual) && actual >= expected && actual <= expected + 1;
+  assert.ok(reserved(innerWidth, window.width) && reserved(innerHeight, window.height), 'The overlay window must have the reserved size');
+  return observation;
+}
+
+export async function waitForLayoutContainment(page, expected) {
+  const handle = await page.waitForFunction(layoutContainmentObservation, expected, {timeout: 10000, polling: 50});
+  try {return await handle.jsonValue();} finally {await handle.dispose();}
+}
+
 // Inspect the CSS actually loaded by each isolated renderer, including dynamic Vite chunks.
 // A hidden DOM check protects style isolation; it does not establish real game visibility.
 export async function verifyRendererStyles(dashboard, overlay) {
