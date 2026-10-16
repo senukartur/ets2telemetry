@@ -264,7 +264,9 @@ function rowsOf(raw, session) {
       return row;
     }),
     events: raw.events.map(e => ({eventSeq: key(e.eventSeq), type: e.type, utcMs: e.utcMs === null ? null : Number(e.utcMs), firstRedelivered: e.firstRedelivered === 1})),
-    gaps: raw.gaps, samples: raw.samples, coverage: {committedThroughEventSeq: key(raw.sessions[0]?.committedThrough)}
+    gaps: raw.gaps, samples: raw.samples, coverage: {committedThroughEventSeq: key(raw.sessions[0]?.committedThrough)},
+    // ET-015b PR-3: each stored sample as its source second, floor(monotonicNs / 1e9), and its trip label.
+    sampleRows: raw.sampleRows.map(s => ({second: (BigInt(s.monotonicNs) / 1_000_000_000n).toString(), trip: label(s.trip)}))
   };
 }
 
@@ -335,7 +337,13 @@ export async function verifyRecordingRun({config, record, recording, mainEvents,
   assert.ok(raw.events.every(event => event.session === session) && raw.trips.every(trip => trip.session === session && trip.game === 'ets2'));
   const actual = record.database.rows = rowsOf(raw, session);
   const expected = JSON.parse(await readFile(path.join(config.checkout, 'tests/fixtures/recording', `${RECORDING_SCENARIO}.rows.expected.json`), 'utf8'));
-  for (const name of ['trips', 'attributions', 'intervals', 'events', 'gaps', 'samples', 'coverage']) assert.deepEqual(actual[name], expected[name], `Stored ${name} differ from the expectation`);
+  for (const name of ['trips', 'attributions', 'intervals', 'events', 'gaps', 'coverage']) assert.deepEqual(actual[name], expected[name], `Stored ${name} differ from the expectation`);
+  // ET-015b PR-3: whether the one optional sample row was flushed before the diagnostic kill depends on timing, so its
+  // count is recorded, and every stored row must be one of the expectation's optional rows, each at most once.
+  record.database.samples = actual.samples;
+  assert.equal(actual.sampleRows.length, actual.samples);
+  assert.equal(new Set(actual.sampleRows.map(row => row.second)).size, actual.sampleRows.length, 'A sample second is stored twice');
+  for (const row of actual.sampleRows) assert.ok(expected.samples.optional.some(allowed => allowed.second === row.second && allowed.trip === row.trip), `Unexpected stored sample ${JSON.stringify(row)}`);
   // Each event once, and coverage at least every ACK the simulator received.
   assert.equal(new Set(actual.events.map(event => event.eventSeq)).size, actual.events.length);
   const acknowledged = record.proxy.connections.flatMap(c => c.forwardedAcks).reduce((max, through) => BigInt(through) > max ? BigInt(through) : max, 0n);
