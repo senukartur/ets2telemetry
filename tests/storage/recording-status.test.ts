@@ -160,23 +160,31 @@ describe('ET-015c recording status through the production wiring', () => {
 
   it('(c) a held commit and a bound of four: retrying BACKLOG_FULL, then the restarted service records the redelivery (REG-011)', async () => {
     // As S4 (c): the first connection's client does not wait for ACKs, so the server writes events 1-5 while eventSeq 1
-    // is held inside its transaction; the fifth closes the connection with BACKLOG_FULL. The frames after eventSeq 1 reach
-    // the ingestion only once the worker reports the hold. Every item is redelivered, one more than the bound, so the
-    // redelivery goes to a restarted service with the production bound (G11 is PR-2's; this case shows the status).
+    // is held inside its transaction; the fifth closes the connection with BACKLOG_FULL. Every item is redelivered, one
+    // more than the bound, so the redelivery goes to a restarted service with the production bound (G11 is PR-2's; this
+    // case shows the status).
     const input = withTransport(scenario('normal-delivery'), 'normal-delivery-backlog-status', [connect(0, {durable: true, ack: 'withhold'}), disconnect(350), connect(360), disconnect(1100)]);
     const expected = recordingExpected('normal-delivery-backlog');
     expect(reactiveConflicts(input)).toEqual([]);
     const server = await serveV1Reactive(input, {scale: 0, awaitScriptedAcks: true, quiesceMs: 0});
     const first: string[] = [], workerA = storageWorker({hold: {eventSeq: '1'}}), control = workerA.control as MessagePort, failures: unknown[] = [];
     const held = guarded(once(control, 'message'), 'the held commit of eventSeq 1', HANG_GUARD_MS);
+    let recorded!: () => void;
+    const recording = new Promise<void>(resolve => { recorded = resolve; });
     let gated = false;
-    // The first connection is gated after eventSeq 1 until the worker holds its commit (S4 (c), hosted run 38907225873).
+    // The first connection's eventSeq 5 and everything after it reach the ingestion only once (1) the worker holds the
+    // commit of eventSeq 1, so 2-4 queue behind a commit in flight and 5 exceeds the bound (S4 (c), hosted run
+    // 38907225873), and (2) the publisher sent `recording` for the snapshots before 5. The publisher computes the status
+    // one macrotask after a change (G5): when the snapshot that makes the source connected and eventSeq 5 are applied in
+    // the same macrotask, as on a slow host that has read both already, it correctly sends only `retrying` (hosted run
+    // 38949384603). Holding 5 back until `recording` was sent makes that step observable on every host.
     const gatedConnect = {connect: (endpoint: string) => {
-      const gate = gated ? undefined : {afterEventSeq: '1', until: () => held}; gated = true;
+      const gate = gated ? undefined : {beforeEventSeq: '5', until: () => Promise.all([held, guarded(recording, 'the recording status before eventSeq 5', HANG_GUARD_MS)])};
+      gated = true;
       return new ClientSocket(net.connect(endpoint), gate, error => failures.push(error)) as unknown as TelemetrySocket;
     }};
     let stoppedA: Promise<void> | undefined;
-    const a = serviceRuntime('t', workerA.handle, gatedConnect, first, {onState: state => {
+    const a = serviceRuntime('t', workerA.handle, gatedConnect, first, {onStatus: next => { if (next.state === 'recording') recorded(); }, onState: state => {
       if (stoppedA || state.reason !== 'Durable commit not completed (BACKLOG_FULL); retrying') return;
       // One macrotask later: release the held commit and stop this service; the flush waits for that commit.
       stoppedA = new Promise(resolve => setImmediate(() => { first.push('release'); control.postMessage({type: 'release'}); void stopService(a, first, workerA.exit).then(resolve); }));
