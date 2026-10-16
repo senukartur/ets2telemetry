@@ -265,3 +265,71 @@ export function overlayOverflow() {
   }
   return {layout: root.getAttribute('data-layout'), root: {width: Math.round(bounds.width), height: Math.round(bounds.height)}, sections, outside, truncated};
 }
+
+/** ET-015c PR-4: the recording texts of a service that records nothing (production, GAME_HISTORY_RECORDING false). */
+export const RECORDING_DISABLED_TEXT = Object.freeze({headline: 'Off: this version does not record game history', detail: null, losses: null, alert: null,
+  notice: 'Prototype live display. No trip recording or durable history.'});
+
+// ET-015c PR-4: the dashboard's recording status (dashboard-renderer.tsx). Self-contained browser callback: the
+// headline and the alert as text, the detail and losses as their lines, and the prototype notice. An absent element
+// reads null; a duplicated one makes the observation invalid (undefined).
+export function recordingTextObservation() {
+  const one = id => {
+    const nodes = globalThis.document.querySelectorAll(`[data-testid="${id}"]`);
+    return nodes.length === 1 ? nodes[0] : nodes.length ? undefined : null;
+  };
+  const text = id => {const node = one(id); return node ? node.textContent : node;};
+  const lines = id => {const node = one(id); return node ? [...node.children].map(child => child.textContent) : node;};
+  return {headline: text('health-recording'), detail: lines('health-recording-detail'), losses: lines('health-recording-losses'),
+    alert: text('health-recording-alert'), notice: text('prototype-notice')};
+}
+// Self-contained browser callback: the observation when every key of `expected` matches it exactly, otherwise false.
+export function recordingTextMatches(expected) {
+  const one = id => {
+    const nodes = globalThis.document.querySelectorAll(`[data-testid="${id}"]`);
+    return nodes.length === 1 ? nodes[0] : nodes.length ? undefined : null;
+  };
+  const text = id => {const node = one(id); return node ? node.textContent : node;};
+  const lines = id => {const node = one(id); return node ? [...node.children].map(child => child.textContent) : node;};
+  const observation = {headline: text('health-recording'), detail: lines('health-recording-detail'), losses: lines('health-recording-losses'),
+    alert: text('health-recording-alert'), notice: text('prototype-notice')};
+  return Object.keys(expected).every(key => JSON.stringify(observation[key]) === JSON.stringify(expected[key])) ? observation : false;
+}
+/**
+ * Waits until the dashboard shows the expected recording texts (only the keys given); a hang guard only. On expiry it
+ * fails with `message` and the last observation.
+ */
+export async function waitForRecordingText(page, expected, message, timeoutMs = 10000) {
+  let handle;
+  try {handle = await page.waitForFunction(recordingTextMatches, expected, {timeout: timeoutMs});}
+  catch (error) {
+    const last = await page.evaluate(recordingTextObservation).catch(() => null);
+    throw new Error(`${message} within ${timeoutMs} ms; last ${JSON.stringify(last)}`, {cause: error});
+  }
+  try {return await handle.jsonValue();} finally {await handle.dispose();}
+}
+/**
+ * Starts recording every distinct recording text the dashboard shows, from now until its document is replaced, through a
+ * MutationObserver, so a state shorter than any poll is still seen. At most 200 entries.
+ */
+export async function startRecordingTextLog(page) {
+  // Self-contained: the page's CSP forbids building a function from text, so the reader is repeated here.
+  await page.evaluate(() => {
+    const one = id => {
+      const nodes = globalThis.document.querySelectorAll(`[data-testid="${id}"]`);
+      return nodes.length === 1 ? nodes[0] : nodes.length ? undefined : null;
+    };
+    const text = id => {const node = one(id); return node ? node.textContent : node;};
+    const lines = id => {const node = one(id); return node ? [...node.children].map(child => child.textContent) : node;};
+    const read = () => ({headline: text('health-recording'), detail: lines('health-recording-detail'), losses: lines('health-recording-losses'),
+      alert: text('health-recording-alert'), notice: text('prototype-notice')});
+    const entries = globalThis.__ets2telemetryRecordingText = [];
+    const note = () => {const value = JSON.stringify(read()); if (entries.at(-1) !== value && entries.length < 200) entries.push(value);};
+    note();
+    new globalThis.MutationObserver(note).observe(globalThis.document.body, {subtree: true, childList: true, characterData: true});
+  });
+}
+/** The distinct recording texts seen since startRecordingTextLog, in order. */
+export async function recordingTextLog(page) {
+  return (await page.evaluate(() => globalThis.__ets2telemetryRecordingText ?? [])).map(entry => JSON.parse(entry));
+}

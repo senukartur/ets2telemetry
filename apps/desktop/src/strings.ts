@@ -1,4 +1,5 @@
-import type {AppErrorCode, OverlayEditPlacement, OverlayLayout, OverlaySectionId, ServiceHealth, SettingsSaveError, SettingsState, StorageHealth, UnitGame, UnitProfile} from '../../../packages/contracts/src';
+import type {AppErrorCode, OverlayEditPlacement, OverlayLayout, OverlaySectionId, RecordingCode, RecordingHealth, RecordingLosses, RecordingTarget, RecordingTrip, ServiceHealth,
+  SettingsSaveError, SettingsState, StorageHealth, UnitGame, UnitProfile} from '../../../packages/contracts/src';
 import type {FieldNote, LiveFieldId, LiveSectionId, ViewReason} from '../../../packages/telemetry-core/src/live-view';
 import type {OverlayGroupId, OverlayPresetId, OverlayRequirement} from './overlay-sections';
 
@@ -13,12 +14,14 @@ export const STRINGS = Object.freeze({
   startupFailed: 'Startup failed',
   startupWaiting: 'Waiting for the telemetry service',
   sourceSelectionFailed: 'Source selection failed',
-  prototypeNotice: 'Prototype live display. No trip recording or durable history.',
   healthTitle: 'Application status',
   serviceLabel: 'Telemetry service',
   storageLabel: 'Storage self-test',
   recordingLabel: 'Recording',
-  recordingUnavailable: 'not available in this version',
+  recordingProblemTitle: 'Recording problem',
+  recordingLossesTitle: 'Gaps recorded since ETS2Telemetry started',
+  recordingUpperBound: 'These totals may be an upper bound: after a telemetry service restart in the same game session a restored-database loss is counted again. The database itself is correct.',
+  recordingTrayPrefix: 'Recording: ',
   lastErrorLabel: 'Last problem',
   closeToTray: 'Closing this window keeps ETS2Telemetry running in the notification area. Open it again from the tray icon; use Exit to stop it.',
   exitAction: 'Exit ETS2Telemetry',
@@ -26,7 +29,6 @@ export const STRINGS = Object.freeze({
   exitFailed: 'Exit request failed',
   trayOpen: 'Open ETS2Telemetry',
   trayExit: 'Exit ETS2Telemetry',
-  trayRecording: 'Recording: not available in this version',
   trayStarting: 'Starting',
   trayExiting: 'Exiting',
   serviceFailedTitle: 'Telemetry service problem',
@@ -74,6 +76,110 @@ export const APP_ERROR_TEXT: Readonly<Record<AppErrorCode, string>> = Object.fre
   SERVICE_RESTART_EXHAUSTED: 'Automatic service restart limit reached. Exit and start ETS2Telemetry again.',
   STORAGE_FAILED: 'The isolated storage self-test failed.',
   SERVICE_START_TIMEOUT: 'The telemetry service did not start in time.'
+});
+// Recording status text (ET-015c PR-4, G8). apps/desktop/src/recording-status-text.ts composes these; each map covers
+// every state, code, target, trip phase and loss counter, so a new value fails to compile until it has a text.
+/** The headline of each recording state; retrying and stopped add their cause. */
+export const RECORDING_STATE_TEXT: Readonly<Record<RecordingHealth['state'], string>> = Object.freeze({
+  'disabled': 'Off: this version does not record game history',
+  'unknown': 'Not known: the telemetry service is not running or has not reported a valid status',
+  'opening': 'Opening the database',
+  'waiting': 'Waiting for the recorded source to connect',
+  'recording': 'Recording',
+  'paused': 'Game paused; recording continues when it resumes',
+  'interrupted': 'Connection lost; recording resumes on reconnection, and the missing time is recorded as a gap',
+  'retrying': 'Retrying: {cause}. Nothing is acknowledged until storage commits; events while reconnecting are recorded as a gap',
+  'stopped': 'Stopped: {cause}. Restart ETS2Telemetry after fixing it',
+  'live-only': 'Not recording this game session: the database is behind the plugin (restored database); recording resumes with the next game session',
+  'not-recorded-source': 'Not recording the selected source'
+});
+/** The tray's short form after `Recording: `; retrying and stopped add their cause. */
+export const RECORDING_STATE_SHORT_TEXT: Readonly<Record<RecordingHealth['state'], string>> = Object.freeze({
+  'disabled': 'off in this version',
+  'unknown': 'not known',
+  'opening': 'opening the database',
+  'waiting': 'waiting for the source',
+  'recording': 'on',
+  'paused': 'game paused',
+  'interrupted': 'connection lost',
+  'retrying': 'retrying, {cause}',
+  'stopped': 'stopped, {cause}',
+  'live-only': 'not this game session',
+  'not-recorded-source': 'not this source'
+});
+/** What a recording code means, as a cause inside a sentence. Never a path or error text. */
+export const RECORDING_CODE_TEXT: Readonly<Record<RecordingCode, string>> = Object.freeze({
+  DATABASE_LOCKED: 'the database is locked by another program',
+  PERMISSION_DENIED: 'no permission to write the database',
+  DISK_FULL: 'the disk is full',
+  IO_ERROR: 'a disk read or write failed',
+  DATABASE_CORRUPT: 'the database is damaged',
+  CONSTRAINT_VIOLATION: 'storage refused inconsistent data',
+  INVALID_INPUT: 'storage refused invalid data',
+  UNKNOWN_SESSION: 'storage does not know this game session',
+  UNKNOWN_TRIP: 'storage does not know this trip',
+  SESSION_CONFLICT: 'this game session conflicts with the stored one',
+  VALUE_OUT_OF_RANGE: 'a value was out of range',
+  STORAGE_CLOSED: 'the database is closed',
+  STORAGE_BUSY: 'storage is busy',
+  WORKER_FAILED: 'the storage worker failed',
+  TIMEOUT: 'storage did not answer in time',
+  DATA_PATH_INVALID: 'the data folder cannot be used',
+  DATABASE_UNRECOGNIZED: 'the database file is not an ETS2Telemetry database',
+  SCHEMA_NEWER: 'the database was written by a newer version',
+  PURPOSE_MISMATCH: 'the database holds another kind of data',
+  DURABILITY_UNVERIFIED: 'safe disk writes could not be confirmed',
+  BACKUP_FAILED: 'the backup before a database upgrade failed',
+  MIGRATION_FAILED: 'the database upgrade failed',
+  INTERNAL: 'an internal error occurred',
+  TRIP_ORDER_VIOLATION: 'trip events arrived out of order',
+  TRIP_COVERAGE_MISMATCH: 'the trip records do not match the stored coverage',
+  TRIP_UNKNOWN_SESSION: 'a trip belongs to an unknown game session',
+  BACKLOG_FULL: 'too much work is waiting for storage',
+  COVERAGE_MISMATCH: 'the plugin and the database disagree about what was stored',
+  ACK_AHEAD_OF_STORAGE: 'the database is behind the plugin'
+});
+/** The database a recording writes, shown only for a test database. */
+export const RECORDING_TARGET_TEXT: Readonly<Record<RecordingTarget, string | null>> = Object.freeze({
+  history: null,
+  synthetic: 'Synthetic test database (never game history)',
+  replay: 'Replay test database (never game history)'
+});
+/** The tray's form of a test database target, after the short state. */
+export const RECORDING_TARGET_SHORT_TEXT: Readonly<Record<RecordingTarget, string | null>> = Object.freeze({
+  history: null, synthetic: 'synthetic test database', replay: 'replay test database'
+});
+/** The current trip; an idle trip without an untracked job shows nothing. */
+export const RECORDING_TRIP_TEXT = Object.freeze({
+  untrackedJob: 'The current job started before recording and is not tracked as a trip',
+  completeness: Object.freeze({
+    unknown: 'The current trip\'s completeness is not known yet', partial: 'Current trip is partial', complete: 'Current trip is recorded completely so far'
+  }) satisfies Readonly<Record<NonNullable<RecordingTrip['completeness']>, string>>,
+  open: 'A trip is in progress',
+  phase: Object.freeze({'idle': null, 'active': null, 'awaiting-outcome': 'waiting for its delivery outcome', 'reload-check': 'checking a loaded save'}) satisfies
+    Readonly<Record<RecordingTrip['phase'], string | null>>
+});
+/** One line per non-zero loss counter, with `{count}` replaced. */
+export const RECORDING_LOSS_TEXT: Readonly<Record<keyof RecordingLosses, string>> = Object.freeze({
+  lostEvents: 'Lost events: {count}',
+  eventLoss: 'Event loss intervals: {count}',
+  notConnected: 'Intervals without a connection: {count}',
+  sampleLoss: 'One-second sample loss intervals: {count}',
+  restoreLoss: 'Restored-database intervals: {count}',
+  droppedSamples: 'Dropped one-second samples: {count}'
+});
+/** The status card's prototype notice for the recording state: no recording, not known, a test database or history. */
+export const PROTOTYPE_NOTICE_TEXT = Object.freeze({
+  disabled: 'Prototype live display. No trip recording or durable history.',
+  unknown: 'Prototype live display. The recording status is not known right now.',
+  test: 'Prototype live display. Only a test database is recorded, never game history.',
+  history: 'Prototype live display. Game history recording is new; check the recording status below.'
+});
+/** The Alert below the recording row while recording is retrying, stopped or live-only. */
+export const RECORDING_ALERT_TEXT = Object.freeze({
+  retrying: 'ETS2Telemetry retries automatically. Live telemetry and the overlay keep working.',
+  stopped: 'Recording stopped until the telemetry service starts again. Live telemetry and the overlay keep working.',
+  liveOnly: 'Live telemetry and the overlay keep working; this game session is not recorded.'
 });
 /**
  * Shown in the units card and the overlay card for the last refused save; never part of the service's last problem.

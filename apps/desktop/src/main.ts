@@ -25,7 +25,7 @@ import {captureActivation, type CaptureGrant} from './capture-activation';
 import {monitorEventLoopLag} from './event-loop-lag';
 import {ExitCoordinator, secondInstanceAction, type ExitReason} from './app-lifecycle';
 import {failureCode, initialHealth, reduceHealth, sameHealth, type HealthEvent} from './app-health';
-import {addLosses, parseRecordingHealth, ZERO_LOSSES} from './recording-status';
+import {addLosses, parseRecordingHealth, recordingFacts, sameRecording, ZERO_LOSSES} from './recording-status';
 import {TrayPresenter, type TrayMenuItem} from './tray-model';
 import {TRAY_ICON_REPRESENTATIONS, trayIconPng, type TrayTone} from './tray-icon';
 
@@ -155,6 +155,9 @@ function runApplication(profileError: unknown): void {
   function updateHealth(event: HealthEvent, immediate = false): void {
     const next = reduceHealth(health, event);
     if (sameHealth(next, health)) return;
+    // ET-015c PR-4: the opt-in smoke timeline records every recording status change, so the runtime journey can prove
+    // states shorter than any poll (fixed enums and counts only; never in default logs).
+    if (timeline && !sameRecording(next.recording, health.recording)) timeline('RECORDING_STATUS', recordingFacts(next.recording));
     health = next;
     pushAppState();
     presentTray(immediate);

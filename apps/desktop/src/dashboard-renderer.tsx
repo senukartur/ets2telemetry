@@ -7,6 +7,7 @@ import {Label} from '@/components/ui/label';
 import {RadioGroup, RadioGroupItem} from '@/components/ui/radio-group';
 import {dashboardFuel, dashboardSpeed} from './speed-display';
 import {createStartupLine} from './dashboard-startup';
+import {recordingStatusText} from './recording-status-text';
 import {LiveDashboard} from './live-dashboard';
 import {OverlaySettingsCard} from './overlay-settings-card';
 import {DEFAULT_UNIT_PROFILES, displayProfile, isUnitProfile, UNIT_GAMES, UNIT_PROFILE_IDS} from './unit-profiles';
@@ -29,6 +30,9 @@ export default function App() {
   useEffect(() => window.desktop.subscribeAppState(state => {setApp(state); startupLine.health(state.health);}), [startupLine]);
   const health = app?.health;
   const problem = health && (health.service === 'failed' || health.service === 'restarting') && health.lastError;
+  // ET-015c PR-4 (G8): the recording status text; until main's first push the status is not known.
+  const recording = recordingStatusText(health?.recording ?? {state: 'unknown'});
+  const recordingAlertVariant = health?.recording.state === 'retrying' ? 'default' : 'destructive';
   const settings = app?.settings;
   // Main pushes the saved settings; until the first push the ET-000 defaults apply.
   const profile = displayProfile(live, settings?.units);
@@ -48,7 +52,7 @@ export default function App() {
     <p>Origin: {live?.observation?.source.origin ?? (live?.selection === 'synthetic' || live?.selection === 'replay' ? live.selection : 'game')}; {live?.fresh ? 'current' : 'not current'}; interval coverage unknown.</p>
     <p data-testid="speed">Speed: {dashboardSpeed(live, profile)}</p>
     <p data-testid="fuel">Fuel: {dashboardFuel(live, profile)}</p>
-    <p>{STRINGS.prototypeNotice}</p>
+    <p data-testid="prototype-notice">{recording.notice}</p>
   </CardContent></Card>
   <LiveDashboard live={live} units={settings?.units} />
   <Card size="sm"><CardHeader><CardTitle><h2>{STRINGS.healthTitle}</h2></CardTitle></CardHeader><CardContent className="space-y-2">
@@ -56,9 +60,13 @@ export default function App() {
     <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1" data-testid="app-health">
       <dt>{STRINGS.serviceLabel}</dt><dd data-testid="health-service">{health ? SERVICE_HEALTH_TEXT[health.service] : '—'}</dd>
       <dt>{STRINGS.storageLabel}</dt><dd data-testid="health-storage">{health ? STORAGE_HEALTH_TEXT[health.storage] : '—'}</dd>
-      <dt>{STRINGS.recordingLabel}</dt><dd data-testid="health-recording">{STRINGS.recordingUnavailable}</dd>
+      <dt>{STRINGS.recordingLabel}</dt><dd data-testid="health-recording">{health ? recording.headline : '—'}</dd>
+      {health && recording.detail.length ? <dd className="col-start-2" data-testid="health-recording-detail">{recording.detail.map(line => <p key={line}>{line}</p>)}</dd> : null}
+      {health && recording.losses.length ? <dd className="col-start-2" data-testid="health-recording-losses">{recording.losses.map(line => <p key={line}>{line}</p>)}</dd> : null}
       {health?.lastError && !problem ? <><dt>{STRINGS.lastErrorLabel}</dt><dd>{APP_ERROR_TEXT[health.lastError]}</dd></> : null}
     </dl>
+    {health && recording.alert ? <Alert variant={recordingAlertVariant}><AlertTitle>{STRINGS.recordingProblemTitle}</AlertTitle>
+      <AlertDescription data-testid="health-recording-alert">{recording.alert}</AlertDescription></Alert> : null}
     <Alert><AlertDescription data-testid="close-to-tray">{STRINGS.closeToTray}</AlertDescription></Alert>
     <Button variant="destructive" disabled={exit === 'pending'} data-testid="exit-application"
       onClick={() => {setExit('pending'); void window.desktop.exitApplication().catch(() => setExit('failed'));}}>

@@ -64,3 +64,14 @@ Recorded October 16, 2026 by the coordinator after the ET-015c PR-3 review. **Th
 - The trip recorder then counts a restore loss only when it was inserted.
 
 **Until then:** a service restart in the same plugin session overstates `restoreLoss` and `lostEvents` in the live recording status; the totals shown by ET-015c PR-4 are an upper bound in that case. No storage API change is authorized by this entry.
+
+## TD-005: Loss totals hidden while the recording status is unknown
+
+Recorded October 16, 2026 by the coordinator after the advisory review of ET-015c PR-4 (PR #91). **This entry is a coordinator decision under the owner's standing delegation of October 15, 2026, not an individually owner-approved deferral** (see the ET-015c authorization in [concept.md](../concept.md#et-015c-authorization--october-16-2026)). The owner may revise it.
+
+Main keeps the loss totals of earlier service processes in its loss base, but `{state: 'unknown'}` carries no losses ([recording status](telemetry-service-v1.md#recording-status-et-015c)). The dashboard therefore hides the "Gaps recorded since ETS2Telemetry started" lines whenever the service fails, exits or restarts, until the next service reports a status; they then reappear with the earlier processes' counts added. After the supervisor's restarts are exhausted the status stays `unknown`, so the totals stay hidden until the application restarts, which starts new totals ([dashboard](app-lifecycle.md#recording-on-the-dashboard-and-in-the-tray-et-015c-pr-4)). The database is correct.
+
+**Future work:**
+- Carry main's retained loss totals through the `unknown` state, for example with an optional `losses` field on `unknown`, so the dashboard keeps showing the gaps recorded since start while the service is not running.
+
+**Until then:** the loss lines are hidden while the recording status is `unknown`. No `AppState` contract change is authorized by this entry.

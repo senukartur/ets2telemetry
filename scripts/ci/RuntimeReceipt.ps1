@@ -160,6 +160,56 @@ function Test-RecordingServiceEvent {
     return $true
 }
 
+# ET-015c PR-4 recording status facts of the journey: waiting before each admission with no losses, recording shown with
+# the synthetic target note during connection 1, interrupted with the partial trip after it, unknown between the
+# terminated and the restarted service, the status kept across a dashboard reload, recording while the dashboard was
+# closed with no lost event after the redelivery (one not-connected interval), the totals shown by the reopened
+# dashboard, which is closed again before the tray exit, an entry of each dashboard text log the driver records, and
+# run B recording again with fresh totals.
+function Test-RecordingStatusReceipt {
+    param([object]$Recording)
+    foreach ($field in @('statusWaitingShown','statusRecordingShown','statusUnknownAfterServiceExit','statusReloadKept','statusRecordedWhileClosed',
+        'statusNoEventLoss','statusReopenedLosses','statusRunBFresh','dashboardClosedBeforeTrayExit')) {
+        if ($Recording.$field -isnot [bool] -or $Recording.$field -ne $true) { return $false }
+    }
+    $status = $Recording.status
+    if ($null -eq $status -or $null -eq $Recording.restart.status) { return $false }
+    $note = 'Synthetic test database (never game history)'
+    $lossNames = @('lostEvents','eventLoss','notConnected','sampleLoss','restoreLoss','droppedSamples')
+    foreach ($waiting in @($status.beforeAdmission, $status.afterRestart, $Recording.restart.status.beforeAdmission)) {
+        $health = $waiting.health
+        if ($null -eq $health -or $health.state -cne 'waiting' -or $health.target -cne 'synthetic' -or $null -ne $health.code -or $null -ne $health.trip -or
+            $waiting.dashboard.headline -cne 'Waiting for the recorded source to connect' -or (@($waiting.dashboard.detail) -join '|') -cne $note) { return $false }
+        foreach ($name in $lossNames) { if (!(Test-ReceiptInteger -Value $health.losses.$name -Minimum 0 -Maximum 0)) { return $false } }
+    }
+    $interrupted = $status.afterFirstConnection
+    if ($interrupted.health.state -cne 'interrupted' -or $interrupted.health.trip.completeness -cne 'partial' -or
+        (@($interrupted.dashboard.detail) -join '|') -cne ($note + '|Current trip is partial')) { return $false }
+    if (@($status.firstConnectionRows | Where-Object { $_.state -ceq 'recording' -and $_.target -ceq 'synthetic' }).Count -lt 1 -or
+        @($status.serviceRestartRows | Where-Object { $_.state -ceq 'unknown' }).Count -lt 1 -or
+        @($status.whileClosedRows | Where-Object { $_.state -ceq 'recording' -and $_.target -ceq 'synthetic' }).Count -lt 1) { return $false }
+    if ($status.afterReload.headline -cne $status.afterRestart.dashboard.headline -or
+        (@($status.afterReload.detail) -join '|') -cne (@($status.afterRestart.dashboard.detail) -join '|')) { return $false }
+    $closed = $status.whileClosed
+    if ($null -eq $closed -or $closed.target -cne 'synthetic' -or $null -ne $closed.code -or $closed.state -cnotin @('recording','paused','interrupted') -or
+        !(Test-ReceiptInteger -Value $closed.losses.lostEvents -Minimum 0 -Maximum 0) -or
+        !(Test-ReceiptInteger -Value $closed.losses.notConnected -Minimum 1 -Maximum 1)) { return $false }
+    if ((@($status.reopened.losses) -join '|') -cne 'Gaps recorded since ETS2Telemetry started|Intervals without a connection: 1') { return $false }
+    # The reopened dashboard is closed again, so the tray exit runs with the main window closed.
+    if ($status.closedAgain.dashboard -isnot [bool] -or $status.closedAgain.dashboard) { return $false }
+    # Each dashboard text log the driver records holds the text it was waited for.
+    if (@($status.firstConnectionTexts | Where-Object { $_.headline -ceq 'Recording' -and @($_.detail)[0] -ceq $note }).Count -lt 1 -or
+        @($status.serviceRestartTexts | Where-Object { $_.headline -ceq 'Not known: the telemetry service is not running or has not reported a valid status' -and
+            $null -eq $_.detail }).Count -lt 1 -or
+        @($Recording.restart.status.texts | Where-Object { $_.headline -cin @('Recording','Game paused; recording continues when it resumes') -and
+            @($_.detail)[0] -ceq $note }).Count -lt 1) { return $false }
+    foreach ($row in @($Recording.restart.status.rows)) {
+        foreach ($name in $lossNames) { if ($null -ne $row.$name -and !(Test-ReceiptInteger -Value $row.$name -Minimum 0 -Maximum 0)) { return $false } }
+    }
+    if (@($Recording.restart.status.rows | Where-Object { $_.state -cin @('recording','paused') }).Count -lt 1) { return $false }
+    return $true
+}
+
 # ET-015a PR-4 recording journey: commits through a killed and restarted service, close-to-tray, a tray exit and an
 # application restart into one synthetic database, which holds the hand-written rows; no history database exists.
 function Test-RecordingReceipt {
@@ -247,6 +297,7 @@ function Test-RecordingReceipt {
     if ($restartRequests.Count -ne 1 -or $restartRequests[0].facts.reason -cne 'app-quit') { return $false }
     # Only the terminated service's probe remains, as crash evidence.
     if (@($Driver.probesAfterExit).Count -ne 1 -or (@($Driver.probesAfterExit) -join ',') -cne (@($recording.retainedCrashProbe) -join ',')) { return $false }
+    if (!(Test-RecordingStatusReceipt -Recording $recording)) { return $false }
     return $true
 }
 
