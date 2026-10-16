@@ -4,13 +4,13 @@
 // against the journal contract (packages/contracts/src/journal.ts) and the request it answers. A reply that fails the
 // check is never forwarded to the renderer. Renderer-safe: no Node or Electron API, so the sandboxed preload can import
 // it. See docs/journal.md#ipc-methods-and-codes-j10-j11.
-import type {JournalCallCode, JournalCallResult, JournalStorageCode, JournalTripsQuery} from '../../../packages/contracts/src';
+import type {JournalCallCode, JournalCallResult, JournalSample, JournalStorageCode, JournalTripsQuery} from '../../../packages/contracts/src';
 import {
   isJournalEventCursor, isJournalRowCursor, isJournalTripsQuery, isJournalUuid, JOURNAL_EVENT_LIMITS, JOURNAL_INTERVAL_LIMITS, JOURNAL_SAMPLE_LIMITS,
   validateJournalEventPage, validateJournalIntervalPage, validateJournalTripDetail, validateJournalTripPage, type JournalPageQuery, type JournalTripListItem
 } from '../../../packages/contracts/src/journal';
 import {NAME_BYTES} from '../../../packages/contracts/src/protocol-v1';
-import type {StorageErrorCode} from '../../../packages/storage/src/api';
+import type {SampleRecord, StorageErrorCode} from '../../../packages/storage/src/api';
 
 /** The five fixed invoke channels of the journal reads (J10); the export channel follows in ET-016 PR-5. */
 export const JOURNAL_CHANNELS = {
@@ -97,7 +97,10 @@ export function parseJournalQuery(value: unknown): JournalQuery | undefined {
 type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
 // The contract's storage codes equal the storage error codes; a new storage code fails to compile here until it is listed.
 const STORAGE_CODES_MATCH: Same<JournalStorageCode, StorageErrorCode> = true;
-void STORAGE_CODES_MATCH;
+// The renderer-safe sample shape equals the storage worker's sample record; a field added, removed or retyped on either
+// side fails to compile here, so the reply check below cannot drift from what listSamples returns (PR-3 review).
+const SAMPLES_MATCH: Same<JournalSample, SampleRecord> = true;
+void STORAGE_CODES_MATCH; void SAMPLES_MATCH;
 const STORAGE_CODE_TABLE: Readonly<Record<JournalStorageCode, true>> = {
   DATABASE_LOCKED: true, PERMISSION_DENIED: true, DISK_FULL: true, IO_ERROR: true, DATABASE_CORRUPT: true, CONSTRAINT_VIOLATION: true, INVALID_INPUT: true,
   UNKNOWN_SESSION: true, UNKNOWN_TRIP: true, SESSION_CONFLICT: true, VALUE_OUT_OF_RANGE: true, STORAGE_CLOSED: true, STORAGE_BUSY: true, WORKER_FAILED: true,
@@ -182,6 +185,8 @@ function checkValue(query: JournalQuery, value: unknown): void {
     return;
   }
   case 'intervals': {
+    // Each interval's `detail` is an open record checked only as an object whose annotation and cause agree with the
+    // interval's flags; its cause-specific keys vary by writer and are forwarded as stored (docs/journal.md).
     const page = validateJournalIntervalPage(value, query.page.limit), ids = page.intervals.map(interval => interval.id);
     ascending(ids, query.page.cursor); nextCursor(page.nextCursor, ids, query.page.limit);
     return;
