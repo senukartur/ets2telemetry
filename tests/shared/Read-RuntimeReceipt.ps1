@@ -18,6 +18,14 @@ function ConvertTo-Int64Number {
 }
 foreach ($case in @($config.cases)) {
     try {
+        if ($case.numbers -ceq 'int64' -and $case.scenario -ceq 'recording') {
+            # ET-015a PR-4: the recording receipt the same way.
+            $driver = ConvertTo-Int64Number -Value (Get-Content -LiteralPath $case.receipt -Raw | ConvertFrom-Json)
+            if ($driver.recording.trayExit.launcherExit -isnot [long] -or $driver.recording.servicePid -isnot [long]) { throw 'Int64 conversion failed.' }
+            $valid = [bool](Test-RecordingReceipt -Driver $driver)
+            $results.Add([ordered]@{passed = $valid; driverResultAvailable = $true; reason = $(if ($valid) { $null } else { 'RECORDING_RESULT_INCOMPLETE_OR_INVALID' })})
+            continue
+        }
         if ($case.numbers -ceq 'int64') {
             $driver = ConvertTo-Int64Number -Value (Get-Content -LiteralPath $case.receipt -Raw | ConvertFrom-Json)
             if ($driver.lifecycle.secondInstance.exitCode -isnot [long] -or $driver.lifecycle.restartLauncherExit -isnot [long]) { throw 'Int64 conversion failed.' }
