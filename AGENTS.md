@@ -327,3 +327,11 @@ Production game sources stay live-only (`GAME_HISTORY_RECORDING` false, `durable
 ET-015a makes no schema, wire, preload/IPC or renderer change. ET-015b, ET-015c, ET-016 and later phases are not authorized by this paragraph. No game, TruckersMP, display or performance claim follows.
 
 ET-015a PR-1 implementation update on October 16, 2026: storage gains a `{game, outcome}` filter on `listTrips` and an `ifAbsent` option on `recordCompleteness`; `apps/desktop/src/trip-seeds.ts` derives cold-start `TripSeed`s from stored rows (not yet called); and a test-only fault storage worker injects disk-full, permission and lock failures inside the real transaction. No production behaviour changes; see [ET-015a validation](docs/validation/et-015a.md).
+
+## ET-012c strip overflow fix — October 16, 2026
+
+On October 16, 2026 the owner decided to fix the overlay strip's overflow first, in a separate package ET-012c, before ET-010c (PR #73) merges. Under that decision and the standing delegation of October 15, 2026, the coordinator adopted the architect's decisions S1–S12 ([concept.md](concept.md#et-012c-strip-overflow-fix--october-16-2026)).
+
+The strip now reserves as many 36 px rows as its enabled sections need at its width. Every strip section has a fixed maximum width, and a longer value ends in an ellipsis, so no enabled section is hidden. The window size depends only on the saved layout, placement and sections and on the game's client area, never on values. A strip that does not fit is hidden as a whole, and edit mode reports `too-large`. The overlay smoke fails when a shown strip section lies outside the overlay window.
+
+ET-012c makes no settings format, IPC, preload, protocol, projection or service change, and the card, cluster and HUD are unchanged. For the strip, M4's height `round(38 × scale)` becomes `ceil((36 × rows + 2) × scale)`; earlier dated text is unchanged. Real-game readability, click-through over the taller window, fractional-DPI rounding and frame-time impact remain pending in [ET-012c validation](docs/validation/et-012c.md). No game, TruckersMP, display or performance claim follows.

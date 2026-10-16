@@ -716,3 +716,28 @@ Event and trip effects are committed in one transaction before the ACK. Recordin
 | R17 | The recorder exposes a read-only trip view for ET-015b's sample references |
 
 Synthetic and replay recordings use only temporary or synthetic-purpose databases. No schema, wire, preload/IPC or renderer change; ET-015b, ET-015c, ET-016 and later phases are not authorized by this section. No game, TruckersMP, display or performance claim follows from synthetic or local tests.
+
+## ET-012c strip overflow fix — October 16, 2026
+
+On October 16, 2026 the owner decided to fix the overlay strip's overflow first, in a separate package ET-012c, before ET-010c (PR #73) merges.
+- **The problem.** With protocol v1 data, the default strip (1280 × 38 DIP, all sections) kept only seven of twelve shown sections on its single visible line. ET-012b's scale could not help.
+- **Decisions.** Under that decision and the standing delegation of October 15, 2026, the coordinator adopted the architect's decisions S1–S12 below. They were not individually reviewed by the owner.
+
+| # | Decision |
+| --- | --- |
+| S1 | One PR, strip only; the overlay smoke assertion is the reproducing regression case |
+| S2 | The strip reserves `rows` 36 px rows, computed by greedy in-order packing of per-item maximum widths (two tag slots, then the enabled sections in canonical order, with the 14 px column gap). The window height is `ceil((36 × rows + 2) × scale)` DIP. Flexbox line breaking uses widths clamped by `max-width`, so the real layout never needs more lines than reserved. Rejected: a fixed two rows, renderer measurement over new IPC, and rows derived from the values or from the sections that currently have data |
+| S3 | Per-section maximum widths in CSS px: speed 140, gear 90, RPM 130, fuel 190, range 140, SDK consumption 230, cargo 300, origin 300, destination 300, distance driven 150, distance remaining 150, deadline 220, expected income 300, game time 200. Two tag slots of 96 each. Longer values end in an ellipsis |
+| S4 | A pure module `overlay-strip.ts` holds the constants and `stripRowCount`; main's geometry and the overlay renderer share it, and a unit test cross-checks `renderer.css`. The renderer gains no geometry authority |
+| S5 | The geometry functions take the enabled sections and default to all of them, so a forgotten argument over-reserves. The strip width rule is unchanged. The strip fits only when the client height is at least its height plus 16. The one-row strip height uses `ceil` instead of M4's `round` |
+| S6 | A strip that does not fit hides as a whole in driving mode, and edit mode reports `too-large` (L10/M4); it never shrinks automatically or clips sections |
+| S7 | The controller keeps the saved sections. A sections-only change re-places a shown strip with one topmost re-assertion, never shows a hidden overlay, and re-sizes the edit overlay from its unchanged draft |
+| S8 | Main creates the overlay window at the size for the saved sections and passes the sections to the controller only after a durable settings save |
+| S9 | Strip items carry their maximum width inline. The fixed 38 px row height is removed; the surface takes its content height at the top of the reserved window, and the unused transparent rows stay click-through |
+| S10 | The overlay runtime smoke asserts that every shown strip section lies inside the overlay window and that every strip item is capped; truncation and row counts are recorded only. The receipt and its phase count are unchanged |
+| S11 | Card, cluster and HUD are unchanged in ET-012c |
+| S12 | No change to settings format v3, preload/IPC, `OverlayPresentation`, protocol, fixtures, service or native code; driving-mode click-through, no focus, the topmost re-assertion and the REG-016 invariant keep their code paths |
+
+**Invariant.** The overlay window geometry is a function only of the layout, placement, enabled sections, client rectangle and display topology. Every enabled strip section that the projection shows lies inside the window.
+
+No game, TruckersMP, display or performance claim follows from synthetic checks.
