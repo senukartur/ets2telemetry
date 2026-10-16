@@ -29,6 +29,12 @@ export interface JournalTextOptions {
   units?: UnitProfiles;
   /** The IANA time zone of the clock times; the system's local zone when absent. Tests pass a fixed zone. */
   timeZone?: string;
+  /**
+   * Whether the page is the first of its list (read without a cursor); true when absent. A read sets its next cursor
+   * whenever a page is full, so a later page can be empty: it then says that nothing more follows, never that nothing
+   * was recorded.
+   */
+  firstPage?: boolean;
 }
 /** One labelled value. `note` says what the value means, such as "job offer, excludes ferries". */
 export interface JournalField {id: string; label: string; value: string; note?: string}
@@ -55,7 +61,9 @@ export type JournalSampleRow =
   | {kind: 'restart'; key: string; text: string}
   | {kind: 'sample'; key: string; time: string; speed: string; fuel: string; consumption: string; range: string; rpm: string; gear: string; odometer: string;
     gameTime: string; position: string};
-export interface JournalSampleText {rows: JournalSampleRow[]; empty: string | null; hasNext: boolean}
+/** A column heading of the sample table; `note` says what its values are, such as the SDK mean. */
+export interface JournalColumn {label: string; note?: string}
+export interface JournalSampleText {columns: JournalColumn[]; rows: JournalSampleRow[]; empty: string | null; hasNext: boolean}
 
 type JournalFailure = Extract<JournalCallResult<unknown>, {ok: false}>;
 type Avail<T> = {available: true; value: T} | {available: false; reason: UnavailableReason};
@@ -74,13 +82,16 @@ const nameOf = (input: Avail<string>) => show(input, name);
 const formatters = new Map<string, Intl.DateTimeFormat>();
 /** A UTC label as local clock time, `YYYY-MM-DD HH:MM:SS`. The label is never used for real durations. */
 export function localTime(utcMs: number, timeZone?: string): string {
+  // A label outside the Date range (about ±8.64e15 ms) is an invalid reading, never a thrown RangeError.
+  const date = new Date(utcMs);
+  if (!Number.isFinite(date.getTime())) return unavailable('invalid');
   const key = timeZone ?? '';
   let format = formatters.get(key);
   if (!format) {
     format = new Intl.DateTimeFormat('en-GB', {timeZone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23'});
     formatters.set(key, format);
   }
-  const parts = Object.fromEntries(format.formatToParts(new Date(utcMs)).map(part => [part.type, part.value]));
+  const parts = Object.fromEntries(format.formatToParts(date).map(part => [part.type, part.value]));
   return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second}`;
 }
 
@@ -131,12 +142,14 @@ function tripRow(trip: JournalTripListItem, options: JournalTextOptions): Journa
 
 /**
  * One page of the trip list. An empty first page without filters is `No trips recorded`; with the recording state
- * `disabled` (GAME_HISTORY_RECORDING false) it adds that game recording is off in this version.
+ * `disabled` (GAME_HISTORY_RECORDING false) it adds that game recording is off in this version. An empty later page
+ * only says that no more trips follow.
  */
 export function journalListText(page: JournalTripPage, options: JournalTextOptions & {filtered: boolean; recording?: RecordingHealth['state']}): JournalListText {
-  const empty = page.trips.length ? null : options.filtered ? JOURNAL_STRINGS.emptyFiltered : JOURNAL_STRINGS.empty;
+  const first = options.firstPage ?? true;
+  const empty = page.trips.length ? null : !first ? JOURNAL_STRINGS.noMoreTrips : options.filtered ? JOURNAL_STRINGS.emptyFiltered : JOURNAL_STRINGS.empty;
   return {rows: page.trips.map(trip => tripRow(trip, options)), empty,
-    emptyNote: empty !== null && !options.filtered && options.recording === 'disabled' ? JOURNAL_STRINGS.recordingOffNote : null, hasNext: page.nextCursor !== null};
+    emptyNote: empty !== null && first && !options.filtered && options.recording === 'disabled' ? JOURNAL_STRINGS.recordingOffNote : null, hasNext: page.nextCursor !== null};
 }
 
 const field = (id: keyof typeof JOURNAL_LABEL_TEXT, value: string, note?: string): JournalField =>
@@ -240,7 +253,7 @@ export function journalIntervalText(page: JournalIntervalPage, options: JournalT
     rows: page.intervals.map(interval => ({id: interval.id, kind: JOURNAL_INTERVAL_KIND_TEXT[interval.kind], cause: causeText(interval),
       start: time(interval.startUtcMs), end: time(interval.endUtcMs),
       events: interval.firstEventSeq !== null && interval.lastEventSeq !== null ? fill(JOURNAL_STRINGS.eventRange, {first: interval.firstEventSeq, last: interval.lastEventSeq}) : '—'})),
-    empty: page.intervals.length ? null : JOURNAL_STRINGS.noIntervals, hasNext: page.nextCursor !== null
+    empty: page.intervals.length ? null : (options.firstPage ?? true) ? JOURNAL_STRINGS.noIntervals : JOURNAL_STRINGS.noMoreIntervals, hasNext: page.nextCursor !== null
   };
 }
 
@@ -282,7 +295,7 @@ export function journalEventText(page: JournalEventPage, trip: {tripUuid: string
     window: windowText(page.window),
     rows: page.events.map(event => ({eventSeq: event.eventSeq, time: show(event.occurred.utcUnixMs, value => localTime(Number(value), options.timeZone)),
       type: JOURNAL_EVENT_TYPE_TEXT[event.type], detail: eventDetail(event.record, units), attribution: attributionText(event, trip.tripUuid)})),
-    empty: page.events.length ? null : JOURNAL_STRINGS.noEvents, hasNext: page.nextCursor !== null
+    empty: page.events.length ? null : (options.firstPage ?? true) ? JOURNAL_STRINGS.noEvents : JOURNAL_STRINGS.noMoreEvents, hasNext: page.nextCursor !== null
   };
 }
 
@@ -316,5 +329,9 @@ export function journalSampleText(page: JournalSamplePage, game: JournalGame, op
       odometer: show(sample.odometer, distance(units)), gameTime: sampleGameTime(sample), position: show(sample.position, formatPosition)});
     previous = sample;
   }
-  return {rows, empty: page.samples.length ? null : JOURNAL_STRINGS.noSamples, hasNext: page.nextCursor !== null};
+  const L = JOURNAL_LABEL_TEXT;
+  const columns: JournalColumn[] = [{label: L.time}, {label: L.speed}, {label: L.fuel}, {label: L.gear}, {label: L.rpm}, {label: L.odometer}, {label: L.range},
+    {label: L.consumption, note: JOURNAL_NOTE_TEXT.consumption}, {label: L.gameTime}, {label: L.position, note: JOURNAL_NOTE_TEXT.position}];
+  return {columns, rows, empty: page.samples.length ? null : (options.firstPage ?? true) ? JOURNAL_STRINGS.noSamples : JOURNAL_STRINGS.noMoreSamples,
+    hasNext: page.nextCursor !== null};
 }

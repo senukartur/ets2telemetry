@@ -121,6 +121,18 @@ describe('journal list (J13; REG-014, REG-009)', () => {
     expect(journalListText(page([]), {filtered: false, recording: 'recording'})).toMatchObject({empty: 'No trips recorded', emptyNote: null});
     expect(journalListText(page([]), {filtered: true, recording: 'disabled'})).toMatchObject({empty: 'No trips match these filters', emptyNote: null});
   });
+  it('says only that no more trips follow on an empty later page, with or without filters (review round 1)', () => {
+    // A full page always has a next cursor, so exactly 50 trips give an empty page 2.
+    expect(journalListText(page([]), {filtered: false, recording: 'disabled', firstPage: false})).toEqual({rows: [], empty: 'No more trips.', emptyNote: null, hasNext: false});
+    expect(journalListText(page([]), {filtered: true, recording: 'disabled', firstPage: false})).toEqual({rows: [], empty: 'No more trips.', emptyNote: null, hasNext: false});
+    expect(journalListText(page([]), {filtered: false, recording: 'disabled', firstPage: true})).toMatchObject({empty: 'No trips recorded'});
+  });
+  it('shows a UTC label outside the Date range as an invalid reading instead of throwing (review round 1)', () => {
+    const row = journalListText(page([{...DELIVERED, startedUtcMs: 8_640_000_000_000_001, endedUtcMs: 9_007_199_254_740_991}]), {timeZone: ZONE, filtered: false}).rows[0];
+    expect(row.started).toBe('unavailable (invalid reading)');
+    const detail = journalDetailText({...DELIVERED_DETAIL, trip: {...DELIVERED_DETAIL.trip, startedUtcMs: 8_640_000_000_000_001, endedUtcMs: 9_007_199_254_740_991}}, {timeZone: ZONE});
+    expect(fields(detail.sections, 'trip')).toMatchObject({started: 'unavailable (invalid reading)', ended: 'unavailable (invalid reading)'});
+  });
   it('names every close reason of a trip without an outcome', () => {
     const reasons = (['configuration-cleared', 'different-job', 'restart', 'discontinuity', 'gap'] as const).map(closeReason =>
       journalListText(page([{...GAP_CLOSED, closeReason}]), {filtered: false}).rows[0].outcome);
@@ -217,7 +229,7 @@ describe('trip detail (J13, J21, J22; REG-014, REG-009)', () => {
     expect(fields(text.sections, 'trip')).toMatchObject({outcome: 'No outcome — events were lost', completeness: 'Partial', ended: '2026-10-11 02:00:24'});
     expect(fields(text.sections, 'money')).toMatchObject({revenueOrPenalty: 'none (no delivery or cancellation)', fine: '70 EUR (SDK-documented), 1 amount'});
     expect(fields(text.sections, 'truck')).toMatchObject({licensePlate: 'SYN 0003'});
-    expect(notes(text.sections, 'trailers')).toEqual(['No trailer was recorded for this trip.']);
+    expect(notes(text.sections, 'trailers')).toEqual(['No trailer was recorded for this trip. A trip whose recording started during the job has no trailer until the game sends it again.']);
     expect(fields(text.sections, 'samples')).toEqual({sampleCount: '0'});
   });
   it('shows an open trip without a truck (J22)', () => {
@@ -263,6 +275,9 @@ describe('completeness intervals and timeline (J7, J13)', () => {
       {id: '4', kind: 'Lost events', cause: 'lost events', start: '—', end: '—', events: 'eventSeq 25–26'},
       {id: '5', kind: 'Not connected', cause: 'other', start: '—', end: '—', events: '—'}]});
     expect(journalIntervalText({database: DATABASE, total: 0, nextCursor: null, intervals: []})).toMatchObject({empty: 'No completeness intervals were recorded for this trip.'});
+    // Review round 1: exactly 100 intervals give an empty page 2, which must not contradict the total.
+    expect(journalIntervalText({database: DATABASE, total: 100, nextCursor: null, intervals: []}, {firstPage: false}))
+      .toEqual({total: 'Completeness intervals recorded for this trip: 100.', rows: [], empty: 'No more completeness intervals.', hasNext: false});
   });
   const occurred = (utcMs: number | null) => ({monotonicNs: NO, gameTime: {minutes: NO, clockId: CLOCK}, utcUnixMs: utcMs === null ? NO : value(String(utcMs)),
     simulation: 'running' as const, configurationRevision: '1', boundaryOrder: '1'});
@@ -300,10 +315,15 @@ describe('completeness intervals and timeline (J7, J13)', () => {
       .toBe('This trip was closed before schema version 2, so its window is unknown. Only the events attributed to it or referenced by it are listed.');
     expect(journalEventText({database: DATABASE, window: {known: false, pluginSessionId: MIGRATED_V1_SESSION}, events: [], nextCursor: null},
       {tripUuid: MIGRATED_V1_TRIP, game: 'ets2'}).empty).toBe('No events in this window.');
+    // Review round 1: exactly 100 events give an empty page 2.
+    expect(journalEventText({database: DATABASE, window: DELIVERED_DETAIL.window, events: [], nextCursor: null}, {tripUuid: T.delivered, game: 'ets2'}, {firstPage: false}))
+      .toEqual({window: "Events of the trip's plugin session from eventSeq 4 through 9, the event that closed the trip.", rows: [], empty: 'No more events in this window.', hasNext: false});
   });
 });
 
 describe('one-second samples (J14; REG-009, REG-017)', () => {
+  const COLUMNS = [{label: 'Time'}, {label: 'Speed'}, {label: 'Fuel'}, {label: 'Gear'}, {label: 'Engine RPM'}, {label: 'Odometer'}, {label: 'Estimated range'},
+    {label: 'SDK average consumption', note: 'SDK mean, not a trip average'}, {label: 'Game time'}, {label: 'World position', note: 'game-world coordinates, not GPS'}];
   const OTHER_CLOCK = '2c000000-0000-4000-8000-00000000000b';
   const sample = (id: string, second: number, rest: Partial<JournalSample> = {}, clock = CLOCK): JournalSample => ({id, tripUuid: T.delivered, utcMs: BASE_UTC + 4_000 + second * 1_000,
     sourceClockId: clock, monotonicNs: (5_000_000_000_000n + BigInt(second) * 1_000_000_000n + 250_000_000n).toString(), gameTime: null, speed: NO, fuel: NO,
@@ -316,7 +336,7 @@ describe('one-second samples (J14; REG-009, REG-017)', () => {
     sample('4', 4, {speed: {available: false, reason: 'invalid'}, engineRpm: value(0)}),
     sample('5', 4, {gear: value(-1), averageConsumption: value(0)}, OTHER_CLOCK)]};
   it('shows the samples with a no-samples separator and a source restart in metric', () => {
-    expect(journalSampleText(page, 'ets2', {units: DEFAULT, timeZone: ZONE})).toEqual({empty: null, hasNext: true, rows: [
+    expect(journalSampleText(page, 'ets2', {units: DEFAULT, timeZone: ZONE})).toEqual({columns: COLUMNS, empty: null, hasNext: true, rows: [
       {kind: 'sample', key: '2', time: '2026-10-11 02:00:05', speed: '80.1 km/h', fuel: '410.5 L', consumption: '32.5 L/100 km', range: '1263.0 km', rpm: '1451 rpm', gear: '12',
         odometer: '1234.6 km', gameTime: 'Day 9, 13:45', position: 'x -31212.3, y 42.5, z 18801.5'},
       {kind: 'sample', key: '3', time: '2026-10-11 02:00:06', speed: '0.0 km/h', fuel: 'unavailable (not provided by the game)', consumption: 'unavailable (not observed)',
@@ -345,6 +365,16 @@ describe('one-second samples (J14; REG-009, REG-017)', () => {
     expect(journalSampleText({database: DATABASE, nextCursor: null, samples: [zero]}, 'ats', {timeZone: ZONE}).rows).toEqual([{kind: 'sample', key: '9',
       time: '2026-10-11 02:00:05', speed: '0.0 mph', fuel: '0.0 US gal', consumption: 'unavailable (not provided by the game)', range: 'unavailable (invalid reading)', rpm: '0 rpm',
       gear: 'N', odometer: 'unavailable (not observed)', gameTime: 'Day 1, 00:00', position: 'x 0.0, y 0.0, z 0.0'}]);
-    expect(journalSampleText({database: DATABASE, nextCursor: null, samples: []}, 'ats')).toEqual({rows: [], empty: 'No one-second samples were recorded for this trip.', hasNext: false});
+    expect(journalSampleText({database: DATABASE, nextCursor: null, samples: []}, 'ats')).toEqual({columns: COLUMNS, rows: [], empty: 'No one-second samples were recorded for this trip.',
+      hasNext: false});
+  });
+  it('says only that no more samples follow on an empty later page (review round 1)', () => {
+    // 3,600 samples fill twelve pages of 300; page 13 is empty while the detail counts 3600.
+    expect(journalSampleText({database: DATABASE, nextCursor: null, samples: []}, 'ets2', {firstPage: false}))
+      .toEqual({columns: COLUMNS, rows: [], empty: 'No more one-second samples.', hasNext: false});
+  });
+  it('shows a sample label outside the Date range as an invalid reading (review round 1)', () => {
+    const rows = journalSampleText({database: DATABASE, nextCursor: null, samples: [sample('9', 1, {utcMs: -8_640_000_000_000_001})]}, 'ets2', {timeZone: ZONE}).rows;
+    expect(rows[0]).toMatchObject({kind: 'sample', time: 'unavailable (invalid reading)'});
   });
 });

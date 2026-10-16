@@ -6,6 +6,7 @@ import {Alert, AlertDescription} from '@/components/ui/alert';
 import {Badge} from '@/components/ui/badge';
 import {Button} from '@/components/ui/button';
 import {Card, CardContent, CardHeader, CardTitle} from '@/components/ui/card';
+import {Select, SelectContent, SelectItem, SelectTrigger, SelectValue} from '@/components/ui/select';
 import {Table, TableBody, TableCell, TableHead, TableHeader, TableRow} from '@/components/ui/table';
 import {Tabs, TabsContent, TabsList, TabsTrigger} from '@/components/ui/tabs';
 import {
@@ -81,15 +82,19 @@ function tripsQuery(filters: Filters, cursor: string | undefined): JournalTripsQ
   return {...(cursor ? {cursor} : {}), ...(filters.game ? {game: filters.game} : {}), ...(filters.outcome ? {outcome: filters.outcome} : {}),
     ...(filters.completeness ? {completeness: filters.completeness} : {})};
 }
+/** Radix Select items cannot have an empty value, so `All` (no filter) is this fixed item value. */
+const ALL = 'all';
 function FilterSelect<T extends string>({label, value, options, text, onChange, testId}: {
   label: string; value: T | undefined; options: readonly T[]; text: Readonly<Record<T, string>>; onChange: (value: T | undefined) => void; testId: string;
 }) {
-  return <label className="flex items-center gap-1 text-sm">{label}
-    <select className="rounded-md border bg-background px-1 py-0.5" value={value ?? ''} data-testid={testId}
-      onChange={event => onChange(options.find(option => option === event.target.value))}>
-      <option value="">{JOURNAL_STRINGS.allFilter}</option>
-      {options.map(option => <option key={option} value={option}>{text[option]}</option>)}
-    </select></label>;
+  return <div className="flex items-center gap-1 text-sm"><span id={`${testId}-label`}>{label}</span>
+    <Select value={value ?? ALL} onValueChange={next => onChange(options.find(option => option === next))}>
+      <SelectTrigger size="sm" aria-labelledby={`${testId}-label`} data-testid={testId}><SelectValue /></SelectTrigger>
+      <SelectContent>
+        <SelectItem value={ALL}>{JOURNAL_STRINGS.allFilter}</SelectItem>
+        {options.map(option => <SelectItem key={option} value={option}>{text[option]}</SelectItem>)}
+      </SelectContent>
+    </Select></div>;
 }
 
 interface Selected {tripUuid: string; game: JournalGame}
@@ -101,7 +106,7 @@ function TripList({filters, options, recording, onDatabase, onOpen}: {
   const read = useCallback<Read<JournalTripPage>>(cursor => window.desktop.listJournalTrips(tripsQuery({game, outcome, completeness}, cursor)), [game, outcome, completeness]);
   const paged = usePagedRead(read, onDatabase);
   const filtered = game !== undefined || outcome !== undefined || completeness !== undefined;
-  const text = paged.loaded.state === 'value' ? journalListText(paged.loaded.value, {...options, filtered, recording}) : undefined;
+  const text = paged.loaded.state === 'value' ? journalListText(paged.loaded.value, {...options, filtered, recording, firstPage: paged.number === 1}) : undefined;
   return <div className="space-y-2" data-testid="journal-list">
     <Pager paged={paged} testId="journal-list" />
     <Status loaded={paged.loaded} testId="journal-list" />
@@ -155,7 +160,7 @@ function Intervals({trip, options, onDatabase}: {trip: Selected; options: Journa
   const {tripUuid} = trip;
   const read = useCallback((cursor: string | undefined) => window.desktop.listJournalIntervals(tripUuid, cursor), [tripUuid]);
   const paged = usePagedRead(read, onDatabase);
-  const text = paged.loaded.state === 'value' ? journalIntervalText(paged.loaded.value, options) : undefined;
+  const text = paged.loaded.state === 'value' ? journalIntervalText(paged.loaded.value, {...options, firstPage: paged.number === 1}) : undefined;
   return <div className="space-y-2" data-testid="journal-intervals">
     <Pager paged={paged} testId="journal-intervals" /><Status loaded={paged.loaded} testId="journal-intervals" />
     {text ? <p data-testid="journal-intervals-total">{text.total}</p> : null}
@@ -172,7 +177,7 @@ function Timeline({trip, options, onDatabase}: {trip: Selected; options: Journal
   const {tripUuid} = trip;
   const read = useCallback((cursor: string | undefined) => window.desktop.listJournalEvents(tripUuid, cursor), [tripUuid]);
   const paged = usePagedRead(read, onDatabase);
-  const text = paged.loaded.state === 'value' ? journalEventText(paged.loaded.value, trip, options) : undefined;
+  const text = paged.loaded.state === 'value' ? journalEventText(paged.loaded.value, trip, {...options, firstPage: paged.number === 1}) : undefined;
   return <div className="space-y-2" data-testid="journal-timeline">
     <Pager paged={paged} testId="journal-events" /><Status loaded={paged.loaded} testId="journal-events" />
     {text ? <p data-testid="journal-window">{text.window}</p> : null}
@@ -189,18 +194,17 @@ function Samples({trip, options, onDatabase}: {trip: Selected; options: JournalT
   const {tripUuid, game} = trip;
   const read = useCallback((cursor: string | undefined) => window.desktop.listJournalSamples(tripUuid, cursor), [tripUuid]);
   const paged = usePagedRead(read, onDatabase);
-  const text = paged.loaded.state === 'value' ? journalSampleText(paged.loaded.value, game, options) : undefined;
-  const L = JOURNAL_LABEL_TEXT;
+  const text = paged.loaded.state === 'value' ? journalSampleText(paged.loaded.value, game, {...options, firstPage: paged.number === 1}) : undefined;
   return <div className="space-y-2" data-testid="journal-samples">
     <Pager paged={paged} testId="journal-samples" /><Status loaded={paged.loaded} testId="journal-samples" />
     {text?.empty ? <p data-testid="journal-samples-empty">{text.empty}</p> : null}
-    {text?.rows.length ? <Table><TableHeader><TableRow>{[L.time, L.speed, L.fuel, L.gear, L.rpm, L.odometer, L.range, L.consumption, L.gameTime, L.position]
-      .map(label => <TableHead key={label}>{label}</TableHead>)}</TableRow></TableHeader>
+    {text?.rows.length ? <Table><TableHeader><TableRow>{text.columns.map(column => <TableHead key={column.label}>{column.label}
+      {column.note ? <span className="block text-xs font-normal text-muted-foreground" data-testid="journal-samples-column-note">{column.note}</span> : null}</TableHead>)}</TableRow></TableHeader>
     <TableBody>{text.rows.map(row => row.kind === 'sample'
       ? <TableRow key={row.key} data-testid="journal-sample-row" data-kind="sample">
         {[row.time, row.speed, row.fuel, row.gear, row.rpm, row.odometer, row.range, row.consumption, row.gameTime, row.position].map((cell, index) => <TableCell key={index}>{cell}</TableCell>)}
       </TableRow>
-      : <TableRow key={row.key} data-testid="journal-sample-row" data-kind={row.kind}><TableCell colSpan={10} className="text-muted-foreground italic">{row.text}</TableCell></TableRow>)}
+      : <TableRow key={row.key} data-testid="journal-sample-row" data-kind={row.kind}><TableCell colSpan={text.columns.length} className="text-muted-foreground italic">{row.text}</TableCell></TableRow>)}
     </TableBody></Table> : null}
   </div>;
 }
@@ -222,6 +226,20 @@ function TripDetail({trip, options, onDatabase, onBack}: {trip: Selected; option
       <TabsContent value="samples"><Samples trip={trip} options={options} onDatabase={onDatabase} /></TabsContent>
     </Tabs>
   </div>;
+}
+
+/**
+ * Keeps a render fault of the journal inside its tab: React unmounts the whole tree on an uncaught render error, which
+ * would also blank the Live tab. It shows fixed text, never the error. Closing the tab unmounts the boundary, so opening
+ * it again retries.
+ */
+export class JournalBoundary extends React.Component<{children: React.ReactNode}, {failed: boolean}> {
+  override state = {failed: false};
+  static getDerivedStateFromError(): {failed: boolean} { return {failed: true}; }
+  override render() {
+    return this.state.failed ? <Alert variant="destructive"><AlertDescription data-testid="journal-render-failed">{JOURNAL_STRINGS.renderFailed}</AlertDescription></Alert>
+      : this.props.children;
+  }
 }
 
 const GAMES: readonly JournalGame[] = ['ets2', 'ats'];

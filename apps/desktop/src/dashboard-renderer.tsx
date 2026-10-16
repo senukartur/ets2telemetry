@@ -11,7 +11,7 @@ import {createStartupLine} from './dashboard-startup';
 import {recordingStatusText} from './recording-status-text';
 import {LiveDashboard} from './live-dashboard';
 import {OverlaySettingsCard} from './overlay-settings-card';
-import {Journal} from './journal';
+import {Journal, JournalBoundary} from './journal';
 import {DEFAULT_UNIT_PROFILES, displayProfile, isUnitProfile, UNIT_GAMES, UNIT_PROFILE_IDS} from './unit-profiles';
 import {APP_ERROR_TEXT, JOURNAL_STRINGS, SERVICE_HEALTH_TEXT, SETTINGS_SAVE_ERROR_TEXT, SETTINGS_STATE_TEXT, STORAGE_HEALTH_TEXT, STRINGS, UNIT_GAME_TEXT, UNIT_PROFILE_TEXT} from './strings';
 import './index.css';
@@ -101,5 +101,5 @@ export default function App() {
   </CardContent></Card>
   <OverlaySettingsCard settings={settings} edit={app?.overlayEdit} onSaved={saved} onRequest={() => setLastCard('overlay')} showSaveError={lastCard === 'overlay'} />
   </TabsContent>
-  <TabsContent value="journal"><Journal units={settings?.units} recording={health?.recording.state} /></TabsContent></Tabs></main>;
+  <TabsContent value="journal"><JournalBoundary><Journal units={settings?.units} recording={health?.recording.state} /></JournalBoundary></TabsContent></Tabs></main>;
 }

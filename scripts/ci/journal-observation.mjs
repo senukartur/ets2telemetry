@@ -45,7 +45,7 @@ const ANCHOR_ROWS = [
   {trip: T.delivered, started: local(BASE_UTC + 4_000), game: 'ETS2', route: ROUTE, outcome: 'Delivered', completeness: 'Complete', observed: '152.0 km', fuel: NOT_OBSERVED, cargo: 'Synthetic Cargo'}
 ];
 const NO_TRUCK = 'No truck was recorded for this trip. A trip whose recording started during the job has no truck until the game sends it again.';
-const NO_TRAILER = 'No trailer was recorded for this trip.';
+const NO_TRAILER = 'No trailer was recorded for this trip. A trip whose recording started during the job has no trailer until the game sends it again.';
 /** Each anchor's detail: title, outcome, completeness badge, chosen fields (`<section>-<field>`) and section notes. */
 const ANCHOR_DETAILS = [
   {trip: T.delivered, title: `ETS2: ${ROUTE}`, outcome: 'Delivered', completeness: 'Complete', fields: {'distance-plannedDistance': '152.0 km', 'distance-observedDistance': '152.0 km',
@@ -125,6 +125,11 @@ function liveLinesInViewport() {
   return {innerHeight: globalThis.innerHeight, scrollY: globalThis.scrollY, status: box('telemetry-status'), speed: box('speed'), fuel: box('fuel')};
 }
 
+/** Chooses a filter in its shadcn Select: open the trigger, then click the option, which Radix renders in a portal. */
+async function chooseFilter(page, testId, option) {
+  await clickTestId(page, testId);
+  await page.getByRole('option', {name: option, exact: true}).click({timeout: 5000});
+}
 const clickTestId = (page, testId, scope) => (scope ? page.locator(scope).getByTestId(testId) : page.getByTestId(testId)).click({timeout: 5000});
 
 /**
@@ -296,6 +301,9 @@ export async function runJournalSeeded({dashboard, record}) {
   assert.deepEqual(record.pagingIntervals, {total: 'Completeness intervals recorded for this trip: 104.', pageTwo: 4, nextOnLast: false});
   record.intervalsPaged = true;
   const samples = await openTable(dashboard, 'samples', 300);
+  // The SDK mean and the world position carry their notes in the column headings.
+  record.sampleColumnNotes = await dashboard.getByTestId('journal-samples-column-note').allTextContents();
+  assert.deepEqual(record.sampleColumnNotes, ['SDK mean, not a trip average', 'game-world coordinates, not GPS']);
   const samples2 = await nextTable(dashboard, 'samples', 2, 300);
   await nextTable(dashboard, 'samples', 1, 300, 'previous');
   record.pagingSamples = {kinds: [...new Set([...samples.rows, ...samples2.rows].map(row => row.kind))], firstSpeed: samples.rows[0].cells[1], nextOnSecond: samples2.next};
@@ -304,12 +312,12 @@ export async function runJournalSeeded({dashboard, record}) {
   await back(dashboard);
 
   // Filters apply before the page limit: no outcome is exactly the three anchors closed without one; partial is 3 + 36.
-  await dashboard.getByTestId('journal-filter-outcome').selectOption('none');
+  await chooseFilter(dashboard, 'journal-filter-outcome', 'No outcome');
   const none = await until(dashboard, listState, {page: 1, count: 3, first: T.restartClosed});
-  await dashboard.getByTestId('journal-filter-outcome').selectOption('');
-  await dashboard.getByTestId('journal-filter-completeness').selectOption('partial');
+  await chooseFilter(dashboard, 'journal-filter-outcome', 'All');
+  await chooseFilter(dashboard, 'journal-filter-completeness', 'Partial');
   const partial = await until(dashboard, listState, {page: 1, count: 39});
-  await dashboard.getByTestId('journal-filter-completeness').selectOption('');
+  await chooseFilter(dashboard, 'journal-filter-completeness', 'All');
   await until(dashboard, listState, {page: 1, count: 50, first: T.paging});
   record.filters = {none: none.rows.map(row => row.trip), noneNext: none.next, partial: partial.rows.length, partialNext: partial.next};
   assert.deepEqual(record.filters, {none: [T.restartClosed, T.gapClosed, T.differentJob], noneNext: false, partial: 39, partialNext: false});
