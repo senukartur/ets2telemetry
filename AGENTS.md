@@ -447,3 +447,10 @@ ET-015c settles two items of the enablement list:
 The enablement PR still needs the v0 retirement, real-game v1 evidence and the S-1/S-2 decision in ET-016. ET-016 and later phases are not authorized by this paragraph. No game, TruckersMP, display or performance claim follows.
 
 ET-015c PR-2 implementation update on October 16, 2026: the commit backlog bound is now 512 items, twice the producer's 256 retained entries. The leftover work of one ended connection plus a full redelivery and live items now fits, so such a reconnection is no longer refused. Before, it was refused, and events were lost as `offline` through the refused reconnection. Leftovers stacked from several connections that ended before the queue drained, or a true storage stall, still close the connection as retryable `BACKLOG_FULL`: bounded and draining. See [the telemetry service v1 ingestion](docs/telemetry-service-v1.md) and [ET-015c validation](docs/validation/et-015c.md).
+
+ET-015c PR-1 implementation update on October 16, 2026: the service's recording wiring moved unchanged into `apps/desktop/src/recording-runtime.ts`. With it, the storage suite proves the following with the real storage worker and the real shutdown sequence:
+- `recording-flush` waits for a commit in flight;
+- a live-only connection made while storage is opening reconnects durable once it opens, and its window's events are committed as a `noDurableConsumer` gap (R10);
+- a stop during a retryable backoff, or while a restore-loss row is in flight, ends within the stop budget.
+
+No behaviour changed. See [the telemetry service v1 ingestion](docs/telemetry-service-v1.md) and [ET-015c validation](docs/validation/et-015c.md).
