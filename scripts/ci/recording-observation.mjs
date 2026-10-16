@@ -305,6 +305,10 @@ export async function runRecordingSmoke({application, launcher, dashboard, recor
     'RECORDING_LOSSES_NOT_SHOWN_AFTER_REOPEN');
   assert.equal(record.status.reopened.detail?.[0], SYNTHETIC_NOTE);
   record.statusReopenedLosses = true;
+  // Close it again, so the tray exit below still runs with the main window closed (REG-012: close to the tray, then exit).
+  const closedAgain = record.status.closedAgain = await closeDashboard(application, reopened);
+  assert.equal(closedAgain.dashboard, false); assert.equal(closedAgain.servicePid, restarted.servicePid); assert.equal(closedAgain.exiting, false);
+  record.dashboardClosedBeforeTrayExit = true;
 
   // 4. Explicit exit from the tray: the service's ordered stop runs `recording-flush`, which writes the pending sample of
   // second 1001 (H11), then closes the database.
