@@ -10,7 +10,7 @@
   "trips": [
     {"trip": "trip@2", "jobConfigurationEventSeq": "2", "truckConfigurationEventSeq": "1", "trailerConfigurationEventSeqs": [], "openedEventSeq": "2",
       "gameMode": {"mode": "unknown", "method": "none", "confidence": "none"}, "gameModeAmbiguous": false, "outcome": "none", "outcomeEventSeq": null, "closeReason": "discontinuity",
-      "recordingCompleteness": "partial", "startedUtcMs": 1800000000020, "endedUtcMs": 1800000000120, "observedDistanceM": {"available": false, "reason": "not-observed"}}
+      "recordingCompleteness": "partial", "startedUtcMs": 1800000000020, "endedUtcMs": 1800000000120, "observedDistanceM": {"available": false, "reason": "not-observed"}, "fuelUsedL": {"available": false, "reason": "not-observed"}}
   ],
   "attributions": [],
   "intervals": [{"trip": "trip@2", "kind": "discontinuity", "detail": {"cause": "opened-at-load", "atEventSeq": "2"}}],

@@ -14,7 +14,8 @@ try {
   const trips = db.prepare(`SELECT t.id, t.trip_uuid AS tripUuid, p.plugin_session_uuid AS session, t.game, je.event_seq AS jobSeq, te.event_seq AS truckSeq,
       oe.event_seq AS openedSeq, t.game_mode AS mode, t.game_mode_method AS method, t.game_mode_confidence AS confidence, t.game_mode_ambiguous AS ambiguous,
       t.outcome, ue.event_seq AS outcomeSeq, t.close_reason AS closeReason, t.recording_completeness AS completeness, t.started_utc_ms AS startedUtcMs,
-      t.ended_utc_ms AS endedUtcMs, t.observed_distance_m AS distance, t.observed_distance_m_state AS distanceState
+      t.ended_utc_ms AS endedUtcMs, t.observed_distance_m AS distance, t.observed_distance_m_state AS distanceState,
+      t.fuel_used_l AS fuelUsed, t.fuel_used_l_state AS fuelUsedState
     FROM trips t JOIN plugin_sessions p ON p.id = t.plugin_session_ref JOIN job_configurations j ON j.id = t.job_configuration_ref JOIN events je ON je.id = j.event_ref
     LEFT JOIN truck_configurations k ON k.id = t.truck_configuration_ref LEFT JOIN events te ON te.id = k.event_ref
     JOIN events oe ON oe.id = t.opened_event_ref LEFT JOIN events ue ON ue.id = t.outcome_event_ref ORDER BY t.id`).all();

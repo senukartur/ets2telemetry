@@ -26,6 +26,10 @@ const UNKNOWN_MODE = {mode: 'unknown', method: 'none', confidence: 'none'} as co
 const open = (tripUuid: string, startedUtcMs: number): TripEffect =>
   ({kind: 'trip.open', tripUuid, game: 'ets2', gameMode: UNKNOWN_MODE, jobConfiguration: 'this-event', recordingCompleteness: 'unknown', startedUtcMs});
 const distance = (tripUuid: string, value: number): TripEffect => ({kind: 'trip.update', tripUuid, set: {observedDistanceM: {available: true, value}}});
+/** A trip.update of fuel used alone (S-1, J8); with `observedDistanceM` both totals travel in one update. */
+const fuel = (tripUuid: string, value: number | 'invalid', observedDistanceM?: number): TripEffect => ({kind: 'trip.update', tripUuid, set: {
+  ...(observedDistanceM !== undefined ? {observedDistanceM: {available: true, value: observedDistanceM}} : {}),
+  fuelUsedL: value === 'invalid' ? {available: false, reason: 'invalid'} : {available: true, value}}});
 const partial = (tripUuid: string): TripEffect => ({kind: 'trip.update', tripUuid, set: {recordingCompleteness: 'partial'}});
 const attr = (tripUuid: string | null, attribution: 'trip' | 'free-driving'): TripEffect => ({kind: 'event.attribute', tripUuid, attribution});
 const note = (tripUuid: string, detail: Record<string, unknown>): TripEffect => ({kind: 'completeness.add', interval: {tripUuid, kind: 'discontinuity', detail: {annotation: true, ...detail}}});
@@ -211,7 +215,8 @@ describe('fuel (T16)', () => {
       // One refuel episode over two steps, then consumption, then a second episode.
       [reading(s, {ms: 3000, odometer: 1000, fuel: 450})], [reading(s, {ms: 4000, odometer: 1000, fuel: 500})], [reading(s, {ms: 5000, odometer: 1000, fuel: 499})],
       [reading(s, {ms: 6000, odometer: 1000, fuel: 520})],
-      [s.event(r.paused(), paused), [distance(trip, 0),
+      // ET-016 PR-6 (J8): the carrier's update also persists fuel used, 1.4921875 L as computed below.
+      [s.event(r.paused(), paused), [fuel(trip, 1.4921875, 0),
         note(trip, {cause: 'refuel', addedLiters: 100.4921875, atMonotonicNs: ns(3000), lastAtMonotonicNs: ns(4000)}),
         note(trip, {cause: 'refuel', addedLiters: 21, atMonotonicNs: ns(6000)})]]]);
     // Consumed 0.5 + 1 L minus the 0.0078125 L increase; refuels 50.4921875 + 50 + 21 L in two episodes.
@@ -228,6 +233,80 @@ describe('fuel (T16)', () => {
     const {s, rows} = opened();
     const state = play([...rows, [reading(s, {ms: 0, odometer: 1000})], [reading(s, {ms: 1000, odometer: 1000, fuel: 300})]]);
     expect(tripView(state, 'ets2').current).toMatchObject({fuelUsedL: {state: 'missing', reason: 'not-observed'}, refuelledL: 0, refuels: 0});
+  });
+});
+
+// ET-016 PR-6 (J8, S-1): fuel used is persisted exactly like observed distance. Expected values are written by hand from
+// docs/trips.md ("Persistence") and the fuel rule of T16; fuel levels are binary fractions, so every sum is exact.
+describe('fuel used persistence (J8, S-1)', () => {
+  it('is persisted on a carrier when it changed, zero as a value, and not sent again while unchanged (REG-008) [synthetic-inference]', () => {
+    const {s, trip, rows} = opened();
+    const state = play([...rows, [reading(s, {ms: 0, fuel: 400})], [reading(s, {ms: 1000, fuel: 400})],
+      // An unchanged level is a continuous fuel step: 0 L is a value, not unavailable.
+      [s.event(r.fined()), [attr(trip, 'trip'), fuel(trip, 0)]],
+      [reading(s, {ms: 2000, fuel: 400})], [s.event(r.toll()), [attr(trip, 'trip')]],
+      [reading(s, {ms: 3000, fuel: 399.5})], [s.event(r.paused(), paused), [fuel(trip, 0.5)]]]);
+    expect(tripView(state, 'ets2').current).toMatchObject({fuelUsedL: {state: 'value', value: 0.5}});
+  });
+  it('is never written while it was never observed: a step with a missing level adds nothing [synthetic-inference]', () => {
+    const {s, trip, rows} = opened();
+    const state = play([...rows, [reading(s, {ms: 0, odometer: 1000, fuel: 400})], [reading(s, {ms: 1000, odometer: 1100})], [reading(s, {ms: 2000, odometer: 1200, fuel: 399})],
+      [s.event(r.paused(), paused), [distance(trip, 200)]],
+      [s.event(r.delivered(), paused), [attr(trip, 'trip'), delivered(trip, 'complete', at(4))]]]);
+    expect(tripView(state, 'ets2').lastClosed).toMatchObject({fuelUsedL: {state: 'missing', reason: 'not-observed'}});
+  });
+  it('is persisted before an outcome close even when it changed after the previous carrier (REG-008) [synthetic-inference]', () => {
+    const {s, trip, rows} = opened();
+    const state = play([...rows, [reading(s, {ms: 0, fuel: 400})], [reading(s, {ms: 1000, fuel: 399})],
+      [s.event(r.delivered()), [attr(trip, 'trip'), fuel(trip, 1), delivered(trip, 'complete', at(3))]]]);
+    expect(tripView(state, 'ets2').lastClosed).toMatchObject({fuelUsedL: {state: 'value', value: 1}});
+  });
+  it('is persisted before a discontinuity close and before a gap close [synthetic-inference]', () => {
+    const a = opened();
+    // A timer restart while running after the trip's load window closes it as a discontinuity (T13).
+    play([...a.rows, [reading(a.s, {ms: 0, fuel: 400})], [reading(a.s, {ms: 1000, fuel: 399.5})],
+      [a.s.event(r.timersRestart(), paused), [fuel(a.trip, 0.5),
+        {kind: 'trip.close', tripUuid: a.trip, outcome: 'none', closeReason: 'discontinuity', recordingCompleteness: 'partial', endedUtcMs: at(3)}]]]);
+    const b = opened(), state = play([...b.rows, [reading(b.s, {ms: 0, fuel: 400})], [reading(b.s, {ms: 1000, fuel: 399.75})]]);
+    const effects = run(state, [b.s.gap(2)]).effects[0];
+    expect(effects.slice(0, 2)).toEqual([fuel(b.trip, 0.25),
+      {kind: 'trip.close', tripUuid: b.trip, outcome: 'none', closeReason: 'gap', recordingCompleteness: 'partial', endedUtcMs: at(2)}]);
+  });
+  it('is persisted before a restart close of an earlier plugin session (T11) [synthetic-inference]', () => {
+    const {s, trip, rows} = opened(), b = new Script(ETS2_B, 'ets2', {utcMs: BASE_UTC + 100_000});
+    play([...rows, [reading(s, {ms: 0, fuel: 400})], [reading(s, {ms: 1000, fuel: 398})], [{kind: 'disconnected'}], [sessionInput(b.welcome())],
+      [b.event(r.paused(), paused), [fuel(trip, 2),
+        {kind: 'trip.close', tripUuid: trip, outcome: 'none', closeReason: 'restart', recordingCompleteness: 'partial', endedUtcMs: at(2)}]]]);
+  });
+  it('a resumed trip continues from its stored fuel used (cold start, R4) [synthetic-inference]', () => {
+    const s = new Script(ETS2_A), trip = uuid(ETS2_A, '2');
+    const seed: TripSeed = {tripUuid: trip, pluginSessionId: ETS2_A, game: 'ets2', jobKey: jobKey(job()), startedUtcMs: at(2), recordingCompleteness: 'unknown',
+      observedDistanceM: 500, fuelUsedL: 20.5};
+    s.next = 3n;
+    const state = play([[sessionInput(s.welcome(), '2', [seed])], [reading(s, {ms: 0, odometer: 1000, fuel: 400})], [reading(s, {ms: 1000, odometer: 1100, fuel: 399.5})],
+      // 20.5 L stored plus the 0.5 L step; 500 m stored plus the 100 m step.
+      [s.event(r.paused(), paused), [partial(trip), {kind: 'completeness.add', interval: {tripUuid: trip, kind: 'not-connected', detail: {cause: 'consumer-restart'}}},
+        fuel(trip, 21, 600)]]]);
+    expect(tripView(state, 'ets2').current).toMatchObject({observedDistanceM: {state: 'value', value: 600}, fuelUsedL: {state: 'value', value: 21}});
+  });
+  it('a resumed trip keeps its stored fuel used, zero included, without sending it again before its close (R4) [synthetic-inference]', () => {
+    for (const stored of [12.25, 0]) {
+      const s = new Script(ETS2_A, 'ets2', {utcMs: BASE_UTC + 2000}), trip = uuid(ETS2_A, '2');
+      const seed: TripSeed = {tripUuid: trip, pluginSessionId: ETS2_A, game: 'ets2', jobKey: jobKey(job()), startedUtcMs: at(2), recordingCompleteness: 'unknown', fuelUsedL: stored};
+      s.next = 3n;
+      const state = play([[sessionInput(s.welcome(), '2', [seed])], [reading(s, {ms: 0, odometer: 1000})], [reading(s, {ms: 1000, odometer: 1000})],
+        [s.event(r.delivered()), [partial(trip), {kind: 'completeness.add', interval: {tripUuid: trip, kind: 'not-connected', detail: {cause: 'consumer-restart'}}},
+          attr(trip, 'trip'), distance(trip, 0), delivered(trip, 'partial', at(3))]]]);
+      expect(tripView(state, 'ets2').lastClosed, String(stored)).toMatchObject({fuelUsedL: {state: 'value', value: stored}});
+    }
+  });
+  it('a negative total is persisted as invalid, and as its value once it is no longer negative (not clamped) [synthetic-inference]', () => {
+    const {s, trip, rows} = opened();
+    // +0.0078125 L is within FUEL_NOISE_LITERS: an unchanged step whose increase exceeds the consumption so far.
+    let state = play([...rows, [reading(s, {ms: 0, fuel: 400})], [reading(s, {ms: 1000, fuel: 400.0078125})], [s.event(r.fined()), [attr(trip, 'trip'), fuel(trip, 'invalid')]]]);
+    expect(tripView(state, 'ets2').current).toMatchObject({fuelUsedL: {state: 'value', value: -0.0078125}});
+    state = play([[reading(s, {ms: 2000, fuel: 399.0078125})], [s.event(r.paused(), paused), [fuel(trip, 0.9921875)]]], state);
+    expect(tripView(state, 'ets2').current).toMatchObject({fuelUsedL: {state: 'value', value: 0.9921875}});
   });
 });
 

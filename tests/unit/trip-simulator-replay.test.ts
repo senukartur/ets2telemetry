@@ -42,7 +42,7 @@ function summarize(replay: TripReplay, map: Map<string, string>, pluginSessionId
     trips: s.trips.map(t => ({trip: t.tripUuid, jobConfigurationEventSeq: t.jobConfigurationEventSeq, truckConfigurationEventSeq: t.truckConfigurationEventSeq,
       trailerConfigurationEventSeqs: t.trailerConfigurationEventSeqs, openedEventSeq: t.openedEventSeq, gameMode: t.gameMode, gameModeAmbiguous: t.gameModeAmbiguous,
       outcome: t.outcome, outcomeEventSeq: t.outcomeEventSeq, closeReason: t.closeReason, recordingCompleteness: t.recordingCompleteness, startedUtcMs: t.startedUtcMs,
-      endedUtcMs: t.endedUtcMs, observedDistanceM: t.observedDistanceM})),
+      endedUtcMs: t.endedUtcMs, observedDistanceM: t.observedDistanceM, fuelUsedL: t.fuelUsedL})),
     attributions: s.attributions.map(a => ({eventSeq: a.eventSeq, trip: a.tripUuid, attribution: a.attribution})),
     intervals: s.intervals.map(i => {
       const {tripUuid, ...rest} = i, row: Record<string, unknown> = {trip: tripUuid ?? null, ...rest};
@@ -109,7 +109,9 @@ describe('trip replay of a synthetic transcript with readings accounting (fix ro
       // The job opens while running (eventSeq 2) and the delivery (eventSeq 4) closes it partial because of the hole.
       trips: [{trip: 'trip@2', jobConfigurationEventSeq: '2', truckConfigurationEventSeq: null, trailerConfigurationEventSeqs: [], openedEventSeq: '2',
         gameMode: {mode: 'unknown', method: 'none', confidence: 'none'}, gameModeAmbiguous: false, outcome: 'delivered', outcomeEventSeq: '4', closeReason: 'outcome',
-        recordingCompleteness: 'partial', startedUtcMs: BASE_UTC + 2000, endedUtcMs: BASE_UTC + 14_000, observedDistanceM: {available: true, value: 150}}],
+        recordingCompleteness: 'partial', startedUtcMs: BASE_UTC + 2000, endedUtcMs: BASE_UTC + 14_000, observedDistanceM: {available: true, value: 150},
+        // ET-016 PR-6 (J8): fuel used is stored as well, 0.5 + 0.5 L (see the view below); the 450 -> 450 L step adds 0 L.
+        fuelUsedL: {available: true, value: 1}}],
       attributions: [{eventSeq: '4', trip: 'trip@2', attribution: 'trip'}],
       intervals: [
         // 7 s of running time between the snapshots at 3,000 and 10,000 ms; 130 m across it is continuous.

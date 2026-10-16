@@ -178,8 +178,15 @@ export interface TripAccounting {
   observedDistanceM: number | null;
   /** The value last sent with trip.update observedDistanceM (or stored, for a resumed trip); null before that. */
   persistedDistanceM: number | null;
+  /** The stored fuel used of a resumed trip (J8), from which fuel used accumulates; null otherwise. */
+  storedFuelUsedL: number | null;
+  /**
+   * What was last sent with trip.update fuelUsedL (or stored, for a resumed trip): litres, `invalid` for a negative
+   * total, which storage cannot hold, or null before that.
+   */
+  persistedFuelUsedL: number | 'invalid' | null;
   fuelConsumedL: number; fuelIncreaseL: number;
-  /** Continuous fuel steps counted; fuel used is unavailable while zero. */
+  /** Continuous fuel steps counted; without a stored value, fuel used is unavailable while zero. */
   fuelSteps: number;
   refuelledL: number;
   /** Refuel episodes: consecutive refuelled steps form one. */
@@ -189,9 +196,9 @@ export interface TripAccounting {
   /** Where the session's last reading was taken: before this trip, while it was open, or while it was active. */
   lastReading: 'none' | 'open' | 'active';
 }
-export function newAccounting(storedDistanceM: number | null = null): TripAccounting {
-  return {observedDistanceM: storedDistanceM, persistedDistanceM: storedDistanceM, fuelConsumedL: 0, fuelIncreaseL: 0, fuelSteps: 0, refuelledL: 0, refuels: 0,
-    refuelling: false, lastReading: 'none'};
+export function newAccounting(storedDistanceM: number | null = null, storedFuelUsedL: number | null = null): TripAccounting {
+  return {observedDistanceM: storedDistanceM, persistedDistanceM: storedDistanceM, storedFuelUsedL, persistedFuelUsedL: storedFuelUsedL, fuelConsumedL: 0, fuelIncreaseL: 0,
+    fuelSteps: 0, refuelledL: 0, refuels: 0, refuelling: false, lastReading: 'none'};
 }
 /** What accumulating one step found beyond the totals: a refuel (`episode` when it starts a new one). */
 export interface Accumulated {refuel: {addedLiters: number; episode: boolean} | null}
@@ -210,18 +217,38 @@ export function accumulate(acc: TripAccounting, step: ReadingStep): Accumulated 
   acc.refuelling = fuel.kind === 'refuelled';
   return {refuel};
 }
-/** Fuel used in litres (T16), or null before the first continuous fuel step. */
+/**
+ * Fuel used in litres (T16): a resumed trip's stored value plus the net drop of the steps counted since (J8), or null
+ * before the first continuous fuel step when nothing was stored.
+ */
 export function fuelUsedL(acc: TripAccounting): number | null {
-  return acc.fuelSteps === 0 ? null : acc.fuelConsumedL - acc.fuelIncreaseL;
+  if (acc.fuelSteps === 0) return acc.storedFuelUsedL;
+  return (acc.storedFuelUsedL ?? 0) + acc.fuelConsumedL - acc.fuelIncreaseL;
+}
+/** A trip.update of the readings totals; `set` holds only the totals that changed. */
+export interface AccountingUpdate {
+  kind: 'trip.update'; tripUuid: string;
+  set: {observedDistanceM?: {available: true; value: number}; fuelUsedL?: {available: true; value: number} | {available: false; reason: 'invalid'}};
 }
 /**
- * The observed distance to persist (T16): a trip.update when it changed since the last one. The caller adds it on every
- * commit carrier and right before every close, so a close never leaves an unsent change.
+ * The observed distance and fuel used to persist (T16, J8): one trip.update with each total that changed since it was
+ * last sent. The caller adds it on every commit carrier and right before every close, so a close never leaves an unsent
+ * change. A total that was never observed is not sent, so storage keeps `not-observed`. Fuel used is not clamped
+ * (docs/trips.md): a negative total, which storage cannot hold, is sent as `invalid` and replaced by its value once it
+ * is no longer negative.
  */
-export function distanceUpdate(tripUuid: string, acc: TripAccounting): {kind: 'trip.update'; tripUuid: string; set: {observedDistanceM: {available: true; value: number}}} | null {
-  if (acc.observedDistanceM === null || acc.observedDistanceM === acc.persistedDistanceM) return null;
-  acc.persistedDistanceM = acc.observedDistanceM;
-  return {kind: 'trip.update', tripUuid, set: {observedDistanceM: {available: true, value: acc.observedDistanceM}}};
+export function accountingUpdate(tripUuid: string, acc: TripAccounting): AccountingUpdate | null {
+  const set: AccountingUpdate['set'] = {};
+  if (acc.observedDistanceM !== null && acc.observedDistanceM !== acc.persistedDistanceM) {
+    acc.persistedDistanceM = acc.observedDistanceM;
+    set.observedDistanceM = {available: true, value: acc.observedDistanceM};
+  }
+  const used = fuelUsedL(acc), fuel = used === null ? null : used >= 0 ? used : 'invalid';
+  if (fuel !== null && fuel !== acc.persistedFuelUsedL) {
+    acc.persistedFuelUsedL = fuel;
+    set.fuelUsedL = fuel === 'invalid' ? {available: false, reason: 'invalid'} : {available: true, value: fuel};
+  }
+  return set.observedDistanceM === undefined && set.fuelUsedL === undefined ? null : {kind: 'trip.update', tripUuid, set};
 }
 /**
  * The odometer change across a connection hole, recorded in its not-connected interval and never added to a trip:

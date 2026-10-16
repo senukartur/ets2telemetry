@@ -76,4 +76,26 @@ describe('ET-014 PR-2 readings accounting effects through real commits', () => {
         detail: {annotation: true, cause: 'odometer-jump', deltaM: 58_850, atMonotonicNs: '1008000000000'}}
     ]);
   });
+
+  // ET-016 PR-6 (S-1, J8): the reducer's fuel-used updates are accepted by real commits; a negative total is never sent
+  // as a negative value, which the schema CHECK would refuse and so stop durable delivery, but as `invalid`.
+  it('stores fuel used from the reducer, a negative total as invalid, and its value before the close [synthetic-inference]', async () => {
+    const storage = await ws.open(), s = new Script(ETS2_A), t = uuid(ETS2_A, '2');
+    const fuelOf = () => ok(storage.getTrip(t))?.fuelUsedL;
+    const statuses: string[] = [];
+    let state = initialTripState();
+    const step = (steps: Step[]) => { const result = drive(storage, steps, state); state = result.state; statuses.push(...result.statuses); };
+    step([sessionInput(s.welcome()), s.event(r.started()), s.event(r.jobConfigured())]);
+    expect(fuelOf()).toEqual({available: false, reason: 'not-observed'});
+    // +0.0078125 L is within the 0.01 L noise: an unchanged step, so fuel used is -0.0078125 L, stored as invalid.
+    step([reading(s, 0, 1000, 400), reading(s, 1000, 1000, 400.0078125), s.event(r.fined())]);
+    expect(fuelOf()).toEqual({available: false, reason: 'invalid'});
+    // 1 L consumed: 0.9921875 L at the next carrier; 1 L more before the delivery is persisted by the delivery itself.
+    step([reading(s, 2000, 1000, 399.0078125), s.event(r.paused())]);
+    expect(fuelOf()).toEqual({available: true, value: 0.9921875});
+    step([reading(s, 3000, 1000, 398.0078125), s.event(r.delivered())]);
+    expect(statuses).toEqual(['committed', 'committed', 'committed', 'committed', 'committed']);
+    expect(ok(storage.getTrip(t))).toMatchObject({outcome: 'delivered', observedDistanceM: {available: true, value: 0}, fuelUsedL: {available: true, value: 1.9921875}});
+    storage.close();
+  });
 });

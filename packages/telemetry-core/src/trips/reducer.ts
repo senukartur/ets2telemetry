@@ -6,7 +6,7 @@ import type {Available, EventRecord, Money, Uint64} from '../../../contracts/src
 import type {CompletenessInterval} from '../../../storage/src/api';
 import type {StepSample} from '../derived';
 import {
-  accumulate, advanceGameTime, classifyStep, distanceUpdate, isFastAdvance, isReadingHole, jumpLabel, newAccounting, odometerDeltaM, readingPoint, startRunClock, switchRunClock,
+  accumulate, advanceGameTime, classifyStep, accountingUpdate, isFastAdvance, isReadingHole, jumpLabel, newAccounting, odometerDeltaM, readingPoint, startRunClock, switchRunClock,
   type GameTimeJump, type ReadingPoint, type ReadingStep
 } from './accounting';
 import {canonicalJson, jobKey, tripUuidFor} from './identity';
@@ -74,7 +74,7 @@ function seedTrip(seed: TripSeed): OpenTrip {
     completeness: seed.recordingCompleteness, gameMode: {mode: 'unknown', method: 'none', confidence: 'none'}, gameModeAmbiguous: false,
     startedUtcMs: seed.startedUtcMs, startedMonotonicNs: null, clockId: null, market: null, cargoLoaded: null, truckKey: null,
     trailerKeys: new Array<null>(TRAILER_SLOTS).fill(null), plannedDistance: null, expectedIncome: null,
-    fines: emptyMoney(), finesBeforeLoaded: emptyMoney(), tolls: emptyMoney(), transfers: emptyMoney(), accounting: newAccounting(seed.observedDistanceM ?? null)
+    fines: emptyMoney(), finesBeforeLoaded: emptyMoney(), tolls: emptyMoney(), transfers: emptyMoney(), accounting: newAccounting(seed.observedDistanceM ?? null, seed.fuelUsedL ?? null)
   };
 }
 function closedFrom(trip: OpenTrip, close: Pick<ClosedTrip, 'outcome' | 'closeReason' | 'endedUtcMs' | 'endedMonotonicNs' | 'completeness'>,
@@ -108,8 +108,8 @@ function queueAnnotations(slot: GameSlot, annotations: TripEffect[]) {
 /**
  * The effects of one commit carrier (T18): queued lifecycle effects first, then the carrier's own effects, then at most
  * eight annotations, never more than MAX_EFFECTS in total. The carrier's own effects always fit (at most six by
- * construction: a distance update and a close, then an open with three cause intervals) because they may reference
- * `this-event`; queued effects never do, so they can wait.
+ * construction: one update of observed distance and fuel used and a close, then an open with three cause intervals)
+ * because they may reference `this-event`; queued effects never do, so they can wait.
  */
 function assemble(slot: GameSlot, own: TripEffect[], annotations: TripEffect[]): TripEffect[] {
   if (own.length > MAX_EFFECTS) throw new Error('Trip reducer invariant: too many effects for one event');
@@ -129,9 +129,9 @@ interface Carrier {
 /** Closes the open trip of the carrier's game. A non-outcome close is always partial; an outcome close is complete only after a clean window (T13). */
 function closeTrip(c: Carrier, outcome: ClosedTrip['outcome'], closeReason: ClosedTrip['closeReason'], extra: Partial<Pick<ClosedTrip, 'revenue' | 'penalty' | 'deliveredDistance'>> = {}) {
   const trip = c.slot.trip!;
-  // The observed distance is persisted before every close (T16).
-  const distance = distanceUpdate(trip.tripUuid, trip.accounting);
-  if (distance !== null) c.own.push(distance);
+  // The observed distance and fuel used are persisted before every close (T16, J8).
+  const totals = accountingUpdate(trip.tripUuid, trip.accounting);
+  if (totals !== null) c.own.push(totals);
   let ended = c.label;
   // UTC is a label and can be set back; the schema requires ended >= started, so clamp and annotate (T15).
   if (ended < trip.startedUtcMs) {
@@ -402,12 +402,12 @@ function stepEvent(state: TripState, message: EventMessage, coveredThrough: Uint
   // T17: each live event's simulation state splits the running time since the last reading. A replayed event happened
   // before the connection's first reading.
   if (session.runClock !== null && c.monotonicNs !== null && !replayed(c)) session.runClock = switchRunClock(session.runClock, message.capture.clockId, c.monotonicNs, occurred.simulation);
-  flushDistance(c);
+  flushTotals(c);
   return {ok: true, state: draft, effects: assemble(c.slot, c.own, c.annotations)};
 }
-/** T16: every commit carrier persists the open trip's observed distance when it changed. */
-function flushDistance(c: Carrier) {
-  const trip = c.slot.trip, update = trip === null ? null : distanceUpdate(trip.tripUuid, trip.accounting);
+/** T16, J8: every commit carrier persists the open trip's observed distance and fuel used when they changed. */
+function flushTotals(c: Carrier) {
+  const trip = c.slot.trip, update = trip === null ? null : accountingUpdate(trip.tripUuid, trip.accounting);
   if (update !== null) c.own.push(update);
 }
 
@@ -443,15 +443,15 @@ function stepGap(state: TripState, message: GapMessage, coveredThrough: Uint64, 
   // Events inside the gap are unknown: a hidden start, restart or regression leaves the load state unknown.
   session.load = 'unknown';
   session.processedThrough = d.lastEventSeq; session.lastUtcMs = c.label; session.clockId = message.capture.clockId;
-  flushDistance(c);
+  flushTotals(c);
   return {ok: true, state: draft, effects: assemble(c.slot, c.own, c.annotations)};
 }
 
 /** Queues a restart close of a trip of an earlier session (T11), at its last observed label as a lower bound (T15). */
 function restartClose(slot: GameSlot, trip: OpenTrip, lastUtcMs: number | null) {
-  // The observed distance is persisted before every close (T16).
-  const distance = distanceUpdate(trip.tripUuid, trip.accounting);
-  if (distance !== null) slot.pending.push(distance);
+  // The observed distance and fuel used are persisted before every close (T16, J8).
+  const totals = accountingUpdate(trip.tripUuid, trip.accounting);
+  if (totals !== null) slot.pending.push(totals);
   let ended = lastUtcMs ?? trip.startedUtcMs;
   if (ended < trip.startedUtcMs) {
     slot.pendingAnnotations.push(annotation(trip.tripUuid, {cause: 'utc-label-jump', labelUtcMs: ended, clampedToUtcMs: trip.startedUtcMs, atEventSeq: null}));
