@@ -684,3 +684,35 @@ On October 15, 2026 the owner wrote (translated from Russian): "Overall, keep do
 | M13 | No React component tests (as L14); the smokes record the edit steps for review and the receipt and `RuntimeReceipt.ps1` are unchanged |
 
 Invariant (REG-016): the overlay is visible only in driving mode (the game in front; ignoring the mouse, not focusable, not movable) or in edit mode (an own window focused, the game not in front; interactive), and no controller call leaves a taskbar tab enabled.
+
+## ET-015a authorization — October 16, 2026
+
+On October 15, 2026 the owner wrote (translated from Russian): "Overall, keep doing other tasks until you hit tests in the real game. Make optimal decisions. I want you to close as many tasks as possible without my involvement. If there are flaky tests, delegate their fixes to subagents." Under this standing delegation the coordinator started ET-015a (events and durable ACK) and adopted the architect's decisions R1–R17 below. They are coordinator decisions and were not individually reviewed by the owner; the owner may revise them. For ET-015a only, this supersedes earlier statements that ET-015a remains unauthorized; earlier dated text is unchanged.
+
+Event and trip effects are committed in one transaction before the ACK. Recording of real game history stays gated until a separate enablement PR, which requires:
+- the v0 retirement (D2);
+- real-game v1 evidence;
+- ET-015b and ET-015c;
+- the S-1/S-2 decision in ET-016.
+
+| # | Decision |
+| --- | --- |
+| R1 | Four PRs in order, each from `main` after the previous merge: storage recovery reads; the trip recorder in the ingestion pipeline; service wiring and the production gate; a runtime recording journey (development and packaged) |
+| R2 | A `TripRecorderSink` implements `DurableSink` and owns the `TripState`. `DurableDelivery` stays the only FIFO and single-in-flight scheduler. The reducer steps when an item reaches the head of the FIFO, coverage is read just before the commit, and state is adopted only on `committed`, `duplicate`, `covered` or `conflict` (T3). `EffectsHook` is removed (S-3) |
+| R3 | Production gate: `GAME_HISTORY_RECORDING = false` in `recording-policy.ts`. `ETS2TELEMETRY_RECORDING=synthetic:<name>` or `replay:<name>` opens `%LOCALAPPDATA%\ETS2Telemetry\synthetic\<name>.sqlite` with that purpose instead of history, and durable delivery applies only to the matching selection. An invalid value logs `RECORDING_TARGET_REJECTED` and falls back to the default. The env can never select history |
+| R4 | Cold start uses storage-derived `TripSeed`s (job key, observed distance, last UTC label, `awaitingOutcome`), not a replay rebuild. This answers the open rebuild question in [trips](docs/trips.md) |
+| R5 | Checkpoints and snapshots of durable connections enter the same FIFO as readings, in stream order, bounded separately by `MAX_PENDING_READINGS` = 512. Overflow closes the connection as retryable `BACKLOG_FULL`; readings are never thinned |
+| R6 | At `openSession` the recorder steps `disconnected` itself when the reducer still has a connection |
+| R7 | A retryable storage failure gives no adoption and no ACK, then a retryable close. An unavailable failure stops durable delivery for the service lifetime. Reducer violations map to fixed unavailable codes (`TRIP_ORDER_VIOLATION`, `TRIP_COVERAGE_MISMATCH`, `TRIP_UNKNOWN_SESSION`) |
+| R8 | The receipt UTC label is captured when the frame is decoded and passed with the commit |
+| R9 | ACK ahead of storage (E6) records one session-level `restore-loss` completeness interval, written at most once, before the session continues live-only |
+| R10 | A hello requests durable delivery only for listed selections and only while storage is open. When storage opens, a live-only connection reconnects once as durable; live never waits for storage |
+| R11 | S-1 (fuel-used column) and S-2 (late-attached job trips) go to ET-016 in one schema v2 migration; S-3 is resolved here; S-4 stays in detail JSON. No schema migration in ET-015a |
+| R12 | Storage API additions without a schema change: a `{game, outcome}` filter on `listTrips` and an `ifAbsent` option on `recordCompleteness` |
+| R13 | Disk-full, permission and lock failures are injected through the real worker by a test-only entry inside the real transaction, so rollback of the event and its effects is proven |
+| R14 | Orderly exit splits ingestion stop into intake (`stopSource`) and a 500 ms `recording-flush` step that waits for the in-flight commit and drops queued work; the producer redelivers it. The service stop budget stays 2500 ms |
+| R15 | Seeds are read only at the first durable welcome of a game in the recorder's lifetime |
+| R16 | `conflict` results are adopted as T3 says; a later divergence fails closed |
+| R17 | The recorder exposes a read-only trip view for ET-015b's sample references |
+
+Synthetic and replay recordings use only temporary or synthetic-purpose databases. No schema, wire, preload/IPC or renderer change; ET-015b, ET-015c, ET-016 and later phases are not authorized by this section. No game, TruckersMP, display or performance claim follows from synthetic or local tests.

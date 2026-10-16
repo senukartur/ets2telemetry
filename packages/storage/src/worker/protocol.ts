@@ -2,8 +2,8 @@
 // data only, so the client and its tests never load native SQLite. Messages cross a worker port by structured clone.
 // The client sends one request at a time; the host answers every request exactly once, in order. See docs/storage.md.
 import type {
-  CommitResult, CompletenessInterval, EventRow, OpenSummary, Purpose, Result, SampleInput, SampleRecord, SessionRecord, StorageError, StorageInfo,
-  TripEffect, TripRecord, Uint64
+  CommitResult, CompletenessInterval, CompletenessOptions, EventRow, OpenSummary, Purpose, Result, SampleInput, SampleRecord, SessionRecord, StorageError, StorageInfo,
+  TripEffect, TripList, TripPage, TripRecord, Uint64
 } from '../api';
 import {ERROR_MESSAGES} from '../errors';
 
@@ -20,13 +20,13 @@ export interface StorageCommands {
   commitEvent: {args: {input: {message: unknown; effects?: TripEffect[]}}; value: CommitResult};
   commitGap: {args: {input: {message: unknown; effects?: TripEffect[]}}; value: CommitResult};
   appendSamples: {args: {pluginSessionId: string; rows: SampleInput[]}; value: {appended: number}};
-  recordCompleteness: {args: {pluginSessionId: string; interval: CompletenessInterval}; value: undefined};
+  recordCompleteness: {args: {pluginSessionId: string; interval: CompletenessInterval; options?: CompletenessOptions}; value: undefined};
   committedThrough: {args: {pluginSessionId: string}; value: Uint64};
   getSession: {args: {pluginSessionId: string}; value: SessionRecord};
   getEvent: {args: {pluginSessionId: string; eventSeq: Uint64}; value: EventRow | undefined};
   listEvents: {args: {pluginSessionId: string; page?: {afterEventSeq?: Uint64; limit?: number}}; value: EventRow[]};
   getTrip: {args: {tripUuid: string}; value: TripRecord | undefined};
-  listTrips: {args: {page?: {cursor?: string; limit?: number}}; value: {trips: TripRecord[]; nextCursor: string | null}};
+  listTrips: {args: {page?: TripPage}; value: TripList};
   listSamples: {args: {scope: {tripUuid: string} | {pluginSessionId: string}; page?: {afterId?: string; limit?: number}}; value: SampleRecord[]};
   storageInfo: {args: Record<never, never>; value: StorageInfo};
   /** Closes the connection (SQLite checkpoints the WAL); the host then stops listening and the worker thread ends. */
@@ -51,8 +51,24 @@ const isText = (value: unknown): value is string => typeof value === 'string' &&
 const isUint64 = (value: unknown): value is Uint64 => typeof value === 'string' && /^(0|[1-9][0-9]{0,19})$/.test(value) && BigInt(value) <= 0xffff_ffff_ffff_ffffn;
 
 /**
+ * An optional argument object: absent, or a plain object whose every key is listed and whose value is undefined or
+ * passes its check. An unknown key, such as an in-process option, refuses the request instead of being ignored.
+ */
+function optionalArgs(value: unknown, checks: Readonly<Record<string, (field: unknown) => boolean>>): boolean {
+  if (value === undefined) return true;
+  if (!isRecord(value)) return false;
+  return Object.entries(value).every(([key, field]) => Object.hasOwn(checks, key) && (field === undefined || checks[key](field)));
+}
+const oneOf = (options: readonly string[]) => (field: unknown) => typeof field === 'string' && options.includes(field);
+/** ET-015a: the `listTrips` filter and the `recordCompleteness` options, checked strictly at the worker boundary. */
+const TRIP_PAGE_ARGS = {cursor: (field: unknown) => typeof field === 'string', limit: (field: unknown) => typeof field === 'number',
+  game: oneOf(['ets2', 'ats']), outcome: oneOf(['open', 'delivered', 'cancelled', 'none'])};
+const COMPLETENESS_OPTIONS_ARGS = {ifAbsent: (field: unknown) => typeof field === 'boolean'};
+
+/**
  * Checks the envelope and the argument shapes a command needs to reach the storage core. The core validates every
- * argument value itself; this only refuses messages that are not storage requests at all.
+ * argument value itself; this refuses messages that are not storage requests at all, and checks the `listTrips` page
+ * and the `recordCompleteness` options strictly, so only their listed fields cross the worker boundary.
  */
 export function parseRequest(message: unknown): {ok: true; id: number; command: StorageCommand} | {ok: false; id?: number} {
   if (!isRecord(message) || message.type !== 'storage.request' || !isId(message.id)) return {ok: false};
@@ -64,6 +80,8 @@ export function parseRequest(message: unknown): {ok: true; id: number; command: 
     if (!isRecord(options) || !isText(options.path) || !isText(options.purpose) || !isText(options.backupsDirectory) || !isText(options.appVersion)) return {ok: false, id};
   }
   if ((name === 'upsertSession' || name === 'commitEvent' || name === 'commitGap') && !isRecord(command.input)) return {ok: false, id};
+  if (name === 'listTrips' && !optionalArgs(command.page, TRIP_PAGE_ARGS)) return {ok: false, id};
+  if (name === 'recordCompleteness' && !optionalArgs(command.options, COMPLETENESS_OPTIONS_ARGS)) return {ok: false, id};
   return {ok: true, id, command: command as StorageCommand};
 }
 

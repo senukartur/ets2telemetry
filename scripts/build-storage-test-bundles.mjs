@@ -23,8 +23,9 @@ if (!script) {
 const sqlite = path.dirname(require.resolve('better-sqlite3/package.json')).replaceAll('\\', '/');
 const external = ['better-sqlite3', ...builtinModules, ...builtinModules.map(name => `node:${name}`)];
 // The protocol v1 ingestion and its durable sink run in the ingestion crash child (tests/storage/v1-ingestion-crash.test.ts).
+// The test-only fault storage worker (ET-015a) injects SQLite errors and holds inside real commit transactions.
 const entries = {'storage-worker': 'apps/desktop/src/storage-worker.ts', 'storage-core': 'packages/storage/src/index.ts', 'storage-client': 'packages/storage/src/client.ts',
-  'v1-ingestion': 'apps/desktop/src/v1-ingestion.ts', 'durable-sink': 'apps/desktop/src/durable-sink.ts'};
+  'v1-ingestion': 'apps/desktop/src/v1-ingestion.ts', 'durable-sink': 'apps/desktop/src/durable-sink.ts', 'fault-storage-worker': 'tests/storage/fixtures/fault-storage-worker.ts'};
 const directory = await mkdtemp(path.join(tmpdir(), 'ets2telemetry-storage-bundles-'));
 let code;
 try {

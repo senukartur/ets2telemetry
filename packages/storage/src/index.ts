@@ -3,7 +3,8 @@
 // failures; error results carry fixed text and never a filesystem path. See docs/storage.md.
 import {rmSync} from 'node:fs';
 import type {
-  CommitOptions, CommitResult, CompletenessInterval, EventRow, OpenSummary, Result, SampleInput, SampleRecord, SessionRecord, StorageInfo, TripEffect, TripRecord, Uint64
+  CommitOptions, CommitResult, CompletenessInterval, CompletenessOptions, EventRow, OpenSummary, Result, SampleInput, SampleRecord, SessionRecord, StorageInfo, TripEffect, TripList,
+  TripPage, TripRecord, Uint64
 } from './api';
 import {classifyError} from './errors';
 import {restoreCopy} from './sqlite/backup';
@@ -28,13 +29,15 @@ export class Storage {
   commitEvent(input: {message: unknown; effects?: TripEffect[]}, options?: CommitOptions): Result<CommitResult> { return attempt(() => writes.commitEvent(this.connection, input, options)); }
   commitGap(input: {message: unknown; effects?: TripEffect[]}, options?: CommitOptions): Result<CommitResult> { return attempt(() => writes.commitGap(this.connection, input, options)); }
   appendSamples(pluginSessionId: string, rows: SampleInput[]) { return attempt(() => writes.appendSamples(this.connection, pluginSessionId, rows)); }
-  recordCompleteness(pluginSessionId: string, interval: CompletenessInterval): Result<void> { return attempt(() => writes.recordCompleteness(this.connection, pluginSessionId, interval)); }
+  recordCompleteness(pluginSessionId: string, interval: CompletenessInterval, options?: CompletenessOptions): Result<void> {
+    return attempt(() => writes.recordCompleteness(this.connection, pluginSessionId, interval, options));
+  }
   committedThrough(pluginSessionId: string): Result<Uint64> { return attempt(() => reads.committedThrough(this.connection, pluginSessionId)); }
   getSession(pluginSessionId: string): Result<SessionRecord> { return attempt(() => reads.getSession(this.connection, pluginSessionId)); }
   getEvent(pluginSessionId: string, eventSeq: Uint64): Result<EventRow | undefined> { return attempt(() => reads.getEvent(this.connection, pluginSessionId, eventSeq)); }
   listEvents(pluginSessionId: string, page?: {afterEventSeq?: Uint64; limit?: number}): Result<EventRow[]> { return attempt(() => reads.listEvents(this.connection, pluginSessionId, page)); }
   getTrip(tripUuid: string): Result<TripRecord | undefined> { return attempt(() => reads.getTrip(this.connection, tripUuid)); }
-  listTrips(page?: {cursor?: string; limit?: number}) { return attempt(() => reads.listTrips(this.connection, page)); }
+  listTrips(page?: TripPage): Result<TripList> { return attempt(() => reads.listTrips(this.connection, page)); }
   listSamples(scope: {tripUuid: string} | {pluginSessionId: string}, page?: {afterId?: string; limit?: number}): Result<SampleRecord[]> { return attempt(() => reads.listSamples(this.connection, scope, page)); }
   storageInfo(): Result<StorageInfo> { return attempt(() => reads.storageInfo(this.connection)); }
   /** Closes the connection. SQLite checkpoints the WAL into the main file; further commands fail with STORAGE_CLOSED. */

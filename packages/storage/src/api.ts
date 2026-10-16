@@ -81,6 +81,22 @@ export type TripEffect =
     recordingCompleteness: RecordingCompleteness; endedUtcMs: number}
   | {kind: 'event.attribute'; tripUuid: string | null; attribution: Attribution}
   | {kind: 'completeness.add'; interval: CompletenessInterval};
+/**
+ * A `listTrips` page with an optional filter, applied in SQL before the page limit (ET-015a, R12). `game` and `outcome`
+ * narrow the trips; without them every trip is listed. `cursor` is the opaque `nextCursor` of the previous page read
+ * with the same filter.
+ */
+export interface TripPage {cursor?: string; limit?: number; game?: 'ets2' | 'ats'; outcome?: TripOutcome}
+export interface TripList {trips: TripRecord[]; nextCursor: string | null}
+/**
+ * `ifAbsent` (ET-015a, R12): skip the insert when the session already holds an interval with the same trip reference,
+ * kind, first and last eventSeq and canonical detail, so a loss recorded again after a service restart adds no second
+ * row. Labels and monotonic bounds are not compared. The result is the same whether or not a row was inserted.
+ * `ifAbsent` requires both `firstEventSeq` and `lastEventSeq`; without them the command is INVALID_INPUT, because
+ * two distinct outages that differ only in their labels would compare equal. It is meant for eventSeq-bounded
+ * intervals such as the restore-loss interval (R9).
+ */
+export interface CompletenessOptions {ifAbsent?: boolean}
 export const MAX_EFFECTS = 16;
 export const MAX_SAMPLE_BATCH = 3_600;
 export const MAX_EVENT_PAGE = 500;
