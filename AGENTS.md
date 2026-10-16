@@ -478,7 +478,7 @@ Under the owner's standing delegation of October 15, 2026 (quoted in the ET-015a
 - with J9, ET-014's T9: a job seen first in a checkpoint now opens a partial late-attach trip. This follows concept §3 and the owner's answer of October 10, 2026 that late attachment marks trips incomplete.
 
 **ET-016a** is five PRs:
-- storage schema v2 with S-1 fuel used, S-2 checkpoint jobs and trip close carriers;
+- storage schema v2 with S-1 fuel used, S-2 checkpoint jobs and checkpoint-opened trips, and trip close carriers;
 - bounded journal reads in the storage worker;
 - journal queries from main through the telemetry service;
 - the Journal tab in the main window;
