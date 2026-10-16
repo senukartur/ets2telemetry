@@ -89,6 +89,11 @@ export class V1Ingestion {
   private socket?: TelemetrySocket;
   /** The current connection while it is open and live-only: its plugin session once known, and how to end it (R10). */
   private liveOnly?: {pluginSessionId?: string; reconnect: () => void};
+  /**
+   * Whether the latest hello of the current selection requested durable delivery; undefined before its first hello. It
+   * is kept after that connection closes, so a retryable reconnection still reports `pending`.
+   */
+  private requestedDurable?: boolean;
   private readonly completions = new Set<Promise<void>>();
   private retry?: ReturnType<typeof setTimeout>;
   private handshake?: ReturnType<typeof setTimeout>;
@@ -118,7 +123,8 @@ export class V1Ingestion {
   configureBroker(configuration: BrokerConfiguration | undefined): void { this.options.broker = configuration; }
   select(selection: SourceSelection, endpoint?: string): void {
     sourceSelection(selection); if (this.disposed) throw new Error('Ingestion stopped');
-    this.cancel(); this.state = initialState(selection, this.durableStatus()); this.endpoint = endpoint; this.attempt = 0;
+    this.cancel(); this.requestedDurable = undefined;
+    this.state = initialState(selection, this.durableStatus()); this.endpoint = endpoint; this.attempt = 0;
     this.pendingSelection = {selection, endpoint};
     if (this.transition) { this.emit('waiting', 'Previous source is closing'); return; }
     if (this.completions.size) {
@@ -153,7 +159,17 @@ export class V1Ingestion {
   async flush(): Promise<void> { await this.delivery?.stop(); }
   /** Ends the source, waits for owned processes and then for the one storage command in flight. */
   async stop(): Promise<void> { await this.stopSource(); await this.flush(); }
-  private durableStatus(): DurableStatus { return this.delivery ? this.delivery.status : {state: 'off'}; }
+  /**
+   * The reported durable status. `failed` is always reported, so a failure for the service lifetime (or the
+   * ACK_AHEAD_OF_STORAGE block) stays visible on the live-only connections after it. Otherwise the pipeline's `pending`
+   * or `active` is reported only when the latest hello requested durable delivery: a connection that did not (a selection
+   * outside `durableSelections`, storage not ready, a refused open) and a selection without a hello yet report `off`.
+   */
+  private durableStatus(): DurableStatus {
+    if (!this.delivery) return {state: 'off'};
+    const status = this.delivery.status;
+    return status.state === 'failed' || this.requestedDurable === true ? status : {state: 'off'};
+  }
   /** R10: whether a hello now may request durable delivery for this selection and, when known, plugin session. */
   private durableWanted(pluginSessionId?: string): boolean {
     if (!this.delivery?.durableAllowed(pluginSessionId)) return false;
@@ -247,6 +263,7 @@ export class V1Ingestion {
     socket.once('connect', () => {
       if (!active()) return;
       requested = this.durableWanted(socket.authority?.pluginSessionId); consumer = new V1Consumer(requested);
+      if (this.delivery && requested !== this.requestedDurable) { this.requestedDurable = requested; this.publish(); }
       if (!requested && this.delivery) {
         liveOnly = this.liveOnly = {pluginSessionId: socket.authority?.pluginSessionId,
           reconnect: () => close('disconnected', 'Durable delivery available; reconnecting durable', true)};
