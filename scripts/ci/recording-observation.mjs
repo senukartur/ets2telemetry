@@ -23,7 +23,8 @@ import {startRecordingProxy} from './recording-proxy.mjs';
 // which their explicit exits flush (recording-flush) unless the 5 s sample flush already wrote it.
 // ET-015c PR-4: the dashboard, the gated lifecycle state and main's opt-in RECORDING_STATUS timeline rows show the
 // recording status along the journey (RECORDING_STATUS_* below); after the redelivery, run A's closed dashboard is
-// reopened from the tray to show its loss totals before the tray exit.
+// reopened from the tray to show its loss totals and closed again, so the tray exit still runs with the main window
+// closed. The dashboard's text logs (MutationObserver) are recorded, and the receipt checks them.
 
 export const RECORDING_TARGET = 'synthetic:smoke';
 export const RECORDING_SCENARIO = 'normal-delivery-runtime-journey';

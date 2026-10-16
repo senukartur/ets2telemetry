@@ -164,7 +164,8 @@ function Test-RecordingServiceEvent {
 # the synthetic target note during connection 1, interrupted with the partial trip after it, unknown between the
 # terminated and the restarted service, the status kept across a dashboard reload, recording while the dashboard was
 # closed with no lost event after the redelivery (one not-connected interval), the totals shown by the reopened
-# dashboard and run B recording again with fresh totals.
+# dashboard, which is closed again before the tray exit, an entry of each dashboard text log the driver records, and
+# run B recording again with fresh totals.
 function Test-RecordingStatusReceipt {
     param([object]$Recording)
     foreach ($field in @('statusWaitingShown','statusRecordingShown','statusUnknownAfterServiceExit','statusReloadKept','statusRecordedWhileClosed',
