@@ -204,11 +204,15 @@ ET-015a PR-4 adds a fifth bounded journey in each mode, right after the correspo
 It runs in one Windows Job with the unchanged 60-second, 16-process, 2-GiB, 25%-CPU and kill-on-close limits and zero retries, and, like the lifecycle smoke, gets a separate `diagnostics-restart` directory for run B. The application runs with the isolated profile, TEMP, APPDATA and LOCALAPPDATA, the v0 synthetic source and gated live-smoke diagnostics of the other journeys, and with `ETS2TELEMETRY_RECORDING=synthetic:smoke`, so its telemetry service records into `<isolated LOCALAPPDATA>\ETS2Telemetry\synthetic\smoke.sqlite` instead of history ([recording gate](telemetry-service-v1.md#recording-gate-et-015a)). Its protocol v1 source is `ETS2TELEMETRY_SOURCE_PIPE_V1`:
 
 - **Simulator.** The built simulator CLI (`tools/telemetry-simulator/dist/cli.cjs serve-v1`) serves the corpus scenario `normal-delivery` reactively, with its transport replaced in memory by three durable connections at 0, 360 and 2,010 ms and with a `simulation.paused` appended at 2,100 ms. The derived scenario is written to `recording-scenario.json` in the run directory.
-- **Recording proxy** ([recording-observation.mjs](../scripts/ci/recording-observation.mjs)). The proxy sits between the service and the simulator on its own synthetic test pipe. It refuses a hello that does not request durable delivery, which happens while storage is still opening (R10), so the simulator serves only the durable clients its script expects. A durable hello waits for its admission inside the client's 5-second handshake deadline. The first connection is admitted at once, the journey admits each later one, and one connection is open at a time. Like the scenario's `dropAfter:4`, the proxy delivers the first four ACKs of connection 1 and drops the fifth. Every ACK the proxy sees was written by the service only after its storage commit (E8), so ACKs are the in-run evidence of commits.
+- **Recording proxy** ([recording-proxy.mjs](../scripts/ci/recording-proxy.mjs), tested over actual pipes in `tests/unit/recording-proxy.test.ts`). The proxy sits between the service and the simulator on its own synthetic test pipe. It refuses a hello that does not request durable delivery, which happens while storage is still opening (R10), so the simulator serves only the durable clients its script expects. A durable hello waits for its admission, one connection open at a time. Nothing is admitted until the journey asks, and connection 1 only after the dashboard shows current data, so the simulator's 1-second ACK waits do not overlap application startup.
+
+  A hold is limited to 2 seconds, about half the service's 5-second handshake deadline (the time from opening a connection to its checkpoint). An older hold is destroyed by its timer, or refused when an admission reaches it late, and the admission is kept. The service reconnects on its backoff, and its fresh hello is admitted with at least 3 seconds left for its checkpoint. Without the limit, an admission that landed just before the service's deadline would be consumed by a connection the service then closes, and the journey would fail.
+
+  Like the scenario's `dropAfter:4`, the proxy delivers the first four ACKs of connection 1 and drops the fifth. Every ACK the proxy sees was written by the service only after its storage commit (E8), so ACKs are the in-run evidence of commits. The proxy records each event's time to the first ACK that covers it.
 
 Run A, in order:
 
-1. Wait for current v0 data. Connection 1 must deliver eventSeq 1–5, the proxy must see ACKs 1–5 (forwarding 1–4), and the simulator must end the connection at its scripted disconnect (350 ms). The service log must contain a `V1_SOURCE_STATUS` row with `durable: active`.
+1. Wait for current v0 data, then admit connection 1. It must deliver eventSeq 1–5, the proxy must see ACKs 1–5 (forwarding 1–4), and the simulator must end the connection at its scripted disconnect (350 ms). The service log must contain a `V1_SOURCE_STATUS` row with `durable: active`.
 2. Emit the gated `ets2telemetry:diagnostic-service-exit`. Main's supervisor must start a new service process, and the dashboard must show current data again.
 3. Close the main window to the tray, then admit connection 2. The restarted service must receive a checkpoint at ACK 4, eventSeq 5 again with `redelivered: true` and then 6–9, and acknowledge 5–9, with no dashboard and the same service PID. This is the cold start from seeds (R4) and a duplicate redelivery. A `durable: active` row of the new process must follow.
 4. Stop tracing and emit the gated tray action `exit`. The launcher must exit 0 within 8 seconds with one `APP_EXIT_REQUESTED` (`tray`).
@@ -234,14 +238,23 @@ The additive `Test-RecordingReceipt` rules in `RuntimeReceipt.ps1` check the dri
 
 Their 44 cases, among them an intact receipt and two negative cases with PowerShell 7's Int64 integers, run in the existing PowerShell batch of `tests/unit/runtime-receipt.test.ts`. Earlier scenario rules are unchanged.
 
+Recorded and never asserted, in the driver's `recording` result and copied by the wrapper into `wrapper-result.json` as `recordingFacts`:
+
+- `refusedLiveOnly`: live-only hellos refused while storage was still opening;
+- `expiredHolds`: holds that reached the 2-second limit;
+- `maxAckLatencyMs`: the slowest event-to-ACK time.
+
+The proxy's per-connection record also keeps each hold's age at admission (`heldMs`) and every latency (`ackLatencyMs`), so a hosted run shows its margins against the simulator's 1-second ACK waits. A failed run waits at most 1 second for the simulator before terminating it (5 seconds after a passing journey), so `result.json` is still written inside the Job.
+
 The scripted disconnects of connections 2 and 3 (2,000 and 3,000 ms) are short because the reactive server waits out each paced interval in real time, even after its client has left. Either the script or the journey's own exit may end them, with the same stored rows.
 
 What this journey does not show:
 
 - **Flush timing.** It cannot tell whether `recording-flush` waits for a commit in flight. No commit is in flight at the tray exit, and `StorageClient.close()` lets the command in flight finish anyway. A `recording-flush` that started `flush()` without awaiting it passed this journey; the unit flush case in `telemetry-service-v0.test.ts` covers the wait.
+- **The R10 upgrade.** It does not exercise `durableAvailabilityChanged()`. A live-only connection made while storage is still opening is refused by the proxy rather than upgraded, and the next connection is durable from its hello. With a real producer, the plugin counts every event it observes during such a live-only window at each service start as `noDurableConsumer` loss and later delivers a gap for it. The window is therefore not lossless, and its length is only made visible here (`refusedLiveOnly`). The upgrade itself is covered by the unit cases in `v1-ingestion.test.ts` and `telemetry-service-v0.test.ts`.
 - **Scope.** The source is synthetic and the tray is reached through the gated diagnostic action. Real games, the production broker's v1 path, history recording (still gated off), the OS tray icon and real disks are not involved.
 
-Measured local durations on the owner workstation (24 logical processors), October 16, 2026, on `b26ec7b`: development Job 5.65–5.75 s, packaged 5.68–6.13 s. A whole wrapper run took 6.7 s in each mode, so the two steps add about 13 s locally. The hosted lifecycle steps took 6 s each in run [38888973522](https://github.com/senukartur/ets2telemetry/actions/runs/38888973522); hosted durations of the new steps belong in the PR's CI record.
+Measured local durations on the owner workstation (24 logical processors), October 16, 2026, on `b26ec7b`: development Job 5.65–5.75 s, packaged 5.68–6.13 s; after review round 1 on `ae1fa06`: development 5.66–5.79 s, packaged 5.78–6.03 s, with event-to-ACK latencies of 2–9 ms and holds of 20–329 ms at admission. A whole wrapper run took 6.7 s in each mode, so the two steps add about 13 s locally. The hosted lifecycle steps took 6 s each in run [38888973522](https://github.com/senukartur/ets2telemetry/actions/runs/38888973522); hosted durations of the new steps belong in the PR's CI record.
 
 ## PowerShell validator test budgets
 
