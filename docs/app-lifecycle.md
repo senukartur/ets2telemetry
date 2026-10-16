@@ -40,7 +40,7 @@ The icon is created when Electron is ready, before the service starts, with the 
 The context menu contains:
 
 1. a disabled status line, for example `Service: ready · Storage self-test: verified`;
-2. the disabled line `Recording: not available in this version`;
+2. the disabled line `Recording: <short headline>` with the [recording status](#recording-on-the-dashboard-and-in-the-tray-et-015c-pr-4), for example `Recording: off in this version` in production or `Recording: on · synthetic test database` for a synthetic recording target (ET-015c PR-4);
 3. **Open ETS2Telemetry**;
 4. **Exit ETS2Telemetry**.
 
@@ -87,9 +87,36 @@ Since ET-015c PR-3, `recording` is the [recording status](telemetry-service-v1.m
 - the loss counts are totals since ETS2Telemetry started: main adds the last counts of every earlier service process to the current one's;
 - the status reaches the dashboard through the existing `app:state` push and `app:get-state`, so a reloaded, recovered or reopened dashboard gets the current status when it subscribes, and the tray through its presenter. Closing or recovering the upstream live channel does not change it. No IPC channel, bridge method or preload code is added.
 
-The dashboard and tray still show the fixed recording text until ET-015c PR-4 presents the status. Since ET-011b, `AppState` also carries `settings`: the units per game, the [load state](settings.md#load-states), whether a change can be saved and the last save's refusal (`saveError`: `SETTINGS_WRITE_FAILED` or `SETTINGS_READ_ONLY`, cleared by the next successful save). Settings errors stay in that view and never replace or clear the service's `lastError`.
+Since ET-015c PR-4 the dashboard and tray present the status; see [below](#recording-on-the-dashboard-and-in-the-tray-et-015c-pr-4). Since ET-011b, `AppState` also carries `settings`: the units per game, the [load state](settings.md#load-states), whether a change can be saved and the last save's refusal (`saveError`: `SETTINGS_WRITE_FAILED` or `SETTINGS_READ_ONLY`, cleared by the next successful save). Settings errors stay in that view and never replace or clear the service's `lastError`.
 
 The preload bridge appends three methods after the original three: `getAppState()`, `subscribeAppState(listener)` (one listener per document; main pushes the full state on every change after the document subscribes) and `exitApplication()`. Every handler checks the sender and its main frame; the overlay has no access. The dashboard shows a status card with the service, storage self-test and recording state, a shadcn `Alert` while the service is failed or restarting, a permanent close-to-tray explanation and the Exit button. `getStatus()` answers `null` while the service is not ready instead of failing, so a dashboard opened during a restart or after restart exhaustion shows `Waiting for the telemetry service` and queries again whenever the pushed health enters `ready` (`apps/desktop/src/dashboard-startup.ts`). User-visible text lives in `apps/desktop/src/strings.ts`; there is no localization framework yet. ET-011b appends a seventh method, `setUnitProfile(game, profile)`, and a **Display units** card; see [settings](settings.md#dashboard-and-overlay). ET-012a appends `setOverlayLayout(layout)` and `setOverlaySections(sections)`, with the same trust checks, and an **Overlay** card; ET-012b appends the four overlay edit methods (see [settings](settings.md#overlay-placements-and-edit-mode-et-012b)); the overlay bridge is unchanged.
+
+### Recording on the dashboard and in the tray (ET-015c PR-4)
+
+A pure builder, `apps/desktop/src/recording-status-text.ts`, turns `AppState.health.recording` into fixed English text from `apps/desktop/src/strings.ts` (G8). It never derives the status itself, and every state and code has its own text, so a new one fails to compile until it has a text. The **Application status** card's Recording row shows the headline (`health-recording`), with these fixed meanings:
+
+| State | Headline |
+| --- | --- |
+| `disabled` | Off: this version does not record game history |
+| `unknown` | Not known while the telemetry service is not running |
+| `opening` | Opening the database |
+| `waiting` | Waiting for the recorded source to connect |
+| `recording` | Recording |
+| `paused` | Game paused; recording continues when it resumes |
+| `interrupted` | Connection lost; recording resumes on reconnection, and the missing time is recorded as a gap |
+| `retrying` | Retrying: *cause*. Nothing is acknowledged until storage commits; events while reconnecting are recorded as a gap |
+| `stopped` | Stopped: *cause*. Restart ETS2Telemetry after fixing it |
+| `live-only` | Not recording this game session: the database is behind the plugin (restored database); recording resumes with the next game session |
+| `not-recorded-source` | Not recording the selected source |
+
+The cause is a fixed phrase per recording code, for example `the disk is full` for `DISK_FULL` or `no permission to write the database` for `PERMISSION_DENIED`; a missing code reads as `an internal error occurred`. No path or error text is shown. Below the headline the row shows:
+
+- the detail (`health-recording-detail`): `Synthetic test database (never game history)` or `Replay test database (never game history)` for a test target, then the current trip: `Current trip is partial`, `Current trip is recorded completely so far` or `The current trip's completeness is not known yet`, with `waiting for its delivery outcome` or `checking a loaded save` for those phases, or `The current job started before recording and is not tracked as a trip`;
+- the losses (`health-recording-losses`), only when a total is non-zero: the title `Gaps recorded since ETS2Telemetry started` and one line per non-zero counter (lost events, event loss intervals, intervals without a connection, one-second sample loss intervals, restored-database intervals, dropped one-second samples). With a restored-database loss a note says the totals may be an upper bound, since a telemetry service restart in the same game session counts it again ([TD-004](technical-debt.md#td-004-restore-loss-counted-once-in-the-live-loss-totals)); the database itself is correct. Totals start again with each application start.
+
+For `retrying`, `stopped` and `live-only` a shadcn `Alert` titled **Recording problem** follows the list (`health-recording-alert`; destructive except for `retrying`) and says that live telemetry and the overlay keep working. The status card's prototype notice (`prototype-notice`) follows the state: `No trip recording or durable history` while disabled, a not-known notice while unknown, `Only a test database is recorded, never game history` for a test target, and a notice that game history recording is new for the history target. Before main's first push the row shows a dash.
+
+The tray's second status line is `Recording: ` and the short form of the headline, for example `off in this version`, `not known`, `on`, `connection lost` or `retrying, the disk is full`, followed by ` · synthetic test database` or ` · replay test database` for a test target; it is cut at 127 characters like the tooltip, and the tooltip does not carry it. The overlay and both preloads are unchanged.
 
 ## Isolated smoke diagnostics
 
@@ -97,5 +124,7 @@ Only when `ETS2TELEMETRY_LIVE_SMOKE=1` and absolute diagnostic and profile direc
 
 - `ets2telemetry:diagnostic-tray-action` with `open` or `exit` calls the same handlers as the tray menu;
 - `ets2telemetry:diagnostic-lifecycle-state` returns read-only facts (started, exiting, service PID, tray, dashboard, overlay, upstream, health and, since ET-011b, the settings view).
+
+With an explicit diagnostic directory (`ETS2TELEMETRY_DIAGNOSTIC_DIR`), the opt-in timeline also logs `RECORDING_STATUS` whenever `health.recording` changes (ET-015c PR-4), with flat fixed facts: `state`, and for a reported state `target`, `code`, the six loss totals, `tripPhase`, `tripCompleteness` and `untrackedJob`. The recording journey reads these rows to prove states shorter than any poll; default logs never contain them.
 
 Neither is reachable from a renderer. See [CI](ci.md#et-011a-tray-lifecycle-smoke) for the smoke that uses them and [ET-011 validation](validation/et-011.md) for evidence and pending manual checks.
