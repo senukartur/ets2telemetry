@@ -327,3 +327,11 @@ Production game sources stay live-only (`GAME_HISTORY_RECORDING` false, `durable
 ET-015a makes no schema, wire, preload/IPC or renderer change. ET-015b, ET-015c, ET-016 and later phases are not authorized by this paragraph. No game, TruckersMP, display or performance claim follows.
 
 ET-015a PR-1 implementation update on October 16, 2026: storage gains a `{game, outcome}` filter on `listTrips` and an `ifAbsent` option on `recordCompleteness`; `apps/desktop/src/trip-seeds.ts` derives cold-start `TripSeed`s from stored rows (not yet called); and a test-only fault storage worker injects disk-full, permission and lock failures inside the real transaction. No production behaviour changes; see [ET-015a validation](docs/validation/et-015a.md).
+
+ET-015a PR-2 implementation update on October 16, 2026:
+- **Commit and ACK.** `TripRecorderSink` (`apps/desktop/src/trip-recorder.ts`) commits v1 events and gaps together with their ET-014 trip effects in one storage transaction. The ACK is sent only after the commit, and trip state is adopted only after `committed`, `duplicate`, `covered` or `conflict`.
+- **Readings.** Checkpoints and snapshots go through the same FIFO, bounded at 512 readings apart from the 256 items. The receipt UTC label is taken when the frame is decoded.
+- **ACK ahead of storage.** It records one `restore-loss` interval.
+- **Ingestion.** Ingestion gains durable selections and readiness and a `stopSource`/`flush` split. `EffectsHook` is removed (S-3).
+- **Evidence.** All of this is proven only with synthetic sources against temporary synthetic-purpose databases: the real storage worker, killed processes and injected SQLite failures.
+- **Production is unchanged.** The service passes no sink and game selections stay live-only. See [ET-015a validation](docs/validation/et-015a.md).
