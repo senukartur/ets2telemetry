@@ -12,6 +12,7 @@ import {expect} from 'vitest';
 import {FrameDecoder, decodePayload, type ClientMessage} from '../../packages/contracts/src/protocol-v1';
 import {StorageClient, workerHandle} from '../../packages/storage/src/client';
 import {storageError} from '../../packages/storage/src/errors';
+import type {TripSummaryView, TripView} from '../../packages/telemetry-core/src/index';
 import {TripRecorderSink, type TripRecorderClient} from '../../apps/desktop/src/trip-recorder';
 import {V1Ingestion, type V1SourceState} from '../../apps/desktop/src/v1-ingestion';
 import type {ClientPolicy} from '../../tools/telemetry-simulator/src/v1/client';
@@ -91,8 +92,18 @@ export async function storedRows(ws: {open(): Promise<Storage>; database: string
   return JSON.parse(JSON.stringify(out), (_key, v: unknown) => typeof v === 'string' && map.has(v) ? map.get(v) : v) as StoredRows;
 }
 
+/** The recorder's trip view in the shape of the `view` block of a `<id>.trip.expected.json`, with labels. */
+export function viewSummary(view: TripView, seed: string): unknown {
+  const trip = (v: TripSummaryView | null) => v === null ? null : {trip: v.tripUuid, recordingCompleteness: v.recordingCompleteness, observedDistanceM: v.observedDistanceM,
+    fuelUsedL: v.fuelUsedL, refuelledL: v.refuelledL, refuels: v.refuels};
+  const out = {phase: view.phase, untrackedJob: view.untrackedJob, current: trip(view.current),
+    lastClosed: view.lastClosed === null ? null : {...trip(view.lastClosed), outcome: view.lastClosed.outcome, closeReason: view.lastClosed.closeReason}};
+  const map = labels(seed);
+  return JSON.parse(JSON.stringify(out), (_key, v: unknown) => typeof v === 'string' && map.has(v) ? map.get(v) : v) as unknown;
+}
+
 /** A hand-written `<id>.trip.expected.json` of the simulator corpus, or a `tests/fixtures/recording/<id>.rows.expected.json`. */
-export interface RowsExpected {scenario: string; authoredFrom: string[]; trips: unknown[]; attributions: unknown[]; intervals: unknown[]; coverage: {committedThroughEventSeq: string} & Record<string, unknown>}
+export interface RowsExpected {scenario: string; authoredFrom: string[]; trips: unknown[]; attributions: unknown[]; intervals: unknown[]; coverage: {committedThroughEventSeq: string} & Record<string, unknown>; view?: unknown}
 export const tripExpected = (id: string) => JSON.parse(readFileSync(path.join(SIMULATOR_V1_DIR, `${id}.trip.expected.json`), 'utf8')) as RowsExpected;
 export const recordingExpected = (id: string) => JSON.parse(readFileSync(path.join(RECORDING_FIXTURES, `${id}.rows.expected.json`), 'utf8')) as RowsExpected;
 

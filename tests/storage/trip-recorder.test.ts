@@ -2,7 +2,8 @@
 // against the reactive v1 simulator on actual Windows pipes, unpaced, into a temporary synthetic-purpose database. The
 // stored trips, attributions and completeness intervals must equal the rows of the hand-written
 // tests/fixtures/simulator-v1/<id>.trip.expected.json, which ET-014 wrote for the lockstep replay; every ACK must be at or
-// below the storage coverage reported when it was written (REG-001, REG-003, REG-004, REG-005, REG-006).
+// below the storage coverage reported when it was written, and the recorder's final view must equal the file's `view`
+// block (REG-001, REG-003, REG-004, REG-005, REG-006).
 import {readFileSync} from 'node:fs';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 import {readFixtureFile} from '../../tools/telemetry-simulator/src/fixture-file';
@@ -10,7 +11,7 @@ import {reactiveDifferences} from '../../tools/telemetry-simulator/src/v1/reacti
 import {scenarioSource} from '../../tools/telemetry-simulator/src/v1/replay';
 import {expectedPath, scenarioPath} from '../shared/simulator-v1-expected';
 import {ok, workspace} from './helpers';
-import {replayOf, runRecording, storedRows, terminateWorkers, tripExpected} from './recording-helpers';
+import {replayOf, runRecording, storedRows, terminateWorkers, tripExpected, viewSummary} from './recording-helpers';
 
 type Json = Record<string, unknown>;
 let ws: Awaited<ReturnType<typeof workspace>>;
@@ -39,5 +40,8 @@ describe('S2 trip recorder through the real storage worker against the reactive 
     if (ledger) expect(tally.coverage.toString()).toBe(ledger.committedThroughEventSeq);
     const reader = await ws.open(); expect(ok(reader.committedThrough(session))).toBe(expected.coverage.committedThroughEventSeq); reader.close();
     expect(await storedRows(ws, replay.scenario.seed)).toEqual({trips: expected.trips, attributions: expected.attributions, intervals: expected.intervals});
+    // The recorder's own adopted state: the hand-written view of the scenario's game (one service, no restart).
+    expect(services).toHaveLength(1);
+    expect(viewSummary(services[0].recorder.view(replay.scenario.game), replay.scenario.seed)).toEqual(expected.view);
   }, 90_000);
 });

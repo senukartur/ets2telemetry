@@ -10,21 +10,15 @@ import type {Uint64} from '../../../packages/contracts/src/protocol-v1';
 import type {CommitResult} from '../../../packages/storage/src/api';
 import type {StorageClient} from '../../../packages/storage/src/client';
 import {initialTripState, normalizeV1State, stepTrip, tripView, type TripErrorCode, type TripGame, type TripInput, type TripState, type TripView} from '../../../packages/telemetry-core/src/index';
-import type {CommitContext, CoverageMessage, DurableSink, ReadingMessage, SinkError, SinkResult, WelcomeMessage} from './durable-sink';
+import type {CommitContext, CoverageMessage, DurableSink, ReadingMessage, RecorderErrorCode, SinkError, SinkResult, WelcomeMessage} from './durable-sink';
 import {readTripSeeds} from './trip-seeds';
+
+/** The recorder's sink codes and their E7 class live in durable-sink.ts, so the ingestion chain never loads the reducer. */
+export {RECORDER_FAILURE_CLASS, type RecorderErrorCode} from './durable-sink';
 
 /** The storage commands the recorder uses: the durable path, the restore-loss marker and the cold-start reads. */
 export type TripRecorderClient = Pick<StorageClient, 'upsertSession' | 'committedThrough' | 'commitEvent' | 'commitGap' | 'recordCompleteness' | 'listTrips' | 'getEvent' | 'listEvents'>;
 
-/**
- * R7: fixed sink codes for a reducer result `ok: false`. They are contract defects between the stream, storage and the
- * reducer (T5 says fail closed), never retried.
- */
-export type RecorderErrorCode = 'TRIP_ORDER_VIOLATION' | 'TRIP_COVERAGE_MISMATCH' | 'TRIP_UNKNOWN_SESSION';
-/** Every recorder code is `unavailable`: durable delivery stops for the service lifetime and the ingestion goes live-only. */
-export const RECORDER_FAILURE_CLASS: Readonly<Record<RecorderErrorCode, 'unavailable'>> = {
-  TRIP_ORDER_VIOLATION: 'unavailable', TRIP_COVERAGE_MISMATCH: 'unavailable', TRIP_UNKNOWN_SESSION: 'unavailable'
-};
 const RECORDER_CODE: Readonly<Record<TripErrorCode, RecorderErrorCode>> = {
   ORDER_VIOLATION: 'TRIP_ORDER_VIOLATION', COVERAGE_MISMATCH: 'TRIP_COVERAGE_MISMATCH', UNKNOWN_SESSION: 'TRIP_UNKNOWN_SESSION'
 };
@@ -51,8 +45,9 @@ function reading(message: ReadingMessage): TripInput {
  *   `session` with the stored coverage.
  * - `commit`: reads `committedThrough()`, steps the event or gap, commits it with the effects and adopts the stepped
  *   state on `committed`, `duplicate`, `covered` or `conflict`. On a failed commit the state is kept, so the redelivered
- *   item is stepped again from it and yields the same effects (R7). A gap whose `previouslyCoveredThrough` differs from
- *   the coverage read before the commit is not adopted and fails with TRIP_COVERAGE_MISMATCH.
+ *   item is stepped again from it: no effect of an earlier commit is lost or repeated, and effects queued by the
+ *   reconnection (such as its not-connected interval) may be added (R7). A gap whose `previouslyCoveredThrough` differs
+ *   from the coverage read before the commit, or is missing, is not adopted and fails with TRIP_COVERAGE_MISMATCH.
  * - `observe` (R5): a checkpoint steps `checkpoint` and then its state as a reading; a snapshot steps a reading.
  * - `restoreLoss` (R9): one session-level `restore-loss` interval for the eventSeq range the producer released beyond
  *   storage, recorded with `ifAbsent` so a service restart in the same plugin session adds no second row.

@@ -76,8 +76,10 @@ describe('S4 injected storage failures under the trip recorder', () => {
   it('(c) queue pressure: a held commit and a bound of 4 close the connection, and nothing is acknowledged before the release (REG-011)', async () => {
     // The first connection's client does not wait for ACKs, so the server writes events 1-5 while eventSeq 1 is held; the
     // fifth closes the connection with BACKLOG_FULL. Every item it received is redelivered, one more than the bound, so
-    // the same service could never accept that burst: the redelivery goes to a restarted service with the production
-    // bound of 256, which equals the producer's 256 retained entries (docs/telemetry-service-v1.md).
+    // the same service with a bound of four would refuse that burst again at every reconnection. The redelivery goes to
+    // a restarted service with the production bound of 256, which starts with nothing queued. Equality of that bound with
+    // the producer's 256 retained entries is not enough on its own: items still queued or in flight from an earlier
+    // connection count against a redelivery too, which can give a transient BACKLOG_FULL (docs/telemetry-service-v1.md).
     const input = withTransport(base(), 'normal-delivery-backlog', [connect(0, {durable: true, ack: 'withhold'}), disconnect(350), connect(360), disconnect(1100)]);
     let released = false;
     const run = await runRecording(input, {path: ws.database, backups: ws.backups}, {fault: {hold: {eventSeq: '1'}}, maxPendingCommits: 4, serve: {quiesceMs: 0}, restartAfter: [0],

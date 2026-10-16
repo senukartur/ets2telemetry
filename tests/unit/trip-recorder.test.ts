@@ -252,6 +252,35 @@ describe('ET-015a trip recorder in the v1 ingestion pipeline', () => {
     expect([latest().acks, recorder.view('ets2').lastClosed?.outcome, storage.violations]).toEqual([['4', '5'], 'delivered', []]);
   });
 
+  /** Storage whose gap commits report `committed` with a wrong or missing `previouslyCoveredThrough`. */
+  class GapStorage extends ModelStorage {
+    constructor(private readonly previous: string | undefined) { super(); }
+    override async commitGap(input: {message: unknown; effects?: TripEffect[]}): Promise<Result<CommitResult>> {
+      const result = await super.commitGap(input);
+      if (!result.ok) return result;
+      const {previouslyCoveredThrough: _stored, ...rest} = result.value;
+      void _stored;
+      return {ok: true, value: this.previous === undefined ? rest : {...rest, previouslyCoveredThrough: this.previous}};
+    }
+  }
+  for (const [name, previous] of [['a different', '0'], ['a missing', undefined]] as const) it(`R7: fails closed on a gap result with ${name} previouslyCoveredThrough and adopts nothing`, async () => {
+    const storage = new GapStorage(previous), trip = uuid(ETS2_A, '2');
+    const recorder = start(storage); connectLatest();
+    const s = new Script(ETS2_A);
+    latest().feed(s.welcome(), s.checkpoint(null), s.event(r.started()), s.event(r.jobConfigured()));
+    await settle();
+    expect(latest().acks).toEqual(['1', '2']);
+    const before = recorder.view('ets2');
+    expect(before).toMatchObject({phase: 'active', current: {tripUuid: trip}});
+    // The coverage read before the gap is 2; the gap would close the trip, but its result names another starting point.
+    latest().feed(s.gap(1));
+    await settle();
+    expect(logs).toContainEqual(['V1_DURABLE_UNAVAILABLE', {code: 'TRIP_COVERAGE_MISMATCH'}]);
+    expect([latest().acks, latest().destroyed, state().durable]).toEqual([['1', '2'], true, {state: 'failed', code: 'TRIP_COVERAGE_MISMATCH'}]);
+    expect(recorder.view('ets2')).toEqual(before);
+    await advance(250); connectLatest(); expect(latest().hello.durableEvents).toBe(false);
+  });
+
   it('U6: fails closed on a reducer order violation and reconnects live-only (R7, T5)', async () => {
     const storage = new ModelStorage(), recorder = new TripRecorderSink(storage);
     // A defect injected at the sink: eventSeq 2 reaches the recorder as eventSeq 3.

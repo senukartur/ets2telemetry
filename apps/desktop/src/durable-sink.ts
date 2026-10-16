@@ -6,7 +6,6 @@
 import type {ServerMessage, Uint64} from '../../../packages/contracts/src/protocol-v1';
 import type {CommitResult, StorageError, StorageErrorCode} from '../../../packages/storage/src/api';
 import type {StorageClient} from '../../../packages/storage/src/client';
-import {RECORDER_FAILURE_CLASS, type RecorderErrorCode} from './trip-recorder';
 
 export type WelcomeMessage = Extract<ServerMessage, {kind: 'welcome'}>;
 /** A message that carries eventSeq coverage: one event or one gap marker. */
@@ -14,6 +13,16 @@ export type CoverageMessage = Extract<ServerMessage, {kind: 'event' | 'gap'}>;
 /** A message that carries a reading of current state: the connection's checkpoint or a snapshot. */
 export type ReadingMessage = Extract<ServerMessage, {kind: 'checkpoint' | 'snapshot'}>;
 
+/**
+ * R7: the trip recorder's fixed sink codes for a reducer result `ok: false`. They are contract defects between the
+ * stream, storage and the reducer (T5 says fail closed), never retried. They live here, not in trip-recorder.ts, so the
+ * ingestion and the ACK pipeline never load the reducer.
+ */
+export type RecorderErrorCode = 'TRIP_ORDER_VIOLATION' | 'TRIP_COVERAGE_MISMATCH' | 'TRIP_UNKNOWN_SESSION';
+/** Every recorder code is `unavailable`: durable delivery stops for the service lifetime and the ingestion goes live-only. */
+export const RECORDER_FAILURE_CLASS: Readonly<Record<RecorderErrorCode, 'unavailable'>> = {
+  TRIP_ORDER_VIOLATION: 'unavailable', TRIP_COVERAGE_MISMATCH: 'unavailable', TRIP_UNKNOWN_SESSION: 'unavailable'
+};
 /** Every code a sink may fail with: the storage codes and the trip recorder's own codes (R7). */
 export type SinkErrorCode = StorageErrorCode | RecorderErrorCode;
 export type SinkError = Omit<StorageError, 'code'> & {code: SinkErrorCode};
