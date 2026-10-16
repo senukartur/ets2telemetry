@@ -7,6 +7,7 @@ Status (October 15, 2026):
 - **PR-1**: the event-driven lifecycle, identity, attribution and completeness. It covers T1–T15 and T18–T20 as they apply to events.
 - **PR-2**: [readings accounting](#readings-accounting-t16-t17) (T16, T17): observed distance, fuel used, refuels, game-time jumps, crossings, position jumps and reading holes, plus replay of the ET-005b simulator scenarios against hand-written trip expectations.
 - Nothing records yet. No storage schema, wire, preload/IPC, renderer or native code changes. ET-015a wires the reducer into commits.
+- **ET-015a PR-2 (October 16, 2026)**: the [caller contract](#caller-contract-for-et-015a) below is implemented by `TripRecorderSink` ([telemetry service v1](telemetry-service-v1.md#trip-recorder-et-015a)) and proven against the real storage worker, killed processes and injected storage failures with synthetic sources only. The running service still passes no sink, so production records nothing yet.
 - Behaviour seen in real traces rests only on the reviewed CAP-01 observations O1–O11 ([CAP-01a validation](validation/cap-01a.md)). Everything else is synthetic inference and stays pending until real-game sessions ([ET-014 validation](validation/et-014.md)).
 
 ## Interface
@@ -32,6 +33,15 @@ Inputs (`TripInput`):
 | `disconnected` | — | None |
 
 ## Caller contract for ET-015a
+
+ET-015a PR-2 implements this contract in [trip-recorder.ts](../apps/desktop/src/trip-recorder.ts), as a durable sink at the head of the ingestion's one FIFO ([telemetry service v1](telemetry-service-v1.md#trip-recorder-et-015a)). How each rule maps to it:
+
+- adoption after the commit, and a kept state after a failed commit, in `commit`;
+- the disconnection is stepped lazily: when the next welcome's session opens and the reducer still has a connection, `disconnected` is stepped before `session` (R6). The interval comes from the session's last item and reading, so the time of the step does not matter;
+- readings arrive in stream order with the items through the same FIFO (R5);
+- the receipt label is captured when the frame is decoded (R8);
+- seeds are read at the first durable welcome per game (R15, below);
+- an `ok: false` result becomes an `unavailable` sink code (`TRIP_ORDER_VIOLATION`, `TRIP_COVERAGE_MISMATCH`, `TRIP_UNKNOWN_SESSION`; R7).
 
 **Adopt after commit (T3).** For each event or gap, the caller:
 
@@ -66,16 +76,26 @@ Because the reducer applies effects only for new coverage and queues them otherw
 - a seed of another plugin session closes as `restart` at the new session's first commit (T11);
 - a seed of the same session resumes as an active trip (awaiting its outcome with `awaitingOutcome`) and becomes partial with a `not-connected` interval (`consumer-restart`): the consumer was not running for part of it. Its reload-check phase, load window and money totals are not rebuilt. Its `cargoLoaded` is unknown too, so after a clear its identical re-send never matches: an O10 save load then closes the resumed trip and opens a not-merged continuation, which is the conservative result.
 
-**Storage gaps (T19).** No storage change is part of ET-014. These gaps go to ET-015a or ET-016:
+**Seed rules (ET-015a, R4).** The recorder builds the seeds with `readTripSeeds` ([trip-seeds.ts](../apps/desktop/src/trip-seeds.ts)) from stored rows only, by fixed rules that mirror `TripStorageModel.seeds()` of the trip replay; the reducer is not run over stored items:
 
-| # | Gap | Proposed owner |
+- the open trips of the welcome's game come from `listTrips({game, outcome: 'open'})`, page by page;
+- `jobKey` is `jobKey()` of the stored `job.configured` record at the trip's job configuration eventSeq, or null when that row is missing or of another type;
+- `lastObservedUtcMs` is the usable label (`occurred.utcUnixMs`, a safe integer) of the session's stored event with the highest eventSeq;
+- `observedDistanceM` is the stored value when it is available;
+- `awaitingOutcome` is true when the session's last `job.configured` or `job.cleared` event after the trip's opening event is a `job.cleared`.
+
+The seeds are read only when the reducer has no session of the welcome's game, that is at the first durable welcome per game in the recorder's lifetime (R15). Later welcomes rely on the reducer's own memory, which never closes a trip twice.
+
+**Storage gaps (T19).** No storage change is part of ET-014. Their dispositions, decided in ET-015a (R11):
+
+| # | Gap | Disposition |
 | --- | --- | --- |
-| S-1 | No fuel-used column on trips; PR-2 reports fuel used, refuelled litres and refuel episodes in the view only. `trip.close` has no detail, so the close carries none of them | Schema v2 `observed_fuel_used_l`, ET-015a |
-| S-2 | A late-attached job cannot open a trip from the checkpoint: storage opens trips only at a job configuration event, and hydration stores no configuration rows. The job stays untracked until an identical `job.configured` arrives | Schema v2 and concept §7 wording, decided at ET-015a or ET-016 |
-| S-3 | The current synchronous `EffectsHook` of the durable sink gets no commit result, so it cannot follow T3 | ET-015a replaces it with step, commit, then adopt |
-| S-4 | Continuations have no column; they live in completeness `detail` JSON (`continuationOf`) | Acceptable as is |
+| S-1 | No fuel-used column on trips; PR-2 reports fuel used, refuelled litres and refuel episodes in the view only. `trip.close` has no detail, so the close carries none of them | Moved to ET-016, in one schema v2 migration with S-2 and the journal indexes. Commits and ACKs do not need it; fuel used stays in the trip view. Its resolution or explicit owner acceptance is on the enablement checklist |
+| S-2 | A late-attached job cannot open a trip from the checkpoint: storage opens trips only at a job configuration event, and hydration stores no configuration rows. The job stays untracked until an identical `job.configured` arrives | Moved to ET-016 (schema v2 and concept §7 wording). It changes T9, a product behaviour: a job accepted before the app starts is never recorded as a trip. It is on the enablement checklist; nothing real is recorded before then |
+| S-3 | The synchronous `EffectsHook` of the durable sink got no commit result, so it could not follow T3 | **Resolved in ET-015a PR-2**: the hook is removed, and `TripRecorderSink` steps, commits and then adopts |
+| S-4 | Continuations have no column; they live in completeness `detail` JSON (`continuationOf`) | Kept as is |
 
-Open question for ET-015a: the alternative to seeds is rebuilding the state by replaying the session's stored items through the reducer alone, from coverage 0. That needs the stored gap rows as well, and the storage read API lists events but not gaps.
+**Rebuild instead of seeds (answered in ET-015a, R4).** The alternative was to rebuild the state by replaying the session's stored items through the reducer from coverage 0. It is rejected: the storage read API lists events but not gaps, readings are not stored (so distance and reading holes could not be rebuilt), and it would cost a whole session's events at every start while still losing the readings-based state. Seeds are read instead; what a seeded trip loses is listed above.
 
 ## States and transitions
 
