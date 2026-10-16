@@ -91,7 +91,8 @@ export class V1Ingestion {
   private liveOnly?: {pluginSessionId?: string; reconnect: () => void};
   /**
    * Whether the latest hello of the current selection requested durable delivery; undefined before its first hello. It
-   * is kept after that connection closes, so a retryable reconnection still reports `pending`.
+   * is kept after that connection closes: after a retryable storage failure the reconnection reports `pending`, and
+   * after a plain source disconnection the pipeline's `active` remains until the next welcome.
    */
   private requestedDurable?: boolean;
   private readonly completions = new Set<Promise<void>>();
