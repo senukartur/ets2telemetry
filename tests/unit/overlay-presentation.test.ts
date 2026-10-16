@@ -271,13 +271,58 @@ it('leaves the v1 job sections out once v0 reports no job, without keeping dashe
   const presentation = overlayPresentation(noJob, undefined, undefined, overlayPresentation(withV1()));
   expect(ids(presentation.sections)).toEqual(['speed', 'gear', 'rpm', 'fuel', 'sdk-consumption', 'distance-remaining', 'game-time']);
 });
-it('equals the v0-only projection once v1 data is gone, whatever v1 sections were shown before (fix round 1)', () => {
-  const shownWithV1 = overlayPresentation(withV1());
+it('keeps v1 sections that were never shown absent without v1 data (fix round 1)', () => {
+  // Fix round 1 checked this with a previous projection that showed v1 sections; the PR #73 advisory review changed that
+  // case (a shown section now keeps a dash, below), so the no-v1 case is checked against a v0-only previous projection.
+  const v0Only = overlayPresentation(live(), undefined, undefined, overlayPresentation(live()));
   for (const telemetry of [live(), {...live(), v1: v1Projection('snapshot-live', {selection: 'ats', origin: 'game'})}]) {
-    const presentation = overlayPresentation(telemetry, undefined, undefined, shownWithV1);
-    expect(presentation).toEqual(overlayPresentation(live(), undefined, undefined, overlayPresentation(live())));
+    const presentation = overlayPresentation(telemetry, undefined, undefined, overlayPresentation(live()));
+    expect(presentation).toEqual(v0Only);
     expect(ids(presentation.sections)).toEqual(['speed', 'gear', 'rpm', 'fuel', 'sdk-consumption', 'cargo', 'destination', 'expected-income', 'game-time']);
   }
+});
+// PR #73 advisory review: a v1-only section that was shown keeps an `unavailable` dash when its v1 carriage is lost while
+// the same v0 source continues (ET-012a L5), for example when main strips an invalid projection or the v1 origin stops
+// matching. An update without a v0 observation (a selection change, a service restart or a lost channel) clears it.
+const LOST_V1: OverlaySectionView[] = [
+  {id: 'speed', state: 'value', text: '0.0 km/h'},
+  {id: 'gear', state: 'value', text: 'R1'},
+  {id: 'rpm', state: 'value', text: '600 rpm', ring: 0.2},
+  {id: 'fuel', state: 'unavailable'},
+  {id: 'sdk-consumption', state: 'value', text: '25.0 L/100 km'},
+  {id: 'cargo', state: 'value', text: 'cargo.logs'},
+  {id: 'origin', state: 'unavailable'},
+  {id: 'destination', state: 'value', text: 'city.warszawa'},
+  {id: 'distance-remaining', state: 'unavailable'},
+  {id: 'deadline', state: 'unavailable'},
+  {id: 'expected-income', state: 'value', text: '9007199254740993.123456 (currency unknown)'},
+  {id: 'game-time', state: 'value', text: 'Day 8574, 09:18'}
+];
+it.each([
+  ['main strips the projection', () => live()],
+  ['the v1 origin stops matching', () => withV1({origin: 'replay'})],
+  ['the v1 game stops matching', () => withV1({game: 'ats'})]
+])('keeps shown v1 sections as dashes while v0 stays current when %s', (_name, lost) => {
+  const shown = overlayPresentation(withV1());
+  const presentation = overlayPresentation(lost(), undefined, undefined, shown);
+  expect(presentation).toMatchObject({freshness: 'current', speed: '0.0'});
+  expect(presentation.sections).toEqual(LOST_V1);
+  // The dash stays while the same source continues without v1, and the value returns with v1.
+  expect(overlayPresentation(lost(), undefined, undefined, presentation).sections).toEqual(LOST_V1);
+  expect(overlayPresentation(withV1(), undefined, undefined, presentation).sections).toEqual(FULL);
+});
+it('keeps shown v1 sections as dashes while v0 is stale and the v1 projection is lost', () => {
+  const stale = overlayPresentation({...live(), fresh: false, status: 'stale'}, undefined, undefined, overlayPresentation(withV1()));
+  expect(stale.sections).toEqual(ids(FULL).map(id => ({id, state: 'unavailable'})));
+});
+it('clears shown v1 sections on an update without a v0 observation, such as a selection change', () => {
+  const lost = overlayPresentation(live(), undefined, undefined, overlayPresentation(withV1()));
+  const cleared = overlayPresentation(initialLive('ets2'), undefined, undefined, lost);
+  expect(cleared.sections).toEqual(['speed', 'gear', 'rpm', 'fuel', 'sdk-consumption', 'cargo', 'destination', 'expected-income', 'game-time']
+    .map(id => ({id, state: 'unavailable'})));
+  // Current v0 data of the new selection without v1 then shows no v1 section at all.
+  expect(ids(overlayPresentation(live(), undefined, undefined, cleared).sections))
+    .toEqual(['speed', 'gear', 'rpm', 'fuel', 'sdk-consumption', 'cargo', 'destination', 'expected-income', 'game-time']);
 });
 it('uses no v1 data of another origin or selection', () => {
   for (const telemetry of [{...live(), v1: v1Projection('snapshot-live', {selection: 'ets2'})}, {...live(), v1: v1Projection('snapshot-live', {selection: 'ats', origin: 'game'})}])

@@ -1243,6 +1243,23 @@ it.each([
   expect(channels[0].port1.postMessage.mock.calls.map(call => call[0])).toEqual([1, 2, 3, 4, 5].map(delivery => ({type: 'consumed', delivery})));
   expect(log.mock.calls.filter(call => call[0] === 'MAIN_CHANNEL_CLOSED')).toEqual([]);
 });
+// PR #73 advisory review: the realistic path to a lost v1 carriage is a projection main strips while v0 continues.
+it('keeps a shown overlay origin as a dash when main strips the next v1 projection, and clears it on a source change', async () => {
+  const {dashboard, overlayChannel} = await v1Consumers();
+  deliver(readingWithV1(), 1); await vi.advanceTimersByTimeAsync(50); consumeOverlay(dashboard); consumeOverlay(overlayChannel);
+  expect(sectionOf(overlayProjection(overlayChannel), 'origin')).toEqual(ORIGIN_VALUE);
+  const invalid = readingWithV1(); invalid.observation!.capture.monotonicNs = '2000';
+  (invalid.v1!.observation!.state as unknown as Record<string, unknown>).window = {available: false, reason: 'not-observed'};
+  deliver(invalid, 2); await vi.advanceTimersByTimeAsync(50); consumeOverlay(dashboard); consumeOverlay(overlayChannel);
+  expect(log.mock.calls.filter(call => call[0] === 'LIVE_V1_REJECTED')).toEqual([['LIVE_V1_REJECTED', undefined, {count: 1}]]);
+  const stripped = overlayProjection(overlayChannel);
+  expect(stripped).toMatchObject({freshness: 'current', speed: '90.0'});
+  for (const id of ['origin', 'distance-remaining', 'deadline']) expect(sectionOf(stripped, id)).toEqual({id, state: 'unavailable'});
+  expect(sectionOf(stripped, 'cargo')).toEqual({id: 'cargo', state: 'value', text: 'cargo.logs'});
+  // A source change publishes an update without an observation; the v1 sections are then left out.
+  await handlers.get('telemetry:select')!(trusted(), 'ats'); await vi.advanceTimersByTimeAsync(50);
+  for (const id of ['origin', 'distance-remaining', 'deadline']) expect(sectionOf(overlayProjection(overlayChannel), id)).toBeUndefined();
+});
 it('expires v1 data 500 ms after its last new boundary while v0 renews, turning the overlay origin into a dash', async () => {
   const {dashboard, overlayChannel} = await v1Consumers();
   for (let step = 0; step <= 5; step++) {

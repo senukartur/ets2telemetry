@@ -47,7 +47,8 @@ const BASELINE_SECTIONS: ReadonlySet<OverlaySectionId> = new Set<OverlaySectionI
  * Protocol v1 (ET-010c decision F7): parts v0 does not carry come from the v1 projection through the same combiner as
  * the dashboard card (live-sources.ts). The overall state stays v0's, and a v1 part has a value only while the v0 data
  * is current, the v1 data is current and, for job parts, both describe the same job. A section shown before whose v1
- * data is no longer eligible becomes `unavailable`; one never shown stays out; a mixed section keeps its v0 part. v1
+ * data is no longer eligible becomes `unavailable`, also when its v1 projection is lost while the same v0 source
+ * continues; an update without a v0 observation clears it. One never shown stays out; a mixed section keeps its v0 part. v1
  * never authorizes placement or visibility: main places the overlay from the v0 observation's window only.
  *
  * `editing` (ET-012b) only marks the overlay edit mode for the renderer; it changes no section or value.
@@ -72,7 +73,15 @@ export function overlayPresentation(live: LiveTelemetry, units: UnitProfiles = D
   const sections: OverlaySectionView[] = [];
   for (const id of OVERLAY_SECTION_IDS) {
     const {parts, detail} = SECTION_FIELDS[id];
-    if (!overlay.sections[id] || !parts.some(carried)) continue;
+    if (!overlay.sections[id]) continue;
+    if (!parts.some(carried)) {
+      // A shown v1 section whose v1 carriage is lost while the same v0 source continues (main stripped an invalid
+      // projection, or the v1 origin or game stopped matching) keeps its dash (ET-012a L5). An update without a v0
+      // observation (a selection change, a service failure or restart, a lost channel) clears it, as do v1 data never
+      // carried and a disabled section.
+      if (shown.has(id) && observation) sections.push({id, state: 'unavailable'});
+      continue;
+    }
     if (!current) {
       if (shown.has(id) || BASELINE_SECTIONS.has(id)) sections.push({id, state: 'unavailable'});
       continue;
