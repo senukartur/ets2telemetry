@@ -1,23 +1,42 @@
-// The durable sink of protocol v1 ingestion (ET-006b, E1): where a received event or gap marker is committed before the
-// consumer may acknowledge it (docs/protocol/v1.md §10). Node-safe: it talks to storage only through the StorageClient
-// interface and never loads native SQLite. Production passes no sink yet, so nothing is recorded or acknowledged until
-// ET-015a supplies trip effects; see docs/telemetry-service-v1.md.
+// The durable sink of protocol v1 ingestion (ET-006b, E1; ET-015a, R2): where a received event or gap marker is
+// committed before the consumer may acknowledge it (docs/protocol/v1.md §10). Node-safe: it talks to storage only
+// through the StorageClient interface and never loads native SQLite. `StorageDurableSink` commits messages without trip
+// effects; the trip recorder (trip-recorder.ts) commits them with their ET-014 effects. Production passes no sink yet,
+// so nothing is recorded or acknowledged; see docs/telemetry-service-v1.md.
 import type {ServerMessage, Uint64} from '../../../packages/contracts/src/protocol-v1';
-import type {CommitResult, Result, StorageError, StorageErrorCode, TripEffect} from '../../../packages/storage/src/api';
+import type {CommitResult, StorageError, StorageErrorCode} from '../../../packages/storage/src/api';
 import type {StorageClient} from '../../../packages/storage/src/client';
+import {RECORDER_FAILURE_CLASS, type RecorderErrorCode} from './trip-recorder';
 
 export type WelcomeMessage = Extract<ServerMessage, {kind: 'welcome'}>;
 /** A message that carries eventSeq coverage: one event or one gap marker. */
 export type CoverageMessage = Extract<ServerMessage, {kind: 'event' | 'gap'}>;
+/** A message that carries a reading of current state: the connection's checkpoint or a snapshot. */
+export type ReadingMessage = Extract<ServerMessage, {kind: 'checkpoint' | 'snapshot'}>;
+
+/** Every code a sink may fail with: the storage codes and the trip recorder's own codes (R7). */
+export type SinkErrorCode = StorageErrorCode | RecorderErrorCode;
+export type SinkError = Omit<StorageError, 'code'> & {code: SinkErrorCode};
+export type SinkResult<T> = {ok: true; value: T} | {ok: false; error: SinkError};
+/** R8: the consumer's UTC label, captured when the frame was decoded, never when the commit runs. */
+export interface CommitContext {receivedUtcMs: number}
 
 /**
  * Durable storage as the ingestion sees it. `openSession` stores the plugin session from a validated welcome and
  * returns its contiguous committed coverage C. `commit` stores one event or gap marker in one transaction keyed
  * UNIQUE(plugin_session_id, event_seq) and returns the coverage after it. A rejected promise counts as INTERNAL.
+ *
+ * The optional members are called by DurableDelivery in FIFO order with the commits:
+ * - `observe` (R5) receives each durable connection's checkpoint and snapshots, synchronously at the head of the FIFO;
+ *   a failure result fails durable delivery like a failed commit. Without it, snapshots are not queued.
+ * - `restoreLoss` (R9) records that the producer released (storedThrough, ackedThrough] beyond storage, before the
+ *   ACK_AHEAD_OF_STORAGE connection closes.
  */
 export interface DurableSink {
-  openSession(welcome: WelcomeMessage): Promise<Result<{committedThroughEventSeq: Uint64}>>;
-  commit(message: CoverageMessage): Promise<Result<CommitResult>>;
+  openSession(welcome: WelcomeMessage): Promise<SinkResult<{committedThroughEventSeq: Uint64}>>;
+  commit(message: CoverageMessage, context: CommitContext): Promise<SinkResult<CommitResult>>;
+  observe?(message: ReadingMessage): SinkResult<undefined>;
+  restoreLoss?(pluginSessionId: string, storedThroughEventSeq: Uint64, ackedThroughEventSeq: Uint64): Promise<SinkResult<undefined>>;
 }
 
 /**
@@ -37,35 +56,28 @@ export const STORAGE_FAILURE_CLASS: Readonly<Record<StorageErrorCode, 'retryable
   DATA_PATH_INVALID: 'unavailable', DATABASE_UNRECOGNIZED: 'unavailable', SCHEMA_NEWER: 'unavailable', PURPOSE_MISMATCH: 'unavailable',
   DURABILITY_UNVERIFIED: 'unavailable', BACKUP_FAILED: 'unavailable', MIGRATION_FAILED: 'unavailable'
 };
-/** Classifies a sink failure; an unknown code (a sink that is not storage) is never retried. */
-export function failureClass(error: Pick<StorageError, 'code'>): 'retryable' | 'unavailable' {
-  return Object.hasOwn(STORAGE_FAILURE_CLASS, error.code) ? STORAGE_FAILURE_CLASS[error.code] : 'unavailable';
+/**
+ * Classifies a sink failure: a storage code by STORAGE_FAILURE_CLASS, a trip recorder code by RECORDER_FAILURE_CLASS
+ * (always unavailable). An unknown code (a sink that is neither) is never retried.
+ */
+export function failureClass(error: Pick<SinkError, 'code'>): 'retryable' | 'unavailable' {
+  if (Object.hasOwn(STORAGE_FAILURE_CLASS, error.code)) return STORAGE_FAILURE_CLASS[error.code as StorageErrorCode];
+  return Object.hasOwn(RECORDER_FAILURE_CLASS, error.code) ? RECORDER_FAILURE_CLASS[error.code as RecorderErrorCode] : 'unavailable';
 }
 
-/**
- * Trip effects of one commit (ET-014/ET-015a fill this hook; the default supplies none). `coveredThrough` is the
- * session's committed coverage right before the commit. For a gap, storage applies the effects only when its row is
- * first stored and they must describe only (coveredThrough, lastEventSeq] (docs/storage.md, "Overlapping gap rows").
- */
-export type EffectsHook = (message: CoverageMessage, coveredThrough: Uint64) => TripEffect[];
-export type DurableStorageClient = Pick<StorageClient, 'upsertSession' | 'commitEvent' | 'commitGap' | 'committedThrough'>;
+export type DurableStorageClient = Pick<StorageClient, 'upsertSession' | 'commitEvent' | 'commitGap'>;
 
-/** The real sink over the telemetry service's StorageClient. Tests use it only with temporary synthetic databases. */
+/**
+ * Commits messages without trip effects over the telemetry service's StorageClient. Tests use it only with temporary
+ * synthetic databases; the trip recorder replaces it wherever trips are recorded.
+ */
 export class StorageDurableSink implements DurableSink {
-  constructor(private readonly client: DurableStorageClient, private readonly effects?: EffectsHook) {}
-  async openSession(welcome: WelcomeMessage): Promise<Result<{committedThroughEventSeq: Uint64}>> {
+  constructor(private readonly client: DurableStorageClient) {}
+  async openSession(welcome: WelcomeMessage): Promise<SinkResult<{committedThroughEventSeq: Uint64}>> {
     const result = await this.client.upsertSession({message: welcome});
     return result.ok ? {ok: true, value: {committedThroughEventSeq: result.value.committedThroughEventSeq}} : result;
   }
-  async commit(message: CoverageMessage): Promise<Result<CommitResult>> {
-    let effects: TripEffect[] | undefined;
-    if (this.effects) {
-      // The storage caller rule: read the coverage right before committing; the single writer keeps it until the commit.
-      const covered = await this.client.committedThrough(message.source.pluginSessionId);
-      if (!covered.ok) return covered;
-      effects = this.effects(message, covered.value);
-    }
-    const input = effects?.length ? {message, effects} : {message};
-    return message.kind === 'event' ? this.client.commitEvent(input) : this.client.commitGap(input);
+  commit(message: CoverageMessage): Promise<SinkResult<CommitResult>> {
+    return message.kind === 'event' ? this.client.commitEvent({message}) : this.client.commitGap({message});
   }
 }

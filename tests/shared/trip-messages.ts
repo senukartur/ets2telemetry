@@ -4,7 +4,8 @@
 import {readFileSync} from 'node:fs';
 import path from 'node:path';
 import {
-  validateServerMessage, type EventRecord, type GameMode, type JobConfiguration, type LossCounts, type Money, type ServerMessage, type TrailerConfiguration, type TruckConfiguration
+  validateServerMessage, type CurrentState, type EventRecord, type GameMode, type JobConfiguration, type LossCounts, type Money, type ServerMessage, type TrailerConfiguration,
+  type TruckConfiguration
 } from '../../packages/contracts/src/protocol-v1';
 import {stepTrip, type CheckpointMessage, type EventMessage, type GapMessage, type TripEffect, type TripInput, type TripSeed, type TripState, type WelcomeMessage} from '../../packages/telemetry-core/src/index';
 
@@ -89,6 +90,7 @@ export class Script {
   private utc: number;
   private gameClock = GAME_CLOCK_1;
   private minutes = '12345';
+  private acked = '0';
   readonly clockId: string;
   /** `utcMs` is the label before the first item; each session of a test gets its own source clock. */
   constructor(readonly session: string, readonly game: 'ets2' | 'ats' = 'ets2', options: {utcMs?: number; clockId?: string} = {}) {
@@ -113,14 +115,34 @@ export class Script {
    * `retained` events already built are unacknowledged and retained, so a consumer receives them after the checkpoint
    * as replayed events (protocol v1 §7, §9).
    */
-  checkpoint(checkpointJob: JobConfiguration | null, retained = 0): CheckpointMessage {
+  checkpoint(checkpointJob: JobConfiguration | null, retained = 0, state: Partial<CurrentState> = {}): CheckpointMessage {
     const data = structuredClone(fixture<Of<'checkpoint'>>('checkpoint').data);
     data.boundarySeq = this.seq.toString();
     data.state.configuration.job = checkpointJob === null ? {available: false, reason: 'not-observed'} : {available: true, value: checkpointJob};
-    data.status.delivery = {...data.status.delivery, ackedThroughEventSeq: (this.next - 1n - BigInt(retained)).toString(), nextEventSeq: this.next.toString(),
+    data.state = {...data.state, ...state};
+    this.acked = (this.next - 1n - BigInt(retained)).toString();
+    data.status.delivery = {...data.status.delivery, ackedThroughEventSeq: this.acked, nextEventSeq: this.next.toString(),
       retainedEvents: retained, retainedBytes: retained * 1_024,
       oldestRetainedMonotonicNs: retained > 0 ? {available: true, value: (this.ns - 1_000_000n).toString()} : {available: false, reason: 'not-observed'}};
     return this.envelope('checkpoint', data);
+  }
+  /**
+   * A snapshot after `advanceMs` (ET-015a): the shared snapshot fixture's state with the script's UTC label, an increasing
+   * boundary order and the given state fields, and the delivery status of the connection's checkpoint (its
+   * `ackedThroughEventSeq`, the script's next eventSeq).
+   */
+  snapshot(state: Partial<CurrentState> = {}, advanceMs = 1_000): Extract<ServerMessage, {kind: 'snapshot'}> {
+    this.advance(advanceMs);
+    const data = structuredClone(fixture<Of<'snapshot'>>('snapshot').data);
+    data.state = {...data.state, captureUtcUnixMs: {available: true, value: this.utc.toString()}, boundaryOrder: (100n + this.seq).toString(), ...state};
+    data.status.delivery = {...data.status.delivery, ackedThroughEventSeq: this.acked, nextEventSeq: this.next.toString(), retainedEvents: 0, retainedBytes: 0,
+      oldestRetainedMonotonicNs: {available: false, reason: 'not-observed'}};
+    data.continuity = {coalescedSnapshots: '0', offlineTransitions: '0'};
+    return this.envelope('snapshot', data);
+  }
+  /** The producer's redelivery of an event already built (ET-015a): the same data marked `redelivered`, in a new envelope. */
+  redeliver(m: EventMessage): EventMessage {
+    return this.envelope('event', {...structuredClone(m.data), redelivered: true});
   }
   event(record: EventRecord, options: EventOptions = {}): EventMessage {
     this.advance(options.advanceMs ?? 1_000);
