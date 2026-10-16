@@ -29,6 +29,10 @@ export const WORKER = path.join(bundles, 'storage-worker.cjs');
 export const FAULT_WORKER = path.join(bundles, 'fault-storage-worker.cjs');
 export const RECORDING_FIXTURES = path.resolve('tests/fixtures/recording');
 type Json = Record<string, unknown>;
+/** Storage workers of every run that have not exited yet. */
+const live = new Set<Worker>();
+/** Terminates the workers a failed case left running, so the temporary database can be removed (afterEach). */
+export async function terminateWorkers(): Promise<void> { await Promise.all([...live].map(worker => worker.terminate())); live.clear(); }
 
 /**
  * A scenario fixture with its transport replaced, for a reconnection the scripted corpus does not have, and optional
@@ -182,6 +186,7 @@ export async function runRecording(input: Json, database: {path: string; backups
     const first = services.length === 0, channel = plan.fault && first ? new MessageChannel() : undefined;
     const worker = channel ? new Worker(FAULT_WORKER, {workerData: {kind: 'storage', ...plan.fault, control: channel.port2}, transferList: [channel.port2]})
       : new Worker(WORKER, {workerData: {kind: 'storage'}});
+    live.add(worker); void once(worker, 'exit').then(() => live.delete(worker));
     const exit = once(worker, 'exit').then(([code]) => code as number), client = new StorageClient(workerHandle(worker), {closeGraceMs: TEST_CLOSE_GRACE_MS});
     ok(await client.open({path: database.path, purpose: 'synthetic', backupsDirectory: database.backups, appVersion: '0.1.0-test'}));
     const counted = async (command: ReturnType<StorageClient['commitEvent']>) => {
@@ -219,6 +224,10 @@ export async function runRecording(input: Json, database: {path: string; backups
     const served = (index: number) => report.transcript.filter(l => l.connection === index + 1 && l.direction === 'client' && l.message.kind === 'ack')
       .map(l => (l.message as Extract<ClientMessage, {kind: 'ack'}>).data.throughEventSeq);
     return {report, services, tally, acks, served, timeline};
+  } catch (error) {
+    // A failed run reconnects nowhere afterwards; its workers are terminated by terminateWorkers() in afterEach.
+    for (const service of services) await service.ingestion.stopSource().catch(() => undefined);
+    throw error;
   } finally { await server.stop(); }
 }
 

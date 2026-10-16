@@ -10,12 +10,12 @@ import {reactiveDifferences} from '../../tools/telemetry-simulator/src/v1/reacti
 import {scenarioSource} from '../../tools/telemetry-simulator/src/v1/replay';
 import {expectedPath, scenarioPath} from '../shared/simulator-v1-expected';
 import {ok, workspace} from './helpers';
-import {replayOf, runRecording, storedRows, tripExpected} from './recording-helpers';
+import {replayOf, runRecording, storedRows, terminateWorkers, tripExpected} from './recording-helpers';
 
 type Json = Record<string, unknown>;
 let ws: Awaited<ReturnType<typeof workspace>>;
 beforeEach(async () => { ws = await workspace(); });
-afterEach(async () => { await ws.dispose(); });
+afterEach(async () => { await terminateWorkers(); await ws.dispose(); });
 
 const SCENARIOS = ['normal-delivery', 'save-load', 'reconnect-lost-ack', 'app-absent-hydration', 'retention-expired', 'timers-truck-refuel', 'ferry-train', 'sleep-teleport',
   'quick-job-profile-change', 'clock-change-suspend'];

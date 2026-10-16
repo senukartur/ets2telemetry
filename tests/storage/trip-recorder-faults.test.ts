@@ -9,12 +9,12 @@ import {readFixtureFile} from '../../tools/telemetry-simulator/src/fixture-file'
 import {scenarioSource} from '../../tools/telemetry-simulator/src/v1/replay';
 import {scenarioPath} from '../shared/simulator-v1-expected';
 import {ok, workspace} from './helpers';
-import {recordingExpected, replayOf, runRecording, storedRows, withTransport, type RecordingRun} from './recording-helpers';
+import {recordingExpected, replayOf, runRecording, storedRows, terminateWorkers, withTransport, type RecordingRun} from './recording-helpers';
 
 type Json = Record<string, unknown>;
 let ws: Awaited<ReturnType<typeof workspace>>;
 beforeEach(async () => { ws = await workspace(); });
-afterEach(async () => { await ws.dispose(); });
+afterEach(async () => { await terminateWorkers(); await ws.dispose(); });
 
 const base = () => readFixtureFile(scenarioPath('normal-delivery')) as Json;
 const SEED = 'et005b-normal-delivery';
