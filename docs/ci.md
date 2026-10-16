@@ -283,7 +283,7 @@ Recorded and never asserted, in the driver's `recording` result and copied by th
 
 The proxy's per-connection record also keeps each hold's age at admission (`heldMs`) and every latency (`ackLatencyMs`), so a hosted run shows its margins against the simulator's 1-second ACK waits. A failed run waits at most 1 second for the simulator before terminating it (5 seconds after a passing journey), so `result.json` is still written inside the Job.
 
-The scripted disconnects of connections 2 and 3 (2,000 and, since ET-015b PR-4, 4,000 ms) are short because the reactive server waits out each paced interval in real time, even after its client has left. Either the script or the journey's own exit may end them, with the same stored rows.
+The scripted disconnects of connections 2 and 3 (2,000 and, since ET-015b PR-4, 4,000 ms) are short, so that a run that keeps a connection open does not wait out a long scripted tail. Either the script or the journey's own exit may end them, with the same stored rows.
 
 What this journey does not show:
 

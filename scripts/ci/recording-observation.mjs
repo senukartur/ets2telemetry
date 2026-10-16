@@ -30,7 +30,7 @@ const durable = Object.freeze({durable: true, commit: 'each', ack: 'each'});
 /**
  * normal-delivery's steps are unchanged; its transport becomes three durable connections. The scripted disconnects of
  * connections 2 and 3 end them only when the journey has not ended them first by exiting; either order stores the same
- * rows. They are short because the reactive server paces each wait in real time, also after its client left.
+ * rows. They are short so that a run that keeps a connection open does not wait out a long scripted tail.
  */
 export const JOURNEY_TRANSPORT = Object.freeze([
   {atMs: 0, action: 'connect', client: {durable: true, commit: 'each', ack: 'dropAfter:4'}},
@@ -279,7 +279,7 @@ function sampleExit(service, pid) {
   assert.ok(Number.isFinite(flushAfterConnectMs), `Service ${pid}: diagnostic times unavailable`);
   const exits = rows.filter(row => row.event === 'V1_SAMPLES_EXIT').map(row => row.facts);
   const required = flushAfterConnectMs < EXIT_FLUSH_CERTAIN_MS;
-  if (required || exits.length) assert.deepEqual(exits, [{rows: 1, losses: 0, code: 'WRITTEN'}], `Service ${pid}: the exit flush did not write the pending sample`);
+  if (required || exits.length) assert.deepEqual(exits, [{rows: 1, losses: 0, code: 'WRITTEN'}], `Service ${pid}: the exit flush did not write the pending sample (recording-flush ${flushAfterConnectMs} ms after the first connection, required ${required})`);
   return {pid, required, flushAfterConnectMs, exits};
 }
 
