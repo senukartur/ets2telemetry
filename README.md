@@ -69,10 +69,14 @@ Enable the local guard in each checkout:
 git config --local core.hooksPath .githooks
 ```
 
-The hook blocks direct pushes to remote `main`. Server-side branch protection is unavailable for this private repository on the current plan, so the local guard and working rules currently enforce the process within this checkout. Windows CI is implemented with hosted clean/failure/restoration evidence; final current-head validation and owner review still gate merging.
+The hook blocks direct pushes to remote `main`. Server-side branch protection is not configured, so the local guard and working rules currently enforce the process within this checkout. Windows CI is implemented with hosted clean/failure/restoration evidence; final current-head validation and owner review still gate merging.
 
 See [Git workflow rules](AGENTS.md#git-workflow) for branch, PR, history, validation, and release policies.
 
 ## Development setup
 
 Follow [Windows setup](docs/setup.md). Node/npm and Visual Studio/CMake paths were inspected; packaging, GUI startup, and installation commands remain subject to the ET-001 acceptance record.
+
+## License
+
+The project is released under the [MIT License](LICENSE). The vendored SCS Telemetry SDK headers in `native/telemetry-plugin/vendor/scs-sdk-1.15` keep their own [SCS Software license](native/telemetry-plugin/vendor/scs-sdk-1.15/LICENSE.txt), whose notice must be preserved when redistributing them or the plugin.

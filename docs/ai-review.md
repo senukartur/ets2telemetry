@@ -36,7 +36,7 @@ Without a valid secret, the review job fails with an authentication error (`api_
 
 ## Cost and limits
 
-Each run consumes Claude usage roughly proportional to the diff and the documents read. Ubuntu runner minutes count against the private repository's Actions quota at the Linux rate. Draft PRs are skipped; mark a PR ready for review, or comment `@claude review the latest changes` when a review is worth the cost.
+Each run consumes Claude usage roughly proportional to the diff and the documents read. While the repository is private, Ubuntu runner minutes count against its Actions quota at the Linux rate; standard GitHub-hosted runners are free for public repositories. In a public repository, do not ask `@claude` to review a PR from a fork: the run would read an untrusted contributor's text with the review secret available. Draft PRs are skipped; mark a PR ready for review, or comment `@claude review the latest changes` when a review is worth the cost.
 
 The reviewer sees the PR checkout, not the game, native runtime, or packaged application. It does not run tests, builds, or the simulator. Findings can be wrong or incomplete; verify each one before acting on it.
 
