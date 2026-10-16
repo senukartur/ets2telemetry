@@ -121,6 +121,9 @@ jobs:
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario overlay -ForceRendererReuse
       - name: Bounded development tray lifecycle, single instance and explicit exit smoke
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario lifecycle
+      # ET-015a PR-4: synthetic v1 recording through a killed service, close-to-tray, tray exit and restart.
+      - name: Bounded development synthetic recording journey smoke
+        run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario recording
       - name: Forge maker and static native package inspection
         run: |
           npm run make
@@ -135,6 +138,8 @@ jobs:
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged -Scenario overlay -ForceRendererReuse
       - name: Bounded packaged tray lifecycle, single instance and explicit exit smoke
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged -Scenario lifecycle
+      - name: Bounded packaged synthetic recording journey smoke
+        run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged -Scenario recording
       - name: Extended existing safety regressions
         if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.extended)
         run: ./scripts/ci/Invoke-Extended.ps1

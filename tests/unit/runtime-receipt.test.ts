@@ -6,6 +6,10 @@ import {receiptBatchTimeout, validateRuntimeReceipts} from '../shared/runtime-re
 
 // The index that appends a row to run A's lifecycle main events; ET-011b added three settings rows after the original four.
 const MAIN_EVENTS_APPEND = 7;
+// ET-015a recording receipts: run A has the terminated service (pid 4100) and its replacement (4200), run B one service
+// (4300). The index of run A's recording-flush step, and the index that appends a row to run A's service events.
+const RECORDING_FLUSH_A = 11;
+const SERVICE_EVENTS_A_APPEND = 16;
 const cases = [
   {name: 'missing despite exit zero', body: undefined, code: 0, available: false, reason: 'DRIVER_RESULT_MISSING'},
   {name: 'missing after process failure', body: undefined, code: 1, available: false, reason: 'DRIVER_RESULT_MISSING'},
@@ -19,7 +23,8 @@ const cases = [
   {name: 'scaffold receipt cannot prove telemetry', body: JSON.stringify({passed: true, commit: 'candidate', mode: 'packaged', scenarioKind: 'scaffold'}), scenario: 'telemetry', code: 0, available: true, reason: 'DRIVER_RESULT_SCENARIO_MISMATCH'},
   {name: 'telemetry receipt missing scenario', body: JSON.stringify({passed: true, commit: 'candidate', mode: 'packaged'}), scenario: 'telemetry', code: 0, available: true, reason: 'DRIVER_RESULT_SCENARIO_MISMATCH'},
   {name: 'matching telemetry scenario', body: JSON.stringify({passed: true, commit: 'candidate', mode: 'packaged', scenarioKind: 'telemetry'}), scenario: 'telemetry', code: 0, available: true, reason: null},
-  ...lifecycleCases()
+  ...lifecycleCases(),
+  ...recordingCases()
 ];
 
 // ET-011a lifecycle receipts: one intact receipt, then single-field corruptions that must each fail.
@@ -131,6 +136,105 @@ function lifecycleCases() {
       ['late read that ended unreadable in run B', value => {value.lifecycle.restartMainEvents[4] = {event: 'SETTINGS_FALLBACK', facts: {state: 'unreadable', reason: 'load-limit'}};}]
     ] satisfies [string, LateCorruption][]).map(([name, corrupt]) => ({name: `lifecycle ${name}`, body: lateLifecycleReceipt(corrupt), scenario: 'lifecycle', code: 0, available: true, reason: 'LIFECYCLE_RESULT_INCOMPLETE_OR_INVALID'})),
     {name: 'lifecycle two quarantined files with Int64 integers', body: lifecycleReceipt(['lifecycle', 'settingsQuarantined'], 2), scenario: 'lifecycle', numbers: 'int64' as const, code: 0, available: true, reason: 'LIFECYCLE_RESULT_INCOMPLETE_OR_INVALID'}
+  ];
+}
+
+// ET-015a PR-4 recording receipts: one intact receipt shaped like a real development run, then single-field corruptions.
+function recordingReceipt(path: (string | number)[] = [], replacement?: Json): string {
+  const step = (pid: number, name: string): Json => ({pid, event: 'SHUTDOWN_STEP', facts: {name, outcome: 'ok'}});
+  const started = (pid: number, created: boolean): Json[] => [{pid, event: 'RECORDING_TARGET', facts: {purpose: 'synthetic'}}, {pid, event: 'STORAGE_VERIFIED'},
+    {pid, event: 'HISTORY_STORAGE_OPENED', facts: {schemaVersion: 1, created, migratedFrom: null}},
+    {pid, event: 'V1_SOURCE_STATUS', facts: {status: 'stale', selection: 'synthetic', durable: 'active', count: 1}}];
+  // Seven rows: the intake and flush steps, then the storage steps around the close.
+  const stopped = (pid: number): Json[] => [...['ingestion', 'capture', 'v1-ingestion', 'recording-flush', 'storage-probe'].map(name => step(pid, name)),
+    {pid, event: 'HISTORY_STORAGE_CLOSED'}, step(pid, 'history-storage'), {pid, event: 'SERVICE_REPORT', detail: {type: 'stopped', clean: true}}];
+  const connection = (index: number, acked: string | null, events: [string, boolean][], forwarded: string[], withheld: string[], closedBy: string | null): Json =>
+    ({connection: index, checkpointAckedThrough: acked, events: events.map(([eventSeq, redelivered]) => ({eventSeq, redelivered})), gaps: 0, end: null,
+      acks: [...forwarded, ...withheld], forwardedAcks: forwarded, withheldAcks: withheld, closedBy});
+  const lifecycleState = {servicePid: 4200, dashboard: false, exiting: false, tray: true, overlay: true};
+  const durable: Json = {status: 'stale', selection: 'synthetic', durable: 'active', count: 1};
+  const value: Json = {passed: true, commit: 'candidate', mode: 'packaged', scenarioKind: 'recording', launcherExit: 0, probesAfterExit: ['ets2telemetry-probe-a'],
+    mainEvents: [{event: 'DIAGNOSTIC_SERVICE_EXIT_REQUEST'}, {event: 'SERVICE_EXIT', detail: {code: 0}}, {event: 'APP_EXIT_REQUESTED', facts: {reason: 'tray'}},
+      {event: 'SERVICE_EXIT', detail: {code: 0}}, {event: 'APP_EXIT', detail: {code: 0}}],
+    serviceEvents: [...started(4100, true), ...started(4200, false), ...stopped(4200)],
+    recording: {commitsActive: true, serviceRestartRecovered: true, dashboardClosedRecordingContinued: true, trayExitOrderly: true, restartRecovered: true,
+      shutdownClean: true, simulatorMatchesReplay: true, historyDatabaseAbsent: true, sidecarsAbsent: true, databaseRowsMatch: true,
+      servicePid: 4100, restartedServicePid: 4200, afterClose: lifecycleState, whileClosed: lifecycleState, restart: {servicePid: 4300, durable},
+      firstServiceDurable: {...durable, status: 'connected'}, restartedServiceDurable: durable,
+      firstConnection: connection(1, '0', [['1', false], ['2', false], ['3', false], ['4', false], ['5', false]], ['1', '2', '3', '4'], ['5'], 'server'),
+      secondConnection: connection(2, '4', [['5', true], ['6', false], ['7', false], ['8', false], ['9', false]], ['5', '6', '7', '8', '9'], [], 'client'),
+      thirdConnection: connection(3, '9', [['10', false]], ['10'], [], 'client'),
+      trayExit: {launcherExit: 0, signal: null, exitMilliseconds: 88, requests: ['tray']}, restartLauncherExit: 0,
+      simulator: {exit: {code: 0, signal: null}, report: {scenario: 'normal-delivery-runtime-journey', cancelled: false, matchesReplay: true, differences: [],
+        connections: [1, 2, 3].map(index => ({connection: index, durable: true, closedBy: index === 1 ? 'disconnect' : 'client'}))}},
+      files: {magic: 'SQLite format 3', applicationId: 1163154226, userVersion: 1, sidecars: [], syntheticBackups: false, historyDatabase: false, dataDirectory: false},
+      database: {integrity: ['ok'], foreignKeyViolations: 0, purpose: 'synthetic', acceptedOrigin: 'synthetic', acknowledgedThrough: '10',
+        sessions: [{game: 'ets2', origin: 'synthetic', committedThrough: '10', endReason: null, simulatorSession: true}],
+        rows: {trips: [{trip: 'trip@3', outcome: 'delivered', recordingCompleteness: 'partial'}], attributions: [{eventSeq: '8', trip: 'trip@3', attribution: 'trip'}],
+          intervals: [{trip: 'trip@3', kind: 'discontinuity', detail: {cause: 'opened-at-load', atEventSeq: '3'}}, {trip: 'trip@3', kind: 'not-connected', detail: {cause: 'consumer-restart'}}],
+          events: Array.from({length: 10}, (_, index) => ({eventSeq: String(index + 1)}))}},
+      retainedCrashProbe: ['ets2telemetry-probe-a'],
+      restartMainEvents: [{event: 'APP_EXIT_REQUESTED', facts: {reason: 'app-quit'}}, {event: 'SERVICE_EXIT', detail: {code: 0}}, {event: 'APP_EXIT', detail: {code: 0}}],
+      restartServiceEvents: [...started(4300, false), ...stopped(4300)]}};
+  if (path.length) {
+    let target = value as Record<string | number, Json>;
+    for (const key of path.slice(0, -1)) target = target[key] as Record<string | number, Json>;
+    const last = path.at(-1)!;
+    if (replacement === undefined) delete target[last]; else target[last] = replacement;
+  }
+  return JSON.stringify(value);
+}
+function recordingCases() {
+  const invalid = (name: string, path: (string | number)[], replacement?: Json) =>
+    ({name: `recording ${name}`, body: recordingReceipt(path, replacement), scenario: 'recording', code: 0, available: true, reason: 'RECORDING_RESULT_INCOMPLETE_OR_INVALID'});
+  const int64 = (name: string, path: (string | number)[] = [], replacement?: Json) =>
+    ({name: `recording ${name} with Int64 integers`, body: recordingReceipt(path, replacement), scenario: 'recording', numbers: 'int64' as const, code: 0, available: true,
+      reason: path.length ? 'RECORDING_RESULT_INCOMPLETE_OR_INVALID' : null});
+  return [
+    {name: 'intact recording receipt', body: recordingReceipt(), scenario: 'recording', code: 0, available: true, reason: null},
+    int64('intact receipt'),
+    int64('tray exit 1', ['recording', 'trayExit', 'launcherExit'], 1),
+    int64('reused service', ['recording', 'restart', 'servicePid'], 4200),
+    {name: 'scaffold receipt cannot prove recording', body: recordingReceipt(['scenarioKind'], 'scaffold'), scenario: 'recording', code: 0, available: true, reason: 'DRIVER_RESULT_SCENARIO_MISMATCH'},
+    {name: 'recording receipt cannot prove lifecycle', body: recordingReceipt(), scenario: 'lifecycle', code: 0, available: true, reason: 'DRIVER_RESULT_SCENARIO_MISMATCH'},
+    invalid('result missing', ['recording']),
+    invalid('rows not matched', ['recording', 'databaseRowsMatch'], false),
+    invalid('flag as string', ['recording', 'commitsActive'], 'true'),
+    invalid('flag missing', ['recording', 'dashboardClosedRecordingContinued']),
+    invalid('service not restarted', ['recording', 'restartedServicePid'], 4100),
+    invalid('service replaced while closed', ['recording', 'whileClosed', 'servicePid'], 4201),
+    invalid('dashboard open while recording', ['recording', 'whileClosed', 'dashboard'], true),
+    invalid('lost ACK delivered', ['recording', 'firstConnection', 'withheldAcks'], []),
+    invalid('no redelivery', ['recording', 'secondConnection', 'events', 0, 'redelivered'], false),
+    invalid('restart checkpoint past the lost ACK', ['recording', 'secondConnection', 'checkpointAckedThrough'], '5'),
+    invalid('run B commit missing', ['recording', 'thirdConnection', 'forwardedAcks'], []),
+    invalid('durable not active', ['recording', 'restartedServiceDurable', 'durable'], 'pending'),
+    invalid('run B durable not logged', ['recording', 'restart', 'durable']),
+    invalid('tray exit through another path', ['recording', 'trayExit', 'requests'], ['renderer']),
+    invalid('tray exit slower than 8 s', ['recording', 'trayExit', 'exitMilliseconds'], 8001),
+    invalid('simulator differs from the replay', ['recording', 'simulator', 'report', 'matchesReplay'], false),
+    invalid('simulator exit 1', ['recording', 'simulator', 'exit', 'code'], 1),
+    invalid('live-only connection served', ['recording', 'simulator', 'report', 'connections', 1, 'durable'], false),
+    invalid('history database created', ['recording', 'files', 'historyDatabase'], true),
+    invalid('WAL file left', ['recording', 'files', 'sidecars'], ['-wal']),
+    invalid('integrity failure', ['recording', 'database', 'integrity'], ['row 3 missing from index']),
+    invalid('history purpose', ['recording', 'database', 'purpose'], 'history'),
+    invalid('coverage short', ['recording', 'database', 'sessions', 0, 'committedThrough'], '9'),
+    invalid('acknowledged past coverage', ['recording', 'database', 'acknowledgedThrough'], '11'),
+    invalid('event missing', ['recording', 'database', 'rows', 'events'], Array.from({length: 9}, (_, index) => ({eventSeq: String(index + 1)}))),
+    invalid('trip still open', ['recording', 'database', 'rows', 'trips', 0, 'outcome'], 'open'),
+    invalid('no consumer-restart interval', ['recording', 'database', 'rows', 'intervals', 1, 'detail', 'cause'], 'disconnected'),
+    invalid('flush step timed out', ['serviceEvents', RECORDING_FLUSH_A, 'facts', 'outcome'], 'timeout'),
+    invalid('durable failure logged', ['serviceEvents', SERVICE_EVENTS_A_APPEND], {pid: 4200, event: 'V1_DURABLE_UNAVAILABLE', facts: {code: 'PERMISSION_DENIED'}}),
+    invalid('history unavailable logged', ['serviceEvents', SERVICE_EVENTS_A_APPEND], {pid: 4200, event: 'HISTORY_STORAGE_UNAVAILABLE', facts: {code: 'DISK_FULL'}}),
+    invalid('replacement created a new database', ['serviceEvents', 6, 'facts', 'created'], true),
+    invalid('second target rejected', ['recording', 'restartServiceEvents', 0], {pid: 4300, event: 'RECORDING_TARGET_REJECTED'}),
+    invalid('run B flush step missing', ['recording', 'restartServiceEvents', 7, 'facts', 'name'], 'flush'),
+    invalid('third service exit', ['mainEvents', 5], {event: 'SERVICE_EXIT', detail: {code: 0}}),
+    invalid('unclean final stop', ['serviceEvents', 15, 'detail', 'clean'], false),
+    invalid('run B exit through another path', ['recording', 'restartMainEvents', 0, 'facts', 'reason'], 'tray'),
+    invalid('run B closed nonzero', ['recording', 'restartLauncherExit'], 1),
+    invalid('second probe left', ['probesAfterExit', 1], 'ets2telemetry-probe-b')
   ];
 }
 

@@ -350,6 +350,14 @@ ET-015a PR-3 implementation update on October 16, 2026: the telemetry service ap
 - **Stop sequence.** Service stop is intake (1000 ms), then a new `recording-flush` step (500 ms) that waits for the commit in flight, then storage (1000 ms). The total stays 2500 ms.
 - See [ET-015a validation](docs/validation/et-015a.md).
 
+ET-015a PR-4 implementation update on October 16, 2026: the development and packaged `recording` runtime smokes record a synthetic protocol v1 source into `synthetic\smoke.sqlite` through four steps:
+- a terminated and restarted service, which redelivers a duplicate;
+- recording while the main window is closed to the tray;
+- a tray exit with `recording-flush`;
+- an application restart that appends to the same database.
+
+The database must equal hand-written rows, and no history database may be created. No product code changed. Whether `recording-flush` waits for a commit in flight is shown only by unit tests, because no commit is in flight at the journey's exit. Hosted CI, the enablement PR and every real-game check remain pending ([ET-015a validation](docs/validation/et-015a.md)).
+
 ## ET-012c strip overflow fix — October 16, 2026
 
 On October 16, 2026 the owner decided to fix the overlay strip's overflow first, in a separate package ET-012c, before ET-010c (PR #73) merges. Under that decision and the standing delegation of October 15, 2026, the coordinator adopted the architect's decisions S1–S12 ([concept.md](concept.md#et-012c-strip-overflow-fix--october-16-2026)).
