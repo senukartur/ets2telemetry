@@ -127,6 +127,11 @@ describe('ET-015b injected sample failures under the trip recorder', () => {
   const storedSamples = (seed: string, session: string) => readSamples(ws, seed, session);
   const failureLogs = (run: RecordingRun) => run.services[0].logs.filter(([event]) => /^V1_(DURABLE|SAMPLES_(RETRY|DROPPED|DISCARDED|SKIPPED))/.test(event));
   const allEvents = [['1', '2', '3', '4', '5', '6'], ['7', '8']];
+  /**
+   * A flush delay far beyond any run (review pass 1), so the first sample batch is the one the batch size queues; a slow
+   * runner's 5 s timer could otherwise write a smaller batch first and take the injected fault or hold.
+   */
+  const NO_FLUSH_TIMER_MS = 600_000;
 
   it('(e) SQLITE_FULL twice in appendSamples keeps the rows and stores each once later, while events commit and are acknowledged (DISK_FULL)', async () => {
     const input = samplesInput(), session = scenarioSource(replayOf(input).scenario).pluginSessionId;
@@ -144,7 +149,8 @@ describe('ET-015b injected sample failures under the trip recorder', () => {
     // reconnection after the failure is live-only.
     const base = samplesInput(), input = withTransport(base, 'one-second-samples-permission-denied', [connect(0), disconnect(13000), connect(15500, {durable: false}), disconnect(17500)]);
     const session = scenarioSource(replayOf(input).scenario).pluginSessionId;
-    const run = await runRecording(input, {path: ws.database, backups: ws.backups}, {fault: {samplesFault: {code: 'SQLITE_READONLY', times: 1}}, sampleBatchRows: 7});
+    const run = await runRecording(input, {path: ws.database, backups: ws.backups}, {fault: {samplesFault: {code: 'SQLITE_READONLY', times: 1}}, sampleBatchRows: 7,
+      sampleFlushMs: NO_FLUSH_TIMER_MS});
     const logs = failureLogs(run), discarded = logs.find(([event]) => event === 'V1_SAMPLES_DISCARDED')?.[1] as {count: number} | undefined;
     expect(logs).toEqual([['V1_DURABLE_UNAVAILABLE', {code: 'PERMISSION_DENIED'}], ['V1_SAMPLES_DISCARDED', {count: discarded?.count}]]);
     // Rows 1000-1005 and 1009 at least, and at most 1010-1012 that were observed before the batch ran.
@@ -160,8 +166,9 @@ describe('ET-015b injected sample failures under the trip recorder', () => {
   it('(g) a held sample batch holds the FIFO: no event is acknowledged until it is released, then every item and row is stored (REG-007)', async () => {
     const input = samplesInput(), session = scenarioSource(replayOf(input).scenario).pluginSessionId;
     let listening = false;
-    // The first appendSamples (six rows, 1000-1005) is held inside its transaction for 300 ms of real time.
-    const run = await runRecording(input, {path: ws.database, backups: ws.backups}, {fault: {samplesFault: {hold: true}}, sampleBatchRows: 6,
+    // The first appendSamples (six rows, 1000-1005, queued by the batch size, never by the timer) is held inside its
+    // transaction for 300 ms of real time.
+    const run = await runRecording(input, {path: ws.database, backups: ws.backups}, {fault: {samplesFault: {hold: true}}, sampleBatchRows: 6, sampleFlushMs: NO_FLUSH_TIMER_MS,
       onState: (_state, service, mark) => {
         if (listening || !service.control) return;
         listening = true;
