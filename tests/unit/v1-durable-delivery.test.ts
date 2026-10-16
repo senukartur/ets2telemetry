@@ -542,7 +542,8 @@ describe('ET-015b samples op in the storage-commit pipeline', () => {
     sink.releaseSamples(); await settle();
     expect([writes(), sink.heldWrites]).toEqual([['samples 1-60'], 1]);
     sink.releaseSamples(); await settle();
-    expect([writes(), vi.getTimerCount()]).toEqual([['samples 1-60', 'samples 61-120'], 1]);
+    // No further op was queued meanwhile: the 10 rows left wait for the timer, and no write runs.
+    expect([writes(), sink.writeSizes, sink.heldWrites, vi.getTimerCount()]).toEqual([['samples 1-60', 'samples 61-120'], [60, 60], 0, 1]);
   });
 
   it('commits an item queued behind a samples op right after that one batch; samples never acknowledge or count against the bounds (H10)', async () => {
