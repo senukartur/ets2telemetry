@@ -39,7 +39,7 @@ The contract is [packages/contracts/src/journal.ts](../packages/contracts/src/jo
 
 - the list fields (game, game-mode evidence, outcome, close reason, recording completeness, UTC labels, observed distance, fuel used, a job summary), the plugin session, how the trip opened (`openedBy` `event` with its `openedEventSeq`, or `checkpoint` with `openedEventSeq` null), the outcome eventSeq, and the close carrier (`closedBy`, null while open and for trips closed under schema version 1);
 - the job values in canonical units from the normalized job row, with its source (`event` with its eventSeq, or `checkpoint` with the checkpoint's nextEventSeq);
-- the truck and the latest 10 trailer configurations from their configuration events, with the trip's trailer total, and the gameplay outcome record (`job.delivered` with its revenue or `job.cancelled` with its penalty);
+- the truck and the latest 10 trailer configurations in commit order (not eventSeq order: a later plugin session's eventSeqs start at 1 again) from their configuration events, with the trip's trailer total, and the gameplay outcome record (`job.delivered` with its revenue or `job.cancelled` with its penalty);
 - money totals (below), the timeline window (below), the first 50 completeness intervals with the trip's total and the next cursor;
 - the trip's sample count with the UTC labels of its first and last sample;
 - the export bounds fixed at this read (J17): the trip session's committed coverage and the trip's largest sample and interval ids.

@@ -217,7 +217,7 @@ Samples reuse `listSamples` with `limit` 300 or 3,600, which its existing bound 
 | Trip by UUID | `SEARCH trips USING INDEX sqlite_autoindex_trips_1 (trip_uuid=?)` |
 | Job, session, event, truck, clock, sample label, database purpose | `SEARCH … USING INTEGER PRIMARY KEY (rowid=?)` |
 | Event at the carrier | `SEARCH events USING COVERING INDEX sqlite_autoindex_events_1 (plugin_session_id=? AND event_seq=?)` |
-| Trailers | `SEARCH x USING COVERING INDEX sqlite_autoindex_trip_trailers_1 (trip_ref=?)`, then the trailer configuration and event by primary key (the latest 10 by eventSeq); the total `SEARCH trip_trailers USING COVERING INDEX sqlite_autoindex_trip_trailers_1 (trip_ref=?)` |
+| Trailers | `SEARCH x USING COVERING INDEX sqlite_autoindex_trip_trailers_1 (trip_ref=?)`, then the trailer configuration and event by primary key (the latest 10 in commit order, `ORDER BY e.id DESC`, because a trip can hold trailer configurations of a later plugin session whose eventSeqs start at 1 again); the total `SEARCH trip_trailers USING COVERING INDEX sqlite_autoindex_trip_trailers_1 (trip_ref=?)` |
 | Money amounts | `SEARCH a USING COVERING INDEX event_attributions_trip (trip_ref=?)`, then the event and its amount by primary key |
 | Interval page and total | `SEARCH completeness_intervals USING INDEX completeness_intervals_trip (trip_ref=? AND rowid>?)`; the total and last id `USING COVERING INDEX completeness_intervals_trip (trip_ref=?)` |
 | Sample count, first and last id | `SEARCH samples USING COVERING INDEX samples_trip (trip_ref=?)` |
