@@ -17,6 +17,7 @@ import {HISTORY_CLOSE_BUDGET_MS, historyWorker} from './history-storage';
 import type {V1SourceState} from './v1-ingestion';
 import {GAME_HISTORY_RECORDING} from './recording-policy';
 import {createRecordingRuntime} from './recording-runtime';
+import {JournalService} from './journal-service';
 import type {LiveTelemetry, LiveTelemetryV1, SourceSelection} from '../../../packages/contracts/src';
 import {liveV1Projection, withV1} from './live-v1';
 const port = process.parentPort;
@@ -72,6 +73,9 @@ const runtime = createRecordingRuntime({env: process.env, gameHistory: GAME_HIST
   createWorker: () => historyWorker(__dirname), connectGame: (configuration, game) => new NativePipeClient(configuration, game, diagnoseV1Broker, 'v1'),
   onV1State, onRecordingStatus: status => port.postMessage({type: 'recording', status})});
 const v1 = runtime.v1;
+// ET-016 (J2, J4): journal reads from main, through the database the runtime opened, one at a time and only while it is
+// open. Main sends {type: 'journal', id, query}; the answer is {type: 'journal', id, result} with a fixed J11 code on refusal.
+const journal = new JournalService({history: runtime.history, stopping: () => stopping, log});
 /** A v1 failure never fails the v0 selection it follows. */
 function selectV1(selection: SourceSelection, broker: BrokerConfiguration | undefined): void {
   try {v1.configureBroker(v1BrokerConfiguration(broker)); v1.select(selection, v1FixtureEndpoint);}
@@ -176,6 +180,9 @@ port.on('message', event => {
       if (command.capture !== undefined) captures.offer(command.capture, selection, broker);
     }
     catch {port.postMessage({type: 'failed', code: 'INVALID_SOURCE_COMMAND'});}
+  } else if (command?.type === 'journal') {
+    for (const transferred of event.ports) transferred.close();
+    journal.receive(command, reply => port.postMessage(reply));
   } else {for (const transferred of event.ports) transferred.close();}
 });
 void probe.start();

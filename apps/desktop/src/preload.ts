@@ -6,6 +6,8 @@ import {RecoveryBudget} from './recovery-budget';
 import {isOverlayLayout, parseOverlaySections} from './overlay-sections';
 import {isOverlayEditOutcome, parseOverlayEditScale} from './overlay-placement';
 import {isUnitGame, isUnitProfile} from './unit-profiles';
+import {copyTripsQuery, isPageArgument, JOURNAL_CHANNELS} from './journal-contract';
+import {isJournalUuid} from '../../../packages/contracts/src/journal';
 let listener: ((update: LiveTelemetry) => void) | undefined;
 let port: MessagePort | undefined;
 let current: LiveTelemetry = initialLive();
@@ -150,6 +152,22 @@ const bridge: DesktopBridge = {
   resetOverlayEditPlacement: () => ipcRenderer.invoke('overlay-edit:reset'),
   finishOverlayEdit: outcome => isOverlayEditOutcome(outcome)
     ? ipcRenderer.invoke('overlay-edit:finish', outcome)
-    : Promise.reject(new Error('Invalid overlay edit request'))
+    : Promise.reject(new Error('Invalid overlay edit request')),
+  // ET-016 journal reads (J10): fixed channels; only a fresh copy of a validated filter, or a validated UUID and cursor
+  // (null when absent), is forwarded, and main validates again and fixes the page size.
+  listJournalTrips: query => {
+    const copy = copyTripsQuery(query);
+    return copy ? ipcRenderer.invoke(JOURNAL_CHANNELS.trips, copy) : Promise.reject(new Error('Invalid journal request'));
+  },
+  getJournalTrip: tripUuid => isJournalUuid(tripUuid) ? ipcRenderer.invoke(JOURNAL_CHANNELS.trip, tripUuid) : Promise.reject(new Error('Invalid journal request')),
+  listJournalEvents: (tripUuid, cursor) => journalPage('events', tripUuid, cursor),
+  listJournalIntervals: (tripUuid, cursor) => journalPage('intervals', tripUuid, cursor),
+  listJournalSamples: (tripUuid, cursor) => journalPage('samples', tripUuid, cursor)
 };
+/** One page request of a trip: exactly the UUID and the cursor, or null for the first page. */
+function journalPage<T>(kind: 'events' | 'intervals' | 'samples', tripUuid: unknown, cursor: unknown): Promise<T> {
+  return isPageArgument(kind, tripUuid, cursor)
+    ? ipcRenderer.invoke(JOURNAL_CHANNELS[kind], tripUuid, cursor ?? null) as Promise<T>
+    : Promise.reject(new Error('Invalid journal request'));
+}
 contextBridge.exposeInMainWorld('desktop', Object.freeze(bridge));

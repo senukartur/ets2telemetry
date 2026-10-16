@@ -122,8 +122,25 @@ try {
     process: typeof globalThis.process, keys: Object.keys(globalThis.desktop),
     frozen: Object.isFrozen(globalThis.desktop), status: await globalThis.desktop.getStatus()}));
   assert.deepEqual(result.actual, {require: 'undefined', process: 'undefined', keys: ['getStatus', 'selectSource', 'subscribeLive', 'getAppState', 'subscribeAppState', 'exitApplication', 'setUnitProfile', 'setOverlayLayout', 'setOverlaySections',
-    'beginOverlayEdit', 'setOverlayEditScale', 'resetOverlayEditPlacement', 'finishOverlayEdit'],
+    'beginOverlayEdit', 'setOverlayEditScale', 'resetOverlayEditPlacement', 'finishOverlayEdit',
+    'listJournalTrips', 'getJournalTrip', 'listJournalEvents', 'listJournalIntervals', 'listJournalSamples'],
     frozen: true, status: result.expected.status});
+  if (config.scenario === 'scaffold') {
+    // ET-016 PR-3: a journal read crosses the preload, main and the telemetry service to the new, empty history database
+    // of the isolated LOCALAPPDATA; an invalid trip id is refused in the preload. DATABASE_OPENING is retried for up to 10 s.
+    result.journal = await window.evaluate(async () => {
+      let answer;
+      for (let attempt = 0; attempt < 100; attempt++) {
+        answer = await globalThis.desktop.listJournalTrips();
+        if (answer.ok || answer.code !== 'DATABASE_OPENING') break;
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      const refused = await globalThis.desktop.getJournalTrip('C:\\Users\\owner\\telemetry.sqlite').then(() => 'resolved', error => String(error?.message));
+      return {answer, refused};
+    });
+    assert.deepEqual(result.journal, {answer: {ok: true, value: {database: {purpose: 'history', schemaVersion: 2}, trips: [], nextCursor: null}},
+      refused: 'Invalid journal request'});
+  }
   result.probesBeforeExit = (await readdir(config.temp)).filter(name => name.startsWith('ets2telemetry-probe-'));
   assert.equal(result.probesBeforeExit.length, 1);
   if (config.scenario === 'overlay') {

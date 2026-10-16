@@ -2,7 +2,7 @@
 
 ET-016 adds the trip journal: a list of recorded trips, a detail view of one trip and a versioned JSON export. This document describes where the journal reads its data, the read commands and their bounds, and the timeline window of a trip. Decisions J1–J22 are in [concept.md](../concept.md#et-016-authorization--october-16-2026); the schema they read is [storage schema version 2](storage.md#schema-version-2-et-016).
 
-Status (October 16, 2026): ET-016a PR-2 implements the storage reads in the storage worker and their tests. The parts below marked **pending** belong to later PRs: the journal queries from main through the telemetry service (PR-3), the Journal tab (PR-4) and the JSON export (PR-5). Nothing in the application calls the journal reads yet, and `GAME_HISTORY_RECORDING` stays `false`, so no real game history exists to show.
+Status (October 16, 2026): ET-016a PR-2 implements the storage reads in the storage worker and their tests. PR-3 routes them from the dashboard through main to the telemetry service with five bridge methods ([IPC methods and codes](#ipc-methods-and-codes-j10-j11)). The parts below marked **pending** belong to later PRs: the Journal tab (PR-4) and the JSON export (PR-5). No renderer code calls the bridge methods yet, and `GAME_HISTORY_RECORDING` stays `false`, so no real game history exists to show.
 
 ## Data source and purposes (J2, J3)
 
@@ -13,7 +13,7 @@ The journal reads the database that the telemetry service opened, through the se
 - Every journal response carries `database: {purpose, schemaVersion}`. A purpose other than `history` is a test database that is never game history; the Journal tab shows a persistent banner for it (pending, PR-4), and the export header carries the purpose (pending, PR-5).
 - Tests and smokes seed only temporary or isolated synthetic databases, never history.
 
-Journal reads share the recorder's single command lane in the storage client: one command in flight, at most 64 queued, 10 s per command. A read that missed that deadline would fail the client closed and stop recording for the service lifetime, so every read is bounded, uses an index or a primary key ([below](#query-plans)), and the service will send at most one journal command at a time (pending, PR-3).
+Journal reads share the recorder's single command lane in the storage client: one command in flight, at most 64 queued, 10 s per command. A read that missed that deadline would fail the client closed and stop recording for the service lifetime, so every read is bounded, uses an index or a primary key ([below](#query-plans)), and the service sends at most one journal command at a time ([routing](#routing-and-bounds-j4)).
 
 ## Read commands and bounds (J5)
 
@@ -68,9 +68,44 @@ An event row at the carrier's eventSeq marks an event close; otherwise a gap clo
 
 No index was added for the journal (J6). Every statement is a constant of `JOURNAL_QUERIES`, and `tests/storage/journal-scale.test.ts` runs `EXPLAIN QUERY PLAN` on each against a database of 1,008 trips and 360,657 samples: each uses a primary key, the events `UNIQUE (plugin_session_id, event_seq)` index, `event_attributions_trip`, `completeness_intervals_trip`, `samples_trip` or the `trip_trailers` primary key, and no plan scans `events` or `samples`. The trip page walks the trips primary key backwards from the cursor; the unknown-window timeline looks each referenced event up by its primary key. The plans and timings are listed in [storage](storage.md#journal-reads-et-016).
 
+## IPC methods and codes (J10, J11)
+
+ET-016 PR-3 adds five methods to the dashboard's preload bridge, after `finishOverlayEdit`, each on its own fixed invoke channel. The sixth, `exportJournalTrip`, follows with the export in PR-5.
+
+| Bridge method | Channel | Arguments the preload forwards | Page main fixes | Value |
+| --- | --- | --- | --- | --- |
+| `listJournalTrips(query?)` | `journal:list-trips` | one fresh copy of `{cursor?, game?, outcome?, completeness?}` | 50 trips (the storage read's fixed page) | `JournalTripPage` |
+| `getJournalTrip(tripUuid)` | `journal:get-trip` | the UUID | — | `JournalTripDetail` |
+| `listJournalEvents(tripUuid, cursor?)` | `journal:list-events` | the UUID and the event cursor, or `null` | 100 events | `JournalEventPage` |
+| `listJournalIntervals(tripUuid, cursor?)` | `journal:list-intervals` | the UUID and the interval cursor, or `null` | 100 intervals | `JournalIntervalPage` |
+| `listJournalSamples(tripUuid, cursor?)` | `journal:list-samples` | the UUID and the sample cursor, or `null` | 300 samples | `JournalSamplePage`: `{database, samples, nextCursor}`, where a full page's cursor is its last sample id |
+
+**Arguments.** The preload checks every argument before it invokes, with the same rules as the storage worker: a lower-case UUID, a cursor of the read's format (a trip, interval or sample cursor is a row id up to 2^63 − 1; an event cursor an eventSeq up to 2^64 − 2), and a filter of only the listed keys and values. It forwards only own fields, read once, in a fresh object; anything else rejects with `Invalid journal request` and no IPC. Main checks the same rules again with exact argument counts (`list-trips` one object, `get-trip` one UUID, the page channels a UUID and a cursor or `null`) and sets the page size itself; the renderer cannot choose it. Only the trusted dashboard main frame may call: another sender, a subframe or the overlay rejects with `Untrusted journal request`. The code is in [journal-contract.ts](../apps/desktop/src/journal-contract.ts).
+
+**Results.** A valid call never rejects: it resolves `{ok: true, value}` or `{ok: false, code}` with a fixed code.
+
+| Code | Meaning |
+| --- | --- |
+| `SERVICE_UNAVAILABLE` | No ready telemetry service: before the first readiness of a restarted service, after a failure, exit or restart exhaustion, while the application or the service stops |
+| `DATABASE_OPENING` | The service is still opening its database |
+| `DATABASE_UNAVAILABLE` | The database could not be opened or failed later; `storageCode` names the storage error code that made it unavailable (for example `PERMISSION_DENIED`, `SCHEMA_NEWER`). `storageCode: 'TIMEOUT'` means a storage command, possibly this read, missed the storage client's 10 s deadline: that fails the client closed, so the database and recording stay stopped for that telemetry service until it restarts ([the telemetry service](telemetry-service-v1.md#journal-queries-et-016)) |
+| `BUSY` | Main already holds one request in flight and four waiting, the service is still running an earlier read that main timed out, or the storage client's queue is full |
+| `TIMEOUT` | No answer from the service within main's 15 s deadline; the read may be retried |
+| `NOT_FOUND` | The trip is not in the database (`UNKNOWN_TRIP`) |
+| `FAILED` | Anything else: a refused query, an unexpected storage error, a journal answer that broke the contract in the client (`JOURNAL_ANSWER_INVALID`), or a service reply main refused |
+
+No fixed-shape field of a result carries a path, a process id, a Windows session id or error text: the shapes have no such field, and main refuses a reply with any extra field ([below](#routing-and-bounds-j4)). The one open record is an interval's `detail`, forwarded as stored; only project code writes it (the trip reducer, the trip recorder and the sample buffer), from validated protocol v1 data and its own counters, and none of them writes a path, process id or session id into it. Plugin session ids, trip UUIDs and eventSeqs are stable data identifiers and appear in the values.
+
+### Routing and bounds (J4)
+
+1. **Main** ([journal-broker.ts](../apps/desktop/src/journal-broker.ts)) sends each read to the current ready service on its parent port as `{type: 'journal', id, query}`. One request is in flight per service, at most 4 wait behind it, and one more answers `BUSY` at once. Each request has 15 s from the moment it is sent; then it answers `TIMEOUT`, the next waiting request is sent, and the late reply, whose id is no longer in flight, is ignored. The service is attached at its readiness. When it fails, exits, restarts or exhausts its restarts, or the application exits, the request in flight and every waiting one answer `SERVICE_UNAVAILABLE`, and replies of the retired service are ignored.
+2. **The service** ([journal-service.ts](../apps/desktop/src/journal-service.ts)) parses the query again and runs one journal read at a time through the client of the database it opened; a second read while one runs answers `BUSY`. It reads only while the database is open and the service is not stopping, so at most one journal command is ever in the storage queue, behind at most the recorder's one command in flight. It answers `{type: 'journal', id, result}`. A malformed message is answered `FAILED` (when its id is valid) and logged as `JOURNAL_REQUEST_REJECTED {count}` at counts 1, 2, 4, 8, …
+3. **Main's reply check.** Main forwards a reply only when it is exactly `{type, id, result}` from the current service for the request in flight, and the result answers that request exactly: the journal contract validators for the read and its requested limit, the requested trip (for the detail and the samples), rows strictly after the requested cursor and in order, a next cursor exactly on a full page, trips that match the requested filter, list-row names within the protocol's 256-byte name bound, and samples of exactly the `JournalSample` shape (a compile-time check keeps it equal to the storage `SampleRecord`). Every fixed-shape object must have exactly its listed keys. An interval's `detail` is the exception: it must be an object whose `annotation` and `cause` agree with the interval's flags, but its other keys are not checked and it is forwarded as stored. Its keys vary by cause (about thirty across the reducer's annotations, gap and reading-hole intervals, the recorder's restore loss and the sample buffer's backlog) and grow with new causes, so a key whitelist in main would fail whole pages, and later exports, whenever a writer gains a key. Anything else answers `FAILED` and is never forwarded.
+
+The `journal` reply type sits before main's fatal default for unknown service messages, which stays fatal (`SERVICE_INVALID_MESSAGE`). Main logs fixed codes with counts at 1, 2, 4, 8, …: `JOURNAL_REQUEST_BUSY`, `JOURNAL_REQUEST_TIMEOUT {kind}`, `JOURNAL_REPLY_REJECTED {kind}` and `JOURNAL_REPLY_IGNORED`. The service's history storage logs `JOURNAL_ANSWER_INVALID {command, count}` the same way.
+
 ## Pending parts
 
-- **IPC (pending, PR-3).** Main sends journal queries to the telemetry service on its parent port, with one query in flight per service, at most 4 queued and 15 s each, and six fixed bridge methods for the trusted dashboard frame (J4, J10, J11).
 - **Journal tab (pending, PR-4).** The Live and Journal tabs, the paged list with filters, the trip detail, the display rules of J13 and the sample gap rows of J14.
 - **JSON export (pending, PR-5).** The `ets2telemetry.trip-export` format version 1 and the main-process save flow (J15–J17).
 - **Late-attach trips (pending, ET-016b PR-7).** Since PR-6 the recorder writes fuel used for each trip, as a value or with its unavailability reason. Until PR-7 no trip has a checkpoint job.
