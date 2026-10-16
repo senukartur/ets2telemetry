@@ -12,7 +12,7 @@ const welcome = Buffer.from(encodeFrame(v1('welcome'))), checkpoint = Buffer.fro
 const event1 = Buffer.from(encodeFrame(withEventSeq('event-simulation-started', 1n))), event2 = Buffer.from(encodeFrame(withEventSeq('event-simulation-started', 2n)));
 
 /** A fake pipe socket, the ClientSocket over it, and what the ClientSocket passed on: the data bytes and the event order. */
-function harness(gate?: {afterEventSeq: string; until: () => Promise<unknown>}) {
+function harness(gate?: {afterEventSeq: string; redelivered?: boolean; until: () => Promise<unknown>}) {
   const real = Object.assign(new EventEmitter(), {write: () => true, destroy: () => undefined}), failures: unknown[] = [];
   const socket = new ClientSocket(real as unknown as net.Socket, gate, error => failures.push(error));
   const chunks: Buffer[] = [], events: string[] = [];
@@ -44,6 +44,23 @@ describe('recording harness ClientSocket', () => {
     expect(h.bytes().equals(Buffer.concat([welcome, checkpoint, event1, event2]))).toBe(true);
     expect(h.collapsed()).toEqual(['data', 'end', 'close']);
     expect(h.failures).toEqual([]);
+  });
+
+  it('with `redelivered`, holds only after a redelivery of the gate event, not after its first delivery (ET-015c)', async () => {
+    const redelivered = (eventSeq: bigint) => {
+      const m = withEventSeq('event-simulation-started', eventSeq) as Extract<ReturnType<typeof v1>, {kind: 'event'}>; m.data.redelivered = true;
+      return Buffer.from(encodeFrame(m));
+    };
+    let open!: () => void, opened = 0;
+    const h = harness({afterEventSeq: '1', redelivered: true, until: () => { opened++; return new Promise<void>(r => { open = r; }); }});
+    h.real.emit('data', Buffer.concat([welcome, checkpoint, event1, event2]));
+    expect([opened, h.bytes().equals(Buffer.concat([welcome, checkpoint, event1, event2]))]).toEqual([0, true]);
+    const again1 = redelivered(1n), again2 = redelivered(2n);
+    h.real.emit('data', Buffer.concat([again1, again2])); h.real.emit('end');
+    expect([opened, h.bytes().equals(Buffer.concat([welcome, checkpoint, event1, event2, again1]))]).toEqual([1, true]);
+    open(); await Promise.resolve(); await Promise.resolve();
+    expect(h.bytes().equals(Buffer.concat([welcome, checkpoint, event1, event2, again1, again2]))).toBe(true);
+    expect([h.collapsed(), h.failures]).toEqual([['data', 'end'], []]);
   });
 
   it('passes on an incomplete frame held before the gate event ahead of an error and close', () => {

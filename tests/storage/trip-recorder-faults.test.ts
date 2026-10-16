@@ -93,9 +93,9 @@ describe('S4 injected storage failures under the trip recorder', () => {
     // The first connection's client does not wait for ACKs, so the server writes events 1-5 while eventSeq 1 is held; the
     // fifth closes the connection with BACKLOG_FULL. Every item it received is redelivered, one more than the bound, so
     // the same service with a bound of four would refuse that burst again at every reconnection. The redelivery goes to
-    // a restarted service with the production bound of 256, which starts with nothing queued. Equality of that bound with
-    // the producer's 256 retained entries is not enough on its own: items still queued or in flight from an earlier
-    // connection count against a redelivery too, which can give a transient BACKLOG_FULL (docs/telemetry-service-v1.md).
+    // a restarted service with the production bound (512, twice the producer's 256 retained entries since ET-015c G11),
+    // which starts with nothing queued. A redelivery to the same service while an ended connection's items are still
+    // queued is tests/storage/backlog-redelivery.test.ts.
     // The frames after eventSeq 1 reach the ingestion only once the worker reports the commit of 1 held inside its
     // transaction. Without that gate a slow session open (hosted CI run 38907225873) let all five items arrive first: 1-4
     // were queued, the fifth dropped them, nothing was committed or held, and the restarted service committed 1-9 anew.
