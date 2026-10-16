@@ -463,16 +463,24 @@ async function runEditStep(application, dashboard, overlay) {
 export const HIDDEN_OVERLAY_DOM_FILE = 'hidden-overlay-dom.html';
 export const HIDDEN_OVERLAY_SCREENSHOT_FILE = 'hidden-overlay-dom.png';
 export const HIDDEN_OVERLAY_SCREENSHOT_TIMEOUT_MS = 5000;
+export const HIDDEN_OVERLAY_DOM_TIMEOUT_MS = 10000;
 
 /**
  * Review evidence of the hidden overlay document after every overlay assertion has passed; it asserts nothing about
  * rendering. The serialized DOM is read through the renderer's JavaScript and needs no rendered frame, so it is always
- * written and a failure to read it fails the run. The PNG is best effort: Page.captureScreenshot waits for a frame the
- * never-shown overlay window's compositor may stop presenting at any time, after which every capture waits forever.
- * Only that bounded Playwright timeout is recorded instead of failing the run; any other screenshot error still fails.
+ * written, and a failure to read it fails the run. `page.content()` has no Playwright timeout, so a hung renderer fails
+ * after `domTimeout`, well inside the Job's 60 s limit, and result.json keeps the error. The PNG is best effort:
+ * Page.captureScreenshot waits for a frame the never-shown overlay window's compositor may stop presenting, and then
+ * no capture completed within the observed bounds (8 s, 5 s). Only that bounded Playwright timeout is recorded instead
+ * of failing the run; any other screenshot error still fails.
  */
-export async function captureHiddenOverlay(overlay, output, screenshotTimeout = HIDDEN_OVERLAY_SCREENSHOT_TIMEOUT_MS) {
-  const html = await overlay.content();
+export async function captureHiddenOverlay(overlay, output, {screenshotTimeout = HIDDEN_OVERLAY_SCREENSHOT_TIMEOUT_MS, domTimeout = HIDDEN_OVERLAY_DOM_TIMEOUT_MS} = {}) {
+  let timer;
+  const expired = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`HIDDEN_OVERLAY_DOM_NOT_READ_WITHIN_${domTimeout}_MS`)), domTimeout);
+  });
+  let html;
+  try {html = await Promise.race([overlay.content(), expired]);} finally {clearTimeout(timer);}
   // Written before it is checked, so a failed run keeps it.
   await writeFile(path.join(output, HIDDEN_OVERLAY_DOM_FILE), html);
   assert.equal(html.split('data-testid="overlay-root"').length, 2, 'The serialized overlay DOM must hold exactly one overlay root');

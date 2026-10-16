@@ -75,5 +75,14 @@ $receipt = [ordered]@{passed=$validation.passed; scenario=$Scenario;
     finishedUtc=[datetime]::UtcNow.ToString('o')}
 # Never overwrite the driver's receipt or invent observations when it died early.
 $receipt | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $output 'wrapper-result.json') -Encoding utf8
+# Review evidence only (docs/ci.md): name a skipped hidden-overlay PNG in the job log; this never changes the result.
+if ($Scenario -eq 'overlay' -and $validation.driverResultAvailable -eq $true) {
+    try {
+        $capture = (Get-Content -LiteralPath (Join-Path $output 'result.json') -Raw -Encoding UTF8 | ConvertFrom-Json).overlay.capture
+        if ($null -ne $capture -and $capture.screenshot.captured -eq $false) {
+            Write-Output "Hidden overlay PNG skipped (review evidence only): $($capture.screenshot.error.message) DOM capture: $($capture.dom.file)"
+        }
+    } catch { Write-Output 'Hidden overlay capture facts unavailable.' }
+}
 Write-Output "Runtime evidence: $output"
 if (!$validation.passed) { throw "Runtime smoke failed: $($validation.reason), Job exit $code; retained evidence: $output" }

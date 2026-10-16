@@ -399,11 +399,11 @@ describe('hidden overlay evidence capture', () => {
       throw Object.assign(new Error(`page.screenshot: Timeout ${options.timeout}ms exceeded.\nCall log:\n  - taking page screenshot`), {name: 'TimeoutError'});
     }}};
   }
-  async function capture(overlay: ReturnType<typeof fakeOverlay>, timeout?: number) {
+  async function capture(overlay: ReturnType<typeof fakeOverlay>, options?: {screenshotTimeout?: number; domTimeout?: number}) {
     const {captureHiddenOverlay} = await import(observationModule);
     const resources = await temporaryResources();
     try {
-      const record = await captureHiddenOverlay(overlay.page, resources.directory, timeout);
+      const record = await captureHiddenOverlay(overlay.page, resources.directory, options);
       return {record, dom: await readFile(path.join(resources.directory, 'hidden-overlay-dom.html'), 'utf8'),
         png: await readFile(path.join(resources.directory, 'hidden-overlay-dom.png'), 'utf8').catch(() => null)};
     } finally {await resources.dispose();}
@@ -419,20 +419,30 @@ describe('hidden overlay evidence capture', () => {
 
   it('keeps the DOM and records a screenshot that never gets a frame instead of waiting for it', async () => {
     const overlay = fakeOverlay('hang');
-    const {record, dom, png} = await capture(overlay, 50);
+    const {record, dom, png} = await capture(overlay, {screenshotTimeout: 50});
     expect(dom).toBe(html); expect(png).toBeNull();
     expect(record.screenshot).toMatchObject({captured: false, file: null, timeoutMilliseconds: 50,
       error: {name: 'TimeoutError', message: 'page.screenshot: Timeout 50ms exceeded.'}});
   });
 
   it('fails on any other screenshot error, a DOM that cannot be read or a DOM without exactly one overlay root', async () => {
-    await expect(capture(fakeOverlay('closed'), 50)).rejects.toThrow('Target page, context or browser has been closed');
+    await expect(capture(fakeOverlay('closed'), {screenshotTimeout: 50})).rejects.toThrow('Target page, context or browser has been closed');
     await expect(capture(fakeOverlay('ok', () => Promise.reject(new Error('Execution context was destroyed'))))).rejects.toThrow('Execution context was destroyed');
     for (const document of ['<html><body></body></html>', html.replace('</body>', `${html}</body>`)]) {
       const overlay = fakeOverlay('ok', () => Promise.resolve(document));
       await expect(capture(overlay)).rejects.toThrow('The serialized overlay DOM must hold exactly one overlay root');
       expect(overlay.requests).toEqual([]);
     }
+  });
+
+  it('fails a hung renderer whose DOM is never returned after the DOM bound, without taking a screenshot', async () => {
+    const {HIDDEN_OVERLAY_DOM_TIMEOUT_MS} = await import(observationModule);
+    expect(HIDDEN_OVERLAY_DOM_TIMEOUT_MS).toBe(10000);
+    const overlay = fakeOverlay('ok', () => new Promise<string>(() => undefined));
+    const started = performance.now();
+    await expect(capture(overlay, {domTimeout: 50})).rejects.toThrow('HIDDEN_OVERLAY_DOM_NOT_READ_WITHIN_50_MS');
+    expect(performance.now() - started).toBeLessThan(2000);
+    expect(overlay.requests).toEqual([]);
   });
 });
 
