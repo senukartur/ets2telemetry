@@ -873,10 +873,20 @@ Under the owner's standing delegation of October 15, 2026 (quoted in the ET-015a
 | J15 | Export format `ets2telemetry.trip-export`, version 1:<br>• canonical units and stable identifiers;<br>• the protocol v1 availability and money shapes, with the currency marked SDK-documented or unknown;<br>• the trip, job, truck, trailers, outcome details, money totals, intervals, events, samples and bounds.<br>Any change bumps the version. There is no import |
 | J16 | Main exports through the save dialog:<br>• cancelling writes nothing;<br>• a target inside the application's data root is refused;<br>• the file is written as a partial in the target folder, page by page, then synced and renamed;<br>• a failure or an exit removes the partial;<br>• logs carry fixed codes only.<br>The Windows overwrite prompt is a pending manual check |
 | J17 | Exporting an open trip takes a bounded snapshot fixed at the start of the export |
-| J18 | No uninstall statement until the owner's uninstall data rule is recorded here |
+| J18 | The owner's uninstall data rule is recorded ("Uninstall removes local data — October 16, 2026"): the journal states next to Export that an uninstall removes local history and that the JSON export is a copy for the user's records, which cannot be imported |
 | J19 | TD-004 and TD-005 are unchanged; the journal reads the authoritative database |
 | J20 | Tests use hand-written anchor trips and expected values, generated filler trips for paging only, EXPLAIN QUERY PLAN checks instead of timing assertions, and a save dialog stubbed in the smokes only |
 | J21 | No trip average consumption (TD-006) |
 | J22 | Late-attach trips have no truck or trailer identity until it is sent again (TD-007) |
 
 `GAME_HISTORY_RECORDING` stays `false`. ET-017 and later phases are not authorized by this section. No game, TruckersMP, display or performance claim follows from synthetic or local tests.
+
+## Uninstall removes local data — October 16, 2026
+
+On October 16, 2026 the owner confirmed an answer first given on October 10, 2026: uninstalling ETS2Telemetry removes all of its local data. That covers the application root `%LOCALAPPDATA%\ETS2Telemetry`: the history database and its backups, settings, logs, synthetic recordings and other application-owned files. History is expected to come back from the server once the later server phase exists. Until then, an uninstall loses unsynchronized local history permanently.
+
+- **Scope.** Only data the application owns is removed. The plugin rules above still apply: on uninstall, remove only the plugin file this application installed, and never touch other plugins or game files.
+- **Installer work.** ET-018 implements the removal and its checks. The ET-001 scaffold's uninstaller keeps the data root, as recorded in [ET-001 validation](docs/validation/et-001.md); that is the baseline ET-018 changes.
+- **Warning to users.** Before the history is removed, the product must say so clearly. The trip journal's export (ET-016, J18) states that an uninstall removes local history and that a JSON export is the way to keep a copy; ETS2Telemetry cannot import that copy.
+
+This records an owner decision. It authorizes no package by itself, and earlier dated text is unchanged.
