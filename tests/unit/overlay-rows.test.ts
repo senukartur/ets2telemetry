@@ -108,9 +108,11 @@ it('matches the card, cluster and HUD rules in renderer.css', () => {
   declares('.overlay-hud-lines', {gap: `${HUD_LINE_GAP_CSS}px`});
   declares('.overlay-hud-tags', {height: `${HUD_TAG_ROW_HEIGHT_CSS}px`, overflow: 'hidden'});
   declares('.overlay-hud-line', {height: `${HUD_LINE_HEIGHT_CSS}px`, 'align-items': 'center', overflow: 'hidden'});
-  // The row model counts no margin around a row or tag row, and only the card header's 6 px gap.
-  for (const selector of ['.overlay-row', '.overlay-panel-row', '.overlay-panel-tags', '.overlay-hud-line', '.overlay-hud-tags', '.overlay-panel', '.overlay-hud-lines']) {
-    const margins = rule(selector).split(';').map(declaration => /^\s*(margin[\w-]*)\s*:\s*(.*?)\s*$/s.exec(declaration)).flatMap(match => match ? [match[2]] : []);
-    expect(margins.filter(value => value !== '0'), `${selector} margins`).toEqual([]);
-  }
+  // The row model counts no margin around a row, tag row or surface, and only the card header's 6 px gap; no padding on
+  // the root or a layout root pushes a surface down from the window's top (review pass 3).
+  const nonzero = (selector: string, prefix: string) => rule(selector).split(';').map(declaration => /^\s*([\w-]+)\s*:\s*(.*?)\s*$/s.exec(declaration))
+    .flatMap(match => match && match[1].startsWith(prefix) && match[2] !== '0' ? [`${match[1]}: ${match[2]}`] : []);
+  for (const selector of ['.overlay-row', '.overlay-panel-row', '.overlay-panel-tags', '.overlay-hud-line', '.overlay-hud-tags', '.overlay-panel', '.overlay-hud-lines',
+    '.overlay-card-body', '.overlay-cluster-body']) expect(nonzero(selector, 'margin'), `${selector} margins`).toEqual([]);
+  for (const selector of ['.overlay', '.overlay-card', '.overlay-cluster', '.overlay-hud']) expect(nonzero(selector, 'padding'), `${selector} padding`).toEqual([]);
 });

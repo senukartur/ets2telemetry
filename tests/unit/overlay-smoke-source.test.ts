@@ -362,8 +362,9 @@ describe('ET-012d card, cluster and HUD containment observation', () => {
       surfaces: [{className: 'overlay-surface overlay-panel', top: -18, bottom: 225, inside: false}]});
     // The gauge sections have no surface and are measured from the root: a speed box ending at 224 is the lowest.
     expect(await observeLayout('cluster', {item: {speed: {left: 50, top: 200, width: 100, height: 24}}})).toMatchObject({bottom: 224});
-    // A card body that starts 10 px down moves the measurement with it: 277 − 10.
-    expect(await observeLayout('card', {clip: {left: 0, top: 10, width: 300, height: 350}})).toMatchObject({bottom: 267,
+    // Review pass 3 changed the requirement: a top-aligned surface pushed down from the root's top (a card body that
+    // starts 10 px down) is measured from the root's top, the higher of the two, so the offset counts: 277, not 277 − 10.
+    expect(await observeLayout('card', {clip: {left: 0, top: 10, width: 300, height: 350}})).toMatchObject({bottom: 277,
       surfaces: [{className: 'overlay-surface overlay-card-body', top: 10, bottom: 360, inside: true}]});
   });
   it('rejects a surface outside the window and an unexpected number of surfaces', async () => {
@@ -373,6 +374,11 @@ describe('ET-012d card, cluster and HUD containment observation', () => {
     // Even with the surface inside, the lowest row 232 below the panel's top exceeds the 225 reserve.
     const inside = {...grown, surfaces: [{...grown.surfaces[0], inside: true}]};
     expect(() => verifyLayoutContainment(inside, WINDOWS.cluster, RESERVED.cluster)).toThrow('Overlay sections extend below the height the row model reserves');
+    // The reviewer's pass-3 case: a 20 px margin above the card body moves its last row to {10, 320, 200, 18}. From the
+    // root's top it ends at 338, past the 336 reserve; from the body's top it would end at 318 and pass.
+    const pushed = await observeLayout('card', {clip: {left: 0, top: 20, width: 300, height: 340}, item: {'game-time': {left: 10, top: 320, width: 200, height: 18}}});
+    expect(pushed).toMatchObject({outside: [], clipped: [], bottom: 338, surfaces: [{top: 20, inside: true}]});
+    expect(() => verifyLayoutContainment(pushed, WINDOWS.card, RESERVED.card)).toThrow('Overlay sections extend below the height the row model reserves');
     const valid = await observeLayout('cluster') as {surfaces: Record<string, unknown>[]};
     for (const surfaces of [[], [valid.surfaces[0], valid.surfaces[0]], undefined])
       expect(() => verifyLayoutContainment({...valid, surfaces}, WINDOWS.cluster, RESERVED.cluster)).toThrow('Exactly one overlay surface must hold the rows');

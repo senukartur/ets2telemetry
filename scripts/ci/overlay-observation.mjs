@@ -106,10 +106,12 @@ export const LAYOUT_SMOKE_RESERVED_CSS = Object.freeze({card: 336, cluster: 225,
 // expected sections, then one coherent read of where they lie. `outside` lists sections with an empty box or one not
 // fully inside the root (the window's viewport) and every ancestor up to the root that clips its overflow, such as the
 // cluster's side panel. `clipped` lists sections whose value box is not vertically inside the section's fixed row.
-// `bottom` is the lowest section bottom below the top of the surface that holds the rows (the card body, the cluster's
-// side panel or the HUD lines; the root for the cluster's gauge sections), which the row model's reserve must cover.
-// Measuring from the surface matters for the cluster: its panel is bottom-aligned, so space the model does not count
-// grows the panel upwards past the root's top while its lowest row stays where it was. `surfaces` records each such
+// `bottom` is the lowest section bottom below the higher of the root's top and the top of the surface that holds the
+// rows (the card body, the cluster's side panel or the HUD lines; the root alone for the cluster's gauge sections),
+// which the row model's reserve must cover. The surface's top matters for the cluster: its panel is bottom-aligned, so
+// space the model does not count grows the panel upwards past the root's top while its lowest row stays where it was.
+// The root's top matters for the top-aligned card and HUD: space that pushes their surface down, such as a margin on
+// the card body or padding on the root, moves the rows down with it. `surfaces` records each such
 // surface's box and whether it lies inside the root. `truncated` (values that end in an ellipsis) is recorded for review
 // only. Every comparison allows 0.01 CSS px: Chromium reports a
 // box flush with its row's edge with float noise, such as the cluster's RPM value ending at 221.3229217529297 in a row
@@ -136,7 +138,7 @@ export function layoutContainmentObservation(expected) {
       surfaces.push({className: String(surface.className), top: surfaceBox.top - rootBox.top, bottom: surfaceBox.bottom - rootBox.top,
         inside: within(surfaceBox, rootBox)});
     }
-    bottom = Math.max(bottom, box.bottom - surfaceBox.top);
+    bottom = Math.max(bottom, box.bottom - Math.min(surfaceBox.top, rootBox.top));
     let inside = box.width > 0 && box.height > 0 && within(box, rootBox);
     for (let ancestor = node.parentElement; inside && ancestor && ancestor !== root; ancestor = ancestor.parentElement)
       if (globalThis.getComputedStyle(ancestor).overflow !== 'visible' && !within(box, ancestor.getBoundingClientRect())) inside = false;
