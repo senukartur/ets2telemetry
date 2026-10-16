@@ -99,11 +99,11 @@ A v1 file passes both steps. A migrated file loads as `loaded` (or `loaded-with-
 
 | Field | Values | Default |
 | --- | --- | --- |
-| `overlay.layout` | `strip` (one 38 px row at the top centre), `card` (top right), `cluster` (round speed gauge and side panel at the bottom left), `hud` (shadowed text at the top left) | `strip` |
+| `overlay.layout` | `strip` (one or more 36 px rows at the top centre, as many as the enabled sections need), `card` (top right), `cluster` (round speed gauge and side panel at the bottom left), `hud` (shadowed text at the top left) | `strip` |
 | `overlay.sections.<id>` | `true` or `false` for each of the fourteen sections; at least one `true` | all `true` |
 | `overlay.placements.<layout>` (ET-012b) | `x` and `y` in [0, 1], `scale` in [0.5, 2]; see [overlay placements](#overlay-placements-and-edit-mode-et-012b) | the ET-012a anchor of each layout at scale 1: strip `0.5, 0`, card `1, 0`, cluster `0, 1`, HUD `0, 0` |
 
-The settings card groups the sections as Driving (`speed`, `gear`, `rpm`), Fuel (`fuel`, `range`, `sdk-consumption`), Job (`cargo`, `origin`, `destination`, `distance-driven`, `distance-remaining`, `deadline`, `expected-income`) and Time (`game-time`). Which sections the live bridge can fill today, and how a section without data appears, is described in [live telemetry fields](live-telemetry-fields.md#overlay) and [the minimal overlay](minimal-overlay.md#layouts-and-sections-et-012a).
+The settings card groups the sections as Driving (`speed`, `gear`, `rpm`), Fuel (`fuel`, `range`, `sdk-consumption`), Job (`cargo`, `origin`, `destination`, `distance-driven`, `distance-remaining`, `deadline`, `expected-income`) and Time (`game-time`). Which sections the live bridge can fill today, and how a section without data appears, is described in [live telemetry fields](live-telemetry-fields.md#overlay) and [the minimal overlay](minimal-overlay.md#layouts-and-sections-et-012a). Since ET-012c a sections save can change the strip's height: the strip reserves rows for every enabled section, whether or not it currently has data, and is re-placed after the durable save ([geometry](minimal-overlay.md#geometry-and-placements-et-012b)). The settings format is unchanged.
 
 ### Overlay placements and edit mode (ET-012b)
 
