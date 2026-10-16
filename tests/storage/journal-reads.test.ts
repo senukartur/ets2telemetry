@@ -52,7 +52,7 @@ function expectedOrder(query: JournalTripsQuery): string[] {
 function readAll(query: Omit<JournalTripsQuery, 'cursor'>) {
   const pages: number[] = [], trips: string[] = [];
   let cursor: string | undefined;
-  for (;;) {
+  for (let round = 0; round < 100; round++) {
     const page = ok(storage.journalTrips({...query, cursor}));
     expect(page.database).toEqual(DATABASE);
     pages.push(page.trips.length);
@@ -62,6 +62,7 @@ function readAll(query: Omit<JournalTripsQuery, 'cursor'>) {
     if (page.nextCursor === null) return {pages, trips};
     cursor = page.nextCursor;
   }
+  throw new Error('Journal paging did not end within 100 pages');
 }
 const eventSeqs = (tripUuid: string, cursor?: string) => ok(storage.journalEvents(tripUuid, {limit: 100, cursor})).events.map(event => event.eventSeq);
 
@@ -287,7 +288,7 @@ describe('journal samples and bounds (J5)', () => {
     expect(detail.exportBounds.lastSampleId).toBe('660');
     const pages: number[] = [], ids: string[] = [];
     let afterId: string | undefined;
-    for (;;) {
+    for (let round = 0; round < 100; round++) {
       const rows = ok(storage.listSamples({tripUuid: T.manySamples}, {limit: 300, afterId}));
       pages.push(rows.length); ids.push(...rows.map(row => row.id));
       if (rows.length < 300) break;
@@ -373,7 +374,7 @@ describe('a trip with more than 5,000 money amounts and more than 100 intervals 
       // 5,002 events in the open window: ten full export pages with cursors, then two events and no cursor.
       const seen: string[] = [], sizes: number[] = [];
       let cursor: string | undefined;
-      for (;;) {
+      for (let round = 0; round < 100; round++) {
         const page = ok(st.journalEvents(trip, {limit: 500, cursor}));
         sizes.push(page.events.length); seen.push(...page.events.map(e => e.eventSeq));
         if (page.events.length === 500) expect(page.nextCursor).toBe(page.events.at(-1)!.eventSeq); else expect(page.nextCursor).toBeNull();

@@ -31,13 +31,14 @@ afterAll(async () => { await ws.dispose(); });
 function readAll(query: Omit<JournalTripsQuery, 'cursor'>): {pages: number[]; trips: string[]} {
   const pages: number[] = [], trips: string[] = [];
   let cursor: string | undefined;
-  for (;;) {
+  for (let round = 0; round < 100; round++) {
     const page = ok(storage.journalTrips({...query, cursor}));
     pages.push(page.trips.length); trips.push(...page.trips.map(trip => trip.tripUuid));
     if (page.nextCursor === null) return {pages, trips};
     expect(page.trips).toHaveLength(JOURNAL_TRIP_PAGE);
     cursor = page.nextCursor;
   }
+  throw new Error('Journal paging did not end within 100 pages');
 }
 
 describe('journal reads at scale (J5; REG-014)', () => {
