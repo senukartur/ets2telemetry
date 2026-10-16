@@ -126,7 +126,7 @@ export class DurableConnection {
  * sink's `observe` at their place in the FIFO (R5). Sink failures follow the E7 table in durable-sink.ts.
  *
  * ET-015b (H8-H12): when the sink has `samples`, a `samples` op joins the FIFO tail once its oldest pending row has
- * waited SAMPLE_FLUSH_MS (a timer armed when rows become pending) or SAMPLE_BATCH_ROWS are pending. At most one such op
+ * waited SAMPLE_FLUSH_MS (a timer armed when rows or loss intervals become pending) or SAMPLE_BATCH_ROWS rows are pending. At most one such op
  * is queued or running, it writes at most SAMPLE_BATCH_ROWS rows of one plugin session, it never counts against the
  * item or reading bounds and it never produces or advances an ACK. A retryable sample failure keeps the rows for the
  * next timer and leaves every connection open; any other failure stops durable delivery for the service lifetime and
@@ -149,7 +149,7 @@ export class DurableDelivery {
   private readonly maxReadings: number;
   private readonly sampleFlushMs: number;
   private readonly sampleBatchRows: number;
-  /** The flush timer of pending samples, armed while rows are pending and no `samples` op is queued or running. */
+  /** The flush timer of pending samples, armed while rows or loss intervals are pending and no `samples` op is queued or running. */
   private sampleTimer?: ReturnType<typeof setTimeout>;
   /** Whether a `samples` op is queued or running (H8: at most one). */
   private sampleOp = false;
