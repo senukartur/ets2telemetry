@@ -7,12 +7,12 @@ import {classifyError, storageError} from '../errors';
 import {openStorage, type Storage} from '../index';
 import {parseRequest, type StorageCommand, type StorageResponse} from './protocol';
 
-/** A commit command as the host received it, after the request was parsed. */
-export type CommitCommand = Extract<StorageCommand, {name: 'commitEvent' | 'commitGap'}>;
+/** A commit command as the host received it, after the request was parsed; `appendSamples` since ET-015b (H16). */
+export type CommitCommand = Extract<StorageCommand, {name: 'commitEvent' | 'commitGap' | 'appendSamples'}>;
 /**
  * In-process options of a test entry that starts the host itself (ET-015a, R13). They are passed by code on the worker
  * thread and are never read from a message. `commitOptions` may return the in-process commit options, such as a
- * `testHooks.beforeCommit` fault, for one commit command. The production storage worker passes none.
+ * `testHooks.beforeCommit` fault, for one commit or sample append command. The production storage worker passes none.
  */
 export interface HostTestOptions {commitOptions?: (command: CommitCommand) => CommitOptions | undefined}
 
@@ -59,7 +59,10 @@ export function serveStorage(port: HostPort, testOptions: HostTestOptions = {}):
     // a test entry's in-process testOptions.
     case 'commitEvent': return storage.commitEvent({message: command.input.message, effects: command.input.effects}, testOptions.commitOptions?.(command));
     case 'commitGap': return storage.commitGap({message: command.input.message, effects: command.input.effects}, testOptions.commitOptions?.(command));
-    case 'appendSamples': return storage.appendSamples(command.pluginSessionId, command.rows);
+    // Only `uniqueSeconds` of the options is forwarded; the commit options come from the in-process testOptions only.
+    case 'appendSamples':
+      return storage.appendSamples(command.pluginSessionId, command.rows, command.options === undefined ? undefined : {uniqueSeconds: command.options.uniqueSeconds},
+        testOptions.commitOptions?.(command));
     case 'recordCompleteness':
       return storage.recordCompleteness(command.pluginSessionId, command.interval, command.options === undefined ? undefined : {ifAbsent: command.options.ifAbsent});
     case 'committedThrough': return storage.committedThrough(command.pluginSessionId);

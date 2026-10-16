@@ -169,7 +169,7 @@ describe('trips belong to one game', () => {
     expect(ok(storage.listSamples({tripUuid: T1}))).toEqual([]);
     expect(ok(storage.getTrip(T1))).toMatchObject({outcome: 'open', recordingCompleteness: 'complete'});
     // The same sample from the trip's own session is accepted.
-    expect(ok(storage.appendSamples(P1, [sample]))).toEqual({appended: 1});
+    expect(ok(storage.appendSamples(P1, [sample]))).toEqual({appended: 1, skipped: 0});
   });
   it('lets a later plugin session of the same game close the trip on restart', async () => {
     const storage = await ets2Trip();
