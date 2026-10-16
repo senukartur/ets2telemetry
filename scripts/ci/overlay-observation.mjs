@@ -106,8 +106,12 @@ export const LAYOUT_SMOKE_RESERVED_CSS = Object.freeze({card: 336, cluster: 225,
 // expected sections, then one coherent read of where they lie. `outside` lists sections with an empty box or one not
 // fully inside the root (the window's viewport) and every ancestor up to the root that clips its overflow, such as the
 // cluster's side panel. `clipped` lists sections whose value box is not vertically inside the section's fixed row.
-// `bottom` is the lowest section bottom below the root's top, which the row model's reserve must cover. `truncated`
-// (values that end in an ellipsis) is recorded for review only. Every comparison allows 0.01 CSS px: Chromium reports a
+// `bottom` is the lowest section bottom below the top of the surface that holds the rows (the card body, the cluster's
+// side panel or the HUD lines; the root for the cluster's gauge sections), which the row model's reserve must cover.
+// Measuring from the surface matters for the cluster: its panel is bottom-aligned, so space the model does not count
+// grows the panel upwards past the root's top while its lowest row stays where it was. `surfaces` records each such
+// surface's box and whether it lies inside the root. `truncated` (values that end in an ellipsis) is recorded for review
+// only. Every comparison allows 0.01 CSS px: Chromium reports a
 // box flush with its row's edge with float noise, such as the cluster's RPM value ending at 221.3229217529297 in a row
 // ending at 221.32291793823242. That is below one 1/64 px layout unit at display scaling up to 150 % and about 1/50 of a
 // device pixel at 200 %, so it never hides a visible overhang.
@@ -121,11 +125,18 @@ export function layoutContainmentObservation(expected) {
   if (sections.length !== expected.sections.length || sections.some((id, index) => id !== expected.sections[index])) return false;
   const rootBox = root.getBoundingClientRect(), noise = 0.01;
   const within = (box, outer) => box.left >= outer.left - noise && box.top >= outer.top - noise && box.right <= outer.right + noise && box.bottom <= outer.bottom + noise;
-  const outside = [], clipped = [], truncated = [];
+  const outside = [], clipped = [], truncated = [], surfaces = [], seen = [];
   let bottom = 0;
   nodes.forEach((node, index) => {
     const box = node.getBoundingClientRect();
-    bottom = Math.max(bottom, box.bottom - rootBox.top);
+    const surface = node.closest('.overlay-card-body, .overlay-panel, .overlay-hud-lines');
+    const surfaceBox = surface ? surface.getBoundingClientRect() : rootBox;
+    if (surface && !seen.includes(surface)) {
+      seen.push(surface);
+      surfaces.push({className: String(surface.className), top: surfaceBox.top - rootBox.top, bottom: surfaceBox.bottom - rootBox.top,
+        inside: within(surfaceBox, rootBox)});
+    }
+    bottom = Math.max(bottom, box.bottom - surfaceBox.top);
     let inside = box.width > 0 && box.height > 0 && within(box, rootBox);
     for (let ancestor = node.parentElement; inside && ancestor && ancestor !== root; ancestor = ancestor.parentElement)
       if (globalThis.getComputedStyle(ancestor).overflow !== 'visible' && !within(box, ancestor.getBoundingClientRect())) inside = false;
@@ -137,18 +148,20 @@ export function layoutContainmentObservation(expected) {
     if (value.scrollWidth > value.clientWidth) truncated.push(sections[index]);
   });
   return {layout: expected.layout, viewport: {innerWidth: globalThis.innerWidth, innerHeight: globalThis.innerHeight}, sections, outside, clipped, bottom,
-    truncated};
+    surfaces, truncated};
 }
 
 /**
- * Every shown section lies inside the overlay window and its clipping ancestors, no value is clipped by its row, the
- * lowest section ends within the CSS height the row model reserves for the shown sections (0.01 px of float noise
- * allowed), and the viewport has the window's size, allowing one DIP of rounding (getBounds can round a window up by
- * one DIP).
+ * Every shown section lies inside the overlay window and its clipping ancestors, no value is clipped by its row, the one
+ * surface holding the rows lies inside the window, the lowest section ends within the CSS height the row model reserves
+ * for the shown sections below that surface's top (0.01 px of float noise allowed), and the viewport has the window's
+ * size, allowing one DIP of rounding (getBounds can round a window up by one DIP).
  */
 export function verifyLayoutContainment(observation, window, reservedCss) {
   assert.deepEqual(observation.outside, [], 'Enabled overlay sections lie outside the overlay window');
   assert.deepEqual(observation.clipped, [], 'Overlay section values are clipped by their rows');
+  assert.ok(Array.isArray(observation.surfaces) && observation.surfaces.length === 1, 'Exactly one overlay surface must hold the rows');
+  assert.ok(observation.surfaces[0].inside === true, 'The overlay surface lies outside the overlay window');
   assert.ok(Number.isFinite(observation.bottom) && Number.isFinite(reservedCss) && observation.bottom <= reservedCss + 0.01,
     'Overlay sections extend below the height the row model reserves');
   const {innerWidth, innerHeight} = observation.viewport;

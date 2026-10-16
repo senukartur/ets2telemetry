@@ -108,4 +108,9 @@ it('matches the card, cluster and HUD rules in renderer.css', () => {
   declares('.overlay-hud-lines', {gap: `${HUD_LINE_GAP_CSS}px`});
   declares('.overlay-hud-tags', {height: `${HUD_TAG_ROW_HEIGHT_CSS}px`, overflow: 'hidden'});
   declares('.overlay-hud-line', {height: `${HUD_LINE_HEIGHT_CSS}px`, 'align-items': 'center', overflow: 'hidden'});
+  // The row model counts no margin around a row or tag row, and only the card header's 6 px gap.
+  for (const selector of ['.overlay-row', '.overlay-panel-row', '.overlay-panel-tags', '.overlay-hud-line', '.overlay-hud-tags', '.overlay-panel', '.overlay-hud-lines']) {
+    const margins = rule(selector).split(';').map(declaration => /^\s*(margin[\w-]*)\s*:\s*(.*?)\s*$/s.exec(declaration)).flatMap(match => match ? [match[2]] : []);
+    expect(margins.filter(value => value !== '0'), `${selector} margins`).toEqual([]);
+  }
 });

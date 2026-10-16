@@ -215,26 +215,31 @@ describe('ET-012d card, cluster and HUD containment observation', () => {
    * A window of the layout's reserved size. Card and HUD sections sit in one clipping body that fills the window;
    * cluster gauge sections sit in a 200 px gauge that does not clip, the panel sections in a clipping side panel. Rows
    * are 18 high and 21 apart from y 28, each value 16 high one pixel below its row's top. `clip` moves the clipping
-   * container, `item` and `value` move single sections and values.
+   * container, `item` and `value` move single sections and values. The clipping container that holds the rows is the
+   * layout's surface, which the sections' `closest` finds, named as in renderer.css.
    */
   function containmentDocument(layout: LayoutName, {layout: rendered = layout, sections = EXPECTED, roots = 1, freshness = 'current', clip, item = {},
     value = {}, truncated = []}: Containment = {}) {
     const window = WINDOWS[layout], rootBox = {left: 0, top: 0, width: window.width, height: window.height};
-    const container = (box: Box, overflow: string, parentElement: unknown) => ({overflow, parentElement, getBoundingClientRect: () => rect(box)});
+    const container = (box: Box, overflow: string, parentElement: unknown, className = '') => ({overflow, parentElement, className, getBoundingClientRect: () => rect(box)});
+    const SURFACES = '.overlay-card-body, .overlay-panel, .overlay-hud-lines';
+    const SURFACE = {card: 'overlay-surface overlay-card-body', cluster: 'overlay-surface overlay-panel', hud: 'overlay-hud-lines'}[layout];
     const nodes: unknown[] = [];
     const rootNode = {overflow: 'hidden', getAttribute: (name: string) => ({'data-layout': rendered, 'data-freshness': freshness} as Record<string, string>)[name] ?? null,
       getBoundingClientRect: () => rect(rootBox), querySelectorAll: (selector: string) => selector === '[data-testid^="overlay-section-"]' ? nodes : []};
-    const body = container(rootBox, layout === 'cluster' ? 'visible' : 'hidden', rootNode);
+    const body = container(rootBox, layout === 'cluster' ? 'visible' : 'hidden', rootNode,
+      layout === 'cluster' ? 'overlay-cluster-body' : clip ? '' : SURFACE);
     const gauge = container({left: 0, top: window.height - 200, width: 200, height: 200}, 'visible', body);
-    const panel = container(clip ?? {left: 210, top: 0, width: 230, height: window.height}, 'hidden', body);
-    const clipped = layout === 'cluster' ? panel : clip ? container(clip, 'hidden', body) : body;
+    const panel = container(clip ?? {left: 210, top: 0, width: 230, height: window.height}, 'hidden', body, SURFACE);
+    const clipped = layout === 'cluster' ? panel : clip ? container(clip, 'hidden', body, SURFACE) : body;
     let row = 0;
     for (const id of sections) {
       const inGauge = layout === 'cluster' && ['speed', 'gear', 'rpm'].includes(id);
       const box = item[id] ?? (inGauge ? {left: 50, top: window.height - 150 + ['speed', 'gear', 'rpm'].indexOf(id) * 30, width: 100, height: 24}
         : {left: (layout === 'cluster' ? 220 : 10), top: 28 + 21 * row++, width: 200, height: 18});
       const valueBox = value[id] ?? {left: box.left + 100, top: box.top + 1, width: 60, height: 16};
-      nodes.push({parentElement: inGauge ? gauge : clipped, getAttribute: (name: string) => name === 'data-testid' ? `overlay-section-${id}` : null,
+      nodes.push({parentElement: inGauge ? gauge : clipped, closest: (selector: string) => !inGauge && selector === SURFACES ? clipped : null,
+        getAttribute: (name: string) => name === 'data-testid' ? `overlay-section-${id}` : null,
         getBoundingClientRect: () => rect(box), querySelector: (selector: string) => selector === '.overlay-value'
           ? {getBoundingClientRect: () => rect(valueBox), scrollWidth: truncated.includes(id) ? 200 : 60, clientWidth: 60} : null});
     }
@@ -266,9 +271,12 @@ describe('ET-012d card, cluster and HUD containment observation', () => {
   });
   // The fake rows end at 28 + 21 × 11 + 18 = 277 in the card and HUD and at 28 + 21 × 8 + 18 = 214 in the cluster panel.
   const BOTTOM = {card: 277, cluster: 214, hud: 277};
+  // Each surface fills the window's height: the card body and HUD lines from 0 to 360 and 320, the cluster panel to 225.
+  const SURFACE = {card: {className: 'overlay-surface overlay-card-body', top: 0, bottom: 360, inside: true},
+    cluster: {className: 'overlay-surface overlay-panel', top: 0, bottom: 225, inside: true}, hud: {className: 'overlay-hud-lines', top: 0, bottom: 320, inside: true}};
   it.each(['card', 'cluster', 'hud'] as const)('reports every shown %s section inside the window and records truncation', async layout => {
     expect(await observeLayout(layout, {truncated: ['origin']})).toEqual({layout, viewport: {innerWidth: WINDOWS[layout].width, innerHeight: WINDOWS[layout].height},
-      sections: EXPECTED, outside: [], clipped: [], bottom: BOTTOM[layout], truncated: ['origin']});
+      sections: EXPECTED, outside: [], clipped: [], bottom: BOTTOM[layout], surfaces: [SURFACE[layout]], truncated: ['origin']});
   });
   it.each([
     {name: 'below the card window', layout: 'card' as const, options: {item: {'game-time': {left: 10, top: 384, width: 200, height: 18}}}},
@@ -343,6 +351,31 @@ describe('ET-012d card, cluster and HUD containment observation', () => {
     for (const bottom of [336.02, Number.NaN]) expect(() => verifyLayoutContainment({...valid, bottom}, WINDOWS.card, RESERVED.card), String(bottom))
       .toThrow('Overlay sections extend below the height the row model reserves');
     expect(() => verifyLayoutContainment(valid, WINDOWS.card)).toThrow('Overlay sections extend below the height the row model reserves');
+  });
+  // Review pass 2: the cluster's panel is bottom-aligned, so 2 px the model does not count above each of its nine rows
+  // grows it by 18 px upwards, to {210, −18, 230, 243} in the 225 px window, while its rows stay in the window. Measured
+  // from the root's top the lowest row would still end at 214; measured from the panel's top it ends at 214 + 18 = 232.
+  const GROWN_PANEL = {left: 210, top: -18, width: 230, height: 243};
+  it('measures the lowest row from the top of its surface and records the surface', async () => {
+    const grown = await observeLayout('cluster', {clip: GROWN_PANEL});
+    expect(grown).toMatchObject({outside: [], clipped: [], bottom: 232,
+      surfaces: [{className: 'overlay-surface overlay-panel', top: -18, bottom: 225, inside: false}]});
+    // The gauge sections have no surface and are measured from the root: a speed box ending at 224 is the lowest.
+    expect(await observeLayout('cluster', {item: {speed: {left: 50, top: 200, width: 100, height: 24}}})).toMatchObject({bottom: 224});
+    // A card body that starts 10 px down moves the measurement with it: 277 − 10.
+    expect(await observeLayout('card', {clip: {left: 0, top: 10, width: 300, height: 350}})).toMatchObject({bottom: 267,
+      surfaces: [{className: 'overlay-surface overlay-card-body', top: 10, bottom: 360, inside: true}]});
+  });
+  it('rejects a surface outside the window and an unexpected number of surfaces', async () => {
+    const {verifyLayoutContainment} = await import(observationModule);
+    const grown = await observeLayout('cluster', {clip: GROWN_PANEL}) as {surfaces: Record<string, unknown>[]};
+    expect(() => verifyLayoutContainment(grown, WINDOWS.cluster, RESERVED.cluster)).toThrow('The overlay surface lies outside the overlay window');
+    // Even with the surface inside, the lowest row 232 below the panel's top exceeds the 225 reserve.
+    const inside = {...grown, surfaces: [{...grown.surfaces[0], inside: true}]};
+    expect(() => verifyLayoutContainment(inside, WINDOWS.cluster, RESERVED.cluster)).toThrow('Overlay sections extend below the height the row model reserves');
+    const valid = await observeLayout('cluster') as {surfaces: Record<string, unknown>[]};
+    for (const surfaces of [[], [valid.surfaces[0], valid.surfaces[0]], undefined])
+      expect(() => verifyLayoutContainment({...valid, surfaces}, WINDOWS.cluster, RESERVED.cluster)).toThrow('Exactly one overlay surface must hold the rows');
   });
 });
 
