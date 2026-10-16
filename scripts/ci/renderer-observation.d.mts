@@ -19,6 +19,7 @@ export function waitForV1NotCurrentLive(page: Page, values: readonly string[], s
 /** Element test id to exact text, `null` for an absent element; `freshness` compares overlay-root's data-freshness. */
 export type OverlayV1Expectation = Readonly<Record<string, string | null>>;
 export const SYNTHETIC_V1_OVERLAY_CURRENT: OverlayV1Expectation;
+export const SYNTHETIC_V1_STRIP_SECTIONS: readonly string[];
 export const SYNTHETIC_V1_OVERLAY_V0_STALE: OverlayV1Expectation;
 export const SYNTHETIC_V1_OVERLAY_V1_STALE: OverlayV1Expectation;
 export const SYNTHETIC_V1_OVERLAY_STOPPED: OverlayV1Expectation;

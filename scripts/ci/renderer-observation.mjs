@@ -208,6 +208,9 @@ export const SYNTHETIC_V1_OVERLAY_CURRENT = Object.freeze({
   'overlay-cargo': 'Synthetic Cargo', 'overlay-cargo-detail': '18.0 t', 'overlay-destination': 'Synthetic City B, Synthetic Company B',
   'overlay-speed': '90.0', 'freshness': 'current'
 });
+/** The strip sections the pair shows, in canonical order: range stays hidden (its estimate is not observed). */
+export const SYNTHETIC_V1_STRIP_SECTIONS = Object.freeze(['speed', 'gear', 'rpm', 'fuel', 'sdk-consumption', 'cargo', 'origin', 'destination',
+  'distance-remaining', 'deadline', 'expected-income', 'game-time']);
 /** v0 not current: every shown section is a dash and no detail remains. */
 export const SYNTHETIC_V1_OVERLAY_V0_STALE = Object.freeze({
   'overlay-origin': '—', 'overlay-distance-remaining': '—', 'overlay-deadline': '—', 'overlay-cargo': '—', 'overlay-cargo-detail': null,

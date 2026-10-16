@@ -8,7 +8,7 @@ import {OVERLAY_PRESETS} from '../../apps/desktop/src/overlay-sections';
 import {DEFAULT_OVERLAY_PLACEMENTS} from '../../apps/desktop/src/overlay-placement';
 import {overlayView} from '../../apps/desktop/src/overlay-view';
 import {
-  SYNTHETIC_V1_OVERLAY_CURRENT, SYNTHETIC_V1_OVERLAY_STOPPED, SYNTHETIC_V1_OVERLAY_V0_STALE, SYNTHETIC_V1_OVERLAY_V1_STALE
+  SYNTHETIC_V1_OVERLAY_CURRENT, SYNTHETIC_V1_OVERLAY_STOPPED, SYNTHETIC_V1_OVERLAY_V0_STALE, SYNTHETIC_V1_OVERLAY_V1_STALE, SYNTHETIC_V1_STRIP_SECTIONS
 } from '../../scripts/ci/renderer-observation.mjs';
 import {smokePair, v1Projection, type V1Options} from '../shared/live-v1-fixtures';
 
@@ -297,6 +297,8 @@ const expectRendered = (presentation: OverlayPresentation, expected: Readonly<Re
 it('produces the overlay texts the telemetry smoke expects for the smoke pair', () => {
   const current = overlayPresentation(smokePair());
   expectRendered(current, SYNTHETIC_V1_OVERLAY_CURRENT);
+  // The strip containment assertion (ET-012c) in the telemetry smoke expects exactly these sections for the pair.
+  expect(ids(current.sections)).toEqual(SYNTHETIC_V1_STRIP_SECTIONS);
   expectRendered(overlayPresentation(smokePair({}, {status: 'stale', fresh: false}), undefined, undefined, current), SYNTHETIC_V1_OVERLAY_V0_STALE);
   expectRendered(overlayPresentation(smokePair({status: 'stale', fresh: false, reason: 'Main has no recent v1 SDK capture'}), undefined, undefined, current),
     SYNTHETIC_V1_OVERLAY_V1_STALE);
