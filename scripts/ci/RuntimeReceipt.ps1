@@ -168,7 +168,7 @@ function Test-RecordingServiceEvent {
 function Test-RecordingStatusReceipt {
     param([object]$Recording)
     foreach ($field in @('statusWaitingShown','statusRecordingShown','statusUnknownAfterServiceExit','statusReloadKept','statusRecordedWhileClosed',
-        'statusNoEventLoss','statusReopenedLosses','statusRunBFresh')) {
+        'statusNoEventLoss','statusReopenedLosses','statusRunBFresh','dashboardClosedBeforeTrayExit')) {
         if ($Recording.$field -isnot [bool] -or $Recording.$field -ne $true) { return $false }
     }
     $status = $Recording.status
@@ -194,6 +194,14 @@ function Test-RecordingStatusReceipt {
         !(Test-ReceiptInteger -Value $closed.losses.lostEvents -Minimum 0 -Maximum 0) -or
         !(Test-ReceiptInteger -Value $closed.losses.notConnected -Minimum 1 -Maximum 1)) { return $false }
     if ((@($status.reopened.losses) -join '|') -cne 'Gaps recorded since ETS2Telemetry started|Intervals without a connection: 1') { return $false }
+    # The reopened dashboard is closed again, so the tray exit runs with the main window closed.
+    if ($status.closedAgain.dashboard -isnot [bool] -or $status.closedAgain.dashboard) { return $false }
+    # Each dashboard text log the driver records holds the text it was waited for.
+    if (@($status.firstConnectionTexts | Where-Object { $_.headline -ceq 'Recording' -and @($_.detail)[0] -ceq $note }).Count -lt 1 -or
+        @($status.serviceRestartTexts | Where-Object { $_.headline -ceq 'Not known: the telemetry service is not running or has not reported a valid status' -and
+            $null -eq $_.detail }).Count -lt 1 -or
+        @($Recording.restart.status.texts | Where-Object { $_.headline -cin @('Recording','Game paused; recording continues when it resumes') -and
+            @($_.detail)[0] -ceq $note }).Count -lt 1) { return $false }
     foreach ($row in @($Recording.restart.status.rows)) {
         foreach ($name in $lossNames) { if ($null -ne $row.$name -and !(Test-ReceiptInteger -Value $row.$name -Minimum 0 -Maximum 0)) { return $false } }
     }

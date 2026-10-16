@@ -170,7 +170,11 @@ function recordingReceipt(path: (string | number)[] = [], replacement?: Json): s
     afterRestart: waiting(), serviceRestartRows: [{state: 'unknown'}, row('opening'), row('waiting')], afterReload: waitingText(),
     whileClosedRows: [row('recording', 1), row('interrupted', 1)],
     whileClosed: {state: 'recording', target: 'synthetic', code: null, losses: losses(1), trip: {phase: 'idle', completeness: null, untrackedJob: false}},
-    reopened: {headline: 'Recording', detail: [note], losses: ['Gaps recorded since ETS2Telemetry started', 'Intervals without a connection: 1'], alert: null, notice}};
+    reopened: {headline: 'Recording', detail: [note], losses: ['Gaps recorded since ETS2Telemetry started', 'Intervals without a connection: 1'], alert: null, notice},
+    closedAgain: lifecycleState,
+    firstConnectionTexts: [waitingText(), {headline: 'Recording', detail: [note, 'Current trip is partial'], losses: null, alert: null, notice}],
+    serviceRestartTexts: [waitingText(), {headline: 'Not known: the telemetry service is not running or has not reported a valid status', detail: null, losses: null, alert: null,
+      notice: 'Prototype live display. The recording status is not known right now.'}, waitingText()]};
   const value: Json = {passed: true, commit: 'candidate', mode: 'packaged', scenarioKind: 'recording', launcherExit: 0, probesAfterExit: ['ets2telemetry-probe-a'],
     mainEvents: [{event: 'DIAGNOSTIC_SERVICE_EXIT_REQUEST'}, {event: 'SERVICE_EXIT', detail: {code: 0}}, {event: 'APP_EXIT_REQUESTED', facts: {reason: 'tray'}},
       {event: 'SERVICE_EXIT', detail: {code: 0}}, {event: 'APP_EXIT', detail: {code: 0}}],
@@ -178,9 +182,10 @@ function recordingReceipt(path: (string | number)[] = [], replacement?: Json): s
     recording: {commitsActive: true, serviceRestartRecovered: true, dashboardClosedRecordingContinued: true, trayExitOrderly: true, restartRecovered: true,
       shutdownClean: true, simulatorMatchesReplay: true, historyDatabaseAbsent: true, sidecarsAbsent: true, databaseRowsMatch: true, samplesRecorded: true,
       statusWaitingShown: true, statusRecordingShown: true, statusUnknownAfterServiceExit: true, statusReloadKept: true, statusRecordedWhileClosed: true,
-      statusNoEventLoss: true, statusReopenedLosses: true, statusRunBFresh: true, status,
+      statusNoEventLoss: true, statusReopenedLosses: true, statusRunBFresh: true, dashboardClosedBeforeTrayExit: true, status,
       servicePid: 4100, restartedServicePid: 4200, afterClose: lifecycleState, whileClosed: lifecycleState,
-      restart: {servicePid: 4300, durable, status: {beforeAdmission: waiting(), rows: [row('opening'), row('waiting'), row('recording'), row('paused')]}},
+      restart: {servicePid: 4300, durable, status: {beforeAdmission: waiting(), rows: [row('opening'), row('waiting'), row('recording'), row('paused')],
+        texts: [waitingText(), {headline: 'Game paused; recording continues when it resumes', detail: [note], losses: null, alert: null, notice}]}},
       firstServiceDurable: {...durable, status: 'connected'}, restartedServiceDurable: durable,
       firstConnection: connection(1, '0', [['1', false], ['2', false], ['3', false], ['4', false], ['5', false]], ['1', '2', '3', '4'], ['5'], 'server'),
       secondConnection: connection(2, '4', [['5', true], ['6', false], ['7', false], ['8', false], ['9', false], ['10', false]], ['5', '6', '7', '8', '9', '10'], [], 'client'),
@@ -290,7 +295,13 @@ function recordingCases() {
     invalid('reopened dashboard without totals', ['recording', 'status', 'reopened', 'losses'], null),
     invalid('run B carried run A totals', ['recording', 'restart', 'status', 'rows', 3, 'notConnected'], 1),
     invalid('run B never recorded', ['recording', 'restart', 'status', 'rows'], [{state: 'opening', target: 'synthetic'}, {state: 'waiting', target: 'synthetic'}, {state: 'interrupted', target: 'synthetic'}]),
-    int64('status losses', ['recording', 'status', 'whileClosed', 'losses', 'notConnected'], 2)
+    int64('status losses', ['recording', 'status', 'whileClosed', 'losses', 'notConnected'], 2),
+    // PR-4 review pass 1: the dashboard text logs and the closed dashboard before the tray exit.
+    invalid('connection 1 text log without recording', ['recording', 'status', 'firstConnectionTexts', 1, 'headline'], 'Connection lost; recording resumes on reconnection, and the missing time is recorded as a gap'),
+    invalid('restart text log without unknown', ['recording', 'status', 'serviceRestartTexts', 1, 'headline'], 'Not known while the telemetry service is not running'),
+    invalid('run B text log without a recorded state', ['recording', 'restart', 'status', 'texts', 1, 'headline'], 'Waiting for the recorded source to connect'),
+    invalid('dashboard open at the tray exit', ['recording', 'status', 'closedAgain', 'dashboard'], true),
+    invalid('closed-again flag missing', ['recording', 'dashboardClosedBeforeTrayExit'])
   ];
 }
 
