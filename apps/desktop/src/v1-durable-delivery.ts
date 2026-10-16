@@ -13,8 +13,16 @@ import type {DiagnosticFacts} from './diagnostics';
 import {failureClass, type CoverageMessage, type DurableSink, type ReadingMessage, type SampleSink, type SinkError, type SinkResult, type WelcomeMessage} from './durable-sink';
 import {MAX_PENDING_SAMPLES} from './sample-buffer';
 
-/** E5: coverage items queued or in flight across every connection. One more closes its connection as retryable. */
-export const MAX_PENDING_COMMITS = 256;
+/**
+ * E5, ET-015c (G11): coverage items queued or in flight across every connection. One more closes its connection as
+ * retryable (BACKLOG_FULL). The bound is twice the producer's 256 retained entries (docs/native-transport-v1.md, I2).
+ * The leftover items of a connection that has ended were never acknowledged, so they cover entries the producer still
+ * retains; the reconnection redelivers those entries, at most 256, and its live items are admitted into the same 256
+ * entries until an ACK releases some, which follows commits that have already left the queue. Leftovers plus a full
+ * redelivery plus live items therefore fit, and a reconnection is not refused while the earlier work drains. Only a
+ * true storage stall fills it, for example with the delta gaps of a gap record that keeps growing while nothing commits.
+ */
+export const MAX_PENDING_COMMITS = 512;
 /**
  * R5: snapshot readings queued or in flight across every connection, counted apart from the coverage items: more than
  * 25 s at 20 Hz, above the 10 s storage deadline that fails the worker. One more closes its connection as retryable.
