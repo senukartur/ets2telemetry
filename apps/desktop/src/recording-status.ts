@@ -136,6 +136,15 @@ export function parseRecordingHealth(value: unknown): RecordingHealth | undefine
   if (!losses || trip === undefined) return undefined;
   return {state: state as RecordingState, target: value.target as RecordingTarget, code: value.code, losses, trip};
 }
+/**
+ * ET-015c PR-4: a status as flat diagnostic facts (fixed enums, counts and booleans only) for main's opt-in smoke
+ * timeline row RECORDING_STATUS, which the runtime journey reads to prove states too short to poll.
+ */
+export function recordingFacts(status: RecordingHealth): Readonly<Record<string, string | number | boolean | null>> {
+  if (!('losses' in status)) return {state: status.state};
+  return {state: status.state, target: status.target, code: status.code, ...status.losses,
+    tripPhase: status.trip?.phase ?? null, tripCompleteness: status.trip?.completeness ?? null, untrackedJob: status.trip?.untrackedJob ?? null};
+}
 /** Value equality of two statuses built by this module or by `parseRecordingHealth` (their key order is fixed). */
 export const sameRecording = (left: RecordingHealth, right: RecordingHealth): boolean => JSON.stringify(left) === JSON.stringify(right);
 const sameLosses = (left: RecordingHealth | undefined, right: RecordingHealth): boolean =>

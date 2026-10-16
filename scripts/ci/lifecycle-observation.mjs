@@ -3,7 +3,7 @@ import {spawn} from 'node:child_process';
 import {mkdir, readFile, readdir, writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import {performance} from 'node:perf_hooks';
-import {waitForCurrentTelemetry} from './renderer-observation.mjs';
+import {RECORDING_DISABLED_TEXT, waitForCurrentTelemetry, waitForRecordingText} from './renderer-observation.mjs';
 import {waitForOverlay} from './overlay-observation.mjs';
 
 // ET-011b settings evidence. Run A starts with a deliberately truncated settings file, which must stay byte-identical
@@ -86,6 +86,13 @@ export async function newDashboardPage(application, retired) {
     pages => pages.length === 1, 'EXPECTED_ONE_NEW_DASHBOARD').then(pages => pages[0]);
 }
 
+/** ET-015c PR-4: main's `disabled` recording status and the dashboard's fixed text for it. */
+async function disabledRecording(application, page) {
+  const state = await until(() => lifecycleState(application), value => value.health.recording.state === 'disabled', 'RECORDING_NOT_DISABLED');
+  assert.deepEqual(state.health.recording, {state: 'disabled'});
+  return {health: state.health.recording, dashboard: await waitForRecordingText(page, RECORDING_DISABLED_TEXT, 'RECORDING_DISABLED_TEXT_NOT_SHOWN')};
+}
+
 async function readyDashboard(page) {
   await page.getByText(READY_TEXT, {exact: true}).waitFor({state: 'visible', timeout: 10000});
   return waitForCurrentTelemetry(page);
@@ -129,6 +136,8 @@ export async function runLifecycleSmoke({application, launcher, dashboard, overl
   assert.equal(initial.started, true); assert.equal(initial.tray, true); assert.equal(initial.overlay, true);
   assert.ok(Number.isSafeInteger(initial.servicePid) && initial.servicePid > 0, 'Service PID unavailable');
   record.servicePid = initial.servicePid;
+  // ET-015c PR-4: the service records nothing, so main reports `disabled` and the dashboard shows its fixed text.
+  record.recordingStatus = {initial: await disabledRecording(application, dashboard)};
   // 0. The seeded invalid settings file yields defaults and is neither changed nor joined by any file on startup.
   // A CPU-starved start (hosted run 38755116140) may open the windows while the read is still pending (`loading`,
   // read-only defaults); main applies the same read when it settles, so wait for that before the exact checks.
@@ -183,6 +192,8 @@ export async function runLifecycleSmoke({application, launcher, dashboard, overl
   assert.equal(await application.evaluate(({app}) => app.emit('ets2telemetry:diagnostic-tray-action', 'open')), true, 'Diagnostic tray action unavailable');
   const trayDashboard = await newDashboardPage(application, retired);
   record.afterTrayOpen = await readyDashboard(trayDashboard);
+  // A dashboard reopened from the tray gets the same status when it subscribes.
+  record.recordingStatus.afterTrayOpen = await disabledRecording(application, trayDashboard);
   const beforeExit = await lifecycleState(application);
   assert.equal(beforeExit.servicePid, initial.servicePid); assert.equal(beforeExit.dashboard, true); assert.equal(await serviceExits(), 0);
   assert.equal(source.statistics().connections, 1);
@@ -232,6 +243,8 @@ export async function verifyLifecycleRestart({application, record, rendererPages
   assert.equal(state.started, true); assert.equal(state.tray, true);
   record.restart.servicePid = state.servicePid;
   assert.notEqual(state.servicePid, record.servicePid);
+  record.recordingStatus.restart = await disabledRecording(application, dashboard);
+  record.recordingDisabledShown = true;
   record.restartRecovered = true;
   record.restart.settingsState = state.settings.state;
   assert.deepEqual(state.settings, {units: {ets2: 'us-customary', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null});

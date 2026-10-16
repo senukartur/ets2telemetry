@@ -462,3 +462,11 @@ ET-015c PR-3 implementation update on October 16, 2026: the telemetry service no
 - the committed loss counts.
 
 Main keeps it in `AppState.health.recording`. It resets the status to `unknown` while the service is not running, and adds the totals across service restarts. A restore loss counted again after a service restart in the same plugin session overstates the totals (TD-004); the database stays correct. No IPC channel, bridge method or preload code changed; only the payload type is wider. Production reports `disabled`, and the dashboard and tray text follow in PR-4. See [the telemetry service v1 ingestion](docs/telemetry-service-v1.md) and [ET-015c validation](docs/validation/et-015c.md).
+
+ET-015c PR-4 implementation update on October 16, 2026: the Application status card of the dashboard and the tray's second status line show the recording state from `AppState.health.recording`.
+- **Dashboard.** It shows the target, with a note that a synthetic or replay database is never game history, the current trip's completeness, and the gaps recorded since ETS2Telemetry started. A restore loss carries the TD-004 upper-bound note. An alert appears for `retrying`, `stopped` and `live-only`.
+- **Unknown state.** The `unknown` headline now reads "Not known: the telemetry service is not running or has not reported a valid status", because main also sets `unknown` for a rejected status message. This amends G8's fixed text.
+- **Smokes.** The development and packaged smokes assert the default `Off` text. The recording journey asserts the state across the start, a service restart, a dashboard reload, close-to-tray, a tray exit with the main window closed and an application restart.
+- **Unchanged.** The overlay, the preloads, IPC channels and bridge methods are unchanged, and `GAME_HISTORY_RECORDING` stays `false`.
+
+See [application lifecycle](docs/app-lifecycle.md) and [ET-015c validation](docs/validation/et-015c.md).
