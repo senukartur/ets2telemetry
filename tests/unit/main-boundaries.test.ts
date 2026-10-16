@@ -1617,3 +1617,22 @@ it('keeps the recording status unchanged when the upstream live channel closes a
   expect(upstreamRequests()).toBe(2);
   expect([healthOf(), pushedRecordings().length]).toEqual([recordingStatus('recording'), pushes]);
 });
+// ET-015c PR-4: the opt-in smoke timeline records every recording status change as flat facts; default logs never do.
+const recordingRows = () => log.mock.calls.filter(call => call[0] === 'RECORDING_STATUS').map(call => call[2] as unknown);
+it('records each recording status change in the opt-in diagnostic timeline only', async () => {
+  vi.stubEnv('ETS2TELEMETRY_DIAGNOSTIC_DIR', 'C:\\isolated\\diagnostics');
+  await ready();
+  report(recordingStatus('waiting')); report(recordingStatus('waiting'));
+  report({...recordingStatus('retrying', {lostEvents: 2}, 'DISK_FULL'), trip: null});
+  child.emit('exit', 1);
+  expect(recordingRows()).toEqual([
+    {state: 'waiting', target: 'synthetic', code: null, ...NO_LOSSES, tripPhase: 'active', tripCompleteness: 'partial', untrackedJob: false},
+    {state: 'retrying', target: 'synthetic', code: 'DISK_FULL', ...NO_LOSSES, lostEvents: 2, tripPhase: null, tripCompleteness: null, untrackedJob: null},
+    {state: 'unknown'}]);
+});
+it('keeps recording status changes out of default logs', async () => {
+  await ready();
+  report(recordingStatus('recording')); child.emit('exit', 1);
+  expect(healthOf()).toEqual({state: 'unknown'});
+  expect(recordingRows()).toEqual([]);
+});
