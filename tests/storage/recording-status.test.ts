@@ -67,12 +67,18 @@ const TIMELINE_CODES = /^(HISTORY_STORAGE_OPENED|HISTORY_STORAGE_CLOSED|V1_DURAB
  * follows source messages only.
  */
 const NO_STALE_MS = 600_000;
+/**
+ * The sample flush delay of these cases (review pass 1). With the 5 s default a slow host could let the timer write
+ * pending rows mid-case: a successful write clears the retry code early in (a), and a write before the failure leaves
+ * nothing to discard in (b). No case tests the timer, so pending rows are written only by a full batch or at the stop.
+ */
+const NO_FLUSH_TIMER_MS = 600_000;
 function serviceRuntime(name: string, worker: StorageWorkerHandle, socket: {connect: (endpoint: string) => TelemetrySocket}, timeline: string[],
   options: {onState?: (state: V1SourceState) => void; onStatus?: (status: RecordingHealth) => void; ingestionOverrides?: RecordingIngestionOverrides} = {}) {
   const logs: [string, unknown][] = [], states: V1SourceState[] = [], statuses: RecordingHealth[] = [];
   const runtime = createRecordingRuntime({env: {ETS2TELEMETRY_RECORDING: `synthetic:${name}`}, gameHistory: GAME_HISTORY_RECORDING, localAppData: ws.directory,
     log: (event, _detail, facts) => { logs.push([event, facts]); if (TIMELINE_CODES.test(event)) timeline.push(event); },
-    createWorker: () => worker, connect: socket.connect, ingestionOverrides: {staleMs: NO_STALE_MS, ...options.ingestionOverrides},
+    createWorker: () => worker, connect: socket.connect, ingestionOverrides: {staleMs: NO_STALE_MS, sampleFlushMs: NO_FLUSH_TIMER_MS, ...options.ingestionOverrides},
     historyOverrides: {appVersion: '0.1.0-test', closeGraceMs: TEST_CLOSE_GRACE_MS}, statusOverrides: {intervalMs: 0},
     onV1State: state => { states.push(state); options.onState?.(state); },
     onRecordingStatus: next => { statuses.push(next); options.onStatus?.(next); }});
