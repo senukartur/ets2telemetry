@@ -21,7 +21,8 @@ export interface TripSummaryView {
   observedDistanceM: Reading<number>;
   /**
    * Litres consumed minus small increases over continuous fuel steps while active (T16); `not-observed` before the first
-   * step. Refuels are excluded and reported apart. Not stored yet (S-1), and never the SDK's average consumption.
+   * step, unless a resumed trip has a stored value. Refuels are excluded and reported apart. Stored with the trip (S-1,
+   * J8), where a negative total is `invalid`; never the SDK's average consumption.
    */
   fuelUsedL: Reading<number>;
   /** Litres added by refuels while active, and the number of refuel episodes. */

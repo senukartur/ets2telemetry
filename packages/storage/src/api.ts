@@ -82,14 +82,15 @@ export type EventReference = 'this-event' | {eventSeq: Uint64};
  * Every trip reference (trip.update, trip.close, event.attribute, completeness.add and sample tripUuid) must name a
  * trip of the current session's game; otherwise the command is INVALID_INPUT. A trip of an earlier plugin session of
  * the same game is allowed, because a new session closes it with close_reason 'restart'. A closed trip accepts only
- * trip.update of recordingCompleteness and observedDistanceM.
+ * trip.update of recordingCompleteness, observedDistanceM and fuelUsedL. Observed distance and fuel used (litres, S-1)
+ * are finite and not negative when available.
  */
 export type TripEffect =
   | {kind: 'trip.open'; tripUuid: string; game: 'ets2' | 'ats'; gameMode: Pick<GameMode, 'mode' | 'method' | 'confidence'>; gameModeAmbiguous?: boolean;
     jobConfiguration: EventReference; truckConfiguration?: EventReference; trailerConfigurations?: EventReference[];
     recordingCompleteness: RecordingCompleteness; startedUtcMs: number}
   | {kind: 'trip.update'; tripUuid: string; set: {recordingCompleteness?: RecordingCompleteness; gameModeAmbiguous?: boolean;
-    observedDistanceM?: Available<number>; truckConfiguration?: EventReference; trailerConfigurations?: EventReference[]}}
+    observedDistanceM?: Available<number>; fuelUsedL?: Available<number>; truckConfiguration?: EventReference; trailerConfigurations?: EventReference[]}}
   | {kind: 'trip.close'; tripUuid: string; outcome: Exclude<TripOutcome, 'open'>; closeReason: CloseReason; outcomeEvent?: EventReference;
     recordingCompleteness: RecordingCompleteness; endedUtcMs: number}
   | {kind: 'event.attribute'; tripUuid: string | null; attribution: Attribution}
@@ -149,6 +150,8 @@ export interface TripRecord {
   jobConfigurationEventSeq: Uint64; truckConfigurationEventSeq: Uint64 | null; trailerConfigurationEventSeqs: Uint64[];
   openedEventSeq: Uint64; outcome: TripOutcome; outcomeEventSeq: Uint64 | null; closeReason: CloseReason | null;
   recordingCompleteness: RecordingCompleteness; startedUtcMs: number; endedUtcMs: number | null; observedDistanceM: Available<number>;
+  /** Litres (S-1, schema version 2); `not-observed` until the trip's first fuel update. */
+  fuelUsedL: Available<number>;
   createdUtcMs: number; updatedUtcMs: number;
 }
 export interface StorageInfo {

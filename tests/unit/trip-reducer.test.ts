@@ -476,6 +476,13 @@ describe('cold start (TripSeed) and effect bounds (T11, T18)', () => {
       [b.event(r.jobConfigured(), paused), [open(next, BASE_UTC + 102_000, {truckConfiguration: {eventSeq: '1'}, recordingCompleteness: 'partial'}),
         cause(next, 'discontinuity', {cause: 'opened-at-load', atEventSeq: '2'}), cause(next, 'discontinuity', {cause: 'restart', continuationOf: stored, decision: 'not-merged', atEventSeq: '2'})]]]);
   });
+  it('closes a stored trip of an earlier session without resending its stored distance and fuel used, which its view keeps (T11, J8) [synthetic-inference]', () => {
+    const b = new Script(ETS2_B, 'ets2', {utcMs: BASE_UTC + 100_000}), stored = uuid(ETS2_A, '6');
+    // Nothing changed since the stored values were written, so the restart close carries no trip.update (ET-016 PR-6).
+    const state = play([[sessionInput(b.welcome(), '0', [seed(stored, {observedDistanceM: 1500, fuelUsedL: 4.75})])],
+      [b.event(r.truckConfigured(), paused), [close(stored, 'none', 'restart', 'partial', at(9))]]]);
+    expect(tripView(state, 'ets2').lastClosed).toMatchObject({tripUuid: stored, observedDistanceM: {state: 'value', value: 1500}, fuelUsedL: {state: 'value', value: 4.75}});
+  });
   it('a queued not-connected interval of an earlier session drops its monotonic bounds before a later session commits it (T11) [synthetic-inference]', () => {
     const a = new Script(ETS2_A), b = new Script(ETS2_B, 'ets2', {utcMs: BASE_UTC + 100_000}), {rows, trip} = acceptedJob(a);
     play([...rows, [{kind: 'disconnected'}], [sessionInput(a.welcome(), '7')], [{kind: 'disconnected'}], [sessionInput(b.welcome())],
