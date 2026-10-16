@@ -146,17 +146,23 @@ export const RECORDING_STATUS_INTERVAL_MS = 250;
 export interface RecordingStatusTimers {
   setTimeout(callback: () => void, milliseconds: number): unknown;
   clearTimeout(handle: unknown): void;
+  /** Runs `callback` once the I/O callbacks of the current event loop turn ran (Node's setImmediate). */
+  setImmediate(callback: () => void): unknown;
+  clearImmediate(handle: unknown): void;
   now(): number;
 }
 const systemTimers: RecordingStatusTimers = {
   setTimeout: (callback, milliseconds) => setTimeout(callback, milliseconds),
   clearTimeout: handle => clearTimeout(handle as ReturnType<typeof setTimeout>),
+  setImmediate: callback => setImmediate(callback),
+  clearImmediate: handle => clearImmediate(handle as ReturnType<typeof setImmediate>),
   now: () => performance.now()
 };
 /**
  * G5: sends the recording status when it changes. `start` sends the current status at once. A change is noted with
- * `changed`; the status is computed once the current macrotask's work settled (a 0 ms timer), so changes made in one
- * turn, such as a session opening and its checkpoint failing, give one status. A new status whose losses differ from
+ * `changed`; the status is computed once the I/O callbacks of the current event loop turn and their promise jobs ran
+ * (setImmediate), so changes made together, such as a session opening and its checkpoint finding the database behind
+ * the plugin, give one status and no passing `recording`. A new status whose losses differ from
  * the last one sent is sent at once; any other new status is sent at most once per `intervalMs`, the latest one at the
  * end of the interval (trailing send). An unchanged status is never sent again. There is no heartbeat. `close` stops it.
  */
@@ -184,11 +190,11 @@ export class RecordingStatusPublisher {
   }
   changed(): void {
     if (!this.#started || this.#closed || this.#settle !== undefined) return;
-    this.#settle = this.#timers.setTimeout(() => { this.#settle = undefined; this.#flush(); }, 0);
+    this.#settle = this.#timers.setImmediate(() => { this.#settle = undefined; this.#flush(); });
   }
   close(): void {
     this.#closed = true;
-    if (this.#settle !== undefined) this.#timers.clearTimeout(this.#settle);
+    if (this.#settle !== undefined) this.#timers.clearImmediate(this.#settle);
     if (this.#trailing !== undefined) this.#timers.clearTimeout(this.#trailing);
     this.#settle = this.#trailing = undefined;
   }

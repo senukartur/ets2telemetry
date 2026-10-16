@@ -113,7 +113,7 @@ describe('RecordingStatusPublisher (G5)', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
   const timers = {setTimeout: (callback: () => void, ms: number) => setTimeout(callback, ms), clearTimeout: (handle: unknown) => clearTimeout(handle as ReturnType<typeof setTimeout>),
-    now: () => Date.now()};
+    setImmediate: (callback: () => void) => setImmediate(callback), clearImmediate: (handle: unknown) => clearImmediate(handle as ReturnType<typeof setImmediate>), now: () => Date.now()};
   function fixture() {
     let current: RecordingHealth = {state: 'opening', target: 'synthetic', code: null, losses: {...ZERO_LOSSES}, trip: null};
     const sent: string[] = [];
