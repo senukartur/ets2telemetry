@@ -25,18 +25,19 @@ const CLIENT_FRAME_BYTES = 4096, SERVER_FRAME_BYTES = 65536;
 const PIPE_PATTERN_V1 = /^\\\\\.\\pipe\\ETS2Telemetry-SYNTHETIC-TEST-v1-[1-9][0-9]*-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const durable = Object.freeze({durable: true, commit: 'each', ack: 'each'});
 /**
- * normal-delivery's steps are unchanged; its transport becomes three durable connections. The scripted disconnects end a
- * connection only when its client is still there; the journey normally ends connections 2 and 3 itself, by exiting.
+ * normal-delivery's steps are unchanged; its transport becomes three durable connections. The scripted disconnects of
+ * connections 2 and 3 end them only when the journey has not ended them first by exiting; either order stores the same
+ * rows. They are short because the reactive server paces each wait in real time, also after its client left.
  */
 export const JOURNEY_TRANSPORT = Object.freeze([
   {atMs: 0, action: 'connect', client: {durable: true, commit: 'each', ack: 'dropAfter:4'}},
   {atMs: 350, action: 'disconnect'},
   {atMs: 360, action: 'connect', client: durable},
-  {atMs: 5000, action: 'disconnect'},
-  {atMs: 5010, action: 'connect', client: durable},
-  {atMs: 15000, action: 'disconnect'}
+  {atMs: 2000, action: 'disconnect'},
+  {atMs: 2010, action: 'connect', client: durable},
+  {atMs: 3000, action: 'disconnect'}
 ]);
-const JOURNEY_STEPS = Object.freeze([{atMs: 5100, action: 'lifecycle', event: 'simulation.paused'}]);
+const JOURNEY_STEPS = Object.freeze([{atMs: 2100, action: 'lifecycle', event: 'simulation.paused'}]);
 /** ACKs the proxy delivers per connection, as JOURNEY_TRANSPORT scripts them; later ones are lost on the way. */
 const DELIVERED_ACKS = [4, Infinity, Infinity];
 
