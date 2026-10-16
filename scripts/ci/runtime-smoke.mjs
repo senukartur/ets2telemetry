@@ -122,7 +122,8 @@ try {
     process: typeof globalThis.process, keys: Object.keys(globalThis.desktop),
     frozen: Object.isFrozen(globalThis.desktop), status: await globalThis.desktop.getStatus()}));
   assert.deepEqual(result.actual, {require: 'undefined', process: 'undefined', keys: ['getStatus', 'selectSource', 'subscribeLive', 'getAppState', 'subscribeAppState', 'exitApplication', 'setUnitProfile', 'setOverlayLayout', 'setOverlaySections',
-    'beginOverlayEdit', 'setOverlayEditScale', 'resetOverlayEditPlacement', 'finishOverlayEdit'],
+    'beginOverlayEdit', 'setOverlayEditScale', 'resetOverlayEditPlacement', 'finishOverlayEdit',
+    'listJournalTrips', 'getJournalTrip', 'listJournalEvents', 'listJournalIntervals', 'listJournalSamples'],
     frozen: true, status: result.expected.status});
   result.probesBeforeExit = (await readdir(config.temp)).filter(name => name.startsWith('ets2telemetry-probe-'));
   assert.equal(result.probesBeforeExit.length, 1);

@@ -3,7 +3,7 @@ export interface ScaffoldStatus { service: 'ready'; storage: 'verified'; synthet
 import type {CurrentState, SourceIdentity, AppliedState, CaptureTime} from './protocol-v0';
 import type {AppState, OverlayEditState, OverlayLayout, OverlaySectionId, OverlaySections, RecordingCode, SettingsView, UnitGame, UnitProfile} from './app-state';
 import type {Available, LiveObservationV1, Uint64} from './protocol-v1';
-import type {JournalDatabase} from './journal';
+import type {JournalDatabase, JournalEventPage, JournalIntervalPage, JournalTripDetail, JournalTripPage, JournalTripsQuery} from './journal';
 export type SourceSelection = 'game' | 'ets2' | 'ats' | 'synthetic' | 'replay';
 /** Statuses of the v1 source; service failure and restart belong to the update that carries the projection. */
 export type LiveV1Status = 'waiting' | 'connected' | 'paused' | 'stale' | 'incompatible' | 'disconnected' | 'unavailable';
@@ -66,6 +66,20 @@ export interface DesktopBridge {
   resetOverlayEditPlacement(): Promise<OverlayEditState>;
   /** Leaves edit mode: `save` persists the edited placement (applied after the durable write), `cancel` discards it. */
   finishOverlayEdit(outcome: 'save' | 'cancel'): Promise<SettingsView>;
+  /**
+   * ET-016 (J10, J11): one page of 50 recorded trips, newest first, with optional filters and the `nextCursor` of the
+   * previous page read with the same filters. The journal methods read the database the telemetry service opened; main
+   * fixes every page size, and an invalid argument or an untrusted caller rejects.
+   */
+  listJournalTrips(query?: JournalTripsQuery): Promise<JournalCallResult<JournalTripPage>>;
+  /** One trip's detail; `NOT_FOUND` for an unknown trip. */
+  getJournalTrip(tripUuid: string): Promise<JournalCallResult<JournalTripDetail>>;
+  /** One page of 100 timeline events of a trip, after the given event cursor. */
+  listJournalEvents(tripUuid: string, cursor?: string): Promise<JournalCallResult<JournalEventPage>>;
+  /** One page of 100 completeness intervals of a trip, after the given interval cursor. */
+  listJournalIntervals(tripUuid: string, cursor?: string): Promise<JournalCallResult<JournalIntervalPage>>;
+  /** One page of 300 one-second samples of a trip, after the given sample cursor. */
+  listJournalSamples(tripUuid: string, cursor?: string): Promise<JournalCallResult<JournalSamplePage>>;
 }
 /**
  * The fixed refusal codes of a journal call (ET-016, J11). `SERVICE_UNAVAILABLE`: no ready telemetry service, or it is

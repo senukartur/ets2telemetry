@@ -8,6 +8,7 @@ import type {LiveTelemetry} from '../../packages/contracts/src';
 import {validateMessage} from '../../packages/contracts/src/protocol-v0';
 import {initialLive} from '../../apps/desktop/src/live-state';
 import {v1Projection, type V1Options} from '../shared/live-v1-fixtures';
+import {changed, DETAIL, LIST_ITEM, TRIP, TRIP_PAGE} from '../shared/journal-replies';
 
 const processEvents = ['uncaughtException', 'unhandledRejection'] as const;
 const processEmitter: EventEmitter = process;
@@ -1635,4 +1636,121 @@ it('keeps recording status changes out of default logs', async () => {
   report(recordingStatus('recording')); child.emit('exit', 1);
   expect(healthOf()).toEqual({state: 'unknown'});
   expect(recordingRows()).toEqual([]);
+});
+
+// ET-016 PR-3 (J4, J10, J11): five fixed journal channels from the trusted dashboard main frame only, routed to the current
+// ready service on its parent port; main checks every reply strictly. Expected values are written by hand.
+const JOURNAL_CHANNELS = ['journal:list-trips', 'journal:get-trip', 'journal:list-events', 'journal:list-intervals', 'journal:list-samples'] as const;
+const journalCall = (channel: typeof JOURNAL_CHANNELS[number], event: unknown, ...request: unknown[]) =>
+  Promise.resolve().then(() => handlers.get(channel)!(event, ...request as [unknown]));
+const journalSent = (target = child) => target.postMessage.mock.calls.map(call => call[0] as Record<string, unknown>).filter(message => message.type === 'journal');
+const journalReply = (id: number, result: unknown, target = child) => target.emit('message', {type: 'journal', id, result});
+it('rejects journal requests from untrusted senders, frames and the overlay, and every invalid shape, before they reach the service', async () => {
+  trayAvailable = true; await ready();
+  const valid: Record<typeof JOURNAL_CHANNELS[number], unknown[]> = {'journal:list-trips': [{}], 'journal:get-trip': [TRIP], 'journal:list-events': [TRIP, null],
+    'journal:list-intervals': [TRIP, null], 'journal:list-samples': [TRIP, null]};
+  for (const event of [{sender: {}, senderFrame: contents.mainFrame}, {sender: contents, senderFrame: {}}, overlayTrusted()])
+    for (const channel of JOURNAL_CHANNELS) await expect(journalCall(channel, event, ...valid[channel])).rejects.toThrow('Untrusted journal request');
+  const invalid: [typeof JOURNAL_CHANNELS[number], unknown[]][] = [
+    ['journal:list-trips', []], ['journal:list-trips', [{}, {}]], ['journal:list-trips', [{limit: 51}]], ['journal:list-trips', [{game: 'ets'}]], ['journal:list-trips', [undefined]],
+    ['journal:get-trip', []], ['journal:get-trip', [TRIP, null]], ['journal:get-trip', [TRIP.toUpperCase()]], ['journal:get-trip', ['C:\\Users\\owner']],
+    ['journal:list-events', [TRIP]], ['journal:list-events', [TRIP, null, 500]], ['journal:list-events', [TRIP, '18446744073709551615']],
+    ['journal:list-intervals', [TRIP, '0']], ['journal:list-samples', [TRIP, undefined]], ['journal:list-samples', ['not-a-uuid', null]]];
+  for (const [channel, request] of invalid) await expect(journalCall(channel, trusted(), ...request)).rejects.toThrow('Invalid journal request');
+  expect(journalSent()).toEqual([]);
+  expect(overlayContents.send).not.toHaveBeenCalled();
+});
+it('routes each journal read to the ready service with the page size main fixes, and answers with its checked reply', async () => {
+  await ready();
+  const list = journalCall('journal:list-trips', trusted(), {game: 'ets2'});
+  await settle();
+  expect(journalSent()).toEqual([{type: 'journal', id: 1, query: {kind: 'trips', query: {game: 'ets2'}}}]);
+  journalReply(1, {ok: true, value: TRIP_PAGE});
+  await expect(list).resolves.toEqual({ok: true, value: TRIP_PAGE});
+  const pages = [journalCall('journal:list-events', trusted(), TRIP, null), journalCall('journal:list-intervals', trusted(), TRIP, '7'),
+    journalCall('journal:list-samples', trusted(), TRIP, '310'), journalCall('journal:get-trip', trusted(), TRIP)];
+  for (let id = 2; id <= 5; id++) {
+    await settle();
+    journalReply(id, {ok: false, code: id === 5 ? 'NOT_FOUND' : 'DATABASE_OPENING'});
+  }
+  await expect(Promise.all(pages)).resolves.toEqual([{ok: false, code: 'DATABASE_OPENING'}, {ok: false, code: 'DATABASE_OPENING'}, {ok: false, code: 'DATABASE_OPENING'},
+    {ok: false, code: 'NOT_FOUND'}]);
+  expect(journalSent().slice(1)).toEqual([
+    {type: 'journal', id: 2, query: {kind: 'events', tripUuid: TRIP, page: {limit: 100}}},
+    {type: 'journal', id: 3, query: {kind: 'intervals', tripUuid: TRIP, page: {cursor: '7', limit: 100}}},
+    {type: 'journal', id: 4, query: {kind: 'samples', tripUuid: TRIP, page: {cursor: '310', limit: 300}}},
+    {type: 'journal', id: 5, query: {kind: 'trip', tripUuid: TRIP}}]);
+  expect(child.postMessage).not.toHaveBeenCalledWith({type: 'stop'});
+});
+it('never forwards an invalid service page: the call answers FAILED, the reply is logged as rejected, and the service keeps running', async () => {
+  await ready();
+  const call = journalCall('journal:list-trips', trusted(), {});
+  await settle();
+  journalReply(1, {ok: true, value: changed(TRIP_PAGE, page => { page.trips = Array<typeof LIST_ITEM>(51).fill(LIST_ITEM); })});
+  await expect(call).resolves.toEqual({ok: false, code: 'FAILED'});
+  const detail = journalCall('journal:get-trip', trusted(), TRIP);
+  await settle();
+  journalReply(2, {ok: true, value: changed(DETAIL, value => { (value.trip as Record<string, unknown>).processId = 4242; })});
+  await expect(detail).resolves.toEqual({ok: false, code: 'FAILED'});
+  expect(log.mock.calls.filter(entry => entry[0] === 'JOURNAL_REPLY_REJECTED').map(entry => entry[2] as unknown)).toEqual([{kind: 'trips', count: 1}, {kind: 'trip', count: 2}]);
+  expect([child.postMessage.mock.calls.some(entry => (entry[0] as {type: string}).type === 'stop'), child.kill.mock.calls.length, app.exit.mock.calls.length]).toEqual([false, 0, 0]);
+  // An unknown service message type stays fatal beside the journal reply type.
+  child.emit('message', {type: 'journal-export'});
+  expect(child.postMessage).toHaveBeenCalledWith({type: 'stop'});
+});
+it('ignores a journal message of a service that is not ready yet, without failing, and refuses calls before the dashboard exists', async () => {
+  await loadMain(); await settle();
+  // No dashboard exists before the first readiness, so no sender is trusted.
+  await expect(journalCall('journal:list-trips', trusted(), {})).rejects.toThrow('Untrusted journal request');
+  journalReply(1, {ok: true, value: TRIP_PAGE});
+  expect(log).toHaveBeenCalledWith('JOURNAL_REPLY_IGNORED', undefined, {count: 1});
+  child.emit('message', {type: 'ready'}); await settle();
+  expect(journalSent()).toEqual([]);
+  expect(child.postMessage).not.toHaveBeenCalledWith({type: 'stop'});
+  expect(app.exit).not.toHaveBeenCalled();
+});
+it('accepts journal replies only from the current service and answers pending reads SERVICE_UNAVAILABLE when it fails, exits or the application exits', async () => {
+  trayAvailable = true; await ready();
+  const pending = journalCall('journal:get-trip', trusted(), TRIP), queued = journalCall('journal:list-trips', trusted(), {});
+  await settle();
+  child.emit('message', {type: 'failed', code: 'STORAGE_WORKER_EXIT'});
+  await expect(Promise.all([pending, queued])).resolves.toEqual([{ok: false, code: 'SERVICE_UNAVAILABLE'}, {ok: false, code: 'SERVICE_UNAVAILABLE'}]);
+  // The failing service is terminated; its late reply is ignored and new calls are refused until a service is ready.
+  journalReply(1, {ok: true, value: DETAIL});
+  await expect(journalCall('journal:list-trips', trusted(), {})).resolves.toEqual({ok: false, code: 'SERVICE_UNAVAILABLE'});
+  child.emit('exit', 1); await vi.advanceTimersByTimeAsync(250);
+  const replacement = children[1];
+  replacement.emit('message', {type: 'ready'}); await settle();
+  const next = journalCall('journal:get-trip', trusted(), TRIP);
+  await settle();
+  expect(journalSent(replacement)).toEqual([{type: 'journal', id: 2, query: {kind: 'trip', tripUuid: TRIP}}]);
+  // A reply of the exited service, even with the id in flight, never answers the replacement's request.
+  journalReply(2, {ok: true, value: DETAIL});
+  journalReply(2, {ok: true, value: DETAIL}, replacement);
+  await expect(next).resolves.toEqual({ok: true, value: DETAIL});
+  // An unexpected exit and an application exit both answer the request in flight.
+  const lost = journalCall('journal:list-trips', trusted(), {});
+  await settle();
+  replacement.emit('exit', 1);
+  await expect(lost).resolves.toEqual({ok: false, code: 'SERVICE_UNAVAILABLE'});
+  await vi.advanceTimersByTimeAsync(1000); children[2].emit('message', {type: 'ready'}); await settle();
+  const exiting = journalCall('journal:list-trips', trusted(), {});
+  await settle();
+  expect(journalSent(children[2])).toHaveLength(1);
+  trayMenuItem('Exit ETS2Telemetry').click!();
+  await expect(exiting).resolves.toEqual({ok: false, code: 'SERVICE_UNAVAILABLE'});
+  await expect(journalCall('journal:list-trips', trusted(), {})).resolves.toEqual({ok: false, code: 'SERVICE_UNAVAILABLE'});
+});
+it('answers TIMEOUT when the service does not reply within 15 s and sends the next queued read', async () => {
+  await ready();
+  const slow = journalCall('journal:list-trips', trusted(), {}), next = journalCall('journal:get-trip', trusted(), TRIP);
+  await settle();
+  expect(journalSent()).toHaveLength(1);
+  await vi.advanceTimersByTimeAsync(15_000);
+  await expect(slow).resolves.toEqual({ok: false, code: 'TIMEOUT'});
+  expect(journalSent().at(-1)).toEqual({type: 'journal', id: 2, query: {kind: 'trip', tripUuid: TRIP}});
+  journalReply(1, {ok: true, value: TRIP_PAGE});
+  journalReply(2, {ok: true, value: DETAIL});
+  await expect(next).resolves.toEqual({ok: true, value: DETAIL});
+  expect(child.postMessage).not.toHaveBeenCalledWith({type: 'stop'});
 });
