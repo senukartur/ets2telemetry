@@ -4,7 +4,7 @@
 // queued command get an error, later commands fail at once, and no success is reported afterwards. See docs/storage.md.
 import type {Worker} from 'node:worker_threads';
 import type {
-  CommitResult, CompletenessInterval, CompletenessOptions, EventRow, JournalEventPage, JournalResult, JournalIntervalPage, JournalPageQuery, JournalTripDetail, JournalTripPage, JournalTripsQuery,
+  AttachInput, AttachResult, CommitResult, CompletenessInterval, CompletenessOptions, EventRow, JournalEventPage, JournalResult, JournalIntervalPage, JournalPageQuery, JournalTripDetail, JournalTripPage, JournalTripsQuery,
   OpenSummary, Result, SampleAppendOptions, SampleAppendResult, SampleInput, SampleRecord, SessionRecord, StorageError, StorageErrorCode, StorageInfo, TripEffect, TripList,
   TripPage, TripRecord, Uint64
 } from './api';
@@ -108,6 +108,13 @@ export class StorageClient {
   recordCompleteness(pluginSessionId: string, interval: CompletenessInterval, options?: CompletenessOptions): Promise<Result<undefined>> {
     if (options === undefined) return this.#request({name: 'recordCompleteness', pluginSessionId, interval});
     return this.#request({name: 'recordCompleteness', pluginSessionId, interval, options: isObject(options) ? {ifAbsent: options.ifAbsent} : options});
+  }
+  /**
+   * ET-016 PR-7 (J9): opens a trip from a checkpoint job. The input is copied field by field; a value that is not an
+   * object is forwarded as given, so the worker's request parser refuses it with INVALID_INPUT.
+   */
+  openAttachedTrip(input: AttachInput): Promise<Result<AttachResult>> {
+    return this.#request({name: 'openAttachedTrip', input: isObject(input) ? {pluginSessionId: input.pluginSessionId, nextEventSeq: input.nextEventSeq, job: input.job, effects: input.effects} : input});
   }
   committedThrough(pluginSessionId: string): Promise<Result<Uint64>> { return this.#request({name: 'committedThrough', pluginSessionId}); }
   getSession(pluginSessionId: string): Promise<Result<SessionRecord>> { return this.#request({name: 'getSession', pluginSessionId}); }

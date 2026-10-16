@@ -54,6 +54,9 @@ export function labels(seed: string): Map<string, string> {
   for (let seq = 1; seq <= 200; seq++) {
     const h = createHash('sha256').update(`ets2telemetry-trip-v1:${session}:${seq}`, 'utf8').digest('hex');
     map.set(`${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`, `trip@${seq}`);
+    // ET-016 PR-7 (J9): a late-attach trip is `attach@<the checkpoint's nextEventSeq>`.
+    const a = createHash('sha256').update(`ets2telemetry-trip-attach-v1:${session}:${seq}`, 'utf8').digest('hex');
+    map.set(`${a.slice(0, 8)}-${a.slice(8, 12)}-${a.slice(12, 16)}-${a.slice(16, 20)}-${a.slice(20, 32)}`, `attach@${seq}`);
   }
   return map;
 }
@@ -295,7 +298,7 @@ export async function runRecording(input: Json, database: {path: string; backups
       commitEvent: input => scripted(() => client.commitEvent(input)), commitGap: input => scripted(() => client.commitGap(input)),
       recordCompleteness: (session, interval, options) => client.recordCompleteness(session, interval, options),
       listTrips: page => client.listTrips(page), getEvent: (session, eventSeq) => client.getEvent(session, eventSeq), listEvents: (session, page) => client.listEvents(session, page),
-      appendSamples: (session, rows, options) => client.appendSamples(session, rows, options)
+      appendSamples: (session, rows, options) => client.appendSamples(session, rows, options), openAttachedTrip: input => client.openAttachedTrip(input)
     };
     const recorder = new TripRecorderSink(storage), states: V1SourceState[] = [], logs: [string, unknown][] = [];
     const service: Service = {ingestion: undefined as unknown as V1Ingestion, recorder, client, worker, exit, states, logs, control: channel?.port1};

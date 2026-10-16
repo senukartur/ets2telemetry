@@ -748,3 +748,60 @@ describe('ET-015c retry code of the storage-commit pipeline', () => {
     });
   });
 });
+
+describe('ET-016 PR-7 attach op in the storage-commit pipeline (J9)', () => {
+  /** A sink whose late-attach trip is due once the coverage of P1 reaches `dueAt`, until it opened; every open is logged. */
+  class AttachingSink extends MemorySink {
+    dueAt?: bigint; opened = false; attachFailure?: StorageErrorCode; status: 'committed' | 'duplicate' | 'none' = 'committed';
+    observe(m: Extract<ServerMessage, {kind: 'checkpoint' | 'snapshot'}>): Result<undefined> { this.log.push(`observe ${m.kind}`); return {ok: true, value: undefined}; }
+    readonly attach = {
+      due: () => this.dueAt !== undefined && !this.opened && this.through(P1) >= this.dueAt,
+      open: (context: {receivedUtcMs: number}) => {
+        this.log.push(`attach ${context.receivedUtcMs - RECEIVED}`);
+        if (this.attachFailure) return Promise.resolve({ok: false as const, error: storageError(this.attachFailure)});
+        this.opened = true;
+        return Promise.resolve({ok: true as const, value: {status: this.status}});
+      }
+    };
+  }
+  function attaching(dueAt: bigint, options: {maxPendingCommits?: number} = {}) {
+    const sink = new AttachingSink(); sink.dueAt = dueAt; sink.paused = true;
+    const delivery = new DurableDelivery(sink, options), link = new Link(sink.log), connection = delivery.connect(welcome(), link);
+    connection.checkpoint(checkpointAt('0'), RECEIVED);
+    return {sink, delivery, link, connection};
+  }
+  it('opens the trip right after the commit that drained the replayed events, before the items queued behind it, with no ACK of its own', async () => {
+    const {sink, delivery, link, connection} = attaching(1n);
+    for (const n of [1, 2, 3]) expect(connection.enqueue(range(event(n)), event(n), RECEIVED + n)).toBe(true);
+    sink.paused = false; sink.releaseOne(); await delivery.idle();
+    // The attach carries the receipt label of the commit that made it due (event 1) and runs before event 2.
+    expect(sink.log).toEqual([`open ${P1}`, 'observe checkpoint', 'committed 1', 'ack 1', 'attach 1', 'committed 2', 'ack 2', 'committed 3', 'ack 3']);
+    expect([link.acks, delivery.status, link.closes]).toEqual([['1', '2', '3'], {state: 'active'}, []]);
+  });
+  it('opens the trip right after the checkpoint when nothing is replayed, and counts it against no bound', async () => {
+    const {sink, delivery, link, connection} = attaching(0n, {maxPendingCommits: 1});
+    expect(connection.enqueue(range(event(1)), event(1), RECEIVED + 1)).toBe(true);
+    sink.paused = false; sink.releaseOne(); await delivery.idle();
+    expect(sink.log).toEqual([`open ${P1}`, 'observe checkpoint', 'attach 0', 'committed 1', 'ack 1']);
+    expect([link.acks, delivery.pending]).toEqual([['1'], 0]);
+  });
+  it('fails the connection like a failed commit: retryable closes it and drops its queued items, unavailable stops durable delivery', async () => {
+    const retry = attaching(0n); retry.sink.attachFailure = 'DISK_FULL';
+    retry.connection.enqueue(range(event(1)), event(1), RECEIVED + 1);
+    retry.sink.paused = false; retry.sink.releaseOne(); await retry.delivery.idle();
+    expect([retry.sink.log, retry.link.closes, retry.link.acks, retry.delivery.retryCode]).toEqual([[`open ${P1}`, 'observe checkpoint', 'attach 0'], [['retryable', 'DISK_FULL']], [], 'DISK_FULL']);
+    const fatal = attaching(0n); fatal.sink.attachFailure = 'INVALID_INPUT';
+    fatal.connection.enqueue(range(event(1)), event(1), RECEIVED + 1);
+    fatal.sink.paused = false; fatal.sink.releaseOne(); await fatal.delivery.idle();
+    expect([fatal.link.closes, fatal.delivery.status]).toEqual([[['unavailable', 'INVALID_INPUT']], {state: 'failed', code: 'INVALID_INPUT'}]);
+  });
+  it('treats a malformed attach result as INTERNAL and a duplicate as opened', async () => {
+    const dup = attaching(0n); dup.sink.status = 'duplicate';
+    dup.connection.enqueue(range(event(1)), event(1), RECEIVED + 1);
+    dup.sink.paused = false; dup.sink.releaseOne(); await dup.delivery.idle();
+    expect([dup.link.acks, dup.link.closes]).toEqual([['1'], []]);
+    const bad = attaching(0n); bad.sink.status = 'opened' as 'committed';
+    bad.sink.paused = false; bad.sink.releaseOne(); await bad.delivery.idle();
+    expect([bad.link.closes, bad.delivery.status]).toEqual([[['unavailable', 'INTERNAL']], {state: 'failed', code: 'INTERNAL'}]);
+  });
+});

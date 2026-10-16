@@ -388,6 +388,41 @@ describe('a trip opened from a checkpoint (schema version 2, J7; written only fr
   });
 });
 
+describe('a late-attach trip written by openAttachedTrip (ET-016 PR-7, J7, J9)', () => {
+  it('starts its window at the checkpoint\'s nextEventSeq, after the replayed events, and ends it at the delivery that closed it', async () => {
+    const la = await workspace();
+    try {
+      const st = await la.open(), s = new Script(ETS2_A), trip = '7e000000-0000-4000-8000-000000000001';
+      const mode = {mode: 'single-player', method: 'module-scan', confidence: 'weak'} as const;
+      ok(st.upsertSession({message: s.welcome()}));
+      // eventSeq 1 and 2 happened before the checkpoint (replayed); the checkpoint's nextEventSeq is 3.
+      ok(st.commitEvent({message: s.event(r.paused(), {simulation: 'paused'})}));
+      ok(st.commitEvent({message: s.event(r.fined()), effects: [{kind: 'event.attribute', tripUuid: null, attribution: 'free-driving'}]}));
+      expect(ok(st.openAttachedTrip({pluginSessionId: ETS2_A, nextEventSeq: '3', job: job(), effects: [
+        {kind: 'trip.open', tripUuid: trip, game: 'ets2', gameMode: mode, jobConfiguration: 'this-event', recordingCompleteness: 'partial', startedUtcMs: BASE_UTC + 2_500},
+        {kind: 'completeness.add', interval: {tripUuid: trip, kind: 'not-connected', detail: {cause: 'late-attach', source: 'checkpoint', nextEventSeq: '3'}}}]}))).toEqual({status: 'committed'});
+      ok(st.commitEvent({message: s.event(r.started())}));
+      ok(st.commitEvent({message: s.event(r.fined()), effects: [{kind: 'event.attribute', tripUuid: trip, attribution: 'trip'}]}));
+      ok(st.commitEvent({message: s.event(r.delivered(), {simulation: 'paused'}), effects: [{kind: 'event.attribute', tripUuid: trip, attribution: 'trip'},
+        {kind: 'trip.close', tripUuid: trip, outcome: 'delivered', closeReason: 'outcome', outcomeEvent: 'this-event', recordingCompleteness: 'partial', endedUtcMs: BASE_UTC + 5_000}]}));
+      const detail = ok(st.journalTrip(trip));
+      expect(validateJournalTripDetail(detail)).toBe(detail);
+      expect(detail.trip).toMatchObject({openedBy: 'checkpoint', openedEventSeq: null, outcome: 'delivered', outcomeEventSeq: '5', closedBy: {pluginSessionId: ETS2_A, eventSeq: '5'}});
+      expect(detail.job).toEqual({source: 'checkpoint', eventSeq: null, checkpointNextEventSeq: '3', values: job()});
+      const window = {known: true, pluginSessionId: ETS2_A, fromEventSeq: '3', throughEventSeq: '5', end: 'close-event'};
+      expect(detail.window).toEqual(window);
+      const events = ok(st.journalEvents(trip, {limit: 100}));
+      expect(events.window).toEqual(window);
+      // The replayed fine (2) is before the window; the trip's own events are 3 to 5.
+      expect(events.events.map(event => [event.eventSeq, event.attribution])).toEqual([['3', null], ['4', {kind: 'trip', tripUuid: trip}], ['5', {kind: 'trip', tripUuid: trip}]]);
+      expect(ok(st.journalIntervals(trip, {limit: 100})).intervals.map(i => [i.kind, i.cause])).toEqual([['not-connected', 'late-attach']]);
+      // The storage read API reports the same origin (TripRecord).
+      expect(ok(st.getTrip(trip))).toMatchObject({jobSource: 'checkpoint', jobConfigurationEventSeq: null, checkpointJob: {nextEventSeq: '3', values: job()}, openedBy: 'checkpoint', openedEventSeq: null});
+      st.close();
+    } finally { await la.dispose(); }
+  });
+});
+
 describe('the latest trailer configurations of a trip across plugin sessions (review pass 2)', () => {
   it('keeps the latest ten in commit order, so a later session\'s trailer at eventSeq 1 is among them', async () => {
     const tw = await workspace();

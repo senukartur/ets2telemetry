@@ -18,7 +18,8 @@ const NOT_OBSERVED = {available: false as const, reason: 'not-observed' as const
 function trip(overrides: Partial<TripRecord> = {}): TripRecord {
   return {
     tripUuid: T1, pluginSessionId: S1, game: 'ets2', gameMode: {mode: 'unknown', method: 'none', confidence: 'none'}, gameModeAmbiguous: false,
-    jobConfigurationEventSeq: '2', truckConfigurationEventSeq: null, trailerConfigurationEventSeqs: [], openedEventSeq: '2', outcome: 'open', outcomeEventSeq: null,
+    jobSource: 'event', jobConfigurationEventSeq: '2', checkpointJob: null, truckConfigurationEventSeq: null, trailerConfigurationEventSeqs: [], openedBy: 'event', openedEventSeq: '2',
+    outcome: 'open', outcomeEventSeq: null,
     closeReason: null, recordingCompleteness: 'complete', startedUtcMs: UTC, endedUtcMs: null, observedDistanceM: NOT_OBSERVED, fuelUsedL: NOT_OBSERVED, createdUtcMs: UTC,
     updatedUtcMs: UTC, ...overrides
   };
@@ -79,6 +80,17 @@ describe('seedFromStored (R4)', () => {
     // Rows in another order give the same answer.
     expect(seedFromStored(trip(), cleared[0], [...cleared].reverse()).awaitingOutcome).toBe(true);
     expect(seedFromStored(trip(), resent[0], [...resent].reverse())).not.toHaveProperty('awaitingOutcome');
+  });
+
+  it('seeds a late-attach trip from its stored checkpoint job, with its opening at the checkpoint\'s nextEventSeq − 1 (ET-016 PR-7, J9)', () => {
+    const attached = trip({jobSource: 'checkpoint', jobConfigurationEventSeq: null, checkpointJob: {nextEventSeq: '4', values: job()}, openedBy: 'checkpoint', openedEventSeq: null,
+      recordingCompleteness: 'partial'});
+    // No job event exists: the key comes from the checkpoint job, whatever row is passed.
+    expect(seedFromStored(attached, undefined, [])).toEqual({tripUuid: T1, pluginSessionId: S1, game: 'ets2', jobKey: jobKey(job()), startedUtcMs: UTC, recordingCompleteness: 'partial'});
+    expect(seedFromStored(attached, configured('3', null, otherJob()), []).jobKey).toBe(jobKey(job()));
+    // A clear replayed before the checkpoint (3) is not the trip's; a live clear at 4 or later is.
+    expect(seedFromStored(attached, undefined, [event('3', 'job.cleared', null)])).not.toHaveProperty('awaitingOutcome');
+    expect(seedFromStored(attached, undefined, [event('4', 'job.cleared', '1791676804000')])).toMatchObject({awaitingOutcome: true, lastObservedUtcMs: 1_791_676_804_000});
   });
 
   it('passes an available stored distance through and leaves a not-observed one out', () => {
@@ -195,6 +207,16 @@ describe('readTripSeeds', () => {
     // The forward read from 599, then the earlier range from the start until a page reaches the opening event.
     expect(f.calls.filter(call => call[0] === 'listEvents')).toEqual([['listEvents', S1, {limit: 500, afterEventSeq: '599'}], ['listEvents', S1, {limit: 500, afterEventSeq: '1099'}],
       ['listEvents', S1, {limit: 500, afterEventSeq: '0'}], ['listEvents', S1, {limit: 500, afterEventSeq: '500'}]]);
+  });
+
+  it('reads a late-attach trip\'s session from the checkpoint\'s nextEventSeq − 1 and its job from the trip record, never as an event (ET-016 PR-7)', async () => {
+    const attached = trip({jobSource: 'checkpoint', jobConfigurationEventSeq: null, checkpointJob: {nextEventSeq: '701', values: job()}, openedBy: 'checkpoint', openedEventSeq: null});
+    const s1 = [...run(1, 699), event('700', 'job.cleared', null), event('701', 'player.fined', '1791677501000')];
+    const f = reader([[attached]], {[S1]: s1});
+    expect(await readTripSeeds(f.reader, 'ets2')).toEqual({ok: true, value: [{tripUuid: T1, pluginSessionId: S1, game: 'ets2', jobKey: jobKey(job()), startedUtcMs: UTC,
+      recordingCompleteness: 'complete', lastObservedUtcMs: 1_791_677_501_000}]});
+    // The scan starts after 699 (the opening point 700, less one), and no getEvent is made for the checkpoint job.
+    expect(f.calls.filter(call => call[0] !== 'listTrips')).toEqual([['listEvents', S1, {limit: 500, afterEventSeq: '699'}]]);
   });
 
   it('asks for the requested game and returns no seeds when it has no open trip', async () => {

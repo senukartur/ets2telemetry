@@ -8,7 +8,7 @@ import {createHash} from 'node:crypto';
 import {describe, expect, it} from 'vitest';
 import {MAX_EFFECTS as STORAGE_MAX_EFFECTS} from '../../packages/storage/src/api';
 import {
-  MAX_ANNOTATIONS_PER_COMMIT, MAX_EFFECTS, initialTripState, jobKey, stepTrip, tripView, type EventMessage, type GapMessage, type TripEffect, type TripInput, type TripSeed, type TripState
+  MAX_ANNOTATIONS_PER_COMMIT, MAX_EFFECTS, dueAttach, initialTripState, jobKey, stepTrip, tripView, type EventMessage, type GapMessage, type TripEffect, type TripInput, type TripSeed, type TripState
 } from '../../packages/telemetry-core/src/index';
 import {
   ATS_A, BASE_UTC, ETS2_A, ETS2_B, GAME_CLOCK_1, GAME_CLOCK_2, RECEIVED_UTC, Script, cargoMarketJob, carrier, job, otherJob, r, run, sessionInput, trailer, truck, type Step
@@ -19,6 +19,13 @@ const uuid = (session: string, eventSeq: string) => {
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`;
 };
 const UNKNOWN_MODE = {mode: 'unknown', method: 'none', confidence: 'none'} as const;
+/** ET-016 PR-7 (J9): the late-attach trip UUID, the T4 shape over its own prefix, written with node:crypto. */
+const attachUuid = (session: string, nextEventSeq: string) => {
+  const h = createHash('sha256').update(`ets2telemetry-trip-attach-v1:${session}:${nextEventSeq}`, 'utf8').digest('hex');
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`;
+};
+/** The game mode of the shared checkpoint fixture's status, where a late-attach trip starts. */
+const CHECKPOINT_MODE = {mode: 'single-player', method: 'module-scan', confidence: 'weak'} as const;
 const BURST_REFS = {truckConfiguration: {eventSeq: '1'}, trailerConfigurations: [{eventSeq: '2'}]};
 const at = (seconds: number) => BASE_UTC + seconds * 1_000;
 const open = (tripUuid: string, startedUtcMs: number, extra: Partial<Extract<TripEffect, {kind: 'trip.open'}>> = {}): TripEffect =>
@@ -273,18 +280,28 @@ describe('loads, restarts and continuations', () => {
 });
 
 describe('hydration, gaps and connections', () => {
-  it('16a. late attach: a checkpoint job stays untracked until an identical job.configured opens a partial trip (T9) [concept-2026-10-14, synthetic-inference]', () => {
-    const s = new Script(ETS2_A), t = uuid(ETS2_A, '23');
+  // ET-016 PR-7: J9 supersedes T9's "a checkpoint job stays untracked until an identical job.configured opens a trip".
+  // The checkpoint job now opens a partial late-attach trip itself, so 16a, 16b and the replayed-clear case below were
+  // rewritten by hand from J9: their old expectations described the superseded rule, not a regression.
+  it('16a. late attach: a checkpoint job seen while idle opens a partial trip from the checkpoint (J9, superseding T9) [concept-2026-10-10, synthetic-inference]', () => {
+    const s = new Script(ETS2_A), a = attachUuid(ETS2_A, '1'), t = uuid(ETS2_A, '23');
     let state = play([[sessionInput(s.welcome())], [{kind: 'checkpoint', message: s.checkpoint(job())}]]);
+    // Nothing is replayed (nextEventSeq 1, coverage 0), so the trip is due at once; until it opens the job is untracked.
     expect(tripView(state, 'ets2')).toMatchObject({phase: 'idle', untrackedJob: true, current: null});
+    expect(dueAttach(state)).toEqual({pluginSessionId: ETS2_A, nextEventSeq: '1', job: job()});
+    // The trip starts at the checkpoint's capture label (the fixture's BASE_UTC) with the checkpoint's game mode.
+    state = play([[{kind: 'attach', receivedUtcMs: RECEIVED_UTC}, [open(a, BASE_UTC, {gameMode: CHECKPOINT_MODE, recordingCompleteness: 'partial'}),
+      cause(a, 'not-connected', {cause: 'late-attach', source: 'checkpoint', nextEventSeq: '1'})]]], state);
+    expect(tripView(state, 'ets2')).toMatchObject({phase: 'active', untrackedJob: false, current: {tripUuid: a, recordingCompleteness: 'partial'}});
     const gap = s.gap(20, 'offline');
     state = play([
-      // The consumer was absent for eventSeq 1–20 (offline): a session-level not-connected interval (T10).
-      [gap, gapEffects(gap, null, '1', '20')],
-      // The checkpoint showed a job: a fine meanwhile is inside a job no trip tracks, so ambiguous, never free driving
-      // (concept.md, October 13, 2026; fix round 1 finding 2 changed this requirement from free-driving).
+      // The consumer was then absent for eventSeq 1–20 (offline): the gap closes the trip (T10) at the session's last label,
+      // which the attach set to its start label, and its job becomes untracked.
+      [gap, [close(a, 'none', 'gap', 'partial', BASE_UTC), ...gapEffects(gap, a, '1', '20')]],
+      // A fine meanwhile is inside a job no trip tracks, so ambiguous, never free driving (concept.md, October 13, 2026).
       [s.event(r.fined()), [attr(null, 'ambiguous')]], [s.event(r.paused(), paused)],
-      [s.event(r.jobConfigured(), paused), [open(t, at(4), {recordingCompleteness: 'partial'}), cause(t, 'not-connected', {cause: 'late-attach', atEventSeq: '23'})]]
+      // The identical job re-sent opens a not-merged gap continuation of the late-attach trip, not a second late attach.
+      [s.event(r.jobConfigured(), paused), [open(t, at(4), {recordingCompleteness: 'partial'}), cause(t, 'discontinuity', {cause: 'gap', continuationOf: a, decision: 'not-merged', atEventSeq: '23'})]]
     ], state);
     expect(tripView(state, 'ets2')).toMatchObject({phase: 'active', untrackedJob: false, current: {tripUuid: t, recordingCompleteness: 'partial'}});
   });
@@ -301,19 +318,25 @@ describe('hydration, gaps and connections', () => {
       [s.event(r.started())], [s.event(r.fined()), [attr(t, 'trip')]]]);
     expect(tripView(state, 'ets2')).toMatchObject({phase: 'active', untrackedJob: false, current: {tripUuid: t, recordingCompleteness: 'partial'}});
   });
-  it('a replayed clear does not end a checkpoint job; live events after the checkpoint are ambiguous until a live clear (T9, T14) [synthetic-inference]', () => {
-    const s = new Script(ETS2_A);
+  it('a replayed clear does not end a checkpoint job: its late-attach trip opens after the replay and owns the live events until a live clear (J9, T14) [synthetic-inference]', () => {
+    const s = new Script(ETS2_A), a = attachUuid(ETS2_A, '4');
     const retained = [s.event(r.started()), s.event(r.fined()), s.event(r.jobCleared())];
     const checkpoint = s.checkpoint(job(), 3);
     play([[sessionInput(s.welcome())], [{kind: 'checkpoint', message: checkpoint}],
       [retained[0]], [retained[1], [attr(null, 'free-driving')]], [retained[2]],
-      [s.event(r.fined()), [attr(null, 'ambiguous')]], [s.event(r.jobCleared())], [s.event(r.fined()), [attr(null, 'free-driving')]]]);
+      [{kind: 'attach', receivedUtcMs: RECEIVED_UTC}, [open(a, BASE_UTC, {gameMode: CHECKPOINT_MODE, recordingCompleteness: 'partial'}),
+        cause(a, 'not-connected', {cause: 'late-attach', source: 'checkpoint', nextEventSeq: '4'})]],
+      [s.event(r.fined()), [attr(a, 'trip')]], [s.event(r.jobCleared())], [s.event(r.fined()), [attr(null, 'free-driving')]]]);
   });
   it('16b. the outcome of an untracked job is ambiguous (T9, T14) [synthetic-inference]', () => {
-    const s = new Script(ETS2_A);
-    let state = play([[sessionInput(s.welcome())], [{kind: 'checkpoint', message: s.checkpoint(job())}]]);
+    const s = new Script(ETS2_A), a = attachUuid(ETS2_A, '1');
+    let state = play([[sessionInput(s.welcome())], [{kind: 'checkpoint', message: s.checkpoint(job())}],
+      [{kind: 'attach', receivedUtcMs: RECEIVED_UTC}, [open(a, BASE_UTC, {gameMode: CHECKPOINT_MODE, recordingCompleteness: 'partial'}),
+        cause(a, 'not-connected', {cause: 'late-attach', source: 'checkpoint', nextEventSeq: '1'})]]]);
+    // Since J9 the checkpoint job is tracked; a gap that closes its trip leaves it untracked, as in T9's original case.
     const gap = s.gap(20, 'offline');
-    state = play([[gap, gapEffects(gap, null, '1', '20')], [s.event(r.paused(), paused)], [s.event(r.delivered(), paused), [attr(null, 'ambiguous')]]], state);
+    state = play([[gap, [close(a, 'none', 'gap', 'partial', BASE_UTC), ...gapEffects(gap, a, '1', '20')]], [s.event(r.paused(), paused)],
+      [s.event(r.delivered(), paused), [attr(null, 'ambiguous')]]], state);
     expect(tripView(state, 'ets2')).toMatchObject({phase: 'idle', untrackedJob: false, current: null});
   });
   it('a checkpoint never opens, closes or attributes, even with a job (T9) [concept-2026-10-14]', () => {
@@ -463,6 +486,88 @@ describe('delivery semantics (T3, T5)', () => {
       capture: {clockId: s.clockId, monotonicNs: '1'}, state: {} as never}});
     expect(stepTrip(state, reading(ETS2_B))).toEqual({ok: false, code: 'UNKNOWN_SESSION'});
     expect(stepTrip(gone, reading(ETS2_A))).toEqual({ok: false, code: 'UNKNOWN_SESSION'});
+  });
+});
+
+describe('late-attach trips (J9, J22, ET-016 PR-7)', () => {
+  const attachStep = {kind: 'attach', receivedUtcMs: RECEIVED_UTC} as const;
+  const lateAttach = (tripUuid: string, nextEventSeq: string) => cause(tripUuid, 'not-connected', {cause: 'late-attach', source: 'checkpoint', nextEventSeq});
+  it('opens only once the replayed events have drained; neither an early attach nor a live item before it is accepted [synthetic-inference]', () => {
+    const s = new Script(ETS2_A), a = attachUuid(ETS2_A, '3');
+    const retained = [s.event(r.paused(), paused), s.event(r.fined(), paused)];
+    let state = play([[sessionInput(s.welcome())], [{kind: 'checkpoint', message: s.checkpoint(job(), 2)}]]);
+    // eventSeq 1 and 2 happened before the checkpoint: the trip waits for them (RED: attach before drain).
+    expect(dueAttach(state)).toBeNull();
+    expect(stepTrip(state, attachStep)).toEqual({ok: false, code: 'ORDER_VIOLATION'});
+    state = play([[retained[0]]], state);
+    expect(dueAttach(state)).toBeNull();
+    // A replayed fine happened before the checkpoint job applies: free driving.
+    state = play([[retained[1], [attr(null, 'free-driving')]]], state);
+    expect(dueAttach(state)).toEqual({pluginSessionId: ETS2_A, nextEventSeq: '3', job: job()});
+    // Due: the next live item must wait for the trip, so stepping it first fails closed.
+    const live = s.event(r.fined());
+    expect(stepTrip(state, carrier(state, live))).toEqual({ok: false, code: 'ORDER_VIOLATION'});
+    state = play([[attachStep, [open(a, BASE_UTC, {gameMode: CHECKPOINT_MODE, recordingCompleteness: 'partial'}), lateAttach(a, '3')]], [live, [attr(a, 'trip')]]], state);
+    expect(dueAttach(state)).toBeNull();
+    expect(tripView(state, 'ets2')).toMatchObject({phase: 'active', untrackedJob: false, current: {tripUuid: a}});
+  });
+  it('waits for a replayed gap that reaches the checkpoint, then opens after it [synthetic-inference]', () => {
+    const s = new Script(ETS2_A), a = attachUuid(ETS2_A, '4'), gap = s.gap(3);
+    let state = play([[sessionInput(s.welcome())], [{kind: 'checkpoint', message: s.checkpoint(job(), 0)}]]);
+    expect(dueAttach(state)).toBeNull();
+    state = play([[gap, gapEffects(gap, null, '1', '3')]], state);
+    expect(dueAttach(state)?.nextEventSeq).toBe('4');
+    play([[attachStep, [open(a, BASE_UTC, {gameMode: CHECKPOINT_MODE, recordingCompleteness: 'partial'}), lateAttach(a, '4')]]], state);
+  });
+  it('an identical replayed job.configured keeps the opened-before-attach trip and opens no late-attach trip [synthetic-inference]', () => {
+    const s = new Script(ETS2_A), t = uuid(ETS2_A, '2');
+    const retained = [s.event(r.paused(), paused), s.event(r.jobConfigured(), paused)];
+    const state = play([[sessionInput(s.welcome())], [{kind: 'checkpoint', message: s.checkpoint(job(), 2)}], [retained[0]],
+      // The fresh session has not started yet, so the session is loading (T12) as well.
+      [retained[1], [open(t, at(2), {recordingCompleteness: 'partial'}), cause(t, 'discontinuity', {cause: 'opened-at-load', atEventSeq: '2'}),
+        cause(t, 'not-connected', {cause: 'opened-before-attach', atEventSeq: '2'})]]]);
+    expect(dueAttach(state)).toBeNull();
+    expect(stepTrip(state, attachStep)).toEqual({ok: false, code: 'ORDER_VIOLATION'});
+    play([[s.event(r.started())], [s.event(r.fined()), [attr(t, 'trip')]]], state);
+  });
+  it('opens no trip while a trip is open: a reconnection checkpoint only hydrates [synthetic-inference]', () => {
+    const s = new Script(ETS2_A), {rows, trip} = acceptedJob(s);
+    const state = play([...rows, [{kind: 'disconnected'}], [sessionInput(s.welcome(), '7')], [{kind: 'checkpoint', message: s.checkpoint(job())}]]);
+    expect(dueAttach(state)).toBeNull();
+    expect(tripView(state, 'ets2')).toMatchObject({phase: 'active', untrackedJob: false, current: {tripUuid: trip}});
+  });
+  it('after a plugin restart: sends the earlier trip\'s restart close first and marks the identical job a not-merged continuation (T11) [synthetic-inference]', () => {
+    const a = new Script(ETS2_A), b = new Script(ETS2_B, 'ets2', {utcMs: BASE_UTC + 100_000}), {rows, trip} = acceptedJob(a), next = attachUuid(ETS2_B, '1');
+    play([...rows, [{kind: 'disconnected'}], [sessionInput(b.welcome())], [{kind: 'checkpoint', message: b.checkpoint(job())}],
+      // The queued restart close precedes the new trip in the same openAttachedTrip command, so one trip is open at a time.
+      [attachStep, [close(trip, 'none', 'restart', 'partial', at(7)), open(next, BASE_UTC, {gameMode: CHECKPOINT_MODE, recordingCompleteness: 'partial'}), lateAttach(next, '1'),
+        cause(next, 'discontinuity', {cause: 'restart', continuationOf: trip, decision: 'not-merged', source: 'checkpoint', nextEventSeq: '1'})]]]);
+  });
+  it('has no truck or trailer reference until they are configured again; a paused checkpoint keeps the load window (J22, TD-007, T12) [synthetic-inference]', () => {
+    const s = new Script(ETS2_A), a = attachUuid(ETS2_A, '3');
+    // The session already knows its truck (1) and trailer (2), but the late-attach trip references neither.
+    const state = play([[sessionInput(s.welcome())], [s.event(r.truckConfigured(), paused)], [s.event(r.trailerConfigured(), paused)], [{kind: 'disconnected'}],
+      [sessionInput(s.welcome(), '2')], [{kind: 'checkpoint', message: s.checkpoint(job(), 0, {simulation: 'paused'})}],
+      [attachStep, [open(a, BASE_UTC, {gameMode: CHECKPOINT_MODE, recordingCompleteness: 'partial'}), lateAttach(a, '3')]],
+      // The identical re-send is the first reference, so no truck-change annotation.
+      [s.event(r.truckConfigured(), paused), [{kind: 'trip.update', tripUuid: a, set: {truckConfiguration: 'this-event'}}]],
+      [s.event(r.trailerConfigured(), paused), [{kind: 'trip.update', tripUuid: a, set: {trailerConfigurations: ['this-event']}}]],
+      // Opened while paused: the load's timer restart belongs to the load window and does not close the trip.
+      [s.event(r.timersRestart(), paused)], [s.event(r.started())], [s.event(r.fined()), [attr(a, 'trip')]]]);
+    expect(tripView(state, 'ets2')).toMatchObject({phase: 'active', current: {tripUuid: a, recordingCompleteness: 'partial'}});
+  });
+  it('after a service restart the stored late-attach trip resumes from its seed: no second trip, and the identical job is the same job [synthetic-inference]', () => {
+    const s = new Script(ETS2_A), a = attachUuid(ETS2_A, '1');
+    play([[sessionInput(s.welcome())], [{kind: 'checkpoint', message: s.checkpoint(job())}],
+      [attachStep, [open(a, BASE_UTC, {gameMode: CHECKPOINT_MODE, recordingCompleteness: 'partial'}), lateAttach(a, '1')]], [s.event(r.started())]]);
+    // A new service: the seed carries jobKey() of the stored checkpoint job (trip-seeds.ts).
+    const seed: TripSeed = {tripUuid: a, pluginSessionId: ETS2_A, game: 'ets2', jobKey: jobKey(job()), startedUtcMs: BASE_UTC, recordingCompleteness: 'partial', lastObservedUtcMs: at(1)};
+    const state = play([[sessionInput(s.welcome(), '1', [seed])], [{kind: 'checkpoint', message: s.checkpoint(job())}]], initialTripState());
+    expect(dueAttach(state)).toBeNull();
+    play([[s.event(r.jobConfigured()), [cause(a, 'not-connected', {cause: 'consumer-restart'})]], [s.event(r.fined()), [attr(a, 'trip')]]], state);
+  });
+  it('refuses an attach without a connection [synthetic-inference]', () => {
+    expect(stepTrip(initialTripState(), attachStep)).toEqual({ok: false, code: 'UNKNOWN_SESSION'});
   });
 });
 

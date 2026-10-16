@@ -3,7 +3,7 @@
 import {createHash} from 'node:crypto';
 import {describe, expect, it} from 'vitest';
 import {isUuid} from '../../packages/storage/src/codec';
-import {JOB_KEY_FIELDS, jobKey, sha256Hex, tripUuidFor, utf8Bytes} from '../../packages/telemetry-core/src/index';
+import {attachTripUuidFor, JOB_KEY_FIELDS, jobKey, sha256Hex, tripUuidFor, utf8Bytes} from '../../packages/telemetry-core/src/index';
 import {job} from '../shared/trip-messages';
 
 /** The T4 derivation written independently of the reducer: node:crypto SHA-256 of the documented input, first 128 bits. */
@@ -65,6 +65,21 @@ describe('tripUuidFor (T4)', () => {
     expect(tripUuidFor(SESSION, '7')).toBe(tripUuidFor(SESSION, '7'));
     const all = new Set([tripUuidFor(SESSION, '7'), tripUuidFor(SESSION, '8'), tripUuidFor('10000000-0000-4000-8000-000000000002', '7')]);
     expect(all.size).toBe(3);
+  });
+});
+
+describe('attachTripUuidFor (ET-016 PR-7, J9)', () => {
+  const SESSION = '10000000-0000-4000-8000-000000000001';
+  it('is the first 128 bits of SHA-256("ets2telemetry-trip-attach-v1:" + session + ":" + nextEventSeq) in the T4 shape, never a T4 UUID', () => {
+    for (const next of ['1', '2', '9007199254740993', '18446744073709551615']) {
+      const h = createHash('sha256').update(`ets2telemetry-trip-attach-v1:${SESSION}:${next}`, 'utf8').digest('hex');
+      const uuid = attachTripUuidFor(SESSION, next);
+      expect(uuid).toBe(`${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`);
+      expect(isUuid(uuid)).toBe(true);
+      // Its own prefix keeps it apart from the trip opened at an event with the same number.
+      expect(uuid).not.toBe(tripUuidFor(SESSION, next));
+    }
+    expect(attachTripUuidFor(SESSION, '7')).toBe(attachTripUuidFor(SESSION, '7'));
   });
 });
 

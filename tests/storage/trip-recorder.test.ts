@@ -45,3 +45,43 @@ describe('S2 trip recorder through the real storage worker against the reactive 
     expect(viewSummary(services[0].recorder.view(replay.scenario.game), replay.scenario.seed)).toEqual(expected.view);
   }, 90_000);
 });
+
+describe('late-attach trips through the real storage worker (ET-016 PR-7, J9)', () => {
+  it('opens one late-attach trip and, after a service restart, resumes it instead of opening a second one', async () => {
+    // A job accepted and a start while no client is connected (offline gap 1-2), a client from 100 to 200 ms, a service
+    // restart, and a second client from 300 ms that receives the identical job configuration at 350 ms.
+    const base = readFixtureFile(scenarioPath('app-absent-hydration')) as Json;
+    const jobAttributes = (base.steps as Json[])[1].attributes;
+    const input = {...base, id: 'late-attach-restart', seed: 'et016-late-attach-restart', steps: [
+      {atMs: 10, action: 'configuration', id: 'job', attributes: jobAttributes}, {atMs: 20, action: 'lifecycle', event: 'simulation.started'},
+      {atMs: 30, action: 'frame', channels: {speed: 20}}, {atMs: 350, action: 'configuration', id: 'job', attributes: jobAttributes}, {atMs: 360, action: 'frame', channels: {speed: 21}}],
+      transport: [{atMs: 100, action: 'connect', client: {durable: true}}, {atMs: 200, action: 'disconnect'}, {atMs: 300, action: 'connect', client: {durable: true}},
+        {atMs: 400, action: 'disconnect'}]};
+    const {services, tally} = await runRecording(input, {path: ws.database, backups: ws.backups}, {restartAfter: [0]});
+    expect(services).toHaveLength(2);
+    for (const service of services) {
+      expect(await service.client.close()).toEqual({clean: true});
+      expect(service.states.filter(s => s.status === 'incompatible' || s.durable.state === 'failed')).toEqual([]);
+    }
+    // Hand-written rows: the checkpoint at 100 ms (nextEventSeq 3) opens attach@3 after the gap 1-2, starting at the label of
+    // the frame at 30 ms. The restarted service seeds it with the checkpoint job's key, so its checkpoint at 300 ms opens
+    // nothing (RED: a second trip after a service restart) and the identical re-send (3) is the same job: it carries only
+    // the resumed trip's queued consumer-restart interval.
+    const expected = {
+      trips: [{trip: 'attach@3', jobConfigurationEventSeq: null, truckConfigurationEventSeq: null, trailerConfigurationEventSeqs: [], openedEventSeq: null,
+        gameMode: {mode: 'unknown', method: 'none', confidence: 'none'}, gameModeAmbiguous: false, outcome: 'open', outcomeEventSeq: null, closeReason: null,
+        recordingCompleteness: 'partial', startedUtcMs: 1_800_000_000_030, endedUtcMs: null,
+        observedDistanceM: {available: false, reason: 'not-observed'}, fuelUsedL: {available: false, reason: 'not-observed'}}],
+      attributions: [],
+      intervals: [
+        {trip: null, kind: 'not-connected', firstEventSeq: '1', lastEventSeq: '2', startMonotonicNs: '1000010000000', endMonotonicNs: '1000020000000', sourceClockId: 'capture-clock',
+          detail: {cause: 'gap', causes: {offline: '2', noDurableConsumer: '0', queueCount: '0', queueBytes: '0', retentionExpired: '0', encodingFailed: '0'},
+            firstEventSeq: '1', lastEventSeq: '2', redelivered: false}},
+        {trip: 'attach@3', kind: 'not-connected', detail: {cause: 'late-attach', source: 'checkpoint', nextEventSeq: '3'}},
+        {trip: 'attach@3', kind: 'not-connected', detail: {cause: 'consumer-restart'}}]
+    };
+    expect(await storedRows(ws, input.seed)).toEqual(expected);
+    expect({coverage: tally.coverage.toString(), committed: tally.committed}).toEqual({coverage: '3', committed: 2});
+    expect(viewSummary(services[1].recorder.view('ets2'), input.seed)).toMatchObject({phase: 'active', untrackedJob: false, current: {trip: 'attach@3', recordingCompleteness: 'partial'}});
+  }, 90_000);
+});

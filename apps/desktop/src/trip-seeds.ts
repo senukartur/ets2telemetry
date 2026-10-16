@@ -35,8 +35,16 @@ interface SessionScan {
   lastLabel: {eventSeq: bigint; utcMs: number} | null;
   trips: Map<string, {opened: bigint; lastJobEvent: {eventSeq: bigint; type: string} | null}>;
 }
+/**
+ * Where a trip opened in its session's event order: its opening event, or for a trip opened from a checkpoint (ET-016
+ * PR-7, J9) the checkpoint's nextEventSeq - 1, so every event at or after the checkpoint's nextEventSeq follows the opening.
+ */
+function openedAt(trip: TripRecord): bigint {
+  if (trip.openedEventSeq !== null) return BigInt(trip.openedEventSeq);
+  return trip.checkpointJob === null ? 0n : BigInt(trip.checkpointJob.nextEventSeq) - 1n;
+}
 const newScan = (trips: readonly TripRecord[]): SessionScan =>
-  ({lastLabel: null, trips: new Map(trips.map(trip => [trip.tripUuid, {opened: BigInt(trip.openedEventSeq), lastJobEvent: null}]))});
+  ({lastLabel: null, trips: new Map(trips.map(trip => [trip.tripUuid, {opened: openedAt(trip), lastJobEvent: null}]))});
 function observe(scan: SessionScan, event: EventRow, labelOnly = false): void {
   const eventSeq = BigInt(event.eventSeq), label = labelOf(event.occurred);
   if (label !== null && (scan.lastLabel === null || eventSeq > scan.lastLabel.eventSeq)) scan.lastLabel = {eventSeq, utcMs: label};
@@ -46,7 +54,9 @@ function observe(scan: SessionScan, event: EventRow, labelOnly = false): void {
   }
 }
 function seedOf(trip: TripRecord, jobRow: EventRow | undefined, scan: SessionScan): TripSeed {
-  const job = jobRow !== undefined && jobRow.eventSeq === trip.jobConfigurationEventSeq && isJobConfigured(jobRow.record) ? jobKey(jobRow.record) : null;
+  // A checkpoint job (J9) is read with the trip; an event job from its stored job.configured record.
+  const job = trip.jobSource === 'checkpoint' ? trip.checkpointJob === null ? null : jobKey(trip.checkpointJob.values)
+    : jobRow !== undefined && jobRow.eventSeq === trip.jobConfigurationEventSeq && isJobConfigured(jobRow.record) ? jobKey(jobRow.record) : null;
   const lastJobEvent = scan.trips.get(trip.tripUuid)?.lastJobEvent ?? null;
   return {
     tripUuid: trip.tripUuid, pluginSessionId: trip.pluginSessionId, game: trip.game, jobKey: job, startedUtcMs: trip.startedUtcMs,
@@ -60,7 +70,8 @@ function seedOf(trip: TripRecord, jobRow: EventRow | undefined, scan: SessionSca
 /**
  * The seed of one stored open trip (R4):
  * - `jobKey`: jobKey() of the stored job configuration record. Null when the row is missing, is not a `job.configured`
- *   record or is not at the trip's job configuration eventSeq, so no later job matches the trip.
+ *   record or is not at the trip's job configuration eventSeq, so no later job matches the trip. For a trip opened from a
+ *   checkpoint (ET-016 PR-7, J9) it is jobKey() of the stored checkpoint job, `TripRecord.checkpointJob`; `jobRow` is unused.
  * - `lastObservedUtcMs`: the label of the session's stored event with the highest eventSeq that has a usable label.
  * - `observedDistanceM`: the stored observed distance when it is available.
  * - `fuelUsedL`: the stored fuel used when it is available (S-1, J8).
@@ -86,7 +97,7 @@ export function seedFromStored(trip: TripRecord, jobRow: EventRow | undefined, s
  */
 async function scanSession(reader: TripSeedReader, pluginSessionId: string, trips: readonly TripRecord[]): Promise<Result<SessionScan>> {
   const scan = newScan(trips);
-  const first = trips.reduce((min, trip) => { const opened = BigInt(trip.openedEventSeq); return opened < min ? opened : min; }, BigInt(trips[0].openedEventSeq));
+  const first = trips.reduce((min, trip) => { const opened = openedAt(trip); return opened < min ? opened : min; }, openedAt(trips[0]));
   const before = first > 0n ? first - 1n : 0n;
   for (let after = before; ;) {
     const page = await reader.listEvents(pluginSessionId, {limit: MAX_EVENT_PAGE, afterEventSeq: after.toString()});
@@ -130,6 +141,8 @@ export async function readTripSeeds(reader: TripSeedReader, game: TripGame): Pro
       scan = read.value;
       scans.set(trip.pluginSessionId, scan);
     }
+    // A checkpoint job (J9) comes with the trip record, so no event is read for it.
+    if (trip.jobConfigurationEventSeq === null) { seeds.push(seedOf(trip, undefined, scan)); continue; }
     const job = await reader.getEvent(trip.pluginSessionId, trip.jobConfigurationEventSeq);
     if (!job.ok) return job;
     seeds.push(seedOf(trip, job.value, scan));

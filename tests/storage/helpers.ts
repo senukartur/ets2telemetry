@@ -96,6 +96,11 @@ const expectedRepresentative = () => JSON.parse(readFileSync(path.join(STORAGE_F
  * then closes it and checks gaps, attributions, completeness and row counts with plain SQL. `rowCountChanges` covers
  * rows that a later schema legitimately adds, such as its own schema_migrations row.
  */
+/**
+ * ET-016 PR-7 (J9): the TripRecord fields added after the immutable fixture expectations were written, with the values of
+ * a trip opened at its job.configured event, as every fixture trip was (their SQL: opened_by 'event', job source 'event').
+ */
+export const EVENT_OPENED = {jobSource: 'event', checkpointJob: null, openedBy: 'event'} as const;
 export function expectRepresentative(storage: Storage, file: string, rowCountChanges: Record<string, number> = {}) {
   const expected = expectedRepresentative();
   expect(storage.summary.databaseUuid).toBe(expected.databaseUuid);
@@ -104,8 +109,9 @@ export function expectRepresentative(storage: Storage, file: string, rowCountCha
   expect(events.map(({eventSeq, type, firstRedelivered, protocolMinor, committedUtcMs}) => ({eventSeq, type, firstRedelivered, protocolMinor, committedUtcMs}))).toEqual(expected.events);
   for (const [eventSeq, values] of Object.entries(expected.recordValues)) expect(events.find(e => e.eventSeq === eventSeq)?.record, eventSeq).toMatchObject(values as object);
   // ET-016 PR-6: TripRecord gained fuelUsedL after this immutable expectation was written. A version 1 trip has no fuel
-  // used, and migration 0002 stores `not-observed` for it (docs/storage.md, schema version 2).
-  expect(ok(storage.listTrips()).trips).toEqual((expected.trips as object[]).map(trip => ({...trip, fuelUsedL: {available: false, reason: 'not-observed'}})));
+  // used, and migration 0002 stores `not-observed` for it (docs/storage.md, schema version 2). ET-016 PR-7: TripRecord also
+  // gained where its job and opening came from; every version 1 trip opened at its job.configured event.
+  expect(ok(storage.listTrips()).trips).toEqual((expected.trips as object[]).map(trip => ({...trip, fuelUsedL: {available: false, reason: 'not-observed'}, ...EVENT_OPENED})));
   expect(ok(storage.listSamples({pluginSessionId: P1}))).toEqual(expected.samples);
   storage.close();
   readOnly(file, db => {

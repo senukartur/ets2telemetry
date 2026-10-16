@@ -3,20 +3,28 @@
   "basis": ["synthetic-inference"],
   "authoredFrom": [
     "app-absent-hydration.expected.json: the checkpoint at 100 hydrates the job with nextEventSeq 4; gaps 1-3 and 4-4 are offline only; event 5 is job.cleared",
-    "docs/trips.md T9: a checkpoint never opens a trip; its job is untracked from eventSeq 4 on and the live clear (eventSeq 5) ends it",
-    "docs/trips.md T10: a gap with no open trip is a session-level not-connected interval over its new suffix, with the record's monotonic bounds because the suffix is the whole record",
-    "docs/trips.md T16 (PR-2): readings without an open trip accumulate nothing and add no effect"
+    "ET-016 PR-7 (J9, superseding T9 here): the replayed gap 1-3 reaches nextEventSeq 4 minus 1, so the checkpoint job opens a late-attach trip, partial with a late-attach not-connected interval, starting at the checkpoint state's capture label (the frame at 30, 1,800,000,000,030) with its game mode; it has no job event, opening event or truck reference (J22)",
+    "docs/trips.md T10: the gap 1-3 with no open trip is a session-level not-connected interval over its new suffix, with the record's monotonic bounds because the suffix is the whole record; the live gap 4-4 closes the late-attach trip as gap, partial, at the session's last label, the late-attach trip's own start label 1,800,000,000,030 (the attach is the session's latest labelled point), carries its interval, and leaves the job untracked until the live clear (eventSeq 5)",
+    "docs/trips.md T16 (PR-2): the trip has no reading pair while open, so it has observed nothing"
   ],
-  "trips": [],
+  "trips": [
+    {"trip": "attach@4", "jobConfigurationEventSeq": null, "truckConfigurationEventSeq": null, "trailerConfigurationEventSeqs": [], "openedEventSeq": null,
+      "gameMode": {"mode": "unknown", "method": "none", "confidence": "none"}, "gameModeAmbiguous": false, "outcome": "none", "outcomeEventSeq": null, "closeReason": "gap",
+      "recordingCompleteness": "partial", "startedUtcMs": 1800000000030, "endedUtcMs": 1800000000030,
+      "observedDistanceM": {"available": false, "reason": "not-observed"}, "fuelUsedL": {"available": false, "reason": "not-observed"}}
+  ],
   "attributions": [],
   "intervals": [
     {"trip": null, "kind": "not-connected", "firstEventSeq": "1", "lastEventSeq": "3", "startMonotonicNs": "1000000000000", "endMonotonicNs": "1000020000000", "sourceClockId": "capture-clock",
       "detail": {"cause": "gap", "causes": {"offline": "3", "noDurableConsumer": "0", "queueCount": "0", "queueBytes": "0", "retentionExpired": "0", "encodingFailed": "0"},
         "firstEventSeq": "1", "lastEventSeq": "3", "redelivered": false}},
-    {"trip": null, "kind": "not-connected", "firstEventSeq": "4", "lastEventSeq": "4", "startMonotonicNs": "1000040000000", "endMonotonicNs": "1000040000000", "sourceClockId": "capture-clock",
+    {"trip": "attach@4", "kind": "not-connected", "detail": {"cause": "late-attach", "source": "checkpoint", "nextEventSeq": "4"}},
+    {"trip": "attach@4", "kind": "not-connected", "firstEventSeq": "4", "lastEventSeq": "4", "startMonotonicNs": "1000040000000", "endMonotonicNs": "1000040000000", "sourceClockId": "capture-clock",
       "detail": {"cause": "gap", "causes": {"offline": "1", "noDurableConsumer": "0", "queueCount": "0", "queueBytes": "0", "retentionExpired": "0", "encodingFailed": "0"},
         "firstEventSeq": "4", "lastEventSeq": "4", "redelivered": false}}
   ],
   "coverage": {"committedThroughEventSeq": "5", "committed": 3, "duplicate": 0, "covered": 0},
-  "view": {"phase": "idle", "untrackedJob": false, "current": null, "lastClosed": null}
+  "view": {"phase": "idle", "untrackedJob": false, "current": null,
+    "lastClosed": {"trip": "attach@4", "recordingCompleteness": "partial", "observedDistanceM": {"state": "missing", "reason": "not-observed"},
+      "fuelUsedL": {"state": "missing", "reason": "not-observed"}, "refuelledL": 0, "refuels": 0, "outcome": "none", "closeReason": "gap"}}
 }

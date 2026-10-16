@@ -149,9 +149,12 @@ export const RECORDING_TARGET_TEXT: Readonly<Record<RecordingTarget, string | nu
 export const RECORDING_TARGET_SHORT_TEXT: Readonly<Record<RecordingTarget, string | null>> = Object.freeze({
   history: null, synthetic: 'synthetic test database', replay: 'replay test database'
 });
-/** The current trip; an idle trip without an untracked job shows nothing. */
+/**
+ * The current trip; an idle trip without an untracked job shows nothing. Since ET-016 PR-7 (J9) a job that started before
+ * recording opens a partial trip, so an untracked job is one whose trip a recording gap ended.
+ */
 export const RECORDING_TRIP_TEXT = Object.freeze({
-  untrackedJob: 'The current job started before recording and is not tracked as a trip',
+  untrackedJob: 'The current job is not tracked as a trip: a recording gap ended its trip',
   completeness: Object.freeze({
     unknown: 'The current trip\'s completeness is not known yet', partial: 'Current trip is partial', complete: 'Current trip is recorded completely so far'
   }) satisfies Readonly<Record<NonNullable<RecordingTrip['completeness']>, string>>,

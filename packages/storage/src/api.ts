@@ -1,6 +1,6 @@
 // Typed storage commands, results, errors and trip effects. Node-safe: no native SQLite, Electron or filesystem
 // access, so the Node-safe test suite and a future worker client can import it. See docs/storage.md.
-import type {Available, GameMode, Uint64} from '../../contracts/src/protocol-v1';
+import type {Available, GameMode, JobConfiguration, Uint64} from '../../contracts/src/protocol-v1';
 
 export type {Uint64};
 /** What a database file holds. History accepts only game data; synthetic and replay data live in separate files. */
@@ -73,7 +73,10 @@ export type TripOutcome = 'open' | 'delivered' | 'cancelled' | 'none';
 export type CloseReason = 'outcome' | 'configuration-cleared' | 'different-job' | 'restart' | 'discontinuity' | 'gap';
 export type RecordingCompleteness = 'complete' | 'partial' | 'unknown';
 export type Attribution = 'trip' | 'trip-before-loaded' | 'free-driving' | 'ambiguous';
-/** A configuration event of the same plugin session, identified by its eventSeq; or the event being committed. */
+/**
+ * A configuration event of the same plugin session, identified by its eventSeq; or the event being committed. In
+ * openAttachedTrip, `this-event` as a trip's job configuration names the checkpoint job configuration the command stores.
+ */
 export type EventReference = 'this-event' | {eventSeq: Uint64};
 /**
  * Trip changes computed by the domain (ET-014) and applied in the same transaction as the event or gap that caused
@@ -116,6 +119,25 @@ export const MAX_SAMPLE_BATCH = 3_600;
 export const MAX_EVENT_PAGE = 500;
 export const MAX_TRIP_PAGE = 100;
 
+/**
+ * openAttachedTrip (ET-016 PR-7, J9): a trip opened from a checkpoint job while the game's slot was idle. `nextEventSeq`
+ * is the checkpoint's `status.delivery.nextEventSeq` (1 or more, at most the session's committed coverage + 1) and `job`
+ * the checkpoint's job configuration in the protocol v1 shape. `effects` may start with the reducer's queued lifecycle
+ * effects of earlier trips of the game (`trip.update`, a `trip.close` without an outcome, whose close carrier is this
+ * session and nextEventSeq, and `completeness.add`); then exactly one `trip.open`, whose `jobConfiguration` is
+ * `this-event` (the job stored by this command) and which names no truck or trailer (J22); then only `completeness.add`
+ * intervals of that trip. The command stores the job as a `checkpoint` configuration keyed UNIQUE(plugin session,
+ * nextEventSeq) and the trip with `opened_by` `checkpoint`, in one transaction. It never changes coverage and is never
+ * acknowledged.
+ */
+export interface AttachInput {pluginSessionId: string; nextEventSeq: Uint64; job: JobConfiguration; effects: TripEffect[]}
+/**
+ * `committed`: the job, trip and intervals were stored. `duplicate`: the session already holds a checkpoint job at this
+ * nextEventSeq, such as the same attach retried after a lost answer; nothing is written and the effects are not applied
+ * again.
+ */
+export interface AttachResult {status: 'committed' | 'duplicate'}
+
 export type CommitStatus = 'committed' | 'duplicate' | 'conflict' | 'covered';
 /**
  * `committed`: the row and its effects were inserted. `duplicate`: the same key already held an identical payload, and
@@ -145,10 +167,17 @@ export interface SessionRecord {
 export interface EventRow {
   eventSeq: Uint64; type: string; occurred: unknown; record: unknown; firstRedelivered: boolean; protocolMinor: number; committedUtcMs: number;
 }
+/**
+ * A stored trip. Since ET-016 PR-7 (J9) a trip can open from a checkpoint: `openedBy` is then `checkpoint` and
+ * `openedEventSeq` null, and its job comes from that checkpoint (`jobSource` `checkpoint`, `jobConfigurationEventSeq`
+ * null, `checkpointJob` its nextEventSeq and values). A trip opened at a job.configured event has `openedBy` and
+ * `jobSource` `event`, an `openedEventSeq` and a `jobConfigurationEventSeq`, and `checkpointJob` null.
+ */
 export interface TripRecord {
   tripUuid: string; pluginSessionId: string; game: 'ets2' | 'ats'; gameMode: Pick<GameMode, 'mode' | 'method' | 'confidence'>; gameModeAmbiguous: boolean;
-  jobConfigurationEventSeq: Uint64; truckConfigurationEventSeq: Uint64 | null; trailerConfigurationEventSeqs: Uint64[];
-  openedEventSeq: Uint64; outcome: TripOutcome; outcomeEventSeq: Uint64 | null; closeReason: CloseReason | null;
+  jobSource: 'event' | 'checkpoint'; jobConfigurationEventSeq: Uint64 | null; checkpointJob: {nextEventSeq: Uint64; values: JobConfiguration} | null;
+  truckConfigurationEventSeq: Uint64 | null; trailerConfigurationEventSeqs: Uint64[];
+  openedBy: 'event' | 'checkpoint'; openedEventSeq: Uint64 | null; outcome: TripOutcome; outcomeEventSeq: Uint64 | null; closeReason: CloseReason | null;
   recordingCompleteness: RecordingCompleteness; startedUtcMs: number; endedUtcMs: number | null; observedDistanceM: Available<number>;
   /** Litres (S-1, schema version 2); `not-observed` until the trip's first fuel update. */
   fuelUsedL: Available<number>;
