@@ -37,7 +37,7 @@ function expectRepresentativeV2(storage: Storage, file: string) {
   expect(ok(storage.listTrips()).trips).toEqual(expected.trips);
   storage.close();
   readOnly(file, db => {
-    expect(db.prepare(`SELECT t.trip_uuid, t.fuel_used_l, t.fuel_used_l_state, s.plugin_session_uuid AS closed_by_session, t.closed_by_event_seq
+    expect(db.prepare(`SELECT t.trip_uuid, t.opened_by, t.fuel_used_l, t.fuel_used_l_state, s.plugin_session_uuid AS closed_by_session, t.closed_by_event_seq
       FROM trips t LEFT JOIN plugin_sessions s ON s.id = t.closed_by_session_ref ORDER BY t.id`).all()).toEqual(expected.tripColumns);
     expect(db.prepare(`SELECT j.id, s.plugin_session_uuid AS session, j.source, e.event_seq, j.checkpoint_next_event_seq, j.expected_income_state
       FROM job_configurations j JOIN plugin_sessions s ON s.id = j.plugin_session_ref LEFT JOIN events e ON e.id = j.event_ref ORDER BY j.id`).all()).toEqual(expected.jobConfigurations);

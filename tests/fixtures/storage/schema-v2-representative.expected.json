@@ -161,10 +161,10 @@
     ]
   },
   "tripColumns": [
-    {"trip_uuid": "70000000-0000-4000-8000-000000000001", "fuel_used_l": 42.5, "fuel_used_l_state": "available", "closed_by_session": "10000000-0000-4000-8000-000000000001", "closed_by_event_seq": "00000000000000000002"},
-    {"trip_uuid": "70000000-0000-4000-8000-000000000002", "fuel_used_l": null, "fuel_used_l_state": "not-observed", "closed_by_session": "10000000-0000-4000-8000-000000000001", "closed_by_event_seq": "00000000000000000004"},
-    {"trip_uuid": "70000000-0000-4000-8000-000000000003", "fuel_used_l": 0, "fuel_used_l_state": "available", "closed_by_session": "10000000-0000-4000-8000-000000000002", "closed_by_event_seq": "00000000000000000001"},
-    {"trip_uuid": "70000000-0000-4000-8000-000000000004", "fuel_used_l": null, "fuel_used_l_state": "not-supported", "closed_by_session": null, "closed_by_event_seq": null}
+    {"trip_uuid": "70000000-0000-4000-8000-000000000001", "opened_by": "event", "fuel_used_l": 42.5, "fuel_used_l_state": "available", "closed_by_session": "10000000-0000-4000-8000-000000000001", "closed_by_event_seq": "00000000000000000002"},
+    {"trip_uuid": "70000000-0000-4000-8000-000000000002", "opened_by": "event", "fuel_used_l": null, "fuel_used_l_state": "not-observed", "closed_by_session": "10000000-0000-4000-8000-000000000001", "closed_by_event_seq": "00000000000000000004"},
+    {"trip_uuid": "70000000-0000-4000-8000-000000000003", "opened_by": "event", "fuel_used_l": 0, "fuel_used_l_state": "available", "closed_by_session": "10000000-0000-4000-8000-000000000002", "closed_by_event_seq": "00000000000000000001"},
+    {"trip_uuid": "70000000-0000-4000-8000-000000000004", "opened_by": "event", "fuel_used_l": null, "fuel_used_l_state": "not-supported", "closed_by_session": null, "closed_by_event_seq": null}
   ],
   "jobConfigurations": [
     {"id": 1, "session": "10000000-0000-4000-8000-000000000001", "source": "event", "event_seq": "00000000000000000001", "checkpoint_next_event_seq": null, "expected_income_state": "available"},
