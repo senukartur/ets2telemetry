@@ -139,9 +139,9 @@ describe('ET-012c strip containment observation', () => {
       getComputedStyle: (node: {testId: string}) => ({maxWidth: layout.maxWidth?.[node.testId] ?? '140px'})}))) as false | Record<string, unknown>;
   }
   it('names the sections the synthetic checkpoint fixture shows in the strip', async () => {
-    const {STRIP_SMOKE_SECTIONS, STRIP_SMOKE_VIEWPORT} = await import(observationModule);
+    const {STRIP_SMOKE_SECTIONS, STRIP_SMOKE_WINDOW} = await import(observationModule);
     expect(STRIP_SMOKE_SECTIONS).toEqual(EXPECTED);
-    expect(STRIP_SMOKE_VIEWPORT).toEqual({innerWidth: 1280, innerHeight: 110});
+    expect(STRIP_SMOKE_WINDOW).toEqual({innerHeight: 110, minWidth: 480, maxWidth: 1280});
   });
   it('reports every shown section inside the window and the strip row, every item capped, and records truncation and rows', async () => {
     expect(await observeStrip({truncated: ['cargo']})).toEqual({viewport: {innerWidth: 1280, innerHeight: 110}, sections: EXPECTED,
@@ -180,6 +180,20 @@ describe('ET-012c strip containment observation', () => {
     expect(() => verifyStripLayout({...valid, uncapped: ['overlay-section-cargo']})).toThrow('Every strip item must have a maximum width');
     const unreserved = await observeStrip({viewport: {innerWidth: 1280, innerHeight: 38}});
     expect(() => verifyStripLayout(unreserved)).toThrow('reserved size');
+  });
+  it('accepts a window the screen narrowed, but never another height or a width outside the strip limits', async () => {
+    // Windows limits a window to the screen size: on a 1024-wide hosted runner screen the hidden overlay, created
+    // 1280 x 110 and never placed without a game window, is 1024 x 110 (CI run 38878781715).
+    const {verifyStripLayout} = await import(observationModule);
+    const narrow = await observeStrip({viewport: {innerWidth: 1024, innerHeight: 110}});
+    expect(verifyStripLayout(narrow)).toBe(narrow);
+    expect(verifyStripLayout({...narrow, viewport: {innerWidth: 480, innerHeight: 110}})).toBeTruthy();
+    for (const viewport of [{innerWidth: 1024, innerHeight: 74}, {innerWidth: 1024, innerHeight: 111}, {innerWidth: 1024, innerHeight: 146}])
+      expect(() => verifyStripLayout({...narrow, viewport}), JSON.stringify(viewport)).toThrow('The strip overlay window must have its reserved size');
+    for (const viewport of [{innerWidth: 479, innerHeight: 110}, {innerWidth: 1281, innerHeight: 110}])
+      expect(() => verifyStripLayout({...narrow, viewport}), JSON.stringify(viewport)).toThrow('The strip overlay window width must lie between 480 and 1280');
+    // Containment still applies to the narrowed window.
+    expect(() => verifyStripLayout({...narrow, outside: ['game-time']})).toThrow('Enabled strip sections lie outside the overlay window');
   });
 });
 

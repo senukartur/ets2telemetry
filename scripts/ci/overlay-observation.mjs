@@ -33,8 +33,11 @@ export async function waitForOverlay(page, expected) {
 // ET-012c strip containment. The synthetic checkpoint fixture (tests/fixtures/protocol-v0/checkpoint.json) carries
 // current values for these sections, in canonical order; range stays hidden because its estimate is not observed.
 export const STRIP_SMOKE_SECTIONS = Object.freeze(['speed', 'gear', 'rpm', 'fuel', 'sdk-consumption', 'cargo', 'destination', 'expected-income', 'game-time']);
-// The hidden overlay window is created at the strip's reserved size for every section at scale 1 (overlay-geometry.ts).
-export const STRIP_SMOKE_VIEWPORT = Object.freeze({innerWidth: 1280, innerHeight: 110});
+// The hidden overlay window is created at the strip's reserved size for every section at scale 1, 1280 x 110
+// (overlay-geometry.ts). Without a game window main never places it, and Windows limits a window to the screen size, so
+// on a narrow screen it is narrower (1024 on the hosted runner of CI run 38878781715). The height is not limited, and the
+// width must stay within the strip's own limits of 480 to 1280.
+export const STRIP_SMOKE_WINDOW = Object.freeze({innerHeight: 110, minWidth: 480, maxWidth: 1280});
 
 // Self-contained browser callback: false until exactly one current strip root shows exactly the expected sections, then
 // one coherent read of where they lie. `outside` lists sections with an empty box or one not fully inside both the root
@@ -65,10 +68,16 @@ export function stripLayoutObservation(expected) {
   return {viewport: {innerWidth: globalThis.innerWidth, innerHeight: globalThis.innerHeight}, sections, outside, uncapped, truncated, rows: tops.size};
 }
 
-/** Every shown strip section lies inside the overlay window, the window has the reserved size, and every item is capped. */
+/**
+ * Every shown strip section lies inside the overlay window, every item is capped, and the window has the reserved
+ * height with a width the screen may have narrowed. The actual viewport stays in the recorded observation.
+ */
 export function verifyStripLayout(observation) {
   assert.deepEqual(observation.outside, [], 'Enabled strip sections lie outside the overlay window');
-  assert.deepEqual(observation.viewport, {...STRIP_SMOKE_VIEWPORT}, 'The strip overlay window must have its reserved size');
+  const {innerWidth, innerHeight} = observation.viewport;
+  assert.equal(innerHeight, STRIP_SMOKE_WINDOW.innerHeight, 'The strip overlay window must have its reserved size');
+  assert.ok(Number.isFinite(innerWidth) && innerWidth >= STRIP_SMOKE_WINDOW.minWidth && innerWidth <= STRIP_SMOKE_WINDOW.maxWidth,
+    `The strip overlay window width must lie between ${STRIP_SMOKE_WINDOW.minWidth} and ${STRIP_SMOKE_WINDOW.maxWidth}`);
   assert.deepEqual(observation.uncapped, [], 'Every strip item must have a maximum width');
   return observation;
 }
