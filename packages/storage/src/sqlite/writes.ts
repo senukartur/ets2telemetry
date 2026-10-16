@@ -208,17 +208,22 @@ function applyEffects(c: EffectContext, effects: unknown): void {
       case 'trip.update': {
         const trip = tripRow(c, effect.tripUuid), set = effect.set;
         if (typeof set !== 'object' || set === null) fail('INVALID_INPUT');
-        // A closed trip may still learn about its recording (a late gap can downgrade completeness, a final distance can
-        // arrive), but its configuration and game-mode evidence are fixed once it is closed.
-        const allowed = trip.outcome === 'open' ? ['recordingCompleteness', 'gameModeAmbiguous', 'observedDistanceM', 'truckConfiguration', 'trailerConfigurations']
-          : ['recordingCompleteness', 'observedDistanceM'];
+        // A closed trip may still learn about its recording (a late gap can downgrade completeness, a final distance or
+        // fuel used can arrive), but its configuration and game-mode evidence are fixed once it is closed.
+        const allowed = trip.outcome === 'open' ? ['recordingCompleteness', 'gameModeAmbiguous', 'observedDistanceM', 'fuelUsedL', 'truckConfiguration', 'trailerConfigurations']
+          : ['recordingCompleteness', 'observedDistanceM', 'fuelUsedL'];
         if (Object.keys(set).some(key => !allowed.includes(key))) fail('INVALID_INPUT');
         if (set.recordingCompleteness !== undefined) statement(c.db, 'UPDATE trips SET recording_completeness = ? WHERE id = ?').run(enumValue(set.recordingCompleteness, COMPLETENESS), trip.id);
         const ambiguous = optionalBoolean(set.gameModeAmbiguous);
         if (ambiguous !== undefined) statement(c.db, 'UPDATE trips SET game_mode_ambiguous = ? WHERE id = ?').run(ambiguous, trip.id);
         if (set.observedDistanceM !== undefined) {
-          const [value, state] = availabilityColumns(availability(set.observedDistanceM) as Available<number>, v => { if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) fail('INVALID_INPUT'); return v; });
+          const [value, state] = availabilityColumns(availability(set.observedDistanceM) as Available<number>, nonNegative);
           statement(c.db, 'UPDATE trips SET observed_distance_m = ?, observed_distance_m_state = ? WHERE id = ?').run(value, state, trip.id);
+        }
+        // S-1 (J8): fuel used in litres, validated exactly like observed distance.
+        if (set.fuelUsedL !== undefined) {
+          const [value, state] = availabilityColumns(availability(set.fuelUsedL) as Available<number>, nonNegative);
+          statement(c.db, 'UPDATE trips SET fuel_used_l = ?, fuel_used_l_state = ? WHERE id = ?').run(value, state, trip.id);
         }
         if (set.truckConfiguration !== undefined) statement(c.db, 'UPDATE trips SET truck_configuration_ref = ? WHERE id = ?').run(configurationRef(c, 'truck_configurations', set.truckConfiguration), trip.id);
         addTrailers(c, trip.id, set.trailerConfigurations);
@@ -348,6 +353,11 @@ function sessionByUuid(db: Database.Database, pluginSessionId: unknown): Session
 }
 function finiteNumber(value: unknown, integer = false): number {
   if (typeof value !== 'number' || !Number.isFinite(value) || (integer && !Number.isInteger(value))) fail('INVALID_INPUT');
+  return value;
+}
+/** A finite number that is not negative, such as observed distance or fuel used; anything else is INVALID_INPUT. */
+function nonNegative(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) fail('INVALID_INPUT');
   return value;
 }
 const REASONS = ['not-observed', 'not-supported', 'invalid'];

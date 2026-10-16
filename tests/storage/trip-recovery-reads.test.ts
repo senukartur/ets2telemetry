@@ -243,3 +243,43 @@ describe('cold-start seeds from the real worker (R4)', () => {
     await w.close();
   });
 });
+
+// ET-016 PR-6 (S-1, J8): fuel used is written by trip.update like observed distance, on open and closed trips, read back
+// as TripRecord.fuelUsedL and passed into cold-start seeds when it is available. Values are written by hand.
+describe('trip fuel used (S-1, J8)', () => {
+  it('stores fuel used on open and closed trips, refuses invalid values and reads it into TripRecord and seeds', async () => {
+    const a = new Script(ETS2_A), b = new Script(ETS2_B);
+    const w = await openWorker();
+    for (const s of [a, b]) ok(await w.client.upsertSession({message: s.welcome()}));
+    const fuel = (tripUuid: string, fuelUsedL: unknown): TripEffect => ({kind: 'trip.update', tripUuid, set: {fuelUsedL: fuelUsedL as never}});
+    // Session A: T1 opens at eventSeq 1 and stays open.
+    await commit(w.client, a.event(r.jobConfigured()), [opens(T(1))]);
+    expect(ok(await w.client.getTrip(T(1)))?.fuelUsedL).toEqual({available: false, reason: 'not-observed'});
+    const fined = a.event(r.fined());
+    // The validation of observed distance: finite and not negative when available, and a strict availability object.
+    for (const bad of [{available: true, value: -0.5}, {available: true, value: Number.NaN}, {available: true, value: Number.POSITIVE_INFINITY},
+      {available: true, value: '12.5'}, {available: true}, {available: true, value: 1, reason: 'invalid'}, {available: false}, {available: false, reason: 'unknown'}, 12.5]) {
+      failed(await w.client.commitEvent({message: fined, effects: [fuel(T(1), bad)]}), 'INVALID_INPUT');
+    }
+    expect(ok(await w.client.committedThrough(ETS2_A))).toBe('1');
+    await commit(w.client, fined, [{kind: 'trip.update', tripUuid: T(1), set: {observedDistanceM: {available: true, value: 100}, fuelUsedL: {available: true, value: 12.5}}}]);
+    expect(ok(await w.client.getTrip(T(1)))).toMatchObject({outcome: 'open', observedDistanceM: {available: true, value: 100}, fuelUsedL: {available: true, value: 12.5}});
+    // Session B: T2 opens and stores zero, a value; T3 stores invalid before its close and a value after it.
+    await commit(w.client, b.event(r.jobConfigured()), [opens(T(2))]);
+    await commit(w.client, b.event(r.fined()), [fuel(T(2), {available: true, value: 0})]);
+    await commit(w.client, b.event(r.jobConfigured(otherJob())), [opens(T(3))]);
+    await commit(w.client, b.event(r.delivered()), [fuel(T(3), {available: false, reason: 'invalid'}), closes(T(3), 'delivered', 'outcome')]);
+    expect(ok(await w.client.getTrip(T(3)))).toMatchObject({outcome: 'delivered', fuelUsedL: {available: false, reason: 'invalid'}});
+    const late = b.event(r.fined());
+    failed(await w.client.commitEvent({message: late, effects: [fuel(T(3), {available: true, value: -1})]}), 'INVALID_INPUT');
+    await commit(w.client, late, [fuel(T(3), {available: true, value: 8})]);
+    expect(ok(await w.client.getTrip(T(3)))).toMatchObject({outcome: 'delivered', fuelUsedL: {available: true, value: 8}});
+    expect(ok(await w.client.getTrip(T(2)))?.fuelUsedL).toEqual({available: true, value: 0});
+    expect(ok(await readTripSeeds(w.client, 'ets2'))).toEqual([
+      {tripUuid: T(1), pluginSessionId: ETS2_A, game: 'ets2', jobKey: jobKey(job()), startedUtcMs: BASE_UTC, recordingCompleteness: 'complete',
+        lastObservedUtcMs: BASE_UTC + 2_000, observedDistanceM: 100, fuelUsedL: 12.5},
+      {tripUuid: T(2), pluginSessionId: ETS2_B, game: 'ets2', jobKey: jobKey(job()), startedUtcMs: BASE_UTC, recordingCompleteness: 'complete',
+        lastObservedUtcMs: BASE_UTC + 5_000, fuelUsedL: 0}]);
+    await w.close();
+  });
+});

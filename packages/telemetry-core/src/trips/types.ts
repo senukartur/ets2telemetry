@@ -26,13 +26,15 @@ export type GameModeEvidence = Pick<GameMode, 'mode' | 'method' | 'confidence'>;
  * `jobKey()` of the trip's stored job configuration; null when it cannot be rebuilt, so no later job matches it.
  * `lastObservedUtcMs` is the label of the trip session's last stored item, the lower bound of a restart close.
  * `observedDistanceM` is the trip's stored observed distance when it is available; a resumed trip accumulates from it.
+ * `fuelUsedL` is the trip's stored fuel used when it is available; a resumed trip accumulates fuel used from it (J8).
  * `awaitingOutcome` is true when the trip's job was cleared before the stop: the session's last stored `job.configured`
  * or `job.cleared` event after the trip's opening event (`openedEventSeq`, which can follow the job configuration, for
  * example for a reload trip) is a `job.cleared`. The trip then resumes awaiting its outcome and counts no distance.
  */
 export interface TripSeed {
   tripUuid: string; pluginSessionId: string; game: TripGame; jobKey: string | null;
-  startedUtcMs: number; recordingCompleteness: RecordingCompleteness; lastObservedUtcMs?: number; observedDistanceM?: number; awaitingOutcome?: boolean;
+  startedUtcMs: number; recordingCompleteness: RecordingCompleteness; lastObservedUtcMs?: number; observedDistanceM?: number; fuelUsedL?: number;
+  awaitingOutcome?: boolean;
 }
 
 /**
