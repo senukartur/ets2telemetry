@@ -307,19 +307,52 @@ describe('ET-006b storage-commit ACK pipeline', () => {
     expect([delivery.observeLiveOnly(P1), delivery.observeLiveOnly(P2), delivery.durableAllowed()]).toEqual([false, true, true]);
     expect(logs).toEqual([['V1_DURABLE_ACK_AHEAD', {code: 'ACK_AHEAD_OF_STORAGE'}]]);
   });
-  it('bounds the backlog at 256 coverage items and closes the connection on the 257th (REG-011)', async () => {
-    expect(MAX_PENDING_COMMITS).toBe(256);
+  // ET-015c (G11): the bound is twice the producer's 256 retained entries (docs/native-transport-v1.md, I2), so it was
+  // raised from 256; this case closed on the 257th item before.
+  it('bounds the backlog at 512 coverage items and closes the connection on the 513th (REG-011)', async () => {
+    expect(MAX_PENDING_COMMITS).toBe(512);
     const sink = new MemorySink(); sink.paused = true;
     const {delivery, link, connection, logs} = started(sink);
     // The session open is in flight and held, so the items below queue behind it.
     await flush(); expect(sink.waitingCommands).toBe(1);
-    for (let n = 1; n <= 256; n++) expect(connection.enqueue(range(event(n)), event(n), RECEIVED)).toBe(true);
-    expect([delivery.pending, link.closes]).toEqual([256, []]);
-    expect(connection.enqueue(range(event(257)), event(257), RECEIVED)).toBe(false);
+    for (let n = 1; n <= 512; n++) expect(connection.enqueue(range(event(n)), event(n), RECEIVED)).toBe(true);
+    expect([delivery.pending, link.closes]).toEqual([512, []]);
+    expect(connection.enqueue(range(event(513)), event(513), RECEIVED)).toBe(false);
     expect([delivery.pending, link.closes, logs]).toEqual([0, [['retryable', 'BACKLOG_FULL']], [['V1_DURABLE_RETRY', {code: 'BACKLOG_FULL', count: 1}]]]);
     sink.paused = false; sink.releaseOne(); await delivery.idle();
     // The open completed; no queued item of the closed connection was committed or acknowledged.
     expect([sink.log, link.acks]).toEqual([[`open ${P1}`], []]);
+  });
+  it('keeps the items of an ended connection and a full redelivery with a live gap inside the bound, and commits each item once (G11, REG-011)', async () => {
+    const sink = new MemorySink(); sink.paused = true;
+    const logs: unknown[] = [], delivery = new DurableDelivery(sink, {log: (...entry) => logs.push(entry)});
+    const first = new Link(sink.log), one = delivery.connect(welcome(), first);
+    one.checkpoint(checkpointAt('0'), RECEIVED);
+    for (let n = 1; n <= 200; n++) expect(one.enqueue(range(event(n)), event(n), RECEIVED)).toBe(true);
+    // The open completes; the commit of eventSeq 1 is then held in flight with 199 items queued behind it.
+    await flush(); sink.releaseOne(); await flush();
+    expect([sink.waitingCommands, delivery.pending, sink.log]).toEqual([1, 200, [`open ${P1}`]]);
+    // The connection ends without an ACK, so its 200 items stay queued or in flight. The producer still retains its
+    // full 256 entries (A = 0; I2: 255 events and the reserved gap record 256-258) and redelivers all of them on the next
+    // connection; then one live delta gap extends that trailing record (I3, I6).
+    first.open = false;
+    const second = new Link(sink.log), two = delivery.connect(welcome('welcome-reconnect'), second);
+    two.checkpoint(checkpointAt('0'), RECEIVED);
+    for (let n = 1; n <= 255; n++) expect(two.enqueue(range(event(n)), event(n), RECEIVED)).toBe(true);
+    expect(two.enqueue(range(gap(256, 258)), gap(256, 258), RECEIVED)).toBe(true);
+    expect(two.enqueue(range(gap(259, 260)), gap(259, 260), RECEIVED)).toBe(true);
+    // 200 left over, 256 redelivered and one live item: 457, below the 512 bound.
+    expect([delivery.pending, first.closes, second.closes, logs]).toEqual([457, [], [], []]);
+    sink.paused = false; sink.releaseOne(); await delivery.idle();
+    // The ended connection's items commit without an ACK; the redelivered 1-200 are duplicates, 201-255 and both gaps
+    // are first commits, and the new connection acknowledges each of them in order.
+    const numbers = (from: number, to: number) => Array.from({length: to - from + 1}, (_, i) => from + i);
+    expect(sink.log).toEqual([`open ${P1}`, ...numbers(1, 200).map(n => `committed ${n}`), `open ${P1}`,
+      ...numbers(1, 200).flatMap(n => [`duplicate ${n}`, `ack ${n}`]), ...numbers(201, 255).flatMap(n => [`committed ${n}`, `ack ${n}`]),
+      'committed 258', 'ack 258', 'committed 260', 'ack 260']);
+    expect([first.acks, second.acks, second.closes, logs, delivery.pending, delivery.status])
+      .toEqual([[], [...numbers(1, 255).map(String), '258', '260'], [], [], 0, {state: 'active'}]);
+    expect([sink.sessions.get(P1)!.events.size, sink.sessions.get(P1)!.gaps, sink.through(P1)]).toEqual([255, [[256n, 258n], [259n, 260n]], 260n]);
   });
   it('ignores a session open that completes after stop', async () => {
     const sink = new MemorySink(); sink.paused = true;
@@ -424,7 +457,7 @@ describe('ET-006b storage-commit ACK pipeline', () => {
     connection.checkpoint(checkpointAt('0'), RECEIVED);
     await flush(); expect(sink.waitingCommands).toBe(1);
     for (let n = 1; n <= 256; n++) expect(connection.enqueue(range(event(n)), event(n), RECEIVED)).toBe(true);
-    // Readings do not count against the 256 coverage items, and items do not count against the 512 readings.
+    // Readings do not count against the coverage items, and items do not count against the 512 readings.
     for (let n = 1; n <= 512; n++) expect(connection.snapshot(snapshotSeq(1000 + n), RECEIVED)).toBe(true);
     expect([delivery.pending, delivery.pendingReadingCount, link.closes]).toEqual([256, 512, []]);
     expect(connection.snapshot(snapshotSeq(2000), RECEIVED)).toBe(false);

@@ -13,8 +13,20 @@ import type {DiagnosticFacts} from './diagnostics';
 import {failureClass, type CoverageMessage, type DurableSink, type ReadingMessage, type SampleSink, type SinkError, type SinkResult, type WelcomeMessage} from './durable-sink';
 import {MAX_PENDING_SAMPLES} from './sample-buffer';
 
-/** E5: coverage items queued or in flight across every connection. One more closes its connection as retryable. */
-export const MAX_PENDING_COMMITS = 256;
+/**
+ * E5, ET-015c (G11): coverage items queued or in flight across every connection. One more closes its connection as
+ * retryable (BACKLOG_FULL). The bound is twice the producer's 256 retained entries (docs/native-transport-v1.md, I2).
+ * The leftover items of a connection that has ended were never acknowledged, so they cover entries the producer still
+ * retains; the reconnection redelivers those entries, at most 256, and its live items are admitted into the same 256
+ * entries until an ACK releases some, which follows commits that have already left the queue. The leftovers of one
+ * ended connection plus a full redelivery plus live events therefore fit. A live delta gap item extends the trailing gap
+ * record (I3, I6) and takes no new entry, so it fits only while the leftovers and the redelivery stay below 512: after
+ * 256 leftover items and a redelivery of all 256 entries, the first delta gap is item 513. The queue can therefore still
+ * fill, and a reconnection still be refused for a while (retryable, bounded and draining, never a livelock), when a gap
+ * record keeps growing while nothing commits, as in a true storage stall, or when the leftovers of several connections
+ * that ended before the queue drained are stacked.
+ */
+export const MAX_PENDING_COMMITS = 512;
 /**
  * R5: snapshot readings queued or in flight across every connection, counted apart from the coverage items: more than
  * 25 s at 20 Hz, above the 10 s storage deadline that fails the worker. One more closes its connection as retryable.
