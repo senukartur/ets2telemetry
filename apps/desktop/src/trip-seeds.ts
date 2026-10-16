@@ -58,9 +58,15 @@ function seedOf(trip: TripRecord, jobRow: EventRow | undefined, scan: SessionSca
   const job = trip.jobSource === 'checkpoint' ? trip.checkpointJob === null ? null : jobKey(trip.checkpointJob.values)
     : jobRow !== undefined && jobRow.eventSeq === trip.jobConfigurationEventSeq && isJobConfigured(jobRow.record) ? jobKey(jobRow.record) : null;
   const lastJobEvent = scan.trips.get(trip.tripUuid)?.lastJobEvent ?? null;
+  // A trip opened from a checkpoint (J9) is itself the session's labelled point at nextEventSeq - 1: the reducer made its
+  // start label the session's last label, and storage holds no event at it (PR-7 review round 1). A stored label counts
+  // only when its event follows the checkpoint, as the reducer's own last label would.
+  const opened = scan.trips.get(trip.tripUuid)?.opened ?? 0n;
+  const lastObserved = trip.openedBy !== 'checkpoint' ? scan.lastLabel?.utcMs
+    : scan.lastLabel !== null && scan.lastLabel.eventSeq > opened ? scan.lastLabel.utcMs : trip.startedUtcMs;
   return {
     tripUuid: trip.tripUuid, pluginSessionId: trip.pluginSessionId, game: trip.game, jobKey: job, startedUtcMs: trip.startedUtcMs,
-    recordingCompleteness: trip.recordingCompleteness, ...(scan.lastLabel !== null ? {lastObservedUtcMs: scan.lastLabel.utcMs} : {}),
+    recordingCompleteness: trip.recordingCompleteness, ...(lastObserved !== undefined ? {lastObservedUtcMs: lastObserved} : {}),
     ...(trip.observedDistanceM.available ? {observedDistanceM: trip.observedDistanceM.value} : {}),
     ...(trip.fuelUsedL.available ? {fuelUsedL: trip.fuelUsedL.value} : {}),
     ...(lastJobEvent?.type === 'job.cleared' ? {awaitingOutcome: true} : {})
@@ -72,7 +78,9 @@ function seedOf(trip: TripRecord, jobRow: EventRow | undefined, scan: SessionSca
  * - `jobKey`: jobKey() of the stored job configuration record. Null when the row is missing, is not a `job.configured`
  *   record or is not at the trip's job configuration eventSeq, so no later job matches the trip. For a trip opened from a
  *   checkpoint (ET-016 PR-7, J9) it is jobKey() of the stored checkpoint job, `TripRecord.checkpointJob`; `jobRow` is unused.
- * - `lastObservedUtcMs`: the label of the session's stored event with the highest eventSeq that has a usable label.
+ * - `lastObservedUtcMs`: the label of the session's stored event with the highest eventSeq that has a usable label. For a
+ *   trip opened from a checkpoint it is that label only when the event is at or after the checkpoint's nextEventSeq, and
+ *   otherwise the trip's start label, the label the reducer gave the session at the attach.
  * - `observedDistanceM`: the stored observed distance when it is available.
  * - `fuelUsedL`: the stored fuel used when it is available (S-1, J8).
  * - `awaitingOutcome`: true when the session's last `job.configured` or `job.cleared` event after the trip's opening

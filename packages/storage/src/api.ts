@@ -123,10 +123,11 @@ export const MAX_TRIP_PAGE = 100;
  * openAttachedTrip (ET-016 PR-7, J9): a trip opened from a checkpoint job while the game's slot was idle. `nextEventSeq`
  * is the checkpoint's `status.delivery.nextEventSeq` (1 or more, at most the session's committed coverage + 1) and `job`
  * the checkpoint's job configuration in the protocol v1 shape. `effects` may start with the reducer's queued lifecycle
- * effects of earlier trips of the game (`trip.update`, a `trip.close` without an outcome, whose close carrier is this
- * session and nextEventSeq, and `completeness.add`); then exactly one `trip.open`, whose `jobConfiguration` is
- * `this-event` (the job stored by this command) and which names no truck or trailer (J22); then only `completeness.add`
- * intervals of that trip. The command stores the job as a `checkpoint` configuration keyed UNIQUE(plugin session,
+ * effects of earlier trips of the game (`trip.update`, a `trip.close` without an outcome of a trip of an earlier plugin
+ * session, whose close carrier is this session and nextEventSeq, and `completeness.add`); then exactly one `trip.open`,
+ * whose UUID is the late-attach derivation of this session and nextEventSeq, whose `jobConfiguration` is `this-event`
+ * (the job stored by this command), which names no truck or trailer (J22) and which leaves the game with no other open
+ * trip; then only `completeness.add` intervals of that trip. The command stores the job as a `checkpoint` configuration keyed UNIQUE(plugin session,
  * nextEventSeq) and the trip with `opened_by` `checkpoint`, in one transaction. It never changes coverage and is never
  * acknowledged.
  */

@@ -566,6 +566,45 @@ describe('late-attach trips (J9, J22, ET-016 PR-7)', () => {
     expect(dueAttach(state)).toBeNull();
     play([[s.event(r.jobConfigured()), [cause(a, 'not-connected', {cause: 'consumer-restart'})]], [s.event(r.fined()), [attr(a, 'trip')]]], state);
   });
+  describe('a late-attach trip deferred behind more than 13 queued lifecycle effects (PR-7 review round 1)', () => {
+    // Fourteen stored open trips of an earlier session: their restart closes wait in the slot's queue, so the attach (three
+    // effects of its own) does not fit in one command and waits for the first live commit to drain them.
+    const stale = Array.from({length: 14}, (_, i) => `70000000-0000-4000-8000-${String(i + 1).padStart(12, '0')}`);
+    const seeds: TripSeed[] = stale.map(tripUuid => ({tripUuid, pluginSessionId: ETS2_A, game: 'ets2', jobKey: null, startedUtcMs: BASE_UTC,
+      recordingCompleteness: 'unknown', lastObservedUtcMs: BASE_UTC + 5_000}));
+    const closes = stale.map(t => close(t, 'none', 'restart', 'partial', BASE_UTC + 5_000));
+    function deferred() {
+      const b = new Script(ETS2_B, 'ets2', {utcMs: BASE_UTC + 100_000});
+      const state = play([[sessionInput(b.welcome(), '0', seeds)], [{kind: 'checkpoint', message: b.checkpoint(job())}]]);
+      // Drained (nextEventSeq 1, coverage 0) but deferred: nothing is due, so a live item may be stepped.
+      expect(dueAttach(state)).toBeNull();
+      return {b, state};
+    }
+    it('a live job.cleared ends the checkpoint job: no late-attach trip opens after it [synthetic-inference]', () => {
+      const {b, state} = deferred();
+      const after = play([[b.event(r.jobCleared(), paused), closes]], state);
+      expect(dueAttach(after)).toBeNull();
+      expect(stepTrip(after, attachStep)).toEqual({ok: false, code: 'ORDER_VIOLATION'});
+      expect(tripView(after, 'ets2')).toMatchObject({phase: 'idle', untrackedJob: false, current: null});
+    });
+    it('a live outcome ends the checkpoint job: it is ambiguous and no late-attach trip opens after it [synthetic-inference]', () => {
+      const {b, state} = deferred();
+      const after = play([[b.event(r.delivered(), paused), [...closes.slice(0, 14), attr(null, 'ambiguous')]]], state);
+      expect(dueAttach(after)).toBeNull();
+      expect(tripView(after, 'ets2')).toMatchObject({phase: 'idle', untrackedJob: false});
+    });
+    it('a live gap hides whether the job ended: no late-attach trip opens after it [synthetic-inference]', () => {
+      const {b, state} = deferred(), gap = b.gap(2);
+      const after = play([[gap, [...closes, ...gapEffects(gap, null, '1', '2')]]], state);
+      expect(dueAttach(after)).toBeNull();
+    });
+    it('any other live item leaves the job as the checkpoint showed it: the trip opens right after that commit [synthetic-inference]', () => {
+      const {b, state} = deferred(), a = attachUuid(ETS2_B, '1');
+      const after = play([[b.event(r.fined()), [...closes, attr(null, 'ambiguous')]]], state);
+      expect(dueAttach(after)).toEqual({pluginSessionId: ETS2_B, nextEventSeq: '1', job: job()});
+      play([[attachStep, [open(a, BASE_UTC, {gameMode: CHECKPOINT_MODE, recordingCompleteness: 'partial'}), lateAttach(a, '1')]]], after);
+    });
+  });
   it('refuses an attach without a connection [synthetic-inference]', () => {
     expect(stepTrip(initialTripState(), attachStep)).toEqual({ok: false, code: 'UNKNOWN_SESSION'});
   });

@@ -1,6 +1,7 @@
 // Write commands. Each command is one BEGIN IMMEDIATE transaction on the verified writer connection; a commit result
 // exists only after COMMIT returned. Events and gaps are keyed UNIQUE(plugin session, eventSeq range): a redelivery
 // is a no-op whose effects are never applied again (protocol v1 §10, docs/storage.md "Write commands").
+import {createHash} from 'node:crypto';
 import type Database from 'better-sqlite3';
 import {validateServerMessage, type Available, type EventRecord, type GapData, type ServerMessage, type SourceIdentity} from '../../../contracts/src/protocol-v1';
 import {
@@ -129,6 +130,8 @@ interface EffectContext {
   db: Database.Database; session: SessionRow; game: string; now: number; eventRef?: bigint; eventType?: string; carrierEventSeq?: string;
   /** openAttachedTrip only (ET-016 PR-7, J9): the checkpoint job configuration the command stored for its trip.open. */
   attachJobRef?: bigint;
+  /** openAttachedTrip only: the trip UUID the attach must open, attachTripUuidFor(session, nextEventSeq) (review round 1). */
+  attachTripUuid?: string;
 }
 const enumValue = (value: unknown, options: readonly string[]) => { if (typeof value !== 'string' || !options.includes(value)) fail('INVALID_INPUT'); return value; };
 const utcMs = (value: unknown) => { if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) fail('INVALID_INPUT'); return value; };
@@ -202,6 +205,10 @@ function applyEffects(c: EffectContext, effects: unknown): void {
         const attached = c.attachJobRef !== undefined;
         if ((!attached && c.eventRef === undefined) || !isUuid(effect.tripUuid) || enumValue(effect.game, GAMES) !== c.game || typeof effect.gameMode !== 'object' || effect.gameMode === null) fail('INVALID_INPUT');
         if (attached && (effect.jobConfiguration !== 'this-event' || effect.truckConfiguration !== undefined || effect.trailerConfigurations !== undefined)) fail('INVALID_INPUT');
+        // PR-7 review round 1, defence in depth: a late-attach trip has the UUID of its session and checkpoint, and the game
+        // has no other open trip once the queued closes before it were applied.
+        if (attached && (effect.tripUuid !== c.attachTripUuid
+          || statement(c.db, `SELECT 1 FROM trips WHERE game = ? AND outcome = 'open' LIMIT 1`).pluck().get(c.game) !== undefined)) fail('INVALID_INPUT');
         const job = attached ? c.attachJobRef! : configurationRef(c, 'job_configurations', effect.jobConfiguration);
         const truck = effect.truckConfiguration === undefined ? null : configurationRef(c, 'truck_configurations', effect.truckConfiguration);
         const id = statement(c.db, insert('trips', ['trip_uuid', 'plugin_session_ref', 'game', 'game_mode', 'game_mode_method', 'game_mode_confidence', 'game_mode_ambiguous', 'job_configuration_ref',
@@ -240,6 +247,9 @@ function applyEffects(c: EffectContext, effects: unknown): void {
       case 'trip.close': {
         const trip = tripRow(c, effect.tripUuid), outcome = enumValue(effect.outcome, OUTCOMES);
         if (trip.outcome !== 'open') fail('INVALID_INPUT');
+        // PR-7 review round 1: an attach carries only closes of earlier plugin sessions' trips (restart). A close of a trip
+        // of this session would record carrier (session, nextEventSeq), which the journal would read as the next live event.
+        if (c.attachJobRef !== undefined && statement(c.db, 'SELECT plugin_session_ref FROM trips WHERE id = ?').pluck().get(trip.id) === c.session.id) fail('INVALID_INPUT');
         let outcomeEvent: bigint | null = null;
         // Only the gameplay outcome event decides delivery or cancellation (concept.md §7).
         if (outcome !== 'none') {
@@ -494,10 +504,21 @@ function checkpointJobValues(job: unknown): unknown[] {
   return specValues(JOB_FIELDS, job);
 }
 /**
+ * The late-attach trip UUID (J9): the first 128 bits of SHA-256("ets2telemetry-trip-attach-v1:" + session + ":" +
+ * nextEventSeq) in the 8-4-4-4-12 shape, the derivation of telemetry-core's attachTripUuidFor, written here with node:crypto
+ * because storage does not import the reducer.
+ */
+function attachTripUuid(pluginSessionId: string, nextEventSeq: string): string {
+  const h = createHash('sha256').update(`ets2telemetry-trip-attach-v1:${pluginSessionId}:${nextEventSeq}`, 'utf8').digest('hex');
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`;
+}
+/**
  * Opens a trip from a checkpoint job (ET-016 PR-7, J9; AttachInput). In one transaction it stores the job as a
  * `checkpoint` configuration of the session at `nextEventSeq`, then applies the effects in order: queued lifecycle
  * effects of earlier trips of the game (trip.update, a trip.close without an outcome, completeness.add), the trip.open
- * (opened_by `checkpoint`, no opening event) and its completeness intervals. The same session and nextEventSeq again is `duplicate` and writes
+ * (opened_by `checkpoint`, no opening event) and its completeness intervals. A close may name only a trip of an earlier
+ * plugin session; the trip.open must carry attachTripUuid(session, nextEventSeq), and no other trip of the game may be
+ * open at that point (PR-7 review round 1). The same session and nextEventSeq again is `duplicate` and writes
  * nothing. Coverage is unchanged: the command commits no event and is never acknowledged.
  */
 export function openAttachedTrip(conn: StorageConnection, input: AttachInput): AttachResult {
@@ -526,7 +547,7 @@ export function openAttachedTrip(conn: StorageConnection, input: AttachInput): A
       .run(session.id, 'checkpoint', nextKey, ...values).lastInsertRowid;
     // A queued close sent with the attach records this session and nextEventSeq as its close carrier (J7): the first
     // eventSeq after the coverage the attach follows.
-    applyEffects({db, session, game: session.game, now: conn.now(), attachJobRef: BigInt(job), carrierEventSeq: nextKey}, effects);
+    applyEffects({db, session, game: session.game, now: conn.now(), attachJobRef: BigInt(job), attachTripUuid: attachTripUuid(input.pluginSessionId, input.nextEventSeq), carrierEventSeq: nextKey}, effects);
     return {status: 'committed'};
   });
 }

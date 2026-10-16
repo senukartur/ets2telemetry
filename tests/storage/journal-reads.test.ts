@@ -3,6 +3,7 @@
 // then seeded with the hand-written anchors and 110 filler trips of tests/shared/journal-seed.ts. Every expected value
 // is written by hand from that seed, the version 1 and 2 fixture SQL and J5/J7; none is read back from the code under
 // test. Runs under npm run test:storage.
+import {createHash} from 'node:crypto';
 import Database from 'better-sqlite3';
 import {afterAll, beforeAll, describe, expect, it} from 'vitest';
 import {JOURNAL_DETAIL_INTERVALS, JOURNAL_TRIP_PAGE, validateJournalTripDetail, type JournalTripListItem, type JournalTripsQuery} from '../../packages/contracts/src/journal';
@@ -392,7 +393,9 @@ describe('a late-attach trip written by openAttachedTrip (ET-016 PR-7, J7, J9)',
   it('starts its window at the checkpoint\'s nextEventSeq, after the replayed events, and ends it at the delivery that closed it', async () => {
     const la = await workspace();
     try {
-      const st = await la.open(), s = new Script(ETS2_A), trip = '7e000000-0000-4000-8000-000000000001';
+      // The late-attach UUID of session A and nextEventSeq 3 (J9), which openAttachedTrip requires since review round 1.
+      const h = createHash('sha256').update(`ets2telemetry-trip-attach-v1:${ETS2_A}:3`, 'utf8').digest('hex');
+      const st = await la.open(), s = new Script(ETS2_A), trip = `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`;
       const mode = {mode: 'single-player', method: 'module-scan', confidence: 'weak'} as const;
       ok(st.upsertSession({message: s.welcome()}));
       // eventSeq 1 and 2 happened before the checkpoint (replayed); the checkpoint's nextEventSeq is 3.

@@ -82,9 +82,10 @@ describe('openAttachedTrip (J9)', () => {
     sessionWithCoverage(storage);
     // 4 is beyond coverage 2 + 1: an attach before the replayed events drained (RED: attach before drain).
     for (const next of ['4', '0', '03', '-1', '18446744073709551616']) failed(storage.openAttachedTrip(attachInput(ETS2_A, next)), 'INVALID_INPUT');
-    // The bound is the only order check storage makes: 1 and 3 are both at or below coverage + 1.
+    // Both 1 and 3 are at or below coverage + 1; once 1 opened its trip, 3 is refused because the game has an open trip
+    // (review round 1).
     expect(ok(storage.openAttachedTrip(attachInput(ETS2_A, '1')))).toEqual({status: 'committed'});
-    expect(ok(storage.openAttachedTrip(attachInput(ETS2_A, '3')))).toEqual({status: 'committed'});
+    failed(storage.openAttachedTrip(attachInput(ETS2_A, '3')), 'INVALID_INPUT');
     failed(storage.openAttachedTrip(attachInput('10000000-0000-4000-8000-0000000000ff', '1')), 'UNKNOWN_SESSION');
     storage.close();
   });
@@ -116,6 +117,21 @@ describe('openAttachedTrip (J9)', () => {
     for (const [name, overrides] of cases) expect(failed(storage.openAttachedTrip(attachInput(ETS2_A, '3', overrides)), 'INVALID_INPUT').code, name).toBe('INVALID_INPUT');
     storage.close();
     expect(counts(ws.database)).toEqual({job_configurations: 0, trips: 0, completeness_intervals: 0, events: 2});
+  });
+  it('refuses a trip UUID other than the attach derivation, another open trip of the game and a close of a trip of this session (PR-7 review round 1)', async () => {
+    const storage = await ws.open(), s = sessionWithCoverage(storage), other = '7a000000-0000-4000-8000-000000000001';
+    // The T4 UUID of an event-opened trip, or any other UUID, is not this attach's.
+    failed(storage.openAttachedTrip(attachInput(ETS2_A, '3', {effects: [open(other), lateAttach(other, '3')]})), 'INVALID_INPUT');
+    // An open trip of this session's game: the attach would make it the second one.
+    ok(storage.commitEvent({message: s.event(r.jobConfigured()), effects: [{kind: 'trip.open', tripUuid: other, game: 'ets2', gameMode: MODE, jobConfiguration: 'this-event',
+      recordingCompleteness: 'unknown', startedUtcMs: BASE_UTC}]}));
+    failed(storage.openAttachedTrip(attachInput(ETS2_A, '4')), 'INVALID_INPUT');
+    // Closing that trip of this session inside the attach is refused too: its carrier would read as live event 4.
+    const four = attachUuid(ETS2_A, '4');
+    failed(storage.openAttachedTrip(attachInput(ETS2_A, '4', {effects: [
+      {kind: 'trip.close', tripUuid: other, outcome: 'none', closeReason: 'discontinuity', recordingCompleteness: 'partial', endedUtcMs: BASE_UTC}, open(four), lateAttach(four, '4')]})), 'INVALID_INPUT');
+    storage.close();
+    expect(counts(ws.database)).toEqual({job_configurations: 1, trips: 1, completeness_intervals: 0, events: 3});
   });
   it('applies queued lifecycle effects first: an earlier session\'s trip closes as restart with this session and nextEventSeq as its carrier (J7)', async () => {
     const storage = await ws.open(), a = new Script(ETS2_A), b = new Script(ETS2_B, 'ets2', {utcMs: BASE_UTC + 100_000}), old = '7b000000-0000-4000-8000-000000000001';

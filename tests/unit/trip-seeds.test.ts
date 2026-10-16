@@ -85,12 +85,28 @@ describe('seedFromStored (R4)', () => {
   it('seeds a late-attach trip from its stored checkpoint job, with its opening at the checkpoint\'s nextEventSeq − 1 (ET-016 PR-7, J9)', () => {
     const attached = trip({jobSource: 'checkpoint', jobConfigurationEventSeq: null, checkpointJob: {nextEventSeq: '4', values: job()}, openedBy: 'checkpoint', openedEventSeq: null,
       recordingCompleteness: 'partial'});
-    // No job event exists: the key comes from the checkpoint job, whatever row is passed.
-    expect(seedFromStored(attached, undefined, [])).toEqual({tripUuid: T1, pluginSessionId: S1, game: 'ets2', jobKey: jobKey(job()), startedUtcMs: UTC, recordingCompleteness: 'partial'});
+    // No job event exists: the key comes from the checkpoint job, whatever row is passed. With no stored event at or after
+    // the checkpoint, the last observed label is the trip's start label, the label the attach gave the session (review round 1).
+    expect(seedFromStored(attached, undefined, [])).toEqual({tripUuid: T1, pluginSessionId: S1, game: 'ets2', jobKey: jobKey(job()), startedUtcMs: UTC, recordingCompleteness: 'partial',
+      lastObservedUtcMs: UTC});
     expect(seedFromStored(attached, configured('3', null, otherJob()), []).jobKey).toBe(jobKey(job()));
     // A clear replayed before the checkpoint (3) is not the trip's; a live clear at 4 or later is.
     expect(seedFromStored(attached, undefined, [event('3', 'job.cleared', null)])).not.toHaveProperty('awaitingOutcome');
     expect(seedFromStored(attached, undefined, [event('4', 'job.cleared', '1791676804000')])).toMatchObject({awaitingOutcome: true, lastObservedUtcMs: 1_791_676_804_000});
+  });
+
+  it('never takes a label from before the checkpoint for a late-attach trip: its start label is the later point (PR-7 review round 1)', () => {
+    const attached = trip({jobSource: 'checkpoint', jobConfigurationEventSeq: null, checkpointJob: {nextEventSeq: '3', values: job()}, openedBy: 'checkpoint', openedEventSeq: null,
+      startedUtcMs: UTC + 10_000});
+    // Events 1 and 2 (labels UTC + 1 s and UTC + 2 s) happened before the checkpoint, which opened the trip at UTC + 10 s.
+    const before = [event('1', 'player.fined', String(UTC + 1_000)), event('2', 'simulation.paused', String(UTC + 2_000))];
+    expect(seedFromStored(attached, undefined, before).lastObservedUtcMs).toBe(UTC + 10_000);
+    // An unlabelled live event keeps the start label; a labelled one replaces it, also when the clock was set back.
+    expect(seedFromStored(attached, undefined, [...before, event('3', 'player.fined', null)]).lastObservedUtcMs).toBe(UTC + 10_000);
+    expect(seedFromStored(attached, undefined, [...before, event('3', 'player.fined', String(UTC + 12_000))]).lastObservedUtcMs).toBe(UTC + 12_000);
+    expect(seedFromStored(attached, undefined, [...before, event('3', 'player.fined', String(UTC + 9_000))]).lastObservedUtcMs).toBe(UTC + 9_000);
+    // An event-opened trip keeps the session-wide rule.
+    expect(seedFromStored(trip({openedEventSeq: '1', jobConfigurationEventSeq: '1'}), undefined, before).lastObservedUtcMs).toBe(UTC + 2_000);
   });
 
   it('passes an available stored distance through and leaves a not-observed one out', () => {

@@ -151,10 +151,12 @@ export const RECORDING_TARGET_SHORT_TEXT: Readonly<Record<RecordingTarget, strin
 });
 /**
  * The current trip; an idle trip without an untracked job shows nothing. Since ET-016 PR-7 (J9) a job that started before
- * recording opens a partial trip, so an untracked job is one whose trip a recording gap ended.
+ * recording opens a partial trip once the replayed events have drained, so an untracked job is either such a job before
+ * its trip opens (or when a live clear, outcome or gap prevented it) or the job of a trip a recording gap ended. The status
+ * carries only a flag, not the cause, so the line names both (PR-7 review round 1).
  */
 export const RECORDING_TRIP_TEXT = Object.freeze({
-  untrackedJob: 'The current job is not tracked as a trip: a recording gap ended its trip',
+  untrackedJob: 'The current job is not tracked as a trip: it started before recording, or a recording gap ended its trip',
   completeness: Object.freeze({
     unknown: 'The current trip\'s completeness is not known yet', partial: 'Current trip is partial', complete: 'Current trip is recorded completely so far'
   }) satisfies Readonly<Record<NonNullable<RecordingTrip['completeness']>, string>>,

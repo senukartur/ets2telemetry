@@ -406,7 +406,8 @@ function stepEvent(state: TripState, message: EventMessage, coveredThrough: Uint
   // before the connection's first reading.
   if (session.runClock !== null && c.monotonicNs !== null && !replayed(c)) session.runClock = switchRunClock(session.runClock, message.capture.clockId, c.monotonicNs, occurred.simulation);
   flushTotals(c);
-  settleAttach(session, c.slot);
+  // A live clear or outcome ends the job the checkpoint showed: a deferred late-attach trip must not open after it.
+  settleAttach(session, c.slot, !replayed(c) && (record.type === 'job.cleared' || record.type === 'job.delivered' || record.type === 'job.cancelled'));
   return {ok: true, state: draft, effects: assemble(c.slot, c.own, c.annotations)};
 }
 /** T16, J8: every commit carrier persists the open trip's observed distance and fuel used when they changed. */
@@ -448,7 +449,8 @@ function stepGap(state: TripState, message: GapMessage, coveredThrough: Uint64, 
   session.load = 'unknown';
   session.processedThrough = d.lastEventSeq; session.lastUtcMs = c.label; session.clockId = message.capture.clockId;
   flushTotals(c);
-  settleAttach(session, c.slot);
+  // A gap that covers an eventSeq at or after the checkpoint hides live events, which may have ended the checkpoint's job.
+  settleAttach(session, c.slot, session.pendingAttach !== null && last >= BigInt(session.pendingAttach.nextEventSeq));
   return {ok: true, state: draft, effects: assemble(c.slot, c.own, c.annotations)};
 }
 
@@ -569,11 +571,16 @@ function attachDue(session: SessionState, slot: GameSlot): boolean {
   return drained(session) && slot.trip === null && slot.pending.length <= MAX_EFFECTS - ATTACH_OWN_EFFECTS;
 }
 /**
- * J9: when the replayed events have drained and a trip is open, that trip tracks the game (for example an identical
- * replayed job.configured opened it, `opened-before-attach`), so no late-attach trip opens.
+ * J9: drops the pending late-attach trip when it can no longer open correctly:
+ * - the replayed events have drained and a trip is open, which tracks the game (for example an identical replayed
+ *   job.configured opened it, `opened-before-attach`);
+ * - `ended`: a live item (at or after the checkpoint's nextEventSeq) contradicts the checkpoint's job: a live
+ *   `job.cleared`, `job.delivered` or `job.cancelled`, or a gap that hides live events (PR-7 review round 1).
+ * A live item reaches the reducer with an attach still pending only when the attach was deferred because the queued
+ * lifecycle effects did not fit; any other live item (a fine, a pause) leaves the job as the checkpoint showed it.
  */
-function settleAttach(session: SessionState, slot: GameSlot) {
-  if (drained(session) && slot.trip !== null) session.pendingAttach = null;
+function settleAttach(session: SessionState, slot: GameSlot, ended = false) {
+  if (ended || (drained(session) && slot.trip !== null)) session.pendingAttach = null;
 }
 /**
  * ET-016 PR-7 (J9): the late-attach trip the caller must open now with an `attach` input, before the next item of the
@@ -631,6 +638,7 @@ function stepDisconnected(state: TripState): TripStepResult {
   draft.connection = null;
   if (session !== undefined) {
     // A pending late-attach trip belongs to this connection's checkpoint; the next connection's checkpoint decides again.
+    // The checkpoint's untracked job is kept: the job is still likely active, and the next checkpoint replaces or clears it.
     session.pendingAttach = null;
     session.disconnected = {utcMs: session.lastUtcMs, monotonicNs: session.lastMonotonicNs, clockId: session.clockId, reading: session.lastReading};
     // The next connection starts its own readings: no step crosses a connection hole (T16).

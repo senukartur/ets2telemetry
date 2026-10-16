@@ -2,11 +2,17 @@
 // (docs/trips.md, caller contract), into an in-memory first-insert storage model written from docs/storage.md (OD-9 trip
 // effects). It is a test adapter: it opens no database and writes no history. The model follows the scripted client of
 // each connection: a commit the client does not make is not made here either, and the reducer state is then kept (T3).
+import {createHash} from 'node:crypto';
 import type {EventRecord, JobConfiguration, ServerMessage} from '../../packages/contracts/src/protocol-v1';
 import type {AttachInput, CompletenessInterval, SampleAppendResult, SampleInput} from '../../packages/storage/src/api';
 import {dueAttach, initialTripState, jobKey, normalizeV1State, stepTrip, type TripEffect, type TripInput, type TripSeed, type TripState} from '../../packages/telemetry-core/src/index';
 import type {ReplayResult} from '../../tools/telemetry-simulator/src/v1/replay';
 
+/** The late-attach UUID (J9), written with node:crypto as storage checks it. */
+function attachUuid(session: string, nextEventSeq: string): string {
+  const h = createHash('sha256').update(`ets2telemetry-trip-attach-v1:${session}:${nextEventSeq}`, 'utf8').digest('hex');
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`;
+}
 /** The simulator's UTC label origin (docs/simulator-v1.md, clocks); the consumer's receipt label uses it too. */
 const UTC_BASE_MS = 1_800_000_000_000;
 type Of<K extends ServerMessage['kind']> = Extract<ServerMessage, {kind: K}>;
@@ -34,7 +40,8 @@ export type StoredSample = SampleInput & {pluginSessionId: string};
  * session, with docs/storage.md's `uniqueSeconds` rule and the sample trip-reference rule.
  */
 export class TripStorageModel {
-  private coverage = new Map<string, {game: 'ets2' | 'ats'; through: bigint; lastUtcMs: number | null}>();
+  /** Per session: the game, coverage, and the label of the last committed event that has one, with its eventSeq. */
+  private coverage = new Map<string, {game: 'ets2' | 'ats'; through: bigint; lastUtcMs: number | null; lastUtcSeq: bigint}>();
   private jobs = new Map<string, Extract<EventRecord, {type: 'job.configured'}>>();
   /** The last job.configured or job.cleared event per session, to tell whether an open trip's job was cleared. */
   private lastJobEvent = new Map<string, {type: string; eventSeq: bigint}>();
@@ -52,7 +59,7 @@ export class TripStorageModel {
   /** Stores a session at its welcome, as upsertSession does, so samples may name it before its first commit. */
   openSession(session: string, game: 'ets2' | 'ats'): void {
     const known = this.coverage.get(session);
-    if (known === undefined) this.coverage.set(session, {game, through: 0n, lastUtcMs: null});
+    if (known === undefined) this.coverage.set(session, {game, through: 0n, lastUtcMs: null, lastUtcSeq: 0n});
     else if (known.game !== game) throw new Error('Session game changed');
   }
   /**
@@ -90,7 +97,10 @@ export class TripStorageModel {
   seeds(game: 'ets2' | 'ats'): TripSeed[] {
     return this.trips.filter(t => t.outcome === 'open' && t.game === game).map(t => {
       const job = t.checkpointJob !== null ? t.checkpointJob.values : this.jobs.get(`${t.pluginSessionId}:${t.jobConfigurationEventSeq}`);
-      const last = this.coverage.get(t.pluginSessionId)?.lastUtcMs ?? null;
+      const stored = this.coverage.get(t.pluginSessionId);
+      // A checkpoint-opened trip is the session's labelled point at nextEventSeq - 1 (trip-seeds.ts, PR-7 review round 1).
+      const last = t.checkpointJob === null ? stored?.lastUtcMs ?? null
+        : stored !== undefined && stored.lastUtcMs !== null && stored.lastUtcSeq >= BigInt(t.checkpointJob.nextEventSeq) ? stored.lastUtcMs : t.startedUtcMs;
       return {tripUuid: t.tripUuid, pluginSessionId: t.pluginSessionId, game: t.game, jobKey: job === undefined ? null : jobKey(job), startedUtcMs: t.startedUtcMs,
         recordingCompleteness: t.recordingCompleteness as TripSeed['recordingCompleteness'], ...(last !== null ? {lastObservedUtcMs: last} : {}),
         ...(t.observedDistanceM.available ? {observedDistanceM: t.observedDistanceM.value} : {}), ...(t.fuelUsedL.available ? {fuelUsedL: t.fuelUsedL.value} : {}),
@@ -115,7 +125,7 @@ export class TripStorageModel {
       const stored = trip === null || trip === undefined ? undefined : this.trips.find(t => t.tripUuid === trip);
       if (trip !== null && (stored === undefined || stored.game !== s.game)) throw new Error('Attach lifecycle effect names no trip of this game');
       if (effect.kind === 'trip.close') {
-        if (effect.outcome !== 'none' || stored!.outcome !== 'open' || effect.endedUtcMs < stored!.startedUtcMs) throw new Error('Invalid attach close');
+        if (effect.outcome !== 'none' || stored!.outcome !== 'open' || effect.endedUtcMs < stored!.startedUtcMs || stored!.pluginSessionId === input.pluginSessionId) throw new Error('Invalid attach close');
         Object.assign(stored!, {outcome: 'none', closeReason: effect.closeReason, recordingCompleteness: effect.recordingCompleteness, endedUtcMs: effect.endedUtcMs});
       } else if (effect.kind === 'trip.update') {
         if (Object.keys(effect.set).some(name => name !== 'recordingCompleteness' && name !== 'observedDistanceM' && name !== 'fuelUsedL')) throw new Error('Invalid attach update');
@@ -127,7 +137,7 @@ export class TripStorageModel {
       } else throw new Error(`Invalid attach lifecycle effect ${effect.kind}`);
     }
     if (open?.kind !== 'trip.open' || open.jobConfiguration !== 'this-event' || open.truckConfiguration !== undefined || open.trailerConfigurations !== undefined ||
-      open.game !== s.game || this.trips.some(t => t.tripUuid === open.tripUuid)) throw new Error('Invalid attach trip.open');
+      open.game !== s.game || this.trips.some(t => t.tripUuid === open.tripUuid) || open.tripUuid !== attachUuid(input.pluginSessionId, input.nextEventSeq)) throw new Error('Invalid attach trip.open');
     if (this.trips.some(t => t.outcome === 'open' && t.game === s.game)) throw new Error('Two open trips of one game');
     this.checkpointJobs.add(key);
     this.trips.push({tripUuid: open.tripUuid, pluginSessionId: input.pluginSessionId, game: open.game, gameMode: {...open.gameMode}, gameModeAmbiguous: open.gameModeAmbiguous ?? false,
@@ -145,7 +155,7 @@ export class TripStorageModel {
   }
   private session(m: Of<'event'> | Of<'gap'>) {
     let s = this.coverage.get(m.source.pluginSessionId);
-    if (s === undefined) { s = {game: m.source.game, through: 0n, lastUtcMs: null}; this.coverage.set(m.source.pluginSessionId, s); }
+    if (s === undefined) { s = {game: m.source.game, through: 0n, lastUtcMs: null, lastUtcSeq: 0n}; this.coverage.set(m.source.pluginSessionId, s); }
     return s;
   }
   commitEvent(m: Of<'event'>, effects: TripEffect[]): 'committed' | 'duplicate' {
@@ -162,7 +172,7 @@ export class TripStorageModel {
     if (record.type === 'trailer.configured') this.trailers.add(key);
     this.apply(m, effects);
     s.through = seq;
-    if (m.data.occurred.utcUnixMs.available) s.lastUtcMs = Number(m.data.occurred.utcUnixMs.value);
+    if (m.data.occurred.utcUnixMs.available) { s.lastUtcMs = Number(m.data.occurred.utcUnixMs.value); s.lastUtcSeq = seq; }
     this.statuses.committed++; return 'committed';
   }
   commitGap(m: Of<'gap'>, effects: TripEffect[]): 'committed' | 'covered' {
