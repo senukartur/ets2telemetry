@@ -50,7 +50,7 @@ describe('S5 recording target through the real storage worker', () => {
     expect(ok(await s.history.client!.listTrips())).toEqual({trips: [], nextCursor: null});
     await s.history.close();
     expect(s.history.client).toBeUndefined();
-    expect(s.logs).toEqual([['RECORDING_TARGET', {purpose: 'synthetic'}], ['HISTORY_STORAGE_OPENED', {schemaVersion: 1, created: true, migratedFrom: null}], ['HISTORY_STORAGE_CLOSED', undefined]]);
+    expect(s.logs).toEqual([['RECORDING_TARGET', {purpose: 'synthetic'}], ['HISTORY_STORAGE_OPENED', {schemaVersion: 2, created: true, migratedFrom: null}], ['HISTORY_STORAGE_CLOSED', undefined]]);
     expect(readOnly(target(), db => db.prepare('SELECT purpose FROM database_info WHERE id = 1').pluck().get())).toBe('synthetic');
     expect([existsSync(historyFile()), existsSync(target() + '-wal')]).toEqual([false, false]);
   }, 60_000);

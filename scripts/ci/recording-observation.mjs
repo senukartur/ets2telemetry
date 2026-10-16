@@ -488,7 +488,7 @@ export async function verifyRecordingRun({config, record, recording, mainEvents,
     sidecars: ['-wal', '-shm', '-journal'].filter(suffix => existsSync(database + suffix)), syntheticBackups: existsSync(path.join(root, 'synthetic', 'backups')),
     historyDatabase: existsSync(path.join(root, 'data', 'telemetry.sqlite')), dataDirectory: existsSync(path.join(root, 'data'))};
   // Whether the empty `data` directory exists is recorded only; the history database file must not.
-  assert.deepEqual({...files, dataDirectory: null}, {magic: 'SQLite format 3', applicationId: 1163154226, userVersion: 1, sidecars: [], syntheticBackups: false,
+  assert.deepEqual({...files, dataDirectory: null}, {magic: 'SQLite format 3', applicationId: 1163154226, userVersion: 2, sidecars: [], syntheticBackups: false,
     historyDatabase: false, dataDirectory: null});
   record.historyDatabaseAbsent = true; record.sidecarsAbsent = true;
 
@@ -500,7 +500,7 @@ export async function verifyRecordingRun({config, record, recording, mainEvents,
       simulatorSession: s.session === session}))};
   assert.deepEqual(raw.integrity, ['ok']); assert.equal(raw.foreignKeyViolations, 0);
   assert.deepEqual({purpose: raw.purpose, acceptedOrigin: raw.acceptedOrigin, applicationId: raw.applicationId, userVersion: raw.userVersion},
-    {purpose: 'synthetic', acceptedOrigin: 'synthetic', applicationId: 1163154226, userVersion: 1});
+    {purpose: 'synthetic', acceptedOrigin: 'synthetic', applicationId: 1163154226, userVersion: 2});
   assert.deepEqual(record.database.sessions, [{game: 'ets2', origin: 'synthetic', committedThrough: '13', endReason: null, simulatorSession: true}]);
   assert.ok(raw.events.every(event => event.session === session) && raw.trips.every(trip => trip.session === session && trip.game === 'ets2'));
   assert.ok(raw.sampleRows.every(sample => sample.session === session), 'A sample belongs to another plugin session');

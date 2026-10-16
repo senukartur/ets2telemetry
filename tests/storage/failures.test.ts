@@ -24,7 +24,13 @@ describe('REG-007 visible write failures', () => {
       const worst = v1('event-worst');
       if (worst.kind !== 'event') throw new Error('fixture');
       ok(storage.upsertSession({message: {...v1('welcome'), source: worst.source}}));
-      const db = connection.writer(), pages = Number(db.pragma('page_count', {simple: true}));
+      const db = connection.writer();
+      // Schema version 2 rebuilds job_configurations, which leaves the old table's pages on the freelist of a new
+      // database (ET-016). VACUUM empties the freelist first, so the cap below leaves no page to allocate.
+      expect(Number(db.pragma('freelist_count', {simple: true}))).toBeGreaterThan(0);
+      db.exec('VACUUM');
+      expect(Number(db.pragma('freelist_count', {simple: true}))).toBe(0);
+      const pages = Number(db.pragma('page_count', {simple: true}));
       // Cap the file at its current size: the next event needs overflow pages that cannot be allocated.
       db.pragma(`max_page_count = ${pages}`);
       const error = failedWithoutPath(storage.commitEvent({message: worst}), 'DISK_FULL');
