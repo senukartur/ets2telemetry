@@ -101,3 +101,4 @@ export interface OverlayBridge {
 export * from './protocol-v0';
 export * from './app-state';
 export type {LiveObservationV1, LiveStateV1} from './protocol-v1';
+export * from './journal';

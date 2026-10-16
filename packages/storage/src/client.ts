@@ -4,8 +4,9 @@
 // queued command get an error, later commands fail at once, and no success is reported afterwards. See docs/storage.md.
 import type {Worker} from 'node:worker_threads';
 import type {
-  CommitResult, CompletenessInterval, CompletenessOptions, EventRow, OpenSummary, Result, SampleAppendOptions, SampleAppendResult, SampleInput, SampleRecord, SessionRecord,
-  StorageError, StorageErrorCode, StorageInfo, TripEffect, TripList, TripPage, TripRecord, Uint64
+  CommitResult, CompletenessInterval, CompletenessOptions, EventRow, JournalEventPage, JournalIntervalPage, JournalPageQuery, JournalTripDetail, JournalTripPage, JournalTripsQuery,
+  OpenSummary, Result, SampleAppendOptions, SampleAppendResult, SampleInput, SampleRecord, SessionRecord, StorageError, StorageErrorCode, StorageInfo, TripEffect, TripList,
+  TripPage, TripRecord, Uint64
 } from './api';
 import {storageError} from './errors';
 import {parseResponse, type CommandName, type CommandValue, type StorageCommand, type StorageRequest, type WorkerOpenOptions} from './worker/protocol';
@@ -117,6 +118,22 @@ export class StorageClient {
   }
   listSamples(scope: {tripUuid: string} | {pluginSessionId: string}, page?: {afterId?: string; limit?: number}): Promise<Result<SampleRecord[]>> { return this.#request({name: 'listSamples', scope, page}); }
   storageInfo(): Promise<Result<StorageInfo>> { return this.#request({name: 'storageInfo'}); }
+  /**
+   * Journal reads (ET-016, J5). Queries and pages are copied field by field, so only their listed fields cross the
+   * boundary; a value that is not an object is forwarded as given, and the worker's request parser refuses it with
+   * INVALID_INPUT. Every answer is validated against the journal contract: a malformed one fails the client closed.
+   */
+  journalTrips(query?: JournalTripsQuery): Promise<Result<JournalTripPage>> {
+    if (query === undefined) return this.#request({name: 'journalTrips'});
+    return this.#request({name: 'journalTrips', query: isObject(query) ? {cursor: query.cursor, game: query.game, outcome: query.outcome, completeness: query.completeness} : query});
+  }
+  journalTrip(tripUuid: string): Promise<Result<JournalTripDetail>> { return this.#request({name: 'journalTrip', tripUuid}); }
+  journalEvents(tripUuid: string, page: JournalPageQuery): Promise<Result<JournalEventPage>> {
+    return this.#request({name: 'journalEvents', tripUuid, page: isObject(page) ? {cursor: page.cursor, limit: page.limit} : page});
+  }
+  journalIntervals(tripUuid: string, page: JournalPageQuery): Promise<Result<JournalIntervalPage>> {
+    return this.#request({name: 'journalIntervals', tripUuid, page: isObject(page) ? {cursor: page.cursor, limit: page.limit} : page});
+  }
 
   /**
    * Orderly close: queued commands get STORAGE_CLOSED, the command in flight finishes with its real result, then the

@@ -1,9 +1,14 @@
 // Messages between the StorageClient in the telemetry service and the storage worker host (ET-013). Node-safe: plain
 // data only, so the client and its tests never load native SQLite. Messages cross a worker port by structured clone.
 // The client sends one request at a time; the host answers every request exactly once, in order. See docs/storage.md.
+import {
+  isJournalPageQuery, isJournalTripsQuery, isJournalUuid, JOURNAL_EVENT_LIMITS, JOURNAL_INTERVAL_LIMITS, validateJournalEventPage, validateJournalIntervalPage,
+  validateJournalTripDetail, validateJournalTripPage
+} from '../../../contracts/src/journal';
 import type {
-  CommitResult, CompletenessInterval, CompletenessOptions, EventRow, OpenSummary, Purpose, Result, SampleAppendOptions, SampleAppendResult, SampleInput, SampleRecord, SessionRecord,
-  StorageError, StorageInfo, TripEffect, TripList, TripPage, TripRecord, Uint64
+  CommitResult, CompletenessInterval, CompletenessOptions, EventRow, JournalEventPage, JournalIntervalPage, JournalPageQuery, JournalTripDetail, JournalTripPage, JournalTripsQuery,
+  OpenSummary, Purpose, Result, SampleAppendOptions, SampleAppendResult, SampleInput, SampleRecord, SessionRecord, StorageError, StorageInfo, TripEffect, TripList, TripPage,
+  TripRecord, Uint64
 } from '../api';
 import {ERROR_MESSAGES} from '../errors';
 
@@ -29,6 +34,11 @@ export interface StorageCommands {
   listTrips: {args: {page?: TripPage}; value: TripList};
   listSamples: {args: {scope: {tripUuid: string} | {pluginSessionId: string}; page?: {afterId?: string; limit?: number}}; value: SampleRecord[]};
   storageInfo: {args: Record<never, never>; value: StorageInfo};
+  /** Journal reads (ET-016 PR-2, J5); arguments and answers are checked strictly on both sides of the boundary. */
+  journalTrips: {args: {query?: JournalTripsQuery}; value: JournalTripPage};
+  journalTrip: {args: {tripUuid: string}; value: JournalTripDetail};
+  journalEvents: {args: {tripUuid: string; page: JournalPageQuery}; value: JournalEventPage};
+  journalIntervals: {args: {tripUuid: string; page: JournalPageQuery}; value: JournalIntervalPage};
   /** Closes the connection (SQLite checkpoints the WAL); the host then stops listening and the worker thread ends. */
   close: {args: Record<never, never>; value: undefined};
 }
@@ -41,7 +51,7 @@ export interface StorageResponse {type: 'storage.response'; id: number; result: 
 
 export const COMMAND_NAMES: readonly CommandName[] = Object.freeze([
   'open', 'upsertSession', 'commitEvent', 'commitGap', 'appendSamples', 'recordCompleteness', 'committedThrough', 'getSession', 'getEvent',
-  'listEvents', 'getTrip', 'listTrips', 'listSamples', 'storageInfo', 'close'
+  'listEvents', 'getTrip', 'listTrips', 'listSamples', 'storageInfo', 'journalTrips', 'journalTrip', 'journalEvents', 'journalIntervals', 'close'
 ] as const);
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -67,12 +77,35 @@ const COMPLETENESS_OPTIONS_ARGS = {ifAbsent: (field: unknown) => typeof field ==
 /** ET-015b: the `appendSamples` options, checked strictly like the completeness options. */
 const SAMPLE_OPTIONS_ARGS = {uniqueSeconds: (field: unknown) => typeof field === 'boolean'};
 const isCount = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+type JournalCommandName = 'journalTrips' | 'journalTrip' | 'journalEvents' | 'journalIntervals';
+const JOURNAL_COMMAND_KEYS: Readonly<Record<JournalCommandName, readonly string[]>> = {
+  journalTrips: ['name', 'query'], journalTrip: ['name', 'tripUuid'], journalEvents: ['name', 'tripUuid', 'page'], journalIntervals: ['name', 'tripUuid', 'page']
+};
+/**
+ * ET-016: a journal command carries exactly its listed fields, and each is checked as the storage core checks it: a
+ * trip UUID, a query of only the listed filters and a page whose `limit` is one of the read's allowed values and whose
+ * cursor has the read's fixed format. Anything else refuses the request.
+ */
+function journalArgs(name: JournalCommandName, command: Record<string, unknown>): boolean {
+  if (!Object.keys(command).every(key => JOURNAL_COMMAND_KEYS[name].includes(key))) return false;
+  switch (name) {
+  case 'journalTrips': return isJournalTripsQuery(command.query);
+  case 'journalTrip': return isJournalUuid(command.tripUuid);
+  case 'journalEvents': return isJournalUuid(command.tripUuid) && isJournalPageQuery(command.page, JOURNAL_EVENT_LIMITS, 'event');
+  case 'journalIntervals': return isJournalUuid(command.tripUuid) && isJournalPageQuery(command.page, JOURNAL_INTERVAL_LIMITS, 'row');
+  }
+}
+const isJournalCommand = (name: CommandName): name is JournalCommandName => Object.hasOwn(JOURNAL_COMMAND_KEYS, name);
+/** Whether a journal answer has exactly the documented shape (packages/contracts/src/journal.ts). */
+function validJournal(validate: (value: unknown) => unknown, value: unknown): boolean {
+  try { validate(value); return true; } catch { return false; }
+}
 
 /**
  * Checks the envelope and the argument shapes a command needs to reach the storage core. The core validates every
  * argument value itself; this refuses messages that are not storage requests at all, and checks the `listTrips` page,
- * the `recordCompleteness` options and the `appendSamples` options strictly, so only their listed fields cross the
- * worker boundary.
+ * the `recordCompleteness` options, the `appendSamples` options and every journal command (ET-016) strictly, so only
+ * their listed fields cross the worker boundary.
  */
 export function parseRequest(message: unknown): {ok: true; id: number; command: StorageCommand} | {ok: false; id?: number} {
   if (!isRecord(message) || message.type !== 'storage.request' || !isId(message.id)) return {ok: false};
@@ -87,6 +120,7 @@ export function parseRequest(message: unknown): {ok: true; id: number; command: 
   if (name === 'listTrips' && !optionalArgs(command.page, TRIP_PAGE_ARGS)) return {ok: false, id};
   if (name === 'recordCompleteness' && !optionalArgs(command.options, COMPLETENESS_OPTIONS_ARGS)) return {ok: false, id};
   if (name === 'appendSamples' && !optionalArgs(command.options, SAMPLE_OPTIONS_ARGS)) return {ok: false, id};
+  if (isJournalCommand(name) && !journalArgs(name, command)) return {ok: false, id};
   return {ok: true, id, command: command as StorageCommand};
 }
 
@@ -96,8 +130,9 @@ function isStorageError(value: unknown): value is StorageError {
 
 /**
  * A commit result is what a later durable ACK is built from (protocol v1 §10), so its shape is checked exactly, and so are
- * the sample counts by which a caller keeps or drops its pending rows (ET-015b); any other success value is passed
- * through from the host, which returns only what the storage core produced.
+ * the sample counts by which a caller keeps or drops its pending rows (ET-015b), and every journal answer (ET-016),
+ * which leaves the service; any other success value is passed through from the host, which returns only what the
+ * storage core produced.
  */
 function validValue(name: CommandName, value: unknown): boolean {
   switch (name) {
@@ -109,6 +144,11 @@ function validValue(name: CommandName, value: unknown): boolean {
   case 'open': return isRecord(value) && typeof value.schemaVersion === 'number' && typeof value.created === 'boolean' && isText(value.databaseUuid) && isText(value.purpose);
   case 'upsertSession': return isRecord(value) && typeof value.created === 'boolean' && isUint64(value.committedThroughEventSeq);
   case 'close': case 'recordCompleteness': return value === undefined;
+  // ET-016: a journal page reaches main and the renderer, so a malformed answer fails the client closed like a malformed commit.
+  case 'journalTrips': return validJournal(validateJournalTripPage, value);
+  case 'journalTrip': return validJournal(validateJournalTripDetail, value);
+  case 'journalEvents': return validJournal(validateJournalEventPage, value);
+  case 'journalIntervals': return validJournal(validateJournalIntervalPage, value);
   default: return true;
   }
 }

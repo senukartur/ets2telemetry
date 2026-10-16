@@ -3,17 +3,19 @@
 // failures; error results carry fixed text and never a filesystem path. See docs/storage.md.
 import {rmSync} from 'node:fs';
 import type {
-  CommitOptions, CommitResult, CompletenessInterval, CompletenessOptions, EventRow, OpenSummary, Result, SampleAppendOptions, SampleAppendResult, SampleInput, SampleRecord,
-  SessionRecord, StorageInfo, TripEffect, TripList, TripPage, TripRecord, Uint64
+  CommitOptions, CommitResult, CompletenessInterval, CompletenessOptions, EventRow, JournalEventPage, JournalIntervalPage, JournalPageQuery, JournalTripDetail, JournalTripPage,
+  JournalTripsQuery, OpenSummary, Result, SampleAppendOptions, SampleAppendResult, SampleInput, SampleRecord, SessionRecord, StorageInfo, TripEffect, TripList, TripPage, TripRecord, Uint64
 } from './api';
 import {classifyError} from './errors';
 import {restoreCopy} from './sqlite/backup';
 import {checkPath, openConnection, type OpenOptions, type StorageConnection} from './sqlite/connection';
+import * as journal from './sqlite/journal';
 import * as reads from './sqlite/reads';
 import * as writes from './sqlite/writes';
 
 export * from './api';
 export {MIGRATIONS, APPLICATION_ID, type Migration} from './sqlite/migrations';
+export {JOURNAL_QUERIES} from './sqlite/journal';
 export type {OpenOptions, OpenTestHooks} from './sqlite/connection';
 
 function attempt<T>(body: () => T): Result<T> {
@@ -41,6 +43,11 @@ export class Storage {
   getTrip(tripUuid: string): Result<TripRecord | undefined> { return attempt(() => reads.getTrip(this.connection, tripUuid)); }
   listTrips(page?: TripPage): Result<TripList> { return attempt(() => reads.listTrips(this.connection, page)); }
   listSamples(scope: {tripUuid: string} | {pluginSessionId: string}, page?: {afterId?: string; limit?: number}): Result<SampleRecord[]> { return attempt(() => reads.listSamples(this.connection, scope, page)); }
+  /** Journal reads (ET-016 PR-2, J5): bounded pages for the trip journal and its export; see sqlite/journal.ts. */
+  journalTrips(query?: JournalTripsQuery): Result<JournalTripPage> { return attempt(() => journal.journalTrips(this.connection, query)); }
+  journalTrip(tripUuid: string): Result<JournalTripDetail> { return attempt(() => journal.journalTrip(this.connection, tripUuid)); }
+  journalEvents(tripUuid: string, page: JournalPageQuery): Result<JournalEventPage> { return attempt(() => journal.journalEvents(this.connection, tripUuid, page)); }
+  journalIntervals(tripUuid: string, page: JournalPageQuery): Result<JournalIntervalPage> { return attempt(() => journal.journalIntervals(this.connection, tripUuid, page)); }
   storageInfo(): Result<StorageInfo> { return attempt(() => reads.storageInfo(this.connection)); }
   /** Closes the connection. SQLite checkpoints the WAL into the main file; further commands fail with STORAGE_CLOSED. */
   close(): Result<void> { return attempt(() => this.connection.close()); }

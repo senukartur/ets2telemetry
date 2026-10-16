@@ -73,6 +73,12 @@ export function serveStorage(port: HostPort, testOptions: HostTestOptions = {}):
     case 'listTrips': return storage.listTrips(command.page);
     case 'listSamples': return storage.listSamples(command.scope, command.page);
     case 'storageInfo': return storage.storageInfo();
+    // ET-016: only the parsed fields are forwarded; the parser already refused any other key.
+    case 'journalTrips': return storage.journalTrips(command.query === undefined ? undefined
+      : {cursor: command.query.cursor, game: command.query.game, outcome: command.query.outcome, completeness: command.query.completeness});
+    case 'journalTrip': return storage.journalTrip(command.tripUuid);
+    case 'journalEvents': return storage.journalEvents(command.tripUuid, {cursor: command.page.cursor, limit: command.page.limit});
+    case 'journalIntervals': return storage.journalIntervals(command.tripUuid, {cursor: command.page.cursor, limit: command.page.limit});
     }
   }
 

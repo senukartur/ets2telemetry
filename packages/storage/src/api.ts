@@ -155,3 +155,7 @@ export interface StorageInfo {
   schemaVersion: number; databaseUuid: string; purpose: Purpose; acceptedOrigin: Origin; durability: Durability;
   pageSize: number; pageCount: number; freelistCount: number;
 }
+/** Journal reads (ET-016 PR-2, J5): the query and page types live in the shared journal contract. */
+export type {
+  JournalEventPage, JournalIntervalPage, JournalPageQuery, JournalTripDetail, JournalTripPage, JournalTripsQuery
+} from '../../contracts/src/journal';
