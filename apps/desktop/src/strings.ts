@@ -82,7 +82,7 @@ export const APP_ERROR_TEXT: Readonly<Record<AppErrorCode, string>> = Object.fre
 /** The headline of each recording state; retrying and stopped add their cause. */
 export const RECORDING_STATE_TEXT: Readonly<Record<RecordingHealth['state'], string>> = Object.freeze({
   'disabled': 'Off: this version does not record game history',
-  'unknown': 'Not known while the telemetry service is not running',
+  'unknown': 'Not known: the telemetry service is not running or has not reported a valid status',
   'opening': 'Opening the database',
   'waiting': 'Waiting for the recorded source to connect',
   'recording': 'Recording',

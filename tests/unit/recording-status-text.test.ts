@@ -13,7 +13,7 @@ const TEST_NOTICE = 'Prototype live display. Only a test database is recorded, n
 it('shows the fixed texts of the disabled and unknown states without detail, losses or alert', () => {
   expect(recordingStatusText({state: 'disabled'})).toEqual({headline: 'Off: this version does not record game history', short: 'off in this version',
     detail: [], losses: [], alert: null, notice: 'Prototype live display. No trip recording or durable history.'});
-  expect(recordingStatusText({state: 'unknown'})).toEqual({headline: 'Not known while the telemetry service is not running', short: 'not known',
+  expect(recordingStatusText({state: 'unknown'})).toEqual({headline: 'Not known: the telemetry service is not running or has not reported a valid status', short: 'not known',
     detail: [], losses: [], alert: null, notice: 'Prototype live display. The recording status is not known right now.'});
 });
 

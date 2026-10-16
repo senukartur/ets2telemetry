@@ -98,7 +98,7 @@ A pure builder, `apps/desktop/src/recording-status-text.ts`, turns `AppState.hea
 | State | Headline |
 | --- | --- |
 | `disabled` | Off: this version does not record game history |
-| `unknown` | Not known while the telemetry service is not running |
+| `unknown` | Not known: the telemetry service is not running or has not reported a valid status |
 | `opening` | Opening the database |
 | `waiting` | Waiting for the recorded source to connect |
 | `recording` | Recording |

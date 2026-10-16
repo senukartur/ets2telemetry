@@ -252,7 +252,7 @@ export async function runRecordingSmoke({application, launcher, dashboard, recor
   const unknownAt = restartRows.findIndex(row => row.state === 'unknown');
   assert.ok(unknownAt >= 0 && restartRows.slice(unknownAt + 1).some(row => row.state === 'waiting' && row.target === 'synthetic'),
     'Main did not report unknown between the terminated and the restarted service');
-  record.status.serviceRestartTexts = await shownText(dashboard, text => text.headline === 'Not known while the telemetry service is not running' && text.detail === null,
+  record.status.serviceRestartTexts = await shownText(dashboard, text => text.headline === 'Not known: the telemetry service is not running or has not reported a valid status' && text.detail === null,
     'RECORDING_UNKNOWN_NOT_SHOWN_AFTER_SERVICE_EXIT');
   record.statusUnknownAfterServiceExit = true;
   // A dashboard reload subscribes again and gets the same status.
