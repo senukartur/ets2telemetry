@@ -7,8 +7,10 @@ import path from 'node:path';
 import {MessageChannel, Worker} from 'node:worker_threads';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import {CLOSE_GRACE_MS, StorageClient, workerHandle} from '../../packages/storage/src/client';
-import type {Result, SampleInput, StorageErrorCode, TripEffect} from '../../packages/storage/src/index';
+import type {JournalResult, Result, SampleInput, StorageErrorCode, TripEffect} from '../../packages/storage/src/index';
 import type {WorkerOpenOptions} from '../../packages/storage/src/worker/protocol';
+import {JOURNAL_TRIPS as T, seedJournalAnchors} from '../shared/journal-seed';
+import {BASE_UTC, ETS2_A} from '../shared/trip-messages';
 import {ok, P1, readOnly, TEST_CLOSE_GRACE_MS, v1, withEventSeq, workspace} from './helpers';
 
 const bundles = process.env.ETS2TELEMETRY_STORAGE_TEST_BUNDLES;
@@ -52,7 +54,7 @@ function startWorker({closeGraceMs = TEST_CLOSE_GRACE_MS, closeDelayMs}: {closeG
 }
 const options = (overrides: Partial<WorkerOpenOptions> = {}): WorkerOpenOptions =>
   ({path: ws.database, purpose: 'synthetic', backupsDirectory: ws.backups, appVersion: '0.1.0-test', ...overrides});
-function refused<T>(result: Result<T>, code: StorageErrorCode) {
+function refused<T>(result: Result<T> | JournalResult<T>, code: StorageErrorCode | 'JOURNAL_ANSWER_INVALID') {
   expect(result.ok ? 'ok' : result.error.code).toBe(code);
   // Error results cross the worker boundary with fixed text only, never a path.
   expect(JSON.stringify(result)).not.toContain(ws.directory.replaceAll('\\', '\\\\'));
@@ -220,6 +222,116 @@ describe('storage worker', () => {
     worker.postMessage(request(4, {uniqueSeconds: true}));
     await vi.waitFor(() => expect(answers).toHaveLength(4));
     expect(answers.map(answer => (answer as {result: {error: {code: string}}}).result.error.code)).toEqual(['INVALID_INPUT', 'INVALID_INPUT', 'INVALID_INPUT', 'STORAGE_CLOSED']);
+  });
+
+  it('serves the journal reads through the real worker and the validating client (ET-016, REG-014)', async () => {
+    const {client, exit} = startWorker();
+    ok(await client.open(options()));
+    // The seed writes the anchors through the client, as a later seeding script would.
+    await seedJournalAnchors(client);
+    const page = ok(await client.journalTrips());
+    expect(page.database).toEqual({purpose: 'synthetic', schemaVersion: 2});
+    expect(page.trips.map(trip => trip.tripUuid)).toEqual([T.manySamples, T.zeroValues, T.open, T.restartClosed, T.gapClosed, T.differentJob, T.cancelled, T.delivered]);
+    expect(page.nextCursor).toBeNull();
+    expect(ok(await client.journalTrips({game: 'ats', outcome: 'delivered', completeness: 'complete'})).trips.map(trip => trip.tripUuid)).toEqual([T.zeroValues]);
+    expect(ok(await client.journalTrips({cursor: '2'})).trips.map(trip => trip.tripUuid)).toEqual([T.delivered]);
+    const detail = ok(await client.journalTrip(T.delivered));
+    expect(detail.window).toEqual({known: true, pluginSessionId: ETS2_A, fromEventSeq: '4', throughEventSeq: '9', end: 'close-event'});
+    expect(detail.money.totals.map(total => [total.category, total.raw])).toEqual([['fine', '401'], ['toll', '35'], ['ferry', '677']]);
+    expect(detail.samples).toEqual({count: 3, firstUtcMs: BASE_UTC + 5_000, lastUtcMs: BASE_UTC + 8_000});
+    expect(ok(await client.journalEvents(T.delivered, {limit: 100})).events.map(event => event.eventSeq)).toEqual(['4', '5', '6', '7', '8', '9']);
+    expect(ok(await client.journalEvents(T.delivered, {limit: 500, cursor: '7'})).events.map(event => event.eventSeq)).toEqual(['8', '9']);
+    expect(ok(await client.journalIntervals(T.gapClosed, {limit: 100})).intervals.map(i => [i.kind, i.annotation])).toEqual([
+      ['discontinuity', true], ['sample-loss', false], ['event-loss', false]]);
+    expect(ok(await client.listSamples({tripUuid: T.manySamples}, {limit: 300}))).toHaveLength(300);
+    refused(await client.journalTrip('7a000000-0000-4000-8000-0000000000ff'), 'UNKNOWN_TRIP');
+    refused(await client.journalEvents(T.delivered, {limit: 51}), 'INVALID_INPUT');
+    // A refused argument is an ordinary result: the client keeps serving.
+    expect(client.state).toBe('running');
+    expect(await client.close()).toEqual({clean: true});
+    expect(await exit).toBe(0);
+  });
+
+  it('bounds the trailers of a trip that holds more than ten through the real worker and the validating client (ET-016 review pass 1)', async () => {
+    const {client, exit} = startWorker();
+    ok(await client.open(options()));
+    ok(await client.upsertSession({message: v1('welcome')}));
+    expect(ok(await client.commitEvent({message: withEventSeq('event-job-configured', 1n), effects: [openTrip]})).status).toBe('committed');
+    // Twelve trailer configurations given to the open trip: every one stays a trip_trailers row.
+    for (let seq = 2n; seq <= 13n; seq++) {
+      expect(ok(await client.commitEvent({message: withEventSeq('event-trailer-configured', seq),
+        effects: [{kind: 'trip.update', tripUuid: T1, set: {trailerConfigurations: ['this-event']}}]})).status).toBe('committed');
+    }
+    const detail = ok(await client.journalTrip(T1));
+    expect(detail.trailers.total).toBe(12);
+    // The latest ten, in eventSeq order.
+    expect(detail.trailers.items.map(trailer => trailer.eventSeq)).toEqual(['4', '5', '6', '7', '8', '9', '10', '11', '12', '13']);
+    expect(client.state).toBe('running');
+    expect(ok(await client.committedThrough(P1))).toBe('13');
+    expect(await client.close()).toEqual({clean: true});
+    expect(await exit).toBe(0);
+  });
+
+  it('answers a contract-invalid journal page with JOURNAL_ANSWER_INVALID for that read alone; recorder commands keep working (ET-016 review pass 1)', async () => {
+    // The bundled worker with each journalTrips answer altered on the worker thread after the host produced it, as a
+    // faulty host would: the frame stays well formed, only the page breaks the journal contract.
+    const CORRUPTING_WORKER = `
+const {parentPort, workerData} = require('node:worker_threads');
+const journal = new Set(), on = parentPort.on.bind(parentPort), post = parentPort.postMessage.bind(parentPort);
+parentPort.on = (event, listener) => on(event, event !== 'message' ? listener : message => {
+  if (message && message.command && message.command.name === 'journalTrips') journal.add(message.id);
+  listener(message);
+});
+parentPort.postMessage = message => {
+  if (message && journal.has(message.id) && message.result && message.result.ok) message.result.value.database.purpose = 'game';
+  post(message);
+};
+require(workerData.entry);
+`;
+    const worker = new Worker(CORRUPTING_WORKER, {eval: true, workerData: {kind: 'storage', entry: WORKER}});
+    started.push(worker);
+    const exit = once(worker, 'exit').then(([code]) => code as number);
+    const refusals: unknown[] = [];
+    const client = new StorageClient(workerHandle(worker), {closeGraceMs: TEST_CLOSE_GRACE_MS, onJournalAnswerInvalid: facts => refusals.push(facts)});
+    ok(await client.open(options()));
+    ok(await client.upsertSession({message: v1('welcome')}));
+    expect(ok(await client.commitEvent({message: withEventSeq('event-job-configured', 1n), effects: [openTrip]})).status).toBe('committed');
+    refused(await client.journalTrips(), 'JOURNAL_ANSWER_INVALID');
+    expect(refusals).toEqual([{command: 'journalTrips'}]);
+    expect(client.state).toBe('running');
+    // The recorder's commands and other journal reads keep working on the same client and worker.
+    expect(ok(await client.commitEvent({message: withEventSeq('event-trailer-configured', 2n)}))).toEqual({status: 'committed', committedThroughEventSeq: '2'});
+    expect(ok(await client.committedThrough(P1))).toBe('2');
+    expect(ok(await client.journalTrip(T1)).trip.tripUuid).toBe(T1);
+    expect(await client.close()).toEqual({clean: true});
+    expect(await exit).toBe(0);
+  });
+
+  it('refuses journal commands with unknown fields, other page sizes or malformed cursors with INVALID_INPUT', async () => {
+    const worker = new Worker(WORKER, {workerData: {kind: 'storage'}});
+    started.push(worker);
+    const answers: unknown[] = [];
+    worker.on('message', message => answers.push(message));
+    const commands: Record<string, unknown>[] = [
+      {name: 'journalTrips', query: {limit: 50}},
+      {name: 'journalTrips', query: {cursor: '0'}},
+      {name: 'journalTrips', query: {game: 'ETS2'}},
+      {name: 'journalTrips', query: null},
+      {name: 'journalTrips', testHooks: {}},
+      {name: 'journalTrip', tripUuid: 'not-a-uuid'},
+      {name: 'journalTrip', tripUuid: T.delivered, page: {limit: 100}},
+      {name: 'journalEvents', tripUuid: T.delivered, page: {limit: 51}},
+      {name: 'journalEvents', tripUuid: T.delivered, page: {limit: 100, cursor: '18446744073709551615'}},
+      {name: 'journalEvents', tripUuid: T.delivered},
+      {name: 'journalIntervals', tripUuid: T.delivered, page: {limit: 3_600}},
+      {name: 'journalIntervals', tripUuid: T.delivered, page: {limit: 100, cursor: '01'}},
+      // Well-formed requests pass the parser and reach the host, which has no open database yet.
+      {name: 'journalTrips', query: {cursor: '9223372036854775807', game: 'ats', outcome: 'open', completeness: 'unknown'}},
+      {name: 'journalEvents', tripUuid: T.delivered, page: {limit: 500, cursor: '18446744073709551614'}}
+    ];
+    commands.forEach((command, index) => worker.postMessage({type: 'storage.request', id: index + 1, command}));
+    await vi.waitFor(() => expect(answers).toHaveLength(commands.length));
+    expect(answers.map(answer => (answer as {result: {error: {code: string}}}).result.error.code)).toEqual([...Array(12).fill('INVALID_INPUT'), 'STORAGE_CLOSED', 'STORAGE_CLOSED']);
   });
 });
 

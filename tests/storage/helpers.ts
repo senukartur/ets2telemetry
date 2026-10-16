@@ -6,7 +6,7 @@ import path from 'node:path';
 import Database from 'better-sqlite3';
 import {expect} from 'vitest';
 import {decodePayload, type ServerMessage} from '../../packages/contracts/src/protocol-v1';
-import {openStorage, type OpenOptions, type Result, type Storage, type StorageErrorCode} from '../../packages/storage/src/index';
+import {openStorage, type JournalResult, type OpenOptions, type Result, type Storage, type StorageErrorCode} from '../../packages/storage/src/index';
 import {contentDigest} from '../../packages/storage/src/sqlite/digest';
 import {temporaryResources} from '../shared/resources';
 
@@ -38,11 +38,15 @@ export function withEventSeq(name: string, first: bigint, last = first): ServerM
 export const sha256 = (file: string) => createHash('sha256').update(readFileSync(file)).digest('hex');
 export const files = (directory: string) => readdirSync(directory).sort();
 
-export function ok<T>(result: Result<T>): T {
-  if (!result.ok) throw new Error(`Expected success, got ${result.error.code}${result.error.cause ? `/${result.error.cause}` : ''}`);
+/** Accepts a journal result too, whose error may be the client's JOURNAL_ANSWER_INVALID (ET-016). */
+export function ok<T>(result: Result<T> | JournalResult<T>): T {
+  if (!result.ok) {
+    const cause = 'cause' in result.error ? result.error.cause : undefined;
+    throw new Error(`Expected success, got ${result.error.code}${cause ? `/${cause}` : ''}`);
+  }
   return result.value;
 }
-export function failed<T>(result: Result<T>, code: StorageErrorCode) {
+export function failed<R extends Result<unknown> | JournalResult<unknown>>(result: R, code: StorageErrorCode | 'JOURNAL_ANSWER_INVALID'): Extract<R, {ok: false}>['error'] {
   expect(result.ok, `expected ${code}`).toBe(false);
   if (result.ok) throw new Error('unreachable');
   expect(result.error.code).toBe(code);

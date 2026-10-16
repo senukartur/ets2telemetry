@@ -4,11 +4,12 @@
 // queued command get an error, later commands fail at once, and no success is reported afterwards. See docs/storage.md.
 import type {Worker} from 'node:worker_threads';
 import type {
-  CommitResult, CompletenessInterval, CompletenessOptions, EventRow, OpenSummary, Result, SampleAppendOptions, SampleAppendResult, SampleInput, SampleRecord, SessionRecord,
-  StorageError, StorageErrorCode, StorageInfo, TripEffect, TripList, TripPage, TripRecord, Uint64
+  CommitResult, CompletenessInterval, CompletenessOptions, EventRow, JournalEventPage, JournalResult, JournalIntervalPage, JournalPageQuery, JournalTripDetail, JournalTripPage, JournalTripsQuery,
+  OpenSummary, Result, SampleAppendOptions, SampleAppendResult, SampleInput, SampleRecord, SessionRecord, StorageError, StorageErrorCode, StorageInfo, TripEffect, TripList,
+  TripPage, TripRecord, Uint64
 } from './api';
 import {storageError} from './errors';
-import {parseResponse, type CommandName, type CommandValue, type StorageCommand, type StorageRequest, type WorkerOpenOptions} from './worker/protocol';
+import {parseResponse, type CommandName, type CommandValue, type JournalCommandName, type StorageCommand, type StorageRequest, type WorkerOpenOptions} from './worker/protocol';
 
 /** Deadline of one command after it was sent to the worker. */
 export const COMMAND_DEADLINE_MS = 10_000;
@@ -32,6 +33,12 @@ export interface StorageClientOptions {
   timers?: ClientTimers; commandDeadlineMs?: number; openDeadlineMs?: number; closeGraceMs?: number; maxQueued?: number;
   /** Called once when the worker fails or misses a deadline, with the error the command in flight received. */
   onFailure?: (error: StorageError) => void;
+  /**
+   * Called when a journal answer broke the journal contract (ET-016): that command got JOURNAL_ANSWER_INVALID and the
+   * client keeps running. The fact is the command name only; the owner logs it as a fixed code. It is called after the
+   * command resolved and the next queued command was sent; anything it throws is ignored.
+   */
+  onJournalAnswerInvalid?: (facts: {command: JournalCommandName}) => void;
 }
 export type ClientState = 'running' | 'closing' | 'closed' | 'failed';
 
@@ -50,7 +57,7 @@ export function workerHandle(worker: Worker): StorageWorkerHandle {
   };
 }
 
-interface Pending {command: StorageCommand; resolve: (result: Result<unknown>) => void}
+interface Pending {command: StorageCommand; resolve: (result: Result<unknown> | JournalResult<unknown>) => void}
 interface InFlight extends Pending {id: number; timer: unknown}
 /** Whether an argument is an object whose fields can be copied; anything else is forwarded for the parser to refuse. */
 const isObject = (value: unknown): value is object => typeof value === 'object' && value !== null;
@@ -67,7 +74,7 @@ export class StorageClient {
   #closeAcknowledged = false;
   #closeTimer: unknown;
   readonly #timers: ClientTimers;
-  readonly #options: Required<Omit<StorageClientOptions, 'timers' | 'onFailure'>>;
+  readonly #options: Required<Omit<StorageClientOptions, 'timers' | 'onFailure' | 'onJournalAnswerInvalid'>>;
 
   constructor(private readonly worker: StorageWorkerHandle, private readonly settings: StorageClientOptions = {}) {
     this.#timers = settings.timers ?? systemTimers;
@@ -117,6 +124,24 @@ export class StorageClient {
   }
   listSamples(scope: {tripUuid: string} | {pluginSessionId: string}, page?: {afterId?: string; limit?: number}): Promise<Result<SampleRecord[]>> { return this.#request({name: 'listSamples', scope, page}); }
   storageInfo(): Promise<Result<StorageInfo>> { return this.#request({name: 'storageInfo'}); }
+  /**
+   * Journal reads (ET-016, J5). Queries and pages are copied field by field, so only their listed fields cross the
+   * boundary; a value that is not an object is forwarded as given, and the worker's request parser refuses it with
+   * INVALID_INPUT. Every answer is validated against the journal contract and the requested page size: a well-framed answer
+   * that breaks it resolves that command alone with JOURNAL_ANSWER_INVALID and the client keeps serving (review pass 1);
+   * a malformed frame still fails the client closed.
+   */
+  journalTrips(query?: JournalTripsQuery): Promise<JournalResult<JournalTripPage>> {
+    if (query === undefined) return this.#request({name: 'journalTrips'});
+    return this.#request({name: 'journalTrips', query: isObject(query) ? {cursor: query.cursor, game: query.game, outcome: query.outcome, completeness: query.completeness} : query});
+  }
+  journalTrip(tripUuid: string): Promise<JournalResult<JournalTripDetail>> { return this.#request({name: 'journalTrip', tripUuid}); }
+  journalEvents(tripUuid: string, page: JournalPageQuery): Promise<JournalResult<JournalEventPage>> {
+    return this.#request({name: 'journalEvents', tripUuid, page: isObject(page) ? {cursor: page.cursor, limit: page.limit} : page});
+  }
+  journalIntervals(tripUuid: string, page: JournalPageQuery): Promise<JournalResult<JournalIntervalPage>> {
+    return this.#request({name: 'journalIntervals', tripUuid, page: isObject(page) ? {cursor: page.cursor, limit: page.limit} : page});
+  }
 
   /**
    * Orderly close: queued commands get STORAGE_CLOSED, the command in flight finishes with its real result, then the
@@ -146,7 +171,7 @@ export class StorageClient {
     if (this.#state === 'failed') return Promise.resolve(failure('WORKER_FAILED'));
     if (this.#inFlight && this.#queue.length >= this.#options.maxQueued) return Promise.resolve(failure('STORAGE_BUSY'));
     return new Promise<Result<CommandValue<K>>>(resolve => {
-      this.#queue.push({command, resolve: resolve as (result: Result<unknown>) => void});
+      this.#queue.push({command, resolve: resolve as Pending['resolve']});
       this.#pump();
     });
   }
@@ -179,13 +204,18 @@ export class StorageClient {
     // Nothing is accepted once the client failed or closed: a late answer never turns into a success.
     if (this.#state === 'failed' || this.#state === 'closed') return;
     const inFlight = this.#inFlight;
-    const response = inFlight ? parseResponse(message, inFlight.command.name) : undefined;
+    const response = inFlight ? parseResponse(message, inFlight.command) : undefined;
     if (!inFlight || !response || response.id !== inFlight.id) { this.#fail('WORKER_FAILED'); return; }
     this.#timers.clearTimeout(inFlight.timer);
     this.#inFlight = undefined;
     inFlight.resolve(response.result);
     if (this.#state === 'closing') { if (inFlight.command.name !== 'close') this.#sendClose(); }
     else this.#pump();
+    // A bad journal page fails only its own command (worker/protocol.ts, parseResponse); the client keeps serving. The
+    // report runs last, after the call is resolved and the next command is sent, and nothing it throws reaches the client.
+    if ('journalAnswerInvalid' in response) {
+      try { this.settings.onJournalAnswerInvalid?.({command: inFlight.command.name as JournalCommandName}); } catch { /* a report never affects the client */ }
+    }
   }
 
   #exit(code: number): void {

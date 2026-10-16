@@ -158,3 +158,17 @@ export interface StorageInfo {
   schemaVersion: number; databaseUuid: string; purpose: Purpose; acceptedOrigin: Origin; durability: Durability;
   pageSize: number; pageCount: number; freelistCount: number;
 }
+/** Journal reads (ET-016 PR-2, J5): the query and page types live in the shared journal contract. */
+export type {
+  JournalEventPage, JournalIntervalPage, JournalPageQuery, JournalTripDetail, JournalTripPage, JournalTripsQuery
+} from '../../contracts/src/journal';
+/**
+ * ET-016 review pass 1: the error of one journal command whose well-framed answer broke the journal contract. Only the
+ * client produces it, for that command alone, and keeps running. It is not a StorageErrorCode: commits, sample appends,
+ * the durable sink and the recording status never see it, and a worker cannot send it.
+ */
+export interface JournalAnswerError {code: 'JOURNAL_ANSWER_INVALID'; retryable: false; message: string}
+export const JOURNAL_ANSWER_INVALID: Readonly<JournalAnswerError> = Object.freeze({code: 'JOURNAL_ANSWER_INVALID', retryable: false,
+  message: 'The storage worker returned a journal page that does not match the journal contract.'});
+/** The result of a journal command: a storage Result, or JOURNAL_ANSWER_INVALID for a page that broke the contract. */
+export type JournalResult<T> = {ok: true; value: T} | {ok: false; error: StorageError | JournalAnswerError};

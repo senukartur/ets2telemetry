@@ -1,7 +1,8 @@
 // Storage size measurement (ET-013 PR-2, partial REG-018): 100 hours of 1 Hz history samples (360,000 rows) with
 // representative sessions, trips and gameplay events, written through the real storage core with its verified
 // durability settings into a temporary database. Prints database, WAL, table and index sizes, the per-100-hour
-// projection and command timings. Run with `npm run measure:storage`; it is not part of a check suite.
+// projection and command timings, including the ET-016 journal reads (recorded only, never asserted). Run with
+// `npm run measure:storage`; it is not part of a check suite.
 import {existsSync, statSync, writeFileSync} from 'node:fs';
 import {performance} from 'node:perf_hooks';
 import {afterAll, beforeAll, expect, it} from 'vitest';
@@ -107,7 +108,9 @@ it('measures 100 hours of 1 Hz history: database, WAL, indexes and command timin
   storage.close();
 
   const reopened = ok(await openStorage(ws.options()));
-  const queries: Record<string, number[]> = {listTrips: [], getTrip: [], listTripSamples: [], listEvents: [], committedThrough: [], storageInfo: []};
+  // ET-016 PR-2: the journal reads are recorded beside them, never asserted (J20).
+  const queries: Record<string, number[]> = {listTrips: [], getTrip: [], listTripSamples: [], listEvents: [], committedThrough: [], storageInfo: [],
+    journalTrips: [], journalTrip: [], journalEvents: [], journalIntervals: [], journalTripSamples300: []};
   const lastTrip = uuid('70000000', SESSIONS * TRIPS_PER_SESSION), lastSession = uuid('10000000', SESSIONS);
   for (let run = 0; run < 20; run++) {
     timed(queries.listTrips, () => ok(reopened.listTrips({limit: 100})));
@@ -117,6 +120,11 @@ it('measures 100 hours of 1 Hz history: database, WAL, indexes and command timin
     timed(queries.listEvents, () => ok(reopened.listEvents(lastSession, {limit: 500})));
     timed(queries.committedThrough, () => ok(reopened.committedThrough(lastSession)));
     timed(queries.storageInfo, () => ok(reopened.storageInfo()));
+    timed(queries.journalTrips, () => ok(reopened.journalTrips()));
+    timed(queries.journalTrip, () => ok(reopened.journalTrip(lastTrip)));
+    timed(queries.journalEvents, () => ok(reopened.journalEvents(lastTrip, {limit: 100})));
+    timed(queries.journalIntervals, () => ok(reopened.journalIntervals(lastTrip, {limit: 100})));
+    timed(queries.journalTripSamples300, () => ok(reopened.listSamples({tripUuid: lastTrip}, {limit: 300})));
   }
   const info = ok(reopened.storageInfo());
   reopened.close();

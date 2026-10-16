@@ -1,8 +1,11 @@
+import {readFileSync} from 'node:fs';
+import path from 'node:path';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
-import type {CompletenessOptions, Result, SampleAppendOptions, SampleInput, StorageError, StorageErrorCode, TripPage} from '../../packages/storage/src/api';
+import type {CompletenessOptions, JournalResult, Result, SampleAppendOptions, SampleInput, StorageError, StorageErrorCode, TripPage} from '../../packages/storage/src/api';
 import {COMMAND_DEADLINE_MS, MAX_QUEUED_COMMANDS, OPEN_DEADLINE_MS, StorageClient, type StorageClientOptions, type StorageWorkerHandle} from '../../packages/storage/src/client';
 import {storageError} from '../../packages/storage/src/errors';
 import {parseRequest, type StorageRequest} from '../../packages/storage/src/worker/protocol';
+import {job, trailer, truck} from '../shared/trip-messages';
 
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
@@ -365,5 +368,186 @@ describe('StorageClient close', () => {
     await vi.advanceTimersByTimeAsync(COMMAND_DEADLINE_MS);
     expect(f.client.state).toBe('failed');
     await expect(f.client.close()).resolves.toEqual({clean: false});
+  });
+});
+
+/**
+ * ET-016 PR-2: the journal commands at the worker boundary. Requests are copied field by field and checked strictly;
+ * every answer is validated against the journal contract, and a malformed one fails the client closed like a
+ * malformed commit result. The valid answers below are written by hand in the documented shapes.
+ */
+describe('ET-016 journal reads at the worker boundary', () => {
+  const TRIP = '7a000000-0000-4000-8000-000000000001';
+  const NO = {available: false, reason: 'not-observed'} as const;
+  const DATABASE = {purpose: 'synthetic', schemaVersion: 2};
+  const LIST_ITEM = {tripUuid: TRIP, game: 'ets2', gameMode: {mode: 'unknown', method: 'none', confidence: 'none'}, gameModeAmbiguous: false, outcome: 'open', closeReason: null,
+    recordingCompleteness: 'unknown', startedUtcMs: 1_791_676_800_000, endedUtcMs: null, observedDistanceM: {available: true, value: 0}, fuelUsedL: NO,
+    job: {source: 'event', sourceCity: {available: true, value: ''}, sourceCompany: NO, destinationCity: NO, destinationCompany: NO, cargo: NO,
+      plannedDistance: {available: true, value: 0, unit: 'm'}, expectedIncome: {available: true, value: {raw: '18446744073709551615', sdkType: 'u64', currency: {status: 'unknown'}}}}};
+  const INTERVAL = {id: '1', kind: 'discontinuity', annotation: true, cause: 'truck-change', startUtcMs: null, endUtcMs: null, startMonotonicNs: null, endMonotonicNs: null,
+    sourceClockId: null, firstEventSeq: null, lastEventSeq: null, detail: {cause: 'truck-change', annotation: true, atEventSeq: '2'}};
+  const WINDOW = {known: true, pluginSessionId: P1, fromEventSeq: '1', throughEventSeq: null, end: 'open'};
+  const configured = JSON.parse(readFileSync(path.resolve('tests/fixtures/protocol-v1/event-job-configured.json'), 'utf8')) as {data: {occurred: unknown; record: unknown}};
+  const EVENT = {eventSeq: '1', type: 'job.configured', occurred: configured.data.occurred, record: configured.data.record, attribution: null};
+  const PAGE = {database: DATABASE, trips: [LIST_ITEM], nextCursor: null};
+  const EVENTS = {database: DATABASE, window: WINDOW, events: [EVENT, {...EVENT, eventSeq: '2', attribution: {kind: 'ambiguous', tripUuid: null}}], nextCursor: null};
+  const INTERVALS = {database: DATABASE, intervals: [INTERVAL], total: 1, nextCursor: null};
+  const DETAIL = {database: DATABASE, trip: {...LIST_ITEM, pluginSessionId: P1, openedBy: 'event', openedEventSeq: '1', outcomeEventSeq: null, closedBy: null},
+    job: {source: 'event', eventSeq: '1', checkpointNextEventSeq: null, values: job()}, truck: {eventSeq: '2', values: truck()}, trailers: {items: [{eventSeq: '3', values: trailer(0)}], total: 1},
+    outcomeDetails: null,
+    money: {incomplete: false, totals: [{category: 'fine', sdkType: 's64', currency: {status: 'unknown'}, raw: '-18446744073709551616', count: 2}],
+      unavailable: [{category: 'toll', reason: 'invalid', count: 1}]},
+    window: WINDOW, intervals: {items: [INTERVAL], total: 1, nextCursor: null}, samples: {count: 0, firstUtcMs: null, lastUtcMs: null},
+    exportBounds: {committedThroughEventSeq: '3', lastSampleId: null, lastIntervalId: '1'}};
+  type Call = (client: StorageClient) => Promise<JournalResult<unknown>>;
+  const CALLS: Record<'trips' | 'trip' | 'events' | 'intervals', Call> = {
+    trips: client => client.journalTrips(), trip: client => client.journalTrip(TRIP),
+    events: client => client.journalEvents(TRIP, {limit: 100}), intervals: client => client.journalIntervals(TRIP, {limit: 100})
+  };
+  const VALID = {trips: PAGE, trip: DETAIL, events: EVENTS, intervals: INTERVALS};
+  const changed = <T>(value: T, change: (copy: T) => void): T => { const copy = structuredClone(value); change(copy); return copy; };
+  const request = (command: Record<string, unknown>) => ({type: 'storage.request', id: 1, command});
+
+  it('copies only the listed query and page fields, and sends no query when none is given', () => {
+    const f = fixture();
+    void f.client.journalTrips({cursor: '5', game: 'ats', outcome: 'open', completeness: 'partial', limit: 51} as Parameters<StorageClient['journalTrips']>[0]);
+    expect(f.sent[0].command).toEqual({name: 'journalTrips', query: {cursor: '5', game: 'ats', outcome: 'open', completeness: 'partial'}});
+    f.ok(1, PAGE);
+    void f.client.journalTrips();
+    expect(f.sent[1].command).toEqual({name: 'journalTrips'});
+    expect(Object.hasOwn(f.sent[1].command, 'query')).toBe(false);
+    f.ok(2, PAGE);
+    void f.client.journalEvents(TRIP, {limit: 500, cursor: '9', testHooks: {}} as Parameters<StorageClient['journalEvents']>[1]);
+    expect(f.sent[2].command).toEqual({name: 'journalEvents', tripUuid: TRIP, page: {limit: 500, cursor: '9'}});
+    f.ok(3, EVENTS);
+    void f.client.journalIntervals(TRIP, {limit: 100, after: '1'} as Parameters<StorageClient['journalIntervals']>[1]);
+    expect(f.sent[3].command).toEqual({name: 'journalIntervals', tripUuid: TRIP, page: {limit: 100, cursor: undefined}});
+    for (const sent of f.sent) expect(parseRequest(sent).ok).toBe(true);
+  });
+  it('forwards a page that is not an object as given, so the worker parser refuses it', () => {
+    const f = fixture();
+    expect(() => f.client.journalEvents(TRIP, null as unknown as {limit: number})).not.toThrow();
+    expect(f.sent[0].command).toEqual({name: 'journalEvents', tripUuid: TRIP, page: null});
+    expect(parseRequest(f.sent[0])).toEqual({ok: false, id: 1});
+  });
+  it.each([
+    ['journalTrips without a query', {name: 'journalTrips'}, true],
+    ['journalTrips with every filter', {name: 'journalTrips', query: {cursor: '9223372036854775807', game: 'ets2', outcome: 'none', completeness: 'complete'}}, true],
+    ['journalTrips with undefined fields', {name: 'journalTrips', query: {cursor: undefined, game: undefined}}, true],
+    ['journalTrips with a page size', {name: 'journalTrips', query: {limit: 50}}, false],
+    ['journalTrips with cursor 0', {name: 'journalTrips', query: {cursor: '0'}}, false],
+    ['journalTrips with a cursor beyond 2^63 - 1', {name: 'journalTrips', query: {cursor: '9223372036854775808'}}, false],
+    ['journalTrips with an unknown completeness', {name: 'journalTrips', query: {completeness: 'full'}}, false],
+    ['journalTrips with an extra field', {name: 'journalTrips', query: {}, testHooks: {}}, false],
+    ['journalTrip', {name: 'journalTrip', tripUuid: TRIP}, true],
+    ['journalTrip with an upper-case id', {name: 'journalTrip', tripUuid: TRIP.toUpperCase()}, false],
+    ['journalEvents of 100', {name: 'journalEvents', tripUuid: TRIP, page: {limit: 100}}, true],
+    ['journalEvents of 500 after the last eventSeq', {name: 'journalEvents', tripUuid: TRIP, page: {limit: 500, cursor: '18446744073709551614'}}, true],
+    ['journalEvents of 51', {name: 'journalEvents', tripUuid: TRIP, page: {limit: 51}}, false],
+    ['journalEvents of 300', {name: 'journalEvents', tripUuid: TRIP, page: {limit: 300}}, false],
+    ['journalEvents beyond the last eventSeq', {name: 'journalEvents', tripUuid: TRIP, page: {limit: 100, cursor: '18446744073709551615'}}, false],
+    ['journalEvents without a page', {name: 'journalEvents', tripUuid: TRIP}, false],
+    ['journalIntervals of 500', {name: 'journalIntervals', tripUuid: TRIP, page: {limit: 500, cursor: '1'}}, true],
+    ['journalIntervals of 3,600', {name: 'journalIntervals', tripUuid: TRIP, page: {limit: 3_600}}, false],
+    ['journalIntervals with a text limit', {name: 'journalIntervals', tripUuid: TRIP, page: {limit: '100'}}, false]
+  ])('checks %s strictly', (_name, command, accepted) => {
+    expect(parseRequest(request(command)).ok).toBe(accepted);
+  });
+  it.each(Object.keys(CALLS) as (keyof typeof CALLS)[])('accepts a well-formed %s answer', async name => {
+    const f = fixture();
+    const read = CALLS[name](f.client);
+    f.ok(1, VALID[name]);
+    await expect(read).resolves.toEqual({ok: true, value: VALID[name]});
+    expect(f.client.state).toBe('running');
+  });
+  it('accepts a detail with the latest ten of twelve trailer configurations', async () => {
+    const f = fixture();
+    const detail = changed(DETAIL, p => { p.trailers = {items: Array(10).fill(p.trailers.items[0]) as typeof p.trailers.items, total: 12}; });
+    const read = f.client.journalTrip(TRIP);
+    f.ok(1, detail);
+    await expect(read).resolves.toEqual({ok: true, value: detail});
+  });
+  const COMMANDS = {trips: 'journalTrips', trip: 'journalTrip', events: 'journalEvents', intervals: 'journalIntervals'} as const;
+  it.each<[string, keyof typeof CALLS, unknown]>([
+    ['51 trips on a page', 'trips', changed(PAGE, p => { p.trips = Array<typeof LIST_ITEM>(51).fill(LIST_ITEM); })],
+    ['an unknown database purpose', 'trips', changed(PAGE, p => { p.database.purpose = 'game'; })],
+    ['a cursor of 0', 'trips', changed(PAGE, p => { (p as {nextCursor: unknown}).nextCursor = '0'; })],
+    ['an available distance without a value', 'trips', changed(PAGE, p => { (p.trips[0] as {observedDistanceM: unknown}).observedDistanceM = {available: true}; })],
+    ['a negative distance', 'trips', changed(PAGE, p => { p.trips[0].observedDistanceM = {available: true, value: -1}; })],
+    ['an unknown availability reason', 'trips', changed(PAGE, p => { (p.trips[0] as {fuelUsedL: unknown}).fuelUsedL = {available: false, reason: 'zero'}; })],
+    ['money as a number', 'trips', changed(PAGE, p => { (p.trips[0].job as {expectedIncome: unknown}).expectedIncome = {available: true, value: {raw: 5, sdkType: 'u64', currency: {status: 'unknown'}}}; })],
+    ['an open trip with a close reason', 'trips', changed(PAGE, p => { (p.trips[0] as {closeReason: unknown}).closeReason = 'gap'; })],
+    ['an extra field', 'trips', changed(PAGE, p => { (p.trips[0] as Record<string, unknown>).processId = 4242; })],
+    ['an interval flag that disagrees with its detail', 'intervals', changed(INTERVALS, p => { p.intervals[0].annotation = false; })],
+    ['an interval total below its page', 'trip', changed(DETAIL, p => { p.intervals.total = 0; })],
+    ['an event whose type differs from its record', 'events', changed(EVENTS, p => { p.events[0].type = 'job.cleared'; })],
+    ['an event occurrence with an invalid clock', 'events', changed(EVENTS, p => { (p.events[0].occurred as {gameTime: {clockId: string}}).gameTime.clockId = 'clock'; })],
+    ['a free-driving event with a trip', 'events', changed(EVENTS, p => { (p.events[1] as {attribution: unknown}).attribution = {kind: 'free-driving', tripUuid: TRIP}; })],
+    ['501 events', 'events', changed(EVENTS, p => { p.events = Array<typeof EVENT>(501).fill(EVENT); })],
+    ['an open window with an end', 'events', changed(EVENTS, p => { (p.window as {throughEventSeq: unknown}).throughEventSeq = '9'; })],
+    ['a window of another session', 'trip', changed(DETAIL, p => { p.window = {...WINDOW, pluginSessionId: '10000000-0000-4000-8000-000000000002'}; })],
+    ['job values outside the protocol', 'trip', changed(DETAIL, p => { (p.job.values as unknown as {plannedDistance: unknown}).plannedDistance = {available: true, value: 1_500, unit: 'm'}; })],
+    ['incomplete money with totals', 'trip', changed(DETAIL, p => { p.money.incomplete = true; })],
+    ['a money total that is not an integer', 'trip', changed(DETAIL, p => { p.money.totals[0].raw = '1.5'; })],
+    ['a sample label without samples', 'trip', changed(DETAIL, p => { (p.samples as {firstUtcMs: unknown}).firstUtcMs = 1; })],
+    ['export bounds that disagree with the intervals', 'trip', changed(DETAIL, p => { (p.exportBounds as {lastIntervalId: unknown}).lastIntervalId = null; })],
+    ['an event-opened trip without its opening event', 'trip', changed(DETAIL, p => { (p.trip as {openedEventSeq: unknown}).openedEventSeq = null; })],
+    ['a checkpoint-opened trip with an opening event', 'trip', changed(DETAIL, p => { p.trip.openedBy = 'checkpoint'; })],
+    ['a missing value', 'trip', undefined],
+    // Review pass 1: lists bounded like the storage reads, and pages tied to the requested limit.
+    ['eleven trailer configurations', 'trip', changed(DETAIL, p => { p.trailers = {items: Array(11).fill(p.trailers.items[0]) as typeof p.trailers.items, total: 11}; })],
+    ['fewer trailer configurations than the total allows', 'trip', changed(DETAIL, p => { p.trailers.total = 5; })],
+    ['101 events for a page of 100', 'events', changed(EVENTS, p => { p.events = Array<typeof EVENT>(101).fill(EVENT); })],
+    ['a full page of 100 events without a cursor', 'events', changed(EVENTS, p => { p.events = Array<typeof EVENT>(100).fill(EVENT); })],
+    ['a cursor on a short page', 'trips', changed(PAGE, p => { (p as {nextCursor: unknown}).nextCursor = '5'; })],
+    ['101 intervals for a page of 100', 'intervals', changed(INTERVALS, p => { p.intervals = Array<typeof INTERVAL>(101).fill(INTERVAL); p.total = 101; })]
+  ])('refuses a journal answer with %s for that read alone, and the client keeps serving (review pass 1)', async (_name, name, value) => {
+    const refusals: unknown[] = [];
+    const f = fixture({onJournalAnswerInvalid: facts => refusals.push(facts)});
+    const read = CALLS[name](f.client);
+    f.ok(1, value);
+    await expect(read).resolves.toEqual({ok: false, error: {code: 'JOURNAL_ANSWER_INVALID', retryable: false,
+      message: 'The storage worker returned a journal page that does not match the journal contract.'}});
+    expect(refusals).toEqual([{command: COMMANDS[name]}]);
+    expect(f.client.state).toBe('running');
+    expect(f.failures).toEqual([]);
+    expect(f.handle.terminate).not.toHaveBeenCalled();
+    // The recorder's next command is sent and answered as usual.
+    const next = f.client.commitEvent({message: {}});
+    expect(f.sent.map(sent => sent.command.name)).toEqual([COMMANDS[name], 'commitEvent']);
+    f.ok(2, COMMITTED);
+    await expect(next).resolves.toEqual({ok: true, value: COMMITTED});
+  });
+  it('resolves the read and sends the next command even when the report callback throws (review pass 2)', async () => {
+    const f = fixture({onJournalAnswerInvalid: () => { throw new Error('the log sink is closing'); }});
+    const read = f.client.journalTrips();
+    const next = f.client.commitEvent({message: {}});
+    // The worker answers the journal read with a page that breaks the contract; the throw must not escape the listener.
+    expect(() => f.ok(1, changed(PAGE, p => { p.database.purpose = 'game'; }))).not.toThrow();
+    await expect(read).resolves.toEqual({ok: false, error: {code: 'JOURNAL_ANSWER_INVALID', retryable: false,
+      message: 'The storage worker returned a journal page that does not match the journal contract.'}});
+    expect(f.sent.map(sent => sent.command.name)).toEqual(['journalTrips', 'commitEvent']);
+    f.ok(2, COMMITTED);
+    await expect(next).resolves.toEqual({ok: true, value: COMMITTED});
+    expect(f.client.state).toBe('running');
+  });
+  it.each<[string, (f: ReturnType<typeof fixture>) => void]>([
+    ['a success without a value', f => f.raw({type: 'storage.response', id: 1, result: {ok: true}})],
+    ['an error with an unknown code', f => f.reply(1, {ok: false, error: {code: 'JOURNAL_ANSWER_INVALID', retryable: false, message: 'x'}} as unknown as Result<unknown>)],
+    ['an answer for another id', f => f.ok(2, PAGE)],
+    ['a frame of another type', f => f.raw({type: 'storage.request', id: 1, result: {ok: true, value: PAGE}})]
+  ])('still fails the client closed on a malformed journal frame: %s', async (_name, answer) => {
+    const f = fixture();
+    const read = f.client.journalTrips();
+    answer(f);
+    await expect(read).resolves.toEqual(error('WORKER_FAILED'));
+    expect(f.client.state).toBe('failed');
+  });
+  it('still fails the client closed on an invalid answer to a recorder command', async () => {
+    const f = fixture({onJournalAnswerInvalid: () => { throw new Error('not a journal command'); }});
+    const commit = f.client.commitEvent({message: {}});
+    f.ok(1, {status: 'committed', committedThroughEventSeq: '01'});
+    await expect(commit).resolves.toEqual(error('WORKER_FAILED'));
+    expect(f.client.state).toBe('failed');
   });
 });
