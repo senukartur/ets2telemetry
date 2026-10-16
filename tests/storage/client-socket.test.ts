@@ -49,7 +49,8 @@ describe('recording harness ClientSocket', () => {
   it('with `beforeEventSeq`, holds the gate event itself and everything after it until the gate opens', async () => {
     let open!: () => void;
     const h = harness({beforeEventSeq: '2', until: () => new Promise<void>(r => { open = r; })});
-    // The gate frame arrives in the same chunk as the frames before it; the end follows while the gate is closed.
+    // The gate frame starts in the same chunk as the frames before it and completes in the next; the end follows while
+    // the gate is closed.
     h.real.emit('data', Buffer.concat([welcome, checkpoint, event1, event2.subarray(0, 6)]));
     h.real.emit('data', event2.subarray(6)); h.real.emit('end');
     expect(h.bytes().equals(Buffer.concat([welcome, checkpoint, event1]))).toBe(true);

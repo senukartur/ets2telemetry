@@ -170,7 +170,9 @@ describe('ET-015c recording status through the production wiring', () => {
     const first: string[] = [], workerA = storageWorker({hold: {eventSeq: '1'}}), control = workerA.control as MessagePort, failures: unknown[] = [];
     const held = guarded(once(control, 'message'), 'the held commit of eventSeq 1', HANG_GUARD_MS);
     let recorded!: () => void;
-    const recording = new Promise<void>(resolve => { recorded = resolve; });
+    // Guarded from the start, like `held`, so that its hang guard ends before the wait for the BACKLOG_FULL close below.
+    const recording = guarded(new Promise<void>(resolve => { recorded = resolve; }), 'the recording status before eventSeq 5', HANG_GUARD_MS);
+    recording.catch(() => undefined);
     let gated = false;
     // The first connection's eventSeq 5 and everything after it reach the ingestion only once (1) the worker holds the
     // commit of eventSeq 1, so 2-4 queue behind a commit in flight and 5 exceeds the bound (S4 (c), hosted run
@@ -179,7 +181,7 @@ describe('ET-015c recording status through the production wiring', () => {
     // the same macrotask, as on a slow host that has read both already, it correctly sends only `retrying` (hosted run
     // 38949384603). Holding 5 back until `recording` was sent makes that step observable on every host.
     const gatedConnect = {connect: (endpoint: string) => {
-      const gate = gated ? undefined : {beforeEventSeq: '5', until: () => Promise.all([held, guarded(recording, 'the recording status before eventSeq 5', HANG_GUARD_MS)])};
+      const gate = gated ? undefined : {beforeEventSeq: '5', until: () => Promise.all([held, recording])};
       gated = true;
       return new ClientSocket(net.connect(endpoint), gate, error => failures.push(error)) as unknown as TelemetrySocket;
     }};
@@ -192,7 +194,9 @@ describe('ET-015c recording status through the production wiring', () => {
     try {
       await startDurable(a.runtime, server.endpoint);
       expect(await held).toEqual([{type: 'held', eventSeq: '1'}]);
-      await until(() => stoppedA !== undefined, 'the BACKLOG_FULL close', HANG_GUARD_MS);
+      // A gate that failed (its recording guard) keeps eventSeq 5 back, so the wait ends on it and reports that cause.
+      await until(() => stoppedA !== undefined || failures.length > 0, 'the BACKLOG_FULL close', HANG_GUARD_MS);
+      expect(failures).toEqual([]);
       await guarded(stoppedA!, 'the stop of the first service', HANG_GUARD_MS);
       expect(sequence(a.statuses)).toEqual([...STARTED, 'recording', 'retrying BACKLOG_FULL']);
       expect(a.statuses.at(-1)).toEqual(status('retrying', {}, IDLE, 'BACKLOG_FULL'));
