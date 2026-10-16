@@ -85,7 +85,7 @@ try {
   assert.equal(result.playwright, '1.64.0');
   if (config.scenario === 'telemetry' || config.scenario === 'overlay' || config.scenario === 'lifecycle' || config.scenario === 'recording') telemetrySource = await startLiveSmokeSource(config.checkout);
   if (config.scenario === 'telemetry') telemetrySourceV1 = await startLiveSmokeSourceV1(config.checkout);
-  if (config.scenario === 'recording') recordingSource = await startRecordingSource(config.checkout, config.output);
+  if (config.scenario === 'recording') recordingSource = await startRecordingSource(config);
   // ET-011b: the lifecycle journey starts from a deliberately invalid settings file in the isolated LOCALAPPDATA.
   if (config.scenario === 'lifecycle') await seedLifecycleSettings(config);
   phase('launch-requested');
@@ -416,12 +416,14 @@ finally {
       recording.restartServiceEvents = await diagnosticEvents(path.join(config.diagnosticsRestart, 'service'));
       recording.restartLauncherExit = result.launcherExit;
       await verifyRecordingRun({config, record: recording, recording: recordingSource, mainEvents: result.mainEvents, serviceEvents: result.serviceEvents,
-        restartMainEvents: recording.restartMainEvents, restartServiceEvents: recording.restartServiceEvents});
+        restartMainEvents: recording.restartMainEvents, restartServiceEvents: recording.restartServiceEvents, simulatorWaitMs: result.failure ? 1000 : 5000});
     } else result.history.file = await verifyHistoryFile();
   } catch (error) {result.postconditionFailure = failure(error);}
   // A failed run still ends the simulator it started; the Job owns it otherwise.
   if (recordingSource && !result.recording?.simulator) {
-    try {result.recordingSourceStop = await recordingSource.stop();} catch (error) {result.recordingSourceFailure = failure(error);}
+    // A short bound: a simulator still waiting for a scripted connection is terminated, so result.json is written inside the Job.
+    try {result.recordingProxy = recordingSource.statistics(); result.recordingSourceStop = await recordingSource.stop({waitMs: 1000});}
+    catch (error) {result.recordingSourceFailure = failure(error);}
   }
   result.passed = !result.failure && !result.closeFailure && !result.traceFailure && !result.postconditionFailure && !result.sourceCloseFailure && !result.sourceV1CloseFailure &&
     !result.recordingSourceFailure;

@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
-import net from 'node:net';
 import {spawn} from 'node:child_process';
-import {createHash, randomUUID} from 'node:crypto';
+import {createHash} from 'node:crypto';
 import {existsSync} from 'node:fs';
 import {copyFile, mkdir, open, readFile, writeFile} from 'node:fs/promises';
 import {createRequire} from 'node:module';
@@ -9,19 +8,21 @@ import path from 'node:path';
 import {performance} from 'node:perf_hooks';
 import {waitForCurrentTelemetry} from './renderer-observation.mjs';
 import {closeDashboard, lifecycleState, until, waitForExit} from './lifecycle-observation.mjs';
+import {startRecordingProxy} from './recording-proxy.mjs';
 
 // ET-015a PR-4: the recording runtime journey. The service records the synthetic protocol v1 source into
 // `<isolated LOCALAPPDATA>\ETS2Telemetry\synthetic\smoke.sqlite` (ETS2TELEMETRY_RECORDING=synthetic:smoke) while the
 // reactive simulator serves normal-delivery with a journey transport (JOURNEY_TRANSPORT). A recording proxy between the
-// service and the simulator forwards only durable hellos, one admitted connection at a time, and applies the scripted
-// ACK policy: connection 1 delivers four ACKs and loses the fifth, so the restarted service receives a redelivery. Every
+// service and the simulator (recording-proxy.mjs) forwards only durable hellos, one admitted connection at a time and
+// none held longer than 2 s, and applies the scripted ACK policy: connection 1 delivers four ACKs and loses the fifth,
+// so the restarted service receives a redelivery. The journey admits each connection itself, the first only after the
+// dashboard shows current data. Every
 // ACK it sees is written by the service only after the storage commit (E8), so ACKs are the in-run commit evidence; the
 // rows are compared after exit with the hand-written tests/fixtures/recording/normal-delivery-runtime-journey.rows.expected.json.
 
 export const RECORDING_TARGET = 'synthetic:smoke';
 export const RECORDING_SCENARIO = 'normal-delivery-runtime-journey';
 const READY_TEXT = 'Telemetry service ready; isolated storage probe verified';
-const CLIENT_FRAME_BYTES = 4096, SERVER_FRAME_BYTES = 65536;
 const PIPE_PATTERN_V1 = /^\\\\\.\\pipe\\ETS2Telemetry-SYNTHETIC-TEST-v1-[1-9][0-9]*-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const durable = Object.freeze({durable: true, commit: 'each', ack: 'each'});
 /**
@@ -50,27 +51,13 @@ const seededId = (seed, label) => uuidOf(createHash('sha256').update(`simulator-
 const tripLabels = session => new Map(Array.from({length: 20}, (_, index) =>
   [uuidOf(createHash('sha256').update(`ets2telemetry-trip-v1:${session}:${index + 1}`, 'utf8').digest('hex')), `trip@${index + 1}`]));
 
-/** Splits length-prefixed frames; `onFrame` gets each whole frame with its decoded JSON payload. */
-function frameReader(limit, onFrame) {
-  let input = Buffer.alloc(0);
-  return bytes => {
-    input = Buffer.concat([input, bytes]);
-    while (input.length >= 4) {
-      const length = input.readUInt32LE(0);
-      if (length < 1 || length > limit) throw new Error('Invalid frame length');
-      if (input.length < 4 + length) return;
-      const frame = input.subarray(0, 4 + length);
-      input = input.subarray(4 + length);
-      onFrame(frame, JSON.parse(new TextDecoder('utf-8', {fatal: true}).decode(frame.subarray(4))));
-    }
-  };
-}
-
 /**
- * Starts the reactive simulator (`serve-v1`, the built CLI) on the journey scenario and the recording proxy in front of
- * it. The proxy's endpoint is what the service connects to (ETS2TELEMETRY_SOURCE_PIPE_V1).
+ * Starts the reactive simulator (`serve-v1`, the built CLI) on the journey scenario and the recording proxy
+ * (recording-proxy.mjs) in front of it. The proxy's endpoint is what the service connects to (ETS2TELEMETRY_SOURCE_PIPE_V1).
+ * The simulator child gets the run's isolated TEMP, APPDATA and LOCALAPPDATA, like every other process of the run.
  */
-export async function startRecordingSource(checkout, output) {
+export async function startRecordingSource(config) {
+  const {checkout, output} = config;
   const base = JSON.parse(await readFile(path.join(checkout, 'tests/fixtures/simulator-v1/normal-delivery.json'), 'utf8'));
   const scenario = {...base, id: RECORDING_SCENARIO,
     purpose: 'Runtime recording journey: normal-delivery through a killed and restarted telemetry service, close-to-tray, a tray exit and an application restart.',
@@ -78,7 +65,8 @@ export async function startRecordingSource(checkout, output) {
   const scenarioFile = path.join(output, 'recording-scenario.json');
   await writeFile(scenarioFile, JSON.stringify(scenario, null, 2) + '\n');
   const simulator = spawn(process.execPath, [path.join(checkout, 'tools/telemetry-simulator/dist/cli.cjs'), 'serve-v1', scenarioFile],
-    {cwd: checkout, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true});
+    {cwd: checkout, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
+      env: {...process.env, TEMP: config.temp, TMP: config.temp, APPDATA: config.appdata, LOCALAPPDATA: config.localappdata}});
   const lines = [], stderr = [];
   let partial = '';
   const exited = new Promise(resolve => simulator.once('exit', (code, signal) => resolve({code, signal})));
@@ -91,86 +79,34 @@ export async function startRecordingSource(checkout, output) {
     });
     void exited.then(() => reject(new Error(`Simulator exited before serving: ${stderr.join('').slice(0, 512)}`)));
   });
-  const started = JSON.parse(await Promise.race([announced, new Promise((_, reject) => setTimeout(() => reject(new Error('SIMULATOR_NOT_SERVING_WITHIN_10_SECONDS')), 10000))]));
-  assert.deepEqual({origin: started.origin, mode: started.mode, history: started.history}, {origin: 'synthetic', mode: 'reactive', history: false});
-  assert.match(started.endpoint, PIPE_PATTERN_V1);
-
-  const endpoint = `\\\\.\\pipe\\ETS2Telemetry-SYNTHETIC-TEST-v1-${process.pid}-${randomUUID()}`;
-  const connections = [], sockets = new Set();
-  // The first connection is admitted from the start; the journey admits each later one (`admit`).
-  let admissions = 1, attempts = 0, refusedLiveOnly = 0, stopped = false, held, active;
-  // Starts the held connection once it is admitted and no other connection is open (the simulator serves one at a time).
-  const startHeld = () => {
-    if (!held || active || admissions < 1 || stopped) return;
-    const {socket, hello} = held; held = undefined;
-    if (socket.destroyed) return;
-    admissions--;
-    const index = connections.length;
-    const record = {connection: index + 1, checkpointAckedThrough: null, events: [], gaps: 0, end: null, acks: [], forwardedAcks: [], withheldAcks: [], closedBy: null};
-    connections.push(record);
-    const upstream = active = net.connect(started.endpoint);
-    sockets.add(upstream);
-    const finish = by => {record.closedBy ??= by; if (active === upstream) active = undefined; socket.destroy(); upstream.destroy(); startHeld();};
-    const observe = frameReader(SERVER_FRAME_BYTES, (_frame, message) => {
-      if (message.kind === 'checkpoint') record.checkpointAckedThrough = key(message.data.status.delivery.ackedThroughEventSeq);
-      else if (message.kind === 'event') record.events.push({eventSeq: key(message.data.eventSeq), redelivered: message.data.redelivered});
-      else if (message.kind === 'gap') record.gaps++;
-      else if (message.kind === 'end') record.end = message.data.reason;
-    });
-    upstream.on('connect', () => upstream.write(hello));
-    // Server bytes pass unchanged; a copy is decoded for the record.
-    upstream.on('data', bytes => {try {observe(bytes);} catch {record.decodeFailure = true;} socket.write(bytes);});
-    upstream.on('end', () => {record.closedBy ??= 'server'; socket.end();});
-    upstream.on('close', () => finish('server'));
-    upstream.on('error', () => undefined);
-    socket.removeAllListeners('data');
-    const forward = frameReader(CLIENT_FRAME_BYTES, (frame, message) => {
-      if (message.kind !== 'ack') {upstream.write(frame); return;}
-      const through = key(message.data.throughEventSeq);
-      record.acks.push(through);
-      if (record.forwardedAcks.length < DELIVERED_ACKS[index]) {record.forwardedAcks.push(through); upstream.write(frame);}
-      else record.withheldAcks.push(through);
-    });
-    socket.on('data', bytes => {try {forward(bytes);} catch {record.decodeFailure = true; finish('proxy');}});
-    socket.on('close', () => finish('client'));
-  };
-  const server = net.createServer(socket => {
-    sockets.add(socket); socket.on('close', () => sockets.delete(socket)); socket.on('error', () => undefined);
-    if (stopped) {socket.destroy(); return;}
-    attempts++;
-    // The hello decides: a live-only hello (storage not open yet) is refused, so the simulator only ever serves durable
-    // clients as its script expects; a durable one waits for its admission inside the client's 5 s handshake deadline.
-    const read = frameReader(CLIENT_FRAME_BYTES, (frame, message) => {
-      if (message.kind !== 'hello') {socket.destroy(); return;}
-      if (message.data.durableEvents !== true) {refusedLiveOnly++; socket.destroy(); return;}
-      if (held) held.socket.destroy();
-      held = {socket, hello: frame};
-      socket.once('close', () => {if (held?.socket === socket) held = undefined;});
-      startHeld();
-    });
-    socket.on('data', bytes => {try {read(bytes);} catch {socket.destroy();}});
-  });
-  await new Promise((resolve, reject) => {server.once('error', reject); server.listen(endpoint, resolve);});
-  const statistics = () => ({attempts, refusedLiveOnly, admissionsPending: admissions, held: Boolean(held), connections: structuredClone(connections)});
+  // After a timeout the child is terminated and `announced` rejects later; that rejection is expected and handled here.
+  announced.catch(() => undefined);
+  let announceTimer, started;
+  try {
+    started = JSON.parse(await Promise.race([announced,
+      new Promise((_, reject) => {announceTimer = setTimeout(() => reject(new Error('SIMULATOR_NOT_SERVING_WITHIN_10_SECONDS')), 10000);})]));
+    assert.deepEqual({origin: started.origin, mode: started.mode, history: started.history}, {origin: 'synthetic', mode: 'reactive', history: false});
+    assert.match(started.endpoint, PIPE_PATTERN_V1);
+  } catch (error) {simulator.kill(); throw error;} finally {clearTimeout(announceTimer);}
+  let proxy;
+  try {proxy = await startRecordingProxy({upstream: started.endpoint, deliveredAcks: DELIVERED_ACKS});} catch (error) {simulator.kill(); throw error;}
+  const statistics = () => proxy.statistics();
   return {
-    endpoint, scenario: RECORDING_SCENARIO, seed: scenario.seed, simulatorEndpoint: started.endpoint,
-    /** Lets the next durable connection through. */
-    admit: () => {admissions++; startHeld();},
+    endpoint: proxy.endpoint, scenario: RECORDING_SCENARIO, seed: scenario.seed, simulatorEndpoint: started.endpoint,
+    /** Lets the next durable connection through; nothing is admitted before the first call. */
+    admit: () => proxy.admit(),
     statistics,
     /** Polls the proxy's record until `accept` holds; a liveness bound only. */
     waitFor: (accept, message, timeoutMs) => until(async () => statistics(), accept, message, timeoutMs),
     /**
-     * Closes the proxy, then waits for the simulator to finish its script and report. A simulator that does not end in
-     * time is terminated and the run has no report.
+     * Closes the proxy, then waits up to `waitMs` for the simulator to finish its script and report. A simulator that does
+     * not end in time is terminated and the run has no report. A failed run passes a short bound, so the driver still
+     * writes its result inside the Job's 60 s.
      */
-    stop: async () => {
-      if (!stopped) {
-        stopped = true; held?.socket.destroy();
-        for (const socket of sockets) socket.destroy();
-        await new Promise(resolve => server.close(resolve));
-      }
+    stop: async ({waitMs = 10000} = {}) => {
+      await proxy.stop();
       let timer;
-      const outcome = await Promise.race([exited, new Promise(resolve => {timer = setTimeout(() => resolve(null), 10000);})]);
+      const outcome = await Promise.race([exited, new Promise(resolve => {timer = setTimeout(() => resolve(null), waitMs);})]);
       clearTimeout(timer);
       if (!outcome) {simulator.kill(); return {exit: null, report: null, stderr: stderr.join('').slice(0, 2048)};}
       if (partial) {lines.push(partial); partial = '';}
@@ -205,6 +141,9 @@ export async function runRecordingSmoke({application, launcher, dashboard, recor
   assert.equal(initial.started, true); assert.equal(initial.tray, true); assert.equal(initial.serviceReady, true);
   assert.ok(Number.isSafeInteger(initial.servicePid) && initial.servicePid > 0, 'Service PID unavailable');
   record.servicePid = initial.servicePid;
+  // Connection 1 is admitted only now, with both windows up and current data shown, so the simulator's 1 s ACK waits
+  // (quiesce) do not overlap the application's own startup.
+  recording.admit();
 
   // 1. Commits become active: connection 1 commits events 1-5 (ACKs 1-4 reach the simulator, the ACK of 5 is lost) and
   // ends at its scripted disconnect; the service logs durable delivery `active`.
@@ -333,7 +272,7 @@ function rowsOf(raw, session) {
  * After both runs: the diagnostics of both runs, the simulator's report and the synthetic database, which must hold the
  * hand-written rows, while no history database was created and no WAL or shared-memory file is left.
  */
-export async function verifyRecordingRun({config, record, recording, mainEvents, serviceEvents, restartMainEvents, restartServiceEvents}) {
+export async function verifyRecordingRun({config, record, recording, mainEvents, serviceEvents, restartMainEvents, restartServiceEvents, simulatorWaitMs}) {
   // Run A: a terminated service and its replacement; run B: one service. Both exits are orderly.
   verifyServiceRecording(serviceEvents, [true, false]);
   assert.equal(mainEvents.filter(row => row.event === 'DIAGNOSTIC_SERVICE_EXIT_REQUEST').length, 1);
@@ -354,8 +293,12 @@ export async function verifyRecordingRun({config, record, recording, mainEvents,
   record.shutdownClean = true;
 
   // The simulator served all three connections durable, closed none for a protocol error and matched its replay.
-  const simulator = record.simulator = await recording.stop();
+  const simulator = record.simulator = await recording.stop({waitMs: simulatorWaitMs});
   record.proxy = recording.statistics();
+  // Recorded, never asserted, so hosted runs show their margins: live-only hellos refused while storage was still opening
+  // (the R10 window this journey does not exercise), holds that expired before admission, and event-to-ACK latencies.
+  record.refusedLiveOnly = record.proxy.refusedLiveOnly; record.expiredHolds = record.proxy.expiredHolds;
+  record.maxAckLatencyMs = Math.max(0, ...record.proxy.connections.flatMap(c => c.ackLatencyMs.map(latency => latency.ms)));
   assert.deepEqual(simulator.exit, {code: 0, signal: null});
   const report = simulator.report;
   assert.equal(report?.scenario, RECORDING_SCENARIO); assert.equal(report.cancelled, false); assert.equal(report.history, false);
