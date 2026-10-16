@@ -271,10 +271,11 @@ function runApplication(profileError: unknown): void {
     try {port1.start(); child.postMessage({type: 'subscribe'}, [port2]);} catch (error) {port2.close(); lost(); log('MAIN_SUBSCRIPTION_FAILED', String(error));}
   }
   function createOverlay(): void {
-    // Created at the saved layout's nominal size times its saved scale, the strip as high as its saved sections need
-    // (ET-012c); the controller sets the actual bounds inside the game's client area. The scale is also the document's
-    // zoom factor (ET-012b decision M4); the overlay's own session keeps that zoom away from the dashboard, whose file://
-    // origin it would otherwise share.
+    // Created at the saved layout's size for its saved scale and sections: the strip as high as its sections need
+    // (ET-012c), the card, cluster and HUD at least their nominal size times the scale and taller when their sections
+    // need more rows (ET-012d). The controller sets the actual bounds inside the game's client area. The scale is also
+    // the document's zoom factor (ET-012b decision M4); the overlay's own session keeps that zoom away from the
+    // dashboard, whose file:// origin it would otherwise share.
     const settings = settingsStore.view(), layout = settings.overlay.layout, placement = settings.overlay.placements[layout];
     const size = overlayWindowSize(layout, placement.scale, settings.overlay.sections);
     const created = overlay = new BrowserWindow({width: size.width, height: size.height, show: false, frame: false,

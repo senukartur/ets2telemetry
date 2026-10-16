@@ -763,3 +763,27 @@ On October 16, 2026 the owner decided to fix the overlay strip's overflow first,
 **Invariant.** The overlay window geometry is a function only of the layout, placement, enabled sections, client rectangle and display topology. Every enabled strip section that the projection shows lies inside the window.
 
 No game, TruckersMP, display or performance claim follows from synthetic checks.
+
+## ET-012d overlay layout fit — October 16, 2026
+
+- **Problem.** With protocol v1 data (ET-010c), the Cluster's side panel was capped at 200 px and clipped game time. The Card and HUD would clip at 13 sections, and at 14 sections plus a tag.
+- **Decisions.** The owner decided on October 16, 2026 to fix the strip first. The coordinator decided to merge ET-010c and fix the remaining layouts here. Under the standing delegation the coordinator adopted the architect's decisions K1–K12 below; the owner did not review them individually.
+
+| # | Decision |
+| --- | --- |
+| K1 | One PR covering the Card, Cluster and Minimal HUD; the strip (ET-012c) is untouched |
+| K2 | Fixed-height rows and a linear reserve. A header or tag row is always reserved, plus one fixed row per enabled section. For the Cluster's side panel, the count is the enabled sections other than speed, gear and RPM, which the gauge shows |
+| K3 | Constants in CSS px at zoom 1 with border-box sizing:<br>• Card: 48 + 24 per section<br>• Cluster panel: 36 + 21 per panel section<br>• HUD: 18 + 24 per section |
+| K4 | Grow-only. The height is the larger of the scaled nominal height and the scaled reserve, and widths are unchanged. Every configuration whose reserve fits its nominal size at a given scale keeps its exact geometry at that scale |
+| K5 | A shared `surfaceHeightDip(content, border, scale) = ceil(content × scale + 2 × border × max(1, scale))`. It applies to every layout and gives the strip no numeric change |
+| K6 | Degradation is unchanged: a layout that does not fit hides as a whole, and edit mode reports `too-large` |
+| K7 | A pure `overlay-rows.ts` holds the row model. The Cluster gauge set is exported once from `overlay-sections.ts`, and a unit test cross-checks `renderer.css` |
+| K8 | The CSS gets fixed row heights with centred alignment and hidden overflow, and the Cluster panel's `max-height: 200px` is removed |
+| K9 | No controller or main logic change; sections changes already re-place the window after a durable save |
+| K10 | The telemetry smoke asserts Card, HUD and Cluster containment with v1 data in driver-sized windows that are tied to `overlayWindowSize`. The overlay smoke keeps the strip assertion |
+| K11 | The containment assertion fails when a shown section lies outside the window or a clipping ancestor, when a value is clipped by its row, or when the viewport is not the reserved size (+1 px rounding) |
+| K12 | No change to settings v3, preload/IPC, `OverlayPresentation`, protocol, fixtures, service, native code or the receipt; the REG-016 paths are unchanged |
+
+**Invariant.** The overlay window geometry is a function only of the layout, placement, enabled sections, client rectangle and display topology. Every enabled section that the projection shows lies inside the window, in every layout.
+
+No game, TruckersMP, display or performance claim follows from synthetic checks.

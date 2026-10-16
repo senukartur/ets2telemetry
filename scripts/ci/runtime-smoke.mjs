@@ -12,7 +12,10 @@ import {
   SYNTHETIC_V1_OVERLAY_STOPPED, SYNTHETIC_V1_OVERLAY_V0_STALE, SYNTHETIC_V1_OVERLAY_V1_STALE, SYNTHETIC_V1_STRIP_SECTIONS, SYNTHETIC_V1_VALUE_IDS,
   waitForCompleteLive, waitForCurrentTelemetry, waitForNotCurrentLive, waitForOverlayV1, waitForV1NotCurrentLive
 } from './renderer-observation.mjs';
-import {rendererPages, runOverlaySmoke, verifyStripLayout, waitForStripLayout, windowSecurity, verifyRendererStyles} from './overlay-observation.mjs';
+import {
+  LAYOUT_SMOKE_RESERVED_CSS, LAYOUT_SMOKE_WINDOWS, rendererPages, runOverlaySmoke, verifyLayoutContainment, verifyStripLayout, waitForLayoutContainment, waitForStripLayout, windowSecurity,
+  verifyRendererStyles
+} from './overlay-observation.mjs';
 import {runLifecycleSmoke, seedLifecycleSettings, verifyLifecycleRestart} from './lifecycle-observation.mjs';
 // These read-only globals are used only inside serialized Playwright browser callbacks.
 /* global document: readonly, getComputedStyle: readonly, innerHeight: readonly, innerWidth: readonly */
@@ -148,13 +151,48 @@ try {
       width: globalThis.innerWidth, height: globalThis.innerHeight, sections: globalThis.document.querySelectorAll('[data-testid^="overlay-section-"]').length}));
     // A short bound for the review-only layouts keeps missed waits well inside the Job's 60 s limit; the strip
     // restore keeps the usual 10 s. `sections` is null when the count could not be read, and is then not compared.
-    const renderedLayout = async (layout, width, sections, timeout) => {
+    // `height`, when given, is compared the same way as the width.
+    const renderedLayout = async (layout, width, sections, timeout, height = null) => {
       const handle = await overlay.waitForFunction(expected => {
         const root = globalThis.document.querySelector('[data-testid="overlay-root"]');
         return root?.getAttribute('data-layout') === expected.layout && Math.abs(globalThis.innerWidth - expected.width) <= 1 &&
+          (expected.height === null || Math.abs(globalThis.innerHeight - expected.height) <= 1) &&
           (expected.sections === null || globalThis.document.querySelectorAll('[data-testid^="overlay-section-"]').length === expected.sections);
-      }, {layout, width, sections}, {timeout});
+      }, {layout, width, height, sections}, {timeout});
       await handle.dispose();
+    };
+    // ET-012d (decisions K10 and K11): the card, HUD and cluster with every v1 section the pair shows. The saved sections
+    // are first set to exactly those twelve, so each window reserves no row for a hidden section (range and distance
+    // driven); without a game window the controller never places the overlay, so the hidden window is sized here
+    // (LAYOUT_SMOKE_WINDOWS for those sections at scale 1, tied to overlayWindowSize by a unit test). Each observation is
+    // stored before it is verified, so a failed receipt keeps it. The original sections and the strip are restored at
+    // the size the product created in every case; the first error, a failed assertion or a failed restore, fails the run.
+    const assertLayouts = async record => {
+      let base = null, sections = null, original = null, failed;
+      try {
+        base = await overlay.evaluate(() => ({width: globalThis.innerWidth, height: globalThis.innerHeight}));
+        sections = await overlay.evaluate(() => globalThis.document.querySelectorAll('[data-testid^="overlay-section-"]').length);
+        original = (await window.evaluate(() => globalThis.desktop.getAppState())).settings.overlay.sections;
+        const shown = Object.fromEntries(Object.keys(original).map(id => [id, SYNTHETIC_V1_STRIP_SECTIONS.includes(id)]));
+        record.sections = (await window.evaluate(value => globalThis.desktop.setOverlaySections(value), shown)).overlay.sections;
+        assert.deepEqual(record.sections, shown);
+        for (const layout of ['card', 'hud', 'cluster']) {
+          const size = LAYOUT_SMOKE_WINDOWS[layout];
+          const saved = await window.evaluate(value => globalThis.desktop.setOverlayLayout(value), layout);
+          assert.equal(saved.overlay.layout, layout);
+          (record.windows ??= {})[layout] = await resizeOverlay(size.width, size.height, 1);
+          await renderedLayout(layout, size.width, null, 10000, size.height);
+          verifyLayoutContainment(record[layout] = await waitForLayoutContainment(overlay, {layout, sections: SYNTHETIC_V1_STRIP_SECTIONS}), size,
+            LAYOUT_SMOKE_RESERVED_CSS[layout]);
+        }
+      } catch (error) {failed = error;}
+      try {
+        await window.evaluate(() => globalThis.desktop.setOverlayLayout('strip'));
+        if (original) assert.deepEqual((await window.evaluate(value => globalThis.desktop.setOverlaySections(value), original)).overlay.sections, original);
+        if (base) {await resizeOverlay(base.width, base.height, 1); await renderedLayout('strip', base.width, sections, 10000, base.height);}
+        record.restored = 'strip';
+      } catch (error) {failed ??= error;}
+      if (failed) throw failed;
     };
     const measureLayouts = async layouts => {
       const record = {};
@@ -195,14 +233,13 @@ try {
     // overlay window. This is an assertion; the overflow record below stays for review.
     result.telemetry.stripLayout = verifyStripLayout(await waitForStripLayout(overlay, {sections: SYNTHETIC_V1_STRIP_SECTIONS}));
     result.telemetry.overlayOverflow = await overlay.evaluate(overlayOverflow);
-    // Also for review only, recorded and never asserted (docs/validation/et-012a.md asked for it): the card, HUD and
-    // cluster layouts with every section filled. Without a game window the controller never places the overlay, so the
-    // hidden window is sized here to each layout's nominal size (overlay-geometry.ts) and restored to the strip size
-    // the product created afterwards. The strip is also measured at ET-012b's largest scale, 2: twice that size with a
-    // document zoom of 2 (2560 x 220 DIP for every section where the screen allows it).
+    // ET-012d: an assertion. Every shown card, HUD and cluster section lies inside its reserved window.
     // The layout saves are real settings writes in the isolated profile: a failed write logs SETTINGS_WRITE_FAILED,
     // which the strict diagnostic postcondition below rejects, so it fails the run as a product failure.
-    result.telemetry.overlayLayoutOverflow = await measureLayouts([['card', 300, 360], ['hud', 320, 320], ['cluster', 440, 220], ['strip', null, null, 2]]);
+    await assertLayouts(result.telemetry.layoutContainment = {});
+    // For review only, recorded and never asserted: the strip at ET-012b's largest scale, 2, twice the size the product
+    // created with a document zoom of 2 (2560 x 220 DIP for every section where the screen allows it), then restored.
+    result.telemetry.overlayLayoutOverflow = await measureLayouts([['strip', null, null, 2]]);
     // Hold the v0 source on the same connection until main's freshness expiry: every v0 card value must become not
     // current while the v1 rows stay current and the overlay keeps only dashes; then return after resume. The later
     // single-connection assertion proves the hold did not reconnect.

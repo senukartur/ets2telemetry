@@ -282,7 +282,7 @@ it('keeps v1 sections that were never shown absent without v1 data (fix round 1)
   }
 });
 // PR #73 advisory review: a v1-only section that was shown keeps an `unavailable` dash when its v1 carriage is lost while
-// the same v0 source continues (ET-012a L5), for example when main strips an invalid projection or the v1 origin stops
+// an update still carries a v0 observation (ET-012a L5), for example when main strips an invalid projection or the v1 origin stops
 // matching. An update without a v0 observation (a selection change, a service restart or a lost channel) clears it.
 const LOST_V1: OverlaySectionView[] = [
   {id: 'speed', state: 'value', text: '0.0 km/h'},

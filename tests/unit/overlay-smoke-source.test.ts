@@ -197,6 +197,194 @@ describe('ET-012c strip containment observation', () => {
   });
 });
 
+describe('ET-012d card, cluster and HUD containment observation', () => {
+  // Hand-derived from the shared v0 and v1 smoke fixtures (SYNTHETIC_V1_STRIP_SECTIONS): the twelve sections the
+  // telemetry smoke shows, in canonical order, which is also the cluster's DOM order (gauge, then panel).
+  const EXPECTED = ['speed', 'gear', 'rpm', 'fuel', 'sdk-consumption', 'cargo', 'origin', 'destination', 'distance-remaining', 'deadline',
+    'expected-income', 'game-time'];
+  // The windows and reserved CSS heights for those twelve sections at scale 1: card max(360, 48 + 24 × 12 = 336), cluster
+  // max(220, 36 + 21 × 9 = 225) and HUD max(320, 18 + 24 × 12 = 306).
+  const WINDOWS = {card: {width: 300, height: 360}, cluster: {width: 440, height: 225}, hud: {width: 320, height: 320}};
+  const RESERVED = {card: 336, cluster: 225, hud: 306};
+  type LayoutName = keyof typeof WINDOWS;
+  type Box = {left: number; top: number; width: number; height: number};
+  interface Containment {layout?: string; sections?: string[]; roots?: number; freshness?: string; viewport?: {innerWidth: number; innerHeight: number};
+    clip?: Box; item?: Record<string, Box>; value?: Record<string, Box>; truncated?: string[]}
+  const rect = ({left, top, width, height}: Box) => ({left, top, width, height, right: left + width, bottom: top + height});
+  /**
+   * A window of the layout's reserved size. Card and HUD sections sit in one clipping body that fills the window;
+   * cluster gauge sections sit in a 200 px gauge that does not clip, the panel sections in a clipping side panel. Rows
+   * are 18 high and 21 apart from y 28, each value 16 high one pixel below its row's top. `clip` moves the clipping
+   * container, `item` and `value` move single sections and values. The clipping container that holds the rows is the
+   * layout's surface, which the sections' `closest` finds, named as in renderer.css.
+   */
+  function containmentDocument(layout: LayoutName, {layout: rendered = layout, sections = EXPECTED, roots = 1, freshness = 'current', clip, item = {},
+    value = {}, truncated = []}: Containment = {}) {
+    const window = WINDOWS[layout], rootBox = {left: 0, top: 0, width: window.width, height: window.height};
+    const container = (box: Box, overflow: string, parentElement: unknown, className = '') => ({overflow, parentElement, className, getBoundingClientRect: () => rect(box)});
+    const SURFACES = '.overlay-card-body, .overlay-panel, .overlay-hud-lines';
+    const SURFACE = {card: 'overlay-surface overlay-card-body', cluster: 'overlay-surface overlay-panel', hud: 'overlay-hud-lines'}[layout];
+    const nodes: unknown[] = [];
+    const rootNode = {overflow: 'hidden', getAttribute: (name: string) => ({'data-layout': rendered, 'data-freshness': freshness} as Record<string, string>)[name] ?? null,
+      getBoundingClientRect: () => rect(rootBox), querySelectorAll: (selector: string) => selector === '[data-testid^="overlay-section-"]' ? nodes : []};
+    const body = container(rootBox, layout === 'cluster' ? 'visible' : 'hidden', rootNode,
+      layout === 'cluster' ? 'overlay-cluster-body' : clip ? '' : SURFACE);
+    const gauge = container({left: 0, top: window.height - 200, width: 200, height: 200}, 'visible', body);
+    const panel = container(clip ?? {left: 210, top: 0, width: 230, height: window.height}, 'hidden', body, SURFACE);
+    const clipped = layout === 'cluster' ? panel : clip ? container(clip, 'hidden', body, SURFACE) : body;
+    let row = 0;
+    for (const id of sections) {
+      const inGauge = layout === 'cluster' && ['speed', 'gear', 'rpm'].includes(id);
+      const box = item[id] ?? (inGauge ? {left: 50, top: window.height - 150 + ['speed', 'gear', 'rpm'].indexOf(id) * 30, width: 100, height: 24}
+        : {left: (layout === 'cluster' ? 220 : 10), top: 28 + 21 * row++, width: 200, height: 18});
+      const valueBox = value[id] ?? {left: box.left + 100, top: box.top + 1, width: 60, height: 16};
+      nodes.push({parentElement: inGauge ? gauge : clipped, closest: (selector: string) => !inGauge && selector === SURFACES ? clipped : null,
+        getAttribute: (name: string) => name === 'data-testid' ? `overlay-section-${id}` : null,
+        getBoundingClientRect: () => rect(box), querySelector: (selector: string) => selector === '.overlay-value'
+          ? {getBoundingClientRect: () => rect(valueBox), scrollWidth: truncated.includes(id) ? 200 : 60, clientWidth: 60} : null});
+    }
+    return {querySelectorAll: (selector: string) => selector === '[data-testid="overlay-root"]' ? Array.from({length: roots}, () => rootNode) : []};
+  }
+  async function observeLayout(layout: LayoutName, options: Containment = {}, expected: string[] = EXPECTED) {
+    const {layoutContainmentObservation} = await import(observationModule);
+    const viewport = options.viewport ?? {innerWidth: WINDOWS[layout].width, innerHeight: WINDOWS[layout].height};
+    // The exact-state form also protects the callback from requiring module closures; the JSON round trip stands in for
+    // Playwright's serialization.
+    return JSON.parse(JSON.stringify(runInNewContext(`(${layoutContainmentObservation.toString()})(expected)`, {expected: {layout, sections: expected},
+      document: containmentDocument(layout, options), ...viewport,
+      getComputedStyle: (node: {overflow?: string}) => ({overflow: node.overflow ?? 'visible'})}))) as false | Record<string, unknown>;
+  }
+  it('sizes each smoke window as the product creates it for the shown sections at scale 1, with their reserved height', async () => {
+    const {LAYOUT_SMOKE_WINDOWS, LAYOUT_SMOKE_RESERVED_CSS} = await import(observationModule);
+    const {SYNTHETIC_V1_STRIP_SECTIONS} = await import(pathToFileURL(path.resolve('scripts/ci/renderer-observation.mjs')).href);
+    const {overlayWindowSize} = await import('../../apps/desktop/src/overlay-geometry');
+    const {layoutReservedCss} = await import('../../apps/desktop/src/overlay-rows');
+    const {OVERLAY_SECTION_IDS} = await import('../../apps/desktop/src/overlay-sections');
+    expect(SYNTHETIC_V1_STRIP_SECTIONS).toEqual(EXPECTED);
+    expect(LAYOUT_SMOKE_WINDOWS).toEqual(WINDOWS);
+    expect(LAYOUT_SMOKE_RESERVED_CSS).toEqual(RESERVED);
+    const shown = Object.fromEntries(OVERLAY_SECTION_IDS.map(id => [id, EXPECTED.includes(id)])) as Record<(typeof OVERLAY_SECTION_IDS)[number], boolean>;
+    for (const layout of ['card', 'cluster', 'hud'] as const) {
+      expect(LAYOUT_SMOKE_WINDOWS[layout], layout).toEqual(overlayWindowSize(layout, 1, shown));
+      expect(LAYOUT_SMOKE_RESERVED_CSS[layout], layout).toBe(layoutReservedCss(layout, shown));
+    }
+  });
+  // The fake rows end at 28 + 21 × 11 + 18 = 277 in the card and HUD and at 28 + 21 × 8 + 18 = 214 in the cluster panel.
+  const BOTTOM = {card: 277, cluster: 214, hud: 277};
+  // Each surface fills the window's height: the card body and HUD lines from 0 to 360 and 320, the cluster panel to 225.
+  const SURFACE = {card: {className: 'overlay-surface overlay-card-body', top: 0, bottom: 360, inside: true},
+    cluster: {className: 'overlay-surface overlay-panel', top: 0, bottom: 225, inside: true}, hud: {className: 'overlay-hud-lines', top: 0, bottom: 320, inside: true}};
+  it.each(['card', 'cluster', 'hud'] as const)('reports every shown %s section inside the window and records truncation', async layout => {
+    expect(await observeLayout(layout, {truncated: ['origin']})).toEqual({layout, viewport: {innerWidth: WINDOWS[layout].width, innerHeight: WINDOWS[layout].height},
+      sections: EXPECTED, outside: [], clipped: [], bottom: BOTTOM[layout], surfaces: [SURFACE[layout]], truncated: ['origin']});
+  });
+  it.each([
+    {name: 'below the card window', layout: 'card' as const, options: {item: {'game-time': {left: 10, top: 384, width: 200, height: 18}}}},
+    {name: 'partly below the HUD window', layout: 'hud' as const, options: {item: {'game-time': {left: 10, top: 310, width: 200, height: 18}}}},
+    // ET-012a's cluster panel was capped at 200 px and clipped its last row inside a taller window.
+    {name: 'outside only the clipping cluster panel', layout: 'cluster' as const,
+      options: {clip: {left: 210, top: 0, width: 230, height: 200}, item: {'game-time': {left: 220, top: 205, width: 200, height: 18}}}},
+    // Expected income's row ends at 28 + 21 × 10 + 18 = 256, inside the 260 px body.
+    {name: 'outside only the clipping card body', layout: 'card' as const,
+      options: {clip: {left: 0, top: 0, width: 300, height: 260}, item: {'game-time': {left: 10, top: 262, width: 200, height: 18}}}},
+    {name: 'with an empty box', layout: 'hud' as const, options: {item: {'game-time': {left: 10, top: 259, width: 0, height: 18}}}}
+  ])('lists a section $name as outside', async ({layout, options}) => {
+    expect(await observeLayout(layout, options)).toMatchObject({outside: ['game-time'], clipped: []});
+  });
+  it('ignores an ancestor that does not clip, such as the cluster gauge', async () => {
+    // Speed reaches past the gauge's right edge at 200 but stays inside the window.
+    expect(await observeLayout('cluster', {item: {speed: {left: 150, top: 117, width: 100, height: 24}}})).toMatchObject({outside: [], clipped: []});
+  });
+  it.each([
+    // Cargo's card row is {10, 133, 200, 18}: 28 + 21 × 5.
+    {name: 'taller than its row', value: {left: 110, top: 131, width: 60, height: 22}},
+    {name: 'above its row', value: {left: 110, top: 132, width: 60, height: 16}},
+    {name: 'below its row', value: {left: 110, top: 136, width: 60, height: 16}}
+  ])('lists a value $name as clipped', async ({value}) => {
+    expect(await observeLayout('card', {value: {cargo: value}})).toMatchObject({outside: [], clipped: ['cargo']});
+  });
+  it('accepts a value that fills its row exactly, also with float noise, and only within 0.01 px', async () => {
+    expect(await observeLayout('card', {value: {cargo: {left: 110, top: 133, width: 60, height: 18}}})).toMatchObject({outside: [], clipped: []});
+    // The development smoke's cluster RPM value: 205.7291717529297 to 221.3229217529297 in a row ending at 221.32291793823242.
+    expect(await observeLayout('cluster', {item: {rpm: {left: 70, top: 203.0625, width: 60, height: 18.260417938232422}},
+      value: {rpm: {left: 75, top: 205.7291717529297, width: 50, height: 15.59375}}})).toMatchObject({outside: [], clipped: []});
+    expect(await observeLayout('card', {value: {cargo: {left: 110, top: 133, width: 60, height: 18.02}}})).toMatchObject({clipped: ['cargo']});
+    // A HUD line flush with the bottom of its clipping container, with noise, is inside; 0.02 px past it is outside.
+    expect(await observeLayout('hud', {clip: {left: 0, top: 0, width: 320, height: 277}, item: {'game-time': {left: 10, top: 259, width: 200, height: 18.000004}}}))
+      .toMatchObject({outside: [], clipped: []});
+    expect(await observeLayout('hud', {clip: {left: 0, top: 0, width: 320, height: 277}, item: {'game-time': {left: 10, top: 259, width: 200, height: 18.02}}}))
+      .toMatchObject({outside: ['game-time']});
+  });
+  it.each([
+    {name: 'another layout', options: {layout: 'strip'}},
+    {name: 'a stale root', options: {freshness: 'stale'}},
+    {name: 'a missing section', options: {sections: EXPECTED.slice(1)}},
+    {name: 'an extra section', options: {sections: [...EXPECTED, 'range']}},
+    {name: 'another section order', options: {sections: [EXPECTED[1], EXPECTED[0], ...EXPECTED.slice(2)]}},
+    {name: 'no root', options: {roots: 0}},
+    {name: 'two roots', options: {roots: 2}}
+  ])('waits instead of observing $name', async ({options}) => {
+    expect(await observeLayout('cluster', options)).toBe(false);
+  });
+  it('accepts the reserved window with every section inside and every value in its row, and rejects any other result', async () => {
+    const {verifyLayoutContainment} = await import(observationModule);
+    const valid = await observeLayout('cluster');
+    expect(verifyLayoutContainment(valid, WINDOWS.cluster, RESERVED.cluster)).toBe(valid);
+    expect(() => verifyLayoutContainment({...valid, outside: ['game-time']}, WINDOWS.cluster, RESERVED.cluster)).toThrow('Enabled overlay sections lie outside the overlay window');
+    expect(() => verifyLayoutContainment({...valid, clipped: ['fuel']}, WINDOWS.cluster, RESERVED.cluster)).toThrow('Overlay section values are clipped by their rows');
+    // getBounds can round a window up by one DIP: 441 x 226 passes; one pixel short or two over fails.
+    expect(verifyLayoutContainment({...valid, viewport: {innerWidth: 441, innerHeight: 226}}, WINDOWS.cluster, RESERVED.cluster)).toBeTruthy();
+    for (const viewport of [{innerWidth: 439, innerHeight: 225}, {innerWidth: 440, innerHeight: 224}, {innerWidth: 442, innerHeight: 225},
+      {innerWidth: 440, innerHeight: 227}, {innerWidth: 440, innerHeight: 267}])
+      expect(() => verifyLayoutContainment({...valid, viewport}, WINDOWS.cluster, RESERVED.cluster), JSON.stringify(viewport))
+        .toThrow('The overlay window must have the reserved size');
+  });
+  it('requires the lowest section to end within the reserved height of the shown sections', async () => {
+    const {verifyLayoutContainment} = await import(observationModule);
+    // A card row below the reserve but inside the window and its body: 48 + 24 × 12 = 336 CSS px reserved, 360 window.
+    const low = await observeLayout('card', {item: {'game-time': {left: 10, top: 320, width: 200, height: 18}}});
+    expect(low).toMatchObject({outside: [], clipped: [], bottom: 338});
+    expect(() => verifyLayoutContainment(low, WINDOWS.card, RESERVED.card)).toThrow('Overlay sections extend below the height the row model reserves');
+    const valid = await observeLayout('card');
+    expect(verifyLayoutContainment({...valid, bottom: 336}, WINDOWS.card, RESERVED.card)).toBeTruthy();
+    expect(verifyLayoutContainment({...valid, bottom: 336.005}, WINDOWS.card, RESERVED.card)).toBeTruthy();
+    for (const bottom of [336.02, Number.NaN]) expect(() => verifyLayoutContainment({...valid, bottom}, WINDOWS.card, RESERVED.card), String(bottom))
+      .toThrow('Overlay sections extend below the height the row model reserves');
+    expect(() => verifyLayoutContainment(valid, WINDOWS.card)).toThrow('Overlay sections extend below the height the row model reserves');
+  });
+  // Review pass 2: the cluster's panel is bottom-aligned, so 2 px the model does not count above each of its nine rows
+  // grows it by 18 px upwards, to {210, −18, 230, 243} in the 225 px window, while its rows stay in the window. Measured
+  // from the root's top the lowest row would still end at 214; measured from the panel's top it ends at 214 + 18 = 232.
+  const GROWN_PANEL = {left: 210, top: -18, width: 230, height: 243};
+  it('measures the lowest row from the top of its surface and records the surface', async () => {
+    const grown = await observeLayout('cluster', {clip: GROWN_PANEL});
+    expect(grown).toMatchObject({outside: [], clipped: [], bottom: 232,
+      surfaces: [{className: 'overlay-surface overlay-panel', top: -18, bottom: 225, inside: false}]});
+    // The gauge sections have no surface and are measured from the root: a speed box ending at 224 is the lowest.
+    expect(await observeLayout('cluster', {item: {speed: {left: 50, top: 200, width: 100, height: 24}}})).toMatchObject({bottom: 224});
+    // Review pass 3 changed the requirement: a top-aligned surface pushed down from the root's top (a card body that
+    // starts 10 px down) is measured from the root's top, the higher of the two, so the offset counts: 277, not 277 − 10.
+    expect(await observeLayout('card', {clip: {left: 0, top: 10, width: 300, height: 350}})).toMatchObject({bottom: 277,
+      surfaces: [{className: 'overlay-surface overlay-card-body', top: 10, bottom: 360, inside: true}]});
+  });
+  it('rejects a surface outside the window and an unexpected number of surfaces', async () => {
+    const {verifyLayoutContainment} = await import(observationModule);
+    const grown = await observeLayout('cluster', {clip: GROWN_PANEL}) as {surfaces: Record<string, unknown>[]};
+    expect(() => verifyLayoutContainment(grown, WINDOWS.cluster, RESERVED.cluster)).toThrow('The overlay surface lies outside the overlay window');
+    // Even with the surface inside, the lowest row 232 below the panel's top exceeds the 225 reserve.
+    const inside = {...grown, surfaces: [{...grown.surfaces[0], inside: true}]};
+    expect(() => verifyLayoutContainment(inside, WINDOWS.cluster, RESERVED.cluster)).toThrow('Overlay sections extend below the height the row model reserves');
+    // The reviewer's pass-3 case: a 20 px margin above the card body moves its last row to {10, 320, 200, 18}. From the
+    // root's top it ends at 338, past the 336 reserve; from the body's top it would end at 318 and pass.
+    const pushed = await observeLayout('card', {clip: {left: 0, top: 20, width: 300, height: 340}, item: {'game-time': {left: 10, top: 320, width: 200, height: 18}}});
+    expect(pushed).toMatchObject({outside: [], clipped: [], bottom: 338, surfaces: [{top: 20, inside: true}]});
+    expect(() => verifyLayoutContainment(pushed, WINDOWS.card, RESERVED.card)).toThrow('Overlay sections extend below the height the row model reserves');
+    const valid = await observeLayout('cluster') as {surfaces: Record<string, unknown>[]};
+    for (const surfaces of [[], [valid.surfaces[0], valid.surfaces[0]], undefined])
+      expect(() => verifyLayoutContainment({...valid, surfaces}, WINDOWS.cluster, RESERVED.cluster)).toThrow('Exactly one overlay surface must hold the rows');
+  });
+});
+
 describe('debugger-paused stall start, independent observation and resume ordering', () => {
   // The fake DevTools session keeps the renderer "paused" until the code under test sends Debugger.resume.
   type Mode = 'during' | 'after' | 'late-metadata' | 'missing-reading-time' | 'foreign-frame' | 'exception-pause' | 'no-pause';
