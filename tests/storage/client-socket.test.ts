@@ -6,13 +6,13 @@ import type net from 'node:net';
 import {describe, expect, it} from 'vitest';
 import {encodeFrame} from '../../packages/contracts/src/protocol-v1';
 import {v1, withEventSeq} from './helpers';
-import {ClientSocket} from './recording-helpers';
+import {ClientSocket, type StreamGate} from './recording-helpers';
 
 const welcome = Buffer.from(encodeFrame(v1('welcome'))), checkpoint = Buffer.from(encodeFrame(v1('checkpoint')));
 const event1 = Buffer.from(encodeFrame(withEventSeq('event-simulation-started', 1n))), event2 = Buffer.from(encodeFrame(withEventSeq('event-simulation-started', 2n)));
 
 /** A fake pipe socket, the ClientSocket over it, and what the ClientSocket passed on: the data bytes and the event order. */
-function harness(gate?: {afterEventSeq: string; redelivered?: boolean; until: () => Promise<unknown>}) {
+function harness(gate?: StreamGate) {
   const real = Object.assign(new EventEmitter(), {write: () => true, destroy: () => undefined}), failures: unknown[] = [];
   const socket = new ClientSocket(real as unknown as net.Socket, gate, error => failures.push(error));
   const chunks: Buffer[] = [], events: string[] = [];
@@ -44,6 +44,20 @@ describe('recording harness ClientSocket', () => {
     expect(h.bytes().equals(Buffer.concat([welcome, checkpoint, event1, event2]))).toBe(true);
     expect(h.collapsed()).toEqual(['data', 'end', 'close']);
     expect(h.failures).toEqual([]);
+  });
+
+  it('with `beforeEventSeq`, holds the gate event itself and everything after it until the gate opens', async () => {
+    let open!: () => void;
+    const h = harness({beforeEventSeq: '2', until: () => new Promise<void>(r => { open = r; })});
+    // The gate frame starts in the same chunk as the frames before it and completes in the next; the end follows while
+    // the gate is closed.
+    h.real.emit('data', Buffer.concat([welcome, checkpoint, event1, event2.subarray(0, 6)]));
+    h.real.emit('data', event2.subarray(6)); h.real.emit('end');
+    expect(h.bytes().equals(Buffer.concat([welcome, checkpoint, event1]))).toBe(true);
+    expect(h.collapsed()).toEqual(['data']);
+    open(); await Promise.resolve(); await Promise.resolve();
+    expect(h.bytes().equals(Buffer.concat([welcome, checkpoint, event1, event2]))).toBe(true);
+    expect([h.collapsed(), h.failures]).toEqual([['data', 'end'], []]);
   });
 
   it('with `redelivered`, holds only after a redelivery of the gate event, not after its first delivery (ET-015c)', async () => {

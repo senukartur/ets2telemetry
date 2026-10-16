@@ -134,7 +134,8 @@ export interface RecordingPlan {
    * Holds back the first connection's stream after the server frame of the event with this eventSeq until `until`
    * resolves (see ClientSocket), so that a storage state, such as a held commit, is reached before later items arrive.
    * With `redelivered: true` (ET-015c) the gated stream is instead the first one that carries that event as a
-   * redelivery, so that a test acts only once a reconnection's redelivery has reached the ingestion.
+   * redelivery, so that a test acts only once a reconnection's redelivery has reached the ingestion. A test that must
+   * hold the gate event itself back builds its own ClientSocket with `beforeEventSeq`.
    */
   gate?: {afterEventSeq: string; redelivered?: boolean; until: (service: Service) => Promise<unknown>};
 }
@@ -152,14 +153,16 @@ export interface RecordingRun {
  * The client socket the ingestion and the harness see: the connect, data, end, error and close events of the real pipe
  * socket, passed on synchronously and in their order. With a gate, the server bytes are passed on one whole frame at a
  * time up to the frame of the gate's event; everything after it (the rest of the stream, end, error and close) waits in
- * order until the gate's promise resolves, then follows at once. An incomplete frame kept before the gate's event is
+ * order until the gate's promise resolves, then follows at once. With `beforeEventSeq` instead of `afterEventSeq`, the
+ * frame of the gate's event waits as well. An incomplete frame kept before the gate's event is
  * passed on ahead of the end, error or close that follows it. Re-cutting a byte stream at frame boundaries is invisible
  * to a consumer that decodes it, and nothing is reordered, dropped or added (tests/storage/client-socket.test.ts).
  */
+export type StreamGate = ({afterEventSeq: string} | {beforeEventSeq: string}) & {redelivered?: boolean; until: () => Promise<unknown>};
 export class ClientSocket extends EventEmitter {
   private partial = Buffer.alloc(0);
   private waiting?: [string, unknown[]][];
-  constructor(private readonly real: net.Socket, private gate: {afterEventSeq: string; redelivered?: boolean; until: () => Promise<unknown>} | undefined, private readonly fail: (error: unknown) => void) {
+  constructor(private readonly real: net.Socket, private gate: StreamGate | undefined, private readonly fail: (error: unknown) => void) {
     super();
     real.on('connect', () => this.pass('connect'));
     real.on('data', (chunk: Buffer) => { if (this.gate) this.frames(chunk); else this.pass('data', chunk); });
@@ -178,18 +181,21 @@ export class ClientSocket extends EventEmitter {
     const bytes = this.partial; this.partial = Buffer.alloc(0);
     this.pass('data', bytes);
   }
-  /** Passes whole frames until the gate's event has been passed; the rest waits behind the gate. */
+  /** Passes whole frames until the gate's event has been passed (or reached, with `beforeEventSeq`); the rest waits behind the gate. */
   private frames(chunk: Buffer): void {
     // The kept bytes move into this chunk's bytes; only what is still incomplete below is kept again.
     let bytes = Buffer.concat([this.partial, chunk]); this.partial = Buffer.alloc(0);
     while (this.gate && bytes.length >= 4 && bytes.length >= 4 + bytes.readUInt32LE(0)) {
       const frame = bytes.subarray(0, 4 + bytes.readUInt32LE(0)); bytes = bytes.subarray(frame.length);
-      this.pass('data', frame);
       let message: ReturnType<typeof decodePayload> | undefined;
       // An invalid frame is the ingestion's own decoder's to report.
       try { message = decodePayload(frame.subarray(4), 'server'); } catch { message = undefined; }
-      const {afterEventSeq, redelivered} = this.gate;
-      if (message?.kind === 'event' && message.data.eventSeq === afterEventSeq && (redelivered === undefined || message.data.redelivered === redelivered)) this.hold(this.gate.until);
+      const gate = this.gate, before = 'beforeEventSeq' in gate, eventSeq = before ? gate.beforeEventSeq : gate.afterEventSeq;
+      const matches = message?.kind === 'event' && message.data.eventSeq === eventSeq && (gate.redelivered === undefined || message.data.redelivered === gate.redelivered);
+      // Before the gate event the frame waits behind the gate; after it, the frame passes and the rest waits.
+      if (matches && before) this.hold(gate.until);
+      this.pass('data', frame);
+      if (matches && !before) this.hold(gate.until);
     }
     if (this.gate) this.partial = bytes;
     else if (bytes.length) this.pass('data', bytes);
