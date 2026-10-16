@@ -48,7 +48,7 @@ const diagnosticEvents = async directory => (await readFile(path.join(directory,
 // never reports it unavailable, and closes it in its storage shutdown step before its single stopped report.
 const verifyHistoryEvents = (service, created) => {
   const opened = service.filter(row => row.event === 'HISTORY_STORAGE_OPENED').map(row => row.facts);
-  assert.deepEqual(opened, created.map(value => ({schemaVersion: 1, created: value, migratedFrom: null})));
+  assert.deepEqual(opened, created.map(value => ({schemaVersion: 2, created: value, migratedFrom: null})));
   assert.ok(!service.some(row => row.event === 'HISTORY_STORAGE_UNAVAILABLE'), 'History storage was unavailable');
   const closed = service.flatMap((row, index) => row.event === 'HISTORY_STORAGE_CLOSED' ? [index] : []);
   const stopped = service.findLastIndex(row => row.event === 'SERVICE_REPORT' && row.detail?.type === 'stopped');
@@ -57,7 +57,7 @@ const verifyHistoryEvents = (service, created) => {
   return {opened, closed: closed.length};
 };
 // The database is in the isolated LOCALAPPDATA, checkpointed and closed: a SQLite file of this application at schema
-// version 1 without WAL, shared-memory or journal files, and no pre-migration backup for a new database.
+// version 2 (ET-016) without WAL, shared-memory or journal files, and no pre-migration backup for a new database.
 const verifyHistoryFile = async () => {
   const database = path.join(config.localappdata, 'ETS2Telemetry', 'data', 'telemetry.sqlite');
   const file = await open(database, 'r');
@@ -66,7 +66,7 @@ const verifyHistoryFile = async () => {
   const facts = {magic: header.subarray(0, 15).toString('latin1'), applicationId: header.readInt32BE(68), userVersion: header.readUInt32BE(60),
     sidecars: ['-wal', '-shm', '-journal'].filter(suffix => existsSync(database + suffix)),
     backups: existsSync(path.join(config.localappdata, 'ETS2Telemetry', 'backups'))};
-  assert.deepEqual(facts, {magic: 'SQLite format 3', applicationId: 1163154226, userVersion: 1, sidecars: [], backups: false});
+  assert.deepEqual(facts, {magic: 'SQLite format 3', applicationId: 1163154226, userVersion: 2, sidecars: [], backups: false});
   return facts;
 };
 // Every launch of one run shares the isolated profile, TEMP, APPDATA and LOCALAPPDATA; only the diagnostic directory may differ.

@@ -79,12 +79,16 @@ export function upsertSession(conn: StorageConnection, input: {message: unknown}
   });
 }
 
-/** Normalized configuration, amount and delivery rows of a newly inserted event, in the same transaction. */
-function normalize(db: Database.Database, eventRef: bigint, record: EventRecord): void {
+/**
+ * Normalized configuration, amount and delivery rows of a newly inserted event, in the same transaction. A job
+ * configuration records its plugin session and its source `event` (schema version 2); checkpoint job configurations
+ * are written by their own command (ET-016b).
+ */
+function normalize(db: Database.Database, session: bigint, eventRef: bigint, record: EventRecord): void {
   const fields = record as unknown as Record<string, unknown>;
   const write = (table: string, specs: readonly FieldSpec[], extra: [string, unknown][] = []) =>
     statement(db, insert(table, ['event_ref', ...extra.map(([c]) => c), ...specColumns(specs)])).run(eventRef, ...extra.map(([, v]) => v), ...specValues(specs, fields));
-  if (record.type === 'job.configured') write('job_configurations', JOB_FIELDS);
+  if (record.type === 'job.configured') write('job_configurations', JOB_FIELDS, [['plugin_session_ref', session], ['source', 'event']]);
   else if (record.type === 'truck.configured') write('truck_configurations', TRUCK_FIELDS);
   else if (record.type === 'trailer.configured') write('trailer_configurations', TRAILER_FIELDS, [['slot_index', BigInt(record.index)]]);
   else if (record.type === 'job.delivered') write('job_deliveries', DELIVERY_FIELDS);
@@ -116,7 +120,12 @@ function advanceCoverage(db: Database.Database, session: SessionRow, first: bigi
   return through.toString();
 }
 
-interface EffectContext {db: Database.Database; session: SessionRow; game: string; now: number; eventRef?: bigint; eventType?: string}
+/**
+ * `carrierEventSeq` is the item being committed, in the current plugin session: the event's eventSeq key, or for a gap
+ * the first eventSeq it newly covers. A trip.close records it as the trip's close carrier (ET-016, J7). Only commitEvent and
+ * commitGap set it; no other command applies effects.
+ */
+interface EffectContext {db: Database.Database; session: SessionRow; game: string; now: number; eventRef?: bigint; eventType?: string; carrierEventSeq?: string}
 const enumValue = (value: unknown, options: readonly string[]) => { if (typeof value !== 'string' || !options.includes(value)) fail('INVALID_INPUT'); return value; };
 const utcMs = (value: unknown) => { if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) fail('INVALID_INPUT'); return value; };
 const optionalBoolean = (value: unknown) => { if (value !== undefined && typeof value !== 'boolean') fail('INVALID_INPUT'); return value === undefined ? undefined : value ? 1n : 0n; };
@@ -184,14 +193,15 @@ function applyEffects(c: EffectContext, effects: unknown): void {
     if (typeof effect !== 'object' || effect === null) fail('INVALID_INPUT');
     switch (effect.kind) {
       case 'trip.open': {
-        // A trip opens at the job configuration event that defines it, never at a gap.
+        // A trip opens at the job configuration event that defines it, never at a gap (opened_by 'event'; a checkpoint
+        // opening is a separate command of ET-016b).
         if (c.eventRef === undefined || !isUuid(effect.tripUuid) || enumValue(effect.game, GAMES) !== c.game || typeof effect.gameMode !== 'object' || effect.gameMode === null) fail('INVALID_INPUT');
         const job = configurationRef(c, 'job_configurations', effect.jobConfiguration);
         const truck = effect.truckConfiguration === undefined ? null : configurationRef(c, 'truck_configurations', effect.truckConfiguration);
         const id = statement(c.db, insert('trips', ['trip_uuid', 'plugin_session_ref', 'game', 'game_mode', 'game_mode_method', 'game_mode_confidence', 'game_mode_ambiguous', 'job_configuration_ref',
-          'truck_configuration_ref', 'opened_event_ref', 'outcome', 'recording_completeness', 'started_utc_ms', 'observed_distance_m', 'observed_distance_m_state', 'created_utc_ms', 'updated_utc_ms']))
+          'truck_configuration_ref', 'opened_event_ref', 'opened_by', 'outcome', 'recording_completeness', 'started_utc_ms', 'observed_distance_m', 'observed_distance_m_state', 'created_utc_ms', 'updated_utc_ms']))
           .run(effect.tripUuid, c.session.id, effect.game, enumValue(effect.gameMode.mode, MODES), enumValue(effect.gameMode.method, METHODS), enumValue(effect.gameMode.confidence, CONFIDENCES),
-            optionalBoolean(effect.gameModeAmbiguous) ?? 0n, job, truck, c.eventRef, 'open', enumValue(effect.recordingCompleteness, COMPLETENESS), utcMs(effect.startedUtcMs), null, 'not-observed', c.now, c.now).lastInsertRowid;
+            optionalBoolean(effect.gameModeAmbiguous) ?? 0n, job, truck, c.eventRef, 'event', 'open', enumValue(effect.recordingCompleteness, COMPLETENESS), utcMs(effect.startedUtcMs), null, 'not-observed', c.now, c.now).lastInsertRowid;
         addTrailers(c, BigInt(id), effect.trailerConfigurations);
         break;
       }
@@ -226,8 +236,13 @@ function applyEffects(c: EffectContext, effects: unknown): void {
           if (event.type !== (outcome === 'delivered' ? 'job.delivered' : 'job.cancelled')) fail('INVALID_INPUT');
           outcomeEvent = event.id;
         } else if (effect.outcomeEvent !== undefined) fail('INVALID_INPUT');
-        statement(c.db, 'UPDATE trips SET outcome = ?, close_reason = ?, outcome_event_ref = ?, recording_completeness = ?, ended_utc_ms = ?, updated_utc_ms = ? WHERE id = ?')
-          .run(outcome, enumValue(effect.closeReason, CLOSE_REASONS), outcomeEvent, enumValue(effect.recordingCompleteness, COMPLETENESS), utcMs(effect.endedUtcMs), c.now, trip.id);
+        // The close carrier is the committed item itself, in the current session: a restart close made by a later
+        // plugin session records that session, not the trip's own.
+        if (c.carrierEventSeq === undefined) fail('INVALID_INPUT');
+        statement(c.db, `UPDATE trips SET outcome = ?, close_reason = ?, outcome_event_ref = ?, recording_completeness = ?, ended_utc_ms = ?, updated_utc_ms = ?,
+          closed_by_session_ref = ?, closed_by_event_seq = ? WHERE id = ?`)
+          .run(outcome, enumValue(effect.closeReason, CLOSE_REASONS), outcomeEvent, enumValue(effect.recordingCompleteness, COMPLETENESS), utcMs(effect.endedUtcMs), c.now,
+            c.session.id, c.carrierEventSeq, trip.id);
         break;
       }
       case 'event.attribute': {
@@ -273,8 +288,8 @@ export function commitEvent(conn: StorageConnection, input: {message: unknown; e
         u64Key(occurred.configurationRevision), u64Key(occurred.boundaryOrder), payload, BigInt(m.version.minor), redelivered ? 1n : 0n, now);
     if (result.changes !== 1) fail('CONSTRAINT_VIOLATION');
     const eventRef = BigInt(result.lastInsertRowid);
-    normalize(db, eventRef, record);
-    applyEffects({db, session, game: session.game, now, eventRef, eventType: record.type}, input.effects);
+    normalize(db, session.id, eventRef, record);
+    applyEffects({db, session, game: session.game, now, eventRef, eventType: record.type, carrierEventSeq: seqKey}, input.effects);
     const through = advanceCoverage(db, session, BigInt(eventSeq), BigInt(eventSeq));
     options.testHooks?.beforeCommit?.();
     return {status: 'committed', committedThroughEventSeq: through};
@@ -316,7 +331,10 @@ export function commitGap(conn: StorageConnection, input: {message: unknown; eff
     statement(db, insert('event_gaps', ['plugin_session_ref', 'first_event_seq', 'last_event_seq', ...CAUSES.map(([, c]) => c), 'first_lost_monotonic_ns', 'first_lost_monotonic_ns_state',
       'last_lost_monotonic_ns', 'last_lost_monotonic_ns_state', 'source_clock_ref', 'redelivered', 'committed_utc_ms']))
       .run(session.id, firstKey, lastKey, ...CAUSES.map(([key]) => u64Key(d.causes[key])), firstLost, firstLostState, lastLost, lastLostState, clock, d.redelivered ? 1n : 0n, now);
-    applyEffects({db, session, game: session.game, now}, input.effects);
+    // The carrier of a gap is the first eventSeq it newly covers: previouslyCoveredThrough + 1, or the gap's own first
+    // eventSeq when it starts beyond that (ET-016, J7). It is at most lastEventSeq, which is above the coverage here.
+    const firstNew = BigInt(previouslyCoveredThrough) + 1n, carrier = BigInt(d.firstEventSeq) > firstNew ? BigInt(d.firstEventSeq) : firstNew;
+    applyEffects({db, session, game: session.game, now, carrierEventSeq: u64Key(carrier)}, input.effects);
     const through = advanceCoverage(db, session, BigInt(d.firstEventSeq), BigInt(d.lastEventSeq));
     options.testHooks?.beforeCommit?.();
     return {status: 'committed', committedThroughEventSeq: through, previouslyCoveredThrough};

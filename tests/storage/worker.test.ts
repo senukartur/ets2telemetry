@@ -70,7 +70,7 @@ describe('storage worker', () => {
   it('opens, commits, reads and closes through the real worker, and a new worker reopens the same history', async () => {
     const first = startWorker();
     const summary = ok(await first.client.open(options()));
-    expect(summary).toMatchObject({schemaVersion: 1, created: true, purpose: 'synthetic'});
+    expect(summary).toMatchObject({schemaVersion: 2, created: true, purpose: 'synthetic'});
     expect(ok(await first.client.upsertSession({message: v1('welcome')}))).toEqual({created: true, committedThroughEventSeq: '0'});
     expect(ok(await first.client.commitEvent({message: v1('event-job-configured'), effects: [openTrip, {kind: 'event.attribute', tripUuid: T1, attribution: 'trip'}]})))
       .toEqual({status: 'committed', committedThroughEventSeq: '1'});

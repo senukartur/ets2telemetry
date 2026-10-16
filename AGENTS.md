@@ -470,3 +470,32 @@ ET-015c PR-4 implementation update on October 16, 2026: the Application status c
 - **Unchanged.** The overlay, the preloads, IPC channels and bridge methods are unchanged, and `GAME_HISTORY_RECORDING` stays `false`.
 
 See [application lifecycle](docs/app-lifecycle.md) and [ET-015c validation](docs/validation/et-015c.md).
+
+## ET-016 authorization — October 16, 2026
+
+Under the owner's standing delegation of October 15, 2026 (quoted in the ET-015a authorization above), the coordinator started ET-016: the trip journal, trip details and JSON export. It adopted the architect's decisions J1–J22 ([concept.md](concept.md#et-016-authorization--october-16-2026)) as coordinator decisions; the owner did not review them individually. For ET-016 only, this supersedes two earlier statements; earlier dated text is unchanged:
+- that ET-016 is not authorized;
+- with J9, ET-014's T9: a job seen first in a checkpoint now opens a partial late-attach trip. This follows concept §3 and the owner's answer of October 10, 2026 that late attachment marks trips incomplete.
+
+**ET-016a** is five PRs:
+- storage schema v2 with S-1 fuel used, S-2 checkpoint jobs and checkpoint-opened trips, and trip close carriers;
+- bounded journal reads in the storage worker;
+- journal queries from main through the telemetry service;
+- the Journal tab in the main window;
+- versioned JSON export through a main-process save dialog.
+
+**ET-016b** is three PRs:
+- fuel-used persistence;
+- late-attach trips;
+- journal and export reconciliation in the recording runtime journey.
+
+How the journal reads and exports:
+- It reads the database the telemetry service opened, through its storage worker. That is history in production, or the synthetic or replay recording target, which is clearly labelled.
+- Six fixed bridge methods are added. The renderer receives bounded pages and never a path.
+- Main owns the save dialog and the export file writer. Cancelling the dialog writes nothing.
+
+`GAME_HISTORY_RECORDING` stays `false`. Once ET-016b merges, the enablement PR no longer waits for S-1/S-2, but it still needs the v0 retirement, real-game v1 evidence and real full-volume and ACL evidence. Next to Export the journal states that an uninstall removes local history and that the JSON export is a copy, which cannot be imported (J18; owner rule recorded on October 16, 2026). ET-017 and later phases are not authorized by this paragraph. No game, TruckersMP, display or performance claim follows.
+
+## Uninstall removes local data — October 16, 2026
+
+On October 16, 2026 the owner confirmed that uninstalling ETS2Telemetry removes all of its local data under `%LOCALAPPDATA%\ETS2Telemetry`: the history database and its backups, settings, logs and synthetic recordings. Unsynchronized history is lost until the later server phase can restore it. Only application-owned data and the plugin file this application installed are removed. ET-018 implements this, changing the ET-001 baseline that keeps the data root. The ET-016 journal states the rule next to its JSON export, which is a copy for the user's records and cannot be imported (J18). See [concept.md](concept.md#uninstall-removes-local-data--october-16-2026).

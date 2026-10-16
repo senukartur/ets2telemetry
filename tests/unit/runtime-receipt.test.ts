@@ -145,7 +145,7 @@ function lifecycleCases() {
 function recordingReceipt(path: (string | number)[] = [], replacement?: Json): string {
   const step = (pid: number, name: string): Json => ({pid, event: 'SHUTDOWN_STEP', facts: {name, outcome: 'ok'}});
   const started = (pid: number, created: boolean): Json[] => [{pid, event: 'RECORDING_TARGET', facts: {purpose: 'synthetic'}}, {pid, event: 'STORAGE_VERIFIED'},
-    {pid, event: 'HISTORY_STORAGE_OPENED', facts: {schemaVersion: 1, created, migratedFrom: null}},
+    {pid, event: 'HISTORY_STORAGE_OPENED', facts: {schemaVersion: 2, created, migratedFrom: null}},
     {pid, event: 'V1_SOURCE_STATUS', facts: {status: 'stale', selection: 'synthetic', durable: 'active', count: 1}}];
   // Seven rows: the intake and flush steps, then the storage steps around the close.
   const stopped = (pid: number): Json[] => [...['ingestion', 'capture', 'v1-ingestion', 'recording-flush', 'storage-probe'].map(name => step(pid, name)),
@@ -193,7 +193,7 @@ function recordingReceipt(path: (string | number)[] = [], replacement?: Json): s
       trayExit: {launcherExit: 0, signal: null, exitMilliseconds: 88, requests: ['tray']}, restartLauncherExit: 0,
       simulator: {exit: {code: 0, signal: null}, report: {scenario: 'normal-delivery-runtime-journey', cancelled: false, matchesReplay: true, differences: [],
         connections: [1, 2, 3].map(index => ({connection: index, durable: true, closedBy: index === 1 ? 'disconnect' : 'client'}))}},
-      files: {magic: 'SQLite format 3', applicationId: 1163154226, userVersion: 1, sidecars: [], syntheticBackups: false, historyDatabase: false, dataDirectory: false},
+      files: {magic: 'SQLite format 3', applicationId: 1163154226, userVersion: 2, sidecars: [], syntheticBackups: false, historyDatabase: false, dataDirectory: false},
       database: {integrity: ['ok'], foreignKeyViolations: 0, purpose: 'synthetic', acceptedOrigin: 'synthetic', acknowledgedThrough: '13',
         sessions: [{game: 'ets2', origin: 'synthetic', committedThrough: '13', endReason: null, simulatorSession: true}],
         rows: {trips: [{trip: 'trip@3', outcome: 'delivered', recordingCompleteness: 'partial'}], attributions: [{eventSeq: '8', trip: 'trip@3', attribution: 'trip'}],
@@ -245,6 +245,8 @@ function recordingCases() {
     invalid('live-only connection served', ['recording', 'simulator', 'report', 'connections', 1, 'durable'], false),
     invalid('history database created', ['recording', 'files', 'historyDatabase'], true),
     invalid('WAL file left', ['recording', 'files', 'sidecars'], ['-wal']),
+    // ET-016 PR-1: the recording target is created at schema version 2.
+    invalid('schema version 1 database', ['recording', 'files', 'userVersion'], 1),
     invalid('integrity failure', ['recording', 'database', 'integrity'], ['row 3 missing from index']),
     invalid('history purpose', ['recording', 'database', 'purpose'], 'history'),
     invalid('coverage short', ['recording', 'database', 'sessions', 0, 'committedThrough'], '12'),

@@ -3,14 +3,39 @@ import path from 'node:path';
 import Database from 'better-sqlite3';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 import {MIGRATIONS, openStorage, type Migration} from '../../packages/storage/src/index';
+import {SCHEMA_V1} from '../../packages/storage/src/sqlite/schema-v1';
+import {SCHEMA_V2} from '../../packages/storage/src/sqlite/schema-v2';
 import {digestOf, expectRepresentative, failed, files, ok, readOnly, REPRESENTATIVE, sha256, workspace} from './helpers';
 
 let ws: Awaited<ReturnType<typeof workspace>>;
 beforeEach(async () => { ws = await workspace(); });
 afterEach(async () => { await ws.dispose(); });
 
-const v2: Migration = {version: 2, name: '0002-test-trip-note', up: db => { db.exec('ALTER TABLE trips ADD COLUMN test_note TEXT'); }};
 const failingV3: Migration = {version: 3, name: '0003-test-failure', up: db => { db.exec('CREATE TABLE test_v3 (id INTEGER PRIMARY KEY)'); throw new Error('injected migration failure'); }};
+const schemaOf = (file: string) => readOnly(file, db => db.prepare('SELECT type, name, tbl_name, sql FROM sqlite_schema ORDER BY type, name').all());
+/** Runs `change` on a closed database file through a plain connection; `foreignKeys` false allows an orphan row. */
+function edit(file: string, change: (db: Database.Database) => void, foreignKeys = true) {
+  const db = new Database(file);
+  try { if (!foreignKeys) db.pragma('foreign_keys = OFF'); change(db); } finally { db.close(); }
+}
+/**
+ * Adds a second plugin session (id 7) to a version 1 copy, with clocks 11 and 12, its own job.configured event (id 6,
+ * eventSeq 1) and that event's job configuration (id 2). The ids differ from every other id, so a backfill from the
+ * wrong column cannot produce session 7 by accident.
+ */
+const SECOND_SESSION = `CREATE TEMP TABLE s AS SELECT * FROM plugin_sessions WHERE id = 1;
+  UPDATE s SET id = 7, plugin_session_uuid = '10000000-0000-4000-8000-000000000007', process_instance_uuid = '20000000-0000-4000-8000-000000000007', committed_through_event_seq = '00000000000000000001';
+  INSERT INTO plugin_sessions SELECT * FROM s;
+  CREATE TEMP TABLE k AS SELECT * FROM clocks WHERE plugin_session_ref = 1;
+  UPDATE k SET id = id + 10, plugin_session_ref = 7;
+  INSERT INTO clocks SELECT * FROM k;
+  CREATE TEMP TABLE e AS SELECT * FROM events WHERE id = 1;
+  UPDATE e SET id = 6, plugin_session_id = 7, source_clock_ref = 11, occurred_game_clock_ref = 12;
+  INSERT INTO events SELECT * FROM e;
+  CREATE TEMP TABLE j AS SELECT * FROM job_configurations WHERE id = 1;
+  UPDATE j SET id = 2, event_ref = 6;
+  INSERT INTO job_configurations SELECT * FROM j;`;
+const jobIdentities = (file: string) => readOnly(file, db => db.prepare('SELECT id, plugin_session_ref, source, event_ref, checkpoint_next_event_seq FROM job_configurations ORDER BY id').all());
 /** Opens a file that is not ours and checks that it was refused without changing a byte or leaving sidecar files. */
 async function expectRefused(file: string, code: 'SCHEMA_NEWER' | 'DATABASE_UNRECOGNIZED' | 'PURPOSE_MISMATCH', purpose: 'synthetic' | 'history' = 'synthetic') {
   const before = sha256(file), listing = files(path.dirname(file));
@@ -20,9 +45,16 @@ async function expectRefused(file: string, code: 'SCHEMA_NEWER' | 'DATABASE_UNRE
 }
 
 describe('REG-013 schema migrations', () => {
-  it('migrates an immutable version 1 copy forward after a verified backup and keeps every ID and value', async () => {
+  // ET-016 PR-1: production migrates version 1 to version 2 (0002-journal), so these cases use the real migration list.
+  // The expected rows are written by hand from schema-v1-representative.sql and J6.
+  it('migrates an immutable version 1 copy to version 2 after a verified backup and keeps every ID and value', async () => {
     const copy = ws.copyFixture(REPRESENTATIVE), original = digestOf(copy);
-    const storage = await ws.open({path: copy, migrations: [...MIGRATIONS, v2]});
+    const v1Jobs = readOnly(copy, db => db.prepare('SELECT * FROM job_configurations ORDER BY id').all());
+    // trips is rebuilt too: its rows and every row that references a trip must survive unchanged.
+    const REFERENCING = ['trip_trailers', 'event_attributions', 'completeness_intervals', 'samples'];
+    const rowsOf = (file: string, table: string) => readOnly(file, db => db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all());
+    const v1Trips = rowsOf(copy, 'trips'), v1Referencing = REFERENCING.map(table => rowsOf(copy, table));
+    const storage = await ws.open({path: copy});
     expect(storage.summary).toMatchObject({schemaVersion: 2, created: false, migratedFrom: 1});
     const backupName = storage.summary.backupFileName!;
     expect(backupName).toMatch(/^telemetry-f0000000-v1-20261015T120000000Z\.sqlite$/);
@@ -34,16 +66,70 @@ describe('REG-013 schema migrations', () => {
     expect(manifest).toMatchObject({format: 'ets2telemetry-backup-1', databaseUuid: 'f0000000-0000-4000-8000-000000000001', fromVersion: 1, fileName: backupName,
       fileSha256: sha256(backup), logicalDigest: original.logicalDigest, rowCounts: original.rowCounts, reason: 'pre-migration'});
     const recorded = readOnly(copy, db => db.prepare('SELECT version, name, backup_file_name, backup_sha256 FROM schema_migrations ORDER BY version').all());
-    expect(recorded).toEqual([{version: 1, name: '0001-initial', backup_file_name: null, backup_sha256: null}, {version: 2, name: '0002-test-trip-note', backup_file_name: backupName, backup_sha256: manifest.fileSha256}]);
+    expect(recorded).toEqual([{version: 1, name: '0001-initial', backup_file_name: null, backup_sha256: null}, {version: 2, name: '0002-journal', backup_file_name: backupName, backup_sha256: manifest.fileSha256}]);
     expect(digestOf(copy).userVersion).toBe(2);
+    readOnly(copy, db => {
+      // The cancelled trip of version 1 keeps every column, opened at an event, has no recorded carrier, and its fuel
+      // used was never observed.
+      expect(db.prepare('SELECT id, opened_event_ref, opened_by, fuel_used_l, fuel_used_l_state, closed_by_session_ref, closed_by_event_seq FROM trips').all())
+        .toEqual([{id: 1, opened_event_ref: 1, opened_by: 'event', fuel_used_l: null, fuel_used_l_state: 'not-observed', closed_by_session_ref: null, closed_by_event_seq: null}]);
+      expect(db.prepare('SELECT * FROM trips ORDER BY id').all()).toEqual(v1Trips.map(row => ({...row as object, opened_by: 'event', fuel_used_l: null,
+        fuel_used_l_state: 'not-observed', closed_by_session_ref: null, closed_by_event_seq: null})));
+      REFERENCING.forEach((table, index) => expect(db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all(), table).toEqual(v1Referencing[index]));
+      expect(v1Referencing.map(rows => rows.length)).toEqual([1, 4, 1, 3]);
+      // The job configuration keeps every version 1 column and comes from event 1 of session 1.
+      expect(db.prepare('SELECT * FROM job_configurations ORDER BY id').all()).toEqual(v1Jobs.map(row => ({...row as object, plugin_session_ref: 1, source: 'event', checkpoint_next_event_seq: null})));
+      expect(db.pragma('foreign_key_check')).toEqual([]);
+      expect(db.pragma('integrity_check', {simple: true})).toBe('ok');
+    });
   });
-  it('leaves the database at version 1 with unchanged content when a later step fails', async () => {
+  it('backfills each job configuration with the plugin session of its event', async () => {
+    const copy = ws.copyFixture(REPRESENTATIVE);
+    edit(copy, db => db.exec(SECOND_SESSION));
+    const storage = await ws.open({path: copy});
+    expect(storage.summary).toMatchObject({schemaVersion: 2, migratedFrom: 1});
+    storage.close();
+    expect(jobIdentities(copy)).toEqual([
+      {id: 1, plugin_session_ref: 1, source: 'event', event_ref: 1, checkpoint_next_event_seq: null},
+      {id: 2, plugin_session_ref: 7, source: 'event', event_ref: 6, checkpoint_next_event_seq: null}]);
+    expect(readOnly(copy, db => db.pragma('foreign_key_check'))).toEqual([]);
+  });
+  it('never migrates a version 1 database whose job configuration lost its event: the verified backup refuses it first', async () => {
+    const copy = ws.copyFixture(REPRESENTATIVE);
+    // A version 1 row whose event is missing, so its session cannot be backfilled. The backup's foreign_key_check
+    // refuses the database before 0002 runs; the backfill's LEFT JOIN would fail NOT NULL rather than drop the row.
+    edit(copy, db => db.exec('CREATE TEMP TABLE j AS SELECT * FROM job_configurations WHERE id = 1; UPDATE j SET id = 2, event_ref = 999; INSERT INTO job_configurations SELECT * FROM j;'), false);
+    const before = digestOf(copy);
+    failed(await openStorage(ws.options({path: copy})), 'BACKUP_FAILED');
+    expect(digestOf(copy)).toEqual(before);
+    expect(files(ws.backups)).toEqual([]);
+    expect(readOnly(copy, db => db.prepare('SELECT version FROM schema_migrations').pluck().all())).toEqual([1]);
+  });
+  it('rolls back migration 0002 with a later failing step: the database stays at version 1 with unchanged content and the backup is named', async () => {
     const copy = ws.copyFixture(REPRESENTATIVE), before = digestOf(copy);
-    const error = failed(await openStorage(ws.options({path: copy, migrations: [...MIGRATIONS, v2, failingV3]})), 'MIGRATION_FAILED');
+    const error = failed(await openStorage(ws.options({path: copy, migrations: [...MIGRATIONS, failingV3]})), 'MIGRATION_FAILED');
     expect(error.backupFileName).toMatch(/^telemetry-f0000000-v1-.*\.sqlite$/);
     expect(existsSync(path.join(ws.backups, error.backupFileName!))).toBe(true);
     expect(digestOf(copy)).toEqual(before);
-    expectRepresentative(await ws.open({path: copy}), copy);
+    // The next open with the production list migrates the unchanged version 1 content.
+    expectRepresentative(await ws.open({path: copy}), copy, {schema_migrations: 2});
+  });
+  it('creates a new database at version 2 whose schema is the frozen version 1 text followed by migration 0002', async () => {
+    const storage = await ws.open(); storage.close();
+    // The frozen statements executed by hand on an empty file, outside the migration framework.
+    const manual = path.join(ws.directory, 'manual.sqlite');
+    edit(manual, db => { for (const statement of [...SCHEMA_V1, ...SCHEMA_V2]) db.exec(statement); }, false);
+    expect(schemaOf(ws.database)).toEqual(schemaOf(manual));
+    // A migrated version 1 database has the same schema, and so has the committed version 2 fixture.
+    const migrated = ws.copyFixture(REPRESENTATIVE);
+    (await ws.open({path: migrated})).close();
+    expect(schemaOf(migrated)).toEqual(schemaOf(ws.database));
+    expect(schemaOf(ws.database)).toEqual(schemaOf(ws.copyFixture('schema-v2-representative.sqlite')));
+    // Version 2 keeps every version 1 trigger and index text and adds no index except the new UNIQUE key's own.
+    const objects = (file: string, type: string) => (schemaOf(file) as {type: string; name: string; sql: string | null}[]).filter(o => o.type === type).map(({name, sql}) => ({name, sql}));
+    const v1 = ws.copyFixture(REPRESENTATIVE, path.join(ws.directory, 'v1.sqlite'));
+    expect(objects(ws.database, 'trigger')).toEqual(objects(v1, 'trigger'));
+    expect(objects(ws.database, 'index')).toEqual([...objects(v1, 'index'), {name: 'sqlite_autoindex_job_configurations_2', sql: null}].sort((a, b) => a.name < b.name ? -1 : 1));
   });
   it('refuses a newer schema without changing the file', async () => {
     await expectRefused(ws.copyFixture('schema-newer-999.sqlite'), 'SCHEMA_NEWER');
@@ -88,7 +174,7 @@ describe('REG-013 schema migrations', () => {
     });
     it('refuses a version changed after inspection even when it is supported, without migrating or backing up', async () => {
       const copy = ws.copyFixture(REPRESENTATIVE), hook = changeAfterInspect(db => db.pragma('user_version = 2'));
-      failed(await openStorage(ws.options({path: copy, migrations: [...MIGRATIONS, v2], testHooks: {afterInspect: hook.afterInspect}})), 'DATABASE_UNRECOGNIZED');
+      failed(await openStorage(ws.options({path: copy, testHooks: {afterInspect: hook.afterInspect}})), 'DATABASE_UNRECOGNIZED');
       expect(sha256(copy)).toBe(hook.state.hash);
       expect(existsSync(ws.backups)).toBe(false);
     });
@@ -109,6 +195,6 @@ describe('REG-013 schema migrations', () => {
   });
   it('creates a new database in an existing empty file', async () => {
     writeFileSync(ws.database, '');
-    expect((await ws.open()).summary).toMatchObject({created: true, schemaVersion: 1});
+    expect((await ws.open()).summary).toMatchObject({created: true, schemaVersion: 2});
   });
 });
