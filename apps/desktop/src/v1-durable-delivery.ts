@@ -18,9 +18,11 @@ import {MAX_PENDING_SAMPLES} from './sample-buffer';
  * retryable (BACKLOG_FULL). The bound is twice the producer's 256 retained entries (docs/native-transport-v1.md, I2).
  * The leftover items of a connection that has ended were never acknowledged, so they cover entries the producer still
  * retains; the reconnection redelivers those entries, at most 256, and its live items are admitted into the same 256
- * entries until an ACK releases some, which follows commits that have already left the queue. Leftovers plus a full
- * redelivery plus live items therefore fit, and a reconnection is not refused while the earlier work drains. Only a
- * true storage stall fills it, for example with the delta gaps of a gap record that keeps growing while nothing commits.
+ * entries until an ACK releases some, which follows commits that have already left the queue. The leftovers of one
+ * ended connection plus a full redelivery plus live items therefore fit. The queue can still fill, and a reconnection
+ * still be refused for a while (retryable, bounded and draining, never a livelock), when the leftovers of several
+ * connections that ended before the queue drained are stacked, or when a gap record keeps growing while nothing
+ * commits and each extension adds a delta gap item without a new entry (I3, I6), as in a true storage stall.
  */
 export const MAX_PENDING_COMMITS = 512;
 /**
