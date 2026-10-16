@@ -125,10 +125,11 @@ let stopping = false, storageStopped = false, exiting = false;
 /**
  * A failed probe ends the service from its report, outside the orderly sequence. Close the history database first,
  * bounded by the same budget as its shutdown step, then exit with the probe's code; a late close never delays the exit.
+ * The recording status stops first, so the closing database is never reported to main (ET-015c).
  */
 function exitAfterHistory(code: number): void {
   if (exiting) return;
-  exiting = true;
+  exiting = true; runtime.stopStatus();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const bound = new Promise<void>(resolve => {timer = setTimeout(resolve, HISTORY_CLOSE_BUDGET_MS);});
   void Promise.race([runtime.history.close().catch(() => undefined), bound]).then(() => {clearTimeout(timer); process.exit(code);});
