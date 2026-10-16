@@ -112,7 +112,9 @@ describe('replies (J10, J11)', () => {
 });
 
 describe('retiring the service (J4)', () => {
-  it.each(['failure', 'exit', 'exhaustion', 'application exit'])('resolves the request in flight and every queued one SERVICE_UNAVAILABLE on its %s', async () => {
+  // Main calls retire() for a failure, an exit, restart exhaustion and an application exit alike; main-boundaries.test.ts
+  // drives those lifecycle paths through main itself.
+  it('resolves the request in flight and every queued one SERVICE_UNAVAILABLE when the service is retired', async () => {
     const f = fixture(), results: unknown[] = [];
     for (let index = 0; index < 3; index++) track(results, index, f.broker.request(TRIPS));
     f.broker.retire();
