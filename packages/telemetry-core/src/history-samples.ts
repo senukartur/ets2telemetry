@@ -54,15 +54,19 @@ function sampleUtc(state: CurrentState, receivedUtcMs: number): number {
   const ms = Number(label.value);
   return Number.isSafeInteger(ms) ? ms : receivedUtcMs;
 }
-/** H7: only a committed, active trip owns a sample; idle, awaiting the outcome, a reload check and an untracked job do not. */
-function sampleTrip(view: TripView): string | null {
-  return view.phase === 'active' && !view.untrackedJob && view.current !== null ? view.current.tripUuid : null;
+/**
+ * H7: only a committed, active trip owns a sample; idle, awaiting the outcome, a reload check and an untracked job do
+ * not. A view of another game than the reading's never lends its trip (a defensive check; the caller passes the
+ * reading's game).
+ */
+function sampleTrip(view: TripView, game: TripGame): string | null {
+  return view.game === game && view.phase === 'active' && !view.untrackedJob && view.current !== null ? view.current.tripUuid : null;
 }
 /** H14: the storage row of one reading, in the wire's canonical units, copied unchanged. */
 function sampleRow(message: ReadingMessage, receivedUtcMs: number, view: TripView): SampleInput {
   const state = message.data.state, game = state.gameTime, place = state.worldPlacement;
   return {
-    tripUuid: sampleTrip(view), utcMs: sampleUtc(state, receivedUtcMs), sourceClockId: message.capture.clockId, monotonicNs: message.capture.monotonicNs,
+    tripUuid: sampleTrip(view, message.source.game), utcMs: sampleUtc(state, receivedUtcMs), sourceClockId: message.capture.clockId, monotonicNs: message.capture.monotonicNs,
     gameTime: {minutes: game.available ? {available: true, value: Number(game.value)} : {available: false, reason: game.reason}, clockId: game.clockId},
     speed: plain(state.speed), fuel: plain(state.fuel), averageConsumption: plain(state.averageConsumption), estimatedRange: plain(state.estimatedRange),
     engineRpm: plain(state.engineRpm), gear: plain(state.gear), odometer: plain(state.odometer),
@@ -89,7 +93,8 @@ export function sampleReading(state: SamplerState, input: SampleReadingInput): S
     return {state: withSlot({pluginSessionId: source.pluginSessionId, clockId: capture.clockId, boundaryOrder: reading.boundaryOrder, second: null}), decision: 'baseline', row: null};
   }
   if (BigInt(reading.boundaryOrder) <= BigInt(slot.boundaryOrder)) return {state, decision: 'stale', row: null};
-  // A fresh reading always advances the boundary. A new capture clock starts with no sampled second.
+  // A fresh reading always advances the boundary. Only the current capture clock is kept: a clock change within a plugin
+  // session is not expected (protocol v1 §5 rejects one within a connection), and a new clock starts with no sampled second.
   const fresh: SamplerSlot = {...slot, clockId: capture.clockId, boundaryOrder: reading.boundaryOrder, second: capture.clockId === slot.clockId ? slot.second : null};
   if (reading.simulation !== 'running') return {state: withSlot(fresh), decision: 'not-running', row: null};
   const ns = BigInt(capture.monotonicNs);

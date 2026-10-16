@@ -315,7 +315,7 @@ describe('capture range and plugin sessions', () => {
       ats: {pluginSessionId: SESSION_C, clockId: CLOCK, boundaryOrder: '7', second: null}
     }});
   });
-  it('the sampled second is kept per capture clock', () => {
+  it('a new capture clock starts with no sampled second', () => {
     const fed = feed([reading({ms: 1_500, boundary: 1}), reading({ms: 1_550, boundary: 2}),
       reading({ms: -500, boundary: 3, clock: CLOCK_B}), reading({ms: -400, boundary: 4, clock: CLOCK_B})]);
     expect(fed.decisions).toEqual(['baseline', 'sampled', 'sampled', 'same-second']);
@@ -351,6 +351,10 @@ describe('H7 trip reference', () => {
   it('an untracked job never gets a trip reference, even beside an active phase', () => {
     const view: TripView = {...tripView(active, 'ets2'), untrackedJob: true};
     const fed = feed([reading({ms: 0, boundary: 1}), reading({ms: 50, boundary: 2})], {view});
+    expect(fed.rows.map(row => row.tripUuid)).toEqual([null]);
+  });
+  it('a view of another game never lends its trip', () => {
+    const fed = feed([reading({ms: 0, boundary: 1, game: 'ats'}), reading({ms: 50, boundary: 2, game: 'ats'})], {view: tripView(active, 'ets2')});
     expect(fed.rows.map(row => row.tripUuid)).toEqual([null]);
   });
 });
