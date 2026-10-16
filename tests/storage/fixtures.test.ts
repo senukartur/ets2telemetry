@@ -34,7 +34,10 @@ function expectRepresentativeV2(storage: Storage, file: string) {
   }
   const first = ok(storage.listEvents(expected.sessions[0].pluginSessionId));
   for (const [eventSeq, values] of Object.entries(expected.recordValues)) expect(first.find(e => e.eventSeq === eventSeq)?.record, eventSeq).toMatchObject(values as object);
-  expect(ok(storage.listTrips()).trips).toEqual(expected.trips);
+  // ET-016 PR-6: TripRecord gained fuelUsedL after this immutable expectation was written. The hand-written values are
+  // the fixture's fuel used, as in its SQL and in `tripColumns` below: 42.5 L, not observed, 0 L and not supported.
+  const fuelUsedL = [{available: true, value: 42.5}, {available: false, reason: 'not-observed'}, {available: true, value: 0}, {available: false, reason: 'not-supported'}];
+  expect(ok(storage.listTrips()).trips).toEqual((expected.trips as object[]).map((trip, index) => ({...trip, fuelUsedL: fuelUsedL[index]})));
   storage.close();
   readOnly(file, db => {
     expect(db.prepare(`SELECT t.trip_uuid, t.opened_by, t.fuel_used_l, t.fuel_used_l_state, s.plugin_session_uuid AS closed_by_session, t.closed_by_event_seq

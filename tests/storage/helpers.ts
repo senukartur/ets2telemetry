@@ -103,7 +103,9 @@ export function expectRepresentative(storage: Storage, file: string, rowCountCha
   const events = ok(storage.listEvents(P1));
   expect(events.map(({eventSeq, type, firstRedelivered, protocolMinor, committedUtcMs}) => ({eventSeq, type, firstRedelivered, protocolMinor, committedUtcMs}))).toEqual(expected.events);
   for (const [eventSeq, values] of Object.entries(expected.recordValues)) expect(events.find(e => e.eventSeq === eventSeq)?.record, eventSeq).toMatchObject(values as object);
-  expect(ok(storage.listTrips()).trips).toEqual(expected.trips);
+  // ET-016 PR-6: TripRecord gained fuelUsedL after this immutable expectation was written. A version 1 trip has no fuel
+  // used, and migration 0002 stores `not-observed` for it (docs/storage.md, schema version 2).
+  expect(ok(storage.listTrips()).trips).toEqual((expected.trips as object[]).map(trip => ({...trip, fuelUsedL: {available: false, reason: 'not-observed'}})));
   expect(ok(storage.listSamples({pluginSessionId: P1}))).toEqual(expected.samples);
   storage.close();
   readOnly(file, db => {

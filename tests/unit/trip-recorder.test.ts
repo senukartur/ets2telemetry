@@ -224,12 +224,13 @@ describe('ET-015a trip recorder in the v1 ingestion pipeline', () => {
     latest().feed(s.snapshot(odometer(1_100), 2_000), s.snapshot(odometer(1_250), 2_000), s.event(r.delivered()));
     await settle(); expect(storage.holding).toBe(1);
     storage.release(); await settle();
-    // The opening step (1,000 -> 1,100) began before the trip opened, so only 1,100 -> 1,250 counts: 150 m.
+    // The opening step (1,000 -> 1,100) began before the trip opened, so only 1,100 -> 1,250 counts: 150 m. Both
+    // snapshots keep the fixture's 410.5 L, so that step is an unchanged fuel step: fuel used is 0 L, a value (J8).
     expect(storage.attempts[1]).toEqual({eventSeq: '2', effects: [
       {kind: 'event.attribute', tripUuid: trip, attribution: 'trip'},
-      {kind: 'trip.update', tripUuid: trip, set: {observedDistanceM: {available: true, value: 150}}},
+      {kind: 'trip.update', tripUuid: trip, set: {observedDistanceM: {available: true, value: 150}, fuelUsedL: {available: true, value: 0}}},
       {kind: 'trip.close', tripUuid: trip, outcome: 'delivered', closeReason: 'outcome', outcomeEvent: 'this-event', recordingCompleteness: 'partial', endedUtcMs: BASE_UTC + 6_000}]});
-    expect(storage.model.trips.map(t => [t.outcome, t.observedDistanceM])).toEqual([['delivered', {available: true, value: 150}]]);
+    expect(storage.model.trips.map(t => [t.outcome, t.observedDistanceM, t.fuelUsedL])).toEqual([['delivered', {available: true, value: 150}, {available: true, value: 0}]]);
     expect([latest().acks, storage.violations]).toEqual([['1', '2'], []]);
   });
 

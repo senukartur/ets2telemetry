@@ -420,7 +420,9 @@ function rowsOf(raw, session) {
       trailerConfigurationEventSeqs: t.trailerSeqs.map(key), openedEventSeq: key(t.openedSeq), gameMode: {mode: t.mode, method: t.method, confidence: t.confidence},
       gameModeAmbiguous: t.ambiguous === 1, outcome: t.outcome, outcomeEventSeq: key(t.outcomeSeq), closeReason: t.closeReason, recordingCompleteness: t.completeness,
       startedUtcMs: t.startedUtcMs, endedUtcMs: t.endedUtcMs,
-      observedDistanceM: t.distanceState === 'available' ? {available: true, value: t.distance} : {available: false, reason: t.distanceState}})),
+      observedDistanceM: t.distanceState === 'available' ? {available: true, value: t.distance} : {available: false, reason: t.distanceState},
+      // ET-016 PR-6 (S-1): fuel used is a stored trip value as well.
+      fuelUsedL: t.fuelUsedState === 'available' ? {available: true, value: t.fuelUsed} : {available: false, reason: t.fuelUsedState}})),
     attributions: raw.attributions.map(a => ({eventSeq: key(a.eventSeq), trip: label(a.trip), attribution: a.attribution})),
     intervals: raw.intervals.map(i => {
       const row = {trip: label(i.trip), kind: i.kind};

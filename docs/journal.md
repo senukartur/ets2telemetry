@@ -108,5 +108,5 @@ The `journal` reply type sits before main's fatal default for unknown service me
 
 - **Journal tab (pending, PR-4).** The Live and Journal tabs, the paged list with filters, the trip detail, the display rules of J13 and the sample gap rows of J14.
 - **JSON export (pending, PR-5).** The `ets2telemetry.trip-export` format version 1 and the main-process save flow (J15–J17).
-- **Late-attach trips and fuel used (pending, ET-016b).** Until PR-6 and PR-7, fuel used stays `not-observed` for every trip the recorder writes and no trip has a checkpoint job.
+- **Late-attach trips (pending, ET-016b PR-7).** Since PR-6 the recorder writes fuel used for each trip, as a value or with its unavailability reason. Until PR-7 no trip has a checkpoint job.
 - Real game history, journal read latency while recording, and large real histories remain unmeasured.

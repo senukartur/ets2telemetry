@@ -18,6 +18,8 @@ export interface StoredTrip {
   outcome: 'open' | 'delivered' | 'cancelled' | 'none'; outcomeEventSeq: string | null; closeReason: string | null;
   recordingCompleteness: string; startedUtcMs: number; endedUtcMs: number | null;
   observedDistanceM: {available: true; value: number} | {available: false; reason: string};
+  /** S-1 (ET-016 PR-6): litres, persisted like observed distance. */
+  fuelUsedL: {available: true; value: number} | {available: false; reason: string};
 }
 export interface StoredAttribution {pluginSessionId: string; eventSeq: string; tripUuid: string | null; attribution: string}
 export type StoredInterval = CompletenessInterval & {pluginSessionId: string};
@@ -85,7 +87,8 @@ export class TripStorageModel {
       const job = this.jobs.get(`${t.pluginSessionId}:${t.jobConfigurationEventSeq}`), last = this.coverage.get(t.pluginSessionId)?.lastUtcMs ?? null;
       return {tripUuid: t.tripUuid, pluginSessionId: t.pluginSessionId, game: t.game, jobKey: job === undefined ? null : jobKey(job), startedUtcMs: t.startedUtcMs,
         recordingCompleteness: t.recordingCompleteness as TripSeed['recordingCompleteness'], ...(last !== null ? {lastObservedUtcMs: last} : {}),
-        ...(t.observedDistanceM.available ? {observedDistanceM: t.observedDistanceM.value} : {}), ...(this.cleared(t) ? {awaitingOutcome: true} : {})};
+        ...(t.observedDistanceM.available ? {observedDistanceM: t.observedDistanceM.value} : {}), ...(t.fuelUsedL.available ? {fuelUsedL: t.fuelUsedL.value} : {}),
+        ...(this.cleared(t) ? {awaitingOutcome: true} : {})};
     });
   }
   private session(m: Of<'event'> | Of<'gap'>) {
@@ -144,18 +147,23 @@ export class TripStorageModel {
             truckConfigurationEventSeq: effect.truckConfiguration === undefined ? null : ref(effect.truckConfiguration, this.trucks, 'truck.configured'),
             trailerConfigurationEventSeqs: (effect.trailerConfigurations ?? []).map(r => ref(r, this.trailers, 'trailer.configured')), openedEventSeq: here!,
             outcome: 'open', outcomeEventSeq: null, closeReason: null, recordingCompleteness: effect.recordingCompleteness, startedUtcMs: effect.startedUtcMs, endedUtcMs: null,
-            observedDistanceM: NOT_OBSERVED});
+            observedDistanceM: NOT_OBSERVED, fuelUsedL: NOT_OBSERVED});
           break;
         }
         case 'trip.update': {
           const trip = this.trip(m, effect.tripUuid)!, set = effect.set;
-          const allowed = trip.outcome === 'open' ? ['recordingCompleteness', 'gameModeAmbiguous', 'observedDistanceM', 'truckConfiguration', 'trailerConfigurations'] : ['recordingCompleteness', 'observedDistanceM'];
+          const allowed = trip.outcome === 'open' ? ['recordingCompleteness', 'gameModeAmbiguous', 'observedDistanceM', 'fuelUsedL', 'truckConfiguration', 'trailerConfigurations']
+            : ['recordingCompleteness', 'observedDistanceM', 'fuelUsedL'];
           if (Object.keys(set).some(key => !allowed.includes(key))) throw new Error(`trip.update of ${Object.keys(set).join(',')} on a ${trip.outcome} trip`);
           if (set.recordingCompleteness !== undefined) trip.recordingCompleteness = set.recordingCompleteness;
           if (set.gameModeAmbiguous !== undefined) trip.gameModeAmbiguous = set.gameModeAmbiguous;
           if (set.observedDistanceM !== undefined) {
             if (set.observedDistanceM.available && !(Number.isFinite(set.observedDistanceM.value) && set.observedDistanceM.value >= 0)) throw new Error('Invalid observed distance');
             trip.observedDistanceM = structuredClone(set.observedDistanceM);
+          }
+          if (set.fuelUsedL !== undefined) {
+            if (set.fuelUsedL.available && !(Number.isFinite(set.fuelUsedL.value) && set.fuelUsedL.value >= 0)) throw new Error('Invalid fuel used');
+            trip.fuelUsedL = structuredClone(set.fuelUsedL);
           }
           if (set.truckConfiguration !== undefined) trip.truckConfigurationEventSeq = ref(set.truckConfiguration, this.trucks, 'truck.configured');
           for (const r of set.trailerConfigurations ?? []) trip.trailerConfigurationEventSeqs.push(ref(r, this.trailers, 'trailer.configured'));

@@ -13,7 +13,7 @@ import {
   waitForCompleteLive, waitForCurrentTelemetry, waitForNotCurrentLive, waitForOverlayV1, waitForRecordingText, waitForV1NotCurrentLive
 } from './renderer-observation.mjs';
 import {
-  LAYOUT_SMOKE_RESERVED_CSS, LAYOUT_SMOKE_WINDOWS, rendererPages, runOverlaySmoke, verifyLayoutContainment, verifyStripLayout, waitForLayoutContainment, waitForStripLayout, windowSecurity,
+  captureHiddenOverlay, LAYOUT_SMOKE_RESERVED_CSS, LAYOUT_SMOKE_WINDOWS, rendererPages, runOverlaySmoke, verifyLayoutContainment, verifyStripLayout, waitForLayoutContainment, waitForStripLayout, windowSecurity,
   verifyRendererStyles
 } from './overlay-observation.mjs';
 import {runLifecycleSmoke, seedLifecycleSettings, verifyLifecycleRestart} from './lifecycle-observation.mjs';
@@ -146,7 +146,8 @@ try {
   if (config.scenario === 'overlay') {
     result.overlay = {};
     await runOverlaySmoke(application, window, overlay, telemetrySource, result.overlay);
-    await overlay.screenshot({path: path.join(config.output, 'hidden-overlay-dom.png')});
+    // Review evidence only: the serialized DOM always, the PNG when the hidden window presents a frame (overlay-observation.mjs).
+    result.overlay.capture = await captureHiddenOverlay(overlay, config.output);
   }
   if (config.scenario === 'telemetry') {
     // The dashboard is taller than the smoke window, and outside wheel input on a shared desktop can scroll it, also
