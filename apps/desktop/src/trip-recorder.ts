@@ -7,14 +7,16 @@
 // same FIFO and are adopted at once. ET-015b: after each reading the recorder samples it at one row per source second
 // and holds the rows until DurableDelivery's `samples` op writes them. Node-safe: it talks to storage only through the
 // StorageClient interface. See docs/telemetry-service-v1.md.
+import type {RecordingLosses, RecordingTrip} from '../../../packages/contracts/src';
 import type {Uint64} from '../../../packages/contracts/src/protocol-v1';
-import type {CommitResult, SampleAppendResult} from '../../../packages/storage/src/api';
+import type {CommitResult, CompletenessKind, SampleAppendResult, TripEffect} from '../../../packages/storage/src/api';
 import type {StorageClient} from '../../../packages/storage/src/client';
 import {
   initialSamplerState, initialTripState, normalizeV1State, sampleReading, stepTrip, tripView, type SamplerState, type TripErrorCode, type TripGame, type TripInput,
   type TripState, type TripView
 } from '../../../packages/telemetry-core/src/index';
 import type {CommitContext, CoverageMessage, DurableSink, ReadingMessage, RecorderErrorCode, SampleSink, SinkError, SinkResult, WelcomeMessage} from './durable-sink';
+import {saturatingAdd} from './recording-status';
 import {SampleBuffer} from './sample-buffer';
 import {readTripSeeds} from './trip-seeds';
 
@@ -32,6 +34,13 @@ const RECORDER_MESSAGE = 'The trip recorder refused an input that breaks the cal
 const refused = (code: RecorderErrorCode): {ok: false; error: SinkError} => ({ok: false, error: {code, retryable: false, message: RECORDER_MESSAGE}});
 /** Commit statuses after which the stepped state is adopted (T3, R16). */
 const ADOPT = new Set<CommitResult['status']>(['committed', 'duplicate', 'covered', 'conflict']);
+/** ET-015c (G6): the completeness interval kinds the recording status counts, with the counter of each. */
+const COUNTED: Partial<Record<CompletenessKind, 'eventLoss' | 'notConnected' | 'sampleLoss' | 'restoreLoss'>> = {
+  'event-loss': 'eventLoss', 'not-connected': 'notConnected', 'sample-loss': 'sampleLoss', 'restore-loss': 'restoreLoss'
+};
+const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
+/** ET-015c: `onChange` is called after every change the recording status may show: trip state, losses or dropped samples. */
+export interface TripRecorderOptions {onChange?: () => void}
 
 /** The reducer reading of a checkpoint or snapshot: its normalized state, source identity, capture time and UTC label. */
 function reading(message: ReadingMessage): TripInput {
@@ -66,6 +75,11 @@ function reading(message: ReadingMessage): TripInput {
  *   one at the final write) and then its rows with `appendSamples(…, {uniqueSeconds: true})` (H6); each part leaves the
  *   buffer only once stored.
  * - `view(game)` (R17): the read-only trip view, for ET-015b.
+ * - `losses()` and `tripSummary(game)` (ET-015c, G6): what the recording status shows. Losses count only what storage
+ *   committed: for a gap committed as new (`committed`), the eventSeq range it newly covers, lastEventSeq minus
+ *   previouslyCoveredThrough; the `completeness.add` intervals of `committed` commits by kind; each sample-loss
+ *   interval `samples.write` stored; each restore loss recorded, with its range; and the rows the pending sample bound
+ *   dropped. A `duplicate`, `covered` or `conflict` result adds nothing, since its effects were stored before or never.
  *
  * A reducer `ok: false` result becomes a RecorderErrorCode and changes no state.
  */
@@ -73,13 +87,15 @@ export class TripRecorderSink implements DurableSink {
   private state: TripState = initialTripState();
   private sampler: SamplerState = initialSamplerState();
   private readonly buffer = new SampleBuffer();
+  private lostEvents = 0n;
+  private readonly counts = {eventLoss: 0, notConnected: 0, sampleLoss: 0, restoreLoss: 0};
   readonly samples: SampleSink = {
     pending: () => ({rows: this.buffer.rowCount, losses: this.buffer.lossCount}),
     write: (maxRows, final) => this.writeSamples(maxRows, final),
     discard: () => this.buffer.discard(),
     dropped: () => this.buffer.dropped
   };
-  constructor(private readonly client: TripRecorderClient) {}
+  constructor(private readonly client: TripRecorderClient, private readonly options: TripRecorderOptions = {}) {}
 
   async openSession(welcome: WelcomeMessage): Promise<SinkResult<{committedThroughEventSeq: Uint64}>> {
     const stored = await this.client.upsertSession({message: welcome});
@@ -104,6 +120,7 @@ export class TripRecorderSink implements DurableSink {
     const session = stepTrip(next, {kind: 'session', welcome, coveredThrough, openTrips});
     if (!session.ok) return refused(RECORDER_CODE[session.code]);
     this.state = session.state;
+    this.options.onChange?.();
     return {ok: true, value: {committedThroughEventSeq: coveredThrough}};
   }
 
@@ -120,6 +137,12 @@ export class TripRecorderSink implements DurableSink {
     // R7: the gap's effects describe only (coveredThrough, lastEventSeq]; another starting point means they were wrong.
     if (message.kind === 'gap' && result.value.previouslyCoveredThrough !== coveredThrough) return refused('TRIP_COVERAGE_MISMATCH');
     this.state = stepped.state;
+    // G6: only a new row stored its effects; a gap covers (previouslyCoveredThrough, lastEventSeq] anew.
+    if (result.value.status === 'committed') {
+      this.countIntervals(stepped.effects);
+      if (message.kind === 'gap') this.addLostEvents(BigInt(message.data.lastEventSeq) - BigInt(coveredThrough));
+    }
+    this.options.onChange?.();
     return result;
   }
 
@@ -137,6 +160,7 @@ export class TripRecorderSink implements DurableSink {
     const sampled = sampleReading(this.sampler, {message, receivedUtcMs: context.receivedUtcMs, view: tripView(this.state, message.source.game)});
     this.sampler = sampled.state;
     if (sampled.row) this.buffer.push(message.source.pluginSessionId, sampled.row);
+    this.options.onChange?.();
     return {ok: true, value: undefined};
   }
 
@@ -151,6 +175,8 @@ export class TripRecorderSink implements DurableSink {
       const recorded = await this.client.recordCompleteness(batch.pluginSessionId, loss);
       if (!recorded.ok) return recorded;
       this.buffer.commitLoss(loss);
+      this.counts.sampleLoss = saturatingAdd(this.counts.sampleLoss, 1);
+      this.options.onChange?.();
     }
     if (batch.rows.length === 0) return {ok: true, value: {appended: 0, skipped: 0}};
     const result = await this.client.appendSamples(batch.pluginSessionId, [...batch.rows], {uniqueSeconds: true});
@@ -159,12 +185,43 @@ export class TripRecorderSink implements DurableSink {
   }
 
   async restoreLoss(pluginSessionId: string, storedThroughEventSeq: Uint64, ackedThroughEventSeq: Uint64): Promise<SinkResult<undefined>> {
-    return this.client.recordCompleteness(pluginSessionId, {
+    const result = await this.client.recordCompleteness(pluginSessionId, {
       kind: 'restore-loss', firstEventSeq: (BigInt(storedThroughEventSeq) + 1n).toString(), lastEventSeq: ackedThroughEventSeq,
       detail: {cause: 'ack-ahead-of-storage', storedThroughEventSeq, ackedThroughEventSeq}
     }, {ifAbsent: true});
+    if (result.ok) {
+      // G6: each recorded restore loss and its range (storedThrough, ackedThrough]. `ifAbsent` reports no difference, so
+      // a later service in the same plugin session counts it again although storage keeps one row.
+      this.counts.restoreLoss = saturatingAdd(this.counts.restoreLoss, 1);
+      this.addLostEvents(BigInt(ackedThroughEventSeq) - BigInt(storedThroughEventSeq));
+      this.options.onChange?.();
+    }
+    return result;
   }
 
   /** R17: the read-only trip view of one game from the adopted state. */
   view(game: TripGame): TripView { return tripView(this.state, game); }
+
+  /** ET-015c (G2): the phase, the open trip's completeness and the untracked-job flag of one game, from the adopted state. */
+  tripSummary(game: TripGame): RecordingTrip {
+    const view = this.view(game);
+    return {phase: view.phase, completeness: view.current?.recordingCompleteness ?? null, untrackedJob: view.untrackedJob};
+  }
+
+  /** ET-015c (G6): the committed losses of this recorder's lifetime, saturating at Number.MAX_SAFE_INTEGER. */
+  losses(): RecordingLosses {
+    return {lostEvents: Number(this.lostEvents > MAX_SAFE ? MAX_SAFE : this.lostEvents), ...this.counts, droppedSamples: this.buffer.dropped};
+  }
+
+  private countIntervals(effects: readonly TripEffect[]): void {
+    for (const effect of effects) {
+      const counter = effect.kind === 'completeness.add' ? COUNTED[effect.interval.kind] : undefined;
+      if (counter) this.counts[counter] = saturatingAdd(this.counts[counter], 1);
+    }
+  }
+  private addLostEvents(count: bigint): void {
+    if (count <= 0n) return;
+    this.lostEvents += count;
+    if (this.lostEvents > MAX_SAFE) this.lostEvents = MAX_SAFE;
+  }
 }

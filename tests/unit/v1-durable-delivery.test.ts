@@ -646,3 +646,72 @@ describe('ET-015b samples op in the storage-commit pipeline', () => {
     expect([vi.getTimerCount(), sink.log, logs]).toEqual([0, [`open ${P1}`], []]);
   });
 });
+
+// ET-015c (G9): the pipeline's retry code, which the recording status shows as `retrying`. Expectations are written by
+// hand from G9: a retryable commit, sample or backlog failure sets it; only a successful commit or sample write clears it.
+describe('ET-015c retry code of the storage-commit pipeline', () => {
+  function retrying(sink: MemorySink, options: {maxPendingCommits?: number} = {}) {
+    const changes: (string | undefined)[] = [], delivery = new DurableDelivery(sink, {...options, onRetryCode: code => changes.push(code)});
+    const connect = (name = 'welcome', acked = '0') => {
+      const link = new Link(sink.log), connection = delivery.connect(welcome(name), link);
+      connection.checkpoint(checkpointAt(acked), RECEIVED);
+      return {link, connection};
+    };
+    return {delivery, changes, connect};
+  }
+
+  it('keeps a retryable commit failure through the reconnection and its session open, and clears it at the next successful commit', async () => {
+    const sink = new MemorySink(), {delivery, changes, connect} = retrying(sink);
+    const first = connect();
+    sink.failures.push('DISK_FULL');
+    first.connection.enqueue(range(event(1)), event(1), RECEIVED); await delivery.idle();
+    expect([delivery.retryCode, delivery.status, first.link.closes, changes]).toEqual(['DISK_FULL', {state: 'pending', retryCode: 'DISK_FULL'}, [['retryable', 'DISK_FULL']], ['DISK_FULL']]);
+    // The reconnection's welcome and session open clear the status's retryCode, but not the pipeline's.
+    const second = connect('welcome-reconnect'); await delivery.idle();
+    expect([delivery.status, delivery.retryCode, changes]).toEqual([{state: 'active'}, 'DISK_FULL', ['DISK_FULL']]);
+    second.connection.enqueue(range(event(1)), event(1), RECEIVED); await delivery.idle();
+    expect([second.link.acks, delivery.retryCode, changes]).toEqual([['1'], undefined, ['DISK_FULL', undefined]]);
+    // Later successes change nothing.
+    second.connection.enqueue(range(event(2)), event(2), RECEIVED); await delivery.idle();
+    expect(changes).toEqual(['DISK_FULL', undefined]);
+  });
+
+  it('sets BACKLOG_FULL when a bound closes the connection', async () => {
+    const sink = new MemorySink(); sink.paused = true;
+    const {delivery, changes, connect} = retrying(sink, {maxPendingCommits: 1});
+    const {connection} = connect();
+    await flush();
+    expect(connection.enqueue(range(event(1)), event(1), RECEIVED)).toBe(true);
+    expect(connection.enqueue(range(event(2)), event(2), RECEIVED)).toBe(false);
+    expect([delivery.retryCode, changes]).toEqual(['BACKLOG_FULL', ['BACKLOG_FULL']]);
+    sink.paused = false; sink.releaseOne(); await delivery.idle();
+    // The open of the closed connection completed; that is no write that clears it.
+    expect(delivery.retryCode).toBe('BACKLOG_FULL');
+  });
+
+  describe('sample writes', () => {
+    beforeEach(() => { vi.useFakeTimers(); });
+    afterEach(() => { vi.useRealTimers(); });
+    const snapshotAt = (seq: number) => { const m = structuredClone(server('snapshot')) as Extract<ServerMessage, {kind: 'snapshot'}>; m.seq = String(seq); return m; };
+
+    it('sets the code of a retryable sample failure with the connection open, and clears it at the next successful sample write', async () => {
+      const sink = new SamplingSink(); sink.sampleFailures.push('DATABASE_LOCKED');
+      const {delivery, changes, connect} = retrying(sink), {link, connection} = connect();
+      for (let seq = 0; seq < 60; seq++) connection.snapshot(snapshotAt(100 + seq), RECEIVED);
+      await vi.advanceTimersByTimeAsync(0);
+      expect([delivery.retryCode, delivery.status, link.closes, changes]).toEqual(['DATABASE_LOCKED', {state: 'active'}, [], ['DATABASE_LOCKED']]);
+      await vi.advanceTimersByTimeAsync(SAMPLE_FLUSH_MS);
+      expect([sink.log.at(-1), delivery.retryCode, changes]).toEqual(['samples 1-60', undefined, ['DATABASE_LOCKED', undefined]]);
+    });
+
+    it('clears a sample failure code at the next successful commit too', async () => {
+      const sink = new SamplingSink(); sink.sampleFailures.push('DISK_FULL');
+      const {delivery, changes, connect} = retrying(sink), {link, connection} = connect();
+      for (let seq = 0; seq < 60; seq++) connection.snapshot(snapshotAt(100 + seq), RECEIVED);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(delivery.retryCode).toBe('DISK_FULL');
+      connection.enqueue(range(event(1)), event(1), RECEIVED); await vi.advanceTimersByTimeAsync(0);
+      expect([link.acks, delivery.retryCode, changes]).toEqual([['1'], undefined, ['DISK_FULL', undefined]]);
+    });
+  });
+});

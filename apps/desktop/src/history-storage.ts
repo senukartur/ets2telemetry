@@ -30,6 +30,8 @@ export interface HistoryStorageOptions {
   target?: RecordingDatabase;
   /** ET-015a (R10): called once, after the database opened, so durable delivery can start without waiting for a reconnection. */
   onOpened?: () => void;
+  /** ET-015c (G3): called after every change of `state`, for the recording status. */
+  onStateChange?: (state: HistoryState) => void;
   /** Tests only. */
   timers?: ClientTimers;
   /** Tests only: the real-worker storage suite bounds a close by its own grace (tests/storage/helpers.ts). */
@@ -56,10 +58,13 @@ export class HistoryStorage {
   #client: StorageClient | undefined;
   #opening: Promise<void> | undefined;
   #reported = false;
+  #failure: StorageErrorCode | null = null;
 
   constructor(private readonly options: HistoryStorageOptions) {}
 
   get state(): HistoryState { return this.#state; }
+  /** ET-015c (G10): the code that made the database unavailable (the first one, as logged); null before any failure. */
+  get failureCode(): StorageErrorCode | null { return this.#failure; }
   /** The storage client while the database is open; undefined before the open finished, after a failure and after close. */
   get client(): StorageClient | undefined { return this.#state === 'open' ? this.#client : undefined; }
 
@@ -81,7 +86,7 @@ export class HistoryStorage {
       client = new StorageClient(this.options.createWorker(), {timers: this.options.timers, closeGraceMs: this.options.closeGraceMs ?? HISTORY_CLOSE_GRACE_MS, onFailure: error => this.#unavailable(error.code)});
     } catch { this.#unavailable('WORKER_FAILED'); return; }
     this.#client = client;
-    this.#state = 'opening';
+    this.#set('opening');
     this.#opening = client.open({...file, purpose: target.purpose, appVersion: this.options.appVersion ?? version}).then(result => {
       if (!result.ok) {
         this.#unavailable(result.error.code);
@@ -89,7 +94,7 @@ export class HistoryStorage {
         void client.close();
         return;
       }
-      if (this.#state === 'opening') this.#state = 'open';
+      if (this.#state === 'opening') this.#set('open');
       const summary = result.value;
       this.options.log('HISTORY_STORAGE_OPENED', undefined, {schemaVersion: summary.schemaVersion, created: summary.created, migratedFrom: summary.migratedFrom ?? null});
       // Leftovers of a backup that an earlier shutdown terminated; the count only, never a file name.
@@ -105,18 +110,25 @@ export class HistoryStorage {
    */
   async close(): Promise<void> {
     const client = this.#client;
-    if (!client) { this.#state = 'closed'; return; }
+    if (!client) { this.#set('closed'); return; }
     const {clean} = await client.close();
     await this.#opening;
     // Still open here only when the database opened and no failure followed.
     const opened = this.#state === 'open';
-    this.#state = 'closed';
+    this.#set('closed');
     if (!clean) throw new Error('History storage did not close cleanly');
     if (opened) this.options.log('HISTORY_STORAGE_CLOSED');
   }
 
+  #set(state: HistoryState): void {
+    if (state === this.#state) return;
+    this.#state = state;
+    this.options.onStateChange?.(state);
+  }
+
   #unavailable(code: StorageErrorCode): void {
-    if (this.#state !== 'closed') this.#state = 'unavailable';
+    this.#failure ??= code;
+    if (this.#state !== 'closed') this.#set('unavailable');
     if (this.#reported) return;
     this.#reported = true;
     this.options.log('HISTORY_STORAGE_UNAVAILABLE', undefined, {code});

@@ -13,7 +13,7 @@ const SUMMARY = {schemaVersion: 1, created: true, databaseUuid: '50000000-0000-4
 const timers = {setTimeout: (callback: () => void, ms: number) => setTimeout(callback, ms), clearTimeout: (handle: unknown) => clearTimeout(handle as ReturnType<typeof setTimeout>)};
 
 /** A scripted storage worker. `open` answers with `openResult`; `close` is answered only when `answerClose` is true. */
-function fixture(localAppData: string | null = 'C:\\isolated',openResult: Result<unknown> = {ok: true, value: SUMMARY}, answerClose = true, extra: Pick<HistoryStorageOptions, 'target' | 'onOpened'> = {}) {
+function fixture(localAppData: string | null = 'C:\\isolated',openResult: Result<unknown> = {ok: true, value: SUMMARY}, answerClose = true, extra: Pick<HistoryStorageOptions, 'target' | 'onOpened' | 'onStateChange'> = {}) {
   const sent: StorageRequest[] = [], log = vi.fn();
   const listeners: {message?: (message: unknown) => void; error?: (error: unknown) => void; exit?: (code: number) => void} = {};
   let exited = false;
@@ -233,5 +233,32 @@ describe('recording target and the trip recorder client (ET-015a, R3, R10)', () 
     source.client = {appendSamples: (...args: unknown[]) => { received.push(args); return Promise.resolve({ok: true, value: {appended: 0, skipped: 0}}); }} as unknown as StorageClient;
     expect(await client.appendSamples('s', [], {uniqueSeconds: true})).toEqual({ok: true, value: {appended: 0, skipped: 0}});
     expect(received).toEqual([['s', [], {uniqueSeconds: true}]]);
+  });
+});
+
+// ET-015c (G3, G10): the recording status reads the database state, each change of it and the code of its failure.
+describe('history storage state for the recording status (ET-015c)', () => {
+  it('reports each state change once and no failure code for an open and an orderly close', async () => {
+    const states: string[] = [], f = fixture('C:\\isolated', {ok: true, value: SUMMARY}, true, {onStateChange: state => states.push(state)});
+    expect([f.history.state, f.history.failureCode]).toEqual(['idle', null]);
+    f.history.start(); await vi.advanceTimersByTimeAsync(0);
+    await f.history.close();
+    expect([states, f.history.failureCode]).toEqual([['opening', 'open', 'closed'], null]);
+  });
+  it.each<[string, string | null, Result<unknown>, string[], StorageErrorCode]>([
+    ['a refused open', 'C:\\isolated', {ok: false, error: storageError('SCHEMA_NEWER')}, ['opening', 'unavailable'], 'SCHEMA_NEWER'],
+    ['a missing LOCALAPPDATA', null, {ok: true, value: SUMMARY}, ['unavailable'], 'DATA_PATH_INVALID']
+  ])('keeps the first failure code after %s', async (_name, localAppData, openResult, expected, code) => {
+    const states: string[] = [], f = fixture(localAppData, openResult, true, {onStateChange: state => states.push(state)});
+    f.history.start(); await vi.advanceTimersByTimeAsync(0);
+    expect([states, f.history.failureCode]).toEqual([expected, code]);
+    await f.history.close();
+    expect(f.history.failureCode).toBe(code);
+  });
+  it('reports a worker crash after the open as unavailable with WORKER_FAILED', async () => {
+    const states: string[] = [], f = fixture('C:\\isolated', {ok: true, value: SUMMARY}, true, {onStateChange: state => states.push(state)});
+    f.history.start(); await vi.advanceTimersByTimeAsync(0);
+    f.crash(); f.crash();
+    expect([states, f.history.failureCode]).toEqual([['opening', 'open', 'unavailable'], 'WORKER_FAILED']);
   });
 });

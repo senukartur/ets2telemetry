@@ -299,13 +299,15 @@ async function stoppedService(stopProbe: (report: ProbeDependencies['report']) =
     constructor(options: HistoryStorageOptions) {history.options.push(options);}
     get state() {return history.state;}
     get client() {return history.client;}
+    // ET-015c: the recording status reads the failure code; the stand-in never fails.
+    get failureCode() {return null;}
     start() {history.start();}
     close() {return history.close();}
   }}));
   // The protocol v1 ingestion (ET-006b) is replaced like the history database: its options and calls are recorded.
   const v1 = {options: [] as V1IngestionOptions[], configureBroker: vi.fn<(configuration: BrokerConfiguration | undefined) => void>(),
     select: vi.fn<(selection: string, endpoint?: string) => void>(), stopSource: vi.fn(() => Promise.resolve()), flush: vi.fn(() => Promise.resolve()),
-    durableAvailabilityChanged: vi.fn()};
+    durableAvailabilityChanged: vi.fn(), current: {selection: 'game', status: 'waiting', reason: 'Select ETS2 or ATS explicitly', fresh: false, durable: {state: 'off'}} as V1SourceState};
   // A case that needs the real ingestion and trip recorder (the flush step) keeps the module.
   if (!options.realV1) vi.doMock('../../apps/desktop/src/v1-ingestion', () => ({V1Ingestion: class {
     constructor(options: V1IngestionOptions) {v1.options.push(options);}
@@ -314,6 +316,9 @@ async function stoppedService(stopProbe: (report: ProbeDependencies['report']) =
     stopSource() {return v1.stopSource();}
     flush() {return v1.flush();}
     durableAvailabilityChanged() {v1.durableAvailabilityChanged();}
+    // ET-015c: the recording status of a recording target reads the state and the retry code.
+    get current() {return v1.current;}
+    get durableRetryCode() {return undefined;}
   }}));
   // The native client is replaced by a recorder so the production connectGame closures can be called without a broker.
   const pipeClients: unknown[][] = [];
@@ -622,4 +627,61 @@ it.each(['hanging', 'failed'])('reports a %s storage step within its budget as a
     expect(f.exit).toHaveBeenCalledExactlyOnceWith(1);
     expect(f.steps().find(step => step.name === 'storage-probe')).toMatchObject({outcome: mode === 'hanging' ? 'timeout' : 'failed'});
   } finally {f.restore();}
+});
+// ET-015c (G4, G5): the service posts its recording status to main on the parent port. Expected statuses are written by
+// hand from G3 and docs/telemetry-service-v1.md#recording-status-et-015c.
+describe('ET-015c recording status on the parent port', () => {
+  const stopProbe = (report: ProbeDependencies['report']) => {report({type: 'stopped'}); return Promise.resolve();};
+  const v1Endpoint = '\\\\.\\pipe\\ETS2Telemetry-SYNTHETIC-TEST-v1-123-' + randomUUID();
+  const recordingPosts = (parent: {postMessage: ReturnType<typeof vi.fn>}) => parent.postMessage.mock.calls.map(call => call[0] as {type: string; status?: unknown})
+    .filter(message => message.type === 'recording');
+
+  it('reports disabled once in production, whatever the source does, and nothing after the stop begins', async () => {
+    const f = await stoppedService(stopProbe);
+    try {
+      expect(recordingPosts(f.parent)).toEqual([{type: 'recording', status: {state: 'disabled'}}]);
+      f.parent.emit('message', {data: {type: 'select', source: 'synthetic'}, ports: []});
+      const state = (status: V1SourceState['status']): V1SourceState => ({selection: 'synthetic', status, reason: 'fixed', fresh: status === 'connected', durable: {state: 'off'}});
+      for (const status of ['waiting', 'connected', 'disconnected'] as const) f.v1.options[0].onState!(state(status));
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(recordingPosts(f.parent)).toEqual([{type: 'recording', status: {state: 'disabled'}}]);
+      f.stop(); await vi.advanceTimersByTimeAsync(1000);
+      expect(recordingPosts(f.parent)).toHaveLength(1);
+      expect([f.exit.mock.calls, vi.getTimerCount()]).toEqual([[[0]], 0]);
+    } finally {f.restore();}
+  });
+
+  it('reports opening, then waiting, then recording for a synthetic recording target', async () => {
+    vi.stubEnv('ETS2TELEMETRY_RECORDING', 'synthetic:t'); vi.stubEnv('ETS2TELEMETRY_SOURCE_PIPE_V1', v1Endpoint);
+    const sockets: TestSocket[] = [];
+    const connect = vi.spyOn(net, 'connect').mockImplementation(() => {const socket = new TestSocket(); sockets.push(socket); return socket as unknown as net.Socket;});
+    const answer = (value: unknown) => Promise.resolve({ok: true, value});
+    const client = {
+      upsertSession: () => answer({created: true, committedThroughEventSeq: '0'}), committedThrough: () => answer('0'),
+      listTrips: () => answer({trips: [], nextCursor: null}), getEvent: () => answer(undefined), listEvents: () => answer([]), recordCompleteness: () => answer(undefined)
+    } as unknown as StorageClient;
+    const f = await stoppedService(stopProbe, undefined, {realV1: true});
+    const zero = {lostEvents: 0, eventLoss: 0, notConnected: 0, sampleLoss: 0, restoreLoss: 0, droppedSamples: 0};
+    const status = (state: string, trip: unknown = null) => ({type: 'recording', status: {state, target: 'synthetic', code: null, losses: zero, trip}});
+    try {
+      // The database is still opening when the service starts.
+      expect(recordingPosts(f.parent)).toEqual([status('opening')]);
+      // It opens and the synthetic source is selected in the same turn: one status, sent at the end of the 250 ms interval.
+      f.history.state = 'open'; f.history.client = client; f.history.options[0].onStateChange!('open');
+      f.parent.emit('message', {data: {type: 'select', source: 'synthetic'}, ports: []});
+      await vi.advanceTimersByTimeAsync(300);
+      expect(recordingPosts(f.parent)).toEqual([status('opening'), status('waiting')]);
+      // A durable connection with fresh data and an open session records; the checkpoint's game has no trip yet.
+      const socket = sockets[0]; socket.emit('connect');
+      const s = new Script(ETS2_A);
+      for (const message of [s.welcome(), s.checkpoint(null)]) socket.emit('data', encodeFrameV1(message));
+      await vi.advanceTimersByTimeAsync(300);
+      expect(recordingPosts(f.parent)).toEqual([status('opening'), status('waiting'), status('recording', {phase: 'idle', completeness: null, untrackedJob: false})]);
+      f.stop(); await vi.advanceTimersByTimeAsync(0);
+      // The stop ends the source, but no status follows once it began.
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(recordingPosts(f.parent)).toHaveLength(3);
+      expect(f.exit).toHaveBeenCalledExactlyOnceWith(0);
+    } finally {connect.mockRestore(); f.restore(); vi.unstubAllEnvs();}
+  });
 });

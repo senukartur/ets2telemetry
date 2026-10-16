@@ -19,7 +19,7 @@ import type {TelemetrySocket} from '../../apps/desktop/src/native-pipe-client';
 import {RECORDER_FAILURE_CLASS, TripRecorderSink, type TripRecorderClient} from '../../apps/desktop/src/trip-recorder';
 import {V1Ingestion, type V1IngestionOptions, type V1SourceState} from '../../apps/desktop/src/v1-ingestion';
 import {failureClass} from '../../apps/desktop/src/durable-sink';
-import {BASE_UTC, ETS2_A, Script, r} from '../shared/trip-messages';
+import {BASE_UTC, ETS2_A, RECEIVED_UTC, Script, r} from '../shared/trip-messages';
 import {TripStorageModel} from '../shared/trip-replay';
 
 const ENDPOINT = '\\\\.\\pipe\\ETS2Telemetry-SYNTHETIC-TEST-v1-1-00000000-0000-4000-8000-000000000000';
@@ -487,5 +487,79 @@ describe('ET-015b one-second samples through the trip recorder', () => {
     expect(storage.intervals).toEqual([{pluginSessionId: ETS2_A, interval: {tripUuid: null, kind: 'sample-loss', startUtcMs: BASE_UTC + 301_000, endUtcMs: BASE_UTC + 307_000,
       startMonotonicNs: '1301000000000', endMonotonicNs: '1307000000000', sourceClockId: s.clockId, detail: {cause: 'sample-backlog', count: 7}}}]);
     expect([recorder.samples.pending(), storage.model.samples.length, latest().destroyed]).toEqual([{rows: 0, losses: 0}, 300, false]);
+  });
+});
+
+// ET-015c (G2, G6): what the recording status reads from the recorder. Expected counts are written by hand from G6:
+// only effects storage stored as a new row count, a gap counts only the eventSeq values it newly covers, and restore
+// losses, stored sample-loss intervals and dropped rows count once each.
+describe('ET-015c committed losses and the trip summary of the recorder', () => {
+  const ZERO = {lostEvents: 0, eventLoss: 0, notConnected: 0, sampleLoss: 0, restoreLoss: 0, droppedSamples: 0};
+  const context = {receivedUtcMs: RECEIVED_UTC};
+
+  it('L1: counts the new coverage of committed gaps and their interval kinds, never the covered part of a gap or a covered record (G6)', async () => {
+    const storage = new ModelStorage();
+    let changes = 0;
+    const recorder = new TripRecorderSink(storage, {onChange: () => changes++}), s = new Script(ETS2_A);
+    expect([recorder.losses(), recorder.tripSummary('ets2')]).toEqual([ZERO, {phase: 'idle', completeness: null, untrackedJob: false}]);
+    expect((await recorder.openSession(s.welcome())).ok).toBe(true);
+    expect(recorder.observe(s.checkpoint(null), context).ok).toBe(true);
+    expect(await recorder.commit(s.event(r.started()), context)).toMatchObject({ok: true, value: {status: 'committed'}});
+    // A queue loss of 2-4 with no trip open: one session-level event-loss interval.
+    expect(await recorder.commit(s.gap(3), context)).toMatchObject({ok: true, value: {status: 'committed', committedThroughEventSeq: '4'}});
+    expect(recorder.losses()).toEqual({...ZERO, lostEvents: 3, eventLoss: 1});
+    // An offline loss of 5-6 is a not-connected interval.
+    expect(await recorder.commit(s.gap(2, 'offline'), context)).toMatchObject({ok: true, value: {status: 'committed', committedThroughEventSeq: '6'}});
+    expect(recorder.losses()).toEqual({...ZERO, lostEvents: 5, eventLoss: 1, notConnected: 1});
+    // A merged record 3-8 that storage already covers through 6: only 7 and 8 are new.
+    const merged = s.gapRange(3n, 8n, {queueCount: '6'});
+    expect(await recorder.commit(merged, context)).toMatchObject({ok: true, value: {status: 'committed', committedThroughEventSeq: '8', previouslyCoveredThrough: '6'}});
+    expect(recorder.losses()).toEqual({...ZERO, lostEvents: 7, eventLoss: 2, notConnected: 1});
+    // The same record again lies wholly inside coverage: covered, and nothing more is counted.
+    expect(await recorder.commit(merged, context)).toMatchObject({ok: true, value: {status: 'covered'}});
+    expect(recorder.losses()).toEqual({...ZERO, lostEvents: 7, eventLoss: 2, notConnected: 1});
+    expect([changes > 0, storage.violations]).toEqual([true, []]);
+  });
+
+  it('L2: counts nothing for a failed commit and reports the open trip of a game (G2, G6)', async () => {
+    const storage = new ModelStorage(); storage.failures.set('2', ['DISK_FULL']);
+    const recorder = new TripRecorderSink(storage), s = new Script(ETS2_A);
+    await recorder.openSession(s.welcome()); recorder.observe(s.checkpoint(null), context);
+    await recorder.commit(s.event(r.started()), context);
+    const job = s.event(r.jobConfigured());
+    expect(await recorder.commit(job, context)).toMatchObject({ok: false, error: {code: 'DISK_FULL'}});
+    expect([recorder.losses(), recorder.tripSummary('ets2')]).toEqual([ZERO, {phase: 'idle', completeness: null, untrackedJob: false}]);
+    expect(await recorder.commit(job, context)).toMatchObject({ok: true, value: {status: 'committed'}});
+    // Opened while running, outside a load: its completeness is not known yet (T12). The other game stays idle.
+    expect([recorder.tripSummary('ets2'), recorder.tripSummary('ats'), recorder.losses()]).toEqual([{phase: 'active', completeness: 'unknown', untrackedJob: false},
+      {phase: 'idle', completeness: null, untrackedJob: false}, ZERO]);
+  });
+
+  it('L3: counts a recorded restore loss with its released range (R9, G6)', async () => {
+    const storage = new ModelStorage(), s = new Script(ETS2_A);
+    start(storage); connectLatest();
+    latest().feed(s.welcome(), s.checkpoint(null), s.event(r.started()), s.event(r.paused(), {simulation: 'paused'}));
+    await settle(); expect(latest().acks).toEqual(['1', '2']);
+    await stopLifetime();
+    // The producer released eventSeq 3-5 that storage never committed: A = 5, C = 2.
+    for (let i = 0; i < 3; i++) s.event(r.started());
+    const counting = new TripRecorderSink(storage);
+    start(storage, counting); connectLatest();
+    latest().feed(s.welcome(), s.checkpoint(null));
+    await settle();
+    expect([state().durable, counting.losses()]).toEqual([{state: 'failed', code: 'ACK_AHEAD_OF_STORAGE'}, {...ZERO, lostEvents: 3, restoreLoss: 1}]);
+  });
+
+  it('L4: counts each stored sample-loss interval and the rows the pending bound dropped (H9, G6)', async () => {
+    const storage = new ModelStorage(); storage.sampleFailures.push('DISK_FULL');
+    const recorder = new TripRecorderSink(storage), s = new Script(ETS2_A);
+    start(storage, recorder); connectLatest();
+    latest().feed(s.welcome(), s.checkpoint(null));
+    for (let n = 1; n <= 302; n++) latest().feed(s.snapshot({}, 1_000));
+    await settle();
+    // Two rows were dropped; their interval is not stored yet, so it is not counted.
+    expect(recorder.losses()).toEqual({...ZERO, droppedSamples: 2});
+    await advance(5_000);
+    expect([storage.intervals.map(i => i.interval.kind), recorder.losses()]).toEqual([['sample-loss'], {...ZERO, sampleLoss: 1, droppedSamples: 2}]);
   });
 });
