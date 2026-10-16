@@ -141,7 +141,8 @@ shutdown.register('intake', {name: 'ingestion', budgetMs: 1000, run: () => inges
 shutdown.register('intake', {name: 'capture', budgetMs: 1000, run: () => captures.stop()});
 // Ends the v1 source and waits for its broker process; nothing is acknowledged afterwards (R14).
 shutdown.register('intake', {name: 'v1-ingestion', budgetMs: 1000, run: () => v1.stopSource()});
-// Drops queued durable work and waits for the one storage command in flight before the database closes (R14).
+// Drops queued durable work and waits for the one storage command in flight before the database closes (R14); then,
+// unless durable delivery failed, writes the pending one-second samples (ET-015b, H11).
 shutdown.register('flush', {name: 'recording-flush', budgetMs: 500, run: () => v1.flush()});
 shutdown.register('storage', {name: 'storage-probe', budgetMs: 1000, run: async () => {
   await probe.stop();
