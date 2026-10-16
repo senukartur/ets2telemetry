@@ -4,14 +4,16 @@
 // effects; the trip recorder (trip-recorder.ts) commits them with their ET-014 effects. Production passes no sink yet,
 // so nothing is recorded or acknowledged; see docs/telemetry-service-v1.md.
 import type {ServerMessage, Uint64} from '../../../packages/contracts/src/protocol-v1';
-import type {CommitResult, StorageError, StorageErrorCode} from '../../../packages/storage/src/api';
+import type {CommitResult, SampleAppendResult, StorageError, StorageErrorCode} from '../../../packages/storage/src/api';
 import type {StorageClient} from '../../../packages/storage/src/client';
+// A type-only import: the ingestion and the ACK pipeline still never load telemetry-core or the reducer at runtime.
+import type {ReadingMessage} from '../../../packages/telemetry-core/src/history-samples';
 
 export type WelcomeMessage = Extract<ServerMessage, {kind: 'welcome'}>;
 /** A message that carries eventSeq coverage: one event or one gap marker. */
 export type CoverageMessage = Extract<ServerMessage, {kind: 'event' | 'gap'}>;
-/** A message that carries a reading of current state: the connection's checkpoint or a snapshot. */
-export type ReadingMessage = Extract<ServerMessage, {kind: 'checkpoint' | 'snapshot'}>;
+/** A message that carries a reading of current state: the connection's checkpoint or a snapshot (the sampler's type). */
+export type {ReadingMessage};
 
 /**
  * R7: the trip recorder's fixed sink codes for a reducer result `ok: false`. They are contract defects between the
@@ -27,8 +29,27 @@ export const RECORDER_FAILURE_CLASS: Readonly<Record<RecorderErrorCode, 'unavail
 export type SinkErrorCode = StorageErrorCode | RecorderErrorCode;
 export type SinkError = Omit<StorageError, 'code'> & {code: SinkErrorCode};
 export type SinkResult<T> = {ok: true; value: T} | {ok: false; error: SinkError};
-/** R8: the consumer's UTC label, captured when the frame was decoded, never when the commit runs. */
+/**
+ * R8, H13: the consumer's UTC label, captured when the frame was decoded, never when its commit or observation runs.
+ * Every event, gap, checkpoint and snapshot of a durable connection carries one.
+ */
 export interface CommitContext {receivedUtcMs: number}
+
+/**
+ * ET-015b (H2, H8, H11, H12): the sink's pending one-second samples, written only by DurableDelivery's `samples` op and
+ * by its final write at `stop()`; it never produces or advances an ACK.
+ * - `pending()`: rows and loss intervals waiting to be written.
+ * - `write(maxRows)`: stores the next batch of one plugin session (its loss intervals, then at most `maxRows` rows) and
+ *   drops them from the pending set only once stored; a failure keeps them.
+ * - `discard()`: drops everything pending and returns the number of rows dropped.
+ * - `dropped()`: rows dropped by the pending bound in the sink's lifetime.
+ */
+export interface SampleSink {
+  pending(): number;
+  write(maxRows: number): Promise<SinkResult<SampleAppendResult>>;
+  discard(): number;
+  dropped(): number;
+}
 
 /**
  * Durable storage as the ingestion sees it. `openSession` stores the plugin session from a validated welcome and
@@ -36,16 +57,19 @@ export interface CommitContext {receivedUtcMs: number}
  * UNIQUE(plugin_session_id, event_seq) and returns the coverage after it. A rejected promise counts as INTERNAL.
  *
  * The optional members are called by DurableDelivery in FIFO order with the commits:
- * - `observe` (R5) receives each durable connection's checkpoint and snapshots, synchronously at the head of the FIFO;
- *   a failure result fails durable delivery like a failed commit. Without it, snapshots are not queued.
+ * - `observe` (R5) receives each durable connection's checkpoint and snapshots with their receipt label (H13),
+ *   synchronously at the head of the FIFO; a failure result fails durable delivery like a failed commit. Without it,
+ *   snapshots are not queued.
  * - `restoreLoss` (R9) records that the producer released (storedThrough, ackedThrough] beyond storage, before the
  *   ACK_AHEAD_OF_STORAGE connection closes.
+ * - `samples` (ET-015b) holds the rows `observe` sampled; DurableDelivery schedules their writes.
  */
 export interface DurableSink {
   openSession(welcome: WelcomeMessage): Promise<SinkResult<{committedThroughEventSeq: Uint64}>>;
   commit(message: CoverageMessage, context: CommitContext): Promise<SinkResult<CommitResult>>;
-  observe?(message: ReadingMessage): SinkResult<undefined>;
+  observe?(message: ReadingMessage, context: CommitContext): SinkResult<undefined>;
   restoreLoss?(pluginSessionId: string, storedThroughEventSeq: Uint64, ackedThroughEventSeq: Uint64): Promise<SinkResult<undefined>>;
+  readonly samples?: SampleSink;
 }
 
 /**

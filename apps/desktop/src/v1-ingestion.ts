@@ -64,9 +64,14 @@ export interface V1IngestionOptions {
   durableSelections?: readonly SourceSelection[];
   /** R10: whether storage is open now; a hello requests durable delivery only while it returns true. Default: always. */
   durableReady?: () => boolean;
-  /** R8: the consumer's UTC clock in milliseconds for the receipt label of each event and gap; defaults to Date.now. */
+  /**
+   * R8, H13: the consumer's UTC clock in milliseconds for the receipt label of each event, gap, checkpoint and snapshot
+   * of a durable connection; defaults to Date.now.
+   */
   utcNow?: () => number;
   staleMs?: number; handshakeMs?: number; probeIntervalMs?: number; maxPendingCommits?: number; maxPendingReadings?: number;
+  /** Tests only (ET-015b, H8): the pipeline's sample flush delay and batch size. */
+  sampleFlushMs?: number; sampleBatchRows?: number;
   /** Fixed codes and numbers only. */
   diagnose?: (event: string, facts?: DiagnosticFacts) => void;
   onState?: (state: V1SourceState) => void;
@@ -118,7 +123,7 @@ export class V1Ingestion {
     this.utcNow = options.utcNow ?? (() => Date.now());
     if (options.sink) {
       this.delivery = new DurableDelivery(options.sink, {maxPendingCommits: options.maxPendingCommits, maxPendingReadings: options.maxPendingReadings,
-        log: options.diagnose, onStatus: () => this.publish()});
+        sampleFlushMs: options.sampleFlushMs, sampleBatchRows: options.sampleBatchRows, log: options.diagnose, onStatus: () => this.publish()});
     }
     this.state = initialState('game', this.durableStatus());
   }
@@ -159,9 +164,12 @@ export class V1Ingestion {
     this.disposed = true; this.pendingSelection = undefined; this.cancel();
     await Promise.all(this.completions); await this.transition;
   }
-  /** Drops queued durable work and waits for the one storage command in flight; nothing is written afterwards (R14). */
+  /**
+   * Drops queued durable work and waits for the one storage command in flight; no commit or ACK follows (R14). Then the
+   * pending one-second samples are written unless durable delivery failed (ET-015b, H11).
+   */
   async flush(): Promise<void> { await this.delivery?.stop(); }
-  /** Ends the source, waits for owned processes and then for the one storage command in flight. */
+  /** Ends the source, waits for owned processes, then for the one storage command in flight and the final sample write. */
   async stop(): Promise<void> { await this.stopSource(); await this.flush(); }
   /**
    * The reported durable status. `failed` is always reported, so a failure for the service lifetime (or the
@@ -302,13 +310,14 @@ export class V1Ingestion {
             case 'checkpoint':
               if (!durable) healthy();
               clearTimeout(this.handshake); this.handshake = undefined;
-              // R5: the checkpoint starts the connection's cursor and is the recorder's first reading, in FIFO order.
-              durable?.checkpoint(message);
+              // R5: the checkpoint starts the connection's cursor and is the recorder's first reading, in FIFO order. H13:
+              // like an event's, its receipt label is taken when the frame is decoded.
+              durable?.checkpoint(message, this.utcNow());
               observe(message);
               this.probes ??= setInterval(sendProbe, this.options.probeIntervalMs ?? V1_PROBE_INTERVAL_MS);
               sendProbe();
               return;
-            case 'snapshot': observe(message); durable?.snapshot(message); return;
+            case 'snapshot': observe(message); durable?.snapshot(message, this.utcNow()); return;
             case 'event': case 'gap':
               // The consumer accepts coverage only on a durable connection; receipt is never an ACK.
               if (!durable || !applied.coverage) throw new Error('Coverage without a durable connection');
