@@ -60,12 +60,19 @@ const TIMELINE_CODES = /^(HISTORY_STORAGE_OPENED|HISTORY_STORAGE_CLOSED|V1_DURAB
  * factory. Only the worker, the fixture connect, the test close grace, ingestion test knobs and a status interval of 0
  * are supplied: every status change the publisher settles is recorded, none is coalesced away by real time.
  */
+/**
+ * The v1 staleness bound of these cases. With the 500 ms default, a host that stalls the test process for longer, or a
+ * session open slower than 500 ms after the last frame of a connection, would turn connected data stale by real time
+ * and add or remove an `interrupted` or `recording` step. Staleness is covered by the unit rule table; here each step
+ * follows source messages only.
+ */
+const NO_STALE_MS = 600_000;
 function serviceRuntime(name: string, worker: StorageWorkerHandle, socket: {connect: (endpoint: string) => TelemetrySocket}, timeline: string[],
   options: {onState?: (state: V1SourceState) => void; onStatus?: (status: RecordingHealth) => void; ingestionOverrides?: RecordingIngestionOverrides} = {}) {
   const logs: [string, unknown][] = [], states: V1SourceState[] = [], statuses: RecordingHealth[] = [];
   const runtime = createRecordingRuntime({env: {ETS2TELEMETRY_RECORDING: `synthetic:${name}`}, gameHistory: GAME_HISTORY_RECORDING, localAppData: ws.directory,
     log: (event, _detail, facts) => { logs.push([event, facts]); if (TIMELINE_CODES.test(event)) timeline.push(event); },
-    createWorker: () => worker, connect: socket.connect, ingestionOverrides: options.ingestionOverrides,
+    createWorker: () => worker, connect: socket.connect, ingestionOverrides: {staleMs: NO_STALE_MS, ...options.ingestionOverrides},
     historyOverrides: {appVersion: '0.1.0-test', closeGraceMs: TEST_CLOSE_GRACE_MS}, statusOverrides: {intervalMs: 0},
     onV1State: state => { states.push(state); options.onState?.(state); },
     onRecordingStatus: next => { statuses.push(next); options.onStatus?.(next); }});
