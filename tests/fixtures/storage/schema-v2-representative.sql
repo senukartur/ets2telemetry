@@ -2,9 +2,9 @@
 -- Provenance: created once on October 16, 2026 by executing this file with better-sqlite3 13.0.3 (SQLite 3.53.4)
 -- Database.exec() into a new empty file in rollback-journal (DELETE) mode. Never regenerate or edit it: it is the
 -- immutable REG-013 baseline of schema version 2. The DDL is the exact sqlite_schema text, in sqlite_schema order, that
--- migrations 0001-initial and 0002-journal produced on that date. job_configurations comes last because 0002 rebuilt
--- it, and its name is quoted because SQLite writes a renamed table's name that way. tests/storage/fixtures.test.ts and
--- tests/storage/migrations.test.ts check that the migrations still produce it.
+-- migrations 0001-initial and 0002-journal produced on that date. job_configurations and trips come last because 0002
+-- rebuilt them, and their names are quoted because SQLite writes a renamed table's name that way.
+-- tests/storage/fixtures.test.ts and tests/storage/migrations.test.ts check that the migrations still produce it.
 PRAGMA application_id = 1163154226;
 PRAGMA user_version = 2;
 BEGIN;
@@ -63,20 +63,6 @@ CREATE TABLE event_amounts (event_ref INTEGER PRIMARY KEY REFERENCES events (id)
 CREATE TABLE job_deliveries (event_ref INTEGER PRIMARY KEY REFERENCES events (id),
     earned_xp INTEGER CHECK (earned_xp BETWEEN -2147483648 AND 2147483647), earned_xp_state TEXT NOT NULL CHECK (earned_xp_state IN ('available', 'not-observed', 'not-supported', 'invalid')) CHECK ((earned_xp_state = 'available') = (earned_xp IS NOT NULL)), cargo_damage REAL, cargo_damage_state TEXT NOT NULL CHECK (cargo_damage_state IN ('available', 'not-observed', 'not-supported', 'invalid')) CHECK ((cargo_damage_state = 'available') = (cargo_damage IS NOT NULL)), distance_m REAL, distance_m_state TEXT NOT NULL CHECK (distance_m_state IN ('available', 'not-observed', 'not-supported', 'invalid')) CHECK ((distance_m_state = 'available') = (distance_m IS NOT NULL)),
     delivery_duration_minutes INTEGER CHECK (delivery_duration_minutes BETWEEN 0 AND 4294967295), delivery_duration_minutes_state TEXT NOT NULL CHECK (delivery_duration_minutes_state IN ('available', 'not-observed', 'not-supported', 'invalid')) CHECK ((delivery_duration_minutes_state = 'available') = (delivery_duration_minutes IS NOT NULL)), auto_park_used INTEGER CHECK (auto_park_used IN (0, 1)), auto_park_used_state TEXT NOT NULL CHECK (auto_park_used_state IN ('available', 'not-observed', 'not-supported', 'invalid')) CHECK ((auto_park_used_state = 'available') = (auto_park_used IS NOT NULL)), auto_load_used INTEGER CHECK (auto_load_used IN (0, 1)), auto_load_used_state TEXT NOT NULL CHECK (auto_load_used_state IN ('available', 'not-observed', 'not-supported', 'invalid')) CHECK ((auto_load_used_state = 'available') = (auto_load_used IS NOT NULL))) STRICT;
-CREATE TABLE trips (id INTEGER PRIMARY KEY, trip_uuid TEXT NOT NULL CHECK (trip_uuid GLOB '[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]') UNIQUE, plugin_session_ref INTEGER NOT NULL REFERENCES plugin_sessions (id),
-    game TEXT NOT NULL CHECK (game IN ('ets2', 'ats')), game_mode TEXT NOT NULL CHECK (game_mode IN ('single-player', 'truckersmp', 'unknown', 'convoy')),
-    game_mode_method TEXT NOT NULL CHECK (game_mode_method IN ('module-scan', 'process-scan', 'none')), game_mode_confidence TEXT NOT NULL CHECK (game_mode_confidence IN ('strong', 'weak', 'none')),
-    game_mode_ambiguous INTEGER NOT NULL DEFAULT 0 CHECK (game_mode_ambiguous IN (0, 1)),
-    job_configuration_ref INTEGER NOT NULL REFERENCES job_configurations (id), truck_configuration_ref INTEGER REFERENCES truck_configurations (id),
-    opened_event_ref INTEGER NOT NULL REFERENCES events (id),
-    outcome TEXT NOT NULL CHECK (outcome IN ('open', 'delivered', 'cancelled', 'none')), outcome_event_ref INTEGER REFERENCES events (id),
-    close_reason TEXT CHECK (close_reason IN ('outcome', 'configuration-cleared', 'different-job', 'restart', 'discontinuity', 'gap')),
-    recording_completeness TEXT NOT NULL CHECK (recording_completeness IN ('complete', 'partial', 'unknown')),
-    started_utc_ms INTEGER NOT NULL CHECK (started_utc_ms >= 0), ended_utc_ms INTEGER CHECK (ended_utc_ms >= started_utc_ms),
-    observed_distance_m REAL CHECK (observed_distance_m >= 0), observed_distance_m_state TEXT NOT NULL CHECK (observed_distance_m_state IN ('available', 'not-observed', 'not-supported', 'invalid')) CHECK ((observed_distance_m_state = 'available') = (observed_distance_m IS NOT NULL)),
-    created_utc_ms INTEGER NOT NULL CHECK (created_utc_ms >= 0), updated_utc_ms INTEGER NOT NULL CHECK (updated_utc_ms >= created_utc_ms), fuel_used_l REAL CHECK (fuel_used_l IS NULL OR fuel_used_l >= 0), fuel_used_l_state TEXT NOT NULL DEFAULT 'not-observed' CHECK (fuel_used_l_state IN ('available', 'not-observed', 'not-supported', 'invalid')) CHECK ((fuel_used_l_state = 'available') = (fuel_used_l IS NOT NULL)), closed_by_session_ref INTEGER REFERENCES plugin_sessions (id), closed_by_event_seq TEXT CHECK (closed_by_event_seq IS NULL OR ((length(closed_by_event_seq) = 20 AND closed_by_event_seq NOT GLOB '*[^0-9]*' AND closed_by_event_seq <= '18446744073709551615') AND closed_by_event_seq > '00000000000000000000' AND closed_by_event_seq <= '18446744073709551614')) CHECK ((closed_by_session_ref IS NULL) = (closed_by_event_seq IS NULL)) CHECK (closed_by_event_seq IS NULL OR outcome <> 'open'),
-    CHECK ((outcome = 'open') = (close_reason IS NULL)), CHECK ((outcome IN ('delivered', 'cancelled')) = (outcome_event_ref IS NOT NULL)),
-    CHECK ((outcome = 'open') = (ended_utc_ms IS NULL))) STRICT;
 CREATE TABLE trip_trailers (trip_ref INTEGER NOT NULL REFERENCES trips (id), trailer_configuration_ref INTEGER NOT NULL REFERENCES trailer_configurations (id),
     PRIMARY KEY (trip_ref, trailer_configuration_ref)) STRICT;
 CREATE TABLE event_attributions (event_ref INTEGER PRIMARY KEY REFERENCES events (id), trip_ref INTEGER REFERENCES trips (id),
@@ -111,6 +97,26 @@ CREATE TABLE "job_configurations" (id INTEGER PRIMARY KEY, plugin_session_ref IN
     expected_income_raw TEXT CHECK ((expected_income_sdk_type = 'u64' AND (expected_income_raw = '0' OR (expected_income_raw GLOB '[1-9]*' AND length(expected_income_raw) <= 20 AND substr(expected_income_raw, 2) NOT GLOB '*[^0-9]*'))) OR (expected_income_sdk_type = 's64' AND (expected_income_raw = '0' OR (expected_income_raw GLOB '[1-9]*' AND length(expected_income_raw) <= 19 AND substr(expected_income_raw, 2) NOT GLOB '*[^0-9]*') OR (expected_income_raw GLOB '-[1-9]*' AND length(expected_income_raw) <= 20 AND substr(expected_income_raw, 2) NOT GLOB '*[^0-9]*')))), expected_income_sdk_type TEXT CHECK (expected_income_sdk_type IN ('s64', 'u64')), expected_income_currency_status TEXT CHECK (expected_income_currency_status IN ('unknown', 'sdk-documented')), expected_income_currency_code TEXT CHECK (expected_income_currency_code GLOB '[A-Z][A-Z][A-Z]'), expected_income_currency_source TEXT CHECK (length(expected_income_currency_source) BETWEEN 1 AND 128), expected_income_state TEXT NOT NULL CHECK (expected_income_state IN ('available', 'not-observed', 'not-supported', 'invalid')) CHECK ((expected_income_state = 'available') = (expected_income_raw IS NOT NULL) AND (expected_income_raw IS NULL) = (expected_income_sdk_type IS NULL) AND (expected_income_raw IS NULL) = (expected_income_currency_status IS NULL)) CHECK ((expected_income_currency_status IS 'sdk-documented') = (expected_income_currency_code IS NOT NULL) AND (expected_income_currency_code IS NULL) = (expected_income_currency_source IS NULL)), delivery_deadline_minutes INTEGER CHECK (delivery_deadline_minutes BETWEEN 0 AND 4294967295), delivery_deadline_minutes_state TEXT NOT NULL CHECK (delivery_deadline_minutes_state IN ('available', 'not-observed', 'not-supported', 'invalid')) CHECK ((delivery_deadline_minutes_state = 'available') = (delivery_deadline_minutes IS NOT NULL)),
     CHECK ((source = 'event') = (event_ref IS NOT NULL)), CHECK ((source = 'checkpoint') = (checkpoint_next_event_seq IS NOT NULL)),
     UNIQUE (plugin_session_ref, checkpoint_next_event_seq)) STRICT;
+CREATE TABLE "trips" (id INTEGER PRIMARY KEY, trip_uuid TEXT NOT NULL CHECK (trip_uuid GLOB '[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]') UNIQUE, plugin_session_ref INTEGER NOT NULL REFERENCES plugin_sessions (id),
+    game TEXT NOT NULL CHECK (game IN ('ets2', 'ats')), game_mode TEXT NOT NULL CHECK (game_mode IN ('single-player', 'truckersmp', 'unknown', 'convoy')),
+    game_mode_method TEXT NOT NULL CHECK (game_mode_method IN ('module-scan', 'process-scan', 'none')), game_mode_confidence TEXT NOT NULL CHECK (game_mode_confidence IN ('strong', 'weak', 'none')),
+    game_mode_ambiguous INTEGER NOT NULL DEFAULT 0 CHECK (game_mode_ambiguous IN (0, 1)),
+    job_configuration_ref INTEGER NOT NULL REFERENCES job_configurations (id), truck_configuration_ref INTEGER REFERENCES truck_configurations (id),
+    opened_event_ref INTEGER REFERENCES events (id), opened_by TEXT NOT NULL CHECK (opened_by IN ('event', 'checkpoint')),
+    outcome TEXT NOT NULL CHECK (outcome IN ('open', 'delivered', 'cancelled', 'none')), outcome_event_ref INTEGER REFERENCES events (id),
+    close_reason TEXT CHECK (close_reason IN ('outcome', 'configuration-cleared', 'different-job', 'restart', 'discontinuity', 'gap')),
+    recording_completeness TEXT NOT NULL CHECK (recording_completeness IN ('complete', 'partial', 'unknown')),
+    started_utc_ms INTEGER NOT NULL CHECK (started_utc_ms >= 0), ended_utc_ms INTEGER CHECK (ended_utc_ms >= started_utc_ms),
+    observed_distance_m REAL CHECK (observed_distance_m >= 0), observed_distance_m_state TEXT NOT NULL CHECK (observed_distance_m_state IN ('available', 'not-observed', 'not-supported', 'invalid')) CHECK ((observed_distance_m_state = 'available') = (observed_distance_m IS NOT NULL)),
+    created_utc_ms INTEGER NOT NULL CHECK (created_utc_ms >= 0), updated_utc_ms INTEGER NOT NULL CHECK (updated_utc_ms >= created_utc_ms),
+    fuel_used_l REAL CHECK (fuel_used_l IS NULL OR fuel_used_l >= 0),
+    fuel_used_l_state TEXT NOT NULL DEFAULT 'not-observed' CHECK (fuel_used_l_state IN ('available', 'not-observed', 'not-supported', 'invalid')) CHECK ((fuel_used_l_state = 'available') = (fuel_used_l IS NOT NULL)),
+    closed_by_session_ref INTEGER REFERENCES plugin_sessions (id),
+    closed_by_event_seq TEXT CHECK (closed_by_event_seq IS NULL OR ((length(closed_by_event_seq) = 20 AND closed_by_event_seq NOT GLOB '*[^0-9]*' AND closed_by_event_seq <= '18446744073709551615') AND closed_by_event_seq > '00000000000000000000' AND closed_by_event_seq <= '18446744073709551614')),
+    CHECK ((outcome = 'open') = (close_reason IS NULL)), CHECK ((outcome IN ('delivered', 'cancelled')) = (outcome_event_ref IS NOT NULL)),
+    CHECK ((outcome = 'open') = (ended_utc_ms IS NULL)),
+    CHECK ((opened_by = 'event' AND opened_event_ref IS NOT NULL) OR (opened_by = 'checkpoint' AND opened_event_ref IS NULL)),
+    CHECK ((closed_by_session_ref IS NULL) = (closed_by_event_seq IS NULL)), CHECK (closed_by_event_seq IS NULL OR outcome <> 'open')) STRICT;
 -- Representative synthetic content. Every value below was chosen by hand; the expected read results are written by
 -- hand in schema-v2-representative.expected.json. Only payload_json texts were produced once by the canonical JSON
 -- encoder from the named protocol v1 fixtures (event-job-configured, event-job-delivered and
@@ -119,7 +125,8 @@ CREATE TABLE "job_configurations" (id INTEGER PRIMARY KEY, plugin_session_ref IN
 -- in a gap that closes trip 2 (carrier: the gap's first new eventSeq, 4) and opens trip 3 at eventSeq 6. Plugin
 -- session 2 closes trip 3 as a restart from its own eventSeq 1 (carrier in session 2) and opens trip 4, which stays
 -- open. Job configuration 5 comes from a checkpoint of session 2 (the S-2 shape) and no trip references it. Fuel used
--- covers an available value, an available zero and two unavailable reasons.
+-- covers an available value, an available zero and two unavailable reasons. Every trip opened at an event (opened_by
+-- 'event'); a checkpoint opening needs the late-attach read path of ET-016b and is not part of this fixture.
 INSERT INTO database_info (id, database_uuid, purpose, accepted_origin, created_utc_ms, created_app_version)
   VALUES (1, 'f0000000-0000-4000-8000-000000000002', 'synthetic', 'synthetic', 1791676800000, '0.1.0');
 INSERT INTO schema_migrations (version, name, applied_utc_ms, app_version, backup_file_name, backup_sha256) VALUES
@@ -190,15 +197,15 @@ INSERT INTO job_deliveries (event_ref, earned_xp, earned_xp_state, cargo_damage,
   delivery_duration_minutes_state, auto_park_used, auto_park_used_state, auto_load_used, auto_load_used_state)
   VALUES (2, 250, 'available', 0.0125, 'available', 151250.5, 'available', 471, 'available', 0, 'available', 1, 'available');
 INSERT INTO trips (id, trip_uuid, plugin_session_ref, game, game_mode, game_mode_method, game_mode_confidence, game_mode_ambiguous, job_configuration_ref,
-  truck_configuration_ref, opened_event_ref, outcome, outcome_event_ref, close_reason, recording_completeness, started_utc_ms, ended_utc_ms,
+  truck_configuration_ref, opened_event_ref, opened_by, outcome, outcome_event_ref, close_reason, recording_completeness, started_utc_ms, ended_utc_ms,
   observed_distance_m, observed_distance_m_state, created_utc_ms, updated_utc_ms, fuel_used_l, fuel_used_l_state, closed_by_session_ref, closed_by_event_seq) VALUES
-  (1, '70000000-0000-4000-8000-000000000001', 1, 'ets2', 'single-player', 'module-scan', 'weak', 0, 1, NULL, 1, 'delivered', 2, 'outcome', 'complete',
+  (1, '70000000-0000-4000-8000-000000000001', 1, 'ets2', 'single-player', 'module-scan', 'weak', 0, 1, NULL, 1, 'event', 'delivered', 2, 'outcome', 'complete',
    1791676800000, 1791676802000, 151000.25, 'available', 1791676801000, 1791676802000, 42.5, 'available', 1, '00000000000000000002'),
-  (2, '70000000-0000-4000-8000-000000000002', 1, 'ets2', 'single-player', 'module-scan', 'weak', 0, 2, NULL, 3, 'none', NULL, 'gap', 'partial',
+  (2, '70000000-0000-4000-8000-000000000002', 1, 'ets2', 'single-player', 'module-scan', 'weak', 0, 2, NULL, 3, 'event', 'none', NULL, 'gap', 'partial',
    1791676803000, 1791676805000, NULL, 'not-observed', 1791676803000, 1791676805000, NULL, 'not-observed', 1, '00000000000000000004'),
-  (3, '70000000-0000-4000-8000-000000000003', 1, 'ets2', 'single-player', 'module-scan', 'weak', 0, 3, NULL, 4, 'none', NULL, 'restart', 'partial',
+  (3, '70000000-0000-4000-8000-000000000003', 1, 'ets2', 'single-player', 'module-scan', 'weak', 0, 3, NULL, 4, 'event', 'none', NULL, 'restart', 'partial',
    1791676806000, 1791676807000, 0.0, 'available', 1791676806000, 1791676811000, 0.0, 'available', 2, '00000000000000000001'),
-  (4, '70000000-0000-4000-8000-000000000004', 2, 'ets2', 'unknown', 'none', 'none', 0, 4, NULL, 5, 'open', NULL, NULL, 'partial',
+  (4, '70000000-0000-4000-8000-000000000004', 2, 'ets2', 'unknown', 'none', 'none', 0, 4, NULL, 5, 'event', 'open', NULL, NULL, 'partial',
    1791676810000, NULL, NULL, 'not-observed', 1791676811000, 1791676811000, NULL, 'not-supported', NULL, NULL);
 INSERT INTO event_attributions (event_ref, trip_ref, attribution) VALUES (2, 1, 'trip');
 INSERT INTO completeness_intervals (id, plugin_session_ref, trip_ref, kind, start_utc_ms, end_utc_ms, start_monotonic_ns, end_monotonic_ns, source_clock_ref,

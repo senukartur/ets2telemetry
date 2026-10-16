@@ -193,14 +193,15 @@ function applyEffects(c: EffectContext, effects: unknown): void {
     if (typeof effect !== 'object' || effect === null) fail('INVALID_INPUT');
     switch (effect.kind) {
       case 'trip.open': {
-        // A trip opens at the job configuration event that defines it, never at a gap.
+        // A trip opens at the job configuration event that defines it, never at a gap (opened_by 'event'; a checkpoint
+        // opening is a separate command of ET-016b).
         if (c.eventRef === undefined || !isUuid(effect.tripUuid) || enumValue(effect.game, GAMES) !== c.game || typeof effect.gameMode !== 'object' || effect.gameMode === null) fail('INVALID_INPUT');
         const job = configurationRef(c, 'job_configurations', effect.jobConfiguration);
         const truck = effect.truckConfiguration === undefined ? null : configurationRef(c, 'truck_configurations', effect.truckConfiguration);
         const id = statement(c.db, insert('trips', ['trip_uuid', 'plugin_session_ref', 'game', 'game_mode', 'game_mode_method', 'game_mode_confidence', 'game_mode_ambiguous', 'job_configuration_ref',
-          'truck_configuration_ref', 'opened_event_ref', 'outcome', 'recording_completeness', 'started_utc_ms', 'observed_distance_m', 'observed_distance_m_state', 'created_utc_ms', 'updated_utc_ms']))
+          'truck_configuration_ref', 'opened_event_ref', 'opened_by', 'outcome', 'recording_completeness', 'started_utc_ms', 'observed_distance_m', 'observed_distance_m_state', 'created_utc_ms', 'updated_utc_ms']))
           .run(effect.tripUuid, c.session.id, effect.game, enumValue(effect.gameMode.mode, MODES), enumValue(effect.gameMode.method, METHODS), enumValue(effect.gameMode.confidence, CONFIDENCES),
-            optionalBoolean(effect.gameModeAmbiguous) ?? 0n, job, truck, c.eventRef, 'open', enumValue(effect.recordingCompleteness, COMPLETENESS), utcMs(effect.startedUtcMs), null, 'not-observed', c.now, c.now).lastInsertRowid;
+            optionalBoolean(effect.gameModeAmbiguous) ?? 0n, job, truck, c.eventRef, 'event', 'open', enumValue(effect.recordingCompleteness, COMPLETENESS), utcMs(effect.startedUtcMs), null, 'not-observed', c.now, c.now).lastInsertRowid;
         addTrailers(c, BigInt(id), effect.trailerConfigurations);
         break;
       }

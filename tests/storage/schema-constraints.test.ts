@@ -50,7 +50,7 @@ describe('schema version 1 constraints', () => {
     rejected("UPDATE plugin_sessions SET origin = 'game'", 'SQLITE_CONSTRAINT_TRIGGER');
   });
   it('requires an outcome event for delivered or cancelled trips and a trip exactly for attributed events', () => {
-    const trip = "INSERT INTO trips (trip_uuid, plugin_session_ref, game, game_mode, game_mode_method, game_mode_confidence, job_configuration_ref, opened_event_ref, outcome, outcome_event_ref, close_reason, recording_completeness, started_utc_ms, ended_utc_ms, observed_distance_m_state, created_utc_ms, updated_utc_ms) VALUES ('70000000-0000-4000-8000-000000000001', 1, 'ets2', 'unknown', 'none', 'none', 1, 1, ?, ?, ?, 'unknown', 0, ?, 'not-observed', 0, 0)";
+    const trip = "INSERT INTO trips (trip_uuid, plugin_session_ref, game, game_mode, game_mode_method, game_mode_confidence, job_configuration_ref, opened_event_ref, opened_by, outcome, outcome_event_ref, close_reason, recording_completeness, started_utc_ms, ended_utc_ms, observed_distance_m_state, created_utc_ms, updated_utc_ms) VALUES ('70000000-0000-4000-8000-000000000001', 1, 'ets2', 'unknown', 'none', 'none', 1, 1, 'event', ?, ?, ?, 'unknown', 0, ?, 'not-observed', 0, 0)";
     rejected(trip, 'SQLITE_CONSTRAINT_CHECK', 'delivered', null, 'outcome', 1);
     rejected(trip, 'SQLITE_CONSTRAINT_CHECK', 'open', null, 'outcome', null);
     sql(trip, 'open', null, null, null);
@@ -71,9 +71,9 @@ describe('schema version 1 constraints', () => {
 // ET-016 PR-1 (J6): the version 2 columns. Each row below is inserted by hand next to the job configuration that the
 // beforeEach commit stored (id 1, event 1 of plugin session 1).
 describe('schema version 2 constraints', () => {
-  const TRIP = `INSERT INTO trips (trip_uuid, plugin_session_ref, game, game_mode, game_mode_method, game_mode_confidence, job_configuration_ref, opened_event_ref, outcome,
+  const TRIP = `INSERT INTO trips (trip_uuid, plugin_session_ref, game, game_mode, game_mode_method, game_mode_confidence, job_configuration_ref, opened_event_ref, opened_by, outcome,
     close_reason, recording_completeness, started_utc_ms, ended_utc_ms, observed_distance_m_state, created_utc_ms, updated_utc_ms, fuel_used_l, fuel_used_l_state,
-    closed_by_session_ref, closed_by_event_seq) VALUES (?, 1, 'ets2', 'unknown', 'none', 'none', 1, 1, ?, ?, 'unknown', 0, ?, 'not-observed', 0, 0, ?, ?, ?, ?)`;
+    closed_by_session_ref, closed_by_event_seq) VALUES (?, 1, 'ets2', 'unknown', 'none', 'none', 1, 1, 'event', ?, ?, 'unknown', 0, ?, 'not-observed', 0, 0, ?, ?, ?, ?)`;
   const tripUuid = (n: number) => `70000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
   /** A closed (gap) trip with the given fuel used and carrier. */
   const closed = (n: number, fuel: unknown, state: unknown, session: unknown, eventSeq: unknown) => [tripUuid(n), 'none', 'gap', 0, fuel, state, session, eventSeq];
@@ -81,7 +81,7 @@ describe('schema version 2 constraints', () => {
   const SEQ_1 = '00000000000000000001';
 
   it('keeps fuel used with its availability state: not observed by default, zero is a value, nothing negative or without a state', () => {
-    sql("INSERT INTO trips (trip_uuid, plugin_session_ref, game, game_mode, game_mode_method, game_mode_confidence, job_configuration_ref, opened_event_ref, outcome, recording_completeness, started_utc_ms, observed_distance_m_state, created_utc_ms, updated_utc_ms) VALUES (?, 1, 'ets2', 'unknown', 'none', 'none', 1, 1, 'open', 'unknown', 0, 'not-observed', 0, 0)", tripUuid(1));
+    sql("INSERT INTO trips (trip_uuid, plugin_session_ref, game, game_mode, game_mode_method, game_mode_confidence, job_configuration_ref, opened_event_ref, opened_by, outcome, recording_completeness, started_utc_ms, observed_distance_m_state, created_utc_ms, updated_utc_ms) VALUES (?, 1, 'ets2', 'unknown', 'none', 'none', 1, 1, 'event', 'open', 'unknown', 0, 'not-observed', 0, 0)", tripUuid(1));
     expect(connection.reader().prepare('SELECT fuel_used_l, fuel_used_l_state, closed_by_session_ref, closed_by_event_seq FROM trips WHERE trip_uuid = ?').get(tripUuid(1)))
       .toEqual({fuel_used_l: null, fuel_used_l_state: 'not-observed', closed_by_session_ref: null, closed_by_event_seq: null});
     sql(TRIP, ...closed(2, 0, 'available', 1n, SEQ_1));
@@ -101,6 +101,19 @@ describe('schema version 2 constraints', () => {
     for (const eventSeq of ['1', '00000000000000000000', '18446744073709551615', '0000000000000000000a']) rejected(TRIP, 'SQLITE_CONSTRAINT_CHECK', ...closed(3, null, 'not-observed', 1n, eventSeq));
     rejected(TRIP, 'SQLITE_CONSTRAINT_FOREIGNKEY', ...closed(3, null, 'not-observed', 999n, SEQ_1));
     sql(TRIP, ...closed(3, null, 'not-observed', 1n, '18446744073709551614'));
+  });
+  it('opens a trip either at a stored event or from a checkpoint without one', () => {
+    const opening = `INSERT INTO trips (trip_uuid, plugin_session_ref, game, game_mode, game_mode_method, game_mode_confidence, job_configuration_ref, opened_event_ref, opened_by,
+      outcome, recording_completeness, started_utc_ms, observed_distance_m_state, created_utc_ms, updated_utc_ms) VALUES (?, 1, 'ets2', 'unknown', 'none', 'none', 1, ?, ?, 'open', 'partial', 0, 'not-observed', 0, 0)`;
+    sql(opening, tripUuid(1), 1n, 'event');
+    sql(opening, tripUuid(2), null, 'checkpoint');
+    rejected(opening, 'SQLITE_CONSTRAINT_CHECK', tripUuid(3), null, 'event');
+    rejected(opening, 'SQLITE_CONSTRAINT_CHECK', tripUuid(3), 1n, 'checkpoint');
+    rejected(opening, 'SQLITE_CONSTRAINT_CHECK', tripUuid(3), 1n, 'replay');
+    rejected(opening, 'SQLITE_CONSTRAINT_NOTNULL', tripUuid(3), 1n, null);
+    rejected(opening, 'SQLITE_CONSTRAINT_FOREIGNKEY', tripUuid(3), 999n, 'event');
+    expect(connection.reader().prepare('SELECT opened_event_ref, opened_by FROM trips ORDER BY id').all())
+      .toEqual([{opened_event_ref: 1n, opened_by: 'event'}, {opened_event_ref: null, opened_by: 'checkpoint'}]);
   });
   it('ties a job configuration to exactly one event or checkpoint reference of its plugin session', () => {
     const states = specColumns(JOB_FIELDS).filter(column => column.endsWith('_state'));
