@@ -18,6 +18,7 @@ import type {StorageClient} from '../../packages/storage/src/client';
 import type {BrokerConfiguration, BrokerDiagnostic} from '../../apps/desktop/src/native-pipe-client';
 import {replay, type Scenario} from '../../tools/telemetry-simulator/src/scenario';
 import {startPipe} from '../../tools/telemetry-simulator/src/pipe';
+import {v1SourceState} from '../shared/live-v1-fixtures';
 const scenario = JSON.parse(readFileSync('tests/fixtures/simulator-v0/reconnect.json', 'utf8')) as Scenario;
 const emissions = replay(scenario);
 const endpoint = '\\\\.\\pipe\\ETS2Telemetry-SYNTHETIC-TEST-v0-123-' + randomUUID();
@@ -395,6 +396,33 @@ it('runs protocol v1 beside v0 without a durable sink, following each selection 
     f.v1.options[0].diagnose!('V1_DURABLE_UNAVAILABLE', {code: 'WORKER_FAILED'});
     expect(f.log).toHaveBeenLastCalledWith('V1_DURABLE_UNAVAILABLE', undefined, {code: 'WORKER_FAILED'});
   } finally {f.stop(); await vi.advanceTimersByTimeAsync(0); f.restore(); vi.unstubAllEnvs();}
+});
+// ET-010c decisions F1 and F2: the service attaches the whitelisted v1 projection of the same selection to the live update.
+it('publishes the v1 projection of the same selection with the live update and ignores clock-mapping-only changes', async () => {
+  const f = await stoppedService(report => {report({type: 'stopped'}); return Promise.resolve();});
+  const port = new TestPort();
+  try {
+    f.parent.emit('message', {data: {type: 'subscribe'}, ports: [port]}); port.consume();
+    f.parent.emit('message', {data: {type: 'select', source: 'synthetic'}, ports: []});
+    await vi.advanceTimersByTimeAsync(50); port.consume();
+    const v0 = port.messages.at(-1)!.update;
+    expect(v0).toMatchObject({selection: 'synthetic'}); expect(v0).not.toHaveProperty('v1');
+    const onState = f.v1.options[0].onState!;
+    const state = v1SourceState();
+    onState(state); await vi.advanceTimersByTimeAsync(50); port.consume();
+    const update = port.messages.at(-1)!.update;
+    expect(update).toMatchObject({selection: 'synthetic', status: v0.status, reason: v0.reason, fresh: v0.fresh,
+      v1: {selection: 'synthetic', status: 'connected', fresh: true, observation: {seq: '5', receivedMonotonicMs: 1250}}});
+    expect(JSON.stringify(update)).not.toMatch(/clockMapping|65538|"durable"|WORKER_FAILED|lastEnd|continuity/);
+    // A new clock mapping or durable status with the same observation changes nothing the projection shows.
+    const count = port.messages.length;
+    onState({...state, clockMapping: {...state.clockMapping!, offsetNs: '99'}, durable: {state: 'off'}});
+    await vi.advanceTimersByTimeAsync(100);
+    expect(port.messages).toHaveLength(count);
+    // A state of another selection never rides on this selection's update.
+    onState(v1SourceState('snapshot-live', {selection: 'ets2'})); await vi.advanceTimersByTimeAsync(50);
+    expect(port.messages.at(-1)!.update).not.toHaveProperty('v1');
+  } finally {f.stop(); await vi.advanceTimersByTimeAsync(0); f.restore();}
 });
 it('bounds the v1 ingestion stop by its 1,000 ms intake budget and reports a late stop as unclean', async () => {
   const f = await stoppedService(report => {report({type: 'stopped'}); return Promise.resolve();});

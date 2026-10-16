@@ -8,6 +8,7 @@ import {OverlayController} from '../../apps/desktop/src/overlay-controller';
 import {overlayPresentation} from '../../apps/desktop/src/overlay-presentation';
 import {DEFAULT_OVERLAY_PLACEMENTS} from '../../apps/desktop/src/overlay-placement';
 import {DEFAULT_OVERLAY_SECTIONS, OVERLAY_PRESETS} from '../../apps/desktop/src/overlay-sections';
+import {v1Projection} from '../shared/live-v1-fixtures';
 
 function live(): LiveTelemetry {
   const snapshot = validateMessage(JSON.parse(readFileSync('tests/fixtures/protocol-v0/snapshot.json', 'utf8')));
@@ -100,6 +101,51 @@ it('retains receipt expiry across port invalidation and independently renews a n
   await vi.advanceTimersByTimeAsync(100); expect(publish.mock.lastCall?.[0].fresh).toBe(false);
   freshness.accept({...current, observation: {...current.observation!, capture: {...current.observation!.capture, monotonicNs: '9999999999'}, windowReceivedMonotonicMs: 500}});
   expect(publish.mock.lastCall?.[0]).toMatchObject({fresh: true, observation: {windowFresh: true}});
+  freshness.close(); expect(vi.getTimerCount()).toBe(0);
+});
+// ET-010c decision F3: main's v1 expiry is independent of the v0 SDK and window clocks.
+function withV1(current: LiveTelemetry, boundaryOrder = '102', receivedMonotonicMs = 0): LiveTelemetry {
+  const v1 = v1Projection('snapshot-live', {selection: 'ets2', origin: 'game', receivedMonotonicMs});
+  v1.observation!.state.boundaryOrder = boundaryOrder;
+  return {...current, v1};
+}
+const newCapture = (current: LiveTelemetry, monotonicNs: string): LiveTelemetry =>
+  ({...current, observation: {...current.observation!, capture: {...current.observation!.capture, monotonicNs}, windowReceivedMonotonicMs: Number(monotonicNs)}});
+it('expires v1 data 500 ms after its last new boundary while new v0 captures keep v0 current', async () => {
+  const publish = vi.fn(), freshness = new LiveFreshness(publish), current = live();
+  freshness.accept(withV1(current)); await vi.advanceTimersByTimeAsync(200);
+  // New v0 captures with the same v1 boundary and receipt time renew only v0.
+  freshness.accept(withV1(newCapture(current, '200'))); await vi.advanceTimersByTimeAsync(200);
+  freshness.accept(withV1(newCapture(current, '400'))); await vi.advanceTimersByTimeAsync(99);
+  expect(publish.mock.lastCall?.[0]).toMatchObject({fresh: true, v1: {fresh: true, status: 'connected'}});
+  await vi.advanceTimersByTimeAsync(1);
+  expect(publish.mock.lastCall?.[0]).toMatchObject({fresh: true, status: 'connected',
+    v1: {fresh: false, status: 'stale', reason: 'Main has no recent v1 SDK capture', observation: {state: {boundaryOrder: '102'}}}});
+  // A resent v1 observation stays expired; a new boundary renews it.
+  freshness.accept(withV1(newCapture(current, '500')));
+  expect(publish.mock.lastCall?.[0].v1).toMatchObject({fresh: false, status: 'stale'});
+  freshness.accept(withV1(newCapture(current, '550'), '103', 550));
+  expect(publish.mock.lastCall?.[0]).toMatchObject({fresh: true, v1: {fresh: true, status: 'connected'}});
+  freshness.close(); expect(vi.getTimerCount()).toBe(0);
+});
+it('lets new v1 boundaries renew neither the v0 SDK expiry nor the window expiry', async () => {
+  const publish = vi.fn(), freshness = new LiveFreshness(publish), current = live();
+  freshness.accept(withV1(current)); await vi.advanceTimersByTimeAsync(300);
+  freshness.accept(withV1(current, '103', 300)); await vi.advanceTimersByTimeAsync(200);
+  expect(publish.mock.lastCall?.[0]).toMatchObject({fresh: false, status: 'stale', reason: 'Main has no recent SDK capture', observation: {windowFresh: false},
+    v1: {fresh: true, status: 'connected'}});
+  await vi.advanceTimersByTimeAsync(300);
+  expect(publish.mock.lastCall?.[0].v1).toMatchObject({fresh: false, reason: 'Main has no recent v1 SDK capture'});
+  freshness.close(); expect(vi.getTimerCount()).toBe(0);
+});
+it('clears v1 data on invalidation and keeps its expiry across it', async () => {
+  const publish = vi.fn(), freshness = new LiveFreshness(publish), current = live();
+  freshness.accept(withV1(current)); await vi.advanceTimersByTimeAsync(400);
+  freshness.invalidate({...initialLive('ets2'), status: 'stale'});
+  expect(publish.mock.lastCall?.[0]).not.toHaveProperty('v1');
+  // The same v1 observation after the invalidation does not restart its 500 ms.
+  freshness.accept(withV1(newCapture(current, '400'))); await vi.advanceTimersByTimeAsync(100);
+  expect(publish.mock.lastCall?.[0]).toMatchObject({fresh: true, v1: {fresh: false, status: 'stale'}});
   freshness.close(); expect(vi.getTimerCount()).toBe(0);
 });
 function controller(layout?: OverlayLayout) {

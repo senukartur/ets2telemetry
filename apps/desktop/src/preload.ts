@@ -1,6 +1,7 @@
 import {contextBridge, ipcRenderer} from 'electron';
 import type {AppState, DesktopBridge, LiveTelemetry} from '../../../packages/contracts/src';
 import {initialLive, sourceSelection} from './live-state';
+import {expiredV1, liveV1Key, parseLiveV1, RENDERER_V1_EXPIRED_REASON, V1_LIVE_EXPIRY_MS} from './live-v1';
 import {RecoveryBudget} from './recovery-budget';
 import {isOverlayLayout, parseOverlaySections} from './overlay-sections';
 import {isOverlayEditOutcome, parseOverlayEditScale} from './overlay-placement';
@@ -14,17 +15,29 @@ let sdkReceiptKey: string | undefined;
 let sdkExpiry = 0;
 let windowReceiptKey: string | undefined;
 let windowExpiry = 0;
+// The protocol v1 projection expires on its own clock (ET-010c decision F3); v0 receipts never renew it.
+let v1Freshness: ReturnType<typeof setTimeout> | undefined;
+let v1ReceiptKey: string | undefined;
+let v1Expiry = 0;
 let recovery: ReturnType<typeof setTimeout> | undefined;
 let recoveryBudget = new RecoveryBudget();
 let subscription = Symbol();
-function clearFreshness(): void {clearTimeout(freshness); freshness = undefined; clearTimeout(windowFreshness); windowFreshness = undefined;}
+function clearFreshness(): void {clearTimeout(freshness); freshness = undefined; clearTimeout(windowFreshness); windowFreshness = undefined; clearTimeout(v1Freshness); v1Freshness = undefined;}
 function clearRecovery(): void {clearTimeout(recovery); recovery = undefined;}
 function closePort(): void {const previous = port; port = undefined; previous?.close();}
 function stale(reason: string): void {
   clearFreshness(); current = {...current, status: 'stale', fresh: false, reason,
-    ...(current.observation ? {observation: {...current.observation, windowFresh: false}} : {})}; listener?.(current);
+    ...(current.observation ? {observation: {...current.observation, windowFresh: false}} : {}), ...(current.v1 ? {v1: expiredStale(current.v1, reason)} : {})}; listener?.(current);
 }
-function publish(update: LiveTelemetry): void {
+/** A v1 projection that is no longer fresh stays as it is; a fresh one becomes stale with the given reason. */
+function expiredStale(v1: NonNullable<LiveTelemetry['v1']>, reason: string): NonNullable<LiveTelemetry['v1']> {return v1.fresh ? expiredV1(v1, reason) : v1;}
+/** The update without a v1 projection that fails validation for its selection (ET-010c decision F2). */
+function acceptedV1(update: LiveTelemetry): LiveTelemetry {
+  if (update.v1 === undefined || parseLiveV1(update.v1, update.selection)) return update;
+  const stripped = {...update}; delete stripped.v1; return stripped;
+}
+function publish(incoming: LiveTelemetry): void {
+  const update = acceptedV1(incoming);
   clearFreshness(); current = update;
   const now = performance.now(), observation = update.observation;
   const sourceKey = observation ? `${observation.source.pluginSessionId}|${observation.source.processInstanceId}|${observation.capture.clockId}` : undefined;
@@ -46,6 +59,15 @@ function publish(update: LiveTelemetry): void {
       if (current.observation) {current = {...current, observation: {...current.observation, windowFresh: false}}; listener?.(current);}
     }, windowExpiry - now);
   }
+  const v1Key = liveV1Key(update.v1);
+  if (v1Key === undefined || v1Key !== v1ReceiptKey) {v1ReceiptKey = v1Key; v1Expiry = now + V1_LIVE_EXPIRY_MS;}
+  if (update.v1?.fresh) {
+    if (now >= v1Expiry) current = {...current, v1: expiredV1(update.v1, RENDERER_V1_EXPIRED_REASON)};
+    else v1Freshness = setTimeout(() => {
+      v1Freshness = undefined;
+      if (current.v1) {current = {...current, v1: expiredV1(current.v1, RENDERER_V1_EXPIRED_REASON)}; listener?.(current);}
+    }, v1Expiry - now);
+  }
   listener?.(current);
 }
 function lost(next: MessagePort): void {
@@ -60,6 +82,7 @@ function lost(next: MessagePort): void {
 ipcRenderer.on('telemetry:port', event => {
   clearRecovery(); clearFreshness(); closePort(); const next = event.ports[0];
   if (listener && (current.fresh || current.observation?.windowFresh)) stale('Replacement live subscription awaits a current observation');
+  else if (listener && current.v1?.fresh) {current = {...current, v1: expiredV1(current.v1, 'Replacement live subscription awaits a current observation')}; listener(current);}
   if (!listener || event.ports.length !== 1) {for (const incoming of event.ports) incoming.close(); return;}
   port = next;
   // Electron's renderer MessagePort includes the documented close-event extension.
@@ -92,7 +115,7 @@ const bridge: DesktopBridge = {
   },
   subscribeLive: callback => {
     if (typeof callback !== 'function' || listener) throw new Error('One live subscription is allowed');
-    subscription = Symbol(); listener = callback; current = initialLive(); sdkReceiptKey = windowReceiptKey = undefined; recoveryBudget = new RecoveryBudget(); ipcRenderer.send('telemetry:subscribe');
+    subscription = Symbol(); listener = callback; current = initialLive(); sdkReceiptKey = windowReceiptKey = v1ReceiptKey = undefined; recoveryBudget = new RecoveryBudget(); ipcRenderer.send('telemetry:subscribe');
     let active = true;
     return () => {if (!active) return; active = false; subscription = Symbol(); listener = undefined; clearFreshness(); clearRecovery(); closePort(); ipcRenderer.send('telemetry:unsubscribe');};
   },

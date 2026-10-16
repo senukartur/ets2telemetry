@@ -32,7 +32,10 @@ export interface V1Observation {
   /** True for the checkpoint: it replaces current state only and never yields an event (REG-003, REG-004). */
   hydration: boolean;
 }
-/** Service-internal v1 source state (E2). No preload, IPC or renderer receives it yet; ET-010c exposes it. */
+/**
+ * Service-internal v1 source state (E2). It never leaves the telemetry service as is: ET-010c sends only its whitelisted
+ * live projection (live-v1.ts), without the window, clock mapping, last `end`, delivery cursor or durable status.
+ */
 export interface V1SourceState {
   selection: SourceSelection; status: V1Status; reason: string; fresh: boolean;
   observation?: V1Observation;

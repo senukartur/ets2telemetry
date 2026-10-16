@@ -7,6 +7,7 @@ import {afterEach, beforeAll, beforeEach, expect, it, vi} from 'vitest';
 import type {LiveTelemetry} from '../../packages/contracts/src';
 import {validateMessage} from '../../packages/contracts/src/protocol-v0';
 import {initialLive} from '../../apps/desktop/src/live-state';
+import {v1Projection, type V1Options} from '../shared/live-v1-fixtures';
 
 const processEvents = ['uncaughtException', 'unhandledRejection'] as const;
 const processEmitter: EventEmitter = process;
@@ -1187,6 +1188,93 @@ it('refuses overlay settings requests once exiting', async () => {
   await expect(saveOverlay('settings:set-overlay-layout', trusted(), 'card')).rejects.toThrow('retired');
   await expect(saveOverlay('settings:set-overlay-sections', trusted(), ALL_SECTIONS)).rejects.toThrow('retired');
   expect(overlayWrite).not.toHaveBeenCalled();
+});
+// ET-010c decisions F2, F3 and F7: main validates the v1 projection before freshness and the overlay see it, expires it
+// on its own clock and feeds it into the overlay projection. The v1 input is snapshot-live with the v0 job ids under the
+// ETS2 game origin; the overlay origin text is written by hand from it. Since ET-012b the projection also carries `editing`.
+const OVERLAY_KEYS = ['source', 'origin', 'status', 'speed', 'speedUnit', 'fuel', 'fuelUnit', 'freshness', 'layout', 'paused', 'sections', 'editing'];
+const ORIGIN_VALUE = {id: 'origin', state: 'value', text: 'Synthetic City A, Synthetic Company A'};
+const sectionOf = (projection: Record<string, unknown>, id: string) => (projection.sections as {id: string}[]).find(section => section.id === id);
+function readingWithV1(options: V1Options = {}): LiveTelemetry {
+  return {...currentReading(), v1: v1Projection('snapshot-live', {selection: 'ets2', origin: 'game', ...options})};
+}
+async function v1Consumers() {
+  vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2'); await ready();
+  ipc.emit('telemetry:subscribe', trusted()); const dashboard = channels[1];
+  ipc.emit('overlay:subscribe', overlayTrusted()); const overlayChannel = channels[2];
+  consumeOverlay(dashboard); consumeOverlay(overlayChannel);
+  return {dashboard, overlayChannel};
+}
+it('feeds a valid v1 projection to the dashboard and into the overlay sections, whose shape is unchanged', async () => {
+  const {dashboard, overlayChannel} = await v1Consumers();
+  deliver(readingWithV1()); await vi.advanceTimersByTimeAsync(50);
+  const update = dashboard.port1.postMessage.mock.lastCall![0].update as LiveTelemetry;
+  expect(update.v1).toMatchObject({selection: 'ets2', status: 'connected', fresh: true, observation: {state: {boundaryOrder: '102'}}});
+  const projection = overlayProjection(overlayChannel);
+  expect(Object.keys(projection)).toEqual(OVERLAY_KEYS);
+  expect(sectionOf(projection, 'origin')).toEqual(ORIGIN_VALUE);
+  expect(sectionOf(projection, 'cargo')).toEqual({id: 'cargo', state: 'value', text: 'Synthetic Cargo', detail: '18.0 t'});
+  expect(JSON.stringify(projection)).not.toMatch(/pluginSessionId|boundaryOrder|handle|clockMapping|10000000-0000-4000-8000-000000000001/);
+  expect(log.mock.calls.filter(call => call[0] === 'LIVE_V1_REJECTED')).toEqual([]);
+});
+it.each([
+  ['a projection that still carries the game window', (update: LiveTelemetry) => {
+    (update.v1!.observation!.state as unknown as Record<string, unknown>).window = {available: true, value: {handle: '65538', x: 0, y: 0, width: 1920, height: 1080, dpi: 96,
+      foreground: true, minimized: false, displayMode: 'borderless'}};
+  }],
+  ['a projection with an extra clock mapping', (update: LiveTelemetry) => {(update.v1 as unknown as Record<string, unknown>).clockMapping = {offsetNs: '1'};}],
+  ['a projection of another selection', (update: LiveTelemetry) => {update.v1!.selection = 'ats';}]
+])('strips %s, logs it at occurrences 1, 2 and 4 and keeps the v0 update and the channel', async (_name, corrupt) => {
+  const {dashboard, overlayChannel} = await v1Consumers();
+  for (let delivery = 1; delivery <= 5; delivery++) {
+    const update = readingWithV1(); corrupt(update);
+    update.observation!.capture.monotonicNs = String(delivery); deliver(update, delivery);
+  }
+  await vi.advanceTimersByTimeAsync(50);
+  expect(log.mock.calls.filter(call => call[0] === 'LIVE_V1_REJECTED')).toEqual([1, 2, 4].map(count => ['LIVE_V1_REJECTED', undefined, {count}]));
+  const update = dashboard.port1.postMessage.mock.lastCall![0].update as LiveTelemetry;
+  expect(update).not.toHaveProperty('v1');
+  expect(update).toMatchObject({selection: 'ets2', status: 'connected', fresh: true});
+  // The overlay equals the v0-only projection: no v1 section at all.
+  const projection = overlayProjection(overlayChannel);
+  expect(sectionIds(projection)).toEqual(['speed', 'gear', 'rpm', 'fuel', 'sdk-consumption', 'cargo', 'destination', 'expected-income', 'game-time']);
+  expect(sectionOf(projection, 'cargo')).toEqual({id: 'cargo', state: 'value', text: 'cargo.logs'});
+  expect(channels[0].port1.close).not.toHaveBeenCalled();
+  expect(channels[0].port1.postMessage.mock.calls.map(call => call[0])).toEqual([1, 2, 3, 4, 5].map(delivery => ({type: 'consumed', delivery})));
+  expect(log.mock.calls.filter(call => call[0] === 'MAIN_CHANNEL_CLOSED')).toEqual([]);
+});
+// PR #73 advisory review: the realistic path to a lost v1 carriage is a projection main strips while v0 continues.
+it('keeps a shown overlay origin as a dash when main strips the next v1 projection, and clears it on a source change', async () => {
+  const {dashboard, overlayChannel} = await v1Consumers();
+  deliver(readingWithV1(), 1); await vi.advanceTimersByTimeAsync(50); consumeOverlay(dashboard); consumeOverlay(overlayChannel);
+  expect(sectionOf(overlayProjection(overlayChannel), 'origin')).toEqual(ORIGIN_VALUE);
+  const invalid = readingWithV1(); invalid.observation!.capture.monotonicNs = '2000';
+  (invalid.v1!.observation!.state as unknown as Record<string, unknown>).window = {available: false, reason: 'not-observed'};
+  deliver(invalid, 2); await vi.advanceTimersByTimeAsync(50); consumeOverlay(dashboard); consumeOverlay(overlayChannel);
+  expect(log.mock.calls.filter(call => call[0] === 'LIVE_V1_REJECTED')).toEqual([['LIVE_V1_REJECTED', undefined, {count: 1}]]);
+  const stripped = overlayProjection(overlayChannel);
+  expect(stripped).toMatchObject({freshness: 'current', speed: '90.0'});
+  for (const id of ['origin', 'distance-remaining', 'deadline']) expect(sectionOf(stripped, id)).toEqual({id, state: 'unavailable'});
+  expect(sectionOf(stripped, 'cargo')).toEqual({id: 'cargo', state: 'value', text: 'cargo.logs'});
+  // A source change publishes an update without an observation; the v1 sections are then left out.
+  await handlers.get('telemetry:select')!(trusted(), 'ats'); await vi.advanceTimersByTimeAsync(50);
+  for (const id of ['origin', 'distance-remaining', 'deadline']) expect(sectionOf(overlayProjection(overlayChannel), id)).toBeUndefined();
+});
+it('expires v1 data 500 ms after its last new boundary while v0 renews, turning the overlay origin into a dash', async () => {
+  const {dashboard, overlayChannel} = await v1Consumers();
+  for (let step = 0; step <= 5; step++) {
+    const update = readingWithV1(); update.observation!.capture.monotonicNs = String(1000 + step);
+    update.observation!.windowReceivedMonotonicMs = step * 100;
+    deliver(update, step + 1);
+    if (step === 4) expect(sectionOf(overlayProjection(overlayChannel), 'origin')).toEqual(ORIGIN_VALUE);
+    await drainOverlay(overlayChannel, 100); consumeOverlay(dashboard);
+  }
+  const projection = overlayProjection(overlayChannel);
+  expect(projection).toMatchObject({freshness: 'current', speed: '90.0'});
+  expect(sectionOf(projection, 'origin')).toEqual({id: 'origin', state: 'unavailable'});
+  expect(sectionOf(projection, 'distance-remaining')).toEqual({id: 'distance-remaining', state: 'unavailable'});
+  expect(sectionOf(projection, 'cargo')).toEqual({id: 'cargo', state: 'value', text: 'cargo.logs'});
+  expect(dashboard.port1.postMessage.mock.lastCall![0].update).toMatchObject({fresh: true, v1: {fresh: false, status: 'stale', reason: 'Main has no recent v1 SDK capture'}});
 });
 it('re-places the overlay when a late settings read brings another layout', async () => {
   trayAvailable = true; vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2');

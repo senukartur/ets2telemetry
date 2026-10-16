@@ -49,8 +49,9 @@ export function normalizeV1Trailer(trailer: TrailerConfiguration): LiveTrailer {
 /**
  * Normalizes v1 current state. Without the status block (game mode and event loss), those readings are
  * `not-observed`. Hydrated checkpoint configuration is current state only and never implies a gameplay effect.
+ * It reads neither the game window nor the delivery cursor, so the live projection without them (ET-010c) is accepted.
  */
-export function normalizeV1State(state: CurrentState, status?: SourceStatus): NormalizedLiveState {
+export function normalizeV1State(state: Omit<CurrentState, 'window'>, status?: Pick<SourceStatus, 'gameMode' | 'eventLoss'>): NormalizedLiveState {
   const configuration = state.configuration;
   const eventLoss: Reading<EventLossView> = status
     ? valueOf(Object.freeze(Object.fromEntries(EVENT_LOSS_CAUSES.map(cause => [cause, BigInt(status.eventLoss[cause])])) as Record<EventLossCause, bigint>))
