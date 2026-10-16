@@ -123,12 +123,19 @@ export class V1Ingestion {
     this.utcNow = options.utcNow ?? (() => Date.now());
     if (options.sink) {
       this.delivery = new DurableDelivery(options.sink, {maxPendingCommits: options.maxPendingCommits, maxPendingReadings: options.maxPendingReadings,
-        sampleFlushMs: options.sampleFlushMs, sampleBatchRows: options.sampleBatchRows, log: options.diagnose, onStatus: () => this.publish()});
+        sampleFlushMs: options.sampleFlushMs, sampleBatchRows: options.sampleBatchRows, log: options.diagnose, onStatus: () => this.publish(),
+        // ET-015c (G9): the retry code is not part of the state, but a change of it is reported like one.
+        onRetryCode: () => this.publish()});
     }
     this.state = initialState('game', this.durableStatus());
   }
   /** The current service-internal state. */
   get current(): V1SourceState { return this.state; }
+  /**
+   * ET-015c (G9): the ACK pipeline's retry code, set by a retryable commit, sample or backlog failure and cleared only by
+   * the next successful write; undefined without a sink. Each change is reported through `onState`.
+   */
+  get durableRetryCode(): string | undefined { return this.delivery?.retryCode; }
   configureBroker(configuration: BrokerConfiguration | undefined): void { this.options.broker = configuration; }
   select(selection: SourceSelection, endpoint?: string): void {
     sourceSelection(selection); if (this.disposed) throw new Error('Ingestion stopped');

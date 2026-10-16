@@ -714,7 +714,7 @@ it('reopens a new dashboard from the tray that resubscribes without a second ups
   ipc.emit('telemetry:subscribe', reopenedSender);
   expect(reopened.postMessage).toHaveBeenCalledWith('telemetry:port', null, [channels.at(-1)!.port2]);
   expect(upstreamRequests()).toBe(1); expect(children).toHaveLength(1);
-  expect(handlers.get('app:get-state')!(reopenedSender)).toEqual({health: {service: 'ready', storage: 'verified', recording: 'unavailable', lastError: null}, settings: {units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: null}, overlayEdit: DRIVING});
+  expect(handlers.get('app:get-state')!(reopenedSender)).toEqual({health: {service: 'ready', storage: 'verified', recording: {state: 'unknown'}, lastError: null}, settings: {units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: null}, overlayEdit: DRIVING});
   // A second tray open focuses the existing window instead of creating another.
   trays[0].emit('click'); expect(windows).toHaveLength(3); expect(windows[2].show).toHaveBeenCalledOnce(); expect(windows[2].focus).toHaveBeenCalledOnce();
 });
@@ -797,13 +797,13 @@ it('minimizes instead of closing the dashboard when the notification area is una
 it('recovers a post-readiness service failure report with a supervised restart and visible health', async () => {
   trayAvailable = true; await ready(); ipc.emit('app:subscribe-state', trusted());
   const states = () => contents.send.mock.calls.filter(call => call[0] === 'app:state').map(call => (call[1] as {health: Record<string, unknown>}).health);
-  expect(states().at(-1)).toEqual({service: 'ready', storage: 'verified', recording: 'unavailable', lastError: null});
+  expect(states().at(-1)).toEqual({service: 'ready', storage: 'verified', recording: {state: 'unknown'}, lastError: null});
   child.emit('message', {type: 'failed', code: 'STORAGE_WORKER_EXIT'});
   expect(child.kill).toHaveBeenCalledOnce(); expect(child.postMessage).not.toHaveBeenCalledWith({type: 'stop'}); expect(app.exit).not.toHaveBeenCalled();
-  expect(states().at(-1)).toEqual({service: 'restarting', storage: 'failed', recording: 'unavailable', lastError: 'STORAGE_FAILED'});
+  expect(states().at(-1)).toEqual({service: 'restarting', storage: 'failed', recording: {state: 'unknown'}, lastError: 'STORAGE_FAILED'});
   child.emit('exit', 1); expect(states().at(-1)).toMatchObject({service: 'restarting', lastError: 'STORAGE_FAILED'});
   await vi.advanceTimersByTimeAsync(250); children[1].emit('message', {type: 'ready'}); await settle();
-  expect(states().at(-1)).toEqual({service: 'ready', storage: 'verified', recording: 'unavailable', lastError: 'STORAGE_FAILED'});
+  expect(states().at(-1)).toEqual({service: 'ready', storage: 'verified', recording: {state: 'unknown'}, lastError: 'STORAGE_FAILED'});
   await vi.advanceTimersByTimeAsync(500); expect(trays[0].setToolTip).toHaveBeenLastCalledWith(expect.stringMatching(/^ETS2Telemetry\nService ready/));
   expect(app.exit).not.toHaveBeenCalled(); expect(windows).toHaveLength(2);
 });
@@ -819,7 +819,7 @@ it('shows restart exhaustion in health and the tray and stays running until an e
     children.at(-1)!.emit('exit', 1); await vi.advanceTimersByTimeAsync(1000);
     if (crash < 2) {children.at(-1)!.emit('message', {type: 'ready'}); await settle();}
   }
-  expect(handlers.get('app:get-state')!(trusted())).toEqual({health: {service: 'failed', storage: 'pending', recording: 'unavailable', lastError: 'SERVICE_RESTART_EXHAUSTED'}, settings: {units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: null}, overlayEdit: DRIVING});
+  expect(handlers.get('app:get-state')!(trusted())).toEqual({health: {service: 'failed', storage: 'pending', recording: {state: 'unknown'}, lastError: 'SERVICE_RESTART_EXHAUSTED'}, settings: {units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: null}, overlayEdit: DRIVING});
   await vi.advanceTimersByTimeAsync(500);
   expect(trays[0].setImage).toHaveBeenCalled(); expect(trays[0].setToolTip).toHaveBeenLastCalledWith('ETS2Telemetry\nService failed');
   expect(app.exit).not.toHaveBeenCalled();
@@ -959,7 +959,7 @@ it('applies a settings read that settles after the load budget to the dashboard 
   // The store applies the late read (t = 200 ms) and reports it; main reads the new view from the store.
   settingsView = {units: {ets2: 'us-customary', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null};
   expect(settingsChanged).toBeTypeOf('function'); settingsChanged!();
-  expect(pushes().at(-1)).toEqual({health: {service: 'ready', storage: 'verified', recording: 'unavailable', lastError: null}, settings: settingsView, overlayEdit: DRIVING});
+  expect(pushes().at(-1)).toEqual({health: {service: 'ready', storage: 'verified', recording: {state: 'unknown'}, lastError: null}, settings: settingsView, overlayEdit: DRIVING});
   expect(handlers.get('app:get-state')!(trusted())).toMatchObject({settings: settingsView});
   await vi.advanceTimersByTimeAsync(50);
   expect(overlayProjection(overlayChannel)).toMatchObject({source: 'ETS2', speed: '55.9', speedUnit: 'mph', fuel: '19.3', fuelUnit: 'US gal', freshness: 'current'});
@@ -995,7 +995,7 @@ it('applies a unit profile only after the durable save and republishes the overl
   expect(pushes()).toHaveLength(before); expect(overlayProjection(overlayChannel)).toMatchObject({speedUnit: 'km/h'});
   settingsView = {units: {ets2: 'us-customary', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null}; saved.resolve(settingsView);
   await expect(request).resolves.toEqual(settingsView);
-  expect(pushes().at(-1)).toEqual({health: {service: 'ready', storage: 'verified', recording: 'unavailable', lastError: null}, settings: settingsView, overlayEdit: DRIVING});
+  expect(pushes().at(-1)).toEqual({health: {service: 'ready', storage: 'verified', recording: {state: 'unknown'}, lastError: null}, settings: settingsView, overlayEdit: DRIVING});
   await vi.advanceTimersByTimeAsync(50);
   expect(overlayProjection(overlayChannel)).toMatchObject({source: 'ETS2', speed: '55.9', speedUnit: 'mph', fuel: '19.3', fuelUnit: 'US gal', freshness: 'current'});
   consumeOverlay(overlayChannel);
@@ -1017,7 +1017,7 @@ it.each(['SETTINGS_WRITE_FAILED', 'SETTINGS_READ_ONLY'] as const)('keeps the uni
   const upstream = channels.at(-1)!;
   ipc.emit('app:subscribe-state', trusted()); ipc.emit('overlay:subscribe', overlayTrusted()); const overlayChannel = channels.at(-1)!;
   consumeOverlay(overlayChannel); deliver(currentReading(), 1, upstream); await vi.advanceTimersByTimeAsync(50); consumeOverlay(overlayChannel);
-  const health = {service: 'ready', storage: 'verified', recording: 'unavailable', lastError: 'STORAGE_FAILED'};
+  const health = {service: 'ready', storage: 'verified', recording: {state: 'unknown'}, lastError: 'STORAGE_FAILED'};
   expect(handlers.get('app:get-state')!(trusted())).toMatchObject({health});
   const deliveries = overlayChannel.port1.postMessage.mock.calls.length;
   // The store records the refusal in its view, as the real store does.
@@ -1495,4 +1495,125 @@ it('reports waiting for the game while no game window can be placed, and never s
   expect(windows[1].setMovable).not.toHaveBeenCalled();
   expect(editPushes()).toEqual([{active: false}, {active: true, layout: 'strip', scale: 1, placement: 'waiting-for-game'},
     {active: true, layout: 'strip', scale: 2, placement: 'waiting-for-game'}, {active: true, layout: 'strip', scale: 1, placement: 'waiting-for-game'}]);
+});
+
+// ET-015c (G4, G5, G6, G12): main accepts the recording status only from the current service, validates it, keeps it in
+// AppState.health.recording and adds the committed losses of every service process. Expected values are written by hand.
+const NO_LOSSES = {lostEvents: 0, eventLoss: 0, notConnected: 0, sampleLoss: 0, restoreLoss: 0, droppedSamples: 0};
+const recordingStatus = (state: string, losses: Partial<typeof NO_LOSSES> = {}, code: string | null = null) =>
+  ({state, target: 'synthetic', code, losses: {...NO_LOSSES, ...losses}, trip: {phase: 'active', completeness: 'partial', untrackedJob: false}});
+const report = (status: unknown, target = child) => target.emit('message', {type: 'recording', status});
+const healthOf = () => (handlers.get('app:get-state')!(trusted()) as {health: {recording: unknown}}).health.recording;
+const pushedRecordings = (target = contents) => target.send.mock.calls.filter(call => call[0] === 'app:state').map(call => (call[1] as {health: {recording: unknown}}).health.recording);
+it('accepts a valid recording status before and after readiness and pushes it in the application state and to the tray presenter', async () => {
+  const presented: unknown[] = [];
+  vi.doMock('../../apps/desktop/src/tray-model', async importOriginal => {
+    const original = await importOriginal<typeof import('../../apps/desktop/src/tray-model')>();
+    return {...original, TrayPresenter: class extends original.TrayPresenter {
+      update(input: Parameters<InstanceType<typeof original.TrayPresenter>['update']>[0], immediate?: boolean) {presented.push(input.health.recording); super.update(input, immediate);}
+    }};
+  });
+  try {
+    trayAvailable = true; await loadMain(); await settle();
+    // A status reported before readiness stays through it.
+    report({state: 'disabled'});
+    child.emit('message', {type: 'ready'}); await settle();
+    expect(healthOf()).toEqual({state: 'disabled'});
+    ipc.emit('app:subscribe-state', trusted());
+    report(recordingStatus('waiting')); report(recordingStatus('recording', {notConnected: 1}));
+    expect(healthOf()).toEqual(recordingStatus('recording', {notConnected: 1}));
+    expect(pushedRecordings()).toEqual([{state: 'disabled'}, recordingStatus('waiting'), recordingStatus('recording', {notConnected: 1})]);
+    expect(presented.at(-1)).toEqual(recordingStatus('recording', {notConnected: 1}));
+    expect(presented).toContainEqual({state: 'disabled'});
+    // The same status again pushes nothing.
+    report(recordingStatus('recording', {notConnected: 1}));
+    expect(pushedRecordings()).toHaveLength(3);
+    expect(log.mock.calls.map(call => call[0] as string).filter(name => /RECORDING_STATUS_REJECTED|SERVICE_INVALID_MESSAGE/.test(name))).toEqual([]);
+    expect(child.postMessage).not.toHaveBeenCalledWith({type: 'stop'});
+  } finally {vi.doUnmock('../../apps/desktop/src/tray-model');}
+});
+it('turns an invalid recording status into unknown with a counted, non-fatal RECORDING_STATUS_REJECTED log', async () => {
+  await ready(); ipc.emit('app:subscribe-state', trusted());
+  report(recordingStatus('recording'));
+  const invalid: unknown[] = [{...recordingStatus('recording'), path: 'C:\\Users\\owner'}, {state: 'recorded'}, {...recordingStatus('recording'), losses: {...NO_LOSSES, lostEvents: -1}},
+    {...recordingStatus('recording'), code: 'SQLITE_FULL'}, undefined];
+  for (const status of invalid) report(status);
+  // The message itself must be exactly {type, status}.
+  child.emit('message', {type: 'recording', status: recordingStatus('recording'), detail: 'extra'});
+  child.emit('message', {type: 'recording'});
+  expect(healthOf()).toEqual({state: 'unknown'});
+  expect(log.mock.calls.filter(call => call[0] === 'RECORDING_STATUS_REJECTED').map(call => call[2] as unknown)).toEqual([{count: 1}, {count: 2}, {count: 4}]);
+  expect(pushedRecordings()).toEqual([{state: 'unknown'}, recordingStatus('recording'), {state: 'unknown'}]);
+  expect(log).not.toHaveBeenCalledWith('SERVICE_INVALID_MESSAGE', undefined);
+  expect([child.postMessage.mock.calls.some(call => call[0].type === 'stop'), child.kill.mock.calls.length, app.exit.mock.calls.length]).toEqual([false, 0, 0]);
+  // A valid report afterwards is accepted again.
+  report(recordingStatus('paused'));
+  expect(healthOf()).toEqual(recordingStatus('paused'));
+  // An unknown message type stays fatal.
+  child.emit('message', {type: 'recording-v2'});
+  expect(child.postMessage).toHaveBeenCalledWith({type: 'stop'});
+});
+it('resets the recording status to unknown when the service fails or exits and ignores reports of a retired service', async () => {
+  trayAvailable = true; await ready(); ipc.emit('app:subscribe-state', trusted());
+  report(recordingStatus('recording'));
+  child.emit('message', {type: 'failed', code: 'STORAGE_WORKER_EXIT'});
+  expect(healthOf()).toEqual({state: 'unknown'});
+  // The failing service is terminated; a report it still sends is ignored.
+  report(recordingStatus('recording'));
+  expect(healthOf()).toEqual({state: 'unknown'});
+  child.emit('exit', 1); await vi.advanceTimersByTimeAsync(250);
+  const replacement = children[1];
+  report(recordingStatus('opening'), replacement);
+  expect(healthOf()).toEqual(recordingStatus('opening'));
+  // The exited service's late report changes nothing; the restart and readiness keep the new service's status.
+  report(recordingStatus('stopped', {}, 'PERMISSION_DENIED'));
+  replacement.emit('message', {type: 'ready'}); await settle();
+  expect(healthOf()).toEqual(recordingStatus('opening'));
+  // An exit without a failure report resets it too: the failed service, then the restart, each push unknown.
+  const before = pushedRecordings().length;
+  replacement.emit('exit', 1);
+  expect(healthOf()).toEqual({state: 'unknown'});
+  expect(pushedRecordings().slice(before - 1)).toEqual([recordingStatus('opening'), {state: 'unknown'}, {state: 'unknown'}]);
+  expect(log.mock.calls.filter(call => call[0] === 'RECORDING_STATUS_REJECTED')).toEqual([]);
+});
+it('adds the committed losses of every service process since the application started', async () => {
+  await ready();
+  // The latest report of one service replaces its earlier one; it is not added to it.
+  report(recordingStatus('recording', {lostEvents: 2, notConnected: 1}));
+  report(recordingStatus('recording', {lostEvents: 3, notConnected: 2, droppedSamples: 1}));
+  expect(healthOf()).toEqual(recordingStatus('recording', {lostEvents: 3, notConnected: 2, droppedSamples: 1}));
+  // A failure report and the exit that follows add the failed service's losses once.
+  child.emit('message', {type: 'failed', code: 'STORAGE_WORKER_EXIT'}); child.emit('exit', 1);
+  await vi.advanceTimersByTimeAsync(250); children[1].emit('message', {type: 'ready'}); await settle();
+  report(recordingStatus('recording', {notConnected: 1, restoreLoss: 1}), children[1]);
+  expect(healthOf()).toEqual(recordingStatus('recording', {lostEvents: 3, notConnected: 3, droppedSamples: 1, restoreLoss: 1}));
+  // A disabled report carries no losses; the next process's report starts from all the earlier totals.
+  children[1].emit('exit', 1); await vi.advanceTimersByTimeAsync(1000);
+  report({state: 'disabled'}, children[2]);
+  expect(healthOf()).toEqual({state: 'disabled'});
+  report(recordingStatus('waiting'), children[2]);
+  expect(healthOf()).toEqual(recordingStatus('waiting', {lostEvents: 3, notConnected: 3, droppedSamples: 1, restoreLoss: 1}));
+});
+it.each(['reload', 'renderer-crash', 'reopen'] as const)('gives a dashboard subscribing after a %s the current recording status', async reason => {
+  trayAvailable = true; await ready(); ipc.emit('app:subscribe-state', trusted());
+  report(recordingStatus('interrupted', {notConnected: 1}));
+  let target = contents;
+  if (reason === 'reload') contents.emit('did-start-loading');
+  else if (reason === 'renderer-crash') contents.emit('render-process-gone', {}, {reason: 'crashed'});
+  else {closeDashboard(); trays[0].emit('click'); target = extraContents[0];}
+  const sender = {sender: target, senderFrame: target.mainFrame}, before = target.send.mock.calls.length;
+  ipc.emit('app:subscribe-state', sender);
+  expect(target.send.mock.calls.length).toBe(before + 1);
+  expect(pushedRecordings(target).at(-1)).toEqual(recordingStatus('interrupted', {notConnected: 1}));
+  expect((handlers.get('app:get-state')!(sender) as {health: {recording: unknown}}).health.recording).toEqual(recordingStatus('interrupted', {notConnected: 1}));
+});
+it('keeps the recording status unchanged when the upstream live channel closes and recovers', async () => {
+  await ready(); ipc.emit('app:subscribe-state', trusted());
+  report(recordingStatus('recording'));
+  const pushes = pushedRecordings().length;
+  channels[0].port1.close();
+  expect(log).toHaveBeenCalledWith('MAIN_CHANNEL_CLOSED', 'Active service live subscription closed');
+  await vi.advanceTimersByTimeAsync(250);
+  expect(upstreamRequests()).toBe(2);
+  expect([healthOf(), pushedRecordings().length]).toEqual([recordingStatus('recording'), pushes]);
 });

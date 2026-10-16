@@ -65,10 +65,12 @@ function onV1State(state: V1SourceState): void {
 // durable history database (ET-013, OD-2), or the recording target that replaces it, is opened at start in its own
 // storage worker without delaying readiness or live telemetry; the ET-001 temporary probe below stays the readiness gate,
 // and opening the database lets the live-only v1 connection reconnect durable (R10). This wiring lives in
-// recording-runtime.ts (ET-015c, G13), so the storage suite drives the same code with a real storage worker.
+// recording-runtime.ts (ET-015c, G13), so the storage suite drives the same code with a real storage worker. ET-015c
+// (G4): the recording status goes to main on the parent port as {type: 'recording', status}, from the start until the
+// orderly stop begins; production, which builds no recorder, reports {state: 'disabled'} once.
 const runtime = createRecordingRuntime({env: process.env, gameHistory: GAME_HISTORY_RECORDING, localAppData: process.env.LOCALAPPDATA, log,
   createWorker: () => historyWorker(__dirname), connectGame: (configuration, game) => new NativePipeClient(configuration, game, diagnoseV1Broker, 'v1'),
-  onV1State});
+  onV1State, onRecordingStatus: status => port.postMessage({type: 'recording', status})});
 const v1 = runtime.v1;
 /** A v1 failure never fails the v0 selection it follows. */
 function selectV1(selection: SourceSelection, broker: BrokerConfiguration | undefined): void {
@@ -123,10 +125,11 @@ let stopping = false, storageStopped = false, exiting = false;
 /**
  * A failed probe ends the service from its report, outside the orderly sequence. Close the history database first,
  * bounded by the same budget as its shutdown step, then exit with the probe's code; a late close never delays the exit.
+ * The recording status stops first, so the closing database is never reported to main (ET-015c).
  */
 function exitAfterHistory(code: number): void {
   if (exiting) return;
-  exiting = true;
+  exiting = true; runtime.stopStatus();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const bound = new Promise<void>(resolve => {timer = setTimeout(resolve, HISTORY_CLOSE_BUDGET_MS);});
   void Promise.race([runtime.history.close().catch(() => undefined), bound]).then(() => {clearTimeout(timer); process.exit(code);});
@@ -143,7 +146,7 @@ shutdown.register('storage', {name: 'storage-probe', budgetMs: 1000, run: async 
 runtime.register(shutdown);
 function stop(): void {
   if (stopping) return;
-  stopping = true; subscriptions.close();
+  stopping = true; subscriptions.close(); runtime.stopStatus();
   void shutdown.run().then(({clean}) => {
     const message = {type: 'stopped', clean};
     log('SERVICE_REPORT', message); port.postMessage(message);

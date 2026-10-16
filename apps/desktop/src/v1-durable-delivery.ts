@@ -76,6 +76,8 @@ export interface DurableDeliveryOptions {
   log?: (event: string, facts?: DiagnosticFacts) => void;
   /** Called after every status change. */
   onStatus?: (status: DurableStatus) => void;
+  /** ET-015c (G9): called after every change of `retryCode`. */
+  onRetryCode?: (code: string | undefined) => void;
 }
 
 type ConnectionOp = {connection: DurableConnection} & (
@@ -156,6 +158,7 @@ export class DurableDelivery {
   private current: DurableStatus = {state: 'pending'};
   private conflicts = 0;
   private retries = new Map<string, number>();
+  private retrying?: string;
   private stopped = false;
   private readonly maxPending: number;
   private readonly maxReadings: number;
@@ -182,6 +185,12 @@ export class DurableDelivery {
     if (!Number.isSafeInteger(this.sampleBatchRows) || this.sampleBatchRows < 1 || this.sampleBatchRows > MAX_PENDING_SAMPLES) throw new Error('Invalid sample batch size');
   }
   get status(): DurableStatus { return this.current; }
+  /**
+   * ET-015c (G9): the code of the latest retryable failure of a commit, a sample write or a backlog bound
+   * (BACKLOG_FULL). Unlike the `pending` status's `retryCode`, a reconnection or a session open does not clear it; only
+   * the next successful commit or sample write does, so the recording status keeps `retrying` until storage writes again.
+   */
+  get retryCode(): string | undefined { return this.retrying; }
   /** Coverage items queued or in flight. */
   get pending(): number { return this.pendingItems; }
   /** Snapshot readings queued or in flight. */
@@ -341,6 +350,8 @@ export class DurableDelivery {
     }
     try { cursor.commit(op.first, op.last); } catch { this.failure(connection, internal()); return; }
     if (value.committedThroughEventSeq !== cursor.throughEventSeq) { this.unavailable(connection, 'COVERAGE_MISMATCH'); return; }
+    // G9: storage committed again.
+    this.setRetryCode(undefined);
     // E8: only the connection that received the coverage, while current, open and before `end`.
     if (!connection.link.current()) return;
     connection.link.committed?.();
@@ -392,6 +403,7 @@ export class DurableDelivery {
     if (!result.ok) { this.sampleFailure(result.error); return; }
     if (!validCounts(result.value)) { this.unavailable(undefined, 'INTERNAL'); return; }
     this.sampleBackoff = false;
+    this.setRetryCode(undefined);
     this.countSkipped(result.value.skipped);
   }
   /**
@@ -404,6 +416,7 @@ export class DurableDelivery {
     const count = (this.sampleRetries.get(error.code) ?? 0) + 1; this.sampleRetries.set(error.code, count);
     if ((count & (count - 1)) === 0) this.options.log?.('V1_SAMPLES_RETRY', {code: error.code, count});
     this.sampleBackoff = true;
+    this.setRetryCode(error.code);
   }
   /** Rows storage skipped as already stored (H6); the running total is logged as V1_SAMPLES_SKIPPED when it reaches 1, 2, 4, ... */
   private countSkipped(skipped: number): void {
@@ -422,6 +435,7 @@ export class DurableDelivery {
       const result = await this.call(() => samples.write(MAX_PENDING_SAMPLES, true));
       if (!result.ok) { code = result.error.code; break; }
       if (!validCounts(result.value)) { code = 'INTERNAL'; break; }
+      this.setRetryCode(undefined);
       this.countSkipped(result.value.skipped);
       // Each write stores one plugin session's batch; a write that stored nothing would never end.
       const now = total(samples);
@@ -441,7 +455,12 @@ export class DurableDelivery {
     // Repeated identical retryable failures are logged at occurrences 1, 2, 4, 8, ...
     const count = (this.retries.get(code) ?? 0) + 1; this.retries.set(code, count);
     if ((count & (count - 1)) === 0) this.options.log?.('V1_DURABLE_RETRY', {code, count});
+    this.setRetryCode(code);
     if (this.failedCode === undefined) this.setStatus({state: 'pending', retryCode: code});
+  }
+  private setRetryCode(code: string | undefined): void {
+    if (code === this.retrying) return;
+    this.retrying = code; this.options.onRetryCode?.(code);
   }
   /**
    * Stops durable delivery for the service lifetime. `connection` is the one whose work failed; a failed `samples` op

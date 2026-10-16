@@ -1,0 +1,19 @@
+{
+  "scenario": "plugin-restart",
+  "authoredFrom": [
+    "ET-015c G16, written by hand before the first run. Plugin session A (seed et005b-normal-delivery) is normal-delivery.json up to its second simulation.started (eventSeq 7 at 500 ms), then a plugin shutdown at 700 ms that sends end; one durable connection from 0 ms. Plugin session B (seed et015c-plugin-restart-b, a new plugin session of the same game) configures a truck (eventSeq 1 at 10 ms), starts the simulation (2 at 40 ms) and publishes a frame at 100 ms; one durable connection from 0 to 300 ms. One recording runtime records A, then B after the source is selected again.",
+    "Session A, as in normal-delivery.trip.expected.json: the job (eventSeq 3) is configured before the session's first simulation.started, so trip@3 opens partial with an opened-at-load interval (T12), with truck 1 and trailer 2; the road stop 100 -> 200 persists observed distance 0 m at eventSeq 5 (T16). No outcome follows.",
+    "Plugin exit (G16): end writes nothing; no interval is added for the shutdown.",
+    "Session B (T11, docs/trips.md transition table): the open trip of an earlier session of the game closes {outcome none, closeReason restart, partial} at the new session's first commit (eventSeq 1 of B). A restart close uses the old session's last observed label as a lower bound: the label of eventSeq 7, 1,800,000,000,500. Observed distance did not change since its update at eventSeq 5, so no further trip.update is sent. Session B has no job, so it opens no trip and adds no interval; its events start at eventSeq 1."
+  ],
+  "trips": [
+    {"trip": "trip@3", "jobConfigurationEventSeq": "3", "truckConfigurationEventSeq": "1", "trailerConfigurationEventSeqs": ["2"], "openedEventSeq": "3",
+      "gameMode": {"mode": "unknown", "method": "none", "confidence": "none"}, "gameModeAmbiguous": false, "outcome": "none", "outcomeEventSeq": null, "closeReason": "restart",
+      "recordingCompleteness": "partial", "startedUtcMs": 1800000000030, "endedUtcMs": 1800000000500, "observedDistanceM": {"available": true, "value": 0}}
+  ],
+  "attributions": [],
+  "intervals": [
+    {"trip": "trip@3", "kind": "discontinuity", "detail": {"cause": "opened-at-load", "atEventSeq": "3"}}
+  ],
+  "coverage": {"committedThroughEventSeq": "7", "sessionB": {"committedThroughEventSeq": "2", "events": ["1", "2"]}}
+}

@@ -160,6 +160,8 @@ A gap-sourced untracked job is unaffected: a gap is itself a stream item in orde
 | open trip of this session | reconnection after `disconnected` | unchanged | trip.update `partial`; a `not-connected` interval from the last item before the disconnection |
 | any | checkpoint | unchanged | none; the session keeps the checkpoint's `nextEventSeq`, and an idle slot records the checkpoint job as untracked from that point on (T9) |
 
+**Plugin exit (ET-015c, G16).** A plugin exit writes no interval of its own; T11 is the rule that keeps its uncertainty: the next plugin session of the game closes the open trip as `restart`, partial, at its first commit (`tests/storage/recording-status.test.ts` (g)).
+
 Cause intervals on `trip.open` make the new trip partial:
 
 - `opened-at-load` (`discontinuity`): the session is loading (T12);

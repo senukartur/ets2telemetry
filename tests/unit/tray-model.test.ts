@@ -6,7 +6,7 @@ import {TRAY_ICON_REPRESENTATIONS, TRAY_TONE_RGB, crc32, trayIconPng, type TrayT
 
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
-const health = (service: AppHealth['service'], storage: AppHealth['storage'] = 'verified'): AppHealth => ({service, storage, recording: 'unavailable', lastError: null});
+const health = (service: AppHealth['service'], storage: AppHealth['storage'] = 'verified'): AppHealth => ({service, storage, recording: {state: 'disabled'}, lastError: null});
 const ready: TrayInput = {health: health('ready'), exiting: false, source: {selection: 'ets2', status: 'connected'}};
 
 it('builds the status, recording, open and exit menu and disables actions while exiting', () => {

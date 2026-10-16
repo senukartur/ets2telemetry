@@ -5,12 +5,56 @@
 export type AppErrorCode = 'SERVICE_EXITED' | 'SERVICE_RESTART_EXHAUSTED' | 'STORAGE_FAILED' | 'SERVICE_START_TIMEOUT';
 export type ServiceHealth = 'starting' | 'ready' | 'restarting' | 'failed' | 'stopping';
 export type StorageHealth = 'pending' | 'verified' | 'failed';
+/** The database a recording service writes (ET-015c, G2): game history, or a synthetic or replay test database. */
+export type RecordingTarget = 'history' | 'synthetic' | 'replay';
+/**
+ * What the recording of the telemetry service is doing (ET-015c, G3): the database is opening; it waits for a recorded
+ * source; it records; the game is paused; the connection was lost after recording; a retryable storage or backlog
+ * failure is being retried; the selected source is not recorded; this plugin session continues live-only (the database
+ * is behind the plugin); or recording stopped for the service lifetime.
+ */
+export type RecordingState = 'opening' | 'waiting' | 'recording' | 'paused' | 'interrupted' | 'retrying' | 'not-recorded-source' | 'live-only' | 'stopped';
+/**
+ * The closed set of recording codes: the storage error codes, the trip recorder's codes and the ACK pipeline's own
+ * failure codes. apps/desktop/src/recording-status.ts asserts at compile time that it equals them.
+ */
+export type RecordingCode =
+  | 'DATABASE_LOCKED' | 'PERMISSION_DENIED' | 'DISK_FULL' | 'IO_ERROR' | 'DATABASE_CORRUPT' | 'CONSTRAINT_VIOLATION' | 'INVALID_INPUT' | 'UNKNOWN_SESSION'
+  | 'UNKNOWN_TRIP' | 'SESSION_CONFLICT' | 'VALUE_OUT_OF_RANGE' | 'STORAGE_CLOSED' | 'STORAGE_BUSY' | 'WORKER_FAILED' | 'TIMEOUT' | 'DATA_PATH_INVALID'
+  | 'DATABASE_UNRECOGNIZED' | 'SCHEMA_NEWER' | 'PURPOSE_MISMATCH' | 'DURABILITY_UNVERIFIED' | 'BACKUP_FAILED' | 'MIGRATION_FAILED' | 'INTERNAL'
+  | 'TRIP_ORDER_VIOLATION' | 'TRIP_COVERAGE_MISMATCH' | 'TRIP_UNKNOWN_SESSION'
+  | 'BACKLOG_FULL' | 'COVERAGE_MISMATCH' | 'ACK_AHEAD_OF_STORAGE';
+/**
+ * Losses that storage committed (ET-015c, G6), as non-negative safe integers that saturate. `lostEvents`: events a
+ * committed gap or a recorded restore loss newly covers. The interval counts are the completeness intervals of each
+ * kind that were committed, and `droppedSamples` the one-second rows the pending bound dropped. Main adds the counts of
+ * every service process since ETS2Telemetry started; the database stays authoritative.
+ */
+export interface RecordingLosses {
+  lostEvents: number; eventLoss: number; notConnected: number; sampleLoss: number; restoreLoss: number; droppedSamples: number;
+}
+/** The current trip of the recorded game: its phase, the open trip's completeness (null when idle) and an untracked job. */
+export interface RecordingTrip {
+  phase: 'idle' | 'active' | 'awaiting-outcome' | 'reload-check';
+  completeness: 'unknown' | 'partial' | 'complete' | null;
+  untrackedJob: boolean;
+}
+/**
+ * The recording status in the application health (ET-015c, G2). `disabled`: this service records nothing (production
+ * until the enablement PR). `unknown`: main has no current report, because the service is not running or sent an invalid
+ * one. Otherwise the service's state with its target, a fixed code, its committed losses and the current trip. Fixed
+ * enums and counts only: never text, paths or identifiers.
+ */
+export type RecordingHealth =
+  | {state: 'disabled'}
+  | {state: 'unknown'}
+  | {state: RecordingState; target: RecordingTarget; code: RecordingCode | null; losses: RecordingLosses; trip: RecordingTrip | null};
 export interface AppHealth {
   service: ServiceHealth;
   /** The isolated storage self-test of the current service; not production history. */
   storage: StorageHealth;
-  /** This version records no history, so recording is always unavailable. */
-  recording: 'unavailable';
+  /** ET-015c: the validated recording status the current service reports; `unknown` while there is none. */
+  recording: RecordingHealth;
   lastError: AppErrorCode | null;
 }
 /** Games with their own display unit profile. */

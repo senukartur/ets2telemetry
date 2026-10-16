@@ -204,7 +204,9 @@ it('allows one application state listener, forwards pushed state and unsubscribe
   expect(ipc.send).toHaveBeenCalledExactlyOnceWith('app:subscribe-state');
   expect(() => bridge.subscribeAppState(vi.fn())).toThrow('One application state subscription');
   expect(() => bridge.subscribeAppState('not a function' as never)).toThrow();
-  const state = {health: {service: 'ready', storage: 'verified', recording: 'unavailable', lastError: null}};
+  // ET-015c: the wider recording status passes through unchanged; the preload forwards main's state as it is.
+  const state = {health: {service: 'ready', storage: 'verified', recording: {state: 'recording', target: 'synthetic', code: null,
+    losses: {lostEvents: 2, eventLoss: 0, notConnected: 1, sampleLoss: 0, restoreLoss: 0, droppedSamples: 0}, trip: {phase: 'active', completeness: 'partial', untrackedJob: false}}, lastError: null}};
   ipc.emit('app:state', {}, state); expect(listener).toHaveBeenCalledExactlyOnceWith(state);
   stop(); stop(); expect(ipc.send.mock.calls.filter(call => call[0] === 'app:unsubscribe-state')).toHaveLength(1);
   ipc.emit('app:state', {}, state); expect(listener).toHaveBeenCalledOnce();
