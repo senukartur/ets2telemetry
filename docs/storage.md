@@ -173,8 +173,10 @@ The service talks to the worker through [StorageClient](../packages/storage/src/
 | Deadline per command | 10 s after it was sent; `open` 120 s, because it can include a verified backup and a migration |
 | Missed deadline | The command gets retryable `TIMEOUT`, the worker is terminated and every queued and later command gets `WORKER_FAILED` |
 | Worker error or unexpected exit | The command in flight and every queued command get `WORKER_FAILED`; later commands too |
-| Malformed answer | An answer for another id, an unknown error code, a commit result without a canonical decimal `committedThroughEventSeq` and a known status, or an `appendSamples` result whose `appended` and `skipped` are not both non-negative safe integers fails the client the same way. So does a journal answer that is not exactly the shape of [the journal contract](../packages/contracts/src/journal.ts) (ET-016) |
+| Malformed answer | An answer for another id, an unknown error code, a commit result without a canonical decimal `committedThroughEventSeq` and a known status, or an `appendSamples` result whose `appended` and `skipped` are not both non-negative safe integers fails the client the same way. A journal answer is the one exception (ET-016 review pass 1): see the journal answer rule below |
 | Close | Queued commands get `STORAGE_CLOSED`, the command in flight finishes with its real result, then the worker closes the database (SQLite checkpoints the WAL) and its thread exits with code 0. Without that within the close grace, the worker is terminated and the command in flight gets `WORKER_FAILED`. Closing a client that had already failed (worker error or exit, missed deadline, malformed answer) only waits for the terminated thread and is never clean |
+
+**Journal answer rule (ET-016 review pass 1).** Journal reads are off the commit and ACK path, so a journal answer that is well framed (a `storage.response` with the expected id and `{ok: true, value}`) but whose value breaks [the journal contract](../packages/contracts/src/journal.ts) or holds more rows than the request asked for does not fail the client. That one command resolves with the client-made error `{code: 'JOURNAL_ANSWER_INVALID', retryable: false}`, the `onJournalAnswerInvalid` option is called with the fixed fact `{command}` (the telemetry service logs it from ET-016 PR-3 on), and the client, the recorder and later commands keep running. `JOURNAL_ANSWER_INVALID` is not a storage error code: a worker cannot send it, and commits, the durable sink and the recording status never see it. Every other malformed frame, including a journal frame without a value, with an unknown error code or for another id, and every invalid answer to a non-journal command still fails the client closed.
 
 **No success after a failure.** A worker failure, a missed deadline or a malformed answer fails the client closed. The command in flight may or may not have committed, so it is reported as `TIMEOUT` or `WORKER_FAILED`, never as a commit result, and an answer arriving later is ignored. A durable ACK may be built only from a commit result (protocol v1 §10), so a lost answer can delay an ACK but never advance one past stored coverage; after a restart the producer redelivers and storage answers `duplicate`. A storage error such as `DISK_FULL` is an ordinary result: the worker keeps serving and a retry can commit.
 
@@ -199,7 +201,7 @@ ET-016 PR-2 adds four read commands for the [trip journal](journal.md) (J5). Eac
 | Command | Bound | Order and cursor |
 | --- | --- | --- |
 | `journalTrips({cursor?, game?, outcome?, completeness?})` | 50 trips; the page size is fixed and a `limit` is refused | Newest first: `id < cursor ORDER BY id DESC`; the cursor is the last row id, `^[1-9][0-9]{0,18}$`. The filters are in the `WHERE` clause, before the `LIMIT` |
-| `journalTrip(tripUuid)` | One trip; its first 50 completeness intervals; at most 5,000 money amounts summed, beyond that `incomplete: true` | `UNKNOWN_TRIP` for an unknown trip |
+| `journalTrip(tripUuid)` | One trip; its first 50 completeness intervals; its latest 10 trailer configurations with their total; at most 5,000 money amounts summed, beyond that `incomplete: true` | `UNKNOWN_TRIP` for an unknown trip |
 | `journalEvents(tripUuid, {cursor?, limit})` | `limit` 100 or 500 | eventSeq order; the cursor is the last eventSeq, `^[1-9][0-9]{0,19}$` |
 | `journalIntervals(tripUuid, {cursor?, limit})` | `limit` 100 or 500, with the trip's total | Insertion order; the cursor is the last interval id |
 
@@ -215,7 +217,7 @@ Samples reuse `listSamples` with `limit` 300 or 3,600, which its existing bound 
 | Trip by UUID | `SEARCH trips USING INDEX sqlite_autoindex_trips_1 (trip_uuid=?)` |
 | Job, session, event, truck, clock, sample label, database purpose | `SEARCH … USING INTEGER PRIMARY KEY (rowid=?)` |
 | Event at the carrier | `SEARCH events USING COVERING INDEX sqlite_autoindex_events_1 (plugin_session_id=? AND event_seq=?)` |
-| Trailers | `SEARCH x USING COVERING INDEX sqlite_autoindex_trip_trailers_1 (trip_ref=?)`, then the trailer configuration and event by primary key |
+| Trailers | `SEARCH x USING COVERING INDEX sqlite_autoindex_trip_trailers_1 (trip_ref=?)`, then the trailer configuration and event by primary key (the latest 10 by eventSeq); the total `SEARCH trip_trailers USING COVERING INDEX sqlite_autoindex_trip_trailers_1 (trip_ref=?)` |
 | Money amounts | `SEARCH a USING COVERING INDEX event_attributions_trip (trip_ref=?)`, then the event and its amount by primary key |
 | Interval page and total | `SEARCH completeness_intervals USING INDEX completeness_intervals_trip (trip_ref=? AND rowid>?)`; the total and last id `USING COVERING INDEX completeness_intervals_trip (trip_ref=?)` |
 | Sample count, first and last id | `SEARCH samples USING COVERING INDEX samples_trip (trip_ref=?)` |
