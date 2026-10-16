@@ -226,4 +226,12 @@ describe('recording target and the trip recorder client (ET-015a, R3, R10)', () 
       ['recordCompleteness', 's', interval, {ifAbsent: true}], ['listTrips', {game: 'ets2', outcome: 'open'}], ['getEvent', 's', '1'], ['listEvents', 's', {afterEventSeq: '0', limit: 500}]
     ]);
   });
+  it('answers appendSamples with STORAGE_CLOSED while no database is open, and forwards it with its options while one is (ET-015b)', async () => {
+    const source: {client: StorageClient | undefined} = {client: undefined}, client = recorderClient(source);
+    expect(await client.appendSamples('s', [], {uniqueSeconds: true})).toEqual({ok: false, error: storageError('STORAGE_CLOSED')});
+    const received: unknown[][] = [];
+    source.client = {appendSamples: (...args: unknown[]) => { received.push(args); return Promise.resolve({ok: true, value: {appended: 0, skipped: 0}}); }} as unknown as StorageClient;
+    expect(await client.appendSamples('s', [], {uniqueSeconds: true})).toEqual({ok: true, value: {appended: 0, skipped: 0}});
+    expect(received).toEqual([['s', [], {uniqueSeconds: true}]]);
+  });
 });

@@ -4,20 +4,26 @@
 // steps the reducer when an item reaches the head of that FIFO and follows the caller contract in docs/trips.md:
 // coverage is read right before each commit, and the stepped state is adopted only when storage reports `committed`,
 // `duplicate`, `covered` or `conflict` (T3). Readings (the checkpoint's and each snapshot's state) arrive through the
-// same FIFO and are adopted at once. Node-safe: it talks to storage only through the StorageClient interface.
-// See docs/telemetry-service-v1.md.
+// same FIFO and are adopted at once. ET-015b: after each reading the recorder samples it at one row per source second
+// and holds the rows until DurableDelivery's `samples` op writes them. Node-safe: it talks to storage only through the
+// StorageClient interface. See docs/telemetry-service-v1.md.
 import type {Uint64} from '../../../packages/contracts/src/protocol-v1';
-import type {CommitResult} from '../../../packages/storage/src/api';
+import type {CommitResult, SampleAppendResult} from '../../../packages/storage/src/api';
 import type {StorageClient} from '../../../packages/storage/src/client';
-import {initialTripState, normalizeV1State, stepTrip, tripView, type TripErrorCode, type TripGame, type TripInput, type TripState, type TripView} from '../../../packages/telemetry-core/src/index';
-import type {CommitContext, CoverageMessage, DurableSink, ReadingMessage, RecorderErrorCode, SinkError, SinkResult, WelcomeMessage} from './durable-sink';
+import {
+  initialSamplerState, initialTripState, normalizeV1State, sampleReading, stepTrip, tripView, type SamplerState, type TripErrorCode, type TripGame, type TripInput,
+  type TripState, type TripView
+} from '../../../packages/telemetry-core/src/index';
+import type {CommitContext, CoverageMessage, DurableSink, ReadingMessage, RecorderErrorCode, SampleSink, SinkError, SinkResult, WelcomeMessage} from './durable-sink';
+import {SampleBuffer} from './sample-buffer';
 import {readTripSeeds} from './trip-seeds';
 
 /** The recorder's sink codes and their E7 class live in durable-sink.ts, so the ingestion chain never loads the reducer. */
 export {RECORDER_FAILURE_CLASS, type RecorderErrorCode} from './durable-sink';
 
-/** The storage commands the recorder uses: the durable path, the restore-loss marker and the cold-start reads. */
-export type TripRecorderClient = Pick<StorageClient, 'upsertSession' | 'committedThrough' | 'commitEvent' | 'commitGap' | 'recordCompleteness' | 'listTrips' | 'getEvent' | 'listEvents'>;
+/** The storage commands the recorder uses: the durable path, the restore-loss marker, the cold-start reads and the samples. */
+export type TripRecorderClient = Pick<StorageClient, 'upsertSession' | 'committedThrough' | 'commitEvent' | 'commitGap' | 'recordCompleteness' | 'listTrips' | 'getEvent' |
+  'listEvents' | 'appendSamples'>;
 
 const RECORDER_CODE: Readonly<Record<TripErrorCode, RecorderErrorCode>> = {
   ORDER_VIOLATION: 'TRIP_ORDER_VIOLATION', COVERAGE_MISMATCH: 'TRIP_COVERAGE_MISMATCH', UNKNOWN_SESSION: 'TRIP_UNKNOWN_SESSION'
@@ -51,15 +57,27 @@ function reading(message: ReadingMessage): TripInput {
  *   This is detection after the commit, not prevention: the gap row and its effects are already stored. The failure
  *   stops durable delivery (no ACK, live-only), and a later cold start seeds from those rows. Under the single-writer
  *   rule it should never happen.
- * - `observe` (R5): a checkpoint steps `checkpoint` and then its state as a reading; a snapshot steps a reading.
+ * - `observe` (R5): a checkpoint steps `checkpoint` and then its state as a reading; a snapshot steps a reading. Then
+ *   (ET-015b, H2) the adopted reading goes through `sampleReading` with the trip view of its game, and a sampled row
+ *   joins the pending SampleBuffer.
  * - `restoreLoss` (R9): one session-level `restore-loss` interval for the eventSeq range the producer released beyond
  *   storage, recorded with `ifAbsent` so a service restart in the same plugin session adds no second row.
+ * - `samples` (ET-015b): the pending rows for DurableDelivery. `write` stores one session's loss intervals and then its
+ *   rows with `appendSamples(…, {uniqueSeconds: true})` (H6); each part leaves the buffer only once stored.
  * - `view(game)` (R17): the read-only trip view, for ET-015b.
  *
  * A reducer `ok: false` result becomes a RecorderErrorCode and changes no state.
  */
 export class TripRecorderSink implements DurableSink {
   private state: TripState = initialTripState();
+  private sampler: SamplerState = initialSamplerState();
+  private readonly buffer = new SampleBuffer();
+  readonly samples: SampleSink = {
+    pending: () => this.buffer.pending,
+    write: maxRows => this.writeSamples(maxRows),
+    discard: () => this.buffer.discard(),
+    dropped: () => this.buffer.dropped
+  };
   constructor(private readonly client: TripRecorderClient) {}
 
   async openSession(welcome: WelcomeMessage): Promise<SinkResult<{committedThroughEventSeq: Uint64}>> {
@@ -104,7 +122,7 @@ export class TripRecorderSink implements DurableSink {
     return result;
   }
 
-  observe(message: ReadingMessage): SinkResult<undefined> {
+  observe(message: ReadingMessage, context: CommitContext): SinkResult<undefined> {
     let next = this.state;
     if (message.kind === 'checkpoint') {
       const hydrated = stepTrip(next, {kind: 'checkpoint', message});
@@ -114,7 +132,26 @@ export class TripRecorderSink implements DurableSink {
     const read = stepTrip(next, reading(message));
     if (!read.ok) return refused(RECORDER_CODE[read.code]);
     this.state = read.state;
+    // H2, H7: the sample sees the trip state that the commits before it in the FIFO left, and this reading.
+    const sampled = sampleReading(this.sampler, {message, receivedUtcMs: context.receivedUtcMs, view: tripView(this.state, message.source.game)});
+    this.sampler = sampled.state;
+    if (sampled.row) this.buffer.push(message.source.pluginSessionId, sampled.row);
     return {ok: true, value: undefined};
+  }
+
+  /** The `samples` write: one plugin session's loss intervals, then at most `maxRows` of its rows (H8, H9). */
+  private async writeSamples(maxRows: number): Promise<SinkResult<SampleAppendResult>> {
+    const batch = this.buffer.nextBatch(maxRows);
+    if (!batch) return {ok: true, value: {appended: 0, skipped: 0}};
+    for (const loss of batch.losses) {
+      const recorded = await this.client.recordCompleteness(batch.pluginSessionId, loss);
+      if (!recorded.ok) return recorded;
+      this.buffer.commitLoss(loss);
+    }
+    if (batch.rows.length === 0) return {ok: true, value: {appended: 0, skipped: 0}};
+    const result = await this.client.appendSamples(batch.pluginSessionId, [...batch.rows], {uniqueSeconds: true});
+    if (result.ok) this.buffer.commit(batch);
+    return result;
   }
 
   async restoreLoss(pluginSessionId: string, storedThroughEventSeq: Uint64, ackedThroughEventSeq: Uint64): Promise<SinkResult<undefined>> {

@@ -56,7 +56,8 @@ async function openStorage() {
       commitEvent: input => Promise.resolve(storage.commitEvent(input, options(input.message))), commitGap: input => Promise.resolve(storage.commitGap(input, options(input.message))),
       recordCompleteness: (session, interval, completeness) => Promise.resolve(storage.recordCompleteness(session, interval, completeness)),
       listTrips: page => Promise.resolve(storage.listTrips(page)), getEvent: (session, eventSeq) => Promise.resolve(storage.getEvent(session, eventSeq)),
-      listEvents: (session, page) => Promise.resolve(storage.listEvents(session, page))
+      listEvents: (session, page) => Promise.resolve(storage.listEvents(session, page)),
+      appendSamples: (session, rows, sampleOptions) => Promise.resolve(storage.appendSamples(session, rows, sampleOptions))
     };
   }
   const {StorageClient, workerHandle} = require(path.join(bundles, 'storage-client.cjs'));
@@ -84,7 +85,9 @@ async function main() {
       if (hit(message, count) && barrier.kind === 'after') await stop(label);
       return result;
     },
-    observe: message => recorder.observe(message),
+    observe: (message, context) => recorder.observe(message, context),
+    // ET-015b: the recorder's pending one-second samples, written by the pipeline's samples op and at stop.
+    samples: recorder.samples,
     async restoreLoss(session, stored, acked) { if (frozen) await forever(); return recorder.restoreLoss(session, stored, acked); }
   };
   let connections = 0;

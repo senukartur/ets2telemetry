@@ -215,7 +215,8 @@ export async function runRecording(input: Json, database: {path: string; backups
       upsertSession: input => client.upsertSession(input), committedThrough: session => client.committedThrough(session),
       commitEvent: input => scripted(() => client.commitEvent(input)), commitGap: input => scripted(() => client.commitGap(input)),
       recordCompleteness: (session, interval, options) => client.recordCompleteness(session, interval, options),
-      listTrips: page => client.listTrips(page), getEvent: (session, eventSeq) => client.getEvent(session, eventSeq), listEvents: (session, page) => client.listEvents(session, page)
+      listTrips: page => client.listTrips(page), getEvent: (session, eventSeq) => client.getEvent(session, eventSeq), listEvents: (session, page) => client.listEvents(session, page),
+      appendSamples: (session, rows, options) => client.appendSamples(session, rows, options)
     };
     const recorder = new TripRecorderSink(storage), states: V1SourceState[] = [], logs: [string, unknown][] = [];
     const service: Service = {ingestion: undefined as unknown as V1Ingestion, recorder, client, worker, exit, states, logs, control: channel?.port1};
