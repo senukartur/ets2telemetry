@@ -136,6 +136,112 @@ function Test-LifecycleSettingsReceipt {
     return $true
 }
 
+# ET-015a PR-4 recording journey: one service run's recording diagnostics. RECORDING_TARGET and HISTORY_STORAGE_OPENED
+# once per service process, one ok recording-flush and history-storage step and no durable or target failure.
+function Test-RecordingServiceEvent {
+    param([object[]]$ServiceEvents, [bool[]]$Created)
+    $targets = @($ServiceEvents | Where-Object { $_.event -ceq 'RECORDING_TARGET' })
+    if ($targets.Count -ne $Created.Count) { return $false }
+    foreach ($target in $targets) { if ($target.facts.purpose -cne 'synthetic') { return $false } }
+    $opened = @($ServiceEvents | Where-Object { $_.event -ceq 'HISTORY_STORAGE_OPENED' })
+    if ($opened.Count -ne $Created.Count) { return $false }
+    for ($index = 0; $index -lt $Created.Count; $index++) {
+        if ($opened[$index].facts.created -isnot [bool] -or $opened[$index].facts.created -ne $Created[$index]) { return $false }
+    }
+    foreach ($stepName in @('recording-flush','history-storage')) {
+        $steps = @($ServiceEvents | Where-Object { $_.event -ceq 'SHUTDOWN_STEP' -and $_.facts.name -ceq $stepName })
+        if ($steps.Count -ne 1 -or $steps[0].facts.outcome -cne 'ok') { return $false }
+    }
+    if (@($ServiceEvents | Where-Object { $_.event -ceq 'HISTORY_STORAGE_CLOSED' }).Count -ne 1) { return $false }
+    foreach ($row in $ServiceEvents) {
+        if ($row.event -cmatch '^(V1_DURABLE_(RETRY|UNAVAILABLE|ACK_AHEAD|RESTORE_LOSS)|V1_EVENT_CONFLICT|RECORDING_TARGET_REJECTED|HISTORY_STORAGE_UNAVAILABLE)$') { return $false }
+    }
+    return $true
+}
+
+# ET-015a PR-4 recording journey: commits through a killed and restarted service, close-to-tray, a tray exit and an
+# application restart into one synthetic database, which holds the hand-written rows; no history database exists.
+function Test-RecordingReceipt {
+    param([object]$Driver)
+    $recording = $Driver.recording
+    if ($null -eq $recording) { return $false }
+    foreach ($field in @('commitsActive','serviceRestartRecovered','dashboardClosedRecordingContinued','trayExitOrderly','restartRecovered',
+        'shutdownClean','simulatorMatchesReplay','historyDatabaseAbsent','sidecarsAbsent','databaseRowsMatch')) {
+        if ($recording.$field -isnot [bool] -or $recording.$field -ne $true) { return $false }
+    }
+    # Three distinct service processes: the first, its supervised replacement (unchanged while the dashboard is closed) and run B's.
+    foreach ($servicePid in @($recording.servicePid, $recording.restartedServicePid, $recording.restart.servicePid)) {
+        if (!(Test-ReceiptInteger -Value $servicePid -Minimum 1 -Maximum 4294967295)) { return $false }
+    }
+    if ($recording.restartedServicePid -eq $recording.servicePid -or $recording.restart.servicePid -eq $recording.servicePid -or
+        $recording.restart.servicePid -eq $recording.restartedServicePid -or $recording.afterClose.servicePid -ne $recording.restartedServicePid -or
+        $recording.whileClosed.servicePid -ne $recording.restartedServicePid) { return $false }
+    foreach ($state in @($recording.afterClose, $recording.whileClosed)) {
+        foreach ($flag in @('dashboard','exiting')) { if ($state.$flag -isnot [bool] -or $state.$flag) { return $false } }
+        foreach ($flag in @('tray','overlay')) { if ($state.$flag -isnot [bool] -or !$state.$flag) { return $false } }
+    }
+    # Commits: ACKs reach the proxy only after their storage commits; the fifth ACK of connection 1 is lost on purpose, so
+    # the restarted service receives eventSeq 5 again and acknowledges it once more.
+    $first = $recording.firstConnection; $second = $recording.secondConnection; $third = $recording.thirdConnection
+    if ($null -eq $first -or $null -eq $second -or $null -eq $third) { return $false }
+    if ((@($first.forwardedAcks) -join ',') -cne '1,2,3,4' -or (@($first.withheldAcks) -join ',') -cne '5' -or $first.closedBy -cne 'server' -or
+        $second.checkpointAckedThrough -cne '4' -or (@($second.forwardedAcks) -join ',') -cne '5,6,7,8,9' -or (@($second.withheldAcks)).Count -ne 0 -or
+        $third.checkpointAckedThrough -cne '9' -or (@($third.forwardedAcks) -join ',') -cne '10') { return $false }
+    $redelivered = @($second.events)
+    if ($redelivered.Count -ne 5 -or $redelivered[0].eventSeq -cne '5' -or $redelivered[0].redelivered -isnot [bool] -or !$redelivered[0].redelivered) { return $false }
+    foreach ($row in @($recording.firstServiceDurable, $recording.restartedServiceDurable, $recording.restart.durable)) {
+        if ($null -eq $row -or $row.durable -cne 'active' -or $row.selection -cne 'synthetic') { return $false }
+    }
+    $exit = $recording.trayExit
+    if ($null -eq $exit -or !(Test-ReceiptInteger -Value $exit.launcherExit -Minimum 0 -Maximum 0) -or $null -ne $exit.signal -or
+        !(Test-ReceiptInteger -Value $exit.exitMilliseconds -Minimum 0 -Maximum 8000) -or
+        @($exit.requests).Count -ne 1 -or @($exit.requests)[0] -cne 'tray') { return $false }
+    if (!(Test-ReceiptInteger -Value $recording.restartLauncherExit -Minimum 0 -Maximum 0) -or $Driver.launcherExit -ne 0) { return $false }
+    # The simulator served three durable connections and matched its deterministic replay.
+    $simulator = $recording.simulator
+    if ($null -eq $simulator -or !(Test-ReceiptInteger -Value $simulator.exit.code -Minimum 0 -Maximum 0) -or $simulator.report.matchesReplay -isnot [bool] -or
+        !$simulator.report.matchesReplay -or $simulator.report.cancelled -isnot [bool] -or $simulator.report.cancelled -or @($simulator.report.connections).Count -ne 3) { return $false }
+    foreach ($connection in @($simulator.report.connections)) { if ($connection.durable -isnot [bool] -or !$connection.durable) { return $false } }
+    # Files and rows: the closed synthetic database without sidecars, no history database, and the expected rows.
+    $files = $recording.files
+    if ($null -eq $files -or @($files.sidecars).Count -ne 0 -or $files.historyDatabase -isnot [bool] -or $files.historyDatabase -or
+        $files.syntheticBackups -isnot [bool] -or $files.syntheticBackups -or !(Test-ReceiptInteger -Value $files.userVersion -Minimum 1 -Maximum 1)) { return $false }
+    $database = $recording.database
+    if ($null -eq $database -or (@($database.integrity) -join ',') -cne 'ok' -or !(Test-ReceiptInteger -Value $database.foreignKeyViolations -Minimum 0 -Maximum 0) -or
+        $database.purpose -cne 'synthetic' -or @($database.sessions).Count -ne 1 -or $database.sessions[0].origin -cne 'synthetic' -or
+        $database.sessions[0].committedThrough -cne '10' -or $database.acknowledgedThrough -cne '10') { return $false }
+    $rows = $database.rows
+    if ($null -eq $rows -or @($rows.events).Count -ne 10 -or @($rows.trips).Count -ne 1 -or $rows.trips[0].outcome -cne 'delivered' -or
+        $rows.trips[0].recordingCompleteness -cne 'partial' -or @($rows.attributions).Count -ne 1 -or @($rows.intervals).Count -ne 2 -or
+        $rows.intervals[1].kind -cne 'not-connected' -or $rows.intervals[1].detail.cause -cne 'consumer-restart') { return $false }
+    $eventSeqs = @($rows.events | ForEach-Object { $_.eventSeq })
+    if (($eventSeqs -join ',') -cne '1,2,3,4,5,6,7,8,9,10') { return $false }
+    # Run A: the terminated service and its replacement; one tray exit and one final clean stop.
+    $mainEvents = @($Driver.mainEvents); $serviceEvents = @($Driver.serviceEvents)
+    $appExits = @($mainEvents | Where-Object { $_.event -ceq 'APP_EXIT' }); $serviceExits = @($mainEvents | Where-Object { $_.event -ceq 'SERVICE_EXIT' })
+    if ($appExits.Count -ne 1 -or $null -eq $appExits[0].detail.code -or $appExits[0].detail.code -ne 0 -or $serviceExits.Count -ne 2 -or
+        $null -eq $serviceExits[1].detail.code -or $serviceExits[1].detail.code -ne 0) { return $false }
+    if (@($mainEvents | Where-Object { $_.event -ceq 'DIAGNOSTIC_SERVICE_EXIT_REQUEST' }).Count -ne 1) { return $false }
+    $requests = @($mainEvents | Where-Object { $_.event -ceq 'APP_EXIT_REQUESTED' })
+    if ($requests.Count -ne 1 -or $requests[0].facts.reason -cne 'tray') { return $false }
+    $stopped = @($serviceEvents | Where-Object { $_.event -ceq 'SERVICE_REPORT' -and $_.detail.type -ceq 'stopped' })
+    if ($stopped.Count -ne 1 -or $stopped[0].detail.clean -isnot [bool] -or !$stopped[0].detail.clean) { return $false }
+    foreach ($step in @($serviceEvents | Where-Object { $_.event -ceq 'SHUTDOWN_STEP' })) { if ($step.facts.outcome -cne 'ok') { return $false } }
+    foreach ($row in $mainEvents + $serviceEvents) {
+        if ($row.event -cmatch 'FAILED|TIMEOUT|UNCAUGHT|UNHANDLED|INVALID|RENDER_PROCESS_GONE') { return $false }
+    }
+    if (!(Test-RecordingServiceEvent -ServiceEvents $serviceEvents -Created @($true, $false))) { return $false }
+    # Run B: one orderly run that reopened the same database.
+    $restartMain = @($recording.restartMainEvents); $restartService = @($recording.restartServiceEvents)
+    if (!(Test-OrderlyRunEvent -MainEvents $restartMain -ServiceEvents $restartService) -or
+        !(Test-RecordingServiceEvent -ServiceEvents $restartService -Created @($false))) { return $false }
+    $restartRequests = @($restartMain | Where-Object { $_.event -ceq 'APP_EXIT_REQUESTED' })
+    if ($restartRequests.Count -ne 1 -or $restartRequests[0].facts.reason -cne 'app-quit') { return $false }
+    # Only the terminated service's probe remains, as crash evidence.
+    if (@($Driver.probesAfterExit).Count -ne 1 -or (@($Driver.probesAfterExit) -join ',') -cne (@($recording.retainedCrashProbe) -join ',')) { return $false }
+    return $true
+}
+
 function Test-RuntimeReceipt {
     param([string]$DriverResultPath, [string]$ExpectedCommit, [string]$ExpectedMode, [int]$JobExitCode,
         [string]$ExpectedScenario)
@@ -280,6 +386,10 @@ function Test-RuntimeReceipt {
     # Lifecycle is additive as well; earlier scenario rules are unchanged.
     if ($ExpectedScenario -ceq 'lifecycle' -and !(Test-LifecycleReceipt -Driver $driver)) {
         $validation.reason = 'LIFECYCLE_RESULT_INCOMPLETE_OR_INVALID'; return $validation
+    }
+    # Recording is additive too (ET-015a PR-4); it tightens no earlier scenario.
+    if ($ExpectedScenario -ceq 'recording' -and !(Test-RecordingReceipt -Driver $driver)) {
+        $validation.reason = 'RECORDING_RESULT_INCOMPLETE_OR_INVALID'; return $validation
     }
     $validation.passed = $true
     return $validation

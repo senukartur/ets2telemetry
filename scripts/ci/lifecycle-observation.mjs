@@ -70,7 +70,7 @@ export async function lifecycleState(application) {
   return state;
 }
 
-async function until(read, accept, message, timeoutMs = 10000) {
+export async function until(read, accept, message, timeoutMs = 10000) {
   const deadline = performance.now() + timeoutMs;
   for (;;) {
     const value = await read();
@@ -91,7 +91,7 @@ async function readyDashboard(page) {
   return waitForCurrentTelemetry(page);
 }
 
-async function closeDashboard(application, page) {
+export async function closeDashboard(application, page) {
   const closed = page.isClosed() ? Promise.resolve() : page.waitForEvent('close', {timeout: 5000});
   const requested = await application.evaluate(({BrowserWindow}) => {
     const targets = BrowserWindow.getAllWindows().filter(window => {
@@ -107,7 +107,7 @@ async function closeDashboard(application, page) {
   return until(() => lifecycleState(application), state => state.dashboard === false, 'DASHBOARD_NOT_RETIRED', 5000);
 }
 
-function waitForExit(child, timeoutMs, message) {
+export function waitForExit(child, timeoutMs, message) {
   if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve({code: child.exitCode, signal: child.signalCode});
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(message)), timeoutMs);
