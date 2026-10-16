@@ -19,10 +19,12 @@ import {MAX_PENDING_SAMPLES} from './sample-buffer';
  * The leftover items of a connection that has ended were never acknowledged, so they cover entries the producer still
  * retains; the reconnection redelivers those entries, at most 256, and its live items are admitted into the same 256
  * entries until an ACK releases some, which follows commits that have already left the queue. The leftovers of one
- * ended connection plus a full redelivery plus live items therefore fit. The queue can still fill, and a reconnection
- * still be refused for a while (retryable, bounded and draining, never a livelock), when the leftovers of several
- * connections that ended before the queue drained are stacked, or when a gap record keeps growing while nothing
- * commits and each extension adds a delta gap item without a new entry (I3, I6), as in a true storage stall.
+ * ended connection plus a full redelivery plus live events therefore fit. A live delta gap item extends the trailing gap
+ * record (I3, I6) and takes no new entry, so it fits only while the leftovers and the redelivery stay below 512: after
+ * 256 leftover items and a redelivery of all 256 entries, the first delta gap is item 513. The queue can therefore still
+ * fill, and a reconnection still be refused for a while (retryable, bounded and draining, never a livelock), when a gap
+ * record keeps growing while nothing commits, as in a true storage stall, or when the leftovers of several connections
+ * that ended before the queue drained are stacked.
  */
 export const MAX_PENDING_COMMITS = 512;
 /**
