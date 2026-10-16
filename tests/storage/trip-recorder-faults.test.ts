@@ -45,7 +45,7 @@ async function heldOrHang(control: MessagePort): Promise<unknown> {
   });
   try { return (await Promise.race([once(control, 'message'), guard]))[0]; } finally { clearTimeout(timer); }
 }
-const durableLogs =(run: RecordingRun, service = 0) => run.services[service].logs.filter(([event]) => event.startsWith('V1_DURABLE'));
+const durableLogs = (run: RecordingRun, service = 0) => run.services[service].logs.filter(([event]) => event.startsWith('V1_DURABLE'));
 
 describe('S4 injected storage failures under the trip recorder', () => {
   // A retryable failure of job.delivered (eventSeq 8): the connection closes without its ACK and the redelivery on the
