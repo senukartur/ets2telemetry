@@ -4,8 +4,8 @@
 // queued command get an error, later commands fail at once, and no success is reported afterwards. See docs/storage.md.
 import type {Worker} from 'node:worker_threads';
 import type {
-  CommitResult, CompletenessInterval, CompletenessOptions, EventRow, OpenSummary, Result, SampleInput, SampleRecord, SessionRecord, StorageError, StorageErrorCode, StorageInfo,
-  TripEffect, TripList, TripPage, TripRecord, Uint64
+  CommitResult, CompletenessInterval, CompletenessOptions, EventRow, OpenSummary, Result, SampleAppendOptions, SampleAppendResult, SampleInput, SampleRecord, SessionRecord,
+  StorageError, StorageErrorCode, StorageInfo, TripEffect, TripList, TripPage, TripRecord, Uint64
 } from './api';
 import {storageError} from './errors';
 import {parseResponse, type CommandName, type CommandValue, type StorageCommand, type StorageRequest, type WorkerOpenOptions} from './worker/protocol';
@@ -86,7 +86,14 @@ export class StorageClient {
   upsertSession(input: {message: unknown}) { return this.#request({name: 'upsertSession', input}); }
   commitEvent(input: {message: unknown; effects?: TripEffect[]}): Promise<Result<CommitResult>> { return this.#request({name: 'commitEvent', input}); }
   commitGap(input: {message: unknown; effects?: TripEffect[]}): Promise<Result<CommitResult>> { return this.#request({name: 'commitGap', input}); }
-  appendSamples(pluginSessionId: string, rows: SampleInput[]): Promise<Result<{appended: number}>> { return this.#request({name: 'appendSamples', pluginSessionId, rows}); }
+  /**
+   * Only `uniqueSeconds` of the options crosses the worker boundary (ET-015b). A value that is not an object is forwarded
+   * as given, so the worker's request parser refuses it with INVALID_INPUT instead of the client throwing.
+   */
+  appendSamples(pluginSessionId: string, rows: SampleInput[], options?: SampleAppendOptions): Promise<Result<SampleAppendResult>> {
+    if (options === undefined) return this.#request({name: 'appendSamples', pluginSessionId, rows});
+    return this.#request({name: 'appendSamples', pluginSessionId, rows, options: isObject(options) ? {uniqueSeconds: options.uniqueSeconds} : options});
+  }
   /**
    * Only `ifAbsent` of the options crosses the worker boundary. A value that is not an object is forwarded as given, so
    * the worker's request parser refuses it with INVALID_INPUT instead of the client throwing.

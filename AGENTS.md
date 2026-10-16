@@ -397,3 +397,17 @@ The repository became public on October 16, 2026, and at the owner's request the
 - The repository admin role may bypass these rules only when merging a pull request (`pull_requests_only`); direct pushes to `main` stay blocked for everyone.
 
 Windows CI does not run on PRs that change only `**.md` or `docs/**`, so their required checks never report. Merge such a PR with `gh pr merge <pr> --squash --admin` only when its diff is limited to those paths, after the review rules above are met. Never use `--admin` to skip a failing, pending or cancelled check on any other PR. GitHub counts a job skipped by its `if` condition, such as the draft skip in both Windows CI jobs, as a passing required check, so the ruleset alone does not prove a real run: the merge gate remains a successful run of both jobs on the final head after **Ready for review** ([docs/ci.md](docs/ci.md#triggers-and-draft-checks)). The local pre-push hook remains in place. Inspect the live rules with `gh api repos/senukartur/ets2telemetry/rules/branches/main` before relying on this description.
+
+## ET-015b authorization — October 16, 2026
+
+Under the owner's standing delegation of October 15, 2026 (quoted in the ET-015a authorization above), the coordinator started ET-015b, one-second history. It adopted the architect's decisions H1–H17 ([concept.md](concept.md#et-015b-authorization--october-16-2026)) as coordinator decisions; the owner did not review them individually. For ET-015b only, this supersedes earlier statements that ET-015b remains unauthorized; earlier dated text is unchanged.
+
+ET-015b is four PRs:
+- a storage guard that stores at most one sample per source second;
+- a pure, freshness-aware 1 Hz sampler in `packages/telemetry-core`;
+- sample recording through the trip recorder and the DurableDelivery FIFO, with bounded batches, a 5 s flush, a 300-row backlog bound and a final write in the existing `recording-flush` step;
+- the extension of the recording runtime journey.
+
+Samples follow active real seconds of the source capture clock, never renderer frequency or game time. Paused, stale and missing seconds produce no row, and missing seconds are never filled.
+
+Storage gains only the `appendSamples` option `uniqueSeconds`, a `skipped` count and an in-process test hook that never crosses the worker boundary. There is no schema, migration, wire, preload/IPC, renderer or native change. `GAME_HISTORY_RECORDING` stays `false`, so samples are written only to synthetic or replay recording targets. ET-015c, ET-016 and later phases are not authorized by this paragraph. No game, TruckersMP, display or performance claim follows.

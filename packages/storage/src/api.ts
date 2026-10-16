@@ -45,6 +45,19 @@ export interface SampleInput {
   position: Available<{x: number; y: number; z: number}>;
 }
 export interface SampleRecord extends SampleInput {id: string; tripUuid: string | null}
+/**
+ * `uniqueSeconds` (ET-015b, H6): keep at most one row per plugin session, source clock and source second, where the
+ * source second is floor(monotonicNs / 1e9). Inside the transaction, each row is compared with the session's latest
+ * stored row (by insertion order) and with the rows accepted earlier in the same batch: a row whose second is at or below
+ * the last accepted second of its own source clock is skipped, and a row on another clock is accepted. Across commands
+ * only the latest stored row is read, so a row that returns to a clock after a row on another clock is compared with
+ * nothing stored for that clock; a plugin session's capture clock is constant, so the producer never does this. Every
+ * row is still validated, including the trip reference of a skipped row, and an invalid row stores none of the batch.
+ * A skipped row writes nothing, not even its clock rows.
+ */
+export interface SampleAppendOptions {uniqueSeconds?: boolean}
+/** `skipped` counts the rows `uniqueSeconds` left out; it is 0 without the option. */
+export interface SampleAppendResult {appended: number; skipped: number}
 
 export type CompletenessKind = 'event-loss' | 'not-connected' | 'storage-unavailable' | 'sample-loss' | 'discontinuity' | 'restore-loss';
 /** A known missing or discontinuous interval. It records the gap; it never fabricates data for it. */
@@ -119,7 +132,7 @@ export type CommitStatus = 'committed' | 'duplicate' | 'conflict' | 'covered';
  * committing (the single writer keeps it unchanged until the commit) and check it against previouslyCoveredThrough.
  */
 export interface CommitResult {status: CommitStatus; committedThroughEventSeq: Uint64; previouslyCoveredThrough?: Uint64}
-/** In-process test hooks only; never part of a worker message. */
+/** In-process test hooks of commitEvent, commitGap and appendSamples (ET-015b); never part of a worker message. */
 export interface CommitOptions {testHooks?: {beforeCommit?: () => void}}
 
 export interface SessionRecord {
