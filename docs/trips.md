@@ -99,12 +99,13 @@ The seeds are read only when the reducer has no session of the welcome's game, t
 | S-3 | The synchronous `EffectsHook` of the durable sink got no commit result, so it could not follow T3 | **Resolved in ET-015a PR-2**: the hook is removed, and `TripRecorderSink` steps, commits and then adopts |
 | S-4 | Continuations have no column; they live in completeness `detail` JSON (`continuationOf`) | Kept as is |
 
-**Trip view consumers (R17, H7).** The recorder's `view(game)` returns `tripView` of its adopted state, so it reflects only committed events and gaps. A consumer that binds data to a trip, such as a one-second sample, uses `view.current.tripUuid` only while `view.phase` is `active` and `view.untrackedJob` is false. In every other case the reference is null:
+**Trip view consumers (R17, H7).** The recorder's `view(game)` returns `tripView` of its adopted state. A trip appears in it only after the event that opened it is committed, and an event or gap changes it only once committed; session and reading steps are adopted at once. A consumer that binds data to a trip, such as a one-second sample, uses `view.current.tripUuid` only while `view.phase` is `active` and `view.untrackedJob` is false. In every other case the reference is null:
 
 - the game is idle;
 - the trip is awaiting its outcome after `job.cleared`;
 - the trip is in a reload check;
-- a job is untracked: a checkpoint job seen while idle, or the job of a trip a gap closed (free driving or ambiguous).
+- a job is untracked: a checkpoint job seen while idle, or the job of a trip a gap closed (free driving or ambiguous);
+- the view is of another game than the reading (a defensive check in the sampler).
 
 A reading reaches the recorder in FIFO order after the items before it, so a sample taken when the reading arrives sees the trip state left by the commits before it, never by a commit still waiting.
 
@@ -265,7 +266,7 @@ Readings without an open trip of their session change no trip and add no effect:
 
 [`history-samples.ts`](../packages/telemetry-core/src/history-samples.ts) decides which protocol v1 readings (a connection's checkpoint and each snapshot) become one-second history samples, and builds their `SampleInput` rows for storage's `appendSamples` ([storage](storage.md#storage-api)). It is pure and deterministic. It reads no clock and runs no timer, and it never mutates its inputs. It imports `SampleInput` as a type only from `packages/storage/src/api.ts`, as T2 allows. The coordinator adopted decisions H1–H17 ([concept.md](../concept.md#et-015b-authorization--october-16-2026)). PR-3 calls `sampleReading` from the trip recorder at the head of the DurableDelivery FIFO (H2), after the reading has stepped the reducer.
 
-**Tick (H3).** The tick is the absolute source second `floor(capture.monotonicNs / 1e9)`, kept per plugin session and capture clock. The first qualifying reading in each second is sampled, and its `capture.monotonicNs` becomes the sample's time. Game time and UTC never set the cadence, so a sleep, a save load or a UTC change does not add or skip samples. A rule such as "at least 1 s since the last sample" would drift: at 20 Hz it gives about 3,510 rows per hour instead of 3,600.
+**Tick (H3).** The tick is the absolute source second `floor(capture.monotonicNs / 1e9)`, kept per plugin session and capture clock. The first qualifying reading in each second is sampled, and its `capture.monotonicNs` becomes the sample's time. Game time and UTC never set the cadence, so a sleep, a save load or a UTC change does not add or skip samples. A rule such as "at least 1 s since the last sample" would drift when readings jitter: at 20 Hz with ±10 ms jitter it gives about 3,500 rows per hour instead of 3,600.
 
 **Freshness (H4).** The sampler remembers, per game, the plugin session and capture clock of the last reading, its `boundaryOrder` and the last sampled second. Each reading gets one decision:
 
@@ -278,7 +279,7 @@ Readings without an open trip of their session change no trip and add no effect:
 | `same-second` | Fresh and running, but its second is not above the last sampled second on its clock | The boundary advances; no row |
 | `sampled` | Fresh, running, a new second and in range | The second is remembered; `row` is the sample |
 
-A reading on a new capture clock of the same session starts that clock with no sampled second. The live display's 500 ms staleness rule is not used.
+The sampler keeps only the current capture clock and its last sampled second. A capture clock change is not expected within a plugin session: [protocol v1](protocol/v1.md#5-envelopes-identity-sequences-and-time) §5 rejects one within a connection, and the plugin keeps one QPC clock per session. If one happens across connections, the new clock starts with no sampled second. The live display's 500 ms staleness rule is not used.
 
 **Pauses and holes (H5).** Paused and unavailable readings produce no row. After a resume or a reconnection the next qualifying second is sampled, and missed seconds are never filled. The sampler adds no interval for source holes: the reducer already records `sample-loss` reading holes and `not-connected` intervals on trips (T17).
 
@@ -289,9 +290,9 @@ A reading on a new capture clock of the same session starts that clock with no s
 - **Position.** It comes from `worldPlacement.position` in game coordinates. Orientation is not stored (OD-6).
 - **Game time.** `gameTime` is always present as `{minutes, clockId}`: the minutes as a number, or the unavailable reason, on the game time's own clock.
 - **UTC.** `utcMs` is the reading's `captureUtcUnixMs` when it is available and a safe integer. Otherwise it is `receivedUtcMs`, the consumer's label taken when the frame was decoded (H13). The caller must pass a non-negative safe integer. UTC, game time and source time stay in separate columns.
-- **Trip reference.** `tripUuid` follows the [trip view rule](#caller-contract-for-et-015a) (R17, H7): the open trip only while it is active and no job is untracked, otherwise null.
+- **Trip reference.** `tripUuid` follows the [trip view rule](#caller-contract-for-et-015a) (R17, H7): the open trip only while it is active, no job is untracked and the view is of the reading's game, otherwise null.
 
-The sampler writes nothing. Storage enforces one row per session, clock and second as well (H6, ET-015b PR-1), and batching, flushing and loss accounting (H8–H12) belong to the recorder pipeline (ET-015b PR-3). Real-game cadence, snapshot flow while paused and performance stay pending ([ET-015b validation](validation/et-015b.md)).
+The sampler writes nothing. Storage enforces one row per session, clock and second as well (H6, ET-015b PR-1), but only when the caller passes `{uniqueSeconds: true}` to `appendSamples`: it skips a row whose second is at or below that of the session's last stored row on the same clock, or of an earlier row of the same batch. Batching, flushing and loss accounting (H8–H12) belong to the recorder pipeline (ET-015b PR-3). Real-game cadence, snapshot flow while paused and performance stay pending ([ET-015b validation](validation/et-015b.md)).
 
 ## Effect bounds (T18)
 
