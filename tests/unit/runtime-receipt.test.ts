@@ -318,7 +318,9 @@ function journalReceipt(path: (string | number)[] = [], replacement?: Json): str
   const trip = (n: number) => `7a000000-0000-4000-8000-00000000000${n}`;
   const value: Json = {passed: true, commit: 'candidate', mode: 'packaged', scenarioKind: 'journal', launcherExit: 0, probesAfterExit: [],
     mainEvents: main(), serviceEvents: service(true),
-    journal: {liveLinesInViewport: true, liveHiddenInJournal: true, emptyHistoryShown: true, recordingOffNoteShown: true, liveRestored: true, seeded: true, syntheticBannerShown: true,
+    journal: {liveViewport: {innerHeight: 437, scrollY: 0, status: {top: 158, bottom: 178, visible: true}, speed: {top: 214, bottom: 234, visible: true},
+      fuel: {top: 242, bottom: 262, visible: true}},
+      liveLinesInViewport: true, liveHiddenInJournal: true, emptyHistoryShown: true, recordingOffNoteShown: true, liveRestored: true, seeded: true, syntheticBannerShown: true,
       pagesWalked: true, anchorRowsMatch: true, anchorDetailsMatch: true, backKeptPage: true, sampleGapShown: true, timelinePaged: true, intervalsPaged: true, samplesPaged: true,
       filtersApplied: true, shutdownClean: true,
       emptyHistory: {page: 'Page 1. The journal does not update by itself; use Refresh.', error: null, empty: 'No trips recorded',
@@ -380,7 +382,18 @@ function journalCases() {
     invalid('run 2 opened history', ['journal', 'restartServiceEvents', 0, 'facts', 'purpose'], 'history'),
     invalid('run 2 created its database', ['journal', 'restartServiceEvents', 2, 'facts', 'created'], true),
     invalid('run 2 with a failure event', ['journal', 'restartServiceEvents', 13], {event: 'HISTORY_STORAGE_UNAVAILABLE_FAILED'}),
-    invalid('run 2 events missing', ['journal', 'restartMainEvents'])
+    invalid('run 2 events missing', ['journal', 'restartMainEvents']),
+    // Review round 1: the viewport bounds and the anchor order themselves, not only the driver's flags.
+    invalid('viewport missing', ['journal', 'liveViewport']),
+    invalid('fuel line below the viewport', ['journal', 'liveViewport', 'fuel', 'bottom'], 438),
+    invalid('status line above the viewport', ['journal', 'liveViewport', 'status', 'top'], -4),
+    invalid('speed line not visible', ['journal', 'liveViewport', 'speed', 'visible'], false),
+    invalid('speed line box missing', ['journal', 'liveViewport', 'speed']),
+    invalid('anchor rows out of order', ['journal', 'anchorRows'], [8, 7, 6, 5, 4, 3, 1, 2].map(n => ({trip: `7a000000-0000-4000-8000-00000000000${n}`}))),
+    invalid('a filler instead of an anchor row', ['journal', 'anchorRows', 0, 'trip'], '7f000000-0000-4000-8000-00000000000a'),
+    invalid('anchor details out of order', ['journal', 'anchorDetails'], [2, 1, 3, 4, 5, 6, 7, 8].map(n => ({trip: `7a000000-0000-4000-8000-00000000000${n}`}))),
+    {name: 'journal fuel line below the viewport with Int64 integers', body: journalReceipt(['journal', 'liveViewport', 'fuel', 'bottom'], 438), scenario: 'journal',
+      numbers: 'int64' as const, code: 0, available: true, reason: 'JOURNAL_RESULT_INCOMPLETE_OR_INVALID'}
   ];
 }
 

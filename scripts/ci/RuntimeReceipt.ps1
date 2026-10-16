@@ -323,7 +323,20 @@ function Test-JournalReceipt {
     if ((@($journal.pages | ForEach-Object { $_.count }) -join ',') -cne '50,50,19' -or @($journal.pages)[2].next -isnot [bool] -or @($journal.pages)[2].next) { return $false }
     $filters = $journal.filters
     if ($null -eq $filters -or @($filters.none).Count -ne 3 -or !(Test-ReceiptInteger -Value $filters.partial -Minimum 39 -Maximum 39)) { return $false }
-    if (@($journal.anchorRows).Count -ne 8 -or @($journal.anchorDetails).Count -ne 8) { return $false }
+    # Review round 1: the B6 viewport bounds and the anchors' order are re-checked here, not only as driver flags. The
+    # status, speed and fuel lines must lie inside the first viewport; page 3 lists the anchors newest first, and the
+    # details are opened oldest first.
+    $viewport = $journal.liveViewport
+    if ($null -eq $viewport -or !(Test-ReceiptInteger -Value $viewport.innerHeight -Minimum 1 -Maximum 100000)) { return $false }
+    foreach ($line in @('status','speed','fuel')) {
+        $box = $viewport.$line
+        if ($null -eq $box -or $box.visible -isnot [bool] -or !$box.visible -or !(Test-ReceiptInteger -Value $box.top -Minimum 0 -Maximum 100000) -or
+            !(Test-ReceiptInteger -Value $box.bottom -Minimum 0 -Maximum 100000) -or $box.top -gt $box.bottom -or $box.bottom -gt $viewport.innerHeight) { return $false }
+    }
+    $anchorRows = '7a000000-0000-4000-8000-000000000008,7a000000-0000-4000-8000-000000000007,7a000000-0000-4000-8000-000000000006,7a000000-0000-4000-8000-000000000005,7a000000-0000-4000-8000-000000000004,7a000000-0000-4000-8000-000000000003,7a000000-0000-4000-8000-000000000002,7a000000-0000-4000-8000-000000000001'
+    $anchorDetails = '7a000000-0000-4000-8000-000000000001,7a000000-0000-4000-8000-000000000002,7a000000-0000-4000-8000-000000000003,7a000000-0000-4000-8000-000000000004,7a000000-0000-4000-8000-000000000005,7a000000-0000-4000-8000-000000000006,7a000000-0000-4000-8000-000000000007,7a000000-0000-4000-8000-000000000008'
+    if ((@($journal.anchorRows | ForEach-Object { $_.trip }) -join ',') -cne $anchorRows -or
+        (@($journal.anchorDetails | ForEach-Object { $_.trip }) -join ',') -cne $anchorDetails) { return $false }
     if ((@($journal.deliveredSamples | ForEach-Object { $_.kind }) -join ',') -cne 'sample,sample,gap,sample' -or
         @($journal.deliveredSamples)[2].text -cne 'no samples for 1 s') { return $false }
     if (@($journal.pagingTimeline.pageTwo).Count -ne 5 -or !(Test-ReceiptInteger -Value $journal.pagingIntervals.pageTwo -Minimum 4 -Maximum 4) -or
