@@ -1,0 +1,19 @@
+{
+  "scenario": "normal-delivery-backlog",
+  "authoredFrom": [
+    "Why a separate expectation: the transport of normal-delivery.json is replaced by a first durable connection whose client does not wait for ACKs, so the server writes events 1-5 while the commit of eventSeq 1 (truck.configured) is held inside its transaction, and a second durable connection at 360 ms that a restarted service takes. With a bound of 4 coverage items, the fifth item closes the first connection with BACKLOG_FULL (E5); its queued items 2-4 are dropped and the held commit of 1 completes after the release without an ACK.",
+    "The restarted service starts the session at coverage 1 (load unknown, T12: no opened-at-load) and reads no seed (no trip is stored). The second checkpoint hydrates the configured job as untracked from nextEventSeq 6 (T9); the redelivered truck.configured (1) is a duplicate at the processed point, so this reducer never sees the truck.",
+    "The redelivered trailer (2) and job (3) lie before nextEventSeq 6: the job opens trip@3 from its own configuration event, replayed from before the attach, so it is partial with an opened-before-attach not-connected interval (docs/trips.md, Replayed events); it references trailer 2 and no truck.",
+    "The redelivered start (4) and cargo re-send (5) and the live 6-9 follow: the delivery (8) attributes to the trip and closes it {delivered, outcome, partial} at 1,800,000,000,600. The only reading after the opening is none (the second connection's checkpoint precedes the redelivered job in the stream), so observed distance stays not observed (T16). Nine first commits (1 by the first service, 2-9 by the second) and one duplicate (the redelivered 1)."
+  ],
+  "trips": [
+    {"trip": "trip@3", "jobConfigurationEventSeq": "3", "truckConfigurationEventSeq": null, "trailerConfigurationEventSeqs": ["2"], "openedEventSeq": "3",
+      "gameMode": {"mode": "unknown", "method": "none", "confidence": "none"}, "gameModeAmbiguous": false, "outcome": "delivered", "outcomeEventSeq": "8", "closeReason": "outcome",
+      "recordingCompleteness": "partial", "startedUtcMs": 1800000000030, "endedUtcMs": 1800000000600, "observedDistanceM": {"available": false, "reason": "not-observed"}}
+  ],
+  "attributions": [{"eventSeq": "8", "trip": "trip@3", "attribution": "trip"}],
+  "intervals": [
+    {"trip": "trip@3", "kind": "not-connected", "detail": {"cause": "opened-before-attach", "atEventSeq": "3"}}
+  ],
+  "coverage": {"committedThroughEventSeq": "9", "committed": 9, "duplicate": 1, "covered": 0}
+}

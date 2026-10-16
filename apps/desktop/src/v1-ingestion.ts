@@ -1,9 +1,9 @@
 // Protocol v1 ingestion in the telemetry service (ET-006b, E2, E5, E9, E10). It validates each connection's hello,
 // welcome, checkpoint, snapshots, events, gaps, clock replies and `end` through the ET-002b V1Consumer, checks every
 // envelope against the selected source, keeps service-internal live state, measures the source clock and, when a
-// durable sink is configured, hands events and gaps to the storage-commit ACK pipeline (v1-durable-delivery.ts).
-// The telemetry service runs it beside v0 without a sink (PR-3), so in production it records nothing and sends no ACK.
-// See docs/telemetry-service-v1.md.
+// durable sink is configured, hands events, gaps and the durable connection's checkpoint and snapshots to the
+// storage-commit ACK pipeline (v1-durable-delivery.ts). The telemetry service runs it beside v0 without a sink, so in
+// production it records nothing and sends no ACK. See docs/telemetry-service-v1.md.
 import {randomUUID} from 'node:crypto';
 import net from 'node:net';
 import {FrameDecoder, PROTOCOL_V1, encodeFrame, type CaptureTime, type Continuity, type CurrentState, type EndData, type ServerMessage, type SourceIdentity, type SourceStatus, type Uint64} from '../../../packages/contracts/src/protocol-v1';
@@ -54,7 +54,16 @@ export interface V1IngestionOptions {
   broker?: BrokerConfiguration;
   /** Durable storage. Without it every hello is live-only and nothing is acknowledged. */
   sink?: DurableSink;
-  staleMs?: number; handshakeMs?: number; probeIntervalMs?: number; maxPendingCommits?: number;
+  /**
+   * R10: the selections whose connections may request durable delivery; every selection when omitted. A hello of any
+   * other selection is live-only even with a sink.
+   */
+  durableSelections?: readonly SourceSelection[];
+  /** R10: whether storage is open now; a hello requests durable delivery only while it returns true. Default: always. */
+  durableReady?: () => boolean;
+  /** R8: the consumer's UTC clock in milliseconds for the receipt label of each event and gap; defaults to Date.now. */
+  utcNow?: () => number;
+  staleMs?: number; handshakeMs?: number; probeIntervalMs?: number; maxPendingCommits?: number; maxPendingReadings?: number;
   /** Fixed codes and numbers only. */
   diagnose?: (event: string, facts?: DiagnosticFacts) => void;
   onState?: (state: V1SourceState) => void;
@@ -75,8 +84,11 @@ export class V1Ingestion {
   private readonly now: () => number;
   private readonly nowNs: () => bigint;
   private readonly connect: (endpoint: string) => TelemetrySocket;
+  private readonly utcNow: () => number;
   private readonly delivery?: DurableDelivery;
   private socket?: TelemetrySocket;
+  /** The current connection while it is open and live-only: its plugin session once known, and how to end it (R10). */
+  private liveOnly?: {pluginSessionId?: string; reconnect: () => void};
   private readonly completions = new Set<Promise<void>>();
   private retry?: ReturnType<typeof setTimeout>;
   private handshake?: ReturnType<typeof setTimeout>;
@@ -94,7 +106,11 @@ export class V1Ingestion {
     this.now = options.now ?? (() => performance.now());
     this.nowNs = options.nowNs ?? (() => process.hrtime.bigint());
     this.connect = options.connect ?? (endpoint => net.connect(endpoint));
-    if (options.sink) this.delivery = new DurableDelivery(options.sink, {maxPendingCommits: options.maxPendingCommits, log: options.diagnose, onStatus: () => this.publish()});
+    this.utcNow = options.utcNow ?? (() => Date.now());
+    if (options.sink) {
+      this.delivery = new DurableDelivery(options.sink, {maxPendingCommits: options.maxPendingCommits, maxPendingReadings: options.maxPendingReadings,
+        log: options.diagnose, onStatus: () => this.publish()});
+    }
     this.state = initialState('game', this.durableStatus());
   }
   /** The current service-internal state. */
@@ -116,12 +132,35 @@ export class V1Ingestion {
     }
     this.pendingSelection = undefined; this.applySelection(selection, endpoint);
   }
-  /** Ends the source and waits for owned processes and the one storage command in flight. */
-  async stop(): Promise<void> {
-    this.disposed = true; this.pendingSelection = undefined; this.cancel();
-    await Promise.all(this.completions); await this.transition; await this.delivery?.stop();
+  /**
+   * R10: storage became ready (or durable delivery became possible otherwise). A current live-only connection that could
+   * now request durable delivery is closed and reconnects at once on the shortest backoff; nothing else changes.
+   */
+  durableAvailabilityChanged(): void {
+    const current = this.liveOnly;
+    if (this.disposed || !current || !this.durableWanted(current.pluginSessionId)) return;
+    this.attempt = 0; current.reconnect();
   }
+  /**
+   * Ends the source and waits for owned processes (the intake phase of a shutdown). Nothing is acknowledged afterwards;
+   * the storage-commit pipeline keeps its work until `flush`.
+   */
+  async stopSource(): Promise<void> {
+    this.disposed = true; this.pendingSelection = undefined; this.cancel();
+    await Promise.all(this.completions); await this.transition;
+  }
+  /** Drops queued durable work and waits for the one storage command in flight; nothing is written afterwards (R14). */
+  async flush(): Promise<void> { await this.delivery?.stop(); }
+  /** Ends the source, waits for owned processes and then for the one storage command in flight. */
+  async stop(): Promise<void> { await this.stopSource(); await this.flush(); }
   private durableStatus(): DurableStatus { return this.delivery ? this.delivery.status : {state: 'off'}; }
+  /** R10: whether a hello now may request durable delivery for this selection and, when known, plugin session. */
+  private durableWanted(pluginSessionId?: string): boolean {
+    if (!this.delivery?.durableAllowed(pluginSessionId)) return false;
+    const selections = this.options.durableSelections;
+    if (selections !== undefined && !selections.includes(this.state.selection)) return false;
+    return this.options.durableReady?.() ?? true;
+  }
   private applySelection(selection: SourceSelection, endpoint?: string): void {
     this.endpoint = endpoint;
     if (selection === 'game') { this.emit('waiting', 'Select ETS2 or ATS explicitly'); return; }
@@ -153,9 +192,10 @@ export class V1Ingestion {
     const active = () => !closed && !this.disposed && generation === this.generation;
     // Fixed at 'connect', when the hello is written: the native client sets its authority receipt, which names the plugin
     // session, just before it emits 'connect'; a fixture socket has no authority.
-    let requested = false, consumer: V1Consumer | undefined;
+    let requested = false, consumer: V1Consumer | undefined, liveOnly: V1Ingestion['liveOnly'];
     const close = (status: V1Status, reason: string, retry: boolean) => {
       if (!active()) return; closed = true;
+      if (this.liveOnly === liveOnly) this.liveOnly = undefined;
       clearTimeout(this.handshake); clearInterval(this.freshness); clearInterval(this.probes);
       this.handshake = undefined; this.freshness = undefined; this.probes = undefined;
       socket.destroy(); this.socket = undefined;
@@ -206,7 +246,11 @@ export class V1Ingestion {
     this.handshake = setTimeout(() => close('disconnected', 'Hello/checkpoint deadline exceeded', true), this.options.handshakeMs ?? V1_HANDSHAKE_MS);
     socket.once('connect', () => {
       if (!active()) return;
-      requested = Boolean(this.delivery?.durableAllowed(socket.authority?.pluginSessionId)); consumer = new V1Consumer(requested);
+      requested = this.durableWanted(socket.authority?.pluginSessionId); consumer = new V1Consumer(requested);
+      if (!requested && this.delivery) {
+        liveOnly = this.liveOnly = {pluginSessionId: socket.authority?.pluginSessionId,
+          reconnect: () => close('disconnected', 'Durable delivery available; reconnecting durable', true)};
+      }
       socket.write(encodeFrame({version: PROTOCOL_V1, kind: 'hello', data: {clientInstanceId: this.clientInstanceId, minMinor: 0, maxMinor: 0, durableEvents: requested}}));
     });
     socket.on('data', (bytes: unknown) => {
@@ -227,6 +271,7 @@ export class V1Ingestion {
           switch (message.kind) {
             case 'welcome': {
               const session = message.source.pluginSessionId;
+              if (liveOnly) liveOnly.pluginSessionId = session;
               if (this.state.clockMapping && !isClockMappingCurrent(this.state.clockMapping, message.capture.clockId, this.clientClockId)) this.state = {...this.state, clockMapping: undefined};
               if (message.data.durableEvents && this.delivery) durable = this.delivery.connect(message, link);
               // A live-only connection after ACK_AHEAD_OF_STORAGE that names a new plugin session reconnects durable.
@@ -236,16 +281,18 @@ export class V1Ingestion {
             case 'checkpoint':
               if (!durable) healthy();
               clearTimeout(this.handshake); this.handshake = undefined;
-              durable?.checkpoint(message.data.status.delivery.ackedThroughEventSeq);
+              // R5: the checkpoint starts the connection's cursor and is the recorder's first reading, in FIFO order.
+              durable?.checkpoint(message);
               observe(message);
               this.probes ??= setInterval(sendProbe, this.options.probeIntervalMs ?? V1_PROBE_INTERVAL_MS);
               sendProbe();
               return;
-            case 'snapshot': observe(message); return;
+            case 'snapshot': observe(message); durable?.snapshot(message); return;
             case 'event': case 'gap':
               // The consumer accepts coverage only on a durable connection; receipt is never an ACK.
               if (!durable || !applied.coverage) throw new Error('Coverage without a durable connection');
-              durable.enqueue(applied.coverage, message);
+              // R8: the receipt label is taken when the frame is decoded, never when its commit runs.
+              durable.enqueue(applied.coverage, message, this.utcNow());
               return;
             case 'clock.reply': {
               const mapping = computeClockMapping({reply: message, probeId: probeId.toString(), clientClockId: this.clientClockId, probeSentNs: probeSentNs.toString(), replyReceivedNs: this.nowNs().toString()});
@@ -276,7 +323,7 @@ export class V1Ingestion {
     socket.on('close', () => close('disconnected', 'Source closed; interval coverage unknown', true));
   }
   private cancel(): void {
-    ++this.generation; clearTimeout(this.retry); clearTimeout(this.handshake); clearInterval(this.freshness); clearInterval(this.probes);
+    ++this.generation; this.liveOnly = undefined; clearTimeout(this.retry); clearTimeout(this.handshake); clearInterval(this.freshness); clearInterval(this.probes);
     this.retry = undefined; this.handshake = undefined; this.freshness = undefined; this.probes = undefined;
     this.socket?.destroy(); this.socket = undefined;
   }

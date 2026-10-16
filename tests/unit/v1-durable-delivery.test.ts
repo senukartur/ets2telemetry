@@ -11,7 +11,7 @@ import {decodePayload, negotiateV1, validateClientMessage, type ClientMessage, t
 import type {CommitResult, Result, StorageErrorCode} from '../../packages/storage/src/api';
 import {ERROR_MESSAGES, storageError} from '../../packages/storage/src/errors';
 import {STORAGE_FAILURE_CLASS, StorageDurableSink, failureClass, type CoverageMessage, type DurableSink, type WelcomeMessage} from '../../apps/desktop/src/durable-sink';
-import {DurableDelivery, MAX_PENDING_COMMITS, type DurableCloseKind, type DurableLink} from '../../apps/desktop/src/v1-durable-delivery';
+import {DurableDelivery, MAX_PENDING_COMMITS, MAX_PENDING_READINGS, type DurableCloseKind, type DurableLink} from '../../apps/desktop/src/v1-durable-delivery';
 
 const dir = resolve('tests/fixtures/protocol-v1');
 const server = (name: string) => decodePayload(new Uint8Array(readFileSync(resolve(dir, `${name}.json`))), 'server') as ServerMessage;
@@ -31,6 +31,13 @@ function gap(first: number, last: number): CoverageMessage {
   return m;
 }
 const range = (m: CoverageMessage) => m.kind === 'event' ? {firstEventSeq: m.data.eventSeq, lastEventSeq: m.data.eventSeq} : {firstEventSeq: m.data.firstEventSeq, lastEventSeq: m.data.lastEventSeq};
+/** The shared checkpoint of session P1 with the producer's acknowledged point `acked` (A). */
+function checkpointAt(acked: string): Extract<ServerMessage, {kind: 'checkpoint'}> {
+  const m = structuredClone(server('checkpoint')) as Extract<ServerMessage, {kind: 'checkpoint'}>;
+  m.data.status.delivery.ackedThroughEventSeq = acked; return m;
+}
+/** The consumer's receipt label passed with every item; this pipeline only forwards it (R8). */
+const RECEIVED = 1_800_000_000_000;
 const flush = () => new Promise<void>(r => setImmediate(r));
 /** A storage failure, a rejected promise, or a successful commit that reports the given coverage. */
 type Scripted = StorageErrorCode | 'reject' | {committedThroughEventSeq: string};
@@ -134,8 +141,8 @@ async function replay(steps: string[]) {
     if (m.kind === 'welcome') {
       validator = new AckValidator(m.source.pluginSessionId, m.data.durableEvents);
       link = new Link(sink.log, validator); connection = delivery.connect(m, link); finals.push(m.source.pluginSessionId);
-    } else if (m.kind === 'checkpoint') { validator!.checkpoint(m.data.status.delivery.ackedThroughEventSeq); connection!.checkpoint(m.data.status.delivery.ackedThroughEventSeq); }
-    else if (applied.coverage && (m.kind === 'event' || m.kind === 'gap')) { validator!.sent(applied.coverage.lastEventSeq); expect(connection!.enqueue(applied.coverage, m)).toBe(true); }
+    } else if (m.kind === 'checkpoint') { validator!.checkpoint(m.data.status.delivery.ackedThroughEventSeq); connection!.checkpoint(m); }
+    else if (applied.coverage && (m.kind === 'event' || m.kind === 'gap')) { validator!.sent(applied.coverage.lastEventSeq); expect(connection!.enqueue(applied.coverage, m, RECEIVED)).toBe(true); }
   }
   await delivery.idle();
   return {sink, delivery, finalAck: acks().at(-1) ?? '0', link: link!};
@@ -174,7 +181,7 @@ describe('ET-006b storage-commit ACK pipeline', () => {
   function started(sink: MemorySink, options: {maxPendingCommits?: number} = {}) {
     const logs: [string, unknown][] = [], delivery = new DurableDelivery(sink, {...options, log: (event, facts) => logs.push([event, facts])});
     const link = new Link(sink.log), connection = delivery.connect(welcome(), link);
-    connection.checkpoint('0');
+    connection.checkpoint(checkpointAt('0'));
     return {delivery, link, connection, logs};
   }
   // One FIFO with one command in flight cannot commit eventSeq 4 before 3, so commits {1, 2, 4} never arise in the
@@ -182,7 +189,7 @@ describe('ET-006b storage-commit ACK pipeline', () => {
   it('never acknowledges on receipt, only after the sink resolves, and not past a commit in flight or a failed one', async () => {
     const sink = new MemorySink(); sink.paused = true;
     const {link, connection} = started(sink);
-    for (const n of [1, 2, 3, 4]) connection.enqueue(range(event(n)), event(n));
+    for (const n of [1, 2, 3, 4]) connection.enqueue(range(event(n)), event(n), RECEIVED);
     await flush();
     expect(link.acks).toEqual([]);
     sink.releaseOne(); await flush();                        // open
@@ -200,29 +207,29 @@ describe('ET-006b storage-commit ACK pipeline', () => {
   it('writes nothing for a commit that finishes after its connection closed, and re-ACKs after redelivery', async () => {
     const sink = new MemorySink(), delivery = new DurableDelivery(sink);
     const first = new Link(sink.log), one = delivery.connect(welcome(), first);
-    one.checkpoint('0');
-    for (const n of [1, 2, 3]) one.enqueue(range(event(n)), event(n));
+    one.checkpoint(checkpointAt('0'));
+    for (const n of [1, 2, 3]) one.enqueue(range(event(n)), event(n), RECEIVED);
     await delivery.idle();
     sink.paused = true;
-    one.enqueue(range(event(4)), event(4)); await flush();
+    one.enqueue(range(event(4)), event(4), RECEIVED); await flush();
     // The connection ends while the commit of 4 is in flight; the commit still completes in storage.
     first.open = false; sink.releaseOne(); sink.paused = false; await delivery.idle();
     expect(first.acks).toEqual(['1', '2', '3']);
     const second = new Link(sink.log), two = delivery.connect(welcome('welcome-reconnect'), second);
-    two.checkpoint('3');
-    for (const n of [4, 5, 6]) two.enqueue(range(event(n)), event(n));
+    two.checkpoint(checkpointAt('3'));
+    for (const n of [4, 5, 6]) two.enqueue(range(event(n)), event(n), RECEIVED);
     await delivery.idle();
     expect(second.acks).toEqual(['4', '5', '6']);
     expect(sink.log.slice(-7)).toEqual([`open ${P1}`, 'duplicate 4', 'ack 4', 'committed 5', 'ack 5', 'committed 6', 'ack 6']);
   });
   it('acknowledges a conflicting redelivery, keeps the stored row and logs the conflict count', async () => {
     const sink = new MemorySink(), {delivery, link, connection, logs} = started(sink);
-    connection.enqueue(range(event(1)), event(1)); await delivery.idle();
+    connection.enqueue(range(event(1)), event(1), RECEIVED); await delivery.idle();
     link.open = false;
     const second = new Link(sink.log), two = delivery.connect(welcome('welcome-reconnect'), second);
-    two.checkpoint('0');
+    two.checkpoint(checkpointAt('0'));
     const different = event(1, 'event-job-cleared');
-    two.enqueue(range(different), different); await delivery.idle();
+    two.enqueue(range(different), different, RECEIVED); await delivery.idle();
     expect(second.acks).toEqual(['1']);
     expect(sink.log.slice(-2)).toEqual(['conflict 1', 'ack 1']);
     expect(sink.sessions.get(P1)!.events.get(1n)).toContain('job.configured');
@@ -230,12 +237,12 @@ describe('ET-006b storage-commit ACK pipeline', () => {
   });
   it('acknowledges a gap that is wholly inside committed coverage as covered', async () => {
     const sink = new MemorySink(), {delivery, link, connection} = started(sink);
-    for (const m of [event(1), gap(2, 3), event(4)]) connection.enqueue(range(m), m);
+    for (const m of [event(1), gap(2, 3), event(4)]) connection.enqueue(range(m), m, RECEIVED);
     await delivery.idle();
     link.open = false;
     const second = new Link(sink.log), two = delivery.connect(welcome('welcome-reconnect'), second);
-    two.checkpoint('1');
-    const merged = gap(2, 4); two.enqueue(range(merged), merged);
+    two.checkpoint(checkpointAt('1'));
+    const merged = gap(2, 4); two.enqueue(range(merged), merged, RECEIVED);
     await delivery.idle();
     expect(second.acks).toEqual(['4']);
     expect(sink.log.slice(-2)).toEqual(['covered 4', 'ack 4']);
@@ -252,7 +259,7 @@ describe('ET-006b storage-commit ACK pipeline', () => {
   for (const code of ['DATABASE_LOCKED', 'DISK_FULL', 'IO_ERROR', 'STORAGE_BUSY'] as const) it(`closes as retryable without an ACK on ${code} and stays durable (REG-007)`, async () => {
     const sink = new MemorySink(), {delivery, link, connection, logs} = started(sink);
     sink.failures.push(code);
-    connection.enqueue(range(event(1)), event(1)); connection.enqueue(range(event(2)), event(2));
+    connection.enqueue(range(event(1)), event(1), RECEIVED); connection.enqueue(range(event(2)), event(2), RECEIVED);
     await delivery.idle();
     expect([link.acks, link.closes, sink.log]).toEqual([[], [['retryable', code]], [`open ${P1}`, 'failed 1']]);
     expect(delivery.status).toEqual({state: 'pending', retryCode: code});
@@ -262,7 +269,7 @@ describe('ET-006b storage-commit ACK pipeline', () => {
   for (const code of ['WORKER_FAILED', 'TIMEOUT', 'CONSTRAINT_VIOLATION', 'SESSION_CONFLICT', 'INVALID_INPUT', 'INTERNAL', 'PERMISSION_DENIED'] as const) it(`stops durable delivery for the service lifetime on ${code}`, async () => {
     const sink = new MemorySink(), {delivery, link, connection, logs} = started(sink);
     sink.failures.push(code);
-    connection.enqueue(range(event(1)), event(1)); connection.enqueue(range(event(2)), event(2));
+    connection.enqueue(range(event(1)), event(1), RECEIVED); connection.enqueue(range(event(2)), event(2), RECEIVED);
     await delivery.idle();
     expect([link.acks, link.closes, sink.log]).toEqual([[], [['unavailable', code]], [`open ${P1}`, 'failed 1']]);
     expect(delivery.status).toEqual({state: 'failed', code});
@@ -274,24 +281,24 @@ describe('ET-006b storage-commit ACK pipeline', () => {
   });
   it('treats a rejected sink promise and a failed session open as non-retryable', async () => {
     const rejecting = new MemorySink(); rejecting.failures.push('reject');
-    const a = started(rejecting); a.connection.enqueue(range(event(1)), event(1)); await a.delivery.idle();
+    const a = started(rejecting); a.connection.enqueue(range(event(1)), event(1), RECEIVED); await a.delivery.idle();
     expect([a.link.acks, a.link.closes, a.delivery.status]).toEqual([[], [['unavailable', 'INTERNAL']], {state: 'failed', code: 'INTERNAL'}]);
     const refusing = new MemorySink(); refusing.openFailures.push('CONSTRAINT_VIOLATION');
-    const b = started(refusing); b.connection.enqueue(range(event(1)), event(1)); await b.delivery.idle();
+    const b = started(refusing); b.connection.enqueue(range(event(1)), event(1), RECEIVED); await b.delivery.idle();
     expect([b.link.closes, refusing.log]).toEqual([[['unavailable', 'CONSTRAINT_VIOLATION']], []]);
   });
   it('fails closed on COVERAGE_MISMATCH instead of acknowledging', async () => {
     const sink = new MemorySink(), {delivery, link, connection, logs} = started(sink);
     // Storage reports coverage 7 after committing eventSeq 1, while the cursor holds 1.
     sink.failures.push({committedThroughEventSeq: '7'});
-    connection.enqueue(range(event(1)), event(1)); await delivery.idle();
+    connection.enqueue(range(event(1)), event(1), RECEIVED); await delivery.idle();
     expect([link.acks, link.closes, delivery.status, logs]).toEqual([[], [['unavailable', 'COVERAGE_MISMATCH']], {state: 'failed', code: 'COVERAGE_MISMATCH'}, [['V1_DURABLE_UNAVAILABLE', {code: 'COVERAGE_MISMATCH'}]]]);
   });
   it('disables durable delivery for one plugin session when its producer acknowledged beyond storage', async () => {
     const sink = new MemorySink(), logs: unknown[] = [], delivery = new DurableDelivery(sink, {log: (...entry) => logs.push(entry)});
     const link = new Link(sink.log), connection = delivery.connect(welcome(), link);
     // Storage holds nothing for P1 (C = 0) while the checkpoint says the producer released through 3 (A = 3).
-    connection.checkpoint('3'); connection.enqueue(range(event(4)), event(4));
+    connection.checkpoint(checkpointAt('3')); connection.enqueue(range(event(4)), event(4), RECEIVED);
     await delivery.idle();
     expect([link.acks, link.closes, sink.log]).toEqual([[], [['ack-ahead', 'ACK_AHEAD_OF_STORAGE']], [`open ${P1}`]]);
     expect(delivery.status).toEqual({state: 'failed', code: 'ACK_AHEAD_OF_STORAGE'});
@@ -305,9 +312,9 @@ describe('ET-006b storage-commit ACK pipeline', () => {
     const {delivery, link, connection, logs} = started(sink);
     // The session open is in flight and held, so the items below queue behind it.
     await flush(); expect(sink.waitingCommands).toBe(1);
-    for (let n = 1; n <= 256; n++) expect(connection.enqueue(range(event(n)), event(n))).toBe(true);
+    for (let n = 1; n <= 256; n++) expect(connection.enqueue(range(event(n)), event(n), RECEIVED)).toBe(true);
     expect([delivery.pending, link.closes]).toEqual([256, []]);
-    expect(connection.enqueue(range(event(257)), event(257))).toBe(false);
+    expect(connection.enqueue(range(event(257)), event(257), RECEIVED)).toBe(false);
     expect([delivery.pending, link.closes, logs]).toEqual([0, [['retryable', 'BACKLOG_FULL']], [['V1_DURABLE_RETRY', {code: 'BACKLOG_FULL', count: 1}]]]);
     sink.paused = false; sink.releaseOne(); await delivery.idle();
     // The open completed; no queued item of the closed connection was committed or acknowledged.
@@ -326,7 +333,7 @@ describe('ET-006b storage-commit ACK pipeline', () => {
   it('drops queued work on stop and waits for the command in flight', async () => {
     const sink = new MemorySink(); sink.paused = true;
     const {delivery, link, connection} = started(sink);
-    for (const n of [1, 2, 3]) connection.enqueue(range(event(n)), event(n));
+    for (const n of [1, 2, 3]) connection.enqueue(range(event(n)), event(n), RECEIVED);
     await flush(); sink.releaseOne(); await flush();
     const stopped = delivery.stop(); let done = false; void stopped.then(() => { done = true; });
     await flush(); expect(done).toBe(false);
@@ -335,22 +342,113 @@ describe('ET-006b storage-commit ACK pipeline', () => {
     expect([sink.log, link.acks, delivery.pending, delivery.durableAllowed()]).toEqual([[`open ${P1}`, 'committed 1'], [], 0, false]);
   });
 
-  it('commits through StorageClient commands and reads coverage before a gap that carries effects', async () => {
+  // S-3 (ET-015a): the effects hook is gone. StorageDurableSink commits without effects; the trip recorder, which reads
+  // coverage before each commit and adopts its state only after it, is covered in tests/unit/trip-recorder.test.ts.
+  it('commits through StorageClient commands without trip effects', async () => {
     const calls: string[] = [];
     const ok = <T>(value: T) => Promise.resolve({ok: true as const, value});
     const storage = {
       upsertSession: (input: {message: unknown}) => { calls.push(`upsert ${(input.message as ServerMessage).kind}`); return ok({created: true, committedThroughEventSeq: '2'}); },
       commitEvent: (input: {message: unknown; effects?: unknown[]}) => { calls.push(`event ${input.effects?.length ?? 'none'}`); return ok<CommitResult>({status: 'committed', committedThroughEventSeq: '3'}); },
-      commitGap: (input: {message: unknown; effects?: unknown[]}) => { calls.push(`gap ${input.effects?.length ?? 'none'}`); return ok<CommitResult>({status: 'committed', committedThroughEventSeq: '5', previouslyCoveredThrough: '3'}); },
-      committedThrough: (session: string) => { calls.push(`through ${session}`); return ok('3'); }
+      commitGap: (input: {message: unknown; effects?: unknown[]}) => { calls.push(`gap ${input.effects?.length ?? 'none'}`); return ok<CommitResult>({status: 'committed', committedThroughEventSeq: '5', previouslyCoveredThrough: '3'}); }
     };
-    expect(await new StorageDurableSink(storage).openSession(welcome())).toEqual({ok: true, value: {committedThroughEventSeq: '2'}});
-    await new StorageDurableSink(storage).commit(event(3));
-    await new StorageDurableSink(storage).commit(gap(4, 5));
-    const seen: string[] = [];
-    const hooked = new StorageDurableSink(storage, (m, covered) => { seen.push(`${m.kind} ${covered}`); return m.kind === 'gap' ? [{kind: 'completeness.add', interval: {kind: 'event-loss', firstEventSeq: '4', lastEventSeq: '5'}}] : []; });
-    await hooked.commit(gap(4, 5)); await hooked.commit(event(3));
-    expect(calls).toEqual(['upsert welcome', 'event none', 'gap none', `through ${P1}`, 'gap 1', `through ${P1}`, 'event none']);
-    expect(seen).toEqual(['gap 3', 'event 3']);
+    const sink = new StorageDurableSink(storage);
+    expect(await sink.openSession(welcome())).toEqual({ok: true, value: {committedThroughEventSeq: '2'}});
+    expect(await sink.commit(event(3))).toEqual({ok: true, value: {status: 'committed', committedThroughEventSeq: '3'}});
+    expect(await sink.commit(gap(4, 5))).toEqual({ok: true, value: {status: 'committed', committedThroughEventSeq: '5', previouslyCoveredThrough: '3'}});
+    expect(calls).toEqual(['upsert welcome', 'event none', 'gap none']);
+    expect(['observe' in sink, 'restoreLoss' in sink]).toEqual([false, false]);
+  });
+
+  /** A MemorySink that also observes readings and records restore-loss calls, logging both into the shared log. */
+  class ObservingSink extends MemorySink {
+    readonly contexts: number[] = [];
+    observeFailure?: StorageErrorCode;
+    restoreFailure?: StorageErrorCode;
+    override async commit(m: CoverageMessage, context?: {receivedUtcMs: number}): Promise<Result<CommitResult>> {
+      if (context) this.contexts.push(context.receivedUtcMs);
+      return super.commit(m);
+    }
+    observe(m: Extract<ServerMessage, {kind: 'checkpoint' | 'snapshot'}>): Result<undefined> {
+      if (this.observeFailure) return {ok: false, error: storageError(this.observeFailure)};
+      this.log.push(`observe ${m.kind} ${m.seq}`); return {ok: true, value: undefined};
+    }
+    restoreLoss(session: string, stored: string, acked: string): Promise<Result<undefined>> {
+      this.log.push(`restore-loss ${session === P1 ? 'P1' : session} ${stored} ${acked}`);
+      return Promise.resolve(this.restoreFailure ? {ok: false, error: storageError(this.restoreFailure)} : {ok: true, value: undefined});
+    }
+  }
+  const snapshotSeq = (seq: number) => { const m = structuredClone(server('snapshot')) as Extract<ServerMessage, {kind: 'snapshot'}>; m.seq = String(seq); return m; };
+  it('observes the checkpoint and snapshots at their place in the FIFO and passes each receipt label (R5, R8)', async () => {
+    const sink = new ObservingSink(); sink.paused = true;
+    const delivery = new DurableDelivery(sink), link = new Link(sink.log), connection = delivery.connect(welcome(), link);
+    connection.checkpoint(checkpointAt('0'));
+    connection.enqueue(range(event(1)), event(1), RECEIVED + 1);
+    expect(connection.snapshot(snapshotSeq(50))).toBe(true);
+    connection.enqueue(range(event(2)), event(2), RECEIVED + 2);
+    expect(connection.snapshot(snapshotSeq(51))).toBe(true);
+    // Nothing is observed at receipt: the open is still held, so every reading waits behind it.
+    await flush();
+    expect([sink.log, delivery.pendingReadingCount, delivery.pending]).toEqual([[], 2, 2]);
+    sink.paused = false; sink.releaseOne(); await delivery.idle();
+    expect(sink.log).toEqual([`open ${P1}`, `observe checkpoint ${server('checkpoint').seq}`, 'committed 1', 'ack 1', 'observe snapshot 50', 'committed 2', 'ack 2', 'observe snapshot 51']);
+    expect([sink.contexts, delivery.pendingReadingCount]).toEqual([[RECEIVED + 1, RECEIVED + 2], 0]);
+  });
+  it('queues no snapshot for a sink without observe', async () => {
+    const sink = new MemorySink(), delivery = new DurableDelivery(sink), link = new Link(sink.log), connection = delivery.connect(welcome(), link);
+    connection.checkpoint(checkpointAt('0'));
+    expect(connection.snapshot(snapshotSeq(50))).toBe(true);
+    expect(delivery.pendingReadingCount).toBe(0);
+    connection.enqueue(range(event(1)), event(1), RECEIVED); await delivery.idle();
+    expect(sink.log).toEqual([`open ${P1}`, 'committed 1', 'ack 1']);
+  });
+  it('stops durable delivery when a reading is refused, without an ACK for later items', async () => {
+    const sink = new ObservingSink(), logs: unknown[] = [], delivery = new DurableDelivery(sink, {log: (...entry) => logs.push(entry)});
+    const link = new Link(sink.log), connection = delivery.connect(welcome(), link);
+    connection.checkpoint(checkpointAt('0'));
+    connection.enqueue(range(event(1)), event(1), RECEIVED);
+    await delivery.idle();
+    sink.observeFailure = 'INTERNAL';
+    connection.snapshot(snapshotSeq(50)); connection.enqueue(range(event(2)), event(2), RECEIVED);
+    await delivery.idle();
+    // The checkpoint was observed before the failure was scripted; the refused snapshot drops event 2.
+    expect([sink.log, link.closes, delivery.status, logs]).toEqual([[`open ${P1}`, `observe checkpoint ${server('checkpoint').seq}`, 'committed 1', 'ack 1'],
+      [['unavailable', 'INTERNAL']], {state: 'failed', code: 'INTERNAL'}, [['V1_DURABLE_UNAVAILABLE', {code: 'INTERNAL'}]]]);
+  });
+  it('bounds snapshot readings at 512 apart from the coverage items and closes the connection on the 513th (R5, REG-011)', async () => {
+    expect(MAX_PENDING_READINGS).toBe(512);
+    const sink = new ObservingSink(); sink.paused = true;
+    const logs: unknown[] = [], delivery = new DurableDelivery(sink, {log: (...entry) => logs.push(entry)});
+    const link = new Link(sink.log), connection = delivery.connect(welcome(), link);
+    connection.checkpoint(checkpointAt('0'));
+    await flush(); expect(sink.waitingCommands).toBe(1);
+    for (let n = 1; n <= 256; n++) expect(connection.enqueue(range(event(n)), event(n), RECEIVED)).toBe(true);
+    // Readings do not count against the 256 coverage items, and items do not count against the 512 readings.
+    for (let n = 1; n <= 512; n++) expect(connection.snapshot(snapshotSeq(1000 + n))).toBe(true);
+    expect([delivery.pending, delivery.pendingReadingCount, link.closes]).toEqual([256, 512, []]);
+    expect(connection.snapshot(snapshotSeq(2000))).toBe(false);
+    expect([delivery.pending, delivery.pendingReadingCount, link.closes, logs]).toEqual([0, 0, [['retryable', 'BACKLOG_FULL']], [['V1_DURABLE_RETRY', {code: 'BACKLOG_FULL', count: 1}]]]);
+    expect(delivery.status).toEqual({state: 'pending', retryCode: 'BACKLOG_FULL'});
+    sink.paused = false; sink.releaseOne(); await delivery.idle();
+    expect([sink.log, link.acks]).toEqual([[`open ${P1}`], []]);
+  });
+  it('records the restore loss (C, A] before closing an ACK_AHEAD_OF_STORAGE connection and logs the result (R9)', async () => {
+    for (const [failure, code] of [[undefined, 'RECORDED'], ['DISK_FULL', 'DISK_FULL']] as const) {
+      const sink = new ObservingSink(); sink.restoreFailure = failure;
+      const logs: unknown[] = [], delivery = new DurableDelivery(sink, {log: (...entry) => logs.push(entry)});
+      // Storage holds 1 and 2 (C = 2) while the checkpoint says the producer released through 5 (A = 5).
+      const first = new Link(sink.log), one = delivery.connect(welcome(), first);
+      one.checkpoint(checkpointAt('0'));
+      for (const n of [1, 2]) one.enqueue(range(event(n)), event(n), RECEIVED);
+      await delivery.idle(); first.open = false;
+      const link = new Link(sink.log), connection = delivery.connect(welcome('welcome-reconnect'), link);
+      connection.checkpoint(checkpointAt('5')); connection.enqueue(range(event(6)), event(6), RECEIVED);
+      await delivery.idle();
+      expect(sink.log.slice(6)).toEqual([`open ${P1}`, 'restore-loss P1 2 5']);
+      expect([link.acks, link.closes, delivery.status]).toEqual([[], [['ack-ahead', 'ACK_AHEAD_OF_STORAGE']], {state: 'failed', code: 'ACK_AHEAD_OF_STORAGE'}]);
+      // A failure to record it does not unblock the plugin session.
+      expect([delivery.durableAllowed(P1), delivery.durableAllowed(P2)]).toEqual([false, true]);
+      expect(logs).toEqual([['V1_DURABLE_ACK_AHEAD', {code: 'ACK_AHEAD_OF_STORAGE'}], ['V1_DURABLE_RESTORE_LOSS', {code}]]);
+    }
   });
 });

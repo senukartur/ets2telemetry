@@ -97,7 +97,6 @@ async function run(input: Json, plan: Plan) {
     const settled = <T>(command: Promise<T>) => command.finally(() => { progress.settled++; notify(); });
     const storage: DurableStorageClient = {
       upsertSession: input => client.upsertSession(input),
-      committedThrough: session => client.committedThrough(session),
       commitGap: input => settled(client.commitGap(input)),
       commitEvent: async input => {
         commits++;
