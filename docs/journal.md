@@ -2,7 +2,7 @@
 
 ET-016 adds the trip journal: a list of recorded trips, a detail view of one trip and a versioned JSON export. This document describes where the journal reads its data, the read commands and their bounds, and the timeline window of a trip. Decisions J1–J22 are in [concept.md](../concept.md#et-016-authorization--october-16-2026); the schema they read is [storage schema version 2](storage.md#schema-version-2-et-016).
 
-Status (October 16, 2026): ET-016a PR-2 implements the storage reads in the storage worker and their tests. PR-3 routes them from the dashboard through main to the telemetry service with five bridge methods ([IPC methods and codes](#ipc-methods-and-codes-j10-j11)). The parts below marked **pending** belong to later PRs: the Journal tab (PR-4) and the JSON export (PR-5). No renderer code calls the bridge methods yet, and `GAME_HISTORY_RECORDING` stays `false`, so no real game history exists to show.
+Status (October 16, 2026): ET-016a PR-2 implements the storage reads in the storage worker and their tests. PR-3 routes them from the dashboard through main to the telemetry service with five bridge methods ([IPC methods and codes](#ipc-methods-and-codes-j10-j11)). PR-4 adds the [Journal tab](#the-journal-tab-j12j14) to the main window, which reads through those methods. The parts below marked **pending** belong to later PRs, such as the JSON export (PR-5). `GAME_HISTORY_RECORDING` stays `false`, so no real game history exists to show.
 
 ## Data source and purposes (J2, J3)
 
@@ -10,7 +10,7 @@ The journal reads the database that the telemetry service opened, through the se
 
 - In production that database is the history database (`%LOCALAPPDATA%\ETS2Telemetry\data\telemetry.sqlite`, purpose `history`).
 - With `ETS2TELEMETRY_RECORDING=synthetic:<name>` or `replay:<name>` it is that synthetic or replay [recording target](storage.md#history-database-in-the-telemetry-service) instead. There is no journal-specific variable or file picker.
-- Every journal response carries `database: {purpose, schemaVersion}`. A purpose other than `history` is a test database that is never game history; the Journal tab shows a persistent banner for it (pending, PR-4), and the export header carries the purpose (pending, PR-5).
+- Every journal response carries `database: {purpose, schemaVersion}`. A purpose other than `history` is a test database that is never game history; the Journal tab shows a persistent banner for it, and the export header carries the purpose (pending, PR-5).
 - Tests and smokes seed only temporary or isolated synthetic databases, never history.
 
 Journal reads share the recorder's single command lane in the storage client: one command in flight, at most 64 queued, 10 s per command. A read that missed that deadline would fail the client closed and stop recording for the service lifetime, so every read is bounded, uses an index or a primary key ([below](#query-plans)), and the service sends at most one journal command at a time ([routing](#routing-and-bounds-j4)).
@@ -104,9 +104,39 @@ No result carries a path, a process id, a Windows session id or error text. Plug
 
 The `journal` reply type sits before main's fatal default for unknown service messages, which stays fatal (`SERVICE_INVALID_MESSAGE`). Main logs fixed codes with counts at 1, 2, 4, 8, …: `JOURNAL_REQUEST_BUSY`, `JOURNAL_REQUEST_TIMEOUT {kind}`, `JOURNAL_REPLY_REJECTED {kind}` and `JOURNAL_REPLY_IGNORED`. The service's history storage logs `JOURNAL_ANSWER_INVALID {command, count}` the same way.
 
+## The Journal tab (J12–J14)
+
+ET-016 PR-4 adds the Journal tab to the main window. The window has two shadcn Tabs: **Live**, the existing dashboard and the default, and **Journal**. The Live panel stays mounted while Journal is open, so its cards keep their state, and its inactive state hides it (Radix does not hide a force-mounted panel). The Journal panel mounts when it opens and holds nothing while closed. The tab list is one compact row above the first card, so the status, speed and fuel lines stay inside the first 800 × 500 viewport (B6); the journal smoke measures them.
+
+**Reads.** The tab uses only the five bridge methods above. It holds one page of each list at a time: the trip list, and in a trip's detail the completeness intervals, the timeline and the samples. Next and Previous walk a stack of cursors, so Previous re-reads the earlier page instead of keeping it. A list loads when it opens and on Refresh; nothing refreshes by itself. While a trip is open, the list stays mounted but hidden, so Back returns to the same page without a read. A filter change starts a new list at its first page. Only the latest request of a list may set its page, so a slow answer to an earlier page is dropped. The detail has four tabs, each reading when it opens: Summary (the trip detail), Completeness (intervals, 100 per page), Timeline (events, 100 per page) and Samples (300 per page).
+
+**Text.** Every string comes from the pure builder [journal-view.ts](../apps/desktop/src/journal-view.ts) with the fixed texts of [strings.ts](../apps/desktop/src/strings.ts); [journal.tsx](../apps/desktop/src/journal.tsx) only renders it. There are no React component tests (B4): `tests/unit/journal-view.test.ts` checks the texts and the journal runtime smoke the rendered tab.
+
+**Display rules (J13).**
+
+| Value | Shown as |
+| --- | --- |
+| Outcome | `Delivered`, `Cancelled`, `In progress`, or `No outcome — <why it closed>` (job cleared, a different job started, the game or plugin restarted, a loaded save or game time change, events were lost) |
+| Recording completeness | A separate badge: `Complete`, `Partial` or `Unknown`. Neither is inferred from the other |
+| Distances | Planned (job offer, excludes ferries), Observed (odometer while recording) and Delivered (reported by the game) are separate rows. A trip that was not delivered shows `none (not delivered)` |
+| Money | Expected income (job offer) and Revenue or Penalty (reported by the game) are separate rows; a trip without an outcome shows `none (no delivery or cancellation)`, an open one `not yet (in progress)`. Fines, tolls, ferries and trains show one exact total per currency and SDK type, for example `401 EUR (SDK-documented), 2 amounts; 50 (currency unknown), 1 amount`, plus `N unavailable (reason)`. Nothing is converted, netted or added across currencies; with more than 5,000 amounts a note replaces the totals |
+| A missing value | `unavailable (not observed)`, `unavailable (not provided by the game)` or `unavailable (invalid reading)`. Zero, `no` and an empty name (`(empty)`) are values |
+| Units | The trip's own game profile from the saved settings: ETS2 metric and ATS US customary by default, never the profile of the game currently shown on Live |
+| Times | The recorded UTC labels as local clock time, `YYYY-MM-DD HH:MM:SS`; a note says so. Real durations are not shown, because labels are not monotonic time. The delivery duration and the deadline are game time |
+| Game mode | The mode with its evidence, for example `Single-player (weak evidence, not confirmed, module scan)`; a weak result is never presented as confirmed (D9). A mode that changed during the trip says so |
+| Fuel used | The stored trip value (S-1, J8) with its availability. There is no trip average consumption (J21) |
+| Truck and trailers | A trip without a truck says that none was recorded and that a trip attached during its job has none until the game sends it again (J22); the same holds for trailers. Only the latest 10 trailer configurations are listed, with a note when the trip has more |
+| Test database | A persistent banner `Synthetic test database — never game history` or `Replay test database — never game history` on every view while the last answer came from such a database (J3) |
+| Empty history | `No trips recorded`; while recording is `disabled` (`GAME_HISTORY_RECORDING` false) it adds that game recording is off in this version. With a filter: `No trips match these filters` |
+| Refusals | Each J11 code is a fixed sentence; `DATABASE_UNAVAILABLE` names the storage code's fixed cause. A rejected call shows `The journal request was refused.` No path, SQL or storage error text is shown |
+
+**Timeline and intervals.** The timeline states its window in words (through the closing event, before the events a gap lost, to the end of the session, in progress, or unknown for a trip closed under schema version 1), and each event shows its time, type, a short detail (money exact as above) and whom it belongs to: this trip, this trip before the cargo was loaded, another trip, free driving, ambiguous, or `—`. Interval causes are fixed texts for the recorder's causes ([trip interval detail keys](trips.md#interval-detail-keys)); any other cause shows as `other`, and an annotation says that it leaves completeness unchanged.
+
+**Samples (J14).** Each sample row shows its time, speed, fuel, gear, engine RPM, odometer, the SDK's estimated range and mean consumption (labelled as the SDK mean, not a trip average), game time and the game-world position, each `unavailable (reason)` when missing. Between two rows of the same source clock whose source seconds (monotonic time ÷ 1 s) are more than one apart, a `no samples for N s` row names the N missing seconds; a change of source clock is a `source restarted` row. Only the current page is held, so the first row of a page is not compared with the previous page.
+
 ## Pending parts
 
-- **Journal tab (pending, PR-4).** The Live and Journal tabs, the paged list with filters, the trip detail, the display rules of J13 and the sample gap rows of J14.
+- **Journal tab manual checks (pending).** Readability at 100% and 150% scaling in the 800 × 500 window, keyboard use of the tabs, tables and filters, and the tab against real recorded game history (after enablement).
 - **JSON export (pending, PR-5).** The `ets2telemetry.trip-export` format version 1 and the main-process save flow (J15–J17).
 - **Late-attach trips (pending, ET-016b PR-7).** Since PR-6 the recorder writes fuel used for each trip, as a value or with its unavailability reason. Until PR-7 no trip has a checkpoint job.
 - Real game history, journal read latency while recording, and large real histories remain unmeasured.
