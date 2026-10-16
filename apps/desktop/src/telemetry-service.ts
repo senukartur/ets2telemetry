@@ -13,10 +13,10 @@ import {createHash} from 'node:crypto';
 import os from 'node:os';
 import {CaptureController} from './capture-controller';
 import {ShutdownSequence} from './shutdown-sequence';
-import {HistoryStorage, HISTORY_CLOSE_BUDGET_MS, historyWorker, recorderClient} from './history-storage';
-import {V1Ingestion, type V1SourceState} from './v1-ingestion';
-import {GAME_HISTORY_RECORDING, recordingPlan} from './recording-policy';
-import {TripRecorderSink} from './trip-recorder';
+import {HISTORY_CLOSE_BUDGET_MS, historyWorker} from './history-storage';
+import type {V1SourceState} from './v1-ingestion';
+import {GAME_HISTORY_RECORDING} from './recording-policy';
+import {createRecordingRuntime} from './recording-runtime';
 import type {LiveTelemetry, LiveTelemetryV1, SourceSelection} from '../../../packages/contracts/src';
 import {liveV1Projection, withV1} from './live-v1';
 const port = process.parentPort;
@@ -61,15 +61,15 @@ function onV1State(state: V1SourceState): void {
 }
 // ET-015a recording gate (R3, R10): game selections stay live-only while GAME_HISTORY_RECORDING is false. Only
 // ETS2TELEMETRY_RECORDING=synthetic:<name>|replay:<name> constructs the trip recorder, over a database in the synthetic
-// directory that replaces history, and makes only the matching selection durable once that database is open.
-const recording = recordingPlan(process.env, {gameHistory: GAME_HISTORY_RECORDING, log: event => log(event)});
-const recorder = recording.durableSelections.length ? new TripRecorderSink(recorderClient({get client() {return history.client;}})) : undefined;
-const v1 = new V1Ingestion({
-  connectGame: (configuration, game) => new NativePipeClient(configuration, game, diagnoseV1Broker, 'v1'),
-  diagnose: (event, facts) => log(event, undefined, facts),
-  onState: onV1State,
-  ...(recorder ? {sink: recorder, durableSelections: recording.durableSelections, durableReady: () => history.state === 'open'} : {})
-});
+// directory that replaces history, and makes only the matching selection durable once that database is open. The
+// durable history database (ET-013, OD-2), or the recording target that replaces it, is opened at start in its own
+// storage worker without delaying readiness or live telemetry; the ET-001 temporary probe below stays the readiness gate,
+// and opening the database lets the live-only v1 connection reconnect durable (R10). This wiring lives in
+// recording-runtime.ts (ET-015c, G13), so the storage suite drives the same code with a real storage worker.
+const runtime = createRecordingRuntime({env: process.env, gameHistory: GAME_HISTORY_RECORDING, localAppData: process.env.LOCALAPPDATA, log,
+  createWorker: () => historyWorker(__dirname), connectGame: (configuration, game) => new NativePipeClient(configuration, game, diagnoseV1Broker, 'v1'),
+  onV1State});
+const v1 = runtime.v1;
 /** A v1 failure never fails the v0 selection it follows. */
 function selectV1(selection: SourceSelection, broker: BrokerConfiguration | undefined): void {
   try {v1.configureBroker(v1BrokerConfiguration(broker)); v1.select(selection, v1FixtureEndpoint);}
@@ -118,11 +118,6 @@ const probe = new ServiceProbe({
     if (message.code === 'SERVICE_STOP_FAILED') exitAfterHistory(1);
   }
 });
-// The durable history database (ET-013, OD-2): opened at start in its own storage worker without delaying
-// readiness or live telemetry. The ET-001 temporary probe above stays the readiness gate. A recording target replaces it
-// with its synthetic or replay database; opening that database lets the live-only v1 connection reconnect durable (R10).
-const history: HistoryStorage = new HistoryStorage({localAppData: process.env.LOCALAPPDATA, log, createWorker: () => historyWorker(__dirname),
-  target: recording.database, ...(recorder ? {onOpened: () => v1.durableAvailabilityChanged()} : {})});
 // Ordered, bounded service shutdown: 1000 (intake) + 500 (flush) + 1000 (storage) = SERVICE_STOP_BUDGET_MS.
 let stopping = false, storageStopped = false, exiting = false;
 /**
@@ -134,21 +129,18 @@ function exitAfterHistory(code: number): void {
   exiting = true;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const bound = new Promise<void>(resolve => {timer = setTimeout(resolve, HISTORY_CLOSE_BUDGET_MS);});
-  void Promise.race([history.close().catch(() => undefined), bound]).then(() => {clearTimeout(timer); process.exit(code);});
+  void Promise.race([runtime.history.close().catch(() => undefined), bound]).then(() => {clearTimeout(timer); process.exit(code);});
 }
 const shutdown = new ShutdownSequence(log);
 shutdown.register('intake', {name: 'ingestion', budgetMs: 1000, run: () => ingestion.stop()});
 shutdown.register('intake', {name: 'capture', budgetMs: 1000, run: () => captures.stop()});
-// Ends the v1 source and waits for its broker process; nothing is acknowledged afterwards (R14).
-shutdown.register('intake', {name: 'v1-ingestion', budgetMs: 1000, run: () => v1.stopSource()});
-// Drops queued durable work and waits for the one storage command in flight before the database closes (R14); then,
-// unless durable delivery failed, writes the pending one-second samples (ET-015b, H11).
-shutdown.register('flush', {name: 'recording-flush', budgetMs: 500, run: () => v1.flush()});
 shutdown.register('storage', {name: 'storage-probe', budgetMs: 1000, run: async () => {
   await probe.stop();
   if (!storageStopped) throw new Error('Storage probe did not stop cleanly');
 }});
-shutdown.register('storage', {name: 'history-storage', budgetMs: HISTORY_CLOSE_BUDGET_MS, run: () => history.close()});
+// v1-ingestion (intake), recording-flush (flush) and history-storage (storage), in that phase order (R14); see
+// recording-runtime.ts. Registered after the probe so each phase keeps its earlier step order.
+runtime.register(shutdown);
 function stop(): void {
   if (stopping) return;
   stopping = true; subscriptions.close();
@@ -184,4 +176,4 @@ port.on('message', event => {
   } else {for (const transferred of event.ports) transferred.close();}
 });
 void probe.start();
-history.start();
+runtime.start();

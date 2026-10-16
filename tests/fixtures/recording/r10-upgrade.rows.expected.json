@@ -1,0 +1,23 @@
+{
+  "scenario": "r10-upgrade",
+  "authoredFrom": [
+    "Why a separate expectation: live-only.json has no trip expectation, and here its source steps run against the telemetry service's recording runtime (apps/desktop/src/recording-runtime.ts, ET-015c G14) with ETS2TELEMETRY_RECORDING=synthetic:t. The derived transport is a live-only connection at 0 ms, a scripted disconnect at 10,050 ms that the client pre-empts, a durable connection at 10,100 ms and a disconnect at 10,200 ms; frames every 100 ms from 300 ms to 10,000 ms only keep the paced server close to the client's own close.",
+    "R10 (docs/telemetry-service-v1.md, Connection and validation): while the synthetic database is still opening, durableReady() is false, so the first hello asks for durableEvents false. When the open finishes, HistoryStorage calls onOpened, durableAvailabilityChanged() closes the live-only connection and the ingestion reconnects once, after 250 ms, with a durable hello.",
+    "OD-4 and live-only.expected.json: simulation.started (eventSeq 1, 10 ms) and the cleared job configuration (eventSeq 2, 100 ms) are observed while only a live-only client is connected, so both become noDurableConsumer loss, published as one gap record at the next frame ends (20 and 200 ms). No later event exists, so the durable connection receives one merged gap 1-2 {noDurableConsumer: 2}, not redelivered, with firstLost 1,000,010,000,000 ns and lastLost 1,000,100,000,000 ns on the capture clock (10^12 ns + atMs x 10^6), and acknowledges 2 after its commit.",
+    "docs/trips.md transition table: an idle game slot and a gap with a new suffix give a session-level gap interval. The suffix (0, 2] is the whole record, so the interval keeps the record's monotonic bounds and the capture clock. gapKind: no queueCount, queueBytes or encodingFailed loss, so the kind is not-connected. Interval detail keys: {cause: gap, causes: the six counters, firstEventSeq, lastEventSeq, redelivered}. A gap carries no UTC label and no label was seen before it, so the interval has none.",
+    "The durable checkpoint shows no job (the configuration was cleared), so no job becomes untracked and no trip opens; no gameplay event exists, so there are no attributions."
+  ],
+  "trips": [],
+  "attributions": [],
+  "intervals": [
+    {"trip": null, "kind": "not-connected", "startMonotonicNs": "1000010000000", "endMonotonicNs": "1000100000000", "sourceClockId": "capture-clock",
+      "firstEventSeq": "1", "lastEventSeq": "2",
+      "detail": {"cause": "gap", "causes": {"offline": "0", "noDurableConsumer": "2", "queueCount": "0", "queueBytes": "0", "retentionExpired": "0", "encodingFailed": "0"},
+        "firstEventSeq": "1", "lastEventSeq": "2", "redelivered": false}}
+  ],
+  "gaps": [
+    {"firstEventSeq": "1", "lastEventSeq": "2", "causes": {"offline": "0", "noDurableConsumer": "2", "queueCount": "0", "queueBytes": "0", "retentionExpired": "0", "encodingFailed": "0"},
+      "redelivered": false}
+  ],
+  "coverage": {"committedThroughEventSeq": "2"}
+}
