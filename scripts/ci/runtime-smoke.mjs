@@ -14,12 +14,13 @@ import {
 } from './renderer-observation.mjs';
 import {rendererPages, runOverlaySmoke, verifyStripLayout, waitForStripLayout, windowSecurity, verifyRendererStyles} from './overlay-observation.mjs';
 import {runLifecycleSmoke, seedLifecycleSettings, verifyLifecycleRestart} from './lifecycle-observation.mjs';
+import {RECORDING_TARGET, runRecordingSmoke, startRecordingSource, verifyRecordingRestart, verifyRecordingRun} from './recording-observation.mjs';
 // These read-only globals are used only inside serialized Playwright browser callbacks.
 /* global document: readonly, getComputedStyle: readonly, innerHeight: readonly, innerWidth: readonly */
 
 const [configFile] = process.argv.slice(2);
 const config = JSON.parse((await readFile(configFile, 'utf8')).replace(/^\uFEFF/, ''));
-const result = {scenario: config.scenario === 'lifecycle' ? 'V0 TRAY-LIFECYCLE-SETTINGS / partial REG-009, REG-011, REG-012, REG-017' : config.scenario === 'overlay' ? 'V0 HIDDEN-OVERLAY-PROJECTION / partial REG-009, REG-011, REG-017' : config.scenario === 'telemetry' ? 'V0 SOURCE-RENDERER-RECOVERY / partial REG-003, REG-010, REG-011, REG-017' : 'SCAFFOLD-WORKER / partial REG-011, REG-017', passed: false,
+const result = {scenario: config.scenario === 'recording' ? 'V1 SYNTHETIC-RECORDING-JOURNEY / partial REG-006, REG-012, REG-017' : config.scenario === 'lifecycle' ? 'V0 TRAY-LIFECYCLE-SETTINGS / partial REG-009, REG-011, REG-012, REG-017' : config.scenario === 'overlay' ? 'V0 HIDDEN-OVERLAY-PROJECTION / partial REG-009, REG-011, REG-017' : config.scenario === 'telemetry' ? 'V0 SOURCE-RENDERER-RECOVERY / partial REG-003, REG-010, REG-011, REG-017' : 'SCAFFOLD-WORKER / partial REG-011, REG-017', passed: false,
   scenarioKind: config.scenario ?? 'scaffold',
   commit: config.commit, mode: config.mode, node: process.versions, expected: {
     status: {service: 'ready', storage: 'verified', synthetic: true}, exit: 0, probesAfterExit: []},
@@ -32,6 +33,8 @@ let tracing = false;
 let telemetrySource;
 // ET-010c: the telemetry scenario also serves synthetic protocol v1 data; every other scenario stays v0-only.
 let telemetrySourceV1;
+// ET-015a PR-4: the recording scenario's reactive v1 simulator behind its recording proxy (recording-observation.mjs).
+let recordingSource;
 const failure = error => ({name: error.name, message: error.message, stack: error.stack});
 // Driver timeline on its own wall and monotonic clocks, to align with app diagnostics and the Job CPU series.
 result.phases = [];
@@ -68,7 +71,8 @@ const environment = diagnostics => ({...process.env, TEMP: config.temp, TMP: con
   LOCALAPPDATA: config.localappdata, ETS2TELEMETRY_PROFILE_DIR: config.profile,
   ETS2TELEMETRY_DIAGNOSTIC_DIR: diagnostics,
   ...(telemetrySource ? {ETS2TELEMETRY_LIVE_SMOKE: '1', ETS2TELEMETRY_SOURCE_KIND: 'synthetic', ETS2TELEMETRY_SOURCE_PIPE: telemetrySource.endpoint} : {}),
-  ...(telemetrySourceV1 ? {ETS2TELEMETRY_SOURCE_PIPE_V1: telemetrySourceV1.endpoint} : {})});
+  ...(telemetrySourceV1 ? {ETS2TELEMETRY_SOURCE_PIPE_V1: telemetrySourceV1.endpoint} : {}),
+  ...(recordingSource ? {ETS2TELEMETRY_SOURCE_PIPE_V1: recordingSource.endpoint, ETS2TELEMETRY_RECORDING: RECORDING_TARGET} : {})});
 const launchOptions = diagnostics => ({timeout: 20000, cwd: config.cwd,
   ...(config.mode === 'packaged' ? {executablePath: config.executable, args: config.forceRendererProcessReuse ? ['--renderer-process-limit=1'] : []} :
     {args: [config.checkout, ...(config.forceRendererProcessReuse ? ['--renderer-process-limit=1'] : [])]}),
@@ -79,8 +83,9 @@ try {
   assert.equal(process.versions.node, '24.19.0');
   result.playwright = JSON.parse(await readFile(new URL('../../node_modules/playwright-core/package.json', import.meta.url))).version;
   assert.equal(result.playwright, '1.64.0');
-  if (config.scenario === 'telemetry' || config.scenario === 'overlay' || config.scenario === 'lifecycle') telemetrySource = await startLiveSmokeSource(config.checkout);
+  if (config.scenario === 'telemetry' || config.scenario === 'overlay' || config.scenario === 'lifecycle' || config.scenario === 'recording') telemetrySource = await startLiveSmokeSource(config.checkout);
   if (config.scenario === 'telemetry') telemetrySourceV1 = await startLiveSmokeSourceV1(config.checkout);
+  if (config.scenario === 'recording') recordingSource = await startRecordingSource(config.checkout, config.output);
   // ET-011b: the lifecycle journey starts from a deliberately invalid settings file in the isolated LOCALAPPDATA.
   if (config.scenario === 'lifecycle') await seedLifecycleSettings(config);
   phase('launch-requested');
@@ -308,8 +313,20 @@ try {
     await verifyLifecycleRestart({application, record: result.lifecycle, rendererPages, config});
     phase('restart-ready');
   }
+  if (config.scenario === 'recording') {
+    // ET-015a PR-4: run A records through a killed and restarted service and close-to-tray, then exits from the tray;
+    // the shared close path below owns run B, which appends to the same synthetic database.
+    result.recording = {};
+    await runRecordingSmoke({application, launcher, dashboard: window, recording: recordingSource, config, events: diagnosticEvents, record: result.recording,
+      stopTracing: async () => {tracing = false; await application.context().tracing.stop({path: path.join(config.output, 'trace.zip')}); phase('tracing-stopped');}});
+    application = undefined; phase('tray-exit-complete');
+    application = await electron.launch(launchOptions(config.diagnosticsRestart));
+    launcher = application.process(); phase('restart-launch-returned');
+    await verifyRecordingRestart({application, record: result.recording, rendererPages, recording: recordingSource, events: diagnosticEvents, config});
+    phase('restart-recorded');
+  }
   phase('journey-complete');
-  if (config.scenario !== 'lifecycle') await window.screenshot({path: path.join(config.output, 'ready.png')});
+  if (config.scenario !== 'lifecycle' && config.scenario !== 'recording') await window.screenshot({path: path.join(config.output, 'ready.png')});
 } catch (error) {result.failure = failure(error); phase('failed');}
 finally {
   try {await telemetrySource?.stop();} catch (error) {result.sourceCloseFailure = failure(error);}
@@ -338,11 +355,12 @@ finally {
     result.mainEvents = await diagnosticEvents(config.diagnostics);
     result.serviceEvents = await diagnosticEvents(path.join(config.diagnostics, 'service'));
     result.probesAfterExit = (await readdir(config.temp)).filter(name => name.startsWith('ets2telemetry-probe-'));
-    if (telemetrySource && result.telemetry?.serviceRestartRecovered) {
+    const restartRecord = result.telemetry?.serviceRestartRecovered ? result.telemetry : result.recording?.serviceRestartRecovered ? result.recording : undefined;
+    if (telemetrySource && restartRecord) {
       // A deliberately killed worker's original isolated probe is retained as crash evidence.
       // The replacement service must remove its own normal-shutdown probe.
       assert.deepEqual(result.probesAfterExit, result.probesBeforeExit);
-      result.telemetry.retainedCrashProbe = result.probesAfterExit;
+      restartRecord.retainedCrashProbe = result.probesAfterExit;
       result.expected.probesAfterExit = result.probesBeforeExit;
     } else assert.deepEqual(result.probesAfterExit, []);
     const diagnosticCrashObserved = result.mainEvents.some(row => row.event === 'DIAGNOSTIC_SERVICE_EXIT_REQUEST');
@@ -354,7 +372,8 @@ finally {
     assert.ok(result.serviceEvents.some(row => row.event === 'STORAGE_VERIFIED'));
     assert.ok(result.serviceEvents.some(row => row.event === 'SERVICE_REPORT' && row.detail?.type === 'stopped'));
     // A deliberately killed service never closed its database; its replacement reopens the existing file.
-    result.history = verifyHistoryEvents(result.serviceEvents, telemetrySource && result.telemetry?.serviceRestartRecovered ? [true, false] : [true]);
+    // A recording target logs the same opening and closing codes for its synthetic database (ET-015a PR-3).
+    result.history = verifyHistoryEvents(result.serviceEvents, telemetrySource && restartRecord ? [true, false] : [true]);
     assert.ok(![...result.mainEvents, ...result.serviceEvents].some(row =>
       /FAILED|TIMEOUT|UNCAUGHT|UNHANDLED|INVALID|RENDER_PROCESS_GONE/.test(row.event)));
     if (config.scenario === 'lifecycle') {
@@ -390,9 +409,22 @@ finally {
       lifecycle.restartLauncherExit = result.launcherExit;
       lifecycle.shutdownClean = true;
     }
-    result.history.file = await verifyHistoryFile();
+    if (config.scenario === 'recording') {
+      // ET-015a PR-4: no history database may exist; the synthetic database replaces it (recording-observation.mjs).
+      const recording = result.recording ??= {};
+      recording.restartMainEvents = await diagnosticEvents(config.diagnosticsRestart);
+      recording.restartServiceEvents = await diagnosticEvents(path.join(config.diagnosticsRestart, 'service'));
+      recording.restartLauncherExit = result.launcherExit;
+      await verifyRecordingRun({config, record: recording, recording: recordingSource, mainEvents: result.mainEvents, serviceEvents: result.serviceEvents,
+        restartMainEvents: recording.restartMainEvents, restartServiceEvents: recording.restartServiceEvents});
+    } else result.history.file = await verifyHistoryFile();
   } catch (error) {result.postconditionFailure = failure(error);}
-  result.passed = !result.failure && !result.closeFailure && !result.traceFailure && !result.postconditionFailure && !result.sourceCloseFailure && !result.sourceV1CloseFailure;
+  // A failed run still ends the simulator it started; the Job owns it otherwise.
+  if (recordingSource && !result.recording?.simulator) {
+    try {result.recordingSourceStop = await recordingSource.stop();} catch (error) {result.recordingSourceFailure = failure(error);}
+  }
+  result.passed = !result.failure && !result.closeFailure && !result.traceFailure && !result.postconditionFailure && !result.sourceCloseFailure && !result.sourceV1CloseFailure &&
+    !result.recordingSourceFailure;
   result.finishedUtc = new Date().toISOString();
   await writeFile(path.join(config.output, 'result.json'), JSON.stringify(result, null, 2) + '\n');
 }

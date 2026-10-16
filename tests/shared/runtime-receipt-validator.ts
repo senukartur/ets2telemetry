@@ -3,7 +3,7 @@ import {writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import {promisify} from 'node:util';
 
-/** `numbers: 'int64'` validates a lifecycle receipt with PowerShell 7's Int64 JSON integers. */
+/** `numbers: 'int64'` validates a lifecycle (or, with scenario `recording`, a recording) receipt with PowerShell 7's Int64 JSON integers. */
 export type RuntimeReceiptCase = {receipt: string; code: number; scenario?: string; numbers?: 'int64'};
 export type RuntimeReceiptResult = {passed?: boolean; driverResultAvailable?: boolean; reason?: string | null; error?: string};
 

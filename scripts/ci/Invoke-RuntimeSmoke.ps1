@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param([ValidateSet('development','packaged')][string]$Mode,
-    [ValidateSet('scaffold','telemetry','overlay','lifecycle')][string]$Scenario = 'scaffold',
+    [ValidateSet('scaffold','telemetry','overlay','lifecycle','recording')][string]$Scenario = 'scaffold',
     [switch]$ForceRendererReuse,
     [string]$OutputRoot = (Join-Path $PSScriptRoot '../../.local/ci'))
 $ErrorActionPreference = 'Stop'
@@ -13,8 +13,8 @@ foreach ($name in @('cwd','temp','appdata','localappdata','profile','diagnostics
     $paths[$name] = Join-Path $output $name
     New-Item -ItemType Directory -Path $paths[$name] | Out-Null
 }
-# The lifecycle restart run reuses the profile and LOCALAPPDATA but writes its own diagnostics.
-if ($Scenario -eq 'lifecycle') {
+# The lifecycle and recording restart runs reuse the profile and LOCALAPPDATA but write their own diagnostics.
+if ($Scenario -eq 'lifecycle' -or $Scenario -eq 'recording') {
     $paths.diagnosticsRestart = Join-Path $output 'diagnostics-restart'
     New-Item -ItemType Directory -Path $paths.diagnosticsRestart | Out-Null
 }
