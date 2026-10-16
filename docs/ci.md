@@ -177,7 +177,16 @@ After `layoutSwitch` the driver runs the edit mode once, recorded as `editMode` 
 
 The receipt's observation and window phases are unchanged; `RuntimeReceipt.ps1` does not validate `editMode`, and a failed step fails the driver and therefore the receipt. Dragging over a real game window, the focus transitions and the visible edit overlay cannot be exercised by this hidden synthetic harness; they stay pending in [ET-012b validation](validation/et-012b.md).
 
-These are hidden-renderer projection and isolation checks. `hidden-overlay-dom.png` captures that DOM; it does not establish an OS-visible overlay, game-following placement, click-through, foreground/focus behavior, mixed DPI, monitor removal, real game compatibility, display latency or frame-time performance. Those checks remain pending against the real-game candidate. Adding this harness/workflow is not an executed or passed UI/hosted check; actual runs and their candidate identities must be recorded separately before acceptance.
+### Hidden overlay evidence capture
+
+After the edit step the driver keeps review evidence of the hidden overlay document, recorded as `result.overlay.capture` (`captureHiddenOverlay` in `overlay-observation.mjs`). It asserts nothing about rendering:
+
+1. `hidden-overlay-dom.html` is the serialized DOM (`page.content()`), read through the renderer's JavaScript without a rendered frame. It is written before it is checked, and the run fails when it cannot be read or does not hold exactly one `overlay-root`. `capture.dom` records the file and its size.
+2. `hidden-overlay-dom.png` is best effort, bounded to 5 s. `capture.screenshot` records `captured`, the time taken and, after a Playwright `TimeoutError`, `captured: false` with the error; that timeout does not fail the run. Any other screenshot error still fails it.
+
+The PNG is optional because `page.screenshot` sends `Page.captureScreenshot`, which makes the page produce a new frame and returns only after that frame arrives from the window's compositor. The overlay window is never shown in this harness, and once Chromium stops presenting frames for it, every later capture waits forever; `webContents.capturePage()` waits the same way. Before this change the step waited for Playwright's default 30 s timeout and then failed the run after every assertion had passed ([ET-010 validation](validation/et-010.md#hidden-overlay-screenshot-timeout-october-16-2026)). `RuntimeReceipt.ps1` validates neither file nor `capture`.
+
+These are hidden-renderer projection and isolation checks. `hidden-overlay-dom.html` and, when captured, `hidden-overlay-dom.png` record that DOM; they do not establish an OS-visible overlay, game-following placement, click-through, foreground/focus behavior, mixed DPI, monitor removal, real game compatibility, display latency or frame-time performance. Those checks remain pending against the real-game candidate. Adding this harness/workflow is not an executed or passed UI/hosted check; actual runs and their candidate identities must be recorded separately before acceptance.
 
 ## ET-011a tray lifecycle smoke
 
