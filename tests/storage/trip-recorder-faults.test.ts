@@ -3,6 +3,8 @@
 // simulator on actual pipes. The transport of normal-delivery.json is replaced so that the reconnection the failure
 // causes is scripted; the final rows are hand-written in tests/fixtures/recording/<id>.rows.expected.json (REG-007,
 // REG-011). Injected SQLite codes are not a full volume, a real permission change or a real lock.
+import {once} from 'node:events';
+import type {MessagePort} from 'node:worker_threads';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 import type {ServerMessage} from '../../packages/contracts/src/protocol-v1';
 import {readFixtureFile} from '../../tools/telemetry-simulator/src/fixture-file';
@@ -30,6 +32,18 @@ async function expectRows(run: RecordingRun, id: string) {
   expect({committed: run.tally.committed, duplicate: run.tally.duplicate, covered: run.tally.covered, conflict: run.tally.conflict})
     .toEqual({committed: expected.coverage.committed, duplicate: expected.coverage.duplicate, covered: expected.coverage.covered, conflict: 0});
   expect(await storedRows(ws, SEED)).toEqual({trips: expected.trips, attributions: expected.attributions, intervals: expected.intervals});
+}
+/**
+ * The fault worker's first control message, normally `{type: 'held'}` once a commit is held inside its transaction. The
+ * bound is a named hang guard only, far below the case timeout: a worker that never holds fails the case with its cause.
+ */
+const HELD_HANG_GUARD_MS = 15_000;
+async function heldOrHang(control: MessagePort): Promise<unknown> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const guard = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`The fault worker never reported a held commit within ${HELD_HANG_GUARD_MS} ms`)), HELD_HANG_GUARD_MS);
+  });
+  try { return (await Promise.race([once(control, 'message'), guard]))[0]; } finally { clearTimeout(timer); }
 }
 const durableLogs = (run: RecordingRun, service = 0) => run.services[service].logs.filter(([event]) => event.startsWith('V1_DURABLE'));
 
@@ -80,9 +94,13 @@ describe('S4 injected storage failures under the trip recorder', () => {
     // a restarted service with the production bound of 256, which starts with nothing queued. Equality of that bound with
     // the producer's 256 retained entries is not enough on its own: items still queued or in flight from an earlier
     // connection count against a redelivery too, which can give a transient BACKLOG_FULL (docs/telemetry-service-v1.md).
+    // The frames after eventSeq 1 reach the ingestion only once the worker reports the commit of 1 held inside its
+    // transaction. Without that gate a slow session open (hosted CI run 38907225873) let all five items arrive first: 1-4
+    // were queued, the fifth dropped them, nothing was committed or held, and the restarted service committed 1-9 anew.
     const input = withTransport(base(), 'normal-delivery-backlog', [connect(0, {durable: true, ack: 'withhold'}), disconnect(350), connect(360), disconnect(1100)]);
     let released = false;
     const run = await runRecording(input, {path: ws.database, backups: ws.backups}, {fault: {hold: {eventSeq: '1'}}, maxPendingCommits: 4, serve: {quiesceMs: 0}, restartAfter: [0],
+      gate: {afterEventSeq: '1', until: async service => { expect(await heldOrHang(service.control!)).toEqual({type: 'held', eventSeq: '1'}); }},
       onState: (state, service, mark) => {
         if (released || state.durable.state !== 'pending' || state.durable.retryCode !== 'BACKLOG_FULL') return;
         released = true; mark('release'); service.control!.postMessage({type: 'release'});

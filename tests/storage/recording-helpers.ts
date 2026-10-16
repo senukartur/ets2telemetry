@@ -3,7 +3,7 @@
 // pipes, into a temporary synthetic-purpose database, and the labelled rows read back from that database. Barriers and
 // waits are counted in commits, ACKs and connections; real-time bounds are liveness bounds only.
 import net from 'node:net';
-import {once} from 'node:events';
+import {EventEmitter, once} from 'node:events';
 import {readFileSync} from 'node:fs';
 import {createHash} from 'node:crypto';
 import path from 'node:path';
@@ -126,6 +126,11 @@ export interface RecordingPlan {
   between?: () => Promise<void>;
   /** Called after every state change of a service, for tests that react to a status (for example a release). */
   onState?: (state: V1SourceState, service: Service, mark: (label: string) => void) => void;
+  /**
+   * Holds back the first connection's stream after the server frame of the event with this eventSeq until `until`
+   * resolves (see ClientSocket), so that a storage state, such as a held commit, is reached before later items arrive.
+   */
+  gate?: {afterEventSeq: string; until: (service: Service) => Promise<unknown>};
 }
 export interface RecordingRun {
   report: ReactiveReport; services: Service[]; tally: CommitTally;
@@ -135,6 +140,62 @@ export interface RecordingRun {
   served: (connection: number) => string[];
   /** ACK writes (`ack <connection> <through>`) and the labels tests mark from `onState`, in order. */
   timeline: string[];
+}
+
+/**
+ * The client socket the ingestion and the harness see: the connect, data, end, error and close events of the real pipe
+ * socket, passed on synchronously and in their order. With a gate, the server bytes are passed on one whole frame at a
+ * time up to the frame of the gate's event; everything after it (the rest of the stream, end, error and close) waits in
+ * order until the gate's promise resolves, then follows at once. An incomplete frame kept before the gate's event is
+ * passed on ahead of the end, error or close that follows it. Re-cutting a byte stream at frame boundaries is invisible
+ * to a consumer that decodes it, and nothing is reordered, dropped or added (tests/storage/client-socket.test.ts).
+ */
+export class ClientSocket extends EventEmitter {
+  private partial = Buffer.alloc(0);
+  private waiting?: [string, unknown[]][];
+  constructor(private readonly real: net.Socket, private gate: {afterEventSeq: string; until: () => Promise<unknown>} | undefined, private readonly fail: (error: unknown) => void) {
+    super();
+    real.on('connect', () => this.pass('connect'));
+    real.on('data', (chunk: Buffer) => { if (this.gate) this.frames(chunk); else this.pass('data', chunk); });
+    real.on('end', () => { this.flush(); this.pass('end'); });
+    real.on('error', (error: Error) => { this.flush(); this.pass('error', error); });
+    real.on('close', (hadError: boolean) => { this.flush(); this.pass('close', hadError); });
+  }
+  write(bytes: Uint8Array, ...rest: unknown[]): boolean { return (this.real.write.bind(this.real) as (...args: unknown[]) => boolean)(bytes, ...rest); }
+  destroy(): void { this.real.destroy(); }
+  private pass(event: string, ...args: unknown[]): void {
+    if (this.waiting) this.waiting.push([event, args]); else this.emit(event, ...args);
+  }
+  /** Passes on an incomplete frame kept before the gate's event, ahead of the socket event that follows it. */
+  private flush(): void {
+    if (!this.partial.length) return;
+    const bytes = this.partial; this.partial = Buffer.alloc(0);
+    this.pass('data', bytes);
+  }
+  /** Passes whole frames until the gate's event has been passed; the rest waits behind the gate. */
+  private frames(chunk: Buffer): void {
+    // The kept bytes move into this chunk's bytes; only what is still incomplete below is kept again.
+    let bytes = Buffer.concat([this.partial, chunk]); this.partial = Buffer.alloc(0);
+    while (this.gate && bytes.length >= 4 && bytes.length >= 4 + bytes.readUInt32LE(0)) {
+      const frame = bytes.subarray(0, 4 + bytes.readUInt32LE(0)); bytes = bytes.subarray(frame.length);
+      this.pass('data', frame);
+      let message: ReturnType<typeof decodePayload> | undefined;
+      // An invalid frame is the ingestion's own decoder's to report.
+      try { message = decodePayload(frame.subarray(4), 'server'); } catch { message = undefined; }
+      if (message?.kind === 'event' && message.data.eventSeq === this.gate.afterEventSeq) this.hold(this.gate.until);
+    }
+    if (this.gate) this.partial = bytes;
+    else if (bytes.length) this.pass('data', bytes);
+  }
+  private hold(until: () => Promise<unknown>): void {
+    this.gate = undefined;
+    const waiting: [string, unknown[]][] = this.waiting = [];
+    until().then(() => {
+      // Events passed while these are emitted queue behind them.
+      for (let next = waiting.shift(); next; next = waiting.shift()) this.emit(next[0], ...next[1]);
+      this.waiting = undefined;
+    }, this.fail);
+  }
 }
 
 /** Every pending ACK the policy of a scripted connection loses on the way to the pipe, as in the replay. */
@@ -153,14 +214,17 @@ export async function runRecording(input: Json, database: {path: string; backups
   const server = await serveV1Reactive(input, {scale: 0, awaitScriptedAcks: true, ...plan.serve});
   const timeline: string[] = [], services: Service[] = [], tally: CommitTally = {committed: 0, duplicate: 0, covered: 0, conflict: 0, coverage: 0n}, acks: RecordingRun['acks'] = [];
   const closed: Promise<void>[] = [];
-  let connection = -1, finished!: () => void;
+  let connection = -1, finished!: () => void, gate = plan.gate;
   const allClosed = new Promise<void>(r => { finished = r; });
   let fail!: (error: unknown) => void;
   const failed = new Promise<never>((_, reject) => { fail = reject; }), background: Promise<unknown>[] = [];
   failed.catch(() => undefined);
   const track = (work: Promise<unknown>) => { background.push(work.catch(error => fail(error))); };
   const connect = (endpoint: string) => {
-    const socket = net.connect(endpoint), write = socket.write.bind(socket), decoder = new FrameDecoder('server');
+    // Only the first connection's stream is gated; `until` receives the service that owns it.
+    const gated = gate; gate = undefined;
+    const socket = new ClientSocket(net.connect(endpoint), gated && {afterEventSeq: gated.afterEventSeq, until: () => gated.until(services.at(-1)!)}, error => fail(error));
+    const write = socket.write.bind(socket), decoder = new FrameDecoder('server');
     let index: number | undefined, sent = 0;
     // Registered before the ingestion's listeners: a welcome is numbered before the ingestion applies it.
     socket.on('data', (chunk: Buffer) => {
@@ -189,7 +253,7 @@ export async function runRecording(input: Json, database: {path: string; backups
         acks.push({connection: index, through: BigInt(m.data.throughEventSeq), coverage: tally.coverage}); timeline.push(`ack ${index} ${m.data.throughEventSeq}`);
         if (acksLost(policies[index], sent++)) return true;
       }
-      return (write as (...args: unknown[]) => boolean)(bytes, ...rest);
+      return write(bytes, ...rest);
     });
     return socket;
   };
