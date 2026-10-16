@@ -774,7 +774,7 @@ No game, TruckersMP, display or performance claim follows from synthetic checks.
 | K1 | One PR covering the Card, Cluster and Minimal HUD; the strip (ET-012c) is untouched |
 | K2 | Fixed-height rows and a linear reserve. A header or tag row is always reserved, plus one fixed row per enabled section. For the Cluster's side panel, the count is the enabled sections other than speed, gear and RPM, which the gauge shows |
 | K3 | Constants in CSS px at zoom 1 with border-box sizing:<br>• Card: 48 + 24 per section<br>• Cluster panel: 36 + 21 per panel section<br>• HUD: 18 + 24 per section |
-| K4 | Grow-only. The height is the larger of the scaled nominal height and the scaled reserve, and widths are unchanged. Every configuration that fits its nominal size today keeps its exact geometry |
+| K4 | Grow-only. The height is the larger of the scaled nominal height and the scaled reserve, and widths are unchanged. Every configuration whose reserve fits its nominal size at a given scale keeps its exact geometry at that scale |
 | K5 | A shared `surfaceHeightDip(content, border, scale) = ceil(content × scale + 2 × border × max(1, scale))`. It applies to every layout and gives the strip no numeric change |
 | K6 | Degradation is unchanged: a layout that does not fit hides as a whole, and edit mode reports `too-large` |
 | K7 | A pure `overlay-rows.ts` holds the row model. The Cluster gauge set is exported once from `overlay-sections.ts`, and a unit test cross-checks `renderer.css` |
