@@ -47,12 +47,13 @@ export default function App() {
     }, () => setUnits('failed'));
   };
   // ET-016 PR-4 (J12): Live (the default) and Journal tabs. The Live tab stays mounted while hidden, so its cards keep
-  // their state; the Journal tab mounts when opened, loads its first page then and holds nothing while closed. The tab
-  // list is one compact row, so the status, speed and fuel lines stay in the first viewport (B6).
+  // their state; Radix does not hide a force-mounted panel, so its inactive state hides it. The Journal tab mounts when
+  // opened, loads its first page then and holds nothing while closed. The tab list is one compact row, so the status,
+  // speed and fuel lines stay in the first viewport (B6).
   return <main className="mx-auto max-w-xl p-4"><Tabs defaultValue="live">
   <TabsList><TabsTrigger value="live" data-testid="tab-live">{JOURNAL_STRINGS.liveTab}</TabsTrigger>
     <TabsTrigger value="journal" data-testid="tab-journal">{JOURNAL_STRINGS.journalTab}</TabsTrigger></TabsList>
-  <TabsContent value="live" forceMount className="space-y-4"><Card><CardHeader><CardTitle><h1>ETS2Telemetry</h1></CardTitle></CardHeader><CardContent className="space-y-2"><p>{startup}</p>
+  <TabsContent value="live" forceMount className="space-y-4 data-[state=inactive]:hidden"><Card><CardHeader><CardTitle><h1>ETS2Telemetry</h1></CardTitle></CardHeader><CardContent className="space-y-2"><p>{startup}</p>
     <label>Source <select value={live?.selection ?? 'game'} onChange={event => {void window.desktop.selectSource(event.target.value as SourceSelection).catch(() => setStartup(STRINGS.sourceSelectionFailed));}}>
       <option value="game">Select a game</option><option value="ets2">Euro Truck Simulator 2</option><option value="ats">American Truck Simulator</option><option value="synthetic">Synthetic fixture</option><option value="replay">Replay fixture</option>
     </select></label>
