@@ -410,4 +410,4 @@ ET-015b is four PRs:
 
 Samples follow active real seconds of the source capture clock, never renderer frequency or game time. Paused, stale and missing seconds produce no row, and missing seconds are never filled.
 
-Storage gains only the `appendSamples` option `uniqueSeconds` and a `skipped` count. There is no schema, migration, wire, preload/IPC, renderer or native change. `GAME_HISTORY_RECORDING` stays `false`, so samples are written only to synthetic or replay recording targets. ET-015c, ET-016 and later phases are not authorized by this paragraph. No game, TruckersMP, display or performance claim follows.
+Storage gains only the `appendSamples` option `uniqueSeconds`, a `skipped` count and an in-process test hook that never crosses the worker boundary. There is no schema, migration, wire, preload/IPC, renderer or native change. `GAME_HISTORY_RECORDING` stays `false`, so samples are written only to synthetic or replay recording targets. ET-015c, ET-016 and later phases are not authorized by this paragraph. No game, TruckersMP, display or performance claim follows.
