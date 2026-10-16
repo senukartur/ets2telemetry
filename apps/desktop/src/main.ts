@@ -149,7 +149,9 @@ function runApplication(profileError: unknown): void {
     stopping: () => {if (lifecycle.abort()) {updateHealth({type: 'exit-requested'}, true); retireLive();}},
     // The failed service is being terminated: retire its readiness, status and live channels now rather than when
     // its exit arrives (up to 3000 ms later). The later state callback finds them already retired.
-    failure: code => {failureReported = true; serviceReady = false; selectionPending = false; status = undefined; closeUpstream(); retireRecording(); journal.retire();
+    // A new selection generation also retires a readiness still awaiting its broker or settings, so the failing service
+    // never becomes ready, selected or the journal's service afterwards (ET-016 PR-3 review).
+    failure: code => {failureReported = true; serviceReady = false; selectionPending = false; status = undefined; selectionGeneration++; closeUpstream(); retireRecording(); journal.retire();
       updateHealth({type: 'service-failure', code: failureCode(code, reportedFailureCode)}); reportedFailureCode = undefined;
       const update: LiveTelemetry = {...initialLive(selection), status: 'restarting', reason: 'Telemetry service failed; current interval is unknown'};
       freshness.invalidate(update); dashboardSubscriptions.close(); dashboardPort = undefined; window?.webContents.send('telemetry:service-state', update);}

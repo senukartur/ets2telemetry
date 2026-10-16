@@ -1741,6 +1741,19 @@ it('accepts journal replies only from the current service and answers pending re
   await expect(exiting).resolves.toEqual({ok: false, code: 'SERVICE_UNAVAILABLE'});
   await expect(journalCall('journal:list-trips', trusted(), {})).resolves.toEqual({ok: false, code: 'SERVICE_UNAVAILABLE'});
 });
+it('never makes a service ready, selected or the journal\'s service when its failure arrives while its readiness awaits the broker', async () => {
+  vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2'); trayAvailable = true; await ready();
+  child.emit('exit', 1); await vi.advanceTimersByTimeAsync(250);
+  const replacement = children[1], complete = pendingVerification();
+  replacement.emit('message', {type: 'ready'}); await settle();
+  // The failure report arrives while the replacement's readiness still awaits its broker verification.
+  replacement.emit('message', {type: 'failed', code: 'STORAGE_WORKER_EXIT'});
+  complete(); await settle();
+  expect(replacement.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({type: 'select'}));
+  expect(handlers.get('scaffold:status')!(trusted())).toBeNull();
+  await expect(journalCall('journal:list-trips', trusted(), {})).resolves.toEqual({ok: false, code: 'SERVICE_UNAVAILABLE'});
+  expect(journalSent(replacement)).toEqual([]);
+});
 it('answers TIMEOUT when the service does not reply within 15 s and sends the next queued read', async () => {
   await ready();
   const slow = journalCall('journal:list-trips', trusted(), {}), next = journalCall('journal:get-trip', trusted(), TRIP);
