@@ -192,6 +192,57 @@ The additive `Test-LifecycleSettingsReceipt` rules in `RuntimeReceipt.ps1` rejec
 
 Measured local durations on the owner workstation (24 logical processors), October 15, 2026, on `18b8348`: development lifecycle Job 2.82 s and 2.84 s, packaged 2.62 s, up from about 2.3–2.4 s for ET-011a. Hosted durations belong in the PR's CI record.
 
+## ET-015a recording journey smoke
+
+ET-015a PR-4 adds a fifth bounded journey in each mode, right after the corresponding lifecycle smoke:
+
+```powershell
+./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario recording
+./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged -Scenario recording
+```
+
+It runs in one Windows Job with the unchanged 60-second, 16-process, 2-GiB, 25%-CPU and kill-on-close limits and zero retries, and, like the lifecycle smoke, gets a separate `diagnostics-restart` directory for run B. The application runs with the isolated profile, TEMP, APPDATA and LOCALAPPDATA, the v0 synthetic source and gated live-smoke diagnostics of the other journeys, and with `ETS2TELEMETRY_RECORDING=synthetic:smoke`, so its telemetry service records into `<isolated LOCALAPPDATA>\ETS2Telemetry\synthetic\smoke.sqlite` instead of history ([recording gate](telemetry-service-v1.md#recording-gate-et-015a)). Its protocol v1 source is `ETS2TELEMETRY_SOURCE_PIPE_V1`:
+
+- **Simulator.** The built simulator CLI (`tools/telemetry-simulator/dist/cli.cjs serve-v1`) serves the corpus scenario `normal-delivery` reactively, with its transport replaced in memory by three durable connections at 0, 360 and 2,010 ms and with a `simulation.paused` appended at 2,100 ms. The derived scenario is written to `recording-scenario.json` in the run directory.
+- **Recording proxy** ([recording-observation.mjs](../scripts/ci/recording-observation.mjs)). The proxy sits between the service and the simulator on its own synthetic test pipe. It refuses a hello that does not request durable delivery, which happens while storage is still opening (R10), so the simulator serves only the durable clients its script expects. A durable hello waits for its admission inside the client's 5-second handshake deadline. The first connection is admitted at once, the journey admits each later one, and one connection is open at a time. Like the scenario's `dropAfter:4`, the proxy delivers the first four ACKs of connection 1 and drops the fifth. Every ACK the proxy sees was written by the service only after its storage commit (E8), so ACKs are the in-run evidence of commits.
+
+Run A, in order:
+
+1. Wait for current v0 data. Connection 1 must deliver eventSeq 1–5, the proxy must see ACKs 1–5 (forwarding 1–4), and the simulator must end the connection at its scripted disconnect (350 ms). The service log must contain a `V1_SOURCE_STATUS` row with `durable: active`.
+2. Emit the gated `ets2telemetry:diagnostic-service-exit`. Main's supervisor must start a new service process, and the dashboard must show current data again.
+3. Close the main window to the tray, then admit connection 2. The restarted service must receive a checkpoint at ACK 4, eventSeq 5 again with `redelivered: true` and then 6–9, and acknowledge 5–9, with no dashboard and the same service PID. This is the cold start from seeds (R4) and a duplicate redelivery. A `durable: active` row of the new process must follow.
+4. Stop tracing and emit the gated tray action `exit`. The launcher must exit 0 within 8 seconds with one `APP_EXIT_REQUESTED` (`tray`).
+
+Run B starts the application again with the same profile and LOCALAPPDATA. After current data, connection 3 is admitted: it must start at ACK 9, deliver only eventSeq 10, acknowledge it and log `durable: active`. Run B then closes through Playwright's `close()`.
+
+After both runs the driver checks:
+
+- **Diagnostics.** Run A logs `RECORDING_TARGET {purpose: synthetic}` and `HISTORY_STORAGE_OPENED` twice (`created` true, then false, for the terminated service and its replacement), two `SERVICE_EXIT` rows and one `DIAGNOSTIC_SERVICE_EXIT_REQUEST`. Run B logs one of each with `created: false`. Each run's final stop has `ok` `recording-flush` and `history-storage` steps, one `HISTORY_STORAGE_CLOSED` and a clean `stopped` report. Neither run logs a `V1_DURABLE_RETRY`, `V1_DURABLE_UNAVAILABLE`, `V1_DURABLE_ACK_AHEAD`, `V1_DURABLE_RESTORE_LOSS`, `V1_EVENT_CONFLICT`, `RECORDING_TARGET_REJECTED`, `HISTORY_STORAGE_UNAVAILABLE` or failure event. Only the terminated service's storage probe remains.
+- **Simulator.** The simulator process exits 0 with a report of three durable connections, connection 1 closed by its script and the others by the client or the script, and `matchesReplay: true`: the events, checkpoints and snapshots it served equal its deterministic replay of the same scenario.
+- **Files.** `smoke.sqlite` is a closed schema version 1 database of this application with no `-wal`, `-shm` or `-journal` file and no `synthetic\backups` directory, and `data\telemetry.sqlite` does not exist.
+- **Rows.** A copy of the database, made in `recording-verify`, is read read-only by [recording-database.cjs](../scripts/ci/recording-database.cjs) under the checkout's Electron in Node mode. The checks are `integrity_check` `ok`, no foreign key violation, purpose and accepted origin `synthetic`, and one ETS2 session of the simulator with coverage 10. Its trips, attributions, completeness intervals, events with UTC labels, gaps and samples must equal the hand-written [normal-delivery-runtime-journey.rows.expected.json](../tests/fixtures/recording/normal-delivery-runtime-journey.rows.expected.json): trip@3 delivered and partial with `opened-at-load` and `consumer-restart` intervals, each eventSeq 1–10 once. The coverage is at least the highest ACK the simulator received.
+
+The additive `Test-RecordingReceipt` rules in `RuntimeReceipt.ps1` check the driver's flags and re-check the key facts:
+
+- three distinct service PIDs, unchanged while the dashboard is closed;
+- the forwarded and lost ACKs and the redelivered eventSeq 5;
+- `durable: active` for every service process;
+- the tray exit within 8 seconds;
+- the simulator's verdict;
+- the files, the integrity result, coverage 10, ten events and the `consumer-restart` interval;
+- both runs' diagnostics and the single retained probe.
+
+Their 44 cases, among them an intact receipt and two negative cases with PowerShell 7's Int64 integers, run in the existing PowerShell batch of `tests/unit/runtime-receipt.test.ts`. Earlier scenario rules are unchanged.
+
+The scripted disconnects of connections 2 and 3 (2,000 and 3,000 ms) are short because the reactive server waits out each paced interval in real time, even after its client has left. Either the script or the journey's own exit may end them, with the same stored rows.
+
+What this journey does not show:
+
+- **Flush timing.** It cannot tell whether `recording-flush` waits for a commit in flight. No commit is in flight at the tray exit, and `StorageClient.close()` lets the command in flight finish anyway. A `recording-flush` that started `flush()` without awaiting it passed this journey; the unit flush case in `telemetry-service-v0.test.ts` covers the wait.
+- **Scope.** The source is synthetic and the tray is reached through the gated diagnostic action. Real games, the production broker's v1 path, history recording (still gated off), the OS tray icon and real disks are not involved.
+
+Measured local durations on the owner workstation (24 logical processors), October 16, 2026, on `b26ec7b`: development Job 5.65–5.75 s, packaged 5.68–6.13 s. A whole wrapper run took 6.7 s in each mode, so the two steps add about 13 s locally. The hosted lifecycle steps took 6 s each in run [38888973522](https://github.com/senukartur/ets2telemetry/actions/runs/38888973522); hosted durations of the new steps belong in the PR's CI record.
+
 ## PowerShell validator test budgets
 
 Five Node test files run production or fixture rules under Windows PowerShell 5.1 (`powershell.exe`). Starting that process dominates their cost: locally a bare `-NoProfile` start takes about 0.2 s, and dot-sourcing `RuntimeReceipt.ps1` and validating one receipt about 0.45 s per process. Hosted runners are slower and vary by runner: the installer helper fixture takes 1.2 s locally and 2.1–2.4 s hosted. Two tests intermittently failed on slow runners in October 2026:
