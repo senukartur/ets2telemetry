@@ -119,7 +119,7 @@ export interface Service {
 export interface RecordingPlan {
   /** workerData for the fault worker of the first service (R13); without it the production worker entry runs. */
   fault?: Record<string, unknown>;
-  /** The coverage-item bound of the first service only; a restarted service has the production bound (256). */
+  /** The coverage-item bound of the first service only; a restarted service has the production bound (MAX_PENDING_COMMITS). */
   maxPendingCommits?: number;
   /** After the connection with this 0-based index closes, the service stops and a new one cold-starts on the same file. */
   restartAfter?: number[];
@@ -133,8 +133,10 @@ export interface RecordingPlan {
   /**
    * Holds back the first connection's stream after the server frame of the event with this eventSeq until `until`
    * resolves (see ClientSocket), so that a storage state, such as a held commit, is reached before later items arrive.
+   * With `redelivered: true` (ET-015c) the gated stream is instead the first one that carries that event as a
+   * redelivery, so that a test acts only once a reconnection's redelivery has reached the ingestion.
    */
-  gate?: {afterEventSeq: string; until: (service: Service) => Promise<unknown>};
+  gate?: {afterEventSeq: string; redelivered?: boolean; until: (service: Service) => Promise<unknown>};
 }
 export interface RecordingRun {
   report: ReactiveReport; services: Service[]; tally: CommitTally;
@@ -157,7 +159,7 @@ export interface RecordingRun {
 export class ClientSocket extends EventEmitter {
   private partial = Buffer.alloc(0);
   private waiting?: [string, unknown[]][];
-  constructor(private readonly real: net.Socket, private gate: {afterEventSeq: string; until: () => Promise<unknown>} | undefined, private readonly fail: (error: unknown) => void) {
+  constructor(private readonly real: net.Socket, private gate: {afterEventSeq: string; redelivered?: boolean; until: () => Promise<unknown>} | undefined, private readonly fail: (error: unknown) => void) {
     super();
     real.on('connect', () => this.pass('connect'));
     real.on('data', (chunk: Buffer) => { if (this.gate) this.frames(chunk); else this.pass('data', chunk); });
@@ -186,7 +188,8 @@ export class ClientSocket extends EventEmitter {
       let message: ReturnType<typeof decodePayload> | undefined;
       // An invalid frame is the ingestion's own decoder's to report.
       try { message = decodePayload(frame.subarray(4), 'server'); } catch { message = undefined; }
-      if (message?.kind === 'event' && message.data.eventSeq === this.gate.afterEventSeq) this.hold(this.gate.until);
+      const {afterEventSeq, redelivered} = this.gate;
+      if (message?.kind === 'event' && message.data.eventSeq === afterEventSeq && (redelivered === undefined || message.data.redelivered === redelivered)) this.hold(this.gate.until);
     }
     if (this.gate) this.partial = bytes;
     else if (bytes.length) this.pass('data', bytes);
@@ -225,9 +228,11 @@ export async function runRecording(input: Json, database: {path: string; backups
   failed.catch(() => undefined);
   const track = (work: Promise<unknown>) => { background.push(work.catch(error => fail(error))); };
   const connect = (endpoint: string) => {
-    // Only the first connection's stream is gated; `until` receives the service that owns it.
-    const gated = gate; gate = undefined;
-    const socket = new ClientSocket(net.connect(endpoint), gated && {afterEventSeq: gated.afterEventSeq, until: () => gated.until(services.at(-1)!)}, error => fail(error));
+    // One stream is gated: the first connection's, or with `redelivered` each connection's until one carries the gate's
+    // event as a redelivery. `until` receives the service that owns the stream.
+    const gated = gate; if (!gated?.redelivered) gate = undefined;
+    const socket = new ClientSocket(net.connect(endpoint), gated && {afterEventSeq: gated.afterEventSeq, redelivered: gated.redelivered,
+      until: () => { gate = undefined; return gated.until(services.at(-1)!); }}, error => fail(error));
     const write = socket.write.bind(socket), decoder = new FrameDecoder('server');
     let index: number | undefined, sent = 0;
     // Registered before the ingestion's listeners: a welcome is numbered before the ingestion applies it.
