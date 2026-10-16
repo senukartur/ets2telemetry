@@ -336,6 +336,12 @@ ET-015a PR-2 implementation update on October 16, 2026:
 - **Evidence.** All of this is proven only with synthetic sources against temporary synthetic-purpose databases: the real storage worker, killed processes and injected SQLite failures.
 - **Production is unchanged.** The service passes no sink and game selections stay live-only. See [ET-015a validation](docs/validation/et-015a.md).
 
+ET-015a PR-3 implementation update on October 16, 2026: the telemetry service applies the recording gate in `apps/desktop/src/recording-policy.ts`, where `GAME_HISTORY_RECORDING` is `false` and a unit tripwire asserts it.
+- **Production game sources are unchanged.** History opens, no recorder is built, hellos ask for `durableEvents: false`, and no ACK or history row is written.
+- **Synthetic and replay recording.** Only `ETS2TELEMETRY_RECORDING=synthetic:<name>` or `replay:<name>` runs `TripRecorderSink` in the service, for the matching selection only. It writes to `%LOCALAPPDATA%\ETS2Telemetry\synthetic\<name>.sqlite` instead of history. Durable delivery starts once that database is open. An invalid value logs `RECORDING_TARGET_REJECTED` and falls back to the default.
+- **Stop sequence.** Service stop is intake (1000 ms), then a new `recording-flush` step (500 ms) that waits for the commit in flight, then storage (1000 ms). The total stays 2500 ms.
+- See [ET-015a validation](docs/validation/et-015a.md).
+
 ## ET-012c strip overflow fix — October 16, 2026
 
 On October 16, 2026 the owner decided to fix the overlay strip's overflow first, in a separate package ET-012c, before ET-010c (PR #73) merges. Under that decision and the standing delegation of October 15, 2026, the coordinator adopted the architect's decisions S1–S12 ([concept.md](concept.md#et-012c-strip-overflow-fix--october-16-2026)).
