@@ -19,8 +19,8 @@ function trip(overrides: Partial<TripRecord> = {}): TripRecord {
   return {
     tripUuid: T1, pluginSessionId: S1, game: 'ets2', gameMode: {mode: 'unknown', method: 'none', confidence: 'none'}, gameModeAmbiguous: false,
     jobConfigurationEventSeq: '2', truckConfigurationEventSeq: null, trailerConfigurationEventSeqs: [], openedEventSeq: '2', outcome: 'open', outcomeEventSeq: null,
-    closeReason: null, recordingCompleteness: 'complete', startedUtcMs: UTC, endedUtcMs: null, observedDistanceM: NOT_OBSERVED, createdUtcMs: UTC, updatedUtcMs: UTC,
-    ...overrides
+    closeReason: null, recordingCompleteness: 'complete', startedUtcMs: UTC, endedUtcMs: null, observedDistanceM: NOT_OBSERVED, fuelUsedL: NOT_OBSERVED, createdUtcMs: UTC,
+    updatedUtcMs: UTC, ...overrides
   };
 }
 /** A stored event row; `utc` is its `occurred.utcUnixMs` label (a decimal string) or null for an unavailable label. */
@@ -84,6 +84,14 @@ describe('seedFromStored (R4)', () => {
   it('passes an available stored distance through and leaves a not-observed one out', () => {
     expect(seedFromStored(trip({observedDistanceM: {available: true, value: 0}}), undefined, []).observedDistanceM).toBe(0);
     expect(seedFromStored(trip(), undefined, [])).toEqual({tripUuid: T1, pluginSessionId: S1, game: 'ets2', jobKey: null, startedUtcMs: UTC, recordingCompleteness: 'complete'});
+  });
+
+  it('passes an available stored fuel used through, zero as a value, and leaves an unavailable one out (S-1, J8)', () => {
+    expect(seedFromStored(trip({fuelUsedL: {available: true, value: 37.25}}), undefined, []).fuelUsedL).toBe(37.25);
+    expect(seedFromStored(trip({fuelUsedL: {available: true, value: 0}}), undefined, []).fuelUsedL).toBe(0);
+    // A negative total is stored as invalid; like any unavailable value it is not resumed.
+    expect(seedFromStored(trip({fuelUsedL: {available: false, reason: 'invalid'}}), undefined, [])).not.toHaveProperty('fuelUsedL');
+    expect(seedFromStored(trip(), undefined, [])).not.toHaveProperty('fuelUsedL');
   });
 });
 

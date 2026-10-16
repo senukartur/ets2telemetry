@@ -52,6 +52,7 @@ function seedOf(trip: TripRecord, jobRow: EventRow | undefined, scan: SessionSca
     tripUuid: trip.tripUuid, pluginSessionId: trip.pluginSessionId, game: trip.game, jobKey: job, startedUtcMs: trip.startedUtcMs,
     recordingCompleteness: trip.recordingCompleteness, ...(scan.lastLabel !== null ? {lastObservedUtcMs: scan.lastLabel.utcMs} : {}),
     ...(trip.observedDistanceM.available ? {observedDistanceM: trip.observedDistanceM.value} : {}),
+    ...(trip.fuelUsedL.available ? {fuelUsedL: trip.fuelUsedL.value} : {}),
     ...(lastJobEvent?.type === 'job.cleared' ? {awaitingOutcome: true} : {})
   };
 }
@@ -62,6 +63,7 @@ function seedOf(trip: TripRecord, jobRow: EventRow | undefined, scan: SessionSca
  *   record or is not at the trip's job configuration eventSeq, so no later job matches the trip.
  * - `lastObservedUtcMs`: the label of the session's stored event with the highest eventSeq that has a usable label.
  * - `observedDistanceM`: the stored observed distance when it is available.
+ * - `fuelUsedL`: the stored fuel used when it is available (S-1, J8).
  * - `awaitingOutcome`: true when the session's last `job.configured` or `job.cleared` event after the trip's opening
  *   event is `job.cleared`: the job was cleared and not configured again before the stop.
  * `sessionEvents` are the stored events of the trip's plugin session, in any order. readTripSeeds() applies the same

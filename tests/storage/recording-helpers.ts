@@ -69,7 +69,7 @@ export async function storedRows(ws: {open(): Promise<Storage>; database: string
   const trips = ok(reader.listTrips()).trips.map(t => ({trip: t.tripUuid, jobConfigurationEventSeq: t.jobConfigurationEventSeq, truckConfigurationEventSeq: t.truckConfigurationEventSeq,
     trailerConfigurationEventSeqs: t.trailerConfigurationEventSeqs, openedEventSeq: t.openedEventSeq, gameMode: t.gameMode, gameModeAmbiguous: t.gameModeAmbiguous,
     outcome: t.outcome, outcomeEventSeq: t.outcomeEventSeq, closeReason: t.closeReason, recordingCompleteness: t.recordingCompleteness, startedUtcMs: t.startedUtcMs,
-    endedUtcMs: t.endedUtcMs, observedDistanceM: t.observedDistanceM}));
+    endedUtcMs: t.endedUtcMs, observedDistanceM: t.observedDistanceM, fuelUsedL: t.fuelUsedL}));
   reader.close();
   const rows = readOnly(ws.database, db => ({
     attributions: db.prepare(`SELECT e.event_seq AS eventSeq, t.trip_uuid AS trip, a.attribution FROM event_attributions a JOIN events e ON e.id = a.event_ref

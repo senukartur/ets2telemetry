@@ -77,7 +77,11 @@ function tripRecord(db: Database.Database, r: Record<string, unknown>): TripReco
     openedEventSeq: seqOf(db, r.opened_event_ref), outcome: r.outcome as TripRecord['outcome'], outcomeEventSeq: r.outcome_event_ref === null ? null : seqOf(db, r.outcome_event_ref),
     closeReason: r.close_reason as TripRecord['closeReason'], recordingCompleteness: r.recording_completeness as TripRecord['recordingCompleteness'],
     startedUtcMs: toSafeNumber(r.started_utc_ms), endedUtcMs: r.ended_utc_ms === null ? null : toSafeNumber(r.ended_utc_ms),
-    observedDistanceM: fromAvailability(r.observed_distance_m, r.observed_distance_m_state, toReal), createdUtcMs: toSafeNumber(r.created_utc_ms), updatedUtcMs: toSafeNumber(r.updated_utc_ms)
+    observedDistanceM: fromAvailability(r.observed_distance_m, r.observed_distance_m_state, toReal),
+    // A version 1 database, opened only with the version 1 migrations (tests of an older build), has no fuel used
+    // column (S-1): nothing was observed, as migration 0002 records for every existing trip.
+    fuelUsedL: Object.hasOwn(r, 'fuel_used_l_state') ? fromAvailability(r.fuel_used_l, r.fuel_used_l_state, toReal) : {available: false, reason: 'not-observed'},
+    createdUtcMs: toSafeNumber(r.created_utc_ms), updatedUtcMs: toSafeNumber(r.updated_utc_ms)
   };
 }
 export function getTrip(conn: StorageConnection, tripUuid: string): TripRecord | undefined {

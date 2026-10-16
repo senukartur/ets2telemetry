@@ -157,7 +157,8 @@ class EffectModel {
         }
         case 'trip.update': {
           const trip = known(effect.tripUuid)!;
-          if (trip.closed) expect(Object.keys(effect.set).every(key => key === 'recordingCompleteness' || key === 'observedDistanceM')).toBe(true);
+          // A closed trip accepts fuel used as well since ET-016 PR-6 (J8, docs/storage.md).
+          if (trip.closed) expect(Object.keys(effect.set).every(key => key === 'recordingCompleteness' || key === 'observedDistanceM' || key === 'fuelUsedL')).toBe(true);
           if (effect.set.truckConfiguration !== undefined) configuration(effect.set.truckConfiguration, 'truck.configured');
           for (const ref of effect.set.trailerConfigurations ?? []) configuration(ref, 'trailer.configured');
           expect(effect.set.recordingCompleteness === undefined || effect.set.recordingCompleteness === 'partial').toBe(true);
