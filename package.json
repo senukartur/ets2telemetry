@@ -5,7 +5,7 @@
   "private": true,
   "description": "Local ETS2 and ATS telemetry desktop scaffold",
   "author": "Artur Sianiuk",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "main": "apps/desktop/dist/main.cjs",
   "packageManager": "npm@11.17.0",
   "engines": {
