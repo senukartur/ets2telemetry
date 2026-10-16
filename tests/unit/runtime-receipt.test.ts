@@ -10,6 +10,8 @@ const MAIN_EVENTS_APPEND = 7;
 // (4300). The index of run A's recording-flush step, and the index that appends a row to run A's service events.
 const RECORDING_FLUSH_A = 11;
 const SERVICE_EVENTS_A_APPEND = 16;
+// The index that appends a row to run B's service events (ET-015b PR-4).
+const RUN_B_SERVICE_EVENTS_APPEND = 12;
 const cases = [
   {name: 'missing despite exit zero', body: undefined, code: 0, available: false, reason: 'DRIVER_RESULT_MISSING'},
   {name: 'missing after process failure', body: undefined, code: 1, available: false, reason: 'DRIVER_RESULT_MISSING'},
@@ -158,21 +160,23 @@ function recordingReceipt(path: (string | number)[] = [], replacement?: Json): s
       {event: 'SERVICE_EXIT', detail: {code: 0}}, {event: 'APP_EXIT', detail: {code: 0}}],
     serviceEvents: [...started(4100, true), ...started(4200, false), ...stopped(4200)],
     recording: {commitsActive: true, serviceRestartRecovered: true, dashboardClosedRecordingContinued: true, trayExitOrderly: true, restartRecovered: true,
-      shutdownClean: true, simulatorMatchesReplay: true, historyDatabaseAbsent: true, sidecarsAbsent: true, databaseRowsMatch: true,
+      shutdownClean: true, simulatorMatchesReplay: true, historyDatabaseAbsent: true, sidecarsAbsent: true, databaseRowsMatch: true, samplesRecorded: true,
       servicePid: 4100, restartedServicePid: 4200, afterClose: lifecycleState, whileClosed: lifecycleState, restart: {servicePid: 4300, durable},
       firstServiceDurable: {...durable, status: 'connected'}, restartedServiceDurable: durable,
       firstConnection: connection(1, '0', [['1', false], ['2', false], ['3', false], ['4', false], ['5', false]], ['1', '2', '3', '4'], ['5'], 'server'),
-      secondConnection: connection(2, '4', [['5', true], ['6', false], ['7', false], ['8', false], ['9', false]], ['5', '6', '7', '8', '9'], [], 'client'),
-      thirdConnection: connection(3, '9', [['10', false]], ['10'], [], 'client'),
+      secondConnection: connection(2, '4', [['5', true], ['6', false], ['7', false], ['8', false], ['9', false], ['10', false]], ['5', '6', '7', '8', '9', '10'], [], 'client'),
+      thirdConnection: connection(3, '10', [['11', false], ['12', false], ['13', false]], ['11', '12', '13'], [], 'client'),
       trayExit: {launcherExit: 0, signal: null, exitMilliseconds: 88, requests: ['tray']}, restartLauncherExit: 0,
       simulator: {exit: {code: 0, signal: null}, report: {scenario: 'normal-delivery-runtime-journey', cancelled: false, matchesReplay: true, differences: [],
         connections: [1, 2, 3].map(index => ({connection: index, durable: true, closedBy: index === 1 ? 'disconnect' : 'client'}))}},
       files: {magic: 'SQLite format 3', applicationId: 1163154226, userVersion: 1, sidecars: [], syntheticBackups: false, historyDatabase: false, dataDirectory: false},
-      database: {integrity: ['ok'], foreignKeyViolations: 0, purpose: 'synthetic', acceptedOrigin: 'synthetic', acknowledgedThrough: '10',
-        sessions: [{game: 'ets2', origin: 'synthetic', committedThrough: '10', endReason: null, simulatorSession: true}],
+      database: {integrity: ['ok'], foreignKeyViolations: 0, purpose: 'synthetic', acceptedOrigin: 'synthetic', acknowledgedThrough: '13',
+        sessions: [{game: 'ets2', origin: 'synthetic', committedThrough: '13', endReason: null, simulatorSession: true}],
         rows: {trips: [{trip: 'trip@3', outcome: 'delivered', recordingCompleteness: 'partial'}], attributions: [{eventSeq: '8', trip: 'trip@3', attribution: 'trip'}],
           intervals: [{trip: 'trip@3', kind: 'discontinuity', detail: {cause: 'opened-at-load', atEventSeq: '3'}}, {trip: 'trip@3', kind: 'not-connected', detail: {cause: 'consumer-restart'}}],
-          events: Array.from({length: 10}, (_, index) => ({eventSeq: String(index + 1)}))}},
+          events: Array.from({length: 13}, (_, index) => ({eventSeq: String(index + 1)})),
+          // ET-015b PR-4: without the optional second-1000 row, which the terminated service stores only when its 5 s flush ran.
+          sampleRows: [{second: '1001', trip: null}, {second: '1002', trip: null}]}},
       retainedCrashProbe: ['ets2telemetry-probe-a'],
       restartMainEvents: [{event: 'APP_EXIT_REQUESTED', facts: {reason: 'app-quit'}}, {event: 'SERVICE_EXIT', detail: {code: 0}}, {event: 'APP_EXIT', detail: {code: 0}}],
       restartServiceEvents: [...started(4300, false), ...stopped(4300)]}};
@@ -219,9 +223,21 @@ function recordingCases() {
     invalid('WAL file left', ['recording', 'files', 'sidecars'], ['-wal']),
     invalid('integrity failure', ['recording', 'database', 'integrity'], ['row 3 missing from index']),
     invalid('history purpose', ['recording', 'database', 'purpose'], 'history'),
-    invalid('coverage short', ['recording', 'database', 'sessions', 0, 'committedThrough'], '9'),
-    invalid('acknowledged past coverage', ['recording', 'database', 'acknowledgedThrough'], '11'),
-    invalid('event missing', ['recording', 'database', 'rows', 'events'], Array.from({length: 9}, (_, index) => ({eventSeq: String(index + 1)}))),
+    invalid('coverage short', ['recording', 'database', 'sessions', 0, 'committedThrough'], '12'),
+    invalid('acknowledged past coverage', ['recording', 'database', 'acknowledgedThrough'], '14'),
+    invalid('event missing', ['recording', 'database', 'rows', 'events'], Array.from({length: 12}, (_, index) => ({eventSeq: String(index + 1)}))),
+    // ET-015b PR-4 sample rules.
+    {name: 'intact recording receipt with the optional sample', body: recordingReceipt(['recording', 'database', 'rows', 'sampleRows'],
+      [{second: '1000', trip: 'trip@3'}, {second: '1001', trip: null}, {second: '1002', trip: null}]), scenario: 'recording', code: 0, available: true, reason: null},
+    invalid('samples not recorded', ['recording', 'samplesRecorded'], false),
+    invalid('samples flag missing', ['recording', 'samplesRecorded']),
+    invalid('run B sample missing', ['recording', 'database', 'rows', 'sampleRows'], [{second: '1001', trip: null}]),
+    invalid('exit-flushed sample missing', ['recording', 'database', 'rows', 'sampleRows'], [{second: '1000', trip: 'trip@3'}, {second: '1002', trip: null}]),
+    invalid('paused second sampled', ['recording', 'database', 'rows', 'sampleRows'], [{second: '1001', trip: null}, {second: '1002', trip: null}, {second: '1003', trip: null}]),
+    invalid('sample after the delivery names the trip', ['recording', 'database', 'rows', 'sampleRows', 0, 'trip'], 'trip@3'),
+    invalid('sample rows missing', ['recording', 'database', 'rows', 'sampleRows']),
+    invalid('sample rows dropped', ['serviceEvents', SERVICE_EVENTS_A_APPEND], {pid: 4200, event: 'V1_SAMPLES_DROPPED', facts: {count: 1}}),
+    invalid('run B sample write retried', ['recording', 'restartServiceEvents', RUN_B_SERVICE_EVENTS_APPEND], {pid: 4300, event: 'V1_SAMPLES_RETRY', facts: {code: 'DISK_FULL', count: 1}}),
     invalid('trip still open', ['recording', 'database', 'rows', 'trips', 0, 'outcome'], 'open'),
     invalid('no consumer-restart interval', ['recording', 'database', 'rows', 'intervals', 1, 'detail', 'cause'], 'disconnected'),
     invalid('flush step timed out', ['serviceEvents', RECORDING_FLUSH_A, 'facts', 'outcome'], 'timeout'),
