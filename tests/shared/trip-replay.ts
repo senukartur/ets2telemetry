@@ -3,7 +3,7 @@
 // effects). It is a test adapter: it opens no database and writes no history. The model follows the scripted client of
 // each connection: a commit the client does not make is not made here either, and the reducer state is then kept (T3).
 import type {EventRecord, ServerMessage} from '../../packages/contracts/src/protocol-v1';
-import type {CompletenessInterval} from '../../packages/storage/src/api';
+import type {CompletenessInterval, SampleAppendResult, SampleInput} from '../../packages/storage/src/api';
 import {initialTripState, jobKey, normalizeV1State, stepTrip, type TripEffect, type TripInput, type TripSeed, type TripState} from '../../packages/telemetry-core/src/index';
 import type {ReplayResult} from '../../tools/telemetry-simulator/src/v1/replay';
 
@@ -21,11 +21,13 @@ export interface StoredTrip {
 }
 export interface StoredAttribution {pluginSessionId: string; eventSeq: string; tripUuid: string | null; attribution: string}
 export type StoredInterval = CompletenessInterval & {pluginSessionId: string};
+export type StoredSample = SampleInput & {pluginSessionId: string};
 
 /**
  * Rows keyed UNIQUE(plugin_session_id, event_seq) with contiguous coverage per session. Effects are applied only when
  * an event or gap is inserted for the first time; a duplicate event or a covered gap stores nothing. Every rule of
- * docs/storage.md "Trip effects" that the reducer could break is checked and throws.
+ * docs/storage.md "Trip effects" that the reducer could break is checked and throws. ET-015b: sample rows of a known
+ * session, with docs/storage.md's `uniqueSeconds` rule and the sample trip-reference rule.
  */
 export class TripStorageModel {
   private coverage = new Map<string, {game: 'ets2' | 'ats'; through: bigint; lastUtcMs: number | null}>();
@@ -37,9 +39,41 @@ export class TripStorageModel {
   readonly trips: StoredTrip[] = [];
   readonly attributions: StoredAttribution[] = [];
   readonly intervals: StoredInterval[] = [];
+  readonly samples: StoredSample[] = [];
   readonly statuses = {committed: 0, duplicate: 0, covered: 0};
 
   committedThrough(session: string): string { return (this.coverage.get(session)?.through ?? 0n).toString(); }
+  /** Stores a session at its welcome, as upsertSession does, so samples may name it before its first commit. */
+  openSession(session: string, game: 'ets2' | 'ats'): void {
+    const known = this.coverage.get(session);
+    if (known === undefined) this.coverage.set(session, {game, through: 0n, lastUtcMs: null});
+    else if (known.game !== game) throw new Error('Session game changed');
+  }
+  /**
+   * appendSamples (docs/storage.md, ET-015b H6): every row must name a stored trip of the session's game or none; with
+   * `uniqueSeconds` a row whose source second floor(monotonicNs / 1e9) is at or below the last accepted second of its
+   * clock (seeded with the session's latest stored row) is skipped.
+   */
+  appendSamples(session: string, rows: SampleInput[], options: {uniqueSeconds?: boolean} = {}): SampleAppendResult {
+    const known = this.coverage.get(session);
+    if (known === undefined) throw new Error(`Samples of unknown session ${session}`);
+    for (const row of rows) {
+      if (row.tripUuid === null || row.tripUuid === undefined) continue;
+      const trip = this.trips.find(t => t.tripUuid === row.tripUuid);
+      if (trip === undefined || trip.game !== known.game) throw new Error(`Sample names trip ${row.tripUuid} that is not of this session's game`);
+    }
+    const last = new Map<string, bigint>(), latest = this.samples.filter(s => s.pluginSessionId === session).at(-1);
+    if (options.uniqueSeconds && latest) last.set(latest.sourceClockId, BigInt(latest.monotonicNs) / 1_000_000_000n);
+    let appended = 0;
+    for (const row of rows) {
+      const second = BigInt(row.monotonicNs) / 1_000_000_000n, previous = last.get(row.sourceClockId);
+      if (options.uniqueSeconds && previous !== undefined && second <= previous) continue;
+      if (options.uniqueSeconds) last.set(row.sourceClockId, second);
+      this.samples.push({pluginSessionId: session, ...structuredClone(row)});
+      appended++;
+    }
+    return {appended, skipped: rows.length - appended};
+  }
   /** The stored open trips of a game, as a cold start reads them (TripSeed). */
   /** An open trip whose session's last stored job event, after the trip opened, is a clear: it awaits its outcome. */
   private cleared(t: StoredTrip): boolean {

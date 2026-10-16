@@ -5,7 +5,7 @@
 // tests/fixtures/recording/<id>.rows.expected.json where a derived transport adds the reconnection the kill needs.
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
-import {writeFileSync} from 'node:fs';
+import {readFileSync, writeFileSync} from 'node:fs';
 import path from 'node:path';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 import {readFixtureFile} from '../../tools/telemetry-simulator/src/fixture-file';
@@ -13,7 +13,7 @@ import {reactiveDifferences, serveV1Reactive, type ReactiveServeOptions} from '.
 import {replayV1, scenarioSource} from '../../tools/telemetry-simulator/src/v1/replay';
 import {scenarioPath} from '../shared/simulator-v1-expected';
 import {ok, readOnly, workspace} from './helpers';
-import {recordingExpected, storedRows, tripExpected, withTransport} from './recording-helpers';
+import {recordingExpected, storedRows, storedSamples, tripExpected, withTransport} from './recording-helpers';
 
 /** Liveness bound for a child line; never a measured duration. */
 const CHILD_LIVENESS_MS = 20_000;
@@ -26,7 +26,7 @@ beforeEach(async () => { ws = await workspace(); });
 afterEach(async () => { await ws.dispose(); });
 
 type Barrier = {kind: 'before' | 'after'; eventSeq?: string; commit?: number} | {kind: 'inside'; eventSeq: string} | null;
-interface ChildConfig {barrier: Barrier; mode?: 'worker' | 'in-process'; maxConnections?: number; commitAfterFirstEnd?: boolean}
+interface ChildConfig {barrier: Barrier; mode?: 'worker' | 'in-process'; maxConnections?: number; commitAfterFirstEnd?: boolean; sampleFlushMs?: number; stopAfterDisconnect?: boolean}
 /** One service process. `until` resolves at the first stdout line that matches; stderr must stay empty. */
 function service(endpoint: string, config: ChildConfig, name: string) {
   const file = path.join(ws.directory, `${name}.json`);
@@ -193,6 +193,41 @@ describe('S3 killed recording process (REG-006)', () => {
     expect(trips.map(t => [t.jobConfigurationEventSeq, t.outcome, t.closeReason])).toEqual(final);
     if (id === 'normal-delivery') expect(trips[0].outcomeEventSeq).toBe('8');
     expect(two.lines.filter(l => l.startsWith('committed')).at(-1)).toBe(`committed ${total} ${total}`);
+    expect(checks()).toEqual({integrity: 'ok', foreignKeys: []});
+  }, 60_000);
+
+  // (e) ET-015b (H9, REG-006): one-second samples across a killed process. The first process flushes samples after 1 ms,
+  // so some of seconds 1000-1005 may be stored when it is terminated before committing eventSeq 6 (simulation.started at
+  // 9,000 ms); which ones depends on timing, and the rest are lost with the process, as H9 allows. Every stored row must
+  // equal its hand-written row in one-second-samples.rows.expected.json. The cold-started second process takes the
+  // reconnection at 15,500 ms, whose checkpoint is its baseline, and its orderly stop after that connection stores 1016
+  // (in the resumed trip@3) and 1017 (after the delivery).
+  it('(e) one-second samples: a killed process loses at most its pending rows, and the restarted one appends later seconds once', async () => {
+    const input = readFixtureFile(path.resolve('tests/fixtures/recording/one-second-samples.json')) as Json, replay = replayV1(input);
+    const session = scenarioSource(replay.scenario).pluginSessionId, seed = (input as {seed: string}).seed;
+    const expected = (JSON.parse(readFileSync(path.resolve('tests/fixtures/recording/one-second-samples.rows.expected.json'), 'utf8')) as {samples: {monotonicNs: string}[]}).samples;
+    const server = await serveV1Reactive(input, {scale: 0, awaitScriptedAcks: true}), children: Child[] = [];
+    try {
+      const one = service(server.endpoint, {barrier: {kind: 'before', eventSeq: '6'}, maxConnections: 1, sampleFlushMs: 1}, 'first'); children.push(one);
+      await one.until(line => line === 'barrier before 6');
+      await one.terminate();
+      const two = service(server.endpoint, {barrier: null, stopAfterDisconnect: true}, 'second'); children.push(two);
+      await two.until(line => line === 'stopped');
+      await two.terminate();
+      await server.done;
+      for (const child of children) expectAcksAfterCommits(child);
+    } finally {
+      await Promise.all(children.map(c => c.terminate().catch(() => undefined)));
+      await server.stop();
+    }
+    const shaped = await storedSamples(ws, seed, session) as {monotonicNs: string}[];
+    const second = (row: {monotonicNs: string}) => BigInt(row.monotonicNs) / 1_000_000_000n;
+    const first = shaped.filter(row => second(row) <= 1005n), later = shaped.filter(row => second(row) > 1005n);
+    // The first process's rows are a prefix of 1000-1005, in order; the second process's rows are exactly 1016 and 1017.
+    expect(first).toEqual(expected.slice(0, first.length));
+    expect(later).toEqual(expected.filter(row => ['1016', '1017'].includes(String(second(row)))));
+    expect(readOnly(ws.database, db => db.prepare(`SELECT count(*) FROM (SELECT source_clock_ref, monotonic_ns / 1000000000 AS s FROM samples GROUP BY source_clock_ref, s HAVING count(*) > 1)`)
+      .pluck().get())).toBe(0);
     expect(checks()).toEqual({integrity: 'ok', foreignKeys: []});
   }, 60_000);
 });

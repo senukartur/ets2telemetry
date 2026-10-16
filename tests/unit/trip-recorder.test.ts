@@ -8,7 +8,10 @@ import {createHash} from 'node:crypto';
 import {EventEmitter} from 'node:events';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import {decodePayload, encodeFrame, type ClientMessage, type ServerMessage, type SourceIdentity} from '../../packages/contracts/src/protocol-v1';
-import type {CommitResult, CompletenessInterval, CompletenessOptions, EventRow, Result, StorageErrorCode, TripEffect, TripList, TripPage, TripRecord} from '../../packages/storage/src/api';
+import type {
+  CommitResult, CompletenessInterval, CompletenessOptions, EventRow, Result, SampleAppendOptions, SampleAppendResult, SampleInput, StorageErrorCode, TripEffect, TripList, TripPage,
+  TripRecord
+} from '../../packages/storage/src/api';
 import {storageError} from '../../packages/storage/src/errors';
 import {canonicalJson} from '../../packages/telemetry-core/src/index';
 import type {CoverageMessage, DurableSink, WelcomeMessage} from '../../apps/desktop/src/durable-sink';
@@ -26,6 +29,8 @@ const uuid = (session: string, eventSeq: string) => {
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`;
 };
 const ok = <T>(value: T): Promise<Result<T>> => Promise.resolve({ok: true, value});
+/** The source second of a capture time, floor(ns / 1e9) (H3). */
+const second = (ns: string) => (BigInt(ns) / 1_000_000_000n).toString();
 const UNKNOWN_MODE = {mode: 'unknown', method: 'none', confidence: 'none'} as const;
 
 class FakeSocket extends EventEmitter implements TelemetrySocket {
@@ -53,13 +58,28 @@ class ModelStorage implements TripRecorderClient {
   readonly failures = new Map<string, StorageErrorCode[]>();
   /** Hold the first commit of the item ending at this eventSeq until `release`. */
   holdAt?: string;
+  /** ET-015b: scripted failures of the next appendSamples calls, and every sample write in order (`samples <seconds>` or `loss <count>`). */
+  readonly sampleFailures: StorageErrorCode[] = [];
+  /** Scripted failures of the next `sample-loss` recordCompleteness calls (review pass 1). */
+  readonly lossFailures: StorageErrorCode[] = [];
+  readonly sampleWrites: string[] = [];
+  readonly sampleOptions: unknown[] = [];
   private readonly held: (() => void)[] = [];
   private readonly rows = new Map<string, EventRow[]>();
   get holding(): number { return this.held.length; }
   release(): void { this.held.shift()?.(); }
   upsertSession(input: {message: unknown}) {
     const welcome = input.message as WelcomeMessage;
+    this.model.openSession(welcome.source.pluginSessionId, welcome.source.game);
     return ok({created: !this.rows.has(welcome.source.pluginSessionId), committedThroughEventSeq: this.model.committedThrough(welcome.source.pluginSessionId)});
+  }
+  appendSamples(pluginSessionId: string, rows: SampleInput[], options?: SampleAppendOptions): Promise<Result<SampleAppendResult>> {
+    this.sampleOptions.push(options);
+    const failure = this.sampleFailures.shift();
+    if (failure) return Promise.resolve({ok: false, error: storageError(failure)});
+    const value = this.model.appendSamples(pluginSessionId, rows, options);
+    this.sampleWrites.push(`samples ${rows.map(row => second(row.monotonicNs)).join(',')}`);
+    return ok(value);
   }
   committedThrough(pluginSessionId: string) { return ok(this.model.committedThrough(pluginSessionId)); }
   commitEvent(input: {message: unknown; effects?: TripEffect[]}) { return this.commit(input.message as CoverageMessage, input.effects); }
@@ -82,9 +102,12 @@ class ModelStorage implements TripRecorderClient {
     } catch (error) { this.violations.push(String(error)); throw error; }
   }
   recordCompleteness(pluginSessionId: string, interval: CompletenessInterval, options?: CompletenessOptions): Promise<Result<undefined>> {
+    const lossFailure = interval.kind === 'sample-loss' ? this.lossFailures.shift() : undefined;
+    if (lossFailure) return Promise.resolve({ok: false, error: storageError(lossFailure)});
     const same = (a: CompletenessInterval) => (a.tripUuid ?? null) === (interval.tripUuid ?? null) && a.kind === interval.kind && a.firstEventSeq === interval.firstEventSeq &&
       a.lastEventSeq === interval.lastEventSeq && canonicalJson(a.detail ?? null) === canonicalJson(interval.detail ?? null);
     if (!(options?.ifAbsent && this.intervals.some(i => i.pluginSessionId === pluginSessionId && same(i.interval)))) this.intervals.push({pluginSessionId, interval: structuredClone(interval)});
+    if (interval.kind === 'sample-loss') this.sampleWrites.push(`loss ${String(interval.detail?.count)}`);
     return ok(undefined);
   }
   listTrips(page: TripPage = {}): Promise<Result<TripList>> {
@@ -290,7 +313,7 @@ describe('ET-015a trip recorder in the v1 ingestion pipeline', () => {
         if (m.kind !== 'event' || m.data.eventSeq !== '2') return recorder.commit(m, context);
         const skipped = structuredClone(m); skipped.data.eventSeq = '3'; return recorder.commit(skipped, context);
       },
-      observe: m => recorder.observe(m)
+      observe: (m, context) => recorder.observe(m, context)
     };
     start(storage, skipping); connectLatest();
     const s = new Script(ETS2_A);
@@ -353,5 +376,116 @@ describe('ET-015a trip recorder in the v1 ingestion pipeline', () => {
     storage.release(); await settle();
     expect(storage.model.trips.map(t => t.startedUtcMs)).toEqual([received]);
     expect(storage.attempts[0].effects[0]).toMatchObject({kind: 'trip.open', startedUtcMs: 1_850_000_000_000});
+  });
+});
+
+describe('ET-015b one-second samples through the trip recorder', () => {
+  /** The stored samples as [source second, trip UUID or null, UTC label]. */
+  const stored = (storage: ModelStorage) => storage.model.samples.map(row => [second(row.monotonicNs), row.tripUuid ?? null, row.utcMs]);
+
+  it('S1: a sample names the trip that a committed event earlier in the FIFO opened, and is written with uniqueSeconds (H2, H6, H7, REG-001)', async () => {
+    const storage = new ModelStorage(); storage.holdAt = '2';
+    const recorder = start(storage); connectLatest();
+    const s = new Script(ETS2_A), trip = uuid(ETS2_A, '2');
+    // The checkpoint (second 1000) is the session's baseline; the snapshot after the start (second 1001) has no trip yet.
+    latest().feed(s.welcome(), s.checkpoint(null), s.event(r.started()), s.snapshot({}, 200), s.event(r.jobConfigured()));
+    // This snapshot (second 1002) arrives while job.configured is in flight, so it is sampled only after that commit.
+    latest().feed(s.snapshot({}, 500));
+    await settle();
+    expect([storage.holding, recorder.samples.pending()]).toEqual([1, {rows: 1, losses: 0}]);
+    storage.release(); await settle();
+    expect(recorder.samples.pending()).toEqual({rows: 2, losses: 0});
+    // The rows wait for the 5 s flush timer, which started with the first row.
+    expect(storage.model.samples).toEqual([]);
+    await advance(5_000);
+    expect(stored(storage)).toEqual([['1001', null, BASE_UTC + 1_200], ['1002', trip, BASE_UTC + 2_700]]);
+    expect([storage.sampleOptions, storage.sampleWrites, storage.violations, latest().acks]).toEqual([[{uniqueSeconds: true}], ['samples 1001,1002'], [], ['1', '2']]);
+  });
+
+  it('S2: never names a trip whose opening commit failed; the reconnection samples a fresh checkpoint without it (H4, H7, REG-003, REG-007)', async () => {
+    const storage = new ModelStorage(); storage.failures.set('2', ['DISK_FULL']);
+    start(storage); connectLatest();
+    const s = new Script(ETS2_A), trip = uuid(ETS2_A, '2');
+    latest().feed(s.welcome(), s.checkpoint(null), s.event(r.started()));
+    const job = s.event(r.jobConfigured(), {advanceMs: 2_000});
+    // The snapshot behind the failed commit is dropped with the connection's queued work: no row for second 1003.
+    latest().feed(job, s.snapshot({}, 500));
+    await settle();
+    expect([latest().destroyed, latest().acks, storage.model.samples]).toEqual([true, ['1'], []]);
+    await advance(250); connectLatest();
+    // The reconnection's checkpoint carries a later SDK boundary, so it is fresh: second 1003, before the redelivered job.
+    latest().feed(s.welcome(), s.checkpoint(null, 1, {boundaryOrder: '200'}), s.redeliver(job), s.snapshot({boundaryOrder: '210'}, 1_000));
+    await settle(); await advance(5_000);
+    expect(stored(storage)).toEqual([['1003', null, BASE_UTC], ['1004', trip, BASE_UTC + 4_500]]);
+    expect([latest().acks, storage.violations]).toEqual([['2'], []]);
+  });
+
+  it('S3: labels a sample without a capture UTC label with the receipt label taken at decode (H13)', async () => {
+    const storage = new ModelStorage(); storage.holdAt = '1';
+    start(storage); connectLatest();
+    const s = new Script(ETS2_A), decoded = clock.utc;
+    latest().feed(s.welcome(), s.checkpoint(null), s.event(r.started()), s.snapshot({captureUtcUnixMs: {available: false, reason: 'not-observed'}}, 500));
+    await settle();
+    clock.utc += 60_000;
+    storage.release(); await settle(); await advance(5_000);
+    expect(stored(storage)).toEqual([['1001', null, decoded]]);
+  });
+
+  it('S4: writes the sample-loss interval of rows dropped beyond 300 before the next rows (H9, REG-007)', async () => {
+    const storage = new ModelStorage(); storage.sampleFailures.push('DISK_FULL');
+    const recorder = start(storage); connectLatest();
+    const s = new Script(ETS2_A);
+    latest().feed(s.welcome(), s.checkpoint(null));
+    // Seconds 1001-1302 are all observed before the first batch runs: 300 rows are held and the newest two are dropped.
+    for (let n = 1; n <= 302; n++) latest().feed(s.snapshot({}, 1_000));
+    await settle();
+    // That batch failed. The run is still open while the buffer is full, so no loss interval was written yet.
+    expect([recorder.samples.pending(), recorder.samples.dropped(), storage.model.samples, storage.sampleWrites]).toEqual([{rows: 300, losses: 1}, 2, [], []]);
+    expect(logs.filter(([event]) => event.startsWith('V1_SAMPLES'))).toEqual([['V1_SAMPLES_DROPPED', {count: 1}], ['V1_SAMPLES_DROPPED', {count: 2}],
+      ['V1_SAMPLES_RETRY', {code: 'DISK_FULL', count: 1}]]);
+    await advance(5_000);
+    const batch = (first: number) => `samples ${Array.from({length: 60}, (_, i) => first + i).join(',')}`;
+    // The first stored batch frees room and so ends the run; the next batch writes its one interval before its rows.
+    expect(storage.sampleWrites).toEqual([batch(1001), 'loss 2', batch(1061), batch(1121), batch(1181), batch(1241)]);
+    expect(storage.intervals).toEqual([{pluginSessionId: ETS2_A, interval: {tripUuid: null, kind: 'sample-loss', startUtcMs: BASE_UTC + 301_000, endUtcMs: BASE_UTC + 302_000,
+      startMonotonicNs: '1301000000000', endMonotonicNs: '1302000000000', sourceClockId: s.clockId, detail: {cause: 'sample-backlog', count: 2}}}]);
+    expect([recorder.samples.pending(), storage.model.samples.length, latest().destroyed]).toEqual([{rows: 0, losses: 0}, 300, false]);
+  });
+
+  it('S5: writes the pending rows at the stop, after the commit in flight, without an ACK (H11)', async () => {
+    const storage = new ModelStorage();
+    start(storage); connectLatest();
+    const s = new Script(ETS2_A);
+    latest().feed(s.welcome(), s.checkpoint(null), s.snapshot({}, 1_000), s.snapshot({}, 1_000));
+    storage.holdAt = '1'; latest().feed(s.event(r.started()));
+    await settle(); expect(storage.holding).toBe(1);
+    const socket = latest(), stopping = ingestion!.stop(); ingestion = undefined;
+    await settle(); expect(storage.model.samples).toEqual([]);
+    storage.release(); await stopping;
+    expect([stored(storage), socket.acks, logs.filter(([event]) => event === 'V1_SAMPLES_EXIT')])
+      .toEqual([[['1001', null, BASE_UTC + 1_000], ['1002', null, BASE_UTC + 2_000]], [], [['V1_SAMPLES_EXIT', {rows: 2, losses: 0, code: 'WRITTEN'}]]]);
+  });
+
+  it('S6: stores one sample-loss interval for one contiguous outage across failed retries of rows and of the interval (H9, H12, review pass 1)', async () => {
+    const storage = new ModelStorage(); storage.sampleFailures.push('DISK_FULL', 'DISK_FULL', 'DISK_FULL'); storage.lossFailures.push('DISK_FULL', 'DISK_FULL');
+    const recorder = start(storage); connectLatest();
+    const s = new Script(ETS2_A);
+    latest().feed(s.welcome(), s.checkpoint(null));
+    // Seconds 1001-1300 are held, 1301-1302 dropped; the first batch fails.
+    for (let n = 1; n <= 302; n++) latest().feed(s.snapshot({}, 1_000));
+    await settle();
+    // The outage goes on: each retry fails while seconds 1303-1307 are dropped into the same open run.
+    for (const more of [3, 2]) {
+      for (let n = 0; n < more; n++) latest().feed(s.snapshot({}, 1_000));
+      await advance(5_000);
+    }
+    expect([recorder.samples.pending(), recorder.samples.dropped(), storage.intervals]).toEqual([{rows: 300, losses: 1}, 7, []]);
+    // The fourth attempt stores rows 1001-1060, which ends the run; its interval then fails twice and is retried as it is.
+    await advance(5_000);
+    expect([storage.sampleWrites, recorder.samples.pending()]).toEqual([[`samples ${Array.from({length: 60}, (_, i) => 1001 + i).join(',')}`], {rows: 240, losses: 1}]);
+    await advance(5_000); await advance(5_000);
+    expect(storage.intervals).toEqual([{pluginSessionId: ETS2_A, interval: {tripUuid: null, kind: 'sample-loss', startUtcMs: BASE_UTC + 301_000, endUtcMs: BASE_UTC + 307_000,
+      startMonotonicNs: '1301000000000', endMonotonicNs: '1307000000000', sourceClockId: s.clockId, detail: {cause: 'sample-backlog', count: 7}}}]);
+    expect([recorder.samples.pending(), storage.model.samples.length, latest().destroyed]).toEqual([{rows: 0, losses: 0}, 300, false]);
   });
 });

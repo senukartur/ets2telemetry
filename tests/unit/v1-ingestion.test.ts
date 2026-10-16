@@ -416,6 +416,26 @@ describe('ET-006b protocol v1 ingestion', () => {
     await settle(); expect(live.trace).toEqual([]);
   });
 
+  it('labels each durable checkpoint and snapshot with utcNow() at its decode, not when it is observed (H13)', async () => {
+    let utc = 1_900_000_000_000;
+    const labels: string[] = [];
+    class LabellingSink extends ObservingSink {
+      override observe(m: Extract<ServerMessage, {kind: 'checkpoint' | 'snapshot'}>, context?: {receivedUtcMs: number}): Result<undefined> {
+        labels.push(`${m.kind} ${context?.receivedUtcMs}`); return super.observe(m);
+      }
+    }
+    const sink = new LabellingSink(); sink.hold = true;
+    start({sink, utcNow: () => utc}); connectLatest();
+    latest().feed(frame('welcome'), frame('checkpoint'), frame('event-job-configured'));
+    utc += 5_000;
+    // The snapshot is decoded now but observed only after the held commit before it.
+    latest().feed(frame('snapshot'));
+    utc += 60_000;
+    await settle(); expect(labels).toEqual(['checkpoint 1900000000000']);
+    sink.hold = false; sink.held.shift()!(); await settle();
+    expect(labels).toEqual(['checkpoint 1900000000000', 'snapshot 1900000005000']);
+  });
+
   it('stopSource() ends the source without a later ACK; flush() waits for the commit in flight (R14)', async () => {
     const sink = new Sink(); sink.hold = true; start({sink}); connectLatest();
     latest().feed(frame('welcome'), frame('checkpoint'), frame('event-job-configured'));

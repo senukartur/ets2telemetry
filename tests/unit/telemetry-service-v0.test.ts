@@ -537,6 +537,40 @@ describe('ET-015a recording gate in the service (R3, R10, R14)', () => {
       expect(sockets).toHaveLength(1);
     } finally {connect.mockRestore(); f.restore(); vi.unstubAllEnvs();}
   });
+  it('writes the pending one-second samples in the recording-flush step, before the database closes and inside 2,500 ms (ET-015b, H11)', async () => {
+    vi.stubEnv('ETS2TELEMETRY_RECORDING', 'synthetic:t'); vi.stubEnv('ETS2TELEMETRY_SOURCE_PIPE_V1', v1Endpoint);
+    const sockets: TestSocket[] = [];
+    const connect = vi.spyOn(net, 'connect').mockImplementation(() => {const socket = new TestSocket(); sockets.push(socket); return socket as unknown as net.Socket;});
+    const order: string[] = [], appended: unknown[][] = [];
+    const answer = (value: unknown) => Promise.resolve({ok: true, value});
+    const client = {
+      upsertSession: () => answer({created: true, committedThroughEventSeq: '0'}), committedThrough: () => answer('0'),
+      listTrips: () => answer({trips: [], nextCursor: null}), getEvent: () => answer(undefined), listEvents: () => answer([]), recordCompleteness: () => answer(undefined),
+      appendSamples: (session: string, rows: {monotonicNs: string}[], options: unknown) => {
+        order.push('appendSamples'); appended.push([session, rows.map(row => row.monotonicNs), options]);
+        return answer({appended: rows.length, skipped: 0});
+      }
+    } as unknown as StorageClient;
+    const f = await stoppedService(stopProbe, () => {order.push('history-close'); return Promise.resolve();}, {realV1: true});
+    try {
+      f.history.state = 'open'; f.history.client = client;
+      f.parent.emit('message', {data: {type: 'select', source: 'synthetic'}, ports: []});
+      const socket = sockets[0];
+      socket.emit('connect');
+      // The checkpoint is the baseline; two fresh, running snapshots in seconds 1001 and 1002 become pending rows.
+      const s = new Script(ETS2_A);
+      for (const message of [s.welcome(), s.checkpoint(null), s.snapshot({}, 1_000), s.snapshot({}, 1_000)]) socket.emit('data', encodeFrameV1(message));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(appended).toEqual([]);
+      f.stop(); await vi.advanceTimersByTimeAsync(0);
+      // No 5 s timer was needed: the flush step wrote both rows at once, then the storage phase closed the database.
+      expect(appended).toEqual([[ETS2_A, ['1001000000000', '1002000000000'], {uniqueSeconds: true}]]);
+      expect(order).toEqual(['appendSamples', 'history-close']);
+      expect(f.steps().find(step => step.name === 'recording-flush')).toMatchObject({phase: 'flush', outcome: 'ok'});
+      expect(f.log.mock.calls.filter(call => call[0] === 'V1_SAMPLES_EXIT').map(call => call[2] as unknown)).toEqual([{rows: 2, losses: 0, code: 'WRITTEN'}]);
+      expect(f.stops()).toEqual([{type: 'stopped', clean: true}]); expect(f.exit).toHaveBeenCalledExactlyOnceWith(0);
+    } finally {connect.mockRestore(); f.restore(); vi.unstubAllEnvs();}
+  });
 });
 it('waits for the history database to close before the single stopped report, and reports a failed close as unclean', async () => {
   let finish!: () => void;

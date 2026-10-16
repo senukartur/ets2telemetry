@@ -18,6 +18,9 @@
 // process held at a barrier never takes a later scripted connection that belongs to the next process. With
 // `commitAfterFirstEnd`, no commit starts before the first connection has ended, so the server has written that whole
 // connection (and retains everything unacknowledged) before any barrier can be reached.
+// ET-015b: `sampleFlushMs` sets the pipeline's sample flush delay, and with `stopAfterDisconnect` the process stops its
+// ingestion at its first `disconnected` (the final sample write included) and then reports:
+//   stopped                             the orderly stop finished
 'use strict';
 const {readFileSync, writeSync} = require('node:fs');
 const net = require('node:net');
@@ -56,7 +59,8 @@ async function openStorage() {
       commitEvent: input => Promise.resolve(storage.commitEvent(input, options(input.message))), commitGap: input => Promise.resolve(storage.commitGap(input, options(input.message))),
       recordCompleteness: (session, interval, completeness) => Promise.resolve(storage.recordCompleteness(session, interval, completeness)),
       listTrips: page => Promise.resolve(storage.listTrips(page)), getEvent: (session, eventSeq) => Promise.resolve(storage.getEvent(session, eventSeq)),
-      listEvents: (session, page) => Promise.resolve(storage.listEvents(session, page))
+      listEvents: (session, page) => Promise.resolve(storage.listEvents(session, page)),
+      appendSamples: (session, rows, sampleOptions) => Promise.resolve(storage.appendSamples(session, rows, sampleOptions))
     };
   }
   const {StorageClient, workerHandle} = require(path.join(bundles, 'storage-client.cjs'));
@@ -84,7 +88,9 @@ async function main() {
       if (hit(message, count) && barrier.kind === 'after') await stop(label);
       return result;
     },
-    observe: message => recorder.observe(message),
+    observe: (message, context) => recorder.observe(message, context),
+    // ET-015b: the recorder's pending one-second samples, written by the pipeline's samples op and at stop.
+    samples: recorder.samples,
     async restoreLoss(session, stored, acked) { if (frozen) await forever(); return recorder.restoreLoss(session, stored, acked); }
   };
   let connections = 0;
@@ -101,10 +107,14 @@ async function main() {
     };
     return socket;
   };
-  let previous;
-  const ingestion = new V1Ingestion({connect, sink, onState: state => {
+  let previous, stopping = false;
+  const ingestion = new V1Ingestion({connect, sink, sampleFlushMs: config.sampleFlushMs, onState: state => {
     // Only a connection that delivered a checkpoint counts; a refused connection attempt has no observation yet.
-    if (state.status === 'disconnected' && previous !== 'disconnected' && state.observation) writeSync(1, 'disconnected\n');
+    if (state.status === 'disconnected' && previous !== 'disconnected' && state.observation) {
+      writeSync(1, 'disconnected\n');
+      // After the state callback returns, so the closing connection finishes first.
+      if (config.stopAfterDisconnect && !stopping) { stopping = true; setImmediate(() => void ingestion.stop().then(() => write('stopped'))); }
+    }
     previous = state.status;
   }});
   ingestion.select('synthetic', config.endpoint);

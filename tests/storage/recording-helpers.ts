@@ -126,6 +126,8 @@ export interface RecordingPlan {
   between?: () => Promise<void>;
   /** Called after every state change of a service, for tests that react to a status (for example a release). */
   onState?: (state: V1SourceState, service: Service, mark: (label: string) => void) => void;
+  /** ET-015b: the sample flush delay and batch size of every service; the production values when omitted. */
+  sampleFlushMs?: number; sampleBatchRows?: number;
   /**
    * Holds back the first connection's stream after the server frame of the event with this eventSeq until `until`
    * resolves (see ClientSocket), so that a storage state, such as a held commit, is reached before later items arrive.
@@ -279,11 +281,13 @@ export async function runRecording(input: Json, database: {path: string; backups
       upsertSession: input => client.upsertSession(input), committedThrough: session => client.committedThrough(session),
       commitEvent: input => scripted(() => client.commitEvent(input)), commitGap: input => scripted(() => client.commitGap(input)),
       recordCompleteness: (session, interval, options) => client.recordCompleteness(session, interval, options),
-      listTrips: page => client.listTrips(page), getEvent: (session, eventSeq) => client.getEvent(session, eventSeq), listEvents: (session, page) => client.listEvents(session, page)
+      listTrips: page => client.listTrips(page), getEvent: (session, eventSeq) => client.getEvent(session, eventSeq), listEvents: (session, page) => client.listEvents(session, page),
+      appendSamples: (session, rows, options) => client.appendSamples(session, rows, options)
     };
     const recorder = new TripRecorderSink(storage), states: V1SourceState[] = [], logs: [string, unknown][] = [];
     const service: Service = {ingestion: undefined as unknown as V1Ingestion, recorder, client, worker, exit, states, logs, control: channel?.port1};
-    service.ingestion = new V1Ingestion({connect, sink: recorder, maxPendingCommits: first ? plan.maxPendingCommits : undefined, diagnose: (event, facts) => logs.push([event, facts]),
+    service.ingestion = new V1Ingestion({connect, sink: recorder, maxPendingCommits: first ? plan.maxPendingCommits : undefined, sampleFlushMs: plan.sampleFlushMs,
+      sampleBatchRows: plan.sampleBatchRows, diagnose: (event, facts) => logs.push([event, facts]),
       onState: s => { states.push(s); try { plan.onState?.(s, service, label => timeline.push(label)); } catch (error) { fail(error); } }});
     services.push(service);
     service.ingestion.select('synthetic', server.endpoint);
@@ -308,3 +312,16 @@ export async function runRecording(input: Json, database: {path: string; backups
 
 /** The replay of a scenario, for `reactiveDifferences`. */
 export const replayOf = (input: Json) => replayV1(input);
+
+/**
+ * ET-015b: the stored samples of a plugin session in insertion order, in the shape of the rows in
+ * tests/fixtures/recording/one-second-samples.rows.expected.json, with labels for seeded identifiers.
+ */
+export async function storedSamples(ws: {open(): Promise<Storage>}, seed: string, pluginSessionId: string): Promise<unknown[]> {
+  const reader = await ws.open();
+  const rows = ok(reader.listSamples({pluginSessionId}, {limit: 3600}));
+  reader.close();
+  const map = labels(seed);
+  const shaped = rows.map(({id, tripUuid, ...row}) => { void id; return {...row, trip: tripUuid}; });
+  return JSON.parse(JSON.stringify(shaped), (_key, v: unknown) => typeof v === 'string' && map.has(v) ? map.get(v) : v) as unknown[];
+}

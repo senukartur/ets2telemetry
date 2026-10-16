@@ -415,3 +415,10 @@ Storage gains only the `appendSamples` option `uniqueSeconds`, a `skipped` count
 ET-015b PR-1 implementation update on October 16, 2026: `appendSamples` gains the `uniqueSeconds` option and returns `{appended, skipped}`. With the option, one transaction skips each row whose source second does not advance past the session's latest stored row on the same clock or an earlier row of the batch. The test-only fault worker can fail or hold sample batches. Nothing outside tests writes samples yet. See [ET-015b validation](docs/validation/et-015b.md).
 
 ET-015b PR-2 implementation update on October 16, 2026: `packages/telemetry-core/src/history-samples.ts` adds the pure `sampleReading`. It picks the first fresh, running reading in each source-clock second, treats a plugin session's first reading as a baseline, and never fills missed seconds. A sample references a trip only while that game's trip view is active. Nothing calls it until PR-3. See [trips](docs/trips.md) and [ET-015b validation](docs/validation/et-015b.md).
+
+ET-015b PR-3 implementation update on October 16, 2026:
+- **Sampling.** The trip recorder samples durable readings at the head of the DurableDelivery FIFO with `sampleReading` and keeps the rows in a bounded buffer: 300 rows, with newer rows dropped. Each contiguous outage becomes one session-level `sample-loss` interval, and at most 16 loss runs are kept per session and clock.
+- **Writes.** A low-priority `samples` op writes at most 60 rows through `appendSamples` with `uniqueSeconds`. It is queued after 5 s or at 60 rows, and only one is queued or running at a time. It never produces or advances an ACK.
+- **Exit.** The existing 500 ms `recording-flush` step writes the pending rows and loss intervals after the commit in flight.
+- **Failures.** Retryable failures keep the rows. Unavailable failures make the service live-only and discard them. Diagnostics are the `V1_SAMPLES_*` codes.
+- **Production is unchanged.** `GAME_HISTORY_RECORDING` stays `false`. See [the telemetry service v1 ingestion](docs/telemetry-service-v1.md) and [ET-015b validation](docs/validation/et-015b.md).

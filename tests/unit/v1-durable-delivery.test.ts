@@ -5,13 +5,14 @@
 // REG-011). Real commits through the storage worker are in tests/storage/v1-durable-ingestion.test.ts.
 import {readFileSync} from 'node:fs';
 import {resolve} from 'node:path';
-import {describe, expect, it} from 'vitest';
+import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import {AckValidator, V1Consumer} from '../../packages/contracts/src/protocol-v1-delivery';
 import {decodePayload, negotiateV1, validateClientMessage, type ClientMessage, type ServerMessage} from '../../packages/contracts/src/protocol-v1';
 import type {CommitResult, Result, StorageErrorCode} from '../../packages/storage/src/api';
 import {ERROR_MESSAGES, storageError} from '../../packages/storage/src/errors';
 import {STORAGE_FAILURE_CLASS, StorageDurableSink, failureClass, type CoverageMessage, type DurableSink, type WelcomeMessage} from '../../apps/desktop/src/durable-sink';
-import {DurableDelivery, MAX_PENDING_COMMITS, MAX_PENDING_READINGS, type DurableCloseKind, type DurableLink} from '../../apps/desktop/src/v1-durable-delivery';
+import {DurableDelivery, MAX_PENDING_COMMITS, MAX_PENDING_READINGS, SAMPLE_BATCH_ROWS, SAMPLE_FLUSH_MS, type DurableCloseKind, type DurableLink} from '../../apps/desktop/src/v1-durable-delivery';
+import type {SampleSink} from '../../apps/desktop/src/durable-sink';
 
 const dir = resolve('tests/fixtures/protocol-v1');
 const server = (name: string) => decodePayload(new Uint8Array(readFileSync(resolve(dir, `${name}.json`))), 'server') as ServerMessage;
@@ -141,7 +142,7 @@ async function replay(steps: string[]) {
     if (m.kind === 'welcome') {
       validator = new AckValidator(m.source.pluginSessionId, m.data.durableEvents);
       link = new Link(sink.log, validator); connection = delivery.connect(m, link); finals.push(m.source.pluginSessionId);
-    } else if (m.kind === 'checkpoint') { validator!.checkpoint(m.data.status.delivery.ackedThroughEventSeq); connection!.checkpoint(m); }
+    } else if (m.kind === 'checkpoint') { validator!.checkpoint(m.data.status.delivery.ackedThroughEventSeq); connection!.checkpoint(m, RECEIVED); }
     else if (applied.coverage && (m.kind === 'event' || m.kind === 'gap')) { validator!.sent(applied.coverage.lastEventSeq); expect(connection!.enqueue(applied.coverage, m, RECEIVED)).toBe(true); }
   }
   await delivery.idle();
@@ -181,7 +182,7 @@ describe('ET-006b storage-commit ACK pipeline', () => {
   function started(sink: MemorySink, options: {maxPendingCommits?: number} = {}) {
     const logs: [string, unknown][] = [], delivery = new DurableDelivery(sink, {...options, log: (event, facts) => logs.push([event, facts])});
     const link = new Link(sink.log), connection = delivery.connect(welcome(), link);
-    connection.checkpoint(checkpointAt('0'));
+    connection.checkpoint(checkpointAt('0'), RECEIVED);
     return {delivery, link, connection, logs};
   }
   // One FIFO with one command in flight cannot commit eventSeq 4 before 3, so commits {1, 2, 4} never arise in the
@@ -207,7 +208,7 @@ describe('ET-006b storage-commit ACK pipeline', () => {
   it('writes nothing for a commit that finishes after its connection closed, and re-ACKs after redelivery', async () => {
     const sink = new MemorySink(), delivery = new DurableDelivery(sink);
     const first = new Link(sink.log), one = delivery.connect(welcome(), first);
-    one.checkpoint(checkpointAt('0'));
+    one.checkpoint(checkpointAt('0'), RECEIVED);
     for (const n of [1, 2, 3]) one.enqueue(range(event(n)), event(n), RECEIVED);
     await delivery.idle();
     sink.paused = true;
@@ -216,7 +217,7 @@ describe('ET-006b storage-commit ACK pipeline', () => {
     first.open = false; sink.releaseOne(); sink.paused = false; await delivery.idle();
     expect(first.acks).toEqual(['1', '2', '3']);
     const second = new Link(sink.log), two = delivery.connect(welcome('welcome-reconnect'), second);
-    two.checkpoint(checkpointAt('3'));
+    two.checkpoint(checkpointAt('3'), RECEIVED);
     for (const n of [4, 5, 6]) two.enqueue(range(event(n)), event(n), RECEIVED);
     await delivery.idle();
     expect(second.acks).toEqual(['4', '5', '6']);
@@ -227,7 +228,7 @@ describe('ET-006b storage-commit ACK pipeline', () => {
     connection.enqueue(range(event(1)), event(1), RECEIVED); await delivery.idle();
     link.open = false;
     const second = new Link(sink.log), two = delivery.connect(welcome('welcome-reconnect'), second);
-    two.checkpoint(checkpointAt('0'));
+    two.checkpoint(checkpointAt('0'), RECEIVED);
     const different = event(1, 'event-job-cleared');
     two.enqueue(range(different), different, RECEIVED); await delivery.idle();
     expect(second.acks).toEqual(['1']);
@@ -241,7 +242,7 @@ describe('ET-006b storage-commit ACK pipeline', () => {
     await delivery.idle();
     link.open = false;
     const second = new Link(sink.log), two = delivery.connect(welcome('welcome-reconnect'), second);
-    two.checkpoint(checkpointAt('1'));
+    two.checkpoint(checkpointAt('1'), RECEIVED);
     const merged = gap(2, 4); two.enqueue(range(merged), merged, RECEIVED);
     await delivery.idle();
     expect(second.acks).toEqual(['4']);
@@ -298,7 +299,7 @@ describe('ET-006b storage-commit ACK pipeline', () => {
     const sink = new MemorySink(), logs: unknown[] = [], delivery = new DurableDelivery(sink, {log: (...entry) => logs.push(entry)});
     const link = new Link(sink.log), connection = delivery.connect(welcome(), link);
     // Storage holds nothing for P1 (C = 0) while the checkpoint says the producer released through 3 (A = 3).
-    connection.checkpoint(checkpointAt('3')); connection.enqueue(range(event(4)), event(4), RECEIVED);
+    connection.checkpoint(checkpointAt('3'), RECEIVED); connection.enqueue(range(event(4)), event(4), RECEIVED);
     await delivery.idle();
     expect([link.acks, link.closes, sink.log]).toEqual([[], [['ack-ahead', 'ACK_AHEAD_OF_STORAGE']], [`open ${P1}`]]);
     expect(delivery.status).toEqual({state: 'failed', code: 'ACK_AHEAD_OF_STORAGE'});
@@ -382,11 +383,11 @@ describe('ET-006b storage-commit ACK pipeline', () => {
   it('observes the checkpoint and snapshots at their place in the FIFO and passes each receipt label (R5, R8)', async () => {
     const sink = new ObservingSink(); sink.paused = true;
     const delivery = new DurableDelivery(sink), link = new Link(sink.log), connection = delivery.connect(welcome(), link);
-    connection.checkpoint(checkpointAt('0'));
+    connection.checkpoint(checkpointAt('0'), RECEIVED);
     connection.enqueue(range(event(1)), event(1), RECEIVED + 1);
-    expect(connection.snapshot(snapshotSeq(50))).toBe(true);
+    expect(connection.snapshot(snapshotSeq(50), RECEIVED)).toBe(true);
     connection.enqueue(range(event(2)), event(2), RECEIVED + 2);
-    expect(connection.snapshot(snapshotSeq(51))).toBe(true);
+    expect(connection.snapshot(snapshotSeq(51), RECEIVED)).toBe(true);
     // Nothing is observed at receipt: the open is still held, so every reading waits behind it.
     await flush();
     expect([sink.log, delivery.pendingReadingCount, delivery.pending]).toEqual([[], 2, 2]);
@@ -396,8 +397,8 @@ describe('ET-006b storage-commit ACK pipeline', () => {
   });
   it('queues no snapshot for a sink without observe', async () => {
     const sink = new MemorySink(), delivery = new DurableDelivery(sink), link = new Link(sink.log), connection = delivery.connect(welcome(), link);
-    connection.checkpoint(checkpointAt('0'));
-    expect(connection.snapshot(snapshotSeq(50))).toBe(true);
+    connection.checkpoint(checkpointAt('0'), RECEIVED);
+    expect(connection.snapshot(snapshotSeq(50), RECEIVED)).toBe(true);
     expect(delivery.pendingReadingCount).toBe(0);
     connection.enqueue(range(event(1)), event(1), RECEIVED); await delivery.idle();
     expect(sink.log).toEqual([`open ${P1}`, 'committed 1', 'ack 1']);
@@ -405,11 +406,11 @@ describe('ET-006b storage-commit ACK pipeline', () => {
   it('stops durable delivery when a reading is refused, without an ACK for later items', async () => {
     const sink = new ObservingSink(), logs: unknown[] = [], delivery = new DurableDelivery(sink, {log: (...entry) => logs.push(entry)});
     const link = new Link(sink.log), connection = delivery.connect(welcome(), link);
-    connection.checkpoint(checkpointAt('0'));
+    connection.checkpoint(checkpointAt('0'), RECEIVED);
     connection.enqueue(range(event(1)), event(1), RECEIVED);
     await delivery.idle();
     sink.observeFailure = 'INTERNAL';
-    connection.snapshot(snapshotSeq(50)); connection.enqueue(range(event(2)), event(2), RECEIVED);
+    connection.snapshot(snapshotSeq(50), RECEIVED); connection.enqueue(range(event(2)), event(2), RECEIVED);
     await delivery.idle();
     // The checkpoint was observed before the failure was scripted; the refused snapshot drops event 2.
     expect([sink.log, link.closes, delivery.status, logs]).toEqual([[`open ${P1}`, `observe checkpoint ${server('checkpoint').seq}`, 'committed 1', 'ack 1'],
@@ -420,13 +421,13 @@ describe('ET-006b storage-commit ACK pipeline', () => {
     const sink = new ObservingSink(); sink.paused = true;
     const logs: unknown[] = [], delivery = new DurableDelivery(sink, {log: (...entry) => logs.push(entry)});
     const link = new Link(sink.log), connection = delivery.connect(welcome(), link);
-    connection.checkpoint(checkpointAt('0'));
+    connection.checkpoint(checkpointAt('0'), RECEIVED);
     await flush(); expect(sink.waitingCommands).toBe(1);
     for (let n = 1; n <= 256; n++) expect(connection.enqueue(range(event(n)), event(n), RECEIVED)).toBe(true);
     // Readings do not count against the 256 coverage items, and items do not count against the 512 readings.
-    for (let n = 1; n <= 512; n++) expect(connection.snapshot(snapshotSeq(1000 + n))).toBe(true);
+    for (let n = 1; n <= 512; n++) expect(connection.snapshot(snapshotSeq(1000 + n), RECEIVED)).toBe(true);
     expect([delivery.pending, delivery.pendingReadingCount, link.closes]).toEqual([256, 512, []]);
-    expect(connection.snapshot(snapshotSeq(2000))).toBe(false);
+    expect(connection.snapshot(snapshotSeq(2000), RECEIVED)).toBe(false);
     expect([delivery.pending, delivery.pendingReadingCount, link.closes, logs]).toEqual([0, 0, [['retryable', 'BACKLOG_FULL']], [['V1_DURABLE_RETRY', {code: 'BACKLOG_FULL', count: 1}]]]);
     expect(delivery.status).toEqual({state: 'pending', retryCode: 'BACKLOG_FULL'});
     sink.paused = false; sink.releaseOne(); await delivery.idle();
@@ -438,11 +439,11 @@ describe('ET-006b storage-commit ACK pipeline', () => {
       const logs: unknown[] = [], delivery = new DurableDelivery(sink, {log: (...entry) => logs.push(entry)});
       // Storage holds 1 and 2 (C = 2) while the checkpoint says the producer released through 5 (A = 5).
       const first = new Link(sink.log), one = delivery.connect(welcome(), first);
-      one.checkpoint(checkpointAt('0'));
+      one.checkpoint(checkpointAt('0'), RECEIVED);
       for (const n of [1, 2]) one.enqueue(range(event(n)), event(n), RECEIVED);
       await delivery.idle(); first.open = false;
       const link = new Link(sink.log), connection = delivery.connect(welcome('welcome-reconnect'), link);
-      connection.checkpoint(checkpointAt('5')); connection.enqueue(range(event(6)), event(6), RECEIVED);
+      connection.checkpoint(checkpointAt('5'), RECEIVED); connection.enqueue(range(event(6)), event(6), RECEIVED);
       await delivery.idle();
       expect(sink.log.slice(6)).toEqual([`open ${P1}`, 'restore-loss P1 2 5']);
       expect([link.acks, link.closes, delivery.status]).toEqual([[], [['ack-ahead', 'ACK_AHEAD_OF_STORAGE']], {state: 'failed', code: 'ACK_AHEAD_OF_STORAGE'}]);
@@ -450,5 +451,198 @@ describe('ET-006b storage-commit ACK pipeline', () => {
       expect([delivery.durableAllowed(P1), delivery.durableAllowed(P2)]).toEqual([false, true]);
       expect(logs).toEqual([['V1_DURABLE_ACK_AHEAD', {code: 'ACK_AHEAD_OF_STORAGE'}], ['V1_DURABLE_RESTORE_LOSS', {code}]]);
     }
+  });
+});
+
+/**
+ * ET-015b: a MemorySink whose `observe` turns every snapshot into one pending sample row, numbered 1, 2, 3, ..., and
+ * whose `samples` writes them in order, logging `samples <first>-<last>` into the shared log. Sample writes can be held
+ * or scripted to fail, and can report rows that storage skipped. It stands in for the trip recorder's SampleBuffer.
+ */
+class SamplingSink extends MemorySink {
+  readonly pendingRows: number[] = [];
+  readonly writeSizes: number[] = [];
+  readonly sampleFailures: (StorageErrorCode | 'reject')[] = [];
+  holdSamples = false; skipPerWrite = 0; droppedRows = 0;
+  /** Loss intervals pending; only a final write stores them, logging `losses <n>`. */
+  pendingLosses = 0;
+  readonly finals: boolean[] = [];
+  private nextRow = 0;
+  private readonly heldSamples: (() => void)[] = [];
+  get heldWrites(): number { return this.heldSamples.length; }
+  releaseSamples(): void { this.heldSamples.shift()?.(); }
+  observe(m: Extract<ServerMessage, {kind: 'checkpoint' | 'snapshot'}>): Result<undefined> {
+    if (m.kind === 'snapshot') this.pendingRows.push(++this.nextRow);
+    return {ok: true, value: undefined};
+  }
+  readonly samples: SampleSink = {
+    pending: () => ({rows: this.pendingRows.length, losses: this.pendingLosses}),
+    write: async (maxRows, final) => {
+      this.writeSizes.push(maxRows); this.finals.push(final === true);
+      if (this.holdSamples) await new Promise<void>(r => this.heldSamples.push(r));
+      const failure = this.sampleFailures.shift();
+      if (failure === 'reject') throw new Error('sink defect');
+      if (failure) { this.log.push(`samples failed ${failure}`); return {ok: false, error: storageError(failure)}; }
+      if (final && this.pendingLosses) { this.log.push(`losses ${this.pendingLosses}`); this.pendingLosses = 0; }
+      const batch = this.pendingRows.splice(0, maxRows), skipped = Math.min(this.skipPerWrite, batch.length);
+      this.log.push(`samples ${batch[0]}-${batch.at(-1)}`);
+      return {ok: true, value: {appended: batch.length - skipped, skipped}};
+    },
+    discard: () => this.pendingRows.splice(0).length,
+    dropped: () => this.droppedRows
+  };
+}
+
+describe('ET-015b samples op in the storage-commit pipeline', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+  const settle = () => vi.advanceTimersByTimeAsync(0);
+  const snapshotAt = (seq: number) => { const m = structuredClone(server('snapshot')) as Extract<ServerMessage, {kind: 'snapshot'}>; m.seq = String(seq); return m; };
+  /** An open durable connection of P1 whose checkpoint (A = 0) is queued; `readings(n)` queues n snapshots. */
+  function sampling(sink = new SamplingSink(), options: {maxPendingCommits?: number} = {}) {
+    const logs: [string, unknown][] = [], delivery = new DurableDelivery(sink, {...options, log: (event, facts) => logs.push([event, facts])});
+    const link = new Link(sink.log), connection = delivery.connect(welcome(), link);
+    connection.checkpoint(checkpointAt('0'), RECEIVED);
+    let seq = 100;
+    const readings = (n: number) => { for (let i = 0; i < n; i++) expect(connection.snapshot(snapshotAt(seq++), RECEIVED)).toBe(true); };
+    const writes = () => sink.log.filter(line => line.startsWith('samples'));
+    return {sink, delivery, link, connection, logs, readings, writes};
+  }
+
+  it('arms the flush timer at the first pending row and queues one samples op 5 s later (H8)', async () => {
+    expect([SAMPLE_FLUSH_MS, SAMPLE_BATCH_ROWS]).toEqual([5000, 60]);
+    expect(() => new DurableDelivery(new SamplingSink(), {sampleBatchRows: 0})).toThrow('Invalid sample batch size');
+    expect(() => new DurableDelivery(new SamplingSink(), {sampleFlushMs: 0})).toThrow('Invalid sample flush delay');
+    const {sink, link, logs, readings, writes} = sampling();
+    await settle();
+    // The session open and the checkpoint add no row, so no timer runs.
+    expect(vi.getTimerCount()).toBe(0);
+    readings(1); await settle();
+    expect(vi.getTimerCount()).toBe(1);
+    await vi.advanceTimersByTimeAsync(2000); readings(2); await settle();
+    // The timer started with the first row; later rows do not restart it.
+    await vi.advanceTimersByTimeAsync(2999); expect(writes()).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1); expect(writes()).toEqual(['samples 1-3']);
+    expect([sink.writeSizes, vi.getTimerCount(), link.acks, logs]).toEqual([[60], 0, [], []]);
+  });
+
+  it('queues a samples op at once when 60 rows are pending and writes at most 60 rows per op (H8)', async () => {
+    const {sink, readings, writes} = sampling();
+    readings(130); await settle();
+    // Two full batches at once, one after the other; the 10 rows left wait for the timer.
+    expect([writes(), sink.writeSizes, vi.getTimerCount()]).toEqual([['samples 1-60', 'samples 61-120'], [60, 60], 1]);
+    await vi.advanceTimersByTimeAsync(4999); expect(writes()).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(1); expect(writes()).toEqual(['samples 1-60', 'samples 61-120', 'samples 121-130']);
+  });
+
+  it('keeps at most one samples op queued or running (H8)', async () => {
+    const sink = new SamplingSink(); sink.holdSamples = true;
+    const {readings, writes} = sampling(sink);
+    readings(60); await settle();
+    expect(sink.heldWrites).toBe(1);
+    // More than a full batch and more than the flush delay while that op runs: no second op and no timer.
+    readings(70); await vi.advanceTimersByTimeAsync(20_000);
+    expect([sink.heldWrites, sink.writeSizes, vi.getTimerCount()]).toEqual([1, [60], 0]);
+    sink.releaseSamples(); await settle();
+    expect([writes(), sink.heldWrites]).toEqual([['samples 1-60'], 1]);
+    sink.releaseSamples(); await settle();
+    // No further op was queued meanwhile: the 10 rows left wait for the timer, and no write runs.
+    expect([writes(), sink.writeSizes, sink.heldWrites, vi.getTimerCount()]).toEqual([['samples 1-60', 'samples 61-120'], [60, 60], 0, 1]);
+  });
+
+  it('commits an item queued behind a samples op right after that one batch; samples never acknowledge or count against the bounds (H10)', async () => {
+    const sink = new SamplingSink(); sink.holdSamples = true;
+    const {delivery, link, connection, readings} = sampling(sink, {maxPendingCommits: 1});
+    readings(60); await settle();
+    expect(sink.heldWrites).toBe(1);
+    // The bound of one coverage item is free although a samples op is in flight.
+    expect(connection.enqueue(range(event(1)), event(1), RECEIVED)).toBe(true);
+    expect([delivery.pending, delivery.pendingReadingCount, link.acks]).toEqual([1, 0, []]);
+    sink.releaseSamples(); await settle();
+    expect(sink.log).toEqual([`open ${P1}`, 'samples 1-60', 'committed 1', 'ack 1']);
+  });
+
+  it('keeps the rows after a retryable failure and retries them at the next timer, with the connection open (H12, REG-007)', async () => {
+    const sink = new SamplingSink(); sink.sampleFailures.push('DISK_FULL', 'DISK_FULL');
+    const {delivery, link, connection, logs, readings, writes} = sampling(sink);
+    readings(60); await settle();
+    expect([writes(), sink.pendingRows.length, link.closes, delivery.status, logs]).toEqual([['samples failed DISK_FULL'], 60, [], {state: 'active'},
+      [['V1_SAMPLES_RETRY', {code: 'DISK_FULL', count: 1}]]]);
+    // A full batch is pending, but the rows wait for the timer; events still commit and are acknowledged meanwhile.
+    readings(1); connection.enqueue(range(event(1)), event(1), RECEIVED); await settle();
+    expect([writes(), link.acks]).toEqual([['samples failed DISK_FULL'], ['1']]);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect([writes().at(-1), logs.at(-1)]).toEqual(['samples failed DISK_FULL', ['V1_SAMPLES_RETRY', {code: 'DISK_FULL', count: 2}]]);
+    await vi.advanceTimersByTimeAsync(5000);
+    // The next success ends the backoff: the 61st row is written by its own timer.
+    expect(writes().slice(2)).toEqual(['samples 1-60']);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect([writes().slice(3), link.closes, delivery.durableAllowed()]).toEqual([['samples 61-61'], [], true]);
+  });
+
+  for (const [failure, code] of [['PERMISSION_DENIED', 'PERMISSION_DENIED'], ['reject', 'INTERNAL']] as const) it(`stops durable delivery and discards the pending rows on ${code} (H12)`, async () => {
+    const sink = new SamplingSink(); sink.sampleFailures.push(failure);
+    const {delivery, link, connection, logs, readings} = sampling(sink);
+    readings(60); await settle();
+    expect([logs, link.closes, delivery.status, sink.pendingRows.length, delivery.durableAllowed()]).toEqual([
+      [['V1_DURABLE_UNAVAILABLE', {code}], ['V1_SAMPLES_DISCARDED', {count: 60}]], [['unavailable', code]], {state: 'failed', code}, 0, false]);
+    // Nothing more is queued or written, and stop() writes nothing.
+    connection.enqueue(range(event(1)), event(1), RECEIVED); await delivery.stop();
+    expect([sink.log, sink.writeSizes, vi.getTimerCount()]).toEqual([[`open ${P1}`, ...(failure === 'reject' ? [] : ['samples failed PERMISSION_DENIED'])], [60], 0]);
+  });
+
+  it('stop() drops queued work, waits for the commit in flight, then writes every pending row once (H11)', async () => {
+    const {sink, delivery, link, connection, logs, readings} = sampling();
+    readings(5); await settle();
+    expect(vi.getTimerCount()).toBe(1);
+    sink.paused = true;
+    connection.enqueue(range(event(1)), event(1), RECEIVED); await settle();
+    expect(sink.waitingCommands).toBe(1);
+    connection.enqueue(range(event(2)), event(2), RECEIVED); readings(2);
+    const stopped = delivery.stop(); let done = false; void stopped.then(() => { done = true; });
+    await settle();
+    expect([done, vi.getTimerCount(), sink.writeSizes]).toEqual([false, 0, []]);
+    sink.releaseOne(); await stopped;
+    // Commit 1 completed in storage without an ACK; event 2 and the two queued snapshots were dropped, not observed.
+    expect([sink.log, link.acks, sink.writeSizes, logs]).toEqual([[`open ${P1}`, 'committed 1', 'samples 1-5'], [], [300], [['V1_SAMPLES_EXIT', {rows: 5, losses: 0, code: 'WRITTEN'}]]]);
+    expect(sink.finals).toEqual([true]);
+    // A second stop returns the same promise and writes nothing more.
+    expect(delivery.stop()).toBe(stopped);
+  });
+
+  it('stop() reports a failed final write and writes nothing after durable delivery failed (H11)', async () => {
+    const one = sampling(); one.sink.sampleFailures.push('DISK_FULL');
+    one.readings(5); await settle(); await one.delivery.stop();
+    expect([one.writes(), one.logs]).toEqual([['samples failed DISK_FULL'], [['V1_SAMPLES_EXIT', {rows: 5, losses: 0, code: 'DISK_FULL'}]]]);
+    // Loss intervals still pending are written by the final write too and reported apart from the rows.
+    const three = sampling(); three.sink.pendingLosses = 1;
+    three.readings(2); await settle(); await three.delivery.stop();
+    expect([three.sink.log.slice(-2), three.logs]).toEqual([['losses 1', 'samples 1-2'], [['V1_SAMPLES_EXIT', {rows: 2, losses: 1, code: 'WRITTEN'}]]]);
+    // An unavailable commit failure discards the pending rows; stop() then writes nothing and logs no exit.
+    const two = sampling(); two.sink.failures.push('PERMISSION_DENIED');
+    two.readings(5); await settle();
+    two.connection.enqueue(range(event(1)), event(1), RECEIVED); await settle(); await two.delivery.stop();
+    expect([two.writes(), two.logs]).toEqual([[], [['V1_DURABLE_UNAVAILABLE', {code: 'PERMISSION_DENIED'}], ['V1_SAMPLES_DISCARDED', {count: 5}]]]);
+  });
+
+  it('logs dropped and skipped rows when their running totals reach 1, 2, 4, 8, ... (H12)', async () => {
+    const {sink, logs, readings} = sampling();
+    await settle();
+    for (const dropped of [1, 2, 3, 4, 5]) { sink.droppedRows = dropped; readings(1); await settle(); }
+    expect(logs).toEqual([['V1_SAMPLES_DROPPED', {count: 1}], ['V1_SAMPLES_DROPPED', {count: 2}], ['V1_SAMPLES_DROPPED', {count: 4}]]);
+    sink.skipPerWrite = 3; logs.length = 0;
+    // 5 rows are pending; three full batches skip 3 rows each: totals 3, 6 and 9.
+    readings(55); await settle(); readings(60); await settle(); readings(60); await settle();
+    expect(logs).toEqual([['V1_SAMPLES_SKIPPED', {count: 3}], ['V1_SAMPLES_SKIPPED', {count: 6}], ['V1_SAMPLES_SKIPPED', {count: 9}]]);
+  });
+
+  it('runs no timer and writes nothing for a sink without samples', async () => {
+    const sink = new MemorySink(), logs: unknown[] = [];
+    const observing: DurableSink = {openSession: w => sink.openSession(w), commit: m => sink.commit(m), observe: () => ({ok: true, value: undefined})};
+    const delivery = new DurableDelivery(observing, {log: (...entry) => logs.push(entry)}), connection = delivery.connect(welcome(), new Link(sink.log));
+    connection.checkpoint(checkpointAt('0'), RECEIVED);
+    for (let n = 0; n < 70; n++) connection.snapshot(snapshotAt(200 + n), RECEIVED);
+    await settle(); await vi.advanceTimersByTimeAsync(10_000); await delivery.stop();
+    expect([vi.getTimerCount(), sink.log, logs]).toEqual([0, [`open ${P1}`], []]);
   });
 });
