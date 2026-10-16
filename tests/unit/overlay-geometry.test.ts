@@ -242,6 +242,16 @@ it('keeps the exact nominal geometry of the presets that fit it', () => {
   }
 });
 
+it('keeps the nominal size only at the scales where the reserved rows fit it', () => {
+  // Thirteen sections (without distance driven): content 46 + 24 × 13 = 358, so 360 with the border, exactly the card's
+  // nominal height at scale 1. At 0.5 the border stays one DIP: ceil(358 × 0.5 + 2) = 181, not round(360 × 0.5) = 180.
+  // At 1.12: ceil(400.96 + 2.24 = 403.2) = 404, not round(403.2) = 403.
+  const area = client(0, 0, 1920, 1080);
+  expect(overlaySize('card', area, 1, WITHOUT_DRIVEN)).toEqual({width: 300, height: 360});
+  expect(overlaySize('card', area, 0.5, WITHOUT_DRIVEN)).toEqual({width: 150, height: 181});
+  expect(overlaySize('card', area, 1.12, WITHOUT_DRIVEN)).toEqual({width: 336, height: 404});
+});
+
 it('computes a surface height with the border snapped to one device pixel below zoom 1', () => {
   // Strip, three rows at 1.1: 118.8 + 2.2 = 121 (the epsilon keeps binary noise from making it 122).
   expect(surfaceHeightDip(108, 1, 1.1)).toBe(121);

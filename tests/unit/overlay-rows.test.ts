@@ -79,43 +79,33 @@ it('matches the card, cluster and HUD rules in renderer.css', () => {
     if (!match) throw new Error(`Missing rule ${selector}`);
     return match[1];
   };
+  // The values of one property in a rule body, by exact property name: `line-height: 24px` never satisfies `height`, and
+  // a second declaration of the same property, which would override the first, shows up as a second value.
+  const values = (body: string, property: string) => body.split(';').map(declaration => /^\s*([\w-]+)\s*:\s*(.*?)\s*$/s.exec(declaration))
+    .flatMap(match => match && match[1] === property ? [match[2]] : []);
+  const declares = (selector: string, declarations: Record<string, string>) => {
+    const body = rule(selector);
+    for (const [property, value] of Object.entries(declarations)) expect(values(body, property), `${selector} ${property}`).toEqual([value]);
+  };
   // Every height assumes border-box sizing and the 1 px surface border of the card and the cluster's panel.
-  expect(rule('.overlay *, .overlay *::before, .overlay *::after')).toContain('box-sizing: border-box;');
-  expect(rule('.overlay-surface')).toContain(`border: ${CARD_BORDER_CSS}px solid`);
-  // Card.
-  expect(rule('.overlay-card-body')).toContain(`padding: ${CARD_PADDING_Y_CSS}px ${CARD_PADDING_X_CSS}px;`);
-  const header = rule('.overlay-card-header');
-  expect(header).toContain(`height: ${CARD_HEADER_HEIGHT_CSS}px;`);
-  expect(header).toContain(`margin-bottom: ${CARD_HEADER_GAP_CSS}px;`);
-  expect(header).toContain('flex-wrap: nowrap;');
-  expect(header).toContain('overflow: hidden;');
-  const row = rule('.overlay-row');
-  expect(row).toContain(`height: ${CARD_ROW_HEIGHT_CSS}px;`);
-  expect(row).toContain('border-top: 1px solid');
-  expect(row).toContain('overflow: hidden;');
-  expect(row).toContain('align-items: center;');
-  expect(row).toContain('padding: 0;');
+  declares('.overlay *, .overlay *::before, .overlay *::after', {'box-sizing': 'border-box'});
+  expect(values(rule('.overlay-surface'), 'border')).toEqual([expect.stringMatching(new RegExp(`^${CARD_BORDER_CSS}px solid `))]);
+  // Card. The description list and its values keep no default margins, which the row model does not count.
+  declares('.overlay-card-body', {padding: `${CARD_PADDING_Y_CSS}px ${CARD_PADDING_X_CSS}px`});
+  declares('.overlay-card-header', {height: `${CARD_HEADER_HEIGHT_CSS}px`, 'margin-bottom': `${CARD_HEADER_GAP_CSS}px`, 'flex-wrap': 'nowrap', overflow: 'hidden'});
+  declares('.overlay-rows', {margin: '0'});
+  declares('.overlay-row', {height: `${CARD_ROW_HEIGHT_CSS}px`, overflow: 'hidden', 'align-items': 'center', padding: '0'});
+  expect(values(rule('.overlay-row'), 'border-top')).toEqual([expect.stringMatching(/^1px solid /)]);
+  declares('.overlay-row dd', {margin: '0'});
   // Cluster: the panel takes its content height; only the fixed rows bound it.
-  const panel = rule('.overlay-panel');
-  expect(panel).toContain(`padding: ${CLUSTER_PANEL_PADDING_Y_CSS}px ${CLUSTER_PANEL_PADDING_X_CSS}px;`);
-  expect(panel).toContain(`gap: ${CLUSTER_ROW_GAP_CSS}px;`);
-  expect(panel).not.toMatch(/max-height\s*:(?!\s*100%)/);
-  const tags = rule('.overlay-panel-tags');
-  expect(tags).toContain(`height: ${CLUSTER_TAG_ROW_HEIGHT_CSS}px;`);
-  expect(tags).toContain('flex-wrap: nowrap;');
-  expect(tags).toContain('overflow: hidden;');
-  const panelRow = rule('.overlay-panel-row');
-  expect(panelRow).toContain(`height: ${CLUSTER_ROW_HEIGHT_CSS}px;`);
-  expect(panelRow).toContain('align-items: center;');
-  expect(panelRow).toContain('overflow: hidden;');
-  expect(rule('.overlay-gauge')).toContain(`height: ${CLUSTER_GAUGE_SIZE_CSS}px;`);
+  declares('.overlay-panel', {padding: `${CLUSTER_PANEL_PADDING_Y_CSS}px ${CLUSTER_PANEL_PADDING_X_CSS}px`, gap: `${CLUSTER_ROW_GAP_CSS}px`});
+  expect(values(rule('.overlay-panel'), 'max-height').filter(value => value !== '100%')).toEqual([]);
+  expect(values(rule('.overlay-panel'), 'height')).toEqual([]);
+  declares('.overlay-panel-tags', {height: `${CLUSTER_TAG_ROW_HEIGHT_CSS}px`, 'flex-wrap': 'nowrap', overflow: 'hidden'});
+  declares('.overlay-panel-row', {height: `${CLUSTER_ROW_HEIGHT_CSS}px`, 'align-items': 'center', overflow: 'hidden'});
+  declares('.overlay-gauge', {height: `${CLUSTER_GAUGE_SIZE_CSS}px`});
   // HUD.
-  expect(rule('.overlay-hud-lines')).toContain(`gap: ${HUD_LINE_GAP_CSS}px;`);
-  const hudTags = rule('.overlay-hud-tags');
-  expect(hudTags).toContain(`height: ${HUD_TAG_ROW_HEIGHT_CSS}px;`);
-  expect(hudTags).toContain('overflow: hidden;');
-  const line = rule('.overlay-hud-line');
-  expect(line).toContain(`height: ${HUD_LINE_HEIGHT_CSS}px;`);
-  expect(line).toContain('align-items: center;');
-  expect(line).toContain('overflow: hidden;');
+  declares('.overlay-hud-lines', {gap: `${HUD_LINE_GAP_CSS}px`});
+  declares('.overlay-hud-tags', {height: `${HUD_TAG_ROW_HEIGHT_CSS}px`, overflow: 'hidden'});
+  declares('.overlay-hud-line', {height: `${HUD_LINE_HEIGHT_CSS}px`, 'align-items': 'center', overflow: 'hidden'});
 });

@@ -13,7 +13,7 @@ import {
   waitForCompleteLive, waitForCurrentTelemetry, waitForNotCurrentLive, waitForOverlayV1, waitForV1NotCurrentLive
 } from './renderer-observation.mjs';
 import {
-  LAYOUT_SMOKE_WINDOWS, rendererPages, runOverlaySmoke, verifyLayoutContainment, verifyStripLayout, waitForLayoutContainment, waitForStripLayout, windowSecurity,
+  LAYOUT_SMOKE_RESERVED_CSS, LAYOUT_SMOKE_WINDOWS, rendererPages, runOverlaySmoke, verifyLayoutContainment, verifyStripLayout, waitForLayoutContainment, waitForStripLayout, windowSecurity,
   verifyRendererStyles
 } from './overlay-observation.mjs';
 import {runLifecycleSmoke, seedLifecycleSettings, verifyLifecycleRestart} from './lifecycle-observation.mjs';
@@ -161,27 +161,34 @@ try {
       }, {layout, width, height, sections}, {timeout});
       await handle.dispose();
     };
-    // ET-012d (decisions K10 and K11): the card, HUD and cluster with every v1 section shown, each in its reserved window
-    // for every section at scale 1. Without a game window the controller never places the overlay, so the hidden window
-    // is sized here (LAYOUT_SMOKE_WINDOWS, tied to overlayWindowSize by a unit test). Each observation is stored before
-    // it is verified, so a failed receipt keeps it. The strip is restored at the size the product created in every case;
-    // the first error, a failed assertion or a failed restore, fails the run.
+    // ET-012d (decisions K10 and K11): the card, HUD and cluster with every v1 section the pair shows. The saved sections
+    // are first set to exactly those twelve, so each window reserves no row for a hidden section (range and distance
+    // driven); without a game window the controller never places the overlay, so the hidden window is sized here
+    // (LAYOUT_SMOKE_WINDOWS for those sections at scale 1, tied to overlayWindowSize by a unit test). Each observation is
+    // stored before it is verified, so a failed receipt keeps it. The original sections and the strip are restored at
+    // the size the product created in every case; the first error, a failed assertion or a failed restore, fails the run.
     const assertLayouts = async record => {
-      let base = null, sections = null, failed;
+      let base = null, sections = null, original = null, failed;
       try {
         base = await overlay.evaluate(() => ({width: globalThis.innerWidth, height: globalThis.innerHeight}));
         sections = await overlay.evaluate(() => globalThis.document.querySelectorAll('[data-testid^="overlay-section-"]').length);
+        original = (await window.evaluate(() => globalThis.desktop.getAppState())).settings.overlay.sections;
+        const shown = Object.fromEntries(Object.keys(original).map(id => [id, SYNTHETIC_V1_STRIP_SECTIONS.includes(id)]));
+        record.sections = (await window.evaluate(value => globalThis.desktop.setOverlaySections(value), shown)).overlay.sections;
+        assert.deepEqual(record.sections, shown);
         for (const layout of ['card', 'hud', 'cluster']) {
           const size = LAYOUT_SMOKE_WINDOWS[layout];
           const saved = await window.evaluate(value => globalThis.desktop.setOverlayLayout(value), layout);
           assert.equal(saved.overlay.layout, layout);
           (record.windows ??= {})[layout] = await resizeOverlay(size.width, size.height, 1);
           await renderedLayout(layout, size.width, null, 10000, size.height);
-          verifyLayoutContainment(record[layout] = await waitForLayoutContainment(overlay, {layout, sections: SYNTHETIC_V1_STRIP_SECTIONS}), size);
+          verifyLayoutContainment(record[layout] = await waitForLayoutContainment(overlay, {layout, sections: SYNTHETIC_V1_STRIP_SECTIONS}), size,
+            LAYOUT_SMOKE_RESERVED_CSS[layout]);
         }
       } catch (error) {failed = error;}
       try {
         await window.evaluate(() => globalThis.desktop.setOverlayLayout('strip'));
+        if (original) assert.deepEqual((await window.evaluate(value => globalThis.desktop.setOverlaySections(value), original)).overlay.sections, original);
         if (base) {await resizeOverlay(base.width, base.height, 1); await renderedLayout('strip', base.width, sections, 10000, base.height);}
         record.restored = 'strip';
       } catch (error) {failed ??= error;}

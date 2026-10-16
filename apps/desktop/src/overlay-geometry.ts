@@ -53,7 +53,9 @@ const stripHeight = (rows: number, scale: number) => surfaceHeightDip(STRIP_ROW_
 /**
  * The card, cluster or HUD window at this scale (ET-012d decision K4): round(nominal width × scale) wide and the larger
  * of round(nominal height × scale) and the DIP height its reserved rows need (overlay-rows.ts). A layout whose sections
- * fit its nominal size keeps its exact ET-012b geometry; it grows only when they do not.
+ * fit its nominal size at that scale keeps its exact ET-012b geometry; it grows only when they do not. Fitting at
+ * scale 1 does not imply fitting at every scale: a 13-section card reserves exactly its nominal 360 at scale 1, but at
+ * 0.5 the snapped border makes it ceil(358 × 0.5 + 2) = 181 high, not 180.
  */
 function rowLayoutSize(layout: RowLayout, scale: number, sections: OverlaySections): {width: number; height: number} {
   const nominal = OVERLAY_NOMINAL_SIZE[layout];

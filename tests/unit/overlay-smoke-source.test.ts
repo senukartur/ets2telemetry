@@ -202,7 +202,10 @@ describe('ET-012d card, cluster and HUD containment observation', () => {
   // telemetry smoke shows, in canonical order, which is also the cluster's DOM order (gauge, then panel).
   const EXPECTED = ['speed', 'gear', 'rpm', 'fuel', 'sdk-consumption', 'cargo', 'origin', 'destination', 'distance-remaining', 'deadline',
     'expected-income', 'game-time'];
-  const WINDOWS = {card: {width: 300, height: 384}, cluster: {width: 440, height: 267}, hud: {width: 320, height: 354}};
+  // The windows and reserved CSS heights for those twelve sections at scale 1: card max(360, 48 + 24 × 12 = 336), cluster
+  // max(220, 36 + 21 × 9 = 225) and HUD max(320, 18 + 24 × 12 = 306).
+  const WINDOWS = {card: {width: 300, height: 360}, cluster: {width: 440, height: 225}, hud: {width: 320, height: 320}};
+  const RESERVED = {card: 336, cluster: 225, hud: 306};
   type LayoutName = keyof typeof WINDOWS;
   type Box = {left: number; top: number; width: number; height: number};
   interface Containment {layout?: string; sections?: string[]; roots?: number; freshness?: string; viewport?: {innerWidth: number; innerHeight: number};
@@ -246,19 +249,30 @@ describe('ET-012d card, cluster and HUD containment observation', () => {
       document: containmentDocument(layout, options), ...viewport,
       getComputedStyle: (node: {overflow?: string}) => ({overflow: node.overflow ?? 'visible'})}))) as false | Record<string, unknown>;
   }
-  it('sizes each smoke window as the product creates it for every section at scale 1', async () => {
-    const {LAYOUT_SMOKE_WINDOWS} = await import(observationModule);
+  it('sizes each smoke window as the product creates it for the shown sections at scale 1, with their reserved height', async () => {
+    const {LAYOUT_SMOKE_WINDOWS, LAYOUT_SMOKE_RESERVED_CSS} = await import(observationModule);
+    const {SYNTHETIC_V1_STRIP_SECTIONS} = await import(pathToFileURL(path.resolve('scripts/ci/renderer-observation.mjs')).href);
     const {overlayWindowSize} = await import('../../apps/desktop/src/overlay-geometry');
+    const {layoutReservedCss} = await import('../../apps/desktop/src/overlay-rows');
+    const {OVERLAY_SECTION_IDS} = await import('../../apps/desktop/src/overlay-sections');
+    expect(SYNTHETIC_V1_STRIP_SECTIONS).toEqual(EXPECTED);
     expect(LAYOUT_SMOKE_WINDOWS).toEqual(WINDOWS);
-    for (const layout of ['card', 'cluster', 'hud'] as const) expect(LAYOUT_SMOKE_WINDOWS[layout], layout).toEqual(overlayWindowSize(layout, 1));
+    expect(LAYOUT_SMOKE_RESERVED_CSS).toEqual(RESERVED);
+    const shown = Object.fromEntries(OVERLAY_SECTION_IDS.map(id => [id, EXPECTED.includes(id)])) as Record<(typeof OVERLAY_SECTION_IDS)[number], boolean>;
+    for (const layout of ['card', 'cluster', 'hud'] as const) {
+      expect(LAYOUT_SMOKE_WINDOWS[layout], layout).toEqual(overlayWindowSize(layout, 1, shown));
+      expect(LAYOUT_SMOKE_RESERVED_CSS[layout], layout).toBe(layoutReservedCss(layout, shown));
+    }
   });
+  // The fake rows end at 28 + 21 × 11 + 18 = 277 in the card and HUD and at 28 + 21 × 8 + 18 = 214 in the cluster panel.
+  const BOTTOM = {card: 277, cluster: 214, hud: 277};
   it.each(['card', 'cluster', 'hud'] as const)('reports every shown %s section inside the window and records truncation', async layout => {
     expect(await observeLayout(layout, {truncated: ['origin']})).toEqual({layout, viewport: {innerWidth: WINDOWS[layout].width, innerHeight: WINDOWS[layout].height},
-      sections: EXPECTED, outside: [], clipped: [], truncated: ['origin']});
+      sections: EXPECTED, outside: [], clipped: [], bottom: BOTTOM[layout], truncated: ['origin']});
   });
   it.each([
     {name: 'below the card window', layout: 'card' as const, options: {item: {'game-time': {left: 10, top: 384, width: 200, height: 18}}}},
-    {name: 'partly below the HUD window', layout: 'hud' as const, options: {item: {'game-time': {left: 10, top: 340, width: 200, height: 18}}}},
+    {name: 'partly below the HUD window', layout: 'hud' as const, options: {item: {'game-time': {left: 10, top: 310, width: 200, height: 18}}}},
     // ET-012a's cluster panel was capped at 200 px and clipped its last row inside a taller window.
     {name: 'outside only the clipping cluster panel', layout: 'cluster' as const,
       options: {clip: {left: 210, top: 0, width: 230, height: 200}, item: {'game-time': {left: 220, top: 205, width: 200, height: 18}}}},
@@ -307,14 +321,28 @@ describe('ET-012d card, cluster and HUD containment observation', () => {
   it('accepts the reserved window with every section inside and every value in its row, and rejects any other result', async () => {
     const {verifyLayoutContainment} = await import(observationModule);
     const valid = await observeLayout('cluster');
-    expect(verifyLayoutContainment(valid, WINDOWS.cluster)).toBe(valid);
-    expect(() => verifyLayoutContainment({...valid, outside: ['game-time']}, WINDOWS.cluster)).toThrow('Enabled overlay sections lie outside the overlay window');
-    expect(() => verifyLayoutContainment({...valid, clipped: ['fuel']}, WINDOWS.cluster)).toThrow('Overlay section values are clipped by their rows');
-    // getBounds can round a window up by one DIP: 441 x 268 passes; one pixel short or two over fails.
-    expect(verifyLayoutContainment({...valid, viewport: {innerWidth: 441, innerHeight: 268}}, WINDOWS.cluster)).toBeTruthy();
-    for (const viewport of [{innerWidth: 439, innerHeight: 267}, {innerWidth: 440, innerHeight: 266}, {innerWidth: 442, innerHeight: 267},
-      {innerWidth: 440, innerHeight: 269}, {innerWidth: 440, innerHeight: 220}])
-      expect(() => verifyLayoutContainment({...valid, viewport}, WINDOWS.cluster), JSON.stringify(viewport)).toThrow('The overlay window must have the reserved size');
+    expect(verifyLayoutContainment(valid, WINDOWS.cluster, RESERVED.cluster)).toBe(valid);
+    expect(() => verifyLayoutContainment({...valid, outside: ['game-time']}, WINDOWS.cluster, RESERVED.cluster)).toThrow('Enabled overlay sections lie outside the overlay window');
+    expect(() => verifyLayoutContainment({...valid, clipped: ['fuel']}, WINDOWS.cluster, RESERVED.cluster)).toThrow('Overlay section values are clipped by their rows');
+    // getBounds can round a window up by one DIP: 441 x 226 passes; one pixel short or two over fails.
+    expect(verifyLayoutContainment({...valid, viewport: {innerWidth: 441, innerHeight: 226}}, WINDOWS.cluster, RESERVED.cluster)).toBeTruthy();
+    for (const viewport of [{innerWidth: 439, innerHeight: 225}, {innerWidth: 440, innerHeight: 224}, {innerWidth: 442, innerHeight: 225},
+      {innerWidth: 440, innerHeight: 227}, {innerWidth: 440, innerHeight: 267}])
+      expect(() => verifyLayoutContainment({...valid, viewport}, WINDOWS.cluster, RESERVED.cluster), JSON.stringify(viewport))
+        .toThrow('The overlay window must have the reserved size');
+  });
+  it('requires the lowest section to end within the reserved height of the shown sections', async () => {
+    const {verifyLayoutContainment} = await import(observationModule);
+    // A card row below the reserve but inside the window and its body: 48 + 24 × 12 = 336 CSS px reserved, 360 window.
+    const low = await observeLayout('card', {item: {'game-time': {left: 10, top: 320, width: 200, height: 18}}});
+    expect(low).toMatchObject({outside: [], clipped: [], bottom: 338});
+    expect(() => verifyLayoutContainment(low, WINDOWS.card, RESERVED.card)).toThrow('Overlay sections extend below the height the row model reserves');
+    const valid = await observeLayout('card');
+    expect(verifyLayoutContainment({...valid, bottom: 336}, WINDOWS.card, RESERVED.card)).toBeTruthy();
+    expect(verifyLayoutContainment({...valid, bottom: 336.005}, WINDOWS.card, RESERVED.card)).toBeTruthy();
+    for (const bottom of [336.02, Number.NaN]) expect(() => verifyLayoutContainment({...valid, bottom}, WINDOWS.card, RESERVED.card), String(bottom))
+      .toThrow('Overlay sections extend below the height the row model reserves');
+    expect(() => verifyLayoutContainment(valid, WINDOWS.card)).toThrow('Overlay sections extend below the height the row model reserves');
   });
 });
 
