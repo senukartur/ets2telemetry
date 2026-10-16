@@ -65,8 +65,8 @@ export interface RecordingStatusInput {
   /** G9: the ACK pipeline's retry code, set by a retryable commit or sample failure and cleared by a successful write. */
   retryCode: string | null;
   /**
-   * Whether the current selection was recording (durable delivery active with connected v1 data) since it was selected.
-   * A connection that is not recording yet then reads `waiting`; one that was recording reads `interrupted`.
+   * Whether the current selection was recording or paused (durable delivery active with fresh, connected or paused v1 data)
+   * since it was selected. A connection that has not recorded yet then reads `waiting`; one that has reads `interrupted`.
    */
   recorded: boolean;
   losses: RecordingLosses;
@@ -84,7 +84,7 @@ const recordingCode = (code: string | null | undefined): RecordingCode => isReco
  * 5. The selection is not recorded: `not-recorded-source`.
  * 6. A retry code is set: `retrying` with it (G9).
  * 7. Durable delivery is active and the v1 source is connected: `recording`; paused: `paused`.
- * 8. Otherwise `interrupted` when the selection was recording since it was selected, else `waiting`.
+ * 8. Otherwise `interrupted` when the selection was recording or paused since it was selected, else `waiting`.
  * `recording` thus needs all three: the database open, the durable cursor active and fresh v1 data (connected or paused
  * are the fresh v1 statuses).
  */

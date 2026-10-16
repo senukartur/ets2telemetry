@@ -82,14 +82,14 @@ export function createRecordingRuntime(options: RecordingRuntimeOptions): Record
   // The recorder reaches storage through the history client, so a command before the open or after a failure answers
   // STORAGE_CLOSED (recorderClient).
   const recorder = plan.durableSelections.length ? new TripRecorderSink(recorderClient({get client() {return history.client;}}), {onChange: changed}) : undefined;
-  // The selection that was recording (durable delivery active, v1 connected) since it was selected: G3 rule 8.
+  // The selection that was recording or paused (durable delivery active, fresh v1 data) since it was selected: G3 rule 8.
   let recorded: SourceSelection | undefined;
   const v1 = new V1Ingestion({
     ...(options.connectGame ? {connectGame: options.connectGame} : {}),
     ...(options.connect ? {connect: options.connect} : {}),
     diagnose: (event, facts) => log(event, undefined, facts),
     onState: state => {
-      if (recorded !== state.selection) recorded = state.durable.state === 'active' && state.status === 'connected' ? state.selection : undefined;
+      if (recorded !== state.selection) recorded = state.durable.state === 'active' && (state.status === 'connected' || state.status === 'paused') ? state.selection : undefined;
       options.onV1State(state); if (recorder) changed();
     },
     ...(recorder ? {sink: recorder, durableSelections: plan.durableSelections, durableReady: () => history.state === 'open'} : {}),

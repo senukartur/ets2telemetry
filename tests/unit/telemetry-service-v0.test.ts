@@ -684,4 +684,44 @@ describe('ET-015c recording status on the parent port', () => {
       expect(f.exit).toHaveBeenCalledExactlyOnceWith(0);
     } finally {connect.mockRestore(); f.restore(); vi.unstubAllEnvs();}
   });
+
+  // Review pass 1, finding 4: a selection whose recorded data was only ever paused was recording too.
+  it('reports interrupted, not waiting, when a connection that recorded only paused data is lost', async () => {
+    vi.stubEnv('ETS2TELEMETRY_RECORDING', 'synthetic:t'); vi.stubEnv('ETS2TELEMETRY_SOURCE_PIPE_V1', v1Endpoint);
+    const sockets: TestSocket[] = [];
+    const connect = vi.spyOn(net, 'connect').mockImplementation(() => {const socket = new TestSocket(); sockets.push(socket); return socket as unknown as net.Socket;});
+    const answer = (value: unknown) => Promise.resolve({ok: true, value});
+    const client = {
+      upsertSession: () => answer({created: true, committedThroughEventSeq: '0'}), committedThrough: () => answer('0'),
+      listTrips: () => answer({trips: [], nextCursor: null}), getEvent: () => answer(undefined), listEvents: () => answer([]), recordCompleteness: () => answer(undefined)
+    } as unknown as StorageClient;
+    const f = await stoppedService(stopProbe, undefined, {realV1: true});
+    try {
+      f.history.state = 'open'; f.history.client = client; f.history.options[0].onStateChange!('open');
+      f.parent.emit('message', {data: {type: 'select', source: 'synthetic'}, ports: []});
+      await vi.advanceTimersByTimeAsync(300);
+      const socket = sockets[0]; socket.emit('connect');
+      const s = new Script(ETS2_A);
+      for (const message of [s.welcome(), s.checkpoint(null, 0, {simulation: 'paused'})]) socket.emit('data', encodeFrameV1(message));
+      await vi.advanceTimersByTimeAsync(300);
+      socket.emit('end');
+      await vi.advanceTimersByTimeAsync(300);
+      expect(recordingPosts(f.parent).map(message => (message.status as {state: string}).state)).toEqual(['opening', 'waiting', 'paused', 'interrupted']);
+    } finally {f.stop(); await vi.advanceTimersByTimeAsync(0); connect.mockRestore(); f.restore(); vi.unstubAllEnvs();}
+  });
+
+  // Review pass 1, finding 3: the probe-failure exit closes the database without reporting that to main.
+  it('posts no recording status once a probe failure begins the exit, so the closing database is never reported', async () => {
+    vi.stubEnv('ETS2TELEMETRY_RECORDING', 'synthetic:t');
+    const f = await stoppedService(() => Promise.resolve(), () => new Promise<void>(() => undefined));
+    try {
+      expect(recordingPosts(f.parent).map(message => (message.status as {state: string}).state)).toEqual(['opening']);
+      f.probeReport({type: 'failed', code: 'STORAGE_WORKER_FAILED'}); f.probeReport({type: 'stopped'});
+      // The database closes while the exit waits for it.
+      f.history.state = 'closed'; f.history.options[0].onStateChange!('closed');
+      await vi.advanceTimersByTimeAsync(999);
+      expect(recordingPosts(f.parent).map(message => (message.status as {state: string}).state)).toEqual(['opening']);
+      await vi.advanceTimersByTimeAsync(1); expect(f.exit).toHaveBeenCalledExactlyOnceWith(0);
+    } finally {f.restore(); vi.unstubAllEnvs();}
+  });
 });

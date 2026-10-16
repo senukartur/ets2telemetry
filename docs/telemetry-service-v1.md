@@ -231,10 +231,10 @@ PR-3 (G2–G7, G9, G10, G12) makes the service report what its recording is doin
 | 6 | The pipeline's retry code is set (G9) | `retrying` | `DISK_FULL`, `IO_ERROR`, `DATABASE_LOCKED`, `STORAGE_BUSY` or `BACKLOG_FULL` |
 | 7 | The durable cursor is `active` and v1 is `connected` | `recording` | null |
 | 7 | The durable cursor is `active` and v1 is `paused` | `paused` | null |
-| 8 | Otherwise, when this selection was recording since it was selected | `interrupted` | null |
+| 8 | Otherwise, when this selection was recording or paused since it was selected | `interrupted` | null |
 | 8 | Otherwise | `waiting` | null |
 
-`recording` thus needs all three: the database open, the durable cursor active and fresh v1 data (connected or paused are the fresh v1 statuses). Rule 8 splits G3's last two rules by whether the selection was recording since it was selected: a connection that has not recorded yet reads `waiting` whatever order its session open and checkpoint take, and one that recorded and lost its fresh data or its connection reads `interrupted` until it records again ([deviation](validation/et-015c.md#pr-3-the-recording-status-from-the-service-to-main-october-16-2026)).
+`recording` thus needs all three: the database open, the durable cursor active and fresh v1 data (connected or paused are the fresh v1 statuses). Rule 8 splits G3's last two rules by whether the selection was recording or paused (cursor active, fresh v1 data) since it was selected: a connection that has not recorded yet reads `waiting` whatever order its session open and checkpoint take, and one that recorded and lost its fresh data or its connection reads `interrupted` until it records again ([deviation](validation/et-015c.md#pr-3-the-recording-status-from-the-service-to-main-october-16-2026)).
 
 **Retry code (G9).** `DurableDelivery.retryCode` is set by a retryable commit or sample failure and by a backlog bound (`BACKLOG_FULL`), and cleared only by the next successful commit or sample write, not by a reconnection or a session open. `DISK_FULL`, `IO_ERROR` and `DATABASE_LOCKED` stay retryable; recovery uses the existing reconnect backoff (at most 4 s) and the 5 s sample timer. Permission and the other unavailable codes give `stopped` for the service lifetime; there is no automatic re-open (ET-019).
 
