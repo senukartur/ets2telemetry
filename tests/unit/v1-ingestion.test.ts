@@ -51,6 +51,17 @@ class Sink implements DurableSink {
   }
 }
 
+/** A Sink that also observes readings; `trace` lists observed readings and commits with their receipt labels in order. */
+class ObservingSink extends Sink {
+  readonly trace: string[] = [];
+  override async commit(m: CoverageMessage, context?: {receivedUtcMs: number}): Promise<Result<CommitResult>> {
+    const result = await super.commit(m);
+    this.trace.push(`commit ${m.kind === 'event' ? m.data.eventSeq : m.data.lastEventSeq} ${context?.receivedUtcMs}`);
+    return result;
+  }
+  observe(m: Extract<ServerMessage, {kind: 'checkpoint' | 'snapshot'}>): Result<undefined> { this.trace.push(`observe ${m.kind} ${m.seq}`); return {ok: true, value: undefined}; }
+}
+
 let clock: {ms: number; ns: bigint};
 let sockets: FakeSocket[];
 let states: V1SourceState[];
@@ -325,6 +336,80 @@ describe('ET-006b protocol v1 ingestion', () => {
     await advance(1000); connectLatest(); expect(latest().hello.durableEvents).toBe(true);
     expect(server('welcome-restart').source.pluginSessionId).toBe(P2);
     expect(server('welcome').source.pluginSessionId).toBe(P1);
+  });
+
+  it('requests durable delivery only while storage is ready and reconnects once when it becomes ready (R10)', async () => {
+    let ready = false;
+    start({sink: new Sink(), durableReady: () => ready}); connectLatest();
+    expect(latest().hello.durableEvents).toBe(false);
+    latest().feed(frame('welcome-live'), frame('checkpoint-live'));
+    expect([state().status, state().durable]).toEqual(['connected', {state: 'pending'}]);
+    // Nothing is possible yet: the live-only connection stays.
+    ingestion!.durableAvailabilityChanged();
+    expect([latest().destroyed, sockets]).toEqual([false, [latest()]]);
+    ready = true; ingestion!.durableAvailabilityChanged();
+    expect([latest().destroyed, state().status]).toEqual([true, 'disconnected']);
+    // Exactly one reconnection, on the shortest backoff, with a durable hello.
+    expect(await nextDelay()).toBe(250);
+    connectLatest(); expect(latest().hello.durableEvents).toBe(true);
+    latest().feed(frame('welcome'), frame('checkpoint'));
+    ingestion!.durableAvailabilityChanged();
+    await advance(5_000);
+    expect([sockets.length, latest().destroyed]).toEqual([2, false]);
+  });
+
+  it('keeps a selection that is not durable live-only, also for a game source (R10)', async () => {
+    start({sink: new Sink(), durableSelections: ['synthetic']}, 'replay'); connectLatest();
+    expect(latest().hello.durableEvents).toBe(false);
+    ingestion!.durableAvailabilityChanged();
+    expect(latest().destroyed).toBe(false);
+    void ingestion!.stop();
+    // A game selection with a synthetic-only plan: the hello stays live-only although the broker names the session.
+    const games: FakeSocket[] = [], authority = {...server('welcome').source, origin: 'game' as const};
+    start({broker: {executable: 'broker.exe', discoveryDirectory: 'transport'}, connectGame: () => { const s = new FakeSocket(); s.authority = authority; games.push(s); return s; },
+      sink: new Sink(), durableSelections: ['synthetic']}, 'ets2');
+    games[0].emit('connect');
+    expect(games[0].hello.durableEvents).toBe(false);
+    void ingestion!.stop();
+    start({sink: new Sink(), durableSelections: ['synthetic']}); connectLatest();
+    expect(latest().hello.durableEvents).toBe(true);
+    await settle();
+  });
+
+  it('hands the durable checkpoint and snapshots to the sink in stream order and labels each item at its receipt (R5, R8)', async () => {
+    let utc = 1_900_000_000_000;
+    const sink = new ObservingSink(); sink.hold = true;
+    start({sink, utcNow: () => utc}); connectLatest();
+    latest().feed(frame('welcome'), frame('checkpoint'), frame('event-job-configured'));
+    utc += 5_000;
+    latest().feed(frame('snapshot'), frame('event-truck-configured-e2'));
+    // The label is the receipt time, even though the commit runs only after the hold is released (R8).
+    utc += 60_000;
+    await settle(); expect(sink.held).toHaveLength(1);
+    sink.hold = false; sink.held.shift()!(); await settle();
+    expect(sink.trace).toEqual([`observe checkpoint ${server('checkpoint').seq}`, 'commit 1 1900000000000', `observe snapshot ${server('snapshot').seq}`, 'commit 2 1900000005000']);
+    expect(latest().acks).toEqual(['1', '2']);
+    // A live-only connection hands nothing to the sink.
+    const live = new ObservingSink();
+    void ingestion!.stop();
+    start({sink: live, durableReady: () => false}); connectLatest();
+    latest().feed(frame('welcome-live'), frame('checkpoint-live'), frame('snapshot'));
+    await settle(); expect(live.trace).toEqual([]);
+  });
+
+  it('stopSource() ends the source without a later ACK; flush() waits for the commit in flight (R14)', async () => {
+    const sink = new Sink(); sink.hold = true; start({sink}); connectLatest();
+    latest().feed(frame('welcome'), frame('checkpoint'), frame('event-job-configured'));
+    await settle(); expect(sink.held).toHaveLength(1);
+    const socket = latest();
+    await ingestion!.stopSource();
+    expect(socket.destroyed).toBe(true);
+    const flushed = ingestion!.flush(); let done = false; void flushed.then(() => { done = true; });
+    await settle(); expect(done).toBe(false);
+    sink.held.shift()!(); await flushed;
+    // The commit completed in storage, but nothing is written after the source stopped.
+    expect([sink.commits, socket.acks]).toEqual([['event 1'], []]);
+    await advance(10_000); expect(sockets).toHaveLength(1);
   });
 
   it('stop() waits for the owned source to complete', async () => {

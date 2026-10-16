@@ -706,3 +706,60 @@ On October 15, 2026 the owner wrote (translated from Russian): "Overall, keep do
 | M13 | No React component tests (as L14); the smokes record the edit steps for review and the receipt and `RuntimeReceipt.ps1` are unchanged |
 
 Invariant (REG-016): the overlay is visible only in driving mode (the game in front; ignoring the mouse, not focusable, not movable) or in edit mode (an own window focused, the game not in front; interactive), and no controller call leaves a taskbar tab enabled.
+
+## ET-015a authorization — October 16, 2026
+
+On October 15, 2026 the owner wrote (translated from Russian): "Overall, keep doing other tasks until you hit tests in the real game. Make optimal decisions. I want you to close as many tasks as possible without my involvement. If there are flaky tests, delegate their fixes to subagents." Under this standing delegation the coordinator started ET-015a (events and durable ACK) and adopted the architect's decisions R1–R17 below. They are coordinator decisions and were not individually reviewed by the owner; the owner may revise them. For ET-015a only, this supersedes earlier statements that ET-015a remains unauthorized; earlier dated text is unchanged.
+
+Event and trip effects are committed in one transaction before the ACK. Recording of real game history stays gated until a separate enablement PR, which requires:
+- the v0 retirement (D2);
+- real-game v1 evidence;
+- ET-015b and ET-015c;
+- the S-1/S-2 decision in ET-016.
+
+| # | Decision |
+| --- | --- |
+| R1 | Four PRs in order, each from `main` after the previous merge: storage recovery reads; the trip recorder in the ingestion pipeline; service wiring and the production gate; a runtime recording journey (development and packaged) |
+| R2 | A `TripRecorderSink` implements `DurableSink` and owns the `TripState`. `DurableDelivery` stays the only FIFO and single-in-flight scheduler. The reducer steps when an item reaches the head of the FIFO, coverage is read just before the commit, and state is adopted only on `committed`, `duplicate`, `covered` or `conflict` (T3). `EffectsHook` is removed (S-3) |
+| R3 | Production gate: `GAME_HISTORY_RECORDING = false` in `recording-policy.ts`. `ETS2TELEMETRY_RECORDING=synthetic:<name>` or `replay:<name>` opens `%LOCALAPPDATA%\ETS2Telemetry\synthetic\<name>.sqlite` with that purpose instead of history, and durable delivery applies only to the matching selection. An invalid value logs `RECORDING_TARGET_REJECTED` and falls back to the default. The env can never select history |
+| R4 | Cold start uses storage-derived `TripSeed`s (job key, observed distance, last UTC label, `awaitingOutcome`), not a replay rebuild. This answers the open rebuild question in [trips](docs/trips.md) |
+| R5 | Checkpoints and snapshots of durable connections enter the same FIFO as readings, in stream order, bounded separately by `MAX_PENDING_READINGS` = 512. Overflow closes the connection as retryable `BACKLOG_FULL`; readings are never thinned |
+| R6 | At `openSession` the recorder steps `disconnected` itself when the reducer still has a connection |
+| R7 | A retryable storage failure gives no adoption and no ACK, then a retryable close. An unavailable failure stops durable delivery for the service lifetime. Reducer violations map to fixed unavailable codes (`TRIP_ORDER_VIOLATION`, `TRIP_COVERAGE_MISMATCH`, `TRIP_UNKNOWN_SESSION`) |
+| R8 | The receipt UTC label is captured when the frame is decoded and passed with the commit |
+| R9 | ACK ahead of storage (E6) records one session-level `restore-loss` completeness interval, written at most once, before the session continues live-only |
+| R10 | A hello requests durable delivery only for listed selections and only while storage is open. When storage opens, a live-only connection reconnects once as durable; live never waits for storage |
+| R11 | S-1 (fuel-used column) and S-2 (late-attached job trips) go to ET-016 in one schema v2 migration; S-3 is resolved here; S-4 stays in detail JSON. No schema migration in ET-015a |
+| R12 | Storage API additions without a schema change: a `{game, outcome}` filter on `listTrips` and an `ifAbsent` option on `recordCompleteness` |
+| R13 | Disk-full, permission and lock failures are injected through the real worker by a test-only entry inside the real transaction, so rollback of the event and its effects is proven |
+| R14 | Orderly exit splits ingestion stop into intake (`stopSource`) and a 500 ms `recording-flush` step that waits for the in-flight commit and drops queued work; the producer redelivers it. The service stop budget stays 2500 ms |
+| R15 | Seeds are read only at the first durable welcome of a game in the recorder's lifetime |
+| R16 | `conflict` results are adopted as T3 says; a later divergence fails closed |
+| R17 | The recorder exposes a read-only trip view for ET-015b's sample references |
+
+Synthetic and replay recordings use only temporary or synthetic-purpose databases. No schema, wire, preload/IPC or renderer change; ET-015b, ET-015c, ET-016 and later phases are not authorized by this section. No game, TruckersMP, display or performance claim follows from synthetic or local tests.
+
+## ET-012c strip overflow fix — October 16, 2026
+
+On October 16, 2026 the owner decided to fix the overlay strip's overflow first, in a separate package ET-012c, before ET-010c (PR #73) merges.
+- **The problem.** With protocol v1 data, the default strip (1280 × 38 DIP, all sections) kept only seven of twelve shown sections on its single visible line. ET-012b's scale could not help.
+- **Decisions.** Under that decision and the standing delegation of October 15, 2026, the coordinator adopted the architect's decisions S1–S12 below. They were not individually reviewed by the owner.
+
+| # | Decision |
+| --- | --- |
+| S1 | One PR, strip only; the overlay smoke assertion is the reproducing regression case |
+| S2 | The strip reserves `rows` 36 px rows, computed by greedy in-order packing of per-item maximum widths (two tag slots, then the enabled sections in canonical order, with the 14 px column gap). The window height is `ceil(36 × rows × scale + 2 × max(1, scale))` DIP. Below zoom 1 the surface border snaps to one device pixel, so the inner width counts it as `max(1, 1 / scale)` CSS px. Flexbox line breaking uses widths clamped by `max-width`, so the real layout never needs more lines than reserved. Rejected: a fixed two rows, renderer measurement over new IPC, and rows derived from the values or from the sections that currently have data |
+| S3 | Per-section maximum widths in CSS px: speed 140, gear 90, RPM 130, fuel 190, range 140, SDK consumption 230, cargo 300, origin 300, destination 300, distance driven 150, distance remaining 150, deadline 220, expected income 300, game time 200. Two tag slots of 96 each. Longer values end in an ellipsis |
+| S4 | A pure module `overlay-strip.ts` holds the constants and `stripRowCount`; main's geometry and the overlay renderer share it, and a unit test cross-checks `renderer.css`. The renderer gains no geometry authority |
+| S5 | The geometry functions take the enabled sections and default to all of them, so a forgotten argument over-reserves. The strip width rule is unchanged. The strip fits only when the client height is at least its height plus 16. The one-row strip height uses `ceil` instead of M4's `round` |
+| S6 | A strip that does not fit hides as a whole in driving mode, and edit mode reports `too-large` (L10/M4); it never shrinks automatically or clips sections |
+| S7 | The controller keeps the saved sections. A sections-only change re-places a shown strip, with one topmost re-assertion when its rectangle changes, never shows a hidden overlay, and re-sizes the edit overlay from its unchanged draft |
+| S8 | Main creates the overlay window at the size for the saved sections and passes the sections to the controller only after a durable settings save |
+| S9 | Strip items carry their maximum width inline. The fixed 38 px row height is removed; the surface takes its content height at the top of the reserved window, and the unused transparent rows stay click-through |
+| S10 | The overlay runtime smoke asserts that every shown strip section lies inside the overlay window and that every strip item is capped; truncation and row counts are recorded only. The receipt and its phase count are unchanged |
+| S11 | Card, cluster and HUD are unchanged in ET-012c |
+| S12 | No change to settings format v3, preload/IPC, `OverlayPresentation`, protocol, fixtures, service or native code; driving-mode click-through, no focus, the topmost re-assertion and the REG-016 invariant keep their code paths |
+
+**Invariant.** The overlay window geometry is a function only of the layout, placement, enabled sections, client rectangle and display topology. Every enabled strip section that the projection shows lies inside the window.
+
+No game, TruckersMP, display or performance claim follows from synthetic checks.

@@ -2,10 +2,19 @@
 // It runs the in-process storage core and therefore loads native SQLite; only the desktop storage worker imports it.
 // Requests are handled one at a time in arrival order. Open options are copied field by field, so test hooks, injected
 // migrations and clocks never cross the worker boundary. See docs/storage.md.
-import type {Result} from '../api';
+import type {CommitOptions, Result} from '../api';
 import {classifyError, storageError} from '../errors';
 import {openStorage, type Storage} from '../index';
 import {parseRequest, type StorageCommand, type StorageResponse} from './protocol';
+
+/** A commit command as the host received it, after the request was parsed. */
+export type CommitCommand = Extract<StorageCommand, {name: 'commitEvent' | 'commitGap'}>;
+/**
+ * In-process options of a test entry that starts the host itself (ET-015a, R13). They are passed by code on the worker
+ * thread and are never read from a message. `commitOptions` may return the in-process commit options, such as a
+ * `testHooks.beforeCommit` fault, for one commit command. The production storage worker passes none.
+ */
+export interface HostTestOptions {commitOptions?: (command: CommitCommand) => CommitOptions | undefined}
 
 /** The worker side of the port: worker_threads' parentPort satisfies it. */
 export interface HostPort {
@@ -21,7 +30,7 @@ const failed = (code: Parameters<typeof storageError>[0]): Result<never> => ({ok
  * Serves requests until a `close` request: it closes the database, answers, stops listening and releases the port so
  * the worker thread can end with exit code 0. Commands before a successful `open` or after `close` get STORAGE_CLOSED.
  */
-export function serveStorage(port: HostPort): void {
+export function serveStorage(port: HostPort, testOptions: HostTestOptions = {}): void {
   let storage: Storage | undefined;
   let closed = false;
   let queue = Promise.resolve();
@@ -46,11 +55,13 @@ export function serveStorage(port: HostPort): void {
     if (!storage) return failed('STORAGE_CLOSED');
     switch (command.name) {
     case 'upsertSession': return storage.upsertSession({message: command.input.message});
-    // Only the message and its effects are forwarded; in-process commit options never come from a message.
-    case 'commitEvent': return storage.commitEvent({message: command.input.message, effects: command.input.effects});
-    case 'commitGap': return storage.commitGap({message: command.input.message, effects: command.input.effects});
+    // Only the message and its effects are forwarded; in-process commit options never come from a message, only from
+    // a test entry's in-process testOptions.
+    case 'commitEvent': return storage.commitEvent({message: command.input.message, effects: command.input.effects}, testOptions.commitOptions?.(command));
+    case 'commitGap': return storage.commitGap({message: command.input.message, effects: command.input.effects}, testOptions.commitOptions?.(command));
     case 'appendSamples': return storage.appendSamples(command.pluginSessionId, command.rows);
-    case 'recordCompleteness': return storage.recordCompleteness(command.pluginSessionId, command.interval);
+    case 'recordCompleteness':
+      return storage.recordCompleteness(command.pluginSessionId, command.interval, command.options === undefined ? undefined : {ifAbsent: command.options.ifAbsent});
     case 'committedThrough': return storage.committedThrough(command.pluginSessionId);
     case 'getSession': return storage.getSession(command.pluginSessionId);
     case 'getEvent': return storage.getEvent(command.pluginSessionId, command.eventSeq);

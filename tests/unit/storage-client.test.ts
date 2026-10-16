@@ -1,5 +1,5 @@
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
-import type {Result, StorageError, StorageErrorCode} from '../../packages/storage/src/api';
+import type {CompletenessOptions, Result, StorageError, StorageErrorCode, TripPage} from '../../packages/storage/src/api';
 import {COMMAND_DEADLINE_MS, MAX_QUEUED_COMMANDS, OPEN_DEADLINE_MS, StorageClient, type StorageClientOptions, type StorageWorkerHandle} from '../../packages/storage/src/client';
 import {storageError} from '../../packages/storage/src/errors';
 import {parseRequest, type StorageRequest} from '../../packages/storage/src/worker/protocol';
@@ -85,6 +85,81 @@ describe('StorageClient command flow', () => {
     await expect(retry).resolves.toEqual({ok: true, value: COMMITTED});
     expect(f.failures).toEqual([]);
     expect(f.client.state).toBe('running');
+  });
+});
+
+describe('ET-015a trip filter and completeness options at the worker boundary', () => {
+  const INTERVAL = {kind: 'restore-loss' as const, firstEventSeq: '3', lastEventSeq: '5'};
+  const request = (command: Record<string, unknown>) => ({type: 'storage.request', id: 1, command});
+  it('sends the listTrips filter and copies only the page fields', () => {
+    const f = fixture();
+    void f.client.listTrips({game: 'ats', outcome: 'open', cursor: '5', limit: 10, testHooks: {}} as Parameters<StorageClient['listTrips']>[0]);
+    expect(f.sent[0].command).toEqual({name: 'listTrips', page: {game: 'ats', outcome: 'open', cursor: '5', limit: 10}});
+    expect(Object.keys((f.sent[0].command as {page: object}).page).sort()).toEqual(['cursor', 'game', 'limit', 'outcome']);
+    expect(parseRequest(f.sent[0]).ok).toBe(true);
+  });
+  it('sends ifAbsent and nothing else of the completeness options, and no options when none are given', async () => {
+    const f = fixture();
+    const first = f.client.recordCompleteness(P1, INTERVAL, {ifAbsent: true, testHooks: {}} as Parameters<StorageClient['recordCompleteness']>[2]);
+    expect(f.sent[0].command).toEqual({name: 'recordCompleteness', pluginSessionId: P1, interval: INTERVAL, options: {ifAbsent: true}});
+    f.ok(1, undefined);
+    await expect(first).resolves.toEqual({ok: true, value: undefined});
+    void f.client.recordCompleteness(P1, INTERVAL);
+    expect(f.sent[1].command).toEqual({name: 'recordCompleteness', pluginSessionId: P1, interval: INTERVAL});
+    expect(Object.hasOwn(f.sent[1].command, 'options')).toBe(false);
+    for (const sent of f.sent) expect(parseRequest(sent).ok).toBe(true);
+  });
+  // Review pass 1: a non-object page or options value used to throw a TypeError in the client. It is forwarded as given,
+  // so the strict worker parser refuses it and the caller gets an INVALID_INPUT result.
+  it.each([['null', null], ['a number', 5], ['a string', 'ets2']])('forwards %s as the page or options value instead of throwing', (_name, value) => {
+    const f = fixture();
+    expect(() => f.client.listTrips(value as unknown as TripPage)).not.toThrow();
+    expect(() => f.client.recordCompleteness(P1, INTERVAL, value as unknown as CompletenessOptions)).not.toThrow();
+    expect(f.sent[0].command).toEqual({name: 'listTrips', page: value});
+    expect(parseRequest(f.sent[0])).toEqual({ok: false, id: 1});
+    f.reply(1, error('INVALID_INPUT') as Result<unknown>);
+    expect(f.sent).toHaveLength(2);
+    expect(f.sent[1].command).toEqual({name: 'recordCompleteness', pluginSessionId: P1, interval: INTERVAL, options: value});
+    expect(parseRequest(f.sent[1])).toEqual({ok: false, id: 2});
+  });
+  it('returns the INVALID_INPUT answer of a refused page to the caller', async () => {
+    const f = fixture();
+    const listed = f.client.listTrips(null as unknown as TripPage);
+    f.reply(1, error('INVALID_INPUT') as Result<unknown>);
+    await expect(listed).resolves.toEqual(error('INVALID_INPUT'));
+  });
+  it.each([
+    ['no page', undefined],
+    ['an empty page', {}],
+    ['every field', {cursor: '7', limit: 100, game: 'ets2', outcome: 'cancelled'}],
+    ['undefined fields', {cursor: undefined, limit: undefined, game: undefined, outcome: undefined}],
+    ['outcome none', {outcome: 'none'}],
+    ['outcome delivered', {outcome: 'delivered'}]
+  ])('accepts a listTrips page with %s', (_name, page) => {
+    expect(parseRequest(request({name: 'listTrips', page}))).toMatchObject({ok: true, id: 1});
+  });
+  it.each([
+    ['an unknown key', {game: 'ets2', testHooks: {}}],
+    ['an unknown game', {game: 'ETS2'}],
+    ['an unknown outcome', {outcome: 'closed'}],
+    ['a numeric cursor', {cursor: 5}],
+    ['a text limit', {limit: '10'}],
+    ['an array', []],
+    ['null', null]
+  ])('refuses a listTrips page with %s', (_name, page) => {
+    expect(parseRequest(request({name: 'listTrips', page}))).toEqual({ok: false, id: 1});
+  });
+  it.each([
+    ['no options', undefined, true],
+    ['ifAbsent true', {ifAbsent: true}, true],
+    ['ifAbsent false', {ifAbsent: false}, true],
+    ['ifAbsent undefined', {ifAbsent: undefined}, true],
+    ['a text ifAbsent', {ifAbsent: 'yes'}, false],
+    ['an unknown key', {ifAbsent: true, testHooks: {}}, false],
+    ['an array', [], false],
+    ['null', null, false]
+  ])('checks recordCompleteness options strictly: %s', (_name, options, accepted) => {
+    expect(parseRequest(request({name: 'recordCompleteness', pluginSessionId: P1, interval: INTERVAL, options})).ok).toBe(accepted);
   });
 });
 

@@ -108,6 +108,95 @@ describe('coherent hidden-renderer observations', () => {
   ])('cannot accept mismatched state, readings, origin or units', async sample => {expect(await observe(sample)).toBe(false);});
 });
 
+describe('ET-012c strip containment observation', () => {
+  // Hand-derived from tests/fixtures/protocol-v0/checkpoint.json: range stays hidden because its estimate is not observed.
+  const EXPECTED = ['speed', 'gear', 'rpm', 'fuel', 'sdk-consumption', 'cargo', 'destination', 'expected-income', 'game-time'];
+  type Box = {left: number; top: number; width: number; height: number};
+  interface Layout {sections?: string[]; roots?: number; layout?: string; freshness?: string; viewport?: {innerWidth: number; innerHeight: number};
+    root?: Box; row?: Box; item?: Record<string, Box>; maxWidth?: Record<string, string>; truncated?: string[]}
+  const rect = ({left, top, width, height}: Box) => ({left, top, width, height, right: left + width, bottom: top + height});
+  // A 1280 x 110 window: the root fills it, the strip row is 1260 wide and three 36 px rows high, and every item is 90 x 36
+  // on the first row after a 96 px synthetic tag. `item` moves single sections; `maxWidth` overrides computed maximum widths.
+  function stripDocument({sections = EXPECTED, roots = 1, layout = 'strip', freshness = 'current', root = {left: 0, top: 0, width: 1280, height: 110},
+    row = {left: 10, top: 0, width: 1260, height: 110}, item = {}, truncated = []}: Layout = {}) {
+    const node = (testId: string, box: Box, extra: Record<string, unknown> = {}) => ({testId, className: testId === 'overlay-tag-origin' ? 'overlay-tag' : 'overlay-item',
+      getAttribute: (name: string) => name === 'data-testid' ? testId : null, getBoundingClientRect: () => rect(box), ...extra});
+    const nodes = sections.map((id, index) => node(`overlay-section-${id}`, item[id] ?? {left: 120 + index * 100, top: 1, width: 90, height: 36},
+      {querySelector: (selector: string) => selector === '.overlay-value' ? {scrollWidth: truncated.includes(id) ? 200 : 60, clientWidth: 60} : null}));
+    const strip = {...node('strip-row', row), children: [node('overlay-tag-origin', {left: 12, top: 8, width: 96, height: 20}), ...nodes]};
+    const rootNode = {getAttribute: (name: string) => ({'data-layout': layout, 'data-freshness': freshness} as Record<string, string>)[name] ?? null,
+      getBoundingClientRect: () => rect(root), querySelector: (selector: string) => selector === '.overlay-strip-row' ? strip : null,
+      querySelectorAll: (selector: string) => selector === '[data-testid^="overlay-section-"]' ? nodes : []};
+    return {querySelectorAll: (selector: string) => selector === '[data-testid="overlay-root"]' ? Array.from({length: roots}, () => rootNode) : []};
+  }
+  async function observeStrip(layout: Layout = {}, expected: string[] = EXPECTED) {
+    const {stripLayoutObservation} = await import(observationModule);
+    const viewport = layout.viewport ?? {innerWidth: 1280, innerHeight: 110};
+    // The exact-state form also protects the callback from requiring module closures; the JSON round trip stands in for
+    // Playwright's serialization, which returns plain objects of this realm.
+    return JSON.parse(JSON.stringify(runInNewContext(`(${stripLayoutObservation.toString()})(expected)`, {expected: {sections: expected},
+      document: stripDocument(layout), ...viewport,
+      getComputedStyle: (node: {testId: string}) => ({maxWidth: layout.maxWidth?.[node.testId] ?? '140px'})}))) as false | Record<string, unknown>;
+  }
+  it('names the sections the synthetic checkpoint fixture shows in the strip', async () => {
+    const {STRIP_SMOKE_SECTIONS, STRIP_SMOKE_WINDOW} = await import(observationModule);
+    expect(STRIP_SMOKE_SECTIONS).toEqual(EXPECTED);
+    expect(STRIP_SMOKE_WINDOW).toEqual({innerHeight: 110, minWidth: 480, maxWidth: 1280});
+  });
+  it('reports every shown section inside the window and the strip row, every item capped, and records truncation and rows', async () => {
+    expect(await observeStrip({truncated: ['cargo']})).toEqual({viewport: {innerWidth: 1280, innerHeight: 110}, sections: EXPECTED,
+      outside: [], uncapped: [], truncated: ['cargo'], rows: 1});
+  });
+  it.each([
+    {name: 'below the window', item: {'game-time': {left: 120, top: 110, width: 90, height: 36}}},
+    {name: 'partly below the window', item: {'game-time': {left: 120, top: 80, width: 90, height: 36}}},
+    {name: 'past the right edge', item: {'game-time': {left: 1250, top: 1, width: 90, height: 36}}},
+    {name: 'outside only the strip row', row: {left: 10, top: 0, width: 1260, height: 38}, item: {'game-time': {left: 120, top: 37, width: 90, height: 36}}},
+    {name: 'with an empty box', item: {'game-time': {left: 120, top: 1, width: 0, height: 36}}}
+  ])('lists a section $name as outside', async ({item, row}) => {
+    expect(await observeStrip({item, ...(row ? {row} : {})})).toMatchObject({outside: ['game-time'], uncapped: []});
+  });
+  it('lists every strip item without a maximum width as uncapped', async () => {
+    expect(await observeStrip({maxWidth: {'overlay-tag-origin': 'none', 'overlay-section-cargo': 'none'}}))
+      .toMatchObject({outside: [], uncapped: ['overlay-tag-origin', 'overlay-section-cargo']});
+  });
+  it.each([
+    {name: 'a missing section', layout: {sections: EXPECTED.slice(1)}},
+    {name: 'an extra section', layout: {sections: [...EXPECTED, 'range']}},
+    {name: 'another section order', layout: {sections: [EXPECTED[1], EXPECTED[0], ...EXPECTED.slice(2)]}},
+    {name: 'another layout', layout: {layout: 'card'}},
+    {name: 'a stale root', layout: {freshness: 'stale'}},
+    {name: 'no root', layout: {roots: 0}},
+    {name: 'two roots', layout: {roots: 2}}
+  ])('waits instead of observing $name', async ({layout}) => {
+    expect(await observeStrip(layout)).toBe(false);
+  });
+  it('accepts the reserved window with every section inside and capped, and rejects any other result', async () => {
+    const {verifyStripLayout} = await import(observationModule);
+    const valid = await observeStrip();
+    expect(verifyStripLayout(valid)).toBe(valid);
+    expect(() => verifyStripLayout({...valid, outside: ['expected-income', 'game-time']})).toThrow('Enabled strip sections lie outside the overlay window');
+    expect(() => verifyStripLayout({...valid, viewport: {innerWidth: 1280, innerHeight: 38}})).toThrow('The strip overlay window must have its reserved size');
+    expect(() => verifyStripLayout({...valid, uncapped: ['overlay-section-cargo']})).toThrow('Every strip item must have a maximum width');
+    const unreserved = await observeStrip({viewport: {innerWidth: 1280, innerHeight: 38}});
+    expect(() => verifyStripLayout(unreserved)).toThrow('reserved size');
+  });
+  it('accepts a window the screen narrowed, but never another height or a width outside the strip limits', async () => {
+    // Windows limits a window to the screen size: on a 1024-wide hosted runner screen the hidden overlay, created
+    // 1280 x 110 and never placed without a game window, is 1024 x 110 (CI run 38878781715).
+    const {verifyStripLayout} = await import(observationModule);
+    const narrow = await observeStrip({viewport: {innerWidth: 1024, innerHeight: 110}});
+    expect(verifyStripLayout(narrow)).toBe(narrow);
+    expect(verifyStripLayout({...narrow, viewport: {innerWidth: 480, innerHeight: 110}})).toBeTruthy();
+    for (const viewport of [{innerWidth: 1024, innerHeight: 74}, {innerWidth: 1024, innerHeight: 111}, {innerWidth: 1024, innerHeight: 146}])
+      expect(() => verifyStripLayout({...narrow, viewport}), JSON.stringify(viewport)).toThrow('The strip overlay window must have its reserved size');
+    for (const viewport of [{innerWidth: 479, innerHeight: 110}, {innerWidth: 1281, innerHeight: 110}])
+      expect(() => verifyStripLayout({...narrow, viewport}), JSON.stringify(viewport)).toThrow('The strip overlay window width must lie between 480 and 1280');
+    // Containment still applies to the narrowed window.
+    expect(() => verifyStripLayout({...narrow, outside: ['game-time']})).toThrow('Enabled strip sections lie outside the overlay window');
+  });
+});
+
 describe('debugger-paused stall start, independent observation and resume ordering', () => {
   // The fake DevTools session keeps the renderer "paused" until the code under test sends Debugger.resume.
   type Mode = 'during' | 'after' | 'late-metadata' | 'missing-reading-time' | 'foreign-frame' | 'exception-pause' | 'no-pause';

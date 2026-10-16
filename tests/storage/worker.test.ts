@@ -1,9 +1,10 @@
 // The storage worker as the telemetry service runs it: the bundled apps/desktop/src/storage-worker.ts in a real worker
-// thread under the pinned Electron runtime, driven through StorageClient (REG-006, REG-007 partial).
+// thread under the pinned Electron runtime, driven through StorageClient (REG-006, REG-007 partial), and the ET-015a
+// test-only fault storage worker.
 import {chmodSync, existsSync} from 'node:fs';
 import {once} from 'node:events';
 import path from 'node:path';
-import {Worker} from 'node:worker_threads';
+import {MessageChannel, Worker} from 'node:worker_threads';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 import {CLOSE_GRACE_MS, StorageClient, workerHandle} from '../../packages/storage/src/client';
 import type {Result, StorageErrorCode, TripEffect} from '../../packages/storage/src/index';
@@ -183,5 +184,77 @@ describe('storage worker', () => {
     worker.postMessage({type: 'storage.request', id: 7, command: {name: 'dropTable'}});
     const [response] = await answer;
     expect(response).toMatchObject({type: 'storage.response', id: 7, result: {ok: false, error: {code: 'INVALID_INPUT'}}});
+  });
+});
+
+/**
+ * ET-015a fault injection through the real worker (R13): the bundled test entry tests/storage/fixtures/fault-storage-worker.ts
+ * runs the same host with an in-process commit fault inside the real transaction. Nothing of the fault crosses a message.
+ */
+describe('fault storage worker', () => {
+  const FAULT_WORKER = path.join(bundles, 'fault-storage-worker.cjs');
+  function startFaultWorker(data: {fault?: {eventSeq: string; code: string; times: number}; hold?: {eventSeq: string}}) {
+    const channel = new MessageChannel();
+    const worker = new Worker(FAULT_WORKER, {workerData: {kind: 'storage', ...data, control: channel.port2}, transferList: [channel.port2]});
+    started.push(worker);
+    const exit = once(worker, 'exit').then(([code]) => code as number);
+    return {client: new StorageClient(workerHandle(worker), {closeGraceMs: TEST_CLOSE_GRACE_MS}), control: channel.port1, exit};
+  }
+  const attribute: TripEffect = {kind: 'event.attribute', tripUuid: T1, attribution: 'trip'};
+  const deliver: TripEffect[] = [{kind: 'trip.close', tripUuid: T1, outcome: 'delivered', closeReason: 'outcome', outcomeEvent: 'this-event', recordingCompleteness: 'complete',
+    endedUtcMs: 1_791_676_900_000}, attribute];
+
+  it('an injected SQLITE_FULL rolls back the event and its trip effects, is DISK_FULL, and the retry commits once (REG-007)', async () => {
+    const {client, exit} = startFaultWorker({fault: {eventSeq: '2', code: 'SQLITE_FULL', times: 1}});
+    ok(await client.open(options()));
+    ok(await client.upsertSession({message: v1('welcome')}));
+    expect(ok(await client.commitEvent({message: v1('event-job-configured'), effects: [openTrip, attribute]}))).toEqual({status: 'committed', committedThroughEventSeq: '1'});
+    const full = await client.commitEvent({message: withEventSeq('event-job-delivered', 2n), effects: deliver});
+    expect(full).toEqual({ok: false, error: {code: 'DISK_FULL', retryable: true, message: 'The disk or the database size limit is full.', sqliteCode: 'SQLITE_FULL'}});
+    // The transaction rolled back the event row, its close and its attribution; coverage did not move.
+    expect(ok(await client.committedThrough(P1))).toBe('1');
+    expect(ok(await client.getEvent(P1, '2'))).toBeUndefined();
+    expect(ok(await client.getTrip(T1))).toMatchObject({outcome: 'open', outcomeEventSeq: null, closeReason: null, endedUtcMs: null});
+    // The worker keeps serving: the retry of the same commit is stored once, with its effects.
+    expect(ok(await client.commitEvent({message: withEventSeq('event-job-delivered', 2n), effects: deliver}))).toEqual({status: 'committed', committedThroughEventSeq: '2'});
+    expect(ok(await client.getTrip(T1))).toMatchObject({outcome: 'delivered', outcomeEventSeq: '2', closeReason: 'outcome', endedUtcMs: 1_791_676_900_000});
+    expect(await client.close()).toEqual({clean: true});
+    expect(await exit).toBe(0);
+    readOnly(ws.database, db => {
+      expect(db.prepare('SELECT event_seq AS seq, type FROM events ORDER BY event_seq').all()).toEqual([{seq: '00000000000000000001', type: 'job.configured'}, {seq: '00000000000000000002', type: 'job.delivered'}]);
+      expect(db.prepare('SELECT count(*) AS attributions FROM event_attributions').get()).toEqual({attributions: 2});
+      expect(db.prepare("PRAGMA integrity_check").pluck().get()).toBe('ok');
+    });
+  });
+
+  it.each([['SQLITE_READONLY', 'PERMISSION_DENIED', false], ['SQLITE_BUSY', 'DATABASE_LOCKED', true]] as const)('classifies an injected %s as %s and stores nothing', async (sqliteCode, code, retryable) => {
+    const {client} = startFaultWorker({fault: {eventSeq: '1', code: sqliteCode, times: 1}});
+    ok(await client.open(options()));
+    ok(await client.upsertSession({message: v1('welcome')}));
+    const refused = await client.commitEvent({message: v1('event-job-configured'), effects: [openTrip]});
+    expect(refused.ok ? 'ok' : [refused.error.code, refused.error.retryable, refused.error.sqliteCode]).toEqual([code, retryable, sqliteCode]);
+    expect(ok(await client.committedThrough(P1))).toBe('0');
+    expect(ok(await client.getTrip(T1))).toBeUndefined();
+    expect(ok(await client.commitEvent({message: v1('event-job-configured'), effects: [openTrip]})).status).toBe('committed');
+    expect(await client.close()).toEqual({clean: true});
+  });
+
+  it('holds the commit covering the configured eventSeq inside its transaction until the release message', async () => {
+    const {client, control, exit} = startFaultWorker({hold: {eventSeq: '1'}});
+    ok(await client.open(options()));
+    ok(await client.upsertSession({message: v1('welcome')}));
+    const held = once(control, 'message');
+    let answered = false;
+    const commit = client.commitEvent({message: v1('event-job-configured'), effects: [openTrip]}).then(result => { answered = true; return result; });
+    const queued = client.committedThrough(P1);
+    expect((await held)[0]).toEqual({type: 'held', eventSeq: '1'});
+    // The worker thread is blocked inside the transaction, so neither the commit nor the command behind it is answered.
+    expect(answered).toBe(false);
+    control.postMessage({type: 'release'});
+    expect(ok(await commit)).toEqual({status: 'committed', committedThroughEventSeq: '1'});
+    expect(ok(await queued)).toBe('1');
+    control.close();
+    expect(await client.close()).toEqual({clean: true});
+    expect(await exit).toBe(0);
   });
 });
