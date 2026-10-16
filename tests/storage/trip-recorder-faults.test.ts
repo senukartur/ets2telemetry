@@ -3,13 +3,15 @@
 // simulator on actual pipes. The transport of normal-delivery.json is replaced so that the reconnection the failure
 // causes is scripted; the final rows are hand-written in tests/fixtures/recording/<id>.rows.expected.json (REG-007,
 // REG-011). Injected SQLite codes are not a full volume, a real permission change or a real lock.
+import {readFileSync} from 'node:fs';
+import path from 'node:path';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 import type {ServerMessage} from '../../packages/contracts/src/protocol-v1';
 import {readFixtureFile} from '../../tools/telemetry-simulator/src/fixture-file';
 import {scenarioSource} from '../../tools/telemetry-simulator/src/v1/replay';
 import {scenarioPath} from '../shared/simulator-v1-expected';
 import {ok, workspace} from './helpers';
-import {recordingExpected, replayOf, runRecording, storedRows, terminateWorkers, withTransport, type RecordingRun} from './recording-helpers';
+import {RECORDING_FIXTURES, recordingExpected, replayOf, runRecording, storedRows, storedSamples as readSamples, terminateWorkers, withTransport, type RecordingRun} from './recording-helpers';
 
 type Json = Record<string, unknown>;
 let ws: Awaited<ReturnType<typeof workspace>>;
@@ -94,5 +96,71 @@ describe('S4 injected storage failures under the trip recorder', () => {
     // The first connection never received an ACK; the second acknowledged every redelivered and live item.
     expect([run.served(0), run.served(1)]).toEqual([[], ['1', '2', '3', '4', '5', '6', '7', '8', '9']]);
     await expectRows(run, 'normal-delivery-backlog');
+  }, 90_000);
+});
+
+// ET-015b (H10, H12): failures injected inside the real appendSamples transaction by the fault worker's `samplesFault`,
+// under the same recorder and ingestion, with tests/fixtures/recording/one-second-samples.json. Its events are 1-6 on
+// connection 1 and 7-8 on connection 2; its stored rows are hand-written in one-second-samples.rows.expected.json.
+describe('ET-015b injected sample failures under the trip recorder', () => {
+  const samplesInput = () => JSON.parse(readFileSync(path.join(RECORDING_FIXTURES, 'one-second-samples.json'), 'utf8')) as Json & {seed: string};
+  const samplesExpected = () => (JSON.parse(readFileSync(path.join(RECORDING_FIXTURES, 'one-second-samples.rows.expected.json'), 'utf8')) as {samples: unknown[]}).samples;
+  /** The stored samples in the expectation's shape; every client must be closed first. */
+  const storedSamples = (seed: string, session: string) => readSamples(ws, seed, session);
+  const failureLogs = (run: RecordingRun) => run.services[0].logs.filter(([event]) => /^V1_(DURABLE|SAMPLES_(RETRY|DROPPED|DISCARDED|SKIPPED))/.test(event));
+  const allEvents = [['1', '2', '3', '4', '5', '6'], ['7', '8']];
+
+  it('(e) SQLITE_FULL twice in appendSamples keeps the rows and stores each once later, while events commit and are acknowledged (DISK_FULL)', async () => {
+    const input = samplesInput(), session = scenarioSource(replayOf(input).scenario).pluginSessionId;
+    // A 1 ms flush writes and retries each pending row almost at once, so both failures happen during the run.
+    const run = await runRecording(input, {path: ws.database, backups: ws.backups}, {fault: {samplesFault: {code: 'SQLITE_FULL', times: 2}}, sampleFlushMs: 1});
+    expect(failureLogs(run)).toEqual([['V1_SAMPLES_RETRY', {code: 'DISK_FULL', count: 1}], ['V1_SAMPLES_RETRY', {code: 'DISK_FULL', count: 2}]]);
+    expect([run.served(0), run.served(1)]).toEqual(allEvents);
+    expect(run.services[0].states.filter(s => s.status === 'incompatible' || s.durable.state === 'failed')).toEqual([]);
+    expect(await run.services[0].client.close()).toEqual({clean: true});
+    expect(await storedSamples(input.seed, session)).toEqual(samplesExpected());
+  }, 90_000);
+
+  it('(f) SQLITE_READONLY in appendSamples stops durable delivery for the service lifetime and discards the pending rows (PERMISSION_DENIED)', async () => {
+    // The first batch is queued when the seventh row (second 1009, after simulation.started, eventSeq 6) is pending. The
+    // reconnection after the failure is live-only.
+    const base = samplesInput(), input = withTransport(base, 'one-second-samples-permission-denied', [connect(0), disconnect(13000), connect(15500, {durable: false}), disconnect(17500)]);
+    const session = scenarioSource(replayOf(input).scenario).pluginSessionId;
+    const run = await runRecording(input, {path: ws.database, backups: ws.backups}, {fault: {samplesFault: {code: 'SQLITE_READONLY', times: 1}}, sampleBatchRows: 7});
+    const logs = failureLogs(run), discarded = logs.find(([event]) => event === 'V1_SAMPLES_DISCARDED')?.[1] as {count: number} | undefined;
+    expect(logs).toEqual([['V1_DURABLE_UNAVAILABLE', {code: 'PERMISSION_DENIED'}], ['V1_SAMPLES_DISCARDED', {count: discarded?.count}]]);
+    // Rows 1000-1005 and 1009 at least, and at most 1010-1012 that were observed before the batch ran.
+    expect(discarded!.count).toBeGreaterThanOrEqual(7); expect(discarded!.count).toBeLessThanOrEqual(10);
+    expect(run.services[0].states.at(-1)?.durable).toEqual({state: 'failed', code: 'PERMISSION_DENIED'});
+    // Events 1-6 were committed and acknowledged before the batch; the live-only connection acknowledges nothing.
+    expect([run.served(0), run.served(1)]).toEqual([allEvents[0], []]);
+    expect(await run.services[0].client.close()).toEqual({clean: true});
+    const reader = await ws.open(); expect(ok(reader.committedThrough(session))).toBe('6'); reader.close();
+    expect(await storedSamples(base.seed, session)).toEqual([]);
+  }, 90_000);
+
+  it('(g) a held sample batch holds the FIFO: no event is acknowledged until it is released, then every item and row is stored (REG-007)', async () => {
+    const input = samplesInput(), session = scenarioSource(replayOf(input).scenario).pluginSessionId;
+    let listening = false;
+    // The first appendSamples (six rows, 1000-1005) is held inside its transaction for 300 ms of real time.
+    const run = await runRecording(input, {path: ws.database, backups: ws.backups}, {fault: {samplesFault: {hold: true}}, sampleBatchRows: 6,
+      onState: (_state, service, mark) => {
+        if (listening || !service.control) return;
+        listening = true;
+        service.control.on('message', (message: {type?: string}) => {
+          if (message.type !== 'held') return;
+          mark('held');
+          setTimeout(() => { mark('release'); service.control!.postMessage({type: 'release'}); }, 300);
+        });
+      }});
+    run.services[0].control?.close();
+    const held = run.timeline.indexOf('held'), release = run.timeline.indexOf('release');
+    expect([held >= 0, release - held]).toEqual([true, 1]);
+    // Some event was waiting behind the batch: it is acknowledged only after the release.
+    expect(run.timeline.slice(release + 1).filter(line => line.startsWith('ack')).length).toBeGreaterThan(0);
+    expect([run.served(0), run.served(1)]).toEqual(allEvents);
+    expect(failureLogs(run)).toEqual([]);
+    expect(await run.services[0].client.close()).toEqual({clean: true});
+    expect(await storedSamples(input.seed, session)).toEqual(samplesExpected());
   }, 90_000);
 });

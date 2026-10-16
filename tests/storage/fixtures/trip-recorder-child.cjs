@@ -18,6 +18,9 @@
 // process held at a barrier never takes a later scripted connection that belongs to the next process. With
 // `commitAfterFirstEnd`, no commit starts before the first connection has ended, so the server has written that whole
 // connection (and retains everything unacknowledged) before any barrier can be reached.
+// ET-015b: `sampleFlushMs` sets the pipeline's sample flush delay, and with `stopAfterDisconnect` the process stops its
+// ingestion at its first `disconnected` (the final sample write included) and then reports:
+//   stopped                             the orderly stop finished
 'use strict';
 const {readFileSync, writeSync} = require('node:fs');
 const net = require('node:net');
@@ -104,10 +107,14 @@ async function main() {
     };
     return socket;
   };
-  let previous;
-  const ingestion = new V1Ingestion({connect, sink, onState: state => {
+  let previous, stopping = false;
+  const ingestion = new V1Ingestion({connect, sink, sampleFlushMs: config.sampleFlushMs, onState: state => {
     // Only a connection that delivered a checkpoint counts; a refused connection attempt has no observation yet.
-    if (state.status === 'disconnected' && previous !== 'disconnected' && state.observation) writeSync(1, 'disconnected\n');
+    if (state.status === 'disconnected' && previous !== 'disconnected' && state.observation) {
+      writeSync(1, 'disconnected\n');
+      // After the state callback returns, so the closing connection finishes first.
+      if (config.stopAfterDisconnect && !stopping) { stopping = true; setImmediate(() => void ingestion.stop().then(() => write('stopped'))); }
+    }
     previous = state.status;
   }});
   ingestion.select('synthetic', config.endpoint);
