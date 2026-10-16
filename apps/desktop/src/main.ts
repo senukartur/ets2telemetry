@@ -140,7 +140,11 @@ function runApplication(profileError: unknown): void {
       else updateHealth({type: 'service-restarting'});
       const update: LiveTelemetry = {...initialLive(selection), status: state, reason: 'Telemetry service exited; current interval is unknown'};
       freshness.invalidate(update); dashboardSubscriptions.close(); dashboardPort = undefined; window?.webContents.send('telemetry:service-state', update);},
+    // A service that failed or exited before its first readiness completed (the readiness was retired while awaiting its
+    // broker or settings) never created the windows; create them now, so the dashboard shows the exhausted state and
+    // the tray and a second launch can open it (ET-016 PR-3 delta review).
     exhausted: () => {retireRecording(); journal.retire(); updateHealth({type: 'service-restart-exhausted'});
+      if (!started && !supervisor.stopping && !lifecycle.exiting) {started = true; createWindow(); createOverlay();}
       const update: LiveTelemetry = {...initialLive(selection), status: 'service-failed', reason: 'Automatic service restart limit reached'};
       freshness.invalidate(update); window?.webContents.send('telemetry:service-state', update);},
     // Every stop that did not start as an exit request is fatal (renderer or overlay exhaustion, configuration or
@@ -149,7 +153,9 @@ function runApplication(profileError: unknown): void {
     stopping: () => {if (lifecycle.abort()) {updateHealth({type: 'exit-requested'}, true); retireLive();}},
     // The failed service is being terminated: retire its readiness, status and live channels now rather than when
     // its exit arrives (up to 3000 ms later). The later state callback finds them already retired.
-    failure: code => {failureReported = true; serviceReady = false; selectionPending = false; status = undefined; closeUpstream(); retireRecording(); journal.retire();
+    // A new selection generation also retires a readiness still awaiting its broker or settings, so the failing service
+    // never becomes ready, selected or the journal's service afterwards (ET-016 PR-3 review).
+    failure: code => {failureReported = true; serviceReady = false; selectionPending = false; status = undefined; selectionGeneration++; closeUpstream(); retireRecording(); journal.retire();
       updateHealth({type: 'service-failure', code: failureCode(code, reportedFailureCode)}); reportedFailureCode = undefined;
       const update: LiveTelemetry = {...initialLive(selection), status: 'restarting', reason: 'Telemetry service failed; current interval is unknown'};
       freshness.invalidate(update); dashboardSubscriptions.close(); dashboardPort = undefined; window?.webContents.send('telemetry:service-state', update);}

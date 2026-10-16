@@ -51,12 +51,12 @@ const TRIP_ROW = {game: 'ets2', gameMode: {mode: 'unknown', method: 'none', conf
 const SYNTHETIC_V2 = {purpose: 'synthetic', schemaVersion: 2};
 
 /** One service's recording runtime for `synthetic:<name>` and the journal service over its database, as the service builds them. */
-function service(name: string, worker: StorageWorkerHandle, timeline: string[]) {
+function service(name: string, worker: StorageWorkerHandle, timeline: string[], sampleFlushMs = NO_FLUSH_TIMER_MS) {
   const logs: [string, unknown][] = [], socket = tracedConnect(timeline);
   let stopping = false;
   const runtime = createRecordingRuntime({env: {ETS2TELEMETRY_RECORDING: `synthetic:${name}`}, gameHistory: GAME_HISTORY_RECORDING, localAppData: ws.directory,
     log: (event, _detail, facts) => { logs.push([event, facts]); }, createWorker: () => worker, connect: socket.connect,
-    ingestionOverrides: {sampleFlushMs: NO_FLUSH_TIMER_MS}, historyOverrides: {appVersion: '0.1.0-test', closeGraceMs: TEST_CLOSE_GRACE_MS}, onV1State: () => undefined});
+    ingestionOverrides: {sampleFlushMs}, historyOverrides: {appVersion: '0.1.0-test', closeGraceMs: TEST_CLOSE_GRACE_MS}, onV1State: () => undefined});
   const journal = new JournalService({history: runtime.history, stopping: () => stopping, log: (event, _detail, facts) => { logs.push([event, facts]); }});
   /** A journal read that writes `journal answered` to the timeline when its answer arrives. */
   const read = (query: JournalQuery) => journal.query(query).then(result => { timeline.push('journal answered'); return result; });
@@ -111,12 +111,12 @@ describe('ET-016 journal queries through the production recording wiring', () =>
       expect(servedAcks(report, 0)).toEqual(ACKS);
       expect(failures(s.logs)).toEqual([]);
 
-      // After the delivery the same trip reads delivered; its detail, timeline and samples pass main's check as read.
+      // After the delivery the same trip reads delivered; its detail, timeline and intervals pass main's check as read.
+      // No sample row is written before the stop here (the flush timer is off); case (d) reads a stored sample page.
       const after = await s.read(TRIPS);
       expect(after).toMatchObject({ok: true, value: {trips: [{...TRIP_ROW, outcome: 'delivered', closeReason: 'outcome', endedUtcMs: 1_800_000_000_600}]}});
       const tripUuid = (after as {value: {trips: {tripUuid: string}[]}}).value.trips[0].tripUuid;
-      for (const query of [{kind: 'trip', tripUuid}, {kind: 'events', tripUuid, page: {limit: 100}}, {kind: 'intervals', tripUuid, page: {limit: 100}},
-        {kind: 'samples', tripUuid, page: {limit: 300}}] as JournalQuery[]) {
+      for (const query of [{kind: 'trip', tripUuid}, {kind: 'events', tripUuid, page: {limit: 100}}, {kind: 'intervals', tripUuid, page: {limit: 100}}] as JournalQuery[]) {
         const result = await s.read(query);
         expect(result.ok, query.kind).toBe(true);
         expect(forwarded(query, result), query.kind).toEqual(result);
@@ -191,4 +191,38 @@ describe('ET-016 journal queries through the production recording wiring', () =>
     expect(await guarded(worker.exit, 'the storage worker exit', HANG_GUARD_MS)).toBe(0);
     expect(existsSync(historyFile())).toBe(false);
   }, 60_000);
+
+  it('(d) a stored one-second sample reads back as a sample page that main forwards unchanged (J5, J10; REG-014)', async () => {
+    // normal-delivery with a 1 ms sample flush: the checkpoint at 0 ms is the session's baseline, the snapshot at 100 ms
+    // is the first reading of source second 1000 (the one at 200 ms is the same second), so the recorder writes exactly
+    // one row, attributed to the trip that eventSeq 3 opened (normal-delivery-runtime-journey.rows.expected.json).
+    const input = scenario('normal-delivery'), timeline: string[] = [];
+    const server = await serveV1Reactive(input, {scale: 0, awaitScriptedAcks: true});
+    const worker = storageWorker(), traced = tracedHandle(worker.handle, timeline);
+    const s = service('t', traced.handle, timeline, 1);
+    try {
+      await startDurable(s.runtime, server.endpoint);
+      const report = await guarded(server.done, 'the reactive server run', HANG_GUARD_MS);
+      expect(servedAcks(report, 0)).toEqual(ACKS);
+      await until(() => timeline.includes('done appendSamples'), 'the sample write', HANG_GUARD_MS);
+      const trips = await s.read(TRIPS);
+      const tripUuid = (trips as {value: {trips: {tripUuid: string}[]}}).value.trips[0].tripUuid;
+      const query: JournalQuery = {kind: 'samples', tripUuid, page: {limit: 300}};
+      const page = await s.read(query);
+      expect(page).toMatchObject({ok: true, value: {database: SYNTHETIC_V2, nextCursor: null, samples: [{tripUuid, utcMs: 1_800_000_000_100, monotonicNs: '1000100000000',
+        speed: {available: true, value: 25.5}, odometer: {available: true, value: 1_000_500}, gameTime: {minutes: {available: true, value: 601}}}]}});
+      expect((page as {value: {samples: unknown[]}}).value.samples).toHaveLength(1);
+      expect(forwarded(query, page)).toEqual(page);
+      // The page after that row is empty and passes as well.
+      const id = (page as {value: {samples: {id: string}[]}}).value.samples[0].id;
+      const next: JournalQuery = {kind: 'samples', tripUuid, page: {cursor: id, limit: 300}};
+      const empty = await s.read(next);
+      expect(empty).toEqual({ok: true, value: {database: SYNTHETIC_V2, samples: [], nextCursor: null}});
+      expect(forwarded(next, empty)).toEqual(empty);
+      expect(failures(s.logs)).toEqual([]);
+      await s.stop();
+      expect(await guarded(worker.exit, 'the storage worker exit', HANG_GUARD_MS)).toBe(0);
+      expect(existsSync(historyFile())).toBe(false);
+    } finally { await server.stop(); }
+  }, 90_000);
 });

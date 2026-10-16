@@ -1741,6 +1741,40 @@ it('accepts journal replies only from the current service and answers pending re
   await expect(exiting).resolves.toEqual({ok: false, code: 'SERVICE_UNAVAILABLE'});
   await expect(journalCall('journal:list-trips', trusted(), {})).resolves.toEqual({ok: false, code: 'SERVICE_UNAVAILABLE'});
 });
+it('never makes a service ready, selected or the journal\'s service when its failure arrives while its readiness awaits the broker', async () => {
+  vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2'); trayAvailable = true; await ready();
+  child.emit('exit', 1); await vi.advanceTimersByTimeAsync(250);
+  const replacement = children[1], complete = pendingVerification();
+  replacement.emit('message', {type: 'ready'}); await settle();
+  // The failure report arrives while the replacement's readiness still awaits its broker verification.
+  replacement.emit('message', {type: 'failed', code: 'STORAGE_WORKER_EXIT'});
+  complete(); await settle();
+  expect(replacement.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({type: 'select'}));
+  expect(handlers.get('scaffold:status')!(trusted())).toBeNull();
+  await expect(journalCall('journal:list-trips', trusted(), {})).resolves.toEqual({ok: false, code: 'SERVICE_UNAVAILABLE'});
+  expect(journalSent(replacement)).toEqual([]);
+});
+it.each(['failure report', 'unexpected exit'] as const)('creates the dashboard and overlay showing restart exhaustion when the first service ends by its %s before its readiness completed', async ending => {
+  vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2'); trayAvailable = true;
+  await loadMain(); await settle();
+  const complete = pendingVerification();
+  // The first readiness is accepted (later failures are recovered) but still awaits its broker verification.
+  child.emit('message', {type: 'ready'}); await settle();
+  if (ending === 'failure report') child.emit('message', {type: 'failed', code: 'STORAGE_WORKER_EXIT'});
+  child.emit('exit', 1);
+  await vi.advanceTimersByTimeAsync(250); children[1].emit('exit', 1);
+  await vi.advanceTimersByTimeAsync(1000); children[2].emit('exit', 1);
+  expect(windows).toHaveLength(2); expect(loadFile).toHaveBeenCalledTimes(2);
+  expect((handlers.get('app:get-state')!(trusted()) as {health: unknown}).health).toEqual({service: 'failed', storage: ending === 'failure report' ? 'failed' : 'pending', recording: {state: 'unknown'}, lastError: 'SERVICE_RESTART_EXHAUSTED'});
+  // A second launch now focuses that dashboard instead of being ignored as starting.
+  app.emit('second-instance');
+  expect(log).toHaveBeenCalledWith('SECOND_INSTANCE', undefined, {action: 'focused'});
+  // The retired readiness completing later creates nothing more and selects nothing.
+  complete(); await settle();
+  expect(windows).toHaveLength(2);
+  expect(child.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({type: 'select'}));
+  expect(app.exit).not.toHaveBeenCalled();
+});
 it('answers TIMEOUT when the service does not reply within 15 s and sends the next queued read', async () => {
   await ready();
   const slow = journalCall('journal:list-trips', trusted(), {}), next = journalCall('journal:get-trip', trusted(), TRIP);

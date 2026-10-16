@@ -109,6 +109,9 @@ describe('main accepts a service reply only when it answers the request exactly 
     ['an event page', EVENTS, EVENT_PAGE],
     ['a full event page', EVENTS, {...EVENT_PAGE, events: numbered(EVENT, 'eventSeq', 100), nextCursor: '100'}],
     ['an interval page', INTERVALS, INTERVAL_PAGE],
+    // An interval's detail is an open record: its cause-specific keys are forwarded as stored (docs/journal.md).
+    ['an interval whose detail carries cause-specific keys', INTERVALS, changed(INTERVAL_PAGE, p => {
+      p.intervals[0].detail = {cause: 'truck-change', annotation: true, atEventSeq: '2', count: 3} as typeof INTERVAL.detail; })],
     ['a sample page', SAMPLES, SAMPLE_PAGE],
     ['a full sample page', SAMPLES, {...SAMPLE_PAGE, samples: numbered(SAMPLE, 'id', 300, 11), nextCursor: '310'}],
     ['an empty sample page', SAMPLES, {...SAMPLE_PAGE, samples: []}]
@@ -152,6 +155,8 @@ describe('main accepts a service reply only when it answers the request exactly 
     ['an event at the requested cursor', {kind: 'events', tripUuid: TRIP, page: {cursor: '3', limit: 100}}, EVENT_PAGE],
     ['a full event page whose cursor is not its last event', EVENTS, {...EVENT_PAGE, events: numbered(EVENT, 'eventSeq', 100), nextCursor: '99'}],
     ['an event record over the protocol name bound', EVENTS, changed(EVENT_PAGE, p => { (p.events[0].record as {cargo: unknown}).cargo = {available: true, value: LONG_NAME}; })],
+    ['an interval detail whose cause disagrees with the interval', INTERVALS, changed(INTERVAL_PAGE, p => { p.intervals[0].detail.cause = 'refuel'; })],
+    ['an interval detail that is not an object', INTERVALS, changed(INTERVAL_PAGE, p => { (p.intervals[0] as {detail: unknown}).detail = 'C:\\Users\\owner'; })],
     ['an interval at the requested cursor', {kind: 'intervals', tripUuid: TRIP, page: {cursor: '7', limit: 100}}, INTERVAL_PAGE],
     ['101 intervals for a page of 100', INTERVALS, {...INTERVAL_PAGE, intervals: numbered(INTERVAL, 'id', 101, 7), total: 101, nextCursor: '107'}],
     ['301 samples for a page of 300', SAMPLES, {...SAMPLE_PAGE, samples: numbered(SAMPLE, 'id', 301, 11), nextCursor: '311'}],
