@@ -3,7 +3,7 @@ import type {AppHealth, ScaffoldStatus} from '../../packages/contracts/src';
 import {createStartupLine} from '../../apps/desktop/src/dashboard-startup';
 
 const ready: ScaffoldStatus = {service: 'ready', storage: 'verified', synthetic: true};
-const health = (service: AppHealth['service']): AppHealth => ({service, storage: service === 'ready' ? 'verified' : 'pending', recording: 'unavailable', lastError: null});
+const health = (service: AppHealth['service']): AppHealth => ({service, storage: service === 'ready' ? 'verified' : 'pending', recording: {state: 'unknown'}, lastError: null});
 const flush = async () => {for (let turn = 0; turn < 5; turn++) await Promise.resolve();};
 function fixture(answers: (ScaffoldStatus | null | Error)[]) {
   const getStatus = vi.fn(() => {const answer = answers.shift() ?? null; return answer instanceof Error ? Promise.reject(answer) : Promise.resolve(answer);});

@@ -25,6 +25,7 @@ import {captureActivation, type CaptureGrant} from './capture-activation';
 import {monitorEventLoopLag} from './event-loop-lag';
 import {ExitCoordinator, secondInstanceAction, type ExitReason} from './app-lifecycle';
 import {failureCode, initialHealth, reduceHealth, sameHealth, type HealthEvent} from './app-health';
+import {addLosses, parseRecordingHealth, ZERO_LOSSES} from './recording-status';
 import {TrayPresenter, type TrayMenuItem} from './tray-model';
 import {TRAY_ICON_REPRESENTATIONS, trayIconPng, type TrayTone} from './tray-icon';
 
@@ -74,6 +75,11 @@ function runApplication(profileError: unknown): void {
   let tray: Tray | undefined, trayPresenter: TrayPresenter | undefined, trayUnavailable = false;
   let health: AppHealth = initialHealth(), appStateSubscribed = false, lastLive: LiveTelemetry = initialLive();
   let failureReported = false, reportedFailureCode: unknown;
+  // ET-015c (G4, G6, G12): the service whose recording status main accepts, until it fails, exits or restarts; the
+  // committed losses of every earlier service process; and the latest losses the current one reported.
+  let recordingChild: UtilityProcess | undefined, lossBase = ZERO_LOSSES, childLosses = ZERO_LOSSES, rejectedRecording = 0;
+  /** Stops accepting the current service's recording status and adds its losses to the totals; repeated calls add nothing. */
+  function retireRecording(): void {recordingChild = undefined; lossBase = addLosses(lossBase, childLosses); childLosses = ZERO_LOSSES;}
   const upstreamBudget = new RecoveryBudget(), overlayBudget = new RecoveryBudget();
   const dashboardSubscriptions = new LiveSubscriptions(initialLive(), 1);
   // The last projection main published: a non-current projection keeps its shape (ET-012a decision L5).
@@ -125,12 +131,12 @@ function runApplication(profileError: unknown): void {
   });
   const supervisor = new ServiceSupervisor(log, code => lifecycle.finish(code), {
     restart: () => startService(),
-    state: state => {serviceReady = false; selectionPending = false; status = undefined; closeUpstream();
+    state: state => {serviceReady = false; selectionPending = false; status = undefined; closeUpstream(); retireRecording();
       if (state === 'service-failed') {updateHealth({type: 'service-exited', afterFailure: failureReported}); failureReported = false;}
       else updateHealth({type: 'service-restarting'});
       const update: LiveTelemetry = {...initialLive(selection), status: state, reason: 'Telemetry service exited; current interval is unknown'};
       freshness.invalidate(update); dashboardSubscriptions.close(); dashboardPort = undefined; window?.webContents.send('telemetry:service-state', update);},
-    exhausted: () => {updateHealth({type: 'service-restart-exhausted'});
+    exhausted: () => {retireRecording(); updateHealth({type: 'service-restart-exhausted'});
       const update: LiveTelemetry = {...initialLive(selection), status: 'service-failed', reason: 'Automatic service restart limit reached'};
       freshness.invalidate(update); window?.webContents.send('telemetry:service-state', update);},
     // Every stop that did not start as an exit request is fatal (renderer or overlay exhaustion, configuration or
@@ -139,7 +145,7 @@ function runApplication(profileError: unknown): void {
     stopping: () => {if (lifecycle.abort()) {updateHealth({type: 'exit-requested'}, true); retireLive();}},
     // The failed service is being terminated: retire its readiness, status and live channels now rather than when
     // its exit arrives (up to 3000 ms later). The later state callback finds them already retired.
-    failure: code => {failureReported = true; serviceReady = false; selectionPending = false; status = undefined; closeUpstream();
+    failure: code => {failureReported = true; serviceReady = false; selectionPending = false; status = undefined; closeUpstream(); retireRecording();
       updateHealth({type: 'service-failure', code: failureCode(code, reportedFailureCode)}); reportedFailureCode = undefined;
       const update: LiveTelemetry = {...initialLive(selection), status: 'restarting', reason: 'Telemetry service failed; current interval is unknown'};
       freshness.invalidate(update); dashboardSubscriptions.close(); dashboardPort = undefined; window?.webContents.send('telemetry:service-state', update);}
@@ -409,7 +415,7 @@ function runApplication(profileError: unknown): void {
     const entrypoint = processEntrypoint(__dirname, 'telemetry-service');
     if (!existsSync(entrypoint)) throw new Error('Missing physical telemetry service entrypoint');
     const child = service = utilityProcess.fork(entrypoint, [], {serviceName: 'ETS2Telemetry telemetry service', stdio: 'pipe'});
-    supervisor.attach(child);
+    supervisor.attach(child); recordingChild = child;
     child.stdout?.on('data', chunk => log('SERVICE_STDOUT', String(chunk)));
     child.stderr?.on('data', chunk => log('SERVICE_STDERR', String(chunk)));
     child.once('spawn', () => log('SERVICE_SPAWN', {pid: child.pid}));
@@ -434,8 +440,30 @@ function runApplication(profileError: unknown): void {
         // Before first readiness this stays fatal; afterwards the supervisor restarts the service.
         reportedFailureCode = (message as Record<string, unknown>).code;
         supervisor.serviceFailed('SERVICE_START_FAILED', message);
-      } else if (type !== 'stopped') fail('SERVICE_INVALID_MESSAGE');
+      } else if (type === 'recording') acceptRecording(child, message as Record<string, unknown>);
+      else if (type !== 'stopped') fail('SERVICE_INVALID_MESSAGE');
     });
+  }
+  /**
+   * ET-015c (G4): a recording status from the current service, before or after its readiness, until it fails, exits or
+   * restarts (retireRecording). Exactly {type, status} with a status that parseRecordingHealth accepts; anything else is
+   * not fatal: the status becomes `unknown` and RECORDING_STATUS_REJECTED {count} is logged at counts 1, 2, 4, 8, ...
+   * The reported losses are added to those of earlier service processes (G6); the status reaches the dashboard through
+   * the existing app:state push and app:get-state, and the tray through its presenter.
+   */
+  function acceptRecording(child: UtilityProcess, message: Record<string, unknown>): void {
+    if (recordingChild !== child) return;
+    const keys = Object.keys(message);
+    const parsed = keys.length === 2 && keys.includes('status') ? parseRecordingHealth(message.status) : undefined;
+    if (!parsed) {
+      const count = ++rejectedRecording;
+      if ((count & (count - 1)) === 0) log('RECORDING_STATUS_REJECTED', undefined, {count});
+      updateHealth({type: 'recording', status: {state: 'unknown'}});
+      return;
+    }
+    if (!('losses' in parsed)) {updateHealth({type: 'recording', status: parsed}); return;}
+    childLosses = parsed.losses;
+    updateHealth({type: 'recording', status: {...parsed, losses: addLosses(lossBase, parsed.losses)}});
   }
   log('APP_START', {electron: process.versions.electron, node: process.versions.node, packaged: app.isPackaged});
   if (timeline) {
