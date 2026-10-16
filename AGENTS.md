@@ -358,6 +358,21 @@ The strip now reserves as many 36 px rows as its enabled sections need at its wi
 
 ET-012c makes no settings format, IPC, preload, protocol, projection or service change, and the card, cluster and HUD are unchanged. For the strip, M4's height `round(38 × scale)` becomes `ceil(36 × rows × scale + 2 × max(1, scale))`, which equals `ceil((36 × rows + 2) × scale)` at scale 1 or more. Below zoom 1 the row model counts the surface border snapped to one device pixel. Earlier dated text is unchanged. Real-game readability, click-through over the taller window, fractional-DPI rounding and frame-time impact remain pending in [ET-012c validation](docs/validation/et-012c.md). No game, TruckersMP, display or performance claim follows.
 
+## ET-012d overlay layout fit — October 16, 2026
+
+On October 16, 2026 the owner decided to fix the overlay strip first. The coordinator then decided to merge ET-010c and to fix the Cluster in a follow-up package, ET-012d. Under those decisions and the standing delegation of October 15, 2026, the coordinator adopted the architect's decisions K1–K12 ([concept.md](concept.md#et-012d-overlay-layout-fit--october-16-2026)). The owner did not review them individually.
+
+The Card, the Cluster's side panel and the Minimal HUD use fixed row heights, and each reserves its height for its enabled sections. The window is at least its ET-012a nominal size and grows only when the enabled sections need more room. With every section at scale 1 the windows are:
+- Card: 300 × 384;
+- Cluster: 440 × 267;
+- HUD: 320 × 354.
+
+The size never depends on values. A layout that does not fit hides as a whole, and edit mode reports `too-large`. The telemetry smoke asserts that every shown Card, Cluster and HUD section lies inside the overlay window with protocol v1 data.
+
+ET-012d makes no settings format, IPC, preload, projection, protocol or service change, and the strip is unchanged. For the Card, Cluster and HUD, M4's height `round(nominal × scale)` becomes `max(round(nominal height × scale), ceil(content × scale + 2 × border × max(1, scale)))`. Widths are unchanged, and earlier dated text is unchanged.
+
+Real-game readability of the taller layouts, click-through over them, fractional-DPI rounding and frame-time impact remain pending in [ET-012d validation](docs/validation/et-012d.md). No game, TruckersMP, display or performance claim follows.
+
 ## Repository visibility and license — October 16, 2026
 
 On October 16, 2026 the owner released the project under the [MIT License](LICENSE) and decided to make the GitHub repository public, so that standard GitHub-hosted Actions runners stop consuming the private-repository minute quota. The visibility switch is a separate owner action in the GitHub settings; check the current state with `gh repo view senukartur/ets2telemetry --json visibility` instead of assuming it. The vendored SCS SDK headers keep their own license and notice ([vendor](native/telemetry-plugin/vendor/README.md)).
