@@ -847,3 +847,36 @@ ET-015c shows the user a truthful recording status. It fixes a queue-pressure de
 | G20 | Tests use hand-written tables and rows, fake timers, the production wiring in process with the real or fault worker, the reactive simulator on real pipes, and runtime smoke assertions. Waits count commits, ACKs or holds; real-time bounds are only named hang guards |
 
 `GAME_HISTORY_RECORDING` stays `false`. ET-016 and later phases are not authorized by this section. No game, TruckersMP, display or performance claim follows from synthetic or local tests.
+
+## ET-016 authorization — October 16, 2026
+
+Under the owner's standing delegation of October 15, 2026 (quoted in the ET-015a authorization above), the coordinator started ET-016: the trip journal, trip details and JSON export. It adopted the architect's decisions J1–J22 below as coordinator decisions; the owner did not review them individually and may revise them. For ET-016 only, this supersedes two earlier statements; earlier dated text is unchanged:
+- that ET-016 is not authorized;
+- with J9, T9: a job seen first in a checkpoint now opens a partial late-attach trip. This matches §3, which says recording that starts after a job has begun is reflected in the trip's completeness, and the owner's answer of October 10, 2026 that late attachment marks trips incomplete.
+
+| # | Decision |
+| --- | --- |
+| J1 | **ET-016a:** schema v2, then journal reads, IPC, the Journal tab and export.<br>**ET-016b:** fuel-used persistence (may start after schema v2), then late-attach trips, then journal and export reconciliation in the recording journey |
+| J2 | The journal reads through the telemetry service's open database and its storage worker. A second connection is ruled out by exclusive locking (OD-8), and only the storage worker loads SQLite |
+| J3 | Synthetic or replay databases are browsable only as the existing `ETS2TELEMETRY_RECORDING` target. Every response carries the database purpose. A non-history purpose shows a persistent "never game history" banner, and the export header carries the purpose. Tests seed only isolated synthetic databases |
+| J4 | Main sends journal queries to the service on its parent port:<br>• one in flight per service and at most 4 queued (`BUSY` beyond that), with 15 s each;<br>• replies from a retired service are ignored.<br>The service runs one query at a time, only while the database is open, so at most one journal command is ever in the storage queue |
+| J5 | New worker commands `journalTrips`, `journalTrip`, `journalEvents` and `journalIntervals`; samples reuse `listSamples`. Bounds: trips 50 per page, newest first, with filters applied in SQL before the limit; events 100 (UI) or 500 (export); intervals 100 or 500; samples 300 or 3,600. Money totals are exact, per currency and SDK type, and marked `incomplete` beyond 5,000 amounts |
+| J6 | Schema v2 is one migration:<br>• S-1 `trips.fuel_used_l` with its availability state;<br>• the trip close carrier (session and eventSeq);<br>• S-2 `job_configurations` rebuilt with a session reference, an `event` or `checkpoint` source and the matching unique references.<br>No new index is needed. No UNIQUE sample index is added, because the `uniqueSeconds` guard covers it (closes the H6 deferral) |
+| J7 | A trip's timeline window runs through its own session's events, from the job configuration or the opening, up to the recorded close carrier (inclusive for an event, exclusive for a gap's first new eventSeq) or the end of the session. Migrated v1 trips have no known window and list only their attributed or referenced events |
+| J8 | S-1: fuel used is persisted like observed distance, both while the trip is open and before every close, and resumes from seeds. Refuels stay annotations |
+| J9 | S-2: a job seen in a checkpoint while the game's slot is idle opens a partial trip once the retained events have replayed:<br>• the job values come from the checkpoint;<br>• a `late-attach` not-connected interval is recorded;<br>• when the previous trip with the same job closed without an outcome, a not-merged continuation interval is recorded too;<br>• the identifier is deterministic, and the trip is written by an idempotent storage command ordered in the FIFO, with no ACK or coverage change.<br>Supersedes T9 |
+| J10 | Six fixed bridge methods (list trips, get trip, list events, intervals and samples, export trip) on six fixed channels, for the trusted dashboard main frame only. Arguments are validated in the preload and again in main, and main sets the page size. Main validates every service reply strictly. No path, process id or session id reaches the renderer |
+| J11 | Methods resolve `{ok, value}` or `{ok: false, code}` with fixed codes, for example `DATABASE_OPENING`, `BUSY`, `NOT_FOUND` and the export codes. Invalid or untrusted calls reject |
+| J12 | The main window gains Live and Journal tabs. The journal has a paged list with filters, and a paged detail with summary, job, truck, trailers, money, completeness intervals, timeline and samples. Only the current page is held, and there is no auto-refresh |
+| J13 | Display rules:<br>• outcome and recording completeness are separate;<br>• planned, observed and delivered distance are labelled apart;<br>• expected income is shown apart from revenue or penalty, as exact digits with the currency basis, never netted or converted;<br>• a missing value reads "unavailable (reason)", and zero is a value;<br>• game mode carries its confidence;<br>• units follow the game profile;<br>• no trip average consumption |
+| J14 | Sample tables show "no samples for N s" between rows more than one source second apart, and "source restarted" at a clock change |
+| J15 | Export format `ets2telemetry.trip-export`, version 1:<br>• canonical units and stable identifiers;<br>• the protocol v1 availability and money shapes, with the currency marked SDK-documented or unknown;<br>• the trip, job, truck, trailers, outcome details, money totals, intervals, events, samples and bounds.<br>Any change bumps the version. There is no import |
+| J16 | Main exports through the save dialog:<br>• cancelling writes nothing;<br>• a target inside the application's data root is refused;<br>• the file is written as a partial in the target folder, page by page, then synced and renamed;<br>• a failure or an exit removes the partial;<br>• logs carry fixed codes only.<br>The Windows overwrite prompt is a pending manual check |
+| J17 | Exporting an open trip takes a bounded snapshot fixed at the start of the export |
+| J18 | No uninstall statement until the owner's uninstall data rule is recorded here |
+| J19 | TD-004 and TD-005 are unchanged; the journal reads the authoritative database |
+| J20 | Tests use hand-written anchor trips and expected values, generated filler trips for paging only, EXPLAIN QUERY PLAN checks instead of timing assertions, and a save dialog stubbed in the smokes only |
+| J21 | No trip average consumption (TD-006) |
+| J22 | Late-attach trips have no truck or trailer identity until it is sent again (TD-007) |
+
+`GAME_HISTORY_RECORDING` stays `false`. ET-017 and later phases are not authorized by this section. No game, TruckersMP, display or performance claim follows from synthetic or local tests.
