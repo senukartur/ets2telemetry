@@ -1,13 +1,18 @@
 {
   "scenario": "normal-delivery-runtime-journey",
   "authoredFrom": [
-    "Why a separate expectation: the runtime recording journey (ET-015a PR-4, scripts/ci/recording-observation.mjs) serves normal-delivery.json with its transport replaced by three durable connections and one step appended. Connection 1 (0 ms, ack dropAfter:4) commits events 1-5 and loses the ACK of 5 before its scripted disconnect at 350 ms; the telemetry service is then terminated and main's supervisor restarts it. Connection 2 (360 ms) is taken by the restarted service after the main window was closed to the tray; the application then exits from the tray. Connection 3 (2,010 ms) is taken by run B, the restarted application, and receives the appended simulation.paused at 2,100 ms.",
-    "Events: eventSeq 1-9 are normal-delivery's (normal-delivery.expected.json: truck, trailer, job, simulation.started, job re-send, simulation.paused, simulation.started, job.delivered, job.cleared at atMs 10, 20, 30, 40, 300, 400, 500, 600 and 610) and 10 is the appended simulation.paused at 2,100 ms; each UTC label is 1,800,000,000,000 + atMs. Each is stored once, and every first commit was a first delivery: the redelivered eventSeq 5 on connection 2 is a duplicate of its row from connection 1. No gap is stored.",
-    "Samples (ET-015b PR-3, H3-H9): connection 1's checkpoint is the plugin session's baseline, and its snapshot of the frame at 100 ms (simulation running since 40 ms) is the only fresh running reading of second 1000; it names trip@3, committed earlier in the FIFO. That row is stored only when the service's 5 s sample flush ran before the diagnostic kill (H9), so the journey accepts zero or one row and records the count. The checkpoints of connections 2 and 3 are the baselines of new recorders, and no frame follows them, so nothing else is sampled. PR-4 extends the journey with asserted sample rows.",
+    "Why a separate expectation: the runtime recording journey (ET-015a PR-4, extended by ET-015b PR-4; scripts/ci/recording-observation.mjs) serves normal-delivery.json with its transport replaced by three durable connections and eight steps appended. Connection 1 (0 ms, ack dropAfter:4) commits events 1-5 and loses the ACK of 5 before its scripted disconnect at 350 ms; the telemetry service is then terminated and main's supervisor restarts it. Connection 2 (360 ms) is taken by the restarted service after the main window was closed to the tray; the application exits from the tray once eventSeq 10 is acknowledged. Connection 3 (2,010 ms) is taken by run B, the restarted application, which closes once eventSeq 13 is acknowledged; its scripted disconnect is at 4,000 ms.",
+    "Appended steps (ET-015b PR-4): frames at 1,100 ms (speed 0) and 1,600 ms (speed 2.5) and simulation.paused at 1,700 ms on connection 2; simulation.started at 2,050 ms, a frame at 2,100 ms (speed 12.25, odometer 1,000.53125 km), simulation.paused at 2,900 ms, a frame without channels at 3,100 ms and simulation.started at 3,200 ms on connection 3. Each connection's last appended step is a lifecycle event, and nothing follows it before the scripted disconnect, so the journey's exit after its ACK cannot change what the simulator serves: the ACK of the last event also proves that every reading before it in the FIFO was observed.",
+    "Events: eventSeq 1-9 are normal-delivery's (normal-delivery.expected.json: truck, trailer, job, simulation.started, job re-send, simulation.paused, simulation.started, job.delivered, job.cleared at atMs 10, 20, 30, 40, 300, 400, 500, 600 and 610), and 10-13 are the appended lifecycle events at 1,700, 2,050, 2,900 and 3,200 ms; each UTC label is 1,800,000,000,000 + atMs. Each is stored once, and every first commit was a first delivery: the redelivered eventSeq 5 on connection 2 is a duplicate of its row from connection 1. No gap is stored. Coverage is 13.",
     "Events 1-5 commit as in normal-delivery: the job (3) opens trip@3 partial with opened-at-load (T12), truck 1 and trailer 2 are its references, and the road stop 100 -> 200 persists observed distance 0 m at eventSeq 5 (T16).",
     "docs/trips.md cold start (R4): the restarted service seeds the stored open trip of the same plugin session (job key of eventSeq 3, last label 1,800,000,000,300 of eventSeq 5, stored distance 0, not cleared), resumes it active and queues a consumer-restart not-connected interval; the trip is already partial, so no trip.update. The redelivered eventSeq 5 lies at the processed point, so the reducer skips it (T5).",
-    "The first new commit (eventSeq 6) carries the queued interval; the pause (6) and resume (7) add nothing else, as in normal-delivery. job.delivered (8) attributes to the trip and closes it {delivered, outcome, partial} at its label 1,800,000,000,600; the distance is unchanged (0 m), so no update. job.cleared (9) adds nothing.",
-    "Run B: the third service finds no stored open trip of ETS2 (R4), so it seeds nothing and records no interval; the appended simulation.paused (10) adds no trip effect. Coverage is 10."
+    "The first new commit (eventSeq 6) carries the queued interval; the pause (6) and resume (7) add nothing else, as in normal-delivery. job.delivered (8) attributes to the trip and closes it {delivered, outcome, partial} at its label 1,800,000,000,600; the distance is unchanged (0 m), so no update. job.cleared (9) adds nothing. The frames at 1,100 and 1,600 ms and the pause (10) come with no trip, so they add no trip effect.",
+    "Run B: the third service finds no stored open trip of ETS2 (R4), so it seeds nothing and records no interval; events 11-13 and its frames add no trip effect.",
+    "Sample rows (ET-015b H3-H7, H11, H13, H14; docs/trips.md one-second sampler; docs/simulator-v1.md clocks): the source second is floor(capture.monotonicNs / 1e9) with capture = 10^12 ns + atMs x 10^6, a snapshot is written at its frame (each frame here is more than 50 ms after the connection's previous state message), and its state is the slot published at that frame, with captureUtcUnixMs = 1,800,000,000,000 + atMs. The first reading of the plugin session in each recorder lifetime, the checkpoint of each connection here, is a baseline and never sampled (H4). Speeds are m/s and odometers km x 1,000 = m, both float32-exact.",
+    "Optional (zero rows or this one, recorded, not asserted): connection 1's frame at 100 ms (speed 25.5, odometer 1,000.5 km), running since 40 ms and the first fresh reading after the checkpoint baseline, is second 1000 and names trip@3, active since eventSeq 3 committed earlier in the FIFO. That row is stored only when the first service's 5 s sample flush ran before the diagnostic kill (H9); the kill drops it otherwise; frame 200 is the same second.",
+    "Required: the restarted service's baseline is connection 2's checkpoint at 360 ms. The frame at 1,100 ms (running since eventSeq 7 at 500 ms, speed 0, odometer unchanged at 1,000.5 km) is second 1001, with no trip because job.delivered (8) and job.cleared (9) committed before it (H7). The frame at 1,600 ms is the same second, so its speed 2.5 is never stored. The row is still pending when the tray exit's recording-flush runs, unless the 5 s flush already wrote it; it is stored either way (H11).",
+    "Required: run B's baseline is connection 3's checkpoint at 2,010 ms (slot of the frame at 1,600 ms). After simulation.started (11) the frame at 2,100 ms (speed 12.25, odometer 1,000.53125 km) is second 1002, with no trip. The frame at 3,100 ms is fresh but paused since eventSeq 12, so second 1003 has no row and is not filled later (H5). The row is written by run B's exit flush or by the 5 s flush.",
+    "Rows are listed in insertion order: the optional row first when present, then the required rows; each second at most once. Every row belongs to the simulator's plugin session."
   ],
   "trips": [
     {"trip": "trip@3", "jobConfigurationEventSeq": "3", "truckConfigurationEventSeq": "1", "trailerConfigurationEventSeqs": ["2"], "openedEventSeq": "3",
@@ -29,9 +34,20 @@
     {"eventSeq": "7", "type": "simulation.started", "utcMs": 1800000000500, "firstRedelivered": false},
     {"eventSeq": "8", "type": "job.delivered", "utcMs": 1800000000600, "firstRedelivered": false},
     {"eventSeq": "9", "type": "job.cleared", "utcMs": 1800000000610, "firstRedelivered": false},
-    {"eventSeq": "10", "type": "simulation.paused", "utcMs": 1800000002100, "firstRedelivered": false}
+    {"eventSeq": "10", "type": "simulation.paused", "utcMs": 1800000001700, "firstRedelivered": false},
+    {"eventSeq": "11", "type": "simulation.started", "utcMs": 1800000002050, "firstRedelivered": false},
+    {"eventSeq": "12", "type": "simulation.paused", "utcMs": 1800000002900, "firstRedelivered": false},
+    {"eventSeq": "13", "type": "simulation.started", "utcMs": 1800000003200, "firstRedelivered": false}
   ],
   "gaps": 0,
-  "samples": {"optional": [{"second": "1000", "trip": "trip@3"}]},
-  "coverage": {"committedThroughEventSeq": "10"}
+  "samples": {
+    "optional": [
+      {"second": "1000", "trip": "trip@3", "monotonicNs": "1000100000000", "utcMs": 1800000000100, "speedMps": 25.5, "odometerM": 1000500}
+    ],
+    "required": [
+      {"second": "1001", "trip": null, "monotonicNs": "1001100000000", "utcMs": 1800000001100, "speedMps": 0, "odometerM": 1000500},
+      {"second": "1002", "trip": null, "monotonicNs": "1002100000000", "utcMs": 1800000002100, "speedMps": 12.25, "odometerM": 1000531.25}
+    ]
+  },
+  "coverage": {"committedThroughEventSeq": "13"}
 }

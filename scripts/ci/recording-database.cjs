@@ -30,8 +30,10 @@ try {
       FROM events e JOIN plugin_sessions p ON p.id = e.plugin_session_id ORDER BY e.id`).all(),
     gaps: db.prepare('SELECT count(*) FROM event_gaps').pluck().get(),
     samples: db.prepare('SELECT count(*) FROM samples').pluck().get(),
-    // ET-015b PR-3: each sample's trip UUID and source monotonic time, in insertion order.
-    sampleRows: db.prepare(`SELECT t.trip_uuid AS trip, CAST(s.monotonic_ns AS TEXT) AS monotonicNs FROM samples s LEFT JOIN trips t ON t.id = s.trip_ref ORDER BY s.id`).all(),
+    // ET-015b: each sample's plugin session, trip UUID, source monotonic time, UTC label, speed and odometer, in insertion order.
+    sampleRows: db.prepare(`SELECT p.plugin_session_uuid AS session, t.trip_uuid AS trip, CAST(s.monotonic_ns AS TEXT) AS monotonicNs, s.utc_ms AS utcMs,
+      s.speed_mps AS speedMps, s.odometer_m AS odometerM
+      FROM samples s JOIN plugin_sessions p ON p.id = s.plugin_session_ref LEFT JOIN trips t ON t.id = s.trip_ref ORDER BY s.id`).all(),
     trips: trips.map(({id, ...trip}) => ({...trip, trailerSeqs: trailers.pluck().all(id)})),
     attributions: db.prepare(`SELECT e.event_seq AS eventSeq, t.trip_uuid AS trip, a.attribution FROM event_attributions a JOIN events e ON e.id = a.event_ref
       LEFT JOIN trips t ON t.id = a.trip_ref ORDER BY e.event_seq`).all(),
