@@ -16,7 +16,7 @@ import {LiveSubscriptions} from './live-subscriptions';
 import {LiveFreshness} from './live-freshness';
 import {OVERLAY_TOPMOST_LEVEL, OverlayController} from './overlay-controller';
 import {overlayPresentation} from './overlay-presentation';
-import {OVERLAY_NOMINAL_SIZE} from './overlay-geometry';
+import {overlayWindowSize} from './overlay-geometry';
 import {isOverlayLayout, parseOverlaySections} from './overlay-sections';
 import {isOverlayEditOutcome, parseOverlayEditScale, type OverlayEditOutcome} from './overlay-placement';
 import {OwnForegroundGate} from './overlay-edit';
@@ -161,7 +161,7 @@ function runApplication(profileError: unknown): void {
     if (lifecycle.exiting) return;
     const view = settingsStore.view();
     publishOverlay(lastLive, view.units, view.overlay);
-    overlayController?.setLayout(view.overlay.layout, view.overlay.placements[view.overlay.layout]);
+    overlayController?.setLayout(view.overlay.layout, view.overlay.placements[view.overlay.layout], view.overlay.sections);
   }
   // ET-012b edit mode. The controller reports every change of its edit state; main pushes it to the dashboard and,
   // when the mode itself changes, republishes the overlay projection with its `editing` flag (no authority renewed).
@@ -259,11 +259,13 @@ function runApplication(profileError: unknown): void {
     try {port1.start(); child.postMessage({type: 'subscribe'}, [port2]);} catch (error) {port2.close(); lost(); log('MAIN_SUBSCRIPTION_FAILED', String(error));}
   }
   function createOverlay(): void {
-    // Created at the saved layout's nominal size times its saved scale; the controller sets the actual bounds inside the
-    // game's client area. The scale is also the document's zoom factor (ET-012b decision M4); the overlay's own session
-    // keeps that zoom away from the dashboard, whose file:// origin it would otherwise share.
-    const settings = settingsStore.view(), layout = settings.overlay.layout, placement = settings.overlay.placements[layout], size = OVERLAY_NOMINAL_SIZE[layout];
-    const created = overlay = new BrowserWindow({width: Math.round(size.width * placement.scale), height: Math.round(size.height * placement.scale), show: false, frame: false,
+    // Created at the saved layout's nominal size times its saved scale, the strip as high as its saved sections need
+    // (ET-012c); the controller sets the actual bounds inside the game's client area. The scale is also the document's
+    // zoom factor (ET-012b decision M4); the overlay's own session keeps that zoom away from the dashboard, whose file://
+    // origin it would otherwise share.
+    const settings = settingsStore.view(), layout = settings.overlay.layout, placement = settings.overlay.placements[layout];
+    const size = overlayWindowSize(layout, placement.scale, settings.overlay.sections);
+    const created = overlay = new BrowserWindow({width: size.width, height: size.height, show: false, frame: false,
       transparent: true, backgroundColor: '#00000000',
       focusable: false, skipTaskbar: true, resizable: false, movable: false, minimizable: false, maximizable: false, fullscreenable: false,
       // A dedicated in-memory session separates the overlay's browser context from the dashboard.
@@ -275,7 +277,7 @@ function runApplication(profileError: unknown): void {
     // taskbar, which drops WS_EX_TOPMOST while a borderless full-screen game is foreground.
     created.setAlwaysOnTop(true, OVERLAY_TOPMOST_LEVEL);
     overlayController = new OverlayController(created, screen, phase => log('OVERLAY_TOPMOST_RESTORED', undefined, {phase}), layout,
-      {placement, editChanged: overlayEditChanged});
+      {placement, sections: settings.overlay.sections, editChanged: overlayEditChanged});
     created.webContents.setWindowOpenHandler(() => ({action: 'deny'}));
     created.webContents.on('will-navigate', event => event.preventDefault());
     // A loaded document starts at the default zoom; the scale in use applies again.

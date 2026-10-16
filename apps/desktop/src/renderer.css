@@ -21,11 +21,17 @@ html:has(.overlay-body) { background: transparent; }
 /* Not current: placeholders and icons are dimmed; there are no last-known values to dim (N6). */
 .overlay.is-dim .overlay-value, .overlay.is-dim .overlay-unit, .overlay.is-dim .overlay-icon, .overlay.is-dim .overlay-ring { opacity: .5; }
 
-/* Strip: one 38 px row at the top centre. Items wrap whole onto a clipped second line when the row is too narrow. */
+/* Strip (ET-012c): 36 px rows at the top centre of a window main sized for the enabled sections (overlay-strip.ts, whose
+   constants these rules must match). Items wrap whole onto as many rows as they need; each is capped by an inline
+   max-width, and a longer value ends in an ellipsis. The surface takes its content height at the top of the window; the
+   unused reserved rows stay transparent. */
 .overlay-strip { justify-content: center; align-items: flex-start; }
-.overlay-strip-row { display: flex; flex-wrap: wrap; align-content: flex-start; justify-content: center; column-gap: 14px; max-width: 100%; height: 38px; padding: 0 12px; overflow: hidden; }
+.overlay-strip-row { display: flex; flex-wrap: wrap; align-content: flex-start; justify-content: center; column-gap: 14px; max-width: 100%; max-height: 100%; padding: 0 12px; overflow: hidden; }
 .overlay-strip-row > * { height: 36px; }
 .overlay-strip-row > .overlay-tag { height: auto; align-self: center; }
+.overlay-strip .overlay-item { min-width: 0; overflow: hidden; }
+.overlay-strip .overlay-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.overlay-strip .overlay-tag { overflow: hidden; }
 .overlay-item { display: inline-flex; align-items: center; gap: 6px; }
 .overlay-group-start { position: relative; padding-left: 15px; }
 .overlay-group-start::before { content: ''; position: absolute; left: 0; top: 8px; bottom: 8px; width: 1px; background: rgba(255, 255, 255, .3); }
