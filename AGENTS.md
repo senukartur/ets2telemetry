@@ -50,7 +50,7 @@ Git setup update on October 10, 2026:
 - Use Git for local history and synchronization, and GitHub CLI for pull requests and GitHub checks. A GitHub MCP server is not required for this workflow.
 - The application and native development toolchains remain unverified.
 - GitHub allows only squash merging and automatically deletes merged task branches. Squash commits use the PR title and body.
-- GitHub returned HTTP 403 for branch protection and rulesets while the repository was private on the Free plan. Public repositories can use them, but none are configured. PR-only changes to `main` are an owner policy, reinforced by the local pre-push hook; they are not currently enforced on the server. No required CI checks exist yet.
+- GitHub returned HTTP 403 for branch protection and rulesets while the repository was private on the Free plan. Since October 16, 2026 the public repository enforces the `Protect main` ruleset; see [Branch protection](#branch-protection--october-16-2026).
 
 Coordinator documentation update on October 10, 2026:
 
@@ -187,8 +187,8 @@ gh api graphql -f query='mutation($id:ID!){resolveReviewThread(input:{threadId:$
 - Do not push directly to `main`, force-push `main`, delete `main`, or bypass the local hook during normal work. Rewrite published history only when the owner explicitly authorizes that specific operation. Use an explicit expected remote commit with `--force-with-lease` for an authorized rewrite.
 - Fix merged mistakes through a new PR or a revert PR. Avoid rewriting shared history for ordinary corrections.
 - Enable the tracked hook in each checkout with `git config --local core.hooksPath .githooks`. The current checkout is configured this way. Git for Windows includes the shell used by the hook.
-- `.githooks/pre-push` rejects direct updates or deletion of remote `main`; GitHub PR merging is unaffected. This local guard can be bypassed and does not replace server-side branch protection. Do not bypass it unless necessary for a specifically authorized exception.
-- If server-side protection becomes available, require PRs, linear history, resolved review conversations, and passing existing CI checks; block force pushes and branch deletion. Do not invent required check names or require a second-account approval in the current single-owner setup.
+- `.githooks/pre-push` rejects direct updates or deletion of remote `main`; GitHub PR merging is unaffected. This local guard can be bypassed; the server-side `Protect main` ruleset enforces the same rule. Do not bypass it unless necessary for a specifically authorized exception.
+- Server-side protection follows these rules: require PRs, linear history, resolved review conversations, and passing existing CI checks; block force pushes and branch deletion. Do not invent required check names or require a second-account approval in the current single-owner setup. The `Protect main` ruleset implements them; see [Branch protection](#branch-protection--october-16-2026).
 
 ### Validation and Releases
 
@@ -213,7 +213,7 @@ ET-023b PowerShell analysis update on October 11, 2026: `npm run lint:ps` runs h
 - Include appropriate behavior tests in the same PR as a feature; retain a reproducing regression test for bug fixes where feasible. Explain justified omissions. Do not add redundant implementation-mirroring tests or application tests for documentation-only edits.
 - Use deterministic fixtures and controlled clocks for domain logic; use actual Windows pipes, temporary SQLite files, and the storage worker for integration boundaries. Keep all test data isolated from real user history and game files.
 - Preserve historical migration fixtures and explicit expectations for trip completion/completeness, event deduplication, durable ACKs, and missing intervals. Update the scenario-to-test registry as components are implemented.
-- A failing existing baseline suite blocks acceptance. Check the current PR commit and run extra migration, packaging, native, or real-game checks when the change affects those boundaries. Current repository limitations mean the owner enforces this merge policy; do not claim server-side required checks exist.
+- A failing existing baseline suite blocks acceptance. Check the current PR commit and run extra migration, packaging, native, or real-game checks when the change affects those boundaries. The `Protect main` ruleset requires only the two Windows CI jobs ([Branch protection](#branch-protection--october-16-2026)); the owner enforces the rest of this merge policy, so do not claim that the server enforces review, real-game or other acceptance evidence.
 - Report flaky outcomes and pending manual checks honestly. Do not silently skip critical tests, replace expected values merely to accept changed behavior, or treat retries/coverage percentages as proof of correctness.
 
 - Inspect the actual project state before choosing commands or editing files. Prefer `rg` for searches.
@@ -366,8 +366,34 @@ The strip now reserves as many 36 px rows as its enabled sections need at its wi
 
 ET-012c makes no settings format, IPC, preload, protocol, projection or service change, and the card, cluster and HUD are unchanged. For the strip, M4's height `round(38 × scale)` becomes `ceil(36 × rows × scale + 2 × max(1, scale))`, which equals `ceil((36 × rows + 2) × scale)` at scale 1 or more. Below zoom 1 the row model counts the surface border snapped to one device pixel. Earlier dated text is unchanged. Real-game readability, click-through over the taller window, fractional-DPI rounding and frame-time impact remain pending in [ET-012c validation](docs/validation/et-012c.md). No game, TruckersMP, display or performance claim follows.
 
+## ET-012d overlay layout fit — October 16, 2026
+
+On October 16, 2026 the owner decided to fix the overlay strip first. The coordinator then decided to merge ET-010c and to fix the Cluster in a follow-up package, ET-012d. Under those decisions and the standing delegation of October 15, 2026, the coordinator adopted the architect's decisions K1–K12 ([concept.md](concept.md#et-012d-overlay-layout-fit--october-16-2026)). The owner did not review them individually.
+
+The Card, the Cluster's side panel and the Minimal HUD use fixed row heights, and each reserves its height for its enabled sections. The window is at least its ET-012a nominal size and grows only when the enabled sections need more room. With every section at scale 1 the windows are:
+- Card: 300 × 384;
+- Cluster: 440 × 267;
+- HUD: 320 × 354.
+
+The size never depends on values. A layout that does not fit hides as a whole, and edit mode reports `too-large`. The telemetry smoke asserts that every shown Card, Cluster and HUD section lies inside the overlay window with protocol v1 data.
+
+ET-012d makes no settings format, IPC, preload, projection, protocol or service change, and the strip is unchanged. For the Card, Cluster and HUD, M4's height `round(nominal × scale)` becomes `max(round(nominal height × scale), ceil(content × scale + 2 × border × max(1, scale)))`. Widths are unchanged, and earlier dated text is unchanged.
+
+Real-game readability of the taller layouts, click-through over them, fractional-DPI rounding and frame-time impact remain pending in [ET-012d validation](docs/validation/et-012d.md). No game, TruckersMP, display or performance claim follows.
+
 ## Repository visibility and license — October 16, 2026
 
 On October 16, 2026 the owner released the project under the [MIT License](LICENSE) and decided to make the GitHub repository public, so that standard GitHub-hosted Actions runners stop consuming the private-repository minute quota. The visibility switch is a separate owner action in the GitHub settings; check the current state with `gh repo view senukartur/ets2telemetry --json visibility` instead of assuming it. The vendored SCS SDK headers keep their own license and notice ([vendor](native/telemetry-plugin/vendor/README.md)).
 
-Once the repository is public, its full Git history, pull requests, review comments, Actions logs and retained artifacts are readable by anyone, and that cannot be undone. Never commit or paste into PRs, comments or logs any secret, token, personal path, account, player or profile data, raw game captures or screenshots. Fork pull requests run Windows CI without repository secrets; do not ask `@claude` to review a fork PR. Branch protection and rulesets become available on the Free plan for public repositories, but none are configured; the local pre-push hook and the owner merge policy still apply. This decision changes no product scope and no package authorization.
+Once the repository is public, its full Git history, pull requests, review comments, Actions logs and retained artifacts are readable by anyone, and that cannot be undone. Never commit or paste into PRs, comments or logs any secret, token, personal path, account, player or profile data, raw game captures or screenshots. Fork pull requests run Windows CI without repository secrets; do not ask `@claude` to review a fork PR. Branch protection and rulesets become available on the Free plan for public repositories; the ruleset now in force is described under [Branch protection](#branch-protection--october-16-2026), and the local pre-push hook and the owner merge policy still apply. This decision changes no product scope and no package authorization.
+
+## Branch protection — October 16, 2026
+
+The repository became public on October 16, 2026, and at the owner's request the active repository ruleset `Protect main` (id 25232619) now protects the default branch:
+
+- Deleting `main` and non-fast-forward pushes are blocked, and history must be linear.
+- Changes reach `main` only through a pull request merged by squash. No approving review is required in the single-owner setup, but every review thread must be resolved.
+- The `Windows CI` jobs `Windows x64 scaffold` and `Windows x64 native AddressSanitizer`, reported by GitHub Actions, must pass on the PR head. The branch need not be up to date with `main` first. The advisory Claude review is not required.
+- The repository admin role may bypass these rules only when merging a pull request (`pull_requests_only`); direct pushes to `main` stay blocked for everyone.
+
+Windows CI does not run on PRs that change only `**.md` or `docs/**`, so their required checks never report. Merge such a PR with `gh pr merge <pr> --squash --admin` only when its diff is limited to those paths, after the review rules above are met. Never use `--admin` to skip a failing, pending or cancelled check on any other PR. GitHub counts a job skipped by its `if` condition, such as the draft skip in both Windows CI jobs, as a passing required check, so the ruleset alone does not prove a real run: the merge gate remains a successful run of both jobs on the final head after **Ready for review** ([docs/ci.md](docs/ci.md#triggers-and-draft-checks)). The local pre-push hook remains in place. Inspect the live rules with `gh api repos/senukartur/ets2telemetry/rules/branches/main` before relying on this description.

@@ -44,7 +44,11 @@ function Strip({view}: {view: OverlayView}) {
   </div>;
 }
 
-/** Header with the game and tags, then one labelled row per section. */
+/**
+ * Header with the game and tags, then one labelled row per section. Every row and the header have a fixed height
+ * (ET-012d), and main reserves the window's height for the enabled sections (overlay-rows.ts), so every section stays
+ * inside the window; a longer value ends in an ellipsis.
+ */
 function CardLayout({view}: {view: OverlayView}) {
   return <div className="overlay-surface overlay-card-body">
     <header className="overlay-card-header"><span className="overlay-source">{view.source}</span><Tags tags={view.tags} /></header>
@@ -56,7 +60,10 @@ function CardLayout({view}: {view: OverlayView}) {
   </div>;
 }
 
-/** A round speed gauge with the RPM ring and a gear badge, and the remaining sections in a side panel. */
+/**
+ * A round speed gauge with the RPM ring and a gear badge, and the remaining sections in a side panel of fixed-height
+ * rows that takes its content height (ET-012d); main reserves the window's height for the panel's rows.
+ */
 function Cluster({view}: {view: OverlayView}) {
   const gauge = view.gauge, ring = gauge?.rpm?.ring ?? 0;
   return <div className="overlay-cluster-body">
@@ -82,7 +89,10 @@ function Cluster({view}: {view: OverlayView}) {
   </div>;
 }
 
-/** Shadowed text lines without a background. */
+/**
+ * Shadowed text lines without a background, each of a fixed height (ET-012d). The tag row's height is reserved even
+ * while no tag shows, so a tag that appears never pushes a line out of the window.
+ */
 function Hud({view}: {view: OverlayView}) {
   return <div className="overlay-hud-lines">
     {view.tags.length ? <div className="overlay-hud-tags"><Tags tags={view.tags} /></div> : null}

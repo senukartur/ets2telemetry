@@ -34,7 +34,7 @@ export interface OverlayScreen {
 export interface OverlayControllerOptions {
   /** The saved placement of the initial layout; the overlay window was created at its scale. */
   placement?: OverlayPlacement;
-  /** The saved enabled sections; the strip reserves rows for them (ET-012c). Defaults to every section. */
+  /** The saved enabled sections; every layout reserves rows for them (ET-012c, ET-012d). Defaults to every section. */
   sections?: OverlaySections;
   /** Receives every change of the edit state. */
   editChanged?: (state: OverlayEditState) => void;
@@ -85,8 +85,9 @@ export class OverlayController {
   /**
    * A saved layout, placement or sections change re-places the window from the last observation; it renews no SDK or
    * window freshness. A moved visible overlay re-asserts topmost without activation; a hidden one stays hidden. Sections
-   * alone change only the strip's reserved rows (ET-012c decision S7): the window moves and is raised only when its
-   * rectangle changed. While editing, the saved placement is only remembered: the draft stays until edit mode ends, but
+   * alone change only the reserved rows of the strip (ET-012c decision S7) and of the card, cluster and HUD (ET-012d
+   * decision K9): the window moves and is raised only when its rectangle changed, so a bottom-anchored layout that grows
+   * moves its top edge. While editing, the saved placement is only remembered: the draft stays until edit mode ends, but
    * changed sections re-size the draft from its unchanged fractions, which may no longer fit.
    */
   setLayout(layout: OverlayLayout, placement: OverlayPlacement = DEFAULT_OVERLAY_PLACEMENTS[layout], sections: OverlaySections = this.sections): void {

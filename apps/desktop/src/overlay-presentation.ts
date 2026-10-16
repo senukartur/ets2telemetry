@@ -75,8 +75,8 @@ export function overlayPresentation(live: LiveTelemetry, units: UnitProfiles = D
     const {parts, detail} = SECTION_FIELDS[id];
     if (!overlay.sections[id]) continue;
     if (!parts.some(carried)) {
-      // A shown v1 section whose v1 carriage is lost while the same v0 source continues (main stripped an invalid
-      // projection, or the v1 origin or game stopped matching) keeps its dash (ET-012a L5). An update without a v0
+      // A shown v1 section whose v1 carriage is lost while an update still carries a v0 observation (main stripped an
+      // invalid projection, or the v1 origin or game stopped matching) keeps its dash (ET-012a L5). An update without a v0
       // observation (a selection change, a service failure or restart, a lost channel) clears it, as do v1 data never
       // carried and a disabled section.
       if (shown.has(id) && observation) sections.push({id, state: 'unavailable'});

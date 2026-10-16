@@ -37,17 +37,23 @@ html:has(.overlay-body) { background: transparent; }
 .overlay-group-start::before { content: ''; position: absolute; left: 0; top: 8px; bottom: 8px; width: 1px; background: rgba(255, 255, 255, .3); }
 .overlay-strip .overlay-value { font-size: 18px; }
 
+/* Card, cluster panel and HUD (ET-012d): fixed-height rows, one per enabled section, in a window main sized for them
+   (overlay-rows.ts, whose constants these rules must match). Each row centres its content and clips what does not fit,
+   so a value never makes a row taller; a longer value ends in an ellipsis. Header and tag rows have a fixed height too,
+   and their tags shrink before the game name does. */
+.overlay-card-header .overlay-tag, .overlay-panel-tags .overlay-tag { flex: 0 1 auto; min-width: 0; overflow: hidden; }
+
 /* Card: top right, label and value rows; long labels shorten before values do. */
 .overlay-card { align-items: flex-start; }
 .overlay-card-body { width: 100%; max-height: 100%; padding: 10px 14px; overflow: hidden; }
-.overlay-card-header { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 6px; }
+.overlay-card-header { display: flex; flex-wrap: nowrap; align-items: center; gap: 6px; height: 20px; margin-bottom: 6px; overflow: hidden; }
 .overlay-rows { margin: 0; }
-.overlay-row { display: flex; align-items: baseline; gap: 10px; padding: 3px 0; border-top: 1px solid rgba(255, 255, 255, .12); }
+.overlay-row { display: flex; align-items: center; gap: 10px; height: 24px; padding: 0; border-top: 1px solid rgba(255, 255, 255, .12); overflow: hidden; }
 .overlay-row dt { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #e2e8ef; font-size: 12px; }
 .overlay-row dt .overlay-icon { vertical-align: -2px; margin-right: 6px; }
 .overlay-row dd { flex: 0 1 auto; min-width: 0; max-width: 72%; margin: 0; overflow: hidden; }
 .overlay-row .overlay-value-group, .overlay-panel-row .overlay-value-group { display: flex; justify-content: flex-end; max-width: 100%; }
-.overlay-row .overlay-value, .overlay-panel-row .overlay-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.overlay-row .overlay-value, .overlay-panel-row .overlay-value, .overlay-hud-line .overlay-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .overlay-card .overlay-value { font-size: 14px; }
 
 /* Cluster: bottom left, a round speed gauge with the RPM ring and gear badge, and a side panel. */
@@ -63,16 +69,18 @@ html:has(.overlay-body) { background: transparent; }
 .overlay-gauge-gear { padding: 1px 10px; border-radius: 6px; background: rgba(255, 255, 255, .16); }
 .overlay-gauge-gear .overlay-value { font-size: 16px; }
 .overlay-gauge-rpm .overlay-value { font-size: 12px; font-weight: 400; color: #c8d3de; }
-.overlay-panel { display: flex; flex: 1 1 auto; flex-direction: column; gap: 3px; min-width: 0; max-width: 230px; max-height: 200px; padding: 8px 10px; overflow: hidden; font-size: 13px; }
-.overlay-panel-tags { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.overlay-panel-row { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+/* The panel takes its content height, which the window reserves; ET-012a's 200 px cap clipped its last rows. */
+.overlay-panel { display: flex; flex: 1 1 auto; flex-direction: column; gap: 3px; min-width: 0; max-width: 230px; padding: 8px 10px; overflow: hidden; font-size: 13px; }
+.overlay-panel-tags { display: flex; flex: none; flex-wrap: nowrap; align-items: center; gap: 6px; height: 18px; overflow: hidden; }
+.overlay-panel-row { display: flex; flex: none; align-items: center; gap: 8px; min-width: 0; height: 18px; overflow: hidden; }
 .overlay-panel-row .overlay-value-group { flex: 1 1 auto; min-width: 0; overflow: hidden; }
 
 /* Minimal HUD: top left, shadowed text without a background. */
 .overlay-hud { align-items: flex-start; }
 .overlay-hud-lines { display: flex; flex-direction: column; gap: 2px; max-width: 100%; max-height: 100%; overflow: hidden; text-shadow: 0 1px 2px #000, 0 0 4px #000; }
-.overlay-hud-tags { display: flex; gap: 6px; }
-.overlay-hud-line { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.overlay-hud-tags { display: flex; flex: none; align-items: center; gap: 6px; height: 18px; overflow: hidden; }
+.overlay-hud-line { display: flex; flex: none; align-items: center; gap: 6px; min-width: 0; height: 22px; overflow: hidden; }
+.overlay-hud-line .overlay-value-group { min-width: 0; overflow: hidden; }
 .overlay-hud .overlay-icon { filter: drop-shadow(0 1px 1px #000); align-self: center; }
 .overlay-hud .overlay-value { font-size: 16px; }
 
