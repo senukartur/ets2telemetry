@@ -17,7 +17,7 @@ export const JOURNAL_SAMPLE_LIMITS: readonly number[] = Object.freeze([300, 3_60
 /** Completeness intervals included in a trip detail; later ones are read with `journalIntervals` and its cursor. */
 export const JOURNAL_DETAIL_INTERVALS = 50;
 /**
- * Trailer configurations included in a trip detail: the latest ones by eventSeq. A trip keeps every trailer
+ * Trailer configurations included in a trip detail: the latest ones in commit order. A trip keeps every trailer
  * configuration it was given, so it can hold more; the detail then still carries the total (review pass 1).
  */
 export const JOURNAL_DETAIL_TRAILERS = 10;
@@ -128,7 +128,7 @@ export interface JournalTripDetail {
   job: {source: 'event' | 'checkpoint'; eventSeq: Uint64 | null; checkpointNextEventSeq: Uint64 | null; values: JobConfiguration};
   truck: {eventSeq: Uint64; values: TruckConfiguration} | null;
   /**
-   * The latest JOURNAL_DETAIL_TRAILERS trailer configurations of the trip in eventSeq order, and how many the trip holds.
+   * The latest JOURNAL_DETAIL_TRAILERS trailer configurations of the trip in commit order, and how many the trip holds.
    * A trip that was given more (a trailer re-sent or changed while it was open) shows only the latest ones here.
    */
   trailers: {items: {eventSeq: Uint64; values: TrailerConfiguration}[]; total: number};

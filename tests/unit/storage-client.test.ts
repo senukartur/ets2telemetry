@@ -518,6 +518,19 @@ describe('ET-016 journal reads at the worker boundary', () => {
     f.ok(2, COMMITTED);
     await expect(next).resolves.toEqual({ok: true, value: COMMITTED});
   });
+  it('resolves the read and sends the next command even when the report callback throws (review pass 2)', async () => {
+    const f = fixture({onJournalAnswerInvalid: () => { throw new Error('the log sink is closing'); }});
+    const read = f.client.journalTrips();
+    const next = f.client.commitEvent({message: {}});
+    // The worker answers the journal read with a page that breaks the contract; the throw must not escape the listener.
+    expect(() => f.ok(1, changed(PAGE, p => { p.database.purpose = 'game'; }))).not.toThrow();
+    await expect(read).resolves.toEqual({ok: false, error: {code: 'JOURNAL_ANSWER_INVALID', retryable: false,
+      message: 'The storage worker returned a journal page that does not match the journal contract.'}});
+    expect(f.sent.map(sent => sent.command.name)).toEqual(['journalTrips', 'commitEvent']);
+    f.ok(2, COMMITTED);
+    await expect(next).resolves.toEqual({ok: true, value: COMMITTED});
+    expect(f.client.state).toBe('running');
+  });
   it.each<[string, (f: ReturnType<typeof fixture>) => void]>([
     ['a success without a value', f => f.raw({type: 'storage.response', id: 1, result: {ok: true}})],
     ['an error with an unknown code', f => f.reply(1, {ok: false, error: {code: 'JOURNAL_ANSWER_INVALID', retryable: false, message: 'x'}} as unknown as Result<unknown>)],

@@ -35,7 +35,8 @@ export interface StorageClientOptions {
   onFailure?: (error: StorageError) => void;
   /**
    * Called when a journal answer broke the journal contract (ET-016): that command got JOURNAL_ANSWER_INVALID and the
-   * client keeps running. The fact is the command name only; the owner logs it as a fixed code.
+   * client keeps running. The fact is the command name only; the owner logs it as a fixed code. It is called after the
+   * command resolved and the next queued command was sent; anything it throws is ignored.
    */
   onJournalAnswerInvalid?: (facts: {command: JournalCommandName}) => void;
 }
@@ -207,11 +208,14 @@ export class StorageClient {
     if (!inFlight || !response || response.id !== inFlight.id) { this.#fail('WORKER_FAILED'); return; }
     this.#timers.clearTimeout(inFlight.timer);
     this.#inFlight = undefined;
-    // A bad journal page fails only its own command (worker/protocol.ts, parseResponse); the client keeps serving.
-    if ('journalAnswerInvalid' in response) this.settings.onJournalAnswerInvalid?.({command: inFlight.command.name as JournalCommandName});
     inFlight.resolve(response.result);
     if (this.#state === 'closing') { if (inFlight.command.name !== 'close') this.#sendClose(); }
     else this.#pump();
+    // A bad journal page fails only its own command (worker/protocol.ts, parseResponse); the client keeps serving. The
+    // report runs last, after the call is resolved and the next command is sent, and nothing it throws reaches the client.
+    if ('journalAnswerInvalid' in response) {
+      try { this.settings.onJournalAnswerInvalid?.({command: inFlight.command.name as JournalCommandName}); } catch { /* a report never affects the client */ }
+    }
   }
 
   #exit(code: number): void {

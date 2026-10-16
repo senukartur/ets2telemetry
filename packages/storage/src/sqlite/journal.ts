@@ -37,9 +37,13 @@ export const JOURNAL_QUERIES = {
   eventById: 'SELECT event_seq, type, payload_json FROM events WHERE id = ?',
   eventExists: 'SELECT 1 FROM events WHERE plugin_session_id = ? AND event_seq = ?',
   truck: 'SELECT event_ref FROM truck_configurations WHERE id = ?',
-  /** The trip's latest trailer configurations, newest first, at most JOURNAL_DETAIL_TRAILERS (review pass 1). */
+  /**
+   * The trip's latest trailer configurations, newest first by commit order (the event row id), at most
+   * JOURNAL_DETAIL_TRAILERS (review passes 1 and 2). eventSeq is not compared: a trip can hold trailer configurations of
+   * a later plugin session, whose eventSeqs start at 1 again.
+   */
   trailers: `SELECT e.event_seq, e.payload_json FROM trip_trailers x JOIN trailer_configurations c ON c.id = x.trailer_configuration_ref JOIN events e ON e.id = c.event_ref
-    WHERE x.trip_ref = ? ORDER BY e.event_seq DESC LIMIT ?`,
+    WHERE x.trip_ref = ? ORDER BY e.id DESC LIMIT ?`,
   trailerTotal: 'SELECT count(*) AS total FROM trip_trailers WHERE trip_ref = ?',
   /** The trip's attributed money events in event order, one more than the bound so an overflow is detected. */
   amounts: `SELECT e.type, m.amount_raw, m.amount_sdk_type, m.amount_currency_status, m.amount_currency_code, m.amount_currency_source, m.amount_state

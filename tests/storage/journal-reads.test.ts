@@ -388,6 +388,27 @@ describe('a trip opened from a checkpoint (schema version 2, J7; written only fr
   });
 });
 
+describe('the latest trailer configurations of a trip across plugin sessions (review pass 2)', () => {
+  it('keeps the latest ten in commit order, so a later session\'s trailer at eventSeq 1 is among them', async () => {
+    const tw = await workspace();
+    try {
+      const st = await tw.open(), a = new Script(ETS2_A), b = new Script(ETS2_B, 'ets2', {utcMs: SESSION_B_UTC}), trip = '7d000000-0000-4000-8000-000000000001';
+      const addTrailer: TripEffect = {kind: 'trip.update', tripUuid: trip, set: {trailerConfigurations: ['this-event']}};
+      ok(st.upsertSession({message: a.welcome()}));
+      ok(st.commitEvent({message: a.event(r.jobConfigured()), effects: [{kind: 'trip.open', tripUuid: trip, game: 'ets2', gameMode: {mode: 'unknown', method: 'none', confidence: 'none'},
+        jobConfiguration: 'this-event', recordingCompleteness: 'unknown', startedUtcMs: BASE_UTC}]}));
+      // Session A gives the open trip eleven trailer configurations (eventSeqs 2 to 12).
+      for (let i = 0; i < 11; i++) ok(st.commitEvent({message: a.event(r.trailerConfigured()), effects: [addTrailer]}));
+      // A later plugin session of the same game gives it one more, at its own eventSeq 1.
+      ok(st.upsertSession({message: b.welcome()}));
+      ok(st.commitEvent({message: b.event(r.trailerConfigured()), effects: [addTrailer]}));
+      const detail = ok(st.journalTrip(trip));
+      expect(detail.trailers.total).toBe(12);
+      expect(detail.trailers.items.map(trailer => trailer.eventSeq)).toEqual(['4', '5', '6', '7', '8', '9', '10', '11', '12', '1']);
+    } finally { await tw.dispose(); }
+  });
+});
+
 describe('a trip with more than 5,000 money amounts and more than 100 intervals (J5; REG-014)', () => {
   it('pages its events and intervals with cursors and marks its money totals incomplete beyond 5,000 amounts', async () => {
     const big = await workspace();
