@@ -146,31 +146,36 @@ export interface RecordingRun {
  * The client socket the ingestion and the harness see: the connect, data, end, error and close events of the real pipe
  * socket, passed on synchronously and in their order. With a gate, the server bytes are passed on one whole frame at a
  * time up to the frame of the gate's event; everything after it (the rest of the stream, end, error and close) waits in
- * order until the gate's promise resolves, then follows at once. Re-cutting a byte stream at frame boundaries is
- * invisible to a consumer that decodes it, and nothing is reordered, dropped or added.
+ * order until the gate's promise resolves, then follows at once. An incomplete frame kept before the gate's event is
+ * passed on ahead of the end, error or close that follows it. Re-cutting a byte stream at frame boundaries is invisible
+ * to a consumer that decodes it, and nothing is reordered, dropped or added (tests/storage/client-socket.test.ts).
  */
-class ClientSocket extends EventEmitter {
+export class ClientSocket extends EventEmitter {
   private partial = Buffer.alloc(0);
   private waiting?: [string, unknown[]][];
   constructor(private readonly real: net.Socket, private gate: {afterEventSeq: string; until: () => Promise<unknown>} | undefined, private readonly fail: (error: unknown) => void) {
     super();
     real.on('connect', () => this.pass('connect'));
     real.on('data', (chunk: Buffer) => { if (this.gate) this.frames(chunk); else this.pass('data', chunk); });
-    real.on('end', () => {
-      if (this.partial.length) { this.pass('data', this.partial); this.partial = Buffer.alloc(0); }
-      this.pass('end');
-    });
-    real.on('error', (error: Error) => this.pass('error', error));
-    real.on('close', (hadError: boolean) => this.pass('close', hadError));
+    real.on('end', () => { this.flush(); this.pass('end'); });
+    real.on('error', (error: Error) => { this.flush(); this.pass('error', error); });
+    real.on('close', (hadError: boolean) => { this.flush(); this.pass('close', hadError); });
   }
   write(bytes: Uint8Array, ...rest: unknown[]): boolean { return (this.real.write.bind(this.real) as (...args: unknown[]) => boolean)(bytes, ...rest); }
   destroy(): void { this.real.destroy(); }
   private pass(event: string, ...args: unknown[]): void {
     if (this.waiting) this.waiting.push([event, args]); else this.emit(event, ...args);
   }
+  /** Passes on an incomplete frame kept before the gate's event, ahead of the socket event that follows it. */
+  private flush(): void {
+    if (!this.partial.length) return;
+    const bytes = this.partial; this.partial = Buffer.alloc(0);
+    this.pass('data', bytes);
+  }
   /** Passes whole frames until the gate's event has been passed; the rest waits behind the gate. */
   private frames(chunk: Buffer): void {
-    let bytes = Buffer.concat([this.partial, chunk]);
+    // The kept bytes move into this chunk's bytes; only what is still incomplete below is kept again.
+    let bytes = Buffer.concat([this.partial, chunk]); this.partial = Buffer.alloc(0);
     while (this.gate && bytes.length >= 4 && bytes.length >= 4 + bytes.readUInt32LE(0)) {
       const frame = bytes.subarray(0, 4 + bytes.readUInt32LE(0)); bytes = bytes.subarray(frame.length);
       this.pass('data', frame);
