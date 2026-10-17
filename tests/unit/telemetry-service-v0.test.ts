@@ -285,8 +285,8 @@ async function stoppedService(stopProbe: (report: ProbeDependencies['report']) =
   const previousPort = Object.getOwnPropertyDescriptor(process, 'parentPort');
   const parent = Object.assign(new EventEmitter(), {postMessage: vi.fn()});
   Object.defineProperty(process, 'parentPort', {configurable: true, value: parent});
-  const log = vi.fn();
-  vi.doMock('../../apps/desktop/src/diagnostics', () => ({createDiagnostics: () => log}));
+  const log = vi.fn(), diagnostics: unknown[][] = [];
+  vi.doMock('../../apps/desktop/src/diagnostics', () => ({createDiagnostics: (...args: unknown[]) => {diagnostics.push(args); return log;}}));
   let probeReport: ProbeDependencies['report'] = () => undefined;
   vi.doMock('../../apps/desktop/src/service-probe', () => ({ServiceProbe: class {
     constructor(private readonly dependencies: ProbeDependencies) {probeReport = message => dependencies.report(message);}
@@ -332,7 +332,7 @@ async function stoppedService(stopProbe: (report: ProbeDependencies['report']) =
   };
   const stops = () => parent.postMessage.mock.calls.map(call => call[0] as {type: string}).filter(message => message.type === 'stopped');
   const steps = () => log.mock.calls.filter(call => call[0] === 'SHUTDOWN_STEP').map(call => call[2] as Record<string, unknown>);
-  return {exit, parent, log, history, v1, pipeClients, restore, stops, steps, probeReport: (message: Parameters<ProbeDependencies['report']>[0]) => probeReport(message),
+  return {exit, parent, log, diagnostics, history, v1, pipeClients, restore, stops, steps, probeReport: (message: Parameters<ProbeDependencies['report']>[0]) => probeReport(message),
     stop: () => parent.emit('message', {data: {type: 'stop'}, ports: []})};
 }
 it('runs the ordered shutdown once and reports exactly one clean stopped message before exit 0', async () => {
@@ -356,6 +356,18 @@ it('runs the ordered shutdown once and reports exactly one clean stopped message
     expect(f.log).toHaveBeenCalledWith('SERVICE_REPORT', {type: 'stopped', clean: true});
     expect(vi.getTimerCount()).toBe(0);
   } finally {f.restore();}
+});
+// Without LOCALAPPDATA the service once logged under TEMP while main logged under userData; it now uses main's root.
+it('writes its log in the service subdirectory of the root main passed, also without LOCALAPPDATA', async () => {
+  const root = 'C:\\isolated\\user-data\\ETS2Telemetry\\logs';
+  vi.stubEnv('LOCALAPPDATA', undefined); vi.stubEnv('ETS2TELEMETRY_DIAGNOSTIC_DIR', undefined); vi.stubEnv('ETS2TELEMETRY_SERVICE_LOG_ROOT', root);
+  try {
+    const f = await stoppedService(report => {report({type: 'stopped'}); return Promise.resolve();});
+    try {
+      expect(f.diagnostics[0]).toEqual([`${root}\\service`, false]);
+      f.stop(); await vi.advanceTimersByTimeAsync(0); expect(f.exit).toHaveBeenCalledExactlyOnceWith(0);
+    } finally {f.restore();}
+  } finally {vi.unstubAllEnvs();}
 });
 it('runs protocol v1 beside v0 without a durable sink, following each selection with the v1 fixture endpoint and the derived broker directory', async () => {
   const v1Endpoint = '\\\\.\\pipe\\ETS2Telemetry-SYNTHETIC-TEST-v1-123-' + randomUUID();

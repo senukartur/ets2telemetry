@@ -10,6 +10,7 @@ import {SettingsBusyError, SettingsError, SettingsStore, settingsDirectory} from
 import {isUnitGame, isUnitProfile} from './unit-profiles';
 import {processEntrypoint} from './entrypoints';
 import {createDiagnostics, type DiagnosticFacts} from './diagnostics';
+import {mainLogLocation, serviceEnvironment} from './log-location';
 import {ServiceSupervisor} from './service-supervisor';
 import {initialLive, sourceSelection} from './live-state';
 import {createBrokerResolver} from './broker-artifact';
@@ -57,7 +58,9 @@ else {
 
 function runApplication(profileError: unknown): void {
   const diagnosticDirectory = process.env.ETS2TELEMETRY_DIAGNOSTIC_DIR;
-  const log = createDiagnostics(diagnosticDirectory || path.join(process.env.LOCALAPPDATA || app.getPath('userData'), 'ETS2Telemetry', 'logs'), Boolean(diagnosticDirectory));
+  // Resolved once; the telemetry service gets this root at fork, so both logs share it, also without LOCALAPPDATA.
+  const logLocation = mainLogLocation(process.env, app.getPath('userData'));
+  const log = createDiagnostics(logLocation.directory, logLocation.detailed);
   // Opt-in startup timeline for diagnosing stalls in isolated smokes: fixed codes and numbers only, never in default logs.
   const timeline = diagnosticDirectory ? (event: string, facts?: DiagnosticFacts) => log(event, undefined, facts) : undefined;
   function observeLoads(contents: Electron.WebContents, prefix: 'DASHBOARD' | 'OVERLAY'): void {
@@ -457,7 +460,8 @@ function runApplication(profileError: unknown): void {
     if (supervisor.stopping) return;
     const entrypoint = processEntrypoint(__dirname, 'telemetry-service');
     if (!existsSync(entrypoint)) throw new Error('Missing physical telemetry service entrypoint');
-    const child = service = utilityProcess.fork(entrypoint, [], {serviceName: 'ETS2Telemetry telemetry service', stdio: 'pipe'});
+    const child = service = utilityProcess.fork(entrypoint, [], {serviceName: 'ETS2Telemetry telemetry service', stdio: 'pipe',
+      env: serviceEnvironment(process.env, logLocation.directory)});
     supervisor.attach(child); recordingChild = child;
     child.stdout?.on('data', chunk => log('SERVICE_STDOUT', String(chunk)));
     child.stderr?.on('data', chunk => log('SERVICE_STDERR', String(chunk)));
