@@ -26,6 +26,8 @@ let windows: (EventEmitter & {webContents: typeof contents; hide: ReturnType<typ
   topmost: boolean; setAlwaysOnTop: ReturnType<typeof vi.fn>; moveTop: ReturnType<typeof vi.fn>; setIgnoreMouseEvents: ReturnType<typeof vi.fn>; setFocusable: ReturnType<typeof vi.fn>;
   minimized: boolean; minimize: ReturnType<typeof vi.fn>; restore: ReturnType<typeof vi.fn>; show: ReturnType<typeof vi.fn>; focus: ReturnType<typeof vi.fn>;
   focused: boolean; setMovable: ReturnType<typeof vi.fn>; setSkipTaskbar: ReturnType<typeof vi.fn>; bounds: Electron.Rectangle})[];
+// ET-016 PR-5: the Save dialog of the trip export; each case sets its answer.
+let showSaveDialog: ReturnType<typeof vi.fn<(window: unknown, options: unknown) => Promise<{canceled: boolean; filePath?: string}>>>;
 let channels: {port1: EventEmitter & {postMessage: ReturnType<typeof vi.fn>; close: ReturnType<typeof vi.fn<() => void>>; start: ReturnType<typeof vi.fn<() => void>>}; port2: {close: ReturnType<typeof vi.fn<() => void>>}}[];
 let configurations: Electron.BrowserWindowConstructorOptions[];
 let log: ReturnType<typeof vi.fn>;
@@ -99,6 +101,7 @@ function installFixture() {
   handlers = new Map(); ipc = new EventEmitter();
   Object.assign(ipc, {handle: (name: string, handler: typeof handlers extends Map<string, infer H> ? H : never) => handlers.set(name, handler)});
   resolveBroker = vi.fn(() => undefined);
+  showSaveDialog = vi.fn(() => Promise.resolve({canceled: true, filePath: ''}));
   vi.doMock('electron', () => ({app, ipcMain: ipc, utilityProcess: {fork: () => {
     if (forks++ === 0) return child;
     const next = Object.assign(new EventEmitter(), {postMessage: vi.fn(), kill: vi.fn(() => true)}); children.push(next); return next;
@@ -127,7 +130,8 @@ function installFixture() {
       isDestroyed() {return this.destroyed;}
     },
     Menu: {buildFromTemplate: (template: unknown[]) => ({template})},
-    nativeImage: {createFromBuffer: () => ({addRepresentation: vi.fn()})}}));
+    nativeImage: {createFromBuffer: () => ({addRepresentation: vi.fn()})},
+    dialog: {showSaveDialog: (window: unknown, options: unknown) => showSaveDialog(window, options)}}));
   vi.doMock('electron-squirrel-startup', () => ({default: false}));
   vi.doMock('../../apps/desktop/src/entrypoints', () => ({processEntrypoint: () => 'package.json'}));
   log = vi.fn(); vi.doMock('../../apps/desktop/src/diagnostics', () => ({createDiagnostics: () => log}));
@@ -1787,4 +1791,88 @@ it('answers TIMEOUT when the service does not reply within 15 s and sends the ne
   journalReply(2, {ok: true, value: DETAIL});
   await expect(next).resolves.toEqual({ok: true, value: DETAIL});
   expect(child.postMessage).not.toHaveBeenCalledWith({type: 'stop'});
+});
+
+// ET-016 PR-5 (J10, J16): the sixth journal channel exports one trip through main's Save dialog, from the trusted
+// dashboard main frame only. Its reads go through the same broker; the dialog belongs to the dashboard window. Expected
+// values are written by hand from J16; these cases never reach a file (cancel, refusal and exit happen before any write).
+const exportCall = (event: unknown, ...request: unknown[]) => Promise.resolve().then(() => handlers.get('journal:export-trip')!(event, ...request as [unknown]));
+const DATABASE_INFO = {database: {purpose: 'synthetic', schemaVersion: 2}, databaseUuid: 'f0000000-0000-4000-8000-000000000001'};
+/** Answers the export's detail and database reads in order. */
+async function answerExportReads(firstId = 1) {
+  await settle();
+  expect(journalSent().at(-1)).toEqual({type: 'journal', id: firstId, query: {kind: 'trip', tripUuid: TRIP}});
+  journalReply(firstId, {ok: true, value: DETAIL}); await settle(); await settle();
+  expect(journalSent().at(-1)).toEqual({type: 'journal', id: firstId + 1, query: {kind: 'database'}});
+  journalReply(firstId + 1, {ok: true, value: DATABASE_INFO}); await settle(); await settle();
+}
+it('rejects trip exports from untrusted senders, frames and the overlay, and every invalid shape, before any read or dialog', async () => {
+  trayAvailable = true; await ready();
+  for (const event of [{sender: {}, senderFrame: contents.mainFrame}, {sender: contents, senderFrame: {}}, overlayTrusted()])
+    await expect(exportCall(event, TRIP)).rejects.toThrow('Untrusted journal request');
+  for (const request of [[], [TRIP, null], [TRIP.toUpperCase()], ['C:\\Users\\owner\\trip.json'], [{tripUuid: TRIP}]])
+    await expect(exportCall(trusted(), ...request)).rejects.toThrow('Invalid journal request');
+  expect(journalSent()).toEqual([]);
+  expect(showSaveDialog).not.toHaveBeenCalled();
+});
+it('reads the detail, offers the default name in Documents in the Save dialog of the dashboard, and writes nothing when it is cancelled', async () => {
+  await ready();
+  let answer!: (value: {canceled: boolean; filePath?: string}) => void;
+  showSaveDialog.mockImplementationOnce(() => new Promise(resolve => { answer = resolve; }));
+  const running = exportCall(trusted(), TRIP);
+  await answerExportReads();
+  expect(showSaveDialog).toHaveBeenCalledExactlyOnceWith(windows[0], {defaultPath: 'C:\\isolated\\ets2telemetry-trip-ets2-20261011-0000-7a000000.json',
+    filters: [{name: 'JSON', extensions: ['json']}]});
+  // One export at a time (J16).
+  await expect(exportCall(trusted(), TRIP)).resolves.toEqual({ok: false, code: 'EXPORT_IN_PROGRESS'});
+  answer({canceled: true, filePath: ''});
+  await expect(running).resolves.toEqual({ok: true, value: {outcome: 'cancelled'}});
+  expect(log.mock.calls.filter(entry => String(entry[0]).startsWith('JOURNAL_EXPORT_')).map(entry => [entry[0], entry[2] ?? null]))
+    .toEqual([['JOURNAL_EXPORT_FAILED', {code: 'EXPORT_IN_PROGRESS'}], ['JOURNAL_EXPORT_CANCELLED', null]]);
+  expect(journalSent()).toHaveLength(2);
+});
+it('refuses a target in the data directory of LOCALAPPDATA, in any case, before writing', async () => {
+  vi.stubEnv('LOCALAPPDATA', 'C:\\isolated-local'); await ready();
+  showSaveDialog.mockImplementationOnce(() => Promise.resolve({canceled: false, filePath: 'C:\\ISOLATED-LOCAL\\ets2telemetry\\data\\trip.json'}));
+  const running = exportCall(trusted(), TRIP);
+  await answerExportReads();
+  await expect(running).resolves.toEqual({ok: false, code: 'EXPORT_TARGET_REFUSED'});
+  expect(journalSent()).toHaveLength(2);
+});
+it('answers a running export EXPORT_INTERRUPTED when the application exits, and refuses exports afterwards', async () => {
+  trayAvailable = true; await ready();
+  // A read in flight: the exit retires the broker, and the export ends as interrupted rather than with the read's code.
+  const reading = exportCall(trusted(), TRIP);
+  await settle();
+  expect(journalSent()).toHaveLength(1);
+  trayMenuItem('Exit ETS2Telemetry').click!();
+  await expect(reading).resolves.toEqual({ok: false, code: 'EXPORT_INTERRUPTED'});
+  await expect(exportCall(trusted(), TRIP)).resolves.toEqual({ok: false, code: 'EXPORT_INTERRUPTED'});
+  expect(showSaveDialog).not.toHaveBeenCalled();
+});
+it('ends an export whose dialog is open at the exit as interrupted, without a write', async () => {
+  trayAvailable = true; await ready();
+  let answer!: (value: {canceled: boolean; filePath?: string}) => void;
+  showSaveDialog.mockImplementationOnce(() => new Promise(resolve => { answer = resolve; }));
+  const running = exportCall(trusted(), TRIP);
+  await answerExportReads();
+  trayMenuItem('Exit ETS2Telemetry').click!();
+  answer({canceled: false, filePath: 'C:\\Users\\owner\\Documents\\trip.json'});
+  await expect(running).resolves.toEqual({ok: false, code: 'EXPORT_INTERRUPTED'});
+  expect(journalSent()).toHaveLength(2);
+});
+// PR-5 review round 1, finding 3: a fatal stop, which is no exit request, also stops a running export before any file.
+it('ends an export whose dialog is open at a fatal stop as interrupted, without a write', async () => {
+  await ready();
+  let answer!: (value: {canceled: boolean; filePath?: string}) => void;
+  showSaveDialog.mockImplementationOnce(() => new Promise(resolve => { answer = resolve; }));
+  const running = exportCall(trusted(), TRIP);
+  await answerExportReads();
+  // An unknown service message type is fatal (SERVICE_INVALID_MESSAGE).
+  child.emit('message', {type: 'journal-export'});
+  expect(child.postMessage).toHaveBeenCalledWith({type: 'stop'});
+  answer({canceled: false, filePath: 'C:\\Users\\owner\\Documents\\trip.json'});
+  await expect(running).resolves.toEqual({ok: false, code: 'EXPORT_INTERRUPTED'});
+  await expect(exportCall(trusted(), TRIP)).resolves.toEqual({ok: false, code: 'EXPORT_INTERRUPTED'});
+  expect(journalSent()).toHaveLength(2);
 });

@@ -21,6 +21,8 @@ export interface JournalHistory {
   readonly client: JournalClient | undefined;
   /** The open database's purpose and schema version; defined only while it is open. */
   readonly database: JournalDatabase | undefined;
+  /** ET-016 PR-5: the open database's UUID from its open summary, for an export header; defined only while it is open. */
+  readonly databaseUuid: string | undefined;
 }
 export interface JournalServiceOptions {
   history: JournalHistory;
@@ -79,6 +81,12 @@ export class JournalService {
     if (history.state !== 'open') return notOpen(history);
     const client = history.client, database = history.database;
     if (!client || !database) return refusal('SERVICE_UNAVAILABLE');
+    // An export header (ET-016 PR-5) comes from the open summary: no storage command joins the queue for it.
+    if (query.kind === 'database') {
+      const databaseUuid = history.databaseUuid;
+      return databaseUuid === undefined ? refusal('SERVICE_UNAVAILABLE')
+        : {ok: true, value: {database: {purpose: database.purpose, schemaVersion: database.schemaVersion}, databaseUuid}};
+    }
     if (this.#busy) return refusal('BUSY');
     this.#busy = true;
     try {
@@ -89,7 +97,7 @@ export class JournalService {
     } finally { this.#busy = false; }
   }
 
-  #read(client: JournalClient, database: JournalDatabase, query: JournalQuery): Promise<JournalResult<unknown>> {
+  #read(client: JournalClient, database: JournalDatabase, query: Exclude<JournalQuery, {kind: 'database'}>): Promise<JournalResult<unknown>> {
     switch (query.kind) {
     case 'trips': return client.journalTrips(query.query);
     case 'trip': return client.journalTrip(query.tripUuid);

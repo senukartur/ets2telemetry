@@ -6,7 +6,7 @@ import {RecoveryBudget} from './recovery-budget';
 import {isOverlayLayout, parseOverlaySections} from './overlay-sections';
 import {isOverlayEditOutcome, parseOverlayEditScale} from './overlay-placement';
 import {isUnitGame, isUnitProfile} from './unit-profiles';
-import {copyTripsQuery, isPageArgument, JOURNAL_CHANNELS} from './journal-contract';
+import {copyTripsQuery, isPageArgument, JOURNAL_CHANNELS, JOURNAL_EXPORT_CHANNEL} from './journal-contract';
 import {isJournalUuid} from '../../../packages/contracts/src/journal';
 let listener: ((update: LiveTelemetry) => void) | undefined;
 let port: MessagePort | undefined;
@@ -162,7 +162,10 @@ const bridge: DesktopBridge = {
   getJournalTrip: tripUuid => isJournalUuid(tripUuid) ? ipcRenderer.invoke(JOURNAL_CHANNELS.trip, tripUuid) : Promise.reject(new Error('Invalid journal request')),
   listJournalEvents: (tripUuid, cursor) => journalPage('events', tripUuid, cursor),
   listJournalIntervals: (tripUuid, cursor) => journalPage('intervals', tripUuid, cursor),
-  listJournalSamples: (tripUuid, cursor) => journalPage('samples', tripUuid, cursor)
+  listJournalSamples: (tripUuid, cursor) => journalPage('samples', tripUuid, cursor),
+  // ET-016 PR-5 (J16): only a validated trip UUID is forwarded; main validates it again, owns the Save dialog and the file
+  // writer, and answers with fixed codes and row counts, never a path.
+  exportJournalTrip: tripUuid => isJournalUuid(tripUuid) ? ipcRenderer.invoke(JOURNAL_EXPORT_CHANNEL, tripUuid) : Promise.reject(new Error('Invalid journal request'))
 };
 /** One page request of a trip: exactly the UUID and the cursor, or null for the first page. */
 function journalPage<T>(kind: 'events' | 'intervals' | 'samples', tripUuid: unknown, cursor: unknown): Promise<T> {

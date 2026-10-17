@@ -63,6 +63,7 @@ export class HistoryStorage {
   #reported = false;
   #failure: StorageErrorCode | null = null;
   #database: JournalDatabase | undefined;
+  #databaseUuid: string | undefined;
   #invalidJournalAnswers = 0;
 
   constructor(private readonly options: HistoryStorageOptions) {}
@@ -74,6 +75,8 @@ export class HistoryStorage {
   get client(): StorageClient | undefined { return this.#state === 'open' ? this.#client : undefined; }
   /** ET-016 (J3): the open database's purpose and schema version, from its open summary; undefined while it is not open. */
   get database(): JournalDatabase | undefined { return this.#state === 'open' ? this.#database : undefined; }
+  /** ET-016 PR-5: the open database's UUID from its open summary, for an export header; undefined while it is not open. */
+  get databaseUuid(): string | undefined { return this.#state === 'open' ? this.#databaseUuid : undefined; }
 
   start(): void {
     if (this.#state !== 'idle') return;
@@ -108,6 +111,7 @@ export class HistoryStorage {
       }
       const summary = result.value;
       this.#database = {purpose: summary.purpose, schemaVersion: summary.schemaVersion};
+      this.#databaseUuid = summary.databaseUuid;
       if (this.#state === 'opening') this.#set('open');
       this.options.log('HISTORY_STORAGE_OPENED', undefined, {schemaVersion: summary.schemaVersion, created: summary.created, migratedFrom: summary.migratedFrom ?? null});
       // Leftovers of a backup that an earlier shutdown terminated; the count only, never a file name.

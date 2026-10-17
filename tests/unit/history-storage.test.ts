@@ -271,14 +271,17 @@ describe('the database the journal reads (ET-016 PR-3, J3, J4)', () => {
     expect(f.history.database).toBeUndefined();
     await vi.advanceTimersByTimeAsync(0);
     expect(f.history.database).toEqual({purpose: 'synthetic', schemaVersion: 2});
+    // ET-016 PR-5: the export header names the database UUID of the open summary, also only while it is open.
+    expect(f.history.databaseUuid).toBe('50000000-0000-4000-8000-000000000001');
     await f.history.close();
     expect(f.history.database).toBeUndefined();
+    expect(f.history.databaseUuid).toBeUndefined();
   });
   it('names no database after a failure', async () => {
     const f = fixture();
     f.history.start(); await vi.advanceTimersByTimeAsync(0);
     f.crash();
-    expect([f.history.state, f.history.database]).toEqual(['unavailable', undefined]);
+    expect([f.history.state, f.history.database, f.history.databaseUuid]).toEqual(['unavailable', undefined, undefined]);
   });
   it('logs a journal answer that broke the contract as a counted fixed code and keeps the database open', async () => {
     const f = fixture();

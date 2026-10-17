@@ -1,6 +1,6 @@
-// ET-016 PR-3 (J10): the five journal read methods of the dashboard preload. Each validates its arguments before it invokes
-// its fixed channel and forwards only a fresh copy of the validated values; anything else rejects without IPC. Expected
-// values are written by hand from J10.
+// ET-016 PR-3 (J10): the five journal read methods of the dashboard preload, and since PR-5 the sixth, the trip export.
+// Each validates its arguments before it invokes its fixed channel and forwards only a fresh copy of the validated values;
+// anything else rejects without IPC. Expected values are written by hand from J10.
 import {EventEmitter} from 'node:events';
 import {afterEach, beforeEach, expect, it, vi} from 'vitest';
 import type {DesktopBridge} from '../../packages/contracts/src';
@@ -16,9 +16,21 @@ beforeEach(async () => {
 });
 afterEach(() => {vi.doUnmock('electron');});
 
-it('appends the five journal methods after the overlay edit methods of the frozen bridge', () => {
+it('appends the six journal methods after the overlay edit methods of the frozen bridge', () => {
   expect(Object.isFrozen(bridge)).toBe(true);
-  expect(Object.keys(bridge).slice(-6)).toEqual(['finishOverlayEdit', 'listJournalTrips', 'getJournalTrip', 'listJournalEvents', 'listJournalIntervals', 'listJournalSamples']);
+  // ET-016 PR-5 appends exportJournalTrip after the five reads (J10).
+  expect(Object.keys(bridge).slice(-7)).toEqual(['finishOverlayEdit', 'listJournalTrips', 'getJournalTrip', 'listJournalEvents', 'listJournalIntervals', 'listJournalSamples',
+    'exportJournalTrip']);
+});
+
+it('forwards exactly a validated trip UUID on the export channel and nothing else (ET-016 PR-5, J16)', async () => {
+  await bridge.exportJournalTrip(TRIP);
+  expect(ipc.invoke.mock.calls).toEqual([['journal:export-trip', TRIP]]);
+  for (const id of [TRIP.toUpperCase(), 'C:\\Users\\owner\\trip.json', '', 42, null, undefined, {tripUuid: TRIP}]) {
+    await expect(bridge.exportJournalTrip(id as string)).rejects.toThrow('Invalid journal request');
+  }
+  expect(ipc.invoke).toHaveBeenCalledTimes(1);
+  expect(ipc.send).not.toHaveBeenCalled();
 });
 
 it('forwards validated arguments on the fixed channels and resolves with main\'s answer', async () => {

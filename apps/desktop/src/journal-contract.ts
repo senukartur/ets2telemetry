@@ -4,7 +4,7 @@
 // against the journal contract (packages/contracts/src/journal.ts) and the request it answers. A reply that fails the
 // check is never forwarded to the renderer. Renderer-safe: no Node or Electron API, so the sandboxed preload can import
 // it. See docs/journal.md#ipc-methods-and-codes-j10-j11.
-import type {JournalCallCode, JournalCallResult, JournalSample, JournalStorageCode, JournalTripsQuery} from '../../../packages/contracts/src';
+import type {JournalCallCode, JournalCallResult, JournalDatabase, JournalSample, JournalStorageCode, JournalTripsQuery} from '../../../packages/contracts/src';
 import {
   isJournalEventCursor, isJournalRowCursor, isJournalTripsQuery, isJournalUuid, JOURNAL_EVENT_LIMITS, JOURNAL_INTERVAL_LIMITS, JOURNAL_SAMPLE_LIMITS,
   validateJournalEventPage, validateJournalIntervalPage, validateJournalTripDetail, validateJournalTripPage, type JournalPageQuery, type JournalTripListItem
@@ -12,21 +12,36 @@ import {
 import {NAME_BYTES} from '../../../packages/contracts/src/protocol-v1';
 import type {SampleRecord, StorageErrorCode} from '../../../packages/storage/src/api';
 
-/** The five fixed invoke channels of the journal reads (J10); the export channel follows in ET-016 PR-5. */
+/** The five fixed invoke channels of the journal reads (J10). */
 export const JOURNAL_CHANNELS = {
   trips: 'journal:list-trips', trip: 'journal:get-trip', events: 'journal:list-events', intervals: 'journal:list-intervals', samples: 'journal:list-samples'
 } as const;
+/** The sixth journal channel (J10, ET-016 PR-5): one trip's JSON export through main's Save dialog. */
+export const JOURNAL_EXPORT_CHANNEL = 'journal:export-trip';
 /** Page sizes main sets for the dashboard (J5, J10); the renderer cannot choose them. */
 export const JOURNAL_UI_EVENT_LIMIT = JOURNAL_EVENT_LIMITS[0];
 export const JOURNAL_UI_INTERVAL_LIMIT = JOURNAL_INTERVAL_LIMITS[0];
 export const JOURNAL_UI_SAMPLE_LIMIT = JOURNAL_SAMPLE_LIMITS[0];
+/** Page sizes of the export's reads (J5, J16): the larger allowed page of each read. */
+export const JOURNAL_EXPORT_EVENT_LIMIT = JOURNAL_EVENT_LIMITS[1];
+export const JOURNAL_EXPORT_INTERVAL_LIMIT = JOURNAL_INTERVAL_LIMITS[1];
+export const JOURNAL_EXPORT_SAMPLE_LIMIT = JOURNAL_SAMPLE_LIMITS[1];
 
-/** One journal read, as main sends it to the telemetry service in `{type: 'journal', id, query}`. */
+/**
+ * One journal read, as main sends it to the telemetry service in `{type: 'journal', id, query}`. `database` is main's
+ * own read for an export header (ET-016 PR-5): the open database's purpose, schema version and UUID, which the service
+ * answers from the open summary of its database without a storage command. No renderer channel requests it.
+ */
 export type JournalQuery =
   | {kind: 'trips'; query: JournalTripsQuery}
   | {kind: 'trip'; tripUuid: string}
-  | {kind: 'events' | 'intervals' | 'samples'; tripUuid: string; page: JournalPageQuery};
+  | {kind: 'events' | 'intervals' | 'samples'; tripUuid: string; page: JournalPageQuery}
+  | {kind: 'database'};
 export type JournalQueryKind = JournalQuery['kind'];
+/** The reads the dashboard may request, one per read channel. */
+export type JournalChannelKind = keyof typeof JOURNAL_CHANNELS;
+/** The answer to a `database` query: the open database as an export header names it. */
+export interface JournalDatabaseInfo {database: JournalDatabase; databaseUuid: string}
 type PageKind = Extract<JournalQuery, {page: JournalPageQuery}>['kind'];
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -61,7 +76,7 @@ export function isPageArgument(kind: PageKind, tripUuid: unknown, cursor: unknow
  * page size main fixes for the dashboard. `list-trips` takes one filter object; `get-trip` one UUID; the page channels a
  * UUID and a cursor or null. Undefined for anything else.
  */
-export function journalRequest(kind: JournalQueryKind, args: readonly unknown[]): JournalQuery | undefined {
+export function journalRequest(kind: JournalChannelKind, args: readonly unknown[]): JournalQuery | undefined {
   if (kind === 'trips') {
     const query = args.length === 1 && isRecord(args[0]) ? copyTripsQuery(args[0]) : undefined;
     return query ? {kind, query} : undefined;
@@ -85,6 +100,7 @@ export function parseJournalQuery(value: unknown): JournalQuery | undefined {
     return query ? {kind: 'trips', query} : undefined;
   }
   if (value.kind === 'trip') return hasExactly(value, ['kind', 'tripUuid']) && isJournalUuid(value.tripUuid) ? {kind: 'trip', tripUuid: value.tripUuid} : undefined;
+  if (value.kind === 'database') return hasExactly(value, ['kind']) ? {kind: 'database'} : undefined;
   const kind = value.kind;
   if ((kind !== 'events' && kind !== 'intervals' && kind !== 'samples') || !hasExactly(value, ['kind', 'tripUuid', 'page']) || !isJournalUuid(value.tripUuid)) return undefined;
   const page = value.page;
@@ -159,9 +175,19 @@ function rowTexts(trip: JournalTripListItem): void {
   for (const field of [trip.job.sourceCity, trip.job.sourceCompany, trip.job.destinationCity, trip.job.destinationCompany, trip.job.cargo]) if (field.available) name(field.value);
 }
 
+/** The purpose and schema version that every journal answer carries (J3). */
+function databaseOf(value: unknown): void {
+  const database = exact(value, ['purpose', 'schemaVersion']);
+  if (!['history', 'synthetic', 'replay'].includes(database.purpose as string) || !Number.isSafeInteger(database.schemaVersion) || (database.schemaVersion as number) < 1) bad();
+}
 /** Throws unless `value` answers `query` exactly: the journal contract, the requested page and its filter. */
 function checkValue(query: JournalQuery, value: unknown): void {
   switch (query.kind) {
+  case 'database': {
+    const o = exact(value, ['database', 'databaseUuid']);
+    databaseOf(o.database); uuid(o.databaseUuid);
+    return;
+  }
   case 'trips': {
     const page = validateJournalTripPage(value), {cursor, game, outcome, completeness} = query.query;
     for (const trip of page.trips) {
@@ -192,8 +218,8 @@ function checkValue(query: JournalQuery, value: unknown): void {
     return;
   }
   case 'samples': {
-    const o = exact(value, ['database', 'samples', 'nextCursor']), database = exact(o.database, ['purpose', 'schemaVersion']);
-    if (!['history', 'synthetic', 'replay'].includes(database.purpose as string) || !Number.isSafeInteger(database.schemaVersion) || (database.schemaVersion as number) < 1) bad();
+    const o = exact(value, ['database', 'samples', 'nextCursor']);
+    databaseOf(o.database);
     if (!Array.isArray(o.samples) || o.samples.length > query.page.limit) bad();
     const samples = o.samples as unknown[];
     for (const item of samples) sample(item, query.tripUuid);

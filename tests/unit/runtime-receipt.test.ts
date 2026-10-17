@@ -316,6 +316,10 @@ function journalReceipt(path: (string | number)[] = [], replacement?: Json): str
     ...['ingestion', 'capture', 'v1-ingestion', 'recording-flush', 'storage-probe'].map(name => ({event: 'SHUTDOWN_STEP', facts: {name, outcome: 'ok'}})),
     {event: 'HISTORY_STORAGE_CLOSED'}, {event: 'SHUTDOWN_STEP', facts: {name: 'history-storage', outcome: 'ok'}}, {event: 'SERVICE_REPORT', detail: {type: 'stopped', clean: true}}];
   const trip = (n: number) => `7a000000-0000-4000-8000-00000000000${n}`;
+  // ET-016 PR-5: run 2 logs two saved exports, a cancelled one and the refused data-folder target.
+  const exportEvents = (): Json[] => [{event: 'JOURNAL_EXPORT_SAVED', facts: {events: 105, samples: 3600}}, {event: 'JOURNAL_EXPORT_SAVED', facts: {events: 6, samples: 3}},
+    {event: 'JOURNAL_EXPORT_CANCELLED', facts: null}, {event: 'JOURNAL_EXPORT_FAILED', facts: {code: 'EXPORT_TARGET_REFUSED'}}];
+  const restartMain = (): Json[] => [main()[0], ...exportEvents().map(row => (row as {facts: Json}).facts === null ? {event: (row as {event: string}).event} : row), ...main().slice(1)];
   const value: Json = {passed: true, commit: 'candidate', mode: 'packaged', scenarioKind: 'journal', launcherExit: 0, probesAfterExit: [],
     mainEvents: main(), serviceEvents: service(true),
     journal: {liveViewport: {innerHeight: 437, scrollY: 0, status: {top: 158, bottom: 178, visible: true}, speed: {top: 214, bottom: 234, visible: true},
@@ -334,7 +338,14 @@ function journalReceipt(path: (string | number)[] = [], replacement?: Json): str
       pagingSamples: {kinds: ['sample'], firstSpeed: '72.0 km/h', nextOnSecond: true},
       filters: {none: [trip(5), trip(4), trip(3)], noneNext: false, partial: 39, partialNext: false},
       restartLauncherExit: 0, files: {magic: 'SQLite format 3', applicationId: 1163154226, userVersion: 2, sidecars: [], syntheticBackups: false},
-      restartMainEvents: main(), restartServiceEvents: service(false)}};
+      exportNoteShown: true, exportsSaved: true, exportCancelledWritesNothing: true, exportTargetRefused: true, dataFolderUnchanged: true,
+      exportFolder: ['delivered.json', 'paging.json'],
+      pagingExport: {events: 105, firstEvent: '1', lastEvent: '105', intervals: 104, samples: 3600, snapshot: true, outcome: 'open'},
+      deliveredExport: {bounds: {committedThroughEventSeq: '29', lastSampleId: '4', lastIntervalId: null, snapshot: false},
+        events: [['4', 'job.configured', null], ['5', 'player.fined', 'trip'], ['6', 'player.tollgate.paid', 'trip'], ['7', 'player.use.ferry', 'trip'], ['8', 'player.fined', 'trip'],
+          ['9', 'job.delivered', 'trip']], intervals: 0},
+      exportEvents: exportEvents(),
+      restartMainEvents: restartMain(), restartServiceEvents: service(false)}};
   if (path.length) {
     let target = value as Record<string | number, Json>;
     for (const key of path.slice(0, -1)) target = target[key] as Record<string | number, Json>;
@@ -393,7 +404,21 @@ function journalCases() {
     invalid('a filler instead of an anchor row', ['journal', 'anchorRows', 0, 'trip'], '7f000000-0000-4000-8000-00000000000a'),
     invalid('anchor details out of order', ['journal', 'anchorDetails'], [2, 1, 3, 4, 5, 6, 7, 8].map(n => ({trip: `7a000000-0000-4000-8000-00000000000${n}`}))),
     {name: 'journal fuel line below the viewport with Int64 integers', body: journalReceipt(['journal', 'liveViewport', 'fuel', 'bottom'], 438), scenario: 'journal',
-      numbers: 'int64' as const, code: 0, available: true, reason: 'JOURNAL_RESULT_INCOMPLETE_OR_INVALID'}
+      numbers: 'int64' as const, code: 0, available: true, reason: 'JOURNAL_RESULT_INCOMPLETE_OR_INVALID'},
+    // ET-016 PR-5 trip export, additive.
+    invalid('export flag missing', ['journal', 'exportsSaved']),
+    invalid('uninstall note not shown', ['journal', 'exportNoteShown'], false),
+    invalid('data folder changed by a refused export', ['journal', 'dataFolderUnchanged'], false),
+    invalid('partial file left in the export folder', ['journal', 'exportFolder'], ['delivered.json', 'paging.json', 'paging.json.0badc0de.partial']),
+    invalid('cancelled export wrote a file', ['journal', 'exportFolder'], ['cancelled.json', 'delivered.json', 'paging.json']),
+    invalid('paging export short of its samples', ['journal', 'pagingExport', 'samples'], 3599),
+    invalid('open trip export not a snapshot', ['journal', 'pagingExport', 'snapshot'], false),
+    invalid('delivered export as a snapshot', ['journal', 'deliveredExport', 'bounds', 'snapshot'], true),
+    invalid('delivered export with an event after its outcome', ['journal', 'deliveredExport', 'events', 6], ['10', 'job.cleared', null]),
+    invalid('cancelled export row missing', ['journal', 'exportEvents', 2], {event: 'JOURNAL_EXPORT_SAVED', facts: {events: 6, samples: 3}}),
+    invalid('refused export logged with another code', ['journal', 'exportEvents', 3, 'facts', 'code'], 'EXPORT_WRITE_FAILED'),
+    invalid('a second export failure in run 2', ['journal', 'restartMainEvents', 5], {event: 'JOURNAL_EXPORT_FAILED', facts: {code: 'EXPORT_WRITE_FAILED'}}),
+    invalid('the refused export row missing from run 2', ['journal', 'restartMainEvents', 4], {event: 'JOURNAL_EXPORT_CANCELLED'})
   ];
 }
 

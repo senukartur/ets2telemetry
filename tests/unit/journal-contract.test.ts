@@ -75,6 +75,7 @@ describe('the service parses the query main sent (J4)', () => {
   });
   it.each([
     ['an unknown kind', {kind: 'export', tripUuid: TRIP}],
+    ['a database query with a trip', {kind: 'database', tripUuid: TRIP}],
     ['a trip page size', {kind: 'trips', query: {limit: 50}}],
     ['an events page of 51', {kind: 'events', tripUuid: TRIP, page: {limit: 51}}],
     ['an events page of 300', {kind: 'events', tripUuid: TRIP, page: {limit: 300}}],
@@ -99,6 +100,27 @@ class Raw {constructor(readonly reply: unknown) {}}
 const raw = (reply: unknown) => new Raw(reply);
 /** A cargo name of 257 UTF-8 bytes, one over the protocol's NAME_BYTES. */
 const LONG_NAME = 'é'.repeat(128) + 'x';
+
+describe('the export header read (ET-016 PR-5)', () => {
+  const DATABASE_UUID = 'f0000000-0000-4000-8000-000000000001', INFO = {database: {purpose: 'history', schemaVersion: 2}, databaseUuid: DATABASE_UUID};
+  it('is a query of exactly its kind', () => {
+    expect(parseJournalQuery({kind: 'database'})).toEqual({kind: 'database'});
+  });
+  it('forwards exactly the database purpose, schema version and UUID', () => {
+    expect(parseJournalReply({kind: 'database'}, {ok: true, value: INFO})).toEqual({ok: true, value: INFO});
+    expect(parseJournalReply({kind: 'database'}, {ok: false, code: 'DATABASE_OPENING'})).toEqual({ok: false, code: 'DATABASE_OPENING'});
+  });
+  it.each<[string, unknown]>([
+    ['an extra path', {...INFO, path: 'C:\\Users\\owner\\telemetry.sqlite'}],
+    ['an upper-case UUID', {...INFO, databaseUuid: DATABASE_UUID.toUpperCase()}],
+    ['no UUID', {database: INFO.database}],
+    ['an unlisted purpose', {...INFO, database: {purpose: 'test', schemaVersion: 2}}],
+    ['schema version 0', {...INFO, database: {purpose: 'history', schemaVersion: 0}}],
+    ['an extra database field', {...INFO, database: {...INFO.database, file: 'telemetry.sqlite'}}]
+  ])('refuses an answer with %s', (_name, value) => {
+    expect(parseJournalReply({kind: 'database'}, {ok: true, value})).toBeUndefined();
+  });
+});
 
 describe('main accepts a service reply only when it answers the request exactly (J10, J11)', () => {
   it.each<[string, JournalQuery, unknown]>([

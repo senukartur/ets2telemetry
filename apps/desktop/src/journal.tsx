@@ -10,14 +10,16 @@ import {Select, SelectContent, SelectItem, SelectTrigger, SelectValue} from '@/c
 import {Table, TableBody, TableCell, TableHead, TableHeader, TableRow} from '@/components/ui/table';
 import {Tabs, TabsContent, TabsList, TabsTrigger} from '@/components/ui/tabs';
 import {
-  journalBannerText, journalDetailText, journalErrorText, journalEventText, journalIntervalText, journalListText, journalSampleText, type JournalBadge, type JournalTextOptions
+  journalBannerText, journalDetailText, journalErrorText, journalEventText, journalExportText, journalIntervalText, journalListText, journalSampleText, type JournalBadge,
+  type JournalTextOptions
 } from './journal-view';
-import {JOURNAL_COMPLETENESS_TEXT, JOURNAL_GAME_TEXT, JOURNAL_LABEL_TEXT, JOURNAL_OUTCOME_TEXT, JOURNAL_STRINGS} from './strings';
+import {JOURNAL_COMPLETENESS_TEXT, JOURNAL_EXPORT_STRINGS, JOURNAL_GAME_TEXT, JOURNAL_LABEL_TEXT, JOURNAL_OUTCOME_TEXT, JOURNAL_STRINGS} from './strings';
 
 /**
  * The Journal tab (ET-016 PR-4, J12): a paged trip list with filters and one trip's detail, both thin maps over the pure
  * texts of journal-view.ts. It reads only through the five journal bridge methods and holds one page of each list at a
- * time; Next and Previous walk a stack of cursors. Nothing refreshes by itself: a list loads when it opens and on
+ * time; Next and Previous walk a stack of cursors. Since PR-5 a trip's detail has an Export button, which calls the sixth
+ * method; main owns the Save dialog and the file, and the tab shows only the fixed result text. Nothing refreshes by itself: a list loads when it opens and on
  * Refresh. A synthetic or replay database shows a persistent banner (J3). There are no React component tests (B4); the
  * texts are unit-tested in tests/unit/journal-view.test.ts and the tab is exercised by the journal runtime smoke.
  */
@@ -209,9 +211,35 @@ function Samples({trip, options, onDatabase}: {trip: Selected; options: JournalT
   </div>;
 }
 
+/**
+ * The trip export (ET-016 PR-5, J16, J18): one button, the fixed result text and the uninstall note. The export runs in
+ * main, which answers with a code and row counts only; the button is disabled while it runs. An answer that arrives after
+ * the detail closed is dropped.
+ */
+function ExportTrip({tripUuid}: {tripUuid: string}) {
+  const [state, setState] = useState<{busy: boolean; text: string | null; failed: boolean}>({busy: false, text: null, failed: false});
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  const run = () => {
+    setState({busy: true, text: null, failed: false});
+    void window.desktop.exportJournalTrip(tripUuid).then(
+      result => { if (mounted.current) setState({busy: false, ...journalExportText(result)}); },
+      () => { if (mounted.current) setState({busy: false, text: JOURNAL_EXPORT_STRINGS.refused, failed: true}); });
+  };
+  return <div className="space-y-1" data-testid="journal-export">
+    <div className="flex flex-wrap items-center gap-2">
+      <Button size="sm" variant="outline" disabled={state.busy} onClick={run} data-testid="journal-export-button">{state.busy ? JOURNAL_EXPORT_STRINGS.exporting : JOURNAL_EXPORT_STRINGS.button}</Button>
+      {state.text ? <span role="status" className={state.failed ? 'text-destructive' : undefined} data-testid="journal-export-result" data-failed={state.failed ? 'true' : 'false'}>
+        {state.text}</span> : null}
+    </div>
+    <p className="text-xs text-muted-foreground" data-testid="journal-export-note">{JOURNAL_EXPORT_STRINGS.note}</p>
+  </div>;
+}
+
 function TripDetail({trip, options, onDatabase, onBack}: {trip: Selected; options: JournalTextOptions; onDatabase: (database: JournalDatabase) => void; onBack: () => void}) {
   return <div className="space-y-3" data-testid="journal-detail" data-trip={trip.tripUuid}>
     <Button size="sm" variant="outline" onClick={onBack} data-testid="journal-back">{JOURNAL_STRINGS.back}</Button>
+    <ExportTrip tripUuid={trip.tripUuid} />
     {/* Each tab reads when it opens; an inactive tab is unmounted and holds no page. */}
     <Tabs defaultValue="summary">
       <TabsList>

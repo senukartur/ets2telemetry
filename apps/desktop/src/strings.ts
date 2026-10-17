@@ -1,4 +1,4 @@
-import type {AppErrorCode, JournalAttributionKind, JournalCallCode, JournalCloseReason, JournalCompleteness, JournalIntervalKind, JournalMoneyCategory, JournalOutcome,
+import type {AppErrorCode, JournalAttributionKind, JournalCallCode, JournalCloseReason, JournalCompleteness, JournalExportCode, JournalIntervalKind, JournalMoneyCategory, JournalOutcome,
   JournalPurpose, OverlayEditPlacement, OverlayLayout, OverlaySectionId, RecordingCode, RecordingHealth, RecordingLosses, RecordingTarget, RecordingTrip, ServiceHealth,
   SettingsSaveError, SettingsState, StorageHealth, UnitGame, UnitProfile} from '../../../packages/contracts/src';
 import type {EventType, GameMode, UnavailableReason} from '../../../packages/contracts/src/protocol-v1';
@@ -357,6 +357,25 @@ export const JOURNAL_ERROR_TEXT: Readonly<Record<JournalCallCode, string>> = Obj
   TIMEOUT: 'The journal did not answer in time. Try again.',
   NOT_FOUND: 'This trip is not in the database.',
   FAILED: 'The journal could not be read.'
+});
+/**
+ * The trip export (ET-016 PR-5, J16, J18). The note next to Export states the owner's uninstall rule of October 16, 2026
+ * and that the export is a copy that cannot be imported. Results never name a path.
+ */
+export const JOURNAL_EXPORT_STRINGS = Object.freeze({
+  button: 'Export JSON',
+  exporting: 'Exporting…',
+  note: 'Uninstalling ETS2Telemetry removes its local trip history. The JSON export is a copy for your own records; it cannot be imported back.',
+  saved: 'Saved the trip as JSON: {events} events, {intervals} completeness intervals and {samples} one-second samples.',
+  cancelled: 'Export cancelled. Nothing was written.',
+  refused: 'The export request was refused.'
+});
+/** The export's own refusal codes as fixed text; the journal codes use JOURNAL_ERROR_TEXT. */
+export const JOURNAL_EXPORT_ERROR_TEXT: Readonly<Record<JournalExportCode, string>> = Object.freeze({
+  EXPORT_TARGET_REFUSED: 'That location cannot be used. Choose a folder outside the ETS2Telemetry data folder.',
+  EXPORT_WRITE_FAILED: 'The file could not be written. A file that already had this name is unchanged.',
+  EXPORT_IN_PROGRESS: 'Another export is still running. Try again when it has finished.',
+  EXPORT_INTERRUPTED: 'The export stopped because ETS2Telemetry is exiting. Nothing was written.'
 });
 export const JOURNAL_GAME_TEXT: Readonly<Record<UnitGame, string>> = Object.freeze({ets2: 'ETS2', ats: 'ATS'});
 /** Outcome and recording completeness are separate (J13); neither is inferred from the other. */

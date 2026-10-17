@@ -2,7 +2,7 @@
 
 ET-016 adds the trip journal: a list of recorded trips, a detail view of one trip and a versioned JSON export. This document describes where the journal reads its data, the read commands and their bounds, and the timeline window of a trip. Decisions J1–J22 are in [concept.md](../concept.md#et-016-authorization--october-16-2026); the schema they read is [storage schema version 2](storage.md#schema-version-2-et-016).
 
-Status (October 16, 2026): ET-016a PR-2 implements the storage reads in the storage worker and their tests. PR-3 routes them from the dashboard through main to the telemetry service with five bridge methods ([IPC methods and codes](#ipc-methods-and-codes-j10-j11)). PR-4 adds the [Journal tab](#the-journal-tab-j12j14) to the main window, which reads through those methods. The parts below marked **pending** belong to later PRs, such as the JSON export (PR-5). `GAME_HISTORY_RECORDING` stays `false`, so no real game history exists to show.
+Status (October 16, 2026): ET-016a PR-2 implements the storage reads in the storage worker and their tests. PR-3 routes them from the dashboard through main to the telemetry service with five bridge methods ([IPC methods and codes](#ipc-methods-and-codes-j10-j11)). PR-4 adds the [Journal tab](#the-journal-tab-j12j14) to the main window, which reads through those methods. PR-5 (October 17, 2026) adds the sixth method and the [JSON export](#json-export-j15j18). The parts below marked **pending** belong to later PRs. `GAME_HISTORY_RECORDING` stays `false`, so no real game history exists to show.
 
 ## Data source and purposes (J2, J3)
 
@@ -10,7 +10,7 @@ The journal reads the database that the telemetry service opened, through the se
 
 - In production that database is the history database (`%LOCALAPPDATA%\ETS2Telemetry\data\telemetry.sqlite`, purpose `history`).
 - With `ETS2TELEMETRY_RECORDING=synthetic:<name>` or `replay:<name>` it is that synthetic or replay [recording target](storage.md#history-database-in-the-telemetry-service) instead. There is no journal-specific variable or file picker.
-- Every journal response carries `database: {purpose, schemaVersion}`. A purpose other than `history` is a test database that is never game history; the Journal tab shows a persistent banner for it, and the export header carries the purpose (pending, PR-5).
+- Every journal response carries `database: {purpose, schemaVersion}`. A purpose other than `history` is a test database that is never game history; the Journal tab shows a persistent banner for it, and the [export](journal-export.md) header carries the purpose, the database UUID and the session origin.
 - Tests and smokes seed only temporary or isolated synthetic databases, never history.
 
 Journal reads share the recorder's single command lane in the storage client: one command in flight, at most 64 queued, 10 s per command. A read that missed that deadline would fail the client closed and stop recording for the service lifetime, so every read is bounded, uses an index or a primary key ([below](#query-plans)), and the service sends at most one journal command at a time ([routing](#routing-and-bounds-j4)).
@@ -70,7 +70,7 @@ No index was added for the journal (J6). Every statement is a constant of `JOURN
 
 ## IPC methods and codes (J10, J11)
 
-ET-016 PR-3 adds five methods to the dashboard's preload bridge, after `finishOverlayEdit`, each on its own fixed invoke channel. The sixth, `exportJournalTrip`, follows with the export in PR-5.
+ET-016 PR-3 adds five methods to the dashboard's preload bridge, after `finishOverlayEdit`, each on its own fixed invoke channel. PR-5 appends the sixth, `exportJournalTrip(tripUuid)` on `journal:export-trip` ([JSON export](#json-export-j15j18)).
 
 | Bridge method | Channel | Arguments the preload forwards | Page main fixes | Value |
 | --- | --- | --- | --- | --- |
@@ -134,9 +134,19 @@ ET-016 PR-4 adds the Journal tab to the main window. The window has two shadcn T
 
 **Samples (J14).** Each sample row shows its time, speed, fuel, gear, engine RPM, odometer, the SDK's estimated range and mean consumption, game time and the world position; the consumption and position headings carry the notes `SDK mean, not a trip average` and `game-world coordinates, not GPS`. Each value is `unavailable (reason)` when missing. Between two rows of the same source clock whose source seconds (monotonic time ÷ 1 s) are more than one apart, a `no samples for N s` row names the N missing seconds; a change of source clock is a `source restarted` row. Only the current page is held, so the first row of a page is not compared with the previous page.
 
+## JSON export (J15–J18)
+
+ET-016 PR-5 exports one trip as `ets2telemetry.trip-export` format version 1; the format, the save flow and its codes are in [the trip export format](journal-export.md). In short:
+
+- The trip detail has an **Export JSON** button, with the note that an uninstall removes the local trip history and that the export is a copy for the user's records which cannot be imported (J18).
+- `exportJournalTrip(tripUuid)` validates the UUID in the preload and again in main, accepts only the trusted dashboard main frame and runs one export at a time (`EXPORT_IN_PROGRESS` otherwise). Main owns the Save dialog and the file; the renderer receives the outcome (`saved` with row counts, or `cancelled`) or a fixed code, never a path.
+- Main reads the detail, then the open database's UUID with the main-only `database` query, which the service answers from its open summary without a storage command. The pages are read through the same broker at the export page sizes: events and intervals 500, samples 3,600.
+- The detail's export bounds (J17) fix what the file contains; an open trip's export is marked `snapshot`.
+- A cancelled dialog writes nothing; a target inside `%LOCALAPPDATA%\ETS2Telemetry\` or a device path is refused; a failure or an exit removes the partial file and leaves an existing target unchanged.
+
 ## Pending parts
 
 - **Journal tab manual checks (pending).** Readability at 100% and 150% scaling in the 800 × 500 window, keyboard use of the tabs, tables and filters, and the tab against real recorded game history (after enablement).
-- **JSON export (pending, PR-5).** The `ets2telemetry.trip-export` format version 1 and the main-process save flow (J15–J17).
+- **Export manual checks (pending).** The real Windows Save dialog (overwrite prompt, cancel by Esc and the close box, OneDrive Documents, long paths, a read-only folder) and exports of real recorded game history after enablement.
 - **Late-attach trips (ET-016b PR-7, done).** Since PR-6 the recorder writes fuel used for each trip, as a value or with its unavailability reason. Since PR-7 a job accepted before the recorder attached is a partial trip with a checkpoint job and no truck or trailer until they are configured again ([TD-007](technical-debt.md#td-007-truck-and-trailer-identity-of-late-attach-trips)).
 - Real game history, journal read latency while recording, and large real histories remain unmeasured.
