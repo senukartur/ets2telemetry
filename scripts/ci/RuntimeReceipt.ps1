@@ -95,26 +95,42 @@ function Test-LifecycleReceipt {
     $actions = @($Driver.mainEvents | Where-Object { $_.event -ceq 'SECOND_INSTANCE' })
     if ($actions.Count -ne 1 -or $actions[0].facts.action -cne 'created') { return $false }
     if (!(Test-LifecycleSettingsReceipt -Driver $Driver)) { return $false }
-    if (!(Test-LifecyclePluginReceipt -Driver $Driver)) { return $false }
     return $true
 }
 
-# ET-017 PR-5 plugin journey in the lifecycle smoke: both runs in the test-root mode, the Steam folders installed with the
+# ET-017 PR-5 plugin journey (scenario `plugin`): both runs in the test-root mode, the Steam folders installed with the
 # bundled plugin, unrelated and unrecognized files unchanged, the card shown without a path, the exclusion removing the
-# plugin, and a restart that writes nothing.
-function Test-LifecyclePluginReceipt {
+# plugin, and a restart that writes nothing; both runs exit orderly.
+function Test-PluginReceipt {
     param([object]$Driver)
-    $plugin = $Driver.lifecycle.plugin
+    $plugin = $Driver.plugin
     if ($null -eq $plugin) { return $false }
     foreach ($field in @('pluginSteamInstalled','pluginUnrelatedUnchanged','pluginUnrecognizedUnchanged','pluginCardShown','pluginNoPathShown',
         'pluginExclusionRemoved','pluginRestartStates','pluginRestartUnchanged','pluginEventsVerified')) {
         if ($plugin.$field -isnot [bool] -or $plugin.$field -ne $true) { return $false }
     }
-    foreach ($rows in @(@($Driver.mainEvents), @($Driver.lifecycle.restartMainEvents))) {
+    if (!(Test-ReceiptInteger -Value $plugin.runAExit -Minimum 0 -Maximum 0) -or !(Test-ReceiptInteger -Value $plugin.restartLauncherExit -Minimum 0 -Maximum 0)) { return $false }
+    if (!(Test-OrderlyRunEvent -MainEvents @($Driver.mainEvents) -ServiceEvents @($Driver.serviceEvents)) -or
+        !(Test-OrderlyRunEvent -MainEvents @($plugin.restartMainEvents) -ServiceEvents @($plugin.restartServiceEvents))) { return $false }
+    foreach ($rows in @(@($Driver.mainEvents), @($plugin.restartMainEvents))) {
         $modes = @($rows | Where-Object { $_.event -ceq 'PLUGIN_SETUP_MODE' })
         if ($modes.Count -ne 1 -or $modes[0].facts.mode -cne 'test-root') { return $false }
         if (@($rows | Where-Object { $_.event -ceq 'PLUGIN_TEST_ROOT_ESCAPE' }).Count -ne 0) { return $false }
     }
+    return $true
+}
+
+# ET-017 PR-5 review: the scaffold smoke runs plugin setup in the disabled mode with a rendered dashboard; the card must
+# show the disabled-mode note and disable every control that would change nothing.
+function Test-ScaffoldPluginReceipt {
+    param([object]$Driver)
+    $card = $Driver.pluginCard
+    if ($null -eq $card) { return $false }
+    foreach ($field in @('disabledNoteShown','controlsDisabled')) {
+        if ($card.$field -isnot [bool] -or $card.$field -ne $true) { return $false }
+    }
+    $modes = @($Driver.mainEvents | Where-Object { $_.event -ceq 'PLUGIN_SETUP_MODE' })
+    if ($modes.Count -ne 1 -or $modes[0].facts.mode -cne 'disabled') { return $false }
     return $true
 }
 
@@ -617,6 +633,13 @@ function Test-RuntimeReceipt {
     # Journal is additive too (ET-016 PR-4); it tightens no earlier scenario.
     if ($ExpectedScenario -ceq 'journal' -and !(Test-JournalReceipt -Driver $driver)) {
         $validation.reason = 'JOURNAL_RESULT_INCOMPLETE_OR_INVALID'; return $validation
+    }
+    # ET-017 PR-5: the plugin journey is its own scenario; the scaffold smoke also proves the disabled card.
+    if ($ExpectedScenario -ceq 'plugin' -and !(Test-PluginReceipt -Driver $driver)) {
+        $validation.reason = 'PLUGIN_RESULT_INCOMPLETE_OR_INVALID'; return $validation
+    }
+    if ($ExpectedScenario -ceq 'scaffold' -and !(Test-ScaffoldPluginReceipt -Driver $driver)) {
+        $validation.reason = 'SCAFFOLD_PLUGIN_CARD_INVALID'; return $validation
     }
     $validation.passed = $true
     return $validation

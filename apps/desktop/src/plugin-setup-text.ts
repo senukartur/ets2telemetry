@@ -7,8 +7,11 @@ import {
   PLUGIN_DISCOVERY_TEXT, PLUGIN_FOLDER_REFUSAL_TEXT, PLUGIN_MANUAL_FOLDER_TEXT, PLUGIN_MODE_TEXT, PLUGIN_REASON_TEXT, PLUGIN_STATE_TEXT, PLUGIN_STRINGS, UNIT_GAME_TEXT
 } from './strings';
 
-/** Block reasons after which the card offers the manual copy (P12): "Show plugin file" and "Open game plugins folder". */
-export const MANUAL_COPY_REASONS: readonly PluginBlockReason[] = Object.freeze(['PERMISSION_DENIED', 'READ_ONLY_FILE', 'UNRECOGNIZED_FILE', 'TARGET_LOCKED']);
+/**
+ * Block reasons after which the card offers the manual copy (P12): "Show plugin file" and "Open game plugins folder". A
+ * locked file (TARGET_LOCKED) is retried automatically, so it shows only that text.
+ */
+export const MANUAL_COPY_REASONS: readonly PluginBlockReason[] = Object.freeze(['PERMISSION_DENIED', 'READ_ONLY_FILE', 'UNRECOGNIZED_FILE']);
 
 export interface PluginTargetText {
   /** The target id, for the bridge's openPluginFolder only. */
@@ -63,7 +66,9 @@ function targetText(target: PluginTargetView): PluginTargetText {
   };
 }
 
-function gameText(game: PluginGame, view: PluginGameView): PluginGameText {
+function gameText(game: PluginGame, view: PluginGameView, disabled: boolean): PluginGameText {
+  // The disabled mode never discovers anything: "Looking for the game…" would stay forever.
+  if (disabled) return {title: UNIT_GAME_TEXT[game], managed: !view.excluded, notes: [PLUGIN_STRINGS.notSearched], targets: view.targets.map(targetText)};
   const notes = [PLUGIN_DISCOVERY_TEXT[view.discovery]];
   const manual = PLUGIN_MANUAL_FOLDER_TEXT[view.manualFolder];
   if (manual) notes.push(manual);
@@ -80,7 +85,7 @@ export function pluginSetupText(view: PluginSetupView): PluginSetupText {
     bundled: view.bundled ? fileText(PLUGIN_STRINGS.bundled, view.bundled) : PLUGIN_STRINGS.bundledUnknown,
     running: view.running ? PLUGIN_STRINGS.running : null,
     actionable: view.mode !== 'disabled',
-    games: {ets2: gameText('ets2', view.games.ets2), ats: gameText('ats', view.games.ats)}
+    games: {ets2: gameText('ets2', view.games.ets2, view.mode === 'disabled'), ats: gameText('ats', view.games.ats, view.mode === 'disabled')}
   };
 }
 

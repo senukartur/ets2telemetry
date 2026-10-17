@@ -5,7 +5,7 @@ import {lstat, mkdir, readFile, realpath, stat, writeFile} from 'node:fs/promise
 import path from 'node:path';
 import {performance} from 'node:perf_hooks';
 
-// ET-017 PR-5: the fake Steam and game folders of the lifecycle smoke's plugin journey (REG-015, REG-017). Everything is
+// ET-017 PR-5: the fake Steam and game folders of the `plugin` runtime smoke scenario (REG-015, REG-017). Everything is
 // created inside the run's isolated output folder, which also holds the test-root marker file, so the application's
 // test-root mode confines every read and write to it. Nothing reads the Windows registry or touches a real Steam or game
 // folder. Evidence names files by fixed labels only, never by path.
@@ -57,11 +57,11 @@ async function steamGame(library, game, plugins) {
  * an unrelated DLL and a text file) and LibraryB (ATS, without a plugins folder), and a manual ETS2 folder holding an
  * unrecognized file with the plugin's name, chosen in a seeded install registry (the smoke cannot click the folder dialog).
  */
-export async function buildPluginFixture(output) {
+async function buildFixture(output) {
   const root = path.join(output, 'plugin-root');
   await mkdir(root, {recursive: true});
   const canonical = await realpath(root);
-  await writeFile(path.join(canonical, PLUGIN_TEST_ROOT_MARKER), 'Fake root of the ETS2Telemetry lifecycle smoke.\n');
+  await writeFile(path.join(canonical, PLUGIN_TEST_ROOT_MARKER), 'Fake root of the ETS2Telemetry plugin smoke.\n');
   const steam = path.join(canonical, 'Steam'), libraryA = path.join(canonical, 'LibraryA'), libraryB = path.join(canonical, 'LibraryB');
   await mkdir(path.join(steam, 'steamapps', 'common'), {recursive: true});
   const entries = [steam, libraryA, libraryB].map((library, index) =>
@@ -89,7 +89,7 @@ export async function buildPluginFixture(output) {
 }
 
 /** The SHA-256 of the bundled plugin the application installs: the packaged resources' or the development stage's. */
-export async function bundledPluginHash(config) {
+async function readBundledHash(config) {
   const directory = config.mode === 'packaged' ? path.join(path.dirname(config.executable), 'resources', 'telemetry-plugin')
     : path.join(config.checkout, '.local', 'package-native', 'telemetry-plugin');
   const manifest = JSON.parse(await readFile(path.join(directory, 'plugin-manifest.json'), 'utf8'));
@@ -98,16 +98,37 @@ export async function bundledPluginHash(config) {
 }
 
 /** Each fixture file by label: its hash, size and modification time, or `absent`. No path is recorded. */
-export async function snapshotPluginFixture(fixture) {
+async function snapshotFixture(fixture) {
   const snapshot = {};
   for (const [label, file] of Object.entries(fixture.files)) {
     let item;
-    try {item = await lstat(file);} catch {snapshot[label] = 'absent'; continue;}
+    try {item = await lstat(file);} catch (error) {
+      if (error?.code !== 'ENOENT') throw error;
+      snapshot[label] = 'absent'; continue;
+    }
     snapshot[label] = item.isDirectory() ? {directory: true, mtimeMs: item.mtimeMs}
       : {sha256: sha256(await readFile(file)), size: item.size, mtimeMs: (await stat(file)).mtimeMs};
   }
   return snapshot;
 }
+
+/**
+ * Runs one fixture file-system step. A failure rethrows a fixed `PLUGIN_FIXTURE_<step>` error with the error code only,
+ * so no fixture path reaches the receipt or the log.
+ */
+async function fixtureStep(step, work) {
+  try {return await work();} catch (error) {
+    const code = typeof error?.code === 'string' && /^[A-Z0-9_]{1,32}$/.test(error.code) ? error.code : 'UNKNOWN';
+    // eslint-disable-next-line preserve-caught-error -- the cause's message names a fixture path; only its code may leave.
+    throw new Error(`PLUGIN_FIXTURE_${step}: ${code}`);
+  }
+}
+/** Builds the fake root (see buildFixture). */
+export const buildPluginFixture = output => fixtureStep('BUILD', () => buildFixture(output));
+/** The SHA-256 of the bundled plugin the application installs: the packaged resources' or the development stage's. */
+export const bundledPluginHash = config => fixtureStep('BUNDLE', () => readBundledHash(config));
+/** Each fixture file by label: its hash, size and modification time, or `absent`. No path is recorded. */
+export const snapshotPluginFixture = fixture => fixtureStep('SNAPSHOT', () => snapshotFixture(fixture));
 
 const appPlugins = page => page.evaluate(() => globalThis.desktop.getAppState().then(state => state.plugins));
 async function until(read, accept, message, timeoutMs) {
@@ -142,10 +163,11 @@ const CARD_EXCLUDED = {...CARD_A, 'plugin-target-ats-steam-0-state': 'Not manage
  * files byte-identical; the card shows Installed / Blocked / Installed; switching ATS off in the card removes its plugin
  * and the plugins folder this application created for it.
  */
-export async function runPluginJourney({dashboard, fixture, config, before, record}) {
+export async function runPluginJourney({dashboard, fixture, config, before, record, phase = () => undefined}) {
   const bundled = await bundledPluginHash(config);
   record.view = await until(() => appPlugins(dashboard), settled(RUN_A), 'PLUGIN_SETUP_NOT_SETTLED', 30000);
   record.card = await until(() => cardStates(dashboard), value => JSON.stringify(value) === JSON.stringify(CARD_A), 'PLUGIN_CARD_NOT_SHOWN', 10000);
+  phase('plugin-run-a-settled');
   assertNoPath(await cardText(dashboard), fixture);
   record.pluginCardShown = true; record.pluginNoPathShown = true;
   const after = await snapshotPluginFixture(fixture);
@@ -164,18 +186,20 @@ export async function runPluginJourney({dashboard, fixture, config, before, reco
   assert.deepEqual([excluded.ets2Plugin, excluded.manualPlugin, excluded.unrelatedDll, excluded.unrelatedText],
     [after.ets2Plugin, after.manualPlugin, after.unrelatedDll, after.unrelatedText]);
   record.pluginExclusionRemoved = true;
-  // The click scrolled the card into view; the lifecycle journey reads the status lines at the top of the Live tab.
+  phase('plugin-excluded');
+  // The click scrolled the card into view; return to the top of the Live tab for the screenshot and later reads.
   await dashboard.evaluate(() => globalThis.scrollTo(0, 0));
 }
 
 /** Run B: the restart reaches the same states without writing: every fixture file keeps its bytes and modification time. */
-export async function verifyPluginRestart({dashboard, fixture, before, record}) {
+export async function verifyPluginRestart({dashboard, fixture, before, record, phase = () => undefined}) {
   record.restartView = await until(() => appPlugins(dashboard), view => view.games.ats.excluded && settled(RUN_A_EXCLUDED)(view), 'PLUGIN_RESTART_NOT_SETTLED', 30000);
   record.restartCard = await until(() => cardStates(dashboard), value => JSON.stringify(value) === JSON.stringify(CARD_EXCLUDED), 'PLUGIN_RESTART_CARD_NOT_SHOWN', 10000);
   assertNoPath(await cardText(dashboard), fixture);
   record.pluginRestartStates = true;
   assert.deepEqual(await snapshotPluginFixture(fixture), before);
   record.pluginRestartUnchanged = true;
+  phase('plugin-run-b-settled');
 }
 
 /** The plugin rows of one run's main log: the test-root mode, and no path refused outside the root. */
@@ -184,4 +208,21 @@ export function verifyPluginEvents(rows) {
   assert.deepEqual(modes, [{mode: 'test-root', reason: null}]);
   assert.deepEqual(rows.filter(row => row.event === 'PLUGIN_TEST_ROOT_ESCAPE' || row.event === 'PLUGIN_SETUP_MODE_REJECTED'), []);
   return rows.filter(row => row.event === 'PLUGIN_ACTION').map(row => row.facts);
+}
+
+/** The text of the disabled mode's note in the card (strings.ts PLUGIN_MODE_TEXT.disabled). */
+export const PLUGIN_DISABLED_NOTE = 'Plugin setup is off in this launch (a development, test or opt-out launch); no game folder is changed.';
+/** The card's controls that change setup; the disabled mode must disable each of them. */
+const CHANGING_CONTROLS = ['plugin-ets2-managed', 'plugin-ets2-choose', 'plugin-ats-managed', 'plugin-ats-choose', 'plugin-retry'];
+/** In the disabled mode the card shows its note and disables every control that would change nothing. */
+export async function verifyDisabledPluginCard(dashboard) {
+  const note = dashboard.getByTestId('plugin-mode');
+  await note.waitFor({state: 'attached', timeout: 10000});
+  const record = {note: await note.innerText(), controls: {}};
+  assert.equal(record.note, PLUGIN_DISABLED_NOTE);
+  record.disabledNoteShown = true;
+  for (const id of CHANGING_CONTROLS) record.controls[id] = await dashboard.getByTestId(id).isDisabled();
+  assert.deepEqual(record.controls, Object.fromEntries(CHANGING_CONTROLS.map(id => [id, true])));
+  record.controlsDisabled = true;
+  return record;
 }

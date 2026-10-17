@@ -487,6 +487,7 @@ export const PLUGIN_STRINGS = Object.freeze({
   steamFolder: 'Steam folder {number}',
   manualFolder: 'Chosen folder',
   noFolders: 'No game folder found yet.',
+  notSearched: 'Not searched in this launch.',
   installedVersion: 'Installed plugin: {version} ({hash})',
   unknownVersion: 'unknown version',
   lastFailure: 'Last problem: {reason}',

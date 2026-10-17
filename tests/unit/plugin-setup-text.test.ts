@@ -47,6 +47,15 @@ describe('a game', () => {
     expect(pluginSetupText(view({}, {ets2: {discovery}})).games.ets2.notes).toEqual(notes);
   });
 
+  // Review round 1 of PR-5: the disabled mode never discovers, so its pending discovery is not "Looking for the game…".
+  it('says that the disabled mode does not search, for both games', () => {
+    const text = pluginSetupText(view({mode: 'disabled', bundled: null}));
+    expect(text.games.ets2.notes).toEqual(['Not searched in this launch.']);
+    expect(text.games.ats.notes).toEqual(['Not searched in this launch.']);
+    expect(text.games.ets2.targets).toEqual([]);
+    expect(pluginSetupText(view({mode: 'test-root'})).games.ets2.notes).toEqual(['Looking for the game…']);
+  });
+
   it('describes the chosen folder and the unlisted Steam folders', () => {
     const notes = (game: Partial<PluginGameView>) => pluginSetupText(view({}, {ets2: {discovery: 'found', targets: [target()], ...game}})).games.ets2.notes;
     expect(notes({manualFolder: 'none'})).toEqual(['Found through Steam.']);
@@ -90,14 +99,15 @@ describe('a game folder', () => {
     BUNDLE_UNAVAILABLE: 'The bundled plugin is missing or damaged; reinstall ETS2Telemetry.'
   };
   const MANUAL_COPY = 'To install it by hand: close the game, copy the plugin file into the game\'s plugins folder (Windows may ask for administrator rights), then press Retry.';
-  it.each(Object.entries(REASONS))('explains the reason %s, with the manual copy only after permission, read-only, unrecognized and lock failures', (reason, text) => {
-    const manual = ['PERMISSION_DENIED', 'READ_ONLY_FILE', 'UNRECOGNIZED_FILE', 'TARGET_LOCKED'].includes(reason);
+  it.each(Object.entries(REASONS))('explains the reason %s, with the manual copy only after permission, read-only and unrecognized-file failures', (reason, text) => {
+    const manual = ['PERMISSION_DENIED', 'READ_ONLY_FILE', 'UNRECOGNIZED_FILE'].includes(reason);
     const line = firstTarget(target({state: 'missing', reason: reason as PluginBlockReason, installed: null}));
     expect(line.detail).toEqual(manual ? [text, MANUAL_COPY] : [text]);
     expect(line.manualCopy).toBe(manual);
   });
   it('offers the manual copy for exactly the P12 reasons', () => {
-    expect([...MANUAL_COPY_REASONS].sort()).toEqual(['PERMISSION_DENIED', 'READ_ONLY_FILE', 'TARGET_LOCKED', 'UNRECOGNIZED_FILE']);
+    // A locked file is retried automatically (review round 1 of PR-5), so it gets no manual-copy actions.
+    expect([...MANUAL_COPY_REASONS].sort()).toEqual(['PERMISSION_DENIED', 'READ_ONLY_FILE', 'UNRECOGNIZED_FILE']);
   });
 
   it('shows the installed version of a folder that is not current, and the last problem when it differs from the reason', () => {
