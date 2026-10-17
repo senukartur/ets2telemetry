@@ -917,3 +917,32 @@ On October 16, 2026 the owner confirmed an answer first given on October 10, 202
 - **Warning to users.** Before the history is removed, the product must say so clearly. The trip journal's export (ET-016, J18) states that an uninstall removes local history and that a JSON export is the way to keep a copy; ETS2Telemetry cannot import that copy.
 
 This records an owner decision. It authorizes no package by itself, and earlier dated text is unchanged.
+
+## ET-017 authorization — October 17, 2026
+
+Under the owner's standing delegation of October 15, 2026, the coordinator started ET-017 to implement the [silent plugin installation](#silent-plugin-installation--october-12-2026) decision of October 12, 2026. The coordinator adopted the architect's decisions P1–P20 as coordinator decisions; the owner agreed explicitly to P11 and P12 on October 17, 2026. The card prerequisites ET-009 and ET-011 are not accepted, and their real-game checks stay pending.
+
+| # | Decision |
+| --- | --- |
+| P1 | The Steam root is read from `HKCU\Software\Valve\Steam\SteamPath`, falling back to the 32-bit machine key. A single fixed, bounded PowerShell call reads only those two values and returns base64 UTF-8, so non-ASCII paths survive. There is no `reg.exe`, native add-on or new dependency |
+| P2 | Libraries come from `steamapps\libraryfolders.vdf`, falling back to `config\`. A bounded KeyValues parser accepts the current and legacy formats and drive paths only. Libraries are deduplicated by file identity. A malformed list falls back to the Steam root |
+| P3 | A game is identified by its app id (ETS2 227300, ATS 270880), its app manifest with a safe `installdir`, and the game executable under `bin\win_x64`. The folders on that path must not be links. `StateFlags` is not used |
+| P4 | One manual folder per game, chosen through main's folder dialog. A selection inside the game is normalized to the game root. Unsupported paths, a non-game or wrong-game folder, linked folders and duplicates are refused with fixed codes |
+| P5 | The build stages the plugin DLL with a manifest: size, SHA-256, the app version, hashes of the plugin sources, and the released hashes from the tracked `released-plugins.json`. Forge ships it as `resources/telemetry-plugin`, and the package inspection verifies it. MSVC builds are not reproducible, so every shipped hash is recorded at release |
+| P6 | An existing plugin file is owned only when its hash is the bundled one, a released one, or the one recorded for that folder. Anything else, including links and oversized files, is never replaced or removed. There is no in-app overwrite |
+| P7 | A bounded `tasklist` listing runs before every change. A running ETS2 or ATS, or any `truckersmp*` process, blocks the change, and a failed listing blocks too. A locked file, reported by the operating system, closes the remaining race |
+| P8 | Every change is atomic per game folder. The intent is recorded first, then the new file is written to a temp file in the same folder, synced, verified by hash, renamed over the target and verified again. The temp file is always removed, and an unfinished operation is recovered at the next run. Rename is retried briefly on `EBUSY` and never on `EPERM`. The plugins folder is created only when missing, and removed only if this application created it and it is empty |
+| P9 | `%LOCALAPPDATA%\ETS2Telemetry\plugins\setup.json` (format v1, bounded) holds the exclusions, the manual folders, the install records, the pending operations and the last failures. It is written atomically like the settings. An invalid file is quarantined, and a newer version is read-only. ET-018 removes only a plugin whose recorded or released hash still matches |
+| P10 | `settings.json` keeps its format. The exclusions and manual folders live in `setup.json`, which still persists them, as the October 12 decision requires |
+| P11 | Excluding a game in the application stops silent installs and removes this application's plugin from that game once it is safe; while the game runs, removal waits. Closing a game never removes the plugin. Re-including the game installs the plugin again. The owner agreed on October 17, 2026 |
+| P12 | There is no elevated helper. A permission error shows recovery text with "Show plugin file" and "Open game plugins folder" for a manual copy. A copied file with the bundled hash is adopted. The helper is technical debt. The owner agreed on October 17, 2026 |
+| P13 | Setup runs 2 s after launch and is never awaited by startup. It is bounded to 30 s and runs one at a time. It polls every 15 s only while a target is blocked by a running game or a lock, and it also runs on Retry, a folder choice or an exclusion change. Exit aborts it within the existing idle budget |
+| P14 | Setup runs in Electron main with asynchronous file and process calls. The telemetry utilityProcess gains no authority over game folders |
+| P15 | A fail-closed mode gate leaves setup disabled for unpackaged runs unless explicitly enabled, and for every test, smoke and diagnostic harness. Tests use a separate test root that must stay inside an isolated profile |
+| P16 | Per-game states reach the renderer through the existing application state. Six trusted dashboard-only methods are added: retry, choose folder, exclude, show plugin file, open game plugins folder, export diagnostics. No path reaches the renderer |
+| P17 | Connection diagnostics distinguish an unavailable service, a missing game, a missing, outdated, blocked or unrecognized plugin, a transport failure and no running source. An opt-in, redacted diagnostic bundle (at most 2 MiB, no paths, user or machine names) is saved only through main's Save dialog. Nothing is uploaded |
+| P18 | One small "Game plugin" card on the Live tab, built from the existing shadcn components. The owner's visual design work is not anticipated, and the overlay is unchanged |
+| P19 | Tests run only on temporary fake Steam and game folders, under guards that refuse any other path |
+| P20 | Six PRs in order: bundle, discovery, installer, main, card, diagnostics |
+
+There is no wire, schema, recording, overlay or native-source change, and `GAME_HISTORY_RECORDING` stays `false`. Real Steam libraries, real game installs loading the plugin, TruckersMP detection and protected libraries remain pending. ET-018 and later phases are not authorized by this section. No game, TruckersMP, display or performance claim follows.

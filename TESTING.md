@@ -511,7 +511,18 @@ ET-019t audits the suite against the scenario registry and shortens Windows CI. 
 
 ## ET-017 plugin setup — October 17, 2026
 
-ET-017 installs, updates and removes only the project's plugin DLL in discovered or chosen game folders (decisions P1–P20, [plugin setup](docs/plugin-setup.md)). Its tests protect REG-015. No test reads the real Steam registry values or touches a real Steam library or game folder: fake roots are built by `tests/shared/fake-steam.ts` inside `os.tmpdir()`, and the code under test reads them through `tests/shared/guarded-fs.ts`, which refuses and records any path outside its own temporary root, so a test fails even when the code catches the refusal. The only real system reads are Windows PowerShell runs against a per-run `HKCU\Software\ETS2Telemetry-Test-<uuid>` key, deleted after each case, and one read-only `tasklist` listing.
+ET-017 implements the owner's silent plugin installation decision of October 12, 2026 in six PRs; the coordinator adopted the architect's decisions P1–P20 under the standing delegation ([game plugin setup](docs/plugin-setup.md)). It installs, updates and removes only the project's plugin DLL in discovered or chosen game folders, and its tests protect REG-015. No test reads the real Steam registry values or touches a real Steam library or game folder: fake roots are built by `tests/shared/fake-steam.ts` inside `os.tmpdir()`, and the code under test reads them through `tests/shared/guarded-fs.ts`, which refuses and records any path outside its own temporary root, so a test fails even when the code catches the refusal. The only real system reads are Windows PowerShell runs against a per-run `HKCU\Software\ETS2Telemetry-Test-<uuid>` key, deleted after each case, and one read-only `tasklist` listing.
+
+### PR-1: bundled plugin DLL
+
+PR-1 bundles the plugin DLL with a hash manifest. It adds no runtime behavior: nothing reads the bundle, discovers a game or writes into a game folder, and no wire, schema, IPC or native source changes.
+
+| Requirement | Executable regression protection | Evidence boundary |
+| --- | --- | --- |
+| The package carries exactly the plugin built from the current sources, with a strict manifest (P5; REG-015, REG-017) | `tests/unit/plugin-bundle-stage.test.ts`: a bundle staged from a miniature checkout passes with hand-written manifest values; a tampered DLL, a manifest hash or size that differs from the bytes, a non-x64, non-DLL or non-PE image with a consistent manifest, a changed, added or removed plugin source, `known` that differs from the tracked list, an `appVersion` that differs from `package.json`, a local build that differs from the bundled bytes, a linked DLL, bundle directory or plugin source, an extra file, unexpected or missing manifest keys, invalid values, oversized files and a malformed released list are each refused. `npm run inspect:package` runs the same checks on the packaged `resources/telemetry-plugin` | Temporary directories with inert synthetic PE headers that are never loaded; the packaged check uses the real Release DLL but never loads it. No discovery, install, ownership or game check |
+| The tracked released-hash list stays valid (P5) | The same file reads `native/telemetry-plugin/released-plugins.json` of the checkout | Format only; the release process that appends hashes is manual |
+
+The entry point is listed in the registry's [test index](docs/regression-registry.md#test-index-et-019t-october-17-2026). The installer and registry, the mode gate and setup orchestration, the dashboard card and diagnostics follow in PR-3 to PR-6 with their own tests; every real Steam, game, TruckersMP, permission and antivirus check remains pending in [ET-017 validation](docs/validation/et-017.md).
 
 ### PR-2: Steam discovery and manual game folders
 

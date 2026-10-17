@@ -194,6 +194,7 @@ gh api graphql -f query='mutation($id:ID!){resolveReviewThread(input:{threadId:$
 
 - Add build, type, and test checks when the corresponding tooling is scaffolded. Until then, perform appropriate local document checks and state that CI is not configured.
 - Test changed telemetry logic through simulation/replay. Validate integration and overlay behavior in actual games when required by the milestone; record versions and display modes. Passing automated checks alone does not establish TruckersMP support.
+- After a release is published, append the shipped plugin DLL hash to `native/telemetry-plugin/released-plugins.json` in a PR before the next release build, as [game plugin setup](docs/plugin-setup.md#released-plugin-list) describes; the shipped artifact is the CI-built one.
 - Mark tested releases with version tags such as `v0.1.0-alpha.1` or `v1.0.0`, and include release artifacts and game validation results when available. A merge alone does not publish a release. Create or publish releases only when authorized by the owner.
 
 ## Workflow and Verification
@@ -539,3 +540,28 @@ The owner kept `tests/electron/startup.spec.ts`.
 The audit maps every test entry point to the regression registry and removes two verified pieces of dead scaffold code: the ET-001 placeholder DLL contract and `isScaffoldStatus`. It rewrites wall-clock-dependent tests so they wait on observable state or controlled clocks, and it seeds the 5,000-amount journal case instead of committing 5,000 transactions. Native MSBuild now builds in parallel, and every CTest run writes JUnit results.
 
 No product behaviour, protocol, schema, IPC or security boundary changes. The scenario coverage stays the same, and the must-not-remove categories are untouched. The measurements and per-test rationale are in [ET-019t validation](docs/validation/et-019t.md). The rest of ET-019 still waits for its prerequisites. No game, TruckersMP, display or performance claim follows.
+
+## ET-017 authorization — October 17, 2026
+
+Under the owner's standing delegation of October 15, 2026 (quoted in the ET-015a authorization above), the coordinator started ET-017: game discovery, silent plugin setup and diagnostics. It follows the owner's [silent plugin installation](concept.md#silent-plugin-installation--october-12-2026) decision of October 12, 2026. The coordinator adopted the architect's decisions P1–P20 ([concept.md](concept.md#et-017-authorization--october-17-2026)) as coordinator decisions. On October 17, 2026 the owner agreed explicitly to P11 (excluding a game in the application removes its plugin; closing a game never does) and P12 (no elevated helper); the owner did not review the other decisions individually.
+
+For ET-017 only, this supersedes the earlier statements that ET-017 is not authorized; earlier dated text is unchanged. ET-017's card prerequisites, ET-009 and ET-011, are not accepted, and their real-game checks stay pending.
+
+ET-017 is six PRs:
+- PR-1 bundles the plugin DLL with a SHA-256 manifest and checks it in the package inspection;
+- PR-2 discovers ETS2 and ATS through the Steam library list and validates a manual game folder;
+- PR-3 installs, updates and removes only the owned plugin atomically, and records each install in a registry;
+- PR-4 runs silent setup in main and exposes per-game state;
+- PR-5 adds a small per-game plugin card on the dashboard;
+- PR-6 adds connection diagnostics and an opt-in diagnostic bundle export.
+
+Setup behaviour:
+- **Ownership.** The application replaces or removes only a file whose hash it recognizes. A recognized hash is the bundled one, a released one, or the one recorded in the registry for that game folder. It never overwrites an unrecognized file with the plugin's name, and it leaves other plugins untouched.
+- **Running games.** It changes nothing while the game or TruckersMP is running.
+- **Excluding a game.** This removes the application's own plugin from that game when it is safe.
+- **No elevated helper.** A protected game folder gets a manual copy alternative; the helper is technical debt.
+- **Install registry.** `%LOCALAPPDATA%\ETS2Telemetry\plugins\setup.json` holds the exclusions, a manual folder per game, and an install record. ET-018 uses that record for uninstall cleanup. `settings.json` keeps its format.
+- **Real-folder safety.** A fail-closed mode gate keeps development runs, smokes and tests from ever writing to real game folders. Only temporary fake Steam and game folders are used in validation.
+- **Renderer.** It receives no paths, only per-game states and fixed codes.
+
+There is no wire, schema, recording, overlay or native-source change, and `GAME_HISTORY_RECORDING` stays `false`. Real Steam libraries, real ETS2 and ATS installs loading the silently installed plugin, TruckersMP detection, and protected or ACL-restricted libraries all remain pending manual checks. ET-018 and later phases are not authorized by this paragraph. No game, TruckersMP, display or performance claim follows.

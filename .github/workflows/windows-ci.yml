@@ -68,12 +68,14 @@ jobs:
       # job below (docs/ci.md#job-layout).
       - name: Build desktop and native x64
         run: |
+          # Configure the plugin tree first: `npm run build` stages the plugin DLL (scripts/stage-native-plugin.mjs) and
+          # reuses this tree and its generator instead of configuring one with the default generator (docs/ci.md).
+          cmake -S native/telemetry-plugin -B native/telemetry-plugin/build -G 'Visual Studio 17 2022' -A x64
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run build
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           # CTest resolves a relative --output-junit path against the build tree, so the JUnit paths are absolute.
           ctest --test-dir native/telemetry-client/build -C Release --output-on-failure --no-tests=error --output-junit "$PWD/.local/ci/ctest-client-release.xml"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cmake -S native/telemetry-plugin -B native/telemetry-plugin/build -G 'Visual Studio 17 2022' -A x64
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run native:build
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
