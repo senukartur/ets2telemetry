@@ -11,9 +11,9 @@ ET-017 is delivered as six PRs:
 | PR-3 | The atomic installer ([algorithm](#algorithm)) and the [install registry](#install-registry) | Implemented; run from main since PR-4 |
 | PR-4 | Silent setup in main ([setup run](#setup-run)), the [mode gate](#mode-gate), the [runtime bundle reader](#runtime-reading), the per-game state in `AppState` and the [IPC channels](#ipc) | Implemented |
 | PR-5 | The per-game plugin card on the dashboard ([the Game plugin card](#the-game-plugin-card)) and the `plugin` runtime smoke scenario | Implemented |
-| PR-6 | Connection diagnosis and the diagnostic bundle | Coming |
+| PR-6 | The [connection diagnosis](#connection-diagnosis) on the card and the [diagnostic bundle](#diagnostic-bundle) with its `diagnostics:export` channel | Implemented |
 
-Since PR-4 a packaged application in the `active` mode reads the bundle, discovers the games and silently installs, updates or removes its plugin, 2 s after it starts. Every development launch, smoke, test and installer harness is in the `disabled` mode and reads or writes nothing ([mode gate](#mode-gate)), except the `plugin` smoke scenario, which since PR-5 runs in the `test-root` mode against a fake root of its own. Since PR-5 the dashboard shows the per-game state in [the Game plugin card](#the-game-plugin-card). The developer procedure in [manual plugin setup](manual-plugin-setup.md) stays the way to put the DLL into a game during development. No game, TruckersMP or performance claim follows from the bundle, discovery or the synthetic checks.
+Since PR-4 a packaged application in the `active` mode reads the bundle, discovers the games and silently installs, updates or removes its plugin, 2 s after it starts. Every development launch, smoke, test and installer harness is in the `disabled` mode and reads or writes nothing ([mode gate](#mode-gate)), except the `plugin` smoke scenario, which since PR-5 runs in the `test-root` mode against a fake root of its own. Since PR-5 the dashboard shows the per-game state in [the Game plugin card](#the-game-plugin-card). Since PR-6 the card also says why no game is connected and can save a redacted [diagnostic bundle](#diagnostic-bundle) through main's Save dialog; nothing is uploaded. The developer procedure in [manual plugin setup](manual-plugin-setup.md) stays the way to put the DLL into a game during development. No game, TruckersMP or performance claim follows from the bundle, discovery or the synthetic checks.
 
 ## Bundle format
 
@@ -241,7 +241,13 @@ Five invoke channels serve the trusted dashboard main frame only; the overlay an
 - **Show plugin file.** Right before `shell.showItemInFolder`, plugin setup checks the verified bundled DLL again with `lstat`. It answers `BUNDLE_UNAVAILABLE` and reveals nothing before the bundle was verified, when the file is missing or no longer a regular file, when it is a link, and once the exit has begun.
 - **Open game plugins folder.** Main validates the listed folder again and opens its `bin\win_x64\plugins` folder with `shell.openPath` whenever that is a plain folder (also when it holds an unexpected entry, such as a folder with the plugin's name), or `bin\win_x64` when `plugins` is absent, a file or a link. An unknown id or a folder that is now linked or no longer a game opens nothing.
 
-The sixth channel of P16, `diagnostics:export`, is not registered yet: it comes with the diagnostic bundle in PR-6, together with its result type, so no renderer-reachable stub exists meanwhile.
+The sixth channel of P16, `diagnostics:export`, was added in PR-6 with the [diagnostic bundle](#diagnostic-bundle):
+
+| Bridge method | Channel | Arguments | Result |
+| --- | --- | --- | --- |
+| `exportDiagnostics()` | `diagnostics:export` | none | `{outcome: 'saved'}`, `{outcome: 'cancelled'}`, `{outcome: 'refused', code}` with `EXPORT_IN_PROGRESS`, `EXPORT_INTERRUPTED` or `EXPORT_TARGET_REFUSED`, or `{outcome: 'failed', code}` with `DIALOG_FAILED`, `BUNDLE_FAILED` or `EXPORT_WRITE_FAILED` |
+
+It serves the trusted dashboard main frame only and rejects the overlay, any other sender or frame and any argument; the preload forwards none. Once the exit has begun it answers `EXPORT_INTERRUPTED` without a dialog. It works in every mode, also `disabled`, because it reads only the application's own state and logs. The bridge method is appended after the plugin methods (`DesktopBridge` in `packages/contracts/src/index.ts`).
 
 ## The Game plugin card
 
@@ -249,6 +255,7 @@ Implemented in PR-5 (P18) as `apps/desktop/src/plugin-setup-card.tsx` on the Liv
 
 The card shows:
 
+- **Connection.** Since PR-6, one line at the top with the [connection diagnosis](#connection-diagnosis), and a note when a connected game still has an older plugin on disk.
 - **Mode.** A note in the `disabled` and `test-root` modes; nothing in the `active` mode.
 - **Bundle.** The bundled plugin's version and the first 12 hex digits of its SHA-256, or "not checked yet".
 - **Run.** "Checking the game folders…" while a setup run is in progress.
@@ -259,11 +266,14 @@ The card shows:
   - "Choose game folder…".
 - **Manual copy (P12).** For `PERMISSION_DENIED`, `READ_ONLY_FILE` and `UNRECOGNIZED_FILE` the folder adds the manual-copy hint and two buttons, "Show plugin file" and "Open game plugins folder".
 - **Retry.** One Retry button for the whole card.
-- **Answers.** The answer of the last call appears as one status line: a fixed text for a saved, cancelled or refused folder choice, for a shown or unavailable plugin file, and "The request failed; nothing changed." for a rejected call.
+- **Export diagnostics…** Since PR-6, a button with the note that the file holds no paths or user and computer names and that nothing is uploaded ([diagnostic bundle](#diagnostic-bundle)). It stays available in the `disabled` mode.
+- **Answers.** The answer of the last call appears as one status line: a fixed text for a saved, cancelled or refused folder choice, for a shown or unavailable plugin file, for each diagnostics export outcome, and "The request failed; nothing changed." for a rejected call.
+
+A folder that holds the current plugin but whose install record could not be written (the registry is read-only, from a newer version, or its write failed) shows **Installed** with the `REGISTRY_UNAVAILABLE` text since PR-6, instead of only a log row; it arms no poll. ET-018's uninstall cleanup relies on that record.
 
 A locked file (`TARGET_LOCKED`) shows only its automatic-retry text, because setup tries it again by itself.
 
-In the `disabled` mode the switches, the folder buttons and Retry are disabled, because they would change nothing. The `scaffold` runtime smoke, which runs disabled with a rendered dashboard, asserts the disabled-mode note and that the five controls are disabled, and `RuntimeReceipt.ps1` requires that evidence (`pluginCard`) and one `PLUGIN_SETUP_MODE` row with `disabled`.
+In the `disabled` mode the switches, the folder buttons and Retry are disabled, because they would change nothing. The `scaffold` runtime smoke, which runs disabled with a rendered dashboard, asserts the disabled-mode note and that the five controls are disabled, and `RuntimeReceipt.ps1` requires that evidence (`pluginCard`) and one `PLUGIN_SETUP_MODE` row with `disabled`. Since PR-6 it also asserts the diagnosis line's fixed `NO_GAME_SELECTED` text (the scaffold launch selects no game) and that "Export diagnostics…" is enabled (`diagnosisShown`, `exportAvailable`).
 
 The card never shows a path: the view carries none, and the folder labels use only the source and position. A renderer that only shows the pushed view cannot reveal one; the `plugin` smoke checks the card's text for the fixture root and for drive and UNC paths.
 
@@ -285,9 +295,61 @@ Nothing reads the Windows registry or touches a real Steam or game folder.
 
   Both installed DLLs must have the bundled manifest's SHA-256. The driver records the phase `plugin-run-a-settled`. The unrelated DLL, the text file and the unrecognized file must keep their bytes and modification times. The smoke then clicks the ATS switch in the card. ATS must become excluded, its plugin must be removed together with the plugins folder created for it, and every other file must stay unchanged (phase `plugin-excluded`). Run A then exits orderly.
 - **Run B.** The restart must reach the same states, with ATS excluded, and write nothing: every fixture file, the install registry included, keeps its bytes and modification time. Its `PLUGIN_ACTION` rows may only be `unchanged`, `blocked` or `absent` (phase `plugin-run-b-settled`), and it exits orderly.
-- **Logs.** Both runs log `PLUGIN_SETUP_MODE` with `test-root` and no `PLUGIN_TEST_ROOT_ESCAPE`. `RuntimeReceipt.ps1` requires the journey's flags, both orderly exits and these rows.
+- **Diagnostics export (PR-6).** After run B's checks the smoke presses "Export diagnostics…" twice. Main's Save dialog is replaced through Playwright's main-process evaluate, as in the journal export journey. A cancelled dialog must write nothing. The second time, the dialog answers with a file in the run's output folder, outside the fake root. The file must be a `ets2telemetry.diagnostics` v1 bundle of at most 2 MiB with the `test-root` plugin view in run B's states and the diagnosis `NO_GAME_SELECTED`. It must hold rows of both logs, without `detail` or `pid`, and contain neither a drive or UNC path, the fake root, the output folder or the isolated LOCALAPPDATA, nor the user or computer name. The dialog must have been offered once, owned by a window, with the default `ets2telemetry-diagnostics-<UTC>.json` name and the JSON filter (phase `plugin-diagnostics-exported`). Run B's main log must hold exactly `DIAGNOSTICS_EXPORT_CANCELLED` and `DIAGNOSTICS_EXPORT_SAVED {bytes}`.
+- **Logs.** Both runs log `PLUGIN_SETUP_MODE` with `test-root` and no `PLUGIN_TEST_ROOT_ESCAPE`. `RuntimeReceipt.ps1` requires the journey's flags (`pluginDiagnosticsExported` since PR-6), both orderly exits and these rows.
 
 The evidence names files by fixed labels and hashes only, never by path. A fixture file-system failure is reported as a fixed `PLUGIN_FIXTURE_<step>` error (`BUILD`, `BUNDLE` or `SNAPSHOT`) with the error code only.
+
+## Connection diagnosis
+
+Implemented in PR-6 (P17) as the pure `connectionDiagnosis(plugins, status, selection, health)` in `apps/desktop/src/connection-diagnosis.ts`. The dashboard computes it from `AppState.plugins`, the live update's status and selection and `AppState.health`, and the card shows its fixed text (`CONNECTION_DIAGNOSIS_TEXT` in `strings.ts`). The first code that applies wins:
+
+| Order | Code | When (mapped onto the current types) |
+| --- | --- | --- |
+| 1 | `SERVICE_UNAVAILABLE` | The service health is not `ready` (`starting`, `restarting`, `failed`, `stopping`), or the live status is `service-failed` or `restarting` |
+| 2 | `CONNECTED` | The live status is `connected` or `paused`, for any selection |
+| 3 | `NO_GAME_SELECTED` | The selection is the "Select a game" placeholder (`game`), `synthetic` or `replay` |
+| 4 | `SETUP_DISABLED` | Plugin setup is `disabled` in this launch, so no game folder was checked |
+| 5 | `GAME_NOT_FOUND` | The selected game's discovery finished and listed no game folder |
+| 6 | `PLUGIN_BLOCKED_PERMISSION` | A listed folder of the selected game has `PERMISSION_DENIED` or `READ_ONLY_FILE` |
+| 7 | `PLUGIN_UNRECOGNIZED` | A listed folder has `UNRECOGNIZED_FILE` |
+| 8 | `PLUGIN_OUTDATED` | A listed folder is `outdated` (from the file's hash on disk) |
+| 9 | `PLUGIN_PENDING_GAME_CLOSE` | A listed folder that is not `installed` waits with `GAME_RUNNING`, `CLIENT_RUNNING` or `TARGET_LOCKED` |
+| 10 | `PLUGIN_BUNDLE_UNAVAILABLE` | A listed folder is blocked by `BUNDLE_UNAVAILABLE`: the bundled plugin is missing or damaged, so the text says to reinstall ETS2Telemetry |
+| 11 | `PLUGIN_NOT_CHECKED` | A listed folder is blocked by `LINKED_FOLDER` or `IO_ERROR`: the plugin could not be checked there, and the text points to the folder line |
+| 12 | `PLUGIN_MISSING` | A listed folder is `missing`, `excluded` (an excluded game) or `blocked` for any other reason |
+| 13 | `TRANSPORT_FAILED` | The live status is `incompatible` or `unavailable`. Neither is tried again by itself: `incompatible` closes the connection without a retry, and `unavailable` means the selection found no configured native client or fixture. The card's Retry runs only plugin setup, so the text says to choose another source and then the game again, or to exit ETS2Telemetry from the tray and start it again (PR #111 review) |
+| 14 | `NO_RUNNING_SOURCE` | Anything else: `waiting`, `stale` or `disconnected`, with the plugin in place |
+
+Rows 6–12 are the folder rows. They look only at the selected game's listed folders, and each folder counts once, under the first folder row that applies to it (a folder blocked by an unrecognized file is not also missing). Rows 10 and 11 were split from `PLUGIN_MISSING` in the PR-6 review, because its advice (manage the game, Retry) does not help them; they are separate codes rather than reason-specific texts, so the diagnostic bundle records them too.
+
+- **No folder holds the current plugin.** The first folder row that applies to any folder is the headline; one folder in that condition is enough.
+- **A folder holds the current plugin** (state `installed`, which means the bundled plugin is in place, also one that keeps `REGISTRY_UNAVAILABLE`). The game can load the plugin from that folder, so the other folders' problems do not explain a missing connection (PR-6 review). Each folder row that applies to another folder becomes a note, in the rows' order: `OTHER_FOLDER_BLOCKED_PERMISSION`, `OTHER_FOLDER_UNRECOGNIZED`, `PLUGIN_OUTDATED_ON_DISK`, `OTHER_FOLDER_PENDING_GAME_CLOSE`, `OTHER_FOLDER_BUNDLE_UNAVAILABLE`, `OTHER_FOLDER_NOT_CHECKED` and `OTHER_FOLDER_MISSING`. The headline falls through to rows 13 and 14. For example, a current Steam folder and a chosen folder with an unrecognized file give `NO_RUNNING_SOURCE`, or `TRANSPORT_FAILED` while the connection fails, with the note `OTHER_FOLDER_UNRECOGNIZED`.
+
+A discovery still `pending` without folders and folders that are `working` fall through to rows 13 and 14. With `CONNECTED`, a listed folder of the selected game that is still `outdated` adds the note `PLUGIN_OUTDATED_ON_DISK`. The diagnosis reads only the pushed view and the live status, never a game folder, and its texts carry no path.
+
+## Diagnostic bundle
+
+Implemented in PR-6 (P17). "Export diagnostics…" on the card calls `exportDiagnostics()`; main (`apps/desktop/src/diagnostic-bundle-writer.ts`) opens its Save dialog parented to the dashboard window with the default name `ets2telemetry-diagnostics-<UTC>.json` (for example `ets2telemetry-diagnostics-20261017T083015Z.json`) in Documents and the JSON filter. One export runs at a time.
+
+- **Content** (`apps/desktop/src/diagnostic-bundle.ts`). One JSON document, format `ets2telemetry.diagnostics`, version 1, at most 2 MiB:
+  - `createdUtc`, and `app` with the application, Electron and Node versions, the packaged flag and `os.release()`;
+  - `health`, `settings` and `plugins` from `AppState`, and `bundledPlugin` (the verified bundled version and hash prefix, or null);
+  - `live` with the status and selection of main's last live update, and the `diagnosis`;
+  - `logs.main` and `logs.service`: the last rows of `startup.jsonl.1` then `startup.jsonl` of main's log directory (`%LOCALAPPDATA%\ETS2Telemetry\logs`, or the diagnostic directory of an isolated launch) and of its `service` subdirectory, each file's last 256 KiB, at most 2000 rows per log;
+  - `omittedLogRows` per log: unreadable lines, rows beyond 2000 and rows left out for the size bound.
+- **Redaction.**
+  - A log row keeps only `time` (an ISO UTC time), `event` (a fixed code) and `facts`; `detail`, `pid` and anything else is dropped, and a line that is not such a row is left out.
+  - A fact keeps only scalar values under plain keys. A fact string that contains `\`, `/` or a drive colon (`C:` at the start or after a non-word character) becomes `<redacted>`, as does a nested value; other strings are cut at 256 characters.
+  - The Windows user name and computer name (`os.userInfo().username`, `os.hostname()` and `USERNAME`, `COMPUTERNAME` and `USERDOMAIN`) are replaced by `<redacted>`, case-insensitively and as whole words, in runtime content only: every log row's fact keys and string fact values, and `app.osRelease`. Since the PR #111 review the format, every schema key, enum code, version and event code stay exactly as written, so a name such as `main`, `logs` or `diagnostics` cannot change the document's shape or break the size trim. Names shorter than two characters are not replaced.
+  - The views carry no Steam, library or game path, and nothing reads the Windows registry for the bundle.
+- **Size bound.** While the text exceeds 2 MiB, the oldest eighth of the longer log's rows is left out and counted. Four full startup logs fit without that.
+- **Saving.** The target checks and the write are shared with the [trip export](journal-export.md) in `apps/desktop/src/export-file.ts`. A target inside `<LOCALAPPDATA>\ETS2Telemetry`, by name, by its real path (a junction) or by file identity, a device path or a relative path is refused with `EXPORT_TARGET_REFUSED`, before the bundle is built. The bundle is built only after an allowed file was chosen, then written to `<name>.<hex8>.partial` beside the target, synced, closed and renamed over the target, with the rename retried as for settings saves. A cancelled dialog reads and writes nothing, and a Save dialog that rejects answers `DIALOG_FAILED` (PR-6 review) without reading or writing; a failure or an exit removes the partial file and leaves an existing target unchanged.
+- **Exit.** The exit's `begin` and a fatal stop abort the export; its file work joins the existing 1000 ms idle budget ([application lifecycle](app-lifecycle.md)).
+- **Logs.** `DIAGNOSTICS_EXPORT_CANCELLED`, `DIAGNOSTICS_EXPORT_SAVED {bytes}` and `DIAGNOSTICS_EXPORT_FAILED {outcome, code, step?, errno?}` in the main log; no path.
+- **No upload.** The bundle is a file the driver chooses where to save and attaches to a report by hand.
+
+The real Windows Save dialog and a real user's logs remain manual checks.
 
 ## Install registry
 
@@ -422,7 +484,7 @@ The [setup run](#setup-run) logs each result as `PLUGIN_ACTION`, on change only.
 
 ## Remaining manual and real-environment checks
 
-All of them stay pending after PR-4:
+All of them stay pending after PR-6:
 
 - real Steam installs: the default and a custom Steam path, including non-ASCII paths, the InstallPath fallback, several libraries on other drives and libraries moved through a junction;
 - ETS2 and ATS loading the silently installed DLL, and a Steam update or file verification preserving it;
@@ -430,7 +492,8 @@ All of them stay pending after PR-4:
 - `sdk unload` and `sdk reload` in the game console;
 - UAC- or ACL-restricted libraries with the manual fallback, and antivirus interference with the rename (PR-3 checks only a sharing lock and an ACL deny on a temporary folder);
 - the SCS loader's file filter: whether a game ever loads the `.tmp` file beside the DLL;
-- the real Windows dialogs, including the game folder dialog, and Explorer reveal, and the packaged Squirrel first launch;
+- the real Windows dialogs, including the game folder dialog and the diagnostics Save dialog, and Explorer reveal, and the packaged Squirrel first launch;
+- the connection diagnosis against real games, TruckersMP and a real plugin connection, and a diagnostic bundle from a real user's profile and logs;
 - ET-018 uninstall cleanup and the readability of the card.
 
 See [ET-017 validation](validation/et-017.md).
@@ -444,3 +507,5 @@ PR-3's installer and registry tests write only into fake game roots and a fake r
 PR-4's orchestrator tests (`tests/unit/plugin-setup.test.ts`) run the setup in the test-root mode on the same guarded root, with a fake running-game lister and fake `setTimeout`; the confinement must refuse a library and a junction outside the root before the guarded file system sees them. The mode gate (`tests/unit/plugin-setup-mode.test.ts`) and the bundle reader (`tests/unit/plugin-bundle.test.ts`) are tested without a game, and `tests/unit/main-boundaries.test.ts` checks main's channels against a fake orchestrator. Every runtime smoke except the `plugin` scenario, the Playwright startup test and the installer harnesses run in the disabled mode; their main logs show `PLUGIN_SETUP_MODE` with `mode: 'disabled'`.
 
 PR-5's card texts are checked by `tests/unit/plugin-setup-text.test.ts` with a hand-written text for every state and reason. The card itself is checked in the running application by the [plugin smoke](#the-plugin-smoke-scenario), in the test-root mode against its own fake root, and in the disabled mode by the scaffold smoke. The repository has no component-rendering unit tests, so no separate renderer unit test was added.
+
+PR-6's diagnosis is checked by `tests/unit/connection-diagnosis.test.ts` against a hand-written precedence table, where pair rows show that each code beats the next. `tests/unit/diagnostic-bundle.test.ts` checks the format, the log row reduction, the redaction of injected paths and user and computer names, and the 2 MiB bound. `tests/unit/diagnostic-bundle-writer.test.ts` writes on real temporary folders: a cancel writes nothing, a failure and an exit remove the partial file, and a data-folder target is refused, also through a junction. `tests/unit/journal-export-writer.test.ts` is unchanged and still passes after the helper extraction. `main-boundaries.test.ts` checks the channel's trust, zero arguments, the dialog's owner and default name, the exit and one saved bundle, and `preload-recovery.test.ts` checks that no argument is forwarded. The scaffold smoke checks the diagnosis line and the plugin smoke the export.

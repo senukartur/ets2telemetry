@@ -60,4 +60,18 @@ These are manual launch instructions, not bounded acceptance harness commands. U
 
 Launch the selected game/client normally, choose windowed or borderless mode and enter active simulation. The overlay appears only with accepted game-origin window metadata while that game is foreground. It hides on minimize/foreground loss/expired metadata. Synthetic/replay choices are controlled fixtures and never make the native overlay visible. Do not infer success from a dashboard status alone: record actual source/game/client versions, mode, artifact hashes, input/focus/DPI behavior and performance using [TESTING.md](../TESTING.md).
 
-To remove this candidate, close both games/client and the app, confirm the exact destination SHA256 still equals the retained installed candidate, and remove only `$pluginTarget` with `Remove-Item -LiteralPath $pluginTarget`. Preserve other plugins, game files, exports and user data. Do not delete the whole `plugins` or transport-policy directory. Future managed installation/uninstallation belongs to ET-017/ET-018.
+To remove this candidate, close both games/client and the app, confirm the exact destination SHA256 still equals the retained installed candidate, and remove only `$pluginTarget` with `Remove-Item -LiteralPath $pluginTarget`. Preserve other plugins, game files, exports and user data. Do not delete the whole `plugins` or transport-policy directory. Managed installation belongs to ET-017 (below); uninstall cleanup belongs to ET-018.
+
+## Hand over to the managed install (ET-017)
+
+Since ET-017, the packaged application installs, updates and removes its own plugin silently in each discovered game folder ([game plugin setup](plugin-setup.md)). It replaces or removes only a file whose SHA-256 it recognizes: the bundled plugin, a released one in `native/telemetry-plugin/released-plugins.json`, or the one recorded for that folder in `%LOCALAPPDATA%\ETS2Telemetry\plugins\setup.json`. A DLL copied by hand from a development build has none of these hashes, so the Game plugin card shows that folder as **Blocked** with "A file with the plugin's name that this application did not install is in the way", and the connection diagnosis says to move it away. The application never overwrites or deletes it ([TD-011](technical-debt.md#td-011-in-app-replacement-of-an-unrecognized-plugin-file)).
+
+To hand a folder over to the managed install:
+
+1. Exit ETS2, ATS, TruckersMP and ETS2Telemetry.
+2. Confirm that the file's SHA-256 still equals the candidate hash you retained above, then remove only that file, as described in the previous section.
+3. Start the installed (packaged) application normally, without any `ETS2TELEMETRY_*` variable. It installs its bundled plugin and records it; the card shows **Installed**.
+
+A file you copied by hand from the packaged application ("Show plugin file" on the card) has the bundled hash: the application adopts it and records it as `adopted` instead of reporting it. Never run a development build with `ETS2TELEMETRY_PLUGIN_SETUP=real` to do this: it writes into real game folders.
+
+If the card reports a problem, **Export diagnostics…** on the card saves one JSON file with versions, states and recent log codes, without paths or user and computer names ([diagnostic bundle](plugin-setup.md#diagnostic-bundle)). Nothing is uploaded; attach the file to a report yourself.

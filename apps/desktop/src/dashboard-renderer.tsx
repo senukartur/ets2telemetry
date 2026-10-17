@@ -12,6 +12,7 @@ import {recordingStatusText} from './recording-status-text';
 import {LiveDashboard} from './live-dashboard';
 import {OverlaySettingsCard} from './overlay-settings-card';
 import {PluginSetupCard} from './plugin-setup-card';
+import {connectionDiagnosis} from './connection-diagnosis';
 import {Journal, JournalBoundary} from './journal';
 import {DEFAULT_UNIT_PROFILES, displayProfile, isUnitProfile, UNIT_GAMES, UNIT_PROFILE_IDS} from './unit-profiles';
 import {APP_ERROR_TEXT, JOURNAL_STRINGS, SERVICE_HEALTH_TEXT, SETTINGS_SAVE_ERROR_TEXT, SETTINGS_STATE_TEXT, STORAGE_HEALTH_TEXT, STRINGS, UNIT_GAME_TEXT, UNIT_PROFILE_TEXT} from './strings';
@@ -85,7 +86,7 @@ export default function App() {
     {exit === 'failed' ? <p role="status">{STRINGS.exitFailed}</p> : null}
   </CardContent></Card>
   {/* ET-017 PR-5 (P18): the Game plugin card, after the Application status card. */}
-  <PluginSetupCard view={app?.plugins} onView={plugins => setApp(current => current && {...current, plugins})} />
+  <PluginSetupCard view={app?.plugins} diagnosis={app ? connectionDiagnosis(app.plugins, live?.status ?? 'waiting', live?.selection ?? 'game', app.health) : undefined} onView={plugins => setApp(current => current && {...current, plugins})} />
   <Card size="sm"><CardHeader><CardTitle><h2>{STRINGS.unitsTitle}</h2></CardTitle></CardHeader><CardContent className="space-y-3">
     {UNIT_GAMES.map(game => <div key={game} className="space-y-2">
       <p id={`units-${game}-label`}>{UNIT_GAME_TEXT[game]}</p>
