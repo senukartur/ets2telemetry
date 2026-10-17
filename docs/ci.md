@@ -270,10 +270,11 @@ Since ET-017 PR-5 (October 17, 2026) the `plugin` runtime smoke scenario runs th
 - **Placement.** The packaged step runs on pull requests, right after the packaged lifecycle smoke. The development step runs on pushes to `main` and dispatches, like the other development smokes.
 - **Why a scenario of its own.** A first version ran the journey inside the `lifecycle` smoke. Review round 1 of PR-5 moved it out: its worst-case waits for two setup runs and an exclusion would have exceeded the gating lifecycle step's 60 s Job on a hosted runner, where the 25% CPU cap is about one processor on the four-processor runners recorded since the repository became public (two processors and 0.5 processor before; see above). The lifecycle smoke is back in its PR-4 shape.
 - **Job.** The `plugin` scenario runs in its own Job with a 120 s deadline; the other limits (16 processes, 2 GiB, 25% CPU, kill-on-close, zero retries) are unchanged, and every other scenario keeps 60 s. `scripts/watchdog/BoundedProcess.cs` accepts deadlines up to 120 s for this, instead of 60 s.
-- **Phases.** The driver records `plugin-run-a-settled`, `plugin-excluded` and `plugin-run-b-settled` beside the usual phases. Locally the packaged Job took about 16 s.
+- **Phases.** The driver records `plugin-run-a-settled`, `plugin-excluded` and `plugin-run-b-settled` beside the usual phases, and since ET-017 PR-6 `plugin-diagnostics-exported`. Locally the packaged Job took about 16 s.
+- **Diagnostics export (PR-6).** Run B presses "Export diagnostics…" with main's Save dialog replaced through Playwright, as the journal smoke does: a cancel writes nothing, and the saved bundle in the run's output folder must hold no path, run folder, user or computer name. The run writes it into `<run output>\diagnostics-export`, never into the fake root or a user folder.
 - **Safety.** The fixture first fails if `tasklist` lists ETS2, ATS or a TruckersMP process.
-- **Receipt.** The `plugin` branch of `RuntimeReceipt.ps1` requires the journey's flags, an orderly exit of both runs, one `PLUGIN_SETUP_MODE` row with `test-root` in each run and no `PLUGIN_TEST_ROOT_ESCAPE` row.
-- **Disabled card.** The `scaffold` smoke asserts the card's disabled-mode note and that the manage switches, folder buttons and Retry are disabled; its receipt branch requires that evidence.
+- **Receipt.** The `plugin` branch of `RuntimeReceipt.ps1` requires the journey's flags (`pluginDiagnosticsExported` since PR-6), an orderly exit of both runs, one `PLUGIN_SETUP_MODE` row with `test-root` in each run and no `PLUGIN_TEST_ROOT_ESCAPE` row.
+- **Disabled card.** The `scaffold` smoke asserts the card's disabled-mode note and that the manage switches, folder buttons and Retry are disabled, and since PR-6 the diagnosis line's fixed text and an enabled "Export diagnostics…" button; its receipt branch requires that evidence.
 
 ## ET-011b settings in the lifecycle smoke
 

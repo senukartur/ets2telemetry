@@ -1,7 +1,7 @@
 // Scaffold status only. The telemetry wire protocol belongs to ET-002a.
 export interface ScaffoldStatus { service: 'ready'; storage: 'verified'; synthetic: true }
 import type {CurrentState, SourceIdentity, AppliedState, CaptureTime} from './protocol-v0';
-import type {AppState, OverlayEditState, OverlayLayout, OverlaySectionId, OverlaySections, PluginFolderChoice, PluginGame, PluginSetupView, PluginShowFileResult, RecordingCode, SettingsView,
+import type {AppState, DiagnosticsExportResult, OverlayEditState, OverlayLayout, OverlaySectionId, OverlaySections, PluginFolderChoice, PluginGame, PluginSetupView, PluginShowFileResult, RecordingCode, SettingsView,
   UnitGame, UnitProfile} from './app-state';
 import type {Available, LiveObservationV1, Uint64} from './protocol-v1';
 import type {JournalDatabase, JournalEventPage, JournalIntervalPage, JournalTripDetail, JournalTripPage, JournalTripsQuery} from './journal';
@@ -110,6 +110,12 @@ export interface DesktopBridge {
   showPluginFile(): Promise<PluginShowFileResult>;
   /** Opens one listed game folder's plugins folder in Explorer, or its `bin\win_x64` folder when that is absent (P12). */
   openPluginFolder(targetId: string): Promise<void>;
+  /**
+   * ET-017 (P17): saves a redacted diagnostic bundle (one JSON file of at most 2 MiB) through main's Save dialog. Resolves
+   * `{outcome: 'saved'}`, `{outcome: 'cancelled'}` when the dialog was cancelled (nothing is written), or a fixed refusal
+   * or failure code; never a path. Nothing is uploaded. Refused once the application exits.
+   */
+  exportDiagnostics(): Promise<DiagnosticsExportResult>;
 }
 /**
  * The fixed refusal codes of a journal call (ET-016, J11). `SERVICE_UNAVAILABLE`: no ready telemetry service, or it is

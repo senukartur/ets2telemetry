@@ -1,10 +1,11 @@
-import type {AppErrorCode, JournalAttributionKind, JournalCallCode, JournalCloseReason, JournalCompleteness, JournalExportCode, JournalIntervalKind, JournalMoneyCategory, JournalOutcome,
+import type {AppErrorCode, DiagnosticsExportFailure, DiagnosticsExportRefusal, JournalAttributionKind, JournalCallCode, JournalCloseReason, JournalCompleteness, JournalExportCode, JournalIntervalKind, JournalMoneyCategory, JournalOutcome,
   JournalPurpose, OverlayEditPlacement, OverlayLayout, OverlaySectionId, PluginBlockReason, PluginDiscoveryOutcome, PluginFolderRefusal, PluginManualFolderState,
   PluginSetupMode, PluginTargetState, RecordingCode, RecordingHealth, RecordingLosses, RecordingTarget, RecordingTrip, ServiceHealth,
   SettingsSaveError, SettingsState, StorageHealth, UnitGame, UnitProfile} from '../../../packages/contracts/src';
 import type {EventType, GameMode, UnavailableReason} from '../../../packages/contracts/src/protocol-v1';
 import type {FieldNote, LiveFieldId, LiveSectionId, ViewReason} from '../../../packages/telemetry-core/src/live-view';
 import type {OverlayGroupId, OverlayPresetId, OverlayRequirement} from './overlay-sections';
+import type {ConnectionDiagnosisCode, ConnectionDiagnosisNote} from './connection-diagnosis';
 
 /**
  * User-visible English text for the dashboard and tray. There is no i18n framework yet; keeping the
@@ -476,6 +477,7 @@ export const JOURNAL_JOB_SOURCE_TEXT = Object.freeze({
  */
 export const PLUGIN_STRINGS = Object.freeze({
   title: 'Game plugin',
+  diagnosisLabel: 'Connection',
   bundled: 'Bundled plugin: {version} ({hash})',
   bundledUnknown: 'Bundled plugin: not checked yet',
   running: 'Checking the game folders…',
@@ -488,12 +490,15 @@ export const PLUGIN_STRINGS = Object.freeze({
   manualFolder: 'Chosen folder',
   noFolders: 'No game folder found yet.',
   notSearched: 'Not searched in this launch.',
+  unrecognizedExcluded: 'A file with the plugin\'s name that this application did not install is in this folder; it is left as it is.',
+  unreadableFile: 'The plugin file in this folder could not be read or checked, so it is left as it is.',
   installedVersion: 'Installed plugin: {version} ({hash})',
   unknownVersion: 'unknown version',
   lastFailure: 'Last problem: {reason}',
   unlistedOne: '1 more Steam folder of this game is not listed; the plugin is not installed there, but excluding the game removes it there too.',
   unlistedMany: '{count} more Steam folders of this game are not listed; the plugin is not installed there, but excluding the game removes it there too.',
   manualCopy: 'To install it by hand: close the game, copy the plugin file into the game\'s plugins folder (Windows may ask for administrator rights), then press Retry.',
+  manualRemove: 'To remove it by hand: close the game, delete the plugin file from the game\'s plugins folder (Windows may ask for administrator rights), then press Retry.',
   requestFailed: 'The request failed; nothing changed.',
   folderChosen: 'Game folder saved; the plugin is being set up there.',
   folderCancelled: 'No folder chosen; nothing changed.',
@@ -549,4 +554,46 @@ export const PLUGIN_FOLDER_REFUSAL_TEXT: Readonly<Record<PluginFolderRefusal, st
   SETUP_DISABLED: 'Plugin setup is off in this launch.',
   REGISTRY_UNAVAILABLE: 'The plugin setup record could not be saved.',
   BUSY: 'A folder dialog is already open.'
+});
+/** The Game plugin card's connection diagnosis (ET-017 P17), one fixed text per code. */
+export const CONNECTION_DIAGNOSIS_TEXT: Readonly<Record<ConnectionDiagnosisCode, string>> = Object.freeze({
+  SERVICE_UNAVAILABLE: 'The telemetry service is not running; see Application status.',
+  CONNECTED: 'Receiving telemetry from the selected source.',
+  NO_GAME_SELECTED: 'No game is selected as the source. Choose Euro Truck Simulator 2 or American Truck Simulator above.',
+  SETUP_DISABLED: 'Not checked: plugin setup is off in this launch.',
+  GAME_NOT_FOUND: 'The selected game was not found. Choose its game folder below.',
+  PLUGIN_BLOCKED_PERMISSION: 'Windows did not allow the plugin file in a game folder to be read or changed. See the folder line below for what to do.',
+  PLUGIN_UNRECOGNIZED: 'A file that this application did not install is in place of the plugin. Move it away, then press Retry.',
+  PLUGIN_OUTDATED: 'An older plugin is installed. If its folder line below says it waits for the game, TruckersMP or another program, it is updated once that closes; otherwise resolve the problem shown there, then press Retry.',
+  PLUGIN_PENDING_GAME_CLOSE: 'The plugin is changed automatically once the game, TruckersMP or the program using the file is closed. Then start the game again.',
+  PLUGIN_BUNDLE_UNAVAILABLE: 'The bundled plugin is missing or damaged. Reinstall ETS2Telemetry.',
+  PLUGIN_NOT_CHECKED: 'The plugin could not be checked in a game folder; see the folder line below.',
+  PLUGIN_MISSING: 'The plugin is not installed in a game folder. Turn on "Manage the plugin for this game" or press Retry.',
+  TRANSPORT_FAILED: 'The game\'s plugin could not be connected, or it is incompatible, and the connection is not tried again by itself. After the plugin is fixed, choose another source and then the game again above, or exit ETS2Telemetry from the tray and start it again.',
+  NO_RUNNING_SOURCE: 'The plugin is in place. Start the game to connect.'
+});
+export const CONNECTION_DIAGNOSIS_NOTE_TEXT: Readonly<Record<ConnectionDiagnosisNote, string>> = Object.freeze({
+  PLUGIN_OUTDATED_ON_DISK: 'A game folder still holds an older plugin. If its folder line says it waits for the game, TruckersMP or another program, it is updated once that closes; otherwise resolve the problem shown there, then press Retry.',
+  OTHER_FOLDER_BLOCKED_PERMISSION: 'Another folder of this game could not be changed because Windows denied access; see its line below.',
+  OTHER_FOLDER_UNRECOGNIZED: 'Another folder of this game holds a file that this application did not install; see its line below.',
+  OTHER_FOLDER_PENDING_GAME_CLOSE: 'Another folder of this game is changed once the game, TruckersMP or the program using the file is closed.',
+  OTHER_FOLDER_BUNDLE_UNAVAILABLE: 'The bundled plugin is missing or damaged, so another folder of this game was not set up. Reinstall ETS2Telemetry.',
+  OTHER_FOLDER_NOT_CHECKED: 'The plugin could not be checked in another folder of this game; see its line below.',
+  OTHER_FOLDER_MISSING: 'Another folder of this game does not hold the plugin; see its line below.'
+});
+/** "Export diagnostics…" (ET-017 P17): the button, the note beside it and each answer as fixed text, never a path. */
+export const DIAGNOSTICS_EXPORT_STRINGS = Object.freeze({
+  button: 'Export diagnostics…',
+  note: 'Saves one JSON file with versions, states and recent log codes, without paths or user and computer names. Nothing is uploaded.',
+  saved: 'Diagnostics saved.',
+  cancelled: 'Export cancelled. Nothing was written.',
+  failed: 'The diagnostics export request failed.'
+});
+export const DIAGNOSTICS_EXPORT_ERROR_TEXT: Readonly<Record<DiagnosticsExportRefusal | DiagnosticsExportFailure, string>> = Object.freeze({
+  EXPORT_IN_PROGRESS: 'Another diagnostics export is still running.',
+  EXPORT_INTERRUPTED: 'The export stopped because ETS2Telemetry is exiting. Nothing was written.',
+  EXPORT_TARGET_REFUSED: 'That location cannot be used. Choose a folder outside the ETS2Telemetry data folder.',
+  BUNDLE_FAILED: 'The diagnostics could not be collected. Nothing was written.',
+  DIALOG_FAILED: 'The Save dialog could not be opened. Nothing was written.',
+  EXPORT_WRITE_FAILED: 'The file could not be written. A file that already had this name is unchanged.'
 });
