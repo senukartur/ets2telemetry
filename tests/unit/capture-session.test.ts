@@ -3,7 +3,7 @@ import {randomUUID} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
 import net from 'node:net';
 import path from 'node:path';
-import {afterEach, beforeEach, describe, expect, it} from 'vitest';
+import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import {Cap0FrameDecoder} from '../../packages/contracts/src/capture-cap0';
 import {CaptureSession, type CaptureAuthority, type CaptureTransport} from '../../apps/desktop/src/capture-session';
 import {temporaryResources} from '../shared/resources';
@@ -45,6 +45,8 @@ async function send(socket: net.Socket, packets: unknown[]) {
   for (const packet of packets) { const bytes = frame(packet); for (let offset = 0; offset < bytes.length; offset += 7) socket.write(bytes.subarray(offset, Math.min(bytes.length, offset + 7))); }
   await new Promise(resolve => setTimeout(resolve, 20));
 }
+/** Hang guard of a wait for an observable write over the real pipe, below the 5 s case timeout; never a speed claim. */
+const WRITE_HANG_GUARD_MS = 4000;
 let resources: Awaited<ReturnType<typeof temporaryResources>>, sources: Source[];
 beforeEach(async () => {resources = await temporaryResources(); sources = [];});
 afterEach(async () => {await Promise.all(sources.map(s => s.close())); await resources.dispose();});
@@ -85,7 +87,9 @@ describe('CAP0 capture over an actual Windows named pipe', () => {
     const pipe = await source(async socket => { await send(socket, [header(), envelope(1, 1)]); });
     sources.push(pipe);
     const capture = session(pipe.endpoint); await capture.start();
-    await new Promise(resolve => setTimeout(resolve, 150));
+    // Stop only once both packets are on disk: the observable write, not a sleep, orders the stop after them.
+    const packets = path.join(resources.directory, 'captures', SESSION, 'packets.ndjson');
+    await vi.waitFor(async () => expect((await readFile(packets, 'utf8')).match(/\n/g)).toHaveLength(2), {timeout: WRITE_HANG_GUARD_MS, interval: 10});
     const manifest = await capture.stop();
     expect(manifest).toMatchObject({stop: {reason: 'service-stop'}, status: 'partial', counts: {packetsWritten: 2}, loss: {endMarkerReceived: false}});
     expect(await capture.done).toEqual(manifest);
