@@ -2,7 +2,7 @@ import {execFileSync} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
 import {mkdir, symlink, writeFile} from 'node:fs/promises';
 import path from 'node:path';
-import {afterEach, beforeEach, describe, expect, it} from 'vitest';
+import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import {nodeExecFile, type ExecFilePort} from '../../apps/desktop/src/plugin-setup/fixed-program';
 import {parseSteamRegistryOutput, readSteamRegistryValues, readSteamRoot, STEAM_MACHINE_KEY, STEAM_USER_KEY,
   steamRegistryScript} from '../../apps/desktop/src/plugin-setup/steam-registry';
@@ -223,8 +223,11 @@ describe.runIf(process.platform === 'win32')('a real run of the fixed script aga
     expect(probe).toContain('CouldNotAutoloadMatchingModule');
     const children: (string | undefined)[] = [];
     const recorded: ExecFilePort = (file, args, options, callback) => {children.push(options.env?.PSModulePath); return nodeExecFile(file, args, options, callback);};
-    expect(await readSteamRegistryValues({execFile: recorded, testKeys: testKeys(), env: {...process.env, PSModulePath: polluted}}))
-      .toEqual({ok: true, steamPath: stored, installPath: null});
+    // The test process itself carries the polluted value, as under a pwsh 7 parent; the reader uses process.env.
+    vi.stubEnv('PSModulePath', polluted);
+    try {
+      expect(await readSteamRegistryValues({execFile: recorded, testKeys: testKeys()})).toEqual({ok: true, steamPath: stored, installPath: null});
+    } finally {vi.unstubAllEnvs();}
     expect(children).toEqual([path.win32.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'Modules')]);
   }, POWERSHELL_START_TIMEOUT_MS);
 
