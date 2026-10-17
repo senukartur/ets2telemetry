@@ -95,21 +95,39 @@ jobs:
         run: npm run smoke --workspace @ets2telemetry/telemetry-simulator
       - name: Isolated synthetic v1 CLI pipe smoke
         run: npm run smoke:v1 --workspace @ets2telemetry/telemetry-simulator
+      # Owner decision E2 (October 17, 2026, docs/ci.md#et-019t-speed-up-october-17-2026): pull requests run only the packaged
+      # smokes; the development smokes run on main pushes and on every dispatch, whatever its `extended` input.
       - name: Bounded development Electron worker smoke
+        if: github.event_name != 'pull_request'
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development
       - name: Bounded development telemetry source and recovery smoke
+        if: github.event_name != 'pull_request'
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario telemetry
       - name: Bounded development hidden overlay projection and isolation smoke
+        if: github.event_name != 'pull_request'
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario overlay -ForceRendererReuse
       - name: Bounded development tray lifecycle, single instance and explicit exit smoke
+        if: github.event_name != 'pull_request'
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario lifecycle
       # ET-015a PR-4: synthetic v1 recording through a killed service, close-to-tray, tray exit and restart.
       - name: Bounded development synthetic recording journey smoke
+        if: github.event_name != 'pull_request'
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario recording
       # ET-016 PR-4: the Journal tab on an empty history, then on a seeded synthetic database (never history).
       - name: Bounded development synthetic trip journal smoke
+        if: github.event_name != 'pull_request'
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario journal
+      # Owner decision E1 (October 17, 2026): pull requests package without the Squirrel maker. Nothing in a PR run reads
+      # out/make; inspect:package and the packaged smokes read out/ETS2Telemetry Desktop-win32-x64, which both commands write.
+      - name: Forge package and static native package inspection
+        if: github.event_name == 'pull_request'
+        run: |
+          npm run package
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run inspect:package
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Forge maker and static native package inspection
+        if: github.event_name != 'pull_request'
         run: |
           npm run make
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
