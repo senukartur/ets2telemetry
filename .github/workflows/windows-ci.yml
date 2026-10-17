@@ -118,6 +118,10 @@ jobs:
       - name: Bounded development tray lifecycle, single instance and explicit exit smoke
         if: github.event_name != 'pull_request'
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario lifecycle
+      # ET-017 PR-5: plugin setup in the test-root mode against a fake Steam and game root (scripts/ci/plugin-fixture.mjs).
+      - name: Bounded development plugin setup and Game plugin card smoke
+        if: github.event_name != 'pull_request'
+        run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario plugin
       # ET-015a PR-4: synthetic v1 recording through a killed service, close-to-tray, tray exit and restart.
       - name: Bounded development synthetic recording journey smoke
         if: github.event_name != 'pull_request'
@@ -150,6 +154,8 @@ jobs:
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged -Scenario overlay -ForceRendererReuse
       - name: Bounded packaged tray lifecycle, single instance and explicit exit smoke
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged -Scenario lifecycle
+      - name: Bounded packaged plugin setup and Game plugin card smoke
+        run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged -Scenario plugin
       - name: Bounded packaged synthetic recording journey smoke
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged -Scenario recording
       - name: Bounded packaged synthetic trip journal smoke

@@ -119,7 +119,8 @@ namespace ETS2Telemetry.Diagnostics {
     }
     // sampleCpu adds output/cpu.jsonl; limits, deadlines and cleanup are identical either way.
     public static int Run(string executable, string[] args, string cwd, string output, int timeoutMs, bool sampleCpu) {
-      if (timeoutMs<100 || timeoutMs>60000) throw new ArgumentOutOfRangeException("timeoutMs");
+      // ET-017 PR-5 review: the plugin smoke scenario needs up to 120 s (two launches, two setup runs and an exclusion).
+      if (timeoutMs<100 || timeoutMs>120000) throw new ArgumentOutOfRangeException("timeoutMs");
       if (!Path.IsPathRooted(executable) || !Path.IsPathRooted(cwd) || !Path.IsPathRooted(output)) throw new ArgumentException("Absolute paths required");
       Directory.CreateDirectory(output);
       IntPtr job=IntPtr.Zero, stdoutRead=IntPtr.Zero, stdoutWrite=IntPtr.Zero, stderrRead=IntPtr.Zero, stderrWrite=IntPtr.Zero, input=IntPtr.Zero;

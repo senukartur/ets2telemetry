@@ -10,10 +10,10 @@ ET-017 is delivered as six PRs:
 | PR-2 | Steam and manual game-folder discovery ([Steam root](#steam-root), [Steam discovery](#steam-discovery), [manual game folder](#manual-game-folder), [running games](#running-games)) | Implemented; run from main since PR-4 |
 | PR-3 | The atomic installer ([algorithm](#algorithm)) and the [install registry](#install-registry) | Implemented; run from main since PR-4 |
 | PR-4 | Silent setup in main ([setup run](#setup-run)), the [mode gate](#mode-gate), the [runtime bundle reader](#runtime-reading), the per-game state in `AppState` and the [IPC channels](#ipc) | Implemented |
-| PR-5 | The per-game plugin card on the dashboard | Coming |
+| PR-5 | The per-game plugin card on the dashboard ([the Game plugin card](#the-game-plugin-card)) and the `plugin` runtime smoke scenario | Implemented |
 | PR-6 | Connection diagnosis and the diagnostic bundle | Coming |
 
-Since PR-4 a packaged application in the `active` mode reads the bundle, discovers the games and silently installs, updates or removes its plugin, 2 s after it starts. Every development launch, smoke, test and installer harness is in the `disabled` mode and reads or writes nothing ([mode gate](#mode-gate)). The dashboard receives the per-game state in `AppState.plugins`, but shows nothing yet: the card comes in PR-5. Until then the developer procedure in [manual plugin setup](manual-plugin-setup.md) stays the way to put the DLL into a game during development. No game, TruckersMP or performance claim follows from the bundle, discovery or the synthetic checks.
+Since PR-4 a packaged application in the `active` mode reads the bundle, discovers the games and silently installs, updates or removes its plugin, 2 s after it starts. Every development launch, smoke, test and installer harness is in the `disabled` mode and reads or writes nothing ([mode gate](#mode-gate)), except the `plugin` smoke scenario, which since PR-5 runs in the `test-root` mode against a fake root of its own. Since PR-5 the dashboard shows the per-game state in [the Game plugin card](#the-game-plugin-card). The developer procedure in [manual plugin setup](manual-plugin-setup.md) stays the way to put the DLL into a game during development. No game, TruckersMP or performance claim follows from the bundle, discovery or the synthetic checks.
 
 ## Bundle format
 
@@ -167,7 +167,7 @@ An empty variable counts as unset, as for the profile override in main. The opt-
 
 - **test-root.** The root must hold the marker file `ets2telemetry-plugin-test-root.marker` as a regular file that is not a link; the harness that builds the fake root creates it. The setup run checks it once, through the confinement, before it reads or writes anything. Without it setup turns off for that application run (`PLUGIN_SETUP_MODE_REJECTED {reason: 'no-marker'}`, then `PLUGIN_SETUP_MODE {mode: 'disabled', reason: 'root-rejected'}`), the view's mode becomes `disabled` and the folder choice is refused with `SETUP_DISABLED`. A marker was chosen over requiring a folder inside `%TEMP%` because the runtime smokes keep their fake roots in the worktree's `.local\ci`. The Steam root is `<root>\Steam`. Nothing reads the Windows registry or runs PowerShell. The install registry is `<root>\LocalAppData\ETS2Telemetry\plugins\setup.json`, so every path setup writes lies inside the root. Every game-folder operation and every write of the install registry goes through a confinement: the path it names, its real location through any junction or symbolic link in an existing ancestor (and in its final component when the operation follows it) and every path `realpath` returns must lie inside the root. Anything else is refused before the real call as a missing path, so discovery and the installer ignore it, and the run logs `PLUGIN_TEST_ROOT_ESCAPE {count}`. A folder chosen in the dialog outside the root is refused as `FOLDER_UNSUPPORTED_PATH`. The running-game check is the real `tasklist`, which only reads.
 - **disabled.** No registry read, no bundle read, no discovery, no timer and no write. Retry and the exclusion switch answer the unchanged view, and the folder dialog is refused with `SETUP_DISABLED` before it opens.
-- Existing harnesses all land in disabled: the runtime smokes, the Playwright startup test, the native installer acceptance and the VM harness set a profile and a diagnostic directory, the `main-boundaries` unit fixture sets `ETS2TELEMETRY_SOURCE_KIND`, and `npm run dev` is unpackaged. The Squirrel lifecycle hooks quit before main constructs plugin setup. `tests/unit/plugin-setup-mode.test.ts` checks each of these environments.
+- Existing harnesses all land in disabled, except the `plugin` smoke scenario, which since PR-5 sets a test root of its own ([plugin smoke](#the-plugin-smoke-scenario)): the runtime smokes, the Playwright startup test, the native installer acceptance and the VM harness set a profile and a diagnostic directory, the `main-boundaries` unit fixture sets `ETS2TELEMETRY_SOURCE_KIND`, and `npm run dev` is unpackaged. The Squirrel lifecycle hooks quit before main constructs plugin setup. `tests/unit/plugin-setup-mode.test.ts` checks each of these environments.
 
 ## Setup run
 
@@ -242,6 +242,52 @@ Five invoke channels serve the trusted dashboard main frame only; the overlay an
 - **Open game plugins folder.** Main validates the listed folder again and opens its `bin\win_x64\plugins` folder with `shell.openPath` whenever that is a plain folder (also when it holds an unexpected entry, such as a folder with the plugin's name), or `bin\win_x64` when `plugins` is absent, a file or a link. An unknown id or a folder that is now linked or no longer a game opens nothing.
 
 The sixth channel of P16, `diagnostics:export`, is not registered yet: it comes with the diagnostic bundle in PR-6, together with its result type, so no renderer-reachable stub exists meanwhile.
+
+## The Game plugin card
+
+Implemented in PR-5 (P18) as `apps/desktop/src/plugin-setup-card.tsx` on the Live tab, right after the Application status card. It is deliberately minimal and functional; the visual design follows the owner's mockups later. It is built only from the shadcn components in `apps/desktop/src/components/ui` (Card, Badge, Button, Switch, Label and Alert), and the overlay is untouched. All text comes from `apps/desktop/src/strings.ts` through the pure builder `apps/desktop/src/plugin-setup-text.ts`, which has a fixed text for every mode, discovery outcome, folder state, block reason, folder refusal and call answer.
+
+The card shows:
+
+- **Mode.** A note in the `disabled` and `test-root` modes; nothing in the `active` mode.
+- **Bundle.** The bundled plugin's version and the first 12 hex digits of its SHA-256, or "not checked yet".
+- **Run.** "Checking the game folders…" while a setup run is in progress.
+- **Each game.**
+  - A "Manage the plugin for this game" switch. Switching it off calls `setPluginGameExcluded(game, true)`; switching it on includes the game again.
+  - The discovery outcome, the chosen folder's state and the count of unlisted Steam folders. In the `disabled` mode, which never searches, the discovery note is "Not searched in this launch." instead of "Looking for the game…".
+  - Each listed folder by its label: "Steam folder N", where N is its position among the game's Steam folders from 1, or "Chosen folder". After the label come its state as a badge and lines for the reason, the installed version of a plugin that is not current, and the last problem when it differs from the reason.
+  - "Choose game folder…".
+- **Manual copy (P12).** For `PERMISSION_DENIED`, `READ_ONLY_FILE` and `UNRECOGNIZED_FILE` the folder adds the manual-copy hint and two buttons, "Show plugin file" and "Open game plugins folder".
+- **Retry.** One Retry button for the whole card.
+- **Answers.** The answer of the last call appears as one status line: a fixed text for a saved, cancelled or refused folder choice, for a shown or unavailable plugin file, and "The request failed; nothing changed." for a rejected call.
+
+A locked file (`TARGET_LOCKED`) shows only its automatic-retry text, because setup tries it again by itself.
+
+In the `disabled` mode the switches, the folder buttons and Retry are disabled, because they would change nothing. The `scaffold` runtime smoke, which runs disabled with a rendered dashboard, asserts the disabled-mode note and that the five controls are disabled, and `RuntimeReceipt.ps1` requires that evidence (`pluginCard`) and one `PLUGIN_SETUP_MODE` row with `disabled`.
+
+The card never shows a path: the view carries none, and the folder labels use only the source and position. A renderer that only shows the pushed view cannot reveal one; the `plugin` smoke checks the card's text for the fixture root and for drive and UNC paths.
+
+### The plugin smoke scenario
+
+Since PR-5 the `plugin` runtime smoke scenario (`Invoke-RuntimeSmoke.ps1 -Scenario plugin`) runs the application in the `test-root` mode. Review round 1 of PR-5 moved the journey out of the `lifecycle` smoke, which is back in its PR-4 shape, so that the gating packaged lifecycle step keeps its 60 s Job. The `plugin` scenario has its own Job of 120 s. CI runs the packaged `plugin` smoke on pull requests and the development one on pushes to `main` and dispatches, like the other development smokes. Before run A, `scripts/ci/plugin-fixture.mjs` first fails loudly if `tasklist` lists `eurotrucks2.exe`, `amtrucks.exe` or a `truckersmp*` process. It then builds `<run output>\plugin-root` with:
+
+- the marker file;
+- `Steam`, whose library list names LibraryA and LibraryB;
+- ETS2 in LibraryA, whose plugins folder holds an unrelated DLL and a text file;
+- ATS in LibraryB, without a plugins folder;
+- a manual ETS2 folder holding an unrecognized file with the plugin's name. The smoke cannot click the folder dialog, so the fixture seeds the install registry with that folder.
+
+Nothing reads the Windows registry or touches a real Steam or game folder.
+
+- **Run A.** The launch run must reach:
+  - in `AppState.plugins`, installed for both Steam folders and blocked with `UNRECOGNIZED_FILE` for the manual folder;
+  - in the card, Installed / Blocked / Installed, with no path in its text.
+
+  Both installed DLLs must have the bundled manifest's SHA-256. The driver records the phase `plugin-run-a-settled`. The unrelated DLL, the text file and the unrecognized file must keep their bytes and modification times. The smoke then clicks the ATS switch in the card. ATS must become excluded, its plugin must be removed together with the plugins folder created for it, and every other file must stay unchanged (phase `plugin-excluded`). Run A then exits orderly.
+- **Run B.** The restart must reach the same states, with ATS excluded, and write nothing: every fixture file, the install registry included, keeps its bytes and modification time. Its `PLUGIN_ACTION` rows may only be `unchanged`, `blocked` or `absent` (phase `plugin-run-b-settled`), and it exits orderly.
+- **Logs.** Both runs log `PLUGIN_SETUP_MODE` with `test-root` and no `PLUGIN_TEST_ROOT_ESCAPE`. `RuntimeReceipt.ps1` requires the journey's flags, both orderly exits and these rows.
+
+The evidence names files by fixed labels and hashes only, never by path. A fixture file-system failure is reported as a fixed `PLUGIN_FIXTURE_<step>` error (`BUILD`, `BUNDLE` or `SNAPSHOT`) with the error code only.
 
 ## Install registry
 
@@ -395,4 +441,6 @@ See [TESTING.md](../TESTING.md#et-017-plugin-setup--october-17-2026) and [ET-017
 
 PR-3's installer and registry tests write only into fake game roots and a fake registry folder under that guarded root. They inject failures by wrapping the guarded file operations. Their real-system cases hold a real sharing lock from a Windows PowerShell child and deny file creation on the temporary `plugins` folder with `icacls`, removing that deny afterwards. `npm run test:plugin-lock` (`tests/integration/plugin-image-lock.test.ts`) loads the tests-only fake SDK host, named `eurotrucks2.exe`, with the test plugin DLL from a fake root. With a lister that wrongly reports no running game, an update and a removal end as `TARGET_LOCKED` and the DLL keeps its bytes. With the real `tasklist` lister, both stop at `GAME_RUNNING` before any file operation. The test first requires that no ETS2, ATS or TruckersMP process runs.
 
-PR-4's orchestrator tests (`tests/unit/plugin-setup.test.ts`) run the setup in the test-root mode on the same guarded root, with a fake running-game lister and fake `setTimeout`; the confinement must refuse a library and a junction outside the root before the guarded file system sees them. The mode gate (`tests/unit/plugin-setup-mode.test.ts`) and the bundle reader (`tests/unit/plugin-bundle.test.ts`) are tested without a game, and `tests/unit/main-boundaries.test.ts` checks main's channels against a fake orchestrator. Every runtime smoke, the Playwright startup test and the installer harnesses run in the disabled mode; their main logs show `PLUGIN_SETUP_MODE` with `mode: 'disabled'`.
+PR-4's orchestrator tests (`tests/unit/plugin-setup.test.ts`) run the setup in the test-root mode on the same guarded root, with a fake running-game lister and fake `setTimeout`; the confinement must refuse a library and a junction outside the root before the guarded file system sees them. The mode gate (`tests/unit/plugin-setup-mode.test.ts`) and the bundle reader (`tests/unit/plugin-bundle.test.ts`) are tested without a game, and `tests/unit/main-boundaries.test.ts` checks main's channels against a fake orchestrator. Every runtime smoke except the `plugin` scenario, the Playwright startup test and the installer harnesses run in the disabled mode; their main logs show `PLUGIN_SETUP_MODE` with `mode: 'disabled'`.
+
+PR-5's card texts are checked by `tests/unit/plugin-setup-text.test.ts` with a hand-written text for every state and reason. The card itself is checked in the running application by the [plugin smoke](#the-plugin-smoke-scenario), in the test-root mode against its own fake root, and in the disabled mode by the scaffold smoke. The repository has no component-rendering unit tests, so no separate renderer unit test was added.

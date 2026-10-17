@@ -17,6 +17,7 @@ import {
   verifyRendererStyles
 } from './overlay-observation.mjs';
 import {runLifecycleSmoke, seedLifecycleSettings, verifyLifecycleRestart} from './lifecycle-observation.mjs';
+import {assertNoGameRunning, buildPluginFixture, runPluginJourney, snapshotPluginFixture, verifyDisabledPluginCard, verifyPluginEvents, verifyPluginRestart} from './plugin-fixture.mjs';
 import {RECORDING_TARGET, runRecordingSmoke, startRecordingSource, verifyRecordingRestart, verifyRecordingRun} from './recording-observation.mjs';
 import {JOURNAL_TARGET, runJournalEmpty, runJournalExport, runJournalSeeded, seedJournalDatabase, verifyJournalRun} from './journal-observation.mjs';
 // These read-only globals are used only inside serialized Playwright browser callbacks.
@@ -24,7 +25,7 @@ import {JOURNAL_TARGET, runJournalEmpty, runJournalExport, runJournalSeeded, see
 
 const [configFile] = process.argv.slice(2);
 const config = JSON.parse((await readFile(configFile, 'utf8')).replace(/^\uFEFF/, ''));
-const result = {scenario: config.scenario === 'journal' ? 'SYNTHETIC-JOURNAL-UI / partial REG-009, REG-014, REG-017' : config.scenario === 'recording' ? 'V1 SYNTHETIC-RECORDING-JOURNEY / partial REG-006, REG-012, REG-017' : config.scenario === 'lifecycle' ? 'V0 TRAY-LIFECYCLE-SETTINGS / partial REG-009, REG-011, REG-012, REG-017' : config.scenario === 'overlay' ? 'V0 HIDDEN-OVERLAY-PROJECTION / partial REG-009, REG-011, REG-017' : config.scenario === 'telemetry' ? 'V0 SOURCE-RENDERER-RECOVERY / partial REG-003, REG-010, REG-011, REG-017' : 'SCAFFOLD-WORKER / partial REG-011, REG-017', passed: false,
+const result = {scenario: config.scenario === 'plugin' ? 'PLUGIN-SETUP-TEST-ROOT / partial REG-015, REG-017' : config.scenario === 'journal' ? 'SYNTHETIC-JOURNAL-UI / partial REG-009, REG-014, REG-017' : config.scenario === 'recording' ? 'V1 SYNTHETIC-RECORDING-JOURNEY / partial REG-006, REG-012, REG-017' : config.scenario === 'lifecycle' ? 'V0 TRAY-LIFECYCLE-SETTINGS / partial REG-009, REG-011, REG-012, REG-017' : config.scenario === 'overlay' ? 'V0 HIDDEN-OVERLAY-PROJECTION / partial REG-009, REG-011, REG-017' : config.scenario === 'telemetry' ? 'V0 SOURCE-RENDERER-RECOVERY / partial REG-003, REG-010, REG-011, REG-017' : 'SCAFFOLD-WORKER / partial REG-011, REG-017', passed: false,
   scenarioKind: config.scenario ?? 'scaffold',
   commit: config.commit, mode: config.mode, node: process.versions, expected: {
     status: {service: 'ready', storage: 'verified', synthetic: true}, exit: 0, probesAfterExit: []},
@@ -41,6 +42,9 @@ let telemetrySourceV1;
 let recordingSource;
 // ET-016 PR-4: the journal scenario's second run opens its seeded synthetic database (journal-observation.mjs).
 let journalTarget;
+// ET-017 PR-5: the plugin scenario's fake Steam and game folders (plugin-fixture.mjs) and the snapshot run A compares against.
+let pluginFixture;
+let pluginBefore;
 const failure = error => ({name: error.name, message: error.message, stack: error.stack});
 // Driver timeline on its own wall and monotonic clocks, to align with app diagnostics and the Job CPU series.
 result.phases = [];
@@ -79,7 +83,9 @@ const environment = diagnostics => ({...process.env, TEMP: config.temp, TMP: con
   ...(telemetrySource ? {ETS2TELEMETRY_LIVE_SMOKE: '1', ETS2TELEMETRY_SOURCE_KIND: 'synthetic', ETS2TELEMETRY_SOURCE_PIPE: telemetrySource.endpoint} : {}),
   ...(telemetrySourceV1 ? {ETS2TELEMETRY_SOURCE_PIPE_V1: telemetrySourceV1.endpoint} : {}),
   ...(recordingSource ? {ETS2TELEMETRY_SOURCE_PIPE_V1: recordingSource.endpoint, ETS2TELEMETRY_RECORDING: RECORDING_TARGET} : {}),
-  ...(journalTarget ? {ETS2TELEMETRY_RECORDING: journalTarget} : {})});
+  ...(journalTarget ? {ETS2TELEMETRY_RECORDING: journalTarget} : {}),
+  // ET-017 PR-5: the test-root mode, confined to the fake root inside this run's isolated output folder.
+  ...(pluginFixture ? {ETS2TELEMETRY_PLUGIN_SETUP_ROOT: pluginFixture.root} : {})});
 const launchOptions = diagnostics => ({timeout: 20000, cwd: config.cwd,
   ...(config.mode === 'packaged' ? {executablePath: config.executable, args: config.forceRendererProcessReuse ? ['--renderer-process-limit=1'] : []} :
     {args: [config.checkout, ...(config.forceRendererProcessReuse ? ['--renderer-process-limit=1'] : [])]}),
@@ -95,6 +101,8 @@ try {
   if (config.scenario === 'recording') recordingSource = await startRecordingSource(config);
   // ET-011b: the lifecycle journey starts from a deliberately invalid settings file in the isolated LOCALAPPDATA.
   if (config.scenario === 'lifecycle') await seedLifecycleSettings(config);
+  // ET-017 PR-5: the plugin journey never runs beside a real game, and only against its fake root.
+  if (config.scenario === 'plugin') {assertNoGameRunning(); pluginFixture = await buildPluginFixture(config.output); pluginBefore = await snapshotPluginFixture(pluginFixture);}
   phase('launch-requested');
   application = await electron.launch(launchOptions(config.diagnostics));
   launcher = application.process();
@@ -145,6 +153,9 @@ try {
     });
     assert.deepEqual(result.journal, {answer: {ok: true, value: {database: {purpose: 'history', schemaVersion: 2}, trips: [], nextCursor: null}},
       refused: 'Invalid journal request'});
+    // ET-017 PR-5 review: plugin setup is disabled here; the card says so and disables every control that would change nothing.
+    result.pluginCard = await verifyDisabledPluginCard(window);
+    await window.evaluate(() => globalThis.scrollTo(0, 0));
   }
   result.probesBeforeExit = (await readdir(config.temp)).filter(name => name.startsWith('ets2telemetry-probe-'));
   assert.equal(result.probesBeforeExit.length, 1);
@@ -418,8 +429,32 @@ try {
     phase('journal-exported');
     await dashboard.screenshot({path: path.join(config.output, 'journal.png')});
   }
+  if (config.scenario === 'plugin') {
+    // ET-017 PR-5: run A installs into the fake folders, shows the card and excludes ATS through the card's switch, then
+    // exits orderly; run B, a restart with the same profile, must reach the same states without writing. The shared close
+    // path below owns run B.
+    result.plugin = {};
+    await runPluginJourney({dashboard: window, fixture: pluginFixture, config, before: pluginBefore, record: result.plugin, phase});
+    tracing = false; await application.context().tracing.stop({path: path.join(config.output, 'trace.zip')}); phase('tracing-stopped');
+    try {
+      await Promise.race([application.close(), new Promise((_, reject) => {timer = setTimeout(() => reject(new Error('APP_CLOSE_TIMEOUT_8_SECONDS')), 8000);})]);
+    } finally {clearTimeout(timer);}
+    result.plugin.runAExit = launcher.exitCode;
+    assert.deepEqual({launcherExit: launcher.exitCode, signal: launcher.signalCode}, {launcherExit: 0, signal: null});
+    application = undefined; phase('plugin-run-a-exited');
+    // Run B must write nothing: every fixture file keeps the bytes and modification time run A left.
+    assertNoGameRunning();
+    const afterRunA = await snapshotPluginFixture(pluginFixture);
+    application = await electron.launch(launchOptions(config.diagnosticsRestart));
+    launcher = application.process(); phase('restart-launch-returned');
+    const {dashboard} = await rendererPages(application);
+    await dashboard.getByText('Telemetry service ready; isolated storage probe verified', {exact: true}).waitFor({state: 'visible', timeout: 10000});
+    phase('restart-ready');
+    await verifyPluginRestart({dashboard, fixture: pluginFixture, before: afterRunA, record: result.plugin, phase});
+    await dashboard.screenshot({path: path.join(config.output, 'plugin.png')});
+  }
   phase('journey-complete');
-  if (config.scenario !== 'lifecycle' && config.scenario !== 'recording' && config.scenario !== 'journal') await window.screenshot({path: path.join(config.output, 'ready.png')});
+  if (config.scenario !== 'lifecycle' && config.scenario !== 'recording' && config.scenario !== 'journal' && config.scenario !== 'plugin') await window.screenshot({path: path.join(config.output, 'ready.png')});
 } catch (error) {result.failure = failure(error); phase('failed');}
 finally {
   try {await telemetrySource?.stop();} catch (error) {result.sourceCloseFailure = failure(error);}
@@ -501,6 +536,22 @@ finally {
       assert.deepEqual(lifecycle.settingsEvents.runB, [...late(lifecycle.settingsEvents.runB), {event: 'SETTINGS_LOADED', facts: {state: 'loaded'}}]);
       lifecycle.restartLauncherExit = result.launcherExit;
       lifecycle.shutdownClean = true;
+    }
+    if (config.scenario === 'plugin') {
+      // ET-017 PR-5: both runs exit orderly in the test-root mode with nothing refused outside the root; run B changes no folder.
+      const plugin = result.plugin ??= {};
+      plugin.restartMainEvents = await diagnosticEvents(config.diagnosticsRestart);
+      plugin.restartServiceEvents = await diagnosticEvents(path.join(config.diagnosticsRestart, 'service'));
+      plugin.restartLauncherExit = result.launcherExit;
+      for (const name of ['APP_EXIT', 'SERVICE_EXIT']) {
+        const rows = plugin.restartMainEvents.filter(row => row.event === name);
+        assert.equal(rows.length, 1); assert.equal(rows[0].detail.code, 0);
+      }
+      assert.ok(!plugin.restartMainEvents.some(row => /FAILED|TIMEOUT|UNCAUGHT|UNHANDLED|INVALID|RENDER_PROCESS_GONE/.test(row.event)));
+      plugin.actions = {runA: verifyPluginEvents(result.mainEvents), runB: verifyPluginEvents(plugin.restartMainEvents)};
+      assert.ok(plugin.actions.runB.length > 0 && plugin.actions.runB.every(facts => ['unchanged', 'blocked', 'absent'].includes(facts.outcome)),
+        'Run B changed a game folder');
+      plugin.pluginEventsVerified = true;
     }
     if (config.scenario === 'journal') {
       // ET-016 PR-4: run 1 created and closed the history database (checked below); run 2 opened only the synthetic one.

@@ -26,6 +26,7 @@ const cases = [
   {name: 'telemetry receipt missing scenario', body: JSON.stringify({passed: true, commit: 'candidate', mode: 'packaged'}), scenario: 'telemetry', code: 0, available: true, reason: 'DRIVER_RESULT_SCENARIO_MISMATCH'},
   {name: 'matching telemetry scenario', body: JSON.stringify({passed: true, commit: 'candidate', mode: 'packaged', scenarioKind: 'telemetry'}), scenario: 'telemetry', code: 0, available: true, reason: null},
   ...lifecycleCases(),
+  ...pluginCases(),
   ...recordingCases(),
   ...journalCases()
 ];
@@ -74,6 +75,59 @@ function lateLifecycleReceipt(corrupt?: LateCorruption): string {
   value.mainEvents.splice(4, 0, pendingRow()); value.lifecycle.restartMainEvents.splice(3, 0, pendingRow());
   corrupt?.(value);
   return JSON.stringify(value);
+}
+// ET-017 PR-5: the plugin scenario's receipt and the scaffold receipt's disabled plugin card. One intact receipt each,
+// then single-field corruptions that must each fail.
+function corrupt(value: Json, path: (string | number)[], replacement?: Json): string {
+  if (path.length) {
+    let target = value as Record<string | number, Json>;
+    for (const key of path.slice(0, -1)) target = target[key] as Record<string | number, Json>;
+    const last = path.at(-1)!;
+    if (replacement === undefined) delete target[last]; else target[last] = replacement;
+  }
+  return JSON.stringify(value);
+}
+function pluginReceipt(path: (string | number)[] = [], replacement?: Json): string {
+  const orderlyMain = (): Json[] => [{event: 'APP_EXIT', detail: {code: 0}}, {event: 'SERVICE_EXIT', detail: {code: 0}}];
+  const orderlyService = (): Json[] => [{event: 'STORAGE_VERIFIED'}, ...['ingestion', 'capture', 'storage-probe'].map(name => ({event: 'SHUTDOWN_STEP', facts: {name, outcome: 'ok'}})),
+    {event: 'SERVICE_REPORT', detail: {type: 'stopped', clean: true}}];
+  const testRoot = (): Json => ({event: 'PLUGIN_SETUP_MODE', facts: {mode: 'test-root', reason: null}});
+  return corrupt({passed: true, commit: 'candidate', mode: 'packaged', scenarioKind: 'plugin', launcherExit: 0, probesAfterExit: [],
+    mainEvents: [...orderlyMain(), testRoot()], serviceEvents: orderlyService(),
+    plugin: {pluginSteamInstalled: true, pluginUnrelatedUnchanged: true, pluginUnrecognizedUnchanged: true, pluginCardShown: true, pluginNoPathShown: true,
+      pluginExclusionRemoved: true, pluginRestartStates: true, pluginRestartUnchanged: true, pluginEventsVerified: true, runAExit: 0, restartLauncherExit: 0,
+      restartMainEvents: [...orderlyMain(), testRoot()], restartServiceEvents: orderlyService()}}, path, replacement);
+}
+function scaffoldReceipt(path: (string | number)[] = [], replacement?: Json): string {
+  return corrupt({passed: true, commit: 'candidate', mode: 'packaged', scenarioKind: 'scaffold',
+    mainEvents: [{event: 'PLUGIN_SETUP_MODE', facts: {mode: 'disabled', reason: 'isolated-launch'}}],
+    pluginCard: {disabledNoteShown: true, controlsDisabled: true}}, path, replacement);
+}
+function pluginCases() {
+  const invalidPlugin = (name: string, path: (string | number)[], replacement?: Json) =>
+    ({name: `plugin ${name}`, body: pluginReceipt(path, replacement), scenario: 'plugin', code: 0, available: true, reason: 'PLUGIN_RESULT_INCOMPLETE_OR_INVALID'});
+  const invalidScaffold = (name: string, path: (string | number)[], replacement?: Json) =>
+    ({name: `scaffold ${name}`, body: scaffoldReceipt(path, replacement), scenario: 'scaffold', code: 0, available: true, reason: 'SCAFFOLD_PLUGIN_CARD_INVALID'});
+  return [
+    {name: 'intact plugin receipt', body: pluginReceipt(), scenario: 'plugin', code: 0, available: true, reason: null},
+    {name: 'scaffold receipt cannot prove the plugin journey', body: pluginReceipt(['scenarioKind'], 'scaffold'), scenario: 'plugin', code: 0, available: true, reason: 'DRIVER_RESULT_SCENARIO_MISMATCH'},
+    invalidPlugin('journey missing', ['plugin']),
+    invalidPlugin('unrecognized file changed', ['plugin', 'pluginUnrecognizedUnchanged'], false),
+    invalidPlugin('exclusion left the plugin', ['plugin', 'pluginExclusionRemoved'], false),
+    invalidPlugin('restart wrote', ['plugin', 'pluginRestartUnchanged'], false),
+    invalidPlugin('card showed a path', ['plugin', 'pluginNoPathShown'], 'true'),
+    invalidPlugin('run A exited nonzero', ['plugin', 'runAExit'], 1),
+    invalidPlugin('run B exited nonzero', ['plugin', 'restartLauncherExit'], 1),
+    invalidPlugin('run A not in the test-root mode', ['mainEvents', 2, 'facts', 'mode'], 'disabled'),
+    invalidPlugin('run B not in the test-root mode', ['plugin', 'restartMainEvents', 2], {event: 'PLUGIN_SETUP_MODE', facts: {mode: 'disabled', reason: 'isolated-launch'}}),
+    invalidPlugin('path refused outside the root', ['mainEvents', 3], {event: 'PLUGIN_TEST_ROOT_ESCAPE', facts: {count: 1}}),
+    invalidPlugin('run B unclean service stop', ['plugin', 'restartServiceEvents', 4, 'detail', 'clean'], false),
+    {name: 'intact scaffold receipt with the disabled plugin card', body: scaffoldReceipt(), scenario: 'scaffold', code: 0, available: true, reason: null},
+    invalidScaffold('card evidence missing', ['pluginCard']),
+    invalidScaffold('disabled note not shown', ['pluginCard', 'disabledNoteShown'], false),
+    invalidScaffold('a control left enabled', ['pluginCard', 'controlsDisabled'], false),
+    invalidScaffold('not in the disabled mode', ['mainEvents', 0, 'facts', 'mode'], 'test-root')
+  ];
 }
 function lifecycleCases() {
   const invalid = (name: string, path: (string | number)[], replacement?: Json) =>
