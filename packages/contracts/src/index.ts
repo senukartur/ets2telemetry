@@ -1,7 +1,8 @@
 // Scaffold status only. The telemetry wire protocol belongs to ET-002a.
 export interface ScaffoldStatus { service: 'ready'; storage: 'verified'; synthetic: true }
 import type {CurrentState, SourceIdentity, AppliedState, CaptureTime} from './protocol-v0';
-import type {AppState, OverlayEditState, OverlayLayout, OverlaySectionId, OverlaySections, RecordingCode, SettingsView, UnitGame, UnitProfile} from './app-state';
+import type {AppState, OverlayEditState, OverlayLayout, OverlaySectionId, OverlaySections, PluginFolderChoice, PluginGame, PluginSetupView, PluginShowFileResult, RecordingCode, SettingsView,
+  UnitGame, UnitProfile} from './app-state';
 import type {Available, LiveObservationV1, Uint64} from './protocol-v1';
 import type {JournalDatabase, JournalEventPage, JournalIntervalPage, JournalTripDetail, JournalTripPage, JournalTripsQuery} from './journal';
 import type {JournalExportResult} from './journal-export';
@@ -87,6 +88,28 @@ export interface DesktopBridge {
    * or a fixed refusal code; never a path. One export runs at a time.
    */
   exportJournalTrip(tripUuid: string): Promise<JournalExportResult>;
+  /**
+   * ET-017 (P13, P16): runs plugin setup again now and resolves with the plugin state after that run. Refused while the
+   * application exits. In the disabled mode it changes nothing and resolves with the current state.
+   */
+  retryPluginSetup(): Promise<PluginSetupView>;
+  /**
+   * Opens main's folder dialog for one game's folder. A chosen folder is validated and stored, replacing an earlier one,
+   * and setup runs again; a cancelled dialog writes nothing. Never returns a path.
+   */
+  choosePluginFolder(game: PluginGame): Promise<PluginFolderChoice>;
+  /**
+   * Excludes or includes one game. Excluding removes this application's plugin from that game's folders when it is safe;
+   * including installs it again. Resolves with the plugin state after the setup run.
+   */
+  setPluginGameExcluded(game: PluginGame, excluded: boolean): Promise<PluginSetupView>;
+  /**
+   * Shows the verified bundled plugin file in Explorer, for a manual copy into a protected folder (P12). Main checks the
+   * file again just before; `BUNDLE_UNAVAILABLE` when it is not verified, missing or a link.
+   */
+  showPluginFile(): Promise<PluginShowFileResult>;
+  /** Opens one listed game folder's plugins folder in Explorer, or its `bin\win_x64` folder when that is absent (P12). */
+  openPluginFolder(targetId: string): Promise<void>;
 }
 /**
  * The fixed refusal codes of a journal call (ET-016, J11). `SERVICE_UNAVAILABLE`: no ready telemetry service, or it is

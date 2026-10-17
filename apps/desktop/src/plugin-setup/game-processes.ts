@@ -7,7 +7,12 @@ import {nodeExecFile, runFixedProgram, systemRoot, type ExecFilePort} from './fi
 // RUNNING_CHECK_FAILED, and the caller then changes nothing. Matching by name is conservative: a process with the same
 // name from another folder also blocks (TD-010 records path-aware detection).
 
-export const TASKLIST_TIMEOUT_MS = 3000;
+/**
+ * The listing's deadline. 3 s proved too short on a loaded machine (the full parallel test suite timed tasklist out
+ * while a standalone run took 0.6 s), which blocked setup with RUNNING_CHECK_FAILED; 10 s is still bounded and leaves
+ * room inside the 30 s setup run, which the poll retries after a failed listing.
+ */
+export const TASKLIST_TIMEOUT_MS = 10_000;
 export const TASKLIST_MAX_OUTPUT_BYTES = 1024 * 1024;
 export const GAME_PROCESS_NAMES: Readonly<Record<PluginGame, string>> = Object.freeze({ets2: 'eurotrucks2.exe', ats: 'amtrucks.exe'});
 /** Any image name starting with this prefix is a TruckersMP client process and blocks both games. */

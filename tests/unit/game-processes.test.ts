@@ -1,6 +1,6 @@
 import {describe, expect, it} from 'vitest';
 import type {ExecFilePort} from '../../apps/desktop/src/plugin-setup/fixed-program';
-import {blockingProcess, checkRunningGames, listProcesses, parseTasklistCsv, runningGames} from '../../apps/desktop/src/plugin-setup/game-processes';
+import {blockingProcess, checkRunningGames, listProcesses, parseTasklistCsv, runningGames, TASKLIST_TIMEOUT_MS} from '../../apps/desktop/src/plugin-setup/game-processes';
 
 // REG-015 (ET-017 P7): running-game detection before a plugin change. CSV fixtures are written by hand in the format
 // of `tasklist /fo csv /nh`; the one real run only lists processes and changes nothing.
@@ -63,11 +63,11 @@ describe('matching', () => {
 });
 
 describe('the fixed tasklist call', () => {
-  it('runs absolute tasklist.exe with fixed arguments, a hidden window, no shell, 3 s and 1 MiB', async () => {
+  it('runs absolute tasklist.exe with fixed arguments, a hidden window, no shell, 10 s and 1 MiB', async () => {
     const {execFile, calls} = stub({stdout: [row('explorer.exe', 10), row('TruckersMP-Launcher.exe', 11)].join('\r\n')});
     expect(await checkRunningGames({execFile, env})).toEqual({ok: true, running: {ets2: false, ats: false, client: true}});
     expect(calls).toEqual([{file: 'C:\\Windows\\System32\\tasklist.exe', args: ['/fo', 'csv', '/nh'],
-      options: {encoding: 'buffer', timeout: 3000, maxBuffer: 1024 * 1024, windowsHide: true, shell: false}}]);
+      options: {encoding: 'buffer', timeout: 10_000, maxBuffer: 1024 * 1024, windowsHide: true, shell: false}}]);
   });
 
   it.each([
@@ -80,10 +80,14 @@ describe('the fixed tasklist call', () => {
     expect(await checkRunningGames({execFile, env})).toEqual({ok: false, code: 'RUNNING_CHECK_FAILED', reason});
   });
 
+  // A hang guard above TASKLIST_TIMEOUT_MS, so a slow listing on a loaded host fails as the product's own timeout, not as
+  // Vitest's default 5 s case timeout.
+  const REAL_RUN_GUARD_MS = 20_000;
   it.runIf(process.platform === 'win32')('lists its own node.exe in a real run', async () => {
+    expect(REAL_RUN_GUARD_MS).toBeGreaterThan(TASKLIST_TIMEOUT_MS);
     const listing = await listProcesses();
     expect(listing.ok).toBe(true);
     if (!listing.ok) return;
     expect(listing.rows.filter(entry => entry.pid === process.pid).map(entry => entry.name.toLowerCase())).toEqual(['node.exe']);
-  });
+  }, REAL_RUN_GUARD_MS);
 });

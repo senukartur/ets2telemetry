@@ -237,7 +237,17 @@ The ET-006a candidate extends npm run build to configure and compile the fixed n
 
 ## ET-017 plugin bundle
 
-Since ET-017 PR-1 (October 17, 2026), `npm run build` also builds the game plugin and stages it for packaging: `scripts/stage-native-plugin.mjs` runs after the native broker build, configures `native/telemetry-plugin/build` with `-A x64` only when that tree has no `CMakeCache.txt`, builds the `ets2telemetry-plugin` target in Release and writes the DLL with a strict `plugin-manifest.json` to ignored `.local/package-native/telemetry-plugin`. Keep the documented CMake toolchain on PATH for `build`, `package` and `make`. Forge copies the directory to `resources/telemetry-plugin` beside `resources/telemetry-client`, and `npm run inspect:package` verifies the manifest, the x64 DLL bytes against the local Release build, the current plugin sources and the tracked `native/telemetry-plugin/released-plugins.json`. The application does not read the bundle yet and installs nothing into a game. See [game plugin setup](plugin-setup.md#bundle-format).
+Since ET-017 PR-1 (October 17, 2026), `npm run build` also builds the game plugin and stages it for packaging: `scripts/stage-native-plugin.mjs` runs after the native broker build, configures `native/telemetry-plugin/build` with `-A x64` only when that tree has no `CMakeCache.txt`, builds the `ets2telemetry-plugin` target in Release and writes the DLL with a strict `plugin-manifest.json` to ignored `.local/package-native/telemetry-plugin`. Keep the documented CMake toolchain on PATH for `build`, `package` and `make`. Forge copies the directory to `resources/telemetry-plugin` beside `resources/telemetry-client`, and `npm run inspect:package` verifies the manifest, the x64 DLL bytes against the local Release build, the current plugin sources and the tracked `native/telemetry-plugin/released-plugins.json`. See [game plugin setup](plugin-setup.md#bundle-format).
+
+Since ET-017 PR-4 a packaged application reads that bundle and silently installs the plugin into the ETS2 and ATS folders it finds through Steam ([setup run](plugin-setup.md#setup-run)). Two environment variables, read once at startup, control it ([mode gate](plugin-setup.md#mode-gate)):
+
+| Variable | Effect |
+| --- | --- |
+| `ETS2TELEMETRY_PLUGIN_SETUP=off` (or any other value than exactly `real`) | Disables plugin setup in any launch; a differently cased or misspelled value disables it too |
+| `ETS2TELEMETRY_PLUGIN_SETUP=real` | Enables it in an unpackaged (development) launch, which otherwise stays disabled; it has no effect together with a profile, diagnostic, live-smoke or source override |
+| `ETS2TELEMETRY_PLUGIN_SETUP_ROOT=<absolute folder>` | With an absolute `ETS2TELEMETRY_PROFILE_DIR` only: the test-root mode, confined to that folder, with `<root>\Steam` as the Steam folder and `<root>\LocalAppData\ETS2Telemetry\plugins\setup.json` as the install registry. The root must hold the marker file `ets2telemetry-plugin-test-root.marker`. Without a profile directory or the marker, or with a relative root or a bare drive, setup is disabled |
+
+Every launch with `ETS2TELEMETRY_PROFILE_DIR`, `ETS2TELEMETRY_DIAGNOSTIC_DIR`, `ETS2TELEMETRY_LIVE_SMOKE` or `ETS2TELEMETRY_SOURCE_KIND` and no test root, and every `npm run dev` without `ETS2TELEMETRY_PLUGIN_SETUP=real`, is disabled: it reads no registry, discovers no game and writes nothing. Do not set `=real` on a development machine unless the real games' plugin folders may be changed; a developer-copied DLL that differs from the staged bundle shows as an unrecognized file and is left alone.
 
 ## Main-window and overlay renderer styles
 

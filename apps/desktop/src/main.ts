@@ -1,10 +1,11 @@
-import {app, BrowserWindow, dialog, ipcMain, Menu, MessageChannelMain, nativeImage, screen, Tray, utilityProcess, type MessagePortMain, type UtilityProcess, type IpcMainEvent, type IpcMainInvokeEvent} from 'electron';
+import {app, BrowserWindow, dialog, ipcMain, Menu, MessageChannelMain, nativeImage, screen, shell, Tray, utilityProcess, type MessagePortMain, type UtilityProcess, type IpcMainEvent, type IpcMainInvokeEvent} from 'electron';
 import squirrelStartup from 'electron-squirrel-startup';
 import {existsSync, mkdirSync} from 'node:fs';
 import path from 'node:path';
 import type {EventEmitter} from 'node:events';
 import {version} from '../../../package.json';
-import type {AppHealth, AppState, LiveTelemetry, OverlayEditState, OverlayPresentation, OverlaySettings, ScaffoldStatus, SettingsView, SourceSelection, UnitProfiles} from '../../../packages/contracts/src';
+import type {AppHealth, AppState, LiveTelemetry, OverlayEditState, OverlayPresentation, OverlaySettings, PluginFolderChoice, PluginGame, PluginShowFileResult, ScaffoldStatus, SettingsView,
+  SourceSelection, UnitProfiles} from '../../../packages/contracts/src';
 import {SettingsBusyError, SettingsError, SettingsStore, settingsDirectory} from './settings-store';
 import {isUnitGame, isUnitProfile} from './unit-profiles';
 import {processEntrypoint} from './entrypoints';
@@ -33,6 +34,9 @@ import {JOURNAL_CHANNELS, JOURNAL_EXPORT_CHANNEL, journalRequest, type JournalCh
 import {EXPORT_DIALOG_FILTERS, JournalExporter} from './journal-export-writer';
 import {isJournalUuid} from '../../../packages/contracts/src/journal';
 import {TRAY_ICON_REPRESENTATIONS, trayIconPng, type TrayTone} from './tray-icon';
+import {pluginSetupMode} from './plugin-setup/mode';
+import {PluginSetup, PluginSetupError, productionPluginSetupPorts} from './plugin-setup/plugin-setup';
+import {isPluginGame, isPluginTargetId, PLUGIN_CHANNELS} from './plugin-setup-contract';
 
 if (squirrelStartup) app.quit();
 else {
@@ -94,6 +98,13 @@ function runApplication(profileError: unknown): void {
     showSaveDialog: defaultPath => window && !window.isDestroyed()
       ? dialog.showSaveDialog(window, {defaultPath, filters: EXPORT_DIALOG_FILTERS.map(filter => ({name: filter.name, extensions: [...filter.extensions]}))})
       : Promise.resolve({canceled: true})});
+  // ET-017 (P13-P16): silent plugin setup. The mode gate is decided once from the launch environment (P15); the disabled
+  // mode, which every isolated or development launch gets, reads and writes nothing. Changes reach the dashboard through
+  // the existing app:state push.
+  const pluginDecision = pluginSetupMode(process.env, app.isPackaged);
+  const pluginSetup = new PluginSetup({decision: pluginDecision, log, changed: () => pushAppState(),
+    ports: pluginDecision.mode === 'disabled' ? undefined : productionPluginSetupPorts({mainDirectory: __dirname, resourcesPath: process.resourcesPath,
+      packaged: app.isPackaged, localAppData: process.env.LOCALAPPDATA, installDirectory: path.dirname(app.getPath('exe')), log})});
   const upstreamBudget = new RecoveryBudget(), overlayBudget = new RecoveryBudget();
   const dashboardSubscriptions = new LiveSubscriptions(initialLive(), 1);
   // The last projection main published: a non-current projection keeps its shape (ET-012a decision L5).
@@ -137,13 +148,15 @@ function runApplication(profileError: unknown): void {
   const lifecycle = new ExitCoordinator({
     log,
     // A running trip export stops first, so a journal read that the retirement answers ends it as interrupted (J16).
-    begin: () => {exporter.abort(); updateHealth({type: 'exit-requested'}, true); retireLive();},
+    // ET-017: plugin setup stops after its current game folder; no new run, poll or trigger starts.
+    begin: () => {exporter.abort(); pluginSetup.abort(); updateHealth({type: 'exit-requested'}, true); retireLive();},
     stopService: () => supervisor.stop(),
-    // An in-flight settings save and the removal of an interrupted export's partial file may delay the final exit by at
-    // most EXIT_IDLE_BUDGET_MS (1000 ms) together.
+    // An in-flight settings save, the removal of an interrupted export's partial file and the plugin setup run in flight
+    // (which ends with the removal of its temporary file) may delay the final exit by at most EXIT_IDLE_BUDGET_MS
+    // (1000 ms) together.
     idle: () => {
-      const settings = settingsStore.idle(), exported = exporter.idle();
-      return settings && exported ? Promise.all([settings, exported]).then(() => undefined) : settings ?? exported;
+      const pending = [settingsStore.idle(), exporter.idle(), pluginSetup.idle()].filter((work): work is Promise<void> => work !== undefined);
+      return pending.length > 1 ? Promise.all(pending).then(() => undefined) : pending[0];
     },
     destroyTray: () => {trayPresenter?.dispose(); const previous = tray; tray = undefined; previous?.destroy();},
     exit: code => app.exit(code)
@@ -166,7 +179,7 @@ function runApplication(profileError: unknown): void {
     // load failure, recovery timeout, ...): mark the application exiting at once so nothing reopens a window, the
     // overlay may close and the tray shows the exiting state. Exit codes and bounds are unchanged.
     // A running trip export ends as interrupted before it opens a file (J16), also on a fatal stop.
-    stopping: () => {exporter.abort(); if (lifecycle.abort()) {updateHealth({type: 'exit-requested'}, true); retireLive();}},
+    stopping: () => {exporter.abort(); pluginSetup.abort(); if (lifecycle.abort()) {updateHealth({type: 'exit-requested'}, true); retireLive();}},
     // The failed service is being terminated: retire its readiness, status and live channels now rather than when
     // its exit arrives (up to 3000 ms later). The later state callback finds them already retired.
     // A new selection generation also retires a readiness still awaiting its broker or settings, so the failing service
@@ -176,7 +189,7 @@ function runApplication(profileError: unknown): void {
       const update: LiveTelemetry = {...initialLive(selection), status: 'restarting', reason: 'Telemetry service failed; current interval is unknown'};
       freshness.invalidate(update); dashboardSubscriptions.close(); dashboardPort = undefined; window?.webContents.send('telemetry:service-state', update);}
   });
-  function appState(): AppState {return {health: {...health}, settings: settingsStore.view(), overlayEdit};}
+  function appState(): AppState {return {health: {...health}, settings: settingsStore.view(), overlayEdit, plugins: pluginSetup.view()};}
   function pushAppState(): void {if (appStateSubscribed && window && !window.isDestroyed()) window.webContents.send('app:state', appState());}
   function updateHealth(event: HealthEvent, immediate = false): void {
     const next = reduceHealth(health, event);
@@ -629,6 +642,62 @@ function runApplication(profileError: unknown): void {
     if (request.length !== 1 || !isJournalUuid(request[0])) throw new Error('Invalid journal request');
     return exporter.export(request[0]);
   });
+  // ET-017 (P12, P16): five fixed-shape plugin setup channels, from the trusted dashboard main frame only (the overlay is
+  // rejected). Exact argument counts, every argument checked again here, and refused once the exit has started. No reply
+  // carries a path: a game folder is named by its target id, and only main opens the folder dialog, Explorer and folders.
+  function pluginRequest(event: IpcMainInvokeEvent, valid: boolean): void {
+    if (!trusted(event)) throw new Error('Untrusted plugin setup request');
+    if (!valid) throw new Error('Invalid plugin setup request');
+    if (lifecycle.exiting) throw new Error('Plugin setup request was retired');
+  }
+  // Fixed messages only: a rejection never carries an error text that might name a path.
+  const pluginReply = <T>(work: () => Promise<T>): Promise<T> => work().catch((error: unknown) => {
+    throw new Error(error instanceof PluginSetupError ? error.message : 'Plugin setup request failed');
+  });
+  ipcMain.handle(PLUGIN_CHANNELS.retry, (event, ...request: unknown[]) => {
+    pluginRequest(event, request.length === 0);
+    return pluginReply(() => pluginSetup.retry());
+  });
+  // One folder dialog at a time, parented to the dashboard. A cancelled dialog, or an exit that began while it was open,
+  // writes nothing; only a confirmed folder reaches plugin setup, which validates it before storing it.
+  let choosingFolder = false;
+  ipcMain.handle(PLUGIN_CHANNELS.chooseFolder, async (event, ...request: unknown[]): Promise<PluginFolderChoice> => {
+    pluginRequest(event, request.length === 1 && isPluginGame(request[0]));
+    const game = request[0] as PluginGame, owner = window;
+    if (pluginSetup.mode === 'disabled') return {outcome: 'refused', code: 'SETUP_DISABLED'};
+    if (choosingFolder) return {outcome: 'refused', code: 'BUSY'};
+    if (!owner || owner.isDestroyed()) return {outcome: 'cancelled'};
+    choosingFolder = true;
+    try {
+      const selection = await pluginReply(() => dialog.showOpenDialog(owner, {properties: ['openDirectory']}));
+      if (selection.canceled || selection.filePaths.length !== 1 || lifecycle.exiting) return {outcome: 'cancelled'};
+      return await pluginReply(() => pluginSetup.chooseFolder(game, selection.filePaths[0]));
+    } finally {choosingFolder = false;}
+  });
+  ipcMain.handle(PLUGIN_CHANNELS.setExcluded, (event, ...request: unknown[]) => {
+    pluginRequest(event, request.length === 2 && isPluginGame(request[0]) && typeof request[1] === 'boolean');
+    return pluginReply(() => pluginSetup.setExcluded(request[0] as PluginGame, request[1] as boolean));
+  });
+  // Explorer selects the verified bundled DLL, so the driver can copy it into a protected folder by hand (P12). Plugin
+  // setup checks the file again right before (a regular file, not a link); otherwise a fixed code answers.
+  ipcMain.handle(PLUGIN_CHANNELS.showFile, async (event, ...request: unknown[]): Promise<PluginShowFileResult> => {
+    pluginRequest(event, request.length === 0);
+    const file = await pluginReply(() => pluginSetup.bundledFile());
+    if (!file || lifecycle.exiting) return {outcome: 'refused', code: 'BUNDLE_UNAVAILABLE'};
+    shell.showItemInFolder(file);
+    return {outcome: 'shown'};
+  });
+  // Opens a listed folder's plugins folder, or its bin\win_x64 folder when that is absent; the folder is validated again.
+  ipcMain.handle(PLUGIN_CHANNELS.openFolder, async (event, ...request: unknown[]) => {
+    pluginRequest(event, request.length === 1 && isPluginTargetId(request[0]));
+    // Both calls run inside pluginReply, so a throw from either reaches the renderer as the fixed message, never its text.
+    await pluginReply(async () => {
+      const folder = await pluginSetup.folderToOpen(request[0] as string);
+      if (!folder || lifecycle.exiting) return;
+      // shell.openPath answers an error text, which may name the folder; only a fixed code is logged.
+      if (await shell.openPath(folder)) log('PLUGIN_FOLDER_NOT_OPENED');
+    });
+  });
   ipcMain.handle('telemetry:select', async (event, source: unknown) => {
     if (!trusted(event) || !serviceReady) throw new Error('Untrusted source request');
     const next = sourceSelection(source);
@@ -654,5 +723,6 @@ function runApplication(profileError: unknown): void {
     catch (error) {retireOverlay(); port1.close(); port2.close(); log('OVERLAY_SUBSCRIPTION_FAILED', String(error));}
   });
   ipcMain.on('overlay:unsubscribe', event => {if (!trustedOverlay(event)) return; retireOverlay();});
-  app.whenReady().then(() => {if (!lifecycle.exiting) createTray(); startService();}).catch(error => fail('APP_START_FAILED', error));
+  // ET-017 (P13): plugin setup starts 2 s after readiness on its own unreferenced timer; startup never waits for it.
+  app.whenReady().then(() => {if (!lifecycle.exiting) {createTray(); pluginSetup.start();} startService();}).catch(error => fail('APP_START_FAILED', error));
 }

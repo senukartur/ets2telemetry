@@ -129,10 +129,79 @@ export interface SettingsView {
   /** The last save's refusal, cleared by the next successful save. Independent of the service's `lastError`. */
   saveError: SettingsSaveError | null;
 }
+/**
+ * Whether plugin setup runs (ET-017 P15). `active`: it manages the plugin in the real Steam and chosen game folders.
+ * `test-root`: an isolated launch confined to a fake root. `disabled`: no discovery, no registry read and no write.
+ */
+export type PluginSetupMode = 'active' | 'test-root' | 'disabled';
+/** Games whose plugin this application manages. */
+export type PluginGame = 'ets2' | 'ats';
+/**
+ * Why a plugin change for one game folder did not happen or must wait (ET-017 P16). apps/desktop/src/plugin-setup/
+ * plugin-setup.ts asserts at compile time that this equals the installer's codes.
+ */
+export type PluginBlockReason = 'GAME_RUNNING' | 'CLIENT_RUNNING' | 'TARGET_LOCKED' | 'PERMISSION_DENIED' | 'READ_ONLY_FILE' | 'UNRECOGNIZED_FILE'
+  | 'LINKED_FOLDER' | 'DISK_FULL' | 'IO_ERROR' | 'VERIFY_FAILED' | 'RUNNING_CHECK_FAILED' | 'REGISTRY_UNAVAILABLE' | 'BUNDLE_UNAVAILABLE';
+/** How the game was found through Steam; `pending` until the first discovery of this application run finished. */
+export type PluginDiscoveryOutcome = 'pending' | 'found' | 'not-found' | 'steam-not-found' | 'steam-list-invalid';
+/** The game folder the driver chose: none, a valid one, or one that is no longer a valid, separate game folder. */
+export type PluginManualFolderState = 'none' | 'set' | 'invalid';
+/**
+ * One game folder's plugin. `installed`: the bundled plugin is in place. `outdated`: an older plugin of this application
+ * is in place. `missing`: no plugin file. `excluded`: the game is excluded and the folder holds no plugin of this
+ * application. `blocked`: the folder holds something this application cannot change now, or a removal waits. `working`:
+ * a change is in progress. `reason` says why a change did not happen or waits.
+ */
+export type PluginTargetState = 'installed' | 'outdated' | 'missing' | 'excluded' | 'blocked' | 'working';
+/** A plugin file this application recognizes: its version (null when unknown) and the first 12 hex digits of its SHA-256. */
+export interface PluginFileView {version: string | null; sha256Prefix: string}
+/**
+ * One game folder, labelled by its source and ordinal only, never by a path. `id` is `<game>:<source>:<ordinal>` with an
+ * ordinal from 0 to 3; `lastFailure` is the last failure recorded for this folder.
+ */
+export interface PluginTargetView {
+  id: string;
+  source: 'steam' | 'manual';
+  ordinal: number;
+  state: PluginTargetState;
+  reason: PluginBlockReason | null;
+  installed: PluginFileView | null;
+  lastFailure: PluginBlockReason | null;
+}
+export interface PluginGameView {
+  excluded: boolean;
+  discovery: PluginDiscoveryOutcome;
+  manualFolder: PluginManualFolderState;
+  /** At most four game folders. */
+  targets: readonly PluginTargetView[];
+  /**
+   * Steam folders of this game beyond the listed ones (with a chosen folder at most three Steam folders are listed). They
+   * are never installed into; when the game is excluded, this application's plugin is still removed from them.
+   */
+  unlistedFolders: number;
+}
+/** Per-game plugin setup state (ET-017 P16). Fixed codes, versions and hash prefixes only: never a path. */
+export interface PluginSetupView {
+  mode: PluginSetupMode;
+  /** The verified bundled plugin, or null before it was read or when it is unavailable. */
+  bundled: PluginFileView | null;
+  /** True while a setup run is in progress. */
+  running: boolean;
+  games: Readonly<Record<PluginGame, PluginGameView>>;
+}
+/** Why a chosen game folder was not stored. */
+export type PluginFolderRefusal = 'FOLDER_UNSUPPORTED_PATH' | 'FOLDER_NOT_GAME' | 'FOLDER_WRONG_GAME' | 'FOLDER_LINKED' | 'FOLDER_DUPLICATE'
+  | 'SETUP_DISABLED' | 'REGISTRY_UNAVAILABLE' | 'BUSY';
+/** The result of the folder dialog: the folder was stored, the dialog was cancelled (nothing written), or it was refused. */
+export type PluginFolderChoice = {outcome: 'chosen'} | {outcome: 'cancelled'} | {outcome: 'refused'; code: PluginFolderRefusal};
+/** "Show plugin file": Explorer shows the verified bundled DLL, or nothing because it is not verified or no longer a plain file. */
+export type PluginShowFileResult = {outcome: 'shown'} | {outcome: 'refused'; code: 'BUNDLE_UNAVAILABLE'};
 /** Main-owned application state pushed to the dashboard. */
 export interface AppState {
   health: AppHealth;
   settings: SettingsView;
   /** The overlay edit mode; pushed whenever it changes. */
   overlayEdit: OverlayEditState;
+  /** ET-017: the per-game plugin setup state; pushed whenever it changes. */
+  plugins: PluginSetupView;
 }

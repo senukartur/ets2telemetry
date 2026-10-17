@@ -158,9 +158,10 @@ it('marks v1 data stale when the subscription closes or a replacement port await
   stop(); expect(vi.getTimerCount()).toBe(0);
 });
 it('preserves the frozen narrow bridge and rejects privileged source values before IPC', async () => {
-  expect(Object.isFrozen(bridge)).toBe(true); expect(Object.keys(bridge).sort()).toEqual(['beginOverlayEdit', 'exitApplication', 'exportJournalTrip', 'finishOverlayEdit', 'getAppState', 'getJournalTrip', 'getStatus',
-    'listJournalEvents', 'listJournalIntervals', 'listJournalSamples', 'listJournalTrips',
-    'resetOverlayEditPlacement', 'selectSource', 'setOverlayEditScale', 'setOverlayLayout', 'setOverlaySections', 'setUnitProfile', 'subscribeAppState', 'subscribeLive']);
+  expect(Object.isFrozen(bridge)).toBe(true); expect(Object.keys(bridge).sort()).toEqual(['beginOverlayEdit', 'choosePluginFolder', 'exitApplication', 'exportJournalTrip', 'finishOverlayEdit', 'getAppState', 'getJournalTrip', 'getStatus',
+    'listJournalEvents', 'listJournalIntervals', 'listJournalSamples', 'listJournalTrips', 'openPluginFolder',
+    'resetOverlayEditPlacement', 'retryPluginSetup', 'selectSource', 'setOverlayEditScale', 'setOverlayLayout', 'setOverlaySections', 'setPluginGameExcluded', 'setUnitProfile',
+    'showPluginFile', 'subscribeAppState', 'subscribeLive']);
   await expect(bridge.selectSource('C:\\arbitrary.exe' as never)).rejects.toThrow('Invalid source selection');
   expect(ipc.invoke).not.toHaveBeenCalled();
   await bridge.selectSource('ats'); expect(ipc.invoke).toHaveBeenCalledWith('telemetry:select', 'ats');
@@ -196,11 +197,12 @@ it('does not reassert service subscription after the callback unsubscribes its o
   expect(subscriptions()).toBe(1); expect(vi.getTimerCount()).toBe(0);
 });
 it('appends the application state and exit methods after the original three bridge keys', () => {
-  // ET-012a appends the two overlay settings methods, ET-012b the four overlay edit methods, ET-016 PR-3 the five journal reads
-  // and ET-016 PR-5 the trip export.
+  // ET-012a appends the two overlay settings methods, ET-012b the four overlay edit methods, ET-016 PR-3 the five journal reads,
+  // ET-016 PR-5 the trip export and ET-017 PR-4 the five plugin setup methods.
   expect(Object.keys(bridge)).toEqual(['getStatus', 'selectSource', 'subscribeLive', 'getAppState', 'subscribeAppState', 'exitApplication', 'setUnitProfile',
     'setOverlayLayout', 'setOverlaySections', 'beginOverlayEdit', 'setOverlayEditScale', 'resetOverlayEditPlacement', 'finishOverlayEdit',
-    'listJournalTrips', 'getJournalTrip', 'listJournalEvents', 'listJournalIntervals', 'listJournalSamples', 'exportJournalTrip']);
+    'listJournalTrips', 'getJournalTrip', 'listJournalEvents', 'listJournalIntervals', 'listJournalSamples', 'exportJournalTrip',
+    'retryPluginSetup', 'choosePluginFolder', 'setPluginGameExcluded', 'showPluginFile', 'openPluginFolder']);
 });
 it('allows one application state listener, forwards pushed state and unsubscribes once', () => {
   const listener = vi.fn(); const stop = bridge.subscribeAppState(listener);
@@ -271,4 +273,29 @@ it('requests the overlay edit mode through fixed channels and forwards only a va
   await bridge.finishOverlayEdit('cancel');
   expect(ipc.invoke.mock.calls).toEqual([['overlay-edit:begin'], ['overlay-edit:set-scale', 1.23], ['overlay-edit:reset'], ['overlay-edit:finish', 'save'],
     ['overlay-edit:finish', 'cancel']]);
+});
+// ET-017 PR-4 (P16): the five plugin setup methods. Each validates its arguments before it invokes its fixed channel and
+// forwards only the validated values; anything else rejects without IPC. Extra arguments are never forwarded.
+it('validates plugin setup requests before IPC and forwards only a game, an exclusion flag or a target id', async () => {
+  for (const game of ['ETS2', 'synthetic', '', 'C:\\Games\\ETS2', undefined, null, 1, {game: 'ets2'}]) {
+    await expect(bridge.choosePluginFolder(game as never)).rejects.toThrow('Invalid plugin setup request');
+    await expect(bridge.setPluginGameExcluded(game as never, true)).rejects.toThrow('Invalid plugin setup request');
+  }
+  for (const excluded of ['true', 1, 0, null, undefined, {}]) {
+    await expect(bridge.setPluginGameExcluded('ets2', excluded as never)).rejects.toThrow('Invalid plugin setup request');
+  }
+  for (const id of ['ets2:steam:4', 'ets2:Steam:0', 'ets2:adopted:0', 'ETS2:steam:0', 'ets2:steam:0 ', 'C:\\Games\\ETS2\\bin\\win_x64\\plugins', '', undefined, 0]) {
+    await expect(bridge.openPluginFolder(id as never)).rejects.toThrow('Invalid plugin setup request');
+  }
+  expect(ipc.invoke).not.toHaveBeenCalled();
+  ipc.invoke.mockResolvedValue(undefined);
+  await Reflect.apply(bridge.retryPluginSetup, bridge, ['C:\\arbitrary']);
+  await Reflect.apply(bridge.choosePluginFolder, bridge, ['ats', 'C:\\Games\\ATS']);
+  await Reflect.apply(bridge.setPluginGameExcluded, bridge, ['ets2', false, {path: 'C:\\arbitrary'}]);
+  await Reflect.apply(bridge.showPluginFile, bridge, ['C:\\Windows\\explorer.exe']);
+  await Reflect.apply(bridge.openPluginFolder, bridge, ['ats:manual:0', 'C:\\Games']);
+  await bridge.openPluginFolder('ets2:steam:3');
+  expect(ipc.invoke.mock.calls).toEqual([['plugin:retry'], ['plugin:choose-folder', 'ats'], ['plugin:set-excluded', 'ets2', false], ['plugin:show-file'],
+    ['plugin:open-folder', 'ats:manual:0'], ['plugin:open-folder', 'ets2:steam:3']]);
+  expect(ipc.send).not.toHaveBeenCalled();
 });

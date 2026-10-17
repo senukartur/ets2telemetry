@@ -18,8 +18,10 @@ afterEach(() => {vi.doUnmock('electron');});
 
 it('appends the six journal methods after the overlay edit methods of the frozen bridge', () => {
   expect(Object.isFrozen(bridge)).toBe(true);
-  // ET-016 PR-5 appends exportJournalTrip after the five reads (J10).
-  expect(Object.keys(bridge).slice(-7)).toEqual(['finishOverlayEdit', 'listJournalTrips', 'getJournalTrip', 'listJournalEvents', 'listJournalIntervals', 'listJournalSamples',
+  // ET-016 PR-5 appends exportJournalTrip after the five reads (J10). ET-017 PR-4 appends the plugin setup methods after
+  // them, so the journal block is located from the overlay edit methods instead of the end of the bridge.
+  const keys = Object.keys(bridge), start = keys.indexOf('finishOverlayEdit');
+  expect(keys.slice(start, start + 7)).toEqual(['finishOverlayEdit', 'listJournalTrips', 'getJournalTrip', 'listJournalEvents', 'listJournalIntervals', 'listJournalSamples',
     'exportJournalTrip']);
 });
 
