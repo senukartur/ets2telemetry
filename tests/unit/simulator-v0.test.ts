@@ -15,7 +15,8 @@ import {checkCadence} from '../../tools/telemetry-simulator/src/cadence';
 
 // pipe.ts paces writes with node:timers/promises, whose ES import fake timers do not reach. Its setTimeout is routed
 // through the global timer at call time, so the controlled-clock case can fake it; every other case still gets the real
-// timer, and an abort still rejects with an AbortError, as the original does.
+// timer. An abort rejects with a DOMException named AbortError, not the original's Node AbortError (code ABORT_ERR); the
+// difference is harmless because pipe.ts aborts only from finish(), after `stopping` is set, and then ignores the error.
 vi.mock('node:timers/promises',async importOriginal=>{
   const original=await importOriginal<typeof import('node:timers/promises')>();
   return {...original,setTimeout:<T>(ms?:number,value?:T,options?:{signal?:AbortSignal})=>new Promise<T>((resolve,reject)=>{
