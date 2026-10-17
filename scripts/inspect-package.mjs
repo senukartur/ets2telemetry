@@ -5,6 +5,7 @@ import path from 'node:path';
 import * as asar from '@electron/asar';
 import {sha256, sourceHashes} from './source-inputs.mjs';
 import {verifyPackage} from './package-integrity.mjs';
+import {verifyPluginBundleAgainstTree} from './plugin-bundle.mjs';
 
 // Read bytes and resolve paths only. Never import application entries or native bindings.
 const directory = path.resolve(process.argv[2] || 'out/ETS2Telemetry Desktop-win32-x64');
@@ -57,6 +58,11 @@ assert.equal(sha256(clientBytes), sha256(readFileSync('native/telemetry-client/b
 assert.equal(clientBytes.readUInt16LE(0), 0x5a4d, 'Native client must be a PE executable');
 assert.equal(clientBytes.readUInt16LE(clientBytes.readUInt32LE(0x3c) + 4), 0x8664, 'Native client must be x64');
 report.nativeClient = {executableSha256: clientMetadata.executableSha256, sourcesVerified: true};
+// The bundled game plugin (ET-017): strict manifest, x64 DLL bytes equal to the local Release build, current plugin
+// sources and the tracked released-plugin list. Nothing in the application reads the bundle yet.
+const pluginManifest = verifyPluginBundleAgainstTree(path.join(directory, 'resources/telemetry-plugin'));
+report.nativePlugin = {sha256: pluginManifest.sha256, size: pluginManifest.size, appVersion: pluginManifest.appVersion,
+  pluginSourcesVerified: Object.keys(pluginManifest.pluginSources).length, known: pluginManifest.known.length};
 mkdirSync('.local/diagnostics', {recursive: true});
 writeFileSync('.local/diagnostics/package-inspection.json', JSON.stringify(report, null, 2) + '\n');
-console.log(JSON.stringify({applicationLaunched: false, ...integrity, compiledFilesVerified: files.length, asarSha256: report.asarSha256, executableSha256: report.executableSha256}, null, 2));
+console.log(JSON.stringify({applicationLaunched: false, ...integrity, compiledFilesVerified: files.length, asarSha256: report.asarSha256, executableSha256: report.executableSha256, pluginSha256: report.nativePlugin.sha256}, null, 2));
