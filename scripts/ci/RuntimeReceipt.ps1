@@ -248,6 +248,10 @@ function Test-RecordingJournalReceipt {
     $exported = $journal.exportRows; $stored = $journal.storedRows; $ids = $journal.exportIds
     if ($null -eq $exported -or $null -eq $stored -or $null -eq $ids -or $null -eq $exported.bounds) { return $false }
     if ((@($exported.eventSeqs) -join ',') -cne '3,4,5,6,7,8' -or (@($stored.eventSeqs) -join ',') -cne '3,4,5,6,7,8') { return $false }
+    # Every identifier must be a string: a null or other element fails the receipt instead of being filtered away.
+    foreach ($list in @($exported.intervalIds, $stored.intervalIds, $exported.sampleIds, $stored.sampleIds)) {
+        if (@(@($list) | Where-Object { $_ -isnot [string] }).Count -ne 0) { return $false }
+    }
     $intervalIds = @($exported.intervalIds | Where-Object { $null -ne $_ }); $storedIntervalIds = @($stored.intervalIds | Where-Object { $null -ne $_ })
     $sampleIds = @($exported.sampleIds | Where-Object { $null -ne $_ }); $storedSampleIds = @($stored.sampleIds | Where-Object { $null -ne $_ })
     if ($intervalIds.Count -ne 2 -or ($intervalIds -join ',') -cne ($storedIntervalIds -join ',') -or $storedIntervalIds.Count -ne 2 -or
