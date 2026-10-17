@@ -89,13 +89,19 @@ describe('refusals', () => {
     expect(await read()).toEqual(refused('directory'));
   });
 
-  it('refuses a folder that does not hold exactly the DLL and its manifest', async () => {
+  // Review round 1 (October 17, 2026): at runtime other entries in the folder are ignored; only the packaging inspection
+  // (plugin-bundle-stage.test.ts) requires exactly the two files. A missing DLL or manifest is still refused.
+  it('ignores other entries in the folder, and refuses a missing DLL or manifest', async () => {
     writePluginBundle(stage, {dll: DLL, appVersion: '0.2.0', pluginSources: SOURCES, known: KNOWN});
     await fsp.writeFile(path.join(stage, 'notes.txt'), 'extra');
-    expect(await read()).toEqual(refused('contents'));
-    await fsp.rm(path.join(stage, 'notes.txt'));
+    await fsp.mkdir(path.join(stage, 'folder'));
+    expect(await read()).toMatchObject({ok: true, bundle: {sha256: sha256(DLL)}});
+    expect(() => verifyPluginBundle(stage)).toThrow(/exactly the DLL and its manifest/);
     await fsp.rm(dllFile());
-    expect(await read()).toEqual(refused('contents'));
+    expect(await read()).toEqual(refused('plugin-unreadable'));
+    await fsp.writeFile(dllFile(), DLL);
+    await fsp.rm(manifestFile());
+    expect(await read()).toEqual(refused('manifest-unreadable'));
   });
 
   it('refuses a DLL whose bytes differ from the manifest hash or size', async () => {

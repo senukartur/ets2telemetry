@@ -16,6 +16,23 @@ describe('P15 rows in order', () => {
     expect(pluginSetupMode({ETS2TELEMETRY_PLUGIN_SETUP: 'off'}, false)).toEqual({mode: 'disabled', reason: 'off'});
   });
 
+  // Review round 1 (October 17, 2026): the opt-out fails closed. Any value other than exactly `real` disables setup.
+  it('row 1: any other value than exactly real disables setup, packaged or not and also beside a test root', () => {
+    for (const value of ['Off', 'OFF', 'false', '0', 'disabled', 'REAL', 'Real', 'real ', 'on', 'true', '1', 'no']) {
+      expect(pluginSetupMode({ETS2TELEMETRY_PLUGIN_SETUP: value}, true), value).toEqual({mode: 'disabled', reason: 'off'});
+      expect(pluginSetupMode({ETS2TELEMETRY_PLUGIN_SETUP: value}, false), value).toEqual({mode: 'disabled', reason: 'off'});
+      expect(pluginSetupMode({ETS2TELEMETRY_PLUGIN_SETUP: value, ETS2TELEMETRY_PLUGIN_SETUP_ROOT: ROOT, ETS2TELEMETRY_PROFILE_DIR: PROFILE}, true), value)
+        .toEqual({mode: 'disabled', reason: 'off'});
+    }
+    // `real` keeps its meaning: it enables an unpackaged launch, is harmless when packaged and leaves a test root alone.
+    expect(pluginSetupMode({ETS2TELEMETRY_PLUGIN_SETUP: 'real'}, false)).toEqual({mode: 'active'});
+    expect(pluginSetupMode({ETS2TELEMETRY_PLUGIN_SETUP: 'real'}, true)).toEqual({mode: 'active'});
+    expect(pluginSetupMode({ETS2TELEMETRY_PLUGIN_SETUP: 'real', ETS2TELEMETRY_PLUGIN_SETUP_ROOT: ROOT, ETS2TELEMETRY_PROFILE_DIR: PROFILE}, false))
+      .toEqual({mode: 'test-root', root: ROOT});
+    // An empty variable still counts as unset.
+    expect(pluginSetupMode({ETS2TELEMETRY_PLUGIN_SETUP: ''}, true)).toEqual({mode: 'active'});
+  });
+
   it('row 2: an absolute test root with an absolute profile directory is the test-root mode, packaged or not', () => {
     expect(pluginSetupMode({ETS2TELEMETRY_PLUGIN_SETUP_ROOT: ROOT, ETS2TELEMETRY_PROFILE_DIR: PROFILE}, false)).toEqual({mode: 'test-root', root: ROOT});
     expect(pluginSetupMode({ETS2TELEMETRY_PLUGIN_SETUP_ROOT: `${ROOT}\\`, ETS2TELEMETRY_PROFILE_DIR: PROFILE}, true)).toEqual({mode: 'test-root', root: ROOT});
@@ -51,9 +68,8 @@ describe('P15 rows in order', () => {
 
   it('row 5: an unpackaged launch is disabled unless ETS2TELEMETRY_PLUGIN_SETUP=real', () => {
     expect(pluginSetupMode({}, false)).toEqual({mode: 'disabled', reason: 'development'});
-    for (const value of ['', 'on', 'REAL', 'true', '1']) {
-      expect(pluginSetupMode({ETS2TELEMETRY_PLUGIN_SETUP: value}, false), value).toEqual({mode: 'disabled', reason: 'development'});
-    }
+    // Other values (`on`, `REAL`, `true`, `1`) are disabled by row 1 since review round 1; see the row 1 case above.
+    expect(pluginSetupMode({ETS2TELEMETRY_PLUGIN_SETUP: ''}, false)).toEqual({mode: 'disabled', reason: 'development'});
     expect(pluginSetupMode({ETS2TELEMETRY_PLUGIN_SETUP: 'real'}, false)).toEqual({mode: 'active'});
   });
 

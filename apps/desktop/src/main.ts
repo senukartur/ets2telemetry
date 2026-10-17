@@ -4,7 +4,7 @@ import {existsSync, mkdirSync} from 'node:fs';
 import path from 'node:path';
 import type {EventEmitter} from 'node:events';
 import {version} from '../../../package.json';
-import type {AppHealth, AppState, LiveTelemetry, OverlayEditState, OverlayPresentation, OverlaySettings, PluginFolderChoice, PluginGame, ScaffoldStatus, SettingsView,
+import type {AppHealth, AppState, LiveTelemetry, OverlayEditState, OverlayPresentation, OverlaySettings, PluginFolderChoice, PluginGame, PluginShowFileResult, ScaffoldStatus, SettingsView,
   SourceSelection, UnitProfiles} from '../../../packages/contracts/src';
 import {SettingsBusyError, SettingsError, SettingsStore, settingsDirectory} from './settings-store';
 import {isUnitGame, isUnitProfile} from './unit-profiles';
@@ -678,11 +678,14 @@ function runApplication(profileError: unknown): void {
     pluginRequest(event, request.length === 2 && isPluginGame(request[0]) && typeof request[1] === 'boolean');
     return pluginReply(() => pluginSetup.setExcluded(request[0] as PluginGame, request[1] as boolean));
   });
-  // Explorer selects the verified bundled DLL, so the driver can copy it into a protected folder by hand (P12).
-  ipcMain.handle(PLUGIN_CHANNELS.showFile, (event, ...request: unknown[]) => {
+  // Explorer selects the verified bundled DLL, so the driver can copy it into a protected folder by hand (P12). Plugin
+  // setup checks the file again right before (a regular file, not a link); otherwise a fixed code answers.
+  ipcMain.handle(PLUGIN_CHANNELS.showFile, async (event, ...request: unknown[]): Promise<PluginShowFileResult> => {
     pluginRequest(event, request.length === 0);
-    const file = pluginSetup.bundledFile();
-    if (file) shell.showItemInFolder(file);
+    const file = await pluginReply(() => pluginSetup.bundledFile());
+    if (!file || lifecycle.exiting) return {outcome: 'refused', code: 'BUNDLE_UNAVAILABLE'};
+    shell.showItemInFolder(file);
+    return {outcome: 'shown'};
   });
   // Opens a listed folder's plugins folder, or its bin\win_x64 folder when that is absent; the folder is validated again.
   ipcMain.handle(PLUGIN_CHANNELS.openFolder, async (event, ...request: unknown[]) => {

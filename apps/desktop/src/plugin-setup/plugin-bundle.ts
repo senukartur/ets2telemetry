@@ -33,8 +33,8 @@ export function pluginBundleDirectory(mainDirectory: string, resourcesPath: stri
 
 /** A verified bundle and, for main only, its DLL's location (for "Show plugin file"); never sent to a renderer. */
 export interface LoadedPluginBundle extends VerifiedPluginBundle {readonly file: string}
-/** Why the bundle could not be used; a fixed code for the PLUGIN_BUNDLE_UNAVAILABLE log line, never a path. */
-export type PluginBundleFailure = 'directory' | 'contents' | 'manifest-unreadable' | 'manifest-invalid' | 'plugin-unreadable' | 'plugin-not-file'
+/** Why the bundle could not be used; a fixed code for the PLUGIN_BUNDLE log line, never a path. */
+export type PluginBundleFailure = 'directory' | 'manifest-unreadable' | 'manifest-invalid' | 'plugin-unreadable' | 'plugin-not-file'
   | 'plugin-size' | 'plugin-hash' | 'plugin-not-x64-dll' | 'aborted';
 export type PluginBundleResult = {readonly ok: true; readonly bundle: LoadedPluginBundle}
   | {readonly ok: false; readonly code: 'BUNDLE_UNAVAILABLE'; readonly failure: PluginBundleFailure};
@@ -48,7 +48,6 @@ interface BundleHandle {
 /** The read operations the bundle reader uses; `node:fs/promises` satisfies it. */
 export interface BundleFileSystem {
   lstat(target: string, options: {bigint: true}): Promise<BundleStats>;
-  readdir(target: string): Promise<string[]>;
   open(target: string, flags: 'r'): Promise<BundleHandle>;
 }
 const nodeBundleFs: BundleFileSystem = nodeFs;
@@ -122,9 +121,10 @@ export function isX64Dll(bytes: Buffer): boolean {
 }
 
 /**
- * Reads and verifies the bundle in `directory`: the folder is not a link and holds exactly the DLL and its manifest; the
+ * Reads and verifies the bundle in `directory`: the folder is not a link and holds the DLL and its manifest; the
  * manifest is strict; the DLL's size and SHA-256 equal the manifest's and it is an x64 PE DLL. Any failure is
- * BUNDLE_UNAVAILABLE with a fixed failure code.
+ * BUNDLE_UNAVAILABLE with a fixed failure code. Other entries in the folder are ignored at runtime: only the two named
+ * files are read, while the packaging inspection (scripts/plugin-bundle.mjs) still requires exactly these two.
  */
 export async function readPluginBundle(directory: string, options: {fs?: BundleFileSystem; signal?: AbortSignal} = {}): Promise<PluginBundleResult> {
   const fs = options.fs ?? nodeBundleFs;
@@ -132,9 +132,6 @@ export async function readPluginBundle(directory: string, options: {fs?: BundleF
     let folder: BundleStats;
     try {folder = await fs.lstat(directory, {bigint: true});} catch {throw new BundleRefusal('directory');}
     if (folder.isSymbolicLink() || !folder.isDirectory()) throw new BundleRefusal('directory');
-    let names: string[];
-    try {names = await fs.readdir(directory);} catch {throw new BundleRefusal('directory');}
-    if ([...names].sort().join('\n') !== [PLUGIN_BUNDLE_FILE, PLUGIN_BUNDLE_MANIFEST].join('\n')) throw new BundleRefusal('contents');
     const manifest = parsePluginManifest(await readBounded(fs, path.join(directory, PLUGIN_BUNDLE_MANIFEST), MAX_BUNDLE_MANIFEST_BYTES, 'manifest-unreadable', options.signal));
     if (!manifest) throw new BundleRefusal('manifest-invalid');
     const file = path.join(directory, PLUGIN_BUNDLE_FILE);

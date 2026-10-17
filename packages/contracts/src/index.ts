@@ -1,7 +1,7 @@
 // Scaffold status only. The telemetry wire protocol belongs to ET-002a.
 export interface ScaffoldStatus { service: 'ready'; storage: 'verified'; synthetic: true }
 import type {CurrentState, SourceIdentity, AppliedState, CaptureTime} from './protocol-v0';
-import type {AppState, OverlayEditState, OverlayLayout, OverlaySectionId, OverlaySections, PluginFolderChoice, PluginGame, PluginSetupView, RecordingCode, SettingsView,
+import type {AppState, OverlayEditState, OverlayLayout, OverlaySectionId, OverlaySections, PluginFolderChoice, PluginGame, PluginSetupView, PluginShowFileResult, RecordingCode, SettingsView,
   UnitGame, UnitProfile} from './app-state';
 import type {Available, LiveObservationV1, Uint64} from './protocol-v1';
 import type {JournalDatabase, JournalEventPage, JournalIntervalPage, JournalTripDetail, JournalTripPage, JournalTripsQuery} from './journal';
@@ -103,8 +103,11 @@ export interface DesktopBridge {
    * including installs it again. Resolves with the plugin state after the setup run.
    */
   setPluginGameExcluded(game: PluginGame, excluded: boolean): Promise<PluginSetupView>;
-  /** Shows the verified bundled plugin file in Explorer, for a manual copy into a protected folder (P12). */
-  showPluginFile(): Promise<void>;
+  /**
+   * Shows the verified bundled plugin file in Explorer, for a manual copy into a protected folder (P12). Main checks the
+   * file again just before; `BUNDLE_UNAVAILABLE` when it is not verified, missing or a link.
+   */
+  showPluginFile(): Promise<PluginShowFileResult>;
   /** Opens one listed game folder's plugins folder in Explorer, or its `bin\win_x64` folder when that is absent (P12). */
   openPluginFolder(targetId: string): Promise<void>;
 }

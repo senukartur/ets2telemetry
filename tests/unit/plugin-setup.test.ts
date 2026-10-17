@@ -4,7 +4,7 @@ import path from 'node:path';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import type {PluginSetupView} from '../../packages/contracts/src';
 import type {RunningGames} from '../../apps/desktop/src/plugin-setup/game-processes';
-import type {PluginSetupDecision} from '../../apps/desktop/src/plugin-setup/mode';
+import {TEST_ROOT_MARKER, type PluginSetupDecision} from '../../apps/desktop/src/plugin-setup/mode';
 import type {InstallerFileSystem, RunningCheck} from '../../apps/desktop/src/plugin-setup/plugin-installer';
 import {PluginRegistry} from '../../apps/desktop/src/plugin-setup/plugin-registry';
 import {LAUNCH_DELAY_MS, MAX_LOCKED_RETRIES, POLL_INTERVAL_MS, PluginSetup, PluginSetupError, RUN_TIMEOUT_MS, type PluginSetupPorts} from '../../apps/desktop/src/plugin-setup/plugin-setup';
@@ -42,6 +42,8 @@ beforeEach(async () => {
   await steam.libraryFolders([steam.steam, libraryB]);
   ets2Root = await steam.install(steam.steam, 'ets2');
   atsRoot = await steam.install(libraryB, 'ats');
+  // The test root's marker: without it the test-root mode turns itself off.
+  await fsp.writeFile(path.join(guard.root, TEST_ROOT_MARKER), 'fake root for plugin setup tests');
   running = {...NOT_RUNNING};
   lister = vi.fn<RunningCheck>(() => Promise.resolve({ok: true, running: {...running}}));
   events = []; views = []; outside = undefined;
@@ -61,8 +63,8 @@ const decision = (): PluginSetupDecision => ({mode: 'test-root', root: guard.roo
 const registryDirectory = () => path.join(guard.root, 'LocalAppData', 'ETS2Telemetry', 'plugins');
 function ports(overrides: Partial<PluginSetupPorts> = {}): PluginSetupPorts {
   return {
-    fs, readBundle: () => Promise.resolve(bundleResult),
-    loadRegistry: directory => PluginRegistry.load(directory, {fs: guard.fs, now: () => new Date(UTC), log: (event, _detail, facts) => events.push({event, facts})}),
+    fs, registryFs: guard.fs, readBundle: () => Promise.resolve(bundleResult),
+    loadRegistry: (directory, registryFs) => PluginRegistry.load(directory, {fs: registryFs, now: () => new Date(UTC), log: (event, _detail, facts) => events.push({event, facts})}),
     readSteamRoot, checkRunning: lister, registryDirectory: undefined, dataRoot: undefined, installDirectory: undefined, randomHex: () => '0123456789abcdef',
     ...overrides
   };
@@ -124,8 +126,8 @@ describe('launch run', () => {
     await settled(setup);
     setTimeoutSpy.mockRestore();
     expect(setup.view()).toEqual({mode: 'test-root', bundled: BUNDLED_VIEW, running: false, games: {
-      ets2: {excluded: false, discovery: 'found', manualFolder: 'none', targets: [target('ets2:steam:0', 'installed')]},
-      ats: {excluded: false, discovery: 'found', manualFolder: 'none', targets: [target('ats:steam:0', 'installed')]}
+      ets2: {excluded: false, discovery: 'found', manualFolder: 'none', targets: [target('ets2:steam:0', 'installed')], unlistedFolders: 0},
+      ats: {excluded: false, discovery: 'found', manualFolder: 'none', targets: [target('ats:steam:0', 'installed')], unlistedFolders: 0}
     }});
     expect(await fsp.readFile(dll(ets2Root))).toEqual(BUNDLE);
     expect(await fsp.readFile(dll(atsRoot))).toEqual(BUNDLE);
@@ -332,11 +334,11 @@ describe('logs', () => {
     expect(vi.getTimerCount()).toBe(0);
     const view = await setup.retry();
     expect(view).toEqual({mode: 'disabled', bundled: null, running: false, games: {
-      ets2: {excluded: false, discovery: 'pending', manualFolder: 'none', targets: []}, ats: {excluded: false, discovery: 'pending', manualFolder: 'none', targets: []}}});
+      ets2: {excluded: false, discovery: 'pending', manualFolder: 'none', targets: [], unlistedFolders: 0}, ats: {excluded: false, discovery: 'pending', manualFolder: 'none', targets: [], unlistedFolders: 0}}});
     expect(await setup.setExcluded('ets2', true)).toEqual(view);
     expect(await setup.chooseFolder('ets2', ets2Root)).toEqual({outcome: 'refused', code: 'SETUP_DISABLED'});
     expect(await setup.folderToOpen('ets2:steam:0')).toBeUndefined();
-    expect(setup.bundledFile()).toBeUndefined();
+    expect(await setup.bundledFile()).toBeUndefined();
     expect(setup.idle()).toBeUndefined();
     await vi.advanceTimersByTimeAsync(LAUNCH_DELAY_MS + POLL_INTERVAL_MS);
     expect(events).toEqual([
@@ -445,8 +447,42 @@ describe('triggers', () => {
     await fsp.mkdir(moved);
     await fsp.symlink(moved, path.join(atsRoot, 'bin', 'win_x64', 'plugins'), 'junction');
     expect(await setup.folderToOpen('ats:steam:0')).toBeUndefined();
-    expect(setup.bundledFile()).toBe(path.join(guard.root, 'bundle', 'ets2telemetry-plugin.dll'));
     setup.abort();
+  });
+
+  it('opens a plain plugins folder that holds an unexpected entry, and bin\\win_x64 when plugins is a file', async () => {
+    const setup = create();
+    await launch(setup);
+    // A folder with the plugin's name: the layout is unexpected, but the plugins folder itself is a plain folder.
+    await fsp.rm(dll(ets2Root));
+    await fsp.mkdir(dll(ets2Root));
+    expect(await setup.folderToOpen('ets2:steam:0')).toBe(path.join(ets2Root, 'bin', 'win_x64', 'plugins'));
+    // A file in place of the plugins folder.
+    await fsp.rm(path.join(atsRoot, 'bin', 'win_x64', 'plugins'), {recursive: true});
+    await fsp.writeFile(path.join(atsRoot, 'bin', 'win_x64', 'plugins'), 'not a folder');
+    expect(await setup.folderToOpen('ats:steam:0')).toBe(path.join(atsRoot, 'bin', 'win_x64'));
+    setup.abort();
+  });
+
+  it('reveals the bundled file only while it is still a plain file, checked right before', async () => {
+    const setup = create();
+    const file = path.join(guard.root, 'bundle', 'ets2telemetry-plugin.dll');
+    expect(await setup.bundledFile()).toBeUndefined();
+    await launch(setup);
+    // Verified once, but the file is gone now.
+    expect(await setup.bundledFile()).toBeUndefined();
+    await fsp.mkdir(path.dirname(file));
+    await fsp.writeFile(file, BUNDLE);
+    expect(await setup.bundledFile()).toBe(file);
+    await fsp.rm(file);
+    const elsewhere = path.join(guard.root, 'elsewhere');
+    await fsp.mkdir(elsewhere);
+    await fsp.symlink(elsewhere, file, 'junction');
+    expect(await setup.bundledFile()).toBeUndefined();
+    await fsp.rm(file);
+    await fsp.writeFile(file, BUNDLE);
+    setup.abort();
+    expect(await setup.bundledFile()).toBeUndefined();
   });
 });
 
@@ -497,5 +533,148 @@ describe('failures', () => {
     expect(runs()).toBe(0);
     expect(logged('PLUGIN_REGISTRY_STATE')).toEqual([{event: 'PLUGIN_REGISTRY_STATE', facts: {state: 'newer-version'}}]);
     setup.abort();
+  });
+});
+
+// PR-4 review round 1 (October 17, 2026): the findings' regression cases.
+describe('review round 1', () => {
+  it('does not poll for a folder that already holds the current plugin while its game runs, but polls for a pending update', async () => {
+    const setup = create();
+    await launch(setup);
+    running = {...NOT_RUNNING, ets2: true};
+    await setup.retry();
+    expect(setup.view().games.ets2.targets).toEqual([target('ets2:steam:0', 'installed')]);
+    expect(logged('PLUGIN_ACTION').at(-2)!.facts).toMatchObject({game: 'ets2', outcome: 'blocked', code: 'GAME_RUNNING'});
+    expect(vi.getTimerCount()).toBe(0);
+    setup.abort();
+
+    // An older plugin of this application (a released hash) waits for its running game: outdated, and polled.
+    const OLD = Buffer.from('released plugin 0.1.0 '.repeat(200));
+    const oldSha = createHash('sha256').update(OLD).digest('hex');
+    bundleResult = {ok: true, bundle: {bytes: BUNDLE, sha256: SHA, appVersion: '0.2.0', known: [{appVersion: '0.1.0', sha256: oldSha}],
+      file: path.join(guard.root, 'bundle', 'ets2telemetry-plugin.dll')}};
+    await fsp.writeFile(dll(atsRoot), OLD);
+    running = {...NOT_RUNNING, ats: true};
+    const updating = create();
+    await launch(updating);
+    expect(updating.view().games.ats.targets).toEqual([target('ats:steam:0', 'outdated', {reason: 'GAME_RUNNING', installed: {version: '0.1.0', sha256Prefix: oldSha.slice(0, 12)}})]);
+    expect(vi.getTimerCount()).toBe(1);
+    updating.abort();
+  });
+
+  /** Three more Steam libraries with ETS2, so the game has four Steam roots; returns them in library order. */
+  async function fourEts2Roots(): Promise<string[]> {
+    const libraries = [await steam.library('LibraryC'), await steam.library('LibraryD'), await steam.library('LibraryE')];
+    await steam.libraryFolders([steam.steam, path.join(guard.root, 'LibraryB'), ...libraries]);
+    return [ets2Root, ...await Promise.all(libraries.map(library => steam.install(library, 'ets2')))];
+  }
+
+  it('counts and logs a Steam root that a chosen folder leaves unlisted, and never installs into it', async () => {
+    const roots = await fourEts2Roots();
+    const manual = await steam.gameFolder(path.join(guard.root, 'Manual ETS2'), 'ets2');
+    const setup = create();
+    expect(await setup.chooseFolder('ets2', manual)).toEqual({outcome: 'chosen'});
+    await settled(setup);
+    expect(setup.view().games.ets2).toMatchObject({unlistedFolders: 1,
+      targets: [target('ets2:steam:0', 'installed'), target('ets2:steam:1', 'installed'), target('ets2:steam:2', 'installed'), target('ets2:manual:0', 'installed')]});
+    expect(setup.view().games.ats.unlistedFolders).toBe(0);
+    expect(logged('PLUGIN_TARGETS_LIMITED')).toEqual([{event: 'PLUGIN_TARGETS_LIMITED', facts: {game: 'ets2', count: 1}}]);
+    expect(await exists(path.join(roots[3], 'bin', 'win_x64', 'plugins'))).toBe(false);
+    await setup.retry();
+    expect(logged('PLUGIN_TARGETS_LIMITED')).toHaveLength(1);
+    expect(JSON.stringify(setup.view())).not.toContain('Library');
+    setup.abort();
+  });
+
+  it('removes the plugin from an unlisted Steam root with an install record when the game is excluded', async () => {
+    const roots = await fourEts2Roots();
+    const setup = create();
+    await launch(setup);
+    expect(setup.view().games.ets2.targets.map(entry => entry.state)).toEqual(['installed', 'installed', 'installed', 'installed']);
+    const manual = await steam.gameFolder(path.join(guard.root, 'Manual ETS2'), 'ets2');
+    expect(await setup.chooseFolder('ets2', manual)).toEqual({outcome: 'chosen'});
+    await settled(setup);
+    expect(setup.view().games.ets2.unlistedFolders).toBe(1);
+    // Unlisted, but still holding the plugin this application installed there.
+    expect(await fsp.readFile(dll(roots[3]))).toEqual(BUNDLE);
+    await setup.setExcluded('ets2', true);
+    for (const root of [...roots, manual]) expect(await exists(dll(root)), root).toBe(false);
+    expect(logged('PLUGIN_ACTION').map(entry => entry.facts)).toContainEqual({game: 'ets2', source: 'steam', ordinal: 3, listed: false, op: 'remove',
+      outcome: 'removed', code: null, step: null, errno: null});
+    setup.abort();
+  });
+
+  it('turns the test-root mode off when the root has no marker file, before reading or writing anything', async () => {
+    await fsp.rm(path.join(guard.root, TEST_ROOT_MARKER));
+    await fsp.mkdir(path.join(guard.root, TEST_ROOT_MARKER));
+    const setup = create();
+    await launch(setup);
+    expect(setup.view().mode).toBe('disabled');
+    expect(setup.mode).toBe('disabled');
+    expect(events.slice(1)).toEqual([
+      {event: 'PLUGIN_SETUP_MODE_REJECTED', facts: {reason: 'no-marker'}},
+      {event: 'PLUGIN_SETUP_MODE', facts: {mode: 'disabled', reason: 'root-rejected'}}
+    ]);
+    expect(await setup.chooseFolder('ets2', ets2Root)).toEqual({outcome: 'refused', code: 'SETUP_DISABLED'});
+    expect((await setup.setExcluded('ets2', true)).games.ets2.excluded).toBe(false);
+    expect((await setup.retry()).mode).toBe('disabled');
+    expect(lister).not.toHaveBeenCalled();
+    expect(await exists(path.join(guard.root, 'LocalAppData'))).toBe(false);
+    expect(await exists(path.join(ets2Root, 'bin', 'win_x64', 'plugins'))).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('confines the install registry writes to the test root too', async () => {
+    outside = await guardedTempRoot('ets2telemetry-plugin-outside-');
+    await fsp.symlink(outside.root, path.join(guard.root, 'LocalAppData'), 'junction');
+    const setup = create();
+    await launch(setup);
+    expect(await fsp.readdir(outside.root)).toEqual([]);
+    expect(logged('PLUGIN_TEST_ROOT_ESCAPE').length).toBeGreaterThan(0);
+    expect(setup.view().games.ets2.targets[0]).toMatchObject({state: 'missing', reason: 'REGISTRY_UNAVAILABLE'});
+    expect(await exists(dll(ets2Root))).toBe(false);
+    setup.abort();
+  });
+
+  it('makes the exit wait for an exclusion\'s registry write and writes nothing after it began', async () => {
+    let holding = false;
+    const renaming = deferred<void>(), release = deferred<void>();
+    const registryFs = {...guard.fs, rename: async (from: string, to: string) => {
+      if (holding) {renaming.resolve(); await release.promise;}
+      return guard.fs.rename(from, to);
+    }} as PluginSetupPorts['registryFs'];
+    const setup = create({registryFs});
+    await launch(setup);
+    holding = true;
+    const excluding = setup.setExcluded('ats', true);
+    await renaming.promise;
+    setup.abort();
+    const idle = setup.idle();
+    expect(idle).toBeDefined();
+    let done = false;
+    void idle!.then(() => {done = true;});
+    await tick(); await tick();
+    expect(done).toBe(false);
+    release.resolve();
+    await idle;
+    await excluding;
+    // The exclusion was stored, but no run started after the exit began: the plugin stays until the next start.
+    const stored = JSON.parse(await fsp.readFile(path.join(registryDirectory(), 'setup.json'), 'utf8')) as {games: {ats: {excluded: boolean}}};
+    expect(stored.games.ats.excluded).toBe(true);
+    expect(await exists(dll(atsRoot))).toBe(true);
+    expect(setup.idle()).toBeUndefined();
+  });
+
+  it('stores no chosen folder when the exit begins while it is validated', async () => {
+    const manual = await steam.gameFolder(path.join(guard.root, 'Manual ETS2'), 'ets2');
+    let setup!: PluginSetup;
+    const base = fs;
+    fs = {...base, realpath: async target => {
+      if (target.toLowerCase().includes('manual ets2')) setup.abort();
+      return base.realpath(target);
+    }};
+    setup = create();
+    await expect(setup.chooseFolder('ets2', manual)).rejects.toThrow('Plugin setup has stopped');
+    expect(await exists(path.join(registryDirectory(), 'setup.json'))).toBe(false);
   });
 });

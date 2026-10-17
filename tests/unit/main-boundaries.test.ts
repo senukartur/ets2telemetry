@@ -74,7 +74,7 @@ const DEFAULT_OVERLAY = {layout: 'strip', sections: ALL_SECTIONS, placements: PL
 const DRIVING = {active: false};
 // ET-017: the application state carries the plugin setup view. These cases run with ETS2TELEMETRY_SOURCE_KIND set and
 // unpackaged, so the mode gate disables plugin setup: nothing is read or written, and no game is ever discovered.
-const NO_PLUGIN_GAME = {excluded: false, discovery: 'pending', manualFolder: 'none', targets: []};
+const NO_PLUGIN_GAME = {excluded: false, discovery: 'pending', manualFolder: 'none', targets: [], unlistedFolders: 0};
 const PLUGINS_DISABLED = {mode: 'disabled', bundled: null, running: false, games: {ets2: NO_PLUGIN_GAME, ats: NO_PLUGIN_GAME}};
 let settingsView: {units: {ets2: string; ats: string}; overlay: {layout: string; sections: Record<string, boolean>; placements: Record<string, {x: number; y: number; scale: number}>}; state: string; writable: boolean; saveError: string | null};
 type OverlayWrite = (kind: 'layout' | 'sections' | 'placement', value: unknown) => Promise<unknown>;
@@ -1896,8 +1896,8 @@ const BUNDLED_FILE = 'C:\\isolated\\resources\\telemetry-plugin\\ets2telemetry-p
 const PLUGINS_FOLDER = 'C:\\Games\\Euro Truck Simulator 2\\bin\\win_x64\\plugins';
 const PLUGIN_VIEW = {mode: 'test-root', bundled: {version: '0.2.0', sha256Prefix: '0123456789ab'}, running: false, games: {
   ets2: {excluded: false, discovery: 'found', manualFolder: 'none', targets: [{id: 'ets2:steam:0', source: 'steam', ordinal: 0, state: 'installed', reason: null,
-    installed: {version: '0.2.0', sha256Prefix: '0123456789ab'}, lastFailure: null}]},
-  ats: {excluded: false, discovery: 'not-found', manualFolder: 'none', targets: []}}};
+    installed: {version: '0.2.0', sha256Prefix: '0123456789ab'}, lastFailure: null}], unlistedFolders: 0},
+  ats: {excluded: false, discovery: 'not-found', manualFolder: 'none', targets: [], unlistedFolders: 0}}};
 interface FakePluginSetup {
   mode: string; view: () => unknown; changed: () => void; start: ReturnType<typeof vi.fn>; abort: ReturnType<typeof vi.fn>; idle: ReturnType<typeof vi.fn>;
   retry: ReturnType<typeof vi.fn>; setExcluded: ReturnType<typeof vi.fn>; chooseFolder: ReturnType<typeof vi.fn>; bundledFile: ReturnType<typeof vi.fn>;
@@ -1917,7 +1917,7 @@ function mockPluginSetup(mode = 'test-root') {
         const fake: FakePluginSetup = pluginSetup = {mode, current: PLUGIN_VIEW, changed: options.changed, view: () => fake.current,
           start: vi.fn(), abort: vi.fn(), idle: vi.fn(() => undefined), retry: vi.fn(() => Promise.resolve(fake.current)),
           setExcluded: vi.fn(() => Promise.resolve(fake.current)), chooseFolder: vi.fn(() => Promise.resolve({outcome: 'chosen'})),
-          bundledFile: vi.fn(() => BUNDLED_FILE), folderToOpen: vi.fn(() => Promise.resolve(PLUGINS_FOLDER))};
+          bundledFile: vi.fn(() => Promise.resolve(BUNDLED_FILE)), folderToOpen: vi.fn(() => Promise.resolve(PLUGINS_FOLDER))};
         return fake;
       }
     }
@@ -2019,7 +2019,7 @@ it('forwards retry and exclusion requests and answers with the plugin view only'
 });
 it('shows the verified bundled file and opens a listed folder through main-owned shell calls, answering no path', async () => {
   mockPluginSetup(); await ready();
-  await expect(pluginCall('plugin:show-file', trusted())).resolves.toBeUndefined();
+  await expect(pluginCall('plugin:show-file', trusted())).resolves.toEqual({outcome: 'shown'});
   expect(shell.showItemInFolder).toHaveBeenCalledExactlyOnceWith(BUNDLED_FILE);
   await expect(pluginCall('plugin:open-folder', trusted(), 'ets2:steam:0')).resolves.toBeUndefined();
   expect(pluginSetup.folderToOpen).toHaveBeenCalledExactlyOnceWith('ets2:steam:0');
@@ -2032,9 +2032,9 @@ it('shows the verified bundled file and opens a listed folder through main-owned
   await expect(pluginCall('plugin:open-folder', trusted(), 'ets2:steam:0')).resolves.toBeUndefined();
   expect(log).toHaveBeenCalledWith('PLUGIN_FOLDER_NOT_OPENED');
   expect(JSON.stringify(log.mock.calls)).not.toContain('Euro Truck Simulator 2');
-  // Without a verified bundle there is nothing to show.
-  pluginSetup.bundledFile.mockReturnValueOnce(undefined);
-  await expect(pluginCall('plugin:show-file', trusted())).resolves.toBeUndefined();
+  // Without a verified bundle, or when plugin setup finds the file missing or a link right before, nothing is shown.
+  pluginSetup.bundledFile.mockResolvedValueOnce(undefined);
+  await expect(pluginCall('plugin:show-file', trusted())).resolves.toEqual({outcome: 'refused', code: 'BUNDLE_UNAVAILABLE'});
   expect(shell.showItemInFolder).toHaveBeenCalledOnce();
 });
 it('carries the plugin view in the application state and pushes it when plugin setup changes', async () => {

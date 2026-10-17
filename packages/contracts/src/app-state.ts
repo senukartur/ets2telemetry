@@ -174,6 +174,11 @@ export interface PluginGameView {
   manualFolder: PluginManualFolderState;
   /** At most four game folders. */
   targets: readonly PluginTargetView[];
+  /**
+   * Steam folders of this game beyond the listed ones (with a chosen folder at most three Steam folders are listed). They
+   * are never installed into; when the game is excluded, this application's plugin is still removed from them.
+   */
+  unlistedFolders: number;
 }
 /** Per-game plugin setup state (ET-017 P16). Fixed codes, versions and hash prefixes only: never a path. */
 export interface PluginSetupView {
@@ -189,6 +194,8 @@ export type PluginFolderRefusal = 'FOLDER_UNSUPPORTED_PATH' | 'FOLDER_NOT_GAME' 
   | 'SETUP_DISABLED' | 'REGISTRY_UNAVAILABLE' | 'BUSY';
 /** The result of the folder dialog: the folder was stored, the dialog was cancelled (nothing written), or it was refused. */
 export type PluginFolderChoice = {outcome: 'chosen'} | {outcome: 'cancelled'} | {outcome: 'refused'; code: PluginFolderRefusal};
+/** "Show plugin file": Explorer shows the verified bundled DLL, or nothing because it is not verified or no longer a plain file. */
+export type PluginShowFileResult = {outcome: 'shown'} | {outcome: 'refused'; code: 'BUNDLE_UNAVAILABLE'};
 /** Main-owned application state pushed to the dashboard. */
 export interface AppState {
   health: AppHealth;

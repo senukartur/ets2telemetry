@@ -4,12 +4,13 @@ import type {PluginBlockReason as ContractBlockReason, PluginDiscoveryOutcome, P
 import type {DiagnosticFacts} from '../diagnostics';
 import {dataPaths} from '../paths';
 import {pluginTargetId} from '../plugin-setup-contract';
+import {nodeAtomicFs, type AtomicFileSystem} from './atomic-json-file';
 import {validateManualFolder} from './game-folder';
 import {blockingProcess, checkRunningGames, type RunningGames} from './game-processes';
-import {confineToRoot, testRootRegistryDirectory, testRootSteam, type PluginSetupDecision} from './mode';
+import {confineAtomicToRoot, confineToRoot, TEST_ROOT_MARKER, testRootRegistryDirectory, testRootSteam, type PluginSetupDecision} from './mode';
 import {pluginBundleDirectory, readPluginBundle, type LoadedPluginBundle, type PluginBundleResult} from './plugin-bundle';
 import {nodeInstallerFs, PluginInstaller, type InstallerFileSystem, type PluginActionResult, type PluginTarget, type RunningCheck} from './plugin-installer';
-import {failureFor, PluginRegistry, type PluginBlockReason} from './plugin-registry';
+import {failureFor, installRecordFor, PluginRegistry, type PluginBlockReason} from './plugin-registry';
 import {canonicalDirectory, discoverSteamGames, isInsideOrEqual, PLUGIN_GAMES, validateGameLayout, type SteamDiscovery, type SteamRootResult} from './steam-discovery';
 import {readSteamRoot} from './steam-registry';
 
@@ -19,8 +20,9 @@ import {readSteamRoot} from './steam-registry';
 // launch run starts 2 s after Electron is ready on an unreferenced timer and is never awaited by startup. Runs are
 // single-flight with one coalesced follow-up and each is aborted after 30 s. While a folder waits for a game or the
 // TruckersMP client to close, or for a locked file, the running games are polled every 15 s. The exit's `begin` aborts
-// the run, and `idle` returns the run in flight, which ends with the removal of its temporary file, so the exit's
-// existing 1000 ms idle budget covers it. The disabled mode does nothing at all.
+// the run, and `idle` returns the run in flight, which ends with the removal of its temporary file, and any registry
+// write of an exclusion or folder choice, so the exit's existing 1000 ms idle budget covers them. The disabled mode
+// does nothing at all.
 
 type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
 /** The installer's block reasons and the AppState contract's must stay the same set. */
@@ -47,10 +49,12 @@ type Log = (event: string, detail?: unknown, facts?: DiagnosticFacts) => void;
 export interface PluginSetupPorts {
   /** Game folder file operations. The test-root mode confines them to its root. */
   fs: InstallerFileSystem;
+  /** The install registry's file operations. The test-root mode confines them to its root too. */
+  registryFs: AtomicFileSystem;
   /** Reads and verifies the bundle; called until it succeeds once, then never again. */
   readBundle(signal: AbortSignal): Promise<PluginBundleResult>;
-  /** Loads the install registry from a folder; loading never writes. */
-  loadRegistry(directory: string | undefined): Promise<PluginRegistry>;
+  /** Loads the install registry from a folder through `fs`; loading never writes. */
+  loadRegistry(directory: string | undefined, fs: AtomicFileSystem): Promise<PluginRegistry>;
   /** The Steam registry reader of the active mode; the test-root mode never calls it. */
   readSteamRoot(signal?: AbortSignal): Promise<SteamRootResult>;
   /** The running-game check before every change and for the poll. */
@@ -83,13 +87,18 @@ export class PluginSetupError extends Error {
 }
 
 interface TargetState extends PluginTargetView {readonly game: PluginGame; readonly root: string}
-interface GameState {excluded: boolean; discovery: PluginDiscoveryOutcome; manualFolder: PluginManualFolderState; targets: TargetState[]}
+interface GameState {
+  excluded: boolean; discovery: PluginDiscoveryOutcome; manualFolder: PluginManualFolderState; targets: TargetState[];
+  /** Steam roots beyond the listed folders; never installed into, but cleaned when the game is excluded. */
+  unlisted: string[];
+}
 type TriggerReason = 'launch' | 'poll' | 'retry' | 'folder' | 'exclusion';
 
-const emptyGame = (): GameState => ({excluded: false, discovery: 'pending', manualFolder: 'none', targets: []});
+const emptyGame = (): GameState => ({excluded: false, discovery: 'pending', manualFolder: 'none', targets: [], unlisted: []});
 const fileView = (sha256: string, version: string | null): PluginFileView => ({version, sha256Prefix: sha256.slice(0, PREFIX_LENGTH)});
 const sameRunning = (left: RunningGames, right: RunningGames) => left.ets2 === right.ets2 && left.ats === right.ats && left.client === right.client;
 const unref = (timer: ReturnType<typeof setTimeout>) => {(timer as {unref?: () => void}).unref?.(); return timer;};
+const settledVoid = (work: Promise<unknown>) => work.then(() => undefined, () => undefined);
 
 export class PluginSetup {
   private readonly decision: PluginSetupDecision;
@@ -97,6 +106,7 @@ export class PluginSetup {
   private readonly changed: () => void;
   private readonly ports: PluginSetupPorts | undefined;
   private readonly fs: InstallerFileSystem | undefined;
+  private readonly registryFs: AtomicFileSystem | undefined;
   private readonly games: Record<PluginGame, GameState> = {ets2: emptyGame(), ats: emptyGame()};
   private registry: PluginRegistry | undefined;
   private registryLoading: Promise<PluginRegistry> | undefined;
@@ -104,6 +114,8 @@ export class PluginSetup {
   private discovery: SteamDiscovery | undefined;
   private current: Promise<void> | undefined;
   private followUp: Promise<void> | undefined;
+  /** Registry writes of an exclusion change or a folder choice; the exit's idle waits for them. */
+  private readonly writes = new Set<Promise<void>>();
   private controller: AbortController | undefined;
   private pollController: AbortController | undefined;
   private launchTimer: ReturnType<typeof setTimeout> | undefined;
@@ -111,9 +123,14 @@ export class PluginSetup {
   private started = false;
   private closed = false;
   private inRun = false;
+  /** The test-root marker check, made once; a root without its marker turns setup off. */
+  private markerCheck: Promise<boolean> | undefined;
+  private markerMissing = false;
   /** The running games the last successful check of the current run saw, and those of the last finished run. */
   private seenRunning: RunningGames | undefined;
   private runRunning: RunningGames | undefined;
+  /** Waiting removals from unlisted Steam roots of an excluded game; they keep the poll running like listed folders. */
+  private unlistedWaits: {game: PluginGame; reason: PluginBlockReason}[] = [];
   private lockedRetries = 0;
   private escapes = 0;
   /** The last facts of each on-change log line, by key. */
@@ -127,21 +144,24 @@ export class PluginSetup {
     if (options.decision.mode !== 'disabled') {
       if (!options.ports) throw new Error('Plugin setup needs its ports outside the disabled mode');
       this.ports = options.ports;
-      this.fs = options.decision.mode === 'test-root' ? confineToRoot(options.ports.fs, options.decision.root, () => {this.escapes++;}) : options.ports.fs;
+      const escaped = () => {this.escapes++;};
+      this.fs = options.decision.mode === 'test-root' ? confineToRoot(options.ports.fs, options.decision.root, escaped) : options.ports.fs;
+      this.registryFs = options.decision.mode === 'test-root' ? confineAtomicToRoot(options.ports.registryFs, options.decision.root, escaped) : options.ports.registryFs;
     }
     if (options.decision.mode === 'disabled' && options.decision.rejected) this.log('PLUGIN_SETUP_MODE_REJECTED', undefined, {reason: options.decision.rejected});
     this.log('PLUGIN_SETUP_MODE', undefined, {mode: options.decision.mode, reason: options.decision.mode === 'disabled' ? options.decision.reason : null});
     this.lastView = JSON.stringify(this.view());
   }
 
-  get mode(): PluginSetupDecision['mode'] {return this.decision.mode;}
+  /** The effective mode: `disabled` also once a test root turned out to lack its marker file. */
+  get mode(): PluginSetupDecision['mode'] {return this.markerMissing ? 'disabled' : this.decision.mode;}
 
-  /** The current view: fixed codes, versions and hash prefixes; never a path. */
+  /** The current view: fixed codes, versions, hash prefixes and counts; never a path. */
   view(): PluginSetupView {
     const game = (state: GameState) => ({excluded: state.excluded, discovery: state.discovery, manualFolder: state.manualFolder,
       targets: state.targets.map(target => ({id: target.id, source: target.source, ordinal: target.ordinal, state: target.state, reason: target.reason,
-        installed: target.installed ? {...target.installed} : null, lastFailure: target.lastFailure}))});
-    return {mode: this.decision.mode, bundled: this.bundle ? fileView(this.bundle.sha256, this.bundle.appVersion) : null, running: this.inRun,
+        installed: target.installed ? {...target.installed} : null, lastFailure: target.lastFailure})), unlistedFolders: state.unlisted.length});
+    return {mode: this.mode, bundled: this.bundle ? fileView(this.bundle.sha256, this.bundle.appVersion) : null, running: this.inRun,
       games: {ets2: game(this.games.ets2), ats: game(this.games.ats)}};
   }
 
@@ -164,11 +184,13 @@ export class PluginSetup {
   async setExcluded(game: PluginGame, excluded: boolean): Promise<PluginSetupView> {
     if (this.decision.mode === 'disabled') return this.view();
     if (this.closed) throw new PluginSetupError('SETUP_CLOSED');
+    if (!await this.allowed()) return this.view();
     const registry = await this.ensureRegistry();
     if (registry.document.games[game].excluded !== excluded) {
+      if (this.closed) throw new PluginSetupError('SETUP_CLOSED');
       if (!registry.writable) throw new PluginSetupError('REGISTRY_UNAVAILABLE');
       try {
-        await registry.update(document => ({...document, games: {...document.games, [game]: {...document.games[game], excluded}}}));
+        await this.track(registry.update(document => ({...document, games: {...document.games, [game]: {...document.games[game], excluded}}})));
       } catch {throw new PluginSetupError('REGISTRY_UNAVAILABLE');}
     }
     this.games[game].excluded = excluded;
@@ -179,7 +201,8 @@ export class PluginSetup {
 
   /**
    * Validates a folder main's dialog returned and stores it as the game's manual folder, replacing an earlier one (whose
-   * install record stays). Setup then runs without being awaited. Main calls this only for a confirmed selection.
+   * install record stays). Setup then runs without being awaited. Main calls this only for a confirmed selection. Once
+   * the exit has begun, also during the validation, nothing is stored.
    */
   async chooseFolder(game: PluginGame, selected: string): Promise<PluginFolderChoice> {
     if (this.decision.mode === 'disabled') return {outcome: 'refused', code: 'SETUP_DISABLED'};
@@ -189,13 +212,15 @@ export class PluginSetup {
       this.flushEscapes();
       return {outcome: 'refused', code: 'FOLDER_UNSUPPORTED_PATH'};
     }
+    if (!await this.allowed()) return {outcome: 'refused', code: 'SETUP_DISABLED'};
     const registry = await this.ensureRegistry();
     if (!registry.writable) return {outcome: 'refused', code: 'REGISTRY_UNAVAILABLE'};
     const result = await validateManualFolder(selected, game, this.folderContext(game));
     this.flushEscapes();
     if (!result.ok) return {outcome: 'refused', code: result.code};
+    if (this.closed) throw new PluginSetupError('SETUP_CLOSED');
     try {
-      await registry.update(document => ({...document, games: {...document.games, [game]: {...document.games[game], manualRoot: result.root}}}));
+      await this.track(registry.update(document => ({...document, games: {...document.games, [game]: {...document.games[game], manualRoot: result.root}}})));
     } catch {return {outcome: 'refused', code: 'REGISTRY_UNAVAILABLE'};}
     this.games[game].manualFolder = 'set';
     this.publish();
@@ -203,24 +228,41 @@ export class PluginSetup {
     return {outcome: 'chosen'};
   }
 
-  /** The verified bundled DLL, for "Show plugin file"; main never sends it to a renderer. */
-  bundledFile(): string | undefined {return this.bundle?.file;}
+  /**
+   * The verified bundled DLL, for "Show plugin file", checked again just before it is revealed: undefined unless the
+   * bundle was verified and its file is still a regular file that is not a link. Main never sends it to a renderer.
+   */
+  async bundledFile(): Promise<string | undefined> {
+    const file = this.bundle?.file;
+    if (!file || this.closed || !this.ports) return undefined;
+    try {
+      const stats = await this.ports.fs.lstat(file, {bigint: true});
+      return stats.isFile() && !stats.isSymbolicLink() ? file : undefined;
+    } catch {return undefined;}
+  }
 
   /**
    * The folder "Open game plugins folder" opens for a listed target: its plugins folder when that is a plain folder,
    * otherwise its `bin\win_x64` folder. Undefined for an unknown target or a folder that is linked or no longer a game.
    */
   async folderToOpen(targetId: string): Promise<string | undefined> {
-    if (this.decision.mode === 'disabled' || this.closed || !this.fs) return undefined;
+    if (this.mode === 'disabled' || this.closed || !this.fs) return undefined;
     const target = PLUGIN_GAMES.flatMap(game => this.games[game].targets).find(candidate => candidate.id === targetId);
     if (!target) return undefined;
     const layout = await validateGameLayout(this.fs, target.root, target.game);
+    let plain = false;
+    if (layout.status === 'ready' || layout.status === 'unexpected-entry') {
+      try {
+        const stats = await this.fs.lstat(layout.pluginsDirectory, {bigint: true});
+        plain = stats.isDirectory() && !stats.isSymbolicLink();
+      } catch {/* absent: bin\win_x64 opens instead */}
+    }
     this.flushEscapes();
     if (layout.status === 'not-game' || layout.status === 'linked') return undefined;
-    return layout.status === 'ready' && layout.pluginsExists ? layout.pluginsDirectory : path.win32.dirname(layout.pluginsDirectory);
+    return plain ? layout.pluginsDirectory : path.win32.dirname(layout.pluginsDirectory);
   }
 
-  /** The exit's `begin`: no further run, poll or trigger; the run in flight stops after its current folder. */
+  /** The exit's `begin`: no further run, poll, trigger or registry write; the run in flight stops after its current folder. */
   abort(): void {
     if (this.closed) return;
     this.closed = true;
@@ -230,14 +272,51 @@ export class PluginSetup {
     this.controller?.abort();
   }
 
-  /** The exit's `idle`: the run in flight, which ends with the removal of its temporary file; undefined when idle. */
+  /**
+   * The exit's `idle`: the run in flight, which ends with the removal of its temporary file, and any registry write of
+   * an exclusion change or folder choice; undefined when there is none.
+   */
   idle(): Promise<void> | undefined {
-    return this.current?.then(() => undefined, () => undefined);
+    const pending = [...(this.current ? [this.current] : []), ...this.writes];
+    return pending.length ? Promise.all(pending.map(settledVoid)).then(() => undefined) : undefined;
+  }
+
+  /** Keeps a registry write in `writes` until it settles, so the exit can wait for it. */
+  private track(work: Promise<unknown>): Promise<void> {
+    const write = work.then(() => undefined);
+    const entry = settledVoid(write);
+    this.writes.add(entry);
+    void entry.then(() => this.writes.delete(entry));
+    return write;
+  }
+
+  /**
+   * In the test-root mode, the root must hold its marker file (TEST_ROOT_MARKER) as a regular file that is not a link,
+   * checked once through the confinement. Without it setup turns off for this application run and logs why.
+   */
+  private allowed(): Promise<boolean> {
+    if (this.decision.mode !== 'test-root') return Promise.resolve(true);
+    const root = this.decision.root;
+    return this.markerCheck ??= (async () => {
+      let present = false;
+      try {
+        const stats = await this.fs!.lstat(path.win32.join(root, TEST_ROOT_MARKER), {bigint: true});
+        present = stats.isFile() && !stats.isSymbolicLink();
+      } catch {/* missing */}
+      if (!present) {
+        this.markerMissing = true;
+        this.log('PLUGIN_SETUP_MODE_REJECTED', undefined, {reason: 'no-marker'});
+        this.log('PLUGIN_SETUP_MODE', undefined, {mode: 'disabled', reason: 'root-rejected'});
+        clearTimeout(this.pollTimer); this.pollTimer = undefined;
+        this.publish();
+      }
+      return present;
+    })();
   }
 
   /** Single-flight: a trigger during a run queues one follow-up run, shared by every further trigger meanwhile. */
   private trigger(reason: TriggerReason): Promise<void> {
-    if (this.closed || this.decision.mode === 'disabled') return Promise.resolve();
+    if (this.closed || this.mode === 'disabled') return Promise.resolve();
     if (reason !== 'poll') this.lockedRetries = 0;
     if (!this.current) {
       const run = this.current = this.execute().finally(() => {if (this.current === run) this.current = undefined;});
@@ -270,7 +349,9 @@ export class PluginSetup {
   }
 
   private async runSteps(signal: AbortSignal): Promise<void> {
+    if (!await this.allowed()) return;
     const ports = this.ports!, fs = this.fs!;
+    this.unlistedWaits = [];
     const registry = await this.ensureRegistry();
     for (const game of PLUGIN_GAMES) this.games[game].excluded = registry.document.games[game].excluded;
     if (!this.bundle) {
@@ -297,6 +378,7 @@ export class PluginSetup {
         if (signal.aborted) return;
         await this.act(installer, registry, target, signal);
       }
+      if (installer && this.games[game].excluded) await this.cleanUnlisted(installer, registry, game, signal);
     }
   }
 
@@ -313,7 +395,11 @@ export class PluginSetup {
       state.manualFolder = result.ok ? 'set' : 'invalid';
       if (result.ok) manual = result.root;
     }
-    const steam = found.roots.slice(0, manual ? MAX_TARGETS_PER_GAME - 1 : MAX_TARGETS_PER_GAME);
+    const listed = manual ? MAX_TARGETS_PER_GAME - 1 : MAX_TARGETS_PER_GAME;
+    const steam = found.roots.slice(0, listed);
+    // A Steam root beyond the listed folders is not installed into; it is counted, logged and still cleaned on exclusion.
+    state.unlisted = found.roots.slice(listed).map(root => root.root);
+    if (state.unlisted.length || this.logged.has(`limited:${game}`)) this.logOnChange(`limited:${game}`, 'PLUGIN_TARGETS_LIMITED', {game, count: state.unlisted.length});
     const next: {source: 'steam' | 'manual'; ordinal: number; root: string}[] = [
       ...steam.map((root, ordinal) => ({source: 'steam' as const, ordinal, root: root.root})),
       ...(manual ? [{source: 'manual' as const, ordinal: 0, root: manual}] : [])
@@ -327,6 +413,24 @@ export class PluginSetup {
         lastFailure: failureFor(registry.document, game, entry.root)?.code ?? null};
     });
     for (const target of previous) if (!state.targets.some(other => other.id === target.id)) this.logged.delete(`action:${target.id}`);
+  }
+
+  /**
+   * Exclusion never leaves this application's plugin behind: an unlisted Steam root of an excluded game that has an
+   * install record gets the same removal as a listed folder. Its result is logged (`listed: false`), never shown.
+   */
+  private async cleanUnlisted(installer: PluginInstaller, registry: PluginRegistry, game: PluginGame, signal: AbortSignal): Promise<void> {
+    for (const [index, root] of this.games[game].unlisted.entries()) {
+      if (signal.aborted) return;
+      if (!installRecordFor(registry.document, game, root)) continue;
+      let result: PluginActionResult;
+      try {result = await installer.remove({game, source: 'steam', root});} catch (error) {
+        result = {op: 'remove', outcome: 'blocked', reason: 'IO_ERROR', step: null, errno: error instanceof Error ? error.name : null, loadsAfterRestart: false};
+      }
+      this.logOnChange(`unlisted:${game}:${root.toLowerCase()}`, 'PLUGIN_ACTION', {game, source: 'steam', ordinal: MAX_TARGETS_PER_GAME - 1 + index, listed: false,
+        op: result.op, outcome: result.outcome, code: result.reason, step: result.step, errno: result.errno});
+      if (result.reason && POLL_REASONS.includes(result.reason)) this.unlistedWaits.push({game, reason: result.reason});
+    }
   }
 
   /** Installs into or removes from one folder and records its new view. */
@@ -352,7 +456,8 @@ export class PluginSetup {
    * The view of a folder after an operation. A success is `installed` (or `excluded` after a removal). A blocked change
    * is described from what the folder holds now: an older plugin of this application is `outdated`, no plugin is
    * `missing` (`excluded` for an excluded game), and anything this application cannot change is `blocked`; `reason`
-   * says why the change did not happen.
+   * says why the change did not happen. An install refused while the folder already holds the current plugin has
+   * nothing left to do: it is `installed` without a reason, so a running game does not keep the poll alive.
    */
   private async describe(installer: PluginInstaller, target: PluginTarget, excluded: boolean, result: PluginActionResult, signal: AbortSignal): Promise<Pick<PluginTargetView, 'state' | 'reason' | 'installed'>> {
     const bundle = this.bundle!;
@@ -363,6 +468,7 @@ export class PluginSetup {
     try {found = await installer.inspect(target);} catch {found = {state: 'blocked', reason: 'IO_ERROR', step: 'classify', errno: null};}
     if (found.state === 'missing') return {state: excluded ? 'excluded' : 'missing', reason: result.reason, installed: null};
     if (found.state === 'blocked') return {state: 'blocked', reason: result.reason, installed: null};
+    if (result.op === 'install' && found.current) return {state: 'installed', reason: null, installed: fileView(found.sha256, found.version)};
     const state: PluginTargetState = excluded ? 'blocked' : found.current ? 'installed' : 'outdated';
     return {state, reason: result.reason, installed: fileView(found.sha256, found.version)};
   }
@@ -399,7 +505,7 @@ export class PluginSetup {
     return this.registryLoading ??= (async () => {
       try {
         const directory = this.decision.mode === 'test-root' ? testRootRegistryDirectory(this.decision.root) : this.ports!.registryDirectory;
-        const registry = this.registry = await this.ports!.loadRegistry(directory);
+        const registry = this.registry = await this.ports!.loadRegistry(directory, this.registryFs!);
         this.logOnChange('registry', 'PLUGIN_REGISTRY_STATE', {state: registry.state});
         for (const game of PLUGIN_GAMES) this.games[game].excluded = registry.document.games[game].excluded;
         return registry;
@@ -407,12 +513,18 @@ export class PluginSetup {
     })();
   }
 
+  /** The reasons that keep the poll running: those of listed folders and of waiting removals from unlisted roots. */
+  private waits(): {game: PluginGame; reason: PluginBlockReason}[] {
+    const listed = PLUGIN_GAMES.flatMap(game => this.games[game].targets.flatMap(target => target.reason !== null && POLL_REASONS.includes(target.reason) ? [{game, reason: target.reason}] : []));
+    return [...listed, ...this.unlistedWaits];
+  }
+
   /** Polls the running games every 15 s while a folder waits for a game, the TruckersMP client or a locked file. */
   private schedulePoll(): void {
     clearTimeout(this.pollTimer); this.pollTimer = undefined;
-    const waiting = PLUGIN_GAMES.some(game => this.games[game].targets.some(target => target.reason !== null && POLL_REASONS.includes(target.reason)));
+    const waiting = this.waits().length > 0;
     if (!waiting) this.lockedRetries = 0;
-    if (this.closed || !waiting) return;
+    if (this.closed || this.mode === 'disabled' || !waiting) return;
     this.pollTimer = unref(setTimeout(() => {this.pollTimer = undefined; void this.poll();}, POLL_INTERVAL_MS));
   }
 
@@ -434,12 +546,10 @@ export class PluginSetup {
    */
   private unblocked(running: RunningGames): boolean {
     let locked = false;
-    for (const game of PLUGIN_GAMES) {
-      for (const target of this.games[game].targets) {
-        if (target.reason === 'GAME_RUNNING' || target.reason === 'CLIENT_RUNNING') {
-          if (blockingProcess(game, running) !== target.reason) return true;
-        } else if (target.reason === 'TARGET_LOCKED') locked = true;
-      }
+    for (const {game, reason} of this.waits()) {
+      if (reason === 'GAME_RUNNING' || reason === 'CLIENT_RUNNING') {
+        if (blockingProcess(game, running) !== reason) return true;
+      } else if (reason === 'TARGET_LOCKED') locked = true;
     }
     if (!locked) return false;
     if (!this.runRunning || !sameRunning(this.runRunning, running)) {this.lockedRetries = 0; return true;}
@@ -477,8 +587,9 @@ export function productionPluginSetupPorts(options: {mainDirectory: string; reso
   const data = options.localAppData && path.win32.isAbsolute(options.localAppData) ? dataPaths(options.localAppData) : undefined;
   return {
     fs: nodeInstallerFs,
+    registryFs: nodeAtomicFs,
     readBundle: signal => readPluginBundle(bundleDirectory, {signal}),
-    loadRegistry: directory => PluginRegistry.load(directory, {log: options.log}),
+    loadRegistry: (directory, fs) => PluginRegistry.load(directory, {fs, log: options.log}),
     readSteamRoot: signal => readSteamRoot({signal}),
     checkRunning: signal => checkRunningGames({signal}),
     registryDirectory: data?.pluginMetadata,
