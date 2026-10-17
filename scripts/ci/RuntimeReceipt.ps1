@@ -301,6 +301,69 @@ function Test-RecordingReceipt {
     return $true
 }
 
+# ET-016 PR-4 journal journey: run 1 shows the empty history in the Journal tab with the Live lines in the first
+# viewport; the seed writes the synthetic journal database; run 2 opens only that database and reads it through the
+# Journal tab: three list pages, two filters, every anchor's row and detail, and the paging trip's timeline, intervals
+# and samples. Both runs exit orderly; the synthetic file is closed without sidecars or backups.
+function Test-JournalReceipt {
+    param([object]$Driver)
+    $journal = $Driver.journal
+    if ($null -eq $journal) { return $false }
+    foreach ($field in @('liveLinesInViewport','liveHiddenInJournal','emptyHistoryShown','recordingOffNoteShown','liveRestored','seeded','syntheticBannerShown',
+        'pagesWalked','anchorRowsMatch','anchorDetailsMatch','backKeptPage','sampleGapShown','timelinePaged','intervalsPaged','samplesPaged','filtersApplied','shutdownClean')) {
+        if ($journal.$field -isnot [bool] -or $journal.$field -ne $true) { return $false }
+    }
+    $empty = $journal.emptyHistory
+    if ($null -eq $empty -or $empty.empty -cne 'No trips recorded' -or
+        $empty.emptyNote -cne 'Game history recording is off in this version, so no game trips are recorded yet.' -or
+        $null -ne $empty.banner -or $null -ne $empty.error -or @($empty.rows).Count -ne 0) { return $false }
+    $seed = $journal.seed
+    if ($null -eq $seed -or !(Test-ReceiptInteger -Value $seed.trips -Minimum 119 -Maximum 119) -or !(Test-ReceiptInteger -Value $seed.fillers -Minimum 110 -Maximum 110) -or
+        !(Test-ReceiptInteger -Value $seed.pagingTolls -Minimum 104 -Maximum 104) -or !(Test-ReceiptInteger -Value $seed.pagingSamples -Minimum 3600 -Maximum 3600)) { return $false }
+    if ((@($journal.pages | ForEach-Object { $_.count }) -join ',') -cne '50,50,19' -or @($journal.pages)[2].next -isnot [bool] -or @($journal.pages)[2].next) { return $false }
+    $filters = $journal.filters
+    if ($null -eq $filters -or @($filters.none).Count -ne 3 -or !(Test-ReceiptInteger -Value $filters.partial -Minimum 39 -Maximum 39)) { return $false }
+    # Review round 1: the B6 viewport bounds and the anchors' order are re-checked here, not only as driver flags. The
+    # status, speed and fuel lines must lie inside the first viewport; page 3 lists the anchors newest first, and the
+    # details are opened oldest first.
+    $viewport = $journal.liveViewport
+    if ($null -eq $viewport -or !(Test-ReceiptInteger -Value $viewport.innerHeight -Minimum 1 -Maximum 100000)) { return $false }
+    foreach ($line in @('status','speed','fuel')) {
+        $box = $viewport.$line
+        if ($null -eq $box -or $box.visible -isnot [bool] -or !$box.visible -or !(Test-ReceiptInteger -Value $box.top -Minimum 0 -Maximum 100000) -or
+            !(Test-ReceiptInteger -Value $box.bottom -Minimum 0 -Maximum 100000) -or $box.top -gt $box.bottom -or $box.bottom -gt $viewport.innerHeight) { return $false }
+    }
+    $anchorRows = '7a000000-0000-4000-8000-000000000008,7a000000-0000-4000-8000-000000000007,7a000000-0000-4000-8000-000000000006,7a000000-0000-4000-8000-000000000005,7a000000-0000-4000-8000-000000000004,7a000000-0000-4000-8000-000000000003,7a000000-0000-4000-8000-000000000002,7a000000-0000-4000-8000-000000000001'
+    $anchorDetails = '7a000000-0000-4000-8000-000000000001,7a000000-0000-4000-8000-000000000002,7a000000-0000-4000-8000-000000000003,7a000000-0000-4000-8000-000000000004,7a000000-0000-4000-8000-000000000005,7a000000-0000-4000-8000-000000000006,7a000000-0000-4000-8000-000000000007,7a000000-0000-4000-8000-000000000008'
+    if ((@($journal.anchorRows | ForEach-Object { $_.trip }) -join ',') -cne $anchorRows -or
+        (@($journal.anchorDetails | ForEach-Object { $_.trip }) -join ',') -cne $anchorDetails) { return $false }
+    if ((@($journal.deliveredSamples | ForEach-Object { $_.kind }) -join ',') -cne 'sample,sample,gap,sample' -or
+        @($journal.deliveredSamples)[2].text -cne 'no samples for 1 s') { return $false }
+    if (@($journal.pagingTimeline.pageTwo).Count -ne 5 -or !(Test-ReceiptInteger -Value $journal.pagingIntervals.pageTwo -Minimum 4 -Maximum 4) -or
+        (@($journal.pagingSamples.kinds) -join ',') -cne 'sample') { return $false }
+    $exit = $journal.emptyRunExit
+    if ($null -eq $exit -or !(Test-ReceiptInteger -Value $exit.launcherExit -Minimum 0 -Maximum 0) -or $null -ne $exit.signal) { return $false }
+    if (!(Test-ReceiptInteger -Value $journal.restartLauncherExit -Minimum 0 -Maximum 0) -or $Driver.launcherExit -ne 0 -or
+        $null -eq $Driver.probesAfterExit -or @($Driver.probesAfterExit).Count -ne 0) { return $false }
+    $files = $journal.files
+    if ($null -eq $files -or !(Test-ReceiptInteger -Value $files.userVersion -Minimum 2 -Maximum 2) -or @($files.sidecars).Count -ne 0 -or
+        $files.syntheticBackups -isnot [bool] -or $files.syntheticBackups) { return $false }
+    # Run 1 opened the new history database; run 2 only the existing synthetic one.
+    $serviceEvents = @($Driver.serviceEvents); $restartService = @($journal.restartServiceEvents)
+    if (!(Test-OrderlyRunEvent -MainEvents @($Driver.mainEvents) -ServiceEvents $serviceEvents) -or
+        !(Test-OrderlyRunEvent -MainEvents @($journal.restartMainEvents) -ServiceEvents $restartService)) { return $false }
+    if (@($serviceEvents | Where-Object { $_.event -ceq 'RECORDING_TARGET' }).Count -ne 0) { return $false }
+    foreach ($run in @(@{rows=$serviceEvents; created=$true}, @{rows=$restartService; created=$false})) {
+        $opened = @($run.rows | Where-Object { $_.event -ceq 'HISTORY_STORAGE_OPENED' })
+        if ($opened.Count -ne 1 -or $opened[0].facts.created -isnot [bool] -or $opened[0].facts.created -ne $run.created -or
+            !(Test-ReceiptInteger -Value $opened[0].facts.schemaVersion -Minimum 2 -Maximum 2)) { return $false }
+        if (@($run.rows | Where-Object { $_.event -ceq 'HISTORY_STORAGE_CLOSED' }).Count -ne 1) { return $false }
+    }
+    $targets = @($restartService | Where-Object { $_.event -ceq 'RECORDING_TARGET' })
+    if ($targets.Count -ne 1 -or $targets[0].facts.purpose -cne 'synthetic') { return $false }
+    return $true
+}
+
 function Test-RuntimeReceipt {
     param([string]$DriverResultPath, [string]$ExpectedCommit, [string]$ExpectedMode, [int]$JobExitCode,
         [string]$ExpectedScenario)
@@ -449,6 +512,10 @@ function Test-RuntimeReceipt {
     # Recording is additive too (ET-015a PR-4); it tightens no earlier scenario.
     if ($ExpectedScenario -ceq 'recording' -and !(Test-RecordingReceipt -Driver $driver)) {
         $validation.reason = 'RECORDING_RESULT_INCOMPLETE_OR_INVALID'; return $validation
+    }
+    # Journal is additive too (ET-016 PR-4); it tightens no earlier scenario.
+    if ($ExpectedScenario -ceq 'journal' -and !(Test-JournalReceipt -Driver $driver)) {
+        $validation.reason = 'JOURNAL_RESULT_INCOMPLETE_OR_INVALID'; return $validation
     }
     $validation.passed = $true
     return $validation

@@ -18,12 +18,13 @@ import {
 } from './overlay-observation.mjs';
 import {runLifecycleSmoke, seedLifecycleSettings, verifyLifecycleRestart} from './lifecycle-observation.mjs';
 import {RECORDING_TARGET, runRecordingSmoke, startRecordingSource, verifyRecordingRestart, verifyRecordingRun} from './recording-observation.mjs';
+import {JOURNAL_TARGET, runJournalEmpty, runJournalSeeded, seedJournalDatabase, verifyJournalRun} from './journal-observation.mjs';
 // These read-only globals are used only inside serialized Playwright browser callbacks.
 /* global document: readonly, getComputedStyle: readonly, innerHeight: readonly, innerWidth: readonly */
 
 const [configFile] = process.argv.slice(2);
 const config = JSON.parse((await readFile(configFile, 'utf8')).replace(/^\uFEFF/, ''));
-const result = {scenario: config.scenario === 'recording' ? 'V1 SYNTHETIC-RECORDING-JOURNEY / partial REG-006, REG-012, REG-017' : config.scenario === 'lifecycle' ? 'V0 TRAY-LIFECYCLE-SETTINGS / partial REG-009, REG-011, REG-012, REG-017' : config.scenario === 'overlay' ? 'V0 HIDDEN-OVERLAY-PROJECTION / partial REG-009, REG-011, REG-017' : config.scenario === 'telemetry' ? 'V0 SOURCE-RENDERER-RECOVERY / partial REG-003, REG-010, REG-011, REG-017' : 'SCAFFOLD-WORKER / partial REG-011, REG-017', passed: false,
+const result = {scenario: config.scenario === 'journal' ? 'SYNTHETIC-JOURNAL-UI / partial REG-009, REG-014, REG-017' : config.scenario === 'recording' ? 'V1 SYNTHETIC-RECORDING-JOURNEY / partial REG-006, REG-012, REG-017' : config.scenario === 'lifecycle' ? 'V0 TRAY-LIFECYCLE-SETTINGS / partial REG-009, REG-011, REG-012, REG-017' : config.scenario === 'overlay' ? 'V0 HIDDEN-OVERLAY-PROJECTION / partial REG-009, REG-011, REG-017' : config.scenario === 'telemetry' ? 'V0 SOURCE-RENDERER-RECOVERY / partial REG-003, REG-010, REG-011, REG-017' : 'SCAFFOLD-WORKER / partial REG-011, REG-017', passed: false,
   scenarioKind: config.scenario ?? 'scaffold',
   commit: config.commit, mode: config.mode, node: process.versions, expected: {
     status: {service: 'ready', storage: 'verified', synthetic: true}, exit: 0, probesAfterExit: []},
@@ -38,6 +39,8 @@ let telemetrySource;
 let telemetrySourceV1;
 // ET-015a PR-4: the recording scenario's reactive v1 simulator behind its recording proxy (recording-observation.mjs).
 let recordingSource;
+// ET-016 PR-4: the journal scenario's second run opens its seeded synthetic database (journal-observation.mjs).
+let journalTarget;
 const failure = error => ({name: error.name, message: error.message, stack: error.stack});
 // Driver timeline on its own wall and monotonic clocks, to align with app diagnostics and the Job CPU series.
 result.phases = [];
@@ -75,7 +78,8 @@ const environment = diagnostics => ({...process.env, TEMP: config.temp, TMP: con
   ETS2TELEMETRY_DIAGNOSTIC_DIR: diagnostics,
   ...(telemetrySource ? {ETS2TELEMETRY_LIVE_SMOKE: '1', ETS2TELEMETRY_SOURCE_KIND: 'synthetic', ETS2TELEMETRY_SOURCE_PIPE: telemetrySource.endpoint} : {}),
   ...(telemetrySourceV1 ? {ETS2TELEMETRY_SOURCE_PIPE_V1: telemetrySourceV1.endpoint} : {}),
-  ...(recordingSource ? {ETS2TELEMETRY_SOURCE_PIPE_V1: recordingSource.endpoint, ETS2TELEMETRY_RECORDING: RECORDING_TARGET} : {})});
+  ...(recordingSource ? {ETS2TELEMETRY_SOURCE_PIPE_V1: recordingSource.endpoint, ETS2TELEMETRY_RECORDING: RECORDING_TARGET} : {}),
+  ...(journalTarget ? {ETS2TELEMETRY_RECORDING: journalTarget} : {})});
 const launchOptions = diagnostics => ({timeout: 20000, cwd: config.cwd,
   ...(config.mode === 'packaged' ? {executablePath: config.executable, args: config.forceRendererProcessReuse ? ['--renderer-process-limit=1'] : []} :
     {args: [config.checkout, ...(config.forceRendererProcessReuse ? ['--renderer-process-limit=1'] : [])]}),
@@ -122,8 +126,25 @@ try {
     process: typeof globalThis.process, keys: Object.keys(globalThis.desktop),
     frozen: Object.isFrozen(globalThis.desktop), status: await globalThis.desktop.getStatus()}));
   assert.deepEqual(result.actual, {require: 'undefined', process: 'undefined', keys: ['getStatus', 'selectSource', 'subscribeLive', 'getAppState', 'subscribeAppState', 'exitApplication', 'setUnitProfile', 'setOverlayLayout', 'setOverlaySections',
-    'beginOverlayEdit', 'setOverlayEditScale', 'resetOverlayEditPlacement', 'finishOverlayEdit'],
+    'beginOverlayEdit', 'setOverlayEditScale', 'resetOverlayEditPlacement', 'finishOverlayEdit',
+    'listJournalTrips', 'getJournalTrip', 'listJournalEvents', 'listJournalIntervals', 'listJournalSamples'],
     frozen: true, status: result.expected.status});
+  if (config.scenario === 'scaffold') {
+    // ET-016 PR-3: a journal read crosses the preload, main and the telemetry service to the new, empty history database
+    // of the isolated LOCALAPPDATA; an invalid trip id is refused in the preload. DATABASE_OPENING is retried for up to 10 s.
+    result.journal = await window.evaluate(async () => {
+      let answer;
+      for (let attempt = 0; attempt < 100; attempt++) {
+        answer = await globalThis.desktop.listJournalTrips();
+        if (answer.ok || answer.code !== 'DATABASE_OPENING') break;
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      const refused = await globalThis.desktop.getJournalTrip('C:\\Users\\owner\\telemetry.sqlite').then(() => 'resolved', error => String(error?.message));
+      return {answer, refused};
+    });
+    assert.deepEqual(result.journal, {answer: {ok: true, value: {database: {purpose: 'history', schemaVersion: 2}, trips: [], nextCursor: null}},
+      refused: 'Invalid journal request'});
+  }
   result.probesBeforeExit = (await readdir(config.temp)).filter(name => name.startsWith('ets2telemetry-probe-'));
   assert.equal(result.probesBeforeExit.length, 1);
   if (config.scenario === 'overlay') {
@@ -365,8 +386,36 @@ try {
     await verifyRecordingRestart({application, record: result.recording, rendererPages, recording: recordingSource, events: diagnosticEvents, config});
     phase('restart-recorded');
   }
+  if (config.scenario === 'journal') {
+    // ET-016 PR-4: run 1 shows the empty history and exits orderly; the seed writes the synthetic database; run 2 reads
+    // it through the Journal tab. The shared close path below owns run 2.
+    result.journal = {};
+    await runJournalEmpty({dashboard: window, record: result.journal});
+    phase('journal-empty-shown');
+    tracing = false; await application.context().tracing.stop({path: path.join(config.output, 'trace-empty-history.zip')}); phase('tracing-stopped');
+    const closeStart = performance.now();
+    try {
+      await Promise.race([application.close(), new Promise((_, reject) => {timer = setTimeout(() => reject(new Error('APP_CLOSE_TIMEOUT_8_SECONDS')), 8000);})]);
+    } finally {clearTimeout(timer);}
+    result.journal.emptyRunExit = {launcherExit: launcher.exitCode, signal: launcher.signalCode, closeMilliseconds: Math.round(performance.now() - closeStart)};
+    assert.deepEqual({launcherExit: launcher.exitCode, signal: launcher.signalCode}, {launcherExit: 0, signal: null});
+    application = undefined; phase('journal-empty-run-exited');
+    await seedJournalDatabase({config, record: result.journal});
+    phase('journal-seeded');
+    journalTarget = JOURNAL_TARGET;
+    application = await electron.launch(launchOptions(config.diagnosticsRestart));
+    launcher = application.process(); phase('restart-launch-returned');
+    await application.context().tracing.start({screenshots: true, snapshots: true});
+    tracing = true;
+    const {dashboard} = await rendererPages(application);
+    await dashboard.getByText('Telemetry service ready; isolated storage probe verified', {exact: true}).waitFor({state: 'visible', timeout: 10000});
+    phase('restart-ready');
+    await runJournalSeeded({dashboard, record: result.journal});
+    phase('journal-read');
+    await dashboard.screenshot({path: path.join(config.output, 'journal.png')});
+  }
   phase('journey-complete');
-  if (config.scenario !== 'lifecycle' && config.scenario !== 'recording') await window.screenshot({path: path.join(config.output, 'ready.png')});
+  if (config.scenario !== 'lifecycle' && config.scenario !== 'recording' && config.scenario !== 'journal') await window.screenshot({path: path.join(config.output, 'ready.png')});
 } catch (error) {result.failure = failure(error); phase('failed');}
 finally {
   try {await telemetrySource?.stop();} catch (error) {result.sourceCloseFailure = failure(error);}
@@ -448,6 +497,14 @@ finally {
       assert.deepEqual(lifecycle.settingsEvents.runB, [...late(lifecycle.settingsEvents.runB), {event: 'SETTINGS_LOADED', facts: {state: 'loaded'}}]);
       lifecycle.restartLauncherExit = result.launcherExit;
       lifecycle.shutdownClean = true;
+    }
+    if (config.scenario === 'journal') {
+      // ET-016 PR-4: run 1 created and closed the history database (checked below); run 2 opened only the synthetic one.
+      const journal = result.journal ??= {};
+      journal.restartMainEvents = await diagnosticEvents(config.diagnosticsRestart);
+      journal.restartServiceEvents = await diagnosticEvents(path.join(config.diagnosticsRestart, 'service'));
+      journal.restartLauncherExit = result.launcherExit;
+      await verifyJournalRun({config, record: journal, restartMainEvents: journal.restartMainEvents, restartServiceEvents: journal.restartServiceEvents});
     }
     if (config.scenario === 'recording') {
       // ET-015a PR-4: no history database may exist; the synthetic database replaces it (recording-observation.mjs).

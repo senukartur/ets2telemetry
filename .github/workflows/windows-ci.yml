@@ -124,6 +124,9 @@ jobs:
       # ET-015a PR-4: synthetic v1 recording through a killed service, close-to-tray, tray exit and restart.
       - name: Bounded development synthetic recording journey smoke
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario recording
+      # ET-016 PR-4: the Journal tab on an empty history, then on a seeded synthetic database (never history).
+      - name: Bounded development synthetic trip journal smoke
+        run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario journal
       - name: Forge maker and static native package inspection
         run: |
           npm run make
@@ -140,6 +143,8 @@ jobs:
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged -Scenario lifecycle
       - name: Bounded packaged synthetic recording journey smoke
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged -Scenario recording
+      - name: Bounded packaged synthetic trip journal smoke
+        run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged -Scenario journal
       - name: Extended existing safety regressions
         if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.extended)
         run: ./scripts/ci/Invoke-Extended.ps1

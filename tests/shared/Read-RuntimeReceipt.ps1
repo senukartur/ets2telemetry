@@ -26,6 +26,14 @@ foreach ($case in @($config.cases)) {
             $results.Add([ordered]@{passed = $valid; driverResultAvailable = $true; reason = $(if ($valid) { $null } else { 'RECORDING_RESULT_INCOMPLETE_OR_INVALID' })})
             continue
         }
+        if ($case.numbers -ceq 'int64' -and $case.scenario -ceq 'journal') {
+            # ET-016 PR-4: the journal receipt the same way.
+            $driver = ConvertTo-Int64Number -Value (Get-Content -LiteralPath $case.receipt -Raw | ConvertFrom-Json)
+            if ($driver.journal.seed.trips -isnot [long] -or $driver.journal.restartLauncherExit -isnot [long]) { throw 'Int64 conversion failed.' }
+            $valid = [bool](Test-JournalReceipt -Driver $driver)
+            $results.Add([ordered]@{passed = $valid; driverResultAvailable = $true; reason = $(if ($valid) { $null } else { 'JOURNAL_RESULT_INCOMPLETE_OR_INVALID' })})
+            continue
+        }
         if ($case.numbers -ceq 'int64') {
             $driver = ConvertTo-Int64Number -Value (Get-Content -LiteralPath $case.receipt -Raw | ConvertFrom-Json)
             if ($driver.lifecycle.secondInstance.exitCode -isnot [long] -or $driver.lifecycle.restartLauncherExit -isnot [long]) { throw 'Int64 conversion failed.' }

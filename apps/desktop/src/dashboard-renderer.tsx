@@ -5,13 +5,15 @@ import {Alert, AlertDescription, AlertTitle} from '@/components/ui/alert';
 import {Button} from '@/components/ui/button';
 import {Label} from '@/components/ui/label';
 import {RadioGroup, RadioGroupItem} from '@/components/ui/radio-group';
+import {Tabs, TabsContent, TabsList, TabsTrigger} from '@/components/ui/tabs';
 import {dashboardFuel, dashboardSpeed} from './speed-display';
 import {createStartupLine} from './dashboard-startup';
 import {recordingStatusText} from './recording-status-text';
 import {LiveDashboard} from './live-dashboard';
 import {OverlaySettingsCard} from './overlay-settings-card';
+import {Journal, JournalBoundary} from './journal';
 import {DEFAULT_UNIT_PROFILES, displayProfile, isUnitProfile, UNIT_GAMES, UNIT_PROFILE_IDS} from './unit-profiles';
-import {APP_ERROR_TEXT, SERVICE_HEALTH_TEXT, SETTINGS_SAVE_ERROR_TEXT, SETTINGS_STATE_TEXT, STORAGE_HEALTH_TEXT, STRINGS, UNIT_GAME_TEXT, UNIT_PROFILE_TEXT} from './strings';
+import {APP_ERROR_TEXT, JOURNAL_STRINGS, SERVICE_HEALTH_TEXT, SETTINGS_SAVE_ERROR_TEXT, SETTINGS_STATE_TEXT, STORAGE_HEALTH_TEXT, STRINGS, UNIT_GAME_TEXT, UNIT_PROFILE_TEXT} from './strings';
 import './index.css';
 
 export default function App() {
@@ -44,7 +46,14 @@ export default function App() {
       saved(view); setUnits('idle');
     }, () => setUnits('failed'));
   };
-  return <main className="mx-auto max-w-xl space-y-4 p-4"><Card><CardHeader><CardTitle><h1>ETS2Telemetry</h1></CardTitle></CardHeader><CardContent className="space-y-2"><p>{startup}</p>
+  // ET-016 PR-4 (J12): Live (the default) and Journal tabs. The Live tab stays mounted while hidden, so its cards keep
+  // their state; Radix does not hide a force-mounted panel, so its inactive state hides it. The Journal tab mounts when
+  // opened, loads its first page then and holds nothing while closed. The tab list is one compact row, so the status,
+  // speed and fuel lines stay in the first viewport (B6).
+  return <main className="mx-auto max-w-xl p-4"><Tabs defaultValue="live">
+  <TabsList><TabsTrigger value="live" data-testid="tab-live">{JOURNAL_STRINGS.liveTab}</TabsTrigger>
+    <TabsTrigger value="journal" data-testid="tab-journal">{JOURNAL_STRINGS.journalTab}</TabsTrigger></TabsList>
+  <TabsContent value="live" forceMount className="space-y-4 data-[state=inactive]:hidden"><Card><CardHeader><CardTitle><h1>ETS2Telemetry</h1></CardTitle></CardHeader><CardContent className="space-y-2"><p>{startup}</p>
     <label>Source <select value={live?.selection ?? 'game'} onChange={event => {void window.desktop.selectSource(event.target.value as SourceSelection).catch(() => setStartup(STRINGS.sourceSelectionFailed));}}>
       <option value="game">Select a game</option><option value="ets2">Euro Truck Simulator 2</option><option value="ats">American Truck Simulator</option><option value="synthetic">Synthetic fixture</option><option value="replay">Replay fixture</option>
     </select></label>
@@ -90,5 +99,7 @@ export default function App() {
     {settings?.saveError && lastCard === 'units' ? <p role="status" data-testid="settings-error">{SETTINGS_SAVE_ERROR_TEXT[settings.saveError]}</p>
       : units === 'failed' ? <p role="status" data-testid="settings-error">{STRINGS.unitsSaveFailed}</p> : null}
   </CardContent></Card>
-  <OverlaySettingsCard settings={settings} edit={app?.overlayEdit} onSaved={saved} onRequest={() => setLastCard('overlay')} showSaveError={lastCard === 'overlay'} /></main>;
+  <OverlaySettingsCard settings={settings} edit={app?.overlayEdit} onSaved={saved} onRequest={() => setLastCard('overlay')} showSaveError={lastCard === 'overlay'} />
+  </TabsContent>
+  <TabsContent value="journal"><JournalBoundary><Journal units={settings?.units} recording={health?.recording.state} /></JournalBoundary></TabsContent></Tabs></main>;
 }

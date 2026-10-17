@@ -2,6 +2,7 @@ import {existsSync} from 'node:fs';
 import path from 'node:path';
 import {Worker} from 'node:worker_threads';
 import {version} from '../../../package.json';
+import type {JournalDatabase} from '../../../packages/contracts/src';
 import type {StorageErrorCode} from '../../../packages/storage/src/api';
 import {StorageClient, workerHandle, type ClientTimers, type StorageWorkerHandle} from '../../../packages/storage/src/client';
 import {storageError} from '../../../packages/storage/src/errors';
@@ -51,7 +52,9 @@ export function historyWorker(directory: string): StorageWorkerHandle {
  * `%LOCALAPPDATA%\ETS2Telemetry\data\telemetry.sqlite` in the storage worker without waiting for it, so live telemetry
  * and the overlay never depend on storage. Diagnostics carry fixed codes and numbers only: HISTORY_STORAGE_OPENED,
  * HISTORY_STORAGE_UNAVAILABLE (once) and HISTORY_STORAGE_CLOSED. ET-015a (R3) can open a synthetic or replay target
- * instead: it logs RECORDING_TARGET {purpose} first and then the same codes. `client` serves the trip recorder.
+ * instead: it logs RECORDING_TARGET {purpose} first and then the same codes. `client` serves the trip recorder and, since
+ * ET-016, the journal reads (journal-service.ts), which also read `database`; a journal answer that broke the journal
+ * contract is logged as JOURNAL_ANSWER_INVALID {command, count} at counts 1, 2, 4, 8, ...
  */
 export class HistoryStorage {
   #state: HistoryState = 'idle';
@@ -59,6 +62,8 @@ export class HistoryStorage {
   #opening: Promise<void> | undefined;
   #reported = false;
   #failure: StorageErrorCode | null = null;
+  #database: JournalDatabase | undefined;
+  #invalidJournalAnswers = 0;
 
   constructor(private readonly options: HistoryStorageOptions) {}
 
@@ -67,6 +72,8 @@ export class HistoryStorage {
   get failureCode(): StorageErrorCode | null { return this.#failure; }
   /** The storage client while the database is open; undefined before the open finished, after a failure and after close. */
   get client(): StorageClient | undefined { return this.#state === 'open' ? this.#client : undefined; }
+  /** ET-016 (J3): the open database's purpose and schema version, from its open summary; undefined while it is not open. */
+  get database(): JournalDatabase | undefined { return this.#state === 'open' ? this.#database : undefined; }
 
   start(): void {
     if (this.#state !== 'idle') return;
@@ -83,7 +90,12 @@ export class HistoryStorage {
     } catch { this.#unavailable('DATA_PATH_INVALID'); return; }
     let client: StorageClient;
     try {
-      client = new StorageClient(this.options.createWorker(), {timers: this.options.timers, closeGraceMs: this.options.closeGraceMs ?? HISTORY_CLOSE_GRACE_MS, onFailure: error => this.#unavailable(error.code)});
+      client = new StorageClient(this.options.createWorker(), {timers: this.options.timers, closeGraceMs: this.options.closeGraceMs ?? HISTORY_CLOSE_GRACE_MS, onFailure: error => this.#unavailable(error.code),
+        // ET-016: a journal answer that broke the journal contract failed only that read; the database stays open.
+        onJournalAnswerInvalid: ({command}) => {
+          const count = ++this.#invalidJournalAnswers;
+          if ((count & (count - 1)) === 0) this.options.log('JOURNAL_ANSWER_INVALID', undefined, {command, count});
+        }});
     } catch { this.#unavailable('WORKER_FAILED'); return; }
     this.#client = client;
     this.#set('opening');
@@ -94,8 +106,9 @@ export class HistoryStorage {
         void client.close();
         return;
       }
-      if (this.#state === 'opening') this.#set('open');
       const summary = result.value;
+      this.#database = {purpose: summary.purpose, schemaVersion: summary.schemaVersion};
+      if (this.#state === 'opening') this.#set('open');
       this.options.log('HISTORY_STORAGE_OPENED', undefined, {schemaVersion: summary.schemaVersion, created: summary.created, migratedFrom: summary.migratedFrom ?? null});
       // Leftovers of a backup that an earlier shutdown terminated; the count only, never a file name.
       if (summary.removedPartialBackups) this.options.log('HISTORY_BACKUP_PARTIALS_REMOVED', undefined, {count: summary.removedPartialBackups});

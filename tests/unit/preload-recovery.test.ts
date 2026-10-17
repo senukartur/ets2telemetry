@@ -158,7 +158,8 @@ it('marks v1 data stale when the subscription closes or a replacement port await
   stop(); expect(vi.getTimerCount()).toBe(0);
 });
 it('preserves the frozen narrow bridge and rejects privileged source values before IPC', async () => {
-  expect(Object.isFrozen(bridge)).toBe(true); expect(Object.keys(bridge).sort()).toEqual(['beginOverlayEdit', 'exitApplication', 'finishOverlayEdit', 'getAppState', 'getStatus',
+  expect(Object.isFrozen(bridge)).toBe(true); expect(Object.keys(bridge).sort()).toEqual(['beginOverlayEdit', 'exitApplication', 'finishOverlayEdit', 'getAppState', 'getJournalTrip', 'getStatus',
+    'listJournalEvents', 'listJournalIntervals', 'listJournalSamples', 'listJournalTrips',
     'resetOverlayEditPlacement', 'selectSource', 'setOverlayEditScale', 'setOverlayLayout', 'setOverlaySections', 'setUnitProfile', 'subscribeAppState', 'subscribeLive']);
   await expect(bridge.selectSource('C:\\arbitrary.exe' as never)).rejects.toThrow('Invalid source selection');
   expect(ipc.invoke).not.toHaveBeenCalled();
@@ -195,9 +196,10 @@ it('does not reassert service subscription after the callback unsubscribes its o
   expect(subscriptions()).toBe(1); expect(vi.getTimerCount()).toBe(0);
 });
 it('appends the application state and exit methods after the original three bridge keys', () => {
-  // ET-012a appends the two overlay settings methods, ET-012b the four overlay edit methods.
+  // ET-012a appends the two overlay settings methods, ET-012b the four overlay edit methods, ET-016 PR-3 the five journal reads.
   expect(Object.keys(bridge)).toEqual(['getStatus', 'selectSource', 'subscribeLive', 'getAppState', 'subscribeAppState', 'exitApplication', 'setUnitProfile',
-    'setOverlayLayout', 'setOverlaySections', 'beginOverlayEdit', 'setOverlayEditScale', 'resetOverlayEditPlacement', 'finishOverlayEdit']);
+    'setOverlayLayout', 'setOverlaySections', 'beginOverlayEdit', 'setOverlayEditScale', 'resetOverlayEditPlacement', 'finishOverlayEdit',
+    'listJournalTrips', 'getJournalTrip', 'listJournalEvents', 'listJournalIntervals', 'listJournalSamples']);
 });
 it('allows one application state listener, forwards pushed state and unsubscribes once', () => {
   const listener = vi.fn(); const stop = bridge.subscribeAppState(listener);

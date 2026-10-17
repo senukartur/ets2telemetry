@@ -27,6 +27,8 @@ import {ExitCoordinator, secondInstanceAction, type ExitReason} from './app-life
 import {failureCode, initialHealth, reduceHealth, sameHealth, type HealthEvent} from './app-health';
 import {addLosses, parseRecordingHealth, recordingFacts, sameRecording, ZERO_LOSSES} from './recording-status';
 import {TrayPresenter, type TrayMenuItem} from './tray-model';
+import {JournalBroker} from './journal-broker';
+import {JOURNAL_CHANNELS, journalRequest, type JournalQueryKind} from './journal-contract';
 import {TRAY_ICON_REPRESENTATIONS, trayIconPng, type TrayTone} from './tray-icon';
 
 if (squirrelStartup) app.quit();
@@ -80,6 +82,8 @@ function runApplication(profileError: unknown): void {
   let recordingChild: UtilityProcess | undefined, lossBase = ZERO_LOSSES, childLosses = ZERO_LOSSES, rejectedRecording = 0;
   /** Stops accepting the current service's recording status and adds its losses to the totals; repeated calls add nothing. */
   function retireRecording(): void {recordingChild = undefined; lossBase = addLosses(lossBase, childLosses); childLosses = ZERO_LOSSES;}
+  // ET-016 (J4): journal reads go to the current ready service, attached at readiness and retired with it.
+  const journal = new JournalBroker({log});
   const upstreamBudget = new RecoveryBudget(), overlayBudget = new RecoveryBudget();
   const dashboardSubscriptions = new LiveSubscriptions(initialLive(), 1);
   // The last projection main published: a non-current projection keeps its shape (ET-012a decision L5).
@@ -131,12 +135,16 @@ function runApplication(profileError: unknown): void {
   });
   const supervisor = new ServiceSupervisor(log, code => lifecycle.finish(code), {
     restart: () => startService(),
-    state: state => {serviceReady = false; selectionPending = false; status = undefined; closeUpstream(); retireRecording();
+    state: state => {serviceReady = false; selectionPending = false; status = undefined; closeUpstream(); retireRecording(); journal.retire();
       if (state === 'service-failed') {updateHealth({type: 'service-exited', afterFailure: failureReported}); failureReported = false;}
       else updateHealth({type: 'service-restarting'});
       const update: LiveTelemetry = {...initialLive(selection), status: state, reason: 'Telemetry service exited; current interval is unknown'};
       freshness.invalidate(update); dashboardSubscriptions.close(); dashboardPort = undefined; window?.webContents.send('telemetry:service-state', update);},
-    exhausted: () => {retireRecording(); updateHealth({type: 'service-restart-exhausted'});
+    // A service that failed or exited before its first readiness completed (the readiness was retired while awaiting its
+    // broker or settings) never created the windows; create them now, so the dashboard shows the exhausted state and
+    // the tray and a second launch can open it (ET-016 PR-3 delta review).
+    exhausted: () => {retireRecording(); journal.retire(); updateHealth({type: 'service-restart-exhausted'});
+      if (!started && !supervisor.stopping && !lifecycle.exiting) {started = true; createWindow(); createOverlay();}
       const update: LiveTelemetry = {...initialLive(selection), status: 'service-failed', reason: 'Automatic service restart limit reached'};
       freshness.invalidate(update); window?.webContents.send('telemetry:service-state', update);},
     // Every stop that did not start as an exit request is fatal (renderer or overlay exhaustion, configuration or
@@ -145,7 +153,9 @@ function runApplication(profileError: unknown): void {
     stopping: () => {if (lifecycle.abort()) {updateHealth({type: 'exit-requested'}, true); retireLive();}},
     // The failed service is being terminated: retire its readiness, status and live channels now rather than when
     // its exit arrives (up to 3000 ms later). The later state callback finds them already retired.
-    failure: code => {failureReported = true; serviceReady = false; selectionPending = false; status = undefined; closeUpstream(); retireRecording();
+    // A new selection generation also retires a readiness still awaiting its broker or settings, so the failing service
+    // never becomes ready, selected or the journal's service afterwards (ET-016 PR-3 review).
+    failure: code => {failureReported = true; serviceReady = false; selectionPending = false; status = undefined; selectionGeneration++; closeUpstream(); retireRecording(); journal.retire();
       updateHealth({type: 'service-failure', code: failureCode(code, reportedFailureCode)}); reportedFailureCode = undefined;
       const update: LiveTelemetry = {...initialLive(selection), status: 'restarting', reason: 'Telemetry service failed; current interval is unknown'};
       freshness.invalidate(update); dashboardSubscriptions.close(); dashboardPort = undefined; window?.webContents.send('telemetry:service-state', update);}
@@ -218,7 +228,8 @@ function runApplication(profileError: unknown): void {
   // The overlay is marked not loaded first, so an edit in progress hides it before the edit is cancelled; that order avoids
   // a needless show on the retired document.
   function retireOverlay(): void {overlayPort = undefined; overlayController?.loaded(false); cancelOverlayEdit('overlay-retired'); overlaySubscriptions.close();}
-  function retireLive(): void {freshness.close(); closeUpstream(); retireOverlay(); dashboardSubscriptions.close(); dashboardPort = undefined;}
+  // Exits and fatal stops also retire the journal: pending journal requests resolve SERVICE_UNAVAILABLE (ET-016, J4).
+  function retireLive(): void {freshness.close(); closeUpstream(); retireOverlay(); dashboardSubscriptions.close(); dashboardPort = undefined; journal.retire();}
   function stop(): void {retireLive(); supervisor.stop();}
   function fail(code: string, error?: unknown): void {retireLive(); supervisor.fail(code, error);}
   function requestExit(reason: ExitReason): void {lifecycle.request(reason);}
@@ -435,6 +446,7 @@ function runApplication(profileError: unknown): void {
           if (supervisor.stopping || service !== child || generation !== selectionGeneration) return;
           child.postMessage(selectMessage(requested, broker));
           serviceReady = true; selectionPending = false; status = {service: 'ready', storage: 'verified', synthetic: true};
+          journal.attach(child);
           updateHealth({type: 'service-ready'});
           if (!started) {started = true; createWindow(); createOverlay();} else connectSubscription();
           connectUpstream();
@@ -444,6 +456,8 @@ function runApplication(profileError: unknown): void {
         reportedFailureCode = (message as Record<string, unknown>).code;
         supervisor.serviceFailed('SERVICE_START_FAILED', message);
       } else if (type === 'recording') acceptRecording(child, message as Record<string, unknown>);
+      // ET-016 (J4): a journal reply; the broker accepts it only from the current ready service for the request in flight.
+      else if (type === 'journal') journal.reply(child, message as Record<string, unknown>);
       else if (type !== 'stopped') fail('SERVICE_INVALID_MESSAGE');
     });
   }
@@ -581,6 +595,18 @@ function runApplication(profileError: unknown): void {
     editRequest(event, request.length === 1 && isOverlayEditOutcome(request[0]));
     return finishOverlayEdit(request[0] as OverlayEditOutcome);
   });
+  // ET-016 (J10, J11): five fixed-shape journal channels, from the trusted dashboard main frame only (the overlay is
+  // rejected). Exact argument counts, every argument checked again, the page size fixed here; an untrusted or invalid
+  // call rejects. A valid call resolves the broker's {ok, value} or {ok: false, code}; no path, process id or Windows
+  // session id is ever part of it.
+  for (const kind of Object.keys(JOURNAL_CHANNELS) as JournalQueryKind[]) {
+    ipcMain.handle(JOURNAL_CHANNELS[kind], (event, ...request: unknown[]) => {
+      if (!trusted(event)) throw new Error('Untrusted journal request');
+      const query = journalRequest(kind, request);
+      if (!query) throw new Error('Invalid journal request');
+      return journal.request(query);
+    });
+  }
   ipcMain.handle('telemetry:select', async (event, source: unknown) => {
     if (!trusted(event) || !serviceReady) throw new Error('Untrusted source request');
     const next = sourceSelection(source);
