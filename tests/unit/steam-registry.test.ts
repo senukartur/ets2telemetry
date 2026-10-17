@@ -185,10 +185,25 @@ describe.runIf(process.platform === 'win32')('a real run of the fixed script aga
     run(`$value = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${b64(stored)}')); New-Item -Path '${providerKey}' -Force | Out-Null; `
       + `New-ItemProperty -LiteralPath '${providerKey}' -Name SteamPath -Value $value -PropertyType String | Out-Null`);
   }, POWERSHELL_START_TIMEOUT_MS);
+  // Opens a key under HKCU with only ReadPermissions and ChangePermissions, which its owner always holds, so a key whose
+  // values are denied can still have its ACL changed. `$keyPath` is relative to HKCU.
+  const openForAcl = "[Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($keyPath, [Microsoft.Win32.RegistryKeyPermissionCheck]::ReadWriteSubTree, "
+    + '[System.Security.AccessControl.RegistryRights]::ReadPermissions -bor [System.Security.AccessControl.RegistryRights]::ChangePermissions)';
+  const relativeKey = `Software\\ETS2Telemetry-Test-${id}`;
+  /** Denies the current user QueryValues on one test key, so reading any of its values throws. */
+  const denyValues = (subkey: '' | '\\Machine') => run(`$keyPath = '${relativeKey}${subkey}'; $handle = ${openForAcl}; $security = $handle.GetAccessControl(); `
+    + "$security.AddAccessRule((New-Object System.Security.AccessControl.RegistryAccessRule([System.Security.Principal.WindowsIdentity]::GetCurrent().User, 'QueryValues', 'Deny'))); "
+    + '$handle.SetAccessControl($security); $handle.Close()');
   afterEach(() => {
-    run(`Remove-Item -LiteralPath '${providerKey}' -Recurse -Force -ErrorAction SilentlyContinue`);
+    // Deny rules are removed first; then the whole per-run key is deleted.
+    run(`foreach ($keyPath in @('${relativeKey}\\Machine', '${relativeKey}')) { $handle = ${openForAcl}; if ($null -eq $handle) { continue }; `
+      + '$security = $handle.GetAccessControl(); foreach ($rule in @($security.GetAccessRules($true, $false, [System.Security.Principal.SecurityIdentifier]))) { '
+      + "if ($rule.AccessControlType -eq 'Deny') { [void]$security.RemoveAccessRuleSpecific($rule) } }; $handle.SetAccessControl($security); $handle.Close() }; "
+      + `[Microsoft.Win32.Registry]::CurrentUser.DeleteSubKeyTree('${relativeKey}', $false)`);
     expect(run(`Test-Path -LiteralPath '${providerKey}'`).toString().trim()).toBe('False');
   }, POWERSHELL_START_TIMEOUT_MS);
+  const writeMachineValue = (value: string) => run(`$value = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${b64(value)}')); `
+    + `New-Item -Path '${providerKey}\\Machine' -Force | Out-Null; New-ItemProperty -LiteralPath '${providerKey}\\Machine' -Name InstallPath -Value $value -PropertyType String | Out-Null`);
   const testKeys = () => ({user: userKey, machine: `${userKey}\\Machine`});
   /**
    * A module folder like the one a pwsh 7 parent exports: a Core-edition Microsoft.PowerShell.Utility that Windows
@@ -229,6 +244,20 @@ describe.runIf(process.platform === 'win32')('a real run of the fixed script aga
       expect(await readSteamRegistryValues({execFile: recorded, testKeys: testKeys()})).toEqual({ok: true, steamPath: stored, installPath: null});
     } finally {vi.unstubAllEnvs();}
     expect(children).toEqual([path.win32.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'Modules')]);
+  }, POWERSHELL_START_TIMEOUT_MS);
+
+  it('keeps a readable SteamPath when the machine-wide value cannot be read', async () => {
+    writeMachineValue('C:/machine/Steam');
+    denyValues('\\Machine');
+    expect(await readSteamRegistryValues({testKeys: testKeys()})).toEqual({ok: true, steamPath: stored, installPath: null});
+    expect(await readSteamRoot({testKeys: testKeys(), fs: guard.fs})).toEqual({kind: 'found', path: steam});
+  }, POWERSHELL_START_TIMEOUT_MS);
+
+  it('keeps a readable InstallPath when SteamPath cannot be read', async () => {
+    writeMachineValue(stored);
+    denyValues('');
+    expect(await readSteamRegistryValues({testKeys: testKeys()})).toEqual({ok: true, steamPath: null, installPath: stored});
+    expect(await readSteamRoot({testKeys: testKeys(), fs: guard.fs})).toEqual({kind: 'found', path: steam});
   }, POWERSHELL_START_TIMEOUT_MS);
 
   it('needs no module: the fixed script succeeds even when the child itself gets the incompatible PSModulePath', async () => {

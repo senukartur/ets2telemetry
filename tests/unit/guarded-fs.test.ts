@@ -66,6 +66,30 @@ describe('paths', () => {
     expect(await readFile(path.join(outside, 'secret.txt'), 'utf8')).toBe('outside');
   });
 
+  it('refuses access through a dangling junction whose missing target is outside the root', async () => {
+    const gone = await mkdtemp(path.join(tmpdir(), 'ets2telemetry-guard-gone-'));
+    const link = path.win32.join(guard.root, 'Dangling');
+    await symlink(gone, link, 'junction');
+    await rm(gone, {recursive: true});
+    expect(await refused(() => guard.fs.mkdir(path.win32.join(link, 'Made', 'Deeper'), {recursive: true}))).toBe('mkdir-through-link');
+    expect(await refused(() => guard.fs.writeFile(path.win32.join(link, 'planted.txt'), 'x'))).toBe('writeFile-through-link');
+    expect(await refused(() => guard.fs.stat(link))).toBe('stat-through-link');
+    // The link entry itself is inside the root and may be inspected or removed.
+    expect(await refused(() => guard.fs.lstat(link))).toBe('allowed');
+    expect(guard.violations).toHaveLength(3);
+    await expect(readdir(gone)).rejects.toMatchObject({code: 'ENOENT'});
+  });
+
+  it('lets an access through a dangling junction whose missing target is inside the root reach the real call', async () => {
+    const target = path.win32.join(guard.root, 'Removed');
+    await mkdir(target);
+    const link = path.win32.join(guard.root, 'InwardDangling');
+    await symlink(target, link, 'junction');
+    await rm(target, {recursive: true});
+    await expect(guard.fs.stat(path.win32.join(link, 'file.txt'))).rejects.toMatchObject({code: 'ENOENT'});
+    expect(guard.violations).toEqual([]);
+  });
+
   it('catches discovery that would read a library outside the root through a junction', async () => {
     const steam = await fakeSteam(guard.root);
     const link = path.win32.join(guard.root, 'OutwardLibrary');

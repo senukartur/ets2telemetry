@@ -31,9 +31,10 @@ export function steamRegistryScript(keys?: SteamRegistryKeys): string {
   if (keys && (!TEST_KEY.test(user) || !TEST_KEY.test(machine))) throw new Error('Steam registry test keys rejected');
   return [
     "$ErrorActionPreference = 'Stop'",
-    // Base64 needs no JSON escaping, so the output is built as text: a quoted base64 value or null.
+    // Base64 needs no JSON escaping, so the output is built as text: a quoted base64 value or null. Each value is read
+    // on its own, so an unreadable machine-wide key never loses a readable SteamPath, and the reverse.
     'function Read-Value([string]$Key, [string]$Name) {',
-    '  $value = [Microsoft.Win32.Registry]::GetValue($Key, $Name, $null)',
+    "  try { $value = [Microsoft.Win32.Registry]::GetValue($Key, $Name, $null) } catch { return 'null' }",
     `  if ($value -is [string]) { '"' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($value)) + '"' } else { 'null' }`,
     '}',
     `[Console]::Out.Write('{"steamPath":' + (Read-Value '${user}' 'SteamPath') + ',"installPath":' + (Read-Value '${machine}' 'InstallPath') + '}')`

@@ -57,13 +57,22 @@ export async function guardedTempRoot(prefix = 'ets2telemetry-plugin-test-'): Pr
     throw new GuardedFsEscape(operation, text);
   };
   // The real location an operation reaches: links in every existing ancestor are resolved, and the final component too
-  // when the operation follows it. Missing components cannot be links, so they are appended as written.
-  const realLocation = async (target: string, followFinal: boolean): Promise<string> => {
+  // when the operation follows it. A component realpath cannot resolve is either missing, and appended as written, or a
+  // dangling link, which is resolved through readlink. More than 8 link hops count as outside the root.
+  const realLocation = async (target: string, followFinal: boolean, hops = 0): Promise<string> => {
     const resolved = path.win32.resolve(target);
+    if (hops > 8) return '\\\\?\\link-hop-limit';
     let probe = followFinal ? resolved : path.win32.dirname(resolved);
     const rest = followFinal ? [] : [path.win32.basename(resolved)];
     while (true) {
       try {return path.win32.join(await fsp.realpath(probe), ...rest);} catch {
+        let link: string | undefined;
+        try {if ((await fsp.lstat(probe)).isSymbolicLink()) link = await fsp.readlink(probe);} catch {/* missing: keep walking up */}
+        if (link !== undefined) {
+          // Junction targets may carry the \\?\ or \??\ prefix; a relative symbolic link is relative to its folder.
+          const linkTarget = path.win32.resolve(path.win32.dirname(probe), link.replace(/^(\\\\\?\\|\\\?\?\\)/, ''));
+          return realLocation(path.win32.join(linkTarget, ...rest), rest.length ? followFinal : true, hops + 1);
+        }
         const parent = path.win32.dirname(probe);
         if (parent === probe) return resolved;
         rest.unshift(path.win32.basename(probe));
