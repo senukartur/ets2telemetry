@@ -57,7 +57,10 @@ test('Electron supervises service and SQLite worker with a sandboxed renderer',a
     const window = await dashboardWindow(application);
     await expect(window.getByText('Telemetry service ready; isolated storage probe verified')).toBeVisible();
     expect(await window.evaluate(() => {const browserGlobal=globalThis as unknown as {require?:unknown;desktop:DesktopBridge};return {node:typeof browserGlobal.require,keys:Object.keys(browserGlobal.desktop)};})).toEqual({node:'undefined',keys:['getStatus','selectSource','subscribeLive','getAppState','subscribeAppState','exitApplication','setUnitProfile','setOverlayLayout','setOverlaySections','beginOverlayEdit','setOverlayEditScale','resetOverlayEditPlacement','finishOverlayEdit','listJournalTrips','getJournalTrip','listJournalEvents','listJournalIntervals','listJournalSamples','exportJournalTrip','retryPluginSetup','choosePluginFolder','setPluginGameExcluded','showPluginFile','openPluginFolder']});
-    expect(await application.evaluate(({BrowserWindow}) => {const contents=BrowserWindow.getAllWindows()[0].webContents as unknown as {getLastWebPreferences():Electron.WebPreferences};const preferences=contents.getLastWebPreferences();return {sandbox:preferences.sandbox,isolation:preferences.contextIsolation,node:preferences.nodeIntegration};})).toEqual({sandbox:true,isolation:true,node:false});
+    // Every window (the dashboard and the overlay, in either order) must be sandboxed and isolated without Node integration.
+    const preferences = await application.evaluate(({BrowserWindow}) => BrowserWindow.getAllWindows().map(owner => {const contents=owner.webContents as unknown as {getLastWebPreferences():Electron.WebPreferences};const values=contents.getLastWebPreferences();return {sandbox:values.sandbox,isolation:values.contextIsolation,node:values.nodeIntegration};}));
+    expect(preferences.length).toBeGreaterThan(0);
+    for (const entry of preferences) expect(entry).toEqual({sandbox:true,isolation:true,node:false});
   } finally {
     try {
       if (application) await closeWithinDeadline(application);

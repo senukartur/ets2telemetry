@@ -264,7 +264,7 @@ Since ET-017 PR-5 (October 17, 2026) the `plugin` runtime smoke scenario runs th
 ```
 
 - **Placement.** The packaged step runs on pull requests, right after the packaged lifecycle smoke. The development step runs on pushes to `main` and dispatches, like the other development smokes.
-- **Why a scenario of its own.** A first version ran the journey inside the `lifecycle` smoke. Review round 1 of PR-5 moved it out: its worst-case waits for two setup runs and an exclusion would have exceeded the gating lifecycle step's 60 s Job on a hosted runner, where the 25% CPU cap is about one core. The lifecycle smoke is back in its PR-4 shape.
+- **Why a scenario of its own.** A first version ran the journey inside the `lifecycle` smoke. Review round 1 of PR-5 moved it out: its worst-case waits for two setup runs and an exclusion would have exceeded the gating lifecycle step's 60 s Job on a hosted runner, where the 25% CPU cap is about one processor on the four-processor runners recorded since the repository became public (two processors and 0.5 processor before; see above). The lifecycle smoke is back in its PR-4 shape.
 - **Job.** The `plugin` scenario runs in its own Job with a 120 s deadline; the other limits (16 processes, 2 GiB, 25% CPU, kill-on-close, zero retries) are unchanged, and every other scenario keeps 60 s. `scripts/watchdog/BoundedProcess.cs` accepts deadlines up to 120 s for this, instead of 60 s.
 - **Phases.** The driver records `plugin-run-a-settled`, `plugin-excluded` and `plugin-run-b-settled` beside the usual phases. Locally the packaged Job took about 16 s.
 - **Safety.** The fixture first fails if `tasklist` lists ETS2, ATS or a TruckersMP process.
