@@ -4,6 +4,7 @@ import type {CurrentState, SourceIdentity, AppliedState, CaptureTime} from './pr
 import type {AppState, OverlayEditState, OverlayLayout, OverlaySectionId, OverlaySections, RecordingCode, SettingsView, UnitGame, UnitProfile} from './app-state';
 import type {Available, LiveObservationV1, Uint64} from './protocol-v1';
 import type {JournalDatabase, JournalEventPage, JournalIntervalPage, JournalTripDetail, JournalTripPage, JournalTripsQuery} from './journal';
+import type {JournalExportResult} from './journal-export';
 export type SourceSelection = 'game' | 'ets2' | 'ats' | 'synthetic' | 'replay';
 /** Statuses of the v1 source; service failure and restart belong to the update that carries the projection. */
 export type LiveV1Status = 'waiting' | 'connected' | 'paused' | 'stale' | 'incompatible' | 'disconnected' | 'unavailable';
@@ -80,6 +81,12 @@ export interface DesktopBridge {
   listJournalIntervals(tripUuid: string, cursor?: string): Promise<JournalCallResult<JournalIntervalPage>>;
   /** One page of 300 one-second samples of a trip, after the given sample cursor. */
   listJournalSamples(tripUuid: string, cursor?: string): Promise<JournalCallResult<JournalSamplePage>>;
+  /**
+   * ET-016 PR-5 (J15-J17): exports one trip as a versioned JSON file through main's Save dialog. Resolves
+   * `{outcome: 'saved'}` with the row counts, `{outcome: 'cancelled'}` when the dialog was cancelled (nothing is written),
+   * or a fixed refusal code; never a path. One export runs at a time.
+   */
+  exportJournalTrip(tripUuid: string): Promise<JournalExportResult>;
 }
 /**
  * The fixed refusal codes of a journal call (ET-016, J11). `SERVICE_UNAVAILABLE`: no ready telemetry service, or it is
@@ -146,3 +153,4 @@ export * from './protocol-v0';
 export * from './app-state';
 export type {LiveObservationV1, LiveStateV1} from './protocol-v1';
 export * from './journal';
+export * from './journal-export';

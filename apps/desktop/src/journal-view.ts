@@ -1,5 +1,5 @@
 import type {
-  JournalCallResult, JournalDatabase, JournalEvent, JournalEventPage, JournalGame, JournalGameMode, JournalInterval, JournalIntervalPage, JournalMoneyTotals,
+  JournalCallResult, JournalDatabase, JournalExportResult, JournalEvent, JournalEventPage, JournalGame, JournalGameMode, JournalInterval, JournalIntervalPage, JournalMoneyTotals,
   JournalSample, JournalSamplePage, JournalTripDetail, JournalTripListItem, JournalTripPage, JournalWindow, RecordingHealth, UnitProfiles
 } from '../../../packages/contracts/src';
 import type {Currency, EventRecord, Money, UnavailableReason} from '../../../packages/contracts/src/protocol-v1';
@@ -10,7 +10,8 @@ import {
 } from '../../../packages/telemetry-core/src/format';
 import type {MoneyCurrency} from '../../../packages/telemetry-core/src/readings';
 import {
-  JOURNAL_ATTRIBUTION_TEXT, JOURNAL_CLOSE_REASON_TEXT, JOURNAL_COMPLETENESS_TEXT, JOURNAL_ERROR_TEXT, JOURNAL_EVENT_TYPE_TEXT, JOURNAL_GAME_MODE_EVIDENCE_TEXT,
+  JOURNAL_ATTRIBUTION_TEXT, JOURNAL_CLOSE_REASON_TEXT, JOURNAL_COMPLETENESS_TEXT, JOURNAL_ERROR_TEXT, JOURNAL_EVENT_TYPE_TEXT, JOURNAL_EXPORT_ERROR_TEXT, JOURNAL_EXPORT_STRINGS,
+  JOURNAL_GAME_MODE_EVIDENCE_TEXT,
   JOURNAL_GAME_MODE_TEXT, JOURNAL_GAME_TEXT, JOURNAL_INTERVAL_CAUSE_TEXT, JOURNAL_INTERVAL_KIND_TEXT, JOURNAL_JOB_SOURCE_TEXT, JOURNAL_LABEL_TEXT,
   JOURNAL_MONEY_CATEGORY_TEXT, JOURNAL_NOTE_TEXT, JOURNAL_OPENED_BY_TEXT, JOURNAL_OTHER_CAUSE, JOURNAL_OUTCOME_TEXT, JOURNAL_PURPOSE_TEXT, JOURNAL_REASON_TEXT,
   JOURNAL_SECTION_TEXT, JOURNAL_STRINGS, RECORDING_CODE_TEXT, UNIT_GAME_TEXT
@@ -109,6 +110,16 @@ const gameTime = (minutes: string) => formatGameTime(BigInt(minutes));
 export function journalErrorText(failure: JournalFailure): string {
   if (failure.code === 'DATABASE_UNAVAILABLE') return fill(JOURNAL_ERROR_TEXT.DATABASE_UNAVAILABLE, {cause: RECORDING_CODE_TEXT[failure.storageCode]});
   return JOURNAL_ERROR_TEXT[failure.code];
+}
+/** The fixed result text of a trip export (ET-016 PR-5, J16): the row counts, a cancellation or the refusal code's sentence. */
+export function journalExportText(result: JournalExportResult): {text: string; failed: boolean} {
+  if (result.ok) {
+    const value = result.value;
+    return value.outcome === 'cancelled' ? {text: JOURNAL_EXPORT_STRINGS.cancelled, failed: false}
+      : {text: fill(JOURNAL_EXPORT_STRINGS.saved, {events: String(value.events), intervals: String(value.intervals), samples: String(value.samples)}), failed: false};
+  }
+  if (Object.hasOwn(JOURNAL_EXPORT_ERROR_TEXT, result.code)) return {text: JOURNAL_EXPORT_ERROR_TEXT[result.code as keyof typeof JOURNAL_EXPORT_ERROR_TEXT], failed: true};
+  return {text: journalErrorText(result as JournalFailure), failed: true};
 }
 /** The persistent banner of a synthetic or replay test database (J3); null for history and before the first answer. */
 export function journalBannerText(database: JournalDatabase | undefined): string | null {

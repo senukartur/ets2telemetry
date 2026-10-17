@@ -1,8 +1,9 @@
-import {app, BrowserWindow, ipcMain, Menu, MessageChannelMain, nativeImage, screen, Tray, utilityProcess, type MessagePortMain, type UtilityProcess, type IpcMainEvent, type IpcMainInvokeEvent} from 'electron';
+import {app, BrowserWindow, dialog, ipcMain, Menu, MessageChannelMain, nativeImage, screen, Tray, utilityProcess, type MessagePortMain, type UtilityProcess, type IpcMainEvent, type IpcMainInvokeEvent} from 'electron';
 import squirrelStartup from 'electron-squirrel-startup';
 import {existsSync, mkdirSync} from 'node:fs';
 import path from 'node:path';
 import type {EventEmitter} from 'node:events';
+import {version} from '../../../package.json';
 import type {AppHealth, AppState, LiveTelemetry, OverlayEditState, OverlayPresentation, OverlaySettings, ScaffoldStatus, SettingsView, SourceSelection, UnitProfiles} from '../../../packages/contracts/src';
 import {SettingsBusyError, SettingsError, SettingsStore, settingsDirectory} from './settings-store';
 import {isUnitGame, isUnitProfile} from './unit-profiles';
@@ -28,7 +29,9 @@ import {failureCode, initialHealth, reduceHealth, sameHealth, type HealthEvent} 
 import {addLosses, parseRecordingHealth, recordingFacts, sameRecording, ZERO_LOSSES} from './recording-status';
 import {TrayPresenter, type TrayMenuItem} from './tray-model';
 import {JournalBroker} from './journal-broker';
-import {JOURNAL_CHANNELS, journalRequest, type JournalQueryKind} from './journal-contract';
+import {JOURNAL_CHANNELS, JOURNAL_EXPORT_CHANNEL, journalRequest, type JournalChannelKind} from './journal-contract';
+import {EXPORT_DIALOG_FILTERS, JournalExporter} from './journal-export-writer';
+import {isJournalUuid} from '../../../packages/contracts/src/journal';
 import {TRAY_ICON_REPRESENTATIONS, trayIconPng, type TrayTone} from './tray-icon';
 
 if (squirrelStartup) app.quit();
@@ -84,6 +87,13 @@ function runApplication(profileError: unknown): void {
   function retireRecording(): void {recordingChild = undefined; lossBase = addLosses(lossBase, childLosses); childLosses = ZERO_LOSSES;}
   // ET-016 (J4): journal reads go to the current ready service, attached at readiness and retired with it.
   const journal = new JournalBroker({log});
+  // ET-016 PR-5 (J16): one trip export at a time. Main owns the Save dialog and the file writer; the renderer gets fixed
+  // codes and row counts only. The dialog belongs to the dashboard window; without one the export is cancelled.
+  const exporter = new JournalExporter({log, read: query => journal.request(query), localAppData: process.env.LOCALAPPDATA, appVersion: version,
+    documents: () => app.getPath('documents'),
+    showSaveDialog: defaultPath => window && !window.isDestroyed()
+      ? dialog.showSaveDialog(window, {defaultPath, filters: EXPORT_DIALOG_FILTERS.map(filter => ({name: filter.name, extensions: [...filter.extensions]}))})
+      : Promise.resolve({canceled: true})});
   const upstreamBudget = new RecoveryBudget(), overlayBudget = new RecoveryBudget();
   const dashboardSubscriptions = new LiveSubscriptions(initialLive(), 1);
   // The last projection main published: a non-current projection keeps its shape (ET-012a decision L5).
@@ -126,10 +136,15 @@ function runApplication(profileError: unknown): void {
   let selection: SourceSelection = sourceSelection(process.env.ETS2TELEMETRY_SOURCE_KIND || 'game');
   const lifecycle = new ExitCoordinator({
     log,
-    begin: () => {updateHealth({type: 'exit-requested'}, true); retireLive();},
+    // A running trip export stops first, so a journal read that the retirement answers ends it as interrupted (J16).
+    begin: () => {exporter.abort(); updateHealth({type: 'exit-requested'}, true); retireLive();},
     stopService: () => supervisor.stop(),
-    // An in-flight settings save may delay the final exit by at most EXIT_IDLE_BUDGET_MS (1000 ms).
-    idle: () => settingsStore.idle(),
+    // An in-flight settings save and the removal of an interrupted export's partial file may delay the final exit by at
+    // most EXIT_IDLE_BUDGET_MS (1000 ms) together.
+    idle: () => {
+      const settings = settingsStore.idle(), exported = exporter.idle();
+      return settings && exported ? Promise.all([settings, exported]).then(() => undefined) : settings ?? exported;
+    },
     destroyTray: () => {trayPresenter?.dispose(); const previous = tray; tray = undefined; previous?.destroy();},
     exit: code => app.exit(code)
   });
@@ -599,7 +614,7 @@ function runApplication(profileError: unknown): void {
   // rejected). Exact argument counts, every argument checked again, the page size fixed here; an untrusted or invalid
   // call rejects. A valid call resolves the broker's {ok, value} or {ok: false, code}; no path, process id or Windows
   // session id is ever part of it.
-  for (const kind of Object.keys(JOURNAL_CHANNELS) as JournalQueryKind[]) {
+  for (const kind of Object.keys(JOURNAL_CHANNELS) as JournalChannelKind[]) {
     ipcMain.handle(JOURNAL_CHANNELS[kind], (event, ...request: unknown[]) => {
       if (!trusted(event)) throw new Error('Untrusted journal request');
       const query = journalRequest(kind, request);
@@ -607,6 +622,12 @@ function runApplication(profileError: unknown): void {
       return journal.request(query);
     });
   }
+  // ET-016 PR-5 (J16): the sixth journal channel exports exactly one trip UUID, from the trusted dashboard main frame only.
+  ipcMain.handle(JOURNAL_EXPORT_CHANNEL, (event, ...request: unknown[]) => {
+    if (!trusted(event)) throw new Error('Untrusted journal request');
+    if (request.length !== 1 || !isJournalUuid(request[0])) throw new Error('Invalid journal request');
+    return exporter.export(request[0]);
+  });
   ipcMain.handle('telemetry:select', async (event, source: unknown) => {
     if (!trusted(event) || !serviceReady) throw new Error('Untrusted source request');
     const next = sourceSelection(source);

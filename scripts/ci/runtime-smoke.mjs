@@ -18,7 +18,7 @@ import {
 } from './overlay-observation.mjs';
 import {runLifecycleSmoke, seedLifecycleSettings, verifyLifecycleRestart} from './lifecycle-observation.mjs';
 import {RECORDING_TARGET, runRecordingSmoke, startRecordingSource, verifyRecordingRestart, verifyRecordingRun} from './recording-observation.mjs';
-import {JOURNAL_TARGET, runJournalEmpty, runJournalSeeded, seedJournalDatabase, verifyJournalRun} from './journal-observation.mjs';
+import {JOURNAL_TARGET, runJournalEmpty, runJournalExport, runJournalSeeded, seedJournalDatabase, verifyJournalRun} from './journal-observation.mjs';
 // These read-only globals are used only inside serialized Playwright browser callbacks.
 /* global document: readonly, getComputedStyle: readonly, innerHeight: readonly, innerWidth: readonly */
 
@@ -127,7 +127,7 @@ try {
     frozen: Object.isFrozen(globalThis.desktop), status: await globalThis.desktop.getStatus()}));
   assert.deepEqual(result.actual, {require: 'undefined', process: 'undefined', keys: ['getStatus', 'selectSource', 'subscribeLive', 'getAppState', 'subscribeAppState', 'exitApplication', 'setUnitProfile', 'setOverlayLayout', 'setOverlaySections',
     'beginOverlayEdit', 'setOverlayEditScale', 'resetOverlayEditPlacement', 'finishOverlayEdit',
-    'listJournalTrips', 'getJournalTrip', 'listJournalEvents', 'listJournalIntervals', 'listJournalSamples'],
+    'listJournalTrips', 'getJournalTrip', 'listJournalEvents', 'listJournalIntervals', 'listJournalSamples', 'exportJournalTrip'],
     frozen: true, status: result.expected.status});
   if (config.scenario === 'scaffold') {
     // ET-016 PR-3: a journal read crosses the preload, main and the telemetry service to the new, empty history database
@@ -412,6 +412,9 @@ try {
     phase('restart-ready');
     await runJournalSeeded({dashboard, record: result.journal});
     phase('journal-read');
+    // ET-016 PR-5: the trip export through the Journal tab, with main's Save dialog replaced through Playwright.
+    await runJournalExport({application, dashboard, config, record: result.journal});
+    phase('journal-exported');
     await dashboard.screenshot({path: path.join(config.output, 'journal.png')});
   }
   phase('journey-complete');

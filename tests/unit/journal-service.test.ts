@@ -16,6 +16,8 @@ import {DETAIL, EVENT_PAGE, INTERVAL_PAGE, SAMPLE, TRIP, TRIP_PAGE} from '../sha
 
 const DATABASE = {purpose: 'synthetic', schemaVersion: 2} as const;
 const TRIPS: JournalQuery = {kind: 'trips', query: {game: 'ets2'}};
+/** The open database's UUID, as its open summary reports it (ET-016 PR-5). */
+const DATABASE_UUID = 'f0000000-0000-4000-8000-000000000001';
 
 /** A deferred client answer, resolved by the test. */
 function deferred<T>() {
@@ -34,7 +36,8 @@ function recordedClient() {
 }
 function fixture(state: HistoryState = 'open', failureCode: StorageErrorCode | null = null) {
   const recorded = recordedClient(), log = vi.fn();
-  const history: {-readonly [K in keyof JournalHistory]: JournalHistory[K]} = {state, failureCode, client: state === 'open' ? recorded.client : undefined, database: state === 'open' ? DATABASE : undefined};
+  const history: {-readonly [K in keyof JournalHistory]: JournalHistory[K]} = {state, failureCode, client: state === 'open' ? recorded.client : undefined, database: state === 'open' ? DATABASE : undefined,
+    databaseUuid: state === 'open' ? DATABASE_UUID : undefined};
   let stopping = false;
   const service = new JournalService({history, stopping: () => stopping, log});
   return {...recorded, history, log, service, stop: () => { stopping = true; }};
@@ -60,6 +63,27 @@ describe('refusals before any storage read (J4, J11)', () => {
     f.stop();
     await expect(f.service.query(TRIPS)).resolves.toEqual({ok: false, code: 'SERVICE_UNAVAILABLE'});
     expect(f.calls).toEqual([]);
+  });
+});
+
+describe('the export header read (ET-016 PR-5, J3, J15)', () => {
+  it('answers the purpose, schema version and UUID of the open database from its open summary, without a storage command, also while a read runs', async () => {
+    const f = fixture();
+    const first = f.service.query(TRIPS);
+    await expect(f.service.query({kind: 'database'})).resolves.toEqual({ok: true, value: {database: {purpose: 'synthetic', schemaVersion: 2}, databaseUuid: DATABASE_UUID}});
+    expect(f.calls).toEqual([['journalTrips', {game: 'ets2'}]]);
+    f.answer(0, {ok: true, value: TRIP_PAGE});
+    await first;
+  });
+  it.each<[HistoryState, JournalCallResult<never>]>([
+    ['opening', {ok: false, code: 'DATABASE_OPENING'}], ['closed', {ok: false, code: 'SERVICE_UNAVAILABLE'}]
+  ])('refuses it while the database is %s', async (state, expected) => {
+    await expect(fixture(state).service.query({kind: 'database'})).resolves.toEqual(expected);
+  });
+  it('refuses it while the service stops', async () => {
+    const f = fixture();
+    f.stop();
+    await expect(f.service.query({kind: 'database'})).resolves.toEqual({ok: false, code: 'SERVICE_UNAVAILABLE'});
   });
 });
 

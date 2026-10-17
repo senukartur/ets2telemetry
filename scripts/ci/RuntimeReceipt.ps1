@@ -341,6 +341,22 @@ function Test-JournalReceipt {
         @($journal.deliveredSamples)[2].text -cne 'no samples for 1 s') { return $false }
     if (@($journal.pagingTimeline.pageTwo).Count -ne 5 -or !(Test-ReceiptInteger -Value $journal.pagingIntervals.pageTwo -Minimum 4 -Maximum 4) -or
         (@($journal.pagingSamples.kinds) -join ',') -cne 'sample') { return $false }
+    # ET-016 PR-5 trip export: the paging trip and the delivered anchor saved and checked, a cancelled dialog and a refused
+    # data-folder target that wrote nothing, and exactly the expected export rows in run 2's main log.
+    foreach ($field in @('exportNoteShown','exportsSaved','exportCancelledWritesNothing','exportTargetRefused','dataFolderUnchanged')) {
+        if ($journal.$field -isnot [bool] -or $journal.$field -ne $true) { return $false }
+    }
+    if ((@($journal.exportFolder) -join ',') -cne 'delivered.json,paging.json') { return $false }
+    $pagingExport = $journal.pagingExport
+    if ($null -eq $pagingExport -or !(Test-ReceiptInteger -Value $pagingExport.events -Minimum 105 -Maximum 105) -or
+        !(Test-ReceiptInteger -Value $pagingExport.intervals -Minimum 104 -Maximum 104) -or !(Test-ReceiptInteger -Value $pagingExport.samples -Minimum 3600 -Maximum 3600) -or
+        $pagingExport.snapshot -isnot [bool] -or !$pagingExport.snapshot) { return $false }
+    if ((@($journal.deliveredExport.events | ForEach-Object { $_[0] }) -join ',') -cne '4,5,6,7,8,9' -or $journal.deliveredExport.bounds.snapshot -isnot [bool] -or
+        $journal.deliveredExport.bounds.snapshot) { return $false }
+    $exportEvents = @($journal.exportEvents)
+    if ((@($exportEvents | ForEach-Object { $_.event }) -join ',') -cne 'JOURNAL_EXPORT_SAVED,JOURNAL_EXPORT_SAVED,JOURNAL_EXPORT_CANCELLED,JOURNAL_EXPORT_FAILED' -or
+        $exportEvents[3].facts.code -cne 'EXPORT_TARGET_REFUSED' -or !(Test-ReceiptInteger -Value $exportEvents[0].facts.samples -Minimum 3600 -Maximum 3600) -or
+        !(Test-ReceiptInteger -Value $exportEvents[1].facts.events -Minimum 6 -Maximum 6)) { return $false }
     $exit = $journal.emptyRunExit
     if ($null -eq $exit -or !(Test-ReceiptInteger -Value $exit.launcherExit -Minimum 0 -Maximum 0) -or $null -ne $exit.signal) { return $false }
     if (!(Test-ReceiptInteger -Value $journal.restartLauncherExit -Minimum 0 -Maximum 0) -or $Driver.launcherExit -ne 0 -or
@@ -350,8 +366,11 @@ function Test-JournalReceipt {
         $files.syntheticBackups -isnot [bool] -or $files.syntheticBackups) { return $false }
     # Run 1 opened the new history database; run 2 only the existing synthetic one.
     $serviceEvents = @($Driver.serviceEvents); $restartService = @($journal.restartServiceEvents)
+    # The refused export target's row is run 2's only expected failure code (ET-016 PR-5); it is checked above.
+    $restartMain = @($journal.restartMainEvents | Where-Object { !($_.event -ceq 'JOURNAL_EXPORT_FAILED' -and $_.facts.code -ceq 'EXPORT_TARGET_REFUSED') })
+    if (@($journal.restartMainEvents).Count - $restartMain.Count -ne 1) { return $false }
     if (!(Test-OrderlyRunEvent -MainEvents @($Driver.mainEvents) -ServiceEvents $serviceEvents) -or
-        !(Test-OrderlyRunEvent -MainEvents @($journal.restartMainEvents) -ServiceEvents $restartService)) { return $false }
+        !(Test-OrderlyRunEvent -MainEvents $restartMain -ServiceEvents $restartService)) { return $false }
     if (@($serviceEvents | Where-Object { $_.event -ceq 'RECORDING_TARGET' }).Count -ne 0) { return $false }
     foreach ($run in @(@{rows=$serviceEvents; created=$true}, @{rows=$restartService; created=$false})) {
         $opened = @($run.rows | Where-Object { $_.event -ceq 'HISTORY_STORAGE_OPENED' })
