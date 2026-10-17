@@ -1,6 +1,6 @@
 # Windows x64 scaffold
 
-The accepted scaffold now includes the v0 SDK adapter, native snapshot transport, telemetry service and game-window metadata. ET-008 adds a candidate [minimal overlay](minimal-overlay.md) and [closed-game manual plugin setup](manual-plugin-setup.md). Use only the maintained SDK DLL identified there; never install the historical placeholder DLL. Production history and durable event delivery remain unimplemented. Required real-game, display and performance acceptance remains pending. [Windows CI and bounded worker smokes](ci.md) provide controlled evidence, not game compatibility.
+The accepted scaffold now includes the v0 SDK adapter, native snapshot transport, telemetry service and game-window metadata. ET-008 adds a candidate [minimal overlay](minimal-overlay.md) and [closed-game manual plugin setup](manual-plugin-setup.md). Use only the maintained SDK DLL identified there. The historical ET-001 placeholder DLL is no longer built (ET-019t, October 17, 2026). Production history and durable event delivery remain unimplemented. Required real-game, display and performance acceptance remains pending. [Windows CI and bounded worker smokes](ci.md) provide controlled evidence, not game compatibility.
 
 ## Toolchain
 
