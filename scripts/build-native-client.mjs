@@ -11,7 +11,8 @@ function run(args) {
   if (result.status !== 0) throw new Error(`Native client CMake failed with ${result.status}`);
 }
 run(['-S', 'native/telemetry-client', '-B', 'native/telemetry-client/build', '-A', 'x64']);
-run(['--build', 'native/telemetry-client/build', '--config', 'Release']);
+// `/m` lets MSBuild build independent projects of the solution in parallel (docs/ci.md).
+run(['--build', 'native/telemetry-client/build', '--config', 'Release', '--', '/m']);
 if (JSON.stringify(inputs) !== JSON.stringify(sourceHashes())) throw new Error('Native client source changed during build');
 const executable = 'native/telemetry-client/build/Release/telemetry-pipe-client.exe';
 const stage = '.local/package-native/telemetry-client';

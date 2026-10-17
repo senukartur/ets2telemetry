@@ -35,7 +35,7 @@
     "package": "npm run build && electron-forge package --platform win32 --arch x64",
     "make": "npm run build && electron-forge make --platform win32 --arch x64",
     "native:configure": "cmake -S native/telemetry-plugin -B native/telemetry-plugin/build -A x64",
-    "native:build": "cmake --build native/telemetry-plugin/build --config Release",
+    "native:build": "cmake --build native/telemetry-plugin/build --config Release -- /m",
     "native:test": "ctest --test-dir native/telemetry-plugin/build -C Release --output-on-failure",
     "capture:export": "node tools/capture-export/build.mjs && node tools/capture-export/dist/cli.cjs"
   },
