@@ -881,6 +881,32 @@ Under the owner's standing delegation of October 15, 2026 (quoted in the ET-015a
 
 `GAME_HISTORY_RECORDING` stays `false`. ET-017 and later phases are not authorized by this section. No game, TruckersMP, display or performance claim follows from synthetic or local tests.
 
+ET-016 implementation update on October 17, 2026: ET-016a and ET-016b are implemented.
+
+**ET-016a**
+- Schema version 2: #93.
+- Bounded journal reads in the storage worker: #96.
+- Journal queries from the trusted dashboard through main to the telemetry service: #97. A storage-side timeout is reported as an unavailable database, because it ends recording for that service.
+- The Journal tab with trip details: #98.
+- The versioned JSON trip export through a main-process save flow: #101. It refuses targets in the data folder by name, real path and file identity, and states the J18 uninstall note next to Export.
+
+**ET-016b**
+- Fuel-used persistence: #95.
+- Late-attach trips opened from checkpoints, which supersede T9: #99.
+- Journal and export reconciliation in the development and packaged recording journey: PR-8.
+
+**Technical debt.** TD-006 (trip average consumption), TD-007 (late-attach truck and trailer identity) and TD-008 (the export's trailer list is limited to the latest 10 configurations) record the deferred parts.
+
+**Enablement.** It no longer waits for S-1/S-2, but it still needs the v0 retirement, real-game v1 evidence, and real full-volume and ACL evidence. `GAME_HISTORY_RECORDING` stays `false`.
+
+**Pending checks.**
+- The real Windows Save dialog, readability and keyboard use of the Journal tab, and a forced render fault.
+- The journal and export against real recorded history.
+- Real late-attach checkpoints.
+- Every real-game, TruckersMP, display and performance check.
+
+See [journal](docs/journal.md), [trip export](docs/journal-export.md) and [ET-016 validation](docs/validation/et-016.md).
+
 ## Uninstall removes local data — October 16, 2026
 
 On October 16, 2026 the owner confirmed an answer first given on October 10, 2026: uninstalling ETS2Telemetry removes all of its local data. That covers the application root `%LOCALAPPDATA%\ETS2Telemetry`: the history database and its backups, settings, logs, synthetic recordings and other application-owned files. History is expected to come back from the server once the later server phase exists. Until then, an uninstall loses unsynchronized local history permanently.
