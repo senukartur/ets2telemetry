@@ -54,11 +54,11 @@ const listing = async (directory = out) => (await readdir(directory)).sort();
 
 describe('a cancelled Save dialog (J16)', () => {
   it('writes nothing and answers cancelled', async () => {
-    const fs: ExportFileSystem = {open: vi.fn(), rename: vi.fn(), unlink: vi.fn(), realpath: vi.fn()};
+    const fs: ExportFileSystem = {open: vi.fn(), rename: vi.fn(), unlink: vi.fn(), realpath: vi.fn(), stat: vi.fn()};
     const f = exporter({target: null, fs});
     await expect(f.instance.export(TRIP)).resolves.toEqual({ok: true, value: {outcome: 'cancelled'}});
     expect(f.showSaveDialog).toHaveBeenCalledExactlyOnceWith('C:\\Users\\owner\\Documents\\ets2telemetry-trip-ets2-20261011-0000-7a000000.json');
-    expect([fs.open, fs.rename, fs.unlink, fs.realpath].map(call => (call as ReturnType<typeof vi.fn>).mock.calls.length)).toEqual([0, 0, 0, 0]);
+    expect([fs.open, fs.rename, fs.unlink, fs.realpath, fs.stat].map(call => (call as ReturnType<typeof vi.fn>).mock.calls.length)).toEqual([0, 0, 0, 0, 0]);
     expect(await listing()).toEqual([]);
     expect(events(f.log)).toEqual([['JOURNAL_EXPORT_CANCELLED', null]]);
     // The detail and the database header were read before the dialog; no page was.
@@ -79,6 +79,17 @@ describe('a saved export (J16, J17)', () => {
     // Each read at the export page size of its kind (J5, J16).
     expect(f.queries).toEqual([{kind: 'trip', tripUuid: TRIP}, {kind: 'database'}, {kind: 'intervals', tripUuid: TRIP, page: {limit: 500}},
       {kind: 'events', tripUuid: TRIP, page: {limit: 500}}, {kind: 'samples', tripUuid: TRIP, page: {limit: 3_600}}]);
+  });
+  it('appends every part from the current position, so the file is exactly the parts in order (review round 1, finding 4)', async () => {
+    const parts: string[] = [];
+    const fs: ExportFileSystem = {...realFs, open: async (target, flags) => {
+      const handle = await realFs.open(target, flags);
+      return {writeFile: (data: string, encoding: 'utf8') => { parts.push(data); return handle.writeFile(data, encoding); }, sync: () => handle.sync(), close: () => handle.close()};
+    }};
+    const f = exporter({fs});
+    expect((await f.instance.export(TRIP)).ok).toBe(true);
+    expect(parts.length).toBeGreaterThan(3);
+    expect(await readFile(path.join(out, 'trip.json'), 'utf8')).toBe(parts.join(''));
   });
   it('replaces an existing target', async () => {
     await writeFile(path.join(out, 'trip.json'), 'old export');
@@ -138,7 +149,8 @@ describe('a failed export leaves no partial file and the old target unchanged (J
     let writes = 0;
     const fs: ExportFileSystem = {...realFs, open: async (target, flags) => {
       const handle = await realFs.open(target, flags);
-      return {write: (data: string) => ++writes === 3 ? Promise.reject(Object.assign(new Error('disk'), {code: 'EIO'})) : handle.write(data), sync: () => handle.sync(), close: () => handle.close()};
+      return {writeFile: (data: string, encoding: 'utf8') => ++writes === 3 ? Promise.reject(Object.assign(new Error('disk'), {code: 'EIO'})) : handle.writeFile(data, encoding),
+        sync: () => handle.sync(), close: () => handle.close()};
     }};
     const f = exporter({fs});
     await expect(f.instance.export(TRIP)).resolves.toEqual({ok: false, code: 'EXPORT_WRITE_FAILED'});
@@ -197,6 +209,50 @@ describe('refused targets (J16)', () => {
     const f = exporter({target: path.join(out, 'link', 'trip.json')});
     await expect(f.instance.export(TRIP)).resolves.toEqual({ok: false, code: 'EXPORT_TARGET_REFUSED'});
     expect(await listing(path.join(local, 'ETS2Telemetry', 'data'))).toEqual([]);
+  });
+  // PR-5 review round 1, finding 1: a UNC alias of the data folder passes the lexical and the realpath checks, because
+  // realpath leaves a UNC path unchanged; the folder and its ancestors are compared with the data folder by file identity.
+  it('refuses the data folder through a real \\\\localhost admin share', async ({skip}) => {
+    const drive = local.slice(0, 1);
+    const unc = (target: string) => `\\\\localhost\\${drive}$${target.slice(2)}`;
+    const shareAvailable = await realFs.stat(unc(path.join(local, 'ETS2Telemetry'))).then(stats => stats.isDirectory(), () => false);
+    // Administrative shares exist on default Windows installations; a host without them cannot run this alias.
+    if (!shareAvailable) { skip(`the administrative share \\\\localhost\\${drive}$ is not available on this host`); return; }
+    const f = exporter({target: unc(path.join(local, 'ETS2Telemetry', 'data', 'trip.json'))});
+    await expect(f.instance.export(TRIP)).resolves.toEqual({ok: false, code: 'EXPORT_TARGET_REFUSED'});
+    expect(await listing(path.join(local, 'ETS2Telemetry', 'data'))).toEqual([]);
+    // The same share outside the data folder is an allowed target.
+    const allowed = exporter({target: unc(path.join(out, 'trip.json'))});
+    expect((await allowed.instance.export(TRIP)).ok).toBe(true);
+    expect(await listing()).toEqual(['trip.json']);
+  });
+  it('refuses a UNC alias whose realpath stays unchanged when an ancestor has the identity of the data folder', async () => {
+    // Runs everywhere: the alias \\server\share\ETS2Telemetry is the data folder by volume and file index.
+    const dataRoot = path.join(local, 'ETS2Telemetry');
+    const fs: ExportFileSystem = {...realFs, open: vi.fn(), realpath: (target: string) => Promise.resolve(target),
+      stat: (target: string) => Promise.resolve(target === dataRoot || target === '\\\\server\\share\\ETS2Telemetry' ? {dev: 7n, ino: 42n} : {dev: 7n, ino: BigInt(target.length)})};
+    const f = exporter({target: '\\\\server\\share\\ETS2Telemetry\\data\\trip.json', fs});
+    await expect(f.instance.export(TRIP)).resolves.toEqual({ok: false, code: 'EXPORT_TARGET_REFUSED'});
+    expect(fs.open).not.toHaveBeenCalled();
+    // Another folder of the share is allowed by the identity check (it fails later only because this fixture opens nothing).
+    const other = exporter({target: '\\\\server\\share\\exports\\trip.json', fs: {...fs, open: () => Promise.reject(Object.assign(new Error('no'), {code: 'ENOENT'}))}});
+    await expect(other.instance.export(TRIP)).resolves.toEqual({ok: false, code: 'EXPORT_WRITE_FAILED'});
+  });
+  it('refuses a folder deeper than the ancestor bound, which it cannot show to lie outside the data folder', async () => {
+    const deep = ['\\\\server\\share', ...Array.from({length: 130}, (_, index) => `d${index}`)].join('\\');
+    const fs: ExportFileSystem = {...realFs, open: vi.fn(), realpath: (target: string) => Promise.resolve(target),
+      stat: (target: string) => Promise.resolve({dev: 7n, ino: BigInt(target.length + 1_000)})};
+    const f = exporter({target: `${deep}\\trip.json`, fs});
+    await expect(f.instance.export(TRIP)).resolves.toEqual({ok: false, code: 'EXPORT_TARGET_REFUSED'});
+    expect(fs.open).not.toHaveBeenCalled();
+  });
+  it('still refuses the data folder lexically before it exists, and saves elsewhere', async () => {
+    const fresh = path.join(root, 'fresh-local');
+    await mkdir(fresh);
+    const refused = exporter({localAppData: fresh, target: path.join(fresh, 'ETS2Telemetry', 'trip.json')});
+    await expect(refused.instance.export(TRIP)).resolves.toEqual({ok: false, code: 'EXPORT_TARGET_REFUSED'});
+    expect(existsSync(path.join(fresh, 'ETS2Telemetry'))).toBe(false);
+    expect((await exporter({localAppData: fresh}).instance.export(TRIP)).ok).toBe(true);
   });
   it.each([
     '\\\\?\\C:\\exports\\trip.json', '\\\\.\\C:\\exports\\trip.json', '\\\\.\\pipe\\trip', '//?/C:/exports/trip.json', '\\??\\C:\\exports\\trip.json', 'C:\\exports\\NUL.json',

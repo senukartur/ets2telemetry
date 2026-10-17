@@ -1,10 +1,11 @@
 // ET-016 PR-5 (J15-J17): the trip export end to end below the Electron UI. A synthetic recording target under a temporary
 // LOCALAPPDATA is opened by the service's HistoryStorage in the real storage worker and seeded through its client with the
-// hand-written anchors of tests/shared/journal-seed.ts and one open trip of 521 events, 520 completeness intervals and
-// 3,601 samples, so every export section takes more than one page. The service's JournalService answers the reads, main's
+// hand-written anchors of tests/shared/journal-seed.ts, one open trip of 521 events, 520 completeness intervals and
+// 3,601 samples, so every export section takes more than one page, and one late-attach trip opened from a checkpoint. The service's JournalService answers the reads, main's
 // reply check (journal-contract.ts) forwards them and main's JournalExporter writes the file. After the database closes,
 // independent SQL on a read-only connection reconciles each export with the stored rows; rows written after the detail
 // read (during the Save dialog) must stay out of the export (J17). Runs under npm run test:storage (REG-014).
+import {createHash} from 'node:crypto';
 import {existsSync, mkdirSync, readdirSync, readFileSync} from 'node:fs';
 import path from 'node:path';
 import {afterAll, beforeAll, describe, expect, it} from 'vitest';
@@ -25,6 +26,11 @@ const LARGE_SESSION = '10000000-0000-4000-8000-0000000000f7';
 const LARGE_TRIP = '7c000000-0000-4000-8000-000000000001';
 const LARGE_UTC = BASE_UTC + 5_000_000;
 const TOLLS = 520, SAMPLES = 3_601;
+/** PR-5 review round 1: a late-attach trip (ET-016b PR-7, J9) opened from a checkpoint with nextEventSeq 3 in its own session. */
+const LATE_SESSION = '10000000-0000-4000-8000-0000000000f8';
+const LATE_UTC = BASE_UTC + 6_000_000;
+const lateHash = createHash('sha256').update(`ets2telemetry-trip-attach-v1:${LATE_SESSION}:3`, 'utf8').digest('hex');
+const LATE_TRIP = `${lateHash.slice(0, 8)}-${lateHash.slice(8, 12)}-${lateHash.slice(12, 16)}-${lateHash.slice(16, 20)}-${lateHash.slice(20, 32)}`;
 const HANG_GUARD_MS = 30_000;
 
 let ws: Awaited<ReturnType<typeof workspace>>;
@@ -50,6 +56,20 @@ beforeAll(async () => {
   await until(() => history.state !== 'idle' && history.state !== 'opening', 'the database open', HANG_GUARD_MS);
   expect(history.state).toBe('open');
   client = history.client!;
+  // The late-attach trip first: storage opens one only while no trip of its game is open (J9), and the anchors leave one open.
+  // Its eventSeq 1-2 before the checkpoint, the trip opened from the checkpoint job, then 3-5 with its delivery.
+  const late = new Script(LATE_SESSION, 'ets2', {utcMs: LATE_UTC});
+  await ok(client.upsertSession({message: late.welcome()}), 'late session');
+  await ok(client.commitEvent({message: late.event(r.paused(), {simulation: 'paused'})}), 'late 1');
+  await ok(client.commitEvent({message: late.event(r.fined()), effects: [{kind: 'event.attribute', tripUuid: null, attribution: 'free-driving'}]}), 'late 2');
+  await ok(client.openAttachedTrip({pluginSessionId: LATE_SESSION, nextEventSeq: '3', job: job(), effects: [
+    {kind: 'trip.open', tripUuid: LATE_TRIP, game: 'ets2', gameMode: {mode: 'single-player', method: 'module-scan', confidence: 'weak'}, jobConfiguration: 'this-event',
+      recordingCompleteness: 'partial', startedUtcMs: LATE_UTC + 2_500},
+    {kind: 'completeness.add', interval: {tripUuid: LATE_TRIP, kind: 'not-connected', detail: {cause: 'late-attach', source: 'checkpoint', nextEventSeq: '3'}}}]}), 'late attach');
+  await ok(client.commitEvent({message: late.event(r.started())}), 'late 3');
+  await ok(client.commitEvent({message: late.event(r.fined()), effects: [{kind: 'event.attribute', tripUuid: LATE_TRIP, attribution: 'trip'}]}), 'late 4');
+  await ok(client.commitEvent({message: late.event(r.delivered(), {simulation: 'paused'}), effects: [{kind: 'event.attribute', tripUuid: LATE_TRIP, attribution: 'trip'},
+    {kind: 'trip.close', tripUuid: LATE_TRIP, outcome: 'delivered', closeReason: 'outcome', outcomeEvent: 'this-event', recordingCompleteness: 'partial', endedUtcMs: LATE_UTC + 5_000}]}), 'late 5');
   await seedJournalAnchors(client);
   large = new Script(LARGE_SESSION, 'ets2', {utcMs: LARGE_UTC});
   await ok(client.upsertSession({message: large.welcome()}), 'large session');
@@ -110,8 +130,27 @@ describe('a trip export through the real worker, the service journal and main\'s
       snapshot: true});
     results.large = {file: f.target(), document};
   });
-  it('reconciles both exports with the stored rows read by independent SQL', async () => {
-    expect(Object.keys(results).sort()).toEqual(['delivered', 'large']);
+  it('exports a late-attach trip opened from a checkpoint: its checkpoint job, no truck or trailer, and its window from the checkpoint', async () => {
+    const f = exporter();
+    await expect(f.instance.export(LATE_TRIP)).resolves.toEqual({ok: true, value: {outcome: 'saved', events: 3, intervals: 1, samples: 0}});
+    const document = JSON.parse(readFileSync(f.target(), 'utf8')) as Exported & {job: unknown; truck: unknown; trailers: unknown};
+    expect(tripExportProblems(document)).toEqual([]);
+    expect(path.basename(f.target())).toBe(`ets2telemetry-trip-ets2-20261011-0140-${LATE_TRIP.slice(0, 8)}.json`);
+    expect(document.trip).toEqual({tripUuid: LATE_TRIP, pluginSessionId: LATE_SESSION, game: 'ets2', gameMode: {mode: 'single-player', method: 'module-scan', confidence: 'weak'},
+      gameModeAmbiguous: false, outcome: 'delivered', closeReason: 'outcome', recordingCompleteness: 'partial', startedUtcMs: LATE_UTC + 2_500, endedUtcMs: LATE_UTC + 5_000,
+      observedDistanceM: {available: false, reason: 'not-observed'}, fuelUsedL: {available: false, reason: 'not-observed'}, openedBy: 'checkpoint', openedEventSeq: null,
+      outcomeEventSeq: '5', closedBy: {pluginSessionId: LATE_SESSION, eventSeq: '5'}});
+    expect(document.job).toEqual({source: 'checkpoint', eventSeq: null, checkpointNextEventSeq: '3', values: job()});
+    expect([document.truck, document.trailers]).toEqual([null, {items: [], total: 0}]);
+    expect(document.window).toEqual({known: true, pluginSessionId: LATE_SESSION, fromEventSeq: '3', throughEventSeq: '5', end: 'close-event'});
+    expect(document.events.map(event => [event.eventSeq, event.type, event.attribution?.kind ?? null])).toEqual([['3', 'simulation.started', null], ['4', 'player.fined', 'trip'],
+      ['5', 'job.delivered', 'trip']]);
+    expect(document.intervals.map(interval => [interval.kind, interval.detail])).toEqual([['not-connected', {cause: 'late-attach', source: 'checkpoint', nextEventSeq: '3'}]]);
+    expect([document.samples, document.bounds.committedThroughEventSeq, document.bounds.lastSampleId, document.bounds.snapshot]).toEqual([[], '5', null, false]);
+    results.late = {file: f.target(), document};
+  });
+  it('reconciles the exports with the stored rows read by independent SQL', async () => {
+    expect(Object.keys(results).sort()).toEqual(['delivered', 'large', 'late']);
     await history.close();
     readOnly(database(), db => {
       const info = db.prepare('SELECT database_uuid, purpose FROM database_info WHERE id = 1').get() as {database_uuid: string; purpose: string};
@@ -158,9 +197,10 @@ describe('a trip export through the real worker, the service journal and main\'s
       expect(large.window).toEqual({known: true, pluginSessionId: LARGE_SESSION, fromEventSeq: '1', throughEventSeq: null, end: 'open'});
     });
     // Only the two documents are left in the export folder: no partial file, and nothing was written beside the database.
-    expect(readdirSync(exports).sort()).toEqual([path.basename(results.large.file), path.basename(results.delivered.file)].sort());
+    expect(readdirSync(exports).sort()).toEqual([path.basename(results.large.file), path.basename(results.delivered.file), path.basename(results.late.file)].sort());
     expect(existsSync(path.join(ws.directory, 'ETS2Telemetry', 'data'))).toBe(false);
-    expect(logs.filter(([event]) => event.startsWith('JOURNAL_EXPORT_'))).toEqual([['JOURNAL_EXPORT_SAVED', {events: 6, samples: 3}], ['JOURNAL_EXPORT_SAVED', {events: 521, samples: 3_601}]]);
+    expect(logs.filter(([event]) => event.startsWith('JOURNAL_EXPORT_'))).toEqual([['JOURNAL_EXPORT_SAVED', {events: 6, samples: 3}], ['JOURNAL_EXPORT_SAVED', {events: 521, samples: 3_601}],
+      ['JOURNAL_EXPORT_SAVED', {events: 3, samples: 0}]]);
     expect(logs.filter(([event]) => /UNAVAILABLE|INVALID|REJECTED/.test(event))).toEqual([]);
   });
 });

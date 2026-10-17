@@ -1861,3 +1861,18 @@ it('ends an export whose dialog is open at the exit as interrupted, without a wr
   await expect(running).resolves.toEqual({ok: false, code: 'EXPORT_INTERRUPTED'});
   expect(journalSent()).toHaveLength(2);
 });
+// PR-5 review round 1, finding 3: a fatal stop, which is no exit request, also stops a running export before any file.
+it('ends an export whose dialog is open at a fatal stop as interrupted, without a write', async () => {
+  await ready();
+  let answer!: (value: {canceled: boolean; filePath?: string}) => void;
+  showSaveDialog.mockImplementationOnce(() => new Promise(resolve => { answer = resolve; }));
+  const running = exportCall(trusted(), TRIP);
+  await answerExportReads();
+  // An unknown service message type is fatal (SERVICE_INVALID_MESSAGE).
+  child.emit('message', {type: 'journal-export'});
+  expect(child.postMessage).toHaveBeenCalledWith({type: 'stop'});
+  answer({canceled: false, filePath: 'C:\\Users\\owner\\Documents\\trip.json'});
+  await expect(running).resolves.toEqual({ok: false, code: 'EXPORT_INTERRUPTED'});
+  await expect(exportCall(trusted(), TRIP)).resolves.toEqual({ok: false, code: 'EXPORT_INTERRUPTED'});
+  expect(journalSent()).toHaveLength(2);
+});
