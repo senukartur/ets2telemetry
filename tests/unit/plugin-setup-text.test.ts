@@ -154,7 +154,7 @@ describe('the connection diagnosis and the diagnostics export', () => {
     PLUGIN_BLOCKED_PERMISSION: 'Windows did not allow the plugin to be installed. Copy it by hand as shown below, then press Retry.',
     PLUGIN_UNRECOGNIZED: 'A file that this application did not install is in place of the plugin. Move it away, then press Retry.',
     PLUGIN_OUTDATED: 'An older plugin is installed. It is updated once the game is closed.',
-    PLUGIN_PENDING_GAME_CLOSE: 'The plugin is installed once the game, TruckersMP or the program using the file is closed. Then start the game again.',
+    PLUGIN_PENDING_GAME_CLOSE: 'The plugin is changed automatically once the game, TruckersMP or the program using the file is closed. Then start the game again.',
     PLUGIN_BUNDLE_UNAVAILABLE: 'The bundled plugin is missing or damaged. Reinstall ETS2Telemetry.',
     PLUGIN_NOT_CHECKED: 'The plugin could not be checked in a game folder; see the folder line below.',
     PLUGIN_MISSING: 'The plugin is not installed in a game folder. Turn on "Manage the plugin for this game" or press Retry.',
