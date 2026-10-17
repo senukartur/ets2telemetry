@@ -1,5 +1,9 @@
 # Windows CI and regression infrastructure
 
+## Advisory AI review
+
+The separate [Claude code review](ai-review.md) workflow comments on non-draft pull requests and on owner `@claude` requests. It runs on Ubuntu and requires a Claude secret. It is advisory only and is not a required check; the Windows jobs below remain the CI merge gate.
+
 ET-022 provides [Windows CI](../.github/workflows/windows-ci.yml) for pull requests, pushes to `main`, and manual dispatch. ET-024 limits automatic runs as described in [Triggers and draft checks](#triggers-and-draft-checks). Clean hosted execution and the deliberate failing-assertion/restoration sequence passed as recorded in [ET-022 validation](validation/et-022.md). The final current PR head still needs its own check/review association before owner merge. These runs do not establish branch protection or game compatibility.
 
 The explicitly selected x64 `windows-2022` image uses Visual Studio 2022 with `Visual Studio 17 2022`, not the local Visual Studio 2026 generator. Image updates may change MSVC and SDK patch versions; each run records image identity and vendor versions. Node 24.19.0, npm 11.17.0, Electron 44.7.0 and Playwright 1.64.0 are pinned. CMake 4.3.1 is acquired explicitly before tool verification and configuration; the runner's CMake 3.31.6 does not satisfy the existing native minimum of 4.3. Action revisions are pinned to exact commits (checkout v5, setup-node v5, cache v4, upload-artifact v4). The [runner manifest](https://github.com/actions/runner-images/blob/main/images/windows/Windows2022-Readme.md) documents VS 2022 support.

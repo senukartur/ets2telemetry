@@ -99,7 +99,7 @@ Keep the initial PR suite bounded; target feedback within about 10 minutes and m
 
 A failing baseline suite blocks acceptance of the change. Check the current PR commit, not a stale earlier run; shared-contract or migration changes require all relevant consumers. Record check names only after real jobs exist. The `Protect main` ruleset requires the `Windows x64 scaffold` and `Windows x64 native AddressSanitizer` jobs to pass before a PR merges; PRs limited to `**.md`/`docs/**` get no CI run and are merged with the admin bypass described in [branch protection](AGENTS.md#branch-protection--october-16-2026). Required checks prove only that the jobs passed; review, real-game and other acceptance evidence remain owner/reviewer policy.
 
-The repository's advisory Claude code review workflow was removed on October 17, 2026. Pull requests continue to use the independent review, Windows CI, and real-game evidence requirements described here.
+The advisory Claude code review workflow was restored on October 18, 2026. It posts review comments but is not a required check; pull requests still need the independent review, Windows CI, and real-game evidence described here.
 
 Dependency upgrades (especially Electron, Node, better-sqlite3, SDK, or protocol tooling) need the relevant native, packaged, and migration checks in addition to unit tests. Real-game checks are triggered before release and earlier for SDK, window/input behavior, game/client compatibility, or native changes that simulation cannot validate. If a necessary machine or game is unavailable, keep the required acceptance evidence pending rather than claiming success.
 
