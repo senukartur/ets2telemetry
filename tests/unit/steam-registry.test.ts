@@ -35,12 +35,12 @@ function stub(reply: (call: Call) => {error?: Record<string, unknown>; stdout?: 
   };
   return {execFile, calls};
 }
-const output = (steamPath: string | null, installPath: string | null) => JSON.stringify({steamPath: steamPath === null ? null : b64(steamPath), installPath: installPath === null ? null : b64(installPath)});
+const output = (steamPath: string | null, installPath: string | null, unreadable = 0) => JSON.stringify({steamPath: steamPath === null ? null : b64(steamPath), installPath: installPath === null ? null : b64(installPath), unreadable});
 
 describe('the fixed call', () => {
   it('runs absolute Windows PowerShell with fixed flags, a hidden window, no shell, 5 s and 16 KiB, and reads only the two Valve values', async () => {
     const {execFile, calls} = stub(() => ({stdout: output(null, null)}));
-    expect(await readSteamRegistryValues({execFile, env})).toEqual({ok: true, steamPath: null, installPath: null});
+    expect(await readSteamRegistryValues({execFile, env})).toEqual({ok: true, steamPath: null, installPath: null, unreadable: 0});
     expect(calls).toHaveLength(1);
     const [call] = calls;
     expect(call.file).toBe('C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe');
@@ -102,23 +102,30 @@ describe('bounds and output contract', () => {
   });
 
   it.each([
-    ['invalid base64 characters', JSON.stringify({steamPath: '@@@=', installPath: null})],
-    ['unpadded base64', JSON.stringify({steamPath: 'QQ', installPath: null})],
-    ['non-canonical base64', JSON.stringify({steamPath: 'QR==', installPath: null})],
-    ['base64 of bytes that are not UTF-8', JSON.stringify({steamPath: Buffer.from([0xc8, 0xe3]).toString('base64'), installPath: null})],
-    ['a plain path instead of base64', JSON.stringify({steamPath: 'C:\\Steam', installPath: null})],
-    ['a number', JSON.stringify({steamPath: 5, installPath: null})],
-    ['an extra key', JSON.stringify({steamPath: null, installPath: null, other: null})],
-    ['a missing key', JSON.stringify({steamPath: null})],
+    ['invalid base64 characters', JSON.stringify({steamPath: '@@@=', installPath: null, unreadable: 0})],
+    ['unpadded base64', JSON.stringify({steamPath: 'QQ', installPath: null, unreadable: 0})],
+    ['non-canonical base64', JSON.stringify({steamPath: 'QR==', installPath: null, unreadable: 0})],
+    ['base64 of bytes that are not UTF-8', JSON.stringify({steamPath: Buffer.from([0xc8, 0xe3]).toString('base64'), installPath: null, unreadable: 0})],
+    ['a plain path instead of base64', JSON.stringify({steamPath: 'C:\\Steam', installPath: null, unreadable: 0})],
+    ['a number', JSON.stringify({steamPath: 5, installPath: null, unreadable: 0})],
+    ['an extra key', JSON.stringify({steamPath: null, installPath: null, unreadable: 0, other: null})],
+    ['a missing key', JSON.stringify({steamPath: null, unreadable: 0})],
+    ['a missing unreadable count', JSON.stringify({steamPath: null, installPath: null})],
+    ['a negative unreadable count', JSON.stringify({steamPath: null, installPath: null, unreadable: -1})],
+    ['an unreadable count over 2', JSON.stringify({steamPath: null, installPath: null, unreadable: 3})],
+    ['a fractional unreadable count', JSON.stringify({steamPath: null, installPath: null, unreadable: 1.5})],
+    ['an unreadable count as text', JSON.stringify({steamPath: null, installPath: null, unreadable: '1'})],
+    ['an unreadable value that is not null', output('C:/Steam', 'D:/Steam', 1)],
+    ['more unreadable values than null values', output('C:/Steam', null, 2)],
     ['an array', '[]'],
     ['text that is not JSON', 'SteamPath REG_SZ C:\\Steam'],
-    ['a value over 4096 bytes', JSON.stringify({steamPath: b64('C:\\' + 'a'.repeat(4094)), installPath: null})]
+    ['a value over 4096 bytes', JSON.stringify({steamPath: b64('C:\\' + 'a'.repeat(4094)), installPath: null, unreadable: 0})]
   ])('rejects %s', (_name, text) => {
     expect(parseSteamRegistryOutput(Buffer.from(text))).toEqual({ok: false, code: 'STEAM_REGISTRY_OUTPUT_INVALID'});
   });
 
   it('decodes non-ASCII values exactly', () => {
-    expect(parseSteamRegistryOutput(Buffer.from(` ${output('D:/Игры/Steam', null)}\r\n`))).toEqual({ok: true, steamPath: 'D:/Игры/Steam', installPath: null});
+    expect(parseSteamRegistryOutput(Buffer.from(` ${output('D:/Игры/Steam', null)}\r\n`))).toEqual({ok: true, steamPath: 'D:/Игры/Steam', installPath: null, unreadable: 0});
   });
 });
 
@@ -146,6 +153,22 @@ describe('canonical Steam root', () => {
     for (const steamPath of [null, path.win32.join(guard.root, 'Gone'), '\\\\server\\share\\Steam', 'relative\\Steam', '\\\\?\\C:\\Steam']) {
       const {execFile} = stub(() => ({stdout: output(steamPath, install)}));
       expect([steamPath, await readSteamRoot({execFile, env, fs: guard.fs})]).toEqual([steamPath, {kind: 'found', path: install}]);
+    }
+  });
+
+  it('reports STEAM_REGISTRY_FAILED instead of not-found when no value is usable and a read failed; a usable value still wins', async () => {
+    const install = path.win32.join(guard.root, 'MachineSteam');
+    await mkdir(install);
+    const gone = path.win32.join(guard.root, 'Gone');
+    for (const [steamPath, installPath, unreadable, expected] of [
+      [null, null, 1, {kind: 'failed', code: 'STEAM_REGISTRY_FAILED'}],
+      [null, null, 2, {kind: 'failed', code: 'STEAM_REGISTRY_FAILED'}],
+      [gone, null, 1, {kind: 'failed', code: 'STEAM_REGISTRY_FAILED'}],
+      [null, install, 1, {kind: 'found', path: install}],
+      [null, null, 0, {kind: 'not-found'}]
+    ] as const) {
+      const {execFile} = stub(() => ({stdout: output(steamPath, installPath, unreadable)}));
+      expect([steamPath, installPath, unreadable, await readSteamRoot({execFile, env, fs: guard.fs})]).toEqual([steamPath, installPath, unreadable, expected]);
     }
   });
 
@@ -222,7 +245,7 @@ describe.runIf(process.platform === 'win32')('a real run of the fixed script aga
   it('reads a Cyrillic SteamPath and canonicalizes it; the missing machine value stays null', async () => {
     const scripts: string[] = [];
     const recorded: ExecFilePort = (file, args, options, callback) => {scripts.push(args[4]); return nodeExecFile(file, args, options, callback);};
-    expect(await readSteamRegistryValues({execFile: recorded, testKeys: testKeys()})).toEqual({ok: true, steamPath: stored, installPath: null});
+    expect(await readSteamRegistryValues({execFile: recorded, testKeys: testKeys()})).toEqual({ok: true, steamPath: stored, installPath: null, unreadable: 0});
     expect(await readSteamRoot({execFile: recorded, testKeys: testKeys(), fs: guard.fs})).toEqual({kind: 'found', path: steam});
     expect(scripts).toHaveLength(2);
     for (const script of scripts) expect(script).not.toContain('Valve');
@@ -241,7 +264,7 @@ describe.runIf(process.platform === 'win32')('a real run of the fixed script aga
     // The test process itself carries the polluted value, as under a pwsh 7 parent; the reader uses process.env.
     vi.stubEnv('PSModulePath', polluted);
     try {
-      expect(await readSteamRegistryValues({execFile: recorded, testKeys: testKeys()})).toEqual({ok: true, steamPath: stored, installPath: null});
+      expect(await readSteamRegistryValues({execFile: recorded, testKeys: testKeys()})).toEqual({ok: true, steamPath: stored, installPath: null, unreadable: 0});
     } finally {vi.unstubAllEnvs();}
     expect(children).toEqual([path.win32.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'Modules')]);
   }, POWERSHELL_START_TIMEOUT_MS);
@@ -249,20 +272,28 @@ describe.runIf(process.platform === 'win32')('a real run of the fixed script aga
   it('keeps a readable SteamPath when the machine-wide value cannot be read', async () => {
     writeMachineValue('C:/machine/Steam');
     denyValues('\\Machine');
-    expect(await readSteamRegistryValues({testKeys: testKeys()})).toEqual({ok: true, steamPath: stored, installPath: null});
+    expect(await readSteamRegistryValues({testKeys: testKeys()})).toEqual({ok: true, steamPath: stored, installPath: null, unreadable: 1});
     expect(await readSteamRoot({testKeys: testKeys(), fs: guard.fs})).toEqual({kind: 'found', path: steam});
   }, POWERSHELL_START_TIMEOUT_MS);
 
   it('keeps a readable InstallPath when SteamPath cannot be read', async () => {
     writeMachineValue(stored);
     denyValues('');
-    expect(await readSteamRegistryValues({testKeys: testKeys()})).toEqual({ok: true, steamPath: null, installPath: stored});
+    expect(await readSteamRegistryValues({testKeys: testKeys()})).toEqual({ok: true, steamPath: null, installPath: stored, unreadable: 1});
     expect(await readSteamRoot({testKeys: testKeys(), fs: guard.fs})).toEqual({kind: 'found', path: steam});
+  }, POWERSHELL_START_TIMEOUT_MS);
+
+  it('reports a read failure, not "not installed", when neither value can be read', async () => {
+    writeMachineValue(stored);
+    denyValues('');
+    denyValues('\\Machine');
+    expect(await readSteamRegistryValues({testKeys: testKeys()})).toEqual({ok: true, steamPath: null, installPath: null, unreadable: 2});
+    expect(await readSteamRoot({testKeys: testKeys(), fs: guard.fs})).toEqual({kind: 'failed', code: 'STEAM_REGISTRY_FAILED'});
   }, POWERSHELL_START_TIMEOUT_MS);
 
   it('needs no module: the fixed script succeeds even when the child itself gets the incompatible PSModulePath', async () => {
     const polluted = await pollutedModulePath();
     const forced: ExecFilePort = (file, args, options, callback) => nodeExecFile(file, args, {...options, env: {...options.env, PSModulePath: polluted}}, callback);
-    expect(await readSteamRegistryValues({execFile: forced, testKeys: testKeys()})).toEqual({ok: true, steamPath: stored, installPath: null});
+    expect(await readSteamRegistryValues({execFile: forced, testKeys: testKeys()})).toEqual({ok: true, steamPath: stored, installPath: null, unreadable: 0});
   }, POWERSHELL_START_TIMEOUT_MS);
 });
