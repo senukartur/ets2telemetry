@@ -587,3 +587,25 @@ The P15 mode gate decides where setup may write:
 - **Test-root mode** applies when two conditions hold: `ETS2TELEMETRY_PLUGIN_SETUP_ROOT` names a fake root that holds the test-root marker file, and an isolated profile is set. In this mode, every file operation and the install registry are confined to that root. A root without the marker turns setup off for that run.
 
 The details are in [plugin setup](docs/plugin-setup.md). The repository's checks never run active mode, and an unpackaged launch with `=real` writes into real game folders, so agents must not use it. Real Steam libraries, real ETS2 and ATS installs loading the silently installed plugin, TruckersMP detection, and protected libraries remain pending manual checks. No game, TruckersMP, display or performance claim follows.
+
+## ET-017 implementation update — October 17, 2026
+
+All six ET-017 PRs are implemented:
+- PR-1 (#104) bundles the plugin;
+- PR-2 (#105) adds Steam discovery and the manual folder check;
+- PR-3 (#106) adds the atomic installer and the install registry;
+- PR-4 (#107) runs silent setup in main, behind the P15 mode gate;
+- PR-5 (#108) adds the Game plugin card on the Live tab and the `plugin` runtime smoke against a fake test root;
+- PR-6 adds the connection diagnosis on the card and the opt-in diagnostic bundle. The bundle is saved only through main's Save dialog, is redacted, is at most 2 MiB and is never uploaded.
+
+The deferred parts are TD-009 (an elevated copy helper), TD-010 (path-aware running-game detection) and TD-011 (in-app replacement of an unrecognized plugin file) in [technical debt](docs/technical-debt.md).
+
+The card stays in Review. Its prerequisites ET-009 and ET-011 are not accepted, and every real-environment check remains pending ([ET-017 validation](docs/validation/et-017.md)):
+- real Steam libraries;
+- real ETS2 and ATS installs loading the silently installed plugin;
+- TruckersMP process names;
+- protected or ACL-restricted libraries, and antivirus;
+- the real folder and Save dialogs and Explorer;
+- the card's readability.
+
+`GAME_HISTORY_RECORDING` stays `false`. ET-018 and later phases are not authorized by this update. No game, TruckersMP, display or performance claim follows.
