@@ -257,7 +257,9 @@ describe('seeded random streams (T18, REG-005)', () => {
     // The streams exercise both cold-start seed paths.
     expect(seeded.resumed).toBeGreaterThan(5);
     expect(seeded.restarted).toBeGreaterThan(5);
-  });
+    // A deterministic, bounded loop (150 seeds x 120 steps, about 20,000 reducer steps): about 2.3 s locally, 5.2 s on a
+    // loaded hosted Windows runner (docs/validation/et-014.md), so the budget is well above the default 5 s.
+  }, 30_000);
 });
 
 describe('annotation merging and deferral (T18)', () => {
