@@ -150,11 +150,25 @@ describe('CAP0 session failure handling', () => {
     expect(transports).toHaveLength(4); expect(manifest).toMatchObject({status: 'complete', stop: {reason: 'source-end'}});
   });
   it('cancels a pending transient retry when the service stops', async () => {
-    const {capture, transports} = scripted([t => t.emit('error', transient('Capture authority deadline exceeded'))], {transientWindowMs: 60_000});
-    await capture.start(); await new Promise(resolve => setTimeout(resolve, 30));
-    const manifest = await capture.stop(); const attempts = transports.length;
-    await new Promise(resolve => setTimeout(resolve, 600));
-    expect(manifest).toMatchObject({stop: {reason: 'no-source'}}); expect(transports).toHaveLength(attempts);
+    // Controlled timers: the retry schedule is observed exactly instead of sleeping past it.
+    vi.useFakeTimers({toFake: ['setTimeout', 'clearTimeout']});
+    try {
+      const {capture, transports} = scripted([t => t.emit('error', transient('Capture authority deadline exceeded'))], {transientWindowMs: 60_000});
+      await capture.start();
+      // The scripted transport emits on a zero-delay timer, which fake timers run 1 ms later.
+      await vi.advanceTimersByTimeAsync(1); expect(transports).toHaveLength(1);
+      // The first transient failure scheduled a retry 250 ms later: it ran and failed again, which scheduled the next
+      // retry 500 ms after that, so it is still pending 300 ms in.
+      await vi.advanceTimersByTimeAsync(300); expect(transports).toHaveLength(2);
+      // Pending now: the collection deadline and that retry.
+      expect(vi.getTimerCount()).toBe(2);
+      const manifest = await capture.stop();
+      expect(manifest).toMatchObject({stop: {reason: 'no-source'}});
+      // The stop cancelled the retry and the deadline, and no attempt follows within the whole transient window.
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(transports).toHaveLength(2);
+    } finally { vi.useRealTimers(); }
   });
 });
 
