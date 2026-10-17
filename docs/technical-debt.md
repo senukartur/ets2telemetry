@@ -75,3 +75,14 @@ Main keeps the loss totals of earlier service processes in its loss base, but `{
 - Carry main's retained loss totals through the `unknown` state, for example with an optional `losses` field on `unknown`, so the dashboard keeps showing the gaps recorded since start while the service is not running.
 
 **Until then:** the loss lines are hidden while the recording status is `unknown`. No `AppState` contract change is authorized by this entry.
+
+## TD-007: Truck and trailer identity of late-attach trips
+
+Recorded October 17, 2026 by the coordinator with ET-016b PR-7 (decision J22). **This entry is a coordinator decision under the owner's standing delegation of October 15, 2026, not an individually owner-approved deferral** (see the ET-016 authorization in [concept.md](../concept.md#et-016-authorization--october-16-2026)). The owner may revise it.
+
+A [late-attach trip](trips.md#late-attach-trips-j9) opens from a protocol v1 checkpoint's job. The checkpoint also carries the current truck and trailer configuration, but storage keeps truck and trailer configurations only as rows of `truck.configured` and `trailer.configured` events, so `openAttachedTrip` stores no truck or trailer reference ([storage](storage.md#late-attach-trips-et-016b-pr-7)). The trip gets one only when the game sends `truck.configured` or `trailer.configured` again and that event is committed; until then the journal shows no truck or trailers for it. Configurations the session committed before the checkpoint are not referenced either.
+
+**Future work:**
+- Store the checkpoint's truck and trailer configuration with the late-attach trip (checkpoint configuration rows, as for the job), or reference the session's latest committed configurations when they equal the checkpoint's.
+
+**Until then:** a late-attach trip may have no truck or trailer identity. No schema or storage API change is authorized by this entry.

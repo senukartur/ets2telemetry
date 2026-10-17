@@ -4,7 +4,7 @@
 // below is written from docs/storage.md and docs/trips.md, not from the reducer.
 import {describe, expect, it} from 'vitest';
 import {GAMEPLAY_EVENT_TYPES, type EventRecord, type LossCounts} from '../../packages/contracts/src/protocol-v1';
-import {initialTripState, jobKey, stepTrip, type EventMessage, type GapMessage, type TripEffect, type TripInput, type TripSeed, type TripState} from '../../packages/telemetry-core/src/index';
+import {dueAttach, initialTripState, jobKey, stepTrip, type EventMessage, type GapMessage, type TripEffect, type TripInput, type TripSeed, type TripState} from '../../packages/telemetry-core/src/index';
 import {
   ATS_A, BASE_UTC, ETS2_A, ETS2_B, Script, cargoMarketJob, carrier, job, otherJob, r, sessionInput, trailer, truck
 } from '../shared/trip-messages';
@@ -59,7 +59,8 @@ function mixedStream() {
     {kind: 'disconnected'}, sessionInput(t.welcome()), t.event(r.started()), t.event(r.paused(), paused), t.event(r.jobConfigured(otherJob()), paused),
     t.event(r.started()), t.event(r.fined()), {kind: 'disconnected'}];
   // The ETS2 session reconnects at its processed point, then the plugin restarts with a new session.
-  steps.push(sessionInput(a.welcome(), (a.next - 1n).toString()),{kind: 'checkpoint', message: a.checkpoint(job())}, a.event(r.paused(), paused),
+  // ET-016 PR-7 (J9): the gap closed the trip, so the reconnection's checkpoint job opens a late-attach trip at once.
+  steps.push(sessionInput(a.welcome(), (a.next - 1n).toString()), {kind: 'checkpoint', message: a.checkpoint(job())}, {kind: 'attach', receivedUtcMs: BASE_UTC}, a.event(r.paused(), paused),
     a.event(r.jobConfigured(), paused), a.event(r.started()), a.event(r.truckConfigured(truck({licensePlate: {available: true, value: 'SYN 0009'}}))),
     {kind: 'disconnected'}, sessionInput(b.welcome()), b.event(r.jobConfigured(), paused), b.event(r.timersRestart(), paused), b.event(r.started()),
     b.event(r.paused(), paused), b.event(r.jobCleared(), paused), b.event(r.trailerConfigured(trailer(0)), paused), b.event(r.cancelled(), paused));
@@ -104,6 +105,41 @@ class EffectModel {
   seeds(game: string): TripSeed[] {
     return [...this.trips.entries()].filter(([, t]) => !t.closed && t.game === game).map(([tripUuid, t]) => ({tripUuid, pluginSessionId: t.session, game: t.game as 'ets2' | 'ats',
       jobKey: t.jobKey, startedUtcMs: t.startedUtcMs, recordingCompleteness: t.completeness}));
+  }
+  /** Checkpoint jobs already stored by openAttachedTrip, keyed `session:nextEventSeq`; a repeat is a storage duplicate. */
+  attachKeys = new Set<string>();
+  /**
+   * openAttachedTrip (ET-016 PR-7, J9): queued lifecycle effects of known trips of the game (updates, closes without an
+   * outcome, intervals without monotonic bounds), then one trip.open of the checkpoint job with no truck or trailer, then
+   * only that trip's intervals. A repeated key applies nothing.
+   */
+  attach(game: 'ets2' | 'ats', request: NonNullable<ReturnType<typeof dueAttach>>, effects: TripEffect[]) {
+    const key = `${request.pluginSessionId}:${request.nextEventSeq}`;
+    if (this.attachKeys.has(key)) return;
+    this.attachKeys.add(key);
+    expect(effects.length).toBeLessThanOrEqual(16);
+    const at = effects.findIndex(e => e.kind === 'trip.open'), open = effects[at];
+    expect(at, 'one trip.open').toBeGreaterThanOrEqual(0);
+    for (const effect of effects.slice(0, at)) {
+      if (effect.kind === 'trip.close') {
+        const trip = this.trips.get(effect.tripUuid)!;
+        expect(trip?.game).toBe(game); expect(trip.closed).toBe(false); expect(effect.outcome).toBe('none');
+        expect(effect.endedUtcMs).toBeGreaterThanOrEqual(trip.startedUtcMs);
+        trip.closed = true;
+      } else if (effect.kind === 'trip.update') {
+        expect(this.trips.get(effect.tripUuid)?.game).toBe(game);
+        expect(Object.keys(effect.set).every(name => ['recordingCompleteness', 'observedDistanceM', 'fuelUsedL'].includes(name))).toBe(true);
+      } else {
+        expect(effect.kind).toBe('completeness.add');
+        if (effect.kind === 'completeness.add') expect(effect.interval.startMonotonicNs ?? effect.interval.endMonotonicNs).toBeUndefined();
+      }
+    }
+    if (open.kind !== 'trip.open') return;
+    expect(this.trips.has(open.tripUuid), 'a trip opens once').toBe(false);
+    expect([open.game, open.jobConfiguration, open.truckConfiguration, open.trailerConfigurations, open.recordingCompleteness]).toEqual([game, 'this-event', undefined, undefined, 'partial']);
+    this.trips.set(open.tripUuid, {game, session: request.pluginSessionId, closed: false, startedUtcMs: open.startedUtcMs, jobKey: jobKey(request.job), completeness: 'partial'});
+    for (const effect of effects.slice(at + 1)) expect(effect.kind === 'completeness.add' && effect.interval.tripUuid === open.tripUuid).toBe(true);
+    expect([...this.trips.values()].filter(t => !t.closed && t.game === game).length, 'at most one open trip per game').toBe(1);
   }
   check(message: EventMessage | GapMessage, effects: TripEffect[]) {
     const game = message.source.game, session = message.source.pluginSessionId, record = message.kind === 'event' ? message.data.record : null;
@@ -197,14 +233,14 @@ const RECORDS: ((s: Script, next: () => number) => EventRecord)[] = [
 ];
 const CAUSES: (keyof LossCounts)[] = ['offline', 'noDurableConsumer', 'queueCount', 'queueBytes', 'retentionExpired', 'encodingFailed'];
 
-// 150 seeds of 120 iterations (19,901 reducer steps) take about 2.3 s of CPU work locally; on a hosted Windows runner
-// this file took 4.4 s, and a heavier version of this case timed out above 5.2 s (docs/validation/et-014.md). This
-// budget bounds that deterministic computation; the case asserts no timing.
+// 150 seeds of 120 iterations take about 2.3 s of CPU work locally; on a hosted Windows runner this file took 4.4 s
+// before the late-attach steps (ET-016 PR-7) were added, and with them this case timed out above 5.2 s
+// (docs/validation/et-014.md). This budget bounds that deterministic computation; the case asserts no timing.
 const SEEDED_STREAM_REPLAY_BUDGET_MS = 30_000;
 
 describe('seeded random streams (T18, REG-005)', () => {
   it('never exceed 16 effects, never close a trip twice and never give an outcome without its event', () => {
-    const seeded = {resumed: 0, restarted: 0};
+    const seeded = {resumed: 0, restarted: 0, attached: 0};
     for (let seed = 1; seed <= 150; seed++) {
       const next = random(seed), model = new EffectModel();
       let state = initialTripState(), sessionCounter = 0;
@@ -218,6 +254,15 @@ describe('seeded random streams (T18, REG-005)', () => {
         if (input.kind === 'event' || input.kind === 'gap') model.check(input.message, result.effects);
         else expect(result.effects).toEqual([]);
         state = result.state;
+        // J9: a due late-attach trip opens right after the checkpoint or commit that made it due, as DurableDelivery does.
+        const due = dueAttach(state);
+        if (due !== null) {
+          const attached = stepTrip(state, {kind: 'attach', receivedUtcMs: BASE_UTC});
+          expect(attached.ok, `seed ${seed}: attach`).toBe(true);
+          if (!attached.ok) return;
+          model.attach(game, due, attached.effects); seeded.attached += 1;
+          state = attached.state;
+        }
       };
       // Committed coverage per session, as storage would report it after a service restart.
       const covered: Record<string, string> = {};
@@ -262,6 +307,7 @@ describe('seeded random streams (T18, REG-005)', () => {
     // The streams exercise both cold-start seed paths.
     expect(seeded.resumed).toBeGreaterThan(5);
     expect(seeded.restarted).toBeGreaterThan(5);
+    expect(seeded.attached).toBeGreaterThan(5);
   }, SEEDED_STREAM_REPLAY_BUDGET_MS);
 });
 

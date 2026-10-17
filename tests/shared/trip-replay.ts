@@ -2,11 +2,17 @@
 // (docs/trips.md, caller contract), into an in-memory first-insert storage model written from docs/storage.md (OD-9 trip
 // effects). It is a test adapter: it opens no database and writes no history. The model follows the scripted client of
 // each connection: a commit the client does not make is not made here either, and the reducer state is then kept (T3).
-import type {EventRecord, ServerMessage} from '../../packages/contracts/src/protocol-v1';
-import type {CompletenessInterval, SampleAppendResult, SampleInput} from '../../packages/storage/src/api';
-import {initialTripState, jobKey, normalizeV1State, stepTrip, type TripEffect, type TripInput, type TripSeed, type TripState} from '../../packages/telemetry-core/src/index';
+import {createHash} from 'node:crypto';
+import type {EventRecord, JobConfiguration, ServerMessage} from '../../packages/contracts/src/protocol-v1';
+import type {AttachInput, CompletenessInterval, SampleAppendResult, SampleInput} from '../../packages/storage/src/api';
+import {dueAttach, initialTripState, jobKey, normalizeV1State, stepTrip, type TripEffect, type TripInput, type TripSeed, type TripState} from '../../packages/telemetry-core/src/index';
 import type {ReplayResult} from '../../tools/telemetry-simulator/src/v1/replay';
 
+/** The late-attach UUID (J9), written with node:crypto as storage checks it. */
+function attachUuid(session: string, nextEventSeq: string): string {
+  const h = createHash('sha256').update(`ets2telemetry-trip-attach-v1:${session}:${nextEventSeq}`, 'utf8').digest('hex');
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`;
+}
 /** The simulator's UTC label origin (docs/simulator-v1.md, clocks); the consumer's receipt label uses it too. */
 const UTC_BASE_MS = 1_800_000_000_000;
 type Of<K extends ServerMessage['kind']> = Extract<ServerMessage, {kind: K}>;
@@ -14,7 +20,9 @@ const NOT_OBSERVED = {available: false as const, reason: 'not-observed' as const
 
 export interface StoredTrip {
   tripUuid: string; pluginSessionId: string; game: 'ets2' | 'ats'; gameMode: {mode: string; method: string; confidence: string}; gameModeAmbiguous: boolean;
-  jobConfigurationEventSeq: string; truckConfigurationEventSeq: string | null; trailerConfigurationEventSeqs: string[]; openedEventSeq: string;
+  /** ET-016 PR-7 (J9): a trip opened from a checkpoint has its checkpoint job and no job or opening event. */
+  jobSource: 'event' | 'checkpoint'; jobConfigurationEventSeq: string | null; checkpointJob: {nextEventSeq: string; values: JobConfiguration} | null;
+  truckConfigurationEventSeq: string | null; trailerConfigurationEventSeqs: string[]; openedBy: 'event' | 'checkpoint'; openedEventSeq: string | null;
   outcome: 'open' | 'delivered' | 'cancelled' | 'none'; outcomeEventSeq: string | null; closeReason: string | null;
   recordingCompleteness: string; startedUtcMs: number; endedUtcMs: number | null;
   observedDistanceM: {available: true; value: number} | {available: false; reason: string};
@@ -32,12 +40,15 @@ export type StoredSample = SampleInput & {pluginSessionId: string};
  * session, with docs/storage.md's `uniqueSeconds` rule and the sample trip-reference rule.
  */
 export class TripStorageModel {
-  private coverage = new Map<string, {game: 'ets2' | 'ats'; through: bigint; lastUtcMs: number | null}>();
+  /** Per session: the game, coverage, and the label of the last committed event that has one, with its eventSeq. */
+  private coverage = new Map<string, {game: 'ets2' | 'ats'; through: bigint; lastUtcMs: number | null; lastUtcSeq: bigint}>();
   private jobs = new Map<string, Extract<EventRecord, {type: 'job.configured'}>>();
   /** The last job.configured or job.cleared event per session, to tell whether an open trip's job was cleared. */
   private lastJobEvent = new Map<string, {type: string; eventSeq: bigint}>();
   private trucks = new Set<string>();
   private trailers = new Set<string>();
+  /** Checkpoint jobs stored by openAttachedTrip, keyed `session:nextEventSeq`. */
+  private checkpointJobs = new Set<string>();
   readonly trips: StoredTrip[] = [];
   readonly attributions: StoredAttribution[] = [];
   readonly intervals: StoredInterval[] = [];
@@ -48,7 +59,7 @@ export class TripStorageModel {
   /** Stores a session at its welcome, as upsertSession does, so samples may name it before its first commit. */
   openSession(session: string, game: 'ets2' | 'ats'): void {
     const known = this.coverage.get(session);
-    if (known === undefined) this.coverage.set(session, {game, through: 0n, lastUtcMs: null});
+    if (known === undefined) this.coverage.set(session, {game, through: 0n, lastUtcMs: null, lastUtcSeq: 0n});
     else if (known.game !== game) throw new Error('Session game changed');
   }
   /**
@@ -80,20 +91,71 @@ export class TripStorageModel {
   /** An open trip whose session's last stored job event, after the trip opened, is a clear: it awaits its outcome. */
   private cleared(t: StoredTrip): boolean {
     const last = this.lastJobEvent.get(t.pluginSessionId);
-    return last !== undefined && last.type === 'job.cleared' && last.eventSeq > BigInt(t.openedEventSeq);
+    const opened = t.openedEventSeq !== null ? BigInt(t.openedEventSeq) : BigInt(t.checkpointJob!.nextEventSeq) - 1n;
+    return last !== undefined && last.type === 'job.cleared' && last.eventSeq > opened;
   }
   seeds(game: 'ets2' | 'ats'): TripSeed[] {
     return this.trips.filter(t => t.outcome === 'open' && t.game === game).map(t => {
-      const job = this.jobs.get(`${t.pluginSessionId}:${t.jobConfigurationEventSeq}`), last = this.coverage.get(t.pluginSessionId)?.lastUtcMs ?? null;
+      const job = t.checkpointJob !== null ? t.checkpointJob.values : this.jobs.get(`${t.pluginSessionId}:${t.jobConfigurationEventSeq}`);
+      const stored = this.coverage.get(t.pluginSessionId);
+      // A checkpoint-opened trip is the session's labelled point at nextEventSeq - 1 (trip-seeds.ts, PR-7 review round 1).
+      const last = t.checkpointJob === null ? stored?.lastUtcMs ?? null
+        : stored !== undefined && stored.lastUtcMs !== null && stored.lastUtcSeq >= BigInt(t.checkpointJob.nextEventSeq) ? stored.lastUtcMs : t.startedUtcMs;
       return {tripUuid: t.tripUuid, pluginSessionId: t.pluginSessionId, game: t.game, jobKey: job === undefined ? null : jobKey(job), startedUtcMs: t.startedUtcMs,
         recordingCompleteness: t.recordingCompleteness as TripSeed['recordingCompleteness'], ...(last !== null ? {lastObservedUtcMs: last} : {}),
         ...(t.observedDistanceM.available ? {observedDistanceM: t.observedDistanceM.value} : {}), ...(t.fuelUsedL.available ? {fuelUsedL: t.fuelUsedL.value} : {}),
         ...(this.cleared(t) ? {awaitingOutcome: true} : {})};
     });
   }
+  /**
+   * openAttachedTrip (docs/storage.md, ET-016 PR-7): a checkpoint job of a known session at nextEventSeq, at most its
+   * coverage + 1, keyed (session, nextEventSeq) so a repeat is `duplicate`. Queued lifecycle effects of earlier trips
+   * (updates, closes without an outcome, intervals without monotonic bounds) may come first; then exactly one trip.open
+   * of that job, with no truck or trailer, then only intervals of that trip without monotonic bounds. Coverage is unchanged.
+   */
+  openAttachedTrip(input: AttachInput): 'committed' | 'duplicate' {
+    const s = this.coverage.get(input.pluginSessionId);
+    if (s === undefined) throw new Error(`Attach of unknown session ${input.pluginSessionId}`);
+    if (BigInt(input.nextEventSeq) < 1n || BigInt(input.nextEventSeq) > s.through + 1n) throw new Error(`Attach at ${input.nextEventSeq} beyond coverage ${s.through} + 1`);
+    const key = `${input.pluginSessionId}:${input.nextEventSeq}`;
+    if (this.checkpointJobs.has(key)) return 'duplicate';
+    const at = input.effects.findIndex(effect => effect.kind === 'trip.open'), open = input.effects[at], rest = input.effects.slice(at + 1);
+    for (const effect of input.effects.slice(0, at)) {
+      const trip = effect.kind === 'completeness.add' ? effect.interval.tripUuid : effect.kind === 'trip.update' || effect.kind === 'trip.close' ? effect.tripUuid : undefined;
+      const stored = trip === null || trip === undefined ? undefined : this.trips.find(t => t.tripUuid === trip);
+      if (trip !== null && (stored === undefined || stored.game !== s.game)) throw new Error('Attach lifecycle effect names no trip of this game');
+      if (effect.kind === 'trip.close') {
+        if (effect.outcome !== 'none' || stored!.outcome !== 'open' || effect.endedUtcMs < stored!.startedUtcMs || stored!.pluginSessionId === input.pluginSessionId) throw new Error('Invalid attach close');
+        Object.assign(stored!, {outcome: 'none', closeReason: effect.closeReason, recordingCompleteness: effect.recordingCompleteness, endedUtcMs: effect.endedUtcMs});
+      } else if (effect.kind === 'trip.update') {
+        if (Object.keys(effect.set).some(name => name !== 'recordingCompleteness' && name !== 'observedDistanceM' && name !== 'fuelUsedL')) throw new Error('Invalid attach update');
+        if (effect.set.recordingCompleteness !== undefined) stored!.recordingCompleteness = effect.set.recordingCompleteness;
+        if (effect.set.observedDistanceM !== undefined) stored!.observedDistanceM = structuredClone(effect.set.observedDistanceM);
+        if (effect.set.fuelUsedL !== undefined) stored!.fuelUsedL = structuredClone(effect.set.fuelUsedL);
+      } else if (effect.kind === 'completeness.add' && effect.interval.startMonotonicNs === undefined && effect.interval.endMonotonicNs === undefined) {
+        this.intervals.push({pluginSessionId: input.pluginSessionId, ...structuredClone(effect.interval)});
+      } else throw new Error(`Invalid attach lifecycle effect ${effect.kind}`);
+    }
+    if (open?.kind !== 'trip.open' || open.jobConfiguration !== 'this-event' || open.truckConfiguration !== undefined || open.trailerConfigurations !== undefined ||
+      open.game !== s.game || this.trips.some(t => t.tripUuid === open.tripUuid) || open.tripUuid !== attachUuid(input.pluginSessionId, input.nextEventSeq)) throw new Error('Invalid attach trip.open');
+    if (this.trips.some(t => t.outcome === 'open' && t.game === s.game)) throw new Error('Two open trips of one game');
+    this.checkpointJobs.add(key);
+    this.trips.push({tripUuid: open.tripUuid, pluginSessionId: input.pluginSessionId, game: open.game, gameMode: {...open.gameMode}, gameModeAmbiguous: open.gameModeAmbiguous ?? false,
+      jobSource: 'checkpoint', jobConfigurationEventSeq: null, checkpointJob: {nextEventSeq: input.nextEventSeq, values: structuredClone(input.job)}, truckConfigurationEventSeq: null,
+      trailerConfigurationEventSeqs: [], openedBy: 'checkpoint', openedEventSeq: null, outcome: 'open', outcomeEventSeq: null, closeReason: null,
+      recordingCompleteness: open.recordingCompleteness, startedUtcMs: open.startedUtcMs, endedUtcMs: null, observedDistanceM: NOT_OBSERVED, fuelUsedL: NOT_OBSERVED});
+    for (const effect of rest) {
+      if (effect.kind !== 'completeness.add' || effect.interval.tripUuid !== open.tripUuid || effect.interval.startMonotonicNs !== undefined || effect.interval.endMonotonicNs !== undefined) {
+        throw new Error('Invalid attach effect');
+      }
+      this.intervals.push({pluginSessionId: input.pluginSessionId, ...structuredClone(effect.interval)});
+    }
+    // The statuses count event and gap commits only; an attach is no coverage item.
+    return 'committed';
+  }
   private session(m: Of<'event'> | Of<'gap'>) {
     let s = this.coverage.get(m.source.pluginSessionId);
-    if (s === undefined) { s = {game: m.source.game, through: 0n, lastUtcMs: null}; this.coverage.set(m.source.pluginSessionId, s); }
+    if (s === undefined) { s = {game: m.source.game, through: 0n, lastUtcMs: null, lastUtcSeq: 0n}; this.coverage.set(m.source.pluginSessionId, s); }
     return s;
   }
   commitEvent(m: Of<'event'>, effects: TripEffect[]): 'committed' | 'duplicate' {
@@ -110,7 +172,7 @@ export class TripStorageModel {
     if (record.type === 'trailer.configured') this.trailers.add(key);
     this.apply(m, effects);
     s.through = seq;
-    if (m.data.occurred.utcUnixMs.available) s.lastUtcMs = Number(m.data.occurred.utcUnixMs.value);
+    if (m.data.occurred.utcUnixMs.available) { s.lastUtcMs = Number(m.data.occurred.utcUnixMs.value); s.lastUtcSeq = seq; }
     this.statuses.committed++; return 'committed';
   }
   commitGap(m: Of<'gap'>, effects: TripEffect[]): 'committed' | 'covered' {
@@ -143,9 +205,9 @@ export class TripStorageModel {
         case 'trip.open': {
           if (event === null || this.trips.some(t => t.tripUuid === effect.tripUuid) || effect.game !== m.source.game) throw new Error('Invalid trip.open');
           this.trips.push({tripUuid: effect.tripUuid, pluginSessionId: session, game: effect.game, gameMode: {...effect.gameMode}, gameModeAmbiguous: effect.gameModeAmbiguous ?? false,
-            jobConfigurationEventSeq: ref(effect.jobConfiguration, this.jobs, 'job.configured'),
+            jobSource: 'event', jobConfigurationEventSeq: ref(effect.jobConfiguration, this.jobs, 'job.configured'), checkpointJob: null,
             truckConfigurationEventSeq: effect.truckConfiguration === undefined ? null : ref(effect.truckConfiguration, this.trucks, 'truck.configured'),
-            trailerConfigurationEventSeqs: (effect.trailerConfigurations ?? []).map(r => ref(r, this.trailers, 'trailer.configured')), openedEventSeq: here!,
+            trailerConfigurationEventSeqs: (effect.trailerConfigurations ?? []).map(r => ref(r, this.trailers, 'trailer.configured')), openedBy: 'event', openedEventSeq: here!,
             outcome: 'open', outcomeEventSeq: null, closeReason: null, recordingCompleteness: effect.recordingCompleteness, startedUtcMs: effect.startedUtcMs, endedUtcMs: null,
             observedDistanceM: NOT_OBSERVED, fuelUsedL: NOT_OBSERVED});
           break;
@@ -219,6 +281,8 @@ export interface TripReplay {
   state: TripState; storage: TripStorageModel;
   /** Readings fed, carriers stepped, and consumer process starts (the first one and one after each client crash). */
   readings: number; carriers: number; consumerStarts: number;
+  /** Late-attach trips opened (ET-016 PR-7, J9), duplicates included. */
+  attaches: number;
 }
 /**
  * Feeds the transcript's server messages in order: `session` at each welcome (with the stored open trips after a
@@ -230,7 +294,16 @@ export interface TripReplay {
  */
 export function replayTrips(result: Pick<ReplayResult, 'transcript' | 'connections'>): TripReplay {
   const storage = new TripStorageModel(), records = new Map(result.connections.map(c => [c.connection, c]));
-  const out: TripReplay = {state: initialTripState(), storage, readings: 0, carriers: 0, consumerStarts: 1};
+  const out: TripReplay = {state: initialTripState(), storage, readings: 0, carriers: 0, consumerStarts: 1, attaches: 0};
+  // J9: as DurableDelivery's attach op, a due late-attach trip opens right after the checkpoint or commit that made it due.
+  const attach = (receivedUtcMs: number) => {
+    const due = dueAttach(out.state);
+    if (due === null) return;
+    const stepped = stepTrip(out.state, {kind: 'attach', receivedUtcMs});
+    if (!stepped.ok) throw new Error(`Trip reducer refused attach: ${stepped.code}`);
+    storage.openAttachedTrip({...due, effects: stepped.effects});
+    out.state = stepped.state; out.attaches++;
+  };
   let fresh = true, connection: number | null = null, stopped = false;
   const end = () => {
     if (connection === null) return;
@@ -250,7 +323,9 @@ export function replayTrips(result: Pick<ReplayResult, 'transcript' | 'connectio
         out.state = adopt(out.state, {kind: 'session', welcome: m, coveredThrough: storage.committedThrough(m.source.pluginSessionId), openTrips: !known && fresh ? storage.seeds(m.source.game) : []});
         fresh = false; break;
       }
-      case 'checkpoint': out.state = adopt(adopt(out.state, {kind: 'checkpoint', message: m}), reading(m)); out.readings++; break;
+      case 'checkpoint':
+        out.state = adopt(adopt(out.state, {kind: 'checkpoint', message: m, receivedUtcMs: UTC_BASE_MS + line.atMs}), reading(m)); out.readings++;
+        attach(UTC_BASE_MS + line.atMs); break;
       case 'snapshot': out.state = adopt(out.state, reading(m)); out.readings++; break;
       case 'event': case 'gap': {
         const coveredThrough = storage.committedThrough(m.source.pluginSessionId), receivedUtcMs = UTC_BASE_MS + line.atMs;
@@ -263,6 +338,7 @@ export function replayTrips(result: Pick<ReplayResult, 'transcript' | 'connectio
         if (m.kind === 'event') storage.commitEvent(m, stepped.effects); else storage.commitGap(m, stepped.effects);
         // T3: committed, duplicate and covered all adopt the stepped state.
         out.state = stepped.state;
+        attach(receivedUtcMs);
         break;
       }
       default: break;

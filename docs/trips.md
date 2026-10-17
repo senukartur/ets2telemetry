@@ -10,6 +10,7 @@ Status (October 15, 2026):
 - **ET-015a PR-2 (October 16, 2026)**: the [caller contract](#caller-contract-for-et-015a) below is implemented by `TripRecorderSink` ([telemetry service v1](telemetry-service-v1.md#trip-recorder-et-015a)) and proven against the real storage worker, killed processes and injected storage failures with synthetic sources only. The running service still passes no sink, so production records nothing yet.
 - **ET-015b PR-2 (October 16, 2026)**: the pure [one-second sampler](#one-second-sampler-et-015b) chooses which readings become history samples and builds their storage rows. Nothing calls it yet; ET-015b PR-3 runs it in the trip recorder.
 - **ET-016 PR-6 (October 16, 2026)**: fuel used is persisted like observed distance (J8, storage gap S-1 resolved): on carriers when it changed, before every close, and resumed from cold-start seeds. A negative total is stored as `invalid` ([Persistence](#readings-accounting-t16-t17)).
+- **ET-016 PR-7 (October 17, 2026)**: [late-attach trips](#late-attach-trips-j9) (J9, storage gap S-2 resolved). A job seen in a checkpoint while the game's slot is idle opens a partial trip from the checkpoint once the replayed events have drained, stored by `openAttachedTrip`. This supersedes T9's rule that such a job stays untracked until an identical `job.configured` arrives.
 - Behaviour seen in real traces rests only on the reviewed CAP-01 observations O1–O11 ([CAP-01a validation](validation/cap-01a.md)). Everything else is synthetic inference and stays pending until real-game sessions ([ET-014 validation](validation/et-014.md)).
 
 ## Interface
@@ -22,6 +23,7 @@ All values are plain data: uint64 values stay decimal strings, and the state sur
 | `stepTrip(state, input)` | `{ok: true, state, effects}` or `{ok: false, code}` with `ORDER_VIOLATION`, `COVERAGE_MISMATCH` or `UNKNOWN_SESSION` |
 | `tripView(state, game)` | Phase, untracked job, the open trip and the last closed trip of one game |
 | `tripUuidFor(pluginSessionId, jobEventSeq)`, `jobKey(job)` | Trip identity (T4) and job identity (T6) |
+| `attachTripUuidFor(pluginSessionId, nextEventSeq)`, `dueAttach(state)` | The UUID of a [late-attach trip](#late-attach-trips-j9), and the late-attach trip the caller must open now (`{pluginSessionId, nextEventSeq, job}` or null) (J9) |
 | `MAX_EFFECTS` (16), `MAX_ANNOTATIONS_PER_COMMIT` (8) | Per-commit bounds (T18); a test checks that `MAX_EFFECTS` equals storage's |
 | `initialSamplerState()`, `sampleReading(state, {message, receivedUtcMs, view})` | The [one-second sampler](#one-second-sampler-et-015b) (ET-015b): `{state, decision, row}`, where `row` is a storage `SampleInput` or null |
 
@@ -30,7 +32,8 @@ Inputs (`TripInput`):
 | Kind | Carries | Effects |
 | --- | --- | --- |
 | `session` | The validated welcome, the coverage `upsertSession` returned, and `openTrips` (`TripSeed[]`) on a cold start | None; decided effects wait in the game's queue |
-| `checkpoint` | The connection's checkpoint | None (hydration only, T9) |
+| `checkpoint` | The connection's checkpoint and, optionally, its receipt label `receivedUtcMs` | None (hydration). While the game's slot is idle, its job becomes the connection's pending late-attach trip (J9) |
+| `attach` | `receivedUtcMs`, the last fallback of the start label | The effects of the due [late-attach trip](#late-attach-trips-j9), for the storage command `openAttachedTrip`, never for an event or gap commit |
 | `event`, `gap` | The message, `coveredThrough` read right before the commit, and `receivedUtcMs` | The effects for that message's commit |
 | `reading` | A normalized state of the current connection (the checkpoint's and each snapshot's), with its source identity, capture time and UTC label | None; distance and fuel accumulate, and annotations or a reading-hole downgrade wait for the game's next carrier |
 | `disconnected` | — | None |
@@ -44,7 +47,8 @@ ET-015a PR-2 implements this contract in [trip-recorder.ts](../apps/desktop/src/
 - readings arrive in stream order with the items through the same FIFO (R5);
 - the receipt label is captured when the frame is decoded (R8);
 - seeds are read at the first durable welcome per game (R15, below);
-- an `ok: false` result becomes an `unavailable` sink code (`TRIP_ORDER_VIOLATION`, `TRIP_COVERAGE_MISMATCH`, `TRIP_UNKNOWN_SESSION`; R7).
+- an `ok: false` result becomes an `unavailable` sink code (`TRIP_ORDER_VIOLATION`, `TRIP_COVERAGE_MISMATCH`, `TRIP_UNKNOWN_SESSION`; R7);
+- a due late-attach trip (ET-016 PR-7) is opened by DurableDelivery's `attach` op at the head of the FIFO, right after the reading or commit that made it due, in `openAttach`: step `attach`, store the effects with `openAttachedTrip`, adopt on `committed` or `duplicate`.
 
 **Adopt after commit (T3).** For each event or gap, the caller:
 
@@ -54,6 +58,8 @@ ET-015a PR-2 implements this contract in [trip-recorder.ts](../apps/desktop/src/
 4. adopts the returned state only when storage reports `committed`, `duplicate`, `covered` or `conflict`.
 
 On a retryable or failed commit the caller keeps the old state. When the item is redelivered, it is stepped from that kept state, so no effect of an earlier commit is lost or repeated. Effects queued by the reconnection, such as its `not-connected` interval, or a replayed configuration's `opened-before-attach` cause, may be added to it. Non-carrier inputs (session, checkpoint, disconnected) are adopted immediately. An `ok: false` result fails closed: durable delivery must stop, as for any other contract violation.
+
+**Late attach (J9).** After stepping a checkpoint or adopting a commit, the caller asks `dueAttach(state)`. When it returns a request, the caller steps `{kind: 'attach', receivedUtcMs}` before any other item of the connection, stores the effects with `openAttachedTrip({...request, effects})` and adopts the state only on `committed` or `duplicate` (T3). On a failure the state is kept; the connection fails like a failed commit, and the next connection's checkpoint decides again. An event or gap stepped while an attach is due is `ORDER_VIOLATION`, and so is an `attach` with none due.
 
 **Connections.** Every connection ends with a `disconnected` input before the next connection's `session` input, including a reconnection to the same plugin session, a switch to the other game and a new plugin session. The reducer takes the interval in which the consumer was not connected from that input; an item or a reading of a session that is not the current connection's is refused.
 
@@ -72,8 +78,8 @@ Because the reducer applies effects only for new coverage and queues them otherw
 **Cold start (`TripSeed`).** When the service starts while storage holds open trips of the welcome's game, the caller passes them with the first session input:
 
 - `{tripUuid, pluginSessionId, game, jobKey, startedUtcMs, recordingCompleteness, lastObservedUtcMs?}`;
-- `jobKey` is `jobKey()` of the trip's stored job configuration. With null, no later job ever matches it;
-- `lastObservedUtcMs` is the label of the session's last stored item that has a usable label;
+- `jobKey` is `jobKey()` of the trip's stored job configuration: its `job.configured` record, or for a late-attach trip the stored checkpoint job (`TripRecord.checkpointJob`, ET-016 PR-7). With null, no later job ever matches it;
+- `lastObservedUtcMs` is the label of the session's last stored item that has a usable label; for a late-attach trip, of the last such item at or after the checkpoint's `nextEventSeq`, else the trip's start label, which the attach made the session's last label (PR-7 review round 1);
 - `observedDistanceM` (PR-2) is the trip's stored observed distance when it is available; a resumed trip accumulates from it, so its next update never replaces the stored value with a smaller one;
 - `fuelUsedL` (ET-016 PR-6, J8) is the trip's stored fuel used when it is available; a resumed trip accumulates fuel used from it in the same way. A stored `invalid` or `not-observed` value is not passed, so the resumed trip counts fuel used from its next continuous fuel step. After a stored `invalid` (a negative total), the next stored value can therefore overstate the trip by at most that dropped negative total, which is bounded by the summed noise increases; the trip is already partial (`consumer-restart`);
 - `awaitingOutcome` (PR-2 fix round 1) is true when the trip's job was cleared before the stop: the session's last stored `job.configured` or `job.cleared` event after the trip's opening event (`openedEventSeq`, which can follow the job configuration, for example for a reload trip) is a `job.cleared`. The trip then resumes awaiting its outcome, so free driving after the clear adds no distance, and a later outcome still attaches;
@@ -83,11 +89,11 @@ Because the reducer applies effects only for new coverage and queues them otherw
 **Seed rules (ET-015a, R4).** The recorder builds the seeds with `readTripSeeds` ([trip-seeds.ts](../apps/desktop/src/trip-seeds.ts)) from stored rows only, by fixed rules that mirror `TripStorageModel.seeds()` of the trip replay; the reducer is not run over stored items:
 
 - the open trips of the welcome's game come from `listTrips({game, outcome: 'open'})`, page by page;
-- `jobKey` is `jobKey()` of the stored `job.configured` record at the trip's job configuration eventSeq, or null when that row is missing or of another type;
-- `lastObservedUtcMs` is the label of the session's stored event with the highest eventSeq that has a usable label (`occurred.utcUnixMs`, available and a safe integer);
+- `jobKey` is `jobKey()` of the stored `job.configured` record at the trip's job configuration eventSeq, or null when that row is missing or of another type; for a trip opened from a checkpoint it is `jobKey()` of `TripRecord.checkpointJob.values`, and no event is read for it (ET-016 PR-7);
+- `lastObservedUtcMs` is the label of the session's stored event with the highest eventSeq that has a usable label (`occurred.utcUnixMs`, available and a safe integer); for a trip opened from a checkpoint, only an event at or after its `nextEventSeq` counts, and without one it is the trip's start label (PR-7 review round 1). A label from before the checkpoint would otherwise end a later restart or gap close before the trip's start, clamped with a false `utc-label-jump`;
 - `observedDistanceM` is the stored value when it is available;
 - `fuelUsedL` is the stored value when it is available (ET-016 PR-6);
-- `awaitingOutcome` is true when the session's last `job.configured` or `job.cleared` event after the trip's opening event is a `job.cleared`.
+- `awaitingOutcome` is true when the session's last `job.configured` or `job.cleared` event after the trip's opening event is a `job.cleared`. A trip opened from a checkpoint has no opening event; its opening point is the checkpoint's `nextEventSeq` − 1, so only events at or after `nextEventSeq` count, and the session scan starts there.
 
 The seeds are read only when the reducer has no session of the welcome's game, that is at the first durable welcome per game in the recorder's lifetime (R15). Later welcomes rely on the reducer's own memory, which never closes a trip twice.
 
@@ -98,7 +104,7 @@ The seeds are read only when the reducer has no session of the welcome's game, t
 | # | Gap | Disposition |
 | --- | --- | --- |
 | S-1 | No fuel-used column on trips; PR-2 reports fuel used, refuelled litres and refuel episodes in the view only. `trip.close` has no detail, so the close carries none of them | Moved to ET-016, in one schema v2 migration with S-2 and the journal indexes. **Resolved in ET-016 PR-6** (J8): schema version 2 has `trips.fuel_used_l`, and the reducer persists fuel used with `trip.update fuelUsedL` like observed distance (see [Persistence](#readings-accounting-t16-t17)). Refuelled litres and episodes stay `refuel` annotations |
-| S-2 | A late-attached job cannot open a trip from the checkpoint: storage opens trips only at a job configuration event, and hydration stores no configuration rows. The job stays untracked until an identical `job.configured` arrives | Moved to ET-016 (schema v2 and concept §7 wording). It changes T9, a product behaviour: a job accepted before the app starts is never recorded as a trip. It is on the enablement checklist; nothing real is recorded before then |
+| S-2 | A late-attached job cannot open a trip from the checkpoint: storage opens trips only at a job configuration event, and hydration stores no configuration rows. The job stays untracked until an identical `job.configured` arrives | Moved to ET-016 (schema v2 and concept §7 wording). It changes T9, a product behaviour: a job accepted before the app starts is never recorded as a trip. **Resolved in ET-016 PR-7** (J9): schema version 2 stores checkpoint job configurations and checkpoint-opened trips, and `openAttachedTrip` opens a [late-attach trip](#late-attach-trips-j9). This restores concept §3 and REG-003: a job accepted before the application attached is recorded as a partial trip |
 | S-3 | The synchronous `EffectsHook` of the durable sink got no commit result, so it could not follow T3 | **Resolved in ET-015a PR-2**: the hook is removed, and `TripRecorderSink` steps, commits and then adopts |
 | S-4 | Continuations have no column; they live in completeness `detail` JSON (`continuationOf`) | Kept as is |
 
@@ -107,7 +113,7 @@ The seeds are read only when the reducer has no session of the welcome's game, t
 - the game is idle;
 - the trip is awaiting its outcome after `job.cleared`;
 - the trip is in a reload check;
-- a job is untracked: a checkpoint job seen while idle, or the job of a trip a gap closed (free driving or ambiguous);
+- a job is untracked: the job of a trip a gap closed (free driving or ambiguous), or a checkpoint job seen while idle until its late-attach trip opens;
 - the view is of another game than the reading (a defensive check in the sampler).
 
 A reading reaches the recorder in FIFO order after the items before it, so a sample taken when the reading arrives sees the trip state left by the commits before it, never by a commit still waiting.
@@ -126,7 +132,7 @@ A newly opened trip also has a **load window**. If its job was configured outsid
 
 The session's **load state** is `loading` from a fresh session until its first `simulation.started`, and again after `timers.restart` until the next start (O1). A `gameTime.regression` never starts a load: it follows the start of the load it ends (O10), so it leaves the state unchanged, or sets `running` when it occurred while running. The state is `unknown` after a gap or when the reducer joins a session that already has committed events.
 
-A job is **untracked** when it is known or likely active but no trip tracks it: a checkpoint job seen while idle (T9), or the job of a trip that a gap closed before its clear or outcome. It stays untracked until `job.cleared`, an outcome or a new trip. A later checkpoint while idle replaces it, or clears it when that checkpoint shows no job. A new plugin session starts with none.
+A job is **untracked** when it is known or likely active but no trip tracks it: the job of a trip that a gap closed before its clear or outcome, or a checkpoint job seen while idle until its [late-attach trip](#late-attach-trips-j9) opens (J9; T9 kept it untracked until an identical `job.configured`). It stays untracked until `job.cleared`, an outcome or a new trip. A later checkpoint while idle replaces it, or clears it when that checkpoint shows no job. A new plugin session starts with none.
 
 **Replayed events.** A checkpoint describes the state at its `status.delivery.nextEventSeq`. The producer's retained events below that point arrive after the checkpoint but happened before it, while the consumer was not attached (protocol v1 §7, §9). The reducer keeps that point per session and treats a replayed event as an ordinary stream event:
 
@@ -161,14 +167,16 @@ A gap-sourced untracked job is unaffected: a gap is itself a stream item in orde
 | any open | `source.gameMode` that differs from the trip's mode | unchanged | trip.update `gameModeAmbiguous: true`, once |
 | open trip of an earlier session of the game | new session | idle | close `{none, restart, partial}` at the new session's first commit. A continuation candidate left by an earlier close is relabelled `restart` |
 | open trip of this session | reconnection after `disconnected` | unchanged | trip.update `partial`; a `not-connected` interval from the last item before the disconnection |
-| any | checkpoint | unchanged | none; the session keeps the checkpoint's `nextEventSeq`, and an idle slot records the checkpoint job as untracked from that point on (T9) |
+| any | checkpoint | unchanged | none; the session keeps the checkpoint's `nextEventSeq`, and an idle slot records the checkpoint job as untracked from that point on and as the connection's pending late-attach trip (J9) |
+| idle, a late-attach trip due (replayed events drained) | `attach` | active (new) | through `openAttachedTrip`: the slot's queued lifecycle effects, then `trip.open` from the checkpoint job with a `late-attach` cause and a continuation cause (J9) |
+| open, when the replayed events drain | — | unchanged | the pending late-attach trip is dropped: the open trip (for example from an identical replayed configuration) tracks the game |
 
 **Plugin exit (ET-015c, G16).** A plugin exit writes no interval of its own; T11 is the rule that keeps its uncertainty: the next plugin session of the game closes the open trip as `restart`, partial, at its first commit (`tests/storage/recording-status.test.ts` (g)).
 
 Cause intervals on `trip.open` make the new trip partial:
 
 - `opened-at-load` (`discontinuity`): the session is loading (T12);
-- `late-attach` (`not-connected`): an identical job was untracked since a checkpoint, and this configuration is not replayed (T9);
+- `late-attach` (`not-connected`): the trip opened from a checkpoint job (J9, `source: 'checkpoint'`); or, at an event, an identical job was untracked since a checkpoint and this configuration is not replayed (T9; since J9 only when the late-attach trip could not open because a trip was open when the replayed events drained);
 - `opened-before-attach` (`not-connected`): the configuration is replayed from before the connection's checkpoint;
 - `{cause, continuationOf, decision: 'not-merged'}` (`discontinuity`): the last trip of this game closed without an outcome and had the same job key. Its close reason is the cause: `restart` (T11), `gap`, `discontinuity` or `configuration-cleared`. A candidate that crosses a plugin restart is `restart`, and an outcome clears it. Identical jobs are never merged.
 
@@ -179,9 +187,9 @@ Every `completeness.add` of the reducer carries a `detail` object (storage keeps
 | `detail.cause` | Interval kind | Other keys |
 | --- | --- | --- |
 | `opened-at-load` | `discontinuity` | `atEventSeq`: the event that opened the trip, or the timer restart inside its load window |
-| `late-attach` | `not-connected` | `atEventSeq`: the opening event |
+| `late-attach` | `not-connected` | `atEventSeq`: the opening event. A trip opened from a checkpoint (J9) has instead `source: 'checkpoint'` and `nextEventSeq`: the checkpoint's `nextEventSeq` |
 | `opened-before-attach` | `not-connected` | `atEventSeq`: the replayed opening event |
-| `restart`, `gap`, `discontinuity`, `configuration-cleared` | `discontinuity` | `continuationOf`: the earlier trip's UUID; `decision`: `not-merged`; `atEventSeq`: the opening event |
+| `restart`, `gap`, `discontinuity`, `configuration-cleared` | `discontinuity` | `continuationOf`: the earlier trip's UUID; `decision`: `not-merged`; `atEventSeq`: the opening event, or for a trip opened from a checkpoint `source: 'checkpoint'` and `nextEventSeq` |
 | `reload` | `discontinuity` | `continuationOf`, `decision: 'not-merged'`; `atEventSeq`: the decisive event |
 | `save-load` | `discontinuity` | `fromClockId`, `toClockId`: the game clocks of the `gameTime.regression`; `atEventSeq`: the regression |
 | `gap` (an interval of the gap itself) | `event-loss` or `not-connected` | `causes`: the record's six loss counters; `firstEventSeq`, `lastEventSeq`: the whole record's range (the interval's own range is the new suffix); `redelivered` |
@@ -194,6 +202,18 @@ Every `completeness.add` of the reducer carries a `detail` object (storage keeps
 | `game-time-jump` (annotation, PR-2) | `discontinuity` | `annotation: true`; `label`: `crossing` or `possible-sleep`; `fromMinutes`, `toMinutes`: game minutes as decimal strings; `atMonotonicNs`: the reading where it was found. While it waits, wherever it is in the queue, a growing jump updates `toMinutes`, `lastAtMonotonicNs` and an upgrade to `crossing`; one that grows after it was sent gets a new annotation with `continues: true` whose `fromMinutes` is where the sent one ended, so the ranges never overlap. Never merged with another jump |
 | `position-jump` (annotation, PR-2) | `discontinuity` | `annotation: true`; `label`: `crossing` or `possible-teleport`; `meters`: the straight-line step; `atMonotonicNs`; after merging also `count` and `lastAtMonotonicNs` |
 | `refuel` (annotation, PR-2) | `discontinuity` | `annotation: true`; `addedLiters`: the episode's litres in this annotation; `atMonotonicNs`: its first step; `lastAtMonotonicNs` once it grows while waiting, wherever it is in the queue. An episode that continues after its annotation was sent gets a new one with `continues: true`. Never merged with another episode |
+
+## Late-attach trips (J9)
+
+ET-016 PR-7 implements J9 ([concept.md](../concept.md#et-016-authorization--october-16-2026)), which supersedes T9: a job accepted before the recorder attached is recorded as a partial trip, as concept §3 and REG-003 require, instead of staying untracked until an identical `job.configured` arrives.
+
+- **When.** A checkpoint while the game's slot is idle and its job is available sets the connection's pending late-attach trip. It is due once the session's processed point reaches the checkpoint's `nextEventSeq` − 1, so the retained events replayed after the checkpoint are stepped first. If a trip is open at that point (an identical replayed `job.configured` opened it with `opened-before-attach`, or a different replayed job), no late-attach trip opens. A disconnection, a new checkpoint or a new plugin session drops a pending one. A live item stepped before it opened (possible only while it waits behind queued lifecycle effects, below) drops it too when it contradicts the checkpoint's job: a live `job.cleared`, `job.delivered` or `job.cancelled`, or a gap over eventSeqs at or after `nextEventSeq`, which may hide such an event; any other live item leaves the job as the checkpoint showed it (PR-7 review round 1). A disconnection keeps the checkpoint's untracked job, which is still likely active; the next checkpoint replaces or clears it.
+- **What.** The trip opens from the checkpoint's job, partial, with a `not-connected` interval `{cause: 'late-attach', source: 'checkpoint', nextEventSeq}` and, when the game's last trip closed without an outcome and had the same job key, a not-merged continuation interval. It starts at the checkpoint state's capture UTC label (else the session's last label, else the receipt label), capture time and clock, with the checkpoint status's game mode. It has no truck or trailer reference until a `truck.configured` or `trailer.configured` is committed again (J22, [TD-007](technical-debt.md)); the first one is a reference, not a `truck-change`. Opened outside a running simulation, it keeps a load window like a trip opened at an event (T12). The attach is the session's latest labelled point, so a following gap closes the trip at its start label.
+- **How it is stored.** The effects are the slot's queued lifecycle effects (such as the restart close of an earlier session's trip, so one trip of the game is open at a time) followed by the `trip.open` and its intervals. They go to `openAttachedTrip({pluginSessionId, nextEventSeq, job, effects})` ([storage](storage.md#late-attach-trips-et-016b-pr-7)), never to an event or gap commit: no coverage change and no ACK. The attach waits while the queued lifecycle effects would not fit beside its own three in one command (16 effects); the next commit drains them. Queued annotations wait for the next commit. A live fine, toll or transfer committed while the attach waits has no trip yet, so it is attributed `ambiguous` and changes no trip totals (T14), while the trip that then opens starts at the earlier checkpoint label and its journal window from `nextEventSeq` lists that event. Totals and the window therefore disagree for that event. This is accepted: it needs more than 13 queued lifecycle effects, for example many stale open trips closed at a restart, and attributing an event to a trip that did not exist when it was committed would contradict T14 (PR-7 advisory review).
+- **Restart idempotence.** After a service restart the stored trip is a cold-start seed with its checkpoint job key, so the slot is not idle and no late attach is due; an identical re-send is the same job. Should a recorder attach again at the same checkpoint anyway (an answer lost), storage answers `duplicate`, and the recorder adopts the trip: never a second trip.
+- **Untracked jobs.** With J9 a job is untracked when a gap closed its trip before its clear or outcome, or when it started before recording and its late-attach trip has not opened (or a live gap prevented it). The recording status carries only a flag, so the dashboard and tray text names both causes ([application lifecycle](app-lifecycle.md)).
+
+PR-7 interpretations, listed for review: the trip starts at the checkpoint's own label, clock and game mode rather than the session's, because it opens at the checkpoint; it gets no `opened-at-load` cause (J9 lists only the late-attach and continuation causes) but keeps the load window; and queued lifecycle effects travel with the attach so that a restart close never leaves two open trips of one game. The evidence basis is synthetic inference: real late-attach checkpoints remain pending.
 
 ## Attribution (T14)
 
@@ -213,6 +233,7 @@ Money is summed per trip as exact BigInt digits per currency and SDK type. Fines
 ## Identity
 
 - **Trip UUID (T4).** The first 128 bits of SHA-256(`ets2telemetry-trip-v1:` + pluginSessionId + `:` + eventSeq of the configuring job event), written as 8-4-4-4-12 lowercase hex like the simulator's seeded ids, without RFC 4122 version bits. A replay or redelivery therefore yields the same UUID. telemetry-core has its own SHA-256, checked against NIST vectors and `node:crypto`.
+- **Late-attach trip UUID (J9).** The same shape over SHA-256(`ets2telemetry-trip-attach-v1:` + pluginSessionId + `:` + the checkpoint's `nextEventSeq`). Its own prefix keeps it apart from every event-opened trip, and storage keeps at most one checkpoint job per session and `nextEventSeq`, so the same attach is a storage `duplicate`, never a second trip.
 - **Job key (T6).** The canonical tuple of every `job.configured` field except `cargoLoaded`, with availability, reason, unit and money currency. A cargo-market pickup re-send is therefore the same job (O3).
 - **Truck and trailer.** A re-send with identical values changes nothing; different values update the reference.
 
@@ -347,7 +368,7 @@ The plan's transitions table leaves these cases open. They are listed here for r
 - **Re-send with a different `cargoLoaded` after a clear.** It is a not-merged continuation, never a reload check (fix round 1).
 - **Outcome guard.** It applies after any replacement or load, not only after a clear.
 - **Untracked jobs.** Fines, tolls and transfers while a job is untracked are `ambiguous`, not `free-driving` (fix round 1, replacing the PR-1 reading of T14).
-- **Replayed events.** A checkpoint job applies only from the checkpoint's `nextEventSeq` on, and a replayed configuration opens a partial trip with `opened-before-attach` rather than `late-attach` (fix round 2).
+- **Replayed events.** A checkpoint job applies only from the checkpoint's `nextEventSeq` on, and a replayed configuration opens a partial trip with `opened-before-attach` rather than `late-attach` (fix round 2). Since ET-016 PR-7 (J9) the checkpoint job itself opens a late-attach trip once the replay drains, unless a trip is open then.
 
 ## PR-2 interpretations of the plan
 

@@ -84,7 +84,8 @@ type ConnectionOp = {connection: DurableConnection} & (
   {kind: 'open'; welcome: WelcomeMessage} |
   {kind: 'checkpoint'; message: CheckpointMessage; receivedUtcMs: number} |
   {kind: 'snapshot'; message: SnapshotMessage; receivedUtcMs: number} |
-  {kind: 'item'; first: Uint64; last: Uint64; message: CoverageMessage; receivedUtcMs: number});
+  {kind: 'item'; first: Uint64; last: Uint64; message: CoverageMessage; receivedUtcMs: number} |
+  {kind: 'attach'; receivedUtcMs: number});
 /** ET-015b: one batch of the sink's pending samples. It belongs to no connection and is never dropped with one. */
 type Op = ConnectionOp | {kind: 'samples'};
 const COMMIT_STATUSES = new Set<CommitResult['status']>(['committed', 'duplicate', 'conflict', 'covered']);
@@ -145,6 +146,10 @@ export class DurableConnection {
  * item or reading bounds and it never produces or advances an ACK. A retryable sample failure keeps the rows for the
  * next timer and leaves every connection open; any other failure stops durable delivery for the service lifetime and
  * discards the pending rows. `stop()` writes the rows still pending unless delivery failed.
+ *
+ * ET-016 PR-7 (J9): when the sink has `attach` and reports a late-attach trip due after a reading or a commit, an
+ * `attach` op of that connection goes to the FIFO head, so it runs before anything queued behind. It never produces or
+ * advances an ACK, counts against no bound, is dropped with its connection, and fails like a commit of that connection.
  */
 export class DurableDelivery {
   private readonly queue: Op[] = [];
@@ -337,6 +342,7 @@ export class DurableDelivery {
       return;
     }
     if (op.kind === 'snapshot') { this.observe(connection, op.message, op.receivedUtcMs); return; }
+    if (op.kind === 'attach') { await this.attach(connection, op.receivedUtcMs); return; }
     try { cursor.received(op.first, op.last); } catch { this.failure(connection, internal()); return; }
     const result = await this.call(() => this.sink.commit(op.message, {receivedUtcMs: op.receivedUtcMs}));
     if (connection.dropped || this.stopped) return;
@@ -352,6 +358,8 @@ export class DurableDelivery {
     if (value.committedThroughEventSeq !== cursor.throughEventSeq) { this.unavailable(connection, 'COVERAGE_MISMATCH'); return; }
     // G9: storage committed again.
     this.setRetryCode(undefined);
+    // J9: a commit that drained the replayed events may make a late-attach trip due; it opens before the next item.
+    this.queueAttach(connection, op.receivedUtcMs);
     // E8: only the connection that received the coverage, while current, open and before `end`.
     if (!connection.link.current()) return;
     connection.link.committed?.();
@@ -366,12 +374,34 @@ export class DurableDelivery {
     if (!this.sink.observe) return;
     const result = this.sink.observe(message, {receivedUtcMs});
     if (!result.ok) { this.failure(connection, result.error); return; }
+    this.queueAttach(connection, receivedUtcMs);
     const samples = this.sink.samples;
     if (!samples) return;
     const dropped = samples.dropped();
     if (reachesPowerOfTwo(this.sampleDropped, dropped)) this.options.log?.('V1_SAMPLES_DROPPED', {count: dropped});
     this.sampleDropped = dropped;
     this.scheduleSamples();
+  }
+
+  /**
+   * ET-016 PR-7 (J9): when the sink reports a late-attach trip due, its op goes to the FIFO head, so it runs right after
+   * the op that made it due and before any item or reading queued behind; at most one is queued. It counts against no
+   * bound and belongs to its connection, so it is dropped with the connection's other work.
+   */
+  private queueAttach(connection: DurableConnection, receivedUtcMs: number): void {
+    if (!this.sink.attach || connection.dropped || this.stopped || this.queue.some(op => op.kind === 'attach')) return;
+    if (!this.sink.attach.due()) return;
+    this.queue.unshift({connection, kind: 'attach', receivedUtcMs});
+  }
+  /** One late-attach op: no coverage and no ACK; a failure fails the connection like a failed commit. */
+  private async attach(connection: DurableConnection, receivedUtcMs: number): Promise<void> {
+    const attach = this.sink.attach;
+    if (!attach) return;
+    const result = await this.call(() => attach.open({receivedUtcMs}));
+    if (connection.dropped || this.stopped) return;
+    if (!result.ok) { this.failure(connection, result.error); return; }
+    if (!['committed', 'duplicate', 'none'].includes(result.value?.status)) { this.failure(connection, internal()); return; }
+    if (result.value.status !== 'none') this.setRetryCode(undefined);
   }
 
   /**

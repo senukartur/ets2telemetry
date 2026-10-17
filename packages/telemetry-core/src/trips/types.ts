@@ -1,7 +1,7 @@
 // Trip reducer inputs, state and results (ET-014). Everything is plain data: uint64 values stay decimal strings, and
 // the state survives structured cloning and JSON. Effects use the storage TripEffect contract, imported as types only
 // from packages/storage/src/api.ts (T2); see docs/trips.md.
-import type {Available, Currency, GameMode, Money, ServerMessage, Uint64} from '../../../contracts/src/protocol-v1';
+import type {Available, Currency, GameMode, JobConfiguration, Money, ServerMessage, Uint64} from '../../../contracts/src/protocol-v1';
 import type {RecordingCompleteness, TripEffect, TripOutcome, CloseReason} from '../../../storage/src/api';
 import type {StepSample} from '../derived';
 import type {GameTimeWindow, ReadingPoint, RunClock, TransferMark, TripAccounting} from './accounting';
@@ -23,7 +23,8 @@ export type GameModeEvidence = Pick<GameMode, 'mode' | 'method' | 'confidence'>;
  * A stored open trip of the welcome's game, supplied at a session input for a session the reducer does not know yet
  * (a cold start, ET-015a). A trip of another plugin session is closed with reason `restart` (T11). A trip of the same
  * session resumes, partial, because the consumer was not running for part of it: active, or awaiting its outcome. `jobKey` is
- * `jobKey()` of the trip's stored job configuration; null when it cannot be rebuilt, so no later job matches it.
+ * `jobKey()` of the trip's stored job configuration (its job.configured event, or the checkpoint job of a late-attach
+ * trip, J9); null when it cannot be rebuilt, so no later job matches it.
  * `lastObservedUtcMs` is the label of the trip session's last stored item, the lower bound of a restart close.
  * `observedDistanceM` is the trip's stored observed distance when it is available; a resumed trip accumulates from it.
  * `fuelUsedL` is the trip's stored fuel used when it is available; a resumed trip accumulates fuel used from it (J8).
@@ -44,19 +45,26 @@ export interface TripSeed {
  * used only when the session has no earlier label. `reading` is one normalized state of the current connection (the
  * checkpoint's and each snapshot's), in stream order with the events; `utcMs` is its capture UTC label. Readings are
  * not commit carriers: what they decide waits for the game's next carrier (T16, T17).
+ *
+ * ET-016 PR-7 (J9): a checkpoint's optional `receivedUtcMs` is its receipt label, the start label of a late-attach trip
+ * when the checkpoint has no capture UTC label and the session none yet. `attach` opens the pending late-attach trip of
+ * the current connection once `pendingAttach()` reports it; its effects belong to the storage command openAttachedTrip,
+ * never to an event or gap commit. Its `receivedUtcMs` is the last fallback of the start label.
  */
 export type TripInput =
   | {kind: 'session'; welcome: WelcomeMessage; coveredThrough: Uint64; openTrips: TripSeed[]}
-  | {kind: 'checkpoint'; message: CheckpointMessage}
+  | {kind: 'checkpoint'; message: CheckpointMessage; receivedUtcMs?: number}
+  | {kind: 'attach'; receivedUtcMs: number}
   | {kind: 'event'; message: EventMessage; coveredThrough: Uint64; receivedUtcMs: number}
   | {kind: 'gap'; message: GapMessage; coveredThrough: Uint64; receivedUtcMs: number}
   | {kind: 'reading'; sample: StepSample & {utcMs?: number}}
   | {kind: 'disconnected'};
 
 /**
- * `ORDER_VIOLATION`: an eventSeq or gap start beyond the next expected eventSeq. `COVERAGE_MISMATCH`: the caller's
- * committed coverage differs from what the reducer has processed. `UNKNOWN_SESSION`: an item or checkpoint of a session
- * that is not the current connection's session. All three fail closed: the state is unchanged.
+ * `ORDER_VIOLATION`: an eventSeq or gap start beyond the next expected eventSeq, an item stepped while a late-attach trip
+ * is due and not yet opened, or an `attach` input with none due. `COVERAGE_MISMATCH`: the caller's committed coverage
+ * differs from what the reducer has processed. `UNKNOWN_SESSION`: an item or checkpoint of a session that is not the
+ * current connection's session. All three fail closed: the state is unchanged.
  */
 export type TripErrorCode = 'ORDER_VIOLATION' | 'COVERAGE_MISMATCH' | 'UNKNOWN_SESSION';
 export type TripStepResult = {ok: true; state: TripState; effects: TripEffect[]} | {ok: false; code: TripErrorCode};
@@ -101,18 +109,34 @@ export interface ClosedTrip extends Omit<OpenTrip, 'phase' | 'reloadEventSeq' | 
   revenue: Available<Money> | null; penalty: Available<Money> | null; deliveredDistance: Available<number> | null;
 }
 export interface ConfigurationRef {eventSeq: Uint64; key: string}
+/**
+ * ET-016 PR-7 (J9): a late-attach trip decided by the current connection's checkpoint, which showed job `job` (key
+ * `key`) while the game's slot was idle. It opens once the session's processed point reaches `nextEventSeq − 1`, so the
+ * retained events replayed after the checkpoint are stepped first. The other values describe the checkpoint, where the
+ * trip starts: its UTC label (capture label, else the session's last label, else the receipt label; null without any),
+ * capture time and clock, game mode and simulation state.
+ */
+export interface PendingAttach {
+  nextEventSeq: Uint64; key: string; job: JobConfiguration; labelUtcMs: number | null; monotonicNs: Uint64; clockId: string;
+  gameMode: GameModeEvidence; simulation: 'running' | 'paused' | 'unavailable';
+}
+/** What an `attach` input will store: openAttachedTrip's session, checkpoint key and job (docs/storage.md). */
+export interface AttachRequest {pluginSessionId: string; nextEventSeq: Uint64; job: JobConfiguration}
 export interface SessionState {
   pluginSessionId: string; game: TripGame; processedThrough: Uint64; load: LoadState; gameMode: GameModeEvidence;
   clockId: string | null; lastUtcMs: number | null; lastMonotonicNs: Uint64 | null;
   truck: ConfigurationRef | null; trailers: (ConfigurationRef | null)[];
   /**
-   * A job that is known or likely active but that no trip tracks: a checkpoint job seen while idle (T9), or the job of
-   * a trip a gap closed before its clear or outcome. Gameplay events meanwhile are ambiguous, never free driving
-   * (concept.md, October 13, 2026). Cleared by `job.cleared`, an outcome or a new trip; a later checkpoint while idle
-   * replaces or clears it, and a new plugin session starts with none. A checkpoint job describes the state at the
-   * checkpoint, so it applies only from `attachedFromEventSeq` on: replayed events below it happened earlier.
+   * A job that is known or likely active but that no trip tracks: a checkpoint job seen while idle until its late-attach
+   * trip opens (J9), or the job of a trip a gap closed before its clear or outcome. Gameplay events meanwhile are
+   * ambiguous, never free driving (concept.md, October 13, 2026). Cleared by `job.cleared`, an outcome or a new trip; a
+   * later checkpoint while idle replaces or clears it, and a new plugin session starts with none. A checkpoint job
+   * describes the state at the checkpoint, so it applies only from `attachedFromEventSeq` on: replayed events below it
+   * happened earlier.
    */
   untrackedJob: {key: string; source: 'checkpoint' | 'gap'} | null;
+  /** The current connection's late-attach trip still to open (J9); null when none is pending. */
+  pendingAttach: PendingAttach | null;
   /**
    * The current connection's checkpoint `nextEventSeq`. Events below it are replayed from the producer's retention: they
    * happened before the consumer attached (protocol v1 §7, §9). Null before the connection's checkpoint.

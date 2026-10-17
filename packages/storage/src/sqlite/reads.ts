@@ -9,6 +9,7 @@ import {
 import {fromAvailability, fromMask, fromU64Key, isUuid, SAMPLE_FIELDS, toReal, toSafeNumber, u64Key} from '../codec';
 import {fail} from '../errors';
 import type {StorageConnection} from './connection';
+import {jobValues} from './journal';
 import {statement} from './writes';
 
 const U32 = 4_294_967_295;
@@ -65,16 +66,28 @@ export function listEvents(conn: StorageConnection, pluginSessionId: string, pag
 }
 
 const seqOf = (db: Database.Database, eventRef: unknown) => fromU64Key(statement(db, 'SELECT event_seq FROM events WHERE id = ?').pluck().get(eventRef));
+/**
+ * The trip's job configuration: its job.configured event's eventSeq, or since ET-016 PR-7 (J9) the checkpoint's
+ * nextEventSeq and stored values. A version 1 database (no `source` column) holds only event configurations.
+ */
+function jobOf(db: Database.Database, ref: unknown): Pick<TripRecord, 'jobSource' | 'jobConfigurationEventSeq' | 'checkpointJob'> {
+  const job = statement(db, 'SELECT * FROM job_configurations WHERE id = ?').pluck(false).get(ref) as Record<string, unknown> | undefined;
+  if (!job) fail('DATABASE_CORRUPT');
+  if (job.source === 'checkpoint') return {jobSource: 'checkpoint', jobConfigurationEventSeq: null, checkpointJob: {nextEventSeq: fromU64Key(job.checkpoint_next_event_seq), values: jobValues(job)}};
+  return {jobSource: 'event', jobConfigurationEventSeq: seqOf(db, job.event_ref), checkpointJob: null};
+}
 function tripRecord(db: Database.Database, r: Record<string, unknown>): TripRecord {
   const configSeq = (table: string, ref: unknown) => seqOf(db, statement(db, `SELECT event_ref FROM ${table} WHERE id = ?`).pluck().get(ref));
+  // A trip opened from a checkpoint has no opening event (opened_by 'checkpoint'); version 1 trips always opened at one.
+  const openedBy = r.opened_by === 'checkpoint' ? 'checkpoint' : 'event';
   const trailers = statement(db, `SELECT e.event_seq FROM trip_trailers t JOIN trailer_configurations c ON c.id = t.trailer_configuration_ref JOIN events e ON e.id = c.event_ref
     WHERE t.trip_ref = ? ORDER BY e.event_seq`).pluck().all(r.id).map(fromU64Key);
   return {
     tripUuid: String(r.trip_uuid), pluginSessionId: String(statement(db, 'SELECT plugin_session_uuid FROM plugin_sessions WHERE id = ?').pluck().get(r.plugin_session_ref)),
     game: r.game as TripRecord['game'], gameMode: {mode: r.game_mode, method: r.game_mode_method, confidence: r.game_mode_confidence} as TripRecord['gameMode'],
-    gameModeAmbiguous: toSafeNumber(r.game_mode_ambiguous, 1, 0) === 1, jobConfigurationEventSeq: configSeq('job_configurations', r.job_configuration_ref),
+    gameModeAmbiguous: toSafeNumber(r.game_mode_ambiguous, 1, 0) === 1, ...jobOf(db, r.job_configuration_ref),
     truckConfigurationEventSeq: r.truck_configuration_ref === null ? null : configSeq('truck_configurations', r.truck_configuration_ref), trailerConfigurationEventSeqs: trailers,
-    openedEventSeq: seqOf(db, r.opened_event_ref), outcome: r.outcome as TripRecord['outcome'], outcomeEventSeq: r.outcome_event_ref === null ? null : seqOf(db, r.outcome_event_ref),
+    openedBy, openedEventSeq: openedBy === 'checkpoint' ? null : seqOf(db, r.opened_event_ref), outcome: r.outcome as TripRecord['outcome'], outcomeEventSeq: r.outcome_event_ref === null ? null : seqOf(db, r.outcome_event_ref),
     closeReason: r.close_reason as TripRecord['closeReason'], recordingCompleteness: r.recording_completeness as TripRecord['recordingCompleteness'],
     startedUtcMs: toSafeNumber(r.started_utc_ms), endedUtcMs: r.ended_utc_ms === null ? null : toSafeNumber(r.ended_utc_ms),
     observedDistanceM: fromAvailability(r.observed_distance_m, r.observed_distance_m_state, toReal),

@@ -276,7 +276,8 @@ describe('ET-015c recording status through the production wiring', () => {
 
   it('(f) the application absent: no spool and no history for the absent interval; the checkpoint hydrates and the offline gaps are counted (G17)', async () => {
     // app-absent-hydration: events 1-3 and 4 happen before the client attaches at 100 ms and arrive as offline gaps; the
-    // checkpoint hydrates the job without an event; the clear (5) is the only event row.
+    // checkpoint hydrates the job without an event and, since ET-016 PR-7 (J9), opens its late-attach trip after gap 1-3;
+    // the clear (5) is the only event row.
     const input = scenario('app-absent-hydration'), expected = tripExpected('app-absent-hydration');
     expect(reactiveConflicts(input)).toEqual([]);
     const server = await serveV1Reactive(input, {scale: 0, awaitScriptedAcks: true});
@@ -287,7 +288,9 @@ describe('ET-015c recording status through the production wiring', () => {
       await guarded(server.done, 'the reactive server run', HANG_GUARD_MS);
       await until(() => lastState(s.statuses) === 'interrupted', 'the final interrupted status', HANG_GUARD_MS);
       expect(sequence(s.statuses)).toEqual([...STARTED, 'recording', 'interrupted']);
-      expect(s.statuses.at(-1)).toEqual(status('interrupted', {lostEvents: 4, notConnected: 2}));
+      // ET-016 PR-7 (J9): the checkpoint job now opens a late-attach trip with its own not-connected interval, the third
+      // beside the two offline gaps (the expectation's intervals); before J9 the job stayed untracked and only the gaps counted.
+      expect(s.statuses.at(-1)).toEqual(status('interrupted', {lostEvents: 4, notConnected: 3}));
       await stopService(s, timeline, worker.exit);
       const storage = await reader('t').open(), session = sessionOf(input);
       expect([ok(storage.committedThrough(session)), ok(storage.listEvents(session)).map(event => event.eventSeq)]).toEqual([expected.coverage.committedThroughEventSeq, ['5']]);
