@@ -2,6 +2,7 @@
 // docs/journal-export.md and the hand-written journal answers of tests/shared/journal-replies.ts; only the protocol v1
 // job, truck, trailer and event records come from the shared protocol v1 fixtures, as in the journal tests. Nothing is
 // read back from apps/desktop/src/journal-export.ts (REG-014).
+import {readFileSync} from 'node:fs';
 import {describe, expect, it} from 'vitest';
 import type {JournalEvent, JournalInterval, JournalSample, JournalTripDetail} from '../../packages/contracts/src';
 import {
@@ -149,6 +150,17 @@ describe('bounds (J17)', () => {
   it('are checked by the validator: a row past them is a problem', () => {
     const document = JSON.parse(serialize(detail, {samples: [[SAMPLE, {...SAMPLE, id: '12'}]], events: [[EVENT, EVENT_4, {...EVENT, eventSeq: '5'}]]})) as unknown;
     expect(tripExportProblems(document)).toEqual(['$.events[2]: past the export bounds', '$.samples[1]: past the export bounds']);
+  });
+});
+
+describe('the documented example (docs/journal-export.md)', () => {
+  it('is a valid format version 1 document of a closed trip', () => {
+    const text = readFileSync('docs/journal-export.md', 'utf8').replaceAll('\r\n', '\n');
+    const block = /\n## Example\n[\s\S]*?```json\n([\s\S]*?)\n```\n/.exec(text);
+    expect(block).not.toBeNull();
+    const document = JSON.parse(block![1]) as {bounds: {snapshot: boolean}; events: unknown[]; samples: unknown[]};
+    expect(tripExportProblems(document)).toEqual([]);
+    expect([document.bounds.snapshot, document.events.length, document.samples.length]).toEqual([false, 3, 1]);
   });
 });
 
