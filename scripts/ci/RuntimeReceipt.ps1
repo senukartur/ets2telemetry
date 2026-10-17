@@ -210,6 +210,62 @@ function Test-RecordingStatusReceipt {
     return $true
 }
 
+# ET-016 PR-8 journal and export of the recording journey: run B's Journal tab showed the one recorded trip with its
+# hand-written list row, detail, two completeness intervals, timeline 3-8 and samples; the export was saved once and a
+# cancelled export wrote nothing; after the exit the export passed the shared validator and reconciled with the stored
+# rows: the same trip, plugin session and database UUIDs, each eventSeq of the window once despite the redelivery, and
+# the trip's stored interval and sample ids. The schema version 2 trip columns say that the trip opened at its job event.
+function Test-RecordingJournalReceipt {
+    param([object]$Recording)
+    $journal = $Recording.journal
+    if ($null -eq $journal) { return $false }
+    foreach ($field in @('listMatch','detailMatch','intervalsMatch','timelineMatch','samplesMatch','exportSaved','exportCancelledWritesNothing',
+        'exportUnchangedByCancel','sampleCountMatch','exportValidated','exportReconciled')) {
+        if ($journal.$field -isnot [bool] -or $journal.$field -ne $true) { return $false }
+    }
+    $uuid = '^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$'
+    $trip = $journal.tripUuid
+    if ($trip -isnot [string] -or $trip -cnotmatch $uuid) { return $false }
+    $rows = @($journal.list.rows)
+    if ($rows.Count -ne 1 -or $rows[0].trip -cne $trip -or $rows[0].outcome -cne 'Delivered' -or $rows[0].completeness -cne 'Partial' -or
+        $journal.list.banner -cne "Synthetic test database $([char]0x2014) never game history") { return $false }
+    $detail = $journal.detail
+    if ($null -eq $detail -or $detail.outcome -cne 'Delivered' -or $detail.completeness -cne 'Partial' -or $detail.fields.'trip-tripId' -cne $trip -or
+        $detail.fields.'trip-openedBy' -cne 'job event 3') { return $false }
+    if (@($journal.intervals.rows).Count -ne 2 -or (@($journal.timeline.eventSeqs) -join ',') -cne '3,4,5,6,7,8') { return $false }
+    # The journal's sample count is the trip's stored count: the optional second-1000 row or none.
+    $sampleCount = $journal.sampleCount
+    $storedTripSamples = @($Recording.database.rows.sampleRows | Where-Object { $_.trip -ceq 'trip@3' }).Count
+    if (!(Test-ReceiptInteger -Value $sampleCount -Minimum 0 -Maximum 1) -or $sampleCount -ne $storedTripSamples) { return $false }
+    # One saved file; the cancelled export left nothing; main logged one saved and one cancelled export.
+    if ((@($journal.exportFolder) -join ',') -cne 'trip.json') { return $false }
+    $exportEvents = @($journal.exportEvents)
+    if ((@($exportEvents | ForEach-Object { $_.event }) -join ',') -cne 'JOURNAL_EXPORT_SAVED,JOURNAL_EXPORT_CANCELLED' -or
+        !(Test-ReceiptInteger -Value $exportEvents[0].facts.events -Minimum 6 -Maximum 6) -or
+        !(Test-ReceiptInteger -Value $exportEvents[0].facts.samples -Minimum $sampleCount -Maximum $sampleCount)) { return $false }
+    if ($null -eq $journal.exportProblems -or @($journal.exportProblems).Count -ne 0) { return $false }
+    # Reconciliation: the export's rows and identifiers against the stored rows.
+    $exported = $journal.exportRows; $stored = $journal.storedRows; $ids = $journal.exportIds
+    if ($null -eq $exported -or $null -eq $stored -or $null -eq $ids -or $null -eq $exported.bounds) { return $false }
+    if ((@($exported.eventSeqs) -join ',') -cne '3,4,5,6,7,8' -or (@($stored.eventSeqs) -join ',') -cne '3,4,5,6,7,8') { return $false }
+    $intervalIds = @($exported.intervalIds | Where-Object { $null -ne $_ }); $storedIntervalIds = @($stored.intervalIds | Where-Object { $null -ne $_ })
+    $sampleIds = @($exported.sampleIds | Where-Object { $null -ne $_ }); $storedSampleIds = @($stored.sampleIds | Where-Object { $null -ne $_ })
+    if ($intervalIds.Count -ne 2 -or ($intervalIds -join ',') -cne ($storedIntervalIds -join ',') -or $storedIntervalIds.Count -ne 2 -or
+        $sampleIds.Count -ne $sampleCount -or ($sampleIds -join ',') -cne ($storedSampleIds -join ',') -or $storedSampleIds.Count -ne $sampleCount) { return $false }
+    $bounds = $exported.bounds
+    if ($bounds.committedThroughEventSeq -cne '13' -or $bounds.snapshot -isnot [bool] -or $bounds.snapshot -or
+        $bounds.lastIntervalId -cne $storedIntervalIds[-1]) { return $false }
+    if (($sampleCount -eq 0 -and $null -ne $bounds.lastSampleId) -or ($sampleCount -eq 1 -and $bounds.lastSampleId -cne $storedSampleIds[-1])) { return $false }
+    foreach ($name in @('tripUuid','pluginSessionId','databaseUuid')) {
+        if ($ids.$name -isnot [string] -or $ids.$name -cnotmatch $uuid -or $ids.$name -cne $stored.$name) { return $false }
+    }
+    if ($ids.tripUuid -cne $trip -or $detail.fields.'trip-session' -cne $ids.pluginSessionId) { return $false }
+    # Schema version 2 trip columns: opened at its job event, with no checkpoint (the journey has no late-attach trip).
+    $storedTrip = @($Recording.database.rows.trips)[0]
+    if ($storedTrip.jobSource -cne 'event' -or $storedTrip.openedBy -cne 'event' -or $null -ne $storedTrip.checkpointNextEventSeq) { return $false }
+    return $true
+}
+
 # ET-015a PR-4 recording journey: commits through a killed and restarted service, close-to-tray, a tray exit and an
 # application restart into one synthetic database, which holds the hand-written rows; no history database exists.
 function Test-RecordingReceipt {
@@ -298,6 +354,8 @@ function Test-RecordingReceipt {
     # Only the terminated service's probe remains, as crash evidence.
     if (@($Driver.probesAfterExit).Count -ne 1 -or (@($Driver.probesAfterExit) -join ',') -cne (@($recording.retainedCrashProbe) -join ',')) { return $false }
     if (!(Test-RecordingStatusReceipt -Recording $recording)) { return $false }
+    # ET-016 PR-8: the journal and export of the recorded trip.
+    if (!(Test-RecordingJournalReceipt -Recording $recording)) { return $false }
     return $true
 }
 

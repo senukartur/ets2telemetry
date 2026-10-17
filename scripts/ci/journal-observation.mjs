@@ -485,3 +485,7 @@ export async function verifyJournalRun({config, record, restartMainEvents, resta
   assert.deepEqual(files, {magic: 'SQLite format 3', applicationId: 1163154226, userVersion: 2, sidecars: [], syntheticBackups: false});
   record.shutdownClean = true;
 }
+
+// ET-016 PR-8: the recording journey (recording-observation.mjs) reads its recorded trip and exports it through the same
+// rendered tab, with these browser callbacks, the same Save dialog replacement and the same shared validator.
+export {clickTestId, dialogCalls, exportTrip, exportValidator, listState, openDetail, openTable, stubSaveDialog, until as untilPage};
