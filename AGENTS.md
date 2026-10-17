@@ -516,6 +516,7 @@ ET-016 implementation update on October 17, 2026: ET-016a and ET-016b are implem
 
 **Pending checks.**
 - The real Windows Save dialog, readability and keyboard use of the Journal tab, and a forced render fault.
+- The first real upgrade of the owner's existing version 1 history database, after its verified backup.
 - The journal and export against real recorded history.
 - Real late-attach checkpoints.
 - Every real-game, TruckersMP, display and performance check.
