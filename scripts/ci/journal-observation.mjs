@@ -437,6 +437,8 @@ export async function runJournalExport({application, dashboard, config, record})
   // (2) A cancelled dialog: the fixed text, and no new file.
   await stubSaveDialog(application, {canceled: true, filePath: ''});
   await exportTrip(dashboard, T.delivered, 'Export cancelled. Nothing was written.');
+  // The cancel must come from the Save dialog main offered again, not from a reply that skipped it.
+  assert.deepEqual(await dialogCalls(application), [deliveredDialog[0]], 'The cancelled export did not offer the Save dialog');
   // (3) A target in the data folder, named in upper case: refused before any file is opened.
   const dataFolder = path.join(config.localappdata, 'ETS2Telemetry', 'synthetic');
   const before = (await readdir(dataFolder)).sort();

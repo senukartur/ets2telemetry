@@ -481,6 +481,8 @@ async function runRecordingJournal({application, dashboard, recording, config, r
   await stubSaveDialog(application, {canceled: true, filePath: ''});
   const cancelled = await exportTrip(dashboard, trip, EXPORT_CANCELLED);
   assert.equal(cancelled.failed, 'false');
+  // The cancel must come from the Save dialog main offered again, not from a reply that skipped it.
+  assert.deepEqual(await dialogCalls(application), [exportDialog(trip)], 'The cancelled export did not offer the Save dialog');
   journal.exportFolder = (await readdir(folder)).sort();
   journal.exportUnchangedByCancel = await sha256Of(file) === savedHash;
   assert.deepEqual(journal.exportFolder, ['trip.json'], 'The cancelled export left a file in the export folder');
