@@ -243,9 +243,9 @@ Since ET-017 PR-4 a packaged application reads that bundle and silently installs
 
 | Variable | Effect |
 | --- | --- |
-| `ETS2TELEMETRY_PLUGIN_SETUP=off` | Disables plugin setup in any launch |
+| `ETS2TELEMETRY_PLUGIN_SETUP=off` (or any other value than exactly `real`) | Disables plugin setup in any launch; a differently cased or misspelled value disables it too |
 | `ETS2TELEMETRY_PLUGIN_SETUP=real` | Enables it in an unpackaged (development) launch, which otherwise stays disabled; it has no effect together with a profile, diagnostic, live-smoke or source override |
-| `ETS2TELEMETRY_PLUGIN_SETUP_ROOT=<absolute folder>` | With an absolute `ETS2TELEMETRY_PROFILE_DIR` only: the test-root mode, confined to that folder, with `<root>\Steam` as the Steam folder and `<root>\LocalAppData\ETS2Telemetry\plugins\setup.json` as the install registry. Without a profile directory, or with a relative root or a bare drive, setup is disabled |
+| `ETS2TELEMETRY_PLUGIN_SETUP_ROOT=<absolute folder>` | With an absolute `ETS2TELEMETRY_PROFILE_DIR` only: the test-root mode, confined to that folder, with `<root>\Steam` as the Steam folder and `<root>\LocalAppData\ETS2Telemetry\plugins\setup.json` as the install registry. The root must hold the marker file `ets2telemetry-plugin-test-root.marker`. Without a profile directory or the marker, or with a relative root or a bare drive, setup is disabled |
 
 Every launch with `ETS2TELEMETRY_PROFILE_DIR`, `ETS2TELEMETRY_DIAGNOSTIC_DIR`, `ETS2TELEMETRY_LIVE_SMOKE` or `ETS2TELEMETRY_SOURCE_KIND` and no test root, and every `npm run dev` without `ETS2TELEMETRY_PLUGIN_SETUP=real`, is disabled: it reads no registry, discovers no game and writes nothing. Do not set `=real` on a development machine unless the real games' plugin folders may be changed; a developer-copied DLL that differs from the staged bundle shows as an unrecognized file and is left alone.
 

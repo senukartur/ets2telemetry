@@ -82,12 +82,12 @@ The list starts empty because nothing has been released. MSVC builds are not rep
 
 Since PR-4, `apps/desktop/src/plugin-setup/plugin-bundle.ts` reads the bundle in main (P5). It reads `process.resourcesPath\telemetry-plugin` when packaged and `<repo>\.local\package-native\telemetry-plugin` in development (the folder `npm run build` stages). It accepts the bundle only when:
 
-- the folder is not a link and holds exactly `ets2telemetry-plugin.dll` and `plugin-manifest.json`;
+- the folder is not a link and holds `ets2telemetry-plugin.dll` and `plugin-manifest.json`; other entries are ignored at runtime, because only these two files are read (the packaging inspection still requires exactly these two);
 - the manifest is a regular file of at most 64 KiB, UTF-8 JSON with exactly the eight keys of the [manifest](#manifest) and valid values;
 - the DLL is a regular file that is not a link, at most 16 MiB, read through one handle that is the file `lstat` saw;
 - its size and SHA-256 equal the manifest's, and it is an x64 PE DLL.
 
-The checks mirror `verifyPluginBundle` of the packaging inspection. Any failure is `BUNDLE_UNAVAILABLE` with a fixed failure code (`directory`, `contents`, `manifest-unreadable`, `manifest-invalid`, `plugin-unreadable`, `plugin-not-file`, `plugin-size`, `plugin-hash`, `plugin-not-x64-dll` or `aborted`), logged as `PLUGIN_BUNDLE {state: 'unavailable', failure}`. Setup reads the bundle once per application run: a failed read is tried again on the next run, and after a success the installer only ever writes that verified in-memory copy and never reads the DLL again. Only "Show plugin file" uses the DLL's location, in main.
+The checks mirror `verifyPluginBundle` of the packaging inspection. Any failure is `BUNDLE_UNAVAILABLE` with a fixed failure code (`directory`, `manifest-unreadable`, `manifest-invalid`, `plugin-unreadable`, `plugin-not-file`, `plugin-size`, `plugin-hash`, `plugin-not-x64-dll` or `aborted`), logged as `PLUGIN_BUNDLE {state: 'unavailable', failure}`. Setup reads the bundle once per application run: a failed read is tried again on the next run, and after a success the installer only ever writes that verified in-memory copy and never reads the DLL again. Only "Show plugin file" uses the DLL's location, in main.
 
 ## Steam root
 
@@ -156,16 +156,16 @@ Implemented in PR-4 as `apps/desktop/src/plugin-setup/mode.ts`. The pure `plugin
 
 | Condition | Mode |
 | --- | --- |
-| `ETS2TELEMETRY_PLUGIN_SETUP=off` | disabled |
+| `ETS2TELEMETRY_PLUGIN_SETUP` set to any value other than exactly `real` (`off`, `Off`, `false`, `0`, `REAL`, …) | disabled (reason `off`) |
 | `ETS2TELEMETRY_PLUGIN_SETUP_ROOT=<absolute path>` and an absolute `ETS2TELEMETRY_PROFILE_DIR` | test-root |
 | `ETS2TELEMETRY_PLUGIN_SETUP_ROOT` without a profile directory, or a relative root | disabled, logged as `PLUGIN_SETUP_MODE_REJECTED` |
 | Any of `ETS2TELEMETRY_PROFILE_DIR`, `ETS2TELEMETRY_DIAGNOSTIC_DIR`, `ETS2TELEMETRY_LIVE_SMOKE` or `ETS2TELEMETRY_SOURCE_KIND` set, without a root | disabled |
 | Unpackaged without `ETS2TELEMETRY_PLUGIN_SETUP=real` | disabled |
 | Anything else | active |
 
-An empty variable counts as unset, as for the profile override in main, and the values `off` and `real` are compared exactly. The test root must be an absolute drive path: a UNC or device path is rejected like a relative one (`relative-root`), and so is a bare drive such as `C:\` or `C:\Steam\..` (`drive-root`), because every folder of that drive, a real Steam library included, would be inside it. A missing or relative profile directory is `no-profile` or `relative-profile`. Main logs `PLUGIN_SETUP_MODE {mode, reason}` once at startup, with the reason `off`, `root-rejected`, `isolated-launch` or `development` for the disabled mode; a rejected root is first logged as `PLUGIN_SETUP_MODE_REJECTED {reason}`. Neither line carries the root.
+An empty variable counts as unset, as for the profile override in main. The opt-out fails closed: since review round 1 of PR-4 any non-empty `ETS2TELEMETRY_PLUGIN_SETUP` other than exactly `real` disables setup, so a differently cased or misspelled `off` never leaves a packaged launch active. `real` keeps its meaning: it enables an unpackaged launch and changes nothing in a packaged one or beside a test root. The test root must be an absolute drive path: a UNC or device path is rejected like a relative one (`relative-root`), and so is a bare drive such as `C:\` or `C:\Steam\..` (`drive-root`), because every folder of that drive, a real Steam library included, would be inside it. A missing or relative profile directory is `no-profile` or `relative-profile`. A root without its marker file is `no-marker` (see test-root below). Main logs `PLUGIN_SETUP_MODE {mode, reason}` once at startup, with the reason `off`, `root-rejected`, `isolated-launch` or `development` for the disabled mode; a rejected root is first logged as `PLUGIN_SETUP_MODE_REJECTED {reason}`. Neither line carries the root.
 
-- **test-root.** The Steam root is `<root>\Steam`. Nothing reads the Windows registry or runs PowerShell. The install registry is `<root>\LocalAppData\ETS2Telemetry\plugins\setup.json`, so every path setup writes lies inside the root. Every game-folder operation goes through a confinement: the path it names, its real location through any junction or symbolic link in an existing ancestor (and in its final component when the operation follows it) and every path `realpath` returns must lie inside the root. Anything else is refused before the real call as a missing path, so discovery and the installer ignore it, and the run logs `PLUGIN_TEST_ROOT_ESCAPE {count}`. A folder chosen in the dialog outside the root is refused as `FOLDER_UNSUPPORTED_PATH`. The running-game check is the real `tasklist`, which only reads.
+- **test-root.** The root must hold the marker file `ets2telemetry-plugin-test-root.marker` as a regular file that is not a link; the harness that builds the fake root creates it. The setup run checks it once, through the confinement, before it reads or writes anything. Without it setup turns off for that application run (`PLUGIN_SETUP_MODE_REJECTED {reason: 'no-marker'}`, then `PLUGIN_SETUP_MODE {mode: 'disabled', reason: 'root-rejected'}`), the view's mode becomes `disabled` and the folder choice is refused with `SETUP_DISABLED`. A marker was chosen over requiring a folder inside `%TEMP%` because the runtime smokes keep their fake roots in the worktree's `.local\ci`. The Steam root is `<root>\Steam`. Nothing reads the Windows registry or runs PowerShell. The install registry is `<root>\LocalAppData\ETS2Telemetry\plugins\setup.json`, so every path setup writes lies inside the root. Every game-folder operation and every write of the install registry goes through a confinement: the path it names, its real location through any junction or symbolic link in an existing ancestor (and in its final component when the operation follows it) and every path `realpath` returns must lie inside the root. Anything else is refused before the real call as a missing path, so discovery and the installer ignore it, and the run logs `PLUGIN_TEST_ROOT_ESCAPE {count}`. A folder chosen in the dialog outside the root is refused as `FOLDER_UNSUPPORTED_PATH`. The running-game check is the real `tasklist`, which only reads.
 - **disabled.** No registry read, no bundle read, no discovery, no timer and no write. Retry and the exclusion switch answer the unchanged view, and the folder dialog is refused with `SETUP_DISABLED` before it opens.
 - Existing harnesses all land in disabled: the runtime smokes, the Playwright startup test, the native installer acceptance and the VM harness set a profile and a diagnostic directory, the `main-boundaries` unit fixture sets `ETS2TELEMETRY_SOURCE_KIND`, and `npm run dev` is unpackaged. The Squirrel lifecycle hooks quit before main constructs plugin setup. `tests/unit/plugin-setup-mode.test.ts` checks each of these environments.
 
@@ -189,13 +189,13 @@ Implemented in PR-4 as `apps/desktop/src/plugin-setup/plugin-setup.ts` (P13, P14
 4. It discovers the Steam roots ([Steam discovery](#steam-discovery)) and validates the stored manual folder of each game again ([manual game folder](#manual-game-folder)). A manual folder that moved, became linked or is now a Steam root is `invalid` and is not changed; its install record stays.
 5. For each listed folder in turn it installs or updates the plugin, or removes it from an excluded game ([algorithm](#algorithm)). Without a verified bundle every folder is `blocked` with `BUNDLE_UNAVAILABLE` and nothing is written.
 
-A game lists at most four folders: its Steam roots in library order (ordinals 0 to 3), then its manual folder (ordinal 0). With a manual folder at most three Steam roots are listed and managed; a fourth copy of one game in Steam is not expected, because Steam installs one copy per library.
+A game lists at most four folders: its Steam roots in library order (ordinals 0 to 3), then its manual folder (ordinal 0). With a manual folder at most three Steam roots are listed and installed into. A fourth Steam root is then unlisted: the view counts it in `unlistedFolders`, the run logs `PLUGIN_TARGETS_LIMITED {game, count}` when the count changes, and it is never installed into. When the game is excluded, each unlisted root that has an install record in the registry still gets the same removal as a listed folder, logged as `PLUGIN_ACTION` with `listed: false`, so an exclusion never leaves this application's plugin behind; a removal there that waits for the game, the client or a lock keeps the poll running like a listed folder. A fourth copy of one game in Steam is not expected, because Steam installs one copy per library, and discovery itself reports at most four roots per game.
 
 **State of a folder.** After its operation each folder is described from the result and, when the change did not happen, from what the folder holds now (read only):
 
 | State | Meaning |
 | --- | --- |
-| `installed` | The bundled plugin is in place (also while a reason such as `GAME_RUNNING` blocks a later change) |
+| `installed` | The bundled plugin is in place. An install that a running game or client refused while the folder already holds the current plugin has nothing left to do: it is `installed` without a reason and does not start the poll |
 | `outdated` | An older plugin of this application is in place; `reason` says why it was not updated |
 | `missing` | No plugin file; `reason` says why none was installed |
 | `excluded` | The game is excluded and the folder holds no plugin of this application |
@@ -208,22 +208,23 @@ A game lists at most four folders: its Steam roots in library order (ordinals 0 
 
 | Code | When |
 | --- | --- |
-| `PLUGIN_SETUP_MODE`, `PLUGIN_SETUP_MODE_REJECTED` | Once at startup |
+| `PLUGIN_SETUP_MODE`, `PLUGIN_SETUP_MODE_REJECTED` | Once at startup, and once more when a test root lacks its marker |
 | `PLUGIN_REGISTRY_STATE {state}` | When the registry's load state changes |
 | `PLUGIN_BUNDLE {state, failure}` | When the bundle state changes |
 | `PLUGIN_DISCOVERY {…counts}` | When the discovery facts change |
-| `PLUGIN_ACTION {game, source, ordinal, op, outcome, code, step, errno}` | When a folder's result changes |
+| `PLUGIN_ACTION {game, source, ordinal, op, outcome, code, step, errno}` | When a folder's result changes; with `listed: false` for a removal from an unlisted Steam root |
+| `PLUGIN_TARGETS_LIMITED {game, count}` | When the number of unlisted Steam roots of a game changes |
 | `PLUGIN_RECOVERY_PENDING {remaining, reason}` | When intents stay after recovery, and once when they are all resolved |
 | `PLUGIN_RECOVERED`, `PLUGIN_REGISTRY_QUARANTINED` | From the installer and the registry, as described below |
 | `PLUGIN_TEST_ROOT_ESCAPE {count}` | In the test-root mode, after a run or a choice that refused paths outside the root |
 | `PLUGIN_SETUP_TIMEOUT {timeoutMs}` | A run reached 30 s |
 | `PLUGIN_FOLDER_NOT_OPENED` | Explorer could not open a folder; its error text is not logged |
 
-**Exit.** The exit's `begin`, and a fatal stop, abort plugin setup: no new run, poll or trigger starts, and the run in flight stops after the folder in progress. The exit's `idle` returns that run, which ends with the removal of its temporary file ([algorithm](#algorithm), step 12); it shares the existing 1000 ms idle budget with an in-flight settings save and an interrupted trip export ([application lifecycle](app-lifecycle.md#explicit-exit)). Requests are refused once the exit has begun.
+**Exit.** The exit's `begin`, and a fatal stop, abort plugin setup: no new run, poll or trigger starts, and the run in flight stops after the folder in progress. The exit's `idle` returns that run, which ends with the removal of its temporary file ([algorithm](#algorithm), step 12), together with any registry write of an exclusion change or a folder choice still in progress; it shares the existing 1000 ms idle budget with an in-flight settings save and an interrupted trip export ([application lifecycle](app-lifecycle.md#explicit-exit)). Requests are refused once the exit has begun, and a folder whose validation was still running when it began is not stored.
 
 ## IPC
 
-Implemented in PR-4 (P16). The per-game state reaches the dashboard as `AppState.plugins` (`PluginSetupView` in `packages/contracts/src/app-state.ts`) through the existing `app:state` push and `app:get-state`; main pushes it whenever it changes. It has the mode, the bundled version with the first 12 hex digits of its SHA-256, whether a run is in progress, and per game the exclusion, the discovery outcome (`pending` until the first discovery), the manual folder state (`none`, `set` or `invalid`) and at most four folders. A folder is `{id, source, ordinal, state, reason, installed, lastFailure}`, with `id` `<game>:<source>:<ordinal>`. No path reaches the renderer: a folder is named by its source and ordinal, for example "Steam library 2".
+Implemented in PR-4 (P16). The per-game state reaches the dashboard as `AppState.plugins` (`PluginSetupView` in `packages/contracts/src/app-state.ts`) through the existing `app:state` push and `app:get-state`; main pushes it whenever it changes. It has the mode, the bundled version with the first 12 hex digits of its SHA-256, whether a run is in progress, and per game the exclusion, the discovery outcome (`pending` until the first discovery), the manual folder state (`none`, `set` or `invalid`), at most four folders and the number of unlisted Steam roots (`unlistedFolders`). A folder is `{id, source, ordinal, state, reason, installed, lastFailure}`, with `id` `<game>:<source>:<ordinal>`. No path reaches the renderer: a folder is named by its source and ordinal, for example "Steam library 2".
 
 Five invoke channels serve the trusted dashboard main frame only; the overlay and any other sender or frame are rejected. Argument counts are exact, the preload validates every argument and main validates it again (`apps/desktop/src/plugin-setup-contract.ts`), and every call is refused once the exit has begun. A failure inside plugin setup reaches the renderer as a fixed message, never its own text.
 
@@ -232,13 +233,13 @@ Five invoke channels serve the trusted dashboard main frame only; the overlay an
 | `retryPluginSetup()` | `plugin:retry` | none | The view after the run |
 | `choosePluginFolder(game)` | `plugin:choose-folder` | `ets2` or `ats` | `{outcome: 'chosen'}`, `{outcome: 'cancelled'}` or `{outcome: 'refused', code}` |
 | `setPluginGameExcluded(game, excluded)` | `plugin:set-excluded` | a game and a boolean | The view after the run |
-| `showPluginFile()` | `plugin:show-file` | none | Nothing |
+| `showPluginFile()` | `plugin:show-file` | none | `{outcome: 'shown'}` or `{outcome: 'refused', code: 'BUNDLE_UNAVAILABLE'}` |
 | `openPluginFolder(targetId)` | `plugin:open-folder` | a listed id matching `^(ets2\|ats):(steam\|manual):[0-3]$` | Nothing |
 
 - **Folder choice.** Main opens `dialog.showOpenDialog(dashboard, {properties: ['openDirectory']})`, one at a time (a second call is refused with `BUSY`). A cancelled dialog, an empty selection or an exit that began while the dialog was open writes nothing. A chosen folder is validated ([manual game folder](#manual-game-folder)) and stored in the registry, replacing an earlier one, and a run starts; a refusal names one of the `FOLDER_*` codes, `REGISTRY_UNAVAILABLE` or, in the disabled mode, `SETUP_DISABLED`.
 - **Exclusion.** The exclusion is written durably to the registry before the run; a registry that cannot be written rejects the call and nothing runs.
-- **Show plugin file.** `shell.showItemInFolder` on the verified bundled DLL; nothing happens before the bundle was verified.
-- **Open game plugins folder.** Main validates the listed folder again and opens its `bin\win_x64\plugins` folder with `shell.openPath`, or `bin\win_x64` when `plugins` is absent or not a folder. An unknown id or a folder that is now linked or no longer a game opens nothing.
+- **Show plugin file.** Right before `shell.showItemInFolder`, plugin setup checks the verified bundled DLL again with `lstat`. It answers `BUNDLE_UNAVAILABLE` and reveals nothing before the bundle was verified, when the file is missing or no longer a regular file, when it is a link, and once the exit has begun.
+- **Open game plugins folder.** Main validates the listed folder again and opens its `bin\win_x64\plugins` folder with `shell.openPath` whenever that is a plain folder (also when it holds an unexpected entry, such as a folder with the plugin's name), or `bin\win_x64` when `plugins` is absent, a file or a link. An unknown id or a folder that is now linked or no longer a game opens nothing.
 
 The sixth channel of P16, `diagnostics:export`, is not registered yet: it comes with the diagnostic bundle in PR-6, together with its result type, so no renderer-reachable stub exists meanwhile.
 
