@@ -196,6 +196,16 @@ export type PluginFolderRefusal = 'FOLDER_UNSUPPORTED_PATH' | 'FOLDER_NOT_GAME' 
 export type PluginFolderChoice = {outcome: 'chosen'} | {outcome: 'cancelled'} | {outcome: 'refused'; code: PluginFolderRefusal};
 /** "Show plugin file": Explorer shows the verified bundled DLL, or nothing because it is not verified or no longer a plain file. */
 export type PluginShowFileResult = {outcome: 'shown'} | {outcome: 'refused'; code: 'BUNDLE_UNAVAILABLE'};
+/**
+ * Why a diagnostic bundle export was refused (ET-017 P17): another export runs, the application exits, or the chosen
+ * file lies in the application's data folder or is not a usable local or UNC file path.
+ */
+export type DiagnosticsExportRefusal = 'EXPORT_IN_PROGRESS' | 'EXPORT_INTERRUPTED' | 'EXPORT_TARGET_REFUSED';
+/** Why a diagnostic bundle export failed: the bundle could not be built, or the file could not be written. */
+export type DiagnosticsExportFailure = 'BUNDLE_FAILED' | 'EXPORT_WRITE_FAILED';
+/** "Export diagnostics…": saved, cancelled (nothing written), refused or failed with a fixed code. Never a path. */
+export type DiagnosticsExportResult = {outcome: 'saved'} | {outcome: 'cancelled'} | {outcome: 'refused'; code: DiagnosticsExportRefusal}
+  | {outcome: 'failed'; code: DiagnosticsExportFailure};
 /** Main-owned application state pushed to the dashboard. */
 export interface AppState {
   health: AppHealth;

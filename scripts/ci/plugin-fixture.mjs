@@ -212,6 +212,8 @@ export function verifyPluginEvents(rows) {
 
 /** The text of the disabled mode's note in the card (strings.ts PLUGIN_MODE_TEXT.disabled). */
 export const PLUGIN_DISABLED_NOTE = 'Plugin setup is off in this launch (a development, test or opt-out launch); no game folder is changed.';
+/** The diagnosis line while no game is selected (strings.ts CONNECTION_DIAGNOSIS_TEXT.NO_GAME_SELECTED, ET-017 PR-6). */
+export const NO_GAME_SELECTED_DIAGNOSIS = 'No game is selected as the source. Choose Euro Truck Simulator 2 or American Truck Simulator above.';
 /** The card's controls that change setup; the disabled mode must disable each of them. */
 const CHANGING_CONTROLS = ['plugin-ets2-managed', 'plugin-ets2-choose', 'plugin-ats-managed', 'plugin-ats-choose', 'plugin-retry'];
 /** In the disabled mode the card shows its note and disables every control that would change nothing. */
@@ -224,5 +226,12 @@ export async function verifyDisabledPluginCard(dashboard) {
   for (const id of CHANGING_CONTROLS) record.controls[id] = await dashboard.getByTestId(id).isDisabled();
   assert.deepEqual(record.controls, Object.fromEntries(CHANGING_CONTROLS.map(id => [id, true])));
   record.controlsDisabled = true;
+  // ET-017 PR-6 (P17): the scaffold launch selects no game, so the diagnosis line shows that fixed text; the diagnostics
+  // export stays available in the disabled mode.
+  record.diagnosis = await dashboard.getByTestId('plugin-diagnosis').innerText();
+  assert.equal(record.diagnosis, NO_GAME_SELECTED_DIAGNOSIS);
+  record.diagnosisShown = true;
+  assert.equal(await dashboard.getByTestId('plugin-export-diagnostics').isEnabled(), true);
+  record.exportAvailable = true;
   return record;
 }

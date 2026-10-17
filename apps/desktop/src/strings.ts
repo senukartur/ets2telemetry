@@ -1,10 +1,11 @@
-import type {AppErrorCode, JournalAttributionKind, JournalCallCode, JournalCloseReason, JournalCompleteness, JournalExportCode, JournalIntervalKind, JournalMoneyCategory, JournalOutcome,
+import type {AppErrorCode, DiagnosticsExportFailure, DiagnosticsExportRefusal, JournalAttributionKind, JournalCallCode, JournalCloseReason, JournalCompleteness, JournalExportCode, JournalIntervalKind, JournalMoneyCategory, JournalOutcome,
   JournalPurpose, OverlayEditPlacement, OverlayLayout, OverlaySectionId, PluginBlockReason, PluginDiscoveryOutcome, PluginFolderRefusal, PluginManualFolderState,
   PluginSetupMode, PluginTargetState, RecordingCode, RecordingHealth, RecordingLosses, RecordingTarget, RecordingTrip, ServiceHealth,
   SettingsSaveError, SettingsState, StorageHealth, UnitGame, UnitProfile} from '../../../packages/contracts/src';
 import type {EventType, GameMode, UnavailableReason} from '../../../packages/contracts/src/protocol-v1';
 import type {FieldNote, LiveFieldId, LiveSectionId, ViewReason} from '../../../packages/telemetry-core/src/live-view';
 import type {OverlayGroupId, OverlayPresetId, OverlayRequirement} from './overlay-sections';
+import type {ConnectionDiagnosisCode, ConnectionDiagnosisNote} from './connection-diagnosis';
 
 /**
  * User-visible English text for the dashboard and tray. There is no i18n framework yet; keeping the
@@ -476,6 +477,7 @@ export const JOURNAL_JOB_SOURCE_TEXT = Object.freeze({
  */
 export const PLUGIN_STRINGS = Object.freeze({
   title: 'Game plugin',
+  diagnosisLabel: 'Connection',
   bundled: 'Bundled plugin: {version} ({hash})',
   bundledUnknown: 'Bundled plugin: not checked yet',
   running: 'Checking the game folders…',
@@ -549,4 +551,37 @@ export const PLUGIN_FOLDER_REFUSAL_TEXT: Readonly<Record<PluginFolderRefusal, st
   SETUP_DISABLED: 'Plugin setup is off in this launch.',
   REGISTRY_UNAVAILABLE: 'The plugin setup record could not be saved.',
   BUSY: 'A folder dialog is already open.'
+});
+/** The Game plugin card's connection diagnosis (ET-017 P17), one fixed text per code. */
+export const CONNECTION_DIAGNOSIS_TEXT: Readonly<Record<ConnectionDiagnosisCode, string>> = Object.freeze({
+  SERVICE_UNAVAILABLE: 'The telemetry service is not running; see Application status.',
+  CONNECTED: 'Receiving telemetry from the selected source.',
+  NO_GAME_SELECTED: 'No game is selected as the source. Choose Euro Truck Simulator 2 or American Truck Simulator above.',
+  SETUP_DISABLED: 'Not checked: plugin setup is off in this launch.',
+  GAME_NOT_FOUND: 'The selected game was not found. Choose its game folder below.',
+  PLUGIN_BLOCKED_PERMISSION: 'Windows did not allow the plugin to be installed. Copy it by hand as shown below, then press Retry.',
+  PLUGIN_UNRECOGNIZED: 'A file that this application did not install is in place of the plugin. Move it away, then press Retry.',
+  PLUGIN_OUTDATED: 'An older plugin is installed. It is updated once the game is closed.',
+  PLUGIN_PENDING_GAME_CLOSE: 'The plugin is installed once the game, TruckersMP or the program using the file is closed. Then start the game again.',
+  PLUGIN_MISSING: 'The plugin is not installed in a game folder. Turn on "Manage the plugin for this game" or press Retry.',
+  TRANSPORT_FAILED: 'The game\'s plugin could not be connected, or it is incompatible. Close the game, press Retry, then start the game again.',
+  NO_RUNNING_SOURCE: 'The plugin is in place. Start the game to connect.'
+});
+export const CONNECTION_DIAGNOSIS_NOTE_TEXT: Readonly<Record<ConnectionDiagnosisNote, string>> = Object.freeze({
+  PLUGIN_OUTDATED_ON_DISK: 'A game folder still holds an older plugin; it is updated once the game is closed.'
+});
+/** "Export diagnostics…" (ET-017 P17): the button, the note beside it and each answer as fixed text, never a path. */
+export const DIAGNOSTICS_EXPORT_STRINGS = Object.freeze({
+  button: 'Export diagnostics…',
+  note: 'Saves one JSON file with versions, states and recent log codes, without paths or user and computer names. Nothing is uploaded.',
+  saved: 'Diagnostics saved.',
+  cancelled: 'Export cancelled. Nothing was written.',
+  failed: 'The diagnostics export request failed.'
+});
+export const DIAGNOSTICS_EXPORT_ERROR_TEXT: Readonly<Record<DiagnosticsExportRefusal | DiagnosticsExportFailure, string>> = Object.freeze({
+  EXPORT_IN_PROGRESS: 'Another diagnostics export is still running.',
+  EXPORT_INTERRUPTED: 'The export stopped because ETS2Telemetry is exiting. Nothing was written.',
+  EXPORT_TARGET_REFUSED: 'That location cannot be used. Choose a folder outside the ETS2Telemetry data folder.',
+  BUNDLE_FAILED: 'The diagnostics could not be collected. Nothing was written.',
+  EXPORT_WRITE_FAILED: 'The file could not be written. A file that already had this name is unchanged.'
 });

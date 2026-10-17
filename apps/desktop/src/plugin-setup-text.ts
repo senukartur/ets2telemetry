@@ -2,9 +2,11 @@
 // the plugin bridge methods: main validated the view, and this module only picks fixed texts from strings.ts. The view
 // never carries a path, and neither does any text here: a game folder is named by its source and position. Renderer-safe:
 // type imports and strings only. See docs/plugin-setup.md#the-game-plugin-card.
-import type {PluginBlockReason, PluginFolderChoice, PluginGame, PluginGameView, PluginSetupView, PluginShowFileResult, PluginTargetState, PluginTargetView} from '../../../packages/contracts/src';
+import type {DiagnosticsExportResult, PluginBlockReason, PluginFolderChoice, PluginGame, PluginGameView, PluginSetupView, PluginShowFileResult, PluginTargetState,
+  PluginTargetView} from '../../../packages/contracts/src';
+import type {ConnectionDiagnosis} from './connection-diagnosis';
 import {
-  PLUGIN_DISCOVERY_TEXT, PLUGIN_FOLDER_REFUSAL_TEXT, PLUGIN_MANUAL_FOLDER_TEXT, PLUGIN_MODE_TEXT, PLUGIN_REASON_TEXT, PLUGIN_STATE_TEXT, PLUGIN_STRINGS, UNIT_GAME_TEXT
+  CONNECTION_DIAGNOSIS_NOTE_TEXT, CONNECTION_DIAGNOSIS_TEXT, DIAGNOSTICS_EXPORT_ERROR_TEXT, DIAGNOSTICS_EXPORT_STRINGS, PLUGIN_DISCOVERY_TEXT, PLUGIN_FOLDER_REFUSAL_TEXT, PLUGIN_MANUAL_FOLDER_TEXT, PLUGIN_MODE_TEXT, PLUGIN_REASON_TEXT, PLUGIN_STATE_TEXT, PLUGIN_STRINGS, UNIT_GAME_TEXT
 } from './strings';
 
 /**
@@ -99,4 +101,16 @@ export function pluginFolderChoiceText(choice: PluginFolderChoice): string {
 /** The answer of "Show plugin file". */
 export function pluginShowFileText(result: PluginShowFileResult): string {
   return result.outcome === 'shown' ? PLUGIN_STRINGS.fileShown : PLUGIN_STRINGS.fileUnavailable;
+}
+
+/** The card's diagnosis line (P17) and its notes. */
+export function connectionDiagnosisText(diagnosis: ConnectionDiagnosis): {line: string; notes: string[]} {
+  return {line: CONNECTION_DIAGNOSIS_TEXT[diagnosis.code], notes: diagnosis.notes.map(note => CONNECTION_DIAGNOSIS_NOTE_TEXT[note])};
+}
+
+/** The answer of "Export diagnostics…". */
+export function diagnosticsExportText(result: DiagnosticsExportResult): string {
+  if (result.outcome === 'saved') return DIAGNOSTICS_EXPORT_STRINGS.saved;
+  if (result.outcome === 'cancelled') return DIAGNOSTICS_EXPORT_STRINGS.cancelled;
+  return DIAGNOSTICS_EXPORT_ERROR_TEXT[result.code];
 }

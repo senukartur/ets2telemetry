@@ -1,6 +1,7 @@
 import {describe, expect, it} from 'vitest';
 import type {PluginBlockReason, PluginGameView, PluginSetupView, PluginTargetState, PluginTargetView} from '../../packages/contracts/src';
-import {MANUAL_COPY_REASONS, pluginFolderChoiceText, pluginSetupText, pluginShowFileText} from '../../apps/desktop/src/plugin-setup-text';
+import {connectionDiagnosisText, diagnosticsExportText, MANUAL_COPY_REASONS, pluginFolderChoiceText, pluginSetupText, pluginShowFileText} from '../../apps/desktop/src/plugin-setup-text';
+import type {ConnectionDiagnosisCode} from '../../apps/desktop/src/connection-diagnosis';
 
 // REG-015 (ET-017 PR-5, P16, P18): the text of the Game plugin card. Every mode, discovery outcome, folder state, target
 // state, block reason and refusal has a hand-written expected text below; none of them may carry a path.
@@ -139,6 +140,45 @@ describe('call answers', () => {
     for (const [code, text] of Object.entries(refusals)) expect(pluginFolderChoiceText({outcome: 'refused', code: code as keyof typeof refusals})).toBe(text);
     expect(pluginShowFileText({outcome: 'shown'})).toBe('The plugin file is shown in Explorer.');
     expect(pluginShowFileText({outcome: 'refused', code: 'BUNDLE_UNAVAILABLE'})).toBe('The bundled plugin file is not available; nothing was shown.');
+  });
+});
+
+// ET-017 PR-6 (P17): the card's connection diagnosis line and the answers of "Export diagnostics…".
+describe('the connection diagnosis and the diagnostics export', () => {
+  const DIAGNOSES: Record<ConnectionDiagnosisCode, string> = {
+    SERVICE_UNAVAILABLE: 'The telemetry service is not running; see Application status.',
+    CONNECTED: 'Receiving telemetry from the selected source.',
+    NO_GAME_SELECTED: 'No game is selected as the source. Choose Euro Truck Simulator 2 or American Truck Simulator above.',
+    SETUP_DISABLED: 'Not checked: plugin setup is off in this launch.',
+    GAME_NOT_FOUND: 'The selected game was not found. Choose its game folder below.',
+    PLUGIN_BLOCKED_PERMISSION: 'Windows did not allow the plugin to be installed. Copy it by hand as shown below, then press Retry.',
+    PLUGIN_UNRECOGNIZED: 'A file that this application did not install is in place of the plugin. Move it away, then press Retry.',
+    PLUGIN_OUTDATED: 'An older plugin is installed. It is updated once the game is closed.',
+    PLUGIN_PENDING_GAME_CLOSE: 'The plugin is installed once the game, TruckersMP or the program using the file is closed. Then start the game again.',
+    PLUGIN_MISSING: 'The plugin is not installed in a game folder. Turn on "Manage the plugin for this game" or press Retry.',
+    TRANSPORT_FAILED: 'The game\'s plugin could not be connected, or it is incompatible. Close the game, press Retry, then start the game again.',
+    NO_RUNNING_SOURCE: 'The plugin is in place. Start the game to connect.'
+  };
+  it.each(Object.entries(DIAGNOSES))('describes %s', (code, line) => {
+    expect(connectionDiagnosisText({code: code as ConnectionDiagnosisCode, notes: []})).toEqual({line, notes: []});
+  });
+  it('adds the note of an older plugin on disk', () => {
+    expect(connectionDiagnosisText({code: 'CONNECTED', notes: ['PLUGIN_OUTDATED_ON_DISK']})).toEqual({line: DIAGNOSES.CONNECTED,
+      notes: ['A game folder still holds an older plugin; it is updated once the game is closed.']});
+  });
+  it('maps every export answer to a fixed text', () => {
+    expect(diagnosticsExportText({outcome: 'saved'})).toBe('Diagnostics saved.');
+    expect(diagnosticsExportText({outcome: 'cancelled'})).toBe('Export cancelled. Nothing was written.');
+    expect(diagnosticsExportText({outcome: 'refused', code: 'EXPORT_IN_PROGRESS'})).toBe('Another diagnostics export is still running.');
+    expect(diagnosticsExportText({outcome: 'refused', code: 'EXPORT_INTERRUPTED'})).toBe('The export stopped because ETS2Telemetry is exiting. Nothing was written.');
+    expect(diagnosticsExportText({outcome: 'refused', code: 'EXPORT_TARGET_REFUSED'})).toBe('That location cannot be used. Choose a folder outside the ETS2Telemetry data folder.');
+    expect(diagnosticsExportText({outcome: 'failed', code: 'BUNDLE_FAILED'})).toBe('The diagnostics could not be collected. Nothing was written.');
+    expect(diagnosticsExportText({outcome: 'failed', code: 'EXPORT_WRITE_FAILED'})).toBe('The file could not be written. A file that already had this name is unchanged.');
+  });
+  // PR-4 review nit: a current plugin whose install record could not be saved shows that next to Installed.
+  it('shows Installed with the unsaved record for a current plugin', () => {
+    const line = firstTarget(target({reason: 'REGISTRY_UNAVAILABLE'}));
+    expect([line.status, line.detail, line.manualCopy]).toEqual(['Installed', ['The plugin setup record could not be saved or is from a newer version.'], false]);
   });
 });
 

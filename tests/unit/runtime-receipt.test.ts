@@ -101,7 +101,7 @@ function pluginReceipt(path: (string | number)[] = [], replacement?: Json): stri
 function scaffoldReceipt(path: (string | number)[] = [], replacement?: Json): string {
   return corrupt({passed: true, commit: 'candidate', mode: 'packaged', scenarioKind: 'scaffold',
     mainEvents: [{event: 'PLUGIN_SETUP_MODE', facts: {mode: 'disabled', reason: 'isolated-launch'}}],
-    pluginCard: {disabledNoteShown: true, controlsDisabled: true}}, path, replacement);
+    pluginCard: {disabledNoteShown: true, controlsDisabled: true, diagnosisShown: true, exportAvailable: true}}, path, replacement);
 }
 function pluginCases() {
   const invalidPlugin = (name: string, path: (string | number)[], replacement?: Json) =>
@@ -126,6 +126,8 @@ function pluginCases() {
     invalidScaffold('card evidence missing', ['pluginCard']),
     invalidScaffold('disabled note not shown', ['pluginCard', 'disabledNoteShown'], false),
     invalidScaffold('a control left enabled', ['pluginCard', 'controlsDisabled'], false),
+    invalidScaffold('diagnosis line not shown', ['pluginCard', 'diagnosisShown'], false),
+    invalidScaffold('diagnostics export unavailable', ['pluginCard', 'exportAvailable']),
     invalidScaffold('not in the disabled mode', ['mainEvents', 0, 'facts', 'mode'], 'test-root')
   ];
 }
