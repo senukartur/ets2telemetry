@@ -1,7 +1,7 @@
 import {describe, expect, it} from 'vitest';
 import type {AppHealth, PluginSetupView, SettingsView} from '../../packages/contracts/src';
 import {buildDiagnosticBundle, type DiagnosticBundleInput} from '../../apps/desktop/src/diagnostic-bundle';
-import {checkDiagnosticsBundle, runtimeStrings} from '../../scripts/ci/diagnostics-bundle-check.mjs';
+import {checkDiagnosticsBundle, runtimeStrings, schemaTokens} from '../../scripts/ci/diagnostics-bundle-check.mjs';
 
 // REG-015, REG-017 (ET-017 PR-6, PR #111 review): the plugin smoke's bundle checks. They run on bundles that the real
 // builder made for simulated user and computer names, including names that equal schema words or redact a fact the
@@ -38,6 +38,27 @@ describe('valid bundles for names that collide with the schema or the smoke fact
   });
   it('accepts an ordinary bundle', () => {
     expect(() => check(bundle(['Jane.Doe', 'TRUCKER-PC7'], {owner: 'Jane.Doe'}), ['Jane.Doe', 'TRUCKER-PC7'])).not.toThrow();
+  });
+});
+
+// PR #111 delta review: the second layer scans the whole text for every name that is not a whole word of a schema token.
+describe('names outside the runtime strings', () => {
+  it('derives the schema tokens from the bundle: keys and fixed values, but no fact key, fact value or OS release', () => {
+    const tokens = schemaTokens(JSON.parse(bundle(['Jane.Doe'], {owner: 'jane.doe', note: 'free text'})));
+    for (const token of ['format', 'ets2telemetry.diagnostics', 'logs', 'main', 'service', 'facts', 'event', 'PLUGIN_SETUP_MODE', 'test-root', 'NO_GAME_SELECTED', '0123456789ab',
+      '0.2.0', '2026-10-17T08:30:15.000Z', 'osRelease']) expect(tokens).toContain(token);
+    // `mode` is still a token: the plugin view has a `mode` key. Free text with whitespace is never a token.
+    expect(tokens).toContain('mode');
+    for (const runtime of ['owner', 'note', 'free text', '<redacted>', 'outcome', '10.0.26200']) expect(tokens).not.toContain(runtime);
+  });
+  it('refuses a name hidden in a free-text field outside the runtime strings', () => {
+    const hidden = JSON.parse(bundle(['Jane.Doe', 'TRUCKER-PC7'])) as Record<string, unknown>;
+    hidden.supportNote = 'exported by jane.doe on trucker-pc7';
+    expect(() => check(JSON.stringify(hidden), ['Jane.Doe', 'TRUCKER-PC7'])).toThrow(/outside its runtime strings/);
+  });
+  it.each(['main', 'logs', 'diagnostics', 'mode', 'root'])('still accepts a colliding name %s, which is a whole word of a schema token', name => {
+    const text = bundle([name, name], {owner: name});
+    expect(() => check(text, [name, name])).not.toThrow();
   });
 });
 

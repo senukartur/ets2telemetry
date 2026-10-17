@@ -37,17 +37,21 @@ const UNCHECKED_REASONS: readonly PluginBlockReason[] = ['LINKED_FOLDER', 'IO_ER
 /** Target states without this application's current plugin in place. */
 const MISSING_STATES: readonly PluginTargetView['state'][] = ['missing', 'excluded', 'blocked'];
 
-const notInstalledWith = (reasons: readonly PluginBlockReason[]) => (target: PluginTargetView) =>
+/** One listed folder of a selected game, with that game's exclusion. */
+interface Folder {target: PluginTargetView; excluded: boolean}
+const notInstalledWith = (reasons: readonly PluginBlockReason[]) => ({target}: Folder) =>
   target.state !== 'installed' && target.reason !== null && reasons.includes(target.reason);
 /** The folder rows in precedence order, each with its test and the note it becomes beside a current folder. */
-const FOLDER_ROWS: readonly {code: FolderCode; note: ConnectionDiagnosisNote; applies: (target: PluginTargetView) => boolean}[] = [
+const FOLDER_ROWS: readonly {code: FolderCode; note: ConnectionDiagnosisNote; applies: (folder: Folder) => boolean}[] = [
   {code: 'PLUGIN_BLOCKED_PERMISSION', note: 'OTHER_FOLDER_BLOCKED_PERMISSION', applies: notInstalledWith(PERMISSION_REASONS)},
-  {code: 'PLUGIN_UNRECOGNIZED', note: 'OTHER_FOLDER_UNRECOGNIZED', applies: notInstalledWith(['UNRECOGNIZED_FILE'])},
-  {code: 'PLUGIN_OUTDATED', note: 'PLUGIN_OUTDATED_ON_DISK', applies: target => target.state === 'outdated'},
+  // An excluded game installs nothing, so a file in its folder is in no install's way: that folder counts as missing
+  // (PR #111 review), whose text says to manage the game again.
+  {code: 'PLUGIN_UNRECOGNIZED', note: 'OTHER_FOLDER_UNRECOGNIZED', applies: folder => !folder.excluded && notInstalledWith(['UNRECOGNIZED_FILE'])(folder)},
+  {code: 'PLUGIN_OUTDATED', note: 'PLUGIN_OUTDATED_ON_DISK', applies: ({target}) => target.state === 'outdated'},
   {code: 'PLUGIN_PENDING_GAME_CLOSE', note: 'OTHER_FOLDER_PENDING_GAME_CLOSE', applies: notInstalledWith(WAITING_REASONS)},
   {code: 'PLUGIN_BUNDLE_UNAVAILABLE', note: 'OTHER_FOLDER_BUNDLE_UNAVAILABLE', applies: notInstalledWith(['BUNDLE_UNAVAILABLE'])},
   {code: 'PLUGIN_NOT_CHECKED', note: 'OTHER_FOLDER_NOT_CHECKED', applies: notInstalledWith(UNCHECKED_REASONS)},
-  {code: 'PLUGIN_MISSING', note: 'OTHER_FOLDER_MISSING', applies: target => MISSING_STATES.includes(target.state)}
+  {code: 'PLUGIN_MISSING', note: 'OTHER_FOLDER_MISSING', applies: ({target}) => MISSING_STATES.includes(target.state)}
 ];
 
 /** The games a selection connects to; the "Select a game" placeholder and the fixtures connect to none. */
@@ -66,7 +70,8 @@ function selectedGames(selection: SourceSelection): readonly PluginGame[] {
  *   `READ_ONLY_FILE`), PLUGIN_UNRECOGNIZED (`UNRECOGNIZED_FILE`), PLUGIN_OUTDATED (state `outdated`, from the file's hash on
  *   disk), PLUGIN_PENDING_GAME_CLOSE (`GAME_RUNNING`, `CLIENT_RUNNING`, `TARGET_LOCKED`), PLUGIN_BUNDLE_UNAVAILABLE
  *   (`BUNDLE_UNAVAILABLE`), PLUGIN_NOT_CHECKED (`LINKED_FOLDER`, `IO_ERROR`) and PLUGIN_MISSING (state `missing`,
- *   `excluded` or `blocked` for any other reason, which includes an excluded game). Without a folder that holds the
+ *   `excluded` or `blocked` for any other reason, which includes an excluded game; an unrecognized file in an excluded game's
+ *   folder counts as missing too, because nothing is installed there). Without a folder that holds the
  *   current plugin, one folder in a row's condition is enough. With one (state `installed`, which means the bundled
  *   plugin is in place), the game can load the plugin from it: every folder row that applies to another folder becomes a
  *   note, and the headline falls through to the transport rows.
@@ -87,7 +92,8 @@ export function connectionDiagnosis(plugins: PluginSetupView, status: LiveTeleme
   if (plugins.mode === 'disabled') return result('SETUP_DISABLED');
   if (games.every(game => plugins.games[game].discovery !== 'pending' && plugins.games[game].targets.length === 0)) return result('GAME_NOT_FOUND');
   // Each folder counts once, under the first folder row that applies to it (a blocked folder is not also missing).
-  const firsts = new Set(targets.map(target => FOLDER_ROWS.find(row => row.applies(target))));
+  const folders = games.flatMap(game => plugins.games[game].targets.map(target => ({target, excluded: plugins.games[game].excluded})));
+  const firsts = new Set(folders.map(folder => FOLDER_ROWS.find(row => row.applies(folder))));
   const applying = FOLDER_ROWS.filter(row => firsts.has(row));
   const current = targets.some(target => target.state === 'installed');
   if (!current && applying.length) return result(applying[0].code);

@@ -29,6 +29,27 @@ export function runtimeStrings(bundle) {
 }
 
 /**
+ * The schema tokens of a parsed bundle: every key and every fixed string value outside the runtime strings, such as the
+ * format, enum and event codes, versions, hash prefixes and the ISO time. Derived from the bundle itself, so a new field
+ * joins the set without a hand-kept list. A fixed value has no whitespace; a value with whitespace is free text and never a
+ * token, so a name inside it is still found by the whole-text scan.
+ */
+export function schemaTokens(bundle) {
+  const tokens = new Set();
+  const walk = (value, path) => {
+    // A log row's facts object (its keys and values) and the OS release are runtime strings, not schema.
+    if ((path.length === 4 && path[0] === 'logs' && path[3] === 'facts') || (path.length === 2 && path[0] === 'app' && path[1] === 'osRelease')) return;
+    if (typeof value === 'string') { if (!/\s/.test(value)) tokens.add(value); }
+    else if (Array.isArray(value)) value.forEach((entry, index) => walk(entry, [...path, index]));
+    else if (value && typeof value === 'object') {
+      for (const [key, entry] of Object.entries(value)) { tokens.add(key); walk(entry, [...path, key]); }
+    }
+  };
+  walk(bundle, []);
+  return [...tokens];
+}
+
+/**
  * Checks a saved bundle's text. `identities` are the user and computer names that must not appear in runtime content,
  * `runPaths` the run's folders that must appear nowhere, and `mainEvents` the fixed event codes the main log must hold.
  * Throws an assertion error naming the failed check; returns the parsed bundle.
@@ -45,7 +66,16 @@ export function checkDiagnosticsBundle(text, {identities, runPaths, mainEvents})
     for (const form of [value, JSON.stringify(value).slice(1, -1)]) assert.ok(!text.toLowerCase().includes(form.toLowerCase()), 'Diagnostic bundle carries a run path');
   }
   assert.doesNotMatch(text, /[A-Za-z]:[\\/]|\\\\/, 'Diagnostic bundle carries a path');
+  // Layer 1: the runtime strings, where the bundle redacts the names.
   const strings = runtimeStrings(bundle);
   for (const name of identities) assert.ok(!strings.some(value => containsName(value, name)), 'Diagnostic bundle carries the user or computer name');
+  // Layer 2 (PR #111 delta review): a free-text field added outside the redaction scope would escape layer 1. A name
+  // that is not a whole word of any schema token, such as `main` or the `root` of `test-root`, must not appear anywhere
+  // in the text either.
+  const tokens = schemaTokens(bundle);
+  for (const name of identities) {
+    if (tokens.some(token => containsName(token, name))) continue;
+    assert.ok(!containsName(text, name), 'Diagnostic bundle carries the user or computer name outside its runtime strings');
+  }
   return bundle;
 }

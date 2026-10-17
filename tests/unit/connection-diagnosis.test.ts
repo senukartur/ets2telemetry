@@ -56,6 +56,9 @@ const TABLE: Row[] = [
   {name: 'read-only file', plugins: view(game([target('outdated', 'READ_ONLY_FILE')])), code: 'PLUGIN_BLOCKED_PERMISSION'},
   // PR #111 review: a refused removal in an excluded game is the same headline, whose text fits a removal too.
   {name: 'a read-only plugin an excluded game could not remove', plugins: view(game([target('blocked', 'READ_ONLY_FILE')], {excluded: true})), code: 'PLUGIN_BLOCKED_PERMISSION'},
+  // PR #111 delta review: an excluded game installs nothing, so its unrecognized file is in no install's way; the folder
+  // counts as missing, whose text says to manage the game again.
+  {name: 'an unrecognized file in an excluded game', plugins: view(game([target('blocked', 'UNRECOGNIZED_FILE')], {excluded: true})), code: 'PLUGIN_MISSING'},
   {name: 'permission beats unrecognized', plugins: view(game([target('blocked', 'UNRECOGNIZED_FILE', 'ets2:manual:0'), target('missing', 'PERMISSION_DENIED')])), code: 'PLUGIN_BLOCKED_PERMISSION'},
   // 7. PLUGIN_UNRECOGNIZED beats PLUGIN_OUTDATED.
   {name: 'unrecognized file', plugins: view(game([target('blocked', 'UNRECOGNIZED_FILE', 'ets2:manual:0')])), code: 'PLUGIN_UNRECOGNIZED'},

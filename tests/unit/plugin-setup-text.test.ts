@@ -116,8 +116,17 @@ describe('a game folder', () => {
       expect([line.detail, line.manualCopy, line.manualRemove]).toEqual([[REASONS[reason], 'Installed plugin: 0.2.0 (0123456789ab)', MANUAL_REMOVE], false, true]);
       expect(JSON.stringify(line)).not.toContain('copy the plugin file into');
     }
-    const unrecognized = excludedTarget('UNRECOGNIZED_FILE');
+    // An unrecognized file is never this application's, so the view carries no installed plugin for it.
+    const unrecognized = pluginSetupText(view({}, {ets2: {excluded: true, discovery: 'found', targets: [target({state: 'blocked', reason: 'UNRECOGNIZED_FILE', installed: null})]}}))
+      .games.ets2.targets[0];
     expect([unrecognized.manualCopy, unrecognized.manualRemove]).toEqual([false, false]);
+    // An excluded game installs nothing, so its unrecognized file gets no advice to move it, also as the last problem.
+    const LEFT = 'A file with the plugin\'s name that this application did not install is in this folder; it is left as it is.';
+    expect(unrecognized.detail).toEqual([LEFT]);
+    const earlier = pluginSetupText(view({}, {ets2: {excluded: true, discovery: 'found', targets: [target({state: 'excluded', reason: null, installed: null,
+      lastFailure: 'UNRECOGNIZED_FILE'})]}})).games.ets2.targets[0];
+    expect(earlier.detail).toEqual([`Last problem: ${LEFT}`]);
+    expect(JSON.stringify([unrecognized, earlier])).not.toContain('Move it away');
     // The same reasons in a managed game still offer the copy, never the removal.
     expect([firstTarget(target({state: 'missing', reason: 'PERMISSION_DENIED', installed: null})).manualRemove, firstTarget(target({state: 'missing', reason: 'PERMISSION_DENIED', installed: null})).manualCopy]).toEqual([false, true]);
   });

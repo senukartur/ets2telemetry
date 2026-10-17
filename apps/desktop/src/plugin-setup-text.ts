@@ -66,9 +66,11 @@ const MANUAL_REMOVE_REASONS: readonly PluginBlockReason[] = ['PERMISSION_DENIED'
  */
 function targetText(target: PluginTargetView, excluded: boolean): PluginTargetText {
   const detail: string[] = [];
-  if (target.reason) detail.push(PLUGIN_REASON_TEXT[target.reason]);
+  // An excluded game installs nothing, so its unrecognized file gets no advice to move it (PR #111 review).
+  const reasonText = (reason: PluginBlockReason) => excluded && reason === 'UNRECOGNIZED_FILE' ? PLUGIN_STRINGS.unrecognizedExcluded : PLUGIN_REASON_TEXT[reason];
+  if (target.reason) detail.push(reasonText(target.reason));
   if (target.installed && target.state !== 'installed') detail.push(fileText(PLUGIN_STRINGS.installedVersion, target.installed));
-  if (target.lastFailure && target.lastFailure !== target.reason) detail.push(fill(PLUGIN_STRINGS.lastFailure, {reason: PLUGIN_REASON_TEXT[target.lastFailure]}));
+  if (target.lastFailure && target.lastFailure !== target.reason) detail.push(fill(PLUGIN_STRINGS.lastFailure, {reason: reasonText(target.lastFailure)}));
   const manualCopy = !excluded && target.reason !== null && MANUAL_COPY_REASONS.includes(target.reason);
   const manualRemove = excluded && target.reason !== null && MANUAL_REMOVE_REASONS.includes(target.reason);
   if (manualCopy) detail.push(PLUGIN_STRINGS.manualCopy);
