@@ -19,11 +19,16 @@ export type ShutdownOutcome = 'ok' | 'failed' | 'timeout';
 export interface ShutdownTimers {
   setTimeout(callback: () => void, milliseconds: number): unknown;
   clearTimeout(handle: unknown): void;
+  /** Runs a callback after the event loop's next poll phase, which delivers the I/O that arrived before it. */
+  setImmediate(callback: () => void): unknown;
+  clearImmediate(handle: unknown): void;
   now(): number;
 }
 const systemTimers: ShutdownTimers = {
   setTimeout: (callback, milliseconds) => setTimeout(callback, milliseconds),
   clearTimeout: handle => clearTimeout(handle as ReturnType<typeof setTimeout>),
+  setImmediate: callback => setImmediate(callback),
+  clearImmediate: handle => clearImmediate(handle as ReturnType<typeof setImmediate>),
   now: () => performance.now()
 };
 
@@ -70,18 +75,24 @@ export class ShutdownSequence {
     return {clean};
   }
 
+  /**
+   * When the budget runs out, the `timeout` verdict waits one more turn of the event loop (an immediate). A service
+   * thread that was blocked or not scheduled past the budget runs the due budget timer before the next poll phase
+   * delivers the I/O that arrived meanwhile, so a step result that was already waiting still counts. A step that has
+   * not finished by then times out; the turn is scheduled only after the budget expired.
+   */
   private runStep(phase: ShutdownPhase, step: ShutdownStep): Promise<ShutdownOutcome> {
     const started = this.timers.now();
     return new Promise<ShutdownOutcome>(resolve => {
-      let settled = false;
+      let settled = false, verdict: unknown;
       const settle = (outcome: ShutdownOutcome) => {
         if (settled) return;
-        settled = true; this.timers.clearTimeout(timer);
+        settled = true; this.timers.clearTimeout(timer); this.timers.clearImmediate(verdict);
         const elapsed = this.timers.now() - started;
         this.log('SHUTDOWN_STEP', undefined, {phase, name: step.name, outcome, ms: Number.isFinite(elapsed) ? Math.max(0, Math.round(elapsed)) : null});
         resolve(outcome);
       };
-      const timer = this.timers.setTimeout(() => settle('timeout'), step.budgetMs);
+      const timer = this.timers.setTimeout(() => { verdict = this.timers.setImmediate(() => settle('timeout')); }, step.budgetMs);
       try {Promise.resolve(step.run()).then(() => settle('ok'), () => settle('failed'));}
       catch {settle('failed');}
     });
