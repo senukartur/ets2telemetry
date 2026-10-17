@@ -1,5 +1,6 @@
 import type {AppErrorCode, JournalAttributionKind, JournalCallCode, JournalCloseReason, JournalCompleteness, JournalExportCode, JournalIntervalKind, JournalMoneyCategory, JournalOutcome,
-  JournalPurpose, OverlayEditPlacement, OverlayLayout, OverlaySectionId, RecordingCode, RecordingHealth, RecordingLosses, RecordingTarget, RecordingTrip, ServiceHealth,
+  JournalPurpose, OverlayEditPlacement, OverlayLayout, OverlaySectionId, PluginBlockReason, PluginDiscoveryOutcome, PluginFolderRefusal, PluginManualFolderState,
+  PluginSetupMode, PluginTargetState, RecordingCode, RecordingHealth, RecordingLosses, RecordingTarget, RecordingTrip, ServiceHealth,
   SettingsSaveError, SettingsState, StorageHealth, UnitGame, UnitProfile} from '../../../packages/contracts/src';
 import type {EventType, GameMode, UnavailableReason} from '../../../packages/contracts/src/protocol-v1';
 import type {FieldNote, LiveFieldId, LiveSectionId, ViewReason} from '../../../packages/telemetry-core/src/live-view';
@@ -466,4 +467,85 @@ export const JOURNAL_OPENED_BY_TEXT = Object.freeze({
 });
 export const JOURNAL_JOB_SOURCE_TEXT = Object.freeze({
   event: 'job event {eventSeq}', checkpoint: 'checkpoint at eventSeq {eventSeq} (recording started during the job)'
+});
+
+/**
+ * The Game plugin card (ET-017 PR-5, P18). Fixed texts for every mode, discovery outcome, folder state, block reason and
+ * refusal of AppState.plugins; apps/desktop/src/plugin-setup-text.ts picks them. Never a path: a game folder is named
+ * by its source and position only.
+ */
+export const PLUGIN_STRINGS = Object.freeze({
+  title: 'Game plugin',
+  bundled: 'Bundled plugin: {version} ({hash})',
+  bundledUnknown: 'Bundled plugin: not checked yet',
+  running: 'Checking the game folders…',
+  manage: 'Manage the plugin for this game',
+  chooseFolder: 'Choose game folder…',
+  retry: 'Retry',
+  showFile: 'Show plugin file',
+  openFolder: 'Open game plugins folder',
+  steamFolder: 'Steam folder {number}',
+  manualFolder: 'Chosen folder',
+  noFolders: 'No game folder found yet.',
+  installedVersion: 'Installed plugin: {version} ({hash})',
+  unknownVersion: 'unknown version',
+  lastFailure: 'Last problem: {reason}',
+  unlistedOne: '1 more Steam folder of this game is not listed; the plugin is not installed there, but excluding the game removes it there too.',
+  unlistedMany: '{count} more Steam folders of this game are not listed; the plugin is not installed there, but excluding the game removes it there too.',
+  manualCopy: 'To install it by hand: close the game, copy the plugin file into the game\'s plugins folder (Windows may ask for administrator rights), then press Retry.',
+  requestFailed: 'The request failed; nothing changed.',
+  folderChosen: 'Game folder saved; the plugin is being set up there.',
+  folderCancelled: 'No folder chosen; nothing changed.',
+  fileShown: 'The plugin file is shown in Explorer.',
+  fileUnavailable: 'The bundled plugin file is not available; nothing was shown.'
+});
+export const PLUGIN_MODE_TEXT: Readonly<Record<PluginSetupMode, string | null>> = Object.freeze({
+  'active': null,
+  'test-root': 'Test mode: plugin setup works only inside a test folder.',
+  'disabled': 'Plugin setup is off in this launch (a development, test or opt-out launch); no game folder is changed.'
+});
+export const PLUGIN_DISCOVERY_TEXT: Readonly<Record<PluginDiscoveryOutcome, string>> = Object.freeze({
+  'pending': 'Looking for the game…',
+  'found': 'Found through Steam.',
+  'not-found': 'Not found in the Steam libraries. Choose the game folder if it is installed elsewhere.',
+  'steam-not-found': 'Steam was not found. Choose the game folder if the game is installed.',
+  'steam-list-invalid': 'Steam\'s library list could not be read; only the main Steam folder was searched.'
+});
+export const PLUGIN_MANUAL_FOLDER_TEXT: Readonly<Record<PluginManualFolderState, string | null>> = Object.freeze({
+  'none': null,
+  'set': 'A chosen game folder is in use.',
+  'invalid': 'The chosen game folder is no longer a separate, valid game folder; it is not changed.'
+});
+export const PLUGIN_STATE_TEXT: Readonly<Record<PluginTargetState, string>> = Object.freeze({
+  'installed': 'Installed',
+  'outdated': 'Older version installed',
+  'missing': 'Not installed',
+  'excluded': 'Not managed (game excluded)',
+  'blocked': 'Blocked',
+  'working': 'Setting up…'
+});
+export const PLUGIN_REASON_TEXT: Readonly<Record<PluginBlockReason, string>> = Object.freeze({
+  GAME_RUNNING: 'The game is running; the plugin is changed after you close it.',
+  CLIENT_RUNNING: 'TruckersMP is running; the plugin is changed after you close it.',
+  TARGET_LOCKED: 'Another program is using the plugin file; it is tried again later.',
+  PERMISSION_DENIED: 'Windows denied access to the game\'s plugins folder.',
+  READ_ONLY_FILE: 'The plugin file is read-only; it is left as it is.',
+  UNRECOGNIZED_FILE: 'A file with the plugin\'s name that this application did not install is in the way; it is left as it is. Move it away, then press Retry.',
+  LINKED_FOLDER: 'The game\'s folders are linked elsewhere; they are not changed.',
+  DISK_FULL: 'The disk is full.',
+  IO_ERROR: 'The game folder could not be read or written.',
+  VERIFY_FAILED: 'The copied plugin did not match the bundled one; nothing was kept.',
+  RUNNING_CHECK_FAILED: 'Running games could not be checked; it is tried again shortly.',
+  REGISTRY_UNAVAILABLE: 'The plugin setup record could not be saved or is from a newer version.',
+  BUNDLE_UNAVAILABLE: 'The bundled plugin is missing or damaged; reinstall ETS2Telemetry.'
+});
+export const PLUGIN_FOLDER_REFUSAL_TEXT: Readonly<Record<PluginFolderRefusal, string>> = Object.freeze({
+  FOLDER_UNSUPPORTED_PATH: 'This folder cannot be used: choose a local game folder outside the ETS2Telemetry folders.',
+  FOLDER_NOT_GAME: 'This folder is not a game folder of this game.',
+  FOLDER_WRONG_GAME: 'This folder holds the other game.',
+  FOLDER_LINKED: 'The game\'s folders in this folder are linked elsewhere; it cannot be used.',
+  FOLDER_DUPLICATE: 'This game folder is already found through Steam.',
+  SETUP_DISABLED: 'Plugin setup is off in this launch.',
+  REGISTRY_UNAVAILABLE: 'The plugin setup record could not be saved.',
+  BUSY: 'A folder dialog is already open.'
 });

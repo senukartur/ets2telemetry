@@ -95,6 +95,26 @@ function Test-LifecycleReceipt {
     $actions = @($Driver.mainEvents | Where-Object { $_.event -ceq 'SECOND_INSTANCE' })
     if ($actions.Count -ne 1 -or $actions[0].facts.action -cne 'created') { return $false }
     if (!(Test-LifecycleSettingsReceipt -Driver $Driver)) { return $false }
+    if (!(Test-LifecyclePluginReceipt -Driver $Driver)) { return $false }
+    return $true
+}
+
+# ET-017 PR-5 plugin journey in the lifecycle smoke: both runs in the test-root mode, the Steam folders installed with the
+# bundled plugin, unrelated and unrecognized files unchanged, the card shown without a path, the exclusion removing the
+# plugin, and a restart that writes nothing.
+function Test-LifecyclePluginReceipt {
+    param([object]$Driver)
+    $plugin = $Driver.lifecycle.plugin
+    if ($null -eq $plugin) { return $false }
+    foreach ($field in @('pluginSteamInstalled','pluginUnrelatedUnchanged','pluginUnrecognizedUnchanged','pluginCardShown','pluginNoPathShown',
+        'pluginExclusionRemoved','pluginRestartStates','pluginRestartUnchanged','pluginEventsVerified')) {
+        if ($plugin.$field -isnot [bool] -or $plugin.$field -ne $true) { return $false }
+    }
+    foreach ($rows in @(@($Driver.mainEvents), @($Driver.lifecycle.restartMainEvents))) {
+        $modes = @($rows | Where-Object { $_.event -ceq 'PLUGIN_SETUP_MODE' })
+        if ($modes.Count -ne 1 -or $modes[0].facts.mode -cne 'test-root') { return $false }
+        if (@($rows | Where-Object { $_.event -ceq 'PLUGIN_TEST_ROOT_ESCAPE' }).Count -ne 0) { return $false }
+    }
     return $true
 }
 

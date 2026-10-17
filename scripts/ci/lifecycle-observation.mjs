@@ -233,7 +233,7 @@ export async function runLifecycleSmoke({application, launcher, dashboard, overl
 }
 
 /** Run B: the same profile and LOCALAPPDATA start again after the orderly exit. */
-export async function verifyLifecycleRestart({application, record, rendererPages, config}) {
+export async function verifyLifecycleRestart({application, record, rendererPages, config, afterReady}) {
   const {dashboard} = await rendererPages(application);
   await dashboard.getByText(READY_TEXT, {exact: true}).waitFor({state: 'visible', timeout: 10000});
   // The saved ETS2 profile applies from the first current reading.
@@ -264,4 +264,6 @@ export async function verifyLifecycleRestart({application, record, rendererPages
     ({url: window.webContents.mainFrame.url, zoom: window.webContents.getZoomFactor()})).map(({url, zoom}) => ({view: new URL(url).search, zoom})));
   assert.deepEqual(record.restart.zoom.sort((left, right) => left.view.localeCompare(right.view)), [{view: '', zoom: 1}, {view: '?view=overlay', zoom: 1}]);
   record.restartPlacementsRestored = true;
+  // ET-017 PR-5: the plugin journey's restart checks run on the same dashboard.
+  if (afterReady) await afterReady(dashboard);
 }

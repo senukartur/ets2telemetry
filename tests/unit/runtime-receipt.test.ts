@@ -4,8 +4,12 @@ import path from 'node:path';
 import {temporaryResources} from '../shared/resources';
 import {receiptBatchTimeout, validateRuntimeReceipts} from '../shared/runtime-receipt-validator';
 
-// The index that appends a row to run A's lifecycle main events; ET-011b added three settings rows after the original four.
-const MAIN_EVENTS_APPEND = 7;
+// The index that appends a row to run A's lifecycle main events; ET-011b added three settings rows after the original four,
+// and ET-017 PR-5 the plugin setup mode row.
+const MAIN_EVENTS_APPEND = 8;
+// ET-017 PR-5: both lifecycle runs log the test-root plugin setup mode.
+// A fresh row per receipt: a corruption below changes one receipt only.
+const pluginMode = () => ({event: 'PLUGIN_SETUP_MODE', facts: {mode: 'test-root', reason: null}});
 // ET-015a recording receipts: run A has the terminated service (pid 4100) and its replacement (4200), run B one service
 // (4300). The index of run A's recording-flush step, and the index that appends a row to run A's service events.
 const RECORDING_FLUSH_A = 11;
@@ -41,7 +45,7 @@ function lifecycleReceipt(path: (string | number)[] = [], replacement?: Json): s
     mainEvents: [...orderlyMain(), {event: 'SECOND_INSTANCE', facts: {action: 'created'}}, {event: 'APP_EXIT_REQUESTED', facts: {reason: 'renderer'}},
       // ET-011b settings diagnostics of run A; MAIN_EVENTS_APPEND below is the index after them.
       {event: 'SETTINGS_FALLBACK', facts: {state: 'invalid-file'}}, {event: 'SETTINGS_QUARANTINED', facts: {state: 'invalid-file'}},
-      {event: 'SETTINGS_SAVED', facts: {game: 'ets2', profile: 'us-customary'}}],
+      {event: 'SETTINGS_SAVED', facts: {game: 'ets2', profile: 'us-customary'}}, pluginMode()],
     serviceEvents: orderlyService(),
     lifecycle: {dashboardClosedServiceAlive: true, overlayAliveAfterClose: true, trayPresentAfterClose: true, overlayCurrentAfterClose: true,
       sourceConnectionPreserved: true, secondInstanceRestoredDashboard: true, trayOpenRestoredDashboard: true, explicitExitOrderly: true,
@@ -54,7 +58,10 @@ function lifecycleReceipt(path: (string | number)[] = [], replacement?: Json): s
       settingsSeededInvalidFile: true, settingsStartupUnchanged: true, settingsQuarantinePreserved: true, settingsSavedExact: true, unitsApplied: true,
       settingsRestartLoaded: true, settingsQuarantined: 1, dashboardUnits: {speed: 'Speed: 55.9 mph', fuel: 'Fuel: 19.3 US gal'},
       overlayUnits: {...reading('55.9', '19.3'), speedUnit: 'mph', fuelUnit: 'US gal'},
-      restartMainEvents: [...orderlyMain(), {event: 'APP_EXIT_REQUESTED', facts: {reason: 'app-quit'}}, {event: 'SETTINGS_LOADED', facts: {state: 'loaded'}}],
+      restartMainEvents: [...orderlyMain(), {event: 'APP_EXIT_REQUESTED', facts: {reason: 'app-quit'}}, {event: 'SETTINGS_LOADED', facts: {state: 'loaded'}}, pluginMode()],
+      // ET-017 PR-5 plugin journey.
+      plugin: {pluginSteamInstalled: true, pluginUnrelatedUnchanged: true, pluginUnrecognizedUnchanged: true, pluginCardShown: true, pluginNoPathShown: true,
+        pluginExclusionRemoved: true, pluginRestartStates: true, pluginRestartUnchanged: true, pluginEventsVerified: true},
       restartServiceEvents: orderlyService()}};
   if (path.length) {
     let target = value as Record<string | number, Json>;
@@ -118,6 +125,15 @@ function lifecycleCases() {
     invalid('two quarantined files', ['lifecycle', 'settingsQuarantined'], 2),
     invalid('quarantine count as string', ['lifecycle', 'settingsQuarantined'], '1'),
     invalid('overlay still metric after the change', ['lifecycle', 'overlayUnits', 'speedUnit'], 'km/h'),
+    // ET-017 PR-5 plugin journey.
+    invalid('plugin journey missing', ['lifecycle', 'plugin']),
+    invalid('unrecognized file changed', ['lifecycle', 'plugin', 'pluginUnrecognizedUnchanged'], false),
+    invalid('exclusion left the plugin', ['lifecycle', 'plugin', 'pluginExclusionRemoved'], false),
+    invalid('restart wrote', ['lifecycle', 'plugin', 'pluginRestartUnchanged'], false),
+    invalid('card showed a path', ['lifecycle', 'plugin', 'pluginNoPathShown'], 'true'),
+    invalid('run A not in the test-root mode', ['mainEvents', 7, 'facts', 'mode'], 'disabled'),
+    invalid('run B not in the test-root mode', ['lifecycle', 'restartMainEvents', 4], {event: 'PLUGIN_SETUP_MODE', facts: {mode: 'disabled', reason: 'isolated-launch'}}),
+    invalid('path refused outside the root', ['mainEvents', MAIN_EVENTS_APPEND], {event: 'PLUGIN_TEST_ROOT_ESCAPE', facts: {count: 1}}),
     invalid('overlay fuel not converted', ['lifecycle', 'overlayUnits', 'fuel'], '73.0'),
     invalid('overlay units stale', ['lifecycle', 'overlayUnits', 'freshness'], 'stale'),
     invalid('dashboard still metric after the change', ['lifecycle', 'dashboardUnits', 'speed'], 'Speed: 90.0 km/h'),
@@ -127,7 +143,8 @@ function lifecycleCases() {
     invalid('fallback for another state', ['mainEvents', 4, 'facts', 'state'], 'loaded-with-fallbacks'),
     invalid('second save', ['mainEvents', MAIN_EVENTS_APPEND], {event: 'SETTINGS_SAVED', facts: {game: 'ats', profile: 'metric'}}),
     invalid('restart loaded another state', ['lifecycle', 'restartMainEvents', 3, 'facts', 'state'], 'defaults'),
-    invalid('restart wrote settings', ['lifecycle', 'restartMainEvents', 4], {event: 'SETTINGS_SAVED', facts: {game: 'ets2', profile: 'us-customary'}}),
+    // Index 5 appends after run B's plugin setup mode row (ET-017 PR-5).
+    invalid('restart wrote settings', ['lifecycle', 'restartMainEvents', 5], {event: 'SETTINGS_SAVED', facts: {game: 'ets2', profile: 'us-customary'}}),
     // Clean late read: one leading pending row per run is accepted; anything else about it is not.
     {name: 'intact lifecycle receipt with late settings reads in both runs', body: lateLifecycleReceipt(), scenario: 'lifecycle', code: 0, available: true, reason: null},
     ...([
