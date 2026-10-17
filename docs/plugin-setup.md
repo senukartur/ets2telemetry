@@ -245,7 +245,7 @@ The sixth channel of P16, `diagnostics:export`, was added in PR-6 with the [diag
 
 | Bridge method | Channel | Arguments | Result |
 | --- | --- | --- | --- |
-| `exportDiagnostics()` | `diagnostics:export` | none | `{outcome: 'saved'}`, `{outcome: 'cancelled'}`, `{outcome: 'refused', code}` with `EXPORT_IN_PROGRESS`, `EXPORT_INTERRUPTED` or `EXPORT_TARGET_REFUSED`, or `{outcome: 'failed', code}` with `BUNDLE_FAILED` or `EXPORT_WRITE_FAILED` |
+| `exportDiagnostics()` | `diagnostics:export` | none | `{outcome: 'saved'}`, `{outcome: 'cancelled'}`, `{outcome: 'refused', code}` with `EXPORT_IN_PROGRESS`, `EXPORT_INTERRUPTED` or `EXPORT_TARGET_REFUSED`, or `{outcome: 'failed', code}` with `DIALOG_FAILED`, `BUNDLE_FAILED` or `EXPORT_WRITE_FAILED` |
 
 It serves the trusted dashboard main frame only and rejects the overlay, any other sender or frame and any argument; the preload forwards none. Once the exit has begun it answers `EXPORT_INTERRUPTED` without a dialog. It works in every mode, also `disabled`, because it reads only the application's own state and logs. The bridge method is appended after the plugin methods (`DesktopBridge` in `packages/contracts/src/index.ts`).
 
@@ -315,11 +315,18 @@ Implemented in PR-6 (P17) as the pure `connectionDiagnosis(plugins, status, sele
 | 7 | `PLUGIN_UNRECOGNIZED` | A listed folder has `UNRECOGNIZED_FILE` |
 | 8 | `PLUGIN_OUTDATED` | A listed folder is `outdated` (from the file's hash on disk) |
 | 9 | `PLUGIN_PENDING_GAME_CLOSE` | A listed folder that is not `installed` waits with `GAME_RUNNING`, `CLIENT_RUNNING` or `TARGET_LOCKED` |
-| 10 | `PLUGIN_MISSING` | A listed folder is `missing`, `excluded` (an excluded game) or `blocked` for any other reason |
-| 11 | `TRANSPORT_FAILED` | The live status is `incompatible` or `unavailable` |
-| 12 | `NO_RUNNING_SOURCE` | Anything else: `waiting`, `stale` or `disconnected`, with the plugin in place |
+| 10 | `PLUGIN_BUNDLE_UNAVAILABLE` | A listed folder is blocked by `BUNDLE_UNAVAILABLE`: the bundled plugin is missing or damaged, so the text says to reinstall ETS2Telemetry |
+| 11 | `PLUGIN_NOT_CHECKED` | A listed folder is blocked by `LINKED_FOLDER` or `IO_ERROR`: the plugin could not be checked there, and the text points to the folder line |
+| 12 | `PLUGIN_MISSING` | A listed folder is `missing`, `excluded` (an excluded game) or `blocked` for any other reason |
+| 13 | `TRANSPORT_FAILED` | The live status is `incompatible` or `unavailable` |
+| 14 | `NO_RUNNING_SOURCE` | Anything else: `waiting`, `stale` or `disconnected`, with the plugin in place |
 
-Rows 6–10 look only at the selected game's listed folders, and one folder in that condition is enough. A discovery still `pending` without folders, folders that are `working`, and `installed` folders (also one that keeps `REGISTRY_UNAVAILABLE`) fall through to rows 11 and 12. With `CONNECTED`, a listed folder of the selected game that is still `outdated` adds the note `PLUGIN_OUTDATED_ON_DISK`. The diagnosis reads only the pushed view and the live status, never a game folder, and its texts carry no path.
+Rows 6–12 are the folder rows. They look only at the selected game's listed folders, and each folder counts once, under the first folder row that applies to it (a folder blocked by an unrecognized file is not also missing). Rows 10 and 11 were split from `PLUGIN_MISSING` in the PR-6 review, because its advice (manage the game, Retry) does not help them; they are separate codes rather than reason-specific texts, so the diagnostic bundle records them too.
+
+- **No folder holds the current plugin.** The first folder row that applies to any folder is the headline; one folder in that condition is enough.
+- **A folder holds the current plugin** (state `installed`, which means the bundled plugin is in place, also one that keeps `REGISTRY_UNAVAILABLE`). The game can load the plugin from that folder, so the other folders' problems do not explain a missing connection (PR-6 review). Each folder row that applies to another folder becomes a note, in the rows' order: `OTHER_FOLDER_BLOCKED_PERMISSION`, `OTHER_FOLDER_UNRECOGNIZED`, `PLUGIN_OUTDATED_ON_DISK`, `OTHER_FOLDER_PENDING_GAME_CLOSE`, `OTHER_FOLDER_BUNDLE_UNAVAILABLE`, `OTHER_FOLDER_NOT_CHECKED` and `OTHER_FOLDER_MISSING`. The headline falls through to rows 13 and 14. For example, a current Steam folder and a chosen folder with an unrecognized file give `NO_RUNNING_SOURCE`, or `TRANSPORT_FAILED` while the connection fails, with the note `OTHER_FOLDER_UNRECOGNIZED`.
+
+A discovery still `pending` without folders and folders that are `working` fall through to rows 13 and 14. With `CONNECTED`, a listed folder of the selected game that is still `outdated` adds the note `PLUGIN_OUTDATED_ON_DISK`. The diagnosis reads only the pushed view and the live status, never a game folder, and its texts carry no path.
 
 ## Diagnostic bundle
 
@@ -337,7 +344,7 @@ Implemented in PR-6 (P17). "Export diagnostics…" on the card calls `exportDiag
   - Every string of the whole document, keys included, has the Windows user name and computer name replaced by `<redacted>`, case-insensitively and as whole words: `os.userInfo().username`, `os.hostname()` and `USERNAME`, `COMPUTERNAME` and `USERDOMAIN`. Names shorter than two characters are not replaced.
   - The views carry no Steam, library or game path, and nothing reads the Windows registry for the bundle.
 - **Size bound.** While the text exceeds 2 MiB, the oldest eighth of the longer log's rows is left out and counted. Four full startup logs fit without that.
-- **Saving.** The target checks and the write are shared with the [trip export](journal-export.md) in `apps/desktop/src/export-file.ts`. A target inside `<LOCALAPPDATA>\ETS2Telemetry`, by name, by its real path (a junction) or by file identity, a device path or a relative path is refused with `EXPORT_TARGET_REFUSED`, before the bundle is built. The bundle is built only after an allowed file was chosen, then written to `<name>.<hex8>.partial` beside the target, synced, closed and renamed over the target, with the rename retried as for settings saves. A cancelled dialog reads and writes nothing; a failure or an exit removes the partial file and leaves an existing target unchanged.
+- **Saving.** The target checks and the write are shared with the [trip export](journal-export.md) in `apps/desktop/src/export-file.ts`. A target inside `<LOCALAPPDATA>\ETS2Telemetry`, by name, by its real path (a junction) or by file identity, a device path or a relative path is refused with `EXPORT_TARGET_REFUSED`, before the bundle is built. The bundle is built only after an allowed file was chosen, then written to `<name>.<hex8>.partial` beside the target, synced, closed and renamed over the target, with the rename retried as for settings saves. A cancelled dialog reads and writes nothing, and a Save dialog that rejects answers `DIALOG_FAILED` (PR-6 review) without reading or writing; a failure or an exit removes the partial file and leaves an existing target unchanged.
 - **Exit.** The exit's `begin` and a fatal stop abort the export; its file work joins the existing 1000 ms idle budget ([application lifecycle](app-lifecycle.md)).
 - **Logs.** `DIAGNOSTICS_EXPORT_CANCELLED`, `DIAGNOSTICS_EXPORT_SAVED {bytes}` and `DIAGNOSTICS_EXPORT_FAILED {outcome, code, step?, errno?}` in the main log; no path.
 - **No upload.** The bundle is a file the driver chooses where to save and attaches to a report by hand.
