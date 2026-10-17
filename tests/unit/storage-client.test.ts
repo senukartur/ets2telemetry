@@ -551,3 +551,36 @@ describe('ET-016 journal reads at the worker boundary', () => {
     expect(f.client.state).toBe('failed');
   });
 });
+
+describe('StorageClient openAttachedTrip (ET-016 PR-7, J9)', () => {
+  const INPUT = {pluginSessionId: P1, nextEventSeq: '3', job: job(), effects: []};
+  const attachRequest = (input: unknown): StorageRequest => ({type: 'storage.request', id: 1, command: {name: 'openAttachedTrip', input} as StorageRequest['command']});
+  it('copies only the four input fields, which the worker parser accepts', () => {
+    const f = fixture();
+    void f.client.openAttachedTrip({...INPUT, testHooks: {}} as Parameters<StorageClient['openAttachedTrip']>[0]);
+    expect(f.sent[0].command).toEqual({name: 'openAttachedTrip', input: INPUT});
+    expect(parseRequest(f.sent[0]).ok).toBe(true);
+  });
+  it.each([
+    ['an unknown input key', {...INPUT, extra: 1}, false],
+    ['no input', undefined, false],
+    ['an array input', [], false],
+    ['the four fields', INPUT, true]
+  ])('checks the input strictly at the worker boundary: %s', (_name, input, accepted) => {
+    expect(parseRequest(attachRequest(input)).ok).toBe(accepted);
+  });
+  it.each([['committed', {status: 'committed'}], ['duplicate', {status: 'duplicate'}]])('accepts a %s answer', async (_name, value) => {
+    const f = fixture();
+    const attach = f.client.openAttachedTrip(INPUT);
+    f.ok(1, value);
+    await expect(attach).resolves.toEqual({ok: true, value});
+  });
+  it.each([['another status', {status: 'covered'}], ['an extra key', {status: 'committed', committedThroughEventSeq: '3'}], ['no object', 'committed']])(
+    'fails closed on an attach answer with %s', async (_name, value) => {
+      const f = fixture();
+      const attach = f.client.openAttachedTrip(INPUT);
+      f.ok(1, value);
+      await expect(attach).resolves.toEqual(error('WORKER_FAILED'));
+      expect(f.client.state).toBe('failed');
+    });
+});

@@ -35,7 +35,10 @@ export interface ClosedTripView extends TripSummaryView {
 export interface TripView {
   game: TripGame;
   phase: 'idle' | TripPhase;
-  /** A job is known or likely active but no trip tracks it: a checkpoint job seen while idle (T9), or the job of a trip a gap closed. */
+  /**
+   * A job is known or likely active but no trip tracks it: the job of a trip a gap closed, or a checkpoint job seen while
+   * idle until its late-attach trip opens after the replayed events (J9, ET-016 PR-7).
+   */
   untrackedJob: boolean;
   current: TripSummaryView | null;
   lastClosed: ClosedTripView | null;

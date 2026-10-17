@@ -77,7 +77,9 @@ it('describes the current trip and an untracked job', () => {
   const detail = (value: RecordingTrip | null) => recordingStatusText(status('recording', {trip: value})).detail;
   expect(detail(null)).toEqual([]);
   expect(detail(trip('idle', null))).toEqual([]);
-  expect(detail(trip('idle', null, true))).toEqual(['The current job started before recording and is not tracked as a trip']);
+  // ET-016 PR-7 (J9): a job that started before recording now opens a partial trip once the replay drains, so the line
+  // names both causes of an untracked job (the status carries only a flag); the text changed with that requirement.
+  expect(detail(trip('idle', null, true))).toEqual(['The current job is not tracked as a trip: it started before recording, or a recording gap ended its trip']);
   expect(detail(trip('active', 'partial'))).toEqual(['Current trip is partial']);
   expect(detail(trip('active', 'complete'))).toEqual(['Current trip is recorded completely so far']);
   expect(detail(trip('active', 'unknown'))).toEqual(["The current trip's completeness is not known yet"]);

@@ -9,9 +9,9 @@ import {
   accumulate, advanceGameTime, classifyStep, accountingUpdate, isFastAdvance, isReadingHole, jumpLabel, newAccounting, odometerDeltaM, readingPoint, startRunClock, switchRunClock,
   type GameTimeJump, type ReadingPoint, type ReadingStep
 } from './accounting';
-import {canonicalJson, jobKey, tripUuidFor} from './identity';
+import {attachTripUuidFor, canonicalJson, jobKey, tripUuidFor} from './identity';
 import {
-  MAX_ANNOTATIONS_PER_COMMIT, MAX_EFFECTS, type ClosedTrip, type ContinuationCandidate, type EventMessage, type GameModeEvidence, type GameSlot, type GapMessage,
+  MAX_ANNOTATIONS_PER_COMMIT, MAX_EFFECTS, type AttachRequest, type ClosedTrip, type ContinuationCandidate, type EventMessage, type GameModeEvidence, type GameSlot, type GapMessage,
   type MoneyTotals, type OpenTrip, type RecordingCompleteness, type SessionState, type TripEffect, type TripGame, type TripInput, type TripSeed, type TripState,
   type TripStepResult, type WelcomeMessage, type CheckpointMessage
 } from './types';
@@ -26,15 +26,17 @@ export function initialTripState(): TripState {
 }
 
 /**
- * Applies one input. Effects are non-empty only for `event` and `gap` inputs that carry new coverage; they belong in
- * that message's storage commit. Other inputs only change state, and any effects they decide (a restart close, a
- * not-connected interval) wait in the game's queue for its next commit carrier. A duplicate item (eventSeq at or below
- * the processed point) returns the same state object and no effects.
+ * Applies one input. Effects are non-empty only for `event` and `gap` inputs that carry new coverage, which belong in
+ * that message's storage commit, and for an `attach` input, whose effects belong in the storage command
+ * openAttachedTrip (J9). Other inputs only change state, and any effects they decide (a restart close, a not-connected
+ * interval) wait in the game's queue for its next commit carrier. A duplicate item (eventSeq at or below the processed
+ * point) returns the same state object and no effects.
  */
 export function stepTrip(state: TripState, input: TripInput): TripStepResult {
   switch (input.kind) {
     case 'session': return stepSession(state, input.welcome, input.coveredThrough, input.openTrips);
-    case 'checkpoint': return stepCheckpoint(state, input.message);
+    case 'checkpoint': return stepCheckpoint(state, input.message, input.receivedUtcMs);
+    case 'attach': return stepAttach(state, input.receivedUtcMs);
     case 'event': return stepEvent(state, input.message, input.coveredThrough, input.receivedUtcMs);
     case 'gap': return stepGap(state, input.message, input.coveredThrough, input.receivedUtcMs);
     case 'reading': return stepReading(state, input.sample);
@@ -64,7 +66,7 @@ function freshSession(welcome: WelcomeMessage, coveredThrough: Uint64): SessionS
     pluginSessionId: welcome.source.pluginSessionId, game: welcome.source.game, processedThrough: coveredThrough,
     // A session first seen at coverage 0 starts with the load burst of O1; joining later, the load state is unknown.
     load: coveredThrough === '0' ? 'loading' : 'unknown', gameMode: modeOf(welcome.data.gameMode), clockId: welcome.capture.clockId,
-    lastUtcMs: null, lastMonotonicNs: null, truck: null, trailers: new Array<null>(TRAILER_SLOTS).fill(null), untrackedJob: null, attachedFromEventSeq: null, disconnected: null,
+    lastUtcMs: null, lastMonotonicNs: null, truck: null, trailers: new Array<null>(TRAILER_SLOTS).fill(null), untrackedJob: null, pendingAttach: null, attachedFromEventSeq: null, disconnected: null,
     lastReading: null, connectionSinceNs: null, lastTransfer: null, runClock: null, gameTimeWindow: null, jumpEpisode: null, bridge: null
   };
 }
@@ -352,7 +354,8 @@ function stepEvent(state: TripState, message: EventMessage, coveredThrough: Uint
   if (typeof checked === 'string') return {ok: false, code: checked};
   const seq = BigInt(message.data.eventSeq), processed = BigInt(checked.processedThrough);
   if (seq <= processed) return {ok: true, state, effects: []};
-  if (seq !== processed + 1n) return {ok: false, code: 'ORDER_VIOLATION'};
+  // J9: a due late-attach trip opens before the next item, so that item sees the trip.
+  if (seq !== processed + 1n || attachDue(checked, state.games[checked.game])) return {ok: false, code: 'ORDER_VIOLATION'};
   const draft = structuredClone(state), session = draft.sessions[checked.pluginSessionId], {occurred, record} = message.data;
   const label = utcOf(occurred.utcUnixMs) ?? session.lastUtcMs ?? receivedUtcMs;
   const c = carrierFor(draft, session, label, occurred.monotonicNs.available ? occurred.monotonicNs.value : null, message.data.eventSeq, occurred.simulation);
@@ -403,6 +406,8 @@ function stepEvent(state: TripState, message: EventMessage, coveredThrough: Uint
   // before the connection's first reading.
   if (session.runClock !== null && c.monotonicNs !== null && !replayed(c)) session.runClock = switchRunClock(session.runClock, message.capture.clockId, c.monotonicNs, occurred.simulation);
   flushTotals(c);
+  // A live clear or outcome ends the job the checkpoint showed: a deferred late-attach trip must not open after it.
+  settleAttach(session, c.slot, !replayed(c) && (record.type === 'job.cleared' || record.type === 'job.delivered' || record.type === 'job.cancelled'));
   return {ok: true, state: draft, effects: assemble(c.slot, c.own, c.annotations)};
 }
 /** T16, J8: every commit carrier persists the open trip's observed distance and fuel used when they changed. */
@@ -422,7 +427,7 @@ function stepGap(state: TripState, message: GapMessage, coveredThrough: Uint64, 
   const first = BigInt(message.data.firstEventSeq), last = BigInt(message.data.lastEventSeq), processed = BigInt(checked.processedThrough);
   // Only the suffix beyond the processed point is new (storage's previouslyCoveredThrough rule).
   if (last <= processed) return {ok: true, state, effects: []};
-  if (first > processed + 1n) return {ok: false, code: 'ORDER_VIOLATION'};
+  if (first > processed + 1n || attachDue(checked, state.games[checked.game])) return {ok: false, code: 'ORDER_VIOLATION'};
   const draft = structuredClone(state), session = draft.sessions[checked.pluginSessionId], suffixFirst = processed + 1n;
   const c = carrierFor(draft, session, session.lastUtcMs ?? receivedUtcMs, null, null, null);
   const d = message.data, whole = first === suffixFirst;
@@ -444,6 +449,8 @@ function stepGap(state: TripState, message: GapMessage, coveredThrough: Uint64, 
   session.load = 'unknown';
   session.processedThrough = d.lastEventSeq; session.lastUtcMs = c.label; session.clockId = message.capture.clockId;
   flushTotals(c);
+  // A gap that covers an eventSeq at or after the checkpoint hides live events, which may have ended the checkpoint's job.
+  settleAttach(session, c.slot, session.pendingAttach !== null && last >= BigInt(session.pendingAttach.nextEventSeq));
   return {ok: true, state: draft, effects: assemble(c.slot, c.own, c.annotations)};
 }
 
@@ -525,14 +532,104 @@ function stepSession(state: TripState, welcome: WelcomeMessage, coveredThrough: 
   return {ok: true, state: draft, effects: []};
 }
 
-/** Hydration only (T9): a checkpoint never opens, closes or attributes. It marks a job that no trip tracks. */
-function stepCheckpoint(state: TripState, message: CheckpointMessage): TripStepResult {
+/**
+ * Hydration: a checkpoint itself never opens, closes or attributes, and has no effects. While the game's slot is idle,
+ * its job is untracked from the checkpoint on and becomes the connection's pending late-attach trip (J9, which
+ * supersedes T9's "a checkpoint job stays untracked"); an `attach` input opens it once the replayed events have drained.
+ */
+function stepCheckpoint(state: TripState, message: CheckpointMessage, receivedUtcMs: number | undefined): TripStepResult {
   const id = message.source.pluginSessionId;
   if (state.connection !== id || !has(state.sessions, id) || state.sessions[id].game !== message.source.game) return {ok: false, code: 'UNKNOWN_SESSION'};
-  const draft = structuredClone(state), session = draft.sessions[id], job = message.data.state.configuration.job;
-  session.attachedFromEventSeq = message.data.status.delivery.nextEventSeq;
-  if (draft.games[session.game].trip === null) session.untrackedJob = job.available ? {key: jobKey(job.value), source: 'checkpoint'} : null;
+  const draft = structuredClone(state), session = draft.sessions[id], slot = draft.games[session.game], job = message.data.state.configuration.job;
+  const next = message.data.status.delivery.nextEventSeq;
+  session.attachedFromEventSeq = next;
+  session.pendingAttach = null;
+  if (slot.trip === null) {
+    session.untrackedJob = job.available ? {key: jobKey(job.value), source: 'checkpoint'} : null;
+    if (job.available) {
+      // The trip starts at the checkpoint: its label follows T15 (the capture label, else the session's last label, else the receipt label).
+      const label = utcOf(message.data.state.captureUtcUnixMs) ?? session.lastUtcMs ?? (receivedUtcMs !== undefined && Number.isSafeInteger(receivedUtcMs) && receivedUtcMs >= 0 ? receivedUtcMs : null);
+      session.pendingAttach = {nextEventSeq: next, key: jobKey(job.value), job: structuredClone(job.value), labelUtcMs: label, monotonicNs: message.capture.monotonicNs,
+        clockId: message.capture.clockId, gameMode: modeOf(message.data.status.gameMode), simulation: message.data.state.simulation};
+    }
+  }
   return {ok: true, state: draft, effects: []};
+}
+
+/** J9: the replayed events of the pending late-attach trip have drained: the processed point reached nextEventSeq − 1. */
+function drained(session: SessionState): boolean {
+  return session.pendingAttach !== null && BigInt(session.processedThrough) >= BigInt(session.pendingAttach.nextEventSeq) - 1n;
+}
+/** The most effects an attach adds of its own: the trip.open and two cause intervals. */
+const ATTACH_OWN_EFFECTS = 3;
+/**
+ * J9: the late-attach trip is due once the replayed events drained while the slot is idle. The slot's queued lifecycle
+ * effects (such as the restart close of an earlier session's trip) go first in the same command, so the attach waits
+ * while they would not fit beside its own effects; a later event or gap commit drains them.
+ */
+function attachDue(session: SessionState, slot: GameSlot): boolean {
+  return drained(session) && slot.trip === null && slot.pending.length <= MAX_EFFECTS - ATTACH_OWN_EFFECTS;
+}
+/**
+ * J9: drops the pending late-attach trip when it can no longer open correctly:
+ * - the replayed events have drained and a trip is open, which tracks the game (for example an identical replayed
+ *   job.configured opened it, `opened-before-attach`);
+ * - `ended`: a live item (at or after the checkpoint's nextEventSeq) contradicts the checkpoint's job: a live
+ *   `job.cleared`, `job.delivered` or `job.cancelled`, or a gap that hides live events (PR-7 review round 1).
+ * A live item reaches the reducer with an attach still pending only when the attach was deferred because the queued
+ * lifecycle effects did not fit; any other live item (a fine, a pause) leaves the job as the checkpoint showed it.
+ */
+function settleAttach(session: SessionState, slot: GameSlot, ended = false) {
+  if (ended || (drained(session) && slot.trip !== null)) session.pendingAttach = null;
+}
+/**
+ * ET-016 PR-7 (J9): the late-attach trip the caller must open now with an `attach` input, before the next item of the
+ * current connection, or null. Its effects go to the storage command openAttachedTrip with this session, nextEventSeq and
+ * job; the caller adopts the stepped state only after storage reports `committed` or `duplicate` (T3).
+ */
+export function dueAttach(state: TripState): AttachRequest | null {
+  const id = state.connection;
+  if (id === null || !has(state.sessions, id)) return null;
+  const session = state.sessions[id];
+  if (!attachDue(session, state.games[session.game])) return null;
+  const a = session.pendingAttach!;
+  return {pluginSessionId: id, nextEventSeq: a.nextEventSeq, job: structuredClone(a.job)};
+}
+/**
+ * Opens the due late-attach trip (J9): partial, with a `late-attach` not-connected interval from the checkpoint and a
+ * not-merged continuation when the last trip of this game closed without an outcome and had the same job key. It has
+ * no truck or trailer reference until they are configured again (J22, TD-007), starts at the checkpoint's label, capture
+ * time, game mode and load window, and is identified by attachTripUuidFor. The slot's queued lifecycle effects go first
+ * (attachDue guarantees they fit), so an earlier trip's restart close precedes the new trip; queued annotations wait for
+ * the next event or gap commit.
+ */
+function stepAttach(state: TripState, receivedUtcMs: number): TripStepResult {
+  const id = state.connection;
+  if (id === null || !has(state.sessions, id)) return {ok: false, code: 'UNKNOWN_SESSION'};
+  if (!attachDue(state.sessions[id], state.games[state.sessions[id].game])) return {ok: false, code: 'ORDER_VIOLATION'};
+  const draft = structuredClone(state), session = draft.sessions[id], slot = draft.games[session.game], a = session.pendingAttach!;
+  session.pendingAttach = null;
+  const uuid = attachTripUuidFor(id, a.nextEventSeq), label = a.labelUtcMs ?? receivedUtcMs, at = {source: 'checkpoint', nextEventSeq: a.nextEventSeq};
+  const causes: CompletenessInterval[] = [{kind: 'not-connected', detail: {cause: 'late-attach', ...at}}];
+  const continuation = slot.continuation;
+  if (continuation !== null && continuation.jobKey !== null && continuation.jobKey === a.key) {
+    causes.push({kind: 'discontinuity', detail: {cause: continuation.cause, continuationOf: continuation.tripUuid, decision: 'not-merged', ...at}});
+  }
+  slot.continuation = null;
+  session.untrackedJob = null;
+  // The checkpoint is the session's latest labelled point now, so a later gap close uses its label (T15), not a receipt label.
+  session.lastUtcMs = label; session.lastMonotonicNs = a.monotonicNs; session.clockId = a.clockId;
+  const effects: TripEffect[] = [...slot.pending.splice(0), {kind: 'trip.open', tripUuid: uuid, game: session.game, gameMode: modeOf(a.gameMode), jobConfiguration: 'this-event',
+    recordingCompleteness: 'partial', startedUtcMs: label}];
+  for (const interval of causes) effects.push({kind: 'completeness.add', interval: {tripUuid: uuid, ...interval}});
+  slot.trip = {
+    tripUuid: uuid, pluginSessionId: id, jobKey: a.key, jobEventSeq: null, phase: 'active', reloadEventSeq: null, loadCheck: a.simulation === 'running' ? null : 'before-start',
+    completeness: 'partial', gameMode: modeOf(a.gameMode), gameModeAmbiguous: false, startedUtcMs: label, startedMonotonicNs: a.monotonicNs, clockId: a.clockId,
+    market: plain(a.job.market), cargoLoaded: plain(a.job.cargoLoaded), plannedDistance: plain(a.job.plannedDistance), expectedIncome: plain(a.job.expectedIncome),
+    truckKey: null, trailerKeys: new Array<null>(TRAILER_SLOTS).fill(null),
+    fines: emptyMoney(), finesBeforeLoaded: emptyMoney(), tolls: emptyMoney(), transfers: emptyMoney(), accounting: newAccounting()
+  };
+  return {ok: true, state: draft, effects};
 }
 
 function stepDisconnected(state: TripState): TripStepResult {
@@ -540,6 +637,9 @@ function stepDisconnected(state: TripState): TripStepResult {
   const draft = structuredClone(state), session = draft.sessions[draft.connection!];
   draft.connection = null;
   if (session !== undefined) {
+    // A pending late-attach trip belongs to this connection's checkpoint; the next connection's checkpoint decides again.
+    // The checkpoint's untracked job is kept: the job is still likely active, and the next checkpoint replaces or clears it.
+    session.pendingAttach = null;
     session.disconnected = {utcMs: session.lastUtcMs, monotonicNs: session.lastMonotonicNs, clockId: session.clockId, reading: session.lastReading};
     // The next connection starts its own readings: no step crosses a connection hole (T16).
     session.lastReading = null; session.connectionSinceNs = null; session.runClock = null; session.gameTimeWindow = null; session.jumpEpisode = null; session.bridge = null;

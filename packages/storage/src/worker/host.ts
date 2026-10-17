@@ -65,6 +65,11 @@ export function serveStorage(port: HostPort, testOptions: HostTestOptions = {}):
         testOptions.commitOptions?.(command));
     case 'recordCompleteness':
       return storage.recordCompleteness(command.pluginSessionId, command.interval, command.options === undefined ? undefined : {ifAbsent: command.options.ifAbsent});
+    // ET-016 PR-7: only the parsed input fields are forwarded.
+    case 'openAttachedTrip': {
+      const {pluginSessionId, nextEventSeq, job, effects} = command.input;
+      return storage.openAttachedTrip({pluginSessionId, nextEventSeq, job, effects});
+    }
     case 'committedThrough': return storage.committedThrough(command.pluginSessionId);
     case 'getSession': return storage.getSession(command.pluginSessionId);
     case 'getEvent': return storage.getEvent(command.pluginSessionId, command.eventSeq);

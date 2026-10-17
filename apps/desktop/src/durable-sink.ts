@@ -52,6 +52,20 @@ export interface SampleSink {
   dropped(): number;
 }
 
+/** What opening a late-attach trip did: stored it, found it stored already, or found none due. */
+export type AttachStatus = 'committed' | 'duplicate' | 'none';
+/**
+ * ET-016 PR-7 (J9): the sink's late-attach trip, a trip opened from a checkpoint job once the replayed events drained.
+ * DurableDelivery asks `due()` after each observed reading and after each successful commit of a connection; when it is
+ * true, `open(context)` runs as the very next op of the FIFO, before anything queued behind, with the receipt label of
+ * the item that made it due. `open` stores the trip and adopts it; it never changes coverage and never produces an ACK. A
+ * failure is handled like a failed commit of that connection.
+ */
+export interface AttachSink {
+  due(): boolean;
+  open(context: CommitContext): Promise<SinkResult<{status: AttachStatus}>>;
+}
+
 /**
  * Durable storage as the ingestion sees it. `openSession` stores the plugin session from a validated welcome and
  * returns its contiguous committed coverage C. `commit` stores one event or gap marker in one transaction keyed
@@ -64,6 +78,7 @@ export interface SampleSink {
  * - `restoreLoss` (R9) records that the producer released (storedThrough, ackedThrough] beyond storage, before the
  *   ACK_AHEAD_OF_STORAGE connection closes.
  * - `samples` (ET-015b) holds the rows `observe` sampled; DurableDelivery schedules their writes.
+ * - `attach` (ET-016 PR-7) opens a late-attach trip at its place in the FIFO (AttachSink).
  */
 export interface DurableSink {
   openSession(welcome: WelcomeMessage): Promise<SinkResult<{committedThroughEventSeq: Uint64}>>;
@@ -71,6 +86,7 @@ export interface DurableSink {
   observe?(message: ReadingMessage, context: CommitContext): SinkResult<undefined>;
   restoreLoss?(pluginSessionId: string, storedThroughEventSeq: Uint64, ackedThroughEventSeq: Uint64): Promise<SinkResult<undefined>>;
   readonly samples?: SampleSink;
+  readonly attach?: AttachSink;
 }
 
 /**

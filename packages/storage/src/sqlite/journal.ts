@@ -102,8 +102,8 @@ function valuesOf<T>(record: EventRecord): T {
   return Object.fromEntries(Object.entries(record).filter(([key]) => key !== 'type')) as T;
 }
 
-/** The stored job values in the protocol v1 shape, with the canonical units of the wire. */
-function jobValues(job: Row): JobConfiguration {
+/** The stored job values in the protocol v1 shape, with the canonical units of the wire; reads.ts also uses it for TripRecord.checkpointJob. */
+export function jobValues(job: Row): JobConfiguration {
   const v = specRecord(JOB_FIELDS, job) as Record<string, object>;
   const unit = (field: string, value: string) => ({...v[field], unit: value});
   return {...v, cargoMass: unit('cargoMass', 'kg'), cargoUnitMass: unit('cargoUnitMass', 'kg'), plannedDistance: unit('plannedDistance', 'm'),

@@ -79,7 +79,7 @@ const carriers = (file: string) => readOnly(file, db => db.prepare(`SELECT t.tri
  */
 function storedSeeds(storage: Storage, game: 'ets2' | 'ats'): TripSeed[] {
   return ok(storage.listTrips()).trips.filter(t => t.outcome === 'open' && t.game === game).map(t => {
-    const record = ok(storage.getEvent(t.pluginSessionId, t.jobConfigurationEventSeq))!.record as JobConfiguration;
+    const record = ok(storage.getEvent(t.pluginSessionId, t.jobConfigurationEventSeq!))!.record as JobConfiguration;
     const last = ok(storage.listEvents(t.pluginSessionId)).at(-1)!.occurred as {utcUnixMs: {available: boolean; value?: string}};
     return {tripUuid: t.tripUuid, pluginSessionId: t.pluginSessionId, game, jobKey: jobKey(record), startedUtcMs: t.startedUtcMs,
       recordingCompleteness: t.recordingCompleteness, ...(last.utcUnixMs.available ? {lastObservedUtcMs: Number(last.utcUnixMs.value)} : {})};

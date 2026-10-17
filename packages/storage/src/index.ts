@@ -3,7 +3,7 @@
 // failures; error results carry fixed text and never a filesystem path. See docs/storage.md.
 import {rmSync} from 'node:fs';
 import type {
-  CommitOptions, CommitResult, CompletenessInterval, CompletenessOptions, EventRow, JournalEventPage, JournalIntervalPage, JournalPageQuery, JournalTripDetail, JournalTripPage,
+  AttachInput, AttachResult, CommitOptions, CommitResult, CompletenessInterval, CompletenessOptions, EventRow, JournalEventPage, JournalIntervalPage, JournalPageQuery, JournalTripDetail, JournalTripPage,
   JournalTripsQuery, OpenSummary, Result, SampleAppendOptions, SampleAppendResult, SampleInput, SampleRecord, SessionRecord, StorageInfo, TripEffect, TripList, TripPage, TripRecord, Uint64
 } from './api';
 import {classifyError} from './errors';
@@ -36,6 +36,8 @@ export class Storage {
   recordCompleteness(pluginSessionId: string, interval: CompletenessInterval, options?: CompletenessOptions): Result<void> {
     return attempt(() => writes.recordCompleteness(this.connection, pluginSessionId, interval, options));
   }
+  /** ET-016 PR-7 (J9): opens a trip from a checkpoint job; see AttachInput. */
+  openAttachedTrip(input: AttachInput): Result<AttachResult> { return attempt(() => writes.openAttachedTrip(this.connection, input)); }
   committedThrough(pluginSessionId: string): Result<Uint64> { return attempt(() => reads.committedThrough(this.connection, pluginSessionId)); }
   getSession(pluginSessionId: string): Result<SessionRecord> { return attempt(() => reads.getSession(this.connection, pluginSessionId)); }
   getEvent(pluginSessionId: string, eventSeq: Uint64): Result<EventRow | undefined> { return attempt(() => reads.getEvent(this.connection, pluginSessionId, eventSeq)); }

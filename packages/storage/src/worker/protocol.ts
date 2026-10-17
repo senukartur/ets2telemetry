@@ -6,7 +6,7 @@ import {
   validateJournalTripDetail, validateJournalTripPage
 } from '../../../contracts/src/journal';
 import type {
-  CommitResult, CompletenessInterval, CompletenessOptions, EventRow, JournalAnswerError, JournalEventPage, JournalIntervalPage, JournalPageQuery, JournalTripDetail, JournalTripPage, JournalTripsQuery,
+  AttachInput, AttachResult, CommitResult, CompletenessInterval, CompletenessOptions, EventRow, JournalAnswerError, JournalEventPage, JournalIntervalPage, JournalPageQuery, JournalTripDetail, JournalTripPage, JournalTripsQuery,
   OpenSummary, Purpose, Result, SampleAppendOptions, SampleAppendResult, SampleInput, SampleRecord, SessionRecord, StorageError, StorageInfo, TripEffect, TripList, TripPage,
   TripRecord, Uint64
 } from '../api';
@@ -27,6 +27,8 @@ export interface StorageCommands {
   commitGap: {args: {input: {message: unknown; effects?: TripEffect[]}}; value: CommitResult};
   appendSamples: {args: {pluginSessionId: string; rows: SampleInput[]; options?: SampleAppendOptions}; value: SampleAppendResult};
   recordCompleteness: {args: {pluginSessionId: string; interval: CompletenessInterval; options?: CompletenessOptions}; value: undefined};
+  /** ET-016 PR-7 (J9): a late-attach trip; never acknowledged and never a coverage change. */
+  openAttachedTrip: {args: {input: AttachInput}; value: AttachResult};
   committedThrough: {args: {pluginSessionId: string}; value: Uint64};
   getSession: {args: {pluginSessionId: string}; value: SessionRecord};
   getEvent: {args: {pluginSessionId: string; eventSeq: Uint64}; value: EventRow | undefined};
@@ -56,7 +58,7 @@ export interface StorageResponse {type: 'storage.response'; id: number; result: 
 export type ParsedResponse = StorageResponse | {type: 'storage.response'; id: number; result: {ok: false; error: JournalAnswerError}; journalAnswerInvalid: true};
 
 export const COMMAND_NAMES: readonly CommandName[] = Object.freeze([
-  'open', 'upsertSession', 'commitEvent', 'commitGap', 'appendSamples', 'recordCompleteness', 'committedThrough', 'getSession', 'getEvent',
+  'open', 'upsertSession', 'commitEvent', 'commitGap', 'appendSamples', 'recordCompleteness', 'openAttachedTrip', 'committedThrough', 'getSession', 'getEvent',
   'listEvents', 'getTrip', 'listTrips', 'listSamples', 'storageInfo', 'journalTrips', 'journalTrip', 'journalEvents', 'journalIntervals', 'close'
 ] as const);
 
@@ -82,6 +84,7 @@ const TRIP_PAGE_ARGS = {cursor: (field: unknown) => typeof field === 'string', l
 const COMPLETENESS_OPTIONS_ARGS = {ifAbsent: (field: unknown) => typeof field === 'boolean'};
 /** ET-015b: the `appendSamples` options, checked strictly like the completeness options. */
 const SAMPLE_OPTIONS_ARGS = {uniqueSeconds: (field: unknown) => typeof field === 'boolean'};
+const ATTACH_INPUT_KEYS: readonly string[] = ['pluginSessionId', 'nextEventSeq', 'job', 'effects'];
 const isCount = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 export type JournalCommandName = 'journalTrips' | 'journalTrip' | 'journalEvents' | 'journalIntervals';
 const JOURNAL_COMMAND_KEYS: Readonly<Record<JournalCommandName, readonly string[]>> = {
@@ -121,7 +124,7 @@ function validJournal(command: Extract<StorageCommand, {name: JournalCommandName
 /**
  * Checks the envelope and the argument shapes a command needs to reach the storage core. The core validates every
  * argument value itself; this refuses messages that are not storage requests at all, and checks the `listTrips` page,
- * the `recordCompleteness` options, the `appendSamples` options and every journal command (ET-016) strictly, so only
+ * the `recordCompleteness` options, the `appendSamples` options, the `openAttachedTrip` input and every journal command (ET-016) strictly, so only
  * their listed fields cross the worker boundary.
  */
 export function parseRequest(message: unknown): {ok: true; id: number; command: StorageCommand} | {ok: false; id?: number} {
@@ -137,6 +140,8 @@ export function parseRequest(message: unknown): {ok: true; id: number; command: 
   if (name === 'listTrips' && !optionalArgs(command.page, TRIP_PAGE_ARGS)) return {ok: false, id};
   if (name === 'recordCompleteness' && !optionalArgs(command.options, COMPLETENESS_OPTIONS_ARGS)) return {ok: false, id};
   if (name === 'appendSamples' && !optionalArgs(command.options, SAMPLE_OPTIONS_ARGS)) return {ok: false, id};
+  // ET-016 PR-7: only the four listed input fields cross the boundary; the storage core checks their values.
+  if (name === 'openAttachedTrip' && (!isRecord(command.input) || !Object.keys(command.input).every(key => ATTACH_INPUT_KEYS.includes(key)))) return {ok: false, id};
   if (isJournalCommand(name) && !journalArgs(name, command)) return {ok: false, id};
   return {ok: true, id, command: command as StorageCommand};
 }
@@ -159,6 +164,8 @@ function validValue(command: StorageCommand, value: unknown): boolean {
     return isRecord(value) && ['committed', 'duplicate', 'conflict', 'covered'].includes(value.status as string) && isUint64(value.committedThroughEventSeq)
       && (value.previouslyCoveredThrough === undefined || isUint64(value.previouslyCoveredThrough)) && (name === 'commitGap' || value.status !== 'covered');
   case 'committedThrough': return isUint64(value);
+  // ET-016 PR-7: the recorder adopts a late-attach trip only on one of these two statuses (T3).
+  case 'openAttachedTrip': return isRecord(value) && Object.keys(value).length === 1 && (value.status === 'committed' || value.status === 'duplicate');
   case 'open': return isRecord(value) && typeof value.schemaVersion === 'number' && typeof value.created === 'boolean' && isText(value.databaseUuid) && isText(value.purpose);
   case 'upsertSession': return isRecord(value) && typeof value.created === 'boolean' && isUint64(value.committedThroughEventSeq);
   case 'close': case 'recordCompleteness': return value === undefined;

@@ -36,6 +36,7 @@ function tripLines(trip: Extract<RecordingHealth, {losses: RecordingLosses}>['tr
     const phase = RECORDING_TRIP_TEXT.phase[trip.phase];
     lines.push(phase ? `${base}; ${phase}` : base);
   }
+  // ET-016 PR-7 (J9): an untracked job started before recording and has no trip yet, or a recording gap ended its trip.
   if (trip.untrackedJob) lines.push(RECORDING_TRIP_TEXT.untrackedJob);
   return lines;
 }
