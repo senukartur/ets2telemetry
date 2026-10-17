@@ -19,6 +19,8 @@ import {expectedPath, manifest, mismatches, scenarioPath, type Expected} from '.
 
 type Json = Record<string, unknown>;
 const load = (id: string) => readFixtureFile(scenarioPath(id));
+/** The injected hello deadline: the server must not close a silent client before it (a product bound, not a speed claim). */
+const HELLO_TIMEOUT_MS = 300;
 const SOURCE = {versions: {telemetryApi: {major: 1, minor: 1}, gameTelemetry: {major: 1, minor: 19}, sdkArchive: 'scs-sdk-1.15'}, gameplayEvents: 'registered', currency: 'unknown', gameMode: 'unknown'};
 const inline = (steps: Json[], transport: Json[]): Json => ({format: 'ets2telemetry-simulator-v1', schemaVersion: 1, id: 'pipe-test', purpose: 'Pipe test', reg: ['REG-011'], origin: 'synthetic',
   game: 'ets2', seed: 'pipe-test', provenance: null, source: SOURCE, steps, transport});
@@ -132,12 +134,12 @@ describe('simulator v1 over an actual Windows named pipe', () => {
 
   it('closes a silent client at the injected hello deadline, not earlier', async () => {
     const s = inline([], [{atMs: 0, action: 'clientFault', fault: 'helloTimeout'}, {atMs: 10, action: 'connect', client: {durable: true}}, {atMs: 20, action: 'disconnect'}]);
-    const server = await serveV1(s, {scale: 0, helloTimeoutMs: 300});
+    const server = await serveV1(s, {scale: 0, helloTimeoutMs: HELLO_TIMEOUT_MS});
     try {
       // The server measures its deadline on performance.now() from accepting the connection, which follows `start`.
       const start = performance.now(), silent = rawClient(server.endpoint);
       expect(await silent.closed).toEqual({bytes: 0, messages: []});
-      expect(performance.now() - start).toBeGreaterThanOrEqual(300);
+      expect(performance.now() - start).toBeGreaterThanOrEqual(HELLO_TIMEOUT_MS);
       const next = rawClient(server.endpoint, hello());
       expect((await next.closed).messages.map(m => m.kind)).toEqual(['welcome', 'checkpoint']);
       expect((await server.done).result.connections.map(c => c.closedBy)).toEqual(['helloTimeout', 'disconnect']);
