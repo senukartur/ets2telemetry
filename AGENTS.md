@@ -526,3 +526,16 @@ See [journal](docs/journal.md), [trip export](docs/journal-export.md) and [ET-01
 ## Uninstall removes local data — October 16, 2026
 
 On October 16, 2026 the owner confirmed that uninstalling ETS2Telemetry removes all of its local data under `%LOCALAPPDATA%\ETS2Telemetry`: the history database and its backups, settings, logs and synthetic recordings. Unsynchronized history is lost until the later server phase can restore it. Only application-owned data and the plugin file this application installed are removed. ET-018 implements this, changing the ET-001 baseline that keeps the data root. The ET-016 journal states the rule next to its JSON export, which is a copy for the user's records and cannot be imported (J18). See [concept.md](concept.md#uninstall-removes-local-data--october-16-2026).
+
+## ET-019t test-suite audit — October 17, 2026
+
+On October 12, 2026 the owner defined ET-019t, a test-suite audit and cleanup, in a comment on the ET-019 card. It does not wait for ET-012, ET-017 or ET-018. Under the standing delegation of October 15, 2026, the coordinator started it on October 17, 2026. That day the owner also approved three changes:
+- **Squirrel only on main (E1).** Pull requests package and inspect the application without building the Squirrel distributable; main pushes and manual dispatches still run the full `make`.
+- **Development smokes only on main (E2).** Pull requests run only the packaged runtime smokes; the development-mode smokes run on main pushes and manual dispatches.
+- **A third required check.** A third Windows CI job, `Windows x64 tests` (lint, PowerShell analysis, typecheck, the Node-safe and storage suites), is added to the required status checks of ruleset `Protect main`, beside the two existing jobs. Run `gh api repos/senukartur/ets2telemetry/rules/branches/main` to see the live rules.
+
+The owner kept `tests/electron/startup.spec.ts`.
+
+The audit maps every test entry point to the regression registry and removes two verified pieces of dead scaffold code: the ET-001 placeholder DLL contract and `isScaffoldStatus`. It rewrites wall-clock-dependent tests so they wait on observable state or controlled clocks, and it seeds the 5,000-amount journal case instead of committing 5,000 transactions. Native MSBuild now builds in parallel, and every CTest run writes JUnit results.
+
+No product behaviour, protocol, schema, IPC or security boundary changes. The scenario coverage stays the same, and the must-not-remove categories are untouched. The measurements and per-test rationale are in [ET-019t validation](docs/validation/et-019t.md). The rest of ET-019 still waits for its prerequisites. No game, TruckersMP, display or performance claim follows.
