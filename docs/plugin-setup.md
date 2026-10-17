@@ -7,13 +7,13 @@ ET-017 is delivered as six PRs:
 | PR | Content | State |
 | --- | --- | --- |
 | PR-1 | The plugin DLL is bundled with a hash manifest ([bundle format](#bundle-format)) | Implemented; nothing reads the bundle at runtime |
-| PR-2 | Steam and manual game-folder discovery | Coming |
+| PR-2 | Steam and manual game-folder discovery ([Steam root](#steam-root), [Steam discovery](#steam-discovery), [manual game folder](#manual-game-folder), [running games](#running-games)) | Implemented as read-only modules; nothing calls them from main yet |
 | PR-3 | The atomic installer and the [install registry](#install-registry) | Coming |
 | PR-4 | Silent setup in main, the [mode gate](#mode-gate) and the per-game state in `AppState` | Coming |
 | PR-5 | The per-game plugin card on the dashboard | Coming |
 | PR-6 | Connection diagnosis and the diagnostic bundle | Coming |
 
-Until PR-4 lands, the application never discovers a game, never writes into a game folder and never reads the bundle. The developer procedure in [manual plugin setup](manual-plugin-setup.md) stays the only way to put the DLL into a game. No game, TruckersMP or performance claim follows from the bundle.
+Until PR-4 lands, the application never discovers a game, never writes into a game folder and never reads the bundle. The developer procedure in [manual plugin setup](manual-plugin-setup.md) stays the only way to put the DLL into a game. No game, TruckersMP or performance claim follows from the bundle or from discovery.
 
 ## Bundle format
 
@@ -82,6 +82,67 @@ The list starts empty because nothing has been released. MSVC builds are not rep
 
 PR-4 adds `plugin-bundle.ts` in main. It will read the bundle from `process.resourcesPath\telemetry-plugin` when packaged and from `<repo>\.local\package-native\telemetry-plugin` in development. It will read the manifest (at most 64 KiB, strict keys) and the DLL (at most 16 MiB, not a link, x64 PE), hash the DLL in memory and install only that verified buffer, never re-reading the file.
 
+## Steam root
+
+PR-2 adds how the application finds the games and validates a folder the user chose. The modules live in `apps/desktop/src/plugin-setup/`. They only read, every file and process access goes through an injected port, and nothing calls them from main yet; ET-017 PR-4 wires them behind the [mode gate](#mode-gate). No result here establishes that a real Steam installation, game or TruckersMP client behaves as described; see [remaining checks](#remaining-manual-and-real-environment-checks).
+
+`steam-registry.ts` reads where Steam is installed (P1):
+
+- One fixed Windows PowerShell 5.1 call: `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe -NoLogo -NoProfile -NonInteractive -Command <fixed script>`, with a hidden window, no shell, a 5 s deadline and at most 16 KiB of output. `%SystemRoot%` is used only when it is a plain absolute drive folder; otherwise `C:\Windows`.
+- The script uses only .NET calls and string concatenation, no cmdlet, so it never autoloads a module. The child gets the parent's environment with `PSModulePath` (in any letter case) replaced by `%SystemRoot%\System32\WindowsPowerShell\v1.0\Modules`: a pwsh 7 parent, such as the CI tests job, exports module folders whose modules Windows PowerShell 5.1 cannot load (the same problem as in [ET-001 validation](validation/et-001.md)).
+- The script reads exactly two values through `[Microsoft.Win32.Registry]::GetValue`: `HKCU\Software\Valve\Steam\SteamPath`, then, as the fallback, `HKLM\SOFTWARE\WOW6432Node\Valve\Steam\InstallPath`. Each value is read on its own, and one that cannot be read is `null`, so an unreadable machine-wide key never loses a readable SteamPath. It prints `{"steamPath": <base64>|null, "installPath": <base64>|null, "unreadable": <0-2>}`, where each value is the base64 of its UTF-8 bytes, so the console code page cannot change a non-ASCII path, and `unreadable` counts the values whose read failed. Output that is not exactly this shape, uses non-canonical base64, is not UTF-8, exceeds 4096 bytes per value or counts more unreadable values than null ones is refused.
+- The result is canonicalized: normalized with `path.win32`, resolved through `realpath` and checked again. SteamPath is used when it names an existing local folder; otherwise InstallPath. UNC, device, relative and missing paths are never used. When neither value is usable and at least one read failed, the result is `STEAM_REGISTRY_FAILED`, not "not installed", so a denied key is never reported as a missing Steam; a usable value still wins.
+- Failures are fixed codes: `STEAM_REGISTRY_TIMEOUT`, `STEAM_REGISTRY_OUTPUT_TOO_LARGE`, `STEAM_REGISTRY_OUTPUT_INVALID`, `STEAM_REGISTRY_FAILED` and `STEAM_REGISTRY_ABORTED`. Discovery reports each as `steam-not-found`.
+- Rejected alternatives: `reg.exe` prints in the OEM code page, `reg export` writes a file that includes AutoLoginUser, and a native addon, an npm dependency or registry access in the broker would widen the trusted code.
+
+The script's two key names are fixed in code. Tests may replace them only with a per-run key `HKCU\Software\ETS2Telemetry-Test-<uuid>` and one plain subkey of it; any other key is refused before PowerShell starts.
+
+## Steam discovery
+
+`steam-discovery.ts` finds the game roots (P2, P3):
+
+1. The Steam root is library 0.
+2. The library list is `<steam>\steamapps\libraryfolders.vdf`, or `<steam>\config\libraryfolders.vdf` when the first is absent. Both the current format (`"0" { "path" "D:\\SteamLibrary" … }`) and the legacy one (`"1" "D:\\SteamLibrary"` beside keys such as `TimeNextStatsReport`) are read; the top key `libraryfolders` is case-insensitive and only numbered keys are libraries, in numeric order.
+3. A library path must be an absolute drive path. A UNC or device path is skipped without any file access. A library on a missing drive or folder is skipped.
+4. Libraries are deduplicated by canonical path (case-insensitive) and by file identity (volume serial number and file index), so a library listed again through a junction counts once and a junction-moved library is listed by its target.
+5. A list that cannot be read or parsed leaves only the Steam root. Each game's outcome is then `steam-list-invalid`, and the log code is `STEAM_LIBRARY_LIST_INVALID` with a fixed reason.
+6. In each library the manifest `steamapps\appmanifest_<id>.acf` (at most 64 KiB, a regular file) must have `AppState.appid` equal to 227300 (ETS2) or 270880 (ATS), and `installdir` must be one safe folder name: no `\`, `/`, `:`, `.` or `..`, no reserved device name, no trailing dot or space and no control character. StateFlags is ignored.
+7. The root is `<library>\steamapps\common\<installdir>`, resolved through `realpath`. Roots are deduplicated like libraries; at most four are reported per game.
+
+The outcome per game is `found`, `not-found`, `steam-not-found` or `steam-list-invalid`. The result also carries counts for the PLUGIN_DISCOVERY log line (`libraries`, `missingLibraries`, `duplicateLibraries`, `rejectedLibraries`, `invalidManifests`, `staleManifests`, `duplicateRoots` and `truncatedRoots`) and never a path.
+
+### KeyValues reader
+
+`vdf.ts` accepts only what Steam writes: quoted keys and values, braces, whitespace, `//` comments, one UTF-8 byte order mark and the escape set of Valve's reader: `\n`, `\t`, `\v`, `\b`, `\r`, `\f`, `\a`, `\\`, `\?`, `\'` and `\"`. It refuses unquoted tokens, conditionals such as `[$WIN32]`, `#include`, any other escape and invalid UTF-8. Bounds: 1 MiB per file, nesting depth 8 and 4096 UTF-8 bytes per key or value, counted as the string is read; a list may name at most 64 libraries. Entries are kept as an ordered list, so repeated keys and keys such as `__proto__` cannot reach an object prototype; a repeated key the reader needs (for example two `path` entries) is refused.
+
+### Game layout
+
+A root is a game root only when `bin\win_x64\eurotrucks2.exe` (ETS2) or `bin\win_x64\amtrucks.exe` (ATS) is a regular file. The layout is then:
+
+| Status | Meaning |
+| --- | --- |
+| `ready` | `bin` and `bin\win_x64` are plain folders; `plugins` is absent or a plain folder; the target is absent or a regular file |
+| `linked` | `bin`, `bin\win_x64` or `plugins` is a symbolic link or junction (the executable is reachable through it) |
+| `unexpected-entry` | `plugins` is not a folder, or the target is a link or a folder |
+
+Node reports NTFS junctions and symbolic links alike as links. Other reparse points, such as cloud placeholders, look like plain folders to Node and are not detected. Whether a regular target file is owned is decided by the installer (P6, PR-3), not here.
+
+## Manual game folder
+
+`game-folder.ts` validates a folder the user chose in main's folder dialog (P4). A selection of the root, `bin`, `bin\win_x64` or `bin\win_x64\plugins` is normalized to the root by exact tail components, in any case. The canonical root is what is stored. Refusal codes:
+
+| Code | When |
+| --- | --- |
+| FOLDER_UNSUPPORTED_PATH | A relative, drive-relative, UNC, `\\?\`, `\\.\` or `\??\` path or one naming a stream, refused before any file access; a folder inside `%LOCALAPPDATA%\ETS2Telemetry` or the application's install folder, compared by name and by real path; a folder whose real path is UNC |
+| FOLDER_NOT_GAME | The folder is missing or has no regular 64-bit executable of either game |
+| FOLDER_WRONG_GAME | The folder holds the other game |
+| FOLDER_LINKED | `bin`, `bin\win_x64` or `plugins` is a link or junction |
+| FOLDER_DUPLICATE | The root has the file identity of a Steam root found for the game |
+
+## Running games
+
+`game-processes.ts` runs the absolute `%SystemRoot%\System32\tasklist.exe /fo csv /nh` with a hidden window, no shell, 3 s and at most 1 MiB of output (P7). It matches image names case-insensitively: `eurotrucks2.exe` blocks ETS2 (GAME_RUNNING), `amtrucks.exe` blocks ATS (GAME_RUNNING), and any name starting with `truckersmp` blocks both (CLIENT_RUNNING). A game never blocks the other game. A timeout, a failed run, oversized output or any malformed line is RUNNING_CHECK_FAILED, and the caller then changes nothing. Matching by name is conservative: a process of the same name from another folder also blocks.
+
 ## Mode gate
 
 Coming in PR-4. The pure `pluginSetupMode` decides from the environment and the packaged flag whether plugin setup runs. The first matching row wins:
@@ -123,7 +184,7 @@ Coming in PR-3. The registry records which game folders this application manages
 
 **Contract with ET-018 (uninstall).** ET-018 reads this file before it deletes the data root. For each install, and only while neither that game nor TruckersMP is running:
 
-1. It re-validates the layout: `bin`, `binwin_x64` and `plugins` must still be plain folders, not links. Otherwise it skips the install.
+1. It re-validates the layout: `bin`, `bin\win_x64` and `plugins` must still be plain folders, not links. Otherwise it skips the install.
 2. It removes the exact temporary file of each `pending` entry for that folder when that file is a regular file.
 3. It removes the DLL only while its hash is still the recorded `sha256` or a `known` hash. A locked or denied file is skipped and reported, never retried in a loop.
 4. It removes the `plugins` folder only if `createdPluginsDirectory` is set and the folder is now empty.
@@ -132,14 +193,18 @@ Any other file stays.
 
 ## Remaining manual and real-environment checks
 
-All of them stay pending after PR-1:
+All of them stay pending after PR-2:
 
-- real Steam installs: the default and a custom Steam path, including non-ASCII paths, several libraries on other drives and libraries moved through a junction;
+- real Steam installs: the default and a custom Steam path, including non-ASCII paths, the InstallPath fallback, several libraries on other drives and libraries moved through a junction;
 - ETS2 and ATS loading the silently installed DLL, and a Steam update or file verification preserving it;
 - TruckersMP's real process names and the blocking behaviour;
 - `sdk unload` and `sdk reload` in the game console;
 - UAC- or ACL-restricted libraries with the manual fallback, and antivirus interference with the rename;
-- the real Windows dialogs and Explorer reveal, and the packaged Squirrel first launch;
+- the real Windows dialogs, including the game folder dialog, and Explorer reveal, and the packaged Squirrel first launch;
 - ET-018 uninstall cleanup and the readability of the card.
 
 See [ET-017 validation](validation/et-017.md).
+
+## Tests
+
+See [TESTING.md](../TESTING.md#et-017-plugin-setup--october-17-2026) and [ET-017 validation](validation/et-017.md). PR-2's tests build fake Steam roots with `tests/shared/fake-steam.ts` inside `os.tmpdir()` and read them through `tests/shared/guarded-fs.ts`, which refuses and records any path outside its temporary root, also one whose real location lies outside it through a junction. No test reads Valve's registry keys or touches a real Steam or game folder.
