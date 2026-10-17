@@ -487,9 +487,12 @@ it('lets a save requested before the load returned wait at most until the read l
   expect(outcome).toBeInstanceOf(SettingsError); expect((outcome as SettingsError).code).toBe('SETTINGS_WRITE_FAILED');
   expect(settings.idle()).toBeUndefined();
   gated.release();
-  // The late read completes; it neither applies nor triggers the refused save.
+  // The late read completes; it neither applies nor triggers the refused save. Checked in memory first (no save work
+  // pending, the read-limit state kept), so a late read that applied or queued a save fails here deterministically.
   expect(await gated.settled).toBe(Buffer.byteLength(VALID_METRIC));
   await new Promise(resolve => setImmediate(resolve));
+  expect(settings.idle()).toBeUndefined();
+  expect(settings.view()).toMatchObject({state: 'unreadable', writable: false});
   expect((await read()).toString('utf8')).toBe(VALID_METRIC); expect(await list()).toEqual(['settings.json']);
 });
 
