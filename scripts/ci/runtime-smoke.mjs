@@ -17,7 +17,7 @@ import {
   verifyRendererStyles
 } from './overlay-observation.mjs';
 import {runLifecycleSmoke, seedLifecycleSettings, verifyLifecycleRestart} from './lifecycle-observation.mjs';
-import {assertNoGameRunning, buildPluginFixture, runPluginJourney, snapshotPluginFixture, verifyDisabledPluginCard, verifyPluginEvents, verifyPluginRestart} from './plugin-fixture.mjs';
+import {assertNoGameRunning, buildPluginFixture, runDiagnosticsExport, runPluginJourney, snapshotPluginFixture, verifyDisabledPluginCard, verifyPluginEvents, verifyPluginRestart} from './plugin-fixture.mjs';
 import {RECORDING_TARGET, runRecordingSmoke, startRecordingSource, verifyRecordingRestart, verifyRecordingRun} from './recording-observation.mjs';
 import {JOURNAL_TARGET, runJournalEmpty, runJournalExport, runJournalSeeded, seedJournalDatabase, verifyJournalRun} from './journal-observation.mjs';
 // These read-only globals are used only inside serialized Playwright browser callbacks.
@@ -451,6 +451,9 @@ try {
     await dashboard.getByText('Telemetry service ready; isolated storage probe verified', {exact: true}).waitFor({state: 'visible', timeout: 10000});
     phase('restart-ready');
     await verifyPluginRestart({dashboard, fixture: pluginFixture, before: afterRunA, record: result.plugin, phase});
+    // ET-017 PR-6: "Export diagnostics…" after run B's states and files were verified; it writes only into this run's output.
+    await runDiagnosticsExport({application, dashboard, config, fixture: pluginFixture, record: result.plugin});
+    phase('plugin-diagnostics-exported');
     await dashboard.screenshot({path: path.join(config.output, 'plugin.png')});
   }
   phase('journey-complete');
@@ -549,6 +552,10 @@ finally {
       }
       assert.ok(!plugin.restartMainEvents.some(row => /FAILED|TIMEOUT|UNCAUGHT|UNHANDLED|INVALID|RENDER_PROCESS_GONE/.test(row.event)));
       plugin.actions = {runA: verifyPluginEvents(result.mainEvents), runB: verifyPluginEvents(plugin.restartMainEvents)};
+      // ET-017 PR-6: run B's main log records the cancelled and the saved export, with fixed facts only.
+      const exports = plugin.restartMainEvents.filter(row => row.event.startsWith('DIAGNOSTICS_EXPORT_'));
+      assert.deepEqual(exports.map(row => row.event), ['DIAGNOSTICS_EXPORT_CANCELLED', 'DIAGNOSTICS_EXPORT_SAVED']);
+      assert.deepEqual(exports[1].facts, {bytes: plugin.diagnosticsBundle.bytes});
       assert.ok(plugin.actions.runB.length > 0 && plugin.actions.runB.every(facts => ['unchanged', 'blocked', 'absent'].includes(facts.outcome)),
         'Run B changed a game folder');
       plugin.pluginEventsVerified = true;

@@ -106,7 +106,7 @@ function Test-PluginReceipt {
     $plugin = $Driver.plugin
     if ($null -eq $plugin) { return $false }
     foreach ($field in @('pluginSteamInstalled','pluginUnrelatedUnchanged','pluginUnrecognizedUnchanged','pluginCardShown','pluginNoPathShown',
-        'pluginExclusionRemoved','pluginRestartStates','pluginRestartUnchanged','pluginEventsVerified')) {
+        'pluginExclusionRemoved','pluginRestartStates','pluginRestartUnchanged','pluginEventsVerified','pluginDiagnosticsExported')) {
         if ($plugin.$field -isnot [bool] -or $plugin.$field -ne $true) { return $false }
     }
     if (!(Test-ReceiptInteger -Value $plugin.runAExit -Minimum 0 -Maximum 0) -or !(Test-ReceiptInteger -Value $plugin.restartLauncherExit -Minimum 0 -Maximum 0)) { return $false }

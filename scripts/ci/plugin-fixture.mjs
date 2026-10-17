@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
-import {lstat, mkdir, readFile, realpath, stat, writeFile} from 'node:fs/promises';
+import {lstat, mkdir, readdir, readFile, realpath, stat, writeFile} from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import {performance} from 'node:perf_hooks';
+import {dialogCalls, stubSaveDialog} from './journal-observation.mjs';
 
 // ET-017 PR-5: the fake Steam and game folders of the `plugin` runtime smoke scenario (REG-015, REG-017). Everything is
 // created inside the run's isolated output folder, which also holds the test-root marker file, so the application's
@@ -200,6 +202,56 @@ export async function verifyPluginRestart({dashboard, fixture, before, record, p
   assert.deepEqual(await snapshotPluginFixture(fixture), before);
   record.pluginRestartUnchanged = true;
   phase('plugin-run-b-settled');
+}
+
+const exportResult = page => page.evaluate(() => globalThis.document.querySelector('[data-testid="plugin-result"]')?.textContent ?? null);
+const DIAGNOSTICS_CANCELLED = 'Export cancelled. Nothing was written.';
+const DIAGNOSTICS_SAVED = 'Diagnostics saved.';
+/** Whole-word, case-insensitive: a name that must never appear in the bundle. */
+const containsName = (text, name) => typeof name === 'string' && name.trim().length >= 2
+  && new RegExp(`(?<![A-Za-z0-9])${name.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![A-Za-z0-9])`, 'i').test(text);
+
+/**
+ * ET-017 PR-6 (P17): "Export diagnostics…" in run B. Main's Save dialog is replaced through Playwright's main-process
+ * evaluate, as in the journal export journey (journal-observation.mjs): a cancelled dialog writes nothing, then a target
+ * in this run's output folder receives the bundle. The bundle must be the v1 format with the test-root plugin view and
+ * the fixed diagnosis, hold log rows of both logs, and contain no path, no fixture root, no output folder and neither the
+ * user name nor the computer name.
+ */
+export async function runDiagnosticsExport({application, dashboard, config, fixture, record}) {
+  const directory = path.join(config.output, 'diagnostics-export'), file = path.join(directory, 'diagnostics.json');
+  await mkdir(directory);
+  const button = dashboard.getByTestId('plugin-export-diagnostics');
+  await stubSaveDialog(application, {canceled: true, filePath: ''});
+  await button.click();
+  await until(() => exportResult(dashboard), value => value === DIAGNOSTICS_CANCELLED, 'DIAGNOSTICS_EXPORT_NOT_CANCELLED', 10000);
+  assert.deepEqual(await readdir(directory), []);
+  await stubSaveDialog(application, {canceled: false, filePath: file});
+  await button.click();
+  await until(() => exportResult(dashboard), value => value === DIAGNOSTICS_SAVED, 'DIAGNOSTICS_EXPORT_NOT_SAVED', 10000);
+  const offered = await dialogCalls(application);
+  assert.equal(offered.length, 1);
+  assert.equal(offered[0].window, true);
+  assert.match(offered[0].defaultName, /^ets2telemetry-diagnostics-\d{8}T\d{6}Z\.json$/);
+  assert.deepEqual(offered[0].filters, [{name: 'JSON', extensions: ['json']}]);
+  assert.deepEqual(await readdir(directory), ['diagnostics.json']);
+  const text = await readFile(file, 'utf8');
+  assert.ok(Buffer.byteLength(text) <= 2 * 1024 * 1024, 'Diagnostic bundle over 2 MiB');
+  const bundle = JSON.parse(text);
+  assert.deepEqual([bundle.format, bundle.version, bundle.plugins.mode, bundle.diagnosis, bundle.live.selection],
+    ['ets2telemetry.diagnostics', 1, 'test-root', {code: 'NO_GAME_SELECTED', notes: []}, 'game']);
+  assert.deepEqual(states(bundle.plugins), RUN_A_EXCLUDED);
+  assert.ok(bundle.logs.main.some(row => row.event === 'PLUGIN_SETUP_MODE' && row.facts?.mode === 'test-root'), 'Bundle misses the main log rows');
+  assert.ok(bundle.logs.service.length > 0, 'Bundle misses the service log rows');
+  assert.ok(bundle.logs.main.every(row => !('detail' in row) && !('pid' in row)), 'Bundle keeps a log detail');
+  for (const value of [fixture.root, config.output, config.localappdata]) assert.ok(!text.toLowerCase().includes(value.toLowerCase()), 'Diagnostic bundle carries a run path');
+  assert.doesNotMatch(text, /[A-Za-z]:[\\/]|\\\\/, 'Diagnostic bundle carries a path');
+  let user;
+  try {user = os.userInfo().username;} catch {user = undefined;}
+  for (const name of [user, os.hostname(), process.env.USERNAME, process.env.COMPUTERNAME]) assert.ok(!containsName(text, name), 'Diagnostic bundle carries the user or computer name');
+  await dashboard.evaluate(() => globalThis.scrollTo(0, 0));
+  record.diagnosticsBundle = {bytes: Buffer.byteLength(text), mainRows: bundle.logs.main.length, serviceRows: bundle.logs.service.length, omitted: bundle.omittedLogRows};
+  record.pluginDiagnosticsExported = true;
 }
 
 /** The plugin rows of one run's main log: the test-root mode, and no path refused outside the root. */

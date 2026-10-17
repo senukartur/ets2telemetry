@@ -95,7 +95,7 @@ function pluginReceipt(path: (string | number)[] = [], replacement?: Json): stri
   return corrupt({passed: true, commit: 'candidate', mode: 'packaged', scenarioKind: 'plugin', launcherExit: 0, probesAfterExit: [],
     mainEvents: [...orderlyMain(), testRoot()], serviceEvents: orderlyService(),
     plugin: {pluginSteamInstalled: true, pluginUnrelatedUnchanged: true, pluginUnrecognizedUnchanged: true, pluginCardShown: true, pluginNoPathShown: true,
-      pluginExclusionRemoved: true, pluginRestartStates: true, pluginRestartUnchanged: true, pluginEventsVerified: true, runAExit: 0, restartLauncherExit: 0,
+      pluginExclusionRemoved: true, pluginRestartStates: true, pluginRestartUnchanged: true, pluginEventsVerified: true, pluginDiagnosticsExported: true, runAExit: 0, restartLauncherExit: 0,
       restartMainEvents: [...orderlyMain(), testRoot()], restartServiceEvents: orderlyService()}}, path, replacement);
 }
 function scaffoldReceipt(path: (string | number)[] = [], replacement?: Json): string {
@@ -115,6 +115,7 @@ function pluginCases() {
     invalidPlugin('unrecognized file changed', ['plugin', 'pluginUnrecognizedUnchanged'], false),
     invalidPlugin('exclusion left the plugin', ['plugin', 'pluginExclusionRemoved'], false),
     invalidPlugin('restart wrote', ['plugin', 'pluginRestartUnchanged'], false),
+    invalidPlugin('diagnostics export not verified', ['plugin', 'pluginDiagnosticsExported']),
     invalidPlugin('card showed a path', ['plugin', 'pluginNoPathShown'], 'true'),
     invalidPlugin('run A exited nonzero', ['plugin', 'runAExit'], 1),
     invalidPlugin('run B exited nonzero', ['plugin', 'restartLauncherExit'], 1),
