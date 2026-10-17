@@ -76,6 +76,17 @@ Main keeps the loss totals of earlier service processes in its loss base, but `{
 
 **Until then:** the loss lines are hidden while the recording status is `unknown`. No `AppState` contract change is authorized by this entry.
 
+## TD-006: Trip average consumption
+
+Recorded October 17, 2026 by the coordinator with ET-016 PR-5 (decision J21). **This entry is a coordinator decision under the owner's standing delegation of October 15, 2026, not an individually owner-approved deferral** (see the ET-016 authorization in [concept.md](../concept.md#et-016-authorization--october-16-2026)). The owner may revise it.
+
+The SDK's average consumption is the truck computer's running mean, not a value of one trip, and the project has no defined calculation of a trip's own average consumption (for example fuel used over observed distance, with refuels, connection holes and reading gaps accounted for). The journal therefore shows and the [trip export](journal-export.md) writes the trip's fuel used and observed distance as separate stored values, and the SDK mean only per one-second sample, marked as the SDK mean ([journal display rules](journal.md#the-journal-tab-j12j14)).
+
+**Future work:**
+- Define a trip average consumption (its formula, which intervals it excludes, and when it is unavailable) and show it in the journal; adding it to the export bumps `formatVersion`.
+
+**Until then:** no trip average fuel consumption is shown or exported. No schema, export format or display change is authorized by this entry.
+
 ## TD-007: Truck and trailer identity of late-attach trips
 
 Recorded October 17, 2026 by the coordinator with ET-016b PR-7 (decision J22). **This entry is a coordinator decision under the owner's standing delegation of October 15, 2026, not an individually owner-approved deferral** (see the ET-016 authorization in [concept.md](../concept.md#et-016-authorization--october-16-2026)). The owner may revise it.
@@ -86,3 +97,14 @@ A [late-attach trip](trips.md#late-attach-trips-j9) opens from a protocol v1 che
 - Store the checkpoint's truck and trailer configuration with the late-attach trip (checkpoint configuration rows, as for the job), or reference the session's latest committed configurations when they equal the checkpoint's.
 
 **Until then:** a late-attach trip may have no truck or trailer identity. No schema or storage API change is authorized by this entry.
+
+## TD-008: Full trailer configuration list in the trip export
+
+Recorded October 17, 2026 by the coordinator after the ET-016 PR-5 review (round 1). **This entry is a coordinator decision under the owner's standing delegation of October 15, 2026, not an individually owner-approved deferral** (see the ET-016 authorization in [concept.md](../concept.md#et-016-authorization--october-16-2026)). The owner may revise it.
+
+A trip keeps every trailer configuration it was given, but the journal detail carries only the latest 10 in commit order with the trip's `total` ([journal reads](journal.md#read-commands-and-bounds-j5)), and there is no paged trailer read. Trip export format version 1 writes that same `trailers` section ([trip export](journal-export.md#format-version-1)). A trip with more than 10 trailer configurations therefore exports only the latest 10 and `total`; an earlier configuration appears only as a `trailer.configured` event when that event lies inside the trip's J7 timeline window, and otherwise nowhere in the export.
+
+**Future work:**
+- A paged trailer read in the storage worker and the journal routing, and an export that writes the trip's complete trailer list, which bumps `formatVersion`.
+
+**Until then:** the export holds at most 10 trailer configurations, with the total. No storage read, IPC or format change is authorized by this entry.
