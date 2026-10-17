@@ -464,21 +464,39 @@ void redelivery() {
 }
 
 #ifdef ETS2TELEMETRY_TRANSPORT_TEST_HOOKS
-// The 300 s disconnect retention, driven by the worker's clock offset; gap records never age.
+// Counts the worker's ticks ("v1-tick", at the start of Server::tick()). Retention expires only in a tick, and a durable
+// client cancels the disconnect window before its connection's first tick, so expiry must be evaluated by a tick of the
+// listening worker before the client connects. offset() sets the clock offset and waits until a tick that began after it
+// has completed: the second tick counted after the change, since ticks run one at a time on the worker.
+struct TickCounter {
+  static std::atomic<std::uint64_t> ticks;
+  TickCounter() { transport::set_transport_test_hook(hook); }
+  ~TickCounter() { transport::set_transport_test_hook(nullptr); }
+  static DWORD hook(const char* at, HANDLE, HANDLE, DWORD result) { if (std::string(at) == "v1-tick") ticks.fetch_add(1); return result; }
+  static bool offset(std::int64_t ns) {
+    v1::set_clock_offset_for_test(ns); const auto base = ticks.load();
+    return until([&] { return ticks.load() >= base + 2; });
+  }
+};
+std::atomic<std::uint64_t> TickCounter::ticks{0};
+
+// The 300 s disconnect retention, driven by the worker's clock offset; gap records never age. Each offset change waits for
+// a worker tick that read it (TickCounter), never for wall time.
 void retention() {
+  TickCounter counter;
   Fixture f; f.start(); auto first = f.client(true); first->handshake();
   cancelled(f.host, 4); f.host.frame(); require(first->read_until([&] { return first->covered() >= 4; }), "four events");
   std::uint64_t first_ns = UINT64_MAX, last_ns = 0;
   for (const auto* m : coverage_messages(*first)) { const auto t = *m->event->occurred.monotonic_ns.value; first_ns = (std::min)(first_ns, t); last_ns = (std::max)(last_ns, t); }
   first.reset(); require(f.listening(), "relisten");
   // Just inside the window nothing expires.
-  v1::set_clock_offset_for_test(299LL * 1000 * 1000 * 1000); Sleep(50);
+  require(TickCounter::offset(299LL * 1000 * 1000 * 1000), "a worker tick at 299 s");
   auto inside = f.client(true); inside->handshake();
   require(inside->messages[1].state->status.delivery.retained_events == 4 && inside->messages[1].state->status.event_loss.retention_expired == 0, "inside the window: retained");
   require(inside->read_until([&] { return inside->covered() >= 4; }) && coverage_messages(*inside)[0]->event->redelivered, "redelivered after reconnection inside the window");
   inside.reset(); require(f.listening(), "relisten");
   // The reconnection cancelled the window; a new one starts at this disconnect. Past it, every retained event expires.
-  v1::set_clock_offset_for_test(299LL * 1000 * 1000 * 1000 + 301LL * 1000 * 1000 * 1000); Sleep(100);
+  require(TickCounter::offset(299LL * 1000 * 1000 * 1000 + 301LL * 1000 * 1000 * 1000), "a worker tick past the new window");
   auto after = f.client(true); after->handshake();
   const auto& status = after->messages[1].state->status;
   require(status.delivery.retained_events == 1 && status.delivery.retained_bytes == 1024 && status.event_loss.retention_expired == 4 && status.delivery.acked_through_event_seq == 0 && status.delivery.next_event_seq == 5, "expiry: one gap record of 1,024 bytes");
@@ -488,7 +506,7 @@ void retention() {
   require(*gap.first_lost_monotonic_ns.value == first_ns && *gap.last_lost_monotonic_ns.value == last_ns, "S1: lost times of the first and last expired event");
   // Gap records never age: another window passes without a connection, and the gap record stays.
   after.reset(); require(f.listening(), "relisten");
-  v1::set_clock_offset_for_test(299LL * 1000 * 1000 * 1000 + 700LL * 1000 * 1000 * 1000); Sleep(100);
+  require(TickCounter::offset(299LL * 1000 * 1000 * 1000 + 700LL * 1000 * 1000 * 1000), "a worker tick another window later");
   auto last = f.client(true); last->handshake();
   require(last->messages[1].state->status.delivery.retained_events == 1 && last->messages[1].state->status.event_loss.retention_expired == 4, "the gap record never ages");
   // The capture clamp is exercised next, on a fresh session (one Fixture at a time: the fake host is process-global).

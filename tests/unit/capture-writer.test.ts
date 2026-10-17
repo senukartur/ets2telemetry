@@ -1,5 +1,5 @@
 import {createHash} from 'node:crypto';
-import {readdir, readFile} from 'node:fs/promises';
+import {open, readdir, readFile} from 'node:fs/promises';
 import path from 'node:path';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import {CaptureWriter, CAPTURE_LIMITS, type CaptureContext, type CaptureManifest} from '../../apps/desktop/src/capture-writer';
@@ -19,6 +19,18 @@ function writer(options: Partial<ConstructorParameters<typeof CaptureWriter>[0]>
 }
 const readManifest = async (w: CaptureWriter) => JSON.parse(await readFile(path.join(w.directory, 'manifest.json'), 'utf8')) as CaptureManifest;
 function deferred() { let resolve!: () => void; const promise = new Promise<void>(r => { resolve = r; }); return {promise, resolve}; }
+/** The real packets file, with `written` resolving once its first write has completed. */
+function observedFile() {
+  const written = deferred();
+  const openFile = async (filename: string) => {
+    const handle = await open(filename, 'wx');
+    return {write: async (buffer: Buffer, offset?: number, length?: number) => { const result = await handle.write(buffer, offset, length); written.resolve(); return result; },
+      sync: () => handle.sync(), close: () => handle.close()} as never;
+  };
+  return {open: openFile, written: written.promise};
+}
+/** Runs every continuation already queued (promise jobs), so the writer has handled a completed write. */
+const settle = () => new Promise(resolve => setImmediate(resolve));
 
 describe('CAP0 bounded writer', () => {
   it('writes validated packets and a complete manifest with hashes and distinct clock domains', async () => {
@@ -45,8 +57,8 @@ describe('CAP0 bounded writer', () => {
   it('contains a throwing credit grant, immediate or after a completed write, as an internal-error close', async () => {
     const unhandled: unknown[] = [], listener = (reason: unknown) => unhandled.push(reason); process.on('unhandledRejection', listener);
     try {
-      const immediate = writer(); await immediate.instance.start(); immediate.instance.accept(header());
-      await new Promise(resolve => setTimeout(resolve, 5)); // Header written: room for another line.
+      const file = observedFile(), immediate = writer({open: file.open}); await immediate.instance.start(); immediate.instance.accept(header());
+      await file.written; await settle(); // Header written: room for another line.
       expect(() => immediate.instance.whenRoom(() => { throw new Error('stdin closed'); })).not.toThrow();
       expect(await immediate.instance.close('disconnect')).toMatchObject({stop: {reason: 'internal-error', detail: 'credit grant failed: stdin closed'}});
       await resources.dispose(); resources = await temporaryResources();
@@ -54,7 +66,7 @@ describe('CAP0 bounded writer', () => {
       const delayed = writer({limits: {pendingBytes: 4096}, open: () => Promise.resolve({write: async (buffer: Buffer, offset = 0, length = buffer.length - offset) => { await gate.promise; return {bytesWritten: length, buffer}; }, sync: async () => {}, close: async () => {}} as never)});
       await delayed.instance.start(); delayed.instance.accept(header());
       delayed.instance.whenRoom(() => { throw new Error('broker gone'); }); expect(delayed.instance.closed).toBe(false);
-      gate.resolve(); await new Promise(resolve => setTimeout(resolve, 20));
+      gate.resolve(); await settle(); // The completed write released the withheld grant, which threw and closed the capture.
       expect(await delayed.instance.close('disconnect')).toMatchObject({stop: {reason: 'internal-error', detail: 'credit grant failed: broker gone'}, flowControl: {creditsWithheld: 1, withheldAtClose: false}});
       expect(unhandled).toEqual([]);
     } finally { process.off('unhandledRejection', listener); }
@@ -119,7 +131,7 @@ describe('CAP0 writer close robustness and fidelity', () => {
       const {instance, closed} = writer({writeManifest: () => Promise.reject(new Error('manifest disk full'))});
       await instance.start(); instance.accept(header()); instance.accept(end(1, 0));
       const manifest = await instance.close('service-stop');
-      await new Promise(resolve => setTimeout(resolve, 20));
+      await settle(); // An unhandled rejection would have been reported by now.
       expect(manifest).toMatchObject({stop: {reason: 'source-end'}, manifestWriteError: 'manifest disk full'}); expect(closed).toEqual([manifest]);
       expect((await readdir(instance.directory)).sort()).toEqual(['packets.ndjson']); expect(unhandled).toEqual([]);
     } finally { process.off('unhandledRejection', listener); }

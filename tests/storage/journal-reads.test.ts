@@ -447,19 +447,64 @@ describe('the latest trailer configurations of a trip across plugin sessions (re
   });
 });
 
+/**
+ * The 5,000-amount trip is seeded (ET-019t): 121 fines are committed through the core, eventSeqs 2 to 122, and the fine
+ * at eventSeq 122 is copied to eventSeqs 123 to 5,001, so the trip has exactly JOURNAL_MONEY_AMOUNTS fines.
+ */
+const SEEDED_FINE = {coreFines: 121, template: 122, lastEventSeq: 5_001} as const;
+const seqKey = (eventSeq: number) => String(eventSeq).padStart(20, '0');
+/**
+ * Copies the template fine's event, money and attribution rows to every later eventSeq up to SEEDED_FINE.lastEventSeq and
+ * advances the session's committed coverage, in one transaction on the closed database file with foreign keys enforced.
+ * Each copy is the row the core wrote for the template with only its eventSeq changed. The file must then pass
+ * integrity_check and foreign_key_check before the core opens it again.
+ */
+function seedFineCopies(file: string): void {
+  const db = new Database(file, {fileMustExist: true});
+  try {
+    db.pragma('foreign_keys = ON');
+    const columns = (table: string, key: string) => (db.prepare(`PRAGMA table_info(${table})`).all() as {name: string}[]).map(c => c.name).filter(c => c !== key);
+    db.transaction(() => {
+      const template = db.prepare("SELECT id, plugin_session_id AS session, type FROM events WHERE event_seq = ?").get(seqKey(SEEDED_FINE.template)) as {id: number; session: number; type: string};
+      expect(template.type).toBe('player.fined');
+      const events = columns('events', 'id');
+      const copied = db.prepare(`WITH RECURSIVE seq(n) AS (SELECT ? UNION ALL SELECT n + 1 FROM seq WHERE n < ?)
+        INSERT INTO events (${events.join(', ')}) SELECT ${events.map(c => c === 'event_seq' ? "printf('%020d', seq.n)" : `t.${c}`).join(', ')} FROM seq, events t WHERE t.id = ?`)
+        .run(SEEDED_FINE.template + 1, SEEDED_FINE.lastEventSeq, template.id);
+      expect(copied.changes).toBe(SEEDED_FINE.lastEventSeq - SEEDED_FINE.template);
+      for (const table of ['event_amounts', 'event_attributions']) {
+        const rest = columns(table, 'event_ref');
+        const rows = db.prepare(`INSERT INTO ${table} (event_ref, ${rest.join(', ')}) SELECT e.id, ${rest.map(c => `t.${c}`).join(', ')}
+          FROM events e, ${table} t WHERE t.event_ref = ? AND e.plugin_session_id = ? AND e.event_seq > ?`).run(template.id, template.session, seqKey(SEEDED_FINE.template));
+        expect(rows.changes).toBe(copied.changes);
+      }
+      db.prepare('UPDATE plugin_sessions SET committed_through_event_seq = ? WHERE id = ?').run(seqKey(SEEDED_FINE.lastEventSeq), template.session);
+    })();
+    expect(db.pragma('integrity_check', {simple: true})).toBe('ok');
+    expect(db.pragma('foreign_key_check')).toEqual([]);
+  } finally { db.close(); }
+}
+
 describe('a trip with more than 5,000 money amounts and more than 100 intervals (J5; REG-014)', () => {
   it('pages its events and intervals with cursors and marks its money totals incomplete beyond 5,000 amounts', async () => {
     const big = await workspace();
     try {
-      const st = await big.open(), s = new Script(ETS2_A), trip = '7b000000-0000-4000-8000-000000000001';
+      let st = await big.open();
+      const s = new Script(ETS2_A), trip = '7b000000-0000-4000-8000-000000000001';
       ok(st.upsertSession({message: s.welcome()}));
       const commit = (record: Parameters<Script['event']>[0], effects: TripEffect[]) => expect(ok(st.commitEvent({message: s.event(record), effects})).status).toBe('committed');
       commit(r.jobConfigured(), [{kind: 'trip.open', tripUuid: trip, game: 'ets2', gameMode: {mode: 'unknown', method: 'none', confidence: 'none'}, jobConfiguration: 'this-event',
         recordingCompleteness: 'unknown', startedUtcMs: BASE_UTC}]);
-      for (let i = 1; i <= 5_000; i++) {
+      // Through the real core: the first 121 fines (eventSeqs 2 to 122), the first 120 with an interval each.
+      for (let i = 1; i <= SEEDED_FINE.coreFines; i++) {
         commit(r.fined('2'), [{kind: 'event.attribute', tripUuid: trip, attribution: 'trip'},
           ...(i <= 120 ? [{kind: 'completeness.add', interval: {tripUuid: trip, kind: 'sample-loss', detail: {cause: 'reading-hole', holes: i}}} as TripEffect] : [])]);
       }
+      // The other 4,879 fines are copies of the core-written fine at eventSeq 122 (seedFineCopies), so the case does not
+      // pay 5,000 synchronous commits; the core then commits the next item at eventSeq 5,002 as usual.
+      ok(st.close());
+      seedFineCopies(big.database);
+      st = await big.open(); s.next = BigInt(SEEDED_FINE.lastEventSeq) + 1n;
       expect(ok(st.journalTrip(trip)).money).toEqual({incomplete: false, unavailable: [], totals: [{category: 'fine', sdkType: 's64', currency: EUR, raw: '10000', count: 5_000}]});
       commit(r.fined('3'), [{kind: 'event.attribute', tripUuid: trip, attribution: 'trip'}]);
       const detail = ok(st.journalTrip(trip));

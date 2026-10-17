@@ -1,6 +1,6 @@
 # Windows x64 scaffold
 
-The accepted scaffold now includes the v0 SDK adapter, native snapshot transport, telemetry service and game-window metadata. ET-008 adds a candidate [minimal overlay](minimal-overlay.md) and [closed-game manual plugin setup](manual-plugin-setup.md). Use only the maintained SDK DLL identified there; never install the historical placeholder DLL. Production history and durable event delivery remain unimplemented. Required real-game, display and performance acceptance remains pending. [Windows CI and bounded worker smokes](ci.md) provide controlled evidence, not game compatibility.
+The accepted scaffold now includes the v0 SDK adapter, native snapshot transport, telemetry service and game-window metadata. ET-008 adds a candidate [minimal overlay](minimal-overlay.md) and [closed-game manual plugin setup](manual-plugin-setup.md). Use only the maintained SDK DLL identified there. The historical ET-001 placeholder DLL is no longer built (ET-019t, October 17, 2026). Production history and durable event delivery remain unimplemented. Required real-game, display and performance acceptance remains pending. [Windows CI and bounded worker smokes](ci.md) provide controlled evidence, not game compatibility.
 
 ## Toolchain
 
@@ -147,7 +147,7 @@ npm run build
 npm run test:cap0-chain
 ```
 
-It is not part of `npm test` because CI runs Vitest before the native build; Windows CI runs it as a separate bounded step after the native build. It is controlled synthetic evidence, not a game session.
+It is not part of `npm test` because CI runs Vitest without a native build (since ET-019t in the separate `Windows x64 tests` job); Windows CI runs it as a separate bounded step after the native build in the scaffold job. It is controlled synthetic evidence, not a game session.
 
 The protocol v1 chain (ET-006b) uses the same fake-SDK host with a v1 directory, the test plugin DLL and the native broker in its `--protocol v1` mode, again in isolated temporary directories and after the same three build commands:
 

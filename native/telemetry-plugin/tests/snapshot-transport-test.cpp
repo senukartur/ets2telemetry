@@ -14,6 +14,11 @@
 using namespace ets2telemetry;
 using namespace ets2telemetry::transport;
 namespace {
+// Product bounds that these cases assert on wall time, named so that a change to them is explicit. The SDK init waits a
+// fixed 1 s for the transport: an init that waited returns no earlier than the floor, and the ceiling is a hang guard.
+constexpr ULONGLONG startup_wait_floor_ms = 900, startup_wait_hang_guard_ms = 2500;
+// Frame callbacks never wait on a client that does not read: 2,500 of them finish within this bound.
+constexpr ULONGLONG unread_client_callbacks_bound_ms = 2000;
 unsigned assertions = 0;
 void require(bool condition, const char* message) { ++assertions; if (!condition) throw std::runtime_error(message); }
 bool until(const std::function<bool()>& predicate, DWORD ms = 2000) {
@@ -252,7 +257,7 @@ const std::string late_started="ETS2Telemetry: transport started after the start
 void hold_past_wait(HookState& hooks,Fixture& f) {
   require(f.server.start(f.directory),"held worker start"); require(WaitForSingleObject(hooks.ready.get(),5000)==WAIT_OBJECT_0,"startup held before endpoint");
   const auto started=GetTickCount64(); require(f.server.await_startup()==StartupFailure::timeout,"held startup exceeds the fixed wait");
-  const auto waited=GetTickCount64()-started; std::cout<<"awaitMs="<<waited<<'\n'; require(waited>=900&&waited<2500,"wait bounded by the 1 s budget");
+  const auto waited=GetTickCount64()-started; std::cout<<"awaitMs="<<waited<<'\n'; require(waited>=startup_wait_floor_ms&&waited<startup_wait_hang_guard_ms,"wait bounded by the 1 s budget");
   f.host.frame(1); require(f.host.logs.empty(),"no result logged while startup is pending");
 }
 void startup_late() {
@@ -306,7 +311,7 @@ void startup_late() {
     require(f.server.start(f.directory),"raced worker start");
     const auto started=GetTickCount64(); const auto result=f.server.await_startup(); const auto waited=GetTickCount64()-started;
     std::cout<<"raceAwaitMs="<<waited<<" collide="<<collide<<'\n';
-    require(result==(collide?StartupFailure::endpoint_creation:StartupFailure::none)&&waited>=900&&hooks.synchronized.load(),"completion after the wait but before the exchange returns the actual result");
+    require(result==(collide?StartupFailure::endpoint_creation:StartupFailure::none)&&waited>=startup_wait_floor_ms&&hooks.synchronized.load(),"completion after the wait but before the exchange returns the actual result");
     for(int i=0;i<3;++i) f.host.frame(1);
     f.server.stop(); f.adapter->shutdown(); require(f.host.logs.empty(),"a caller-owned result leaves no deferred log");
   }
@@ -487,7 +492,7 @@ void coalescing_and_stalled_shutdown() {
   Fixture f; f.start(); auto h=f.connect(); send(h.get(),framed(hello_payload)); Receiver receiver; receiver.read(h.get(),2);
   f.host.event(SCS_TELEMETRY_EVENT_started); const auto started=GetTickCount64();
   for(unsigned i=0;i<2500;++i) { f.host.frame(static_cast<float>(i%100)); if(i%100==0) Sleep(1); }
-  require(GetTickCount64()-started<2000,"callbacks do not wait on unread client");
+  require(GetTickCount64()-started<unread_client_callbacks_bound_ms,"callbacks do not wait on unread client");
   Sleep(100); receiver.read(h.get(),4); v0::Consumer consumer(true); for(const auto& message:receiver.messages) consumer.accept(message);
   require(receiver.messages.back().continuity.coalesced_snapshots>0,"coalescing explicitly counted");
   // Keep publishing without draining; bounded kernel buffer eventually makes a write pending.
@@ -655,10 +660,10 @@ void dll_late_startup(const char* path) {
     std::cout<<"late scenario="<<scenario<<" result="<<result<<" initMs="<<elapsed<<std::endl;
     const auto failed_reason=std::string(startup_failure_message(StartupFailure::endpoint_creation));
     if(scenario==3) {
-      require(result==SCS_RESULT_generic_error&&elapsed>=900&&elapsed<2500,"raced failure stays the caller's: generic error after the wait");
+      require(result==SCS_RESULT_generic_error&&elapsed>=startup_wait_floor_ms&&elapsed<startup_wait_hang_guard_ms,"raced failure stays the caller's: generic error after the wait");
       require(f.host.logs.size()==1&&f.host.log_types[0]==SCS_LOG_TYPE_error&&f.host.logs[0]==failed_reason,"raced failure logged once by the direct caller");
     } else {
-      require(result==SCS_RESULT_ok&&WaitForSingleObject(hooks.ready.get(),5000)==WAIT_OBJECT_0&&elapsed>=900&&elapsed<2500,"held startup returns ok after the fixed wait");
+      require(result==SCS_RESULT_ok&&WaitForSingleObject(hooks.ready.get(),5000)==WAIT_OBJECT_0&&elapsed>=startup_wait_floor_ms&&elapsed<startup_wait_hang_guard_ms,"held startup returns ok after the fixed wait");
       require(f.host.logs.size()==1&&f.host.log_types[0]==SCS_LOG_TYPE_warning&&f.host.logs[0]==std::string(startup_pending_message()),"pending warning logged once on the direct caller");
     }
     if(scenario==1) collide();

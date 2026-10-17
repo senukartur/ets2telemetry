@@ -11,6 +11,8 @@ import {receiptBatchTimeout, validateRuntimeReceipts, type RuntimeReceiptCase} f
 const sourceModule = pathToFileURL(path.resolve('scripts/ci/live-smoke-source.mjs')).href;
 const observationModule = pathToFileURL(path.resolve('scripts/ci/overlay-observation.mjs')).href;
 const current = {source: 'ETS2', origin: 'synthetic', status: 'connected', freshness: 'current', speed: '90.0', fuel: '73.0', speedUnit: 'km/h', fuelUnit: 'L'};
+/** Hang guard of a wait for the source's 50 ms snapshot timer, inside the case's 6 s timeout; never a cadence claim. */
+const TICK_HANG_GUARD_MS = 1500;
 const phases = ['initial','changed','missing','zero','restored','silent-open-stale','resumed','overlay-reload',
   'overlay-credit-recovery','dashboard-reload','before-dashboard-stall','during-dashboard-stall','dashboard-credit-recovery','disconnected'];
 
@@ -39,9 +41,12 @@ it('holds an actual isolated synthetic pipe open, resumes fresh/missing/zero rea
     expect(initial.data.state.speed).toEqual({available: true, value: 25, unit: 'm/s'});
     expect(initial.data.state.fuel).toEqual({available: true, value: 73, unit: 'L'});
     const identity = source.statistics().identity;
-    source.hold(); await new Promise(resolve => setTimeout(resolve, 75));
-    const frames = source.statistics().frames;
-    await new Promise(resolve => setTimeout(resolve, 150));
+    // Held: wait for the source's own snapshot timer, not wall time. After the first tick that saw the hold no write is in
+    // flight, so the frame count is final; three more ticks must write nothing.
+    const atHold = source.statistics().ticks; source.hold();
+    await vi.waitFor(() => expect(source.statistics().ticks).toBeGreaterThan(atHold), {timeout: TICK_HANG_GUARD_MS, interval: 10});
+    const {frames, ticks} = source.statistics();
+    await vi.waitFor(() => expect(source.statistics().ticks).toBeGreaterThanOrEqual(ticks + 3), {timeout: TICK_HANG_GUARD_MS, interval: 10});
     expect(source.statistics()).toMatchObject({connections: 1, activeClients: 1, held: true, frames, identity});
     const index = messages.length; source.setUnavailable(); source.resume();
     await vi.waitFor(() => expect(messages.slice(index).some(message => message.data?.state?.speed.available === false && message.data?.state?.fuel.available === false)).toBe(true), {timeout: 1500, interval: 20});

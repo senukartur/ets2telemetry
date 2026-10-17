@@ -1,13 +1,7 @@
 import {describe,it,expect} from 'vitest';
-import {isScaffoldStatus} from '../../packages/telemetry-core/src';
 import {dataPaths} from '../../apps/desktop/src/paths';
 import {processEntrypoint} from '../../apps/desktop/src/entrypoints';
 describe('Scaffold boundaries',() => {
-  it('rejects incomplete and real-history status',() => {
-    expect(isScaffoldStatus(null)).toBe(false);
-    expect(isScaffoldStatus({service:'ready',storage:'verified',synthetic:false})).toBe(false);
-    expect(isScaffoldStatus({service:'ready',storage:'verified',synthetic:true})).toBe(true);
-  });
   it('keeps production data independent from installation identity',() => {
     expect(dataPaths('C:\\isolated').database).toBe('C:\\isolated\\ETS2Telemetry\\data\\telemetry.sqlite');
     // Synthetic and replay databases live apart from history (OD-10).

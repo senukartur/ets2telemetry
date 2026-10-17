@@ -31,6 +31,8 @@ afterEach(async () => { await terminateWorkers(); await ws.dispose(); });
 const HANG_GUARD_MS = 30_000;
 /** A flush delay far beyond any run, so no sample write joins the command lane during a case (ET-015b H8). */
 const NO_FLUSH_TIMER_MS = 600_000;
+/** How long the worker runs with a commit held while a queued read must stay unanswered; it proves an absence, never a speed. */
+const HELD_OBSERVATION_MS = 50;
 const scenario = (id: string) => readFixtureFile(scenarioPath(id)) as Json & {seed: string; steps: Json[]};
 const target = (name: string) => path.join(ws.directory, 'ETS2Telemetry', 'synthetic', `${name}.sqlite`);
 const historyFile = () => path.join(ws.directory, 'ETS2Telemetry', 'data', 'telemetry.sqlite');
@@ -94,7 +96,7 @@ describe('ET-016 journal queries through the production recording wiring', () =>
       const first = s.read(TRIPS);
       await expect(s.journal.query({kind: 'trip', tripUuid: '7a000000-0000-4000-8000-000000000001'})).resolves.toEqual({ok: false, code: 'BUSY'});
       // Let the worker run for a while with the commit held: the read stays unanswered.
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await new Promise(resolve => setTimeout(resolve, HELD_OBSERVATION_MS));
       expect(timeline).not.toContain('journal answered');
       timeline.push('release'); worker.control!.postMessage({type: 'release'});
       const answer = await guarded(first, 'the journal answer', HANG_GUARD_MS);

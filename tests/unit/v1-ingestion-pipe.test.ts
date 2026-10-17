@@ -87,7 +87,9 @@ async function runScenario(id: string, scale: number) {
   const sessions = replay.connections.filter(c => !c.helloFault), policies = sessions.map(c => c.policy!);
   const ledger = new CommitLedger(), source = scenarioSource(replay.scenario);
   if (replay.scenario.source.startEventSeq > 1n) ledger.seed(source.pluginSessionId, replay.scenario.source.startEventSeq - 1n);
-  const server = await serveV1Reactive(input, {scale});
+  // A connection scripted to acknowledge every commit is awaited until it has acknowledged everything or left, so a slow
+  // host cannot make the server pace on past an ACK; the quiesce bound applies only to withholding or dropping clients.
+  const server = await serveV1Reactive(input, {scale, awaitScriptedAcks: true});
   const states: V1SourceState[] = [];
   let ingestion: V1Ingestion | undefined, finished!: () => void;
   const allClosed = new Promise<void>(r => { finished = r; });

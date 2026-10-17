@@ -336,11 +336,24 @@ function controlledTimers() {
     clearTimeout: (handle: unknown) => {(handle as ControlledTimer).cleared = true;}
   }};
 }
-/** Real file operations whose `lstat` calls wait until `release()`. */
+/**
+ * Real file operations whose `lstat` calls wait until `release()`. `settled` resolves with the bytes read once the
+ * settings file opened for reading has been closed, so a test can wait for the read itself instead of sleeping.
+ */
 function delayedRead(overrides: Partial<SettingsFileSystem> = {}) {
-  let release!: () => void;
+  let release!: () => void, settle!: (bytesRead: number) => void;
   const gate = new Promise<void>(resolve => {release = resolve;});
-  return {release, fs: wrapped({lstat: async target => {await gate; return fs.lstat(target);}, ...overrides})};
+  const settled = new Promise<number>(resolve => {settle = resolve;});
+  const base = wrapped(overrides);
+  const open: SettingsFileSystem['open'] = async (target, flags) => {
+    const handle = await base.open(target, flags);
+    if (flags !== 'r') return handle;
+    let bytesRead = 0;
+    return {...handle,
+      read: async (...args: Parameters<typeof handle.read>) => {const result = await handle.read(...args); bytesRead += result.bytesRead; return result;},
+      close: async () => {await handle.close(); settle(bytesRead);}};
+  };
+  return {release, settled, fs: wrapped({lstat: async target => {await gate; return fs.lstat(target);}, ...overrides, open})};
 }
 /** Starts a load over a delayed read and lets its 1000 ms budget expire. */
 async function loadPastBudget(fileSystem: SettingsFileSystem) {
@@ -449,7 +462,9 @@ it('declares a read hung at the 30 s limit, stays read-only and ignores its late
   // The read finishing after the limit changes nothing and is not reported again.
   const seen = events.length;
   gated.release();
-  await new Promise(resolve => setTimeout(resolve, 50));
+  // The late read completes (the whole file is read and closed); anything it would change happens before setImmediate.
+  expect(await gated.settled).toBe(Buffer.byteLength(VALID_METRIC));
+  await new Promise(resolve => setImmediate(resolve));
   expect(changed).toHaveBeenCalledOnce();
   expect(settings.view()).toMatchObject({state: 'unreadable', writable: false, units: {ets2: 'metric', ats: 'us-customary'}});
   expect(events).toHaveLength(seen);
@@ -472,7 +487,12 @@ it('lets a save requested before the load returned wait at most until the read l
   expect(outcome).toBeInstanceOf(SettingsError); expect((outcome as SettingsError).code).toBe('SETTINGS_WRITE_FAILED');
   expect(settings.idle()).toBeUndefined();
   gated.release();
-  await new Promise(resolve => setTimeout(resolve, 50));
+  // The late read completes; it neither applies nor triggers the refused save. Checked in memory first (no save work
+  // pending, the read-limit state kept), so a late read that applied or queued a save fails here deterministically.
+  expect(await gated.settled).toBe(Buffer.byteLength(VALID_METRIC));
+  await new Promise(resolve => setImmediate(resolve));
+  expect(settings.idle()).toBeUndefined();
+  expect(settings.view()).toMatchObject({state: 'unreadable', writable: false});
   expect((await read()).toString('utf8')).toBe(VALID_METRIC); expect(await list()).toEqual(['settings.json']);
 });
 

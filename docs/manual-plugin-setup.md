@@ -1,6 +1,6 @@
 # Manual prototype plugin setup
 
-This is a developer procedure for the future real-game gate, not an ET-017 installer/wizard or a compatibility claim. ET-003 supplies the real SDK adapter as `ets2telemetry-plugin.dll`. Never install `ets2telemetry-placeholder.dll`, any test DLL or native console fixture. Historical ET-001 scaffold instructions refer to that placeholder; the commands below identify the maintained SDK artifact. SDK 1.15 is the archive version, not a game or telemetry API version; the pinned headers/license are under `native/telemetry-plugin/vendor/scs-sdk-1.15`.
+This is a developer procedure for the future real-game gate, not an ET-017 installer/wizard or a compatibility claim. ET-003 supplies the real SDK adapter as `ets2telemetry-plugin.dll`. Never install a test DLL or native console fixture. Historical ET-001 scaffold instructions refer to a placeholder DLL that is no longer built (ET-019t, October 17, 2026); the commands below identify the maintained SDK artifact. SDK 1.15 is the archive version, not a game or telemetry API version; the pinned headers/license are under `native/telemetry-plugin/vendor/scs-sdk-1.15`.
 
 ## Build and check
 
