@@ -101,6 +101,14 @@ describe('a failed export leaves no partial file and the old target unchanged', 
     await unchanged();
     expect(events(f.log)).toEqual([['DIAGNOSTICS_EXPORT_FAILED', {outcome: 'failed', code: 'BUNDLE_FAILED'}]]);
   });
+  // PR-6 review: a rejected Save dialog is its own failure, not a bundle failure; nothing is built or written.
+  it('when the Save dialog rejects, before the bundle is built', async () => {
+    const f = exporter({showSaveDialog: () => Promise.reject(new Error('dialog failed'))});
+    await expect(f.instance.export()).resolves.toEqual({outcome: 'failed', code: 'DIALOG_FAILED'});
+    expect(f.build).not.toHaveBeenCalled();
+    await unchanged();
+    expect(events(f.log)).toEqual([['DIAGNOSTICS_EXPORT_FAILED', {outcome: 'failed', code: 'DIALOG_FAILED'}]]);
+  });
   it('never removes a file it did not create', async () => {
     await writeFile(path.join(out, 'diagnostics.json.0badc0de.partial'), 'someone else');
     const f = exporter();

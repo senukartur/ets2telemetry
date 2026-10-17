@@ -201,8 +201,11 @@ export type PluginShowFileResult = {outcome: 'shown'} | {outcome: 'refused'; cod
  * file lies in the application's data folder or is not a usable local or UNC file path.
  */
 export type DiagnosticsExportRefusal = 'EXPORT_IN_PROGRESS' | 'EXPORT_INTERRUPTED' | 'EXPORT_TARGET_REFUSED';
-/** Why a diagnostic bundle export failed: the bundle could not be built, or the file could not be written. */
-export type DiagnosticsExportFailure = 'BUNDLE_FAILED' | 'EXPORT_WRITE_FAILED';
+/**
+ * Why a diagnostic bundle export failed: the Save dialog could not be opened, the bundle could not be built, or the file
+ * could not be written.
+ */
+export type DiagnosticsExportFailure = 'DIALOG_FAILED' | 'BUNDLE_FAILED' | 'EXPORT_WRITE_FAILED';
 /** "Export diagnostics…": saved, cancelled (nothing written), refused or failed with a fixed code. Never a path. */
 export type DiagnosticsExportResult = {outcome: 'saved'} | {outcome: 'cancelled'} | {outcome: 'refused'; code: DiagnosticsExportRefusal}
   | {outcome: 'failed'; code: DiagnosticsExportFailure};

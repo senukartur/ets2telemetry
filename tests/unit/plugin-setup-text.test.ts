@@ -155,6 +155,8 @@ describe('the connection diagnosis and the diagnostics export', () => {
     PLUGIN_UNRECOGNIZED: 'A file that this application did not install is in place of the plugin. Move it away, then press Retry.',
     PLUGIN_OUTDATED: 'An older plugin is installed. It is updated once the game is closed.',
     PLUGIN_PENDING_GAME_CLOSE: 'The plugin is installed once the game, TruckersMP or the program using the file is closed. Then start the game again.',
+    PLUGIN_BUNDLE_UNAVAILABLE: 'The bundled plugin is missing or damaged. Reinstall ETS2Telemetry.',
+    PLUGIN_NOT_CHECKED: 'The plugin could not be checked in a game folder; see the folder line below.',
     PLUGIN_MISSING: 'The plugin is not installed in a game folder. Turn on "Manage the plugin for this game" or press Retry.',
     TRANSPORT_FAILED: 'The game\'s plugin could not be connected, or it is incompatible. Close the game, press Retry, then start the game again.',
     NO_RUNNING_SOURCE: 'The plugin is in place. Start the game to connect.'
@@ -166,6 +168,17 @@ describe('the connection diagnosis and the diagnostics export', () => {
     expect(connectionDiagnosisText({code: 'CONNECTED', notes: ['PLUGIN_OUTDATED_ON_DISK']})).toEqual({line: DIAGNOSES.CONNECTED,
       notes: ['A game folder still holds an older plugin; it is updated once the game is closed.']});
   });
+  // PR-6 review: another folder's problem beside a folder that holds the current plugin is a note.
+  it('describes every other-folder note', () => {
+    expect(connectionDiagnosisText({code: 'NO_RUNNING_SOURCE', notes: ['OTHER_FOLDER_BLOCKED_PERMISSION', 'OTHER_FOLDER_UNRECOGNIZED', 'OTHER_FOLDER_PENDING_GAME_CLOSE',
+      'OTHER_FOLDER_BUNDLE_UNAVAILABLE', 'OTHER_FOLDER_NOT_CHECKED', 'OTHER_FOLDER_MISSING']})).toEqual({line: DIAGNOSES.NO_RUNNING_SOURCE, notes: [
+      'Another folder of this game could not be changed because Windows denied access; see its line below.',
+      'Another folder of this game holds a file that this application did not install; see its line below.',
+      'Another folder of this game is changed once the game, TruckersMP or the program using the file is closed.',
+      'The bundled plugin is missing or damaged, so another folder of this game was not set up. Reinstall ETS2Telemetry.',
+      'The plugin could not be checked in another folder of this game; see its line below.',
+      'Another folder of this game does not hold the plugin; see its line below.']});
+  });
   it('maps every export answer to a fixed text', () => {
     expect(diagnosticsExportText({outcome: 'saved'})).toBe('Diagnostics saved.');
     expect(diagnosticsExportText({outcome: 'cancelled'})).toBe('Export cancelled. Nothing was written.');
@@ -173,6 +186,7 @@ describe('the connection diagnosis and the diagnostics export', () => {
     expect(diagnosticsExportText({outcome: 'refused', code: 'EXPORT_INTERRUPTED'})).toBe('The export stopped because ETS2Telemetry is exiting. Nothing was written.');
     expect(diagnosticsExportText({outcome: 'refused', code: 'EXPORT_TARGET_REFUSED'})).toBe('That location cannot be used. Choose a folder outside the ETS2Telemetry data folder.');
     expect(diagnosticsExportText({outcome: 'failed', code: 'BUNDLE_FAILED'})).toBe('The diagnostics could not be collected. Nothing was written.');
+    expect(diagnosticsExportText({outcome: 'failed', code: 'DIALOG_FAILED'})).toBe('The Save dialog could not be opened. Nothing was written.');
     expect(diagnosticsExportText({outcome: 'failed', code: 'EXPORT_WRITE_FAILED'})).toBe('The file could not be written. A file that already had this name is unchanged.');
   });
   // PR-4 review nit: a current plugin whose install record could not be saved shows that next to Installed.

@@ -563,12 +563,20 @@ export const CONNECTION_DIAGNOSIS_TEXT: Readonly<Record<ConnectionDiagnosisCode,
   PLUGIN_UNRECOGNIZED: 'A file that this application did not install is in place of the plugin. Move it away, then press Retry.',
   PLUGIN_OUTDATED: 'An older plugin is installed. It is updated once the game is closed.',
   PLUGIN_PENDING_GAME_CLOSE: 'The plugin is installed once the game, TruckersMP or the program using the file is closed. Then start the game again.',
+  PLUGIN_BUNDLE_UNAVAILABLE: 'The bundled plugin is missing or damaged. Reinstall ETS2Telemetry.',
+  PLUGIN_NOT_CHECKED: 'The plugin could not be checked in a game folder; see the folder line below.',
   PLUGIN_MISSING: 'The plugin is not installed in a game folder. Turn on "Manage the plugin for this game" or press Retry.',
   TRANSPORT_FAILED: 'The game\'s plugin could not be connected, or it is incompatible. Close the game, press Retry, then start the game again.',
   NO_RUNNING_SOURCE: 'The plugin is in place. Start the game to connect.'
 });
 export const CONNECTION_DIAGNOSIS_NOTE_TEXT: Readonly<Record<ConnectionDiagnosisNote, string>> = Object.freeze({
-  PLUGIN_OUTDATED_ON_DISK: 'A game folder still holds an older plugin; it is updated once the game is closed.'
+  PLUGIN_OUTDATED_ON_DISK: 'A game folder still holds an older plugin; it is updated once the game is closed.',
+  OTHER_FOLDER_BLOCKED_PERMISSION: 'Another folder of this game could not be changed because Windows denied access; see its line below.',
+  OTHER_FOLDER_UNRECOGNIZED: 'Another folder of this game holds a file that this application did not install; see its line below.',
+  OTHER_FOLDER_PENDING_GAME_CLOSE: 'Another folder of this game is changed once the game, TruckersMP or the program using the file is closed.',
+  OTHER_FOLDER_BUNDLE_UNAVAILABLE: 'The bundled plugin is missing or damaged, so another folder of this game was not set up. Reinstall ETS2Telemetry.',
+  OTHER_FOLDER_NOT_CHECKED: 'The plugin could not be checked in another folder of this game; see its line below.',
+  OTHER_FOLDER_MISSING: 'Another folder of this game does not hold the plugin; see its line below.'
 });
 /** "Export diagnostics…" (ET-017 P17): the button, the note beside it and each answer as fixed text, never a path. */
 export const DIAGNOSTICS_EXPORT_STRINGS = Object.freeze({
@@ -583,5 +591,6 @@ export const DIAGNOSTICS_EXPORT_ERROR_TEXT: Readonly<Record<DiagnosticsExportRef
   EXPORT_INTERRUPTED: 'The export stopped because ETS2Telemetry is exiting. Nothing was written.',
   EXPORT_TARGET_REFUSED: 'That location cannot be used. Choose a folder outside the ETS2Telemetry data folder.',
   BUNDLE_FAILED: 'The diagnostics could not be collected. Nothing was written.',
+  DIALOG_FAILED: 'The Save dialog could not be opened. Nothing was written.',
   EXPORT_WRITE_FAILED: 'The file could not be written. A file that already had this name is unchanged.'
 });

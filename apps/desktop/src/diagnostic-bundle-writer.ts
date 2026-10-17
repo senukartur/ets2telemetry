@@ -83,7 +83,9 @@ export class DiagnosticBundleExporter {
     let directory: string | undefined;
     try { directory = this.options.documents(); } catch { directory = undefined; }
     const name = diagnosticBundleFileName(this.#now());
-    const choice = await this.options.showSaveDialog(directory ? path.join(directory, name) : name);
+    let choice: {canceled: boolean; filePath?: string};
+    // A rejected dialog is its own failure (PR-6 review); nothing was chosen, so nothing is read or written.
+    try { choice = await this.options.showSaveDialog(directory ? path.join(directory, name) : name); } catch { throw fail('DIALOG_FAILED'); }
     this.#check();
     if (choice.canceled || !choice.filePath) {
       this.options.log('DIAGNOSTICS_EXPORT_CANCELLED');
