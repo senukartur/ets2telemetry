@@ -11,9 +11,11 @@ import {
 
 /**
  * Block reasons after which the card offers the manual copy (P12): "Show plugin file" and "Open game plugins folder". A
- * locked file (TARGET_LOCKED) is retried automatically, so it shows only that text.
+ * locked file (TARGET_LOCKED) is retried automatically, so it shows only that text. An unrecognized file shows only its
+ * text, which says to move it away and press Retry: a copy hint beside it would overwrite the unknown file for anyone who
+ * followed the hint alone (PR #111 delta review).
  */
-export const MANUAL_COPY_REASONS: readonly PluginBlockReason[] = Object.freeze(['PERMISSION_DENIED', 'READ_ONLY_FILE', 'UNRECOGNIZED_FILE']);
+export const MANUAL_COPY_REASONS: readonly PluginBlockReason[] = Object.freeze(['PERMISSION_DENIED', 'READ_ONLY_FILE']);
 
 export interface PluginTargetText {
   /** The target id, for the bridge's openPluginFolder only. */
@@ -66,9 +68,8 @@ const MANUAL_REMOVE_REASONS: readonly PluginBlockReason[] = ['PERMISSION_DENIED'
  *
  * A manual action that would delete or overwrite a file needs that file's identity (PR #111 review): the removal hint
  * only for a folder whose view carries this application's installed plugin, and the copy hint only where no file is in
- * the way (`missing`), over this application's own plugin, or after the unrecognized-file text that says to move the
- * file away first. A file that could not be read (`PERMISSION_DENIED` without an installed identity, from the installer's
- * classification) gets a note that it is left as it is, and no action.
+ * the way (`missing`) or over this application's own plugin. A file or folder that could not be read or checked
+ * (`PERMISSION_DENIED` without an installed identity) gets a note that it is left as it is, and no action.
  */
 function targetText(target: PluginTargetView, excluded: boolean): PluginTargetText {
   const detail: string[] = [];
@@ -79,7 +80,7 @@ function targetText(target: PluginTargetView, excluded: boolean): PluginTargetTe
   if (target.lastFailure && target.lastFailure !== target.reason) detail.push(fill(PLUGIN_STRINGS.lastFailure, {reason: reasonText(target.lastFailure)}));
   const identified = target.installed !== null;
   const unreadable = target.reason === 'PERMISSION_DENIED' && !identified && target.state !== 'missing' && target.state !== 'excluded';
-  const nothingInTheWay = target.state === 'missing' || identified || target.reason === 'UNRECOGNIZED_FILE';
+  const nothingInTheWay = target.state === 'missing' || identified;
   const manualCopy = !excluded && target.reason !== null && MANUAL_COPY_REASONS.includes(target.reason) && nothingInTheWay;
   const manualRemove = excluded && identified && target.reason !== null && MANUAL_REMOVE_REASONS.includes(target.reason);
   if (unreadable) detail.push(PLUGIN_STRINGS.unreadableFile);

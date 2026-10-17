@@ -491,7 +491,7 @@ export const PLUGIN_STRINGS = Object.freeze({
   noFolders: 'No game folder found yet.',
   notSearched: 'Not searched in this launch.',
   unrecognizedExcluded: 'A file with the plugin\'s name that this application did not install is in this folder; it is left as it is.',
-  unreadableFile: 'The file with the plugin\'s name in this folder could not be read, so it is not known to be this application\'s plugin; it is left as it is.',
+  unreadableFile: 'The plugin file in this folder could not be read or checked, so it is left as it is.',
   installedVersion: 'Installed plugin: {version} ({hash})',
   unknownVersion: 'unknown version',
   lastFailure: 'Last problem: {reason}',

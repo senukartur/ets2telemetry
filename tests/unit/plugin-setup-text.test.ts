@@ -100,8 +100,9 @@ describe('a game folder', () => {
     BUNDLE_UNAVAILABLE: 'The bundled plugin is missing or damaged; reinstall ETS2Telemetry.'
   };
   const MANUAL_COPY = 'To install it by hand: close the game, copy the plugin file into the game\'s plugins folder (Windows may ask for administrator rights), then press Retry.';
-  it.each(Object.entries(REASONS))('explains the reason %s, with the manual copy only after permission, read-only and unrecognized-file failures', (reason, text) => {
-    const manual = ['PERMISSION_DENIED', 'READ_ONLY_FILE', 'UNRECOGNIZED_FILE'].includes(reason);
+  // PR #111 delta review: an unrecognized file shows only "Move it away, then press Retry", never the copy hint beside it.
+  it.each(Object.entries(REASONS))('explains the reason %s, with the manual copy only after permission and read-only failures', (reason, text) => {
+    const manual = ['PERMISSION_DENIED', 'READ_ONLY_FILE'].includes(reason);
     const line = firstTarget(target({state: 'missing', reason: reason as PluginBlockReason, installed: null}));
     expect(line.detail).toEqual(manual ? [text, MANUAL_COPY] : [text]);
     expect(line.manualCopy).toBe(manual);
@@ -118,7 +119,7 @@ describe('a game folder', () => {
     }
     // PR #111 review: a file the installer could not read (PERMISSION_DENIED with no installed identity) may be someone
     // else's, so neither an excluded nor a managed game is told to delete or overwrite it.
-    const UNREADABLE = 'The file with the plugin\'s name in this folder could not be read, so it is not known to be this application\'s plugin; it is left as it is.';
+    const UNREADABLE = 'The plugin file in this folder could not be read or checked, so it is left as it is.';
     const unreadable = (excluded: boolean) => pluginSetupText(view({}, {ets2: {excluded, discovery: 'found', targets: [target({state: 'blocked', reason: 'PERMISSION_DENIED',
       installed: null})]}})).games.ets2.targets[0];
     for (const excluded of [true, false]) {
@@ -146,7 +147,7 @@ describe('a game folder', () => {
   });
   it('offers the manual copy for exactly the P12 reasons', () => {
     // A locked file is retried automatically (review round 1 of PR-5), so it gets no manual-copy actions.
-    expect([...MANUAL_COPY_REASONS].sort()).toEqual(['PERMISSION_DENIED', 'READ_ONLY_FILE', 'UNRECOGNIZED_FILE']);
+    expect([...MANUAL_COPY_REASONS].sort()).toEqual(['PERMISSION_DENIED', 'READ_ONLY_FILE']);
   });
 
   it('shows the installed version of a folder that is not current, and the last problem when it differs from the reason', () => {
@@ -156,8 +157,8 @@ describe('a game folder', () => {
     expect(firstTarget(target({state: 'blocked', reason: 'GAME_RUNNING', installed: {version: null, sha256Prefix: 'bbbbbbbbbbbb'}})).detail).toEqual([
       'The game is running; the plugin is changed after you close it.', 'Installed plugin: unknown version (bbbbbbbbbbbb)']);
     expect(firstTarget(target({lastFailure: 'TARGET_LOCKED'})).detail).toEqual(['Last problem: Another program is using the plugin file; it is tried again later.']);
-    expect(firstTarget(target({state: 'blocked', reason: 'UNRECOGNIZED_FILE', installed: null, lastFailure: 'UNRECOGNIZED_FILE'})).detail).toEqual([
-      REASONS.UNRECOGNIZED_FILE, MANUAL_COPY]);
+    const unrecognized = firstTarget(target({state: 'blocked', reason: 'UNRECOGNIZED_FILE', installed: null, lastFailure: 'UNRECOGNIZED_FILE'}));
+    expect([unrecognized.detail, unrecognized.manualCopy, unrecognized.manualRemove]).toEqual([[REASONS.UNRECOGNIZED_FILE], false, false]);
   });
 });
 

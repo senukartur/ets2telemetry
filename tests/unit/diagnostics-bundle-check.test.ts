@@ -1,8 +1,8 @@
 import {describe, expect, it} from 'vitest';
-import type {AppHealth, LiveTelemetry, OverlayLayout, PluginDiscoveryOutcome, PluginGame, PluginManualFolderState, PluginSetupMode, PluginSetupView, PluginTargetState,
+import type {AppHealth, LiveTelemetry, OverlayLayout, OverlaySectionId, PluginDiscoveryOutcome, PluginGame, PluginManualFolderState, PluginSetupMode, PluginSetupView, PluginTargetState,
   PluginTargetView, RecordingHealth, RecordingTarget, RecordingTrip, ServiceHealth, SettingsState, SettingsView, SourceSelection, StorageHealth, UnitProfile} from '../../packages/contracts/src';
 import {buildDiagnosticBundle, type DiagnosticBundleInput} from '../../apps/desktop/src/diagnostic-bundle';
-import {checkDiagnosticsBundle, ENUM_WORDS, runtimeStrings, schemaTokens} from '../../scripts/ci/diagnostics-bundle-check.mjs';
+import {checkDiagnosticsBundle, ENUMS, runtimeStrings, schemaTokens} from '../../scripts/ci/diagnostics-bundle-check.mjs';
 
 // REG-015, REG-017 (ET-017 PR-6, PR #111 review): the plugin smoke's bundle checks. They run on bundles that the real
 // builder made for simulated user and computer names, including names that equal schema words or redact a fact the
@@ -52,45 +52,67 @@ describe('names outside the runtime strings', () => {
     expect(tokens).toContain('mode');
     for (const runtime of ['owner', 'note', 'free text', '<redacted>', 'outcome', '10.0.26200']) expect(tokens).not.toContain(runtime);
   });
-  // PR #111 delta review: only values of the bundle's fixed forms are tokens, so a whitespace-free leak cannot vouch for
-  // itself.
+  // PR #111 review: tokens come only from known keys and fixed values at their locations, and any other field fails, so
+  // no leak can vouch for itself, whatever its form.
   it.each([['a computer-style identifier', 'trucker-pc7'], ['the bare name', 'jane.doe'], ['a name-pc identifier', 'jane.doe-pc']])('refuses %s in a new whitespace-free field', (_label, value) => {
     const hidden = JSON.parse(bundle(['Jane.Doe', 'TRUCKER-PC7'])) as Record<string, unknown>;
     hidden.owner = value;
-    expect(schemaTokens(hidden)).not.toContain(value);
-    expect(() => check(JSON.stringify(hidden), ['Jane.Doe', 'TRUCKER-PC7'])).toThrow(/outside its runtime strings/);
+    expect(() => schemaTokens(hidden)).toThrow(/unexpected field in bundle$/);
+    expect(() => check(JSON.stringify(hidden), ['Jane.Doe', 'TRUCKER-PC7'])).toThrow(/unexpected field/);
   });
-  it('lists every lower-case enum word of the contract types the views carry', () => {
+  it.each([['a single-token name', 'Jane.Doe', 'Jane.Doe'], ['a code-shaped computer name', 'MY_PC', 'MY_PC'], ['a name equal to an enum word', 'ready', 'ready']])(
+    'refuses %s in an unexpected field', (_label, value, identity) => {
+      const hidden = JSON.parse(bundle([identity])) as Record<string, unknown>;
+      hidden.supportNote = value;
+      expect(() => check(JSON.stringify(hidden), [identity])).toThrow(/unexpected field in bundle$/);
+    });
+  it('refuses an unexpected key equal to the identity, also nested and in a map of fixed keys', () => {
+    const top = JSON.parse(bundle(['MY_PC'])) as Record<string, unknown>; top.MY_PC = true;
+    expect(() => check(JSON.stringify(top), ['MY_PC'])).toThrow(/unexpected field in bundle$/);
+    const nested = JSON.parse(bundle(['MY_PC'])) as {live: Record<string, unknown>}; nested.live.MY_PC = 'waiting';
+    expect(() => check(JSON.stringify(nested), ['MY_PC'])).toThrow(/unexpected field in bundle\.live$/);
+    const mapped = JSON.parse(bundle(['MY_PC'])) as {plugins: {games: Record<string, unknown>}}; mapped.plugins.games.MY_PC = mapped.plugins.games.ets2;
+    expect(() => check(JSON.stringify(mapped), ['MY_PC'])).toThrow(/unexpected field in bundle\.plugins\.games$/);
+  });
+  it('refuses a fixed field whose value does not fit its location', () => {
+    const wrong = JSON.parse(bundle(['MY_PC'])) as {live: {status: string}}; wrong.live.status = 'MY_PC';
+    expect(() => check(JSON.stringify(wrong), ['MY_PC'])).toThrow(/unexpected value at bundle\.live\.status$/);
+  });
+  it('keeps each enum list equal to its contract union', () => {
     // Each record must name every member of its union, so a new member fails the typecheck until it is added here and to
-    // ENUM_WORDS.
-    const unions: Record<string, true>[] = [
-      {starting: true, ready: true, restarting: true, failed: true, stopping: true} satisfies Record<ServiceHealth, true>,
-      {pending: true, verified: true, failed: true} satisfies Record<StorageHealth, true>,
-      {disabled: true, unknown: true, opening: true, waiting: true, recording: true, paused: true, interrupted: true, retrying: true, 'not-recorded-source': true,
+    // ENUMS.
+    const unions: Record<keyof typeof ENUMS, Record<string, true>> = {
+      serviceHealth: {starting: true, ready: true, restarting: true, failed: true, stopping: true} satisfies Record<ServiceHealth, true>,
+      storageHealth: {pending: true, verified: true, failed: true} satisfies Record<StorageHealth, true>,
+      recordingState: {disabled: true, unknown: true, opening: true, waiting: true, recording: true, paused: true, interrupted: true, retrying: true, 'not-recorded-source': true,
         'live-only': true, stopped: true} satisfies Record<RecordingHealth['state'], true>,
-      {history: true, synthetic: true, replay: true} satisfies Record<RecordingTarget, true>,
-      {idle: true, active: true, 'awaiting-outcome': true, 'reload-check': true} satisfies Record<RecordingTrip['phase'], true>,
-      {unknown: true, partial: true, complete: true} satisfies Record<NonNullable<RecordingTrip['completeness']>, true>,
-      {metric: true, 'us-customary': true} satisfies Record<UnitProfile, true>,
-      {strip: true, card: true, cluster: true, hud: true} satisfies Record<OverlayLayout, true>,
-      {loading: true, defaults: true, loaded: true, 'loaded-with-fallbacks': true, 'invalid-file': true, 'unsupported-older': true, 'newer-version': true,
+      recordingTarget: {history: true, synthetic: true, replay: true} satisfies Record<RecordingTarget, true>,
+      tripPhase: {idle: true, active: true, 'awaiting-outcome': true, 'reload-check': true} satisfies Record<RecordingTrip['phase'], true>,
+      tripCompleteness: {unknown: true, partial: true, complete: true} satisfies Record<NonNullable<RecordingTrip['completeness']>, true>,
+      unitProfile: {metric: true, 'us-customary': true} satisfies Record<UnitProfile, true>,
+      overlayLayout: {strip: true, card: true, cluster: true, hud: true} satisfies Record<OverlayLayout, true>,
+      settingsState: {loading: true, defaults: true, loaded: true, 'loaded-with-fallbacks': true, 'invalid-file': true, 'unsupported-older': true, 'newer-version': true,
         unreadable: true, unavailable: true} satisfies Record<SettingsState, true>,
-      {active: true, 'test-root': true, disabled: true} satisfies Record<PluginSetupMode, true>,
-      {ets2: true, ats: true} satisfies Record<PluginGame, true>,
-      {pending: true, found: true, 'not-found': true, 'steam-not-found': true, 'steam-list-invalid': true} satisfies Record<PluginDiscoveryOutcome, true>,
-      {none: true, set: true, invalid: true} satisfies Record<PluginManualFolderState, true>,
-      {installed: true, outdated: true, missing: true, excluded: true, blocked: true, working: true} satisfies Record<PluginTargetState, true>,
-      {steam: true, manual: true} satisfies Record<PluginTargetView['source'], true>,
-      {game: true, ets2: true, ats: true, synthetic: true, replay: true} satisfies Record<SourceSelection, true>,
-      {waiting: true, connected: true, paused: true, stale: true, incompatible: true, disconnected: true, unavailable: true, 'service-failed': true,
+      pluginMode: {active: true, 'test-root': true, disabled: true} satisfies Record<PluginSetupMode, true>,
+      pluginGame: {ets2: true, ats: true} satisfies Record<PluginGame, true>,
+      discovery: {pending: true, found: true, 'not-found': true, 'steam-not-found': true, 'steam-list-invalid': true} satisfies Record<PluginDiscoveryOutcome, true>,
+      manualFolder: {none: true, set: true, invalid: true} satisfies Record<PluginManualFolderState, true>,
+      targetState: {installed: true, outdated: true, missing: true, excluded: true, blocked: true, working: true} satisfies Record<PluginTargetState, true>,
+      targetSource: {steam: true, manual: true} satisfies Record<PluginTargetView['source'], true>,
+      selection: {game: true, ets2: true, ats: true, synthetic: true, replay: true} satisfies Record<SourceSelection, true>,
+      liveStatus: {waiting: true, connected: true, paused: true, stale: true, incompatible: true, disconnected: true, unavailable: true, 'service-failed': true,
         restarting: true} satisfies Record<LiveTelemetry['status'], true>
-    ];
-    for (const union of unions) for (const word of Object.keys(union)) expect(ENUM_WORDS.has(word), word).toBe(true);
+,
+      overlaySection: {speed: true, gear: true, rpm: true, fuel: true, range: true, 'sdk-consumption': true, cargo: true, origin: true, destination: true,
+        'distance-driven': true, 'distance-remaining': true, deadline: true, 'expected-income': true, 'game-time': true} satisfies Record<OverlaySectionId, true>
+    };
+    for (const [name, union] of Object.entries(unions)) expect([...ENUMS[name as keyof typeof ENUMS]].sort(), name).toEqual(Object.keys(union).sort());
+    expect(Object.keys(ENUMS).sort()).toEqual(Object.keys(unions).sort());
   });
   it('refuses a name hidden in a free-text field outside the runtime strings', () => {
     const hidden = JSON.parse(bundle(['Jane.Doe', 'TRUCKER-PC7'])) as Record<string, unknown>;
     hidden.supportNote = 'exported by jane.doe on trucker-pc7';
-    expect(() => check(JSON.stringify(hidden), ['Jane.Doe', 'TRUCKER-PC7'])).toThrow(/outside its runtime strings/);
+    expect(() => check(JSON.stringify(hidden), ['Jane.Doe', 'TRUCKER-PC7'])).toThrow(/unexpected field in bundle$/);
   });
   it.each(['main', 'logs', 'diagnostics', 'mode', 'root'])('still accepts a colliding name %s, which is a whole word of a schema token', name => {
     const text = bundle([name, name], {owner: name});
@@ -109,7 +131,8 @@ describe('leaks and broken bundles', () => {
   it('refuses a missing main row, an empty service log and a kept detail', () => {
     const missing = valid(); missing.logs.main = missing.logs.main.filter(row => row.event !== 'PLUGIN_ACTION'); fails(missing, /PLUGIN_ACTION/);
     const empty = valid(); empty.logs.service = []; fails(empty, /service log rows/);
-    const detail = valid(); detail.logs.main[0].detail = 'x'; fails(detail, /log detail/);
+    // A kept detail is an unknown field of the log row, so the structure check refuses it first.
+    const detail = valid(); detail.logs.main[0].detail = 'x'; fails(detail, /unexpected field in bundle\.logs\.main\[0\]/);
   });
   it('refuses a drive path or a run folder anywhere in the text', () => {
     const drive = valid(); drive.logs.main[1].facts!.where = 'C:\\Users'; fails(drive, /carries a path/);
