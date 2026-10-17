@@ -32,12 +32,18 @@ export function steamRegistryScript(keys?: SteamRegistryKeys): string {
   return [
     "$ErrorActionPreference = 'Stop'",
     // Base64 needs no JSON escaping, so the output is built as text: a quoted base64 value or null. Each value is read
-    // on its own, so an unreadable machine-wide key never loses a readable SteamPath, and the reverse.
+    // on its own, so an unreadable machine-wide key never loses a readable SteamPath, and the reverse. A value that
+    // could not be read is returned as '' and counted in `unreadable`, so a read failure is never mistaken for absence.
     'function Read-Value([string]$Key, [string]$Name) {',
-    "  try { $value = [Microsoft.Win32.Registry]::GetValue($Key, $Name, $null) } catch { return 'null' }",
+    "  try { $value = [Microsoft.Win32.Registry]::GetValue($Key, $Name, $null) } catch { return '' }",
     `  if ($value -is [string]) { '"' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($value)) + '"' } else { 'null' }`,
     '}',
-    `[Console]::Out.Write('{"steamPath":' + (Read-Value '${user}' 'SteamPath') + ',"installPath":' + (Read-Value '${machine}' 'InstallPath') + '}')`
+    `$steamPath = Read-Value '${user}' 'SteamPath'`,
+    `$installPath = Read-Value '${machine}' 'InstallPath'`,
+    "$unreadable = [int]($steamPath -eq '') + [int]($installPath -eq '')",
+    "if ($steamPath -eq '') { $steamPath = 'null' }",
+    "if ($installPath -eq '') { $installPath = 'null' }",
+    `[Console]::Out.Write('{"steamPath":' + $steamPath + ',"installPath":' + $installPath + ',"unreadable":' + $unreadable + '}')`
   ].join('\n');
 }
 
@@ -56,7 +62,9 @@ export function windowsPowerShellEnvironment(env: Readonly<Record<string, string
   return child;
 }
 
-export type SteamRegistryValues = {readonly ok: true; readonly steamPath: string | null; readonly installPath: string | null} | {readonly ok: false; readonly code: SteamRegistryErrorCode};
+/** The two values, null when absent or unreadable; `unreadable` counts the values whose read failed (0 to 2). */
+export type SteamRegistryValues = {readonly ok: true; readonly steamPath: string | null; readonly installPath: string | null; readonly unreadable: number}
+  | {readonly ok: false; readonly code: SteamRegistryErrorCode};
 export type SteamRegistryErrorCode = 'STEAM_REGISTRY_TIMEOUT' | 'STEAM_REGISTRY_OUTPUT_TOO_LARGE' | 'STEAM_REGISTRY_OUTPUT_INVALID' | 'STEAM_REGISTRY_FAILED' | 'STEAM_REGISTRY_ABORTED';
 
 const decoder = new TextDecoder('utf-8', {fatal: true});
@@ -69,16 +77,21 @@ function decodeValue(value: unknown): string | null | undefined {
   try {return decoder.decode(bytes);} catch {return undefined;}
 }
 
-/** Parses the script's output: exactly `{"steamPath": <base64>|null, "installPath": <base64>|null}`. */
+/**
+ * Parses the script's output: exactly `{"steamPath": <base64>|null, "installPath": <base64>|null, "unreadable": n}`,
+ * where `n` (0 to 2) counts the values whose read failed; each of them is null, so `n` never exceeds the null values.
+ */
 export function parseSteamRegistryOutput(stdout: Buffer): SteamRegistryValues {
   let parsed: unknown;
   try {parsed = JSON.parse(stdout.toString('utf8').trim());} catch {return {ok: false, code: 'STEAM_REGISTRY_OUTPUT_INVALID'};}
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {ok: false, code: 'STEAM_REGISTRY_OUTPUT_INVALID'};
   const record = parsed as Record<string, unknown>;
-  if (Object.keys(record).sort().join(',') !== 'installPath,steamPath') return {ok: false, code: 'STEAM_REGISTRY_OUTPUT_INVALID'};
-  const steamPath = decodeValue(record.steamPath), installPath = decodeValue(record.installPath);
+  if (Object.keys(record).sort().join(',') !== 'installPath,steamPath,unreadable') return {ok: false, code: 'STEAM_REGISTRY_OUTPUT_INVALID'};
+  const steamPath = decodeValue(record.steamPath), installPath = decodeValue(record.installPath), unreadable = record.unreadable;
   if (steamPath === undefined || installPath === undefined) return {ok: false, code: 'STEAM_REGISTRY_OUTPUT_INVALID'};
-  return {ok: true, steamPath, installPath};
+  const nulls = Number(steamPath === null) + Number(installPath === null);
+  if (!Number.isInteger(unreadable) || (unreadable as number) < 0 || (unreadable as number) > nulls) return {ok: false, code: 'STEAM_REGISTRY_OUTPUT_INVALID'};
+  return {ok: true, steamPath, installPath, unreadable: unreadable as number};
 }
 
 export interface SteamRegistryOptions {
@@ -105,7 +118,8 @@ export async function readSteamRegistryValues(options: SteamRegistryOptions = {}
 
 /**
  * The canonical Steam root: SteamPath when it names an existing local folder, otherwise InstallPath. Both are
- * normalized with path.win32 and resolved through realpath; UNC, device and missing paths are not used.
+ * normalized with path.win32 and resolved through realpath; UNC, device and missing paths are not used. When neither
+ * value is usable and at least one could not be read, the result is STEAM_REGISTRY_FAILED, not "not installed".
  */
 export async function readSteamRoot(options: SteamRegistryOptions & {fs?: PluginReadFileSystem} = {}): Promise<SteamRootResult> {
   const values = await readSteamRegistryValues(options);
@@ -116,5 +130,5 @@ export async function readSteamRoot(options: SteamRegistryOptions & {fs?: Plugin
     const root = await canonicalDirectory(fs, candidate);
     if (root) return {kind: 'found', path: root.path};
   }
-  return {kind: 'not-found'};
+  return values.unreadable > 0 ? {kind: 'failed', code: 'STEAM_REGISTRY_FAILED'} : {kind: 'not-found'};
 }
