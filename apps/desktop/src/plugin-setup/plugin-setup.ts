@@ -464,7 +464,8 @@ export class PluginSetup {
    * is described from what the folder holds now: an older plugin of this application is `outdated`, no plugin is
    * `missing` (`excluded` for an excluded game), and anything this application cannot change is `blocked`; `reason`
    * says why the change did not happen. An install refused while the folder already holds the current plugin has
-   * nothing left to do: it is `installed` without a reason, so a running game does not keep the poll alive.
+   * nothing left to do: it is `installed` without a reason, so a running game does not keep the poll alive, except that
+   * REGISTRY_UNAVAILABLE stays visible.
    */
   private async describe(installer: PluginInstaller, target: PluginTarget, excluded: boolean, result: PluginActionResult, signal: AbortSignal): Promise<Pick<PluginTargetView, 'state' | 'reason' | 'installed'>> {
     const bundle = this.bundle!;
@@ -475,7 +476,12 @@ export class PluginSetup {
     try {found = await installer.inspect(target);} catch {found = {state: 'blocked', reason: 'IO_ERROR', step: 'classify', errno: null};}
     if (found.state === 'missing') return {state: excluded ? 'excluded' : 'missing', reason: result.reason, installed: null};
     if (found.state === 'blocked') return {state: 'blocked', reason: result.reason, installed: null};
-    if (result.op === 'install' && found.current) return {state: 'installed', reason: null, installed: fileView(found.sha256, found.version)};
+    // PR-6 (PR-4 review nit): a current plugin whose install record could not be written, or whose registry is
+    // read-only, stays `installed` but keeps REGISTRY_UNAVAILABLE, so the card shows that the record is not up to date
+    // (ET-018's uninstall cleanup relies on it). It arms no poll.
+    if (result.op === 'install' && found.current) {
+      return {state: 'installed', reason: result.reason === 'REGISTRY_UNAVAILABLE' ? 'REGISTRY_UNAVAILABLE' : null, installed: fileView(found.sha256, found.version)};
+    }
     const state: PluginTargetState = excluded ? 'blocked' : found.current ? 'installed' : 'outdated';
     return {state, reason: result.reason, installed: fileView(found.sha256, found.version)};
   }

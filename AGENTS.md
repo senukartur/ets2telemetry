@@ -233,9 +233,9 @@ ET-001 recovery update on October 11, 2026: packaged worker/native dependency pa
 
 ET-002a scheduling update on October 11, 2026: the owner explicitly authorized early protocol v0 implementation and a draft PR from updated `main`, deferring SP-01 real-game checks. SP-01 PR #8 remains draft and unaccepted: ETS2 single-player windowed appearance failed and needs a real retry; Convoy remains pending. Preserve those results. The exception does not authorize protocol v1 or waive other acceptance/merge prerequisites; see [COORDINATOR.md](COORDINATOR.md) and [concept.md](concept.md).
 
-AI review update on October 11, 2026: an advisory Claude code review workflow and a root `CLAUDE.md` that imports this file were added. The workflow required an owner-provided `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` secret; its comments never counted as approval, a required check, or verification evidence. The workflow and setup guide were removed on October 17, 2026.
+AI review update on October 11, 2026: an advisory Claude code review workflow and a root `CLAUDE.md` that imports this file were added. The workflow requires an owner-provided `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` secret; its comments never count as approval, a required check, or verification evidence. The workflow and setup guide were removed on October 17, 2026, then restored on October 18, 2026 (Europe/Warsaw) with `claude-sonnet-5-5` at the owner's request.
 
-Claude review disablement on October 17, 2026: the advisory workflow, its setup guide, and its CI references were removed at the owner's request. Independent review, required Windows CI, and real-game criteria remain governed by this file and [TESTING.md](TESTING.md).
+Claude review restoration on October 18, 2026: the advisory workflow and setup guide are active again. They do not replace independent review, required Windows CI, or real-game criteria governed by this file and [TESTING.md](TESTING.md).
 
 ## Owner merge and board-status exception — October 12, 2026
 
@@ -396,7 +396,7 @@ The repository became public on October 16, 2026, and at the owner's request the
 
 - Deleting `main` and non-fast-forward pushes are blocked, and history must be linear.
 - Changes reach `main` only through a pull request merged by squash. No approving review is required in the single-owner setup, but every review thread must be resolved.
-- The `Windows CI` jobs `Windows x64 tests`, `Windows x64 scaffold` and `Windows x64 native AddressSanitizer`, reported by GitHub Actions, must pass on the PR head. The owner authorized adding `Windows x64 tests` on October 17, 2026, and the coordinator added it to the ruleset that day, after the ET-019t PR's first Ready run (#103, run 39030712000) reported the job. The branch need not be up to date with `main` first. The advisory Claude review was never a required check and has since been removed.
+- The `Windows CI` jobs `Windows x64 tests`, `Windows x64 scaffold` and `Windows x64 native AddressSanitizer`, reported by GitHub Actions, must pass on the PR head. The owner authorized adding `Windows x64 tests` on October 17, 2026, and the coordinator added it to the ruleset that day, after the ET-019t PR's first Ready run (#103, run 39030712000) reported the job. The branch need not be up to date with `main` first. The advisory Claude review is not a required check.
 - The repository admin role may bypass these rules only when merging a pull request (`pull_requests_only`); direct pushes to `main` stay blocked for everyone.
 
 Windows CI does not run on PRs that change only `**.md` or `docs/**`, so their required checks never report. Merge such a PR with `gh pr merge <pr> --squash --admin` only when its diff is limited to those paths, after the review rules above are met. Never use `--admin` to skip a failing, pending or cancelled check on any other PR. GitHub counts a job skipped by its `if` condition, such as the draft skip in the Windows CI jobs, as a passing required check, so the ruleset alone does not prove a real run: the merge gate remains a successful run of all three jobs (`Windows x64 tests`, `Windows x64 scaffold`, `Windows x64 native AddressSanitizer`) on the final head after **Ready for review** ([docs/ci.md](docs/ci.md#triggers-and-draft-checks)). The local pre-push hook remains in place. Inspect the live rules with `gh api repos/senukartur/ets2telemetry/rules/branches/main` before relying on this description.
@@ -589,3 +589,25 @@ The P15 mode gate decides where setup may write:
 - **Test-root mode** applies when two conditions hold: `ETS2TELEMETRY_PLUGIN_SETUP_ROOT` names a fake root that holds the test-root marker file, and an isolated profile is set. In this mode, every file operation and the install registry are confined to that root. A root without the marker turns setup off for that run.
 
 The details are in [plugin setup](docs/plugin-setup.md). The repository's checks never run active mode, and an unpackaged launch with `=real` writes into real game folders, so agents must not use it. Real Steam libraries, real ETS2 and ATS installs loading the silently installed plugin, TruckersMP detection, and protected libraries remain pending manual checks. No game, TruckersMP, display or performance claim follows.
+
+## ET-017 implementation update — October 17, 2026
+
+All six ET-017 PRs are implemented:
+- PR-1 (#104) bundles the plugin;
+- PR-2 (#105) adds Steam discovery and the manual folder check;
+- PR-3 (#106) adds the atomic installer and the install registry;
+- PR-4 (#107) runs silent setup in main, behind the P15 mode gate;
+- PR-5 (#108) adds the Game plugin card on the Live tab and the `plugin` runtime smoke against a fake test root;
+- PR-6 adds the connection diagnosis on the card and the opt-in diagnostic bundle. The bundle is saved only through main's Save dialog, is redacted, is at most 2 MiB and is never uploaded.
+
+The deferred parts are TD-009 (an elevated copy helper), TD-010 (path-aware running-game detection) and TD-011 (in-app replacement of an unrecognized plugin file) in [technical debt](docs/technical-debt.md).
+
+The card stays in Review. Its prerequisites ET-009 and ET-011 are not accepted, and every real-environment check remains pending ([ET-017 validation](docs/validation/et-017.md)):
+- real Steam libraries;
+- real ETS2 and ATS installs loading the silently installed plugin;
+- TruckersMP process names;
+- protected or ACL-restricted libraries, and antivirus;
+- the real folder and Save dialogs and Explorer;
+- the card's readability.
+
+`GAME_HISTORY_RECORDING` stays `false`. ET-018 and later phases are not authorized by this update. No game, TruckersMP, display or performance claim follows.

@@ -2,16 +2,20 @@
 // the plugin bridge methods: main validated the view, and this module only picks fixed texts from strings.ts. The view
 // never carries a path, and neither does any text here: a game folder is named by its source and position. Renderer-safe:
 // type imports and strings only. See docs/plugin-setup.md#the-game-plugin-card.
-import type {PluginBlockReason, PluginFolderChoice, PluginGame, PluginGameView, PluginSetupView, PluginShowFileResult, PluginTargetState, PluginTargetView} from '../../../packages/contracts/src';
+import type {DiagnosticsExportResult, PluginBlockReason, PluginFolderChoice, PluginGame, PluginGameView, PluginSetupView, PluginShowFileResult, PluginTargetState,
+  PluginTargetView} from '../../../packages/contracts/src';
+import type {ConnectionDiagnosis} from './connection-diagnosis';
 import {
-  PLUGIN_DISCOVERY_TEXT, PLUGIN_FOLDER_REFUSAL_TEXT, PLUGIN_MANUAL_FOLDER_TEXT, PLUGIN_MODE_TEXT, PLUGIN_REASON_TEXT, PLUGIN_STATE_TEXT, PLUGIN_STRINGS, UNIT_GAME_TEXT
+  CONNECTION_DIAGNOSIS_NOTE_TEXT, CONNECTION_DIAGNOSIS_TEXT, DIAGNOSTICS_EXPORT_ERROR_TEXT, DIAGNOSTICS_EXPORT_STRINGS, PLUGIN_DISCOVERY_TEXT, PLUGIN_FOLDER_REFUSAL_TEXT, PLUGIN_MANUAL_FOLDER_TEXT, PLUGIN_MODE_TEXT, PLUGIN_REASON_TEXT, PLUGIN_STATE_TEXT, PLUGIN_STRINGS, UNIT_GAME_TEXT
 } from './strings';
 
 /**
  * Block reasons after which the card offers the manual copy (P12): "Show plugin file" and "Open game plugins folder". A
- * locked file (TARGET_LOCKED) is retried automatically, so it shows only that text.
+ * locked file (TARGET_LOCKED) is retried automatically, so it shows only that text. An unrecognized file shows only its
+ * text, which says to move it away and press Retry: a copy hint beside it would overwrite the unknown file for anyone who
+ * followed the hint alone (PR #111 delta review).
  */
-export const MANUAL_COPY_REASONS: readonly PluginBlockReason[] = Object.freeze(['PERMISSION_DENIED', 'READ_ONLY_FILE', 'UNRECOGNIZED_FILE']);
+export const MANUAL_COPY_REASONS: readonly PluginBlockReason[] = Object.freeze(['PERMISSION_DENIED', 'READ_ONLY_FILE']);
 
 export interface PluginTargetText {
   /** The target id, for the bridge's openPluginFolder only. */
@@ -23,8 +27,18 @@ export interface PluginTargetText {
   status: string;
   /** Lines under it: why a change did not happen, the installed version, the last problem and the manual-copy hint. */
   detail: string[];
-  /** Whether the card offers "Show plugin file" and "Open game plugins folder" for this folder. */
+  /** Whether the card shows the manual-copy hint and offers "Show plugin file" for this folder, to install by hand. */
   manualCopy: boolean;
+  /**
+   * Whether the card shows the manual-removal hint for this application's plugin: the game is excluded and Windows refused
+   * the removal (PERMISSION_DENIED, READ_ONLY_FILE). Never together with `manualCopy` (PR #111 review).
+   */
+  manualRemove: boolean;
+  /**
+   * Whether the card offers "Open game plugins folder" (P12, P18): with the manual copy, with the manual removal, and for
+   * an unrecognized file in a managed game, which the driver moves away by hand (PR #111 delta review).
+   */
+  openFolder: boolean;
 }
 export interface PluginGameText {
   title: string;
@@ -49,33 +63,56 @@ const fill = (template: string, values: Readonly<Record<string, string>>) => tem
 const fileText = (template: string, file: {version: string | null; sha256Prefix: string}) =>
   fill(template, {version: file.version ?? PLUGIN_STRINGS.unknownVersion, hash: file.sha256Prefix});
 
-function targetText(target: PluginTargetView): PluginTargetText {
+/** Block reasons after which an excluded game's folder needs this application's plugin removed by hand. */
+const MANUAL_REMOVE_REASONS: readonly PluginBlockReason[] = ['PERMISSION_DENIED', 'READ_ONLY_FILE'];
+
+/**
+ * The text of one folder. In an excluded game the folder's change is a removal, so the card never suggests copying the
+ * plugin in there: a refused removal gets the manual-removal hint, and an unrecognized file, which this application
+ * would not remove, gets no manual action.
+ *
+ * A manual action that would delete or overwrite a file needs that file's identity (PR #111 review): the removal hint
+ * only for a folder whose view carries this application's installed plugin, and the copy hint only where no file is in
+ * the way (`missing`) or over this application's own plugin. A file or folder that could not be read or checked
+ * (`PERMISSION_DENIED` without an installed identity) gets a note that it is left as it is, and no action.
+ */
+function targetText(target: PluginTargetView, excluded: boolean): PluginTargetText {
   const detail: string[] = [];
-  if (target.reason) detail.push(PLUGIN_REASON_TEXT[target.reason]);
+  // An excluded game installs nothing, so its unrecognized file gets no advice to move it (PR #111 review).
+  const reasonText = (reason: PluginBlockReason) => excluded && reason === 'UNRECOGNIZED_FILE' ? PLUGIN_STRINGS.unrecognizedExcluded : PLUGIN_REASON_TEXT[reason];
+  if (target.reason) detail.push(reasonText(target.reason));
   if (target.installed && target.state !== 'installed') detail.push(fileText(PLUGIN_STRINGS.installedVersion, target.installed));
-  if (target.lastFailure && target.lastFailure !== target.reason) detail.push(fill(PLUGIN_STRINGS.lastFailure, {reason: PLUGIN_REASON_TEXT[target.lastFailure]}));
-  const manualCopy = target.reason !== null && MANUAL_COPY_REASONS.includes(target.reason);
+  if (target.lastFailure && target.lastFailure !== target.reason) detail.push(fill(PLUGIN_STRINGS.lastFailure, {reason: reasonText(target.lastFailure)}));
+  const identified = target.installed !== null;
+  const unreadable = target.reason === 'PERMISSION_DENIED' && !identified && target.state !== 'missing' && target.state !== 'excluded';
+  const nothingInTheWay = target.state === 'missing' || identified;
+  const manualCopy = !excluded && target.reason !== null && MANUAL_COPY_REASONS.includes(target.reason) && nothingInTheWay;
+  const manualRemove = excluded && identified && target.reason !== null && MANUAL_REMOVE_REASONS.includes(target.reason);
+  if (unreadable) detail.push(PLUGIN_STRINGS.unreadableFile);
   if (manualCopy) detail.push(PLUGIN_STRINGS.manualCopy);
+  if (manualRemove) detail.push(PLUGIN_STRINGS.manualRemove);
   return {
     id: target.id,
     label: target.source === 'manual' ? PLUGIN_STRINGS.manualFolder : fill(PLUGIN_STRINGS.steamFolder, {number: String(target.ordinal + 1)}),
     state: target.state,
     status: PLUGIN_STATE_TEXT[target.state],
     detail,
-    manualCopy
+    manualCopy,
+    manualRemove,
+    openFolder: manualCopy || manualRemove || (!excluded && target.reason === 'UNRECOGNIZED_FILE')
   };
 }
 
 function gameText(game: PluginGame, view: PluginGameView, disabled: boolean): PluginGameText {
   // The disabled mode never discovers anything: "Looking for the game…" would stay forever.
-  if (disabled) return {title: UNIT_GAME_TEXT[game], managed: !view.excluded, notes: [PLUGIN_STRINGS.notSearched], targets: view.targets.map(targetText)};
+  if (disabled) return {title: UNIT_GAME_TEXT[game], managed: !view.excluded, notes: [PLUGIN_STRINGS.notSearched], targets: view.targets.map(target => targetText(target, view.excluded))};
   const notes = [PLUGIN_DISCOVERY_TEXT[view.discovery]];
   const manual = PLUGIN_MANUAL_FOLDER_TEXT[view.manualFolder];
   if (manual) notes.push(manual);
   if (view.unlistedFolders === 1) notes.push(PLUGIN_STRINGS.unlistedOne);
   else if (view.unlistedFolders > 1) notes.push(fill(PLUGIN_STRINGS.unlistedMany, {count: String(view.unlistedFolders)}));
   if (!view.targets.length && view.discovery !== 'pending') notes.push(PLUGIN_STRINGS.noFolders);
-  return {title: UNIT_GAME_TEXT[game], managed: !view.excluded, notes, targets: view.targets.map(targetText)};
+  return {title: UNIT_GAME_TEXT[game], managed: !view.excluded, notes, targets: view.targets.map(target => targetText(target, view.excluded))};
 }
 
 /** The texts of one plugin setup view. Every mode, outcome, state and reason has a fixed text. */
@@ -99,4 +136,16 @@ export function pluginFolderChoiceText(choice: PluginFolderChoice): string {
 /** The answer of "Show plugin file". */
 export function pluginShowFileText(result: PluginShowFileResult): string {
   return result.outcome === 'shown' ? PLUGIN_STRINGS.fileShown : PLUGIN_STRINGS.fileUnavailable;
+}
+
+/** The card's diagnosis line (P17) and its notes. */
+export function connectionDiagnosisText(diagnosis: ConnectionDiagnosis): {line: string; notes: string[]} {
+  return {line: CONNECTION_DIAGNOSIS_TEXT[diagnosis.code], notes: diagnosis.notes.map(note => CONNECTION_DIAGNOSIS_NOTE_TEXT[note])};
+}
+
+/** The answer of "Export diagnostics…". */
+export function diagnosticsExportText(result: DiagnosticsExportResult): string {
+  if (result.outcome === 'saved') return DIAGNOSTICS_EXPORT_STRINGS.saved;
+  if (result.outcome === 'cancelled') return DIAGNOSTICS_EXPORT_STRINGS.cancelled;
+  return DIAGNOSTICS_EXPORT_ERROR_TEXT[result.code];
 }
