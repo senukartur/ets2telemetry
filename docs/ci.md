@@ -20,7 +20,7 @@ Caching is configured only for downloaded npm archives and Electron distribution
 | Push to `main` touching anything else | All three full jobs; the scaffold job runs the Squirrel make, the development and packaged smokes and the extended regressions |
 | Manual dispatch | All three full jobs on the selected branch head; the scaffold job runs the Squirrel make and the development and packaged smokes whatever `extended` says, and adds the extended regressions unless `extended=false` |
 
-Any change outside `**.md` and `docs/**` (code, tests, fixtures, scripts, workflow, `package*.json`, config) runs all three full jobs. GitHub evaluates path filters against the whole PR diff, so a PR that later gains a code change runs normally. Documentation-only PRs rely on the focused document checks in [TESTING.md](../TESTING.md). If required status checks are ever enabled, a path-filtered workflow reports no check and would leave such PRs waiting.
+Any change outside `**.md` and `docs/**` (code, tests, fixtures, scripts, workflow, `package*.json`, config) runs all three full jobs. GitHub evaluates path filters against the whole PR diff, so a PR that later gains a code change runs normally. Documentation-only PRs rely on the focused document checks in [TESTING.md](../TESTING.md). The `Protect main` ruleset requires all three checks, and a path-filtered workflow reports none for such a PR, so a documentation-only PR is merged with the admin bypass described in [branch protection](../AGENTS.md#branch-protection--october-16-2026).
 
 To check a draft head without marking it ready, dispatch the workflow on the task branch:
 
