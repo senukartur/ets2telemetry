@@ -42,8 +42,8 @@ In Claude Code, these Codex model names do not apply. Use:
   crash/recovery, or storage and event-accounting integrity.
 - Read-only searches and context gathering: claude-sonnet-5-5, or the
   model inherited from the session.
-- The advisory CI review already runs on claude-opus-5-5 (see
-  docs/ai-review.md). It never replaces the independent reviewer.
+- Use the configured independent reviewer for a second review; routine CI output
+  does not replace that reviewer.
 Subagent calls may accept only model aliases (sonnet, opus) instead of
 full IDs; verify which model was actually used and record it.
 Do not set a reasoning effort on a subagent unless I asked.

@@ -60,7 +60,7 @@ The run has a budget of 2 fix rounds in total, shared by verifier failures and r
 ## What it does not establish
 
 - A verifier `PASS` covers local checks on one commit. The merge gate is still the Windows CI run after **Ready for review** on the final head ([CI triggers](ci.md#triggers-and-draft-checks)).
-- The reviewer agent is an independent reviewer in the sense of `COORDINATOR.md`. Like the advisory [AI review](ai-review.md), it is not owner approval.
+- The reviewer agent is an independent reviewer in the sense of `COORDINATOR.md`; it is not owner approval.
 - Real ETS2/ATS, TruckersMP, display, latency and frame-time criteria stay pending. They need actual game sessions.
 - The pipeline never marks a PR ready, merges it, or writes to Trello unless the owner asks for that in the session.
 
