@@ -2,8 +2,8 @@ import * as fsp from 'node:fs/promises';
 import path from 'node:path';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 import type {AtomicFileSystem} from '../../apps/desktop/src/plugin-setup/atomic-json-file';
-import {EMPTY_PLUGIN_REGISTRY, MAX_PLUGIN_REGISTRY_BYTES, parsePluginRegistry, PluginRegistry, PluginRegistryError, serializePluginRegistry,
-  type InstallRecord, type PendingIntent, type PluginRegistryDocument} from '../../apps/desktop/src/plugin-setup/plugin-registry';
+import {EMPTY_PLUGIN_REGISTRY, failureFor, MAX_PLUGIN_REGISTRY_BYTES, parsePluginRegistry, PluginRegistry, PluginRegistryError, serializePluginRegistry,
+  withFailure, withoutFailure, type FailureRecord, type InstallRecord, type PendingIntent, type PluginRegistryDocument} from '../../apps/desktop/src/plugin-setup/plugin-registry';
 import {guardedTempRoot, type GuardedRoot} from '../shared/guarded-fs';
 
 // REG-015 (ET-017 P9): the plugin install registry setup.json. Real temporary folders under the guarded root; failures
@@ -16,6 +16,7 @@ let delays: number[];
 // 2026-10-17T08:30:15.250Z is the clock of every record and quarantine below.
 const now = () => new Date(Date.UTC(2026, 9, 17, 8, 30, 15, 250));
 const HASH_A = 'a'.repeat(64), HASH_B = 'b'.repeat(64);
+const UTC_TEXT = '2026-10-17T08:30:15.250Z';
 const ROOT = 'C:\\Games\\Euro Truck Simulator 2';
 const TEMP = 'C:\\Games\\Euro Truck Simulator 2\\bin\\win_x64\\plugins\\ets2telemetry-plugin.dll.0123456789abcdef.tmp';
 const errno = (code: string) => Object.assign(new Error(`${code}: simulated`), {code});
@@ -49,7 +50,7 @@ const FULL: PluginRegistryDocument = {
   ...EMPTY_PLUGIN_REGISTRY,
   games: {ets2: {excluded: false, manualRoot: null}, ats: {excluded: true, manualRoot: 'D:\\ATS'}},
   installs: [INSTALL], pending: [PENDING],
-  lastFailure: {'ats:manual': {code: 'PERMISSION_DENIED', step: 'temp', utc: '2026-10-17T08:30:15.250Z'}}
+  failures: [{game: 'ats', root: 'D:\\ATS', code: 'PERMISSION_DENIED', step: 'temp', utc: '2026-10-17T08:30:15.250Z'}]
 };
 const FULL_TEXT = [
   '{',
@@ -90,18 +91,20 @@ const FULL_TEXT = [
   '      "startedUtc": "2026-10-17T08:30:15.250Z"',
   '    }',
   '  ],',
-  '  "lastFailure": {',
-  '    "ats:manual": {',
+  '  "failures": [',
+  '    {',
+  '      "game": "ats",',
+  '      "root": "D:\\\\ATS",',
   '      "code": "PERMISSION_DENIED",',
   '      "step": "temp",',
   '      "utc": "2026-10-17T08:30:15.250Z"',
   '    }',
-  '  }',
+  '  ]',
   '}',
   ''
 ].join('\n');
 const EMPTY_TEXT = '{\n  "format": "ets2telemetry.plugin-setup",\n  "version": 1,\n  "games": {\n    "ets2": {\n      "excluded": false,\n      "manualRoot": null\n    },\n' +
-  '    "ats": {\n      "excluded": false,\n      "manualRoot": null\n    }\n  },\n  "installs": [],\n  "pending": [],\n  "lastFailure": {}\n}\n';
+  '    "ats": {\n      "excluded": false,\n      "manualRoot": null\n    }\n  },\n  "installs": [],\n  "pending": [],\n  "failures": []\n}\n';
 
 describe('loading', () => {
   it('starts empty without creating anything when neither the folder nor the file exists', async () => {
@@ -150,7 +153,7 @@ interface LooseDocument {
   games: Record<string, Record<string, unknown>>;
   installs: Record<string, unknown>[];
   pending: Record<string, unknown>[];
-  lastFailure: Record<string, Record<string, unknown>>;
+  failures: Record<string, unknown>[];
 }
 
 describe('strict v1 parsing', () => {
@@ -169,7 +172,7 @@ describe('strict v1 parsing', () => {
     ['a string version', variant(value => {value.version = '1';})],
     ['a fractional version', variant(value => {value.version = 1.5;})],
     ['an extra top-level key', variant(value => {value.extra = true;})],
-    ['a missing top-level key', variant(value => {Reflect.deleteProperty(value, 'lastFailure');})],
+    ['a missing top-level key', variant(value => {Reflect.deleteProperty(value, 'failures');})],
     ['a third game', variant(value => {value.games.eut = {excluded: false, manualRoot: null};})],
     ['a relative manual root', variant(value => {value.games.ets2.manualRoot = 'Games\\ETS2';})],
     ['a UNC manual root', variant(value => {value.games.ets2.manualRoot = '\\\\server\\share\\ETS2';})],
@@ -187,23 +190,35 @@ describe('strict v1 parsing', () => {
     ['a pending install with a source hash', variant(value => {value.pending[0].op = 'install';})],
     ['a pending removal with a temp', variant(value => {Object.assign(value.pending[0], {op: 'remove', toSha256: null, appVersion: null});})],
     ['a pending adopted source', variant(value => {value.pending[0].source = 'adopted';})],
-    ['an unknown failure code', variant(value => {value.lastFailure['ats:manual'].code = 'ACCESS_DENIED';})],
-    ['a failure key with an adopted source', variant(value => {value.lastFailure['ats:adopted'] = value.lastFailure['ats:manual'];})],
+    ['an unknown failure code', variant(value => {value.failures[0].code = 'ACCESS_DENIED';})],
+    ['a failure with a source', variant(value => {value.failures[0].source = 'manual';})],
+    ['a failure with a relative root', variant(value => {value.failures[0].root = 'ATS';})],
+    ['two failures for one root in different case', variant(value => {value.failures.push({...value.failures[0], root: 'd:\\ats'});})],
+    ['failures as an object keyed by game and source', variant(value => {value.failures = {'ats:manual': {code: 'PERMISSION_DENIED', step: 'temp', utc: '2026-10-17T08:30:15.250Z'}} as never;})],
     ['a __proto__ key', Buffer.from(FULL_TEXT.replace('"format":', '"__proto__": {},\n  "format":'))]
   ])('refuses %s as an invalid file', (_name, bytes) => {
     expect(parsePluginRegistry(bytes)).toEqual({state: 'invalid-file'});
   });
 
-  it('keeps the bounds: 16 installs and 16 pending intents, 256 KiB', () => {
+  it('keeps the bounds: 16 installs, 16 pending intents, 16 failures and 256 KiB', () => {
     const installs = Array.from({length: 16}, (_, index) => ({...INSTALL, root: `C:\\Games\\Copy ${index}`}));
     const pending = Array.from({length: 16}, (_, index) => ({...PENDING, startedUtc: `2026-10-17T08:30:${String(index).padStart(2, '0')}.000Z`}));
     const atBound = serializePluginRegistry({...FULL, installs, pending});
     expect(parsePluginRegistry(Buffer.from(atBound)).state).toBe('loaded');
     expect(parsePluginRegistry(Buffer.from(serializePluginRegistry({...FULL, installs: [...installs, {...INSTALL, root: 'C:\\Games\\Copy 16'}]}))).state).toBe('invalid-file');
     expect(parsePluginRegistry(Buffer.from(serializePluginRegistry({...FULL, pending: [...pending, PENDING]}))).state).toBe('invalid-file');
+    const failures: FailureRecord[] = Array.from({length: 17}, (_, index) => ({game: 'ets2', root: `C:\\Games\\Copy ${index}`, code: 'IO_ERROR', step: 'temp', utc: UTC_TEXT}));
+    expect(parsePluginRegistry(Buffer.from(serializePluginRegistry({...FULL, failures: failures.slice(0, 16)}))).state).toBe('loaded');
+    expect(parsePluginRegistry(Buffer.from(serializePluginRegistry({...FULL, failures}))).state).toBe('invalid-file');
     const padded = (size: number) => Buffer.concat([Buffer.from(EMPTY_TEXT), Buffer.alloc(size - Buffer.byteLength(EMPTY_TEXT), 0x20)]);
     expect(parsePluginRegistry(padded(MAX_PLUGIN_REGISTRY_BYTES)).state).toBe('loaded');
     expect(parsePluginRegistry(padded(MAX_PLUGIN_REGISTRY_BYTES + 1)).state).toBe('invalid-file');
+    // An oversized file is classified from its first bytes: a later version is never treated as invalid.
+    const large = (head: string) => Buffer.concat([Buffer.from(head), Buffer.alloc(MAX_PLUGIN_REGISTRY_BYTES, 0x20), Buffer.from('}')]);
+    expect(parsePluginRegistry(large('{\n  "format": "ets2telemetry.plugin-setup",\n  "version": 2,\n  "games": {}')).state).toBe('newer-version');
+    expect(parsePluginRegistry(large('\uFEFF{"format":"ets2telemetry.plugin-setup","version":7}')).state).toBe('newer-version');
+    expect(parsePluginRegistry(large('{\n  "format": "ets2telemetry.plugin-setup",\n  "version": 1,\n  "games": {}')).state).toBe('invalid-file');
+    expect(parsePluginRegistry(large('{"version": 2, "format": "ets2telemetry.plugin-setup"')).state).toBe('invalid-file');
     expect(valid.version).toBe(1);
   });
 });
@@ -265,6 +280,17 @@ describe('writing', () => {
     expect(events).toHaveLength(1);
   });
 
+  it('keeps an oversized newer version untouched and read-only instead of quarantining it', async () => {
+    const newer = `{"format":"ets2telemetry.plugin-setup","version":2,"padding":"${'x'.repeat(MAX_PLUGIN_REGISTRY_BYTES)}"}`;
+    await seed(newer);
+    const registry = await load();
+    expect([registry.state, registry.writable]).toEqual(['newer-version', false]);
+    await expect(registry.update(document => document)).rejects.toMatchObject({code: 'REGISTRY_UNAVAILABLE'});
+    expect(await fsp.readFile(file(), 'utf8')).toBe(newer);
+    expect(await list()).toEqual(['setup.json']);
+    expect(events).toEqual([]);
+  });
+
   it('keeps a newer version untouched and read-only', async () => {
     const newer = '{"format":"ets2telemetry.plugin-setup","version":2,"anything":true}';
     await seed(newer);
@@ -315,5 +341,33 @@ describe('writing', () => {
     expect(await list()).toEqual(['setup.json']);
     expect(registry.document).toEqual(EMPTY_PLUGIN_REGISTRY);
     expect(delays).toEqual(fault === 'rename' ? [20, 40, 60, 80, 100] : []);
+  });
+});
+
+describe('failures per game folder', () => {
+  const failure = (root: string, utc = UTC_TEXT, game: 'ets2' | 'ats' = 'ets2'): FailureRecord => ({game, root, code: 'TARGET_LOCKED', step: 'rename', utc});
+  it('replaces and clears only the failure of the same game and root, in any case', () => {
+    const one = withFailure(EMPTY_PLUGIN_REGISTRY, failure('C:\\Steam\\steamapps\\common\\ETS2'));
+    const two = withFailure(one, failure('D:\\Library\\steamapps\\common\\ETS2'));
+    const other = withFailure(two, failure('C:\\Steam\\steamapps\\common\\ETS2', UTC_TEXT, 'ats'));
+    expect(other.failures.map(entry => [entry.game, entry.root])).toEqual([['ets2', 'C:\\Steam\\steamapps\\common\\ETS2'],
+      ['ets2', 'D:\\Library\\steamapps\\common\\ETS2'], ['ats', 'C:\\Steam\\steamapps\\common\\ETS2']]);
+    const replaced = withFailure(other, {...failure('c:\\steam\\steamapps\\common\\ets2'), code: 'IO_ERROR'});
+    expect(replaced.failures).toHaveLength(3);
+    expect(failureFor(replaced, 'ets2', 'C:\\Steam\\steamapps\\common\\ETS2')?.code).toBe('IO_ERROR');
+    const cleared = withoutFailure(replaced, 'ets2', 'D:\\LIBRARY\\steamapps\\common\\ETS2');
+    expect(cleared.failures.map(entry => [entry.game, entry.root])).toEqual([['ats', 'C:\\Steam\\steamapps\\common\\ETS2'],
+      ['ets2', 'c:\\steam\\steamapps\\common\\ets2']]);
+    expect(withoutFailure(cleared, 'ets2', 'E:\\Elsewhere')).toBe(cleared);
+  });
+
+  it('drops the oldest failure of another folder beyond 16', () => {
+    let document = EMPTY_PLUGIN_REGISTRY;
+    for (let index = 0; index < 16; index++) document = withFailure(document, failure(`C:\\Copy ${index}`, `2026-10-17T08:30:${String(59 - index).padStart(2, '0')}.000Z`));
+    const next = withFailure(document, failure('C:\\New', '2026-10-17T09:00:00.000Z'));
+    expect(next.failures).toHaveLength(16);
+    expect(failureFor(next, 'ets2', 'C:\\Copy 15')).toBeUndefined();
+    expect(failureFor(next, 'ets2', 'C:\\New')).toBeDefined();
+    expect(parsePluginRegistry(Buffer.from(serializePluginRegistry(next))).state).toBe('loaded');
   });
 });

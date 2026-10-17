@@ -33,7 +33,11 @@ afterEach(async () => {
   if (host && host.exitCode === null) {
     host.stdin.end('exit\n');
     await until(() => host!.exitCode !== null, 5_000);
-    if (host.exitCode === null) host.kill();
+    if (host.exitCode === null) {
+      host.kill();
+      // The temporary folder holds the DLL the host has loaded; it can be removed only after the host has exited.
+      await until(() => host!.exitCode !== null || host!.signalCode !== null, 5_000);
+    }
   }
   host = undefined;
   const violations = [...guard.violations];

@@ -7,7 +7,7 @@ import type {AtomicFileSystem} from '../../apps/desktop/src/plugin-setup/atomic-
 import type {RunningGames} from '../../apps/desktop/src/plugin-setup/game-processes';
 import {MAX_PLUGIN_FILE_BYTES, PluginInstaller, TARGET_RETRY_DELAYS_MS, type InstallerFileSystem, type PluginTarget, type RunningCheck,
   type VerifiedPluginBundle} from '../../apps/desktop/src/plugin-setup/plugin-installer';
-import {parsePluginRegistry, PluginRegistry, type InstallRecord} from '../../apps/desktop/src/plugin-setup/plugin-registry';
+import {MAX_INSTALL_RECORDS, parsePluginRegistry, PluginRegistry, type InstallRecord, type PendingIntent} from '../../apps/desktop/src/plugin-setup/plugin-registry';
 import {guardedTempRoot, type GuardedRoot} from '../shared/guarded-fs';
 import {fakeSteam, type FakeSteam} from '../shared/fake-steam';
 
@@ -229,7 +229,7 @@ describe('ownership', () => {
     expect(await fsp.readFile(setup.dll)).toEqual(FOREIGN);
     expect((await fsp.stat(setup.dll)).mtimeMs).toBe(before.mtimeMs);
     expect(await list(setup.plugins)).toEqual(['ets2telemetry-plugin.dll']);
-    expect((await registryOnDisk()).lastFailure).toEqual({'ets2:steam': {code: 'UNRECOGNIZED_FILE', step: 'classify', utc: UTC}});
+    expect((await registryOnDisk()).failures).toEqual([{game: 'ets2', root: setup.target.root, code: 'UNRECOGNIZED_FILE', step: 'classify', utc: UTC}]);
   });
 
   it('treats a file over 16 MiB, a folder and a junction with the plugin\'s name as unrecognized without reading them', async () => {
@@ -388,10 +388,18 @@ describe('injected failures', () => {
     const leftovers = await list(setup.plugins);
     expect(leftovers.filter(name => name !== 'ets2telemetry-plugin.dll' && !(step === 'cleanup' && name.endsWith('fedcba9876543210.tmp')))).toEqual([]);
     const disk = await registryOnDisk();
-    expect(disk.pending).toEqual([]);
+    // Review round 1 (finding 2): once the rename has happened, the intent stays so that recovery records the install
+    // from what is on disk; before, it was cleared and the install was never recorded.
+    const intent: PendingIntent = {op: 'update', game: 'ets2', root: setup.target.root, source: 'steam', temp: path.win32.join(setup.plugins, TEMP_NAME),
+      fromSha256: sha(OLD), toSha256: bundle.sha256, appVersion: '0.2.0', createdPluginsDirectory: false, startedUtc: UTC};
+    expect(disk.pending).toEqual(point.afterRename ? [intent] : []);
     expect(disk.installs).toEqual([]);
-    expect(disk.lastFailure).toEqual({'ets2:steam': {code: reason, step, utc: UTC}});
+    expect(disk.failures).toEqual([{game: 'ets2', root: setup.target.root, code: reason, step, utc: UTC}]);
     expect(delays).toEqual(step === 'rename' && code === 'EBUSY' ? TARGET_RETRY_DELAYS_MS : []);
+    if (point.afterRename) {
+      expect(await installer(registry).recover()).toEqual({recovered: 1, remaining: 0, reason: null});
+      expect(await registryOnDisk()).toMatchObject({installs: [record(setup)], pending: []});
+    }
   });
 
   it.each([['EPERM', 'PERMISSION_DENIED'], ['EBUSY', 'IO_ERROR'], ['ENOSPC', 'DISK_FULL']])('creating the plugins folder failing with %s reports %s and leaves no folder or intent', async (code, reason) => {
@@ -562,6 +570,140 @@ describe('crash recovery', () => {
     expect(await exists(path.win32.join(setup.plugins, TEMP_NAME))).toBe(true);
     expect(await installer(registry).recover()).toEqual({recovered: 1, remaining: 0, reason: null});
     expect(await exists(setup.plugins)).toBe(false);
+  });
+});
+
+describe('review round 1', () => {
+  const others = (count: number): InstallRecord[] => Array.from({length: count}, (_, index) => ({game: 'ats', root: `C:\\Other\\Copy ${index}`, source: 'manual',
+    sha256: sha(OLD), appVersion: '0.1.0', installedUtc: UTC, createdPluginsDirectory: false}));
+
+  it('refuses an install or adoption into a new folder when 16 folders are recorded, before any file operation', async () => {
+    expect(MAX_INSTALL_RECORDS).toBe(16);
+    const registry = await loadRegistry();
+    await registry.update(document => ({...document, installs: others(16)}));
+    for (const content of [undefined, BUNDLE]) {
+      const setup = await game({name: content ? 'adopt' : 'fresh', ...(content ? {content} : {})});
+      const probe = instrument(guarded());
+      expect(await installer(registry, {fs: probe.fs}).ensureInstalled(setup.target)).toMatchObject({outcome: 'blocked', reason: 'REGISTRY_UNAVAILABLE', step: 'pending'});
+      expect(probe.calls).toEqual([]);
+    }
+    expect((await registryOnDisk()).installs).toEqual(others(16));
+    expect((await registryOnDisk()).pending).toEqual([]);
+    // A folder that already has a record is still updated.
+    const recorded = await game({name: 'recorded', content: OLD});
+    await registry.update(document => ({...document, installs: [...others(15), record(recorded, {sha256: sha(OLD), appVersion: '0.1.0'})]}));
+    expect((await installer(registry).ensureInstalled(recorded.target)).outcome).toBe('updated');
+  });
+
+  it('recovers intents one at a time and never records past the install bound', async () => {
+    const first = await game({name: 'first', content: BUNDLE}), second = await game({name: 'second', content: BUNDLE});
+    const intent = (setup: Setup, second: number): PendingIntent => ({op: 'install', game: 'ets2', root: setup.target.root, source: 'steam',
+      temp: path.win32.join(setup.plugins, TEMP_NAME), fromSha256: null, toSha256: bundle.sha256, appVersion: '0.2.0', createdPluginsDirectory: false,
+      startedUtc: `2026-10-17T08:30:${second}.000Z`});
+    const registry = await loadRegistry();
+    await registry.update(document => ({...document, installs: others(15), pending: [intent(first, 10), intent(second, 11)]}));
+    expect(await installer(registry).recover()).toEqual({recovered: 2, remaining: 0, reason: null});
+    const disk = await registryOnDisk();
+    expect(disk.installs).toEqual([...others(15), record(first)]);
+    expect(disk.pending).toEqual([]);
+    expect(events.map(entry => entry.facts)).toEqual([{game: 'ets2', source: 'steam', op: 'install', outcome: 'installed'},
+      {game: 'ets2', source: 'steam', op: 'install', outcome: 'unrecorded'}]);
+    expect(await fsp.readFile(second.dll)).toEqual(BUNDLE);
+  });
+
+  it('keeps the intent after a rename whose re-read failed, so recovery records the install with the created folder', async () => {
+    const setup = await game();
+    const registry = await loadRegistry();
+    let opens = 0;
+    const probe = instrument(guarded(), call => {if (call.op === 'open' && call.target === setup.dll && ++opens === 1) throw errno('EBUSY');});
+    expect(await installer(registry, {fs: probe.fs}).ensureInstalled(setup.target)).toMatchObject({reason: 'TARGET_LOCKED', step: 'rehash'});
+    expect((await registryOnDisk()).pending).toMatchObject([{op: 'install', createdPluginsDirectory: true}]);
+    const fresh = await loadRegistry();
+    expect(await installer(fresh).recover()).toEqual({recovered: 1, remaining: 0, reason: null});
+    expect(await registryOnDisk()).toMatchObject({installs: [record(setup, {createdPluginsDirectory: true})], pending: []});
+    expect((await installer(fresh).remove(setup.target)).outcome).toBe('removed');
+    expect(await exists(setup.plugins)).toBe(false);
+  });
+
+  it('keeps an intent whose target cannot be read during recovery, and one whose layout became linked, without removing its temporary file', async () => {
+    const setup = await game();
+    const registry = await loadRegistry();
+    const temp = path.win32.join(setup.plugins, TEMP_NAME);
+    const pending: PendingIntent = {op: 'install', game: 'ets2', root: setup.target.root, source: 'steam', temp, fromSha256: null, toSha256: bundle.sha256,
+      appVersion: '0.2.0', createdPluginsDirectory: true, startedUtc: UTC};
+    await fsp.mkdir(setup.plugins);
+    await fsp.writeFile(setup.dll, BUNDLE);
+    await registry.update(document => ({...document, pending: [pending]}));
+    const locked = instrument(guarded(), call => {if (call.op === 'open' && call.target === setup.dll) throw errno('EBUSY');});
+    expect(await installer(registry, {fs: locked.fs}).recover()).toEqual({recovered: 0, remaining: 1, reason: 'TARGET_LOCKED'});
+    expect((await registryOnDisk()).pending).toEqual([pending]);
+
+    // The plugins folder moved behind a junction: recovery must not reach the temporary file through it.
+    const moved = path.win32.join(guard.root, 'moved-plugins');
+    await fsp.rename(setup.plugins, moved);
+    await fsp.writeFile(path.win32.join(moved, TEMP_NAME), 'partial');
+    await fsp.symlink(moved, setup.plugins, 'junction');
+    const probe = instrument(guarded());
+    expect(await installer(registry, {fs: probe.fs}).recover()).toEqual({recovered: 0, remaining: 1, reason: 'LINKED_FOLDER'});
+    expect(mutationsOf(probe.calls)).toEqual([]);
+    expect(await fsp.readFile(path.win32.join(moved, TEMP_NAME), 'utf8')).toBe('partial');
+    expect((await registryOnDisk()).pending).toEqual([pending]);
+    await fsp.unlink(setup.plugins);
+    await fsp.rename(moved, setup.plugins);
+    expect(await installer(registry).recover()).toEqual({recovered: 1, remaining: 0, reason: null});
+    expect(await exists(temp)).toBe(false);
+    expect((await registryOnDisk()).installs).toEqual([record(setup, {createdPluginsDirectory: true})]);
+  });
+
+  it('records createdPluginsDirectory false durably when another process created the folder first', async () => {
+    const setup = await game();
+    const seen: unknown[] = [];
+    const probe = instrument(guarded(), async call => {
+      if (call.op === 'mkdir') {await fsp.mkdir(call.target); throw errno('EEXIST');}
+      if (call.op === 'open' && call.flags === 'wx') seen.push((await registryOnDisk()).pending.map(intent => intent.createdPluginsDirectory));
+    });
+    const registry = await loadRegistry();
+    expect((await installer(registry, {fs: probe.fs}).ensureInstalled(setup.target)).outcome).toBe('installed');
+    expect(seen).toEqual([[false]]);
+    expect((await registryOnDisk()).installs).toEqual([record(setup)]);
+    expect((await installer(registry).remove(setup.target)).outcome).toBe('removed');
+    expect(await list(setup.plugins)).toEqual([]);
+  });
+
+  it('keeps failures per root: two Steam roots of one game never clear each other, and unchanged runs write nothing', async () => {
+    const blocked = await game({name: 'Library A', content: FOREIGN});
+    const installed = await game({name: 'Library B'});
+    let writes = 0;
+    const base = guard.fs as unknown as AtomicFileSystem;
+    const counting: AtomicFileSystem = {...base, rename: async (from, to) => {writes++; return base.rename(from, to);}};
+    const registry = await loadRegistry(counting);
+    const run = async () => [(await installer(registry).ensureInstalled(blocked.target)).reason, (await installer(registry).ensureInstalled(installed.target)).outcome];
+    expect(await run()).toEqual(['UNRECOGNIZED_FILE', 'installed']);
+    const before = writes;
+    const bytes = await fsp.readFile(path.join(registryDirectory, 'setup.json'));
+    expect(await run()).toEqual(['UNRECOGNIZED_FILE', 'unchanged']);
+    expect(await run()).toEqual(['UNRECOGNIZED_FILE', 'unchanged']);
+    expect(writes).toBe(before);
+    expect(await fsp.readFile(path.join(registryDirectory, 'setup.json'))).toEqual(bytes);
+    expect((await registryOnDisk()).failures).toEqual([{game: 'ets2', root: blocked.target.root, code: 'UNRECOGNIZED_FILE', step: 'classify', utc: UTC}]);
+  });
+
+  it('writes the removal intent durably before the unlink, and removes nothing when that write fails', async () => {
+    const setup = await game({content: OLD});
+    const seen: unknown[] = [];
+    const probe = instrument(guarded(), async call => {
+      if (call.op === 'unlink' && call.target === setup.dll) seen.push((await registryOnDisk()).pending);
+    });
+    expect((await installer(await loadRegistry(), {fs: probe.fs}).remove(setup.target)).outcome).toBe('removed');
+    expect(seen).toEqual([[{op: 'remove', game: 'ets2', root: setup.target.root, source: 'steam', temp: null, fromSha256: sha(OLD), toSha256: null,
+      appVersion: null, createdPluginsDirectory: false, startedUtc: UTC}]]);
+
+    const kept = await game({content: OLD, name: 'kept'});
+    const failing: AtomicFileSystem = {...(guard.fs as unknown as AtomicFileSystem), open: (target, flags) => flags === 'wx' ? Promise.reject(errno('EACCES')) : guard.fs.open(target, flags)};
+    const probe2 = instrument(guarded());
+    expect(await installer(await loadRegistry(failing), {fs: probe2.fs}).remove(kept.target)).toMatchObject({outcome: 'blocked', reason: 'REGISTRY_UNAVAILABLE', step: 'pending'});
+    expect(mutationsOf(probe2.calls)).toEqual([]);
+    expect(await fsp.readFile(kept.dll)).toEqual(OLD);
   });
 });
 

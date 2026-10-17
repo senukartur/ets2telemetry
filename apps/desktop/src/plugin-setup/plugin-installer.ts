@@ -3,8 +3,8 @@ import * as nodeFs from 'node:fs/promises';
 import path from 'node:path';
 import type {DiagnosticFacts} from '../diagnostics';
 import {blockingProcess, type RunningGames} from './game-processes';
-import {installRecordFor, PLUGIN_TEMP_FILE, pluginsDirectoryOf, sameRoot, type FailureRecord, type InstallRecord, type PendingIntent,
-  type PluginBlockReason, type PluginRegistry, type PluginRegistryDocument, type TargetSource} from './plugin-registry';
+import {failureFor, installRecordFor, MAX_INSTALL_RECORDS, PLUGIN_TEMP_FILE, pluginsDirectoryOf, sameRoot, withFailure, withoutFailure, type FailureRecord,
+  type InstallRecord, type PendingIntent, type PluginBlockReason, type PluginRegistry, type TargetSource} from './plugin-registry';
 import {PLUGIN_FILE_NAME, validateGameLayout, type PluginGame} from './steam-discovery';
 
 export {PLUGIN_BLOCK_REASONS, type PluginBlockReason} from './plugin-registry';
@@ -14,8 +14,8 @@ export {PLUGIN_BLOCK_REASONS, type PluginBlockReason} from './plugin-registry';
 // removes a file whose hash it does not recognize, writes a durable pending intent into the install registry before
 // it touches the game folder, and replaces the target by renaming a verified temporary file over it. The installer
 // receives the verified bundle bytes from its caller and never reads the bundle itself; ET-017 PR-4 wires it into main.
-// Documented gap: another process of the same user could swap the target between the classification (step 4) and the
-// rename (step 9).
+// Documented gap: another process of the same user could swap the target, or a folder above it, between the
+// classification (step 4) and the rename (step 9).
 
 /** Largest target that can be the plugin; anything bigger is UNRECOGNIZED_FILE without being read (P6). */
 export const MAX_PLUGIN_FILE_BYTES = 16 * 1024 * 1024;
@@ -236,8 +236,6 @@ export class PluginInstaller {
     }
   }
 
-  private failureKey = (target: PluginTarget) => `${target.game}:${target.source}`;
-
   private result(op: PluginOperation, outcome: PluginOutcome, loadsAfterRestart = false): PluginActionResult {
     return {op, outcome, reason: null, step: null, errno: null, loadsAfterRestart};
   }
@@ -259,19 +257,23 @@ export class PluginInstaller {
   }
 
   /**
-   * Records the failure for the card and clears the finished intent, best effort: a registry that cannot be written
-   * keeps its previous state, and the intent then stays for recovery. A repeated failure before any intent was
-   * written does not rewrite the file.
+   * Records this folder's failure for the card and clears a finished intent, best effort: a registry that cannot be
+   * written keeps its previous state, and the intent then stays for recovery. A failure repeated before any intent
+   * was written does not rewrite the file. Failures are kept per game folder, so another root's failure is never
+   * replaced or cleared.
    */
-  private async recordFailure(target: PluginTarget, failure: StepFailure, intent: PendingIntent | undefined, force: boolean): Promise<void> {
-    const previous = this.registry.document.lastFailure[this.failureKey(target)];
-    if (!force && !intent && previous?.code === failure.reason && previous.step === failure.step) return;
-    const entry: FailureRecord = {code: failure.reason, step: failure.step, utc: this.registry.utc()};
-    await this.registry.update(document => ({
-      ...document,
-      pending: intent ? document.pending.filter(other => !samePending(other, intent)) : document.pending,
-      lastFailure: {...document.lastFailure, [this.failureKey(target)]: entry}
-    })).catch(() => undefined);
+  private async recordFailure(target: PluginTarget, failure: StepFailure, cleared: PendingIntent | undefined, force: boolean): Promise<void> {
+    const previous = failureFor(this.registry.document, target.game, target.root);
+    if (!force && !cleared && previous?.code === failure.reason && previous.step === failure.step) return;
+    const entry: FailureRecord = {game: target.game, root: target.root, code: failure.reason, step: failure.step, utc: this.registry.utc()};
+    await this.registry.update(document => withFailure({
+      ...document, pending: cleared ? document.pending.filter(other => !samePending(other, cleared)) : document.pending
+    }, entry)).catch(() => undefined);
+  }
+
+  /** True when recording a new folder would exceed the 16-install bound: such an install or adoption is refused up front. */
+  private installsFull(target: PluginTarget): boolean {
+    return !installRecordFor(this.registry.document, target.game, target.root) && this.registry.document.installs.length >= MAX_INSTALL_RECORDS;
   }
 
   /**
@@ -284,6 +286,9 @@ export class PluginInstaller {
     let intent: PendingIntent | undefined;
     let temp: string | undefined, tempCreated = false, renamed = false, createdDirectory = false;
     let failure: StepFailure | undefined;
+    // A folder without a record whose result could not be recorded would leave an orphaned DLL: refuse it before
+    // anything in the game folder changes.
+    if (this.installsFull(target)) return this.blocked('install', new StepFailure('REGISTRY_UNAVAILABLE', 'pending', null));
     try {
       // Step 2: the layout, without following any link below the root.
       const layout = await this.layout(target);
@@ -301,7 +306,7 @@ export class PluginInstaller {
       // after it, so the intent already says whether this run created the folder.
       temp = path.win32.join(directory, `${PLUGIN_FILE_NAME}.${this.temporaryHex()}.tmp`);
       const fromSha256 = found.state === 'owned' ? found.sha256 : null;
-      const pending: PendingIntent = {op: fromSha256 ? 'update' : 'install', game: target.game, root: target.root, source: target.source, temp,
+      let pending: PendingIntent = {op: fromSha256 ? 'update' : 'install', game: target.game, root: target.root, source: target.source, temp,
         fromSha256, toSha256: this.bundle.sha256, appVersion: this.bundle.appVersion, createdPluginsDirectory: !layout.pluginsExists,
         startedUtc: this.registry.utc()};
       try {await this.registry.update(document => ({...document, pending: [...document.pending, pending]}));} catch (error) {
@@ -310,11 +315,24 @@ export class PluginInstaller {
       }
       intent = pending;
       if (!layout.pluginsExists) {
+        let existed = false;
         try {await this.fs.mkdir(directory); createdDirectory = true;} catch (error) {
           if (errorCode(error) !== 'EEXIST') throw new StepFailure(blockReasonFor(errorCode(error), 'default'), 'directory', errorCode(error));
+          existed = true;
         }
         const stats = await this.fs.lstat(directory, {bigint: true}).catch(() => undefined);
         if (!stats || stats.isSymbolicLink() || !stats.isDirectory()) throw new StepFailure(stats?.isSymbolicLink() ? 'LINKED_FOLDER' : 'UNRECOGNIZED_FILE', 'directory', null);
+        if (existed) {
+          // Another process created the folder meanwhile: the durable intent must not claim it, or recovery could
+          // remove a folder this application did not create.
+          const corrected: PendingIntent = {...pending, createdPluginsDirectory: false};
+          const previous = pending;
+          try {await this.registry.update(document => ({...document, pending: document.pending.map(other => samePending(other, previous) ? corrected : other)}));} catch (error) {
+            throw new StepFailure('REGISTRY_UNAVAILABLE', 'directory', registryErrno(error));
+          }
+          pending = corrected;
+          intent = corrected;
+        }
       }
       // Step 7: a new temporary file with the verified bytes, synced and closed.
       await this.writeTemporary(temp, () => {tempCreated = true;});
@@ -340,11 +358,11 @@ export class PluginInstaller {
         installedUtc: this.registry.utc(), createdPluginsDirectory: (record?.createdPluginsDirectory ?? false) || createdDirectory};
       const done = pending;
       try {
-        await this.registry.update(document => withoutFailure(this.failureKey(target), {
+        await this.registry.update(document => withoutFailure({
           ...document,
           installs: [...document.installs.filter(other => !(other.game === target.game && sameRoot(other.root, target.root))), installed],
           pending: document.pending.filter(other => !samePending(other, done))
-        }));
+        }, target.game, target.root));
       } catch (error) {
         // The plugin is in place; the intent stays and the next run's recovery records it.
         intent = undefined;
@@ -364,26 +382,27 @@ export class PluginInstaller {
       if (temp && tempCreated && !renamed) tempRemoved = await this.fs.unlink(temp).then(() => true, unlinkError => errorCode(unlinkError) === 'ENOENT');
       if (failure) {
         if (createdDirectory && !renamed) await this.removeEmptyDirectory(pluginsDirectoryOf(target.root));
-        // An intent whose temporary file could not be removed stays for the next run's recovery.
-        if (failure.step !== 'pending') await this.recordFailure(target, failure, intent && tempRemoved ? intent : undefined, intent !== undefined);
+        // The intent stays for the next run's recovery when its temporary file could not be removed, or once the rename
+        // has happened: recovery then records the install from what is on disk, with the created-folder flag.
+        if (failure.step !== 'pending') await this.recordFailure(target, failure, intent && tempRemoved && !renamed ? intent : undefined, intent !== undefined);
       }
     }
   }
 
   /** The target already equals the bundle: record a manual copy as adopted, otherwise change nothing (P12). */
   private async keepCurrent(target: PluginTarget, record: InstallRecord | undefined): Promise<PluginActionResult> {
-    const key = this.failureKey(target);
     const recorded = record?.sha256 === this.bundle.sha256 && record.appVersion === this.bundle.appVersion;
-    if (recorded && !this.registry.document.lastFailure[key]) return this.result('install', 'unchanged');
+    if (recorded && !failureFor(this.registry.document, target.game, target.root)) return this.result('install', 'unchanged');
+    if (this.installsFull(target)) return this.blocked('install', new StepFailure('REGISTRY_UNAVAILABLE', 'record', null));
     const next: InstallRecord = record
       ? {...record, sha256: this.bundle.sha256, appVersion: this.bundle.appVersion}
       : {game: target.game, root: target.root, source: 'adopted', sha256: this.bundle.sha256, appVersion: this.bundle.appVersion,
         installedUtc: this.registry.utc(), createdPluginsDirectory: false};
     try {
-      await this.registry.update(document => withoutFailure(key, {
+      await this.registry.update(document => withoutFailure({
         ...document,
         installs: [...document.installs.filter(other => !(other.game === target.game && sameRoot(other.root, target.root))), next]
-      }));
+      }, target.game, target.root));
     } catch (error) {return this.blocked('install', new StepFailure('REGISTRY_UNAVAILABLE', 'record', registryErrno(error)));}
     return this.result('install', record ? 'unchanged' : 'adopted');
   }
@@ -453,14 +472,13 @@ export class PluginInstaller {
       const record = installRecordFor(this.registry.document, target.game, target.root);
       const found = await this.classify(target, layout.target, layout.targetExists);
       if (found.state === 'blocked') throw new StepFailure(found.reason, found.step, found.errno);
-      const key = this.failureKey(target);
       if (found.state === 'missing') {
         if (record?.createdPluginsDirectory && layout.pluginsExists) await this.removeEmptyDirectory(layout.pluginsDirectory);
-        if (record || this.registry.document.lastFailure[key]) {
+        if (record || failureFor(this.registry.document, target.game, target.root)) {
           try {
-            await this.registry.update(document => withoutFailure(key, {
+            await this.registry.update(document => withoutFailure({
               ...document, installs: document.installs.filter(other => !(other.game === target.game && sameRoot(other.root, target.root)))
-            }));
+            }, target.game, target.root));
           } catch (error) {throw new StepFailure('REGISTRY_UNAVAILABLE', 'record', registryErrno(error));}
         }
         return this.result('remove', 'absent');
@@ -476,11 +494,11 @@ export class PluginInstaller {
       await this.withTargetRetry('unlink', () => this.fs.unlink(layout.target));
       if (pending.createdPluginsDirectory) await this.removeEmptyDirectory(layout.pluginsDirectory);
       try {
-        await this.registry.update(document => withoutFailure(key, {
+        await this.registry.update(document => withoutFailure({
           ...document,
           installs: document.installs.filter(other => !(other.game === target.game && sameRoot(other.root, target.root))),
           pending: document.pending.filter(other => !samePending(other, pending))
-        }));
+        }, target.game, target.root));
       } catch (error) {
         intent = undefined;
         return this.blocked('remove', new StepFailure('REGISTRY_UNAVAILABLE', 'record', registryErrno(error)));
@@ -494,10 +512,13 @@ export class PluginInstaller {
   }
 
   /**
-   * Recovery at the start of each run (P8): for every pending intent whose game is not running, removes its exact
-   * temporary file when that is a regular file, classifies the target again, records an install whose rename completed
-   * or a removal whose unlink completed, removes a plugins folder the intent created and left empty, clears the intent
-   * and logs PLUGIN_RECOVERED. Intents of a running game, or that cannot be cleaned now, stay for a later run.
+   * Recovery at the start of each run (P8). It needs a writable registry and a successful running check; the intents of
+   * a running game stay. Each other intent is resolved on its own, from what is on disk: the layout must still be ready
+   * (no link, still a game), its exact temporary file is removed when that is a regular file, and the target is
+   * classified again. A completed rename is recorded as an install, a completed unlink deletes the install record, a
+   * plugins folder the intent created and that is empty now is removed, and the intent is cleared with a
+   * PLUGIN_RECOVERED log line. An intent whose layout changed, whose temporary file cannot be removed or whose target
+   * cannot be read stays for a later run.
    */
   async recover(): Promise<RecoveryResult> {
     const pending = this.registry.document.pending;
@@ -513,10 +534,14 @@ export class PluginInstaller {
   }
 
   private async recoverIntents(intents: readonly PendingIntent[]): Promise<RecoveryResult> {
-    // What each target holds now: its hash, `missing`, or `unknown` when it cannot be read or the layout changed.
-    const cleared: {intent: PendingIntent; present: string}[] = [];
+    let recovered = 0;
     let reason: PluginBlockReason | null = null;
     for (const intent of intents) {
+      const layout = await validateGameLayout(this.fs, intent.root, intent.game);
+      if (layout.status !== 'ready') {
+        reason = layout.status === 'linked' ? 'LINKED_FOLDER' : layout.status === 'unexpected-entry' ? 'UNRECOGNIZED_FILE' : 'IO_ERROR';
+        continue;
+      }
       if (intent.temp) {
         try {
           const stats = await this.fs.lstat(intent.temp, {bigint: true});
@@ -525,54 +550,42 @@ export class PluginInstaller {
           if (errorCode(error) !== 'ENOENT') {reason = blockReasonFor(errorCode(error), 'default'); continue;}
         }
       }
-      const layout = await validateGameLayout(this.fs, intent.root, intent.game);
-      let present = 'unknown';
-      if (layout.status === 'ready' && !layout.targetExists) present = 'missing';
-      else if (layout.status === 'ready') {
+      // What the target holds now: its hash, `missing`, or `other` for a link, a folder or an oversized file.
+      let present = 'missing';
+      if (layout.targetExists) {
         const hashed = await this.hashFile(layout.target);
         if (hashed.ok) present = hashed.sha256;
-        else if (hashed.kind === 'missing') present = 'missing';
+        else if (hashed.kind === 'error') {reason = blockReasonFor(hashed.errno, 'target-read'); continue;}
+        else if (hashed.kind !== 'missing') present = 'other';
       }
-      if (layout.status === 'ready' && present === 'missing' && layout.pluginsExists && intent.createdPluginsDirectory) {
-        await this.removeEmptyDirectory(layout.pluginsDirectory);
-      }
-      cleared.push({intent, present});
-    }
-    if (!cleared.length) return {recovered: 0, remaining: intents.length, reason};
-    const utc = this.registry.utc();
-    try {
-      await this.registry.update(document => {
-        let installs = [...document.installs];
-        for (const {intent, present} of cleared) {
-          const others = installs.filter(other => !(other.game === intent.game && sameRoot(other.root, intent.root)));
-          const existing = installs.find(other => other.game === intent.game && sameRoot(other.root, intent.root));
-          if (intent.op !== 'remove' && intent.toSha256 !== null && intent.appVersion !== null && present === intent.toSha256) {
+      if (present === 'missing' && layout.pluginsExists && intent.createdPluginsDirectory) await this.removeEmptyDirectory(layout.pluginsDirectory);
+      let outcome = intent.op === 'remove' ? (present === 'missing' ? 'removed' : 'kept') : (present === intent.toSha256 ? 'installed' : 'not-installed');
+      const utc = this.registry.utc();
+      try {
+        await this.registry.update(document => {
+          const same = (other: {game: PluginGame; root: string}) => other.game === intent.game && sameRoot(other.root, intent.root);
+          const existing = document.installs.find(same);
+          let installs = document.installs;
+          if (outcome === 'installed' && intent.toSha256 !== null && intent.appVersion !== null) {
+            if (!existing && document.installs.length >= MAX_INSTALL_RECORDS) outcome = 'unrecorded';
             // The rename completed before the interruption: the plugin is ours.
-            installs = [...others, {game: intent.game, root: intent.root, source: intent.source, sha256: intent.toSha256, appVersion: intent.appVersion,
-              installedUtc: utc, createdPluginsDirectory: (existing?.createdPluginsDirectory ?? false) || intent.createdPluginsDirectory}];
-          } else if (intent.op === 'remove' && present === 'missing') {
-            installs = others;
-          }
-        }
-        return {...document, installs, pending: document.pending.filter(other => !cleared.some(done => samePending(done.intent, other)))};
-      });
-    } catch {return {recovered: 0, remaining: intents.length, reason: 'REGISTRY_UNAVAILABLE'};}
-    for (const {intent, present} of cleared) {
-      const outcome = intent.op === 'remove' ? (present === 'missing' ? 'removed' : 'kept') : (present === intent.toSha256 ? 'installed' : 'not-installed');
+            else installs = [...document.installs.filter(other => !same(other)), {game: intent.game, root: intent.root, source: intent.source, sha256: intent.toSha256,
+              appVersion: intent.appVersion, installedUtc: utc, createdPluginsDirectory: (existing?.createdPluginsDirectory ?? false) || intent.createdPluginsDirectory}];
+          } else if (outcome === 'removed') installs = document.installs.filter(other => !same(other));
+          return {...document, installs, pending: document.pending.filter(other => !samePending(other, intent))};
+        });
+      } catch {reason = 'REGISTRY_UNAVAILABLE'; continue;}
+      // `unrecorded`: the install bound left no room for the record; the file stays owned only through the bundled or a
+      // known hash.
       this.log('PLUGIN_RECOVERED', undefined, {game: intent.game, source: intent.source, op: intent.op, outcome});
+      recovered++;
     }
-    return {recovered: cleared.length, remaining: intents.length - cleared.length, reason};
+    return {recovered, remaining: intents.length - recovered, reason};
   }
 }
 
 function samePending(left: PendingIntent, right: PendingIntent): boolean {
   return left.op === right.op && left.game === right.game && sameRoot(left.root, right.root) && left.temp === right.temp && left.startedUtc === right.startedUtc;
-}
-function withoutFailure(key: string, document: PluginRegistryDocument): PluginRegistryDocument {
-  if (!document.lastFailure[key]) return document;
-  const lastFailure = {...document.lastFailure};
-  delete lastFailure[key];
-  return {...document, lastFailure};
 }
 function registryErrno(error: unknown): string | null {
   return error && typeof error === 'object' && 'errno' in error && typeof error.errno === 'string' ? error.errno : null;

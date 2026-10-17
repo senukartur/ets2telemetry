@@ -16,6 +16,8 @@ export const PLUGIN_REGISTRY_QUARANTINE_PREFIX = 'setup.rejected-';
 export const MAX_PLUGIN_REGISTRY_BYTES = 256 * 1024;
 export const MAX_INSTALL_RECORDS = 16;
 export const MAX_PENDING_INTENTS = 16;
+/** At most one failure per game folder is kept; the oldest is dropped first (failures are informational). */
+export const MAX_FAILURE_RECORDS = 16;
 export const KEPT_REJECTED_REGISTRIES = 3;
 /** Longest root path accepted in a record; far beyond any game folder, it only bounds a hostile file. */
 const MAX_ROOT_LENGTH = 4096;
@@ -57,28 +59,33 @@ export interface PendingIntent {
   readonly createdPluginsDirectory: boolean;
   readonly startedUtc: string;
 }
-export interface FailureRecord {readonly code: PluginBlockReason; readonly step: string; readonly utc: string}
+/** The last failure of one game folder: one entry per game and root, so the targets of one game never share it. */
+export interface FailureRecord {
+  readonly game: PluginGame;
+  readonly root: string;
+  readonly code: PluginBlockReason;
+  readonly step: string;
+  readonly utc: string;
+}
 export interface PluginRegistryDocument {
   readonly format: typeof PLUGIN_REGISTRY_FORMAT;
   readonly version: typeof PLUGIN_REGISTRY_VERSION;
   readonly games: Readonly<Record<PluginGame, GameSetupRecord>>;
   readonly installs: readonly InstallRecord[];
   readonly pending: readonly PendingIntent[];
-  /** Keyed `<game>:<source>`, for example `ets2:steam`. */
-  readonly lastFailure: Readonly<Record<string, FailureRecord>>;
+  readonly failures: readonly FailureRecord[];
 }
 
 export const EMPTY_PLUGIN_REGISTRY: PluginRegistryDocument = deepFreeze({
   format: PLUGIN_REGISTRY_FORMAT, version: PLUGIN_REGISTRY_VERSION,
   games: {ets2: {excluded: false, manualRoot: null}, ats: {excluded: false, manualRoot: null}},
-  installs: [], pending: [], lastFailure: {}
+  installs: [], pending: [], failures: []
 });
 
 const HASH = /^[0-9a-f]{64}$/;
 const APP_VERSION = /^\d{1,9}\.\d{1,9}\.\d{1,9}(-[0-9A-Za-z.-]{1,40})?$/;
 const UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const STEP = /^[a-z][a-z-]{0,31}$/;
-const FAILURE_KEY = /^(ets2|ats):(steam|manual)$/;
 /** The exact temporary file name an install or update writes beside the target (P8 step 3). */
 export const PLUGIN_TEMP_FILE = /^ets2telemetry-plugin\.dll\.[0-9a-f]{16}\.tmp$/;
 
@@ -115,8 +122,8 @@ const isUtc = (value: unknown): value is string => typeof value === 'string' && 
 const GAME_KEYS = ['excluded', 'manualRoot'];
 const INSTALL_KEYS = ['game', 'root', 'source', 'sha256', 'appVersion', 'installedUtc', 'createdPluginsDirectory'];
 const PENDING_KEYS = ['op', 'game', 'root', 'source', 'temp', 'fromSha256', 'toSha256', 'appVersion', 'createdPluginsDirectory', 'startedUtc'];
-const FAILURE_KEYS = ['code', 'step', 'utc'];
-const DOCUMENT_KEYS = ['format', 'version', 'games', 'installs', 'pending', 'lastFailure'];
+const FAILURE_KEYS = ['game', 'root', 'code', 'step', 'utc'];
+const DOCUMENT_KEYS = ['format', 'version', 'games', 'installs', 'pending', 'failures'];
 
 function validGames(value: unknown): value is Record<PluginGame, GameSetupRecord> {
   if (!exactKeys(value, PLUGIN_GAMES)) return false;
@@ -141,21 +148,35 @@ function validPending(value: unknown): value is PendingIntent {
   const from = value.op === 'install' ? value.fromSha256 === null : isHash(value.fromSha256);
   return from && isHash(value.toSha256) && isVersion(value.appVersion);
 }
-function validFailures(value: unknown): value is Record<string, FailureRecord> {
-  if (!isRecord(value)) return false;
-  return Object.entries(value).every(([key, entry]) => FAILURE_KEY.test(key) && exactKeys(entry, FAILURE_KEYS)
-    && (PLUGIN_BLOCK_REASONS as readonly unknown[]).includes(entry.code) && typeof entry.step === 'string' && STEP.test(entry.step) && isUtc(entry.utc));
+function validFailure(value: unknown): value is FailureRecord {
+  return exactKeys(value, FAILURE_KEYS) && isGame(value.game) && isRoot(value.root) && (PLUGIN_BLOCK_REASONS as readonly unknown[]).includes(value.code)
+    && typeof value.step === 'string' && STEP.test(value.step) && isUtc(value.utc);
+}
+/** True when two records name the same game and root, compared case-insensitively. */
+const sameFolder = (left: {game: PluginGame; root: string}, right: {game: PluginGame; root: string}) => left.game === right.game && sameRoot(left.root, right.root);
+const unique = (records: readonly {game: PluginGame; root: string}[]) => records.every((record, index) => records.findIndex(other => sameFolder(other, record)) === index);
+
+/**
+ * The registry is written with `format` and `version` first. A file over the size bound is classified from its first
+ * bytes only: one that starts like a later version of this format is `newer-version` and is never quarantined.
+ */
+const NEWER_PREFIX = /^\uFEFF?\s*\{\s*"format"\s*:\s*"ets2telemetry\.plugin-setup"\s*,\s*"version"\s*:\s*(\d{1,9})\s*[,}]/;
+function oversized(bytes: Uint8Array): ParsedRegistry {
+  const prefix = Buffer.from(bytes.subarray(0, 4096)).toString('utf8');
+  const version = NEWER_PREFIX.exec(prefix)?.[1];
+  return version !== undefined && Number(version) > PLUGIN_REGISTRY_VERSION ? {state: 'newer-version'} : {state: 'invalid-file'};
 }
 
 export type ParsedRegistry = {readonly state: 'loaded'; readonly document: PluginRegistryDocument} | {readonly state: 'invalid-file' | 'newer-version'};
 
 /**
  * Strict parsing: UTF-8 JSON (a leading byte order mark is accepted) of at most 256 KiB with exactly the v1 keys, at
- * most 16 installs and 16 pending intents, one install per game folder and valid values. The same format with a
- * higher integer version is `newer-version`; anything else that is not a valid v1 document is `invalid-file`.
+ * most 16 installs, 16 pending intents and 16 failures, one install and one failure per game folder and valid values. The
+ * same format with a higher integer version is `newer-version`, also for a file over the size bound whose first bytes
+ * say so; anything else that is not a valid v1 document is `invalid-file`.
  */
 export function parsePluginRegistry(bytes: Uint8Array): ParsedRegistry {
-  if (bytes.byteLength > MAX_PLUGIN_REGISTRY_BYTES) return {state: 'invalid-file'};
+  if (bytes.byteLength > MAX_PLUGIN_REGISTRY_BYTES) return oversized(bytes);
   let text: string;
   try {text = new TextDecoder('utf-8', {fatal: true, ignoreBOM: false}).decode(bytes);} catch {return {state: 'invalid-file'};}
   let value: unknown;
@@ -163,23 +184,17 @@ export function parsePluginRegistry(bytes: Uint8Array): ParsedRegistry {
   if (!isRecord(value) || value.format !== PLUGIN_REGISTRY_FORMAT) return {state: 'invalid-file'};
   if (Number.isSafeInteger(value.version) && (value.version as number) > PLUGIN_REGISTRY_VERSION) return {state: 'newer-version'};
   if (value.version !== PLUGIN_REGISTRY_VERSION || !exactKeys(value, DOCUMENT_KEYS) || !validGames(value.games)) return {state: 'invalid-file'};
-  const {installs, pending, lastFailure} = value;
-  if (!Array.isArray(installs) || installs.length > MAX_INSTALL_RECORDS || !installs.every(validInstall)) return {state: 'invalid-file'};
+  const {installs, pending, failures} = value;
+  if (!Array.isArray(installs) || installs.length > MAX_INSTALL_RECORDS || !installs.every(validInstall) || !unique(installs)) return {state: 'invalid-file'};
   if (!Array.isArray(pending) || pending.length > MAX_PENDING_INTENTS || !pending.every(validPending)) return {state: 'invalid-file'};
-  if (!validFailures(lastFailure)) return {state: 'invalid-file'};
-  const typed: InstallRecord[] = installs;
-  if (typed.some((record, index) => typed.findIndex(other => other.game === record.game && sameRoot(other.root, record.root)) !== index)) return {state: 'invalid-file'};
+  if (!Array.isArray(failures) || failures.length > MAX_FAILURE_RECORDS || !failures.every(validFailure) || !unique(failures)) return {state: 'invalid-file'};
   return {state: 'loaded', document: deepFreeze(canonical(value as unknown as PluginRegistryDocument))};
 }
 
 /** A copy with every key in the canonical order, so the bytes of a document never depend on how it was built. */
 function canonical(document: PluginRegistryDocument): PluginRegistryDocument {
   const game = (entry: GameSetupRecord): GameSetupRecord => ({excluded: entry.excluded, manualRoot: entry.manualRoot});
-  const failures: Record<string, FailureRecord> = {};
-  for (const key of Object.keys(document.lastFailure).sort()) {
-    const entry = document.lastFailure[key];
-    failures[key] = {code: entry.code, step: entry.step, utc: entry.utc};
-  }
+  const failures = document.failures.map(entry => ({game: entry.game, root: entry.root, code: entry.code, step: entry.step, utc: entry.utc}));
   return {
     format: PLUGIN_REGISTRY_FORMAT, version: PLUGIN_REGISTRY_VERSION,
     games: {ets2: game(document.games.ets2), ats: game(document.games.ats)},
@@ -188,7 +203,7 @@ function canonical(document: PluginRegistryDocument): PluginRegistryDocument {
     pending: document.pending.map(intent => ({op: intent.op, game: intent.game, root: intent.root, source: intent.source, temp: intent.temp,
       fromSha256: intent.fromSha256, toSha256: intent.toSha256, appVersion: intent.appVersion, createdPluginsDirectory: intent.createdPluginsDirectory,
       startedUtc: intent.startedUtc})),
-    lastFailure: failures
+    failures
   };
 }
 
@@ -289,7 +304,24 @@ export class PluginRegistry {
 
 /** The install record of `game` in exactly this root, if any. */
 export function installRecordFor(document: PluginRegistryDocument, game: PluginGame, root: string): InstallRecord | undefined {
-  return document.installs.find(record => record.game === game && sameRoot(record.root, root));
+  return document.installs.find(record => sameFolder(record, {game, root}));
+}
+
+/** The last failure recorded for `game` in exactly this root, if any. ET-017 PR-4 shows it as the target's last failure. */
+export function failureFor(document: PluginRegistryDocument, game: PluginGame, root: string): FailureRecord | undefined {
+  return document.failures.find(record => sameFolder(record, {game, root}));
+}
+
+/** The document with this folder's failure replaced; beyond the bound the oldest failures of other folders are dropped. */
+export function withFailure(document: PluginRegistryDocument, failure: FailureRecord): PluginRegistryDocument {
+  const others = document.failures.filter(record => !sameFolder(record, failure));
+  const kept = [...others].sort((left, right) => left.utc < right.utc ? 1 : left.utc > right.utc ? -1 : 0).slice(0, MAX_FAILURE_RECORDS - 1);
+  return {...document, failures: [...others.filter(record => kept.includes(record)), failure]};
+}
+
+/** The document without this folder's failure; another folder's failure is never touched. */
+export function withoutFailure(document: PluginRegistryDocument, game: PluginGame, root: string): PluginRegistryDocument {
+  return failureFor(document, game, root) ? {...document, failures: document.failures.filter(record => !sameFolder(record, {game, root}))} : document;
 }
 
 /** The target file of a root; the installer never names any other file in a game folder. */
