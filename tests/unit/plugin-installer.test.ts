@@ -707,6 +707,46 @@ describe('review round 1', () => {
   });
 });
 
+describe('delta review: intents of removed game folders', () => {
+  const intentFor = (setup: Setup): PendingIntent => ({op: 'install', game: 'ets2', root: setup.target.root, source: 'steam',
+    temp: path.win32.join(setup.plugins, TEMP_NAME), fromSha256: null, toSha256: bundle.sha256, appVersion: '0.2.0', createdPluginsDirectory: true, startedUtc: UTC});
+  async function kept(setup: Setup, fs?: InstallerFileSystem) {
+    const registry = await loadRegistry();
+    await registry.update(document => ({...document, pending: [intentFor(setup)]}));
+    return {registry, result: await installer(registry, fs ? {fs} : {}).recover()};
+  }
+
+  it('clears the intent of a root that was removed while its parent folder remains, and logs it as gone', async () => {
+    const setup = await game({name: 'Library\\ETS2'});
+    await fsp.rm(setup.target.root, {recursive: true});
+    expect((await kept(setup)).result).toEqual({recovered: 1, remaining: 0, reason: null});
+    expect((await registryOnDisk()).pending).toEqual([]);
+    expect(events.map(entry => entry.facts)).toEqual([{game: 'ets2', source: 'steam', op: 'install', outcome: 'gone'}]);
+    expect(await exists(path.win32.join(guard.root, 'Games', 'Library'))).toBe(true);
+  });
+
+  it('keeps the intent when the parent folder or the drive is missing', async () => {
+    const setup = await game({name: 'Library\\ETS2'});
+    await fsp.rm(path.win32.join(guard.root, 'Games', 'Library'), {recursive: true});
+    expect((await kept(setup)).result).toEqual({recovered: 0, remaining: 1, reason: 'IO_ERROR'});
+    expect((await registryOnDisk()).pending).toEqual([intentFor(setup)]);
+    // A missing drive: every path on it is ENOENT, the parent included.
+    const drive = await game({name: 'Drive\\ETS2'});
+    const unplugged = instrument(guarded(), call => {if (call.target.toLowerCase().startsWith(path.win32.join(guard.root, 'Games', 'Drive').toLowerCase())) throw errno('ENOENT');});
+    expect((await kept(drive, unplugged.fs)).result).toEqual({recovered: 0, remaining: 1, reason: 'IO_ERROR'});
+    expect((await registryOnDisk()).pending).toEqual([intentFor(drive)]);
+    expect(events).toEqual([]);
+  });
+
+  it('keeps the intent of a root that still exists but is no longer a game', async () => {
+    const setup = await game({name: 'Library\\ETS2'});
+    await fsp.unlink(path.win32.join(setup.target.root, 'bin', 'win_x64', 'eurotrucks2.exe'));
+    expect((await kept(setup)).result).toEqual({recovered: 0, remaining: 1, reason: 'IO_ERROR'});
+    expect((await registryOnDisk()).pending).toEqual([intentFor(setup)]);
+    expect(events).toEqual([]);
+  });
+});
+
 describe('real Windows locks and permissions', () => {
   const systemRoot = process.env.SystemRoot ?? 'C:\\Windows';
   const powershell = path.win32.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');

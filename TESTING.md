@@ -590,3 +590,5 @@ RED for review round 1, each applied alone to `abcdfca` and reverted ([ET-017 va
 - failures keyed by game only fail three cases;
 - every oversized file treated as invalid fails two cases;
 - a removal without its pending intent fails one case.
+
+The delta review (October 17, 2026) adds three recovery cases in `plugin-installer.test.ts`: an intent whose root was removed while its parent folder remains is cleared and logged as `gone`; one whose parent folder is removed, or whose drive is simulated as unplugged, stays with `IO_ERROR`; one whose root exists without its executable stays. Without the rule the removed-root case fails, and treating an unreadable parent as present fails the missing-parent case ([ET-017 validation](docs/validation/et-017.md#delta-review)).

@@ -533,11 +533,40 @@ export class PluginInstaller {
     return {...result, remaining: this.registry.document.pending.length};
   }
 
+  /**
+   * True only when the root itself does not exist (ENOENT) while its parent is still a plain folder. A missing parent,
+   * as on an unplugged drive, or any other error keeps the intent, because the folder may come back.
+   */
+  private async rootGone(root: string): Promise<boolean> {
+    try {
+      await this.fs.lstat(root, {bigint: true});
+      return false;
+    } catch (error) {
+      if (errorCode(error) !== 'ENOENT') return false;
+    }
+    const parent = path.win32.dirname(root);
+    if (parent === root) return false;
+    try {
+      const stats = await this.fs.lstat(parent, {bigint: true});
+      return stats.isDirectory() && !stats.isSymbolicLink();
+    } catch {return false;}
+  }
+
   private async recoverIntents(intents: readonly PendingIntent[]): Promise<RecoveryResult> {
     let recovered = 0;
     let reason: PluginBlockReason | null = null;
     for (const intent of intents) {
       const layout = await validateGameLayout(this.fs, intent.root, intent.game);
+      if (layout.status === 'not-game' && await this.rootGone(intent.root)) {
+        // The game folder was removed (the game or its library uninstalled): its temporary file and target went with it,
+        // so nothing is left to clean and the intent no longer holds one of the 16 slots.
+        try {
+          await this.registry.update(document => ({...document, pending: document.pending.filter(other => !samePending(other, intent))}));
+        } catch {reason = 'REGISTRY_UNAVAILABLE'; continue;}
+        this.log('PLUGIN_RECOVERED', undefined, {game: intent.game, source: intent.source, op: intent.op, outcome: 'gone'});
+        recovered++;
+        continue;
+      }
       if (layout.status !== 'ready') {
         reason = layout.status === 'linked' ? 'LINKED_FOLDER' : layout.status === 'unexpected-entry' ? 'UNRECOGNIZED_FILE' : 'IO_ERROR';
         continue;

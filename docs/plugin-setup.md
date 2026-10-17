@@ -259,12 +259,12 @@ The `plugins` folder is removed only when the install record says that this appl
 
 ### Recovery
 
-`recover()` runs at the start of each run; PR-4 calls it. It needs a writable registry and a successful running check, and the intents of a running game stay. Every other intent is resolved on its own, with its own registry write. The layout must still be ready (no link, still a game); otherwise the intent stays and nothing in the folder is touched. Recovery then removes the exact temporary file when that is a regular file, classifies the target again, and then:
+`recover()` runs at the start of each run; PR-4 calls it. It needs a writable registry and a successful running check, and the intents of a running game stay. Every other intent is resolved on its own, with its own registry write. The layout must still be ready (no link, still a game); otherwise the intent stays and nothing in the folder is touched. One exception: when the root itself no longer exists (`ENOENT`) while its parent folder is still a plain folder, the game or its folder was removed, the temporary file went with it, and the intent is cleared and logged with the outcome `gone`. A missing parent, as on an unplugged drive, keeps the intent. Recovery then removes the exact temporary file when that is a regular file, classifies the target again, and then:
 
 - records the install when the target now has the intent's `toSha256`, because the rename completed before the interruption. When 16 other folders are already recorded, the intent is cleared without a record and logged with the outcome `unrecorded`; the file then stays owned only through the bundled or a `known` hash;
 - deletes the install record of a removal whose target is gone;
 - removes a `plugins` folder that the intent created and that is empty now;
-- clears the intent and logs `PLUGIN_RECOVERED` with the game, source, operation and outcome (`installed`, `not-installed`, `unrecorded`, `removed` or `kept`).
+- clears the intent and logs `PLUGIN_RECOVERED` with the game, source, operation and outcome (`installed`, `not-installed`, `unrecorded`, `gone`, `removed` or `kept`).
 
 An intent whose layout changed, whose temporary file cannot be removed now, or whose target cannot be read (for example while it is locked) stays, and the reason is reported. Every install or removal first recovers the intents of its own root.
 
@@ -287,7 +287,7 @@ PR-4 logs each result as `PLUGIN_ACTION`, on change only.
 
 - Another process of the same user could swap the target, or a folder above it, between the classification (step 4) and the rename (step 9).
 - The registry rename is not separately flushed (see [Install registry](#install-registry)): a power loss can lose the latest intent while a change in a game folder on another drive persists.
-- An intent whose folder stays linked or unreadable is kept indefinitely; it counts against the 16-intent bound until the folder is repaired or ET-018 cleans it.
+- An intent whose folder stays linked, unreadable or present but no longer a game, or whose parent folder or drive is missing, is kept indefinitely; it counts against the 16-intent bound until the folder is repaired or comes back, or ET-018 cleans it. Only a root that is itself gone while its parent folder remains clears its intent (outcome `gone`), because nothing is left to clean. A removed Steam library whose game folder's parent is gone too therefore keeps its intent.
 - An ACL that denies deleting only the target file makes the rename fail with `EPERM`, which reads as `TARGET_LOCKED` rather than `PERMISSION_DENIED`. A folder that denies creating files fails at step 7 as `PERMISSION_DENIED`.
 - Node reports Windows' `ERROR_ACCESS_DENIED` as `EPERM`, so a locked target and a denied one are told apart only by the step.
 
