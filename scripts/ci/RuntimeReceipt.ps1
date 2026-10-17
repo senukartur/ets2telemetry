@@ -106,7 +106,7 @@ function Test-PluginReceipt {
     $plugin = $Driver.plugin
     if ($null -eq $plugin) { return $false }
     foreach ($field in @('pluginSteamInstalled','pluginUnrelatedUnchanged','pluginUnrecognizedUnchanged','pluginCardShown','pluginNoPathShown',
-        'pluginExclusionRemoved','pluginRestartStates','pluginRestartUnchanged','pluginEventsVerified')) {
+        'pluginExclusionRemoved','pluginRestartStates','pluginRestartUnchanged','pluginEventsVerified','pluginDiagnosticsExported')) {
         if ($plugin.$field -isnot [bool] -or $plugin.$field -ne $true) { return $false }
     }
     if (!(Test-ReceiptInteger -Value $plugin.runAExit -Minimum 0 -Maximum 0) -or !(Test-ReceiptInteger -Value $plugin.restartLauncherExit -Minimum 0 -Maximum 0)) { return $false }
@@ -121,12 +121,13 @@ function Test-PluginReceipt {
 }
 
 # ET-017 PR-5 review: the scaffold smoke runs plugin setup in the disabled mode with a rendered dashboard; the card must
-# show the disabled-mode note and disable every control that would change nothing.
+# show the disabled-mode note and disable every control that would change nothing. Since ET-017 PR-6 it must also show
+# the fixed diagnosis line and keep "Export diagnostics..." available.
 function Test-ScaffoldPluginReceipt {
     param([object]$Driver)
     $card = $Driver.pluginCard
     if ($null -eq $card) { return $false }
-    foreach ($field in @('disabledNoteShown','controlsDisabled')) {
+    foreach ($field in @('disabledNoteShown','controlsDisabled','diagnosisShown','exportAvailable')) {
         if ($card.$field -isnot [bool] -or $card.$field -ne $true) { return $false }
     }
     $modes = @($Driver.mainEvents | Where-Object { $_.event -ceq 'PLUGIN_SETUP_MODE' })

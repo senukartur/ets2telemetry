@@ -8,7 +8,7 @@ import {isOverlayEditOutcome, parseOverlayEditScale} from './overlay-placement';
 import {isUnitGame, isUnitProfile} from './unit-profiles';
 import {copyTripsQuery, isPageArgument, JOURNAL_CHANNELS, JOURNAL_EXPORT_CHANNEL} from './journal-contract';
 import {isJournalUuid} from '../../../packages/contracts/src/journal';
-import {isPluginGame, isPluginTargetId, PLUGIN_CHANNELS} from './plugin-setup-contract';
+import {DIAGNOSTICS_EXPORT_CHANNEL, isPluginGame, isPluginTargetId, PLUGIN_CHANNELS} from './plugin-setup-contract';
 let listener: ((update: LiveTelemetry) => void) | undefined;
 let port: MessagePort | undefined;
 let current: LiveTelemetry = initialLive();
@@ -175,7 +175,9 @@ const bridge: DesktopBridge = {
     ? ipcRenderer.invoke(PLUGIN_CHANNELS.setExcluded, game, excluded)
     : Promise.reject(new Error('Invalid plugin setup request')),
   showPluginFile: () => ipcRenderer.invoke(PLUGIN_CHANNELS.showFile),
-  openPluginFolder: targetId => isPluginTargetId(targetId) ? ipcRenderer.invoke(PLUGIN_CHANNELS.openFolder, targetId) : Promise.reject(new Error('Invalid plugin setup request'))
+  openPluginFolder: targetId => isPluginTargetId(targetId) ? ipcRenderer.invoke(PLUGIN_CHANNELS.openFolder, targetId) : Promise.reject(new Error('Invalid plugin setup request')),
+  // ET-017 PR-6 (P17): no argument is forwarded; main owns the Save dialog and the bundle and answers with a fixed outcome.
+  exportDiagnostics: () => ipcRenderer.invoke(DIAGNOSTICS_EXPORT_CHANNEL)
 };
 /** One page request of a trip: exactly the UUID and the cursor, or null for the first page. */
 function journalPage<T>(kind: 'events' | 'intervals' | 'samples', tripUuid: unknown, cursor: unknown): Promise<T> {

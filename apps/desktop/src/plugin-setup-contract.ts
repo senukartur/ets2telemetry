@@ -9,6 +9,9 @@ export const PLUGIN_CHANNELS = {
   openFolder: 'plugin:open-folder'
 } as const;
 
+/** ET-017 PR-6 (P17): the diagnostic bundle export; it takes no argument. */
+export const DIAGNOSTICS_EXPORT_CHANNEL = 'diagnostics:export';
+
 /** A listed game folder: `<game>:<source>:<ordinal>`, never a path. */
 export const PLUGIN_TARGET_ID = /^(ets2|ats):(steam|manual):[0-3]$/;
 

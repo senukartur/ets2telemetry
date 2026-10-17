@@ -731,3 +731,21 @@ describe('unfinished run', () => {
     setup.abort();
   });
 });
+
+// ET-017 PR-6 (PR-4 review nit): a current plugin whose install record cannot be written shows REGISTRY_UNAVAILABLE in the
+// view, not only in the log, and still arms no poll.
+describe('an unsaved install record', () => {
+  it('keeps REGISTRY_UNAVAILABLE on a folder that holds the current plugin while the registry is read-only', async () => {
+    await fsp.mkdir(path.join(ets2Root, 'bin', 'win_x64', 'plugins'), {recursive: true});
+    await fsp.writeFile(dll(ets2Root), BUNDLE);
+    await fsp.mkdir(registryDirectory(), {recursive: true});
+    await fsp.writeFile(path.join(registryDirectory(), 'setup.json'), JSON.stringify({format: 'ets2telemetry.plugin-setup', version: 2}));
+    const setup = create();
+    await launch(setup);
+    expect(setup.view().games.ets2.targets).toEqual([target('ets2:steam:0', 'installed', {reason: 'REGISTRY_UNAVAILABLE'})]);
+    expect(setup.view().games.ats.targets).toEqual([target('ats:steam:0', 'missing', {reason: 'REGISTRY_UNAVAILABLE'})]);
+    expect(await exists(dll(atsRoot))).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+    setup.abort();
+  });
+});
