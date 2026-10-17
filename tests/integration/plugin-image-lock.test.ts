@@ -48,8 +48,13 @@ async function until(predicate: () => boolean, ms: number) {
 
 it('keeps a loaded plugin DLL byte-identical: TARGET_LOCKED with a wrong lister, GAME_RUNNING with the real one', async () => {
   for (const [name, file] of Object.entries(artifacts)) expect(existsSync(file), `${name} artifact missing: run npm run native:build first`).toBe(true);
-  // The GAME_RUNNING assertion below means something only when no real game or client runs now.
-  const before = await checkRunningGames();
+  // The GAME_RUNNING assertion below means something only when no real game or client runs now. A fake host that an
+  // earlier chain step has just stopped may take a moment to exit, so the listing is retried for up to 10 s.
+  let before = await checkRunningGames();
+  for (const end = Date.now() + 10_000; Date.now() < end && !(before.ok && !before.running.ets2 && !before.running.ats && !before.running.client);) {
+    await new Promise(resolve => setTimeout(resolve, 500));
+    before = await checkRunningGames();
+  }
   expect(before.ok && before.running, 'ETS2, ATS or TruckersMP is running; close it before this test').toEqual({ets2: false, ats: false, client: false});
 
   const loaded = await fsp.readFile(artifacts.dll);
