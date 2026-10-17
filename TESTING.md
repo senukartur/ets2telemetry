@@ -673,6 +673,8 @@ RED for PR-6, each applied alone to `4252c08` and reverted ([ET-017 validation](
 - a channel that also accepts the overlay fails the trust case in `main-boundaries.test.ts`;
 - hiding `REGISTRY_UNAVAILABLE` on a current plugin fails the unsaved-record case in `plugin-setup.test.ts`.
 
+PR #111 review, second round: `tests/unit/diagnostics-bundle-check.test.ts` runs the plugin smoke's bundle checks (`scripts/ci/diagnostics-bundle-check.mjs`) on bundles the real builder made for user and computer names `main`, `logs`, `diagnostics`, `mode` and `root`, which must pass, and on bundles with a name in a fact key, a fact value or the OS release, a missing main row, an empty service log, a kept detail, a drive path or a run folder, which must fail. `plugin-setup-text.test.ts` requires the manual-removal hint and no copy hint for a refused removal in an excluded game, and `connection-diagnosis.test.ts` keeps `PLUGIN_BLOCKED_PERMISSION` for it. RED: the old whole-text scan and `facts.mode` check fail the five name cases; a copy hint that ignores the exclusion fails the excluded-game case.
+
 RED for the PR-6 review round, each applied alone to `35dc722` and reverted ([ET-017 validation](docs/validation/et-017.md#pr-6-review-round-1-october-17-2026)):
 - folder rows that ignore a current folder fail the five current-folder cases of `connection-diagnosis.test.ts`;
 - a rejected Save dialog reported as `BUNDLE_FAILED` fails "when the Save dialog rejects, before the bundle is built".
