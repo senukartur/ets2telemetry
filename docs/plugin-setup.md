@@ -269,7 +269,7 @@ The card never shows a path: the view carries none, and the folder labels use on
 
 ### The plugin smoke scenario
 
-Since PR-5 the `plugin` runtime smoke scenario (`Invoke-RuntimeSmoke.ps1 -Scenario plugin`) runs the application in the `test-root` mode. Review round 1 of PR-5 moved the journey out of the `lifecycle` smoke, which is back in its PR-4 shape, so that the gating packaged lifecycle step keeps its 60 s Job. The `plugin` scenario has its own Job of 120 s. CI runs the packaged `plugin` smoke on pull requests and the development one on pushes to `main` and dispatches, like the other development smokes. Before run A, `scripts/ci/plugin-fixture.mjs` first fails loudly if `tasklist` lists `eurotrucks2.exe`, `amtrucks.exe` or a `truckersmp*` process. It then builds `<run output>\plugin-root` with:
+Since PR-5 the `plugin` runtime smoke scenario (`Invoke-RuntimeSmoke.ps1 -Scenario plugin`) runs the application in the `test-root` mode. Review round 1 of PR-5 moved the journey out of the `lifecycle` smoke, which is back in its PR-4 shape, so that the gating packaged lifecycle step keeps its 60 s Job. The `plugin` scenario has its own Job of 60 s, like every other scenario; it had 120 s until October 18, 2026, and its hosted step takes about 14 s ([CI](ci.md#et-017-plugin-smoke-scenario)). CI runs the packaged `plugin` smoke on pull requests and the development one on pushes to `main` and dispatches, like the other development smokes. Before run A, `scripts/ci/plugin-fixture.mjs` first fails loudly if `tasklist` lists `eurotrucks2.exe`, `amtrucks.exe` or a `truckersmp*` process. It then builds `<run output>\plugin-root` with:
 
 - the marker file;
 - `Steam`, whose library list names LibraryA and LibraryB;
