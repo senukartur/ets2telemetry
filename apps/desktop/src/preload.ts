@@ -8,6 +8,7 @@ import {isOverlayEditOutcome, parseOverlayEditScale} from './overlay-placement';
 import {isUnitGame, isUnitProfile} from './unit-profiles';
 import {copyTripsQuery, isPageArgument, JOURNAL_CHANNELS, JOURNAL_EXPORT_CHANNEL} from './journal-contract';
 import {isJournalUuid} from '../../../packages/contracts/src/journal';
+import {isPluginGame, isPluginTargetId, PLUGIN_CHANNELS} from './plugin-setup-contract';
 let listener: ((update: LiveTelemetry) => void) | undefined;
 let port: MessagePort | undefined;
 let current: LiveTelemetry = initialLive();
@@ -165,7 +166,16 @@ const bridge: DesktopBridge = {
   listJournalSamples: (tripUuid, cursor) => journalPage('samples', tripUuid, cursor),
   // ET-016 PR-5 (J16): only a validated trip UUID is forwarded; main validates it again, owns the Save dialog and the file
   // writer, and answers with fixed codes and row counts, never a path.
-  exportJournalTrip: tripUuid => isJournalUuid(tripUuid) ? ipcRenderer.invoke(JOURNAL_EXPORT_CHANNEL, tripUuid) : Promise.reject(new Error('Invalid journal request'))
+  exportJournalTrip: tripUuid => isJournalUuid(tripUuid) ? ipcRenderer.invoke(JOURNAL_EXPORT_CHANNEL, tripUuid) : Promise.reject(new Error('Invalid journal request')),
+  // ET-017 plugin setup (P16): fixed channels; only a validated game, exclusion flag or target id is forwarded, and main
+  // validates again. Main owns the folder dialog, Explorer and the game folders; no answer carries a path.
+  retryPluginSetup: () => ipcRenderer.invoke(PLUGIN_CHANNELS.retry),
+  choosePluginFolder: game => isPluginGame(game) ? ipcRenderer.invoke(PLUGIN_CHANNELS.chooseFolder, game) : Promise.reject(new Error('Invalid plugin setup request')),
+  setPluginGameExcluded: (game, excluded) => isPluginGame(game) && typeof excluded === 'boolean'
+    ? ipcRenderer.invoke(PLUGIN_CHANNELS.setExcluded, game, excluded)
+    : Promise.reject(new Error('Invalid plugin setup request')),
+  showPluginFile: () => ipcRenderer.invoke(PLUGIN_CHANNELS.showFile),
+  openPluginFolder: targetId => isPluginTargetId(targetId) ? ipcRenderer.invoke(PLUGIN_CHANNELS.openFolder, targetId) : Promise.reject(new Error('Invalid plugin setup request'))
 };
 /** One page request of a trip: exactly the UUID and the cursor, or null for the first page. */
 function journalPage<T>(kind: 'events' | 'intervals' | 'samples', tripUuid: unknown, cursor: unknown): Promise<T> {

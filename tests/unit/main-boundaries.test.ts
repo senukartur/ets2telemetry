@@ -28,6 +28,9 @@ let windows: (EventEmitter & {webContents: typeof contents; hide: ReturnType<typ
   focused: boolean; setMovable: ReturnType<typeof vi.fn>; setSkipTaskbar: ReturnType<typeof vi.fn>; bounds: Electron.Rectangle})[];
 // ET-016 PR-5: the Save dialog of the trip export; each case sets its answer.
 let showSaveDialog: ReturnType<typeof vi.fn<(window: unknown, options: unknown) => Promise<{canceled: boolean; filePath?: string}>>>;
+// ET-017 PR-4: the folder dialog and the shell calls of plugin setup; each case sets its answers.
+let showOpenDialog: ReturnType<typeof vi.fn<(window: unknown, options: unknown) => Promise<{canceled: boolean; filePaths: string[]}>>>;
+let shell: {showItemInFolder: ReturnType<typeof vi.fn<(file: string) => void>>; openPath: ReturnType<typeof vi.fn<(folder: string) => Promise<string>>>};
 let channels: {port1: EventEmitter & {postMessage: ReturnType<typeof vi.fn>; close: ReturnType<typeof vi.fn<() => void>>; start: ReturnType<typeof vi.fn<() => void>>}; port2: {close: ReturnType<typeof vi.fn<() => void>>}}[];
 let configurations: Electron.BrowserWindowConstructorOptions[];
 let log: ReturnType<typeof vi.fn>;
@@ -69,6 +72,10 @@ const PLACEMENTS = {strip: {x: 0.5, y: 0, scale: 1}, card: {x: 1, y: 0, scale: 1
 const DEFAULT_OVERLAY = {layout: 'strip', sections: ALL_SECTIONS, placements: PLACEMENTS};
 // ET-012b: the application state carries the overlay edit mode, which every start leaves in driving mode.
 const DRIVING = {active: false};
+// ET-017: the application state carries the plugin setup view. These cases run with ETS2TELEMETRY_SOURCE_KIND set and
+// unpackaged, so the mode gate disables plugin setup: nothing is read or written, and no game is ever discovered.
+const NO_PLUGIN_GAME = {excluded: false, discovery: 'pending', manualFolder: 'none', targets: []};
+const PLUGINS_DISABLED = {mode: 'disabled', bundled: null, running: false, games: {ets2: NO_PLUGIN_GAME, ats: NO_PLUGIN_GAME}};
 let settingsView: {units: {ets2: string; ats: string}; overlay: {layout: string; sections: Record<string, boolean>; placements: Record<string, {x: number; y: number; scale: number}>}; state: string; writable: boolean; saveError: string | null};
 type OverlayWrite = (kind: 'layout' | 'sections' | 'placement', value: unknown) => Promise<unknown>;
 let overlayWrite: ReturnType<typeof vi.fn<OverlayWrite>>;
@@ -102,6 +109,8 @@ function installFixture() {
   Object.assign(ipc, {handle: (name: string, handler: typeof handlers extends Map<string, infer H> ? H : never) => handlers.set(name, handler)});
   resolveBroker = vi.fn(() => undefined);
   showSaveDialog = vi.fn(() => Promise.resolve({canceled: true, filePath: ''}));
+  showOpenDialog = vi.fn(() => Promise.resolve({canceled: true, filePaths: []}));
+  shell = {showItemInFolder: vi.fn(), openPath: vi.fn(() => Promise.resolve(''))};
   vi.doMock('electron', () => ({app, ipcMain: ipc, utilityProcess: {fork: () => {
     if (forks++ === 0) return child;
     const next = Object.assign(new EventEmitter(), {postMessage: vi.fn(), kill: vi.fn(() => true)}); children.push(next); return next;
@@ -131,7 +140,8 @@ function installFixture() {
     },
     Menu: {buildFromTemplate: (template: unknown[]) => ({template})},
     nativeImage: {createFromBuffer: () => ({addRepresentation: vi.fn()})},
-    dialog: {showSaveDialog: (window: unknown, options: unknown) => showSaveDialog(window, options)}}));
+    dialog: {showSaveDialog: (window: unknown, options: unknown) => showSaveDialog(window, options), showOpenDialog: (window: unknown, options: unknown) => showOpenDialog(window, options)},
+    shell: {showItemInFolder: (file: string) => shell.showItemInFolder(file), openPath: (folder: string) => shell.openPath(folder)}}));
   vi.doMock('electron-squirrel-startup', () => ({default: false}));
   vi.doMock('../../apps/desktop/src/entrypoints', () => ({processEntrypoint: () => 'package.json'}));
   log = vi.fn(); vi.doMock('../../apps/desktop/src/diagnostics', () => ({createDiagnostics: () => log}));
@@ -161,7 +171,7 @@ async function removeFixture() {
   for (const name of processEvents) for (const listener of processEmitter.listeners(name)) if (!originals.get(name)!.includes(listener)) processEmitter.removeListener(name, listener as (...args: unknown[]) => void);
   vi.clearAllTimers(); vi.restoreAllMocks(); vi.useRealTimers(); vi.unstubAllEnvs();
   for (const name of ['electron', 'electron-squirrel-startup', '../../apps/desktop/src/entrypoints', '../../apps/desktop/src/diagnostics', '../../apps/desktop/src/broker-artifact',
-    '../../apps/desktop/src/settings-store']) vi.doUnmock(name);
+    '../../apps/desktop/src/settings-store', '../../apps/desktop/src/plugin-setup/plugin-setup']) vi.doUnmock(name);
 }
 async function settle() {await Promise.resolve(); await Promise.resolve();}
 async function ready() {await loadMain(); await Promise.resolve(); child.emit('message', {type: 'ready'}); await settle();}
@@ -719,7 +729,7 @@ it('reopens a new dashboard from the tray that resubscribes without a second ups
   ipc.emit('telemetry:subscribe', reopenedSender);
   expect(reopened.postMessage).toHaveBeenCalledWith('telemetry:port', null, [channels.at(-1)!.port2]);
   expect(upstreamRequests()).toBe(1); expect(children).toHaveLength(1);
-  expect(handlers.get('app:get-state')!(reopenedSender)).toEqual({health: {service: 'ready', storage: 'verified', recording: {state: 'unknown'}, lastError: null}, settings: {units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: null}, overlayEdit: DRIVING});
+  expect(handlers.get('app:get-state')!(reopenedSender)).toEqual({health: {service: 'ready', storage: 'verified', recording: {state: 'unknown'}, lastError: null}, settings: {units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: null}, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED});
   // A second tray open focuses the existing window instead of creating another.
   trays[0].emit('click'); expect(windows).toHaveLength(3); expect(windows[2].show).toHaveBeenCalledOnce(); expect(windows[2].focus).toHaveBeenCalledOnce();
 });
@@ -824,7 +834,7 @@ it('shows restart exhaustion in health and the tray and stays running until an e
     children.at(-1)!.emit('exit', 1); await vi.advanceTimersByTimeAsync(1000);
     if (crash < 2) {children.at(-1)!.emit('message', {type: 'ready'}); await settle();}
   }
-  expect(handlers.get('app:get-state')!(trusted())).toEqual({health: {service: 'failed', storage: 'pending', recording: {state: 'unknown'}, lastError: 'SERVICE_RESTART_EXHAUSTED'}, settings: {units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: null}, overlayEdit: DRIVING});
+  expect(handlers.get('app:get-state')!(trusted())).toEqual({health: {service: 'failed', storage: 'pending', recording: {state: 'unknown'}, lastError: 'SERVICE_RESTART_EXHAUSTED'}, settings: {units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: null}, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED});
   await vi.advanceTimersByTimeAsync(500);
   expect(trays[0].setImage).toHaveBeenCalled(); expect(trays[0].setToolTip).toHaveBeenLastCalledWith('ETS2Telemetry\nService failed');
   expect(app.exit).not.toHaveBeenCalled();
@@ -855,7 +865,7 @@ it('answers a dashboard opened during a service restart with a not-ready status,
   expect(handlers.get('scaffold:status')!(sender)).toBeNull();
   expect(() => handlers.get('scaffold:status')!(trusted())).toThrow('Untrusted');
   ipc.emit('app:subscribe-state', sender);
-  expect(reopened.send).toHaveBeenLastCalledWith('app:state', {health: expect.objectContaining({service: 'restarting'}), settings: {units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: null}, overlayEdit: DRIVING});
+  expect(reopened.send).toHaveBeenLastCalledWith('app:state', {health: expect.objectContaining({service: 'restarting'}), settings: {units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: null}, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED});
   // When the pushed health reports ready, the status query already answers with the ready status.
   let statusAtReadyPush: unknown;
   reopened.send.mockImplementation((channel: string, state: {health: {service: string}}) => {
@@ -964,7 +974,7 @@ it('applies a settings read that settles after the load budget to the dashboard 
   // The store applies the late read (t = 200 ms) and reports it; main reads the new view from the store.
   settingsView = {units: {ets2: 'us-customary', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null};
   expect(settingsChanged).toBeTypeOf('function'); settingsChanged!();
-  expect(pushes().at(-1)).toEqual({health: {service: 'ready', storage: 'verified', recording: {state: 'unknown'}, lastError: null}, settings: settingsView, overlayEdit: DRIVING});
+  expect(pushes().at(-1)).toEqual({health: {service: 'ready', storage: 'verified', recording: {state: 'unknown'}, lastError: null}, settings: settingsView, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED});
   expect(handlers.get('app:get-state')!(trusted())).toMatchObject({settings: settingsView});
   await vi.advanceTimersByTimeAsync(50);
   expect(overlayProjection(overlayChannel)).toMatchObject({source: 'ETS2', speed: '55.9', speedUnit: 'mph', fuel: '19.3', fuelUnit: 'US gal', freshness: 'current'});
@@ -1000,7 +1010,7 @@ it('applies a unit profile only after the durable save and republishes the overl
   expect(pushes()).toHaveLength(before); expect(overlayProjection(overlayChannel)).toMatchObject({speedUnit: 'km/h'});
   settingsView = {units: {ets2: 'us-customary', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null}; saved.resolve(settingsView);
   await expect(request).resolves.toEqual(settingsView);
-  expect(pushes().at(-1)).toEqual({health: {service: 'ready', storage: 'verified', recording: {state: 'unknown'}, lastError: null}, settings: settingsView, overlayEdit: DRIVING});
+  expect(pushes().at(-1)).toEqual({health: {service: 'ready', storage: 'verified', recording: {state: 'unknown'}, lastError: null}, settings: settingsView, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED});
   await vi.advanceTimersByTimeAsync(50);
   expect(overlayProjection(overlayChannel)).toMatchObject({source: 'ETS2', speed: '55.9', speedUnit: 'mph', fuel: '19.3', fuelUnit: 'US gal', freshness: 'current'});
   consumeOverlay(overlayChannel);
@@ -1028,14 +1038,14 @@ it.each(['SETTINGS_WRITE_FAILED', 'SETTINGS_READ_ONLY'] as const)('keeps the uni
   // The store records the refusal in its view, as the real store does.
   settingsWrite.mockImplementation(() => {settingsView = {...settingsView, saveError: code}; return Promise.reject(new FakeSettingsError(code));});
   await expect(saveUnits(trusted(), 'ets2', 'us-customary')).rejects.toThrow(code === 'SETTINGS_READ_ONLY' ? 'Settings are read-only' : 'Settings could not be saved');
-  const refused = {health, settings: {units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: code}, overlayEdit: DRIVING};
+  const refused = {health, settings: {units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: code}, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED};
   expect(handlers.get('app:get-state')!(trusted())).toEqual(refused);
   expect(contents.send).toHaveBeenLastCalledWith('app:state', refused);
   await vi.advanceTimersByTimeAsync(50); expect(overlayChannel.port1.postMessage.mock.calls).toHaveLength(deliveries);
   // A later successful save clears the settings error and still leaves the service problem in place.
   settingsWrite.mockImplementation(() => {settingsView = {units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null}; return Promise.resolve(settingsView);});
   await saveUnits(trusted(), 'ats', 'us-customary');
-  const saved = {health, settings: {units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null}, overlayEdit: DRIVING};
+  const saved = {health, settings: {units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null}, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED};
   expect(handlers.get('app:get-state')!(trusted())).toEqual(saved);
   expect(contents.send).toHaveBeenLastCalledWith('app:state', saved);
 });
@@ -1875,4 +1885,198 @@ it('ends an export whose dialog is open at a fatal stop as interrupted, without 
   await expect(running).resolves.toEqual({ok: false, code: 'EXPORT_INTERRUPTED'});
   await expect(exportCall(trusted(), TRIP)).resolves.toEqual({ok: false, code: 'EXPORT_INTERRUPTED'});
   expect(journalSent()).toHaveLength(2);
+});
+// ET-017 PR-4 (P12, P13, P16): plugin setup in main. A fake orchestrator stands in for plugin-setup.ts, whose own tests
+// cover discovery, installs and timing; these cases cover main's part: the five fixed-shape channels from the trusted
+// dashboard main frame only, the folder dialog parented to the dashboard, main-owned shell calls, the AppState.plugins
+// push, the exit wiring and that no reply carries a path. Expected values are written by hand from P16.
+const PLUGIN_CHANNEL_NAMES = ['plugin:retry', 'plugin:choose-folder', 'plugin:set-excluded', 'plugin:show-file', 'plugin:open-folder'] as const;
+type PluginChannel = typeof PLUGIN_CHANNEL_NAMES[number];
+const BUNDLED_FILE = 'C:\\isolated\\resources\\telemetry-plugin\\ets2telemetry-plugin.dll';
+const PLUGINS_FOLDER = 'C:\\Games\\Euro Truck Simulator 2\\bin\\win_x64\\plugins';
+const PLUGIN_VIEW = {mode: 'test-root', bundled: {version: '0.2.0', sha256Prefix: '0123456789ab'}, running: false, games: {
+  ets2: {excluded: false, discovery: 'found', manualFolder: 'none', targets: [{id: 'ets2:steam:0', source: 'steam', ordinal: 0, state: 'installed', reason: null,
+    installed: {version: '0.2.0', sha256Prefix: '0123456789ab'}, lastFailure: null}]},
+  ats: {excluded: false, discovery: 'not-found', manualFolder: 'none', targets: []}}};
+interface FakePluginSetup {
+  mode: string; view: () => unknown; changed: () => void; start: ReturnType<typeof vi.fn>; abort: ReturnType<typeof vi.fn>; idle: ReturnType<typeof vi.fn>;
+  retry: ReturnType<typeof vi.fn>; setExcluded: ReturnType<typeof vi.fn>; chooseFolder: ReturnType<typeof vi.fn>; bundledFile: ReturnType<typeof vi.fn>;
+  folderToOpen: ReturnType<typeof vi.fn>; current: unknown;
+}
+let pluginSetup: FakePluginSetup;
+let pluginOptions: {decision: unknown; ports: unknown} | undefined;
+/** Replaces the orchestrator with a fake in `mode` before main loads. */
+function mockPluginSetup(mode = 'test-root') {
+  class PluginSetupError extends Error {}
+  vi.doMock('../../apps/desktop/src/plugin-setup/plugin-setup', () => ({
+    PluginSetupError,
+    productionPluginSetupPorts: () => ({}),
+    PluginSetup: class {
+      constructor(options: {decision: unknown; ports: unknown; changed: () => void}) {
+        pluginOptions = options;
+        const fake: FakePluginSetup = pluginSetup = {mode, current: PLUGIN_VIEW, changed: options.changed, view: () => fake.current,
+          start: vi.fn(), abort: vi.fn(), idle: vi.fn(() => undefined), retry: vi.fn(() => Promise.resolve(fake.current)),
+          setExcluded: vi.fn(() => Promise.resolve(fake.current)), chooseFolder: vi.fn(() => Promise.resolve({outcome: 'chosen'})),
+          bundledFile: vi.fn(() => BUNDLED_FILE), folderToOpen: vi.fn(() => Promise.resolve(PLUGINS_FOLDER))};
+        return fake;
+      }
+    }
+  }));
+}
+const pluginCall = (channel: PluginChannel, event: unknown, ...request: unknown[]) =>
+  new Promise<unknown>(resolve => resolve(handlers.get(channel)!(event, ...request as [unknown])));
+const pluginCalls = () => (['start', 'retry', 'setExcluded', 'chooseFolder', 'bundledFile', 'folderToOpen'] as const).map(name => pluginSetup[name].mock.calls.length);
+const VALID_PLUGIN_REQUESTS: Record<PluginChannel, unknown[]> = {
+  'plugin:retry': [], 'plugin:choose-folder': ['ets2'], 'plugin:set-excluded': ['ats', true], 'plugin:show-file': [], 'plugin:open-folder': ['ets2:steam:0']
+};
+it('uses the real mode gate: these unit cases run disabled and start nothing', async () => {
+  await ready();
+  expect((handlers.get('app:get-state')!(trusted()) as {plugins: unknown}).plugins).toEqual(PLUGINS_DISABLED);
+  expect(log).toHaveBeenCalledWith('PLUGIN_SETUP_MODE', undefined, {mode: 'disabled', reason: 'isolated-launch'});
+  await expect(pluginCall('plugin:choose-folder', trusted(), 'ets2')).resolves.toEqual({outcome: 'refused', code: 'SETUP_DISABLED'});
+  await expect(pluginCall('plugin:retry', trusted())).resolves.toEqual(PLUGINS_DISABLED);
+  expect(showOpenDialog).not.toHaveBeenCalled();
+});
+it('starts plugin setup once Electron is ready and the tray exists, without waiting for it', async () => {
+  mockPluginSetup(); trayAvailable = true;
+  await loadMain(); await settle();
+  expect(pluginSetup.start).toHaveBeenCalledOnce();
+  expect(pluginOptions).toMatchObject({decision: {mode: 'disabled', reason: 'isolated-launch'}, ports: undefined});
+  expect(windows).toHaveLength(0);
+  child.emit('message', {type: 'ready'}); await settle();
+  expect(windows).toHaveLength(2);
+});
+it('rejects plugin requests from untrusted senders, frames and the overlay, and every invalid shape, before any dialog or change', async () => {
+  mockPluginSetup(); trayAvailable = true; await ready();
+  const before = pluginCalls();
+  for (const channel of PLUGIN_CHANNEL_NAMES) {
+    for (const event of [{sender: {}, senderFrame: contents.mainFrame}, {sender: contents, senderFrame: {}}, overlayTrusted()]) {
+      await expect(pluginCall(channel, event, ...VALID_PLUGIN_REQUESTS[channel]), channel).rejects.toThrow('Untrusted plugin setup request');
+    }
+  }
+  const invalid: [PluginChannel, unknown[]][] = [
+    ['plugin:retry', ['ets2']], ['plugin:retry', [undefined]],
+    ['plugin:choose-folder', []], ['plugin:choose-folder', ['ETS2']], ['plugin:choose-folder', ['synthetic']], ['plugin:choose-folder', ['C:\\Games\\ETS2']],
+    ['plugin:choose-folder', ['ets2', 'C:\\Games\\ETS2']], ['plugin:choose-folder', [{game: 'ets2'}]],
+    ['plugin:set-excluded', ['ets2']], ['plugin:set-excluded', ['ets2', 'true']], ['plugin:set-excluded', ['ets2', 1]], ['plugin:set-excluded', ['game', true]],
+    ['plugin:set-excluded', ['ets2', true, 'C:\\Games']],
+    ['plugin:show-file', ['C:\\Windows\\System32']], ['plugin:show-file', [undefined]],
+    ['plugin:open-folder', []], ['plugin:open-folder', ['ets2:steam:4']], ['plugin:open-folder', ['ets2:Steam:0']], ['plugin:open-folder', ['ets2:adopted:0']],
+    ['plugin:open-folder', ['ets2:steam:0 ']], ['plugin:open-folder', ['C:\\Games\\ETS2']], ['plugin:open-folder', ['ets2:steam:0', 'ats:steam:0']], ['plugin:open-folder', [0]]
+  ];
+  for (const [channel, request] of invalid) {
+    await expect(pluginCall(channel, trusted(), ...request), `${channel} ${JSON.stringify(request)}`).rejects.toThrow('Invalid plugin setup request');
+  }
+  expect(pluginCalls()).toEqual(before);
+  expect(showOpenDialog).not.toHaveBeenCalled(); expect(shell.showItemInFolder).not.toHaveBeenCalled(); expect(shell.openPath).not.toHaveBeenCalled();
+});
+it('opens the folder dialog parented to the dashboard; a cancelled choice writes nothing, and a chosen one is answered without its path', async () => {
+  mockPluginSetup(); await ready();
+  await expect(pluginCall('plugin:choose-folder', trusted(), 'ats')).resolves.toEqual({outcome: 'cancelled'});
+  expect(showOpenDialog).toHaveBeenCalledExactlyOnceWith(windows[0], {properties: ['openDirectory']});
+  expect(pluginSetup.chooseFolder).not.toHaveBeenCalled();
+  showOpenDialog.mockResolvedValueOnce({canceled: false, filePaths: []});
+  await expect(pluginCall('plugin:choose-folder', trusted(), 'ats')).resolves.toEqual({outcome: 'cancelled'});
+  expect(pluginSetup.chooseFolder).not.toHaveBeenCalled();
+  showOpenDialog.mockResolvedValueOnce({canceled: false, filePaths: ['D:\\Games\\American Truck Simulator\\bin']});
+  await expect(pluginCall('plugin:choose-folder', trusted(), 'ats')).resolves.toEqual({outcome: 'chosen'});
+  expect(pluginSetup.chooseFolder).toHaveBeenCalledExactlyOnceWith('ats', 'D:\\Games\\American Truck Simulator\\bin');
+  // A refusal of the folder is answered with its fixed code only.
+  pluginSetup.chooseFolder.mockResolvedValueOnce({outcome: 'refused', code: 'FOLDER_WRONG_GAME'});
+  showOpenDialog.mockResolvedValueOnce({canceled: false, filePaths: ['D:\\Games\\Euro Truck Simulator 2']});
+  await expect(pluginCall('plugin:choose-folder', trusted(), 'ats')).resolves.toEqual({outcome: 'refused', code: 'FOLDER_WRONG_GAME'});
+  // A failure inside plugin setup reaches the dashboard as a fixed message, never its own text.
+  pluginSetup.chooseFolder.mockRejectedValueOnce(new Error('EPERM: operation not permitted, open D:\\Games\\secret'));
+  showOpenDialog.mockResolvedValueOnce({canceled: false, filePaths: ['D:\\Games\\Euro Truck Simulator 2']});
+  await expect(pluginCall('plugin:choose-folder', trusted(), 'ets2')).rejects.toThrow(/^Plugin setup request failed$/);
+});
+it('allows one folder dialog at a time and writes nothing when the exit begins while it is open', async () => {
+  mockPluginSetup(); trayAvailable = true; await ready();
+  let answer!: (value: {canceled: boolean; filePaths: string[]}) => void;
+  showOpenDialog.mockImplementationOnce(() => new Promise(resolve => {answer = resolve;}));
+  const open = pluginCall('plugin:choose-folder', trusted(), 'ets2');
+  await settle();
+  await expect(pluginCall('plugin:choose-folder', trusted(), 'ats')).resolves.toEqual({outcome: 'refused', code: 'BUSY'});
+  expect(showOpenDialog).toHaveBeenCalledOnce();
+  void handlers.get('app:exit')!(trusted());
+  answer({canceled: false, filePaths: ['D:\\Games\\Euro Truck Simulator 2']});
+  await expect(open).resolves.toEqual({outcome: 'cancelled'});
+  expect(pluginSetup.chooseFolder).not.toHaveBeenCalled();
+});
+it('refuses the folder dialog without opening it in the disabled mode', async () => {
+  mockPluginSetup('disabled'); await ready();
+  await expect(pluginCall('plugin:choose-folder', trusted(), 'ets2')).resolves.toEqual({outcome: 'refused', code: 'SETUP_DISABLED'});
+  expect(showOpenDialog).not.toHaveBeenCalled();
+});
+it('forwards retry and exclusion requests and answers with the plugin view only', async () => {
+  mockPluginSetup(); await ready();
+  await expect(pluginCall('plugin:retry', trusted())).resolves.toEqual(PLUGIN_VIEW);
+  await expect(pluginCall('plugin:set-excluded', trusted(), 'ats', true)).resolves.toEqual(PLUGIN_VIEW);
+  expect(pluginSetup.retry).toHaveBeenCalledExactlyOnceWith();
+  expect(pluginSetup.setExcluded).toHaveBeenCalledExactlyOnceWith('ats', true);
+  pluginSetup.setExcluded.mockRejectedValueOnce(new Error('EACCES: permission denied, open C:\\Users\\driver\\AppData\\Local\\ETS2Telemetry\\plugins\\setup.json'));
+  await expect(pluginCall('plugin:set-excluded', trusted(), 'ats', false)).rejects.toThrow(/^Plugin setup request failed$/);
+});
+it('shows the verified bundled file and opens a listed folder through main-owned shell calls, answering no path', async () => {
+  mockPluginSetup(); await ready();
+  await expect(pluginCall('plugin:show-file', trusted())).resolves.toBeUndefined();
+  expect(shell.showItemInFolder).toHaveBeenCalledExactlyOnceWith(BUNDLED_FILE);
+  await expect(pluginCall('plugin:open-folder', trusted(), 'ets2:steam:0')).resolves.toBeUndefined();
+  expect(pluginSetup.folderToOpen).toHaveBeenCalledExactlyOnceWith('ets2:steam:0');
+  expect(shell.openPath).toHaveBeenCalledExactlyOnceWith(PLUGINS_FOLDER);
+  // An unknown or no longer valid folder opens nothing; an Explorer error is logged as a fixed code without its text.
+  pluginSetup.folderToOpen.mockResolvedValueOnce(undefined);
+  await expect(pluginCall('plugin:open-folder', trusted(), 'ats:manual:0')).resolves.toBeUndefined();
+  expect(shell.openPath).toHaveBeenCalledOnce();
+  shell.openPath.mockResolvedValueOnce(`Failed to open ${PLUGINS_FOLDER}`);
+  await expect(pluginCall('plugin:open-folder', trusted(), 'ets2:steam:0')).resolves.toBeUndefined();
+  expect(log).toHaveBeenCalledWith('PLUGIN_FOLDER_NOT_OPENED');
+  expect(JSON.stringify(log.mock.calls)).not.toContain('Euro Truck Simulator 2');
+  // Without a verified bundle there is nothing to show.
+  pluginSetup.bundledFile.mockReturnValueOnce(undefined);
+  await expect(pluginCall('plugin:show-file', trusted())).resolves.toBeUndefined();
+  expect(shell.showItemInFolder).toHaveBeenCalledOnce();
+});
+it('carries the plugin view in the application state and pushes it when plugin setup changes', async () => {
+  mockPluginSetup(); await ready();
+  expect((handlers.get('app:get-state')!(trusted()) as {plugins: unknown}).plugins).toEqual(PLUGIN_VIEW);
+  ipc.emit('app:subscribe-state', trusted());
+  const changed = {...PLUGIN_VIEW, running: true};
+  pluginSetup.current = changed; pluginSetup.changed();
+  expect(contents.send).toHaveBeenLastCalledWith('app:state', expect.objectContaining({plugins: changed}));
+  expect(overlayContents.send).not.toHaveBeenCalledWith('app:state', expect.anything());
+  // No reply and no push carries a path.
+  const replies = [await pluginCall('plugin:retry', trusted()), await pluginCall('plugin:set-excluded', trusted(), 'ets2', false),
+    await pluginCall('plugin:show-file', trusted()), await pluginCall('plugin:open-folder', trusted(), 'ets2:steam:0'),
+    ...contents.send.mock.calls.filter(call => call[0] === 'app:state').map(call => call[1] as unknown)];
+  expect(JSON.stringify(replies)).not.toMatch(/[A-Za-z]:\\\\|\\\\\\\\/);
+});
+it('refuses every plugin request once the exit has begun, aborts setup and joins its idle work to the exit budget', async () => {
+  mockPluginSetup(); trayAvailable = true; await ready();
+  const idle = deferred();
+  pluginSetup.idle.mockReturnValue(idle.promise);
+  void handlers.get('app:exit')!(trusted());
+  // The exit's begin aborts it; the supervisor's stop aborts it again, which the orchestrator ignores.
+  expect(pluginSetup.abort).toHaveBeenCalled();
+  const before = pluginCalls();
+  for (const channel of PLUGIN_CHANNEL_NAMES) {
+    await expect(pluginCall(channel, trusted(), ...VALID_PLUGIN_REQUESTS[channel]), channel).rejects.toThrow('Plugin setup request was retired');
+  }
+  expect(pluginCalls()).toEqual(before); expect(showOpenDialog).not.toHaveBeenCalled();
+  child.emit('exit', 0);
+  expect(app.exit).not.toHaveBeenCalled();
+  idle.resolve(); await settle();
+  expect(app.exit).toHaveBeenCalledExactlyOnceWith(0);
+});
+it('exits within 1000 ms when the plugin setup run does not settle', async () => {
+  mockPluginSetup(); trayAvailable = true; await ready();
+  pluginSetup.idle.mockReturnValue(new Promise(() => undefined));
+  void handlers.get('app:exit')!(trusted()); child.emit('exit', 0);
+  await vi.advanceTimersByTimeAsync(999); expect(app.exit).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(1); expect(app.exit).toHaveBeenCalledExactlyOnceWith(0);
+});
+it('aborts plugin setup on a fatal stop as well', async () => {
+  mockPluginSetup(); await ready();
+  child.emit('message', {type: 'unexpected'});
+  expect(pluginSetup.abort).toHaveBeenCalledOnce();
 });
