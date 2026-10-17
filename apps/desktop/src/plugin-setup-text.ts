@@ -63,6 +63,12 @@ const MANUAL_REMOVE_REASONS: readonly PluginBlockReason[] = ['PERMISSION_DENIED'
  * The text of one folder. In an excluded game the folder's change is a removal, so the card never suggests copying the
  * plugin in there: a refused removal gets the manual-removal hint, and an unrecognized file, which this application
  * would not remove, gets no manual action.
+ *
+ * A manual action that would delete or overwrite a file needs that file's identity (PR #111 review): the removal hint
+ * only for a folder whose view carries this application's installed plugin, and the copy hint only where no file is in
+ * the way (`missing`), over this application's own plugin, or after the unrecognized-file text that says to move the
+ * file away first. A file that could not be read (`PERMISSION_DENIED` without an installed identity, from the installer's
+ * classification) gets a note that it is left as it is, and no action.
  */
 function targetText(target: PluginTargetView, excluded: boolean): PluginTargetText {
   const detail: string[] = [];
@@ -71,8 +77,12 @@ function targetText(target: PluginTargetView, excluded: boolean): PluginTargetTe
   if (target.reason) detail.push(reasonText(target.reason));
   if (target.installed && target.state !== 'installed') detail.push(fileText(PLUGIN_STRINGS.installedVersion, target.installed));
   if (target.lastFailure && target.lastFailure !== target.reason) detail.push(fill(PLUGIN_STRINGS.lastFailure, {reason: reasonText(target.lastFailure)}));
-  const manualCopy = !excluded && target.reason !== null && MANUAL_COPY_REASONS.includes(target.reason);
-  const manualRemove = excluded && target.reason !== null && MANUAL_REMOVE_REASONS.includes(target.reason);
+  const identified = target.installed !== null;
+  const unreadable = target.reason === 'PERMISSION_DENIED' && !identified && target.state !== 'missing' && target.state !== 'excluded';
+  const nothingInTheWay = target.state === 'missing' || identified || target.reason === 'UNRECOGNIZED_FILE';
+  const manualCopy = !excluded && target.reason !== null && MANUAL_COPY_REASONS.includes(target.reason) && nothingInTheWay;
+  const manualRemove = excluded && identified && target.reason !== null && MANUAL_REMOVE_REASONS.includes(target.reason);
+  if (unreadable) detail.push(PLUGIN_STRINGS.unreadableFile);
   if (manualCopy) detail.push(PLUGIN_STRINGS.manualCopy);
   if (manualRemove) detail.push(PLUGIN_STRINGS.manualRemove);
   return {

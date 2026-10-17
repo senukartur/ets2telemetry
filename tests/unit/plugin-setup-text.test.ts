@@ -116,6 +116,20 @@ describe('a game folder', () => {
       expect([line.detail, line.manualCopy, line.manualRemove]).toEqual([[REASONS[reason], 'Installed plugin: 0.2.0 (0123456789ab)', MANUAL_REMOVE], false, true]);
       expect(JSON.stringify(line)).not.toContain('copy the plugin file into');
     }
+    // PR #111 review: a file the installer could not read (PERMISSION_DENIED with no installed identity) may be someone
+    // else's, so neither an excluded nor a managed game is told to delete or overwrite it.
+    const UNREADABLE = 'The file with the plugin\'s name in this folder could not be read, so it is not known to be this application\'s plugin; it is left as it is.';
+    const unreadable = (excluded: boolean) => pluginSetupText(view({}, {ets2: {excluded, discovery: 'found', targets: [target({state: 'blocked', reason: 'PERMISSION_DENIED',
+      installed: null})]}})).games.ets2.targets[0];
+    for (const excluded of [true, false]) {
+      const line = unreadable(excluded);
+      expect([line.detail, line.manualCopy, line.manualRemove]).toEqual([[REASONS.PERMISSION_DENIED, UNREADABLE], false, false]);
+      expect(JSON.stringify(line)).not.toMatch(/delete the plugin file|copy the plugin file into/);
+    }
+    // A managed game's folder whose own older plugin Windows protects still offers the copy over it.
+    const owned = pluginSetupText(view({}, {ets2: {discovery: 'found', targets: [target({state: 'outdated', reason: 'PERMISSION_DENIED',
+      installed: {version: '0.1.0', sha256Prefix: 'aaaaaaaaaaaa'}})]}})).games.ets2.targets[0];
+    expect([owned.manualCopy, owned.manualRemove]).toEqual([true, false]);
     // An unrecognized file is never this application's, so the view carries no installed plugin for it.
     const unrecognized = pluginSetupText(view({}, {ets2: {excluded: true, discovery: 'found', targets: [target({state: 'blocked', reason: 'UNRECOGNIZED_FILE', installed: null})]}}))
       .games.ets2.targets[0];
@@ -175,7 +189,7 @@ describe('the connection diagnosis and the diagnostics export', () => {
     NO_GAME_SELECTED: 'No game is selected as the source. Choose Euro Truck Simulator 2 or American Truck Simulator above.',
     SETUP_DISABLED: 'Not checked: plugin setup is off in this launch.',
     GAME_NOT_FOUND: 'The selected game was not found. Choose its game folder below.',
-    PLUGIN_BLOCKED_PERMISSION: 'Windows did not allow the plugin file to be changed in a game folder. Do it by hand as the folder line below says, then press Retry.',
+    PLUGIN_BLOCKED_PERMISSION: 'Windows did not allow the plugin file in a game folder to be read or changed. See the folder line below for what to do.',
     PLUGIN_UNRECOGNIZED: 'A file that this application did not install is in place of the plugin. Move it away, then press Retry.',
     PLUGIN_OUTDATED: 'An older plugin is installed. It is updated once the game is closed.',
     PLUGIN_PENDING_GAME_CLOSE: 'The plugin is changed automatically once the game, TruckersMP or the program using the file is closed. Then start the game again.',
