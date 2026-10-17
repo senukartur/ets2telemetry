@@ -254,6 +254,10 @@ The notification-area icon itself cannot be clicked by the harness, so the journ
 
 Measured local durations on the owner workstation (24 logical processors, so the 25% cap is 6 processors), October 15, 2026: development lifecycle Job 2.35–2.37 s, packaged 2.25–2.31 s; second-instance exit 137–165 ms; explicit exit 96–184 ms; run B close 120–145 ms. Hosted runners have two logical processors and a 0.5-processor cap; hosted durations belong in the PR's CI record. The pre-authorized split into a separate restart scenario was not needed locally.
 
+## ET-017 plugin journey in the lifecycle smoke
+
+Since ET-017 PR-5 (October 17, 2026) both `lifecycle` smokes also run the [plugin journey](plugin-setup.md#plugin-journey-of-the-lifecycle-smoke) in the application's test-root mode against a fake Steam and game root that `scripts/ci/plugin-fixture.mjs` builds inside the run's output folder. Pull requests run only the packaged lifecycle smoke, which therefore carries the journey; the step, its Job limits, deadlines and zero retries are unchanged. The fixture first fails if `tasklist` lists ETS2, ATS or a TruckersMP process. The additive plugin branch of `RuntimeReceipt.ps1` requires the journey's flags, one `PLUGIN_SETUP_MODE` row with `test-root` in each run and no `PLUGIN_TEST_ROOT_ESCAPE` row. Locally the development lifecycle Job took about 15 s with the journey.
+
 ## ET-011b settings in the lifecycle smoke
 
 ET-011b extends the same `lifecycle` journey in both modes; the Job limits, deadlines and zero retries are unchanged and no scenario was added. Before run A launches, the driver writes a deliberately truncated `settings.json` into the isolated `LOCALAPPDATA` (`ETS2Telemetry\settings`).
