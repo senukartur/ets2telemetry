@@ -239,9 +239,11 @@ describe('refused targets (J16)', () => {
     await expect(other.instance.export(TRIP)).resolves.toEqual({ok: false, code: 'EXPORT_WRITE_FAILED'});
   });
   it('refuses a folder deeper than the ancestor bound, which it cannot show to lie outside the data folder', async () => {
+    const dataRoot = path.join(local, 'ETS2Telemetry');
     const deep = ['\\\\server\\share', ...Array.from({length: 130}, (_, index) => `d${index}`)].join('\\');
     const fs: ExportFileSystem = {...realFs, open: vi.fn(), realpath: (target: string) => Promise.resolve(target),
-      stat: (target: string) => Promise.resolve({dev: 7n, ino: BigInt(target.length + 1_000)})};
+      // The data root has an identity no other path shares, so only the depth bound can refuse this folder.
+      stat: (target: string) => Promise.resolve(target === dataRoot ? {dev: 7n, ino: 42n} : {dev: 7n, ino: BigInt(target.length + 1_000)})};
     const f = exporter({target: `${deep}\\trip.json`, fs});
     await expect(f.instance.export(TRIP)).resolves.toEqual({ok: false, code: 'EXPORT_TARGET_REFUSED'});
     expect(fs.open).not.toHaveBeenCalled();
