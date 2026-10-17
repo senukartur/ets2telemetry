@@ -93,6 +93,13 @@ jobs:
         run: |
           npm run test:v1-chain
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      # The same fake-SDK host loads the test plugin DLL from a fake game root; the plugin installer must neither replace
+      # nor remove the loaded DLL (ET-017 PR-3, docs/ci.md#et-017-plugin-image-lock). Synthetic only.
+      - name: Plugin image lock check
+        timeout-minutes: 3
+        run: |
+          npm run test:plugin-lock
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Isolated synthetic v0 CLI pipe smoke
         run: npm run smoke --workspace @ets2telemetry/telemetry-simulator
       - name: Isolated synthetic v1 CLI pipe smoke

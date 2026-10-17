@@ -8,7 +8,7 @@ ET-017 is delivered as six PRs:
 | --- | --- | --- |
 | PR-1 | The plugin DLL is bundled with a hash manifest ([bundle format](#bundle-format)) | Implemented; nothing reads the bundle at runtime |
 | PR-2 | Steam and manual game-folder discovery ([Steam root](#steam-root), [Steam discovery](#steam-discovery), [manual game folder](#manual-game-folder), [running games](#running-games)) | Implemented as read-only modules; nothing calls them from main yet |
-| PR-3 | The atomic installer and the [install registry](#install-registry) | Coming |
+| PR-3 | The atomic installer ([algorithm](#algorithm)) and the [install registry](#install-registry) | Implemented as modules; nothing calls them from main yet |
 | PR-4 | Silent setup in main, the [mode gate](#mode-gate) and the per-game state in `AppState` | Coming |
 | PR-5 | The per-game plugin card on the dashboard | Coming |
 | PR-6 | Connection diagnosis and the diagnostic bundle | Coming |
@@ -162,44 +162,145 @@ Coming in PR-4. The pure `pluginSetupMode` decides from the environment and the 
 
 ## Install registry
 
-Coming in PR-3. The registry records which game folders this application manages and which plugin it installed there.
+Implemented in PR-3 as `plugin-registry.ts` with the atomic writer `atomic-json-file.ts` (P9); nothing loads it from main until PR-4. The registry records which game folders this application manages, which plugin it installed or adopted there, and the operations in progress.
 
-- **File.** `%LOCALAPPDATA%\ETS2Telemetry\plugins\setup.json`, format `ets2telemetry.plugin-setup`, version 1:
+- **File.** `%LOCALAPPDATA%\ETS2Telemetry\plugins\setup.json`, format `ets2telemetry.plugin-setup`, version 1. It is UTF-8 JSON, written with two-space indentation, the keys in this order and a final newline:
 
   ```text
   {
     format, version: 1,
-    games: {ets2: {excluded, manualRoot}, ats: {...}},
+    games: {ets2: {excluded, manualRoot}, ats: {excluded, manualRoot}},
     installs: [{game, root, source: steam|manual|adopted, sha256, appVersion, installedUtc, createdPluginsDirectory}],
-    pending: [...],
-    lastFailure: {"<game>:<source>": {code, step, utc}}
+    pending: [{op: install|update|remove, game, root, source: steam|manual, temp, fromSha256, toSha256, appVersion, createdPluginsDirectory, startedUtc}],
+    failures: [{game, root, code, step, utc}]
   }
   ```
 
-- **Bounds.** At most 256 KiB, 16 installs and 16 pending entries.
-- **Writes.** Like the settings file: the file must not be a link; stale `setup.json.<pid>.<uuid>.tmp` files are removed; a new temporary file is written with `wx`, synced and renamed over `setup.json`, with up to five retries on `EPERM`, `EACCES` or `EBUSY`. The single-instance lock guarantees one writer.
-- **Invalid file.** It is kept as `setup.rejected-<UTC>.json` (the newest three are kept), and the registry starts empty.
-- **Newer version.** Read-only: no mutation, and every operation reports `REGISTRY_UNAVAILABLE`.
-- **Exclusions.** Game exclusions and the manual folder live here, not in `settings.json` (P10).
+- **Strict parsing.** Exactly these keys at every level. A root is a normalized absolute drive path; `manualRoot` is such a path or `null`; hashes are 64 lowercase hex digits; versions look like `0.1.0` or `0.2.0-beta.1`; times are UTC ISO strings with milliseconds; there is one install per game and root, compared case-insensitively. A pending `install` has no `fromSha256` and an `update` has one; both name a `temp` that is exactly `ets2telemetry-plugin.dll.<16 lowercase hex>.tmp` in that root's `bin\win_x64\plugins`, so recovery can never remove another file. A `remove` has `temp`, `toSha256` and `appVersion` set to `null`. There is at most one failure per game and root; its code is one of the P16 block reasons. A leading byte order mark is accepted.
+- **Bounds.** At most 256 KiB, 16 installs, 16 pending entries and 16 failures. A change beyond the install or pending bound is refused with `REGISTRY_UNAVAILABLE`, and nothing is written; the installer checks the install bound before it changes a game folder (see [Algorithm](#algorithm)). A new failure beyond 16 drops the oldest failure of another folder, because failures only inform the card.
+- **Loading.** Loading never creates, changes or removes anything. A missing folder or file is the empty registry.
+- **Writes.** As for the settings file ([settings](settings.md#saving)):
+  - the folder is created if needed and must be a plain folder, not a link;
+  - stale `setup.json.<pid>.<uuid>.tmp` files are removed, and no other file is touched;
+  - a new temporary file is written with `wx`, synced, closed and renamed over `setup.json`, with up to five retries after 20, 40, 60, 80 and 100 ms on `EPERM`, `EACCES` or `EBUSY`.
 
-**Contract with ET-018 (uninstall).** ET-018 reads this file before it deletes the data root. For each install, and only while neither that game nor TruckersMP is running:
+  A failure removes the temporary file and keeps both the previous file and the document in memory; a change applies only after the rename. Changes are serialized, and main's single-instance lock guarantees one writer. As for settings, Node.js cannot flush a directory entry on Windows, so the rename itself is not separately flushed: a power loss right after a write can lose the latest registry change, for example a pending intent, while a change already made in a game folder on another drive persists. The next run then sees an owned plugin without its intent or record, which ownership by the bundled or a `known` hash still covers.
+- **Invalid file.** The registry starts empty. The first write moves the file aside unchanged as `setup.rejected-<UTC yyyymmddThhmmssZ>.json` (`-2`, `-3`, … when that name exists), keeps the newest three such files and logs `PLUGIN_REGISTRY_QUARANTINED`.
+- **Read-only states.** The registry is read-only for a newer version (the same format with a higher integer version; a file over 256 KiB is classified from its first bytes, so a large newer file is never quarantined), a `plugins` folder or `setup.json` that is a link or not a plain folder or file, a read error, and a missing or relative location. Nothing is written, and every installer operation reports `REGISTRY_UNAVAILABLE` before it touches a game folder.
+- **Exclusions.** Game exclusions and the manual folder live here, not in `settings.json` (P10). PR-3 only stores them; PR-4 sets and uses them.
+- **Failures.** `failures` keeps the last failure of each game folder (game and canonical root) with its step; PR-4 shows it as that target's last failure. A success in that folder clears it, and a failure or success in one root never replaces or clears another root's failure. A failure repeated before any intent was written does not rewrite the file. A refusal by the running check writes nothing, so polling while a game runs never writes the registry.
 
-1. It re-validates the layout: `bin`, `bin\win_x64` and `plugins` must still be plain folders, not links. Otherwise it skips the install.
+**Format change before release.** Review round 1 of PR-3 (October 17, 2026) replaced the first form of the failure field, `lastFailure` keyed `<game>:<source>`, with the per-folder `failures` list, because the up to four Steam roots of one game overwrote and cleared each other's failure. Nothing had shipped, so version 1 was changed in place; no released build ever wrote the old form, and the parser refuses it.
+
+**Contract with ET-018 (uninstall).** ET-018 reads this file before it deletes the data root.
+
+- **Registry states.** It acts only on a registry that loads as `loaded` or `empty`. For an `invalid-file`, `newer-version` or `unreadable` registry it touches no game folder, reports that the plugin could not be removed, and keeps `plugins\setup.json` (and any `setup.rejected-*.json`) while it deletes the rest of the data root, so that a manual retry or a newer version can still find the installs. An `empty` registry means nothing to clean.
+- **Folders.** Every game folder named by an install record or by a pending `install` or `update` intent, each once. A pending `remove` intent's folder has an install record or nothing left to remove.
+
+For each folder, and only while neither that game nor TruckersMP is running:
+
+1. It re-validates the layout: `bin`, `bin\win_x64` and `plugins` must still be plain folders, not links. Otherwise it skips the folder.
 2. It removes the exact temporary file of each `pending` entry for that folder when that file is a regular file.
-3. It removes the DLL only while its hash is still the recorded `sha256` or a `known` hash. A locked or denied file is skipped and reported, never retried in a loop.
-4. It removes the `plugins` folder only if `createdPluginsDirectory` is set and the folder is now empty.
+3. It removes the DLL only while its hash is still the recorded `sha256`, the `toSha256` of a pending install or update for that folder, or a `known` hash. A read-only DLL (`READ_ONLY_FILE`) is skipped and reported, because an unlink would clear the attribute. A locked or denied file is skipped and reported, never retried in a loop.
+4. It removes the `plugins` folder only if the install record's or a pending intent's `createdPluginsDirectory` is set and the folder is now empty.
 
 Any other file stays.
 
+## Algorithm
+
+Implemented in PR-3 as `plugin-installer.ts` (P6–P8). The caller passes:
+
+- the verified bundle bytes with their SHA-256, the bundle version and the `known` list;
+- a target: the game, its source (`steam` or `manual`) and its canonical root;
+- the registry and the running check.
+
+The installer never reads the bundle itself; PR-4 supplies it. Operations on one target are sequential, and PR-4 runs them single-flight.
+
+### Ownership (P6)
+
+A regular file at `bin\win_x64\plugins\ets2telemetry-plugin.dll` is owned only when its SHA-256 equals one of these:
+
+- the bundled hash;
+- a `known` hash;
+- the `sha256` of the registry's install record for that game and exactly that root. A hash recorded for another root does not count.
+
+Anything else is `UNRECOGNIZED_FILE` and is never written, renamed or removed: a different file, a file over 16 MiB (which is not read), a folder, and a link or junction with the plugin's name. The version of an owned file is the bundle's, the `known` entry's or the record's.
+
+### Install and update
+
+1. **Running check.** The injected check (`checkRunningGames` in production) runs first. `GAME_RUNNING`, `CLIENT_RUNNING` or `RUNNING_CHECK_FAILED` (also for a check that throws) ends the operation before any file access. A read-only registry then gives `REGISTRY_UNAVAILABLE`, and the pending intents of this root are recovered (see [Recovery](#recovery)).
+2. **Layout.** The root is validated again without following links. A linked `bin`, `bin\win_x64` or `plugins` is `LINKED_FOLDER`; a `plugins` entry that is not a folder, or a target that is not a regular file, is `UNRECOGNIZED_FILE`; a root that is no longer a game is `IO_ERROR`.
+3. **Stale temporary files.** Regular files whose names match exactly `^ets2telemetry-plugin\.dll\.[0-9a-f]{16}\.tmp$` are removed. No other file is touched.
+4. **Classification.** An unrecognized file stops the operation. An owned file that equals the bundle needs no change. Without an install record for the root it is adopted with source `adopted` (a manual copy, P12); a record with another hash is updated; otherwise nothing is written, not even the registry.
+5. **Read-only target.** A target without the write permission bit (the Windows read-only attribute) is `READ_ONLY_FILE`; the attribute is never cleared.
+
+Before step 2, a folder without an install record is refused with `REGISTRY_UNAVAILABLE` at step `pending` when 16 folders are already recorded, with no file operation in the game folder, so a result that could not be recorded never leaves an orphaned DLL. This also covers adopting a manual copy.
+6. **Pending intent.** `{op, game, root, source, temp, fromSha256, toSha256, appVersion, createdPluginsDirectory, startedUtc}` is written durably into the registry. If that write fails, the result is `REGISTRY_UNAVAILABLE` and the game folder is not changed. A missing `plugins` folder is created only after this write, without `recursive`, so the intent already records that this run creates it. If another process created the folder meanwhile (`EEXIST`), the intent is rewritten durably with `createdPluginsDirectory: false` before anything else happens; if that write fails, the result is `REGISTRY_UNAVAILABLE` at step `directory`.
+7. **Temporary file.** `ets2telemetry-plugin.dll.<16 hex>.tmp` is created with `wx`, written completely (a write that makes no progress fails), synced and closed.
+8. **Verification.** The temporary file is read back and hashed. Another hash is `VERIFY_FAILED`, and the target is untouched.
+9. **Replacement.** The temporary file is renamed over the target (`MoveFileExW` with `MOVEFILE_REPLACE_EXISTING`). Only `EBUSY` (a sharing violation) is retried, after 20, 40, 60, 80 and 100 ms. `EPERM` is never retried and becomes `TARGET_LOCKED`. Windows reports it for a DLL that a running process has mapped (`npm run test:plugin-lock`) and, as measured on October 17, 2026, for a target that another process holds open without delete sharing.
+10. **Re-hash.** The target is read and hashed again; another hash is `VERIFY_FAILED`.
+11. **Result.** One registry write records the install, clears the intent and clears the target's last failure. The record has source `steam` or `manual`, and `createdPluginsDirectory` is kept from an earlier record or set by this run. If that write fails, the plugin stays in place, the intent stays, and the result is `REGISTRY_UNAVAILABLE`; the next run's recovery records the install.
+12. **Cleanup.** In `finally`, the exact temporary file of this run is removed if it was not renamed. After a failure, a `plugins` folder this run created is removed if it is empty, the failure is recorded for this folder, and the intent is cleared. The intent stays for recovery when its temporary file could not be removed, and always once the rename has happened, for example when the re-hash could not read the target: recovery then records the install from what is on disk, with its `createdPluginsDirectory`.
+
+After a fresh install or update the running check runs once more. If the game started meanwhile, the result says that the game loads the plugin after a restart (P7).
+
+### Removal (P11)
+
+Excluding a game removes the plugin from each of its targets in this order:
+
+1. the running check, the layout and the classification; an unrecognized file stays and is reported;
+2. the read-only refusal, because Node's `unlink` would otherwise clear the attribute;
+3. the pending intent `{op: remove, temp: null, fromSha256, …}`;
+4. the unlink, with the same `EBUSY` retries and `EPERM` as `TARGET_LOCKED`;
+5. the registry write that deletes the install record and clears the intent.
+
+The `plugins` folder is removed only when the install record says that this application created it and the folder is now empty. When the target is already missing, the same rule applies to that empty folder and the record is deleted.
+
+### Recovery
+
+`recover()` runs at the start of each run; PR-4 calls it. It needs a writable registry and a successful running check, and the intents of a running game stay. Every other intent is resolved on its own, with its own registry write. The layout must still be ready (no link, still a game); otherwise the intent stays and nothing in the folder is touched. One exception: when the root itself no longer exists (`ENOENT`) while its parent folder is still a plain folder, the game or its folder was removed, the temporary file went with it, and the intent is cleared and logged with the outcome `gone`. A missing parent, as on an unplugged drive, keeps the intent. Recovery then removes the exact temporary file when that is a regular file, classifies the target again, and then:
+
+- records the install when the target now has the intent's `toSha256`, because the rename completed before the interruption. When 16 other folders are already recorded, the intent is cleared without a record and logged with the outcome `unrecorded`; the file then stays owned only through the bundled or a `known` hash;
+- deletes the install record of a removal whose target is gone;
+- removes a `plugins` folder that the intent created and that is empty now;
+- clears the intent and logs `PLUGIN_RECOVERED` with the game, source, operation and outcome (`installed`, `not-installed`, `unrecorded`, `gone`, `removed` or `kept`).
+
+An intent whose layout changed, whose temporary file cannot be removed now, or whose target cannot be read (for example while it is locked) stays, and the reason is reported. Every install or removal first recovers the intents of its own root.
+
+### Error codes
+
+| Where | `EACCES`, `EPERM`, `EROFS` | `EBUSY` | `ENOSPC` | Anything else |
+| --- | --- | --- | --- | --- |
+| Listing stale files, creating the folder, writing and reading back the temporary file | PERMISSION_DENIED | IO_ERROR | DISK_FULL | IO_ERROR |
+| Reading the target (classification, re-hash) | PERMISSION_DENIED | TARGET_LOCKED | DISK_FULL | IO_ERROR |
+| Renaming over or unlinking the target | TARGET_LOCKED for `EPERM`; PERMISSION_DENIED for `EACCES` and `EROFS` | TARGET_LOCKED after five retries | DISK_FULL | IO_ERROR |
+
+Every result carries the operation, the outcome, the block reason, the step and the error code, never a path:
+
+- outcomes: `installed`, `updated`, `unchanged`, `adopted`, `removed`, `absent` and `blocked`;
+- steps: `process`, `registry`, `recover`, `layout`, `cleanup`, `classify`, `read-only`, `pending`, `directory`, `temp`, `verify`, `rename`, `rehash`, `unlink` and `record`.
+
+PR-4 logs each result as `PLUGIN_ACTION`, on change only.
+
+### Documented gaps
+
+- Another process of the same user could swap the target, or a folder above it, between the classification (step 4) and the rename (step 9).
+- The registry rename is not separately flushed (see [Install registry](#install-registry)): a power loss can lose the latest intent while a change in a game folder on another drive persists.
+- An intent whose folder stays linked, unreadable or present but no longer a game, or whose parent folder or drive is missing, is kept indefinitely; it counts against the 16-intent bound until the folder is repaired or comes back, or ET-018 cleans it. Only a root that is itself gone while its parent folder remains clears its intent (outcome `gone`), because nothing is left to clean. A removed Steam library whose game folder's parent is gone too therefore keeps its intent.
+- An ACL that denies deleting only the target file makes the rename fail with `EPERM`, which reads as `TARGET_LOCKED` rather than `PERMISSION_DENIED`. A folder that denies creating files fails at step 7 as `PERMISSION_DENIED`.
+- Node reports Windows' `ERROR_ACCESS_DENIED` as `EPERM`, so a locked target and a denied one are told apart only by the step.
+
 ## Remaining manual and real-environment checks
 
-All of them stay pending after PR-2:
+All of them stay pending after PR-3:
 
 - real Steam installs: the default and a custom Steam path, including non-ASCII paths, the InstallPath fallback, several libraries on other drives and libraries moved through a junction;
 - ETS2 and ATS loading the silently installed DLL, and a Steam update or file verification preserving it;
 - TruckersMP's real process names and the blocking behaviour;
 - `sdk unload` and `sdk reload` in the game console;
-- UAC- or ACL-restricted libraries with the manual fallback, and antivirus interference with the rename;
+- UAC- or ACL-restricted libraries with the manual fallback, and antivirus interference with the rename (PR-3 checks only a sharing lock and an ACL deny on a temporary folder);
+- the SCS loader's file filter: whether a game ever loads the `.tmp` file beside the DLL;
 - the real Windows dialogs, including the game folder dialog, and Explorer reveal, and the packaged Squirrel first launch;
 - ET-018 uninstall cleanup and the readability of the card.
 
@@ -208,3 +309,5 @@ See [ET-017 validation](validation/et-017.md).
 ## Tests
 
 See [TESTING.md](../TESTING.md#et-017-plugin-setup--october-17-2026) and [ET-017 validation](validation/et-017.md). PR-2's tests build fake Steam roots with `tests/shared/fake-steam.ts` inside `os.tmpdir()` and read them through `tests/shared/guarded-fs.ts`, which refuses and records any path outside its temporary root, also one whose real location lies outside it through a junction. No test reads Valve's registry keys or touches a real Steam or game folder.
+
+PR-3's installer and registry tests write only into fake game roots and a fake registry folder under that guarded root. They inject failures by wrapping the guarded file operations. Their real-system cases hold a real sharing lock from a Windows PowerShell child and deny file creation on the temporary `plugins` folder with `icacls`, removing that deny afterwards. `npm run test:plugin-lock` (`tests/integration/plugin-image-lock.test.ts`) loads the tests-only fake SDK host, named `eurotrucks2.exe`, with the test plugin DLL from a fake root. With a lister that wrongly reports no running game, an update and a removal end as `TARGET_LOCKED` and the DLL keeps its bytes. With the real `tasklist` lister, both stop at `GAME_RUNNING` before any file operation. The test first requires that no ETS2, ATS or TruckersMP process runs.

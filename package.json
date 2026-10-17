@@ -27,6 +27,7 @@
     "test": "vitest run",
     "test:cap0-chain": "vitest run --config vitest.cap0-chain.config.mts",
     "test:v1-chain": "vitest run --config vitest.v1-chain.config.mts",
+    "test:plugin-lock": "vitest run --config vitest.plugin-lock.config.mts",
     "test:storage": "node scripts/build-storage-test-bundles.mjs node_modules/vitest/vitest.mjs run --config vitest.storage.config.mts",
     "measure:storage": "node scripts/run-electron-node.mjs node_modules/vitest/vitest.mjs run --config vitest.storage-measure.config.mts",
     "test:electron": "npm run package && playwright test",
