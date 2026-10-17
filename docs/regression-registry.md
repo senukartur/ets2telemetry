@@ -96,3 +96,203 @@ ET-012d (October 16, 2026) extends partial REG-016 with fixed rows for the card,
 ET-016 PR-3 (October 16, 2026) extends partial REG-011, REG-012 and REG-014 with the journal queries from the dashboard through main to the telemetry service ([journal](journal.md#ipc-methods-and-codes-j10-j11)). REG-014: `journal-contract.test.ts` checks main's parse of every invoke (exact argument counts, UUID, cursor and filter formats, page sizes fixed by main) and refuses 44 hand-written replies that are larger than the request, of another trip, outside the filter, out of cursor order, with an extra field such as a process id or a path in a fixed-shape object (an interval's open `detail` record is forwarded as stored), with a name over the protocol bound or with an unlisted code; `journal-preload.test.ts` rejects invalid UUIDs, cursors and filters before any IPC; `main-boundaries.test.ts` rejects untrusted senders, frames and the overlay and answers an invalid service page `FAILED` without forwarding it. REG-011: `journal-broker.test.ts` bounds main's queue at one request in flight and four waiting (`BUSY` beyond), answers `TIMEOUT` after 15 s with fake timers and ignores the late reply; `journal-service.test.ts` keeps one journal read in the storage lane (`BUSY` for a second) and refuses reads while the database is not open or the service stops; `tests/storage/journal-service.test.ts` holds a commit in the fault worker and shows that a journal read waits in the recorder's single command lane, is answered after the release and leaves the ACK order and the stored rows unchanged, with no `STORAGE_BUSY`, and that a corrupted journal page fails only that read while recording continues. REG-012: pending journal reads resolve `SERVICE_UNAVAILABLE` when the service fails, exits or restarts, or the application exits, and a retired service's replies are ignored (`journal-broker.test.ts`, `main-boundaries.test.ts`). The Journal tab, the export and every real-history check remain pending.
 
 ET-016 PR-7 (late-attach trips, October 17, 2026) extends partial REG-003, REG-005 and REG-006 with synthetic sources only; see [trips](trips.md#late-attach-trips-j9) and [ET-016 validation](validation/et-016.md#pr-7-late-attach-trips-october-17-2026). REG-003: a checkpoint job seen while the game is idle opens a partial late-attach trip once the replayed events drain, never before (RED: an attach before the drain fails seven reducer and replay cases), and an identical replayed configuration keeps its opened-before-attach trip (`trip-reducer.test.ts`, `trip-simulator-replay.test.ts`, `trip-recorder.test.ts` A1). REG-005: the same attach at the same session and nextEventSeq is a storage `duplicate` that writes nothing, a recorder that attaches again adopts the stored trip, and the DurableDelivery attach op never acknowledges (`tests/storage/late-attach.test.ts`, `trip-recorder.test.ts` A2 and A3, `v1-durable-delivery.test.ts`). REG-006: after a service restart the stored trip is seeded with its checkpoint job key, so the restarted service opens no second trip and the identical re-send stays the same job (`tests/storage/trip-recorder.test.ts` with the real worker and the reactive simulator; RED: seeds without the checkpoint job key store a second trip, `trip@3`). Real late-attach checkpoints from both games remain pending.
+
+## Test index (ET-019t, October 17, 2026)
+
+This index lists every test entry point once, with the scenarios it protects. The narrative rows above stay the record of what each scenario's protection proves; the index only says where a requirement is tested and what must not be removed. Paths are repository paths, because file basenames repeat across layers. Each new test entry point is added here in the PR that adds it ([TESTING.md](../TESTING.md#9-handoff-for-every-behavior-change)).
+
+Columns:
+
+- **REG IDs.** The scenarios the entry point protects in part. "Smoke evidence" marks a harness-integrity test: it guards the evidence of the runtime smokes for those scenarios, not the product behavior itself. "Harness" marks a test of a test helper that the named scenarios depend on.
+- **Source.** How the mapping was confirmed. R: this registry, a scenario row or a dated paragraph. F: `REG-0nn` tags in the test file. T: [TESTING.md](../TESTING.md). V: the validation record of the PR that added the file, found with `git log --diff-filter=A`; the record is named in brackets.
+- **Owning card.** The card and PR that added the entry point.
+- **Runs in.** PR: every Windows CI run on a code PR, in the job named (`Windows x64 tests`, `Windows x64 scaffold` or `Windows x64 native AddressSanitizer`). Extended: pushes to `main` and manual dispatch with `extended=true`. Manual: not run by CI.
+- **Protected.** The categories that must not be removed or weakened: ACK, dedup, gap, trip completeness, security (DACL, peer, authority, sandbox, the renderer boundary), v0/CAP0 isolation, historical fixture, and regression (a test for a fixed bug). The categories were assigned by reading each file's case titles. A dash means none of these; such a test can still be the only protection of its REG.
+
+### Vitest, Playwright and measurement entry points
+
+| Entry point | Layer | REG IDs | Source | Owning card (PR) | Runs in | Protected |
+| --- | --- | --- | --- | --- | --- | --- |
+| `tests/unit/app-health.test.ts` | Node unit (Vitest) | REG-011, REG-012 | T, V (et-011) | ET-011a (#52) | PR (tests job, `npm test`) | — |
+| `tests/unit/app-lifecycle.test.ts` | Node unit (Vitest) | REG-012 | R | ET-011a (#52) | PR (tests job, `npm test`) | — |
+| `tests/unit/broker-artifact.test.ts` | Node unit (Vitest) | REG-003, REG-010, REG-011 | R | ET-006a (#13) | PR (tests job, `npm test`) | security |
+| `tests/unit/capture-broker-client.test.ts` | Node unit (Vitest) | REG-004, REG-005, REG-007, REG-009, REG-010, REG-011 | R | CAP-01a (#26) | PR (tests job, `npm test`) | security, v0/CAP0 isolation |
+| `tests/unit/capture-cap0.test.ts` | Node unit (Vitest) | REG-004, REG-005, REG-007, REG-009, REG-010, REG-011 | R | CAP-01a (#26) | PR (tests job, `npm test`) | v0/CAP0 isolation |
+| `tests/unit/capture-controller.test.ts` | Node unit (Vitest) | REG-004, REG-005, REG-007, REG-009, REG-010, REG-011 | R | CAP-01a (#26) | PR (tests job, `npm test`) | v0/CAP0 isolation |
+| `tests/unit/capture-export.test.ts` | Node unit (Vitest) | REG-004, REG-005, REG-007, REG-009, REG-010, REG-011 | R | CAP-01a (#26) | PR (tests job, `npm test`) | v0/CAP0 isolation |
+| `tests/unit/capture-session.test.ts` | Node unit (Vitest) | REG-004, REG-005, REG-007, REG-009, REG-010, REG-011 | R | CAP-01a (#26) | PR (tests job, `npm test`) | gap, v0/CAP0 isolation |
+| `tests/unit/capture-writer.test.ts` | Node unit (Vitest) | REG-004, REG-005, REG-007, REG-009, REG-010, REG-011 | R | CAP-01a (#26) | PR (tests job, `npm test`) | gap, v0/CAP0 isolation |
+| `tests/unit/dashboard-startup.test.ts` | Node unit (Vitest) | REG-011, REG-012 | T, V (et-011) | ET-011a (#52) | PR (tests job, `npm test`) | regression |
+| `tests/unit/diagnostics.test.ts` | Node unit (Vitest) | REG-017 | T, V (et-001) | ET-001 (#5) | PR (tests job, `npm test`) | security |
+| `tests/unit/event-loop-lag.test.ts` | Node unit (Vitest) | smoke evidence: REG-011, REG-012, REG-014, REG-016, REG-017 | V (ci-smoke-window-stall) | ET-022 (#46) | PR (tests job, `npm test`) | — |
+| `tests/unit/history-samples.test.ts` | Node unit (Vitest) | REG-001, REG-002, REG-003, REG-009, REG-018 | R, F | ET-015b (#85) | PR (tests job, `npm test`) | gap |
+| `tests/unit/history-storage.test.ts` | Node unit (Vitest) | REG-007 | R | ET-013 (#60) | PR (tests job, `npm test`) | regression |
+| `tests/unit/installer-driver-provenance.test.ts` | Node unit (Vitest) | REG-017 (historical provenance) | T, V (et-001) | ET-001 (#5) | PR (tests job, `npm test`) | — |
+| `tests/unit/installer-helper-provenance.test.ts` | Node unit (Vitest) | REG-017 (historical provenance) | T, V (et-001) | ET-001 (#5) | PR (tests job, `npm test`) | — |
+| `tests/unit/installer-root-proof.test.ts` | Node unit (Vitest) | REG-017 (historical provenance) | T, V (et-001) | ET-001 (#5) | PR (tests job, `npm test`) | — |
+| `tests/unit/job-cpu-summary.test.ts` | Node unit (Vitest) | smoke evidence: REG-011, REG-012, REG-014, REG-016, REG-017 | V (ci-smoke-window-stall) | ET-022 (#46) | PR (tests job, `npm test`) | — |
+| `tests/unit/journal-broker.test.ts` | Node unit (Vitest) | REG-011, REG-014 | R, F | ET-016a (#97) | PR (tests job, `npm test`) | — |
+| `tests/unit/journal-contract.test.ts` | Node unit (Vitest) | REG-014 | R, F | ET-016a (#97) | PR (tests job, `npm test`) | security |
+| `tests/unit/journal-export-writer.test.ts` | Node unit (Vitest) | REG-014 | R, F | ET-016a (#101) | PR (tests job, `npm test`) | security |
+| `tests/unit/journal-export.test.ts` | Node unit (Vitest) | REG-014 | R, F | ET-016a (#101) | PR (tests job, `npm test`) | gap, trip completeness |
+| `tests/unit/journal-preload.test.ts` | Node unit (Vitest) | REG-011, REG-012, REG-014 | R, T | ET-016a (#97) | PR (tests job, `npm test`) | security |
+| `tests/unit/journal-service.test.ts` | Node unit (Vitest) | REG-011, REG-014 | R, F | ET-016a (#97) | PR (tests job, `npm test`) | — |
+| `tests/unit/journal-view.test.ts` | Node unit (Vitest) | REG-009, REG-014, REG-017 | R, F | ET-016a (#98) | PR (tests job, `npm test`) | gap, trip completeness |
+| `tests/unit/live-dashboard-text.test.ts` | Node unit (Vitest) | REG-002, REG-003, REG-009 | R, F | ET-010b (#62) | PR (tests job, `npm test`) | — |
+| `tests/unit/live-smoke-source-v1.test.ts` | Node unit (Vitest) | REG-003, REG-010, REG-011 | R, F | ET-010c (#73) | PR (tests job, `npm test`) | — |
+| `tests/unit/live-sources.test.ts` | Node unit (Vitest) | REG-002, REG-009 | R | ET-010c (#73) | PR (tests job, `npm test`) | — |
+| `tests/unit/live-v1.test.ts` | Node unit (Vitest) | REG-010 | R | ET-010c (#73) | PR (tests job, `npm test`) | security |
+| `tests/unit/main-boundaries.test.ts` | Node unit (Vitest) | REG-010, REG-011, REG-012, REG-014, REG-016, REG-017 | R, F | ET-006a (#13) | PR (tests job, `npm test`) | security, regression |
+| `tests/unit/native-pipe-client.test.ts` | Node unit (Vitest) | REG-003, REG-005, REG-010, REG-011 | R, T | ET-006a (#13) | PR (tests job, `npm test`) | security |
+| `tests/unit/overlay-edit.test.ts` | Node unit (Vitest) | REG-016 | R | ET-012b (#74) | PR (tests job, `npm test`) | — |
+| `tests/unit/overlay-geometry.test.ts` | Node unit (Vitest) | REG-016 | R, F | ET-012a (#70) | PR (tests job, `npm test`) | — |
+| `tests/unit/overlay-placement.test.ts` | Node unit (Vitest) | REG-016 | T, V (et-012b) | ET-012b (#74) | PR (tests job, `npm test`) | — |
+| `tests/unit/overlay-preload.test.ts` | Node unit (Vitest) | REG-016 | R | ET-008 (#21) | PR (tests job, `npm test`) | security, regression |
+| `tests/unit/overlay-presentation.test.ts` | Node unit (Vitest) | REG-009 | R, F | ET-012a (#70) | PR (tests job, `npm test`) | — |
+| `tests/unit/overlay-rows.test.ts` | Node unit (Vitest) | REG-016 | R, F | ET-012d (#81) | PR (tests job, `npm test`) | regression |
+| `tests/unit/overlay-sections.test.ts` | Node unit (Vitest) | REG-009, REG-016 | T, V (et-012a) | ET-012a (#70) | PR (tests job, `npm test`) | — |
+| `tests/unit/overlay-smoke-source.test.ts` | Node unit (Vitest) | smoke evidence: REG-009, REG-011, REG-016, REG-017 | R | ET-008 (#21) | PR (tests job, `npm test`) | — |
+| `tests/unit/overlay-strip.test.ts` | Node unit (Vitest) | REG-016 | R, F | ET-012c (#76) | PR (tests job, `npm test`) | regression |
+| `tests/unit/overlay-view.test.ts` | Node unit (Vitest) | REG-009, REG-016, REG-017 | R | ET-012a (#70) | PR (tests job, `npm test`) | — |
+| `tests/unit/overlay.test.ts` | Node unit (Vitest) | REG-016 | R, F | ET-008 (#21) | PR (tests job, `npm test`) | security |
+| `tests/unit/package-integrity.test.ts` | Node unit (Vitest) | REG-017 | R | ET-001 (#5) | PR (tests job, `npm test`) | security |
+| `tests/unit/preload-recovery.test.ts` | Node unit (Vitest) | REG-010 | R | ET-006a (#13) | PR (tests job, `npm test`) | security, regression |
+| `tests/unit/protocol-v0.test.ts` | Node unit (Vitest) | REG-003, REG-005, REG-010 | F | ET-002a (#9) | PR (tests job, `npm test`) | — |
+| `tests/unit/protocol-v1-delivery.test.ts` | Node unit (Vitest) | REG-003, REG-004, REG-005, REG-006, REG-009, REG-010, REG-011 | F, T | ET-002b (#42) | PR (tests job, `npm test`) | ACK, dedup, gap |
+| `tests/unit/protocol-v1.test.ts` | Node unit (Vitest) | REG-003, REG-004, REG-005, REG-006, REG-009, REG-010, REG-011 | F, T | ET-002b (#42) | PR (tests job, `npm test`) | gap |
+| `tests/unit/recording-policy.test.ts` | Node unit (Vitest) | REG-007, REG-012 | T, V (et-015a) | ET-015a (#79) | PR (tests job, `npm test`) | — |
+| `tests/unit/recording-proxy.test.ts` | Node unit (Vitest) | smoke evidence: REG-006, REG-012 | T, V (et-015a) | ET-015a (#82) | PR (tests job, `npm test`) | ACK |
+| `tests/unit/recording-status-text.test.ts` | Node unit (Vitest) | REG-012 | R | ET-015c (#91) | PR (tests job, `npm test`) | gap |
+| `tests/unit/recording-status.test.ts` | Node unit (Vitest) | REG-003, REG-006, REG-007, REG-011 | R | ET-015c (#90) | PR (tests job, `npm test`) | gap |
+| `tests/unit/renderer-entry.test.ts` | Node unit (Vitest) | REG-016, REG-017 | V (et-012a) | ET-008 (#21) | PR (tests job, `npm test`) | — |
+| `tests/unit/renderer-observation.test.ts` | Node unit (Vitest) | smoke evidence: REG-002, REG-003, REG-009, REG-011, REG-016 | T, V (et-006a) | ET-006a (#13) | PR (tests job, `npm test`) | — |
+| `tests/unit/runtime-receipt.test.ts` | Node unit (Vitest) | smoke evidence: REG-002, REG-006, REG-011, REG-012, REG-013, REG-014, REG-016, REG-017 | T, V (et-022) | ET-022 (#7) | PR (tests job, `npm test`) | regression |
+| `tests/unit/sample-buffer.test.ts` | Node unit (Vitest) | REG-007, REG-009 | R, F | ET-015b (#86) | PR (tests job, `npm test`) | gap |
+| `tests/unit/scaffold.test.ts` | Node unit (Vitest) | REG-017 | R | ET-001 (#5) | PR (tests job, `npm test`) | — |
+| `tests/unit/service-probe.test.ts` | Node unit (Vitest) | REG-011 | F | ET-001 (#5) | PR (tests job, `npm test`) | regression |
+| `tests/unit/service-supervisor.test.ts` | Node unit (Vitest) | REG-011, REG-012 | R, T | ET-001 (#5) | PR (tests job, `npm test`) | regression |
+| `tests/unit/settings-schema.test.ts` | Node unit (Vitest) | REG-017 | R, F | ET-011b (#56) | PR (tests job, `npm test`) | — |
+| `tests/unit/settings-store.test.ts` | Node unit (Vitest) | REG-017 | R, F | ET-011b (#56) | PR (tests job, `npm test`) | regression |
+| `tests/unit/shutdown-sequence.test.ts` | Node unit (Vitest) | REG-011, REG-012 | R, T | ET-011a (#52) | PR (tests job, `npm test`) | — |
+| `tests/unit/simulator-v0.test.ts` | Node unit (Vitest) | REG-003 | R | ET-005a (#11) | PR (tests job, `npm test`) | gap |
+| `tests/unit/simulator-v1-faults.test.ts` | Node unit (Vitest) | REG-005, REG-010 | R, F | ET-005b (#61) | PR (tests job, `npm test`) | — |
+| `tests/unit/simulator-v1-pipe.test.ts` | Node unit (Vitest) | REG-003, REG-011 | R, F | ET-005b (#61) | PR (tests job, `npm test`) | — |
+| `tests/unit/simulator-v1-reactive.test.ts` | Node unit (Vitest) | REG-011 | F | ET-005b (#61) | PR (tests job, `npm test`) | ACK |
+| `tests/unit/simulator-v1-replay.test.ts` | Node unit (Vitest) | REG-001, REG-003 | R | ET-005b (#50) | PR (tests job, `npm test`) | dedup, gap |
+| `tests/unit/simulator-v1-scenario.test.ts` | Node unit (Vitest) | REG-001, REG-009, REG-010, REG-011 | T | ET-005b (#50) | PR (tests job, `npm test`) | — |
+| `tests/unit/simulator-v1-source.test.ts` | Node unit (Vitest) | REG-009 | R, F | ET-005b (#50) | PR (tests job, `npm test`) | — |
+| `tests/unit/simulator-v1-store.test.ts` | Node unit (Vitest) | REG-005, REG-011 | R, F | ET-005b (#50) | PR (tests job, `npm test`) | ACK, gap |
+| `tests/unit/speed-display.test.ts` | Node unit (Vitest) | REG-009, REG-012, REG-017 | R, T | ET-008 (#21) | PR (tests job, `npm test`) | — |
+| `tests/unit/storage-client.test.ts` | Node unit (Vitest) | REG-007, REG-014 | R | ET-013 (#60) | PR (tests job, `npm test`) | ACK, regression |
+| `tests/unit/storage-codec.test.ts` | Node unit (Vitest) | REG-009 | R | ET-013 (#51) | PR (tests job, `npm test`) | — |
+| `tests/unit/storage-errors.test.ts` | Node unit (Vitest) | REG-007 | R | ET-013 (#51) | PR (tests job, `npm test`) | — |
+| `tests/unit/storage-retention.test.ts` | Node unit (Vitest) | REG-007, REG-013 | V (et-013) | ET-013 (#51) | PR (tests job, `npm test`) | — |
+| `tests/unit/telemetry-core-boundaries.test.ts` | Node unit (Vitest) | REG-008, REG-009 | R | ET-010a (#53) | PR (tests job, `npm test`) | — |
+| `tests/unit/telemetry-core-derived.test.ts` | Node unit (Vitest) | REG-008 | R, F | ET-010a (#53) | PR (tests job, `npm test`) | — |
+| `tests/unit/telemetry-core-format.test.ts` | Node unit (Vitest) | REG-009 | F | ET-010a (#53) | PR (tests job, `npm test`) | — |
+| `tests/unit/telemetry-core-live-view.test.ts` | Node unit (Vitest) | REG-002, REG-003, REG-009 | F | ET-010a (#53) | PR (tests job, `npm test`) | — |
+| `tests/unit/telemetry-core-normalize.test.ts` | Node unit (Vitest) | REG-004, REG-009 | F | ET-010a (#53) | PR (tests job, `npm test`) | — |
+| `tests/unit/telemetry-core-units.test.ts` | Node unit (Vitest) | REG-009 | F | ET-010a (#53) | PR (tests job, `npm test`) | — |
+| `tests/unit/telemetry-service-v0.test.ts` | Node unit (Vitest) | REG-003, REG-007, REG-010, REG-011, REG-012 | R | ET-006a (#13) | PR (tests job, `npm test`) | security, regression |
+| `tests/unit/test-resources.test.ts` | Node unit (Vitest) | none (harness of tests/shared/resources.ts) | R (shared fixtures note), V (et-022) | ET-022 (#7) | PR (tests job, `npm test`) | — |
+| `tests/unit/tray-model.test.ts` | Node unit (Vitest) | REG-012 | R | ET-011a (#52) | PR (tests job, `npm test`) | — |
+| `tests/unit/trip-accounting.test.ts` | Node unit (Vitest) | REG-001, REG-002, REG-003, REG-008, REG-012 | R, F | ET-014 (#72) | PR (tests job, `npm test`) | gap, trip completeness |
+| `tests/unit/trip-identity.test.ts` | Node unit (Vitest) | REG-005, REG-008 | T, V (et-014) | ET-014 (#71) | PR (tests job, `npm test`) | dedup |
+| `tests/unit/trip-recorder.test.ts` | Node unit (Vitest) | REG-001, REG-003, REG-004, REG-005, REG-006, REG-007, REG-009, REG-011 | R, F | ET-015a (#77) | PR (tests job, `npm test`) | ACK, dedup, gap, trip completeness |
+| `tests/unit/trip-reducer-replay.test.ts` | Node unit (Vitest) | REG-005 | R, F | ET-014 (#71) | PR (tests job, `npm test`) | dedup, trip completeness |
+| `tests/unit/trip-reducer.test.ts` | Node unit (Vitest) | REG-001, REG-002, REG-003, REG-004, REG-005, REG-006, REG-008, REG-012 | R, F | ET-014 (#71) | PR (tests job, `npm test`) | dedup, gap, trip completeness, regression |
+| `tests/unit/trip-seeds.test.ts` | Node unit (Vitest) | REG-006, REG-012 | R | ET-015a (#75) | PR (tests job, `npm test`) | trip completeness, regression |
+| `tests/unit/trip-simulator-replay.test.ts` | Node unit (Vitest) | REG-001, REG-003, REG-005, REG-006, REG-008 | R, F | ET-014 (#72) | PR (tests job, `npm test`) | gap, trip completeness |
+| `tests/unit/unit-profiles.test.ts` | Node unit (Vitest) | REG-009, REG-012, REG-017 | R, T | ET-011b (#56) | PR (tests job, `npm test`) | — |
+| `tests/unit/v1-durable-delivery.test.ts` | Node unit (Vitest) | REG-005, REG-006, REG-007, REG-011 | R, F | ET-006b (#64) | PR (tests job, `npm test`) | ACK, dedup, gap |
+| `tests/unit/v1-ingestion-pipe.test.ts` | Node unit (Vitest) | REG-003, REG-005, REG-011 | R, F | ET-006b (#64) | PR (tests job, `npm test`) | ACK, dedup, gap |
+| `tests/unit/v1-ingestion.test.ts` | Node unit (Vitest) | REG-003, REG-004, REG-005, REG-007, REG-010, REG-011 | R, F | ET-006b (#64) | PR (tests job, `npm test`) | ACK, security |
+| `tests/unit/window-placement.test.ts` | Node unit (Vitest) | REG-016 | R | ET-007 (#14) | PR (tests job, `npm test`) | security |
+| `tests/storage/backlog-redelivery.test.ts` | Storage (Vitest under Electron) | REG-011 | R, F | ET-015c (#88) | PR (tests job, `npm run test:storage`) | dedup, gap, regression |
+| `tests/storage/backup-restore.test.ts` | Storage (Vitest under Electron) | REG-007, REG-013 | R, F | ET-013 (#51) | PR (tests job, `npm run test:storage`) | historical fixture |
+| `tests/storage/backup-sweep.test.ts` | Storage (Vitest under Electron) | REG-007, REG-013 | V (et-013) | ET-013 (#60) | PR (tests job, `npm run test:storage`) | regression |
+| `tests/storage/client-socket.test.ts` | Storage (Vitest under Electron) | harness: REG-006, REG-011 | V (et-015a) | ET-015a (#84) | PR (tests job, `npm run test:storage`) | regression |
+| `tests/storage/crash-recovery.test.ts` | Storage (Vitest under Electron) | REG-006 | R, F | ET-013 (#60) | PR (tests job, `npm run test:storage`) | ACK, dedup |
+| `tests/storage/events-commit.test.ts` | Storage (Vitest under Electron) | REG-005, REG-006, REG-009 | R, F | ET-013 (#51) | PR (tests job, `npm run test:storage`) | ACK, dedup, gap |
+| `tests/storage/failures.test.ts` | Storage (Vitest under Electron) | REG-007 | R, F | ET-013 (#51) | PR (tests job, `npm run test:storage`) | ACK |
+| `tests/storage/fixtures.test.ts` | Storage (Vitest under Electron) | REG-005, REG-013 | R, F | ET-013 (#51) | PR (tests job, `npm run test:storage`) | historical fixture |
+| `tests/storage/journal-export.test.ts` | Storage (Vitest under Electron) | REG-014 | R, F | ET-016a (#101) | PR (tests job, `npm run test:storage`) | trip completeness |
+| `tests/storage/journal-reads.test.ts` | Storage (Vitest under Electron) | REG-003, REG-009, REG-014 | R, F | ET-016a (#96) | PR (tests job, `npm run test:storage`) | gap, trip completeness, historical fixture |
+| `tests/storage/journal-scale.test.ts` | Storage (Vitest under Electron) | REG-014 | R, F | ET-016a (#96) | PR (tests job, `npm run test:storage`) | — |
+| `tests/storage/journal-service.test.ts` | Storage (Vitest under Electron) | REG-011, REG-012, REG-014 | R, F | ET-016a (#97) | PR (tests job, `npm run test:storage`) | — |
+| `tests/storage/late-attach.test.ts` | Storage (Vitest under Electron) | REG-003 | R | ET-016b (#99) | PR (tests job, `npm run test:storage`) | dedup, trip completeness |
+| `tests/storage/migrations.test.ts` | Storage (Vitest under Electron) | REG-013 | R, F | ET-013 (#51) | PR (tests job, `npm run test:storage`) | historical fixture |
+| `tests/storage/open-durability.test.ts` | Storage (Vitest under Electron) | REG-006, REG-007 | V (et-013) | ET-013 (#51) | PR (tests job, `npm run test:storage`) | ACK |
+| `tests/storage/recording-runtime.test.ts` | Storage (Vitest under Electron) | REG-003, REG-011, REG-012 | R, F | ET-015c (#89) | PR (tests job, `npm run test:storage`) | ACK, gap |
+| `tests/storage/recording-status.test.ts` | Storage (Vitest under Electron) | REG-002, REG-003, REG-006, REG-007, REG-011 | R, F | ET-015c (#90) | PR (tests job, `npm run test:storage`) | gap |
+| `tests/storage/recording-target.test.ts` | Storage (Vitest under Electron) | REG-007 | R, F | ET-015a (#79) | PR (tests job, `npm run test:storage`) | — |
+| `tests/storage/sample-recorder.test.ts` | Storage (Vitest under Electron) | REG-001, REG-002, REG-003, REG-005, REG-009, REG-012 | R, F | ET-015b (#86) | PR (tests job, `npm run test:storage`) | gap |
+| `tests/storage/samples.test.ts` | Storage (Vitest under Electron) | REG-005, REG-009 | R, F | ET-013 (#51) | PR (tests job, `npm run test:storage`) | dedup |
+| `tests/storage/schema-constraints.test.ts` | Storage (Vitest under Electron) | REG-013 | R | ET-013 (#51) | PR (tests job, `npm run test:storage`) | historical fixture |
+| `tests/storage/trip-accounting-effects.test.ts` | Storage (Vitest under Electron) | REG-001, REG-008 | R | ET-014 (#72) | PR (tests job, `npm run test:storage`) | trip completeness |
+| `tests/storage/trip-effects.test.ts` | Storage (Vitest under Electron) | REG-001, REG-003, REG-004, REG-005, REG-006, REG-008, REG-013 | R, F | ET-014 (#71) | PR (tests job, `npm run test:storage`) | dedup, trip completeness |
+| `tests/storage/trip-recorder-crash.test.ts` | Storage (Vitest under Electron) | REG-005, REG-006 | R, F | ET-015a (#77) | PR (tests job, `npm run test:storage`) | ACK, dedup |
+| `tests/storage/trip-recorder-faults.test.ts` | Storage (Vitest under Electron) | REG-007, REG-011 | R, F | ET-015a (#77) | PR (tests job, `npm run test:storage`) | ACK |
+| `tests/storage/trip-recorder.test.ts` | Storage (Vitest under Electron) | REG-001, REG-003, REG-004, REG-005, REG-006, REG-007, REG-009 | R, F | ET-015a (#77) | PR (tests job, `npm run test:storage`) | ACK, dedup, trip completeness |
+| `tests/storage/trip-recovery-reads.test.ts` | Storage (Vitest under Electron) | REG-006, REG-008, REG-012 | R | ET-015a (#75) | PR (tests job, `npm run test:storage`) | trip completeness |
+| `tests/storage/v1-durable-ingestion.test.ts` | Storage (Vitest under Electron) | REG-003, REG-005, REG-006, REG-007 | R, F | ET-006b (#64) | PR (tests job, `npm run test:storage`) | ACK, dedup, gap |
+| `tests/storage/v1-ingestion-crash.test.ts` | Storage (Vitest under Electron) | REG-006 | R, F | ET-006b (#64) | PR (tests job, `npm run test:storage`) | ACK, dedup |
+| `tests/storage/worker.test.ts` | Storage (Vitest under Electron) | REG-005, REG-006, REG-007, REG-014 | R, F | ET-013 (#60) | PR (tests job, `npm run test:storage`) | ACK, regression |
+| `tests/integration/cap0-chain.test.ts` | Integration chain (Vitest) | REG-004, REG-005, REG-007, REG-009, REG-010, REG-011 | T, V (cap-01a) | CAP-01a (#26) | PR (scaffold job) | security, v0/CAP0 isolation |
+| `tests/integration/v1-chain.test.ts` | Integration chain (Vitest) | REG-003, REG-005, REG-010, REG-011 | T, V (et-006b) | ET-006b (#68) | PR (scaffold job) | ACK, security |
+| `tests/electron/startup.spec.ts` | Playwright Electron | REG-017 | T, V (et-001) | ET-001 (#5) | manual (`npm run test:electron`); kept by owner decision Q2 of October 17, 2026 | security |
+| `tests/measurement/storage-size.measure.ts` | Measurement (Vitest under Electron) | REG-018 (size only) | F, V (et-013) | ET-013 (#60) | manual (`npm run measure:storage`) | — |
+
+### Native CTest families
+
+From `ctest -N` on the four build trees at ET-019t: 75 cases in the plugin Release tree `native/telemetry-plugin/build` (the ET-001 `placeholder-contract` case was removed), 53 in the client Release tree `native/telemetry-client/build`, 70 selected by `-R asan-contract` in the plugin tree `build-asan` and 53 selected by `-R '^native-pipe-client-asan-'` in the client tree `build-asan`. Every case writes its result to the job's CTest JUnit file.
+
+| Entry point | Layer | REG IDs | Source | Owning card (PR) | Runs in | Protected |
+| --- | --- | --- | --- | --- | --- | --- |
+| `protocol-v0-contract` | Native CTest, plugin | REG-003, REG-005, REG-009, REG-010 | T, V (et-002a) | ET-002a (#9) | PR (scaffold job) | — |
+| `protocol-v1-contract` | Native CTest, plugin | REG-003, REG-004, REG-005, REG-006, REG-009, REG-010, REG-011 | R, T | ET-002b (#43) | PR (scaffold job) | ACK, dedup, gap |
+| `v1-producer-contract-{store,release,retention,overflow,encoding,messages,streams,randomized,fuzz}` | Native CTest, plugin | REG-003, REG-005, REG-006, REG-007, REG-009, REG-010, REG-011 | R, T | ET-004b (#47) | PR (scaffold job) | ACK, dedup, gap |
+| `sdk-adapter-contract` | Native CTest, plugin | REG-004, REG-008, REG-009, REG-010, REG-011 | R | ET-003 (#10) | PR (scaffold job) | gap |
+| `event-channel-contract-{ring,gate,loss-runs,flush,concurrency,exhaustion}` | Native CTest, plugin | REG-003, REG-004, REG-005, REG-006, REG-007, REG-009, REG-011 | R | ET-004b (#48) | PR (scaffold job) | gap |
+| `sdk-exports-contract` | Native CTest, plugin | none (see the findings below) | V (et-003) | ET-003 (#10) | PR (scaffold job) | security |
+| `snapshot-transport-contract-*` (13 cases) and `snapshot-transport-dll-contract` | Native CTest, plugin | REG-003, REG-005, REG-010, REG-011 | R | ET-004a (#12) | PR (scaffold job) | security, regression |
+| `snapshot-transport-reporting-contract`, `snapshot-transport-late-reporting-contract` | Native CTest, plugin | REG-011 | R, V (et-004-startup-budget) | ET-004a (#12) | PR (scaffold job) | regression |
+| `snapshot-transport-window-contract`, `-window-dll-contract`, `-window-reporting-contract` | Native CTest, plugin | REG-011, REG-016 | R | ET-007 (#14) | PR (scaffold job) | security |
+| `game-window-monitor-contract`, `game-window-monitor-contract-slow-peer` | Native CTest, plugin | REG-011, REG-016 | V (et-007) | ET-007 (#14) | PR (scaffold job) | regression |
+| `capture-cap0-contract-*` (16 cases) and `capture-cap0-dll-contract` | Native CTest, plugin | REG-004, REG-005, REG-007, REG-009, REG-010, REG-011 | R | CAP-01a (#26) | PR (scaffold job) | gap, v0/CAP0 isolation |
+| `v1-transport-contract-*` (17 cases) and `v1-transport-dll-contract` | Native CTest, plugin | REG-003, REG-004, REG-005, REG-006, REG-007, REG-010, REG-011 | R, T | ET-004b (#54) | PR (scaffold job) | ACK, dedup, gap, security, v0/CAP0 isolation |
+| `native-pipe-client-*` (53 cases, including the CAP0 and protocol v1 broker modes) | Native CTest, client | REG-003, REG-005, REG-010, REG-011 | R, T | ET-006a (#13), extended by CAP-01a and ET-006b | PR (scaffold job) | security, v0/CAP0 isolation |
+| `*-asan-contract*` (70 cases): the AddressSanitizer twins of the protocol v0 and v1, producer, adapter, event channel, snapshot transport, window, CAP0 and v1 transport cases | Native CTest, plugin ASan | as their Release twins | R, T | the twins' cards | PR (AddressSanitizer job) | as their Release twins |
+| `native-pipe-client-asan-*` (53 cases) | Native CTest, client ASan | as `native-pipe-client-*` | R | ET-006a (#13) and later | PR (AddressSanitizer job) | security, v0/CAP0 isolation |
+
+### PowerShell suites
+
+| Entry point | Layer | REG IDs | Source | Owning card (PR) | Runs in | Protected |
+| --- | --- | --- | --- | --- | --- | --- |
+| `tests/watchdog/run.ps1` | Windows Job Object fixtures | REG-011 | R, T | ET-001 (#5) | Extended (`scripts/ci/Invoke-Extended.ps1`) | regression |
+| `tests/windows/Test-UninstallResidue.ps1` | Windows uninstall residue fixtures | REG-017 | T | ET-001 (#5) | Extended (`scripts/ci/Invoke-Extended.ps1`) | — |
+| `tests/vm/Test-InstallerController.ps1`, `Test-InstallerConsoleCustody.ps1`, `Test-InstallerDriverProvenance.ps1`, `Test-InstallerHelperProvenance.ps1` | Installer harness controls | REG-017 (historical provenance) | T, V (et-001) | ET-001 (#5) | Manual | — |
+| `tests/package-integrity/read.ps1`, `path-regression.ps1` | Package fingerprint fixtures | REG-017 | R, T | ET-001 (#5), ET-022 (#7) | PR (tests job, through `tests/unit/package-integrity.test.ts`) | security |
+
+### Runtime smokes and CLI smokes
+
+Each runtime smoke scenario runs once per mode through `./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development` or `-Mode packaged` in the scaffold job ([ci](ci.md#bounded-runtime-checks)). By owner decision E2 of October 17, 2026, pull requests run only the packaged mode; pushes to `main` and every dispatch run both modes ([ci](ci.md#et-019t-speed-up-october-17-2026)).
+
+| Entry point | Layer | REG IDs | Source | Owning card (PR) | Runs in | Protected |
+| --- | --- | --- | --- | --- | --- | --- |
+| scenario `scaffold`, development and packaged | Electron runtime smoke | REG-011, REG-017 | R, T | ET-001 (#5), ET-022 (#7) | PR: packaged mode; main push and dispatch: both modes (scaffold job) | security |
+| scenario `telemetry`, development and packaged | Electron runtime smoke | REG-003, REG-009, REG-010, REG-011, REG-016 | R, T | ET-006a (#13), extended by ET-010b/c | PR: packaged mode; main push and dispatch: both modes (scaffold job) | security, regression |
+| scenario `overlay` (`-ForceRendererReuse`), development and packaged | Electron runtime smoke | REG-009, REG-011, REG-016, REG-017 | R | ET-008 (#21), extended by ET-012a-d | PR: packaged mode; main push and dispatch: both modes (scaffold job) | security, regression |
+| scenario `lifecycle`, development and packaged | Electron runtime smoke | REG-011, REG-012, REG-017 | R, T | ET-011a (#52) | PR: packaged mode; main push and dispatch: both modes (scaffold job) | — |
+| scenario `recording`, development and packaged | Electron runtime smoke | REG-001, REG-002, REG-006, REG-012, REG-014, REG-017 | R, T | ET-015a (#82), extended by ET-015b/c and ET-016 | PR: packaged mode; main push and dispatch: both modes (scaffold job) | ACK, dedup, gap, trip completeness |
+| scenario `journal`, development and packaged | Electron runtime smoke | REG-009, REG-014, REG-017 | R, T | ET-016a (#98) | PR: packaged mode; main push and dispatch: both modes (scaffold job) | trip completeness |
+| `npm run smoke --workspace @ets2telemetry/telemetry-simulator` (v0 CLI pipe smoke) | Simulator CLI | REG-003, REG-010 | R | ET-005a (#11) | PR (scaffold job) | — |
+| `npm run smoke:v1 --workspace @ets2telemetry/telemetry-simulator` (v1 CLI pipe smoke, lockstep and reactive) | Simulator CLI | REG-003, REG-005, REG-011 | R, T | ET-005b (#61) | PR (scaffold job) | — |
+
+### Index findings
+
+- **No REG after source V.** `tests/unit/test-resources.test.ts` tests the shared helper `tests/shared/resources.ts` (unique temporary directories and pipe names, deterministic clocks); no record maps it to a scenario. `sdk-exports-contract` checks that the production plugin DLL exports exactly the SCS entry points and none of the test seams; ET-003 validation names no scenario. Neither is a removal candidate: the first guards the isolation of every case that uses the helper, the second is a security check of the shipped artifact. Neither was deleted.
+- **Installer tests map to REG-017, not REG-015.** The ET-019t plan proposed REG-015/017 for `tests/unit/installer-*.test.ts`. TESTING.md (the ET-001 table) and ET-001 validation record them as provenance proofs of the ET-001 installer acceptance harness, which is partial REG-017 evidence. They do not exercise plugin DLL management.
+- **No same-title, same-layer duplicate.** The only case title repeated within a layer is the `bounded framing` describe block of `protocol-v0.test.ts` and `protocol-v1.test.ts`, which test different protocols.
+- **Coverage gaps, report only.** REG-015 has no executable test. REG-018 covers database size only. REG-002 still has its trip-level pause outcome pending. REG-012, REG-014 and REG-016 keep runtime-only gaps: the real notification area, the real Save dialog and real-game overlay behavior.
+- `tests/electron/startup.spec.ts` stays: the owner decided on October 17, 2026 (Q2) to keep it and `npm run test:electron`, although the `scaffold` runtime smoke covers similar ground ([ET-019t validation](validation/et-019t.md)).

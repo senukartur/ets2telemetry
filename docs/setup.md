@@ -147,7 +147,7 @@ npm run build
 npm run test:cap0-chain
 ```
 
-It is not part of `npm test` because CI runs Vitest before the native build; Windows CI runs it as a separate bounded step after the native build. It is controlled synthetic evidence, not a game session.
+It is not part of `npm test` because CI runs Vitest without a native build (since ET-019t in the separate `Windows x64 tests` job); Windows CI runs it as a separate bounded step after the native build in the scaffold job. It is controlled synthetic evidence, not a game session.
 
 The protocol v1 chain (ET-006b) uses the same fake-SDK host with a v1 directory, the test plugin DLL and the native broker in its `--protocol v1` mode, again in isolated temporary directories and after the same three build commands:
 
