@@ -40,7 +40,11 @@ export const MAX_TARGETS_PER_GAME = 4;
 /** Consecutive automatic retries of a TARGET_LOCKED folder while the running games stay the same. */
 export const MAX_LOCKED_RETRIES = 3;
 /** Block reasons that keep the 15 s poll running. */
-const POLL_REASONS: readonly PluginBlockReason[] = ['GAME_RUNNING', 'CLIENT_RUNNING', 'TARGET_LOCKED'];
+/**
+ * Block reasons that keep the 15 s poll running. A failed listing (RUNNING_CHECK_FAILED) is retried as soon as the poll's
+ * own listing succeeds, so a transient failure on a loaded machine never leaves the plugin unchanged for the session.
+ */
+const POLL_REASONS: readonly PluginBlockReason[] = ['GAME_RUNNING', 'CLIENT_RUNNING', 'TARGET_LOCKED', 'RUNNING_CHECK_FAILED'];
 const PREFIX_LENGTH = 12;
 
 type Log = (event: string, detail?: unknown, facts?: DiagnosticFacts) => void;
@@ -132,6 +136,8 @@ export class PluginSetup {
   /** Waiting removals from unlisted Steam roots of an excluded game; they keep the poll running like listed folders. */
   private unlistedWaits: {game: PluginGame; reason: PluginBlockReason}[] = [];
   private lockedRetries = 0;
+  /** The last run hit its 30 s limit before it reached every folder; the poll retries it like a failed listing. */
+  private unfinished = false;
   private escapes = 0;
   /** The last facts of each on-change log line, by key. */
   private readonly logged = new Map<string, string>();
@@ -329,10 +335,11 @@ export class PluginSetup {
     const controller = this.controller = new AbortController();
     const timer = unref(setTimeout(() => {
       this.log('PLUGIN_SETUP_TIMEOUT', undefined, {timeoutMs: RUN_TIMEOUT_MS});
+      this.unfinished = true;
       controller.abort();
     }, RUN_TIMEOUT_MS));
     clearTimeout(this.pollTimer); this.pollTimer = undefined;
-    this.inRun = true; this.seenRunning = undefined;
+    this.inRun = true; this.seenRunning = undefined; this.unfinished = false;
     this.publish();
     try {await this.runSteps(controller.signal);} catch (error) {
       // A run that throws outside the per-folder handling (for example while loading the registry) keeps the earlier view.
@@ -513,13 +520,17 @@ export class PluginSetup {
     })();
   }
 
-  /** The reasons that keep the poll running: those of listed folders and of waiting removals from unlisted roots. */
+  /**
+   * The reasons that keep the poll running: those of listed folders and of waiting removals from unlisted roots. A run
+   * that hit its 30 s limit may not have reached every folder (or even discovery); it waits like a failed listing.
+   */
   private waits(): {game: PluginGame; reason: PluginBlockReason}[] {
-    const listed = PLUGIN_GAMES.flatMap(game => this.games[game].targets.flatMap(target => target.reason !== null && POLL_REASONS.includes(target.reason) ? [{game, reason: target.reason}] : []));
-    return [...listed, ...this.unlistedWaits];
+    const listed = PLUGIN_GAMES.flatMap(game => this.games[game].targets.flatMap(target => target.reason !== null && POLL_REASONS.includes(target.reason)
+      ? [{game, reason: target.reason}] : []));
+    return [...listed, ...this.unlistedWaits, ...(this.unfinished ? PLUGIN_GAMES.map(game => ({game, reason: 'RUNNING_CHECK_FAILED' as const})) : [])];
   }
 
-  /** Polls the running games every 15 s while a folder waits for a game, the TruckersMP client or a locked file. */
+  /** Polls the running games every 15 s while a folder waits for a game, the TruckersMP client, a locked file or a listing. */
   private schedulePoll(): void {
     clearTimeout(this.pollTimer); this.pollTimer = undefined;
     const waiting = this.waits().length > 0;
@@ -541,12 +552,14 @@ export class PluginSetup {
 
   /**
    * True when a waiting folder may now succeed: its game or the TruckersMP client is no longer running (or another one
-   * started), or, for a locked file, the running games changed since the run, or fewer than three automatic retries
-   * have happened while they stayed the same.
+   * started), a failed listing or an unfinished run can be retried because this listing succeeded, or, for a locked
+   * file, the running games changed since the run, or fewer than three automatic retries have happened while they stayed
+   * the same.
    */
   private unblocked(running: RunningGames): boolean {
     let locked = false;
     for (const {game, reason} of this.waits()) {
+      if (reason === 'RUNNING_CHECK_FAILED') return true;
       if (reason === 'GAME_RUNNING' || reason === 'CLIENT_RUNNING') {
         if (blockingProcess(game, running) !== reason) return true;
       } else if (reason === 'TARGET_LOCKED') locked = true;

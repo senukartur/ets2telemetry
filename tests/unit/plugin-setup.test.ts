@@ -268,6 +268,8 @@ describe('abort', () => {
     expect(lister).toHaveBeenCalledTimes(1);
     expect(setup.view().games.ets2.targets[0]).toMatchObject({state: 'blocked', reason: 'RUNNING_CHECK_FAILED'});
     expect(setup.view().games.ats.targets[0]).toMatchObject({state: 'working'});
+    // Both the failed listing and the folder the run never reached are retried by the poll once a listing succeeds.
+    expect(vi.getTimerCount()).toBe(1);
     expect(await exists(path.join(ets2Root, 'bin', 'win_x64', 'plugins'))).toBe(false);
     expect(await exists(path.join(atsRoot, 'bin', 'win_x64', 'plugins'))).toBe(false);
   });
@@ -676,5 +678,56 @@ describe('review round 1', () => {
     setup = create();
     await expect(setup.chooseFolder('ets2', manual)).rejects.toThrow('Plugin setup has stopped');
     expect(await exists(path.join(registryDirectory(), 'setup.json'))).toBe(false);
+  });
+});
+
+// The tasklist bound fix (October 17, 2026): a failed running-game listing must not leave the plugin uninstalled for the
+// whole session. The poll retries such a folder once its own listing succeeds, and only then.
+describe('failed listing', () => {
+  it('retries a folder whose running check failed once the poll lists the running games again, and then stops polling', async () => {
+    let failing = true;
+    lister.mockImplementation(() => Promise.resolve(failing ? {ok: false, code: 'RUNNING_CHECK_FAILED'} : {ok: true, running: {...running}}));
+    const setup = create();
+    await launch(setup);
+    expect(setup.view().games.ets2.targets).toEqual([target('ets2:steam:0', 'missing', {reason: 'RUNNING_CHECK_FAILED'})]);
+    expect(setup.view().games.ats.targets).toEqual([target('ats:steam:0', 'missing', {reason: 'RUNNING_CHECK_FAILED'})]);
+    expect(vi.getTimerCount()).toBe(1);
+    // The poll's own listing still fails: no run, the poll goes on.
+    await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
+    await settled(setup);
+    expect(runs()).toBe(1);
+    expect(vi.getTimerCount()).toBe(1);
+    failing = false;
+    await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
+    await settled(setup);
+    expect(runs()).toBe(2);
+    expect(setup.view().games.ets2.targets).toEqual([target('ets2:steam:0', 'installed')]);
+    expect(setup.view().games.ats.targets).toEqual([target('ats:steam:0', 'installed')]);
+    expect(vi.getTimerCount()).toBe(0);
+    setup.abort();
+  });
+});
+
+describe('unfinished run', () => {
+  it('retries a run that hit its 30 s limit before it reached any folder', async () => {
+    let hold = true;
+    const readBundle = vi.fn((signal: AbortSignal) => hold
+      ? new Promise<PluginBundleResult>(resolve => signal.addEventListener('abort', () => resolve({ok: false, code: 'BUNDLE_UNAVAILABLE', failure: 'aborted'})))
+      : Promise.resolve(bundleResult));
+    const setup = create({readBundle});
+    setup.start();
+    await vi.advanceTimersByTimeAsync(LAUNCH_DELAY_MS);
+    await until(() => readBundle.mock.calls.length === 1);
+    await vi.advanceTimersByTimeAsync(RUN_TIMEOUT_MS);
+    await settled(setup);
+    expect(logged('PLUGIN_SETUP_TIMEOUT')).toHaveLength(1);
+    expect(setup.view().games.ets2.targets).toEqual([]);
+    expect(vi.getTimerCount()).toBe(1);
+    hold = false;
+    await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
+    await settled(setup);
+    expect(setup.view().games.ets2.targets).toEqual([target('ets2:steam:0', 'installed')]);
+    expect(vi.getTimerCount()).toBe(0);
+    setup.abort();
   });
 });
