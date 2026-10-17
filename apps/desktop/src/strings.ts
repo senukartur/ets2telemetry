@@ -566,7 +566,7 @@ export const CONNECTION_DIAGNOSIS_TEXT: Readonly<Record<ConnectionDiagnosisCode,
   PLUGIN_BUNDLE_UNAVAILABLE: 'The bundled plugin is missing or damaged. Reinstall ETS2Telemetry.',
   PLUGIN_NOT_CHECKED: 'The plugin could not be checked in a game folder; see the folder line below.',
   PLUGIN_MISSING: 'The plugin is not installed in a game folder. Turn on "Manage the plugin for this game" or press Retry.',
-  TRANSPORT_FAILED: 'The game\'s plugin could not be connected, or it is incompatible. Close the game, press Retry, then start the game again.',
+  TRANSPORT_FAILED: 'The game\'s plugin could not be connected, or it is incompatible, and the connection is not tried again by itself. After the plugin is fixed, choose another source and then the game again above, or exit ETS2Telemetry from the tray and start it again.',
   NO_RUNNING_SOURCE: 'The plugin is in place. Start the game to connect.'
 });
 export const CONNECTION_DIAGNOSIS_NOTE_TEXT: Readonly<Record<ConnectionDiagnosisNote, string>> = Object.freeze({

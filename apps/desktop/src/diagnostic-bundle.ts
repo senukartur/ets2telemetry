@@ -73,11 +73,13 @@ function nameRedactor(identities: readonly (string | undefined)[]): (value: stri
   const pattern = new RegExp(`(?<![A-Za-z0-9])(?:${names.sort((a, b) => b.length - a.length).map(escapeRegExp).join('|')})(?![A-Za-z0-9])`, 'giu');
   return value => value.replace(pattern, REDACTED);
 }
-function redactStrings<T>(value: T, redact: (text: string) => string): T {
-  if (typeof value === 'string') return redact(value) as T;
-  if (Array.isArray(value)) return value.map(entry => redactStrings(entry, redact) as unknown) as T;
-  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, entry]) => [redact(key), redactStrings(entry, redact)])) as T;
-  return value;
+/**
+ * Redacts the names in one log row's runtime content only: its fact keys and string fact values. The row's time and
+ * event code passed fixed patterns and are schema, not free text, so they stay as they are (PR #111 review).
+ */
+function redactRow(row: DiagnosticLogRow, redact: (text: string) => string): DiagnosticLogRow {
+  if (!row.facts) return row;
+  return {...row, facts: Object.fromEntries(Object.entries(row.facts).map(([key, value]) => [redact(key), typeof value === 'string' ? redact(value) : value]))};
 }
 
 /** One fact value: scalars only; a path-like string becomes `<redacted>`, and a long one is cut. */
@@ -111,7 +113,7 @@ export function diagnosticLogRow(line: string): DiagnosticLogRow | undefined {
 }
 
 /** The rows of one log, oldest first: the rotated file, then the current one; at most the last DIAGNOSTIC_LOG_ROW_LIMIT. */
-function logRows(text: DiagnosticLogText): {rows: DiagnosticLogRow[]; omitted: number} {
+function logRows(text: DiagnosticLogText, redact: (text: string) => string): {rows: DiagnosticLogRow[]; omitted: number} {
   const rows: DiagnosticLogRow[] = [];
   let omitted = 0;
   for (const content of [text.previous, text.current]) {
@@ -121,7 +123,7 @@ function logRows(text: DiagnosticLogText): {rows: DiagnosticLogRow[]; omitted: n
     for (const line of lines) {
       if (!line.trim()) continue;
       const row = diagnosticLogRow(line);
-      if (row) rows.push(row); else omitted++;
+      if (row) rows.push(redactRow(row, redact)); else omitted++;
     }
   }
   const excess = Math.max(0, rows.length - DIAGNOSTIC_LOG_ROW_LIMIT);
@@ -131,27 +133,33 @@ function logRows(text: DiagnosticLogText): {rows: DiagnosticLogRow[]; omitted: n
 const serialize = (bundle: DiagnosticBundle) => `${JSON.stringify(bundle, null, 2)}\n`;
 
 /**
- * Builds the bundle text. Every string of the whole document passes the name redaction; when the text exceeds
- * DIAGNOSTIC_BUNDLE_MAX_BYTES, the oldest log rows of the longer log are left out until it fits. Throws only when the
- * document without any log row is still too large.
+ * Builds the bundle text. The user and computer names are redacted only in runtime content: the log rows' fact keys and
+ * string fact values, and the operating system's release text. The format, every schema key, enum code, version and
+ * event code stay exactly as written, so a name such as `main` or `diagnostics` can never change the document's shape
+ * (PR #111 review). When the text exceeds DIAGNOSTIC_BUNDLE_MAX_BYTES, the oldest log rows of the longer log are left
+ * out until it fits. Throws only when the document without any log row is still too large.
  */
 export function buildDiagnosticBundle(input: DiagnosticBundleInput): string {
-  const main = logRows(input.logs.main), service = logRows(input.logs.service);
   const redact = nameRedactor(input.identities);
-  const bundle: DiagnosticBundle = redactStrings({
-    format: DIAGNOSTIC_BUNDLE_FORMAT, version: DIAGNOSTIC_BUNDLE_VERSION, createdUtc: new Date(input.createdMs).toISOString(), app: input.app,
-    health: input.health, settings: input.settings, plugins: input.plugins, bundledPlugin: input.plugins.bundled, live: input.live, diagnosis: input.diagnosis,
-    logs: {main: main.rows, service: service.rows}, omittedLogRows: {main: main.omitted, service: service.omitted}
-  }, redact);
-  let text = serialize(bundle);
+  const main = logRows(input.logs.main, redact), service = logRows(input.logs.service, redact);
+  const logs = {main: main.rows, service: service.rows};
+  const omitted = {main: main.omitted, service: service.omitted};
+  // The trim works on these two local arrays and rebuilds the document each time, so it never depends on its keys.
+  const document = (): DiagnosticBundle => ({
+    format: DIAGNOSTIC_BUNDLE_FORMAT, version: DIAGNOSTIC_BUNDLE_VERSION, createdUtc: new Date(input.createdMs).toISOString(),
+    app: {...input.app, osRelease: redact(input.app.osRelease)}, health: input.health, settings: input.settings, plugins: input.plugins,
+    bundledPlugin: input.plugins.bundled, live: input.live, diagnosis: input.diagnosis,
+    logs: {main: logs.main, service: logs.service}, omittedLogRows: {main: omitted.main, service: omitted.service}
+  });
+  let text = serialize(document());
   while (Buffer.byteLength(text, 'utf8') > DIAGNOSTIC_BUNDLE_MAX_BYTES) {
-    const longer = bundle.logs.main.length >= bundle.logs.service.length ? 'main' : 'service';
-    const rows = bundle.logs[longer];
+    const longer: 'main' | 'service' = logs.main.length >= logs.service.length ? 'main' : 'service';
+    const rows = logs[longer];
     if (!rows.length) throw new Error('DIAGNOSTIC_BUNDLE_TOO_LARGE');
     const drop = Math.max(1, Math.ceil(rows.length / 8));
-    bundle.logs[longer] = rows.slice(drop);
-    bundle.omittedLogRows[longer] += drop;
-    text = serialize(bundle);
+    logs[longer] = rows.slice(drop);
+    omitted[longer] += drop;
+    text = serialize(document());
   }
   return text;
 }

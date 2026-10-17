@@ -177,3 +177,46 @@ describe('reading the logs', () => {
     expect(await readFileTail(path.join(resources.directory, 'missing.jsonl'), 4)).toBeUndefined();
   });
 });
+
+// PR #111 review: a user or computer name that equals a schema word must not change the document. Only runtime content
+// (fact keys and string fact values, and the OS release text) is redacted; the format, keys and codes stay exact, also
+// when the bundle has to be trimmed.
+describe('names that collide with the schema', () => {
+  const KEYS = ['format', 'version', 'createdUtc', 'app', 'health', 'settings', 'plugins', 'bundledPlugin', 'live', 'diagnosis', 'logs', 'omittedLogRows'];
+  const collisionRow = (name: string, index = 0) => line({time: '2026-10-17T08:30:00.000Z', event: 'USER_SEEN',
+    facts: {n: index, [name]: 'key of the name', owner: name.toUpperCase(), label: `${name} here`, pad: 'p'.repeat(250), pad2: 'q'.repeat(250), pad3: 'r'.repeat(250)}});
+  const REDACTED_FACTS = {'<redacted>': 'key of the name', owner: REDACTED, label: `${REDACTED} here`};
+  function assertSchema(text: string) {
+    const bundle = parse(text);
+    expect(Object.keys(bundle)).toEqual(KEYS);
+    expect([bundle.format, bundle.version, bundle.createdUtc]).toEqual(['ets2telemetry.diagnostics', 1, '2026-10-17T08:30:15.250Z']);
+    expect(bundle.app).toEqual({version: '0.1.0', electron: '44.7.0', node: '24.19.0', packaged: true, osRelease: '10.0.26200'});
+    expect([bundle.health, bundle.settings, bundle.plugins, bundle.bundledPlugin, bundle.live, bundle.diagnosis])
+      .toEqual([HEALTH, SETTINGS, PLUGINS, {version: '0.2.0', sha256Prefix: '0123456789ab'}, {status: 'waiting', selection: 'ets2'}, {code: 'NO_RUNNING_SOURCE', notes: []}]);
+    expect(Object.keys(bundle.logs)).toEqual(['main', 'service']);
+    expect(Object.keys(bundle.omittedLogRows)).toEqual(['main', 'service']);
+    return bundle;
+  }
+  const NAMES = ['main', 'logs', 'diagnostics', 'ets2telemetry', 'format', 'plugins'];
+  const AS = [['user', (name: string) => [name, 'TRUCKER-PC7']], ['computer', (name: string) => ['Jane.Doe', name]]] as const;
+  for (const [role, identities] of AS) {
+    it.each(NAMES)(`keeps a small bundle exact when the ${role} name is %s, and redacts it in the facts`, name => {
+      const text = buildDiagnosticBundle(input({identities: identities(name), logs: {main: {current: collisionRow(name)}, service: {current: line({time: '2026-10-17T08:30:01.000Z', event: 'SERVICE_READY'})}}}));
+      const bundle = assertSchema(text);
+      expect(bundle.logs.main).toEqual([{time: '2026-10-17T08:30:00.000Z', event: 'USER_SEEN', facts: {n: 0, ...REDACTED_FACTS, pad: 'p'.repeat(250), pad2: 'q'.repeat(250), pad3: 'r'.repeat(250)}}]);
+      expect(bundle.logs.service).toEqual([{time: '2026-10-17T08:30:01.000Z', event: 'SERVICE_READY'}]);
+      expect(bundle.omittedLogRows).toEqual({main: 0, service: 0});
+    });
+    it.each(NAMES)(`keeps a trimmed bundle exact when the ${role} name is %s`, name => {
+      const rows = (count: number) => Array.from({length: count}, (_, index) => collisionRow(name, index)).join('\n');
+      const text = buildDiagnosticBundle(input({identities: identities(name), logs: {main: {previous: rows(2000), current: rows(2000)}, service: {current: rows(2000)}}}));
+      expect(Buffer.byteLength(text, 'utf8')).toBeLessThanOrEqual(DIAGNOSTIC_BUNDLE_MAX_BYTES);
+      const bundle = assertSchema(text);
+      expect(bundle.omittedLogRows.main).toBeGreaterThan(2000);
+      expect(bundle.omittedLogRows.main + bundle.logs.main.length).toBe(4000);
+      expect(bundle.omittedLogRows.service + bundle.logs.service.length).toBe(2000);
+      expect(bundle.logs.main.at(-1)).toMatchObject({event: 'USER_SEEN', facts: {n: 1999, ...REDACTED_FACTS}});
+      expect(text.toLowerCase()).not.toMatch(new RegExp(`"${name}": "key of the name"|"owner": "${name}"`, 'i'));
+    });
+  }
+});
