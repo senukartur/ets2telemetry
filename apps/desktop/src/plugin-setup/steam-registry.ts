@@ -6,6 +6,10 @@ import {nodeExecFile, runFixedProgram, systemRoot, type ExecFilePort} from './fi
 // reads exactly two registry values, HKCU\Software\Valve\Steam\SteamPath and, as the fallback,
 // HKLM\SOFTWARE\WOW6432Node\Valve\Steam\InstallPath, and prints them as base64 UTF-8 inside JSON so the console code
 // page cannot change a non-ASCII path. reg.exe is not used: it prints in the OEM code page.
+//
+// The script uses .NET calls and string concatenation only, no cmdlet, so it never autoloads a module. The child also
+// gets only Windows PowerShell's own module folder in PSModulePath: a pwsh 7 parent (such as the CI tests job) exports
+// module folders whose modules Windows PowerShell 5.1 cannot load.
 
 export const STEAM_USER_KEY = 'HKEY_CURRENT_USER\\Software\\Valve\\Steam';
 export const STEAM_MACHINE_KEY = 'HKEY_LOCAL_MACHINE\\SOFTWARE\\WOW6432Node\\Valve\\Steam';
@@ -27,18 +31,28 @@ export function steamRegistryScript(keys?: SteamRegistryKeys): string {
   if (keys && (!TEST_KEY.test(user) || !TEST_KEY.test(machine))) throw new Error('Steam registry test keys rejected');
   return [
     "$ErrorActionPreference = 'Stop'",
+    // Base64 needs no JSON escaping, so the output is built as text: a quoted base64 value or null.
     'function Read-Value([string]$Key, [string]$Name) {',
     '  $value = [Microsoft.Win32.Registry]::GetValue($Key, $Name, $null)',
-    '  if ($value -is [string]) { [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($value)) } else { $null }',
+    `  if ($value -is [string]) { '"' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($value)) + '"' } else { 'null' }`,
     '}',
-    `$result = [ordered]@{ steamPath = (Read-Value '${user}' 'SteamPath'); installPath = (Read-Value '${machine}' 'InstallPath') }`,
-    '[Console]::Out.Write((ConvertTo-Json -InputObject $result -Compress))'
+    `[Console]::Out.Write('{"steamPath":' + (Read-Value '${user}' 'SteamPath') + ',"installPath":' + (Read-Value '${machine}' 'InstallPath') + '}')`
   ].join('\n');
 }
 
 /** The absolute path of Windows PowerShell 5.1. */
 export function powershellPath(env: Readonly<Record<string, string | undefined>>): string {
   return path.win32.join(systemRoot(env), 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+}
+
+/**
+ * The child's environment: the parent's, with PSModulePath (in any letter case) replaced by Windows PowerShell's own
+ * `%SystemRoot%\System32\WindowsPowerShell\v1.0\Modules`.
+ */
+export function windowsPowerShellEnvironment(env: Readonly<Record<string, string | undefined>>): Record<string, string | undefined> {
+  const child = Object.fromEntries(Object.entries(env).filter(([name]) => name.toLowerCase() !== 'psmodulepath'));
+  child.PSModulePath = path.win32.join(systemRoot(env), 'System32', 'WindowsPowerShell', 'v1.0', 'Modules');
+  return child;
 }
 
 export type SteamRegistryValues = {readonly ok: true; readonly steamPath: string | null; readonly installPath: string | null} | {readonly ok: false; readonly code: SteamRegistryErrorCode};
@@ -79,7 +93,8 @@ export async function readSteamRegistryValues(options: SteamRegistryOptions = {}
   const env = options.env ?? process.env;
   const result = await runFixedProgram(options.execFile ?? nodeExecFile, powershellPath(env),
     ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', steamRegistryScript(options.testKeys)],
-    {timeoutMs: STEAM_REGISTRY_TIMEOUT_MS, maxOutputBytes: STEAM_REGISTRY_MAX_OUTPUT_BYTES, signal: options.signal});
+    {timeoutMs: STEAM_REGISTRY_TIMEOUT_MS, maxOutputBytes: STEAM_REGISTRY_MAX_OUTPUT_BYTES, signal: options.signal,
+      env: windowsPowerShellEnvironment(env)});
   if (!result.ok) {
     return {ok: false, code: result.failure === 'timeout' ? 'STEAM_REGISTRY_TIMEOUT' : result.failure === 'output-too-large' ? 'STEAM_REGISTRY_OUTPUT_TOO_LARGE'
       : result.failure === 'aborted' ? 'STEAM_REGISTRY_ABORTED' : 'STEAM_REGISTRY_FAILED'};

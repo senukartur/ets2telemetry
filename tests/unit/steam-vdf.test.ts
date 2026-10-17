@@ -41,10 +41,15 @@ describe('formats Steam writes', () => {
 });
 
 describe('lexical rules', () => {
-  it('unescapes only \\\\ and \\"', () => {
-    const document = parse('"k" "a\\\\b\\"c"');
-    expect(document.entries).toEqual([['k', 'a\\b"c']]);
-    for (const escape of ['\\n', '\\t', '\\x', '\\u0041']) expect(code(() => parse(`"k" "a${escape}"`))).toBe('VDF_SYNTAX');
+  it.each([
+    ['\\n', '\n'], ['\\t', '\t'], ['\\v', '\v'], ['\\b', '\b'], ['\\r', '\r'], ['\\f', '\f'], ['\\a', '\u0007'],
+    ['\\\\', '\\'], ['\\?', '?'], ["\\'", "'"], ['\\"', '"']
+  ])('decodes the Valve escape %j', (escape, decoded) => {
+    expect(parse(`"k${escape}" "a${escape}b"`).entries).toEqual([[`k${decoded}`, `a${decoded}b`]]);
+  });
+
+  it.each(['\\x41', '\\u0041', '\\0', '\\e', '\\N', '\\ ', '\\/'])('refuses the unknown escape %j', escape => {
+    expect(code(() => parse(`"k" "a${escape}"`))).toBe('VDF_SYNTAX');
   });
 
   it('skips // comments between tokens and after values, but not inside strings', () => {
@@ -99,6 +104,11 @@ describe('bounds and malformed input', () => {
     // Cyrillic letters are two bytes each.
     expect(code(() => parse(`"k" "${'д'.repeat(2048)}"`))).toBe('accepted');
     expect(code(() => parse(`"k" "${'д'.repeat(2049)}"`))).toBe('VDF_STRING_TOO_LONG');
+    // A character outside the Basic Multilingual Plane is four bytes, a CJK character three.
+    expect(code(() => parse(`"k" "${'😀'.repeat(1024)}"`))).toBe('accepted');
+    expect(code(() => parse(`"k" "${'😀'.repeat(1024)}a"`))).toBe('VDF_STRING_TOO_LONG');
+    expect(code(() => parse(`"k" "${'語'.repeat(1365)}a"`))).toBe('accepted');
+    expect(code(() => parse(`"k" "${'語'.repeat(1365)}ab"`))).toBe('VDF_STRING_TOO_LONG');
     expect(code(() => parse(`"${'a'.repeat(4097)}" "v"`))).toBe('VDF_STRING_TOO_LONG');
     // An escape counts as the one character it stands for.
     expect(code(() => parse(`"k" "${'\\\\'.repeat(4096)}"`))).toBe('accepted');

@@ -68,6 +68,21 @@ describe('libraries', () => {
     expect(roots(result, 'ats')).toEqual([{library: 2, root: common(b, ATS), status: 'ready'}]);
   });
 
+  it('reports at most four Steam roots per game, in library order, and counts the rest', async () => {
+    const extra = [await steam.library('L1'), await steam.library('L2'), await steam.library('L3'), await steam.library('L4')];
+    await steam.libraryFolders([steam.steam, ...extra]);
+    for (const library of [steam.steam, ...extra]) await steam.install(library, 'ets2');
+    const result = await discover();
+    expect(result.libraries.map(library => library.ordinal)).toEqual([0, 1, 2, 3, 4]);
+    expect(roots(result, 'ets2')).toEqual([
+      {library: 0, root: common(steam.steam, ETS2), status: 'ready'},
+      {library: 1, root: common(extra[0], ETS2), status: 'ready'},
+      {library: 2, root: common(extra[1], ETS2), status: 'ready'},
+      {library: 3, root: common(extra[2], ETS2), status: 'ready'}
+    ]);
+    expect(result.facts).toMatchObject({truncatedRoots: 1, duplicateRoots: 0, ets2: 'found'});
+  });
+
   it('falls back to config\\libraryfolders.vdf when steamapps has none', async () => {
     const b = await steam.library('ConfigListed');
     await steam.libraryFolders([steam.steam, b], {location: 'config'});

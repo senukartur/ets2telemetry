@@ -3,8 +3,9 @@ import {realpathSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 
-// A file-system facade for plugin-setup tests (ET-017 P19). Every path argument, and every path realpath returns, must
-// lie inside the guard's own mkdtemp root; anything else is refused before the real call and recorded, so a test can
+// A file-system facade for plugin-setup tests (ET-017 P19). Every path argument, its real location through any
+// junction or symbolic link, and every path realpath returns, must lie inside the guard's own mkdtemp root; anything
+// else is refused before the real call and recorded, so a test can
 // fail even when the code under test swallows the error. It protects real Steam libraries, game folders and
 // %LOCALAPPDATA%\ETS2Telemetry from a test that resolves a path it should not.
 
@@ -21,6 +22,8 @@ const OPERATIONS = ['lstat', 'stat', 'realpath', 'open', 'readdir', 'mkdir', 'rm
 type Operation = typeof OPERATIONS[number];
 /** Operations whose first two arguments are both paths. */
 const TWO_PATHS: ReadonlySet<Operation> = new Set(['rename', 'copyFile', 'symlink']);
+/** Operations that act on a final link itself instead of following it. */
+const NOT_FOLLOWING: ReadonlySet<Operation> = new Set(['lstat', 'unlink', 'rmdir', 'rm', 'rename', 'symlink']);
 export type GuardedFs = Pick<typeof fsp, Operation>;
 
 export interface GuardedRoot {
@@ -53,13 +56,38 @@ export async function guardedTempRoot(prefix = 'ets2telemetry-plugin-test-'): Pr
     violations.push(`${operation} ${text}`);
     throw new GuardedFsEscape(operation, text);
   };
+  // The real location an operation reaches: links in every existing ancestor are resolved, and the final component too
+  // when the operation follows it. Missing components cannot be links, so they are appended as written.
+  const realLocation = async (target: string, followFinal: boolean): Promise<string> => {
+    const resolved = path.win32.resolve(target);
+    let probe = followFinal ? resolved : path.win32.dirname(resolved);
+    const rest = followFinal ? [] : [path.win32.basename(resolved)];
+    while (true) {
+      try {return path.win32.join(await fsp.realpath(probe), ...rest);} catch {
+        const parent = path.win32.dirname(probe);
+        if (parent === probe) return resolved;
+        rest.unshift(path.win32.basename(probe));
+        probe = parent;
+      }
+    }
+  };
+  const check = async (operation: Operation, target: unknown, followFinal: boolean) => {
+    if (!inside(target)) refuse(operation, target);
+    // A junction inside the root may point outside it; the real location must be inside too.
+    if (!inside(await realLocation(target as string, followFinal))) refuse(`${operation}-through-link`, target);
+  };
   const guarded = {} as Record<Operation, (...args: unknown[]) => Promise<unknown>>;
   for (const operation of OPERATIONS) {
     const real = fsp[operation] as (...args: unknown[]) => Promise<unknown>;
     guarded[operation] = async (...args: unknown[]) => {
-      if (!inside(args[0])) refuse(operation, args[0]);
-      // For symlink the first path is the link target, which must be absolute here as well.
-      if (TWO_PATHS.has(operation) && !inside(args[1])) refuse(operation, args[1]);
+      if (operation === 'symlink') {
+        // symlink(target, path): the link target must be inside lexically; creating the link follows nothing.
+        if (!inside(args[0])) refuse(operation, args[0]);
+        await check(operation, args[1], false);
+      } else {
+        await check(operation, args[0], !NOT_FOLLOWING.has(operation));
+        if (TWO_PATHS.has(operation)) await check(operation, args[1], !NOT_FOLLOWING.has(operation));
+      }
       const result = await real(...args);
       if (operation === 'realpath' && typeof result === 'string' && !inside(result)) refuse('realpath-result', result);
       return result;

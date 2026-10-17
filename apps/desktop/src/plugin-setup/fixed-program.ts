@@ -9,7 +9,9 @@ import path from 'node:path';
 export type ExecFilePort = (
   file: string,
   args: readonly string[],
-  options: {encoding: 'buffer'; timeout: number; maxBuffer: number; windowsHide: true; shell: false; signal?: AbortSignal},
+  options: {encoding: 'buffer'; timeout: number; maxBuffer: number; windowsHide: true; shell: false; signal?: AbortSignal;
+    /** The child's whole environment; absent means the parent's. */
+    env?: Readonly<Record<string, string | undefined>>},
   callback: (error: ExecFileException | null, stdout: Buffer, stderr: Buffer) => void
 ) => unknown;
 export const nodeExecFile: ExecFilePort = (file, args, options, callback) => execFile(file, args, options, callback);
@@ -17,7 +19,7 @@ export const nodeExecFile: ExecFilePort = (file, args, options, callback) => exe
 export type FixedProgramFailure = 'timeout' | 'output-too-large' | 'aborted' | 'failed';
 export type FixedProgramResult = {readonly ok: true; readonly stdout: Buffer} | {readonly ok: false; readonly failure: FixedProgramFailure};
 
-export interface FixedProgramLimits {timeoutMs: number; maxOutputBytes: number; signal?: AbortSignal}
+export interface FixedProgramLimits {timeoutMs: number; maxOutputBytes: number; signal?: AbortSignal; env?: Readonly<Record<string, string | undefined>>}
 
 /** Runs `file` with `args`; a non-zero exit, a timeout, an abort or output beyond the bound is a failure. */
 export function runFixedProgram(execFilePort: ExecFilePort, file: string, args: readonly string[], limits: FixedProgramLimits): Promise<FixedProgramResult> {
@@ -25,7 +27,7 @@ export function runFixedProgram(execFilePort: ExecFilePort, file: string, args: 
   return new Promise(resolve => {
     try {
       execFilePort(file, args, {encoding: 'buffer', timeout: limits.timeoutMs, maxBuffer: limits.maxOutputBytes, windowsHide: true, shell: false,
-        ...(limits.signal ? {signal: limits.signal} : {})}, (error, stdout) => {
+        ...(limits.signal ? {signal: limits.signal} : {}), ...(limits.env ? {env: limits.env} : {})}, (error, stdout) => {
         if (error) {
           if (error.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') resolve({ok: false, failure: 'output-too-large'});
           else if (error.name === 'AbortError' || limits.signal?.aborted) resolve({ok: false, failure: 'aborted'});

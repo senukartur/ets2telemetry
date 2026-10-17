@@ -46,12 +46,19 @@ describe('the fixed call', () => {
     expect(call.file).toBe('C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe');
     expect(call.args.slice(0, 4)).toEqual(['-NoLogo', '-NoProfile', '-NonInteractive', '-Command']);
     expect(call.args).toHaveLength(5);
-    expect(call.options).toEqual({encoding: 'buffer', timeout: 5000, maxBuffer: 16 * 1024, windowsHide: true, shell: false});
+    expect(call.options).toEqual({encoding: 'buffer', timeout: 5000, maxBuffer: 16 * 1024, windowsHide: true, shell: false,
+      env: {SystemRoot: 'C:\\Windows', PSModulePath: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\Modules'}});
     const script = call.args[4];
     expect(script).toBe(steamRegistryScript());
     expect(script).toContain(`'${STEAM_USER_KEY}' 'SteamPath'`);
     expect(script).toContain(`'${STEAM_MACHINE_KEY}' 'InstallPath'`);
     expect(script.match(/HKEY_[A-Z_]+\\[^']*/g)).toEqual(['HKEY_CURRENT_USER\\Software\\Valve\\Steam', 'HKEY_LOCAL_MACHINE\\SOFTWARE\\WOW6432Node\\Valve\\Steam']);
+  });
+
+  it('passes the parent environment with only Windows PowerShell\'s own module folder in PSModulePath, in any case', async () => {
+    const {execFile, calls} = stub(() => ({stdout: output(null, null)}));
+    await readSteamRegistryValues({execFile, env: {SystemRoot: 'D:\\Win', PSModulePath: 'C:\\Program Files\\PowerShell\\7\\Modules', psmodulepath: 'E:\\Other', KEEP: 'kept'}});
+    expect(calls[0].options.env).toEqual({SystemRoot: 'D:\\Win', KEEP: 'kept', PSModulePath: 'D:\\Win\\System32\\WindowsPowerShell\\v1.0\\Modules'});
   });
 
   it('uses only a plain SystemRoot to build the program path', async () => {
@@ -152,30 +159,78 @@ describe('canonical Steam root', () => {
   });
 });
 
+/**
+ * Bounds each Windows PowerShell process start in the real-run cases and their cleanup: a hang guard for a loaded
+ * runner, not a timing assertion. The product's own 5 s deadline still applies inside each case.
+ */
+const POWERSHELL_START_TIMEOUT_MS = 30_000;
+
 describe.runIf(process.platform === 'win32')('a real run of the fixed script against a temporary HKCU key', () => {
   const id = randomUUID();
   const userKey = `HKEY_CURRENT_USER\\Software\\ETS2Telemetry-Test-${id}`;
   const providerKey = `HKCU:\\Software\\ETS2Telemetry-Test-${id}`;
-  const powershell = path.win32.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-  const run = (script: string) => execFileSync(powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script], {windowsHide: true, timeout: 30_000});
+  const systemRoot = process.env.SystemRoot ?? 'C:\\Windows';
+  const powershell = path.win32.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  // Setup and cleanup use cmdlets, so they get Windows PowerShell's own module folder whatever the parent exported.
+  const cleanEnvironment = {...Object.fromEntries(Object.entries(process.env).filter(([name]) => name.toLowerCase() !== 'psmodulepath')),
+    PSModulePath: path.win32.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'Modules')};
+  const run = (script: string, environment: NodeJS.ProcessEnv = cleanEnvironment) => execFileSync(powershell,
+    ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script], {windowsHide: true, timeout: POWERSHELL_START_TIMEOUT_MS, env: environment, stdio: 'pipe'});
+  let steam: string, stored: string;
+  beforeEach(async () => {
+    steam = path.win32.join(guard.root, 'Игры', 'Стим');
+    await mkdir(steam, {recursive: true});
+    // Stored as Steam writes it: lowercase with forward slashes. Passed in base64 so no code page touches it.
+    stored = steam.toLowerCase().replaceAll('\\', '/');
+    run(`$value = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${b64(stored)}')); New-Item -Path '${providerKey}' -Force | Out-Null; `
+      + `New-ItemProperty -LiteralPath '${providerKey}' -Name SteamPath -Value $value -PropertyType String | Out-Null`);
+  }, POWERSHELL_START_TIMEOUT_MS);
   afterEach(() => {
     run(`Remove-Item -LiteralPath '${providerKey}' -Recurse -Force -ErrorAction SilentlyContinue`);
     expect(run(`Test-Path -LiteralPath '${providerKey}'`).toString().trim()).toBe('False');
-  });
+  }, POWERSHELL_START_TIMEOUT_MS);
+  const testKeys = () => ({user: userKey, machine: `${userKey}\\Machine`});
+  /**
+   * A module folder like the one a pwsh 7 parent exports: a Core-edition Microsoft.PowerShell.Utility that Windows
+   * PowerShell 5.1 finds first and cannot load.
+   */
+  async function pollutedModulePath(): Promise<string> {
+    const folder = path.win32.join(guard.root, 'PollutedModules');
+    const module = path.win32.join(folder, 'Microsoft.PowerShell.Utility');
+    await mkdir(module, {recursive: true});
+    await writeFile(path.win32.join(module, 'Microsoft.PowerShell.Utility.psd1'), "@{ ModuleVersion = '7.0.0.0'; CompatiblePSEditions = @('Core'); "
+      + "RootModule = 'Microsoft.PowerShell.Utility.psm1'; FunctionsToExport = @('ConvertTo-Json'); CmdletsToExport = @(); PowerShellVersion = '3.0' }\n");
+    await writeFile(path.win32.join(module, 'Microsoft.PowerShell.Utility.psm1'), "throw 'polluted module loaded'\n");
+    return `${folder};${process.env.PSModulePath ?? ''}`;
+  }
 
   it('reads a Cyrillic SteamPath and canonicalizes it; the missing machine value stays null', async () => {
-    const steam = path.win32.join(guard.root, 'Игры', 'Стим');
-    await mkdir(steam, {recursive: true});
-    // Stored as Steam writes it: lowercase with forward slashes. Passed in base64 so no code page touches it.
-    const stored = steam.toLowerCase().replaceAll('\\', '/');
-    run(`$value = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${b64(stored)}')); New-Item -Path '${providerKey}' -Force | Out-Null; `
-      + `New-ItemProperty -LiteralPath '${providerKey}' -Name SteamPath -Value $value -PropertyType String | Out-Null`);
     const scripts: string[] = [];
     const recorded: ExecFilePort = (file, args, options, callback) => {scripts.push(args[4]); return nodeExecFile(file, args, options, callback);};
-    const testKeys = {user: userKey, machine: `${userKey}\\Machine`};
-    expect(await readSteamRegistryValues({execFile: recorded, testKeys})).toEqual({ok: true, steamPath: stored, installPath: null});
-    expect(await readSteamRoot({execFile: recorded, testKeys, fs: guard.fs})).toEqual({kind: 'found', path: steam});
+    expect(await readSteamRegistryValues({execFile: recorded, testKeys: testKeys()})).toEqual({ok: true, steamPath: stored, installPath: null});
+    expect(await readSteamRoot({execFile: recorded, testKeys: testKeys(), fs: guard.fs})).toEqual({kind: 'found', path: steam});
     expect(scripts).toHaveLength(2);
     for (const script of scripts) expect(script).not.toContain('Valve');
-  });
+  }, POWERSHELL_START_TIMEOUT_MS);
+
+  it('still succeeds when the parent exports an incompatible PSModulePath', async () => {
+    const polluted = await pollutedModulePath();
+    // The pollution is real: a cmdlet from that module fails under it.
+    let probe = 'succeeded';
+    try {run("$ErrorActionPreference = 'Stop'; ConvertTo-Json -InputObject 1", {...cleanEnvironment, PSModulePath: polluted});} catch (error) {
+      probe = String((error as {stderr?: Buffer}).stderr);
+    }
+    expect(probe).toContain('CouldNotAutoloadMatchingModule');
+    const children: (string | undefined)[] = [];
+    const recorded: ExecFilePort = (file, args, options, callback) => {children.push(options.env?.PSModulePath); return nodeExecFile(file, args, options, callback);};
+    expect(await readSteamRegistryValues({execFile: recorded, testKeys: testKeys(), env: {...process.env, PSModulePath: polluted}}))
+      .toEqual({ok: true, steamPath: stored, installPath: null});
+    expect(children).toEqual([path.win32.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'Modules')]);
+  }, POWERSHELL_START_TIMEOUT_MS);
+
+  it('needs no module: the fixed script succeeds even when the child itself gets the incompatible PSModulePath', async () => {
+    const polluted = await pollutedModulePath();
+    const forced: ExecFilePort = (file, args, options, callback) => nodeExecFile(file, args, {...options, env: {...options.env, PSModulePath: polluted}}, callback);
+    expect(await readSteamRegistryValues({execFile: forced, testKeys: testKeys()})).toEqual({ok: true, steamPath: stored, installPath: null});
+  }, POWERSHELL_START_TIMEOUT_MS);
 });

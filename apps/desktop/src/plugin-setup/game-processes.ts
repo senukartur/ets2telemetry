@@ -76,7 +76,10 @@ export interface ProcessListOptions {
   signal?: AbortSignal;
 }
 
-/** Lists the processes of this Windows session through the absolute tasklist.exe path. */
+/**
+ * Lists the processes of every session, as tasklist does without a filter, through the absolute tasklist.exe path. The
+ * child inherits the environment: tasklist loads no PowerShell modules, so PSModulePath does not matter here.
+ */
 export async function listProcesses(options: ProcessListOptions = {}): Promise<ProcessListing> {
   const tasklist = path.win32.join(systemRoot(options.env ?? process.env), 'System32', 'tasklist.exe');
   const result = await runFixedProgram(options.execFile ?? nodeExecFile, tasklist, ['/fo', 'csv', '/nh'],
