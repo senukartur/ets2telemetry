@@ -184,6 +184,38 @@ describe('storage worker', () => {
     expect(await reopened.exit).toBe(0);
   });
 
+  // Regression (packaged recording smoke, October 18, 2026): a service thread that is blocked past the grace while the
+  // worker closes runs the due grace timer before the event loop's next poll phase delivers the close answer that arrived
+  // meanwhile. Before the fix this close was reported `{clean: false}` although the worker had closed the database.
+  it('counts a close that finished while the client thread was blocked past the grace', async () => {
+    const {client, exit} = startWorker({closeGraceMs: 200});
+    ok(await client.open(options()));
+    ok(await client.upsertSession({message: v1('welcome')}));
+    expect(ok(await client.commitEvent({message: v1('event-job-configured'), effects: [openTrip]})).status).toBe('committed');
+    expect(existsSync(ws.database + '-wal')).toBe(true);
+    // The close and the block run in an immediate, outside the worker port's message callback: that callback would read
+    // the answer from the port's queue before it returns, whereas another callback returns to the loop, which runs its due
+    // timers before the next poll phase. The block lasts until the worker removed the WAL (its close checkpointed and
+    // closed the database) and the grace passed, plus a margin for the answer to be posted.
+    const cell = new Int32Array(new SharedArrayBuffer(4));
+    let walRemoved = false;
+    const closed = await new Promise<{clean: boolean}>(resolve => setImmediate(() => {
+      const pending = client.close(), started = Date.now();
+      while (existsSync(ws.database + '-wal') && Date.now() - started < 20_000) Atomics.wait(cell, 0, 0, 5);
+      walRemoved = !existsSync(ws.database + '-wal');
+      Atomics.wait(cell, 0, 0, Math.max(0, 200 - (Date.now() - started)) + 100);
+      resolve(pending);
+    }));
+    expect(walRemoved).toBe(true);
+    expect(closed).toEqual({clean: true});
+    // 0 when the thread had also ended during the block, 1 when it was terminated after it acknowledged the close.
+    expect([0, 1]).toContain(await exit);
+    const reopened = startWorker();
+    ok(await reopened.client.open(options()));
+    expect(ok(await reopened.client.committedThrough(P1))).toBe('1');
+    expect(await reopened.client.close()).toEqual({clean: true});
+  });
+
   it('answers a malformed request with INVALID_INPUT', async () => {
     const worker = new Worker(WORKER, {workerData: {kind: 'storage'}});
     started.push(worker);

@@ -10,7 +10,8 @@ beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
 
 const SUMMARY = {schemaVersion: 1, created: true, databaseUuid: '50000000-0000-4000-8000-000000000001', purpose: 'history'};
-const timers = {setTimeout: (callback: () => void, ms: number) => setTimeout(callback, ms), clearTimeout: (handle: unknown) => clearTimeout(handle as ReturnType<typeof setTimeout>)};
+const timers = {setTimeout: (callback: () => void, ms: number) => setTimeout(callback, ms), clearTimeout: (handle: unknown) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+  setImmediate: (callback: () => void) => setImmediate(callback), clearImmediate: (handle: unknown) => clearImmediate(handle as ReturnType<typeof setImmediate>)};
 
 /** A scripted storage worker. `open` answers with `openResult`; `close` is answered only when `answerClose` is true. */
 function fixture(localAppData: string | null = 'C:\\isolated',openResult: Result<unknown> = {ok: true, value: SUMMARY}, answerClose = true, extra: Pick<HistoryStorageOptions, 'target' | 'onOpened' | 'onStateChange'> = {}) {
@@ -34,7 +35,9 @@ function fixture(localAppData: string | null = 'C:\\isolated',openResult: Result
   // null stands for an unset variable, since an omitted argument takes the default.
   const history = new HistoryStorage({localAppData: localAppData ?? undefined, appVersion: '0.1.0-test', log, createWorker, timers, ...extra});
   const events = () => log.mock.calls.map(call => [call[0], call[2]]);
-  return {history, sent, log, events, createWorker, worker, respond, crash: () => listeners.error?.(new Error('worker crashed'))};
+  /** Delivers the close answer at once and then the thread's exit, as a late poll phase delivers both. */
+  const finishClose = (id: number) => { listeners.message?.({type: 'storage.response', id, result: {ok: true, value: undefined}}); exit(0); };
+  return {history, sent, log, events, createWorker, worker, respond, finishClose, crash: () => listeners.error?.(new Error('worker crashed'))};
 }
 
 describe('history storage at service start (OD-2)', () => {
@@ -146,11 +149,35 @@ describe('history storage shutdown step', () => {
     const sequence = new ShutdownSequence(f.log, {...timers, now: () => Date.now()});
     sequence.register('storage', {name: 'history-storage', budgetMs: HISTORY_CLOSE_BUDGET_MS, run: () => f.history.close()});
     const result = sequence.run();
-    await vi.advanceTimersByTimeAsync(HISTORY_CLOSE_GRACE_MS);
+    // Requirement change (October 18, 2026): the verdict runs one event-loop turn after the grace, an immediate that the
+    // fake clock schedules 1 ms later.
+    await vi.advanceTimersByTimeAsync(HISTORY_CLOSE_GRACE_MS + 1);
     await expect(result).resolves.toEqual({clean: false});
     expect(f.worker.terminate).toHaveBeenCalledOnce();
-    expect(f.log.mock.calls.find(call => call[0] === 'SHUTDOWN_STEP')?.[2]).toEqual({phase: 'storage', name: 'history-storage', outcome: 'failed', ms: HISTORY_CLOSE_GRACE_MS});
+    expect(f.log.mock.calls.find(call => call[0] === 'SHUTDOWN_STEP')?.[2]).toEqual({phase: 'storage', name: 'history-storage', outcome: 'failed', ms: HISTORY_CLOSE_GRACE_MS + 1});
     expect(f.events().map(([name]) => name)).not.toContain('HISTORY_STORAGE_CLOSED');
+  });
+  // Regression (packaged recording smoke, October 18, 2026): run B logged `history-storage` failed at 807 ms, just past
+  // the 800 ms grace, while the service used almost no CPU. A service thread that was stalled past the grace runs the due
+  // grace timer before it delivers the close answer and exit that arrived meanwhile. They now still count.
+  it('keeps the step ok when the close answer and exit wait behind the due grace timer', async () => {
+    const f = fixture('C:\\isolated', {ok: true, value: SUMMARY}, false);
+    f.history.start(); await vi.advanceTimersByTimeAsync(0);
+    const sequence = new ShutdownSequence(f.log, {...timers, now: () => Date.now()});
+    sequence.register('storage', {name: 'history-storage', budgetMs: HISTORY_CLOSE_BUDGET_MS, run: () => f.history.close()});
+    const result = sequence.run();
+    await vi.advanceTimersByTimeAsync(0);
+    const close = f.sent.find(request => request.command.name === 'close');
+    expect(close).toBeDefined();
+    // Only the grace timer runs, as when the stalled thread resumes; then the late poll phase delivers the worker's work.
+    vi.advanceTimersToNextTimer();
+    f.finishClose(close!.id);
+    await vi.advanceTimersByTimeAsync(0);
+    await expect(result).resolves.toEqual({clean: true});
+    expect(f.worker.terminate).not.toHaveBeenCalled();
+    expect(f.log.mock.calls.find(call => call[0] === 'SHUTDOWN_STEP')?.[2]).toEqual({phase: 'storage', name: 'history-storage', outcome: 'ok', ms: HISTORY_CLOSE_GRACE_MS});
+    expect(f.events().map(([name]) => name)).toContain('HISTORY_STORAGE_CLOSED');
+    expect(f.history.state).toBe('closed');
   });
 });
 

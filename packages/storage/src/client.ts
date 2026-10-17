@@ -28,7 +28,11 @@ export interface StorageWorkerHandle {
   onExit(listener: (code: number) => void): void;
   terminate(): Promise<unknown>;
 }
-export interface ClientTimers {setTimeout(callback: () => void, milliseconds: number): unknown; clearTimeout(handle: unknown): void}
+/** `setImmediate` runs a callback after the event loop's next poll phase, which delivers the I/O that arrived before it. */
+export interface ClientTimers {
+  setTimeout(callback: () => void, milliseconds: number): unknown; clearTimeout(handle: unknown): void;
+  setImmediate(callback: () => void): unknown; clearImmediate(handle: unknown): void;
+}
 export interface StorageClientOptions {
   timers?: ClientTimers; commandDeadlineMs?: number; openDeadlineMs?: number; closeGraceMs?: number; maxQueued?: number;
   /** Called once when the worker fails or misses a deadline, with the error the command in flight received. */
@@ -44,7 +48,9 @@ export type ClientState = 'running' | 'closing' | 'closed' | 'failed';
 
 const systemTimers: ClientTimers = {
   setTimeout: (callback, milliseconds) => setTimeout(callback, milliseconds),
-  clearTimeout: handle => clearTimeout(handle as ReturnType<typeof setTimeout>)
+  clearTimeout: handle => clearTimeout(handle as ReturnType<typeof setTimeout>),
+  setImmediate: callback => setImmediate(callback),
+  clearImmediate: handle => clearImmediate(handle as ReturnType<typeof setImmediate>)
 };
 
 export function workerHandle(worker: Worker): StorageWorkerHandle {
@@ -73,6 +79,7 @@ export class StorageClient {
   #finishClose: ((clean: boolean) => void) | undefined;
   #closeAcknowledged = false;
   #closeTimer: unknown;
+  #closeVerdict: unknown;
   readonly #timers: ClientTimers;
   readonly #options: Required<Omit<StorageClientOptions, 'timers' | 'onFailure' | 'onJournalAnswerInvalid'>>;
 
@@ -153,14 +160,18 @@ export class StorageClient {
   /**
    * Orderly close: queued commands get STORAGE_CLOSED, the command in flight finishes with its real result, then the
    * worker closes the database (SQLite checkpoints the WAL) and its thread exits. Resolves `{clean: true}` only after
-   * the worker acknowledged the close and exited. After `closeGraceMs` the worker is terminated, the command in flight
-   * gets WORKER_FAILED and the result is `{clean: false}`. A client that already failed (worker error or exit, missed
-   * deadline, malformed answer) never closed its database in order: closing waits for the terminated thread, within the
-   * grace, and always resolves `{clean: false}`.
+   * the worker acknowledged the close and its thread ended. When `closeGraceMs` runs out, the verdict waits one more turn
+   * of the event loop (#graceExpired), so a close answer and exit that had already arrived still count. Then the worker
+   * is terminated. The result is `{clean: true}` when the worker had acknowledged the close: its database is closed and
+   * only the thread was still ending. Otherwise the command in flight gets WORKER_FAILED and the result is
+   * `{clean: false}`. A client that already failed (worker error or exit, missed deadline, malformed answer) never closed
+   * its database in order: closing waits for the terminated thread, within the grace, and always resolves `{clean: false}`.
    */
   close(): Promise<{clean: boolean}> {
     if (this.#close) return this.#close;
-    this.#close = new Promise(resolve => { this.#finishClose = clean => { this.#timers.clearTimeout(this.#closeTimer); resolve({clean}); }; });
+    this.#close = new Promise(resolve => {
+      this.#finishClose = clean => { this.#timers.clearTimeout(this.#closeTimer); this.#timers.clearImmediate(this.#closeVerdict); resolve({clean}); };
+    });
     if (this.#state === 'failed') {
       this.#closeTimer = this.#timers.setTimeout(() => this.#finishClose?.(false), this.#options.closeGraceMs);
       void this.#terminate().then(() => this.#finishClose?.(false));
@@ -168,7 +179,7 @@ export class StorageClient {
     }
     this.#state = 'closing';
     for (const pending of this.#queue.splice(0)) pending.resolve(failure('STORAGE_CLOSED'));
-    this.#closeTimer = this.#timers.setTimeout(() => { void this.#forceClose(); }, this.#options.closeGraceMs);
+    this.#closeTimer = this.#timers.setTimeout(() => this.#graceExpired(), this.#options.closeGraceMs);
     if (!this.#inFlight) this.#sendClose();
     return this.#close;
   }
@@ -253,8 +264,26 @@ export class StorageClient {
     else this.settings.onFailure?.(storageError(code));
   }
 
+  /**
+   * The close grace ran out. When the service thread was blocked or not scheduled, the due grace timer runs before the
+   * next poll phase of the event loop delivers the I/O that arrived meanwhile, so the worker's close answer and exit can
+   * wait behind it although the worker finished long before. The verdict therefore runs as an immediate, after that poll
+   * phase; a close that completes there cancels it through #finishClose. Without a stall it adds one loop turn.
+   */
+  #graceExpired(): void {
+    this.#closeVerdict = this.#timers.setImmediate(() => { void this.#forceClose(); });
+  }
+
   async #forceClose(): Promise<void> {
     if (this.#state !== 'closing') return;
+    if (this.#closeAcknowledged) {
+      // The worker answered the close, so its connection is closed, and every commit it reported was already durable in
+      // the WAL (synchronous FULL). Only the thread has not ended: terminating it loses nothing, and the close stays clean.
+      this.#state = 'closed';
+      await this.#terminate();
+      this.#finishClose?.(true);
+      return;
+    }
     this.#state = 'failed';
     const inFlight = this.#inFlight;
     this.#inFlight = undefined;
