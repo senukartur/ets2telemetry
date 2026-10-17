@@ -26,7 +26,8 @@ const cases = [
   {name: 'telemetry receipt missing scenario', body: JSON.stringify({passed: true, commit: 'candidate', mode: 'packaged'}), scenario: 'telemetry', code: 0, available: true, reason: 'DRIVER_RESULT_SCENARIO_MISMATCH'},
   {name: 'matching telemetry scenario', body: JSON.stringify({passed: true, commit: 'candidate', mode: 'packaged', scenarioKind: 'telemetry'}), scenario: 'telemetry', code: 0, available: true, reason: null},
   ...lifecycleCases(),
-  ...recordingCases()
+  ...recordingCases(),
+  ...journalCases()
 ];
 
 // ET-011a lifecycle receipts: one intact receipt, then single-field corruptions that must each fail.
@@ -304,6 +305,95 @@ function recordingCases() {
     invalid('run B text log without a recorded state', ['recording', 'restart', 'status', 'texts', 1, 'headline'], 'Waiting for the recorded source to connect'),
     invalid('dashboard open at the tray exit', ['recording', 'status', 'closedAgain', 'dashboard'], true),
     invalid('closed-again flag missing', ['recording', 'dashboardClosedBeforeTrayExit'])
+  ];
+}
+
+// ET-016 PR-4 journal receipts: one intact receipt shaped like a real development run, then single-field corruptions.
+function journalReceipt(path: (string | number)[] = [], replacement?: Json): string {
+  const main = (): Json[] => [{event: 'APP_START'}, {event: 'APP_EXIT_REQUESTED', facts: {reason: 'app-quit'}}, {event: 'SERVICE_EXIT', detail: {code: 0}}, {event: 'APP_EXIT', detail: {code: 0}}];
+  const service = (created: boolean): Json[] => [...(created ? [] : [{event: 'RECORDING_TARGET', facts: {purpose: 'synthetic'}}]), {event: 'STORAGE_VERIFIED'},
+    {event: 'HISTORY_STORAGE_OPENED', facts: {schemaVersion: 2, created, migratedFrom: null}},
+    ...['ingestion', 'capture', 'v1-ingestion', 'recording-flush', 'storage-probe'].map(name => ({event: 'SHUTDOWN_STEP', facts: {name, outcome: 'ok'}})),
+    {event: 'HISTORY_STORAGE_CLOSED'}, {event: 'SHUTDOWN_STEP', facts: {name: 'history-storage', outcome: 'ok'}}, {event: 'SERVICE_REPORT', detail: {type: 'stopped', clean: true}}];
+  const trip = (n: number) => `7a000000-0000-4000-8000-00000000000${n}`;
+  const value: Json = {passed: true, commit: 'candidate', mode: 'packaged', scenarioKind: 'journal', launcherExit: 0, probesAfterExit: [],
+    mainEvents: main(), serviceEvents: service(true),
+    journal: {liveViewport: {innerHeight: 437, scrollY: 0, status: {top: 158, bottom: 178, visible: true}, speed: {top: 214, bottom: 234, visible: true},
+      fuel: {top: 242, bottom: 262, visible: true}},
+      liveLinesInViewport: true, liveHiddenInJournal: true, emptyHistoryShown: true, recordingOffNoteShown: true, liveRestored: true, seeded: true, syntheticBannerShown: true,
+      pagesWalked: true, anchorRowsMatch: true, anchorDetailsMatch: true, backKeptPage: true, sampleGapShown: true, timelinePaged: true, intervalsPaged: true, samplesPaged: true,
+      filtersApplied: true, shutdownClean: true,
+      emptyHistory: {page: 'Page 1. The journal does not update by itself; use Refresh.', error: null, empty: 'No trips recorded',
+        emptyNote: 'Game history recording is off in this version, so no game trips are recorded yet.', banner: null, next: false, previous: false, rows: []},
+      emptyRunExit: {launcherExit: 0, signal: null, closeMilliseconds: 98},
+      seed: {trips: 119, fillers: 110, pagingTolls: 104, pagingSamples: 3600, elapsedMs: 618, bundleMs: 128, totalMs: 805},
+      pages: [{count: 50, next: true, previous: false}, {count: 50, next: true, previous: true}, {count: 19, next: false, previous: true}],
+      anchorRows: [8, 7, 6, 5, 4, 3, 2, 1].map(n => ({trip: trip(n)})), anchorDetails: [1, 2, 3, 4, 5, 6, 7, 8].map(n => ({trip: trip(n)})),
+      deliveredSamples: [{kind: 'sample', speed: '80.1 km/h'}, {kind: 'sample', speed: '0.0 km/h'}, {kind: 'gap', text: 'no samples for 1 s'}, {kind: 'sample', speed: 'unavailable (invalid reading)'}],
+      pagingTimeline: {first: '1', pageTwo: ['101', '102', '103', '104', '105'], nextOnLast: false}, pagingIntervals: {pageTwo: 4, nextOnLast: false},
+      pagingSamples: {kinds: ['sample'], firstSpeed: '72.0 km/h', nextOnSecond: true},
+      filters: {none: [trip(5), trip(4), trip(3)], noneNext: false, partial: 39, partialNext: false},
+      restartLauncherExit: 0, files: {magic: 'SQLite format 3', applicationId: 1163154226, userVersion: 2, sidecars: [], syntheticBackups: false},
+      restartMainEvents: main(), restartServiceEvents: service(false)}};
+  if (path.length) {
+    let target = value as Record<string | number, Json>;
+    for (const key of path.slice(0, -1)) target = target[key] as Record<string | number, Json>;
+    const last = path.at(-1)!;
+    if (replacement === undefined) delete target[last]; else target[last] = replacement;
+  }
+  return JSON.stringify(value);
+}
+function journalCases() {
+  const invalid = (name: string, path: (string | number)[], replacement?: Json) =>
+    ({name: `journal ${name}`, body: journalReceipt(path, replacement), scenario: 'journal', code: 0, available: true, reason: 'JOURNAL_RESULT_INCOMPLETE_OR_INVALID'});
+  return [
+    {name: 'intact journal receipt', body: journalReceipt(), scenario: 'journal', code: 0, available: true, reason: null},
+    {name: 'intact journal receipt with PowerShell 7 Int64 integers', body: journalReceipt(), scenario: 'journal', numbers: 'int64' as const, code: 0, available: true, reason: null},
+    {name: 'journal seed of 118 trips with Int64 integers', body: journalReceipt(['journal', 'seed', 'trips'], 118), scenario: 'journal', numbers: 'int64' as const, code: 0, available: true,
+      reason: 'JOURNAL_RESULT_INCOMPLETE_OR_INVALID'},
+    {name: 'scaffold receipt cannot prove the journal', body: journalReceipt(['scenarioKind'], 'scaffold'), scenario: 'journal', code: 0, available: true, reason: 'DRIVER_RESULT_SCENARIO_MISMATCH'},
+    {name: 'journal receipt cannot prove recording', body: journalReceipt(), scenario: 'recording', code: 0, available: true, reason: 'DRIVER_RESULT_SCENARIO_MISMATCH'},
+    invalid('result missing', ['journal']),
+    invalid('Live lines outside the viewport', ['journal', 'liveLinesInViewport'], false),
+    invalid('Live shown inside the Journal tab', ['journal', 'liveHiddenInJournal'], false),
+    invalid('banner flag as string', ['journal', 'syntheticBannerShown'], 'true'),
+    invalid('detail flag missing', ['journal', 'anchorDetailsMatch']),
+    invalid('empty history without the recording-off note', ['journal', 'emptyHistory', 'emptyNote'], null),
+    invalid('empty history with a test-database banner', ['journal', 'emptyHistory', 'banner'], 'Synthetic test database — never game history'),
+    invalid('empty history with a row', ['journal', 'emptyHistory', 'rows'], [{trip: '7a000000-0000-4000-8000-000000000001'}]),
+    invalid('seed without the paging samples', ['journal', 'seed', 'pagingSamples'], 3599),
+    invalid('first page of 51 trips', ['journal', 'pages', 0, 'count'], 51),
+    invalid('last page with Next', ['journal', 'pages', 2, 'next'], true),
+    invalid('outcome filter applied after the limit', ['journal', 'filters', 'none'], ['7a000000-0000-4000-8000-000000000005', '7a000000-0000-4000-8000-000000000004']),
+    invalid('partial filter count', ['journal', 'filters', 'partial'], 38),
+    invalid('an anchor detail missing', ['journal', 'anchorDetails'], [1, 2, 3, 4, 5, 6, 7].map(n => ({trip: `7a000000-0000-4000-8000-00000000000${n}`}))),
+    invalid('sample gap row missing', ['journal', 'deliveredSamples', 2], {kind: 'sample', speed: '0.0 km/h'}),
+    invalid('timeline second page short', ['journal', 'pagingTimeline', 'pageTwo'], ['101']),
+    invalid('interval second page empty', ['journal', 'pagingIntervals', 'pageTwo'], 0),
+    invalid('a separator in the paging samples', ['journal', 'pagingSamples', 'kinds'], ['sample', 'gap']),
+    invalid('run 1 exited nonzero', ['journal', 'emptyRunExit', 'launcherExit'], 1),
+    invalid('run 2 exited nonzero', ['journal', 'restartLauncherExit'], 1),
+    invalid('a probe left behind', ['probesAfterExit'], ['ets2telemetry-probe-1']),
+    invalid('synthetic database left with a WAL file', ['journal', 'files', 'sidecars'], ['-wal']),
+    invalid('synthetic database at version 1', ['journal', 'files', 'userVersion'], 1),
+    invalid('synthetic database backed up', ['journal', 'files', 'syntheticBackups'], true),
+    invalid('run 1 opened a recording target', ['serviceEvents', 0], {event: 'RECORDING_TARGET', facts: {purpose: 'synthetic'}}),
+    invalid('run 1 found an existing history database', ['serviceEvents', 1, 'facts', 'created'], false),
+    invalid('run 2 opened history', ['journal', 'restartServiceEvents', 0, 'facts', 'purpose'], 'history'),
+    invalid('run 2 created its database', ['journal', 'restartServiceEvents', 2, 'facts', 'created'], true),
+    invalid('run 2 with a failure event', ['journal', 'restartServiceEvents', 13], {event: 'HISTORY_STORAGE_UNAVAILABLE_FAILED'}),
+    invalid('run 2 events missing', ['journal', 'restartMainEvents']),
+    // Review round 1: the viewport bounds and the anchor order themselves, not only the driver's flags.
+    invalid('viewport missing', ['journal', 'liveViewport']),
+    invalid('fuel line below the viewport', ['journal', 'liveViewport', 'fuel', 'bottom'], 438),
+    invalid('status line above the viewport', ['journal', 'liveViewport', 'status', 'top'], -4),
+    invalid('speed line not visible', ['journal', 'liveViewport', 'speed', 'visible'], false),
+    invalid('speed line box missing', ['journal', 'liveViewport', 'speed']),
+    invalid('anchor rows out of order', ['journal', 'anchorRows'], [8, 7, 6, 5, 4, 3, 1, 2].map(n => ({trip: `7a000000-0000-4000-8000-00000000000${n}`}))),
+    invalid('a filler instead of an anchor row', ['journal', 'anchorRows', 0, 'trip'], '7f000000-0000-4000-8000-00000000000a'),
+    invalid('anchor details out of order', ['journal', 'anchorDetails'], [2, 1, 3, 4, 5, 6, 7, 8].map(n => ({trip: `7a000000-0000-4000-8000-00000000000${n}`}))),
+    {name: 'journal fuel line below the viewport with Int64 integers', body: journalReceipt(['journal', 'liveViewport', 'fuel', 'bottom'], 438), scenario: 'journal',
+      numbers: 'int64' as const, code: 0, available: true, reason: 'JOURNAL_RESULT_INCOMPLETE_OR_INVALID'}
   ];
 }
 

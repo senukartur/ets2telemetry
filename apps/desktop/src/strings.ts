@@ -1,5 +1,7 @@
-import type {AppErrorCode, OverlayEditPlacement, OverlayLayout, OverlaySectionId, RecordingCode, RecordingHealth, RecordingLosses, RecordingTarget, RecordingTrip, ServiceHealth,
+import type {AppErrorCode, JournalAttributionKind, JournalCallCode, JournalCloseReason, JournalCompleteness, JournalIntervalKind, JournalMoneyCategory, JournalOutcome,
+  JournalPurpose, OverlayEditPlacement, OverlayLayout, OverlaySectionId, RecordingCode, RecordingHealth, RecordingLosses, RecordingTarget, RecordingTrip, ServiceHealth,
   SettingsSaveError, SettingsState, StorageHealth, UnitGame, UnitProfile} from '../../../packages/contracts/src';
+import type {EventType, GameMode, UnavailableReason} from '../../../packages/contracts/src/protocol-v1';
 import type {FieldNote, LiveFieldId, LiveSectionId, ViewReason} from '../../../packages/telemetry-core/src/live-view';
 import type {OverlayGroupId, OverlayPresetId, OverlayRequirement} from './overlay-sections';
 
@@ -270,4 +272,174 @@ export const OVERLAY_REQUIREMENT_TEXT: Readonly<Record<OverlayRequirement, strin
   'protocol-v1': "needs the plugin's protocol v1 data",
   'trip-tracking': 'needs trip tracking; hidden for now',
   'ids-until-v1': 'shows game ids without protocol v1'
+});
+
+// Trip journal text (ET-016 PR-4, J12-J14). apps/desktop/src/journal-view.ts composes these; each map covers every
+// code, outcome, close reason, completeness, interval kind, event type and attribution, so a new value fails to compile
+// until it has a text. The journal never shows a path, SQL or storage error text.
+export const JOURNAL_STRINGS = Object.freeze({
+  liveTab: 'Live',
+  journalTab: 'Journal',
+  title: 'Trip journal',
+  refresh: 'Refresh',
+  loading: 'Loading…',
+  previous: 'Previous',
+  next: 'Next',
+  back: 'Back to the list',
+  open: 'Details',
+  gameFilter: 'Game',
+  outcomeFilter: 'Outcome',
+  completenessFilter: 'Recording',
+  allFilter: 'All',
+  empty: 'No trips recorded',
+  emptyFiltered: 'No trips match these filters',
+  noMoreTrips: 'No more trips.',
+  noMoreEvents: 'No more events in this window.',
+  noMoreIntervals: 'No more completeness intervals.',
+  noMoreSamples: 'No more one-second samples.',
+  renderFailed: 'The journal could not be shown. Open the Live tab and then the Journal tab again to retry.',
+  recordingOffNote: 'Game history recording is off in this version, so no game trips are recorded yet.',
+  requestRefused: 'The journal request was refused.',
+  pageNote: 'Page {page}. The journal does not update by itself; use Refresh.',
+  unavailable: 'unavailable',
+  emptyText: '(empty)',
+  none: 'none',
+  inProgress: 'not yet (in progress)',
+  noOutcome: 'none (no delivery or cancellation)',
+  notDelivered: 'none (not delivered)',
+  summaryTab: 'Summary',
+  intervalsTab: 'Completeness',
+  timelineTab: 'Timeline',
+  samplesTab: 'Samples',
+  intervalsTotal: 'Completeness intervals recorded for this trip: {count}.',
+  noIntervals: 'No completeness intervals were recorded for this trip.',
+  noEvents: 'No events in this window.',
+  noSamples: 'No one-second samples were recorded for this trip.',
+  sampleGap: 'no samples for {seconds} s',
+  sourceRestarted: 'source restarted',
+  trailerTotal: 'Showing the latest {shown} of {total} trailer configurations.',
+  noTruck: 'No truck was recorded for this trip. A trip whose recording started during the job has no truck until the game sends it again.',
+  noTrailers: 'No trailer was recorded for this trip. A trip whose recording started during the job has no trailer until the game sends it again.',
+  moneyNote: 'Amounts are the exact game values. They are never converted, netted or added across currencies.',
+  moneyIncomplete: 'This trip has more than 5,000 amounts; no totals are shown, so a partial sum is never presented as a total.',
+  moneyNone: 'none recorded',
+  moneyCount: '{count} amounts',
+  moneyCountOne: '1 amount',
+  moneyUnavailable: '{count} unavailable ({reason})',
+  timeNote: 'Times are the recorded UTC labels shown in local time.',
+  annotation: 'annotation; completeness unchanged',
+  eventRange: 'eventSeq {first}–{last}',
+  windowOpen: "Events of the trip's plugin session from eventSeq {from}; the trip is in progress.",
+  windowCloseEvent: "Events of the trip's plugin session from eventSeq {from} through {through}, the event that closed the trip.",
+  windowCloseGap: "Events of the trip's plugin session from eventSeq {from} through {through}; lost events closed the trip.",
+  windowEndOfSession: "Events of the trip's plugin session from eventSeq {from} to the end of that session; a later session closed the trip.",
+  windowUnknown: 'This trip was closed before schema version 2, so its window is unknown. Only the events attributed to it or referenced by it are listed.',
+  gameModeChanged: 'changed during the trip',
+  zeroConsumption: 'no consumption recorded'
+});
+/** The persistent banner of a test database (J3); history has none. */
+export const JOURNAL_PURPOSE_TEXT: Readonly<Record<JournalPurpose, string | null>> = Object.freeze({
+  history: null,
+  synthetic: 'Synthetic test database — never game history',
+  replay: 'Replay test database — never game history'
+});
+/** Every journal refusal code as fixed text (J11). `{cause}` is the storage code's text from RECORDING_CODE_TEXT. */
+export const JOURNAL_ERROR_TEXT: Readonly<Record<JournalCallCode, string>> = Object.freeze({
+  SERVICE_UNAVAILABLE: 'The telemetry service is not available right now. Try again when it is ready.',
+  DATABASE_OPENING: 'The database is still opening. Try again in a moment.',
+  DATABASE_UNAVAILABLE: 'The database is unavailable: {cause}.',
+  BUSY: 'The journal is busy with other requests. Try again.',
+  TIMEOUT: 'The journal did not answer in time. Try again.',
+  NOT_FOUND: 'This trip is not in the database.',
+  FAILED: 'The journal could not be read.'
+});
+export const JOURNAL_GAME_TEXT: Readonly<Record<UnitGame, string>> = Object.freeze({ets2: 'ETS2', ats: 'ATS'});
+/** Outcome and recording completeness are separate (J13); neither is inferred from the other. */
+export const JOURNAL_OUTCOME_TEXT: Readonly<Record<JournalOutcome, string>> = Object.freeze({
+  open: 'In progress', delivered: 'Delivered', cancelled: 'Cancelled', none: 'No outcome'
+});
+/** Why a trip without an outcome closed, after `No outcome — `. */
+export const JOURNAL_CLOSE_REASON_TEXT: Readonly<Record<JournalCloseReason, string>> = Object.freeze({
+  'outcome': 'delivery outcome',
+  'configuration-cleared': 'job cleared',
+  'different-job': 'a different job started',
+  'restart': 'the game or plugin restarted',
+  'discontinuity': 'a loaded save or game time change',
+  'gap': 'events were lost'
+});
+export const JOURNAL_COMPLETENESS_TEXT: Readonly<Record<JournalCompleteness, string>> = Object.freeze({
+  complete: 'Complete', partial: 'Partial', unknown: 'Unknown'
+});
+/** Why a stored value is unavailable, inside `unavailable (…)`. */
+export const JOURNAL_REASON_TEXT: Readonly<Record<UnavailableReason, string>> = Object.freeze({
+  'not-observed': 'not observed', 'not-supported': 'not provided by the game', 'invalid': 'invalid reading'
+});
+export const JOURNAL_GAME_MODE_TEXT: Readonly<Record<GameMode['mode'] | 'convoy', string>> = Object.freeze({
+  'single-player': 'Single-player', 'truckersmp': 'TruckersMP', 'unknown': 'Unknown', 'convoy': 'Convoy'
+});
+/** Detection evidence: a weak result is never presented as confirmed (D9). */
+export const JOURNAL_GAME_MODE_EVIDENCE_TEXT = Object.freeze({
+  confidence: Object.freeze({strong: 'strong evidence', weak: 'weak evidence, not confirmed', none: 'no evidence'}) satisfies Readonly<Record<GameMode['confidence'], string>>,
+  method: Object.freeze({'module-scan': 'module scan', 'process-scan': 'process scan', 'none': 'no detection'}) satisfies Readonly<Record<GameMode['method'], string>>
+});
+export const JOURNAL_INTERVAL_KIND_TEXT: Readonly<Record<JournalIntervalKind, string>> = Object.freeze({
+  'event-loss': 'Lost events', 'not-connected': 'Not connected', 'storage-unavailable': 'Storage unavailable', 'sample-loss': 'Missing one-second samples',
+  'discontinuity': 'Discontinuity', 'restore-loss': 'Restored database'
+});
+/** The interval causes the recorder writes (docs/trips.md#interval-detail-keys); any other cause shows as JOURNAL_OTHER_CAUSE. */
+export const JOURNAL_INTERVAL_CAUSE_TEXT: Readonly<Record<string, string>> = Object.freeze({
+  'opened-at-load': 'opened while a save was loading', 'late-attach': 'recording started during the job', 'opened-before-attach': 'job began before recording',
+  'restart': 'continues a trip closed by a restart', 'gap': 'lost events', 'discontinuity': 'continues a trip closed by a discontinuity',
+  'configuration-cleared': 'continues a trip whose job was cleared', 'reload': 'save reloaded', 'save-load': 'save loaded', 'disconnected': 'source disconnected',
+  'consumer-restart': 'telemetry service restarted', 'reading-hole': 'readings missing', 'truck-change': 'truck changed', 'utc-label-jump': 'clock label jumped back',
+  'odometer-regressed': 'odometer went back', 'odometer-jump': 'odometer jumped', 'game-time-jump': 'game time jumped', 'position-jump': 'position jumped',
+  'refuel': 'refuelled', 'sample-backlog': 'samples could not be stored in time', 'ack-ahead-of-storage': 'database behind the plugin'
+});
+export const JOURNAL_OTHER_CAUSE = 'other';
+export const JOURNAL_EVENT_TYPE_TEXT: Readonly<Record<EventType, string>> = Object.freeze({
+  'job.configured': 'Job configured', 'job.cleared': 'Job cleared', 'truck.configured': 'Truck configured', 'truck.cleared': 'Truck cleared',
+  'trailer.configured': 'Trailer configured', 'trailer.cleared': 'Trailer detached', 'simulation.paused': 'Game paused', 'simulation.started': 'Game resumed',
+  'timers.restart': 'Game timers restarted', 'gameTime.regression': 'Game time went back', 'job.delivered': 'Delivered', 'job.cancelled': 'Cancelled',
+  'player.fined': 'Fine', 'player.tollgate.paid': 'Toll', 'player.use.ferry': 'Ferry', 'player.use.train': 'Train', 'source.gameMode': 'Game mode detected'
+});
+/** Who an event belongs to, seen from the trip shown; `none` when it has no attribution. */
+export const JOURNAL_ATTRIBUTION_TEXT: Readonly<Record<JournalAttributionKind | 'other-trip' | 'none', string>> = Object.freeze({
+  'trip': 'this trip', 'trip-before-loaded': 'this trip, before the cargo was loaded', 'free-driving': 'free driving', 'ambiguous': 'ambiguous',
+  'other-trip': 'another trip', 'none': '—'
+});
+export const JOURNAL_MONEY_CATEGORY_TEXT: Readonly<Record<JournalMoneyCategory, string>> = Object.freeze({
+  fine: 'Fines', toll: 'Tolls', ferry: 'Ferries', train: 'Trains'
+});
+/** Section titles of the trip detail. */
+export const JOURNAL_SECTION_TEXT = Object.freeze({
+  trip: 'Trip', distance: 'Distance', fuel: 'Fuel', money: 'Money', job: 'Job', delivery: 'Delivery', truck: 'Truck', trailers: 'Trailers', samples: 'One-second samples'
+});
+/** Field and column labels of the journal. */
+export const JOURNAL_LABEL_TEXT = Object.freeze({
+  game: 'Game', gameMode: 'Game mode', outcome: 'Outcome', completeness: 'Recording', started: 'Started', ended: 'Ended', tripId: 'Trip ID', session: 'Plugin session',
+  openedBy: 'Opened by', route: 'Route', cargo: 'Cargo',
+  plannedDistance: 'Planned distance', observedDistance: 'Observed distance', deliveredDistance: 'Delivered distance', fuelUsed: 'Fuel used',
+  expectedIncome: 'Expected income', revenue: 'Revenue', penalty: 'Penalty', revenueOrPenalty: 'Revenue or penalty',
+  sourceCity: 'Source city', sourceCompany: 'Source company', destinationCity: 'Destination city', destinationCompany: 'Destination company', cargoMass: 'Cargo mass',
+  market: 'Job market', specialJob: 'Special job', cargoLoaded: 'Cargo loaded', deadline: 'Delivery deadline', jobSource: 'Job recorded from',
+  earnedXp: 'XP earned', cargoDamage: 'Cargo damage', deliveryDuration: 'Delivery duration', autoPark: 'Auto park used', autoLoad: 'Auto load used',
+  brand: 'Brand', model: 'Model', licensePlate: 'License plate', plateCountry: 'Plate country', fuelCapacity: 'Fuel capacity', bodyType: 'Body type',
+  trailer: 'Trailer {number}', trailerBrand: 'Trailer {number} brand', trailerModel: 'Trailer {number} model', trailerBody: 'Trailer {number} body type',
+  trailerPlate: 'Trailer {number} license plate', sampleCount: 'Samples', firstSample: 'First sample', lastSample: 'Last sample',
+  time: 'Time', eventSeq: 'eventSeq', type: 'Event', detail: 'Detail', attribution: 'Belongs to', kind: 'Kind', cause: 'Cause', start: 'Start', end: 'End', events: 'Events',
+  speed: 'Speed', fuel: 'Fuel', consumption: 'SDK average consumption', range: 'Estimated range', rpm: 'Engine RPM', gear: 'Gear', odometer: 'Odometer',
+  gameTime: 'Game time', position: 'World position'
+});
+/** Context beside a label: what each distance, amount and value means. */
+export const JOURNAL_NOTE_TEXT = Object.freeze({
+  plannedDistance: 'job offer, excludes ferries', observedDistance: 'odometer while recording', deliveredDistance: 'reported by the game',
+  fuelUsed: 'while recording, refuels excluded', expectedIncome: 'job offer', revenue: 'reported by the game', penalty: 'reported by the game',
+  deadline: 'game time', deliveryDuration: 'game time', consumption: 'SDK mean, not a trip average', position: 'game-world coordinates, not GPS'
+});
+/** How the trip opened and where its job values came from; `{eventSeq}` is replaced. */
+export const JOURNAL_OPENED_BY_TEXT = Object.freeze({
+  event: 'job event {eventSeq}', checkpoint: 'checkpoint (recording started during the job)'
+});
+export const JOURNAL_JOB_SOURCE_TEXT = Object.freeze({
+  event: 'job event {eventSeq}', checkpoint: 'checkpoint at eventSeq {eventSeq} (recording started during the job)'
 });
