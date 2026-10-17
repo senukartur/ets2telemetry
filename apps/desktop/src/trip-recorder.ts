@@ -5,17 +5,18 @@
 // coverage is read right before each commit, and the stepped state is adopted only when storage reports `committed`,
 // `duplicate`, `covered` or `conflict` (T3). Readings (the checkpoint's and each snapshot's state) arrive through the
 // same FIFO and are adopted at once. ET-015b: after each reading the recorder samples it at one row per source second
-// and holds the rows until DurableDelivery's `samples` op writes them. Node-safe: it talks to storage only through the
-// StorageClient interface. See docs/telemetry-service-v1.md.
+// and holds the rows until DurableDelivery's `samples` op writes them. ET-016 PR-7 (J9): a checkpoint job seen while the
+// game is idle opens a late-attach trip through DurableDelivery's `attach` op once the replayed events drained. Node-safe:
+// it talks to storage only through the StorageClient interface. See docs/telemetry-service-v1.md.
 import type {RecordingLosses, RecordingTrip} from '../../../packages/contracts/src';
 import type {Uint64} from '../../../packages/contracts/src/protocol-v1';
 import type {CommitResult, CompletenessKind, SampleAppendResult, TripEffect} from '../../../packages/storage/src/api';
 import type {StorageClient} from '../../../packages/storage/src/client';
 import {
-  initialSamplerState, initialTripState, normalizeV1State, sampleReading, stepTrip, tripView, type SamplerState, type TripErrorCode, type TripGame, type TripInput,
+  dueAttach, initialSamplerState, initialTripState, normalizeV1State, sampleReading, stepTrip, tripView, type SamplerState, type TripErrorCode, type TripGame, type TripInput,
   type TripState, type TripView
 } from '../../../packages/telemetry-core/src/index';
-import type {CommitContext, CoverageMessage, DurableSink, ReadingMessage, RecorderErrorCode, SampleSink, SinkError, SinkResult, WelcomeMessage} from './durable-sink';
+import type {AttachSink, AttachStatus, CommitContext, CoverageMessage, DurableSink, ReadingMessage, RecorderErrorCode, SampleSink, SinkError, SinkResult, WelcomeMessage} from './durable-sink';
 import {saturatingAdd} from './recording-status';
 import {SampleBuffer} from './sample-buffer';
 import {readTripSeeds} from './trip-seeds';
@@ -25,7 +26,7 @@ export {RECORDER_FAILURE_CLASS, type RecorderErrorCode} from './durable-sink';
 
 /** The storage commands the recorder uses: the durable path, the restore-loss marker, the cold-start reads and the samples. */
 export type TripRecorderClient = Pick<StorageClient, 'upsertSession' | 'committedThrough' | 'commitEvent' | 'commitGap' | 'recordCompleteness' | 'listTrips' | 'getEvent' |
-  'listEvents' | 'appendSamples'>;
+  'listEvents' | 'appendSamples' | 'openAttachedTrip'>;
 
 const RECORDER_CODE: Readonly<Record<TripErrorCode, RecorderErrorCode>> = {
   ORDER_VIOLATION: 'TRIP_ORDER_VIOLATION', COVERAGE_MISMATCH: 'TRIP_COVERAGE_MISMATCH', UNKNOWN_SESSION: 'TRIP_UNKNOWN_SESSION'
@@ -74,6 +75,10 @@ function reading(message: ReadingMessage): TripInput {
  * - `samples` (ET-015b): the pending rows for DurableDelivery. `write` stores one session's ended loss intervals (every
  *   one at the final write) and then its rows with `appendSamples(…, {uniqueSeconds: true})` (H6); each part leaves the
  *   buffer only once stored.
+ * - `attach` (ET-016 PR-7, J9): `due()` reports the reducer's due late-attach trip (`dueAttach`); `open()` steps `attach`,
+ *   stores the trip with `openAttachedTrip` and adopts the stepped state on `committed` or `duplicate` (T3). A failure
+ *   keeps the state; DurableDelivery then fails the connection like a failed commit, and the next connection's checkpoint
+ *   decides again. The attach never changes coverage or produces an ACK.
  * - `view(game)` (R17): the read-only trip view, for ET-015b.
  * - `losses()` and `tripSummary(game)` (ET-015c, G6): what the recording status shows. Losses count only what storage
  *   committed: for a gap committed as new (`committed`), the eventSeq range it newly covers, lastEventSeq minus
@@ -94,6 +99,10 @@ export class TripRecorderSink implements DurableSink {
     write: (maxRows, final) => this.writeSamples(maxRows, final),
     discard: () => this.buffer.discard(),
     dropped: () => this.buffer.dropped
+  };
+  readonly attach: AttachSink = {
+    due: () => dueAttach(this.state) !== null,
+    open: context => this.openAttach(context)
   };
   constructor(private readonly client: TripRecorderClient, private readonly options: TripRecorderOptions = {}) {}
 
@@ -149,7 +158,7 @@ export class TripRecorderSink implements DurableSink {
   observe(message: ReadingMessage, context: CommitContext): SinkResult<undefined> {
     let next = this.state;
     if (message.kind === 'checkpoint') {
-      const hydrated = stepTrip(next, {kind: 'checkpoint', message});
+      const hydrated = stepTrip(next, {kind: 'checkpoint', message, receivedUtcMs: context.receivedUtcMs});
       if (!hydrated.ok) return refused(RECORDER_CODE[hydrated.code]);
       next = hydrated.state;
     }
@@ -162,6 +171,21 @@ export class TripRecorderSink implements DurableSink {
     if (sampled.row) this.buffer.push(message.source.pluginSessionId, sampled.row);
     this.options.onChange?.();
     return {ok: true, value: undefined};
+  }
+
+  /** J9: opens the due late-attach trip; `none` when nothing is due. */
+  private async openAttach(context: CommitContext): Promise<SinkResult<{status: AttachStatus}>> {
+    const request = dueAttach(this.state);
+    if (request === null) return {ok: true, value: {status: 'none'}};
+    const stepped = stepTrip(this.state, {kind: 'attach', receivedUtcMs: context.receivedUtcMs});
+    if (!stepped.ok) return refused(RECORDER_CODE[stepped.code]);
+    const result = await this.client.openAttachedTrip({...request, effects: stepped.effects});
+    if (!result.ok) return result;
+    this.state = stepped.state;
+    // G6: only a new row stored the intervals.
+    if (result.value.status === 'committed') this.countIntervals(stepped.effects);
+    this.options.onChange?.();
+    return {ok: true, value: {status: result.value.status}};
   }
 
   /**

@@ -3,7 +3,7 @@ import path from 'node:path';
 import {afterAll, afterEach, beforeEach, describe, expect, it} from 'vitest';
 import {MIGRATIONS, type Storage} from '../../packages/storage/src/index';
 import {contentDigest} from '../../packages/storage/src/sqlite/digest';
-import {expectRepresentative, failed, files, ok, readOnly, REPRESENTATIVE, sha256, STORAGE_FIXTURES, v1, withEventSeq, workspace} from './helpers';
+import {EVENT_OPENED, expectRepresentative, failed, files, ok, readOnly, REPRESENTATIVE, sha256, STORAGE_FIXTURES, v1, withEventSeq, workspace} from './helpers';
 
 const manifest = readFileSync(path.join(STORAGE_FIXTURES, 'manifest.txt'), 'utf8').split(/\r?\n/).filter(line => line && !line.startsWith('#')).map(line => line.split(' ') as [string, string]);
 let ws: Awaited<ReturnType<typeof workspace>>;
@@ -37,7 +37,8 @@ function expectRepresentativeV2(storage: Storage, file: string) {
   // ET-016 PR-6: TripRecord gained fuelUsedL after this immutable expectation was written. The hand-written values are
   // the fixture's fuel used, as in its SQL and in `tripColumns` below: 42.5 L, not observed, 0 L and not supported.
   const fuelUsedL = [{available: true, value: 42.5}, {available: false, reason: 'not-observed'}, {available: true, value: 0}, {available: false, reason: 'not-supported'}];
-  expect(ok(storage.listTrips()).trips).toEqual((expected.trips as object[]).map((trip, index) => ({...trip, fuelUsedL: fuelUsedL[index]})));
+  // ET-016 PR-7: and where each trip's job and opening came from; the fixture SQL opens every trip at its event.
+  expect(ok(storage.listTrips()).trips).toEqual((expected.trips as object[]).map((trip, index) => ({...trip, fuelUsedL: fuelUsedL[index], ...EVENT_OPENED})));
   storage.close();
   readOnly(file, db => {
     expect(db.prepare(`SELECT t.trip_uuid, t.opened_by, t.fuel_used_l, t.fuel_used_l_state, s.plugin_session_uuid AS closed_by_session, t.closed_by_event_seq

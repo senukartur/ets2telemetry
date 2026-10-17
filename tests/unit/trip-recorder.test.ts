@@ -9,7 +9,7 @@ import {EventEmitter} from 'node:events';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import {decodePayload, encodeFrame, type ClientMessage, type ServerMessage, type SourceIdentity} from '../../packages/contracts/src/protocol-v1';
 import type {
-  CommitResult, CompletenessInterval, CompletenessOptions, EventRow, Result, SampleAppendOptions, SampleAppendResult, SampleInput, StorageErrorCode, TripEffect, TripList, TripPage,
+  AttachInput, AttachResult, CommitResult, CompletenessInterval, CompletenessOptions, EventRow, Result, SampleAppendOptions, SampleAppendResult, SampleInput, StorageErrorCode, TripEffect, TripList, TripPage,
   TripRecord
 } from '../../packages/storage/src/api';
 import {storageError} from '../../packages/storage/src/errors';
@@ -19,7 +19,7 @@ import type {TelemetrySocket} from '../../apps/desktop/src/native-pipe-client';
 import {RECORDER_FAILURE_CLASS, TripRecorderSink, type TripRecorderClient} from '../../apps/desktop/src/trip-recorder';
 import {V1Ingestion, type V1IngestionOptions, type V1SourceState} from '../../apps/desktop/src/v1-ingestion';
 import {failureClass} from '../../apps/desktop/src/durable-sink';
-import {BASE_UTC, ETS2_A, RECEIVED_UTC, Script, r} from '../shared/trip-messages';
+import {BASE_UTC, ETS2_A, RECEIVED_UTC, Script, job, r} from '../shared/trip-messages';
 import {TripStorageModel} from '../shared/trip-replay';
 
 const ENDPOINT = '\\\\.\\pipe\\ETS2Telemetry-SYNTHETIC-TEST-v1-1-00000000-0000-4000-8000-000000000000';
@@ -82,6 +82,15 @@ class ModelStorage implements TripRecorderClient {
     return ok(value);
   }
   committedThrough(pluginSessionId: string) { return ok(this.model.committedThrough(pluginSessionId)); }
+  /** ET-016 PR-7: every attach is logged with its effects; `attachFailures` scripts the next outcomes. */
+  readonly attaches: AttachInput[] = [];
+  readonly attachFailures: StorageErrorCode[] = [];
+  openAttachedTrip(input: AttachInput): Promise<Result<AttachResult>> {
+    this.attaches.push(structuredClone(input));
+    const failure = this.attachFailures.shift();
+    if (failure) return Promise.resolve({ok: false, error: storageError(failure)});
+    return ok({status: this.model.openAttachedTrip(input)});
+  }
   commitEvent(input: {message: unknown; effects?: TripEffect[]}) { return this.commit(input.message as CoverageMessage, input.effects); }
   commitGap(input: {message: unknown; effects?: TripEffect[]}) { return this.commit(input.message as CoverageMessage, input.effects); }
   private async commit(m: CoverageMessage, effects: TripEffect[] = []): Promise<Result<CommitResult>> {
@@ -562,5 +571,65 @@ describe('ET-015c committed losses and the trip summary of the recorder', () => 
     expect(recorder.losses()).toEqual({...ZERO, droppedSamples: 2});
     await advance(5_000);
     expect([storage.intervals.map(i => i.interval.kind), recorder.losses()]).toEqual([['sample-loss'], {...ZERO, sampleLoss: 1, droppedSamples: 2}]);
+  });
+});
+
+describe('ET-016 PR-7 late-attach trips through the trip recorder (J9)', () => {
+  /** The late-attach UUID, written independently of the reducer with node:crypto. */
+  const attachUuid = (session: string, nextEventSeq: string) => {
+    const h = createHash('sha256').update(`ets2telemetry-trip-attach-v1:${session}:${nextEventSeq}`, 'utf8').digest('hex');
+    return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`;
+  };
+  const CHECKPOINT_MODE = {mode: 'single-player', method: 'module-scan', confidence: 'weak'} as const;
+  const attachEffects = (trip: string, next: string): TripEffect[] => [
+    {kind: 'trip.open', tripUuid: trip, game: 'ets2', gameMode: CHECKPOINT_MODE, jobConfiguration: 'this-event', recordingCompleteness: 'partial', startedUtcMs: BASE_UTC},
+    {kind: 'completeness.add', interval: {tripUuid: trip, kind: 'not-connected', detail: {cause: 'late-attach', source: 'checkpoint', nextEventSeq: next}}}];
+
+  it('A1: opens the checkpoint job as a trip after the replayed events, before the next live item (REG-003)', async () => {
+    const storage = new ModelStorage(), recorder = start(storage); connectLatest();
+    const s = new Script(ETS2_A), welcome = s.welcome(), retained = [s.event(r.paused(), {simulation: 'paused'}), s.event(r.fined(), {simulation: 'paused'})], trip = attachUuid(ETS2_A, '3');
+    // The retained events arrive after the checkpoint in new envelopes (protocol v1 §7, §9).
+    const checkpoint = s.checkpoint(job(), 2);
+    latest().feed(welcome, checkpoint, ...retained.map(m => s.redeliver(m)), s.event(r.started()), s.event(r.fined()));
+    await settle();
+    expect(storage.attaches).toEqual([{pluginSessionId: ETS2_A, nextEventSeq: '3', job: job(), effects: attachEffects(trip, '3')}]);
+    // Event 3 was stepped after the attach: its live fine (4) is the trip's.
+    expect(storage.model.attributions.map(a => [a.eventSeq, a.tripUuid, a.attribution])).toEqual([['2', null, 'free-driving'], ['4', trip, 'trip']]);
+    expect(storage.model.trips.map(t => [t.tripUuid, t.openedBy, t.jobSource, t.outcome])).toEqual([[trip, 'checkpoint', 'checkpoint', 'open']]);
+    expect([latest().acks, recorder.tripSummary('ets2'), recorder.losses().notConnected, storage.violations]).toEqual([['1', '2', '3', '4'],
+      {phase: 'active', completeness: 'partial', untrackedJob: false}, 1, []]);
+  });
+
+  it('A2: keeps the state after a retryable attach failure; the reconnection\'s checkpoint opens the same trip once (REG-007)', async () => {
+    const storage = new ModelStorage(); storage.attachFailures.push('DISK_FULL');
+    const recorder = start(storage); connectLatest();
+    const s = new Script(ETS2_A), trip = attachUuid(ETS2_A, '1');
+    latest().feed(s.welcome(), s.checkpoint(job()));
+    await settle();
+    expect([latest().destroyed, recorder.tripSummary('ets2').phase, state().durable, storage.model.trips]).toEqual([true, 'idle', {state: 'pending', retryCode: 'DISK_FULL'}, []]);
+    await advance(250); connectLatest();
+    latest().feed(s.welcome(), s.checkpoint(job()));
+    await settle();
+    expect(storage.attaches.map(a => a.effects)).toEqual([attachEffects(trip, '1'), attachEffects(trip, '1')]);
+    expect([storage.model.trips.map(t => t.tripUuid), recorder.tripSummary('ets2').phase, state().durable]).toEqual([[trip], 'active', {state: 'active'}]);
+  });
+
+  it('A3: adopts a duplicate attach, so a lost answer never opens a second trip; restarted, the seeded trip opens nothing', async () => {
+    const storage = new ModelStorage(), s = new Script(ETS2_A), trip = attachUuid(ETS2_A, '1'), context = {receivedUtcMs: RECEIVED_UTC};
+    // Two recorders read their (empty) seeds first; the second stands for one whose answer was lost.
+    const first = new TripRecorderSink(storage), lost = new TripRecorderSink(storage), welcome = s.welcome(), checkpoint = s.checkpoint(job());
+    await first.openSession(welcome); await lost.openSession(welcome);
+    first.observe(checkpoint, context);
+    expect(await first.attach.open(context)).toEqual({ok: true, value: {status: 'committed'}});
+    // The same attach again is a storage duplicate, which the recorder adopts: still one trip.
+    lost.observe(checkpoint, context);
+    expect([lost.attach.due(), await lost.attach.open(context), lost.attach.due()]).toEqual([true, {ok: true, value: {status: 'duplicate'}}, false]);
+    expect([lost.tripSummary('ets2').phase, lost.losses().notConnected]).toEqual(['active', 0]);
+    // A cold start reads the stored trip as a seed with the checkpoint job's key: nothing is due.
+    const restarted = new TripRecorderSink(storage);
+    await restarted.openSession(s.welcome()); restarted.observe(s.checkpoint(job()), context);
+    expect([restarted.attach.due(), await restarted.attach.open(context)]).toEqual([false, {ok: true, value: {status: 'none'}}]);
+    expect(await restarted.commit(s.event(r.jobConfigured()), context)).toMatchObject({ok: true, value: {status: 'committed'}});
+    expect([storage.model.trips.map(t => [t.tripUuid, t.outcome]), storage.violations]).toEqual([[[trip, 'open']], []]);
   });
 });

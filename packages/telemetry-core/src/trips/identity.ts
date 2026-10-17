@@ -72,6 +72,19 @@ export function tripUuidFor(pluginSessionId: string, jobEventSeq: string): strin
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`;
 }
 
+/** The prefix of a late-attach trip's UUID hash input (ET-016 PR-7, J9); never shared with TRIP_UUID_PREFIX. */
+export const ATTACH_TRIP_UUID_PREFIX = 'ets2telemetry-trip-attach-v1:';
+/**
+ * The UUID of a trip opened from a checkpoint (J9): the first 128 bits of SHA-256("ets2telemetry-trip-attach-v1:" +
+ * pluginSessionId + ":" + the checkpoint's nextEventSeq), in the shape of tripUuidFor (T4). Storage keeps at most one
+ * checkpoint job per session and nextEventSeq, so the pair opens at most one trip, and its own prefix keeps it apart
+ * from every trip opened at an event.
+ */
+export function attachTripUuidFor(pluginSessionId: string, nextEventSeq: string): string {
+  const h = sha256Hex(`${ATTACH_TRIP_UUID_PREFIX}${pluginSessionId}:${nextEventSeq}`);
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`;
+}
+
 /** JSON with object members in sorted order at every depth, so equal values always give equal text. */
 export function canonicalJson(value: unknown): string {
   if (value === null || typeof value !== 'object') return JSON.stringify(value);
