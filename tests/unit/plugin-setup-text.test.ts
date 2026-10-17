@@ -192,7 +192,9 @@ describe('the connection diagnosis and the diagnostics export', () => {
     GAME_NOT_FOUND: 'The selected game was not found. Choose its game folder below.',
     PLUGIN_BLOCKED_PERMISSION: 'Windows did not allow the plugin file in a game folder to be read or changed. See the folder line below for what to do.',
     PLUGIN_UNRECOGNIZED: 'A file that this application did not install is in place of the plugin. Move it away, then press Retry.',
-    PLUGIN_OUTDATED: 'An older plugin is installed. It is updated once the game is closed.',
+    // PR #111 review: an outdated folder may wait for the game (polled, changed automatically) or have failed with
+    // VERIFY_FAILED, DISK_FULL or REGISTRY_UNAVAILABLE (not polled), so the text fits both and points to the folder line.
+    PLUGIN_OUTDATED: 'An older plugin is installed. If its folder line below says it waits for the game, TruckersMP or another program, it is updated once that closes; otherwise resolve the problem shown there, then press Retry.',
     PLUGIN_PENDING_GAME_CLOSE: 'The plugin is changed automatically once the game, TruckersMP or the program using the file is closed. Then start the game again.',
     PLUGIN_BUNDLE_UNAVAILABLE: 'The bundled plugin is missing or damaged. Reinstall ETS2Telemetry.',
     PLUGIN_NOT_CHECKED: 'The plugin could not be checked in a game folder; see the folder line below.',
@@ -205,7 +207,7 @@ describe('the connection diagnosis and the diagnostics export', () => {
   });
   it('adds the note of an older plugin on disk', () => {
     expect(connectionDiagnosisText({code: 'CONNECTED', notes: ['PLUGIN_OUTDATED_ON_DISK']})).toEqual({line: DIAGNOSES.CONNECTED,
-      notes: ['A game folder still holds an older plugin; it is updated once the game is closed.']});
+      notes: ['A game folder still holds an older plugin. If its folder line says it waits for the game, TruckersMP or another program, it is updated once that closes; otherwise resolve the problem shown there, then press Retry.']});
   });
   // PR-6 review: another folder's problem beside a folder that holds the current plugin is a note.
   it('describes every other-folder note', () => {

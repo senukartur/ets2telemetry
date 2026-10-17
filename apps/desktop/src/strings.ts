@@ -564,7 +564,7 @@ export const CONNECTION_DIAGNOSIS_TEXT: Readonly<Record<ConnectionDiagnosisCode,
   GAME_NOT_FOUND: 'The selected game was not found. Choose its game folder below.',
   PLUGIN_BLOCKED_PERMISSION: 'Windows did not allow the plugin file in a game folder to be read or changed. See the folder line below for what to do.',
   PLUGIN_UNRECOGNIZED: 'A file that this application did not install is in place of the plugin. Move it away, then press Retry.',
-  PLUGIN_OUTDATED: 'An older plugin is installed. It is updated once the game is closed.',
+  PLUGIN_OUTDATED: 'An older plugin is installed. If its folder line below says it waits for the game, TruckersMP or another program, it is updated once that closes; otherwise resolve the problem shown there, then press Retry.',
   PLUGIN_PENDING_GAME_CLOSE: 'The plugin is changed automatically once the game, TruckersMP or the program using the file is closed. Then start the game again.',
   PLUGIN_BUNDLE_UNAVAILABLE: 'The bundled plugin is missing or damaged. Reinstall ETS2Telemetry.',
   PLUGIN_NOT_CHECKED: 'The plugin could not be checked in a game folder; see the folder line below.',
@@ -573,7 +573,7 @@ export const CONNECTION_DIAGNOSIS_TEXT: Readonly<Record<ConnectionDiagnosisCode,
   NO_RUNNING_SOURCE: 'The plugin is in place. Start the game to connect.'
 });
 export const CONNECTION_DIAGNOSIS_NOTE_TEXT: Readonly<Record<ConnectionDiagnosisNote, string>> = Object.freeze({
-  PLUGIN_OUTDATED_ON_DISK: 'A game folder still holds an older plugin; it is updated once the game is closed.',
+  PLUGIN_OUTDATED_ON_DISK: 'A game folder still holds an older plugin. If its folder line says it waits for the game, TruckersMP or another program, it is updated once that closes; otherwise resolve the problem shown there, then press Retry.',
   OTHER_FOLDER_BLOCKED_PERMISSION: 'Another folder of this game could not be changed because Windows denied access; see its line below.',
   OTHER_FOLDER_UNRECOGNIZED: 'Another folder of this game holds a file that this application did not install; see its line below.',
   OTHER_FOLDER_PENDING_GAME_CLOSE: 'Another folder of this game is changed once the game, TruckersMP or the program using the file is closed.',
