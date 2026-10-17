@@ -20,7 +20,7 @@ npm run make
 npm run inspect:package
 ```
 
-`native:build` produces `native/telemetry-plugin/build/Release/ets2telemetry-plugin.dll`. `build` separately compiles the fixed x64 pipe-client broker and desktop/renderer. The source-bound broker receipt must match the desktop receipt; rebuild after source changes. Forge produces `out/ETS2Telemetry Desktop-win32-x64` and the Squirrel maker files; creating them does not install the app. If the environment requires its installed system CA, use `NODE_OPTIONS=--use-system-ca` as explained in setup, without disabling TLS verification.
+`native:build` produces `native/telemetry-plugin/build/Release/ets2telemetry-plugin.dll`. `build` separately compiles the fixed x64 pipe-client broker and desktop/renderer; since ET-017 PR-1 it also builds the plugin DLL and stages it for packaging as `resources/telemetry-plugin` ([game plugin setup](plugin-setup.md#bundle-format)), but nothing installs that copy yet. The source-bound broker receipt must match the desktop receipt; rebuild after source changes. Forge produces `out/ETS2Telemetry Desktop-win32-x64` and the Squirrel maker files; creating them does not install the app. If the environment requires its installed system CA, use `NODE_OPTIONS=--use-system-ca` as explained in setup, without disabling TLS verification.
 
 ## Install only the project DLL, with game/client closed
 
