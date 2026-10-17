@@ -237,7 +237,7 @@ AI review update on October 11, 2026: an advisory Claude code review workflow an
 
 Claude review disablement on October 17, 2026: the advisory workflow, its setup guide, and its CI references were removed at the owner's request. Independent review, required Windows CI, and real-game criteria remain governed by this file and [TESTING.md](TESTING.md).
 
-Advisory AI review on October 17, 2026: `.github/workflows/ai-review.yml` posts one advisory comment when a PR becomes ready for review and updates it on later pushes. It needs the repository secret `ANTHROPIC_API_KEY`; without the secret, and on fork PRs, it skips with a notice. It is not a required check, approval or verification evidence, and no branch protection change is needed.
+Copilot code review on October 17, 2026: pull request review uses GitHub Copilot code review (Copilot Pro), not a custom workflow or an external API key. Automatic review on ready for review is enabled in the `Protect main` ruleset (Settings > Rules > Rulesets > "Automatically request Copilot code review", with draft review off); [.github/copilot-instructions.md](.github/copilot-instructions.md) gives it repository guidance. It is advisory: not a required check, approval or verification evidence.
 
 ## Owner merge and board-status exception — October 12, 2026
 
