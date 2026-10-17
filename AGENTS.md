@@ -496,6 +496,33 @@ How the journal reads and exports:
 
 `GAME_HISTORY_RECORDING` stays `false`. Once ET-016b merges, the enablement PR no longer waits for S-1/S-2, but it still needs the v0 retirement, real-game v1 evidence and real full-volume and ACL evidence. Next to Export the journal states that an uninstall removes local history and that the JSON export is a copy, which cannot be imported (J18; owner rule recorded on October 16, 2026). ET-017 and later phases are not authorized by this paragraph. No game, TruckersMP, display or performance claim follows.
 
+ET-016 implementation update on October 17, 2026: ET-016a and ET-016b are implemented.
+
+**ET-016a**
+- Schema version 2: #93.
+- Bounded journal reads in the storage worker: #96.
+- Journal queries from the trusted dashboard through main to the telemetry service: #97. A storage-side timeout is reported as an unavailable database, because it ends recording for that service.
+- The Journal tab with trip details: #98.
+- The versioned JSON trip export through a main-process save flow: #101. It refuses targets in the data folder by name, real path and file identity, and states the J18 uninstall note next to Export.
+
+**ET-016b**
+- Fuel-used persistence: #95.
+- Late-attach trips opened from checkpoints, which supersede T9: #99.
+- Journal and export reconciliation in the development and packaged recording journey: #102.
+
+**Technical debt.** TD-006 (trip average consumption), TD-007 (late-attach truck and trailer identity) and TD-008 (the export's trailer list is limited to the latest 10 configurations) record the deferred parts.
+
+**Enablement.** It no longer waits for S-1/S-2, but it still needs the v0 retirement, real-game v1 evidence, and real full-volume and ACL evidence. `GAME_HISTORY_RECORDING` stays `false`.
+
+**Pending checks.**
+- The real Windows Save dialog, readability and keyboard use of the Journal tab, and a forced render fault.
+- The first real upgrade of the owner's existing version 1 history database, after its verified backup.
+- The journal and export against real recorded history.
+- Real late-attach checkpoints.
+- Every real-game, TruckersMP, display and performance check.
+
+See [journal](docs/journal.md), [trip export](docs/journal-export.md) and [ET-016 validation](docs/validation/et-016.md).
+
 ## Uninstall removes local data — October 16, 2026
 
 On October 16, 2026 the owner confirmed that uninstalling ETS2Telemetry removes all of its local data under `%LOCALAPPDATA%\ETS2Telemetry`: the history database and its backups, settings, logs and synthetic recordings. Unsynchronized history is lost until the later server phase can restore it. Only application-owned data and the plugin file this application installed are removed. ET-018 implements this, changing the ET-001 baseline that keeps the data root. The ET-016 journal states the rule next to its JSON export, which is a copy for the user's records and cannot be imported (J18). See [concept.md](concept.md#uninstall-removes-local-data--october-16-2026).

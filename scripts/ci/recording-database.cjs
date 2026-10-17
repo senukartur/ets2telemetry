@@ -10,7 +10,8 @@ if (!file) { console.error('Usage: recording-database.cjs <database copy>'); pro
 const db = new Database(file, {readonly: true, fileMustExist: true});
 try {
   const pragma = name => db.pragma(name, {simple: true});
-  const info = db.prepare('SELECT purpose, accepted_origin AS acceptedOrigin FROM database_info WHERE id = 1').get();
+  // ET-016 PR-8: the database UUID, which a trip export names in its header.
+  const info = db.prepare('SELECT database_uuid AS databaseUuid, purpose, accepted_origin AS acceptedOrigin FROM database_info WHERE id = 1').get();
   // ET-016 PR-7 (J9): a late-attach trip has a checkpoint job (no job event) and no opening event, so both joins are LEFT
   // joins; jobSource, checkpointSeq and openedBy say where its job and opening came from.
   const trips = db.prepare(`SELECT t.id, t.trip_uuid AS tripUuid, p.plugin_session_uuid AS session, t.game, je.event_seq AS jobSeq, te.event_seq AS truckSeq,
@@ -27,7 +28,7 @@ try {
   const out = {
     applicationId: pragma('application_id'), userVersion: pragma('user_version'), journalMode: pragma('journal_mode'),
     integrity: db.prepare('PRAGMA integrity_check').pluck().all(), foreignKeyViolations: db.prepare('PRAGMA foreign_key_check').all().length,
-    purpose: info.purpose, acceptedOrigin: info.acceptedOrigin,
+    databaseUuid: info.databaseUuid, purpose: info.purpose, acceptedOrigin: info.acceptedOrigin,
     sessions: db.prepare(`SELECT plugin_session_uuid AS session, game, origin, committed_through_event_seq AS committedThrough, end_reason AS endReason
       FROM plugin_sessions ORDER BY id`).all(),
     events: db.prepare(`SELECT e.event_seq AS eventSeq, e.type, e.first_redelivered AS firstRedelivered, e.occurred_utc_ms AS utcMs, p.plugin_session_uuid AS session
@@ -35,13 +36,15 @@ try {
     gaps: db.prepare('SELECT count(*) FROM event_gaps').pluck().get(),
     samples: db.prepare('SELECT count(*) FROM samples').pluck().get(),
     // ET-015b: each sample's plugin session, trip UUID, source monotonic time, UTC label, speed and odometer, in insertion order.
-    sampleRows: db.prepare(`SELECT p.plugin_session_uuid AS session, t.trip_uuid AS trip, CAST(s.monotonic_ns AS TEXT) AS monotonicNs, s.utc_ms AS utcMs,
+    // ET-016 PR-8: and its row id, which a trip export names.
+    sampleRows: db.prepare(`SELECT CAST(s.id AS TEXT) AS id, p.plugin_session_uuid AS session, t.trip_uuid AS trip, CAST(s.monotonic_ns AS TEXT) AS monotonicNs, s.utc_ms AS utcMs,
       s.speed_mps AS speedMps, s.odometer_m AS odometerM
       FROM samples s JOIN plugin_sessions p ON p.id = s.plugin_session_ref LEFT JOIN trips t ON t.id = s.trip_ref ORDER BY s.id`).all(),
     trips: trips.map(({id, ...trip}) => ({...trip, trailerSeqs: trailers.pluck().all(id)})),
     attributions: db.prepare(`SELECT e.event_seq AS eventSeq, t.trip_uuid AS trip, a.attribution FROM event_attributions a JOIN events e ON e.id = a.event_ref
       LEFT JOIN trips t ON t.id = a.trip_ref ORDER BY e.event_seq`).all(),
-    intervals: db.prepare(`SELECT t.trip_uuid AS trip, c.kind, c.start_utc_ms AS startUtcMs, c.end_utc_ms AS endUtcMs, c.start_monotonic_ns AS startMonotonicNs,
+    // ET-016 PR-8: each interval's row id as well, which a trip export names.
+    intervals: db.prepare(`SELECT CAST(c.id AS TEXT) AS id, t.trip_uuid AS trip, c.kind, c.start_utc_ms AS startUtcMs, c.end_utc_ms AS endUtcMs, c.start_monotonic_ns AS startMonotonicNs,
       c.end_monotonic_ns AS endMonotonicNs, k.clock_uuid AS sourceClockId, c.first_event_seq AS firstEventSeq, c.last_event_seq AS lastEventSeq, c.detail_json AS detail
       FROM completeness_intervals c LEFT JOIN trips t ON t.id = c.trip_ref LEFT JOIN clocks k ON k.id = c.source_clock_ref ORDER BY c.id`).all()
   };

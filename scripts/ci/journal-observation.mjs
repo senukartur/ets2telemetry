@@ -437,6 +437,8 @@ export async function runJournalExport({application, dashboard, config, record})
   // (2) A cancelled dialog: the fixed text, and no new file.
   await stubSaveDialog(application, {canceled: true, filePath: ''});
   await exportTrip(dashboard, T.delivered, 'Export cancelled. Nothing was written.');
+  // The cancel must come from the Save dialog main offered again, not from a reply that skipped it.
+  assert.deepEqual(await dialogCalls(application), [deliveredDialog[0]], 'The cancelled export did not offer the Save dialog');
   // (3) A target in the data folder, named in upper case: refused before any file is opened.
   const dataFolder = path.join(config.localappdata, 'ETS2Telemetry', 'synthetic');
   const before = (await readdir(dataFolder)).sort();
@@ -485,3 +487,7 @@ export async function verifyJournalRun({config, record, restartMainEvents, resta
   assert.deepEqual(files, {magic: 'SQLite format 3', applicationId: 1163154226, userVersion: 2, sidecars: [], syntheticBackups: false});
   record.shutdownClean = true;
 }
+
+// ET-016 PR-8: the recording journey (recording-observation.mjs) reads its recorded trip and exports it through the same
+// rendered tab, with these browser callbacks, the same Save dialog replacement and the same shared validator.
+export {clickTestId, dialogCalls, exportTrip, exportValidator, listState, openDetail, openTable, stubSaveDialog, until as untilPage};

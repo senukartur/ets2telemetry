@@ -6,7 +6,8 @@ $ErrorActionPreference = 'Stop'
 $config = Get-Content -LiteralPath $Configuration -Raw | ConvertFrom-Json
 $results = New-Object System.Collections.Generic.List[object]
 # PowerShell 7, which runs the CI steps, parses every JSON integer as Int64; Windows PowerShell 5.1 uses Int32.
-# An `int64` case retypes the parsed lifecycle receipt the way PowerShell 7 would before validating it.
+# An `int64` case retypes the parsed lifecycle receipt the way PowerShell 7 would before validating it. It reads the
+# receipt as UTF-8, as Test-RuntimeReceipt does (ET-016 PR-8: the recording receipt carries the journal's non-ASCII texts).
 function ConvertTo-Int64Number {
     param([object]$Value)
     if ($Value -is [int]) { return [long]$Value }
@@ -20,7 +21,7 @@ foreach ($case in @($config.cases)) {
     try {
         if ($case.numbers -ceq 'int64' -and $case.scenario -ceq 'recording') {
             # ET-015a PR-4: the recording receipt the same way.
-            $driver = ConvertTo-Int64Number -Value (Get-Content -LiteralPath $case.receipt -Raw | ConvertFrom-Json)
+            $driver = ConvertTo-Int64Number -Value (Get-Content -LiteralPath $case.receipt -Raw -Encoding UTF8 | ConvertFrom-Json)
             if ($driver.recording.trayExit.launcherExit -isnot [long] -or $driver.recording.servicePid -isnot [long]) { throw 'Int64 conversion failed.' }
             $valid = [bool](Test-RecordingReceipt -Driver $driver)
             $results.Add([ordered]@{passed = $valid; driverResultAvailable = $true; reason = $(if ($valid) { $null } else { 'RECORDING_RESULT_INCOMPLETE_OR_INVALID' })})
@@ -28,14 +29,14 @@ foreach ($case in @($config.cases)) {
         }
         if ($case.numbers -ceq 'int64' -and $case.scenario -ceq 'journal') {
             # ET-016 PR-4: the journal receipt the same way.
-            $driver = ConvertTo-Int64Number -Value (Get-Content -LiteralPath $case.receipt -Raw | ConvertFrom-Json)
+            $driver = ConvertTo-Int64Number -Value (Get-Content -LiteralPath $case.receipt -Raw -Encoding UTF8 | ConvertFrom-Json)
             if ($driver.journal.seed.trips -isnot [long] -or $driver.journal.restartLauncherExit -isnot [long]) { throw 'Int64 conversion failed.' }
             $valid = [bool](Test-JournalReceipt -Driver $driver)
             $results.Add([ordered]@{passed = $valid; driverResultAvailable = $true; reason = $(if ($valid) { $null } else { 'JOURNAL_RESULT_INCOMPLETE_OR_INVALID' })})
             continue
         }
         if ($case.numbers -ceq 'int64') {
-            $driver = ConvertTo-Int64Number -Value (Get-Content -LiteralPath $case.receipt -Raw | ConvertFrom-Json)
+            $driver = ConvertTo-Int64Number -Value (Get-Content -LiteralPath $case.receipt -Raw -Encoding UTF8 | ConvertFrom-Json)
             if ($driver.lifecycle.secondInstance.exitCode -isnot [long] -or $driver.lifecycle.restartLauncherExit -isnot [long]) { throw 'Int64 conversion failed.' }
             $valid = [bool](Test-LifecycleReceipt -Driver $driver)
             $results.Add([ordered]@{passed = $valid; driverResultAvailable = $true; reason = $(if ($valid) { $null } else { 'LIFECYCLE_RESULT_INCOMPLETE_OR_INVALID' })})

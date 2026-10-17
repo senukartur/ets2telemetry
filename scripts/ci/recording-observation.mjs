@@ -2,13 +2,14 @@ import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {existsSync} from 'node:fs';
-import {copyFile, mkdir, open, readFile, writeFile} from 'node:fs/promises';
+import {copyFile, mkdir, open, readdir, readFile, writeFile} from 'node:fs/promises';
 import {createRequire} from 'node:module';
 import path from 'node:path';
 import {performance} from 'node:perf_hooks';
 import {recordingTextLog, startRecordingTextLog, waitForCurrentTelemetry, waitForRecordingText} from './renderer-observation.mjs';
 import {closeDashboard, lifecycleState, newDashboardPage, until, waitForExit} from './lifecycle-observation.mjs';
 import {startRecordingProxy} from './recording-proxy.mjs';
+import {clickTestId, dialogCalls, exportTrip, exportValidator, listState, openDetail, openTable, stubSaveDialog, untilPage} from './journal-observation.mjs';
 
 // ET-015a PR-4: the recording runtime journey. The service records the synthetic protocol v1 source into
 // `<isolated LOCALAPPDATA>\ETS2Telemetry\synthetic\smoke.sqlite` (ETS2TELEMETRY_RECORDING=synthetic:smoke) while the
@@ -25,6 +26,10 @@ import {startRecordingProxy} from './recording-proxy.mjs';
 // recording status along the journey (RECORDING_STATUS_* below); after the redelivery, run A's closed dashboard is
 // reopened from the tray to show its loss totals and closed again, so the tray exit still runs with the main window
 // closed. The dashboard's text logs (MutationObserver) are recorded, and the receipt checks them.
+// ET-016 PR-8: after run B recorded, its dashboard opens the Journal tab while the recording runs, compares the list,
+// the detail, the completeness intervals, the timeline and the samples of the recorded trip with hand-written texts,
+// exports the trip through main's Save dialog (replaced through Playwright, as in the journal smoke) and cancels a second
+// export. After both runs the export is checked with the shared validator and reconciled with the stored rows.
 
 export const RECORDING_TARGET = 'synthetic:smoke';
 export const RECORDING_SCENARIO = 'normal-delivery-runtime-journey';
@@ -360,6 +365,221 @@ export async function verifyRecordingRestart({application, record, rendererPages
     'RUN_B_RECORDING_NOT_SHOWN');
   assert.ok(record.restart.status.texts.every(text => text.losses === null), 'Run B showed a loss line');
   record.statusRunBFresh = true;
+  // ET-016 PR-8: the journal and the export of the recorded trip, while run B's recording runs.
+  await runRecordingJournal({application, dashboard, recording, config, record});
+}
+
+// ET-016 PR-8: the recorded trip in the Journal tab and its export. Every expected text and value below is written by
+// hand from normal-delivery.json, the hand-written rows (normal-delivery-runtime-journey.rows.expected.json), J13 and
+// the trip export format (docs/journal-export.md); none is read back from journal-view.ts or the exporter. ETS2 uses the
+// metric profile (the journey never changes the settings), and the scenario's currency is unknown.
+const JOURNAL_BANNER = 'Synthetic test database — never game history';
+const NOT_OBSERVED = 'unavailable (not observed)';
+const JOURNEY_ROUTE = `${NOT_OBSERVED} → ${NOT_OBSERVED}`;
+/** The simulator's UTC label of a step: 1,800,000,000,000 + atMs. */
+const labelAt = atMs => 1_800_000_000_000 + atMs;
+/** A UTC label as the renderer's local clock time, written independently of journal-view.ts with Date's local getters. */
+const localTime = utcMs => {
+  const d = new Date(utcMs), p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+};
+/** T4: the UUID of the trip that the job configuration eventSeq 3 of the simulator's plugin session opened. */
+const journeyTripUuid = session => uuidOf(createHash('sha256').update(`ets2telemetry-trip-v1:${session}:3`, 'utf8').digest('hex'));
+/** trip@3's list row: delivered and partial (opened at load), observed 0 m, no fuel channel, no city or cargo names. */
+const journalRow = trip => ({trip, started: localTime(labelAt(30)), game: 'ETS2', route: JOURNEY_ROUTE, outcome: 'Delivered', completeness: 'Partial',
+  observed: '0.0 km', fuel: NOT_OBSERVED, cargo: NOT_OBSERVED});
+/**
+ * trip@3's detail: every field of the summary. The job of eventSeq 3 has ids, 152 km planned, income 12345 and cargo not
+ * loaded; job.delivered (8) has revenue 12000, 250 XP, damage 0.03125, 152.5 km and 300 game minutes; the truck has a
+ * brand id, a model id and 800 L; trailer 1 is a dryvan. One second-1000 sample belongs to the trip when it was stored.
+ */
+function journalDetail(session, trip, sampleCount) {
+  const fields = {
+    'trip-game': 'Euro Truck Simulator 2', 'trip-gameMode': 'Unknown', 'trip-outcome': 'Delivered', 'trip-completeness': 'Partial', 'trip-started': localTime(labelAt(30)),
+    'trip-ended': localTime(labelAt(600)), 'trip-openedBy': 'job event 3', 'trip-session': session, 'trip-tripId': trip,
+    'distance-plannedDistance': '152.0 km', 'distance-observedDistance': '0.0 km', 'distance-deliveredDistance': '152.5 km', 'fuel-fuelUsed': NOT_OBSERVED,
+    'money-expectedIncome': '12345 (currency unknown)', 'money-revenue': '12000 (currency unknown)', 'money-fine': 'none recorded', 'money-toll': 'none recorded',
+    'money-ferry': 'none recorded', 'money-train': 'none recorded',
+    'job-sourceCity': NOT_OBSERVED, 'job-sourceCompany': NOT_OBSERVED, 'job-destinationCity': NOT_OBSERVED, 'job-destinationCompany': NOT_OBSERVED, 'job-cargo': NOT_OBSERVED,
+    'job-cargoMass': NOT_OBSERVED, 'job-market': NOT_OBSERVED, 'job-specialJob': NOT_OBSERVED, 'job-cargoLoaded': 'no', 'job-deadline': NOT_OBSERVED, 'job-jobSource': 'job event 3',
+    'delivery-earnedXp': '250', 'delivery-cargoDamage': '3%', 'delivery-deliveryDuration': '5 h 0 min', 'delivery-autoPark': 'no', 'delivery-autoLoad': 'no',
+    'truck-brand': NOT_OBSERVED, 'truck-model': NOT_OBSERVED, 'truck-licensePlate': NOT_OBSERVED, 'truck-plateCountry': NOT_OBSERVED, 'truck-fuelCapacity': '800.0 L',
+    'trailers-trailer-0-brand': NOT_OBSERVED, 'trailers-trailer-0-model': NOT_OBSERVED, 'trailers-trailer-0-body': 'dryvan', 'trailers-trailer-0-plate': NOT_OBSERVED,
+    'samples-sampleCount': String(sampleCount),
+    ...(sampleCount ? {'samples-firstSample': localTime(labelAt(100)), 'samples-lastSample': localTime(labelAt(100))} : {})
+  };
+  return {error: null, title: `ETS2: ${JOURNEY_ROUTE}`, outcome: 'Delivered', completeness: 'Partial', fields, banner: JOURNAL_BANNER,
+    notes: {trip: ['Times are the recorded UTC labels shown in local time.'], money: ['Amounts are the exact game values. They are never converted, netted or added across currencies.']}};
+}
+/** The two completeness intervals (kind, cause, start, end, events): neither carries a UTC label or an eventSeq range. */
+const JOURNAL_INTERVALS = {total: 'Completeness intervals recorded for this trip: 2.',
+  rows: [['Discontinuity', 'opened while a save was loading', '—', '—', '—'], ['Not connected', 'telemetry service restarted', '—', '—', '—']]};
+/** J7: from the job configuration (3) through job.delivered (8), which closed the trip; eventSeq 5 once despite its redelivery. */
+const JOB_DETAIL = `${NOT_OBSERVED}, ${JOURNEY_ROUTE}`;
+const journalTimeline = () => ({window: "Events of the trip's plugin session from eventSeq 3 through 8, the event that closed the trip.", rows: [
+  ['3', localTime(labelAt(30)), 'Job configured', JOB_DETAIL, '—'], ['4', localTime(labelAt(40)), 'Game resumed', '', '—'],
+  ['5', localTime(labelAt(300)), 'Job configured', JOB_DETAIL, '—'], ['6', localTime(labelAt(400)), 'Game paused', '', '—'],
+  ['7', localTime(labelAt(500)), 'Game resumed', '', '—'], ['8', localTime(labelAt(600)), 'Delivered', 'Revenue 12000 (currency unknown), delivered distance 152.5 km', 'this trip']]});
+/** The optional second-1000 sample: 25.5 m/s, odometer 1,000.5 km, game time 601 min; no other channel was sent. */
+const journalSampleRow = () => [localTime(labelAt(100)), '91.8 km/h', NOT_OBSERVED, NOT_OBSERVED, NOT_OBSERVED, '1000.5 km', NOT_OBSERVED, NOT_OBSERVED, 'Day 1, 10:01', NOT_OBSERVED];
+const NO_SAMPLES = 'No one-second samples were recorded for this trip.';
+/** J16: the default name carries the start label in UTC (1,800,000,000,030 ms is 2027-01-15 08:00 UTC) and the UUID's first 8 digits. */
+const exportDialog = trip => ({window: true, defaultName: `ets2telemetry-trip-ets2-20270115-0800-${trip.slice(0, 8)}.json`, absoluteDirectory: true,
+  filters: [{name: 'JSON', extensions: ['json']}]});
+const exportSavedText = samples => `Saved the trip as JSON: 6 events, 2 completeness intervals and ${samples} one-second samples.`;
+const EXPORT_CANCELLED = 'Export cancelled. Nothing was written.';
+const sha256Of = async file => createHash('sha256').update(await readFile(file)).digest('hex');
+
+/**
+ * Run B, after its recording: the Journal tab lists the one recorded trip; its detail, completeness intervals, timeline
+ * and samples show their hand-written texts; Export saves it to `recording-export\trip.json` of the run directory through
+ * the replaced Save dialog; a cancelled second export writes nothing and leaves the saved file unchanged. The stored rows
+ * are read only after the exit, so the sample count shown decides whether the optional second-1000 row is expected here;
+ * the reconciliation after the exit checks that count against the database.
+ */
+async function runRecordingJournal({application, dashboard, recording, config, record}) {
+  const session = seededId(recording.seed, 'plugin-session'), trip = journeyTripUuid(session);
+  const journal = record.journal = {tripUuid: trip};
+  await clickTestId(dashboard, 'tab-journal');
+  const list = await untilPage(dashboard, listState, {page: 1, count: 1, first: trip});
+  journal.list = {rows: list.rows, banner: list.banner, error: list.error, next: list.next, previous: list.previous};
+  assert.deepEqual(journal.list, {rows: [journalRow(trip)], banner: JOURNAL_BANNER, error: null, next: false, previous: false}, 'The journal list differs from the hand-written row');
+  journal.listMatch = true;
+
+  const detail = journal.detail = await openDetail(dashboard, trip);
+  const sampleCount = journal.sampleCount = Number(detail.fields['samples-sampleCount']);
+  assert.ok(sampleCount === 0 || sampleCount === 1, `Unexpected trip sample count ${detail.fields['samples-sampleCount']}`);
+  assert.deepEqual(detail, journalDetail(session, trip, sampleCount), 'The journal detail differs from the hand-written texts');
+  journal.detailMatch = true;
+  const intervals = await openTable(dashboard, 'intervals', 2);
+  journal.intervals = {total: intervals.header, rows: intervals.rows.map(row => row.cells), error: intervals.error, next: intervals.next};
+  assert.deepEqual(journal.intervals, {...JOURNAL_INTERVALS, error: null, next: false}, 'The completeness intervals differ from the hand-written texts');
+  journal.intervalsMatch = true;
+  const timeline = await openTable(dashboard, 'timeline', 6);
+  journal.timeline = {window: timeline.header, rows: timeline.rows.map(row => row.cells), eventSeqs: timeline.rows.map(row => row.eventSeq), error: timeline.error, next: timeline.next};
+  const expectedTimeline = journalTimeline();
+  assert.deepEqual(journal.timeline, {...expectedTimeline, eventSeqs: expectedTimeline.rows.map(row => row[0]), error: null, next: false},
+    'The timeline differs from the hand-written texts');
+  journal.timelineMatch = true;
+  const samples = await openTable(dashboard, 'samples', sampleCount);
+  journal.samples = {rows: samples.rows.map(row => ({kind: row.kind, cells: row.cells})), error: samples.error, next: samples.next,
+    empty: sampleCount ? null : await dashboard.getByTestId('journal-samples-empty').textContent({timeout: 5000})};
+  assert.deepEqual(journal.samples, {rows: sampleCount ? [{kind: 'sample', cells: journalSampleRow()}] : [], error: null, next: false, empty: sampleCount ? null : NO_SAMPLES},
+    'The samples differ from the hand-written texts');
+  journal.samplesMatch = true;
+
+  // The export, then a cancelled export. Each Save dialog replacement is set anew and answers a fixed target in the run directory.
+  const folder = path.join(config.output, 'recording-export'), file = path.join(folder, 'trip.json');
+  await mkdir(folder);
+  await stubSaveDialog(application, {canceled: false, filePath: file});
+  const saved = await exportTrip(dashboard, trip, exportSavedText(sampleCount));
+  journal.exportDialog = await dialogCalls(application);
+  assert.equal(saved.failed, 'false');
+  assert.deepEqual(journal.exportDialog, [exportDialog(trip)]);
+  const savedHash = await sha256Of(file);
+  journal.exportSaved = true;
+  await stubSaveDialog(application, {canceled: true, filePath: ''});
+  const cancelled = await exportTrip(dashboard, trip, EXPORT_CANCELLED);
+  assert.equal(cancelled.failed, 'false');
+  // The cancel must come from the Save dialog main offered again, not from a reply that skipped it.
+  assert.deepEqual(await dialogCalls(application), [exportDialog(trip)], 'The cancelled export did not offer the Save dialog');
+  journal.exportFolder = (await readdir(folder)).sort();
+  journal.exportUnchangedByCancel = await sha256Of(file) === savedHash;
+  assert.deepEqual(journal.exportFolder, ['trip.json'], 'The cancelled export left a file in the export folder');
+  assert.equal(journal.exportUnchangedByCancel, true, 'The cancelled export changed the saved file');
+  journal.exportCancelledWritesNothing = true;
+}
+
+/** The trip export rows main logged in run B, in order. */
+const exportEvents = samples => [{event: 'JOURNAL_EXPORT_SAVED', facts: {events: 6, samples}}, {event: 'JOURNAL_EXPORT_CANCELLED', facts: null}];
+/** The scenario's currency is unknown: every amount is `{raw, sdkType, currency: {status: 'unknown'}}`. */
+const unknownMoney = (raw, sdkType) => ({available: true, value: {raw, sdkType, currency: {status: 'unknown'}}});
+const absent = unit => unit ? {available: false, reason: 'not-observed', unit} : {available: false, reason: 'not-observed'};
+/** The job values of eventSeq 3 in the protocol v1 job.configured shape (tools/telemetry-simulator: unsent attributes are not observed). */
+const JOB_VALUES = {sourceCityId: {available: true, value: 'synthetic_city_a'}, sourceCity: absent(), sourceCompanyId: absent(), sourceCompany: absent(),
+  destinationCityId: {available: true, value: 'synthetic_city_b'}, destinationCity: absent(), destinationCompanyId: absent(), destinationCompany: absent(),
+  cargoId: {available: true, value: 'synthetic_cargo'}, cargo: absent(), market: absent(), cargoMass: absent('kg'), cargoUnitMass: absent('kg'), cargoUnitCount: absent(),
+  isSpecialJob: absent(), cargoLoaded: {available: true, value: false}, plannedDistance: {available: true, value: 152000, unit: 'm'},
+  expectedIncome: unknownMoney('12345', 'u64'), deliveryDeadline: absent('min')};
+/** job.delivered (8): revenue 12000, 250 XP, damage 0.03125, 152.5 km, 300 game minutes, no auto park or load. */
+const DELIVERED_RECORD = {type: 'job.delivered', revenue: unknownMoney('12000', 's64'), earnedXp: {available: true, value: 250},
+  cargoDamage: {available: true, value: 0.03125, unit: 'fraction'}, distance: {available: true, value: 152500, unit: 'm'}, deliveryDuration: {available: true, value: '300', unit: 'min'},
+  autoParkUsed: {available: true, value: false}, autoLoadUsed: {available: true, value: false}};
+/** The trip section of the export: the hand-written trip row with its stable identifiers and the close carrier, job.delivered (8). */
+const exportTripSection = (session, trip) => ({tripUuid: trip, pluginSessionId: session, game: 'ets2', gameMode: {mode: 'unknown', method: 'none', confidence: 'none'},
+  gameModeAmbiguous: false, outcome: 'delivered', closeReason: 'outcome', recordingCompleteness: 'partial', startedUtcMs: labelAt(30), endedUtcMs: labelAt(600),
+  observedDistanceM: {available: true, value: 0}, fuelUsedL: {available: false, reason: 'not-observed'}, openedBy: 'event', openedEventSeq: '3', outcomeEventSeq: '8',
+  closedBy: {pluginSessionId: session, eventSeq: '8'}});
+/** The window's events as [eventSeq, type, attribution kind]: only job.delivered (8) is attributed, to the trip itself. */
+const EXPORT_EVENTS = [['3', 'job.configured', null], ['4', 'simulation.started', null], ['5', 'job.configured', null], ['6', 'simulation.paused', null],
+  ['7', 'simulation.started', null], ['8', 'job.delivered', 'trip']];
+
+/**
+ * After both runs: the export saved in run B, checked by the shared validator (tests/shared/trip-export-validator.ts),
+ * against its hand-written sections and against the stored rows read by recording-database.cjs. It names the stored
+ * trip, plugin session and database; it lists each eventSeq of the window once even though eventSeq 5 was redelivered,
+ * and exactly the stored events of the window; its completeness intervals and samples are the trip's stored rows with
+ * their row ids; and its bounds are coverage 13 and the trip's largest stored sample and interval ids.
+ */
+async function reconcileExport({config, record, raw, session, restartMainEvents}) {
+  const journal = record.journal, trip = journeyTripUuid(session);
+  journal.exportEvents = restartMainEvents.filter(row => row.event.startsWith('JOURNAL_EXPORT_')).map(row => ({event: row.event, facts: row.facts ?? null}));
+  assert.deepEqual(journal.exportEvents, exportEvents(journal.sampleCount));
+  const document = JSON.parse(await readFile(path.join(config.output, 'recording-export', 'trip.json'), 'utf8'));
+  const problemsOf = await exportValidator(config);
+  journal.exportProblems = problemsOf(document);
+  assert.deepEqual(journal.exportProblems, [], 'The export is not a valid format version 1 document');
+  journal.exportValidated = true;
+
+  // Hand-written sections.
+  assert.deepEqual({format: document.format, formatVersion: document.formatVersion, application: document.header.application, purpose: document.header.database.purpose,
+    schemaVersion: document.header.database.schemaVersion, sessionOrigin: document.header.sessionOrigin},
+  {format: 'ets2telemetry.trip-export', formatVersion: 1, application: {name: 'ETS2Telemetry', version: '0.1.0'}, purpose: 'synthetic', schemaVersion: 2, sessionOrigin: 'synthetic'});
+  assert.deepEqual(document.trip, exportTripSection(session, trip), 'The exported trip differs from the hand-written row');
+  assert.deepEqual(document.window, {known: true, pluginSessionId: session, fromEventSeq: '3', throughEventSeq: '8', end: 'close-event'});
+  assert.deepEqual({source: document.job.source, eventSeq: document.job.eventSeq, checkpointNextEventSeq: document.job.checkpointNextEventSeq, values: document.job.values},
+    {source: 'event', eventSeq: '3', checkpointNextEventSeq: null, values: JOB_VALUES}, 'The exported job differs from eventSeq 3');
+  assert.deepEqual({eventSeq: document.truck?.eventSeq, brandId: document.truck?.values.brandId, id: document.truck?.values.id, fuelCapacity: document.truck?.values.fuelCapacity},
+    {eventSeq: '1', brandId: {available: true, value: 'synthetic_brand'}, id: {available: true, value: 'vehicle.synthetic_truck'}, fuelCapacity: {available: true, value: 800, unit: 'L'}});
+  assert.deepEqual({total: document.trailers.total, items: document.trailers.items.map(item => ({eventSeq: item.eventSeq, index: item.values.index, id: item.values.id, bodyType: item.values.bodyType}))},
+    {total: 1, items: [{eventSeq: '2', index: 0, id: {available: true, value: 'trailer.synthetic_box'}, bodyType: {available: true, value: 'dryvan'}}]});
+  assert.deepEqual(document.outcomeDetails, {eventSeq: '8', record: DELIVERED_RECORD}, 'The exported outcome differs from job.delivered (8)');
+  assert.deepEqual(document.money, {incomplete: false, totals: [], unavailable: []});
+  const exported = journal.exportRows = {eventSeqs: document.events.map(event => event.eventSeq), intervalIds: document.intervals.map(interval => interval.id),
+    sampleIds: document.samples.map(sample => sample.id), bounds: document.bounds};
+  assert.deepEqual(document.events.map(event => [event.eventSeq, event.type, event.attribution?.kind ?? null]), EXPORT_EVENTS, 'The exported events differ from the window');
+  assert.equal(new Set(exported.eventSeqs).size, exported.eventSeqs.length, 'The export repeats an eventSeq');
+  assert.ok(document.events.every(event => event.attribution === null || event.attribution.tripUuid === trip), 'An exported event is attributed to another trip');
+  assert.deepEqual(document.intervals.map(interval => [interval.kind, interval.cause]), [['discontinuity', 'opened-at-load'], ['not-connected', 'consumer-restart']]);
+  assert.equal(document.samples.length, journal.sampleCount, 'The export holds another number of samples than the journal showed');
+
+  // Reconciliation with the stored rows (recording-database.cjs). Stable identifiers first.
+  const storedTrip = raw.trips[0], tripIntervals = raw.intervals.filter(interval => interval.trip === trip), tripSamples = raw.sampleRows.filter(sample => sample.trip === trip);
+  const stored = journal.storedRows = {tripUuid: storedTrip.tripUuid, pluginSessionId: storedTrip.session, databaseUuid: raw.databaseUuid,
+    eventSeqs: raw.events.map(event => key(event.eventSeq)).filter(eventSeq => BigInt(eventSeq) >= 3n && BigInt(eventSeq) <= 8n),
+    intervalIds: tripIntervals.map(interval => interval.id), sampleIds: tripSamples.map(sample => sample.id)};
+  journal.exportIds = {tripUuid: document.trip.tripUuid, pluginSessionId: document.trip.pluginSessionId, databaseUuid: document.header.database.uuid};
+  assert.equal(raw.trips.length, 1);
+  assert.deepEqual(journal.exportIds, {tripUuid: stored.tripUuid, pluginSessionId: stored.pluginSessionId, databaseUuid: stored.databaseUuid}, 'The export names another trip, session or database');
+  assert.match(stored.databaseUuid, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+  // Events: the stored rows of the window, each once, with their types and UTC labels.
+  assert.deepEqual(exported.eventSeqs, stored.eventSeqs, 'The exported eventSeqs differ from the stored window');
+  const storedEvents = raw.events.filter(event => stored.eventSeqs.includes(key(event.eventSeq))).map(event => [key(event.eventSeq), event.type, Number(event.utcMs)]);
+  assert.deepEqual(document.events.map(event => [event.eventSeq, event.type, event.occurred.utcUnixMs.available ? Number(event.occurred.utcUnixMs.value) : null]), storedEvents);
+  const attributed = raw.attributions.filter(row => stored.eventSeqs.includes(key(row.eventSeq))).map(row => [key(row.eventSeq), row.attribution, row.trip]);
+  assert.deepEqual(document.events.filter(event => event.attribution !== null).map(event => [event.eventSeq, event.attribution.kind, event.attribution.tripUuid]), attributed);
+  // Completeness intervals: the trip's stored rows with their ids, in insertion order.
+  const intervalRow = i => ({id: i.id, kind: i.kind, startUtcMs: i.startUtcMs === null ? null : Number(i.startUtcMs), endUtcMs: i.endUtcMs === null ? null : Number(i.endUtcMs),
+    startMonotonicNs: key(i.startMonotonicNs), endMonotonicNs: key(i.endMonotonicNs), sourceClockId: i.sourceClockId, firstEventSeq: key(i.firstEventSeq),
+    lastEventSeq: key(i.lastEventSeq), detail: typeof i.detail === 'string' ? JSON.parse(i.detail) : i.detail});
+  assert.deepEqual(document.intervals.map(intervalRow), tripIntervals.map(intervalRow), 'The exported intervals differ from the stored rows');
+  // Samples: the trip's stored rows with their ids, monotonic time, UTC label, speed and odometer.
+  const storedValue = value => value === null ? {available: false, reason: 'not-observed'} : {available: true, value};
+  assert.deepEqual(document.samples.map(s => ({id: s.id, monotonicNs: s.monotonicNs, utcMs: s.utcMs, speed: s.speed, odometer: s.odometer})),
+    tripSamples.map(s => ({id: s.id, monotonicNs: s.monotonicNs, utcMs: s.utcMs, speed: storedValue(s.speedMps), odometer: storedValue(s.odometerM)})), 'The exported samples differ from the stored rows');
+  // Bounds: coverage 13 at the detail read, and the trip's largest stored ids.
+  assert.deepEqual(exported.bounds, {committedThroughEventSeq: '13', lastSampleId: stored.sampleIds.at(-1) ?? null, lastIntervalId: stored.intervalIds.at(-1) ?? null, snapshot: false});
+  journal.exportReconciled = true;
 }
 
 const FAILURE_EVENTS = /FAILED|TIMEOUT|UNCAUGHT|UNHANDLED|INVALID|RENDER_PROCESS_GONE/;
@@ -417,7 +637,9 @@ function rowsOf(raw, session) {
   const labels = tripLabels(session), label = value => value === null ? null : labels.get(value) ?? value;
   return {
     trips: raw.trips.map(t => ({trip: label(t.tripUuid), jobConfigurationEventSeq: key(t.jobSeq), truckConfigurationEventSeq: key(t.truckSeq),
-      trailerConfigurationEventSeqs: t.trailerSeqs.map(key), openedEventSeq: key(t.openedSeq), gameMode: {mode: t.mode, method: t.method, confidence: t.confidence},
+      trailerConfigurationEventSeqs: t.trailerSeqs.map(key), openedEventSeq: key(t.openedSeq),
+      // ET-016 PR-7 (J9) columns, compared since ET-016 PR-8: where the job and the opening came from.
+      jobSource: t.jobSource, checkpointNextEventSeq: key(t.checkpointSeq), openedBy: t.openedBy, gameMode: {mode: t.mode, method: t.method, confidence: t.confidence},
       gameModeAmbiguous: t.ambiguous === 1, outcome: t.outcome, outcomeEventSeq: key(t.outcomeSeq), closeReason: t.closeReason, recordingCompleteness: t.completeness,
       startedUtcMs: t.startedUtcMs, endedUtcMs: t.endedUtcMs,
       observedDistanceM: t.distanceState === 'available' ? {available: true, value: t.distance} : {available: false, reason: t.distanceState},
@@ -526,4 +748,11 @@ export async function verifyRecordingRun({config, record, recording, mainEvents,
   record.database.acknowledgedThrough = acknowledged.toString();
   assert.ok(BigInt(actual.coverage.committedThroughEventSeq) >= acknowledged);
   record.databaseRowsMatch = true;
+
+  // ET-016 PR-8: the sample count run B's journal showed is the trip's stored count (the optional second-1000 row or
+  // none), and the export saved in run B reconciles with the stored rows.
+  assert.ok(record.journal, 'Run B did not reach the journal');
+  assert.equal(record.journal.sampleCount, actual.sampleRows.filter(sample => sample.trip === 'trip@3').length, 'The journal showed another sample count than was stored');
+  record.journal.sampleCountMatch = true;
+  await reconcileExport({config, record, raw, session, restartMainEvents});
 }

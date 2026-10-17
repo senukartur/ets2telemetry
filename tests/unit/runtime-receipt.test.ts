@@ -144,6 +144,11 @@ function lifecycleCases() {
 
 // ET-015a PR-4 recording receipts: one intact receipt shaped like a real development run, then single-field corruptions.
 function recordingReceipt(path: (string | number)[] = [], replacement?: Json): string {
+  return recordingReceiptWith(path.length ? [[path, replacement]] : []);
+}
+type Edit = [(string | number)[], Json | undefined];
+/** The intact recording receipt with each edit applied in order; an undefined replacement deletes the field. */
+function recordingReceiptWith(edits: Edit[]): string {
   const step = (pid: number, name: string): Json => ({pid, event: 'SHUTDOWN_STEP', facts: {name, outcome: 'ok'}});
   const started = (pid: number, created: boolean): Json[] => [{pid, event: 'RECORDING_TARGET', facts: {purpose: 'synthetic'}}, {pid, event: 'STORAGE_VERIFIED'},
     {pid, event: 'HISTORY_STORAGE_OPENED', facts: {schemaVersion: 2, created, migratedFrom: null}},
@@ -176,6 +181,28 @@ function recordingReceipt(path: (string | number)[] = [], replacement?: Json): s
     firstConnectionTexts: [waitingText(), {headline: 'Recording', detail: [note, 'Current trip is partial'], losses: null, alert: null, notice}],
     serviceRestartTexts: [waitingText(), {headline: 'Not known: the telemetry service is not running or has not reported a valid status', detail: null, losses: null, alert: null,
       notice: 'Prototype live display. The recording status is not known right now.'}, waitingText()]};
+  // ET-016 PR-8 journal and export facts of run B, shaped like a real development run without the optional sample.
+  const tripUuid = '8bb4178d-82ba-8b84-fcbc-a83799a54662', session = 'd119784f-20da-e413-2065-834bba0a041e', databaseUuid = 'df22c9c6-f7e7-4514-bfbd-2cf6eec01a7a';
+  const notObserved = 'unavailable (not observed)', route = `${notObserved} → ${notObserved}`, banner = 'Synthetic test database — never game history';
+  const windowSeqs = ['3', '4', '5', '6', '7', '8'];
+  const journal: Json = {tripUuid,
+    list: {rows: [{trip: tripUuid, started: '2027-01-15 09:00:00', game: 'ETS2', route, outcome: 'Delivered', completeness: 'Partial', observed: '0.0 km', fuel: notObserved,
+      cargo: notObserved}], banner, error: null, next: false, previous: false},
+    detail: {error: null, title: `ETS2: ${route}`, outcome: 'Delivered', completeness: 'Partial', banner,
+      fields: {'trip-openedBy': 'job event 3', 'trip-session': session, 'trip-tripId': tripUuid, 'samples-sampleCount': '0'}, notes: {}},
+    sampleCount: 0,
+    intervals: {total: 'Completeness intervals recorded for this trip: 2.', rows: [['Discontinuity', 'opened while a save was loading', '—', '—', '—'],
+      ['Not connected', 'telemetry service restarted', '—', '—', '—']], error: null, next: false},
+    timeline: {window: "Events of the trip's plugin session from eventSeq 3 through 8, the event that closed the trip.", rows: [], eventSeqs: windowSeqs, error: null, next: false},
+    samples: {rows: [], error: null, next: false, empty: 'No one-second samples were recorded for this trip.'},
+    exportDialog: [{window: true, defaultName: 'ets2telemetry-trip-ets2-20270115-0800-8bb4178d.json', absoluteDirectory: true, filters: [{name: 'JSON', extensions: ['json']}]}],
+    exportFolder: ['trip.json'],
+    exportEvents: [{event: 'JOURNAL_EXPORT_SAVED', facts: {events: 6, samples: 0}}, {event: 'JOURNAL_EXPORT_CANCELLED', facts: null}], exportProblems: [],
+    exportRows: {eventSeqs: windowSeqs, intervalIds: ['1', '2'], sampleIds: [], bounds: {committedThroughEventSeq: '13', lastSampleId: null, lastIntervalId: '2', snapshot: false}},
+    storedRows: {tripUuid, pluginSessionId: session, databaseUuid, eventSeqs: windowSeqs, intervalIds: ['1', '2'], sampleIds: []},
+    exportIds: {tripUuid, pluginSessionId: session, databaseUuid},
+    listMatch: true, detailMatch: true, intervalsMatch: true, timelineMatch: true, samplesMatch: true, exportSaved: true, exportCancelledWritesNothing: true,
+    exportUnchangedByCancel: true, sampleCountMatch: true, exportValidated: true, exportReconciled: true};
   const value: Json = {passed: true, commit: 'candidate', mode: 'packaged', scenarioKind: 'recording', launcherExit: 0, probesAfterExit: ['ets2telemetry-probe-a'],
     mainEvents: [{event: 'DIAGNOSTIC_SERVICE_EXIT_REQUEST'}, {event: 'SERVICE_EXIT', detail: {code: 0}}, {event: 'APP_EXIT_REQUESTED', facts: {reason: 'tray'}},
       {event: 'SERVICE_EXIT', detail: {code: 0}}, {event: 'APP_EXIT', detail: {code: 0}}],
@@ -197,15 +224,16 @@ function recordingReceipt(path: (string | number)[] = [], replacement?: Json): s
       files: {magic: 'SQLite format 3', applicationId: 1163154226, userVersion: 2, sidecars: [], syntheticBackups: false, historyDatabase: false, dataDirectory: false},
       database: {integrity: ['ok'], foreignKeyViolations: 0, purpose: 'synthetic', acceptedOrigin: 'synthetic', acknowledgedThrough: '13',
         sessions: [{game: 'ets2', origin: 'synthetic', committedThrough: '13', endReason: null, simulatorSession: true}],
-        rows: {trips: [{trip: 'trip@3', outcome: 'delivered', recordingCompleteness: 'partial'}], attributions: [{eventSeq: '8', trip: 'trip@3', attribution: 'trip'}],
+        // ET-016 PR-8: the schema version 2 columns of a trip opened at its job event.
+        rows: {trips: [{trip: 'trip@3', jobSource: 'event', checkpointNextEventSeq: null, openedBy: 'event', outcome: 'delivered', recordingCompleteness: 'partial'}], attributions: [{eventSeq: '8', trip: 'trip@3', attribution: 'trip'}],
           intervals: [{trip: 'trip@3', kind: 'discontinuity', detail: {cause: 'opened-at-load', atEventSeq: '3'}}, {trip: 'trip@3', kind: 'not-connected', detail: {cause: 'consumer-restart'}}],
           events: Array.from({length: 13}, (_, index) => ({eventSeq: String(index + 1)})),
           // ET-015b PR-4: without the optional second-1000 row, which the terminated service stores only when its 5 s flush ran.
           sampleRows: [{second: '1001', trip: null}, {second: '1002', trip: null}]}},
-      retainedCrashProbe: ['ets2telemetry-probe-a'],
+      retainedCrashProbe: ['ets2telemetry-probe-a'], journal,
       restartMainEvents: [{event: 'APP_EXIT_REQUESTED', facts: {reason: 'app-quit'}}, {event: 'SERVICE_EXIT', detail: {code: 0}}, {event: 'APP_EXIT', detail: {code: 0}}],
       restartServiceEvents: [...started(4300, false), ...stopped(4300)]}};
-  if (path.length) {
+  for (const [path, replacement] of edits) {
     let target = value as Record<string | number, Json>;
     for (const key of path.slice(0, -1)) target = target[key] as Record<string | number, Json>;
     const last = path.at(-1)!;
@@ -254,8 +282,12 @@ function recordingCases() {
     invalid('acknowledged past coverage', ['recording', 'database', 'acknowledgedThrough'], '14'),
     invalid('event missing', ['recording', 'database', 'rows', 'events'], Array.from({length: 12}, (_, index) => ({eventSeq: String(index + 1)}))),
     // ET-015b PR-4 sample rules.
-    {name: 'intact recording receipt with the optional sample', body: recordingReceipt(['recording', 'database', 'rows', 'sampleRows'],
-      [{second: '1000', trip: 'trip@3'}, {second: '1001', trip: null}, {second: '1002', trip: null}]), scenario: 'recording', code: 0, available: true, reason: null},
+    // ET-016 PR-8: the stored optional row belongs to trip@3, so run B's journal shows it and its export holds it.
+    {name: 'intact recording receipt with the optional sample', body: recordingReceiptWith([
+      [['recording', 'database', 'rows', 'sampleRows'], [{second: '1000', trip: 'trip@3'}, {second: '1001', trip: null}, {second: '1002', trip: null}]],
+      ...withTripSample()]), scenario: 'recording', code: 0, available: true, reason: null},
+    invalid('optional sample stored but not shown in the journal', ['recording', 'database', 'rows', 'sampleRows'],
+      [{second: '1000', trip: 'trip@3'}, {second: '1001', trip: null}, {second: '1002', trip: null}]),
     invalid('samples not recorded', ['recording', 'samplesRecorded'], false),
     invalid('samples flag missing', ['recording', 'samplesRecorded']),
     invalid('run B sample missing', ['recording', 'database', 'rows', 'sampleRows'], [{second: '1001', trip: null}]),
@@ -304,8 +336,67 @@ function recordingCases() {
     invalid('restart text log without unknown', ['recording', 'status', 'serviceRestartTexts', 1, 'headline'], 'Not known while the telemetry service is not running'),
     invalid('run B text log without a recorded state', ['recording', 'restart', 'status', 'texts', 1, 'headline'], 'Waiting for the recorded source to connect'),
     invalid('dashboard open at the tray exit', ['recording', 'status', 'closedAgain', 'dashboard'], true),
-    invalid('closed-again flag missing', ['recording', 'dashboardClosedBeforeTrayExit'])
+    invalid('closed-again flag missing', ['recording', 'dashboardClosedBeforeTrayExit']),
+    // ET-016 PR-8 journal and export rules, additive.
+    invalid('journal facts missing', ['recording', 'journal']),
+    invalid('journal list not matched', ['recording', 'journal', 'listMatch'], false),
+    invalid('journal detail flag missing', ['recording', 'journal', 'detailMatch']),
+    invalid('timeline flag as string', ['recording', 'journal', 'timelineMatch'], 'true'),
+    invalid('export not reconciled', ['recording', 'journal', 'exportReconciled'], false),
+    invalid('export not validated', ['recording', 'journal', 'exportValidated']),
+    invalid('cancel changed the saved file', ['recording', 'journal', 'exportUnchangedByCancel'], false),
+    invalid('trip id not a UUID', ['recording', 'journal', 'tripUuid'], 'trip@3'),
+    invalid('a second trip listed', ['recording', 'journal', 'list', 'rows', 1], {trip: '8bb4178d-82ba-8b84-fcbc-a83799a54663', outcome: 'Delivered', completeness: 'Partial'}),
+    invalid('list without the synthetic banner', ['recording', 'journal', 'list', 'banner'], null),
+    invalid('list outcome inferred from completeness', ['recording', 'journal', 'list', 'rows', 0, 'outcome'], 'No outcome — events were lost'),
+    invalid('detail shown as complete', ['recording', 'journal', 'detail', 'completeness'], 'Complete'),
+    invalid('detail of another trip', ['recording', 'journal', 'detail', 'fields', 'trip-tripId'], '8bb4178d-82ba-8b84-fcbc-a83799a54663'),
+    invalid('detail opened by a checkpoint', ['recording', 'journal', 'detail', 'fields', 'trip-openedBy'], 'checkpoint (recording started during the job)'),
+    invalid('one completeness interval shown', ['recording', 'journal', 'intervals', 'rows'], [['Discontinuity', 'opened while a save was loading', '—', '—', '—']]),
+    invalid('redelivered event shown twice', ['recording', 'journal', 'timeline', 'eventSeqs'], ['3', '4', '5', '5', '6', '7', '8']),
+    invalid('timeline past the delivery', ['recording', 'journal', 'timeline', 'eventSeqs'], ['3', '4', '5', '6', '7', '8', '9']),
+    invalid('journal sample count without a stored sample', ['recording', 'journal', 'sampleCount'], 1),
+    invalid('cancelled export left a partial file', ['recording', 'journal', 'exportFolder'], ['trip.json', 'trip.json.0badc0de.partial']),
+    invalid('cancelled export wrote a file', ['recording', 'journal', 'exportFolder'], ['cancelled.json', 'trip.json']),
+    invalid('no file saved', ['recording', 'journal', 'exportFolder'], []),
+    invalid('cancelled export row missing', ['recording', 'journal', 'exportEvents'], [{event: 'JOURNAL_EXPORT_SAVED', facts: {events: 6, samples: 0}}]),
+    invalid('cancel logged as a second save', ['recording', 'journal', 'exportEvents', 1], {event: 'JOURNAL_EXPORT_SAVED', facts: {events: 6, samples: 0}}),
+    invalid('saved export with a duplicate event', ['recording', 'journal', 'exportEvents', 0, 'facts', 'events'], 7),
+    invalid('validator problems', ['recording', 'journal', 'exportProblems'], ['events[3]: eventSeq repeats an earlier row']),
+    invalid('exported eventSeq repeated after the redelivery', ['recording', 'journal', 'exportRows', 'eventSeqs'], ['3', '4', '5', '5', '6', '7', '8']),
+    invalid('exported window short of the delivery', ['recording', 'journal', 'exportRows', 'eventSeqs'], ['3', '4', '5', '6', '7']),
+    invalid('stored window with a duplicate', ['recording', 'journal', 'storedRows', 'eventSeqs'], ['3', '4', '5', '5', '6', '7', '8']),
+    invalid('exported interval ids differ from the stored ones', ['recording', 'journal', 'exportRows', 'intervalIds'], ['1', '3']),
+    invalid('exported interval missing', ['recording', 'journal', 'exportRows', 'intervalIds'], ['1']),
+    invalid('exported interval id null', ['recording', 'journal', 'exportRows', 'intervalIds'], [null, '1', '2']),
+    invalid('exported sample id null', ['recording', 'journal', 'exportRows', 'sampleIds'], [null]),
+    invalid('stored interval id null', ['recording', 'journal', 'storedRows', 'intervalIds'], ['1', '2', null]),
+    invalid('exported sample not stored for the trip', ['recording', 'journal', 'exportRows', 'sampleIds'], ['1']),
+    invalid('stored rows missing', ['recording', 'journal', 'storedRows']),
+    invalid('closed trip exported as a snapshot', ['recording', 'journal', 'exportRows', 'bounds', 'snapshot'], true),
+    invalid('bounds short of the coverage', ['recording', 'journal', 'exportRows', 'bounds', 'committedThroughEventSeq'], '12'),
+    invalid('bounds before the last interval', ['recording', 'journal', 'exportRows', 'bounds', 'lastIntervalId'], '1'),
+    invalid('bounds name a sample the trip lacks', ['recording', 'journal', 'exportRows', 'bounds', 'lastSampleId'], '1'),
+    invalid('export of another database', ['recording', 'journal', 'exportIds', 'databaseUuid'], '00000000-0000-4000-8000-000000000001'),
+    invalid('export of another plugin session', ['recording', 'journal', 'exportIds', 'pluginSessionId'], '00000000-0000-4000-8000-000000000002'),
+    invalid('export of another trip', ['recording', 'journal', 'exportIds', 'tripUuid'], '00000000-0000-4000-8000-000000000003'),
+    invalid('database UUID missing', ['recording', 'journal', 'exportIds', 'databaseUuid']),
+    invalid('stored trip from a checkpoint job', ['recording', 'database', 'rows', 'trips', 0, 'jobSource'], 'checkpoint'),
+    invalid('stored trip opened by a checkpoint', ['recording', 'database', 'rows', 'trips', 0, 'openedBy'], 'checkpoint'),
+    invalid('stored trip with a checkpoint nextEventSeq', ['recording', 'database', 'rows', 'trips', 0, 'checkpointNextEventSeq'], '4'),
+    int64('saved export of 7 events', ['recording', 'journal', 'exportEvents', 0, 'facts', 'events'], 7),
+    int64('journal sample count 1 without a stored sample', ['recording', 'journal', 'sampleCount'], 1),
+    {name: 'recording optional sample with Int64 integers', body: recordingReceiptWith([
+      [['recording', 'database', 'rows', 'sampleRows'], [{second: '1000', trip: 'trip@3'}, {second: '1001', trip: null}, {second: '1002', trip: null}]],
+      ...withTripSample()]), scenario: 'recording', numbers: 'int64' as const, code: 0, available: true, reason: null}
   ];
+}
+/** ET-016 PR-8: run B's journal and export facts when the optional second-1000 row (id 1) was stored for trip@3. */
+function withTripSample(): Edit[] {
+  return [
+    [['recording', 'journal', 'sampleCount'], 1], [['recording', 'journal', 'detail', 'fields', 'samples-sampleCount'], '1'],
+    [['recording', 'journal', 'exportEvents', 0, 'facts', 'samples'], 1], [['recording', 'journal', 'exportRows', 'sampleIds'], ['1']],
+    [['recording', 'journal', 'exportRows', 'bounds', 'lastSampleId'], '1'], [['recording', 'journal', 'storedRows', 'sampleIds'], ['1']]];
 }
 
 // ET-016 PR-4 journal receipts: one intact receipt shaped like a real development run, then single-field corruptions.
