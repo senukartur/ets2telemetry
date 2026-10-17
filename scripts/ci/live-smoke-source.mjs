@@ -14,7 +14,8 @@ export async function startLiveSmokeSource(checkout) {
   checkpoint.data.state.fuel = {available: true, value: 73, unit: 'L'};
   checkpoint.data.state.window = {available: false, reason: 'not-observed'};
   checkpoint.data.continuity = {coalescedSnapshots: '0', lostObservations: '0', offlineTransitions: '0'};
-  let seq = 0n, connections = 0, frames = 0, stopped = false, held = false;
+  // `ticks` counts snapshot timer firings, held or not, so a test can observe time passing on the source's own schedule.
+  let seq = 0n, connections = 0, frames = 0, ticks = 0, stopped = false, held = false;
   const origin = performance.now(), clients = new Set();
   const frame = value => {
     const payload = Buffer.from(JSON.stringify(value)); assert.ok(payload.length <= 65536);
@@ -37,7 +38,7 @@ export async function startLiveSmokeSource(checkout) {
       if (stopped || socket.destroyed) return;
       socket.write(frame(message(kind)), error => {if (error) socket.destroy(); else {frames++; then();}});
     };
-    const loop = () => {timer = setTimeout(() => {if (held) loop(); else send('snapshot', loop);}, 50);};
+    const loop = () => {timer = setTimeout(() => {ticks++; if (held) loop(); else send('snapshot', loop);}, 50);};
     socket.on('data', bytes => {
       if (started || hello.length + bytes.length > 4100) {socket.destroy(); return;}
       hello = Buffer.concat([hello, bytes]);
@@ -73,6 +74,6 @@ export async function startLiveSmokeSource(checkout) {
       checkpoint.data.state.fuel = {available: false, reason: 'not-observed', unit: 'L'};
     },
     hold: () => {held = true;}, resume: () => {held = false;},
-    statistics: () => ({connections, frames, activeClients: clients.size, held, stopped, origin: 'synthetic', history: false,
+    statistics: () => ({connections, frames, ticks, activeClients: clients.size, held, stopped, origin: 'synthetic', history: false,
       identity: {...checkpoint.source, clockId: checkpoint.capture.clockId}})};
 }
