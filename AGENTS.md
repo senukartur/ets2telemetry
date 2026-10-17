@@ -568,18 +568,22 @@ There is no wire, schema, recording, overlay or native-source change, and `GAME_
 
 ## ET-017 PR-4 implementation update — October 17, 2026
 
-PR-4 runs silent plugin setup from Electron main and exposes per-game plugin states through the application state. The renderer receives fixed codes and counts only, never paths. Setup starts 2 s after launch and is never awaited by startup. It runs one operation at a time and is bounded to 30 s. The running-game listing is bounded to 10 s.
+PR-4 runs silent plugin setup from Electron main and exposes per-game plugin states through the application state. The renderer receives fixed codes and counts only, never paths. Setup starts 2 s after launch and is never awaited by startup. It runs one setup run at a time and each run is bounded to 30 s. The running-game listing is bounded to 10 s.
 
 Setup polls every 15 s only while one of these holds:
-- a running game or a locked file blocks a target;
+- a running game, a running TruckersMP client or a locked file blocks a target;
 - the running-game listing failed;
 - a run hit its 30 s limit.
 
-This extends P13, which named only running games and locks. A poll writes nothing until its own listing succeeds. Steam game folders beyond the per-game target bound are counted, never shown as paths. Excluding the game still removes this application's recorded plugin from that folder.
+This extends P13, which named only running games and locks. A poll writes nothing until its own listing succeeds. Steam game folders beyond the per-game target bound are counted, never shown as paths. Excluding the game still removes this application's recorded plugin from those folders.
 
 The P15 mode gate decides where setup may write:
-- **Active mode** applies only to a packaged launch with none of the isolation variables set: `ETS2TELEMETRY_PROFILE_DIR`, `ETS2TELEMETRY_DIAGNOSTIC_DIR`, `ETS2TELEMETRY_LIVE_SMOKE` and `ETS2TELEMETRY_SOURCE_KIND`. Only active mode touches real Steam libraries and game folders.
-- **Disabled mode** covers every other launch: `npm run dev`, tests and every smoke or diagnostic harness. Any value of `ETS2TELEMETRY_PLUGIN_SETUP` other than exactly `real` disables setup. The value `real` enables setup for an unpackaged launch, but only when none of the isolation variables is set.
+- **Active mode** requires that no isolation variable and no test root is set. The isolation variables are `ETS2TELEMETRY_PROFILE_DIR`, `ETS2TELEMETRY_DIAGNOSTIC_DIR`, `ETS2TELEMETRY_LIVE_SMOKE` and `ETS2TELEMETRY_SOURCE_KIND`; the test root is `ETS2TELEMETRY_PLUGIN_SETUP_ROOT`. Under that condition:
+  - a packaged launch is active when `ETS2TELEMETRY_PLUGIN_SETUP` is unset;
+  - any launch, packaged or unpackaged, is active when `ETS2TELEMETRY_PLUGIN_SETUP` is exactly `real`.
+
+  Only active mode touches real Steam libraries and game folders.
+- **Disabled mode** applies to every other launch, including `npm run dev` without `=real`, tests, and every smoke or diagnostic harness. Any non-empty value of `ETS2TELEMETRY_PLUGIN_SETUP` other than exactly `real` disables setup.
 - **Test-root mode** applies when two conditions hold: `ETS2TELEMETRY_PLUGIN_SETUP_ROOT` names a fake root that holds the test-root marker file, and an isolated profile is set. In this mode, every file operation and the install registry are confined to that root. A root without the marker turns setup off for that run.
 
-The details are in [plugin setup](docs/plugin-setup.md). The repository's checks never run active mode. Real Steam libraries, real ETS2 and ATS installs loading the silently installed plugin, TruckersMP detection, and protected libraries remain pending manual checks. No game, TruckersMP, display or performance claim follows.
+The details are in [plugin setup](docs/plugin-setup.md). The repository's checks never run active mode, and an unpackaged launch with `=real` writes into real game folders, so agents must not use it. Real Steam libraries, real ETS2 and ATS installs loading the silently installed plugin, TruckersMP detection, and protected libraries remain pending manual checks. No game, TruckersMP, display or performance claim follows.
