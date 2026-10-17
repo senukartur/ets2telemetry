@@ -158,7 +158,7 @@ it('marks v1 data stale when the subscription closes or a replacement port await
   stop(); expect(vi.getTimerCount()).toBe(0);
 });
 it('preserves the frozen narrow bridge and rejects privileged source values before IPC', async () => {
-  expect(Object.isFrozen(bridge)).toBe(true); expect(Object.keys(bridge).sort()).toEqual(['beginOverlayEdit', 'choosePluginFolder', 'exitApplication', 'exportJournalTrip', 'finishOverlayEdit', 'getAppState', 'getJournalTrip', 'getStatus',
+  expect(Object.isFrozen(bridge)).toBe(true); expect(Object.keys(bridge).sort()).toEqual(['beginOverlayEdit', 'choosePluginFolder', 'exitApplication', 'exportDiagnostics', 'exportJournalTrip', 'finishOverlayEdit', 'getAppState', 'getJournalTrip', 'getStatus',
     'listJournalEvents', 'listJournalIntervals', 'listJournalSamples', 'listJournalTrips', 'openPluginFolder',
     'resetOverlayEditPlacement', 'retryPluginSetup', 'selectSource', 'setOverlayEditScale', 'setOverlayLayout', 'setOverlaySections', 'setPluginGameExcluded', 'setUnitProfile',
     'showPluginFile', 'subscribeAppState', 'subscribeLive']);
@@ -198,11 +198,11 @@ it('does not reassert service subscription after the callback unsubscribes its o
 });
 it('appends the application state and exit methods after the original three bridge keys', () => {
   // ET-012a appends the two overlay settings methods, ET-012b the four overlay edit methods, ET-016 PR-3 the five journal reads,
-  // ET-016 PR-5 the trip export and ET-017 PR-4 the five plugin setup methods.
+  // ET-016 PR-5 the trip export, ET-017 PR-4 the five plugin setup methods and ET-017 PR-6 the diagnostics export.
   expect(Object.keys(bridge)).toEqual(['getStatus', 'selectSource', 'subscribeLive', 'getAppState', 'subscribeAppState', 'exitApplication', 'setUnitProfile',
     'setOverlayLayout', 'setOverlaySections', 'beginOverlayEdit', 'setOverlayEditScale', 'resetOverlayEditPlacement', 'finishOverlayEdit',
     'listJournalTrips', 'getJournalTrip', 'listJournalEvents', 'listJournalIntervals', 'listJournalSamples', 'exportJournalTrip',
-    'retryPluginSetup', 'choosePluginFolder', 'setPluginGameExcluded', 'showPluginFile', 'openPluginFolder']);
+    'retryPluginSetup', 'choosePluginFolder', 'setPluginGameExcluded', 'showPluginFile', 'openPluginFolder', 'exportDiagnostics']);
 });
 it('allows one application state listener, forwards pushed state and unsubscribes once', () => {
   const listener = vi.fn(); const stop = bridge.subscribeAppState(listener);
@@ -297,5 +297,13 @@ it('validates plugin setup requests before IPC and forwards only a game, an excl
   await bridge.openPluginFolder('ets2:steam:3');
   expect(ipc.invoke.mock.calls).toEqual([['plugin:retry'], ['plugin:choose-folder', 'ats'], ['plugin:set-excluded', 'ets2', false], ['plugin:show-file'],
     ['plugin:open-folder', 'ats:manual:0'], ['plugin:open-folder', 'ets2:steam:3']]);
+  expect(ipc.send).not.toHaveBeenCalled();
+});
+// ET-017 PR-6 (P17): the diagnostics export forwards no argument; main owns the Save dialog and the bundle.
+it('invokes the diagnostics export on its fixed channel without any argument', async () => {
+  ipc.invoke.mockResolvedValue({outcome: 'cancelled'});
+  await expect(Reflect.apply(bridge.exportDiagnostics, bridge, ['D:/exports/diagnostics.json', {upload: true}])).resolves.toEqual({outcome: 'cancelled'});
+  await bridge.exportDiagnostics();
+  expect(ipc.invoke.mock.calls).toEqual([['diagnostics:export'], ['diagnostics:export']]);
   expect(ipc.send).not.toHaveBeenCalled();
 });

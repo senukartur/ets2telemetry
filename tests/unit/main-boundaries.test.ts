@@ -1,6 +1,6 @@
 import {EventEmitter} from 'node:events';
 import {readFileSync} from 'node:fs';
-import {mkdtemp, rm} from 'node:fs/promises';
+import {mkdir, mkdtemp, readdir, readFile, rm, writeFile} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {afterEach, beforeAll, beforeEach, expect, it, vi} from 'vitest';
@@ -2126,4 +2126,68 @@ it('aborts plugin setup on a fatal stop as well', async () => {
   mockPluginSetup(); await ready();
   child.emit('message', {type: 'unexpected'});
   expect(pluginSetup.abort).toHaveBeenCalledOnce();
+});
+// ET-017 PR-6 (P17): the diagnostics export channel. It takes no argument and serves the trusted dashboard main frame
+// only; the Save dialog belongs to the dashboard window; the answer is a fixed outcome, never a path. The saved case
+// writes into a temporary LOCALAPPDATA and output folder only. Expected values are written by hand from P17.
+const diagnosticsCall = (event: unknown, ...request: unknown[]) => new Promise<unknown>(resolve => resolve(handlers.get('diagnostics:export')!(event, ...request as [unknown])));
+it('rejects diagnostics exports from untrusted senders, frames and the overlay, and any argument, before any dialog', async () => {
+  trayAvailable = true; await ready();
+  for (const event of [{sender: {}, senderFrame: contents.mainFrame}, {sender: contents, senderFrame: {}}, overlayTrusted()])
+    await expect(diagnosticsCall(event)).rejects.toThrow('Untrusted diagnostics request');
+  for (const request of [['C:\\Users\\owner\\diagnostics.json'], [undefined], [{upload: true}]])
+    await expect(diagnosticsCall(trusted(), ...request)).rejects.toThrow('Invalid diagnostics request');
+  expect(showSaveDialog).not.toHaveBeenCalled();
+  expect(log.mock.calls.filter(entry => String(entry[0]).startsWith('DIAGNOSTICS_EXPORT_'))).toEqual([]);
+});
+it('offers the default name in Documents in the Save dialog of the dashboard, and writes nothing when it is cancelled', async () => {
+  vi.setSystemTime(Date.UTC(2026, 9, 17, 8, 30, 15)); await ready();
+  await expect(diagnosticsCall(trusted())).resolves.toEqual({outcome: 'cancelled'});
+  expect(showSaveDialog).toHaveBeenCalledExactlyOnceWith(windows[0], {defaultPath: 'C:\\isolated\\ets2telemetry-diagnostics-20261017T083015Z.json',
+    filters: [{name: 'JSON', extensions: ['json']}]});
+  expect(log).toHaveBeenCalledWith('DIAGNOSTICS_EXPORT_CANCELLED');
+});
+it('refuses a target in the data directory of LOCALAPPDATA before building the bundle', async () => {
+  vi.stubEnv('LOCALAPPDATA', 'C:\\isolated-local'); await ready();
+  showSaveDialog.mockResolvedValueOnce({canceled: false, filePath: 'C:\\ISOLATED-LOCAL\\ets2telemetry\\logs\\diagnostics.json'});
+  await expect(diagnosticsCall(trusted())).resolves.toEqual({outcome: 'refused', code: 'EXPORT_TARGET_REFUSED'});
+  expect(log).toHaveBeenCalledWith('DIAGNOSTICS_EXPORT_FAILED', undefined, {outcome: 'refused', code: 'EXPORT_TARGET_REFUSED'});
+});
+it('answers EXPORT_INTERRUPTED once the exit has begun, also for a dialog open at the exit, and joins no file work', async () => {
+  trayAvailable = true; await ready();
+  let answer!: (value: {canceled: boolean; filePath?: string}) => void;
+  showSaveDialog.mockImplementationOnce(() => new Promise(resolve => { answer = resolve; }));
+  const open = diagnosticsCall(trusted());
+  await settle();
+  void handlers.get('app:exit')!(trusted());
+  answer({canceled: false, filePath: 'C:\\Users\\owner\\Documents\\diagnostics.json'});
+  await expect(open).resolves.toEqual({outcome: 'refused', code: 'EXPORT_INTERRUPTED'});
+  await expect(diagnosticsCall(trusted())).resolves.toEqual({outcome: 'refused', code: 'EXPORT_INTERRUPTED'});
+  expect(showSaveDialog).toHaveBeenCalledOnce();
+  child.emit('exit', 0); await settle();
+  expect(app.exit).toHaveBeenCalledExactlyOnceWith(0);
+});
+it('saves the redacted bundle of this application state and its startup logs, and answers saved without a path', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ets2telemetry-diagnostics-main-'));
+  try {
+    const local = path.join(root, 'local'), logs = path.join(local, 'ETS2Telemetry', 'logs'), target = path.join(root, 'out', 'diagnostics.json');
+    await mkdir(path.join(logs, 'service'), {recursive: true}); await mkdir(path.dirname(target));
+    const user = os.userInfo().username;
+    await writeFile(path.join(logs, 'startup.jsonl'), `${JSON.stringify({time: '2026-10-17T08:30:00.000Z', pid: 1, event: 'PLUGIN_DISCOVERY', facts: {owner: user, library: 'D:\\SteamLibrary'}, detail: 'C:\\Users'})}\n`);
+    await writeFile(path.join(logs, 'service', 'startup.jsonl'), `${JSON.stringify({time: '2026-10-17T08:30:01.000Z', pid: 2, event: 'SERVICE_READY'})}\n`);
+    vi.stubEnv('LOCALAPPDATA', local); await ready();
+    showSaveDialog.mockResolvedValueOnce({canceled: false, filePath: target});
+    const answer = await diagnosticsCall(trusted());
+    expect(answer).toEqual({outcome: 'saved'});
+    const bundle = JSON.parse(await readFile(target, 'utf8')) as Record<string, unknown>;
+    expect(bundle).toMatchObject({format: 'ets2telemetry.diagnostics', version: 1, app: {version: expect.any(String) as string, packaged: false,
+      node: process.versions.node}, health: {service: 'ready', storage: 'verified'}, plugins: PLUGINS_DISABLED, bundledPlugin: null,
+    // No live update arrived yet: main's last live state is the initial one, as the dashboard would show it.
+    live: {status: 'waiting', selection: 'game'}, diagnosis: {code: 'NO_GAME_SELECTED', notes: []},
+    logs: {main: [{time: '2026-10-17T08:30:00.000Z', event: 'PLUGIN_DISCOVERY', facts: {owner: '<redacted>', library: '<redacted>'}}],
+      service: [{time: '2026-10-17T08:30:01.000Z', event: 'SERVICE_READY'}]}});
+    expect(await readdir(path.dirname(target))).toEqual(['diagnostics.json']);
+    expect(log).toHaveBeenCalledWith('DIAGNOSTICS_EXPORT_SAVED', undefined, {bytes: expect.any(Number) as number});
+    expect(JSON.stringify(log.mock.calls.filter(entry => String(entry[0]).startsWith('DIAGNOSTICS_EXPORT_')))).not.toContain(root);
+  } finally {await rm(root, {recursive: true, force: true});}
 });

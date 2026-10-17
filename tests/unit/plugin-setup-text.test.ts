@@ -1,6 +1,7 @@
 import {describe, expect, it} from 'vitest';
 import type {PluginBlockReason, PluginGameView, PluginSetupView, PluginTargetState, PluginTargetView} from '../../packages/contracts/src';
-import {MANUAL_COPY_REASONS, pluginFolderChoiceText, pluginSetupText, pluginShowFileText} from '../../apps/desktop/src/plugin-setup-text';
+import {connectionDiagnosisText, diagnosticsExportText, MANUAL_COPY_REASONS, pluginFolderChoiceText, pluginSetupText, pluginShowFileText} from '../../apps/desktop/src/plugin-setup-text';
+import type {ConnectionDiagnosisCode} from '../../apps/desktop/src/connection-diagnosis';
 
 // REG-015 (ET-017 PR-5, P16, P18): the text of the Game plugin card. Every mode, discovery outcome, folder state, target
 // state, block reason and refusal has a hand-written expected text below; none of them may carry a path.
@@ -99,15 +100,56 @@ describe('a game folder', () => {
     BUNDLE_UNAVAILABLE: 'The bundled plugin is missing or damaged; reinstall ETS2Telemetry.'
   };
   const MANUAL_COPY = 'To install it by hand: close the game, copy the plugin file into the game\'s plugins folder (Windows may ask for administrator rights), then press Retry.';
-  it.each(Object.entries(REASONS))('explains the reason %s, with the manual copy only after permission, read-only and unrecognized-file failures', (reason, text) => {
-    const manual = ['PERMISSION_DENIED', 'READ_ONLY_FILE', 'UNRECOGNIZED_FILE'].includes(reason);
+  // PR #111 delta review: an unrecognized file shows only "Move it away, then press Retry", never the copy hint beside it.
+  it.each(Object.entries(REASONS))('explains the reason %s, with the manual copy only after permission and read-only failures', (reason, text) => {
+    const manual = ['PERMISSION_DENIED', 'READ_ONLY_FILE'].includes(reason);
     const line = firstTarget(target({state: 'missing', reason: reason as PluginBlockReason, installed: null}));
     expect(line.detail).toEqual(manual ? [text, MANUAL_COPY] : [text]);
     expect(line.manualCopy).toBe(manual);
+    // "Open game plugins folder" also serves an unrecognized file, which the driver moves away by hand (P18).
+    expect(line.openFolder).toBe(manual || reason === 'UNRECOGNIZED_FILE');
+  });
+  // PR #111 review: in an excluded game the change is a removal, so the card never suggests copying the plugin in.
+  it('offers the manual removal instead of the copy in an excluded game, and nothing for an unrecognized file there', () => {
+    const MANUAL_REMOVE = 'To remove it by hand: close the game, delete the plugin file from the game\'s plugins folder (Windows may ask for administrator rights), then press Retry.';
+    const excludedTarget = (reason: PluginBlockReason) => pluginSetupText(view({}, {ets2: {excluded: true, discovery: 'found', targets: [target({state: 'blocked', reason,
+      installed: {version: '0.2.0', sha256Prefix: '0123456789ab'}})]}})).games.ets2.targets[0];
+    for (const reason of ['PERMISSION_DENIED', 'READ_ONLY_FILE'] as const) {
+      const line = excludedTarget(reason);
+      expect([line.detail, line.manualCopy, line.manualRemove, line.openFolder]).toEqual([[REASONS[reason], 'Installed plugin: 0.2.0 (0123456789ab)', MANUAL_REMOVE], false, true, true]);
+      expect(JSON.stringify(line)).not.toContain('copy the plugin file into');
+    }
+    // PR #111 review: a file the installer could not read (PERMISSION_DENIED with no installed identity) may be someone
+    // else's, so neither an excluded nor a managed game is told to delete or overwrite it.
+    const UNREADABLE = 'The plugin file in this folder could not be read or checked, so it is left as it is.';
+    const unreadable = (excluded: boolean) => pluginSetupText(view({}, {ets2: {excluded, discovery: 'found', targets: [target({state: 'blocked', reason: 'PERMISSION_DENIED',
+      installed: null})]}})).games.ets2.targets[0];
+    for (const excluded of [true, false]) {
+      const line = unreadable(excluded);
+      expect([line.detail, line.manualCopy, line.manualRemove, line.openFolder]).toEqual([[REASONS.PERMISSION_DENIED, UNREADABLE], false, false, false]);
+      expect(JSON.stringify(line)).not.toMatch(/delete the plugin file|copy the plugin file into/);
+    }
+    // A managed game's folder whose own older plugin Windows protects still offers the copy over it.
+    const owned = pluginSetupText(view({}, {ets2: {discovery: 'found', targets: [target({state: 'outdated', reason: 'PERMISSION_DENIED',
+      installed: {version: '0.1.0', sha256Prefix: 'aaaaaaaaaaaa'}})]}})).games.ets2.targets[0];
+    expect([owned.manualCopy, owned.manualRemove, owned.openFolder]).toEqual([true, false, true]);
+    // An unrecognized file is never this application's, so the view carries no installed plugin for it.
+    const unrecognized = pluginSetupText(view({}, {ets2: {excluded: true, discovery: 'found', targets: [target({state: 'blocked', reason: 'UNRECOGNIZED_FILE', installed: null})]}}))
+      .games.ets2.targets[0];
+    expect([unrecognized.manualCopy, unrecognized.manualRemove, unrecognized.openFolder]).toEqual([false, false, false]);
+    // An excluded game installs nothing, so its unrecognized file gets no advice to move it, also as the last problem.
+    const LEFT = 'A file with the plugin\'s name that this application did not install is in this folder; it is left as it is.';
+    expect(unrecognized.detail).toEqual([LEFT]);
+    const earlier = pluginSetupText(view({}, {ets2: {excluded: true, discovery: 'found', targets: [target({state: 'excluded', reason: null, installed: null,
+      lastFailure: 'UNRECOGNIZED_FILE'})]}})).games.ets2.targets[0];
+    expect(earlier.detail).toEqual([`Last problem: ${LEFT}`]);
+    expect(JSON.stringify([unrecognized, earlier])).not.toContain('Move it away');
+    // The same reasons in a managed game still offer the copy, never the removal.
+    expect([firstTarget(target({state: 'missing', reason: 'PERMISSION_DENIED', installed: null})).manualRemove, firstTarget(target({state: 'missing', reason: 'PERMISSION_DENIED', installed: null})).manualCopy]).toEqual([false, true]);
   });
   it('offers the manual copy for exactly the P12 reasons', () => {
     // A locked file is retried automatically (review round 1 of PR-5), so it gets no manual-copy actions.
-    expect([...MANUAL_COPY_REASONS].sort()).toEqual(['PERMISSION_DENIED', 'READ_ONLY_FILE', 'UNRECOGNIZED_FILE']);
+    expect([...MANUAL_COPY_REASONS].sort()).toEqual(['PERMISSION_DENIED', 'READ_ONLY_FILE']);
   });
 
   it('shows the installed version of a folder that is not current, and the last problem when it differs from the reason', () => {
@@ -117,8 +159,9 @@ describe('a game folder', () => {
     expect(firstTarget(target({state: 'blocked', reason: 'GAME_RUNNING', installed: {version: null, sha256Prefix: 'bbbbbbbbbbbb'}})).detail).toEqual([
       'The game is running; the plugin is changed after you close it.', 'Installed plugin: unknown version (bbbbbbbbbbbb)']);
     expect(firstTarget(target({lastFailure: 'TARGET_LOCKED'})).detail).toEqual(['Last problem: Another program is using the plugin file; it is tried again later.']);
-    expect(firstTarget(target({state: 'blocked', reason: 'UNRECOGNIZED_FILE', installed: null, lastFailure: 'UNRECOGNIZED_FILE'})).detail).toEqual([
-      REASONS.UNRECOGNIZED_FILE, MANUAL_COPY]);
+    const unrecognized = firstTarget(target({state: 'blocked', reason: 'UNRECOGNIZED_FILE', installed: null, lastFailure: 'UNRECOGNIZED_FILE'}));
+    // PR #111 delta review (P18): a managed game's unrecognized file offers only "Open game plugins folder", to move it away.
+    expect([unrecognized.detail, unrecognized.manualCopy, unrecognized.manualRemove, unrecognized.openFolder]).toEqual([[REASONS.UNRECOGNIZED_FILE], false, false, true]);
   });
 });
 
@@ -139,6 +182,61 @@ describe('call answers', () => {
     for (const [code, text] of Object.entries(refusals)) expect(pluginFolderChoiceText({outcome: 'refused', code: code as keyof typeof refusals})).toBe(text);
     expect(pluginShowFileText({outcome: 'shown'})).toBe('The plugin file is shown in Explorer.');
     expect(pluginShowFileText({outcome: 'refused', code: 'BUNDLE_UNAVAILABLE'})).toBe('The bundled plugin file is not available; nothing was shown.');
+  });
+});
+
+// ET-017 PR-6 (P17): the card's connection diagnosis line and the answers of "Export diagnostics…".
+describe('the connection diagnosis and the diagnostics export', () => {
+  const DIAGNOSES: Record<ConnectionDiagnosisCode, string> = {
+    SERVICE_UNAVAILABLE: 'The telemetry service is not running; see Application status.',
+    CONNECTED: 'Receiving telemetry from the selected source.',
+    NO_GAME_SELECTED: 'No game is selected as the source. Choose Euro Truck Simulator 2 or American Truck Simulator above.',
+    SETUP_DISABLED: 'Not checked: plugin setup is off in this launch.',
+    GAME_NOT_FOUND: 'The selected game was not found. Choose its game folder below.',
+    PLUGIN_BLOCKED_PERMISSION: 'Windows did not allow the plugin file in a game folder to be read or changed. See the folder line below for what to do.',
+    PLUGIN_UNRECOGNIZED: 'A file that this application did not install is in place of the plugin. Move it away, then press Retry.',
+    // PR #111 review: an outdated folder may wait for the game (polled, changed automatically) or have failed with
+    // VERIFY_FAILED, DISK_FULL or REGISTRY_UNAVAILABLE (not polled), so the text fits both and points to the folder line.
+    PLUGIN_OUTDATED: 'An older plugin is installed. If its folder line below says it waits for the game, TruckersMP or another program, it is updated once that closes; otherwise resolve the problem shown there, then press Retry.',
+    PLUGIN_PENDING_GAME_CLOSE: 'The plugin is changed automatically once the game, TruckersMP or the program using the file is closed. Then start the game again.',
+    PLUGIN_BUNDLE_UNAVAILABLE: 'The bundled plugin is missing or damaged. Reinstall ETS2Telemetry.',
+    PLUGIN_NOT_CHECKED: 'The plugin could not be checked in a game folder; see the folder line below.',
+    PLUGIN_MISSING: 'The plugin is not installed in a game folder. Turn on "Manage the plugin for this game" or press Retry.',
+    TRANSPORT_FAILED: 'The game\'s plugin could not be connected, or it is incompatible, and the connection is not tried again by itself. After the plugin is fixed, choose another source and then the game again above, or exit ETS2Telemetry from the tray and start it again.',
+    NO_RUNNING_SOURCE: 'The plugin is in place. Start the game to connect.'
+  };
+  it.each(Object.entries(DIAGNOSES))('describes %s', (code, line) => {
+    expect(connectionDiagnosisText({code: code as ConnectionDiagnosisCode, notes: []})).toEqual({line, notes: []});
+  });
+  it('adds the note of an older plugin on disk', () => {
+    expect(connectionDiagnosisText({code: 'CONNECTED', notes: ['PLUGIN_OUTDATED_ON_DISK']})).toEqual({line: DIAGNOSES.CONNECTED,
+      notes: ['A game folder still holds an older plugin. If its folder line says it waits for the game, TruckersMP or another program, it is updated once that closes; otherwise resolve the problem shown there, then press Retry.']});
+  });
+  // PR-6 review: another folder's problem beside a folder that holds the current plugin is a note.
+  it('describes every other-folder note', () => {
+    expect(connectionDiagnosisText({code: 'NO_RUNNING_SOURCE', notes: ['OTHER_FOLDER_BLOCKED_PERMISSION', 'OTHER_FOLDER_UNRECOGNIZED', 'OTHER_FOLDER_PENDING_GAME_CLOSE',
+      'OTHER_FOLDER_BUNDLE_UNAVAILABLE', 'OTHER_FOLDER_NOT_CHECKED', 'OTHER_FOLDER_MISSING']})).toEqual({line: DIAGNOSES.NO_RUNNING_SOURCE, notes: [
+      'Another folder of this game could not be changed because Windows denied access; see its line below.',
+      'Another folder of this game holds a file that this application did not install; see its line below.',
+      'Another folder of this game is changed once the game, TruckersMP or the program using the file is closed.',
+      'The bundled plugin is missing or damaged, so another folder of this game was not set up. Reinstall ETS2Telemetry.',
+      'The plugin could not be checked in another folder of this game; see its line below.',
+      'Another folder of this game does not hold the plugin; see its line below.']});
+  });
+  it('maps every export answer to a fixed text', () => {
+    expect(diagnosticsExportText({outcome: 'saved'})).toBe('Diagnostics saved.');
+    expect(diagnosticsExportText({outcome: 'cancelled'})).toBe('Export cancelled. Nothing was written.');
+    expect(diagnosticsExportText({outcome: 'refused', code: 'EXPORT_IN_PROGRESS'})).toBe('Another diagnostics export is still running.');
+    expect(diagnosticsExportText({outcome: 'refused', code: 'EXPORT_INTERRUPTED'})).toBe('The export stopped because ETS2Telemetry is exiting. Nothing was written.');
+    expect(diagnosticsExportText({outcome: 'refused', code: 'EXPORT_TARGET_REFUSED'})).toBe('That location cannot be used. Choose a folder outside the ETS2Telemetry data folder.');
+    expect(diagnosticsExportText({outcome: 'failed', code: 'BUNDLE_FAILED'})).toBe('The diagnostics could not be collected. Nothing was written.');
+    expect(diagnosticsExportText({outcome: 'failed', code: 'DIALOG_FAILED'})).toBe('The Save dialog could not be opened. Nothing was written.');
+    expect(diagnosticsExportText({outcome: 'failed', code: 'EXPORT_WRITE_FAILED'})).toBe('The file could not be written. A file that already had this name is unchanged.');
+  });
+  // PR-4 review nit: a current plugin whose install record could not be saved shows that next to Installed.
+  it('shows Installed with the unsaved record for a current plugin', () => {
+    const line = firstTarget(target({reason: 'REGISTRY_UNAVAILABLE'}));
+    expect([line.status, line.detail, line.manualCopy]).toEqual(['Installed', ['The plugin setup record could not be saved or is from a newer version.'], false]);
   });
 });
 

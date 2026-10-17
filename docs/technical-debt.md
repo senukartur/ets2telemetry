@@ -108,3 +108,36 @@ A trip keeps every trailer configuration it was given, but the journal detail ca
 - A paged trailer read in the storage worker and the journal routing, and an export that writes the trip's complete trailer list, which bumps `formatVersion`.
 
 **Until then:** the export holds at most 10 trailer configurations, with the total. No storage read, IPC or format change is authorized by this entry.
+
+## TD-009: Elevated copy helper for protected game folders
+
+Recorded October 17, 2026 by the coordinator with ET-017 PR-6. Decision P12 (no elevated helper for the MVP) is one the owner agreed to explicitly on October 17, 2026; this entry records the deferred helper (see the ET-017 authorization in [concept.md](../concept.md#et-017-authorization--october-17-2026)).
+
+Plugin setup runs with the user's rights only. When Windows denies access to a game's `bin\win_x64\plugins` folder or the plugin file is read-only, the folder shows `PERMISSION_DENIED` or `READ_ONLY_FILE`, the [Game plugin card](plugin-setup.md#the-game-plugin-card) offers "Show plugin file" and "Open game plugins folder", and the driver copies the verified bundled DLL by hand. A copy with the bundled hash is then adopted on the next run.
+
+**Future work:**
+- A separate, minimal elevated helper (a UAC prompt on demand) that copies only the verified bundled DLL into one validated plugins folder, with the same SHA-256 verification, atomic rename and ownership rules as the in-process installer, and no other authority.
+
+**Until then:** protected folders need the manual copy. No elevation, service or scheduled task is authorized by this entry.
+
+## TD-010: Path-aware running-game detection
+
+Recorded October 17, 2026 by the coordinator with ET-017 PR-6 (from decision P7). **This entry is a coordinator decision under the owner's standing delegation of October 15, 2026, not an individually owner-approved deferral.** The owner may revise it.
+
+Setup decides that a game or TruckersMP runs by image name only (`eurotrucks2.exe`, `amtrucks.exe`, a `truckersmp*` prefix; [running games](plugin-setup.md#running-games)). Any process with such a name blocks every folder of that game, also one started from another game folder, and a renamed executable is not seen; the operating system's file lock still prevents a change to a plugin a running game has loaded.
+
+**Future work:**
+- Match a running process by its image path against each game folder, so that one installation's running game blocks only that folder, without reading other users' processes or needing elevation.
+
+**Until then:** name-based blocking stays conservative. No process inspection beyond the bounded `tasklist` listing is authorized by this entry.
+
+## TD-011: In-app replacement of an unrecognized plugin file
+
+Recorded October 17, 2026 by the coordinator with ET-017 PR-6 (from decision P6). **This entry is a coordinator decision under the owner's standing delegation of October 15, 2026, not an individually owner-approved deferral.** The owner may revise it.
+
+A file with the plugin's name whose hash this application does not recognize (not the bundled, a released or the recorded one) is `UNRECOGNIZED_FILE`. It is never replaced, renamed or removed; the card tells the driver to move it away and press Retry ([ownership](plugin-setup.md#ownership-p6)). A plugin copied by hand from a development build is such a file.
+
+**Future work:**
+- An explicit, confirmed "Replace this file" action that first moves the unrecognized file to a recoverable backup beside it, then installs the bundled plugin with the usual checks.
+
+**Until then:** the driver moves the file by hand. No in-app replacement or deletion of an unrecognized file is authorized by this entry.

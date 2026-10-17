@@ -17,6 +17,8 @@ The button calls the sixth bridge method, `exportJournalTrip(tripUuid)`, on the 
 5. Creates `<name>.<8 hex digits>.partial` beside the target with the `wx` flag, writes the document page by page (each part with `FileHandle.writeFile`, which writes all of it from the current position) through the journal reads (completeness intervals and events 500 per page, samples 3,600 per page), syncs and closes it, and renames it over the target. A rename that Windows refuses with `EPERM`, `EACCES` or `EBUSY` is retried after 20, 40, 60, 80 and 100 ms, as settings saves are.
 6. On any failure, and when the application exits, it closes and removes the partial file; an existing target stays unchanged. A partial file it did not create is never removed.
 
+Since ET-017 PR-6 the target checks of step 4 and the partial-file write of steps 5 and 6 live in `apps/desktop/src/export-file.ts`, shared with the [diagnostic bundle](plugin-setup.md#diagnostic-bundle) export; the trip export's behaviour is unchanged, and `tests/unit/journal-export-writer.test.ts` still passes without a change.
+
 The whole document is never held in memory: main holds the detail and one page at a time.
 
 **Exit.** An exit, and also a fatal stop that is not an exit request, stops the export at its next step: a read that the exit's broker retirement answers, a page write or a rename attempt. The export answers `EXPORT_INTERRUPTED`, and the exit's bounded idle hook (1,000 ms together with a pending settings save) waits for the partial file's removal. An exit while the dialog is open writes nothing and does not wait for the dialog.

@@ -1,10 +1,11 @@
 import {app, BrowserWindow, dialog, ipcMain, Menu, MessageChannelMain, nativeImage, screen, shell, Tray, utilityProcess, type MessagePortMain, type UtilityProcess, type IpcMainEvent, type IpcMainInvokeEvent} from 'electron';
 import squirrelStartup from 'electron-squirrel-startup';
 import {existsSync, mkdirSync} from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import type {EventEmitter} from 'node:events';
 import {version} from '../../../package.json';
-import type {AppHealth, AppState, LiveTelemetry, OverlayEditState, OverlayPresentation, OverlaySettings, PluginFolderChoice, PluginGame, PluginShowFileResult, ScaffoldStatus, SettingsView,
+import type {AppHealth, AppState, DiagnosticsExportResult, LiveTelemetry, OverlayEditState, OverlayPresentation, OverlaySettings, PluginFolderChoice, PluginGame, PluginShowFileResult, ScaffoldStatus, SettingsView,
   SourceSelection, UnitProfiles} from '../../../packages/contracts/src';
 import {SettingsBusyError, SettingsError, SettingsStore, settingsDirectory} from './settings-store';
 import {isUnitGame, isUnitProfile} from './unit-profiles';
@@ -37,7 +38,10 @@ import {isJournalUuid} from '../../../packages/contracts/src/journal';
 import {TRAY_ICON_REPRESENTATIONS, trayIconPng, type TrayTone} from './tray-icon';
 import {pluginSetupMode} from './plugin-setup/mode';
 import {PluginSetup, PluginSetupError, productionPluginSetupPorts} from './plugin-setup/plugin-setup';
-import {isPluginGame, isPluginTargetId, PLUGIN_CHANNELS} from './plugin-setup-contract';
+import {DIAGNOSTICS_EXPORT_CHANNEL, isPluginGame, isPluginTargetId, PLUGIN_CHANNELS} from './plugin-setup-contract';
+import {connectionDiagnosis} from './connection-diagnosis';
+import {buildDiagnosticBundle, readDiagnosticLogs, readFileTail} from './diagnostic-bundle';
+import {DiagnosticBundleExporter} from './diagnostic-bundle-writer';
 
 if (squirrelStartup) app.quit();
 else {
@@ -56,9 +60,19 @@ else {
   else runApplication(profileError);
 }
 
+/** The names the diagnostic bundle replaces: the Windows user name and computer name as this process sees them. */
+function diagnosticIdentities(): (string | undefined)[] {
+  let user: string | undefined;
+  try {user = os.userInfo().username;} catch {user = undefined;}
+  let host: string | undefined;
+  try {host = os.hostname();} catch {host = undefined;}
+  return [user, host, process.env.USERNAME, process.env.COMPUTERNAME, process.env.USERDOMAIN];
+}
+
 function runApplication(profileError: unknown): void {
   const diagnosticDirectory = process.env.ETS2TELEMETRY_DIAGNOSTIC_DIR;
-  // Resolved once; the telemetry service gets this root at fork, so both logs share it, also without LOCALAPPDATA.
+  // Resolved once; the telemetry service gets this root at fork, so both logs share it, also without LOCALAPPDATA. The
+  // diagnostic bundle (ET-017 P17) reads this directory's startup logs and its `service` subdirectory's.
   const logLocation = mainLogLocation(process.env, app.getPath('userData'));
   const log = createDiagnostics(logLocation.directory, logLocation.detailed);
   // Opt-in startup timeline for diagnosing stalls in isolated smokes: fixed codes and numbers only, never in default logs.
@@ -101,6 +115,20 @@ function runApplication(profileError: unknown): void {
     showSaveDialog: defaultPath => window && !window.isDestroyed()
       ? dialog.showSaveDialog(window, {defaultPath, filters: EXPORT_DIALOG_FILTERS.map(filter => ({name: filter.name, extensions: [...filter.extensions]}))})
       : Promise.resolve({canceled: true})});
+  // ET-017 PR-6 (P17): one diagnostic bundle export at a time, through the same Save dialog of the dashboard window and
+  // the same target checks as the trip export. The bundle is built only after an allowed file was chosen; nothing is
+  // uploaded, and the renderer gets a fixed outcome only.
+  const diagnosticsExporter = new DiagnosticBundleExporter({log, localAppData: process.env.LOCALAPPDATA, documents: () => app.getPath('documents'),
+    showSaveDialog: defaultPath => window && !window.isDestroyed()
+      ? dialog.showSaveDialog(window, {defaultPath, filters: EXPORT_DIALOG_FILTERS.map(filter => ({name: filter.name, extensions: [...filter.extensions]}))})
+      : Promise.resolve({canceled: true}),
+    build: async () => {
+      const state = appState();
+      return buildDiagnosticBundle({createdMs: Date.now(), app: {version, electron: process.versions.electron, node: process.versions.node, packaged: app.isPackaged, osRelease: os.release()},
+        health: state.health, settings: state.settings, plugins: state.plugins, live: {status: lastLive.status, selection: lastLive.selection},
+        diagnosis: connectionDiagnosis(state.plugins, lastLive.status, lastLive.selection, state.health), logs: await readDiagnosticLogs(logLocation.directory, readFileTail),
+        identities: diagnosticIdentities()});
+    }});
   // ET-017 (P13-P16): silent plugin setup. The mode gate is decided once from the launch environment (P15); the disabled
   // mode, which every isolated or development launch gets, reads and writes nothing. Changes reach the dashboard through
   // the existing app:state push.
@@ -152,13 +180,13 @@ function runApplication(profileError: unknown): void {
     log,
     // A running trip export stops first, so a journal read that the retirement answers ends it as interrupted (J16).
     // ET-017: plugin setup stops after its current game folder; no new run, poll or trigger starts.
-    begin: () => {exporter.abort(); pluginSetup.abort(); updateHealth({type: 'exit-requested'}, true); retireLive();},
+    begin: () => {exporter.abort(); diagnosticsExporter.abort(); pluginSetup.abort(); updateHealth({type: 'exit-requested'}, true); retireLive();},
     stopService: () => supervisor.stop(),
-    // An in-flight settings save, the removal of an interrupted export's partial file and the plugin setup run in flight
+    // An in-flight settings save, the removal of an interrupted trip or diagnostics export's partial file and the plugin setup run in flight
     // (which ends with the removal of its temporary file) may delay the final exit by at most EXIT_IDLE_BUDGET_MS
     // (1000 ms) together.
     idle: () => {
-      const pending = [settingsStore.idle(), exporter.idle(), pluginSetup.idle()].filter((work): work is Promise<void> => work !== undefined);
+      const pending = [settingsStore.idle(), exporter.idle(), diagnosticsExporter.idle(), pluginSetup.idle()].filter((work): work is Promise<void> => work !== undefined);
       return pending.length > 1 ? Promise.all(pending).then(() => undefined) : pending[0];
     },
     destroyTray: () => {trayPresenter?.dispose(); const previous = tray; tray = undefined; previous?.destroy();},
@@ -182,7 +210,7 @@ function runApplication(profileError: unknown): void {
     // load failure, recovery timeout, ...): mark the application exiting at once so nothing reopens a window, the
     // overlay may close and the tray shows the exiting state. Exit codes and bounds are unchanged.
     // A running trip export ends as interrupted before it opens a file (J16), also on a fatal stop.
-    stopping: () => {exporter.abort(); pluginSetup.abort(); if (lifecycle.abort()) {updateHealth({type: 'exit-requested'}, true); retireLive();}},
+    stopping: () => {exporter.abort(); diagnosticsExporter.abort(); pluginSetup.abort(); if (lifecycle.abort()) {updateHealth({type: 'exit-requested'}, true); retireLive();}},
     // The failed service is being terminated: retire its readiness, status and live channels now rather than when
     // its exit arrives (up to 3000 ms later). The later state callback finds them already retired.
     // A new selection generation also retires a readiness still awaiting its broker or settings, so the failing service
@@ -701,6 +729,13 @@ function runApplication(profileError: unknown): void {
       // shell.openPath answers an error text, which may name the folder; only a fixed code is logged.
       if (await shell.openPath(folder)) log('PLUGIN_FOLDER_NOT_OPENED');
     });
+  });
+  // ET-017 PR-6 (P17): the diagnostic bundle export takes no argument, from the trusted dashboard main frame only (the
+  // overlay is rejected), and answers EXPORT_INTERRUPTED once the exit has begun. It never rejects with an error text.
+  ipcMain.handle(DIAGNOSTICS_EXPORT_CHANNEL, (event, ...request: unknown[]): Promise<DiagnosticsExportResult> => {
+    if (!trusted(event)) throw new Error('Untrusted diagnostics request');
+    if (request.length !== 0) throw new Error('Invalid diagnostics request');
+    return diagnosticsExporter.export();
   });
   ipcMain.handle('telemetry:select', async (event, source: unknown) => {
     if (!trusted(event) || !serviceReady) throw new Error('Untrusted source request');
