@@ -2037,6 +2037,19 @@ it('shows the verified bundled file and opens a listed folder through main-owned
   await expect(pluginCall('plugin:show-file', trusted())).resolves.toEqual({outcome: 'refused', code: 'BUNDLE_UNAVAILABLE'});
   expect(shell.showItemInFolder).toHaveBeenCalledOnce();
 });
+// PR #107 advisory review: a throw while finding or opening the folder reaches the renderer as the fixed message only.
+it('answers a failing folder lookup or Explorer call with the fixed message, never the error text or a path', async () => {
+  mockPluginSetup(); await ready();
+  const secret = 'C:\\Users\\driver\\Steam\\steamapps\\common\\Euro Truck Simulator 2\\bin\\win_x64\\plugins';
+  pluginSetup.folderToOpen.mockRejectedValueOnce(new Error(`EPERM: operation not permitted, lstat '${secret}'`));
+  const lookup = await pluginCall('plugin:open-folder', trusted(), 'ets2:steam:0').then(() => 'resolved', (error: Error) => error.message);
+  expect(lookup).toBe('Plugin setup request failed');
+  expect(shell.openPath).not.toHaveBeenCalled();
+  shell.openPath.mockRejectedValueOnce(new Error(`Explorer failed for ${secret}`));
+  const opened = await pluginCall('plugin:open-folder', trusted(), 'ets2:steam:0').then(() => 'resolved', (error: Error) => error.message);
+  expect(opened).toBe('Plugin setup request failed');
+  expect(JSON.stringify([lookup, opened])).not.toMatch(/[A-Za-z]:\\|steamapps/);
+});
 it('carries the plugin view in the application state and pushes it when plugin setup changes', async () => {
   mockPluginSetup(); await ready();
   expect((handlers.get('app:get-state')!(trusted()) as {plugins: unknown}).plugins).toEqual(PLUGIN_VIEW);

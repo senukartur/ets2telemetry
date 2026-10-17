@@ -690,10 +690,13 @@ function runApplication(profileError: unknown): void {
   // Opens a listed folder's plugins folder, or its bin\win_x64 folder when that is absent; the folder is validated again.
   ipcMain.handle(PLUGIN_CHANNELS.openFolder, async (event, ...request: unknown[]) => {
     pluginRequest(event, request.length === 1 && isPluginTargetId(request[0]));
-    const folder = await pluginSetup.folderToOpen(request[0] as string);
-    if (!folder || lifecycle.exiting) return;
-    // shell.openPath answers an error text, which may name the folder; only a fixed code is logged.
-    if (await shell.openPath(folder)) log('PLUGIN_FOLDER_NOT_OPENED');
+    // Both calls run inside pluginReply, so a throw from either reaches the renderer as the fixed message, never its text.
+    await pluginReply(async () => {
+      const folder = await pluginSetup.folderToOpen(request[0] as string);
+      if (!folder || lifecycle.exiting) return;
+      // shell.openPath answers an error text, which may name the folder; only a fixed code is logged.
+      if (await shell.openPath(folder)) log('PLUGIN_FOLDER_NOT_OPENED');
+    });
   });
   ipcMain.handle('telemetry:select', async (event, source: unknown) => {
     if (!trusted(event) || !serviceReady) throw new Error('Untrusted source request');
