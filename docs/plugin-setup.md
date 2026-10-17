@@ -74,6 +74,10 @@ The format is strict: exactly the keys `format`, `version` and `known`; `known` 
 
 The list starts empty because nothing has been released. MSVC builds are not reproducible, so the same sources can produce a DLL with a different hash; a local rebuild after a touched source file did so on October 17, 2026. The release process therefore appends the hash of the DLL in each shipped bundle, read from that bundle's manifest, with the release's `appVersion`. Never remove an entry. A later version uses the list to recognize a plugin that an earlier version installed (P6, PR-3). Changing the file requires a new build before `inspect:package`, because the manifest copies it.
 
+**Release rule.** After an ETS2Telemetry version is published, a PR appends `{appVersion, sha256}` from the published artifact's `resources/telemetry-plugin/plugin-manifest.json` before the next release build. The shipped artifact is the one built by Windows CI (`npm run make` on `main` or a dispatch), never a local build. Without the entry, a later version recognizes that plugin only through the per-folder install record, and a user whose record was lost or who copied the DLL by hand sees it as unrecognized.
+
+**Bundle identity.** `pluginSources` covers the repository inputs that compile into the DLL: the plugin sources, its CMake project and the vendored SDK headers. The toolchain, the generator and the CMake cache options are deliberately not part of it, because the builds are not reproducible anyway. A developer tree may therefore stage a DLL built with local cache flags. Release bundles must come from a freshly configured tree, which is what CI does.
+
 ### Runtime reading (PR-4, coming)
 
 PR-4 adds `plugin-bundle.ts` in main. It will read the bundle from `process.resourcesPath\telemetry-plugin` when packaged and from `<repo>\.local\package-native\telemetry-plugin` in development. It will read the manifest (at most 64 KiB, strict keys) and the DLL (at most 16 MiB, not a link, x64 PE), hash the DLL in memory and install only that verified buffer, never re-reading the file.
@@ -117,7 +121,14 @@ Coming in PR-3. The registry records which game folders this application manages
 - **Newer version.** Read-only: no mutation, and every operation reports `REGISTRY_UNAVAILABLE`.
 - **Exclusions.** Game exclusions and the manual folder live here, not in `settings.json` (P10).
 
-**Contract with ET-018 (uninstall).** ET-018 reads this file before it deletes the data root. For each install it removes the DLL only while its hash is still the recorded `sha256` or a `known` hash, then removes the `plugins` folder only if `createdPluginsDirectory` is set and the folder is empty. Any other file stays.
+**Contract with ET-018 (uninstall).** ET-018 reads this file before it deletes the data root. For each install, and only while neither that game nor TruckersMP is running:
+
+1. It re-validates the layout: `bin`, `binwin_x64` and `plugins` must still be plain folders, not links. Otherwise it skips the install.
+2. It removes the exact temporary file of each `pending` entry for that folder when that file is a regular file.
+3. It removes the DLL only while its hash is still the recorded `sha256` or a `known` hash. A locked or denied file is skipped and reported, never retried in a loop.
+4. It removes the `plugins` folder only if `createdPluginsDirectory` is set and the folder is now empty.
+
+Any other file stays.
 
 ## Remaining manual and real-environment checks
 

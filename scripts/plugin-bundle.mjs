@@ -22,7 +22,9 @@ const RELEASED_KEYS = ['format', 'known', 'version'];
 const KNOWN_KEYS = ['appVersion', 'sha256'];
 const HASH = /^[0-9a-f]{64}$/;
 const APP_VERSION = /^\d{1,9}\.\d{1,9}\.\d{1,9}(-[0-9A-Za-z.-]{1,40})?$/;
-// Exactly the directories and files that compile into the DLL: plugin sources, its CMake project and the vendored SDK headers.
+// The repository inputs that compile into the DLL: plugin sources, its CMake project and the vendored SDK headers. The
+// toolchain, generator and CMake cache options are deliberately excluded (builds are not reproducible); release bundles
+// come from a freshly configured CI tree (docs/plugin-setup.md#released-plugin-list).
 const SOURCE_FILES = ['native/telemetry-plugin/CMakeLists.txt'];
 const SOURCE_DIRECTORIES = ['native/telemetry-plugin/src', 'native/telemetry-plugin/vendor/scs-sdk-1.15/include'];
 const SOURCE_KEY = /^native\/telemetry-plugin\/[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*$/;

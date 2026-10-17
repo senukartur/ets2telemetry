@@ -920,7 +920,7 @@ This records an owner decision. It authorizes no package by itself, and earlier 
 
 ## ET-017 authorization — October 17, 2026
 
-Under the owner's standing delegation of October 15, 2026, the coordinator started ET-017 to implement the [silent plugin installation](#silent-plugin-installation--october-12-2026) decision of October 12, 2026. The coordinator adopted the architect's decisions P1–P20 as coordinator decisions; the owner agreed explicitly to P12 on October 17, 2026. The card prerequisites ET-009 and ET-011 are not accepted, and their real-game checks stay pending.
+Under the owner's standing delegation of October 15, 2026, the coordinator started ET-017 to implement the [silent plugin installation](#silent-plugin-installation--october-12-2026) decision of October 12, 2026. The coordinator adopted the architect's decisions P1–P20 as coordinator decisions; the owner agreed explicitly to P11 and P12 on October 17, 2026. The card prerequisites ET-009 and ET-011 are not accepted, and their real-game checks stay pending.
 
 | # | Decision |
 | --- | --- |
@@ -934,7 +934,7 @@ Under the owner's standing delegation of October 15, 2026, the coordinator start
 | P8 | Every change is atomic per game folder. The intent is recorded first, then the new file is written to a temp file in the same folder, synced, verified by hash, renamed over the target and verified again. The temp file is always removed, and an unfinished operation is recovered at the next run. Rename is retried briefly on `EBUSY` and never on `EPERM`. The plugins folder is created only when missing, and removed only if this application created it and it is empty |
 | P9 | `%LOCALAPPDATA%\ETS2Telemetry\plugins\setup.json` (format v1, bounded) holds the exclusions, the manual folders, the install records, the pending operations and the last failures. It is written atomically like the settings. An invalid file is quarantined, and a newer version is read-only. ET-018 removes only a plugin whose recorded or released hash still matches |
 | P10 | `settings.json` keeps its format. The exclusions and manual folders live in `setup.json`, which still persists them, as the October 12 decision requires |
-| P11 | Excluding a game stops silent installs and removes this application's plugin from that game once it is safe; while the game runs, removal waits. Re-including the game installs the plugin again |
+| P11 | Excluding a game in the application stops silent installs and removes this application's plugin from that game once it is safe; while the game runs, removal waits. Closing a game never removes the plugin. Re-including the game installs the plugin again. The owner agreed on October 17, 2026 |
 | P12 | There is no elevated helper. A permission error shows recovery text with "Show plugin file" and "Open game plugins folder" for a manual copy. A copied file with the bundled hash is adopted. The helper is technical debt. The owner agreed on October 17, 2026 |
 | P13 | Setup runs 2 s after launch and is never awaited by startup. It is bounded to 30 s and runs one at a time. It polls every 15 s only while a target is blocked by a running game or a lock, and it also runs on Retry, a folder choice or an exclusion change. Exit aborts it within the existing idle budget |
 | P14 | Setup runs in Electron main with asynchronous file and process calls. The telemetry utilityProcess gains no authority over game folders |

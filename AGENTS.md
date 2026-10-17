@@ -194,6 +194,7 @@ gh api graphql -f query='mutation($id:ID!){resolveReviewThread(input:{threadId:$
 
 - Add build, type, and test checks when the corresponding tooling is scaffolded. Until then, perform appropriate local document checks and state that CI is not configured.
 - Test changed telemetry logic through simulation/replay. Validate integration and overlay behavior in actual games when required by the milestone; record versions and display modes. Passing automated checks alone does not establish TruckersMP support.
+- After a release is published, append the shipped plugin DLL hash to `native/telemetry-plugin/released-plugins.json` in a PR before the next release build, as [game plugin setup](docs/plugin-setup.md#released-plugin-list) describes; the shipped artifact is the CI-built one.
 - Mark tested releases with version tags such as `v0.1.0-alpha.1` or `v1.0.0`, and include release artifacts and game validation results when available. A merge alone does not publish a release. Create or publish releases only when authorized by the owner.
 
 ## Workflow and Verification
@@ -542,7 +543,7 @@ No product behaviour, protocol, schema, IPC or security boundary changes. The sc
 
 ## ET-017 authorization — October 17, 2026
 
-Under the owner's standing delegation of October 15, 2026 (quoted in the ET-015a authorization above), the coordinator started ET-017: game discovery, silent plugin setup and diagnostics. It follows the owner's [silent plugin installation](concept.md#silent-plugin-installation--october-12-2026) decision of October 12, 2026. The coordinator adopted the architect's decisions P1–P20 ([concept.md](concept.md#et-017-authorization--october-17-2026)) as coordinator decisions. For P12 (no elevated helper), the owner agreed explicitly on October 17, 2026; the owner did not review the other decisions individually.
+Under the owner's standing delegation of October 15, 2026 (quoted in the ET-015a authorization above), the coordinator started ET-017: game discovery, silent plugin setup and diagnostics. It follows the owner's [silent plugin installation](concept.md#silent-plugin-installation--october-12-2026) decision of October 12, 2026. The coordinator adopted the architect's decisions P1–P20 ([concept.md](concept.md#et-017-authorization--october-17-2026)) as coordinator decisions. On October 17, 2026 the owner agreed explicitly to P11 (excluding a game in the application removes its plugin; closing a game never does) and P12 (no elevated helper); the owner did not review the other decisions individually.
 
 For ET-017 only, this supersedes the earlier statements that ET-017 is not authorized; earlier dated text is unchanged. ET-017's card prerequisites, ET-009 and ET-011, are not accepted, and their real-game checks stay pending.
 
