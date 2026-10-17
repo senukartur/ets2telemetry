@@ -13,6 +13,20 @@ import {startPipe,consumePipe} from '../../tools/telemetry-simulator/src/pipe';
 import {readFixtureFile,MAX_FIXTURE_BYTES} from '../../tools/telemetry-simulator/src/fixture-file';
 import {checkCadence} from '../../tools/telemetry-simulator/src/cadence';
 
+// pipe.ts paces writes with node:timers/promises, whose ES import fake timers do not reach. Its setTimeout is routed
+// through the global timer at call time, so the controlled-clock case can fake it; every other case still gets the real
+// timer, and an abort still rejects with an AbortError, as the original does.
+vi.mock('node:timers/promises',async importOriginal=>{
+  const original=await importOriginal<typeof import('node:timers/promises')>();
+  return {...original,setTimeout:<T>(ms?:number,value?:T,options?:{signal?:AbortSignal})=>new Promise<T>((resolve,reject)=>{
+    const signal=options?.signal,aborted=()=>new DOMException('The operation was aborted','AbortError');
+    if(signal?.aborted){reject(aborted());return;}
+    const abort=()=>{globalThis.clearTimeout(handle);reject(aborted());};
+    const handle=globalThis.setTimeout(()=>{signal?.removeEventListener('abort',abort);resolve(value as T);},ms);
+    signal?.addEventListener('abort',abort,{once:true});
+  })};
+});
+
 const fixture=JSON.parse(readFileSync('tests/fixtures/simulator-v0/reconnect.json','utf8')) as Scenario;
 const lateDiagnostic:Scenario={id:'synthetic-late-diagnostic',origin:'synthetic',game:'ets2',seed:'late-diagnostic',diagnostics:true,steps:[{action:'connect',atMs:0},{action:'reading',reading:{atMs:0,speedMps:25,fuelL:73,simulation:'running',revision:'1',truck:null,gameMinute:'0'}},{action:'diagnostic',atMs:700,observations:[{channel:'synthetic.review',sdkType:'string',value:{available:true,value:'copied'},unit:'raw'}]},{action:'disconnect',atMs:701}]};
 const expected=JSON.parse(readFileSync('tests/fixtures/simulator-v0/reconnect.expected.json','utf8')) as {messages:unknown[];freshness:Array<{receivedAtMs:number;observeAtMs:number;stale:boolean}>};
@@ -169,6 +183,13 @@ async function buildCli(directory:string):Promise<string> {
 // alone, several seconds when every core is busy), so it runs once here under its own budget instead of inside each case's
 // timeout. Each case still spawns the bundled CLI against its own isolated fixture directory.
 const CLI_BUILD_BUDGET_MS=60_000;
+/** Hang guard of the real-pipe cadence run (one second of readings), below the 5 s case timeout; never a speed claim. */
+const CADENCE_HANG_GUARD_MS=4000;
+/** Hang guard of each real-time wait for pipe I/O while the controlled clock stands still; never a speed claim. */
+const IO_HANG_GUARD_MS=2000;
+/** Forty readings 25 ms apart, then a disconnect at 1000 ms. */
+const cadenceReading:Reading={atMs:25,speedMps:1,fuelL:1,simulation:'running',revision:'1',truck:null,gameMinute:'0'};
+const cadenceSteps:Scenario['steps']=[{action:'connect',atMs:0},...Array.from({length:40},(_,i)=>({action:'reading' as const,reading:{...cadenceReading,atMs:25*(i+1)}})),{action:'disconnect',atMs:1000}];
 let cliDirectory:string|undefined,builtCli='';
 beforeAll(async()=>{cliDirectory=mkdtempSync(join(tmpdir(),'ETS2Telemetry-SYNTHETIC-TEST-cli-'));builtCli=await buildCli(cliDirectory);},CLI_BUILD_BUDGET_MS);
 afterAll(()=>{if(cliDirectory)rmSync(cliDirectory,{recursive:true,force:true});});
@@ -225,13 +246,40 @@ describe('isolated actual Windows pipe boundary',()=>{
     }finally{await run.stop();}
   });
   it('schedules real-time writes from the session start so latency does not accumulate',async()=>{
-    const reading:Reading={atMs:25,speedMps:1,fuelL:1,simulation:'running',revision:'1',truck:null,gameMinute:'0'};
-    const steps:Scenario['steps']=[{action:'connect',atMs:0},...Array.from({length:40},(_,i)=>({action:'reading' as const,reading:{...reading,atMs:25*(i+1)}})),{action:'disconnect',atMs:1000}];
-    const emissions=replay({...fixture,steps}),run=await startPipe(emissions,{realtime:true});
+    // The scheduler rule is checked under a controlled clock below; on the real pipe only the lower bound is a rule.
+    const emissions=replay({...fixture,steps:cadenceSteps}),run=await startPipe(emissions,{realtime:true});
     try {
       const result=await consumePipe(run.endpoint,1);await run.closed;const spanMs=result.arrivalsMs.at(-1)!-result.arrivalsMs[0];
-      expect(spanMs).toBeGreaterThanOrEqual(950);expect(spanMs).toBeLessThan(1150);
+      expect(spanMs).toBeGreaterThanOrEqual(950);expect(spanMs).toBeLessThan(CADENCE_HANG_GUARD_MS);
     }finally{await run.stop();}
+  });
+  it('schedules each write from the session start under a controlled clock, so late timers do not accumulate',async()=>{
+    // Fake setTimeout (also behind node:timers/promises) and performance.now; the pipe I/O is real. The clock advances
+    // synchronously in 30 ms steps against a 25 ms reading period: a due timer fires, but the write it releases runs only
+    // at the end of the step, up to 5 ms late. Scheduling from the session start catches up within the step; scheduling
+    // each write from the previous one would fall one reading behind every 150 ms.
+    vi.useFakeTimers({toFake:['setTimeout','clearTimeout','performance']});
+    const emissions=replay({...fixture,steps:cadenceSteps});let run:Awaited<ReturnType<typeof startPipe>>|undefined;
+    const socket={current:undefined as net.Socket|undefined};
+    try {
+      run=await startPipe(emissions,{realtime:true});
+      const arrivals:number[]=[],decoder=new FrameDecoder();let ended=false;
+      const client=socket.current=net.connect(run.endpoint);
+      client.on('data',chunk=>decoder.push(chunk,()=>arrivals.push(performance.now())));client.on('end',()=>{ended=true;});
+      client.on('connect',()=>client.write(encodeFrame({version:PROTOCOL_V0,kind:'hello',data:{clientInstanceId:'00000000-0000-4000-8000-0000000000c5',minMinor:0,maxMinor:0,diagnostics:false}})));
+      // Waits in real time (setImmediate is not faked) for the pipe I/O of the current fake instant to finish.
+      const settle=async(done:()=>boolean,what:string)=>{const started=Date.now();while(!done()){if(Date.now()-started>IO_HANG_GUARD_MS)throw new Error(`${what}: ${arrivals.length} arrivals`);await new Promise(resolve=>setImmediate(resolve));}};
+      await settle(()=>arrivals.length===2,'welcome and checkpoint');
+      const start=performance.now(),due=(elapsed:number)=>emissions.filter(e=>e.atMs<=elapsed).length;
+      for(let elapsed=30;elapsed<=1020;elapsed+=30){
+        vi.advanceTimersByTime(30);
+        await settle(()=>arrivals.length>=due(elapsed),`every write due by ${elapsed} ms`);
+        expect(arrivals.length).toBe(due(elapsed));
+      }
+      await settle(()=>ended,'the end of the session');
+      // No write before its schedule: each arrival is at or after its emission's offset from the session start.
+      expect(arrivals.map((at,i)=>at-start>=emissions[i].atMs)).toEqual(emissions.map(()=>true));
+    }finally{socket.current?.destroy();vi.useRealTimers();await run?.stop().catch(()=>{});}
   });
   it('CLI smoke accepts a correctly delivered fixture whose gaps are below the measurable threshold',()=>{
     const directory=mkdtempSync(join(tmpdir(),'ETS2Telemetry-SYNTHETIC-TEST-fixture-'));
