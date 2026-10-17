@@ -254,9 +254,22 @@ The notification-area icon itself cannot be clicked by the harness, so the journ
 
 Measured local durations on the owner workstation (24 logical processors, so the 25% cap is 6 processors), October 15, 2026: development lifecycle Job 2.35–2.37 s, packaged 2.25–2.31 s; second-instance exit 137–165 ms; explicit exit 96–184 ms; run B close 120–145 ms. Hosted runners have two logical processors and a 0.5-processor cap; hosted durations belong in the PR's CI record. The pre-authorized split into a separate restart scenario was not needed locally.
 
-## ET-017 plugin journey in the lifecycle smoke
+## ET-017 plugin smoke scenario
 
-Since ET-017 PR-5 (October 17, 2026) both `lifecycle` smokes also run the [plugin journey](plugin-setup.md#plugin-journey-of-the-lifecycle-smoke) in the application's test-root mode against a fake Steam and game root that `scripts/ci/plugin-fixture.mjs` builds inside the run's output folder. Pull requests run only the packaged lifecycle smoke, which therefore carries the journey; the step, its Job limits, deadlines and zero retries are unchanged. The fixture first fails if `tasklist` lists ETS2, ATS or a TruckersMP process. The additive plugin branch of `RuntimeReceipt.ps1` requires the journey's flags, one `PLUGIN_SETUP_MODE` row with `test-root` in each run and no `PLUGIN_TEST_ROOT_ESCAPE` row. Locally the development lifecycle Job took about 15 s with the journey.
+Since ET-017 PR-5 (October 17, 2026) the `plugin` runtime smoke scenario runs the [plugin journey](plugin-setup.md#the-plugin-smoke-scenario) in the application's test-root mode, against a fake Steam and game root that `scripts/ci/plugin-fixture.mjs` builds inside the run's output folder:
+
+```powershell
+./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario plugin
+./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged -Scenario plugin
+```
+
+- **Placement.** The packaged step runs on pull requests, right after the packaged lifecycle smoke. The development step runs on pushes to `main` and dispatches, like the other development smokes.
+- **Why a scenario of its own.** A first version ran the journey inside the `lifecycle` smoke. Review round 1 of PR-5 moved it out: its worst-case waits for two setup runs and an exclusion would have exceeded the gating lifecycle step's 60 s Job on a hosted runner, where the 25% CPU cap is about one core. The lifecycle smoke is back in its PR-4 shape.
+- **Job.** The `plugin` scenario runs in its own Job with a 120 s deadline; the other limits (16 processes, 2 GiB, 25% CPU, kill-on-close, zero retries) are unchanged, and every other scenario keeps 60 s. `scripts/watchdog/BoundedProcess.cs` accepts deadlines up to 120 s for this, instead of 60 s.
+- **Phases.** The driver records `plugin-run-a-settled`, `plugin-excluded` and `plugin-run-b-settled` beside the usual phases. Locally the packaged Job took about 16 s.
+- **Safety.** The fixture first fails if `tasklist` lists ETS2, ATS or a TruckersMP process.
+- **Receipt.** The `plugin` branch of `RuntimeReceipt.ps1` requires the journey's flags, an orderly exit of both runs, one `PLUGIN_SETUP_MODE` row with `test-root` in each run and no `PLUGIN_TEST_ROOT_ESCAPE` row.
+- **Disabled card.** The `scaffold` smoke asserts the card's disabled-mode note and that the manage switches, folder buttons and Retry are disabled; its receipt branch requires that evidence.
 
 ## ET-011b settings in the lifecycle smoke
 
