@@ -28,18 +28,48 @@ export function runtimeStrings(bundle) {
   return strings.filter(value => typeof value === 'string');
 }
 
+const FORMAT = 'ets2telemetry.diagnostics';
+/** Upper-case codes with at least one underscore, such as `UNRECOGNIZED_FILE`; a single upper-case word could be a name. */
+const CODE = /^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$/;
+/** An application, Electron, Node or plugin version, with at most an alpha, beta or rc pre-release. */
+const VERSION = /^\d{1,9}\.\d{1,9}\.\d{1,9}(?:-(?:alpha|beta|rc)(?:\.\d{1,9})?)?$/;
+const HASH_PREFIX = /^[0-9a-f]{12}$/;
+const TARGET_ID = /^(ets2|ats):(steam|manual):[0-3]$/;
+const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/;
 /**
- * The schema tokens of a parsed bundle: every key and every fixed string value outside the runtime strings, such as the
- * format, enum and event codes, versions, hash prefixes and the ISO time. Derived from the bundle itself, so a new field
- * joins the set without a hand-kept list. A fixed value has no whitespace; a value with whitespace is free text and never a
- * token, so a name inside it is still found by the whole-text scan.
+ * The lower-case enum words of the contract types the bundle's views carry (packages/contracts/src). The unit test ties
+ * this set to those types at compile time, so a new enum member fails the test until it is listed here.
+ */
+export const ENUM_WORDS = Object.freeze(new Set([
+  // ServiceHealth, StorageHealth, RecordingHealth state and target, RecordingTrip phase and completeness
+  'starting', 'ready', 'restarting', 'failed', 'stopping', 'pending', 'verified', 'disabled', 'unknown', 'opening', 'waiting', 'recording', 'paused',
+  'interrupted', 'retrying', 'not-recorded-source', 'live-only', 'stopped', 'history', 'synthetic', 'replay', 'idle', 'active', 'awaiting-outcome',
+  'reload-check', 'partial', 'complete',
+  // UnitProfile, OverlayLayout, SettingsState
+  'metric', 'us-customary', 'strip', 'card', 'cluster', 'hud', 'loading', 'defaults', 'loaded', 'loaded-with-fallbacks', 'invalid-file',
+  'unsupported-older', 'newer-version', 'unreadable', 'unavailable',
+  // PluginSetupMode, PluginGame, PluginDiscoveryOutcome, PluginManualFolderState, PluginTargetState, folder source
+  'test-root', 'ets2', 'ats', 'found', 'not-found', 'steam-not-found', 'steam-list-invalid', 'none', 'set', 'invalid', 'installed', 'outdated',
+  'missing', 'excluded', 'blocked', 'working', 'steam', 'manual',
+  // SourceSelection and the live status
+  'game', 'connected', 'stale', 'incompatible', 'disconnected', 'service-failed'
+]));
+/** Whether a string value at `path` has one of the bundle's fixed forms, so it may stand for the schema. */
+const fixedValue = (value, path) => value === FORMAT || CODE.test(value) || ENUM_WORDS.has(value) || VERSION.test(value) || HASH_PREFIX.test(value)
+  || TARGET_ID.test(value) || ISO_TIME.test(value) || (path.length === 4 && path[0] === 'logs' && path[3] === 'event');
+
+/**
+ * The schema tokens of a parsed bundle: every key, and every string value outside the runtime strings that has one of the
+ * bundle's fixed forms: the format, upper-case codes, log event codes, the contract's lower-case enum words, versions, hash
+ * prefixes, target ids and ISO times. Any other value, such as a whitespace-free identifier in a future field, is never
+ * a token, so it cannot vouch for itself in the whole-text scan (PR #111 delta review).
  */
 export function schemaTokens(bundle) {
   const tokens = new Set();
   const walk = (value, path) => {
     // A log row's facts object (its keys and values) and the OS release are runtime strings, not schema.
     if ((path.length === 4 && path[0] === 'logs' && path[3] === 'facts') || (path.length === 2 && path[0] === 'app' && path[1] === 'osRelease')) return;
-    if (typeof value === 'string') { if (!/\s/.test(value)) tokens.add(value); }
+    if (typeof value === 'string') { if (fixedValue(value, path)) tokens.add(value); }
     else if (Array.isArray(value)) value.forEach((entry, index) => walk(entry, [...path, index]));
     else if (value && typeof value === 'object') {
       for (const [key, entry] of Object.entries(value)) { tokens.add(key); walk(entry, [...path, key]); }

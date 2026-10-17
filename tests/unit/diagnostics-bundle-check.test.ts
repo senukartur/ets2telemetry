@@ -1,7 +1,8 @@
 import {describe, expect, it} from 'vitest';
-import type {AppHealth, PluginSetupView, SettingsView} from '../../packages/contracts/src';
+import type {AppHealth, LiveTelemetry, OverlayLayout, PluginDiscoveryOutcome, PluginGame, PluginManualFolderState, PluginSetupMode, PluginSetupView, PluginTargetState,
+  PluginTargetView, RecordingHealth, RecordingTarget, RecordingTrip, ServiceHealth, SettingsState, SettingsView, SourceSelection, StorageHealth, UnitProfile} from '../../packages/contracts/src';
 import {buildDiagnosticBundle, type DiagnosticBundleInput} from '../../apps/desktop/src/diagnostic-bundle';
-import {checkDiagnosticsBundle, runtimeStrings, schemaTokens} from '../../scripts/ci/diagnostics-bundle-check.mjs';
+import {checkDiagnosticsBundle, ENUM_WORDS, runtimeStrings, schemaTokens} from '../../scripts/ci/diagnostics-bundle-check.mjs';
 
 // REG-015, REG-017 (ET-017 PR-6, PR #111 review): the plugin smoke's bundle checks. They run on bundles that the real
 // builder made for simulated user and computer names, including names that equal schema words or redact a fact the
@@ -50,6 +51,41 @@ describe('names outside the runtime strings', () => {
     // `mode` is still a token: the plugin view has a `mode` key. Free text with whitespace is never a token.
     expect(tokens).toContain('mode');
     for (const runtime of ['owner', 'note', 'free text', '<redacted>', 'outcome', '10.0.26200']) expect(tokens).not.toContain(runtime);
+  });
+  // PR #111 delta review: only values of the bundle's fixed forms are tokens, so a whitespace-free leak cannot vouch for
+  // itself.
+  it.each([['a computer-style identifier', 'trucker-pc7'], ['the bare name', 'jane.doe'], ['a name-pc identifier', 'jane.doe-pc']])('refuses %s in a new whitespace-free field', (_label, value) => {
+    const hidden = JSON.parse(bundle(['Jane.Doe', 'TRUCKER-PC7'])) as Record<string, unknown>;
+    hidden.owner = value;
+    expect(schemaTokens(hidden)).not.toContain(value);
+    expect(() => check(JSON.stringify(hidden), ['Jane.Doe', 'TRUCKER-PC7'])).toThrow(/outside its runtime strings/);
+  });
+  it('lists every lower-case enum word of the contract types the views carry', () => {
+    // Each record must name every member of its union, so a new member fails the typecheck until it is added here and to
+    // ENUM_WORDS.
+    const unions: Record<string, true>[] = [
+      {starting: true, ready: true, restarting: true, failed: true, stopping: true} satisfies Record<ServiceHealth, true>,
+      {pending: true, verified: true, failed: true} satisfies Record<StorageHealth, true>,
+      {disabled: true, unknown: true, opening: true, waiting: true, recording: true, paused: true, interrupted: true, retrying: true, 'not-recorded-source': true,
+        'live-only': true, stopped: true} satisfies Record<RecordingHealth['state'], true>,
+      {history: true, synthetic: true, replay: true} satisfies Record<RecordingTarget, true>,
+      {idle: true, active: true, 'awaiting-outcome': true, 'reload-check': true} satisfies Record<RecordingTrip['phase'], true>,
+      {unknown: true, partial: true, complete: true} satisfies Record<NonNullable<RecordingTrip['completeness']>, true>,
+      {metric: true, 'us-customary': true} satisfies Record<UnitProfile, true>,
+      {strip: true, card: true, cluster: true, hud: true} satisfies Record<OverlayLayout, true>,
+      {loading: true, defaults: true, loaded: true, 'loaded-with-fallbacks': true, 'invalid-file': true, 'unsupported-older': true, 'newer-version': true,
+        unreadable: true, unavailable: true} satisfies Record<SettingsState, true>,
+      {active: true, 'test-root': true, disabled: true} satisfies Record<PluginSetupMode, true>,
+      {ets2: true, ats: true} satisfies Record<PluginGame, true>,
+      {pending: true, found: true, 'not-found': true, 'steam-not-found': true, 'steam-list-invalid': true} satisfies Record<PluginDiscoveryOutcome, true>,
+      {none: true, set: true, invalid: true} satisfies Record<PluginManualFolderState, true>,
+      {installed: true, outdated: true, missing: true, excluded: true, blocked: true, working: true} satisfies Record<PluginTargetState, true>,
+      {steam: true, manual: true} satisfies Record<PluginTargetView['source'], true>,
+      {game: true, ets2: true, ats: true, synthetic: true, replay: true} satisfies Record<SourceSelection, true>,
+      {waiting: true, connected: true, paused: true, stale: true, incompatible: true, disconnected: true, unavailable: true, 'service-failed': true,
+        restarting: true} satisfies Record<LiveTelemetry['status'], true>
+    ];
+    for (const union of unions) for (const word of Object.keys(union)) expect(ENUM_WORDS.has(word), word).toBe(true);
   });
   it('refuses a name hidden in a free-text field outside the runtime strings', () => {
     const hidden = JSON.parse(bundle(['Jane.Doe', 'TRUCKER-PC7'])) as Record<string, unknown>;
