@@ -28,7 +28,8 @@ jobs:
     # A skipped draft run is not a passed check; use workflow_dispatch on the branch to check a draft head.
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: windows-2022
-    # The AddressSanitizer builds run in the parallel windows-asan job below, so each job keeps headroom (docs/ci.md#job-layout).
+    # The AddressSanitizer builds and the lint and test suites run in the parallel windows-asan and windows-tests jobs
+    # below, so each job keeps headroom (docs/ci.md#job-layout).
     timeout-minutes: 20
     defaults:
       run:
@@ -63,28 +64,8 @@ jobs:
           key: download-${{ runner.os }}-x64-node24.19.0-abi137-electron44.7.0-abi149-${{ hashFiles('package-lock.json', 'tools/lint/package-lock.json') }}
       - name: Clean lockfile installation
         run: npm ci
-      # Lint runs before the build for fast feedback; its toolchain has a separate lockfile (docs/setup.md).
-      - name: Lint TypeScript and JavaScript
-        run: |
-          npm run lint:install
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          npm run lint
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      # Runs under Windows PowerShell 5.1, like local checks; downloads the hash-pinned module.
-      - name: Analyze PowerShell scripts
-        run: npm run lint:ps
-      - name: Full Node-safe suite and typecheck
-        run: |
-          npm run typecheck
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          npm test -- --reporter=default --reporter=junit --outputFile=.local/ci/vitest.xml
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      # Loads native better-sqlite3 only under the pinned Electron executable in Node mode, never plain Node (docs/storage.md).
-      - name: Storage suite under the pinned Electron runtime
-        timeout-minutes: 5
-        run: |
-          npm run test:storage -- --reporter=default --reporter=junit --outputFile=.local/ci/vitest-storage.xml
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      # Lint, PowerShell analysis, typecheck, the Node-safe suite and the storage suite run in the parallel windows-tests
+      # job below (docs/ci.md#job-layout).
       - name: Build desktop and native x64
         run: |
           npm run build
@@ -233,6 +214,75 @@ jobs:
             .local/ci
             native/telemetry-plugin/build-asan/Testing/Temporary
             native/telemetry-client/build-asan/Testing/Temporary
+          retention-days: 14
+          if-no-files-found: error
+          include-hidden-files: true
+  windows-tests:
+    name: Windows x64 tests
+    # Runs in parallel with the scaffold and AddressSanitizer jobs on its own runner; same draft skip, triggers and
+    # concurrency group. It needs no native build: the Node-safe suite runs before any build, and the storage suite bundles
+    # its own worker (docs/ci.md#job-layout).
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: windows-2022
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      npm_config_cache: ${{ github.workspace }}\.local\cache\npm
+      electron_config_cache: ${{ github.workspace }}\.local\cache\electron
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+      ETS2TELEMETRY_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: '24.19.0'
+          architecture: x64
+          package-manager-cache: false
+      - name: Verify pinned npm and record host versions
+        run: |
+          if ((npm --version) -ne '11.17.0') { throw 'Expected npm 11.17.0 bundled with pinned Node.' }
+          node scripts/ci/versions.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            .local/cache/npm
+            .local/cache/electron
+          key: download-${{ runner.os }}-x64-node24.19.0-abi137-electron44.7.0-abi149-${{ hashFiles('package-lock.json', 'tools/lint/package-lock.json') }}
+      - name: Clean lockfile installation
+        run: npm ci
+      # Its toolchain has a separate lockfile (docs/setup.md).
+      - name: Lint TypeScript and JavaScript
+        run: |
+          npm run lint:install
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run lint
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      # Runs under Windows PowerShell 5.1, like local checks; downloads the hash-pinned module.
+      - name: Analyze PowerShell scripts
+        run: npm run lint:ps
+      - name: Full Node-safe suite and typecheck
+        run: |
+          npm run typecheck
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm test -- --reporter=default --reporter=junit --outputFile=.local/ci/vitest.xml
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      # Loads native better-sqlite3 only under the pinned Electron executable in Node mode, never plain Node (docs/storage.md).
+      - name: Storage suite under the pinned Electron runtime
+        timeout-minutes: 5
+        run: |
+          npm run test:storage -- --reporter=default --reporter=junit --outputFile=.local/ci/vitest-storage.xml
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Record final versions and duration
+        if: always()
+        run: node scripts/ci/versions.mjs
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: windows-tests-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .local/ci
           retention-days: 14
           if-no-files-found: error
           include-hidden-files: true
