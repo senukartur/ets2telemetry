@@ -25,8 +25,13 @@ export interface PluginTargetText {
   status: string;
   /** Lines under it: why a change did not happen, the installed version, the last problem and the manual-copy hint. */
   detail: string[];
-  /** Whether the card offers "Show plugin file" and "Open game plugins folder" for this folder. */
+  /** Whether the card offers "Show plugin file" and "Open game plugins folder" for this folder, to install by hand. */
   manualCopy: boolean;
+  /**
+   * Whether the card offers "Open game plugins folder" to remove this application's plugin by hand: the game is excluded
+   * and Windows refused the removal (PERMISSION_DENIED, READ_ONLY_FILE). Never together with `manualCopy` (PR #111 review).
+   */
+  manualRemove: boolean;
 }
 export interface PluginGameText {
   title: string;
@@ -51,33 +56,44 @@ const fill = (template: string, values: Readonly<Record<string, string>>) => tem
 const fileText = (template: string, file: {version: string | null; sha256Prefix: string}) =>
   fill(template, {version: file.version ?? PLUGIN_STRINGS.unknownVersion, hash: file.sha256Prefix});
 
-function targetText(target: PluginTargetView): PluginTargetText {
+/** Block reasons after which an excluded game's folder needs this application's plugin removed by hand. */
+const MANUAL_REMOVE_REASONS: readonly PluginBlockReason[] = ['PERMISSION_DENIED', 'READ_ONLY_FILE'];
+
+/**
+ * The text of one folder. In an excluded game the folder's change is a removal, so the card never suggests copying the
+ * plugin in there: a refused removal gets the manual-removal hint, and an unrecognized file, which this application
+ * would not remove, gets no manual action.
+ */
+function targetText(target: PluginTargetView, excluded: boolean): PluginTargetText {
   const detail: string[] = [];
   if (target.reason) detail.push(PLUGIN_REASON_TEXT[target.reason]);
   if (target.installed && target.state !== 'installed') detail.push(fileText(PLUGIN_STRINGS.installedVersion, target.installed));
   if (target.lastFailure && target.lastFailure !== target.reason) detail.push(fill(PLUGIN_STRINGS.lastFailure, {reason: PLUGIN_REASON_TEXT[target.lastFailure]}));
-  const manualCopy = target.reason !== null && MANUAL_COPY_REASONS.includes(target.reason);
+  const manualCopy = !excluded && target.reason !== null && MANUAL_COPY_REASONS.includes(target.reason);
+  const manualRemove = excluded && target.reason !== null && MANUAL_REMOVE_REASONS.includes(target.reason);
   if (manualCopy) detail.push(PLUGIN_STRINGS.manualCopy);
+  if (manualRemove) detail.push(PLUGIN_STRINGS.manualRemove);
   return {
     id: target.id,
     label: target.source === 'manual' ? PLUGIN_STRINGS.manualFolder : fill(PLUGIN_STRINGS.steamFolder, {number: String(target.ordinal + 1)}),
     state: target.state,
     status: PLUGIN_STATE_TEXT[target.state],
     detail,
-    manualCopy
+    manualCopy,
+    manualRemove
   };
 }
 
 function gameText(game: PluginGame, view: PluginGameView, disabled: boolean): PluginGameText {
   // The disabled mode never discovers anything: "Looking for the game…" would stay forever.
-  if (disabled) return {title: UNIT_GAME_TEXT[game], managed: !view.excluded, notes: [PLUGIN_STRINGS.notSearched], targets: view.targets.map(targetText)};
+  if (disabled) return {title: UNIT_GAME_TEXT[game], managed: !view.excluded, notes: [PLUGIN_STRINGS.notSearched], targets: view.targets.map(target => targetText(target, view.excluded))};
   const notes = [PLUGIN_DISCOVERY_TEXT[view.discovery]];
   const manual = PLUGIN_MANUAL_FOLDER_TEXT[view.manualFolder];
   if (manual) notes.push(manual);
   if (view.unlistedFolders === 1) notes.push(PLUGIN_STRINGS.unlistedOne);
   else if (view.unlistedFolders > 1) notes.push(fill(PLUGIN_STRINGS.unlistedMany, {count: String(view.unlistedFolders)}));
   if (!view.targets.length && view.discovery !== 'pending') notes.push(PLUGIN_STRINGS.noFolders);
-  return {title: UNIT_GAME_TEXT[game], managed: !view.excluded, notes, targets: view.targets.map(targetText)};
+  return {title: UNIT_GAME_TEXT[game], managed: !view.excluded, notes, targets: view.targets.map(target => targetText(target, view.excluded))};
 }
 
 /** The texts of one plugin setup view. Every mode, outcome, state and reason has a fixed text. */

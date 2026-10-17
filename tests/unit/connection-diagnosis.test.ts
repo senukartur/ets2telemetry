@@ -54,6 +54,8 @@ const TABLE: Row[] = [
   // 6. PLUGIN_BLOCKED_PERMISSION beats PLUGIN_UNRECOGNIZED in another folder of the same game.
   {name: 'permission denied', plugins: view(game([target('missing', 'PERMISSION_DENIED')])), code: 'PLUGIN_BLOCKED_PERMISSION'},
   {name: 'read-only file', plugins: view(game([target('outdated', 'READ_ONLY_FILE')])), code: 'PLUGIN_BLOCKED_PERMISSION'},
+  // PR #111 review: a refused removal in an excluded game is the same headline, whose text fits a removal too.
+  {name: 'a read-only plugin an excluded game could not remove', plugins: view(game([target('blocked', 'READ_ONLY_FILE')], {excluded: true})), code: 'PLUGIN_BLOCKED_PERMISSION'},
   {name: 'permission beats unrecognized', plugins: view(game([target('blocked', 'UNRECOGNIZED_FILE', 'ets2:manual:0'), target('missing', 'PERMISSION_DENIED')])), code: 'PLUGIN_BLOCKED_PERMISSION'},
   // 7. PLUGIN_UNRECOGNIZED beats PLUGIN_OUTDATED.
   {name: 'unrecognized file', plugins: view(game([target('blocked', 'UNRECOGNIZED_FILE', 'ets2:manual:0')])), code: 'PLUGIN_UNRECOGNIZED'},

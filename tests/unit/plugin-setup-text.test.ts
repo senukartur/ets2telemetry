@@ -106,6 +106,21 @@ describe('a game folder', () => {
     expect(line.detail).toEqual(manual ? [text, MANUAL_COPY] : [text]);
     expect(line.manualCopy).toBe(manual);
   });
+  // PR #111 review: in an excluded game the change is a removal, so the card never suggests copying the plugin in.
+  it('offers the manual removal instead of the copy in an excluded game, and nothing for an unrecognized file there', () => {
+    const MANUAL_REMOVE = 'To remove it by hand: close the game, delete the plugin file from the game\'s plugins folder (Windows may ask for administrator rights), then press Retry.';
+    const excludedTarget = (reason: PluginBlockReason) => pluginSetupText(view({}, {ets2: {excluded: true, discovery: 'found', targets: [target({state: 'blocked', reason,
+      installed: {version: '0.2.0', sha256Prefix: '0123456789ab'}})]}})).games.ets2.targets[0];
+    for (const reason of ['PERMISSION_DENIED', 'READ_ONLY_FILE'] as const) {
+      const line = excludedTarget(reason);
+      expect([line.detail, line.manualCopy, line.manualRemove]).toEqual([[REASONS[reason], 'Installed plugin: 0.2.0 (0123456789ab)', MANUAL_REMOVE], false, true]);
+      expect(JSON.stringify(line)).not.toContain('copy the plugin file into');
+    }
+    const unrecognized = excludedTarget('UNRECOGNIZED_FILE');
+    expect([unrecognized.manualCopy, unrecognized.manualRemove]).toEqual([false, false]);
+    // The same reasons in a managed game still offer the copy, never the removal.
+    expect([firstTarget(target({state: 'missing', reason: 'PERMISSION_DENIED', installed: null})).manualRemove, firstTarget(target({state: 'missing', reason: 'PERMISSION_DENIED', installed: null})).manualCopy]).toEqual([false, true]);
+  });
   it('offers the manual copy for exactly the P12 reasons', () => {
     // A locked file is retried automatically (review round 1 of PR-5), so it gets no manual-copy actions.
     expect([...MANUAL_COPY_REASONS].sort()).toEqual(['PERMISSION_DENIED', 'READ_ONLY_FILE', 'UNRECOGNIZED_FILE']);
@@ -151,7 +166,7 @@ describe('the connection diagnosis and the diagnostics export', () => {
     NO_GAME_SELECTED: 'No game is selected as the source. Choose Euro Truck Simulator 2 or American Truck Simulator above.',
     SETUP_DISABLED: 'Not checked: plugin setup is off in this launch.',
     GAME_NOT_FOUND: 'The selected game was not found. Choose its game folder below.',
-    PLUGIN_BLOCKED_PERMISSION: 'Windows did not allow the plugin to be installed. Copy it by hand as shown below, then press Retry.',
+    PLUGIN_BLOCKED_PERMISSION: 'Windows did not allow the plugin file to be changed in a game folder. Do it by hand as the folder line below says, then press Retry.',
     PLUGIN_UNRECOGNIZED: 'A file that this application did not install is in place of the plugin. Move it away, then press Retry.',
     PLUGIN_OUTDATED: 'An older plugin is installed. It is updated once the game is closed.',
     PLUGIN_PENDING_GAME_CLOSE: 'The plugin is changed automatically once the game, TruckersMP or the program using the file is closed. Then start the game again.',
