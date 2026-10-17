@@ -106,6 +106,8 @@ describe('a game folder', () => {
     const line = firstTarget(target({state: 'missing', reason: reason as PluginBlockReason, installed: null}));
     expect(line.detail).toEqual(manual ? [text, MANUAL_COPY] : [text]);
     expect(line.manualCopy).toBe(manual);
+    // "Open game plugins folder" also serves an unrecognized file, which the driver moves away by hand (P18).
+    expect(line.openFolder).toBe(manual || reason === 'UNRECOGNIZED_FILE');
   });
   // PR #111 review: in an excluded game the change is a removal, so the card never suggests copying the plugin in.
   it('offers the manual removal instead of the copy in an excluded game, and nothing for an unrecognized file there', () => {
@@ -114,7 +116,7 @@ describe('a game folder', () => {
       installed: {version: '0.2.0', sha256Prefix: '0123456789ab'}})]}})).games.ets2.targets[0];
     for (const reason of ['PERMISSION_DENIED', 'READ_ONLY_FILE'] as const) {
       const line = excludedTarget(reason);
-      expect([line.detail, line.manualCopy, line.manualRemove]).toEqual([[REASONS[reason], 'Installed plugin: 0.2.0 (0123456789ab)', MANUAL_REMOVE], false, true]);
+      expect([line.detail, line.manualCopy, line.manualRemove, line.openFolder]).toEqual([[REASONS[reason], 'Installed plugin: 0.2.0 (0123456789ab)', MANUAL_REMOVE], false, true, true]);
       expect(JSON.stringify(line)).not.toContain('copy the plugin file into');
     }
     // PR #111 review: a file the installer could not read (PERMISSION_DENIED with no installed identity) may be someone
@@ -124,17 +126,17 @@ describe('a game folder', () => {
       installed: null})]}})).games.ets2.targets[0];
     for (const excluded of [true, false]) {
       const line = unreadable(excluded);
-      expect([line.detail, line.manualCopy, line.manualRemove]).toEqual([[REASONS.PERMISSION_DENIED, UNREADABLE], false, false]);
+      expect([line.detail, line.manualCopy, line.manualRemove, line.openFolder]).toEqual([[REASONS.PERMISSION_DENIED, UNREADABLE], false, false, false]);
       expect(JSON.stringify(line)).not.toMatch(/delete the plugin file|copy the plugin file into/);
     }
     // A managed game's folder whose own older plugin Windows protects still offers the copy over it.
     const owned = pluginSetupText(view({}, {ets2: {discovery: 'found', targets: [target({state: 'outdated', reason: 'PERMISSION_DENIED',
       installed: {version: '0.1.0', sha256Prefix: 'aaaaaaaaaaaa'}})]}})).games.ets2.targets[0];
-    expect([owned.manualCopy, owned.manualRemove]).toEqual([true, false]);
+    expect([owned.manualCopy, owned.manualRemove, owned.openFolder]).toEqual([true, false, true]);
     // An unrecognized file is never this application's, so the view carries no installed plugin for it.
     const unrecognized = pluginSetupText(view({}, {ets2: {excluded: true, discovery: 'found', targets: [target({state: 'blocked', reason: 'UNRECOGNIZED_FILE', installed: null})]}}))
       .games.ets2.targets[0];
-    expect([unrecognized.manualCopy, unrecognized.manualRemove]).toEqual([false, false]);
+    expect([unrecognized.manualCopy, unrecognized.manualRemove, unrecognized.openFolder]).toEqual([false, false, false]);
     // An excluded game installs nothing, so its unrecognized file gets no advice to move it, also as the last problem.
     const LEFT = 'A file with the plugin\'s name that this application did not install is in this folder; it is left as it is.';
     expect(unrecognized.detail).toEqual([LEFT]);
@@ -158,7 +160,8 @@ describe('a game folder', () => {
       'The game is running; the plugin is changed after you close it.', 'Installed plugin: unknown version (bbbbbbbbbbbb)']);
     expect(firstTarget(target({lastFailure: 'TARGET_LOCKED'})).detail).toEqual(['Last problem: Another program is using the plugin file; it is tried again later.']);
     const unrecognized = firstTarget(target({state: 'blocked', reason: 'UNRECOGNIZED_FILE', installed: null, lastFailure: 'UNRECOGNIZED_FILE'}));
-    expect([unrecognized.detail, unrecognized.manualCopy, unrecognized.manualRemove]).toEqual([[REASONS.UNRECOGNIZED_FILE], false, false]);
+    // PR #111 delta review (P18): a managed game's unrecognized file offers only "Open game plugins folder", to move it away.
+    expect([unrecognized.detail, unrecognized.manualCopy, unrecognized.manualRemove, unrecognized.openFolder]).toEqual([[REASONS.UNRECOGNIZED_FILE], false, false, true]);
   });
 });
 

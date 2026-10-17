@@ -53,15 +53,11 @@ export function PluginSetupCard({view, diagnosis, onView}: {view: PluginSetupVie
           {entry.targets.map(target => <div key={target.id} className="space-y-1" data-testid={targetTestId(target.id)}>
             <p><span>{target.label}</span>: <Badge variant={target.state === 'installed' ? 'secondary' : target.state === 'blocked' ? 'destructive' : 'outline'} data-testid={`${targetTestId(target.id)}-state`}>{target.status}</Badge></p>
             {target.detail.map(line => <p key={line} className="text-sm">{line}</p>)}
-            {target.manualRemove ? <div className="flex flex-wrap gap-2">
-              <Button size="sm" variant="outline" disabled={pending} data-testid={`${targetTestId(target.id)}-open-folder`}
-                onClick={() => call(() => window.desktop.openPluginFolder(target.id), () => null)}>{PLUGIN_STRINGS.openFolder}</Button>
-            </div> : null}
-            {target.manualCopy ? <div className="flex flex-wrap gap-2">
-              <Button size="sm" variant="outline" disabled={pending} data-testid={`${targetTestId(target.id)}-show-file`}
-                onClick={() => call(() => window.desktop.showPluginFile(), pluginShowFileText)}>{PLUGIN_STRINGS.showFile}</Button>
-              <Button size="sm" variant="outline" disabled={pending} data-testid={`${targetTestId(target.id)}-open-folder`}
-                onClick={() => call(() => window.desktop.openPluginFolder(target.id), () => null)}>{PLUGIN_STRINGS.openFolder}</Button>
+            {target.manualCopy || target.openFolder ? <div className="flex flex-wrap gap-2">
+              {target.manualCopy ? <Button size="sm" variant="outline" disabled={pending} data-testid={`${targetTestId(target.id)}-show-file`}
+                onClick={() => call(() => window.desktop.showPluginFile(), pluginShowFileText)}>{PLUGIN_STRINGS.showFile}</Button> : null}
+              {target.openFolder ? <Button size="sm" variant="outline" disabled={pending} data-testid={`${targetTestId(target.id)}-open-folder`}
+                onClick={() => call(() => window.desktop.openPluginFolder(target.id), () => null)}>{PLUGIN_STRINGS.openFolder}</Button> : null}
             </div> : null}
           </div>)}
           <Button size="sm" variant="outline" disabled={disabled} data-testid={`plugin-${game}-choose`}

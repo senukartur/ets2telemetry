@@ -27,13 +27,18 @@ export interface PluginTargetText {
   status: string;
   /** Lines under it: why a change did not happen, the installed version, the last problem and the manual-copy hint. */
   detail: string[];
-  /** Whether the card offers "Show plugin file" and "Open game plugins folder" for this folder, to install by hand. */
+  /** Whether the card shows the manual-copy hint and offers "Show plugin file" for this folder, to install by hand. */
   manualCopy: boolean;
   /**
-   * Whether the card offers "Open game plugins folder" to remove this application's plugin by hand: the game is excluded
-   * and Windows refused the removal (PERMISSION_DENIED, READ_ONLY_FILE). Never together with `manualCopy` (PR #111 review).
+   * Whether the card shows the manual-removal hint for this application's plugin: the game is excluded and Windows refused
+   * the removal (PERMISSION_DENIED, READ_ONLY_FILE). Never together with `manualCopy` (PR #111 review).
    */
   manualRemove: boolean;
+  /**
+   * Whether the card offers "Open game plugins folder" (P12, P18): with the manual copy, with the manual removal, and for
+   * an unrecognized file in a managed game, which the driver moves away by hand (PR #111 delta review).
+   */
+  openFolder: boolean;
 }
 export interface PluginGameText {
   title: string;
@@ -93,7 +98,8 @@ function targetText(target: PluginTargetView, excluded: boolean): PluginTargetTe
     status: PLUGIN_STATE_TEXT[target.state],
     detail,
     manualCopy,
-    manualRemove
+    manualRemove,
+    openFolder: manualCopy || manualRemove || (!excluded && target.reason === 'UNRECOGNIZED_FILE')
   };
 }
 

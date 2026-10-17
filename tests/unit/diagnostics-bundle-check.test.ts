@@ -16,7 +16,7 @@ const PLUGINS: PluginSetupView = {mode: 'test-root', bundled: {version: '0.2.0',
 const line = (value: unknown) => JSON.stringify(value);
 const RUN = 'D:\\Smoke\\.local\\ci\\packaged-0123';
 /** A bundle like the plugin smoke's run B: the real builder, the given identities and the run's main and service rows. */
-function bundle(identities: string[], extraFacts: Record<string, string> = {}): string {
+function bundle(identities: string[], extraFacts: Record<string, string> = {}, overrides: Partial<DiagnosticBundleInput> = {}): string {
   const input: DiagnosticBundleInput = {
     createdMs: Date.UTC(2026, 9, 17, 8, 30, 15), app: {version: '0.1.0', electron: '44.7.0', node: '24.19.0', packaged: true, osRelease: '10.0.26200'},
     health: HEALTH, settings: SETTINGS, plugins: PLUGINS, live: {status: 'waiting', selection: 'game'}, diagnosis: {code: 'NO_GAME_SELECTED', notes: []},
@@ -24,7 +24,7 @@ function bundle(identities: string[], extraFacts: Record<string, string> = {}): 
       line({time: '2026-10-17T08:30:00.000Z', pid: 1, event: 'PLUGIN_SETUP_MODE', facts: {mode: 'test-root', reason: null}, detail: `${RUN}\\diagnostics`}),
       line({time: '2026-10-17T08:30:02.000Z', pid: 1, event: 'PLUGIN_ACTION', facts: {game: 'ets2', source: 'steam', ordinal: 0, op: 'install', outcome: 'unchanged', ...extraFacts}})
     ].join('\n')}, service: {current: line({time: '2026-10-17T08:30:01.000Z', pid: 2, event: 'SERVICE_READY'})}},
-    identities
+    identities, ...overrides
   };
   return buildDiagnosticBundle(input);
 }
@@ -117,6 +117,27 @@ describe('names outside the runtime strings', () => {
   it.each(['main', 'logs', 'diagnostics', 'mode', 'root'])('still accepts a colliding name %s, which is a whole word of a schema token', name => {
     const text = bundle([name, name], {owner: name});
     expect(() => check(text, [name, name])).not.toThrow();
+  });
+});
+
+// PR #111 delta review: other product-built variants of the views also fit the version 1 structure.
+describe('other valid variants', () => {
+  it('accepts the full recording health variant with losses and a trip', () => {
+    const health: AppHealth = {service: 'ready', storage: 'verified', lastError: null, recording: {state: 'recording', target: 'synthetic', code: null,
+      losses: {lostEvents: 2, eventLoss: 1, notConnected: 1, sampleLoss: 0, restoreLoss: 0, droppedSamples: 3},
+      trip: {phase: 'active', completeness: 'partial', untrackedJob: false}}};
+    const text = bundle(['Jane.Doe'], {}, {health});
+    expect(() => check(text, ['Jane.Doe'])).not.toThrow();
+    expect(schemaTokens(JSON.parse(text))).toEqual(expect.arrayContaining(['recording', 'synthetic', 'losses', 'droppedSamples', 'trip', 'active', 'partial']));
+    const retrying: AppHealth = {...health, recording: {...health.recording, state: 'retrying', code: 'DATABASE_LOCKED', trip: null} as AppHealth['recording']};
+    expect(() => check(bundle(['Jane.Doe'], {}, {health: retrying}), ['Jane.Doe'])).not.toThrow();
+  });
+  it('accepts a disabled plugin view without targets or a bundled plugin', () => {
+    const none = {excluded: false, discovery: 'pending', manualFolder: 'none', targets: [], unlistedFolders: 0} as const;
+    const plugins: PluginSetupView = {mode: 'disabled', bundled: null, running: false, games: {ets2: none, ats: none}};
+    const text = bundle(['Jane.Doe'], {}, {plugins});
+    expect(() => check(text, ['Jane.Doe'])).not.toThrow();
+    expect(JSON.parse(text)).toMatchObject({plugins: {mode: 'disabled', bundled: null}, bundledPlugin: null});
   });
 });
 
