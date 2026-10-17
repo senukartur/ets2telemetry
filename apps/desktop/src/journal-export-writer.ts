@@ -21,13 +21,17 @@ const RETRYABLE_RENAME = new Set(['EPERM', 'EACCES', 'EBUSY']);
 /** The Save dialog's only file type. */
 export const EXPORT_DIALOG_FILTERS = Object.freeze([{name: 'JSON', extensions: ['json']}]);
 
-interface ExportFileHandle {write(data: string): Promise<unknown>; sync(): Promise<void>; close(): Promise<void>}
+/** Ancestors of the chosen folder compared with the data directory by file identity; a deeper folder is refused. */
+export const EXPORT_ANCESTOR_LIMIT = 128;
+
+interface ExportFileHandle {writeFile(data: string, encoding: 'utf8'): Promise<void>; sync(): Promise<void>; close(): Promise<void>}
 /** The file operations of an export; tests wrap the real ones to inject failures. */
 export interface ExportFileSystem {
   open(target: string, flags: 'wx'): Promise<ExportFileHandle>;
   rename(from: string, to: string): Promise<void>;
   unlink(target: string): Promise<void>;
   realpath(target: string): Promise<string>;
+  stat(target: string, options: {bigint: true}): Promise<{dev: bigint; ino: bigint}>;
 }
 export interface JournalExporterOptions {
   /** One journal read through main's broker, whose answer main already checked against the request (journal-contract.ts). */
@@ -170,12 +174,17 @@ export class JournalExporter {
       const root = this.options.localAppData ? await fs.realpath(path.join(this.options.localAppData, 'ETS2Telemetry')).catch(() => undefined) : undefined;
       if (exportTargetRefused(path.join(real, path.basename(target)), this.options.localAppData)
         || (root !== undefined && inside(comparable(path.join(real, path.basename(target))), comparable(root)))) throw stop('EXPORT_TARGET_REFUSED');
+      // A UNC alias of a local folder (\\localhost\C$\..., \\127.0.0.1\c$\..., the computer's own name, a drive mapped to
+      // such a share) passes both checks above, because realpath leaves a UNC path unchanged. The data directory is
+      // therefore also compared by file identity (volume and file index) with the chosen folder and each of its ancestors.
+      if (await this.#insideDataRoot(real)) throw stop('EXPORT_TARGET_REFUSED');
       step = 'open';
       const candidate = path.join(directory, `${path.basename(target)}.${this.#suffix()}.partial`);
       handle = await fs.open(candidate, 'wx');
       partial = candidate;
       step = 'write';
-      const write = async (text: string) => { this.#check(); if (text) await handle!.write(text); };
+      // writeFile writes the whole text from the handle's current position, looping over partial writes itself.
+      const write = async (text: string) => { this.#check(); if (text) await handle!.writeFile(text, 'utf8'); };
       await write(serializer.begin());
       const bounds = tripExportBounds(detail), session = detail.trip.pluginSessionId;
       const counts = {intervals: 0, events: 0, samples: 0};
@@ -229,6 +238,27 @@ export class JournalExporter {
       if (handle) await handle.close().catch(() => undefined);
       if (partial) await fs.unlink(partial).catch(() => undefined);
     }
+  }
+
+  /**
+   * Whether `folder` or one of its at most EXPORT_ANCESTOR_LIMIT ancestors is the data directory by file identity: the
+   * same volume (`dev`) and file index (`ino`). A data directory that does not exist yet has no identity; the lexical
+   * checks alone apply then. A folder deeper than the limit is refused, since it cannot be shown to lie outside.
+   */
+  async #insideDataRoot(folder: string): Promise<boolean> {
+    if (!this.options.localAppData) return true;
+    const identity = (target: string) => this.#fs.stat(target, {bigint: true}).then(stats => `${stats.dev}:${stats.ino}`, () => undefined);
+    const root = await identity(path.join(this.options.localAppData, 'ETS2Telemetry'));
+    // No identity to compare: a data directory that does not exist yet, or a file system without file indexes.
+    if (root === undefined || root.endsWith(':0')) return false;
+    let current = folder;
+    for (let depth = 0; depth < EXPORT_ANCESTOR_LIMIT; depth++) {
+      if (await identity(current) === root) return true;
+      const parent = path.dirname(current);
+      if (parent === current) return false;
+      current = parent;
+    }
+    return true;
   }
 
   async #renameWithRetry(from: string, to: string): Promise<void> {

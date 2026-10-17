@@ -165,7 +165,8 @@ function runApplication(profileError: unknown): void {
     // Every stop that did not start as an exit request is fatal (renderer or overlay exhaustion, configuration or
     // load failure, recovery timeout, ...): mark the application exiting at once so nothing reopens a window, the
     // overlay may close and the tray shows the exiting state. Exit codes and bounds are unchanged.
-    stopping: () => {if (lifecycle.abort()) {updateHealth({type: 'exit-requested'}, true); retireLive();}},
+    // A running trip export ends as interrupted before it opens a file (J16), also on a fatal stop.
+    stopping: () => {exporter.abort(); if (lifecycle.abort()) {updateHealth({type: 'exit-requested'}, true); retireLive();}},
     // The failed service is being terminated: retire its readiness, status and live channels now rather than when
     // its exit arrives (up to 3000 ms later). The later state callback finds them already retired.
     // A new selection generation also retires a readiness still awaiting its broker or settings, so the failing service
