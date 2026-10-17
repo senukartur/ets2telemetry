@@ -508,7 +508,7 @@ ET-016 implementation update on October 17, 2026: ET-016a and ET-016b are implem
 **ET-016b**
 - Fuel-used persistence: #95.
 - Late-attach trips opened from checkpoints, which supersede T9: #99.
-- Journal and export reconciliation in the development and packaged recording journey: PR-8.
+- Journal and export reconciliation in the development and packaged recording journey: #102.
 
 **Technical debt.** TD-006 (trip average consumption), TD-007 (late-attach truck and trailer identity) and TD-008 (the export's trailer list is limited to the latest 10 configurations) record the deferred parts.
 
