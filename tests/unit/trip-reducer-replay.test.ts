@@ -233,6 +233,11 @@ const RECORDS: ((s: Script, next: () => number) => EventRecord)[] = [
 ];
 const CAUSES: (keyof LossCounts)[] = ['offline', 'noDurableConsumer', 'queueCount', 'queueBytes', 'retentionExpired', 'encodingFailed'];
 
+// 150 seeds of 120 iterations take about 2.3 s of CPU work locally; on a hosted Windows runner this file took 4.4 s
+// before the late-attach steps (ET-016 PR-7) were added, and with them this case timed out above 5.2 s
+// (docs/validation/et-014.md). This budget bounds that deterministic computation; the case asserts no timing.
+const SEEDED_STREAM_REPLAY_BUDGET_MS = 30_000;
+
 describe('seeded random streams (T18, REG-005)', () => {
   it('never exceed 16 effects, never close a trip twice and never give an outcome without its event', () => {
     const seeded = {resumed: 0, restarted: 0, attached: 0};
@@ -303,7 +308,7 @@ describe('seeded random streams (T18, REG-005)', () => {
     expect(seeded.resumed).toBeGreaterThan(5);
     expect(seeded.restarted).toBeGreaterThan(5);
     expect(seeded.attached).toBeGreaterThan(5);
-  });
+  }, SEEDED_STREAM_REPLAY_BUDGET_MS);
 });
 
 describe('annotation merging and deferral (T18)', () => {
