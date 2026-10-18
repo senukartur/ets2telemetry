@@ -247,6 +247,7 @@ try {
     $run = Invoke-Executor $scene 'none' $true
     Assert-Equal @('refused', 'INTENT_INVALID', $null, 'present') @($run.receipt.outcome, $run.receipt.code, (Get-Value), (Get-State $scene.dll)) 'invalid-intent'
     Assert-Equal $before (Get-DataRootEntries $scene.dataRoot) 'invalid-intent data root'
+    if (![IO.File]::ReadAllText((Join-Path $scene.dataRoot 'uninstall\README.txt')).Contains('does not run again')) { throw 'invalid-intent: README without the stop' }
     $rows.Add([ordered]@{case = 'invalid-intent'; passed = $true})
 
     # Without the test root's marker the base must be the real known-folder LocalAppData; a temporary base is refused, and
@@ -260,6 +261,71 @@ try {
     Assert-Equal $before (Get-DataRootEntries $scene.dataRoot) 'not-a-test-root data root'
     Remove-Value
     $rows.Add([ordered]@{case = 'not-a-test-root'; passed = $true})
+
+    # An unexpected error before the attempt is counted and registered: nothing runs again and nothing is removed, and
+    # README.txt says the cleanup stopped (review of PR-5).
+    $scene = New-Scene 'fault1' $owned 1
+    Set-Value $scene.command
+    $run = Invoke-Executor $scene 'none' $true ' -TestFailAt start'
+    Assert-Equal @('refused', 'EXECUTOR_FAILED', 4, $null, 'present', 1, $true) @($run.receipt.outcome, $run.receipt.code, $run.exitCode, (Get-Value), (Get-State $scene.dll),
+        (Get-Attempts $scene.dataRoot), $run.receipt.readme) 'fault-before-registration'
+    if (![IO.File]::ReadAllText((Join-Path $scene.dataRoot 'uninstall\README.txt')).Contains('does not run again')) { throw 'fault-before-registration: README without the stop' }
+    $rows.Add([ordered]@{case = 'fault-before-registration'; passed = $true})
+
+    # An unexpected error right after: the attempt is counted and the script registered again, so the next sign-in tries
+    # again, and README.txt says so.
+    $scene = New-Scene 'fault2' $owned 1
+    Set-Value $scene.command
+    $run = Invoke-Executor $scene 'none' $true ' -TestFailAt registered'
+    Assert-Equal @('refused', 'EXECUTOR_FAILED', $scene.command, 'present', 2, $true) @($run.receipt.outcome, $run.receipt.code, (Get-Value), (Get-State $scene.dll),
+        (Get-Attempts $scene.dataRoot), $run.receipt.readme) 'fault-after-registration'
+    if (![IO.File]::ReadAllText((Join-Path $scene.dataRoot 'uninstall\README.txt')).Contains('tries again at your next Windows sign-in (attempt 2 of 10')) { throw 'fault-after-registration: README without the retry' }
+    # The next sign-in, with nothing in the way, completes.
+    $run = Invoke-Executor $scene 'none' $true
+    Assert-Equal @('complete', 3, $null, 'absent') @($run.receipt.outcome, $run.receipt.attempts, (Get-Value), (Get-State $scene.dataRoot)) 'fault-after-registration retry'
+    $rows.Add([ordered]@{case = 'fault-after-registration'; passed = $true})
+
+    # The intent's 128 KiB bound (review of PR-5): an intent just below it and an install registry with 16 more folders,
+    # all blocked. The rewrite keeps every folder of the intent and drops the registry's from the end, so the next
+    # sign-in still reads it.
+    $scene = New-Scene 'bound' $blockedCase 1
+    $games = Join-Path $scene.root 'G'
+    $pad = 184 - $games.Length - 5
+    $rootOf = { param([string]$Prefix, [int]$Index) Join-Path $games ($Prefix + $Index.ToString('00') + '-' + ('x' * $pad)) }
+    $tempOf = { param([string]$Root, [string]$Seed) Join-Path $Root ('bin\win_x64\plugins\ets2telemetry-plugin.dll.' + (Get-Sha $Seed).Substring(0, 16) + '.tmp') }
+    $document = [ordered]@{format = 'ets2telemetry.uninstall-pending'; version = 1; phase = 'deferred'; startedUtc = $utc; attempts = 1; known = @(Get-Sha $table.contents.known)
+        folders = [Collections.Generic.List[object]]::new()}
+    $limit = 131072 - 50
+    for ($index = 0; $index -lt 31; $index++) {
+        $root = & $rootOf 'o' $index
+        $hashes = @(0..16 | ForEach-Object { Get-Sha ('own-' + $index + '-' + $_) })
+        $temps = [Collections.Generic.List[string]]::new(); foreach ($slot in 0..15) { $temps.Add((& $tempOf $root ('t-' + $index + '-' + $slot))) }
+        $folder = [ordered]@{game = 'ets2'; root = $root; hashes = $hashes; temps = $temps; createdPluginsDirectory = $false}
+        $document.folders.Add($folder)
+        while ($utf8.GetByteCount((ConvertTo-Json1 $document)) -gt $limit -and $temps.Count) { $temps.RemoveAt($temps.Count - 1) }
+        if ($utf8.GetByteCount((ConvertTo-Json1 $document)) -gt $limit) { $document.folders.RemoveAt($document.folders.Count - 1); break }
+        if ($temps.Count -lt 16) { break }
+    }
+    $own = $document.folders.Count
+    Write-Text (Join-Path $scene.dataRoot 'uninstall\pending.json') ((ConvertTo-Json1 $document) + "`n")
+    $installs = @(0..15 | ForEach-Object { [ordered]@{game = 'ets2'; root = (& $rootOf 'r' $_); source = 'steam'; sha256 = (Get-Sha ('reg-' + $_)); appVersion = '0.1.0'
+        installedUtc = $utc; createdPluginsDirectory = $false} })
+    $pending = @(0..15 | ForEach-Object { $root = & $rootOf 'r' $_; [ordered]@{op = 'install'; game = 'ets2'; root = $root; source = 'steam'; temp = (& $tempOf $root ('rt-' + $_))
+        fromSha256 = $null; toSha256 = (Get-Sha ('regto-' + $_)); appVersion = '0.1.0'; createdPluginsDirectory = $false; startedUtc = $utc} })
+    Write-Text (Join-Path $scene.dataRoot 'plugins\setup.json') ((ConvertTo-Json1 ([ordered]@{format = 'ets2telemetry.plugin-setup'; version = 1
+        games = [ordered]@{ets2 = [ordered]@{excluded = $false; manualRoot = $null}; ats = [ordered]@{excluded = $false; manualRoot = $null}}
+        installs = $installs; pending = $pending; failures = @()})) + "`n")
+    Set-Value $scene.command
+    $run = Invoke-Executor $scene 'eurotrucks2.exe' $true
+    $intentFile = Join-Path $scene.dataRoot 'uninstall\pending.json'
+    $rewritten = [IO.File]::ReadAllText($intentFile) | ConvertFrom-Json
+    $ownKept = @($rewritten.folders | Where-Object { [IO.Path]::GetFileName($_.root).StartsWith('o') }).Count
+    Assert-Equal @('deferred', 2, $true, $own, $true) @($run.receipt.outcome, $rewritten.attempts, ((Get-Item -LiteralPath $intentFile).Length -le 131072), $ownKept,
+        (@($rewritten.folders).Count -lt [Math]::Min(32, $own + 16))) 'intent-bound'
+    $run = Invoke-Executor $scene 'eurotrucks2.exe' $true
+    Assert-Equal @('deferred', 'GAME_RUNNING', 3) @($run.receipt.outcome, $run.receipt.code, $run.receipt.attempts) 'intent-bound next sign-in'
+    Remove-Value
+    $rows.Add([ordered]@{case = 'intent-bound'; own = $own; passed = $true})
 
     # The absolute powershell.exe form, in a scene short enough for it: the temporary folder's paths are too long for
     # that form within 260 characters, so this scene lives in a fresh folder at the system drive's root.

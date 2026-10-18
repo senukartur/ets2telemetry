@@ -2,7 +2,10 @@
 param(
     # Test root only: a comma-separated list of the image names the running-game check sees instead of the real process
     # list ('none' for an empty list), so tests never depend on what runs on the machine. A production run refuses it.
-    [string]$TestRunningImages
+    [string]$TestRunningImages,
+    # Test root only: an unexpected error at the step 'start' (before the attempt is counted and registered) or
+    # 'registered' (right after), to prove what an error leaves behind. A production run refuses it.
+    [ValidateSet('start', 'registered')][string]$TestFailAt
 )
 # The deferred-cleanup executor of an ETS2Telemetry uninstall (ET-018 PR-5; plan U7, owner decision O3; docs/uninstall.md,
 # "Deferred cleanup at the next sign-in"). When the uninstall could not finish (a game or TruckersMP ran, a file was
@@ -15,16 +18,18 @@ param(
 #   LocalAppData and its parent holds the ET-017 marker and a valid ets2telemetry-install-test.json) uses only the RunOnce
 #   key that test file names; production requires the base to be the known-folder LocalAppData. Anything else changes
 #   nothing.
-# - Nothing runs while the application is installed again (its executable exists) or without an intent.
-# - The intent counts attempts. It is rewritten with attempt + 1 and, while fewer than 10 attempts were made, the script
-#   registers itself again, both before anything is deleted.
+# - Nothing is cleaned without a valid intent. The intent counts attempts: right after it is read, it is rewritten with
+#   attempt + 1 and, while fewer than 10 attempts were made, the script registers itself again, before anything else.
+#   An unexpected error after that is retried at the next sign-in; an error before it stops the cleanup, and README.txt
+#   says so.
+# - Nothing is cleaned while the application is installed again (its executable exists).
 # - While neither the game nor a TruckersMP client runs, a folder's plugin is removed only while its SHA-256 is a hash this
 #   application installed; an unrecognized, read-only or linked file stays. A temporary file of the installer and a
 #   plugins folder this application created and left empty go too.
 # - Only the allowlisted top-level entries of the data root are removed, never through a link, never clearing a
 #   read-only attribute; plugins\ and uninstall\ go last, and only when every folder is clean, then the empty root.
 # - A complete run removes the RunOnce value. A run still blocked after the 10th attempt stops, removes it and leaves
-#   README.txt with the manual steps.
+#   README.txt with the manual steps. The intent it rewrites stays within 32 folders and 128 KiB.
 # - One receipt with fixed codes and counts, never a path, goes to %TEMP%; a production run shows one summary message box.
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
@@ -144,7 +149,9 @@ function ConvertTo-JsonText($Value) {
             $code = [int]$character
             if ($character -eq '"') { [void]$builder.Append('\"') }
             elseif ($character -eq '\') { [void]$builder.Append('\\') }
-            elseif ($code -lt 32 -or $code -gt 126) { [void]$builder.Append('\u' + $code.ToString('x4')) }
+            # Only control characters are escaped, as JSON.stringify does, so a rewritten intent is never longer in UTF-8
+            # than the application's own two-space document of the same content.
+            elseif ($code -lt 32) { [void]$builder.Append('\u' + $code.ToString('x4')) }
             else { [void]$builder.Append($character) }
         }
         [void]$builder.Append('"')
@@ -271,6 +278,21 @@ function ConvertTo-IntentText($Record, [int]$Attempts, $Folders, [string[]]$Know
                 createdPluginsDirectory = [bool]$folder.createdPluginsDirectory}
         })}
     return (ConvertTo-JsonText $document) + "`n"
+}
+function ConvertTo-BoundedIntentText($Record, [int]$Attempts, $Folders, [string[]]$Known) {
+    # recordable in engine.ts: at most 32 folders and 128 KiB, or the next Read-Intent would refuse the intent. $Folders
+    # come with the intent's own folders first, so the folders only the install registry names drop from the end first.
+    $kept = @($Folders | Select-Object -First 32)
+    for (;;) {
+        $text = ConvertTo-IntentText $Record $Attempts $kept $Known
+        if ($Utf8.GetByteCount($text) -le 131072 -or $kept.Count -eq 0) { return $text }
+        $kept = @($kept | Select-Object -First ($kept.Count - 1))
+    }
+}
+function Sort-OwnFirst($Folders, $Own) {
+    # intentFolders in plugin-cleanup.ts: the folders the intent itself names first, then the registry's, each in order.
+    $isOwn = { param($folder) @($Own | Where-Object { $_.game -ceq $folder.game -and (Test-SamePath $_.root $folder.root) }).Count -gt 0 }
+    return @(@($Folders | Where-Object { & $isOwn $_ }) + @($Folders | Where-Object { !(& $isOwn $_) }))
 }
 function Read-Registry([string]$DataRoot) {
     # The install registry plugins\setup.json: state ok with its folders, or a problem code. A registry that is not a valid
@@ -548,17 +570,25 @@ function Get-ReasonText([string]$Code) {
         default { return 'a file could not be removed (' + $Code + ')' }
     }
 }
-function Write-Readme([string]$Uninstall, [string]$DataRoot, $Folders, [string[]]$Known, [string]$Code, [int]$Attempts, [bool]$Stopped) {
+function Write-Readme([string]$Uninstall, [string]$DataRoot, $Folders, [string[]]$Known, [string]$Code, [int]$Attempts, [string]$Mode) {
+    # $Mode: 'deferred' (registered for the next sign-in), 'stopped' (the 10th attempt), 'failed-retry' (an unexpected
+    # error after this attempt was counted and registered) or 'failed-stopped' (an error before that: nothing runs again).
     $hashes = [Collections.Generic.SortedSet[string]]::new([StringComparer]::Ordinal)
     foreach ($hash in $Known) { [void]$hashes.Add($hash) }
     foreach ($folder in $Folders) { foreach ($hash in $folder.hashes) { [void]$hashes.Add([string]$hash) } }
     $lines = New-Object Collections.Generic.List[string]
     $lines.Add('ETS2Telemetry was uninstalled, but its cleanup could not finish.'); $lines.Add('Reason: ' + $Code); $lines.Add('')
-    if ($Stopped) {
-        $lines.Add('ETS2Telemetry tried ' + $Attempts + ' times and stopped trying at sign-in. Finish the cleanup with the steps below.')
-    } else {
-        $lines.Add('ETS2Telemetry tries again at your next Windows sign-in, once the games are closed (attempt ' + $Attempts + ' of ' + $MaxAttempts + ' was made).')
-        $lines.Add('You only need the steps below if that does not happen.')
+    switch ($Mode) {
+        'stopped' { $lines.Add('ETS2Telemetry tried ' + $Attempts + ' times and stopped trying at sign-in. Finish the cleanup with the steps below.') }
+        'failed-retry' {
+            $lines.Add('An unexpected error stopped this cleanup attempt. ETS2Telemetry tries again at your next Windows sign-in (attempt ' + $Attempts + ' of ' + $MaxAttempts + ' was made).')
+            $lines.Add('You only need the steps below if that does not happen.')
+        }
+        'failed-stopped' { $lines.Add('An unexpected error stopped the automatic cleanup, and it does not run again. Finish the cleanup with the steps below.') }
+        default {
+            $lines.Add('ETS2Telemetry tries again at your next Windows sign-in, once the games are closed (attempt ' + $Attempts + ' of ' + $MaxAttempts + ' was made).')
+            $lines.Add('You only need the steps below if that does not happen.')
+        }
     }
     $lines.Add(''); $lines.Add('Close Euro Truck Simulator 2, American Truck Simulator and TruckersMP first.'); $lines.Add('')
     if (@($Folders).Count) {
@@ -573,6 +603,26 @@ function Write-Readme([string]$Uninstall, [string]$DataRoot, $Folders, [string[]
     $lines.Add(''); $lines.Add('Reinstalling ETS2Telemetry instead cancels this cleanup and keeps the plugin in use.'); $lines.Add('')
     Write-AtomicText $Uninstall 'README.txt' ($lines -join "`r`n")
 }
+function Write-FailureReadme([string]$Uninstall, [string]$DataRoot, [string]$Code, [bool]$Retry, $Attempts) {
+    # README.txt when a run ends without finishing: says whether the next sign-in tries again ($Retry: this attempt was
+    # counted and registered) or that the cleanup stopped. With a readable intent it lists the folders and hashes; without
+    # one, the notice goes above the README an earlier run wrote, which already lists them.
+    $intent = @{state = 'invalid'}
+    try { $intent = Read-Intent $Uninstall } catch { $null = $_ }
+    $mode = if ($Retry) { 'failed-retry' } else { 'failed-stopped' }
+    if ($intent.state -eq 'present') {
+        $count = if ($null -ne $Attempts) { [int]$Attempts } else { [int]$intent.record.attempts }
+        Write-Readme $Uninstall $DataRoot $intent.folders $intent.known $Code $count $mode
+        return
+    }
+    $notice = 'Reason: ' + $Code + "`r`n" + 'The automatic cleanup of ETS2Telemetry stopped, and it does not run again. Finish the cleanup with the steps below.'
+    $readme = Join-Path $Uninstall 'README.txt'
+    $earlier = ''
+    if ((Get-Kind $readme) -eq 'file' -and (New-Object IO.FileInfo($readme)).Length -le 65536) { $earlier = [IO.File]::ReadAllText($readme, $Utf8) }
+    if ($earlier.StartsWith($notice, [StringComparison]::Ordinal)) { return }
+    if ($earlier.Length) { Write-AtomicText $Uninstall 'README.txt' ($notice + "`r`n`r`n" + $earlier); return }
+    Write-Readme $Uninstall $DataRoot @() @() $Code 0 'failed-stopped'
+}
 function Show-Summary($Roots) {
     # One message box, production only: a test run never shows a window that could block it.
     if ($Roots.mode -ne 'production') { $script:Result.messageBox = 'suppressed'; return }
@@ -580,6 +630,7 @@ function Show-Summary($Roots) {
         'complete' { 'ETS2Telemetry finished removing its game plugin and its local data.' }
         'deferred' { 'ETS2Telemetry could not finish removing its game plugin yet: ' + (Get-ReasonText $script:Result.code) + '. It tries again at your next sign-in (attempt ' + $script:Result.attempts + ' of ' + $MaxAttempts + ').' }
         'stopped' { 'ETS2Telemetry stopped trying to remove its game plugin after ' + $script:Result.attempts + ' attempts: ' + (Get-ReasonText $script:Result.code) + '. README.txt in ' + $Roots.uninstall + ' lists the steps to finish by hand.' }
+        'refused' { if ($script:Result.readme) { 'ETS2Telemetry could not finish removing its game plugin and its local data (' + $script:Result.code + '). README.txt in ' + $Roots.uninstall + ' says what happens next and how to finish by hand.' } else { $null } }
         default { $null }
     }
     if ($null -eq $text) { return }
@@ -608,10 +659,40 @@ function Write-Receipt {
 
 $script:UseTestImages = $false
 $script:TestImages = @()
+$script:FailAt = $null
+
+function Invoke-TestFault([string]$Step) {
+    # Test root only (-TestFailAt): an unexpected error at this step, to prove what an error leaves behind.
+    if ($script:FailAt -ceq $Step) { throw ('TEST_FAULT ' + $Step) }
+}
 
 function Invoke-Cleanup($Roots) {
     # Everything after the roots; the outcome goes to $script:Result.
     $state = $script:Result
+    Invoke-TestFault 'start'
+    # The intent first: an error while reading it is never trusted either.
+    $intent = @{state = 'invalid'}
+    try { $intent = Read-Intent $Roots.uninstall } catch { $null = $_ }
+    if ($intent.state -eq 'absent') { $state.outcome = 'not-needed'; $state.code = 'NO_INTENT'; $state.runOnce = Remove-Registration $Roots; return }
+    if ($intent.state -ne 'present') {
+        $state.code = 'INTENT_INVALID'; $state.runOnce = Remove-Registration $Roots
+        try { Write-FailureReadme $Roots.uninstall $Roots.dataRoot $state.code $false $null; $state.readme = $true } catch { $state.readme = $false }
+        return
+    }
+
+    # Right away, before anything else can fail: the intent counts this attempt, then, below the limit, the script
+    # registers itself again (Windows removed the value before starting it). From here on any error, and any kill, is
+    # followed by another attempt at the next sign-in, and every attempt is counted, so at most 10 are ever made.
+    $attempts = [int]$intent.record.attempts + 1
+    $state.attempts = $attempts
+    try { Write-AtomicText $Roots.uninstall 'pending.json' (ConvertTo-BoundedIntentText $intent.record $attempts $intent.folders $intent.known) } catch {
+        $state.code = 'INTENT_FAILED'; $state.runOnce = Remove-Registration $Roots
+        try { Write-FailureReadme $Roots.uninstall $Roots.dataRoot $state.code $false $null; $state.readme = $true } catch { $state.readme = $false }
+        return
+    }
+    if ($attempts -lt $MaxAttempts) { $state.runOnce = Set-Registration $Roots }
+    Invoke-TestFault 'registered'
+
     # The application was installed again: its own start or install hook cancels the deferral; nothing to do here.
     $installRoot = Join-Path $Roots.base 'ETS2TelemetryDesktop'
     $installed = @(if ((Get-Kind $installRoot) -eq 'directory') {
@@ -619,18 +700,6 @@ function Invoke-Cleanup($Roots) {
             Where-Object { (Get-Kind (Join-Path $_.FullName 'ETS2TelemetryDesktop.exe')) -eq 'file' }
     })
     if ($installed.Count) { $state.outcome = 'not-needed'; $state.code = 'APP_INSTALLED'; $state.runOnce = Remove-Registration $Roots; return }
-    $intent = Read-Intent $Roots.uninstall
-    if ($intent.state -eq 'absent') { $state.outcome = 'not-needed'; $state.code = 'NO_INTENT'; $state.runOnce = Remove-Registration $Roots; return }
-    if ($intent.state -ne 'present') { $state.code = 'INTENT_INVALID'; $state.runOnce = Remove-Registration $Roots; return }
-
-    # Before anything is deleted: the intent counts this attempt, and below the limit the script registers itself again,
-    # so a run that is killed from here on is still tried again at the next sign-in.
-    $attempts = [int]$intent.record.attempts + 1
-    $state.attempts = $attempts
-    try { Write-AtomicText $Roots.uninstall 'pending.json' (ConvertTo-IntentText $intent.record $attempts $intent.folders $intent.known) } catch {
-        $state.code = 'INTENT_FAILED'; $state.runOnce = Remove-Registration $Roots; return
-    }
-    if ($attempts -lt $MaxAttempts) { $state.runOnce = Set-Registration $Roots }
 
     # The folders: the install registry's (when it is a valid v1 document) merged with the intent's.
     $registry = Read-Registry $Roots.dataRoot
@@ -658,31 +727,41 @@ function Invoke-Cleanup($Roots) {
         return
     }
     $state.code = if ($blocked.Count) { $blocked[0].reason } elseif ($null -ne $registry.problem) { $registry.problem } else { 'DATA_ENTRY_BLOCKED' }
-    # The intent keeps only what is left; after the 10th attempt the script stops and leaves README.txt.
-    $left = @(foreach ($entry in $blocked) { $entry.folder }) | Select-Object -First 32
-    try { Write-AtomicText $Roots.uninstall 'pending.json' (ConvertTo-IntentText $intent.record $attempts @($left) $intent.known) } catch { $null = $_ }
+    # The intent keeps only what is left, its own folders first and within its bounds; after the 10th attempt the script
+    # stops and leaves README.txt.
+    $left = Sort-OwnFirst @(foreach ($entry in $blocked) { $entry.folder }) $intent.folders
+    try { Write-AtomicText $Roots.uninstall 'pending.json' (ConvertTo-BoundedIntentText $intent.record $attempts $left $intent.known) } catch { $null = $_ }
     $stopped = $attempts -ge $MaxAttempts
     if ($stopped) { $state.outcome = 'stopped'; $state.runOnce = Remove-Registration $Roots } else { $state.outcome = 'deferred' }
-    try { Write-Readme $Roots.uninstall $Roots.dataRoot @($left) $intent.known $state.code $attempts $stopped; $state.readme = $true } catch { $state.readme = $false }
+    $mode = if ($stopped) { 'stopped' } else { 'deferred' }
+    try { Write-Readme $Roots.uninstall $Roots.dataRoot @($left) $intent.known $state.code $attempts $mode; $state.readme = $true } catch { $state.readme = $false }
 }
 
 $roots = $null
-$testParameter = $PSBoundParameters.ContainsKey('TestRunningImages')
+$testParameter = $PSBoundParameters.ContainsKey('TestRunningImages') -or $PSBoundParameters.ContainsKey('TestFailAt')
 try {
     $roots = Resolve-Roots
     if ($null -ne $roots.code) { $Result.code = $roots.code }
     elseif ($testParameter -and $roots.mode -ne 'test-root') { $Result.mode = $roots.mode; $Result.code = 'TEST_PARAMETER_REFUSED' }
     else {
         $Result.mode = $roots.mode
-        if ($testParameter) {
+        if ($PSBoundParameters.ContainsKey('TestRunningImages')) {
             $script:UseTestImages = $true
             $script:TestImages = @(if ($TestRunningImages -cne 'none') { $TestRunningImages.Split(',') | ForEach-Object { $_.Trim().ToLowerInvariant() } })
         }
+        if ($PSBoundParameters.ContainsKey('TestFailAt')) { $script:FailAt = $TestFailAt }
         Invoke-Cleanup $roots
     }
 } catch {
-    # An unexpected failure: what was registered stays, so the next sign-in tries again and counts the attempt.
+    # An unexpected error. Once the attempt was counted and the script registered itself again, the next sign-in tries
+    # again; before that, nothing runs again. README.txt says which, and how to finish by hand. The README goes only into
+    # a folder the roots accepted, or, when the roots themselves failed, into this script's own plain uninstall folder.
     $Result.outcome = 'refused'; $Result.code = 'EXECUTOR_FAILED'
+    $retry = $Result.runOnce -eq 'registered'
+    $uninstallFolder = if ($null -ne $roots -and $null -eq $roots.code) { $roots.uninstall } elseif ($null -eq $roots -and [IO.Path]::GetFileName($PSScriptRoot) -eq 'uninstall' -and (Get-Kind $PSScriptRoot) -eq 'directory') { $PSScriptRoot } else { $null }
+    if ($null -ne $uninstallFolder) {
+        try { Write-FailureReadme $uninstallFolder ([IO.Path]::GetDirectoryName($uninstallFolder)) $Result.code $retry $Result.attempts; $Result.readme = $true } catch { $Result.readme = $false }
+    }
 } finally {
     if ($null -ne $roots -and $null -eq $roots.code -and $Result.code -cne 'TEST_PARAMETER_REFUSED') { Show-Summary $roots }
     Write-Receipt
