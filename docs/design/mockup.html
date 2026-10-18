@@ -1,0 +1,1030 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Yukon Union Telemetry UI</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700;800&display=swap">
+<style>
+/* Layout: a presentation page holding a scaled 1280x800 Electron window (or a 1920x1080 game scene for the overlay).
+   Colours mirror docs/design/tokens.css, which is the source of truth; this page inlines a copy because it must run
+   standalone. Every implementable region carries data-spec="<id>" matching docs/design/ui-spec.md. */
+:root {
+  color-scheme: dark;
+  --yu-bg-app: #111827; --yu-bg-chrome: #0B1120; --yu-bg-card: #1F2937; --yu-bg-inset: #1A2332; --yu-bg-input: #111827;
+  --yu-border: #374151; --yu-border-input: #4B5563; --yu-divider: #2B3544; --yu-divider-chrome: #1F2937;
+  --yu-text: #F3F4F6; --yu-text-secondary: #D1D5DB; --yu-text-muted: #9CA3AF;
+  --yu-accent: #2563EB; --yu-accent-fg: #FFFFFF; --yu-accent-light: #60A5FA;
+  --yu-selected-bg: rgba(37,99,235,.16); --yu-selected-border: rgba(96,165,250,.45); --yu-selected-fg: #DBEAFE;
+  --yu-ok-fg: #8FD3AE; --yu-ok-bg: #13261D; --yu-ok-border: #2A5640;
+  --yu-warn-fg: #E8C58A; --yu-warn-bg: #2A2213; --yu-warn-border: #5A4421;
+  --yu-err-fg: #F3B4A4; --yu-err-bg: #2A1616; --yu-err-border: #5B2A27;
+  --yu-neutral-fg: #D1D5DB; --yu-neutral-bg: #182131; --yu-neutral-border: #4B5563;
+  --yu-online: #34D399; --yu-progress-pending: #E3A13F;
+  --yu-ets2-fg: #7DD3FC; --yu-ets2-bg: rgba(14,165,233,.12); --yu-ets2-border: rgba(56,189,248,.4);
+  --yu-ats-fg: #C4B5FD; --yu-ats-bg: rgba(139,92,246,.12); --yu-ats-border: rgba(167,139,250,.4);
+  --yu-tile-gradient: linear-gradient(135deg, rgba(37,99,235,.32), rgba(31,41,55,.95) 70%); --yu-tile-border: rgba(96,165,250,.5);
+  --yu-tile-teal-gradient: linear-gradient(135deg, rgba(20,184,166,.28), rgba(31,41,55,.95) 70%); --yu-tile-teal-border: rgba(45,212,191,.45);
+  --yu-ov-panel: rgba(11,17,32,.80); --yu-ov-border: rgba(55,65,81,.9); --yu-ov-text: #F3F4F6; --yu-ov-muted: rgba(209,213,219,.72);
+  --yu-ov-icon: rgba(156,163,175,.9); --yu-ov-accent: #60A5FA; --yu-ov-fuel: #8FD3AE; --yu-ov-low: #E8C58A; --yu-ov-bad: #F3B4A4; --yu-ov-edit: #60A5FA;
+  --font: 'Onest', 'Segoe UI', system-ui, sans-serif;
+  --page: #080D19;
+}
+* { box-sizing: border-box; }
+html, body { background: var(--page); color: var(--yu-text); }
+body { margin: 0; font-family: var(--font); font-size: 14px; line-height: 1.45; padding-inline: 16px; padding-block: 24px 56px; }
+button { font: inherit; color: inherit; }
+button:focus-visible, [tabindex]:focus-visible, input:focus-visible { outline: 2px solid var(--yu-accent-light); outline-offset: 2px; }
+
+/* ---------- Presentation page ---------- */
+.page { max-width: 1320px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+.phead { display: flex; flex-wrap: wrap; gap: 14px 28px; align-items: center; justify-content: space-between; }
+.phead .brandline { display: flex; align-items: center; gap: 12px; }
+.phead img { width: 44px; height: 44px; }
+.phead h1 { margin: 0; font-size: 24px; font-weight: 700; }
+.phead p { margin: 2px 0 0; color: var(--yu-text-muted); font-size: 13px; max-width: 70ch; }
+.ctrls { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; padding: 12px 14px; background: var(--yu-bg-chrome); border: 1px solid var(--yu-divider-chrome); border-radius: 12px; }
+.ctl { display: flex; align-items: center; gap: 8px; }
+.ctl > span { font-size: 11px; font-weight: 600; letter-spacing: .6px; text-transform: uppercase; color: var(--yu-text-muted); }
+.pseg { display: inline-flex; flex-wrap: wrap; background: var(--yu-bg-input); border: 1px solid var(--yu-border); border-radius: 10px; padding: 3px; gap: 2px; }
+.pseg button { border: 0; background: transparent; color: var(--yu-text-secondary); min-height: 30px; padding: 0 11px; border-radius: 7px; font-size: 13px; font-weight: 600; cursor: pointer; }
+.pseg button[aria-pressed="true"] { background: var(--yu-accent); color: #fff; }
+.stage { position: relative; width: 100%; }
+.stage > .scaled { position: absolute; top: 0; left: 0; transform-origin: 0 0; }
+.notes { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 14px; }
+.note { background: var(--yu-bg-card); border: 1px solid var(--yu-border); border-radius: 12px; padding: 14px 18px; min-width: 0; }
+.note h2 { margin: 0 0 8px; font-size: 15px; font-weight: 600; border-left: 3px solid var(--yu-accent); padding-left: 10px; }
+.note p, .note li { margin: 0; font-size: 13px; color: var(--yu-text-secondary); }
+.note ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
+.note code { font-size: 12px; color: var(--yu-selected-fg); background: var(--yu-bg-inset); padding: 1px 5px; border-radius: 4px; }
+@media (max-width: 860px) { .notes { grid-template-columns: minmax(0, 1fr); } }
+
+/* ---------- Window ---------- */
+.win { width: 1280px; height: 800px; background: var(--yu-bg-app); border: 1px solid #1F2937; border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; font-size: 13px; color: var(--yu-text); box-shadow: 0 40px 90px -30px rgba(0,0,0,.8); position: relative; }
+.titlebar { height: 32px; flex: none; display: flex; align-items: center; gap: 8px; background: var(--yu-bg-chrome); padding-left: 10px; font-size: 12px; color: var(--yu-text-muted); border-bottom: 1px solid var(--yu-divider-chrome); }
+.titlebar img { width: 16px; height: 16px; }
+.titlebar .cap { margin-left: auto; display: flex; }
+.titlebar .cap span { width: 46px; height: 32px; display: grid; place-items: center; color: var(--yu-text-secondary); }
+.wbody { flex: 1; min-height: 0; display: flex; }
+.side { width: 220px; flex: none; background: var(--yu-bg-chrome); border-right: 1px solid var(--yu-divider-chrome); display: flex; flex-direction: column; gap: 16px; padding: 14px 10px 12px; }
+.lockup { display: flex; align-items: center; gap: 10px; padding: 0 6px; }
+.lockup img { width: 36px; height: 36px; flex: none; }
+.lockup b { display: block; font-size: 15px; font-weight: 700; line-height: 1.2; }
+.lockup span { display: block; font-size: 11px; color: var(--yu-text-muted); }
+.navg { display: flex; flex-direction: column; gap: 2px; }
+.navg > .gl { font-size: 11px; font-weight: 600; letter-spacing: .6px; text-transform: uppercase; color: var(--yu-text-muted); padding: 0 10px 6px; display: flex; align-items: center; gap: 6px; }
+.nav { display: flex; align-items: center; gap: 10px; min-height: 38px; padding: 0 10px; border-radius: 10px; border: 1px solid transparent; background: transparent; color: var(--yu-text-secondary); font-size: 13.5px; cursor: pointer; text-align: left; width: 100%; }
+.nav:hover { background: rgba(255,255,255,.03); }
+.nav[aria-current="page"] { background: var(--yu-selected-bg); border-color: var(--yu-selected-border); color: var(--yu-selected-fg); font-weight: 600; }
+.nav .grow { flex: 1; }
+.sfoot { margin-top: auto; display: flex; flex-direction: column; gap: 10px; }
+.recbox { background: var(--yu-bg-app); border: 1px solid var(--yu-divider-chrome); border-radius: 12px; padding: 10px 12px; display: flex; flex-direction: column; gap: 3px; }
+.recbox .l1 { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 13px; }
+.recbox .l2 { font-size: 12px; color: var(--yu-text-muted); }
+.sfoot .row2 { display: flex; gap: 8px; border-top: 1px solid var(--yu-divider-chrome); padding-top: 10px; }
+.main { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; }
+.topbar { height: 52px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 20px; background: var(--yu-bg-chrome); border-bottom: 1px solid var(--yu-divider-chrome); }
+.topbar h1 { margin: 0 12px 0 0; font-size: 18px; font-weight: 700; }
+.content { flex: 1; min-height: 0; overflow: auto; padding: 18px 20px 20px; display: flex; flex-direction: column; gap: 14px; }
+
+.ico { width: 16px; height: 16px; flex: none; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.ico.s { width: 14px; height: 14px; } .ico.l { width: 18px; height: 18px; } .ico.xl { width: 28px; height: 28px; }
+
+.card { background: var(--yu-bg-card); border: 1px solid var(--yu-border); border-radius: 12px; min-width: 0; }
+.card.hero { background: var(--yu-tile-gradient); border-color: var(--yu-tile-border); }
+.card.teal { background: var(--yu-tile-teal-gradient); border-color: var(--yu-tile-teal-border); }
+.ch { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 14px 16px 0; }
+.ct { font-size: 15px; font-weight: 600; border-left: 3px solid var(--yu-accent); padding-left: 10px; line-height: 1.25; margin: 0; }
+.cd { font-size: 12px; color: var(--yu-text-muted); }
+.cb { padding: 12px 16px 16px; }
+.grid { display: grid; gap: 14px; }
+.row { display: flex; align-items: center; gap: 8px; }
+.wrap { flex-wrap: wrap; }
+.between { justify-content: space-between; }
+.muted { color: var(--yu-text-muted); }
+.t2 { color: var(--yu-text-secondary); }
+.small { font-size: 12px; }
+.num { font-variant-numeric: tabular-nums; }
+.b6 { font-weight: 600; }
+.b7 { font-weight: 700; }
+.mono { font-variant-numeric: tabular-nums; letter-spacing: .01em; }
+.label { font-size: 12px; color: var(--yu-text-muted); }
+.metric { font-size: 28px; font-weight: 800; line-height: 1.1; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+.metric small { font-size: 13px; font-weight: 600; color: var(--yu-text-muted); margin-left: 4px; letter-spacing: 0; }
+.sep { height: 1px; background: var(--yu-divider); }
+
+.chip { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 3px 10px; border-radius: 8px; font-size: 12px; font-weight: 700; border: 1px solid; white-space: nowrap; }
+.badge { display: inline-flex; align-items: center; gap: 5px; min-height: 22px; padding: 2px 8px; border-radius: 6px; font-size: 12px; font-weight: 600; border: 1px solid; white-space: nowrap; }
+.ok { color: var(--yu-ok-fg); background: var(--yu-ok-bg); border-color: var(--yu-ok-border); }
+.warn { color: var(--yu-warn-fg); background: var(--yu-warn-bg); border-color: var(--yu-warn-border); }
+.err { color: var(--yu-err-fg); background: var(--yu-err-bg); border-color: var(--yu-err-border); }
+.neutral { color: var(--yu-neutral-fg); background: var(--yu-neutral-bg); border-color: var(--yu-neutral-border); }
+.g-ets2 { color: var(--yu-ets2-fg); background: var(--yu-ets2-bg); border-color: var(--yu-ets2-border); }
+.g-ats { color: var(--yu-ats-fg); background: var(--yu-ats-bg); border-color: var(--yu-ats-border); }
+.later { color: #93C5FD; background: transparent; border: 1px dashed var(--yu-accent-light); }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; flex: none; }
+.dot.live { background: var(--yu-online); box-shadow: 0 0 0 3px rgba(52,211,153,.18); }
+
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 34px; padding: 0 14px; border-radius: 10px; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; border: 1px solid transparent; }
+.btn.p { background: var(--yu-accent); color: #fff; }
+.btn.s { background: transparent; border-color: var(--yu-border-input); color: var(--yu-text); }
+.btn.d { background: transparent; border-color: var(--yu-err-fg); color: var(--yu-err-fg); }
+.btn.g { background: transparent; color: var(--yu-text-secondary); }
+.btn.sm { min-height: 30px; padding: 0 11px; font-size: 12.5px; }
+.btn.icon { width: 34px; padding: 0; }
+.input { display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 0 11px; border-radius: 10px; background: var(--yu-bg-input); border: 1px solid var(--yu-border-input); color: var(--yu-text-muted); font-size: 13px; }
+.input.val { color: var(--yu-text); justify-content: space-between; }
+.seg { display: inline-flex; background: var(--yu-bg-input); border: 1px solid var(--yu-border); border-radius: 10px; padding: 3px; gap: 2px; }
+.seg button { border: 0; background: transparent; color: var(--yu-text-secondary); min-height: 28px; padding: 0 11px; border-radius: 7px; font-size: 12.5px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+.seg button.on { background: var(--yu-accent); color: #fff; }
+.bar { height: 8px; border-radius: 99px; background: var(--yu-border); overflow: hidden; }
+.bar > i { display: block; height: 100%; border-radius: 99px; background: var(--yu-accent-light); }
+.bar.amber > i { background: var(--yu-progress-pending); }
+.bar.ok > i { background: var(--yu-ok-fg); }
+.switch { width: 36px; height: 20px; border-radius: 99px; background: var(--yu-border); position: relative; flex: none; border: 0; cursor: pointer; padding: 0; }
+.switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 14px; height: 14px; border-radius: 50%; background: var(--yu-text-secondary); transition: left .15s; }
+.switch.on { background: var(--yu-accent); }
+.switch.on::after { left: 19px; background: #fff; }
+.slider { position: relative; height: 20px; display: flex; align-items: center; width: 160px; }
+.slider::before { content: ""; position: absolute; left: 0; right: 0; height: 6px; border-radius: 99px; background: var(--yu-border); }
+.slider > i { position: absolute; left: 0; height: 6px; border-radius: 99px; background: var(--yu-accent-light); }
+.slider > b { position: absolute; width: 16px; height: 16px; border-radius: 50%; background: #fff; border: 2px solid var(--yu-accent); transform: translateX(-50%); }
+.check { width: 18px; height: 18px; border-radius: 5px; border: 1px solid var(--yu-border-input); display: grid; place-items: center; flex: none; }
+.check.on { background: var(--yu-accent); border-color: var(--yu-accent); color: #fff; }
+.radio { width: 18px; height: 18px; border-radius: 50%; border: 1px solid var(--yu-border-input); display: grid; place-items: center; flex: none; }
+.radio.on { border-color: var(--yu-accent-light); }
+.radio.on::after { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--yu-accent-light); }
+
+table.t { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.t th { text-align: left; background: var(--yu-bg-inset); color: var(--yu-text-muted); font-size: 12px; font-weight: 500; height: 34px; padding: 0 10px; white-space: nowrap; }
+table.t td { padding: 9px 10px; border-top: 1px solid var(--yu-divider); vertical-align: middle; }
+table.t .r { text-align: right; }
+table.t tbody tr { cursor: pointer; }
+table.t tbody tr:hover td { background: rgba(255,255,255,.025); }
+.kv { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 7px 0; border-top: 1px solid var(--yu-divider); }
+.kv:first-child { border-top: 0; }
+.kv > span:first-child { color: var(--yu-text-muted); }
+.kv .note { display: block; font-size: 11px; color: var(--yu-text-muted); opacity: .8; }
+.kv b { font-weight: 600; text-align: right; font-variant-numeric: tabular-nums; }
+
+.win[data-conn="lost"] .val, .ovl[data-conn="lost"] .val { opacity: .45; }
+.win[data-conn="waiting"] .val { color: var(--yu-text-muted); }
+
+/* Live */
+.gear { min-width: 64px; height: 64px; padding: 0 10px; border-radius: 12px; border: 1px solid var(--yu-tile-border); background: rgba(11,17,32,.5); display: grid; place-items: center; font-size: 36px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.tank { width: 46px; height: 168px; border-radius: 10px; background: var(--yu-bg-inset); border: 1px solid var(--yu-border); position: relative; overflow: hidden; flex: none; }
+.tank > i { position: absolute; left: 0; right: 0; bottom: 0; }
+.tank > s { position: absolute; left: 0; right: 0; height: 1px; background: rgba(0,0,0,.35); }
+.route { position: relative; height: 40px; }
+.route .ln { position: absolute; left: 10px; right: 10px; top: 18px; height: 8px; border-radius: 99px; background: var(--yu-border); }
+.route .dn { position: absolute; left: 10px; top: 18px; height: 8px; border-radius: 99px; background: var(--yu-accent-light); }
+.route .pt { position: absolute; top: 13px; width: 18px; height: 18px; border-radius: 50%; border: 4px solid var(--yu-bg-card); }
+.route .tk { position: absolute; top: 6px; width: 32px; height: 32px; border-radius: 50%; background: var(--yu-accent); color: #fff; display: grid; place-items: center; transform: translateX(-50%); box-shadow: 0 0 0 4px var(--yu-bg-card); }
+.hmgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px; }
+.hmi { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--yu-text-secondary); min-height: 24px; }
+.hmi.bad { color: var(--yu-err-fg); }
+.empty { display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 8px; padding: 28px 20px; color: var(--yu-text-secondary); }
+.empty .ei { width: 52px; height: 52px; border-radius: 14px; display: grid; place-items: center; border: 1px solid var(--yu-border); background: var(--yu-bg-inset); color: var(--yu-accent-light); }
+.empty h3 { margin: 4px 0 0; font-size: 16px; font-weight: 700; color: var(--yu-text); }
+.empty p { margin: 0; max-width: 46ch; font-size: 13px; color: var(--yu-text-muted); }
+
+/* Sheet */
+.scrim { position: absolute; inset: 0; background: rgba(3,6,14,.55); }
+.sheet { position: absolute; top: 0; right: 0; bottom: 0; width: 470px; background: var(--yu-bg-card); border-left: 1px solid var(--yu-border); box-shadow: -20px 0 50px rgba(0,0,0,.45); display: flex; flex-direction: column; }
+.sheet .sh { padding: 16px 18px 12px; border-bottom: 1px solid var(--yu-divider); display: flex; flex-direction: column; gap: 10px; }
+.sheet .sb { flex: 1; overflow: auto; padding: 4px 18px 12px; }
+.sheet .sf { padding: 12px 18px; border-top: 1px solid var(--yu-divider); font-size: 12px; color: var(--yu-text-muted); }
+.crit { display: grid; grid-template-columns: 26px minmax(0, 1fr) 70px 70px; gap: 10px; align-items: center; padding: 9px 0; border-top: 1px solid var(--yu-divider); }
+.crit:first-child { border-top: 0; }
+.crit .cv { font-size: 11px; color: var(--yu-text-muted); }
+.crit .req, .crit .det { text-align: right; font-variant-numeric: tabular-nums; font-size: 12.5px; }
+.crit.bad .det { color: var(--yu-err-fg); font-weight: 700; }
+.sicon { width: 22px; height: 22px; border-radius: 6px; display: grid; place-items: center; border: 1px solid; }
+
+/* Journal + trip */
+.tl { display: grid; grid-template-columns: 50px 16px minmax(0,1fr) auto; gap: 8px; align-items: start; padding: 7px 0; }
+.tl .rl { position: relative; height: 100%; display: flex; justify-content: center; }
+.tl .rl::before { content: ""; position: absolute; top: 14px; bottom: -14px; width: 1px; background: var(--yu-divider); }
+.tl:last-child .rl::before { display: none; }
+.tl .rl i { width: 9px; height: 9px; border-radius: 50%; margin-top: 5px; position: relative; }
+.ivbar { display: flex; height: 14px; border-radius: 6px; overflow: hidden; gap: 2px; }
+.ivbar i { display: block; height: 100%; }
+
+/* Settings */
+.snav { width: 200px; flex: none; display: flex; flex-direction: column; gap: 2px; }
+.srow { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 24px; align-items: center; padding: 12px 0; border-top: 1px solid var(--yu-divider); }
+.srow:first-child { border-top: 0; }
+.srow b { display: block; font-weight: 600; font-size: 13.5px; }
+.srow .d { font-size: 12px; color: var(--yu-text-muted); }
+.lopt { border: 1px solid var(--yu-border); border-radius: 10px; padding: 8px; display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; font-weight: 600; background: var(--yu-bg-inset); cursor: pointer; text-align: left; }
+.lopt.on { border-color: var(--yu-selected-border); background: var(--yu-selected-bg); color: var(--yu-selected-fg); }
+.lopt .th { height: 56px; border-radius: 6px; background: linear-gradient(180deg, #33415c, #2a3324); position: relative; }
+.lopt .th i { position: absolute; background: rgba(11,17,32,.85); border: 1px solid rgba(96,165,250,.5); border-radius: 3px; }
+.secrow { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 10px; min-height: 40px; padding: 0 2px; border: 0; border-top: 1px solid var(--yu-divider); background: transparent; color: var(--yu-text); font-size: 13px; cursor: pointer; text-align: left; }
+.secrow:first-of-type { border-top: 0; }
+.secrow .req { font-size: 11px; color: var(--yu-text-muted); margin-left: 6px; }
+
+/* Wizard */
+.wiz { flex: 1; display: grid; grid-template-columns: 300px minmax(0,1fr); min-height: 0; }
+.wsteps { background: var(--yu-bg-chrome); border-right: 1px solid var(--yu-divider-chrome); padding: 28px 22px; display: flex; flex-direction: column; gap: 6px; }
+.wstep { display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 0 10px; border-radius: 10px; border: 1px solid transparent; color: var(--yu-text-muted); }
+.wstep .n { width: 26px; height: 26px; border-radius: 50%; border: 1px solid var(--yu-border-input); display: grid; place-items: center; font-weight: 700; font-size: 12px; }
+.wstep.on { background: var(--yu-selected-bg); border-color: var(--yu-selected-border); color: var(--yu-selected-fg); }
+.wstep.on .n { background: var(--yu-accent); border-color: var(--yu-accent); color: #fff; }
+.wstep.done { color: var(--yu-text-secondary); }
+.wstep.done .n { background: var(--yu-ok-bg); border-color: var(--yu-ok-border); color: var(--yu-ok-fg); }
+
+/* Inspect mode: shows spec ids */
+.inspect [data-spec] { outline: 1px dashed rgba(96,165,250,.75); outline-offset: -1px; position: relative; }
+.inspect [data-spec]::after { content: attr(data-spec); position: absolute; top: 0; left: 0; z-index: 20; font: 600 10px/1.5 var(--font); color: #fff; background: rgba(37,99,235,.92); padding: 0 5px; border-radius: 0 0 4px 0; pointer-events: none; white-space: nowrap; }
+
+/* ---------- Overlay scene ---------- */
+.scene { width: 1920px; height: 1080px; position: relative; overflow: hidden; border-radius: 10px; border: 1px solid #1F2937; font-family: var(--font); background: #1b2230; }
+.scene svg.bg { position: absolute; inset: 0; }
+.ovl { position: absolute; color: var(--yu-ov-text); }
+.ovl .val { font-variant-numeric: tabular-nums; }
+.ovl .panel { background: var(--yu-ov-panel); border: 1px solid var(--yu-ov-border); border-radius: 10px; }
+.ovl .lbl { font-size: 10.5px; letter-spacing: .07em; text-transform: uppercase; color: var(--yu-ov-muted); font-weight: 600; }
+.ovl .tag { display: inline-flex; align-items: center; gap: 5px; font-size: 10.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; padding: 2px 7px; border-radius: 5px; border: 1px solid; }
+.ovl .tag.w { color: var(--yu-warn-fg); background: rgba(42,34,19,.9); border-color: var(--yu-warn-border); }
+.ovl .tag.e { color: var(--yu-err-fg); background: rgba(42,22,22,.9); border-color: var(--yu-err-border); }
+.ovl .strip { display: flex; align-items: center; gap: 14px; height: 38px; padding: 0 14px 0 12px; white-space: nowrap; font-size: 14px; font-weight: 600; }
+.ovl .sx { display: inline-flex; align-items: center; gap: 6px; font-variant-numeric: tabular-nums; }
+.ovl .sx .ico { color: var(--yu-ov-icon); stroke-width: 2; }
+.ovl .sx small { font-size: 11px; font-weight: 500; color: var(--yu-ov-muted); margin-left: -2px; }
+.ovl .sp .val { font-size: 22px; font-weight: 800; letter-spacing: -.02em; }
+.ovl .gearchip { min-width: 26px; height: 24px; padding: 0 6px; border-radius: 6px; border: 1.5px solid rgba(96,165,250,.6); display: inline-grid; place-items: center; font-size: 13.5px; font-weight: 800; }
+.ovl .mini { width: 34px; height: 4px; border-radius: 99px; background: rgba(255,255,255,.14); overflow: hidden; display: inline-block; }
+.ovl .mini > i { display: block; height: 100%; background: var(--yu-ov-accent); }
+.ovl .mini.fuel > i { background: var(--yu-ov-fuel); } .ovl .mini.low > i { background: var(--yu-ov-low); }
+.ovl .vr { width: 1px; height: 18px; background: rgba(255,255,255,.16); }
+.ovl .hm.ok { color: var(--yu-ov-fuel); } .ovl .hm.bad { color: var(--yu-ov-bad); }
+.ovl .obar { height: 5px; border-radius: 99px; background: rgba(255,255,255,.14); overflow: hidden; }
+.ovl .obar > i { display: block; height: 100%; background: var(--yu-ov-accent); }
+.ovl .obar.fuel > i { background: var(--yu-ov-fuel); } .ovl .obar.low > i { background: var(--yu-ov-low); }
+.ovl.edit { outline: 2px dashed var(--yu-ov-edit); outline-offset: 6px; }
+.ovl .handle { position: absolute; display: none; align-items: center; gap: 6px; font-size: 12px; background: var(--yu-ov-edit); color: #0B1120; padding: 3px 9px; border-radius: 6px; font-weight: 700; white-space: nowrap; }
+.ovl.edit .handle { display: inline-flex; }
+.editbar { position: absolute; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 12px; padding: 8px 10px 8px 14px; border-radius: 10px; background: rgba(11,17,32,.94); border: 1px solid rgba(96,165,250,.55); color: var(--yu-text); font-size: 13px; white-space: nowrap; }
+.hidden-note { position: absolute; left: 50%; top: 45%; transform: translate(-50%,-50%); padding: 12px 18px; border-radius: 12px; border: 1px dashed rgba(255,255,255,.35); color: rgba(255,255,255,.8); font-size: 16px; background: rgba(0,0,0,.4); text-align: center; }
+.scene-label { position: absolute; font-size: 13px; color: rgba(255,255,255,.45); letter-spacing: .04em; }
+
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="phead">
+    <div class="brandline"><img src="assets/yukon-union-emblem.png" alt=""><div>
+      <h1>Yukon Union Telemetry · UI</h1>
+      <p>Final desktop mockup for ETS2Telemetry in the Yukon Union style. Spec: <code>docs/design/ui-spec.md</code>, tokens: <code>docs/design/tokens.css</code>. Switch on Inspect to see the spec id of each region.</p>
+    </div></div>
+  </header>
+  <nav class="ctrls" aria-label="Mockup controls">
+    <div class="ctl"><span>Screen</span><div class="pseg" id="c-screen">
+      <button data-screen="live">Live</button><button data-screen="journal">Journal</button><button data-screen="trip">Trip details</button><button data-screen="settings">Settings</button><button data-screen="account">Account & sync</button><button data-screen="onboarding">First run</button><button data-screen="states">States</button><button data-screen="overlay">Overlay</button></div></div>
+    <div class="ctl"><span>Language</span><div class="pseg" id="c-lang"><button data-lang="en">EN</button><button data-lang="ru">RU</button></div></div>
+    <div class="ctl"><span>Game</span><div class="pseg" id="c-game"><button data-game="ets2">ETS2</button><button data-game="ats">ATS</button></div></div>
+    <div class="ctl"><span>Connection</span><div class="pseg" id="c-conn"><button data-conn="live">Live</button><button data-conn="paused">Paused</button><button data-conn="waiting">Waiting</button><button data-conn="lost">Lost</button></div></div>
+    <div class="ctl"><span>Hard Mode</span><div class="pseg" id="c-hm"><button data-hm="pass">12/12</button><button data-hm="fail">10/12</button><button data-hm="lost">Lost mid-trip</button></div></div>
+    <div class="ctl"><span>Inspect</span><div class="pseg" id="c-inspect"><button data-inspect="off">Off</button><button data-inspect="on">Spec ids</button></div></div>
+  </nav>
+  <div class="stage" id="stage"><div class="scaled" id="host"></div></div>
+  <div class="notes"><section class="note" id="note-main"></section><section class="note" id="note-side"></section></div>
+</div>
+
+<script>
+(function () {
+'use strict';
+var EMBLEM = 'assets/yukon-union-emblem.png';
+
+/* ---------- Strings (EN canonical, RU proposed). Keys are proposals for apps/desktop/src/strings.ts ---------- */
+var I18N = {
+en: {
+  'app.name': 'Yukon Union', 'app.sub': 'Telemetry · ETS2 · ATS', 'app.window': 'Yukon Union Telemetry',
+  'nav.live': 'Live', 'nav.journal': 'Journal', 'nav.settings': 'Settings', 'nav.account': 'Account & sync', 'nav.group.drive': 'Drive', 'nav.group.app': 'Application', 'nav.group.company': 'Company',
+  'tag.later': 'Later', 'tag.planned': 'Planned', 'side.exit': 'Exit', 'side.lang': 'Language',
+  'rec.recording': 'Recording', 'rec.trip': 'Trip · {d}', 'rec.paused': 'Recording paused', 'rec.pausedSub': 'Resumes with the game',
+  'rec.waiting': 'Not recording', 'rec.waitingSub': 'Waiting for the game', 'rec.lost': 'Connection lost', 'rec.lostSub': 'Missing time is kept as a gap',
+  'chip.game.live': '{game} · {mode}', 'chip.game.paused': '{game} paused', 'chip.game.waiting': 'Waiting for the game', 'chip.game.lost': 'No data · 12 s',
+  'chip.plugin': 'Plugin {n}/{m}', 'chip.hm.pass': 'Hard Mode', 'chip.hm.fail': 'Hard Mode {n}/12', 'chip.hm.lost': 'Hard Mode lost', 'chip.sync': 'Dashboard · later',
+  'mode.sp': 'Single-player', 'mode.tmp': 'TruckersMP', 'stale': 'stale 12 s', 'paused': 'paused',
+  'live.title': 'Live', 'live.speed': 'Speed', 'live.gear': 'Gear', 'live.rpm': 'Engine RPM', 'live.fuel': 'Fuel', 'live.of': 'of {v}', 'live.range': 'Range', 'live.rangeNote': "game's estimate",
+  'live.cons': 'Average consumption', 'live.consNote': 'SDK mean, not a trip average', 'live.consNoteAts': 'SDK mean; mostly static in ATS',
+  'live.job': 'Current job', 'live.market.freight': 'Freight market', 'live.market.cargo': 'Cargo market', 'live.driven': 'Driven', 'live.remaining': 'Remaining', 'live.planned': 'planned {v}', 'live.plannedNote': 'job offer, excludes ferries',
+  'live.deadline': 'Deadline', 'live.income': 'Expected income', 'live.trip': 'This trip', 'live.realTime': 'Real time', 'live.gameTime': 'Game time', 'live.fuelUsed': 'Fuel used', 'live.recording': 'Recording',
+  'live.truck': 'Truck', 'live.plate': 'Plate', 'live.trailer': 'Trailer', 'live.odometer': 'Odometer', 'live.session': 'Game session', 'live.clock': 'Game clock', 'live.mode': 'Mode', 'live.protocol': 'Protocol', 'live.lostEvents': 'Lost events',
+  'live.waitTitle': 'Waiting for the game', 'live.waitText': 'Start Euro Truck Simulator 2 or American Truck Simulator. The plugin connects on its own; nothing to click here.',
+  'complete.complete': 'Complete', 'complete.partial': 'Partial', 'complete.unknown': 'Unknown',
+  'hm.title': 'Hard Mode', 'hm.active': 'Active', 'hm.inactive': 'Not active', 'hm.lost': 'Lost for this trip', 'hm.count': '{n} of 12 settings meet Hard Mode', 'hm.view': 'View checklist',
+  'hm.lostText': '{what} changed to {v} at {time}. This trip will be recorded as standard.', 'hm.tripYes': 'This trip qualifies', 'hm.tripNo': 'This trip does not qualify',
+  'hm.sheet': 'Hard Mode checklist', 'hm.profile': 'Profile', 'hm.file': 'Settings file', 'hm.read': 'Read {s} s ago', 'hm.recheck': 'Check again',
+  'hm.col.setting': 'Setting', 'hm.col.required': 'Required', 'hm.col.detected': 'In game', 'hm.readonly': 'Read-only: the app never changes game settings. Change them in the game under Options → Gameplay; this list updates on its own.',
+  'hm.rule': 'All 12 must pass at the same time. Relaxing any of them during a job removes Hard Mode from that trip.',
+  'hm.c.fuel': 'Realistic fuel consumption', 'hm.c.airbrake': 'Air brake simulation', 'hm.c.police': 'Police and fines', 'hm.c.fatigue': 'Fatigue simulation', 'hm.c.limiter': 'Speed limiter',
+  'hm.c.truckstab': 'Truck stability', 'hm.c.trailerstab': 'Trailer stability', 'hm.c.parking': 'Difficult parking', 'hm.c.rain': 'Rain probability', 'hm.c.events': 'Random road events', 'hm.c.brake': 'Braking intensity', 'hm.c.traffic': 'Traffic density',
+  'val.on': 'On', 'val.off': 'Off', 'val.expert': 'Expert', 'val.simple': 'Simple',
+  'j.title': 'Trip journal', 'j.all': 'All', 'j.outcome': 'Outcome', 'j.recording': 'Recording', 'j.anyOutcome': 'Any outcome', 'j.anyRecording': 'Any recording', 'j.search': 'Search cargo or city', 'j.export': 'Export JSON', 'j.refresh': 'Refresh',
+  'col.started': 'Started', 'col.game': 'Game', 'col.cargo': 'Cargo', 'col.route': 'Route', 'col.distance': 'Distance', 'col.money': 'Revenue', 'col.outcome': 'Outcome', 'col.recording': 'Recording', 'col.sync': 'Sync',
+  'j.of': 'of {v}', 'j.expected': 'expected {v}', 'j.page': 'Page {p} · 50 trips per page · the journal does not update by itself', 'j.prev': 'Previous', 'j.next': 'Next', 'j.count': '{n} trips · {h} h recorded',
+  'out.open': 'In progress', 'out.delivered': 'Delivered', 'out.late': 'Delivered late', 'out.cancelled': 'Cancelled', 'out.none': 'No outcome',
+  'sync.sent': 'Sent', 'sync.queued': 'Queued', 'sync.error': 'Error', 'sync.none': '—',
+  'j.emptyTitle': 'No trips yet', 'j.emptyText': 'Take a job in the game. A trip appears here as soon as it starts.',
+  'tr.back': 'Journal', 'tr.distance': 'Distance observed', 'tr.planned': 'planned {v}', 'tr.delivered': 'game reported {v}', 'tr.revenue': 'Revenue', 'tr.penalty': 'Penalty', 'tr.expected': 'expected {v}',
+  'tr.time': 'Real time', 'tr.gameTime': '{v} game time', 'tr.fuel': 'Fuel used', 'tr.fuelNote': 'from samples, refuels excluded',
+  'tr.tab.summary': 'Summary', 'tr.tab.timeline': 'Timeline', 'tr.tab.completeness': 'Completeness', 'tr.speed': 'Speed over the trip', 'tr.samples': '1 Hz samples', 'tr.gap': 'no samples for {s} s',
+  'tr.money': 'Fines and tolls', 'tr.fines': 'Fines', 'tr.tolls': 'Tolls', 'tr.ferry': 'Ferries and trains', 'tr.hmStart': 'At job start', 'tr.hmEnd': 'At delivery', 'tr.hmSnapshot': 'Settings snapshot kept with the trip', 'tr.truck': 'Truck and trailer',
+  'tr.ivRecorded': 'Recorded', 'tr.ivGap': 'Gap', 'tr.ivTotal': '{n} completeness intervals',
+  'ev.accepted': 'Job accepted', 'ev.refuel': 'Refuelled', 'ev.fine': 'Fine: speeding', 'ev.toll': 'Toll gate', 'ev.gap': 'Gap: plugin reconnected', 'ev.delivered': 'Delivered', 'ev.cancelled': 'Cancelled', 'ev.closed': 'Game closed without an outcome', 'ev.recording': 'Recording at 1 sample per second',
+  's.general': 'General', 's.units': 'Units', 's.overlay': 'Overlay', 's.sections': 'Overlay sections', 's.plugin': 'Game plugin', 's.data': 'Data and storage', 's.about': 'About',
+  's.lang': 'Interface language', 's.langD': 'Cargo, city and company names stay as the game sends them.', 's.autostart': 'Start with Windows', 's.autostartD': 'Starts minimized to the notification area.',
+  's.close': 'Closing the window', 's.closeD': 'Closing keeps the app and recording running in the notification area. Use Exit to stop it.', 's.closeV': 'Hide to tray',
+  's.u.metric': 'Metric (km/h, L)', 's.u.us': 'US customary (mph, gal)', 's.u.d': 'Stored values never change; only the display does.',
+  's.o.show': 'Show overlay', 's.o.showD': 'Hidden while the game is minimized or another app is in front.', 's.o.layout': 'Layout', 's.o.scale': 'Scale', 's.o.opacity': 'Background opacity',
+  's.o.position': 'Position', 's.o.edit': 'Move overlay', 's.o.editD': 'The overlay takes the mouse until you press Done.', 's.o.sectionsD': '{n} of {m} sections shown', 's.o.choose': 'Choose sections',
+  'l.strip': 'Strip', 'l.card': 'Card', 'l.cluster': 'Cluster', 'l.hud': 'Minimal',
+  'p.everything': 'Everything', 'p.job': 'Job focus', 'p.driving': 'Driving only',
+  'g.driving': 'Driving', 'g.fuel': 'Fuel', 'g.job': 'Job', 'g.time': 'Time', 'g.status': 'Status',
+  'sec.speed': 'Speed', 'sec.gear': 'Gear', 'sec.rpm': 'Engine RPM', 'sec.fuel': 'Fuel level', 'sec.range': 'Range', 'sec.sdk-consumption': 'Average consumption', 'sec.cargo': 'Cargo', 'sec.origin': 'Origin',
+  'sec.destination': 'Destination', 'sec.distance-driven': 'Distance driven', 'sec.distance-remaining': 'Distance remaining', 'sec.deadline': 'Deadline', 'sec.expected-income': 'Expected income', 'sec.game-time': 'Game time', 'sec.hard-mode': 'Hard Mode status',
+  'sec.req.v1': 'needs protocol v1', 'sec.req.trip': 'needs trip tracking', 'sec.req.ids': 'ids until v1', 'sec.hint': 'A section without data stays hidden; it never shows zero.',
+  's.p.d': 'The plugin is copied into each game only while that game is closed. Other telemetry plugins are left alone.', 's.p.installed': 'Installed · hash verified', 's.p.update': 'Update waits for the game to close', 's.p.notfound': 'Game not found',
+  's.p.reinstall': 'Reinstall', 's.p.open': 'Open folder', 's.p.choose': 'Choose folder',
+  's.d.location': 'Database', 's.d.size': 'Size', 's.d.sizeV': '{mb} MB · {n} trips', 's.d.backup': 'Backup', 's.d.backupV': 'Last verified {v}', 's.d.backupBtn': 'Create backup', 's.d.diag': 'Diagnostics', 's.d.diagD': 'A bundle for bug reports.', 's.d.diagBtn': 'Save diagnostics',
+  's.a.version': 'Version', 's.a.uninstall': 'Uninstall', 's.a.uninstallD': 'Removes the app and its data. You are warned before anything is deleted.',
+  'a.title': 'Telemetry token', 'a.later': 'Server phase · not in this version', 'a.tokenD': 'Paste the token from your Yukon Union account page. The app uploads your saved trips first, then new ones.', 'a.save': 'Save and connect', 'a.show': 'Show token',
+  'a.status': 'Connection', 'a.dashboard': 'Dashboard', 'a.connected': 'Connected as {u}', 'a.queue': 'Upload queue', 'a.queueV': '{n} trips waiting', 'a.first': 'First history upload', 'a.firstV': '{d} of {t} trips',
+  'a.note': 'Uploading is not acceptance: trips are reviewed on the dashboard.', 'a.offline': 'No network. Trips stay in the queue and upload later.', 'a.lastUpload': 'Last upload', 'a.lastUploadV': '4 min ago',
+  'ob.title': 'Set up Yukon Union Telemetry', 'ob.step': 'Step {n} of 4', 'ob.s1': 'Find games', 'ob.s2': 'Install plugin', 'ob.s3': 'Language and units', 'ob.s4': 'Overlay', 'ob.back': 'Back', 'ob.next': 'Next', 'ob.finish': 'Start',
+  'ob.s1T': 'We looked for Steam libraries on this PC.', 'ob.s2T': 'Close both games first. The plugin goes into bin\\win_x64\\plugins of each game.', 'ob.install': 'Install plugin', 'ob.s3T': 'You can change both later in Settings.', 'ob.s4T': 'Pick how the overlay looks over the game.', 'ob.found': 'Found', 'ob.ready': 'Ready to install',
+  'st.title': 'Empty and error states', 'st.noGame': 'Game not found', 'st.noGameT': 'No ETS2 or ATS installation was found. Choose the game folder by hand.',
+  'st.plugin': 'Plugin not installed', 'st.pluginT': 'Close the game, then install the plugin.', 'st.wait': 'Waiting for the game', 'st.waitT': 'Start ETS2 or ATS. The plugin connects on its own.',
+  'st.lost': 'Connection lost', 'st.lostT': 'No data for 12 s. Values are greyed out until the game reconnects; the missing time is recorded as a gap.',
+  'st.version': 'Plugin version mismatch', 'st.versionT': 'The game still runs an older plugin. Close the game to update it.',
+  'st.rec': 'Recording stopped', 'st.recT': 'The trip database could not be written. Free some disk space, then restart the app.',
+  'st.noToken': 'No token', 'st.noTokenT': 'Trips are saved on this PC. Add a token to upload them to the dashboard.', 'st.addToken': 'Add token',
+  'st.offline': 'No network', 'st.firstSync': 'First history upload', 'st.firstSyncT': '87 of 143 trips uploaded. You can keep driving.',
+  'c.done': 'Done', 'c.reset': 'Reset', 'c.close': 'Close', 'c.retry': 'Retry',
+  'fmt.in': 'in {h} h {m} min', 'fmt.dur': '{h} h {m} min', 'fmt.min': '{m} min', 'fmt.day': 'Day {d}, {t}', 'fmt.date': '{mon} {d}, {t}',
+  'u.kmh': 'km/h', 'u.mph': 'mph', 'u.l': 'L', 'u.gal': 'gal', 'u.km': 'km', 'u.mi': 'mi', 'u.rpm': 'rpm', 'u.t': 't', 'u.lb': 'lb', 'u.l100': 'L/100 km', 'u.mpg': 'mpg',
+  'ov.edit': 'Layout mode: the overlay takes the mouse until you press Done', 'ov.drag': 'Drag to move · scroll to resize', 'ov.hidden': 'Overlay hidden: no game connection', 'ov.hiddenT': 'It appears when ETS2 or ATS runs in front.', 'ov.noSignal': 'No signal 12 s', 'ov.paused': 'Paused'
+},
+ru: {
+  'app.name': 'Yukon Union', 'app.sub': 'Телеметрия · ETS2 · ATS', 'app.window': 'Yukon Union Telemetry',
+  'nav.live': 'Сейчас', 'nav.journal': 'Журнал', 'nav.settings': 'Настройки', 'nav.account': 'Аккаунт и синхронизация', 'nav.group.drive': 'Вождение', 'nav.group.app': 'Программа', 'nav.group.company': 'Компания',
+  'tag.later': 'Позже', 'tag.planned': 'Запланировано', 'side.exit': 'Выход', 'side.lang': 'Язык',
+  'rec.recording': 'Запись идёт', 'rec.trip': 'Рейс · {d}', 'rec.paused': 'Запись на паузе', 'rec.pausedSub': 'Продолжится вместе с игрой',
+  'rec.waiting': 'Запись не идёт', 'rec.waitingSub': 'Ожидание игры', 'rec.lost': 'Связь потеряна', 'rec.lostSub': 'Пропуск будет отмечен в журнале',
+  'chip.game.live': '{game} · {mode}', 'chip.game.paused': '{game} на паузе', 'chip.game.waiting': 'Ожидание игры', 'chip.game.lost': 'Нет данных · 12 с',
+  'chip.plugin': 'Плагин {n}/{m}', 'chip.hm.pass': 'Hard Mode', 'chip.hm.fail': 'Hard Mode {n}/12', 'chip.hm.lost': 'Hard Mode потерян', 'chip.sync': 'Сайт · позже',
+  'mode.sp': 'Одиночная игра', 'mode.tmp': 'TruckersMP', 'stale': 'устарело 12 с', 'paused': 'пауза',
+  'live.title': 'Сейчас', 'live.speed': 'Скорость', 'live.gear': 'Передача', 'live.rpm': 'Обороты', 'live.fuel': 'Топливо', 'live.of': 'из {v}', 'live.range': 'Запас хода', 'live.rangeNote': 'оценка игры',
+  'live.cons': 'Средний расход', 'live.consNote': 'среднее SDK, не за рейс', 'live.consNoteAts': 'среднее SDK; в ATS почти не меняется',
+  'live.job': 'Текущий заказ', 'live.market.freight': 'Грузовой рынок', 'live.market.cargo': 'Биржа грузов', 'live.driven': 'Пройдено', 'live.remaining': 'Осталось', 'live.planned': 'по заказу {v}', 'live.plannedNote': 'из заказа, без паромов',
+  'live.deadline': 'Срок', 'live.income': 'Ожидаемый доход', 'live.trip': 'Этот рейс', 'live.realTime': 'Реальное время', 'live.gameTime': 'Игровое время', 'live.fuelUsed': 'Израсходовано', 'live.recording': 'Запись',
+  'live.truck': 'Грузовик', 'live.plate': 'Номер', 'live.trailer': 'Прицеп', 'live.odometer': 'Одометр', 'live.session': 'Игровая сессия', 'live.clock': 'Часы игры', 'live.mode': 'Режим', 'live.protocol': 'Протокол', 'live.lostEvents': 'Потеряно событий',
+  'live.waitTitle': 'Ожидание игры', 'live.waitText': 'Запустите Euro Truck Simulator 2 или American Truck Simulator. Плагин подключится сам, здесь ничего нажимать не нужно.',
+  'complete.complete': 'Полная', 'complete.partial': 'С пропусками', 'complete.unknown': 'Неизвестно',
+  'hm.title': 'Hard Mode', 'hm.active': 'Активен', 'hm.inactive': 'Не активен', 'hm.lost': 'Потерян для этого рейса', 'hm.count': '{n} из 12 настроек соответствуют Hard Mode', 'hm.view': 'Открыть чек-лист',
+  'hm.lostText': '{what}: значение изменено на {v} в {time}. Рейс будет записан как обычный.', 'hm.tripYes': 'Рейс засчитывается как Hard Mode', 'hm.tripNo': 'Рейс не засчитывается как Hard Mode',
+  'hm.sheet': 'Чек-лист Hard Mode', 'hm.profile': 'Профиль', 'hm.file': 'Файл настроек', 'hm.read': 'Прочитано {s} с назад', 'hm.recheck': 'Проверить снова',
+  'hm.col.setting': 'Настройка', 'hm.col.required': 'Нужно', 'hm.col.detected': 'В игре', 'hm.readonly': 'Только чтение: программа не меняет настройки игры. Измените их в игре: Опции → Геймплей; список обновится сам.',
+  'hm.rule': 'Все 12 условий должны выполняться одновременно. Если ослабить любую настройку во время заказа, рейс теряет Hard Mode.',
+  'hm.c.fuel': 'Реалистичный расход топлива', 'hm.c.airbrake': 'Пневмотормоза', 'hm.c.police': 'Штрафы / полиция', 'hm.c.fatigue': 'Усталость', 'hm.c.limiter': 'Ограничитель скорости',
+  'hm.c.truckstab': 'Стабилизация тягача', 'hm.c.trailerstab': 'Стабилизация прицепа', 'hm.c.parking': 'Сложная парковка', 'hm.c.rain': 'Вероятность дождя', 'hm.c.events': 'Случайные события', 'hm.c.brake': 'Интенсивность торможения', 'hm.c.traffic': 'Плотность трафика',
+  'val.on': 'Вкл.', 'val.off': 'Выкл.', 'val.expert': 'Сложная', 'val.simple': 'Простая',
+  'j.title': 'Журнал рейсов', 'j.all': 'Все', 'j.outcome': 'Итог', 'j.recording': 'Запись', 'j.anyOutcome': 'Любой итог', 'j.anyRecording': 'Любая запись', 'j.search': 'Поиск по грузу или городу', 'j.export': 'Экспорт JSON', 'j.refresh': 'Обновить',
+  'col.started': 'Начало', 'col.game': 'Игра', 'col.cargo': 'Груз', 'col.route': 'Маршрут', 'col.distance': 'Дистанция', 'col.money': 'Доход', 'col.outcome': 'Итог', 'col.recording': 'Запись', 'col.sync': 'Сайт',
+  'j.of': 'из {v}', 'j.expected': 'ожид. {v}', 'j.page': 'Стр. {p} · 50 рейсов на странице · журнал не обновляется сам', 'j.prev': 'Назад', 'j.next': 'Дальше', 'j.count': '{n} рейсов · {h} ч записано',
+  'out.open': 'В пути', 'out.delivered': 'Доставлен', 'out.late': 'Доставлен с опозданием', 'out.cancelled': 'Отменён', 'out.none': 'Без итога',
+  'sync.sent': 'Отправлен', 'sync.queued': 'В очереди', 'sync.error': 'Ошибка', 'sync.none': '—',
+  'j.emptyTitle': 'Рейсов пока нет', 'j.emptyText': 'Возьмите заказ в игре. Рейс появится здесь, как только начнётся.',
+  'tr.back': 'Журнал', 'tr.distance': 'Пройдено по одометру', 'tr.planned': 'по заказу {v}', 'tr.delivered': 'по данным игры {v}', 'tr.revenue': 'Выручка', 'tr.penalty': 'Штраф за отмену', 'tr.expected': 'ожидалось {v}',
+  'tr.time': 'Реальное время', 'tr.gameTime': '{v} игрового', 'tr.fuel': 'Израсходовано', 'tr.fuelNote': 'по сэмплам, без заправок',
+  'tr.tab.summary': 'Сводка', 'tr.tab.timeline': 'События', 'tr.tab.completeness': 'Полнота записи', 'tr.speed': 'Скорость за рейс', 'tr.samples': 'сэмплы 1 Гц', 'tr.gap': 'нет сэмплов {s} с',
+  'tr.money': 'Штрафы и платные дороги', 'tr.fines': 'Штрафы', 'tr.tolls': 'Платные дороги', 'tr.ferry': 'Паромы и поезда', 'tr.hmStart': 'В начале заказа', 'tr.hmEnd': 'При доставке', 'tr.hmSnapshot': 'Снимок настроек хранится вместе с рейсом', 'tr.truck': 'Грузовик и прицеп',
+  'tr.ivRecorded': 'Записано', 'tr.ivGap': 'Пропуск', 'tr.ivTotal': 'Интервалов полноты: {n}',
+  'ev.accepted': 'Заказ принят', 'ev.refuel': 'Заправка', 'ev.fine': 'Штраф: превышение скорости', 'ev.toll': 'Платная дорога', 'ev.gap': 'Пропуск: плагин переподключился', 'ev.delivered': 'Доставлен', 'ev.cancelled': 'Отменён', 'ev.closed': 'Игра закрыта без итога', 'ev.recording': 'Запись, 1 сэмпл в секунду',
+  's.general': 'Общие', 's.units': 'Единицы', 's.overlay': 'Оверлей', 's.sections': 'Секции оверлея', 's.plugin': 'Плагин игры', 's.data': 'Данные', 's.about': 'О программе',
+  's.lang': 'Язык интерфейса', 's.langD': 'Названия грузов, городов и компаний показываются так, как их передаёт игра.', 's.autostart': 'Запуск с Windows', 's.autostartD': 'Запускается свёрнутой в область уведомлений.',
+  's.close': 'Закрытие окна', 's.closeD': 'Программа и запись продолжают работать в области уведомлений. Чтобы остановить, нажмите «Выход».', 's.closeV': 'Свернуть в трей',
+  's.u.metric': 'Метрические (км/ч, л)', 's.u.us': 'Американские (миль/ч, гал)', 's.u.d': 'Сохранённые данные не меняются, меняется только отображение.',
+  's.o.show': 'Показывать оверлей', 's.o.showD': 'Скрывается, когда игра свёрнута или впереди другое окно.', 's.o.layout': 'Вид', 's.o.scale': 'Размер', 's.o.opacity': 'Непрозрачность фона',
+  's.o.position': 'Положение', 's.o.edit': 'Переместить оверлей', 's.o.editD': 'Оверлей перехватывает мышь, пока вы не нажмёте «Готово».', 's.o.sectionsD': 'Показано секций: {n} из {m}', 's.o.choose': 'Выбрать секции',
+  'l.strip': 'Полоса', 'l.card': 'Карточка', 'l.cluster': 'Приборы', 'l.hud': 'Минимальный',
+  'p.everything': 'Всё', 'p.job': 'Заказ', 'p.driving': 'Вождение',
+  'g.driving': 'Вождение', 'g.fuel': 'Топливо', 'g.job': 'Заказ', 'g.time': 'Время', 'g.status': 'Статус',
+  'sec.speed': 'Скорость', 'sec.gear': 'Передача', 'sec.rpm': 'Обороты', 'sec.fuel': 'Уровень топлива', 'sec.range': 'Запас хода', 'sec.sdk-consumption': 'Средний расход', 'sec.cargo': 'Груз', 'sec.origin': 'Откуда',
+  'sec.destination': 'Куда', 'sec.distance-driven': 'Пройдено', 'sec.distance-remaining': 'Осталось', 'sec.deadline': 'Срок', 'sec.expected-income': 'Ожидаемый доход', 'sec.game-time': 'Игровое время', 'sec.hard-mode': 'Статус Hard Mode',
+  'sec.req.v1': 'нужен протокол v1', 'sec.req.trip': 'нужен учёт рейса', 'sec.req.ids': 'до v1 — идентификаторы', 'sec.hint': 'Секция без данных скрывается и никогда не показывает ноль.',
+  's.p.d': 'Плагин копируется в игру, только пока она закрыта. Другие плагины телеметрии не трогаются.', 's.p.installed': 'Установлен · хэш совпадает', 's.p.update': 'Обновление ждёт закрытия игры', 's.p.notfound': 'Игра не найдена',
+  's.p.reinstall': 'Переустановить', 's.p.open': 'Открыть папку', 's.p.choose': 'Выбрать папку',
+  's.d.location': 'База данных', 's.d.size': 'Размер', 's.d.sizeV': '{mb} МБ · {n} рейсов', 's.d.backup': 'Резервная копия', 's.d.backupV': 'Последняя проверенная: {v}', 's.d.backupBtn': 'Создать копию', 's.d.diag': 'Диагностика', 's.d.diagD': 'Архив для отчёта об ошибке.', 's.d.diagBtn': 'Сохранить диагностику',
+  's.a.version': 'Версия', 's.a.uninstall': 'Удаление', 's.a.uninstallD': 'Удаляет программу и её данные. Перед удалением будет предупреждение.',
+  'a.title': 'Токен телеметрии', 'a.later': 'Серверная фаза · не в этой версии', 'a.tokenD': 'Вставьте токен со страницы аккаунта Yukon Union. Программа сначала загрузит сохранённые рейсы, затем новые.', 'a.save': 'Сохранить и подключиться', 'a.show': 'Показать токен',
+  'a.status': 'Подключение', 'a.dashboard': 'Сайт компании', 'a.connected': 'Подключено: {u}', 'a.queue': 'Очередь отправки', 'a.queueV': 'Ждут отправки: {n}', 'a.first': 'Первая загрузка истории', 'a.firstV': '{d} из {t} рейсов',
+  'a.note': 'Загрузка — ещё не зачёт: рейсы проходят проверку на сайте.', 'a.offline': 'Нет сети. Рейсы остаются в очереди и отправятся позже.', 'a.lastUpload': 'Последняя отправка', 'a.lastUploadV': '4 мин назад',
+  'ob.title': 'Настройка Yukon Union Telemetry', 'ob.step': 'Шаг {n} из 4', 'ob.s1': 'Поиск игр', 'ob.s2': 'Установка плагина', 'ob.s3': 'Язык и единицы', 'ob.s4': 'Оверлей', 'ob.back': 'Назад', 'ob.next': 'Далее', 'ob.finish': 'Начать',
+  'ob.s1T': 'Мы поискали библиотеки Steam на этом компьютере.', 'ob.s2T': 'Сначала закройте обе игры. Плагин копируется в bin\\win_x64\\plugins каждой игры.', 'ob.install': 'Установить плагин', 'ob.s3T': 'Оба параметра можно поменять в настройках.', 'ob.s4T': 'Выберите, как оверлей будет выглядеть поверх игры.', 'ob.found': 'Найдена', 'ob.ready': 'Готово к установке',
+  'st.title': 'Пустые состояния и ошибки', 'st.noGame': 'Игра не найдена', 'st.noGameT': 'Не найдена установка ETS2 или ATS. Укажите папку игры вручную.',
+  'st.plugin': 'Плагин не установлен', 'st.pluginT': 'Закройте игру и установите плагин.', 'st.wait': 'Ожидание игры', 'st.waitT': 'Запустите ETS2 или ATS. Плагин подключится сам.',
+  'st.lost': 'Связь потеряна', 'st.lostT': 'Нет данных 12 с. Значения приглушены до переподключения; пропуск записывается в журнал.',
+  'st.version': 'Версия плагина не совпадает', 'st.versionT': 'В игре работает старый плагин. Закройте игру, чтобы обновить его.',
+  'st.rec': 'Запись остановлена', 'st.recT': 'Не удалось записать базу рейсов. Освободите место на диске и перезапустите программу.',
+  'st.noToken': 'Нет токена', 'st.noTokenT': 'Рейсы сохраняются на этом компьютере. Добавьте токен, чтобы отправлять их на сайт.', 'st.addToken': 'Добавить токен',
+  'st.offline': 'Нет сети', 'st.firstSync': 'Первая загрузка истории', 'st.firstSyncT': 'Загружено 87 из 143 рейсов. Можно продолжать ездить.',
+  'c.done': 'Готово', 'c.reset': 'Сбросить', 'c.close': 'Закрыть', 'c.retry': 'Повторить',
+  'fmt.in': 'через {h} ч {m} мин', 'fmt.dur': '{h} ч {m} мин', 'fmt.min': '{m} мин', 'fmt.day': 'День {d}, {t}', 'fmt.date': '{d} {mon}, {t}',
+  'u.kmh': 'км/ч', 'u.mph': 'миль/ч', 'u.l': 'л', 'u.gal': 'гал', 'u.km': 'км', 'u.mi': 'миль', 'u.rpm': 'об/мин', 'u.t': 'т', 'u.lb': 'фунт', 'u.l100': 'л/100 км', 'u.mpg': 'миль/гал',
+  'ov.edit': 'Режим перемещения: оверлей перехватывает мышь, пока вы не нажмёте «Готово»', 'ov.drag': 'Перетащите · колесо меняет размер', 'ov.hidden': 'Оверлей скрыт: нет связи с игрой', 'ov.hiddenT': 'Он появится, когда ETS2 или ATS будет на переднем плане.', 'ov.noSignal': 'Нет сигнала 12 с', 'ov.paused': 'Пауза'
+}
+};
+var MONTHS = { en: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'], ru: ['янв', 'фев', 'мар', 'апр', 'мая', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'] };
+
+var S = { screen: 'live', lang: 'en', game: 'ets2', conn: 'live', hm: 'pass', inspect: 'off', sheet: false, set: 'general', trip: 1, tripTab: 'summary', wiz: 2, ovl: 'strip', ovEdit: false, on: {} };
+try { var saved = JSON.parse(localStorage.getItem('yu-telemetry-mock') || 'null'); if (saved && typeof saved === 'object') for (var k in saved) if (k in S) S[k] = saved[k]; } catch (e) {}
+function save() { try { localStorage.setItem('yu-telemetry-mock', JSON.stringify(S)); } catch (e) {} }
+
+function t(key, vars) {
+  var s = (I18N[S.lang] && I18N[S.lang][key]) || I18N.en[key];
+  if (s === undefined) return '⟦' + key + '⟧';
+  if (vars) s = s.replace(/\{(\w+)\}/g, function (m, n) { return n in vars ? vars[n] : m; });
+  return s;
+}
+function u(k) { return t('u.' + k); }
+function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;'); }
+
+/* ---------- Icons: lucide (stroke 1.8). Names = lucide-react components ---------- */
+var P = {
+  gauge: '<path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/>',
+  bookOpen: '<path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/>',
+  settings2: '<path d="M20 7h-9"/><path d="M14 17H5"/><circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/>',
+  userRound: '<circle cx="12" cy="8" r="5"/><path d="M20 21a8 8 0 0 0-16 0"/>',
+  shieldCheck: '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/>',
+  shieldX: '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m14.5 9.5-5 5"/><path d="m9.5 9.5 5 5"/>',
+  truck: '<path d="M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2"/><path d="M15 18H9"/><path d="M19 18h2a1 1 0 0 0 1-1v-3.65a1 1 0 0 0-.22-.624l-3.48-4.35A1 1 0 0 0 17.52 8H14"/><circle cx="17" cy="18" r="2"/><circle cx="7" cy="18" r="2"/>',
+  fuel: '<line x1="3" x2="15" y1="22" y2="22"/><line x1="4" x2="14" y1="9" y2="9"/><path d="M14 22V4a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v18"/><path d="M14 13h2a2 2 0 0 1 2 2v2a2 2 0 0 0 2 2a2 2 0 0 0 2-2V9.83a2 2 0 0 0-.59-1.42L18 5"/>',
+  mapPin: '<path d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0"/><circle cx="12" cy="10" r="3"/>',
+  flag: '<path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" x2="4" y1="22" y2="15"/>',
+  clock: '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
+  package: '<path d="M16.5 9.4 7.55 4.24"/><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.29 7 12 12 20.71 7"/><line x1="12" x2="12" y1="22" y2="12"/>',
+  route: '<circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/>',
+  coins: '<circle cx="8" cy="8" r="6"/><path d="M18.09 10.37A6 6 0 1 1 10.34 18"/><path d="M7 6h1v4"/><path d="m16.71 13.88.7.71-2.82 2.82"/>',
+  droplet: '<path d="M12 22a7 7 0 0 0 7-7c0-2-1-3.9-3-5.5s-3.5-4-4-6.5c-.5 2.5-2 4.9-4 6.5C6 11.1 5 13 5 15a7 7 0 0 0 7 7z"/>',
+  navigation: '<polygon points="3 11 22 2 13 21 11 13 3 11"/>',
+  calendar: '<rect width="18" height="18" x="3" y="4" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>',
+  activity: '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
+  download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/>',
+  upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/>',
+  search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+  chevDown: '<path d="m6 9 6 6 6-6"/>', chevRight: '<path d="m9 18 6-6-6-6"/>', chevLeft: '<path d="m15 18-6-6 6-6"/>',
+  arrowRight: '<path d="M5 12h14"/><path d="m12 5 7 7-7 7"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>', x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>', minus: '<path d="M5 12h14"/>', square: '<rect width="12" height="12" x="6" y="6" rx="1"/>',
+  triangleAlert: '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+  info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>',
+  plug: '<path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/>',
+  database: '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5V19A9 3 0 0 0 21 19V5"/><path d="M3 12A9 3 0 0 0 21 12"/>',
+  folderOpen: '<path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/>',
+  layers: '<path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/>',
+  eye: '<path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/>',
+  move: '<polyline points="5 9 2 12 5 15"/><polyline points="9 5 12 2 15 5"/><polyline points="15 19 12 22 9 19"/><polyline points="19 9 22 12 19 15"/><line x1="2" x2="22" y1="12" y2="12"/><line x1="12" x2="12" y1="2" y2="22"/>',
+  refresh: '<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>',
+  power: '<path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.77.04"/>',
+  globe: '<circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/>',
+  cloud: '<path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/>',
+  cloudOff: '<path d="m2 2 20 20"/><path d="M5.782 5.782A7 7 0 0 0 9 19h8.5a4.5 4.5 0 0 0 1.307-.193"/><path d="M21.532 16.5A4.5 4.5 0 0 0 17.5 10h-1.79A7.008 7.008 0 0 0 10 5.07"/>',
+  keyRound: '<path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z"/><circle cx="16.5" cy="7.5" r=".5"/>',
+  eyeOff: '<path d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49"/><path d="M14.084 14.158a3 3 0 0 1-4.242-4.242"/><path d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143"/><path d="m2 2 20 20"/>',
+  wifiOff: '<path d="M12 20h.01"/><path d="M8.5 16.429a5 5 0 0 1 7 0"/><path d="M5 12.859a10 10 0 0 1 5.17-2.69"/><path d="M19 12.859a10 10 0 0 0-2.007-1.523"/><path d="M2 8.82a15 15 0 0 1 4.177-2.643"/><path d="M22 8.82a15 15 0 0 0-11.288-3.764"/><path d="m2 2 20 20"/>',
+  pause: '<rect x="14" y="4" width="4" height="16" rx="1"/><rect x="6" y="4" width="4" height="16" rx="1"/>',
+  timer: '<line x1="10" x2="14" y1="2" y2="2"/><line x1="12" x2="15" y1="14" y2="11"/><circle cx="12" cy="14" r="8"/>',
+  monitor: '<rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/>',
+  weight: '<circle cx="12" cy="5" r="3"/><path d="M6.5 8a2 2 0 0 0-1.905 1.46L2.1 18.5A2 2 0 0 0 4 21h16a2 2 0 0 0 1.925-2.54L19.4 9.5A2 2 0 0 0 17.48 8Z"/>',
+  circleDot: '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="1"/>'
+};
+function ic(n, c) { return '<svg class="ico ' + (c || '') + '" viewBox="0 0 24 24" aria-hidden="true">' + (P[n] || '') + '</svg>'; }
+
+/* ---------- Data (game data stays as the game sends it) ---------- */
+var LIVE = {
+  ets2: { game: 'ETS2', name: 'Euro Truck Simulator 2', mode: 'sp', speed: 82.4, spMax: 130, spU: 'kmh', gear: '11', rpm: 1240, rpmMax: 2500,
+    fuel: '412.6', cap: '1400', volU: 'l', fuelPct: 29, avg: '33.8', avgU: 'l100', range: '1214', dU: 'km', odo: '248316.4',
+    remaining: '187.3', planned: '352', done: '164.7', progress: 47, cargo: 'Cement', mass: '21.4', massU: 't', market: 'freight',
+    from: 'Berlin', fromCo: 'Kaarfor', to: 'Praha', toCo: 'Tradeaux', income: '48210 EUR', dl: [5, 12], day: 14, clock: '07:42',
+    truck: 'Scania S 730', plate: 'B TL 4410', trailer: 'Curtainsider', tripReal: 10, tripGame: [3, 8], fuelUsed: '58.2', profile: 'Kestrel' },
+  ats: { game: 'ATS', name: 'American Truck Simulator', mode: 'tmp', speed: 61.8, spMax: 80, spU: 'mph', gear: '9', rpm: 1380, rpmMax: 2200,
+    fuel: '98.4', cap: '150', volU: 'gal', fuelPct: 66, avg: '6.9', avgU: 'mpg', range: '690', dU: 'mi', odo: '81204.7',
+    remaining: '96.2', planned: '214', done: '117.8', progress: 55, cargo: 'Lumber', mass: '44092', massU: 'lb', market: 'cargo',
+    from: 'Redding', fromCo: 'Sierra Sawmill', to: 'Sacramento', toCo: 'Home Store', income: '31760 USD', dl: [2, 47], day: 6, clock: '15:18',
+    truck: 'Peterbilt 579', plate: 'CA 7TRK219', trailer: 'Flatbed', tripReal: 7, tripGame: [2, 21], fuelUsed: '15.6', profile: 'Kestrel' }
+};
+/* Hard Mode criteria matrix (ET-026). value kinds: bool (1 = On), pct (fraction shown as %), parking. */
+var HM = [
+  ['fuel', 'g_realistic_fuel', 'bool', '=', 1, 1, 1],
+  ['airbrake', 'g_air_brake_safety', 'bool', '=', 1, 1, 1],
+  ['police', 'g_police', 'bool', '=', 1, 1, 1],
+  ['fatigue', 'g_fatigue', 'bool', '=', 1, 1, 1],
+  ['limiter', 'g_speed_limiter', 'bool', '=', 1, 1, 1],
+  ['truckstab', 'g_truck_stability', 'pct', '<=', 0.5, 0.4, 0.7],
+  ['trailerstab', 'g_trailer_stability', 'pct', '<=', 0.5, 0.5, 0.5],
+  ['parking', 'g_simple_parking_doubles', 'parking', '=', 0, 0, 0],
+  ['rain', 'g_rain_probability', 'pct', '>=', 0.12, 0.15, 0.15],
+  ['events', 'g_road_events', 'pct', '>=', 0.3, 0.4, 0.4],
+  ['brake', 'g_brake_intensity', 'pct', '<=', 0.75, 0.7, 0.7],
+  ['traffic', 'g_traffic', 'pct', '>=', 1, 1.2, 0.8]
+];
+function hmRows() {
+  return HM.map(function (c) {
+    var det = S.hm === 'fail' || (S.hm === 'lost' && c[0] === 'truckstab') ? c[6] : c[5];
+    if (S.hm === 'lost' && c[0] === 'traffic') det = c[5];
+    var pass = c[3] === '=' ? det === c[4] : c[3] === '<=' ? det <= c[4] + 1e-9 : det >= c[4] - 1e-9;
+    var fmt = function (v) { return c[2] === 'bool' ? t(v ? 'val.on' : 'val.off') : c[2] === 'parking' ? t(v === 0 ? 'val.expert' : 'val.simple') : Math.round(v * 100) + '%'; };
+    var req = c[2] === 'pct' ? (c[3] === '<=' ? '≤ ' : '≥ ') + Math.round(c[4] * 100) + '%' : fmt(c[4]);
+    return { id: c[0], cvar: c[1], req: req, det: fmt(det), pass: pass };
+  });
+}
+function hmPassed() { return hmRows().filter(function (r) { return r.pass; }).length; }
+function hmState() { return S.hm === 'pass' ? 'active' : S.hm === 'lost' ? 'lost' : 'inactive'; }
+
+var TRIPS = [
+  { d: 15, mo: 9, tm: '09:14', game: 'ETS2', cargo: 'Cement', from: 'Berlin', fromCo: 'Kaarfor', to: 'Praha', toCo: 'Tradeaux', obs: '164.7', planned: '352', dU: 'km', real: [0, 10], gt: [3, 8], rev: null, exp: '48210 EUR', out: 'open', rec: 'complete', hm: true, sync: 'none', fuel: '58.2 L',
+    ev: [['09:14', 'ev.accepted', 'Kaarfor, Berlin', ''], ['09:19', 'ev.refuel', '+312.0 L', ''], ['09:24', 'ev.recording', '', 'acc']] },
+  { d: 14, mo: 9, tm: '21:02', game: 'ETS2', cargo: 'Frozen vegetables', from: 'Hamburg', fromCo: 'Posped', to: 'Berlin', toCo: 'Eurogoodies', obs: '291.4', planned: '289', delivered: '289', dU: 'km', real: [0, 18], gt: [5, 41], rev: '36420 EUR', exp: '36420 EUR', out: 'delivered', rec: 'complete', hm: true, sync: 'sent', fuel: '97.6 L',
+    ev: [['21:02', 'ev.accepted', 'Posped, Hamburg', ''], ['21:09', 'ev.fine', '400 EUR', 'warn'], ['21:12', 'ev.toll', '82 EUR', ''], ['21:20', 'ev.delivered', '36420 EUR', 'ok']] },
+  { d: 14, mo: 9, tm: '20:31', game: 'ETS2', cargo: 'Diesel', from: 'Rostock', fromCo: 'EcoGas', to: 'Hamburg', toCo: 'Posped', obs: '181.0', planned: '178', delivered: '178', dU: 'km', real: [0, 11], gt: [3, 32], rev: '22870 EUR', exp: '22870 EUR', out: 'delivered', rec: 'partial', hm: false, sync: 'sent', fuel: '61.0 L',
+    ev: [['20:31', 'ev.accepted', 'EcoGas, Rostock', ''], ['20:35', 'ev.gap', '23 s', 'warn'], ['20:39', 'ev.gap', '18 s', 'warn'], ['20:42', 'ev.delivered', '22870 EUR', 'ok']] },
+  { d: 13, mo: 9, tm: '18:47', game: 'ATS', cargo: 'Lumber', from: 'Redding', fromCo: 'Sierra Sawmill', to: 'Sacramento', toCo: 'Home Store', obs: '216.8', planned: '214', delivered: '214', dU: 'mi', real: [0, 22], gt: [6, 55], rev: '31760 USD', exp: '31760 USD', out: 'delivered', rec: 'complete', hm: true, sync: 'queued', fuel: '33.1 gal',
+    ev: [['18:47', 'ev.accepted', 'Sierra Sawmill, Redding', ''], ['19:09', 'ev.delivered', '31760 USD', 'ok']] },
+  { d: 13, mo: 9, tm: '18:10', game: 'ATS', cargo: 'Gravel', from: 'Reno', fromCo: 'Quarry', to: 'Carson City', toCo: 'Plaster & Co', obs: '12.4', planned: '38', dU: 'mi', real: [0, 2], gt: [0, 41], rev: null, penalty: '2100 USD', exp: '6930 USD', out: 'cancelled', rec: 'complete', hm: false, sync: 'queued', fuel: '2.0 gal',
+    ev: [['18:10', 'ev.accepted', 'Quarry, Reno', ''], ['18:12', 'ev.cancelled', '2100 USD', 'bad']] },
+  { d: 12, mo: 9, tm: '22:40', game: 'ETS2', cargo: 'Tractors', from: 'Paris', fromCo: 'Stokes', to: 'Lyon', toCo: 'Wilnet Transport', obs: '470.9', planned: '463', delivered: '463', dU: 'km', real: [0, 29], gt: [9, 14], rev: '55080 EUR', exp: '61200 EUR', out: 'late', rec: 'complete', hm: true, sync: 'error', fuel: '164.3 L',
+    ev: [['22:40', 'ev.accepted', 'Stokes, Paris', ''], ['23:09', 'ev.delivered', '55080 EUR', 'warn']] },
+  { d: 12, mo: 9, tm: '21:55', game: 'ETS2', cargo: 'Wheat', from: 'Lyon', fromCo: 'Agrominta', to: 'Genève', toCo: 'Sellplan', obs: '88.2', planned: '151', dU: 'km', real: [0, 6], gt: [1, 52], rev: null, exp: '18950 EUR', out: 'none', rec: 'unknown', hm: false, sync: 'sent', fuel: '29.4 L',
+    ev: [['21:55', 'ev.accepted', 'Agrominta, Lyon', ''], ['22:01', 'ev.closed', '', 'bad']] },
+  { d: 11, mo: 9, tm: '19:20', game: 'ETS2', cargo: 'Chemicals', from: 'Brno', fromCo: 'Chemso', to: 'Wien', toCo: 'Lkw Log', obs: '142.7', planned: '141', delivered: '141', dU: 'km', real: [0, 9], gt: [2, 49], rev: '19400 EUR', exp: '19400 EUR', out: 'delivered', rec: 'complete', hm: false, sync: 'sent', fuel: '47.8 L',
+    ev: [['19:20', 'ev.accepted', 'Chemso, Brno', ''], ['19:29', 'ev.delivered', '19400 EUR', 'ok']] }
+];
+
+function D() { return LIVE[S.game]; }
+function V(s) { return S.conn === 'waiting' ? '—' : s; }
+function val(s) { return '<span class="val">' + V(s) + '</span>'; }
+function dur(hm) { return hm[0] ? t('fmt.dur', { h: hm[0], m: hm[1] }) : t('fmt.min', { m: hm[1] }); }
+function date(tr) { return t('fmt.date', { d: tr.d, mon: MONTHS[S.lang][tr.mo], t: tr.tm }); }
+function gameChip(g) { return '<span class="badge ' + (g === 'ATS' ? 'g-ats' : 'g-ets2') + '">' + g + '</span>'; }
+function rng(seed) { var s = seed; return function () { s = (s * 9301 + 49297) % 233280; return s / 233280; }; }
+function series(n, seed, base, amp, lo, hi) {
+  var r = rng(seed), v = base, out = [];
+  for (var i = 0; i < n; i++) { v += (r() - 0.5) * amp; if (v < lo) v = lo + (lo - v) * 0.5; if (v > hi) v = hi - (v - hi) * 0.5; out.push(v); }
+  for (var j = 1; j < n - 1; j++) out[j] = (out[j - 1] + out[j] * 2 + out[j + 1]) / 4;
+  return out;
+}
+function spark(arr, w, h, min, max, color) {
+  var pts = arr.map(function (v, i) { return [(i / (arr.length - 1)) * w, h - ((v - min) / (max - min)) * h]; });
+  var d = pts.map(function (p, i) { return (i ? 'L' : 'M') + p[0].toFixed(1) + ' ' + p[1].toFixed(1); }).join(' ');
+  var last = pts[pts.length - 1];
+  return '<path d="' + d + ' L' + w + ' ' + h + ' L0 ' + h + ' Z" fill="' + color + '" fill-opacity="0.16"/><path d="' + d + '" fill="none" stroke="' + color + '" stroke-width="2" stroke-linejoin="round"/>' +
+    '<circle cx="' + last[0].toFixed(1) + '" cy="' + last[1].toFixed(1) + '" r="3.5" fill="' + color + '"/>';
+}
+function pt(cx, cy, r, deg) { var a = deg * Math.PI / 180; return [cx + r * Math.sin(a), cy - r * Math.cos(a)]; }
+function arc(cx, cy, r, a0, a1) { var p0 = pt(cx, cy, r, a0), p1 = pt(cx, cy, r, a1); return 'M' + p0[0].toFixed(2) + ' ' + p0[1].toFixed(2) + ' A' + r + ' ' + r + ' 0 ' + ((a1 - a0) > 180 ? 1 : 0) + ' 1 ' + p1[0].toFixed(2) + ' ' + p1[1].toFixed(2); }
+function staleBadge() { return S.conn === 'lost' ? '<span class="badge err">' + ic('wifiOff', 's') + t('stale') + '</span>' : S.conn === 'paused' ? '<span class="badge warn">' + ic('pause', 's') + t('paused') + '</span>' : ''; }
+
+/* ---------- Shell ---------- */
+function titlebar() {
+  return '<div class="titlebar" data-spec="shell.titlebar"><img src="' + EMBLEM + '" alt=""><span>' + t('app.window') + '</span><span class="cap" aria-hidden="true"><span>' + ic('minus', 's') + '</span><span>' + ic('square', 's') + '</span><span>' + ic('x', 's') + '</span></span></div>';
+}
+function sidebar() {
+  var nav = function (id, icon, extra) {
+    return '<button class="nav" data-go="' + id + '"' + (S.screen === id || (id === 'journal' && S.screen === 'trip') ? ' aria-current="page"' : '') + '>' + ic(icon, 'l') + '<span class="grow">' + t('nav.' + id) + '</span>' + (extra || '') + '</button>';
+  };
+  var rec = { live: ['dot live', 'rec.recording', t('rec.trip', { d: t('fmt.min', { m: D().tripReal }) })], paused: ['dot', 'rec.paused', t('rec.pausedSub')], waiting: ['dot', 'rec.waiting', t('rec.waitingSub')], lost: ['dot', 'rec.lost', t('rec.lostSub')] }[S.conn];
+  var recColor = { live: '', paused: 'color:var(--yu-warn-fg)', waiting: 'color:var(--yu-text-muted)', lost: 'color:var(--yu-err-fg)' }[S.conn];
+  return '<aside class="side" data-spec="shell.sidebar">' +
+    '<div class="lockup" data-spec="shell.sidebar.lockup"><img src="' + EMBLEM + '" alt=""><div><b>' + t('app.name') + '</b><span>' + t('app.sub') + '</span></div></div>' +
+    '<nav class="navg" data-spec="shell.sidebar.nav"><span class="gl">' + t('nav.group.drive') + '</span>' + nav('live', 'gauge') + nav('journal', 'bookOpen') + '</nav>' +
+    '<nav class="navg"><span class="gl">' + t('nav.group.app') + '</span>' + nav('settings', 'settings2') + '</nav>' +
+    '<nav class="navg"><span class="gl">' + t('nav.group.company') + ' <span class="badge later" style="min-height:18px;font-size:10px;padding:0 6px">' + t('tag.later') + '</span></span>' + nav('account', 'cloud') + '</nav>' +
+    '<div class="sfoot"><div class="recbox" data-spec="shell.sidebar.recording"><div class="l1"><span class="' + rec[0] + '" style="' + recColor + '"></span>' + t(rec[1]) + '</div><div class="l2">' + rec[2] + '</div></div>' +
+    '<div class="row2"><button class="btn s sm" style="flex:1" data-lang-toggle="1" aria-label="' + t('side.lang') + '">' + ic('globe', 's') + (S.lang === 'en' ? 'EN' : 'RU') + ic('chevDown', 's') + '</button><button class="btn s sm" style="flex:1">' + ic('power', 's') + t('side.exit') + '</button></div></div></aside>';
+}
+function topbar(title, extra) {
+  var d = D(), hp = hmPassed();
+  var game = { live: ['ok', 'dot live', t('chip.game.live', { game: d.game, mode: t('mode.' + d.mode) })], paused: ['warn', '', t('chip.game.paused', { game: d.game })], waiting: ['neutral', '', t('chip.game.waiting')], lost: ['err', '', t('chip.game.lost')] }[S.conn];
+  var gIcon = { live: '', paused: ic('pause', 's'), waiting: ic('clock', 's'), lost: ic('wifiOff', 's') }[S.conn];
+  var hs = hmState();
+  var hm = hs === 'active' ? '<span class="chip ok">' + ic('shieldCheck', 's') + t('chip.hm.pass') + '</span>' : hs === 'lost' ? '<span class="chip err">' + ic('shieldX', 's') + t('chip.hm.lost') + '</span>' : '<span class="chip warn">' + ic('shieldX', 's') + t('chip.hm.fail', { n: hp }) + '</span>';
+  return '<header class="topbar" data-spec="shell.topbar"><h1>' + title + '</h1>' +
+    '<div class="row wrap" data-spec="shell.topbar.status" style="gap:6px"><span class="chip ' + game[0] + '">' + (game[1] ? '<span class="' + game[1] + '"></span>' : gIcon) + game[2] + '</span>' +
+    '<span class="chip ok">' + ic('check', 's') + t('chip.plugin', { n: 2, m: 2 }) + '</span>' + hm +
+    '<span class="chip later">' + ic('cloud', 's') + t('chip.sync') + '</span></div><span style="flex:1"></span>' + (extra || '') + '</header>';
+}
+function windowShell(title, extra, body, overlay) {
+  return '<div class="win ' + (S.inspect === 'on' ? 'inspect' : '') + '" data-conn="' + S.conn + '">' + titlebar() + '<div class="wbody">' + sidebar() + '<div class="main">' + topbar(title, extra) +
+    '<div class="content">' + body + '</div>' + (overlay || '') + '</div></div></div>';
+}
+
+/* ---------- Live ---------- */
+function gauge(d) {
+  var cx = 130, cy = 130, a0 = -128, a1 = 128, spd = S.conn === 'waiting' ? 0 : d.speed, f = spd / d.spMax, rf = S.conn === 'waiting' ? 0 : d.rpm / d.rpmMax, ticks = '';
+  for (var v = 0; v <= d.spMax; v += 10) {
+    var a = a0 + (a1 - a0) * v / d.spMax, major = v % 20 === 0, p0 = pt(cx, cy, 112, a), p1 = pt(cx, cy, major ? 101 : 106, a);
+    ticks += '<line x1="' + p0[0].toFixed(1) + '" y1="' + p0[1].toFixed(1) + '" x2="' + p1[0].toFixed(1) + '" y2="' + p1[1].toFixed(1) + '" stroke="' + (major ? '#9CA3AF' : '#4B5563') + '" stroke-width="2"/>';
+    if (major) { var pl = pt(cx, cy, 89, a); ticks += '<text x="' + pl[0].toFixed(1) + '" y="' + (pl[1] + 4).toFixed(1) + '" text-anchor="middle" font-size="11" fill="#9CA3AF" font-family="Onest, sans-serif">' + v + '</text>'; }
+  }
+  return '<svg viewBox="0 0 260 236" width="260" height="236" role="img" aria-label="' + t('live.speed') + '" data-spec="live.instrument.gauge">' +
+    '<path d="' + arc(cx, cy, 122, a0, a1) + '" stroke="#374151" stroke-width="10" fill="none" stroke-linecap="round"/>' +
+    (f > 0 ? '<path class="val" d="' + arc(cx, cy, 122, a0, a0 + (a1 - a0) * f) + '" stroke="#60A5FA" stroke-width="10" fill="none" stroke-linecap="round"/>' : '') + ticks +
+    '<path d="' + arc(cx, cy, 66, -100, 100) + '" stroke="#374151" stroke-width="5" fill="none" stroke-linecap="round"/>' +
+    (rf > 0 ? '<path class="val" d="' + arc(cx, cy, 66, -100, -100 + 200 * rf) + '" stroke="#2563EB" stroke-width="5" fill="none" stroke-linecap="round"/>' : '') +
+    '<text class="val" x="130" y="142" text-anchor="middle" font-size="54" font-weight="800" fill="#F3F4F6" font-family="Onest, sans-serif">' + V(d.speed.toFixed(0)) + '</text>' +
+    '<text x="130" y="166" text-anchor="middle" font-size="13" font-weight="600" fill="#9CA3AF" font-family="Onest, sans-serif">' + u(d.spU) + '</text>' +
+    '<text class="val" x="130" y="214" text-anchor="middle" font-size="13" fill="#D1D5DB" font-family="Onest, sans-serif">' + V(d.rpm) + ' ' + u('rpm') + '</text></svg>';
+}
+function liveScreen() {
+  var d = D(), w = S.conn === 'waiting', fp = w ? 0 : d.fuelPct, prog = w ? 0 : d.progress;
+  var waitBanner = w ? '<div class="card" data-spec="live.waiting"><div class="empty" style="padding:18px"><div class="ei">' + ic('route', 'xl') + '</div><h3>' + t('live.waitTitle') + '</h3><p>' + t('live.waitText') + '</p></div></div>' : '';
+  var instrument = '<div class="card hero" data-spec="live.instrument" style="display:grid;grid-template-columns:260px 120px minmax(0,1fr);gap:14px;align-items:center;padding:12px 18px">' + gauge(d) +
+    '<div style="display:flex;flex-direction:column;align-items:center;gap:8px" data-spec="live.instrument.gear"><span class="label">' + t('live.gear') + '</span><div class="gear val">' + V(d.gear) + '</div>' + staleBadge() + '</div>' +
+    '<div class="row" style="gap:16px;align-items:stretch" data-spec="live.instrument.fuel"><div class="tank"><i class="val" style="height:' + fp + '%;background:' + (fp < 30 ? 'var(--yu-progress-pending)' : 'var(--yu-ok-fg)') + '"></i><s style="top:25%"></s><s style="top:50%"></s><s style="top:75%"></s></div>' +
+    '<div style="display:flex;flex-direction:column;justify-content:space-between;gap:10px;min-width:0"><div><div class="label">' + t('live.fuel') + '</div><div class="metric">' + val(d.fuel) + '<small>' + u(d.volU) + '</small></div><div class="small t2">' + t('live.of', { v: d.cap + ' ' + u(d.volU) }) + ' · ' + V(d.fuelPct + '%') + '</div></div>' +
+    '<div><div class="label">' + t('live.range') + ' · ' + t('live.rangeNote') + '</div><div class="metric" style="font-size:22px">' + val(d.range) + '<small>' + u(d.dU) + '</small></div></div>' +
+    '<div><div class="label">' + t('live.cons') + '</div><div class="b7 num" style="font-size:15px">' + val(d.avg) + ' <span class="muted small">' + u(d.avgU) + '</span></div><div class="small muted">' + t(S.game === 'ats' ? 'live.consNoteAts' : 'live.consNote') + '</div></div></div></div></div>';
+  var hs = hmState(), rows = hmRows(), hp = hmPassed();
+  var hmHead = hs === 'active' ? '<span class="chip ok" style="font-size:13px;min-height:32px">' + ic('shieldCheck') + t('hm.active') + '</span>' : hs === 'lost' ? '<span class="chip err" style="font-size:13px;min-height:32px">' + ic('shieldX') + t('hm.lost') + '</span>' : '<span class="chip warn" style="font-size:13px;min-height:32px">' + ic('shieldX') + t('hm.inactive') + '</span>';
+  var hmCard = '<div class="card" data-spec="live.hardMode"><div class="ch"><h2 class="ct">' + t('hm.title') + '</h2>' + hmHead + '</div><div class="cb" style="display:flex;flex-direction:column;gap:10px">' +
+    '<div class="small t2">' + t('hm.count', { n: hp }) + '</div><div class="bar ' + (hp === 12 ? 'ok' : 'amber') + '"><i style="width:' + Math.round(hp / 12 * 100) + '%"></i></div>' +
+    (hs === 'lost' ? '<div class="badge err" style="white-space:normal;line-height:1.4;padding:6px 9px">' + t('hm.lostText', { what: t('hm.c.truckstab'), v: '70%', time: '09:31' }) + '</div>' : '') +
+    '<div class="hmgrid" data-spec="live.hardMode.criteria">' + rows.map(function (r) { return '<div class="hmi ' + (r.pass ? '' : 'bad') + '">' + ic(r.pass ? 'check' : 'x', 's') + '<span>' + t('hm.c.' + r.id) + '</span></div>'; }).join('') + '</div>' +
+    '<button class="btn s sm" data-sheet="1" data-spec="live.hardMode.open">' + ic('shieldCheck', 's') + t('hm.view') + '</button></div></div>';
+  var job = '<div class="card" data-spec="live.job"><div class="ch"><h2 class="ct">' + t('live.job') + '</h2><div class="row"><span class="badge neutral">' + ic('package', 's') + V(d.cargo) + ' · ' + V(d.mass + ' ' + u(d.massU)) + '</span><span class="badge neutral">' + t('live.market.' + d.market) + '</span>' +
+    '<span class="badge warn">' + ic('clock', 's') + t('live.deadline') + ' ' + V(t('fmt.in', { h: d.dl[0], m: d.dl[1] })) + '</span></div></div><div class="cb">' +
+    '<div class="route" data-spec="live.job.progress"><div class="ln"></div><div class="dn" style="width:calc((100% - 20px) * ' + prog / 100 + ')"></div><div class="pt" style="left:1px;background:var(--yu-accent-light)"></div><div class="pt" style="right:1px;background:var(--yu-text-muted)"></div>' +
+    '<div class="tk" style="left:calc(10px + (100% - 20px) * ' + prog / 100 + ')">' + ic('truck', 's') + '</div></div>' +
+    '<div style="display:grid;grid-template-columns:1fr auto auto auto 1fr;gap:18px;align-items:end;margin-top:6px">' +
+    '<div><div class="label">' + ic('mapPin', 's') + '</div><b>' + V(d.from) + '</b><div class="small muted">' + V(d.fromCo) + '</div></div>' +
+    '<div class="r"><div class="label">' + t('live.driven') + '</div><b class="num" style="font-size:17px">' + val(d.done) + '</b> <span class="muted small">' + u(d.dU) + '</span></div>' +
+    '<div><div class="label">' + t('live.remaining') + '</div><b class="num" style="font-size:17px">' + val(d.remaining) + '</b> <span class="muted small">' + u(d.dU) + '</span><div class="small muted">' + t('live.planned', { v: d.planned + ' ' + u(d.dU) }) + '</div></div>' +
+    '<div><div class="label">' + t('live.income') + '</div><b class="num" style="font-size:15px">' + val(d.income) + '</b></div>' +
+    '<div style="text-align:right"><div class="label">' + ic('flag', 's') + '</div><b>' + V(d.to) + '</b><div class="small muted">' + V(d.toCo) + '</div></div></div></div></div>';
+  var kv = function (k, v, note) { return '<div class="kv"><span>' + k + (note ? '<span class="note">' + note + '</span>' : '') + '</span><b>' + v + '</b></div>'; };
+  var trip = '<div class="card" data-spec="live.trip"><div class="ch"><h2 class="ct">' + t('live.trip') + '</h2></div><div class="cb">' + kv(t('live.realTime'), val(t('fmt.min', { m: d.tripReal }))) + kv(t('live.gameTime'), val(dur(d.tripGame))) +
+    kv(t('live.fuelUsed'), val(d.fuelUsed + ' ' + u(d.volU))) + kv(t('live.recording'), w ? '—' : '<span class="badge ok">' + ic('check', 's') + t('complete.complete') + '</span>') + '</div></div>';
+  var truck = '<div class="card" data-spec="live.truck"><div class="ch"><h2 class="ct">' + t('live.truck') + '</h2></div><div class="cb">' + kv(t('live.truck'), val(d.truck)) + kv(t('live.plate'), val(d.plate)) + kv(t('live.trailer'), val(d.trailer)) + kv(t('live.odometer'), val(d.odo + ' ' + u(d.dU))) + '</div></div>';
+  var sess = '<div class="card" data-spec="live.session"><div class="ch"><h2 class="ct">' + t('live.session') + '</h2></div><div class="cb">' + kv(t('live.clock'), val(t('fmt.day', { d: d.day, t: d.clock }))) + kv(t('live.mode'), V(t('mode.' + d.mode))) + kv(t('live.protocol'), 'v1') + kv(t('live.lostEvents'), val('0')) + '</div></div>';
+  return waitBanner + '<div class="grid" style="grid-template-columns:minmax(0,2.1fr) minmax(0,1fr)">' + instrument + hmCard + '</div>' + job +
+    '<div class="grid" style="grid-template-columns:repeat(3,minmax(0,1fr))">' + trip + truck + sess + '</div>';
+}
+function hmSheet() {
+  var rows = hmRows(), hp = hmPassed(), hs = hmState(), d = D();
+  var status = hs === 'active' ? '<span class="chip ok">' + ic('shieldCheck', 's') + t('hm.active') + ' · 12/12</span>' : hs === 'lost' ? '<span class="chip err">' + ic('shieldX', 's') + t('hm.lost') + '</span>' : '<span class="chip warn">' + ic('shieldX', 's') + t('hm.inactive') + ' · ' + hp + '/12</span>';
+  var list = rows.map(function (r, i) {
+    return '<div class="crit ' + (r.pass ? '' : 'bad') + '"><span class="sicon ' + (r.pass ? 'ok' : 'err') + '">' + ic(r.pass ? 'check' : 'x', 's') + '</span><div style="min-width:0"><div class="b6">' + (i + 1) + '. ' + t('hm.c.' + r.id) + '</div><div class="cv">' + r.cvar + '</div></div>' +
+      '<span class="req">' + r.req + '</span><span class="det">' + r.det + '</span></div>';
+  }).join('');
+  return '<div class="scrim" data-sheet="0"></div><aside class="sheet" role="dialog" aria-label="' + t('hm.sheet') + '" data-spec="hardMode.sheet"><div class="sh"><div class="row between"><h2 class="ct">' + t('hm.sheet') + '</h2><button class="btn g icon" data-sheet="0" aria-label="' + t('c.close') + '">' + ic('x') + '</button></div>' +
+    '<div class="row between">' + status + '<button class="btn s sm">' + ic('refresh', 's') + t('hm.recheck') + '</button></div>' +
+    '<div class="small t2" data-spec="hardMode.sheet.source"><div>' + t('hm.profile') + ': <b>' + d.profile + '</b> · ' + d.name + '</div><div class="muted">' + t('hm.file') + ': Documents\\' + d.name + '\\steam_profiles\\4B657374…\\config.cfg · ' + t('hm.read', { s: 4 }) + '</div></div>' +
+    (hs === 'lost' ? '<div class="badge err" style="white-space:normal;line-height:1.4;padding:6px 9px">' + t('hm.lostText', { what: t('hm.c.truckstab'), v: '70%', time: '09:31' }) + '</div>' : '') + '</div>' +
+    '<div class="sb"><div class="crit" style="color:var(--yu-text-muted);font-size:12px"><span></span><span>' + t('hm.col.setting') + '</span><span class="req">' + t('hm.col.required') + '</span><span class="det" style="color:inherit;font-weight:400">' + t('hm.col.detected') + '</span></div>' +
+    '<div data-spec="hardMode.sheet.criteria">' + list + '</div></div><div class="sf">' + t('hm.rule') + '<br>' + t('hm.readonly') + '</div></aside>';
+}
+
+/* ---------- Journal ---------- */
+function outBadge(o) {
+  var m = { open: ['neutral', 'circleDot'], delivered: ['ok', 'check'], late: ['warn', 'clock'], cancelled: ['err', 'x'], none: ['neutral', 'minus'] }[o];
+  return '<span class="badge ' + m[0] + '">' + ic(m[1], 's') + t('out.' + o) + '</span>';
+}
+function recBadge(r) {
+  var m = { complete: ['ok', 'check'], partial: ['warn', 'triangleAlert'], unknown: ['neutral', 'info'] }[r];
+  return '<span class="badge ' + m[0] + '">' + ic(m[1], 's') + t('complete.' + r) + '</span>';
+}
+function syncBadge(s) {
+  if (s === 'none') return '<span class="muted">—</span>';
+  var m = { sent: ['ok', 'check'], queued: ['warn', 'clock'], error: ['err', 'x'] }[s];
+  return '<span class="badge ' + m[0] + '" title="' + t('sync.' + s) + '">' + ic(m[1], 's') + t('sync.' + s) + '</span>';
+}
+function hmMark(on) { return on ? '<span class="badge ok" title="Hard Mode" style="padding:2px 6px">' + ic('shieldCheck', 's') + 'HM</span>' : ''; }
+function journalScreen() {
+  var bar = '<div class="row wrap" data-spec="journal.filters" style="gap:8px"><div class="seg"><button class="on">' + t('j.all') + '</button><button>ETS2</button><button>ATS</button></div>' +
+    '<div class="input val" style="width:160px">' + t('j.anyOutcome') + ic('chevDown', 's') + '</div><div class="input val" style="width:170px">' + t('j.anyRecording') + ic('chevDown', 's') + '</div>' +
+    '<div class="input" style="width:220px">' + ic('search', 's') + t('j.search') + '</div><span style="flex:1"></span><span class="small muted">' + t('j.count', { n: 143, h: 41 }) + '</span></div>';
+  var rows = TRIPS.map(function (tr, i) {
+    var money = tr.rev ? '<b class="num">' + tr.rev + '</b>' : tr.penalty ? '<b class="num" style="color:var(--yu-err-fg)">−' + tr.penalty + '</b>' : '<span class="muted">—</span>';
+    return '<tr data-trip="' + i + '"><td class="num"><b class="b6">' + date(tr) + '</b></td><td>' + gameChip(tr.game) + '</td><td><div class="row" style="gap:6px">' + esc(tr.cargo) + hmMark(tr.hm) + '</div></td>' +
+      '<td><div class="row" style="gap:5px;white-space:nowrap">' + tr.from + ic('arrowRight', 's') + tr.to + '</div><div class="small muted">' + tr.fromCo + ' → ' + tr.toCo + '</div></td>' +
+      '<td class="r num">' + tr.obs + ' ' + u(tr.dU) + '<div class="small muted">' + t('j.of', { v: tr.planned + ' ' + u(tr.dU) }) + '</div></td>' +
+      '<td class="r">' + money + '<div class="small muted">' + t('j.expected', { v: tr.exp }) + '</div></td><td>' + outBadge(tr.out) + '</td><td>' + recBadge(tr.rec) + '</td><td>' + syncBadge(tr.sync) + '</td><td class="muted">' + ic('chevRight', 's') + '</td></tr>';
+  }).join('');
+  var table = '<div class="card" style="overflow:hidden" data-spec="journal.table"><table class="t"><thead><tr><th>' + t('col.started') + '</th><th>' + t('col.game') + '</th><th>' + t('col.cargo') + '</th><th>' + t('col.route') + '</th><th class="r">' + t('col.distance') + '</th><th class="r">' + t('col.money') + '</th><th>' + t('col.outcome') + '</th><th>' + t('col.recording') + '</th><th>' + t('col.sync') + ' <span class="badge later" style="min-height:16px;font-size:10px;padding:0 5px">' + t('tag.later') + '</span></th><th></th></tr></thead><tbody>' + rows + '</tbody></table>' +
+    '<div class="row between" style="padding:10px 14px;border-top:1px solid var(--yu-divider)" data-spec="journal.pager"><span class="small muted">' + t('j.page', { p: 1 }) + '</span><div class="row"><button class="btn s sm" disabled style="opacity:.5">' + ic('chevLeft', 's') + t('j.prev') + '</button><button class="btn s sm">' + t('j.next') + ic('chevRight', 's') + '</button></div></div></div>';
+  return bar + table;
+}
+function tripScreen() {
+  var tr = TRIPS[S.trip], du = u(tr.dU);
+  var head = '<div class="row between" data-spec="trip.header"><div><button class="btn g sm" data-go="journal" style="padding-left:0">' + ic('chevLeft', 's') + t('tr.back') + '</button>' +
+    '<div class="row wrap" style="gap:8px;margin-top:2px"><h2 style="margin:0;font-size:22px;font-weight:700">' + esc(tr.cargo) + '</h2>' + gameChip(tr.game) + outBadge(tr.out) + recBadge(tr.rec) + (tr.hm ? '<span class="badge ok">' + ic('shieldCheck', 's') + 'Hard Mode</span>' : '') + '</div>' +
+    '<div class="small muted" style="margin-top:3px">' + tr.from + ' · ' + tr.fromCo + ' → ' + tr.to + ' · ' + tr.toCo + ' · ' + date(tr) + '</div></div>' +
+    '<button class="btn s" data-spec="trip.export">' + ic('download', 's') + t('j.export') + '</button></div>';
+  var tile = function (cls, l, v, sub) { return '<div class="card ' + cls + '" style="padding:14px 16px"><div class="label">' + l + '</div><div class="metric">' + v + '</div><div class="small t2">' + sub + '</div></div>'; };
+  var tiles = '<div class="grid" style="grid-template-columns:repeat(4,minmax(0,1fr))" data-spec="trip.tiles">' +
+    tile('hero', t('tr.distance'), tr.obs + '<small>' + du + '</small>', t('tr.planned', { v: tr.planned + ' ' + du }) + (tr.delivered ? ' · ' + t('tr.delivered', { v: tr.delivered + ' ' + du }) : '')) +
+    tile('teal', tr.penalty ? t('tr.penalty') : t('tr.revenue'), tr.rev ? '<span style="font-size:22px">' + tr.rev + '</span>' : tr.penalty ? '<span style="font-size:22px;color:var(--yu-err-fg)">−' + tr.penalty + '</span>' : '—', t('tr.expected', { v: tr.exp })) +
+    tile('', t('tr.time'), dur(tr.real), t('tr.gameTime', { v: dur(tr.gt) })) + tile('', t('tr.fuel'), '<span style="font-size:22px">' + tr.fuel + '</span>', t('tr.fuelNote')) + '</div>';
+  var smax = tr.game === 'ATS' ? 80 : 130, n = tr.rec === 'unknown' ? 36 : 90, sp = series(n, 3 + S.trip * 17, smax * 0.6, smax * 0.18, smax * 0.05, smax * 0.82);
+  var W = 600, H = 140, grid = '';
+  for (var g = 0; g <= 4; g++) grid += '<line x1="36" x2="' + (W + 36) + '" y1="' + (8 + g * H / 4) + '" y2="' + (8 + g * H / 4) + '" stroke="#2B3544"/><text x="30" y="' + (12 + g * H / 4) + '" text-anchor="end" font-size="10" fill="#9CA3AF" font-family="Onest, sans-serif">' + Math.round(smax * (1 - g / 4)) + '</text>';
+  var cw = tr.rec === 'unknown' ? W * 0.6 : W;
+  var gaps = tr.rec === 'partial' ? '<rect x="' + (36 + W * 0.3) + '" y="8" width="10" height="' + H + '" fill="#E8C58A" fill-opacity=".18"/><rect x="' + (36 + W * 0.78) + '" y="8" width="8" height="' + H + '" fill="#E8C58A" fill-opacity=".18"/>' : '';
+  var miss = tr.rec === 'unknown' ? '<rect x="' + (36 + cw) + '" y="8" width="' + (W - cw) + '" height="' + H + '" fill="url(#hatch)"/>' : '';
+  var chart = '<svg viewBox="0 0 ' + (W + 44) + ' ' + (H + 28) + '" width="100%" style="display:block" data-spec="trip.speedChart"><defs><pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="6" stroke="#374151" stroke-width="2"/></pattern></defs>' + grid + gaps +
+    '<g transform="translate(36 8)">' + spark(sp, cw, H, 0, smax, '#60A5FA') + '</g>' + miss + '<text x="36" y="' + (H + 26) + '" font-size="10" fill="#9CA3AF" font-family="Onest, sans-serif">' + tr.tm + '</text><text x="' + (W + 36) + '" y="' + (H + 26) + '" text-anchor="end" font-size="10" fill="#9CA3AF" font-family="Onest, sans-serif">+' + dur(tr.real) + '</text></svg>';
+  var tab = function (id) { return '<button class="' + (S.tripTab === id ? 'on' : '') + '" data-triptab="' + id + '">' + t('tr.tab.' + id) + '</button>'; };
+  var body;
+  if (S.tripTab === 'timeline') {
+    body = '<div data-spec="trip.timeline">' + tr.ev.map(function (e) {
+      var col = { ok: 'var(--yu-ok-fg)', warn: 'var(--yu-warn-fg)', bad: 'var(--yu-err-fg)', acc: 'var(--yu-accent-light)' }[e[3]] || 'var(--yu-text-muted)';
+      return '<div class="tl"><span class="small muted num" style="padding-top:2px">' + e[0] + '</span><span class="rl"><i style="background:' + col + '"></i></span><div><div class="b6">' + t(e[1]) + '</div><div class="small muted">' + e[2] + '</div></div><span></span></div>';
+    }).join('') + '</div>';
+  } else if (S.tripTab === 'completeness') {
+    var segs = tr.rec === 'partial' ? [[30, 'ok'], [2, 'gap'], [46, 'ok'], [2, 'gap'], [20, 'ok']] : tr.rec === 'unknown' ? [[60, 'ok'], [40, 'miss']] : [[100, 'ok']];
+    body = '<div data-spec="trip.completeness" style="display:flex;flex-direction:column;gap:10px"><div class="ivbar">' + segs.map(function (s) { return '<i style="flex:' + s[0] + ';background:' + (s[1] === 'ok' ? 'var(--yu-ok-fg)' : s[1] === 'gap' ? 'var(--yu-progress-pending)' : 'var(--yu-border)') + '"></i>'; }).join('') + '</div>' +
+      '<div class="row small" style="gap:14px"><span class="row" style="gap:6px"><i class="dot" style="color:var(--yu-ok-fg)"></i>' + t('tr.ivRecorded') + '</span><span class="row" style="gap:6px"><i class="dot" style="color:var(--yu-progress-pending)"></i>' + t('tr.ivGap') + '</span><span class="muted">' + t('tr.ivTotal', { n: segs.length }) + '</span></div></div>';
+  } else {
+    body = chart;
+  }
+  var left = '<div class="card" data-spec="trip.detailTabs"><div class="ch"><div class="seg">' + tab('summary') + tab('timeline') + tab('completeness') + '</div><span class="small muted">' + t('tr.samples') + '</span></div><div class="cb">' + body + '</div></div>';
+  var hmc = '<div class="card" data-spec="trip.hardMode"><div class="ch"><h2 class="ct">Hard Mode</h2>' + (tr.hm ? '<span class="chip ok">' + ic('shieldCheck', 's') + t('hm.tripYes') + '</span>' : '<span class="chip neutral">' + ic('shieldX', 's') + t('hm.tripNo') + '</span>') + '</div><div class="cb">' +
+    '<div class="kv"><span>' + t('tr.hmStart') + '</span><b>' + (tr.hm ? '12/12' : '9/12') + '</b></div><div class="kv"><span>' + t('tr.hmEnd') + '</span><b>' + (tr.hm ? '12/12' : '9/12') + '</b></div><div class="small muted" style="margin-top:6px">' + t('tr.hmSnapshot') + '</div></div></div>';
+  var money = '<div class="card" data-spec="trip.money"><div class="ch"><h2 class="ct">' + t('tr.money') + '</h2></div><div class="cb"><div class="kv"><span>' + t('tr.fines') + '</span><b>' + (S.trip === 1 ? '400 EUR' : '0') + '</b></div><div class="kv"><span>' + t('tr.tolls') + '</span><b>' + (S.trip === 1 ? '82 EUR' : '0') + '</b></div><div class="kv"><span>' + t('tr.ferry') + '</span><b>0</b></div></div></div>';
+  return head + tiles + '<div class="grid" style="grid-template-columns:minmax(0,2fr) minmax(0,1fr);align-items:start">' + left + '<div class="grid">' + hmc + money + '</div></div>';
+}
+
+/* ---------- Settings ---------- */
+var SECGROUPS = [['driving', ['speed', 'gear', 'rpm']], ['fuel', ['fuel', 'range', 'sdk-consumption']], ['job', ['cargo', 'origin', 'destination', 'distance-driven', 'distance-remaining', 'deadline', 'expected-income']], ['time', ['game-time']], ['status', ['hard-mode']]];
+var SECREQ = { 'origin': 'v1', 'distance-remaining': 'v1', 'deadline': 'v1', 'distance-driven': 'trip', 'cargo': 'ids', 'destination': 'ids' };
+var ALLSECS = []; SECGROUPS.forEach(function (g) { g[1].forEach(function (s) { ALLSECS.push(s); }); });
+var PRESETS = { everything: ALLSECS, job: ['speed', 'gear', 'fuel', 'cargo', 'destination', 'distance-remaining', 'deadline', 'hard-mode'], driving: ['speed', 'gear', 'rpm', 'fuel', 'range'] };
+function on(k) { return !S.on || S.on[k] !== false; }
+function settingsScreen() {
+  var it = function (id, icon, tag) { return '<button class="nav" data-set="' + id + '"' + (S.set === id ? ' aria-current="page"' : '') + '>' + ic(icon) + '<span class="grow">' + t('s.' + id) + '</span>' + (tag || '') + '</button>'; };
+  var nav = '<nav class="snav" data-spec="settings.nav">' + it('general', 'settings2') + it('units', 'gauge') + it('overlay', 'layers') + it('sections', 'eye') + it('plugin', 'plug') + it('data', 'database') + it('about', 'info') + '</nav>';
+  var card = function (spec, title, inner, extra) { return '<section class="card" data-spec="' + spec + '"><div class="ch"><h2 class="ct">' + title + '</h2>' + (extra || '') + '</div><div class="cb">' + inner + '</div></section>'; };
+  var row = function (l, d, ctl) { return '<div class="srow"><div><b>' + l + '</b>' + (d ? '<span class="d">' + d + '</span>' : '') + '</div><div class="row">' + ctl + '</div></div>'; };
+  var c = '';
+  if (S.set === 'general') {
+    c = card('settings.general', t('s.general'), row(t('s.lang'), t('s.langD'), '<div class="seg"><button class="' + (S.lang === 'en' ? 'on' : '') + '" data-lang="en">English</button><button class="' + (S.lang === 'ru' ? 'on' : '') + '" data-lang="ru">Русский</button></div>') +
+      row(t('s.autostart') + ' <span class="badge later" style="min-height:18px;font-size:10px;padding:0 6px;margin-left:4px">' + t('tag.planned') + '</span>', t('s.autostartD'), '<button class="switch" aria-label="' + t('s.autostart') + '"></button>') +
+      row(t('s.close'), t('s.closeD'), '<span class="badge neutral">' + t('s.closeV') + '</span>'));
+  } else if (S.set === 'units') {
+    var ug = function (name, m) { return row(name, '', '<div class="seg"><button class="' + (m ? 'on' : '') + '">' + t('s.u.metric') + '</button><button class="' + (m ? '' : 'on') + '">' + t('s.u.us') + '</button></div>'); };
+    c = card('settings.units', t('s.units'), ug('Euro Truck Simulator 2', true) + ug('American Truck Simulator', false) + '<div class="small muted" style="margin-top:8px">' + t('s.u.d') + '</div>');
+  } else if (S.set === 'overlay') {
+    var lo = [['strip', [[12, 8, 76, 10]]], ['card', [[70, 10, 24, 50]]], ['cluster', [[6, 50, 24, 42]]], ['hud', [[6, 10, 30, 12]]]].map(function (o) {
+      return '<button class="lopt ' + (S.ovl === o[0] ? 'on' : '') + '" data-ovl="' + o[0] + '"><span class="th">' + o[1].map(function (r) { return '<i style="left:' + r[0] + '%;top:' + r[1] + '%;width:' + r[2] + '%;height:' + r[3] + '%"></i>'; }).join('') + '</span>' + t('l.' + o[0]) + '</button>';
+    }).join('');
+    var n = ALLSECS.filter(on).length;
+    c = card('settings.overlay', t('s.overlay'), row(t('s.o.show'), t('s.o.showD'), '<button class="switch on" aria-label="' + t('s.o.show') + '"></button>') +
+      '<div class="srow" style="grid-template-columns:1fr"><div><b>' + t('s.o.layout') + '</b></div><div class="grid" style="grid-template-columns:repeat(4,minmax(0,1fr));gap:10px" data-spec="settings.overlay.layout">' + lo + '</div></div>' +
+      row(t('s.sections'), t('s.o.sectionsD', { n: n, m: ALLSECS.length }), '<button class="btn s sm" data-set="sections">' + ic('eye', 's') + t('s.o.choose') + '</button>') +
+      row(t('s.o.scale'), '', '<div class="slider"><i style="width:45%"></i><b style="left:45%"></b></div><span class="small num" style="width:42px;text-align:right">110%</span>') +
+      row(t('s.o.opacity'), '', '<div class="slider"><i style="width:75%"></i><b style="left:75%"></b></div><span class="small num" style="width:42px;text-align:right">80%</span>') +
+      row(t('s.o.position'), t('s.o.editD'), '<button class="btn p sm" data-spec="settings.overlay.edit">' + ic('move', 's') + t('s.o.edit') + '</button>'));
+  } else if (S.set === 'sections') {
+    var preset = ['everything', 'job', 'driving'].filter(function (p) { return ALLSECS.every(function (k) { return on(k) === (PRESETS[p].indexOf(k) >= 0); }); })[0];
+    var groups = SECGROUPS.map(function (g) {
+      return '<div><div class="label b6" style="text-transform:uppercase;letter-spacing:.6px;font-size:11px;margin-bottom:2px">' + t('g.' + g[0]) + '</div>' + g[1].map(function (s) {
+        return '<button class="secrow" data-sect="' + s + '" aria-pressed="' + on(s) + '"><span>' + t('sec.' + s) + (SECREQ[s] ? '<span class="req">' + t('sec.req.' + SECREQ[s]) + '</span>' : '') + (s === 'hard-mode' ? ' <span class="badge later" style="min-height:16px;font-size:10px;padding:0 5px">new</span>' : '') + '</span><span class="switch ' + (on(s) ? 'on' : '') + '"></span></button>';
+      }).join('') + '</div>';
+    }).join('');
+    c = card('settings.sections', t('s.sections'), '<div class="grid" style="grid-template-columns:repeat(2,minmax(0,1fr));gap:16px 28px" data-spec="settings.sections.groups">' + groups + '</div><div class="small muted" style="margin-top:12px">' + t('sec.hint') + '</div>',
+      '<div class="seg" data-spec="settings.sections.presets"><button class="' + (preset === 'everything' ? 'on' : '') + '" data-preset="everything">' + t('p.everything') + '</button><button class="' + (preset === 'job' ? 'on' : '') + '" data-preset="job">' + t('p.job') + '</button><button class="' + (preset === 'driving' ? 'on' : '') + '" data-preset="driving">' + t('p.driving') + '</button></div>');
+  } else if (S.set === 'plugin') {
+    var pr = function (game, path, status, btns) { return row(game, path, status + btns); };
+    c = card('settings.plugin', t('s.plugin'), '<div class="small t2" style="margin-bottom:6px">' + t('s.p.d') + '</div>' +
+      pr('Euro Truck Simulator 2', 'D:\\SteamLibrary\\steamapps\\common\\Euro Truck Simulator 2', '<span class="badge ok">' + ic('check', 's') + t('s.p.installed') + '</span>', '<button class="btn s sm">' + t('s.p.reinstall') + '</button><button class="btn g sm">' + ic('folderOpen', 's') + t('s.p.open') + '</button>') +
+      pr('American Truck Simulator', 'D:\\SteamLibrary\\steamapps\\common\\American Truck Simulator', '<span class="badge warn">' + ic('clock', 's') + t('s.p.update') + '</span>', '<button class="btn g sm">' + ic('folderOpen', 's') + t('s.p.open') + '</button>'));
+  } else if (S.set === 'data') {
+    c = card('settings.data', t('s.data'), row(t('s.d.location'), '%LOCALAPPDATA%\\ETS2Telemetry\\data\\telemetry.sqlite', '<button class="btn s sm">' + ic('folderOpen', 's') + t('s.p.open') + '</button>') +
+      row(t('s.d.size'), t('s.d.sizeV', { mb: '18.2', n: 143 }), '') + row(t('s.d.backup'), t('s.d.backupV', { v: '14.10, 21:20' }), '<button class="btn s sm">' + t('s.d.backupBtn') + '</button>') +
+      row(t('s.d.diag'), t('s.d.diagD'), '<button class="btn s sm">' + ic('download', 's') + t('s.d.diagBtn') + '</button>'));
+  } else {
+    c = card('settings.about', t('s.about'), row(t('s.a.version'), 'Yukon Union Telemetry 0.1.0 · plugin 0.1.0', '') + row(t('s.a.uninstall'), t('s.a.uninstallD'), '<button class="btn d sm">' + t('s.a.uninstall') + '</button>'));
+  }
+  return '<div class="row" style="align-items:start;gap:24px">' + nav + '<div style="flex:1;min-width:0;max-width:820px;display:flex;flex-direction:column;gap:14px">' + c + '</div></div>';
+}
+
+/* ---------- Account & sync (server phase) ---------- */
+function accountScreen() {
+  var off = S.conn === 'lost';
+  return '<div class="row"><span class="chip later">' + ic('cloud', 's') + t('a.later') + '</span></div>' +
+    '<div class="grid" style="grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);align-items:start">' +
+    '<section class="card" data-spec="account.token"><div class="ch"><h2 class="ct">' + t('a.title') + '</h2></div><div class="cb" style="display:flex;flex-direction:column;gap:12px"><p class="t2" style="margin:0">' + t('a.tokenD') + '</p>' +
+    '<div class="row"><div class="input val" style="flex:1">' + ic('keyRound', 's') + '<span style="flex:1;letter-spacing:2px;color:var(--yu-text-secondary)">••••••••••••••••••••••••••••</span><button class="btn g icon sm" aria-label="' + t('a.show') + '">' + ic('eyeOff', 's') + '</button></div><button class="btn p">' + t('a.save') + '</button></div>' +
+    '<div class="small muted">' + t('a.note') + '</div></div></section>' +
+    '<section class="card" data-spec="account.status"><div class="ch"><h2 class="ct">' + t('a.status') + '</h2></div><div class="cb">' +
+    '<div class="kv"><span>' + t('a.dashboard') + '</span><b>' + (off ? '<span class="badge neutral">' + ic('wifiOff', 's') + t('st.offline') + '</span>' : '<span class="badge ok">' + ic('check', 's') + t('a.connected', { u: 'Kestrel' }) + '</span>') + '</b></div>' +
+    '<div class="kv"><span>' + t('a.queue') + '</span><b><span class="badge warn">' + ic('clock', 's') + t('a.queueV', { n: 3 }) + '</span></b></div>' +
+    '<div class="kv"><span>' + t('a.lastUpload') + '</span><b>' + t('a.lastUploadV') + '</b></div>' +
+    '<div style="padding-top:10px;display:flex;flex-direction:column;gap:6px" data-spec="account.firstSync"><div class="row between small"><span class="t2">' + t('a.first') + '</span><span class="num">' + t('a.firstV', { d: 87, t: 143 }) + '</span></div><div class="bar"><i style="width:61%"></i></div></div>' +
+    (off ? '<div class="badge neutral" style="margin-top:10px;white-space:normal;padding:6px 9px">' + t('a.offline') + '</div>' : '') + '</div></section></div>';
+}
+
+/* ---------- First run ---------- */
+function onboardingScreen() {
+  var steps = ['ob.s1', 'ob.s2', 'ob.s3', 'ob.s4'].map(function (k, i) {
+    var n = i + 1, cls = n === S.wiz ? 'on' : n < S.wiz ? 'done' : '';
+    return '<div class="wstep ' + cls + '"><span class="n">' + (n < S.wiz ? ic('check', 's') : n) + '</span><span class="b6">' + t(k) + '</span></div>';
+  }).join('');
+  var body = '';
+  if (S.wiz === 1) {
+    body = '<p class="t2">' + t('ob.s1T') + '</p><div class="card"><div class="cb">' +
+      '<div class="kv"><span><b style="color:var(--yu-text)">Euro Truck Simulator 2</b><span class="note">D:\\SteamLibrary\\steamapps\\common</span></span><b><span class="badge ok">' + ic('check', 's') + t('ob.found') + '</span></b></div>' +
+      '<div class="kv"><span><b style="color:var(--yu-text)">American Truck Simulator</b><span class="note">—</span></span><b class="row"><span class="badge neutral">' + t('s.p.notfound') + '</span><button class="btn s sm">' + ic('folderOpen', 's') + t('s.p.choose') + '</button></b></div></div></div>';
+  } else if (S.wiz === 2) {
+    body = '<p class="t2">' + t('ob.s2T') + '</p><div class="card"><div class="cb"><div class="kv"><span><b style="color:var(--yu-text)">Euro Truck Simulator 2</b></span><b><span class="badge neutral">' + t('ob.ready') + '</span></b></div>' +
+      '<div class="kv"><span><b style="color:var(--yu-text)">American Truck Simulator</b></span><b><span class="badge neutral">' + t('ob.ready') + '</span></b></div></div></div><div><button class="btn p">' + ic('plug', 's') + t('ob.install') + '</button></div>';
+  } else if (S.wiz === 3) {
+    body = '<p class="t2">' + t('ob.s3T') + '</p><div class="card"><div class="cb"><div class="srow"><div><b>' + t('s.lang') + '</b></div><div class="seg"><button class="' + (S.lang === 'en' ? 'on' : '') + '" data-lang="en">English</button><button class="' + (S.lang === 'ru' ? 'on' : '') + '" data-lang="ru">Русский</button></div></div>' +
+      '<div class="srow"><div><b>Euro Truck Simulator 2</b></div><div class="seg"><button class="on">' + t('s.u.metric') + '</button><button>' + t('s.u.us') + '</button></div></div><div class="srow"><div><b>American Truck Simulator</b></div><div class="seg"><button>' + t('s.u.metric') + '</button><button class="on">' + t('s.u.us') + '</button></div></div></div></div>';
+  } else {
+    body = '<p class="t2">' + t('ob.s4T') + '</p><div class="grid" style="grid-template-columns:repeat(4,minmax(0,1fr));gap:10px">' + ['strip', 'card', 'cluster', 'hud'].map(function (l) { return '<button class="lopt ' + (S.ovl === l ? 'on' : '') + '" data-ovl="' + l + '"><span class="th"></span>' + t('l.' + l) + '</button>'; }).join('') + '</div>';
+  }
+  return '<div class="win ' + (S.inspect === 'on' ? 'inspect' : '') + '" data-conn="' + S.conn + '">' + titlebar() + '<div class="wiz" data-spec="onboarding">' +
+    '<div class="wsteps" data-spec="onboarding.steps"><div class="lockup" style="padding:0 0 20px"><img src="' + EMBLEM + '" alt=""><div><b>' + t('app.name') + '</b><span>' + t('app.sub') + '</span></div></div><h2 style="margin:0 0 12px;font-size:20px;font-weight:700">' + t('ob.title') + '</h2>' + steps + '</div>' +
+    '<div style="padding:40px 48px;display:flex;flex-direction:column;gap:16px;min-width:0" data-spec="onboarding.step"><span class="label">' + t('ob.step', { n: S.wiz }) + '</span><h2 style="margin:0;font-size:24px;font-weight:700">' + t('ob.s' + S.wiz) + '</h2>' + body +
+    '<div class="row" style="margin-top:auto;justify-content:flex-end;gap:10px"><button class="btn s" data-wiz="' + Math.max(1, S.wiz - 1) + '"' + (S.wiz === 1 ? ' disabled style="opacity:.5"' : '') + '>' + t('ob.back') + '</button><button class="btn p" data-wiz="' + Math.min(4, S.wiz + 1) + '">' + (S.wiz === 4 ? t('ob.finish') : t('ob.next')) + '</button></div></div></div></div>';
+}
+
+/* ---------- States gallery ---------- */
+function statesScreen() {
+  var st = [
+    ['states.gameNotFound', 'monitor', 'st.noGame', 'st.noGameT', '<button class="btn p sm">' + ic('folderOpen', 's') + t('s.p.choose') + '</button>'],
+    ['states.pluginMissing', 'plug', 'st.plugin', 'st.pluginT', '<button class="btn p sm">' + ic('plug', 's') + t('ob.install') + '</button>'],
+    ['states.waiting', 'clock', 'st.wait', 'st.waitT', ''],
+    ['states.connectionLost', 'wifiOff', 'st.lost', 'st.lostT', ''],
+    ['states.versionMismatch', 'triangleAlert', 'st.version', 'st.versionT', ''],
+    ['states.recordingStopped', 'database', 'st.rec', 'st.recT', '<button class="btn s sm">' + ic('folderOpen', 's') + t('s.p.open') + '</button>'],
+    ['states.journalEmpty', 'bookOpen', 'j.emptyTitle', 'j.emptyText', ''],
+    ['states.noToken', 'keyRound', 'st.noToken', 'st.noTokenT', '<button class="btn p sm">' + t('st.addToken') + '</button>'],
+    ['states.offline', 'cloudOff', 'st.offline', 'a.offline', ''],
+    ['states.firstSync', 'upload', 'st.firstSync', 'st.firstSyncT', '<div class="bar" style="width:220px"><i style="width:61%"></i></div>']
+  ];
+  var tone = { 'states.connectionLost': 'err', 'states.recordingStopped': 'err', 'states.versionMismatch': 'warn', 'states.pluginMissing': 'warn', 'states.noToken': 'neutral', 'states.offline': 'neutral' };
+  return '<div class="grid" style="grid-template-columns:repeat(3,minmax(0,1fr))">' + st.map(function (s) {
+    var tn = tone[s[0]];
+    return '<div class="card" data-spec="' + s[0] + '"><div class="empty"><div class="ei" style="' + (tn === 'err' ? 'color:var(--yu-err-fg);border-color:var(--yu-err-border);background:var(--yu-err-bg)' : tn === 'warn' ? 'color:var(--yu-warn-fg);border-color:var(--yu-warn-border);background:var(--yu-warn-bg)' : '') + '">' + ic(s[1], 'xl') + '</div><h3>' + t(s[2]) + '</h3><p>' + t(s[3]) + '</p>' + s[4] + '</div></div>';
+  }).join('') + '</div>';
+}
+
+/* ---------- Overlay ---------- */
+function sceneBg() {
+  return '<svg class="bg" viewBox="0 0 1280 720" width="1920" height="1080" aria-hidden="true"><defs>' +
+    '<linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2a3a5c"/><stop offset=".55" stop-color="#c98a5a"/><stop offset="1" stop-color="#e9b57c"/></linearGradient>' +
+    '<linearGradient id="gnd" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#3b4a33"/><stop offset="1" stop-color="#1e2619"/></linearGradient>' +
+    '<linearGradient id="road" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#4a4c52"/><stop offset="1" stop-color="#26272b"/></linearGradient></defs>' +
+    '<rect width="1280" height="380" fill="url(#sky)"/><circle cx="880" cy="350" r="60" fill="#ffd9a0" opacity=".55"/>' +
+    '<path d="M0 340 L120 300 L260 330 L400 290 L560 335 L700 305 L860 340 L1000 296 L1140 330 L1280 300 L1280 380 L0 380Z" fill="#5a5470" opacity=".7"/>' +
+    '<rect y="378" width="1280" height="342" fill="url(#gnd)"/><path d="M590 378 L690 378 L1180 720 L100 720Z" fill="url(#road)"/>' +
+    '<path d="M637 380 L643 380 L652 420 L640 420Z M630 450 L650 450 L665 520 L620 520Z M610 570 L670 570 L700 700 L580 700Z" fill="#d9d4c4" opacity=".6"/>' +
+    '<rect x="508" y="330" width="264" height="300" rx="6" fill="#d7d9dd" stroke="#8b8f97" stroke-width="3"/><line x1="640" y1="336" x2="640" y2="620" stroke="#a5a9b0" stroke-width="2"/>' +
+    '<rect x="520" y="596" width="30" height="14" rx="3" fill="#c0392b"/><rect x="730" y="596" width="30" height="14" rx="3" fill="#c0392b"/><rect x="520" y="630" width="240" height="22" fill="#222"/>' +
+    '<circle cx="560" cy="664" r="22" fill="#111"/><circle cx="720" cy="664" r="22" fill="#111"/>' +
+    '<rect x="956" y="520" width="300" height="176" rx="12" fill="#0d1218" opacity=".82" stroke="#fff" stroke-opacity=".12"/>' +
+    '<path d="M980 680 C 1040 640, 1080 600, 1130 590 S 1210 560, 1236 540" stroke="#ff9f43" stroke-width="5" fill="none" opacity=".85"/><circle cx="1104" cy="606" r="7" fill="#fff"/></svg>' +
+    '<span class="scene-label" style="left:1458px;top:790px">in-game route advisor (keep clear)</span>';
+}
+function overlayScene() {
+  var d = D(), fp = d.fuelPct, rp = Math.round(d.rpm / d.rpmMax * 100), edit = S.ovEdit, hs = hmState();
+  if (S.conn === 'waiting') return sceneBg() + '<div class="hidden-note">' + t('ov.hidden') + '<br><span style="font-size:13px;opacity:.75">' + t('ov.hiddenT') + '</span></div>';
+  var tag = S.conn === 'paused' ? '<span class="tag w">' + ic('pause', 's') + t('ov.paused') + '</span>' : S.conn === 'lost' ? '<span class="tag e">' + t('ov.noSignal') + '</span>' : '';
+  var handle = function (pos) { return '<span class="handle" style="' + pos + '">' + ic('move', 's') + t('ov.drag') + '</span>'; };
+  var open = function (spec, style) { return '<div class="ovl ' + (edit ? 'edit' : '') + '" data-conn="' + S.conn + '" data-spec="' + spec + '" style="' + style + '">'; };
+  var v = function (s) { return '<span class="val">' + s + '</span>'; };
+  var hmIcon = '<span class="sx hm ' + (hs === 'active' ? 'ok' : 'bad') + '" title="Hard Mode">' + ic(hs === 'active' ? 'shieldCheck' : 'shieldX', 's') + '<span>' + (hs === 'active' ? 'HM' : 'HM ' + hmPassed() + '/12') + '</span></span>';
+  var html;
+  if (S.ovl === 'strip') {
+    var sx = function (icon, inner, title) { return '<span class="sx" title="' + title + '">' + ic(icon, 's') + inner + '</span>'; };
+    var route = (on('origin') ? d.from : '') + (on('origin') && on('destination') ? ' <small>→</small> ' : '') + (on('destination') ? d.to : '');
+    var groups = [
+      [on('speed') && '<span class="sx sp">' + v(d.speed.toFixed(0)) + '<small>' + u(d.spU) + '</small></span>', on('gear') && '<span class="gearchip val">' + d.gear + '</span>', on('rpm') && sx('gauge', v(d.rpm) + '<span class="mini"><i class="val" style="width:' + rp + '%"></i></span>', t('sec.rpm'))],
+      [on('fuel') && sx('fuel', v(fp + '%') + '<span class="mini ' + (fp < 30 ? 'low' : 'fuel') + '"><i class="val" style="width:' + fp + '%"></i></span>', t('sec.fuel')), on('range') && sx('navigation', v(d.range) + '<small>' + u(d.dU) + '</small>', t('sec.range')), on('sdk-consumption') && sx('droplet', v(d.avg) + '<small>' + u(d.avgU) + '</small>', t('sec.sdk-consumption'))],
+      [on('cargo') && sx('package', v(d.cargo), t('sec.cargo')), (on('origin') || on('destination')) && sx('mapPin', v(route), t('col.route')), on('distance-driven') && sx('route', v(d.done) + '<small>' + u(d.dU) + '</small>', t('sec.distance-driven')),
+        on('distance-remaining') && sx('flag', v(d.remaining) + '<small>' + u(d.dU) + '</small>', t('sec.distance-remaining')), on('deadline') && sx('clock', v(d.dl[0] + ':' + d.dl[1]), t('sec.deadline')), on('expected-income') && sx('coins', v(d.income), t('sec.expected-income'))],
+      [on('game-time') && sx('calendar', v(t('fmt.day', { d: d.day, t: d.clock })), t('sec.game-time'))],
+      [on('hard-mode') && hmIcon]
+    ].map(function (g) { return g.filter(Boolean); }).filter(function (g) { return g.length; });
+    html = open('overlay.strip', 'left:50%;top:14px;transform:translateX(-50%)') + handle('top:auto;bottom:-36px;left:0') + '<div class="panel strip">' + (groups.map(function (g) { return g.join(''); }).join('<span class="vr"></span>') || '—') + tag + '</div></div>';
+  } else if (S.ovl === 'card') {
+    var parts = [];
+    if (on('speed') || on('gear') || on('rpm')) parts.push('<div style="display:flex;justify-content:space-between;align-items:end">' + (on('speed') ? '<div><span class="val" style="font-size:48px;font-weight:800;line-height:1">' + d.speed.toFixed(0) + '</span> <span class="lbl">' + u(d.spU) + '</span></div>' : '<span></span>') +
+      '<div style="text-align:right">' + (on('gear') ? '<span class="gearchip val" style="font-size:20px;height:34px;min-width:38px">' + d.gear + '</span>' : '') + (on('rpm') ? '<div class="lbl val" style="margin-top:4px">' + d.rpm + ' ' + u('rpm') + '</div>' : '') + '</div></div>');
+    if (on('fuel') || on('range') || on('sdk-consumption')) parts.push('<div><div style="display:flex;justify-content:space-between;font-size:13px"><span>' + (on('fuel') ? t('live.fuel') + ' ' + v(d.fuel + ' ' + u(d.volU)) : '') + '</span>' + (on('range') ? '<span style="opacity:.75">' + v(d.range + ' ' + u(d.dU)) + '</span>' : '') + '</div>' +
+      (on('fuel') ? '<div class="obar fuel ' + (fp < 30 ? 'low' : '') + '" style="margin-top:6px"><i class="val" style="width:' + fp + '%"></i></div>' : '') + (on('sdk-consumption') ? '<div style="font-size:11.5px;opacity:.65;margin-top:4px">' + v(d.avg + ' ' + u(d.avgU)) + ' · SDK</div>' : '') + '</div>');
+    var job = '';
+    if (on('cargo')) job += '<div style="font-weight:700">' + v(d.cargo) + ' <span style="opacity:.6;font-weight:400">· ' + d.mass + ' ' + u(d.massU) + '</span></div>';
+    if (on('origin')) job += '<div style="display:flex;gap:6px;align-items:center;opacity:.85">' + ic('mapPin', 's') + d.from + ' <span style="opacity:.6">' + d.fromCo + '</span></div>';
+    if (on('destination')) job += '<div style="display:flex;gap:6px;align-items:center;opacity:.85">' + ic('flag', 's') + d.to + ' <span style="opacity:.6">' + d.toCo + '</span></div>';
+    if (on('distance-driven') || on('distance-remaining')) job += '<div><div class="obar" style="margin-top:4px"><i class="val" style="width:' + d.progress + '%"></i></div><div style="display:flex;justify-content:space-between;margin-top:4px;font-size:12.5px"><span>' + (on('distance-driven') ? v(d.done + ' ' + u(d.dU)) : '') + '</span><span>' + (on('distance-remaining') ? v(d.remaining + ' ' + u(d.dU)) : '') + '</span></div></div>';
+    if (on('deadline') || on('expected-income')) job += '<div style="display:flex;justify-content:space-between;font-size:12.5px;opacity:.85"><span>' + (on('deadline') ? t('fmt.in', { h: d.dl[0], m: d.dl[1] }) : '') + '</span><span>' + (on('expected-income') ? v(d.income) : '') + '</span></div>';
+    if (job) parts.push('<div style="display:flex;flex-direction:column;gap:5px;font-size:13px">' + job + '</div>');
+    if (on('game-time') || on('hard-mode')) parts.push('<div style="display:flex;justify-content:space-between;align-items:center;font-size:12.5px">' + (on('game-time') ? v(t('fmt.day', { d: d.day, t: d.clock })) : '<span></span>') + (on('hard-mode') ? hmIcon : '') + '</div>');
+    html = open('overlay.card', 'right:28px;top:28px;width:310px') + handle('top:-36px;left:0') + '<div class="panel" style="padding:14px 16px;display:flex;flex-direction:column;gap:12px"><div style="display:flex;justify-content:space-between;align-items:center"><span class="lbl">' + d.game + ' · ' + t('mode.' + d.mode) + '</span>' + tag + '</div>' +
+      parts.join('<div style="height:1px;background:rgba(255,255,255,.12)"></div>') + '</div></div>';
+  } else if (S.ovl === 'cluster') {
+    var cx = 110, cy = 110, a0 = -130, a1 = 130, f = d.speed / d.spMax, rf = d.rpm / d.rpmMax;
+    var g = (on('speed') || on('gear') || on('rpm')) ? '<svg viewBox="0 0 220 220" width="220" height="220" style="flex:none"><circle cx="110" cy="110" r="104" fill="rgba(11,17,32,.80)" stroke="rgba(55,65,81,.9)"/>' +
+      (on('speed') ? '<path d="' + arc(cx, cy, 92, a0, a1) + '" stroke="rgba(255,255,255,.14)" stroke-width="8" fill="none" stroke-linecap="round"/><path class="val" d="' + arc(cx, cy, 92, a0, a0 + (a1 - a0) * f) + '" stroke="#60A5FA" stroke-width="8" fill="none" stroke-linecap="round"/>' +
+        '<text class="val" x="110" y="112" text-anchor="middle" font-size="50" font-weight="800" fill="#F3F4F6" font-family="Onest, sans-serif">' + d.speed.toFixed(0) + '</text><text x="110" y="134" text-anchor="middle" font-size="11" fill="rgba(209,213,219,.72)" font-family="Onest, sans-serif">' + u(d.spU) + '</text>' : '') +
+      (on('rpm') ? '<path d="' + arc(cx, cy, 78, a0, a1) + '" stroke="rgba(255,255,255,.08)" stroke-width="4" fill="none"/><path class="val" d="' + arc(cx, cy, 78, a0, a0 + (a1 - a0) * rf) + '" stroke="#2563EB" stroke-width="4" fill="none" stroke-linecap="round"/><text class="val" x="110" y="192" text-anchor="middle" font-size="10.5" fill="rgba(209,213,219,.72)" font-family="Onest, sans-serif">' + d.rpm + ' ' + u('rpm') + '</text>' : '') +
+      (on('gear') ? '<text class="val" x="110" y="' + (on('speed') ? 172 : 124) + '" text-anchor="middle" font-size="' + (on('speed') ? 20 : 44) + '" font-weight="800" fill="#60A5FA" font-family="Onest, sans-serif">' + d.gear + '</text>' : '') + '</svg>' : '';
+    var txt = { fuel: fp + '% · ' + d.fuel + ' ' + u(d.volU), range: d.range + ' ' + u(d.dU), 'sdk-consumption': d.avg + ' ' + u(d.avgU), cargo: d.cargo + ' · ' + d.mass + ' ' + u(d.massU), origin: d.from, destination: d.to, 'distance-driven': d.done + ' ' + u(d.dU), 'distance-remaining': d.remaining + ' ' + u(d.dU), deadline: t('fmt.in', { h: d.dl[0], m: d.dl[1] }), 'expected-income': d.income, 'game-time': t('fmt.day', { d: d.day, t: d.clock }) };
+    var rows = ['fuel', 'range', 'sdk-consumption', 'cargo', 'origin', 'destination', 'distance-driven', 'distance-remaining', 'deadline', 'expected-income', 'game-time'].filter(on).map(function (k) {
+      return '<div><div class="lbl">' + t('sec.' + k) + '</div><div class="val" style="font-weight:700;font-size:13.5px">' + txt[k] + '</div>' + (k === 'fuel' ? '<div class="obar fuel ' + (fp < 30 ? 'low' : '') + '" style="margin-top:5px"><i class="val" style="width:' + fp + '%"></i></div>' : '') + '</div>';
+    }).join('') + (on('hard-mode') ? hmIcon : '');
+    html = open('overlay.cluster', 'left:28px;bottom:24px') + handle('top:-36px;left:0') + '<div style="display:flex;align-items:end;gap:10px">' + g + (rows || tag ? '<div class="panel" style="padding:10px 12px;width:230px;display:flex;flex-direction:column;gap:8px;margin-bottom:8px">' + tag + rows + '</div>' : '') + '</div></div>';
+  } else {
+    var line = function (keys) { return keys.filter(on).map(function (k) { return k === 'speed' ? '<span><span class="val" style="font-size:30px;font-weight:800">' + d.speed.toFixed(0) + '</span> ' + u(d.spU) + '</span>' : k === 'hard-mode' ? hmIcon : '<span><span style="opacity:.7">' + t('sec.' + k).toLowerCase() + '</span> <b class="val">' + ({ gear: d.gear, rpm: d.rpm + ' ' + u('rpm'), fuel: fp + '%', range: d.range + ' ' + u(d.dU), 'sdk-consumption': d.avg + ' ' + u(d.avgU), cargo: d.cargo, origin: d.from, destination: d.to, 'distance-driven': d.done + ' ' + u(d.dU), 'distance-remaining': d.remaining + ' ' + u(d.dU), deadline: d.dl[0] + ':' + d.dl[1], 'expected-income': d.income, 'game-time': t('fmt.day', { d: d.day, t: d.clock }) })[k] + '</b></span>'; }).join(' · '); };
+    var l1 = line(['speed', 'gear', 'rpm']), rest = [line(['fuel', 'range', 'sdk-consumption']), line(['cargo', 'origin', 'destination']), line(['distance-driven', 'distance-remaining', 'deadline', 'expected-income']), line(['game-time', 'hard-mode'])].filter(Boolean);
+    html = open('overlay.hud', 'left:30px;top:28px;text-shadow:0 1px 2px rgba(0,0,0,.9),0 0 8px rgba(0,0,0,.6)') + handle('top:-36px;left:0') + '<div style="display:flex;align-items:baseline;gap:14px;font-size:15px">' + l1 + tag + '</div>' +
+      rest.map(function (l) { return '<div style="font-size:14px;margin-top:2px;opacity:.94">' + l + '</div>'; }).join('') + '</div>';
+  }
+  var bar = edit ? '<div class="editbar" style="' + (S.ovl === 'strip' ? 'bottom:22px' : 'top:18px') + '">' + ic('move', 's') + '<span>' + t('ov.edit') + '</span><button class="btn s sm">' + t('c.reset') + '</button><button class="btn p sm" data-ovedit="0">' + t('c.done') + '</button></div>' : '';
+  return sceneBg() + html + bar;
+}
+
+/* ---------- Notes per screen (English, for agents) ---------- */
+var NOTES = {
+  live: ['Live (ui-spec §5.1)', ['Variant B instrument layout in Yukon style: hero gradient tile with the speed gauge (ring = speed, inner arc = RPM), gear block and fuel tank.', 'Hard Mode card (ET-026c) opens the checklist sheet. Try the Hard Mode control above: 12/12, 10/12 and lost mid-trip.', 'Waiting shows the empty-state banner and dashes; Lost greys values and shows a stale badge; Paused keeps values with a paused badge.'],
+    ['shell.topbar.status', 'live.instrument', 'live.hardMode', 'hardMode.sheet', 'live.job', 'live.trip']],
+  journal: ['Journal (ui-spec §5.3)', ['Table per the Yukon guide: header #1A2332, dividers #2B3544, numbers right-aligned, no zebra.', 'Columns map to JournalTripSummary: outcome open/delivered/cancelled/none, recording complete/partial/unknown. "Delivered late" is a display of a delivered outcome with lateness.', 'Sync column is server-phase (Later) and is hidden until sync exists. Click a row for trip details.'],
+    ['journal.filters', 'journal.table', 'journal.pager']],
+  trip: ['Trip details (ui-spec §5.4)', ['Planned, observed and game-reported distance stay separate; expected income and revenue/penalty stay separate; real and game time stay separate.', 'Tabs map to the existing Summary / Timeline / Completeness views of ET-016.', 'Hard Mode card shows the evaluation at job start and at delivery (ET-026b snapshot).'],
+    ['trip.header', 'trip.tiles', 'trip.detailTabs', 'trip.hardMode', 'trip.money']],
+  settings: ['Settings (ui-spec §5.5)', ['Left sub-navigation replaces the current single long dashboard column. Each panel is a card with the blue title bar.', 'Overlay sections reuse OVERLAY_SECTION_IDS, groups and presets from overlay-sections.ts; hard-mode is a proposed new section in a new Status group.', 'Start with Windows is shown as Planned: autostart is not authorized yet.'],
+    ['settings.nav', 'settings.overlay', 'settings.sections']],
+  account: ['Account & sync (ui-spec §5.6)', ['Server phase, not in the MVP. Drawn so the shell reserves its place and the dashboard team sees the flow.', 'Token is masked by default; uploading is not acceptance.', 'Switch Connection to Lost to see the offline queue state.'], ['account.token', 'account.status', 'account.firstSync']],
+  onboarding: ['First run (ui-spec §5.7)', ['Four steps: find games, install plugin, language and units, overlay layout. Use Back/Next inside the window.', 'Plugin installation keeps the existing rules: only while the game is closed, hash-verified, never overwriting unknown files.'], ['onboarding.steps', 'onboarding.step']],
+  states: ['Empty and error states (ui-spec §6)', ['Every state pairs an icon, a title and one sentence that says what to do. Status colour is never the only signal.', 'Token, offline and first-sync states belong to the server phase.'], ['states.*']],
+  overlay: ['Overlay (ui-spec §7)', ['1920×1080 scene at 100% scaling. Strip is the default, top centre, clear of the in-game route advisor.', 'Overlay CSS uses only --yu-ov-* tokens and never loads the shadcn base stylesheet. No backdrop blur.', 'Section switches from Settings → Overlay sections apply here; the Hard Mode status is a proposed new section.'], ['overlay.strip', 'overlay.card', 'overlay.cluster', 'overlay.hud']]
+};
+
+/* ---------- Render ---------- */
+function screenHtml() {
+  var s = S.screen;
+  if (s === 'onboarding') return onboardingScreen();
+  if (s === 'overlay') return '<div class="scene ' + (S.inspect === 'on' ? 'inspect' : '') + '">' + overlayScene() + '</div>';
+  var titles = { live: t('live.title'), journal: t('j.title'), trip: t('j.title'), settings: t('nav.settings'), account: t('nav.account'), states: t('st.title') };
+  var extra = s === 'journal' ? '<button class="btn s sm">' + ic('refresh', 's') + t('j.refresh') + '</button>' : '';
+  var body = s === 'live' ? liveScreen() : s === 'journal' ? journalScreen() : s === 'trip' ? tripScreen() : s === 'settings' ? settingsScreen() : s === 'account' ? accountScreen() : statesScreen();
+  return windowShell(titles[s], extra, body, s === 'live' && S.sheet ? hmSheet() : '');
+}
+function pressed(id, attr, v) { var b = document.querySelectorAll('#' + id + ' button'); for (var i = 0; i < b.length; i++) b[i].setAttribute('aria-pressed', b[i].getAttribute(attr) === v ? 'true' : 'false'); }
+function fit() {
+  var stage = document.getElementById('stage'), host = document.getElementById('host');
+  var w = S.screen === 'overlay' ? 1922 : 1282, h = S.screen === 'overlay' ? 1082 : 802;
+  var sc = Math.min(1, stage.clientWidth / w);
+  host.style.transform = 'scale(' + sc + ')'; stage.style.height = (h * sc) + 'px';
+}
+function render() {
+  pressed('c-screen', 'data-screen', S.screen); pressed('c-lang', 'data-lang', S.lang); pressed('c-game', 'data-game', S.game); pressed('c-conn', 'data-conn', S.conn); pressed('c-hm', 'data-hm', S.hm); pressed('c-inspect', 'data-inspect', S.inspect);
+  document.documentElement.lang = S.lang;
+  document.getElementById('host').innerHTML = screenHtml();
+  var n = NOTES[S.screen];
+  document.getElementById('note-main').innerHTML = '<h2>' + n[0] + '</h2><ul>' + n[1].map(function (x) { return '<li>' + x + '</li>'; }).join('') + '</ul>';
+  document.getElementById('note-side').innerHTML = '<h2>Spec ids on this screen</h2><p>' + n[2].map(function (x) { return '<code>' + x + '</code>'; }).join(' ') + '</p>' +
+    (S.screen === 'overlay' ? '<p style="margin-top:10px"><span class="pseg" id="c-ovl"><button data-ovl="strip">Strip</button><button data-ovl="card">Card</button><button data-ovl="cluster">Cluster</button><button data-ovl="hud">Minimal</button></span> <span class="pseg"><button data-ovedit="' + (S.ovEdit ? '0' : '1') + '" aria-pressed="' + S.ovEdit + '">Layout edit</button></span></p>' : '');
+  if (S.screen === 'overlay') pressed('c-ovl', 'data-ovl', S.ovl);
+  fit(); save();
+}
+document.addEventListener('click', function (e) {
+  var el = e.target.closest('[data-screen],[data-lang],[data-game],[data-conn],[data-hm],[data-inspect],[data-go],[data-sheet],[data-trip],[data-triptab],[data-set],[data-sect],[data-preset],[data-ovl],[data-ovedit],[data-wiz],[data-lang-toggle]');
+  if (!el) return;
+  var a;
+  if ((a = el.getAttribute('data-screen'))) { S.screen = a; S.sheet = false; }
+  else if ((a = el.getAttribute('data-lang'))) S.lang = a;
+  else if (el.getAttribute('data-lang-toggle')) S.lang = S.lang === 'en' ? 'ru' : 'en';
+  else if ((a = el.getAttribute('data-game'))) S.game = a;
+  else if ((a = el.getAttribute('data-conn'))) S.conn = a;
+  else if ((a = el.getAttribute('data-hm'))) S.hm = a;
+  else if ((a = el.getAttribute('data-inspect'))) S.inspect = a;
+  else if ((a = el.getAttribute('data-go'))) { S.screen = a; S.sheet = false; }
+  else if ((a = el.getAttribute('data-sheet'))) S.sheet = a === '1';
+  else if ((a = el.getAttribute('data-trip'))) { S.trip = +a; S.screen = 'trip'; S.tripTab = 'summary'; }
+  else if ((a = el.getAttribute('data-triptab'))) S.tripTab = a;
+  else if ((a = el.getAttribute('data-set'))) S.set = a;
+  else if ((a = el.getAttribute('data-sect'))) S.on[a] = !on(a);
+  else if ((a = el.getAttribute('data-preset'))) { S.on = {}; ALLSECS.forEach(function (k) { S.on[k] = PRESETS[a].indexOf(k) >= 0; }); }
+  else if ((a = el.getAttribute('data-ovl'))) S.ovl = a;
+  else if ((a = el.getAttribute('data-ovedit'))) S.ovEdit = a === '1';
+  else if ((a = el.getAttribute('data-wiz'))) S.wiz = +a;
+  else return;
+  render();
+});
+window.addEventListener('resize', fit);
+if (typeof module === 'undefined') render();
+if (typeof globalThis !== 'undefined') { globalThis.__mock = { S: S, render: render, I18N: I18N, screenHtml: screenHtml }; }
+})();
+</script>
+</body>
+</html>
