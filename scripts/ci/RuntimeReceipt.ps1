@@ -122,7 +122,8 @@ function Test-PluginReceipt {
 
 # ET-017 PR-5 review: the scaffold smoke runs plugin setup in the disabled mode with a rendered dashboard; the card must
 # show the disabled-mode note and disable every control that would change nothing. Since ET-017 PR-6 it must also show
-# the fixed diagnosis line and keep "Export diagnostics..." available.
+# the fixed diagnosis line and keep "Export diagnostics..." available. Since ET-018 PR-4 the uninstall card must show its
+# warning and answer that uninstalling is available only in an installed copy.
 function Test-ScaffoldPluginReceipt {
     param([object]$Driver)
     $card = $Driver.pluginCard
@@ -130,6 +131,12 @@ function Test-ScaffoldPluginReceipt {
     foreach ($field in @('disabledNoteShown','controlsDisabled','diagnosisShown','exportAvailable')) {
         if ($card.$field -isnot [bool] -or $card.$field -ne $true) { return $false }
     }
+    $uninstall = $Driver.uninstallCard
+    if ($null -eq $uninstall) { return $false }
+    if ($uninstall.warningShown -isnot [bool] -or $uninstall.warningShown -ne $true) { return $false }
+    # An installed copy's smoke does not press the button (it would open the confirmation); every other copy must answer.
+    if ($Driver.mode -ceq 'installed') { if ($null -ne $uninstall.notInstalledShown) { return $false } }
+    elseif ($uninstall.notInstalledShown -isnot [bool] -or $uninstall.notInstalledShown -ne $true) { return $false }
     $modes = @($Driver.mainEvents | Where-Object { $_.event -ceq 'PLUGIN_SETUP_MODE' })
     if ($modes.Count -ne 1 -or $modes[0].facts.mode -cne 'disabled') { return $false }
     return $true

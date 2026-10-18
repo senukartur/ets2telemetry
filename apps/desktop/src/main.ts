@@ -1,10 +1,12 @@
 import {app, BrowserWindow, dialog, ipcMain, Menu, MessageChannelMain, nativeImage, screen, shell, Tray, utilityProcess, type MessagePortMain, type UtilityProcess, type IpcMainEvent, type IpcMainInvokeEvent} from 'electron';
+import {spawn} from 'node:child_process';
 import {existsSync, mkdirSync} from 'node:fs';
+import * as nodeFsPromises from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import type {EventEmitter} from 'node:events';
 import {version} from '../../../package.json';
-import type {AppHealth, AppState, DiagnosticsExportResult, LiveTelemetry, OverlayEditState, OverlayPresentation, OverlaySettings, PluginFolderChoice, PluginGame, PluginShowFileResult, ScaffoldStatus, SettingsView,
+import type {AppHealth, AppState, AppUninstallResult, DiagnosticsExportResult, LiveTelemetry, OverlayEditState, OverlayPresentation, OverlaySettings, PluginFolderChoice, PluginGame, PluginShowFileResult, ScaffoldStatus, SettingsView,
   SourceSelection, UnitProfiles} from '../../../packages/contracts/src';
 import {SettingsBusyError, SettingsError, SettingsStore, settingsDirectory} from './settings-store';
 import {isUnitGame, isUnitProfile} from './unit-profiles';
@@ -42,6 +44,13 @@ import {connectionDiagnosis} from './connection-diagnosis';
 import {buildDiagnosticBundle, readDiagnosticLogs, readFileTail} from './diagnostic-bundle';
 import {DiagnosticBundleExporter} from './diagnostic-bundle-writer';
 import {cancelDeferralOnStart, EXIT_CODES, parseSquirrelArgs, prepareSquirrelProcess, productionSquirrelPorts, runSquirrelEvent} from './squirrel-events';
+import {checkRunningGames} from './plugin-setup/game-processes';
+import {pluginBundleDirectory, readPluginBundle} from './plugin-setup/plugin-bundle';
+import {APP_UNINSTALL_FAILSAFE_MS, APP_UNINSTALL_WIPE_BUDGET_MS, AppUninstall, uninstallWipeBudget, type AppUninstallPorts} from './uninstall/app-uninstall';
+import {resolveUninstallRoots} from './uninstall/roots';
+import {UNINSTALL_CHANNEL} from './uninstall-contract';
+import {finishedUninstallText, handoverFailedText} from './uninstall-text';
+import {UNINSTALL_STRINGS} from './strings';
 
 // ET-018 (U2): a Squirrel event runs first and alone, before the profile override, logs, settings, plugin setup and the
 // service. Unpackaged, the first argument after the executable is the application path.
@@ -65,6 +74,12 @@ if (squirrelArgs.kind !== 'none') {
   // A failed profile override never requests the lock: it must not signal the real instance, only fail.
   if (profileError === undefined && !app.requestSingleInstanceLock()) app.quit();
   else runApplication(profileError);
+}
+
+/** Whether `child` is `parent` or lies inside it (case-insensitive, Windows paths). */
+function isInsideFolder(child: string, parent: string): boolean {
+  const normal = (value: string) => path.win32.normalize(value).replace(/\\+$/, '').toLowerCase();
+  return normal(child) === normal(parent) || normal(child).startsWith(`${normal(parent)}\\`);
 }
 
 /** The names the diagnostic bundle replaces: the Windows user name and computer name as this process sees them. */
@@ -143,6 +158,75 @@ function runApplication(profileError: unknown): void {
   const pluginSetup = new PluginSetup({decision: pluginDecision, log, changed: () => pushAppState(),
     ports: pluginDecision.mode === 'disabled' ? undefined : productionPluginSetupPorts({mainDirectory: __dirname, resourcesPath: process.resourcesPath,
       packaged: app.isPackaged, localAppData: process.env.LOCALAPPDATA, installDirectory: path.dirname(app.getPath('exe')), log})});
+  // ET-018 PR-4 (U8): the in-app uninstall. Main owns both dialogs; the dashboard gets fixed codes and target ids only.
+  // The smoke-only dialog seam (`ets2telemetry:diagnostic-uninstall-dialogs` below) answers both dialogs in isolated smokes.
+  let uninstallDialogs: {confirm: boolean} | undefined;
+  let uninstallFailsafe: ReturnType<typeof setTimeout> | undefined;
+  /** When the failsafe fires, on performance.now(); the wipe ends a margin before it. */
+  let uninstallFailsafeAt: number | undefined;
+  const uninstallFs = nodeFsPromises as unknown as AppUninstallPorts['fs'];
+  const appUninstall = new AppUninstall({
+    resolveRoots: () => resolveUninstallRoots({executable: process.execPath, env: process.env, fs: uninstallFs}),
+    confirm: async () => {
+      if (uninstallDialogs) {timeline?.('DIAGNOSTIC_UNINSTALL_DIALOG', {dialog: 'confirm', answer: uninstallDialogs.confirm ? 'uninstall' : 'cancel'}); return uninstallDialogs.confirm;}
+      if (!window || window.isDestroyed()) return false;
+      const answer = await dialog.showMessageBox(window, {type: 'warning', title: UNINSTALL_STRINGS.confirmTitle, message: UNINSTALL_STRINGS.confirmMessage,
+        detail: UNINSTALL_STRINGS.warning.join('\n'), buttons: [UNINSTALL_STRINGS.confirmCancel, UNINSTALL_STRINGS.confirmUninstall], defaultId: 0, cancelId: 0, noLink: true});
+      return answer.response === 1;
+    },
+    fs: uninstallFs,
+    checkRunning: signal => checkRunningGames({signal}),
+    readKnown: async () => {
+      const read = await readPluginBundle(pluginBundleDirectory(__dirname, process.resourcesPath, app.isPackaged));
+      return read.ok ? [read.bundle.sha256, ...read.bundle.known.map(entry => entry.sha256)] : [];
+    },
+    setup: {suspend: () => pluginSetup.suspend(), resume: () => pluginSetup.resume(), targetIdFor: (game, root) => pluginSetup.targetIdFor(game, root)},
+    clock: () => performance.now(),
+    log: (event, facts) => log(event, undefined, facts),
+    // Windows' uninstall removes the program files and the registration; its hook finds the data already gone.
+    startWindowsUninstall: installRoot => new Promise<boolean>(resolve => {
+      try {
+        const child = spawn(path.win32.join(installRoot, 'Update.exe'), ['--uninstall'], {detached: true, stdio: 'ignore', windowsHide: true});
+        child.once('spawn', () => {child.unref(); resolve(true);});
+        child.once('error', () => resolve(false));
+      } catch {resolve(false);}
+    })
+  });
+  /** After the exit: the data wipe, the result dialog, then Windows' uninstall. No log row is written once the wipe ran
+   * while the log folder lies in the data root, so nothing recreates it. The wipe gets only what is left before the 12 s
+   * failsafe, less the handover margin, so a slow exit shortens the wipe instead of letting the failsafe cut it; the
+   * failsafe is disarmed only here. What a short wipe leaves, Windows' uninstall finishes from the intent. */
+  async function completeAppUninstall(): Promise<void> {
+    const prepared = appUninstall.prepared!;
+    const finished = await appUninstall.finishAfterExit(uninstallFailsafeAt === undefined ? APP_UNINSTALL_WIPE_BUDGET_MS
+      : uninstallWipeBudget(uninstallFailsafeAt, performance.now()));
+    clearTimeout(uninstallFailsafe); uninstallFailsafe = undefined;
+    const logOutside = !isInsideFolder(logLocation.directory, prepared.dataRoot);
+    if (finished && logOutside) log('APP_UNINSTALL_FINISHED', undefined, {removed: finished.removed, kept: finished.data.kept, failed: finished.data.failed.length,
+      rootRemoved: finished.data.rootRemoved, notes: finished.notes.length});
+    if (finished) {
+      const text = finishedUninstallText(finished);
+      if (uninstallDialogs) {if (logOutside) timeline?.('DIAGNOSTIC_UNINSTALL_DIALOG', {dialog: 'result', rootRemoved: finished.data.rootRemoved, failed: finished.data.failed.length});}
+      else await dialog.showMessageBox({type: finished.data.failed.some(entry => entry.code !== 'BUDGET_EXPIRED') ? 'warning' : 'info', title: text.title, message: text.message, detail: text.detail, buttons: ['OK'], noLink: true}).catch(() => undefined);
+    }
+    const started = await appUninstall.handOver();
+    if (!started) {
+      if (logOutside) log('APP_UNINSTALL_HANDOFF_FAILED');
+      if (!uninstallDialogs) await dialog.showMessageBox({type: 'error', title: UNINSTALL_STRINGS.spawnFailedTitle, message: handoverFailedText(finished), buttons: ['OK'], noLink: true}).catch(() => undefined);
+    }
+    app.exit(0);
+  }
+  /** The in-app uninstall's exit: the explicit exit with reason `uninstall`, under a 12 s failsafe until the result dialog. */
+  function beginUninstallExit(): void {
+    uninstallFailsafeAt = performance.now() + APP_UNINSTALL_FAILSAFE_MS;
+    uninstallFailsafe = setTimeout(() => {
+      // A row in a log folder inside the data root could recreate it during the wipe; only a diagnostic folder records it.
+      const prepared = appUninstall.prepared;
+      if (prepared && !isInsideFolder(logLocation.directory, prepared.dataRoot)) log('APP_UNINSTALL_FAILSAFE');
+      app.exit(1);
+    }, APP_UNINSTALL_FAILSAFE_MS);
+    requestExit('uninstall');
+  }
   const upstreamBudget = new RecoveryBudget(), overlayBudget = new RecoveryBudget();
   const dashboardSubscriptions = new LiveSubscriptions(initialLive(), 1);
   // The last projection main published: a non-current projection keeps its shape (ET-012a decision L5).
@@ -199,7 +283,7 @@ function runApplication(profileError: unknown): void {
     destroyTray: () => {trayPresenter?.dispose(); const previous = tray; tray = undefined; previous?.destroy();},
     // The final rows (SERVICE_EXIT, APP_EXIT) are on disk before the process ends: the append in flight gets up to
     // MAIN_EXIT_FLUSH_MS, the queue is then written synchronously, and later rows are written at once.
-    exit: code => {void log.finalize(MAIN_EXIT_FLUSH_MS).then(() => app.exit(code));}
+    exit: code => {void log.finalize(MAIN_EXIT_FLUSH_MS).then(() => appUninstall.prepared ? completeAppUninstall() : app.exit(code));}
   });
   const supervisor = new ServiceSupervisor(log, code => lifecycle.finish(code), {
     restart: () => startService(),
@@ -579,6 +663,13 @@ function runApplication(profileError: unknown): void {
       if (action === 'open') {timeline?.('DIAGNOSTIC_TRAY_ACTION', {action}); openDashboard('tray');}
       else if (action === 'exit') {timeline?.('DIAGNOSTIC_TRAY_ACTION', {action}); requestExit('tray');}
     });
+    // ET-018 PR-4: answers the uninstall's confirmation ('uninstall' or 'cancel') and its result dialog in isolated smokes.
+    // An app event: no renderer can reach it.
+    (app as unknown as EventEmitter).on('ets2telemetry:diagnostic-uninstall-dialogs', (answer: unknown) => {
+      if (answer !== 'uninstall' && answer !== 'cancel') return;
+      uninstallDialogs = {confirm: answer === 'uninstall'};
+      timeline?.('DIAGNOSTIC_UNINSTALL_DIALOGS', {answer});
+    });
     // Read-only lifecycle facts for the isolated smoke; it changes no state.
     (app as unknown as EventEmitter).on('ets2telemetry:diagnostic-lifecycle-state', (receive: unknown) => {
       if (typeof receive !== 'function') return;
@@ -751,6 +842,16 @@ function runApplication(profileError: unknown): void {
     if (!trusted(event)) throw new Error('Untrusted diagnostics request');
     if (request.length !== 0) throw new Error('Invalid diagnostics request');
     return diagnosticsExporter.export();
+  });
+  // ET-018 PR-4 (U8): the in-app uninstall takes no argument, from the trusted dashboard main frame only (the overlay is
+  // rejected), and is refused once the exit has begun. `started` begins the explicit exit after the answer was sent.
+  ipcMain.handle(UNINSTALL_CHANNEL, async (event, ...request: unknown[]): Promise<AppUninstallResult> => {
+    if (!trusted(event)) throw new Error('Untrusted uninstall request');
+    if (request.length !== 0) throw new Error('Invalid uninstall request');
+    if (lifecycle.exiting) throw new Error('Uninstall refused: the application is exiting');
+    const result = await appUninstall.run();
+    if (result.outcome === 'started') setImmediate(beginUninstallExit);
+    return result;
   });
   ipcMain.handle('telemetry:select', async (event, source: unknown) => {
     if (!trusted(event) || !serviceReady) throw new Error('Untrusted source request');

@@ -9,6 +9,7 @@ import {isUnitGame, isUnitProfile} from './unit-profiles';
 import {copyTripsQuery, isPageArgument, JOURNAL_CHANNELS, JOURNAL_EXPORT_CHANNEL} from './journal-contract';
 import {isJournalUuid} from '../../../packages/contracts/src/journal';
 import {DIAGNOSTICS_EXPORT_CHANNEL, isPluginGame, isPluginTargetId, PLUGIN_CHANNELS} from './plugin-setup-contract';
+import {UNINSTALL_CHANNEL} from './uninstall-contract';
 let listener: ((update: LiveTelemetry) => void) | undefined;
 let port: MessagePort | undefined;
 let current: LiveTelemetry = initialLive();
@@ -177,7 +178,10 @@ const bridge: DesktopBridge = {
   showPluginFile: () => ipcRenderer.invoke(PLUGIN_CHANNELS.showFile),
   openPluginFolder: targetId => isPluginTargetId(targetId) ? ipcRenderer.invoke(PLUGIN_CHANNELS.openFolder, targetId) : Promise.reject(new Error('Invalid plugin setup request')),
   // ET-017 PR-6 (P17): no argument is forwarded; main owns the Save dialog and the bundle and answers with a fixed outcome.
-  exportDiagnostics: () => ipcRenderer.invoke(DIAGNOSTICS_EXPORT_CHANNEL)
+  exportDiagnostics: () => ipcRenderer.invoke(DIAGNOSTICS_EXPORT_CHANNEL),
+  // ET-018 PR-4 (U8): no argument may reach main, which checks again; main owns both dialogs and answers with fixed codes and
+  // target ids, never a path.
+  uninstallApplication: (...args: unknown[]) => args.length === 0 ? ipcRenderer.invoke(UNINSTALL_CHANNEL) : Promise.reject(new Error('Invalid uninstall request'))
 };
 /** One page request of a trip: exactly the UUID and the cursor, or null for the first page. */
 function journalPage<T>(kind: 'events' | 'intervals' | 'samples', tripUuid: unknown, cursor: unknown): Promise<T> {

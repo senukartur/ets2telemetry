@@ -107,6 +107,11 @@ export interface FolderCleanupPorts {
   /** The bundle's own and earlier released hashes. */
   readonly known: readonly string[];
   readonly delay: (milliseconds: number) => Promise<void>;
+  /**
+   * ET-018 PR-4 preflight: classify only. Every check runs, but no temporary file, DLL or folder is removed; a DLL that
+   * would be removed reports `removed`. A lock or a permission error on the unlink itself cannot show here.
+   */
+  readonly dryRun?: boolean;
 }
 
 /** Cleans one game folder (the contract's steps 1 to 4); see the file comment. */
@@ -177,6 +182,7 @@ async function cleanPlugins(folder: PendingFolder, ports: FolderCleanupPorts, pl
   const {fs} = ports;
   // Step 2: the exact temporary file of each pending entry, when it is a regular file.
   for (const temp of folder.temps) {
+    if (ports.dryRun) break;
     if (!PLUGIN_TEMP_FILE.test(path.win32.basename(temp)) || !sameRoot(path.win32.dirname(temp), plugins)) continue;
     try {
       const stats = await fs.lstat(temp, {bigint: true});
@@ -195,6 +201,7 @@ async function cleanPlugins(folder: PendingFolder, ports: FolderCleanupPorts, pl
     } else if (!folder.hashes.includes(hashed.sha256) && !ports.known.includes(hashed.sha256)) status = 'unrecognized';
     // An unlink would clear the read-only attribute, so a read-only DLL is skipped and reported.
     else if ((hashed.mode & 0o200n) === 0n) return {status: 'blocked', reason: 'READ_ONLY_FILE'};
+    else if (ports.dryRun) status = 'removed';
     else {
       const removed = await unlinkWithRetry(fs, target, ports.delay);
       if (removed) return {status: 'blocked', reason: removed.reason, errno: removed.errno};
@@ -202,7 +209,7 @@ async function cleanPlugins(folder: PendingFolder, ports: FolderCleanupPorts, pl
     }
   }
   // Step 4: the plugins folder only when this application created it and it is now empty.
-  if (folder.createdPluginsDirectory && pluginsExists) await removeEmptyPluginsDirectory(fs, plugins);
+  if (folder.createdPluginsDirectory && pluginsExists && !ports.dryRun) await removeEmptyPluginsDirectory(fs, plugins);
   return {status};
 }
 

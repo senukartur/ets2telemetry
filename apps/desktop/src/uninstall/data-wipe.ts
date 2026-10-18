@@ -76,13 +76,19 @@ export interface WipeOptions {
   readonly keep?: readonly DataEntry[];
   /** Removes the data root when it is empty afterwards. */
   readonly removeRoot?: boolean;
-  /** True once the uninstall budget is spent: the walk stops and reports BUDGET_EXPIRED. */
+  /**
+   * True once the uninstall budget is spent: nothing more is deleted, and every allowlisted entry not reached yet is
+   * reported as BUDGET_EXPIRED, so the report names everything that remains.
+   */
   readonly expired?: () => boolean;
 }
 
 /** Wipes the allowlisted entries of `dataRoot` except `keep`; see the file comment. A missing data root is already wiped. */
 export async function wipeDataRoot(fs: WipeFileSystem, dataRoot: string, options: WipeOptions = {}): Promise<WipeReport> {
-  const keep = new Set<string>(options.keep ?? []), expired = options.expired ?? (() => false);
+  // Latched: once the budget is spent, nothing more is deleted in this call even if the check changed its mind.
+  const keep = new Set<string>(options.keep ?? []), check = options.expired ?? (() => false);
+  let spent = false;
+  const expired = () => (spent ||= check());
   let names: string[];
   try {names = await fs.readdir(dataRoot);} catch (error) {
     if (missing(error)) return {removed: 0, kept: 0, failed: [], rootRemoved: true};
@@ -97,8 +103,8 @@ export async function wipeDataRoot(fs: WipeFileSystem, dataRoot: string, options
     if (!entry) {kept++; continue;}
     if (keep.has(entry)) continue;
     const failure = await removeTree(fs, path.win32.join(dataRoot, name), expired);
+    // After an expiry removeTree returns BUDGET_EXPIRED at once for every later entry, touching nothing: they are listed.
     if (failure) failed.push({entry, code: failure}); else removed++;
-    if (failure === 'BUDGET_EXPIRED') break;
   }
   let rootRemoved = false;
   if (options.removeRoot && !failed.length && !expired()) {

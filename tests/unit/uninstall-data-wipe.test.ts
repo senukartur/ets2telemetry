@@ -3,6 +3,7 @@ import path from 'node:path';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 import {dataPaths} from '../../apps/desktop/src/paths';
 import {DATA_ALLOWLIST, KEPT_UNTIL_CLEAN, wipeDataRoot, type WipeFileSystem} from '../../apps/desktop/src/uninstall/data-wipe';
+import {wipeEverything} from '../../apps/desktop/src/uninstall/engine';
 import {guardedTempRoot, type GuardedRoot} from '../shared/guarded-fs';
 import {exists, listTree} from '../shared/uninstall-fixture';
 
@@ -109,5 +110,49 @@ describe('links and attributes', () => {
     expect(report.failed.at(-1)).toEqual(expect.objectContaining({code: 'BUDGET_EXPIRED'}));
     expect(report.rootRemoved).toBe(false);
     expect(await exists(dataRoot)).toBe(true);
+  });
+});
+
+// Review of PR-4: a spent budget must report everything allowlisted that remains, so the in-app result dialog and the
+// uninstall hook's receipt are truthful, and must delete nothing more.
+describe('a spent budget', () => {
+  /** True from the n-th check on: removeTree checks once per entry, folder and file, so three checks per seeded entry. */
+  const expiresAt = (n: number) => {let calls = 0; return () => ++calls >= n;};
+  const remaining = async () => (await fsp.readdir(dataRoot)).sort();
+  it('reports every allowlisted entry not reached and keeps it', async () => {
+    await seedAll();
+    const report = await wipeDataRoot(fs(), dataRoot, {removeRoot: true, expired: expiresAt(7)});
+    expect(report).toEqual({removed: 2, kept: 0, rootRemoved: false,
+      failed: ['data', 'logs', 'plugins', 'settings', 'synthetic', 'transport', 'uninstall'].map(entry => ({entry, code: 'BUDGET_EXPIRED'}))});
+    expect(await remaining()).toEqual(['data', 'logs', 'plugins', 'settings', 'synthetic', 'transport', 'uninstall']);
+  });
+  it('stays spent within one call even if the check would answer false again', async () => {
+    await seedAll();
+    let calls = 0;
+    const report = await wipeDataRoot(fs(), dataRoot, {removeRoot: true, expired: () => ++calls === 7});
+    expect(report.removed).toBe(2);
+    expect(report.failed.map(entry => entry.entry)).toEqual(['data', 'logs', 'plugins', 'settings', 'synthetic', 'transport', 'uninstall']);
+    expect(await remaining()).toEqual(['data', 'logs', 'plugins', 'settings', 'synthetic', 'transport', 'uninstall']);
+  });
+  it('in the first step of wipeEverything: lists plugins and uninstall too, and deletes neither', async () => {
+    await seedAll();
+    const report = await wipeEverything(fs() as never, dataRoot, expiresAt(7), true);
+    expect(report.removed).toBe(2);
+    expect(report.failed).toEqual(['data', 'logs', 'settings', 'synthetic', 'transport', 'plugins', 'uninstall'].map(entry => ({entry, code: 'BUDGET_EXPIRED'})));
+    expect(await remaining()).toEqual(['data', 'logs', 'plugins', 'settings', 'synthetic', 'transport', 'uninstall']);
+  });
+  it('right after the first step of wipeEverything: reports plugins and uninstall instead of nothing', async () => {
+    await seedAll();
+    // The first step removes seven entries with 21 checks; the registry step's first check finds the budget spent.
+    const report = await wipeEverything(fs() as never, dataRoot, expiresAt(22), true);
+    expect(report).toEqual({removed: 7, kept: 0, rootRemoved: false, failed: [{entry: 'plugins', code: 'BUDGET_EXPIRED'}, {entry: 'uninstall', code: 'BUDGET_EXPIRED'}]});
+    expect(await remaining()).toEqual(['plugins', 'uninstall']);
+  });
+  it('a real failure still keeps plugins and uninstall for the deferral, unreported', async () => {
+    await seedAll();
+    const failing: WipeFileSystem = {...fs(), unlink: target => target.endsWith('logs.bin') ? Promise.reject(Object.assign(new Error('busy'), {code: 'EBUSY'})) : fs().unlink(target)};
+    const report = await wipeEverything(failing as never, dataRoot, () => false, true);
+    expect(report.failed).toEqual([{entry: 'logs', code: 'TARGET_LOCKED'}]);
+    expect(await remaining()).toEqual(['logs', 'plugins', 'uninstall']);
   });
 });
