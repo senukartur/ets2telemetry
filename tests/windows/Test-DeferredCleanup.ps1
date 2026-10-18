@@ -391,6 +391,20 @@ try {
         (Get-State $scene.dll)) 'roaming-outside-refused'
     Assert-Equal $before (Get-DataRootEntries $scene.dataRoot) 'roaming-outside-refused data root'
     $rows.Add([ordered]@{case = 'roaming-outside-refused'; passed = $true})
+
+    # A stand-in spelled inside the test root but reached through a junction that leads out of it is refused as well
+    # (delta review of PR #123): nothing is emptied behind the junction.
+    $scene = New-Scene 'roamj' $owned 1
+    $target = Join-Path $WorkDirectory 'roamj-target'
+    Write-Text (Join-Path $target 'ETS2Telemetry Desktop\Local State') "{}`n"
+    New-Item -ItemType Junction -Path (Join-Path $scene.root 'j') -Target $target | Out-Null
+    $before = Get-DataRootEntries $scene.dataRoot
+    Set-Value $scene.command
+    $run = Invoke-Executor $scene 'none' $true (' -TestRoamingFolder "' + (Join-Path $scene.root 'j\ETS2Telemetry Desktop') + '"')
+    Assert-Equal @('refused', 'TEST_PARAMETER_REFUSED', 'not-run', 'present', 'present') @($run.receipt.outcome, $run.receipt.code, $run.receipt.roaming,
+        (Get-State (Join-Path $target 'ETS2Telemetry Desktop\Local State')), (Get-State $scene.dll)) 'roaming-junction-outside-refused'
+    Assert-Equal $before (Get-DataRootEntries $scene.dataRoot) 'roaming-junction-outside-refused data root'
+    $rows.Add([ordered]@{case = 'roaming-junction-outside-refused'; passed = $true})
 } finally {
     # Read-only fixtures are made writable again so the scenes can be removed; then the scenes and this run's test key go.
     foreach ($folder in @($WorkDirectory, $shortRoot)) {

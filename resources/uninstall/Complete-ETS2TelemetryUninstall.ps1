@@ -782,8 +782,9 @@ try {
     $roots = Resolve-Roots
     if ($null -ne $roots.code) { $Result.code = $roots.code }
     elseif ($testParameter -and $roots.mode -ne 'test-root') { $Result.mode = $roots.mode; $Result.code = 'TEST_PARAMETER_REFUSED' }
-    elseif ($PSBoundParameters.ContainsKey('TestRoamingFolder') -and (!(Test-DrivePath $TestRoamingFolder) -or !(Test-Inside $TestRoamingFolder $roots.testRoot))) {
-        # The stand-in Roaming folder must lie inside the test root, so a test can never remove a real one.
+    elseif ($PSBoundParameters.ContainsKey('TestRoamingFolder') -and (!(Test-DrivePath $TestRoamingFolder) -or !(Test-Confined $TestRoamingFolder $roots.testRoot))) {
+        # The stand-in Roaming folder must lie inside the test root, by its spelled-out path and through every link on the
+        # way down from it (Test-Confined, as for game folders), so a test can never empty a real one.
         $Result.mode = $roots.mode; $Result.code = 'TEST_PARAMETER_REFUSED'
     }
     else {
