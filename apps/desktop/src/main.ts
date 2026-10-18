@@ -49,7 +49,7 @@ import {pluginBundleDirectory, readPluginBundle} from './plugin-setup/plugin-bun
 import {APP_UNINSTALL_FAILSAFE_MS, APP_UNINSTALL_WIPE_BUDGET_MS, AppUninstall, uninstallWipeBudget, type AppUninstallPorts} from './uninstall/app-uninstall';
 import {resolveUninstallRoots} from './uninstall/roots';
 import {UNINSTALL_CHANNEL} from './uninstall-contract';
-import {finishedUninstallText} from './uninstall-text';
+import {finishedUninstallText, handoverFailedText} from './uninstall-text';
 import {UNINSTALL_STRINGS} from './strings';
 
 // ET-018 (U2): a Squirrel event runs first and alone, before the profile override, logs, settings, plugin setup and the
@@ -212,7 +212,7 @@ function runApplication(profileError: unknown): void {
     const started = await appUninstall.handOver();
     if (!started) {
       if (logOutside) log('APP_UNINSTALL_HANDOFF_FAILED');
-      if (!uninstallDialogs) await dialog.showMessageBox({type: 'error', title: UNINSTALL_STRINGS.spawnFailedTitle, message: UNINSTALL_STRINGS.spawnFailed, buttons: ['OK'], noLink: true}).catch(() => undefined);
+      if (!uninstallDialogs) await dialog.showMessageBox({type: 'error', title: UNINSTALL_STRINGS.spawnFailedTitle, message: handoverFailedText(finished), buttons: ['OK'], noLink: true}).catch(() => undefined);
     }
     app.exit(0);
   }

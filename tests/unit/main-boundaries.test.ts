@@ -2345,6 +2345,21 @@ it('says so when Windows\' uninstall cannot start, then exits 0', async () => {
   child.emit('exit', 0); await settle(); await vi.advanceTimersByTimeAsync(0);
   expect(showMessageBox).toHaveBeenCalledTimes(2);
   expect((showMessageBox.mock.calls[1] as [{title: string}])[0].title).toBe('Windows uninstall could not start');
+  // The fake wipe removed the data root, so the dialog may say that the data is gone.
+  expect((showMessageBox.mock.calls[1] as [{message: string}])[0].message).toContain('removed its plugin and data');
+  expect(app.exit).toHaveBeenCalledExactlyOnceWith(0);
+});
+it('after a wipe that did not finish, a failed handover says that data remains', async () => {
+  mockAppUninstall({outcome: 'started'}); trayAvailable = true; await ready();
+  await uninstallCall(trusted()); await vi.advanceTimersByTimeAsync(0);
+  appUninstallFake.handOver.mockResolvedValueOnce(false);
+  appUninstallFake.finishAfterExit.mockResolvedValueOnce({data: {removed: 2, kept: 0, failed: [{entry: 'data', code: 'BUDGET_EXPIRED'}, {entry: 'plugins', code: 'BUDGET_EXPIRED'},
+    {entry: 'uninstall', code: 'BUDGET_EXPIRED'}], rootRemoved: false}, notes: [], removed: 1, unrecognized: 0});
+  child.emit('exit', 0); await settle(); await vi.advanceTimersByTimeAsync(0);
+  expect(showMessageBox).toHaveBeenCalledTimes(2);
+  const [error] = showMessageBox.mock.calls[1] as [{message: string}];
+  expect(error.message).toContain('some of its local data remains');
+  expect(error.message).not.toContain('removed its plugin and data');
   expect(app.exit).toHaveBeenCalledExactlyOnceWith(0);
 });
 // Review of PR-4: a slow exit must shorten the wipe, so the failsafe never cuts it and the handover still runs.

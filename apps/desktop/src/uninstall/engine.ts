@@ -216,12 +216,20 @@ export async function runUninstall(ports: UninstallPorts): Promise<UninstallResu
  * The data wipe of steps 4 and 5: every allowlisted entry except `plugins` and `uninstall`; then, only when the plugin
  * folders are clean (`pluginsClean`) and nothing failed or expired, `plugins`, then `uninstall`, then the empty data
  * root. An interruption before the last step still leaves the intent. The in-app uninstall calls it after the exit.
+ *
+ * A real failure (anything but BUDGET_EXPIRED) keeps `plugins` and `uninstall` for the deferral, unreported, as before.
+ * A spent budget instead lets the later steps run in report-only mode: they delete nothing, but list `plugins` and
+ * `uninstall` as BUDGET_EXPIRED when they exist, so `failed` names everything allowlisted that remains (review of PR-4).
  */
 export async function wipeEverything(fs: UninstallFileSystem, dataRoot: string, expired: () => boolean, pluginsClean: boolean): Promise<UninstallResult['data']> {
+  const real = (report: {failed: readonly {code: WipeFailureCode}[]}) => report.failed.some(entry => entry.code !== 'BUDGET_EXPIRED');
   const first = await wipeDataRoot(fs, dataRoot, {keep: KEPT_UNTIL_CLEAN, expired});
-  if (!pluginsClean || first.failed.length || expired()) return first;
-  const registryWipe = await wipeDataRoot(fs, dataRoot, {keep: DATA_ALLOWLIST.filter(entry => entry !== 'plugins'), expired});
-  const intentWipe = registryWipe.failed.length ? undefined : await wipeDataRoot(fs, dataRoot, {keep: [], removeRoot: true, expired});
+  if (!pluginsClean || real(first)) return first;
+  // Once a step did not finish, the later ones only report: nothing after an unfinished step may be deleted.
+  const reportOnly = () => true;
+  const registryWipe = await wipeDataRoot(fs, dataRoot, {keep: DATA_ALLOWLIST.filter(entry => entry !== 'plugins'), expired: first.failed.length ? reportOnly : expired});
+  const intentWipe = real(registryWipe) ? undefined : await wipeDataRoot(fs, dataRoot, {keep: DATA_ALLOWLIST.filter(entry => entry !== 'uninstall'), removeRoot: true,
+    expired: first.failed.length || registryWipe.failed.length ? reportOnly : expired});
   return {removed: first.removed + registryWipe.removed + (intentWipe?.removed ?? 0), kept: first.kept,
     failed: [...first.failed, ...registryWipe.failed, ...(intentWipe?.failed ?? [])], rootRemoved: intentWipe?.rootRemoved ?? false};
 }

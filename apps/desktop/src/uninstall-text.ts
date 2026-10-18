@@ -46,6 +46,15 @@ export interface FinishedUninstallSummary {
   readonly unrecognized: number;
 }
 /**
+ * The error dialog when Update.exe could not be started after the wipe. It claims that the data is gone only when the
+ * wipe removed every allowlisted entry and the data root; otherwise the intent stays, and an uninstall from Windows
+ * Settings runs the uninstall hook, which reads that intent and wipes the rest.
+ */
+export function handoverFailedText(summary: FinishedUninstallSummary | undefined): string {
+  return summary && !summary.data.failed.length && summary.data.rootRemoved ? UNINSTALL_STRINGS.spawnFailed : UNINSTALL_STRINGS.spawnFailedPartial;
+}
+
+/**
  * The result dialog after the data wipe: what was removed and what remains, with every note. An entry the wipe did not
  * reach in its time (BUDGET_EXPIRED) stays with the intent, and the uninstall hook of the handover finishes it, so it is
  * not left to the user; only a real failure asks for deletion by hand.

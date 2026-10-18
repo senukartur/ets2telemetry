@@ -204,6 +204,10 @@ describe('the wipe budget before the 12 s failsafe', () => {
     expect(finished?.data.removed).toBe(0);
     expect(finished?.data.failed.length).toBeGreaterThan(0);
     expect(finished?.data.failed.every(entry => entry.code === 'BUDGET_EXPIRED')).toBe(true);
+    // Every allowlisted entry that remains is named, the registry and the intent included.
+    const present = (await fsp.readdir(fixture.dataRoot)).map(name => name.toLowerCase()).sort();
+    expect(finished?.data.failed.map(entry => entry.entry).sort()).toEqual(present);
+    expect(present).toEqual(expect.arrayContaining(['data', 'plugins', 'uninstall']));
     expect(await exists(path.win32.join(fixture.dataRoot, 'data', 'telemetry.sqlite'))).toBe(true);
     expect(await exists(path.win32.join(fixture.dataRoot, 'uninstall', 'pending.json'))).toBe(true);
   });

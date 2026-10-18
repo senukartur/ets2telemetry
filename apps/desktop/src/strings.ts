@@ -639,7 +639,9 @@ export const UNINSTALL_STRINGS = Object.freeze({
   finishedPending: 'ETS2Telemetry removed its game plugin. The Windows uninstall that starts now finishes removing its local data and removes the program files.',
   finishedExpired: 'Not deleted yet, because this step ran out of time: {entries}. The Windows uninstall that starts now finishes removing them.',
   spawnFailedTitle: 'Windows uninstall could not start',
-  spawnFailed: 'ETS2Telemetry removed its plugin and data, but the Windows uninstall could not be started. Uninstall ETS2Telemetry from Windows Settings, Apps.'
+  spawnFailed: 'ETS2Telemetry removed its plugin and data, but the Windows uninstall could not be started. Uninstall ETS2Telemetry from Windows Settings, Apps.',
+  /** The handover failed after a wipe that did not finish: the intent stays, and the Windows-initiated hook reads it. */
+  spawnFailedPartial: 'ETS2Telemetry removed its plugin, but some of its local data remains, and the Windows uninstall could not be started. Uninstall ETS2Telemetry from Windows Settings, Apps: that removes the program files and finishes removing the remaining data where it can.'
 });
 export const UNINSTALL_TARGET_TEXT = Object.freeze({
   steam: '{game} (Steam folder {number})',
