@@ -11,7 +11,7 @@ import {rendererPages} from '../ci/overlay-observation.mjs';
 import {checkedPaths, checkInstalled, checkLaunchEnvironment, checkRunPlan, checkRunSignal, FACTS_VARIABLE, factsEvidence, InstallerGuardError, installedEnvironment, normalizePath,
   checkDecoyUnchanged, checkUninstallResidue, electronRuntimeNames, ownsRegistration, parseUninstallString, resolveRealLocation, RUN_ROOT_NAME, runLayout, steamLibraryPaths, uninstallEnvironment} from './installer-guard.mjs';
 
-// ET-018 PR-1 and PR-3 (REG-013, REG-017; plan U10-U13): the Node driver of the installer lifecycle in a marked test root. The
+// ET-018 PR-1, PR-3 and PR-4 (REG-013, REG-015, REG-017; plan U8, U10-U13): the Node driver of the installer lifecycle in a marked test root. The
 // PowerShell harness scripts/installer/Invoke-InstallerLifecycle.ps1 orchestrates the steps and runs every command below
 // that starts a process under a BoundedProcess Job; this file never runs an installer by itself except through `step`,
 // which the harness calls only after the guards passed. See docs/installer-testing.md.
@@ -34,6 +34,10 @@ import {checkedPaths, checkInstalled, checkLaunchEnvironment, checkRunPlan, chec
 //                                             the application runs (complete) or the fake game host runs (deferred);
 //                                             --rehearse stops before the UninstallString (a local check of the driver
 //                                             against a fake layout; the harness never passes it)
+//   app-uninstall <config> <label> <exe> <complete|blocked>
+//                                             PR-4: the in-app uninstall through the smoke-only dialog seam, with the plugin
+//                                             installed: complete (the data wipe, then Update.exe --uninstall) or blocked
+//                                             while the fake game host runs (nothing changes, the application stays installed)
 //   residue <config> <label>                  PR-3: checks the harness's residue-listing-<label>.json listing of the binary root
 //   cleanup <config> <location per view...>   deletes R (never following links) after the harness kept the evidence
 
@@ -468,19 +472,19 @@ async function games(config) {
 }
 
 /** The launch environment of PR-3's launches: as a data launch, without a recording target. */
-function pluginEnvironment(config, label) {
+function pluginEnvironment(config, label, extra = {}) {
   const layout = runLayout(config.runRoot);
   const diagnostics = path.join(layout.diagnostics, `plugin-${label}`);
   const env = installedEnvironment(process.env, {LOCALAPPDATA: layout.base, APPDATA: layout.appData, TEMP: layout.temp, TMP: layout.temp,
-    ETS2TELEMETRY_PROFILE_DIR: layout.profile, ETS2TELEMETRY_DIAGNOSTIC_DIR: diagnostics, ETS2TELEMETRY_PLUGIN_SETUP_ROOT: config.runRoot});
+    ETS2TELEMETRY_PROFILE_DIR: layout.profile, ETS2TELEMETRY_DIAGNOSTIC_DIR: diagnostics, ETS2TELEMETRY_PLUGIN_SETUP_ROOT: config.runRoot, ...extra});
   checkLaunchEnvironment(env, {runRoot: config.runRoot, real: machineFacts().real});
   return {env, diagnostics};
 }
 /** Starts the installed application and waits until its test-root plugin setup recorded the ETS2 install with the bundled hash. */
-async function startWithPlugin(config, label, executable) {
+async function startWithPlugin(config, label, executable, extra = {}) {
   const layout = runLayout(config.runRoot), game = gameLayout(await realpath(config.runRoot));
   assert.ok(normalizePath(executable).startsWith(`${normalizePath(layout.binaryRoot)}\\app-`), 'LAUNCH_EXECUTABLE_NOT_INSTALLED');
-  const {env, diagnostics} = pluginEnvironment(config, label);
+  const {env, diagnostics} = pluginEnvironment(config, label, extra);
   await mkdir(diagnostics, {recursive: true});
   const bundled = await bundledHash(executable);
   const application = await electron.launch({executablePath: executable, cwd: layout.cwd, env, timeout: 20000});
@@ -646,6 +650,125 @@ async function windowsUninstall(config, label, executable, expectation, rehearse
   return record;
 }
 
+// ET-018 PR-4 (REG-015; plan U8): the in-app uninstall. The application runs with the diagnostic gate
+// (ETS2TELEMETRY_LIVE_SMOKE=1, a diagnostic and a profile folder in R), so the app event
+// `ets2telemetry:diagnostic-uninstall-dialogs` answers its confirmation and result dialogs; no renderer can reach it. The
+// button on the dashboard's uninstall card is pressed as a user would. Records keep fixed codes, hashes and counts only.
+/** The application's own exit, Update.exe and Squirrel's hook get this long to finish; the command's Job allows 120 s. */
+const APP_UNINSTALL_DRAIN_MS = 60000;
+/**
+ * The data root's entries by relative name, with hashes of the files outside `data\` (an open SQLite database may change
+ * its sidecars while it is idle). Nothing may appear, disappear or change elsewhere.
+ */
+async function dataRootState(dataRoot) {
+  const entries = await tree(dataRoot);
+  return Object.fromEntries(Object.entries(entries).map(([name, value]) => [name, name.toLowerCase().startsWith('data\\') ? 'present' : value]));
+}
+/** Waits until no process image under R is left, or the budget ends; returns the images still there, relative to R. */
+async function drainRunRoot(config, budget) {
+  const started = performance.now();
+  for (;;) {
+    const remaining = (await processImages()).filter(image => normalizePath(image).startsWith(`${normalizePath(config.runRoot)}\\`));
+    if (!remaining.length || performance.now() - started > budget) return {drainedMilliseconds: Math.round(performance.now() - started), remaining: remaining.map(image => path.relative(config.runRoot, image))};
+    await new Promise(resolve => setTimeout(resolve, 250));
+  }
+}
+/**
+ * The in-app uninstall of the installed application from `exe`, after its test-root plugin setup installed the plugin into
+ * the fake ETS2 folder. `blocked`: the fake game host runs; the card reports the block, and the plugin, the data root and
+ * the unrelated files stay as they were, with no intent; the application keeps running and exits orderly (the harness
+ * then checks that it is still installed). `complete`: the application removes the plugin, exits, wipes its data root and
+ * starts Update.exe --uninstall; once every process under R has ended, the plugin and the data root are gone, the
+ * unrelated files and the export are unchanged, and Squirrel's hook found nothing left (its receipt says so). The harness
+ * then checks the registration, the shortcuts and the vendor residue.
+ */
+async function appUninstall(config, label, executable, expectation) {
+  assert.ok(expectation === 'complete' || expectation === 'blocked', 'APP_UNINSTALL_EXPECTATION_INVALID');
+  checkRunSignal(process.env, {allowLocal: config.allowLocal === true});
+  const runRoot = await realpath(config.runRoot);
+  const layout = runLayout(runRoot), game = gameLayout(runRoot);
+  const record = {label, expectation};
+  const keptBefore = await keptStates(runRoot);
+  const receiptsBefore = new Set(await receiptNames(layout.temp));
+  const started = await startWithPlugin(config, label, executable, {ETS2TELEMETRY_LIVE_SMOKE: '1'});
+  let host, dllBefore, dataBefore, closed = false;
+  try {
+    if (expectation === 'blocked') host = await startFakeGame(config);
+    dllBefore = await fileState(game.dll);
+    assert.equal(typeof dllBefore, 'object', 'PLUGIN_NOT_INSTALLED_BEFORE_UNINSTALL');
+    dataBefore = await dataRootState(layout.dataRoot);
+    await started.application.evaluate(({app}) => {app.emit('ets2telemetry:diagnostic-uninstall-dialogs', 'uninstall');});
+    const {dashboard} = await rendererPages(started.application);
+    const warning = await dashboard.getByTestId('uninstall-warning').innerText();
+    record.warningShown = /trip history/.test(warning) && /captures/.test(warning) && /exports/i.test(warning);
+    assert.equal(record.warningShown, true, 'UNINSTALL_WARNING_MISSING');
+    await dashboard.getByTestId('uninstall-button').click();
+    if (expectation === 'blocked') {
+      const result = dashboard.getByTestId('uninstall-result');
+      await result.waitFor({state: 'visible', timeout: 20000});
+      const text = await result.innerText();
+      record.blockedShown = text.includes('was not uninstalled, and nothing was changed');
+      record.blockedFolders = await dashboard.getByTestId('uninstall-blocked-folder').count();
+      record.pathShown = /[A-Za-z]:\\/.test(text);
+      await closeOrderly(started.application);
+      closed = true;
+      record.exit = {code: started.launcher.exitCode, signal: started.launcher.signalCode};
+    } else {
+      // The application closes itself: the explicit exit, the wipe, the handover to Update.exe, app.exit(0).
+      await until(async () => started.launcher.exitCode !== null || started.launcher.signalCode !== null, Boolean, 'APP_DID_NOT_EXIT', 30000);
+      closed = true;
+      record.exit = {code: started.launcher.exitCode, signal: started.launcher.signalCode};
+      record.drain = await drainRunRoot(config, APP_UNINSTALL_DRAIN_MS);
+    }
+  } finally {
+    if (!closed) await started.application.close().catch(() => undefined);
+    if (host) await stopFakeGame(host);
+  }
+  const main = await serviceEvents(started.diagnostics);
+  record.events = {
+    dialogs: main.filter(row => row.event === 'DIAGNOSTIC_UNINSTALL_DIALOG').map(row => row.facts),
+    uninstall: main.filter(row => row.event === 'APP_UNINSTALL').map(row => ({outcome: row.facts?.outcome, code: row.facts?.code ?? null})),
+    finished: main.filter(row => row.event === 'APP_UNINSTALL_FINISHED').map(row => ({removed: row.facts?.removed, rootRemoved: row.facts?.rootRemoved, failed: row.facts?.failed})),
+    failures: main.filter(row => FAILURE_EVENT.test(row.event)).map(row => row.event)
+  };
+  const kept = await keptStates(runRoot), dllAfter = await fileState(game.dll);
+  const receipts = (await receiptNames(layout.temp)).filter(name => !receiptsBefore.has(name));
+  record.after = {plugin: typeof dllAfter === 'string' ? dllAfter : 'present', unrelatedUnchanged: JSON.stringify(kept) === JSON.stringify(keptBefore), receipts: receipts.length};
+  if (receipts.length === 1) {
+    const text = await readFile(path.join(layout.temp, receipts[0]), 'utf8');
+    assert.doesNotMatch(text, /[A-Za-z]:\\|\\\\/, 'UNINSTALL_RECEIPT_HAS_PATH');
+    record.receipt = JSON.parse(text);
+  }
+  // What the run left, recorded before any assertion so a failing run still shows it.
+  await writeEvidence(config, `app-uninstall-${label}-observed.json`, record).catch(() => undefined);
+  assert.deepEqual(kept, keptBefore, 'UNRELATED_FILES_CHANGED');
+  assert.deepEqual(record.events.failures, [], 'FAILURE_EVENT_LOGGED');
+  assert.deepEqual(record.events.dialogs.slice(0, 1), [{dialog: 'confirm', answer: 'uninstall'}], 'CONFIRM_NOT_ANSWERED');
+  if (expectation === 'blocked') {
+    assert.deepEqual({shown: record.blockedShown, folders: record.blockedFolders, path: record.pathShown}, {shown: true, folders: 1, path: false}, 'BLOCKED_NOT_SHOWN');
+    assert.deepEqual(record.events.uninstall, [{outcome: 'blocked', code: 'GAME_RUNNING'}], 'APP_UNINSTALL_NOT_BLOCKED');
+    assert.deepEqual(record.exit, {code: 0, signal: null}, 'LAUNCH_EXIT_NONZERO');
+    // Nothing changed: the plugin keeps its bytes and time, the data root its entries, and no intent was written.
+    assert.deepEqual(dllAfter, dllBefore, 'BLOCKED_PLUGIN_CHANGED');
+    assert.deepEqual(await dataRootState(layout.dataRoot), dataBefore, 'BLOCKED_DATA_CHANGED');
+    assert.equal(await fileState(path.join(layout.dataRoot, 'uninstall', 'pending.json')), 'absent', 'BLOCKED_INTENT_WRITTEN');
+    assert.equal(record.events.dialogs.length, 1, 'BLOCKED_RESULT_DIALOG');
+    assert.equal(receipts.length, 0, 'BLOCKED_HOOK_RAN');
+  } else {
+    assert.deepEqual(record.drain.remaining, [], 'APP_UNINSTALL_PROCESSES_REMAIN');
+    assert.deepEqual(record.events.uninstall, [{outcome: 'started', code: null}], 'APP_UNINSTALL_NOT_STARTED');
+    assert.deepEqual(record.events.finished, [{removed: 1, rootRemoved: true, failed: 0}], 'APP_UNINSTALL_NOT_FINISHED');
+    assert.deepEqual(record.events.dialogs, [{dialog: 'confirm', answer: 'uninstall'}, {dialog: 'result', rootRemoved: true, failed: 0}], 'RESULT_DIALOG_NOT_ANSWERED');
+    assert.equal(dllAfter, 'absent', 'PLUGIN_NOT_REMOVED');
+    assert.equal(await fileState(layout.dataRoot), 'absent', 'DATA_ROOT_REMAINS');
+    // Squirrel's hook ran after the handover and found nothing left to do.
+    assert.equal(receipts.length, 1, 'UNINSTALL_RECEIPT_COUNT');
+    assert.deepEqual({outcome: record.receipt.outcome, code: record.receipt.code, mode: record.receipt.mode, removed: record.receipt.plugins.removed},
+      {outcome: 'complete', code: null, mode: 'test-root', removed: 0}, 'HOOK_RECEIPT_UNEXPECTED');
+  }
+  return record;
+}
+
 /**
  * The binary-root residue after an uninstall (checkUninstallResidue), from the listing the harness wrote and the Electron
  * runtime names of this checkout's `node_modules/electron/dist`. Records the tolerated runtime files.
@@ -696,6 +819,7 @@ try {
       case 'games': result.result = await games(config); break;
       case 'plugin-launch': result.result = await pluginLaunch(config, label, rest[2], rest[3]); break;
       case 'windows-uninstall': result.result = await windowsUninstall(config, label, rest[2], rest[3], rest[4] === '--rehearse'); break;
+      case 'app-uninstall': result.result = await appUninstall(config, label, rest[2], rest[3]); break;
       case 'residue': result.result = await residue(config, label); break;
       case 'cleanup': result.result = await cleanup(config, rest.slice(1)); break;
       default: throw new Error('UNKNOWN_COMMAND');

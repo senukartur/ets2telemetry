@@ -15,7 +15,10 @@ param(
 # ET-018 PR-3 then runs the Windows-initiated uninstall scenarios: (1) the exact registered UninstallString with a decoy
 # LOCALAPPDATA while the application runs, after its plugin setup installed the plugin into a fake ETS2 folder: complete;
 # (2) a reinstall, a plugin launch and the same uninstall while the fake game host runs: deferred; (3) a reinstall over
-# (2), which cancels the deferral, a launch that adopts the plugin and a final complete uninstall.
+# (2), which cancels the deferral, a launch that adopts the plugin and a final complete uninstall. ET-018 PR-4 adds the
+# in-app scenarios on a fresh install, answered through the smoke-only dialog seam: (5) the uninstall button while the fake
+# game host runs: blocked, nothing changes and the application stays installed; (4) the button again: the plugin and the
+# data root are removed, the application exits and hands over to Update.exe --uninstall, and the residue check follows.
 # Squirrel's binary root is redirected with SQUIRREL_TEMP = R\LocalAppData, and every child process gets LOCALAPPDATA,
 # APPDATA and TEMP inside R. R is deleted at the end, and any HKCU uninstall key that still points into R. It runs on a
 # GitHub-hosted runner, or locally only with -AllowLocal on the owner's explicit request (docs/installer-testing.md).
@@ -25,9 +28,9 @@ $setup = Join-Path $checkout 'out/make/squirrel.windows/x64/ETS2Telemetry Deskto
 $planSteps = @('signal','facts','guard-plan','create-run-root','guard-ready','build-fixture-0.1.1','seed','install-0.1.0','installed-smokes-0.1.0',
     'data-launch-0.1.0','verify-0.1.0','repair-0.1.0','update-0.1.1','installed-smokes-0.1.1','data-launch-0.1.1','verify-0.1.1','games',
     'windows-uninstall-complete-running','install-0.1.0-again','plugin-launch-installed','windows-uninstall-deferred-game','reinstall-0.1.0-over-deferral',
-    'plugin-launch-adopted','windows-uninstall-final','cleanup')
+    'plugin-launch-adopted','windows-uninstall-final','install-0.1.0-for-app','app-uninstall-blocked-game','app-uninstall-complete','cleanup')
 if ($Plan) {
-    [ordered]@{run=$false; steps=$planSteps; scenariosA=$ScenariosA; scenariosB=$ScenariosB; setup=$setup; uninstall='windows-initiated, in R only';
+    [ordered]@{run=$false; steps=$planSteps; scenariosA=$ScenariosA; scenariosB=$ScenariosB; setup=$setup; uninstall='windows-initiated and in-app, in R only';
         localRuns='only with -AllowLocal on an explicit owner request'; applicationLaunched=$false} | ConvertTo-Json
     return
 }
@@ -295,6 +298,19 @@ try {
     $helper = Get-VendorHelper '0.1.0'
     Invoke-Driver 'windows-uninstall' @('final', $executableA, 'complete') 60000
     Assert-Uninstalled 'final' $helper
+
+    # ET-018 PR-4: the in-app uninstall scenarios (docs/installer-testing.md, "In-app uninstall scenarios").
+    $env:ETS2TELEMETRY_DIAGNOSTIC_DIR = Join-Path $runRoot 'diagnosticsinstall-for-app-0.1.0'
+    Invoke-Driver 'step' @('install-for-app-0.1.0', $setup, '--silent') 60000
+    $executableA = Assert-Installed 'install-for-app-0.1.0' '0.1.0'
+    Assert-ProductLinks 'install-for-app-0.1.0' $true
+    $env:ETS2TELEMETRY_DIAGNOSTIC_DIR = $null
+    Invoke-Driver 'app-uninstall' @('blocked-game', $executableA, 'blocked') 90000
+    $null = Assert-Installed 'after-app-blocked' '0.1.0'
+    Assert-ProductLinks 'after-app-blocked' $true
+    $helper = Get-VendorHelper '0.1.0'
+    Invoke-Driver 'app-uninstall' @('complete-app', $executableA, 'complete') 120000
+    Assert-Uninstalled 'complete-app' $helper
     $report.passed = $true
 } catch {
     $report.failure = $_.Exception.Message
