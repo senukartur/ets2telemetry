@@ -639,3 +639,42 @@ For ET-018 only, this supersedes the earlier statements that ET-018 is not autho
 **Not authorized by this paragraph:** no release is published, no certificate or paid service is bought, and no auto-update is added. `GAME_HISTORY_RECORDING` stays `false`.
 
 **Pending manual checks.** A clean Windows machine, real Steam libraries and game folders, uninstall while a real game or TruckersMP runs, Smart App Control and antivirus behaviour, and the owner's first real history upgrade remain pending. No game, TruckersMP, display or performance claim follows.
+
+## ET-018 implementation update — October 18, 2026
+
+All six ET-018 PRs are implemented:
+- PR-1 (#117): an installer lifecycle in a marked test root, run only on GitHub-hosted runners. It shows that install, repair and update keep history and settings.
+- PR-2 (#118): the uninstall engine, which works in this order:
+  1. derive its folders from the install layout (U3);
+  2. preflight;
+  3. write an intent;
+  4. remove plugins whose hash it owns, following the ET-017 contract;
+  5. wipe the allowlisted data, with `plugins\` and `uninstall\` last.
+- PR-3 (#120): our own Squirrel event handling, in place of electron-squirrel-startup. Uninstalling from Windows Settings closes a running instance, removes the plugin and the local data, and writes a path-free receipt. If a game runs, or a lock or permission blocks the cleanup, it defers explicitly.
+- PR-4 (#122): **Uninstall ETS2Telemetry** on the Live tab. It has a data-loss warning and a native confirmation that defaults to Cancel, and it refuses while a game runs. After an orderly exit it wipes the data, shows the result, and hands over to Windows' uninstall for the program files. The new [user guide](docs/user-guide.md) describes both uninstall paths.
+- PR-5 (#123): the deferred cleanup at the next sign-in (O3). An HKCU RunOnce entry runs a retained Windows PowerShell 5.1 executor. It applies the same ownership rules as the engine, which a shared case table checks, and it stops after 10 attempts with a README.
+- PR-6 (#121): `release-identity.json` records the source commit, the versions, the hashes and the Authenticode status of every PE image. It fails on `HashMismatch` and on native code packed inside the asar archive. The [release checklist](docs/release.md) covers the unsigned internal alpha (O1, O2).
+
+The hosted installer lifecycle runs these scenarios in a test root:
+- install, repair and update;
+- three Windows-initiated uninstalls: with the app running, with a fake game running (deferred) and after a reinstall;
+- the deferred executor, first while blocked and then to completion;
+- both in-app scenarios: refused while a fake game runs, and complete with the Update.exe handover.
+
+No installer, `Update.exe`, `--squirrel-*` command or deferred executor ran on the owner's machine, and the real RunOnce key was never written.
+
+The deferred parts are in [technical debt](docs/technical-debt.md):
+- TD-012: in-place restore of the history database;
+- TD-013: Squirrel vendor residue in the binary root;
+- TD-014: code signing (SignPath Foundation after the first alpha);
+- TD-015: packaging only the win32-x64 better-sqlite3 binding.
+
+The card stays in Review. Every real-environment check remains pending ([ET-018 validation](docs/validation/et-018.md)):
+- a clean Windows machine;
+- the native dialogs, and Settings and Control Panel uninstall of a real installation;
+- the RunOnce executor at a real sign-in;
+- SmartScreen, Smart App Control, antivirus or EDR, and a Group Policy execution policy;
+- real Steam libraries, and a real game or TruckersMP running during an uninstall;
+- the owner's first real history upgrade.
+
+Nothing has been published. A release needs the owner's authorization under O2. `GAME_HISTORY_RECORDING` stays `false`. No game, TruckersMP, display or performance claim follows.
