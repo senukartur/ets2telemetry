@@ -28,7 +28,8 @@ const cases = [
   ...lifecycleCases(),
   ...pluginCases(),
   ...recordingCases(),
-  ...journalCases()
+  ...journalCases(),
+  ...installedCases()
 ];
 
 // ET-011a lifecycle receipts: one intact receipt, then single-field corruptions that must each fail.
@@ -570,6 +571,34 @@ function journalCases() {
   ];
 }
 
+// ET-018 PR-1 (U11): the installed mode. An intact scaffold receipt of an installed copy, then single-field corruptions
+// that must each fail; a packaged receipt cannot stand in for an installed one, nor the reverse.
+function installedReceipt(path: (string | number)[] = [], replacement?: Json): string {
+  return corrupt({...JSON.parse(scaffoldReceipt()) as Record<string, Json>, mode: 'installed', runtime: {packaged: true},
+    installed: {executableMatches: true, cwdOutsideInstall: true, minimalPath: true, developmentVariablesAbsent: true, packaged: true,
+      layout: 'ETS2TelemetryDesktop\\app-0.1.1'}}, path, replacement);
+}
+function installedCases() {
+  const invalid = (name: string, path: (string | number)[], replacement?: Json) =>
+    ({name: `installed ${name}`, body: installedReceipt(path, replacement), scenario: 'scaffold', mode: 'installed', code: 0, available: true, reason: 'INSTALLED_RESULT_INCOMPLETE_OR_INVALID'});
+  return [
+    {name: 'intact installed scaffold receipt', body: installedReceipt(), scenario: 'scaffold', mode: 'installed', code: 0, available: true, reason: null},
+    {name: 'packaged receipt cannot prove an installed run', body: scaffoldReceipt(), scenario: 'scaffold', mode: 'installed', code: 0, available: true, reason: 'DRIVER_RESULT_IDENTITY_MISMATCH'},
+    {name: 'installed receipt cannot prove a packaged run', body: installedReceipt(), scenario: 'scaffold', code: 0, available: true, reason: 'DRIVER_RESULT_IDENTITY_MISMATCH'},
+    {name: 'installed scaffold receipt still needs the plugin card', body: installedReceipt(['pluginCard', 'controlsDisabled'], false), scenario: 'scaffold', mode: 'installed', code: 0,
+      available: true, reason: 'SCAFFOLD_PLUGIN_CARD_INVALID'},
+    invalid('facts missing', ['installed']),
+    invalid('another executable ran', ['installed', 'executableMatches'], false),
+    invalid('working directory inside the install', ['installed', 'cwdOutsideInstall'], false),
+    invalid('development PATH', ['installed', 'minimalPath'], false),
+    invalid('Node options inherited', ['installed', 'developmentVariablesAbsent'], false),
+    invalid('a non-boolean flag', ['installed', 'packaged'], 'true'),
+    invalid('the portable package layout', ['installed', 'layout'], 'ETS2Telemetry Desktop-win32-x64'),
+    invalid('a layout with a path', ['installed', 'layout'], 'C:\\Users\\fixture\\ETS2TelemetryDesktop\\app-0.1.1'),
+    invalid('an unpackaged runtime', ['runtime', 'packaged'], false)
+  ];
+}
+
 it('requires an intact current driver receipt and normal Job exit without overwriting failed evidence', async () => {
   const resources = await temporaryResources();
   try {
@@ -578,7 +607,7 @@ it('requires an intact current driver receipt and normal Job exit without overwr
     // All cases share one PowerShell 5.1 validator process; see tests/shared/runtime-receipt-validator.ts.
     const results = await validateRuntimeReceipts(resources.directory, cases.map((scenario, index) =>
       ({receipt: receipts[index], code: scenario.code, ...('scenario' in scenario ? {scenario: scenario.scenario} : {}),
-        ...('numbers' in scenario ? {numbers: scenario.numbers} : {})})));
+        ...('numbers' in scenario ? {numbers: scenario.numbers} : {}), ...('mode' in scenario ? {mode: String(scenario.mode)} : {})})));
     for (const [index, scenario] of cases.entries()) {
       expect(results[index], scenario.name).toMatchObject({passed: scenario.reason === null,
         driverResultAvailable: scenario.available, reason: scenario.reason});

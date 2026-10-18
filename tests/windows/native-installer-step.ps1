@@ -1,5 +1,11 @@
 # A single directly created PowerShell root inside the unchanged watchdog Job.
-[CmdletBinding()]param([Parameter(Mandatory)][string]$ConfigFile)
+[CmdletBinding()]param([switch]$Run,[string]$ConfigFile)
+# Retired by ET-018 PR-1 (October 18, 2026), with Invoke-NativeInstallerAcceptance.ps1: its steps install into and
+# uninstall from the real %LOCALAPPDATA% roots. Without -Run it only reports its plan; -Run always refuses. Installer
+# checks now run in a marked test root (scripts/installer/Invoke-InstallerLifecycle.ps1, docs/installer-testing.md).
+if(!$Run){@{run=$false;retired='RETIRED_ET018_REAL_ROOTS';steps=@('install','repair','update','smoke','uninstall','control','linger');configFile=[bool]$ConfigFile;applicationLaunched=$false}|ConvertTo-Json;return}
+throw 'RETIRED_ET018_REAL_ROOTS: this step used the real LocalAppData roots; use scripts/installer/Invoke-InstallerLifecycle.ps1 (docs/installer-testing.md).'
+# The body below is kept unchanged as the record of the ET-001 procedure; it is unreachable.
 $ErrorActionPreference='Stop';$clock=[Diagnostics.Stopwatch]::StartNew();$console=[IntPtr]::Zero
 $proof=[ordered]@{passed=$false;failure=$null;rootPid=$PID;scope=$null;console=$null;primary=@();finalPids=@();childrenNaturallyDrained=$false}
 function Read-BoundedJson([string]$filename){$stream=[IO.File]::OpenRead($filename);try{$buffer=New-Object byte[] 16385;$count=0;while($count -lt $buffer.Length){$n=$stream.Read($buffer,$count,$buffer.Length-$count);if(!$n){break};$count+=$n};if($count -gt 16384){throw 'Configuration exceeds16KiB.'};[Text.Encoding]::UTF8.GetString($buffer,0,$count).TrimStart([char]0xfeff)|ConvertFrom-Json}finally{$stream.Dispose()}}

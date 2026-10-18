@@ -20,6 +20,7 @@ import {runLifecycleSmoke, seedLifecycleSettings, until, verifyLifecycleRestart}
 import {assertNoGameRunning, buildPluginFixture, runDiagnosticsExport, runPluginJourney, snapshotPluginFixture, verifyDisabledPluginCard, verifyPluginEvents, verifyPluginRestart} from './plugin-fixture.mjs';
 import {RECORDING_TARGET, runRecordingSmoke, startRecordingSource, verifyRecordingRestart, verifyRecordingRun} from './recording-observation.mjs';
 import {JOURNAL_TARGET, runJournalEmpty, runJournalExport, runJournalSeeded, seedJournalDatabase, verifyJournalRun} from './journal-observation.mjs';
+import {installedEnvironment, minimalPath, normalizePath} from '../installer/installer-guard.mjs';
 // These read-only globals are used only inside serialized Playwright browser callbacks.
 /* global document: readonly, getComputedStyle: readonly, innerHeight: readonly, innerWidth: readonly */
 
@@ -77,7 +78,9 @@ const verifyHistoryFile = async () => {
   return facts;
 };
 // Every launch of one run shares the isolated profile, TEMP, APPDATA and LOCALAPPDATA; only the diagnostic directory may differ.
-const environment = diagnostics => ({...process.env, TEMP: config.temp, TMP: config.temp, APPDATA: config.appdata,
+// ET-018 PR-1 (U11): an installed copy starts like a user's: the minimal Windows PATH and no Node, npm, Electron or
+// inherited ETS2TELEMETRY_ variable (scripts/installer/installer-guard.mjs, installedEnvironment).
+const environment = diagnostics => ({...(config.mode === 'installed' ? installedEnvironment(process.env, {}) : process.env), TEMP: config.temp, TMP: config.temp, APPDATA: config.appdata,
   LOCALAPPDATA: config.localappdata, ETS2TELEMETRY_PROFILE_DIR: config.profile,
   ETS2TELEMETRY_DIAGNOSTIC_DIR: diagnostics,
   ...(telemetrySource ? {ETS2TELEMETRY_LIVE_SMOKE: '1', ETS2TELEMETRY_SOURCE_KIND: 'synthetic', ETS2TELEMETRY_SOURCE_PIPE: telemetrySource.endpoint} : {}),
@@ -87,7 +90,7 @@ const environment = diagnostics => ({...process.env, TEMP: config.temp, TMP: con
   // ET-017 PR-5: the test-root mode, confined to the fake root inside this run's isolated output folder.
   ...(pluginFixture ? {ETS2TELEMETRY_PLUGIN_SETUP_ROOT: pluginFixture.root} : {})});
 const launchOptions = diagnostics => ({timeout: 20000, cwd: config.cwd,
-  ...(config.mode === 'packaged' ? {executablePath: config.executable, args: config.forceRendererProcessReuse ? ['--renderer-process-limit=1'] : []} :
+  ...(config.mode !== 'development' ? {executablePath: config.executable, args: config.forceRendererProcessReuse ? ['--renderer-process-limit=1'] : []} :
     {args: [config.checkout, ...(config.forceRendererProcessReuse ? ['--renderer-process-limit=1'] : [])]}),
   env: environment(diagnostics)});
 try {
@@ -125,7 +128,19 @@ try {
       security: {sandbox: preferences.sandbox, isolation: preferences.contextIsolation, node: preferences.nodeIntegration}};
   });
   assert.equal(result.runtime.versions.electron, '44.7.0');
-  assert.equal(result.runtime.packaged, config.mode === 'packaged');
+  assert.equal(result.runtime.packaged, config.mode !== 'development');
+  if (config.mode === 'installed') {
+    // ET-018 PR-1 (U11): the installed executable itself runs, from an unrelated working directory, with the minimal PATH.
+    const actual = await application.evaluate(() => ({executable: process.execPath, cwd: process.cwd(),
+      path: Object.entries(process.env).filter(([key]) => key.toUpperCase() === 'PATH').map(([, value]) => value),
+      development: Object.keys(process.env).filter(key => /^(NODE_OPTIONS|NPM_)/i.test(key))}));
+    result.installed = {executableMatches: normalizePath(actual.executable) === normalizePath(config.executable),
+      cwdOutsideInstall: normalizePath(actual.cwd) === normalizePath(config.cwd) && !normalizePath(actual.cwd).startsWith(normalizePath(path.dirname(path.dirname(config.executable)))),
+      minimalPath: actual.path.length === 1 && actual.path[0] === minimalPath(process.env.SystemRoot), developmentVariablesAbsent: actual.development.length === 0,
+      packaged: result.runtime.packaged, layout: `${path.basename(path.dirname(path.dirname(config.executable)))}\\${path.basename(path.dirname(config.executable))}`};
+    assert.deepEqual({...result.installed, layout: undefined}, {executableMatches: true, cwdOutsideInstall: true, minimalPath: true, developmentVariablesAbsent: true,
+      packaged: true, layout: undefined});
+  }
   assert.equal(result.runtime.rendererProcessLimit, config.forceRendererProcessReuse ? '1' : '');
   assert.deepEqual(result.runtime.security, {sandbox: true, isolation: true, node: false});
   result.runtime.windows = await windowSecurity(application);

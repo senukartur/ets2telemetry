@@ -171,9 +171,10 @@ export async function runLifecycleSmoke({application, launcher, dashboard, overl
   assert.equal(source.statistics().connections, 1); record.sourceConnectionPreserved = true;
 
   // 2. A second launch with the same profile exits 0 without logging and reopens the running dashboard.
-  const executable = config.mode === 'packaged' ? config.executable : await application.evaluate(() => process.execPath);
+  // A packaged or installed run starts its own executable again; a development run the same Electron with the checkout.
+  const executable = config.mode !== 'development' ? config.executable : await application.evaluate(() => process.execPath);
   const started = performance.now();
-  const second = spawn(executable, config.mode === 'packaged' ? [] : [config.checkout], {cwd: config.cwd, env: environment, stdio: 'ignore', windowsHide: true});
+  const second = spawn(executable, config.mode !== 'development' ? [] : [config.checkout], {cwd: config.cwd, env: environment, stdio: 'ignore', windowsHide: true});
   const secondExit = await waitForExit(second, 10000, 'SECOND_INSTANCE_DID_NOT_EXIT_WITHIN_10_SECONDS');
   record.secondInstance = {pid: second.pid ?? null, exitCode: secondExit.code, signal: secondExit.signal, exitMilliseconds: Math.round(performance.now() - started)};
   assert.equal(secondExit.code, 0); assert.equal(secondExit.signal, null);

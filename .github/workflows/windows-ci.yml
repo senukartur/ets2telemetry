@@ -146,6 +146,14 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run inspect:package
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      # ET-018 PR-1 (docs/installer-testing.md): install, repair and update the Squirrel output inside a marked test root in
+      # the runner's temporary folder, with installed smokes and the seeded upgrade of a version 1 database; it never
+      # uninstalls. Non-PR events only, like the maker that builds its Setup.exe. Its evidence, .local/ci/installer-*-evidence,
+      # lies inside the uploaded .local/ci; the run root itself is deleted and never uploaded.
+      - name: Installer lifecycle in a test root
+        if: github.event_name != 'pull_request'
+        timeout-minutes: 8
+        run: ./scripts/installer/Invoke-InstallerLifecycle.ps1
       - name: Bounded Forge packaged Electron worker smoke
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged
       - name: Bounded packaged telemetry source and recovery smoke

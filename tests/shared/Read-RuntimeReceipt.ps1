@@ -42,7 +42,9 @@ foreach ($case in @($config.cases)) {
             $results.Add([ordered]@{passed = $valid; driverResultAvailable = $true; reason = $(if ($valid) { $null } else { 'LIFECYCLE_RESULT_INCOMPLETE_OR_INVALID' })})
             continue
         }
-        $output = @(Test-RuntimeReceipt -DriverResultPath $case.receipt -ExpectedCommit 'candidate' -ExpectedMode 'packaged' `
+        # A case may name its expected mode (ET-018 PR-1 `installed`); every earlier case expects `packaged`.
+        $mode = if ($case.mode) { [string]$case.mode } else { 'packaged' }
+        $output = @(Test-RuntimeReceipt -DriverResultPath $case.receipt -ExpectedCommit 'candidate' -ExpectedMode $mode `
             -ExpectedScenario $case.scenario -JobExitCode $case.code)
         # Exactly one result object per case, as when each case ran in its own process.
         if ($output.Count -ne 1) { $results.Add([ordered]@{error = "Expected one result, got $($output.Count)."}) }

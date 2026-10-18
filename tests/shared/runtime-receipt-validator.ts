@@ -7,7 +7,8 @@ import {promisify} from 'node:util';
  * `numbers: 'int64'` validates a lifecycle (or, with scenario `recording` or `journal`, a recording or journal) receipt with
  * PowerShell 7's Int64 JSON integers.
  */
-export type RuntimeReceiptCase = {receipt: string; code: number; scenario?: string; numbers?: 'int64'};
+/** `mode` is the expected mode (default `packaged`); ET-018 PR-1 adds `installed`. */
+export type RuntimeReceiptCase = {receipt: string; code: number; scenario?: string; numbers?: 'int64'; mode?: string};
 export type RuntimeReceiptResult = {passed?: boolean; driverResultAvailable?: boolean; reason?: string | null; error?: string};
 
 // Measured budgets for one batch; docs/ci.md#powershell-validator-test-budgets records the evidence.

@@ -611,3 +611,31 @@ The card stays in Review. Its prerequisites ET-009 and ET-011 are not accepted, 
 - the card's readability.
 
 `GAME_HISTORY_RECORDING` stays `false`. ET-018 and later phases are not authorized by this update. No game, TruckersMP, display or performance claim follows.
+
+## ET-018 authorization — October 18, 2026
+
+Under the owner's standing delegation of October 15, 2026 (quoted in the ET-015a authorization above), the coordinator started ET-018 on October 18, 2026: Windows packaging, safe upgrades and explicit uninstall. It implements the owner's [uninstall rule of October 16, 2026](#uninstall-removes-local-data--october-16-2026) and the uninstall contract in [game plugin setup](docs/plugin-setup.md).
+
+The coordinator adopted the architect's decisions U1–U17 ([concept.md](concept.md#et-018-authorization--october-18-2026)). On October 18, 2026 the owner decided these questions explicitly:
+- **Signing (O1).** Builds are an unsigned internal alpha for now; nothing is bought. After the first alpha release the project applies to the SignPath Foundation.
+- **Distribution (O2).** A GitHub Releases pre-release on the public repository. Every publication needs the owner's explicit authorization.
+- **Deferred cleanup (O3).** When a Windows-initiated uninstall cannot remove the plugin, for example because a game is running, a retained Windows PowerShell 5.1 script registered under HKCU RunOnce finishes the cleanup at the next sign-in. It checks hashes and stops after 10 attempts.
+- **Electron's Roaming folder (O7).** `%APPDATA%\ETS2Telemetry Desktop` is removed, best effort, in production installs only.
+
+The owner did not review the other decisions individually.
+
+For ET-018 only, this supersedes the earlier statements that ET-018 is not authorized; earlier dated text is unchanged.
+
+**Safety.** The uninstall engine derives its folders from its own install location, never from `%LOCALAPPDATA%` alone. It refuses when they differ (U3), so a test install can only ever wipe its own test root. The ET-001 host installer harness, which used the real roots, is retired. Installer lifecycle tests run only in a marked test root on GitHub-hosted runners, and never on the owner's machine without an explicit owner request.
+
+**Delivery.** Six PRs:
+1. a test-root installer lifecycle that proves upgrade and repair keep history and settings;
+2. the uninstall engine;
+3. our own Squirrel event handling, with cleanup on Windows-initiated uninstall;
+4. in-app uninstall with data-loss warnings;
+5. the deferred cleanup at the next sign-in;
+6. the release artifact identity and signing status.
+
+**Not authorized by this paragraph:** no release is published, no certificate or paid service is bought, and no auto-update is added. `GAME_HISTORY_RECORDING` stays `false`.
+
+**Pending manual checks.** A clean Windows machine, real Steam libraries and game folders, uninstall while a real game or TruckersMP runs, Smart App Control and antivirus behaviour, and the owner's first real history upgrade remain pending. No game, TruckersMP, display or performance claim follows.
