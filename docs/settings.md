@@ -4,7 +4,7 @@ ET-011b stores the user's settings in a small JSON file and uses them to choose 
 
 ## Location
 
-The file is `%LOCALAPPDATA%\ETS2Telemetry\settings\settings.json`. Main resolves `%LOCALAPPDATA%` at runtime through `dataPaths(LOCALAPPDATA).settings` (`apps/desktop/src/paths.ts`), separately from the application binaries and from `telemetry.sqlite`, so an application update does not replace it. When `LOCALAPPDATA` is missing or not an absolute path, there is no settings location: defaults apply and nothing can be saved (`unavailable`). Preserving the file across a real installed update and an optional uninstall removal belong to ET-018.
+The file is `%LOCALAPPDATA%\ETS2Telemetry\settings\settings.json`. Main resolves `%LOCALAPPDATA%` at runtime through `dataPaths(LOCALAPPDATA).settings` (`apps/desktop/src/paths.ts`), separately from the application binaries and from `telemetry.sqlite`, so an application update does not replace it. When `LOCALAPPDATA` is missing or not an absolute path, there is no settings location: defaults apply and nothing can be saved (`unavailable`). Preserving the file across a real installed update and an optional uninstall removal belong to ET-018. Since ET-018 PR-1 the installer lifecycle proves that install, repair and update keep the file byte-identical. An uninstall deletes it with the rest of the data folder, from Windows Settings or from the application; the [in-app uninstall](uninstall.md#in-app-uninstall) and the Journal tab's export note say so ([user guide](user-guide.md#uninstalling)).
 
 ## Format v3 (ET-012b)
 

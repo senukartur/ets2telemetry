@@ -138,7 +138,7 @@ ET-016 PR-4 adds the Journal tab to the main window. The window has two shadcn T
 
 ET-016 PR-5 exports one trip as `ets2telemetry.trip-export` format version 1; the format, the save flow and its codes are in [the trip export format](journal-export.md). In short:
 
-- The trip detail has an **Export JSON** button, with the note that an uninstall removes the local trip history and that the export is a copy for the user's records which cannot be imported (J18).
+- The trip detail has an **Export JSON** button, with the note that an uninstall removes the local trip history and settings and that the export is a copy for the user's records which cannot be imported (J18; settings added by ET-018 PR-4). The [in-app uninstall](uninstall.md#in-app-uninstall) on the Live tab repeats the full warning.
 - `exportJournalTrip(tripUuid)` validates the UUID in the preload and again in main, accepts only the trusted dashboard main frame and runs one export at a time (`EXPORT_IN_PROGRESS` otherwise). Main owns the Save dialog and the file; the renderer receives the outcome (`saved` with row counts, or `cancelled`) or a fixed code, never a path.
 - Main reads the detail, then the open database's UUID with the main-only `database` query, which the service answers from its open summary without a storage command. The pages are read through the same broker at the export page sizes: events and intervals 500, samples 3,600.
 - The detail's export bounds (J17) fix what the file contains; an open trip's export is marked `snapshot`.

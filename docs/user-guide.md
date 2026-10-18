@@ -1,0 +1,89 @@
+# User guide: installing, updating and uninstalling
+
+This guide is for people who run ETS2Telemetry on Windows. It covers the installer, the Windows warnings an unsigned alpha build gets, where the application keeps your data, updates, and the two ways to uninstall. The technical background is in [uninstall](uninstall.md), [game plugin setup](plugin-setup.md) and [installer testing](installer-testing.md).
+
+ETS2Telemetry is an internal alpha. No release has been published yet; when one is, it will be a pre-release on the project's GitHub Releases page. Nothing in this guide claims that a game, TruckersMP, an antivirus product or Smart App Control was tested with it: those checks are still pending.
+
+## Installing
+
+Run `ETS2Telemetry Desktop-<version> Setup.exe`. It installs for your Windows user only, without administrator rights, and starts the application when it finishes. It creates a Desktop and a Start menu shortcut named **ETS2Telemetry Desktop**.
+
+| What | Where |
+| --- | --- |
+| The program | `%LOCALAPPDATA%\ETS2TelemetryDesktop` |
+| Your data (trip history, settings, logs) | `%LOCALAPPDATA%\ETS2Telemetry` |
+| Electron's own browser data | `%APPDATA%\ETS2Telemetry Desktop` |
+| The game plugin | `<game folder>\bin\win_x64\plugins\ets2telemetry-plugin.dll` |
+
+When the application starts, it finds Euro Truck Simulator 2 and American Truck Simulator through Steam and copies its game plugin into each game's `plugins` folder while the game is closed. The **Game plugin** card on the Live tab shows the state of each game, lets you choose a game folder by hand and lets you exclude a game ([game plugin setup](plugin-setup.md)).
+
+### Windows SmartScreen
+
+This alpha is not code-signed. When you run Setup.exe, Microsoft Defender SmartScreen may show **Windows protected your PC**. To continue, select **More info**, check that the file is the one you downloaded from the project's GitHub Releases page, then select **Run anyway**. Only do this for a file from that page. A signed build is planned: after the first alpha release the project applies to the SignPath Foundation for free code signing.
+
+### Smart App Control
+
+On Windows 11, Smart App Control may block unsigned programs, and it offers no exception for a single program. If it blocks this alpha, the alpha cannot run on that computer while Smart App Control is on. Turning it off is your decision and affects every program; this project does not ask you to change Windows security settings. How Smart App Control treats this build has not been tested yet.
+
+## Your data
+
+Everything ETS2Telemetry records or saves lives in `%LOCALAPPDATA%\ETS2Telemetry`:
+
+| Folder | Content |
+| --- | --- |
+| `data` | The trip history database, `telemetry.sqlite` |
+| `backups` | Backups made before a history database upgrade |
+| `settings` | Your settings, `settings.json` |
+| `logs` | Diagnostic logs |
+| `synthetic` | Synthetic or replay recordings, never your game history |
+| `captures` | Evidence captures, only if you turned capturing on |
+| `plugins` | The record of where the game plugin was installed |
+| `transport` | Connection settings shared with the game plugin |
+| `uninstall` | Only during an unfinished uninstall |
+
+Your trip history is stored only on this computer. It is not synchronized anywhere yet: synchronization with a server is a later phase of the project. To keep a copy of a trip, open it on the **Journal** tab and select **Export JSON**; save the file anywhere outside `%LOCALAPPDATA%\ETS2Telemetry`. An export is a copy for your own records. It cannot be imported back into ETS2Telemetry.
+
+## Updating
+
+There is no automatic update. To update, close the games, then run the newer version's Setup.exe. It replaces the program and keeps your data: the trip history, its backups and your settings stay where they are. When a newer version needs a newer history database, it first writes a verified backup of the old one into `backups` ([storage](storage.md)). The application then updates the game plugin in every game folder while the game is closed.
+
+## Uninstalling
+
+Uninstalling deletes your local data. That is the rule for this application, and it cannot be undone:
+
+- your trip history, which is not synchronized anywhere, is deleted for good, with its backups;
+- your settings, logs, captures and synthetic recordings are deleted as well;
+- trip exports you saved elsewhere stay where they are;
+- the ETS2Telemetry game plugin is removed from your game folders while the games are closed. Other plugins and game files are never touched, and a file with the plugin's name that ETS2Telemetry did not install is left as it is.
+
+Export any trip you want to keep before you uninstall.
+
+### From the application
+
+On the **Live** tab, the last card is **Uninstall ETS2Telemetry**. Select **Uninstall ETS2Telemetry…**, read the warning and select **Uninstall** (the default is **Cancel**).
+
+- If a game or TruckersMP is running, or a plugin file cannot be removed, nothing is changed and the card says which game folder and why. Close the game and try again.
+- Otherwise ETS2Telemetry removes its plugin, closes, deletes its data, shows what it removed and what remains, and then starts the Windows uninstall, which removes the program, the shortcuts and its entry in Windows Settings.
+- A portable copy or a development build says that uninstalling is available only in an installed copy. Delete its folder instead.
+
+### From Windows Settings
+
+Open **Settings**, **Apps**, **Installed apps**, select **ETS2Telemetry Desktop** and **Uninstall** (or use Control Panel). A running ETS2Telemetry closes first. Windows shows no window from ETS2Telemetry during this uninstall, so the result is written to a small file, `%TEMP%\ETS2Telemetry-uninstall-<date and time>.json`.
+
+If a game or TruckersMP is running at that moment, Windows still removes the program, but the plugin cannot be removed from that game: ETS2Telemetry keeps `%LOCALAPPDATA%\ETS2Telemetry\plugins` and `%LOCALAPPDATA%\ETS2Telemetry\uninstall`, with a `README.txt` that lists the game folders and the plugin's checksums. Everything else in the data folder is deleted. A later version will finish this cleanup at your next sign-in; until then, follow the README, or reinstall ETS2Telemetry, which cancels the pending cleanup, and uninstall it from the application with the games closed.
+
+### If something is left behind
+
+- **The result says that an unexpected error stopped the cleanup** (`ENGINE_FAILED`). From the application: nothing more was removed; uninstall again. From Windows Settings: Windows already removed the program, so follow `%LOCALAPPDATA%\ETS2Telemetry\uninstall\README.txt` if it exists, or reinstall ETS2Telemetry and uninstall it from the application.
+- **The cleanup could not start** (`HOOK_FAILED`, only from Windows Settings). Nothing of your data or plugin was removed. Reinstall ETS2Telemetry and uninstall it from the application, or remove the files by hand as described below.
+- **A recorded game folder is no longer a plain game folder.** The result names the game. Look in that game's `bin\win_x64\plugins` folder for `ets2telemetry-plugin.dll`.
+- **Unknown files in the data folder.** ETS2Telemetry deletes only the folders listed under [Your data](#your-data). Anything else you put in `%LOCALAPPDATA%\ETS2Telemetry` is kept, and the folder stays until you delete it.
+
+### Removing everything by hand
+
+Use these steps when the uninstall cannot finish, for example when `%LOCALAPPDATA%` is redirected through a link, which ETS2Telemetry refuses to delete from.
+
+1. Close ETS2Telemetry (**Exit ETS2Telemetry** in the notification area icon's menu), the games and TruckersMP.
+2. In each game folder, open `bin\win_x64\plugins`. Delete `ets2telemetry-plugin.dll` only if it is ETS2Telemetry's: in PowerShell, `Get-FileHash -Algorithm SHA256 -LiteralPath '<path to the file>'` must print one of the checksums that `README.txt` lists, or the checksum in `resources\telemetry-plugin\plugin-manifest.json` of the installed program. Leave every other file.
+3. Delete `%LOCALAPPDATA%\ETS2Telemetry`. This deletes your trip history for good.
+4. If the program is still listed in Windows Settings, uninstall it there. Otherwise delete `%LOCALAPPDATA%\ETS2TelemetryDesktop`, `%APPDATA%\ETS2Telemetry Desktop` and any remaining **ETS2Telemetry Desktop** shortcuts.
