@@ -19,14 +19,19 @@ export function uninstallTargetText(targetId: string): string {
   return fill(source === 'manual' ? UNINSTALL_TARGET_TEXT.manual : UNINSTALL_TARGET_TEXT.other, {game: gameText(game)});
 }
 
-/** The card's text for one result: a headline and, for a blocked uninstall, one line per blocked folder. */
+const blockedFolderLines = (blocked: readonly {targetId: string; reason: keyof typeof UNINSTALL_REASON_TEXT}[]) =>
+  blocked.map(entry => fill(UNINSTALL_STRINGS.blockedFolder, {target: uninstallTargetText(entry.targetId), reason: UNINSTALL_REASON_TEXT[entry.reason]}));
+
+/** The card's text for one result: a headline and, for a blocked or interrupted uninstall, one line per blocked folder. */
 export function appUninstallResultText(result: AppUninstallResult): {line: string; folders: string[]} {
   switch (result.outcome) {
     case 'cancelled': return {line: UNINSTALL_STRINGS.cancelled, folders: []};
     case 'not-installed': return {line: UNINSTALL_STRINGS.notInstalled, folders: []};
     case 'started': return {line: UNINSTALL_STRINGS.started, folders: []};
     case 'blocked': return {line: fill(UNINSTALL_STRINGS.blocked, {reason: UNINSTALL_REASON_TEXT[result.code]}),
-      folders: result.blocked.map(entry => fill(UNINSTALL_STRINGS.blockedFolder, {target: uninstallTargetText(entry.targetId), reason: UNINSTALL_REASON_TEXT[entry.reason]}))};
+      folders: blockedFolderLines(result.blocked)};
+    case 'interrupted': return {line: fill(UNINSTALL_STRINGS.interrupted, {reason: UNINSTALL_REASON_TEXT[result.code], count: result.removed}),
+      folders: blockedFolderLines(result.blocked)};
     case 'failed': return {line: fill(UNINSTALL_STRINGS.failed, {reason: UNINSTALL_FAILURE_TEXT[result.code]}), folders: []};
   }
 }
@@ -40,13 +45,29 @@ export interface FinishedUninstallSummary {
   readonly removed: number;
   readonly unrecognized: number;
 }
-/** The result dialog after the data wipe: what was removed and what remains, with every note. */
+/**
+ * The error dialog when Update.exe could not be started after the wipe. It claims that the data is gone only when the
+ * wipe removed every allowlisted entry and the data root; otherwise the intent stays, and an uninstall from Windows
+ * Settings runs the uninstall hook, which reads that intent and wipes the rest.
+ */
+export function handoverFailedText(summary: FinishedUninstallSummary | undefined): string {
+  return summary && !summary.data.failed.length && summary.data.rootRemoved ? UNINSTALL_STRINGS.spawnFailed : UNINSTALL_STRINGS.spawnFailedPartial;
+}
+
+/**
+ * The result dialog after the data wipe: what was removed and what remains, with every note. An entry the wipe did not
+ * reach in its time (BUDGET_EXPIRED) stays with the intent, and the uninstall hook of the handover finishes it, so it is
+ * not left to the user; only a real failure asks for deletion by hand.
+ */
 export function finishedUninstallText(summary: FinishedUninstallSummary): {title: string; message: string; detail: string} {
-  const complete = summary.data.failed.length === 0;
+  const entries = (failed: FinishedUninstallSummary['data']['failed']) => [...new Set(failed.map(entry => UNINSTALL_DATA_ENTRY_TEXT[entry.entry]))].join(', ');
+  const expired = summary.data.failed.filter(entry => entry.code === 'BUDGET_EXPIRED'), failed = summary.data.failed.filter(entry => entry.code !== 'BUDGET_EXPIRED');
   const lines = [fill(UNINSTALL_STRINGS.finishedRemoved, {count: summary.removed})];
   if (summary.unrecognized) lines.push(fill(UNINSTALL_STRINGS.finishedUnrecognized, {count: summary.unrecognized}));
   for (const note of summary.notes) lines.push(uninstallNoteText(note.game, note.note));
   if (summary.data.kept) lines.push(fill(UNINSTALL_STRINGS.finishedKept, {count: summary.data.kept}));
-  if (!complete) lines.push(fill(UNINSTALL_STRINGS.finishedFailed, {entries: [...new Set(summary.data.failed.map(entry => UNINSTALL_DATA_ENTRY_TEXT[entry.entry]))].join(', ')}));
-  return {title: UNINSTALL_STRINGS.finishedTitle, message: complete ? UNINSTALL_STRINGS.finishedMessage : UNINSTALL_STRINGS.finishedPartial, detail: lines.join('\n')};
+  if (failed.length) lines.push(fill(UNINSTALL_STRINGS.finishedFailed, {entries: entries(failed)}));
+  if (expired.length) lines.push(fill(UNINSTALL_STRINGS.finishedExpired, {entries: entries(expired)}));
+  const message = failed.length ? UNINSTALL_STRINGS.finishedPartial : expired.length ? UNINSTALL_STRINGS.finishedPending : UNINSTALL_STRINGS.finishedMessage;
+  return {title: UNINSTALL_STRINGS.finishedTitle, message, detail: lines.join('\n')};
 }

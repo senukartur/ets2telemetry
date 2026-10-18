@@ -5,7 +5,10 @@ param(
     [string]$TestRunningImages,
     # Test root only: an unexpected error at the step 'start' (before the attempt is counted and registered) or
     # 'registered' (right after), to prove what an error leaves behind. A production run refuses it.
-    [ValidateSet('start', 'registered')][string]$TestFailAt
+    [ValidateSet('start', 'registered')][string]$TestFailAt,
+    # Test root only: an allowlisted entry that appears after the registry step, as a writer would leave it, so the shared
+    # case table can check that the last step removes it. A production run refuses it.
+    [ValidateSet('data', 'backups', 'settings', 'logs', 'synthetic', 'captures', 'transport')][string]$TestLateEntry
 )
 # The deferred-cleanup executor of an ETS2Telemetry uninstall (ET-018 PR-5; plan U7, owner decision O3; docs/uninstall.md,
 # "Deferred cleanup at the next sign-in"). When the uninstall could not finish (a game or TruckersMP ran, a file was
@@ -553,6 +556,14 @@ function Clear-Everything([string]$DataRoot, [bool]$PluginsClean) {
     if (!$PluginsClean -or $first.failed.Count) { return $first }
     $registry = Clear-DataRoot $DataRoot @($Allowlist | Where-Object { $_ -ne 'plugins' }) $false
     if ($registry.failed.Count) { return @{removed = $first.removed + $registry.removed; kept = $first.kept; failed = $registry.failed; rootRemoved = $false} }
+    if ($null -ne $script:LateEntry) {
+        # Test root only (-TestLateEntry): an allowlisted entry a writer left behind after the registry step.
+        $late = Join-Path $DataRoot $script:LateEntry
+        [void][IO.Directory]::CreateDirectory($late)
+        [IO.File]::WriteAllText((Join-Path $late 'late.jsonl'), "written after the registry step`n", $Utf8)
+    }
+    # The last step removes every allowlisted entry still there (keep nothing), then the empty root, as wipeEverything in
+    # engine.ts does after clean earlier steps.
     $intent = Clear-DataRoot $DataRoot @() $true
     return @{removed = $first.removed + $registry.removed + $intent.removed; kept = $first.kept; failed = $intent.failed; rootRemoved = $intent.rootRemoved}
 }
@@ -660,6 +671,7 @@ function Write-Receipt {
 $script:UseTestImages = $false
 $script:TestImages = @()
 $script:FailAt = $null
+$script:LateEntry = $null
 
 function Invoke-TestFault([string]$Step) {
     # Test root only (-TestFailAt): an unexpected error at this step, to prove what an error leaves behind.
@@ -738,7 +750,7 @@ function Invoke-Cleanup($Roots) {
 }
 
 $roots = $null
-$testParameter = $PSBoundParameters.ContainsKey('TestRunningImages') -or $PSBoundParameters.ContainsKey('TestFailAt')
+$testParameter = $PSBoundParameters.ContainsKey('TestRunningImages') -or $PSBoundParameters.ContainsKey('TestFailAt') -or $PSBoundParameters.ContainsKey('TestLateEntry')
 try {
     $roots = Resolve-Roots
     if ($null -ne $roots.code) { $Result.code = $roots.code }
@@ -750,6 +762,7 @@ try {
             $script:TestImages = @(if ($TestRunningImages -cne 'none') { $TestRunningImages.Split(',') | ForEach-Object { $_.Trim().ToLowerInvariant() } })
         }
         if ($PSBoundParameters.ContainsKey('TestFailAt')) { $script:FailAt = $TestFailAt }
+        if ($PSBoundParameters.ContainsKey('TestLateEntry')) { $script:LateEntry = $TestLateEntry }
         Invoke-Cleanup $roots
     }
 } catch {

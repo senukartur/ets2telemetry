@@ -1,3 +1,11 @@
+const {version} = require('./package.json');
+
+// Squirrel maker options (ET-018 PR-6, docs/release.md). `authors` and `description` become the NuGet metadata that
+// Squirrel shows as the publisher text; Setup carries the version in its name. scripts/release-identity.mjs,
+// inspect-package --installer and the installer lifecycle find Setup by this exact name.
+const squirrel = {name: 'ETS2TelemetryDesktop', authors: 'ETS2Telemetry contributors',
+  description: 'Local telemetry utility for Euro Truck Simulator 2 and American Truck Simulator', setupExe: `ETS2Telemetry-Setup-${version}.exe`};
+
 module.exports = {
   // better-sqlite3 13.0.3 ships Node-API prebuilds; preserve its bundled binary.
   // Other native dependencies remain eligible for Forge's Electron rebuild.
@@ -14,6 +22,6 @@ module.exports = {
         && !normalized.startsWith('/apps/desktop/dist/') && !normalized.startsWith('/node_modules/');
     }
   },
-  makers: [{name:'@electron-forge/maker-squirrel', config:{name:'ETS2TelemetryDesktop'}}],
+  makers: [{name:'@electron-forge/maker-squirrel', config:squirrel}],
   plugins: [{name:'@electron-forge/plugin-auto-unpack-natives', config:{}}]
 };

@@ -46,10 +46,10 @@ import {DiagnosticBundleExporter} from './diagnostic-bundle-writer';
 import {cancelDeferralOnStart, EXIT_CODES, parseSquirrelArgs, prepareSquirrelProcess, productionSquirrelPorts, runSquirrelEvent} from './squirrel-events';
 import {checkRunningGames} from './plugin-setup/game-processes';
 import {pluginBundleDirectory, readPluginBundle} from './plugin-setup/plugin-bundle';
-import {AppUninstall, type AppUninstallPorts} from './uninstall/app-uninstall';
+import {APP_UNINSTALL_FAILSAFE_MS, APP_UNINSTALL_WIPE_BUDGET_MS, AppUninstall, uninstallWipeBudget, type AppUninstallPorts} from './uninstall/app-uninstall';
 import {resolveUninstallRoots} from './uninstall/roots';
 import {UNINSTALL_CHANNEL} from './uninstall-contract';
-import {finishedUninstallText} from './uninstall-text';
+import {finishedUninstallText, handoverFailedText} from './uninstall-text';
 import {UNINSTALL_STRINGS} from './strings';
 
 // ET-018 (U2): a Squirrel event runs first and alone, before the profile override, logs, settings, plugin setup and the
@@ -162,6 +162,8 @@ function runApplication(profileError: unknown): void {
   // The smoke-only dialog seam (`ets2telemetry:diagnostic-uninstall-dialogs` below) answers both dialogs in isolated smokes.
   let uninstallDialogs: {confirm: boolean} | undefined;
   let uninstallFailsafe: ReturnType<typeof setTimeout> | undefined;
+  /** When the failsafe fires, on performance.now(); the wipe ends a margin before it. */
+  let uninstallFailsafeAt: number | undefined;
   const uninstallFs = nodeFsPromises as unknown as AppUninstallPorts['fs'];
   const appUninstall = new AppUninstall({
     resolveRoots: () => resolveUninstallRoots({executable: process.execPath, env: process.env, fs: uninstallFs}),
@@ -191,10 +193,13 @@ function runApplication(profileError: unknown): void {
     })
   });
   /** After the exit: the data wipe, the result dialog, then Windows' uninstall. No log row is written once the wipe ran
-   * while the log folder lies in the data root, so nothing recreates it. The 12 s failsafe is disarmed only here. */
+   * while the log folder lies in the data root, so nothing recreates it. The wipe gets only what is left before the 12 s
+   * failsafe, less the handover margin, so a slow exit shortens the wipe instead of letting the failsafe cut it; the
+   * failsafe is disarmed only here. What a short wipe leaves, Windows' uninstall finishes from the intent. */
   async function completeAppUninstall(): Promise<void> {
     const prepared = appUninstall.prepared!;
-    const finished = await appUninstall.finishAfterExit();
+    const finished = await appUninstall.finishAfterExit(uninstallFailsafeAt === undefined ? APP_UNINSTALL_WIPE_BUDGET_MS
+      : uninstallWipeBudget(uninstallFailsafeAt, performance.now()));
     clearTimeout(uninstallFailsafe); uninstallFailsafe = undefined;
     const logOutside = !isInsideFolder(logLocation.directory, prepared.dataRoot);
     if (finished && logOutside) log('APP_UNINSTALL_FINISHED', undefined, {removed: finished.removed, kept: finished.data.kept, failed: finished.data.failed.length,
@@ -202,23 +207,24 @@ function runApplication(profileError: unknown): void {
     if (finished) {
       const text = finishedUninstallText(finished);
       if (uninstallDialogs) {if (logOutside) timeline?.('DIAGNOSTIC_UNINSTALL_DIALOG', {dialog: 'result', rootRemoved: finished.data.rootRemoved, failed: finished.data.failed.length});}
-      else await dialog.showMessageBox({type: finished.data.failed.length ? 'warning' : 'info', title: text.title, message: text.message, detail: text.detail, buttons: ['OK'], noLink: true}).catch(() => undefined);
+      else await dialog.showMessageBox({type: finished.data.failed.some(entry => entry.code !== 'BUDGET_EXPIRED') ? 'warning' : 'info', title: text.title, message: text.message, detail: text.detail, buttons: ['OK'], noLink: true}).catch(() => undefined);
     }
     const started = await appUninstall.handOver();
     if (!started) {
       if (logOutside) log('APP_UNINSTALL_HANDOFF_FAILED');
-      if (!uninstallDialogs) await dialog.showMessageBox({type: 'error', title: UNINSTALL_STRINGS.spawnFailedTitle, message: UNINSTALL_STRINGS.spawnFailed, buttons: ['OK'], noLink: true}).catch(() => undefined);
+      if (!uninstallDialogs) await dialog.showMessageBox({type: 'error', title: UNINSTALL_STRINGS.spawnFailedTitle, message: handoverFailedText(finished), buttons: ['OK'], noLink: true}).catch(() => undefined);
     }
     app.exit(0);
   }
   /** The in-app uninstall's exit: the explicit exit with reason `uninstall`, under a 12 s failsafe until the result dialog. */
   function beginUninstallExit(): void {
+    uninstallFailsafeAt = performance.now() + APP_UNINSTALL_FAILSAFE_MS;
     uninstallFailsafe = setTimeout(() => {
       // A row in a log folder inside the data root could recreate it during the wipe; only a diagnostic folder records it.
       const prepared = appUninstall.prepared;
       if (prepared && !isInsideFolder(logLocation.directory, prepared.dataRoot)) log('APP_UNINSTALL_FAILSAFE');
       app.exit(1);
-    }, 12_000);
+    }, APP_UNINSTALL_FAILSAFE_MS);
     requestExit('uninstall');
   }
   const upstreamBudget = new RecoveryBudget(), overlayBudget = new RecoveryBudget();

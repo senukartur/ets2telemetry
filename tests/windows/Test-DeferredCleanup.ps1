@@ -165,7 +165,10 @@ try {
         $scene = New-Scene ('c' + $index) $case 1
         Set-Value $scene.command
         $running = if (@($case.running).Count) { @($case.running) -join ',' } else { 'none' }
-        $run = Invoke-Executor $scene $running $true
+        # `lateEntry`: the script creates that allowlisted entry after the registry step (test root only), as the TypeScript
+        # test's file system does.
+        $late = if ($case.PSObject.Properties.Name -contains 'data' -and $case.data.PSObject.Properties.Name -contains 'lateEntry') { ' -TestLateEntry ' + $case.data.lateEntry } else { '' }
+        $run = Invoke-Executor $scene $running $true $late
         $expect = $case.expect
         $observed = [ordered]@{outcome = $run.receipt.outcome; code = $run.receipt.code; dll = (Get-State $scene.dll); dataRoot = (Get-DataRootEntries $scene.dataRoot)}
         $wanted = [ordered]@{outcome = $expect.outcome; code = $expect.code; dll = $expect.dll; dataRoot = $expect.dataRoot}

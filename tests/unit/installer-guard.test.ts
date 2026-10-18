@@ -5,7 +5,7 @@ import {fileURLToPath} from 'node:url';
 import {promisify} from 'node:util';
 import {describe, expect, it} from 'vitest';
 import {checkedPaths, checkInstalled, checkInstallTest, checkLaunchEnvironment, checkRunPlan, checkRunSignal, FACTS_VARIABLE, factsEvidence, installedEnvironment,
-  checkDecoyUnchanged, checkUninstallResidue, electronRuntimeNames, InstallerGuardError, RESIDUE_MAX_ENTRIES, isGuardedProcess, isHostedRunner, minimalPath, normalizePath, ownsRegistration, parseUninstallString, resolveRealLocation, runLayout,
+  checkDataRootUnchanged, checkDecoyUnchanged, checkUninstallResidue, DATA_ROOT_REQUIRED, electronRuntimeNames, InstallerGuardError, RESIDUE_MAX_ENTRIES, isGuardedProcess, isHostedRunner, minimalPath, normalizePath, ownsRegistration, parseUninstallString, resolveRealLocation, runLayout,
   steamLibraryPaths, uninstallEnvironment, type RunPlanFacts} from '../../scripts/installer/installer-guard.mjs';
 import {temporaryResources} from '../shared/resources';
 
@@ -376,6 +376,47 @@ describe('fact helpers', () => {
 // ET-018 PR-4: every driver command of the harness runs as the root of its own BoundedProcess Job, which refuses a timeout
 // above its cap (ArgumentOutOfRangeException) before anything starts. A step written with a larger timeout would fail the
 // hosted lifecycle at that step, so the harness's literal timeouts are checked here against the cap in BoundedProcess.cs.
+// ET-018 PR-4: the data root before (the application running) and after (closed orderly) a blocked in-app uninstall.
+// Hosted run 39125478842 failed this comparison only because the running application's WAL was gone after the close.
+describe('data root of a blocked in-app uninstall', () => {
+  const file = (sha256: string, size = 10) => ({size, sha256});
+  const BEFORE = {'data\\': {directory: true}, 'data\\telemetry.sqlite': file('a'.repeat(64), 4096), 'data\\telemetry.sqlite-wal': file('b'.repeat(64), 32_768),
+    'data\\telemetry.sqlite-shm': file('c'.repeat(64), 32_768), 'plugins\\': {directory: true}, 'plugins\\setup.json': file('d'.repeat(64)),
+    'settings\\': {directory: true}, 'settings\\settings.json': file('e'.repeat(64))};
+  const without = (tree: Record<string, unknown>, ...names: string[]) => Object.fromEntries(Object.entries(tree).filter(([name]) => !names.includes(name))) as typeof BEFORE;
+  /** The refusal's code and the entry it names, or ACCEPTED. */
+  const outcome = (work: () => unknown) => {
+    try {work(); return 'ACCEPTED';} catch (error) {
+      expect(error).toBeInstanceOf(InstallerGuardError);
+      return [(error as InstallerGuardError).code, /\((.*)\)$/.exec((error as Error).message)?.[1] ?? ''].join(' ').trim();
+    }
+  };
+  it('leaves out the history database\'s sidecars and pages: a WAL that the close checkpointed away passes', () => {
+    const after = {...without(BEFORE, 'data\\telemetry.sqlite-wal', 'data\\telemetry.sqlite-shm'), 'data\\telemetry.sqlite': file('f'.repeat(64), 8192)};
+    expect(checkDataRootUnchanged(BEFORE, after)).toBe(2);
+    expect(checkDataRootUnchanged(after, BEFORE)).toBe(2);
+    expect(checkDataRootUnchanged(BEFORE, {...BEFORE, 'data\\telemetry.sqlite-journal': file('0'.repeat(64))})).toBe(5);
+  });
+  it('requires the history folder and database and the plugin registry on both sides', () => {
+    expect(DATA_ROOT_REQUIRED).toEqual(['data\\', 'data\\telemetry.sqlite', 'plugins\\', 'plugins\\setup.json']);
+    expect(outcome(() => checkDataRootUnchanged(BEFORE, without(BEFORE, 'data\\telemetry.sqlite')))).toBe('DATA_ROOT_REQUIRED_MISSING data\\telemetry.sqlite');
+    expect(outcome(() => checkDataRootUnchanged(without(BEFORE, 'plugins\\setup.json'), without(BEFORE, 'plugins\\setup.json'))))
+      .toBe('DATA_ROOT_REQUIRED_MISSING plugins\\setup.json');
+    expect(outcome(() => checkDataRootUnchanged({}, {}))).toBe('DATA_ROOT_REQUIRED_MISSING data\\');
+  });
+  it('fails any other change: the registry\'s bytes, another entry changed, removed or added, a sidecar outside data', () => {
+    expect(outcome(() => checkDataRootUnchanged(BEFORE, {...BEFORE, 'plugins\\setup.json': file('9'.repeat(64))}))).toBe('DATA_ROOT_ENTRY_CHANGED plugins\\setup.json');
+    expect(outcome(() => checkDataRootUnchanged(BEFORE, {...BEFORE, 'settings\\settings.json': file('e'.repeat(64), 11)}))).toBe('DATA_ROOT_ENTRY_CHANGED settings\\settings.json');
+    expect(outcome(() => checkDataRootUnchanged(BEFORE, without(BEFORE, 'settings\\settings.json')))).toBe('DATA_ROOT_ENTRY_REMOVED settings\\settings.json');
+    expect(outcome(() => checkDataRootUnchanged(BEFORE, {...BEFORE, 'uninstall\\': {directory: true}}))).toBe('DATA_ROOT_ENTRY_ADDED uninstall\\');
+    expect(outcome(() => checkDataRootUnchanged(BEFORE, {...BEFORE, 'synthetic\\x.sqlite-wal': file('1'.repeat(64))}))).toBe('DATA_ROOT_ENTRY_ADDED synthetic\\x.sqlite-wal');
+    expect(outcome(() => checkDataRootUnchanged(BEFORE, {...BEFORE, 'data\\other.txt': file('2'.repeat(64))}))).toBe('DATA_ROOT_ENTRY_ADDED data\\other.txt');
+    // Only a database and its sidecars are exempt from the hash; any other file in data\ keeps its bytes.
+    const withNotes = {...BEFORE, 'data\\notes.txt': file('3'.repeat(64))};
+    expect(outcome(() => checkDataRootUnchanged(withNotes, {...withNotes, 'data\\notes.txt': file('4'.repeat(64))}))).toBe('DATA_ROOT_ENTRY_CHANGED data\\notes.txt');
+  });
+});
+
 describe('harness Job bounds', () => {
   const checkout = fileURLToPath(new URL('../..', import.meta.url));
   const read = (relative: string) => readFile(path.join(checkout, relative), 'utf8');
@@ -393,6 +434,12 @@ describe('harness Job bounds', () => {
     const timeouts = calls.map(line => ({line: line.trim(), timeout: Number(/\s(\d+)\s*$/.exec(line)?.[1] ?? NaN)}));
     expect(timeouts.filter(call => !Number.isInteger(call.timeout) || call.timeout < 100 || call.timeout > cap)).toEqual([]);
     expect(timeouts.map(call => call.line)).toContain("Invoke-Driver 'app-uninstall' @('complete-app', $executableA, 'complete') 60000");
+  });
+  // Review of PR-4: a missing separator put one step's diagnostics beside R\diagnostics, outside the uploaded evidence.
+  it('puts every diagnostic folder of the harness inside R\\diagnostics', async () => {
+    const folders = [...(await read('scripts/installer/Invoke-InstallerLifecycle.ps1')).matchAll(/Join-Path \$runRoot '(diagnostics[^']*)'/g)].map(match => match[1]);
+    expect(folders.length).toBeGreaterThan(5);
+    expect(folders.filter(folder => folder !== 'diagnostics' && !/^diagnostics\\[a-z0-9.-]+$/.test(folder))).toEqual([]);
   });
   it('keeps the in-app uninstall run\'s own budget below the cap', async () => {
     const cap = await jobCap();

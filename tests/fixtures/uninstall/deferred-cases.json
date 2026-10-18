@@ -39,6 +39,8 @@
     {"id": "read-only-data-entry-kept", "folder": {"game": "ets2", "layout": "game", "dll": "owned"}, "running": [], "data": {"readOnlyEntry": true},
       "expect": {"outcome": "deferred", "code": "DATA_ENTRY_BLOCKED", "dll": "absent", "dataRoot": ["logs", "plugins", "uninstall"]}},
     {"id": "junction-in-data-not-followed", "folder": {"game": "ets2", "layout": "game", "dll": "owned"}, "running": [], "data": {"logsJunction": true},
-      "expect": {"outcome": "complete", "code": null, "dll": "absent", "sentinel": "present", "dataRoot": null}}
+      "expect": {"outcome": "complete", "code": null, "dll": "absent", "sentinel": "present", "dataRoot": null}},
+    {"id": "allowlisted-entry-at-the-last-step", "folder": {"game": "ets2", "layout": "game", "dll": "owned"}, "running": [], "data": {"lateEntry": "logs"},
+      "expect": {"outcome": "complete", "code": null, "dll": "absent", "dataRoot": null}}
   ]
 }

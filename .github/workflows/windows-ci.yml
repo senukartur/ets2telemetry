@@ -139,13 +139,34 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run inspect:package
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      # `--installer` also checks that the full NuGet package carries exactly the portable package's files (ET-018 PR-6).
       - name: Forge maker and static native package inspection
         if: github.event_name != 'pull_request'
         run: |
           npm run make
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          npm run inspect:package
+          npm run inspect:package -- --installer
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      # ET-018 PR-6 (docs/release.md): release-identity.json beside Setup records the commit, versions, artifact hashes and
+      # every PE image's Authenticode status. The installer artifact is internal identity only; it publishes nothing.
+      - name: Release artifact identity
+        if: github.event_name != 'pull_request'
+        run: |
+          node scripts/release-identity.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: github.event_name != 'pull_request'
+        with:
+          name: windows-installer-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            out/make/squirrel.windows/x64/ETS2Telemetry-Setup-*.exe
+            out/make/squirrel.windows/x64/*-full.nupkg
+            out/make/squirrel.windows/x64/RELEASES
+            out/make/squirrel.windows/x64/release-identity.json
+          retention-days: 14
+          if-no-files-found: error
+          # Setup and the NuGet package are already compressed.
+          compression-level: 0
       # ET-018 PR-1 (docs/installer-testing.md): install, repair and update the Squirrel output inside a marked test root in
       # the runner's temporary folder, with installed smokes and the seeded upgrade of a version 1 database; it never
       # uninstalls. Non-PR events only, like the maker that builds its Setup.exe. Its evidence, .local/ci/installer-*-evidence,

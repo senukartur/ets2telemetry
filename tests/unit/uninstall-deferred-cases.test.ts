@@ -19,7 +19,7 @@ interface CaseFolder {game: 'ets2' | 'ats'; layout: 'game' | 'gone' | 'no-execut
   readOnly?: boolean; temp?: boolean; created?: boolean; unrelated?: boolean}
 interface CaseExpect {outcome: 'complete' | 'deferred'; code: string | null; dll: 'absent' | 'present'; dataRoot: string[] | null; temp?: 'absent' | 'present';
   pluginsDirectory?: 'absent' | 'present'; unrelated?: 'absent' | 'present'; sentinel?: 'present'}
-interface DeferredCase {id: string; folder: CaseFolder; running: string[]; data?: {unknownEntry?: boolean; readOnlyEntry?: boolean; logsJunction?: boolean}; expect: CaseExpect}
+interface DeferredCase {id: string; folder: CaseFolder; running: string[]; data?: {unknownEntry?: boolean; readOnlyEntry?: boolean; logsJunction?: boolean; lateEntry?: string}; expect: CaseExpect}
 const TABLE = JSON.parse(readFileSync(path.join(import.meta.dirname, '..', 'fixtures', 'uninstall', 'deferred-cases.json'), 'utf8')) as {
   format: string; version: number; contents: Record<'owned' | 'known' | 'foreign', string>; cases: DeferredCase[]};
 const sha = (text: string) => createHash('sha256').update(text, 'utf8').digest('hex');
@@ -103,14 +103,25 @@ describe('the shared deferred-cleanup case table', () => {
   it('is the expected table', () => {
     expect({format: TABLE.format, version: TABLE.version}).toEqual({format: 'ets2telemetry.deferred-cleanup-cases', version: 1});
     expect(new Set(TABLE.cases.map(entry => entry.id)).size).toBe(TABLE.cases.length);
-    expect(TABLE.cases.length).toBeGreaterThanOrEqual(16);
+    expect(TABLE.cases.length).toBeGreaterThanOrEqual(17);
   });
 
   it.each(TABLE.cases.map(entry => [entry.id, entry] as const))('%s: the engine keeps and removes what the table says', async (_id, entry) => {
     const built = await scene(entry);
     const checkRunning: RunningCheck = () => Promise.resolve({ok: true, running: runningGames(entry.running.map((name, pid) => ({name, pid: pid + 1})))});
     let clock = 0;
-    const result = await runUninstall({roots: built.roots, fs: guard.fs, checkRunning, known: [], clock: () => clock++,
+    // `lateEntry`: an allowlisted entry that a writer leaves behind after the registry step, so it is present at the
+    // last step (the script's -TestLateEntry does the same); the last step must still remove it and then the root.
+    const late = entry.data?.lateEntry;
+    const registryFolder = path.win32.join(built.dataRoot, 'plugins').toLowerCase();
+    const fs: typeof guard.fs = late ? {...guard.fs, rmdir: async (...args: Parameters<typeof guard.fs.rmdir>) => {
+      await guard.fs.rmdir(...args);
+      if (String(args[0]).toLowerCase() === registryFolder) {
+        await guard.fs.mkdir(path.win32.join(built.dataRoot, late), {recursive: true});
+        await guard.fs.writeFile(path.win32.join(built.dataRoot, late, 'late.jsonl'), 'written after the registry step\n');
+      }
+    }} : guard.fs;
+    const result = await runUninstall({roots: built.roots, fs, checkRunning, known: [], clock: () => clock++,
       deadline: Number.MAX_SAFE_INTEGER, delay: () => Promise.resolve(), now: () => new Date(UTC)});
     const dataRoot = await fsp.readdir(built.dataRoot).then(names => names.sort(), () => null);
     const observed: Record<string, unknown> = {outcome: result.outcome, code: result.code, dll: await state(built.dll), dataRoot};

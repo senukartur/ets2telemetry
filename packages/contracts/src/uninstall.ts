@@ -17,11 +17,15 @@ export type UninstallFailureCode = 'ROOT_MISMATCH' | 'LAYOUT_INVALID' | 'DATA_RO
 export interface UninstallBlockedFolder {targetId: string; reason: UninstallBlockReason}
 /**
  * `cancelled`: the confirmation was declined; nothing changed. `not-installed`: a portable or development copy, which
- * Windows does not uninstall. `blocked`: a game folder or the install registry stops it; nothing changed. `started`: the
- * plugin is removed and the application exits to remove its data and hand over to Windows' uninstall. `failed`: see code.
+ * Windows does not uninstall. `blocked`: a game folder or the install registry stops it; nothing changed. `interrupted`:
+ * a game folder stopped the plugin removal after `removed` plugin files were already removed (a game started after the
+ * check); the data is kept and plugin setup puts the plugin back. `started`: the plugin is removed and the application
+ * exits to remove its data and hand over to Windows' uninstall. `failed`: see code.
  */
 export type AppUninstallResult = {outcome: 'cancelled'} | {outcome: 'not-installed'} | {outcome: 'started'}
-  | {outcome: 'blocked'; code: UninstallBlockCode; blocked: UninstallBlockedFolder[]} | {outcome: 'failed'; code: UninstallFailureCode};
+  | {outcome: 'blocked'; code: UninstallBlockCode; blocked: UninstallBlockedFolder[]}
+  | {outcome: 'interrupted'; code: UninstallBlockCode; removed: number; blocked: UninstallBlockedFolder[]}
+  | {outcome: 'failed'; code: UninstallFailureCode};
 /** A target id in a blocked list. */
 export const UNINSTALL_TARGET_ID = /^(ets2|ats):((steam|manual):[0-3]|other)$/;
 export const uninstallOtherTarget = (game: PluginGame) => `${game}:other`;

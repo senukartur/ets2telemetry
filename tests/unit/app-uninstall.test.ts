@@ -2,7 +2,7 @@ import * as fsp from 'node:fs/promises';
 import path from 'node:path';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import type {RunningCheck} from '../../apps/desktop/src/plugin-setup/plugin-installer';
-import {AppUninstall, type AppUninstallPorts} from '../../apps/desktop/src/uninstall/app-uninstall';
+import {APP_UNINSTALL_FAILSAFE_MS, AppUninstall, uninstallWipeBudget, type AppUninstallPorts} from '../../apps/desktop/src/uninstall/app-uninstall';
 import {resolveUninstallRoots} from '../../apps/desktop/src/uninstall/roots';
 import {guardedTempRoot, type GuardedRoot} from '../shared/guarded-fs';
 import {CURRENT, exists, FOREIGN, gameFolder, installFixture, installRecord, KNOWN, listTree, notRunning, seedData, writeRegistry,
@@ -127,19 +127,33 @@ describe('the plugin removal and the data wipe', () => {
     expect(await exists(fixture.dataRoot)).toBe(false);
   });
 
-  it('a removal that races (a game started after the preflight) removes the intent, resumes setup and keeps the data', async () => {
-    const {fixture, ets2} = await scene();
+  it('a removal that races (a game started after the preflight) after removing another plugin answers interrupted, removes the intent, resumes setup and keeps the data', async () => {
+    const {fixture, ets2, ats} = await scene();
     let calls = 0;
     const raced: RunningCheck = () => Promise.resolve({ok: true, running: {ets2: calls++ > 0, ats: false, client: false}});
     const test = harness(fixture, {checkRunning: raced});
     const result = await test.uninstall.run();
-    expect(result).toEqual({outcome: 'blocked', code: 'GAME_RUNNING', blocked: [{targetId: 'ets2:steam:0', reason: 'GAME_RUNNING'}]});
+    // ATS's plugin was already gone when ETS2's folder stopped the run: "nothing was changed" would be false here.
+    expect(result).toEqual({outcome: 'interrupted', code: 'GAME_RUNNING', removed: 1, blocked: [{targetId: 'ets2:steam:0', reason: 'GAME_RUNNING'}]});
+    expect(await exists(ats.dll)).toBe(false);
     expect(test.events.filter(event => event === 'suspend' || event === 'resume')).toEqual(['suspend', 'resume']);
     expect(await fsp.readFile(ets2.dll)).toEqual(CURRENT);
     expect(await exists(path.win32.join(fixture.dataRoot, 'uninstall'))).toBe(false);
     expect(await exists(path.win32.join(fixture.dataRoot, 'data', 'telemetry.sqlite'))).toBe(true);
     expect(test.uninstall.prepared).toBeUndefined();
     expect(await test.uninstall.finishAfterExit()).toBeUndefined();
+  });
+
+  it('a removal that races before any plugin was removed answers blocked, and nothing changed', async () => {
+    const {fixture, ets2} = await scene();
+    await writeRegistry(fixture, [installRecord(ets2)]);
+    const before = await listTree(guard.root);
+    let calls = 0;
+    const raced: RunningCheck = () => Promise.resolve({ok: true, running: {ets2: calls++ > 0, ats: false, client: false}});
+    const test = harness(fixture, {checkRunning: raced});
+    expect(await test.uninstall.run()).toEqual({outcome: 'blocked', code: 'GAME_RUNNING', blocked: [{targetId: 'ets2:steam:0', reason: 'GAME_RUNNING'}]});
+    expect(test.events.filter(event => event === 'suspend' || event === 'resume')).toEqual(['suspend', 'resume']);
+    expect(await listTree(guard.root)).toEqual(before);
   });
 
   it('an engine that throws during the removal resumes setup and fails without touching the data', async () => {
@@ -167,6 +181,35 @@ describe('the plugin removal and the data wipe', () => {
     const test = harness(fixture, {confirm: () => Promise.reject(new Error('no window'))});
     expect(await test.uninstall.run()).toEqual({outcome: 'failed', code: 'DIALOG_FAILED'});
     expect(await listTree(guard.root)).toEqual(before);
+  });
+});
+
+describe('the wipe budget before the 12 s failsafe', () => {
+  it('gives the wipe what is left before the failsafe, less the handover margin, at most 5 s and never less than 0', () => {
+    expect(APP_UNINSTALL_FAILSAFE_MS).toBe(12_000);
+    expect(uninstallWipeBudget(12_000, 0)).toBe(5000);
+    expect(uninstallWipeBudget(12_000, 5300)).toBe(5000);
+    expect(uninstallWipeBudget(12_000, 9000)).toBe(2000);
+    expect(uninstallWipeBudget(12_000, 11_200)).toBe(0);
+    expect(uninstallWipeBudget(12_000, 20_000)).toBe(0);
+    expect(uninstallWipeBudget(Number.NaN, 0)).toBe(0);
+  });
+
+  it('a wipe without budget deletes nothing and keeps the intent, so Windows\' uninstall can finish it', async () => {
+    const {fixture} = await scene();
+    const test = harness(fixture);
+    expect(await test.uninstall.run()).toEqual({outcome: 'started'});
+    const finished = await test.uninstall.finishAfterExit(0);
+    expect(finished?.data.rootRemoved).toBe(false);
+    expect(finished?.data.removed).toBe(0);
+    expect(finished?.data.failed.length).toBeGreaterThan(0);
+    expect(finished?.data.failed.every(entry => entry.code === 'BUDGET_EXPIRED')).toBe(true);
+    // Every allowlisted entry that remains is named, the registry and the intent included.
+    const present = (await fsp.readdir(fixture.dataRoot)).map(name => name.toLowerCase()).sort();
+    expect(finished?.data.failed.map(entry => entry.entry).sort()).toEqual(present);
+    expect(present).toEqual(expect.arrayContaining(['data', 'plugins', 'uninstall']));
+    expect(await exists(path.win32.join(fixture.dataRoot, 'data', 'telemetry.sqlite'))).toBe(true);
+    expect(await exists(path.win32.join(fixture.dataRoot, 'uninstall', 'pending.json'))).toBe(true);
   });
 });
 

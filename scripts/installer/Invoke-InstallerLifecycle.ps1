@@ -27,11 +27,13 @@ param(
 # GitHub-hosted runner, or locally only with -AllowLocal on the owner's explicit request (docs/installer-testing.md).
 $ErrorActionPreference = 'Stop'
 $checkout = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path
-$setup = Join-Path $checkout 'out/make/squirrel.windows/x64/ETS2Telemetry Desktop-0.1.0 Setup.exe'
+# The versioned Setup name of forge.config.cjs (ET-018 PR-6); release-identity.test.ts checks that the two agree.
+$setup = Join-Path $checkout 'out/make/squirrel.windows/x64/ETS2Telemetry-Setup-0.1.0.exe'
 $planSteps = @('signal','facts','guard-plan','create-run-root','guard-ready','build-fixture-0.1.1','seed','install-0.1.0','installed-smokes-0.1.0',
     'data-launch-0.1.0','verify-0.1.0','repair-0.1.0','update-0.1.1','installed-smokes-0.1.1','data-launch-0.1.1','verify-0.1.1','games',
     'windows-uninstall-complete-running','install-0.1.0-again','plugin-launch-installed','windows-uninstall-deferred-game','run-once-blocked-game',
-    'reinstall-0.1.0-over-deferral','plugin-launch-adopted','windows-uninstall-final-deferred','run-once-complete','install-0.1.0-for-app','plugin-launch-for-app','app-uninstall-blocked-game','app-uninstall-verify-blocked-game',
+    'reinstall-0.1.0-over-deferral','plugin-launch-adopted','windows-uninstall-final-deferred','run-once-complete',
+    'install-0.1.0-for-app','plugin-launch-for-app','app-uninstall-blocked-game','app-uninstall-verify-blocked-game',
     'app-uninstall-complete','app-uninstall-verify-complete','cleanup')
 if ($Plan) {
     [ordered]@{run=$false; steps=$planSteps; scenariosA=$ScenariosA; scenariosB=$ScenariosB; setup=$setup; uninstall='windows-initiated and in-app, in R only';
@@ -313,7 +315,7 @@ try {
     Invoke-Driver 'run-once' @('final', 'complete') 60000
 
     # ET-018 PR-4: the in-app uninstall scenarios (docs/installer-testing.md, "In-app uninstall scenarios").
-    $env:ETS2TELEMETRY_DIAGNOSTIC_DIR = Join-Path $runRoot 'diagnosticsinstall-for-app-0.1.0'
+    $env:ETS2TELEMETRY_DIAGNOSTIC_DIR = Join-Path $runRoot 'diagnostics\install-for-app-0.1.0'
     Invoke-Driver 'step' @('install-for-app-0.1.0', $setup, '--silent') 60000
     $executableA = Assert-Installed 'install-for-app-0.1.0' '0.1.0'
     Assert-ProductLinks 'install-for-app-0.1.0' $true
