@@ -10,6 +10,10 @@ import {mainLogLocation, SERVICE_LOG_ROOT_VARIABLE, serviceEnvironment, serviceL
  * while it is set, and `fail` rejects that many writes. `syncDelayMs` slows `appendFileSync` (node:fs), as a stalled disk
  * or file-system filter would, so a writer that appends synchronously blocks its caller. `syncWrites` records synchronous
  * appends and `syncFail` makes the next one throw.
+ *
+ * The asynchronous `appendFile` completes only through promises: once its gate is open it writes the file with the real,
+ * undelayed `appendFileSync`. No test therefore waits for real thread-pool I/O, which a loaded runner can delay without
+ * bound; one macrotask turn (afterCallbacks) delivers every completion that is due.
  */
 const control = vi.hoisted(() => ({syncDelayMs: 0, gate: undefined as Promise<void> | undefined, fail: 0, writes: [] as string[], syncWrites: [] as string[], syncFail: false}));
 vi.mock('node:fs', async importOriginal => {
@@ -24,12 +28,13 @@ vi.mock('node:fs', async importOriginal => {
 });
 vi.mock('node:fs/promises', async importOriginal => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
+  const {appendFileSync: realAppendFileSync} = await vi.importActual<typeof import('node:fs')>('node:fs');
   const appendFile = async (...args: Parameters<typeof actual.appendFile>) => {
     control.writes.push(String(args[1]));
     const gate = control.gate;
     if (gate) await gate;
     if (control.fail > 0) { control.fail--; throw new Error('EIO: i/o error, open C:\\private\\startup.jsonl'); }
-    await actual.appendFile(...args);
+    realAppendFileSync(args[0] as string, String(args[1]), 'utf8');
   };
   return {...actual, default: {...actual, appendFile}, appendFile};
 });
@@ -174,6 +179,100 @@ it('reports a failed synchronous drain on the console by event code only', async
   expect(fallback.mock.calls.map(call => call[0] as string)).toEqual(['[ETS2Telemetry] SERVICE_UNCAUGHT']);
   release();
   await log.flush(5000);
+});
+// Final write (October 18, 2026): dispatch run 39094511631 lost the service's last SHUTDOWN_STEP and SERVICE_REPORT rows on a
+// 4-processor runner at a 25% CPU cap, because the exit waited a fixed 150 ms for asynchronous appends that had not
+// finished. The final write now gives the append in flight a bounded wait and then writes the queue synchronously.
+const events = (dir: string) => rows(dir).map(row => row.event);
+/**
+ * One macrotask turn (immediates are not faked): every promise continuation that is due runs first, including the
+ * completion of an append whose gate was opened. The mock does no real asynchronous I/O, so nothing else is awaited.
+ */
+const afterCallbacks = () => new Promise<void>(resolve => setImmediate(resolve));
+it('leaves every queued row on disk once at exit, after a slow in-flight write settles within the bound', async () => {
+  vi.useFakeTimers({toFake: ['setTimeout', 'clearTimeout']});
+  const dir = directory(), log = createDiagnostics(dir);
+  const release = held();
+  log('IN_FLIGHT'); log('SHUTDOWN_STEP'); log('SERVICE_REPORT');
+  let done = false;
+  void log.finalize(2700).then(() => {done = true;});
+  await vi.advanceTimersByTimeAsync(200);
+  expect(done).toBe(false);
+  // The slow append settles after 200 ms, well past the earlier fixed 150 ms wait.
+  release(); await afterCallbacks();
+  expect(done).toBe(true);
+  expect(events(dir)).toEqual(['IN_FLIGHT', 'SHUTDOWN_STEP', 'SERVICE_REPORT']);
+  // One asynchronous append (the batch in flight), then one synchronous append of the queue; nothing written twice.
+  expect(control.writes).toHaveLength(1);
+  expect(control.syncWrites).toHaveLength(1);
+  // A row logged after the final write is on disk when log() returns, and no asynchronous append starts any more.
+  log('LATE_ROW');
+  expect(events(dir)).toEqual(['IN_FLIGHT', 'SHUTDOWN_STEP', 'SERVICE_REPORT', 'LATE_ROW']);
+  expect(control.writes).toHaveLength(1);
+});
+it('still writes every queued row before exit when the in-flight write outlasts the bound, and never twice', async () => {
+  vi.useFakeTimers({toFake: ['setTimeout', 'clearTimeout']});
+  const dir = directory(), log = createDiagnostics(dir);
+  const release = held();
+  log('STORAGE_PROBE_STEP'); log('HISTORY_STORAGE_STEP'); log('SERVICE_REPORT');
+  let done = false;
+  void log.finalize(150).then(() => {done = true;});
+  await vi.advanceTimersByTimeAsync(150);
+  expect(done).toBe(true);
+  // At exit: the queued rows are on disk; only the batch still in flight is not (it may land later or be lost).
+  expect(events(dir)).toEqual(['HISTORY_STORAGE_STEP', 'SERVICE_REPORT']);
+  release(); await afterCallbacks();
+  expect(events(dir).sort()).toEqual(['HISTORY_STORAGE_STEP', 'SERVICE_REPORT', 'STORAGE_PROBE_STEP']);
+});
+it('settles before a failure report: the queue is on disk, then logging continues asynchronously', async () => {
+  vi.useFakeTimers({toFake: ['setTimeout', 'clearTimeout']});
+  const dir = directory(), log = createDiagnostics(dir);
+  const release = held();
+  log('FIRST'); log('SERVICE_REPORT');
+  let done = false;
+  void log.settle(500).then(() => {done = true;});
+  await vi.advanceTimersByTimeAsync(100); expect(done).toBe(false);
+  release(); await afterCallbacks();
+  expect(done).toBe(true);
+  expect(events(dir)).toEqual(['FIRST', 'SERVICE_REPORT']);
+  expect([control.writes.length, control.syncWrites.length]).toEqual([1, 1]);
+  log('AFTER'); expect(control.writes).toHaveLength(2);
+  await afterCallbacks();
+  expect(await log.flush(0)).toBe(true);
+  expect(events(dir)).toEqual(['FIRST', 'SERVICE_REPORT', 'AFTER']);
+});
+// Review round 1: a stop that overran its budget leaves no time to wait, so the queue is written within the call.
+it('writes the queue at once when no time is left, even while an append is in flight', async () => {
+  const dir = directory(), log = createDiagnostics(dir);
+  const release = held();
+  log('IN_FLIGHT'); log('SHUTDOWN_STEP'); log('SERVICE_REPORT');
+  const finished = log.finalize(0);
+  // Already on disk when finalize returns, before any timer or I/O callback ran.
+  expect(events(dir)).toEqual(['SHUTDOWN_STEP', 'SERVICE_REPORT']);
+  expect(control.syncWrites).toHaveLength(1);
+  await finished;
+  release(); await afterCallbacks();
+  expect(events(dir).sort()).toEqual(['IN_FLIGHT', 'SERVICE_REPORT', 'SHUTDOWN_STEP']);
+  expect(control.writes).toHaveLength(1);
+});
+// Review round 1 (nit): after a settle that its timer ended, no new asynchronous append starts until the one in flight
+// finished, so two appends are never in flight together.
+it('starts no asynchronous append after a timer-ended settle until the append in flight finishes', async () => {
+  vi.useFakeTimers({toFake: ['setTimeout', 'clearTimeout']});
+  const dir = directory(), log = createDiagnostics(dir);
+  const release = held();
+  log('IN_FLIGHT'); log('QUEUED');
+  let done = false;
+  void log.settle(100).then(() => {done = true;});
+  await vi.advanceTimersByTimeAsync(100);
+  expect(done).toBe(true);
+  expect(events(dir)).toEqual(['QUEUED']);
+  log('AFTER');
+  expect(control.writes).toHaveLength(1);
+  release(); await afterCallbacks();
+  expect(await log.flush(0)).toBe(true);
+  expect(control.writes).toHaveLength(2);
+  expect(events(dir)).toEqual(['QUEUED', 'IN_FLIGHT', 'AFTER']);
 });
 it('bounds the flush: it reports false after its wait and true once the records are written', async () => {
   vi.useFakeTimers({toFake: ['setTimeout', 'clearTimeout']});

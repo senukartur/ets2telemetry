@@ -195,8 +195,9 @@ function runApplication(profileError: unknown): void {
       return pending.length > 1 ? Promise.all(pending).then(() => undefined) : pending[0];
     },
     destroyTray: () => {trayPresenter?.dispose(); const previous = tray; tray = undefined; previous?.destroy();},
-    // The final rows (SERVICE_EXIT, APP_EXIT) are written before the process ends, waiting at most MAIN_EXIT_FLUSH_MS.
-    exit: code => {void log.flush(MAIN_EXIT_FLUSH_MS).then(() => app.exit(code));}
+    // The final rows (SERVICE_EXIT, APP_EXIT) are on disk before the process ends: the append in flight gets up to
+    // MAIN_EXIT_FLUSH_MS, the queue is then written synchronously, and later rows are written at once.
+    exit: code => {void log.finalize(MAIN_EXIT_FLUSH_MS).then(() => app.exit(code));}
   });
   const supervisor = new ServiceSupervisor(log, code => lifecycle.finish(code), {
     restart: () => startService(),
