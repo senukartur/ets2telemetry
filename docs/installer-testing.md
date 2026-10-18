@@ -104,14 +104,16 @@ Squirrel ends every process whose image lies under its root before it runs the u
 
 ### Binary root residue
 
-At the pinned commit `eef37460ae`, `FullUninstall` deletes the binary root with `DeleteDirectoryOrJustGiveUp`, which leaves every file it cannot delete (Update.exe itself runs the uninstall), and then always writes the one-space `.dead` marker; `cleanDeadVersions` marks an `app-` folder it could not delete with its own `.dead`. After each uninstall the harness first writes `residue-<label>.json` to the evidence: every entry left in the binary root by relative name, with its kind, size and whether its bytes are the installed Squirrel helper or a one-space marker (at most 256 entries; no machine path). Then `Assert-ResidueListing` allows exactly:
+At the pinned commit `eef37460ae`, `FullUninstall` deletes the binary root with `DeleteDirectoryOrJustGiveUp`, which leaves every file it cannot delete (Update.exe itself runs the uninstall), and then always writes the one-space `.dead` marker; `cleanDeadVersions` marks an `app-` folder it could not delete with its own `.dead`. After each uninstall the harness first writes `residue-listing-<label>.json` to the evidence: every entry left in the binary root by relative name, with its kind, size and whether its bytes are the installed Squirrel helper or a one-space marker (at most 257 entries; no machine path). Then the driver's `residue` command applies `checkUninstallResidue` (`installer-guard.mjs`, unit-tested in `installer-guard.test.ts`) and writes `residue-<label>.json`. It allows:
 
 - `app-<version>` folders;
 - `Update.exe` and `app-<version>\squirrel.exe`, each with the bytes of the installed version's `squirrel.exe`, read before the uninstall;
 - the root `.dead` (required) and `app-<version>\.dead`, each one space;
-- at most 32 entries.
+- at most 256 entries.
 
-Anything else fails with its relative name: a file of this application (an executable, resources, the root execution stub, a log), any other folder (`UNINSTALL_UNEXPECTED_DIRECTORY`), a link, a changed helper or an invalid marker. The rule follows ET-001's `Assert-UninstallResidue.ps1`, which accepts one fixed version; it is written in the harness because the scenarios leave more than one `app-` folder.
+It **tolerates and reports** Electron runtime files left in an `app-<version>` folder: a file at its top level, or its `locales` folder and a file in it, whose name is a file of this checkout's `node_modules/electron/dist` (its top-level files except `electron.exe`, and the files of its `locales` folder; never the `resources` folder). Squirrel's `DeleteDirectoryOrJustGiveUp` does not retry a file that something holds for a moment while the folder is deleted, and the hosted runs left `v8_context_snapshot.bin` once with no process of this application alive (the receipt's `otherProcesses` was 0), so such a file is cosmetic vendor residue ([TD-013](technical-debt.md#td-013-squirrel-vendor-residue-in-the-binary-root)). The tolerated names appear as `toleratedRuntimeResidue` in `residue-<label>.json` and in `lifecycle-result.json`.
+
+Anything else fails with its relative name: the product's executable `ETS2TelemetryDesktop.exe`, `electron.exe`, `resources` and everything below it (`app.asar`, `app.asar.unpacked`, the native client and the plugin bundle), a runtime name anywhere else, an unknown file or locale, any other folder (`UNINSTALL_UNEXPECTED_DIRECTORY`), a link (`UNINSTALL_REPARSE_POINT`), a changed helper or an invalid marker. The rule follows ET-001's `Assert-UninstallResidue.ps1`, which accepts one fixed version and no runtime file.
 
 **The decoy check** (`checkDecoyUnchanged` in `installer-guard.mjs`). Windows creates its own folders under whatever `LOCALAPPDATA` a process runs with: the first hosted run saw `Microsoft\`, `Microsoft\Windows\` and `Microsoft\Windows\Caches\` appear in the decoy during the uninstall, created by the shell or Update.exe, not by this application. The check therefore requires:
 
@@ -166,7 +168,7 @@ On a hosted runner the install and updated hooks create the product's Desktop an
 
 ## Evidence
 
-`.local/ci/installer-<id>-evidence` holds `config.json` (the run layout only), one JSON file per driver command (`guard-plan.json`, `seed.json`, `snapshot-<label>.json`, `compare-<before>-<after>.json`, `step-<label>.json` with the program's output, `launch-<label>.json`, `verify-<label>.json`, `history-<label>.json`, PR-3's `games.json`, `plugin-launch-<label>.json` and `windows-uninstall-<label>.json` with the receipt, `cleanup.json`), the Job folders `job-<label>`, the installed smoke runs `installed-<guid>`, `upgrade-fixture.json`, `run-root\` (Squirrel logs and application diagnostics) and `lifecycle-result.json` with each step's exit code and seconds.
+`.local/ci/installer-<id>-evidence` holds `config.json` (the run layout only), one JSON file per driver command (`guard-plan.json`, `seed.json`, `snapshot-<label>.json`, `compare-<before>-<after>.json`, `step-<label>.json` with the program's output, `launch-<label>.json`, `verify-<label>.json`, `history-<label>.json`, PR-3's `games.json`, `plugin-launch-<label>.json`, `windows-uninstall-<label>.json` and `windows-uninstall-<label>-observed.json` with the receipt, `residue-listing-<label>.json` and `residue-<label>.json` with the tolerated runtime files, `cleanup.json`), the Job folders `job-<label>`, the installed smoke runs `installed-<guid>`, `upgrade-fixture.json`, `run-root\` (Squirrel logs and application diagnostics) and `lifecycle-result.json` with each step's exit code and seconds.
 
 ## Limits
 

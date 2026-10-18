@@ -141,3 +141,14 @@ A file with the plugin's name whose hash this application does not recognize (no
 - An explicit, confirmed "Replace this file" action that first moves the unrecognized file to a recoverable backup beside it, then installs the bundled plugin with the usual checks.
 
 **Until then:** the driver moves the file by hand. No in-app replacement or deletion of an unrecognized file is authorized by this entry.
+
+## TD-013: Squirrel vendor residue in the binary root
+
+Recorded October 18, 2026 by the coordinator with ET-018 PR-3 (plan U4, which planned this entry for PR-6). **This entry is a coordinator decision under the owner's standing delegation of October 15, 2026, not an individually owner-approved deferral.** The owner may revise it.
+
+After an uninstall, Squirrel (the version pinned by electron-winstaller 5.4.4) leaves part of its own binary root `%LOCALAPPDATA%\ETS2TelemetryDesktop`: `Update.exe`, which runs the uninstall and cannot delete itself, `app-<version>\squirrel.exe`, the one-space `.dead` marker, and sometimes an `app-<version>\.dead` marker. Its `DeleteDirectoryOrJustGiveUp` does not retry a file that something holds for a moment, so a stock Electron runtime file can also remain in `app-<version>\`: hosted runs left `v8_context_snapshot.bin` with no process of this application running. Earlier runs left `vk_swiftshader.dll`, `vk_swiftshader_icd.json` and `v8_context_snapshot.bin` while the hook's own GPU and network-service child processes were still ending; PR-3 removed those children. The residue holds no data and no file of this application's own: not the executable, the application archive or the plugin. It is cosmetic: a reinstall replaces the folder (Squirrel logs "already exists, burning it to the ground"), and the folder can be deleted by hand. The installer lifecycle checks the residue strictly ([binary root residue](installer-testing.md#binary-root-residue)).
+
+**Future work:**
+- Remove the folder after Squirrel exits, for example from the deferred cleanup at the next sign-in (ET-018 PR-5) or a short-lived helper outside the folder.
+
+**Until then:** the folder stays until a reinstall or a manual delete. Nothing else is authorized by this entry.
