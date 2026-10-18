@@ -5,7 +5,7 @@ import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 import {MIGRATIONS, openStorage, type Migration} from '../../packages/storage/src/index';
 import {SCHEMA_V1} from '../../packages/storage/src/sqlite/schema-v1';
 import {SCHEMA_V2} from '../../packages/storage/src/sqlite/schema-v2';
-import {digestOf, expectRepresentative, failed, files, ok, readOnly, REPRESENTATIVE, sha256, workspace} from './helpers';
+import {digestOf, expectMigratedFromVersion1, expectRepresentative, failed, files, ok, readOnly, readVersion1, REPRESENTATIVE, sha256, workspace} from './helpers';
 
 let ws: Awaited<ReturnType<typeof workspace>>;
 beforeEach(async () => { ws = await workspace(); });
@@ -48,40 +48,12 @@ describe('REG-013 schema migrations', () => {
   // ET-016 PR-1: production migrates version 1 to version 2 (0002-journal), so these cases use the real migration list.
   // The expected rows are written by hand from schema-v1-representative.sql and J6.
   it('migrates an immutable version 1 copy to version 2 after a verified backup and keeps every ID and value', async () => {
-    const copy = ws.copyFixture(REPRESENTATIVE), original = digestOf(copy);
-    const v1Jobs = readOnly(copy, db => db.prepare('SELECT * FROM job_configurations ORDER BY id').all());
-    // trips is rebuilt too: its rows and every row that references a trip must survive unchanged.
-    const REFERENCING = ['trip_trailers', 'event_attributions', 'completeness_intervals', 'samples'];
-    const rowsOf = (file: string, table: string) => readOnly(file, db => db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all());
-    const v1Trips = rowsOf(copy, 'trips'), v1Referencing = REFERENCING.map(table => rowsOf(copy, table));
+    const copy = ws.copyFixture(REPRESENTATIVE), before = readVersion1(copy);
     const storage = await ws.open({path: copy});
     expect(storage.summary).toMatchObject({schemaVersion: 2, created: false, migratedFrom: 1});
     const backupName = storage.summary.backupFileName!;
     expect(backupName).toMatch(/^telemetry-f0000000-v1-20261015T120000000Z\.sqlite$/);
-    expectRepresentative(storage, copy, {schema_migrations: 2});
-    // The backup is the version 1 content, byte-for-byte in logical terms, with a manifest written last.
-    const backup = path.join(ws.backups, backupName);
-    expect(digestOf(backup)).toEqual(original);
-    const manifest = JSON.parse(readFileSync(backup.replace(/\.sqlite$/, '.json'), 'utf8'));
-    expect(manifest).toMatchObject({format: 'ets2telemetry-backup-1', databaseUuid: 'f0000000-0000-4000-8000-000000000001', fromVersion: 1, fileName: backupName,
-      fileSha256: sha256(backup), logicalDigest: original.logicalDigest, rowCounts: original.rowCounts, reason: 'pre-migration'});
-    const recorded = readOnly(copy, db => db.prepare('SELECT version, name, backup_file_name, backup_sha256 FROM schema_migrations ORDER BY version').all());
-    expect(recorded).toEqual([{version: 1, name: '0001-initial', backup_file_name: null, backup_sha256: null}, {version: 2, name: '0002-journal', backup_file_name: backupName, backup_sha256: manifest.fileSha256}]);
-    expect(digestOf(copy).userVersion).toBe(2);
-    readOnly(copy, db => {
-      // The cancelled trip of version 1 keeps every column, opened at an event, has no recorded carrier, and its fuel
-      // used was never observed.
-      expect(db.prepare('SELECT id, opened_event_ref, opened_by, fuel_used_l, fuel_used_l_state, closed_by_session_ref, closed_by_event_seq FROM trips').all())
-        .toEqual([{id: 1, opened_event_ref: 1, opened_by: 'event', fuel_used_l: null, fuel_used_l_state: 'not-observed', closed_by_session_ref: null, closed_by_event_seq: null}]);
-      expect(db.prepare('SELECT * FROM trips ORDER BY id').all()).toEqual(v1Trips.map(row => ({...row as object, opened_by: 'event', fuel_used_l: null,
-        fuel_used_l_state: 'not-observed', closed_by_session_ref: null, closed_by_event_seq: null})));
-      REFERENCING.forEach((table, index) => expect(db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all(), table).toEqual(v1Referencing[index]));
-      expect(v1Referencing.map(rows => rows.length)).toEqual([1, 4, 1, 3]);
-      // The job configuration keeps every version 1 column and comes from event 1 of session 1.
-      expect(db.prepare('SELECT * FROM job_configurations ORDER BY id').all()).toEqual(v1Jobs.map(row => ({...row as object, plugin_session_ref: 1, source: 'event', checkpoint_next_event_seq: null})));
-      expect(db.pragma('foreign_key_check')).toEqual([]);
-      expect(db.pragma('integrity_check', {simple: true})).toBe('ok');
-    });
+    expectMigratedFromVersion1(storage, copy, before, path.join(ws.backups, backupName));
   });
   it('backfills each job configuration with the plugin session of its event', async () => {
     const copy = ws.copyFixture(REPRESENTATIVE);
