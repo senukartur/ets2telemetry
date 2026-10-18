@@ -15,6 +15,7 @@ import {BASE_UTC, ETS2_A, GAME_CLOCK_1, Script, r} from '../shared/trip-messages
 import {seededId} from '../../tools/telemetry-simulator/src/v1/source';
 import {SIMULATOR_V1_DIR, scenarioPath} from '../shared/simulator-v1-expected';
 import {replayTrips, type TripReplay} from '../shared/trip-replay';
+import {staleCheckpointExpected, staleCheckpointScenario} from '../shared/stale-checkpoint';
 
 const SCENARIOS = ['normal-delivery', 'app-absent-hydration', 'save-load', 'timers-truck-refuel', 'ferry-train', 'sleep-teleport', 'quick-job-profile-change',
   'clock-change-suspend', 'reconnect-lost-ack', 'crash-before-commit', 'crash-after-commit', 'retention-expired'];
@@ -130,5 +131,22 @@ describe('trip replay of a synthetic transcript with readings accounting (fix ro
         refuelledL: 51, refuels: 1, outcome: 'delivered', closeReason: 'outcome'})
     });
     expect(replay.readings).toBe(6);
+  });
+});
+
+// ET-019 finding F1 (stale checkpoints, docs/trips.md): the checkpoint's state lags its nextEventSeq, and the replayed
+// events deliver and clear the job it shows. The rows are hand-written in
+// tests/fixtures/recording/normal-delivery-stale-checkpoint.rows.expected.json; the storage suite runs the same scenario
+// through the recorder and the real storage worker (tests/storage/stale-checkpoint.test.ts).
+describe('trip replay of a stale checkpoint after an uncommitted connection (ET-019 F1)', () => {
+  it('opens no late-attach trip for the job the replay delivered and cleared [synthetic-inference]', () => {
+    const input = staleCheckpointScenario(), result = replayV1(input), seed = input.seed as string, session = seededId(seed, 'plugin-session');
+    // The wire precondition of F1: the second checkpoint still shows the job at revision 3, below the replayed clear's.
+    const checkpoints = result.transcript.flatMap(l => l.direction === 'server' && (l.message as ServerMessage).kind === 'checkpoint' ? [l.message as Extract<ServerMessage, {kind: 'checkpoint'}>] : []);
+    expect(checkpoints.map(c => [c.data.status.delivery.nextEventSeq, c.data.state.configuration.revision, c.data.state.configuration.job.available])).toEqual([['1', '0', false], ['10', '3', true]]);
+    const replay = replayTrips(result), expected = staleCheckpointExpected();
+    expect(replay.attaches).toBe(0);
+    expect(summarize(replay, labels(seed), session, 'ets2')).toEqual({trips: expected.trips, attributions: expected.attributions, intervals: expected.intervals,
+      coverage: expected.coverage, view: expected.view});
   });
 });

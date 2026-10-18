@@ -608,6 +608,92 @@ describe('late-attach trips (J9, J22, ET-016 PR-7)', () => {
   it('refuses an attach without a connection [synthetic-inference]', () => {
     expect(stepTrip(initialTripState(), attachStep)).toEqual({ok: false, code: 'UNKNOWN_SESSION'});
   });
+  describe('stale checkpoints: a state that lags the replayed events (OD-5 S7, S11; ET-019 finding F1)', () => {
+    // The producer publishes its state at frame boundaries, but nextEventSeq is the end of its event store, so a checkpoint
+    // built between a stored event and the next publication shows the configuration from before that event. Configuration
+    // callbacks advance the revision, and each event carries the revision after its own callback (protocol v1 §8).
+    const rev = (configurationRevision: string, simulation: 'running' | 'paused' = 'running') => ({configurationRevision, simulation});
+    it('a replayed delivery and clear newer than the checkpoint\'s configuration end its job: no late-attach trip opens after the replay [synthetic-inference]', () => {
+      // The normal-delivery shape of F1: the state (revision 3) still shows job 3, which the replay delivers (8 in the
+      // scenario, 5 here) and clears (revision 4). RED: the job's late-attach trip opened after the replay, open until a
+      // different job, a gap or a restart closed it.
+      const s = new Script(ETS2_A), t = uuid(ETS2_A, '3');
+      const retained = [s.event(r.truckConfigured(), rev('1', 'paused')), s.event(r.trailerConfigured(), rev('2', 'paused')), s.event(r.jobConfigured(), rev('3', 'paused')),
+        s.event(r.started(), rev('3')), s.event(r.delivered(), rev('3')), s.event(r.jobCleared(), rev('4'))];
+      const state = play([[sessionInput(s.welcome())], [{kind: 'checkpoint', message: s.checkpoint(job(), 6, {}, '3')}],
+        [retained[0]], [retained[1]],
+        // The replayed configuration opens the ordinary trip of job 3 (a fresh session is loading, T12).
+        [retained[2], [open(t, at(3), {...BURST_REFS, recordingCompleteness: 'partial'}), cause(t, 'discontinuity', {cause: 'opened-at-load', atEventSeq: '3'}),
+          cause(t, 'not-connected', {cause: 'opened-before-attach', atEventSeq: '3'})]],
+        [retained[3]], [retained[4], [attr(t, 'trip'), close(t, 'delivered', 'outcome', 'partial', at(5))]], [retained[5]]]);
+      expect(dueAttach(state)).toBeNull();
+      expect(stepTrip(state, attachStep)).toEqual({ok: false, code: 'ORDER_VIOLATION'});
+      expect(tripView(state, 'ets2')).toMatchObject({phase: 'idle', untrackedJob: false, current: null});
+      // The job has ended, so a live fine is free driving, not inside an untracked job.
+      play([[s.event(r.fined(), rev('4')), [attr(null, 'free-driving')]]], state);
+    });
+    it('a replayed outcome at the checkpoint\'s revision ends its job even when the clear is still live [synthetic-inference]', () => {
+      // Outcomes do not advance the revision: a delivery at revision 3 happened while the checkpoint's configuration was
+      // current, so it is treated as ending that job; the clear that follows it (revision 4) is at or after nextEventSeq.
+      const s = new Script(ETS2_A);
+      const retained = [s.event(r.started(), rev('3')), s.event(r.delivered(), rev('3'))];
+      const state = play([[sessionInput(s.welcome())], [{kind: 'checkpoint', message: s.checkpoint(job(), 2, {}, '3')}],
+        [retained[0]], [retained[1], [attr(null, 'ambiguous')]]]);
+      expect(dueAttach(state)).toBeNull();
+      expect(tripView(state, 'ets2')).toMatchObject({phase: 'idle', untrackedJob: false, current: null});
+      play([[s.event(r.jobCleared(), rev('4'))], [s.event(r.fined(), rev('4')), [attr(null, 'free-driving')]]], state);
+    });
+    it('a replayed job.cleared newer than the checkpoint\'s configuration alone ends its job: no late-attach trip opens after the replay [synthetic-inference]', () => {
+      // The state (revision 3) still shows job K, but the only replayed event clears the configuration (revision 4) with no
+      // outcome: a newer clear proves that K was cleared before nextEventSeq (docs/trips.md, stale checkpoints). With no
+      // open trip the clear itself has no effects.
+      const s = new Script(ETS2_A);
+      const retained = [s.event(r.jobCleared(), rev('4'))];
+      const state = play([[sessionInput(s.welcome())], [{kind: 'checkpoint', message: s.checkpoint(job(), 1, {}, '3')}], [retained[0]]]);
+      expect(dueAttach(state)).toBeNull();
+      expect(stepTrip(state, attachStep)).toEqual({ok: false, code: 'ORDER_VIOLATION'});
+      expect(tripView(state, 'ets2')).toMatchObject({phase: 'idle', untrackedJob: false, current: null});
+      // The job is no longer untracked, so a live fine is free driving.
+      play([[s.event(r.fined(), rev('4')), [attr(null, 'free-driving')]]], state);
+    });
+    it('a replayed job.configured newer than the checkpoint replaces its job: a gap that then closes that trip opens no late-attach trip [synthetic-inference]', () => {
+      // The state (revision 3) shows job K, but a different job (revision 4) replaced it before nextEventSeq. A replayed gap
+      // closes that job's trip; without the rule the stale job K would then open a late-attach trip.
+      const s = new Script(ETS2_A), t = uuid(ETS2_A, '1');
+      const retained = [s.event(r.jobConfigured(otherJob()), rev('4', 'paused'))], gap = s.gap(1);
+      const state = play([[sessionInput(s.welcome())], [{kind: 'checkpoint', message: s.checkpoint(job(), 2, {}, '3')}],
+        [retained[0], [open(t, at(1), {recordingCompleteness: 'partial'}), cause(t, 'discontinuity', {cause: 'opened-at-load', atEventSeq: '1'}),
+          cause(t, 'not-connected', {cause: 'opened-before-attach', atEventSeq: '1'})]],
+        [gap, [close(t, 'none', 'gap', 'partial', at(1)), ...gapEffects(gap, t, '2', '2')]]]);
+      expect(dueAttach(state)).toBeNull();
+      // The replaced job's trip closed before its clear or outcome, so that job (not K) is untracked (T10, T14).
+      expect(tripView(state, 'ets2')).toMatchObject({phase: 'idle', untrackedJob: true, current: null});
+      play([[s.event(r.fined(), rev('4')), [attr(null, 'ambiguous')]]], state);
+    });
+    it('a stale checkpoint whose replay does not end its job still opens the late-attach trip [synthetic-inference]', () => {
+      // A truck re-send (revision 4) proves that the state (revision 3) lagged the replay, but nothing ended or replaced
+      // the job, so it is still the job at nextEventSeq.
+      const s = new Script(ETS2_A), a = attachUuid(ETS2_A, '3');
+      const retained = [s.event(r.truckConfigured(), rev('4')), s.event(r.fined(), rev('4'))];
+      const state = play([[sessionInput(s.welcome())], [{kind: 'checkpoint', message: s.checkpoint(job(), 2, {}, '3')}],
+        [retained[0]], [retained[1], [attr(null, 'free-driving')]]]);
+      expect(dueAttach(state)).toEqual({pluginSessionId: ETS2_A, nextEventSeq: '3', job: job()});
+      play([[attachStep, [open(a, BASE_UTC, {gameMode: CHECKPOINT_MODE, recordingCompleteness: 'partial'}), lateAttach(a, '3')]],
+        [s.event(r.fined(), rev('4')), [attr(a, 'trip')]]], state);
+    });
+    it('a checkpoint state ahead of its nextEventSeq still opens the late-attach trip: older replayed outcomes and clears belong to earlier jobs (OD-5 S11) [synthetic-inference]', () => {
+      // The state (revision 5) already shows job K, configured by a callback the store has not taken yet (eventSeq 3, at
+      // nextEventSeq). The replayed delivery (revision 3) and clear (revision 4) ended the earlier job.
+      const s = new Script(ETS2_A), a = attachUuid(ETS2_A, '3');
+      const retained = [s.event(r.delivered(), rev('3')), s.event(r.jobCleared(), rev('4'))];
+      const state = play([[sessionInput(s.welcome())], [{kind: 'checkpoint', message: s.checkpoint(job(), 2, {}, '5')}],
+        [retained[0], [attr(null, 'ambiguous')]], [retained[1]]]);
+      expect(dueAttach(state)).toEqual({pluginSessionId: ETS2_A, nextEventSeq: '3', job: job()});
+      play([[attachStep, [open(a, BASE_UTC, {gameMode: CHECKPOINT_MODE, recordingCompleteness: 'partial'}), lateAttach(a, '3')]],
+        // K's own configuration event arrives live: the same job, so the late-attach trip continues.
+        [s.event(r.jobConfigured(), rev('5'))], [s.event(r.fined(), rev('5')), [attr(a, 'trip')]]], state);
+    });
+  });
 });
 
 describe('cold start (TripSeed) and effect bounds (T11, T18)', () => {

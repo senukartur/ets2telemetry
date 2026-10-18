@@ -76,6 +76,8 @@ export interface EventOptions {
   utcMs?: number | null;
   /** Real milliseconds since the previous item of this script; default 1,000. */
   advanceMs?: number;
+  /** occurred.configurationRevision; default 1, below the shared checkpoint fixture's revision 7. */
+  configurationRevision?: string;
 }
 
 /**
@@ -113,12 +115,13 @@ export class Script {
   /**
    * A checkpoint at the script's current point: `nextEventSeq` is the next eventSeq. With `retained` > 0 the last
    * `retained` events already built are unacknowledged and retained, so a consumer receives them after the checkpoint
-   * as replayed events (protocol v1 §7, §9).
+   * as replayed events (protocol v1 §7, §9). `revision` replaces the fixture's configuration revision (7).
    */
-  checkpoint(checkpointJob: JobConfiguration | null, retained = 0, state: Partial<CurrentState> = {}): CheckpointMessage {
+  checkpoint(checkpointJob: JobConfiguration | null, retained = 0, state: Partial<CurrentState> = {}, revision?: string): CheckpointMessage {
     const data = structuredClone(fixture<Of<'checkpoint'>>('checkpoint').data);
     data.boundarySeq = this.seq.toString();
     data.state.configuration.job = checkpointJob === null ? {available: false, reason: 'not-observed'} : {available: true, value: checkpointJob};
+    if (revision !== undefined) data.state.configuration.revision = revision;
     data.state = {...data.state, ...state};
     this.acked = (this.next - 1n - BigInt(retained)).toString();
     data.status.delivery = {...data.status.delivery, ackedThroughEventSeq: this.acked, nextEventSeq: this.next.toString(),
@@ -151,7 +154,7 @@ export class Script {
     return this.envelope('event', {eventSeq: (this.next++).toString(), redelivered: false, record, occurred: {
       monotonicNs: {available: true, value: (this.ns - 1_000_000n).toString()}, gameTime: {minutes: {available: true, value: this.minutes}, clockId: this.gameClock},
       utcUnixMs: utc === null ? {available: false, reason: 'not-observed'} : {available: true, value: utc.toString()},
-      simulation: options.simulation ?? 'running', configurationRevision: '1', boundaryOrder: this.next.toString()
+      simulation: options.simulation ?? 'running', configurationRevision: options.configurationRevision ?? '1', boundaryOrder: this.next.toString()
     }});
   }
   /** A gap of `count` eventSeq values from the next one; all of them have `cause` unless `causes` splits them. */

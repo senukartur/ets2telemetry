@@ -114,11 +114,13 @@ export interface ConfigurationRef {eventSeq: Uint64; key: string}
  * `key`) while the game's slot was idle. It opens once the session's processed point reaches `nextEventSeq − 1`, so the
  * retained events replayed after the checkpoint are stepped first. The other values describe the checkpoint, where the
  * trip starts: its UTC label (capture label, else the session's last label, else the receipt label; null without any),
- * capture time and clock, game mode and simulation state.
+ * capture time and clock, game mode and simulation state. `configurationRevision` is the checkpoint state's
+ * `configuration.revision`: a replayed event with a newer revision proves that the state lagged the replayed events and
+ * may show a job that had already ended (docs/trips.md, stale checkpoints).
  */
 export interface PendingAttach {
   nextEventSeq: Uint64; key: string; job: JobConfiguration; labelUtcMs: number | null; monotonicNs: Uint64; clockId: string;
-  gameMode: GameModeEvidence; simulation: 'running' | 'paused' | 'unavailable';
+  gameMode: GameModeEvidence; simulation: 'running' | 'paused' | 'unavailable'; configurationRevision: Uint64;
 }
 /** What an `attach` input will store: openAttachedTrip's session, checkpoint key and job (docs/storage.md). */
 export interface AttachRequest {pluginSessionId: string; nextEventSeq: Uint64; job: JobConfiguration}
@@ -131,8 +133,8 @@ export interface SessionState {
    * trip opens (J9), or the job of a trip a gap closed before its clear or outcome. Gameplay events meanwhile are
    * ambiguous, never free driving (concept.md, October 13, 2026). Cleared by `job.cleared`, an outcome or a new trip; a
    * later checkpoint while idle replaces or clears it, and a new plugin session starts with none. A checkpoint job
-   * describes the state at the checkpoint, so it applies only from `attachedFromEventSeq` on: replayed events below it
-   * happened earlier.
+   * applies only from `attachedFromEventSeq` on, so a replayed clear or outcome below it does not end it, unless its
+   * configuration revision proves that the checkpoint's state lagged the replay (docs/trips.md, stale checkpoints).
    */
   untrackedJob: {key: string; source: 'checkpoint' | 'gap'} | null;
   /** The current connection's late-attach trip still to open (J9); null when none is pending. */
