@@ -462,8 +462,7 @@ var P = {
   bookOpen: '<path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/>',
   settings2: '<path d="M20 7h-9"/><path d="M14 17H5"/><circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/>',
   userRound: '<circle cx="12" cy="8" r="5"/><path d="M20 21a8 8 0 0 0-16 0"/>',
-  shieldCheck: '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/>',
-  shieldX: '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m14.5 9.5-5 5"/><path d="m9.5 9.5 5 5"/>',
+  mountain: '<path d="m8 3 4 8 5-5 5 15H2L8 3z"/>',
   truck: '<path d="M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2"/><path d="M15 18H9"/><path d="M19 18h2a1 1 0 0 0 1-1v-3.65a1 1 0 0 0-.22-.624l-3.48-4.35A1 1 0 0 0 17.52 8H14"/><circle cx="17" cy="18" r="2"/><circle cx="7" cy="18" r="2"/>',
   fuel: '<line x1="3" x2="15" y1="22" y2="22"/><line x1="4" x2="14" y1="9" y2="9"/><path d="M14 22V4a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v18"/><path d="M14 13h2a2 2 0 0 1 2 2v2a2 2 0 0 0 2 2a2 2 0 0 0 2-2V9.83a2 2 0 0 0-.59-1.42L18 5"/>',
   mapPin: '<path d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0"/><circle cx="12" cy="10" r="3"/>',
@@ -613,7 +612,7 @@ function topbar(title, extra) {
   var game = { live: ['ok', 'dot live', t('chip.game.live', { game: d.game, mode: t('mode.' + d.mode) })], paused: ['warn', '', t('chip.game.paused', { game: d.game })], waiting: ['neutral', '', t('chip.game.waiting')], lost: ['err', '', t('chip.game.lost')] }[S.conn];
   var gIcon = { live: '', paused: ic('pause', 's'), waiting: ic('clock', 's'), lost: ic('wifiOff', 's') }[S.conn];
   var hs = hmState();
-  var hm = hs === 'active' ? '<span class="chip ok">' + ic('shieldCheck', 's') + t('chip.hm.pass') + '</span>' : hs === 'lost' ? '<span class="chip err">' + ic('shieldX', 's') + t('chip.hm.lost') + '</span>' : '<span class="chip warn">' + ic('shieldX', 's') + t('chip.hm.fail', { n: hp }) + '</span>';
+  var hm = hs === 'active' ? '<span class="chip ok">' + ic('mountain', 's') + t('chip.hm.pass') + ic('check', 's') + '</span>' : hs === 'lost' ? '<span class="chip err">' + ic('mountain', 's') + t('chip.hm.lost') + '</span>' : '<span class="chip warn">' + ic('mountain', 's') + t('chip.hm.fail', { n: hp }) + '</span>';
   return '<header class="topbar" data-spec="shell.topbar"><h1>' + title + '</h1>' +
     '<div class="row wrap" data-spec="shell.topbar.status" style="gap:6px"><span class="chip ' + game[0] + '">' + (game[1] ? '<span class="' + game[1] + '"></span>' : gIcon) + game[2] + '</span>' +
     '<span class="chip ok">' + ic('check', 's') + t('chip.plugin', { n: 2, m: 2 }) + '</span>' + hm +
@@ -651,12 +650,12 @@ function liveScreen() {
     '<div><div class="label">' + t('live.range') + ' · ' + t('live.rangeNote') + '</div><div class="metric" style="font-size:22px">' + val(d.range) + '<small>' + u(d.dU) + '</small></div></div>' +
     '<div><div class="label">' + t('live.cons') + '</div><div class="b7 num" style="font-size:15px">' + val(d.avg) + ' <span class="muted small">' + u(d.avgU) + '</span></div><div class="small muted">' + t(S.game === 'ats' ? 'live.consNoteAts' : 'live.consNote') + '</div></div></div></div></div>';
   var hs = hmState(), rows = hmRows(), hp = hmPassed();
-  var hmHead = hs === 'active' ? '<span class="chip ok" style="font-size:13px;min-height:32px">' + ic('shieldCheck') + t('hm.active') + '</span>' : hs === 'lost' ? '<span class="chip err" style="font-size:13px;min-height:32px">' + ic('shieldX') + t('hm.lost') + '</span>' : '<span class="chip warn" style="font-size:13px;min-height:32px">' + ic('shieldX') + t('hm.inactive') + '</span>';
+  var hmHead = hs === 'active' ? '<span class="chip ok" style="font-size:13px;min-height:32px">' + ic('mountain') + t('hm.active') + '</span>' : hs === 'lost' ? '<span class="chip err" style="font-size:13px;min-height:32px">' + ic('mountain') + t('hm.lost') + '</span>' : '<span class="chip warn" style="font-size:13px;min-height:32px">' + ic('mountain') + t('hm.inactive') + '</span>';
   var hmCard = '<div class="card" data-spec="live.hardMode"><div class="ch"><h2 class="ct">' + t('hm.title') + '</h2>' + hmHead + '</div><div class="cb" style="display:flex;flex-direction:column;gap:10px">' +
     '<div class="small t2">' + t('hm.count', { n: hp }) + '</div><div class="bar ' + (hp === 12 ? 'ok' : 'amber') + '"><i style="width:' + Math.round(hp / 12 * 100) + '%"></i></div>' +
     (hs === 'lost' ? '<div class="badge err" style="white-space:normal;line-height:1.4;padding:6px 9px">' + t('hm.lostText', { what: t('hm.c.truckstab'), v: '70%', time: '09:31' }) + '</div>' : '') +
     '<div class="hmgrid" data-spec="live.hardMode.criteria">' + rows.map(function (r) { return '<div class="hmi ' + (r.pass ? '' : 'bad') + '">' + ic(r.pass ? 'check' : 'x', 's') + '<span>' + t('hm.c.' + r.id) + '</span></div>'; }).join('') + '</div>' +
-    '<button class="btn s sm" data-sheet="1" data-spec="live.hardMode.open">' + ic('shieldCheck', 's') + t('hm.view') + '</button></div></div>';
+    '<button class="btn s sm" data-sheet="1" data-spec="live.hardMode.open">' + ic('mountain', 's') + t('hm.view') + '</button></div></div>';
   var job = '<div class="card" data-spec="live.job"><div class="ch"><h2 class="ct">' + t('live.job') + '</h2><div class="row"><span class="badge neutral">' + ic('package', 's') + V(d.cargo) + ' · ' + V(d.mass + ' ' + u(d.massU)) + '</span><span class="badge neutral">' + t('live.market.' + d.market) + '</span>' +
     '<span class="badge warn">' + ic('clock', 's') + t('live.deadline') + ' ' + V(t('fmt.in', { h: d.dl[0], m: d.dl[1] })) + '</span></div></div><div class="cb">' +
     '<div class="route" data-spec="live.job.progress"><div class="ln"></div><div class="dn" style="width:calc((100% - 20px) * ' + prog / 100 + ')"></div><div class="pt" style="left:1px;background:var(--yu-accent-light)"></div><div class="pt" style="right:1px;background:var(--yu-text-muted)"></div>' +
@@ -677,7 +676,7 @@ function liveScreen() {
 }
 function hmSheet() {
   var rows = hmRows(), hp = hmPassed(), hs = hmState(), d = D();
-  var status = hs === 'active' ? '<span class="chip ok">' + ic('shieldCheck', 's') + t('hm.active') + ' · 12/12</span>' : hs === 'lost' ? '<span class="chip err">' + ic('shieldX', 's') + t('hm.lost') + '</span>' : '<span class="chip warn">' + ic('shieldX', 's') + t('hm.inactive') + ' · ' + hp + '/12</span>';
+  var status = hs === 'active' ? '<span class="chip ok">' + ic('mountain', 's') + t('hm.active') + ' · 12/12</span>' : hs === 'lost' ? '<span class="chip err">' + ic('mountain', 's') + t('hm.lost') + '</span>' : '<span class="chip warn">' + ic('mountain', 's') + t('hm.inactive') + ' · ' + hp + '/12</span>';
   var list = rows.map(function (r, i) {
     return '<div class="crit ' + (r.pass ? '' : 'bad') + '"><span class="sicon ' + (r.pass ? 'ok' : 'err') + '">' + ic(r.pass ? 'check' : 'x', 's') + '</span><div style="min-width:0"><div class="b6">' + (i + 1) + '. ' + t('hm.c.' + r.id) + '</div><div class="cv">' + r.cvar + '</div></div>' +
       '<span class="req">' + r.req + '</span><span class="det">' + r.det + '</span></div>';
@@ -704,7 +703,7 @@ function syncBadge(s) {
   var m = { sent: ['ok', 'check'], queued: ['warn', 'clock'], error: ['err', 'x'] }[s];
   return '<span class="badge ' + m[0] + '" title="' + t('sync.' + s) + '">' + ic(m[1], 's') + t('sync.' + s) + '</span>';
 }
-function hmMark(on) { return on ? '<span class="badge ok" title="Hard Mode" style="padding:2px 6px">' + ic('shieldCheck', 's') + 'HM</span>' : ''; }
+function hmMark(on) { return on ? '<span class="badge ok" title="Hard Mode" style="padding:2px 6px">' + ic('mountain', 's') + 'HM</span>' : ''; }
 function journalScreen() {
   var bar = '<div class="row wrap" data-spec="journal.filters" style="gap:8px"><div class="seg"><button class="on">' + t('j.all') + '</button><button>ETS2</button><button>ATS</button></div>' +
     '<div class="input val" style="width:160px">' + t('j.anyOutcome') + ic('chevDown', 's') + '</div><div class="input val" style="width:170px">' + t('j.anyRecording') + ic('chevDown', 's') + '</div>' +
@@ -723,7 +722,7 @@ function journalScreen() {
 function tripScreen() {
   var tr = TRIPS[S.trip], du = u(tr.dU);
   var head = '<div class="row between" data-spec="trip.header"><div><button class="btn g sm" data-go="journal" style="padding-left:0">' + ic('chevLeft', 's') + t('tr.back') + '</button>' +
-    '<div class="row wrap" style="gap:8px;margin-top:2px"><h2 style="margin:0;font-size:22px;font-weight:700">' + esc(tr.cargo) + '</h2>' + gameChip(tr.game) + outBadge(tr.out) + recBadge(tr.rec) + (tr.hm ? '<span class="badge ok">' + ic('shieldCheck', 's') + 'Hard Mode</span>' : '') + '</div>' +
+    '<div class="row wrap" style="gap:8px;margin-top:2px"><h2 style="margin:0;font-size:22px;font-weight:700">' + esc(tr.cargo) + '</h2>' + gameChip(tr.game) + outBadge(tr.out) + recBadge(tr.rec) + (tr.hm ? '<span class="badge ok">' + ic('mountain', 's') + 'Hard Mode</span>' : '') + '</div>' +
     '<div class="small muted" style="margin-top:3px">' + tr.from + ' · ' + tr.fromCo + ' → ' + tr.to + ' · ' + tr.toCo + ' · ' + date(tr) + '</div></div>' +
     '<button class="btn s" data-spec="trip.export">' + ic('download', 's') + t('j.export') + '</button></div>';
   var tile = function (cls, l, v, sub) { return '<div class="card ' + cls + '" style="padding:14px 16px"><div class="label">' + l + '</div><div class="metric">' + v + '</div><div class="small t2">' + sub + '</div></div>'; };
@@ -754,7 +753,7 @@ function tripScreen() {
     body = chart;
   }
   var left = '<div class="card" data-spec="trip.detailTabs"><div class="ch"><div class="seg">' + tab('summary') + tab('timeline') + tab('completeness') + '</div><span class="small muted">' + t('tr.samples') + '</span></div><div class="cb">' + body + '</div></div>';
-  var hmc = '<div class="card" data-spec="trip.hardMode"><div class="ch"><h2 class="ct">Hard Mode</h2>' + (tr.hm ? '<span class="chip ok">' + ic('shieldCheck', 's') + t('hm.tripYes') + '</span>' : '<span class="chip neutral">' + ic('shieldX', 's') + t('hm.tripNo') + '</span>') + '</div><div class="cb">' +
+  var hmc = '<div class="card" data-spec="trip.hardMode"><div class="ch"><h2 class="ct">Hard Mode</h2>' + (tr.hm ? '<span class="chip ok">' + ic('mountain', 's') + t('hm.tripYes') + '</span>' : '<span class="chip neutral">' + ic('mountain', 's') + t('hm.tripNo') + '</span>') + '</div><div class="cb">' +
     '<div class="kv"><span>' + t('tr.hmStart') + '</span><b>' + (tr.hm ? '12/12' : '9/12') + '</b></div><div class="kv"><span>' + t('tr.hmEnd') + '</span><b>' + (tr.hm ? '12/12' : '9/12') + '</b></div><div class="small muted" style="margin-top:6px">' + t('tr.hmSnapshot') + '</div></div></div>';
   var money = '<div class="card" data-spec="trip.money"><div class="ch"><h2 class="ct">' + t('tr.money') + '</h2></div><div class="cb"><div class="kv"><span>' + t('tr.fines') + '</span><b>' + (S.trip === 1 ? '400 EUR' : '0') + '</b></div><div class="kv"><span>' + t('tr.tolls') + '</span><b>' + (S.trip === 1 ? '82 EUR' : '0') + '</b></div><div class="kv"><span>' + t('tr.ferry') + '</span><b>0</b></div></div></div>';
   return head + tiles + '<div class="grid" style="grid-template-columns:minmax(0,2fr) minmax(0,1fr);align-items:start">' + left + '<div class="grid">' + hmc + money + '</div></div>';
@@ -901,7 +900,7 @@ function overlayScene() {
   var handle = function (pos) { return '<span class="handle" style="' + pos + '">' + ic('move', 's') + t('ov.drag') + '</span>'; };
   var open = function (spec, style) { return '<div class="ovl ' + (edit ? 'edit' : '') + '" data-conn="' + S.conn + '" data-spec="' + spec + '" style="' + style + '">'; };
   var v = function (s) { return '<span class="val">' + s + '</span>'; };
-  var hmIcon = '<span class="sx hm ' + (hs === 'active' ? 'ok' : 'bad') + '" title="Hard Mode">' + ic(hs === 'active' ? 'shieldCheck' : 'shieldX', 's') + '<span>' + (hs === 'active' ? 'HM' : 'HM ' + hmPassed() + '/12') + '</span></span>';
+  var hmIcon = '<span class="sx hm ' + (hs === 'active' ? 'ok' : 'bad') + '" title="Hard Mode">' + ic('mountain', 's') + '<span>' + (hs === 'active' ? 'HM' : 'HM ' + hmPassed() + '/12') + '</span></span>';
   var html;
   if (S.ovl === 'strip') {
     var sx = function (icon, inner, title) { return '<span class="sx" title="' + title + '">' + ic(icon, 's') + inner + '</span>'; };

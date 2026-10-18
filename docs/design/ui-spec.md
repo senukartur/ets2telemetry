@@ -65,7 +65,7 @@ Values are in [tokens.css](tokens.css). Summary:
 | Journal | `BookOpen` |
 | Settings | `Settings2` |
 | Account and sync | `Cloud` (offline: `CloudOff`) |
-| Hard Mode met / not met | `ShieldCheck` / `ShieldX` |
+| Hard Mode | `Mountain` in every state; the state is carried by the chip colour and its words ("Hard Mode ✓", "Hard Mode 10/12", "Hard Mode lost"). Do not use shield or badge-check shapes: the owner asked for a mark that cannot be confused with VTCBase's |
 | Plugin | `Plug` |
 | Recording | a dot (`--yu-online` with a 3 px 18% halo when recording) |
 | Cargo, origin, destination | `Package`, `MapPin`, `Flag` |
@@ -238,7 +238,7 @@ The overlay keeps its own minimal stylesheet with the `--yu-ov-*` tokens: panel 
 
 Behaviour is unchanged from ET-012a/b: sections come from `overlay.sections` and the layout from `overlay.layout`; a section without data is hidden; stale values are greyed with a "No signal 12 s" tag; paused shows a "Paused" tag; while no game is connected the overlay is hidden. Layout-edit mode draws a 2 px dashed `--yu-ov-edit` outline, a drag handle and an edit bar with Reset and Done.
 
-**Proposed new section `hard-mode`** (group **Status**): a shield icon with `HM` (ok colour) or `HM N/12` (problem colour). Adding it requires extending `OVERLAY_SECTION_IDS`, the settings migration and the presets (Everything and Job focus include it) in the ET-026c package.
+**Proposed new section `hard-mode`** (group **Status**): the `Mountain` icon with `HM` (ok colour) or `HM N/12` (problem colour). Adding it requires extending `OVERLAY_SECTION_IDS`, the settings migration and the presets (Everything and Job focus include it) in the ET-026c package.
 
 ## 8. Localization
 
