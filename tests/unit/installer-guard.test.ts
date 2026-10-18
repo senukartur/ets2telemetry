@@ -1,6 +1,7 @@
 import {execFile} from 'node:child_process';
 import {mkdir, readdir, readFile, writeFile} from 'node:fs/promises';
 import path from 'node:path';
+import {fileURLToPath} from 'node:url';
 import {promisify} from 'node:util';
 import {describe, expect, it} from 'vitest';
 import {checkedPaths, checkInstalled, checkInstallTest, checkLaunchEnvironment, checkRunPlan, checkRunSignal, FACTS_VARIABLE, factsEvidence, installedEnvironment,
@@ -370,5 +371,33 @@ describe('fact helpers', () => {
       : Promise.reject(Object.assign(new Error('missing'), {code: 'ENOENT'}));
     expect(await resolveRealLocation(`${RUN_ROOT}\\LocalAppData\\ETS2Telemetry`, realpath)).toBe('D:\\real-run\\LocalAppData\\ETS2Telemetry');
     await expect(resolveRealLocation(RUN_ROOT, () => Promise.reject(Object.assign(new Error('denied'), {code: 'EACCES'})))).rejects.toThrow('denied');
+  });
+});
+// ET-018 PR-4: every driver command of the harness runs as the root of its own BoundedProcess Job, which refuses a timeout
+// above its cap (ArgumentOutOfRangeException) before anything starts. A step written with a larger timeout would fail the
+// hosted lifecycle at that step, so the harness's literal timeouts are checked here against the cap in BoundedProcess.cs.
+describe('harness Job bounds', () => {
+  const checkout = fileURLToPath(new URL('../..', import.meta.url));
+  const read = (relative: string) => readFile(path.join(checkout, relative), 'utf8');
+  async function jobCap(): Promise<number> {
+    const match = /if \(timeoutMs<100 \|\| timeoutMs>(\d+)\) throw new ArgumentOutOfRangeException\("timeoutMs"\)/.exec(await read('scripts/watchdog/BoundedProcess.cs'));
+    expect(match, 'BoundedProcess.Run timeout check').not.toBeNull();
+    return Number(match![1]);
+  }
+  it('passes every Invoke-Driver call a literal timeout within the BoundedProcess cap', async () => {
+    const cap = await jobCap();
+    expect(cap).toBe(60000);
+    const calls = (await read('scripts/installer/Invoke-InstallerLifecycle.ps1')).split(/\r?\n/)
+      .filter(line => /\bInvoke-Driver\s+'/.test(line) && !/^\s*function\s/.test(line));
+    expect(calls.length).toBeGreaterThan(30);
+    const timeouts = calls.map(line => ({line: line.trim(), timeout: Number(/\s(\d+)\s*$/.exec(line)?.[1] ?? NaN)}));
+    expect(timeouts.filter(call => !Number.isInteger(call.timeout) || call.timeout < 100 || call.timeout > cap)).toEqual([]);
+    expect(timeouts.map(call => call.line)).toContain("Invoke-Driver 'app-uninstall' @('complete-app', $executableA, 'complete') 60000");
+  });
+  it('keeps the in-app uninstall run\'s own budget below the cap', async () => {
+    const cap = await jobCap();
+    const budget = Number(/const APP_UNINSTALL_RUN_BUDGET_MS = (\d+);/.exec(await read('scripts/installer/installer-lifecycle.mjs'))?.[1]);
+    expect(budget).toBeGreaterThan(0);
+    expect(budget).toBeLessThanOrEqual(cap - 5000);
   });
 });

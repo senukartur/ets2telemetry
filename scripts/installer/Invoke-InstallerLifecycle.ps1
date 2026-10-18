@@ -28,7 +28,8 @@ $setup = Join-Path $checkout 'out/make/squirrel.windows/x64/ETS2Telemetry Deskto
 $planSteps = @('signal','facts','guard-plan','create-run-root','guard-ready','build-fixture-0.1.1','seed','install-0.1.0','installed-smokes-0.1.0',
     'data-launch-0.1.0','verify-0.1.0','repair-0.1.0','update-0.1.1','installed-smokes-0.1.1','data-launch-0.1.1','verify-0.1.1','games',
     'windows-uninstall-complete-running','install-0.1.0-again','plugin-launch-installed','windows-uninstall-deferred-game','reinstall-0.1.0-over-deferral',
-    'plugin-launch-adopted','windows-uninstall-final','install-0.1.0-for-app','app-uninstall-blocked-game','app-uninstall-complete','cleanup')
+    'plugin-launch-adopted','windows-uninstall-final','install-0.1.0-for-app','plugin-launch-for-app','app-uninstall-blocked-game','app-uninstall-verify-blocked-game',
+    'app-uninstall-complete','app-uninstall-verify-complete','cleanup')
 if ($Plan) {
     [ordered]@{run=$false; steps=$planSteps; scenariosA=$ScenariosA; scenariosB=$ScenariosB; setup=$setup; uninstall='windows-initiated and in-app, in R only';
         localRuns='only with -AllowLocal on an explicit owner request'; applicationLaunched=$false} | ConvertTo-Json
@@ -305,11 +306,16 @@ try {
     $executableA = Assert-Installed 'install-for-app-0.1.0' '0.1.0'
     Assert-ProductLinks 'install-for-app-0.1.0' $true
     $env:ETS2TELEMETRY_DIAGNOSTIC_DIR = $null
-    Invoke-Driver 'app-uninstall' @('blocked-game', $executableA, 'blocked') 90000
+    # Each command gets its own Job of at most 60 s (BoundedProcess): the plugin is installed first, so each in-app run only
+    # starts the application; the run records, its verify command asserts.
+    Invoke-Driver 'plugin-launch' @('for-app', $executableA, 'installed') 60000
+    Invoke-Driver 'app-uninstall' @('blocked-game', $executableA, 'blocked') 60000
+    Invoke-Driver 'app-uninstall-verify' @('blocked-game') 30000
     $null = Assert-Installed 'after-app-blocked' '0.1.0'
     Assert-ProductLinks 'after-app-blocked' $true
     $helper = Get-VendorHelper '0.1.0'
-    Invoke-Driver 'app-uninstall' @('complete-app', $executableA, 'complete') 120000
+    Invoke-Driver 'app-uninstall' @('complete-app', $executableA, 'complete') 60000
+    Invoke-Driver 'app-uninstall-verify' @('complete-app') 30000
     Assert-Uninstalled 'complete-app' $helper
     $report.passed = $true
 } catch {
