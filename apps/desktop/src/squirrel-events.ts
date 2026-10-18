@@ -31,10 +31,16 @@ export type SquirrelArgs = {readonly kind: 'none'} | {readonly kind: 'invalid'} 
 const EVENTS: readonly SquirrelEvent[] = Object.freeze(['install', 'updated', 'obsolete', 'uninstall']);
 const PACKAGE_VERSION = /^\d{1,9}\.\d{1,9}\.\d{1,9}(-[0-9A-Za-z.-]{1,40})?$/;
 
-/** The uninstall hook's global deadline; Squirrel waits 10 s for it. */
+/**
+ * The uninstall hook's global deadline. Squirrel's 10 s start when it spawns the process, so both deadlines count from the
+ * process time origin (`performance.now()` is 0 there), less PROCESS_START_MARGIN_MS for the time before that origin: the
+ * engine stops at min(hook start + 8 s, 8 s - margin), and the hard stop at min(hook start + 9 s, 9 s - margin).
+ */
 export const UNINSTALL_DEADLINE_MS = 8000;
-/** A hook that is still running this long after it started writes a deferred receipt and exits, inside Squirrel's 10 s. */
+/** A hook that is still running then writes a deferred receipt and exits, inside Squirrel's 10 s. */
 export const UNINSTALL_HARD_STOP_MS = 9000;
+/** Allowance for the time between Squirrel's spawn and the process time origin, which `performance.now()` cannot see. */
+export const PROCESS_START_MARGIN_MS = 500;
 /** A running instance gets this long to exit after the uninstall-exit request, polled every INSTANCE_POLL_MS. */
 export const INSTANCE_EXIT_WAIT_MS = 6000;
 export const INSTANCE_POLL_MS = 200;
@@ -63,6 +69,12 @@ export function parseSquirrelArgs(args: readonly string[]): SquirrelArgs {
 }
 
 export type InstanceState = 'none' | 'exited' | 'running';
+/**
+ * The receipt's primary reason: the engine's, or one of the hook's own. `RESIDUE_REMAINS`: the engine said complete but
+ * something is left. `ENGINE_FAILED`: the engine or the hook threw; nothing after the failure ran, and a later run
+ * finishes from the intent if the engine reached it.
+ */
+export type HookCode = UninstallCode | 'RESIDUE_REMAINS' | 'ENGINE_FAILED';
 export type ShortcutState = 'created' | 'removed' | 'skipped' | 'failed';
 /** The %TEMP% receipt of one uninstall hook: fixed codes, counts and names of allowlisted entries only, never a path. */
 export interface UninstallReceipt {
@@ -71,7 +83,7 @@ export interface UninstallReceipt {
   readonly createdUtc: string;
   readonly appVersion: string;
   readonly outcome: UninstallResult['outcome'];
-  readonly code: UninstallCode | 'RESIDUE_REMAINS' | null;
+  readonly code: HookCode | null;
   readonly mode: 'production' | 'test-root' | null;
   readonly instance: InstanceState | 'not-checked';
   readonly plugins: UninstallResult['plugins'];
@@ -79,6 +91,9 @@ export interface UninstallReceipt {
   readonly roaming: UninstallResult['roaming'];
   readonly readme: boolean;
   readonly shortcuts: ShortcutState;
+  /** Milliseconds from the process time origin to the hook's start (main's script), for measuring the startup cost. */
+  readonly startupOffsetMs: number;
+  /** Milliseconds from the hook's start to the receipt. */
   readonly elapsedMs: number;
 }
 
@@ -101,7 +116,7 @@ export interface SquirrelPorts {
   /** Production only (O7): releases the lock, then removes Electron's Roaming userData; true when it is gone. */
   readonly removeRoamingUserData?: () => Promise<boolean>;
   writeReceipt(name: string, content: string): Promise<boolean>;
-  /** Monotonic milliseconds. */
+  /** Monotonic milliseconds since the process time origin (`performance.now()` in production). */
   clock(): number;
   delay(milliseconds: number): Promise<void>;
   /** Resolves once after `milliseconds`; the hard stop's own timer, separate from `delay` so tests can hold it. */
@@ -146,33 +161,38 @@ function wantsShortcuts(roots: Extract<UninstallRoots, {ok: true}>, ports: Squir
   return roots.mode === 'production' || roots.testFile.shortcuts;
 }
 
+/** The engine deadline and the hard stop on the clock, anchored to the process time origin (see UNINSTALL_DEADLINE_MS). */
+export function hookDeadlines(started: number): {engine: number; hardStop: number} {
+  return {engine: Math.min(started + UNINSTALL_DEADLINE_MS, UNINSTALL_DEADLINE_MS - PROCESS_START_MARGIN_MS),
+    hardStop: Math.min(started + UNINSTALL_HARD_STOP_MS, UNINSTALL_HARD_STOP_MS - PROCESS_START_MARGIN_MS)};
+}
+
 /**
- * The uninstall hook under a hard stop: a run still going after UNINSTALL_HARD_STOP_MS (a file operation that never
- * settles) writes a deferred receipt and returns 3. The engine's intent is already on disk then, so a later run finishes.
+ * The uninstall hook under a hard stop: a run still going at the hard stop (a file operation that never settles) writes
+ * a deferred receipt and returns 3. If the engine reached its intent, a later run finishes; otherwise nothing was
+ * deleted. The run and the hard stop race for one claim: the side that claims first writes the only receipt and decides
+ * the exit code, and the result resolves only after that receipt was written. The other side never resolves the race.
  */
 async function uninstallWithHardStop(ports: SquirrelPorts): Promise<number> {
   const started = ports.clock();
-  const state: HookState = {mode: null, instance: 'not-checked', shortcuts: 'skipped', finished: false};
-  const hardStop = ports.hardStop(UNINSTALL_HARD_STOP_MS).then(async () => {
-    if (state.finished) return EXIT_CODES.deferred;
-    state.finished = true;
-    await writeReceipt(ports, {outcome: 'deferred', code: 'BUDGET_EXPIRED', plugins: EMPTY_PLUGINS, data: EMPTY_DATA, roaming: 'not-run'}, state, false, started);
-    return EXIT_CODES.deferred;
-  });
-  return Promise.race([uninstall(ports, state, started), hardStop]);
+  const deadlines = hookDeadlines(started);
+  const state: HookState = {mode: null, instance: 'not-checked', shortcuts: 'skipped', claimed: false};
+  const claim = (settled: Settled, readme: boolean): Promise<number> => {
+    if (state.claimed) return new Promise<number>(() => undefined);
+    state.claimed = true;
+    return writeReceipt(ports, settled, state, readme, started).then(() => EXIT_CODES[settled.outcome]);
+  };
+  const hardStop = ports.hardStop(Math.max(0, deadlines.hardStop - started))
+    .then(() => claim({outcome: 'deferred', code: 'BUDGET_EXPIRED', plugins: EMPTY_PLUGINS, data: EMPTY_DATA, roaming: 'not-run'}, false));
+  const run = uninstall(ports, state, deadlines.engine, claim)
+    .catch(() => claim({outcome: 'deferred', code: 'ENGINE_FAILED', plugins: EMPTY_PLUGINS, data: EMPTY_DATA, roaming: 'not-run'}, false));
+  return Promise.race([run, hardStop]);
 }
 
-interface HookState {mode: UninstallReceipt['mode']; instance: UninstallReceipt['instance']; shortcuts: ShortcutState; finished: boolean}
-type Settled = Pick<UninstallResult, 'outcome' | 'plugins' | 'data' | 'roaming'> & {code: UninstallReceipt['code']};
+interface HookState {mode: UninstallReceipt['mode']; instance: UninstallReceipt['instance']; shortcuts: ShortcutState; claimed: boolean}
+type Settled = Pick<UninstallResult, 'outcome' | 'plugins' | 'data' | 'roaming'> & {code: HookCode | null};
 
-async function uninstall(ports: SquirrelPorts, state: HookState, started: number): Promise<number> {
-  const deadline = started + UNINSTALL_DEADLINE_MS;
-  const finish = async (settled: Settled, readme: boolean): Promise<number> => {
-    if (state.finished) return EXIT_CODES[settled.outcome];
-    state.finished = true;
-    await writeReceipt(ports, settled, state, readme, started);
-    return EXIT_CODES[settled.outcome];
-  };
+async function uninstall(ports: SquirrelPorts, state: HookState, deadline: number, finish: (settled: Settled, readme: boolean) => Promise<number>): Promise<number> {
 
   // 1. The roots (U3). A refusal changes nothing.
   const roots = await ports.resolveRoots().catch((): UninstallRoots => ({ok: false, code: 'NOT_INSTALLED'}));
@@ -189,18 +209,19 @@ async function uninstall(ports: SquirrelPorts, state: HookState, started: number
   // 3. The engine, within what is left of the deadline.
   const known = await ports.readKnown().catch(() => []);
   const engine = ports.runUninstall ?? runUninstall;
-  let result: UninstallResult;
+  let settled: Settled;
   try {
-    result = await engine({roots, fs: ports.fs, checkRunning: ports.checkRunning, known, clock: () => ports.clock(), deadline,
+    const result = await engine({roots, fs: ports.fs, checkRunning: ports.checkRunning, known, clock: () => ports.clock(), deadline,
       runningCheckBudgetMs: Math.max(0, Math.min(RUNNING_CHECK_BUDGET_MS, deadline - ports.clock())), now: () => ports.now(), delay: milliseconds => ports.delay(milliseconds),
       ...(roots.mode === 'production' && ports.removeRoamingUserData ? {removeRoamingUserData: ports.removeRoamingUserData} : {}),
       ...(state.instance === 'running' ? {deferAll: 'INSTANCE_RUNNING' as const} : {})});
+    settled = settle(result, await exists(ports.fs, roots.dataRoot));
   } catch {
-    result = {outcome: 'deferred', code: 'DATA_ENTRY_BLOCKED', plugins: EMPTY_PLUGINS, data: EMPTY_DATA, roaming: 'not-run'};
+    // The engine threw: ENGINE_FAILED. If it reached its intent, a later run finishes from it; otherwise nothing was deleted.
+    settled = {outcome: 'deferred', code: 'ENGINE_FAILED', plugins: EMPTY_PLUGINS, data: EMPTY_DATA, roaming: 'not-run'};
   }
-  const settled = settle(result, await exists(ports.fs, roots.dataRoot));
   // A deferral leaves the README beside the intent (the U7 fallback until the PR-5 executor).
-  const readme = settled.outcome === 'deferred' ? await writeDeferralReadme(ports.fs, roots.dataRoot, settled.code === 'RESIDUE_REMAINS' ? null : settled.code).catch(() => false) : false;
+  const readme = settled.outcome === 'deferred' ? await writeDeferralReadme(ports.fs, roots.dataRoot, settled.code).catch(() => false) : false;
   state.shortcuts = await shortcuts;
   return finish(settled, readme);
 }
@@ -230,7 +251,7 @@ async function writeReceipt(ports: SquirrelPorts, settled: Settled, state: HookS
   const now = ports.now();
   const receipt: UninstallReceipt = {format: RECEIPT_FORMAT, version: 1, createdUtc: now.toISOString(), appVersion: ports.appVersion, outcome: settled.outcome,
     code: settled.code, mode: state.mode, instance: state.instance, plugins: settled.plugins, data: settled.data, roaming: settled.roaming, readme,
-    shortcuts: state.shortcuts, elapsedMs: Math.max(0, Math.round(ports.clock() - started))};
+    shortcuts: state.shortcuts, startupOffsetMs: Math.max(0, Math.round(started)), elapsedMs: Math.max(0, Math.round(ports.clock() - started))};
   return ports.writeReceipt(`${RECEIPT_PREFIX}${receiptStamp(now)}.json`, `${JSON.stringify(receipt, null, 2)}\n`).catch(() => false);
 }
 
@@ -275,18 +296,29 @@ export function productionSquirrelPorts(options: {app: SquirrelApp; appVersion: 
   };
 }
 
+/** Chromium's single-instance lock file in userData, held open while this process holds the lock. */
+const SINGLETON_LOCK_FILE = 'lockfile';
 /**
  * O7: removes `%APPDATA%\ETS2Telemetry Desktop` best effort, only when userData is exactly that folder and no diagnostic
- * profile override is set, and only after this process released the single-instance lock. A link is never followed.
+ * profile override is set. A link is never followed. Everything but Chromium's lock file goes while this process still
+ * holds the single-instance lock; then the lock is released and the lock file and the folder go. Between the release and
+ * that last removal a new start could take the lock and recreate the folder (and its own logs in the data root): a
+ * window of one or two file operations, which a start in the middle of a Windows uninstall makes unlikely.
  */
 async function removeRoamingUserData(app: SquirrelApp, env: Readonly<Record<string, string | undefined>>): Promise<boolean> {
   if (env.ETS2TELEMETRY_PROFILE_DIR) return false;
   const userData = app.getPath('userData');
   if (path.win32.normalize(userData).toLowerCase() !== path.win32.join(app.getPath('appData'), ROAMING_USER_DATA_NAME).toLowerCase()) return false;
-  app.releaseSingleInstanceLock();
   let stats;
-  try {stats = await nodeFs.lstat(userData);} catch {return true;}
-  if (stats.isSymbolicLink() || !stats.isDirectory()) return false;
+  try {stats = await nodeFs.lstat(userData);} catch {app.releaseSingleInstanceLock(); return true;}
+  if (stats.isSymbolicLink() || !stats.isDirectory()) {app.releaseSingleInstanceLock(); return false;}
+  const entries = await nodeFs.readdir(userData).catch((): string[] => []);
+  for (const name of entries) {
+    if (name.toLowerCase() === SINGLETON_LOCK_FILE) continue;
+    // fs.rm unlinks a link or junction itself instead of entering it.
+    await nodeFs.rm(path.join(userData, name), {recursive: true, force: true, maxRetries: 2, retryDelay: 100}).catch(() => undefined);
+  }
+  app.releaseSingleInstanceLock();
   await nodeFs.rm(userData, {recursive: true, force: true, maxRetries: 2, retryDelay: 100}).catch(() => undefined);
   return nodeFs.lstat(userData).then(() => false, () => true);
 }

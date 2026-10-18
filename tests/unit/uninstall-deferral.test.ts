@@ -27,7 +27,9 @@ it('the README names the folders, every hash, the reason and the data root, with
   expect(text).toContain('Reason: GAME_RUNNING');
   expect(text).toContain(`ets2: ${path.win32.join(root, 'bin', 'win_x64', 'plugins', 'ets2telemetry-plugin.dll')}`);
   for (const hash of [...KNOWN, 'a'.repeat(64)]) expect(text).toContain(`  ${hash}`);
-  expect(text).toContain(fixture.dataRoot);
+  expect(text).toContain(`Then delete the folders "plugins" and "uninstall" in ${fixture.dataRoot}.`);
+  expect(text).toContain('check it first');
+  expect(text).not.toContain('everything in it');
   expect(text).not.toMatch(/[^\r]\n/);
 });
 

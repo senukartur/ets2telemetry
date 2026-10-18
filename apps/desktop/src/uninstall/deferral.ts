@@ -2,7 +2,6 @@ import path from 'node:path';
 import {writeAtomicFile, type AtomicFileSystem} from '../plugin-setup/atomic-json-file';
 import {pluginTargetOf} from '../plugin-setup/plugin-registry';
 import {PENDING_DIRECTORY, PENDING_FILE, readPendingRecord} from './pending-record';
-import type {UninstallCode} from './engine';
 
 // The deferral fallback of an uninstall (ET-018 U7, fallback part; docs/uninstall.md, "Deferral"). PR-5 adds the RunOnce
 // executor that finishes a deferred uninstall at the next sign-in; until then a deferred run leaves `plugins\` and
@@ -14,7 +13,7 @@ export const README_FILE = 'README.txt';
 
 /** A plain-text README for the user: the remaining folders, the hashes that identify this application's plugin, the steps. */
 export function deferralReadme(dataRoot: string, folders: readonly {game: string; root: string; hashes: readonly string[]}[], known: readonly string[],
-  code: UninstallCode | null): string {
+  code: string | null): string {
   const hashes = [...new Set([...known, ...folders.flatMap(folder => folder.hashes)])].sort();
   const lines = [
     'ETS2Telemetry was uninstalled, but its cleanup could not finish.',
@@ -30,13 +29,14 @@ export function deferralReadme(dataRoot: string, folders: readonly {game: string
     for (const hash of hashes) lines.push(`  ${hash}`);
     lines.push('');
   }
-  lines.push(`Then delete this folder and everything in it: ${dataRoot}`, '',
-    'Reinstalling ETS2Telemetry instead cancels this cleanup and keeps the plugin in use.', '');
+  lines.push(`Then delete the folders "plugins" and "uninstall" in ${dataRoot}.`,
+    'If that folder holds anything else, it is not a file ETS2Telemetry knows: check it first, and delete the folder only when nothing you need is left.',
+    '', 'Reinstalling ETS2Telemetry instead cancels this cleanup and keeps the plugin in use.', '');
   return lines.join('\r\n');
 }
 
 /** Writes `<data root>\uninstall\README.txt` from the current intent; false when there is no intent or the write failed. */
-export async function writeDeferralReadme(fs: AtomicFileSystem, dataRoot: string, code: UninstallCode | null): Promise<boolean> {
+export async function writeDeferralReadme(fs: AtomicFileSystem, dataRoot: string, code: string | null): Promise<boolean> {
   const pending = await readPendingRecord(fs, dataRoot);
   if (pending.state !== 'present') return false;
   try {

@@ -1,7 +1,8 @@
 import * as fsp from 'node:fs/promises';
 import path from 'node:path';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
-import {cancelDeferralOnStart, EXIT_CODES, INSTANCE_EXIT_WAIT_MS, parseSquirrelArgs, RECEIPT_FORMAT, runSquirrelEvent, settle, UNINSTALL_DEADLINE_MS,
+import {cancelDeferralOnStart, EXIT_CODES, hookDeadlines, INSTANCE_EXIT_WAIT_MS, parseSquirrelArgs, PROCESS_START_MARGIN_MS, RECEIPT_FORMAT, runSquirrelEvent, settle,
+  UNINSTALL_DEADLINE_MS, UNINSTALL_HARD_STOP_MS,
   type SquirrelArgs, type SquirrelPorts, type UninstallReceipt} from '../../apps/desktop/src/squirrel-events';
 import type {UninstallPorts, UninstallResult} from '../../apps/desktop/src/uninstall/engine';
 import {resolveUninstallRoots} from '../../apps/desktop/src/uninstall/roots';
@@ -345,6 +346,97 @@ describe('uninstall', () => {
     expect(await runSquirrelEvent(event('uninstall'), test.ports)).toBe(EXIT_CODES.complete);
     expect(await fsp.readFile(game.dll)).toEqual(FOREIGN);
     expect(test.receipts[0].receipt.plugins.unrecognized).toBe(1);
+  });
+});
+
+describe('the hard stop and the run claim one result', () => {
+  const COMPLETE: UninstallResult = {outcome: 'complete', code: null, plugins: {removed: 1, absent: 0, unrecognized: 0, notes: [], blocked: []},
+    data: {removed: 8, kept: 0, failed: [], rootRemoved: true}, roaming: 'not-applicable'};
+  /** A gate: `open()` resolves `wait`. */
+  function gate() {
+    let open: () => void = () => undefined;
+    const wait = new Promise<void>(resolve => {open = resolve;});
+    return {wait, open: () => open()};
+  }
+  const flush = async () => {for (let index = 0; index < 20; index++) await Promise.resolve();};
+
+  it('the run settling just after the hard stop neither changes the code nor cuts the hard stop\'s receipt short', async () => {
+    const {fixture} = await scene();
+    const stop = gate(), engine = gate(), write = gate();
+    let settled = false;
+    const written: string[] = [];
+    const test = harness(fixture, {
+      runUninstall: async ports => {await engine.wait; await fsp.rm(ports.roots.ok ? ports.roots.dataRoot : '', {recursive: true}); return COMPLETE;},
+      hardStop: () => stop.wait,
+      writeReceipt: async (_name, text) => {await write.wait; written.push((JSON.parse(text) as UninstallReceipt).code ?? 'null'); return true;}});
+    const result = runSquirrelEvent(event('uninstall'), test.ports).then(code => {settled = true; return code;});
+    await vi.waitFor(() => expect(test.lockRequests()).toBe(1));
+    stop.open(); await flush();
+    // The hard stop owns the result now; its receipt is still being written when the run settles.
+    engine.open(); await new Promise(resolve => setTimeout(resolve, 50)); await flush();
+    expect(settled).toBe(false);
+    write.open();
+    expect(await result).toBe(EXIT_CODES.deferred);
+    expect(written).toEqual(['BUDGET_EXPIRED']);
+  });
+
+  it('the hard stop firing while the run writes its receipt waits for that receipt and keeps the run\'s code', async () => {
+    const {fixture} = await scene();
+    const stop = gate(), write = gate();
+    let settled = false, writing = false;
+    const written: string[] = [];
+    const test = harness(fixture, {
+      hardStop: () => stop.wait,
+      writeReceipt: async (_name, text) => {writing = true; await write.wait; written.push((JSON.parse(text) as UninstallReceipt).outcome); return true;}});
+    const result = runSquirrelEvent(event('uninstall'), test.ports).then(code => {settled = true; return code;});
+    await vi.waitFor(() => expect(writing).toBe(true));
+    stop.open(); await flush();
+    expect(settled).toBe(false);
+    write.open();
+    expect(await result).toBe(EXIT_CODES.complete);
+    expect(written).toEqual(['complete']);
+  });
+
+  it('anchors both deadlines to the process time origin and records the startup offset', async () => {
+    expect(hookDeadlines(100)).toEqual({engine: UNINSTALL_DEADLINE_MS - PROCESS_START_MARGIN_MS, hardStop: UNINSTALL_HARD_STOP_MS - PROCESS_START_MARGIN_MS});
+    expect(hookDeadlines(0)).toEqual({engine: 7500, hardStop: 8500});
+    const {fixture} = await scene();
+    const stopAfter: number[] = [], deadlines: number[] = [];
+    const test = harness(fixture, {hardStop: milliseconds => {stopAfter.push(milliseconds); return new Promise<void>(() => undefined);},
+      runUninstall: ports => {deadlines.push(ports.deadline); return Promise.resolve({...COMPLETE, outcome: 'deferred', code: 'GAME_RUNNING'});}});
+    // The hook starts 5 s after the process time origin: 2.5 s are left for the engine and 3.5 s until the hard stop.
+    test.advance(4000);
+    expect(await runSquirrelEvent(event('uninstall'), test.ports)).toBe(EXIT_CODES.deferred);
+    expect(stopAfter).toEqual([3500]);
+    expect(deadlines).toEqual([7500]);
+    expect(test.receipts[0].receipt.startupOffsetMs).toBe(5000);
+  });
+
+  it('a late start leaves the engine only what is left before the process deadline', async () => {
+    const {fixture, game} = await scene();
+    let test: Harness | undefined = undefined;
+    // Started at 5 s; the running-game check takes 2.6 s, past the anchored 7.5 s deadline though not past start + 8 s.
+    test = harness(fixture, {checkRunning: () => {test!.advance(2600); return notRunning();}});
+    test.advance(4000);
+    expect(await runSquirrelEvent(event('uninstall'), test.ports)).toBe(EXIT_CODES.deferred);
+    expect(test.receipts[0].receipt).toMatchObject({outcome: 'deferred', code: 'BUDGET_EXPIRED'});
+    expect(await fsp.readFile(game.dll)).toEqual(CURRENT);
+  });
+
+  it('an engine that throws is reported as ENGINE_FAILED and exits 3', async () => {
+    const {fixture} = await scene();
+    const test = harness(fixture, {runUninstall: () => Promise.reject(new Error('boom'))});
+    expect(await runSquirrelEvent(event('uninstall'), test.ports)).toBe(EXIT_CODES.deferred);
+    expect(test.receipts.map(entry => [entry.receipt.outcome, entry.receipt.code])).toEqual([['deferred', 'ENGINE_FAILED']]);
+  });
+
+  it('a hook step that throws before the engine is reported as ENGINE_FAILED and deletes nothing', async () => {
+    const {fixture} = await scene();
+    const before = await listTree(fixture.base);
+    const test = harness(fixture, {requestInstanceLock: () => {throw new Error('lock');}});
+    expect(await runSquirrelEvent(event('uninstall'), test.ports)).toBe(EXIT_CODES.deferred);
+    expect(test.receipts.map(entry => [entry.receipt.outcome, entry.receipt.code])).toEqual([['deferred', 'ENGINE_FAILED']]);
+    expect(await listTree(fixture.base)).toEqual(before);
   });
 });
 
