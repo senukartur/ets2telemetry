@@ -1,9 +1,22 @@
 [CmdletBinding()]
-param([ValidateSet('development','packaged')][string]$Mode,
+param([ValidateSet('development','packaged','installed')][string]$Mode,
     [ValidateSet('scaffold','telemetry','overlay','lifecycle','recording','journal','plugin')][string]$Scenario = 'scaffold',
     [switch]$ForceRendererReuse,
-    [string]$OutputRoot = (Join-Path $PSScriptRoot '../../.local/ci'))
+    [string]$OutputRoot = (Join-Path $PSScriptRoot '../../.local/ci'),
+    # ET-018 PR-1 (U11): the installed mode runs `<binary root>\app-<version>\ETS2TelemetryDesktop.exe` of a Squirrel install.
+    [string]$Executable)
 $ErrorActionPreference = 'Stop'
+if ($Mode -ne 'installed' -and $Executable) { throw 'An executable is given only in the installed mode.' }
+if ($Mode -eq 'installed') {
+    # Only an installed layout: ETS2TelemetryDesktop\app-<semver>\ETS2TelemetryDesktop.exe beside the binary root's Update.exe.
+    if (!$Executable -or ![IO.Path]::IsPathRooted($Executable) -or !(Test-Path -LiteralPath $Executable -PathType Leaf)) { throw 'Installed executable missing.' }
+    $Executable = (Get-Item -LiteralPath $Executable).FullName
+    $appDirectory = Split-Path -Parent $Executable; $binaryRoot = Split-Path -Parent $appDirectory
+    if ((Split-Path -Leaf $Executable) -cne 'ETS2TelemetryDesktop.exe' -or (Split-Path -Leaf $appDirectory) -cnotmatch '^app-[0-9]+\.[0-9]+\.[0-9]+$' -or
+        (Split-Path -Leaf $binaryRoot) -cne 'ETS2TelemetryDesktop' -or !(Test-Path -LiteralPath (Join-Path $binaryRoot 'Update.exe') -PathType Leaf)) {
+        throw 'Not an installed layout: ETS2TelemetryDesktop\app-<version>\ETS2TelemetryDesktop.exe with Update.exe.'
+    }
+}
 $checkout = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path
 $node = (Get-Command node -ErrorAction Stop).Source
 $output = Join-Path ([IO.Path]::GetFullPath($OutputRoot)) ($Mode + '-' + [guid]::NewGuid().ToString('N'))
@@ -25,7 +38,7 @@ if ($ForceRendererReuse -and $Scenario -ne 'overlay') { throw 'Renderer reuse co
 $config.forceRendererProcessReuse = [bool]$ForceRendererReuse
 $config.commit = (& git -C $checkout rev-parse HEAD)
 if ($LASTEXITCODE -ne 0) { throw 'Commit identity unavailable.' }
-$config.executable = Join-Path $checkout 'out/ETS2Telemetry Desktop-win32-x64/ETS2TelemetryDesktop.exe'
+$config.executable = if ($Mode -eq 'installed') { $Executable } else { Join-Path $checkout 'out/ETS2Telemetry Desktop-win32-x64/ETS2TelemetryDesktop.exe' }
 if ($Mode -eq 'packaged' -and !(Test-Path -LiteralPath $config.executable -PathType Leaf)) { throw 'Forge package missing.' }
 $configFile = Join-Path $output 'config.json'
 $config | ConvertTo-Json | Set-Content -LiteralPath $configFile -Encoding utf8

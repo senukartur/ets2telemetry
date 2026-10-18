@@ -93,7 +93,7 @@ async function buildFixture(output) {
 
 /** The SHA-256 of the bundled plugin the application installs: the packaged resources' or the development stage's. */
 async function readBundledHash(config) {
-  const directory = config.mode === 'packaged' ? path.join(path.dirname(config.executable), 'resources', 'telemetry-plugin')
+  const directory = config.mode !== 'development' ? path.join(path.dirname(config.executable), 'resources', 'telemetry-plugin')
     : path.join(config.checkout, '.local', 'package-native', 'telemetry-plugin');
   const manifest = JSON.parse(await readFile(path.join(directory, 'plugin-manifest.json'), 'utf8'));
   assert.match(manifest.sha256, /^[0-9a-f]{64}$/);

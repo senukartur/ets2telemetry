@@ -482,6 +482,21 @@ function Test-JournalReceipt {
     return $true
 }
 
+# ET-018 PR-1 (U11): an installed run started the installed executable itself, packaged, from a working directory outside
+# the install, with only the minimal Windows PATH and without Node or npm variables. `layout` names the binary root and
+# the application folder only.
+function Test-InstalledReceipt {
+    param([object]$Driver)
+    $installed = $Driver.installed
+    if ($null -eq $installed) { return $false }
+    foreach ($field in @('executableMatches','cwdOutsideInstall','minimalPath','developmentVariablesAbsent','packaged')) {
+        if ($installed.$field -isnot [bool] -or $installed.$field -ne $true) { return $false }
+    }
+    if ($installed.layout -isnot [string] -or $installed.layout -cnotmatch '^ETS2TelemetryDesktop\\app-[0-9]+\.[0-9]+\.[0-9]+$') { return $false }
+    if ($Driver.runtime.packaged -isnot [bool] -or $Driver.runtime.packaged -ne $true) { return $false }
+    return $true
+}
+
 function Test-RuntimeReceipt {
     param([string]$DriverResultPath, [string]$ExpectedCommit, [string]$ExpectedMode, [int]$JobExitCode,
         [string]$ExpectedScenario)
@@ -641,6 +656,10 @@ function Test-RuntimeReceipt {
     }
     if ($ExpectedScenario -ceq 'scaffold' -and !(Test-ScaffoldPluginReceipt -Driver $driver)) {
         $validation.reason = 'SCAFFOLD_PLUGIN_CARD_INVALID'; return $validation
+    }
+    # ET-018 PR-1: the installed mode adds its own facts to every scenario; the other modes are unchanged.
+    if ($ExpectedMode -ceq 'installed' -and !(Test-InstalledReceipt -Driver $driver)) {
+        $validation.reason = 'INSTALLED_RESULT_INCOMPLETE_OR_INVALID'; return $validation
     }
     $validation.passed = $true
     return $validation

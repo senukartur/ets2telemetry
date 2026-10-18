@@ -11,7 +11,12 @@ param(
 )
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'Assert-UninstallResidue.ps1')
-if(!$Run){@{run=$false;steps=@('install','repair','smoke-0.1.0','update','smoke-0.1.1','uninstall');globalSeconds=300;stepSeconds=@(45,45,30,45,30,30);preconditions='No product install, registration, product shortcut or data directory; preserve all existing user files.';control=$Control;applicationLaunched=$false}|ConvertTo-Json;return}
+if(!$Run){@{run=$false;retired='RETIRED_ET018_REAL_ROOTS';steps=@('install','repair','smoke-0.1.0','update','smoke-0.1.1','uninstall');globalSeconds=300;stepSeconds=@(45,45,30,45,30,30);preconditions='No product install, registration, product shortcut or data directory; preserve all existing user files.';control=$Control;applicationLaunched=$false}|ConvertTo-Json;return}
+# Retired by ET-018 PR-1 (October 18, 2026). This harness installs into the real %LOCALAPPDATA%\ETS2TelemetryDesktop and
+# seeds the real %LOCALAPPDATA%\ETS2Telemetry; once ET-018's uninstall hook removes the data root, a run would delete the
+# user's real data. Installer checks now run only in a marked test root: scripts/installer/Invoke-InstallerLifecycle.ps1
+# (docs/installer-testing.md). The body below is kept unchanged as the record of the ET-001 procedure.
+throw 'RETIRED_ET018_REAL_ROOTS: this harness used the real LocalAppData roots; use scripts/installer/Invoke-InstallerLifecycle.ps1 (docs/installer-testing.md).'
 $clock=[Diagnostics.Stopwatch]::StartNew();$report=[ordered]@{passed=$false;failure=$null;startedUtc=[datetime]::UtcNow.ToString('o');control=$Control;steps=@();globalSeconds=300;synthetic=$true;automaticHookExitCodesClaimed=$false;originalFilesPreserved=$false;originalShortcutsPreserved=$false;ownedDataRemoved=$false}
 $saved=@{};$steps=[Collections.Generic.List[object]]::new();$ownedDatabase=$false;$prepared=$false
 $ownedFiles=[Collections.Generic.List[object]]::new();$ownedDirectories=[Collections.Generic.List[string]]::new();$sentinelId=[guid]::NewGuid().ToString('N')
