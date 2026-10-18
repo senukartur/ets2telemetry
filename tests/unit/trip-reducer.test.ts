@@ -634,7 +634,7 @@ describe('late-attach trips (J9, J22, ET-016 PR-7)', () => {
     });
     it('a replayed outcome at the checkpoint\'s revision ends its job even when the clear is still live [synthetic-inference]', () => {
       // Outcomes do not advance the revision: a delivery at revision 3 happened while the checkpoint's configuration was
-      // current, so it ended that job; the clear that follows it (revision 4) is at or after nextEventSeq.
+      // current, so it is treated as ending that job; the clear that follows it (revision 4) is at or after nextEventSeq.
       const s = new Script(ETS2_A);
       const retained = [s.event(r.started(), rev('3')), s.event(r.delivered(), rev('3'))];
       const state = play([[sessionInput(s.welcome())], [{kind: 'checkpoint', message: s.checkpoint(job(), 2, {}, '3')}],
@@ -642,6 +642,19 @@ describe('late-attach trips (J9, J22, ET-016 PR-7)', () => {
       expect(dueAttach(state)).toBeNull();
       expect(tripView(state, 'ets2')).toMatchObject({phase: 'idle', untrackedJob: false, current: null});
       play([[s.event(r.jobCleared(), rev('4'))], [s.event(r.fined(), rev('4')), [attr(null, 'free-driving')]]], state);
+    });
+    it('a replayed job.cleared newer than the checkpoint\'s configuration alone ends its job: no late-attach trip opens after the replay [synthetic-inference]', () => {
+      // The state (revision 3) still shows job K, but the only replayed event clears the configuration (revision 4) with no
+      // outcome: a newer clear proves that K was cleared before nextEventSeq (docs/trips.md, stale checkpoints). With no
+      // open trip the clear itself has no effects.
+      const s = new Script(ETS2_A);
+      const retained = [s.event(r.jobCleared(), rev('4'))];
+      const state = play([[sessionInput(s.welcome())], [{kind: 'checkpoint', message: s.checkpoint(job(), 1, {}, '3')}], [retained[0]]]);
+      expect(dueAttach(state)).toBeNull();
+      expect(stepTrip(state, attachStep)).toEqual({ok: false, code: 'ORDER_VIOLATION'});
+      expect(tripView(state, 'ets2')).toMatchObject({phase: 'idle', untrackedJob: false, current: null});
+      // The job is no longer untracked, so a live fine is free driving.
+      play([[s.event(r.fined(), rev('4')), [attr(null, 'free-driving')]]], state);
     });
     it('a replayed job.configured newer than the checkpoint replaces its job: a gap that then closes that trip opens no late-attach trip [synthetic-inference]', () => {
       // The state (revision 3) shows job K, but a different job (revision 4) replaced it before nextEventSeq. A replayed gap
