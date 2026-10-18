@@ -21,6 +21,10 @@
 // ET-015b: `sampleFlushMs` sets the pipeline's sample flush delay, and with `stopAfterDisconnect` the process stops its
 // ingestion at its first `disconnected` (the final sample write included) and then reports:
 //   stopped                             the orderly stop finished
+// ET-019: with `attach: true` the recorder's late-attach op (ET-016 PR-7, J9) runs as in the service, and reports:
+//   attached <status>                   an openAttachedTrip result returned (`committed`, `duplicate` or `none`)
+// with one more barrier, counted in attach ops:
+//   {kind: 'after', attach: true}                            after the first attach op returned, before anything else
 'use strict';
 const {readFileSync, writeSync} = require('node:fs');
 const net = require('node:net');
@@ -60,7 +64,8 @@ async function openStorage() {
       recordCompleteness: (session, interval, completeness) => Promise.resolve(storage.recordCompleteness(session, interval, completeness)),
       listTrips: page => Promise.resolve(storage.listTrips(page)), getEvent: (session, eventSeq) => Promise.resolve(storage.getEvent(session, eventSeq)),
       listEvents: (session, page) => Promise.resolve(storage.listEvents(session, page)),
-      appendSamples: (session, rows, sampleOptions) => Promise.resolve(storage.appendSamples(session, rows, sampleOptions))
+      appendSamples: (session, rows, sampleOptions) => Promise.resolve(storage.appendSamples(session, rows, sampleOptions)),
+      openAttachedTrip: input => Promise.resolve(storage.openAttachedTrip(input))
     };
   }
   const {StorageClient, workerHandle} = require(path.join(bundles, 'storage-client.cjs'));
@@ -74,7 +79,7 @@ async function main() {
   const recorder = new TripRecorderSink(await openStorage());
   let commits = 0, frozen = false, firstEnded;
   const firstEnd = new Promise(resolve => { firstEnded = resolve; });
-  const hit = (message, count) => barrier && barrier.kind !== 'inside' && (barrier.commit !== undefined ? count === barrier.commit : covers(message, barrier.eventSeq));
+  const hit = (message, count) => barrier && barrier.kind !== 'inside' && !barrier.attach && (barrier.commit !== undefined ? count === barrier.commit : covers(message, barrier.eventSeq));
   const stop = async label => { frozen = true; await write(`barrier ${barrier.kind} ${label}`); await forever(); };
   const sink = {
     async openSession(welcome) { if (frozen) await forever(); return recorder.openSession(welcome); },
@@ -91,6 +96,17 @@ async function main() {
     observe: (message, context) => recorder.observe(message, context),
     // ET-015b: the recorder's pending one-second samples, written by the pipeline's samples op and at stop.
     samples: recorder.samples,
+    // ET-019: with `attach`, the late-attach op of the production sink (ET-016 PR-7, J9), with the attach barrier.
+    attach: config.attach !== true ? undefined : {
+      due: () => !frozen && recorder.attach.due(),
+      async open(context) {
+        if (frozen) await forever();
+        const result = await recorder.attach.open(context);
+        if (result.ok) await write(`attached ${result.value.status}`);
+        if (barrier && barrier.attach && barrier.kind === 'after') await stop('attach');
+        return result;
+      }
+    },
     async restoreLoss(session, stored, acked) { if (frozen) await forever(); return recorder.restoreLoss(session, stored, acked); }
   };
   let connections = 0;
