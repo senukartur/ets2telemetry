@@ -14,8 +14,11 @@ param(
 # fixture feed B, installed smokes and a data launch on B, then a read of the upgraded database with the installed runtime.
 # ET-018 PR-3 then runs the Windows-initiated uninstall scenarios: (1) the exact registered UninstallString with a decoy
 # LOCALAPPDATA while the application runs, after its plugin setup installed the plugin into a fake ETS2 folder: complete;
-# (2) a reinstall, a plugin launch and the same uninstall while the fake game host runs: deferred; (3) a reinstall over
-# (2), which cancels the deferral, a launch that adopts the plugin and a final complete uninstall. ET-018 PR-4 adds the
+# (2) a reinstall, a plugin launch and the same uninstall while the fake game host runs: deferred, with the
+# deferred-cleanup executor registered under this run's own test RunOnce key; PR-5 then runs the registered command as
+# Windows would at sign-in while the host still runs: still deferred, registered again; (3) a reinstall over (2), which
+# cancels the deferral and its registration, a launch that adopts the plugin, and a final uninstall while the host runs
+# again, deferred; PR-5 then stops the host and runs the registered command: complete. ET-018 PR-4 adds the
 # in-app scenarios on a fresh install, answered through the smoke-only dialog seam: (5) the uninstall button while the fake
 # game host runs: blocked, nothing changes and the application stays installed; (4) the button again: the plugin and the
 # data root are removed, the application exits and hands over to Update.exe --uninstall, and the residue check follows.
@@ -27,8 +30,8 @@ $checkout = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path
 $setup = Join-Path $checkout 'out/make/squirrel.windows/x64/ETS2Telemetry Desktop-0.1.0 Setup.exe'
 $planSteps = @('signal','facts','guard-plan','create-run-root','guard-ready','build-fixture-0.1.1','seed','install-0.1.0','installed-smokes-0.1.0',
     'data-launch-0.1.0','verify-0.1.0','repair-0.1.0','update-0.1.1','installed-smokes-0.1.1','data-launch-0.1.1','verify-0.1.1','games',
-    'windows-uninstall-complete-running','install-0.1.0-again','plugin-launch-installed','windows-uninstall-deferred-game','reinstall-0.1.0-over-deferral',
-    'plugin-launch-adopted','windows-uninstall-final','install-0.1.0-for-app','plugin-launch-for-app','app-uninstall-blocked-game','app-uninstall-verify-blocked-game',
+    'windows-uninstall-complete-running','install-0.1.0-again','plugin-launch-installed','windows-uninstall-deferred-game','run-once-blocked-game',
+    'reinstall-0.1.0-over-deferral','plugin-launch-adopted','windows-uninstall-final-deferred','run-once-complete','install-0.1.0-for-app','plugin-launch-for-app','app-uninstall-blocked-game','app-uninstall-verify-blocked-game',
     'app-uninstall-complete','app-uninstall-verify-complete','cleanup')
 if ($Plan) {
     [ordered]@{run=$false; steps=$planSteps; scenariosA=$ScenariosA; scenariosB=$ScenariosB; setup=$setup; uninstall='windows-initiated and in-app, in R only';
@@ -54,9 +57,13 @@ $runRoot = Join-Path $runParent ('installer-' + $id)
 $base = Join-Path $runRoot 'LocalAppData'
 $binaryRoot = Join-Path $base 'ETS2TelemetryDesktop'
 $uninstallKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\ETS2TelemetryDesktop'
+# ET-018 PR-5: this run's own RunOnce key; the test install registers its deferred-cleanup executor here, never under the
+# real RunOnce key. The whole key is deleted at the end.
+$testKey = 'Software\ETS2Telemetry-Test-' + $id
+$runOnceKey = 'HKCU\' + $testKey + '\RunOnce'
 New-Item -ItemType Directory -Path $evidence | Out-Null
 $configFile = Join-Path $evidence 'config.json'
-[ordered]@{runRoot=$runRoot; evidence=$evidence; setup=$setup; stepBudgetMs=55000; allowLocal=[bool]$AllowLocal} | ConvertTo-Json |
+[ordered]@{runRoot=$runRoot; evidence=$evidence; setup=$setup; stepBudgetMs=55000; allowLocal=[bool]$AllowLocal; runOnceKey=$runOnceKey} | ConvertTo-Json |
     Set-Content -LiteralPath $configFile -Encoding utf8
 $report = [ordered]@{passed=$false; failure=$null; startedUtc=[datetime]::UtcNow.ToString('o'); scenariosA=$ScenariosA; scenariosB=$ScenariosB; steps=@();
     uninstallRun=$false; runRootRemoved=$false; registrationRemoved=$false; shortcuts=$hosted; uninstalls=@()}
@@ -232,7 +239,7 @@ try {
     $utf8 = [Text.UTF8Encoding]::new($false)
     [IO.File]::WriteAllText((Join-Path $runRoot 'ets2telemetry-plugin-test-root.marker'), "Test root of the ETS2Telemetry installer lifecycle.`n", $utf8)
     [IO.File]::WriteAllText((Join-Path $runRoot 'ets2telemetry-install-test.json'), (([ordered]@{format='ets2telemetry.install-test'; version=1;
-        profileDir=(Join-Path $runRoot 'profile'); runOnceKey=$null; shortcuts=$hosted}) | ConvertTo-Json), $utf8)
+        profileDir=(Join-Path $runRoot 'profile'); runOnceKey=$runOnceKey; shortcuts=$hosted}) | ConvertTo-Json), $utf8)
     Invoke-Driver 'guard' @('ready') 30000
 
     # Installer version B from a temporary copy of the packaged folder (a build step; it runs no installer).
@@ -290,6 +297,8 @@ try {
     $helper = Get-VendorHelper '0.1.0'
     Invoke-Driver 'windows-uninstall' @('deferred-game', '-', 'deferred') 60000
     Assert-Uninstalled 'deferred-game' $helper
+    # PR-5: the next sign-in while the game still runs: the executor keeps everything and registers itself again.
+    Invoke-Driver 'run-once' @('blocked-game', 'blocked') 60000
 
     $env:ETS2TELEMETRY_DIAGNOSTIC_DIR = Join-Path $runRoot 'diagnostics\reinstall-0.1.0'
     Invoke-Driver 'step' @('reinstall-0.1.0', $setup, '--silent') 60000
@@ -297,8 +306,11 @@ try {
     $env:ETS2TELEMETRY_DIAGNOSTIC_DIR = $null
     Invoke-Driver 'plugin-launch' @('adopted', $executableA, 'adopted') 60000
     $helper = Get-VendorHelper '0.1.0'
-    Invoke-Driver 'windows-uninstall' @('final', $executableA, 'complete') 60000
+    # PR-5: the final Windows-initiated uninstall defers while the fake game runs; once it has stopped, the registered
+    # executor finishes the cleanup as it would at the next sign-in.
+    Invoke-Driver 'windows-uninstall' @('final', '-', 'deferred') 60000
     Assert-Uninstalled 'final' $helper
+    Invoke-Driver 'run-once' @('final', 'complete') 60000
 
     # ET-018 PR-4: the in-app uninstall scenarios (docs/installer-testing.md, "In-app uninstall scenarios").
     $env:ETS2TELEMETRY_DIAGNOSTIC_DIR = Join-Path $runRoot 'diagnosticsinstall-for-app-0.1.0'
@@ -357,6 +369,11 @@ try {
             }
             $report.registrationRemoved = ($null -eq (Read-Registration))
         } catch { $report.cleanupFailure = $_.Exception.Message }
+        # This run's own test RunOnce key (PR-5); its name holds the run id, so it is never another key.
+        try {
+            [Microsoft.Win32.Registry]::CurrentUser.DeleteSubKeyTree($testKey, $false)
+            $report.runOnceKeyRemoved = ($null -eq [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($testKey))
+        } catch { $report.runOnceKeyFailure = $_.Exception.Message }
         # The real binary root must still be absent: a run that reached it is a failure whatever else passed.
         $realBinaryRoot = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'ETS2TelemetryDesktop'
         $report.realBinaryRootAbsent = !(Test-Path -LiteralPath $realBinaryRoot)
