@@ -2,8 +2,10 @@ import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {cp, mkdir, readdir, readFile, rm, writeFile} from 'node:fs/promises';
 import path from 'node:path';
+import {createRequire} from 'node:module';
 import {fileURLToPath} from 'node:url';
 import {createWindowsInstaller} from 'electron-winstaller';
+import {setupExeName} from '../release-identity.mjs';
 
 // ET-018 PR-1 (plan U10): builds installer version B, the local update feed of the installer lifecycle. It packs a
 // temporary copy of the packaged application folder with the pinned electron-winstaller as installer version 0.1.1; the
@@ -34,10 +36,11 @@ await assert.rejects(readdir(appDirectory), {code: 'ENOENT'}, 'Fixture app folde
 const executableBefore = sha256(await readFile(path.join(packaged, 'ETS2TelemetryDesktop.exe')));
 await cp(packaged, appDirectory, {recursive: true, errorOnExist: true, force: false});
 try {
-  // The same options the Forge Squirrel maker passes (forge.config.cjs and @electron-forge/maker-squirrel), with the
-  // installer version raised; `version` overrides the package.json version only in the NuGet metadata.
-  await createWindowsInstaller({appDirectory, outputDirectory: feed, name: 'ETS2TelemetryDesktop', title: 'ETS2Telemetry Desktop', noMsi: true,
-    exe: 'ETS2TelemetryDesktop.exe', setupExe: `ETS2Telemetry Desktop-${FIXTURE_VERSION} Setup.exe`, version: FIXTURE_VERSION});
+  // The same options the Forge Squirrel maker passes (forge.config.cjs, read here, and @electron-forge/maker-squirrel), with
+  // the installer version raised; `version` overrides the package.json version only in the NuGet metadata.
+  const maker = createRequire(import.meta.url)('../../forge.config.cjs').makers.find(entry => entry.name === '@electron-forge/maker-squirrel').config;
+  await createWindowsInstaller({title: 'ETS2Telemetry Desktop', noMsi: true, exe: 'ETS2TelemetryDesktop.exe', ...maker, appDirectory, outputDirectory: feed,
+    setupExe: setupExeName(FIXTURE_VERSION), version: FIXTURE_VERSION});
 } finally {
   await rm(appDirectory, {recursive: true, force: true, maxRetries: 5, retryDelay: 200});
 }
