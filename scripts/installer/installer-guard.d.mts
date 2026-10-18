@@ -44,6 +44,17 @@ export function isDrivePath(value: unknown): value is string;
 export function normalizePath(value: string): string;
 export function isInside(candidate: string, parent: string): boolean;
 export function checkRunSignal(env: Readonly<Record<string, string | undefined>>, options?: {allowLocal?: boolean}): void;
+export function isHostedRunner(env: Readonly<Record<string, string | undefined>>): boolean;
+export const RESIDUE_MAX_ENTRIES: number;
+export interface ElectronRuntimeNames {readonly files: ReadonlySet<string>; readonly locales: ReadonlySet<string>}
+export function electronRuntimeNames(entries: readonly {name: string; directory: boolean}[], locales: readonly string[]): ElectronRuntimeNames;
+export interface ResidueRow {relative: string; kind: 'file' | 'directory'; reparse: boolean; bytes?: number; vendorHelper?: boolean; deadMarker?: boolean}
+export function checkUninstallResidue(listing: readonly ResidueRow[], runtime: ElectronRuntimeNames): {vendorFiles: number; tolerated: string[]};
+export const DECOY_OS_FOLDER: string;
+export type DecoyTree = Readonly<Record<string, {readonly directory?: boolean; readonly size?: number; readonly sha256?: string}>>;
+export function checkDecoyUnchanged(before: DecoyTree, after: DecoyTree): number;
+export function parseUninstallString(value: unknown, runRoot: string): {program: string; args: string[]};
+export function uninstallEnvironment(base: Readonly<Record<string, string | undefined>>, options: {runRoot: string; real: {localAppData: string}; decoy: string}): Record<string, string>;
 export function runLayout(runRoot: string): RunLayout;
 export function protectedRoots(real: KnownFolders, steamLibraries?: string[]): {real: string[]; steam: string[]};
 export function resolveRealLocation(target: string, realpath: (path: string) => Promise<string>): Promise<string>;

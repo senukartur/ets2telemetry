@@ -4,8 +4,8 @@ import path from 'node:path';
 import {promisify} from 'node:util';
 import {describe, expect, it} from 'vitest';
 import {checkedPaths, checkInstalled, checkInstallTest, checkLaunchEnvironment, checkRunPlan, checkRunSignal, FACTS_VARIABLE, factsEvidence, installedEnvironment,
-  InstallerGuardError, isGuardedProcess, minimalPath, normalizePath, ownsRegistration, resolveRealLocation, runLayout, steamLibraryPaths,
-  type RunPlanFacts} from '../../scripts/installer/installer-guard.mjs';
+  checkDecoyUnchanged, checkUninstallResidue, electronRuntimeNames, InstallerGuardError, RESIDUE_MAX_ENTRIES, isGuardedProcess, isHostedRunner, minimalPath, normalizePath, ownsRegistration, parseUninstallString, resolveRealLocation, runLayout,
+  steamLibraryPaths, uninstallEnvironment, type RunPlanFacts} from '../../scripts/installer/installer-guard.mjs';
 import {temporaryResources} from '../shared/resources';
 
 // ET-018 PR-1 (REG-017, U12): the installer lifecycle's fail-closed guards. Pure decisions over hand-written facts; no
@@ -50,9 +50,116 @@ describe('CI signal (local runs refused)', () => {
     ['a hosted runner name without the Actions flag', {RUNNER_ENVIRONMENT: 'github-hosted'}],
     ['a differently cased flag', {GITHUB_ACTIONS: 'TRUE', RUNNER_ENVIRONMENT: 'github-hosted'}]
   ])('refuses %s', (_name, env) => expect(refusal(() => checkRunSignal(env))).toBe('LOCAL_RUN_REFUSED'));
-  it('refuses -AllowLocal until ET-018 PR-3, even with the CI signal', () => {
-    expect(refusal(() => checkRunSignal({}, {allowLocal: true}))).toBe('LOCAL_RUN_UNAVAILABLE_UNTIL_PR3');
-    expect(refusal(() => checkRunSignal({GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'github-hosted'}, {allowLocal: true}))).toBe('LOCAL_RUN_UNAVAILABLE_UNTIL_PR3');
+  // ET-018 PR-3 lifted the earlier refusal: the application's own Squirrel handler now skips the shortcuts of a test install.
+  // -AllowLocal is still the owner-requested run only (O6); agents never pass it.
+  it('accepts -AllowLocal (an owner-requested local run) without the CI signal, and only the exact flag', () => {
+    expect(refusal(() => checkRunSignal({}, {allowLocal: true}))).toBe('ACCEPTED');
+    expect(refusal(() => checkRunSignal({}, {allowLocal: 'true' as unknown as boolean}))).toBe('LOCAL_RUN_REFUSED');
+    expect(refusal(() => checkRunSignal({}, {allowLocal: false}))).toBe('LOCAL_RUN_REFUSED');
+  });
+  it('creates real shortcuts only on a GitHub-hosted runner', () => {
+    expect(isHostedRunner({GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'github-hosted'})).toBe(true);
+    expect(isHostedRunner({GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'self-hosted'})).toBe(false);
+    expect(isHostedRunner({})).toBe(false);
+  });
+});
+
+describe('binary root residue after an uninstall (ET-018 PR-3)', () => {
+  // A distribution listing in the shape of node_modules/electron/dist (fixture names; the driver reads the real one).
+  const runtime = electronRuntimeNames([
+    {name: 'electron.exe', directory: false}, {name: 'v8_context_snapshot.bin', directory: false}, {name: 'vk_swiftshader.dll', directory: false},
+    {name: 'resources.pak', directory: false}, {name: 'LICENSES.chromium.html', directory: false}, {name: 'locales', directory: true}, {name: 'resources', directory: true}
+  ], ['en-US.pak', 'de.pak']);
+  const file = (relative: string, flags: {vendorHelper?: boolean; deadMarker?: boolean} = {}) => ({relative, kind: 'file' as const, reparse: false, vendorHelper: false, deadMarker: false, ...flags});
+  const folder = (relative: string, reparse = false) => ({relative, kind: 'directory' as const, reparse});
+  const base = [folder('app-0.1.1'), file('.dead', {deadMarker: true}), file('Update.exe', {vendorHelper: true}), file('app-0.1.1/squirrel.exe', {vendorHelper: true})];
+  it('allows Squirrel\'s own residue and tolerates Electron runtime files, which it reports', () => {
+    expect(checkUninstallResidue(base, runtime)).toEqual({vendorFiles: 2, tolerated: []});
+    expect(checkUninstallResidue([...base, file('app-0.1.1/v8_context_snapshot.bin'), file('app-0.1.1/VK_SWIFTSHADER.DLL'), folder('app-0.1.1/locales'),
+      file('app-0.1.1/locales/en-US.pak'), file('app-0.1.0/.dead', {deadMarker: true})], runtime)).toEqual({vendorFiles: 2,
+      tolerated: ['app-0.1.1/v8_context_snapshot.bin', 'app-0.1.1/VK_SWIFTSHADER.DLL', 'app-0.1.1/locales', 'app-0.1.1/locales/en-US.pak']});
+  });
+  it.each([
+    ['the product executable', [file('app-0.1.1/ETS2TelemetryDesktop.exe')], 'UNINSTALL_UNEXPECTED_FILE'],
+    ['electron.exe, which is never a runtime file', [file('app-0.1.1/electron.exe')], 'UNINSTALL_UNEXPECTED_FILE'],
+    ['the application archive', [folder('app-0.1.1/resources'), file('app-0.1.1/resources/app.asar')], 'UNINSTALL_UNEXPECTED_DIRECTORY'],
+    ['a file below resources', [file('app-0.1.1/resources/telemetry-plugin/ets2telemetry-plugin.dll')], 'UNINSTALL_UNEXPECTED_FILE'],
+    ['a runtime name below resources', [file('app-0.1.1/resources/v8_context_snapshot.bin')], 'UNINSTALL_UNEXPECTED_FILE'],
+    ['a runtime name at the top of the binary root', [file('v8_context_snapshot.bin')], 'UNINSTALL_UNEXPECTED_FILE'],
+    ['a link', [folder('app-0.1.1/locales', true)], 'UNINSTALL_REPARSE_POINT'],
+    ['a linked runtime file', [{...file('app-0.1.1/v8_context_snapshot.bin'), reparse: true}], 'UNINSTALL_REPARSE_POINT'],
+    ['an unknown file', [file('app-0.1.1/notes.txt')], 'UNINSTALL_UNEXPECTED_FILE'],
+    ['an unknown locale', [file('app-0.1.1/locales/xx.pak')], 'UNINSTALL_UNEXPECTED_FILE'],
+    ['another folder', [folder('packages')], 'UNINSTALL_UNEXPECTED_DIRECTORY'],
+    ['a changed helper', [file('app-0.1.0/squirrel.exe')], 'UNINSTALL_VENDOR_HELPER_CHANGED'],
+    ['an invalid marker', [file('app-0.1.0/.dead')], 'UNINSTALL_MARKER_INVALID']
+  ])('refuses %s', (_name, extra, code) => expect(refusal(() => checkUninstallResidue([...base, ...extra], runtime))).toBe(code));
+  it('requires the root marker and bounds the listing', () => {
+    expect(refusal(() => checkUninstallResidue(base.filter(row => row.relative !== '.dead'), runtime))).toBe('UNINSTALL_ROOT_OR_MARKER_MISSING');
+    expect(refusal(() => checkUninstallResidue(Array.from({length: RESIDUE_MAX_ENTRIES + 1}, () => folder('app-0.1.1')), runtime))).toBe('UNINSTALL_RESIDUE_TOO_LARGE');
+  });
+  it('names the refused entry, never a machine path', () => {
+    try {checkUninstallResidue([...base, file('app-0.1.1/ETS2TelemetryDesktop.exe')], runtime);} catch (error) {
+      expect((error as Error).message).toBe('Installer lifecycle refused: UNINSTALL_UNEXPECTED_FILE (app-0.1.1/ETS2TelemetryDesktop.exe)');
+    }
+  });
+  it('takes the runtime names from the distribution listing: electron.exe and folders other than locales are not runtime files', () => {
+    expect([...runtime.files].sort()).toEqual(['licenses.chromium.html', 'resources.pak', 'v8_context_snapshot.bin', 'vk_swiftshader.dll']);
+    expect([...runtime.locales].sort()).toEqual(['de.pak', 'en-us.pak']);
+    expect(refusal(() => electronRuntimeNames([{name: 'notes.txt', directory: false}], []))).toBe('ELECTRON_DIST_INVALID');
+  });
+});
+
+describe('Windows-initiated uninstall (ET-018 PR-3)', () => {
+  // The decoy's trees as the driver's tree() records them: relative paths, folders ending with a backslash.
+  const decoy = {
+    'ETS2Telemetry\\': {directory: true}, 'ETS2Telemetry\\data\\': {directory: true},
+    'ETS2Telemetry\\data\\telemetry.sqlite': {size: 55, sha256: 'a'.repeat(64)},
+    'ETS2TelemetryDesktop\\': {directory: true}, 'ETS2TelemetryDesktop\\sentinel.txt': {size: 18, sha256: 'b'.repeat(64)}
+  };
+  const OS = {'Microsoft\\': {directory: true}, 'Microsoft\\Windows\\': {directory: true}, 'Microsoft\\Windows\\Caches\\': {directory: true}};
+  it('allows the Microsoft folder Windows adds to the decoy, and nothing else', () => {
+    expect(checkDecoyUnchanged(decoy, decoy)).toBe(0);
+    expect(checkDecoyUnchanged(decoy, {...decoy, ...OS})).toBe(3);
+    expect(checkDecoyUnchanged(decoy, {...decoy, ...OS, 'Microsoft\\Windows\\Caches\\cversions.db': {size: 4, sha256: 'c'.repeat(64)}})).toBe(4);
+  });
+  it.each([
+    ['a new ETS2Telemetry entry', {...decoy, 'ETS2Telemetry\\logs\\': {directory: true}}, 'DECOY_PRODUCT_ENTRY_ADDED'],
+    ['a new top-level ETS2Telemetry* folder', {...decoy, 'ETS2Telemetry Desktop\\': {directory: true}}, 'DECOY_PRODUCT_ENTRY_ADDED'],
+    ['an ETS2Telemetry name below Microsoft', {...decoy, ...OS, 'Microsoft\\ETS2Telemetry\\': {directory: true}}, 'DECOY_PRODUCT_ENTRY_ADDED'],
+    ['a changed sentinel', {...decoy, 'ETS2TelemetryDesktop\\sentinel.txt': {size: 18, sha256: 'd'.repeat(64)}}, 'DECOY_ENTRY_CHANGED'],
+    ['a sentinel turned into a folder', {...decoy, 'ETS2Telemetry\\data\\telemetry.sqlite': {directory: true}}, 'DECOY_ENTRY_CHANGED'],
+    ['a removed sentinel', Object.fromEntries(Object.entries(decoy).filter(([entry]) => !entry.endsWith('sentinel.txt'))), 'DECOY_ENTRY_REMOVED'],
+    ['a new top-level entry other than Microsoft', {...decoy, ...OS, 'Temp\\': {directory: true}}, 'DECOY_ENTRY_ADDED'],
+    ['a new top-level file', {...decoy, 'Microsoft.txt': {size: 1, sha256: 'e'.repeat(64)}}, 'DECOY_ENTRY_ADDED']
+  ])('refuses %s', (_name, after, code) => expect(refusal(() => checkDecoyUnchanged(decoy, after))).toBe(code));
+  const update = `${RUN_ROOT}\\LocalAppData\\ETS2TelemetryDesktop\\Update.exe`;
+  it.each([[`"${update}" --uninstall`, ['--uninstall']], [`"${update}" --uninstall -s`, ['--uninstall', '-s']]] as const)('runs the registered %s', (value, args) => {
+    expect(parseUninstallString(value, RUN_ROOT)).toEqual({program: update, args});
+  });
+  it.each([
+    ['another Update.exe', `"C:\\Users\\fixture\\AppData\\Local\\ETS2TelemetryDesktop\\Update.exe" --uninstall`, 'UNINSTALL_STRING_OUTSIDE_RUN_ROOT'],
+    ['an unquoted program', `${update} --uninstall`, 'UNINSTALL_STRING_INVALID'],
+    ['another command', `"${update}" --update C:\\feed`, 'UNINSTALL_STRING_INVALID'],
+    ['an extra argument', `"${update}" --uninstall -s --extra`, 'UNINSTALL_STRING_INVALID'],
+    ['no value', undefined, 'UNINSTALL_STRING_INVALID']
+  ])('refuses %s', (_name, value, code) => expect(refusal(() => parseUninstallString(value, RUN_ROOT))).toBe(code));
+  it('runs with the decoy LOCALAPPDATA, R folders, the minimal PATH and no ETS2TELEMETRY_ variable', () => {
+    const decoy = `${RUN_ROOT}\\decoy`;
+    const env = uninstallEnvironment({SystemRoot: 'C:\\Windows', PATH: 'C:\\tools', LOCALAPPDATA: REAL.localAppData, ETS2TELEMETRY_PROFILE_DIR: `${RUN_ROOT}\\profile`,
+      ets2telemetry_plugin_setup_root: RUN_ROOT, NODE_OPTIONS: '--x', USERNAME: 'fixture'}, {runRoot: RUN_ROOT, real: REAL, decoy});
+    expect(env).toEqual({SystemRoot: 'C:\\Windows', USERNAME: 'fixture', Path: minimalPath('C:\\Windows'), LOCALAPPDATA: decoy, APPDATA: `${RUN_ROOT}\\AppData`,
+      TEMP: `${RUN_ROOT}\\temp`, TMP: `${RUN_ROOT}\\temp`, SQUIRREL_TEMP: `${RUN_ROOT}\\LocalAppData`});
+  });
+  it.each([
+    ['outside R', 'D:\\decoy', 'DECOY_OUTSIDE_RUN_ROOT'], ['R itself', RUN_ROOT, 'DECOY_OUTSIDE_RUN_ROOT'],
+    ['the real LocalAppData', REAL.localAppData, 'DECOY_OUTSIDE_RUN_ROOT']
+  ])('refuses a decoy %s', (_name, decoy, code) => {
+    expect(refusal(() => uninstallEnvironment({SystemRoot: 'C:\\Windows'}, {runRoot: RUN_ROOT, real: REAL, decoy}))).toBe(code);
+  });
+  it('refuses a decoy when the real LocalAppData lies inside R', () => {
+    expect(refusal(() => uninstallEnvironment({SystemRoot: 'C:\\Windows'}, {runRoot: RUN_ROOT, real: {localAppData: `${RUN_ROOT}\\decoy\\inner`}, decoy: `${RUN_ROOT}\\decoy`})))
+      .toBe('DECOY_IS_REAL_ROOT');
   });
 });
 

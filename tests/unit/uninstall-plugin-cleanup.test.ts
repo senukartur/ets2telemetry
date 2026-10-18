@@ -222,6 +222,15 @@ describe('folders and hashes', () => {
       expect(await fsp.readFile(path.win32.join(elsewhere, 'ets2telemetry-plugin.dll'))).toEqual(CURRENT);
       expect(await fsp.readFile(path.win32.join(realBin, 'win_x64', 'plugins', 'ets2telemetry-plugin.dll'))).toEqual(CURRENT);
     });
+    it('defers a root that is a junction to a missing target as FOLDER_UNAVAILABLE, like an unplugged drive', async () => {
+      const target = path.win32.join(fixture.testRoot, 'Removed-drive', 'ETS2');
+      await fsp.mkdir(target, {recursive: true});
+      const root = path.win32.join(fixture.testRoot, 'Games', 'Dangling');
+      await fsp.mkdir(path.win32.dirname(root), {recursive: true});
+      await guard.fs.symlink(target, root, 'junction');
+      await fsp.rm(path.win32.dirname(target), {recursive: true});
+      expect(await clean(folderOf({root, plugins: '', dll: ''}))).toEqual({status: 'blocked', reason: 'FOLDER_UNAVAILABLE'});
+    });
     it('follows a junctioned root, as ET-017 does, and cleans this application\'s DLL there by hash', async () => {
       // The game moved to another folder (another drive in practice); its old root is a junction ET-017 installed through.
       const real = await leftover('Moved-real', CURRENT);

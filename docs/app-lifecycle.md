@@ -9,7 +9,7 @@ For readers new to desktop development: the *main process* is Electron's Node.js
 Only one ETS2Telemetry process tree runs per profile. On startup, main first handles Squirrel installer arguments, then applies the `ETS2TELEMETRY_PROFILE_DIR` override (an absolute diagnostic profile used by isolated tests), and only then asks Electron for the [single-instance lock](https://www.electronjs.org/docs/latest/api/app#apprequestsingleinstancelockadditionaldata). Electron keys the lock by the `userData` directory, so the override must come first.
 
 - **Second launch.** When the lock is held, the new process calls `app.quit()` before it creates a log, registers any listener, starts the service or opens a window or tray icon, and exits with code 0. It writes no diagnostic log and starts no service, window or tray; only the diagnostic profile directory may be created when the override is set. If that override fails, the process requests no lock at all and exits 1 with `PROFILE_SETUP_FAILED`, so a misconfigured diagnostic launch never signals the running instance.
-- **Running instance.** It receives Electron's `second-instance` event and ignores the second process's command line, working directory and additional data. It logs `SECOND_INSTANCE` with a fixed `action`:
+- **Running instance.** It receives Electron's `second-instance` event and ignores the second process's command line and working directory. Its additional data is read for one exact payload only (ET-018 PR-3): `{ets2telemetry: 'uninstall-exit'}`, a plain object with exactly that key and value, which the [Squirrel uninstall hook](#squirrel-events) sends. It runs the explicit exit with reason `uninstall` and logs `SECOND_INSTANCE` with `uninstall-exit`, or `ignored-exiting` when the exit already began; main deletes nothing for it. Every other payload, including one with an extra key, only shows the dashboard. Otherwise it logs `SECOND_INSTANCE` with a fixed `action`:
 
 | State of the running instance | Action |
 | --- | --- |
@@ -22,6 +22,18 @@ Only one ETS2Telemetry process tree runs per profile. On startup, main first han
 Windows may refuse to move a window to the foreground when another application holds it; the taskbar button then flashes. That is an operating-system rule, not an error.
 
 A development launch (`npm run dev`) and an installed copy share the same `productName`, and therefore the same `userData` and instance lock: the second one only focuses the first. To run both side by side, give the development launch its own absolute `ETS2TELEMETRY_PROFILE_DIR`.
+
+## Squirrel events
+
+Since ET-018 PR-3 (plan U2) `apps/desktop/src/squirrel-events.ts` replaces electron-squirrel-startup. Main parses the arguments first, before the diagnostic profile override, any log, the settings, plugin setup and the service (unpackaged, the first argument after the executable is the application path and is skipped). For any `--squirrel` argument main first turns off hardware acceleration and runs the GPU and the network service in the main process (`--in-process-gpu`, `NetworkServiceInProcess2`), so the event process starts no child process that could outlive it while Squirrel deletes the install folder; a normal launch is unchanged. Only exactly `--squirrel-<event> <version>` is an event; `--squirrel-firstrun` alone starts the application normally; any other argument that starts with `--squirrel` exits 4 and changes nothing.
+
+| Event | What runs | Exit code |
+| --- | --- | --- |
+| `--squirrel-install`, `--squirrel-updated` | `Update.exe --createShortcut=<executable>` (a production install; a test install only when its test file sets `shortcuts: true`), then a pending [uninstall deferral](uninstall.md#deferral) is cancelled. No data is written otherwise. | 0 |
+| `--squirrel-obsolete` | Nothing; the previous version after an update quits. | 0 |
+| `--squirrel-uninstall` | The [uninstall hook](uninstall.md#squirrel-uninstall-hook): the instance lock with the `uninstall-exit` payload, the engine within 8 s, the receipt. | 0, 3 or 4 |
+
+electron-squirrel-startup was removed because its uninstall branch quits the process when `Update.exe --removeShortcut` closes, which would race the cleanup. A start of the installed application also cancels a pending deferral. Squirrel runs these hooks with 15 s (install, updated) and 10 s (obsolete, uninstall); see [installer testing](installer-testing.md#squirrel-behaviour-of-the-pinned-electron-winstaller).
 
 ## Close to tray
 
@@ -56,6 +68,7 @@ Every way to leave the application goes through one idempotent exit coordinator 
 | Dashboard **Exit ETS2Telemetry** button (`exitApplication()`) | `renderer` |
 | `app.quit()`, including Playwright's `close()` | `app-quit` (`before-quit` is prevented and redirected) |
 | Windows sign-out or shutdown (`session-end` on any window) | `session-end` |
+| The Squirrel uninstall hook's `uninstall-exit` payload (ET-018 PR-3) | `uninstall` |
 
 The first request logs `APP_EXIT_REQUESTED` with its reason, sets the tray tooltip to `Exiting`, disables the menu, retires live subscriptions, hides the overlay and asks the supervisor to stop the service. Later requests do nothing. `query-session-end` is not prevented. After the supervisor finishes, the coordinator waits for pending idle work (an in-flight [settings](settings.md#saving) save, since ET-016 PR-5 the removal of an interrupted [trip export](journal-export.md#saving-a-trip-j16-j17)'s partial file, since ET-017 PR-6 the same for an interrupted [diagnostic bundle](plugin-setup.md#diagnostic-bundle) export, and, since ET-017 PR-4, the [plugin setup](plugin-setup.md#setup-run) run in flight, which the exit aborts and which ends with the removal of its temporary file, and its registry write of an exclusion change or folder choice; together at most 1000 ms from the request; new saves, exports and plugin setup requests are refused once the exit started), removes the tray icon so no ghost icon remains, writes its final log rows (the append in flight gets at most 300 ms, [diagnostics log](#diagnostics-log)) and calls `app.exit(code)`. The supervisor's existing bounds are unchanged: the service is killed after 3000 ms without a clean stop and the application exits after 5000 ms in any case. Main-internal fatal paths still exit 1 through the same final step. A fatal stop (for example renderer or overlay restart exhaustion, a load or configuration failure, or a service recovery timeout) marks the application exiting as soon as it starts, without logging an exit request: the tray shows `Exiting` with a disabled menu, live state is retired, the overlay may close and neither the tray nor a second launch reopens the dashboard during the stop window.
 

@@ -25,14 +25,14 @@ export const DATA_ROOT = 'ETS2Telemetry';
 export const ROAMING_ROOT = 'ETS2Telemetry Desktop';
 
 export class InstallerGuardError extends Error {
-  /** @param {string} code */
-  constructor(code) {
-    super(`Installer lifecycle refused: ${code}`);
+  /** @param {string} code @param {string} [detail] a relative name inside the run root, never a machine path */
+  constructor(code, detail) {
+    super(`Installer lifecycle refused: ${code}${detail ? ` (${detail})` : ''}`);
     this.name = 'InstallerGuardError';
     this.code = code;
   }
 }
-const refuse = code => {throw new InstallerGuardError(code);};
+const refuse = (code, detail) => {throw new InstallerGuardError(code, detail);};
 
 /** A Windows drive path such as `C:\folder`; UNC, device, relative and drive-relative paths are not. */
 export function isDrivePath(value) {
@@ -49,13 +49,132 @@ export function isInside(candidate, parent) {
 }
 
 /**
- * The CI signal (U12): the harness runs only on a GitHub-hosted runner. `allowLocal` names the owner-requested local run
- * (O6); it refuses as well until ET-018 PR-3 replaces electron-squirrel-startup, whose install and update hooks create
- * real Desktop and Start menu shortcuts whatever the test root says.
+ * The CI signal (U12): the harness runs on a GitHub-hosted runner. `allowLocal` is the owner-requested local run (O6,
+ * `-AllowLocal`): it skips the signal, so only the fact-based guards protect the machine. Agents never pass it. Since
+ * ET-018 PR-3 the application's own Squirrel handler skips the shortcuts of a test install whose test file says so,
+ * which the harness writes for every run that is not on a hosted runner.
  */
 export function checkRunSignal(env, {allowLocal = false} = {}) {
-  if (allowLocal) refuse('LOCAL_RUN_UNAVAILABLE_UNTIL_PR3');
+  if (allowLocal === true) return;
   if (env.GITHUB_ACTIONS !== 'true' || env.RUNNER_ENVIRONMENT !== 'github-hosted') refuse('LOCAL_RUN_REFUSED');
+}
+/**
+ * The one top-level folder Windows may create under any LOCALAPPDATA a process runs with: the shell and Update.exe add
+ * `Microsoft\Windows\Caches` (and possibly more below `Microsoft`) beside the decoy's sentinels. Nothing else is allowed.
+ */
+export const DECOY_OS_FOLDER = 'Microsoft';
+/**
+ * The decoy check of the Windows-initiated uninstall (ET-018 PR-3, U12). `before` and `after` are trees keyed by the
+ * relative path (a folder ends with `\`), with `{directory: true}` or `{size, sha256}` values. Every entry of `before`
+ * must be in `after` with the same value; a new entry is allowed only below the top-level `Microsoft` folder and never
+ * with a component named `ETS2Telemetry*`. Returns the number of allowed new entries; throws the first refusal.
+ */
+export function checkDecoyUnchanged(before, after) {
+  for (const [entry, value] of Object.entries(before)) {
+    if (!Object.hasOwn(after, entry)) refuse('DECOY_ENTRY_REMOVED');
+    const now = after[entry];
+    if (JSON.stringify({directory: now.directory ?? false, size: now.size ?? null, sha256: now.sha256 ?? null}) !==
+      JSON.stringify({directory: value.directory ?? false, size: value.size ?? null, sha256: value.sha256 ?? null})) refuse('DECOY_ENTRY_CHANGED');
+  }
+  let allowed = 0;
+  for (const entry of Object.keys(after)) {
+    if (Object.hasOwn(before, entry)) continue;
+    const parts = entry.split('\\').filter(Boolean);
+    if (parts.some(part => part.toLowerCase().startsWith('ets2telemetry'))) refuse('DECOY_PRODUCT_ENTRY_ADDED');
+    if (parts[0]?.toLowerCase() !== DECOY_OS_FOLDER.toLowerCase()) refuse('DECOY_ENTRY_ADDED');
+    allowed++;
+  }
+  return allowed;
+}
+
+/** The binary-root listing of the harness holds at most this many entries; a longer one refuses. */
+export const RESIDUE_MAX_ENTRIES = 256;
+const APP_FOLDER = /^app-\d{1,9}\.\d{1,9}\.\d{1,9}(-[0-9A-Za-z.-]{1,40})?$/;
+/** Names that are never Electron runtime files, whatever the distribution lists: this product's and Squirrel's executables. */
+const NEVER_RUNTIME = new Set(['electron.exe', 'ets2telemetrydesktop.exe', 'squirrel.exe', 'update.exe']);
+/**
+ * The Electron runtime file names, from a listing of the installed `node_modules/electron/dist`: its top-level files
+ * except `electron.exe` (renamed to the product's executable in a package), and the files of its `locales` folder.
+ * Its `resources` folder and every other folder are not runtime files. `entries` holds `{name, directory}` rows of
+ * the top level and `locales` the file names of `locales`. Names are compared case-insensitively.
+ */
+export function electronRuntimeNames(entries, locales) {
+  if (!Array.isArray(entries) || !entries.some(entry => !entry.directory && /\.(bin|dll|pak|dat)$/i.test(entry.name))) refuse('ELECTRON_DIST_INVALID');
+  return {
+    files: new Set(entries.filter(entry => !entry.directory && !NEVER_RUNTIME.has(entry.name.toLowerCase())).map(entry => entry.name.toLowerCase())),
+    locales: new Set((locales ?? []).map(name => name.toLowerCase()))
+  };
+}
+/**
+ * The binary root after a Windows-initiated uninstall (ET-018 PR-3; docs/installer-testing.md, "Binary root residue").
+ * `listing` holds the harness's rows `{relative, kind, reparse, vendorHelper, deadMarker}` with `/`-separated names
+ * relative to the binary root. Allowed: `app-<version>` folders; `Update.exe` and `app-<version>/squirrel.exe` with
+ * the installed helper's bytes; the root `.dead` (required) and `app-<version>/.dead`, one space each. Tolerated and
+ * reported: Electron runtime files (`runtime`, from electronRuntimeNames) at the top of an `app-<version>` folder and in
+ * its `locales` folder. Anything else fails with its relative name: the product's executable, `resources` and
+ * everything below it, a link, any other file or folder. Returns the vendor helper count and the tolerated names.
+ */
+export function checkUninstallResidue(listing, runtime) {
+  if (!Array.isArray(listing) || listing.length > RESIDUE_MAX_ENTRIES) refuse('UNINSTALL_RESIDUE_TOO_LARGE');
+  let marker = false, vendorFiles = 0;
+  const tolerated = [];
+  for (const row of listing) {
+    const name = String(row?.relative ?? '');
+    const parts = name.split('/');
+    const inApp = parts.length >= 2 && APP_FOLDER.test(parts[0]);
+    if (row.reparse !== false) refuse('UNINSTALL_REPARSE_POINT', name);
+    if (row.kind === 'directory') {
+      if (parts.length === 1 && APP_FOLDER.test(parts[0])) continue;
+      if (inApp && parts.length === 2 && parts[1].toLowerCase() === 'locales') {tolerated.push(name); continue;}
+      refuse('UNINSTALL_UNEXPECTED_DIRECTORY', name);
+    }
+    if (row.kind !== 'file') refuse('UNINSTALL_UNEXPECTED_FILE', name);
+    const leaf = parts.at(-1).toLowerCase();
+    if ((parts.length === 1 && leaf === '.dead') || (inApp && parts.length === 2 && leaf === '.dead')) {
+      if (row.deadMarker !== true) refuse('UNINSTALL_MARKER_INVALID', name);
+      if (parts.length === 1) marker = true;
+      continue;
+    }
+    if ((parts.length === 1 && leaf === 'update.exe') || (inApp && parts.length === 2 && leaf === 'squirrel.exe')) {
+      if (row.vendorHelper !== true) refuse('UNINSTALL_VENDOR_HELPER_CHANGED', name);
+      vendorFiles++;
+      continue;
+    }
+    if (inApp && parts.length === 2 && runtime.files.has(leaf)) {tolerated.push(name); continue;}
+    if (inApp && parts.length === 3 && parts[1].toLowerCase() === 'locales' && runtime.locales.has(leaf)) {tolerated.push(name); continue;}
+    refuse('UNINSTALL_UNEXPECTED_FILE', name);
+  }
+  if (!marker) refuse('UNINSTALL_ROOT_OR_MARKER_MISSING');
+  return {vendorFiles, tolerated};
+}
+
+/** True only on a GitHub-hosted runner; the test install creates real shortcuts only there (U12). */
+export const isHostedRunner = env => env.GITHUB_ACTIONS === 'true' && env.RUNNER_ENVIRONMENT === 'github-hosted';
+
+/**
+ * The registered UninstallString (ET-018 PR-3, U12): exactly the quoted `Update.exe` of the run root's binary root and
+ * `--uninstall`, optionally followed by Squirrel's `-s`. Returns the program and its arguments; anything else refuses.
+ */
+export function parseUninstallString(value, runRoot) {
+  const match = typeof value === 'string' ? /^"([^"]+)"((?: +[^ "]+)*) *$/.exec(value) : null;
+  if (!match) refuse('UNINSTALL_STRING_INVALID');
+  const program = match[1], args = match[2].trim().split(/ +/).filter(Boolean);
+  if (normalizePath(program) !== normalizePath(path.win32.join(runLayout(runRoot).binaryRoot, 'Update.exe'))) refuse('UNINSTALL_STRING_OUTSIDE_RUN_ROOT');
+  if (!(args.length === 1 && args[0] === '--uninstall') && !(args.length === 2 && args[0] === '--uninstall' && args[1] === '-s')) refuse('UNINSTALL_STRING_INVALID');
+  return {program, args};
+}
+/**
+ * The environment of the Windows-initiated uninstall (ET-018 PR-3, U12): the caller's environment without PATH, Node,
+ * npm, Electron and every ETS2TELEMETRY_ variable, LOCALAPPDATA set to the decoy, APPDATA, TEMP and TMP inside R, and
+ * SQUIRREL_TEMP = R\LocalAppData. The decoy must lie inside R and must not be the real LocalAppData.
+ */
+export function uninstallEnvironment(base, {runRoot, real, decoy}) {
+  const layout = runLayout(runRoot);
+  if (!isDrivePath(decoy) || !isInside(decoy, runRoot) || normalizePath(decoy) === normalizePath(runRoot)) refuse('DECOY_OUTSIDE_RUN_ROOT');
+  if (!isDrivePath(real?.localAppData) || isInside(decoy, real.localAppData) || isInside(real.localAppData, decoy)) refuse('DECOY_IS_REAL_ROOT');
+  const env = installedEnvironment(base, {LOCALAPPDATA: decoy, APPDATA: layout.appData, TEMP: layout.temp, TMP: layout.temp, SQUIRREL_TEMP: layout.squirrelTemp});
+  if (Object.keys(env).some(key => key.toUpperCase().startsWith('ETS2TELEMETRY_'))) refuse('UNINSTALL_ENVIRONMENT_INVALID');
+  return env;
 }
 
 /**

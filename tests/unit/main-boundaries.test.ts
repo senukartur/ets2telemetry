@@ -14,7 +14,8 @@ import {changed, DETAIL, LIST_ITEM, TRIP, TRIP_PAGE} from '../shared/journal-rep
 const processEvents = ['uncaughtException', 'unhandledRejection'] as const;
 const processEmitter: EventEmitter = process;
 let originals: Map<string, ReturnType<EventEmitter['listeners']>>;
-let app: EventEmitter & {exit: ReturnType<typeof vi.fn>; quit: ReturnType<typeof vi.fn>; setPath: ReturnType<typeof vi.fn>; requestSingleInstanceLock: ReturnType<typeof vi.fn>};
+let app: EventEmitter & {exit: ReturnType<typeof vi.fn>; quit: ReturnType<typeof vi.fn>; setPath: ReturnType<typeof vi.fn>; requestSingleInstanceLock: ReturnType<typeof vi.fn>;
+  disableHardwareAcceleration: ReturnType<typeof vi.fn>; commandLine: {appendSwitch: ReturnType<typeof vi.fn>}};
 let ipc: EventEmitter;
 let handlers: Map<string, (event: unknown, source?: unknown) => unknown>;
 let child: EventEmitter & {postMessage: ReturnType<typeof vi.fn>; kill: ReturnType<typeof vi.fn>};
@@ -101,7 +102,7 @@ function installFixture() {
   originals = new Map(processEvents.map(name => [name, processEmitter.listeners(name)]));
   lockGranted = true; trayAvailable = false; trays = []; extraContents = [];
   app = Object.assign(new EventEmitter(), {exit: vi.fn(), quit: vi.fn(), getPath: () => 'C:\\isolated', setPath: vi.fn(), whenReady: () => Promise.resolve(), isPackaged: false,
-    requestSingleInstanceLock: vi.fn(() => lockGranted)});
+    requestSingleInstanceLock: vi.fn(() => lockGranted), disableHardwareAcceleration: vi.fn(), commandLine: {appendSwitch: vi.fn()}});
   child = Object.assign(new EventEmitter(), {postMessage: vi.fn(), kill: vi.fn(() => true)});
   children = [child]; let forks = 0;
   contents = Object.assign(new EventEmitter(), {mainFrame: {}, send: vi.fn(), postMessage: vi.fn(), setWindowOpenHandler: vi.fn(), setZoomFactor: vi.fn()});
@@ -147,7 +148,6 @@ function installFixture() {
     nativeImage: {createFromBuffer: () => ({addRepresentation: vi.fn()})},
     dialog: {showSaveDialog: (window: unknown, options: unknown) => showSaveDialog(window, options), showOpenDialog: (window: unknown, options: unknown) => showOpenDialog(window, options)},
     shell: {showItemInFolder: (file: string) => shell.showItemInFolder(file), openPath: (folder: string) => shell.openPath(folder)}}));
-  vi.doMock('electron-squirrel-startup', () => ({default: false}));
   vi.doMock('../../apps/desktop/src/entrypoints', () => ({processEntrypoint: () => 'package.json'}));
   log = Object.assign(vi.fn(), {flush: vi.fn(() => Promise.resolve(true)), settle: vi.fn<(timeoutMs: number) => Promise<void>>(() => Promise.resolve()), finalize: vi.fn<(timeoutMs: number) => Promise<void>>(() => Promise.resolve()), drainSync: vi.fn()}); diagnosticsCalls = [];
   vi.doMock('../../apps/desktop/src/diagnostics', async importOriginal => ({...await importOriginal<typeof import('../../apps/desktop/src/diagnostics')>(),
@@ -177,8 +177,8 @@ async function removeFixture() {
   await Promise.allSettled(loadingMain); await new Promise(resolve => realSetImmediate(resolve));
   for (const name of processEvents) for (const listener of processEmitter.listeners(name)) if (!originals.get(name)!.includes(listener)) processEmitter.removeListener(name, listener as (...args: unknown[]) => void);
   vi.clearAllTimers(); vi.restoreAllMocks(); vi.useRealTimers(); vi.unstubAllEnvs();
-  for (const name of ['electron', 'electron-squirrel-startup', '../../apps/desktop/src/entrypoints', '../../apps/desktop/src/diagnostics', '../../apps/desktop/src/broker-artifact',
-    '../../apps/desktop/src/settings-store', '../../apps/desktop/src/plugin-setup/plugin-setup']) vi.doUnmock(name);
+  for (const name of ['electron', '../../apps/desktop/src/entrypoints', '../../apps/desktop/src/diagnostics', '../../apps/desktop/src/broker-artifact',
+    '../../apps/desktop/src/settings-store', '../../apps/desktop/src/plugin-setup/plugin-setup', '../../apps/desktop/src/squirrel-events']) vi.doUnmock(name);
 }
 async function settle() {await Promise.resolve(); await Promise.resolve();}
 async function ready() {await loadMain(); await Promise.resolve(); child.emit('message', {type: 'ready'}); await settle();}
@@ -769,12 +769,76 @@ it.each([
   if (action === 'ignored-exiting' || action === 'ignored-starting') expect(windows.every(target => target.show.mock.calls.length === 0)).toBe(true);
   expect(JSON.stringify(log.mock.calls)).not.toContain('attacker');
 });
-it.each(['tray', 'renderer', 'app-quit', 'session-end'] as const)('runs one orderly exit for a %s request and removes the tray before exiting', async reason => {
+// ET-018 (U2): a Squirrel event runs first and alone. The handler is replaced here; it never sees the real execPath layout.
+async function withArgv(args: readonly string[], run: () => Promise<void>) {
+  const argv = process.argv;
+  process.argv = [argv[0], 'apps\\desktop\\dist\\main.js', ...args];
+  try {await run();} finally {process.argv = argv;}
+}
+it.each([
+  [['--squirrel-uninstall', '0.1.0'], {kind: 'event', event: 'uninstall', version: '0.1.0'}, 3],
+  [['--squirrel-obsolete', '0.1.0'], {kind: 'event', event: 'obsolete', version: '0.1.0'}, 0],
+  [['--squirrel-install', '0.1.0', '--extra'], {kind: 'invalid'}, 4]
+] as const)('dispatches %j before the profile override, the lock, logs, settings, plugin setup and the service', async (args, parsed, code) => {
+  const run = vi.fn(() => Promise.resolve(code));
+  vi.doMock('../../apps/desktop/src/squirrel-events', async importOriginal => ({...await importOriginal<typeof import('../../apps/desktop/src/squirrel-events')>(),
+    runSquirrelEvent: run, productionSquirrelPorts: () => ({})}));
+  vi.stubEnv('ETS2TELEMETRY_PROFILE_DIR', 'C:\\never-applied');
+  trayAvailable = true;
+  await withArgv(args, async () => {await loadMain(); await settle();});
+  expect(run).toHaveBeenCalledExactlyOnceWith(parsed, {});
+  // No GPU or network-service child process may outlive a Squirrel event process.
+  expect(app.disableHardwareAcceleration).toHaveBeenCalledOnce();
+  expect(app.commandLine.appendSwitch.mock.calls).toEqual([['in-process-gpu'], ['enable-features', 'NetworkServiceInProcess2']]);
+  expect(app.commandLine.appendSwitch.mock.invocationCallOrder[0]).toBeLessThan(run.mock.invocationCallOrder[0]);
+  expect(app.exit).toHaveBeenCalledExactlyOnceWith(code);
+  expect(app.setPath).not.toHaveBeenCalled(); expect(app.requestSingleInstanceLock).not.toHaveBeenCalled();
+  expect(diagnosticsCalls).toEqual([]); expect(log).not.toHaveBeenCalled(); expect(settingsDirectories).toEqual([]);
+  expect(forkCalls).toEqual([]); expect(windows).toHaveLength(0); expect(trays).toHaveLength(0);
+  for (const name of ['before-quit', 'window-all-closed', 'second-instance']) expect(app.listenerCount(name)).toBe(0);
+});
+it('starts normally for --squirrel-firstrun', async () => {
+  const run = vi.fn(() => Promise.resolve(0));
+  vi.doMock('../../apps/desktop/src/squirrel-events', async importOriginal => ({...await importOriginal<typeof import('../../apps/desktop/src/squirrel-events')>(),
+    runSquirrelEvent: run}));
+  await withArgv(['--squirrel-firstrun'], async () => {await ready();});
+  expect(run).not.toHaveBeenCalled();
+  expect(app.disableHardwareAcceleration).not.toHaveBeenCalled(); expect(app.commandLine.appendSwitch).not.toHaveBeenCalled();
+  expect(app.requestSingleInstanceLock).toHaveBeenCalledOnce();
+  expect(app.listenerCount('second-instance')).toBe(1);
+});
+// ET-018 (U6): the one second-instance payload that exits. Main deletes nothing for it.
+it.each([
+  ['an extra key', {ets2telemetry: 'uninstall-exit', force: true}], ['another value', {ets2telemetry: 'Uninstall-Exit'}], ['another key', {ETS2Telemetry: 'uninstall-exit'}],
+  ['an array', ['uninstall-exit']], ['a string', 'uninstall-exit'], ['null', null], ['no data', undefined], ['an empty object', {}]
+] as const)('only shows the dashboard for a second launch with %s, even with Squirrel arguments', async (_name, data) => {
+  trayAvailable = true; await ready();
+  app.emit('second-instance', {}, ['ETS2TelemetryDesktop.exe', '--squirrel-uninstall', '0.1.0'], 'C:\\isolated', data);
+  expect(log).toHaveBeenCalledWith('SECOND_INSTANCE', undefined, {action: 'focused'});
+  expect(windows[0].show).toHaveBeenCalledOnce();
+  expect(log).not.toHaveBeenCalledWith('APP_EXIT_REQUESTED', undefined, expect.anything());
+  expect(child.postMessage).not.toHaveBeenCalledWith({type: 'stop'});
+});
+it('an exiting instance ignores the uninstall-exit payload', async () => {
+  trayAvailable = true; await ready();
+  app.emit('before-quit', {preventDefault: vi.fn()});
+  app.emit('second-instance', {}, [], 'C:\\isolated', {ets2telemetry: 'uninstall-exit'});
+  expect(log).toHaveBeenCalledWith('SECOND_INSTANCE', undefined, {action: 'ignored-exiting'});
+  expect(log.mock.calls.filter(call => call[0] === 'APP_EXIT_REQUESTED')).toEqual([['APP_EXIT_REQUESTED', undefined, {reason: 'app-quit'}]]);
+});
+it('an uninstall-exit request before first readiness still exits once', async () => {
+  trayAvailable = true; await loadMain(); await settle();
+  app.emit('second-instance', {}, [], 'C:\\isolated', {ets2telemetry: 'uninstall-exit'});
+  expect(log).toHaveBeenCalledWith('SECOND_INSTANCE', undefined, {action: 'uninstall-exit'});
+  expect(log.mock.calls.filter(call => call[0] === 'APP_EXIT_REQUESTED')).toEqual([['APP_EXIT_REQUESTED', undefined, {reason: 'uninstall'}]]);
+});
+it.each(['tray', 'renderer', 'app-quit', 'session-end', 'uninstall'] as const)('runs one orderly exit for a %s request and removes the tray before exiting', async reason => {
   trayAvailable = true; await ready(); ipc.emit('overlay:subscribe', overlayTrusted());
   const request = () => {
     if (reason === 'tray') trayMenuItem('Exit ETS2Telemetry').click!();
     else if (reason === 'renderer') void handlers.get('app:exit')!(trusted());
     else if (reason === 'app-quit') {const event = {preventDefault: vi.fn()}; app.emit('before-quit', event); expect(event.preventDefault).toHaveBeenCalled();}
+    else if (reason === 'uninstall') app.emit('second-instance', {}, ['ETS2TelemetryDesktop.exe', '--squirrel-uninstall', '0.1.0'], 'C:\\isolated', {ets2telemetry: 'uninstall-exit'});
     else windows[1].emit('session-end');
   };
   request(); request(); app.emit('before-quit', {preventDefault: vi.fn()}); windows[0].emit('session-end');

@@ -19,6 +19,8 @@ export const GAME_PROCESS_NAMES: Readonly<Record<PluginGame, string>> = Object.f
 export const CLIENT_PROCESS_PREFIX = 'truckersmp';
 
 export interface ProcessRow {readonly name: string; readonly pid: number}
+/** A process row with its Windows session number (tasklist's fourth column), or null when that column is not a number. */
+export interface SessionProcessRow extends ProcessRow {readonly session: number | null}
 export interface RunningGames {readonly ets2: boolean; readonly ats: boolean; readonly client: boolean}
 export type BlockingProcess = 'GAME_RUNNING' | 'CLIENT_RUNNING';
 export type ProcessListing = {readonly ok: true; readonly rows: readonly ProcessRow[]} | {readonly ok: false; readonly code: 'RUNNING_CHECK_FAILED'; readonly reason: string};
@@ -50,12 +52,16 @@ function csvFields(line: string): string[] | undefined {
  * is malformed or no process is listed, because a partial listing could hide a running game.
  */
 export function parseTasklistCsv(text: string): ProcessRow[] | undefined {
-  const rows: ProcessRow[] = [];
+  return parseTasklistSessions(text)?.map(({name, pid}) => ({name, pid}));
+}
+/** parseTasklistCsv with each row's session number (`"Image Name","PID","Session Name","Session#",…`). */
+export function parseTasklistSessions(text: string): SessionProcessRow[] | undefined {
+  const rows: SessionProcessRow[] = [];
   for (const line of text.split(/\r?\n/)) {
     if (!line.trim()) continue;
     const fields = csvFields(line.trim());
     if (!fields || fields.length < 2 || !fields[0] || !/^\d{1,10}$/.test(fields[1])) return undefined;
-    rows.push({name: fields[0], pid: Number(fields[1])});
+    rows.push({name: fields[0], pid: Number(fields[1]), session: fields[3] !== undefined && /^\d{1,10}$/.test(fields[3]) ? Number(fields[3]) : null});
   }
   return rows.length ? rows : undefined;
 }
@@ -86,12 +92,18 @@ export interface ProcessListOptions {
  * child inherits the environment: tasklist loads no PowerShell modules, so PSModulePath does not matter here.
  */
 export async function listProcesses(options: ProcessListOptions = {}): Promise<ProcessListing> {
+  const listing = await listProcessSessions(options);
+  return listing.ok ? {ok: true, rows: listing.rows.map(({name, pid}) => ({name, pid}))} : listing;
+}
+/** listProcesses with each row's session number (ET-018 PR-3: the uninstall hook waits only for its own session). */
+export async function listProcessSessions(options: ProcessListOptions = {}): Promise<{readonly ok: true; readonly rows: readonly SessionProcessRow[]}
+  | {readonly ok: false; readonly code: 'RUNNING_CHECK_FAILED'; readonly reason: string}> {
   const tasklist = path.win32.join(systemRoot(options.env ?? process.env), 'System32', 'tasklist.exe');
   const result = await runFixedProgram(options.execFile ?? nodeExecFile, tasklist, ['/fo', 'csv', '/nh'],
     {timeoutMs: TASKLIST_TIMEOUT_MS, maxOutputBytes: TASKLIST_MAX_OUTPUT_BYTES, signal: options.signal});
   if (!result.ok) return {ok: false, code: 'RUNNING_CHECK_FAILED', reason: result.failure};
   // tasklist writes in the console code page. The names matched here are ASCII, so latin1 never changes them.
-  const rows = parseTasklistCsv(result.stdout.toString('latin1'));
+  const rows = parseTasklistSessions(result.stdout.toString('latin1'));
   return rows ? {ok: true, rows} : {ok: false, code: 'RUNNING_CHECK_FAILED', reason: 'output-invalid'};
 }
 

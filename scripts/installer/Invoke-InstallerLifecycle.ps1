@@ -2,8 +2,8 @@
 param(
     # Reports the steps and launches nothing.
     [switch]$Plan,
-    # An owner-requested local run (plan O6). It refuses until ET-018 PR-3 replaces electron-squirrel-startup, whose
-    # install and update hooks create real Desktop and Start menu shortcuts.
+    # An owner-requested local run (plan O6): skips the GitHub-hosted runner signal; the fact-based guards still apply.
+    # Agents never pass it. The test install then skips the shortcuts, and the run leaves no uninstall key behind.
     [switch]$AllowLocal,
     [string]$OutputRoot = (Join-Path $PSScriptRoot '../../.local/ci'),
     [ValidateSet('scaffold','telemetry','overlay','lifecycle','plugin')][string[]]$ScenariosA = @('scaffold'),
@@ -12,22 +12,28 @@ param(
 # ET-018 PR-1 (REG-013, REG-017; plan U10-U13): the installer lifecycle in a marked test root R. Install A, installed smokes
 # and a data launch that migrates a seeded synthetic version 1 database, repair (Setup A again), update to the local
 # fixture feed B, installed smokes and a data launch on B, then a read of the upgraded database with the installed runtime.
+# ET-018 PR-3 then runs the Windows-initiated uninstall scenarios: (1) the exact registered UninstallString with a decoy
+# LOCALAPPDATA while the application runs, after its plugin setup installed the plugin into a fake ETS2 folder: complete;
+# (2) a reinstall, a plugin launch and the same uninstall while the fake game host runs: deferred; (3) a reinstall over
+# (2), which cancels the deferral, a launch that adopts the plugin and a final complete uninstall.
 # Squirrel's binary root is redirected with SQUIRREL_TEMP = R\LocalAppData, and every child process gets LOCALAPPDATA,
-# APPDATA and TEMP inside R. Nothing uninstalls in PR-1; R is deleted at the end and, on CI, the HKCU uninstall key that
-# points into R. It runs only on a GitHub-hosted runner (docs/installer-testing.md); never run it on a personal machine.
+# APPDATA and TEMP inside R. R is deleted at the end, and any HKCU uninstall key that still points into R. It runs on a
+# GitHub-hosted runner, or locally only with -AllowLocal on the owner's explicit request (docs/installer-testing.md).
 $ErrorActionPreference = 'Stop'
 $checkout = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path
 $setup = Join-Path $checkout 'out/make/squirrel.windows/x64/ETS2Telemetry Desktop-0.1.0 Setup.exe'
 $planSteps = @('signal','facts','guard-plan','create-run-root','guard-ready','build-fixture-0.1.1','seed','install-0.1.0','installed-smokes-0.1.0',
-    'data-launch-0.1.0','verify-0.1.0','repair-0.1.0','update-0.1.1','installed-smokes-0.1.1','data-launch-0.1.1','verify-0.1.1','cleanup')
+    'data-launch-0.1.0','verify-0.1.0','repair-0.1.0','update-0.1.1','installed-smokes-0.1.1','data-launch-0.1.1','verify-0.1.1','games',
+    'windows-uninstall-complete-running','install-0.1.0-again','plugin-launch-installed','windows-uninstall-deferred-game','reinstall-0.1.0-over-deferral',
+    'plugin-launch-adopted','windows-uninstall-final','cleanup')
 if ($Plan) {
-    [ordered]@{run=$false; steps=$planSteps; scenariosA=$ScenariosA; scenariosB=$ScenariosB; setup=$setup; uninstall=$false;
-        localRuns='refused until ET-018 PR-3'; applicationLaunched=$false} | ConvertTo-Json
+    [ordered]@{run=$false; steps=$planSteps; scenariosA=$ScenariosA; scenariosB=$ScenariosB; setup=$setup; uninstall='windows-initiated, in R only';
+        localRuns='only with -AllowLocal on an explicit owner request'; applicationLaunched=$false} | ConvertTo-Json
     return
 }
 # The CI signal comes first, before any registry, process or file-system read. installer-guard.mjs repeats it.
-if ($AllowLocal) { throw 'LOCAL_RUN_UNAVAILABLE_UNTIL_PR3: electron-squirrel-startup would create real shortcuts; see docs/installer-testing.md.' }
-if ($env:GITHUB_ACTIONS -cne 'true' -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted') {
+$hosted = $env:GITHUB_ACTIONS -ceq 'true' -and $env:RUNNER_ENVIRONMENT -ceq 'github-hosted'
+if (!$hosted -and !$AllowLocal) {
     throw 'LOCAL_RUN_REFUSED: the installer lifecycle runs only on a GitHub-hosted runner; dispatch Windows CI instead (docs/installer-testing.md).'
 }
 $node = (Get-Command node -ErrorAction Stop).Source
@@ -46,10 +52,10 @@ $binaryRoot = Join-Path $base 'ETS2TelemetryDesktop'
 $uninstallKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\ETS2TelemetryDesktop'
 New-Item -ItemType Directory -Path $evidence | Out-Null
 $configFile = Join-Path $evidence 'config.json'
-[ordered]@{runRoot=$runRoot; evidence=$evidence; setup=$setup; stepBudgetMs=55000} | ConvertTo-Json |
+[ordered]@{runRoot=$runRoot; evidence=$evidence; setup=$setup; stepBudgetMs=55000; allowLocal=[bool]$AllowLocal} | ConvertTo-Json |
     Set-Content -LiteralPath $configFile -Encoding utf8
 $report = [ordered]@{passed=$false; failure=$null; startedUtc=[datetime]::UtcNow.ToString('o'); scenariosA=$ScenariosA; scenariosB=$ScenariosB; steps=@();
-    uninstallRun=$false; runRootRemoved=$false; registrationRemoved=$false}
+    uninstallRun=$false; runRootRemoved=$false; registrationRemoved=$false; shortcuts=$hosted; uninstalls=@()}
 $clock = [Diagnostics.Stopwatch]::StartNew()
 
 $registryViews = @([Microsoft.Win32.RegistryView]::Registry64, [Microsoft.Win32.RegistryView]::Registry32)
@@ -131,6 +137,73 @@ function Assert-Installed([string]$Label, [string]$Version) {
     return $executable
 }
 
+$shortcutFolders = @([Environment]::GetFolderPath('DesktopDirectory'), [Environment]::GetFolderPath('Programs'))
+function Get-ProductLinkCount {
+    # Shortcuts (.lnk) on the Desktop and in the Start menu whose target lies in R's binary root; read only, counted only.
+    $shell = New-Object -ComObject WScript.Shell
+    $count = 0
+    try {
+        foreach ($folder in $shortcutFolders) {
+            if (!$folder -or !(Test-Path -LiteralPath $folder)) { continue }
+            foreach ($item in @(Get-ChildItem -LiteralPath $folder -Filter '*.lnk' -Recurse -File -ErrorAction SilentlyContinue)) {
+                $link = $shell.CreateShortcut($item.FullName)
+                try { if ($link.TargetPath -and [IO.Path]::GetFullPath($link.TargetPath).StartsWith($binaryRoot + '\', [StringComparison]::OrdinalIgnoreCase)) { $count++ } }
+                finally { [Runtime.InteropServices.Marshal]::FinalReleaseComObject($link) | Out-Null }
+            }
+        }
+    } finally { [Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell) | Out-Null }
+    return $count
+}
+function Assert-ProductLinks([string]$Label, [bool]$Installed) {
+    # A test install creates shortcuts only on a GitHub-hosted runner (its test file says so), and an uninstall removes them.
+    $count = Get-ProductLinkCount
+    $script:report.steps += ,[ordered]@{step=('shortcuts-' + $Label); productLinks=$count}
+    if ($Installed -and $hosted) { if ($count -lt 1) { throw ('Product shortcuts missing after ' + $Label) } }
+    elseif ($count -ne 0) { throw ('PRODUCT_SHORTCUT_UNEXPECTED after ' + $Label + ': ' + $count) }
+}
+function Get-VendorHelper([string]$Version) {
+    # Squirrel's helper of the installed version, before an uninstall: the only executable its residue may keep.
+    $file = Join-Path $binaryRoot ('app-' + $Version + '\squirrel.exe')
+    if (!(Test-Path -LiteralPath $file -PathType Leaf)) { throw ('Vendor helper missing in app-' + $Version) }
+    return [ordered]@{sha256=(Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash; bytes=(Get-Item -LiteralPath $file).Length}
+}
+function Get-BinaryRootListing($Helper) {
+    # Every entry left in the binary root by relative name, with its kind, size and whether its bytes are Squirrel's helper
+    # or its one-space .dead marker; at most 257 entries (the check refuses more than 256). Written to the evidence
+    # before any residue assertion.
+    $rows = [Collections.Generic.List[object]]::new()
+    if (!(Test-Path -LiteralPath $binaryRoot -PathType Container)) { return ,$rows.ToArray() }
+    foreach ($item in @(Get-ChildItem -LiteralPath $binaryRoot -Recurse -Force | Select-Object -First 257)) {
+        $relative = $item.FullName.Substring($binaryRoot.Length + 1).Replace('\', '/')
+        $reparse = [bool]($item.Attributes -band [IO.FileAttributes]::ReparsePoint)
+        if ($item.PSIsContainer) { $rows.Add([ordered]@{relative=$relative; kind='directory'; reparse=$reparse}); continue }
+        $isHelper = $false; $isMarker = $false
+        if (!$reparse -and $item.Length -eq $Helper.bytes) { $isHelper = (Get-FileHash -LiteralPath $item.FullName -Algorithm SHA256).Hash -eq $Helper.sha256 }
+        if (!$reparse -and $item.Length -eq 1) {
+            $stream = [IO.File]::Open($item.FullName, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+            try { $isMarker = $stream.ReadByte() -eq 32 } finally { $stream.Dispose() }
+        }
+        $rows.Add([ordered]@{relative=$relative; kind='file'; bytes=$item.Length; reparse=$reparse; vendorHelper=$isHelper; deadMarker=$isMarker})
+    }
+    return ,$rows.ToArray()
+}
+function Assert-Uninstalled([string]$Label, $Helper) {
+    # After a Windows-initiated uninstall: no registration, no product shortcut, and the binary root holds only Squirrel's
+    # residue (TD-013): the listing goes to the evidence first, then the driver's residue command applies
+    # checkUninstallResidue (installer-guard.mjs; docs/installer-testing.md, "Binary root residue"), which also tolerates
+    # and reports Electron runtime files left in an app- folder and fails anything of this application by name.
+    if ($null -ne (Read-Registration)) { throw ('UNINSTALL_REGISTRATION_REMAINS after ' + $Label) }
+    Assert-ProductLinks $Label $false
+    $listing = Get-BinaryRootListing $Helper
+    ConvertTo-Json -InputObject $listing -Depth 3 | Set-Content -LiteralPath (Join-Path $evidence ('residue-listing-' + $Label + '.json')) -Encoding utf8
+    if (!(Test-Path -LiteralPath $binaryRoot -PathType Container)) { throw ('UNINSTALL_ROOT_OR_MARKER_MISSING after ' + $Label) }
+    # The rule itself is checkUninstallResidue in installer-guard.mjs (unit-tested), run by the driver's residue command.
+    Invoke-Driver 'residue' @($Label) 30000
+    $result = (Get-Content -LiteralPath (Join-Path $evidence ('residue-' + $Label + '.json')) -Raw | ConvertFrom-Json).result
+    $script:report.uninstalls += ,[ordered]@{label=$Label; registrationRemoved=$true; residueEntries=$listing.Count; vendorFiles=$result.vendorFiles;
+        toleratedRuntimeResidue=@($result.toleratedRuntimeResidue); toleratedRuntimeResidueCount=$result.toleratedRuntimeResidueCount}
+}
+
 $saved = @{}
 $guarded = $false
 # Before the first child process starts, the environment names only R (its folders are created after the preflight), so
@@ -146,7 +219,7 @@ $env:LOCALAPPDATA = $base; $env:SQUIRREL_TEMP = $base
 $env:TEMP = Join-Path $runRoot 'temp'; $env:TMP = $env:TEMP; $env:APPDATA = Join-Path $runRoot 'AppData'
 $env:ETS2TELEMETRY_PROFILE_DIR = Join-Path $runRoot 'profile'; $env:ETS2TELEMETRY_PLUGIN_SETUP_ROOT = $runRoot
 try {
-    & $node $driver signal
+    & $node $driver signal @(if ($AllowLocal) { '--allow-local' })
     if ($LASTEXITCODE -ne 0) { throw 'LOCAL_RUN_REFUSED: the guard module refused the run signal.' }
     Invoke-Driver 'guard' @('plan') 30000
     $guarded = $true
@@ -155,7 +228,7 @@ try {
     $utf8 = [Text.UTF8Encoding]::new($false)
     [IO.File]::WriteAllText((Join-Path $runRoot 'ets2telemetry-plugin-test-root.marker'), "Test root of the ETS2Telemetry installer lifecycle.`n", $utf8)
     [IO.File]::WriteAllText((Join-Path $runRoot 'ets2telemetry-install-test.json'), (([ordered]@{format='ets2telemetry.install-test'; version=1;
-        profileDir=(Join-Path $runRoot 'profile'); runOnceKey=$null; shortcuts=$true}) | ConvertTo-Json), $utf8)
+        profileDir=(Join-Path $runRoot 'profile'); runOnceKey=$null; shortcuts=$hosted}) | ConvertTo-Json), $utf8)
     Invoke-Driver 'guard' @('ready') 30000
 
     # Installer version B from a temporary copy of the packaged folder (a build step; it runs no installer).
@@ -171,6 +244,7 @@ try {
     $env:ETS2TELEMETRY_DIAGNOSTIC_DIR = Join-Path $runRoot 'diagnostics\install-0.1.0'
     Invoke-Driver 'step' @('install-0.1.0', $setup, '--silent') 60000
     $executableA = Assert-Installed 'install-0.1.0' '0.1.0'
+    Assert-ProductLinks 'install-0.1.0' $true
     Invoke-Driver 'snapshot' @('install-0.1.0') 30000
     Invoke-Driver 'compare' @('seed', 'install-0.1.0') 30000
 
@@ -194,6 +268,33 @@ try {
     Invoke-InstalledSmoke $executableB $ScenariosB '0.1.1'
     Invoke-Driver 'launch' @('0.1.1', $executableB, 'none') 60000
     Invoke-Driver 'verify' @('0.1.1', $executableB) 30000
+
+    # ET-018 PR-3: the Windows-initiated uninstall scenarios (docs/installer-testing.md, "Uninstall scenarios").
+    $env:ETS2TELEMETRY_DIAGNOSTIC_DIR = $null
+    Invoke-Driver 'games' @() 30000
+    $helper = Get-VendorHelper '0.1.1'
+    $report.uninstallRun = $true
+    Invoke-Driver 'windows-uninstall' @('complete-running', $executableB, 'complete') 60000
+    Assert-Uninstalled 'complete-running' $helper
+
+    $env:ETS2TELEMETRY_DIAGNOSTIC_DIR = Join-Path $runRoot 'diagnostics\install-again-0.1.0'
+    Invoke-Driver 'step' @('install-again-0.1.0', $setup, '--silent') 60000
+    $executableA = Assert-Installed 'install-again-0.1.0' '0.1.0'
+    Assert-ProductLinks 'install-again-0.1.0' $true
+    $env:ETS2TELEMETRY_DIAGNOSTIC_DIR = $null
+    Invoke-Driver 'plugin-launch' @('installed', $executableA, 'installed') 60000
+    $helper = Get-VendorHelper '0.1.0'
+    Invoke-Driver 'windows-uninstall' @('deferred-game', '-', 'deferred') 60000
+    Assert-Uninstalled 'deferred-game' $helper
+
+    $env:ETS2TELEMETRY_DIAGNOSTIC_DIR = Join-Path $runRoot 'diagnostics\reinstall-0.1.0'
+    Invoke-Driver 'step' @('reinstall-0.1.0', $setup, '--silent') 60000
+    $executableA = Assert-Installed 'reinstall-0.1.0' '0.1.0'
+    $env:ETS2TELEMETRY_DIAGNOSTIC_DIR = $null
+    Invoke-Driver 'plugin-launch' @('adopted', $executableA, 'adopted') 60000
+    $helper = Get-VendorHelper '0.1.0'
+    Invoke-Driver 'windows-uninstall' @('final', $executableA, 'complete') 60000
+    Assert-Uninstalled 'final' $helper
     $report.passed = $true
 } catch {
     $report.failure = $_.Exception.Message
@@ -224,7 +325,8 @@ try {
             $report.runRootRemoved = [bool]$cleanup.passed
             $owned = @($cleanup.ownsRegistration)
             if ($owned.Count -ne $registryViews.Count) { throw 'Cleanup returned no decision per registry view.' }
-            if ($env:GITHUB_ACTIONS -ceq 'true' -and $env:RUNNER_ENVIRONMENT -ceq 'github-hosted') {
+            # On a hosted runner or an owner-requested local run; a key is deleted only when it points into R.
+            if ($hosted -or $AllowLocal) {
                 for ($index = 0; $index -lt $registryViews.Count; $index++) {
                     if ($owned[$index] -ne $true) { continue }
                     $hive = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::CurrentUser, $registryViews[$index])
