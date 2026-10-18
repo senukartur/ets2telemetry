@@ -14,7 +14,11 @@ import type {TripRecorderClient} from './trip-recorder';
 
 /** Budget of the `history-storage` step in the service's `storage` shutdown phase. */
 export const HISTORY_CLOSE_BUDGET_MS = 1000;
-/** The orderly close gets this long before the worker is terminated, so the step still ends inside its budget. */
+/**
+ * The orderly close gets this long, plus one event-loop turn for answers that already arrived, before the worker is
+ * terminated, so the step still ends inside its budget. A termination cannot interrupt a native SQLite call; such a stall
+ * ends at the step budget instead.
+ */
 export const HISTORY_CLOSE_GRACE_MS = 800;
 
 export interface HistoryStorageOptions {
@@ -122,8 +126,9 @@ export class HistoryStorage {
 
   /**
    * The `history-storage` shutdown step: waits for a running open, closes the database and waits for the worker thread
-   * to end. Rejects when the worker had to be terminated or had failed earlier in the session, so the step reports a
-   * failed outcome.
+   * to end. Rejects when the worker had to be terminated before it answered the close, or had failed earlier in the
+   * session, so the step reports a failed outcome. A worker that answered the close but whose thread was still ending
+   * when the grace ran out is terminated and the close stays clean (StorageClient.close).
    */
   async close(): Promise<void> {
     const client = this.#client;

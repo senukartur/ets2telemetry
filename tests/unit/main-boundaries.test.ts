@@ -35,6 +35,8 @@ let shell: {showItemInFolder: ReturnType<typeof vi.fn<(file: string) => void>>; 
 let channels: {port1: EventEmitter & {postMessage: ReturnType<typeof vi.fn>; close: ReturnType<typeof vi.fn<() => void>>; start: ReturnType<typeof vi.fn<() => void>>}; port2: {close: ReturnType<typeof vi.fn<() => void>>}}[];
 let configurations: Electron.BrowserWindowConstructorOptions[];
 let log: ReturnType<typeof vi.fn> & {flush: ReturnType<typeof vi.fn>};
+// Log location fix: the arguments of every createDiagnostics call and of every service fork.
+let diagnosticsCalls: unknown[][], forkCalls: unknown[][];
 // ET-011a fixture additions. The tray is unavailable unless a test enables it, so earlier tests keep their
 // timer and log expectations; windows after the first dashboard and overlay get their own web contents.
 let lockGranted: boolean;
@@ -112,7 +114,9 @@ function installFixture() {
   showSaveDialog = vi.fn(() => Promise.resolve({canceled: true, filePath: ''}));
   showOpenDialog = vi.fn(() => Promise.resolve({canceled: true, filePaths: []}));
   shell = {showItemInFolder: vi.fn(), openPath: vi.fn(() => Promise.resolve(''))};
-  vi.doMock('electron', () => ({app, ipcMain: ipc, utilityProcess: {fork: () => {
+  forkCalls = [];
+  vi.doMock('electron', () => ({app, ipcMain: ipc, utilityProcess: {fork: (...args: unknown[]) => {
+    forkCalls.push(args);
     if (forks++ === 0) return child;
     const next = Object.assign(new EventEmitter(), {postMessage: vi.fn(), kill: vi.fn(() => true)}); children.push(next); return next;
   }},
@@ -145,8 +149,9 @@ function installFixture() {
     shell: {showItemInFolder: (file: string) => shell.showItemInFolder(file), openPath: (folder: string) => shell.openPath(folder)}}));
   vi.doMock('electron-squirrel-startup', () => ({default: false}));
   vi.doMock('../../apps/desktop/src/entrypoints', () => ({processEntrypoint: () => 'package.json'}));
-  log = Object.assign(vi.fn(), {flush: vi.fn(() => Promise.resolve(true))});
-  vi.doMock('../../apps/desktop/src/diagnostics', async importOriginal => ({...await importOriginal<typeof import('../../apps/desktop/src/diagnostics')>(), createDiagnostics: () => log}));
+  log = Object.assign(vi.fn(), {flush: vi.fn(() => Promise.resolve(true))}); diagnosticsCalls = [];
+  vi.doMock('../../apps/desktop/src/diagnostics', async importOriginal => ({...await importOriginal<typeof import('../../apps/desktop/src/diagnostics')>(),
+    createDiagnostics: (...args: unknown[]) => {diagnosticsCalls.push(args); return log;}}));
   vi.doMock('../../apps/desktop/src/broker-artifact', () => ({brokerConfiguration: resolveBroker, createBrokerResolver: () => resolveBroker}));
   vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'synthetic');
   settingsView = {units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: null};
@@ -954,6 +959,35 @@ async function drainOverlay(channel: typeof channels[number], milliseconds: numb
     if (channel.port1.postMessage.mock.calls.length > count) consumeOverlay(channel);
   }
 }
+// Without LOCALAPPDATA main logged under userData and the service under TEMP, so one root never held both logs.
+const forkEnvironment = (index = 0) => (forkCalls[index][2] as {env: Record<string, string | undefined>}).env;
+it('resolves one log root under userData without LOCALAPPDATA and forks every service with it', async () => {
+  vi.stubEnv('ETS2TELEMETRY_DIAGNOSTIC_DIR', undefined); vi.stubEnv('LOCALAPPDATA', undefined);
+  // A value in main's own launch environment is replaced, never trusted.
+  vi.stubEnv('ETS2TELEMETRY_SERVICE_LOG_ROOT', 'C:\\elsewhere');
+  await ready();
+  const root = 'C:\\isolated\\ETS2Telemetry\\logs';
+  expect(diagnosticsCalls[0]).toEqual([root, false]);
+  expect(forkEnvironment()).toMatchObject({ETS2TELEMETRY_SERVICE_LOG_ROOT: root, ETS2TELEMETRY_SOURCE_KIND: 'synthetic'});
+  expect(forkEnvironment()).not.toHaveProperty('LOCALAPPDATA');
+  // A supervised restart forks the replacement with the same root.
+  child.emit('exit', 1); await vi.advanceTimersByTimeAsync(250);
+  expect(forkCalls).toHaveLength(2); expect(forkEnvironment(1)).toMatchObject({ETS2TELEMETRY_SERVICE_LOG_ROOT: root});
+});
+it('resolves the log root under LOCALAPPDATA when it is set and forks the service with it', async () => {
+  vi.stubEnv('ETS2TELEMETRY_DIAGNOSTIC_DIR', undefined); vi.stubEnv('LOCALAPPDATA', 'C:\\isolated\\local');
+  await ready();
+  const root = 'C:\\isolated\\local\\ETS2Telemetry\\logs';
+  expect(diagnosticsCalls[0]).toEqual([root, false]);
+  expect(forkEnvironment()).toMatchObject({ETS2TELEMETRY_SERVICE_LOG_ROOT: root, LOCALAPPDATA: 'C:\\isolated\\local'});
+});
+it('hands the diagnostic directory to the service as its log root, with detailed main logs', async () => {
+  vi.stubEnv('ETS2TELEMETRY_DIAGNOSTIC_DIR', 'C:\\isolated\\diagnostics'); vi.stubEnv('LOCALAPPDATA', 'C:\\isolated\\local');
+  await ready();
+  expect(diagnosticsCalls[0]).toEqual(['C:\\isolated\\diagnostics', true]);
+  expect(forkEnvironment()).toMatchObject({ETS2TELEMETRY_SERVICE_LOG_ROOT: 'C:\\isolated\\diagnostics',
+    ETS2TELEMETRY_DIAGNOSTIC_DIR: 'C:\\isolated\\diagnostics'});
+});
 it('loads settings from LOCALAPPDATA and opens the first windows only after the load settled', async () => {
   vi.stubEnv('LOCALAPPDATA', 'C:\\isolated\\local');
   settingsLoaded = false; const load = deferred(); settingsLoading = load.promise;

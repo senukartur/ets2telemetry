@@ -6,6 +6,7 @@ import { processEntrypoint } from './entrypoints';
 import { ServiceProbe } from './service-probe';
 import {existsSync} from 'node:fs';
 import {createDiagnostics, SERVICE_EXIT_FLUSH_MS} from './diagnostics';
+import {serviceLogLocation} from './log-location';
 import {TelemetryIngestion, initialLive, sourceSelection} from './telemetry-ingestion';
 import {LiveSubscriptions} from './live-subscriptions';
 import {NativePipeClient, coalesceBrokerDiagnostics, v1BrokerConfiguration, type BrokerConfiguration} from './native-pipe-client';
@@ -22,7 +23,9 @@ import type {LiveTelemetry, LiveTelemetryV1, SourceSelection} from '../../../pac
 import {liveV1Projection, withV1} from './live-v1';
 const port = process.parentPort;
 if (!port) throw new Error('Missing Electron parent port');
-const log = createDiagnostics(path.join(process.env.ETS2TELEMETRY_DIAGNOSTIC_DIR || path.join(process.env.LOCALAPPDATA || tmpdir(), 'ETS2Telemetry', 'logs'), 'service'), Boolean(process.env.ETS2TELEMETRY_DIAGNOSTIC_DIR));
+// The `service` subdirectory of the log root main resolved and passed at fork (log-location.ts).
+const logLocation = serviceLogLocation(process.env, tmpdir());
+const log = createDiagnostics(logLocation.directory, logLocation.detailed);
 log('SERVICE_BOOT');
 const subscriptions = new LiveSubscriptions(initialLive());
 // The live update is the latest v0 update with the whitelisted v1 projection of the same selection attached

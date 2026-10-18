@@ -288,8 +288,9 @@ async function stoppedService(stopProbe: (report: ProbeDependencies['report']) =
   const parent = Object.assign(new EventEmitter(), {postMessage: vi.fn()});
   Object.defineProperty(process, 'parentPort', {configurable: true, value: parent});
   // The log's final flush resolves at once, as with an idle disk.
-  const log = Object.assign(vi.fn(), {flush: vi.fn(() => Promise.resolve(true))});
-  vi.doMock('../../apps/desktop/src/diagnostics', async importOriginal => ({...await importOriginal<typeof import('../../apps/desktop/src/diagnostics')>(), createDiagnostics: () => log}));
+  const log = Object.assign(vi.fn(), {flush: vi.fn(() => Promise.resolve(true))}), diagnostics: unknown[][] = [];
+  vi.doMock('../../apps/desktop/src/diagnostics', async importOriginal => ({...await importOriginal<typeof import('../../apps/desktop/src/diagnostics')>(),
+    createDiagnostics: (...args: unknown[]) => {diagnostics.push(args); return log;}}));
   let probeReport: ProbeDependencies['report'] = () => undefined;
   vi.doMock('../../apps/desktop/src/service-probe', () => ({ServiceProbe: class {
     constructor(private readonly dependencies: ProbeDependencies) {probeReport = message => dependencies.report(message);}
@@ -335,7 +336,7 @@ async function stoppedService(stopProbe: (report: ProbeDependencies['report']) =
   };
   const stops = () => parent.postMessage.mock.calls.map(call => call[0] as {type: string}).filter(message => message.type === 'stopped');
   const steps = () => log.mock.calls.filter(call => call[0] === 'SHUTDOWN_STEP').map(call => call[2] as Record<string, unknown>);
-  return {exit, parent, log, history, v1, pipeClients, restore, stops, steps, probeReport: (message: Parameters<ProbeDependencies['report']>[0]) => probeReport(message),
+  return {exit, parent, log, diagnostics, history, v1, pipeClients, restore, stops, steps, probeReport: (message: Parameters<ProbeDependencies['report']>[0]) => probeReport(message),
     stop: () => parent.emit('message', {data: {type: 'stop'}, ports: []})};
 }
 it('runs the ordered shutdown once and reports exactly one clean stopped message before exit 0', async () => {
@@ -359,6 +360,18 @@ it('runs the ordered shutdown once and reports exactly one clean stopped message
     expect(f.log).toHaveBeenCalledWith('SERVICE_REPORT', {type: 'stopped', clean: true});
     expect(vi.getTimerCount()).toBe(0);
   } finally {f.restore();}
+});
+// Without LOCALAPPDATA the service once logged under TEMP while main logged under userData; it now uses main's root.
+it('writes its log in the service subdirectory of the root main passed, also without LOCALAPPDATA', async () => {
+  const root = 'C:\\isolated\\user-data\\ETS2Telemetry\\logs';
+  vi.stubEnv('LOCALAPPDATA', undefined); vi.stubEnv('ETS2TELEMETRY_DIAGNOSTIC_DIR', undefined); vi.stubEnv('ETS2TELEMETRY_SERVICE_LOG_ROOT', root);
+  try {
+    const f = await stoppedService(report => {report({type: 'stopped'}); return Promise.resolve();});
+    try {
+      expect(f.diagnostics[0]).toEqual([`${root}\\service`, false]);
+      f.stop(); await vi.advanceTimersByTimeAsync(0); expect(f.exit).toHaveBeenCalledExactlyOnceWith(0);
+    } finally {f.restore();}
+  } finally {vi.unstubAllEnvs();}
 });
 it('runs protocol v1 beside v0 without a durable sink, following each selection with the v1 fixture endpoint and the derived broker directory', async () => {
   const v1Endpoint = '\\\\.\\pipe\\ETS2Telemetry-SYNTHETIC-TEST-v1-123-' + randomUUID();
@@ -436,8 +449,10 @@ it('bounds the v1 ingestion stop by its 1,000 ms intake budget and reports a lat
   const f = await stoppedService(report => {report({type: 'stopped'}); return Promise.resolve();});
   try {
     f.v1.stopSource.mockImplementation(() => new Promise<void>(() => undefined));
-    f.stop(); await vi.advanceTimersByTimeAsync(999);
+    f.stop(); await vi.advanceTimersByTimeAsync(1000);
     expect(f.stops()).toEqual([]); expect(f.history.close).not.toHaveBeenCalled();
+    // Requirement change (October 18, 2026): the timeout verdict runs one event-loop turn after the budget, which the
+    // fake clock schedules 1 ms later.
     await vi.advanceTimersByTimeAsync(1);
     expect(f.steps().find(step => step.name === 'v1-ingestion')).toMatchObject({phase: 'intake', outcome: 'timeout'});
     expect(f.stops()).toEqual([{type: 'stopped', clean: false}]); expect(f.exit).toHaveBeenCalledExactlyOnceWith(1);
@@ -491,11 +506,14 @@ describe('ET-015a recording gate in the service (R3, R10, R14)', () => {
     try {
       const hang = () => new Promise<void>(() => undefined);
       f.v1.stopSource.mockImplementation(hang); f.v1.flush.mockImplementation(hang);
-      f.stop(); await vi.advanceTimersByTimeAsync(1000);
+      // Requirement change (October 18, 2026): each timeout verdict runs one event-loop turn after its budget (an
+      // immediate), which the fake clock schedules 1 ms later; the three phases end at 1,001, 1,502 and 2,503 ms.
+      f.stop(); await vi.advanceTimersByTimeAsync(1000); expect(f.v1.flush).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
       expect(f.v1.flush).toHaveBeenCalledOnce(); expect(f.history.close).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(499); expect(f.history.close).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(500); expect(f.history.close).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(1); expect(f.history.close).toHaveBeenCalledOnce();
-      await vi.advanceTimersByTimeAsync(999); expect(f.stops()).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1000); expect(f.stops()).toEqual([]);
       await vi.advanceTimersByTimeAsync(1);
       expect(f.stops()).toEqual([{type: 'stopped', clean: false}]); expect(f.exit).toHaveBeenCalledExactlyOnceWith(1);
       expect(f.steps().filter(step => step.outcome !== 'ok').map(step => [step.phase, step.name, step.outcome])).toEqual([
@@ -640,7 +658,9 @@ it.each(['hanging', 'failed'])('reports a %s storage step within its budget as a
     report({type: 'failed', code: 'SERVICE_STOP_FAILED'}); return Promise.resolve();
   });
   try {
-    f.stop(); await vi.advanceTimersByTimeAsync(mode === 'hanging' ? 999 : 0);
+    // Requirement change (October 18, 2026): the timeout verdict runs one event-loop turn after the 1,000 ms budget,
+    // which the fake clock schedules 1 ms later.
+    f.stop(); await vi.advanceTimersByTimeAsync(mode === 'hanging' ? 1000 : 0);
     if (mode === 'hanging') {expect(f.stops()).toEqual([]); await vi.advanceTimersByTimeAsync(1);}
     else expect(f.parent.postMessage).toHaveBeenCalledWith({type: 'failed', code: 'SERVICE_STOP_FAILED'});
     expect(f.stops()).toEqual([{type: 'stopped', clean: false}]);

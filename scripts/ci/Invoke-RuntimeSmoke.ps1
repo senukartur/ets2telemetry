@@ -31,13 +31,12 @@ $configFile = Join-Path $output 'config.json'
 $config | ConvertTo-Json | Set-Content -LiteralPath $configFile -Encoding utf8
 . (Join-Path $PSScriptRoot 'RuntimeReceipt.ps1')
 Add-Type -Path (Join-Path $checkout 'scripts/watchdog/BoundedProcess.cs')
-# ET-017 PR-5 review: the plugin journey waits for two setup runs and an exclusion on top of two launches, so its Job
-# gets 120 s; every other scenario keeps 60 s. The other limits are unchanged.
-$jobSeconds = if ($Scenario -eq 'plugin') { 120 } else { 60 }
+# Every scenario runs in a 60 s Job. The plugin journey had 120 s until October 18, 2026; its hosted step took at most
+# 14 s, so 60 s keeps more than four times that (docs/ci.md#et-017-plugin-smoke-scenario).
 $started = [datetime]::UtcNow
 $code = [ETS2Telemetry.Diagnostics.BoundedProcess]::Run($node,
     [string[]]@((Join-Path $PSScriptRoot 'runtime-smoke.mjs'), $configFile),
-    $checkout, (Join-Path $output 'job'), ($jobSeconds * 1000), $true)
+    $checkout, (Join-Path $output 'job'), 60000, $true)
 $durationSeconds = ([datetime]::UtcNow-$started).TotalSeconds
 # Diagnostic only: Job/system CPU use separates starvation under the cap from outside load or a block
 # inside the application. A missing or malformed series is recorded and never changes the smoke result.
@@ -51,7 +50,7 @@ if (Test-Path -LiteralPath $cpuSeries -PathType Leaf) {
 }
 @{mode=$Mode; scenario=$Scenario; commit=$config.commit; exitCode=$code; retries=0;
   durationSeconds=$durationSeconds;
-  limits=("$jobSeconds" + ' s; 16 processes; 2 GiB; 25% CPU; kill-on-close');
+  limits='60 s; 16 processes; 2 GiB; 25% CPU; kill-on-close';
   descendantsNaturallyDrained=($code -eq 0); cpu=$cpu} | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $output 'job-result.json') -Encoding utf8
 $validation = Test-RuntimeReceipt -DriverResultPath (Join-Path $output 'result.json') -ExpectedCommit $config.commit -ExpectedMode $Mode -ExpectedScenario $Scenario -JobExitCode $code
 # ET-015a PR-4: recorded, never asserted. Live-only hellos the recording proxy refused while storage was still opening

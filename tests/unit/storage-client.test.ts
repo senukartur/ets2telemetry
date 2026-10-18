@@ -333,12 +333,53 @@ describe('StorageClient close', () => {
     const closed = track(f.client.close());
     await vi.advanceTimersByTimeAsync(799);
     expect(closed.value).toBeUndefined();
+    // Requirement change (October 18, 2026): the verdict runs one event-loop turn after the grace (an immediate), which
+    // the fake clock schedules 1 ms later. Until then nothing is terminated.
+    await vi.advanceTimersByTimeAsync(1);
+    expect(closed.value).toBeUndefined();
+    expect(f.handle.terminate).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
     expect(commit.value).toEqual(error('WORKER_FAILED'));
     expect(closed.value).toEqual({clean: false});
     expect(f.handle.terminate).toHaveBeenCalledOnce();
     f.ok(1, COMMITTED);
     expect(commit.value).toEqual(error('WORKER_FAILED'));
+    expect(vi.getTimerCount()).toBe(0);
+  });
+  // Regression (packaged recording smoke, October 18, 2026): `history-storage` failed at 807 ms against the 800 ms grace
+  // while the service process used almost no CPU. A stalled service thread runs the due grace timer before the close
+  // answer and exit that arrived meanwhile; the verdict now waits one loop turn, so they still count.
+  it('counts a close answer and exit that arrived while the grace timer was already due', async () => {
+    const f = fixture({closeGraceMs: 800});
+    const started = Date.now();
+    const closed = track(f.client.close());
+    expect(f.sent.map(request => [request.id, request.command.name])).toEqual([[1, 'close']]);
+    // Only the grace timer runs, as after a stall; the answer and exit are delivered before the verdict.
+    vi.advanceTimersToNextTimer();
+    expect(Date.now() - started).toBe(800);
+    expect(closed.value).toBeUndefined();
+    f.ok(1, undefined);
+    f.exit(0);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(closed.value).toEqual({clean: true});
+    expect(f.client.state).toBe('closed');
+    expect(f.handle.terminate).not.toHaveBeenCalled();
+    expect(f.failures).toEqual([]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+  it('after the grace, terminates a worker that acknowledged the close but whose thread did not end, and stays clean', async () => {
+    const f = fixture({closeGraceMs: 800});
+    const closed = track(f.client.close());
+    f.ok(1, undefined);
+    await vi.advanceTimersByTimeAsync(800);
+    expect(closed.value).toBeUndefined();
+    expect(f.handle.terminate).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    // The database was closed when the worker answered; ending the thread loses nothing.
+    expect(f.handle.terminate).toHaveBeenCalledOnce();
+    expect(closed.value).toEqual({clean: true});
+    expect(f.client.state).toBe('closed');
+    expect(f.failures).toEqual([]);
     expect(vi.getTimerCount()).toBe(0);
   });
   it('is not clean when the worker exits before acknowledging the close or refuses it', async () => {

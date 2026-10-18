@@ -11,6 +11,7 @@ import {SettingsBusyError, SettingsError, SettingsStore, settingsDirectory} from
 import {isUnitGame, isUnitProfile} from './unit-profiles';
 import {processEntrypoint} from './entrypoints';
 import {BUNDLE_FLUSH_MS, createDiagnostics, MAIN_EXIT_FLUSH_MS, type DiagnosticFacts} from './diagnostics';
+import {mainLogLocation, serviceEnvironment} from './log-location';
 import {ServiceSupervisor} from './service-supervisor';
 import {initialLive, sourceSelection} from './live-state';
 import {createBrokerResolver} from './broker-artifact';
@@ -70,9 +71,10 @@ function diagnosticIdentities(): (string | undefined)[] {
 
 function runApplication(profileError: unknown): void {
   const diagnosticDirectory = process.env.ETS2TELEMETRY_DIAGNOSTIC_DIR;
-  // The diagnostic bundle (ET-017 P17) reads this directory's startup logs and its `service` subdirectory's.
-  const logDirectory = diagnosticDirectory || path.join(process.env.LOCALAPPDATA || app.getPath('userData'), 'ETS2Telemetry', 'logs');
-  const log = createDiagnostics(logDirectory, Boolean(diagnosticDirectory));
+  // Resolved once; the telemetry service gets this root at fork, so both logs share it, also without LOCALAPPDATA. The
+  // diagnostic bundle (ET-017 P17) reads this directory's startup logs and its `service` subdirectory's.
+  const logLocation = mainLogLocation(process.env, app.getPath('userData'));
+  const log = createDiagnostics(logLocation.directory, logLocation.detailed);
   // Opt-in startup timeline for diagnosing stalls in isolated smokes: fixed codes and numbers only, never in default logs.
   const timeline = diagnosticDirectory ? (event: string, facts?: DiagnosticFacts) => log(event, undefined, facts) : undefined;
   function observeLoads(contents: Electron.WebContents, prefix: 'DASHBOARD' | 'OVERLAY'): void {
@@ -124,7 +126,7 @@ function runApplication(profileError: unknown): void {
       const state = appState();
       return buildDiagnosticBundle({createdMs: Date.now(), app: {version, electron: process.versions.electron, node: process.versions.node, packaged: app.isPackaged, osRelease: os.release()},
         health: state.health, settings: state.settings, plugins: state.plugins, live: {status: lastLive.status, selection: lastLive.selection},
-        diagnosis: connectionDiagnosis(state.plugins, lastLive.status, lastLive.selection, state.health), logs: await log.flush(BUNDLE_FLUSH_MS).then(() => readDiagnosticLogs(logDirectory, readFileTail)),
+        diagnosis: connectionDiagnosis(state.plugins, lastLive.status, lastLive.selection, state.health), logs: await log.flush(BUNDLE_FLUSH_MS).then(() => readDiagnosticLogs(logLocation.directory, readFileTail)),
         identities: diagnosticIdentities()});
     }});
   // ET-017 (P13-P16): silent plugin setup. The mode gate is decided once from the launch environment (P15); the disabled
@@ -487,7 +489,8 @@ function runApplication(profileError: unknown): void {
     if (supervisor.stopping) return;
     const entrypoint = processEntrypoint(__dirname, 'telemetry-service');
     if (!existsSync(entrypoint)) throw new Error('Missing physical telemetry service entrypoint');
-    const child = service = utilityProcess.fork(entrypoint, [], {serviceName: 'ETS2Telemetry telemetry service', stdio: 'pipe'});
+    const child = service = utilityProcess.fork(entrypoint, [], {serviceName: 'ETS2Telemetry telemetry service', stdio: 'pipe',
+      env: serviceEnvironment(process.env, logLocation.directory)});
     supervisor.attach(child); recordingChild = child;
     child.stdout?.on('data', chunk => log('SERVICE_STDOUT', String(chunk)));
     child.stderr?.on('data', chunk => log('SERVICE_STDERR', String(chunk)));

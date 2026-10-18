@@ -14,7 +14,8 @@ import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 import {FrameDecoder, type ClientMessage} from '../../packages/contracts/src/protocol-v1';
 import {openStorage} from '../../packages/storage/src/index';
 import {workerHandle} from '../../packages/storage/src/client';
-import {HistoryStorage, recorderClient} from '../../apps/desktop/src/history-storage';
+import {HISTORY_CLOSE_BUDGET_MS, HistoryStorage, recorderClient} from '../../apps/desktop/src/history-storage';
+import {ShutdownSequence} from '../../apps/desktop/src/shutdown-sequence';
 import {TripRecorderSink} from '../../apps/desktop/src/trip-recorder';
 import {V1Ingestion} from '../../apps/desktop/src/v1-ingestion';
 import {ok, readOnly, sha256, TEST_CLOSE_GRACE_MS, workspace} from './helpers';
@@ -93,5 +94,40 @@ describe('S5 recording target through the real storage worker', () => {
       for (const socket of sockets) socket.destroy();
       await new Promise<void>(resolve => server.close(() => resolve()));
     }
+  }, 60_000);
+});
+
+// Regression (history close grace review, October 18, 2026): a service thread stalled past the 1,000 ms step budget
+// runs both the grace and the budget timers before the next poll phase delivers the worker's close answer and exit. With
+// the production grace and budget and the real ShutdownSequence timers, the step still counts as `ok`.
+describe('the history-storage step after a stall past its budget', () => {
+  it('counts a close that finished while the service thread was blocked past the step budget', async () => {
+    const logs: [string, unknown][] = [];
+    const log = (event: string, _detail?: unknown, facts?: unknown) => { logs.push([event, facts]); };
+    const history = new HistoryStorage({localAppData: ws.directory, appVersion: '0.1.0-test', target: {purpose: 'synthetic', name: 't'}, log,
+      createWorker: () => workerHandle(new Worker(WORKER, {workerData: {kind: 'storage'}}))});
+    history.start();
+    expect(await settled(history)).toBe('open');
+    expect(existsSync(target() + '-wal')).toBe(true);
+    const sequence = new ShutdownSequence(log);
+    // Registered in the first phase so that run() starts the close synchronously, inside the blocked callback below.
+    sequence.register('intake', {name: 'history-storage', budgetMs: HISTORY_CLOSE_BUDGET_MS, run: () => history.close()});
+    const cell = new Int32Array(new SharedArrayBuffer(4));
+    let walRemoved = false;
+    // Run and block in an immediate, outside the worker port's message callback, until the worker removed the WAL and
+    // the budget passed, plus a 1,000 ms margin for the answer and exit on a loaded host.
+    const result = await new Promise<{clean: boolean}>(resolve => setImmediate(() => {
+      const running = sequence.run(), started = Date.now();
+      while (existsSync(target() + '-wal') && Date.now() - started < 20_000) Atomics.wait(cell, 0, 0, 5);
+      walRemoved = !existsSync(target() + '-wal');
+      Atomics.wait(cell, 0, 0, Math.max(0, HISTORY_CLOSE_BUDGET_MS - (Date.now() - started)) + 1_000);
+      resolve(running);
+    }));
+    expect(walRemoved).toBe(true);
+    expect(result).toEqual({clean: true});
+    const step = logs.find(([event]) => event === 'SHUTDOWN_STEP')?.[1] as {outcome: string; ms: number};
+    expect(step.outcome).toBe('ok');
+    expect(step.ms).toBeGreaterThan(HISTORY_CLOSE_BUDGET_MS);
+    expect(logs.map(([event]) => event)).toContain('HISTORY_STORAGE_CLOSED');
   }, 60_000);
 });
