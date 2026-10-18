@@ -53,6 +53,7 @@ function harness(fixture: InstallFixture, overrides: Partial<SquirrelPorts> & {e
     checkRunning: notRunning,
     readKnown: () => Promise.resolve(KNOWN),
     countOtherProcesses: () => Promise.resolve(0),
+    deadlineSignal: () => new AbortController().signal,
     writeReceipt: (name, text) => {receipts.push({name, text, receipt: JSON.parse(text) as UninstallReceipt}); return Promise.resolve(true);},
     clock: () => clock,
     delay: milliseconds => {clock += milliseconds; return Promise.resolve();},
@@ -471,6 +472,36 @@ describe('no process of this application outlives the uninstall hook', () => {
     // The harness clock starts at 1000 and the anchored engine deadline is 7500.
     expect(receipt.processWaitMs).toBeLessThanOrEqual(7500 - 1000);
     expect(receipt.processWaitMs).toBeGreaterThan(7500 - 1000 - 2 * PROCESS_POLL_MS);
+  });
+
+  it('counts nothing once the engine deadline has passed', async () => {
+    const {fixture} = await scene();
+    const count = vi.fn<SquirrelPorts['countOtherProcesses']>(() => Promise.resolve(1));
+    let test: Harness | undefined = undefined;
+    // The running-game check ends past the anchored 7.5 s deadline: the engine defers, and the wait is skipped.
+    test = harness(fixture, {countOtherProcesses: count, checkRunning: () => {test!.advance(7000); return notRunning();}});
+    expect(await runSquirrelEvent(event('uninstall'), test.ports)).toBe(EXIT_CODES.deferred);
+    expect(count).not.toHaveBeenCalled();
+    expect(test.receipts[0].receipt).toMatchObject({code: 'BUDGET_EXPIRED', otherProcesses: null, processWaitMs: 0});
+  });
+
+  it('cuts off a slow listing at the deadline and keeps the engine\'s result', async () => {
+    const {fixture} = await scene();
+    const deadline = new AbortController(), asked: number[] = [];
+    let hardStopped = false;
+    const test = harness(fixture, {
+      deadlineSignal: milliseconds => {asked.push(milliseconds); return deadline.signal;},
+      // A tasklist that does not answer before the deadline: it ends only when the signal it got aborts.
+      countOtherProcesses: signal => new Promise(resolve => {
+        signal.addEventListener('abort', () => resolve(null), {once: true});
+        queueMicrotask(() => deadline.abort());
+      }),
+      hardStop: () => new Promise<void>(resolve => setTimeout(() => {hardStopped = true; resolve();}, 2000))});
+    expect(await runSquirrelEvent(event('uninstall'), test.ports)).toBe(EXIT_CODES.complete);
+    expect(hardStopped).toBe(false);
+    // The harness clock starts at 1000 and the anchored engine deadline is 7500.
+    expect(asked).toEqual([6500]);
+    expect(test.receipts.map(entry => [entry.receipt.outcome, entry.receipt.otherProcesses])).toEqual([['complete', null]]);
   });
 
   it('records null and does not wait when the processes cannot be listed', async () => {

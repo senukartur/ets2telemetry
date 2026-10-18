@@ -2,7 +2,7 @@ import {mkdirSync} from 'node:fs';
 import * as nodeFs from 'node:fs/promises';
 import path from 'node:path';
 import {nodeExecFile, runFixedProgram} from './plugin-setup/fixed-program';
-import {checkRunningGames, listProcesses} from './plugin-setup/game-processes';
+import {checkRunningGames, listProcessSessions} from './plugin-setup/game-processes';
 import {pluginBundleDirectory, readPluginBundle} from './plugin-setup/plugin-bundle';
 import type {RunningCheck} from './plugin-setup/plugin-installer';
 import {cancelDeferral, writeDeferralReadme, type CancelFileSystem, type CancelOutcome} from './uninstall/deferral';
@@ -115,8 +115,9 @@ export interface UninstallReceipt {
   /** Milliseconds from the process time origin to the hook's start (main's script), for measuring the startup cost. */
   readonly startupOffsetMs: number;
   /**
-   * Other processes of this application's executable (by image name, without this process and its own children) still
-   * running when the receipt was written, after waiting for them until the engine deadline; null when not listed.
+   * Other processes of this application's executable in this process's Windows session (by image name, without this
+   * process and its own children) still running when the receipt was written, after waiting for them until the engine
+   * deadline; null when they were not counted (the deadline had passed, or the listing failed or was cut off by it).
    */
   readonly otherProcesses: number | null;
   /** How long the hook waited for them. */
@@ -141,8 +142,13 @@ export interface SquirrelPorts {
   readonly checkRunning: RunningCheck;
   /** The bundle's own and earlier released plugin hashes; empty when the bundle cannot be read. */
   readKnown(): Promise<readonly string[]>;
-  /** The number of other processes of this executable (see UninstallReceipt.otherProcesses), or null when listing failed. */
-  countOtherProcesses(): Promise<number | null>;
+  /**
+   * The number of other processes of this executable in this process's Windows session (see
+   * UninstallReceipt.otherProcesses), or null when the listing failed or `signal` aborted it.
+   */
+  countOtherProcesses(signal: AbortSignal): Promise<number | null>;
+  /** A signal that aborts after `milliseconds` (`AbortSignal.timeout` in production); it bounds the process wait. */
+  deadlineSignal(milliseconds: number): AbortSignal;
   /** Production only (O7): releases the lock, then removes Electron's Roaming userData; true when it is gone. */
   readonly removeRoamingUserData?: () => Promise<boolean>;
   writeReceipt(name: string, content: string): Promise<boolean>;
@@ -273,9 +279,13 @@ export function settle(result: UninstallResult, dataRootPresent: boolean): Settl
 /** Polls the other processes of this executable until none is left or the deadline passes, and records the last count. */
 async function waitForOtherProcesses(ports: SquirrelPorts, state: HookState, deadline: number): Promise<void> {
   const started = ports.clock();
+  // Nothing is counted once the deadline has passed; a listing still running at the deadline is cut off, so the wait never
+  // delays the receipt past it (a slow tasklist would otherwise run into the hard stop and turn the result into deferred).
+  if (started >= deadline) return;
+  const signal = ports.deadlineSignal(Math.max(0, deadline - started));
   for (;;) {
-    state.otherProcesses = await ports.countOtherProcesses().catch(() => null);
-    if (state.otherProcesses === 0 || state.otherProcesses === null || ports.clock() + PROCESS_POLL_MS > deadline) break;
+    state.otherProcesses = signal.aborted ? null : await ports.countOtherProcesses(signal).catch(() => null);
+    if (state.otherProcesses === 0 || state.otherProcesses === null || signal.aborted || ports.clock() + PROCESS_POLL_MS > deadline) break;
     await ports.delay(PROCESS_POLL_MS);
   }
   state.processWaitMs = Math.max(0, Math.round(ports.clock() - started));
@@ -327,14 +337,19 @@ export function productionSquirrelPorts(options: {app: SquirrelApp; appVersion: 
       {timeoutMs, maxOutputBytes: 64 * 1024})).ok,
     fs,
     checkRunning: signal => checkRunningGames({signal}),
-    countOtherProcesses: async () => {
-      const listing = await listProcesses();
-      if (!listing.ok) return null;
+    // Only this process's Windows session: another user's copy cannot hold this install's files open for long, and its
+    // processes are never waited on (their session number is not this one).
+    countOtherProcesses: async signal => {
+      const listing = await listProcessSessions({signal});
+      if (!listing.ok || signal.aborted) return null;
+      const session = listing.rows.find(row => row.pid === process.pid)?.session ?? null;
+      if (session === null) return null;
       let own: Set<number>;
       try {own = new Set([process.pid, ...app.getAppMetrics().map(metric => metric.pid)]);} catch {own = new Set([process.pid]);}
       const name = path.win32.basename(options.executable).toLowerCase();
-      return listing.rows.filter(row => row.name.toLowerCase() === name && !own.has(row.pid)).length;
+      return listing.rows.filter(row => row.name.toLowerCase() === name && row.session === session && !own.has(row.pid)).length;
     },
+    deadlineSignal: milliseconds => AbortSignal.timeout(milliseconds),
     readKnown: async () => {
       const read = await readPluginBundle(pluginBundleDirectory(options.mainDirectory, options.resourcesPath, true));
       return read.ok ? [read.bundle.sha256, ...read.bundle.known.map(entry => entry.sha256)] : [];

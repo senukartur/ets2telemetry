@@ -58,6 +58,12 @@ it('answers an abort at once without destroying the streams of a child that is s
   expect(uncaught).toEqual([]);
 });
 
+it('bounds stdout and stderr each on its own, as execFile did', async () => {
+  const both = "process.stdout.write('o'.repeat(900)); process.stderr.write('e'.repeat(900))";
+  expect(await runFixedProgram(tracked, node, ['-e', both], {...limits, maxOutputBytes: 1024})).toEqual({ok: true, stdout: Buffer.from('o'.repeat(900))});
+  expect(await runFixedProgram(tracked, node, ['-e', "process.stderr.write('e'.repeat(2048))"], {...limits, maxOutputBytes: 1024})).toEqual({ok: false, failure: 'output-too-large'});
+});
+
 it('starts nothing when the signal is already aborted', async () => {
   const controller = new AbortController();
   controller.abort();

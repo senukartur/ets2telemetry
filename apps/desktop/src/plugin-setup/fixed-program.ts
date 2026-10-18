@@ -25,7 +25,9 @@ export type ExecFilePort = (
 export const nodeExecFile: ExecFilePort = (file, args, options, callback) => {
   const child = spawn(file, args, {windowsHide: true, shell: false, stdio: ['ignore', 'pipe', 'pipe'], ...(options.env ? {env: options.env} : {})});
   const stdout: Buffer[] = [], stderr: Buffer[] = [];
-  let size = 0, settled = false, timer: ReturnType<typeof setTimeout> | undefined;
+  // Each stream has its own bound, as with execFile's maxBuffer.
+  const sizes = new Map<Buffer[], number>([[stdout, 0], [stderr, 0]]);
+  let settled = false, timer: ReturnType<typeof setTimeout> | undefined;
   const failure = (message: string, properties: Partial<ExecFileException> & {name?: string}): ExecFileException =>
     Object.assign(new Error(message), {killed: false, code: undefined, signal: undefined, cmd: file}, properties);
   const settle = (error: ExecFileException | null) => {
@@ -41,7 +43,8 @@ export const nodeExecFile: ExecFilePort = (file, args, options, callback) => {
   };
   const collect = (target: Buffer[]) => (chunk: Buffer) => {
     if (settled) return;
-    size += chunk.length;
+    const size = sizes.get(target)! + chunk.length;
+    sizes.set(target, size);
     if (size > options.maxBuffer) {stop(failure('maxBuffer exceeded', {code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER', killed: true})); return;}
     target.push(chunk);
   };

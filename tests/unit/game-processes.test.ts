@@ -1,6 +1,6 @@
 import {describe, expect, it} from 'vitest';
 import type {ExecFilePort} from '../../apps/desktop/src/plugin-setup/fixed-program';
-import {blockingProcess, checkRunningGames, listProcesses, parseTasklistCsv, runningGames, TASKLIST_TIMEOUT_MS} from '../../apps/desktop/src/plugin-setup/game-processes';
+import {blockingProcess, checkRunningGames, listProcesses, parseTasklistCsv, parseTasklistSessions, runningGames, TASKLIST_TIMEOUT_MS} from '../../apps/desktop/src/plugin-setup/game-processes';
 
 // REG-015 (ET-017 P7): running-game detection before a plugin change. CSV fixtures are written by hand in the format
 // of `tasklist /fo csv /nh`; the one real run only lists processes and changes nothing.
@@ -18,6 +18,13 @@ function stub(reply: {error?: Record<string, unknown>; stdout?: string}) {
 const row = (name: string, pid: number, memory = '12,345 K') => `"${name}","${pid}","Console","1","${memory}"`;
 
 describe('CSV parsing', () => {
+  it('reads each row\'s session number for the uninstall hook, and null where the column is not a number', () => {
+    const text = [row('ETS2TelemetryDesktop.exe', 10, '1 K'), '"ETS2TelemetryDesktop.exe","11","Services","0","1 K"', '"short.exe","12"', ''].join('\r\n');
+    expect(parseTasklistSessions(text)).toEqual([{name: 'ETS2TelemetryDesktop.exe', pid: 10, session: 1}, {name: 'ETS2TelemetryDesktop.exe', pid: 11, session: 0},
+      {name: 'short.exe', pid: 12, session: null}]);
+    expect(parseTasklistCsv(text)).toEqual([{name: 'ETS2TelemetryDesktop.exe', pid: 10}, {name: 'ETS2TelemetryDesktop.exe', pid: 11}, {name: 'short.exe', pid: 12}]);
+  });
+
   it('reads quoted fields with commas and escaped quotes', () => {
     const text = [row('System Idle Process', 0, '8 K'), row('eurotrucks2.exe', 4242, '1,234,567 K'), '"odd ""quoted"" name.exe","77","Services","0","1,024 K"', ''].join('\r\n');
     expect(parseTasklistCsv(text)).toEqual([{name: 'System Idle Process', pid: 0}, {name: 'eurotrucks2.exe', pid: 4242}, {name: 'odd "quoted" name.exe', pid: 77}]);
