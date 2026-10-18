@@ -10,7 +10,7 @@
 // The migrated version 1 anchor is not written here: it is the trip of tests/fixtures/storage/schema-v1-representative,
 // migrated to schema version 2 by opening a copy of that fixture before seeding (MIGRATED_V1_TRIP).
 import type {Money} from '../../packages/contracts/src/protocol-v1';
-import type {CommitResult, Result, SampleAppendResult, SampleInput, TripEffect} from '../../packages/storage/src/api';
+import {MAX_SAMPLE_BATCH, type CommitResult, type Result, type SampleAppendResult, type SampleInput, type TripEffect} from '../../packages/storage/src/api';
 import {ATS_A, BASE_UTC, ETS2_A, ETS2_B, job, money, r, Script, trailer, truck, type EventOptions} from './trip-messages';
 
 type Maybe<T> = T | Promise<T>;
@@ -206,13 +206,24 @@ export const FILLER_ATS = '10000000-0000-4000-8000-0000000000e5';
 /**
  * Writes `count` filler trips after the anchors, alternating ETS2 and ATS (filler i is ATS when i is odd). Each pair of
  * games cycles through delivered and complete, cancelled and partial, then open and unknown. With `samplesPerTrip` each
- * trip gets that many one-second samples in one batch (at most 3,600). Returns the trips in creation order.
+ * trip gets that many one-second samples, appended per game in batches of whole trips of at most MAX_SAMPLE_BATCH
+ * (3,600) rows once their trips are written; a trip of more rows is still refused. Every batch is one synced commit,
+ * which a slow runner pays for, so this keeps the scale build short. The stored rows, their values and their order
+ * per trip and per clock are those of one batch per trip; only the sample row ids interleave differently. Returns
+ * the trips in creation order.
  */
 export async function seedJournalFillers(w: JournalSeedWriter, count: number, options: {samplesPerTrip?: number; utcMs?: number} = {}): Promise<FillerTrip[]> {
   const base = options.utcMs ?? BASE_UTC + 1_000_000;
   const scripts = {ets2: new Script(FILLER_ETS2, 'ets2', {utcMs: base}), ats: new Script(FILLER_ATS, 'ats', {utcMs: base})};
   for (const s of Object.values(scripts)) await ok(w.upsertSession({message: s.welcome()}), 'filler session');
-  const trips: FillerTrip[] = [], seconds = {ets2: 0, ats: 0};
+  const trips: FillerTrip[] = [], seconds = {ets2: 0, ats: 0}, pending: Record<'ets2' | 'ats', SampleInput[]> = {ets2: [], ats: []};
+  const flush = async (game: 'ets2' | 'ats') => {
+    const rows = pending[game];
+    if (rows.length === 0) return;
+    pending[game] = [];
+    const {appended} = await ok(w.appendSamples(scripts[game].session, rows), 'filler samples');
+    if (appended !== rows.length) throw new Error(`Journal seed: ${appended} of ${rows.length} filler samples were appended`);
+  };
   for (let i = 0; i < count; i++) {
     const game = i % 2 === 0 ? 'ets2' : 'ats', s = scripts[game], kind = Math.floor(i / 2) % 3;
     const tripUuid = `7f000000-0000-4000-8000-${i.toString(16).padStart(12, '0')}`;
@@ -222,7 +233,8 @@ export async function seedJournalFillers(w: JournalSeedWriter, count: number, op
     if (options.samplesPerTrip) {
       const rows = Array.from({length: options.samplesPerTrip}, (_, k) => seedSample(s, tripUuid, seconds[game] + k, base + (seconds[game] + k) * 1_000, {speed: {available: true, value: 15}}));
       seconds[game] += options.samplesPerTrip;
-      await ok(w.appendSamples(s.session, rows), 'filler samples');
+      if (pending[game].length + rows.length > MAX_SAMPLE_BATCH) await flush(game);
+      pending[game].push(...rows);
     }
     if (trip.outcome !== 'open') {
       await event(w, s, trip.outcome === 'delivered' ? r.delivered() : r.cancelled(), ended => [attribute(tripUuid), {kind: 'trip.close', tripUuid, outcome: trip.outcome as 'delivered' | 'cancelled',
@@ -230,5 +242,7 @@ export async function seedJournalFillers(w: JournalSeedWriter, count: number, op
     }
     trips.push(trip);
   }
+  await flush('ets2');
+  await flush('ats');
   return trips;
 }

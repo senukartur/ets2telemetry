@@ -30,19 +30,19 @@ describe('REG-005/REG-009 event commits', () => {
     expect(valid.length).toBeGreaterThanOrEqual(39);
     expect(valid).toEqual(expect.arrayContaining(['money-int64-min', 'money-uint64-max', 'event-seq-last', 'event-seq-2pow53', 'event-worst', 'event-size-limit']));
   });
-  it('round-trips the canonical occurred and record payload of every valid event fixture exactly', async () => {
-    for (const name of valid) {
-      const message = v1(name);
-      if (message.kind !== 'event') throw new Error('fixture');
-      const storage = await session(welcomeFor(message), path.join(ws.directory, `${name}.sqlite`));
-      expect(ok(storage.commitEvent({message})).status, name).toBe('committed');
-      const row = ok(storage.getEvent(message.source.pluginSessionId, message.data.eventSeq))!;
-      expect(row.eventSeq, name).toBe(message.data.eventSeq);
-      expect(canonicalJson(row.record), name).toBe(canonicalJson(message.data.record));
-      expect(canonicalJson(row.occurred), name).toBe(canonicalJson(message.data.occurred));
-      expect(row.record, name).toEqual(message.data.record);
-      storage.close();
-    }
+  // One case per fixture: each opens, migrates and closes its own database, which a slow hosted runner cannot fit
+  // into one case timeout for all of them (TESTING.md section 6; docs/validation/et-019.md, storage suite headroom).
+  it.each(valid)('round-trips the canonical occurred and record payload of the valid event fixture %s exactly', async name => {
+    const message = v1(name);
+    if (message.kind !== 'event') throw new Error('fixture');
+    const storage = await session(welcomeFor(message), path.join(ws.directory, `${name}.sqlite`));
+    expect(ok(storage.commitEvent({message})).status, name).toBe('committed');
+    const row = ok(storage.getEvent(message.source.pluginSessionId, message.data.eventSeq))!;
+    expect(row.eventSeq, name).toBe(message.data.eventSeq);
+    expect(canonicalJson(row.record), name).toBe(canonicalJson(message.data.record));
+    expect(canonicalJson(row.occurred), name).toBe(canonicalJson(message.data.occurred));
+    expect(row.record, name).toEqual(message.data.record);
+    storage.close();
   });
   it('keeps zero revenue distinct from unavailable revenue and exact 64-bit money', async () => {
     const stored = new Map<string, unknown>();
@@ -249,25 +249,24 @@ describe('REG-006 committed coverage', () => {
       expect(db.prepare('SELECT committed_through_event_seq AS c FROM plugin_sessions').get()).toEqual({c: '00000000000000000006'});
     });
   });
-  it('matches a BigInt reference for seeded random commit orders with redeliveries', async () => {
-    for (const seed of [1, 7, 42, 1_234, 99_991]) {
-      let state = seed;
-      const random = () => { state = (state * 1_103_515_245 + 12_345) % 2_147_483_648; return state / 2_147_483_648; };
-      const items: [bigint, bigint][] = [];
-      for (let next = 1n; next <= 60n;) { const length = random() < 0.6 ? 1n : BigInt(1 + Math.floor(random() * 4)); items.push([next, next + length - 1n]); next += length; }
-      const order = items.map((item, index) => ({item, key: random(), index})).sort((a, b) => a.key - b.key).map(x => x.item);
-      for (let i = 0; i < 10; i++) order.splice(Math.floor(random() * order.length), 0, order[Math.floor(random() * order.length)]);
-      const storage = await session(v1('welcome'), path.join(ws.directory, `seed-${seed}.sqlite`)), committed = new Set<bigint>();
-      for (const [first, last] of order) {
-        const message = first === last && Number(first) % 3 !== 0 ? withEventSeq('event-job-cleared', first) : withEventSeq('gap', first, last);
-        const result = ok(message.kind === 'event' ? storage.commitEvent({message}) : storage.commitGap({message}));
-        for (let n = first; n <= last; n++) committed.add(n);
-        let reference = 0n; while (committed.has(reference + 1n)) reference++;
-        expect(result.committedThroughEventSeq, `seed ${seed}`).toBe(reference.toString());
-      }
-      expect(ok(storage.committedThrough(P1))).toBe(items[items.length - 1][1].toString());
-      storage.close();
+  // One case per seed, each with its own database, for the same reason as the fixture round trip above.
+  it.each([1, 7, 42, 1_234, 99_991])('matches a BigInt reference for seeded random commit orders with redeliveries (seed %i)', async seed => {
+    let state = seed;
+    const random = () => { state = (state * 1_103_515_245 + 12_345) % 2_147_483_648; return state / 2_147_483_648; };
+    const items: [bigint, bigint][] = [];
+    for (let next = 1n; next <= 60n;) { const length = random() < 0.6 ? 1n : BigInt(1 + Math.floor(random() * 4)); items.push([next, next + length - 1n]); next += length; }
+    const order = items.map((item, index) => ({item, key: random(), index})).sort((a, b) => a.key - b.key).map(x => x.item);
+    for (let i = 0; i < 10; i++) order.splice(Math.floor(random() * order.length), 0, order[Math.floor(random() * order.length)]);
+    const storage = await session(v1('welcome'), path.join(ws.directory, `seed-${seed}.sqlite`)), committed = new Set<bigint>();
+    for (const [first, last] of order) {
+      const message = first === last && Number(first) % 3 !== 0 ? withEventSeq('event-job-cleared', first) : withEventSeq('gap', first, last);
+      const result = ok(message.kind === 'event' ? storage.commitEvent({message}) : storage.commitGap({message}));
+      for (let n = first; n <= last; n++) committed.add(n);
+      let reference = 0n; while (committed.has(reference + 1n)) reference++;
+      expect(result.committedThroughEventSeq, `seed ${seed}`).toBe(reference.toString());
     }
+    expect(ok(storage.committedThrough(P1))).toBe(items[items.length - 1][1].toString());
+    storage.close();
   });
 });
 
