@@ -1040,7 +1040,7 @@ All six ET-018 PRs are implemented:
 - PR-5 (#123): the deferred cleanup at the next sign-in (O3). An HKCU RunOnce entry runs a retained Windows PowerShell 5.1 executor. It applies the same ownership rules as the engine, which a shared case table checks, and it stops after 10 attempts with a README.
 - PR-6 (#121): `release-identity.json` records the source commit, the versions, the hashes and the Authenticode status of every PE image. It fails on a `HashMismatch` or `UnknownError` Authenticode status and on native code packed inside the asar archive. The [release checklist](docs/release.md) covers the unsigned internal alpha (O1, O2).
 
-The hosted installer lifecycle runs these scenarios in a test root:
+The hosted installer lifecycle runs these scenarios in a test root. All of them passed together on the `main` push after the last merge ([39153876794](https://github.com/senukartur/ets2telemetry/actions/runs/39153876794), see [final hosted results](docs/validation/et-018.md#final-hosted-results-october-18-2026)):
 - install, repair and update;
 - three Windows-initiated uninstalls: with the app running, with a fake game running (deferred) and after a reinstall;
 - the deferred executor, first while blocked and then to completion;
