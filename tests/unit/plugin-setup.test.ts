@@ -33,7 +33,8 @@ const TEARDOWN_TIMEOUT_MS = 2 * RUN_SETTLE_GUARD_MS;
 
 /**
  * Everything one case owns: its guarded root, fake Steam folders, lister, logs, views, bundle result, file system and
- * every PluginSetup it creates. A case takes it once, at its start, and the closures it hands to PluginSetup capture
+ * every PluginSetup it creates through `create` (the disabled-mode case builds one directly; it starts no run or timer).
+ * A case takes it once, at its start, and the closures it hands to PluginSetup capture
  * this object, never module state. A case that outlives its timeout therefore writes only into its own harness, and
  * after teardown its clock, spy and setup calls through the harness throw, so it cannot advance or patch the timers of
  * the case that runs next.
@@ -182,14 +183,24 @@ afterEach(async () => {
   generation++;
   const h = current;
   current = undefined;
+  let unsettled: unknown;
   try {
     await h?.end();
+  } catch (error) {
+    unsettled = error;
   } finally {
     // Spies first: restoring a setTimeout spy after the real timers return would put this case's fake clock back.
     vi.restoreAllMocks();
     vi.useRealTimers();
   }
-  if (h) expect(await h.dispose()).toEqual([]);
+  if (!h) return;
+  if (unsettled !== undefined) {
+    // A run that never settled may still be writing into its root, so removing the root can fail; the guard error is
+    // this case's failure either way and is reported instead.
+    await h.dispose().catch(() => undefined);
+    throw unsettled;
+  }
+  expect(await h.dispose()).toEqual([]);
 }, TEARDOWN_TIMEOUT_MS);
 
 /** Waits, across real I/O, until `condition` holds; `performance.now()` is not faked. */
