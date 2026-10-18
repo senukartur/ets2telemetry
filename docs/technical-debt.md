@@ -142,6 +142,17 @@ A file with the plugin's name whose hash this application does not recognize (no
 
 **Until then:** the driver moves the file by hand. No in-app replacement or deletion of an unrecognized file is authorized by this entry.
 
+## TD-012: In-place restore of the history database
+
+Recorded October 18, 2026 by the coordinator with ET-018 PR-6 (plan U17). **This entry is a coordinator decision under the owner's standing delegation of October 15, 2026, not an individually owner-approved deferral** (see the ET-018 authorization in [concept.md](../concept.md#et-018-authorization--october-18-2026)). The owner may revise it.
+
+Storage can restore a verified backup only to a new path ([storage](storage.md)); an earlier version of that page deferred the in-place replacement of the live database to ET-018. ET-018's card covers packaging, upgrades and uninstall, not restore, so ET-018 does not implement it. A user who needs an older history today has no in-app way to put a backup in place of `data\telemetry.sqlite`.
+
+**Future work:**
+- An explicit, confirmed restore in the application that stops recording and the storage worker, keeps the current database as a verified backup, restores the chosen backup through the existing verified path and reopens it, and accounts for the coverage the producer has already acknowledged (the `restore-loss` marker of ET-015a).
+
+**Until then:** restore writes only to a new path. No in-place replacement of the live database is authorized by this entry.
+
 ## TD-013: Squirrel vendor residue in the binary root
 
 Recorded October 18, 2026 by the coordinator with ET-018 PR-3 (plan U4, which planned this entry for PR-6). **This entry is a coordinator decision under the owner's standing delegation of October 15, 2026, not an individually owner-approved deferral.** The owner may revise it.
@@ -152,3 +163,15 @@ After an uninstall, Squirrel (the version pinned by electron-winstaller 5.4.4) l
 - Remove the folder after Squirrel exits, for example from the deferred cleanup at the next sign-in (ET-018 PR-5) or a short-lived helper outside the folder.
 
 **Until then:** the folder stays until a reinstall or a manual delete. Nothing else is authorized by this entry.
+
+## TD-014: Code signing
+
+Recorded October 18, 2026 by the coordinator with ET-018 PR-6. Decision O1, an unsigned internal alpha now and an application to the SignPath Foundation after the first alpha release, is the owner's explicit decision of October 18, 2026 (see the ET-018 authorization in [concept.md](../concept.md#et-018-authorization--october-18-2026)); this entry records the deferred signing.
+
+No file this project builds is signed. `release-identity.json` records each PE image's Authenticode status ([releases](release.md#signing)). Until the builds are signed, SmartScreen shows "Unknown publisher" for Setup, and Smart App Control, when it is on, blocks the application with no per-application override.
+
+**Future work:**
+- Apply to the SignPath Foundation after the first alpha is published, and sign the application executable and its execution stub, the broker, the plugin DLL, Setup, `Update.exe` and `squirrel.exe` with RFC 3161 timestamps, from CI without keeping a private key in the repository.
+- Sign the plugin DLL before the build stages it, so that the bundle manifest, the install registry's ownership hashes and the released plugin list name the signed bytes.
+
+**Until then:** releases are unsigned internal alphas, labelled so. No certificate, signing service or paid product is authorized by this entry.
