@@ -28,6 +28,7 @@ export interface RunPlanFacts {
   realBinaryRootExists: boolean;
   registrationExists: boolean;
   processes: string[];
+  steamLibrariesUnreadable?: boolean;
   markers: {pluginMarker: boolean; installTest: unknown} | null;
 }
 export interface InstalledFacts {
@@ -55,4 +56,11 @@ export function checkInstalled(facts: InstalledFacts): void;
 export function minimalPath(systemRoot: string | undefined): string;
 export function installedEnvironment(base: Readonly<Record<string, string | undefined>>, overrides: Record<string, string>): Record<string, string>;
 export function checkLaunchEnvironment(env: Readonly<Record<string, string | undefined>>, context: {runRoot: string; real: KnownFolders}): void;
+export const FACTS_VARIABLE: string;
+export interface FactsEvidence {
+  knownFoldersResolved: boolean; realBinaryRootExists: boolean; registrationExists: boolean;
+  registration: {displayVersion: string | null; installLocationInsideRunRoot: boolean} | null;
+  steamPathPresent: boolean; steamLibraries: number; steamLibrariesUnreadable: boolean; processesListed: number | null; guardedProcesses: string[] | null;
+}
+export function factsEvidence(facts: unknown, runRoot: string): FactsEvidence;
 export function ownsRegistration(runRoot: string, installLocation: string): boolean;

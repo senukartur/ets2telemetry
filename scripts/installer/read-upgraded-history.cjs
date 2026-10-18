@@ -1,14 +1,14 @@
 'use strict';
 // ET-018 PR-1 (REG-013, REG-017): reads the upgraded synthetic history database and its pre-migration backup with the
 // installed application's own Electron runtime and better-sqlite3. The installer lifecycle runs it as
-// `<installed ETS2TelemetryDesktop.exe> read-upgraded-history.cjs <database> <backups> <output>` with ELECTRON_RUN_AS_NODE=1,
+// `<installed ETS2TelemetryDesktop.exe> read-upgraded-history.cjs <database> <backups> <output> <expected executable>` with ELECTRON_RUN_AS_NODE=1,
 // so a successful read also proves that the installed native SQLite binding loads. Read-only: every connection opens with
 // `readonly` and `fileMustExist`. It writes facts only; installer-lifecycle.mjs compares them with hand-written values.
 const {createHash} = require('node:crypto');
 const {readdirSync, readFileSync, writeFileSync} = require('node:fs');
 const path = require('node:path');
 
-const [database, backups, output] = process.argv.slice(2);
+const [database, backups, output, expectedExecutable] = process.argv.slice(2);
 const appDirectory = path.dirname(process.execPath);
 // The packaged module path the application itself resolves; Electron's ASAR support redirects the unpacked binding.
 const Database = require(path.join(appDirectory, 'resources', 'app.asar', 'node_modules', 'better-sqlite3'));
@@ -32,7 +32,9 @@ function common(db) {
 }
 
 const facts = {
-  runtime: {electron: process.versions.electron, node: process.versions.node, execPath: process.execPath},
+  // Whether the installed runtime itself did the read; the uploaded facts never hold the path.
+  runtime: {electron: process.versions.electron, node: process.versions.node,
+    execPathMatches: typeof expectedExecutable === 'string' && path.resolve(process.execPath).toLowerCase() === path.resolve(expectedExecutable).toLowerCase()},
   database: read(database, db => ({
     ...common(db),
     migrations: db.prepare('SELECT version, name, app_version, backup_file_name, backup_sha256 FROM schema_migrations ORDER BY version').all(),

@@ -46,31 +46,33 @@ $binaryRoot = Join-Path $base 'ETS2TelemetryDesktop'
 $uninstallKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\ETS2TelemetryDesktop'
 New-Item -ItemType Directory -Path $evidence | Out-Null
 $configFile = Join-Path $evidence 'config.json'
-$factsFile = Join-Path $evidence 'facts.json'
-[ordered]@{runRoot=$runRoot; evidence=$evidence; setup=$setup; factsFile=$factsFile; stepBudgetMs=55000} | ConvertTo-Json |
+[ordered]@{runRoot=$runRoot; evidence=$evidence; setup=$setup; stepBudgetMs=55000} | ConvertTo-Json |
     Set-Content -LiteralPath $configFile -Encoding utf8
 $report = [ordered]@{passed=$false; failure=$null; startedUtc=[datetime]::UtcNow.ToString('o'); scenariosA=$ScenariosA; scenariosB=$ScenariosB; steps=@();
     uninstallRun=$false; runRootRemoved=$false; registrationRemoved=$false}
 $clock = [Diagnostics.Stopwatch]::StartNew()
 
+$registryViews = @([Microsoft.Win32.RegistryView]::Registry64, [Microsoft.Win32.RegistryView]::Registry32)
+function Read-RegistrationView([Microsoft.Win32.RegistryView]$View) {
+    # The HKCU uninstall key Squirrel writes, in one registry view; only read here.
+    $hive = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::CurrentUser, $View)
+    try {
+        $key = $hive.OpenSubKey($uninstallKey, $false)
+        if (!$key) { return $null }
+        try { return [ordered]@{installLocation=$key.GetValue('InstallLocation'); displayVersion=$key.GetValue('DisplayVersion'); uninstallString=$key.GetValue('UninstallString')} }
+        finally { $key.Dispose() }
+    } finally { $hive.Dispose() }
+}
 function Read-Registration {
-    # The HKCU uninstall key Squirrel writes; read in both registry views, never written here.
-    foreach ($view in @([Microsoft.Win32.RegistryView]::Registry64, [Microsoft.Win32.RegistryView]::Registry32)) {
-        $hive = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::CurrentUser, $view)
-        try {
-            $key = $hive.OpenSubKey($uninstallKey, $false)
-            if ($key) {
-                try { return [ordered]@{installLocation=$key.GetValue('InstallLocation'); displayVersion=$key.GetValue('DisplayVersion'); uninstallString=$key.GetValue('UninstallString')} }
-                finally { $key.Dispose() }
-            }
-        } finally { $hive.Dispose() }
-    }
+    foreach ($view in $registryViews) { $row = Read-RegistrationView $view; if ($row) { return $row } }
     return $null
 }
-function Write-Fact {
+function Get-FactJson {
+    # Machine facts for the guards. They travel in an environment variable of one driver command and are never written to
+    # a file: the evidence is uploaded publicly on CI. The driver records only factsEvidence() (booleans and counts).
     # Known folders through Windows (Environment.GetFolderPath ignores the LOCALAPPDATA and APPDATA variables).
     $real = [ordered]@{localAppData=[Environment]::GetFolderPath('LocalApplicationData'); roamingAppData=[Environment]::GetFolderPath('ApplicationData')}
-    $steamPath = $null; $libraryFolders = $null
+    $steamPath = $null; $libraryFolders = $null; $libraryFoldersState = 'absent'
     $hive = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::CurrentUser, [Microsoft.Win32.RegistryView]::Default)
     try {
         # Read only: the Valve key is never written or enumerated beyond this value.
@@ -80,19 +82,30 @@ function Write-Fact {
     if ($steamPath) {
         $steamPath = [IO.Path]::GetFullPath($steamPath.Replace('/', '\'))
         $vdf = Join-Path $steamPath 'steamapps\libraryfolders.vdf'
-        if ((Test-Path -LiteralPath $vdf -PathType Leaf) -and (Get-Item -LiteralPath $vdf).Length -le 1048576) { $libraryFolders = Get-Content -LiteralPath $vdf -Raw }
+        # A list that exists but is larger than 16 KiB or unreadable refuses the run: it could hide the library R lies in.
+        if (Test-Path -LiteralPath $vdf -PathType Leaf) {
+            $libraryFoldersState = 'unreadable'
+            try { if ((Get-Item -LiteralPath $vdf).Length -le 16384) { $libraryFolders = Get-Content -LiteralPath $vdf -Raw; $libraryFoldersState = 'read' } } catch { $libraryFolders = $null }
+        }
     }
     $registration = Read-Registration
-    [ordered]@{real=$real; realBinaryRootExists=(Test-Path -LiteralPath (Join-Path $real.localAppData 'ETS2TelemetryDesktop')); registrationExists=($null -ne $registration);
-        registration=$registration; steamPath=$steamPath; libraryFolders=$libraryFolders; processes=@(Get-Process | ForEach-Object { $_.ProcessName + '.exe' })} |
-        ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $factsFile -Encoding utf8
+    $facts = [ordered]@{real=$real; realBinaryRootExists=(Test-Path -LiteralPath (Join-Path $real.localAppData 'ETS2TelemetryDesktop')); registrationExists=($null -ne $registration);
+        registration=$registration; steamPath=$steamPath; libraryFolders=$libraryFolders; libraryFoldersState=$libraryFoldersState;
+        processes=@(Get-Process | ForEach-Object { $_.ProcessName + '.exe' } | Sort-Object -Unique)}
+    $json = $facts | ConvertTo-Json -Depth 4 -Compress
+    if ($json.Length -gt 32000) { throw 'FACTS_TOO_LARGE: the machine facts do not fit one environment variable.' }
+    return $json
 }
 function Invoke-Driver([string]$Command, [string[]]$Arguments, [int]$TimeoutMs) {
     # Every driver command runs as the root of its own BoundedProcess Job: 16 processes, 2 GiB, 25% CPU, kill on close.
     $label = $Command + $(if ($Arguments.Count) { '-' + $Arguments[0] } else { '' })
     $started = $clock.Elapsed.TotalSeconds
-    $code = [ETS2Telemetry.Diagnostics.BoundedProcess]::Run($node, [string[]](@($driver, $Command, $configFile) + $Arguments),
-        $evidence, (Join-Path $evidence ('job-' + $label)), $TimeoutMs)
+    # Fresh facts for this command only; the driver removes the variable from its own environment at once.
+    $env:ETS2TELEMETRY_INSTALLER_FACTS = Get-FactJson
+    try {
+        $code = [ETS2Telemetry.Diagnostics.BoundedProcess]::Run($node, [string[]](@($driver, $Command, $configFile) + $Arguments),
+            $evidence, (Join-Path $evidence ('job-' + $label)), $TimeoutMs)
+    } finally { Remove-Item Env:ETS2TELEMETRY_INSTALLER_FACTS -ErrorAction SilentlyContinue }
     $script:report.steps += ,[ordered]@{step=$label; exitCode=$code; seconds=[math]::Round($clock.Elapsed.TotalSeconds - $started, 1)}
     if ($code -ne 0) { throw ('Installer lifecycle step failed: ' + $label + ', Job exit ' + $code + '; evidence: ' + $evidence) }
 }
@@ -110,7 +123,6 @@ function Invoke-InstalledSmoke([string]$Executable, [string[]]$Scenarios, [strin
 }
 function Assert-Installed([string]$Label, [string]$Version) {
     # The registration and the binary root must lie in R; otherwise abort at once, with no uninstall.
-    Write-Fact
     Invoke-Driver 'installed' @($Label) 30000
     $registration = Read-Registration
     if ($registration.displayVersion -cne $Version) { throw ('Registered version differs after ' + $Label) }
@@ -136,7 +148,6 @@ $env:ETS2TELEMETRY_PROFILE_DIR = Join-Path $runRoot 'profile'; $env:ETS2TELEMETR
 try {
     & $node $driver signal
     if ($LASTEXITCODE -ne 0) { throw 'LOCAL_RUN_REFUSED: the guard module refused the run signal.' }
-    Write-Fact
     Invoke-Driver 'guard' @('plan') 30000
     $guarded = $true
     foreach ($folder in @($runRoot, $base, (Join-Path $runRoot 'temp'), (Join-Path $runRoot 'AppData'), (Join-Path $runRoot 'profile'), (Join-Path $runRoot 'cwd'),
@@ -201,20 +212,26 @@ try {
             $diagnostics = Join-Path $runRoot 'diagnostics'
             if (Test-Path -LiteralPath $diagnostics) { Copy-Item -LiteralPath $diagnostics -Destination (Join-Path $kept 'diagnostics') -Recurse }
         } catch { $report.evidenceFailure = $_.Exception.Message }
-        $registration = Read-Registration
-        $location = if ($registration -and $registration.installLocation) { [string]$registration.installLocation } else { '' }
-        # The driver deletes R without following links and decides whether the uninstall key points into R.
-        $line = & $node $driver cleanup $configFile $location | Select-Object -Last 1
+        # One InstallLocation per registry view, '-' where the view has no key. The driver deletes R without following links
+        # and decides for each view whether its key points into R; only those keys are deleted, and only on a hosted runner.
+        $locations = @($registryViews | ForEach-Object {
+            $row = Read-RegistrationView $_
+            if ($row -and $row.installLocation) { [string]$row.installLocation } else { '-' }
+        })
+        $line = & $node $driver cleanup $configFile @locations | Select-Object -Last 1
         try {
             $cleanup = $line | ConvertFrom-Json
             $report.runRootRemoved = [bool]$cleanup.passed
-            if ($cleanup.ownsRegistration -eq $true -and $env:GITHUB_ACTIONS -ceq 'true' -and $env:RUNNER_ENVIRONMENT -ceq 'github-hosted') {
-                foreach ($view in @([Microsoft.Win32.RegistryView]::Registry64, [Microsoft.Win32.RegistryView]::Registry32)) {
-                    $hive = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::CurrentUser, $view)
+            $owned = @($cleanup.ownsRegistration)
+            if ($owned.Count -ne $registryViews.Count) { throw 'Cleanup returned no decision per registry view.' }
+            if ($env:GITHUB_ACTIONS -ceq 'true' -and $env:RUNNER_ENVIRONMENT -ceq 'github-hosted') {
+                for ($index = 0; $index -lt $registryViews.Count; $index++) {
+                    if ($owned[$index] -ne $true) { continue }
+                    $hive = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::CurrentUser, $registryViews[$index])
                     try { $hive.DeleteSubKeyTree($uninstallKey, $false) } finally { $hive.Dispose() }
                 }
-                $report.registrationRemoved = ($null -eq (Read-Registration))
             }
+            $report.registrationRemoved = ($null -eq (Read-Registration))
         } catch { $report.cleanupFailure = $_.Exception.Message }
         # The real binary root must still be absent: a run that reached it is a failure whatever else passed.
         $realBinaryRoot = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'ETS2TelemetryDesktop'

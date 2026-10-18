@@ -43,8 +43,8 @@ Every path in that file lies inside R. `runOnceKey` stays `null` until a deferre
 
 All guards fail closed with a fixed code and never name a path. The harness order is:
 
-1. **CI signal.** `GITHUB_ACTIONS=true` and `RUNNER_ENVIRONMENT=github-hosted`, checked first in PowerShell and again by `checkRunSignal`, before any registry, process or file-system read. Codes `LOCAL_RUN_REFUSED` and `LOCAL_RUN_UNAVAILABLE_UNTIL_PR3`.
-2. **Facts.** The real LocalAppData and Roaming folders come from `Environment.GetFolderPath`, which Windows resolves through the known-folder API and never from the `LOCALAPPDATA` or `APPDATA` variables. The HKCU `Valve\Steam` `SteamPath` value and its `libraryfolders.vdf` are only read. The HKCU uninstall key `ETS2TelemetryDesktop` is read in both registry views. The process list is read once.
+1. **CI signal.** `GITHUB_ACTIONS=true` and `RUNNER_ENVIRONMENT=github-hosted`, checked first in PowerShell, again by `checkRunSignal` and once more by the driver's `step` command before it starts an installer, before any registry, process or file-system read. Codes `LOCAL_RUN_REFUSED` and `LOCAL_RUN_UNAVAILABLE_UNTIL_PR3`. **This signal is advisory:** it reads environment variables, which anyone can set, so it stops an accidental local run but does not prove the machine is a runner. The protection on a personal machine is the fact-based guard below: an existing real binary root or registration, a run root or any run path inside the real data, binary or Roaming root or a Steam library, and a running product or game all refuse the run, whatever the environment says.
+2. **Facts.** The real LocalAppData and Roaming folders come from `Environment.GetFolderPath`, which Windows resolves through the known-folder API and never from the `LOCALAPPDATA` or `APPDATA` variables. The HKCU `Valve\Steam` `SteamPath` value and its `libraryfolders.vdf` (at most 16 KiB; a larger or unreadable list refuses the run with `STEAM_LIBRARIES_UNREADABLE`) are only read. The HKCU uninstall key `ETS2TelemetryDesktop` is read in both registry views. The process list is read before each driver command. **The facts are never written to a file:** the harness passes them to one driver command in the `ETS2TELEMETRY_INSTALLER_FACTS` environment variable, the driver removes it from its own environment at once, so no installer or launch inherits it, and the evidence keeps only `factsEvidence()`: booleans, counts, the matched product and game image names and a registered version of fixed form, never a path, the library list or another process name. `tests/unit/installer-guard.test.ts` runs the driver's guard on such facts and checks its evidence.
 3. **Preflight (`checkRunPlan`)**, before R exists and again once its markers are written. It refuses:
    - a run root that is not an absolute drive path named `installer-<32 lower-case hex>`, or is a drive root (`RUN_ROOT_INVALID`);
    - any path of the run (R, every layout path, the evidence folder, a decoy and its data and binary roots) whose raw path or real location lies inside the real `%LOCALAPPDATA%\ETS2Telemetry`, `%LOCALAPPDATA%\ETS2TelemetryDesktop` or `%APPDATA%\ETS2Telemetry Desktop` (`PATH_IN_REAL_ROOT`) or inside a Steam library (`PATH_IN_STEAM_LIBRARY`). The real location is the realpath of the nearest existing ancestor, so a junction anywhere above is followed;
@@ -70,9 +70,11 @@ All guards fail closed with a fixed code and never name a path. The harness orde
 | Update to B | `B\ETS2TelemetryDesktop\Update.exe --update R\fixture\feed`. The registration must then report 0.1.1. |
 | Installed smokes on B | `scaffold`, `plugin` and `telemetry` by default (`-ScenariosB`) against `app-0.1.1`. |
 | Data launch and verify on B | The database opens with `migratedFrom: null` and reads the same as on A. |
-| Cleanup | Squirrel logs and the application diagnostics are copied into the evidence; R is deleted without following links; on CI the HKCU uninstall key is deleted when it points into R. The real binary root must still be absent. |
+| Cleanup | Squirrel logs and the application diagnostics are copied into the evidence; R is deleted without following links; on CI the HKCU uninstall key is deleted in each registry view whose own InstallLocation points into R. The real binary root must still be absent. |
 
 The synthetic recording target is used because the representative version 1 fixture has the purpose `synthetic`; the history path `data\telemetry.sqlite` refuses any other purpose, and a history-purpose copy would mean editing the fixture. The migration, the verified backup and the manifest follow the same `openConnection` path as history ([storage](storage.md)). No production history database may be created.
+
+This proves the shared migration and backup path (`openConnection` with its verified pre-migration backup and manifest) in the installed runtime with its installed better-sqlite3. It does not prove the history-target wiring end to end: the default selection of `data\telemetry.sqlite`, the `history` purpose and the history backups folder `backups`. That wiring is unit-tested only: `tests/unit/history-storage.test.ts` ("opens the production history database under LOCALAPPDATA without waiting for it", "keeps history mode unchanged with an explicit history target"), `tests/unit/recording-policy.test.ts` ("opens history with no durable selection when the variable is unset or empty") and `tests/storage/migrations.test.ts`, which refuses the synthetic fixture under the history purpose with `PURPOSE_MISMATCH`; the runtime smokes also create a new history database at `data\telemetry.sqlite`, without a migration. The owner's first real upgrade of version 1 history remains the end-to-end check.
 
 ### What is asserted
 
@@ -116,13 +118,15 @@ gh run list --workflow windows-ci.yml --branch <task-branch> --limit 1
 
 ## CI
 
+The first hosted run passed on October 18, 2026: dispatch run [39087647383](https://github.com/senukartur/ets2telemetry/actions/runs/39087647383) at `fbdd34c`, step 2 min 10 s ([ET-018 validation](validation/et-018.md#hosted-run)).
+
 The scaffold job runs the step **Installer lifecycle in a test root** right after **Forge maker and static native package inspection**, on pushes to `main` and on dispatch only, like the maker that builds its Setup.exe; its limit is 8 minutes ([ci](ci.md#et-018-installer-lifecycle)). The evidence folder `.local/ci/installer-<id>-evidence` is part of the uploaded `.local/ci`; R lives in the runner's temporary folder and is never uploaded.
 
-On a hosted runner the step leaves the product's Desktop and Start menu shortcuts created by the hooks, and possibly the Roaming userData folder; the runner is discarded after the job. The HKCU uninstall key is deleted when it points into R.
+On a hosted runner the step leaves the product's Desktop and Start menu shortcuts created by the hooks, and possibly the Roaming userData folder; the runner is discarded after the job. The HKCU uninstall key is deleted in each registry view whose InstallLocation points into R.
 
 ## Evidence
 
-`.local/ci/installer-<id>-evidence` holds `config.json`, `facts.json`, one JSON file per driver command (`guard-plan.json`, `seed.json`, `snapshot-<label>.json`, `compare-<before>-<after>.json`, `step-<label>.json` with the program's output, `launch-<label>.json`, `verify-<label>.json`, `history-<label>.json`, `cleanup.json`), the Job folders `job-<label>`, the installed smoke runs `installed-<guid>`, `upgrade-fixture.json`, `run-root\` (Squirrel logs and application diagnostics) and `lifecycle-result.json` with each step's exit code and seconds.
+`.local/ci/installer-<id>-evidence` holds `config.json` (the run layout only), one JSON file per driver command (`guard-plan.json`, `seed.json`, `snapshot-<label>.json`, `compare-<before>-<after>.json`, `step-<label>.json` with the program's output, `launch-<label>.json`, `verify-<label>.json`, `history-<label>.json`, `cleanup.json`), the Job folders `job-<label>`, the installed smoke runs `installed-<guid>`, `upgrade-fixture.json`, `run-root\` (Squirrel logs and application diagnostics) and `lifecycle-result.json` with each step's exit code and seconds.
 
 ## Limits
 

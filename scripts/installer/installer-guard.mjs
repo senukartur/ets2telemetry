@@ -159,6 +159,8 @@ export function checkRunPlan(facts) {
   for (const location of [runRoot, locationOf(facts, runRoot)]) {
     if ([...roots.real, ...roots.steam, facts.real.localAppData, facts.real.roamingAppData].some(root => isInside(root, location))) refuse('RUN_ROOT_CONTAINS_PROTECTED');
   }
+  // A Steam library list that exists but could not be read could hide a library the run root lies in.
+  if (facts.steamLibrariesUnreadable === true) refuse('STEAM_LIBRARIES_UNREADABLE');
   if (facts.realBinaryRootExists !== false) refuse('REAL_INSTALL_PRESENT');
   if (facts.registrationExists !== false) refuse('REGISTRATION_PRESENT');
   if (!Array.isArray(facts.processes)) refuse('PROCESS_LIST_UNAVAILABLE');
@@ -228,6 +230,38 @@ export function checkLaunchEnvironment(env, {runRoot, real}) {
   const localAppData = Object.entries(env).find(([key]) => key.toUpperCase() === 'LOCALAPPDATA')[1];
   if (!isDrivePath(real?.localAppData) || isInside(localAppData, real.localAppData) || isInside(real.localAppData, localAppData)) refuse('LAUNCH_ENVIRONMENT_REAL_ROOT');
   if (Object.entries(env).some(([key, value]) => key.toUpperCase() === 'ETS2TELEMETRY_PLUGIN_SETUP' && value !== undefined && value !== '')) refuse('LAUNCH_ENVIRONMENT_PLUGIN_SETUP');
+}
+
+/**
+ * The environment variable that carries the harness's machine facts to one driver command. Facts never go to a file:
+ * the evidence is uploaded publicly on CI and would stay on disk after a local run. The driver deletes the variable from
+ * its own environment as soon as it has read it, so no installer or application launch inherits it.
+ */
+export const FACTS_VARIABLE = 'ETS2TELEMETRY_INSTALLER_FACTS';
+/**
+ * What the evidence may keep of the machine facts: only booleans, counts, the matched product and game image names and a
+ * registered version of fixed form. No path, Steam library list or process name of the machine is ever recorded.
+ * `runRoot` decides whether the registration's InstallLocation lies inside the run root.
+ */
+export function factsEvidence(facts, runRoot) {
+  const processes = Array.isArray(facts?.processes) ? facts.processes : null;
+  const registration = facts?.registration;
+  const version = typeof registration?.displayVersion === 'string' && /^[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}$/.test(registration.displayVersion) ? registration.displayVersion : null;
+  return {
+    knownFoldersResolved: isDrivePath(facts?.real?.localAppData) && isDrivePath(facts?.real?.roamingAppData),
+    realBinaryRootExists: facts?.realBinaryRootExists === true,
+    registrationExists: facts?.registrationExists === true,
+    registration: registration ? {displayVersion: version, installLocationInsideRunRoot: isDrivePath(registration.installLocation) && isDrivePath(runRoot) &&
+      isInside(registration.installLocation, runRoot)} : null,
+    steamPathPresent: isDrivePath(facts?.steamPath),
+    steamLibraries: (isDrivePath(facts?.steamPath) ? 1 : 0) + steamLibraryPaths(facts?.libraryFolders ?? '').length,
+    steamLibrariesUnreadable: facts?.steamLibrariesUnreadable === true,
+    processesListed: processes ? processes.length : null,
+    guardedProcesses: processes ? [...new Set(processes.filter(isGuardedProcess).map(name => {
+      const value = String(name).toLowerCase();
+      return value.startsWith('truckersmp') ? 'truckersmp*' : value.endsWith('.exe') ? value : `${value}.exe`;
+    }))].sort() : null
+  };
 }
 
 /** Cleanup may delete the HKCU uninstall key only when it points into this run root (CI only). */

@@ -1,7 +1,12 @@
+import {execFile} from 'node:child_process';
+import {mkdir, readdir, readFile, writeFile} from 'node:fs/promises';
 import path from 'node:path';
+import {promisify} from 'node:util';
 import {describe, expect, it} from 'vitest';
-import {checkedPaths, checkInstalled, checkInstallTest, checkLaunchEnvironment, checkRunPlan, checkRunSignal, installedEnvironment, InstallerGuardError, isGuardedProcess,
-  minimalPath, normalizePath, ownsRegistration, resolveRealLocation, runLayout, steamLibraryPaths, type RunPlanFacts} from '../../scripts/installer/installer-guard.mjs';
+import {checkedPaths, checkInstalled, checkInstallTest, checkLaunchEnvironment, checkRunPlan, checkRunSignal, FACTS_VARIABLE, factsEvidence, installedEnvironment,
+  InstallerGuardError, isGuardedProcess, minimalPath, normalizePath, ownsRegistration, resolveRealLocation, runLayout, steamLibraryPaths,
+  type RunPlanFacts} from '../../scripts/installer/installer-guard.mjs';
+import {temporaryResources} from '../shared/resources';
 
 // ET-018 PR-1 (REG-017, U12): the installer lifecycle's fail-closed guards. Pure decisions over hand-written facts; no
 // registry, process list or file system is read. The fixture user folders are fictitious.
@@ -191,6 +196,59 @@ describe('launch environment', () => {
   });
   it('refuses any ETS2TELEMETRY_PLUGIN_SETUP value', () => {
     expect(refusal(() => checkLaunchEnvironment({...overrides, ETS2TELEMETRY_PLUGIN_SETUP: 'real'}, {runRoot: RUN_ROOT, real: REAL}))).toBe('LAUNCH_ENVIRONMENT_PLUGIN_SETUP');
+  });
+});
+
+describe('machine facts never reach the evidence', () => {
+  // Facts as the harness gathers them: real known folders, a Steam path, a library list, a registration and processes.
+  const VDF = '"libraryfolders"\n{\n\t"0"\n\t{\n\t\t"path"\t\t"C:\\\\Program Files (x86)\\\\Steam"\n\t}\n\t"1"\n\t{\n\t\t"path"\t\t"E:\\\\SteamLibrary"\n\t}\n}\n';
+  const machine = {real: REAL, realBinaryRootExists: false, registrationExists: true, steamPath: STEAM[0], libraryFolders: VDF, libraryFoldersState: 'read',
+    registration: {installLocation: runLayout(RUN_ROOT).binaryRoot, displayVersion: '0.1.1', uninstallString: `"${RUN_ROOT}\\LocalAppData\\ETS2TelemetryDesktop\\Update.exe" --uninstall`},
+    processes: ['explorer.exe', 'fixture-private-tool.exe', 'eurotrucks2.exe', 'TruckersMP-Launcher.exe']};
+  const DRIVE_PATH = /[A-Za-z]:[\\/]/;
+  const assertClean = (text: string) => {
+    expect(text).not.toMatch(DRIVE_PATH);
+    expect(text).not.toMatch(/libraryfolders|"path"|SteamLibrary|fixture|explorer|uninstall/i);
+  };
+  it('keeps only booleans, counts and the matched product and game image names', () => {
+    const evidence = factsEvidence(machine, RUN_ROOT);
+    expect(evidence).toEqual({knownFoldersResolved: true, realBinaryRootExists: false, registrationExists: true,
+      registration: {displayVersion: '0.1.1', installLocationInsideRunRoot: true}, steamPathPresent: true, steamLibraries: 3, steamLibrariesUnreadable: false,
+      processesListed: 4, guardedProcesses: ['eurotrucks2.exe', 'truckersmp*']});
+    assertClean(JSON.stringify(evidence));
+  });
+  it('drops a registered version that is not of fixed form', () => {
+    expect(factsEvidence({...machine, registration: {...machine.registration, displayVersion: 'C:\\Users\\fixture'}}, RUN_ROOT).registration?.displayVersion).toBeNull();
+  });
+  it('refuses a Steam library list that exists but was unreadable', () => {
+    expect(refusal(() => checkRunPlan(facts({steamLibrariesUnreadable: true})))).toBe('STEAM_LIBRARIES_UNREADABLE');
+  });
+  it('writes guard evidence without a path, the library list or process names (the driver itself)', async () => {
+    const resources = await temporaryResources();
+    try {
+      const runRoot = path.join(resources.directory, `installer-${ID}`), evidence = path.join(resources.directory, `installer-${ID}-evidence`);
+      await mkdir(evidence);
+      const config = path.join(evidence, 'config.json');
+      await writeFile(config, JSON.stringify({runRoot, evidence, setup: path.join(resources.directory, 'Setup.exe'), stepBudgetMs: 1000}));
+      // A passing preflight: no registration and no running product or game; the private process name must still not appear.
+      const passing = {...machine, registrationExists: false, registration: null, processes: ['explorer.exe', 'fixture-private-tool.exe']};
+      const env = {...process.env, [FACTS_VARIABLE]: JSON.stringify(passing)};
+      const {stdout} = await promisify(execFile)(process.execPath, [path.resolve('scripts/installer/installer-lifecycle.mjs'), 'guard', config, 'plan'],
+        {env, encoding: 'utf8', timeout: 30000, windowsHide: true});
+      expect(JSON.parse(stdout.trim().split(/\r?\n/).at(-1)!)).toMatchObject({command: 'guard', passed: true});
+      const names = await readdir(evidence);
+      expect(names.sort()).toEqual(['config.json', 'guard-plan.json']);
+      const text = await readFile(path.join(evidence, 'guard-plan.json'), 'utf8');
+      assertClean(text);
+      expect(JSON.parse(text).result).toEqual({phase: 'plan', facts: factsEvidence(passing, runRoot)});
+    } finally {await resources.dispose();}
+  }, 40000);
+  it('never writes the facts to a file in the harness', async () => {
+    const harness = await readFile(path.resolve('scripts/installer/Invoke-InstallerLifecycle.ps1'), 'utf8');
+    expect(harness).not.toMatch(/facts\.json|factsFile/i);
+    expect(harness).toContain('$env:ETS2TELEMETRY_INSTALLER_FACTS = Get-FactJson');
+    expect(harness).toContain('Remove-Item Env:ETS2TELEMETRY_INSTALLER_FACTS');
+    expect(FACTS_VARIABLE).toBe('ETS2TELEMETRY_INSTALLER_FACTS');
   });
 });
 

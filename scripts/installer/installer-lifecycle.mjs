@@ -8,7 +8,7 @@ import {fileURLToPath} from 'node:url';
 import {promisify} from 'node:util';
 import {_electron as electron} from '@playwright/test';
 import {rendererPages} from '../ci/overlay-observation.mjs';
-import {checkedPaths, checkInstalled, checkLaunchEnvironment, checkRunPlan, checkRunSignal, InstallerGuardError, installedEnvironment, normalizePath,
+import {checkedPaths, checkInstalled, checkLaunchEnvironment, checkRunPlan, checkRunSignal, FACTS_VARIABLE, factsEvidence, InstallerGuardError, installedEnvironment, normalizePath,
   ownsRegistration, resolveRealLocation, RUN_ROOT_NAME, runLayout, steamLibraryPaths} from './installer-guard.mjs';
 
 // ET-018 PR-1 (REG-013, REG-017; plan U10-U13): the Node driver of the installer lifecycle in a marked test root. The
@@ -26,7 +26,7 @@ import {checkedPaths, checkInstalled, checkLaunchEnvironment, checkRunPlan, chec
 //   step <config> <label> <exe> [args...]     runs one installer program and waits until no process image under R is left
 //   launch <config> <label> <exe> <1|none>    a data launch of the installed application with LOCALAPPDATA = R\LocalAppData
 //   verify <config> <label> <exe>             reads the upgraded database with the installed Electron and better-sqlite3
-//   cleanup <config> [installLocation]        deletes R (never following links) after the harness kept the evidence
+//   cleanup <config> <location per view...>   deletes R (never following links) after the harness kept the evidence
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const checkout = path.resolve(here, '..', '..');
@@ -84,6 +84,15 @@ async function writeEvidence(config, name, value) {
   await mkdir(config.evidence, {recursive: true});
   await writeFile(path.join(config.evidence, name), JSON.stringify(value, null, 2) + '\n');
 }
+// The harness passes its machine facts (known folders, Steam libraries, registration, processes) in FACTS_VARIABLE, never in
+// a file. It is read once and removed from this process's environment, so no installer or launch inherits it, and the
+// evidence keeps only factsEvidence(): booleans, counts and matched image names.
+const factsText = process.env[FACTS_VARIABLE];
+delete process.env[FACTS_VARIABLE];
+function machineFacts() {
+  assert.ok(typeof factsText === 'string' && factsText.length > 0, 'FACTS_MISSING');
+  return JSON.parse(factsText);
+}
 const failure = error => ({name: error?.name, code: error?.code ?? null, message: String(error?.message ?? error)});
 
 /** The real location of every checked path, keyed by normalized raw path. */
@@ -100,22 +109,22 @@ async function regularFile(file) {
 }
 
 async function guard(config, phase) {
-  const facts = await readJson(config.factsFile);
+  const facts = machineFacts();
   const steamLibraries = [...(facts.steamPath ? [facts.steamPath] : []), ...steamLibraryPaths(facts.libraryFolders ?? '')];
   const base = {runRoot: config.runRoot, paths: [config.evidence], real: facts.real, steamLibraries};
   const plan = {...base, resolved: await resolvedMap(checkedPaths(base)), realBinaryRootExists: facts.realBinaryRootExists,
-    registrationExists: facts.registrationExists, processes: facts.processes, markers: null};
+    registrationExists: facts.registrationExists, processes: facts.processes, steamLibrariesUnreadable: facts.libraryFoldersState === 'unreadable', markers: null};
   if (phase === 'ready') {
     const layout = runLayout(config.runRoot);
     plan.markers = {pluginMarker: await regularFile(layout.pluginMarker),
       installTest: await regularFile(layout.installTest) ? await readJson(layout.installTest, 16 * 1024) : null};
   } else assert.equal(phase, 'plan');
   checkRunPlan(plan);
-  return {phase, steamLibraries: steamLibraries.length, processes: facts.processes.length};
+  return {phase, facts: factsEvidence({...facts, steamLibrariesUnreadable: plan.steamLibrariesUnreadable}, config.runRoot)};
 }
 
 async function installed(config) {
-  const facts = await readJson(config.factsFile);
+  const facts = machineFacts();
   const layout = runLayout(config.runRoot);
   const registration = facts.registration ?? {};
   checkInstalled({runRoot: config.runRoot, installLocation: registration.installLocation, binaryRoot: layout.binaryRoot,
@@ -125,7 +134,7 @@ async function installed(config) {
   const uninstallInsideRunRoot = typeof registration.uninstallString === 'string' &&
     registration.uninstallString.toLowerCase().includes(normalizePath(path.win32.join(layout.binaryRoot, 'Update.exe')));
   assert.ok(uninstallInsideRunRoot, 'UNINSTALL_STRING_OUTSIDE_RUN_ROOT');
-  return {displayVersion: registration.displayVersion ?? null, uninstallInsideRunRoot};
+  return {uninstallInsideRunRoot, facts: factsEvidence(facts, config.runRoot)};
 }
 
 /** The fixture's committed SHA-256 from tests/fixtures/storage/manifest.txt; the fixture itself is never written. */
@@ -204,10 +213,12 @@ async function processImages() {
  */
 async function step(config, label, executable, args) {
   const layout = runLayout(config.runRoot);
+  // The only command that runs an installer repeats the CI signal, so a direct local call refuses as well.
+  checkRunSignal(process.env);
   // Only the reviewed Setup.exe of the make output or the installed Update.exe inside the run root may run here.
   assert.ok(normalizePath(executable) === normalizePath(config.setup) || normalizePath(executable) === normalizePath(path.join(layout.binaryRoot, 'Update.exe')),
     'STEP_EXECUTABLE_UNEXPECTED');
-  checkLaunchEnvironment(process.env, {runRoot: config.runRoot, real: (await readJson(config.factsFile)).real});
+  checkLaunchEnvironment(process.env, {runRoot: config.runRoot, real: machineFacts().real});
   const started = performance.now(), budget = config.stepBudgetMs ?? 50000;
   const child = spawn(executable, args, {cwd: layout.cwd, env: process.env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true});
   const output = {stdout: [], stderr: []};
@@ -262,7 +273,7 @@ async function launch(config, label, executable, migratedFrom) {
   const env = installedEnvironment(process.env, {LOCALAPPDATA: layout.base, APPDATA: layout.appData, TEMP: layout.temp, TMP: layout.temp,
     ETS2TELEMETRY_PROFILE_DIR: layout.profile, ETS2TELEMETRY_DIAGNOSTIC_DIR: diagnostics, ETS2TELEMETRY_PLUGIN_SETUP_ROOT: config.runRoot,
     ETS2TELEMETRY_RECORDING: `synthetic:${RECORDING_NAME}`});
-  checkLaunchEnvironment(env, {runRoot: config.runRoot, real: (await readJson(config.factsFile)).real});
+  checkLaunchEnvironment(env, {runRoot: config.runRoot, real: machineFacts().real});
   assert.ok(normalizePath(executable).startsWith(`${normalizePath(layout.binaryRoot)}\\app-`), 'LAUNCH_EXECUTABLE_NOT_INSTALLED');
   const record = {label};
   let application, closeError;
@@ -271,7 +282,9 @@ async function launch(config, label, executable, migratedFrom) {
     const launcher = application.process();
     const {dashboard} = await rendererPages(application);
     await dashboard.getByText('Telemetry service ready; isolated storage probe verified', {exact: true}).waitFor({state: 'visible', timeout: 15000});
-    record.runtime = await application.evaluate(({app}) => ({executable: process.execPath, packaged: app.isPackaged, version: app.getVersion()}));
+    // Compared here; the evidence keeps the outcome only, never the path.
+    const runtime = await application.evaluate(({app}) => ({executable: process.execPath, packaged: app.isPackaged, version: app.getVersion()}));
+    record.runtime = {executableMatches: normalizePath(runtime.executable) === normalizePath(executable), packaged: runtime.packaged, version: runtime.version};
     await until(() => serviceEvents(path.join(diagnostics, 'service')), rows => rows.some(row => row.event === 'HISTORY_STORAGE_OPENED' || row.event === 'HISTORY_STORAGE_UNAVAILABLE'),
       'HISTORY_OPEN_NOT_LOGGED', 15000);
     await until(() => serviceEvents(diagnostics), rows => rows.some(row => row.event === 'PLUGIN_DISCOVERY'), 'PLUGIN_DISCOVERY_NOT_LOGGED', 15000);
@@ -299,7 +312,7 @@ async function launch(config, label, executable, migratedFrom) {
     serviceExit: main.filter(row => row.event === 'SERVICE_EXIT').map(row => row.detail?.code)
   };
   assert.deepEqual(record.exit, {code: 0, signal: null}, 'LAUNCH_EXIT_NONZERO');
-  assert.equal(normalizePath(record.runtime.executable), normalizePath(executable), 'LAUNCH_EXECUTABLE_DIFFERS');
+  assert.equal(record.runtime.executableMatches, true, 'LAUNCH_EXECUTABLE_DIFFERS');
   assert.equal(record.runtime.packaged, true);
   assert.deepEqual(record.events.opened, [{schemaVersion: 2, created: false, migratedFrom: migratedFrom === 'none' ? null : Number(migratedFrom)}], 'HISTORY_OPEN_UNEXPECTED');
   assert.deepEqual(record.events.target, [{purpose: 'synthetic'}], 'RECORDING_TARGET_UNEXPECTED');
@@ -337,11 +350,11 @@ async function verify(config, label, executable) {
   }
   const output = path.join(config.evidence, `history-${label}.json`);
   const env = installedEnvironment(process.env, {ELECTRON_RUN_AS_NODE: '1', LOCALAPPDATA: layout.base, APPDATA: layout.appData, TEMP: layout.temp, TMP: layout.temp});
-  await promisify(execFile)(executable, [path.join(here, 'read-upgraded-history.cjs'), path.join(work, `${RECORDING_NAME}.sqlite`), workBackups, output],
+  await promisify(execFile)(executable, [path.join(here, 'read-upgraded-history.cjs'), path.join(work, `${RECORDING_NAME}.sqlite`), workBackups, output, executable],
     {cwd: layout.cwd, env, timeout: 20000, windowsHide: true, encoding: 'utf8'});
   const facts = await readJson(output, 4 * 1024 * 1024);
   // The installed runtime and its own native binding did the read.
-  assert.equal(normalizePath(facts.runtime.execPath), normalizePath(executable), 'VERIFY_RUNTIME_DIFFERS');
+  assert.equal(facts.runtime.execPathMatches, true, 'VERIFY_RUNTIME_DIFFERS');
   assert.equal(facts.runtime.electron, '44.7.0');
   // The module cache names the binding by its ASAR path; Electron loads that file from app.asar.unpacked, which must exist.
   assert.deepEqual(facts.runtime.nativeBindings.map(name => name.toLowerCase()), ['resources\\app.asar\\node_modules\\better-sqlite3\\prebuilds\\win32-x64.node'],
@@ -374,12 +387,14 @@ async function verify(config, label, executable) {
 
 /**
  * Deletes R without following any link (fs.rm unlinks a junction or symbolic link instead of entering it), and decides
- * whether the HKCU uninstall key the harness read may be deleted: only when it points into R (ownsRegistration).
+ * for each registry view whether the HKCU uninstall key the harness read there may be deleted: only when that view's
+ * InstallLocation points into R (ownsRegistration). `locations` holds one argument per view, `-` for a view without the
+ * key (Windows PowerShell 5.1 drops empty arguments).
  */
-async function cleanup(config, installLocation) {
+async function cleanup(config, locations) {
   assert.ok(RUN_ROOT_NAME.test(path.win32.basename(config.runRoot)), 'CLEANUP_ROOT_INVALID');
   await rm(config.runRoot, {recursive: true, force: true, maxRetries: 5, retryDelay: 200});
-  return {removed: true, ownsRegistration: typeof installLocation === 'string' && ownsRegistration(config.runRoot, installLocation)};
+  return {removed: true, ownsRegistration: locations.map(location => location !== '-' && ownsRegistration(config.runRoot, location))};
 }
 
 const [command, ...rest] = process.argv.slice(2);
@@ -402,7 +417,7 @@ try {
       case 'step': result.result = await step(config, label, rest[2], rest.slice(3)); break;
       case 'launch': result.result = await launch(config, label, rest[2], rest[3]); break;
       case 'verify': result.result = await verify(config, label, rest[2]); break;
-      case 'cleanup': result.result = await cleanup(config, rest[1]); break;
+      case 'cleanup': result.result = await cleanup(config, rest.slice(1)); break;
       default: throw new Error('UNKNOWN_COMMAND');
     }
     result.passed = true;
@@ -418,5 +433,5 @@ if (config) {
 }
 // One JSON line for the harness; `cleanup` also reports whether the uninstall key may be deleted.
 process.stdout.write(`${JSON.stringify({command, passed: result.passed, failure: result.failure ?? null,
-  ...(command === 'cleanup' ? {ownsRegistration: result.result?.ownsRegistration === true} : {})})}\n`);
+  ...(command === 'cleanup' ? {ownsRegistration: Array.isArray(result.result?.ownsRegistration) ? result.result.ownsRegistration : []} : {})})}\n`);
 process.exitCode = result.passed ? 0 : 1;
