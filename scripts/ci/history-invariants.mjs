@@ -4,8 +4,9 @@
 //
 // Each rule is written from the documents, never read back from the code under test:
 // - I1 no duplicate delivered trips and no double accounting: docs/trips.md, "States and transitions" (an outcome closes
-//   the trip it attributes, `{outcome, this-event}`; each game has one slot with at most one open trip) and
-//   "Attribution (T14)" (each gameplay event gets exactly one `event.attribute`, other events none).
+//   the trip it attributes, `{outcome, this-event}`; each game has one slot with at most one open trip) and "Attribution
+//   (T14)" (each gameplay event gets exactly one `event.attribute`, other events none; an event of an active cargo_market
+//   job before pickup, its outcome included, is `trip-before-loaded`, otherwise an event of the trip is `trip`).
 // - I2 no acknowledged-but-lost events: docs/storage.md, "Storage API" (coverage is the contiguous committed prefix of
 //   events and gap rows; an ACK may be built only from that value) and protocol v1 §10.
 // - I3 no falsely complete trip: docs/trips.md, "What complete means (T13)": complete only when its gameplay outcome closes
@@ -26,6 +27,11 @@ export const GAMEPLAY_EVENTS = Object.freeze(['job.delivered', 'job.cancelled', 
 /** The outcome event type of each closed outcome. */
 const OUTCOME_EVENT = {delivered: 'job.delivered', cancelled: 'job.cancelled'};
 const closedByOutcome = outcome => Object.hasOwn(OUTCOME_EVENT, outcome);
+/**
+ * docs/trips.md, Attribution (T14): the attributions that bind an event to a trip. An outcome that closes an active
+ * cargo_market trip before pickup (cargoLoaded available and false) is `trip-before-loaded`, any other closing outcome `trip`.
+ */
+const TRIP_ATTRIBUTIONS = ['trip', 'trip-before-loaded'];
 
 const big = value => BigInt(value);
 const eventKey = (session, eventSeq) => `${session}#${big(eventSeq)}`;
@@ -67,7 +73,7 @@ function i1(rows, add) {
     if (!event || event.type !== OUTCOME_EVENT[t.outcome]) add('I1', `a ${t.outcome} trip is closed by a stored ${OUTCOME_EVENT[t.outcome]} event`, [t, event ?? null]);
     if (t.closeReason !== 'outcome') add('I1', 'a delivered or cancelled trip has close reason outcome', [t]);
     const own = attributions.get(k) ?? [];
-    if (own.length !== 1 || own[0].attribution !== 'trip' || own[0].tripUuid !== t.tripUuid) add('I1', 'the outcome event is attributed to the trip it closes', [t, ...own]);
+    if (own.length !== 1 || !TRIP_ATTRIBUTIONS.includes(own[0].attribution) || own[0].tripUuid !== t.tripUuid) add('I1', 'the outcome event is attributed to the trip it closes', [t, ...own]);
     closedBy.set(k, [...(closedBy.get(k) ?? []), t]);
   }
   for (const trips of closedBy.values()) if (trips.length > 1) add('I1', 'no outcome event closes two trips', trips);

@@ -72,6 +72,23 @@ describe('history invariants over hand-written rows', () => {
       const rows = changed(r => { r.attributions.push({pluginSessionId: S, eventSeq: '13', tripUuid: null, attribution: 'free-driving'}); });
       expect(broken(rows)).toEqual(['I1']);
     });
+    // T14: a cargo_market job configured while running and cancelled before pickup (cargoLoaded available and false): its
+    // fine and its cancellation are `trip-before-loaded`, and the cancellation closes the trip {cancelled, outcome},
+    // complete after a clean window.
+    const cancelledBeforePickup = (outcomeTrip: string) => changed(r => {
+      r.events = r.events.map(e => e.pluginSessionId === S && e.eventSeq === '5' ? {...e, type: 'job.cancelled'} : e);
+      r.trips[0] = {...r.trips[0], outcome: 'cancelled'};
+      r.attributions = r.attributions.map(a => a.eventSeq === '4' ? {...a, attribution: 'trip-before-loaded'}
+        : a.eventSeq === '5' ? {...a, tripUuid: outcomeTrip, attribution: 'trip-before-loaded'} : a);
+    });
+    it('a cargo-market job cancelled before pickup closes its trip with a trip-before-loaded outcome', () => {
+      expect(checkHistoryInvariants(cancelledBeforePickup(A), ACKS)).toEqual([]);
+    });
+    it('a trip-before-loaded outcome attributed to another trip than the one it closes', () => {
+      const rows = cancelledBeforePickup(B);
+      expect(broken(rows)).toEqual(['I1']);
+      expect(checkHistoryInvariants(rows, ACKS)[0].rule).toBe('the outcome event is attributed to the trip it closes');
+    });
     it('a delivered trip that names no outcome event', () => {
       const rows = changed(r => { r.trips[0] = {...r.trips[0], outcomeSessionId: null, outcomeEventSeq: null, recordingCompleteness: 'partial'}; });
       expect(broken(rows)).toEqual(['I1']);
