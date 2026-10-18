@@ -227,6 +227,64 @@ describe('the reg.exe port', () => {
       'powershell.exe -File "C:\\a b\\c.ps1"', '/f']}]);
   });
 
+  describe('an absent value is told from a failure without reading reg.exe\'s localized error text', () => {
+    const PARENT = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion';
+    const full = (key: string) => key.replace(/^HKCU\\/, 'HKEY_CURRENT_USER\\');
+    const valueLine = `    ${RUN_ONCE_VALUE}    REG_SZ    "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -File "C:\\a b\\c.ps1"`;
+    /** A fake reg.exe: each call is answered by `answer`; exit 0 with stdout, or exit 1 with nothing (as any failure). */
+    function fakeReg(answer: (args: readonly string[]) => string | null, calls: {args: readonly string[]; timeout: number}[] = [], cost = 0) {
+      let clock = 0;
+      const execFile: ExecFilePort = (_file, args, options, callback) => {
+        calls.push({args, timeout: options.timeout});
+        clock += cost;
+        const stdout = answer(args);
+        if (stdout === null) callback(Object.assign(new Error('Command failed'), {code: 1, killed: false}), Buffer.alloc(0), Buffer.alloc(0));
+        else callback(null, Buffer.from(stdout), Buffer.alloc(0));
+        return undefined;
+      };
+      return regExeRunOnce({SystemRoot: 'C:\\Windows'}, execFile, () => clock);
+    }
+
+    it('a denied delete of a value that is still listed is failed, not absent', async () => {
+      const registry = fakeReg(args => args[0] === 'query' && args[1] === PRODUCTION_RUN_ONCE_KEY ? `\r\n${full(PRODUCTION_RUN_ONCE_KEY)}\r\n${valueLine}\r\n` : null);
+      expect(await registry.remove(PRODUCTION_RUN_ONCE_KEY, RUN_ONCE_VALUE, 2000)).toBe('failed');
+    });
+
+    it('a key that exists but cannot be listed is failed, not absent (review of PR-5)', async () => {
+      // The key query fails as a denied read does; its parent lists it, so it exists.
+      const registry = fakeReg(args => args[0] === 'query' && args[1] === PARENT ? `\r\n${full(PARENT)}\r\n${full(PRODUCTION_RUN_ONCE_KEY)}\r\n` : null);
+      expect(await registry.remove(PRODUCTION_RUN_ONCE_KEY, RUN_ONCE_VALUE, 2000)).toBe('failed');
+      expect(await registry.read(PRODUCTION_RUN_ONCE_KEY, RUN_ONCE_VALUE, 2000)).toBeUndefined();
+    });
+
+    it('a listed key without the value, and a key its parent does not list, are absent', async () => {
+      const withoutValue = fakeReg(args => args[0] === 'query' && args[1] === PRODUCTION_RUN_ONCE_KEY ? `\r\n${full(PRODUCTION_RUN_ONCE_KEY)}\r\n    Other    REG_SZ    x\r\n` : null);
+      expect(await withoutValue.remove(PRODUCTION_RUN_ONCE_KEY, RUN_ONCE_VALUE, 2000)).toBe('absent');
+      const noKey = fakeReg(args => args[0] === 'query' && args[1] === PARENT ? `\r\n${full(PARENT)}\r\n${full(PARENT)}\\Run\r\n` : null);
+      expect(await noKey.remove(PRODUCTION_RUN_ONCE_KEY, RUN_ONCE_VALUE, 2000)).toBe('absent');
+      expect(await noKey.read(PRODUCTION_RUN_ONCE_KEY, RUN_ONCE_VALUE, 2000)).toBeNull();
+    });
+
+    it('walks up to HKCU\\Software for a test key whose parent is missing too, and never past it', async () => {
+      const calls: {args: readonly string[]; timeout: number}[] = [];
+      const registry = fakeReg(args => args[0] === 'query' && args[1] === 'HKCU\\Software' ? '\r\nHKEY_CURRENT_USER\\Software\r\nHKEY_CURRENT_USER\\Software\\Other\r\n' : null, calls);
+      expect(await registry.remove(TEST_RUN_ONCE, RUN_ONCE_VALUE, 2000)).toBe('absent');
+      expect(calls.map(call => call.args.slice(0, 2).join(' '))).toEqual([`delete ${TEST_RUN_ONCE}`, `query ${TEST_RUN_ONCE}`, `query ${path.win32.dirname(TEST_RUN_ONCE)}`,
+        'query HKCU\\Software']);
+      const unreadable = fakeReg(() => null, calls.splice(0));
+      expect(await unreadable.remove(TEST_RUN_ONCE, RUN_ONCE_VALUE, 2000)).toBe('failed');
+      expect(calls.map(call => call.args[1])).not.toContain('HKCU');
+    });
+
+    it('the delete and its fallback queries share one timeout', async () => {
+      const calls: {args: readonly string[]; timeout: number}[] = [];
+      const registry = fakeReg(args => args[0] === 'query' && args[1] === 'HKCU\\Software' ? '\r\nHKEY_CURRENT_USER\\Software\r\n' : null, calls, 600);
+      expect(await registry.remove(TEST_RUN_ONCE, RUN_ONCE_VALUE, 2000)).toBe('absent');
+      // Each call costs 600 ms on the fake clock: the four calls get 2000, 1400, 800 and 200 ms.
+      expect(calls.map(call => call.timeout)).toEqual([2000, 1400, 800, 200]);
+    });
+  });
+
   describe('a round trip through the real reg.exe under this run\'s own test key', () => {
     const keyRoot = `HKCU\\Software\\ETS2Telemetry-Test-${randomUUID().replaceAll('-', '')}`;
     const key = `${keyRoot}\\RunOnce`;
@@ -238,7 +296,9 @@ describe('the reg.exe port', () => {
     it('sets, reads and removes the value with quotes and spaces intact', async () => {
       const registry = regExeRunOnce(process.env);
       const command = executorCommand('C:\\Users\\Driver Name\\AppData\\Local\\ETS2Telemetry', WINDOWS)!;
+      // Neither the key nor its parent exists yet: HKCU\Software's listing shows that the value is absent.
       expect(await registry.read(key, RUN_ONCE_VALUE, 5000)).toBeNull();
+      expect(await registry.remove(key, RUN_ONCE_VALUE, 5000)).toBe('absent');
       expect(await registry.set(key, RUN_ONCE_VALUE, command, 5000)).toBe(true);
       expect(await registry.read(key, RUN_ONCE_VALUE, 5000)).toBe(command);
       expect(await registry.remove(key, RUN_ONCE_VALUE, 5000)).toBe('removed');

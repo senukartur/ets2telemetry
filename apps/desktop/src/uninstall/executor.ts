@@ -144,17 +144,39 @@ export function parseRegQuery(output: string, value: string): string | undefined
  * The production registry port: `%SystemRoot%\System32\reg.exe` with fixed arguments. Only the production key and the
  * test key pattern are accepted; anything else fails without starting reg.exe.
  */
-export function regExeRunOnce(env: Readonly<Record<string, string | undefined>>, execFile: ExecFilePort = nodeExecFile): RunOnceRegistry {
+export function regExeRunOnce(env: Readonly<Record<string, string | undefined>>, execFile: ExecFilePort = nodeExecFile, now: () => number = Date.now): RunOnceRegistry {
   const reg = path.win32.join(systemRoot(env), 'System32', 'reg.exe');
-  const run = (args: readonly string[], timeoutMs: number) => runFixedProgram(execFile, reg, args, {timeoutMs, maxOutputBytes: 64 * 1024});
+  const run = (args: readonly string[], timeoutMs: number) => runFixedProgram(execFile, reg, args, {timeoutMs, maxOutputBytes: 256 * 1024});
   const valid = (key: string, value: string) => allowedKey(key) && value === RUN_ONCE_VALUE;
-  const read = async (key: string, value: string, timeoutMs: number): Promise<string | null | undefined> => {
-    if (!valid(key, value)) return undefined;
-    const result = await run(['query', key, '/v', value], timeoutMs);
-    // reg.exe exits 1 both for a missing value and for a failure; a missing value has no output on stdout.
-    if (!result.ok) return result.failure === 'failed' ? null : undefined;
-    return parseRegQuery(result.stdout.toString('utf8'), value);
+  /** One budget for every reg.exe call of an operation: each call gets what is left of it, at least 1 ms. */
+  const budget = (timeoutMs: number) => {
+    const end = now() + timeoutMs;
+    return () => Math.max(1, end - now());
   };
+  /**
+   * The value's data (an empty string for a value of another type), null when it does not exist, or undefined when that
+   * cannot be told. reg.exe exits 1 both for a missing key or value and for a failure such as a denied read, and its
+   * error text is localized, so only exit 0 and the listing on stdout are trusted: the key's own listing (its values),
+   * or, when the key cannot be listed, the listing of its nearest readable ancestor up to `HKCU\Software`, which shows
+   * whether the key exists at all. A key that exists but cannot be listed is undefined, never absent.
+   */
+  const probe = async (key: string, value: string, left: () => number): Promise<string | null | undefined> => {
+    const listing = await run(['query', key], left());
+    if (listing.ok) return valueIn(listing.stdout.toString('utf8'), value);
+    if (listing.failure !== 'failed') return undefined;
+    let child = key;
+    for (let parent = path.win32.dirname(key); child.toLowerCase() !== 'hkcu\\software'; child = parent, parent = path.win32.dirname(parent)) {
+      const ancestor = await run(['query', parent], left());
+      if (!ancestor.ok) {
+        if (ancestor.failure !== 'failed') return undefined;
+        continue;
+      }
+      return listsSubkey(ancestor.stdout.toString('utf8'), child) ? undefined : null;
+    }
+    return undefined;
+  };
+  const read = async (key: string, value: string, timeoutMs: number): Promise<string | null | undefined> =>
+    valid(key, value) ? probe(key, value, budget(timeoutMs)) : undefined;
   return {
     set: async (key, value, data, timeoutMs) => {
       if (!valid(key, value) || /[\r\n\0]/.test(data)) return false;
@@ -162,10 +184,25 @@ export function regExeRunOnce(env: Readonly<Record<string, string | undefined>>,
     },
     remove: async (key, value, timeoutMs) => {
       if (!valid(key, value)) return 'failed';
-      if ((await run(['delete', key, '/v', value, '/f'], timeoutMs)).ok) return 'removed';
-      // The delete fails for a missing value too: a query that finds nothing tells them apart.
-      return await read(key, value, timeoutMs) === null ? 'absent' : 'failed';
+      const left = budget(timeoutMs);
+      if ((await run(['delete', key, '/v', value, '/f'], left())).ok) return 'removed';
+      // The delete also fails for a missing value; only a listing that shows the value is gone makes it `absent`.
+      return await probe(key, value, left) === null ? 'absent' : 'failed';
     },
     read
   };
+}
+
+/** The data of `value` in a `reg query <key>` listing: REG_SZ data, '' for another type, or null when it is not listed. */
+function valueIn(output: string, value: string): string | null {
+  for (const line of output.split(/\r?\n/)) {
+    const match = /^ {4}(.+?) {4}(REG_[A-Z_]+)(?: {4}(.*))?$/.exec(line);
+    if (match && match[1] === value) return match[2] === 'REG_SZ' ? match[3] ?? '' : '';
+  }
+  return null;
+}
+/** True when a `reg query <parent>` listing names the subkey `key` (full names, compared case-insensitively). */
+function listsSubkey(output: string, key: string): boolean {
+  const full = key.replace(/^HKCU\\/i, 'HKEY_CURRENT_USER\\').toLowerCase();
+  return output.split(/\r?\n/).some(line => line.trim().toLowerCase() === full);
 }
