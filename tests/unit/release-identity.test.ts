@@ -322,6 +322,47 @@ describe('the NuGet projection (inspect-package --installer)', () => {
   });
 });
 
+describe('the ZIP reader', () => {
+  // A stored entry first (its local header at offset 0), then a deflated one, then the central directory.
+  const archive = () => zip([['first.pak', Buffer.from('stored bytes')], ['second.txt', Buffer.from('deflated bytes')]]);
+  const eocd = (bytes: Buffer) => bytes.length - 22;
+  const directory = (bytes: Buffer) => bytes.readUInt32LE(eocd(bytes) + 16);
+  const read = (bytes: Buffer) => {const reader = readZip(bytes); for (const name of reader.names) reader.extract(name);};
+
+  it('reads both entries of a valid archive', () => {
+    const reader = readZip(archive());
+    expect(reader.names).toEqual(['first.pak', 'second.txt']);
+    expect(reader.extract('first.pak').toString()).toBe('stored bytes');
+    expect(reader.extract('second.txt').toString()).toBe('deflated bytes');
+  });
+
+  const refusals: [string, () => Buffer, string][] = [
+    ['an entry name with ..', () => zip([['lib/../x', Buffer.from('x')]]), 'Invalid ZIP entry name: lib/../x'],
+    ['an entry name with a backslash', () => zip([['lib\\x', Buffer.from('x')]]), 'Invalid ZIP entry name'],
+    ['an entry name with a leading slash', () => zip([['/x', Buffer.from('x')]]), 'Invalid ZIP entry name: /x'],
+    ['a repeated entry', () => zip([['x.pak', Buffer.from('a')], ['x.pak', Buffer.from('b')]]), 'Repeated ZIP entry: x.pak'],
+    ['the encrypted flag', () => {const bytes = archive(); bytes.writeUInt16LE(1, directory(bytes) + 8); return bytes;}, 'Encrypted ZIP entry: first.pak'],
+    ['a ZIP64 size marker', () => {const bytes = archive(); bytes.writeUInt32LE(0xffffffff, directory(bytes) + 20); return bytes;}, 'ZIP64 archives are not supported'],
+    ['a ZIP64 local offset marker', () => {const bytes = archive(); bytes.writeUInt32LE(0xffffffff, directory(bytes) + 42); return bytes;}, 'ZIP64 archives are not supported'],
+    ['a ZIP64 entry count marker', () => {const bytes = archive(); bytes.writeUInt16LE(0xffff, eocd(bytes) + 8); bytes.writeUInt16LE(0xffff, eocd(bytes) + 10); return bytes;},
+      'ZIP64 archives are not supported'],
+    ['an unsupported compression method', () => {const bytes = archive(); bytes.writeUInt16LE(12, directory(bytes) + 10); return bytes;}, 'Unsupported ZIP compression method 12: first.pak'],
+    ['a wrong local header signature', () => {const bytes = archive(); bytes.writeUInt32LE(0, 0); return bytes;}, 'Invalid ZIP local header: first.pak'],
+    ['a local header that runs into the directory', () => {const bytes = archive(); bytes.writeUInt32LE(directory(bytes) - 10, directory(bytes) + 42); return bytes;},
+      'ZIP local header outside the archive data: first.pak'],
+    ['a local header that names another entry', () => {const bytes = archive(); bytes[30] ^= 1; return bytes;}, 'ZIP local header names another entry: first.pak'],
+    ['entry data that runs into the directory', () => {const bytes = archive(); bytes.writeUInt32LE(directory(bytes), directory(bytes) + 20); return bytes;}, 'Truncated ZIP entry: first.pak'],
+    ['a central record that runs past the directory', () => {const bytes = archive(); bytes.writeUInt32LE(bytes.readUInt32LE(eocd(bytes) + 12) - 1, eocd(bytes) + 12); return bytes;},
+      'ZIP central directory record outside the directory'],
+    ['a central record whose name runs past the directory', () => {const bytes = archive(); bytes.writeUInt16LE(0xfff0, directory(bytes) + 28); return bytes;},
+      'ZIP central directory record outside the directory'],
+    ['a directory larger than its records', () => {const bytes = archive(); bytes.writeUInt16LE(1, eocd(bytes) + 8); bytes.writeUInt16LE(1, eocd(bytes) + 10); return bytes;},
+      'ZIP central directory size differs from its records'],
+    ['a missing end of central directory', () => archive().subarray(0, -22), 'ZIP end of central directory not found']
+  ];
+  for (const [label, build, message] of refusals) it(`refuses ${label}`, () => {expect(() => read(build())).toThrow(message);});
+});
+
 describe('Authenticode output', () => {
   const subject = Buffer.from('CN=Example, O=Example Ltd', 'utf8').toString('base64');
   it('parses one line per file, in order', () => {

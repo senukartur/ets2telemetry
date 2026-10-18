@@ -130,43 +130,52 @@ export function listNativeFiles(root) {
 
 // --- The full NuGet package -----------------------------------------------------------------------------------------
 
-/** Reads a ZIP archive's central directory; stored and deflated entries only, no ZIP64, encryption or data descriptors needed. */
+/**
+ * Reads a ZIP archive's central directory: stored and deflated entries only, no ZIP64, encryption or spanning. Every
+ * central record must lie inside the directory, and every local header and its data before the directory.
+ */
 export function readZip(bytes) {
   const minimum = Math.max(0, bytes.length - 0xffff - 22);
   let end = -1;
   for (let offset = bytes.length - 22; offset >= minimum; offset--) if (bytes.readUInt32LE(offset) === 0x06054b50) {end = offset; break;}
   assert.ok(end >= 0, 'ZIP end of central directory not found');
   const count = bytes.readUInt16LE(end + 10), size = bytes.readUInt32LE(end + 12), start = bytes.readUInt32LE(end + 16);
-  assert.ok(count < 0xffff && size !== 0xffffffff && start !== 0xffffffff, 'ZIP64 archives are not supported');
+  assert.ok(count !== 0xffff && size !== 0xffffffff && start !== 0xffffffff, 'ZIP64 archives are not supported');
   assert.ok(count <= MAX_ZIP_ENTRIES && start + size <= end, 'Invalid ZIP central directory');
+  const directoryEnd = start + size;
   const entries = new Map();
   let offset = start;
   for (let index = 0; index < count; index++) {
+    assert.ok(offset + 46 <= directoryEnd, 'ZIP central directory record outside the directory');
     assert.equal(bytes.readUInt32LE(offset), 0x02014b50, 'Invalid ZIP central directory entry');
     const flags = bytes.readUInt16LE(offset + 8), method = bytes.readUInt16LE(offset + 10), crc = bytes.readUInt32LE(offset + 16);
     const compressed = bytes.readUInt32LE(offset + 20), length = bytes.readUInt32LE(offset + 24);
     const nameLength = bytes.readUInt16LE(offset + 28), extraLength = bytes.readUInt16LE(offset + 30), commentLength = bytes.readUInt16LE(offset + 32);
     const local = bytes.readUInt32LE(offset + 42);
+    const next = offset + 46 + nameLength + extraLength + commentLength;
+    assert.ok(next <= directoryEnd, 'ZIP central directory record outside the directory');
     const name = new TextDecoder('utf-8', {fatal: true}).decode(bytes.subarray(offset + 46, offset + 46 + nameLength));
     assert.ok((flags & 1) === 0, `Encrypted ZIP entry: ${name}`);
     assert.ok(compressed !== 0xffffffff && length !== 0xffffffff && local !== 0xffffffff, 'ZIP64 archives are not supported');
+    assert.ok(method === 0 || method === 8, `Unsupported ZIP compression method ${method}: ${name}`);
     assert.ok(name && !name.startsWith('/') && !name.includes('\\') && !name.split('/').some(part => part === '.' || part === '..'), `Invalid ZIP entry name: ${name}`);
     assert.ok(!entries.has(name), `Repeated ZIP entry: ${name}`);
-    entries.set(name, {name, method, crc, compressed, length, local});
-    offset += 46 + nameLength + extraLength + commentLength;
+    entries.set(name, {name, method, crc, compressed, length, local, nameBytes: bytes.subarray(offset + 46, offset + 46 + nameLength)});
+    offset = next;
   }
+  assert.equal(offset, directoryEnd, 'ZIP central directory size differs from its records');
   /** The bytes of one entry, inflated and checked against its CRC-32 and size. */
   function extract(name) {
     const entry = entries.get(name);
     assert.ok(entry, `Missing ZIP entry: ${name}`);
+    assert.ok(entry.local + 30 <= start, `ZIP local header outside the archive data: ${name}`);
     assert.equal(bytes.readUInt32LE(entry.local), 0x04034b50, `Invalid ZIP local header: ${name}`);
-    const data = entry.local + 30 + bytes.readUInt16LE(entry.local + 26) + bytes.readUInt16LE(entry.local + 28);
+    const nameLength = bytes.readUInt16LE(entry.local + 26);
+    assert.ok(bytes.subarray(entry.local + 30, entry.local + 30 + nameLength).equals(entry.nameBytes), `ZIP local header names another entry: ${name}`);
+    const data = entry.local + 30 + nameLength + bytes.readUInt16LE(entry.local + 28);
+    assert.ok(data + entry.compressed <= start, `Truncated ZIP entry: ${name}`);
     const raw = bytes.subarray(data, data + entry.compressed);
-    assert.equal(raw.length, entry.compressed, `Truncated ZIP entry: ${name}`);
-    let content;
-    if (entry.method === 0) content = raw;
-    else if (entry.method === 8) content = entry.length ? inflateRawSync(raw, {maxOutputLength: entry.length}) : Buffer.alloc(0);
-    else assert.fail(`Unsupported ZIP compression method ${entry.method}: ${name}`);
+    const content = entry.method === 0 ? raw : entry.length ? inflateRawSync(raw, {maxOutputLength: entry.length}) : Buffer.alloc(0);
     assert.equal(content.length, entry.length, `ZIP entry size mismatch: ${name}`);
     assert.equal(crc32(content) >>> 0, entry.crc, `ZIP entry CRC mismatch: ${name}`);
     return content;

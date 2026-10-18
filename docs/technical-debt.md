@@ -175,3 +175,14 @@ No file this project builds is signed. `release-identity.json` records each PE i
 - Sign the plugin DLL before the build stages it, so that the bundle manifest, the install registry's ownership hashes and the released plugin list name the signed bytes.
 
 **Until then:** releases are unsigned internal alphas, labelled so. No certificate, signing service or paid product is authorized by this entry.
+
+## TD-015: Only the win32-x64 better-sqlite3 binding in the package
+
+Recorded October 18, 2026 by the coordinator with ET-018 PR-6, from the PR review. **This entry is a coordinator decision under the owner's standing delegation of October 15, 2026, not an individually owner-approved deferral.** The owner may revise it.
+
+The x64 package carries every prebuilt binding that better-sqlite3 13.0.3 ships under `resources/app.asar.unpacked/node_modules/better-sqlite3/prebuilds/`: `win32-x64.node`, which the storage worker loads, and `win32-arm64.node`, `darwin-arm64.node`, `darwin-x64.node`, `linux-arm64.node`, `linux-x64.node`, `linuxmusl-arm64.node` and `linuxmusl-x64.node`, which Windows x64 never loads. `release-identity.json` lists them (the PE images in `peImages`, the ELF and Mach-O ones in `foreignNodeAddons`; [releases](release.md#release-identity)). They add size and unsigned native files to every release without any use.
+
+**Future work:**
+- Package only `prebuilds/win32-x64.node`, through the Forge `ignore` filter or an `afterCopy` hook, and add an `inspect:package` assertion that no other prebuild is present, while the storage worker still resolves its binding.
+
+**Until then:** the package ships all prebuilds, and the release identity records each with its hash. No packaging change is authorized by this entry.
