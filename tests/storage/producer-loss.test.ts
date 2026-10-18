@@ -51,7 +51,9 @@ const HANG_GUARD_MS = 30_000;
  * Liveness bounds of the overflow cases, which commit about 520 items through the worker, half of them redelivered and
  * acknowledged one by one while the server waits (awaitScriptedAcks); each item crosses several threads and the pipe.
  * Unloaded a case takes 3-6 s; with a busy-loop process on every logical processor of an already busy host, single cases
- * took up to 86 s, so the 30 s defaults are far too close. They bound a hang, never measure a duration.
+ * took up to 89 s, so the 30 s defaults are far too close. They bound a hang, never measure a duration. Two overflow
+ * cases can together exceed the 5 min CI storage step, so a real hang on a hosted runner ends as that step's timeout
+ * rather than as this guard's named failure.
  */
 const OVERFLOW_GUARD_MS = 120_000;
 const OVERFLOW_CASE_MS = 240_000;
