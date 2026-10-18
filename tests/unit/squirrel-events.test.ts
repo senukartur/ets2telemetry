@@ -474,7 +474,7 @@ describe('a step after the engine never replaces its result (final-head hosted r
     expect(receipt.data.removed).toBeGreaterThan(0);
   });
 
-  it('a throw in the README write keeps the engine\'s deferral and names the step', async () => {
+  it('a failed README write keeps the engine\'s deferral: the README is reported missing, and no step failed', async () => {
     const {fixture} = await scene();
     const failing = new Proxy(fixture.fs, {get(target, property: string) {
       const real = (target as unknown as Record<string, unknown>)[property];
@@ -484,7 +484,23 @@ describe('a step after the engine never replaces its result (final-head hosted r
     }});
     const test = harness(fixture, {fs: failing, checkRunning: () => Promise.resolve({ok: true, running: {ets2: true, ats: false, client: false}})});
     expect(await runSquirrelEvent(event('uninstall'), test.ports)).toBe(EXIT_CODES.deferred);
-    expect(test.receipts[0].receipt).toMatchObject({outcome: 'deferred', code: 'GAME_RUNNING', readme: false, plugins: {blocked: [{game: 'ets2', reason: 'GAME_RUNNING'}]}});
+    expect(test.receipts[0].receipt).toMatchObject({outcome: 'deferred', code: 'GAME_RUNNING', readme: false, failedStep: null, plugins: {blocked: [{game: 'ets2', reason: 'GAME_RUNNING'}]}});
+  });
+
+  it('a receipt that cannot even be built (JSON.stringify throws) still lets the claim resolve with its exit code', async () => {
+    const {fixture} = await scene();
+    // A count JSON cannot encode; the data root stays, so the claim is a deferral with RESIDUE_REMAINS.
+    const unencodable = {outcome: 'complete', code: null, plugins: {removed: 0, absent: 0, unrecognized: 0, notes: [], blocked: []},
+      data: {removed: 1n, kept: 0, failed: [], rootRemoved: true}, roaming: 'not-applicable'} as unknown as UninstallResult;
+    const test = harness(fixture, {runUninstall: () => Promise.resolve(unencodable)});
+    expect(await runSquirrelEvent(event('uninstall'), test.ports)).toBe(EXIT_CODES.deferred);
+    expect(test.receipts).toEqual([]);
+  });
+
+  it('a receipt port that throws synchronously still lets the claim resolve', async () => {
+    const {fixture} = await scene();
+    const test = harness(fixture, {writeReceipt: () => {throw new Error('temp folder');}});
+    expect(await runSquirrelEvent(event('uninstall'), test.ports)).toBe(EXIT_CODES.complete);
   });
 });
 

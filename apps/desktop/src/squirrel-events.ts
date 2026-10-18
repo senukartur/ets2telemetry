@@ -312,12 +312,16 @@ async function closeInstance(ports: SquirrelPorts, deadline: number): Promise<In
   return 'running';
 }
 
+/** Writes the receipt; false on any failure, including one while building it, so a claim always resolves with its code. */
 async function writeReceipt(ports: SquirrelPorts, settled: Settled, state: HookState, readme: boolean, started: number): Promise<boolean> {
-  const now = ports.now();
-  const receipt: UninstallReceipt = {format: RECEIPT_FORMAT, version: 1, createdUtc: now.toISOString(), appVersion: ports.appVersion, outcome: settled.outcome,
-    code: settled.code, mode: state.mode, instance: state.instance, plugins: settled.plugins, data: settled.data, roaming: settled.roaming, readme,
-    shortcuts: state.shortcuts, startupOffsetMs: Math.max(0, Math.round(started)), otherProcesses: state.otherProcesses, processWaitMs: state.processWaitMs, failedStep: state.failedStep, elapsedMs: Math.max(0, Math.round(ports.clock() - started))};
-  return ports.writeReceipt(`${RECEIPT_PREFIX}${receiptStamp(now)}.json`, `${JSON.stringify(receipt, null, 2)}\n`).catch(() => false);
+  try {
+    const now = ports.now();
+    const receipt: UninstallReceipt = {format: RECEIPT_FORMAT, version: 1, createdUtc: now.toISOString(), appVersion: ports.appVersion, outcome: settled.outcome,
+      code: settled.code, mode: state.mode, instance: state.instance, plugins: settled.plugins, data: settled.data, roaming: settled.roaming, readme,
+      shortcuts: state.shortcuts, startupOffsetMs: Math.max(0, Math.round(started)), otherProcesses: state.otherProcesses, processWaitMs: state.processWaitMs,
+      failedStep: state.failedStep, elapsedMs: Math.max(0, Math.round(ports.clock() - started))};
+    return await ports.writeReceipt(`${RECEIPT_PREFIX}${receiptStamp(now)}.json`, `${JSON.stringify(receipt, null, 2)}\n`);
+  } catch {return false;}
 }
 
 /**
