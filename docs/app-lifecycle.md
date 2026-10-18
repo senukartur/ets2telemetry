@@ -25,7 +25,7 @@ A development launch (`npm run dev`) and an installed copy share the same `produ
 
 ## Squirrel events
 
-Since ET-018 PR-3 (plan U2) `apps/desktop/src/squirrel-events.ts` replaces electron-squirrel-startup. Main parses the arguments first, before the diagnostic profile override, any log, the settings, plugin setup and the service (unpackaged, the first argument after the executable is the application path and is skipped). Only exactly `--squirrel-<event> <version>` is an event; `--squirrel-firstrun` alone starts the application normally; any other argument that starts with `--squirrel` exits 4 and changes nothing.
+Since ET-018 PR-3 (plan U2) `apps/desktop/src/squirrel-events.ts` replaces electron-squirrel-startup. Main parses the arguments first, before the diagnostic profile override, any log, the settings, plugin setup and the service (unpackaged, the first argument after the executable is the application path and is skipped). For any `--squirrel` argument main first turns off hardware acceleration and runs the GPU and the network service in the main process (`--in-process-gpu`, `NetworkServiceInProcess2`), so the event process starts no child process that could outlive it while Squirrel deletes the install folder; a normal launch is unchanged. Only exactly `--squirrel-<event> <version>` is an event; `--squirrel-firstrun` alone starts the application normally; any other argument that starts with `--squirrel` exits 4 and changes nothing.
 
 | Event | What runs | Exit code |
 | --- | --- | --- |
