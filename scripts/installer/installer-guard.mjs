@@ -58,6 +58,35 @@ export function checkRunSignal(env, {allowLocal = false} = {}) {
   if (allowLocal === true) return;
   if (env.GITHUB_ACTIONS !== 'true' || env.RUNNER_ENVIRONMENT !== 'github-hosted') refuse('LOCAL_RUN_REFUSED');
 }
+/**
+ * The one top-level folder Windows may create under any LOCALAPPDATA a process runs with: the shell and Update.exe add
+ * `Microsoft\Windows\Caches` (and possibly more below `Microsoft`) beside the decoy's sentinels. Nothing else is allowed.
+ */
+export const DECOY_OS_FOLDER = 'Microsoft';
+/**
+ * The decoy check of the Windows-initiated uninstall (ET-018 PR-3, U12). `before` and `after` are trees keyed by the
+ * relative path (a folder ends with `\`), with `{directory: true}` or `{size, sha256}` values. Every entry of `before`
+ * must be in `after` with the same value; a new entry is allowed only below the top-level `Microsoft` folder and never
+ * with a component named `ETS2Telemetry*`. Returns the number of allowed new entries; throws the first refusal.
+ */
+export function checkDecoyUnchanged(before, after) {
+  for (const [entry, value] of Object.entries(before)) {
+    if (!Object.hasOwn(after, entry)) refuse('DECOY_ENTRY_REMOVED');
+    const now = after[entry];
+    if (JSON.stringify({directory: now.directory ?? false, size: now.size ?? null, sha256: now.sha256 ?? null}) !==
+      JSON.stringify({directory: value.directory ?? false, size: value.size ?? null, sha256: value.sha256 ?? null})) refuse('DECOY_ENTRY_CHANGED');
+  }
+  let allowed = 0;
+  for (const entry of Object.keys(after)) {
+    if (Object.hasOwn(before, entry)) continue;
+    const parts = entry.split('\\').filter(Boolean);
+    if (parts.some(part => part.toLowerCase().startsWith('ets2telemetry'))) refuse('DECOY_PRODUCT_ENTRY_ADDED');
+    if (parts[0]?.toLowerCase() !== DECOY_OS_FOLDER.toLowerCase()) refuse('DECOY_ENTRY_ADDED');
+    allowed++;
+  }
+  return allowed;
+}
+
 /** True only on a GitHub-hosted runner; the test install creates real shortcuts only there (U12). */
 export const isHostedRunner = env => env.GITHUB_ACTIONS === 'true' && env.RUNNER_ENVIRONMENT === 'github-hosted';
 

@@ -9,7 +9,7 @@ import {promisify} from 'node:util';
 import {_electron as electron} from '@playwright/test';
 import {rendererPages} from '../ci/overlay-observation.mjs';
 import {checkedPaths, checkInstalled, checkLaunchEnvironment, checkRunPlan, checkRunSignal, FACTS_VARIABLE, factsEvidence, InstallerGuardError, installedEnvironment, normalizePath,
-  ownsRegistration, parseUninstallString, resolveRealLocation, RUN_ROOT_NAME, runLayout, steamLibraryPaths, uninstallEnvironment} from './installer-guard.mjs';
+  checkDecoyUnchanged, ownsRegistration, parseUninstallString, resolveRealLocation, RUN_ROOT_NAME, runLayout, steamLibraryPaths, uninstallEnvironment} from './installer-guard.mjs';
 
 // ET-018 PR-1 and PR-3 (REG-013, REG-017; plan U10-U13): the Node driver of the installer lifecycle in a marked test root. The
 // PowerShell harness scripts/installer/Invoke-InstallerLifecycle.ps1 orchestrates the steps and runs every command below
@@ -616,14 +616,18 @@ async function windowsUninstall(config, label, executable, expectation, rehearse
   const text = await readFile(path.join(layout.temp, receipts[0]), 'utf8');
   assert.doesNotMatch(text, /[A-Za-z]:\\|\\\\/, 'UNINSTALL_RECEIPT_HAS_PATH');
   record.receipt = JSON.parse(text);
-  assert.deepEqual(await tree(decoy), decoyBefore, 'DECOY_CHANGED');
+  // What the uninstall left, recorded before any assertion so a failing run still shows the receipt and the state.
+  const decoyAfter = await tree(decoy), kept = await keptStates(runRoot), dllAfter = await fileState(game.dll);
+  const dataEntries = await readdir(layout.dataRoot).catch(error => {if (error?.code === 'ENOENT') return null; throw error;});
+  record.after = {dataEntries, plugin: typeof dllAfter === 'string' ? dllAfter : 'present', unrelatedUnchanged: JSON.stringify(kept) === JSON.stringify(keptBefore)};
+  await writeEvidence(config, `windows-uninstall-${label}-observed.json`, record).catch(() => undefined);
+  // Windows may add its own Microsoft folder under the decoy (DECOY_OS_FOLDER); everything else must stay as it was.
+  record.decoyOsEntries = checkDecoyUnchanged(decoyBefore, decoyAfter);
   record.decoyUnchanged = true;
-  const kept = await keptStates(runRoot);
   assert.deepEqual(kept, keptBefore, 'UNRELATED_FILES_CHANGED');
   record.unrelatedUnchanged = true;
-  const dataEntries = await readdir(layout.dataRoot).catch(error => {if (error?.code === 'ENOENT') return null; throw error;});
   if (expectation === 'complete') {
-    assert.equal(await fileState(game.dll), 'absent', 'PLUGIN_NOT_REMOVED');
+    assert.equal(dllAfter, 'absent', 'PLUGIN_NOT_REMOVED');
     assert.equal(dataEntries, null, 'DATA_ROOT_REMAINS');
     assert.equal(record.receipt.outcome, 'complete', 'RECEIPT_NOT_COMPLETE');
     assert.equal(record.receipt.code, null);
@@ -632,7 +636,7 @@ async function windowsUninstall(config, label, executable, expectation, rehearse
     assert.equal(record.receipt.data.rootRemoved, true);
     assert.ok(['none', 'exited'].includes(record.receipt.instance), 'RECEIPT_INSTANCE_UNEXPECTED');
   } else {
-    assert.deepEqual(await fileState(game.dll), dllBefore, 'DEFERRED_PLUGIN_CHANGED');
+    assert.deepEqual(dllAfter, dllBefore, 'DEFERRED_PLUGIN_CHANGED');
     assert.deepEqual(dataEntries?.sort(), ['plugins', 'uninstall'], 'DEFERRED_DATA_ENTRIES_UNEXPECTED');
     assert.deepEqual((await readdir(path.join(layout.dataRoot, 'uninstall'))).sort(), ['README.txt', 'pending.json'], 'DEFERRED_UNINSTALL_FOLDER_UNEXPECTED');
     assert.deepEqual({outcome: record.receipt.outcome, code: record.receipt.code, readme: record.receipt.readme}, {outcome: 'deferred', code: 'GAME_RUNNING', readme: true},

@@ -4,7 +4,7 @@ import path from 'node:path';
 import {promisify} from 'node:util';
 import {describe, expect, it} from 'vitest';
 import {checkedPaths, checkInstalled, checkInstallTest, checkLaunchEnvironment, checkRunPlan, checkRunSignal, FACTS_VARIABLE, factsEvidence, installedEnvironment,
-  InstallerGuardError, isGuardedProcess, isHostedRunner, minimalPath, normalizePath, ownsRegistration, parseUninstallString, resolveRealLocation, runLayout,
+  checkDecoyUnchanged, InstallerGuardError, isGuardedProcess, isHostedRunner, minimalPath, normalizePath, ownsRegistration, parseUninstallString, resolveRealLocation, runLayout,
   steamLibraryPaths, uninstallEnvironment, type RunPlanFacts} from '../../scripts/installer/installer-guard.mjs';
 import {temporaryResources} from '../shared/resources';
 
@@ -65,6 +65,28 @@ describe('CI signal (local runs refused)', () => {
 });
 
 describe('Windows-initiated uninstall (ET-018 PR-3)', () => {
+  // The decoy's trees as the driver's tree() records them: relative paths, folders ending with a backslash.
+  const decoy = {
+    'ETS2Telemetry\\': {directory: true}, 'ETS2Telemetry\\data\\': {directory: true},
+    'ETS2Telemetry\\data\\telemetry.sqlite': {size: 55, sha256: 'a'.repeat(64)},
+    'ETS2TelemetryDesktop\\': {directory: true}, 'ETS2TelemetryDesktop\\sentinel.txt': {size: 18, sha256: 'b'.repeat(64)}
+  };
+  const OS = {'Microsoft\\': {directory: true}, 'Microsoft\\Windows\\': {directory: true}, 'Microsoft\\Windows\\Caches\\': {directory: true}};
+  it('allows the Microsoft folder Windows adds to the decoy, and nothing else', () => {
+    expect(checkDecoyUnchanged(decoy, decoy)).toBe(0);
+    expect(checkDecoyUnchanged(decoy, {...decoy, ...OS})).toBe(3);
+    expect(checkDecoyUnchanged(decoy, {...decoy, ...OS, 'Microsoft\\Windows\\Caches\\cversions.db': {size: 4, sha256: 'c'.repeat(64)}})).toBe(4);
+  });
+  it.each([
+    ['a new ETS2Telemetry entry', {...decoy, 'ETS2Telemetry\\logs\\': {directory: true}}, 'DECOY_PRODUCT_ENTRY_ADDED'],
+    ['a new top-level ETS2Telemetry* folder', {...decoy, 'ETS2Telemetry Desktop\\': {directory: true}}, 'DECOY_PRODUCT_ENTRY_ADDED'],
+    ['an ETS2Telemetry name below Microsoft', {...decoy, ...OS, 'Microsoft\\ETS2Telemetry\\': {directory: true}}, 'DECOY_PRODUCT_ENTRY_ADDED'],
+    ['a changed sentinel', {...decoy, 'ETS2TelemetryDesktop\\sentinel.txt': {size: 18, sha256: 'd'.repeat(64)}}, 'DECOY_ENTRY_CHANGED'],
+    ['a sentinel turned into a folder', {...decoy, 'ETS2Telemetry\\data\\telemetry.sqlite': {directory: true}}, 'DECOY_ENTRY_CHANGED'],
+    ['a removed sentinel', Object.fromEntries(Object.entries(decoy).filter(([entry]) => !entry.endsWith('sentinel.txt'))), 'DECOY_ENTRY_REMOVED'],
+    ['a new top-level entry other than Microsoft', {...decoy, ...OS, 'Temp\\': {directory: true}}, 'DECOY_ENTRY_ADDED'],
+    ['a new top-level file', {...decoy, 'Microsoft.txt': {size: 1, sha256: 'e'.repeat(64)}}, 'DECOY_ENTRY_ADDED']
+  ])('refuses %s', (_name, after, code) => expect(refusal(() => checkDecoyUnchanged(decoy, after))).toBe(code));
   const update = `${RUN_ROOT}\\LocalAppData\\ETS2TelemetryDesktop\\Update.exe`;
   it.each([[`"${update}" --uninstall`, ['--uninstall']], [`"${update}" --uninstall -s`, ['--uninstall', '-s']]] as const)('runs the registered %s', (value, args) => {
     expect(parseUninstallString(value, RUN_ROOT)).toEqual({program: update, args});
