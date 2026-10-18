@@ -167,28 +167,62 @@ function Get-VendorHelper([string]$Version) {
     if (!(Test-Path -LiteralPath $file -PathType Leaf)) { throw ('Vendor helper missing in app-' + $Version) }
     return [ordered]@{sha256=(Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash; bytes=(Get-Item -LiteralPath $file).Length}
 }
+$appFolder = '^app-\d{1,9}\.\d{1,9}\.\d{1,9}(-[0-9A-Za-z.-]{1,40})?$'
+function Get-BinaryRootListing($Helper) {
+    # Every entry left in the binary root by relative name, with its kind, size and whether its bytes are Squirrel's helper
+    # or its one-space .dead marker; at most 256 entries. Written to the evidence before any residue assertion.
+    $rows = [Collections.Generic.List[object]]::new()
+    if (!(Test-Path -LiteralPath $binaryRoot -PathType Container)) { return ,$rows.ToArray() }
+    foreach ($item in @(Get-ChildItem -LiteralPath $binaryRoot -Recurse -Force | Select-Object -First 256)) {
+        $relative = $item.FullName.Substring($binaryRoot.Length + 1).Replace('\', '/')
+        $reparse = [bool]($item.Attributes -band [IO.FileAttributes]::ReparsePoint)
+        if ($item.PSIsContainer) { $rows.Add([ordered]@{relative=$relative; kind='directory'; reparse=$reparse}); continue }
+        $isHelper = $false; $isMarker = $false
+        if (!$reparse -and $item.Length -eq $Helper.bytes) { $isHelper = (Get-FileHash -LiteralPath $item.FullName -Algorithm SHA256).Hash -eq $Helper.sha256 }
+        if (!$reparse -and $item.Length -eq 1) {
+            $stream = [IO.File]::Open($item.FullName, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+            try { $isMarker = $stream.ReadByte() -eq 32 } finally { $stream.Dispose() }
+        }
+        $rows.Add([ordered]@{relative=$relative; kind='file'; bytes=$item.Length; reparse=$reparse; vendorHelper=$isHelper; deadMarker=$isMarker})
+    }
+    return ,$rows.ToArray()
+}
 function Assert-Uninstalled([string]$Label, $Helper) {
     # After a Windows-initiated uninstall: no registration, no product shortcut, and the binary root holds only Squirrel's
-    # residue (TD-013): Update.exe and app-<version>\squirrel.exe with the helper's bytes and the one-byte .dead marker
-    # (the predicate of tests/windows/Assert-UninstallResidue.ps1, for every app- folder a reinstall left behind).
+    # own residue (TD-013). At the pinned commit eef37460ae, FullUninstall deletes the root with DeleteDirectoryOrJustGiveUp,
+    # which leaves every file it cannot delete, then always writes the one-space .dead marker; cleanDeadVersions marks an
+    # app- folder it could not delete with its own .dead. Allowed, and nothing else: app-<version> folders, Update.exe and
+    # app-<version>\squirrel.exe with the installed helper's bytes, the root .dead and app-<version>\.dead markers, at
+    # most 32 entries. Any file of this application (its executable, resources, a stub, a log) fails with its name.
     if ($null -ne (Read-Registration)) { throw ('UNINSTALL_REGISTRATION_REMAINS after ' + $Label) }
     Assert-ProductLinks $Label $false
+    $listing = Get-BinaryRootListing $Helper
+    ConvertTo-Json -InputObject $listing -Depth 3 | Set-Content -LiteralPath (Join-Path $evidence ('residue-' + $Label + '.json')) -Encoding utf8
     if (!(Test-Path -LiteralPath $binaryRoot -PathType Container)) { throw ('UNINSTALL_ROOT_OR_MARKER_MISSING after ' + $Label) }
+    $files = Assert-ResidueListing $Label $listing
+    $script:report.uninstalls += ,[ordered]@{label=$Label; registrationRemoved=$true; residueEntries=$listing.Count; vendorFiles=$files; deadMarker=$true}
+}
+function Assert-ResidueListing([string]$Label, [object[]]$Listing) {
+    # The residue rule over a listing of Get-BinaryRootListing; returns the number of vendor helper files.
+    if ($Listing.Count -gt 32) { throw ('UNINSTALL_RESIDUE_TOO_LARGE after ' + $Label + ': ' + $Listing.Count) }
     $marker = $false; $files = 0
-    foreach ($item in @(Get-ChildItem -LiteralPath $binaryRoot -Recurse -Force)) {
-        if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'UNINSTALL_REPARSE_POINT' }
-        $relative = $item.FullName.Substring($binaryRoot.Length + 1).Replace('\', '/')
-        if ($item.PSIsContainer) { if ($relative -notmatch '^app-\d+\.\d+\.\d+$') { throw ('UNINSTALL_UNEXPECTED_DIRECTORY after ' + $Label) }; continue }
-        if ($relative -ieq '.dead') {
-            if ($item.Length -ne 1) { throw 'UNINSTALL_MARKER_INVALID' }
-            $marker = $true; continue
+    foreach ($row in $Listing) {
+        $name = $row.relative
+        if ($row.reparse) { throw ('UNINSTALL_REPARSE_POINT after ' + $Label + ': ' + $name) }
+        if ($row.kind -eq 'directory') { if ($name -notmatch $appFolder) { throw ('UNINSTALL_UNEXPECTED_DIRECTORY after ' + $Label + ': ' + $name) }; continue }
+        $parts = $name.Split('/')
+        $inApp = $parts.Count -eq 2 -and $parts[0] -match $appFolder
+        if ($name -ieq '.dead' -or ($inApp -and $parts[1] -ieq '.dead')) {
+            if (!$row.deadMarker) { throw ('UNINSTALL_MARKER_INVALID after ' + $Label + ': ' + $name) }
+            if ($name -ieq '.dead') { $marker = $true }
+            continue
         }
-        if ($relative -ine 'Update.exe' -and $relative -inotmatch '^app-\d+\.\d+\.\d+/squirrel\.exe$') { throw ('UNINSTALL_UNEXPECTED_FILE after ' + $Label) }
-        if ($item.Length -ne $Helper.bytes -or (Get-FileHash -LiteralPath $item.FullName -Algorithm SHA256).Hash -ne $Helper.sha256) { throw ('UNINSTALL_VENDOR_HELPER_CHANGED after ' + $Label) }
+        if ($name -ine 'Update.exe' -and !($inApp -and $parts[1] -ieq 'squirrel.exe')) { throw ('UNINSTALL_UNEXPECTED_FILE after ' + $Label + ': ' + $name) }
+        if (!$row.vendorHelper) { throw ('UNINSTALL_VENDOR_HELPER_CHANGED after ' + $Label + ': ' + $name) }
         $files++
     }
     if (!$marker) { throw ('UNINSTALL_ROOT_OR_MARKER_MISSING after ' + $Label) }
-    $script:report.uninstalls += ,[ordered]@{label=$Label; registrationRemoved=$true; vendorFiles=$files; deadMarker=$marker}
+    return $files
 }
 
 $saved = @{}
