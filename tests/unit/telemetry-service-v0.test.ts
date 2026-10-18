@@ -433,8 +433,10 @@ it('bounds the v1 ingestion stop by its 1,000 ms intake budget and reports a lat
   const f = await stoppedService(report => {report({type: 'stopped'}); return Promise.resolve();});
   try {
     f.v1.stopSource.mockImplementation(() => new Promise<void>(() => undefined));
-    f.stop(); await vi.advanceTimersByTimeAsync(999);
+    f.stop(); await vi.advanceTimersByTimeAsync(1000);
     expect(f.stops()).toEqual([]); expect(f.history.close).not.toHaveBeenCalled();
+    // Requirement change (October 18, 2026): the timeout verdict runs one event-loop turn after the budget, which the
+    // fake clock schedules 1 ms later.
     await vi.advanceTimersByTimeAsync(1);
     expect(f.steps().find(step => step.name === 'v1-ingestion')).toMatchObject({phase: 'intake', outcome: 'timeout'});
     expect(f.stops()).toEqual([{type: 'stopped', clean: false}]); expect(f.exit).toHaveBeenCalledExactlyOnceWith(1);
@@ -488,11 +490,14 @@ describe('ET-015a recording gate in the service (R3, R10, R14)', () => {
     try {
       const hang = () => new Promise<void>(() => undefined);
       f.v1.stopSource.mockImplementation(hang); f.v1.flush.mockImplementation(hang);
-      f.stop(); await vi.advanceTimersByTimeAsync(1000);
+      // Requirement change (October 18, 2026): each timeout verdict runs one event-loop turn after its budget (an
+      // immediate), which the fake clock schedules 1 ms later; the three phases end at 1,001, 1,502 and 2,503 ms.
+      f.stop(); await vi.advanceTimersByTimeAsync(1000); expect(f.v1.flush).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
       expect(f.v1.flush).toHaveBeenCalledOnce(); expect(f.history.close).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(499); expect(f.history.close).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(500); expect(f.history.close).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(1); expect(f.history.close).toHaveBeenCalledOnce();
-      await vi.advanceTimersByTimeAsync(999); expect(f.stops()).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1000); expect(f.stops()).toEqual([]);
       await vi.advanceTimersByTimeAsync(1);
       expect(f.stops()).toEqual([{type: 'stopped', clean: false}]); expect(f.exit).toHaveBeenCalledExactlyOnceWith(1);
       expect(f.steps().filter(step => step.outcome !== 'ok').map(step => [step.phase, step.name, step.outcome])).toEqual([
@@ -620,7 +625,9 @@ it.each(['hanging', 'failed'])('reports a %s storage step within its budget as a
     report({type: 'failed', code: 'SERVICE_STOP_FAILED'}); return Promise.resolve();
   });
   try {
-    f.stop(); await vi.advanceTimersByTimeAsync(mode === 'hanging' ? 999 : 0);
+    // Requirement change (October 18, 2026): the timeout verdict runs one event-loop turn after the 1,000 ms budget,
+    // which the fake clock schedules 1 ms later.
+    f.stop(); await vi.advanceTimersByTimeAsync(mode === 'hanging' ? 1000 : 0);
     if (mode === 'hanging') {expect(f.stops()).toEqual([]); await vi.advanceTimersByTimeAsync(1);}
     else expect(f.parent.postMessage).toHaveBeenCalledWith({type: 'failed', code: 'SERVICE_STOP_FAILED'});
     expect(f.stops()).toEqual([{type: 'stopped', clean: false}]);
