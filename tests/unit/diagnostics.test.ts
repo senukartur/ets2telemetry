@@ -146,7 +146,7 @@ it('reports a failed write and everything after it on the console, in order, wit
   expect(control.writes).toHaveLength(1);
 });
 // Crash path (review round 1): the telemetry service's crash handler writes the queue synchronously before it exits.
-it('drains the queue synchronously on the crash path; a batch already in flight may land after it', async () => {
+it('drains the queue synchronously on the crash path; a batch already in flight may land after it or be lost', async () => {
   const dir = directory(), log = createDiagnostics(dir, true);
   const release = held();
   log('IN_FLIGHT'); log('QUEUED'); log('SERVICE_UNCAUGHT', new Error('cause'), {kind: 'exception'});
@@ -158,7 +158,8 @@ it('drains the queue synchronously on the crash path; a batch already in flight 
   expect(rows(dir)[1].detail).toMatchObject({message: 'cause'});
   release();
   expect(await log.flush(5000)).toBe(true);
-  // The documented reordering: the batch that was in flight lands after the drained rows, and nothing is written twice.
+  // The documented reordering: here the batch that was in flight lands after the drained rows (a process that exits first
+  // loses it instead), and nothing is written twice.
   expect(rows(dir).map(row => row.event)).toEqual(['QUEUED', 'SERVICE_UNCAUGHT', 'IN_FLIGHT']);
   log.drainSync();
   expect(control.syncWrites).toHaveLength(1);

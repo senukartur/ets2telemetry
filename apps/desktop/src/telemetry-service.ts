@@ -28,17 +28,24 @@ const logLocation = serviceLogLocation(process.env, tmpdir());
 const log = createDiagnostics(logLocation.directory, logLocation.detailed);
 log('SERVICE_BOOT');
 /**
- * A crash ends the service at once, so the records still queued behind the asynchronous log write would be lost. Log one
- * fixed row, write the queue synchronously (at most the 256 KiB the log bounds counted) and exit 1, as an uncaught error
- * did before. A batch already being written asynchronously may land after the drained rows.
+ * An uncaught exception ends the service at once, so the records still queued behind the asynchronous log write would be
+ * lost. Log one fixed row, write the queue synchronously (at most the 256 KiB the log bounds counted) and exit 1, as an
+ * uncaught exception did before. A batch already being written asynchronously may land after the drained rows or be
+ * lost, because process.exit does not wait for thread-pool work; nothing is written twice.
  */
-function crashed(kind: 'exception' | 'rejection', error: unknown): void {
-  log('SERVICE_UNCAUGHT', error, {kind});
+process.on('uncaughtException', error => {
+  log('SERVICE_UNCAUGHT', error);
   log.drainSync();
   process.exit(1);
-}
-process.on('uncaughtException', error => crashed('exception', error));
-process.on('unhandledRejection', reason => crashed('rejection', reason));
+});
+/**
+ * Without a handler an Electron 44 utilityProcess only warns on an unhandled rejection and keeps running (measured on
+ * October 18, 2026), so the service keeps running here too: it logs one fixed row and writes it at once.
+ */
+process.on('unhandledRejection', reason => {
+  log('SERVICE_UNHANDLED_REJECTION', reason);
+  log.drainSync();
+});
 /**
  * Main answers a `failed` report after readiness by killing this process, so the rows that explain the failure are
  * written first, waiting at most SERVICE_EXIT_FLUSH_MS.

@@ -644,22 +644,26 @@ it.each([
     expect(f.parent.postMessage).toHaveBeenLastCalledWith(message);
   } finally {f.restore();}
 });
-it('logs SERVICE_UNCAUGHT, drains the log synchronously and exits 1 on an uncaught error or rejection', async () => {
-  const before = new Map((['uncaughtException', 'unhandledRejection'] as const).map(name => [name, (process as unknown as EventEmitter).listeners(name)]));
+// Review round 2: an uncaught exception still ends the service with exit 1. An unhandled rejection only warned before (an
+// Electron 44.7.0 utilityProcess without a handler keeps running), so the service logs it and keeps running.
+it.each([
+  ['uncaughtException', 'SERVICE_UNCAUGHT', [1]],
+  ['unhandledRejection', 'SERVICE_UNHANDLED_REJECTION', []]
+] as const)('on %s logs %s and drains the log synchronously; exit codes %j', async (event, row, exits) => {
+  const before = (process as unknown as EventEmitter).listeners(event);
   const f = await stoppedService(report => {report({type: 'stopped'}); return Promise.resolve();});
   try {
-    for (const [event, kind] of [['uncaughtException', 'exception'], ['unhandledRejection', 'rejection']] as const) {
-      const added = (process as unknown as EventEmitter).listeners(event).filter(listener => !before.get(event)!.includes(listener));
-      expect(added).toHaveLength(1);
-      f.exit.mockClear(); f.log.drainSync.mockClear();
-      const error = new Error('crash');
-      (added[0] as (error: unknown) => void)(error);
-      expect(f.log).toHaveBeenLastCalledWith('SERVICE_UNCAUGHT', error, {kind});
-      expect(f.log.drainSync).toHaveBeenCalledOnce();
-      expect(f.exit).toHaveBeenCalledExactlyOnceWith(1);
-      expect(f.log.mock.invocationCallOrder.at(-1)!).toBeLessThan(f.log.drainSync.mock.invocationCallOrder[0]);
-      expect(f.log.drainSync.mock.invocationCallOrder[0]).toBeLessThan(f.exit.mock.invocationCallOrder[0]);
-    }
+    const added = (process as unknown as EventEmitter).listeners(event).filter(listener => !before.includes(listener));
+    expect(added).toHaveLength(1);
+    const error = new Error('crash');
+    (added[0] as (error: unknown) => void)(error);
+    expect(f.log).toHaveBeenLastCalledWith(row, error);
+    expect(f.log.drainSync).toHaveBeenCalledOnce();
+    expect(f.log.mock.invocationCallOrder.at(-1)!).toBeLessThan(f.log.drainSync.mock.invocationCallOrder[0]);
+    expect(f.exit.mock.calls.map(call => call[0])).toEqual(exits);
+    if (exits.length) expect(f.log.drainSync.mock.invocationCallOrder[0]).toBeLessThan(f.exit.mock.invocationCallOrder[0]);
+    // A service that survived a rejection still stops in order.
+    else {f.stop(); await vi.advanceTimersByTimeAsync(0); expect(f.stops()).toEqual([{type: 'stopped', clean: true}]); expect(f.exit).toHaveBeenCalledExactlyOnceWith(0);}
   } finally {f.restore();}
 });
 it('waits for the history database to close before the single stopped report, and reports a failed close as unclean', async () => {

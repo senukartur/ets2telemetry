@@ -143,7 +143,12 @@ Main and the telemetry service each write `startup.jsonl` with `createDiagnostic
 
 **Stop margin.** Main's 3,000 ms kill deadline starts when it posts `stop`. The service's stop sequence takes at most 2,500 ms plus three event-loop turns, one per phase, for the `timeout` verdicts ([service shutdown](#service-shutdown)). With the 150 ms exit flush, about 350 ms remain for the `stop` message delivery, the turns and the process exit. A stop that uses every step budget and also meets a disk stall at exit therefore still ends before the kill; the earlier 250 ms bound left 250 ms.
 
-**Crash path.** The service handles `uncaughtException` and `unhandledRejection` itself. It logs one fixed `SERVICE_UNCAUGHT` row with `{kind: 'exception' | 'rejection'}` (the error detail only in diagnostic-directory mode). It then writes the whole queue with one synchronous append (`drainSync`, at most the 256 KiB the bounds counted) and exits 1, as an uncaught error did before. A batch that the asynchronous writer already has in flight may land after the drained rows, so on this path the file can be out of order. That is accepted on a crash path, because the drained rows would otherwise be lost. Main keeps its existing handlers, which run the orderly exit.
+**Crash path.** The service handles `uncaughtException` and `unhandledRejection` itself, and the error detail is logged only in diagnostic-directory mode:
+- **Uncaught exception.** It logs one fixed `SERVICE_UNCAUGHT` row, writes the whole queue with one synchronous append (`drainSync`, at most the 256 KiB the bounds counted) and exits 1, as an uncaught exception did before.
+- **Unhandled rejection.** It logs one fixed `SERVICE_UNHANDLED_REJECTION` row, drains the queue the same way and keeps running. Without a handler, an Electron 44.7.0 utilityProcess only printed `UnhandledPromiseRejectionWarning` and kept running: on October 18, 2026, a scratch utilityProcess that rejected a promise still answered 1 s later. The handler keeps that behaviour.
+- **In-flight batch.** A batch that the asynchronous writer already has in flight may land after the drained rows, or be lost when the process exits first, because `process.exit` does not wait for thread-pool work. Nothing is written twice. On these paths the file can therefore be out of order or miss that batch. That is accepted, because the drained rows would otherwise be lost.
+
+Main keeps its existing handlers, which run the orderly exit.
 
 With an idle disk the flush takes a few milliseconds. Not covered:
 - A disk stall longer than the bound at exit loses the rows still queued, instead of delaying the exit further.

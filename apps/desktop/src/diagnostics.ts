@@ -29,8 +29,9 @@ export interface DiagnosticLog {
    */
   flush(timeoutMs: number): Promise<boolean>;
   /**
-   * Crash path only: writes every queued record at once with a synchronous append (at most the 256 KiB the bounds
-   * counted). A batch already being written asynchronously may land after these records.
+   * Crash and unhandled-rejection paths only: writes every queued record at once with a synchronous append (at most the
+   * 256 KiB the bounds counted). A batch already being written asynchronously may land after these records, or be lost
+   * if the process exits first; nothing is written twice.
    */
   drainSync(): void;
 }
