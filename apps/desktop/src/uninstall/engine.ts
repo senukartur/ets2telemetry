@@ -2,7 +2,7 @@ import path from 'node:path';
 import type {AtomicFileSystem} from '../plugin-setup/atomic-json-file';
 import {confineToRoot} from '../plugin-setup/mode';
 import type {InstallerFileSystem, RunningCheck} from '../plugin-setup/plugin-installer';
-import {PluginRegistry, type PluginRegistryState} from '../plugin-setup/plugin-registry';
+import {PluginRegistry, sameRoot, type PluginRegistryState} from '../plugin-setup/plugin-registry';
 import type {RunningGames} from '../plugin-setup/game-processes';
 import type {PluginGame} from '../plugin-setup/steam-discovery';
 import {DATA_ALLOWLIST, KEPT_UNTIL_CLEAN, wipeDataRoot, type DataEntry, type WipeFailureCode, type WipeFileSystem} from './data-wipe';
@@ -132,7 +132,7 @@ export async function runUninstall(ports: UninstallPorts): Promise<UninstallResu
   // cleans every folder, and what the intent cannot hold is the registry's alone and stays there (intentFolders).
   const intent: PendingRecord = recordable({format: 'ets2telemetry.uninstall-pending', version: 1, phase: 'plugins',
     startedUtc: previous.state === 'present' ? previous.record.startedUtc : now().toISOString(), attempts: previous.state === 'present' ? previous.record.attempts + 1 : 1,
-    known, folders: intentFolders(folders, kept)});
+    known, folders: intentFolders(folders, kept)}, ports.known, kept);
   try {await writePendingRecord(ports.fs, dataRoot, intent);} catch {return refused('INTENT_FAILED');}
   log('UNINSTALL_INTENT', {folders: folders.length, recorded: intent.folders.length, attempts: intent.attempts});
 
@@ -167,7 +167,7 @@ export async function runUninstall(ports: UninstallPorts): Promise<UninstallResu
   if (!complete) {
     // The intent keeps only what is left to clean, for the next run or the deferred cleanup (PR-5).
     const left = intentFolders(blocked.map(entry => entry.folder), kept);
-    try {await writePendingRecord(ports.fs, dataRoot, recordable({...intent, phase: 'deferred', folders: left}));} catch {/* the earlier intent stays; still deferred */}
+    try {await writePendingRecord(ports.fs, dataRoot, recordable({...intent, phase: 'deferred', folders: left}, ports.known, kept));} catch {/* the earlier intent stays; still deferred */}
   }
   const code: UninstallCode | null = complete ? null : budgetSpent ? 'BUDGET_EXPIRED' : registryProblem ?? blocked[0]?.reason ?? (data.failed.length ? 'DATA_ENTRY_BLOCKED' : null);
   const result: UninstallResult = {outcome: complete ? 'complete' : 'deferred', code, plugins, data, roaming: complete ? await roaming(ports, roots.mode) : 'not-run'};
@@ -176,13 +176,25 @@ export async function runUninstall(ports: UninstallPorts): Promise<UninstallResu
 }
 
 /**
- * The record within the intent's byte bound: long roots can make even 32 folders exceed 128 KiB. Folders drop from the
- * end, the registry's first (intentFolders puts the intent's own first), so the record never becomes unwritable.
+ * The record within the intent's byte bound: long roots can make even 32 folders exceed 128 KiB. The registry's folders
+ * drop from the end first (intentFolders puts the intent's own first); then the known hashes only an earlier intent
+ * carried, from the end, while this build's own stay; only then the intent's own folders. The record never becomes
+ * unwritable.
  */
-function recordable(record: PendingRecord): PendingRecord {
-  let folders = record.folders;
-  while (folders.length && !pendingRecordFits({...record, folders})) folders = folders.slice(0, -1);
-  return folders === record.folders ? record : {...record, folders};
+export function recordable(record: PendingRecord, ownKnown: readonly string[], kept: readonly PendingFolder[]): PendingRecord {
+  const fits = (candidate: PendingRecord) => pendingRecordFits(candidate);
+  if (fits(record)) return record;
+  const isOwn = (folder: PendingFolder) => kept.some(other => other.game === folder.game && sameRoot(other.root, folder.root));
+  let current = record;
+  while (current.folders.length && !isOwn(current.folders.at(-1)!) && !fits(current)) current = {...current, folders: current.folders.slice(0, -1)};
+  const own = new Set(ownKnown);
+  while (!fits(current)) {
+    const last = current.known.findLastIndex(hash => !own.has(hash));
+    if (last < 0) break;
+    current = {...current, known: current.known.filter((_hash, index) => index !== last)};
+  }
+  while (current.folders.length && !fits(current)) current = {...current, folders: current.folders.slice(0, -1)};
+  return current;
 }
 
 async function roaming(ports: UninstallPorts, mode: 'production' | 'test-root'): Promise<UninstallResult['roaming']> {

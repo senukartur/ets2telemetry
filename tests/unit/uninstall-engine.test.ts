@@ -2,8 +2,9 @@ import * as fsp from 'node:fs/promises';
 import path from 'node:path';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 import type {RunningCheck} from '../../apps/desktop/src/plugin-setup/plugin-installer';
-import {runUninstall, type UninstallFileSystem, type UninstallPorts, type UninstallResult} from '../../apps/desktop/src/uninstall/engine';
-import {MAX_PENDING_BYTES, parsePendingRecord, serializePendingRecord, type PendingFolder} from '../../apps/desktop/src/uninstall/pending-record';
+import {recordable, runUninstall, type UninstallFileSystem, type UninstallPorts, type UninstallResult} from '../../apps/desktop/src/uninstall/engine';
+import {MAX_KNOWN_HASHES, MAX_PENDING_BYTES, parsePendingRecord, pendingRecordFits, serializePendingRecord, type PendingFolder, type PendingRecord}
+  from '../../apps/desktop/src/uninstall/pending-record';
 import {resolveUninstallRoots, type UninstallRoots} from '../../apps/desktop/src/uninstall/roots';
 import {guardedTempRoot, type GuardedRoot} from '../shared/guarded-fs';
 import {CURRENT, exists, FOREIGN, gameFolder, installFixture, installRecord, KNOWN, listTree, LOCAL_BUILD, notRunning, pendingInstall, RELEASED, seedData, sha, UTC,
@@ -268,6 +269,26 @@ describe('outcomes', () => {
     expect(deferred?.folders.length).toBeLessThan(16);
     expect(deferred?.folders.map(folder => folder.root)).toEqual(folders.slice(0, deferred?.folders.length).map(folder => folder.root));
     expect(await fsp.readFile(path.win32.join(fixture.registryDirectory, 'setup.json'))).toEqual(registryBefore);
+  });
+  it('trims the registry\'s folders, then the hashes only an earlier intent carried, before one of the intent\'s own folders', () => {
+    // Synthetic records only; nothing is written. 30 of the intent's own folders with long roots, 2 registry folders.
+    const segment = 'x'.repeat(200);
+    const root = (name: string) => `C:\\Games\\${Array.from({length: 19}, () => segment).join('\\')}\\${name}`;
+    const folder = (name: string): PendingFolder => ({game: 'ets2', root: root(name), hashes: [sha(CURRENT)], temps: [], createdPluginsDirectory: false});
+    const own = Array.from({length: 30}, (_, index) => folder(`Own${index}`)), registry = [folder('Registry0'), folder('Registry1')];
+    const earlier = Array.from({length: MAX_KNOWN_HASHES - KNOWN.length}, (_, index) => index.toString(16).padStart(64, 'e'));
+    const record: PendingRecord = {format: 'ets2telemetry.uninstall-pending', version: 1, phase: 'plugins', startedUtc: UTC, attempts: 2,
+      known: [...KNOWN, ...earlier].sort(), folders: [...own, ...registry]};
+    // Preconditions: the own folders fit with this build's hashes alone, but not with every earlier hash too.
+    expect(pendingRecordFits({...record, folders: own, known: [...KNOWN].sort()})).toBe(true);
+    expect(pendingRecordFits({...record, folders: own})).toBe(false);
+    const bounded = recordable(record, KNOWN, own);
+    expect(pendingRecordFits(bounded)).toBe(true);
+    expect(bounded.folders).toEqual(own);
+    for (const hash of KNOWN) expect(bounded.known).toContain(hash);
+    expect(bounded.known.length).toBeLessThan(record.known.length);
+    // A record that fits is returned as it is.
+    expect(recordable(bounded, KNOWN, own)).toBe(bounded);
   });
   it('calls the Roaming userData hook only in production mode and only after a complete run', async () => {
     const current = await scene();
