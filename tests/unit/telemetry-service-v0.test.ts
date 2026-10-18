@@ -3,6 +3,7 @@ import {EventEmitter} from 'node:events';
 import net from 'node:net';
 import {randomUUID} from 'node:crypto';
 import {afterEach, beforeAll, beforeEach, describe, expect, it, vi} from 'vitest';
+import {SERVICE_EXIT_FLUSH_MS} from '../../apps/desktop/src/diagnostics';
 import {TelemetryIngestion, TEST_PIPE_PATTERN, initialLive, sourceSelection} from '../../apps/desktop/src/telemetry-ingestion';
 import {LiveSubscriptions, type LivePort} from '../../apps/desktop/src/live-subscriptions';
 import {ServiceSupervisor} from '../../apps/desktop/src/service-supervisor';
@@ -58,9 +59,16 @@ beforeAll(async () => {
   const service = await stoppedService(report => {report({type: 'stopped'}); return Promise.resolve();});
   try {service.stop(); await vi.advanceTimersByTimeAsync(0);} finally {service.restore(); vi.useRealTimers();}
 }, MODULE_GRAPH_LOAD_BUDGET_MS);
-beforeEach(() => {expect(loadingService.size, 'a previous case left telemetry-service loading').toBe(0);});
+// The service entry point registers process crash handlers (SERVICE_UNCAUGHT); each case removes the ones it added.
+const crashEvents = ['uncaughtException', 'unhandledRejection'] as const, processEvents = process as unknown as EventEmitter;
+let crashListeners = new Map<string, unknown[]>();
+beforeEach(() => {
+  expect(loadingService.size, 'a previous case left telemetry-service loading').toBe(0);
+  crashListeners = new Map(crashEvents.map(name => [name, processEvents.listeners(name)]));
+});
 afterEach(async () => {
   await Promise.allSettled(loadingService); await new Promise(resolve => realSetImmediate(resolve));
+  for (const name of crashEvents) for (const listener of processEvents.listeners(name)) if (!crashListeners.get(name)!.includes(listener)) processEvents.removeListener(name, listener as (...args: unknown[]) => void);
   vi.useRealTimers();
 });
 it('boots transport only after the parent selection and retains it across renderer subscriptions', async () => {
@@ -71,7 +79,8 @@ it('boots transport only after the parent selection and retains it across render
   const parent = Object.assign(new EventEmitter(), {postMessage: vi.fn()});
   Object.defineProperty(process, 'parentPort', {configurable: true, value: parent});
   vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'synthetic'); vi.stubEnv('ETS2TELEMETRY_SOURCE_PIPE', endpoint);
-  vi.doMock('../../apps/desktop/src/diagnostics', () => ({createDiagnostics: () => vi.fn()}));
+  vi.doMock('../../apps/desktop/src/diagnostics', async importOriginal => ({...await importOriginal<typeof import('../../apps/desktop/src/diagnostics')>(),
+    createDiagnostics: () => Object.assign(vi.fn(), {flush: vi.fn(() => Promise.resolve(true)), drainSync: vi.fn()})}));
   // Isolate the existing storage probe; exercise the actual service handlers and ingestion.
   vi.doMock('../../apps/desktop/src/service-probe', () => ({ServiceProbe: class {
     constructor(private readonly dependencies: ProbeDependencies) {}
@@ -86,6 +95,8 @@ it('boots transport only after the parent selection and retains it across render
     expect(parent.postMessage).toHaveBeenCalledWith({type: 'ready'}); expect(connect).not.toHaveBeenCalled();
     for (const broker of [null, [], {executable: 123, discoveryDirectory: 'isolated'}, {executable: 'isolated', discoveryDirectory: []}]) {
       parent.emit('message', {data: {type: 'select', source: 'synthetic', broker}, ports: []});
+      // Since October 18, 2026 a failure report is posted after the log flush.
+      await vi.advanceTimersByTimeAsync(0);
       expect(parent.postMessage).toHaveBeenLastCalledWith({type: 'failed', code: 'INVALID_SOURCE_COMMAND'});
       expect(connect).not.toHaveBeenCalled();
     }
@@ -285,8 +296,10 @@ async function stoppedService(stopProbe: (report: ProbeDependencies['report']) =
   const previousPort = Object.getOwnPropertyDescriptor(process, 'parentPort');
   const parent = Object.assign(new EventEmitter(), {postMessage: vi.fn()});
   Object.defineProperty(process, 'parentPort', {configurable: true, value: parent});
-  const log = vi.fn(), diagnostics: unknown[][] = [];
-  vi.doMock('../../apps/desktop/src/diagnostics', () => ({createDiagnostics: (...args: unknown[]) => {diagnostics.push(args); return log;}}));
+  // The log's final flush resolves at once, as with an idle disk.
+  const log = Object.assign(vi.fn(), {flush: vi.fn(() => Promise.resolve(true)), drainSync: vi.fn()}), diagnostics: unknown[][] = [];
+  vi.doMock('../../apps/desktop/src/diagnostics', async importOriginal => ({...await importOriginal<typeof import('../../apps/desktop/src/diagnostics')>(),
+    createDiagnostics: (...args: unknown[]) => {diagnostics.push(args); return log;}}));
   let probeReport: ProbeDependencies['report'] = () => undefined;
   vi.doMock('../../apps/desktop/src/service-probe', () => ({ServiceProbe: class {
     constructor(private readonly dependencies: ProbeDependencies) {probeReport = message => dependencies.report(message);}
@@ -388,11 +401,11 @@ it('runs protocol v1 beside v0 without a durable sink, following each selection 
     select('replay', {executable, discoveryDirectory: 'C:\\isolated\\transport'}); expect(f.v1.configureBroker).toHaveBeenLastCalledWith(undefined);
     // A v1 failure never fails the selection the v0 ingestion accepted.
     f.v1.select.mockImplementationOnce(() => {throw new Error('v1 rejected');});
-    select('synthetic');
+    select('synthetic'); await vi.advanceTimersByTimeAsync(0);
     expect(f.parent.postMessage).not.toHaveBeenCalledWith({type: 'failed', code: 'INVALID_SOURCE_COMMAND'}); expect(f.log).toHaveBeenCalledWith('V1_SELECT_REJECTED');
     expect(f.v1.select).toHaveBeenCalledTimes(4);
     // An invalid selection is rejected before either ingestion sees it.
-    select('C:\\untrusted'); expect(f.parent.postMessage).toHaveBeenLastCalledWith({type: 'failed', code: 'INVALID_SOURCE_COMMAND'}); expect(f.v1.select).toHaveBeenCalledTimes(4);
+    select('C:\\untrusted'); await vi.advanceTimersByTimeAsync(0); expect(f.parent.postMessage).toHaveBeenLastCalledWith({type: 'failed', code: 'INVALID_SOURCE_COMMAND'}); expect(f.v1.select).toHaveBeenCalledTimes(4);
     // Only fixed status codes are logged, on a change of status, at occurrences 1, 2, 4, 8, ... of each status.
     const state = (status: V1SourceState['status']): V1SourceState => ({selection: 'ets2', status, reason: 'fixed', fresh: false, durable: {state: 'off'}});
     for (const status of ['waiting', 'connected', 'connected', 'disconnected', 'waiting', 'disconnected', 'waiting', 'disconnected', 'waiting'] as const) f.v1.options[0].onState!(state(status));
@@ -593,6 +606,65 @@ describe('ET-015a recording gate in the service (R3, R10, R14)', () => {
       expect(f.stops()).toEqual([{type: 'stopped', clean: true}]); expect(f.exit).toHaveBeenCalledExactlyOnceWith(0);
     } finally {connect.mockRestore(); f.restore(); vi.unstubAllEnvs();}
   });
+});
+// The diagnostics log writes asynchronously (October 18, 2026): the service exits only after its final rows are written,
+// or after SERVICE_EXIT_FLUSH_MS, so the stop sequence plus the wait stay inside main's 3,000 ms kill deadline.
+it('exits after the log flush that follows the stopped report, waiting at most SERVICE_EXIT_FLUSH_MS', async () => {
+  const f = await stoppedService(report => {report({type: 'stopped'}); return Promise.resolve();});
+  try {
+    let written!: (done: boolean) => void;
+    f.log.flush.mockImplementation(() => new Promise<boolean>(resolve => {written = resolve;}));
+    f.stop(); await vi.advanceTimersByTimeAsync(0);
+    expect(f.stops()).toEqual([{type: 'stopped', clean: true}]);
+    expect(f.log.flush).toHaveBeenCalledExactlyOnceWith(SERVICE_EXIT_FLUSH_MS);
+    expect(f.log.mock.calls.at(-1)?.[0]).toBe('SERVICE_REPORT');
+    expect(f.log.mock.invocationCallOrder.at(-1)!).toBeLessThan(f.log.flush.mock.invocationCallOrder[0]);
+    expect(f.exit).not.toHaveBeenCalled();
+    written(true); await vi.advanceTimersByTimeAsync(0);
+    expect(f.exit).toHaveBeenCalledExactlyOnceWith(0);
+  } finally {f.restore();}
+});
+// Review round 1 (October 18, 2026): main answers a failure report after readiness by killing the service, so the
+// rows that explain it are written before the report is posted.
+it.each([
+  ['a probe failure report', (f: Awaited<ReturnType<typeof stoppedService>>) => f.probeReport({type: 'failed', code: 'STORAGE_WORKER_FAILED'}), {type: 'failed', code: 'STORAGE_WORKER_FAILED'}],
+  ['a rejected selection', (f: Awaited<ReturnType<typeof stoppedService>>) => f.parent.emit('message', {data: {type: 'select', source: 'C:\\untrusted'}, ports: []}),
+    {type: 'failed', code: 'INVALID_SOURCE_COMMAND'}]
+] as const)('posts %s only after the log flush', async (_name, trigger, message) => {
+  const f = await stoppedService(report => {report({type: 'stopped'}); return Promise.resolve();});
+  try {
+    let written!: (done: boolean) => void;
+    f.log.flush.mockImplementation(() => new Promise<boolean>(resolve => {written = resolve;}));
+    const logged = f.log.mock.calls.length;
+    trigger(f); await vi.advanceTimersByTimeAsync(0);
+    expect(f.parent.postMessage).not.toHaveBeenCalledWith(message);
+    expect(f.log.flush).toHaveBeenCalledExactlyOnceWith(SERVICE_EXIT_FLUSH_MS);
+    if (message.code === 'STORAGE_WORKER_FAILED') expect(f.log.mock.calls.slice(logged).map(call => call[0])).toEqual(['SERVICE_REPORT']);
+    written(true); await vi.advanceTimersByTimeAsync(0);
+    expect(f.parent.postMessage).toHaveBeenLastCalledWith(message);
+  } finally {f.restore();}
+});
+// Review round 2: an uncaught exception still ends the service with exit 1. An unhandled rejection only warned before (an
+// Electron 44.7.0 utilityProcess without a handler keeps running), so the service logs it and keeps running.
+it.each([
+  ['uncaughtException', 'SERVICE_UNCAUGHT', [1]],
+  ['unhandledRejection', 'SERVICE_UNHANDLED_REJECTION', []]
+] as const)('on %s logs %s and drains the log synchronously; exit codes %j', async (event, row, exits) => {
+  const before = (process as unknown as EventEmitter).listeners(event);
+  const f = await stoppedService(report => {report({type: 'stopped'}); return Promise.resolve();});
+  try {
+    const added = (process as unknown as EventEmitter).listeners(event).filter(listener => !before.includes(listener));
+    expect(added).toHaveLength(1);
+    const error = new Error('crash');
+    (added[0] as (error: unknown) => void)(error);
+    expect(f.log).toHaveBeenLastCalledWith(row, error);
+    expect(f.log.drainSync).toHaveBeenCalledOnce();
+    expect(f.log.mock.invocationCallOrder.at(-1)!).toBeLessThan(f.log.drainSync.mock.invocationCallOrder[0]);
+    expect(f.exit.mock.calls.map(call => call[0])).toEqual(exits);
+    if (exits.length) expect(f.log.drainSync.mock.invocationCallOrder[0]).toBeLessThan(f.exit.mock.invocationCallOrder[0]);
+    // A service that survived a rejection still stops in order.
+    else {f.stop(); await vi.advanceTimersByTimeAsync(0); expect(f.stops()).toEqual([{type: 'stopped', clean: true}]); expect(f.exit).toHaveBeenCalledExactlyOnceWith(0);}
+  } finally {f.restore();}
 });
 it('waits for the history database to close before the single stopped report, and reports a failed close as unclean', async () => {
   let finish!: () => void;

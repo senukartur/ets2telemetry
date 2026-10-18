@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { processEntrypoint } from './entrypoints';
 import { ServiceProbe } from './service-probe';
 import {existsSync} from 'node:fs';
-import {createDiagnostics} from './diagnostics';
+import {createDiagnostics, SERVICE_EXIT_FLUSH_MS} from './diagnostics';
 import {serviceLogLocation} from './log-location';
 import {TelemetryIngestion, initialLive, sourceSelection} from './telemetry-ingestion';
 import {LiveSubscriptions} from './live-subscriptions';
@@ -27,6 +27,32 @@ if (!port) throw new Error('Missing Electron parent port');
 const logLocation = serviceLogLocation(process.env, tmpdir());
 const log = createDiagnostics(logLocation.directory, logLocation.detailed);
 log('SERVICE_BOOT');
+/**
+ * An uncaught exception ends the service at once, so the records still queued behind the asynchronous log write would be
+ * lost. Log one fixed row, write the queue synchronously (at most the 256 KiB the log bounds counted) and exit 1, as an
+ * uncaught exception did before. A batch already being written asynchronously may land after the drained rows or be
+ * lost, because process.exit does not wait for thread-pool work; nothing is written twice.
+ */
+process.on('uncaughtException', error => {
+  log('SERVICE_UNCAUGHT', error);
+  log.drainSync();
+  process.exit(1);
+});
+/**
+ * Without a handler an Electron 44 utilityProcess only warns on an unhandled rejection and keeps running (measured on
+ * October 18, 2026), so the service keeps running here too: it logs one fixed row and writes it at once.
+ */
+process.on('unhandledRejection', reason => {
+  log('SERVICE_UNHANDLED_REJECTION', reason);
+  log.drainSync();
+});
+/**
+ * Main answers a `failed` report after readiness by killing this process, so the rows that explain the failure are
+ * written first, waiting at most SERVICE_EXIT_FLUSH_MS.
+ */
+function postFailure(message: {type: string; code?: unknown}): void {
+  void log.flush(SERVICE_EXIT_FLUSH_MS).then(() => {port.postMessage(message);});
+}
 const subscriptions = new LiveSubscriptions(initialLive());
 // The live update is the latest v0 update with the whitelisted v1 projection of the same selection attached
 // (ET-010c decisions F1 and F2); the subscriptions coalesce both to at most 20 Hz.
@@ -121,7 +147,7 @@ const probe = new ServiceProbe({
     // sequence sends the single final `stopped` message after every phase.
     if (stopping && message.type === 'stopped') {storageStopped = true; return;}
     log('SERVICE_REPORT', message);
-    port.postMessage(message);
+    if (message.type === 'failed') postFailure(message); else port.postMessage(message);
     if (stopping) return;
     if (message.type === 'stopped') exitAfterHistory(0);
     if (message.code === 'SERVICE_STOP_FAILED') exitAfterHistory(1);
@@ -129,6 +155,13 @@ const probe = new ServiceProbe({
 });
 // Ordered, bounded service shutdown: 1000 (intake) + 500 (flush) + 1000 (storage) = SERVICE_STOP_BUDGET_MS.
 let stopping = false, storageStopped = false, exiting = false;
+/**
+ * Exits once the pending log records, including the final SHUTDOWN_STEP and SERVICE_REPORT rows, are written, waiting at most
+ * SERVICE_EXIT_FLUSH_MS: 2,500 ms of stop sequence plus this wait stay inside main's 3,000 ms kill deadline.
+ */
+function exitAfterLog(code: number): Promise<void> {
+  return log.flush(SERVICE_EXIT_FLUSH_MS).then(() => {process.exit(code);});
+}
 /**
  * A failed probe ends the service from its report, outside the orderly sequence. Close the history database first,
  * bounded by the same budget as its shutdown step, then exit with the probe's code; a late close never delays the exit.
@@ -139,7 +172,7 @@ function exitAfterHistory(code: number): void {
   exiting = true; runtime.stopStatus();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const bound = new Promise<void>(resolve => {timer = setTimeout(resolve, HISTORY_CLOSE_BUDGET_MS);});
-  void Promise.race([runtime.history.close().catch(() => undefined), bound]).then(() => {clearTimeout(timer); process.exit(code);});
+  void Promise.race([runtime.history.close().catch(() => undefined), bound]).then(() => {clearTimeout(timer); return exitAfterLog(code);});
 }
 const shutdown = new ShutdownSequence(log);
 shutdown.register('intake', {name: 'ingestion', budgetMs: 1000, run: () => ingestion.stop()});
@@ -157,7 +190,7 @@ function stop(): void {
   void shutdown.run().then(({clean}) => {
     const message = {type: 'stopped', clean};
     log('SERVICE_REPORT', message); port.postMessage(message);
-    process.exit(clean ? 0 : 1);
+    return exitAfterLog(clean ? 0 : 1);
   });
 }
 port.on('message', event => {
@@ -182,7 +215,7 @@ port.on('message', event => {
       // Evidence capture is independent of live ingestion: a rejected grant never fails selection.
       if (command.capture !== undefined) captures.offer(command.capture, selection, broker);
     }
-    catch {port.postMessage({type: 'failed', code: 'INVALID_SOURCE_COMMAND'});}
+    catch {postFailure({type: 'failed', code: 'INVALID_SOURCE_COMMAND'});}
   } else if (command?.type === 'journal') {
     for (const transferred of event.ports) transferred.close();
     journal.receive(command, reply => port.postMessage(reply));

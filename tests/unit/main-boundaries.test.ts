@@ -6,6 +6,7 @@ import path from 'node:path';
 import {afterEach, beforeAll, beforeEach, expect, it, vi} from 'vitest';
 import type {LiveTelemetry} from '../../packages/contracts/src';
 import {validateMessage} from '../../packages/contracts/src/protocol-v0';
+import {MAIN_EXIT_FLUSH_MS} from '../../apps/desktop/src/diagnostics';
 import {initialLive} from '../../apps/desktop/src/live-state';
 import {v1Projection, type V1Options} from '../shared/live-v1-fixtures';
 import {changed, DETAIL, LIST_ITEM, TRIP, TRIP_PAGE} from '../shared/journal-replies';
@@ -33,7 +34,7 @@ let showOpenDialog: ReturnType<typeof vi.fn<(window: unknown, options: unknown) 
 let shell: {showItemInFolder: ReturnType<typeof vi.fn<(file: string) => void>>; openPath: ReturnType<typeof vi.fn<(folder: string) => Promise<string>>>};
 let channels: {port1: EventEmitter & {postMessage: ReturnType<typeof vi.fn>; close: ReturnType<typeof vi.fn<() => void>>; start: ReturnType<typeof vi.fn<() => void>>}; port2: {close: ReturnType<typeof vi.fn<() => void>>}}[];
 let configurations: Electron.BrowserWindowConstructorOptions[];
-let log: ReturnType<typeof vi.fn>;
+let log: ReturnType<typeof vi.fn> & {flush: ReturnType<typeof vi.fn>};
 // Log location fix: the arguments of every createDiagnostics call and of every service fork.
 let diagnosticsCalls: unknown[][], forkCalls: unknown[][];
 // ET-011a fixture additions. The tray is unavailable unless a test enables it, so earlier tests keep their
@@ -148,8 +149,9 @@ function installFixture() {
     shell: {showItemInFolder: (file: string) => shell.showItemInFolder(file), openPath: (folder: string) => shell.openPath(folder)}}));
   vi.doMock('electron-squirrel-startup', () => ({default: false}));
   vi.doMock('../../apps/desktop/src/entrypoints', () => ({processEntrypoint: () => 'package.json'}));
-  log = vi.fn(); diagnosticsCalls = [];
-  vi.doMock('../../apps/desktop/src/diagnostics', () => ({createDiagnostics: (...args: unknown[]) => {diagnosticsCalls.push(args); return log;}}));
+  log = Object.assign(vi.fn(), {flush: vi.fn(() => Promise.resolve(true)), drainSync: vi.fn()}); diagnosticsCalls = [];
+  vi.doMock('../../apps/desktop/src/diagnostics', async importOriginal => ({...await importOriginal<typeof import('../../apps/desktop/src/diagnostics')>(),
+    createDiagnostics: (...args: unknown[]) => {diagnosticsCalls.push(args); return log;}}));
   vi.doMock('../../apps/desktop/src/broker-artifact', () => ({brokerConfiguration: resolveBroker, createBrokerResolver: () => resolveBroker}));
   vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'synthetic');
   settingsView = {units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: null};
@@ -787,7 +789,11 @@ it.each(['tray', 'renderer', 'app-quit', 'session-end'] as const)('runs one orde
   const overlayClose = {preventDefault: vi.fn()}; windows[1].emit('close', overlayClose); expect(overlayClose.preventDefault).not.toHaveBeenCalled();
   expect(app.exit).not.toHaveBeenCalled(); expect(trays[0].destroy).not.toHaveBeenCalled();
   child.emit('exit', 0);
+  // Since October 18, 2026 main exits after its pending log records are written, waiting at most MAIN_EXIT_FLUSH_MS.
+  expect(log.flush).toHaveBeenCalledExactlyOnceWith(MAIN_EXIT_FLUSH_MS); expect(app.exit).not.toHaveBeenCalled();
+  await settle();
   expect(app.exit).toHaveBeenCalledExactlyOnceWith(0);
+  expect(log.flush.mock.invocationCallOrder[0]).toBeLessThan(app.exit.mock.invocationCallOrder[0]);
   expect(trays[0].destroy).toHaveBeenCalledOnce();
   expect(trays[0].destroy.mock.invocationCallOrder[0]).toBeLessThan(app.exit.mock.invocationCallOrder[0]);
   expect(log.mock.calls.map(call => call[0] as string).filter(name => failurePattern.test(name))).toEqual([]);
@@ -831,7 +837,7 @@ it('keeps a pre-readiness service failure report fatal', async () => {
   trayAvailable = true; await loadMain(); await settle();
   child.emit('message', {type: 'failed', code: 'STORAGE_TIMEOUT'});
   expect(child.kill).not.toHaveBeenCalled(); expect(child.postMessage).toHaveBeenCalledWith({type: 'stop'});
-  child.emit('exit', 0); expect(app.exit).toHaveBeenCalledExactlyOnceWith(1); expect(trays[0].destroy).toHaveBeenCalledOnce();
+  child.emit('exit', 0); await settle(); expect(app.exit).toHaveBeenCalledExactlyOnceWith(1); expect(trays[0].destroy).toHaveBeenCalledOnce();
 });
 it('shows restart exhaustion in health and the tray and stays running until an explicit exit', async () => {
   trayAvailable = true; await ready();
@@ -843,7 +849,7 @@ it('shows restart exhaustion in health and the tray and stays running until an e
   await vi.advanceTimersByTimeAsync(500);
   expect(trays[0].setImage).toHaveBeenCalled(); expect(trays[0].setToolTip).toHaveBeenLastCalledWith('ETS2Telemetry\nService failed');
   expect(app.exit).not.toHaveBeenCalled();
-  trayMenuItem('Exit ETS2Telemetry').click!(); expect(app.exit).toHaveBeenCalledOnce(); expect(trays[0].destroy).toHaveBeenCalledOnce();
+  trayMenuItem('Exit ETS2Telemetry').click!(); await settle(); expect(app.exit).toHaveBeenCalledOnce(); expect(trays[0].destroy).toHaveBeenCalledOnce();
 });
 it('registers no diagnostic lifecycle events outside the isolated live smoke configuration', async () => {
   trayAvailable = true; await ready();
@@ -859,7 +865,7 @@ it('opens and exits through the gated diagnostic tray action and reports read-on
   app.emit('ets2telemetry:diagnostic-tray-action', 'open'); expect(windows).toHaveLength(3); expect(facts()).toMatchObject({dashboard: true});
   app.emit('ets2telemetry:diagnostic-tray-action', 'exit');
   expect(log).toHaveBeenCalledWith('APP_EXIT_REQUESTED', undefined, {reason: 'tray'}); expect(facts()).toMatchObject({exiting: true, health: {service: 'stopping'}});
-  child.emit('exit', 0); expect(app.exit).toHaveBeenCalledExactlyOnceWith(0);
+  child.emit('exit', 0); await settle(); expect(app.exit).toHaveBeenCalledExactlyOnceWith(0);
   expect(log.mock.calls.map(call => call[0] as string).filter(name => failurePattern.test(name))).toEqual([]);
 }));
 // ET-011a fix round 1.
@@ -926,7 +932,7 @@ it.each(['overlay-restart-exhausted', 'service-recovery-timeout'] as const)('mar
   expect(trayMenuItem('Open ETS2Telemetry').enabled).toBe(false); expect(trayMenuItem('Exit ETS2Telemetry').enabled).toBe(false);
   expect(trays[0].setToolTip).toHaveBeenLastCalledWith('ETS2Telemetry\nExiting');
   expect(log).not.toHaveBeenCalledWith('APP_EXIT_REQUESTED', undefined, expect.anything());
-  child.emit('exit', trigger === 'overlay-restart-exhausted' ? 0 : 1);
+  child.emit('exit', trigger === 'overlay-restart-exhausted' ? 0 : 1); await settle();
   expect(app.exit).toHaveBeenCalledExactlyOnceWith(1);
   expect(trays[0].destroy.mock.invocationCallOrder[0]).toBeLessThan(app.exit.mock.invocationCallOrder[0]);
 });
