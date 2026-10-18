@@ -102,6 +102,14 @@ ET-018 PR-3 (plan U6, U7, U12) runs three Windows-initiated uninstalls after the
 
 Squirrel ends every process whose image lies under its root before it runs the uninstall hook (`UpdateManager.FullUninstall` calls `KillAllExecutablesBelongingToPackage` at the pinned commit `eef37460ae`), so in scenarios (1) and (3) the receipt's `instance` is `none` or `exited`, and both are accepted; the evidence records which. The hook's own lock request (U6) matters for an instance that runs from another location with the same userData. The scenarios add about two to three minutes to the step; their first hosted observation is the PR-3 dispatch.
 
+**The decoy check** (`checkDecoyUnchanged` in `installer-guard.mjs`). Windows creates its own folders under whatever `LOCALAPPDATA` a process runs with: the first hosted run saw `Microsoft\`, `Microsoft\Windows\` and `Microsoft\Windows\Caches\` appear in the decoy during the uninstall, created by the shell or Update.exe, not by this application. The check therefore requires:
+
+- every entry the decoy held before, among them the `ETS2Telemetry` and `ETS2TelemetryDesktop` sentinel subtrees, still present and byte-identical (`DECOY_ENTRY_REMOVED`, `DECOY_ENTRY_CHANGED`);
+- no new entry with a component named `ETS2Telemetry*`, anywhere (`DECOY_PRODUCT_ENTRY_ADDED`);
+- any other new entry only below the top-level `Microsoft` folder, the one documented allowance (`DECOY_ENTRY_ADDED` for anything else, also a top-level file).
+
+The evidence records the number of allowed new entries as `decoyOsEntries`. The driver also writes `windows-uninstall-<label>-observed.json` (the receipt, the data root's entry names and the plugin's state) before its assertions, so a failing run still shows what the uninstall did.
+
 `windows-uninstall` checks that the plugin is installed only once the application or the fake game runs, right before the UninstallString: in (1) it is the launch itself that installs the plugin. `windows-uninstall ... --rehearse` runs everything up to the UninstallString, which it parses but never starts; it exists for a local check of the driver against a fake installed layout, and the harness never passes it.
 
 ## Installed runtime smokes
