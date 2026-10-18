@@ -1,0 +1,42 @@
+{
+  "scenario": "queue-count-overflow-trip",
+  "authoredFrom": [
+    "Input (built in tests/storage/producer-loss.test.ts from queue-count-overflow.json, seed et005b-queue-count-overflow): simulation.started at 10 ms (eventSeq 1); a job without cargo.loaded or market at 20 ms (2); 258 identical tolls of 5 at 30 ms (3-260); job.delivered at 250 ms (261) and the clear at 260 ms (262). No frame step, so no state is published (docs/simulator-v1.md, OD-5 S7): there are no snapshots, and both checkpoints show no job, so no late-attach trip can open (J9). Transport: a durable client at 0 ms that commits each item but whose ACKs are lost on the way (ack withhold), a disconnect at 100 ms, a durable client at 200 ms that commits and acknowledges each item, and a disconnect at 300 ms. One service.",
+    "Producer (protocol v1 §9, full store; queue-count-overflow.expected.json): with no ACK, an event is retained only while one entry stays free, so events 1-255 are retained and 256-260 are lost as queueCount. While connected each newly lost eventSeq is written as its own delta gap at its stream position, so connection 1 carries events 1-255 and the gaps [256], [257], [258], [259] and [260], each queueCount 1 with both lost times at the toll's occurrence (1,000,030,000,000 ns). Connection 2's checkpoint reports A = 0 and nextEventSeq 261; it redelivers 1-255 and the merged record [256, 260] (queueCount 5, redelivered), and the acknowledged store then admits 261 and 262 live.",
+    "docs/trips.md, load state (T12): the session loads until its first simulation.started (1); the job (2) is configured while running, so trip@2 opens with no cause interval and `unknown` completeness (T4: trip@<eventSeq of the job configuration>), with no truck or trailer reference and the unknown game mode. Without a loss it would close complete at its delivery (T13).",
+    "docs/trips.md, Attribution (T14): each toll 3-255 inside the active trip's window is attributed `trip` (the job has no available cargoLoaded, so never trip-before-loaded).",
+    "docs/trips.md, transitions 'any open | gap with a new suffix' (T10) and trip-reducer case 8: the gap [256] closes trip@2 {none, gap, partial} at the session's last label, the toll 255 (1,800,000,000,030; a gap carries no UTC, T15), with an event-loss interval (queueCount is not a consumer absence; trip-reducer T10 table) on the trip: its new suffix [256, 256], the record's lost times as monotonic bounds on the capture clock, and detail {cause: gap, the six counters, the record's range, redelivered: false} (Interval detail keys). The job becomes untracked. The gaps [257]-[260] find the slot idle: each is a session-level event-loss interval of its own suffix ('idle | gap with a new suffix').",
+    "Connection 2 (caller contract, Connections): `disconnected` then `session` at coverage 260; no trip is open, so no not-connected interval. The redelivered 1-255 are storage duplicates at or below the processed point (T5); the merged gap [256, 260] lies wholly inside coverage, so storage answers `covered` and nothing is stored or applied again (docs/storage.md, Coverage). job.delivered (261) has no open trip: the second connection's checkpoint shows no job (no frame was published, docs/simulator-v1.md, OD-5 S7) and a later checkpoint without a job while idle clears the untracked job (docs/trips.md, untracked jobs), so the delivery is an outcome with no attachable trip, attributed `ambiguous`, closing nothing (T14). The clear (262) adds nothing.",
+    "Attributions use one hand-written abbreviation: an entry with `eventSeqRange` [first, last] stands for one attribution per eventSeq in that range, in order; the test expands it before comparing.",
+    "Counts: 262 first commits (255 events and 5 gaps on connection 1, 261 and 262 on connection 2), 255 duplicates and 1 covered gap. Losses (G6, counted once from what storage committed as new rows): lostEvents 5 (one per delta gap), eventLoss 5; the covered redelivery counts nothing."
+  ],
+  "trips": [
+    {"trip": "trip@2", "jobConfigurationEventSeq": "2", "truckConfigurationEventSeq": null, "trailerConfigurationEventSeqs": [], "openedEventSeq": "2",
+      "gameMode": {"mode": "unknown", "method": "none", "confidence": "none"}, "gameModeAmbiguous": false, "outcome": "none", "outcomeEventSeq": null, "closeReason": "gap",
+      "recordingCompleteness": "partial", "startedUtcMs": 1800000000020, "endedUtcMs": 1800000000030, "observedDistanceM": {"available": false, "reason": "not-observed"}, "fuelUsedL": {"available": false, "reason": "not-observed"}}
+  ],
+  "attributions": [
+    {"eventSeqRange": ["3", "255"], "trip": "trip@2", "attribution": "trip"},
+    {"eventSeq": "261", "trip": null, "attribution": "ambiguous"}
+  ],
+  "intervals": [
+    {"trip": "trip@2", "kind": "event-loss", "firstEventSeq": "256", "lastEventSeq": "256", "startMonotonicNs": "1000030000000", "endMonotonicNs": "1000030000000", "sourceClockId": "capture-clock",
+      "detail": {"cause": "gap", "causes": {"offline": "0", "noDurableConsumer": "0", "queueCount": "1", "queueBytes": "0", "retentionExpired": "0", "encodingFailed": "0"},
+        "firstEventSeq": "256", "lastEventSeq": "256", "redelivered": false}},
+    {"trip": null, "kind": "event-loss", "firstEventSeq": "257", "lastEventSeq": "257", "startMonotonicNs": "1000030000000", "endMonotonicNs": "1000030000000", "sourceClockId": "capture-clock",
+      "detail": {"cause": "gap", "causes": {"offline": "0", "noDurableConsumer": "0", "queueCount": "1", "queueBytes": "0", "retentionExpired": "0", "encodingFailed": "0"},
+        "firstEventSeq": "257", "lastEventSeq": "257", "redelivered": false}},
+    {"trip": null, "kind": "event-loss", "firstEventSeq": "258", "lastEventSeq": "258", "startMonotonicNs": "1000030000000", "endMonotonicNs": "1000030000000", "sourceClockId": "capture-clock",
+      "detail": {"cause": "gap", "causes": {"offline": "0", "noDurableConsumer": "0", "queueCount": "1", "queueBytes": "0", "retentionExpired": "0", "encodingFailed": "0"},
+        "firstEventSeq": "258", "lastEventSeq": "258", "redelivered": false}},
+    {"trip": null, "kind": "event-loss", "firstEventSeq": "259", "lastEventSeq": "259", "startMonotonicNs": "1000030000000", "endMonotonicNs": "1000030000000", "sourceClockId": "capture-clock",
+      "detail": {"cause": "gap", "causes": {"offline": "0", "noDurableConsumer": "0", "queueCount": "1", "queueBytes": "0", "retentionExpired": "0", "encodingFailed": "0"},
+        "firstEventSeq": "259", "lastEventSeq": "259", "redelivered": false}},
+    {"trip": null, "kind": "event-loss", "firstEventSeq": "260", "lastEventSeq": "260", "startMonotonicNs": "1000030000000", "endMonotonicNs": "1000030000000", "sourceClockId": "capture-clock",
+      "detail": {"cause": "gap", "causes": {"offline": "0", "noDurableConsumer": "0", "queueCount": "1", "queueBytes": "0", "retentionExpired": "0", "encodingFailed": "0"},
+        "firstEventSeq": "260", "lastEventSeq": "260", "redelivered": false}}
+  ],
+  "coverage": {"committedThroughEventSeq": "262", "committed": 262, "duplicate": 255, "covered": 1},
+  "acks": {"first": [], "second": {"redeliveredThrough": "255", "then": ["260", "261", "262"]}},
+  "losses": {"lostEvents": 5, "eventLoss": 5, "notConnected": 0, "sampleLoss": 0, "restoreLoss": 0, "droppedSamples": 0}
+}
