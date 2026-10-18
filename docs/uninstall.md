@@ -1,6 +1,6 @@
 # Uninstall cleanup engine
 
-ET-018 PR-2 (October 18, 2026) adds the engine that removes this application's own plugin files and local data on uninstall, in `apps/desktop/src/uninstall/`. It implements the owner's [uninstall rule of October 16, 2026](../concept.md#uninstall-removes-local-data--october-16-2026) and the ET-017 [contract with ET-018](plugin-setup.md#install-registry). **Nothing runs it yet:** PR-3 calls it from the Squirrel uninstall hook and PR-4 from the in-app uninstall, and PR-5 adds the deferred cleanup at the next sign-in. Tests run it only on fake installs under guarded temporary folders.
+ET-018 PR-2 (October 18, 2026) adds the engine that removes this application's own plugin files and local data on uninstall, in `apps/desktop/src/uninstall/`. It implements the owner's [uninstall rule of October 16, 2026](../concept.md#uninstall-removes-local-data--october-16-2026) and the ET-017 [contract with ET-018](plugin-setup.md#install-registry). Since ET-018 PR-3 the Squirrel uninstall hook runs it ([below](#squirrel-uninstall-hook)); PR-4 adds the in-app uninstall and PR-5 the deferred cleanup at the next sign-in. Unit tests run it only on fake installs under guarded temporary folders.
 
 | Module | Role |
 | --- | --- |
@@ -9,6 +9,8 @@ ET-018 PR-2 (October 18, 2026) adds the engine that removes this application's o
 | `plugin-cleanup.ts` | Removes this application's plugin from the recorded game folders (U5 step 3) |
 | `data-wipe.ts` | Removes the allowlisted data entries without following links (U4) |
 | `engine.ts` | The order, the budget and the outcome (U5) |
+| `deferral.ts` | PR-3: the README.txt a deferred run leaves, and cancelling a deferral on install, update or start (U7 fallback) |
+| `../squirrel-events.ts` | PR-3: the Squirrel event handler that runs the engine on a Windows-initiated uninstall (U2, U6) |
 
 ## Roots
 
@@ -55,7 +57,7 @@ The ET-017 contract, step by step:
   - when the root is not a folder, or one of the three is a link or not a folder, the folder is **not inspected**: nothing is read or touched through it, and it counts as `absent` with the note `LAYOUT_NOT_PLAIN`, so a plugin may remain there;
   - when one of them does not exist, nothing is left to clean: `absent` with the note `PLUGINS_FOLDER_ABSENT`.
 
-  The result lists each such folder's game and note under `plugins.notes`. **For PR-3 and PR-4:** these notes must reach the user (the uninstall receipt and the result dialog), because `LAYOUT_NOT_PLAIN` means a plugin may remain that this application did not check.
+  The result lists each such folder's game and note under `plugins.notes`. These notes must reach the user, because `LAYOUT_NOT_PLAIN` means a plugin may remain that this application did not check: PR-3's [receipt](#receipt) carries them, and **PR-4's result dialog must show them** with the outcome.
 - **Kept.** A file with the plugin's name and an unknown hash, and every other file, stays; that folder is reported as `unrecognized` and does not block. A read-only DLL is skipped and reported as `READ_ONLY_FILE`, because Node's unlink on Windows would clear the attribute.
 - **Locks.** A sharing violation (`EBUSY`) on the unlink is retried after 20, 40, 60, 80 and 100 ms, then reported; `EPERM` (a mapped image or a denied delete) is reported at once. Both are `TARGET_LOCKED`. A DLL another process opened without read sharing fails the hash read with `EBUSY`, also `TARGET_LOCKED`.
 - **Registry.** After each cleaned folder, its install record, pending intents and failure are removed from `setup.json`.
@@ -69,7 +71,7 @@ The data root's top-level allowlist is `data`, `backups`, `settings`, `logs`, `s
 - **The walker** lstats every entry and never follows a link: a symbolic link or junction is unlinked itself, so its target is never entered. It never clears a read-only attribute; a read-only file stays and is reported (`READ_ONLY_FILE`), as does a locked or denied entry (`TARGET_LOCKED`, `PERMISSION_DENIED`).
 - **Unknown top-level entries** stay and are counted as `kept`; the data root is removed only when it is empty.
 - **Never touched:** exports, other plugins and game files, `%LOCALAPPDATA%\SquirrelTemp`, Squirrel's own binaries and any server records.
-- **Roaming userData (O7).** The engine calls an optional `removeRoamingUserData` hook only in production mode and only after a complete run. PR-3 and PR-4 wire it; in test-root mode the result is `not-applicable`.
+- **Roaming userData (O7).** The engine calls an optional `removeRoamingUserData` hook only in production mode and only after a complete run; in test-root mode the result is `not-applicable`. PR-3's hook removes `%APPDATA%\ETS2Telemetry Desktop` only when userData is exactly that folder and no `ETS2TELEMETRY_PROFILE_DIR` is set, only after the hook released its single-instance lock, and never through a link; Chromium may recreate an empty folder while the hook process exits, which stays recorded. PR-4 wires the in-app path.
 
 ## Order and outcome
 
@@ -84,6 +86,39 @@ The data root's top-level allowlist is `data`, `backups`, `settings`, `logs`, `s
 - **Budget.** The caller passes a monotonic clock and a deadline (PR-3 uses 8 s inside Squirrel's 10 s hook). Before each folder and each data entry the engine checks it; once spent, the run stops and defers with `BUDGET_EXPIRED`. It never reports `complete` with something left.
 - **Interruption.** Every step can be cut off and run again: a run killed after any deletion leaves a state that the next run finishes, from the registry, the intent or what is on disk.
 
+## Squirrel uninstall hook
+
+ET-018 PR-3 (plan U2, U6). Windows Settings, Apps and Control Panel run the registered `"<install root>\Update.exe" --uninstall`. Squirrel first ends every process whose image lies under the install root (`KillAllExecutablesBelongingToPackage` at the pinned commit), then starts the installed executable with `--squirrel-uninstall <version>` and waits at most 10 s; whatever the hook reports, Squirrel then deletes the binaries and the registration. `apps/desktop/src/squirrel-events.ts` handles it before anything else in main (see [application lifecycle](app-lifecycle.md#squirrel-events)):
+
+1. **Roots** (above). A refusal writes a `refused` receipt and changes nothing.
+2. **A running instance.** In test-root mode userData is first set to the test file's `profileDir`, the folder a test launch locks. The hook requests the single-instance lock with `{ets2telemetry: 'uninstall-exit'}`; a running instance answers with its explicit exit, reason `uninstall`, and deletes nothing itself. The hook requests the lock again every 200 ms for up to 6 s; each refused request signals the instance again (`tests/unit/single-instance-relock.test.ts` proves this with the real Electron binary). An instance that is still running, or a profile that could not be set, defers everything with `INSTANCE_RUNNING`: the engine writes the intent and touches no game folder or data entry.
+3. **The engine** with a global deadline of 8 s from the hook's start; the running-game check gets at most 3 s and never more than what is left. A game or TruckersMP that runs, a lock, a permission error, an unreadable registry or the deadline gives `deferred`.
+4. **Shortcuts.** Beside the engine, `Update.exe --removeShortcut=<executable>` runs for a production install, and for a test install only when its test file sets `shortcuts: true`, within 4 s; Squirrel does not remove the shortcuts of an application that handles its events.
+5. **README.** A deferred run writes `uninstall\README.txt` ([Deferral](#deferral)).
+6. **Receipt and exit.** One receipt, then the exit code 0 (`complete`), 3 (`deferred`) or 4 (`refused`). A hook still running 9 s after its start (a file operation that never settles) writes a `deferred` receipt with `BUDGET_EXPIRED` and exits 3; the intent is already on disk then.
+
+`complete` is impossible while anything remains: the hook downgrades an engine result of `complete` to `deferred` with `RESIDUE_REMAINS` when a folder is blocked, a data entry failed or the data root still exists.
+
+### Receipt
+
+`%TEMP%\ETS2Telemetry-uninstall-<yyyymmddThhmmssmmmZ>.json`, created new (never overwritten), with fixed codes, counts and allowlisted entry names only, never a path:
+
+```json
+{"format": "ets2telemetry.uninstall-receipt", "version": 1, "createdUtc": "...", "appVersion": "0.1.0",
+ "outcome": "complete | deferred | refused", "code": null, "mode": "production | test-root | null", "instance": "none | exited | running | not-checked",
+ "plugins": {"removed": 1, "absent": 0, "unrecognized": 0, "notes": [{"game": "ets2", "note": "GAME_EXECUTABLE_MISSING"}], "blocked": []},
+ "data": {"removed": 8, "kept": 0, "failed": [], "rootRemoved": true}, "roaming": "removed | failed | not-applicable | not-run",
+ "readme": false, "shortcuts": "removed | skipped | failed", "elapsedMs": 1234}
+```
+
+`code` is the engine's primary reason (a roots refusal, `INTENT_FAILED`, `RUNNING_CHECK_FAILED`, `BUDGET_EXPIRED`, a registry problem, a plugin block reason, `DATA_ENTRY_BLOCKED`, `INSTANCE_RUNNING`) or the hook's `RESIDUE_REMAINS`. **For PR-4's UI:** `outcome`, `code`, `plugins.blocked`, `plugins.unrecognized` and `plugins.notes` are what the result dialog must explain; the receipt is the Windows-initiated path's only record, because nothing can show a window there.
+
+### Deferral
+
+Until PR-5's executor finishes a deferred uninstall at the next sign-in, a deferred run leaves `plugins\` (the install registry) and `uninstall\` with `pending.json` and `README.txt`. The README (CRLF, plain text) names the reason, the plugin file of each remaining game folder, the SHA-256 hashes of this application's plugin, how to check a file with `Get-FileHash`, and that the data root can then be deleted, or that reinstalling cancels the cleanup.
+
+A new install, an update (`--squirrel-install`, `--squirrel-updated`) or a start of the installed application cancels a pending deferral: it removes only `uninstall\pending.json` and `uninstall\README.txt` when they are regular files (never through a link), then the `uninstall` folder when it is empty, and silent plugin setup adopts the remaining plugin files from the registry. A start logs `UNINSTALL_DEFERRAL_CANCEL` with `cancelled` or `failed` only when there was something to cancel. Unpackaged and development launches never cancel.
+
 ## Tests
 
-Fake installs under the guarded temporary root of `tests/shared/guarded-fs.ts`, built by `tests/shared/uninstall-fixture.ts`; nothing touches a real folder or the registry. See [TESTING.md](../TESTING.md#et-018-uninstall-cleanup-engine--october-18-2026) and [ET-018 validation](validation/et-018.md#pr-2-the-uninstall-cleanup-engine-october-18-2026).
+Fake installs under the guarded temporary root of `tests/shared/guarded-fs.ts`, built by `tests/shared/uninstall-fixture.ts`; nothing touches a real folder or the registry. See [TESTING.md](../TESTING.md#et-018-uninstall-cleanup-engine--october-18-2026) and [ET-018 validation](validation/et-018.md#pr-2-the-uninstall-cleanup-engine-october-18-2026). The Squirrel hook is tested with injected ports in `tests/unit/squirrel-events.test.ts` and on Windows CI by the [uninstall scenarios](installer-testing.md#uninstall-scenarios).
