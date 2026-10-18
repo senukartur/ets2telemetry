@@ -143,6 +143,7 @@ Columns:
 | `tests/unit/uninstall-plugin-cleanup.test.ts` | Node unit (Vitest) | REG-015, REG-017 | T, V (et-018) | ET-018 (PR-2) | PR (tests job, `npm test`) | security |
 | `tests/unit/uninstall-roots.test.ts` | Node unit (Vitest) | REG-017 | T, V (et-018) | ET-018 (PR-2) | PR (tests job, `npm test`) | security |
 | `tests/unit/squirrel-events.test.ts` | Node unit (Vitest) | REG-015, REG-017 | T, V (et-018) | ET-018 (PR-3) | PR (tests job, `npm test`) | security |
+| `tests/unit/fixed-program.test.ts` | Node unit (Vitest) with real child processes | REG-012, REG-015 | T, V (et-018) | ET-018 (PR-3) | PR (tests job, `npm test`) | regression |
 | `tests/unit/uninstall-deferral.test.ts` | Node unit (Vitest) | REG-017 | T, V (et-018) | ET-018 (PR-3) | PR (tests job, `npm test`) | security |
 | `tests/unit/single-instance-relock.test.ts` (fixtures `tests/fixtures/single-instance`) | Node unit (Vitest) with the real Electron binary | REG-012, REG-017 | T, V (et-018) | ET-018 (PR-3) | PR (tests job, `npm test`) | — |
 | `tests/unit/installer-helper-provenance.test.ts` | Node unit (Vitest) | REG-017 (historical provenance) | T, V (et-001) | ET-001 (#5) | PR (tests job, `npm test`) | — |
