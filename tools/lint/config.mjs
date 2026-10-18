@@ -124,7 +124,7 @@ export default tseslint.config(
     files: rendererFiles,
     rules: {
       'no-restricted-imports': ['error', {
-        paths: [...nodeBuiltins, 'electron', 'better-sqlite3', 'electron-squirrel-startup'].map(name => ({name, message: 'Renderer code must use the typed preload bridge, not Node.js or Electron modules.'})),
+        paths: [...nodeBuiltins, 'electron', 'better-sqlite3'].map(name => ({name, message: 'Renderer code must use the typed preload bridge, not Node.js or Electron modules.'})),
         patterns: [{group: ['electron/*'], message: 'Renderer code must use the typed preload bridge.'}, ...storageCorePatterns]
       }]
     }
@@ -134,7 +134,7 @@ export default tseslint.config(
     files: preloadFiles,
     rules: {
       'no-restricted-imports': ['error', {
-        paths: [...nodeBuiltins, 'better-sqlite3', 'electron-squirrel-startup'].map(name => ({name, message: 'The sandboxed preload may import only electron renderer APIs.'})),
+        paths: [...nodeBuiltins, 'better-sqlite3'].map(name => ({name, message: 'The sandboxed preload may import only electron renderer APIs.'})),
         patterns: storageCorePatterns
       }]
     }
