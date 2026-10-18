@@ -1,0 +1,31 @@
+{
+  "scenario": "handoff-full-trip",
+  "authoredFrom": [
+    "Input (built in tests/storage/producer-loss.test.ts from handoff-full.json, seed et005b-handoff-full): simulation.started at 10 ms (eventSeq 1); a job without cargo.loaded or market at 20 ms (2); a toll of 5 at 30 ms (3); the SDK-thread handoff ring full from 40 ms; tolls at 50 and 60 ms (4, 5); the ring drained at 70 ms; a toll at 80 ms (6); job.delivered at 90 ms (7); the clear at 100 ms (8). No frame step, so no snapshot and a checkpoint without a job. One durable connection from 0 to 200 ms that commits and acknowledges each item, recorded through the production wiring (recording-runtime.ts) into synthetic:<name>.",
+    "Producer (protocol v1 §9: an event lost because the bounded handoff is full counts as queueCount; D5: a lost event still takes an eventSeq; docs/native-transport-v1.md, callback capture: a full ring keeps the loss run open, and the next copied record carries it as loss_before; handoff-full.expected.json): the tolls 4 and 5 are one loss run, written as the gap [4, 5] (queueCount 2, first lost 1,000,050,000,000 ns, last lost 1,000,060,000,000 ns) right before event 6. ACKs after each commit: 1, 2, 3, 5 (the gap), 6, 7 and 8.",
+    "docs/trips.md, load state (T12): the job (2) is configured while running, so trip@2 opens `unknown` with no cause interval, no truck or trailer reference and the unknown game mode; the toll (3) is attributed `trip` (T14).",
+    "docs/trips.md, 'any open | gap with a new suffix' (T10) and trip-reducer case 8: the gap [4, 5] closes trip@2 {none, gap, partial} at the session's last label, the toll 3 (1,800,000,000,030, T15), with one event-loss interval (queueCount; trip-reducer T10 table) of its suffix [4, 5], the run's lost times as monotonic bounds on the capture clock and detail {cause: gap, the six counters, the record's range, redelivered: false}. The job becomes untracked.",
+    "docs/trips.md, Attribution (T14): the toll 6 while the job is untracked is `ambiguous`; job.delivered (7) is the outcome of an untracked job, `ambiguous`, and closes no trip. The clear (8) adds nothing. Without the loss the trip would have closed complete at the delivery (T13).",
+    "Journal (docs/journal.md and docs/storage.md, Window rule J7): the list row is outcome none, close reason gap, partial; its timeline window runs from the job configuration (2) through 3, just before the first eventSeq the gap newly covered (`close-gap`), and its intervals page holds the event-loss interval.",
+    "Counts: 7 first commits (6 events, 1 gap); coverage 8. Losses (G6): lostEvents 2 (the gap's newly covered range), eventLoss 1. The recording status carries those losses and the idle trip summary; it reads `waiting` throughout, because no frame publishes a state with an available simulation (docs/telemetry-service-v1.md, Freshness; G3 rule 8)."
+  ],
+  "trips": [
+    {"trip": "trip@2", "jobConfigurationEventSeq": "2", "truckConfigurationEventSeq": null, "trailerConfigurationEventSeqs": [], "openedEventSeq": "2",
+      "gameMode": {"mode": "unknown", "method": "none", "confidence": "none"}, "gameModeAmbiguous": false, "outcome": "none", "outcomeEventSeq": null, "closeReason": "gap",
+      "recordingCompleteness": "partial", "startedUtcMs": 1800000000020, "endedUtcMs": 1800000000030, "observedDistanceM": {"available": false, "reason": "not-observed"}, "fuelUsedL": {"available": false, "reason": "not-observed"}}
+  ],
+  "attributions": [
+    {"eventSeq": "3", "trip": "trip@2", "attribution": "trip"},
+    {"eventSeq": "6", "trip": null, "attribution": "ambiguous"},
+    {"eventSeq": "7", "trip": null, "attribution": "ambiguous"}
+  ],
+  "intervals": [
+    {"trip": "trip@2", "kind": "event-loss", "firstEventSeq": "4", "lastEventSeq": "5", "startMonotonicNs": "1000050000000", "endMonotonicNs": "1000060000000", "sourceClockId": "capture-clock",
+      "detail": {"cause": "gap", "causes": {"offline": "0", "noDurableConsumer": "0", "queueCount": "2", "queueBytes": "0", "retentionExpired": "0", "encodingFailed": "0"},
+        "firstEventSeq": "4", "lastEventSeq": "5", "redelivered": false}}
+  ],
+  "coverage": {"committedThroughEventSeq": "8", "committed": 7, "duplicate": 0, "covered": 0},
+  "acks": ["1", "2", "3", "5", "6", "7", "8"],
+  "window": {"fromEventSeq": "2", "throughEventSeq": "3", "end": "close-gap", "events": ["2", "3"]},
+  "losses": {"lostEvents": 2, "eventLoss": 1, "notConnected": 0, "sampleLoss": 0, "restoreLoss": 0, "droppedSamples": 0}
+}
