@@ -81,7 +81,16 @@ Before it deletes anything, the uninstall copies a small Windows PowerShell scri
 - It shows one message that says what happened, and it writes a small result file, `%TEMP%\ETS2Telemetry-deferred-cleanup-<date and time>.json`, without any folder names.
 - If you reinstalled ETS2Telemetry in the meantime, the reinstall has already cancelled the cleanup: the plugin stays in use and the script does nothing.
 
-You can also finish by hand at any time: follow the README, or reinstall ETS2Telemetry, which cancels the pending cleanup, and uninstall it from the application with the games closed. Windows' handling of this sign-in step on a real machine, including how antivirus products treat it, has not been tested yet.
+- If an unexpected error stops the script, `README.txt` says whether it tries again at the next sign-in or has stopped.
+
+Some things can keep the script from running at all:
+
+- **Antivirus or endpoint security.** A hidden PowerShell script started at sign-in, which deletes files, is the kind of thing such products may flag or block.
+- **A Group Policy execution policy.** On a computer managed by an organization, a policy such as `AllSigned` overrides the script's own setting, and this unsigned script does not run.
+
+In those cases nothing is removed at sign-in, and the cleanup is left to `README.txt`.
+
+You can also finish by hand at any time: follow the README, or reinstall ETS2Telemetry, which cancels the pending cleanup, and uninstall it from the application with the games closed. Windows' handling of this sign-in step on a real machine, including how antivirus products and Group Policy treat it, has not been tested yet.
 
 ### If something is left behind
 

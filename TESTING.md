@@ -781,3 +781,18 @@ ET-018 PR-5 (owner decision O3) adds the deferred-cleanup executor `resources/un
 Changed tests: `uninstall-engine.test.ts`'s exact complete result and the fake results of `squirrel-events.test.ts` gained `executor: 'not-run'`, because the result type gained the field; the `cancelDeferralOnStart` case now expects `{deferral, executor}`, because the function's return changed with this PR. The lifecycle's final Windows-initiated uninstall now defers while the fake game runs and is completed by the executor, instead of completing while the application runs, which scenario (1) still covers. No other expected value changed.
 
 RED for PR-5, each applied alone to the script and reverted: the hash check removed fails `unrecognized-kept`; the running-game check removed fails `game-running`; the registration before the cleanup removed fails the `read-only-kept` registration check; the allowlist check removed fails `unknown-data-entry-kept` (`Test-DeferredCleanup.ps1`). In TypeScript, the hash check removed fails `unrecognized-kept` of the shared table, and arming after the plugin cleanup fails four ordering cases ([ET-018 validation](docs/validation/et-018.md#red-4)).
+
+PR-5 review fixes (October 18, 2026), in `Test-DeferredCleanup.ps1` (now 27 cases) and `uninstall-executor.test.ts`:
+
+- **An unexpected error.** It is raised through the test-root-only `-TestFailAt`. Before the attempt is counted and registered, nothing is registered, nothing is removed and README.txt says the cleanup stopped. Right after, the value is back, attempt 2 is counted and README.txt says it tries again; the next run completes. An invalid intent also leaves the "stopped" README.
+- **The intent's 128 KiB bound.** An intent just below the bound plus 16 registry folders, all blocked: the rewrite keeps every folder of the intent, stays within 128 KiB, and the next attempt reads it.
+- **The absolute `powershell.exe`.** The command uses the absolute form while it fits 260 characters, then the PATH form, then nothing. The PowerShell test checks the absolute form in a short scene at the system drive's root; the unit test checks both bounds.
+
+RED for the fixes, each applied alone to the script and reverted:
+
+- registering only late, on the deferred path, fails `fault-after-registration`;
+- no README on `EXECUTOR_FAILED` fails `fault-before-registration`;
+- the unbounded rewrite fails `intent-bound`;
+- the PATH form only fails `absolute-form`.
+
+Pending manual checks added by the review: the antivirus or EDR reaction to the hidden RunOnce PowerShell command, a Group Policy execution policy (such as `AllSigned`) overriding `-ExecutionPolicy Bypass`, and whether a blocked script that registers itself again runs more than once in one sign-in.
