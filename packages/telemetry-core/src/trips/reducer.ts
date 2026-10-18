@@ -406,8 +406,9 @@ function stepEvent(state: TripState, message: EventMessage, coveredThrough: Uint
   // before the connection's first reading.
   if (session.runClock !== null && c.monotonicNs !== null && !replayed(c)) session.runClock = switchRunClock(session.runClock, message.capture.clockId, c.monotonicNs, occurred.simulation);
   flushTotals(c);
-  // A replayed event can prove that the checkpoint's state lagged the replay and that its job had already ended or been
-  // replaced: the checkpoint job is then neither untracked nor a late-attach trip (stale checkpoints, docs/trips.md).
+  // A replayed event can show that the checkpoint's state lagged the replay and that its job had already ended or been
+  // replaced (a newer clear or configuration proves it, an outcome is treated as ending it): the checkpoint job is then
+  // neither untracked nor a late-attach trip (stale checkpoints, docs/trips.md).
   if (replayed(c) && session.pendingAttach !== null && endsStaleCheckpointJob(record, occurred.configurationRevision, session.pendingAttach.configurationRevision)) {
     session.pendingAttach = null;
     if (session.untrackedJob?.source === 'checkpoint') session.untrackedJob = null;
@@ -542,7 +543,7 @@ function stepSession(state: TripState, welcome: WelcomeMessage, coveredThrough: 
  * Hydration: a checkpoint itself never opens, closes or attributes, and has no effects. While the game's slot is idle,
  * its job is untracked from the checkpoint on and becomes the connection's pending late-attach trip (J9, which
  * supersedes T9's "a checkpoint job stays untracked"); an `attach` input opens it once the replayed events have drained,
- * unless a replayed event proved the checkpoint stale and its job ended (endsStaleCheckpointJob).
+ * unless a replayed event showed the checkpoint stale and ended its job (endsStaleCheckpointJob).
  */
 function stepCheckpoint(state: TripState, message: CheckpointMessage, receivedUtcMs: number | undefined): TripStepResult {
   const id = message.source.pluginSessionId;
@@ -565,16 +566,18 @@ function stepCheckpoint(state: TripState, message: CheckpointMessage, receivedUt
 }
 
 /**
- * Stale checkpoints (docs/trips.md): whether a replayed event proves that the job of a checkpoint with configuration
- * revision `checkpointRevision` had ended or been replaced before the checkpoint's nextEventSeq. The producer publishes
+ * Stale checkpoints (docs/trips.md): whether a replayed event ends the job of a checkpoint with configuration revision
+ * `checkpointRevision` before the checkpoint's nextEventSeq. The producer publishes
  * its state at frame boundaries (OD-5 S7) while nextEventSeq is the end of its event store (OD-5 S11), so the state can
  * lag the replayed events. Configuration callbacks advance the revision and every event carries the revision after its
  * own callback (protocol v1 §8), so:
- * - a `job.cleared` or `job.configured` with a newer revision happened after the checkpoint's configuration: the job
- *   was cleared or replaced, and a replayed configuration opens its own trip;
+ * - a `job.cleared` or `job.configured` with a newer revision happened after the checkpoint's configuration: it proves
+ *   that the job was cleared or replaced, and a replayed configuration opens its own trip;
  * - a `job.delivered` or `job.cancelled` at the checkpoint's revision or later happened while that configuration (or a
- *   later one) was current, so it ended the checkpoint's job or a job that replaced it. Outcomes do not advance the
- *   revision, so an outcome at the same revision can follow the checkpoint's configuration.
+ *   later one) was current, and is treated as ending the checkpoint's job. It does not prove it: after a clear and a new
+ *   configuration, an outcome may still belong to the earlier job (REG-004, O7). This matches onOutcome, which ends an
+ *   untracked job at any outcome while no trip is open. Outcomes do not advance the revision, so an outcome at the same
+ *   revision can follow the checkpoint's configuration.
  * An earlier revision proves nothing: the state can also lead the store (OD-5 S11), so the event may be older than the
  * checkpoint's job.
  */
@@ -608,7 +611,7 @@ function attachDue(session: SessionState, slot: GameSlot): boolean {
  *   `job.cleared`, `job.delivered` or `job.cancelled`, or a gap that hides live events (PR-7 review round 1).
  * A live item reaches the reducer with an attach still pending only when the attach was deferred because the queued
  * lifecycle effects did not fit; any other live item (a fine, a pause) leaves the job as the checkpoint showed it.
- * stepEvent also drops it at a replayed event that proves the checkpoint stale and its job ended (endsStaleCheckpointJob).
+ * stepEvent also drops it at a replayed event that shows the checkpoint stale and ends its job (endsStaleCheckpointJob).
  */
 function settleAttach(session: SessionState, slot: GameSlot, ended = false) {
   if (ended || (drained(session) && slot.trip !== null)) session.pendingAttach = null;
