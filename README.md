@@ -12,6 +12,8 @@ Compatibility with either game in single-player and TruckersMP is required but h
 
 **ET-022 candidate, hosted evidence recorded.** Windows x64 CI connects scaffold checks to pull requests, main pushes and manual runs, with isolated development and packaged worker probes and retained diagnostics. Clean and restored hosted jobs passed all 122 tests, native CTest and both smokes in 199/200 seconds; a deliberate assertion failed the job between them. Final PR-head verification, independent review and owner merge remain required. See [ET-022 validation](docs/validation/et-022.md). See [CI commands and evidence](docs/ci.md) and the [regression registry](docs/regression-registry.md). The preceding ET-001 status describes the merged scaffold baseline.
 
+**Releases, as of October 18, 2026: none published.** Windows CI builds the unsigned Squirrel installer on pushes to `main` and on dispatch and records its identity: the commit, versions, artifact hashes and the Authenticode status of every PE file. A release will be a GitHub pre-release labelled "unsigned internal alpha", published only with the owner's explicit authorization; SmartScreen will show an unknown publisher, and Smart App Control, when it is on, blocks the application. See [releases](docs/release.md).
+
 ## Planned MVP
 
 - Windows x64 support for ETS2 and ATS, including TruckersMP and single-player. Convoy is deferred.
@@ -54,6 +56,7 @@ The scaffold pins Node/npm and application dependencies. Electron main supervise
 - [Agent instructions](AGENTS.md): repository-wide working rules and the current handoff.
 - [Testing and regression strategy](TESTING.md): scaffold checks, permanent scenarios, CI/merge policy, and pending real-game acceptance evidence.
 - [Windows setup](docs/setup.md): pinned tools, build/test/package entrypoints, process boundaries, SDK acquisition, and remaining checks.
+- [Releases](docs/release.md): the release channel, the release checklist, the artifact identity and the signing decision.
 - [Implementation coordinator](COORDINATOR.md): Trello execution, subagent assignments, worktree ownership, independent review, and recovery handoffs.
 - [Coordinator launch prompt](docs/prompts/coordinator-start.md): copy into a separate local Codex chat to coordinate the prototype and prepare PRs for owner review.
 
