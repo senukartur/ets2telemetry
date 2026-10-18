@@ -31,7 +31,7 @@ export type UninstallOutcome = 'complete' | 'deferred' | 'refused';
 export type RegistryProblem = 'REGISTRY_INVALID' | 'REGISTRY_NEWER' | 'REGISTRY_UNREADABLE';
 /** The result's primary reason: why it was refused or deferred, or null when complete. */
 export type UninstallCode = UninstallRootsRefusal | 'INTENT_FAILED' | 'RUNNING_CHECK_FAILED' | 'BUDGET_EXPIRED' | RegistryProblem | CleanupBlockReason
-  | 'DATA_ENTRY_BLOCKED';
+  | 'DATA_ENTRY_BLOCKED' | 'INSTANCE_RUNNING';
 export interface UninstallResult {
   readonly outcome: UninstallOutcome;
   readonly code: UninstallCode | null;
@@ -73,6 +73,11 @@ export interface UninstallPorts {
   readonly delay?: (milliseconds: number) => Promise<void>;
   /** O7 hook: removes Electron's Roaming userData; called only in production mode and only after a complete wipe. */
   readonly removeRoamingUserData?: () => Promise<boolean>;
+  /**
+   * Defer everything with this code after the read-only preflight and the intent: no game folder and no data entry is
+   * touched. The Squirrel uninstall hook uses it when a running instance did not exit (ET-018 U6).
+   */
+  readonly deferAll?: 'INSTANCE_RUNNING';
   /** Fixed codes and counts only. */
   readonly log?: (event: string, facts: Record<string, string | number | boolean | null>) => void;
 }
@@ -135,6 +140,11 @@ export async function runUninstall(ports: UninstallPorts): Promise<UninstallResu
     known, folders: intentFolders(folders, kept)}, ports.known, kept);
   try {await writePendingRecord(ports.fs, dataRoot, intent);} catch {return refused('INTENT_FAILED');}
   log('UNINSTALL_INTENT', {folders: folders.length, recorded: intent.folders.length, attempts: intent.attempts});
+  if (ports.deferAll) {
+    try {await writePendingRecord(ports.fs, dataRoot, {...intent, phase: 'deferred'});} catch {/* the first intent stays; still deferred */}
+    log('UNINSTALL_RESULT', {outcome: 'deferred', code: ports.deferAll, removed: 0, blocked: 0, dataFailed: 0, kept: 0});
+    return {outcome: 'deferred', code: ports.deferAll, plugins: {removed: 0, absent: 0, unrecognized: 0, notes: [], blocked: []}, data: EMPTY_DATA, roaming: 'not-run'};
+  }
 
   // 3. Plugin cleanup, folder by folder.
   let removed = 0, absent = 0, unrecognized = 0;

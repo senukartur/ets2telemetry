@@ -1,10 +1,21 @@
 import type {DiagnosticFacts} from './diagnostics';
 
 /** Every path to an orderly exit. Closing the main window is deliberately not one of them. */
-export type ExitReason = 'tray' | 'renderer' | 'app-quit' | 'session-end';
-export const EXIT_REASONS: readonly ExitReason[] = Object.freeze(['tray', 'renderer', 'app-quit', 'session-end']);
+export type ExitReason = 'tray' | 'renderer' | 'app-quit' | 'session-end' | 'uninstall';
+export const EXIT_REASONS: readonly ExitReason[] = Object.freeze(['tray', 'renderer', 'app-quit', 'session-end', 'uninstall']);
 /** An in-flight durable write (ET-011b settings) may delay the final exit by at most this long. */
 export const EXIT_IDLE_BUDGET_MS = 1000;
+
+/**
+ * The one second-instance payload that is not a request to show the dashboard: the Squirrel uninstall hook asks the running
+ * instance to run its explicit exit with reason `uninstall` (ET-018 U6). Only a plain object with exactly this key and
+ * value matches; anything else, including an extra key, only shows the dashboard.
+ */
+export function isUninstallExitPayload(data: unknown): boolean {
+  if (typeof data !== 'object' || data === null || Array.isArray(data) || Object.getPrototypeOf(data) !== Object.prototype) return false;
+  const keys = Object.keys(data);
+  return keys.length === 1 && keys[0] === 'ets2telemetry' && (data as Record<string, unknown>).ets2telemetry === 'uninstall-exit';
+}
 
 export type DashboardPresence = 'none' | 'minimized' | 'visible';
 export type SecondInstanceAction = 'ignored-exiting' | 'ignored-starting' | 'restored' | 'focused' | 'created';

@@ -1,5 +1,4 @@
 import {app, BrowserWindow, dialog, ipcMain, Menu, MessageChannelMain, nativeImage, screen, shell, Tray, utilityProcess, type MessagePortMain, type UtilityProcess, type IpcMainEvent, type IpcMainInvokeEvent} from 'electron';
-import squirrelStartup from 'electron-squirrel-startup';
 import {existsSync, mkdirSync} from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -27,7 +26,7 @@ import {isOverlayEditOutcome, parseOverlayEditScale, type OverlayEditOutcome} fr
 import {OwnForegroundGate} from './overlay-edit';
 import {captureActivation, type CaptureGrant} from './capture-activation';
 import {monitorEventLoopLag} from './event-loop-lag';
-import {ExitCoordinator, secondInstanceAction, type ExitReason} from './app-lifecycle';
+import {ExitCoordinator, isUninstallExitPayload, secondInstanceAction, type ExitReason} from './app-lifecycle';
 import {failureCode, initialHealth, reduceHealth, sameHealth, type HealthEvent} from './app-health';
 import {addLosses, parseRecordingHealth, recordingFacts, sameRecording, ZERO_LOSSES} from './recording-status';
 import {TrayPresenter, type TrayMenuItem} from './tray-model';
@@ -42,9 +41,15 @@ import {DIAGNOSTICS_EXPORT_CHANNEL, isPluginGame, isPluginTargetId, PLUGIN_CHANN
 import {connectionDiagnosis} from './connection-diagnosis';
 import {buildDiagnosticBundle, readDiagnosticLogs, readFileTail} from './diagnostic-bundle';
 import {DiagnosticBundleExporter} from './diagnostic-bundle-writer';
+import {cancelDeferralOnStart, EXIT_CODES, parseSquirrelArgs, productionSquirrelPorts, runSquirrelEvent} from './squirrel-events';
 
-if (squirrelStartup) app.quit();
-else {
+// ET-018 (U2): a Squirrel event runs first and alone, before the profile override, logs, settings, plugin setup and the
+// service. Unpackaged, the first argument after the executable is the application path.
+const squirrelArgs = parseSquirrelArgs(process.argv.slice(app.isPackaged ? 1 : 2));
+if (squirrelArgs.kind !== 'none') {
+  void runSquirrelEvent(squirrelArgs, productionSquirrelPorts({app, appVersion: version, executable: process.execPath, env: process.env, mainDirectory: __dirname,
+    resourcesPath: process.resourcesPath})).then(code => app.exit(code), () => app.exit(EXIT_CODES.refused));
+} else {
   // The diagnostic profile override must precede the single-instance lock, which Electron keys by userData.
   let profileError: unknown;
   try {
@@ -556,8 +561,14 @@ function runApplication(profileError: unknown): void {
   app.on('before-quit', event => {event.preventDefault(); requestExit('app-quit');});
   // The tray keeps the application running after the last window closes; only an explicit exit ends it.
   app.on('window-all-closed', () => undefined);
-  // The second process's argv, working directory and additional data are deliberately ignored.
-  app.on('second-instance', () => openDashboard('second-instance'));
+  // The second process's argv and working directory are deliberately ignored. Its additional data is read for one exact
+  // payload only: the Squirrel uninstall hook's request to run the explicit exit (ET-018 U6). Main deletes nothing for it;
+  // every other payload only shows the dashboard, and an instance that is already exiting ignores both.
+  app.on('second-instance', (_event, _argv, _cwd, additionalData) => {
+    if (!isUninstallExitPayload(additionalData)) {openDashboard('second-instance'); return;}
+    log('SECOND_INSTANCE', undefined, {action: lifecycle.exiting ? 'ignored-exiting' : 'uninstall-exit'});
+    requestExit('uninstall');
+  });
   if (process.env.ETS2TELEMETRY_LIVE_SMOKE === '1' && diagnosticDirectory && path.isAbsolute(diagnosticDirectory) && process.env.ETS2TELEMETRY_PROFILE_DIR && path.isAbsolute(process.env.ETS2TELEMETRY_PROFILE_DIR)) {
     (app as unknown as EventEmitter).on('ets2telemetry:diagnostic-service-exit', () => {if (service && serviceReady && !supervisor.stopping) {log('DIAGNOSTIC_SERVICE_EXIT_REQUEST', {pid: service.pid}); service.kill();}});
     // Isolated smokes cannot click the notification area; this invokes the same handlers as the tray menu.
@@ -765,4 +776,11 @@ function runApplication(profileError: unknown): void {
   ipcMain.on('overlay:unsubscribe', event => {if (!trustedOverlay(event)) return; retireOverlay();});
   // ET-017 (P13): plugin setup starts 2 s after readiness on its own unreferenced timer; startup never waits for it.
   app.whenReady().then(() => {if (!lifecycle.exiting) {createTray(); pluginSetup.start();} startService();}).catch(error => fail('APP_START_FAILED', error));
+  // ET-018 (U7 fallback): a start of the installed application cancels a pending uninstall deferral; it removes only the
+  // deferral's intent and README, and the next plugin setup run takes over the plugin files again.
+  if (app.isPackaged) {
+    void cancelDeferralOnStart({executable: process.execPath, env: process.env}).then(outcome => {
+      if (outcome === 'cancelled' || outcome === 'failed') log('UNINSTALL_DEFERRAL_CANCEL', undefined, {outcome});
+    });
+  }
 }
