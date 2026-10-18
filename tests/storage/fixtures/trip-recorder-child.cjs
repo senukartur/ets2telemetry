@@ -25,11 +25,17 @@
 //   attached <status>                   an openAttachedTrip result returned (`committed`, `duplicate` or `none`)
 // with one more barrier, counted in attach ops:
 //   {kind: 'after', attach: true}                            after the first attach op returned, before anything else
+// ET-019 PR-4: `mode: 'fault-worker'` runs the test-only fault storage worker with its first `appendSamples` held
+// inside its transaction (`samplesFault: {hold: true}`) through StorageClient. With `stopAfterDisconnect` the process
+// also reports `stopping` before its orderly stop, and in this mode it reports:
+//   appendSamples <rows>                an appendSamples command with that many rows is sent to the worker
+//   barrier samples                     the worker holds the first appendSamples inside its transaction; the child
+//                                       then waits to be terminated
 'use strict';
 const {readFileSync, writeSync} = require('node:fs');
 const net = require('node:net');
 const path = require('node:path');
-const {Worker} = require('node:worker_threads');
+const {MessageChannel, Worker} = require('node:worker_threads');
 
 const [configFile] = process.argv.slice(2);
 const config = JSON.parse(readFileSync(configFile, 'utf8'));
@@ -69,6 +75,20 @@ async function openStorage() {
     };
   }
   const {StorageClient, workerHandle} = require(path.join(bundles, 'storage-client.cjs'));
+  if (config.mode === 'fault-worker') {
+    const {port1, port2} = new MessageChannel();
+    const worker = new Worker(path.join(bundles, 'fault-storage-worker.cjs'), {workerData: {kind: 'storage', samplesFault: {hold: true}, control: port2}, transferList: [port2]});
+    // Only the hold notice is read; the port must not keep the process alive on its own.
+    port1.on('message', message => { if (message && message.type === 'held' && message.command === 'appendSamples') writeSync(1, 'barrier samples\n'); });
+    port1.unref();
+    const client = new StorageClient(workerHandle(worker));
+    const append = client.appendSamples.bind(client);
+    // Reported synchronously before the command is sent, so the parent knows the size of the batch that is held.
+    client.appendSamples = (session, rows, options) => { writeSync(1, `appendSamples ${rows.length}\n`); return append(session, rows, options); };
+    const opened = await client.open(config.open);
+    if (!opened.ok) throw new Error(`Storage open failed: ${opened.error.code}`);
+    return client;
+  }
   const client = new StorageClient(workerHandle(new Worker(path.join(bundles, 'storage-worker.cjs'), {workerData: {kind: 'storage'}})));
   const opened = await client.open(config.open);
   if (!opened.ok) throw new Error(`Storage open failed: ${opened.error.code}`);
@@ -129,7 +149,7 @@ async function main() {
     if (state.status === 'disconnected' && previous !== 'disconnected' && state.observation) {
       writeSync(1, 'disconnected\n');
       // After the state callback returns, so the closing connection finishes first.
-      if (config.stopAfterDisconnect && !stopping) { stopping = true; setImmediate(() => void ingestion.stop().then(() => write('stopped'))); }
+      if (config.stopAfterDisconnect && !stopping) { stopping = true; setImmediate(() => { writeSync(1, 'stopping\n'); void ingestion.stop().then(() => write('stopped')); }); }
     }
     previous = state.status;
   }});
