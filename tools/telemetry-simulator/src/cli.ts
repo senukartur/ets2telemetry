@@ -8,17 +8,24 @@ import {clientPlan,pipeDifferences,runV1PipeClient,serveV1} from './v1/pipe';
 import {checkStateRate,checkV1Cadence} from './v1/cadence';
 import {reactiveDifferences,runIndependentClient,serveV1Reactive} from './v1/reactive';
 
-/** `<file> [--scale <real ms per scenario ms>] [--lockstep | --reactive]` of the v1 pipe commands. */
-function v1Args(command:string,args:string[]):{file:string;scale:number;flag:boolean} {
-  const flagName=command==='serve-v1'?'--lockstep':'--reactive',usage=`Usage: cli.cjs ${command} <simulator-v1-scenario.json> [--scale <0-10>] [${flagName}]`;
-  const [file,...rest]=args;let scale=1,flag=false;
+/**
+ * `<file> [--scale <real ms per scenario ms>] [--lockstep | --reactive]` of the v1 pipe commands. serve-v1 also takes
+ * `--await-scripted-acks` (reactive mode only): serveV1Reactive's `awaitScriptedAcks` for a consumer whose commits may be
+ * slower than the 1,000 ms quiesce bound, such as the desktop service in the recording runtime journey.
+ */
+function v1Args(command:string,args:string[]):{file:string;scale:number;flag:boolean;awaitScriptedAcks:boolean} {
+  const flagName=command==='serve-v1'?'--lockstep':'--reactive',awaitName=command==='serve-v1'?' [--await-scripted-acks]':'';
+  const usage=`Usage: cli.cjs ${command} <simulator-v1-scenario.json> [--scale <0-10>] [${flagName}]${awaitName}`;
+  const [file,...rest]=args;let scale=1,flag=false,awaitScriptedAcks=false;
   for(let i=0;i<rest.length;i++) {
     if(rest[i]==='--scale'&&/^(0|[1-9][0-9]*)(\.[0-9]+)?$/.test(rest[i+1]??''))scale=Number(rest[++i]);
     else if(rest[i]===flagName&&!flag)flag=true;
+    else if(command==='serve-v1'&&rest[i]==='--await-scripted-acks'&&!awaitScriptedAcks)awaitScriptedAcks=true;
     else throw new Error(usage);
   }
-  if(!file)throw new Error(usage);
-  return {file,scale,flag};
+  // Lockstep mode follows the scripted client exactly and has no quiesce bound to lift.
+  if(!file||(awaitScriptedAcks&&flag))throw new Error(usage);
+  return {file,scale,flag,awaitScriptedAcks};
 }
 const sha256=(lines:string[])=>createHash('sha256').update(lines.map(l=>l+'\n').join('')).digest('hex');
 
@@ -33,13 +40,13 @@ async function main():Promise<void> {
   // the scenario's scripted client with --lockstep. smoke-v1 runs the scripted client against a lockstep server, or an
   // independent consumer against a reactive server with --reactive, and checks the run against replay-v1.
   if(command==='serve-v1'||command==='smoke-v1') {
-    const {file:path,scale,flag}=v1Args(command,process.argv.slice(3)),input=readFixtureFile(path);
+    const {file:path,scale,flag,awaitScriptedAcks}=v1Args(command,process.argv.slice(3)),input=readFixtureFile(path);
     const reactive=command==='serve-v1'?!flag:flag;
     const controller=new AbortController();const cancel=()=>controller.abort();process.once('SIGINT',cancel);process.once('SIGTERM',cancel);
     let stop:(()=>Promise<void>)|undefined;
     try {
       if(reactive) {
-        const server=await serveV1Reactive(input,{scale,signal:controller.signal});stop=server.stop;
+        const server=await serveV1Reactive(input,{scale,awaitScriptedAcks,signal:controller.signal});stop=server.stop;
         if(command==='serve-v1') {
           console.log(JSON.stringify({origin:'synthetic',mode:'reactive',endpoint:server.endpoint,history:false}));
           const report=await server.done;
