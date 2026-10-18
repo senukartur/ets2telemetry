@@ -8,13 +8,16 @@ import {mainLogLocation, SERVICE_LOG_ROOT_VARIABLE, serviceEnvironment, serviceL
 /**
  * Filesystem seams for the writer. `appendFile` (node:fs/promises) records every write; a `gate` holds writes that start
  * while it is set, and `fail` rejects that many writes. `syncDelayMs` slows `appendFileSync` (node:fs), as a stalled disk
- * or file-system filter would, so a writer that appends synchronously blocks its caller.
+ * or file-system filter would, so a writer that appends synchronously blocks its caller. `syncWrites` records synchronous
+ * appends and `syncFail` makes the next one throw.
  */
-const control = vi.hoisted(() => ({syncDelayMs: 0, gate: undefined as Promise<void> | undefined, fail: 0, writes: [] as string[]}));
+const control = vi.hoisted(() => ({syncDelayMs: 0, gate: undefined as Promise<void> | undefined, fail: 0, writes: [] as string[], syncWrites: [] as string[], syncFail: false}));
 vi.mock('node:fs', async importOriginal => {
   const actual = await importOriginal<typeof import('node:fs')>();
   const appendFileSync = (...args: Parameters<typeof actual.appendFileSync>) => {
     if (control.syncDelayMs) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, control.syncDelayMs);
+    control.syncWrites.push(String(args[1]));
+    if (control.syncFail) { control.syncFail = false; throw new Error('EIO: i/o error, open C:\\private\\startup.jsonl'); }
     actual.appendFileSync(...args);
   };
   return {...actual, default: {...actual, appendFileSync}, appendFileSync};
@@ -35,7 +38,7 @@ const directories: string[] = [];
 function directory() {const result = mkdtempSync(path.join(tmpdir(), 'ets2-log-test-')); directories.push(result); return result;}
 afterEach(() => {
   for (const dir of directories.splice(0)) rmSync(dir, {recursive: true, force: true});
-  Object.assign(control, {syncDelayMs: 0, gate: undefined, fail: 0, writes: []});
+  Object.assign(control, {syncDelayMs: 0, gate: undefined, fail: 0, writes: [], syncWrites: [], syncFail: false});
   vi.restoreAllMocks(); vi.useRealTimers();
 });
 function held() {
@@ -141,6 +144,35 @@ it('reports a failed write and everything after it on the console, in order, wit
   expect(fallback.mock.calls.map(call => call[0] as string)).toEqual(['FIRST', 'SECOND', 'THIRD', 'FOURTH'].map(event => `[ETS2Telemetry] ${event}`));
   expect(JSON.stringify(fallback.mock.calls)).not.toContain('private');
   expect(control.writes).toHaveLength(1);
+});
+// Crash path (review round 1): the telemetry service's crash handler writes the queue synchronously before it exits.
+it('drains the queue synchronously on the crash path; a batch already in flight may land after it', async () => {
+  const dir = directory(), log = createDiagnostics(dir, true);
+  const release = held();
+  log('IN_FLIGHT'); log('QUEUED'); log('SERVICE_UNCAUGHT', new Error('cause'), {kind: 'exception'});
+  log.drainSync();
+  // The queued rows are on disk when drainSync returns, in one bounded write, while the first batch is still held.
+  expect(control.syncWrites).toHaveLength(1);
+  expect(Buffer.byteLength(control.syncWrites[0])).toBeLessThanOrEqual(256 * 1024);
+  expect(rows(dir).map(row => row.event)).toEqual(['QUEUED', 'SERVICE_UNCAUGHT']);
+  expect(rows(dir)[1].detail).toMatchObject({message: 'cause'});
+  release();
+  expect(await log.flush(5000)).toBe(true);
+  // The documented reordering: the batch that was in flight lands after the drained rows, and nothing is written twice.
+  expect(rows(dir).map(row => row.event)).toEqual(['QUEUED', 'SERVICE_UNCAUGHT', 'IN_FLIGHT']);
+  log.drainSync();
+  expect(control.syncWrites).toHaveLength(1);
+});
+it('reports a failed synchronous drain on the console by event code only', async () => {
+  const dir = directory(), log = createDiagnostics(dir, true);
+  const fallback = vi.spyOn(console, 'error').mockImplementation(() => {});
+  const release = held();
+  log('IN_FLIGHT'); log('SERVICE_UNCAUGHT', new Error('private'), {kind: 'rejection'});
+  control.syncFail = true;
+  expect(() => log.drainSync()).not.toThrow();
+  expect(fallback.mock.calls.map(call => call[0] as string)).toEqual(['[ETS2Telemetry] SERVICE_UNCAUGHT']);
+  release();
+  await log.flush(5000);
 });
 it('bounds the flush: it reports false after its wait and true once the records are written', async () => {
   vi.useFakeTimers({toFake: ['setTimeout', 'clearTimeout']});

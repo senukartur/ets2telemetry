@@ -149,7 +149,7 @@ function installFixture() {
     shell: {showItemInFolder: (file: string) => shell.showItemInFolder(file), openPath: (folder: string) => shell.openPath(folder)}}));
   vi.doMock('electron-squirrel-startup', () => ({default: false}));
   vi.doMock('../../apps/desktop/src/entrypoints', () => ({processEntrypoint: () => 'package.json'}));
-  log = Object.assign(vi.fn(), {flush: vi.fn(() => Promise.resolve(true))}); diagnosticsCalls = [];
+  log = Object.assign(vi.fn(), {flush: vi.fn(() => Promise.resolve(true)), drainSync: vi.fn()}); diagnosticsCalls = [];
   vi.doMock('../../apps/desktop/src/diagnostics', async importOriginal => ({...await importOriginal<typeof import('../../apps/desktop/src/diagnostics')>(),
     createDiagnostics: (...args: unknown[]) => {diagnosticsCalls.push(args); return log;}}));
   vi.doMock('../../apps/desktop/src/broker-artifact', () => ({brokerConfiguration: resolveBroker, createBrokerResolver: () => resolveBroker}));

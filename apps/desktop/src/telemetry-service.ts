@@ -27,6 +27,25 @@ if (!port) throw new Error('Missing Electron parent port');
 const logLocation = serviceLogLocation(process.env, tmpdir());
 const log = createDiagnostics(logLocation.directory, logLocation.detailed);
 log('SERVICE_BOOT');
+/**
+ * A crash ends the service at once, so the records still queued behind the asynchronous log write would be lost. Log one
+ * fixed row, write the queue synchronously (at most the 256 KiB the log bounds counted) and exit 1, as an uncaught error
+ * did before. A batch already being written asynchronously may land after the drained rows.
+ */
+function crashed(kind: 'exception' | 'rejection', error: unknown): void {
+  log('SERVICE_UNCAUGHT', error, {kind});
+  log.drainSync();
+  process.exit(1);
+}
+process.on('uncaughtException', error => crashed('exception', error));
+process.on('unhandledRejection', reason => crashed('rejection', reason));
+/**
+ * Main answers a `failed` report after readiness by killing this process, so the rows that explain the failure are
+ * written first, waiting at most SERVICE_EXIT_FLUSH_MS.
+ */
+function postFailure(message: {type: string; code?: unknown}): void {
+  void log.flush(SERVICE_EXIT_FLUSH_MS).then(() => {port.postMessage(message);});
+}
 const subscriptions = new LiveSubscriptions(initialLive());
 // The live update is the latest v0 update with the whitelisted v1 projection of the same selection attached
 // (ET-010c decisions F1 and F2); the subscriptions coalesce both to at most 20 Hz.
@@ -121,7 +140,7 @@ const probe = new ServiceProbe({
     // sequence sends the single final `stopped` message after every phase.
     if (stopping && message.type === 'stopped') {storageStopped = true; return;}
     log('SERVICE_REPORT', message);
-    port.postMessage(message);
+    if (message.type === 'failed') postFailure(message); else port.postMessage(message);
     if (stopping) return;
     if (message.type === 'stopped') exitAfterHistory(0);
     if (message.code === 'SERVICE_STOP_FAILED') exitAfterHistory(1);
@@ -189,7 +208,7 @@ port.on('message', event => {
       // Evidence capture is independent of live ingestion: a rejected grant never fails selection.
       if (command.capture !== undefined) captures.offer(command.capture, selection, broker);
     }
-    catch {port.postMessage({type: 'failed', code: 'INVALID_SOURCE_COMMAND'});}
+    catch {postFailure({type: 'failed', code: 'INVALID_SOURCE_COMMAND'});}
   } else if (command?.type === 'journal') {
     for (const transferred of event.ports) transferred.close();
     journal.receive(command, reply => port.postMessage(reply));

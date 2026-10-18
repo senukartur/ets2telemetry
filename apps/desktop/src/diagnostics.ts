@@ -1,16 +1,21 @@
-import {existsSync, mkdirSync, renameSync, rmSync, statSync} from 'node:fs';
+import {appendFileSync, existsSync, mkdirSync, renameSync, rmSync, statSync} from 'node:fs';
 import {appendFile} from 'node:fs/promises';
 import path from 'node:path';
 
 const LIMIT = 256 * 1024;
 const MAX_RECORDS = 2000;
 /**
- * The longest a process waits for its pending log records before it exits. The service's stop sequence takes at most
- * 2,500 ms, so with this wait the service exits inside main's 3,000 ms kill deadline. Main has no such deadline after
- * its supervisor finished, and gives its own final rows (`SERVICE_EXIT`, `APP_EXIT`) up to 1,000 ms.
+ * The longest the telemetry service waits for its pending log records before it exits, and before it posts a failure
+ * report that main answers by killing it. Main's 3,000 ms kill deadline starts when main posts `stop`; the stop sequence
+ * takes at most 2,500 ms plus three event-loop turns, so with this wait about 350 ms remain for the message delivery
+ * and the process exit.
  */
-export const SERVICE_EXIT_FLUSH_MS = 250;
-export const MAIN_EXIT_FLUSH_MS = 1000;
+export const SERVICE_EXIT_FLUSH_MS = 150;
+/**
+ * The longest main waits for its final rows (`SERVICE_EXIT`, `APP_EXIT`) before `app.exit`. The exiting instance still
+ * holds the single-instance lock, so a launch in this window only signals it and ends; the wait is kept short for that.
+ */
+export const MAIN_EXIT_FLUSH_MS = 300;
 /** The longest the diagnostic bundle waits for main's pending records before it reads the logs. */
 export const BUNDLE_FLUSH_MS = 250;
 
@@ -23,6 +28,11 @@ export interface DiagnosticLog {
    * `timeoutMs` with `false`. It never rejects.
    */
   flush(timeoutMs: number): Promise<boolean>;
+  /**
+   * Crash path only: writes every queued record at once with a synchronous append (at most the 256 KiB the bounds
+   * counted). A batch already being written asynchronously may land after these records.
+   */
+  drainSync(): void;
 }
 
 /**
@@ -109,6 +119,14 @@ export function createDiagnostics(directory: string, detailed = false): Diagnost
         const waiter = {until: queued, resolve: (done: boolean) => { clearTimeout(timer); resolve(done); }};
         waiters.push(waiter);
       });
+    },
+    drainSync(): void {
+      if (!queue.length) return;
+      const batch = queue; queue = [];
+      try { appendFileSync(filename, batch.map(entry => entry.line).join(''), 'utf8'); }
+      catch { available = false; for (const entry of batch) fallback(entry.event); }
+      handled += batch.length;
+      settle();
     }
   });
 }
