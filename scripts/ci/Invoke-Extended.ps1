@@ -15,4 +15,6 @@ try {
         Tee-Object -FilePath (Join-Path $output 'watchdog-summary.txt')
 } finally { $env:TEMP = $previousTemp; $env:TMP = $previousTmp }
 & (Join-Path $checkout 'tests/windows/Test-UninstallResidue.ps1') -FixtureDirectory (Join-Path $output 'uninstall-residue')
+# ET-018 PR-5: the deferred-cleanup executor on temporary scenes with its own per-run test RunOnce key, which it deletes.
+& (Join-Path $checkout 'tests/windows/Test-DeferredCleanup.ps1') | Tee-Object -FilePath (Join-Path $output 'deferred-cleanup-summary.txt')
 # Evidence remains for always-upload, including inert rejected residue fixtures.

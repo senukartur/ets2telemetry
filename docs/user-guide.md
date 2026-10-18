@@ -39,7 +39,7 @@ Everything ETS2Telemetry records or saves lives in `%LOCALAPPDATA%\ETS2Telemetry
 | `captures` | Evidence captures, only if you turned capturing on |
 | `plugins` | The record of where the game plugin was installed |
 | `transport` | Connection settings shared with the game plugin |
-| `uninstall` | Only during an unfinished uninstall |
+| `uninstall` | Only during an unfinished uninstall: its record, `README.txt` and the cleanup script that runs at your next sign-in |
 
 Your trip history is stored only on this computer. It is not synchronized anywhere yet: synchronization with a server is a later phase of the project. To keep a copy of a trip, open it on the **Journal** tab and select **Export JSON**; save the file anywhere outside `%LOCALAPPDATA%\ETS2Telemetry`. An export is a copy for your own records. It cannot be imported back into ETS2Telemetry.
 
@@ -70,7 +70,27 @@ On the **Live** tab, the last card is **Uninstall ETS2Telemetry**. Select **Unin
 
 Open **Settings**, **Apps**, **Installed apps**, select **ETS2Telemetry Desktop** and **Uninstall** (or use Control Panel). A running ETS2Telemetry closes first. Windows shows no window from ETS2Telemetry during this uninstall, so the result is written to a small file, `%TEMP%\ETS2Telemetry-uninstall-<date and time>.json`.
 
-If a game or TruckersMP is running at that moment, Windows still removes the program, but the plugin cannot be removed from that game: ETS2Telemetry keeps `%LOCALAPPDATA%\ETS2Telemetry\plugins` and `%LOCALAPPDATA%\ETS2Telemetry\uninstall`, with a `README.txt` that lists the game folders and the plugin's checksums. Everything else in the data folder is deleted. A later version will finish this cleanup at your next sign-in; until then, follow the README, or reinstall ETS2Telemetry, which cancels the pending cleanup, and uninstall it from the application with the games closed.
+If a game or TruckersMP is running at that moment, Windows still removes the program, but the plugin cannot be removed from that game: ETS2Telemetry keeps `%LOCALAPPDATA%\ETS2Telemetry\plugins` and `%LOCALAPPDATA%\ETS2Telemetry\uninstall`, with a `README.txt` that lists the game folders and the plugin's checksums. Everything else in the data folder is deleted.
+
+#### The cleanup finishes at your next sign-in
+
+Before it deletes anything, the uninstall copies a small Windows PowerShell script, `Complete-ETS2TelemetryUninstall.ps1`, into `%LOCALAPPDATA%\ETS2Telemetry\uninstall` and asks Windows to run it once at your next sign-in (a `RunOnce` entry named `ETS2TelemetryUninstall` for your user only; no administrator rights). When you sign in again:
+
+- If the games and TruckersMP are closed, the script removes the plugin, but only a file whose checksum is one of ETS2Telemetry's, then the `plugins` and `uninstall` folders and the empty data folder. It never removes a plugin file it does not recognize, a read-only file or anything reached through a linked folder; those stay, and so does anything else you put in the data folder.
+- If a game or TruckersMP is running again, it changes nothing in that game folder and asks Windows to try again at the following sign-in. After 10 attempts in total it stops trying; `README.txt` then says so and lists the steps to finish by hand.
+- It shows one message that says what happened, and it writes a small result file, `%TEMP%\ETS2Telemetry-deferred-cleanup-<date and time>.json`, without any folder names.
+- If it finishes, it also removes Electron's own browser data, `%APPDATA%\ETS2Telemetry Desktop`, as the uninstall itself does when it can finish at once.
+- If you reinstalled ETS2Telemetry in the meantime, the reinstall has already cancelled the cleanup: the plugin stays in use and the script does nothing.
+- If an unexpected error stops the script, `README.txt` says whether it tries again at the next sign-in or has stopped.
+
+Some things can keep the script from running at all:
+
+- **Antivirus or endpoint security.** A hidden PowerShell script started at sign-in, which deletes files, is the kind of thing such products may flag or block.
+- **A Group Policy execution policy.** On a computer managed by an organization, a policy such as `AllSigned` overrides the script's own setting, and this unsigned script does not run.
+
+In those cases nothing is removed at sign-in, and the cleanup is left to `README.txt`.
+
+You can also finish by hand at any time: follow the README, or reinstall ETS2Telemetry, which cancels the pending cleanup, and uninstall it from the application with the games closed. Windows' handling of this sign-in step on a real machine, including how antivirus products and Group Policy treat it, has not been tested yet.
 
 ### If something is left behind
 
@@ -83,7 +103,7 @@ If a game or TruckersMP is running at that moment, Windows still removes the pro
 
 Use these steps when the uninstall cannot finish, for example when `%LOCALAPPDATA%` is redirected through a link, which ETS2Telemetry refuses to delete from.
 
-1. Close ETS2Telemetry (**Exit ETS2Telemetry** in the notification area icon's menu), the games and TruckersMP.
+1. Close ETS2Telemetry (**Exit ETS2Telemetry** in the notification area icon's menu), the games and TruckersMP. If a cleanup is still waiting for your next sign-in, it finds nothing left to do once you have finished these steps.
 2. In each game folder, open `bin\win_x64\plugins`. Delete `ets2telemetry-plugin.dll` only if it is ETS2Telemetry's: in PowerShell, `Get-FileHash -Algorithm SHA256 -LiteralPath '<path to the file>'` must print one of the checksums that `README.txt` lists, or the checksum in `resources\telemetry-plugin\plugin-manifest.json` of the installed program. Leave every other file.
 3. Delete `%LOCALAPPDATA%\ETS2Telemetry`. This deletes your trip history for good.
 4. If the program is still listed in Windows Settings, uninstall it there. Otherwise delete `%LOCALAPPDATA%\ETS2TelemetryDesktop`, `%APPDATA%\ETS2Telemetry Desktop` and any remaining **ETS2Telemetry Desktop** shortcuts.

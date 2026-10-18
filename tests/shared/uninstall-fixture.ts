@@ -4,6 +4,7 @@ import path from 'node:path';
 import type {RunningCheck} from '../../apps/desktop/src/plugin-setup/plugin-installer';
 import type {InstallRecord, PendingIntent} from '../../apps/desktop/src/plugin-setup/plugin-registry';
 import type {UninstallFileSystem} from '../../apps/desktop/src/uninstall/engine';
+import type {RunOnceRegistry} from '../../apps/desktop/src/uninstall/executor';
 import {fakeSteam, type FakeSteam} from './fake-steam';
 import type {GuardedRoot} from './guarded-fs';
 
@@ -110,3 +111,38 @@ export async function listTree(root: string): Promise<string[]> {
   return rows;
 }
 export const exists = (target: string) => fsp.lstat(target).then(() => true, () => false);
+
+/** A per-test RunOnce key of the allowed test form; the fake registry below never reaches Windows. */
+export const TEST_RUN_ONCE = `HKCU\\Software\\ETS2Telemetry-Test-${'0123456789abcdef'.repeat(2)}\\RunOnce`;
+/** Rewrites the fixture's installer test file with this RunOnce key (or null). */
+export async function useRunOnceKey(fixture: InstallFixture, runOnceKey: string | null, shortcuts = false): Promise<void> {
+  await fsp.writeFile(path.win32.join(fixture.testRoot, 'ets2telemetry-install-test.json'), JSON.stringify({format: 'ets2telemetry.install-test', version: 1,
+    profileDir: path.win32.join(fixture.testRoot, 'profile'), runOnceKey, shortcuts}));
+}
+export interface FakeRunOnce extends RunOnceRegistry {
+  /** `<key>\<value>` to data. */
+  readonly values: Map<string, string>;
+  /** `set <key>`, `remove <key>` and `read <key>`, in order. */
+  readonly calls: string[];
+}
+/** An in-memory RunOnce registry for the uninstall tests; `fail` makes every set and remove fail, `onSet` observes a set. */
+export function fakeRunOnce(options: {fail?: boolean; onSet?: () => void} = {}): FakeRunOnce {
+  const values = new Map<string, string>(), calls: string[] = [];
+  const name = (key: string, value: string) => `${key}\\${value}`;
+  return {
+    values, calls,
+    set: (key, value, data) => {
+      calls.push(`set ${key}`);
+      options.onSet?.();
+      if (options.fail) return Promise.resolve(false);
+      values.set(name(key, value), data);
+      return Promise.resolve(true);
+    },
+    remove: (key, value) => {
+      calls.push(`remove ${key}`);
+      if (options.fail) return Promise.resolve('failed' as const);
+      return Promise.resolve(values.delete(name(key, value)) ? 'removed' as const : 'absent' as const);
+    },
+    read: (key, value) => {calls.push(`read ${key}`); return Promise.resolve(values.get(name(key, value)) ?? null);}
+  };
+}

@@ -880,11 +880,12 @@ function runApplication(profileError: unknown): void {
   ipcMain.on('overlay:unsubscribe', event => {if (!trustedOverlay(event)) return; retireOverlay();});
   // ET-017 (P13): plugin setup starts 2 s after readiness on its own unreferenced timer; startup never waits for it.
   app.whenReady().then(() => {if (!lifecycle.exiting) {createTray(); pluginSetup.start();} startService();}).catch(error => fail('APP_START_FAILED', error));
-  // ET-018 (U7 fallback): a start of the installed application cancels a pending uninstall deferral; it removes only the
-  // deferral's intent and README, and the next plugin setup run takes over the plugin files again.
+  // ET-018 (U7): a start of the installed application cancels a pending uninstall deferral; it removes only the deferral's
+  // intent, README and copied executor, then the executor's RunOnce registration, and the next plugin setup run takes
+  // over the plugin files again.
   if (app.isPackaged) {
-    void cancelDeferralOnStart({executable: process.execPath, env: process.env}).then(outcome => {
-      if (outcome === 'cancelled' || outcome === 'failed') log('UNINSTALL_DEFERRAL_CANCEL', undefined, {outcome});
+    void cancelDeferralOnStart({executable: process.execPath, env: process.env}).then(({deferral, executor}) => {
+      if (deferral === 'cancelled' || deferral === 'failed') log('UNINSTALL_DEFERRAL_CANCEL', undefined, {outcome: deferral, executor});
     });
   }
 }

@@ -29,11 +29,11 @@ Since ET-018 PR-3 (plan U2) `apps/desktop/src/squirrel-events.ts` replaces elect
 
 | Event | What runs | Exit code |
 | --- | --- | --- |
-| `--squirrel-install`, `--squirrel-updated` | `Update.exe --createShortcut=<executable>` (a production install; a test install only when its test file sets `shortcuts: true`), then a pending [uninstall deferral](uninstall.md#deferral) is cancelled. No data is written otherwise. | 0 |
+| `--squirrel-install`, `--squirrel-updated` | `Update.exe --createShortcut=<executable>` (a production install; a test install only when its test file sets `shortcuts: true`), then a pending [uninstall deferral](uninstall.md#deferral) is cancelled, with the copied executor and its RunOnce registration (ET-018 PR-5). No data is written otherwise. | 0 |
 | `--squirrel-obsolete` | Nothing; the previous version after an update quits. | 0 |
 | `--squirrel-uninstall` | The [uninstall hook](uninstall.md#squirrel-uninstall-hook): the instance lock with the `uninstall-exit` payload, the engine within 8 s, the receipt. | 0, 3 or 4 |
 
-electron-squirrel-startup was removed because its uninstall branch quits the process when `Update.exe --removeShortcut` closes, which would race the cleanup. A start of the installed application also cancels a pending deferral. Squirrel runs these hooks with 15 s (install, updated) and 10 s (obsolete, uninstall); see [installer testing](installer-testing.md#squirrel-behaviour-of-the-pinned-electron-winstaller).
+electron-squirrel-startup was removed because its uninstall branch quits the process when `Update.exe --removeShortcut` closes, which would race the cleanup. A start of the installed application also cancels a pending deferral, with its RunOnce registration. Squirrel runs these hooks with 15 s (install, updated) and 10 s (obsolete, uninstall); see [installer testing](installer-testing.md#squirrel-behaviour-of-the-pinned-electron-winstaller).
 
 ## Close to tray
 

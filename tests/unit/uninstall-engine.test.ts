@@ -90,7 +90,7 @@ describe('outcomes', () => {
     const current = await scene();
     const result = await run(current.fixture);
     expect(result).toEqual({outcome: 'complete', code: null, plugins: {removed: 2, absent: 0, unrecognized: 0, notes: [], blocked: []},
-      data: {removed: 9, kept: 0, failed: [], rootRemoved: true}, roaming: 'not-applicable'});
+      data: {removed: 9, kept: 0, failed: [], rootRemoved: true}, roaming: 'not-applicable', executor: 'not-run'});
     await expectCleaned(current);
     // The install itself is not the engine's: Squirrel removes the binaries.
     expect(await exists(current.fixture.executable)).toBe(true);

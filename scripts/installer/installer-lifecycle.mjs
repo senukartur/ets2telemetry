@@ -9,7 +9,8 @@ import {promisify} from 'node:util';
 import {_electron as electron} from '@playwright/test';
 import {rendererPages} from '../ci/overlay-observation.mjs';
 import {checkedPaths, checkInstalled, checkLaunchEnvironment, checkRunPlan, checkRunSignal, FACTS_VARIABLE, factsEvidence, InstallerGuardError, installedEnvironment, normalizePath,
-  checkDataRootUnchanged, checkDecoyUnchanged, checkUninstallResidue, electronRuntimeNames, ownsRegistration, parseUninstallString, resolveRealLocation, RUN_ROOT_NAME, runLayout, steamLibraryPaths, uninstallEnvironment} from './installer-guard.mjs';
+  checkDataRootUnchanged, checkDecoyUnchanged, checkUninstallResidue, electronRuntimeNames, ownsRegistration, parseUninstallString, resolveRealLocation, RUN_ONCE_KEY, RUN_ROOT_NAME,
+  runLayout, steamLibraryPaths, uninstallEnvironment} from './installer-guard.mjs';
 
 // ET-018 PR-1, PR-3 and PR-4 (REG-013, REG-015, REG-017; plan U8, U10-U13): the Node driver of the installer lifecycle in a marked test root. The
 // PowerShell harness scripts/installer/Invoke-InstallerLifecycle.ps1 orchestrates the steps and runs every command below
@@ -39,6 +40,12 @@ import {checkedPaths, checkInstalled, checkLaunchEnvironment, checkRunPlan, chec
 //                                             installed: complete (the data wipe, then Update.exe --uninstall, drained) or
 //                                             blocked while the fake game host runs; records only, within 55 s
 //   app-uninstall-verify <config> <label>     PR-4: asserts what app-uninstall recorded and what the files say now
+//   run-once <config> <label> <blocked|complete>
+//                                             PR-5: runs the deferred-cleanup executor as Windows runs a RunOnce entry at
+//                                             sign-in: the registered command is read from this run's own test RunOnce key
+//                                             and checked, the value deleted, the command started (blocked: while the fake
+//                                             game host runs, which it must survive and register itself again; complete:
+//                                             the plugin and the data root are removed and no value is left)
 //   residue <config> <label>                  PR-3: checks the harness's residue-listing-<label>.json listing of the binary root
 //   cleanup <config> <location per view...>   deletes R (never following links) after the harness kept the evidence
 
@@ -528,6 +535,9 @@ async function pluginLaunch(config, label, executable, expectation) {
     assert.equal(typeof before, 'object', 'ADOPTED_PLUGIN_MISSING');
     assert.equal(await fileState(path.join(layout.dataRoot, 'uninstall', 'pending.json')), 'absent', 'DEFERRAL_NOT_CANCELLED');
     assert.equal(await fileState(path.join(layout.dataRoot, 'uninstall', 'README.txt')), 'absent', 'DEFERRAL_NOT_CANCELLED');
+    // PR-5: the reinstall's hook also removed the copied executor and its RunOnce value.
+    assert.equal(await fileState(path.join(layout.dataRoot, 'uninstall', EXECUTOR_FILE)), 'absent', 'DEFERRAL_NOT_CANCELLED');
+    assert.equal(await readRunOnce(config), null, 'RUN_ONCE_NOT_CANCELLED');
     record.deferralCancelled = true;
   }
   const keptBefore = await keptStates(runRoot);
@@ -578,6 +588,51 @@ async function stopFakeGame(host) {
 }
 const receiptNames = async directory => (await readdir(directory).catch(() => [])).filter(name => RECEIPT_NAME.test(name));
 
+// ET-018 PR-5 (U7): the deferred-cleanup executor and its registration. The run's test file names this run's own
+// HKCU\Software\ETS2Telemetry-Test-<id>\RunOnce key (config.runOnceKey); the driver reads and deletes only that key's one
+// value, through the fixed reg.exe, and never the real RunOnce key. The harness deletes the whole test key at the end.
+const RUN_ONCE_VALUE = 'ETS2TelemetryUninstall';
+const EXECUTOR_FILE = 'Complete-ETS2TelemetryUninstall.ps1';
+const EXECUTOR_RECEIPT_NAME = /^ETS2Telemetry-deferred-cleanup-\d{8}T\d{9}Z\.json$/;
+const reg = () => path.win32.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'reg.exe');
+function testRunOnceKey(config) {
+  assert.ok(typeof config.runOnceKey === 'string' && RUN_ONCE_KEY.test(config.runOnceKey), 'RUN_ONCE_KEY_INVALID');
+  return config.runOnceKey;
+}
+const EXECUTOR_ARGUMENTS = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File';
+/**
+ * The registered command the application writes (executor.ts executorCommand): the absolute, quoted powershell.exe under
+ * %SystemRoot% when the command fits 260 characters, otherwise the PATH form `powershell.exe`. The run root on a hosted
+ * runner makes the script path 126 characters, so the lifecycle registers the PATH form (139 + 126 > 260).
+ */
+function executorCommand(dataRoot) {
+  const windows = /^[A-Za-z]:\\[^\\/:*?"<>|]+(\\[^\\/:*?"<>|]+)*$/.test(process.env.SystemRoot ?? '') ? path.win32.normalize(process.env.SystemRoot) : 'C:\\Windows';
+  const script = `"${path.win32.join(dataRoot, 'uninstall', EXECUTOR_FILE)}"`;
+  for (const program of [`"${path.win32.join(windows, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')}"`, 'powershell.exe']) {
+    const command = `${program} ${EXECUTOR_ARGUMENTS} ${script}`;
+    if (command.length <= 260) return command;
+  }
+  return null;
+}
+/** The test key's value, or null when it is absent (reg.exe exits 1). */
+async function readRunOnce(config) {
+  let stdout;
+  try {({stdout} = await promisify(execFile)(reg(), ['query', testRunOnceKey(config), '/v', RUN_ONCE_VALUE], {encoding: 'utf8', windowsHide: true, timeout: 10000}));}
+  catch (error) {
+    if (error?.code === 1) return null;
+    throw error;
+  }
+  for (const line of stdout.split(/\r?\n/)) {
+    const match = /^ {4}(.+?) {4}REG_SZ {4}(.*)$/.exec(line);
+    if (match && match[1] === RUN_ONCE_VALUE) return match[2];
+  }
+  throw new Error('RUN_ONCE_QUERY_UNPARSED');
+}
+async function deleteRunOnce(config) {
+  await promisify(execFile)(reg(), ['delete', testRunOnceKey(config), '/v', RUN_ONCE_VALUE, '/f'], {windowsHide: true, timeout: 10000});
+}
+const executorReceipts = async directory => (await readdir(directory).catch(() => [])).filter(name => EXECUTOR_RECEIPT_NAME.test(name));
+
 /**
  * Runs the exact registered UninstallString as Windows Settings would, with LOCALAPPDATA = R\decoy and no ETS2TELEMETRY_
  * variable. `complete`: the application runs from `exe` with the plugin installed; afterwards it has exited, the DLL and
@@ -626,7 +681,9 @@ async function windowsUninstall(config, label, executable, expectation, rehearse
   // What the uninstall left, recorded before any assertion so a failing run still shows the receipt and the state.
   const decoyAfter = await tree(decoy), kept = await keptStates(runRoot), dllAfter = await fileState(game.dll);
   const dataEntries = await readdir(layout.dataRoot).catch(error => {if (error?.code === 'ENOENT') return null; throw error;});
-  record.after = {dataEntries, plugin: typeof dllAfter === 'string' ? dllAfter : 'present', unrelatedUnchanged: JSON.stringify(kept) === JSON.stringify(keptBefore)};
+  const runOnce = await readRunOnce(config);
+  record.after = {dataEntries, plugin: typeof dllAfter === 'string' ? dllAfter : 'present', unrelatedUnchanged: JSON.stringify(kept) === JSON.stringify(keptBefore),
+    runOnce: runOnce === null ? 'absent' : runOnce === executorCommand(layout.dataRoot) ? 'executor' : 'unexpected'};
   await writeEvidence(config, `windows-uninstall-${label}-observed.json`, record).catch(() => undefined);
   // Windows may add its own Microsoft folder under the decoy (DECOY_OS_FOLDER); everything else must stay as it was.
   record.decoyOsEntries = checkDecoyUnchanged(decoyBefore, decoyAfter);
@@ -642,12 +699,90 @@ async function windowsUninstall(config, label, executable, expectation, rehearse
     assert.equal(record.receipt.plugins.removed, 1, 'RECEIPT_PLUGIN_COUNT');
     assert.equal(record.receipt.data.rootRemoved, true);
     assert.ok(['none', 'exited'].includes(record.receipt.instance), 'RECEIPT_INSTANCE_UNEXPECTED');
+    // PR-5: registered before the first deletion, removed last.
+    assert.equal(record.receipt.executor, 'removed', 'RECEIPT_EXECUTOR_NOT_REMOVED');
+    assert.equal(record.after.runOnce, 'absent', 'RUN_ONCE_LEFT_AFTER_COMPLETE');
   } else {
     assert.deepEqual(dllAfter, dllBefore, 'DEFERRED_PLUGIN_CHANGED');
     assert.deepEqual(dataEntries?.sort(), ['plugins', 'uninstall'], 'DEFERRED_DATA_ENTRIES_UNEXPECTED');
-    assert.deepEqual((await readdir(path.join(layout.dataRoot, 'uninstall'))).sort(), ['README.txt', 'pending.json'], 'DEFERRED_UNINSTALL_FOLDER_UNEXPECTED');
-    assert.deepEqual({outcome: record.receipt.outcome, code: record.receipt.code, readme: record.receipt.readme}, {outcome: 'deferred', code: 'GAME_RUNNING', readme: true},
-      'RECEIPT_NOT_DEFERRED');
+    assert.deepEqual((await readdir(path.join(layout.dataRoot, 'uninstall'))).sort(), [EXECUTOR_FILE, 'README.txt', 'pending.json'], 'DEFERRED_UNINSTALL_FOLDER_UNEXPECTED');
+    assert.deepEqual({outcome: record.receipt.outcome, code: record.receipt.code, readme: record.receipt.readme, executor: record.receipt.executor},
+      {outcome: 'deferred', code: 'GAME_RUNNING', readme: true, executor: 'registered'}, 'RECEIPT_NOT_DEFERRED');
+    // PR-5: the packaged executor was copied byte-identically and registered under this run's test key.
+    assert.deepEqual(await fileState(path.join(layout.dataRoot, 'uninstall', EXECUTOR_FILE)).then(state => typeof state === 'object' ? state.sha256 : state),
+      sha256(await readFile(path.join(checkout, 'resources', 'uninstall', EXECUTOR_FILE))), 'EXECUTOR_COPY_DIFFERS');
+    assert.equal(record.after.runOnce, 'executor', 'RUN_ONCE_NOT_REGISTERED');
+  }
+  return record;
+}
+
+/**
+ * ET-018 PR-5 (U7): the deferred-cleanup executor at the next sign-in. Windows deletes a RunOnce value before it starts
+ * its command; this does the same with this run's test key: the value must be exactly the executor command for R's data
+ * root, it is deleted, and the command is started (powershell.exe from System32 with the parsed arguments) with the
+ * uninstall environment (LOCALAPPDATA = the decoy, TEMP inside R, no ETS2TELEMETRY_ variable). `blocked`: the fake game
+ * host runs, so the executor must keep the DLL, count the attempt and register itself again. `complete`: the host is not
+ * running, so the DLL, the data root and the registration must be gone. The unrelated files, the export and the decoy
+ * stay unchanged either way, and the executor's receipt names no path.
+ */
+async function runOnce(config, label, expectation) {
+  assert.ok(expectation === 'blocked' || expectation === 'complete', 'RUN_ONCE_EXPECTATION_INVALID');
+  assert.match(label, /^[a-z0-9-]{1,40}$/, 'RUN_ONCE_LABEL_INVALID');
+  checkRunSignal(process.env, {allowLocal: config.allowLocal === true});
+  const runRoot = await realpath(config.runRoot);
+  const layout = runLayout(runRoot), game = gameLayout(runRoot), decoy = decoyOf(runRoot), facts = machineFacts();
+  const env = uninstallEnvironment(process.env, {runRoot, real: facts.real, decoy});
+  const command = await readRunOnce(config);
+  assert.equal(command, executorCommand(layout.dataRoot), 'RUN_ONCE_COMMAND_UNEXPECTED');
+  // Either form of the program (the absolute, quoted System32 path or the PATH form); the driver starts System32's.
+  const match = /^(?:"[A-Za-z]:\\[^"]+\\System32\\WindowsPowerShell\\v1\.0\\powershell\.exe"|powershell\.exe) (-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden) -File "([^"]+)"$/
+    .exec(command);
+  assert.ok(match && normalizePath(match[2]).startsWith(`${normalizePath(layout.dataRoot)}\\`), 'RUN_ONCE_COMMAND_OUTSIDE_RUN_ROOT');
+  const attemptsBefore = (await readJson(path.join(layout.dataRoot, 'uninstall', 'pending.json'), 128 * 1024)).attempts;
+  const record = {label, expectation, attemptsBefore, before: {kept: await keptStates(runRoot), plugin: await fileState(game.dll)}};
+  const decoyBefore = await tree(decoy), receiptsBefore = new Set(await executorReceipts(layout.temp));
+  await deleteRunOnce(config);
+  let host;
+  try {
+    if (expectation === 'blocked') host = await startFakeGame(config);
+    const powershell = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+    const started = performance.now();
+    const child = spawn(powershell, [...match[1].split(' '), '-File', match[2]], {cwd: layout.cwd, env, stdio: 'ignore', windowsHide: true});
+    record.exit = await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {child.kill(); reject(new Error('RUN_ONCE_TIMEOUT'));}, 30000);
+      child.on('error', error => {clearTimeout(timer); reject(error);});
+      child.on('exit', (code, signal) => {clearTimeout(timer); resolve({code, signal});});
+    });
+    record.milliseconds = Math.round(performance.now() - started);
+  } finally {
+    if (host) await stopFakeGame(host);
+  }
+  const receipts = (await executorReceipts(layout.temp)).filter(name => !receiptsBefore.has(name));
+  assert.equal(receipts.length, 1, 'EXECUTOR_RECEIPT_COUNT');
+  const text = await readFile(path.join(layout.temp, receipts[0]), 'utf8');
+  assert.doesNotMatch(text, /[A-Za-z]:\\|\\\\/, 'EXECUTOR_RECEIPT_HAS_PATH');
+  record.receipt = JSON.parse(text);
+  const value = await readRunOnce(config), dllAfter = await fileState(game.dll);
+  const dataEntries = await readdir(layout.dataRoot).catch(error => {if (error?.code === 'ENOENT') return null; throw error;});
+  record.after = {dataEntries, plugin: typeof dllAfter === 'string' ? dllAfter : 'present', runOnce: value === null ? 'absent' : value === command ? 'executor' : 'unexpected',
+    kept: await keptStates(runRoot)};
+  await writeEvidence(config, `run-once-${label}-observed.json`, record).catch(() => undefined);
+  record.decoyOsEntries = checkDecoyUnchanged(decoyBefore, await tree(decoy));
+  assert.deepEqual(record.after.kept, record.before.kept, 'UNRELATED_FILES_CHANGED');
+  if (expectation === 'blocked') {
+    assert.deepEqual({outcome: record.receipt.outcome, code: record.receipt.code, attempts: record.receipt.attempts, runOnce: record.receipt.runOnce, mode: record.receipt.mode},
+      {outcome: 'deferred', code: 'GAME_RUNNING', attempts: attemptsBefore + 1, runOnce: 'registered', mode: 'test-root'}, 'EXECUTOR_NOT_DEFERRED');
+    assert.deepEqual(dllAfter, record.before.plugin, 'BLOCKED_PLUGIN_CHANGED');
+    assert.deepEqual(dataEntries?.sort(), ['plugins', 'uninstall'], 'BLOCKED_DATA_ENTRIES_UNEXPECTED');
+    assert.equal(record.after.runOnce, 'executor', 'EXECUTOR_NOT_REGISTERED_AGAIN');
+    assert.equal((await readJson(path.join(layout.dataRoot, 'uninstall', 'pending.json'), 128 * 1024)).attempts, attemptsBefore + 1, 'ATTEMPT_NOT_COUNTED');
+  } else {
+    assert.deepEqual({outcome: record.receipt.outcome, code: record.receipt.code, runOnce: record.receipt.runOnce, mode: record.receipt.mode, removed: record.receipt.plugins.removed,
+      rootRemoved: record.receipt.data.rootRemoved}, {outcome: 'complete', code: null, runOnce: 'removed', mode: 'test-root', removed: 1, rootRemoved: true}, 'EXECUTOR_NOT_COMPLETE');
+    assert.equal(dllAfter, 'absent', 'PLUGIN_NOT_REMOVED');
+    assert.equal(dataEntries, null, 'DATA_ROOT_REMAINS');
+    assert.equal(record.after.runOnce, 'absent', 'RUN_ONCE_LEFT_AFTER_COMPLETE');
+    assert.deepEqual(record.exit, {code: 0, signal: null}, 'EXECUTOR_EXIT_NONZERO');
   }
   return record;
 }
@@ -853,6 +988,7 @@ try {
       case 'windows-uninstall': result.result = await windowsUninstall(config, label, rest[2], rest[3], rest[4] === '--rehearse'); break;
       case 'app-uninstall': result.result = await appUninstall(config, label, rest[2], rest[3]); break;
       case 'app-uninstall-verify': result.result = await appUninstallVerify(config, label); break;
+      case 'run-once': result.result = await runOnce(config, label, rest[2]); break;
       case 'residue': result.result = await residue(config, label); break;
       case 'cleanup': result.result = await cleanup(config, rest.slice(1)); break;
       default: throw new Error('UNKNOWN_COMMAND');
