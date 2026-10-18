@@ -2272,14 +2272,14 @@ it('saves the redacted bundle of this application state and its startup logs, an
 // ET-018 PR-4 (U8): the in-app uninstall channel and its exit. The orchestrator is replaced here; its own order, the
 // preflight, the removal race and the wipe are tests/unit/app-uninstall.test.ts. Main must pass its answers through unchanged.
 interface FakeAppUninstall {
-  run: ReturnType<typeof vi.fn<() => Promise<AppUninstallResult>>>; prepared: unknown; finishAfterExit: ReturnType<typeof vi.fn<() => Promise<unknown>>>;
+  run: ReturnType<typeof vi.fn<() => Promise<AppUninstallResult>>>; prepared: unknown; finishAfterExit: ReturnType<typeof vi.fn<(budgetMs?: number) => Promise<unknown>>>;
   handOver: ReturnType<typeof vi.fn<() => Promise<boolean>>>;
   ports: AppUninstallPorts;
 }
 let appUninstallFake: FakeAppUninstall;
 const PREPARED = {dataRoot: 'C:\\isolated\\LocalAppData\\ETS2Telemetry', installRoot: 'C:\\isolated\\LocalAppData\\ETS2TelemetryDesktop', notes: [], removed: 1, unrecognized: 0};
 function mockAppUninstall(result: AppUninstallResult) {
-  vi.doMock('../../apps/desktop/src/uninstall/app-uninstall', () => ({
+  vi.doMock('../../apps/desktop/src/uninstall/app-uninstall', async importOriginal => ({...await importOriginal<typeof import('../../apps/desktop/src/uninstall/app-uninstall')>(),
     AppUninstall: class {
       constructor(ports: AppUninstallPorts) {
         const fake: FakeAppUninstall = appUninstallFake = {ports, prepared: undefined, handOver: vi.fn(() => Promise.resolve(true)),
@@ -2307,7 +2307,8 @@ it('refuses the uninstall once the exit has begun', async () => {
 });
 it.each([
   ['cancelled', {outcome: 'cancelled'}], ['not-installed', {outcome: 'not-installed'}], ['failed', {outcome: 'failed', code: 'BUSY'}],
-  ['blocked', {outcome: 'blocked', code: 'GAME_RUNNING', blocked: [{targetId: 'ets2:steam:0', reason: 'GAME_RUNNING'}, {targetId: 'ats:other', reason: 'CLIENT_RUNNING'}]}]
+  ['blocked', {outcome: 'blocked', code: 'GAME_RUNNING', blocked: [{targetId: 'ets2:steam:0', reason: 'GAME_RUNNING'}, {targetId: 'ats:other', reason: 'CLIENT_RUNNING'}]}],
+  ['interrupted', {outcome: 'interrupted', code: 'GAME_RUNNING', removed: 1, blocked: [{targetId: 'ets2:steam:0', reason: 'GAME_RUNNING'}]}]
 ] as const)('passes a %s answer through unchanged and starts no exit', async (_name, result) => {
   mockAppUninstall(result as AppUninstallResult); trayAvailable = true; await ready();
   await expect(uninstallCall(trusted())).resolves.toEqual(result);
@@ -2345,6 +2346,28 @@ it('says so when Windows\' uninstall cannot start, then exits 0', async () => {
   expect(showMessageBox).toHaveBeenCalledTimes(2);
   expect((showMessageBox.mock.calls[1] as [{title: string}])[0].title).toBe('Windows uninstall could not start');
   expect(app.exit).toHaveBeenCalledExactlyOnceWith(0);
+});
+// Review of PR-4: a slow exit must shorten the wipe, so the failsafe never cuts it and the handover still runs.
+it('a slow exit shortens the wipe to what is left before the failsafe, less the handover margin', async () => {
+  mockAppUninstall({outcome: 'started'}); trayAvailable = true; await ready();
+  await uninstallCall(trusted()); await vi.advanceTimersByTimeAsync(0);
+  // The final log rows take 8 s: 12 s - 8 s - 1 s leaves 3 s for the wipe.
+  vi.mocked(log.finalize as (timeoutMs: number) => Promise<void>).mockImplementationOnce(() => new Promise<void>(resolve => setTimeout(resolve, 8000)));
+  child.emit('exit', 0); await settle();
+  await vi.advanceTimersByTimeAsync(8000);
+  expect(appUninstallFake.finishAfterExit).toHaveBeenCalledOnce();
+  const [budget] = appUninstallFake.finishAfterExit.mock.calls[0];
+  expect(budget).toBeGreaterThan(2900); expect(budget).toBeLessThanOrEqual(3000);
+  expect(appUninstallFake.handOver).toHaveBeenCalledOnce();
+  expect(app.exit).toHaveBeenCalledExactlyOnceWith(0);
+  await vi.advanceTimersByTimeAsync(20_000);
+  expect(app.exit).toHaveBeenCalledOnce();
+});
+it('a fast exit gives the wipe its full 5 s', async () => {
+  mockAppUninstall({outcome: 'started'}); trayAvailable = true; await ready();
+  await uninstallCall(trusted()); await vi.advanceTimersByTimeAsync(0);
+  child.emit('exit', 0); await settle(); await vi.advanceTimersByTimeAsync(0);
+  expect(appUninstallFake.finishAfterExit).toHaveBeenCalledExactlyOnceWith(5000);
 });
 it('the 12 s failsafe ends an uninstall exit that hangs before the result dialog', async () => {
   mockAppUninstall({outcome: 'started'}); trayAvailable = true; await ready();

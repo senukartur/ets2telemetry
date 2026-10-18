@@ -41,6 +41,16 @@ describe('answers', () => {
     expect(text.folders[1]).toMatch(/^American Truck Simulator \(a folder that is no longer listed\): TruckersMP is running/);
     expect(JSON.stringify(text)).not.toMatch(NO_PATH);
   });
+  it('an interrupted removal does not claim that nothing changed: plugins removed, data kept, the plugin put back', () => {
+    const text = appUninstallResultText({outcome: 'interrupted', code: 'GAME_RUNNING', removed: 2, blocked: [{targetId: 'ets2:steam:0', reason: 'GAME_RUNNING'}]});
+    expect(text.line).toContain('ETS2Telemetry was not uninstalled: the game is running.');
+    expect(text.line).not.toContain('nothing was changed');
+    expect(text.line).toContain('removed its game plugin from some game folders (plugin files removed: 2)');
+    expect(text.line).toContain('Your data was kept.');
+    expect(text.line).toContain('puts the plugin back automatically in every game folder it manages while that game is closed');
+    expect(text.folders).toEqual(['Euro Truck Simulator 2 (Steam folder 1): the game is running. Close it, then try again.']);
+    expect(JSON.stringify(text)).not.toMatch(NO_PATH);
+  });
   it.each(FAILURES)('explains the failure %s', code => {
     const text = appUninstallResultText({outcome: 'failed', code});
     expect(text.line).toContain(UNINSTALL_FAILURE_TEXT[code]);

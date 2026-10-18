@@ -19,14 +19,19 @@ export function uninstallTargetText(targetId: string): string {
   return fill(source === 'manual' ? UNINSTALL_TARGET_TEXT.manual : UNINSTALL_TARGET_TEXT.other, {game: gameText(game)});
 }
 
-/** The card's text for one result: a headline and, for a blocked uninstall, one line per blocked folder. */
+const blockedFolderLines = (blocked: readonly {targetId: string; reason: keyof typeof UNINSTALL_REASON_TEXT}[]) =>
+  blocked.map(entry => fill(UNINSTALL_STRINGS.blockedFolder, {target: uninstallTargetText(entry.targetId), reason: UNINSTALL_REASON_TEXT[entry.reason]}));
+
+/** The card's text for one result: a headline and, for a blocked or interrupted uninstall, one line per blocked folder. */
 export function appUninstallResultText(result: AppUninstallResult): {line: string; folders: string[]} {
   switch (result.outcome) {
     case 'cancelled': return {line: UNINSTALL_STRINGS.cancelled, folders: []};
     case 'not-installed': return {line: UNINSTALL_STRINGS.notInstalled, folders: []};
     case 'started': return {line: UNINSTALL_STRINGS.started, folders: []};
     case 'blocked': return {line: fill(UNINSTALL_STRINGS.blocked, {reason: UNINSTALL_REASON_TEXT[result.code]}),
-      folders: result.blocked.map(entry => fill(UNINSTALL_STRINGS.blockedFolder, {target: uninstallTargetText(entry.targetId), reason: UNINSTALL_REASON_TEXT[entry.reason]}))};
+      folders: blockedFolderLines(result.blocked)};
+    case 'interrupted': return {line: fill(UNINSTALL_STRINGS.interrupted, {reason: UNINSTALL_REASON_TEXT[result.code], count: result.removed}),
+      folders: blockedFolderLines(result.blocked)};
     case 'failed': return {line: fill(UNINSTALL_STRINGS.failed, {reason: UNINSTALL_FAILURE_TEXT[result.code]}), folders: []};
   }
 }

@@ -15,17 +15,34 @@ import type {UninstallRoots} from './roots';
 //    read-only or unrecognized file, a link, a failed listing or a registry problem answers `blocked` with target ids and
 //    fixed codes, and nothing changes.
 // 4. Silent plugin setup is suspended and its run in flight settles; then the intent is written and the plugins are
-//    removed (scope `plugins`). A removal that fails now (a game started meanwhile, a lock) answers `blocked`: the intent
-//    and its README go, setup resumes and installs the plugin again where it was removed, and nothing else changes.
+//    removed (scope `plugins`). A removal that fails now (a game started meanwhile, a lock) removes the intent, resumes
+//    setup and keeps the data. It answers `blocked` when no plugin file was removed yet, so nothing changed; otherwise
+//    `interrupted` with the number removed: setup, resumed, installs the plugin again in every folder it manages while
+//    that game is closed.
 // 5. `started`: main runs the explicit exit with reason `uninstall` (service stop, idle, plugin setup aborted), then
-//    calls finishAfterExit, which wipes the data within its own 5 s budget, and hands over to Windows' uninstall.
+//    calls finishAfterExit, which wipes the data within what is left before the 12 s failsafe (at most 5 s, keeping 1 s
+//    for the handover), and hands over to Windows' uninstall.
 //
 // Nothing here returns or logs a path.
 
 /** The preflight and the plugin removal each get at most this long; the running-game check inside has its own 3 s. */
 export const APP_UNINSTALL_STEP_BUDGET_MS = 10_000;
-/** The data wipe after the exit. */
+/** The data wipe after the exit, at most. */
 export const APP_UNINSTALL_WIPE_BUDGET_MS = 5000;
+/** Main ends an uninstall exit that has not reached its result dialog after this long, with exit code 1. */
+export const APP_UNINSTALL_FAILSAFE_MS = 12_000;
+/** What the wipe leaves before the failsafe for the result dialog to open and the handover to start. */
+export const APP_UNINSTALL_HANDOVER_MARGIN_MS = 1000;
+
+/**
+ * The wipe's budget at `now` for a failsafe due at `failsafeAt` (same monotonic clock): what is left before it, less the
+ * handover margin, at most APP_UNINSTALL_WIPE_BUDGET_MS and at least 0. With 0 the wipe deletes nothing; Windows'
+ * uninstall, started by the handover, then finishes it from the intent.
+ */
+export function uninstallWipeBudget(failsafeAt: number, now: number): number {
+  const left = failsafeAt - now - APP_UNINSTALL_HANDOVER_MARGIN_MS;
+  return Number.isFinite(left) ? Math.max(0, Math.min(APP_UNINSTALL_WIPE_BUDGET_MS, left)) : 0;
+}
 
 export interface AppUninstallSetup {
   /** Pauses silent plugin setup and resolves once its run in flight and its registry writes have settled. */
@@ -125,16 +142,19 @@ export class AppUninstall {
       return this.finish({outcome: 'failed', code: removal.code === 'INTENT_FAILED' ? 'INTENT_FAILED' : 'LAYOUT_INVALID'});
     }
     if (removal.outcome === 'deferred') {
-      // A removal raced (a game started, a lock): no data is touched, the intent goes and setup reinstalls the plugin.
+      // A removal raced (a game started, a lock): no data is touched, the intent goes and setup, resumed, reinstalls the
+      // plugin where this run already removed it. Only a run that removed nothing may say that nothing changed.
       await this.abandon(roots.dataRoot);
-      return this.finish(blockedResult(removal));
+      const blocked = blockedResult(removal);
+      return this.finish(removal.plugins.removed > 0 && blocked.outcome === 'blocked'
+        ? {outcome: 'interrupted', code: blocked.code, removed: removal.plugins.removed, blocked: blocked.blocked} : blocked);
     }
     this.preparedUninstall = {dataRoot: roots.dataRoot, installRoot: roots.installRoot, notes: removal.plugins.notes, removed: removal.plugins.removed,
       unrecognized: removal.plugins.unrecognized};
     return this.finish({outcome: 'started'});
   }
 
-  /** Removes the intent and its README and lets setup run again. */
+  /** Removes the intent (this path writes no README; a leftover one goes too) and lets setup run again. */
   private async abandon(dataRoot: string): Promise<void> {
     await cancelDeferral(this.ports.fs, dataRoot).catch(() => 'failed');
     this.ports.setup.resume();
@@ -142,7 +162,7 @@ export class AppUninstall {
 
   private finish(result: AppUninstallResult): AppUninstallResult {
     this.ports.log('APP_UNINSTALL', {outcome: result.outcome, code: 'code' in result ? result.code : null,
-      blocked: result.outcome === 'blocked' ? result.blocked.length : 0});
+      blocked: 'blocked' in result ? result.blocked.length : 0, removed: result.outcome === 'interrupted' ? result.removed : 0});
     return result;
   }
 
@@ -151,12 +171,15 @@ export class AppUninstall {
 
   /**
    * After the exit stopped the service and every writer: wipes the data root (every allowlisted entry, then the registry,
-   * then the intent and the empty root) within APP_UNINSTALL_WIPE_BUDGET_MS. Undefined when nothing was prepared.
+   * then the intent and the empty root) within `budgetMs`, at most APP_UNINSTALL_WIPE_BUDGET_MS (main passes
+   * uninstallWipeBudget). Entries the budget did not reach stay, with the intent, and are reported as BUDGET_EXPIRED.
+   * Undefined when nothing was prepared.
    */
-  async finishAfterExit(): Promise<FinishedUninstall | undefined> {
+  async finishAfterExit(budgetMs = APP_UNINSTALL_WIPE_BUDGET_MS): Promise<FinishedUninstall | undefined> {
     const prepared = this.preparedUninstall;
     if (!prepared) return undefined;
-    const deadline = this.ports.clock() + APP_UNINSTALL_WIPE_BUDGET_MS;
+    const budget = Number.isFinite(budgetMs) ? Math.max(0, Math.min(APP_UNINSTALL_WIPE_BUDGET_MS, budgetMs)) : 0;
+    const deadline = this.ports.clock() + budget;
     let data: UninstallResult['data'];
     try {data = await wipeEverything(this.ports.fs, prepared.dataRoot, () => this.ports.clock() >= deadline, true);} catch {
       data = {removed: 0, kept: 0, failed: [{entry: 'data', code: 'IO_ERROR'}], rootRemoved: false};

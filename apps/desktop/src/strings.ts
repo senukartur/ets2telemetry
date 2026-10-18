@@ -620,6 +620,7 @@ export const UNINSTALL_STRINGS = Object.freeze({
   cancelled: 'Uninstall cancelled. Nothing was changed.',
   started: 'Removing ETS2Telemetry. The application closes now and Windows finishes the uninstall.',
   blocked: 'ETS2Telemetry was not uninstalled, and nothing was changed: {reason}',
+  interrupted: 'ETS2Telemetry was not uninstalled: {reason} Before it stopped, it had removed its game plugin from some game folders (plugin files removed: {count}). Your data was kept. ETS2Telemetry puts the plugin back automatically in every game folder it manages while that game is closed.',
   blockedFolder: '{target}: {reason}',
   failed: 'ETS2Telemetry was not uninstalled: {reason}',
   requestFailed: 'The uninstall request was refused.',

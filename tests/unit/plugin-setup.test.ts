@@ -785,6 +785,25 @@ describe('suspend and resume', () => {
     setup.abort();
   });
 
+  // ET-018 PR-4 review: the in-app uninstall's `interrupted` text promises that setup puts the plugin back.
+  it('after an interrupted in-app uninstall, resume puts the plugin back where it was removed, while that game is closed', async () => {
+    const setup = create();
+    await launch(setup);
+    expect(await fsp.readFile(dll(atsRoot))).toEqual(BUNDLE);
+    await setup.suspend();
+    // The uninstall's plugin removal cleaned ATS (its file and its install record), then ETS2 started and stopped it.
+    await fsp.rm(dll(atsRoot));
+    const registry = path.join(registryDirectory(), 'setup.json');
+    const document = JSON.parse(await fsp.readFile(registry, 'utf8')) as {installs: {game: string}[]};
+    await fsp.writeFile(registry, `${JSON.stringify({...document, installs: document.installs.filter(install => install.game !== 'ats')}, null, 2)}\n`);
+    running = {...NOT_RUNNING, ets2: true};
+    setup.resume();
+    await settled(setup);
+    expect(await fsp.readFile(dll(atsRoot))).toEqual(BUNDLE);
+    expect(await fsp.readFile(dll(ets2Root))).toEqual(BUNDLE);
+    setup.abort();
+  });
+
   it('names a listed game folder by its target id, and nothing else', async () => {
     const setup = create();
     await launch(setup);
