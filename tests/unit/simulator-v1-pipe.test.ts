@@ -260,7 +260,8 @@ describe('simulator v1 pipe CLI', () => {
   // storage commits were once slower than the fixed 1,000 ms quiesce bound on a hosted runner: the scripted disconnect
   // closed the connection before the ACK, and the journey failed (run 39135729037). With --await-scripted-acks, an ACK
   // that comes 1.5 s after its event is still awaited before the disconnect, so the next connection's checkpoint carries
-  // it and nothing is redelivered. Without the option the same client makes the run differ from the replay.
+  // it and nothing is redelivered. Without the option the same client would make the run differ from the replay, as
+  // the RED mutation in the ET-015a validation record shows; this test does not run that case.
   it('serve-v1 --await-scripted-acks awaits an ACK slower than the quiesce bound', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'ETS2Telemetry-SYNTHETIC-TEST-v1-await-cli-'));
     try {

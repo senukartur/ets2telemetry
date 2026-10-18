@@ -118,7 +118,7 @@ The queue-bytes scenario's split is derived by hand from the documented 6,306-by
 Both servers serve one scenario on a new endpoint `\\.\pipe\ETS2Telemetry-SYNTHETIC-TEST-v1-{pid}-{uuid}`; `TEST_PIPE_PATTERN_V1` matches exactly these names, and both simulator clients refuse any other endpoint. Nothing else is published: no discovery record and no `service-policy.json`. The servers are Node, so they have no protected DACL and no peer authentication; they are not security evidence for the native endpoint.
 
 ```powershell
-node tools/telemetry-simulator/dist/cli.cjs serve-v1 <scenario.json> [--scale <0-10>] [--lockstep]
+node tools/telemetry-simulator/dist/cli.cjs serve-v1 <scenario.json> [--scale <0-10>] [--lockstep] [--await-scripted-acks]
 node tools/telemetry-simulator/dist/cli.cjs smoke-v1 <scenario.json> [--scale <0-10>] [--reactive]
 ```
 
