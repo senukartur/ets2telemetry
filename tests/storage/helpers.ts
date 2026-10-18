@@ -121,3 +121,45 @@ export function expectRepresentative(storage: Storage, file: string, rowCountCha
     expect(contentDigest(db).rowCounts).toEqual({...expected.rowCounts, ...rowCountChanges});
   });
 }
+
+// The version 1 to version 2 expectations of the representative fixture (ET-016 PR-1), moved unchanged from
+// migrations.test.ts so that tests/storage/migration-crash.test.ts (ET-019) checks a migration completed after a killed
+// open against the same hand-written rows. The expected rows are written by hand from schema-v1-representative.sql and J6.
+// trips is rebuilt too: its rows and every row that references a trip must survive unchanged.
+const REFERENCING = ['trip_trailers', 'event_attributions', 'completeness_intervals', 'samples'];
+const rowsOf = (file: string, table: string) => readOnly(file, db => db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all());
+/** Reads what migration 0002 must keep from a version 1 copy of the representative fixture, before it is migrated. */
+export function readVersion1(copy: string) {
+  return {original: digestOf(copy), v1Jobs: readOnly(copy, db => db.prepare('SELECT * FROM job_configurations ORDER BY id').all()),
+    v1Trips: rowsOf(copy, 'trips'), v1Referencing: REFERENCING.map(table => rowsOf(copy, table))};
+}
+/**
+ * Checks a copy of the representative fixture migrated to version 2 through `storage` (which it closes) against `before`
+ * from readVersion1 and against the pre-migration backup at `backup` with its manifest.
+ */
+export function expectMigratedFromVersion1(storage: Storage, copy: string, {original, v1Jobs, v1Trips, v1Referencing}: ReturnType<typeof readVersion1>, backup: string) {
+  const backupName = path.basename(backup);
+  expectRepresentative(storage, copy, {schema_migrations: 2});
+  // The backup is the version 1 content, byte-for-byte in logical terms, with a manifest written last.
+  expect(digestOf(backup)).toEqual(original);
+  const manifest = JSON.parse(readFileSync(backup.replace(/\.sqlite$/, '.json'), 'utf8'));
+  expect(manifest).toMatchObject({format: 'ets2telemetry-backup-1', databaseUuid: 'f0000000-0000-4000-8000-000000000001', fromVersion: 1, fileName: backupName,
+    fileSha256: sha256(backup), logicalDigest: original.logicalDigest, rowCounts: original.rowCounts, reason: 'pre-migration'});
+  const recorded = readOnly(copy, db => db.prepare('SELECT version, name, backup_file_name, backup_sha256 FROM schema_migrations ORDER BY version').all());
+  expect(recorded).toEqual([{version: 1, name: '0001-initial', backup_file_name: null, backup_sha256: null}, {version: 2, name: '0002-journal', backup_file_name: backupName, backup_sha256: manifest.fileSha256}]);
+  expect(digestOf(copy).userVersion).toBe(2);
+  readOnly(copy, db => {
+    // The cancelled trip of version 1 keeps every column, opened at an event, has no recorded carrier, and its fuel
+    // used was never observed.
+    expect(db.prepare('SELECT id, opened_event_ref, opened_by, fuel_used_l, fuel_used_l_state, closed_by_session_ref, closed_by_event_seq FROM trips').all())
+      .toEqual([{id: 1, opened_event_ref: 1, opened_by: 'event', fuel_used_l: null, fuel_used_l_state: 'not-observed', closed_by_session_ref: null, closed_by_event_seq: null}]);
+    expect(db.prepare('SELECT * FROM trips ORDER BY id').all()).toEqual(v1Trips.map(row => ({...row as object, opened_by: 'event', fuel_used_l: null,
+      fuel_used_l_state: 'not-observed', closed_by_session_ref: null, closed_by_event_seq: null})));
+    REFERENCING.forEach((table, index) => expect(db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all(), table).toEqual(v1Referencing[index]));
+    expect(v1Referencing.map(rows => rows.length)).toEqual([1, 4, 1, 3]);
+    // The job configuration keeps every version 1 column and comes from event 1 of session 1.
+    expect(db.prepare('SELECT * FROM job_configurations ORDER BY id').all()).toEqual(v1Jobs.map(row => ({...row as object, plugin_session_ref: 1, source: 'event', checkpoint_next_event_seq: null})));
+    expect(db.pragma('foreign_key_check')).toEqual([]);
+    expect(db.pragma('integrity_check', {simple: true})).toBe('ok');
+  });
+}
