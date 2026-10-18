@@ -29,9 +29,11 @@ import {checkedPaths, checkInstalled, checkLaunchEnvironment, checkRunPlan, chec
 //   games <config>                            PR-3: the fake Steam and ETS2 folder in R, the plugin registry and the decoy
 //   plugin-launch <config> <label> <exe> <installed|adopted>
 //                                             PR-3: a launch whose test-root plugin setup installs or adopts the plugin
-//   windows-uninstall <config> <label> <exe|-> <complete|deferred>
+//   windows-uninstall <config> <label> <exe|-> <complete|deferred> [--rehearse]
 //                                             PR-3: the exact registered UninstallString with the decoy LOCALAPPDATA, while
-//                                             the application runs (complete) or the fake game host runs (deferred)
+//                                             the application runs (complete) or the fake game host runs (deferred);
+//                                             --rehearse stops before the UninstallString (a local check of the driver
+//                                             against a fake layout; the harness never passes it)
 //   cleanup <config> <location per view...>   deletes R (never following links) after the harness kept the evidence
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -549,12 +551,17 @@ const TEST_PLUGIN = path.join(checkout, 'native', 'telemetry-plugin', 'build', '
  */
 async function startFakeGame(config) {
   assert.ok(await regularFile(FAKE_HOST) && await regularFile(TEST_PLUGIN), 'FAKE_GAME_HOST_MISSING');
+  // The host secures and creates only the transport folder and its parent, as the plugin does under its data root, so
+  // the folder above them must exist.
   const transport = path.join(config.runRoot, 'fake-game', 'transport', 'v0');
-  const host = spawn(FAKE_HOST, ['host', TEST_PLUGIN, transport], {cwd: runLayout(config.runRoot).cwd, stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true});
-  let output = '';
+  await mkdir(path.dirname(path.dirname(transport)), {recursive: true});
+  const host = spawn(FAKE_HOST, ['host', TEST_PLUGIN, transport], {cwd: runLayout(config.runRoot).cwd, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true});
+  let output = '', errors = '';
   host.stdout.on('data', chunk => {output += chunk.toString('utf8');});
+  host.stderr.on('data', chunk => {if (errors.length < 1024) errors += chunk.toString('utf8');});
   await until(async () => output.includes('"ready":true') || host.exitCode !== null, Boolean, 'FAKE_GAME_NOT_READY', 15000);
-  assert.equal(host.exitCode, null, 'FAKE_GAME_EXITED');
+  // The host's failure line names a failed requirement; any path in it is removed before it reaches the evidence.
+  assert.equal(host.exitCode, null, `FAKE_GAME_EXITED ${errors.replace(/[A-Za-z]:\\[^\s"]*/g, '<path>').trim().slice(0, 200)}`.trim());
   return host;
 }
 async function stopFakeGame(host) {
@@ -570,8 +577,9 @@ const receiptNames = async directory => (await readdir(directory).catch(() => []
  * the data root are gone, and the unrelated files, the game files, the export and the decoy are unchanged. `deferred`:
  * the fake ETS2 runs; the DLL stays, only `plugins` and `uninstall` (with the intent and README.txt) remain. The receipt
  * in R\temp must say the same. The harness checks the registration, the shortcuts and the vendor residue afterwards.
+ * `rehearse` runs everything up to the UninstallString, which it parses but never starts, and returns the record.
  */
-async function windowsUninstall(config, label, executable, expectation) {
+async function windowsUninstall(config, label, executable, expectation, rehearse = false) {
   assert.ok(expectation === 'complete' || expectation === 'deferred', 'UNINSTALL_EXPECTATION_INVALID');
   checkRunSignal(process.env, {allowLocal: config.allowLocal === true});
   const runRoot = await realpath(config.runRoot);
@@ -579,15 +587,20 @@ async function windowsUninstall(config, label, executable, expectation) {
   const {program, args} = parseUninstallString(facts.registration?.uninstallString, runRoot);
   const env = uninstallEnvironment(process.env, {runRoot, real: facts.real, decoy});
   const record = {label, expectation, args};
-  const decoyBefore = await tree(decoy), keptBefore = await keptStates(runRoot), dllBefore = await fileState(game.dll);
-  assert.equal(typeof dllBefore, 'object', 'PLUGIN_NOT_INSTALLED_BEFORE_UNINSTALL');
+  const decoyBefore = await tree(decoy), keptBefore = await keptStates(runRoot);
   const receiptsBefore = new Set(await receiptNames(layout.temp));
-  let started, host;
+  let started, host, dllBefore;
   try {
+    // In `complete` the launch itself installs the plugin (the registry has no install before it), so the plugin is
+    // checked only once the application or the fake game runs, right before the UninstallString.
     if (expectation === 'complete') started = await startWithPlugin(config, label, executable);
     else host = await startFakeGame(config);
-    record.run = await runAndDrain(config, `uninstall-${label}`, program, args, env, UNINSTALL_RUN_BUDGET_MS).catch(error => ({failure: failure(error)}));
-    if (started) {
+    dllBefore = await fileState(game.dll);
+    assert.equal(typeof dllBefore, 'object', 'PLUGIN_NOT_INSTALLED_BEFORE_UNINSTALL');
+    record.pluginInstalledBefore = true;
+    if (rehearse) record.rehearsal = true;
+    else record.run = await runAndDrain(config, `uninstall-${label}`, program, args, env, UNINSTALL_RUN_BUDGET_MS).catch(error => ({failure: failure(error)}));
+    if (started && !rehearse) {
       // The instance must be gone: Squirrel ends the processes under its root, or the hook's lock request makes it exit.
       await until(async () => started.launcher.exitCode !== null || started.launcher.signalCode !== null, Boolean, 'INSTANCE_DID_NOT_EXIT', 10000);
       record.instanceExit = {code: started.launcher.exitCode, signal: started.launcher.signalCode};
@@ -596,6 +609,7 @@ async function windowsUninstall(config, label, executable, expectation) {
     if (started) await started.application.close().catch(() => undefined);
     if (host) await stopFakeGame(host);
   }
+  if (rehearse) return record;
   assert.equal(record.run.failure, undefined, `UNINSTALL_RUN_FAILED ${record.run.failure?.message ?? ''}`.trim());
   const receipts = (await receiptNames(layout.temp)).filter(name => !receiptsBefore.has(name));
   assert.equal(receipts.length, 1, 'UNINSTALL_RECEIPT_COUNT');
@@ -661,7 +675,7 @@ try {
       case 'verify': result.result = await verify(config, label, rest[2]); break;
       case 'games': result.result = await games(config); break;
       case 'plugin-launch': result.result = await pluginLaunch(config, label, rest[2], rest[3]); break;
-      case 'windows-uninstall': result.result = await windowsUninstall(config, label, rest[2], rest[3]); break;
+      case 'windows-uninstall': result.result = await windowsUninstall(config, label, rest[2], rest[3], rest[4] === '--rehearse'); break;
       case 'cleanup': result.result = await cleanup(config, rest.slice(1)); break;
       default: throw new Error('UNKNOWN_COMMAND');
     }
