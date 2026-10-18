@@ -903,3 +903,38 @@ RED, each applied alone to the product source and reverted, the file then byte-i
 - G6 counting skips the lost events of a gap with a `queueCount` cause (`apps/desktop/src/trip-recorder.ts`): (a), (b) and (d) fail their loss totals; (c), an `encodingFailed` gap, passes.
 
 Commands, timings and findings are in [ET-019 validation](docs/validation/et-019.md#pr-3-producer-losses-inside-an-open-trip-october-18-2026).
+
+## ET-019 replay into the journal and export — October 19, 2026
+
+ET-019 PR-5 replays lifecycle scenarios through the real pipeline: the reactive v1 simulator on actual Windows pipes, `V1Ingestion`, the trip recorder and the real storage worker, into a temporary synthetic-purpose database. It then reads each scenario back the way the dashboard and main read it. It changes tests, fixtures and documentation only: no product source, simulator, wire, schema, IPC or renderer change, and `tests/storage/recording-helpers.ts` is unchanged. `GAME_HISTORY_RECORDING` stays `false`. The per-test workspace is the exporter's LOCALAPPDATA, and every case asserts that no `data\telemetry.sqlite` exists there.
+
+Six scenarios come from the ET-005b corpus and reuse their hand-written `*.trip.expected.json` rows unchanged: `save-load`, `quick-job-profile-change`, `timers-truck-refuel`, `ferry-train`, `app-absent-hydration` and `retention-expired`. Four are derived in the test from a corpus scenario's header and seed, because the corpus has no trip for them, and their rows are hand-written in `tests/fixtures/recording/<id>.rows.expected.json`:
+
+- `cancellation-trips`;
+- `ferry-train-trip`;
+- `timers-truck-refuel-trip`;
+- `missing-job-configuration`.
+
+What only the journal and the export show is hand-written in `tests/fixtures/recording/replay-journal-export.expected.json`. Every expectation comes from [trips](docs/trips.md), [journal](docs/journal.md), [the trip export](docs/journal-export.md), [storage](docs/storage.md) and [the v1 simulator](docs/simulator-v1.md), never from the code under test (section 4).
+
+| Requirement | Executable regression protection | Evidence boundary |
+| --- | --- | --- |
+| Missing configuration alone never proves delivery, and an ambiguous continuation is not merged (REG-004) | `tests/storage/replay-journal-export.test.ts` `missing-job-configuration`: a `job.delivered` whose job configuration was never observed is `ambiguous` and belongs to no trip. A job cleared without an outcome closes `{none, discontinuity, partial}` at a timer restart. The identical job after it is a separate trip with a not-merged continuation interval, delivered by its own outcome only. The journal's `delivered` filter lists that trip alone | Synthetic ATS source; the ordering is inference, not a real trace |
+| Cancellation and delivery stay distinct (REG-004) | `cancellation-trips`: a cargo-market job cancelled before pickup (fine and outcome `trip-before-loaded`, T14) and a job cancelled after its clear with a free-driving toll and an identical truck re-send between (O7). Both are cancelled and complete; the penalties are outcome records, never money totals | No frame, so no samples |
+| Lifecycle discontinuities reach the journal and the export unchanged (REG-003, REG-008) | `save-load` (open, partial, with its save-load interval), `quick-job-profile-change`, the two late-attach trips (`app-absent-hydration` with an empty `close-gap` window, `retention-expired` open), `ferry-train-trip` (a crossing `game-time-jump` annotation that leaves a delivered trip complete) and `timers-truck-refuel-trip` (truck-change and refuel annotations, fuel used 10 L, a 0 m road stop). The corpus `timers-truck-refuel` and `ferry-train`, which have no job, list no trip under any filter | Synthetic readings; real crossings, refuels and profile changes remain pending |
+| The journal reads (REG-014) | Through `JournalService`, with each answer passing main's `parseJournalReply` unchanged: the list rows with their job summaries; every outcome, completeness and game filter; each trip's detail (trip block, job source, truck, trailers, outcome record, money totals, window, intervals, samples and export bounds); its intervals page; its timeline window with each event's type and attribution; and its samples | A new real worker on the closed file, not the running service |
+| The export (REG-014) | Each trip through main's `JournalExporter`: the saved counts, an empty `tripExportProblems` list, and the hand-written header purpose, bounds, trip block, job source, truck, trailers, outcome record, money totals, window, intervals, events and samples | No real Save dialog |
+| ACKs and history invariants (REG-005) | Every ACK at or below the coverage storage had reported when it was written, and `checkHistoryInvariants` (I1–I5) over the stored rows and every ACK | One connection per scenario except `retention-expired` |
+
+Changed tests: none. No existing assertion or expected value changed, and no historical fixture was regenerated.
+
+RED, each applied alone to the product source and reverted, the file then byte-identical (`git hash-object` and the working-copy SHA-256):
+
+- the journal's completeness filter ignores `partial`: `cancellation-trips` and `ferry-train-trip` fail (main's reply check refuses the page first);
+- the export serializer drops interval rows: seven cases fail on the export's intervals, while the shared validator accepts the document;
+- a timer restart keeps an awaiting-outcome trip open, which merges the identical job into it: `missing-job-configuration` (one delivered trip instead of two) and `quick-job-profile-change` fail;
+- a `job.cleared` of an active trip closes it as delivered: four cases fail;
+- an outcome without an attachable trip is attributed `free-driving`: `missing-job-configuration` fails;
+- a `close-gap` window includes the gap's first eventSeq: `app-absent-hydration` fails.
+
+The new file takes about 5 s, one storage worker per case, and the storage suite stays far inside its 5 minute CI step. Commands, timings and findings are in [ET-019 validation](docs/validation/et-019.md#pr-5-lifecycle-scenarios-replayed-into-the-journal-and-the-export-october-19-2026).
