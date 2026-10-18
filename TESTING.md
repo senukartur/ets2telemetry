@@ -473,6 +473,14 @@ PR-7 review round 1 adds:
 
 RED, each applied alone: seeds that keep the session-wide label fail two seed cases and the real-worker case (seed label 1,800,000,000,040 instead of …045); no drop on a live item fails the clear, outcome and gap cases; without the UUID check, the open-trip check or the same-session close check, one, two and one storage cases fail ([ET-016 validation](docs/validation/et-016.md#pr-7-review-round-1-october-17-2026)).
 
+The stale-checkpoint fix (ET-019 finding F1, October 18, 2026; [trips](docs/trips.md#stale-checkpoints)) adds:
+
+| Requirement | Executable regression protection | Evidence boundary |
+| --- | --- | --- |
+| A checkpoint whose state lags its nextEventSeq opens no late-attach trip once a replayed `job.cleared` or `job.configured` with a newer configuration revision, or a replayed outcome at its revision or later, proves its job ended or replaced; a stale checkpoint whose replay leaves the job, and a state ahead of the store, still open it (J9, OD-5 S7, S11; REG-003, REG-001) | `tests/unit/trip-reducer.test.ts` "stale checkpoints" (five cases); `trip-simulator-replay.test.ts` "trip replay of a stale checkpoint" and `tests/storage/stale-checkpoint.test.ts` (reactive simulator, recorder, real worker): `normal-delivery` with an uncommitted first connection against the hand-written `tests/fixtures/recording/normal-delivery-stale-checkpoint.rows.expected.json` | Synthetic producer model; the native plugin's state lag is inferred from its source (docs/trips.md), not observed in a game |
+
+No existing expectation changed. RED, with the rule removed: three reducer cases, the replay case and the storage case fail (the storage run stores `attach@10` and attributes the live fine to it); with a strict comparison for outcomes, the case whose clear is still live fails ([ET-016 validation](docs/validation/et-016.md#stale-checkpoint-fix-october-18-2026)).
+
 PR-5 adds the versioned JSON export of one trip through a Save dialog that main owns ([trip export format](docs/journal-export.md)). The expected documents, results and log rows are written by hand from J15–J18, [journal-replies.ts](tests/shared/journal-replies.ts) and the anchors of [journal-seed.ts](tests/shared/journal-seed.ts); [trip-export-validator.ts](tests/shared/trip-export-validator.ts) is an independent, hand-written check of format version 1 used by the unit and storage suites and the smoke. Nothing is read back from the serializer.
 
 | Requirement | Executable regression protection | Evidence boundary |
