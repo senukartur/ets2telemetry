@@ -25,7 +25,7 @@ export const TARGET_RETRY_DELAYS_MS: readonly number[] = Object.freeze([20, 40, 
 export type InstallStep = 'process' | 'registry' | 'recover' | 'layout' | 'cleanup' | 'classify' | 'read-only' | 'pending' | 'directory'
   | 'temp' | 'verify' | 'rename' | 'rehash' | 'unlink' | 'record';
 
-interface InstallerStats {
+export interface InstallerStats {
   isFile(): boolean;
   isDirectory(): boolean;
   isSymbolicLink(): boolean;
@@ -34,7 +34,7 @@ interface InstallerStats {
   ino: bigint;
   mode: bigint;
 }
-interface InstallerHandle {
+export interface InstallerHandle {
   stat(options: {bigint: true}): Promise<InstallerStats>;
   read(buffer: Uint8Array, offset: number, length: number, position: number): Promise<{bytesRead: number}>;
   write(buffer: Uint8Array, offset: number, length: number, position: number): Promise<{bytesWritten: number}>;
@@ -123,7 +123,48 @@ export function blockReasonFor(code: string | null, kind: ErrorKind): PluginBloc
   return 'IO_ERROR';
 }
 
-type HashedFile = {readonly ok: true; readonly sha256: string; readonly mode: bigint} | {readonly ok: false; readonly kind: 'missing' | 'not-file' | 'too-large' | 'error'; readonly errno: string | null};
+export type HashedFile = {readonly ok: true; readonly sha256: string; readonly mode: bigint} | {readonly ok: false; readonly kind: 'missing' | 'not-file' | 'too-large' | 'error'; readonly errno: string | null};
+
+/**
+ * Reads a regular, non-link file of at most 16 MiB through one handle and hashes it. The handle must still be the file
+ * lstat saw. Shared with the ET-018 uninstall cleanup (apps/desktop/src/uninstall/plugin-cleanup.ts).
+ */
+export async function hashPluginFile(fs: InstallerFileSystem, target: string): Promise<HashedFile> {
+  let before: InstallerStats;
+  try {before = await fs.lstat(target, {bigint: true});} catch (error) {
+    const code = errorCode(error);
+    return {ok: false, kind: code === 'ENOENT' ? 'missing' : 'error', errno: code};
+  }
+  if (before.isSymbolicLink() || !before.isFile()) return {ok: false, kind: 'not-file', errno: null};
+  if (before.size > BigInt(MAX_PLUGIN_FILE_BYTES)) return {ok: false, kind: 'too-large', errno: null};
+  let handle: InstallerHandle;
+  try {handle = await fs.open(target, 'r');} catch (error) {return {ok: false, kind: 'error', errno: errorCode(error)};}
+  try {
+    const held = await handle.stat({bigint: true});
+    if (!held.isFile() || held.dev !== before.dev || held.ino !== before.ino) return {ok: false, kind: 'not-file', errno: null};
+    const hash = createHash('sha256'), chunk = new Uint8Array(64 * 1024);
+    let length = 0;
+    while (true) {
+      const {bytesRead} = await handle.read(chunk, 0, chunk.length, length);
+      if (!bytesRead) break;
+      length += bytesRead;
+      if (length > MAX_PLUGIN_FILE_BYTES) return {ok: false, kind: 'too-large', errno: null};
+      hash.update(chunk.subarray(0, bytesRead));
+    }
+    return {ok: true, sha256: hash.digest('hex'), mode: held.mode};
+  } catch (error) {return {ok: false, kind: 'error', errno: errorCode(error)};}
+  finally {await handle.close().catch(() => undefined);}
+}
+
+/** Removes a plugins folder only when it is a plain, empty folder; any failure leaves it. Shared with the uninstall cleanup. */
+export async function removeEmptyPluginsDirectory(fs: InstallerFileSystem, directory: string): Promise<boolean> {
+  try {
+    const stats = await fs.lstat(directory, {bigint: true});
+    if (stats.isSymbolicLink() || !stats.isDirectory() || (await fs.readdir(directory)).length) return false;
+    await fs.rmdir(directory);
+    return true;
+  } catch {return false;}
+}
 
 export class PluginInstaller {
   private readonly fs: InstallerFileSystem;
@@ -151,32 +192,7 @@ export class PluginInstaller {
   }
 
   /** Reads a regular, non-link file of at most 16 MiB through one handle and hashes it. */
-  private async hashFile(target: string): Promise<HashedFile> {
-    let before: InstallerStats;
-    try {before = await this.fs.lstat(target, {bigint: true});} catch (error) {
-      const code = errorCode(error);
-      return {ok: false, kind: code === 'ENOENT' ? 'missing' : 'error', errno: code};
-    }
-    if (before.isSymbolicLink() || !before.isFile()) return {ok: false, kind: 'not-file', errno: null};
-    if (before.size > BigInt(MAX_PLUGIN_FILE_BYTES)) return {ok: false, kind: 'too-large', errno: null};
-    let handle: InstallerHandle;
-    try {handle = await this.fs.open(target, 'r');} catch (error) {return {ok: false, kind: 'error', errno: errorCode(error)};}
-    try {
-      const held = await handle.stat({bigint: true});
-      if (!held.isFile() || held.dev !== before.dev || held.ino !== before.ino) return {ok: false, kind: 'not-file', errno: null};
-      const hash = createHash('sha256'), chunk = new Uint8Array(64 * 1024);
-      let length = 0;
-      while (true) {
-        const {bytesRead} = await handle.read(chunk, 0, chunk.length, length);
-        if (!bytesRead) break;
-        length += bytesRead;
-        if (length > MAX_PLUGIN_FILE_BYTES) return {ok: false, kind: 'too-large', errno: null};
-        hash.update(chunk.subarray(0, bytesRead));
-      }
-      return {ok: true, sha256: hash.digest('hex'), mode: held.mode};
-    } catch (error) {return {ok: false, kind: 'error', errno: errorCode(error)};}
-    finally {await handle.close().catch(() => undefined);}
-  }
+  private hashFile(target: string): Promise<HashedFile> {return hashPluginFile(this.fs, target);}
 
   /** P7: the game itself or a TruckersMP client blocks every change; a failed check changes nothing. */
   private async processBlock(game: PluginGame): Promise<StepFailure | {running: RunningGames}> {
@@ -449,14 +465,7 @@ export class PluginInstaller {
   }
 
   /** Removes the plugins folder only when it is a plain, empty folder; any failure leaves it. */
-  private async removeEmptyDirectory(directory: string): Promise<boolean> {
-    try {
-      const stats = await this.fs.lstat(directory, {bigint: true});
-      if (stats.isSymbolicLink() || !stats.isDirectory() || (await this.fs.readdir(directory)).length) return false;
-      await this.fs.rmdir(directory);
-      return true;
-    } catch {return false;}
-  }
+  private removeEmptyDirectory(directory: string): Promise<boolean> {return removeEmptyPluginsDirectory(this.fs, directory);}
 
   /**
    * Removes the owned plugin from the target when its game is excluded (P8 removal, P11): the running check, the

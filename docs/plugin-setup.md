@@ -399,6 +399,8 @@ For each folder, and only while neither that game nor TruckersMP is running:
 
 Any other file stays.
 
+**Implemented by ET-018 PR-2 (October 18, 2026).** `apps/desktop/src/uninstall/plugin-cleanup.ts` follows this contract, called by the uninstall engine; see [uninstall](uninstall.md#plugin-cleanup). Two details it settles: a folder whose game root is gone while its parent folder remains counts as cleaned, and one whose parent is missing (an unplugged drive) defers as `FOLDER_UNAVAILABLE`; a sharing violation on the unlink is retried five times within 300 ms like the installer's, while `EPERM` is reported at once. The engine also keeps the folders in its own intent, so a later run can finish after the registry is gone. Nothing runs the engine until ET-018 PR-3 and PR-4.
+
 ## Algorithm
 
 Implemented in PR-3 as `plugin-installer.ts` (P6–P8). The caller passes:
