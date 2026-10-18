@@ -186,3 +186,17 @@ The x64 package carries every prebuilt binding that better-sqlite3 13.0.3 ships 
 - Package only `prebuilds/win32-x64.node`, through the Forge `ignore` filter or an `afterCopy` hook, and add an `inspect:package` assertion that no other prebuild is present, while the storage worker still resolves its binding.
 
 **Until then:** the package ships all prebuilds, and the release identity records each with its hash. No packaging change is authorized by this entry.
+
+## TD-016: A stale checkpoint's job ended inside a replayed gap
+
+Recorded October 18, 2026 by the coordinator with the ET-016 stale-checkpoint fix (ET-019 finding F1). **This entry is a coordinator decision under the owner's standing delegation of October 15, 2026, not an individually owner-approved deferral.** The owner may revise it.
+
+A checkpoint's state is the slot published at the last frame boundary (OD-5 S7), while its `nextEventSeq` is the end of the event store (OD-5 S11), so the state can lag the replayed events ([trips](trips.md#stale-checkpoints)). The fix drops a pending late-attach trip when a replayed `job.cleared`, `job.configured` or outcome carries configuration-revision evidence that the checkpoint's job ended or was replaced. A replayed gap carries no revision, and the checkpoint state carries no source-clock time to compare with the gap's lost times. When a lagging state's job was cleared or delivered inside a replayed gap, for example an offline gap within the last frame before a connection, the late-attach trip still opens for a job that may have ended. It is partial with its `late-attach` interval, and the gap is stored as a session-level interval, but the trip itself may not correspond to an active job.
+
+Dropping the late-attach trip at every replayed gap is not an option. J9's main case is a job accepted while the application was absent: its events are offline loss, so the replay before the trip opens is exactly such a gap (`app-absent-hydration`). That rule would lose the trip that J9 and REG-003 require. The window is the same one as F1: at most about one frame at a connection, or more after a skipped try-lock.
+
+**Future work:**
+- Give the consumer evidence to order a replayed gap against the checkpoint state, for example the state's publication time in the source clock, or the configuration revision of the lost range. Either is a protocol v1 change and needs its own decision. With it, drop the trip only when the gap provably lies after the state's publication.
+- Observe real late-attach checkpoints from both games to measure how often the window occurs.
+
+**Until then:** the behaviour above stands, the trip stays partial, and no wire, schema or native change is authorized by this entry.

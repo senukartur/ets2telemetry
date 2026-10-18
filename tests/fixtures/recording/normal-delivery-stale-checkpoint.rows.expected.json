@@ -1,0 +1,24 @@
+{
+  "scenario": "normal-delivery-stale-checkpoint",
+  "authoredFrom": [
+    "ET-019 finding F1. normal-delivery.json with a derived transport (tests/shared/stale-checkpoint.ts): connection 1 (0-1,100 ms) is durable but commits and acknowledges nothing, so the producer retains eventSeq 1-9; connection 2 (1,200-1,300 ms) commits and acknowledges each item. A fine at 1,250 ms is live eventSeq 10.",
+    "Connection 2's checkpoint (nextEventSeq 10) carries the state published at the last frame, 200 ms (docs/simulator-v1.md, OD-5 S7): job 3 with cargo not loaded at configuration revision 3. The retained events re-send the job at 300 ms (5, revision 4), deliver it at 600 ms (8, revision 4) and clear it at 610 ms (9, revision 5), so the checkpoint's job had ended before nextEventSeq.",
+    "docs/trips.md replayed events: the replayed job.configured (3) opens trip@3 partial with opened-at-load (the session never started a committed item, T12) and opened-before-attach; truck 1 and trailer 2 are its references; the re-send (5) only updates cargoLoaded (O3); the replayed delivery (8) attributes trip and closes it {delivered, outcome, partial} at its label 1,800,000,000,600.",
+    "docs/trips.md stale checkpoints: the replayed job.configured (5, revision 4 > 3) already proves the checkpoint's job replaced, so the pending late-attach trip is dropped and the checkpoint job is no longer untracked; no attach@10 trip and no checkpoint job row are stored. The live fine (10) is free driving.",
+    "Readings: the checkpoint reading precedes the trip's opening and connection 2 gets no snapshot (no frame after 200 ms), so the trip has no reading and its observed distance and fuel used stay not observed (T16)."
+  ],
+  "trips": [
+    {"trip": "trip@3", "jobConfigurationEventSeq": "3", "truckConfigurationEventSeq": "1", "trailerConfigurationEventSeqs": ["2"], "openedEventSeq": "3",
+      "gameMode": {"mode": "unknown", "method": "none", "confidence": "none"}, "gameModeAmbiguous": false, "outcome": "delivered", "outcomeEventSeq": "8", "closeReason": "outcome",
+      "recordingCompleteness": "partial", "startedUtcMs": 1800000000030, "endedUtcMs": 1800000000600, "observedDistanceM": {"available": false, "reason": "not-observed"}, "fuelUsedL": {"available": false, "reason": "not-observed"}}
+  ],
+  "attributions": [{"eventSeq": "8", "trip": "trip@3", "attribution": "trip"}, {"eventSeq": "10", "trip": null, "attribution": "free-driving"}],
+  "intervals": [
+    {"trip": "trip@3", "kind": "discontinuity", "detail": {"cause": "opened-at-load", "atEventSeq": "3"}},
+    {"trip": "trip@3", "kind": "not-connected", "detail": {"cause": "opened-before-attach", "atEventSeq": "3"}}
+  ],
+  "coverage": {"committedThroughEventSeq": "10", "committed": 10, "duplicate": 0, "covered": 0},
+  "view": {"phase": "idle", "untrackedJob": false, "current": null,
+    "lastClosed": {"trip": "trip@3", "recordingCompleteness": "partial", "observedDistanceM": {"state": "missing", "reason": "not-observed"}, "fuelUsedL": {"state": "missing", "reason": "not-observed"},
+      "refuelledL": 0, "refuels": 0, "outcome": "delivered", "closeReason": "outcome"}}
+}
