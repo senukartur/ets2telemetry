@@ -6,10 +6,12 @@
 // tests/fixtures/recording/normal-delivery-stale-checkpoint.rows.expected.json. Runs under npm run test:storage; it is a
 // file of its own because ET-019 extends tests/storage/trip-recorder-crash.test.ts.
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
+import {checkHistoryInvariants, formatViolations, type HistoryAck} from '../../scripts/ci/history-invariants.mjs';
 import {reactiveDifferences} from '../../tools/telemetry-simulator/src/v1/reactive';
 import {scenarioSource} from '../../tools/telemetry-simulator/src/v1/replay';
 import {staleCheckpointExpected, staleCheckpointScenario} from '../shared/stale-checkpoint';
 import {ok, readOnly, workspace} from './helpers';
+import {readHistoryRows} from './history-rows';
 import {replayOf, runRecording, storedRows, terminateWorkers, viewSummary} from './recording-helpers';
 
 let ws: Awaited<ReturnType<typeof workspace>>;
@@ -34,5 +36,9 @@ describe('stale checkpoint through the real storage worker (ET-019 F1)', () => {
     // No checkpoint job configuration was stored (openAttachedTrip never ran).
     expect(readOnly(ws.database, db => db.prepare(`SELECT count(*) FROM job_configurations WHERE source = 'checkpoint'`).pluck().get())).toBe(0);
     expect(viewSummary(services[0].recorder.view('ets2'), seed)).toEqual(expected.view);
+    // ET-019: the history invariants I1–I5 over the closed database and every ACK the recorder wrote.
+    const rows = readHistoryRows(ws.database), written: HistoryAck[] = acks.map(ack => ({pluginSessionId: session, throughEventSeq: ack.through.toString()}));
+    const violations = checkHistoryInvariants(rows, written);
+    expect(violations, formatViolations(violations)).toEqual([]);
   }, 90_000);
 });

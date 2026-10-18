@@ -133,16 +133,16 @@ function expectInvariants(session: string, children: Child[], context = '') {
  * after the scenario's last step, the second connection reconnects after it. `coverage` is the committed coverage after
  * the second process, `commits` the number of commit commands of the first process (its connection's events and gaps),
  * both counted by hand from the scenario fixtures and their expectations. `gapFree` scenarios store every eventSeq as an
- * event. `attach` runs the recorder's late-attach op in both processes.
+ * event. Every scenario runs the recorder's late-attach op in both processes, as the service does.
  */
-interface KillScenario {base: string; steps?: Json[]; transport: Json[]; coverage: number; commits: number; gapFree: boolean; attach: boolean}
+interface KillScenario {base: string; steps?: Json[]; transport: Json[]; coverage: number; commits: number; gapFree: boolean}
 const withheld = (connectMs: number, endMs: number, reconnectMs: number, lastMs: number): Json[] => [{atMs: connectMs, action: 'connect', client: {durable: true, ack: 'withhold'}},
   {atMs: endMs, action: 'disconnect'}, {atMs: reconnectMs, action: 'connect', client: {durable: true}}, {atMs: lastMs, action: 'disconnect'}];
 /**
  * A second job configured while the simulation runs (since 500 ms), delivered and cleared, then a frame (two-jobs). The
  * frame after the clear is deliberate: a checkpoint carries the state of the last frame (simulator OD-5 S7), so without
- * it the reconnection's checkpoint would still show job 10 and J9 would open a late-attach trip for that finished job
- * (finding F1 in docs/validation/et-019.md, tracked by the fix on branch fix/late-attach-stale-checkpoint).
+ * it the reconnection's checkpoint would still show job 10 (finding F1 in docs/validation/et-019.md). Since the
+ * stale-checkpoint fix the replayed clear drops that late-attach trip; the frame keeps the checkpoint current anyway.
  */
 const SECOND_JOB: Json[] = [
   {atMs: 700, action: 'configuration', id: 'job', attributes: [{name: 'cargo.id', sdkType: 'string', value: 'synthetic_cargo_2'},
@@ -157,21 +157,21 @@ const SECOND_JOB: Json[] = [
   {atMs: 950, action: 'frame', channels: {speed: 0}}];
 const SCENARIOS: Record<string, KillScenario> = {
   // Events 1–9 (normal-delivery.expected.json); last step 610 ms.
-  'normal-delivery': {base: 'normal-delivery', transport: withheld(0, 1100, 1200, 1300), coverage: 9, commits: 9, gapFree: true, attach: false},
+  'normal-delivery': {base: 'normal-delivery', transport: withheld(0, 1100, 1200, 1300), coverage: 9, commits: 9, gapFree: true},
   // Events 1–13 (save-load.expected.json).
-  'save-load': {base: 'save-load', transport: withheld(0, 300, 400, 500), coverage: 13, commits: 13, gapFree: true, attach: false},
+  'save-load': {base: 'save-load', transport: withheld(0, 300, 400, 500), coverage: 13, commits: 13, gapFree: true},
   // Truck (1), timers.restart (2), truck (3); the refuel reading at 500 ms.
-  'timers-truck-refuel': {base: 'timers-truck-refuel', transport: withheld(0, 600, 700, 800), coverage: 3, commits: 3, gapFree: true, attach: true},
+  'timers-truck-refuel': {base: 'timers-truck-refuel', transport: withheld(0, 600, 700, 800), coverage: 3, commits: 3, gapFree: true},
   // Events 1–9; last step 140 ms.
-  'quick-job-profile-change': {base: 'quick-job-profile-change', transport: withheld(0, 200, 300, 400), coverage: 9, commits: 9, gapFree: true, attach: true},
+  'quick-job-profile-change': {base: 'quick-job-profile-change', transport: withheld(0, 200, 300, 400), coverage: 9, commits: 9, gapFree: true},
   // Ferry (1), train (2), toll (3).
-  'ferry-train': {base: 'ferry-train', transport: withheld(0, 100, 200, 300), coverage: 3, commits: 3, gapFree: true, attach: true},
+  'ferry-train': {base: 'ferry-train', transport: withheld(0, 100, 200, 300), coverage: 3, commits: 3, gapFree: true},
   // Job (1) and truck (2) on the first connection; after 300,000 ms they are one retentionExpired gap record 1–2.
-  'retention-expired': {base: 'retention-expired', transport: withheld(0, 50, 400_100, 400_200), coverage: 2, commits: 2, gapFree: false, attach: true},
+  'retention-expired': {base: 'retention-expired', transport: withheld(0, 50, 400_100, 400_200), coverage: 2, commits: 2, gapFree: false},
   // The first connection at 100 ms as in the scenario: gap 1–3, gap 4–4 at 150 ms and job.cleared (5) at 200 ms.
-  'app-absent-hydration': {base: 'app-absent-hydration', transport: withheld(100, 300, 400, 500), coverage: 5, commits: 3, gapFree: false, attach: true},
+  'app-absent-hydration': {base: 'app-absent-hydration', transport: withheld(100, 300, 400, 500), coverage: 5, commits: 3, gapFree: false},
   // normal-delivery's events 1–9, then job (10), job.delivered (11) and job.cleared (12).
-  'two-jobs': {base: 'normal-delivery', steps: SECOND_JOB, transport: withheld(0, 1100, 1200, 1300), coverage: 12, commits: 12, gapFree: true, attach: true}
+  'two-jobs': {base: 'normal-delivery', steps: SECOND_JOB, transport: withheld(0, 1100, 1200, 1300), coverage: 12, commits: 12, gapFree: true}
 };
 const killInput = (id: string, name: string): Json => {
   const scenario = SCENARIOS[id];
@@ -248,11 +248,18 @@ describe('S3 killed recording process (REG-006)', () => {
   // - save-load, killed before commit 12: the seed resumes active, because the re-send (9) after the clear cancelled
   //   awaitingOutcome, without its reload-check phase; the regression (13) then closes it as a discontinuity.
   //   Every save-load trip is partial: opened at load (T12), a not-merged continuation or a save load.
-  // These two scenarios run without the recorder's late-attach op, as they did before ET-019: their reconnection
-  // checkpoints carry the state of the last frame (simulator OD-5 S7), which still shows job 3, while the replay already
-  // holds its delivery or clear, so J9 would open a late-attach trip for that job (docs/validation/et-019.md, findings).
+  // Both scenarios run with the recorder's late-attach op since the stale-checkpoint fix (docs/trips.md, stale
+  // checkpoints); before it they ran without it because of finding F1 (docs/validation/et-019.md). No final changed:
+  // - normal-delivery: the reconnection's checkpoint carries the state of the last frame (200 ms, simulator OD-5 S7),
+  //   job 3 at configuration revision 3. Killed before commit 3 or after commit 8 the slot is idle at the checkpoint, so
+  //   a late-attach trip is pending; the replayed re-send (5, revision 4) or clear (9, revision 5) proves the state
+  //   stale and the job replaced or cleared, so it is dropped and no late-attach trip is stored. Killed after commit 5,
+  //   the seed of trip@3 keeps the slot busy, so none is pending.
+  // - save-load: the last frame (240 ms) follows every configuration, so the checkpoint is current (revision 9). Killed
+  //   before commit 2 the replayed job 3 opens trip@3, which is open when the replay drains; killed after commit 7 or
+  //   before commit 12 the seed keeps the slot busy. No late-attach trip opens at any of them.
   //
-  // ET-019 rows, from the same documents; every other scenario runs with the late-attach op, as the service does:
+  // ET-019 rows, from the same documents:
   // - timers-truck-refuel, killed before and after commit 3 (the second truck, after which only the refuel reading
   //   arrives): no job event, so no trip; the refuel and odometer changes belong to no trip (T16).
   // - quick-job-profile-change, killed after commit 5 (the clear): the seed of trip@2 resumes awaiting its outcome
@@ -291,7 +298,7 @@ describe('S3 killed recording process (REG-006)', () => {
   for (const [id, commit, kind, final] of KILLS) it(`(d) ${id}: killed ${kind} ${commit === 'attach' ? 'the attach op' : `commit ${commit}`} keeps every invariant after redelivery`, async () => {
     const scenario = SCENARIOS[id], input = killInput(id, `${id}-kill-${kind}-${commit}`), session = scenarioSource(replayV1(input).scenario).pluginSessionId;
     const barrier: Barrier = commit === 'attach' ? {kind: 'after', attach: true} : {kind, commit};
-    const {one, two} = await crash(input, {barrier, commitAfterFirstEnd: true}, {serve: {quiesceMs: 0}, attach: scenario.attach});
+    const {one, two} = await crash(input, {barrier, commitAfterFirstEnd: true}, {serve: {quiesceMs: 0}, attach: true});
     expectInvariants(session, [one, two]);
     expect(one.lines.at(-1)).toBe(`barrier ${kind} ${commit}`);
     const total = scenario.coverage;
