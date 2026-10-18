@@ -86,7 +86,7 @@ describe('the fixed tasklist call', () => {
   it.runIf(process.platform === 'win32')('lists its own node.exe in a real run', async () => {
     expect(REAL_RUN_GUARD_MS).toBeGreaterThan(TASKLIST_TIMEOUT_MS);
     const listing = await listProcesses();
-    expect(listing.ok).toBe(true);
+    expect(listing).toMatchObject({ok: true});
     if (!listing.ok) return;
     expect(listing.rows.filter(entry => entry.pid === process.pid).map(entry => entry.name.toLowerCase())).toEqual(['node.exe']);
   }, REAL_RUN_GUARD_MS);
