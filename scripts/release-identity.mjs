@@ -29,10 +29,12 @@ export const RELEASES = 'RELEASES';
 export const AUTHENTICODE_STATUSES = ['Valid', 'UnknownError', 'NotSigned', 'HashMismatch', 'NotTrusted', 'NotSupportedFileFormat', 'Incompatible'];
 /**
  * Statuses that stop the identity (docs/release.md, "Signing status gate"). `HashMismatch`: a signed file whose bytes
- * changed after signing, so it is tampered or corrupt. `UnknownError`: WinVerifyTrust could not decide on a file that is
- * a PE image by its header (an unsigned PE image is `NotSigned`), so the identity would record no usable status; a rerun
- * tells a passing verifier fault from a malformed signature. `NotSigned` is expected for the unsigned alpha, and
- * `NotTrusted`, `NotSupportedFileFormat` and `Incompatible` depend on the machine's trust store and Windows version.
+ * changed after signing, so it is tampered or corrupt. `UnknownError`: Windows PowerShell maps only a few WinVerifyTrust
+ * results to named statuses and every other one to `UnknownError`, so besides a malformed signature or a verifier fault it
+ * also covers an untrusted root, a certificate expired without a timestamp, a revoked certificate and a chain that cannot
+ * be built. Those are deterministic: a rerun gives the same result, and a person must inspect the file. (An unsigned PE
+ * image is `NotSigned`.) `NotSigned` is expected for the unsigned alpha. `NotTrusted` means explicit distrust only, and
+ * `NotSupportedFileFormat` and `Incompatible` depend on the file type and the Windows version; they are recorded.
  */
 export const SIGNING_FAILURES = ['HashMismatch', 'UnknownError'];
 /** EXE and DLL files must be PE images; a PE image with any other name is still found by its header. */

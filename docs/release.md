@@ -52,9 +52,9 @@ Only the artifact built by Windows CI on a push to `main` or a dispatch is ever 
 | Status | Why it fails |
 | --- | --- |
 | `HashMismatch` | A signed file whose bytes changed after signing: tampered or corrupt. |
-| `UnknownError` | Windows could not decide on a file that is a PE image by its header. An unsigned PE image reports `NotSigned` (observed locally on a synthetic image), so `UnknownError` points to a malformed signature or a verifier fault, and the identity would record no usable status. A rerun tells a passing fault from a malformed file. |
+| `UnknownError` | Windows PowerShell maps only a few WinVerifyTrust results to named statuses (no error, a bad algorithm, no signature, a bad digest or message, an unknown provider, explicit distrust) and every other result to `UnknownError`. Besides a malformed signature or a verifier fault, it therefore covers an untrusted root, a certificate that expired without a timestamp, a revoked certificate and a chain that cannot be built. These are deterministic: a rerun gives the same result, and a person must inspect the file before any release. An unsigned PE image reports `NotSigned` (observed locally on a synthetic image), not `UnknownError`. |
 
-`NotSigned` is expected for the unsigned alpha and is recorded. `NotTrusted`, `NotSupportedFileFormat` and `Incompatible` depend on the machine's trust store and Windows version, so they are recorded without failing; step 3 of the checklist looks at them.
+`NotSigned` is expected for the unsigned alpha and is recorded. `NotTrusted` means only that a certificate is explicitly distrusted (trust-store problems such as an untrusted root are `UnknownError`), and `NotSupportedFileFormat` and `Incompatible` depend on the file type and the Windows version; they are recorded without failing, and step 3 of the checklist looks at them.
 
 ### Installer inspection
 
