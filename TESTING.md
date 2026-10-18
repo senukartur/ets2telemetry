@@ -920,7 +920,7 @@ RED, each applied alone to the product source and reverted, the file then byte-i
 
 - `V1Ingestion.stopSource` neither disposes the ingestion nor cancels its timers (`apps/desktop/src/v1-ingestion.ts`): (a) fails with five connections, and (b) with three. Removing only the dispose or only the cancel passes: each alone stops the reconnection;
 - the history close grace set to 2,000 ms (`apps/desktop/src/history-storage.ts`): (b) fails, because the termination starts after the step's `timeout` verdict;
-- the grace set to 200 ms: (b) fails its lower bound (termination after 215 ms). (b) is sensitive only to a grace outside [700, 1000) ms: it has deliberately no timed upper bound, so a grace of 950 ms would pass;
+- the grace set to 200 ms: (b) fails its lower bound (termination after 215 ms). (b) is sensitive only to a grace outside about [700, 1000) ms (the lower edge holds with prompt timers; a late timer on a loaded host can let a grace just below 700 ms pass): it has deliberately no timed upper bound, so a grace of 950 ms would pass;
 - `HistoryStorage.close` no longer rejecting an unclean close: (b) fails with the step `ok`;
 - `appendSamples` rows written outside a transaction (`packages/storage/src/sqlite/writes.ts`): (c) fails, because the next open finds the killed batch's ten rows.
 

@@ -223,7 +223,8 @@ describe('ET-019 shutdown and close stalls', () => {
   // checkpointed and removed), so even a stall outside SQLite can end as `timeout` when that close outlasts the 200 ms
   // between the grace and the budget; the case therefore accepts either verdict and checks when the termination starts:
   // no earlier than the grace less LOOP_CLOCK_SLACK_MS, and before the step's verdict at the 1,000 ms budget. A grace
-  // anywhere in [700, 1000) ms passes; there is deliberately no timed upper bound.
+  // anywhere in [700, 1000) ms passes; there is deliberately no timed upper bound. The 700 ms edge holds with prompt
+  // timers: on a loaded host a late grace timer can let a grace just below 700 ms pass. The 1,000 ms edge is timer order.
   it('(b) G18: a close that would stall forever is terminated no earlier than the 800 ms grace (less 100 ms) and before the 1,000 ms step budget; the stop is unclean and bounded, and every committed event survives (REG-006, REG-011)', async () => {
     const localAppData = ws.directory;
     expectNoGameHistory(localAppData);
