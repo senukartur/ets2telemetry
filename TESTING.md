@@ -717,4 +717,6 @@ ET-018 PR-2 adds the uninstall cleanup engine in `apps/desktop/src/uninstall/` (
 
 `plugin-installer.ts` exports `hashPluginFile` and `removeEmptyPluginsDirectory`, moved unchanged; `plugin-installer.test.ts`, `plugin-setup.test.ts` and `plugin-registry.test.ts` pass unchanged. No existing test changed.
 
+PR-2 review fix round: a game root Steam left without its executable is cleaned by hash ownership when its layout is plain, and otherwise counts as absent with a fixed note (`uninstall-plugin-cleanup.test.ts`, six cases, and a complete engine run); the running-game listing's AbortSignal is aborted when its 3 s budget expires; a rerun keeps the intent's known hashes (`uninstall-engine.test.ts`). Each fails when its fix is reverted ([ET-018 validation](docs/validation/et-018.md#review-fix-round-october-18-2026)).
+
 RED for PR-2, each applied alone and reverted: (a) a walker that follows links, (b) a DLL with an unrecognized hash removed, (c) `setup.json` deleted while a folder is blocked, (d) the environment used in test mode, (e) a newer registry treated as empty, (f) the intent written after the first delete and (g) a read-only DLL unlinked each fail named cases ([ET-018 validation](docs/validation/et-018.md#red-1)).

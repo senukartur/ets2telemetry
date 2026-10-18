@@ -7,7 +7,7 @@ import type {RunningGames} from '../plugin-setup/game-processes';
 import type {PluginGame} from '../plugin-setup/steam-discovery';
 import {DATA_ALLOWLIST, KEPT_UNTIL_CLEAN, wipeDataRoot, type DataEntry, type WipeFailureCode, type WipeFileSystem} from './data-wipe';
 import {readPendingRecord, writePendingRecord, type PendingFolder, type PendingRecord} from './pending-record';
-import {cleanFolder, cleanupFolders, forgetFolder, type CleanupBlockReason} from './plugin-cleanup';
+import {cleanFolder, cleanupFolders, forgetFolder, type CleanupBlockReason, type FolderNote} from './plugin-cleanup';
 import type {UninstallRoots, UninstallRootsRefusal} from './roots';
 
 // The uninstall cleanup engine (ET-018 U5; docs/uninstall.md). Not wired into the application yet: PR-3 runs it from the
@@ -40,6 +40,8 @@ export interface UninstallResult {
     readonly absent: number;
     /** Folders where a file with the plugin's name and an unknown hash stays. */
     readonly unrecognized: number;
+    /** Folders that are no longer game folders, with the fixed note of how each was handled. */
+    readonly notes: readonly {readonly game: PluginGame; readonly note: FolderNote}[];
     readonly blocked: readonly {readonly game: PluginGame; readonly reason: CleanupBlockReason | 'RUNNING_CHECK_FAILED' | 'BUDGET_EXPIRED'}[];
   };
   readonly data: {
@@ -80,16 +82,17 @@ const REGISTRY_PROBLEM: Partial<Record<PluginRegistryState, RegistryProblem>> = 
 const defaultDelay = (milliseconds: number) => new Promise<void>(resolve => setTimeout(resolve, milliseconds));
 const EMPTY_DATA = {removed: 0, kept: 0, failed: [], rootRemoved: false} as const;
 
-function withTimeout<T>(work: Promise<T>, milliseconds: number, fallback: T): Promise<T> {
+/** The work's result, or `fallback` after `milliseconds`; `expired` runs then, so the work can be cancelled. */
+function withTimeout<T>(work: Promise<T>, milliseconds: number, fallback: T, expired: () => void): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
-  return Promise.race([work.catch(() => fallback), new Promise<T>(resolve => {timer = setTimeout(() => resolve(fallback), milliseconds);})])
+  return Promise.race([work.catch(() => fallback), new Promise<T>(resolve => {timer = setTimeout(() => {expired(); resolve(fallback);}, milliseconds);})])
     .finally(() => clearTimeout(timer));
 }
 
 /** Runs one uninstall cleanup; see the file comment. */
 export async function runUninstall(ports: UninstallPorts): Promise<UninstallResult> {
   const {roots} = ports;
-  const refused = (code: UninstallCode): UninstallResult => ({outcome: 'refused', code, plugins: {removed: 0, absent: 0, unrecognized: 0, blocked: []},
+  const refused = (code: UninstallCode): UninstallResult => ({outcome: 'refused', code, plugins: {removed: 0, absent: 0, unrecognized: 0, notes: [], blocked: []},
     data: EMPTY_DATA, roaming: 'not-run'});
   if (!roots.ok) return refused(roots.code);
   const now = ports.now ?? (() => new Date()), delay = ports.delay ?? defaultDelay;
@@ -106,14 +109,17 @@ export async function runUninstall(ports: UninstallPorts): Promise<UninstallResu
   const registryProblem = REGISTRY_PROBLEM[registry.state];
   // An invalid, newer or unreadable registry touches no game folder at all (the ET-017 contract); it stays for a retry.
   const folders = registryProblem ? [] : cleanupFolders(registry.document, kept);
-  const running: RunningGames | undefined = folders.length ? await withTimeout(ports.checkRunning().then(check => check.ok ? check.running : undefined),
-    ports.runningCheckBudgetMs ?? RUNNING_CHECK_BUDGET_MS, undefined) : {ets2: false, ats: false, client: false};
-  const known = [...new Set(ports.known)].sort();
+  // The listing is cancelled when its budget expires, so tasklist never outlives the uninstall hook.
+  const listing = new AbortController();
+  const running: RunningGames | undefined = folders.length ? await withTimeout(ports.checkRunning(listing.signal).then(check => check.ok ? check.running : undefined),
+    ports.runningCheckBudgetMs ?? RUNNING_CHECK_BUDGET_MS, undefined, () => listing.abort()) : {ets2: false, ats: false, client: false};
+  // A run from another build keeps the earlier released hashes the intent carries.
+  const known = [...new Set([...ports.known, ...(previous.state === 'present' ? previous.record.known : [])])].sort();
 
   // Nothing at all to do: no data root and no folder.
   const dataRootPresent = await ports.fs.lstat(dataRoot, {bigint: true}).then(() => true, () => false);
   if (!dataRootPresent && !folders.length) {
-    return {outcome: 'complete', code: null, plugins: {removed: 0, absent: 0, unrecognized: 0, blocked: []}, data: {...EMPTY_DATA, rootRemoved: true},
+    return {outcome: 'complete', code: null, plugins: {removed: 0, absent: 0, unrecognized: 0, notes: [], blocked: []}, data: {...EMPTY_DATA, rootRemoved: true},
       roaming: await roaming(ports, roots.mode)};
   }
 
@@ -126,6 +132,7 @@ export async function runUninstall(ports: UninstallPorts): Promise<UninstallResu
 
   // 3. Plugin cleanup, folder by folder.
   let removed = 0, absent = 0, unrecognized = 0;
+  const notes: {game: PluginGame; note: FolderNote}[] = [];
   const blocked: {folder: PendingFolder; reason: CleanupBlockReason | 'RUNNING_CHECK_FAILED' | 'BUDGET_EXPIRED'}[] = [];
   for (const folder of folders) {
     if (!running) {blocked.push({folder, reason: 'RUNNING_CHECK_FAILED'}); continue;}
@@ -133,9 +140,10 @@ export async function runUninstall(ports: UninstallPorts): Promise<UninstallResu
     const outcome = await cleanFolder(folder, {fs: gameFs, running, known, delay});
     if (outcome.status === 'blocked') {blocked.push({folder, reason: outcome.reason}); continue;}
     if (outcome.status === 'removed') removed++; else if (outcome.status === 'absent') absent++; else unrecognized++;
+    if (outcome.note) notes.push({game: folder.game, note: outcome.note});
     if (!registryProblem) await forgetFolder(registry, folder);
   }
-  const plugins = {removed, absent, unrecognized, blocked: blocked.map(entry => ({game: entry.folder.game, reason: entry.reason}))};
+  const plugins = {removed, absent, unrecognized, notes, blocked: blocked.map(entry => ({game: entry.folder.game, reason: entry.reason}))};
   const pluginsClean = !blocked.length && !registryProblem;
 
   // 4 and 5. The data: everything but the registry and the intent first.

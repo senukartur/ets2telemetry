@@ -6,7 +6,7 @@ import {runUninstall, type UninstallFileSystem, type UninstallPorts, type Uninst
 import {parsePendingRecord} from '../../apps/desktop/src/uninstall/pending-record';
 import {resolveUninstallRoots, type UninstallRoots} from '../../apps/desktop/src/uninstall/roots';
 import {guardedTempRoot, type GuardedRoot} from '../shared/guarded-fs';
-import {CURRENT, exists, FOREIGN, gameFolder, installFixture, installRecord, KNOWN, listTree, notRunning, seedData, writeRegistry,
+import {CURRENT, exists, FOREIGN, gameFolder, installFixture, installRecord, KNOWN, listTree, notRunning, RELEASED, seedData, writeRegistry,
   type FakeGameFolder, type InstallFixture} from '../shared/uninstall-fixture';
 
 // REG-015, REG-017 (ET-018 U5): the uninstall engine's ordering, budget and outcomes, on fake installs under the guarded
@@ -74,7 +74,7 @@ describe('outcomes', () => {
   it('completes: removes the plugins, the created plugins folder, every data entry and the data root, and keeps the rest', async () => {
     const current = await scene();
     const result = await run(current.fixture);
-    expect(result).toEqual({outcome: 'complete', code: null, plugins: {removed: 2, absent: 0, unrecognized: 0, blocked: []},
+    expect(result).toEqual({outcome: 'complete', code: null, plugins: {removed: 2, absent: 0, unrecognized: 0, notes: [], blocked: []},
       data: {removed: 9, kept: 0, failed: [], rootRemoved: true}, roaming: 'not-applicable'});
     await expectCleaned(current);
     // The install itself is not the engine's: Squirrel removes the binaries.
@@ -113,6 +113,31 @@ describe('outcomes', () => {
         plugins: {removed: 0, blocked: [{game: 'ets2', reason: 'RUNNING_CHECK_FAILED'}, {game: 'ats', reason: 'RUNNING_CHECK_FAILED'}]}});
       for (const game of current.games) expect(await fsp.readFile(game.dll)).toEqual(CURRENT);
     }
+  });
+  it('cancels the running-game listing when its budget expires', async () => {
+    const current = await scene();
+    let received: AbortSignal | undefined;
+    const slow: RunningCheck = signal => {received = signal; return new Promise(() => undefined);};
+    expect(await run(current.fixture, {checkRunning: slow, runningCheckBudgetMs: 50})).toMatchObject({outcome: 'deferred', code: 'RUNNING_CHECK_FAILED'});
+    expect(received?.aborted).toBe(true);
+  });
+  it('a rerun from another build still removes a DLL whose hash only the intent knows', async () => {
+    const fixture = await installFixture(guard);
+    const game = await gameFolder(fixture, 'ETS2', {content: RELEASED});
+    await writeRegistry(fixture, [installRecord(game)]);
+    const running: RunningCheck = () => Promise.resolve({ok: true, running: {ets2: true, ats: false, client: false}});
+    expect(await run(fixture, {checkRunning: running})).toMatchObject({outcome: 'deferred', code: 'GAME_RUNNING'});
+    // The next build no longer lists the older release; the intent still does.
+    expect(await run(fixture, {known: [KNOWN[0]]})).toMatchObject({outcome: 'complete', plugins: {removed: 1}});
+    expect(await exists(game.dll)).toBe(false);
+  });
+  it('completes for a game Steam uninstalled: the leftover root is cleaned by hash', async () => {
+    const fixture = await installFixture(guard);
+    const game = await gameFolder(fixture, 'ETS2', {content: CURRENT});
+    await fsp.rm(path.win32.join(game.root, 'bin', 'win_x64', 'eurotrucks2.exe'));
+    await writeRegistry(fixture, [installRecord(game)]);
+    expect(await run(fixture)).toMatchObject({outcome: 'complete', plugins: {removed: 1, notes: [{game: 'ets2', note: 'GAME_EXECUTABLE_MISSING'}], blocked: []}});
+    expect(await exists(game.dll)).toBe(false);
   });
   it('keeps an unrecognized plugin file and still completes, because nothing of this application is left', async () => {
     const fixture = await installFixture(guard);

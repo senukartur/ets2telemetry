@@ -166,9 +166,70 @@ describe('folders and hashes', () => {
   it('treats a removed game folder as absent, and an unreachable one as blocked', async () => {
     const gone = path.win32.join(fixture.testRoot, 'Games', 'Gone');
     await fsp.mkdir(path.win32.dirname(gone), {recursive: true});
-    expect(await clean(folderOf({root: gone, plugins: '', dll: ''}))).toEqual({status: 'absent'});
+    expect(await clean(folderOf({root: gone, plugins: '', dll: ''}))).toEqual({status: 'absent', note: 'GAME_FOLDER_GONE'});
     const unplugged = path.win32.join(fixture.testRoot, 'Unplugged-drive', 'Games', 'ETS2');
     expect(await clean(folderOf({root: unplugged, plugins: '', dll: ''}))).toEqual({status: 'blocked', reason: 'FOLDER_UNAVAILABLE'});
+  });
+  describe('a root that remains without the game executable (a game uninstalled by Steam)', () => {
+    /** A game folder whose executable Steam removed, leaving the plugins folder with `content`. */
+    async function leftover(name: string, content?: Uint8Array) {
+      const game = await gameFolder(fixture, name, {plugins: true, ...(content ? {content} : {})});
+      await fsp.rm(path.win32.join(game.root, 'bin', 'win_x64', 'eurotrucks2.exe'));
+      return game;
+    }
+    it('removes this application\'s DLL and the plugins folder it created, by hash ownership', async () => {
+      const game = await leftover('Uninstalled', CURRENT);
+      expect(await clean(folderOf(game, {createdPluginsDirectory: true}))).toEqual({status: 'removed', note: 'GAME_EXECUTABLE_MISSING'});
+      expect(await exists(game.plugins)).toBe(false);
+      expect(await listTree(path.win32.join(game.root, 'bin'))).toEqual(['win_x64\\']);
+    });
+    it('removes the exact temporary file of a pending entry there too', async () => {
+      const game = await leftover('Uninstalled');
+      const temp = pendingInstall(game, '0123456789abcdef').temp!;
+      await fsp.writeFile(temp, LOCAL_BUILD);
+      expect(await clean(folderOf(game, {temps: [temp]}))).toEqual({status: 'absent', note: 'GAME_EXECUTABLE_MISSING'});
+      expect(await listTree(game.plugins)).toEqual([]);
+    });
+    it('keeps an unrecognized DLL and every other file', async () => {
+      const game = await leftover('Uninstalled', FOREIGN);
+      await fsp.writeFile(path.win32.join(game.plugins, 'other-plugin.dll'), 'another tool');
+      expect(await clean(folderOf(game, {createdPluginsDirectory: true}))).toEqual({status: 'unrecognized', note: 'GAME_EXECUTABLE_MISSING'});
+      expect(await listTree(game.plugins)).toEqual(['ets2telemetry-plugin.dll', 'other-plugin.dll']);
+    });
+    it('skips a read-only DLL there as everywhere else', async () => {
+      const game = await leftover('Uninstalled', CURRENT);
+      await fsp.chmod(game.dll, 0o444);
+      try {
+        expect(await clean(folderOf(game))).toEqual({status: 'blocked', reason: 'READ_ONLY_FILE'});
+        expect(await fsp.readFile(game.dll)).toEqual(CURRENT);
+      } finally {await fsp.chmod(game.dll, 0o666);}
+    });
+    it('touches nothing through a linked plugins folder or a linked bin, and counts the folder as absent', async () => {
+      const elsewhere = path.win32.join(fixture.testRoot, 'elsewhere-plugins');
+      await fsp.mkdir(elsewhere, {recursive: true});
+      await fsp.writeFile(path.win32.join(elsewhere, 'ets2telemetry-plugin.dll'), CURRENT);
+      const linkedPlugins = await gameFolder(fixture, 'LinkedPlugins');
+      await fsp.rm(path.win32.join(linkedPlugins.root, 'bin', 'win_x64', 'eurotrucks2.exe'));
+      await guard.fs.symlink(elsewhere, linkedPlugins.plugins, 'junction');
+      expect(await clean(folderOf(linkedPlugins))).toEqual({status: 'absent', note: 'LAYOUT_NOT_PLAIN'});
+      const linkedBin = path.win32.join(fixture.testRoot, 'Games', 'LinkedBin');
+      await fsp.mkdir(linkedBin, {recursive: true});
+      const realBin = path.win32.join(fixture.testRoot, 'real-bin');
+      await fsp.mkdir(path.win32.join(realBin, 'win_x64', 'plugins'), {recursive: true});
+      await fsp.writeFile(path.win32.join(realBin, 'win_x64', 'plugins', 'ets2telemetry-plugin.dll'), CURRENT);
+      await guard.fs.symlink(realBin, path.win32.join(linkedBin, 'bin'), 'junction');
+      expect(await clean(folderOf({root: linkedBin, plugins: '', dll: ''}))).toEqual({status: 'absent', note: 'LAYOUT_NOT_PLAIN'});
+      expect(await fsp.readFile(path.win32.join(elsewhere, 'ets2telemetry-plugin.dll'))).toEqual(CURRENT);
+      expect(await fsp.readFile(path.win32.join(realBin, 'win_x64', 'plugins', 'ets2telemetry-plugin.dll'))).toEqual(CURRENT);
+    });
+    it('counts a root without bin, win_x64 or plugins as absent', async () => {
+      const bare = path.win32.join(fixture.testRoot, 'Games', 'Bare');
+      await fsp.mkdir(path.win32.join(bare, 'bin', 'win_x64'), {recursive: true});
+      expect(await clean(folderOf({root: bare, plugins: '', dll: ''}))).toEqual({status: 'absent', note: 'PLUGINS_FOLDER_ABSENT'});
+      const empty = path.win32.join(fixture.testRoot, 'Games', 'Empty');
+      await fsp.mkdir(empty, {recursive: true});
+      expect(await clean(folderOf({root: empty, plugins: '', dll: ''}))).toEqual({status: 'absent', note: 'PLUGINS_FOLDER_ABSENT'});
+    });
   });
   it('changes nothing while the game or a TruckersMP client runs', async () => {
     const game = await gameFolder(fixture, 'ETS2', {content: CURRENT});
