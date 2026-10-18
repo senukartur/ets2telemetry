@@ -183,18 +183,18 @@ afterEach(async () => {
   generation++;
   const h = current;
   current = undefined;
-  let unsettled: unknown;
+  let unsettled: Error | undefined;
   try {
     await h?.end();
   } catch (error) {
-    unsettled = error;
+    unsettled = error instanceof Error ? error : new Error(String(error));
   } finally {
     // Spies first: restoring a setTimeout spy after the real timers return would put this case's fake clock back.
     vi.restoreAllMocks();
     vi.useRealTimers();
   }
   if (!h) return;
-  if (unsettled !== undefined) {
+  if (unsettled) {
     // A run that never settled may still be writing into its root, so removing the root can fail; the guard error is
     // this case's failure either way and is reported instead.
     await h.dispose().catch(() => undefined);
