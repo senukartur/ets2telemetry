@@ -187,6 +187,11 @@ describe('canonical Steam root', () => {
  * runner, not a timing assertion. The product's own 5 s deadline still applies inside each case.
  */
 const POWERSHELL_START_TIMEOUT_MS = 30_000;
+/**
+ * The timeout of a case, setup or cleanup that starts `processes` PowerShell processes one after another (the helper's
+ * runs and the product's reads): the guard for each, so a case is never cut off before the processes it waits for.
+ */
+const realRunBudget = (processes: number) => processes * POWERSHELL_START_TIMEOUT_MS;
 
 describe.runIf(process.platform === 'win32')('a real run of the fixed script against a temporary HKCU key', () => {
   const id = randomUUID();
@@ -207,7 +212,7 @@ describe.runIf(process.platform === 'win32')('a real run of the fixed script aga
     stored = steam.toLowerCase().replaceAll('\\', '/');
     run(`$value = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${b64(stored)}')); New-Item -Path '${providerKey}' -Force | Out-Null; `
       + `New-ItemProperty -LiteralPath '${providerKey}' -Name SteamPath -Value $value -PropertyType String | Out-Null`);
-  }, POWERSHELL_START_TIMEOUT_MS);
+  }, realRunBudget(1));
   // Opens a key under HKCU with only ReadPermissions and ChangePermissions, which its owner always holds, so a key whose
   // values are denied can still have its ACL changed. `$keyPath` is relative to HKCU.
   const openForAcl = "[Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($keyPath, [Microsoft.Win32.RegistryKeyPermissionCheck]::ReadWriteSubTree, "
@@ -224,7 +229,7 @@ describe.runIf(process.platform === 'win32')('a real run of the fixed script aga
       + "if ($rule.AccessControlType -eq 'Deny') { [void]$security.RemoveAccessRuleSpecific($rule) } }; $handle.SetAccessControl($security); $handle.Close() }; "
       + `[Microsoft.Win32.Registry]::CurrentUser.DeleteSubKeyTree('${relativeKey}', $false)`);
     expect(run(`Test-Path -LiteralPath '${providerKey}'`).toString().trim()).toBe('False');
-  }, POWERSHELL_START_TIMEOUT_MS);
+  }, realRunBudget(2));
   const writeMachineValue = (value: string) => run(`$value = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${b64(value)}')); `
     + `New-Item -Path '${providerKey}\\Machine' -Force | Out-Null; New-ItemProperty -LiteralPath '${providerKey}\\Machine' -Name InstallPath -Value $value -PropertyType String | Out-Null`);
   const testKeys = () => ({user: userKey, machine: `${userKey}\\Machine`});
@@ -249,7 +254,7 @@ describe.runIf(process.platform === 'win32')('a real run of the fixed script aga
     expect(await readSteamRoot({execFile: recorded, testKeys: testKeys(), fs: guard.fs})).toEqual({kind: 'found', path: steam});
     expect(scripts).toHaveLength(2);
     for (const script of scripts) expect(script).not.toContain('Valve');
-  }, POWERSHELL_START_TIMEOUT_MS);
+  }, realRunBudget(2));
 
   it('still succeeds when the parent exports an incompatible PSModulePath', async () => {
     const polluted = await pollutedModulePath();
@@ -267,21 +272,21 @@ describe.runIf(process.platform === 'win32')('a real run of the fixed script aga
       expect(await readSteamRegistryValues({execFile: recorded, testKeys: testKeys()})).toEqual({ok: true, steamPath: stored, installPath: null, unreadable: 0});
     } finally {vi.unstubAllEnvs();}
     expect(children).toEqual([path.win32.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'Modules')]);
-  }, POWERSHELL_START_TIMEOUT_MS);
+  }, realRunBudget(2));
 
   it('keeps a readable SteamPath when the machine-wide value cannot be read', async () => {
     writeMachineValue('C:/machine/Steam');
     denyValues('\\Machine');
     expect(await readSteamRegistryValues({testKeys: testKeys()})).toEqual({ok: true, steamPath: stored, installPath: null, unreadable: 1});
     expect(await readSteamRoot({testKeys: testKeys(), fs: guard.fs})).toEqual({kind: 'found', path: steam});
-  }, POWERSHELL_START_TIMEOUT_MS);
+  }, realRunBudget(4));
 
   it('keeps a readable InstallPath when SteamPath cannot be read', async () => {
     writeMachineValue(stored);
     denyValues('');
     expect(await readSteamRegistryValues({testKeys: testKeys()})).toEqual({ok: true, steamPath: null, installPath: stored, unreadable: 1});
     expect(await readSteamRoot({testKeys: testKeys(), fs: guard.fs})).toEqual({kind: 'found', path: steam});
-  }, POWERSHELL_START_TIMEOUT_MS);
+  }, realRunBudget(4));
 
   it('reports a read failure, not "not installed", when neither value can be read', async () => {
     writeMachineValue(stored);
@@ -289,11 +294,11 @@ describe.runIf(process.platform === 'win32')('a real run of the fixed script aga
     denyValues('\\Machine');
     expect(await readSteamRegistryValues({testKeys: testKeys()})).toEqual({ok: true, steamPath: null, installPath: null, unreadable: 2});
     expect(await readSteamRoot({testKeys: testKeys(), fs: guard.fs})).toEqual({kind: 'failed', code: 'STEAM_REGISTRY_FAILED'});
-  }, POWERSHELL_START_TIMEOUT_MS);
+  }, realRunBudget(5));
 
   it('needs no module: the fixed script succeeds even when the child itself gets the incompatible PSModulePath', async () => {
     const polluted = await pollutedModulePath();
     const forced: ExecFilePort = (file, args, options, callback) => nodeExecFile(file, args, {...options, env: {...options.env, PSModulePath: polluted}}, callback);
     expect(await readSteamRegistryValues({execFile: forced, testKeys: testKeys()})).toEqual({ok: true, steamPath: stored, installPath: null, unreadable: 0});
-  }, POWERSHELL_START_TIMEOUT_MS);
+  }, realRunBudget(1));
 });
