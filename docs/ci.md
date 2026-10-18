@@ -21,8 +21,8 @@ Caching is configured only for downloaded npm archives and Electron distribution
 | PR opened, updated or reopened while **draft** | Workflow run is created but all three jobs are skipped (no runner minutes). A skipped job is not a passed check |
 | PR marked **Ready for review**, or updated while ready | All three jobs on the PR merge result; the scaffold job runs `npm run package` instead of the Squirrel `npm run make` and only the packaged runtime smokes (E1, E2) |
 | PR or `main` push changing only `**.md` or `docs/**` | No run at all; GitHub reports no check for that commit |
-| Push to `main` touching anything else | All three full jobs; the scaffold job runs the Squirrel make, the development and packaged smokes and the extended regressions |
-| Manual dispatch | All three full jobs on the selected branch head; the scaffold job runs the Squirrel make and the development and packaged smokes whatever `extended` says, and adds the extended regressions unless `extended=false` |
+| Push to `main` touching anything else | All three full jobs; the scaffold job runs the Squirrel make, the [installer lifecycle](#et-018-installer-lifecycle), the development and packaged smokes and the extended regressions |
+| Manual dispatch | All three full jobs on the selected branch head; the scaffold job runs the Squirrel make, the installer lifecycle and the development and packaged smokes whatever `extended` says, and adds the extended regressions unless `extended=false` |
 
 Any change outside `**.md` and `docs/**` (code, tests, fixtures, scripts, workflow, `package*.json`, config) runs all three full jobs. GitHub evaluates path filters against the whole PR diff, so a PR that later gains a code change runs normally. Documentation-only PRs rely on the focused document checks in [TESTING.md](../TESTING.md). The `Protect main` ruleset requires all three checks, and a path-filtered workflow reports none for such a PR, so a documentation-only PR is merged with the admin bypass described in [branch protection](../AGENTS.md#branch-protection--october-16-2026).
 
@@ -480,3 +480,21 @@ The packaging steps (`npm run package` or `npm run make`) run `npm run build` ag
 ET-017 PR-3 (October 17, 2026) adds the step **Plugin image lock check** to the scaffold job, right after **Protocol v1 controlled broker chain**, with a 3-minute step limit. It runs `npm run test:plugin-lock` (`vitest.plugin-lock.config.mts`, `tests/integration/plugin-image-lock.test.ts`) and needs the Release test plugin DLL and the fake-SDK host built in **Build desktop and native x64**. The test first requires that the real `tasklist` listing shows no ETS2, ATS or TruckersMP process. The installer then installs the test DLL into a fake game root under a temporary folder, and the fake-SDK host, named `eurotrucks2.exe`, loads it from there. With a lister that wrongly reports no running game, an update and a removal must both end as `TARGET_LOCKED` with the DLL's bytes unchanged, because Windows refuses to replace or delete a mapped image. With the real `tasklist` lister, both must stop at `GAME_RUNNING` before any file operation. After the host exits, the update must succeed. The run is synthetic, writes only into its temporary folder and takes about 9 s locally, most of it in `tasklist` runs. Job names, other step names, conditions and timeouts are unchanged. Adding the step is not a passed hosted check; a hosted duration is recorded once a run exists.
 
 The installer and registry unit tests (`tests/unit/plugin-installer.test.ts`, `tests/unit/plugin-registry.test.ts`) run in the tests job with `npm test`. Their real-system cases start a Windows PowerShell 5.1 child that holds a file lock and run `icacls` on a temporary folder; both are present on the hosted Windows image.
+
+## ET-018 installer lifecycle
+
+ET-018 PR-1 (October 18, 2026) adds the step **Installer lifecycle in a test root** to the scaffold job, right after **Forge maker and static native package inspection**, with an 8-minute step limit. It runs `./scripts/installer/Invoke-InstallerLifecycle.ps1` ([installer testing](installer-testing.md)): it builds installer version 0.1.1 from a copy of the packaged folder, installs the make output's `ETS2Telemetry Desktop-0.1.0 Setup.exe` into a marked test root in `$env:RUNNER_TEMP` with `SQUIRREL_TEMP` redirected, runs installed runtime smokes and a data launch that migrates a seeded synthetic version 1 database, repairs, updates through the local feed, repeats the smokes and the data launch on 0.1.1 and reads the upgraded database with the installed runtime. It never uninstalls. Each installer program and each driver command runs as the root of its own `BoundedProcess` Job (60 s at most, 16 processes, 2 GiB, 25% CPU); the installed smokes are the usual 60 s runtime-smoke Jobs.
+
+| Event | Installer lifecycle |
+| --- | --- |
+| `pull_request` (ready) | skipped, like the maker (E1); owner decision O5 keeps it off pull requests |
+| `push` to `main` | runs |
+| `workflow_dispatch`, either `extended` value | runs |
+
+- **Condition.** `if: github.event_name != 'pull_request'`, the maker's condition, because the step needs `out/make`. A PR that changes installer paths records a dispatch run instead ([installer testing](installer-testing.md#local-runs)).
+- **Refusals.** The harness refuses outside a GitHub-hosted runner (`GITHUB_ACTIONS=true` and `RUNNER_ENVIRONMENT=github-hosted`) before it reads anything, and `-AllowLocal` refuses until ET-018 PR-3.
+- **Evidence.** `.local/ci/installer-<id>-evidence` is inside the existing `.local/ci` upload of `windows-evidence-<run>-<attempt>`, so the upload paths are unchanged. The run root with the installed binaries and the copied package stays in the runner's temporary folder and is deleted at the end; it is never uploaded.
+- **Side effects on the runner.** A temporary HKCU uninstall key, deleted at the end when it points into the run root, and the Desktop and Start menu shortcuts that electron-squirrel-startup's hooks create until PR-3.
+- **Duration.** The plan estimated 3–4 minutes more for the scaffold job on `main` and dispatch, about 12.7 minutes in all. The first dispatch run measures it; if the job nears 15 minutes, a split needs a ruleset change ([job layout](#job-layout)).
+
+No job, check name, trigger or upload path changed. Adding the step is not a passed hosted check; the hosted result and duration are recorded in [ET-018 validation](validation/et-018.md) once a dispatch run exists.

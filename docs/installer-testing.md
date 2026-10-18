@@ -1,0 +1,131 @@
+# Installer testing in a test root
+
+ET-018 PR-1 (October 18, 2026) checks the Squirrel installer's install, repair and update paths, and the preservation of local data across them, inside a marked test root. It covers REG-017 check 1 and part of REG-013 ([plan](validation/et-018.md), decisions U10 to U13). The harness never uninstalls; uninstall scenarios arrive with ET-018 PR-3 and PR-4.
+
+**Never run it on a personal machine.** It refuses to start outside a GitHub-hosted runner, and `-AllowLocal` refuses as well until PR-3 (see [Local runs](#local-runs)). Run it through a Windows CI dispatch.
+
+## Why the ET-001 harness is retired
+
+`tests/windows/Invoke-NativeInstallerAcceptance.ps1` and `tests/windows/native-installer-step.ps1` installed into the real `%LOCALAPPDATA%\ETS2TelemetryDesktop`, seeded the real `%LOCALAPPDATA%\ETS2Telemetry` and called `--squirrel-uninstall` and `Update.exe --uninstall` directly. Once ET-018's uninstall hook removes the data root, a run would delete the user's real history. Since PR-1 both scripts throw `RETIRED_ET018_REAL_ROOTS` for `-Run`; without `-Run` they still print their plan and launch nothing. Their bodies stay unchanged as the record of the ET-001 procedure, and [ET-001 validation](validation/et-001.md) is unchanged.
+
+## Files
+
+| File | Role |
+| --- | --- |
+| `scripts/installer/Invoke-InstallerLifecycle.ps1` | The harness: CI signal, facts, guards, run root, environment, the ordered steps, evidence and cleanup. `-Plan` prints the steps and launches nothing. |
+| `scripts/installer/installer-lifecycle.mjs` | The Node driver. Each command that starts a process runs as the root of its own `scripts/watchdog/BoundedProcess.cs` Job (60 s at most, 16 processes, 2 GiB, 25% CPU, kill on close). |
+| `scripts/installer/installer-guard.mjs` (types in `installer-guard.d.mts`) | Pure guards and root checks; `tests/unit/installer-guard.test.ts` tests them. |
+| `scripts/installer/build-upgrade-fixture.mjs` | Builds installer version B, the local update feed. |
+| `scripts/installer/read-upgraded-history.cjs` | Reads the upgraded database with the installed Electron and better-sqlite3. |
+
+## Run root
+
+The run root R is `$env:RUNNER_TEMP\installer-<32 hex>` on CI; without a runner temporary folder it would be `.local\ci\installer-<32 hex>`. R holds two marker files before anything else runs: the ET-017 marker `ets2telemetry-plugin-test-root.marker` and `ets2telemetry-install-test.json` (plan U3):
+
+```json
+{"format": "ets2telemetry.install-test", "version": 1, "profileDir": "<R>\\profile", "runOnceKey": null, "shortcuts": true}
+```
+
+Every path in that file lies inside R. `runOnceKey` stays `null` until a deferred cleanup exists (PR-5). The application of PR-1 does not read the file yet; PR-3's Squirrel handler will.
+
+| Path | Use |
+| --- | --- |
+| `R\LocalAppData` (B) | `SQUIRREL_TEMP`, created before Setup runs, and the `LOCALAPPDATA` of every child process |
+| `B\ETS2TelemetryDesktop` | Squirrel's binary root: Setup extracts `Update.exe` into `%SQUIRREL_TEMP%\SquirrelTemp`, and Update.exe takes the parent of its own folder as its LocalAppData |
+| `B\ETS2Telemetry` | The application's data root, seeded below |
+| `R\temp`, `R\AppData`, `R\profile`, `R\cwd`, `R\diagnostics` | `TEMP`/`TMP`, `APPDATA`, `ETS2TELEMETRY_PROFILE_DIR`, the working directory and the per-step `ETS2TELEMETRY_DIAGNOSTIC_DIR` |
+| `R\exports` | A trip export the user saved outside the data root |
+| `R\fixture` | The copied application folder (deleted after the build) and the feed of version B |
+
+`ETS2TELEMETRY_PLUGIN_SETUP_ROOT` is R, so plugin setup runs in its test-root mode with its registry at `R\LocalAppData\ETS2Telemetry\plugins\setup.json`, which is the seeded registry of the data root. R has no `Steam` folder, so discovery finds nothing. From the guards on, the harness process sets these variables for itself and every child, and removes every other `ETS2TELEMETRY_` variable it might have inherited; no child receives the real `LOCALAPPDATA`. An application launch also gets `installedEnvironment` (below), which drops Node, npm, Electron and inherited `ETS2TELEMETRY_` variables.
+
+## Guards
+
+All guards fail closed with a fixed code and never name a path. The harness order is:
+
+1. **CI signal.** `GITHUB_ACTIONS=true` and `RUNNER_ENVIRONMENT=github-hosted`, checked first in PowerShell and again by `checkRunSignal`, before any registry, process or file-system read. Codes `LOCAL_RUN_REFUSED` and `LOCAL_RUN_UNAVAILABLE_UNTIL_PR3`.
+2. **Facts.** The real LocalAppData and Roaming folders come from `Environment.GetFolderPath`, which Windows resolves through the known-folder API and never from the `LOCALAPPDATA` or `APPDATA` variables. The HKCU `Valve\Steam` `SteamPath` value and its `libraryfolders.vdf` are only read. The HKCU uninstall key `ETS2TelemetryDesktop` is read in both registry views. The process list is read once.
+3. **Preflight (`checkRunPlan`)**, before R exists and again once its markers are written. It refuses:
+   - a run root that is not an absolute drive path named `installer-<32 lower-case hex>`, or is a drive root (`RUN_ROOT_INVALID`);
+   - any path of the run (R, every layout path, the evidence folder, a decoy and its data and binary roots) whose raw path or real location lies inside the real `%LOCALAPPDATA%\ETS2Telemetry`, `%LOCALAPPDATA%\ETS2TelemetryDesktop` or `%APPDATA%\ETS2Telemetry Desktop` (`PATH_IN_REAL_ROOT`) or inside a Steam library (`PATH_IN_STEAM_LIBRARY`). The real location is the realpath of the nearest existing ancestor, so a junction anywhere above is followed;
+   - a run root whose deletion would reach a protected folder or the real LocalAppData or Roaming folder (`RUN_ROOT_CONTAINS_PROTECTED`);
+   - a decoy `LOCALAPPDATA` equal to the real one, also through a junction (`DECOY_IS_REAL_ROOT`; the decoy is used by PR-3);
+   - an existing real `%LOCALAPPDATA%\ETS2TelemetryDesktop` (`REAL_INSTALL_PRESENT`) or HKCU registration (`REGISTRATION_PRESENT`), also when unknown;
+   - a running `ETS2TelemetryDesktop.exe`, `eurotrucks2.exe`, `amtrucks.exe` or `truckersmp*` process (`PROCESS_RUNNING`), or an unreadable process list;
+   - once R exists, a missing marker (`MARKER_MISSING`) or an installer test file with another format, version or key set, a path outside R or a RunOnce key outside `HKCU\Software\ETS2Telemetry-Test-<32 hex>\RunOnce` (`INSTALL_TEST_INVALID`).
+4. **After each install, repair and update (`checkInstalled`).** The registration's `InstallLocation` and the binary root must both be exactly `B\ETS2TelemetryDesktop`, by raw and real location, the real binary root must still be absent, and the registered `UninstallString` must run `B\ETS2TelemetryDesktop\Update.exe`. Otherwise the run aborts at once and never uninstalls (`INSTALL_OUTSIDE_RUN_ROOT`, `REGISTRATION_MISSING`). If `SQUIRREL_TEMP` were not honored, Setup would install into the known-folder LocalAppData; this check then stops the run before any later step, and the final check reports `REAL_INSTALL_PRESENT`.
+5. **Before each launch and installer step (`checkLaunchEnvironment`).** `LOCALAPPDATA`, `APPDATA`, `TEMP`, `TMP`, the profile and the diagnostic folder lie inside R, `LOCALAPPDATA` is not inside the real LocalAppData, and `ETS2TELEMETRY_PLUGIN_SETUP` is absent.
+
+## Steps
+
+| Step | What it checks |
+| --- | --- |
+| Build fixture B | `build-upgrade-fixture.mjs` copies `out/ETS2Telemetry Desktop-win32-x64` into `R\fixture\app` and runs the pinned electron-winstaller on the copy with the Forge maker's options and installer version `0.1.1`. electron-winstaller writes into its input, so the packaged folder is never handed over itself, and its executable hash is checked after. The application bytes stay 0.1.0. The feed must hold one RELEASES entry for `ETS2TelemetryDesktop-0.1.1-full.nupkg`. This builds files only. |
+| Seed | `B\ETS2Telemetry\synthetic\upgrade.sqlite`: a copy of `tests/fixtures/storage/schema-v1-representative.sqlite`, whose hash must match `manifest.txt` before and after the copy (the fixture is never written). `settings\settings.json`: format 2 with `us-customary` ETS2 units and the HUD layout. `plugins\setup.json`: both games excluded, nothing installed. `R\exports\trip-export.json`. |
+| Install A | `ETS2Telemetry Desktop-0.1.0 Setup.exe --silent` from the make output. The `step` command waits until no process image under R is left, because Squirrel's `--updateSelf` helper outlives its parent. |
+| Installed smokes on A | `Invoke-RuntimeSmoke.ps1 -Mode installed -Executable B\ETS2TelemetryDesktop\app-0.1.0\ETS2TelemetryDesktop.exe`, `scaffold` by default (`-ScenariosA`). Each smoke has its own isolated output and LOCALAPPDATA. |
+| Data launch on A | The installed application with `LOCALAPPDATA=B`, `ETS2TELEMETRY_RECORDING=synthetic:upgrade` and the test-root plugin setup. It must open the database with `{schemaVersion: 2, created: false, migratedFrom: 1}`, load the settings as `{state: loaded, migratedFrom: 2}` without a save or quarantine, run plugin setup in `test-root` mode with no action, log no failure event and exit 0. |
+| Verify A | `read-upgraded-history.cjs` under the installed `ETS2TelemetryDesktop.exe` with `ELECTRON_RUN_AS_NODE=1` reads copies of the database and its backups. The binding it loaded must be the installed `better-sqlite3\prebuilds\win32-x64.node`. |
+| Repair | Setup A again. |
+| Update to B | `B\ETS2TelemetryDesktop\Update.exe --update R\fixture\feed`. The registration must then report 0.1.1. |
+| Installed smokes on B | `scaffold`, `plugin` and `telemetry` by default (`-ScenariosB`) against `app-0.1.1`. |
+| Data launch and verify on B | The database opens with `migratedFrom: null` and reads the same as on A. |
+| Cleanup | Squirrel logs and the application diagnostics are copied into the evidence; R is deleted without following links; on CI the HKCU uninstall key is deleted when it points into R. The real binary root must still be absent. |
+
+The synthetic recording target is used because the representative version 1 fixture has the purpose `synthetic`; the history path `data\telemetry.sqlite` refuses any other purpose, and a history-purpose copy would mean editing the fixture. The migration, the verified backup and the manifest follow the same `openConnection` path as history ([storage](storage.md)). No production history database may be created.
+
+### What is asserted
+
+- **No data write on any hook.** The data root and the export folder are hashed after the seed and after each Squirrel step; install A must equal the seed, repair must equal the state after the data launch on A, and the update must equal the repair. A link or junction in either tree fails the snapshot.
+- **Byte identity.** The settings, the plugin registry and the export keep the seeded bytes through every launch and step.
+- **History.** The database read with the installed runtime equals a hand-written expectation in `installer-lifecycle.mjs`: user version 2, the application id, integrity `ok`, no foreign key violation, the database UUID and purpose, `schema_migrations` with `0002-journal` naming the backup and its hash, the session, the five events, the trip with `opened_by = 'event'` and fuel used `not-observed`, the job configuration's `event` source and the row counts. Exactly one backup and its manifest exist: format `ets2telemetry-backup-1`, version 1, reason `pre-migration`, file hash and size equal to the manifest, and the backup itself at version 1 with integrity `ok` and the version 1 row counts. The database is closed without `-wal`, `-shm` or `-journal` files.
+- **Installed launches.** `executableMatches`, `cwdOutsideInstall`, `minimalPath` and `developmentVariablesAbsent` of the installed smoke receipts (below).
+
+## Installed runtime smokes
+
+`./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode installed -Executable <binary root>\app-<version>\ETS2TelemetryDesktop.exe -Scenario <scenario>` runs an existing scenario against an installed copy (U11). The executable must sit in an installed layout, `ETS2TelemetryDesktop\app-<semver>\ETS2TelemetryDesktop.exe` beside the binary root's `Update.exe`. The launch gets PATH `%SystemRoot%\System32;%SystemRoot%;%SystemRoot%\System32\WindowsPowerShell\v1.0`, no `NODE_*`, `npm_*`, `ELECTRON_*` or inherited `ETS2TELEMETRY_*` variable, and the run's own working directory, which is unrelated to the install. The driver asserts that the application ran that executable, packaged, with that PATH and working directory, and records `installed` in its receipt; `RuntimeReceipt.ps1` requires these facts for mode `installed` and refuses a packaged receipt in their place. A real clean machine without development tools stays a manual check.
+
+## Squirrel behaviour of the pinned electron-winstaller
+
+`package-lock.json` pins electron-winstaller 5.4.4. Its vendored binaries were read, not run, on October 18, 2026:
+
+| File | Version metadata | SHA-256 |
+| --- | --- | --- |
+| `vendor/Squirrel.exe` (installed as `Update.exe`) | file 2.0.1.1, product `2.0.1+eef37460ae` | `76359CD4B0349A83337B941332AD042C90351C2BB0A4628307740324C97984CC` |
+| `vendor/Setup.exe` | file and product 1.9.1.0 | `1E47EB606DAD4C5C1568CFB8F4E970E1051BA5806AEDB1FF3256284A8280D83B` |
+
+`Setup.exe` contains the UTF-16 strings `SQUIRREL_TEMP` and `SquirrelTemp`; `Squirrel.exe` contains `SQUIRREL_TEMP`, `uninstalling anyways` and the four `--squirrel-*` hook arguments. The behaviour the plan assumes is in the source of the pinned commit [`eef37460ae`](https://github.com/Squirrel/Squirrel.Windows/tree/eef37460ae):
+
+- `src/Setup/UpdateRunner.cpp`: `SQUIRREL_TEMP` is used when it exists, is writable and is not a UNC path; otherwise the known-folder LocalAppData (`SHGetFolderPath(CSIDL_LOCAL_APPDATA)`); `\SquirrelTemp` is appended in every case, and Update.exe runs as `Update.exe --install .` from there.
+- `src/Squirrel/UpdateManager.cs`: `GetLocalAppDataDirectory` returns the parent of Update.exe's folder, so the binary root follows `SQUIRREL_TEMP`.
+- `src/Squirrel/Utility.cs`: `GetTempDirectory` also prefers `SQUIRREL_TEMP`; `DeleteDirectoryOrJustGiveUp` swallows a failed delete.
+- `src/Squirrel/UpdateManager.ApplyReleases.cs`: the install and updated hooks get `CancelAfter(15 * 1000)`, the obsolete and uninstall hooks `CancelAfter(10 * 1000)`; a failed uninstall hook logs "Failed to run pre-uninstall hooks, uninstalling anyways"; full uninstall deletes the root and writes `.dead`.
+
+The version string ties the vendored `Squirrel.exe` to that commit; the binary was not decompiled, so the hook timeouts are taken from the source, and the CI run is their first observation in this repository.
+
+## Local runs
+
+The harness refuses every local run. `-AllowLocal` (plan O6, an owner-requested local run) refuses with `LOCAL_RUN_UNAVAILABLE_UNTIL_PR3` until ET-018 PR-3 replaces electron-squirrel-startup: its install and update hooks run `Update.exe --createShortcut`, which creates real Desktop and Start menu shortcuts whatever the test root says, and Chromium may create the real Roaming `ETS2Telemetry Desktop` folder during a hook launch. A local run would also leave a temporary HKCU uninstall entry. `-Plan` is safe everywhere.
+
+Agents run the lifecycle only through a dispatch:
+
+```powershell
+gh workflow run windows-ci.yml --ref <task-branch> -f extended=false
+gh run list --workflow windows-ci.yml --branch <task-branch> --limit 1
+```
+
+## CI
+
+The scaffold job runs the step **Installer lifecycle in a test root** right after **Forge maker and static native package inspection**, on pushes to `main` and on dispatch only, like the maker that builds its Setup.exe; its limit is 8 minutes ([ci](ci.md#et-018-installer-lifecycle)). The evidence folder `.local/ci/installer-<id>-evidence` is part of the uploaded `.local/ci`; R lives in the runner's temporary folder and is never uploaded.
+
+On a hosted runner the step leaves the product's Desktop and Start menu shortcuts created by the hooks, and possibly the Roaming userData folder; the runner is discarded after the job. The HKCU uninstall key is deleted when it points into R.
+
+## Evidence
+
+`.local/ci/installer-<id>-evidence` holds `config.json`, `facts.json`, one JSON file per driver command (`guard-plan.json`, `seed.json`, `snapshot-<label>.json`, `compare-<before>-<after>.json`, `step-<label>.json` with the program's output, `launch-<label>.json`, `verify-<label>.json`, `history-<label>.json`, `cleanup.json`), the Job folders `job-<label>`, the installed smoke runs `installed-<guid>`, `upgrade-fixture.json`, `run-root\` (Squirrel logs and application diagnostics) and `lifecycle-result.json` with each step's exit code and seconds.
+
+## Limits
+
+- No uninstall runs in PR-1; the Windows-initiated and in-app uninstall scenarios belong to PR-3 and PR-4.
+- The hooks are still electron-squirrel-startup's; they write no data, which the snapshots show, but they create shortcuts.
+- A real clean machine, SmartScreen, Smart App Control, real shortcuts, the real game folders and the owner's first real upgrade of version 1 history stay manual checks ([ET-018 validation](validation/et-018.md)).
