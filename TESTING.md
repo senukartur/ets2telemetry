@@ -770,6 +770,8 @@ PR-4 review fix round (after hosted dispatch 39125478842):
 
 Changed tests: the race case of `app-uninstall.test.ts` expected `blocked`; with ATS's plugin already removed it now expects `interrupted`, because that requirement changed in this round. The `main-boundaries.test.ts` orchestrator mock keeps the real module's other exports.
 
+After the merge of PR-6: `uninstall-text.test.ts` also requires that entries a wipe did not reach in its time (`BUDGET_EXPIRED`) are left to the Windows uninstall in the result dialog, while an entry that really failed is still left for deletion by hand.
+
 RED for PR-4, each applied alone and reverted, is listed in the [validation record](docs/validation/et-018.md#red-3): the preflight's deferral ignored, the data wiped before the exit, a path as a target, a declined confirmation that proceeds, "captures" dropped from the warning, `plugins.notes` not shown, a `suspend` that does not pause, the request accepted while exiting, from any sender or with arguments, a raced removal that does not resume setup, and the receipt rule and the claim fix removed; each fails its named cases.
 
 ## ET-018 release artifact identity — October 18, 2026

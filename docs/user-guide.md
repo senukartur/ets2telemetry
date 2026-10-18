@@ -2,11 +2,11 @@
 
 This guide is for people who run ETS2Telemetry on Windows. It covers the installer, the Windows warnings an unsigned alpha build gets, where the application keeps your data, updates, and the two ways to uninstall. The technical background is in [uninstall](uninstall.md), [game plugin setup](plugin-setup.md) and [installer testing](installer-testing.md).
 
-ETS2Telemetry is an internal alpha. No release has been published yet; when one is, it will be a pre-release on the project's GitHub Releases page. Nothing in this guide claims that a game, TruckersMP, an antivirus product or Smart App Control was tested with it: those checks are still pending.
+ETS2Telemetry is an internal alpha. No release has been published yet; when one is, it will be a pre-release labelled "unsigned internal alpha" on the project's GitHub Releases page, and only the owner publishes one ([releases](release.md)). Nothing in this guide claims that a game, TruckersMP, an antivirus product or Smart App Control was tested with it: those checks are still pending.
 
 ## Installing
 
-Run `ETS2Telemetry Desktop-<version> Setup.exe`. It installs for your Windows user only, without administrator rights, and starts the application when it finishes. It creates a Desktop and a Start menu shortcut named **ETS2Telemetry Desktop**.
+Run `ETS2Telemetry-Setup-<version>.exe`, for example `ETS2Telemetry-Setup-0.1.0.exe`. It installs for your Windows user only, without administrator rights, and starts the application when it finishes. It creates a Desktop and a Start menu shortcut named **ETS2Telemetry Desktop**.
 
 | What | Where |
 | --- | --- |
@@ -19,7 +19,7 @@ When the application starts, it finds Euro Truck Simulator 2 and American Truck 
 
 ### Windows SmartScreen
 
-This alpha is not code-signed. When you run Setup.exe, Microsoft Defender SmartScreen may show **Windows protected your PC**. To continue, select **More info**, check that the file is the one you downloaded from the project's GitHub Releases page, then select **Run anyway**. Only do this for a file from that page. A signed build is planned: after the first alpha release the project applies to the SignPath Foundation for free code signing.
+This alpha is not code-signed. When you run `ETS2Telemetry-Setup-<version>.exe`, Microsoft Defender SmartScreen may show **Windows protected your PC**. To continue, select **More info**, check that the file is the one you downloaded from the project's GitHub Releases page, then select **Run anyway**. Only do this for a file from that page. A signed build is planned: after the first alpha release the project applies to the SignPath Foundation for free code signing.
 
 ### Smart App Control
 
@@ -45,7 +45,7 @@ Your trip history is stored only on this computer. It is not synchronized anywhe
 
 ## Updating
 
-There is no automatic update. To update, close the games, then run the newer version's Setup.exe. It replaces the program and keeps your data: the trip history, its backups and your settings stay where they are. When a newer version needs a newer history database, it first writes a verified backup of the old one into `backups` ([storage](storage.md)). The application then updates the game plugin in every game folder while the game is closed.
+There is no automatic update. To update, close the games, then run the newer version's `ETS2Telemetry-Setup-<version>.exe`. It replaces the program and keeps your data: the trip history, its backups and your settings stay where they are. When a newer version needs a newer history database, it first writes a verified backup of the old one into `backups` ([storage](storage.md)). The application then updates the game plugin in every game folder while the game is closed.
 
 ## Uninstalling
 
