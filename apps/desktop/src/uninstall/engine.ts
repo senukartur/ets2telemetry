@@ -182,14 +182,15 @@ export async function runUninstall(ports: UninstallPorts): Promise<UninstallResu
  * unwritable.
  */
 export function recordable(record: PendingRecord, ownKnown: readonly string[], kept: readonly PendingFolder[]): PendingRecord {
-  const fits = (candidate: PendingRecord) => pendingRecordFits(candidate);
+  const fits = pendingRecordFits;
   if (fits(record)) return record;
   const isOwn = (folder: PendingFolder) => kept.some(other => other.game === folder.game && sameRoot(other.root, folder.root));
   let current = record;
   while (current.folders.length && !isOwn(current.folders.at(-1)!) && !fits(current)) current = {...current, folders: current.folders.slice(0, -1)};
   const own = new Set(ownKnown);
   while (!fits(current)) {
-    const last = current.known.findLastIndex(hash => !own.has(hash));
+    let last = current.known.length - 1;
+    while (last >= 0 && own.has(current.known[last])) last--;
     if (last < 0) break;
     current = {...current, known: current.known.filter((_hash, index) => index !== last)};
   }
