@@ -9,9 +9,9 @@ import {promisify} from 'node:util';
 import {_electron as electron} from '@playwright/test';
 import {rendererPages} from '../ci/overlay-observation.mjs';
 import {checkedPaths, checkInstalled, checkLaunchEnvironment, checkRunPlan, checkRunSignal, FACTS_VARIABLE, factsEvidence, InstallerGuardError, installedEnvironment, normalizePath,
-  ownsRegistration, resolveRealLocation, RUN_ROOT_NAME, runLayout, steamLibraryPaths} from './installer-guard.mjs';
+  ownsRegistration, parseUninstallString, resolveRealLocation, RUN_ROOT_NAME, runLayout, steamLibraryPaths, uninstallEnvironment} from './installer-guard.mjs';
 
-// ET-018 PR-1 (REG-013, REG-017; plan U10-U13): the Node driver of the installer lifecycle in a marked test root. The
+// ET-018 PR-1 and PR-3 (REG-013, REG-017; plan U10-U13): the Node driver of the installer lifecycle in a marked test root. The
 // PowerShell harness scripts/installer/Invoke-InstallerLifecycle.ps1 orchestrates the steps and runs every command below
 // that starts a process under a BoundedProcess Job; this file never runs an installer by itself except through `step`,
 // which the harness calls only after the guards passed. See docs/installer-testing.md.
@@ -26,6 +26,12 @@ import {checkedPaths, checkInstalled, checkLaunchEnvironment, checkRunPlan, chec
 //   step <config> <label> <exe> [args...]     runs one installer program and waits until no process image under R is left
 //   launch <config> <label> <exe> <1|none>    a data launch of the installed application with LOCALAPPDATA = R\LocalAppData
 //   verify <config> <label> <exe>             reads the upgraded database with the installed Electron and better-sqlite3
+//   games <config>                            PR-3: the fake Steam and ETS2 folder in R, the plugin registry and the decoy
+//   plugin-launch <config> <label> <exe> <installed|adopted>
+//                                             PR-3: a launch whose test-root plugin setup installs or adopts the plugin
+//   windows-uninstall <config> <label> <exe|-> <complete|deferred>
+//                                             PR-3: the exact registered UninstallString with the decoy LOCALAPPDATA, while
+//                                             the application runs (complete) or the fake game host runs (deferred)
 //   cleanup <config> <location per view...>   deletes R (never following links) after the harness kept the evidence
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -112,7 +118,7 @@ async function regularFile(file) {
 async function guard(config, phase) {
   const facts = machineFacts();
   const steamLibraries = [...(facts.steamPath ? [facts.steamPath] : []), ...steamLibraryPaths(facts.libraryFolders ?? '')];
-  const base = {runRoot: config.runRoot, paths: [config.evidence], real: facts.real, steamLibraries};
+  const base = {runRoot: config.runRoot, paths: [config.evidence], decoy: decoyOf(config.runRoot), real: facts.real, steamLibraries};
   const plan = {...base, resolved: await resolvedMap(checkedPaths(base)), realBinaryRootExists: facts.realBinaryRootExists,
     registrationExists: facts.registrationExists, processes: facts.processes, steamLibrariesUnreadable: facts.libraryFoldersState === 'unreadable', markers: null};
   if (phase === 'ready') {
@@ -215,13 +221,18 @@ async function processImages() {
 async function step(config, label, executable, args) {
   const layout = runLayout(config.runRoot);
   // The only command that runs an installer repeats the CI signal, so a direct local call refuses as well.
-  checkRunSignal(process.env);
+  checkRunSignal(process.env, {allowLocal: config.allowLocal === true});
   // Only the reviewed Setup.exe of the make output or the installed Update.exe inside the run root may run here.
   assert.ok(normalizePath(executable) === normalizePath(config.setup) || normalizePath(executable) === normalizePath(path.join(layout.binaryRoot, 'Update.exe')),
     'STEP_EXECUTABLE_UNEXPECTED');
   checkLaunchEnvironment(process.env, {runRoot: config.runRoot, real: machineFacts().real});
-  const started = performance.now(), budget = config.stepBudgetMs ?? 50000;
-  const child = spawn(executable, args, {cwd: layout.cwd, env: process.env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true});
+  return runAndDrain(config, label, executable, args, process.env);
+}
+/** Runs one program in R's working folder, keeps its bounded output, and waits until no process image under R is left. */
+async function runAndDrain(config, label, executable, args, env, budget = config.stepBudgetMs ?? 50000) {
+  const layout = runLayout(config.runRoot);
+  const started = performance.now();
+  const child = spawn(executable, args, {cwd: layout.cwd, env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true});
   const output = {stdout: [], stderr: []};
   child.stdout.on('data', chunk => output.stdout.push(chunk)); child.stderr.on('data', chunk => output.stderr.push(chunk));
   const exit = await new Promise((resolve, reject) => {
@@ -386,6 +397,236 @@ async function verify(config, label, executable) {
   return {backup: manifest.fileName, preserved: Object.keys(now)};
 }
 
+// ET-018 PR-3 (REG-017; plan U6, U7, U12): the Windows-initiated uninstall scenarios. Squirrel's UninstallString runs
+// with LOCALAPPDATA = R\decoy, which holds sentinel ETS2Telemetry files, and with no ETS2TELEMETRY_ variable: the hook
+// must take its roots from the install location inside R and leave the decoy byte-identical. Every record keeps fixed
+// labels, hashes and counts only, never a path.
+const PLUGIN_FILE = 'ets2telemetry-plugin.dll';
+const RECEIPT_NAME = /^ETS2Telemetry-uninstall-\d{8}T\d{9}Z\.json$/;
+const decoyOf = runRoot => path.win32.join(runRoot, 'decoy');
+/** The uninstall program and its drain get this long, so the whole command stays inside its 60 s Job with a launch before it. */
+const UNINSTALL_RUN_BUDGET_MS = 35000;
+/** The fake ETS2 folder in R's fake Steam library, and the files the uninstall must keep or remove there. */
+function gameLayout(runRoot) {
+  const library = path.win32.join(runRoot, 'LibraryA'), root = path.win32.join(library, 'steamapps', 'common', 'Euro Truck Simulator 2');
+  const win64 = path.win32.join(root, 'bin', 'win_x64'), plugins = path.win32.join(win64, 'plugins');
+  return {steam: path.win32.join(runRoot, 'Steam'), library, root, plugins, dll: path.win32.join(plugins, PLUGIN_FILE),
+    kept: {executable: path.win32.join(win64, 'eurotrucks2.exe'), unrelatedDll: path.win32.join(plugins, 'other-plugin.dll'), unrelatedText: path.win32.join(plugins, 'readme.txt')}};
+}
+const vdfString = value => `"${value.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`;
+async function fileState(file) {
+  try {
+    const item = await lstat(file);
+    if (!item.isFile() || item.isSymbolicLink()) return 'not-a-file';
+    const bytes = await readFile(file);
+    return {sha256: sha256(bytes), size: bytes.length, mtimeMs: item.mtimeMs};
+  } catch (error) {
+    if (error?.code === 'ENOENT') return 'absent';
+    throw error;
+  }
+}
+async function keptStates(runRoot) {
+  const {kept} = gameLayout(runRoot), layout = runLayout(runRoot), states = {};
+  for (const [label, file] of Object.entries(kept)) states[label] = await fileState(file);
+  states.export = await fileState(path.join(layout.exports, 'trip-export.json'));
+  return states;
+}
+async function bundledHash(executable) {
+  const manifest = await readJson(path.join(path.dirname(executable), 'resources', 'telemetry-plugin', 'plugin-manifest.json'), 64 * 1024);
+  assert.match(manifest.sha256, /^[0-9a-f]{64}$/, 'BUNDLE_HASH_INVALID');
+  return manifest.sha256;
+}
+
+/**
+ * The fake Steam root `R\Steam` with a library list naming `R\LibraryA`, the fake ETS2 folder there with an unrelated DLL
+ * and a text file in its plugins folder, a plugin registry that manages ETS2 and excludes ATS, and the decoy
+ * LOCALAPPDATA with sentinel data and binary roots. Runs after the PR-1 upgrade checks, which need the seeded registry.
+ */
+async function games(config) {
+  const runRoot = await realpath(config.runRoot);
+  const game = gameLayout(runRoot), layout = runLayout(runRoot);
+  const write = async (file, content) => {await mkdir(path.dirname(file), {recursive: true}); await writeFile(file, content, {flag: 'wx'});};
+  const entries = [game.steam, game.library].map((library, index) => `\t"${index}"\n\t{\n\t\t"path"\t\t${vdfString(library)}\n\t\t"label"\t\t""\n\t\t"apps"\n\t\t{\n\t\t}\n\t}\n`).join('');
+  await mkdir(path.join(game.steam, 'steamapps', 'common'), {recursive: true});
+  await write(path.join(game.steam, 'steamapps', 'libraryfolders.vdf'), `"libraryfolders"\n{\n${entries}}\n`);
+  await write(path.join(game.library, 'steamapps', 'appmanifest_227300.acf'),
+    '"AppState"\n{\n\t"appid"\t\t"227300"\n\t"name"\t\t"Euro Truck Simulator 2"\n\t"StateFlags"\t\t"4"\n\t"installdir"\t\t"Euro Truck Simulator 2"\n}\n');
+  await write(game.kept.executable, 'fake executable of the installer lifecycle\n');
+  await write(game.kept.unrelatedDll, 'MZ unrelated plugin of another tool; never changed by ETS2Telemetry\n');
+  await write(game.kept.unrelatedText, 'Notes of the driver; never changed by ETS2Telemetry.\n');
+  // The seeded registry excluded both games for the upgrade checks; ETS2 is managed from now on.
+  await writeFile(path.join(layout.dataRoot, 'plugins', 'setup.json'), JSON.stringify({format: 'ets2telemetry.plugin-setup', version: 1,
+    games: {ets2: {excluded: false, manualRoot: null}, ats: {excluded: true, manualRoot: null}}, installs: [], pending: [], failures: []}, null, 2) + '\n');
+  const decoy = decoyOf(runRoot);
+  await write(path.join(decoy, 'ETS2Telemetry', 'data', 'telemetry.sqlite'), 'decoy history: an uninstall must never touch this file\n');
+  await write(path.join(decoy, 'ETS2Telemetry', 'settings', 'settings.json'), '{"decoy":true}\n');
+  await write(path.join(decoy, 'ETS2TelemetryDesktop', 'sentinel.txt'), 'decoy binary root\n');
+  return {kept: await keptStates(runRoot), decoyFiles: Object.keys(await tree(decoy)).length};
+}
+
+/** The launch environment of PR-3's launches: as a data launch, without a recording target. */
+function pluginEnvironment(config, label) {
+  const layout = runLayout(config.runRoot);
+  const diagnostics = path.join(layout.diagnostics, `plugin-${label}`);
+  const env = installedEnvironment(process.env, {LOCALAPPDATA: layout.base, APPDATA: layout.appData, TEMP: layout.temp, TMP: layout.temp,
+    ETS2TELEMETRY_PROFILE_DIR: layout.profile, ETS2TELEMETRY_DIAGNOSTIC_DIR: diagnostics, ETS2TELEMETRY_PLUGIN_SETUP_ROOT: config.runRoot});
+  checkLaunchEnvironment(env, {runRoot: config.runRoot, real: machineFacts().real});
+  return {env, diagnostics};
+}
+/** Starts the installed application and waits until its test-root plugin setup recorded the ETS2 install with the bundled hash. */
+async function startWithPlugin(config, label, executable) {
+  const layout = runLayout(config.runRoot), game = gameLayout(await realpath(config.runRoot));
+  assert.ok(normalizePath(executable).startsWith(`${normalizePath(layout.binaryRoot)}\\app-`), 'LAUNCH_EXECUTABLE_NOT_INSTALLED');
+  const {env, diagnostics} = pluginEnvironment(config, label);
+  await mkdir(diagnostics, {recursive: true});
+  const bundled = await bundledHash(executable);
+  const application = await electron.launch({executablePath: executable, cwd: layout.cwd, env, timeout: 20000});
+  try {
+    const {dashboard} = await rendererPages(application);
+    await dashboard.getByText('Telemetry service ready; isolated storage probe verified', {exact: true}).waitFor({state: 'visible', timeout: 15000});
+    const registry = path.join(layout.dataRoot, 'plugins', 'setup.json');
+    await until(async () => {
+      const document = await readJson(registry, 256 * 1024).catch(() => null);
+      const install = document?.installs?.find(row => row.game === 'ets2' && normalizePath(row.root) === normalizePath(game.root));
+      const dll = await fileState(game.dll);
+      return install?.sha256 === bundled && typeof dll === 'object' && dll.sha256 === bundled;
+    }, Boolean, 'PLUGIN_NOT_INSTALLED', 30000);
+    return {application, launcher: application.process(), bundled, diagnostics};
+  } catch (error) {
+    await application.close().catch(() => undefined);
+    throw error;
+  }
+}
+async function closeOrderly(application) {
+  let timer;
+  try {
+    await Promise.race([application.close(), new Promise((_, reject) => {timer = setTimeout(() => reject(new Error('APP_CLOSE_TIMEOUT_8_SECONDS')), 8000);})]);
+  } finally {clearTimeout(timer);}
+}
+
+/**
+ * A launch whose plugin setup installs the bundled plugin into the fake ETS2 folder (`installed`), or adopts the plugin a
+ * deferred uninstall left there after the reinstall cancelled the deferral (`adopted`: the intent and README are gone
+ * before the launch, and the DLL keeps its bytes and modification time).
+ */
+async function pluginLaunch(config, label, executable, expectation) {
+  assert.ok(expectation === 'installed' || expectation === 'adopted', 'PLUGIN_EXPECTATION_INVALID');
+  const runRoot = await realpath(config.runRoot);
+  const layout = runLayout(runRoot), game = gameLayout(runRoot);
+  const record = {label, expectation};
+  const before = await fileState(game.dll);
+  if (expectation === 'adopted') {
+    assert.equal(typeof before, 'object', 'ADOPTED_PLUGIN_MISSING');
+    assert.equal(await fileState(path.join(layout.dataRoot, 'uninstall', 'pending.json')), 'absent', 'DEFERRAL_NOT_CANCELLED');
+    assert.equal(await fileState(path.join(layout.dataRoot, 'uninstall', 'README.txt')), 'absent', 'DEFERRAL_NOT_CANCELLED');
+    record.deferralCancelled = true;
+  }
+  const keptBefore = await keptStates(runRoot);
+  const started = await startWithPlugin(config, label, executable);
+  await closeOrderly(started.application);
+  record.exit = {code: started.launcher.exitCode, signal: started.launcher.signalCode};
+  assert.deepEqual(record.exit, {code: 0, signal: null}, 'LAUNCH_EXIT_NONZERO');
+  const after = await fileState(game.dll);
+  if (expectation === 'adopted') {
+    assert.deepEqual(after, before, 'ADOPTED_PLUGIN_REWRITTEN');
+    record.adoptedUnchanged = true;
+  }
+  record.pluginInstalled = typeof after === 'object' && after.sha256 === started.bundled;
+  assert.deepEqual(await keptStates(runRoot), keptBefore, 'UNRELATED_FILES_CHANGED');
+  const main = await serviceEvents(started.diagnostics);
+  record.failures = main.filter(row => FAILURE_EVENT.test(row.event)).map(row => row.event);
+  record.pluginMode = main.filter(row => row.event === 'PLUGIN_SETUP_MODE').map(row => row.facts?.mode);
+  assert.deepEqual(record.failures, [], 'FAILURE_EVENT_LOGGED');
+  assert.deepEqual(record.pluginMode, ['test-root'], 'PLUGIN_MODE_UNEXPECTED');
+  return record;
+}
+
+const FAKE_HOST = path.join(checkout, 'native', 'telemetry-plugin', 'build', 'cap0-host', 'Release', 'eurotrucks2.exe');
+const TEST_PLUGIN = path.join(checkout, 'native', 'telemetry-plugin', 'build', 'Release', 'snapshot-transport-test-plugin.dll');
+/**
+ * The tests-only fake SDK host, named eurotrucks2.exe, with the isolated test plugin DLL and a transport folder inside R.
+ * The production DLL is never loaded: it would write `transport\` into the real LocalAppData.
+ */
+async function startFakeGame(config) {
+  assert.ok(await regularFile(FAKE_HOST) && await regularFile(TEST_PLUGIN), 'FAKE_GAME_HOST_MISSING');
+  const transport = path.join(config.runRoot, 'fake-game', 'transport', 'v0');
+  const host = spawn(FAKE_HOST, ['host', TEST_PLUGIN, transport], {cwd: runLayout(config.runRoot).cwd, stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true});
+  let output = '';
+  host.stdout.on('data', chunk => {output += chunk.toString('utf8');});
+  await until(async () => output.includes('"ready":true') || host.exitCode !== null, Boolean, 'FAKE_GAME_NOT_READY', 15000);
+  assert.equal(host.exitCode, null, 'FAKE_GAME_EXITED');
+  return host;
+}
+async function stopFakeGame(host) {
+  if (host.exitCode !== null) return;
+  host.stdin.end('exit\n');
+  await until(async () => host.exitCode !== null, Boolean, 'FAKE_GAME_NOT_STOPPED', 5000).catch(() => {host.kill();});
+}
+const receiptNames = async directory => (await readdir(directory).catch(() => [])).filter(name => RECEIPT_NAME.test(name));
+
+/**
+ * Runs the exact registered UninstallString as Windows Settings would, with LOCALAPPDATA = R\decoy and no ETS2TELEMETRY_
+ * variable. `complete`: the application runs from `exe` with the plugin installed; afterwards it has exited, the DLL and
+ * the data root are gone, and the unrelated files, the game files, the export and the decoy are unchanged. `deferred`:
+ * the fake ETS2 runs; the DLL stays, only `plugins` and `uninstall` (with the intent and README.txt) remain. The receipt
+ * in R\temp must say the same. The harness checks the registration, the shortcuts and the vendor residue afterwards.
+ */
+async function windowsUninstall(config, label, executable, expectation) {
+  assert.ok(expectation === 'complete' || expectation === 'deferred', 'UNINSTALL_EXPECTATION_INVALID');
+  checkRunSignal(process.env, {allowLocal: config.allowLocal === true});
+  const runRoot = await realpath(config.runRoot);
+  const layout = runLayout(runRoot), game = gameLayout(runRoot), decoy = decoyOf(runRoot), facts = machineFacts();
+  const {program, args} = parseUninstallString(facts.registration?.uninstallString, runRoot);
+  const env = uninstallEnvironment(process.env, {runRoot, real: facts.real, decoy});
+  const record = {label, expectation, args};
+  const decoyBefore = await tree(decoy), keptBefore = await keptStates(runRoot), dllBefore = await fileState(game.dll);
+  assert.equal(typeof dllBefore, 'object', 'PLUGIN_NOT_INSTALLED_BEFORE_UNINSTALL');
+  const receiptsBefore = new Set(await receiptNames(layout.temp));
+  let started, host;
+  try {
+    if (expectation === 'complete') started = await startWithPlugin(config, label, executable);
+    else host = await startFakeGame(config);
+    record.run = await runAndDrain(config, `uninstall-${label}`, program, args, env, UNINSTALL_RUN_BUDGET_MS).catch(error => ({failure: failure(error)}));
+    if (started) {
+      // The instance must be gone: Squirrel ends the processes under its root, or the hook's lock request makes it exit.
+      await until(async () => started.launcher.exitCode !== null || started.launcher.signalCode !== null, Boolean, 'INSTANCE_DID_NOT_EXIT', 10000);
+      record.instanceExit = {code: started.launcher.exitCode, signal: started.launcher.signalCode};
+    }
+  } finally {
+    if (started) await started.application.close().catch(() => undefined);
+    if (host) await stopFakeGame(host);
+  }
+  assert.equal(record.run.failure, undefined, `UNINSTALL_RUN_FAILED ${record.run.failure?.message ?? ''}`.trim());
+  const receipts = (await receiptNames(layout.temp)).filter(name => !receiptsBefore.has(name));
+  assert.equal(receipts.length, 1, 'UNINSTALL_RECEIPT_COUNT');
+  const text = await readFile(path.join(layout.temp, receipts[0]), 'utf8');
+  assert.doesNotMatch(text, /[A-Za-z]:\\|\\\\/, 'UNINSTALL_RECEIPT_HAS_PATH');
+  record.receipt = JSON.parse(text);
+  assert.deepEqual(await tree(decoy), decoyBefore, 'DECOY_CHANGED');
+  record.decoyUnchanged = true;
+  const kept = await keptStates(runRoot);
+  assert.deepEqual(kept, keptBefore, 'UNRELATED_FILES_CHANGED');
+  record.unrelatedUnchanged = true;
+  const dataEntries = await readdir(layout.dataRoot).catch(error => {if (error?.code === 'ENOENT') return null; throw error;});
+  if (expectation === 'complete') {
+    assert.equal(await fileState(game.dll), 'absent', 'PLUGIN_NOT_REMOVED');
+    assert.equal(dataEntries, null, 'DATA_ROOT_REMAINS');
+    assert.equal(record.receipt.outcome, 'complete', 'RECEIPT_NOT_COMPLETE');
+    assert.equal(record.receipt.code, null);
+    assert.equal(record.receipt.mode, 'test-root');
+    assert.equal(record.receipt.plugins.removed, 1, 'RECEIPT_PLUGIN_COUNT');
+    assert.equal(record.receipt.data.rootRemoved, true);
+    assert.ok(['none', 'exited'].includes(record.receipt.instance), 'RECEIPT_INSTANCE_UNEXPECTED');
+  } else {
+    assert.deepEqual(await fileState(game.dll), dllBefore, 'DEFERRED_PLUGIN_CHANGED');
+    assert.deepEqual(dataEntries?.sort(), ['plugins', 'uninstall'], 'DEFERRED_DATA_ENTRIES_UNEXPECTED');
+    assert.deepEqual((await readdir(path.join(layout.dataRoot, 'uninstall'))).sort(), ['README.txt', 'pending.json'], 'DEFERRED_UNINSTALL_FOLDER_UNEXPECTED');
+    assert.deepEqual({outcome: record.receipt.outcome, code: record.receipt.code, readme: record.receipt.readme}, {outcome: 'deferred', code: 'GAME_RUNNING', readme: true},
+      'RECEIPT_NOT_DEFERRED');
+  }
+  return record;
+}
+
 /**
  * Deletes R without following any link (fs.rm unlinks a junction or symbolic link instead of entering it), and decides
  * for each registry view whether the HKCU uninstall key the harness read there may be deleted: only when that view's
@@ -418,6 +659,9 @@ try {
       case 'step': result.result = await step(config, label, rest[2], rest.slice(3)); break;
       case 'launch': result.result = await launch(config, label, rest[2], rest[3]); break;
       case 'verify': result.result = await verify(config, label, rest[2]); break;
+      case 'games': result.result = await games(config); break;
+      case 'plugin-launch': result.result = await pluginLaunch(config, label, rest[2], rest[3]); break;
+      case 'windows-uninstall': result.result = await windowsUninstall(config, label, rest[2], rest[3]); break;
       case 'cleanup': result.result = await cleanup(config, rest.slice(1)); break;
       default: throw new Error('UNKNOWN_COMMAND');
     }
@@ -429,7 +673,7 @@ try {
 result.finishedUtc = new Date().toISOString();
 if (config) {
   // Evidence file names use fixed labels only; the cleanup argument is a path and never becomes part of a name.
-  const name = command === 'seed' || command === 'cleanup' ? `${command}.json` : command === 'compare' ? `compare-${rest[1]}-${rest[2]}.json` : `${command}-${rest[1]}.json`;
+  const name = command === 'seed' || command === 'cleanup' || command === 'games' ? `${command}.json` : command === 'compare' ? `compare-${rest[1]}-${rest[2]}.json` : `${command}-${rest[1]}.json`;
   try {await writeEvidence(config, name, result);} catch (error) {result.evidenceFailure = failure(error);}
 }
 // One JSON line for the harness; `cleanup` also reports whether the uninstall key may be deleted.

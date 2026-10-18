@@ -49,13 +49,42 @@ export function isInside(candidate, parent) {
 }
 
 /**
- * The CI signal (U12): the harness runs only on a GitHub-hosted runner. `allowLocal` names the owner-requested local run
- * (O6); it refuses as well until ET-018 PR-3 replaces electron-squirrel-startup, whose install and update hooks create
- * real Desktop and Start menu shortcuts whatever the test root says.
+ * The CI signal (U12): the harness runs on a GitHub-hosted runner. `allowLocal` is the owner-requested local run (O6,
+ * `-AllowLocal`): it skips the signal, so only the fact-based guards protect the machine. Agents never pass it. Since
+ * ET-018 PR-3 the application's own Squirrel handler skips the shortcuts of a test install whose test file says so,
+ * which the harness writes for every run that is not on a hosted runner.
  */
 export function checkRunSignal(env, {allowLocal = false} = {}) {
-  if (allowLocal) refuse('LOCAL_RUN_UNAVAILABLE_UNTIL_PR3');
+  if (allowLocal === true) return;
   if (env.GITHUB_ACTIONS !== 'true' || env.RUNNER_ENVIRONMENT !== 'github-hosted') refuse('LOCAL_RUN_REFUSED');
+}
+/** True only on a GitHub-hosted runner; the test install creates real shortcuts only there (U12). */
+export const isHostedRunner = env => env.GITHUB_ACTIONS === 'true' && env.RUNNER_ENVIRONMENT === 'github-hosted';
+
+/**
+ * The registered UninstallString (ET-018 PR-3, U12): exactly the quoted `Update.exe` of the run root's binary root and
+ * `--uninstall`, optionally followed by Squirrel's `-s`. Returns the program and its arguments; anything else refuses.
+ */
+export function parseUninstallString(value, runRoot) {
+  const match = typeof value === 'string' ? /^"([^"]+)"((?: +[^ "]+)*) *$/.exec(value) : null;
+  if (!match) refuse('UNINSTALL_STRING_INVALID');
+  const program = match[1], args = match[2].trim().split(/ +/).filter(Boolean);
+  if (normalizePath(program) !== normalizePath(path.win32.join(runLayout(runRoot).binaryRoot, 'Update.exe'))) refuse('UNINSTALL_STRING_OUTSIDE_RUN_ROOT');
+  if (!(args.length === 1 && args[0] === '--uninstall') && !(args.length === 2 && args[0] === '--uninstall' && args[1] === '-s')) refuse('UNINSTALL_STRING_INVALID');
+  return {program, args};
+}
+/**
+ * The environment of the Windows-initiated uninstall (ET-018 PR-3, U12): the caller's environment without PATH, Node,
+ * npm, Electron and every ETS2TELEMETRY_ variable, LOCALAPPDATA set to the decoy, APPDATA, TEMP and TMP inside R, and
+ * SQUIRREL_TEMP = R\LocalAppData. The decoy must lie inside R and must not be the real LocalAppData.
+ */
+export function uninstallEnvironment(base, {runRoot, real, decoy}) {
+  const layout = runLayout(runRoot);
+  if (!isDrivePath(decoy) || !isInside(decoy, runRoot) || normalizePath(decoy) === normalizePath(runRoot)) refuse('DECOY_OUTSIDE_RUN_ROOT');
+  if (!isDrivePath(real?.localAppData) || isInside(decoy, real.localAppData) || isInside(real.localAppData, decoy)) refuse('DECOY_IS_REAL_ROOT');
+  const env = installedEnvironment(base, {LOCALAPPDATA: decoy, APPDATA: layout.appData, TEMP: layout.temp, TMP: layout.temp, SQUIRREL_TEMP: layout.squirrelTemp});
+  if (Object.keys(env).some(key => key.toUpperCase().startsWith('ETS2TELEMETRY_'))) refuse('UNINSTALL_ENVIRONMENT_INVALID');
+  return env;
 }
 
 /**

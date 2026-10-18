@@ -4,8 +4,8 @@ import path from 'node:path';
 import {promisify} from 'node:util';
 import {describe, expect, it} from 'vitest';
 import {checkedPaths, checkInstalled, checkInstallTest, checkLaunchEnvironment, checkRunPlan, checkRunSignal, FACTS_VARIABLE, factsEvidence, installedEnvironment,
-  InstallerGuardError, isGuardedProcess, minimalPath, normalizePath, ownsRegistration, resolveRealLocation, runLayout, steamLibraryPaths,
-  type RunPlanFacts} from '../../scripts/installer/installer-guard.mjs';
+  InstallerGuardError, isGuardedProcess, isHostedRunner, minimalPath, normalizePath, ownsRegistration, parseUninstallString, resolveRealLocation, runLayout,
+  steamLibraryPaths, uninstallEnvironment, type RunPlanFacts} from '../../scripts/installer/installer-guard.mjs';
 import {temporaryResources} from '../shared/resources';
 
 // ET-018 PR-1 (REG-017, U12): the installer lifecycle's fail-closed guards. Pure decisions over hand-written facts; no
@@ -50,9 +50,48 @@ describe('CI signal (local runs refused)', () => {
     ['a hosted runner name without the Actions flag', {RUNNER_ENVIRONMENT: 'github-hosted'}],
     ['a differently cased flag', {GITHUB_ACTIONS: 'TRUE', RUNNER_ENVIRONMENT: 'github-hosted'}]
   ])('refuses %s', (_name, env) => expect(refusal(() => checkRunSignal(env))).toBe('LOCAL_RUN_REFUSED'));
-  it('refuses -AllowLocal until ET-018 PR-3, even with the CI signal', () => {
-    expect(refusal(() => checkRunSignal({}, {allowLocal: true}))).toBe('LOCAL_RUN_UNAVAILABLE_UNTIL_PR3');
-    expect(refusal(() => checkRunSignal({GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'github-hosted'}, {allowLocal: true}))).toBe('LOCAL_RUN_UNAVAILABLE_UNTIL_PR3');
+  // ET-018 PR-3 lifted the earlier refusal: the application's own Squirrel handler now skips the shortcuts of a test install.
+  // -AllowLocal is still the owner-requested run only (O6); agents never pass it.
+  it('accepts -AllowLocal (an owner-requested local run) without the CI signal, and only the exact flag', () => {
+    expect(refusal(() => checkRunSignal({}, {allowLocal: true}))).toBe('ACCEPTED');
+    expect(refusal(() => checkRunSignal({}, {allowLocal: 'true' as unknown as boolean}))).toBe('LOCAL_RUN_REFUSED');
+    expect(refusal(() => checkRunSignal({}, {allowLocal: false}))).toBe('LOCAL_RUN_REFUSED');
+  });
+  it('creates real shortcuts only on a GitHub-hosted runner', () => {
+    expect(isHostedRunner({GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'github-hosted'})).toBe(true);
+    expect(isHostedRunner({GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'self-hosted'})).toBe(false);
+    expect(isHostedRunner({})).toBe(false);
+  });
+});
+
+describe('Windows-initiated uninstall (ET-018 PR-3)', () => {
+  const update = `${RUN_ROOT}\\LocalAppData\\ETS2TelemetryDesktop\\Update.exe`;
+  it.each([[`"${update}" --uninstall`, ['--uninstall']], [`"${update}" --uninstall -s`, ['--uninstall', '-s']]] as const)('runs the registered %s', (value, args) => {
+    expect(parseUninstallString(value, RUN_ROOT)).toEqual({program: update, args});
+  });
+  it.each([
+    ['another Update.exe', `"C:\\Users\\fixture\\AppData\\Local\\ETS2TelemetryDesktop\\Update.exe" --uninstall`, 'UNINSTALL_STRING_OUTSIDE_RUN_ROOT'],
+    ['an unquoted program', `${update} --uninstall`, 'UNINSTALL_STRING_INVALID'],
+    ['another command', `"${update}" --update C:\\feed`, 'UNINSTALL_STRING_INVALID'],
+    ['an extra argument', `"${update}" --uninstall -s --extra`, 'UNINSTALL_STRING_INVALID'],
+    ['no value', undefined, 'UNINSTALL_STRING_INVALID']
+  ])('refuses %s', (_name, value, code) => expect(refusal(() => parseUninstallString(value, RUN_ROOT))).toBe(code));
+  it('runs with the decoy LOCALAPPDATA, R folders, the minimal PATH and no ETS2TELEMETRY_ variable', () => {
+    const decoy = `${RUN_ROOT}\\decoy`;
+    const env = uninstallEnvironment({SystemRoot: 'C:\\Windows', PATH: 'C:\\tools', LOCALAPPDATA: REAL.localAppData, ETS2TELEMETRY_PROFILE_DIR: `${RUN_ROOT}\\profile`,
+      ets2telemetry_plugin_setup_root: RUN_ROOT, NODE_OPTIONS: '--x', USERNAME: 'fixture'}, {runRoot: RUN_ROOT, real: REAL, decoy});
+    expect(env).toEqual({SystemRoot: 'C:\\Windows', USERNAME: 'fixture', Path: minimalPath('C:\\Windows'), LOCALAPPDATA: decoy, APPDATA: `${RUN_ROOT}\\AppData`,
+      TEMP: `${RUN_ROOT}\\temp`, TMP: `${RUN_ROOT}\\temp`, SQUIRREL_TEMP: `${RUN_ROOT}\\LocalAppData`});
+  });
+  it.each([
+    ['outside R', 'D:\\decoy', 'DECOY_OUTSIDE_RUN_ROOT'], ['R itself', RUN_ROOT, 'DECOY_OUTSIDE_RUN_ROOT'],
+    ['the real LocalAppData', REAL.localAppData, 'DECOY_OUTSIDE_RUN_ROOT']
+  ])('refuses a decoy %s', (_name, decoy, code) => {
+    expect(refusal(() => uninstallEnvironment({SystemRoot: 'C:\\Windows'}, {runRoot: RUN_ROOT, real: REAL, decoy}))).toBe(code);
+  });
+  it('refuses a decoy when the real LocalAppData lies inside R', () => {
+    expect(refusal(() => uninstallEnvironment({SystemRoot: 'C:\\Windows'}, {runRoot: RUN_ROOT, real: {localAppData: `${RUN_ROOT}\\decoy\\inner`}, decoy: `${RUN_ROOT}\\decoy`})))
+      .toBe('DECOY_IS_REAL_ROOT');
   });
 });
 
