@@ -772,6 +772,8 @@ Changed tests: the race case of `app-uninstall.test.ts` expected `blocked`; with
 
 After the merge of PR-6: `uninstall-text.test.ts` also requires that entries a wipe did not reach in its time (`BUDGET_EXPIRED`) are left to the Windows uninstall in the result dialog, while an entry that really failed is still left for deletion by hand.
 
+Second delta review: `uninstall-data-wipe.test.ts` requires that a spent budget deletes nothing more but lists every allowlisted entry it did not reach, `plugins` and `uninstall` included after an unfinished step of `wipeEverything`, and stays spent within one call; `uninstall-text.test.ts` and `main-boundaries.test.ts` require that a failed handover says the data is gone only after a complete wipe.
+
 RED for PR-4, each applied alone and reverted, is listed in the [validation record](docs/validation/et-018.md#red-3): the preflight's deferral ignored, the data wiped before the exit, a path as a target, a declined confirmation that proceeds, "captures" dropped from the warning, `plugins.notes` not shown, a `suspend` that does not pause, the request accepted while exiting, from any sender or with arguments, a raced removal that does not resume setup, and the receipt rule and the claim fix removed; each fails its named cases.
 
 ## ET-018 release artifact identity — October 18, 2026
