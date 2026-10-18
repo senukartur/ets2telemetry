@@ -207,7 +207,7 @@ function runApplication(profileError: unknown): void {
     if (finished) {
       const text = finishedUninstallText(finished);
       if (uninstallDialogs) {if (logOutside) timeline?.('DIAGNOSTIC_UNINSTALL_DIALOG', {dialog: 'result', rootRemoved: finished.data.rootRemoved, failed: finished.data.failed.length});}
-      else await dialog.showMessageBox({type: finished.data.failed.length ? 'warning' : 'info', title: text.title, message: text.message, detail: text.detail, buttons: ['OK'], noLink: true}).catch(() => undefined);
+      else await dialog.showMessageBox({type: finished.data.failed.some(entry => entry.code !== 'BUDGET_EXPIRED') ? 'warning' : 'info', title: text.title, message: text.message, detail: text.detail, buttons: ['OK'], noLink: true}).catch(() => undefined);
     }
     const started = await appUninstall.handOver();
     if (!started) {

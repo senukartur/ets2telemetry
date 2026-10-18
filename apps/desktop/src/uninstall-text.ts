@@ -45,13 +45,20 @@ export interface FinishedUninstallSummary {
   readonly removed: number;
   readonly unrecognized: number;
 }
-/** The result dialog after the data wipe: what was removed and what remains, with every note. */
+/**
+ * The result dialog after the data wipe: what was removed and what remains, with every note. An entry the wipe did not
+ * reach in its time (BUDGET_EXPIRED) stays with the intent, and the uninstall hook of the handover finishes it, so it is
+ * not left to the user; only a real failure asks for deletion by hand.
+ */
 export function finishedUninstallText(summary: FinishedUninstallSummary): {title: string; message: string; detail: string} {
-  const complete = summary.data.failed.length === 0;
+  const entries = (failed: FinishedUninstallSummary['data']['failed']) => [...new Set(failed.map(entry => UNINSTALL_DATA_ENTRY_TEXT[entry.entry]))].join(', ');
+  const expired = summary.data.failed.filter(entry => entry.code === 'BUDGET_EXPIRED'), failed = summary.data.failed.filter(entry => entry.code !== 'BUDGET_EXPIRED');
   const lines = [fill(UNINSTALL_STRINGS.finishedRemoved, {count: summary.removed})];
   if (summary.unrecognized) lines.push(fill(UNINSTALL_STRINGS.finishedUnrecognized, {count: summary.unrecognized}));
   for (const note of summary.notes) lines.push(uninstallNoteText(note.game, note.note));
   if (summary.data.kept) lines.push(fill(UNINSTALL_STRINGS.finishedKept, {count: summary.data.kept}));
-  if (!complete) lines.push(fill(UNINSTALL_STRINGS.finishedFailed, {entries: [...new Set(summary.data.failed.map(entry => UNINSTALL_DATA_ENTRY_TEXT[entry.entry]))].join(', ')}));
-  return {title: UNINSTALL_STRINGS.finishedTitle, message: complete ? UNINSTALL_STRINGS.finishedMessage : UNINSTALL_STRINGS.finishedPartial, detail: lines.join('\n')};
+  if (failed.length) lines.push(fill(UNINSTALL_STRINGS.finishedFailed, {entries: entries(failed)}));
+  if (expired.length) lines.push(fill(UNINSTALL_STRINGS.finishedExpired, {entries: entries(expired)}));
+  const message = failed.length ? UNINSTALL_STRINGS.finishedPartial : expired.length ? UNINSTALL_STRINGS.finishedPending : UNINSTALL_STRINGS.finishedMessage;
+  return {title: UNINSTALL_STRINGS.finishedTitle, message, detail: lines.join('\n')};
 }

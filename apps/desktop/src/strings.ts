@@ -635,6 +635,9 @@ export const UNINSTALL_STRINGS = Object.freeze({
   finishedUnrecognized: 'Files with the plugin\'s name that ETS2Telemetry did not install were left as they are: {count}.',
   finishedKept: 'Files and folders in the data folder that ETS2Telemetry does not know were kept: {count}. Delete %LOCALAPPDATA%\\ETS2Telemetry by hand if you do not need them.',
   finishedFailed: 'Could not be deleted: {entries}. Delete %LOCALAPPDATA%\\ETS2Telemetry by hand.',
+  /** The wipe ran out of time (BUDGET_EXPIRED): the intent stays, and the uninstall hook of the handover finishes it. */
+  finishedPending: 'ETS2Telemetry removed its game plugin. The Windows uninstall that starts now finishes removing its local data and removes the program files.',
+  finishedExpired: 'Not deleted yet, because this step ran out of time: {entries}. The Windows uninstall that starts now finishes removing them.',
   spawnFailedTitle: 'Windows uninstall could not start',
   spawnFailed: 'ETS2Telemetry removed its plugin and data, but the Windows uninstall could not be started. Uninstall ETS2Telemetry from Windows Settings, Apps.'
 });

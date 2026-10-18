@@ -82,6 +82,24 @@ describe('the result dialog', () => {
     expect(text.detail).toContain('does not know were kept: 2');
     expect(text.detail).toContain('Could not be deleted: logs, captures.');
   });
+  // Delta review of PR-4: entries a short wipe did not reach stay with the intent, and the handover's uninstall hook
+  // finishes them, so the dialog must not send the user to delete them by hand.
+  it('a wipe that ran out of time leaves the rest to the Windows uninstall, not to the user', () => {
+    const text = finishedUninstallText({data: {kept: 0, failed: [{entry: 'data', code: 'BUDGET_EXPIRED'}, {entry: 'plugins', code: 'BUDGET_EXPIRED'}], rootRemoved: false},
+      notes: [], removed: 1, unrecognized: 0});
+    expect(text.message).toBe(UNINSTALL_STRINGS.finishedPending);
+    expect(text.message).toContain('The Windows uninstall that starts now finishes removing its local data');
+    expect(text.detail).toContain('Not deleted yet, because this step ran out of time: trip history, plugin setup record. The Windows uninstall that starts now finishes removing them.');
+    expect(text.detail).not.toContain('by hand');
+    expect(text.detail).not.toContain('Could not be deleted');
+  });
+  it('a real failure beside a short wipe still asks for deletion by hand, for the failed entry only', () => {
+    const text = finishedUninstallText({data: {kept: 0, failed: [{entry: 'logs', code: 'TARGET_LOCKED'}, {entry: 'data', code: 'BUDGET_EXPIRED'}], rootRemoved: false},
+      notes: [], removed: 1, unrecognized: 0});
+    expect(text.message).toBe(UNINSTALL_STRINGS.finishedPartial);
+    expect(text.detail).toContain('Could not be deleted: logs. Delete %LOCALAPPDATA%\\ETS2Telemetry by hand.');
+    expect(text.detail).toContain('Not deleted yet, because this step ran out of time: trip history.');
+  });
   it('a complete wipe says so', () => {
     expect(finishedUninstallText({data: {kept: 0, failed: [], rootRemoved: true}, notes: [], removed: 2, unrecognized: 0}).message).toBe(UNINSTALL_STRINGS.finishedMessage);
   });
