@@ -143,6 +143,7 @@ Main and the telemetry service each write `startup.jsonl` with `createDiagnostic
 With an idle disk the flush takes a few milliseconds. Not covered:
 - A disk stall longer than the bound at exit loses the rows still queued, instead of delaying the exit further.
 - A killed or crashed process loses the records queued behind the write in flight; before, every completed `log()` call was already on disk.
+- Rows logged after main's final flush, such as the opt-in timeline's `DASHBOARD_WINDOW_CLOSED` while `app.exit` closes the windows, are written only if the write finishes before the process ends. No check reads them.
 
 The runtime smokes read the logs after the application exited, except three reads while it runs: the recording journey's first-connection and service-restart status rows, and the delayed-commit retirement row of the telemetry smoke. They now poll for the row instead of reading once. Every other read during a run asserts that a row is absent or counts rows logged long before the read, so a row still being written cannot make it fail.
 
