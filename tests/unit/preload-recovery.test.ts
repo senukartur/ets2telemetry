@@ -161,7 +161,7 @@ it('preserves the frozen narrow bridge and rejects privileged source values befo
   expect(Object.isFrozen(bridge)).toBe(true); expect(Object.keys(bridge).sort()).toEqual(['beginOverlayEdit', 'choosePluginFolder', 'exitApplication', 'exportDiagnostics', 'exportJournalTrip', 'finishOverlayEdit', 'getAppState', 'getJournalTrip', 'getStatus',
     'listJournalEvents', 'listJournalIntervals', 'listJournalSamples', 'listJournalTrips', 'openPluginFolder',
     'resetOverlayEditPlacement', 'retryPluginSetup', 'selectSource', 'setOverlayEditScale', 'setOverlayLayout', 'setOverlaySections', 'setPluginGameExcluded', 'setUnitProfile',
-    'showPluginFile', 'subscribeAppState', 'subscribeLive']);
+    'showPluginFile', 'subscribeAppState', 'subscribeLive', 'uninstallApplication']);
   await expect(bridge.selectSource('C:\\arbitrary.exe' as never)).rejects.toThrow('Invalid source selection');
   expect(ipc.invoke).not.toHaveBeenCalled();
   await bridge.selectSource('ats'); expect(ipc.invoke).toHaveBeenCalledWith('telemetry:select', 'ats');
@@ -198,11 +198,12 @@ it('does not reassert service subscription after the callback unsubscribes its o
 });
 it('appends the application state and exit methods after the original three bridge keys', () => {
   // ET-012a appends the two overlay settings methods, ET-012b the four overlay edit methods, ET-016 PR-3 the five journal reads,
-  // ET-016 PR-5 the trip export, ET-017 PR-4 the five plugin setup methods and ET-017 PR-6 the diagnostics export.
+  // ET-016 PR-5 the trip export, ET-017 PR-4 the five plugin setup methods, ET-017 PR-6 the diagnostics export and ET-018
+  // PR-4 the in-app uninstall.
   expect(Object.keys(bridge)).toEqual(['getStatus', 'selectSource', 'subscribeLive', 'getAppState', 'subscribeAppState', 'exitApplication', 'setUnitProfile',
     'setOverlayLayout', 'setOverlaySections', 'beginOverlayEdit', 'setOverlayEditScale', 'resetOverlayEditPlacement', 'finishOverlayEdit',
     'listJournalTrips', 'getJournalTrip', 'listJournalEvents', 'listJournalIntervals', 'listJournalSamples', 'exportJournalTrip',
-    'retryPluginSetup', 'choosePluginFolder', 'setPluginGameExcluded', 'showPluginFile', 'openPluginFolder', 'exportDiagnostics']);
+    'retryPluginSetup', 'choosePluginFolder', 'setPluginGameExcluded', 'showPluginFile', 'openPluginFolder', 'exportDiagnostics', 'uninstallApplication']);
 });
 it('allows one application state listener, forwards pushed state and unsubscribes once', () => {
   const listener = vi.fn(); const stop = bridge.subscribeAppState(listener);
@@ -297,6 +298,16 @@ it('validates plugin setup requests before IPC and forwards only a game, an excl
   await bridge.openPluginFolder('ets2:steam:3');
   expect(ipc.invoke.mock.calls).toEqual([['plugin:retry'], ['plugin:choose-folder', 'ats'], ['plugin:set-excluded', 'ets2', false], ['plugin:show-file'],
     ['plugin:open-folder', 'ats:manual:0'], ['plugin:open-folder', 'ets2:steam:3']]);
+  expect(ipc.send).not.toHaveBeenCalled();
+});
+// ET-018 PR-4 (U8): the in-app uninstall forwards nothing; any argument is refused before IPC, and main checks again.
+it('invokes the in-app uninstall on its fixed channel only without arguments', async () => {
+  ipc.invoke.mockResolvedValue({outcome: 'cancelled'});
+  await expect(bridge.uninstallApplication()).resolves.toEqual({outcome: 'cancelled'});
+  await expect(Reflect.apply(bridge.uninstallApplication, bridge, [{force: true}])).rejects.toThrow('Invalid uninstall request');
+  await expect(Reflect.apply(bridge.uninstallApplication, bridge, ['C:\\Users'])).rejects.toThrow('Invalid uninstall request');
+  await expect(Reflect.apply(bridge.uninstallApplication, bridge, [undefined])).rejects.toThrow('Invalid uninstall request');
+  expect(ipc.invoke.mock.calls).toEqual([['app:uninstall']]);
   expect(ipc.send).not.toHaveBeenCalled();
 });
 // ET-017 PR-6 (P17): the diagnostics export forwards no argument; main owns the Save dialog and the bundle.

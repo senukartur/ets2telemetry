@@ -10,7 +10,7 @@ import {blockingProcess, checkRunningGames, type RunningGames} from './game-proc
 import {confineAtomicToRoot, confineToRoot, TEST_ROOT_MARKER, testRootRegistryDirectory, testRootSteam, type PluginSetupDecision} from './mode';
 import {pluginBundleDirectory, readPluginBundle, type LoadedPluginBundle, type PluginBundleResult} from './plugin-bundle';
 import {nodeInstallerFs, PluginInstaller, type InstallerFileSystem, type PluginActionResult, type PluginTarget, type RunningCheck} from './plugin-installer';
-import {failureFor, installRecordFor, PluginRegistry, type PluginBlockReason} from './plugin-registry';
+import {failureFor, installRecordFor, PluginRegistry, sameRoot, type PluginBlockReason} from './plugin-registry';
 import {canonicalDirectory, discoverSteamGames, isInsideOrEqual, PLUGIN_GAMES, validateGameLayout, type SteamDiscovery, type SteamRootResult} from './steam-discovery';
 import {readSteamRoot} from './steam-registry';
 
@@ -126,6 +126,8 @@ export class PluginSetup {
   private pollTimer: ReturnType<typeof setTimeout> | undefined;
   private started = false;
   private closed = false;
+  /** ET-018 PR-4: the in-app uninstall has paused setup (suspend); nothing runs or writes until resume. */
+  private suspended = false;
   private inRun = false;
   /** The test-root marker check, made once; a root without its marker turns setup off. */
   private markerCheck: Promise<boolean> | undefined;
@@ -189,7 +191,7 @@ export class PluginSetup {
   /** Stores the exclusion of a game durably, then runs setup; resolves with the view after that run. */
   async setExcluded(game: PluginGame, excluded: boolean): Promise<PluginSetupView> {
     if (this.decision.mode === 'disabled') return this.view();
-    if (this.closed) throw new PluginSetupError('SETUP_CLOSED');
+    if (this.closed || this.suspended) throw new PluginSetupError('SETUP_CLOSED');
     if (!await this.allowed()) return this.view();
     const registry = await this.ensureRegistry();
     if (registry.document.games[game].excluded !== excluded) {
@@ -212,7 +214,7 @@ export class PluginSetup {
    */
   async chooseFolder(game: PluginGame, selected: string): Promise<PluginFolderChoice> {
     if (this.decision.mode === 'disabled') return {outcome: 'refused', code: 'SETUP_DISABLED'};
-    if (this.closed) throw new PluginSetupError('SETUP_CLOSED');
+    if (this.closed || this.suspended) throw new PluginSetupError('SETUP_CLOSED');
     if (this.decision.mode === 'test-root' && !(typeof selected === 'string' && isInsideOrEqual(selected, this.decision.root))) {
       this.escapes++;
       this.flushEscapes();
@@ -266,6 +268,37 @@ export class PluginSetup {
     this.flushEscapes();
     if (layout.status === 'not-game' || layout.status === 'linked') return undefined;
     return plain ? layout.pluginsDirectory : path.win32.dirname(layout.pluginsDirectory);
+  }
+
+  /**
+   * ET-018 PR-4 (U8 step 5): the in-app uninstall pauses setup before it removes the plugin. No further run, poll,
+   * trigger or registry write starts; the run in flight stops after its current folder, and this resolves once it and
+   * every registry write have settled. Exclusion changes and folder choices are refused until resume.
+   */
+  async suspend(): Promise<void> {
+    this.suspended = true;
+    clearTimeout(this.launchTimer); this.launchTimer = undefined;
+    clearTimeout(this.pollTimer); this.pollTimer = undefined;
+    this.pollController?.abort();
+    this.controller?.abort();
+    await this.idle();
+  }
+
+  /**
+   * Lifts suspend after an in-app uninstall that could not remove every plugin: the registry is read again (the
+   * uninstall changed it on disk) and a run starts, which installs the plugin again where it was removed.
+   */
+  resume(): void {
+    if (!this.suspended) return;
+    this.suspended = false;
+    if (this.closed || this.decision.mode === 'disabled') return;
+    this.registry = undefined;
+    void this.trigger('retry');
+  }
+
+  /** The id of the listed target for a game folder (`<game>:<source>:<ordinal>`), or undefined when it is not listed. */
+  targetIdFor(game: PluginGame, root: string): string | undefined {
+    return this.games[game].targets.find(target => sameRoot(target.root, root))?.id;
   }
 
   /** The exit's `begin`: no further run, poll, trigger or registry write; the run in flight stops after its current folder. */
@@ -322,7 +355,7 @@ export class PluginSetup {
 
   /** Single-flight: a trigger during a run queues one follow-up run, shared by every further trigger meanwhile. */
   private trigger(reason: TriggerReason): Promise<void> {
-    if (this.closed || this.mode === 'disabled') return Promise.resolve();
+    if (this.closed || this.suspended || this.mode === 'disabled') return Promise.resolve();
     if (reason !== 'poll') this.lockedRetries = 0;
     if (!this.current) {
       const run = this.current = this.execute().finally(() => {if (this.current === run) this.current = undefined;});
@@ -541,12 +574,12 @@ export class PluginSetup {
     clearTimeout(this.pollTimer); this.pollTimer = undefined;
     const waiting = this.waits().length > 0;
     if (!waiting) this.lockedRetries = 0;
-    if (this.closed || this.mode === 'disabled' || !waiting) return;
+    if (this.closed || this.suspended || this.mode === 'disabled' || !waiting) return;
     this.pollTimer = unref(setTimeout(() => {this.pollTimer = undefined; void this.poll();}, POLL_INTERVAL_MS));
   }
 
   private async poll(): Promise<void> {
-    if (this.closed || this.current) return;
+    if (this.closed || this.suspended || this.current) return;
     const controller = this.pollController = new AbortController();
     let check: Awaited<ReturnType<RunningCheck>>;
     try {check = await this.ports!.checkRunning(controller.signal);} catch {check = {ok: false, code: 'RUNNING_CHECK_FAILED'};}

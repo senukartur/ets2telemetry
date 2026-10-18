@@ -1,0 +1,52 @@
+import type {AppUninstallResult, PluginGame} from '../../../packages/contracts/src';
+import {UNINSTALL_TARGET_ID} from '../../../packages/contracts/src/uninstall';
+import {UNINSTALL_DATA_ENTRY_TEXT, UNINSTALL_FAILURE_TEXT, UNINSTALL_NOTE_TEXT, UNINSTALL_REASON_TEXT, UNINSTALL_STRINGS, UNINSTALL_TARGET_TEXT, UNIT_GAME_TEXT} from './strings';
+import type {DataEntry, WipeFailureCode} from './uninstall/data-wipe';
+import type {FolderNote} from './uninstall/plugin-cleanup';
+
+// The in-app uninstall's texts (ET-018 PR-4, plan U8 and U9): the card's answer to every result, and the result dialog
+// after the data wipe. Built from fixed strings, target ids, counts and allowlisted entry names; never a path. Main and
+// the dashboard both use it, so it imports no Node or Electron API.
+
+const fill = (template: string, values: Readonly<Record<string, string | number>>) => template.replace(/\{(\w+)\}/g, (_match, key: string) => String(values[key] ?? ''));
+const gameText = (game: PluginGame) => UNIT_GAME_TEXT[game];
+
+/** A blocked folder's name from its target id: `ets2:steam:0` is Steam folder 1, `ats:other` a folder no longer listed. */
+export function uninstallTargetText(targetId: string): string {
+  if (!UNINSTALL_TARGET_ID.test(targetId)) return targetId.startsWith('ats') ? gameText('ats') : gameText('ets2');
+  const [game, source, ordinal] = targetId.split(':') as [PluginGame, 'steam' | 'manual' | 'other', string | undefined];
+  if (source === 'steam') return fill(UNINSTALL_TARGET_TEXT.steam, {game: gameText(game), number: Number(ordinal) + 1});
+  return fill(source === 'manual' ? UNINSTALL_TARGET_TEXT.manual : UNINSTALL_TARGET_TEXT.other, {game: gameText(game)});
+}
+
+/** The card's text for one result: a headline and, for a blocked uninstall, one line per blocked folder. */
+export function appUninstallResultText(result: AppUninstallResult): {line: string; folders: string[]} {
+  switch (result.outcome) {
+    case 'cancelled': return {line: UNINSTALL_STRINGS.cancelled, folders: []};
+    case 'not-installed': return {line: UNINSTALL_STRINGS.notInstalled, folders: []};
+    case 'started': return {line: UNINSTALL_STRINGS.started, folders: []};
+    case 'blocked': return {line: fill(UNINSTALL_STRINGS.blocked, {reason: UNINSTALL_REASON_TEXT[result.code]}),
+      folders: result.blocked.map(entry => fill(UNINSTALL_STRINGS.blockedFolder, {target: uninstallTargetText(entry.targetId), reason: UNINSTALL_REASON_TEXT[entry.reason]}))};
+    case 'failed': return {line: fill(UNINSTALL_STRINGS.failed, {reason: UNINSTALL_FAILURE_TEXT[result.code]}), folders: []};
+  }
+}
+
+/** One note as fixed text for the result dialog (PR-2 and PR-3 promised that the notes reach the user). */
+export const uninstallNoteText = (game: PluginGame, note: FolderNote) => fill(UNINSTALL_NOTE_TEXT[note], {game: gameText(game)});
+
+export interface FinishedUninstallSummary {
+  readonly data: {readonly kept: number; readonly failed: readonly {readonly entry: DataEntry; readonly code: WipeFailureCode}[]; readonly rootRemoved: boolean};
+  readonly notes: readonly {readonly game: PluginGame; readonly note: FolderNote}[];
+  readonly removed: number;
+  readonly unrecognized: number;
+}
+/** The result dialog after the data wipe: what was removed and what remains, with every note. */
+export function finishedUninstallText(summary: FinishedUninstallSummary): {title: string; message: string; detail: string} {
+  const complete = summary.data.failed.length === 0;
+  const lines = [fill(UNINSTALL_STRINGS.finishedRemoved, {count: summary.removed})];
+  if (summary.unrecognized) lines.push(fill(UNINSTALL_STRINGS.finishedUnrecognized, {count: summary.unrecognized}));
+  for (const note of summary.notes) lines.push(uninstallNoteText(note.game, note.note));
+  if (summary.data.kept) lines.push(fill(UNINSTALL_STRINGS.finishedKept, {count: summary.data.kept}));
+  if (!complete) lines.push(fill(UNINSTALL_STRINGS.finishedFailed, {entries: [...new Set(summary.data.failed.map(entry => UNINSTALL_DATA_ENTRY_TEXT[entry.entry]))].join(', ')}));
+  return {title: UNINSTALL_STRINGS.finishedTitle, message: complete ? UNINSTALL_STRINGS.finishedMessage : UNINSTALL_STRINGS.finishedPartial, detail: lines.join('\n')};
+}

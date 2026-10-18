@@ -4,7 +4,8 @@ import {mkdir, mkdtemp, readdir, readFile, rm, writeFile} from 'node:fs/promises
 import os from 'node:os';
 import path from 'node:path';
 import {afterEach, beforeAll, beforeEach, expect, it, vi} from 'vitest';
-import type {LiveTelemetry} from '../../packages/contracts/src';
+import type {AppUninstallResult, LiveTelemetry} from '../../packages/contracts/src';
+import type {AppUninstallPorts} from '../../apps/desktop/src/uninstall/app-uninstall';
 import {validateMessage} from '../../packages/contracts/src/protocol-v0';
 import {MAIN_EXIT_FLUSH_MS} from '../../apps/desktop/src/diagnostics';
 import {initialLive} from '../../apps/desktop/src/live-state';
@@ -32,6 +33,8 @@ let windows: (EventEmitter & {webContents: typeof contents; hide: ReturnType<typ
 let showSaveDialog: ReturnType<typeof vi.fn<(window: unknown, options: unknown) => Promise<{canceled: boolean; filePath?: string}>>>;
 // ET-017 PR-4: the folder dialog and the shell calls of plugin setup; each case sets its answers.
 let showOpenDialog: ReturnType<typeof vi.fn<(window: unknown, options: unknown) => Promise<{canceled: boolean; filePaths: string[]}>>>;
+// ET-018 PR-4: dialog.showMessageBox, with or without a parent window.
+let showMessageBox: ReturnType<typeof vi.fn<(...args: unknown[]) => Promise<{response: number}>>>;
 let shell: {showItemInFolder: ReturnType<typeof vi.fn<(file: string) => void>>; openPath: ReturnType<typeof vi.fn<(folder: string) => Promise<string>>>};
 let channels: {port1: EventEmitter & {postMessage: ReturnType<typeof vi.fn>; close: ReturnType<typeof vi.fn<() => void>>; start: ReturnType<typeof vi.fn<() => void>>}; port2: {close: ReturnType<typeof vi.fn<() => void>>}}[];
 let configurations: Electron.BrowserWindowConstructorOptions[];
@@ -114,6 +117,7 @@ function installFixture() {
   resolveBroker = vi.fn(() => undefined);
   showSaveDialog = vi.fn(() => Promise.resolve({canceled: true, filePath: ''}));
   showOpenDialog = vi.fn(() => Promise.resolve({canceled: true, filePaths: []}));
+  showMessageBox = vi.fn(() => Promise.resolve({response: 0}));
   shell = {showItemInFolder: vi.fn(), openPath: vi.fn(() => Promise.resolve(''))};
   forkCalls = [];
   vi.doMock('electron', () => ({app, ipcMain: ipc, utilityProcess: {fork: (...args: unknown[]) => {
@@ -146,7 +150,8 @@ function installFixture() {
     },
     Menu: {buildFromTemplate: (template: unknown[]) => ({template})},
     nativeImage: {createFromBuffer: () => ({addRepresentation: vi.fn()})},
-    dialog: {showSaveDialog: (window: unknown, options: unknown) => showSaveDialog(window, options), showOpenDialog: (window: unknown, options: unknown) => showOpenDialog(window, options)},
+    dialog: {showSaveDialog: (window: unknown, options: unknown) => showSaveDialog(window, options), showOpenDialog: (window: unknown, options: unknown) => showOpenDialog(window, options),
+      showMessageBox: (...args: unknown[]) => showMessageBox(...args)},
     shell: {showItemInFolder: (file: string) => shell.showItemInFolder(file), openPath: (folder: string) => shell.openPath(folder)}}));
   vi.doMock('../../apps/desktop/src/entrypoints', () => ({processEntrypoint: () => 'package.json'}));
   log = Object.assign(vi.fn(), {flush: vi.fn(() => Promise.resolve(true)), settle: vi.fn<(timeoutMs: number) => Promise<void>>(() => Promise.resolve()), finalize: vi.fn<(timeoutMs: number) => Promise<void>>(() => Promise.resolve()), drainSync: vi.fn()}); diagnosticsCalls = [];
@@ -178,7 +183,8 @@ async function removeFixture() {
   for (const name of processEvents) for (const listener of processEmitter.listeners(name)) if (!originals.get(name)!.includes(listener)) processEmitter.removeListener(name, listener as (...args: unknown[]) => void);
   vi.clearAllTimers(); vi.restoreAllMocks(); vi.useRealTimers(); vi.unstubAllEnvs();
   for (const name of ['electron', '../../apps/desktop/src/entrypoints', '../../apps/desktop/src/diagnostics', '../../apps/desktop/src/broker-artifact',
-    '../../apps/desktop/src/settings-store', '../../apps/desktop/src/plugin-setup/plugin-setup', '../../apps/desktop/src/squirrel-events']) vi.doUnmock(name);
+    '../../apps/desktop/src/settings-store', '../../apps/desktop/src/plugin-setup/plugin-setup', '../../apps/desktop/src/squirrel-events',
+    '../../apps/desktop/src/uninstall/app-uninstall']) vi.doUnmock(name);
 }
 async function settle() {await Promise.resolve(); await Promise.resolve();}
 async function ready() {await loadMain(); await Promise.resolve(); child.emit('message', {type: 'ready'}); await settle();}
@@ -2005,7 +2011,7 @@ const PLUGIN_VIEW = {mode: 'test-root', bundled: {version: '0.2.0', sha256Prefix
 interface FakePluginSetup {
   mode: string; view: () => unknown; changed: () => void; start: ReturnType<typeof vi.fn>; abort: ReturnType<typeof vi.fn>; idle: ReturnType<typeof vi.fn>;
   retry: ReturnType<typeof vi.fn>; setExcluded: ReturnType<typeof vi.fn>; chooseFolder: ReturnType<typeof vi.fn>; bundledFile: ReturnType<typeof vi.fn>;
-  folderToOpen: ReturnType<typeof vi.fn>; current: unknown;
+  folderToOpen: ReturnType<typeof vi.fn>; current: unknown; suspend: ReturnType<typeof vi.fn>; resume: ReturnType<typeof vi.fn>; targetIdFor: ReturnType<typeof vi.fn>;
 }
 let pluginSetup: FakePluginSetup;
 let pluginOptions: {decision: unknown; ports: unknown} | undefined;
@@ -2021,7 +2027,8 @@ function mockPluginSetup(mode = 'test-root') {
         const fake: FakePluginSetup = pluginSetup = {mode, current: PLUGIN_VIEW, changed: options.changed, view: () => fake.current,
           start: vi.fn(), abort: vi.fn(), idle: vi.fn(() => undefined), retry: vi.fn(() => Promise.resolve(fake.current)),
           setExcluded: vi.fn(() => Promise.resolve(fake.current)), chooseFolder: vi.fn(() => Promise.resolve({outcome: 'chosen'})),
-          bundledFile: vi.fn(() => Promise.resolve(BUNDLED_FILE)), folderToOpen: vi.fn(() => Promise.resolve(PLUGINS_FOLDER))};
+          bundledFile: vi.fn(() => Promise.resolve(BUNDLED_FILE)), folderToOpen: vi.fn(() => Promise.resolve(PLUGINS_FOLDER)),
+          suspend: vi.fn(() => Promise.resolve()), resume: vi.fn(), targetIdFor: vi.fn(() => 'ets2:steam:0')};
         return fake;
       }
     }
@@ -2260,4 +2267,123 @@ it('saves the redacted bundle of this application state and its startup logs, an
     expect(log).toHaveBeenCalledWith('DIAGNOSTICS_EXPORT_SAVED', undefined, {bytes: expect.any(Number) as number});
     expect(JSON.stringify(log.mock.calls.filter(entry => String(entry[0]).startsWith('DIAGNOSTICS_EXPORT_')))).not.toContain(root);
   } finally {await rm(root, {recursive: true, force: true});}
+});
+
+// ET-018 PR-4 (U8): the in-app uninstall channel and its exit. The orchestrator is replaced here; its own order, the
+// preflight, the removal race and the wipe are tests/unit/app-uninstall.test.ts. Main must pass its answers through unchanged.
+interface FakeAppUninstall {
+  run: ReturnType<typeof vi.fn<() => Promise<AppUninstallResult>>>; prepared: unknown; finishAfterExit: ReturnType<typeof vi.fn<() => Promise<unknown>>>;
+  handOver: ReturnType<typeof vi.fn<() => Promise<boolean>>>;
+  ports: AppUninstallPorts;
+}
+let appUninstallFake: FakeAppUninstall;
+const PREPARED = {dataRoot: 'C:\\isolated\\LocalAppData\\ETS2Telemetry', installRoot: 'C:\\isolated\\LocalAppData\\ETS2TelemetryDesktop', notes: [], removed: 1, unrecognized: 0};
+function mockAppUninstall(result: AppUninstallResult) {
+  vi.doMock('../../apps/desktop/src/uninstall/app-uninstall', () => ({
+    AppUninstall: class {
+      constructor(ports: AppUninstallPorts) {
+        const fake: FakeAppUninstall = appUninstallFake = {ports, prepared: undefined, handOver: vi.fn(() => Promise.resolve(true)),
+          run: vi.fn(() => {if (result.outcome === 'started') fake.prepared = PREPARED; return Promise.resolve(result);}),
+          finishAfterExit: vi.fn(() => Promise.resolve({data: {removed: 7, kept: 0, failed: [], rootRemoved: true}, notes: [{game: 'ats', note: 'GAME_EXECUTABLE_MISSING'}], removed: 1, unrecognized: 0}))};
+        return fake;
+      }
+    }
+  }));
+}
+const uninstallCall = (event: unknown, ...request: unknown[]) => new Promise<unknown>(resolve => resolve(handlers.get('app:uninstall')!(event, ...request as [unknown])));
+const exitRequests = () => log.mock.calls.filter(call => call[0] === 'APP_EXIT_REQUESTED').map(call => call[2] as unknown);
+it('rejects the uninstall from untrusted senders, frames and the overlay, and any argument, before the orchestrator runs', async () => {
+  mockAppUninstall({outcome: 'cancelled'}); trayAvailable = true; await ready();
+  for (const event of [{sender: {}, senderFrame: contents.mainFrame}, {sender: contents, senderFrame: {}}, overlayTrusted()])
+    await expect(uninstallCall(event)).rejects.toThrow('Untrusted uninstall request');
+  for (const request of [['C:\\Users\\owner'], [undefined], [{force: true}]]) await expect(uninstallCall(trusted(), ...request)).rejects.toThrow('Invalid uninstall request');
+  expect(appUninstallFake.run).not.toHaveBeenCalled();
+});
+it('refuses the uninstall once the exit has begun', async () => {
+  mockAppUninstall({outcome: 'started'}); trayAvailable = true; await ready();
+  app.emit('before-quit', {preventDefault: vi.fn()});
+  await expect(uninstallCall(trusted())).rejects.toThrow('the application is exiting');
+  expect(appUninstallFake.run).not.toHaveBeenCalled();
+});
+it.each([
+  ['cancelled', {outcome: 'cancelled'}], ['not-installed', {outcome: 'not-installed'}], ['failed', {outcome: 'failed', code: 'BUSY'}],
+  ['blocked', {outcome: 'blocked', code: 'GAME_RUNNING', blocked: [{targetId: 'ets2:steam:0', reason: 'GAME_RUNNING'}, {targetId: 'ats:other', reason: 'CLIENT_RUNNING'}]}]
+] as const)('passes a %s answer through unchanged and starts no exit', async (_name, result) => {
+  mockAppUninstall(result as AppUninstallResult); trayAvailable = true; await ready();
+  await expect(uninstallCall(trusted())).resolves.toEqual(result);
+  await vi.advanceTimersByTimeAsync(20_000);
+  expect(exitRequests()).toEqual([]);
+  expect(child.postMessage).not.toHaveBeenCalledWith({type: 'stop'});
+  expect(app.exit).not.toHaveBeenCalled();
+});
+it('after started: the explicit exit with reason uninstall, the final log rows, the wipe, the result dialog, the handover, exit 0', async () => {
+  mockAppUninstall({outcome: 'started'}); trayAvailable = true; await ready();
+  await expect(uninstallCall(trusted())).resolves.toEqual({outcome: 'started'});
+  // The answer reaches the dashboard before the exit begins.
+  expect(exitRequests()).toEqual([]);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(exitRequests()).toEqual([{reason: 'uninstall'}]);
+  expect(child.postMessage).toHaveBeenCalledWith({type: 'stop'});
+  expect(appUninstallFake.finishAfterExit).not.toHaveBeenCalled();
+  child.emit('exit', 0); await settle(); await vi.advanceTimersByTimeAsync(0);
+  expect(log.finalize.mock.invocationCallOrder[0]).toBeLessThan(appUninstallFake.finishAfterExit.mock.invocationCallOrder[0]);
+  expect(showMessageBox).toHaveBeenCalledOnce();
+  const [options] = showMessageBox.mock.calls[0] as [{title: string; message: string; detail: string}];
+  expect(options.title).toBe('ETS2Telemetry was uninstalled');
+  expect(options.detail).toContain('American Truck Simulator: the game is no longer installed in a recorded folder');
+  expect(showMessageBox.mock.invocationCallOrder[0]).toBeLessThan(appUninstallFake.handOver.mock.invocationCallOrder[0]);
+  expect(app.exit).toHaveBeenCalledExactlyOnceWith(0);
+  // The 12 s failsafe was disarmed before the result dialog.
+  await vi.advanceTimersByTimeAsync(20_000);
+  expect(app.exit).toHaveBeenCalledOnce();
+});
+it('says so when Windows\' uninstall cannot start, then exits 0', async () => {
+  mockAppUninstall({outcome: 'started'}); trayAvailable = true; await ready();
+  await uninstallCall(trusted()); await vi.advanceTimersByTimeAsync(0);
+  appUninstallFake.handOver.mockResolvedValueOnce(false);
+  child.emit('exit', 0); await settle(); await vi.advanceTimersByTimeAsync(0);
+  expect(showMessageBox).toHaveBeenCalledTimes(2);
+  expect((showMessageBox.mock.calls[1] as [{title: string}])[0].title).toBe('Windows uninstall could not start');
+  expect(app.exit).toHaveBeenCalledExactlyOnceWith(0);
+});
+it('the 12 s failsafe ends an uninstall exit that hangs before the result dialog', async () => {
+  mockAppUninstall({outcome: 'started'}); trayAvailable = true; await ready();
+  await uninstallCall(trusted()); await vi.advanceTimersByTimeAsync(0);
+  appUninstallFake.finishAfterExit.mockImplementationOnce(() => new Promise(() => undefined));
+  child.emit('exit', 0); await settle();
+  await vi.advanceTimersByTimeAsync(11_000); expect(app.exit).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(1_500); expect(app.exit).toHaveBeenCalledExactlyOnceWith(1);
+  expect(showMessageBox).not.toHaveBeenCalled();
+});
+it('confirms in a dialog of the dashboard with Cancel as the default; the smoke seam answers both dialogs instead', async () => {
+  mockAppUninstall({outcome: 'cancelled'}); trayAvailable = true; await ready();
+  showMessageBox.mockResolvedValueOnce({response: 0}).mockResolvedValueOnce({response: 1});
+  await expect(appUninstallFake.ports.confirm()).resolves.toBe(false);
+  await expect(appUninstallFake.ports.confirm()).resolves.toBe(true);
+  const [parent, options] = showMessageBox.mock.calls[0] as [unknown, {defaultId: number; cancelId: number; buttons: string[]; detail: string}];
+  expect(parent).toBe(windows[0]);
+  expect(options).toMatchObject({defaultId: 0, cancelId: 0, buttons: ['Cancel', 'Uninstall']});
+  expect(options.detail).toContain('captures');
+});
+it('the dialog seam is an app event of isolated smokes only', async () => {
+  await isolatedProfile(async profile => {
+    vi.stubEnv('ETS2TELEMETRY_LIVE_SMOKE', '1'); vi.stubEnv('ETS2TELEMETRY_DIAGNOSTIC_DIR', profile); vi.stubEnv('ETS2TELEMETRY_PROFILE_DIR', profile);
+    mockAppUninstall({outcome: 'cancelled'}); trayAvailable = true; await ready();
+    app.emit('ets2telemetry:diagnostic-uninstall-dialogs', 'uninstall');
+    await expect(appUninstallFake.ports.confirm()).resolves.toBe(true);
+    app.emit('ets2telemetry:diagnostic-uninstall-dialogs', 'cancel');
+    await expect(appUninstallFake.ports.confirm()).resolves.toBe(false);
+    expect(showMessageBox).not.toHaveBeenCalled();
+  });
+});
+it('without the smoke gate the dialog seam does nothing', async () => {
+  mockAppUninstall({outcome: 'cancelled'}); trayAvailable = true; await ready();
+  expect(app.listenerCount('ets2telemetry:diagnostic-uninstall-dialogs')).toBe(0);
+});
+it('wires the orchestrator to plugin setup: suspend, resume (after a removal race) and the target ids', async () => {
+  mockPluginSetup(); mockAppUninstall({outcome: 'cancelled'}); trayAvailable = true; await ready();
+  await appUninstallFake.ports.setup.suspend();
+  appUninstallFake.ports.setup.resume();
+  expect(appUninstallFake.ports.setup.targetIdFor('ets2', 'C:\\Games\\ETS2')).toBe('ets2:steam:0');
+  expect(pluginSetup.suspend).toHaveBeenCalledOnce(); expect(pluginSetup.resume).toHaveBeenCalledOnce();
 });

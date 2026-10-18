@@ -12,6 +12,7 @@ import {recordingStatusText} from './recording-status-text';
 import {LiveDashboard} from './live-dashboard';
 import {OverlaySettingsCard} from './overlay-settings-card';
 import {PluginSetupCard} from './plugin-setup-card';
+import {UninstallCard} from './uninstall-card';
 import {connectionDiagnosis} from './connection-diagnosis';
 import {Journal, JournalBoundary} from './journal';
 import {DEFAULT_UNIT_PROFILES, displayProfile, isUnitProfile, UNIT_GAMES, UNIT_PROFILE_IDS} from './unit-profiles';
@@ -104,6 +105,7 @@ export default function App() {
       : units === 'failed' ? <p role="status" data-testid="settings-error">{STRINGS.unitsSaveFailed}</p> : null}
   </CardContent></Card>
   <OverlaySettingsCard settings={settings} edit={app?.overlayEdit} onSaved={saved} onRequest={() => setLastCard('overlay')} showSaveError={lastCard === 'overlay'} />
+  <UninstallCard />
   </TabsContent>
   <TabsContent value="journal"><JournalBoundary><Journal units={settings?.units} recording={health?.recording.state} /></JournalBoundary></TabsContent></Tabs></main>;
 }

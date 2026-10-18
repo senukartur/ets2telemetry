@@ -6,6 +6,9 @@ import type {EventType, GameMode, UnavailableReason} from '../../../packages/con
 import type {FieldNote, LiveFieldId, LiveSectionId, ViewReason} from '../../../packages/telemetry-core/src/live-view';
 import type {OverlayGroupId, OverlayPresetId, OverlayRequirement} from './overlay-sections';
 import type {ConnectionDiagnosisCode, ConnectionDiagnosisNote} from './connection-diagnosis';
+import type {UninstallBlockCode, UninstallFailureCode} from '../../../packages/contracts/src/uninstall';
+import type {FolderNote} from './uninstall/plugin-cleanup';
+import type {DataEntry} from './uninstall/data-wipe';
 
 /**
  * User-visible English text for the dashboard and tray. There is no i18n framework yet; keeping the
@@ -367,7 +370,7 @@ export const JOURNAL_ERROR_TEXT: Readonly<Record<JournalCallCode, string>> = Obj
 export const JOURNAL_EXPORT_STRINGS = Object.freeze({
   button: 'Export JSON',
   exporting: 'Exporting…',
-  note: 'Uninstalling ETS2Telemetry removes its local trip history. The JSON export is a copy for your own records; it cannot be imported back.',
+  note: 'Uninstalling ETS2Telemetry removes its local trip history and settings. The JSON export is a copy for your own records; it cannot be imported back.',
   saved: 'Saved the trip as JSON: {events} events, {intervals} completeness intervals and {samples} one-second samples.',
   cancelled: 'Export cancelled. Nothing was written.',
   refused: 'The export request was refused.'
@@ -596,4 +599,90 @@ export const DIAGNOSTICS_EXPORT_ERROR_TEXT: Readonly<Record<DiagnosticsExportRef
   BUNDLE_FAILED: 'The diagnostics could not be collected. Nothing was written.',
   DIALOG_FAILED: 'The Save dialog could not be opened. Nothing was written.',
   EXPORT_WRITE_FAILED: 'The file could not be written. A file that already had this name is unchanged.'
+});
+/**
+ * The in-app uninstall (ET-018 PR-4, plan U8 and U9). The warning states what the owner's uninstall rule of October 16,
+ * 2026 removes, what stays and when the game plugin goes. No text names a path; the data folder is described by its
+ * location only. uninstall-text.ts builds every message from these.
+ */
+export const UNINSTALL_STRINGS = Object.freeze({
+  title: 'Uninstall ETS2Telemetry',
+  warningTitle: 'Uninstalling deletes your local data',
+  warning: [
+    'Your local trip history, which is not synchronized anywhere, is deleted for good, with its backups.',
+    'Your settings, logs, captures and synthetic recordings are deleted as well.',
+    'Trip exports you saved elsewhere stay where they are.',
+    'The ETS2Telemetry game plugin is removed from your game folders while the games are closed.'
+  ] as readonly string[],
+  button: 'Uninstall ETS2Telemetry…',
+  pending: 'Checking your game folders…',
+  notInstalled: 'Uninstalling is available only in an installed copy of ETS2Telemetry. This copy is portable or a development build; delete its folder to remove it.',
+  cancelled: 'Uninstall cancelled. Nothing was changed.',
+  started: 'Removing ETS2Telemetry. The application closes now and Windows finishes the uninstall.',
+  blocked: 'ETS2Telemetry was not uninstalled, and nothing was changed: {reason}',
+  blockedFolder: '{target}: {reason}',
+  failed: 'ETS2Telemetry was not uninstalled: {reason}',
+  requestFailed: 'The uninstall request was refused.',
+  confirmTitle: 'Uninstall ETS2Telemetry',
+  confirmMessage: 'Uninstall ETS2Telemetry and delete its local data?',
+  confirmCancel: 'Cancel',
+  confirmUninstall: 'Uninstall',
+  finishedTitle: 'ETS2Telemetry was uninstalled',
+  finishedMessage: 'ETS2Telemetry removed its game plugin and its local data. Windows now removes the program files.',
+  finishedPartial: 'ETS2Telemetry removed its game plugin, but some local data could not be deleted. Windows now removes the program files.',
+  finishedRemoved: 'Plugin files removed: {count}.',
+  finishedUnrecognized: 'Files with the plugin\'s name that ETS2Telemetry did not install were left as they are: {count}.',
+  finishedKept: 'Files and folders in the data folder that ETS2Telemetry does not know were kept: {count}. Delete %LOCALAPPDATA%\\ETS2Telemetry by hand if you do not need them.',
+  finishedFailed: 'Could not be deleted: {entries}. Delete %LOCALAPPDATA%\\ETS2Telemetry by hand.',
+  spawnFailedTitle: 'Windows uninstall could not start',
+  spawnFailed: 'ETS2Telemetry removed its plugin and data, but the Windows uninstall could not be started. Uninstall ETS2Telemetry from Windows Settings, Apps.'
+});
+export const UNINSTALL_TARGET_TEXT = Object.freeze({
+  steam: '{game} (Steam folder {number})',
+  manual: '{game} (chosen folder)',
+  other: '{game} (a folder that is no longer listed)'
+});
+/** Why the in-app uninstall stopped at a game folder or the install registry; every code has a fixed text. */
+export const UNINSTALL_REASON_TEXT: Readonly<Record<UninstallBlockCode, string>> = Object.freeze({
+  GAME_RUNNING: 'the game is running. Close it, then try again.',
+  CLIENT_RUNNING: 'TruckersMP is running. Close it, then try again.',
+  TARGET_LOCKED: 'another program is using the plugin file. Close it, then try again.',
+  PERMISSION_DENIED: 'Windows denied access to the game\'s plugins folder.',
+  READ_ONLY_FILE: 'the plugin file is read-only. Clear its read-only attribute, then try again.',
+  UNRECOGNIZED_FILE: 'the game folder holds unexpected entries, so it is not changed.',
+  LINKED_FOLDER: 'the game\'s folders are linked elsewhere, so they are not changed.',
+  DISK_FULL: 'the disk is full.',
+  IO_ERROR: 'the game folder could not be read or written.',
+  VERIFY_FAILED: 'the plugin file could not be checked.',
+  RUNNING_CHECK_FAILED: 'running games could not be checked. Try again in a moment.',
+  REGISTRY_UNAVAILABLE: 'the plugin setup record could not be used.',
+  BUNDLE_UNAVAILABLE: 'the bundled plugin is missing or damaged.',
+  FOLDER_UNAVAILABLE: 'the game folder is not available right now (for example a disconnected drive). Connect it, then try again.',
+  BUDGET_EXPIRED: 'checking the game folders took too long. Try again.',
+  REGISTRY_INVALID: 'the plugin setup record is damaged, so the game folders are not known.',
+  REGISTRY_NEWER: 'the plugin setup record was written by a newer version of ETS2Telemetry.',
+  REGISTRY_UNREADABLE: 'the plugin setup record could not be read. Try again.'
+});
+/** Why the in-app uninstall failed before it changed anything. */
+export const UNINSTALL_FAILURE_TEXT: Readonly<Record<UninstallFailureCode, string>> = Object.freeze({
+  ROOT_MISMATCH: 'the install folder does not match this Windows user\'s local application data folder.',
+  LAYOUT_INVALID: 'the install folder is not laid out as expected.',
+  DATA_ROOT_LINKED: 'the data folder is a link to another location, so it is not deleted. Remove it by hand.',
+  TEST_ROOT_INVALID: 'this test installation is not marked correctly.',
+  BUSY: 'an uninstall is already in progress.',
+  DIALOG_FAILED: 'the confirmation could not be shown.',
+  INTENT_FAILED: 'the uninstall record could not be written to the data folder.',
+  ENGINE_FAILED: 'an unexpected error stopped it. Nothing more was removed; run the uninstall again.'
+});
+/** How a game folder that is no longer a game folder was handled (the engine's notes); shown in the result. */
+export const UNINSTALL_NOTE_TEXT: Readonly<Record<FolderNote, string>> = Object.freeze({
+  GAME_FOLDER_GONE: '{game}: the game folder no longer exists; nothing was left there.',
+  GAME_EXECUTABLE_MISSING: '{game}: the game is no longer installed in a recorded folder; the plugin was removed from it by its checksum.',
+  LAYOUT_NOT_PLAIN: '{game}: a recorded folder is no longer a plain game folder, so it was not checked. Look in its bin\\win_x64\\plugins folder for ets2telemetry-plugin.dll.',
+  PLUGINS_FOLDER_ABSENT: '{game}: a recorded folder has no plugins folder; nothing was left there.'
+});
+/** A data entry that could not be deleted, by its allowlisted name. */
+export const UNINSTALL_DATA_ENTRY_TEXT: Readonly<Record<DataEntry, string>> = Object.freeze({
+  data: 'trip history', backups: 'history backups', settings: 'settings', logs: 'logs', synthetic: 'synthetic recordings', plugins: 'plugin setup record',
+  captures: 'captures', transport: 'connection settings', uninstall: 'uninstall record'
 });

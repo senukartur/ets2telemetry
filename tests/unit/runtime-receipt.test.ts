@@ -102,7 +102,8 @@ function pluginReceipt(path: (string | number)[] = [], replacement?: Json): stri
 function scaffoldReceipt(path: (string | number)[] = [], replacement?: Json): string {
   return corrupt({passed: true, commit: 'candidate', mode: 'packaged', scenarioKind: 'scaffold',
     mainEvents: [{event: 'PLUGIN_SETUP_MODE', facts: {mode: 'disabled', reason: 'isolated-launch'}}],
-    pluginCard: {disabledNoteShown: true, controlsDisabled: true, diagnosisShown: true, exportAvailable: true}}, path, replacement);
+    pluginCard: {disabledNoteShown: true, controlsDisabled: true, diagnosisShown: true, exportAvailable: true},
+    uninstallCard: {warningShown: true, notInstalledShown: true}}, path, replacement);
 }
 function pluginCases() {
   const invalidPlugin = (name: string, path: (string | number)[], replacement?: Json) =>
@@ -130,7 +131,10 @@ function pluginCases() {
     invalidScaffold('a control left enabled', ['pluginCard', 'controlsDisabled'], false),
     invalidScaffold('diagnosis line not shown', ['pluginCard', 'diagnosisShown'], false),
     invalidScaffold('diagnostics export unavailable', ['pluginCard', 'exportAvailable']),
-    invalidScaffold('not in the disabled mode', ['mainEvents', 0, 'facts', 'mode'], 'test-root')
+    invalidScaffold('not in the disabled mode', ['mainEvents', 0, 'facts', 'mode'], 'test-root'),
+    invalidScaffold('uninstall card evidence missing', ['uninstallCard']),
+    invalidScaffold('uninstall warning not shown', ['uninstallCard', 'warningShown'], false),
+    invalidScaffold('not-installed answer not shown', ['uninstallCard', 'notInstalledShown'], 'true')
   ];
 }
 function lifecycleCases() {
@@ -576,7 +580,7 @@ function journalCases() {
 function installedReceipt(path: (string | number)[] = [], replacement?: Json): string {
   return corrupt({...JSON.parse(scaffoldReceipt()) as Record<string, Json>, mode: 'installed', runtime: {packaged: true},
     installed: {executableMatches: true, cwdOutsideInstall: true, minimalPath: true, developmentVariablesAbsent: true, packaged: true,
-      layout: 'ETS2TelemetryDesktop\\app-0.1.1'}}, path, replacement);
+      layout: 'ETS2TelemetryDesktop\\app-0.1.1'}, uninstallCard: {warningShown: true, notInstalledShown: null}}, path, replacement);
 }
 function installedCases() {
   const invalid = (name: string, path: (string | number)[], replacement?: Json) =>
@@ -587,6 +591,11 @@ function installedCases() {
     {name: 'installed receipt cannot prove a packaged run', body: installedReceipt(), scenario: 'scaffold', code: 0, available: true, reason: 'DRIVER_RESULT_IDENTITY_MISMATCH'},
     {name: 'installed scaffold receipt still needs the plugin card', body: installedReceipt(['pluginCard', 'controlsDisabled'], false), scenario: 'scaffold', mode: 'installed', code: 0,
       available: true, reason: 'SCAFFOLD_PLUGIN_CARD_INVALID'},
+    // ET-018 PR-4: an installed copy's smoke never presses the uninstall button, so it may not claim the not-installed answer.
+    {name: 'installed scaffold receipt cannot claim the not-installed answer', body: installedReceipt(['uninstallCard', 'notInstalledShown'], true), scenario: 'scaffold',
+      mode: 'installed', code: 0, available: true, reason: 'SCAFFOLD_PLUGIN_CARD_INVALID'},
+    {name: 'installed scaffold receipt still needs the uninstall warning', body: installedReceipt(['uninstallCard', 'warningShown'], false), scenario: 'scaffold',
+      mode: 'installed', code: 0, available: true, reason: 'SCAFFOLD_PLUGIN_CARD_INVALID'},
     invalid('facts missing', ['installed']),
     invalid('another executable ran', ['installed', 'executableMatches'], false),
     invalid('working directory inside the install', ['installed', 'cwdOutsideInstall'], false),

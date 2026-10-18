@@ -6,6 +6,7 @@ import type {AppState, DiagnosticsExportResult, OverlayEditState, OverlayLayout,
 import type {Available, LiveObservationV1, Uint64} from './protocol-v1';
 import type {JournalDatabase, JournalEventPage, JournalIntervalPage, JournalTripDetail, JournalTripPage, JournalTripsQuery} from './journal';
 import type {JournalExportResult} from './journal-export';
+import type {AppUninstallResult} from './uninstall';
 export type SourceSelection = 'game' | 'ets2' | 'ats' | 'synthetic' | 'replay';
 /** Statuses of the v1 source; service failure and restart belong to the update that carries the projection. */
 export type LiveV1Status = 'waiting' | 'connected' | 'paused' | 'stale' | 'incompatible' | 'disconnected' | 'unavailable';
@@ -116,6 +117,13 @@ export interface DesktopBridge {
    * or failure code; never a path. Nothing is uploaded. Refused once the application exits.
    */
   exportDiagnostics(): Promise<DiagnosticsExportResult>;
+  /**
+   * ET-018 PR-4 (U8): uninstalls ETS2Telemetry from the dashboard. Takes no argument. Main asks for confirmation in a native
+   * dialog, checks every game folder first and changes nothing when one blocks; otherwise it removes the plugin, exits,
+   * removes the local data and hands over to Windows' uninstall. Resolves with fixed codes and target ids, never a path.
+   * Refused once the application exits.
+   */
+  uninstallApplication(): Promise<AppUninstallResult>;
 }
 /**
  * The fixed refusal codes of a journal call (ET-016, J11). `SERVICE_UNAVAILABLE`: no ready telemetry service, or it is
@@ -183,3 +191,4 @@ export * from './app-state';
 export type {LiveObservationV1, LiveStateV1} from './protocol-v1';
 export * from './journal';
 export * from './journal-export';
+export * from './uninstall';

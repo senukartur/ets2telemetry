@@ -47,6 +47,25 @@ let journalTarget;
 let pluginFixture;
 let pluginBefore;
 const failure = error => ({name: error.name, message: error.message, stack: error.stack});
+/** The uninstall card of a portable or development copy: the warning, and the not-installed answer to its button. */
+async function verifyUninstallNotInstalled(page, press) {
+  const warning = await page.getByTestId('uninstall-warning').innerText();
+  // An installed copy (the installer lifecycle's installed smokes) would open the confirmation: its button is not pressed.
+  if (!press) {
+    const record = {warningShown: /captures/.test(warning) && /trip history/.test(warning) && /exports/i.test(warning), notInstalledShown: null};
+    assert.equal(record.warningShown, true, 'UNINSTALL_CARD_UNEXPECTED');
+    return record;
+  }
+  await page.getByTestId('uninstall-button').click();
+  const result = page.getByTestId('uninstall-result');
+  await result.waitFor({state: 'visible', timeout: 10000});
+  const text = await result.innerText();
+  const record = {warningShown: /captures/.test(warning) && /trip history/.test(warning) && /exports/i.test(warning),
+    notInstalledShown: text.includes('available only in an installed copy')};
+  assert.deepEqual(record, {warningShown: true, notInstalledShown: true}, 'UNINSTALL_CARD_UNEXPECTED');
+  return record;
+}
+
 // Driver timeline on its own wall and monotonic clocks, to align with app diagnostics and the Job CPU series.
 result.phases = [];
 const phase = name => result.phases.push({phase: name, utc: new Date().toISOString(), monotonicMs: Math.round(performance.now() * 10) / 10});
@@ -151,7 +170,7 @@ try {
   assert.deepEqual(result.actual, {require: 'undefined', process: 'undefined', keys: ['getStatus', 'selectSource', 'subscribeLive', 'getAppState', 'subscribeAppState', 'exitApplication', 'setUnitProfile', 'setOverlayLayout', 'setOverlaySections',
     'beginOverlayEdit', 'setOverlayEditScale', 'resetOverlayEditPlacement', 'finishOverlayEdit',
     'listJournalTrips', 'getJournalTrip', 'listJournalEvents', 'listJournalIntervals', 'listJournalSamples', 'exportJournalTrip',
-    'retryPluginSetup', 'choosePluginFolder', 'setPluginGameExcluded', 'showPluginFile', 'openPluginFolder', 'exportDiagnostics'],
+    'retryPluginSetup', 'choosePluginFolder', 'setPluginGameExcluded', 'showPluginFile', 'openPluginFolder', 'exportDiagnostics', 'uninstallApplication'],
     frozen: true, status: result.expected.status});
   if (config.scenario === 'scaffold') {
     // ET-016 PR-3: a journal read crosses the preload, main and the telemetry service to the new, empty history database
@@ -170,6 +189,10 @@ try {
       refused: 'Invalid journal request'});
     // ET-017 PR-5 review: plugin setup is disabled here; the card says so and disables every control that would change nothing.
     result.pluginCard = await verifyDisabledPluginCard(window);
+    // ET-018 PR-4: the uninstall card shows its warning. In a portable or development copy its button answers that
+    // uninstalling is available only in an installed copy: main answers before any dialog and changes nothing. An installed
+    // copy's button is never pressed here; the installer lifecycle's app-assisted scenarios do that through the dialog seam.
+    result.uninstallCard = await verifyUninstallNotInstalled(window, config.mode !== 'installed');
     await window.evaluate(() => globalThis.scrollTo(0, 0));
   }
   result.probesBeforeExit = (await readdir(config.temp)).filter(name => name.startsWith('ets2telemetry-probe-'));

@@ -42,7 +42,7 @@ export interface UninstallResult {
     readonly unrecognized: number;
     /** Folders that are no longer game folders, with the fixed note of how each was handled. */
     readonly notes: readonly {readonly game: PluginGame; readonly note: FolderNote}[];
-    readonly blocked: readonly {readonly game: PluginGame; readonly reason: CleanupBlockReason | 'RUNNING_CHECK_FAILED' | 'BUDGET_EXPIRED'}[];
+    readonly blocked: readonly {readonly game: PluginGame; readonly reason: CleanupBlockReason | 'RUNNING_CHECK_FAILED' | 'BUDGET_EXPIRED'; readonly id?: string}[];
   };
   readonly data: {
     readonly removed: number;
@@ -78,6 +78,15 @@ export interface UninstallPorts {
    * touched. The Squirrel uninstall hook uses it when a running instance did not exit (ET-018 U6).
    */
   readonly deferAll?: 'INSTANCE_RUNNING';
+  /**
+   * ET-018 PR-4, the in-app uninstall (U8): `preflight` runs the read-only preflight and classifies every folder without
+   * writing anything (no intent, no deletion, no registry write); `plugins` writes the intent and cleans the plugin
+   * folders, and leaves the data to the caller, which wipes it after the application's exit (wipeEverything). The
+   * default runs everything, as the Squirrel hook does.
+   */
+  readonly scope?: 'preflight' | 'plugins' | 'all';
+  /** Names a folder for the caller (a plugin target id); the result then carries it as `id`, never the folder's path. */
+  readonly describeFolder?: (folder: {readonly game: PluginGame; readonly root: string}) => string;
   /** Fixed codes and counts only. */
   readonly log?: (event: string, facts: Record<string, string | number | boolean | null>) => void;
 }
@@ -126,6 +135,26 @@ export async function runUninstall(ports: UninstallPorts): Promise<UninstallResu
   for (const hash of previous.state === 'present' ? previous.record.known : []) if (knownSet.size < MAX_KNOWN_HASHES) knownSet.add(hash);
   const known = [...knownSet].sort();
 
+  const scope = ports.scope ?? 'all';
+  const blockedEntry = (folder: PendingFolder, reason: CleanupBlockReason | 'RUNNING_CHECK_FAILED' | 'BUDGET_EXPIRED') =>
+    ({game: folder.game, reason, ...(ports.describeFolder ? {id: ports.describeFolder(folder)} : {})});
+  if (scope === 'preflight') {
+    // Read-only: every folder is classified as cleanFolder would, with nothing removed and nothing written.
+    let removed = 0, absent = 0, unrecognized = 0;
+    const notes: {game: PluginGame; note: FolderNote}[] = [];
+    const blocked: ReturnType<typeof blockedEntry>[] = [];
+    for (const folder of folders) {
+      if (!running) {blocked.push(blockedEntry(folder, 'RUNNING_CHECK_FAILED')); continue;}
+      const outcome = await cleanFolder(folder, {fs: gameFs, running, known, delay, dryRun: true});
+      if (outcome.status === 'blocked') {blocked.push(blockedEntry(folder, outcome.reason)); continue;}
+      if (outcome.status === 'removed') removed++; else if (outcome.status === 'absent') absent++; else unrecognized++;
+      if (outcome.note) notes.push({game: folder.game, note: outcome.note});
+    }
+    const code: UninstallCode | null = registryProblem ?? blocked[0]?.reason ?? null;
+    log('UNINSTALL_PREFLIGHT', {folders: folders.length, blocked: blocked.length, code});
+    return {outcome: code ? 'deferred' : 'complete', code, plugins: {removed, absent, unrecognized, notes, blocked}, data: EMPTY_DATA, roaming: 'not-run'};
+  }
+
   // Nothing at all to do: no data root and no folder.
   const dataRootPresent = await ports.fs.lstat(dataRoot, {bigint: true}).then(() => true, () => false);
   if (!dataRootPresent && !folders.length) {
@@ -159,19 +188,17 @@ export async function runUninstall(ports: UninstallPorts): Promise<UninstallResu
     if (outcome.note) notes.push({game: folder.game, note: outcome.note});
     if (!registryProblem) await forgetFolder(registry, folder);
   }
-  const plugins = {removed, absent, unrecognized, notes, blocked: blocked.map(entry => ({game: entry.folder.game, reason: entry.reason}))};
+  const plugins = {removed, absent, unrecognized, notes, blocked: blocked.map(entry => blockedEntry(entry.folder, entry.reason))};
   const pluginsClean = !blocked.length && !registryProblem;
+  if (scope === 'plugins') {
+    // The caller wipes the data after the application's exit; the intent stays until that wipe removes it last.
+    const code: UninstallCode | null = pluginsClean ? null : registryProblem ?? blocked[0]?.reason ?? null;
+    log('UNINSTALL_PLUGINS', {outcome: pluginsClean ? 'complete' : 'deferred', code, removed, blocked: blocked.length});
+    return {outcome: pluginsClean ? 'complete' : 'deferred', code, plugins, data: EMPTY_DATA, roaming: 'not-run'};
+  }
 
   // 4 and 5. The data: everything but the registry and the intent first.
-  const first = await wipeDataRoot(ports.fs, dataRoot, {keep: KEPT_UNTIL_CLEAN, expired});
-  let data = first;
-  if (pluginsClean && !first.failed.length && !expired()) {
-    // The registry, then the intent, then the empty root: an interruption before the last step still has the intent.
-    const registryWipe = await wipeDataRoot(ports.fs, dataRoot, {keep: DATA_ALLOWLIST.filter(entry => entry !== 'plugins'), expired});
-    const intentWipe = registryWipe.failed.length ? undefined : await wipeDataRoot(ports.fs, dataRoot, {keep: [], removeRoot: true, expired});
-    data = {removed: first.removed + registryWipe.removed + (intentWipe?.removed ?? 0), kept: first.kept,
-      failed: [...first.failed, ...registryWipe.failed, ...(intentWipe?.failed ?? [])], rootRemoved: intentWipe?.rootRemoved ?? false};
-  }
+  const data = await wipeEverything(ports.fs, dataRoot, expired, pluginsClean);
   const budgetSpent = expired() || data.failed.some(entry => entry.code === 'BUDGET_EXPIRED');
   const complete = pluginsClean && !data.failed.length && !budgetSpent;
   if (!complete) {
@@ -183,6 +210,20 @@ export async function runUninstall(ports: UninstallPorts): Promise<UninstallResu
   const result: UninstallResult = {outcome: complete ? 'complete' : 'deferred', code, plugins, data, roaming: complete ? await roaming(ports, roots.mode) : 'not-run'};
   log('UNINSTALL_RESULT', {outcome: result.outcome, code: result.code, removed, blocked: blocked.length, dataFailed: data.failed.length, kept: data.kept});
   return result;
+}
+
+/**
+ * The data wipe of steps 4 and 5: every allowlisted entry except `plugins` and `uninstall`; then, only when the plugin
+ * folders are clean (`pluginsClean`) and nothing failed or expired, `plugins`, then `uninstall`, then the empty data
+ * root. An interruption before the last step still leaves the intent. The in-app uninstall calls it after the exit.
+ */
+export async function wipeEverything(fs: UninstallFileSystem, dataRoot: string, expired: () => boolean, pluginsClean: boolean): Promise<UninstallResult['data']> {
+  const first = await wipeDataRoot(fs, dataRoot, {keep: KEPT_UNTIL_CLEAN, expired});
+  if (!pluginsClean || first.failed.length || expired()) return first;
+  const registryWipe = await wipeDataRoot(fs, dataRoot, {keep: DATA_ALLOWLIST.filter(entry => entry !== 'plugins'), expired});
+  const intentWipe = registryWipe.failed.length ? undefined : await wipeDataRoot(fs, dataRoot, {keep: [], removeRoot: true, expired});
+  return {removed: first.removed + registryWipe.removed + (intentWipe?.removed ?? 0), kept: first.kept,
+    failed: [...first.failed, ...registryWipe.failed, ...(intentWipe?.failed ?? [])], rootRemoved: intentWipe?.rootRemoved ?? false};
 }
 
 /**

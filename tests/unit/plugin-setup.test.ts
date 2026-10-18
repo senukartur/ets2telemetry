@@ -749,3 +749,48 @@ describe('an unsaved install record', () => {
     setup.abort();
   });
 });
+
+// ET-018 PR-4 (U8 step 5): the in-app uninstall pauses setup while it removes the plugin, and lifts the pause after a
+// removal that raced, so setup installs the plugin again.
+describe('suspend and resume', () => {
+  it('suspend waits for the run in flight, then nothing runs or writes until resume, which runs with a fresh registry', async () => {
+    const gate = deferred<void>();
+    let calls = 0;
+    lister.mockImplementation(async () => {if (calls++ === 0) await gate.promise; return {ok: true, running: {...running}};});
+    const setup = create();
+    setup.start();
+    await vi.advanceTimersByTimeAsync(LAUNCH_DELAY_MS);
+    await until(() => calls === 1);
+    let suspended = false;
+    const suspending = setup.suspend().then(() => {suspended = true;});
+    await tick();
+    expect(suspended).toBe(false);
+    gate.resolve();
+    await suspending;
+    expect(setup.idle()).toBeUndefined();
+    // The aborted run stopped after its current folder; from now on nothing runs and every request is refused.
+    const callsWhenSuspended = calls;
+    await expect(setup.retry()).resolves.toBeDefined();
+    expect(setup.idle()).toBeUndefined();
+    await expect(setup.setExcluded('ats', true)).rejects.toThrow(PluginSetupError);
+    await expect(setup.chooseFolder('ets2', ets2Root)).rejects.toThrow(PluginSetupError);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(calls).toBe(callsWhenSuspended);
+    // An uninstall changed the registry on disk meanwhile: resume reads it again and runs.
+    await fsp.rm(path.join(registryDirectory(), 'setup.json'), {force: true});
+    setup.resume();
+    await settled(setup);
+    expect(calls).toBeGreaterThan(callsWhenSuspended);
+    expect(await fsp.readFile(dll(ets2Root))).toEqual(BUNDLE);
+    setup.abort();
+  });
+
+  it('names a listed game folder by its target id, and nothing else', async () => {
+    const setup = create();
+    await launch(setup);
+    expect(setup.targetIdFor('ets2', ets2Root)).toBe('ets2:steam:0');
+    expect(setup.targetIdFor('ats', atsRoot.toUpperCase())).toBe('ats:steam:0');
+    expect(setup.targetIdFor('ets2', atsRoot)).toBeUndefined();
+    setup.abort();
+  });
+});

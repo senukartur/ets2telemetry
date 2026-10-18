@@ -328,7 +328,8 @@ export async function runJournalSeeded({dashboard, record}) {
 // ET-016 PR-5: the trip export journey (J15-J18). The Save dialog is replaced in main through Playwright's main-process
 // evaluate (TESTING.md §2); the product has no test seam. The replacement answers with a fixed target inside this run's
 // output folder, records only the default file name and the filters it was offered, and is set anew for each case.
-const EXPORT_NOTE = 'Uninstalling ETS2Telemetry removes its local trip history. The JSON export is a copy for your own records; it cannot be imported back.';
+// ET-018 PR-4 extended the J18 note to settings.
+const EXPORT_NOTE = 'Uninstalling ETS2Telemetry removes its local trip history and settings. The JSON export is a copy for your own records; it cannot be imported back.';
 const ETS2_A = '10000000-0000-4000-8000-0000000000a1';
 const EUR = {status: 'sdk-documented', code: 'EUR', source: 'scs-sdk-1.15/include/eurotrucks2/scssdk_telemetry_eut2.h#game-specific-units'};
 /** The delivered anchor's export, written by hand from tests/shared/journal-seed.ts: its row, bounds, timeline, samples and money. */
