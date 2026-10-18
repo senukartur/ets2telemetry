@@ -39,6 +39,14 @@ type Barrier = {kind: 'before' | 'after'; eventSeq?: string; commit?: number} | 
 interface ChildConfig {barrier: Barrier; mode?: 'worker' | 'in-process'; maxConnections?: number; commitAfterFirstEnd?: boolean; sampleFlushMs?: number; stopAfterDisconnect?: boolean; attach?: boolean}
 /** The children's LOCALAPPDATA: a directory of the test's workspace, never the user's. */
 const localAppData = () => path.join(ws.directory, 'localappdata');
+/**
+ * ET-019: game sources record no history yet (R3), and no process of the case created a history database under the
+ * children's LOCALAPPDATA; every case calls it before it starts processes and after they ended.
+ */
+function expectNoGameHistory() {
+  expect(GAME_HISTORY_RECORDING).toBe(false);
+  expect(existsSync(path.join(localAppData(), 'ETS2Telemetry', 'data', 'telemetry.sqlite'))).toBe(false);
+}
 /** One service process. `until` resolves at the first stdout line that matches; stderr must stay empty. */
 function service(endpoint: string, config: ChildConfig, name: string) {
   const file = path.join(ws.directory, `${name}.json`);
@@ -87,8 +95,7 @@ function expectAcksAfterCommits(child: Child) {
  * process holds the database.
  */
 async function crash(input: Json, first: ChildConfig, options: {serve?: ReactiveServeOptions; between?: () => Promise<void>; attach?: boolean} = {}) {
-  // ET-019: game sources record no history yet (R3); the recorder under test writes only the synthetic database.
-  expect(GAME_HISTORY_RECORDING).toBe(false);
+  expectNoGameHistory();
   const server = await serveV1Reactive(input, {scale: 0, awaitScriptedAcks: true, ...options.serve}), children: Child[] = [];
   try {
     const one = service(server.endpoint, {maxConnections: 1, attach: options.attach, ...first}, 'first'); children.push(one);
@@ -100,7 +107,7 @@ async function crash(input: Json, first: ChildConfig, options: {serve?: Reactive
     await two.terminate();
     const report = await server.done;
     for (const child of children) expectAcksAfterCommits(child);
-    expect(existsSync(path.join(localAppData(), 'ETS2Telemetry', 'data', 'telemetry.sqlite'))).toBe(false);
+    expectNoGameHistory();
     return {report, one, two};
   } finally {
     // No child outlives its test, whatever failed.
@@ -131,7 +138,12 @@ function expectInvariants(session: string, children: Child[], context = '') {
 interface KillScenario {base: string; steps?: Json[]; transport: Json[]; coverage: number; commits: number; gapFree: boolean; attach: boolean}
 const withheld = (connectMs: number, endMs: number, reconnectMs: number, lastMs: number): Json[] => [{atMs: connectMs, action: 'connect', client: {durable: true, ack: 'withhold'}},
   {atMs: endMs, action: 'disconnect'}, {atMs: reconnectMs, action: 'connect', client: {durable: true}}, {atMs: lastMs, action: 'disconnect'}];
-/** A second job configured while the simulation runs (since 500 ms), delivered and cleared, then a frame (two-jobs). */
+/**
+ * A second job configured while the simulation runs (since 500 ms), delivered and cleared, then a frame (two-jobs). The
+ * frame after the clear is deliberate: a checkpoint carries the state of the last frame (simulator OD-5 S7), so without
+ * it the reconnection's checkpoint would still show job 10 and J9 would open a late-attach trip for that finished job
+ * (finding F1 in docs/validation/et-019.md, tracked by the fix on branch fix/late-attach-stale-checkpoint).
+ */
 const SECOND_JOB: Json[] = [
   {atMs: 700, action: 'configuration', id: 'job', attributes: [{name: 'cargo.id', sdkType: 'string', value: 'synthetic_cargo_2'},
     {name: 'source.city.id', sdkType: 'string', value: 'synthetic_city_b'}, {name: 'destination.city.id', sdkType: 'string', value: 'synthetic_city_c'},
@@ -316,6 +328,7 @@ describe('S3 killed recording process (REG-006)', () => {
     const input = readFixtureFile(path.resolve('tests/fixtures/recording/one-second-samples.json')) as Json, replay = replayV1(input);
     const session = scenarioSource(replay.scenario).pluginSessionId, seed = (input as {seed: string}).seed;
     const expected = (JSON.parse(readFileSync(path.resolve('tests/fixtures/recording/one-second-samples.rows.expected.json'), 'utf8')) as {samples: {monotonicNs: string}[]}).samples;
+    expectNoGameHistory();
     const server = await serveV1Reactive(input, {scale: 0, awaitScriptedAcks: true}), children: Child[] = [];
     try {
       const one = service(server.endpoint, {barrier: {kind: 'before', eventSeq: '6'}, maxConnections: 1, sampleFlushMs: 1}, 'first'); children.push(one);
@@ -330,6 +343,7 @@ describe('S3 killed recording process (REG-006)', () => {
       await Promise.all(children.map(c => c.terminate().catch(() => undefined)));
       await server.stop();
     }
+    expectNoGameHistory();
     expectInvariants(session, children);
     const shaped = await storedSamples(ws, seed, session) as {monotonicNs: string}[];
     const second = (row: {monotonicNs: string}) => BigInt(row.monotonicNs) / 1_000_000_000n;
