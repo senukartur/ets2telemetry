@@ -6,9 +6,16 @@ import * as asar from '@electron/asar';
 import {sha256, sourceHashes} from './source-inputs.mjs';
 import {verifyPackage} from './package-integrity.mjs';
 import {verifyPluginBundleAgainstTree} from './plugin-bundle.mjs';
+import {inspectInstaller, MAKE_DIRECTORY, PACKAGE_DIRECTORY} from './release-identity.mjs';
 
 // Read bytes and resolve paths only. Never import application entries or native bindings.
-const directory = path.resolve(process.argv[2] || 'out/ETS2Telemetry Desktop-win32-x64');
+// `--installer` (ET-018 PR-6) also checks the Squirrel make output: the full NuGet package must carry exactly the
+// portable package's files with the same bytes, apart from Squirrel's known additions (scripts/release-identity.mjs).
+const args = process.argv.slice(2);
+const installerCheck = args.includes('--installer');
+const positional = args.filter(arg => arg !== '--installer');
+assert.ok(positional.length <= 1 && !positional.some(arg => arg.startsWith('--')), 'Usage: inspect-package.mjs [package directory] [--installer]');
+const directory = path.resolve(positional[0] || PACKAGE_DIRECTORY);
 const archive = path.join(directory, 'resources/app.asar');
 const integrity = verifyPackage(directory);
 const paths = asar.listPackage(archive).map(filename => filename.replaceAll('\\', '/'));
@@ -63,6 +70,11 @@ report.nativeClient = {executableSha256: clientMetadata.executableSha256, source
 const pluginManifest = verifyPluginBundleAgainstTree(path.join(directory, 'resources/telemetry-plugin'));
 report.nativePlugin = {sha256: pluginManifest.sha256, size: pluginManifest.size, appVersion: pluginManifest.appVersion,
   pluginSourcesVerified: Object.keys(pluginManifest.pluginSources).length, known: pluginManifest.known.length};
+if (installerCheck) {
+  const version = JSON.parse(readFileSync('package.json', 'utf8')).version;
+  report.installer = inspectInstaller({packageDirectory: directory, makeDirectory: path.resolve(MAKE_DIRECTORY), version});
+}
 mkdirSync('.local/diagnostics', {recursive: true});
 writeFileSync('.local/diagnostics/package-inspection.json', JSON.stringify(report, null, 2) + '\n');
-console.log(JSON.stringify({applicationLaunched: false, ...integrity, compiledFilesVerified: files.length, asarSha256: report.asarSha256, executableSha256: report.executableSha256, pluginSha256: report.nativePlugin.sha256}, null, 2));
+console.log(JSON.stringify({applicationLaunched: false, ...integrity, compiledFilesVerified: files.length, asarSha256: report.asarSha256, executableSha256: report.executableSha256, pluginSha256: report.nativePlugin.sha256,
+  ...(report.installer ? {installer: {setup: report.installer.setup, nupkg: report.installer.nupkg, projectedFiles: report.installer.projectedFiles, additions: report.installer.additions}} : {})}, null, 2));

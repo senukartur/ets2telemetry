@@ -1,0 +1,66 @@
+export interface AuthenticodeResult {status: string; signer: string | null; thumbprint: string | null; timestamped: boolean}
+export interface PeImage {path: string; size: number; sha256: string; machine: string}
+export interface ForeignAddon {path: string; size: number; sha256: string; format: 'elf' | 'mach-o'}
+export interface InstallerFacts {
+  setup: string;
+  nupkg: string;
+  releases: string;
+  projectedFiles: number;
+  excludedPackageFiles: string[];
+  additions: string[];
+}
+export interface ReleaseIdentity {
+  format: 'ets2telemetry.release-identity';
+  version: 1;
+  createdUtc: string;
+  source: {commit: string | null; sourceCommit: string | null; treeClean: boolean | null};
+  versions: {app: string; nuget: string; electron: string; plugin: string};
+  artifacts: Record<'setup' | 'nupkg' | 'releases', {name: string; size: number; sha256: string}>;
+  package: {sha256: string; files: number; projectedFiles: number; excludedFromNupkg: string[]; nupkgAdditions: string[]};
+  plugin: {file: string; sha256: string; size: number; appVersion: string; matchesManifest: true; known: number};
+  broker: {file: string; sha256: string; size: number; matchesBuildEvidence: true};
+  squirrel: {
+    updateExe: {path: string; sha256: string; matchesVendor: true};
+    executionStubs: {path: string; sha256: string}[];
+    vendor: Record<'Squirrel.exe' | 'Setup.exe' | 'StubExecutable.exe', string>;
+  };
+  signing: {decision: string; summary: Record<string, number>};
+  peImages: (PeImage & {location: 'package' | 'nupkg' | 'installer'; authenticode: AuthenticodeResult})[];
+  foreignNodeAddons: ForeignAddon[];
+}
+
+export const IDENTITY_FORMAT: 'ets2telemetry.release-identity';
+export const IDENTITY_FILE: string;
+export const PACKAGE_DIRECTORY: string;
+export const MAKE_DIRECTORY: string;
+export const VENDOR_DIRECTORY: string;
+export const NUGET_ID: string;
+export const EXECUTABLE: string;
+export const RELEASES: string;
+export const AUTHENTICODE_STATUSES: string[];
+export const AUTHENTICODE_SCRIPT: string;
+export function setupExeName(version: string): string;
+export function nugetVersion(version: string): string;
+export function nupkgName(version: string): string;
+export function hashFile(filename: string): {size: number; sha256: string};
+export function listFiles(root: string): string[];
+export function peMachine(read: (position: number, length: number) => Buffer): string | null;
+export function foreignFormat(read: (position: number, length: number) => Buffer): 'elf' | 'mach-o' | null;
+export function listNativeFiles(root: string): {pe: PeImage[]; foreign: ForeignAddon[]};
+export function readZip(bytes: Buffer): {names: string[]; extract(name: string): Buffer};
+export function projectPackageFile(relative: string, executable?: string): string | null;
+export function knownAddition(name: string, stubs: ReadonlySet<string>): boolean;
+export function parseReleases(text: string): {sha1: string; name: string; size: number};
+export function inspectInstaller(options: {packageDirectory: string; makeDirectory: string; version: string; executable?: string}): InstallerFacts;
+export function parseAuthenticodeOutput(stdout: string, count: number): AuthenticodeResult[];
+export function windowsPowerShell(env?: Readonly<Record<string, string | undefined>>): {executable: string; env: Record<string, string | undefined>};
+export function readAuthenticode(files: string[], env?: Readonly<Record<string, string | undefined>>): AuthenticodeResult[];
+export function releaseIdentity(options: {
+  checkout?: string;
+  packageDirectory?: string;
+  makeDirectory?: string;
+  vendorDirectory?: string;
+  signatures?: (files: string[]) => AuthenticodeResult[];
+  source?: {commit: string | null; sourceCommit: string | null; treeClean: boolean | null};
+  now?: () => Date;
+}): ReleaseIdentity;
