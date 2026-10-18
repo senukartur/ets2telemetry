@@ -5,9 +5,9 @@ import path from 'node:path';
 const LIMIT = 256 * 1024;
 const MAX_RECORDS = 2000;
 /**
- * The shortest wait of the telemetry service's final log write for the asynchronous append in flight, and its whole wait
- * on exit paths without a `stop` request. After an orderly stop the service waits longer when the stop left time before
- * main's kill deadline (telemetry-service.ts, exitWaitMs). Whatever is still queued afterwards is written synchronously.
+ * How long the telemetry service's final log write waits for the asynchronous append in flight on exit paths without a
+ * `stop` request (a failed probe). After `stop` the wait is the time left before main's kill deadline less a 300 ms
+ * reserve (service-supervisor.ts, stopTimeLeftMs). Whatever is still queued afterwards is written synchronously.
  */
 export const SERVICE_EXIT_FLUSH_MS = 150;
 /**
@@ -143,7 +143,8 @@ export function createDiagnostics(directory: string, detailed = false): Diagnost
   }
   function settleWrites(timeoutMs: number): Promise<void> {
     return new Promise<void>(resolve => {
-      if (!writing) { drainSync(); resolve(); return; }
+      // No append in flight, or no time left to wait for it: write the queue now.
+      if (!writing || timeoutMs <= 0) { drainSync(); resolve(); return; }
       const done = () => {
         clearTimeout(timer);
         const index = idle.indexOf(done);

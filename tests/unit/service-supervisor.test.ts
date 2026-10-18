@@ -1,7 +1,13 @@
 import {afterEach, beforeEach, expect, it, vi} from 'vitest';
-import {ServiceSupervisor} from '../../apps/desktop/src/service-supervisor';
+import {SERVICE_EXIT_RESERVE_MS, SERVICE_KILL_DEADLINE_MS, ServiceSupervisor, stopTimeLeftMs} from '../../apps/desktop/src/service-supervisor';
 
 beforeEach(() => vi.useFakeTimers());
+// Review round 1 of the final log write (October 18, 2026): the stopping service's wait for an append in flight ends
+// SERVICE_EXIT_RESERVE_MS before the kill deadline and is 0, with no floor, once a stop overran that point.
+it('gives a stopping service the time left before the kill deadline, less the exit reserve, and 0 after it', () => {
+  expect([SERVICE_KILL_DEADLINE_MS, SERVICE_EXIT_RESERVE_MS]).toEqual([3000, 300]);
+  expect([0, 20, 2500, 2503, 2700, 2750, 2900, 5000].map(stopTimeLeftMs)).toEqual([2700, 2680, 200, 197, 0, 0, 0, 0]);
+});
 afterEach(() => vi.useRealTimers());
 function fixture() {
   const log = vi.fn();

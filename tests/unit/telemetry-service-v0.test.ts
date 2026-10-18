@@ -3,7 +3,7 @@ import {EventEmitter} from 'node:events';
 import net from 'node:net';
 import {randomUUID} from 'node:crypto';
 import {afterEach, beforeAll, beforeEach, describe, expect, it, vi} from 'vitest';
-import {SERVICE_EXIT_FLUSH_MS, SERVICE_REPORT_SETTLE_MS} from '../../apps/desktop/src/diagnostics';
+import {SERVICE_REPORT_SETTLE_MS} from '../../apps/desktop/src/diagnostics';
 import {SERVICE_KILL_DEADLINE_MS} from '../../apps/desktop/src/service-supervisor';
 import {TelemetryIngestion, TEST_PIPE_PATTERN, initialLive, sourceSelection} from '../../apps/desktop/src/telemetry-ingestion';
 import {LiveSubscriptions, type LivePort} from '../../apps/desktop/src/live-subscriptions';
@@ -628,7 +628,7 @@ it('exits after the final log write that follows the stopped report, with the ti
     expect(f.exit).toHaveBeenCalledExactlyOnceWith(0);
   } finally {f.restore();}
 });
-it('gives the final log write only the time left after a stop that used its whole budget, at least SERVICE_EXIT_FLUSH_MS', async () => {
+it('gives the final log write only the time left after a stop that used its whole budget', async () => {
   const hang = () => new Promise<void>(() => undefined);
   const f = await stoppedService(hang, hang);
   try {
@@ -638,7 +638,6 @@ it('gives the final log write only the time left after a stop that used its whol
     // The phases ended at 1,001, 1,502 and 2,503 ms (fake verdict turns of 1 ms): 3,000 - 300 - 2,503 = 197 ms remain.
     const wait = f.log.finalize.mock.calls[0][0];
     expect(wait).toBe(SERVICE_KILL_DEADLINE_MS - 300 - 2503);
-    expect(wait).toBeGreaterThanOrEqual(SERVICE_EXIT_FLUSH_MS);
   } finally {f.restore();}
 });
 // Review round 1 (October 18, 2026): main answers a failure report after readiness by killing the service, so the

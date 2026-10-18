@@ -6,7 +6,7 @@ import { processEntrypoint } from './entrypoints';
 import { ServiceProbe } from './service-probe';
 import {existsSync} from 'node:fs';
 import {createDiagnostics, SERVICE_EXIT_FLUSH_MS, SERVICE_REPORT_SETTLE_MS} from './diagnostics';
-import {SERVICE_KILL_DEADLINE_MS} from './service-supervisor';
+import {stopTimeLeftMs} from './service-supervisor';
 import {serviceLogLocation} from './log-location';
 import {TelemetryIngestion, initialLive, sourceSelection} from './telemetry-ingestion';
 import {LiveSubscriptions} from './live-subscriptions';
@@ -159,16 +159,14 @@ const probe = new ServiceProbe({
 let stopping = false, storageStopped = false, exiting = false;
 // When this service received `stop`; main's kill deadline started a little earlier, when main posted it.
 let stopReceivedAt: number | undefined;
-/** Kept from main's kill deadline for the `stop` message's delivery, the synchronous log write and the process exit. */
-const EXIT_RESERVE_MS = 300;
 /**
- * How long the final log write lets an append in flight finish: the time an orderly stop left before main's kill
- * deadline, less EXIT_RESERVE_MS, and at least SERVICE_EXIT_FLUSH_MS. A stop that used its whole 2,500 ms budget uses
- * 2,500 + 150 + 300 = 2,950 ms of the 3,000.
+ * How long the final log write lets an append in flight finish. After `stop` it is the time left until 300 ms before
+ * main's kill deadline (stopTimeLeftMs), so the wait ends at most 2,700 ms after `stop` arrived. A stop that overran that
+ * point waits 0 ms: the queue is written at once, and a batch still in flight may land after it or be lost. Without a
+ * `stop` (a failed probe's exit) the wait is SERVICE_EXIT_FLUSH_MS.
  */
 function exitWaitMs(): number {
-  if (stopReceivedAt === undefined) return SERVICE_EXIT_FLUSH_MS;
-  return Math.max(SERVICE_EXIT_FLUSH_MS, Math.round(SERVICE_KILL_DEADLINE_MS - EXIT_RESERVE_MS - (performance.now() - stopReceivedAt)));
+  return stopReceivedAt === undefined ? SERVICE_EXIT_FLUSH_MS : stopTimeLeftMs(performance.now() - stopReceivedAt);
 }
 /**
  * Exits once the final rows (the last SHUTDOWN_STEP and SERVICE_REPORT) are on disk. No asynchronous append starts after

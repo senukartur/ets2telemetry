@@ -1,6 +1,16 @@
 import {RecoveryBudget} from './recovery-budget';
 /** Main kills a service that has not exited this long after main posted `stop`; the service plans its exit within it. */
 export const SERVICE_KILL_DEADLINE_MS = 3000;
+/** Kept from the kill deadline for the `stop` message's delivery, the service's synchronous log write and its exit. */
+export const SERVICE_EXIT_RESERVE_MS = 300;
+/**
+ * How long a stopping service may still let a log append in flight finish before its final synchronous write: the time
+ * left until SERVICE_EXIT_RESERVE_MS before the kill deadline, measured from when the service received `stop`. The wait
+ * therefore ends at most 2,700 ms after `stop` arrived; once that has passed it is 0 and the queue is written at once.
+ */
+export function stopTimeLeftMs(elapsedSinceStopMs: number): number {
+  return Math.max(0, Math.round(SERVICE_KILL_DEADLINE_MS - SERVICE_EXIT_RESERVE_MS - elapsedSinceStopMs));
+}
 export interface SupervisedService {
   postMessage(message: {type: 'stop'}): void;
   kill(): boolean;

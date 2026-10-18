@@ -234,6 +234,39 @@ it('settles before a failure report: the queue is on disk, then logging continue
   expect(await log.flush(5000)).toBe(true);
   expect(events(dir)).toEqual(['FIRST', 'SERVICE_REPORT', 'AFTER']);
 });
+// Review round 1: a stop that overran its budget leaves no time to wait, so the queue is written within the call.
+it('writes the queue at once when no time is left, even while an append is in flight', async () => {
+  const dir = directory(), log = createDiagnostics(dir);
+  const release = held();
+  log('IN_FLIGHT'); log('SHUTDOWN_STEP'); log('SERVICE_REPORT');
+  const finished = log.finalize(0);
+  // Already on disk when finalize returns, before any timer or I/O callback ran.
+  expect(events(dir)).toEqual(['SHUTDOWN_STEP', 'SERVICE_REPORT']);
+  expect(control.syncWrites).toHaveLength(1);
+  await finished;
+  release(); await until(() => events(dir).length === 3);
+  expect(events(dir).sort()).toEqual(['IN_FLIGHT', 'SERVICE_REPORT', 'SHUTDOWN_STEP']);
+  expect(control.writes).toHaveLength(1);
+});
+// Review round 1 (nit): after a settle that its timer ended, no new asynchronous append starts until the one in flight
+// finished, so two appends are never in flight together.
+it('starts no asynchronous append after a timer-ended settle until the append in flight finishes', async () => {
+  vi.useFakeTimers({toFake: ['setTimeout', 'clearTimeout']});
+  const dir = directory(), log = createDiagnostics(dir);
+  const release = held();
+  log('IN_FLIGHT'); log('QUEUED');
+  let done = false;
+  void log.settle(100).then(() => {done = true;});
+  await vi.advanceTimersByTimeAsync(100);
+  expect(done).toBe(true);
+  expect(events(dir)).toEqual(['QUEUED']);
+  log('AFTER');
+  expect(control.writes).toHaveLength(1);
+  release(); vi.useRealTimers();
+  expect(await log.flush(5000)).toBe(true);
+  expect(control.writes).toHaveLength(2);
+  expect(events(dir)).toEqual(['QUEUED', 'IN_FLIGHT', 'AFTER']);
+});
 it('bounds the flush: it reports false after its wait and true once the records are written', async () => {
   vi.useFakeTimers({toFake: ['setTimeout', 'clearTimeout']});
   const dir = directory(), log = createDiagnostics(dir);
