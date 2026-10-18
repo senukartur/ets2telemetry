@@ -8,10 +8,12 @@
 // docs/app-lifecycle.md (service shutdown), docs/trips.md and the scenario fixtures, never read back from the code under
 // test. Waits count states, held commands, barrier lines and timer order; real-time values are named hang guards only.
 import {spawn} from 'node:child_process';
+import net from 'node:net';
 import {once} from 'node:events';
 import {existsSync, readFileSync, writeFileSync} from 'node:fs';
 import path from 'node:path';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
+import {decodePayload, type ClientMessage} from '../../packages/contracts/src/protocol-v1';
 import type {StorageWorkerHandle} from '../../packages/storage/src/client';
 import {createRecordingRuntime, type RecordingRuntime} from '../../apps/desktop/src/recording-runtime';
 import {GAME_HISTORY_RECORDING} from '../../apps/desktop/src/recording-policy';
@@ -24,7 +26,7 @@ import {scenarioPath} from '../shared/simulator-v1-expected';
 import {ok, readOnly, TEST_CLOSE_GRACE_MS, workspace} from './helpers';
 import {readHistoryRows} from './history-rows';
 import {
-  guarded, RECORDING_FIXTURES, servedAcks, storageWorker, storedRows, storedSamples, terminateWorkers, tracedConnect, tracedShutdown, tripExpected, until
+  ClientSocket, guarded, RECORDING_FIXTURES, servedAcks, storageWorker, storedRows, storedSamples, terminateWorkers, tracedHandle, tracedShutdown, tripExpected, until
 } from './recording-helpers';
 
 type Json = Record<string, unknown>;
@@ -38,6 +40,11 @@ const HANG_GUARD_MS = 30_000;
 const CHILD_LIVENESS_MS = 20_000;
 /** A sample flush delay far beyond any run, so the only sample write is the final one at the stop (ET-015b H8, H11). */
 const NO_FLUSH_TIMER_MS = 600_000;
+/**
+ * Cases (a) and (b): a pending sample row is queued for writing 1 ms after it appears, so it is written while the
+ * connection is still open and the stop's `recording-flush` has nothing left to write (ET-015b H8, H11).
+ */
+const EARLY_FLUSH_MS = 1;
 /** docs/telemetry-service-v1.md (E9): reconnection delays are 250, 500, 1000, 2000 and then 4000 ms. */
 const LONGEST_BACKOFF_MS = 4_000;
 /** docs/app-lifecycle.md, service shutdown: `SERVICE_STOP_BUDGET_MS`, the sum of the phase maxima 1000 + 500 + 1000. */
@@ -82,17 +89,46 @@ async function tripTuples(open: () => ReturnType<typeof ws.open>) {
   return trips;
 }
 
+/** The fixture connect a runtime gets, and the number of connections it opened. */
+interface FixtureConnect {connect: (endpoint: string) => ClientSocket; sockets: () => number}
+/**
+ * The fixture connect of cases (a) and (b): actual pipe sockets whose ACK frames are written to `timeline` as
+ * `ack <throughEventSeq>`, as tracedConnect does. The first connection's stream is passed on through ClientSocket with
+ * everything after the frame of eventSeq `afterEventSeq` (its end and close included) held until `release` resolves, so
+ * the ingestion sees the end of the connection only after a storage state the case waits for.
+ */
+function gatedConnect(timeline: string[], afterEventSeq: string, release: () => Promise<unknown>, fail: (error: unknown) => void): FixtureConnect {
+  let sockets = 0;
+  const connect = (endpoint: string) => {
+    const socket = new ClientSocket(net.connect(endpoint), sockets++ === 0 ? {afterEventSeq, until: release} : undefined, fail);
+    const write = socket.write.bind(socket);
+    socket.write = (bytes: Uint8Array, ...rest: unknown[]) => {
+      const m = decodePayload(bytes.subarray(4), 'client') as ClientMessage;
+      if (m.kind === 'ack') timeline.push(`ack ${m.data.throughEventSeq}`);
+      return write(bytes, ...rest);
+    };
+    return socket;
+  };
+  return {connect, sockets: () => sockets};
+}
+/**
+ * normal-delivery has one sample row: its first reading, the checkpoint at 0 ms, is the plugin session's baseline, and the
+ * frame at 100 ms is the first fresh running reading of source second 1000 (simulation started at 40 ms; the frame at
+ * 200 ms is in the same second). Source clock 1,000,000,000,000 ns + 100 ms (docs/simulator-v1.md, trips.md H3, H4).
+ */
+const NORMAL_DELIVERY_SAMPLES = ['1000100000000'];
+
 /**
  * One service's recording runtime for `synthetic:<name>` under the workspace as LOCALAPPDATA, built by the production
  * factory. Only the worker, the fixture connect and, where a case passes it, the close grace are supplied; without
  * `closeGraceMs` the database has the production grace.
  */
-function serviceRuntime(name: string, worker: StorageWorkerHandle, socket: ReturnType<typeof tracedConnect>, timeline: string[],
-  options: {closeGraceMs?: number; onState?: (state: V1SourceState) => void} = {}) {
+function serviceRuntime(name: string, worker: StorageWorkerHandle, socket: FixtureConnect, timeline: string[],
+  options: {closeGraceMs?: number; sampleFlushMs?: number; onState?: (state: V1SourceState) => void} = {}) {
   const logs: [string, unknown][] = [];
   const runtime = createRecordingRuntime({env: {ETS2TELEMETRY_RECORDING: `synthetic:${name}`}, gameHistory: GAME_HISTORY_RECORDING, localAppData: ws.directory,
     log: (event, _detail, facts) => { logs.push([event, facts]); if (/^HISTORY_STORAGE_(OPENED|CLOSED)$/.test(event)) timeline.push(event); },
-    createWorker: () => worker, connect: socket.connect, ingestionOverrides: {sampleFlushMs: NO_FLUSH_TIMER_MS},
+    createWorker: () => worker, connect: socket.connect, ingestionOverrides: {sampleFlushMs: options.sampleFlushMs ?? NO_FLUSH_TIMER_MS},
     historyOverrides: {appVersion: '0.1.0-test', ...(options.closeGraceMs === undefined ? {} : {closeGraceMs: options.closeGraceMs})},
     onV1State: state => options.onState?.(state)});
   return {runtime, logs};
@@ -109,7 +145,7 @@ async function startDurable(runtime: RecordingRuntime, endpoint: string) {
  * reconnection timer (it arms it right after it reports the state). Resolves with the sequence result, its wall time,
  * the connections made and the state at the stop, and the time from the `history-storage` step's start to the end.
  */
-function stopOnDisconnect(shutdown: ReturnType<typeof tracedShutdown>, socket: ReturnType<typeof tracedConnect>, timeline: string[], current: () => V1SourceState) {
+function stopOnDisconnect(shutdown: ReturnType<typeof tracedShutdown>, socket: FixtureConnect, timeline: string[], current: () => V1SourceState) {
   let stopping: Promise<{clean: boolean; elapsedMs: number; atStop: {sockets: number; status: string}}> | undefined;
   const onState = (state: V1SourceState) => {
     if (stopping || state.status !== 'disconnected') return;
@@ -131,11 +167,14 @@ describe('ET-019 shutdown and close stalls', () => {
     const input = scenario('normal-delivery'), timeline: string[] = [];
     expect(reactiveConflicts(input)).toEqual([]);
     const server = await serveV1Reactive(input, {scale: 0, awaitScriptedAcks: true});
-    const worker = storageWorker(), socket = tracedConnect(timeline), shutdown = tracedShutdown(timeline);
+    const worker = storageWorker(), traced = tracedHandle(worker.handle, timeline), shutdown = tracedShutdown(timeline), failures: unknown[] = [];
+    // The end of the connection reaches the ingestion only after the sample row was written (EARLY_FLUSH_MS), so the
+    // stop's flush has nothing to wait for or write; the step's 500 ms budget then cannot be reached.
+    const socket = gatedConnect(timeline, '9', () => until(() => timeline.includes('done appendSamples'), 'the early sample write', HANG_GUARD_MS), error => failures.push(error));
     let runtime!: RecordingRuntime;
     const stop = stopOnDisconnect(shutdown, socket, timeline, () => runtime.v1.current);
     // The close itself is not under test here: the suite's grace keeps a loaded host from turning it unclean.
-    const s = serviceRuntime('t', worker.handle, socket, timeline, {closeGraceMs: TEST_CLOSE_GRACE_MS, onState: stop.onState});
+    const s = serviceRuntime('t', traced.handle, socket, timeline, {closeGraceMs: TEST_CLOSE_GRACE_MS, sampleFlushMs: EARLY_FLUSH_MS, onState: stop.onState});
     runtime = s.runtime;
     s.runtime.register(shutdown.registrar);
     try {
@@ -162,13 +201,16 @@ describe('ET-019 shutdown and close stalls', () => {
       expect(servedAcks(report, 0)).toEqual(NORMAL_DELIVERY_ACKS);
       expect(ordered(timeline, ['stop', 'step intake v1-ingestion ok', 'step flush recording-flush ok', 'start history-storage', 'HISTORY_STORAGE_CLOSED']))
         .toEqual(['stop', 'step intake v1-ingestion ok', 'step flush recording-flush ok', 'start history-storage', 'HISTORY_STORAGE_CLOSED']);
+      // The one sample row was written before the stop, so the flush wrote nothing (no V1_SAMPLES_EXIT, no second write).
+      expect([failures, timeline.filter(line => line === 'done appendSamples').length, ordered(timeline, ['done appendSamples', 'stop'])]).toEqual([[], 1, ['done appendSamples', 'stop']]);
+      expect(s.logs.filter(([event]) => event.startsWith('V1_SAMPLES_'))).toEqual([]);
 
       const storage = await reader('t').open(), session = sessionOf(input);
       expect(ok(storage.committedThrough(session))).toBe('9');
       storage.close();
       const expected = tripExpected('normal-delivery');
       expect(await storedRows(reader('t'), input.seed)).toEqual({trips: expected.trips, attributions: expected.attributions, intervals: expected.intervals});
-      expectInvariants(target('t'), session, acks);
+      expect(expectInvariants(target('t'), session, acks).samples.map(row => row.monotonicNs)).toEqual(NORMAL_DELIVERY_SAMPLES);
       expectNoGameHistory(localAppData);
     } finally { await server.stop(); }
   }, 90_000);
@@ -179,27 +221,31 @@ describe('ET-019 shutdown and close stalls', () => {
   // therefore ends unclean, `failed` or `timeout`, never `ok`, and never stretches the stop past its budget. Finding of
   // this PR (docs/validation/et-019.md, PR-4): the termination itself closes the database in native SQLite (the WAL is
   // checkpointed and removed), so even a stall outside SQLite can end as `timeout` when that close outlasts the 200 ms
-  // between the grace and the budget; the case therefore accepts either verdict and checks when the termination starts.
-  it('(b) G18: a close that would stall forever is cut at the 800 ms grace: the worker is terminated before the step budget, the stop is unclean and bounded, and every committed event survives (REG-006, REG-011)', async () => {
+  // between the grace and the budget; the case therefore accepts either verdict and checks when the termination starts:
+  // no earlier than the grace less LOOP_CLOCK_SLACK_MS, and before the step's verdict at the 1,000 ms budget. A grace
+  // anywhere in [700, 1000) ms passes; there is deliberately no timed upper bound.
+  it('(b) G18: a close that would stall forever is terminated no earlier than the 800 ms grace (less 100 ms) and before the 1,000 ms step budget; the stop is unclean and bounded, and every committed event survives (REG-006, REG-011)', async () => {
     const localAppData = ws.directory;
     expectNoGameHistory(localAppData);
     const input = scenario('normal-delivery'), timeline: string[] = [];
     expect(reactiveConflicts(input)).toEqual([]);
     const server = await serveV1Reactive(input, {scale: 0, awaitScriptedAcks: true});
     // The fault worker holds the close before its host receives it and is never released: the close would stall forever.
-    const worker = storageWorker({closeHold: true}), socket = tracedConnect(timeline);
+    const worker = storageWorker({closeHold: true}), traced = tracedHandle(worker.handle, timeline), failures: unknown[] = [];
+    // As in (a): the sample row is written before the end of the connection, so the flush has nothing slow to do.
+    const socket = gatedConnect(timeline, '9', () => until(() => timeline.includes('done appendSamples'), 'the early sample write', HANG_GUARD_MS), error => failures.push(error));
     const held = guarded(once(worker.control!, 'message'), 'the held close', HANG_GUARD_MS).then(([message]) => { timeline.push('held close'); return message as unknown; });
     let storageStarted = 0, terminatedAfterMs: number | undefined;
     const shutdown = tracedShutdown(timeline, name => { if (name === 'history-storage') storageStarted = performance.now(); });
     // A test-side wrapper of the worker handle (no worker change) that marks the first termination request.
-    const handle: StorageWorkerHandle = {...worker.handle, terminate: () => {
+    const handle: StorageWorkerHandle = {...traced.handle, terminate: () => {
       if (terminatedAfterMs === undefined) { terminatedAfterMs = performance.now() - storageStarted; timeline.push('terminate'); }
-      return worker.handle.terminate();
+      return traced.handle.terminate();
     }};
     let runtime!: RecordingRuntime;
     const stop = stopOnDisconnect(shutdown, socket, timeline, () => runtime.v1.current);
     // No close grace is passed: the database has the production grace.
-    const s = serviceRuntime('t', handle, socket, timeline, {onState: stop.onState});
+    const s = serviceRuntime('t', handle, socket, timeline, {sampleFlushMs: EARLY_FLUSH_MS, onState: stop.onState});
     runtime = s.runtime;
     s.runtime.register(shutdown.registrar);
     try {
@@ -216,6 +262,9 @@ describe('ET-019 shutdown and close stalls', () => {
       expect(verdict.map(step => [step.phase, step.name])).toEqual([['storage', 'history-storage']]);
       expect(['failed', 'timeout']).toContain(verdict[0].outcome);
       expect(clean).toBe(false);
+      // The one sample row was written before the stop, so the flush wrote nothing (no V1_SAMPLES_EXIT, no second write).
+      expect([failures, timeline.filter(line => line === 'done appendSamples').length, ordered(timeline, ['done appendSamples', 'stop'])]).toEqual([[], 1, ['done appendSamples', 'stop']]);
+      expect(s.logs.filter(([event]) => event.startsWith('V1_SAMPLES_'))).toEqual([]);
       // The close was held, the termination started after the grace and before the step's verdict: the order of the
       // timeline, not a duration, bounds it by the budget.
       const step = `step storage history-storage ${verdict[0].outcome}`;
@@ -225,7 +274,7 @@ describe('ET-019 shutdown and close stalls', () => {
       expect(elapsedMs).toBeLessThanOrEqual(STOP_BUDGET_MS);
       // No orderly-close row, and the database is closed for the service lifetime.
       expect(s.logs.filter(([event]) => event === 'HISTORY_STORAGE_CLOSED')).toEqual([]);
-      expect(s.runtime.history.state).toBe('closed');
+      await until(() => s.runtime.history.state === 'closed', 'the closed history state', HANG_GUARD_MS);
       const acks = timeline.filter(line => line.startsWith('ack ')).map(line => line.slice(4));
       expect([acks, servedAcks(report, 0), socket.sockets()]).toEqual([NORMAL_DELIVERY_ACKS, NORMAL_DELIVERY_ACKS, 1]);
 
@@ -235,7 +284,7 @@ describe('ET-019 shutdown and close stalls', () => {
       storage.close();
       const expected = tripExpected('normal-delivery');
       expect(await storedRows(reader('t'), input.seed)).toEqual({trips: expected.trips, attributions: expected.attributions, intervals: expected.intervals});
-      expectInvariants(target('t'), session, acks);
+      expect(expectInvariants(target('t'), session, acks).samples.map(row => row.monotonicNs)).toEqual(NORMAL_DELIVERY_SAMPLES);
       expectNoGameHistory(localAppData);
     } finally { worker.control?.close(); await server.stop(); }
   }, 90_000);
