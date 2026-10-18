@@ -4,7 +4,7 @@ import net from 'node:net';
 import {randomUUID} from 'node:crypto';
 import {afterEach, beforeAll, beforeEach, describe, expect, it, vi} from 'vitest';
 import {SERVICE_REPORT_SETTLE_MS} from '../../apps/desktop/src/diagnostics';
-import {SERVICE_KILL_DEADLINE_MS} from '../../apps/desktop/src/service-supervisor';
+import {SERVICE_EXIT_RESERVE_MS, SERVICE_KILL_DEADLINE_MS} from '../../apps/desktop/src/service-supervisor';
 import {TelemetryIngestion, TEST_PIPE_PATTERN, initialLive, sourceSelection} from '../../apps/desktop/src/telemetry-ingestion';
 import {LiveSubscriptions, type LivePort} from '../../apps/desktop/src/live-subscriptions';
 import {ServiceSupervisor} from '../../apps/desktop/src/service-supervisor';
@@ -608,11 +608,9 @@ describe('ET-015a recording gate in the service (R3, R10, R14)', () => {
     } finally {connect.mockRestore(); f.restore(); vi.unstubAllEnvs();}
   });
 });
-// The diagnostics log writes asynchronously (October 18, 2026): the service exits only after its final rows are written,
-// or after SERVICE_EXIT_FLUSH_MS, so the stop sequence plus the wait stay inside main's 3,000 ms kill deadline.
 // Final log write (October 18, 2026, dispatch run 39094511631): the service exits only after finalize wrote its final
-// rows. The append in flight gets the time the stop left before main's 3,000 ms kill deadline, less a 300 ms reserve,
-// and at least SERVICE_EXIT_FLUSH_MS.
+// rows. The append in flight gets the time the stop left before main's 3,000 ms kill deadline, less the
+// SERVICE_EXIT_RESERVE_MS reserve, and nothing once that time has passed.
 it('exits after the final log write that follows the stopped report, with the time left before the kill deadline', async () => {
   const f = await stoppedService(report => {report({type: 'stopped'}); return Promise.resolve();});
   try {
@@ -620,7 +618,7 @@ it('exits after the final log write that follows the stopped report, with the ti
     f.log.finalize.mockImplementation(() => new Promise<void>(resolve => {written = resolve;}));
     f.stop(); await vi.advanceTimersByTimeAsync(0);
     expect(f.stops()).toEqual([{type: 'stopped', clean: true}]);
-    expect(f.log.finalize).toHaveBeenCalledExactlyOnceWith(SERVICE_KILL_DEADLINE_MS - 300);
+    expect(f.log.finalize).toHaveBeenCalledExactlyOnceWith(SERVICE_KILL_DEADLINE_MS - SERVICE_EXIT_RESERVE_MS);
     expect(f.log.mock.calls.at(-1)?.[0]).toBe('SERVICE_REPORT');
     expect(f.log.mock.invocationCallOrder.at(-1)!).toBeLessThan(f.log.finalize.mock.invocationCallOrder[0]);
     expect(f.exit).not.toHaveBeenCalled();
@@ -637,7 +635,7 @@ it('gives the final log write only the time left after a stop that used its whol
     expect(f.stops()).toEqual([{type: 'stopped', clean: false}]);
     // The phases ended at 1,001, 1,502 and 2,503 ms (fake verdict turns of 1 ms): 3,000 - 300 - 2,503 = 197 ms remain.
     const wait = f.log.finalize.mock.calls[0][0];
-    expect(wait).toBe(SERVICE_KILL_DEADLINE_MS - 300 - 2503);
+    expect(wait).toBe(SERVICE_KILL_DEADLINE_MS - SERVICE_EXIT_RESERVE_MS - 2503);
   } finally {f.restore();}
 });
 // Review round 1 (October 18, 2026): main answers a failure report after readiness by killing the service, so the
