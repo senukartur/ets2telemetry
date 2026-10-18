@@ -9,7 +9,7 @@ import {promisify} from 'node:util';
 import {_electron as electron} from '@playwright/test';
 import {rendererPages} from '../ci/overlay-observation.mjs';
 import {checkedPaths, checkInstalled, checkLaunchEnvironment, checkRunPlan, checkRunSignal, FACTS_VARIABLE, factsEvidence, InstallerGuardError, installedEnvironment, normalizePath,
-  checkDecoyUnchanged, ownsRegistration, parseUninstallString, resolveRealLocation, RUN_ROOT_NAME, runLayout, steamLibraryPaths, uninstallEnvironment} from './installer-guard.mjs';
+  checkDecoyUnchanged, checkUninstallResidue, electronRuntimeNames, ownsRegistration, parseUninstallString, resolveRealLocation, RUN_ROOT_NAME, runLayout, steamLibraryPaths, uninstallEnvironment} from './installer-guard.mjs';
 
 // ET-018 PR-1 and PR-3 (REG-013, REG-017; plan U10-U13): the Node driver of the installer lifecycle in a marked test root. The
 // PowerShell harness scripts/installer/Invoke-InstallerLifecycle.ps1 orchestrates the steps and runs every command below
@@ -34,6 +34,7 @@ import {checkedPaths, checkInstalled, checkLaunchEnvironment, checkRunPlan, chec
 //                                             the application runs (complete) or the fake game host runs (deferred);
 //                                             --rehearse stops before the UninstallString (a local check of the driver
 //                                             against a fake layout; the harness never passes it)
+//   residue <config> <label>                  PR-3: checks the harness's residue-listing-<label>.json listing of the binary root
 //   cleanup <config> <location per view...>   deletes R (never following links) after the harness kept the evidence
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -646,6 +647,21 @@ async function windowsUninstall(config, label, executable, expectation, rehearse
 }
 
 /**
+ * The binary-root residue after an uninstall (checkUninstallResidue), from the listing the harness wrote and the Electron
+ * runtime names of this checkout's `node_modules/electron/dist`. Records the tolerated runtime files.
+ */
+async function residue(config, label) {
+  assert.match(label, /^[a-z0-9-]{1,40}$/, 'RESIDUE_LABEL_INVALID');
+  const listing = await readJson(path.join(config.evidence, `residue-listing-${label}.json`), 1024 * 1024);
+  const dist = path.join(checkout, 'node_modules', 'electron', 'dist');
+  const entries = (await readdir(dist, {withFileTypes: true})).map(entry => ({name: entry.name, directory: entry.isDirectory()}));
+  const runtime = electronRuntimeNames(entries, await readdir(path.join(dist, 'locales')));
+  const result = checkUninstallResidue(Array.isArray(listing) ? listing : listing ? [listing] : [], runtime);
+  return {entries: Array.isArray(listing) ? listing.length : listing ? 1 : 0, vendorFiles: result.vendorFiles, toleratedRuntimeResidue: result.tolerated,
+    toleratedRuntimeResidueCount: result.tolerated.length};
+}
+
+/**
  * Deletes R without following any link (fs.rm unlinks a junction or symbolic link instead of entering it), and decides
  * for each registry view whether the HKCU uninstall key the harness read there may be deleted: only when that view's
  * InstallLocation points into R (ownsRegistration). `locations` holds one argument per view, `-` for a view without the
@@ -680,6 +696,7 @@ try {
       case 'games': result.result = await games(config); break;
       case 'plugin-launch': result.result = await pluginLaunch(config, label, rest[2], rest[3]); break;
       case 'windows-uninstall': result.result = await windowsUninstall(config, label, rest[2], rest[3], rest[4] === '--rehearse'); break;
+      case 'residue': result.result = await residue(config, label); break;
       case 'cleanup': result.result = await cleanup(config, rest.slice(1)); break;
       default: throw new Error('UNKNOWN_COMMAND');
     }

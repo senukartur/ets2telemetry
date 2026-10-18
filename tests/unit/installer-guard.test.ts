@@ -4,7 +4,7 @@ import path from 'node:path';
 import {promisify} from 'node:util';
 import {describe, expect, it} from 'vitest';
 import {checkedPaths, checkInstalled, checkInstallTest, checkLaunchEnvironment, checkRunPlan, checkRunSignal, FACTS_VARIABLE, factsEvidence, installedEnvironment,
-  checkDecoyUnchanged, InstallerGuardError, isGuardedProcess, isHostedRunner, minimalPath, normalizePath, ownsRegistration, parseUninstallString, resolveRealLocation, runLayout,
+  checkDecoyUnchanged, checkUninstallResidue, electronRuntimeNames, InstallerGuardError, RESIDUE_MAX_ENTRIES, isGuardedProcess, isHostedRunner, minimalPath, normalizePath, ownsRegistration, parseUninstallString, resolveRealLocation, runLayout,
   steamLibraryPaths, uninstallEnvironment, type RunPlanFacts} from '../../scripts/installer/installer-guard.mjs';
 import {temporaryResources} from '../shared/resources';
 
@@ -61,6 +61,52 @@ describe('CI signal (local runs refused)', () => {
     expect(isHostedRunner({GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'github-hosted'})).toBe(true);
     expect(isHostedRunner({GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'self-hosted'})).toBe(false);
     expect(isHostedRunner({})).toBe(false);
+  });
+});
+
+describe('binary root residue after an uninstall (ET-018 PR-3)', () => {
+  // A distribution listing in the shape of node_modules/electron/dist (fixture names; the driver reads the real one).
+  const runtime = electronRuntimeNames([
+    {name: 'electron.exe', directory: false}, {name: 'v8_context_snapshot.bin', directory: false}, {name: 'vk_swiftshader.dll', directory: false},
+    {name: 'resources.pak', directory: false}, {name: 'LICENSES.chromium.html', directory: false}, {name: 'locales', directory: true}, {name: 'resources', directory: true}
+  ], ['en-US.pak', 'de.pak']);
+  const file = (relative: string, flags: {vendorHelper?: boolean; deadMarker?: boolean} = {}) => ({relative, kind: 'file' as const, reparse: false, vendorHelper: false, deadMarker: false, ...flags});
+  const folder = (relative: string, reparse = false) => ({relative, kind: 'directory' as const, reparse});
+  const base = [folder('app-0.1.1'), file('.dead', {deadMarker: true}), file('Update.exe', {vendorHelper: true}), file('app-0.1.1/squirrel.exe', {vendorHelper: true})];
+  it('allows Squirrel\'s own residue and tolerates Electron runtime files, which it reports', () => {
+    expect(checkUninstallResidue(base, runtime)).toEqual({vendorFiles: 2, tolerated: []});
+    expect(checkUninstallResidue([...base, file('app-0.1.1/v8_context_snapshot.bin'), file('app-0.1.1/VK_SWIFTSHADER.DLL'), folder('app-0.1.1/locales'),
+      file('app-0.1.1/locales/en-US.pak'), file('app-0.1.0/.dead', {deadMarker: true})], runtime)).toEqual({vendorFiles: 2,
+      tolerated: ['app-0.1.1/v8_context_snapshot.bin', 'app-0.1.1/VK_SWIFTSHADER.DLL', 'app-0.1.1/locales', 'app-0.1.1/locales/en-US.pak']});
+  });
+  it.each([
+    ['the product executable', [file('app-0.1.1/ETS2TelemetryDesktop.exe')], 'UNINSTALL_UNEXPECTED_FILE'],
+    ['electron.exe, which is never a runtime file', [file('app-0.1.1/electron.exe')], 'UNINSTALL_UNEXPECTED_FILE'],
+    ['the application archive', [folder('app-0.1.1/resources'), file('app-0.1.1/resources/app.asar')], 'UNINSTALL_UNEXPECTED_DIRECTORY'],
+    ['a file below resources', [file('app-0.1.1/resources/telemetry-plugin/ets2telemetry-plugin.dll')], 'UNINSTALL_UNEXPECTED_FILE'],
+    ['a runtime name below resources', [file('app-0.1.1/resources/v8_context_snapshot.bin')], 'UNINSTALL_UNEXPECTED_FILE'],
+    ['a runtime name at the top of the binary root', [file('v8_context_snapshot.bin')], 'UNINSTALL_UNEXPECTED_FILE'],
+    ['a link', [folder('app-0.1.1/locales', true)], 'UNINSTALL_REPARSE_POINT'],
+    ['a linked runtime file', [{...file('app-0.1.1/v8_context_snapshot.bin'), reparse: true}], 'UNINSTALL_REPARSE_POINT'],
+    ['an unknown file', [file('app-0.1.1/notes.txt')], 'UNINSTALL_UNEXPECTED_FILE'],
+    ['an unknown locale', [file('app-0.1.1/locales/xx.pak')], 'UNINSTALL_UNEXPECTED_FILE'],
+    ['another folder', [folder('packages')], 'UNINSTALL_UNEXPECTED_DIRECTORY'],
+    ['a changed helper', [file('app-0.1.0/squirrel.exe')], 'UNINSTALL_VENDOR_HELPER_CHANGED'],
+    ['an invalid marker', [file('app-0.1.0/.dead')], 'UNINSTALL_MARKER_INVALID']
+  ])('refuses %s', (_name, extra, code) => expect(refusal(() => checkUninstallResidue([...base, ...extra], runtime))).toBe(code));
+  it('requires the root marker and bounds the listing', () => {
+    expect(refusal(() => checkUninstallResidue(base.filter(row => row.relative !== '.dead'), runtime))).toBe('UNINSTALL_ROOT_OR_MARKER_MISSING');
+    expect(refusal(() => checkUninstallResidue(Array.from({length: RESIDUE_MAX_ENTRIES + 1}, () => folder('app-0.1.1')), runtime))).toBe('UNINSTALL_RESIDUE_TOO_LARGE');
+  });
+  it('names the refused entry, never a machine path', () => {
+    try {checkUninstallResidue([...base, file('app-0.1.1/ETS2TelemetryDesktop.exe')], runtime);} catch (error) {
+      expect((error as Error).message).toBe('Installer lifecycle refused: UNINSTALL_UNEXPECTED_FILE (app-0.1.1/ETS2TelemetryDesktop.exe)');
+    }
+  });
+  it('takes the runtime names from the distribution listing: electron.exe and folders other than locales are not runtime files', () => {
+    expect([...runtime.files].sort()).toEqual(['licenses.chromium.html', 'resources.pak', 'v8_context_snapshot.bin', 'vk_swiftshader.dll']);
+    expect([...runtime.locales].sort()).toEqual(['de.pak', 'en-us.pak']);
+    expect(refusal(() => electronRuntimeNames([{name: 'notes.txt', directory: false}], []))).toBe('ELECTRON_DIST_INVALID');
   });
 });
 

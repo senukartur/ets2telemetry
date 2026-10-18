@@ -25,14 +25,14 @@ export const DATA_ROOT = 'ETS2Telemetry';
 export const ROAMING_ROOT = 'ETS2Telemetry Desktop';
 
 export class InstallerGuardError extends Error {
-  /** @param {string} code */
-  constructor(code) {
-    super(`Installer lifecycle refused: ${code}`);
+  /** @param {string} code @param {string} [detail] a relative name inside the run root, never a machine path */
+  constructor(code, detail) {
+    super(`Installer lifecycle refused: ${code}${detail ? ` (${detail})` : ''}`);
     this.name = 'InstallerGuardError';
     this.code = code;
   }
 }
-const refuse = code => {throw new InstallerGuardError(code);};
+const refuse = (code, detail) => {throw new InstallerGuardError(code, detail);};
 
 /** A Windows drive path such as `C:\folder`; UNC, device, relative and drive-relative paths are not. */
 export function isDrivePath(value) {
@@ -85,6 +85,67 @@ export function checkDecoyUnchanged(before, after) {
     allowed++;
   }
   return allowed;
+}
+
+/** The binary-root listing of the harness holds at most this many entries; a longer one refuses. */
+export const RESIDUE_MAX_ENTRIES = 256;
+const APP_FOLDER = /^app-\d{1,9}\.\d{1,9}\.\d{1,9}(-[0-9A-Za-z.-]{1,40})?$/;
+/** Names that are never Electron runtime files, whatever the distribution lists: this product's and Squirrel's executables. */
+const NEVER_RUNTIME = new Set(['electron.exe', 'ets2telemetrydesktop.exe', 'squirrel.exe', 'update.exe']);
+/**
+ * The Electron runtime file names, from a listing of the installed `node_modules/electron/dist`: its top-level files
+ * except `electron.exe` (renamed to the product's executable in a package), and the files of its `locales` folder.
+ * Its `resources` folder and every other folder are not runtime files. `entries` holds `{name, directory}` rows of
+ * the top level and `locales` the file names of `locales`. Names are compared case-insensitively.
+ */
+export function electronRuntimeNames(entries, locales) {
+  if (!Array.isArray(entries) || !entries.some(entry => !entry.directory && /\.(bin|dll|pak|dat)$/i.test(entry.name))) refuse('ELECTRON_DIST_INVALID');
+  return {
+    files: new Set(entries.filter(entry => !entry.directory && !NEVER_RUNTIME.has(entry.name.toLowerCase())).map(entry => entry.name.toLowerCase())),
+    locales: new Set((locales ?? []).map(name => name.toLowerCase()))
+  };
+}
+/**
+ * The binary root after a Windows-initiated uninstall (ET-018 PR-3; docs/installer-testing.md, "Binary root residue").
+ * `listing` holds the harness's rows `{relative, kind, reparse, vendorHelper, deadMarker}` with `/`-separated names
+ * relative to the binary root. Allowed: `app-<version>` folders; `Update.exe` and `app-<version>/squirrel.exe` with
+ * the installed helper's bytes; the root `.dead` (required) and `app-<version>/.dead`, one space each. Tolerated and
+ * reported: Electron runtime files (`runtime`, from electronRuntimeNames) at the top of an `app-<version>` folder and in
+ * its `locales` folder. Anything else fails with its relative name: the product's executable, `resources` and
+ * everything below it, a link, any other file or folder. Returns the vendor helper count and the tolerated names.
+ */
+export function checkUninstallResidue(listing, runtime) {
+  if (!Array.isArray(listing) || listing.length > RESIDUE_MAX_ENTRIES) refuse('UNINSTALL_RESIDUE_TOO_LARGE');
+  let marker = false, vendorFiles = 0;
+  const tolerated = [];
+  for (const row of listing) {
+    const name = String(row?.relative ?? '');
+    const parts = name.split('/');
+    const inApp = parts.length >= 2 && APP_FOLDER.test(parts[0]);
+    if (row.reparse !== false) refuse('UNINSTALL_REPARSE_POINT', name);
+    if (row.kind === 'directory') {
+      if (parts.length === 1 && APP_FOLDER.test(parts[0])) continue;
+      if (inApp && parts.length === 2 && parts[1].toLowerCase() === 'locales') {tolerated.push(name); continue;}
+      refuse('UNINSTALL_UNEXPECTED_DIRECTORY', name);
+    }
+    if (row.kind !== 'file') refuse('UNINSTALL_UNEXPECTED_FILE', name);
+    const leaf = parts.at(-1).toLowerCase();
+    if ((parts.length === 1 && leaf === '.dead') || (inApp && parts.length === 2 && leaf === '.dead')) {
+      if (row.deadMarker !== true) refuse('UNINSTALL_MARKER_INVALID', name);
+      if (parts.length === 1) marker = true;
+      continue;
+    }
+    if ((parts.length === 1 && leaf === 'update.exe') || (inApp && parts.length === 2 && leaf === 'squirrel.exe')) {
+      if (row.vendorHelper !== true) refuse('UNINSTALL_VENDOR_HELPER_CHANGED', name);
+      vendorFiles++;
+      continue;
+    }
+    if (inApp && parts.length === 2 && runtime.files.has(leaf)) {tolerated.push(name); continue;}
+    if (inApp && parts.length === 3 && parts[1].toLowerCase() === 'locales' && runtime.locales.has(leaf)) {tolerated.push(name); continue;}
+    refuse('UNINSTALL_UNEXPECTED_FILE', name);
+  }
+  if (!marker) refuse('UNINSTALL_ROOT_OR_MARKER_MISSING');
+  return {vendorFiles, tolerated};
 }
 
 /** True only on a GitHub-hosted runner; the test install creates real shortcuts only there (U12). */
