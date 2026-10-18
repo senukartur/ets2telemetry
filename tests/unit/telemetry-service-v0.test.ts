@@ -3,7 +3,8 @@ import {EventEmitter} from 'node:events';
 import net from 'node:net';
 import {randomUUID} from 'node:crypto';
 import {afterEach, beforeAll, beforeEach, describe, expect, it, vi} from 'vitest';
-import {SERVICE_EXIT_FLUSH_MS} from '../../apps/desktop/src/diagnostics';
+import {SERVICE_EXIT_FLUSH_MS, SERVICE_REPORT_SETTLE_MS} from '../../apps/desktop/src/diagnostics';
+import {SERVICE_KILL_DEADLINE_MS} from '../../apps/desktop/src/service-supervisor';
 import {TelemetryIngestion, TEST_PIPE_PATTERN, initialLive, sourceSelection} from '../../apps/desktop/src/telemetry-ingestion';
 import {LiveSubscriptions, type LivePort} from '../../apps/desktop/src/live-subscriptions';
 import {ServiceSupervisor} from '../../apps/desktop/src/service-supervisor';
@@ -80,7 +81,7 @@ it('boots transport only after the parent selection and retains it across render
   Object.defineProperty(process, 'parentPort', {configurable: true, value: parent});
   vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'synthetic'); vi.stubEnv('ETS2TELEMETRY_SOURCE_PIPE', endpoint);
   vi.doMock('../../apps/desktop/src/diagnostics', async importOriginal => ({...await importOriginal<typeof import('../../apps/desktop/src/diagnostics')>(),
-    createDiagnostics: () => Object.assign(vi.fn(), {flush: vi.fn(() => Promise.resolve(true)), drainSync: vi.fn()})}));
+    createDiagnostics: () => Object.assign(vi.fn(), {flush: vi.fn(() => Promise.resolve(true)), settle: vi.fn<(timeoutMs: number) => Promise<void>>(() => Promise.resolve()), finalize: vi.fn<(timeoutMs: number) => Promise<void>>(() => Promise.resolve()), drainSync: vi.fn()})}));
   // Isolate the existing storage probe; exercise the actual service handlers and ingestion.
   vi.doMock('../../apps/desktop/src/service-probe', () => ({ServiceProbe: class {
     constructor(private readonly dependencies: ProbeDependencies) {}
@@ -297,7 +298,7 @@ async function stoppedService(stopProbe: (report: ProbeDependencies['report']) =
   const parent = Object.assign(new EventEmitter(), {postMessage: vi.fn()});
   Object.defineProperty(process, 'parentPort', {configurable: true, value: parent});
   // The log's final flush resolves at once, as with an idle disk.
-  const log = Object.assign(vi.fn(), {flush: vi.fn(() => Promise.resolve(true)), drainSync: vi.fn()}), diagnostics: unknown[][] = [];
+  const log = Object.assign(vi.fn(), {flush: vi.fn(() => Promise.resolve(true)), settle: vi.fn<(timeoutMs: number) => Promise<void>>(() => Promise.resolve()), finalize: vi.fn<(timeoutMs: number) => Promise<void>>(() => Promise.resolve()), drainSync: vi.fn()}), diagnostics: unknown[][] = [];
   vi.doMock('../../apps/desktop/src/diagnostics', async importOriginal => ({...await importOriginal<typeof import('../../apps/desktop/src/diagnostics')>(),
     createDiagnostics: (...args: unknown[]) => {diagnostics.push(args); return log;}}));
   let probeReport: ProbeDependencies['report'] = () => undefined;
@@ -609,19 +610,35 @@ describe('ET-015a recording gate in the service (R3, R10, R14)', () => {
 });
 // The diagnostics log writes asynchronously (October 18, 2026): the service exits only after its final rows are written,
 // or after SERVICE_EXIT_FLUSH_MS, so the stop sequence plus the wait stay inside main's 3,000 ms kill deadline.
-it('exits after the log flush that follows the stopped report, waiting at most SERVICE_EXIT_FLUSH_MS', async () => {
+// Final log write (October 18, 2026, dispatch run 39094511631): the service exits only after finalize wrote its final
+// rows. The append in flight gets the time the stop left before main's 3,000 ms kill deadline, less a 300 ms reserve,
+// and at least SERVICE_EXIT_FLUSH_MS.
+it('exits after the final log write that follows the stopped report, with the time left before the kill deadline', async () => {
   const f = await stoppedService(report => {report({type: 'stopped'}); return Promise.resolve();});
   try {
-    let written!: (done: boolean) => void;
-    f.log.flush.mockImplementation(() => new Promise<boolean>(resolve => {written = resolve;}));
+    let written!: () => void;
+    f.log.finalize.mockImplementation(() => new Promise<void>(resolve => {written = resolve;}));
     f.stop(); await vi.advanceTimersByTimeAsync(0);
     expect(f.stops()).toEqual([{type: 'stopped', clean: true}]);
-    expect(f.log.flush).toHaveBeenCalledExactlyOnceWith(SERVICE_EXIT_FLUSH_MS);
+    expect(f.log.finalize).toHaveBeenCalledExactlyOnceWith(SERVICE_KILL_DEADLINE_MS - 300);
     expect(f.log.mock.calls.at(-1)?.[0]).toBe('SERVICE_REPORT');
-    expect(f.log.mock.invocationCallOrder.at(-1)!).toBeLessThan(f.log.flush.mock.invocationCallOrder[0]);
+    expect(f.log.mock.invocationCallOrder.at(-1)!).toBeLessThan(f.log.finalize.mock.invocationCallOrder[0]);
     expect(f.exit).not.toHaveBeenCalled();
-    written(true); await vi.advanceTimersByTimeAsync(0);
+    written(); await vi.advanceTimersByTimeAsync(0);
     expect(f.exit).toHaveBeenCalledExactlyOnceWith(0);
+  } finally {f.restore();}
+});
+it('gives the final log write only the time left after a stop that used its whole budget, at least SERVICE_EXIT_FLUSH_MS', async () => {
+  const hang = () => new Promise<void>(() => undefined);
+  const f = await stoppedService(hang, hang);
+  try {
+    f.v1.stopSource.mockImplementation(hang); f.v1.flush.mockImplementation(hang);
+    f.stop(); await vi.advanceTimersByTimeAsync(2503);
+    expect(f.stops()).toEqual([{type: 'stopped', clean: false}]);
+    // The phases ended at 1,001, 1,502 and 2,503 ms (fake verdict turns of 1 ms): 3,000 - 300 - 2,503 = 197 ms remain.
+    const wait = f.log.finalize.mock.calls[0][0];
+    expect(wait).toBe(SERVICE_KILL_DEADLINE_MS - 300 - 2503);
+    expect(wait).toBeGreaterThanOrEqual(SERVICE_EXIT_FLUSH_MS);
   } finally {f.restore();}
 });
 // Review round 1 (October 18, 2026): main answers a failure report after readiness by killing the service, so the
@@ -633,14 +650,14 @@ it.each([
 ] as const)('posts %s only after the log flush', async (_name, trigger, message) => {
   const f = await stoppedService(report => {report({type: 'stopped'}); return Promise.resolve();});
   try {
-    let written!: (done: boolean) => void;
-    f.log.flush.mockImplementation(() => new Promise<boolean>(resolve => {written = resolve;}));
+    let written!: () => void;
+    f.log.settle.mockImplementation(() => new Promise<void>(resolve => {written = resolve;}));
     const logged = f.log.mock.calls.length;
     trigger(f); await vi.advanceTimersByTimeAsync(0);
     expect(f.parent.postMessage).not.toHaveBeenCalledWith(message);
-    expect(f.log.flush).toHaveBeenCalledExactlyOnceWith(SERVICE_EXIT_FLUSH_MS);
+    expect(f.log.settle).toHaveBeenCalledExactlyOnceWith(SERVICE_REPORT_SETTLE_MS);
     if (message.code === 'STORAGE_WORKER_FAILED') expect(f.log.mock.calls.slice(logged).map(call => call[0])).toEqual(['SERVICE_REPORT']);
-    written(true); await vi.advanceTimersByTimeAsync(0);
+    written(); await vi.advanceTimersByTimeAsync(0);
     expect(f.parent.postMessage).toHaveBeenLastCalledWith(message);
   } finally {f.restore();}
 });

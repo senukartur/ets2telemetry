@@ -34,7 +34,7 @@ let showOpenDialog: ReturnType<typeof vi.fn<(window: unknown, options: unknown) 
 let shell: {showItemInFolder: ReturnType<typeof vi.fn<(file: string) => void>>; openPath: ReturnType<typeof vi.fn<(folder: string) => Promise<string>>>};
 let channels: {port1: EventEmitter & {postMessage: ReturnType<typeof vi.fn>; close: ReturnType<typeof vi.fn<() => void>>; start: ReturnType<typeof vi.fn<() => void>>}; port2: {close: ReturnType<typeof vi.fn<() => void>>}}[];
 let configurations: Electron.BrowserWindowConstructorOptions[];
-let log: ReturnType<typeof vi.fn> & {flush: ReturnType<typeof vi.fn>};
+let log: ReturnType<typeof vi.fn> & {flush: ReturnType<typeof vi.fn>; finalize: ReturnType<typeof vi.fn>};
 // Log location fix: the arguments of every createDiagnostics call and of every service fork.
 let diagnosticsCalls: unknown[][], forkCalls: unknown[][];
 // ET-011a fixture additions. The tray is unavailable unless a test enables it, so earlier tests keep their
@@ -149,7 +149,7 @@ function installFixture() {
     shell: {showItemInFolder: (file: string) => shell.showItemInFolder(file), openPath: (folder: string) => shell.openPath(folder)}}));
   vi.doMock('electron-squirrel-startup', () => ({default: false}));
   vi.doMock('../../apps/desktop/src/entrypoints', () => ({processEntrypoint: () => 'package.json'}));
-  log = Object.assign(vi.fn(), {flush: vi.fn(() => Promise.resolve(true)), drainSync: vi.fn()}); diagnosticsCalls = [];
+  log = Object.assign(vi.fn(), {flush: vi.fn(() => Promise.resolve(true)), settle: vi.fn<(timeoutMs: number) => Promise<void>>(() => Promise.resolve()), finalize: vi.fn<(timeoutMs: number) => Promise<void>>(() => Promise.resolve()), drainSync: vi.fn()}); diagnosticsCalls = [];
   vi.doMock('../../apps/desktop/src/diagnostics', async importOriginal => ({...await importOriginal<typeof import('../../apps/desktop/src/diagnostics')>(),
     createDiagnostics: (...args: unknown[]) => {diagnosticsCalls.push(args); return log;}}));
   vi.doMock('../../apps/desktop/src/broker-artifact', () => ({brokerConfiguration: resolveBroker, createBrokerResolver: () => resolveBroker}));
@@ -790,10 +790,10 @@ it.each(['tray', 'renderer', 'app-quit', 'session-end'] as const)('runs one orde
   expect(app.exit).not.toHaveBeenCalled(); expect(trays[0].destroy).not.toHaveBeenCalled();
   child.emit('exit', 0);
   // Since October 18, 2026 main exits after its pending log records are written, waiting at most MAIN_EXIT_FLUSH_MS.
-  expect(log.flush).toHaveBeenCalledExactlyOnceWith(MAIN_EXIT_FLUSH_MS); expect(app.exit).not.toHaveBeenCalled();
+  expect(log.finalize).toHaveBeenCalledExactlyOnceWith(MAIN_EXIT_FLUSH_MS); expect(app.exit).not.toHaveBeenCalled();
   await settle();
   expect(app.exit).toHaveBeenCalledExactlyOnceWith(0);
-  expect(log.flush.mock.invocationCallOrder[0]).toBeLessThan(app.exit.mock.invocationCallOrder[0]);
+  expect(log.finalize.mock.invocationCallOrder[0]).toBeLessThan(app.exit.mock.invocationCallOrder[0]);
   expect(trays[0].destroy).toHaveBeenCalledOnce();
   expect(trays[0].destroy.mock.invocationCallOrder[0]).toBeLessThan(app.exit.mock.invocationCallOrder[0]);
   expect(log.mock.calls.map(call => call[0] as string).filter(name => failurePattern.test(name))).toEqual([]);

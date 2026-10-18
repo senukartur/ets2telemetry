@@ -5,15 +5,20 @@ import path from 'node:path';
 const LIMIT = 256 * 1024;
 const MAX_RECORDS = 2000;
 /**
- * The longest the telemetry service waits for its pending log records before it exits, and before it posts a failure
- * report that main answers by killing it. Main's 3,000 ms kill deadline starts when main posts `stop`; the stop sequence
- * takes at most 2,500 ms plus three event-loop turns, so with this wait about 350 ms remain for the message delivery
- * and the process exit.
+ * The shortest wait of the telemetry service's final log write for the asynchronous append in flight, and its whole wait
+ * on exit paths without a `stop` request. After an orderly stop the service waits longer when the stop left time before
+ * main's kill deadline (telemetry-service.ts, exitWaitMs). Whatever is still queued afterwards is written synchronously.
  */
 export const SERVICE_EXIT_FLUSH_MS = 150;
 /**
- * The longest main waits for its final rows (`SERVICE_EXIT`, `APP_EXIT`) before `app.exit`. The exiting instance still
- * holds the single-instance lock, so a launch in this window only signals it and ends; the wait is kept short for that.
+ * How long the service lets an append in flight finish before it writes its queue synchronously and posts a failure
+ * report that main answers by killing it. Main reacts to the failure that much later at most.
+ */
+export const SERVICE_REPORT_SETTLE_MS = 500;
+/**
+ * How long main lets an append in flight finish before it writes its final rows (`SERVICE_EXIT`, `APP_EXIT`)
+ * synchronously and calls `app.exit`. The exiting instance still holds the single-instance lock, so a launch in this
+ * window only signals it and ends; the wait is kept short for that.
  */
 export const MAIN_EXIT_FLUSH_MS = 300;
 /** The longest the diagnostic bundle waits for main's pending records before it reads the logs. */
@@ -28,6 +33,18 @@ export interface DiagnosticLog {
    * `timeoutMs` with `false`. It never rejects.
    */
   flush(timeoutMs: number): Promise<boolean>;
+  /**
+   * Lets the asynchronous append in flight, if any, finish within `timeoutMs`, then writes everything still queued with
+   * one synchronous append (at most the 256 KiB the bounds counted). The queued rows are therefore on disk when it
+   * resolves, whatever the timer does. Only a batch that is still in flight after `timeoutMs` can land after them, or be
+   * lost if the process exits first. Nothing is written twice. Later records are written asynchronously again.
+   */
+  settle(timeoutMs: number): Promise<void>;
+  /**
+   * The final write before the process exits: like `settle`, but no further asynchronous append is started once it is
+   * called, and every record logged after it resolved is written synchronously at once.
+   */
+  finalize(timeoutMs: number): Promise<void>;
   /**
    * Crash and unhandled-rejection paths only: writes every queued record at once with a synchronous append (at most the
    * 256 KiB the bounds counted). A batch already being written asynchronously may land after these records, or be lost
@@ -62,19 +79,23 @@ export function createDiagnostics(directory: string, detailed = false): Diagnost
 
   let queue: {event: string; line: string}[] = [];
   let writing = false;
+  // final: no new asynchronous append (finalize was called); drained: finalize resolved, so records are written at once.
+  let final = false, drained = false;
+  // Called once the append in flight settled, before the next one may start (settle and finalize).
+  const idle: (() => void)[] = [];
   // Records handed to the queue, and records written or reported; flush waits until the second reaches the first.
   let queued = 0, handled = 0;
   const waiters: {until: number; resolve: (done: boolean) => void}[] = [];
 
   // A disk error must not break shutdown, and fallback output never includes raw errors.
   const fallback = (event: string) => console.error(`[ETS2Telemetry] ${event}`);
-  function settle(): void {
+  function notifyFlushes(): void {
     for (const waiter of waiters.splice(0)) {
       if (handled >= waiter.until) waiter.resolve(true); else waiters.push(waiter);
     }
   }
   function pump(): void {
-    if (writing || !queue.length) return;
+    if (writing || final || !queue.length) return;
     const batch = queue; queue = [];
     writing = true;
     const finished = (written: boolean) => {
@@ -86,7 +107,8 @@ export function createDiagnostics(directory: string, detailed = false): Diagnost
         handled += queue.length; queue = [];
       }
       writing = false; handled += batch.length;
-      settle(); pump();
+      for (const resume of idle.splice(0)) resume();
+      notifyFlushes(); pump();
     };
     appendFile(filename, batch.map(entry => entry.line).join(''), 'utf8').then(() => finished(true), () => finished(false));
   }
@@ -106,8 +128,32 @@ export function createDiagnostics(directory: string, detailed = false): Diagnost
     bytes += size;
     if (!available) { fallback(event); return; }
     queue.push({event, line}); queued++;
-    pump();
+    if (drained) drainSync(); else pump();
   };
+  function drainSync(): void {
+    if (!queue.length) return;
+    const batch = queue; queue = [];
+    if (!available) { for (const entry of batch) fallback(entry.event); }
+    else {
+      try { appendFileSync(filename, batch.map(entry => entry.line).join(''), 'utf8'); }
+      catch { available = false; for (const entry of batch) fallback(entry.event); }
+    }
+    handled += batch.length;
+    notifyFlushes();
+  }
+  function settleWrites(timeoutMs: number): Promise<void> {
+    return new Promise<void>(resolve => {
+      if (!writing) { drainSync(); resolve(); return; }
+      const done = () => {
+        clearTimeout(timer);
+        const index = idle.indexOf(done);
+        if (index >= 0) idle.splice(index, 1);
+        drainSync(); resolve();
+      };
+      const timer = setTimeout(done, timeoutMs);
+      idle.push(done);
+    });
+  }
   return Object.assign(log, {
     flush(timeoutMs: number): Promise<boolean> {
       if (handled >= queued) return Promise.resolve(true);
@@ -121,13 +167,11 @@ export function createDiagnostics(directory: string, detailed = false): Diagnost
         waiters.push(waiter);
       });
     },
-    drainSync(): void {
-      if (!queue.length) return;
-      const batch = queue; queue = [];
-      try { appendFileSync(filename, batch.map(entry => entry.line).join(''), 'utf8'); }
-      catch { available = false; for (const entry of batch) fallback(entry.event); }
-      handled += batch.length;
-      settle();
-    }
+    settle: settleWrites,
+    finalize(timeoutMs: number): Promise<void> {
+      final = true;
+      return settleWrites(timeoutMs).then(() => { drained = true; drainSync(); });
+    },
+    drainSync
   });
 }

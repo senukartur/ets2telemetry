@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os';
 import { processEntrypoint } from './entrypoints';
 import { ServiceProbe } from './service-probe';
 import {existsSync} from 'node:fs';
-import {createDiagnostics, SERVICE_EXIT_FLUSH_MS} from './diagnostics';
+import {createDiagnostics, SERVICE_EXIT_FLUSH_MS, SERVICE_REPORT_SETTLE_MS} from './diagnostics';
+import {SERVICE_KILL_DEADLINE_MS} from './service-supervisor';
 import {serviceLogLocation} from './log-location';
 import {TelemetryIngestion, initialLive, sourceSelection} from './telemetry-ingestion';
 import {LiveSubscriptions} from './live-subscriptions';
@@ -47,11 +48,12 @@ process.on('unhandledRejection', reason => {
   log.drainSync();
 });
 /**
- * Main answers a `failed` report after readiness by killing this process, so the rows that explain the failure are
- * written first, waiting at most SERVICE_EXIT_FLUSH_MS.
+ * Main answers a `failed` report after readiness by killing this process, so the rows that explain the failure are on
+ * disk before it is posted: the append in flight gets up to SERVICE_REPORT_SETTLE_MS, and the queue is then written
+ * synchronously.
  */
 function postFailure(message: {type: string; code?: unknown}): void {
-  void log.flush(SERVICE_EXIT_FLUSH_MS).then(() => {port.postMessage(message);});
+  void log.settle(SERVICE_REPORT_SETTLE_MS).then(() => {port.postMessage(message);});
 }
 const subscriptions = new LiveSubscriptions(initialLive());
 // The live update is the latest v0 update with the whitelisted v1 projection of the same selection attached
@@ -155,12 +157,26 @@ const probe = new ServiceProbe({
 });
 // Ordered, bounded service shutdown: 1000 (intake) + 500 (flush) + 1000 (storage) = SERVICE_STOP_BUDGET_MS.
 let stopping = false, storageStopped = false, exiting = false;
+// When this service received `stop`; main's kill deadline started a little earlier, when main posted it.
+let stopReceivedAt: number | undefined;
+/** Kept from main's kill deadline for the `stop` message's delivery, the synchronous log write and the process exit. */
+const EXIT_RESERVE_MS = 300;
 /**
- * Exits once the pending log records, including the final SHUTDOWN_STEP and SERVICE_REPORT rows, are written, waiting at most
- * SERVICE_EXIT_FLUSH_MS: 2,500 ms of stop sequence plus this wait stay inside main's 3,000 ms kill deadline.
+ * How long the final log write lets an append in flight finish: the time an orderly stop left before main's kill
+ * deadline, less EXIT_RESERVE_MS, and at least SERVICE_EXIT_FLUSH_MS. A stop that used its whole 2,500 ms budget uses
+ * 2,500 + 150 + 300 = 2,950 ms of the 3,000.
+ */
+function exitWaitMs(): number {
+  if (stopReceivedAt === undefined) return SERVICE_EXIT_FLUSH_MS;
+  return Math.max(SERVICE_EXIT_FLUSH_MS, Math.round(SERVICE_KILL_DEADLINE_MS - EXIT_RESERVE_MS - (performance.now() - stopReceivedAt)));
+}
+/**
+ * Exits once the final rows (the last SHUTDOWN_STEP and SERVICE_REPORT) are on disk. No asynchronous append starts after
+ * this point; the one in flight gets exitWaitMs(), and the queue is then written synchronously, so the final rows never
+ * depend on a timer racing process.exit. Only that in-flight batch, if it is still unsettled, can land after them or be lost.
  */
 function exitAfterLog(code: number): Promise<void> {
-  return log.flush(SERVICE_EXIT_FLUSH_MS).then(() => {process.exit(code);});
+  return log.finalize(exitWaitMs()).then(() => {process.exit(code);});
 }
 /**
  * A failed probe ends the service from its report, outside the orderly sequence. Close the history database first,
@@ -186,7 +202,7 @@ shutdown.register('storage', {name: 'storage-probe', budgetMs: 1000, run: async 
 runtime.register(shutdown);
 function stop(): void {
   if (stopping) return;
-  stopping = true; subscriptions.close(); runtime.stopStatus();
+  stopping = true; stopReceivedAt = performance.now(); subscriptions.close(); runtime.stopStatus();
   void shutdown.run().then(({clean}) => {
     const message = {type: 'stopped', clean};
     log('SERVICE_REPORT', message); port.postMessage(message);

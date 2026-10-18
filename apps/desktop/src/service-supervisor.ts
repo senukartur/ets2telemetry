@@ -1,4 +1,6 @@
 import {RecoveryBudget} from './recovery-budget';
+/** Main kills a service that has not exited this long after main posted `stop`; the service plans its exit within it. */
+export const SERVICE_KILL_DEADLINE_MS = 3000;
 export interface SupervisedService {
   postMessage(message: {type: 'stop'}): void;
   kill(): boolean;
@@ -101,7 +103,7 @@ export class ServiceSupervisor {
       this.log('SERVICE_STOP_TIMEOUT');
       try {if (!this.service?.kill()) this.log('SERVICE_KILL_REJECTED');}
       catch (error) {this.log('SERVICE_KILL_FAILED', error);}
-    }, 3000));
+    }, SERVICE_KILL_DEADLINE_MS));
     this.timers.push(setTimeout(() => {this.exitCode = 1; this.finish();}, 5000));
     try {this.service.postMessage({type: 'stop'});}
     catch (error) {this.exitCode = 1; this.log('SERVICE_STOP_SEND_FAILED', error);}

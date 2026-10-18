@@ -175,6 +175,65 @@ it('reports a failed synchronous drain on the console by event code only', async
   release();
   await log.flush(5000);
 });
+// Final write (October 18, 2026): dispatch run 39094511631 lost the service's last SHUTDOWN_STEP and SERVICE_REPORT rows on a
+// 4-processor runner at a 25% CPU cap, because the exit waited a fixed 150 ms for asynchronous appends that had not
+// finished. The final write now gives the append in flight a bounded wait and then writes the queue synchronously.
+const events = (dir: string) => rows(dir).map(row => row.event);
+/** Waits on real I/O (immediates are not faked) until check() holds, at most 1,000 turns. */
+async function until(check: () => boolean) {for (let turn = 0; turn < 1000 && !check(); turn++) await new Promise(resolve => setImmediate(resolve));}
+it('leaves every queued row on disk once at exit, after a slow in-flight write settles within the bound', async () => {
+  vi.useFakeTimers({toFake: ['setTimeout', 'clearTimeout']});
+  const dir = directory(), log = createDiagnostics(dir);
+  const release = held();
+  log('IN_FLIGHT'); log('SHUTDOWN_STEP'); log('SERVICE_REPORT');
+  let done = false;
+  void log.finalize(2700).then(() => {done = true;});
+  await vi.advanceTimersByTimeAsync(200);
+  expect(done).toBe(false);
+  // The slow append settles after 200 ms, well past the earlier fixed 150 ms wait.
+  release(); await until(() => done);
+  expect(done).toBe(true);
+  expect(events(dir)).toEqual(['IN_FLIGHT', 'SHUTDOWN_STEP', 'SERVICE_REPORT']);
+  // One asynchronous append (the batch in flight), then one synchronous append of the queue; nothing written twice.
+  expect(control.writes).toHaveLength(1);
+  expect(control.syncWrites).toHaveLength(1);
+  // A row logged after the final write is on disk when log() returns, and no asynchronous append starts any more.
+  log('LATE_ROW');
+  expect(events(dir)).toEqual(['IN_FLIGHT', 'SHUTDOWN_STEP', 'SERVICE_REPORT', 'LATE_ROW']);
+  expect(control.writes).toHaveLength(1);
+});
+it('still writes every queued row before exit when the in-flight write outlasts the bound, and never twice', async () => {
+  vi.useFakeTimers({toFake: ['setTimeout', 'clearTimeout']});
+  const dir = directory(), log = createDiagnostics(dir);
+  const release = held();
+  log('STORAGE_PROBE_STEP'); log('HISTORY_STORAGE_STEP'); log('SERVICE_REPORT');
+  let done = false;
+  void log.finalize(150).then(() => {done = true;});
+  await vi.advanceTimersByTimeAsync(150);
+  expect(done).toBe(true);
+  // At exit: the queued rows are on disk; only the batch still in flight is not (it may land later or be lost).
+  expect(events(dir)).toEqual(['HISTORY_STORAGE_STEP', 'SERVICE_REPORT']);
+  release(); vi.useRealTimers();
+  await new Promise(resolve => setTimeout(resolve, 50));
+  expect(events(dir).sort()).toEqual(['HISTORY_STORAGE_STEP', 'SERVICE_REPORT', 'STORAGE_PROBE_STEP']);
+});
+it('settles before a failure report: the queue is on disk, then logging continues asynchronously', async () => {
+  vi.useFakeTimers({toFake: ['setTimeout', 'clearTimeout']});
+  const dir = directory(), log = createDiagnostics(dir);
+  const release = held();
+  log('FIRST'); log('SERVICE_REPORT');
+  let done = false;
+  void log.settle(500).then(() => {done = true;});
+  await vi.advanceTimersByTimeAsync(100); expect(done).toBe(false);
+  release(); await until(() => done);
+  expect(done).toBe(true);
+  expect(events(dir)).toEqual(['FIRST', 'SERVICE_REPORT']);
+  expect([control.writes.length, control.syncWrites.length]).toEqual([1, 1]);
+  vi.useRealTimers();
+  log('AFTER'); expect(control.writes).toHaveLength(2);
+  expect(await log.flush(5000)).toBe(true);
+  expect(events(dir)).toEqual(['FIRST', 'SERVICE_REPORT', 'AFTER']);
+});
 it('bounds the flush: it reports false after its wait and true once the records are written', async () => {
   vi.useFakeTimers({toFake: ['setTimeout', 'clearTimeout']});
   const dir = directory(), log = createDiagnostics(dir);
