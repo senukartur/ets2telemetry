@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { processEntrypoint } from './entrypoints';
 import { ServiceProbe } from './service-probe';
 import {existsSync} from 'node:fs';
-import {createDiagnostics} from './diagnostics';
+import {createDiagnostics, SERVICE_EXIT_FLUSH_MS} from './diagnostics';
 import {TelemetryIngestion, initialLive, sourceSelection} from './telemetry-ingestion';
 import {LiveSubscriptions} from './live-subscriptions';
 import {NativePipeClient, coalesceBrokerDiagnostics, v1BrokerConfiguration, type BrokerConfiguration} from './native-pipe-client';
@@ -127,6 +127,13 @@ const probe = new ServiceProbe({
 // Ordered, bounded service shutdown: 1000 (intake) + 500 (flush) + 1000 (storage) = SERVICE_STOP_BUDGET_MS.
 let stopping = false, storageStopped = false, exiting = false;
 /**
+ * Exits once the pending log records, including the final SHUTDOWN_STEP and SERVICE_REPORT rows, are written, waiting at most
+ * SERVICE_EXIT_FLUSH_MS: 2,500 ms of stop sequence plus this wait stay inside main's 3,000 ms kill deadline.
+ */
+function exitAfterLog(code: number): Promise<void> {
+  return log.flush(SERVICE_EXIT_FLUSH_MS).then(() => {process.exit(code);});
+}
+/**
  * A failed probe ends the service from its report, outside the orderly sequence. Close the history database first,
  * bounded by the same budget as its shutdown step, then exit with the probe's code; a late close never delays the exit.
  * The recording status stops first, so the closing database is never reported to main (ET-015c).
@@ -136,7 +143,7 @@ function exitAfterHistory(code: number): void {
   exiting = true; runtime.stopStatus();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const bound = new Promise<void>(resolve => {timer = setTimeout(resolve, HISTORY_CLOSE_BUDGET_MS);});
-  void Promise.race([runtime.history.close().catch(() => undefined), bound]).then(() => {clearTimeout(timer); process.exit(code);});
+  void Promise.race([runtime.history.close().catch(() => undefined), bound]).then(() => {clearTimeout(timer); return exitAfterLog(code);});
 }
 const shutdown = new ShutdownSequence(log);
 shutdown.register('intake', {name: 'ingestion', budgetMs: 1000, run: () => ingestion.stop()});
@@ -154,7 +161,7 @@ function stop(): void {
   void shutdown.run().then(({clean}) => {
     const message = {type: 'stopped', clean};
     log('SERVICE_REPORT', message); port.postMessage(message);
-    process.exit(clean ? 0 : 1);
+    return exitAfterLog(clean ? 0 : 1);
   });
 }
 port.on('message', event => {

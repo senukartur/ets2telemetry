@@ -16,7 +16,7 @@ import {
   captureHiddenOverlay, LAYOUT_SMOKE_RESERVED_CSS, LAYOUT_SMOKE_WINDOWS, rendererPages, runOverlaySmoke, verifyLayoutContainment, verifyStripLayout, waitForLayoutContainment, waitForStripLayout, windowSecurity,
   verifyRendererStyles
 } from './overlay-observation.mjs';
-import {runLifecycleSmoke, seedLifecycleSettings, verifyLifecycleRestart} from './lifecycle-observation.mjs';
+import {runLifecycleSmoke, seedLifecycleSettings, until, verifyLifecycleRestart} from './lifecycle-observation.mjs';
 import {assertNoGameRunning, buildPluginFixture, runDiagnosticsExport, runPluginJourney, snapshotPluginFixture, verifyDisabledPluginCard, verifyPluginEvents, verifyPluginRestart} from './plugin-fixture.mjs';
 import {RECORDING_TARGET, runRecordingSmoke, startRecordingSource, verifyRecordingRestart, verifyRecordingRun} from './recording-observation.mjs';
 import {JOURNAL_TARGET, runJournalEmpty, runJournalExport, runJournalSeeded, seedJournalDatabase, verifyJournalRun} from './journal-observation.mjs';
@@ -348,7 +348,8 @@ try {
     });
     try {await window.reload();} finally {await window.unrouteAll();}
     await current('renderer-reload-delayed-commit');
-    const retiredAfter = await precommitRetirements();
+    // Main writes its log asynchronously, so the retirement row is awaited rather than read once.
+    const retiredAfter = await until(precommitRetirements, count => count > retiredBefore, 'DELAYED_COMMIT_RETIREMENT_NOT_LOGGED');
     result.telemetry.delayedCommit = {holdMilliseconds: commitDelayMilliseconds, precommitRetirementsBefore: retiredBefore, precommitRetirementsAfter: retiredAfter};
     assert.equal(retiredAfter - retiredBefore, 1, 'Delayed-commit reload did not retire the replaced document subscription');
     result.telemetry.rendererReloads = 3;

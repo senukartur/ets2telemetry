@@ -237,7 +237,9 @@ export async function runRecordingSmoke({application, launcher, dashboard, recor
   assert.deepEqual(record.status.afterFirstConnection.health, RECORDING_STATUS_INTERRUPTED);
   record.status.firstConnectionTexts = await shownText(dashboard, text => text.headline === 'Recording' && text.detail?.[0] === SYNTHETIC_NOTE && text.notice === TEST_NOTICE,
     'RECORDING_NOT_SHOWN_DURING_FIRST_CONNECTION');
-  record.status.firstConnectionRows = statusRows(await mainEvents());
+  // Main writes its log asynchronously, so the row is awaited rather than read once.
+  record.status.firstConnectionRows = statusRows(await until(mainEvents, rows => statusRows(rows).some(row => row.state === 'recording' && row.target === 'synthetic'),
+    'RECORDING_ROW_NOT_LOGGED_DURING_FIRST_CONNECTION'));
   assert.ok(record.status.firstConnectionRows.some(row => row.state === 'recording' && row.target === 'synthetic' && row.code === null && row.lostEvents === 0),
     'Main never received recording during connection 1');
   record.statusRecordingShown = true;
@@ -254,7 +256,10 @@ export async function runRecordingSmoke({application, launcher, dashboard, recor
   record.status.afterRestart = {dashboard: await waitForRecordingText(dashboard, RECORDING_TEXT_WAITING, 'RECORDING_NOT_WAITING_AFTER_SERVICE_RESTART'),
     health: await recordingHealth(application, status => status.state === 'waiting', 'RECORDING_NOT_WAITING_AFTER_SERVICE_RESTART')};
   assert.deepEqual(record.status.afterRestart.health, RECORDING_STATUS_WAITING);
-  const restartRows = record.status.serviceRestartRows = statusRows((await mainEvents()).slice(beforeServiceExit));
+  // Main writes its log asynchronously, so the rows are awaited rather than read once.
+  const unknownThenWaiting = rows => {const at = rows.findIndex(row => row.state === 'unknown'); return at >= 0 && rows.slice(at + 1).some(row => row.state === 'waiting' && row.target === 'synthetic');};
+  const restartRows = record.status.serviceRestartRows = statusRows((await until(mainEvents, rows => unknownThenWaiting(statusRows(rows.slice(beforeServiceExit))),
+    'RECORDING_RESTART_ROWS_NOT_LOGGED')).slice(beforeServiceExit));
   const unknownAt = restartRows.findIndex(row => row.state === 'unknown');
   assert.ok(unknownAt >= 0 && restartRows.slice(unknownAt + 1).some(row => row.state === 'waiting' && row.target === 'synthetic'),
     'Main did not report unknown between the terminated and the restarted service');

@@ -10,7 +10,7 @@ import type {AppHealth, AppState, DiagnosticsExportResult, LiveTelemetry, Overla
 import {SettingsBusyError, SettingsError, SettingsStore, settingsDirectory} from './settings-store';
 import {isUnitGame, isUnitProfile} from './unit-profiles';
 import {processEntrypoint} from './entrypoints';
-import {createDiagnostics, type DiagnosticFacts} from './diagnostics';
+import {BUNDLE_FLUSH_MS, createDiagnostics, MAIN_EXIT_FLUSH_MS, type DiagnosticFacts} from './diagnostics';
 import {ServiceSupervisor} from './service-supervisor';
 import {initialLive, sourceSelection} from './live-state';
 import {createBrokerResolver} from './broker-artifact';
@@ -124,7 +124,7 @@ function runApplication(profileError: unknown): void {
       const state = appState();
       return buildDiagnosticBundle({createdMs: Date.now(), app: {version, electron: process.versions.electron, node: process.versions.node, packaged: app.isPackaged, osRelease: os.release()},
         health: state.health, settings: state.settings, plugins: state.plugins, live: {status: lastLive.status, selection: lastLive.selection},
-        diagnosis: connectionDiagnosis(state.plugins, lastLive.status, lastLive.selection, state.health), logs: await readDiagnosticLogs(logDirectory, readFileTail),
+        diagnosis: connectionDiagnosis(state.plugins, lastLive.status, lastLive.selection, state.health), logs: await log.flush(BUNDLE_FLUSH_MS).then(() => readDiagnosticLogs(logDirectory, readFileTail)),
         identities: diagnosticIdentities()});
     }});
   // ET-017 (P13-P16): silent plugin setup. The mode gate is decided once from the launch environment (P15); the disabled
@@ -188,7 +188,8 @@ function runApplication(profileError: unknown): void {
       return pending.length > 1 ? Promise.all(pending).then(() => undefined) : pending[0];
     },
     destroyTray: () => {trayPresenter?.dispose(); const previous = tray; tray = undefined; previous?.destroy();},
-    exit: code => app.exit(code)
+    // The final rows (SERVICE_EXIT, APP_EXIT) are written before the process ends, waiting at most MAIN_EXIT_FLUSH_MS.
+    exit: code => {void log.flush(MAIN_EXIT_FLUSH_MS).then(() => app.exit(code));}
   });
   const supervisor = new ServiceSupervisor(log, code => lifecycle.finish(code), {
     restart: () => startService(),

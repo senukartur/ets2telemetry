@@ -3,6 +3,7 @@ import {EventEmitter} from 'node:events';
 import net from 'node:net';
 import {randomUUID} from 'node:crypto';
 import {afterEach, beforeAll, beforeEach, describe, expect, it, vi} from 'vitest';
+import {SERVICE_EXIT_FLUSH_MS} from '../../apps/desktop/src/diagnostics';
 import {TelemetryIngestion, TEST_PIPE_PATTERN, initialLive, sourceSelection} from '../../apps/desktop/src/telemetry-ingestion';
 import {LiveSubscriptions, type LivePort} from '../../apps/desktop/src/live-subscriptions';
 import {ServiceSupervisor} from '../../apps/desktop/src/service-supervisor';
@@ -71,7 +72,8 @@ it('boots transport only after the parent selection and retains it across render
   const parent = Object.assign(new EventEmitter(), {postMessage: vi.fn()});
   Object.defineProperty(process, 'parentPort', {configurable: true, value: parent});
   vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'synthetic'); vi.stubEnv('ETS2TELEMETRY_SOURCE_PIPE', endpoint);
-  vi.doMock('../../apps/desktop/src/diagnostics', () => ({createDiagnostics: () => vi.fn()}));
+  vi.doMock('../../apps/desktop/src/diagnostics', async importOriginal => ({...await importOriginal<typeof import('../../apps/desktop/src/diagnostics')>(),
+    createDiagnostics: () => Object.assign(vi.fn(), {flush: vi.fn(() => Promise.resolve(true))})}));
   // Isolate the existing storage probe; exercise the actual service handlers and ingestion.
   vi.doMock('../../apps/desktop/src/service-probe', () => ({ServiceProbe: class {
     constructor(private readonly dependencies: ProbeDependencies) {}
@@ -285,8 +287,9 @@ async function stoppedService(stopProbe: (report: ProbeDependencies['report']) =
   const previousPort = Object.getOwnPropertyDescriptor(process, 'parentPort');
   const parent = Object.assign(new EventEmitter(), {postMessage: vi.fn()});
   Object.defineProperty(process, 'parentPort', {configurable: true, value: parent});
-  const log = vi.fn();
-  vi.doMock('../../apps/desktop/src/diagnostics', () => ({createDiagnostics: () => log}));
+  // The log's final flush resolves at once, as with an idle disk.
+  const log = Object.assign(vi.fn(), {flush: vi.fn(() => Promise.resolve(true))});
+  vi.doMock('../../apps/desktop/src/diagnostics', async importOriginal => ({...await importOriginal<typeof import('../../apps/desktop/src/diagnostics')>(), createDiagnostics: () => log}));
   let probeReport: ProbeDependencies['report'] = () => undefined;
   vi.doMock('../../apps/desktop/src/service-probe', () => ({ServiceProbe: class {
     constructor(private readonly dependencies: ProbeDependencies) {probeReport = message => dependencies.report(message);}
@@ -576,6 +579,23 @@ describe('ET-015a recording gate in the service (R3, R10, R14)', () => {
       expect(f.stops()).toEqual([{type: 'stopped', clean: true}]); expect(f.exit).toHaveBeenCalledExactlyOnceWith(0);
     } finally {connect.mockRestore(); f.restore(); vi.unstubAllEnvs();}
   });
+});
+// The diagnostics log writes asynchronously (October 18, 2026): the service exits only after its final rows are written,
+// or after SERVICE_EXIT_FLUSH_MS, so the stop sequence plus the wait stay inside main's 3,000 ms kill deadline.
+it('exits after the log flush that follows the stopped report, waiting at most SERVICE_EXIT_FLUSH_MS', async () => {
+  const f = await stoppedService(report => {report({type: 'stopped'}); return Promise.resolve();});
+  try {
+    let written!: (done: boolean) => void;
+    f.log.flush.mockImplementation(() => new Promise<boolean>(resolve => {written = resolve;}));
+    f.stop(); await vi.advanceTimersByTimeAsync(0);
+    expect(f.stops()).toEqual([{type: 'stopped', clean: true}]);
+    expect(f.log.flush).toHaveBeenCalledExactlyOnceWith(SERVICE_EXIT_FLUSH_MS);
+    expect(f.log.mock.calls.at(-1)?.[0]).toBe('SERVICE_REPORT');
+    expect(f.log.mock.invocationCallOrder.at(-1)!).toBeLessThan(f.log.flush.mock.invocationCallOrder[0]);
+    expect(f.exit).not.toHaveBeenCalled();
+    written(true); await vi.advanceTimersByTimeAsync(0);
+    expect(f.exit).toHaveBeenCalledExactlyOnceWith(0);
+  } finally {f.restore();}
 });
 it('waits for the history database to close before the single stopped report, and reports a failed close as unclean', async () => {
   let finish!: () => void;
