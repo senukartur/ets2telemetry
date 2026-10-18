@@ -236,6 +236,8 @@ describe('ET-019 shutdown and close stalls', () => {
     // As in (a): the sample row is written before the end of the connection, so the flush has nothing slow to do.
     const socket = gatedConnect(timeline, '9', () => until(() => timeline.includes('done appendSamples'), 'the early sample write', HANG_GUARD_MS), error => failures.push(error));
     const held = guarded(once(worker.control!, 'message'), 'the held close', HANG_GUARD_MS).then(([message]) => { timeline.push('held close'); return message as unknown; });
+    // Awaited only after the stop; if the case fails earlier, its hang guard must not reject unobserved.
+    held.catch(() => undefined);
     let storageStarted = 0, terminatedAfterMs: number | undefined;
     const shutdown = tracedShutdown(timeline, name => { if (name === 'history-storage') storageStarted = performance.now(); });
     // A test-side wrapper of the worker handle (no worker change) that marks the first termination request.
