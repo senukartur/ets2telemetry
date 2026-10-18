@@ -4,11 +4,12 @@ import {blockReasonFor, hashPluginFile, removeEmptyPluginsDirectory, TARGET_RETR
 import {PLUGIN_TEMP_FILE, sameRoot, withoutFailure, type PluginBlockReason, type PluginRegistry,
   type PluginRegistryDocument} from '../plugin-setup/plugin-registry';
 import {PLUGIN_FILE_NAME, validateGameLayout} from '../plugin-setup/steam-discovery';
-import type {PendingFolder} from './pending-record';
+import {MAX_FOLDER_HASHES, MAX_FOLDER_TEMPS, MAX_PENDING_FOLDERS, type PendingFolder} from './pending-record';
 
 // Plugin cleanup on uninstall (ET-018 U5 step 3), the contract ET-017 wrote for ET-018 (docs/plugin-setup.md,
-// "Contract with ET-018"). It acts only on a registry that loads as `loaded` or `empty`, and only on the folders an
-// install record or a pending install or update names (and those the uninstall intent kept). For each folder, while
+// "Contract with ET-018"). It uses a registry only when it loads as `loaded` or `empty`, and acts only on the folders an
+// install record or a pending install or update names, and those the uninstall intent kept; with an invalid, newer or
+// unreadable registry, only on the intent's folders, with their own hashes (docs/uninstall.md). For each folder, while
 // neither that game nor TruckersMP runs: the layout is checked again without following links, the exact temporary
 // files of pending intents are removed, the DLL is removed only while its hash is a recorded, pending or known hash
 // and the file is not read-only, and the plugins folder only when this application created it and it is now empty.
@@ -67,6 +68,24 @@ export function cleanupFolders(document: PluginRegistryDocument | undefined, kep
   }
   return folders.map(folder => ({game: folder.game, root: folder.root, hashes: [...folder.hashes].sort(), temps: [...folder.temps].sort(),
     createdPluginsDirectory: folder.created}));
+}
+
+/**
+ * The folders as the intent can record them (MAX_PENDING_FOLDERS, MAX_FOLDER_HASHES, MAX_FOLDER_TEMPS). The registry's
+ * bounds do not keep the merge within the intent's: up to 32 registry folders plus the intent's 32, and per folder up to
+ * 17 registry hashes and 16 temporary files plus the intent's own. The intent's folders come first, each with its own
+ * hashes and temporary files first, because once the registry is gone or unusable only the intent knows them; then the
+ * registry's, in the order of `folders`. What does not fit is the registry's alone, and it stays there: the registry is
+ * wiped only after a clean run, and a folder leaves it only after it was cleaned with the full merged list.
+ */
+export function intentFolders(folders: readonly PendingFolder[], kept: readonly PendingFolder[]): PendingFolder[] {
+  const ownOf = (folder: PendingFolder) => kept.find(other => other.game === folder.game && sameRoot(other.root, folder.root));
+  const bounded = (own: readonly string[], all: readonly string[], bound: number) => [...new Set([...own, ...all])].slice(0, bound).sort();
+  const ordered = [...folders.filter(folder => ownOf(folder)), ...folders.filter(folder => !ownOf(folder))];
+  return ordered.slice(0, MAX_PENDING_FOLDERS).map(folder => {
+    const own = ownOf(folder);
+    return {...folder, hashes: bounded(own?.hashes ?? [], folder.hashes, MAX_FOLDER_HASHES), temps: bounded(own?.temps ?? [], folder.temps, MAX_FOLDER_TEMPS)};
+  });
 }
 
 const errorCode = (error: unknown) => error && typeof error === 'object' && 'code' in error ? String(error.code) : null;
