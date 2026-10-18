@@ -1,0 +1,35 @@
+{
+  "scenario": "missing-job-configuration",
+  "basis": ["REG-004", "synthetic-inference"],
+  "authoredFrom": [
+    "tests/storage/replay-journal-export.test.ts builds the scenario from the header and seed of units-currency.json (ATS, SDK-documented USD): simulation.started (1, atMs 10); job.delivered with no job configuration ever observed (2, 20); job A configured while running (3, 30); a toll (4, 40); simulation.paused (5, 50); job.cleared (6, 60); a frame with a timer restart at 70 (timers.restart, 7); job A configured again with identical values (8, 80); simulation.started (9, 90); a toll (10, 100); job.delivered (11, 110); job.cleared (12, 120). One durable client commits and acknowledges every item; the only frame is the timer restart, while paused",
+    "concept.md (Summaries and Events) and AGENTS.md: a disappearing job configuration does not by itself confirm delivery, and ambiguous continuations are never merged automatically (REG-004)",
+    "docs/simulator-v1.md: UTC labels are 1,800,000,000,000 ms + atMs; docs/trips.md T4: trips are labelled trip@<eventSeq of the job configuration>",
+    "docs/trips.md Attribution (T14): the delivery at 2 has no attachable trip and no job is known, so it is ambiguous, opens nothing and closes nothing",
+    "docs/trips.md transitions: job A configured while running opens trip@3 unknown with no cause; the toll (4) is trip; after job.cleared the trip awaits its outcome; timers.restart outside a load window closes it {none, discontinuity, partial} at the restart's label (atMs 70), so the cleared configuration alone never makes it delivered",
+    "docs/trips.md T12 and cause intervals: the identical job after the timer restart and before the next start opens trip@8 during a load (opened-at-load) and, because the game's last trip closed without an outcome with the same job key, a not-merged continuation interval {cause: discontinuity, continuationOf: trip@3}; the two trips are never merged",
+    "docs/trips.md transitions: after the start the toll (10) and the delivery (11) attach to trip@8, which closes {delivered, outcome}, partial because of its cause intervals",
+    "docs/trips.md T16 (PR-2) and J8: no odometer or fuel channel, so neither trip observes distance or fuel; no truck or trailer is configured"
+  ],
+  "trips": [
+    {"trip": "trip@3", "jobConfigurationEventSeq": "3", "truckConfigurationEventSeq": null, "trailerConfigurationEventSeqs": [], "openedEventSeq": "3",
+      "gameMode": {"mode": "unknown", "method": "none", "confidence": "none"}, "gameModeAmbiguous": false, "outcome": "none", "outcomeEventSeq": null, "closeReason": "discontinuity",
+      "recordingCompleteness": "partial", "startedUtcMs": 1800000000030, "endedUtcMs": 1800000000070,
+      "observedDistanceM": {"available": false, "reason": "not-observed"}, "fuelUsedL": {"available": false, "reason": "not-observed"}},
+    {"trip": "trip@8", "jobConfigurationEventSeq": "8", "truckConfigurationEventSeq": null, "trailerConfigurationEventSeqs": [], "openedEventSeq": "8",
+      "gameMode": {"mode": "unknown", "method": "none", "confidence": "none"}, "gameModeAmbiguous": false, "outcome": "delivered", "outcomeEventSeq": "11", "closeReason": "outcome",
+      "recordingCompleteness": "partial", "startedUtcMs": 1800000000080, "endedUtcMs": 1800000000110,
+      "observedDistanceM": {"available": false, "reason": "not-observed"}, "fuelUsedL": {"available": false, "reason": "not-observed"}}
+  ],
+  "attributions": [
+    {"eventSeq": "2", "trip": null, "attribution": "ambiguous"},
+    {"eventSeq": "4", "trip": "trip@3", "attribution": "trip"},
+    {"eventSeq": "10", "trip": "trip@8", "attribution": "trip"},
+    {"eventSeq": "11", "trip": "trip@8", "attribution": "trip"}
+  ],
+  "intervals": [
+    {"trip": "trip@8", "kind": "discontinuity", "detail": {"cause": "opened-at-load", "atEventSeq": "8"}},
+    {"trip": "trip@8", "kind": "discontinuity", "detail": {"cause": "discontinuity", "continuationOf": "trip@3", "decision": "not-merged", "atEventSeq": "8"}}
+  ],
+  "coverage": {"committedThroughEventSeq": "12", "committed": 12, "duplicate": 0, "covered": 0}
+}
