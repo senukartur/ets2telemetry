@@ -41,12 +41,14 @@ import {DIAGNOSTICS_EXPORT_CHANNEL, isPluginGame, isPluginTargetId, PLUGIN_CHANN
 import {connectionDiagnosis} from './connection-diagnosis';
 import {buildDiagnosticBundle, readDiagnosticLogs, readFileTail} from './diagnostic-bundle';
 import {DiagnosticBundleExporter} from './diagnostic-bundle-writer';
-import {cancelDeferralOnStart, EXIT_CODES, parseSquirrelArgs, productionSquirrelPorts, runSquirrelEvent} from './squirrel-events';
+import {cancelDeferralOnStart, EXIT_CODES, parseSquirrelArgs, prepareSquirrelProcess, productionSquirrelPorts, runSquirrelEvent} from './squirrel-events';
 
 // ET-018 (U2): a Squirrel event runs first and alone, before the profile override, logs, settings, plugin setup and the
 // service. Unpackaged, the first argument after the executable is the application path.
 const squirrelArgs = parseSquirrelArgs(process.argv.slice(app.isPackaged ? 1 : 2));
 if (squirrelArgs.kind !== 'none') {
+  // Before anything else: no GPU or network-service child process may outlive this process (Squirrel deletes the folder).
+  prepareSquirrelProcess(app);
   void runSquirrelEvent(squirrelArgs, productionSquirrelPorts({app, appVersion: version, executable: process.execPath, env: process.env, mainDirectory: __dirname,
     resourcesPath: process.resourcesPath})).then(code => app.exit(code), () => app.exit(EXIT_CODES.refused));
 } else {

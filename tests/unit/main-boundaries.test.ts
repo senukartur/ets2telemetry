@@ -14,7 +14,8 @@ import {changed, DETAIL, LIST_ITEM, TRIP, TRIP_PAGE} from '../shared/journal-rep
 const processEvents = ['uncaughtException', 'unhandledRejection'] as const;
 const processEmitter: EventEmitter = process;
 let originals: Map<string, ReturnType<EventEmitter['listeners']>>;
-let app: EventEmitter & {exit: ReturnType<typeof vi.fn>; quit: ReturnType<typeof vi.fn>; setPath: ReturnType<typeof vi.fn>; requestSingleInstanceLock: ReturnType<typeof vi.fn>};
+let app: EventEmitter & {exit: ReturnType<typeof vi.fn>; quit: ReturnType<typeof vi.fn>; setPath: ReturnType<typeof vi.fn>; requestSingleInstanceLock: ReturnType<typeof vi.fn>;
+  disableHardwareAcceleration: ReturnType<typeof vi.fn>; commandLine: {appendSwitch: ReturnType<typeof vi.fn>}};
 let ipc: EventEmitter;
 let handlers: Map<string, (event: unknown, source?: unknown) => unknown>;
 let child: EventEmitter & {postMessage: ReturnType<typeof vi.fn>; kill: ReturnType<typeof vi.fn>};
@@ -101,7 +102,7 @@ function installFixture() {
   originals = new Map(processEvents.map(name => [name, processEmitter.listeners(name)]));
   lockGranted = true; trayAvailable = false; trays = []; extraContents = [];
   app = Object.assign(new EventEmitter(), {exit: vi.fn(), quit: vi.fn(), getPath: () => 'C:\\isolated', setPath: vi.fn(), whenReady: () => Promise.resolve(), isPackaged: false,
-    requestSingleInstanceLock: vi.fn(() => lockGranted)});
+    requestSingleInstanceLock: vi.fn(() => lockGranted), disableHardwareAcceleration: vi.fn(), commandLine: {appendSwitch: vi.fn()}});
   child = Object.assign(new EventEmitter(), {postMessage: vi.fn(), kill: vi.fn(() => true)});
   children = [child]; let forks = 0;
   contents = Object.assign(new EventEmitter(), {mainFrame: {}, send: vi.fn(), postMessage: vi.fn(), setWindowOpenHandler: vi.fn(), setZoomFactor: vi.fn()});
@@ -786,6 +787,10 @@ it.each([
   trayAvailable = true;
   await withArgv(args, async () => {await loadMain(); await settle();});
   expect(run).toHaveBeenCalledExactlyOnceWith(parsed, {});
+  // No GPU or network-service child process may outlive a Squirrel event process.
+  expect(app.disableHardwareAcceleration).toHaveBeenCalledOnce();
+  expect(app.commandLine.appendSwitch.mock.calls).toEqual([['in-process-gpu'], ['enable-features', 'NetworkServiceInProcess2']]);
+  expect(app.commandLine.appendSwitch.mock.invocationCallOrder[0]).toBeLessThan(run.mock.invocationCallOrder[0]);
   expect(app.exit).toHaveBeenCalledExactlyOnceWith(code);
   expect(app.setPath).not.toHaveBeenCalled(); expect(app.requestSingleInstanceLock).not.toHaveBeenCalled();
   expect(diagnosticsCalls).toEqual([]); expect(log).not.toHaveBeenCalled(); expect(settingsDirectories).toEqual([]);
@@ -798,6 +803,7 @@ it('starts normally for --squirrel-firstrun', async () => {
     runSquirrelEvent: run}));
   await withArgv(['--squirrel-firstrun'], async () => {await ready();});
   expect(run).not.toHaveBeenCalled();
+  expect(app.disableHardwareAcceleration).not.toHaveBeenCalled(); expect(app.commandLine.appendSwitch).not.toHaveBeenCalled();
   expect(app.requestSingleInstanceLock).toHaveBeenCalledOnce();
   expect(app.listenerCount('second-instance')).toBe(1);
 });

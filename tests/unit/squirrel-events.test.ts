@@ -1,7 +1,7 @@
 import * as fsp from 'node:fs/promises';
 import path from 'node:path';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
-import {cancelDeferralOnStart, EXIT_CODES, hookDeadlines, INSTANCE_EXIT_WAIT_MS, parseSquirrelArgs, PROCESS_START_MARGIN_MS, RECEIPT_FORMAT, runSquirrelEvent, settle,
+import {cancelDeferralOnStart, EXIT_CODES, hookDeadlines, prepareSquirrelProcess, PROCESS_POLL_MS, INSTANCE_EXIT_WAIT_MS, parseSquirrelArgs, PROCESS_START_MARGIN_MS, RECEIPT_FORMAT, runSquirrelEvent, settle,
   UNINSTALL_DEADLINE_MS, UNINSTALL_HARD_STOP_MS,
   type SquirrelArgs, type SquirrelPorts, type UninstallReceipt} from '../../apps/desktop/src/squirrel-events';
 import type {UninstallPorts, UninstallResult} from '../../apps/desktop/src/uninstall/engine';
@@ -52,6 +52,7 @@ function harness(fixture: InstallFixture, overrides: Partial<SquirrelPorts> & {e
     fs: fixture.fs,
     checkRunning: notRunning,
     readKnown: () => Promise.resolve(KNOWN),
+    countOtherProcesses: () => Promise.resolve(0),
     writeReceipt: (name, text) => {receipts.push({name, text, receipt: JSON.parse(text) as UninstallReceipt}); return Promise.resolve(true);},
     clock: () => clock,
     delay: milliseconds => {clock += milliseconds; return Promise.resolve();},
@@ -437,6 +438,46 @@ describe('the hard stop and the run claim one result', () => {
     expect(await runSquirrelEvent(event('uninstall'), test.ports)).toBe(EXIT_CODES.deferred);
     expect(test.receipts.map(entry => [entry.receipt.outcome, entry.receipt.code])).toEqual([['deferred', 'ENGINE_FAILED']]);
     expect(await listTree(fixture.base)).toEqual(before);
+  });
+});
+
+describe('no process of this application outlives the uninstall hook', () => {
+  it('a Squirrel event process turns off hardware acceleration and runs the GPU and the network service in process', () => {
+    const calls: string[] = [];
+    prepareSquirrelProcess({disableHardwareAcceleration: () => calls.push('disableHardwareAcceleration'),
+      commandLine: {appendSwitch: (name, value) => calls.push(value === undefined ? name : `${name}=${value}`)}});
+    expect(calls).toEqual(['disableHardwareAcceleration', 'in-process-gpu', 'enable-features=NetworkServiceInProcess2']);
+  });
+
+  it('waits for other processes of the executable to end before the receipt, and records the count and the wait', async () => {
+    const {fixture} = await scene();
+    const counts = [2, 1, 0];
+    let calls = 0, receiptAt = -1;
+    const test = harness(fixture, {countOtherProcesses: () => Promise.resolve(counts[Math.min(calls++, counts.length - 1)])});
+    const write = test.ports.writeReceipt;
+    test.ports = {...test.ports, writeReceipt: (name, text) => {receiptAt = calls; return write(name, text);}};
+    expect(await runSquirrelEvent(event('uninstall'), test.ports)).toBe(EXIT_CODES.complete);
+    expect(calls).toBe(3);
+    expect(receiptAt).toBe(3);
+    expect(test.receipts[0].receipt).toMatchObject({outcome: 'complete', otherProcesses: 0, processWaitMs: 2 * PROCESS_POLL_MS});
+  });
+
+  it('stops waiting at the engine deadline and records what is still running, without changing the outcome', async () => {
+    const {fixture} = await scene();
+    const test = harness(fixture, {countOtherProcesses: () => Promise.resolve(1)});
+    expect(await runSquirrelEvent(event('uninstall'), test.ports)).toBe(EXIT_CODES.complete);
+    const receipt = test.receipts[0].receipt;
+    expect(receipt).toMatchObject({outcome: 'complete', otherProcesses: 1});
+    // The harness clock starts at 1000 and the anchored engine deadline is 7500.
+    expect(receipt.processWaitMs).toBeLessThanOrEqual(7500 - 1000);
+    expect(receipt.processWaitMs).toBeGreaterThan(7500 - 1000 - 2 * PROCESS_POLL_MS);
+  });
+
+  it('records null and does not wait when the processes cannot be listed', async () => {
+    const {fixture} = await scene();
+    const test = harness(fixture, {countOtherProcesses: () => Promise.resolve(null)});
+    expect(await runSquirrelEvent(event('uninstall'), test.ports)).toBe(EXIT_CODES.complete);
+    expect(test.receipts[0].receipt).toMatchObject({otherProcesses: null, processWaitMs: 0});
   });
 });
 

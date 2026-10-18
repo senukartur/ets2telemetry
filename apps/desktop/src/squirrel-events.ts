@@ -2,7 +2,7 @@ import {mkdirSync} from 'node:fs';
 import * as nodeFs from 'node:fs/promises';
 import path from 'node:path';
 import {nodeExecFile, runFixedProgram} from './plugin-setup/fixed-program';
-import {checkRunningGames} from './plugin-setup/game-processes';
+import {checkRunningGames, listProcesses} from './plugin-setup/game-processes';
 import {pluginBundleDirectory, readPluginBundle} from './plugin-setup/plugin-bundle';
 import type {RunningCheck} from './plugin-setup/plugin-installer';
 import {cancelDeferral, writeDeferralReadme, type CancelFileSystem, type CancelOutcome} from './uninstall/deferral';
@@ -46,6 +46,8 @@ export const INSTANCE_EXIT_WAIT_MS = 6000;
 export const INSTANCE_POLL_MS = 200;
 /** The single-instance payload that asks a running instance to run its explicit exit with reason `uninstall`. */
 export const UNINSTALL_EXIT_PAYLOAD = Object.freeze({ets2telemetry: 'uninstall-exit'} as const);
+/** The uninstall hook waits for other processes of this executable to end, polled this often, until its engine deadline. */
+export const PROCESS_POLL_MS = 200;
 /** `Update.exe --createShortcut` gets at most this long; Squirrel waits 15 s for the install and updated hooks. */
 export const SHORTCUT_TIMEOUT_MS = 10_000;
 /** `Update.exe --removeShortcut` runs beside the cleanup and gets at most this long. */
@@ -54,6 +56,25 @@ export const RECEIPT_PREFIX = 'ETS2Telemetry-uninstall-';
 export const RECEIPT_FORMAT = 'ets2telemetry.uninstall-receipt';
 export const EXIT_CODES: Readonly<Record<UninstallResult['outcome'], number>> = Object.freeze({complete: 0, deferred: 3, refused: 4});
 const EXECUTABLE_NAME = /^[A-Za-z0-9._ -]{1,64}\.exe$/i;
+
+/** The part of Electron's `app` that a Squirrel event process configures before it is ready. */
+export interface SquirrelProcessApp {
+  disableHardwareAcceleration(): void;
+  readonly commandLine: {appendSwitch(name: string, value?: string): void};
+}
+/**
+ * A Squirrel event process starts no child process (ET-018 PR-3). Squirrel deletes the install folder as soon as the
+ * hook's main process exits; a windowless Electron otherwise runs a GPU process and a network-service utility process,
+ * which end a moment after main and hold `v8_context_snapshot.bin`, `vk_swiftshader.dll` and `vk_swiftshader_icd.json`,
+ * so Squirrel could not delete them (a hosted lifecycle run, dispatch 39102356971). With hardware acceleration off, the GPU work in
+ * process and the network service in process, a scratch Electron 44.7.0 hook ran one process image instead of three.
+ * Must run before the app is ready; normal launches never call it.
+ */
+export function prepareSquirrelProcess(app: SquirrelProcessApp): void {
+  app.disableHardwareAcceleration();
+  app.commandLine.appendSwitch('in-process-gpu');
+  app.commandLine.appendSwitch('enable-features', 'NetworkServiceInProcess2');
+}
 
 /**
  * Strict parsing of the arguments after the executable (and, unpackaged, after the application path). `none` when no
@@ -93,6 +114,13 @@ export interface UninstallReceipt {
   readonly shortcuts: ShortcutState;
   /** Milliseconds from the process time origin to the hook's start (main's script), for measuring the startup cost. */
   readonly startupOffsetMs: number;
+  /**
+   * Other processes of this application's executable (by image name, without this process and its own children) still
+   * running when the receipt was written, after waiting for them until the engine deadline; null when not listed.
+   */
+  readonly otherProcesses: number | null;
+  /** How long the hook waited for them. */
+  readonly processWaitMs: number;
   /** Milliseconds from the hook's start to the receipt. */
   readonly elapsedMs: number;
 }
@@ -113,6 +141,8 @@ export interface SquirrelPorts {
   readonly checkRunning: RunningCheck;
   /** The bundle's own and earlier released plugin hashes; empty when the bundle cannot be read. */
   readKnown(): Promise<readonly string[]>;
+  /** The number of other processes of this executable (see UninstallReceipt.otherProcesses), or null when listing failed. */
+  countOtherProcesses(): Promise<number | null>;
   /** Production only (O7): releases the lock, then removes Electron's Roaming userData; true when it is gone. */
   readonly removeRoamingUserData?: () => Promise<boolean>;
   writeReceipt(name: string, content: string): Promise<boolean>;
@@ -176,7 +206,7 @@ export function hookDeadlines(started: number): {engine: number; hardStop: numbe
 async function uninstallWithHardStop(ports: SquirrelPorts): Promise<number> {
   const started = ports.clock();
   const deadlines = hookDeadlines(started);
-  const state: HookState = {mode: null, instance: 'not-checked', shortcuts: 'skipped', claimed: false};
+  const state: HookState = {mode: null, instance: 'not-checked', shortcuts: 'skipped', claimed: false, otherProcesses: null, processWaitMs: 0};
   const claim = (settled: Settled, readme: boolean): Promise<number> => {
     if (state.claimed) return new Promise<number>(() => undefined);
     state.claimed = true;
@@ -189,7 +219,8 @@ async function uninstallWithHardStop(ports: SquirrelPorts): Promise<number> {
   return Promise.race([run, hardStop]);
 }
 
-interface HookState {mode: UninstallReceipt['mode']; instance: UninstallReceipt['instance']; shortcuts: ShortcutState; claimed: boolean}
+interface HookState {mode: UninstallReceipt['mode']; instance: UninstallReceipt['instance']; shortcuts: ShortcutState; claimed: boolean;
+  otherProcesses: number | null; processWaitMs: number}
 type Settled = Pick<UninstallResult, 'outcome' | 'plugins' | 'data' | 'roaming'> & {code: HookCode | null};
 
 async function uninstall(ports: SquirrelPorts, state: HookState, deadline: number, finish: (settled: Settled, readme: boolean) => Promise<number>): Promise<number> {
@@ -223,6 +254,9 @@ async function uninstall(ports: SquirrelPorts, state: HookState, deadline: numbe
   // A deferral leaves the README beside the intent (the U7 fallback until the PR-5 executor).
   const readme = settled.outcome === 'deferred' ? await writeDeferralReadme(ports.fs, roots.dataRoot, settled.code).catch(() => false) : false;
   state.shortcuts = await shortcuts;
+  // Squirrel deletes the install folder right after this process exits; a process of this executable that is still
+  // ending (an instance Squirrel ended, a portable copy that got the uninstall-exit request) would keep its files.
+  await waitForOtherProcesses(ports, state, deadline);
   return finish(settled, readme);
 }
 
@@ -234,6 +268,17 @@ export function settle(result: UninstallResult, dataRootPresent: boolean): Settl
   const residue = result.plugins.blocked.length > 0 || result.data.failed.length > 0 || dataRootPresent;
   if (result.outcome === 'complete' && residue) return {...result, outcome: 'deferred', code: 'RESIDUE_REMAINS', roaming: result.roaming};
   return result;
+}
+
+/** Polls the other processes of this executable until none is left or the deadline passes, and records the last count. */
+async function waitForOtherProcesses(ports: SquirrelPorts, state: HookState, deadline: number): Promise<void> {
+  const started = ports.clock();
+  for (;;) {
+    state.otherProcesses = await ports.countOtherProcesses().catch(() => null);
+    if (state.otherProcesses === 0 || state.otherProcesses === null || ports.clock() + PROCESS_POLL_MS > deadline) break;
+    await ports.delay(PROCESS_POLL_MS);
+  }
+  state.processWaitMs = Math.max(0, Math.round(ports.clock() - started));
 }
 
 /** Requests the lock with the uninstall-exit payload; a running instance gets `deadline` to exit and release it. */
@@ -251,7 +296,7 @@ async function writeReceipt(ports: SquirrelPorts, settled: Settled, state: HookS
   const now = ports.now();
   const receipt: UninstallReceipt = {format: RECEIPT_FORMAT, version: 1, createdUtc: now.toISOString(), appVersion: ports.appVersion, outcome: settled.outcome,
     code: settled.code, mode: state.mode, instance: state.instance, plugins: settled.plugins, data: settled.data, roaming: settled.roaming, readme,
-    shortcuts: state.shortcuts, startupOffsetMs: Math.max(0, Math.round(started)), elapsedMs: Math.max(0, Math.round(ports.clock() - started))};
+    shortcuts: state.shortcuts, startupOffsetMs: Math.max(0, Math.round(started)), otherProcesses: state.otherProcesses, processWaitMs: state.processWaitMs, elapsedMs: Math.max(0, Math.round(ports.clock() - started))};
   return ports.writeReceipt(`${RECEIPT_PREFIX}${receiptStamp(now)}.json`, `${JSON.stringify(receipt, null, 2)}\n`).catch(() => false);
 }
 
@@ -261,6 +306,7 @@ export interface SquirrelApp {
   setPath(name: 'userData' | 'sessionData', value: string): void;
   requestSingleInstanceLock(additionalData?: Record<string, unknown>): boolean;
   releaseSingleInstanceLock(): void;
+  getAppMetrics(): readonly {readonly pid: number}[];
 }
 export const ROAMING_USER_DATA_NAME = 'ETS2Telemetry Desktop';
 
@@ -281,6 +327,14 @@ export function productionSquirrelPorts(options: {app: SquirrelApp; appVersion: 
       {timeoutMs, maxOutputBytes: 64 * 1024})).ok,
     fs,
     checkRunning: signal => checkRunningGames({signal}),
+    countOtherProcesses: async () => {
+      const listing = await listProcesses();
+      if (!listing.ok) return null;
+      let own: Set<number>;
+      try {own = new Set([process.pid, ...app.getAppMetrics().map(metric => metric.pid)]);} catch {own = new Set([process.pid]);}
+      const name = path.win32.basename(options.executable).toLowerCase();
+      return listing.rows.filter(row => row.name.toLowerCase() === name && !own.has(row.pid)).length;
+    },
     readKnown: async () => {
       const read = await readPluginBundle(pluginBundleDirectory(options.mainDirectory, options.resourcesPath, true));
       return read.ok ? [read.bundle.sha256, ...read.bundle.known.map(entry => entry.sha256)] : [];
