@@ -990,3 +990,37 @@ The card stays in Review. Its prerequisites ET-009 and ET-011 are not accepted, 
 - the card's readability.
 
 `GAME_HISTORY_RECORDING` stays `false`. ET-018 and later phases are not authorized by this update. No game, TruckersMP, display or performance claim follows.
+
+## ET-018 authorization — October 18, 2026
+
+Under the owner's standing delegation of October 15, 2026, the coordinator started ET-018 on October 18, 2026: Windows packaging, safe upgrades and explicit uninstall. It implements the [uninstall rule of October 16, 2026](#uninstall-removes-local-data--october-16-2026) and the uninstall contract in [game plugin setup](docs/plugin-setup.md). The coordinator adopted the architect's decisions U1–U17 as coordinator decisions.
+
+The owner decided these on October 18, 2026:
+- **O1, signing.** An unsigned internal alpha now; apply to the SignPath Foundation after the first alpha.
+- **O2, distribution.** A GitHub Releases pre-release, published only with the owner's authorization.
+- **O3, deferred cleanup.** A RunOnce executor finishes a deferred cleanup at the next sign-in.
+- **O7, Roaming folder.** Electron's Roaming folder is removed, best effort.
+
+The owner did not review the other decisions individually.
+
+| # | Decision |
+| --- | --- |
+| U1 | Keep the Squirrel maker: per-user, no elevation. A Windows-initiated uninstall cannot be stopped, so cleanup defers explicitly instead of claiming success |
+| U2 | Our own Squirrel event handler replaces electron-squirrel-startup. It parses argv strictly. Install, update and obsolete events never delete data. The uninstall event runs the cleanup engine within an 8 s deadline, inside Squirrel's 10 s, and writes a bounded receipt with no paths |
+| U3 | The roots come from the install location: `app-<semver>` → `ETS2TelemetryDesktop` → base, and the data root is `base\ETS2Telemetry`. In production the LOCALAPPDATA variable must equal base, otherwise nothing is removed. A marked test root ignores the environment and confines every path to itself. Portable, unpackaged and development launches never delete anything |
+| U4 | Only the allowlisted top-level entries of the data root are removed: data, backups, settings, logs, synthetic, plugins, captures, transport, uninstall. Unknown entries are kept, and links are unlinked without being followed. The following are never removed: exports, other plugins, game files, the shared SquirrelTemp folder and server records |
+| U5 | The cleanup engine works in this order: a read-only preflight, then a persisted intent, then plugin cleanup under the ET-017 contract, then the data wipe. The metadata and the helper go last. Every step is idempotent |
+| U6 | Windows-initiated uninstall first asks a running instance to exit. A running game or TruckersMP, a lock, a permission error, an unreadable registry or a timeout defers the cleanup |
+| U7 | Deferred cleanup (O3): a retained PowerShell 5.1 executor under HKCU RunOnce runs the same contract at the next sign-in. It stops after 10 attempts, and a reinstall cancels it |
+| U8 | App-assisted uninstall is the primary path. A Live-tab card and one trusted-dashboard bridge method, `uninstallApplication()`, which never returns a path. A blocked preflight changes nothing; then come plugin removal, an explicit exit, the data wipe and the `Update.exe --uninstall` hand-off |
+| U9 | Warnings in the card, next to export and in a new user guide say that local history, settings, logs, captures and synthetic recordings are deleted, and that exports are kept |
+| U10 | Upgrades and repair never write the data root. History migrates on first open with a verified backup. A REG-017 check covers install, repair and update in a test root |
+| U11 | Installed smokes run the existing scenarios against the installed executable, with a minimal system PATH |
+| U12 | Test isolation: a marked run root, SQUIRREL_TEMP redirected into it, a decoy LOCALAPPDATA for the Windows-initiated case, and fail-closed guards against the owner's real roots, registration and processes. The ET-001 host harness is retired. Agents run the installer lifecycle only on GitHub-hosted runners |
+| U13 | CI keeps E1 and E2. On non-PR events an installer lifecycle step runs after make; there is no new job and no check rename |
+| U14 | The release identity records the SHA-256 and Authenticode status of every shipped PE file. On main and dispatch, CI uploads the installer as an artifact |
+| U15 | Distribution through GitHub Releases pre-releases (O2) |
+| U16 | Signing: an unsigned alpha now (O1). Signing the plugin DLL later must happen before staging, so that the ownership hashes match |
+| U17 | In-place database restore is not part of ET-018 and is recorded as technical debt |
+
+No release is published, no certificate or paid service is bought, and no auto-update is added. `GAME_HISTORY_RECORDING` stays `false`. A clean machine, real games and TruckersMP, Smart App Control and antivirus, and the owner's first real history upgrade remain pending. No game, TruckersMP, display or performance claim follows.
