@@ -8,7 +8,7 @@ import {crc32, deflateRawSync} from 'node:zlib';
 import {createPackageWithOptions} from '@electron/asar';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 import {writePluginBundle} from '../../scripts/plugin-bundle.mjs';
-import {AUTHENTICODE_STATUSES, inspectInstaller, nugetVersion, parseAuthenticodeOutput, readAuthenticode, readZip, releaseIdentity, setupExeName,
+import {AUTHENTICODE_STATUSES, SIGNING_FAILURES, inspectInstaller, packedNativeEntries, nugetVersion, parseAuthenticodeOutput, readAuthenticode, readZip, releaseIdentity, setupExeName,
   windowsPowerShell, type AuthenticodeResult} from '../../scripts/release-identity.mjs';
 
 // ET-018 PR-6 (plan U14, U16; docs/release.md): the release identity and `inspect-package --installer` on a fake package
@@ -50,7 +50,8 @@ async function put(file: string, bytes: Buffer | string) {
 }
 
 /** A fake checkout with a portable package, the vendored Squirrel binaries and (with buildMake) the make output. */
-async function fakeTree(): Promise<Tree> {
+/** `packed`: extra archive entries that stay inside app.asar (only `.node` and `.cjs` files are unpacked). */
+async function fakeTree({packed = []}: {packed?: [string, Buffer][]} = {}): Promise<Tree> {
   const checkout = path.join(root, 'checkout');
   const packageDirectory = path.join(checkout, 'out', 'ETS2Telemetry Desktop-win32-x64');
   const makeDirectory = path.join(checkout, 'out', 'make', 'squirrel.windows', 'x64');
@@ -72,9 +73,9 @@ async function fakeTree(): Promise<Tree> {
   const addons: [string, Buffer][] = [[`node_modules/addon-${random()}/build/Release/addon.node`, pe()],
     [`node_modules/better-sqlite3/prebuilds/win32-arm64.node`, pe({machine: 0xaa64})], [`node_modules/better-sqlite3/prebuilds/linux-x64.node`, elf()],
     [`node_modules/better-sqlite3/prebuilds/darwin-x64.node`, machO()], ['apps/desktop/dist/main.cjs', Buffer.from('inert')]];
-  for (const [name, bytes] of addons) await put(path.join(source, name), bytes);
+  for (const [name, bytes] of [...addons, ...packed]) await put(path.join(source, name), bytes);
   await mkdir(path.join(packageDirectory, 'resources'), {recursive: true});
-  await createPackageWithOptions(source, path.join(packageDirectory, 'resources', 'app.asar'), {unpack: '**/*'});
+  await createPackageWithOptions(source, path.join(packageDirectory, 'resources', 'app.asar'), {unpack: '**/*.{node,cjs}'});
   for (const [name, bytes] of addons) {
     const relative = `resources/app.asar.unpacked/${name}`;
     if (bytes.readUInt16LE(0) === 0x5a4d) peFiles.push(relative); else if (name.endsWith('.node')) foreign.push(relative);
@@ -319,6 +320,62 @@ describe('the NuGet projection (inspect-package --installer)', () => {
     const at = bytes.indexOf(Buffer.from('license'));
     bytes[at] ^= 1;
     expect(() => readZip(bytes).extract('lib/net45/LICENSE')).toThrow('ZIP entry CRC mismatch');
+  });
+});
+
+describe('signing status gate', () => {
+  /** A file marked FAKE-STATUS:<status> gets that status; every other file is NotSigned. */
+  const statusReader = (files: string[]): AuthenticodeResult[] => files.map(file => {
+    const status = /FAKE-STATUS:([A-Za-z]+)/.exec(readFileSync(file).toString('latin1'))?.[1] ?? 'NotSigned';
+    return status === 'NotSigned' ? {status, signer: null, thumbprint: null, timestamped: false}
+      : {status, signer: 'CN=Fake Signer', thumbprint: 'C'.repeat(40), timestamped: false};
+  });
+  async function treeWith(status: string) {
+    const tree = await fakeTree();
+    await writeFile(path.join(tree.packageDirectory, 'marked.dll'), Buffer.concat([pe({characteristics: 0x2022}), Buffer.from(`FAKE-STATUS:${status}`)]));
+    await buildMake(tree);
+    return tree;
+  }
+  it('fails on HashMismatch and UnknownError only', () => {
+    expect(SIGNING_FAILURES).toEqual(['HashMismatch', 'UnknownError']);
+  });
+  for (const status of ['HashMismatch', 'UnknownError']) {
+    it(`refuses an image that reports ${status}, naming its relative path`, async () => {
+      const tree = await treeWith(status);
+      expect(() => identityOf(tree, statusReader)).toThrow(`Authenticode ${status}: package marked.dll`);
+    });
+  }
+  for (const status of ['NotSigned', 'NotTrusted', 'NotSupportedFileFormat', 'Incompatible', 'Valid']) {
+    it(`records an image that reports ${status}`, async () => {
+      const tree = await treeWith(status);
+      expect(identityOf(tree, statusReader).peImages.find(image => image.path === 'marked.dll')?.authenticode.status).toBe(status);
+    });
+  }
+});
+
+describe('native code packed inside app.asar', () => {
+  async function archiveWith(entries: [string, Buffer][], unpack = '**/keep-*') {
+    const source = path.join(root, 'packed-source');
+    for (const [name, bytes] of entries) await put(path.join(source, name), bytes);
+    const archive = path.join(root, 'packed', 'app.asar');
+    await mkdir(path.dirname(archive), {recursive: true});
+    await createPackageWithOptions(source, archive, {unpack});
+    return archive;
+  }
+  it('accepts native code that is physically unpacked and packed files without native code', async () => {
+    const archive = await archiveWith([['native/keep-addon.node', pe()], ['native/keep-helper.dll', pe()], ['app/main.js', Buffer.from('module.exports = 1;')],
+      ['app/data.bin', Buffer.from('MZ but too short')], ['app/empty.txt', Buffer.alloc(0)]]);
+    expect(packedNativeEntries(archive)).toEqual([]);
+  });
+  it('lists packed .node, .dll and .exe names and PE, ELF and Mach-O headers under any name', async () => {
+    const archive = await archiveWith([['native/keep-addon.node', pe()], ['a/addon.node', Buffer.from('text')], ['a/helper.DLL', Buffer.from('text')],
+      ['a/tool.exe', Buffer.from('text')], ['a/blob.bin', pe()], ['a/linux.so', elf()], ['a/mac.dat', machO()], ['a/main.js', Buffer.from('x')]]);
+    expect(packedNativeEntries(archive)).toEqual(['a/addon.node', 'a/blob.bin', 'a/helper.DLL', 'a/linux.so', 'a/mac.dat', 'a/tool.exe']);
+  });
+  it('fails the release identity when the package archive packs native code', async () => {
+    const tree = await fakeTree({packed: [['native/helper.dll', pe({characteristics: 0x2022})]]});
+    await buildMake(tree);
+    expect(() => identityOf(tree)).toThrow('Native code packed inside app.asar: native/helper.dll');
   });
 });
 

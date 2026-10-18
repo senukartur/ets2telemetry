@@ -6,6 +6,7 @@ import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 import {crc32, inflateRawSync} from 'node:zlib';
+import * as asar from '@electron/asar';
 import {verifyPackage} from './package-integrity.mjs';
 import {PLUGIN_FILE, verifyPluginBundle} from './plugin-bundle.mjs';
 
@@ -26,6 +27,14 @@ export const EXECUTABLE = 'ETS2TelemetryDesktop.exe';
 export const RELEASES = 'RELEASES';
 /** The statuses of System.Management.Automation.SignatureStatus in Windows PowerShell 5.1. */
 export const AUTHENTICODE_STATUSES = ['Valid', 'UnknownError', 'NotSigned', 'HashMismatch', 'NotTrusted', 'NotSupportedFileFormat', 'Incompatible'];
+/**
+ * Statuses that stop the identity (docs/release.md, "Signing status gate"). `HashMismatch`: a signed file whose bytes
+ * changed after signing, so it is tampered or corrupt. `UnknownError`: WinVerifyTrust could not decide on a file that is
+ * a PE image by its header (an unsigned PE image is `NotSigned`), so the identity would record no usable status; a rerun
+ * tells a passing verifier fault from a malformed signature. `NotSigned` is expected for the unsigned alpha, and
+ * `NotTrusted`, `NotSupportedFileFormat` and `Incompatible` depend on the machine's trust store and Windows version.
+ */
+export const SIGNING_FAILURES = ['HashMismatch', 'UnknownError'];
 /** EXE and DLL files must be PE images; a PE image with any other name is still found by its header. */
 const PE_EXTENSIONS = new Set(['.exe', '.dll']);
 /** Node addons are PE images, or the ELF and Mach-O prebuilds of other platforms that better-sqlite3 ships and Windows never loads. */
@@ -343,6 +352,36 @@ function git(checkout, args) {
 function readJsonFile(filename) {
   return JSON.parse(new TextDecoder('utf-8', {fatal: true}).decode(readFileSync(filename)));
 }
+/** Fails with a fixed message naming the first image whose status is in SIGNING_FAILURES, by its location and relative path. */
+export function assertSigningStatuses(images) {
+  for (const image of images) {
+    assert.ok(!SIGNING_FAILURES.includes(image.authenticode.status), `Authenticode ${image.authenticode.status}: ${image.location} ${image.path}`);
+  }
+}
+
+/**
+ * Entries of the application archive that hold native code without being physically unpacked: a `.node`, `.dll` or
+ * `.exe` name, or a PE, ELF or Mach-O header under any name. The PE walk sees only the package tree, so code packed
+ * inside app.asar would escape it; Windows cannot load such code from the archive either. Returns relative names.
+ */
+export function packedNativeEntries(archive) {
+  const found = [];
+  for (const listed of asar.listPackage(archive, {isPack: false})) {
+    const name = listed.replaceAll('\\', '/').replace(/^\//, '');
+    const entry = asar.statFile(archive, path.normalize(name), false);
+    if ('files' in entry || 'link' in entry || entry.unpacked) continue;
+    const extension = path.posix.extname(name).toLowerCase();
+    const read = bufferReader(entry.size ? asar.extractFile(archive, path.normalize(name), false) : Buffer.alloc(0));
+    if (PE_EXTENSIONS.has(extension) || extension === ADDON_EXTENSION || peMachine(read) !== null || foreignFormat(read) !== null) found.push(name);
+  }
+  return found.sort();
+}
+/** inspect-package and the identity: no native code may be packed inside app.asar. */
+export function assertNoPackedNativeCode(archive) {
+  const found = packedNativeEntries(archive);
+  assert.deepEqual(found, [], `Native code packed inside app.asar: ${found.join(', ')}`);
+}
+
 const signingSummary = images => Object.fromEntries(AUTHENTICODE_STATUSES.map(status => [status, images.filter(image => image.authenticode.status === status).length])
   .filter(([, count]) => count > 0));
 
@@ -359,6 +398,7 @@ export function releaseIdentity({checkout = '.', packageDirectory = path.join(ch
   assert.equal(electron, electronPin, 'Packaged Electron differs from the package.json pin');
   const {facts: installer, zip} = checkInstaller({packageDirectory, makeDirectory, version});
   const integrity = verifyPackage(packageDirectory);
+  assertNoPackedNativeCode(path.join(packageDirectory, 'resources/app.asar'));
 
   // The plugin and the broker against their bundle records; the NuGet payload carries the same bytes (inspectInstaller).
   const plugin = verifyPluginBundle(path.join(packageDirectory, 'resources/telemetry-plugin'));
@@ -386,6 +426,7 @@ export function releaseIdentity({checkout = '.', packageDirectory = path.join(ch
     const results = signatures(images.map(image => image.file));
     assert.equal(results.length, images.length, 'Authenticode results do not match the images');
     images.forEach((image, index) => {image.authenticode = results[index]; delete image.file;});
+    assertSigningStatuses(images);
   } finally {rmSync(scratch, {recursive: true, force: true});}
 
   // Squirrel's helpers: Update.exe is the payload's squirrel.exe, copied unchanged from the vendored Squirrel.exe.

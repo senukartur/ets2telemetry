@@ -6,7 +6,7 @@ import * as asar from '@electron/asar';
 import {sha256, sourceHashes} from './source-inputs.mjs';
 import {verifyPackage} from './package-integrity.mjs';
 import {verifyPluginBundleAgainstTree} from './plugin-bundle.mjs';
-import {inspectInstaller, MAKE_DIRECTORY, PACKAGE_DIRECTORY} from './release-identity.mjs';
+import {assertNoPackedNativeCode, inspectInstaller, MAKE_DIRECTORY, PACKAGE_DIRECTORY} from './release-identity.mjs';
 
 // Read bytes and resolve paths only. Never import application entries or native bindings.
 // `--installer` (ET-018 PR-6) also checks the Squirrel make output: the full NuGet package must carry exactly the
@@ -19,6 +19,8 @@ const directory = path.resolve(positional[0] || PACKAGE_DIRECTORY);
 const archive = path.join(directory, 'resources/app.asar');
 const integrity = verifyPackage(directory);
 const paths = asar.listPackage(archive).map(filename => filename.replaceAll('\\', '/'));
+// ET-018 PR-6: native code must be physically unpacked, where the release identity's PE walk sees it.
+assertNoPackedNativeCode(archive);
 assert.ok(!paths.some(filename => /^\/(test-results|playwright-report|\.local|tests|scripts)(\/|$)/.test(filename)), 'Diagnostic or development files leaked into package');
 const read = filename => asar.extractFile(archive, path.normalize(filename));
 const metadata = JSON.parse(read('apps/desktop/dist/build-evidence.json'));
