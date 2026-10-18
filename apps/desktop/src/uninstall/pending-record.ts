@@ -89,6 +89,11 @@ export async function readPendingRecord(fs: AtomicFileSystem, dataRoot: string):
   return record ? {state: 'present', record} : {state: 'invalid'};
 }
 
+/** True when the record serializes within every bound of the strict parser, so writePendingRecord accepts it. */
+export function pendingRecordFits(record: PendingRecord): boolean {
+  return parsePendingRecord(Buffer.from(serializePendingRecord(record), 'utf8')) !== undefined;
+}
+
 /** Writes the intent atomically (a synced temporary file renamed over it). Throws AtomicFileError. */
 export async function writePendingRecord(fs: AtomicFileSystem, dataRoot: string, record: PendingRecord): Promise<void> {
   const content = serializePendingRecord(record);

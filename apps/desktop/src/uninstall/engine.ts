@@ -6,8 +6,8 @@ import {PluginRegistry, type PluginRegistryState} from '../plugin-setup/plugin-r
 import type {RunningGames} from '../plugin-setup/game-processes';
 import type {PluginGame} from '../plugin-setup/steam-discovery';
 import {DATA_ALLOWLIST, KEPT_UNTIL_CLEAN, wipeDataRoot, type DataEntry, type WipeFailureCode, type WipeFileSystem} from './data-wipe';
-import {MAX_KNOWN_HASHES, readPendingRecord, writePendingRecord, type PendingFolder, type PendingRecord} from './pending-record';
-import {cleanFolder, cleanupFolders, forgetFolder, type CleanupBlockReason, type FolderNote} from './plugin-cleanup';
+import {MAX_KNOWN_HASHES, pendingRecordFits, readPendingRecord, writePendingRecord, type PendingFolder, type PendingRecord} from './pending-record';
+import {cleanFolder, cleanupFolders, forgetFolder, intentFolders, type CleanupBlockReason, type FolderNote} from './plugin-cleanup';
 import type {UninstallRoots, UninstallRootsRefusal} from './roots';
 
 // The uninstall cleanup engine (ET-018 U5; docs/uninstall.md). Not wired into the application yet: PR-3 runs it from the
@@ -107,8 +107,10 @@ export async function runUninstall(ports: UninstallPorts): Promise<UninstallResu
   const previous = await readPendingRecord(ports.fs, dataRoot);
   const kept = previous.state === 'present' ? previous.record.folders : [];
   const registryProblem = REGISTRY_PROBLEM[registry.state];
-  // An invalid, newer or unreadable registry touches no game folder at all (the ET-017 contract); it stays for a retry.
-  const folders = registryProblem ? [] : cleanupFolders(registry.document, kept);
+  // An invalid, newer or unreadable registry names no folder (the ET-017 contract); it stays for a retry. The folders an
+  // earlier run recorded in its own intent do not come from it, so they are still cleaned with the intent's own hashes,
+  // exactly as when the registry is gone, and the run stays deferred.
+  const folders = cleanupFolders(registryProblem ? undefined : registry.document, kept);
   // The listing is cancelled when its budget expires, so tasklist never outlives the uninstall hook.
   const listing = new AbortController();
   const running: RunningGames | undefined = folders.length ? await withTimeout(ports.checkRunning(listing.signal).then(check => check.ok ? check.running : undefined),
@@ -126,12 +128,13 @@ export async function runUninstall(ports: UninstallPorts): Promise<UninstallResu
       roaming: await roaming(ports, roots.mode)};
   }
 
-  // 2. The intent, before the first deletion.
-  const intent: PendingRecord = {format: 'ets2telemetry.uninstall-pending', version: 1, phase: 'plugins',
+  // 2. The intent, before the first deletion. It records the folders within its bounds, the intent's own first; the run
+  // cleans every folder, and what the intent cannot hold is the registry's alone and stays there (intentFolders).
+  const intent: PendingRecord = recordable({format: 'ets2telemetry.uninstall-pending', version: 1, phase: 'plugins',
     startedUtc: previous.state === 'present' ? previous.record.startedUtc : now().toISOString(), attempts: previous.state === 'present' ? previous.record.attempts + 1 : 1,
-    known, folders};
+    known, folders: intentFolders(folders, kept)});
   try {await writePendingRecord(ports.fs, dataRoot, intent);} catch {return refused('INTENT_FAILED');}
-  log('UNINSTALL_INTENT', {folders: folders.length, attempts: intent.attempts});
+  log('UNINSTALL_INTENT', {folders: folders.length, recorded: intent.folders.length, attempts: intent.attempts});
 
   // 3. Plugin cleanup, folder by folder.
   let removed = 0, absent = 0, unrecognized = 0;
@@ -163,13 +166,23 @@ export async function runUninstall(ports: UninstallPorts): Promise<UninstallResu
   const complete = pluginsClean && !data.failed.length && !budgetSpent;
   if (!complete) {
     // The intent keeps only what is left to clean, for the next run or the deferred cleanup (PR-5).
-    const left = blocked.map(entry => entry.folder);
-    try {await writePendingRecord(ports.fs, dataRoot, {...intent, phase: 'deferred', folders: left});} catch {/* the earlier intent stays; still deferred */}
+    const left = intentFolders(blocked.map(entry => entry.folder), kept);
+    try {await writePendingRecord(ports.fs, dataRoot, recordable({...intent, phase: 'deferred', folders: left}));} catch {/* the earlier intent stays; still deferred */}
   }
   const code: UninstallCode | null = complete ? null : budgetSpent ? 'BUDGET_EXPIRED' : registryProblem ?? blocked[0]?.reason ?? (data.failed.length ? 'DATA_ENTRY_BLOCKED' : null);
   const result: UninstallResult = {outcome: complete ? 'complete' : 'deferred', code, plugins, data, roaming: complete ? await roaming(ports, roots.mode) : 'not-run'};
   log('UNINSTALL_RESULT', {outcome: result.outcome, code: result.code, removed, blocked: blocked.length, dataFailed: data.failed.length, kept: data.kept});
   return result;
+}
+
+/**
+ * The record within the intent's byte bound: long roots can make even 32 folders exceed 128 KiB. Folders drop from the
+ * end, the registry's first (intentFolders puts the intent's own first), so the record never becomes unwritable.
+ */
+function recordable(record: PendingRecord): PendingRecord {
+  let folders = record.folders;
+  while (folders.length && !pendingRecordFits({...record, folders})) folders = folders.slice(0, -1);
+  return folders === record.folders ? record : {...record, folders};
 }
 
 async function roaming(ports: UninstallPorts, mode: 'production' | 'test-root'): Promise<UninstallResult['roaming']> {

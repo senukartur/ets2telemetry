@@ -3,11 +3,11 @@ import path from 'node:path';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 import type {RunningCheck} from '../../apps/desktop/src/plugin-setup/plugin-installer';
 import {runUninstall, type UninstallFileSystem, type UninstallPorts, type UninstallResult} from '../../apps/desktop/src/uninstall/engine';
-import {parsePendingRecord} from '../../apps/desktop/src/uninstall/pending-record';
+import {MAX_PENDING_BYTES, parsePendingRecord, serializePendingRecord, type PendingFolder} from '../../apps/desktop/src/uninstall/pending-record';
 import {resolveUninstallRoots, type UninstallRoots} from '../../apps/desktop/src/uninstall/roots';
 import {guardedTempRoot, type GuardedRoot} from '../shared/guarded-fs';
-import {CURRENT, exists, FOREIGN, gameFolder, installFixture, installRecord, KNOWN, listTree, notRunning, RELEASED, seedData, writeRegistry,
-  type FakeGameFolder, type InstallFixture} from '../shared/uninstall-fixture';
+import {CURRENT, exists, FOREIGN, gameFolder, installFixture, installRecord, KNOWN, listTree, LOCAL_BUILD, notRunning, pendingInstall, RELEASED, seedData, sha, UTC,
+  writeRegistry, type FakeGameFolder, type InstallFixture} from '../shared/uninstall-fixture';
 
 // REG-015, REG-017 (ET-018 U5): the uninstall engine's ordering, budget and outcomes, on fake installs under the guarded
 // temporary root. A kill is simulated by a file system that stops answering after a given deletion; the run is then
@@ -48,6 +48,20 @@ async function expectCleaned(current: Scene) {
   expect(await exists(current.games[1].plugins)).toBe(false);
   expect(await listTree(current.games[0].plugins)).toEqual(['other-plugin.dll']);
 }
+const ets2Running: RunningCheck = () => Promise.resolve({ok: true, running: {ets2: true, ats: false, client: false}});
+const intentFile = (fixture: InstallFixture) => path.win32.join(fixture.dataRoot, 'uninstall', 'pending.json');
+const readIntent = async (fixture: InstallFixture) => parsePendingRecord(await fsp.readFile(intentFile(fixture)));
+/** An intent an earlier run left, written as the engine writes it. */
+async function writeIntent(fixture: InstallFixture, folders: readonly PendingFolder[]) {
+  await fsp.mkdir(path.win32.dirname(intentFile(fixture)), {recursive: true});
+  await fsp.writeFile(intentFile(fixture), serializePendingRecord({format: 'ets2telemetry.uninstall-pending', version: 1, phase: 'deferred', startedUtc: UTC,
+    attempts: 1, known: [...KNOWN].sort(), folders}));
+}
+/** A recorded game folder that no longer exists, under `Games`. */
+const gone = (fixture: InstallFixture, name: string): FakeGameFolder => {
+  const root = path.win32.join(fixture.testRoot, 'Games', name), plugins = path.win32.join(root, 'bin', 'win_x64', 'plugins');
+  return {root, plugins, dll: path.win32.join(plugins, 'ets2telemetry-plugin.dll')};
+};
 const DELETIONS = new Set(['unlink', 'rmdir']);
 /**
  * The scene's file system, counting deletions. With `killAfter`, the operation after that many deletions never
@@ -177,6 +191,83 @@ describe('outcomes', () => {
     } finally {await fsp.chmod(settings, 0o666);}
     expect(await run(current.fixture)).toMatchObject({outcome: 'complete'});
     await expectCleaned(current);
+  });
+  it.each([
+    ['invalid', 'REGISTRY_INVALID', '{"format":"ets2telemetry.plugin-setup","version":1,"broken":true}'],
+    ['newer', 'REGISTRY_NEWER', '{"format":"ets2telemetry.plugin-setup","version":2,"installs":[]}']
+  ])('a registry that turned %s keeps and then cleans the folder of an earlier intent by its own hash, and stays deferred', async (_state, code, content) => {
+    const fixture = await installFixture(guard);
+    // A recorded local build: neither the bundle nor a release knows its hash, only the registry and then the intent.
+    const game = await gameFolder(fixture, 'ETS2', {content: LOCAL_BUILD});
+    await writeRegistry(fixture, [installRecord(game, {sha256: sha(LOCAL_BUILD)})]);
+    expect(await run(fixture, {checkRunning: ets2Running})).toMatchObject({outcome: 'deferred', code: 'GAME_RUNNING'});
+    const setup = path.win32.join(fixture.registryDirectory, 'setup.json');
+    await fsp.writeFile(setup, content);
+    // The game still runs: the intent's folder is kept, not forgotten.
+    expect(await run(fixture, {checkRunning: ets2Running})).toMatchObject({outcome: 'deferred', code,
+      plugins: {removed: 0, blocked: [{game: 'ets2', reason: 'GAME_RUNNING'}]}});
+    expect(await readIntent(fixture)).toMatchObject({phase: 'deferred', attempts: 2,
+      folders: [{game: 'ets2', root: game.root, hashes: [sha(LOCAL_BUILD)], temps: [], createdPluginsDirectory: false}]});
+    expect(await fsp.readFile(game.dll)).toEqual(LOCAL_BUILD);
+    // The game exits: the folder is cleaned by the intent's hash; the registry stays untouched and keeps the run deferred.
+    expect(await run(fixture)).toMatchObject({outcome: 'deferred', code, plugins: {removed: 1, blocked: []}});
+    expect(await exists(game.dll)).toBe(false);
+    expect(await fsp.readFile(setup, 'utf8')).toBe(content);
+    expect(await readIntent(fixture)).toMatchObject({phase: 'deferred', attempts: 3, folders: []});
+  });
+  it('cleans the maximum registry merged with the maximum intent, and records what fits with the intent\'s own entries first', async () => {
+    const fixture = await installFixture(guard);
+    const shared = await gameFolder(fixture, 'Shared', {content: LOCAL_BUILD});
+    const hash = (prefix: string, index: number) => `${prefix.repeat(48)}${index.toString(16).padStart(16, '0')}`;
+    const temp = (prefix: string, index: number) => path.win32.join(shared.plugins, `ets2telemetry-plugin.dll.${prefix}${index.toString(16).padStart(15, '0')}.tmp`);
+    // The registry at its bounds: 16 installs (the shared folder and 15 folders whose game is gone) and 16 pending updates
+    // of the shared folder, 17 hashes and 16 temporary files there. The DLL's hash is only a pending update's toSha256.
+    const registryOnly = Array.from({length: 15}, (_, index) => gone(fixture, `Registry${index}`));
+    await writeRegistry(fixture, [installRecord(shared, {sha256: hash('a', 0)}), ...registryOnly.map(folder => installRecord(folder))],
+      Array.from({length: 16}, (_, index) => pendingInstall(shared, '0', {op: 'update', temp: temp('b', index), fromSha256: hash('a', 0),
+        toSha256: index === 0 ? sha(LOCAL_BUILD) : hash('b', index)})));
+    // The intent at its bounds: 32 folders, the shared one with its own 17 hashes and 16 temporary files.
+    const intentOnly = Array.from({length: 31}, (_, index) => gone(fixture, `Intent${index}`));
+    const ownHashes = Array.from({length: 17}, (_, index) => hash('c', index)), ownTemps = Array.from({length: 16}, (_, index) => temp('d', index));
+    await writeIntent(fixture, [{game: 'ets2', root: shared.root, hashes: ownHashes, temps: ownTemps, createdPluginsDirectory: false},
+      ...intentOnly.map(folder => ({game: 'ets2' as const, root: folder.root, hashes: [sha(CURRENT)], temps: [], createdPluginsDirectory: false}))]);
+    // 47 folders, 34 hashes and 32 temporary files in the shared one: beyond every bound of the intent.
+    expect(await run(fixture, {checkRunning: ets2Running})).toMatchObject({outcome: 'deferred', code: 'GAME_RUNNING', plugins: {removed: 0}});
+    const deferred = await readIntent(fixture);
+    expect(deferred?.folders.map(folder => folder.root)).toEqual([shared.root, ...intentOnly.map(folder => folder.root)]);
+    expect(deferred?.folders[0]).toEqual({game: 'ets2', root: shared.root, hashes: [...ownHashes].sort(), temps: [...ownTemps].sort(), createdPluginsDirectory: false});
+    // The folders the intent cannot hold stay in the registry, which a deferred run keeps.
+    expect(JSON.parse(await fsp.readFile(path.win32.join(fixture.registryDirectory, 'setup.json'), 'utf8')).installs).toHaveLength(16);
+    // The game exits: every folder is cleaned with the full merged list, so the DLL whose hash the intent dropped goes.
+    const result = await run(fixture);
+    expect(result).toMatchObject({outcome: 'complete', code: null, plugins: {removed: 1, absent: 46, unrecognized: 0, blocked: []}});
+    expect(result.plugins.notes).toHaveLength(46);
+    expect(await exists(shared.dll)).toBe(false);
+    expect(await exists(fixture.dataRoot)).toBe(false);
+  });
+  it('keeps the intent within its byte bound for a registry of long game roots', async () => {
+    const fixture = await installFixture(guard);
+    // Roots near the registry's 4096-character bound, each with an install record and a pending install.
+    const games = path.win32.join(fixture.testRoot, 'Games');
+    const segment = 'x'.repeat(200), segments = Math.floor((4080 - games.length) / 201);
+    const folders = Array.from({length: 16}, (_, index) => gone(fixture, path.win32.join(...Array.from({length: segments}, () => segment), `L${index}`)));
+    expect(folders[0].root.length).toBeLessThanOrEqual(4096);
+    const intents = folders.map((folder, index) => pendingInstall(folder, index.toString(16).padStart(16, '0')));
+    await writeRegistry(fixture, folders.map(folder => installRecord(folder)), intents);
+    const registryBefore = await fsp.readFile(path.win32.join(fixture.registryDirectory, 'setup.json'));
+    // Precondition: these 16 folders alone, as the intent would record them, exceed its byte bound.
+    const unbounded = serializePendingRecord({format: 'ets2telemetry.uninstall-pending', version: 1, phase: 'plugins', startedUtc: UTC, attempts: 1, known: [...KNOWN].sort(),
+      folders: folders.map((folder, index) => ({game: 'ets2', root: folder.root, hashes: [sha(CURRENT), sha(LOCAL_BUILD)].sort(), temps: [intents[index].temp!],
+        createdPluginsDirectory: false}))});
+    expect(Buffer.byteLength(unbounded)).toBeGreaterThan(MAX_PENDING_BYTES);
+    const result = await run(fixture, {checkRunning: ets2Running});
+    expect(result).toMatchObject({outcome: 'deferred', code: 'GAME_RUNNING', plugins: {removed: 0}});
+    expect(result.plugins.blocked).toHaveLength(16);
+    const deferred = await readIntent(fixture);
+    expect(deferred?.folders.length).toBeGreaterThan(0);
+    expect(deferred?.folders.length).toBeLessThan(16);
+    expect(deferred?.folders.map(folder => folder.root)).toEqual(folders.slice(0, deferred?.folders.length).map(folder => folder.root));
+    expect(await fsp.readFile(path.win32.join(fixture.registryDirectory, 'setup.json'))).toEqual(registryBefore);
   });
   it('calls the Roaming userData hook only in production mode and only after a complete run', async () => {
     const current = await scene();
