@@ -79,8 +79,8 @@ Before it deletes anything, the uninstall copies a small Windows PowerShell scri
 - If the games and TruckersMP are closed, the script removes the plugin, but only a file whose checksum is one of ETS2Telemetry's, then the `plugins` and `uninstall` folders and the empty data folder. It never removes a plugin file it does not recognize, a read-only file or anything reached through a linked folder; those stay, and so does anything else you put in the data folder.
 - If a game or TruckersMP is running again, it changes nothing in that game folder and asks Windows to try again at the following sign-in. After 10 attempts in total it stops trying; `README.txt` then says so and lists the steps to finish by hand.
 - It shows one message that says what happened, and it writes a small result file, `%TEMP%\ETS2Telemetry-deferred-cleanup-<date and time>.json`, without any folder names.
+- If it finishes, it also removes Electron's own browser data, `%APPDATA%\ETS2Telemetry Desktop`, as the uninstall itself does when it can finish at once.
 - If you reinstalled ETS2Telemetry in the meantime, the reinstall has already cancelled the cleanup: the plugin stays in use and the script does nothing.
-
 - If an unexpected error stops the script, `README.txt` says whether it tries again at the next sign-in or has stopped.
 
 Some things can keep the script from running at all:
