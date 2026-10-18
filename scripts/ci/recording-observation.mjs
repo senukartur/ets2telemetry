@@ -123,6 +123,14 @@ const shownText = (page, accept, message) => until(() => recordingTextLog(page),
  * Starts the reactive simulator (`serve-v1`, the built CLI) on the journey scenario and the recording proxy
  * (recording-proxy.mjs) in front of it. The proxy's endpoint is what the service connects to (ETS2TELEMETRY_SOURCE_PIPE_V1).
  * The simulator child gets the run's isolated TEMP, APPDATA and LOCALAPPDATA, like every other process of the run.
+ *
+ * `--await-scripted-acks`: connections 2 and 3 are scripted to acknowledge each commit, and the service writes each ACK
+ * only after its storage commit (E8). Without the option the simulator waits at most 1,000 ms for those ACKs after each
+ * action and then paces on to the scripted disconnect, so one commit slower than that bound (hosted run 39135729037: the
+ * gate eventSeq 13 committed, its ACK never sent, the Job nearly idle) ended connection 3 before the gate's ACK and the
+ * journey failed with THIRD_CONNECTION_DID_NOT_COMMIT. With it, the simulator waits until the service acknowledged
+ * everything written to it or left (30 s liveness bound), as the ET-006b storage tests do. Connection 1 drops ACKs after
+ * four (`dropAfter:4`), so it keeps the bounded wait.
  */
 export async function startRecordingSource(config) {
   const {checkout, output} = config;
@@ -132,7 +140,7 @@ export async function startRecordingSource(config) {
     steps: [...base.steps, ...JOURNEY_STEPS], transport: JOURNEY_TRANSPORT};
   const scenarioFile = path.join(output, 'recording-scenario.json');
   await writeFile(scenarioFile, JSON.stringify(scenario, null, 2) + '\n');
-  const simulator = spawn(process.execPath, [path.join(checkout, 'tools/telemetry-simulator/dist/cli.cjs'), 'serve-v1', scenarioFile],
+  const simulator = spawn(process.execPath, [path.join(checkout, 'tools/telemetry-simulator/dist/cli.cjs'), 'serve-v1', scenarioFile, '--await-scripted-acks'],
     {cwd: checkout, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
       env: {...process.env, TEMP: config.temp, TMP: config.temp, APPDATA: config.appdata, LOCALAPPDATA: config.localappdata}});
   const lines = [], stderr = [];

@@ -1,5 +1,5 @@
 import {createHash} from 'node:crypto';
-import {mkdtempSync, readFileSync, rmSync} from 'node:fs';
+import {mkdtempSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
 import {spawn} from 'node:child_process';
@@ -253,6 +253,45 @@ describe('simulator v1 pipe CLI', () => {
       const smoke = await runCli([cli, 'smoke-v1', scenarioPath('pipe-reconnect'), '--reactive']);
       expect([smoke.status, smoke.stderr]).toEqual([0, '']);
       expect(JSON.parse(smoke.stdout)).toMatchObject({mode: 'reactive', scenario: 'pipe-reconnect', connections: 2, ledger: replayV1(load('pipe-reconnect')).ledger});
+    } finally { rmSync(directory, {recursive: true, force: true}); }
+  }, 180_000);
+
+  // The recording runtime journey (scripts/ci/recording-observation.mjs) serves the desktop service through serve-v1, whose
+  // storage commits were once slower than the fixed 1,000 ms quiesce bound on a hosted runner: the scripted disconnect
+  // closed the connection before the ACK, and the journey failed (run 39135729037). With --await-scripted-acks, an ACK
+  // that comes 1.5 s after its event is still awaited before the disconnect, so the next connection's checkpoint carries
+  // it and nothing is redelivered. Without the option the same client makes the run differ from the replay.
+  it('serve-v1 --await-scripted-acks awaits an ACK slower than the quiesce bound', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ETS2Telemetry-SYNTHETIC-TEST-v1-await-cli-'));
+    try {
+      const cli = await buildCli(directory), path = join(directory, 'slow-ack.json');
+      const s = inline([{atMs: 10, action: 'lifecycle', event: 'simulation.started'}],
+        [{atMs: 0, action: 'connect', client: {durable: true}}, {atMs: 100, action: 'disconnect'}, {atMs: 110, action: 'connect', client: {durable: true}}, {atMs: 200, action: 'disconnect'}]);
+      writeFileSync(path, JSON.stringify(s));
+      const child = spawn(process.execPath, [cli, 'serve-v1', path, '--scale', '0', '--await-scripted-acks'], {windowsHide: true});
+      let stdout = '', stderr = '';
+      child.stdout.on('data', (c: Buffer) => { stdout += c.toString('utf8'); }); child.stderr.on('data', (c: Buffer) => { stderr += c.toString('utf8'); });
+      const exited = new Promise<number | null>(r => child.on('exit', code => r(code)));
+      await until(() => stdout.includes('\n'), 150_000);
+      const {endpoint, mode} = JSON.parse(stdout.split('\n')[0]) as {endpoint: string; mode: string};
+      expect(mode).toBe('reactive');
+      const first = rawClient(endpoint, hello(true));
+      await until(() => first.messages.some(m => m.kind === 'event'));
+      // 1,500 ms after the event arrived, so at least 500 ms after the 1,000 ms bound would have ended the wait.
+      await new Promise(r => setTimeout(r, 1500));
+      first.socket.write(encodeFrame({version: PROTOCOL_V1, kind: 'ack', data: {pluginSessionId: first.messages[0].source.pluginSessionId, throughEventSeq: '1'}}));
+      expect((await first.closed).messages.map(m => m.kind)).toEqual(['welcome', 'checkpoint', 'event']);
+      const second = await rawClient(endpoint, hello(true)).closed, checkpoint = second.messages.find(m => m.kind === 'checkpoint');
+      expect(checkpoint?.kind === 'checkpoint' && checkpoint.data.status.delivery.ackedThroughEventSeq).toBe('1');
+      expect(second.messages.filter(m => m.kind === 'event')).toEqual([]);
+      expect([await exited, stderr]).toEqual([0, '']);
+      expect(JSON.parse(stdout.trim().split('\n')[1])).toMatchObject({mode: 'reactive', cancelled: false, matchesReplay: true, differences: [],
+        connections: [{connection: 1, closedBy: 'disconnect'}, {connection: 2, closedBy: 'disconnect'}]});
+      // Lockstep mode follows its scripted client and has no quiesce bound; smoke-v1 does not take the option.
+      for (const args of [['serve-v1', path, '--lockstep', '--await-scripted-acks'], ['serve-v1', path, '--await-scripted-acks', '--await-scripted-acks'], ['smoke-v1', path, '--reactive', '--await-scripted-acks']]) {
+        const usage = await runCli([cli, ...args]);
+        expect([usage.status, usage.stdout]).toEqual([1, '']);
+      }
     } finally { rmSync(directory, {recursive: true, force: true}); }
   }, 180_000);
 });
