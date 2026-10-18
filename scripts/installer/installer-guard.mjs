@@ -87,6 +87,41 @@ export function checkDecoyUnchanged(before, after) {
   return allowed;
 }
 
+/** SQLite's sidecar files beside a database in `data\`: they come and go with the open connection and its checkpoints. */
+const DATA_SIDECAR = /^data\\[^\\]+\.sqlite-(wal|shm|journal)$/i;
+/** A database file in `data\`, compared by presence only: a checkpoint rewrites its pages without any data change. */
+const DATA_DATABASE = /^data\\[^\\]+\.sqlite$/i;
+/** Entries a blocked in-app uninstall must leave in the data root: the history folder and database, the plugin registry. */
+export const DATA_ROOT_REQUIRED = Object.freeze(['data\\', 'data\\telemetry.sqlite', 'plugins\\', 'plugins\\setup.json']);
+/**
+ * ET-018 PR-4: a blocked in-app uninstall changes nothing in the data root. `before` is taken while the application runs
+ * and `after` once it closed orderly, which checkpoints the history database's WAL and removes it. So the SQLite sidecars
+ * of `data\` are left out of the comparison, and a database file there is compared by presence. Every entry of
+ * DATA_ROOT_REQUIRED must be in both; every other entry must keep its kind, size and hash (plugins\setup.json among
+ * them), and none may appear or disappear. Refuses with the entry's relative name; returns the number of sidecars left
+ * out. `before` and `after` map relative names to `{directory}` or `{size, sha256}`, like the driver's tree().
+ */
+export function checkDataRootUnchanged(before, after) {
+  let sidecars = 0;
+  const view = tree => {
+    const rows = new Map();
+    for (const [entry, value] of Object.entries(tree ?? {})) {
+      if (DATA_SIDECAR.test(entry)) {sidecars++; continue;}
+      rows.set(entry, DATA_DATABASE.test(entry) ? 'present'
+        : JSON.stringify({directory: value?.directory ?? false, size: value?.size ?? null, sha256: value?.sha256 ?? null}));
+    }
+    return rows;
+  };
+  const was = view(before), now = view(after);
+  for (const entry of DATA_ROOT_REQUIRED) if (!was.has(entry) || !now.has(entry)) refuse('DATA_ROOT_REQUIRED_MISSING', entry);
+  for (const [entry, value] of was) {
+    if (!now.has(entry)) refuse('DATA_ROOT_ENTRY_REMOVED', entry);
+    if (now.get(entry) !== value) refuse('DATA_ROOT_ENTRY_CHANGED', entry);
+  }
+  for (const entry of now.keys()) if (!was.has(entry)) refuse('DATA_ROOT_ENTRY_ADDED', entry);
+  return sidecars;
+}
+
 /** The binary-root listing of the harness holds at most this many entries; a longer one refuses. */
 export const RESIDUE_MAX_ENTRIES = 256;
 const APP_FOLDER = /^app-\d{1,9}\.\d{1,9}\.\d{1,9}(-[0-9A-Za-z.-]{1,40})?$/;

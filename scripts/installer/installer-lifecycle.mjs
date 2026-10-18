@@ -9,7 +9,7 @@ import {promisify} from 'node:util';
 import {_electron as electron} from '@playwright/test';
 import {rendererPages} from '../ci/overlay-observation.mjs';
 import {checkedPaths, checkInstalled, checkLaunchEnvironment, checkRunPlan, checkRunSignal, FACTS_VARIABLE, factsEvidence, InstallerGuardError, installedEnvironment, normalizePath,
-  checkDecoyUnchanged, checkUninstallResidue, electronRuntimeNames, ownsRegistration, parseUninstallString, resolveRealLocation, RUN_ROOT_NAME, runLayout, steamLibraryPaths, uninstallEnvironment} from './installer-guard.mjs';
+  checkDataRootUnchanged, checkDecoyUnchanged, checkUninstallResidue, electronRuntimeNames, ownsRegistration, parseUninstallString, resolveRealLocation, RUN_ROOT_NAME, runLayout, steamLibraryPaths, uninstallEnvironment} from './installer-guard.mjs';
 
 // ET-018 PR-1, PR-3 and PR-4 (REG-013, REG-015, REG-017; plan U8, U10-U13): the Node driver of the installer lifecycle in a marked test root. The
 // PowerShell harness scripts/installer/Invoke-InstallerLifecycle.ps1 orchestrates the steps and runs every command below
@@ -666,13 +666,11 @@ const APP_UNINSTALL_RUN_BUDGET_MS = 55000;
 /** What the blocked run keeps of that budget for its closing waits: closeOrderly's 8 s and stopFakeGame's 5 s. */
 const APP_UNINSTALL_CLOSE_RESERVE_MS = 13000;
 /**
- * The data root's entries by relative name, with hashes of the files outside `data\` (an open SQLite database may change
- * its sidecars while it is idle). Nothing may appear, disappear or change elsewhere.
+ * Every entry of the data root by relative name, with its size and hash, as recorded; `checkDataRootUnchanged`
+ * (installer-guard.mjs, unit-tested) decides what a blocked run may change: only the history database's SQLite sidecars
+ * and pages, which the running application and its orderly close checkpoint.
  */
-async function dataRootState(dataRoot) {
-  const entries = await tree(dataRoot);
-  return Object.fromEntries(Object.entries(entries).map(([name, value]) => [name, name.toLowerCase().startsWith('data\\') ? 'present' : value]));
-}
+const dataRootState = dataRoot => tree(dataRoot);
 /** Waits until no process image under R is left, or the budget ends; returns the images still there, relative to R. */
 async function drainRunRoot(config, budget) {
   const started = performance.now();
@@ -783,7 +781,8 @@ async function appUninstallVerify(config, label) {
     // Nothing changed: the plugin keeps its bytes and time, the data root its entries, and no intent was written.
     assert.deepEqual(observed.after.plugin, observed.before.pluginAtClick, 'BLOCKED_PLUGIN_CHANGED');
     assert.deepEqual(dllAfter, observed.before.pluginAtClick, 'BLOCKED_PLUGIN_CHANGED');
-    assert.deepEqual(observed.after.dataRoot, observed.before.dataRoot, 'BLOCKED_DATA_CHANGED');
+    // The before state is taken while the application runs (its WAL may exist), the after state once it closed.
+    record.dataSidecarsIgnored = checkDataRootUnchanged(observed.before.dataRoot, observed.after.dataRoot);
     assert.equal(await fileState(path.join(layout.dataRoot, 'uninstall', 'pending.json')), 'absent', 'BLOCKED_INTENT_WRITTEN');
     assert.equal(events.dialogs.length, 1, 'BLOCKED_RESULT_DIALOG');
     assert.equal(receipts.length, 0, 'BLOCKED_HOOK_RAN');

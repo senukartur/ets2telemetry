@@ -53,6 +53,8 @@ export function checkUninstallResidue(listing: readonly ResidueRow[], runtime: E
 export const DECOY_OS_FOLDER: string;
 export type DecoyTree = Readonly<Record<string, {readonly directory?: boolean; readonly size?: number; readonly sha256?: string}>>;
 export function checkDecoyUnchanged(before: DecoyTree, after: DecoyTree): number;
+export const DATA_ROOT_REQUIRED: readonly string[];
+export function checkDataRootUnchanged(before: DecoyTree, after: DecoyTree): number;
 export function parseUninstallString(value: unknown, runRoot: string): {program: string; args: string[]};
 export function uninstallEnvironment(base: Readonly<Record<string, string | undefined>>, options: {runRoot: string; real: {localAppData: string}; decoy: string}): Record<string, string>;
 export function runLayout(runRoot: string): RunLayout;

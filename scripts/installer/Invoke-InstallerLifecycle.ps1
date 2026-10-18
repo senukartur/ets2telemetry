@@ -301,7 +301,7 @@ try {
     Assert-Uninstalled 'final' $helper
 
     # ET-018 PR-4: the in-app uninstall scenarios (docs/installer-testing.md, "In-app uninstall scenarios").
-    $env:ETS2TELEMETRY_DIAGNOSTIC_DIR = Join-Path $runRoot 'diagnosticsinstall-for-app-0.1.0'
+    $env:ETS2TELEMETRY_DIAGNOSTIC_DIR = Join-Path $runRoot 'diagnostics\install-for-app-0.1.0'
     Invoke-Driver 'step' @('install-for-app-0.1.0', $setup, '--silent') 60000
     $executableA = Assert-Installed 'install-for-app-0.1.0' '0.1.0'
     Assert-ProductLinks 'install-for-app-0.1.0' $true
