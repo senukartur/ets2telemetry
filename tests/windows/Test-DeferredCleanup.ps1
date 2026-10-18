@@ -157,6 +157,11 @@ function Assert-Equal($Expected, $Actual, [string]$What) {
 $rows = [Collections.Generic.List[object]]::new()
 $shortRoot = $null
 New-Item -ItemType Directory -Path $WorkDirectory | Out-Null
+# The real Roaming userData of this user is only looked at, never changed: a test root must not touch it (O7, review of
+# PR #123). Its existence and modification time are compared at the end.
+$realRoaming = Join-Path ([Environment]::GetFolderPath('ApplicationData')) 'ETS2Telemetry Desktop'
+function Get-RealRoamingState { if (Test-Path -LiteralPath $realRoaming) { return 'present ' + (Get-Item -LiteralPath $realRoaming -Force).LastWriteTimeUtc.Ticks } else { return 'absent' } }
+$realRoamingBefore = Get-RealRoamingState
 try {
     # The shared table, each case started as RunOnce starts it.
     $index = 0
@@ -186,10 +191,11 @@ try {
             Assert-Equal 2 (Get-Attempts $scene.dataRoot) ('Case ' + $case.id + ' attempts')
             Assert-Equal @('Complete-ETS2TelemetryUninstall.ps1', 'README.txt', 'pending.json') (Get-Names (Join-Path $scene.dataRoot 'uninstall')) ('Case ' + $case.id + ' uninstall folder')
             if (![IO.File]::ReadAllText((Join-Path $scene.dataRoot 'uninstall\README.txt')).Contains('attempt 2 of 10')) { throw ('Case ' + $case.id + ': README without the attempt') }
-            Assert-Equal @('registered', 3) @($run.receipt.runOnce, $run.exitCode) ('Case ' + $case.id + ' receipt')
+            Assert-Equal @('registered', 3, 'not-run') @($run.receipt.runOnce, $run.exitCode, $run.receipt.roaming) ('Case ' + $case.id + ' receipt')
         } else {
             if ($null -ne (Get-Value)) { throw ('Case ' + $case.id + ': the registration remains') }
-            Assert-Equal @('removed', 0) @($run.receipt.runOnce, $run.exitCode) ('Case ' + $case.id + ' receipt')
+            # A complete run in a test root without a stand-in Roaming folder touches none.
+            Assert-Equal @('removed', 0, 'not-applicable') @($run.receipt.runOnce, $run.exitCode, $run.receipt.roaming) ('Case ' + $case.id + ' receipt')
         }
         Remove-Value
         $rows.Add([ordered]@{case = $case.id; outcome = $run.receipt.outcome; code = $run.receipt.code; passed = $true})
@@ -341,6 +347,50 @@ try {
     Assert-Equal @('deferred', 'registered', $scene.command) @($run.receipt.outcome, $run.receipt.runOnce, (Get-Value)) 'absolute-form'
     Remove-Value
     $rows.Add([ordered]@{case = 'absolute-form'; passed = $true})
+
+    # O7 at the next sign-in (review of PR #123): a complete production run removes Electron's Roaming userData. A test
+    # root proves the removal on a stand-in inside it: the folder goes, a junction inside it and a junction as the folder
+    # itself are removed, never entered, and their targets stay.
+    $scene = New-Scene 'roam' $owned 1
+    $stand = Join-Path $scene.root 'Roaming\ETS2Telemetry Desktop'
+    Write-Text (Join-Path $stand 'Local State') "{}`n"
+    Write-Text (Join-Path $stand 'Cache\data_0') "cache`n"
+    $outside = Join-Path $scene.root 'outside-roaming'
+    Write-Text (Join-Path $outside 'sentinel.txt') "outside the Roaming folder`n"
+    New-Item -ItemType Junction -Path (Join-Path $stand 'linked') -Target $outside | Out-Null
+    Set-Value $scene.command
+    $run = Invoke-Executor $scene 'none' $true (' -TestRoamingFolder "' + $stand + '"')
+    Assert-Equal @('complete', 'removed', 'absent', 'present') @($run.receipt.outcome, $run.receipt.roaming, (Get-State $stand), (Get-State (Join-Path $outside 'sentinel.txt'))) 'roaming-stand-in'
+    $rows.Add([ordered]@{case = 'roaming-stand-in'; passed = $true})
+
+    $scene = New-Scene 'roamlink' $owned 1
+    $stand = Join-Path $scene.root 'Roaming\ETS2Telemetry Desktop'
+    $outside = Join-Path $scene.root 'outside-roaming'
+    Write-Text (Join-Path $outside 'sentinel.txt') "outside the Roaming folder`n"
+    New-Item -ItemType Directory -Path (Split-Path $stand) | Out-Null
+    New-Item -ItemType Junction -Path $stand -Target $outside | Out-Null
+    Set-Value $scene.command
+    $run = Invoke-Executor $scene 'none' $true (' -TestRoamingFolder "' + $stand + '"')
+    Assert-Equal @('complete', 'removed', 'absent', 'present') @($run.receipt.outcome, $run.receipt.roaming, (Get-State $stand), (Get-State (Join-Path $outside 'sentinel.txt'))) 'roaming-junction'
+    $rows.Add([ordered]@{case = 'roaming-junction'; passed = $true})
+
+    $scene = New-Scene 'roamnone' $owned 1
+    Set-Value $scene.command
+    $run = Invoke-Executor $scene 'none' $true (' -TestRoamingFolder "' + (Join-Path $scene.root 'Roaming\ETS2Telemetry Desktop') + '"')
+    Assert-Equal @('complete', 'absent') @($run.receipt.outcome, $run.receipt.roaming) 'roaming-absent'
+    $rows.Add([ordered]@{case = 'roaming-absent'; passed = $true})
+
+    # A stand-in outside the test root (here a folder beside it in the work folder) is refused, and nothing changes.
+    $scene = New-Scene 'roamout' $owned 1
+    $beside = Join-Path $WorkDirectory 'beside\ETS2Telemetry Desktop'
+    Write-Text (Join-Path $beside 'Local State') "{}`n"
+    $before = Get-DataRootEntries $scene.dataRoot
+    Set-Value $scene.command
+    $run = Invoke-Executor $scene 'none' $true (' -TestRoamingFolder "' + $beside + '"')
+    Assert-Equal @('refused', 'TEST_PARAMETER_REFUSED', 'not-run', 'present', 'present') @($run.receipt.outcome, $run.receipt.code, $run.receipt.roaming, (Get-State $beside),
+        (Get-State $scene.dll)) 'roaming-outside-refused'
+    Assert-Equal $before (Get-DataRootEntries $scene.dataRoot) 'roaming-outside-refused data root'
+    $rows.Add([ordered]@{case = 'roaming-outside-refused'; passed = $true})
 } finally {
     # Read-only fixtures are made writable again so the scenes can be removed; then the scenes and this run's test key go.
     foreach ($folder in @($WorkDirectory, $shortRoot)) {
@@ -353,4 +403,5 @@ try {
     [Microsoft.Win32.Registry]::CurrentUser.DeleteSubKeyTree($testKeyRoot, $false)
 }
 if ($null -ne [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($testKeyRoot)) { throw 'The test key remains.' }
+if ((Get-RealRoamingState) -cne $realRoamingBefore) { throw 'The real Roaming userData changed.' }
 Write-Output ('DEFERRED_CLEANUP_PASS ' + $rows.Count)

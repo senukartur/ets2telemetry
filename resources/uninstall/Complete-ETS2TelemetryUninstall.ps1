@@ -8,7 +8,10 @@ param(
     [ValidateSet('start', 'registered')][string]$TestFailAt,
     # Test root only: an allowlisted entry that appears after the registry step, as a writer would leave it, so the shared
     # case table can check that the last step removes it. A production run refuses it.
-    [ValidateSet('data', 'backups', 'settings', 'logs', 'synthetic', 'captures', 'transport')][string]$TestLateEntry
+    [ValidateSet('data', 'backups', 'settings', 'logs', 'synthetic', 'captures', 'transport')][string]$TestLateEntry,
+    # Test root only: a folder inside the test root that stands in for Electron's Roaming userData, so the removal a
+    # production run makes can be tested; without it a test root never removes anything there. A production run refuses it.
+    [string]$TestRoamingFolder
 )
 # The deferred-cleanup executor of an ETS2Telemetry uninstall (ET-018 PR-5; plan U7, owner decision O3; docs/uninstall.md,
 # "Deferred cleanup at the next sign-in"). When the uninstall could not finish (a game or TruckersMP ran, a file was
@@ -33,6 +36,7 @@ param(
 #   read-only attribute; plugins\ and uninstall\ go last, and only when every folder is clean, then the empty root.
 # - A complete run removes the RunOnce value. A run still blocked after the 10th attempt stops, removes it and leaves
 #   README.txt with the manual steps. The intent it rewrites stays within 32 folders and 128 KiB.
+# - A complete production run also removes Electron's Roaming userData %APPDATA%\ETS2Telemetry Desktop, best effort (O7).
 # - One receipt with fixed codes and counts, never a path, goes to %TEMP%; a production run shows one summary message box.
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
@@ -57,7 +61,7 @@ $Result = [ordered]@{
     format = 'ets2telemetry.deferred-cleanup-receipt'; version = 1; createdUtc = $null; mode = $null; outcome = 'refused'; code = $null; attempts = $null
     plugins = [ordered]@{removed = 0; absent = 0; unrecognized = 0; notes = @(); blocked = @()}
     data = [ordered]@{removed = 0; kept = 0; failed = @(); rootRemoved = $false}
-    runOnce = 'not-run'; readme = $false; messageBox = 'not-shown'; elapsedMs = 0
+    roaming = 'not-run'; runOnce = 'not-run'; readme = $false; messageBox = 'not-shown'; elapsedMs = 0
 }
 
 # --- Small helpers --------------------------------------------------------------------------------------------------
@@ -672,6 +676,26 @@ $script:UseTestImages = $false
 $script:TestImages = @()
 $script:FailAt = $null
 $script:LateEntry = $null
+$script:TestRoaming = $null
+
+function Remove-RoamingUserData($Roots) {
+    # Owner decision O7, as the Squirrel hook does after its own complete run: Electron's Roaming userData
+    # %APPDATA%\ETS2Telemetry Desktop is removed best effort, in production only. The folder comes from the known folder
+    # ApplicationData (never the APPDATA variable) and this exact name; a link or junction there is removed itself, never
+    # entered (Remove-Tree), and a read-only or locked file stays. A test root touches no Roaming folder at all: only the
+    # folder -TestRoamingFolder names inside the test root, or nothing ('not-applicable').
+    if ($Roots.mode -eq 'production') {
+        $appData = [Environment]::GetFolderPath('ApplicationData')
+        if ([string]::IsNullOrEmpty($appData)) { return 'failed' }
+        $folder = Join-Path $appData 'ETS2Telemetry Desktop'
+    } elseif ($null -ne $script:TestRoaming) { $folder = $script:TestRoaming } else { return 'not-applicable' }
+    $kind = Get-Kind $folder
+    if ($kind -eq 'missing') { return 'absent' }
+    if ($kind -ne 'directory' -and $kind -ne 'link') { return 'failed' }
+    try { $failure = Remove-Tree $folder } catch { return 'failed' }
+    if ($null -eq $failure -and (Get-Kind $folder) -eq 'missing') { return 'removed' }
+    return 'failed'
+}
 
 function Invoke-TestFault([string]$Step) {
     # Test root only (-TestFailAt): an unexpected error at this step, to prove what an error leaves behind.
@@ -733,8 +757,10 @@ function Invoke-Cleanup($Roots) {
     $data = Clear-Everything $Roots.dataRoot $pluginsClean
     $state.data = [ordered]@{removed = $data.removed; kept = $data.kept; failed = @($data.failed); rootRemoved = [bool]$data.rootRemoved}
     if ($pluginsClean -and !$data.failed.Count) {
-        # Complete: unregister last, with the data root, this script and the intent already gone.
+        # Complete: Electron's Roaming userData best effort (O7, production only), then unregister last, with the data
+        # root, this script and the intent already gone.
         $state.outcome = 'complete'; $state.code = $null
+        $state.roaming = Remove-RoamingUserData $Roots
         $state.runOnce = Remove-Registration $Roots
         return
     }
@@ -750,11 +776,16 @@ function Invoke-Cleanup($Roots) {
 }
 
 $roots = $null
-$testParameter = $PSBoundParameters.ContainsKey('TestRunningImages') -or $PSBoundParameters.ContainsKey('TestFailAt') -or $PSBoundParameters.ContainsKey('TestLateEntry')
+$testParameter = $PSBoundParameters.ContainsKey('TestRunningImages') -or $PSBoundParameters.ContainsKey('TestFailAt') -or $PSBoundParameters.ContainsKey('TestLateEntry') -or
+    $PSBoundParameters.ContainsKey('TestRoamingFolder')
 try {
     $roots = Resolve-Roots
     if ($null -ne $roots.code) { $Result.code = $roots.code }
     elseif ($testParameter -and $roots.mode -ne 'test-root') { $Result.mode = $roots.mode; $Result.code = 'TEST_PARAMETER_REFUSED' }
+    elseif ($PSBoundParameters.ContainsKey('TestRoamingFolder') -and (!(Test-DrivePath $TestRoamingFolder) -or !(Test-Inside $TestRoamingFolder $roots.testRoot))) {
+        # The stand-in Roaming folder must lie inside the test root, so a test can never remove a real one.
+        $Result.mode = $roots.mode; $Result.code = 'TEST_PARAMETER_REFUSED'
+    }
     else {
         $Result.mode = $roots.mode
         if ($PSBoundParameters.ContainsKey('TestRunningImages')) {
@@ -763,6 +794,7 @@ try {
         }
         if ($PSBoundParameters.ContainsKey('TestFailAt')) { $script:FailAt = $TestFailAt }
         if ($PSBoundParameters.ContainsKey('TestLateEntry')) { $script:LateEntry = $TestLateEntry }
+        if ($PSBoundParameters.ContainsKey('TestRoamingFolder')) { $script:TestRoaming = $TestRoamingFolder }
         Invoke-Cleanup $roots
     }
 } catch {
