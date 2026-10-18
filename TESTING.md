@@ -937,4 +937,4 @@ RED, each applied alone to the product source and reverted, the file then byte-i
 - an outcome without an attachable trip is attributed `free-driving`: `missing-job-configuration` fails;
 - a `close-gap` window includes the gap's first eventSeq: `app-absent-hydration` fails.
 
-The new file takes about 5 s, one storage worker per case, and the storage suite stays far inside its 5 minute CI step. Commands, timings and findings are in [ET-019 validation](docs/validation/et-019.md#pr-5-lifecycle-scenarios-replayed-into-the-journal-and-the-export-october-19-2026).
+The new file takes about 5 s locally, one storage worker per case, about 2 s of it the idle quiesce of `retention-expired`. The storage suite margin within its 5 minute CI step is measured locally only; a slow hosted runner took 221 s for the whole suite on another PR, so the hosted step time is recorded with this PR. Commands, timings and findings are in [ET-019 validation](docs/validation/et-019.md#pr-5-lifecycle-scenarios-replayed-into-the-journal-and-the-export-october-19-2026).

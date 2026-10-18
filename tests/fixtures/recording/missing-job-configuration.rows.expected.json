@@ -1,6 +1,6 @@
 {
   "scenario": "missing-job-configuration",
-  "basis": ["REG-004", "synthetic-inference"],
+  "basis": ["synthetic-inference"],
   "authoredFrom": [
     "tests/storage/replay-journal-export.test.ts builds the scenario from the header and seed of units-currency.json (ATS, SDK-documented USD): simulation.started (1, atMs 10); job.delivered with no job configuration ever observed (2, 20); job A configured while running (3, 30); a toll (4, 40); simulation.paused (5, 50); job.cleared (6, 60); a frame with a timer restart at 70 (timers.restart, 7); job A configured again with identical values (8, 80); simulation.started (9, 90); a toll (10, 100); job.delivered (11, 110); job.cleared (12, 120). One durable client commits and acknowledges every item; the only frame is the timer restart, while paused",
     "concept.md (Summaries and Events) and AGENTS.md: a disappearing job configuration does not by itself confirm delivery, and ambiguous continuations are never merged automatically (REG-004)",
