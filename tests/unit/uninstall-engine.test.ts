@@ -121,6 +121,21 @@ describe('outcomes', () => {
     expect(await run(current.fixture, {checkRunning: slow, runningCheckBudgetMs: 50})).toMatchObject({outcome: 'deferred', code: 'RUNNING_CHECK_FAILED'});
     expect(received?.aborted).toBe(true);
   });
+  it('keeps the intent writable when a full intent list meets a new bundle hash', async () => {
+    const fixture = await installFixture(guard);
+    const game = await gameFolder(fixture, 'ETS2', {content: CURRENT});
+    await writeRegistry(fixture, [installRecord(game)]);
+    // 257 known hashes, the intent's bound: the current one and 256 earlier releases.
+    const full = [KNOWN[0], ...Array.from({length: 256}, (_, index) => index.toString(16).padStart(64, '0'))];
+    const running: RunningCheck = () => Promise.resolve({ok: true, running: {ets2: true, ats: false, client: false}});
+    expect(await run(fixture, {checkRunning: running, known: full})).toMatchObject({outcome: 'deferred', code: 'GAME_RUNNING'});
+    const intent = parsePendingRecord(await fsp.readFile(path.win32.join(fixture.dataRoot, 'uninstall', 'pending.json')));
+    expect(intent?.known).toHaveLength(257);
+    // The next build adds a new hash: the merged list stays within the bound, and the run proceeds.
+    const next = 'b'.repeat(64);
+    expect(await run(fixture, {known: [KNOWN[0], next]})).toMatchObject({outcome: 'complete', plugins: {removed: 1}});
+    expect(await exists(game.dll)).toBe(false);
+  });
   it('a rerun from another build still removes a DLL whose hash only the intent knows', async () => {
     const fixture = await installFixture(guard);
     const game = await gameFolder(fixture, 'ETS2', {content: RELEASED});

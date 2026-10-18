@@ -222,6 +222,15 @@ describe('folders and hashes', () => {
       expect(await fsp.readFile(path.win32.join(elsewhere, 'ets2telemetry-plugin.dll'))).toEqual(CURRENT);
       expect(await fsp.readFile(path.win32.join(realBin, 'win_x64', 'plugins', 'ets2telemetry-plugin.dll'))).toEqual(CURRENT);
     });
+    it('follows a junctioned root, as ET-017 does, and cleans this application\'s DLL there by hash', async () => {
+      // The game moved to another folder (another drive in practice); its old root is a junction ET-017 installed through.
+      const real = await leftover('Moved-real', CURRENT);
+      const root = path.win32.join(fixture.testRoot, 'Games', 'Moved');
+      await guard.fs.symlink(real.root, root, 'junction');
+      expect(await clean(folderOf({root, plugins: '', dll: ''}, {createdPluginsDirectory: true}))).toEqual({status: 'removed', note: 'GAME_EXECUTABLE_MISSING'});
+      expect(await exists(real.dll)).toBe(false);
+      expect(await exists(real.plugins)).toBe(false);
+    });
     it('counts a root without bin, win_x64 or plugins as absent', async () => {
       const bare = path.win32.join(fixture.testRoot, 'Games', 'Bare');
       await fsp.mkdir(path.win32.join(bare, 'bin', 'win_x64'), {recursive: true});

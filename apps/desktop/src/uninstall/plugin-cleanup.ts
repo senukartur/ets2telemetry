@@ -18,7 +18,9 @@ import type {PendingFolder} from './pending-record';
 /** Why a folder could not be cleaned now; the uninstall then defers. */
 export type CleanupBlockReason = PluginBlockReason | 'FOLDER_UNAVAILABLE';
 /**
- * `removed`: the DLL was removed. `absent`: nothing of this application was left. `unrecognized`: a file with the plugin's
+ * `removed`: the DLL was removed. `absent`: nothing of this application was found, or, with the note `LAYOUT_NOT_PLAIN`,
+ * the folder was not inspected because a link or non-folder stood in the way; such a folder never blocks, so a plugin
+ * may remain there, and PR-3 and PR-4 must show `plugins.notes` to the user. `unrecognized`: a file with the plugin's
  * name and an unknown hash stays, as do other files; nothing of this application is left. `blocked`: retry later.
  */
 export type FolderOutcome = {readonly status: 'removed' | 'absent' | 'unrecognized'; readonly note?: FolderNote}
@@ -29,8 +31,9 @@ export type FolderOutcome = {readonly status: 'removed' | 'absent' | 'unrecogniz
  * - `GAME_FOLDER_GONE`: the root is gone while its parent remains (the game and its folder were removed);
  * - `GAME_EXECUTABLE_MISSING`: the root remains without the game executable, as Steam leaves it after an uninstall when
  *   files it did not install, such as this plugin, are still there; the plugin was cleaned by hash ownership as usual;
- * - `LAYOUT_NOT_PLAIN`: in such a root, the root, `bin`, `bin\win_x64` or `plugins` is a link or not a folder: nothing
- *   is touched through it, and the folder counts as absent so that it never blocks forever;
+ * - `LAYOUT_NOT_PLAIN`: the root is not a folder, or in it `bin`, `bin\win_x64` or `plugins` is a link or not a folder:
+ *   nothing is inspected or touched through it, and the folder counts as absent so that it never blocks forever,
+ *   although a plugin may remain there;
  * - `PLUGINS_FOLDER_ABSENT`: in such a root, `bin`, `bin\win_x64` or `plugins` does not exist: nothing is left to clean.
  */
 export type FolderNote = 'GAME_FOLDER_GONE' | 'GAME_EXECUTABLE_MISSING' | 'LAYOUT_NOT_PLAIN' | 'PLUGINS_FOLDER_ABSENT';
@@ -111,17 +114,28 @@ async function entryKind(fs: InstallerFileSystem, target: string): Promise<Entry
   }
 }
 
+/** The kind of `target` with a final link followed: a directory, anything else, or missing. */
+async function followedKind(fs: InstallerFileSystem, target: string): Promise<EntryKind> {
+  try {return (await fs.stat(target, {bigint: true})).isDirectory() ? 'directory' : 'other';} catch (error) {
+    if (errorCode(error) === 'ENOENT' || errorCode(error) === 'ENOTDIR') return 'missing';
+    throw error;
+  }
+}
+
 /**
  * A folder that is no longer a game folder. A root that is gone while its parent remains is absent; a missing parent
  * (an unplugged drive) defers. A root that remains without the game executable (Steam leaves it after an uninstall when
  * files it did not install, such as this plugin, are still there) is cleaned by hash ownership exactly as a game folder
- * when the root, `bin`, `bin\win_x64` and `plugins` are plain folders; otherwise it counts as absent with a fixed note,
- * because nothing is touched through a link and a deferral could never end.
+ * when the root is a folder (followed, as validateGameLayout follows it) and `bin`, `bin\win_x64` and `plugins` are plain
+ * folders; otherwise it is not inspected and counts as absent with a fixed note, because nothing is touched through a
+ * link and a deferral could never end.
  */
 async function notGameFolder(folder: PendingFolder, ports: FolderCleanupPorts): Promise<FolderOutcome> {
   const {fs} = ports;
+  // The root is followed, as validateGameLayout does: ET-017 installs through a junctioned root (a game moved to another
+  // drive), so the cleanup must reach it too. `bin`, `bin\win_x64` and `plugins` below it are never followed.
   let rootKind: EntryKind;
-  try {rootKind = await entryKind(fs, folder.root);} catch (error) {return {status: 'blocked', reason: blockReasonFor(errorCode(error), 'default'), errno: errorCode(error)};}
+  try {rootKind = await followedKind(fs, folder.root);} catch (error) {return {status: 'blocked', reason: blockReasonFor(errorCode(error), 'default'), errno: errorCode(error)};}
   if (rootKind === 'missing') return await rootGone(fs, folder.root) ? {status: 'absent', note: 'GAME_FOLDER_GONE'} : {status: 'blocked', reason: 'FOLDER_UNAVAILABLE'};
   if (rootKind !== 'directory') return {status: 'absent', note: 'LAYOUT_NOT_PLAIN'};
   const bin = path.win32.join(folder.root, 'bin'), win64 = path.win32.join(bin, 'win_x64'), plugins = path.win32.join(win64, 'plugins');

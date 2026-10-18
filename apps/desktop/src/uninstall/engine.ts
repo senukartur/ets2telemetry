@@ -6,7 +6,7 @@ import {PluginRegistry, type PluginRegistryState} from '../plugin-setup/plugin-r
 import type {RunningGames} from '../plugin-setup/game-processes';
 import type {PluginGame} from '../plugin-setup/steam-discovery';
 import {DATA_ALLOWLIST, KEPT_UNTIL_CLEAN, wipeDataRoot, type DataEntry, type WipeFailureCode, type WipeFileSystem} from './data-wipe';
-import {readPendingRecord, writePendingRecord, type PendingFolder, type PendingRecord} from './pending-record';
+import {MAX_KNOWN_HASHES, readPendingRecord, writePendingRecord, type PendingFolder, type PendingRecord} from './pending-record';
 import {cleanFolder, cleanupFolders, forgetFolder, type CleanupBlockReason, type FolderNote} from './plugin-cleanup';
 import type {UninstallRoots, UninstallRootsRefusal} from './roots';
 
@@ -113,8 +113,11 @@ export async function runUninstall(ports: UninstallPorts): Promise<UninstallResu
   const listing = new AbortController();
   const running: RunningGames | undefined = folders.length ? await withTimeout(ports.checkRunning(listing.signal).then(check => check.ok ? check.running : undefined),
     ports.runningCheckBudgetMs ?? RUNNING_CHECK_BUDGET_MS, undefined, () => listing.abort()) : {ets2: false, ats: false, client: false};
-  // A run from another build keeps the earlier released hashes the intent carries.
-  const known = [...new Set([...ports.known, ...(previous.state === 'present' ? previous.record.known : [])])].sort();
+  // A run from another build keeps the earlier released hashes the intent carries: this build's first, then the intent's
+  // while the intent's bound allows, so a long list never makes the intent unwritable.
+  const knownSet = new Set(ports.known.slice(0, MAX_KNOWN_HASHES));
+  for (const hash of previous.state === 'present' ? previous.record.known : []) if (knownSet.size < MAX_KNOWN_HASHES) knownSet.add(hash);
+  const known = [...knownSet].sort();
 
   // Nothing at all to do: no data root and no folder.
   const dataRootPresent = await ports.fs.lstat(dataRoot, {bigint: true}).then(() => true, () => false);
