@@ -38,12 +38,15 @@ interface Harness {
   receipts: {name: string; receipt: UninstallReceipt; text: string}[];
   updates: {installRoot: string; args: readonly string[]}[];
   lockRequests: () => number;
+  /** Resolves at the first lock request, so a case can wait for the run to reach it without a wall-clock wait. */
+  firstLockRequest: Promise<void>;
   order: string[];
   advance(milliseconds: number): void;
 }
 /** Fake ports around `fixture`; the clock advances only through `delay` and `advance`. */
 function harness(fixture: InstallFixture, overrides: Partial<SquirrelPorts> & {env?: Record<string, string>; locks?: boolean[]} = {}): Harness {
-  let clock = 1000, requests = 0;
+  let clock = 1000, requests = 0, locked: () => void = () => undefined;
+  const firstLockRequest = new Promise<void>(resolve => {locked = resolve;});
   const receipts: Harness['receipts'] = [], updates: Harness['updates'] = [], order: string[] = [];
   const {env, locks, ...rest} = overrides;
   const registry = fakeRunOnce({onSet: () => order.push('register')});
@@ -56,6 +59,7 @@ function harness(fixture: InstallFixture, overrides: Partial<SquirrelPorts> & {e
       order.push('lock');
       const answer = locks ? locks[Math.min(requests, locks.length - 1)] : true;
       requests++;
+      locked();
       return answer;
     },
     runUpdate: (installRoot, args) => {updates.push({installRoot, args}); return Promise.resolve(true);},
@@ -74,7 +78,7 @@ function harness(fixture: InstallFixture, overrides: Partial<SquirrelPorts> & {e
     now: () => new Date(UTC),
     ...rest
   };
-  return {ports, registry, receipts, updates, order, lockRequests: () => requests, advance: milliseconds => {clock += milliseconds;}};
+  return {ports, registry, receipts, updates, order, lockRequests: () => requests, firstLockRequest, advance: milliseconds => {clock += milliseconds;}};
 }
 
 interface Scene {fixture: InstallFixture; game: FakeGameFolder; unrelated: string}
@@ -308,7 +312,8 @@ describe('uninstall', () => {
     let stop: () => void = () => undefined;
     const test = harness(fixture, {runUninstall: () => new Promise<UninstallResult>(() => undefined), hardStop: () => new Promise<void>(resolve => {stop = resolve;})});
     const running = runSquirrelEvent(event('uninstall'), test.ports);
-    await vi.waitFor(() => expect(test.lockRequests()).toBe(1));
+    await test.firstLockRequest;
+    expect(test.lockRequests()).toBe(1);
     stop();
     expect(await running).toBe(EXIT_CODES.deferred);
     expect(test.receipts.map(entry => [entry.receipt.outcome, entry.receipt.code])).toEqual([['deferred', 'BUDGET_EXPIRED']]);
@@ -371,21 +376,27 @@ describe('the hard stop and the run claim one result', () => {
     return {wait, open: () => open()};
   }
   const flush = async () => {for (let index = 0; index < 20; index++) await Promise.resolve();};
+  /** One macrotask turn: every microtask queued before it has run. No wall-clock wait. */
+  const macrotask = () => new Promise<void>(resolve => setImmediate(resolve));
 
   it('the run settling just after the hard stop neither changes the code nor cuts the hard stop\'s receipt short', async () => {
     const {fixture} = await scene();
-    const stop = gate(), engine = gate(), write = gate();
+    const stop = gate(), engine = gate(), write = gate(), processWait = gate();
     let settled = false;
     const written: string[] = [];
     const test = harness(fixture, {
       runUninstall: async ports => {await engine.wait; await fsp.rm(ports.roots.ok ? ports.roots.dataRoot : '', {recursive: true}); return COMPLETE;},
+      // The process wait is the run's last step before it claims the result: reaching it shows the run has settled.
+      countOtherProcesses: () => {processWait.open(); return Promise.resolve(0);},
       hardStop: () => stop.wait,
       writeReceipt: async (_name, text) => {await write.wait; written.push((JSON.parse(text) as UninstallReceipt).code ?? 'null'); return true;}});
     const result = runSquirrelEvent(event('uninstall'), test.ports).then(code => {settled = true; return code;});
-    await vi.waitFor(() => expect(test.lockRequests()).toBe(1));
+    await test.firstLockRequest;
+    expect(test.lockRequests()).toBe(1);
     stop.open(); await flush();
     // The hard stop owns the result now; its receipt is still being written when the run settles.
-    engine.open(); await new Promise(resolve => setTimeout(resolve, 50)); await flush();
+    // After the process wait only microtasks are left before the run's claim; one macrotask turn drains them all.
+    engine.open(); await processWait.wait; await macrotask();
     expect(settled).toBe(false);
     write.open();
     expect(await result).toBe(EXIT_CODES.deferred);
@@ -394,14 +405,14 @@ describe('the hard stop and the run claim one result', () => {
 
   it('the hard stop firing while the run writes its receipt waits for that receipt and keeps the run\'s code', async () => {
     const {fixture} = await scene();
-    const stop = gate(), write = gate();
-    let settled = false, writing = false;
+    const stop = gate(), write = gate(), writing = gate();
+    let settled = false;
     const written: string[] = [];
     const test = harness(fixture, {
       hardStop: () => stop.wait,
-      writeReceipt: async (_name, text) => {writing = true; await write.wait; written.push((JSON.parse(text) as UninstallReceipt).outcome); return true;}});
+      writeReceipt: async (_name, text) => {writing.open(); await write.wait; written.push((JSON.parse(text) as UninstallReceipt).outcome); return true;}});
     const result = runSquirrelEvent(event('uninstall'), test.ports).then(code => {settled = true; return code;});
-    await vi.waitFor(() => expect(writing).toBe(true));
+    await writing.wait;
     stop.open(); await flush();
     expect(settled).toBe(false);
     write.open();
@@ -560,17 +571,21 @@ describe('no process of this application outlives the uninstall hook', () => {
   it('cuts off a slow listing at the deadline and keeps the engine\'s result', async () => {
     const {fixture} = await scene();
     const deadline = new AbortController(), asked: number[] = [];
-    let hardStopped = false;
+    let hardStopFired = false, fireHardStop: () => void = () => undefined;
     const test = harness(fixture, {
       deadlineSignal: milliseconds => {asked.push(milliseconds); return deadline.signal;},
-      // A tasklist that does not answer before the deadline: it ends only when the signal it got aborts.
+      // A tasklist that does not answer before the deadline: it ends only when the signal it got aborts. The hard stop
+      // fires one macrotask after the deadline, once every microtask is done: a run that honours the signal has claimed
+      // its result by then, while one that waited for the listing would lose the claim to the hard stop.
       countOtherProcesses: signal => new Promise(resolve => {
         signal.addEventListener('abort', () => resolve(null), {once: true});
-        queueMicrotask(() => deadline.abort());
+        queueMicrotask(() => {deadline.abort(); setImmediate(() => fireHardStop());});
       }),
-      hardStop: () => new Promise<void>(resolve => setTimeout(() => {hardStopped = true; resolve();}, 2000))});
+      hardStop: () => new Promise<void>(resolve => {fireHardStop = () => {hardStopFired = true; resolve();};})});
     expect(await runSquirrelEvent(event('uninstall'), test.ports)).toBe(EXIT_CODES.complete);
-    expect(hardStopped).toBe(false);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    // The hard stop did fire, after the run had claimed: its claim wrote nothing.
+    expect(hardStopFired).toBe(true);
     // The harness clock starts at 1000 and the anchored engine deadline is 7500.
     expect(asked).toEqual([6500]);
     expect(test.receipts.map(entry => [entry.receipt.outcome, entry.receipt.otherProcesses])).toEqual([['complete', null]]);

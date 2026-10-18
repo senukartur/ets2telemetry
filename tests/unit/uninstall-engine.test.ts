@@ -65,6 +65,13 @@ const gone = (fixture: InstallFixture, name: string): FakeGameFolder => {
 };
 const DELETIONS = new Set(['unlink', 'rmdir']);
 /**
+ * The deletions a complete run of `scene()` makes, counted by hand from the scene: the two recorded DLLs (2), the plugins
+ * folder setup created for ATS (1), a file and its folder for each of data, backups, settings, logs, synthetic and
+ * captures (12), the service policy with its v1 and transport folders (3), setup.json with plugins (2), pending.json with
+ * uninstall (2) and the data root (1).
+ */
+const SCENE_DELETIONS = 23;
+/**
  * The scene's file system, counting deletions. With `killAfter`, the operation after that many deletions never
  * settles, so the run stops there as a killed process would; `killed` resolves when that happens.
  */
@@ -319,13 +326,16 @@ describe('ordering and interruption', () => {
     expect(seen).toEqual([expect.objectContaining({phase: 'plugins', attempts: 1, known: [...KNOWN].sort(),
       folders: [expect.objectContaining({game: 'ets2', root: current.games[0].root}), expect.objectContaining({game: 'ats', root: current.games[1].root})]})]);
   });
-  it('finishes after a kill after any deletion: a fresh run completes with the same final state', {timeout: 120_000}, async () => {
-    const reference = await scene('reference');
-    const probe = counting(reference.fixture.fs);
-    expect(await run(reference.fixture, {fs: probe.fs})).toMatchObject({outcome: 'complete'});
-    const total = probe.deletions();
-    expect(total).toBeGreaterThan(15);
-    for (let kill = 1; kill < total; kill++) {
+  // One case per kill point and per expiry point (ET-019, October 18, 2026): each case builds one scene, so its file work
+  // no longer grows with the number of points under the default case timeout. The points and assertions are unchanged.
+  describe('finishes after a kill after any deletion: a fresh run completes with the same final state', () => {
+    it(`a complete run of the scene makes exactly ${SCENE_DELETIONS} deletions, one kill point after each but the last`, async () => {
+      const reference = await scene('reference');
+      const probe = counting(reference.fixture.fs);
+      expect(await run(reference.fixture, {fs: probe.fs})).toMatchObject({outcome: 'complete'});
+      expect(probe.deletions()).toBe(SCENE_DELETIONS);
+    });
+    it.each(Array.from({length: SCENE_DELETIONS - 1}, (_, index) => index + 1))('kill after deletion %i', async kill => {
       const current = await scene(`kill-${kill}`);
       const killing = counting(current.fixture.fs, {killAfter: kill});
       // The abandoned run never settles; the kill is observed and the run is left behind, as a killed process.
@@ -334,16 +344,18 @@ describe('ordering and interruption', () => {
       const rerun = await run(current.fixture);
       expect(rerun.outcome, `kill after deletion ${kill}`).toBe('complete');
       await expectCleaned(current);
-    }
+    });
   });
-  it('defers at an expired budget and never reports complete while something is left', async () => {
-    const expiredAtStart = await scene('expired');
-    expect(await run(expiredAtStart.fixture, {deadline: 0})).toMatchObject({outcome: 'deferred', code: 'BUDGET_EXPIRED',
-      plugins: {removed: 0, blocked: [{game: 'ets2', reason: 'BUDGET_EXPIRED'}, {game: 'ats', reason: 'BUDGET_EXPIRED'}]}});
-    for (const game of expiredAtStart.games) expect(await fsp.readFile(game.dll)).toEqual(CURRENT);
-    expect(await exists(path.win32.join(expiredAtStart.fixture.dataRoot, 'uninstall', 'pending.json'))).toBe(true);
+  describe('defers at an expired budget and never reports complete while something is left', () => {
+    it('a budget already expired at the start touches no plugin and leaves the intent', async () => {
+      const expiredAtStart = await scene('expired');
+      expect(await run(expiredAtStart.fixture, {deadline: 0})).toMatchObject({outcome: 'deferred', code: 'BUDGET_EXPIRED',
+        plugins: {removed: 0, blocked: [{game: 'ets2', reason: 'BUDGET_EXPIRED'}, {game: 'ats', reason: 'BUDGET_EXPIRED'}]}});
+      for (const game of expiredAtStart.games) expect(await fsp.readFile(game.dll)).toEqual(CURRENT);
+      expect(await exists(path.win32.join(expiredAtStart.fixture.dataRoot, 'uninstall', 'pending.json'))).toBe(true);
+    });
     // Every possible expiry point: a deferred run always leaves the intent, and a complete one leaves nothing.
-    for (let budget = 1; budget < 80; budget += 3) {
+    it.each(Array.from({length: 27}, (_, index) => 1 + 3 * index))('a budget of %i clock readings', async budget => {
       const current = await scene(`budget-${budget}`);
       const result = await run(current.fixture, {deadline: budget});
       if (result.outcome === 'complete') await expectCleaned(current);
@@ -351,7 +363,7 @@ describe('ordering and interruption', () => {
         expect(result.code, `budget ${budget}`).toBe('BUDGET_EXPIRED');
         expect(await exists(path.win32.join(current.fixture.dataRoot, 'uninstall', 'pending.json')), `budget ${budget}`).toBe(true);
       }
-    }
+    });
   });
   it('a second run after a complete one changes nothing and completes', async () => {
     const current = await scene();

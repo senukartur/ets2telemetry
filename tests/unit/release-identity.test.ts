@@ -198,15 +198,14 @@ describe('PE images', () => {
     expect(identity.signing.summary).toEqual({Valid: 1, NotSigned: identity.peImages.length - 1});
   });
 
-  it('refuses an EXE or DLL that is not a PE image and a Node addon that is no executable image', async () => {
-    for (const name of ['resources/tools/fake.exe', 'fake.dll', 'resources/fake.node']) {
+  // One case per name (ET-019, October 18, 2026): each builds one fake tree instead of three under the default timeout.
+  it.each(['resources/tools/fake.exe', 'fake.dll', 'resources/fake.node'])('refuses an EXE or DLL that is not a PE image and a Node addon that is no executable image: %s',
+    async name => {
       const tree = await fakeTree();
       await put(path.join(tree.packageDirectory, name), 'not an image');
       await buildMake(tree);
       expect(() => identityOf(tree)).toThrow(name.endsWith('.node') ? 'Not an executable image' : 'Not a PE image');
-      await rm(tree.checkout, {recursive: true, force: true});
-    }
-  });
+    });
 
   it('writes relative names only', async () => {
     const tree = await fakeTree();

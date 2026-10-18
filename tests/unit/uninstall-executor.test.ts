@@ -286,6 +286,14 @@ describe('the reg.exe port', () => {
   });
 
   describe('a round trip through the real reg.exe under this run\'s own test key', () => {
+    /**
+     * Each operation's budget for its reg.exe processes (one to four): a hang guard for a loaded host, not a timing
+     * assertion. How fast Windows starts reg.exe is not what this case checks (TESTING.md section 6); the fake reg.exe
+     * cases above check how one budget is shared by an operation's calls.
+     */
+    const REG_HANG_GUARD_MS = 30_000;
+    /** The case runs seven operations one after another, each bounded by the guard. */
+    const ROUND_TRIP_OPERATIONS = 7;
     const keyRoot = `HKCU\\Software\\ETS2Telemetry-Test-${randomUUID().replaceAll('-', '')}`;
     const key = `${keyRoot}\\RunOnce`;
     afterEach(() => {
@@ -297,13 +305,13 @@ describe('the reg.exe port', () => {
       const registry = regExeRunOnce(process.env);
       const command = executorCommand('C:\\Users\\Driver Name\\AppData\\Local\\ETS2Telemetry', WINDOWS)!;
       // Neither the key nor its parent exists yet: HKCU\Software's listing shows that the value is absent.
-      expect(await registry.read(key, RUN_ONCE_VALUE, 5000)).toBeNull();
-      expect(await registry.remove(key, RUN_ONCE_VALUE, 5000)).toBe('absent');
-      expect(await registry.set(key, RUN_ONCE_VALUE, command, 5000)).toBe(true);
-      expect(await registry.read(key, RUN_ONCE_VALUE, 5000)).toBe(command);
-      expect(await registry.remove(key, RUN_ONCE_VALUE, 5000)).toBe('removed');
-      expect(await registry.remove(key, RUN_ONCE_VALUE, 5000)).toBe('absent');
-      expect(await registry.read(key, RUN_ONCE_VALUE, 5000)).toBeNull();
-    });
+      expect(await registry.read(key, RUN_ONCE_VALUE, REG_HANG_GUARD_MS)).toBeNull();
+      expect(await registry.remove(key, RUN_ONCE_VALUE, REG_HANG_GUARD_MS)).toBe('absent');
+      expect(await registry.set(key, RUN_ONCE_VALUE, command, REG_HANG_GUARD_MS)).toBe(true);
+      expect(await registry.read(key, RUN_ONCE_VALUE, REG_HANG_GUARD_MS)).toBe(command);
+      expect(await registry.remove(key, RUN_ONCE_VALUE, REG_HANG_GUARD_MS)).toBe('removed');
+      expect(await registry.remove(key, RUN_ONCE_VALUE, REG_HANG_GUARD_MS)).toBe('absent');
+      expect(await registry.read(key, RUN_ONCE_VALUE, REG_HANG_GUARD_MS)).toBeNull();
+    }, ROUND_TRIP_OPERATIONS * REG_HANG_GUARD_MS);
   });
 });
