@@ -48,6 +48,21 @@ it('cancels: removes pending.json, README.txt and the then empty folder, and not
   expect(await cancelDeferral(fs, fixture.dataRoot)).toBe('none');
 });
 
+it('cancelling also removes the copied deferred-cleanup executor (PR-5)', async () => {
+  await fsp.mkdir(uninstallDirectory(), {recursive: true});
+  for (const name of ['pending.json', 'README.txt', 'Complete-ETS2TelemetryUninstall.ps1']) await fsp.writeFile(path.win32.join(uninstallDirectory(), name), 'x');
+  expect(await cancelDeferral(fs, fixture.dataRoot)).toBe('cancelled');
+  expect(await exists(uninstallDirectory())).toBe(false);
+});
+
+it('the README promises the automatic cleanup at the next sign-in only when the executor is registered', () => {
+  const root = path.win32.join(fixture.testRoot, 'Games', 'ETS2');
+  const automatic = deferralReadme(fixture.dataRoot, [{game: 'ets2', root, hashes: []}], KNOWN, 'GAME_RUNNING', true);
+  expect(automatic).toContain('ETS2Telemetry finishes this cleanup by itself at your next Windows sign-in, once the games are closed (at most 10 attempts).');
+  expect(automatic).toContain('Get-FileHash');
+  expect(deferralReadme(fixture.dataRoot, [{game: 'ets2', root, hashes: []}], KNOWN, 'GAME_RUNNING')).not.toContain('by itself');
+});
+
 it('keeps an unknown file in the uninstall folder, and the folder with it', async () => {
   await fsp.mkdir(uninstallDirectory(), {recursive: true});
   await fsp.writeFile(path.win32.join(uninstallDirectory(), 'pending.json'), 'x');

@@ -63,6 +63,16 @@ report.nativeClient = {executableSha256: clientMetadata.executableSha256, source
 const pluginManifest = verifyPluginBundleAgainstTree(path.join(directory, 'resources/telemetry-plugin'));
 report.nativePlugin = {sha256: pluginManifest.sha256, size: pluginManifest.size, appVersion: pluginManifest.appVersion,
   pluginSourcesVerified: Object.keys(pluginManifest.pluginSources).length, known: pluginManifest.known.length};
+// The deferred-cleanup executor (ET-018 PR-5): exactly the tracked script, plain ASCII so Windows PowerShell 5.1 reads it
+// without a byte order mark, and nothing else in its folder.
+const executorDirectory = path.join(directory, 'resources/uninstall');
+assert.deepEqual(readdirSync(executorDirectory).sort(), ['Complete-ETS2TelemetryUninstall.ps1'], 'Unexpected files beside the uninstall executor');
+const executorBytes = readFileSync(path.join(executorDirectory, 'Complete-ETS2TelemetryUninstall.ps1'));
+assert.equal(sha256(executorBytes), sha256(readFileSync('resources/uninstall/Complete-ETS2TelemetryUninstall.ps1')), 'Packaged uninstall executor differs from the tracked script');
+assert.ok(executorBytes.length > 0 && executorBytes.length <= 256 * 1024 && executorBytes.every(byte => byte === 9 || byte === 10 || byte === 13 || (byte >= 32 && byte < 127)),
+  'Uninstall executor must be plain ASCII within 256 KiB');
+report.uninstallExecutor = {sha256: sha256(executorBytes), size: executorBytes.length};
 mkdirSync('.local/diagnostics', {recursive: true});
 writeFileSync('.local/diagnostics/package-inspection.json', JSON.stringify(report, null, 2) + '\n');
-console.log(JSON.stringify({applicationLaunched: false, ...integrity, compiledFilesVerified: files.length, asarSha256: report.asarSha256, executableSha256: report.executableSha256, pluginSha256: report.nativePlugin.sha256}, null, 2));
+console.log(JSON.stringify({applicationLaunched: false, ...integrity, compiledFilesVerified: files.length, asarSha256: report.asarSha256, executableSha256: report.executableSha256, pluginSha256: report.nativePlugin.sha256,
+  uninstallExecutorSha256: report.uninstallExecutor.sha256}, null, 2));

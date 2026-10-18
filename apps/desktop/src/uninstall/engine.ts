@@ -6,6 +6,7 @@ import {PluginRegistry, sameRoot, type PluginRegistryState} from '../plugin-setu
 import type {RunningGames} from '../plugin-setup/game-processes';
 import type {PluginGame} from '../plugin-setup/steam-discovery';
 import {DATA_ALLOWLIST, KEPT_UNTIL_CLEAN, wipeDataRoot, type DataEntry, type WipeFailureCode, type WipeFileSystem} from './data-wipe';
+import type {ExecutorState} from './executor';
 import {MAX_KNOWN_HASHES, pendingRecordFits, readPendingRecord, writePendingRecord, type PendingFolder, type PendingRecord} from './pending-record';
 import {cleanFolder, cleanupFolders, forgetFolder, intentFolders, type CleanupBlockReason, type FolderNote} from './plugin-cleanup';
 import type {UninstallRoots, UninstallRootsRefusal} from './roots';
@@ -14,11 +15,13 @@ import type {UninstallRoots, UninstallRootsRefusal} from './roots';
 // Squirrel uninstall hook and PR-4 from the in-app uninstall. Order ("metadata and helper last"):
 //
 // 1. Read-only preflight: the roots (U3), the install registry, the previous intent and the running games (at most 3 s).
-// 2. The intent `uninstall\pending.json`, written atomically before anything is deleted.
+// 2. The intent `uninstall\pending.json`, written atomically before anything is deleted; then (ET-018 PR-5, U7) the
+//    deferred-cleanup executor is copied beside it and registered under RunOnce, still before the first deletion.
 // 3. Plugin cleanup under the ET-017 contract, the registry updated after each folder.
 // 4. Every folder clean: the allowlisted data except `plugins` and `uninstall`, then `plugins`, then `uninstall`, then
 //    the empty data root.
-// 5. A folder blocked or deferred: everything except `plugins` and `uninstall`; the intent stays for a later run.
+// 5. A folder blocked or deferred: everything except `plugins` and `uninstall`; the intent stays for a later run, and
+//    the registered executor finishes it at the next sign-in. Only a complete run removes the registration, last.
 //
 // Every step can be interrupted and run again: a killed run leaves a state that the next run finishes. The result
 // carries fixed codes and counts only, never a path, and `complete` is reported only when nothing of this application
@@ -52,6 +55,8 @@ export interface UninstallResult {
   };
   /** O7: Electron's Roaming userData, removed best effort in production installs only (wired in PR-3 and PR-4). */
   readonly roaming: 'removed' | 'failed' | 'not-applicable' | 'not-run';
+  /** ET-018 PR-5 (U7): the deferred-cleanup executor's registration after this run; `not-run` without the ports. */
+  readonly executor: ExecutorState;
 }
 
 /** Every file operation the engine uses; `node:fs/promises` satisfies it. */
@@ -87,8 +92,16 @@ export interface UninstallPorts {
   readonly scope?: 'preflight' | 'plugins' | 'all';
   /** Names a folder for the caller (a plugin target id); the result then carries it as `id`, never the folder's path. */
   readonly describeFolder?: (folder: {readonly game: PluginGame; readonly root: string}) => string;
+  /**
+   * ET-018 PR-5 (U7): copies the deferred-cleanup executor into `uninstall\` and registers it under RunOnce. Called once,
+   * after the intent was written and before anything is deleted, so a run killed at any later point is still finished at
+   * the next sign-in. Only the Squirrel uninstall hook passes it; the scope must be `all`.
+   */
+  readonly armExecutor?: () => Promise<ExecutorState>;
+  /** Removes that registration; called only after a complete run, as its very last step. */
+  readonly disarmExecutor?: () => Promise<ExecutorState>;
   /** Fixed codes and counts only. */
-  readonly log?: (event: string, facts: Record<string, string | number | boolean | null>) => void;
+  readonly log?:(event: string, facts: Record<string, string | number | boolean | null>) => void;
 }
 
 const REGISTRY_PROBLEM: Partial<Record<PluginRegistryState, RegistryProblem>> = {'invalid-file': 'REGISTRY_INVALID', 'newer-version': 'REGISTRY_NEWER',
@@ -107,7 +120,7 @@ function withTimeout<T>(work: Promise<T>, milliseconds: number, fallback: T, exp
 export async function runUninstall(ports: UninstallPorts): Promise<UninstallResult> {
   const {roots} = ports;
   const refused = (code: UninstallCode): UninstallResult => ({outcome: 'refused', code, plugins: {removed: 0, absent: 0, unrecognized: 0, notes: [], blocked: []},
-    data: EMPTY_DATA, roaming: 'not-run'});
+    data: EMPTY_DATA, roaming: 'not-run', executor: 'not-run'});
   if (!roots.ok) return refused(roots.code);
   const now = ports.now ?? (() => new Date()), delay = ports.delay ?? defaultDelay;
   const expired = () => ports.clock() >= ports.deadline;
@@ -152,14 +165,15 @@ export async function runUninstall(ports: UninstallPorts): Promise<UninstallResu
     }
     const code: UninstallCode | null = registryProblem ?? blocked[0]?.reason ?? null;
     log('UNINSTALL_PREFLIGHT', {folders: folders.length, blocked: blocked.length, code});
-    return {outcome: code ? 'deferred' : 'complete', code, plugins: {removed, absent, unrecognized, notes, blocked}, data: EMPTY_DATA, roaming: 'not-run'};
+    return {outcome: code ? 'deferred' : 'complete', code, plugins: {removed, absent, unrecognized, notes, blocked}, data: EMPTY_DATA, roaming: 'not-run', executor: 'not-run'};
   }
 
   // Nothing at all to do: no data root and no folder.
   const dataRootPresent = await ports.fs.lstat(dataRoot, {bigint: true}).then(() => true, () => false);
   if (!dataRootPresent && !folders.length) {
+    // A registration cannot normally outlive its data root; should one be left, it goes last here as well.
     return {outcome: 'complete', code: null, plugins: {removed: 0, absent: 0, unrecognized: 0, notes: [], blocked: []}, data: {...EMPTY_DATA, rootRemoved: true},
-      roaming: await roaming(ports, roots.mode)};
+      roaming: await roaming(ports, roots.mode), executor: await disarm(ports, scope)};
   }
 
   // 2. The intent, before the first deletion. It records the folders within its bounds, the intent's own first; the run
@@ -169,10 +183,14 @@ export async function runUninstall(ports: UninstallPorts): Promise<UninstallResu
     known, folders: intentFolders(folders, kept)}, ports.known, kept);
   try {await writePendingRecord(ports.fs, dataRoot, intent);} catch {return refused('INTENT_FAILED');}
   log('UNINSTALL_INTENT', {folders: folders.length, recorded: intent.folders.length, attempts: intent.attempts});
+  // The executor, still before the first deletion: from here on a run killed at any point is finished at the next sign-in.
+  const armed: ExecutorState = ports.armExecutor && scope === 'all' ? await ports.armExecutor().catch((): ExecutorState => 'failed') : 'not-run';
+  if (armed !== 'not-run') log('UNINSTALL_EXECUTOR', {state: armed});
   if (ports.deferAll) {
     try {await writePendingRecord(ports.fs, dataRoot, {...intent, phase: 'deferred'});} catch {/* the first intent stays; still deferred */}
-    log('UNINSTALL_RESULT', {outcome: 'deferred', code: ports.deferAll, removed: 0, blocked: 0, dataFailed: 0, kept: 0});
-    return {outcome: 'deferred', code: ports.deferAll, plugins: {removed: 0, absent: 0, unrecognized: 0, notes: [], blocked: []}, data: EMPTY_DATA, roaming: 'not-run'};
+    log('UNINSTALL_RESULT', {outcome: 'deferred', code: ports.deferAll, removed: 0, blocked: 0, dataFailed: 0, kept: 0, executor: armed});
+    return {outcome: 'deferred', code: ports.deferAll, plugins: {removed: 0, absent: 0, unrecognized: 0, notes: [], blocked: []}, data: EMPTY_DATA, roaming: 'not-run',
+      executor: armed};
   }
 
   // 3. Plugin cleanup, folder by folder.
@@ -194,7 +212,7 @@ export async function runUninstall(ports: UninstallPorts): Promise<UninstallResu
     // The caller wipes the data after the application's exit; the intent stays until that wipe removes it last.
     const code: UninstallCode | null = pluginsClean ? null : registryProblem ?? blocked[0]?.reason ?? null;
     log('UNINSTALL_PLUGINS', {outcome: pluginsClean ? 'complete' : 'deferred', code, removed, blocked: blocked.length});
-    return {outcome: pluginsClean ? 'complete' : 'deferred', code, plugins, data: EMPTY_DATA, roaming: 'not-run'};
+    return {outcome: pluginsClean ? 'complete' : 'deferred', code, plugins, data: EMPTY_DATA, roaming: 'not-run', executor: armed};
   }
 
   // 4 and 5. The data: everything but the registry and the intent first.
@@ -207,8 +225,12 @@ export async function runUninstall(ports: UninstallPorts): Promise<UninstallResu
     try {await writePendingRecord(ports.fs, dataRoot, recordable({...intent, phase: 'deferred', folders: left}, ports.known, kept));} catch {/* the earlier intent stays; still deferred */}
   }
   const code: UninstallCode | null = complete ? null : budgetSpent ? 'BUDGET_EXPIRED' : registryProblem ?? blocked[0]?.reason ?? (data.failed.length ? 'DATA_ENTRY_BLOCKED' : null);
-  const result: UninstallResult = {outcome: complete ? 'complete' : 'deferred', code, plugins, data, roaming: complete ? await roaming(ports, roots.mode) : 'not-run'};
-  log('UNINSTALL_RESULT', {outcome: result.outcome, code: result.code, removed, blocked: blocked.length, dataFailed: data.failed.length, kept: data.kept});
+  const roamingResult = complete ? await roaming(ports, roots.mode) : 'not-run';
+  // Unregister last: only a complete run, with the data root and the copied executor already gone, removes the registration.
+  const result: UninstallResult = {outcome: complete ? 'complete' : 'deferred', code, plugins, data, roaming: roamingResult,
+    executor: complete ? await disarm(ports, scope) : armed};
+  log('UNINSTALL_RESULT', {outcome: result.outcome, code: result.code, removed, blocked: blocked.length, dataFailed: data.failed.length, kept: data.kept,
+    executor: result.executor});
   return result;
 }
 
@@ -247,6 +269,11 @@ export function recordable(record: PendingRecord, ownKnown: readonly string[], k
   }
   while (current.folders.length && !fits(current)) current = {...current, folders: current.folders.slice(0, -1)};
   return current;
+}
+
+/** Removes the executor's registration after a complete run of scope `all`; `not-run` without the port. */
+async function disarm(ports: UninstallPorts, scope: 'preflight' | 'plugins' | 'all'): Promise<ExecutorState> {
+  return ports.disarmExecutor && scope === 'all' ? ports.disarmExecutor().catch((): ExecutorState => 'failed') : 'not-run';
 }
 
 async function roaming(ports: UninstallPorts, mode: 'production' | 'test-root'): Promise<UninstallResult['roaming']> {

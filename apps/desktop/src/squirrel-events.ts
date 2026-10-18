@@ -7,6 +7,8 @@ import {pluginBundleDirectory, readPluginBundle} from './plugin-setup/plugin-bun
 import type {RunningCheck} from './plugin-setup/plugin-installer';
 import {cancelDeferral, writeDeferralReadme, type CancelFileSystem, type CancelOutcome} from './uninstall/deferral';
 import {RUNNING_CHECK_BUDGET_MS, runUninstall, type UninstallCode, type UninstallFileSystem, type UninstallPorts, type UninstallResult} from './uninstall/engine';
+import {armExecutor, disarmExecutor, EXECUTOR_FILE, EXECUTOR_RESOURCE_DIRECTORY, MAX_EXECUTOR_BYTES, REG_TIMEOUT_MS, regExeRunOnce, type ExecutorState,
+  type RunOnceRegistry} from './uninstall/executor';
 import {resolveUninstallRoots, type UninstallRoots, type UninstallRootsRefusal} from './uninstall/roots';
 
 // The Squirrel.Windows event handler (ET-018 U2, U6; docs/app-lifecycle.md, "Squirrel events"; docs/uninstall.md). It
@@ -15,11 +17,14 @@ import {resolveUninstallRoots, type UninstallRoots, type UninstallRootsRefusal} 
 // event and the package version:
 //
 // - `--squirrel-install` and `--squirrel-updated` create the shortcuts through `Update.exe --createShortcut` (skipped in a
-//   test install unless its test file asks for them) and cancel a pending uninstall deferral. They never delete data.
+//   test install unless its test file asks for them) and cancel a pending uninstall deferral, with its RunOnce
+//   registration. They never delete data.
 // - `--squirrel-obsolete` (the previous version after an update) quits. It never deletes anything.
 // - `--squirrel-uninstall` closes a running instance through the single-instance lock, then runs the uninstall engine
-//   within a global 8 s deadline, inside Squirrel's 10 s hook budget. It writes one bounded receipt into %TEMP% with
-//   fixed codes and counts, never a path, and exits 0 (complete), 3 (deferred) or 4 (refused).
+//   within a global 8 s deadline, inside Squirrel's 10 s hook budget. Before the engine deletes anything it copies the
+//   deferred-cleanup executor and registers it under RunOnce (ET-018 PR-5, U7); only a complete run removes the
+//   registration, last. It writes one bounded receipt into %TEMP% with fixed codes and counts, never a path, and exits
+//   0 (complete), 3 (deferred) or 4 (refused).
 // - `--squirrel-firstrun` alone starts the application normally. Any other argument that starts with `--squirrel` is
 //   refused: the process exits 4 and changes nothing.
 //
@@ -52,6 +57,8 @@ export const PROCESS_POLL_MS = 200;
 export const SHORTCUT_TIMEOUT_MS = 10_000;
 /** `Update.exe --removeShortcut` runs beside the cleanup and gets at most this long. */
 export const REMOVE_SHORTCUT_TIMEOUT_MS = 4000;
+/** The shortest time a registry call of the uninstall hook gets, even when the engine deadline is close or past. */
+export const REG_FLOOR_MS = 500;
 export const RECEIPT_PREFIX = 'ETS2Telemetry-uninstall-';
 export const RECEIPT_FORMAT = 'ets2telemetry.uninstall-receipt';
 export const EXIT_CODES: Readonly<Record<UninstallResult['outcome'], number>> = Object.freeze({complete: 0, deferred: 3, refused: 4});
@@ -113,6 +120,8 @@ export interface UninstallReceipt {
   readonly plugins: UninstallResult['plugins'];
   readonly data: UninstallResult['data'];
   readonly roaming: UninstallResult['roaming'];
+  /** ET-018 PR-5 (U7): the deferred-cleanup executor's registration when the receipt was written. */
+  readonly executor: ExecutorState;
   readonly readme: boolean;
   readonly shortcuts: ShortcutState;
   /** The first step after the engine that threw, or null; the engine's outcome and counts stand regardless. */
@@ -144,6 +153,10 @@ export interface SquirrelPorts {
   /** Runs `<installRoot>\Update.exe` with fixed arguments; true when it exited 0 within the timeout. */
   runUpdate(installRoot: string, args: readonly string[], timeoutMs: number): Promise<boolean>;
   readonly fs: UninstallFileSystem & CancelFileSystem;
+  /** HKCU RunOnce through reg.exe in production; tests inject a fake (never the real RunOnce key). */
+  readonly runOnce: RunOnceRegistry;
+  /** The packaged deferred-cleanup executor's bytes, or undefined when it cannot be read. */
+  readExecutor(): Promise<Uint8Array | undefined>;
   readonly checkRunning: RunningCheck;
   /** The bundle's own and earlier released plugin hashes; empty when the bundle cannot be read. */
   readKnown(): Promise<readonly string[]>;
@@ -186,14 +199,18 @@ export async function runSquirrelEvent(args: SquirrelArgs, ports: SquirrelPorts)
   }
 }
 
-/** install and updated: the shortcuts, then cancelling a pending deferral. Nothing is deleted but the deferral's own files. */
-async function installed(ports: SquirrelPorts): Promise<{shortcuts: ShortcutState; deferral: CancelOutcome | 'not-installed'}> {
+/**
+ * install and updated: the shortcuts, then cancelling a pending deferral and its RunOnce registration. Nothing is deleted
+ * but the deferral's own files.
+ */
+async function installed(ports: SquirrelPorts): Promise<{shortcuts: ShortcutState; deferral: CancelOutcome | 'not-installed'; executor: ExecutorState}> {
   const roots = await ports.resolveRoots().catch((): UninstallRoots => ({ok: false, code: 'NOT_INSTALLED'}));
-  if (!roots.ok) return {shortcuts: 'skipped', deferral: 'not-installed'};
+  if (!roots.ok) return {shortcuts: 'skipped', deferral: 'not-installed', executor: 'not-run'};
   const shortcuts: ShortcutState = !wantsShortcuts(roots, ports) ? 'skipped'
     : await ports.runUpdate(roots.installRoot, [`--createShortcut=${ports.executableName}`], SHORTCUT_TIMEOUT_MS).then((ok): ShortcutState => ok ? 'created' : 'failed', (): ShortcutState => 'failed');
   const deferral = await cancelDeferral(ports.fs, roots.dataRoot).catch((): CancelOutcome => 'failed');
-  return {shortcuts, deferral};
+  const executor = deferral === 'none' ? 'not-run' : await disarmExecutor(roots, ports.runOnce, REG_TIMEOUT_MS).catch((): ExecutorState => 'failed');
+  return {shortcuts, deferral, executor};
 }
 
 /** Production installs always manage shortcuts; a test install only when its test file sets `shortcuts: true`. */
@@ -217,7 +234,8 @@ export function hookDeadlines(started: number): {engine: number; hardStop: numbe
 async function uninstallWithHardStop(ports: SquirrelPorts): Promise<number> {
   const started = ports.clock();
   const deadlines = hookDeadlines(started);
-  const state: HookState = {mode: null, instance: 'not-checked', shortcuts: 'skipped', claimed: false, otherProcesses: null, processWaitMs: 0, failedStep: null};
+  const state: HookState = {mode: null, instance: 'not-checked', shortcuts: 'skipped', claimed: false, otherProcesses: null, processWaitMs: 0, failedStep: null,
+    executor: 'not-run'};
   const claim = (settled: Settled, readme: boolean): Promise<number> => {
     if (state.claimed) return new Promise<number>(() => undefined);
     state.claimed = true;
@@ -232,7 +250,9 @@ async function uninstallWithHardStop(ports: SquirrelPorts): Promise<number> {
 }
 
 interface HookState {mode: UninstallReceipt['mode']; instance: UninstallReceipt['instance']; shortcuts: ShortcutState; claimed: boolean;
-  otherProcesses: number | null; processWaitMs: number; failedStep: PostEngineStep | null}
+  otherProcesses: number | null; processWaitMs: number; failedStep: PostEngineStep | null;
+  /** Set as soon as the engine armed or disarmed the executor, so even a hard stop or an engine throw records it. */
+  executor: ExecutorState}
 type Settled = Pick<UninstallResult, 'outcome' | 'plugins' | 'data' | 'roaming'> & {code: HookCode | null};
 
 async function uninstall(ports: SquirrelPorts, state: HookState, deadline: number, finish: (settled: Settled, readme: boolean) => Promise<number>): Promise<number> {
@@ -252,10 +272,17 @@ async function uninstall(ports: SquirrelPorts, state: HookState, deadline: numbe
   // 3. The engine, within what is left of the deadline.
   const known = await ports.readKnown().catch(() => []);
   const engine = ports.runUninstall ?? runUninstall;
+  // A registry call gets REG_TIMEOUT_MS, cut to what is left before the engine deadline but never below REG_FLOOR_MS: the
+  // registration matters most exactly when the run is short of time, and the hard stop still bounds the whole hook.
+  const registryTimeout = () => Math.max(REG_FLOOR_MS, Math.min(REG_TIMEOUT_MS, deadline - ports.clock()));
+  const armExecutorPort = async () => state.executor = await armExecutor({roots, fs: ports.fs, registry: ports.runOnce, readExecutor: () => ports.readExecutor(),
+    timeoutMs: registryTimeout});
+  const disarmExecutorPort = async () => state.executor = await disarmExecutor(roots, ports.runOnce, registryTimeout());
   let settled: Settled;
   try {
     const result = await engine({roots, fs: ports.fs, checkRunning: ports.checkRunning, known, clock: () => ports.clock(), deadline,
       runningCheckBudgetMs: Math.max(0, Math.min(RUNNING_CHECK_BUDGET_MS, deadline - ports.clock())), now: () => ports.now(), delay: milliseconds => ports.delay(milliseconds),
+      armExecutor: armExecutorPort, disarmExecutor: disarmExecutorPort,
       ...(roots.mode === 'production' && ports.removeRoamingUserData ? {removeRoamingUserData: ports.removeRoamingUserData} : {}),
       ...(state.instance === 'running' ? {deferAll: 'INSTANCE_RUNNING' as const} : {})});
     settled = settle(result, await exists(ports.fs, roots.dataRoot));
@@ -267,8 +294,10 @@ async function uninstall(ports: SquirrelPorts, state: HookState, deadline: numbe
   const step = async <T>(name: PostEngineStep, work: () => Promise<T>, fallback: T): Promise<T> => {
     try {return await work();} catch {state.failedStep ??= name; return fallback;}
   };
-  // A deferral leaves the README beside the intent (the U7 fallback until the PR-5 executor).
-  const readme = settled.outcome === 'deferred' ? await step('readme', () => writeDeferralReadme(ports.fs, roots.dataRoot, settled.code), false) : false;
+  // A deferral leaves the README beside the intent: it says whether the registered executor finishes at the next sign-in,
+  // and gives the manual steps in case it cannot.
+  const readme = settled.outcome === 'deferred'
+    ? await step('readme', () => writeDeferralReadme(ports.fs, roots.dataRoot, settled.code, state.executor === 'registered'), false) : false;
   state.shortcuts = await step('shortcuts', () => shortcuts, 'failed');
   // Squirrel deletes the install folder right after this process exits; a process of this executable that is still
   // ending (an instance Squirrel ended, a portable copy that got the uninstall-exit request) would keep its files.
@@ -317,7 +346,7 @@ async function writeReceipt(ports: SquirrelPorts, settled: Settled, state: HookS
   try {
     const now = ports.now();
     const receipt: UninstallReceipt = {format: RECEIPT_FORMAT, version: 1, createdUtc: now.toISOString(), appVersion: ports.appVersion, outcome: settled.outcome,
-      code: settled.code, mode: state.mode, instance: state.instance, plugins: settled.plugins, data: settled.data, roaming: settled.roaming, readme,
+      code: settled.code, mode: state.mode, instance: state.instance, plugins: settled.plugins, data: settled.data, roaming: settled.roaming, executor: state.executor, readme,
       shortcuts: state.shortcuts, startupOffsetMs: Math.max(0, Math.round(started)), otherProcesses: state.otherProcesses, processWaitMs: state.processWaitMs,
       failedStep: state.failedStep, elapsedMs: Math.max(0, Math.round(ports.clock() - started))};
     return await ports.writeReceipt(`${RECEIPT_PREFIX}${receiptStamp(now)}.json`, `${JSON.stringify(receipt, null, 2)}\n`);
@@ -359,6 +388,14 @@ export function productionSquirrelPorts(options: {app: SquirrelApp; appVersion: 
     runUpdate: async (installRoot, args, timeoutMs) => (await runFixedProgram(nodeExecFile, path.win32.join(installRoot, 'Update.exe'), args,
       {timeoutMs, maxOutputBytes: 64 * 1024})).ok,
     fs,
+    runOnce: regExeRunOnce(env),
+    // The executor Forge ships as an extra resource (resources\uninstall); armExecutor checks it is bounded ASCII text.
+    readExecutor: async () => {
+      const file = path.join(options.resourcesPath, EXECUTOR_RESOURCE_DIRECTORY, EXECUTOR_FILE);
+      const stats = await nodeFs.lstat(file);
+      if (!stats.isFile() || stats.isSymbolicLink() || stats.size > MAX_EXECUTOR_BYTES) return undefined;
+      return nodeFs.readFile(file);
+    },
     checkRunning: signal => checkRunningGames({signal}),
     // Only this process's Windows session: another user's copy cannot hold this install's files open for long, and its
     // processes are never waited on (their session number is not this one).
@@ -416,12 +453,17 @@ async function removeRoamingUserData(app: SquirrelApp, env: Readonly<Record<stri
 }
 
 /**
- * A start of the installed application cancels a pending uninstall deferral (U7): the intent and the README go, and
- * silent plugin setup takes over the plugin files again. Unpackaged and development launches never get here.
+ * A start of the installed application cancels a pending uninstall deferral (U7): the intent, the README and the copied
+ * executor go, then the executor's RunOnce registration, and silent plugin setup takes over the plugin files again. The
+ * registry is touched only when there was a deferral to cancel. Unpackaged and development launches never get here.
  */
-export async function cancelDeferralOnStart(options: {executable: string; env: Readonly<Record<string, string | undefined>>; fs?: SquirrelPorts['fs']}): Promise<CancelOutcome | UninstallRootsRefusal> {
+export async function cancelDeferralOnStart(options: {executable: string; env: Readonly<Record<string, string | undefined>>; fs?: SquirrelPorts['fs'];
+  runOnce?: RunOnceRegistry}): Promise<{readonly deferral: CancelOutcome | UninstallRootsRefusal; readonly executor: ExecutorState}> {
   const fs = options.fs ?? nodeFs;
   const roots = await resolveUninstallRoots({executable: options.executable, env: options.env, fs}).catch((): UninstallRoots => ({ok: false, code: 'NOT_INSTALLED'}));
-  if (!roots.ok) return roots.code;
-  return cancelDeferral(fs, roots.dataRoot).catch((): CancelOutcome => 'failed');
+  if (!roots.ok) return {deferral: roots.code, executor: 'not-run'};
+  const deferral = await cancelDeferral(fs, roots.dataRoot).catch((): CancelOutcome => 'failed');
+  if (deferral === 'none') return {deferral, executor: 'not-run'};
+  const executor = await disarmExecutor(roots, options.runOnce ?? regExeRunOnce(options.env), REG_TIMEOUT_MS).catch((): ExecutorState => 'failed');
+  return {deferral, executor};
 }

@@ -1,27 +1,34 @@
 import path from 'node:path';
 import {writeAtomicFile, type AtomicFileSystem} from '../plugin-setup/atomic-json-file';
 import {pluginTargetOf} from '../plugin-setup/plugin-registry';
+import {EXECUTOR_FILE, MAX_ATTEMPTS} from './executor';
 import {PENDING_DIRECTORY, PENDING_FILE, readPendingRecord} from './pending-record';
 
-// The deferral fallback of an uninstall (ET-018 U7, fallback part; docs/uninstall.md, "Deferral"). PR-5 adds the RunOnce
-// executor that finishes a deferred uninstall at the next sign-in; until then a deferred run leaves `plugins\` and
-// `uninstall\` with the intent and a README.txt that names what is left and how to remove it by hand. A new install, an
-// update or a start of the installed application cancels the deferral: the intent and the README go, and silent plugin
-// setup takes over the plugin files again.
+// The deferral of an uninstall (ET-018 U7; docs/uninstall.md, "Deferral"). A deferred run leaves `plugins\` and
+// `uninstall\` with the intent, the deferred-cleanup executor that the next sign-in runs (PR-5, executor.ts) and a
+// README.txt that names what is left and how to remove it by hand if the executor cannot finish. A new install, an update
+// or a start of the installed application cancels the deferral: the intent, the README and the copied executor go (the
+// caller then removes the RunOnce registration), and silent plugin setup takes over the plugin files again.
 
 export const README_FILE = 'README.txt';
 
-/** A plain-text README for the user: the remaining folders, the hashes that identify this application's plugin, the steps. */
+/**
+ * A plain-text README for the user: the remaining folders, the hashes that identify this application's plugin, the
+ * steps. `automatic`: the executor is registered and tries again at the next sign-in.
+ */
 export function deferralReadme(dataRoot: string, folders: readonly {game: string; root: string; hashes: readonly string[]}[], known: readonly string[],
-  code: string | null): string {
+  code: string | null, automatic = false): string {
   const hashes = [...new Set([...known, ...folders.flatMap(folder => folder.hashes)])].sort();
   const lines = [
     'ETS2Telemetry was uninstalled, but its cleanup could not finish.',
     `Reason: ${code ?? 'unknown'}`,
-    '',
-    'Close Euro Truck Simulator 2, American Truck Simulator and TruckersMP first.',
     ''
   ];
+  if (automatic) {
+    lines.push(`ETS2Telemetry finishes this cleanup by itself at your next Windows sign-in, once the games are closed (at most ${MAX_ATTEMPTS} attempts).`,
+      'You only need the steps below if that does not happen.', '');
+  }
+  lines.push('Close Euro Truck Simulator 2, American Truck Simulator and TruckersMP first.', '');
   if (folders.length) {
     lines.push('Remove the ETS2Telemetry plugin from these game folders, but only when the file\'s SHA-256 is one of the hashes below:');
     for (const folder of folders) lines.push(`  ${folder.game}: ${pluginTargetOf(folder.root)}`);
@@ -36,11 +43,12 @@ export function deferralReadme(dataRoot: string, folders: readonly {game: string
 }
 
 /** Writes `<data root>\uninstall\README.txt` from the current intent; false when there is no intent or the write failed. */
-export async function writeDeferralReadme(fs: AtomicFileSystem, dataRoot: string, code: string | null): Promise<boolean> {
+export async function writeDeferralReadme(fs: AtomicFileSystem, dataRoot: string, code: string | null, automatic = false): Promise<boolean> {
   const pending = await readPendingRecord(fs, dataRoot);
   if (pending.state !== 'present') return false;
   try {
-    await writeAtomicFile(fs, path.win32.join(dataRoot, PENDING_DIRECTORY), README_FILE, deferralReadme(dataRoot, pending.record.folders, pending.record.known, code));
+    await writeAtomicFile(fs, path.win32.join(dataRoot, PENDING_DIRECTORY), README_FILE,
+      deferralReadme(dataRoot, pending.record.folders, pending.record.known, code, automatic));
     return true;
   } catch {return false;}
 }
@@ -49,8 +57,9 @@ export async function writeDeferralReadme(fs: AtomicFileSystem, dataRoot: string
 export interface CancelFileSystem extends AtomicFileSystem {rmdir(target: string): Promise<void>}
 export type CancelOutcome = 'none' | 'cancelled' | 'failed';
 /**
- * Cancels a pending deferral: removes only `uninstall\pending.json` and `uninstall\README.txt` when they are regular files
- * (never through a link), then the `uninstall` folder when it is empty. `none` when there was nothing to cancel.
+ * Cancels a pending deferral: removes only `uninstall\pending.json`, `uninstall\README.txt` and the copied executor when
+ * they are regular files (never through a link), then the `uninstall` folder when it is empty. `none` when there was
+ * nothing to cancel. The caller removes the executor's RunOnce registration whenever the result is not `none`.
  */
 export async function cancelDeferral(fs: CancelFileSystem, dataRoot: string): Promise<CancelOutcome> {
   const directory = path.win32.join(dataRoot, PENDING_DIRECTORY);
@@ -58,7 +67,7 @@ export async function cancelDeferral(fs: CancelFileSystem, dataRoot: string): Pr
   try {folder = await fs.lstat(directory);} catch {return 'none';}
   if (folder.isSymbolicLink() || !folder.isDirectory()) return 'failed';
   let removed = 0, failed = false;
-  for (const name of [PENDING_FILE, README_FILE]) {
+  for (const name of [PENDING_FILE, README_FILE, EXECUTOR_FILE]) {
     const file = path.win32.join(directory, name);
     try {
       const stats = await fs.lstat(file);

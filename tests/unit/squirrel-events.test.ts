@@ -1,3 +1,4 @@
+import {readFileSync} from 'node:fs';
 import * as fsp from 'node:fs/promises';
 import path from 'node:path';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
@@ -5,10 +6,11 @@ import {cancelDeferralOnStart, deadlineSignal, EXIT_CODES, hookDeadlines, prepar
   UNINSTALL_DEADLINE_MS, UNINSTALL_HARD_STOP_MS,
   type SquirrelArgs, type SquirrelPorts, type UninstallReceipt} from '../../apps/desktop/src/squirrel-events';
 import type {UninstallPorts, UninstallResult} from '../../apps/desktop/src/uninstall/engine';
+import {EXECUTOR_FILE, executorCommand, RUN_ONCE_VALUE} from '../../apps/desktop/src/uninstall/executor';
 import {resolveUninstallRoots} from '../../apps/desktop/src/uninstall/roots';
 import {guardedTempRoot, type GuardedRoot} from '../shared/guarded-fs';
-import {CURRENT, exists, FOREIGN, gameFolder, installFixture, installRecord, KNOWN, listTree, notRunning, seedData, UTC, writeRegistry,
-  type FakeGameFolder, type InstallFixture} from '../shared/uninstall-fixture';
+import {CURRENT, exists, fakeRunOnce, FOREIGN, gameFolder, installFixture, installRecord, KNOWN, listTree, notRunning, seedData, TEST_RUN_ONCE, useRunOnceKey, UTC,
+  writeRegistry, type FakeGameFolder, type FakeRunOnce, type InstallFixture} from '../shared/uninstall-fixture';
 
 // REG-015, REG-017 (ET-018 U2, U6): the Squirrel event handler on fake installs under the guarded temporary root. Every
 // port is injected: no Update.exe, no lock, no tasklist and no %TEMP% receipt is real, and the handler never sees the
@@ -24,8 +26,14 @@ afterEach(async () => {
 
 const event = (name: 'install' | 'updated' | 'obsolete' | 'uninstall'): SquirrelArgs => ({kind: 'event', event: name, version: '0.1.0'});
 
+/** The tracked executor script, which the production port reads from the packaged resources. */
+const SCRIPT = readFileSync(path.join(import.meta.dirname, '..', '..', 'resources', 'uninstall', EXECUTOR_FILE));
+const RUN_ONCE_ENTRY = `${TEST_RUN_ONCE}\\${RUN_ONCE_VALUE}`;
+
 interface Harness {
   ports: SquirrelPorts;
+  /** The in-memory RunOnce registry; the real key is never written. */
+  registry: FakeRunOnce;
   receipts: {name: string; receipt: UninstallReceipt; text: string}[];
   updates: {installRoot: string; args: readonly string[]}[];
   lockRequests: () => number;
@@ -37,6 +45,7 @@ function harness(fixture: InstallFixture, overrides: Partial<SquirrelPorts> & {e
   let clock = 1000, requests = 0;
   const receipts: Harness['receipts'] = [], updates: Harness['updates'] = [], order: string[] = [];
   const {env, locks, ...rest} = overrides;
+  const registry = fakeRunOnce({onSet: () => order.push('register')});
   const ports: SquirrelPorts = {
     appVersion: '0.1.0',
     executableName: 'ETS2TelemetryDesktop.exe',
@@ -50,6 +59,8 @@ function harness(fixture: InstallFixture, overrides: Partial<SquirrelPorts> & {e
     },
     runUpdate: (installRoot, args) => {updates.push({installRoot, args}); return Promise.resolve(true);},
     fs: fixture.fs,
+    runOnce: registry,
+    readExecutor: () => Promise.resolve(SCRIPT),
     checkRunning: notRunning,
     readKnown: () => Promise.resolve(KNOWN),
     countOtherProcesses: () => Promise.resolve(0),
@@ -61,17 +72,14 @@ function harness(fixture: InstallFixture, overrides: Partial<SquirrelPorts> & {e
     now: () => new Date(UTC),
     ...rest
   };
-  return {ports, receipts, updates, order, lockRequests: () => requests, advance: milliseconds => {clock += milliseconds;}};
+  return {ports, registry, receipts, updates, order, lockRequests: () => requests, advance: milliseconds => {clock += milliseconds;}};
 }
 
 interface Scene {fixture: InstallFixture; game: FakeGameFolder; unrelated: string}
 /** An installed scene: one fake ETS2 folder with the recorded plugin and an unrelated DLL, and every data entry. */
-async function scene(options: {testRoot?: boolean; shortcuts?: boolean} = {}): Promise<Scene> {
+async function scene(options: {testRoot?: boolean; shortcuts?: boolean; runOnceKey?: string} = {}): Promise<Scene> {
   const fixture = await installFixture(guard, {testRoot: options.testRoot});
-  if (options.shortcuts) {
-    await fsp.writeFile(path.win32.join(fixture.testRoot, 'ets2telemetry-install-test.json'), JSON.stringify({format: 'ets2telemetry.install-test', version: 1,
-      profileDir: path.win32.join(fixture.testRoot, 'profile'), runOnceKey: null, shortcuts: true}));
-  }
+  if (options.shortcuts || options.runOnceKey) await useRunOnceKey(fixture, options.runOnceKey ?? null, options.shortcuts === true);
   const game = await gameFolder(fixture, 'ETS2', {content: CURRENT});
   const unrelated = path.win32.join(game.plugins, 'other-plugin.dll');
   await fsp.writeFile(unrelated, 'another tool');
@@ -307,7 +315,7 @@ describe('uninstall', () => {
   it('never reports complete while the data root remains, whatever the engine says', async () => {
     const {fixture} = await scene();
     const lying = (): Promise<UninstallResult> => Promise.resolve({outcome: 'complete', code: null, plugins: {removed: 1, absent: 0, unrecognized: 0, notes: [], blocked: []},
-      data: {removed: 7, kept: 0, failed: [], rootRemoved: true}, roaming: 'not-applicable'});
+      data: {removed: 7, kept: 0, failed: [], rootRemoved: true}, roaming: 'not-applicable', executor: 'not-run'});
     const test = harness(fixture, {runUninstall: lying});
     expect(await runSquirrelEvent(event('uninstall'), test.ports)).toBe(EXIT_CODES.deferred);
     expect(test.receipts[0].receipt).toMatchObject({outcome: 'deferred', code: 'RESIDUE_REMAINS'});
@@ -315,7 +323,7 @@ describe('uninstall', () => {
 
   it('settle keeps a clean complete and downgrades one with a blocked folder or a failed entry', () => {
     const complete: UninstallResult = {outcome: 'complete', code: null, plugins: {removed: 0, absent: 0, unrecognized: 0, notes: [], blocked: []},
-      data: {removed: 0, kept: 0, failed: [], rootRemoved: true}, roaming: 'not-applicable'};
+      data: {removed: 0, kept: 0, failed: [], rootRemoved: true}, roaming: 'not-applicable', executor: 'not-run'};
     expect(settle(complete, false)).toEqual(complete);
     expect(settle({...complete, plugins: {...complete.plugins, blocked: [{game: 'ets2', reason: 'TARGET_LOCKED'}]}}, false)).toMatchObject({outcome: 'deferred', code: 'RESIDUE_REMAINS'});
     expect(settle({...complete, data: {...complete.data, failed: [{entry: 'logs', code: 'READ_ONLY_FILE'}]}}, false)).toMatchObject({outcome: 'deferred', code: 'RESIDUE_REMAINS'});
@@ -353,7 +361,7 @@ describe('uninstall', () => {
 
 describe('the hard stop and the run claim one result', () => {
   const COMPLETE: UninstallResult = {outcome: 'complete', code: null, plugins: {removed: 1, absent: 0, unrecognized: 0, notes: [], blocked: []},
-    data: {removed: 8, kept: 0, failed: [], rootRemoved: true}, roaming: 'not-applicable'};
+    data: {removed: 8, kept: 0, failed: [], rootRemoved: true}, roaming: 'not-applicable', executor: 'not-run'};
   /** A gate: `open()` resolves `wait`. */
   function gate() {
     let open: () => void = () => undefined;
@@ -491,7 +499,7 @@ describe('a step after the engine never replaces its result (final-head hosted r
     const {fixture} = await scene();
     // A count JSON cannot encode; the data root stays, so the claim is a deferral with RESIDUE_REMAINS.
     const unencodable = {outcome: 'complete', code: null, plugins: {removed: 0, absent: 0, unrecognized: 0, notes: [], blocked: []},
-      data: {removed: 1n, kept: 0, failed: [], rootRemoved: true}, roaming: 'not-applicable'} as unknown as UninstallResult;
+      data: {removed: 1n, kept: 0, failed: [], rootRemoved: true}, roaming: 'not-applicable', executor: 'not-run'} as unknown as UninstallResult;
     const test = harness(fixture, {runUninstall: () => Promise.resolve(unencodable)});
     expect(await runSquirrelEvent(event('uninstall'), test.ports)).toBe(EXIT_CODES.deferred);
     expect(test.receipts).toEqual([]);
@@ -578,11 +586,121 @@ describe('cancelDeferralOnStart', () => {
   it('cancels the deferral of the installed application and refuses any other layout', async () => {
     const {fixture} = await scene();
     await seedDeferral(fixture);
+    const runOnce = fakeRunOnce();
     expect(await cancelDeferralOnStart({executable: path.win32.join(guard.root, 'node_modules', 'electron', 'dist', 'electron.exe'), env: {},
-      fs: fixture.fs})).toBe('NOT_INSTALLED');
+      fs: fixture.fs, runOnce})).toEqual({deferral: 'NOT_INSTALLED', executor: 'not-run'});
     for (const file of deferralFiles(fixture)) expect(await exists(file)).toBe(true);
-    expect(await cancelDeferralOnStart({executable: fixture.executable, env: {}, fs: fixture.fs})).toBe('cancelled');
+    // The fixture's test file names no RunOnce key: no registry call at all.
+    expect(await cancelDeferralOnStart({executable: fixture.executable, env: {}, fs: fixture.fs, runOnce})).toEqual({deferral: 'cancelled', executor: 'not-applicable'});
     for (const file of deferralFiles(fixture)) expect(await exists(file)).toBe(false);
-    expect(await cancelDeferralOnStart({executable: fixture.executable, env: {}, fs: fixture.fs})).toBe('none');
+    expect(await cancelDeferralOnStart({executable: fixture.executable, env: {}, fs: fixture.fs, runOnce})).toEqual({deferral: 'none', executor: 'not-run'});
+    expect(runOnce.calls).toEqual([]);
+  });
+
+  it('removes the copied executor and its RunOnce value with the deferral, and touches the registry only when there was one', async () => {
+    const {fixture} = await scene({runOnceKey: TEST_RUN_ONCE});
+    await seedDeferral(fixture);
+    await fsp.writeFile(path.win32.join(fixture.dataRoot, 'uninstall', EXECUTOR_FILE), SCRIPT);
+    const runOnce = fakeRunOnce();
+    runOnce.values.set(RUN_ONCE_ENTRY, executorCommand(fixture.dataRoot));
+    expect(await cancelDeferralOnStart({executable: fixture.executable, env: {}, fs: fixture.fs, runOnce})).toEqual({deferral: 'cancelled', executor: 'removed'});
+    expect(await exists(path.win32.join(fixture.dataRoot, 'uninstall'))).toBe(false);
+    expect(runOnce.values.size).toBe(0);
+    expect(await cancelDeferralOnStart({executable: fixture.executable, env: {}, fs: fixture.fs, runOnce})).toEqual({deferral: 'none', executor: 'not-run'});
+    expect(runOnce.calls).toEqual([`remove ${TEST_RUN_ONCE}`]);
+  });
+});
+
+describe('the deferred-cleanup executor (ET-018 PR-5, U7)', () => {
+  it('a complete uninstall registers before the first deletion and removes the registration last', async () => {
+    const {fixture, game} = await scene({runOnceKey: TEST_RUN_ONCE});
+    const deletions: string[] = [];
+    const test = harness(fixture);
+    const fs = new Proxy(fixture.fs, {get: (target, name, receiver) => {
+      const value: unknown = Reflect.get(target, name, receiver);
+      if (name !== 'unlink' || typeof value !== 'function') return value;
+      return (...args: unknown[]) => {
+        if (!/\.tmp$/.test(String(args[0]))) test.order.push('delete');
+        deletions.push(String(args[0]));
+        return (value as (...parameters: unknown[]) => unknown).apply(target, args);
+      };
+    }});
+    test.ports = {...test.ports, fs};
+    expect(await runSquirrelEvent(event('uninstall'), test.ports)).toBe(EXIT_CODES.complete);
+    expect(test.order.indexOf('register')).toBeGreaterThan(-1);
+    expect(test.order.indexOf('register')).toBeLessThan(test.order.indexOf('delete'));
+    expect(test.registry.calls).toEqual([`set ${TEST_RUN_ONCE}`, `remove ${TEST_RUN_ONCE}`]);
+    expect(test.registry.values.size).toBe(0);
+    expect(await exists(fixture.dataRoot)).toBe(false);
+    expect(await exists(game.dll)).toBe(false);
+    expect(test.receipts[0].receipt).toMatchObject({outcome: 'complete', executor: 'removed'});
+    // The copied executor went with the uninstall folder, after the registration.
+    expect(deletions.some(file => file.endsWith(`\\uninstall\\${EXECUTOR_FILE}`))).toBe(true);
+  });
+
+  it('a deferred uninstall leaves the copied executor registered for the next sign-in and says so in README.txt', async () => {
+    const {fixture, game} = await scene({runOnceKey: TEST_RUN_ONCE});
+    const test = harness(fixture, {checkRunning: () => Promise.resolve({ok: true, running: {ets2: true, ats: false, client: false}})});
+    expect(await runSquirrelEvent(event('uninstall'), test.ports)).toBe(EXIT_CODES.deferred);
+    expect(test.registry.values.get(RUN_ONCE_ENTRY)).toBe(executorCommand(fixture.dataRoot));
+    expect(await fsp.readFile(path.win32.join(fixture.dataRoot, 'uninstall', EXECUTOR_FILE))).toEqual(SCRIPT);
+    expect((await fsp.readdir(path.win32.join(fixture.dataRoot, 'uninstall'))).sort()).toEqual([EXECUTOR_FILE, 'README.txt', 'pending.json']);
+    expect(await fsp.readFile(path.win32.join(fixture.dataRoot, 'uninstall', 'README.txt'), 'utf8')).toContain('finishes this cleanup by itself at your next Windows sign-in');
+    expect(await fsp.readFile(game.dll)).toEqual(CURRENT);
+    expect(test.receipts[0].receipt).toMatchObject({outcome: 'deferred', code: 'GAME_RUNNING', executor: 'registered', readme: true});
+    expectNoPath(test.receipts[0].text, fixture);
+  });
+
+  it('a running instance defers everything, with the executor registered', async () => {
+    const {fixture} = await scene({runOnceKey: TEST_RUN_ONCE});
+    const test = harness(fixture, {locks: [false]});
+    expect(await runSquirrelEvent(event('uninstall'), test.ports)).toBe(EXIT_CODES.deferred);
+    expect(test.receipts[0].receipt).toMatchObject({code: 'INSTANCE_RUNNING', executor: 'registered'});
+    expect(test.registry.values.get(RUN_ONCE_ENTRY)).toBe(executorCommand(fixture.dataRoot));
+  });
+
+  it('a failed registration keeps the README as the fallback, without the sign-in promise', async () => {
+    const {fixture} = await scene({runOnceKey: TEST_RUN_ONCE});
+    const test = harness(fixture, {runOnce: fakeRunOnce({fail: true}), checkRunning: () => Promise.resolve({ok: true, running: {ets2: true, ats: false, client: false}})});
+    expect(await runSquirrelEvent(event('uninstall'), test.ports)).toBe(EXIT_CODES.deferred);
+    expect(test.receipts[0].receipt).toMatchObject({outcome: 'deferred', executor: 'failed', readme: true});
+    const readme = await fsp.readFile(path.win32.join(fixture.dataRoot, 'uninstall', 'README.txt'), 'utf8');
+    expect(readme).not.toContain('by itself');
+    expect(readme).toContain('Get-FileHash');
+  });
+
+  it('a test install without a RunOnce key copies nothing and writes no key', async () => {
+    const {fixture} = await scene();
+    const test = harness(fixture, {checkRunning: () => Promise.resolve({ok: true, running: {ets2: true, ats: false, client: false}})});
+    expect(await runSquirrelEvent(event('uninstall'), test.ports)).toBe(EXIT_CODES.deferred);
+    expect(test.registry.calls).toEqual([]);
+    expect(await exists(path.win32.join(fixture.dataRoot, 'uninstall', EXECUTOR_FILE))).toBe(false);
+    expect(test.receipts[0].receipt.executor).toBe('not-applicable');
+  });
+
+  it('a production install registers under the production RunOnce key (on the injected registry only)', async () => {
+    const {fixture} = await scene({testRoot: false});
+    const test = harness(fixture, {env: {LOCALAPPDATA: fixture.base}, checkRunning: () => Promise.resolve({ok: true, running: {ets2: false, ats: false, client: true}})});
+    expect(await runSquirrelEvent(event('uninstall'), test.ports)).toBe(EXIT_CODES.deferred);
+    expect(test.registry.calls).toEqual(['set HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce']);
+    expect(test.receipts[0].receipt).toMatchObject({mode: 'production', code: 'CLIENT_RUNNING', executor: 'registered'});
+  });
+
+  it.each(['install', 'updated'] as const)('%s cancels the deferral with its copied executor and RunOnce value', async name => {
+    const {fixture} = await scene({runOnceKey: TEST_RUN_ONCE});
+    await seedDeferral(fixture);
+    await fsp.writeFile(path.win32.join(fixture.dataRoot, 'uninstall', EXECUTOR_FILE), SCRIPT);
+    const test = harness(fixture);
+    test.registry.values.set(RUN_ONCE_ENTRY, executorCommand(fixture.dataRoot));
+    expect(await runSquirrelEvent(event(name), test.ports)).toBe(0);
+    expect(await exists(path.win32.join(fixture.dataRoot, 'uninstall'))).toBe(false);
+    expect(test.registry.values.size).toBe(0);
+  });
+
+  it.each(['install', 'updated'] as const)('%s without a deferral never touches the registry', async name => {
+    const {fixture} = await scene({runOnceKey: TEST_RUN_ONCE});
+    const test = harness(fixture);
+    expect(await runSquirrelEvent(event(name), test.ports)).toBe(0);
+    expect(test.registry.calls).toEqual([]);
   });
 });
