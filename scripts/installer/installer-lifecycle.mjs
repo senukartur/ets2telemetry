@@ -599,8 +599,21 @@ function testRunOnceKey(config) {
   assert.ok(typeof config.runOnceKey === 'string' && RUN_ONCE_KEY.test(config.runOnceKey), 'RUN_ONCE_KEY_INVALID');
   return config.runOnceKey;
 }
-/** The registered command the application writes (executor.ts executorCommand). */
-const executorCommand = dataRoot => `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "${path.win32.join(dataRoot, 'uninstall', EXECUTOR_FILE)}"`;
+const EXECUTOR_ARGUMENTS = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File';
+/**
+ * The registered command the application writes (executor.ts executorCommand): the absolute, quoted powershell.exe under
+ * %SystemRoot% when the command fits 260 characters, otherwise the PATH form `powershell.exe`. The run root on a hosted
+ * runner makes the script path 126 characters, so the lifecycle registers the PATH form (139 + 126 > 260).
+ */
+function executorCommand(dataRoot) {
+  const windows = /^[A-Za-z]:\\[^\\/:*?"<>|]+(\\[^\\/:*?"<>|]+)*$/.test(process.env.SystemRoot ?? '') ? path.win32.normalize(process.env.SystemRoot) : 'C:\\Windows';
+  const script = `"${path.win32.join(dataRoot, 'uninstall', EXECUTOR_FILE)}"`;
+  for (const program of [`"${path.win32.join(windows, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')}"`, 'powershell.exe']) {
+    const command = `${program} ${EXECUTOR_ARGUMENTS} ${script}`;
+    if (command.length <= 260) return command;
+  }
+  return null;
+}
 /** The test key's value, or null when it is absent (reg.exe exits 1). */
 async function readRunOnce(config) {
   let stdout;
@@ -721,7 +734,9 @@ async function runOnce(config, label, expectation) {
   const env = uninstallEnvironment(process.env, {runRoot, real: facts.real, decoy});
   const command = await readRunOnce(config);
   assert.equal(command, executorCommand(layout.dataRoot), 'RUN_ONCE_COMMAND_UNEXPECTED');
-  const match = /^powershell\.exe (-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden) -File "([^"]+)"$/.exec(command);
+  // Either form of the program (the absolute, quoted System32 path or the PATH form); the driver starts System32's.
+  const match = /^(?:"[A-Za-z]:\\[^"]+\\System32\\WindowsPowerShell\\v1\.0\\powershell\.exe"|powershell\.exe) (-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden) -File "([^"]+)"$/
+    .exec(command);
   assert.ok(match && normalizePath(match[2]).startsWith(`${normalizePath(layout.dataRoot)}\\`), 'RUN_ONCE_COMMAND_OUTSIDE_RUN_ROOT');
   const attemptsBefore = (await readJson(path.join(layout.dataRoot, 'uninstall', 'pending.json'), 128 * 1024)).attempts;
   const record = {label, expectation, attemptsBefore, before: {kept: await keptStates(runRoot), plugin: await fileState(game.dll)}};

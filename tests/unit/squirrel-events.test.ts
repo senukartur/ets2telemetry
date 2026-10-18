@@ -29,6 +29,7 @@ const event = (name: 'install' | 'updated' | 'obsolete' | 'uninstall'): Squirrel
 /** The tracked executor script, which the production port reads from the packaged resources. */
 const SCRIPT = readFileSync(path.join(import.meta.dirname, '..', '..', 'resources', 'uninstall', EXECUTOR_FILE));
 const RUN_ONCE_ENTRY = `${TEST_RUN_ONCE}\\${RUN_ONCE_VALUE}`;
+const WINDOWS = 'C:\\Windows';
 
 interface Harness {
   ports: SquirrelPorts;
@@ -60,6 +61,7 @@ function harness(fixture: InstallFixture, overrides: Partial<SquirrelPorts> & {e
     runUpdate: (installRoot, args) => {updates.push({installRoot, args}); return Promise.resolve(true);},
     fs: fixture.fs,
     runOnce: registry,
+    windowsDirectory: WINDOWS,
     readExecutor: () => Promise.resolve(SCRIPT),
     checkRunning: notRunning,
     readKnown: () => Promise.resolve(KNOWN),
@@ -602,7 +604,7 @@ describe('cancelDeferralOnStart', () => {
     await seedDeferral(fixture);
     await fsp.writeFile(path.win32.join(fixture.dataRoot, 'uninstall', EXECUTOR_FILE), SCRIPT);
     const runOnce = fakeRunOnce();
-    runOnce.values.set(RUN_ONCE_ENTRY, executorCommand(fixture.dataRoot));
+    runOnce.values.set(RUN_ONCE_ENTRY, executorCommand(fixture.dataRoot, WINDOWS)!);
     expect(await cancelDeferralOnStart({executable: fixture.executable, env: {}, fs: fixture.fs, runOnce})).toEqual({deferral: 'cancelled', executor: 'removed'});
     expect(await exists(path.win32.join(fixture.dataRoot, 'uninstall'))).toBe(false);
     expect(runOnce.values.size).toBe(0);
@@ -642,7 +644,7 @@ describe('the deferred-cleanup executor (ET-018 PR-5, U7)', () => {
     const {fixture, game} = await scene({runOnceKey: TEST_RUN_ONCE});
     const test = harness(fixture, {checkRunning: () => Promise.resolve({ok: true, running: {ets2: true, ats: false, client: false}})});
     expect(await runSquirrelEvent(event('uninstall'), test.ports)).toBe(EXIT_CODES.deferred);
-    expect(test.registry.values.get(RUN_ONCE_ENTRY)).toBe(executorCommand(fixture.dataRoot));
+    expect(test.registry.values.get(RUN_ONCE_ENTRY)).toBe(executorCommand(fixture.dataRoot, WINDOWS));
     expect(await fsp.readFile(path.win32.join(fixture.dataRoot, 'uninstall', EXECUTOR_FILE))).toEqual(SCRIPT);
     expect((await fsp.readdir(path.win32.join(fixture.dataRoot, 'uninstall'))).sort()).toEqual([EXECUTOR_FILE, 'README.txt', 'pending.json']);
     expect(await fsp.readFile(path.win32.join(fixture.dataRoot, 'uninstall', 'README.txt'), 'utf8')).toContain('finishes this cleanup by itself at your next Windows sign-in');
@@ -656,7 +658,7 @@ describe('the deferred-cleanup executor (ET-018 PR-5, U7)', () => {
     const test = harness(fixture, {locks: [false]});
     expect(await runSquirrelEvent(event('uninstall'), test.ports)).toBe(EXIT_CODES.deferred);
     expect(test.receipts[0].receipt).toMatchObject({code: 'INSTANCE_RUNNING', executor: 'registered'});
-    expect(test.registry.values.get(RUN_ONCE_ENTRY)).toBe(executorCommand(fixture.dataRoot));
+    expect(test.registry.values.get(RUN_ONCE_ENTRY)).toBe(executorCommand(fixture.dataRoot, WINDOWS));
   });
 
   it('a failed registration keeps the README as the fallback, without the sign-in promise', async () => {
@@ -691,7 +693,7 @@ describe('the deferred-cleanup executor (ET-018 PR-5, U7)', () => {
     await seedDeferral(fixture);
     await fsp.writeFile(path.win32.join(fixture.dataRoot, 'uninstall', EXECUTOR_FILE), SCRIPT);
     const test = harness(fixture);
-    test.registry.values.set(RUN_ONCE_ENTRY, executorCommand(fixture.dataRoot));
+    test.registry.values.set(RUN_ONCE_ENTRY, executorCommand(fixture.dataRoot, WINDOWS)!);
     expect(await runSquirrelEvent(event(name), test.ports)).toBe(0);
     expect(await exists(path.win32.join(fixture.dataRoot, 'uninstall'))).toBe(false);
     expect(test.registry.values.size).toBe(0);

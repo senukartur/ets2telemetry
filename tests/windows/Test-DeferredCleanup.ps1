@@ -57,9 +57,9 @@ function Remove-Value {
 }
 function ConvertTo-Json1($Value) { return ConvertTo-Json -InputObject $Value -Depth 6 -Compress }
 
-function New-Scene([string]$Name, $Case, [int]$Attempts) {
+function New-Scene([string]$Name, $Case, [int]$Attempts, [string]$Parent = $WorkDirectory) {
     # The same scene as uninstall-deferred-cases.test.ts: R with the marker and the test file, the data root, the game folder.
-    $root = Join-Path $WorkDirectory $Name
+    $root = Join-Path $Parent $Name
     $base = Join-Path $root 'LocalAppData'; $dataRoot = Join-Path $base 'ETS2Telemetry'
     New-Item -ItemType Directory -Path $dataRoot -Force | Out-Null
     Write-Text (Join-Path $root 'ets2telemetry-plugin-test-root.marker') "deferred-cleanup cases`n"
@@ -105,20 +105,28 @@ function New-Scene([string]$Name, $Case, [int]$Attempts) {
     if ($data['readOnlyEntry']) { $locked = Join-Path $dataRoot 'logs\locked.jsonl'; Write-Text $locked "read-only log`n"; (Get-Item -LiteralPath $locked).IsReadOnly = $true }
     if ($data['logsJunction']) { Write-Text $sentinel "outside the data root`n"; New-Item -ItemType Junction -Path (Join-Path $dataRoot 'logs\linked') -Target (Split-Path $sentinel) | Out-Null }
     Copy-Item -LiteralPath $executor -Destination (Join-Path $dataRoot 'uninstall\Complete-ETS2TelemetryUninstall.ps1')
-    $command = 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + (Join-Path $dataRoot 'uninstall\Complete-ETS2TelemetryUninstall.ps1') + '"'
-    return @{root = $root; base = $base; dataRoot = $dataRoot; dll = $dll; temp = $temp; plugins = $plugins; unrelated = $unrelated; sentinel = $sentinel; command = $command}
+    return @{root = $root; base = $base; dataRoot = $dataRoot; dll = $dll; temp = $temp; plugins = $plugins; unrelated = $unrelated; sentinel = $sentinel
+        command = (Get-ExpectedCommand $dataRoot)}
+}
+function Get-ExpectedCommand([string]$DataRoot) {
+    # executorCommand in executor.ts, written out by hand: the absolute, quoted powershell.exe while the command fits 260
+    # characters, otherwise the PATH form.
+    $script = '"' + (Join-Path $DataRoot 'uninstall\Complete-ETS2TelemetryUninstall.ps1') + '"'
+    $absolute = '"' + $env:SystemRoot + '\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File ' + $script
+    if ($absolute.Length -le 260) { return $absolute }
+    return 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File ' + $script
 }
 
-function Invoke-Executor($Scene, [string]$Running, [bool]$AsRunOnce) {
+function Invoke-Executor($Scene, [string]$Running, [bool]$AsRunOnce, [string]$Extra = '') {
     # As Windows runs a RunOnce entry: the value is read and checked, deleted, then started. -TestRunningImages replaces
     # the real process list (the executor honors it only in a test root). TEMP points into the scene for the receipt.
     $value = Get-Value
     if ($value -cne $Scene.command) { throw ('Registered command differs: ' + $value) }
     if ($AsRunOnce) { Remove-Value }
-    $match = [regex]::Match($value, '^powershell\.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "([^"]+)"$')
+    $match = [regex]::Match($value, '^(?:"[A-Za-z]:\\[^"]+\\System32\\WindowsPowerShell\\v1\.0\\powershell\.exe"|powershell\.exe) -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "([^"]+)"$')
     if (!$match.Success) { throw 'Registered command has an unexpected form.' }
     $start = New-Object Diagnostics.ProcessStartInfo($shell)
-    $start.Arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $match.Groups[1].Value + '" -TestRunningImages ' + $Running
+    $start.Arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $match.Groups[1].Value + '" -TestRunningImages ' + $Running + $Extra
     $start.UseShellExecute = $false; $start.CreateNoWindow = $true
     $start.EnvironmentVariables['TEMP'] = Join-Path $Scene.root 'temp'; $start.EnvironmentVariables['TMP'] = Join-Path $Scene.root 'temp'
     $process = [Diagnostics.Process]::Start($start)
@@ -147,6 +155,7 @@ function Assert-Equal($Expected, $Actual, [string]$What) {
 }
 
 $rows = [Collections.Generic.List[object]]::new()
+$shortRoot = $null
 New-Item -ItemType Directory -Path $WorkDirectory | Out-Null
 try {
     # The shared table, each case started as RunOnce starts it.
@@ -251,13 +260,26 @@ try {
     Assert-Equal $before (Get-DataRootEntries $scene.dataRoot) 'not-a-test-root data root'
     Remove-Value
     $rows.Add([ordered]@{case = 'not-a-test-root'; passed = $true})
+
+    # The absolute powershell.exe form, in a scene short enough for it: the temporary folder's paths are too long for
+    # that form within 260 characters, so this scene lives in a fresh folder at the system drive's root.
+    $shortRoot = Join-Path ($env:SystemDrive + '\') ('etd' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    New-Item -ItemType Directory -Path $shortRoot | Out-Null
+    $scene = New-Scene 'a' $blockedCase 1 $shortRoot
+    if (!$scene.command.StartsWith('"' + $env:SystemRoot + '\System32\WindowsPowerShell\v1.0\powershell.exe" ', [StringComparison]::Ordinal)) { throw 'absolute-form: the scene path is too long' }
+    Set-Value $scene.command
+    $run = Invoke-Executor $scene 'eurotrucks2.exe' $true
+    Assert-Equal @('deferred', 'registered', $scene.command) @($run.receipt.outcome, $run.receipt.runOnce, (Get-Value)) 'absolute-form'
+    Remove-Value
+    $rows.Add([ordered]@{case = 'absolute-form'; passed = $true})
 } finally {
     # Read-only fixtures are made writable again so the scenes can be removed; then the scenes and this run's test key go.
-    if (Test-Path -LiteralPath $WorkDirectory) {
-        # Junctions are removed first and never entered; their targets lie in the work folder too.
-        Get-ChildItem -LiteralPath $WorkDirectory -Recurse -Force -Directory -Attributes ReparsePoint -ErrorAction SilentlyContinue | ForEach-Object { [IO.Directory]::Delete($_.FullName, $false) }
-        Get-ChildItem -LiteralPath $WorkDirectory -Recurse -Force -File -ErrorAction SilentlyContinue | Where-Object { $_.IsReadOnly } | ForEach-Object { $_.IsReadOnly = $false }
-        Remove-Item -LiteralPath $WorkDirectory -Recurse -Force
+    foreach ($folder in @($WorkDirectory, $shortRoot)) {
+        if (!$folder -or !(Test-Path -LiteralPath $folder)) { continue }
+        # Junctions are removed first and never entered; their targets lie in the same folder too.
+        Get-ChildItem -LiteralPath $folder -Recurse -Force -Directory -Attributes ReparsePoint -ErrorAction SilentlyContinue | ForEach-Object { [IO.Directory]::Delete($_.FullName, $false) }
+        Get-ChildItem -LiteralPath $folder -Recurse -Force -File -ErrorAction SilentlyContinue | Where-Object { $_.IsReadOnly } | ForEach-Object { $_.IsReadOnly = $false }
+        Remove-Item -LiteralPath $folder -Recurse -Force
     }
     [Microsoft.Win32.Registry]::CurrentUser.DeleteSubKeyTree($testKeyRoot, $false)
 }

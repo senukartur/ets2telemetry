@@ -1,7 +1,7 @@
 import {mkdirSync} from 'node:fs';
 import * as nodeFs from 'node:fs/promises';
 import path from 'node:path';
-import {nodeExecFile, runFixedProgram} from './plugin-setup/fixed-program';
+import {nodeExecFile, runFixedProgram, systemRoot} from './plugin-setup/fixed-program';
 import {checkRunningGames, listProcessSessions} from './plugin-setup/game-processes';
 import {pluginBundleDirectory, readPluginBundle} from './plugin-setup/plugin-bundle';
 import type {RunningCheck} from './plugin-setup/plugin-installer';
@@ -155,6 +155,8 @@ export interface SquirrelPorts {
   readonly fs: UninstallFileSystem & CancelFileSystem;
   /** HKCU RunOnce through reg.exe in production; tests inject a fake (never the real RunOnce key). */
   readonly runOnce: RunOnceRegistry;
+  /** The Windows folder for the registered command's absolute powershell.exe (`systemRoot(env)` in production). */
+  readonly windowsDirectory: string;
   /** The packaged deferred-cleanup executor's bytes, or undefined when it cannot be read. */
   readExecutor(): Promise<Uint8Array | undefined>;
   readonly checkRunning: RunningCheck;
@@ -275,7 +277,7 @@ async function uninstall(ports: SquirrelPorts, state: HookState, deadline: numbe
   // A registry call gets REG_TIMEOUT_MS, cut to what is left before the engine deadline but never below REG_FLOOR_MS: the
   // registration matters most exactly when the run is short of time, and the hard stop still bounds the whole hook.
   const registryTimeout = () => Math.max(REG_FLOOR_MS, Math.min(REG_TIMEOUT_MS, deadline - ports.clock()));
-  const armExecutorPort = async () => state.executor = await armExecutor({roots, fs: ports.fs, registry: ports.runOnce, readExecutor: () => ports.readExecutor(),
+  const armExecutorPort = async () => state.executor = await armExecutor({roots, fs: ports.fs, registry: ports.runOnce, windowsDirectory: ports.windowsDirectory, readExecutor: () => ports.readExecutor(),
     timeoutMs: registryTimeout});
   const disarmExecutorPort = async () => state.executor = await disarmExecutor(roots, ports.runOnce, registryTimeout());
   let settled: Settled;
@@ -389,6 +391,7 @@ export function productionSquirrelPorts(options: {app: SquirrelApp; appVersion: 
       {timeoutMs, maxOutputBytes: 64 * 1024})).ok,
     fs,
     runOnce: regExeRunOnce(env),
+    windowsDirectory: systemRoot(env),
     // The executor Forge ships as an extra resource (resources\uninstall); armExecutor checks it is bounded ASCII text.
     readExecutor: async () => {
       const file = path.join(options.resourcesPath, EXECUTOR_RESOURCE_DIRECTORY, EXECUTOR_FILE);

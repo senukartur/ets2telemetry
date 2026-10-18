@@ -57,9 +57,27 @@ export function runOnceKeyFor(roots: UninstallRoots): string | null {
 }
 const allowedKey = (key: string) => key === PRODUCTION_RUN_ONCE_KEY || TEST_RUN_ONCE_KEY.test(key);
 
-/** The registered command: Windows PowerShell 5.1 runs the copied script, hidden, without a profile and without prompts. */
-export function executorCommand(dataRoot: string): string {
-  return `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "${path.win32.join(dataRoot, PENDING_DIRECTORY, EXECUTOR_FILE)}"`;
+/** Windows PowerShell 5.1 under the Windows folder (`%SystemRoot%`, expanded when the command is built). */
+export const powershellPath = (windows: string) => path.win32.join(windows, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+const EXECUTOR_ARGUMENTS = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File';
+
+/**
+ * The registered command: Windows PowerShell 5.1 runs the copied script, hidden, without a profile and without prompts.
+ * The program is the absolute, quoted `<windows>\System32\WindowsPowerShell\v1.0\powershell.exe`, so no folder on PATH
+ * can stand in for it. That form takes 139 characters plus the script's path; when it would exceed the 260 characters
+ * Windows runs from a RunOnce key, the plain `powershell.exe` form (94 plus the path, resolved through PATH) is used
+ * instead, and when even that is too long, nothing is registered (undefined) and README.txt is the fallback. With
+ * `C:\Windows` and the usual `C:\Users\<name>\AppData\Local` (a script path of 83 characters plus the name) the
+ * absolute form fits for user names of up to 38 characters. The deferred-cleanup script builds the same command
+ * (`Get-ExecutorCommand`) from its own location and `%SystemRoot%` when it registers itself again.
+ */
+export function executorCommand(dataRoot: string, windows: string): string | undefined {
+  const script = `"${path.win32.join(dataRoot, PENDING_DIRECTORY, EXECUTOR_FILE)}"`;
+  for (const program of [`"${powershellPath(windows)}"`, 'powershell.exe']) {
+    const command = `${program} ${EXECUTOR_ARGUMENTS} ${script}`;
+    if (command.length <= MAX_RUN_ONCE_COMMAND) return command;
+  }
+  return undefined;
 }
 
 /** True for executor bytes that are plain ASCII text within the bound (a BOM-less script that PowerShell 5.1 reads as is). */
@@ -72,6 +90,8 @@ export interface ExecutorPorts {
   readonly roots: UninstallRoots;
   readonly fs: AtomicFileSystem;
   readonly registry: RunOnceRegistry;
+  /** The Windows folder (`systemRoot(env)` in production) for the absolute powershell.exe path. */
+  readonly windowsDirectory: string;
   /** The packaged executor's bytes, or undefined when it cannot be read. */
   readExecutor(): Promise<Uint8Array | undefined>;
   /** The milliseconds a registry call may take now (REG_TIMEOUT_MS, cut to the uninstall's remaining budget). */
@@ -81,15 +101,15 @@ export interface ExecutorPorts {
 /**
  * Copies the executor into `<data root>\uninstall\` (atomically, then read back and compared) and registers it. Called
  * after the intent is written and before anything is deleted. A failed copy registers nothing, so the registration never
- * names a missing or partial script; a command longer than 260 characters is never registered. Either failure leaves
- * README.txt as the fallback.
+ * names a missing or partial script; a command that fits 260 characters in neither form is never registered
+ * (executorCommand). Either failure leaves README.txt as the fallback.
  */
 export async function armExecutor(ports: ExecutorPorts): Promise<ExecutorState> {
   const key = runOnceKeyFor(ports.roots);
   if (!ports.roots.ok || key === null) return 'not-applicable';
   if (!allowedKey(key)) return 'failed';
-  const command = executorCommand(ports.roots.dataRoot);
-  if (command.length > MAX_RUN_ONCE_COMMAND) return 'failed';
+  const command = executorCommand(ports.roots.dataRoot, ports.windowsDirectory);
+  if (command === undefined) return 'failed';
   const bytes = await ports.readExecutor().catch(() => undefined);
   if (!bytes || !validExecutorBytes(bytes)) return 'failed';
   const directory = path.win32.join(ports.roots.dataRoot, PENDING_DIRECTORY);

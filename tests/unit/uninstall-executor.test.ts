@@ -19,6 +19,7 @@ import {CURRENT, exists, fakeRunOnce, gameFolder, installFixture, installRecord,
 // HKCU\Software\ETS2Telemetry-Test-<uuid>\RunOnce key, which it deletes afterwards; the real RunOnce key is never written.
 
 const SCRIPT = readFileSync(path.join(import.meta.dirname, '..', '..', 'resources', 'uninstall', EXECUTOR_FILE));
+const WINDOWS = 'C:\\Windows';
 let guard: GuardedRoot;
 beforeEach(async () => {guard = await guardedTempRoot('ets2telemetry-uninstall-executor-');});
 afterEach(async () => {
@@ -51,9 +52,23 @@ describe('the RunOnce key and command', () => {
     expect(runOnceKeyFor({ok: false, code: 'NOT_INSTALLED'})).toBeNull();
   });
 
-  it('runs Windows PowerShell hidden, without a profile or prompts, on the copied script', () => {
-    expect(executorCommand('C:\\Users\\Driver\\AppData\\Local\\ETS2Telemetry')).toBe('powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden '
-      + '-File "C:\\Users\\Driver\\AppData\\Local\\ETS2Telemetry\\uninstall\\Complete-ETS2TelemetryUninstall.ps1"');
+  it('runs the absolute Windows PowerShell hidden, without a profile or prompts, on the copied script', () => {
+    expect(executorCommand('C:\\Users\\Driver\\AppData\\Local\\ETS2Telemetry', WINDOWS)).toBe('"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" '
+      + '-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "C:\\Users\\Driver\\AppData\\Local\\ETS2Telemetry\\uninstall\\Complete-ETS2TelemetryUninstall.ps1"');
+  });
+
+  it('keeps the budget: the absolute form up to 260 characters, then the PATH form, then nothing', () => {
+    // The absolute form is 139 characters plus the script path; the PATH form 94 plus it.
+    const dataRootFor = (scriptLength: number) => `C:\\${'d'.repeat(scriptLength - 3 - '\\uninstall\\Complete-ETS2TelemetryUninstall.ps1'.length)}`;
+    const script = (dataRoot: string) => path.win32.join(dataRoot, 'uninstall', EXECUTOR_FILE);
+    const typical = 'C:\\Users\\a-user-name-of-38-characters-xxxxxxxxx\\AppData\\Local\\ETS2Telemetry';
+    expect(script(typical).length).toBe(83 + 38);
+    expect(executorCommand(typical, WINDOWS)).toMatch(/^"C:\\Windows\\System32\\WindowsPowerShell\\v1\.0\\powershell\.exe" /);
+    expect(executorCommand(typical, WINDOWS)).toHaveLength(260);
+    expect(executorCommand(dataRootFor(122), WINDOWS)).toMatch(/^powershell\.exe /);
+    expect(executorCommand(dataRootFor(122), WINDOWS)).toHaveLength(94 + 122);
+    expect(executorCommand(dataRootFor(166), WINDOWS)).toHaveLength(260);
+    expect(executorCommand(dataRootFor(167), WINDOWS)).toBeUndefined();
   });
 
   it('parses the data of one REG_SZ value from reg.exe query', () => {
@@ -68,9 +83,9 @@ describe('armExecutor and disarmExecutor', () => {
     const fixture = await installFixture(guard), registry = fakeRunOnce({onSet: () => order.push(readFileSync(scriptCopy(fixture)).equals(SCRIPT) ? 'set-after-copy' : 'set')});
     const order: string[] = [];
     const roots = await testRoots(fixture);
-    expect(await armExecutor({roots, fs: fixture.fs, registry, readExecutor: () => Promise.resolve(SCRIPT), timeoutMs: () => 2000})).toBe('registered');
+    expect(await armExecutor({roots, fs: fixture.fs, registry, windowsDirectory: WINDOWS, readExecutor: () => Promise.resolve(SCRIPT), timeoutMs: () => 2000})).toBe('registered');
     expect(order).toEqual(['set-after-copy']);
-    expect(registry.values.get(`${TEST_RUN_ONCE}\\${RUN_ONCE_VALUE}`)).toBe(executorCommand(fixture.dataRoot));
+    expect(registry.values.get(`${TEST_RUN_ONCE}\\${RUN_ONCE_VALUE}`)).toBe(executorCommand(fixture.dataRoot, WINDOWS));
     expect(await disarmExecutor(roots, registry, 2000)).toBe('removed');
     expect(registry.values.size).toBe(0);
     expect(await disarmExecutor(roots, registry, 2000)).toBe('removed');
@@ -79,9 +94,9 @@ describe('armExecutor and disarmExecutor', () => {
   it('registers nothing when the script cannot be read or is not plain ASCII, and nothing names a missing script', async () => {
     const fixture = await installFixture(guard), registry = fakeRunOnce();
     const roots = await testRoots(fixture);
-    expect(await armExecutor({roots, fs: fixture.fs, registry, readExecutor: () => Promise.resolve(undefined), timeoutMs: () => 2000})).toBe('failed');
-    expect(await armExecutor({roots, fs: fixture.fs, registry, readExecutor: () => Promise.reject(new Error('gone')), timeoutMs: () => 2000})).toBe('failed');
-    expect(await armExecutor({roots, fs: fixture.fs, registry, readExecutor: () => Promise.resolve(Buffer.from('\u00ff\u00fe')), timeoutMs: () => 2000})).toBe('failed');
+    expect(await armExecutor({roots, fs: fixture.fs, registry, windowsDirectory: WINDOWS, readExecutor: () => Promise.resolve(undefined), timeoutMs: () => 2000})).toBe('failed');
+    expect(await armExecutor({roots, fs: fixture.fs, registry, windowsDirectory: WINDOWS, readExecutor: () => Promise.reject(new Error('gone')), timeoutMs: () => 2000})).toBe('failed');
+    expect(await armExecutor({roots, fs: fixture.fs, registry, windowsDirectory: WINDOWS, readExecutor: () => Promise.resolve(Buffer.from('\u00ff\u00fe')), timeoutMs: () => 2000})).toBe('failed');
     expect(registry.calls).toEqual([]);
     expect(await exists(scriptCopy(fixture))).toBe(false);
   });
@@ -89,22 +104,23 @@ describe('armExecutor and disarmExecutor', () => {
   it('never registers a command longer than Windows runs', async () => {
     const fixture = await installFixture(guard, {name: `r${'x'.repeat(MAX_RUN_ONCE_COMMAND - 100)}`}), registry = fakeRunOnce();
     const roots = await testRoots(fixture);
-    expect(executorCommand(fixture.dataRoot).length).toBeGreaterThan(MAX_RUN_ONCE_COMMAND);
-    expect(await armExecutor({roots, fs: fixture.fs, registry, readExecutor: () => Promise.resolve(SCRIPT), timeoutMs: () => 2000})).toBe('failed');
+    expect(executorCommand(fixture.dataRoot, WINDOWS)).toBeUndefined();
+    expect(path.win32.join(fixture.dataRoot, 'uninstall', EXECUTOR_FILE).length + 94).toBeGreaterThan(MAX_RUN_ONCE_COMMAND);
+    expect(await armExecutor({roots, fs: fixture.fs, registry, windowsDirectory: WINDOWS, readExecutor: () => Promise.resolve(SCRIPT), timeoutMs: () => 2000})).toBe('failed');
     expect(registry.calls).toEqual([]);
   });
 
   it('reports a failed registration and a failed removal', async () => {
     const fixture = await installFixture(guard), registry = fakeRunOnce({fail: true});
     const roots = await testRoots(fixture);
-    expect(await armExecutor({roots, fs: fixture.fs, registry, readExecutor: () => Promise.resolve(SCRIPT), timeoutMs: () => 2000})).toBe('failed');
+    expect(await armExecutor({roots, fs: fixture.fs, registry, windowsDirectory: WINDOWS, readExecutor: () => Promise.resolve(SCRIPT), timeoutMs: () => 2000})).toBe('failed');
     expect(await disarmExecutor(roots, registry, 2000)).toBe('failed');
   });
 
   it('a test install without a RunOnce key copies nothing and writes no key at all', async () => {
     const fixture = await installFixture(guard), registry = fakeRunOnce();
     const roots = await testRoots(fixture, null);
-    expect(await armExecutor({roots, fs: fixture.fs, registry, readExecutor: () => Promise.resolve(SCRIPT), timeoutMs: () => 2000})).toBe('not-applicable');
+    expect(await armExecutor({roots, fs: fixture.fs, registry, windowsDirectory: WINDOWS, readExecutor: () => Promise.resolve(SCRIPT), timeoutMs: () => 2000})).toBe('not-applicable');
     expect(await disarmExecutor(roots, registry, 2000)).toBe('not-applicable');
     expect(registry.calls).toEqual([]);
     expect(await exists(scriptCopy(fixture))).toBe(false);
@@ -221,7 +237,7 @@ describe('the reg.exe port', () => {
 
     it('sets, reads and removes the value with quotes and spaces intact', async () => {
       const registry = regExeRunOnce(process.env);
-      const command = executorCommand('C:\\Users\\Driver Name\\AppData\\Local\\ETS2Telemetry');
+      const command = executorCommand('C:\\Users\\Driver Name\\AppData\\Local\\ETS2Telemetry', WINDOWS)!;
       expect(await registry.read(key, RUN_ONCE_VALUE, 5000)).toBeNull();
       expect(await registry.set(key, RUN_ONCE_VALUE, command, 5000)).toBe(true);
       expect(await registry.read(key, RUN_ONCE_VALUE, 5000)).toBe(command);

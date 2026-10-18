@@ -197,12 +197,21 @@ function Resolve-Roots {
     return $roots
 }
 function Get-ExecutorCommand([string]$DataRoot) {
-    return 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + [IO.Path]::Combine($DataRoot, 'uninstall', $ExecutorName) + '"'
+    # executorCommand in executor.ts: the absolute, quoted powershell.exe under %SystemRoot% when the command fits 260
+    # characters, otherwise the PATH form, otherwise nothing ($null).
+    $windows = $env:SystemRoot
+    if ($null -eq $windows -or $windows -notmatch '^[A-Za-z]:\\[^\\/:*?"<>|]+(\\[^\\/:*?"<>|]+)*$') { $windows = 'C:\Windows' }
+    $script = '"' + [IO.Path]::Combine($DataRoot, 'uninstall', $ExecutorName) + '"'
+    foreach ($program in @(('"' + [IO.Path]::Combine($windows, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe') + '"'), 'powershell.exe')) {
+        $command = $program + ' -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File ' + $script
+        if ($command.Length -le $MaxCommand) { return $command }
+    }
+    return $null
 }
 function Set-Registration($Roots) {
     if ($null -eq $Roots.subKey) { return 'not-applicable' }
     $command = Get-ExecutorCommand $Roots.dataRoot
-    if ($command.Length -gt $MaxCommand) { return 'failed' }
+    if ($null -eq $command) { return 'failed' }
     try {
         $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($Roots.subKey)
         try { $key.SetValue($ValueName, $command, [Microsoft.Win32.RegistryValueKind]::String) } finally { $key.Dispose() }
