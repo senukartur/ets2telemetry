@@ -91,7 +91,8 @@ const factsText = process.env[FACTS_VARIABLE];
 delete process.env[FACTS_VARIABLE];
 function machineFacts() {
   assert.ok(typeof factsText === 'string' && factsText.length > 0, 'FACTS_MISSING');
-  return JSON.parse(factsText);
+  // A JSON syntax error message quotes part of its input, which could carry a machine path into evidence.
+  try {return JSON.parse(factsText);} catch {throw new Error('FACTS_INVALID');}
 }
 const failure = error => ({name: error?.name, code: error?.code ?? null, message: String(error?.message ?? error)});
 
