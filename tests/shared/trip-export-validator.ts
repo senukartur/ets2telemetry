@@ -74,10 +74,14 @@ export function tripExportProblems(document: unknown): string[] {
   const window = document.window;
   if (!isObject(window) || !isObject(trip) || window.pluginSessionId !== trip.pluginSessionId) problem('$.window', 'not the trip session');
 
-  // Rows: their own keys, ascending ids and inside the bounds (J17).
-  const rows = (name: 'intervals' | 'events' | 'samples', keys: readonly string[], id: (row: Json) => unknown, last: string | null) => {
+  // Rows: their own keys, ascending ids and inside the bounds (J17). A null sample or interval bound means the trip had
+  // no such rows at the detail read, so any row is past it. A non-null one is the trip's largest id at that read, and
+  // storage deletes no history rows, so the section must hold that row; with ascending ids inside the bound it is the last.
+  // The event bound is the session's committed coverage, not a row of the trip: its window can be empty (J7).
+  const rows = (name: 'intervals' | 'events' | 'samples', keys: readonly string[], id: (row: Json) => unknown, last: string | null, rowAtBound = false) => {
     const list = document[name];
     if (!Array.isArray(list)) { problem(`$.${name}`, 'not an array'); return; }
+    if (rowAtBound && last !== null && !list.some((row: unknown) => isObject(row) && id(row) === last)) problem(`$.${name}`, 'no row at the export bound');
     let previous = -1n;
     list.forEach((row: unknown, index) => {
       const where = `$.${name}[${index}]`;
@@ -89,9 +93,9 @@ export function tripExportProblems(document: unknown): string[] {
       if (last === null || BigInt(key) > BigInt(last)) problem(where, 'past the export bounds');
     });
   };
-  rows('intervals', INTERVAL_KEYS, row => row.id, bounds.lastIntervalId as string | null);
+  rows('intervals', INTERVAL_KEYS, row => row.id, bounds.lastIntervalId as string | null, true);
   rows('events', EVENT_KEYS, row => row.eventSeq, bounds.committedThroughEventSeq as string);
-  rows('samples', SAMPLE_KEYS, row => row.id, bounds.lastSampleId as string | null);
+  rows('samples', SAMPLE_KEYS, row => row.id, bounds.lastSampleId as string | null, true);
   for (const [index, event] of (Array.isArray(document.events) ? document.events : []).entries()) {
     if (!isObject(event) || !isObject(event.record) || event.record.type !== event.type) problem(`$.events[${index}]`, 'record type differs');
     const attribution = isObject(event) ? event.attribution : undefined;
