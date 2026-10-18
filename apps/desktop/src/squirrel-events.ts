@@ -92,10 +92,13 @@ export function parseSquirrelArgs(args: readonly string[]): SquirrelArgs {
 export type InstanceState = 'none' | 'exited' | 'running';
 /**
  * The receipt's primary reason: the engine's, or one of the hook's own. `RESIDUE_REMAINS`: the engine said complete but
- * something is left. `ENGINE_FAILED`: the engine or the hook threw; nothing after the failure ran, and a later run
- * finishes from the intent if the engine reached it.
+ * something is left. `ENGINE_FAILED`: the engine itself threw; a later run finishes from the intent if the engine reached
+ * it. `HOOK_FAILED`: a hook step before the engine threw (the profile, the instance lock, the known hashes); the engine
+ * did not run and nothing was deleted. A step after the engine never replaces its result (see `failedStep`).
  */
-export type HookCode = UninstallCode | 'RESIDUE_REMAINS' | 'ENGINE_FAILED';
+export type HookCode = UninstallCode | 'RESIDUE_REMAINS' | 'ENGINE_FAILED' | 'HOOK_FAILED';
+/** A hook step after the engine that threw; the receipt keeps the engine's outcome and counts and names the step. */
+export type PostEngineStep = 'readme' | 'shortcuts' | 'process-wait';
 export type ShortcutState = 'created' | 'removed' | 'skipped' | 'failed';
 /** The %TEMP% receipt of one uninstall hook: fixed codes, counts and names of allowlisted entries only, never a path. */
 export interface UninstallReceipt {
@@ -112,6 +115,8 @@ export interface UninstallReceipt {
   readonly roaming: UninstallResult['roaming'];
   readonly readme: boolean;
   readonly shortcuts: ShortcutState;
+  /** The first step after the engine that threw, or null; the engine's outcome and counts stand regardless. */
+  readonly failedStep: PostEngineStep | null;
   /** Milliseconds from the process time origin to the hook's start (main's script), for measuring the startup cost. */
   readonly startupOffsetMs: number;
   /**
@@ -212,7 +217,7 @@ export function hookDeadlines(started: number): {engine: number; hardStop: numbe
 async function uninstallWithHardStop(ports: SquirrelPorts): Promise<number> {
   const started = ports.clock();
   const deadlines = hookDeadlines(started);
-  const state: HookState = {mode: null, instance: 'not-checked', shortcuts: 'skipped', claimed: false, otherProcesses: null, processWaitMs: 0};
+  const state: HookState = {mode: null, instance: 'not-checked', shortcuts: 'skipped', claimed: false, otherProcesses: null, processWaitMs: 0, failedStep: null};
   const claim = (settled: Settled, readme: boolean): Promise<number> => {
     if (state.claimed) return new Promise<number>(() => undefined);
     state.claimed = true;
@@ -220,13 +225,14 @@ async function uninstallWithHardStop(ports: SquirrelPorts): Promise<number> {
   };
   const hardStop = ports.hardStop(Math.max(0, deadlines.hardStop - started))
     .then(() => claim({outcome: 'deferred', code: 'BUDGET_EXPIRED', plugins: EMPTY_PLUGINS, data: EMPTY_DATA, roaming: 'not-run'}, false));
+  // Only a step before the engine can still throw here: the engine's own throw and every later step are caught inside.
   const run = uninstall(ports, state, deadlines.engine, claim)
-    .catch(() => claim({outcome: 'deferred', code: 'ENGINE_FAILED', plugins: EMPTY_PLUGINS, data: EMPTY_DATA, roaming: 'not-run'}, false));
+    .catch(() => claim({outcome: 'deferred', code: 'HOOK_FAILED', plugins: EMPTY_PLUGINS, data: EMPTY_DATA, roaming: 'not-run'}, false));
   return Promise.race([run, hardStop]);
 }
 
 interface HookState {mode: UninstallReceipt['mode']; instance: UninstallReceipt['instance']; shortcuts: ShortcutState; claimed: boolean;
-  otherProcesses: number | null; processWaitMs: number}
+  otherProcesses: number | null; processWaitMs: number; failedStep: PostEngineStep | null}
 type Settled = Pick<UninstallResult, 'outcome' | 'plugins' | 'data' | 'roaming'> & {code: HookCode | null};
 
 async function uninstall(ports: SquirrelPorts, state: HookState, deadline: number, finish: (settled: Settled, readme: boolean) => Promise<number>): Promise<number> {
@@ -257,12 +263,16 @@ async function uninstall(ports: SquirrelPorts, state: HookState, deadline: numbe
     // The engine threw: ENGINE_FAILED. If it reached its intent, a later run finishes from it; otherwise nothing was deleted.
     settled = {outcome: 'deferred', code: 'ENGINE_FAILED', plugins: EMPTY_PLUGINS, data: EMPTY_DATA, roaming: 'not-run'};
   }
+  // The engine has settled: from here on a failing step is recorded as failedStep and never replaces its result.
+  const step = async <T>(name: PostEngineStep, work: () => Promise<T>, fallback: T): Promise<T> => {
+    try {return await work();} catch {state.failedStep ??= name; return fallback;}
+  };
   // A deferral leaves the README beside the intent (the U7 fallback until the PR-5 executor).
-  const readme = settled.outcome === 'deferred' ? await writeDeferralReadme(ports.fs, roots.dataRoot, settled.code).catch(() => false) : false;
-  state.shortcuts = await shortcuts;
+  const readme = settled.outcome === 'deferred' ? await step('readme', () => writeDeferralReadme(ports.fs, roots.dataRoot, settled.code), false) : false;
+  state.shortcuts = await step('shortcuts', () => shortcuts, 'failed');
   // Squirrel deletes the install folder right after this process exits; a process of this executable that is still
   // ending (an instance Squirrel ended, a portable copy that got the uninstall-exit request) would keep its files.
-  await waitForOtherProcesses(ports, state, deadline);
+  await step('process-wait', () => waitForOtherProcesses(ports, state, deadline), undefined);
   return finish(settled, readme);
 }
 
@@ -306,8 +316,17 @@ async function writeReceipt(ports: SquirrelPorts, settled: Settled, state: HookS
   const now = ports.now();
   const receipt: UninstallReceipt = {format: RECEIPT_FORMAT, version: 1, createdUtc: now.toISOString(), appVersion: ports.appVersion, outcome: settled.outcome,
     code: settled.code, mode: state.mode, instance: state.instance, plugins: settled.plugins, data: settled.data, roaming: settled.roaming, readme,
-    shortcuts: state.shortcuts, startupOffsetMs: Math.max(0, Math.round(started)), otherProcesses: state.otherProcesses, processWaitMs: state.processWaitMs, elapsedMs: Math.max(0, Math.round(ports.clock() - started))};
+    shortcuts: state.shortcuts, startupOffsetMs: Math.max(0, Math.round(started)), otherProcesses: state.otherProcesses, processWaitMs: state.processWaitMs, failedStep: state.failedStep, elapsedMs: Math.max(0, Math.round(ports.clock() - started))};
   return ports.writeReceipt(`${RECEIPT_PREFIX}${receiptStamp(now)}.json`, `${JSON.stringify(receipt, null, 2)}\n`).catch(() => false);
+}
+
+/**
+ * The production deadline signal. `AbortSignal.timeout` accepts only a whole number of milliseconds, while the hook's
+ * clock (`performance.now()`) is fractional: a fractional delay threw RangeError ERR_OUT_OF_RANGE after the engine had
+ * finished (the final-head hosted run of PR-3). The delay is rounded up, never down, so the signal never fires early.
+ */
+export function deadlineSignal(milliseconds: number): AbortSignal {
+  return AbortSignal.timeout(Math.min(0x7fffffff, Math.max(0, Math.ceil(milliseconds))));
 }
 
 /** Electron's part of the production ports. */
@@ -349,7 +368,7 @@ export function productionSquirrelPorts(options: {app: SquirrelApp; appVersion: 
       const name = path.win32.basename(options.executable).toLowerCase();
       return listing.rows.filter(row => row.name.toLowerCase() === name && row.session === session && !own.has(row.pid)).length;
     },
-    deadlineSignal: milliseconds => AbortSignal.timeout(milliseconds),
+    deadlineSignal,
     readKnown: async () => {
       const read = await readPluginBundle(pluginBundleDirectory(options.mainDirectory, options.resourcesPath, true));
       return read.ok ? [read.bundle.sha256, ...read.bundle.known.map(entry => entry.sha256)] : [];

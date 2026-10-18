@@ -1,7 +1,7 @@
 import * as fsp from 'node:fs/promises';
 import path from 'node:path';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
-import {cancelDeferralOnStart, EXIT_CODES, hookDeadlines, prepareSquirrelProcess, PROCESS_POLL_MS, INSTANCE_EXIT_WAIT_MS, parseSquirrelArgs, PROCESS_START_MARGIN_MS, RECEIPT_FORMAT, runSquirrelEvent, settle,
+import {cancelDeferralOnStart, deadlineSignal, EXIT_CODES, hookDeadlines, prepareSquirrelProcess, PROCESS_POLL_MS, INSTANCE_EXIT_WAIT_MS, parseSquirrelArgs, PROCESS_START_MARGIN_MS, RECEIPT_FORMAT, runSquirrelEvent, settle,
   UNINSTALL_DEADLINE_MS, UNINSTALL_HARD_STOP_MS,
   type SquirrelArgs, type SquirrelPorts, type UninstallReceipt} from '../../apps/desktop/src/squirrel-events';
 import type {UninstallPorts, UninstallResult} from '../../apps/desktop/src/uninstall/engine';
@@ -432,13 +432,59 @@ describe('the hard stop and the run claim one result', () => {
     expect(test.receipts.map(entry => [entry.receipt.outcome, entry.receipt.code])).toEqual([['deferred', 'ENGINE_FAILED']]);
   });
 
-  it('a hook step that throws before the engine is reported as ENGINE_FAILED and deletes nothing', async () => {
+  it('a hook step that throws before the engine is reported as HOOK_FAILED and deletes nothing', async () => {
     const {fixture} = await scene();
     const before = await listTree(fixture.base);
     const test = harness(fixture, {requestInstanceLock: () => {throw new Error('lock');}});
     expect(await runSquirrelEvent(event('uninstall'), test.ports)).toBe(EXIT_CODES.deferred);
-    expect(test.receipts.map(entry => [entry.receipt.outcome, entry.receipt.code])).toEqual([['deferred', 'ENGINE_FAILED']]);
+    expect(test.receipts.map(entry => [entry.receipt.outcome, entry.receipt.code])).toEqual([['deferred', 'HOOK_FAILED']]);
     expect(await listTree(fixture.base)).toEqual(before);
+  });
+});
+
+describe('a step after the engine never replaces its result (final-head hosted run)', () => {
+  it('the production deadline signal takes the fractional milliseconds of performance.now()', () => {
+    // AbortSignal.timeout(6499.7) throws RangeError ERR_OUT_OF_RANGE; the production signal rounds the delay up.
+    expect(() => AbortSignal.timeout(6499.7)).toThrow(RangeError);
+    const signal = deadlineSignal(6499.7);
+    expect(signal.aborted).toBe(false);
+    expect(deadlineSignal(-3).aborted).toBe(false);
+  });
+
+  it('a hook on a fractional clock with the production deadline signal completes and counts the other processes', async () => {
+    const {fixture, game} = await scene();
+    const counted: AbortSignal[] = [];
+    const test = harness(fixture, {deadlineSignal, countOtherProcesses: signal => {counted.push(signal); return Promise.resolve(0);}});
+    // performance.now() is fractional; the harness clock otherwise starts at a whole 1000.
+    test.advance(0.37);
+    expect(await runSquirrelEvent(event('uninstall'), test.ports)).toBe(EXIT_CODES.complete);
+    expect(counted).toHaveLength(1);
+    expect(test.receipts[0].receipt).toMatchObject({outcome: 'complete', code: null, plugins: {removed: 1}, data: {rootRemoved: true}, otherProcesses: 0,
+      failedStep: null});
+    expect(await exists(game.dll)).toBe(false);
+  });
+
+  it('a throw in the process wait keeps the engine\'s outcome and counts and names the step', async () => {
+    const {fixture} = await scene();
+    const test = harness(fixture, {deadlineSignal: () => {throw new RangeError('The value of "delay" is out of range. It must be an integer.');}});
+    expect(await runSquirrelEvent(event('uninstall'), test.ports)).toBe(EXIT_CODES.complete);
+    const receipt = test.receipts[0].receipt;
+    expect(receipt).toMatchObject({outcome: 'complete', code: null, plugins: {removed: 1, blocked: []}, data: {failed: [], rootRemoved: true}, failedStep: 'process-wait',
+      otherProcesses: null});
+    expect(receipt.data.removed).toBeGreaterThan(0);
+  });
+
+  it('a throw in the README write keeps the engine\'s deferral and names the step', async () => {
+    const {fixture} = await scene();
+    const failing = new Proxy(fixture.fs, {get(target, property: string) {
+      const real = (target as unknown as Record<string, unknown>)[property];
+      // The README is the only file the hook writes after the engine; its temporary file is opened with `wx`.
+      if (property === 'open') return (file: string, flags: string) => file.includes('README') && flags === 'wx' ? Promise.reject(new Error('disk')) : (real as (...args: unknown[]) => unknown).call(target, file, flags);
+      return typeof real === 'function' ? (real as (...args: unknown[]) => unknown).bind(target) : real;
+    }});
+    const test = harness(fixture, {fs: failing, checkRunning: () => Promise.resolve({ok: true, running: {ets2: true, ats: false, client: false}})});
+    expect(await runSquirrelEvent(event('uninstall'), test.ports)).toBe(EXIT_CODES.deferred);
+    expect(test.receipts[0].receipt).toMatchObject({outcome: 'deferred', code: 'GAME_RUNNING', readme: false, plugins: {blocked: [{game: 'ets2', reason: 'GAME_RUNNING'}]}});
   });
 });
 
