@@ -213,3 +213,30 @@ The protocol parsers are fuzzed only by seeded mutation: `tests/unit/protocol-fu
 - Give the native seeded fuzz cases an iteration multiplier from the environment (default 1, x50 in the extended job; plan decision D4). It is planned for ET-019 PR-10 with the extended job; until then the native cases run their fixed counts.
 
 **Until then:** the seeded campaigns above are the only generated-input coverage of the parsers. No new toolchain, dependency, CI job or native build is authorized by this entry.
+
+## TD-018: A broker that exits mid-session is not restarted
+
+Recorded October 19, 2026 by the coordinator with ET-019 PR-8 ([finding](validation/et-019.md#pr-8-findings)). **This entry is a coordinator decision under the owner's standing delegation of October 15, 2026, not an individually owner-approved deferral.** The owner may revise it.
+
+The documented recovery rules make exit 1 after an authority receipt final: telemetry-service-v0.md says "Exit 1, receipt/relay violations and protocol or identity failures remain final incompatible states", and E9 gives "other broker rejections" `incompatible` with no reconnection ([telemetry service v1](telemetry-service-v1.md#reconnection-e9)). The source stays `incompatible` until the user selects it again. A broker that crashes, or that the user or an antivirus product kills (the alpha is unsigned, TD-014), exits like an authority failure: `TerminateProcess` gives exit code 1, and the only difference is the missing diagnostic line (stage `unreported`). So such an exit stops both the v0 overlay feed and v1 for that game, although the plugin session survives and a fresh broker would resume it with nothing lost (`tests/integration/v1-chain-process-death.test.ts`, case 1).
+
+**Future work:**
+- Class an exit after a receipt that reports no diagnostic stage (`unreported`), or that carries a crash exit code, as a retryable `disconnected` with the E9 backoff, and keep diagnosed authority failures final.
+- Amend E9 and the v0 recovery rule in the same change, and extend the v1 chain test so that a killed broker is restarted.
+
+**Until then:** a broker that exits mid-session stays final until the next selection, as documented. No product change is authorized by this entry.
+
+## TD-019: Stale discovery records accumulate
+
+Recorded October 19, 2026 by the coordinator with ET-019 PR-8 ([finding](validation/et-019.md#pr-8-findings)). **This entry is a coordinator decision under the owner's standing delegation of October 15, 2026, not an individually owner-approved deferral.** The owner may revise it.
+
+A crashed or killed game leaves its v0 and v1 discovery records behind. `native/telemetry-plugin/src/pipe-discovery.cpp` removes only its own record, in its destructor, and the client does not delete records ([native transport boundary](native-transport-boundary-v0.md#discovery-and-service-policy)). `native/telemetry-client/src/client.cpp` counts every UUID-named `.json` record before the game filter and the liveness check, and fails closed above 128 records or 256 directory entries. After enough crashes in one profile, every broker run would fail, also for the v0 overlay, and only an uninstall or a manual delete recovers. This was read from the code, not executed; PR-8 observed only that a killed host's v1 record stays.
+
+A possible amplification, unverified: when a stale record's process ID has been reused, an `OpenProcess` error other than `ERROR_INVALID_PARAMETER` (for example access denied for another user's or an elevated process) is a hard discovery failure rather than a skipped record.
+
+**Future work:**
+- Sweep records whose process is demonstrably gone, or stop counting them toward the limit, without weakening the ownership, ACL and reparse checks.
+- Decide how a reused process ID of a stale record is treated.
+- Add a test with more than 128 stale records and one live record.
+
+**Until then:** stale records stay until an uninstall or a manual delete. No native change is authorized by this entry.
