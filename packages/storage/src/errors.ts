@@ -28,8 +28,19 @@ export const ERROR_MESSAGES: Readonly<Record<StorageErrorCode, string>> = {
   MIGRATION_FAILED: 'The database schema could not be upgraded; the database is unchanged.',
   INTERNAL: 'An unexpected storage failure occurred.'
 };
+/** Codes that an open failure may retry after the condition clears. */
+export const REOPEN_RETRYABLE_CODES: ReadonlySet<StorageErrorCode> = new Set(['DATABASE_LOCKED', 'DISK_FULL', 'IO_ERROR', 'STORAGE_BUSY', 'TIMEOUT']);
 /** Codes that a caller may retry unchanged after the condition clears. */
-const RETRYABLE: ReadonlySet<StorageErrorCode> = new Set(['DATABASE_LOCKED', 'DISK_FULL', 'IO_ERROR', 'STORAGE_BUSY', 'TIMEOUT']);
+const RETRYABLE: ReadonlySet<StorageErrorCode> = REOPEN_RETRYABLE_CODES;
+
+/** True when an open failure may be retried on backoff. */
+export function isReopenRetryable(error: StorageError): boolean {
+  if (REOPEN_RETRYABLE_CODES.has(error.code)) return true;
+  if (error.code === 'BACKUP_FAILED' && error.cause !== undefined) {
+    return REOPEN_RETRYABLE_CODES.has(error.cause);
+  }
+  return false;
+}
 
 export function storageError(code: StorageErrorCode, extra: Pick<StorageError, 'sqliteCode' | 'cause' | 'backupFileName'> = {}): StorageError {
   const error: StorageError = {code, retryable: RETRYABLE.has(code), message: ERROR_MESSAGES[code]};

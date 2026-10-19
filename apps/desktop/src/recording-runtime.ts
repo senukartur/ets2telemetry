@@ -43,8 +43,8 @@ export interface RecordingRuntimeOptions {
   onV1State: (state: V1SourceState) => void;
   /** Tests only: bounds, timers and clocks of the ingestion and its pipeline. */
   ingestionOverrides?: RecordingIngestionOverrides;
-  /** Tests only: the stamped application version and the close grace of the database. */
-  historyOverrides?: Pick<HistoryStorageOptions, 'appVersion' | 'closeGraceMs'>;
+  /** Tests only: the stamped application version, close grace, and reopen retry overrides of the database. */
+  historyOverrides?: Pick<HistoryStorageOptions, 'appVersion' | 'closeGraceMs' | 'reopenBackoffMs' | 'maxReopenAttempts'>;
   /** ET-015c (G4, G5): every recording status to send to main, from `start()` until `stopStatus()`. */
   onRecordingStatus?: (status: RecordingHealth) => void;
   /** Tests only: the coalescing interval (G5) and timers of the recording status; 250 ms and the system timers by default. */
