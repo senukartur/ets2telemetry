@@ -519,20 +519,26 @@ function Test-RefusalReceipt {
     if ($null -eq $health -or $health.service -cne 'ready' -or $health.storage -cne 'verified' -or $health.recording.state -cne 'disabled' -or
         @($health.recording.PSObject.Properties).Count -ne 1 -or $null -ne $health.lastError) { return $false }
     $text = $refusal.recordingText
-    if ($null -eq $text -or $text.headline -cne 'Off: this version does not record game history' -or $null -ne $text.alert -or
-        $text.notice -cne 'Prototype live display. No trip recording or durable history.') { return $false }
+    if ($null -eq $text -or $text.headline -cne 'Off: this version does not record game history' -or $null -ne $text.detail -or $null -ne $text.losses -or
+        $null -ne $text.alert -or $text.notice -cne 'Prototype live display. No trip recording or durable history.') { return $false }
     $journal = $refusal.journal
     if ($null -eq $journal -or $journal.error -cne 'The database is unavailable: the database was written by a newer version.' -or
-        $null -ne $journal.empty -or $null -ne $journal.emptyNote -or $null -ne $journal.banner -or !(Test-ReceiptInteger -Value $journal.rows -Minimum 0 -Maximum 0)) { return $false }
-    $rows = @($refusal.recordingStatusRows)
-    if ($rows.Count -ne 1 -or $rows[0].state -cne 'disabled') { return $false }
-    # The service logged the refusal once and neither opened, closed nor targeted a database; the run exited orderly.
+        $null -ne $journal.empty -or $null -ne $journal.emptyNote -or $null -ne $journal.banner -or !(Test-ReceiptInteger -Value $journal.rows -Minimum 0 -Maximum 0) -or
+        $journal.next -isnot [bool] -or $journal.next -or $journal.previous -isnot [bool] -or $journal.previous) { return $false }
+    # The logs themselves, not the driver's summaries: main's one RECORDING_STATUS row and its app-quit exit request, and the
+    # service's one refusal row, one clean history-storage step and no open, close or target row; the run exited orderly.
     $serviceEvents = @($Driver.serviceEvents); $mainEvents = @($Driver.mainEvents)
+    $statusRows = @($mainEvents | Where-Object { $_.event -ceq 'RECORDING_STATUS' })
+    if ($statusRows.Count -ne 1 -or $statusRows[0].facts.state -cne 'disabled' -or @($statusRows[0].facts.PSObject.Properties).Count -ne 1) { return $false }
+    $exitRequests = @($mainEvents | Where-Object { $_.event -ceq 'APP_EXIT_REQUESTED' })
+    if ($exitRequests.Count -ne 1 -or $exitRequests[0].facts.reason -cne 'app-quit') { return $false }
     $unavailable = @($serviceEvents | Where-Object { $_.event -ceq 'HISTORY_STORAGE_UNAVAILABLE' })
     if ($unavailable.Count -ne 1 -or $unavailable[0].facts.code -cne 'SCHEMA_NEWER') { return $false }
     foreach ($eventName in @('HISTORY_STORAGE_OPENED','HISTORY_STORAGE_CLOSED','RECORDING_TARGET')) {
         if (@($serviceEvents | Where-Object { $_.event -ceq $eventName }).Count -ne 0) { return $false }
     }
+    $historySteps = @($serviceEvents | Where-Object { $_.event -ceq 'SHUTDOWN_STEP' -and $_.facts.name -ceq 'history-storage' })
+    if ($historySteps.Count -ne 1 -or $historySteps[0].facts.outcome -cne 'ok' -or (@($refusal.historyEvents.historyStep) -join ',') -cne 'ok') { return $false }
     if (!(Test-OrderlyRunEvent -MainEvents $mainEvents -ServiceEvents $serviceEvents)) { return $false }
     if ($Driver.launcherExit -ne 0 -or $null -eq $Driver.probesAfterExit -or @($Driver.probesAfterExit).Count -ne 0) { return $false }
     return $true

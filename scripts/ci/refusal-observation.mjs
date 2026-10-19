@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {existsSync} from 'node:fs';
-import {constants, copyFile, mkdir, open, readdir, readFile, stat} from 'node:fs/promises';
+import {constants, copyFile, mkdir, open, readdir, readFile, realpath, stat} from 'node:fs/promises';
 import path from 'node:path';
 import {listState, untilPage} from './journal-observation.mjs';
 import {RECORDING_DISABLED_TEXT, waitForRecordingText} from './renderer-observation.mjs';
@@ -50,6 +50,16 @@ export async function placeNewerHistory({config, record}) {
   const relative = path.relative(path.resolve(config.output), path.resolve(target));
   assert.ok(relative && !relative.startsWith('..') && !path.isAbsolute(relative), 'The history path is outside this run\'s output folder');
   assert.equal(existsSync(path.dirname(path.dirname(target))), false, 'The isolated LOCALAPPDATA already holds an ETS2Telemetry folder');
+  // Defence in depth: whatever the configuration says, never write under this driver's own (real) LOCALAPPDATA. Both sides
+  // are resolved through existing folders (realpath, so junctions and 8.3 names compare equal) and compared without case.
+  const canonical = async folder => {try {return await realpath(folder);} catch {return path.resolve(folder);}};
+  const realLocal = process.env.LOCALAPPDATA;
+  if (realLocal) {
+    const own = (await canonical(realLocal)).toLowerCase();
+    const placed = path.join(await canonical(config.localappdata), path.relative(config.localappdata, target)).toLowerCase();
+    const inside = path.win32.relative(own, placed);
+    assert.ok(inside.startsWith('..') || path.win32.isAbsolute(inside), 'The history path is under the real LOCALAPPDATA');
+  }
   const expected = await manifestHash(config);
   assert.equal(await sha256(fixture), expected, 'The newer-schema fixture differs from its manifest before the copy');
   await mkdir(path.dirname(target), {recursive: true});
