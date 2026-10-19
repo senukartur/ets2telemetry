@@ -373,7 +373,7 @@ require(workerData.entry);
  */
 describe('fault storage worker', () => {
   const FAULT_WORKER = path.join(bundles, 'fault-storage-worker.cjs');
-  function startFaultWorker(data: {fault?: {eventSeq: string; code: string; times: number}; hold?: {eventSeq: string}; samplesFault?: {code: string; times: number} | {hold: true}}) {
+  function startFaultWorker(data: {fault?: {eventSeq: string; code: string; times: number}; hold?: {eventSeq: string}; samplesFault?: {code: string; times: number} | {hold: true}; closeHold?: true}) {
     const channel = new MessageChannel();
     const worker = new Worker(FAULT_WORKER, {workerData: {kind: 'storage', ...data, control: channel.port2}, transferList: [channel.port2]});
     started.push(worker);
@@ -476,5 +476,26 @@ describe('fault storage worker', () => {
     control.close();
     expect(await client.close()).toEqual({clean: true});
     expect(await exit).toBe(0);
+  });
+
+  // ET-019 PR-4 (G18): the close is held on the worker thread before the host receives it, so the database stays open and
+  // the close unanswered until the release; then the host closes the database and the thread ends with code 0.
+  it('holds the close request before the host receives it until the release message (ET-019 PR-4)', async () => {
+    const {client, control, exit} = startFaultWorker({closeHold: true});
+    ok(await client.open(options()));
+    ok(await client.upsertSession({message: v1('welcome')}));
+    expect(ok(await client.commitEvent({message: v1('event-job-configured'), effects: [openTrip]})).status).toBe('committed');
+    const held = once(control, 'message');
+    let answered = false;
+    const closed = client.close().then(result => { answered = true; return result; });
+    expect((await held)[0]).toEqual({type: 'held', command: 'close'});
+    // The host has not received the close: the database is still open, so its WAL is still there.
+    expect([answered, existsSync(ws.database + '-wal')]).toEqual([false, true]);
+    control.postMessage({type: 'release'});
+    expect(await closed).toEqual({clean: true});
+    expect(await exit).toBe(0);
+    control.close();
+    // The released close checkpointed and closed the database.
+    expect(existsSync(ws.database + '-wal')).toBe(false);
   });
 });
