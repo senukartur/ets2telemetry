@@ -687,7 +687,7 @@ The owner asked for a final mockup of the desktop application and the overlay in
 
 ## ET-019 implementation update — October 19, 2026
 
-Under the owner's standing delegation of October 15, 2026, the coordinator delivered the rest of ET-019, cross-component recovery and regression coverage, from October 18 to 19, 2026. The coordinator adopted the plan decisions D3–D6 (D3 measure then gate; D4 campaign sizes; D5 seeded mutation fuzzing; D6 a synthetic-content fixture). The owner approved D1, an extended CI job, and D2, a dispatch-only soak, on October 18, 2026. Every PR changed tests, test tools, CI or docs only: no product source, protocol, schema or IPC changed, and `GAME_HISTORY_RECORDING` stays `false`.
+Under the owner's standing delegation of October 15, 2026, the coordinator delivered the rest of ET-019, cross-component recovery and regression coverage, from October 18 to 19, 2026. The coordinator adopted the ET-019 plan decisions D3–D5 (D3 measure, then gate; D4 campaign sizes; D5 seeded mutation fuzzing); D6, a synthetic-content history-purpose fixture, was adopted but no PR needed it. These plan labels are not the protocol v1 decisions D1–D17 in concept.md. The owner approved D1, an extended CI job, and D2, a dispatch-only soak, on October 18, 2026. Every PR changed tests, test tools, CI or docs only: no product source, protocol, schema or IPC changed, and `GAME_HISTORY_RECORDING` stays `false`.
 
 Delivered work:
 - **History invariants and kill campaigns.**
@@ -710,18 +710,20 @@ Delivered work:
 - **Flaky-test fixes found on the way:** #125, #130, #131, #134, #136, #137 and #138.
 
 Hosted results:
-- The 30-minute application soak stored exactly the expected 183 events, 30 trips and 1,524 samples with no gap.
-- The 90-minute application soak passed. The telemetry service's memory trend was flat, while Electron main grew about 11 MiB per hour (r² 0.99). That growth is recorded as an observation for its own investigation, not a threshold (D3).
-- The extended workflow's first own run passed in 14.5 minutes.
+- The 30-minute application soak stored exactly the expected 183 events, 30 trips, 1,524 cycle samples and the 19-sample tail, with no gap.
+- The 90-minute application soak passed. The telemetry service's memory trend after the warm-up was flat (−1.3 MiB/h), while Electron main grew about 11 MiB per hour (r² 0.99). That growth is recorded as an observation for its own investigation, not a threshold (ET-019 plan decision D3).
+- The extended workflow's first own run passed in 14.5 minutes, and its second in 24.3 minutes.
 
 See [ET-019 validation](docs/validation/et-019.md).
 
-The card stays in Review. Product gaps found by these tests are recorded, not fixed:
+The card stays in Review. These gaps remain open and are recorded, not fixed. TD-016, TD-018 and TD-019 were found by these tests; TD-017 is a deferred test-tooling item; G5, G10 and G18 were deferred to ET-019 by ET-015c:
 - TD-016: a replayed gap's stale checkpoint;
 - TD-017: coverage-guided and native fuzzing;
 - TD-018: a broker that exits mid-session is not restarted;
 - TD-019: stale discovery records accumulate, so after enough game crashes the broker fails closed;
 - G10: no automatic re-open of history after it stopped;
-- G18: a close stall longer than 2 s.
+- G18: a history close slower than the 800 ms grace is terminated and reported unclean, so the service exits 1, though nothing committed is lost;
+- G5: no service heartbeat, so a hung telemetry service keeps its last recording status;
+- a kill between a backup's rename and its manifest can leave a manifest-less backup (PR-2, an uncovered kill point).
 
-Each needs its own card. Thresholds for resource use wait for more hosted runs (D3). Real recording into history, CPU and frame time beside a game, TruckersMP, one-hour real sessions and a real power loss remain pending (ET-020). No game, TruckersMP, display or performance claim follows.
+Each needs its own card. Thresholds for resource use wait for more hosted runs (ET-019 plan decision D3). Real recording into history, CPU and frame time beside a game, TruckersMP, one-hour real sessions and a real power loss remain pending (ET-020). ET-020 and later phases are not authorized by this update. No game, TruckersMP, display or performance claim follows.
