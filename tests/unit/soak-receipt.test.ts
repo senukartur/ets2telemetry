@@ -99,6 +99,16 @@ function withServiceRows(change: (rows: Json[]) => void): string {
 }
 const invalid = (name: string, path: (string | number)[], replacement?: Json) => ({name: `soak ${name}`, body: corrupt(path, replacement), scenario: 'soak', reason: REASON});
 const rejected = (name: string, body: string) => ({name: `soak ${name}`, body, scenario: 'soak', reason: REASON});
+/**
+ * The intact receipt with `count` rows of `event` counted in one log and the same number taken from `from` in that log,
+ * so the counts still add up to the log's records and only the event's name can reject the receipt.
+ */
+function withCountedEvent(log: 'main' | 'service', event: string, count: number, from: string): string {
+  const value = soakReceipt() as {soak: {logEvents: Record<string, Record<string, number>>}};
+  const counts = value.soak.logEvents[log];
+  counts[from] -= count; counts[event] = count;
+  return JSON.stringify(value);
+}
 
 const cases: {name: string; body: string; scenario: string; reason: string | null; numbers?: 'int64'}[] = [
   {name: 'intact three-minute soak', body: JSON.stringify(soakReceipt()), scenario: 'soak', reason: null},
@@ -183,10 +193,11 @@ const cases: {name: string; body: string; scenario: string; reason: string | nul
   // Fix round: the logs are checked independently of the driver, from the kept rows and the counts.
   rejected('a kept failure row', corrupt(['mainEvents', 4], {event: 'SETTINGS_WRITE_FAILED', facts: {code: 'IO_ERROR'}})),
   rejected('a kept recording-failure row', withServiceRows(rows => {rows.push({event: 'V1_SAMPLES_DROPPED', facts: {count: 1}});})),
-  invalid('a failure count in the main log', ['soak', 'logEvents', 'main', 'SETTINGS_WRITE_FAILED'], 1),
-  invalid('a timeout count in the service log', ['soak', 'logEvents', 'service', 'STORAGE_COMMAND_TIMEOUT'], 2),
-  invalid('a recording-failure count', ['soak', 'logEvents', 'service', 'V1_DURABLE_RETRY'], 2),
-  invalid('a samples-dropped count', ['soak', 'logEvents', 'service', 'V1_SAMPLES_DROPPED'], 1),
+  // Each count is taken from another count of the same log, so the counts still add up to the log's records.
+  rejected('a failure count in the main log', withCountedEvent('main', 'SETTINGS_WRITE_FAILED', 1, 'RECORDING_STATUS')),
+  rejected('a timeout count in the service log', withCountedEvent('service', 'STORAGE_COMMAND_TIMEOUT', 2, 'V1_SOURCE_STATUS')),
+  rejected('a recording-failure count', withCountedEvent('service', 'V1_DURABLE_RETRY', 2, 'V1_SOURCE_STATUS')),
+  rejected('a samples-dropped count', withCountedEvent('service', 'V1_SAMPLES_DROPPED', 1, 'V1_SOURCE_STATUS')),
   invalid('log counts missing', ['soak', 'logEvents']),
   invalid('service log counts missing', ['soak', 'logEvents', 'service']),
   // Delta review: the counts must cover each log.
