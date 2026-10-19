@@ -51,9 +51,10 @@ function soakReceipt(): Json {
       series: [row(6, null, 'waiting', 94_056_448), row(90_137, 89_575, 'recording', 125_468_672)],
       seriesSummary: {main: kindSummary(1), renderer: kindSummary(2), telemetryService: kindSummary(1), gpu: kindSummary(1)},
       // Every row of each log counted by event (compactSoakLogs); none is a failure.
-      logEvents: {main: {APP_EXIT: 1, APP_EXIT_REQUESTED: 1, APP_START: 1, RECORDING_STATUS: 17, SERVICE_EXIT: 1, SERVICE_READY: 1},
+      // They add up to each log's records (main 35, service 25).
+      logEvents: {main: {APP_EXIT: 1, APP_EXIT_REQUESTED: 1, APP_START: 1, RECORDING_STATUS: 30, SERVICE_EXIT: 1, SERVICE_READY: 1},
         service: {HISTORY_STORAGE_CLOSED: 1, HISTORY_STORAGE_OPENED: 1, RECORDING_TARGET: 1, SERVICE_REPORT: 2, SHUTDOWN_STEP: 6, STORAGE_VERIFIED: 1, V1_SAMPLES_EXIT: 1,
-          V1_SOURCE_STATUS: 9}}}};
+          V1_SOURCE_STATUS: 12}}}};
 }
 function corrupt(path: (string | number)[], replacement?: Json, value: Json = soakReceipt()): string {
   let target = value as Record<string | number, Json>;
@@ -188,6 +189,11 @@ const cases: {name: string; body: string; scenario: string; reason: string | nul
   invalid('a samples-dropped count', ['soak', 'logEvents', 'service', 'V1_SAMPLES_DROPPED'], 1),
   invalid('log counts missing', ['soak', 'logEvents']),
   invalid('service log counts missing', ['soak', 'logEvents', 'service']),
+  // Delta review: the counts must cover each log.
+  invalid('an empty main log count', ['soak', 'logEvents', 'main'], {}),
+  invalid('a service count one short of its records', ['soak', 'logEvents', 'service', 'V1_SOURCE_STATUS'], 11),
+  invalid('a fractional count', ['soak', 'logEvents', 'main', 'RECORDING_STATUS'], 29.5),
+  invalid('a string in place of the main counts', ['soak', 'logEvents', 'main'], 'APP_START,APP_EXIT'),
   invalid('a history target instead of the synthetic one', ['serviceEvents', 0, 'facts', 'purpose'], 'history'),
   rejected('no recording target row', withServiceRows(rows => {rows.splice(0, 1);})),
   rejected('two recording target rows', withServiceRows(rows => {rows.unshift({event: 'RECORDING_TARGET', facts: {purpose: 'synthetic'}});})),

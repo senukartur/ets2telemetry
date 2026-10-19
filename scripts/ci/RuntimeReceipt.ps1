@@ -642,6 +642,18 @@ function Test-SoakReceipt {
         'HISTORY_STORAGE_UNAVAILABLE','V1_SAMPLES_RETRY','V1_SAMPLES_DROPPED','V1_SAMPLES_DISCARDED','V1_SAMPLES_SKIPPED')
     $logEvents = $soak.logEvents
     if ($null -eq $logEvents -or $null -eq $logEvents.main -or $null -eq $logEvents.service -or $logEvents.main -is [array] -or $logEvents.service -is [array]) { return $false } # rule: log counts present
+    # The counts cover each log: an object of non-negative whole counts that add up to the log's records, which the log budget
+    # above range-checks, so a partial or empty count cannot hide an uncounted failure code.
+    $countsCover = $true
+    foreach ($log in @('main','service')) {
+        $logCounts = $logEvents.$log; $sum = 0
+        if ($logCounts -isnot [System.Management.Automation.PSCustomObject]) { $countsCover = $false; continue }
+        foreach ($property in $logCounts.PSObject.Properties) {
+            if (Test-ReceiptInteger -Value $property.Value -Minimum 0 -Maximum 2000) { $sum += [int]$property.Value } else { $countsCover = $false }
+        }
+        if (!(Test-ReceiptInteger -Value $soak.logs.$log.records -Minimum $sum -Maximum $sum)) { $countsCover = $false }
+    }
+    if (!$countsCover) { return $false } # rule: log counts cover the logs
     $counted = @($logEvents.main.PSObject.Properties | ForEach-Object { $_.Name }) + @($logEvents.service.PSObject.Properties | ForEach-Object { $_.Name })
     if (@($counted | Where-Object { $_ -cmatch $failurePattern }).Count -ne 0) { return $false } # rule: counted failure events
     if (@($counted | Where-Object { $_ -cin $recordingFailures }).Count -ne 0) { return $false } # rule: counted recording failures
