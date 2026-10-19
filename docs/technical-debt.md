@@ -200,3 +200,15 @@ Dropping the late-attach trip at every replayed gap is not an option. J9's main 
 - Observe real late-attach checkpoints from both games to measure how often the window occurs.
 
 **Until then:** the behaviour above stands, the trip stays partial, and no wire, schema or native change is authorized by this entry.
+
+## TD-017: Coverage-guided fuzzing (libFuzzer / native)
+
+Recorded October 19, 2026 by the coordinator with ET-019 PR-9 (decision D5 of the ET-019 plan). **This entry is a coordinator decision under the owner's standing delegation of October 15, 2026, not an individually owner-approved deferral.** The owner may revise it.
+
+The protocol parsers are fuzzed only by seeded mutation: `tests/unit/protocol-fuzz.test.ts` mutates the valid shared fixtures for the TypeScript payload decoders, frame decoders and broker stdout readers ([ET-019 validation](validation/et-019.md#pr-9-seeded-mutation-fuzzing-of-the-typescript-frame-parsers-october-19-2026)), and the native CTest cases `snapshot-transport-contract-fuzz`, `v1-producer-contract-fuzz` and `v1-transport-contract-fuzz` run fixed seeded mutations of their own. Neither is guided by coverage: a mutation that reaches a new branch is not kept and mutated further, so a defect behind a deep chain of conditions can stay unreached however many inputs run. The C++ parsers (`protocol-v0.cpp`, `protocol-v1.cpp`, the CAP0 hello and the broker's stdin control stream) have no generated-input campaign beyond those cases.
+
+**Future work:**
+- Add coverage-guided fuzz targets for the C++ v0, v1 and CAP0 decoders and the broker control stream, for example libFuzzer with AddressSanitizer in a separate clang-cl build, seeded from the shared fixtures, with a bounded run in the extended CI job and the corpus kept outside the repository unless reviewed.
+- Consider a coverage-guided JavaScript fuzzer for the TypeScript decoders once one fits the pinned toolchain without install scripts.
+
+**Until then:** the seeded campaigns above are the only generated-input coverage of the parsers. No new toolchain, dependency, CI job or native build is authorized by this entry.
