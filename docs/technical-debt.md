@@ -210,5 +210,6 @@ The protocol parsers are fuzzed only by seeded mutation: `tests/unit/protocol-fu
 **Future work:**
 - Add coverage-guided fuzz targets for the C++ v0, v1 and CAP0 decoders and the broker control stream, for example libFuzzer with AddressSanitizer in a separate clang-cl build, seeded from the shared fixtures, with a bounded run in the extended CI job and the corpus kept outside the repository unless reviewed.
 - Consider a coverage-guided JavaScript fuzzer for the TypeScript decoders once one fits the pinned toolchain without install scripts.
+- Give the native seeded fuzz cases an iteration multiplier from the environment (default 1, x50 in the extended job; plan decision D4). It is planned for ET-019 PR-10 with the extended job; until then the native cases run their fixed counts.
 
 **Until then:** the seeded campaigns above are the only generated-input coverage of the parsers. No new toolchain, dependency, CI job or native build is authorized by this entry.
