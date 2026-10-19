@@ -225,12 +225,14 @@ describe('outcomes', () => {
   });
   // The next case builds one scene at every bound and runs the engine twice over 47 folders: 1,356 real fs.promises
   // calls in temporary folders, counted on October 19, 2026 (389 engine operations through the guarded file system, 948
-  // of the guard's own realpath and lstat checks, and 19 calls of the test's setup and reads), rounded up to 1,400. That
+  // of the guard's own realpath and lstat checks, and 19 calls of the test's setup and reads). Counted at the libuv
+  // request level, which includes the file-handle reads, writes, syncs and closes of the atomic JSON files, that is
+  // 1,421 promise requests and 36 handle closes, rounded up to 1,500 operations. That
   // is about 0.3 s idle, but a loaded host slowed single operations to as much as 67 ms each (ET-019, load-sensitive
   // unit tests), and the case exceeded the default 5 s. The scene cannot be shared, because both runs change it. This
   // budget bounds that irreducible file work with the worst measured operation time for every call; the case asserts no
   // timing.
-  const MAX_REGISTRY_FS_OPERATIONS = 1_400, FS_OPERATION_ALLOWANCE_MS = 67;
+  const MAX_REGISTRY_FS_OPERATIONS = 1_500, FS_OPERATION_ALLOWANCE_MS = 67;
   const MAX_REGISTRY_FS_BUDGET_MS = MAX_REGISTRY_FS_OPERATIONS * FS_OPERATION_ALLOWANCE_MS;
   it('cleans the maximum registry merged with the maximum intent, and records what fits with the intent\'s own entries first', async () => {
     const fixture = await installFixture(guard);
