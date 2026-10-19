@@ -223,6 +223,15 @@ describe('outcomes', () => {
     expect(await fsp.readFile(setup, 'utf8')).toBe(content);
     expect(await readIntent(fixture)).toMatchObject({phase: 'deferred', attempts: 3, folders: []});
   });
+  // The next case builds one scene at every bound and runs the engine twice over 47 folders: 1,356 real fs.promises
+  // calls in temporary folders, counted on October 19, 2026 (389 engine operations through the guarded file system, 948
+  // of the guard's own realpath and lstat checks, and 19 calls of the test's setup and reads), rounded up to 1,400. That
+  // is about 0.3 s idle, but a loaded host slowed single operations to as much as 67 ms each (ET-019, load-sensitive
+  // unit tests), and the case exceeded the default 5 s. The scene cannot be shared, because both runs change it. This
+  // budget bounds that irreducible file work with the worst measured operation time for every call; the case asserts no
+  // timing.
+  const MAX_REGISTRY_FS_OPERATIONS = 1_400, FS_OPERATION_ALLOWANCE_MS = 67;
+  const MAX_REGISTRY_FS_BUDGET_MS = MAX_REGISTRY_FS_OPERATIONS * FS_OPERATION_ALLOWANCE_MS;
   it('cleans the maximum registry merged with the maximum intent, and records what fits with the intent\'s own entries first', async () => {
     const fixture = await installFixture(guard);
     const shared = await gameFolder(fixture, 'Shared', {content: LOCAL_BUILD});
@@ -252,7 +261,7 @@ describe('outcomes', () => {
     expect(result.plugins.notes).toHaveLength(46);
     expect(await exists(shared.dll)).toBe(false);
     expect(await exists(fixture.dataRoot)).toBe(false);
-  });
+  }, MAX_REGISTRY_FS_BUDGET_MS);
   it('keeps the intent within its byte bound for a registry of long game roots', async () => {
     const fixture = await installFixture(guard);
     // Roots near the registry's 4096-character bound, each with an install record and a pending install.
