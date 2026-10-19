@@ -14,7 +14,6 @@ export interface ServiceHeartbeatMonitorOptions {
   timeoutMs?: number;
   setTimeout?: (callback: () => void, ms: number) => unknown;
   clearTimeout?: (timer: unknown) => void;
-  now?: () => number;
   onTimeout: () => void;
   onResume?: () => void;
 }
@@ -23,7 +22,6 @@ export class ServiceHeartbeatMonitor {
   readonly timeoutMs: number;
   private readonly setTimer: (callback: () => void, ms: number) => unknown;
   private readonly clearTimer: (timer: unknown) => void;
-  private readonly now: () => number;
   private readonly onTimeoutCallback: () => void;
   private readonly onResumeCallback?: () => void;
 
@@ -35,7 +33,6 @@ export class ServiceHeartbeatMonitor {
     this.timeoutMs = options.timeoutMs ?? HEARTBEAT_TIMEOUT_MS;
     this.setTimer = options.setTimeout ?? ((cb, ms) => setTimeout(cb, ms));
     this.clearTimer = options.clearTimeout ?? (t => clearTimeout(t as ReturnType<typeof setTimeout>));
-    this.now = options.now ?? (() => performance.now());
     this.onTimeoutCallback = options.onTimeout;
     this.onResumeCallback = options.onResume;
   }

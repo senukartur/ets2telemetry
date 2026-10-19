@@ -1812,7 +1812,7 @@ it('accepts {type: "heartbeat"} without error and resets the liveness deadline',
   expect(healthOf()).toEqual(recordingStatus('recording'));
 });
 
-it('logs SERVICE_HEARTBEAT_RESUMED upon recovering from a timeout and restores subsequent status', async () => {
+it('logs SERVICE_HEARTBEAT_RESUMED upon recovering from a timeout and automatically restores pre-timeout recording status', async () => {
   await ready();
   report(recordingStatus('recording'));
 
@@ -1821,13 +1821,23 @@ it('logs SERVICE_HEARTBEAT_RESUMED upon recovering from a timeout and restores s
   expect(healthOf()).toEqual({state: 'unknown'});
   expect(log).toHaveBeenCalledWith('SERVICE_HEARTBEAT_TIMEOUT');
 
-  // Recovering service emits heartbeat
+  // Recovering service emits heartbeat: restores pre-timeout status without requiring a new recording report
   child.emit('message', {type: 'heartbeat'});
   expect(log).toHaveBeenCalledWith('SERVICE_HEARTBEAT_RESUMED');
-
-  // Subsequent recording report restores health
-  report(recordingStatus('recording'));
   expect(healthOf()).toEqual(recordingStatus('recording'));
+});
+
+it('clears cached recording status on service restart or exit', async () => {
+  await ready();
+  report(recordingStatus('recording'));
+
+  await vi.advanceTimersByTimeAsync(5000);
+  expect(healthOf()).toEqual({state: 'unknown'});
+
+  // If the service exits, status stays unknown and cached status is cleared
+  child.emit('exit', 0);
+  await settle();
+  expect(healthOf()).toEqual({state: 'unknown'});
 });
 
 

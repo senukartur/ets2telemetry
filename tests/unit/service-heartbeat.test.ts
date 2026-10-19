@@ -150,14 +150,12 @@ describe('ServiceHeartbeatMonitor (REG-011)', () => {
     const customTimeoutMs = 2500;
     const fakeSetTimeout = vi.fn((cb: () => void, ms: number) => setTimeout(cb, ms));
     const fakeClearTimeout = vi.fn((timer: unknown) => clearTimeout(timer as ReturnType<typeof setTimeout>));
-    const now = vi.fn(() => 42);
     const onTimeout = vi.fn();
 
     const monitor = new ServiceHeartbeatMonitor({
       timeoutMs: customTimeoutMs,
       setTimeout: fakeSetTimeout,
       clearTimeout: fakeClearTimeout,
-      now,
       onTimeout
     });
 

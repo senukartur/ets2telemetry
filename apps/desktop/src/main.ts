@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type {EventEmitter} from 'node:events';
 import {version} from '../../../package.json';
-import type {AppHealth, AppState, AppUninstallResult, DiagnosticsExportResult, LiveTelemetry, OverlayEditState, OverlayPresentation, OverlaySettings, PluginFolderChoice, PluginGame, PluginShowFileResult, ScaffoldStatus, SettingsView,
+import type {AppHealth, AppState, AppUninstallResult, DiagnosticsExportResult, LiveTelemetry, OverlayEditState, OverlayPresentation, OverlaySettings, PluginFolderChoice, PluginGame, PluginShowFileResult, RecordingHealth, ScaffoldStatus, SettingsView,
   SourceSelection, UnitProfiles} from '../../../packages/contracts/src';
 import {SettingsBusyError, SettingsError, SettingsStore, settingsDirectory} from './settings-store';
 import {isUnitGame, isUnitProfile} from './unit-profiles';
@@ -127,8 +127,9 @@ function runApplication(profileError: unknown): void {
   // ET-015c (G4, G6, G12): the service whose recording status main accepts, until it fails, exits or restarts; the
   // committed losses of every earlier service process; and the latest losses the current one reported.
   let recordingChild: UtilityProcess | undefined, lossBase = ZERO_LOSSES, childLosses = ZERO_LOSSES, rejectedRecording = 0;
+  let lastKnownRecordingStatus: RecordingHealth | undefined;
   /** Stops accepting the current service's recording status and adds its losses to the totals; repeated calls add nothing. */
-  function retireRecording(): void {recordingChild = undefined; lossBase = addLosses(lossBase, childLosses); childLosses = ZERO_LOSSES;}
+  function retireRecording(): void {recordingChild = undefined; lossBase = addLosses(lossBase, childLosses); childLosses = ZERO_LOSSES; lastKnownRecordingStatus = undefined;}
   // ET-016 (J4): journal reads go to the current ready service, attached at readiness and retired with it.
   const journal = new JournalBroker({log});
   // ET-016 PR-5 (J16): one trip export at a time. Main owns the Save dialog and the file writer; the renderer gets fixed
@@ -278,6 +279,7 @@ function runApplication(profileError: unknown): void {
     onResume: () => {
       log('SERVICE_HEARTBEAT_RESUMED');
       timeline?.('SERVICE_HEARTBEAT_RESUMED');
+      if (lastKnownRecordingStatus) updateHealth({type: 'recording', status: lastKnownRecordingStatus});
     }
   });
   const lifecycle = new ExitCoordinator({
@@ -596,7 +598,7 @@ function runApplication(profileError: unknown): void {
     if (!existsSync(entrypoint)) throw new Error('Missing physical telemetry service entrypoint');
     const child = service = utilityProcess.fork(entrypoint, [], {serviceName: 'ETS2Telemetry telemetry service', stdio: 'pipe',
       env: serviceEnvironment(process.env, logLocation.directory)});
-    supervisor.attach(child); recordingChild = child; heartbeatMonitor.start();
+    supervisor.attach(child); recordingChild = child; lastKnownRecordingStatus = undefined; heartbeatMonitor.start();
     child.stdout?.on('data', chunk => log('SERVICE_STDOUT', String(chunk)));
     child.stderr?.on('data', chunk => log('SERVICE_STDERR', String(chunk)));
     child.once('spawn', () => log('SERVICE_SPAWN', {pid: child.pid}));
@@ -647,9 +649,11 @@ function runApplication(profileError: unknown): void {
       updateHealth({type: 'recording', status: {state: 'unknown'}});
       return;
     }
-    if (!('losses' in parsed)) {updateHealth({type: 'recording', status: parsed}); return;}
+    if (!('losses' in parsed)) {lastKnownRecordingStatus = parsed; updateHealth({type: 'recording', status: parsed}); return;}
     childLosses = parsed.losses;
-    updateHealth({type: 'recording', status: {...parsed, losses: addLosses(lossBase, parsed.losses)}});
+    const combined: RecordingHealth = {...parsed, losses: addLosses(lossBase, parsed.losses)};
+    lastKnownRecordingStatus = combined;
+    updateHealth({type: 'recording', status: combined});
   }
   log('APP_START', {electron: process.versions.electron, node: process.versions.node, packaged: app.isPackaged});
   if (timeline) {
