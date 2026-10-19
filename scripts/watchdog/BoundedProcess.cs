@@ -36,6 +36,7 @@ namespace ETS2Telemetry.Diagnostics {
     [DllImport("kernel32.dll", SetLastError=true)] static extern bool SetInformationJobObject(IntPtr job, int type, ref ExtendedLimits limits, uint size);
     [DllImport("kernel32.dll", SetLastError=true)] static extern bool SetInformationJobObject(IntPtr job, int type, ref CpuLimit limits, uint size);
     [DllImport("kernel32.dll", SetLastError=true)] static extern bool QueryInformationJobObject(IntPtr job, int type, out Accounting accounting, uint size, IntPtr returned);
+    [DllImport("kernel32.dll", SetLastError=true)] static extern bool QueryInformationJobObject(IntPtr job, int type, out ExtendedLimits limits, uint size, IntPtr returned);
     [DllImport("kernel32.dll", SetLastError=true)] static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
     [DllImport("kernel32.dll", SetLastError=true)] static extern bool TerminateJobObject(IntPtr job, uint code);
     [DllImport("kernel32.dll", SetLastError=true)] static extern bool TerminateProcess(IntPtr process, uint code);
@@ -82,6 +83,18 @@ namespace ETS2Telemetry.Diagnostics {
       }
     }
 
+    // Optional evidence (ET-019 PR-11): the Job's peak committed memory of any one process and of the whole Job, read once
+    // after the Job was terminated and before its handle closes; the peaks stay queryable while the handle is open. A failed
+    // query writes no file; a write that fails midway can leave a partial file, which the wrapper rejects (JOB_MEMORY_INVALID).
+    // Nothing here can stop the rest of the cleanup: every exception is swallowed.
+    static void WritePeakMemory(IntPtr job, string path) {
+      try {
+        ExtendedLimits value;
+        if (!QueryInformationJobObject(job,9,out value,(uint)Marshal.SizeOf(typeof(ExtendedLimits)),IntPtr.Zero)) return;
+        File.WriteAllText(path,String.Format(CultureInfo.InvariantCulture,"{{\"peakProcessMemoryBytes\":{0},\"peakJobMemoryBytes\":{1}}}\n",
+          value.PeakProcessMemory.ToUInt64(),value.PeakJobMemory.ToUInt64()),new UTF8Encoding(false));
+      } catch (Exception) { /* Diagnostic evidence never affects containment or cleanup. */ }
+    }
     static void Check(bool ok) {if (!ok) throw new Win32Exception(Marshal.GetLastWin32Error());}
     static void Close(ref IntPtr handle) {if (handle != IntPtr.Zero && handle != new IntPtr(-1)) CloseHandle(handle); handle=IntPtr.Zero;}
     public static string Quote(string value) {
@@ -117,7 +130,7 @@ namespace ETS2Telemetry.Diagnostics {
     public static int Run(string executable, string[] args, string cwd, string output, int timeoutMs) {
       return Run(executable, args, cwd, output, timeoutMs, false);
     }
-    // sampleCpu adds output/cpu.jsonl; limits, deadlines and cleanup are identical either way.
+    // sampleCpu adds output/cpu.jsonl and output/memory.json; limits, deadlines and cleanup are identical either way.
     public static int Run(string executable, string[] args, string cwd, string output, int timeoutMs, bool sampleCpu) {
       if (timeoutMs<100 || timeoutMs>60000) throw new ArgumentOutOfRangeException("timeoutMs");
       if (!Path.IsPathRooted(executable) || !Path.IsPathRooted(cwd) || !Path.IsPathRooted(output)) throw new ArgumentException("Absolute paths required");
@@ -164,6 +177,8 @@ namespace ETS2Telemetry.Diagnostics {
         if (sampler!=null) sampler.Dispose();
         if (process.Process!=IntPtr.Zero && WaitForSingleObject(process.Process,0)==258) TerminateProcess(process.Process,126);
         if (job!=IntPtr.Zero) TerminateJobObject(job,126);
+        // After termination, before the handle closes: the peaks are final, also after a deadline or a forced cleanup.
+        if (sampleCpu && job!=IntPtr.Zero && process.Process!=IntPtr.Zero) WritePeakMemory(job,Path.Combine(output,"memory.json"));
         Close(ref job);
         if (process.Process!=IntPtr.Zero) WaitForSingleObject(process.Process,2000);
         Close(ref process.Thread); Close(ref process.Process);

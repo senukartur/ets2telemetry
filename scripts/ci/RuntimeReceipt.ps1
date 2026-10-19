@@ -559,9 +559,82 @@ function Test-InstalledReceipt {
     return $true
 }
 
+# ET-019 PR-11: resource evidence of every runtime smoke, measured and not gated. Only the shape is checked: every value
+# present (or null with a fixed reason where a phase may be missing) and a non-negative whole number in plausible units.
+# The Job's peak committed memory, from job-result.json: bytes, at least 1 MiB (a KiB or MiB value is far below that) and at
+# most the Job's 2 GiB committed-memory limit; one process never peaks above the whole Job.
+function Test-JobMemoryReceipt {
+    param([object]$Memory)
+    if ($null -eq $Memory -or $Memory -is [array]) { return $false }
+    if (((@($Memory.PSObject.Properties | ForEach-Object { $_.Name }) | Sort-Object) -join ',') -cne 'peakJobMemoryBytes,peakProcessMemoryBytes') { return $false }
+    foreach ($field in @('peakProcessMemoryBytes','peakJobMemoryBytes')) {
+        if (!(Test-ReceiptInteger -Value $Memory.$field -Minimum 1048576 -Maximum 2147483648)) { return $false }
+    }
+    return ([decimal]$Memory.peakProcessMemoryBytes -le [decimal]$Memory.peakJobMemoryBytes)
+}
+
+# The first launch's phases (scripts/ci/launch-evidence.mjs): exactly these names, each whole milliseconds after the origin
+# and at most the Job's 60 s, or null with a fixed reason. Only the history opening (the refusal scenario opens none) and the
+# dashboard's paint timing may be missing.
+function Test-ColdLaunchReceipt {
+    param([object]$Driver)
+    $launch = $Driver.coldLaunch
+    if ($null -eq $launch -or $launch -is [array] -or $launch.origin -cnotin @('main-process-created','launch-requested')) { return $false }
+    # PowerShell 7 (the CI shell) parses an ISO date string as [datetime]; Windows PowerShell 5.1 keeps the string.
+    if ($launch.originUtc -isnot [datetime] -and ($launch.originUtc -isnot [string] -or
+        $launch.originUtc -cnotmatch '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$')) { return $false }
+    # The launch request is a V8 Date (coarse to the system timer tick, about 15.6 ms) and the origin the kernel's creation
+    # time, so a healthy launch can measure slightly negative. A bounded skew down to -1000 ms is recorded as measured.
+    if (!(Test-ReceiptInteger -Value $launch.launchRequestedToOriginMs -Minimum -1000 -Maximum 60000)) { return $false }
+    $phases = $launch.phasesMs; $unavailable = $launch.unavailable
+    if ($null -eq $phases -or $phases -is [array] -or $null -eq $unavailable -or $unavailable -is [array]) { return $false }
+    $names = @('mainStarted','mainReady','serviceReady','storageProbeVerified','historyStorageOpened','firstWindowShown','dashboardLoaded',
+        'rendererFirstPaint','rendererFirstContentfulPaint','dashboardReadyVisible')
+    $nullable = @('historyStorageOpened','rendererFirstPaint','rendererFirstContentfulPaint')
+    if (((@($phases.PSObject.Properties | ForEach-Object { $_.Name }) | Sort-Object) -join ',') -cne ((@($names) | Sort-Object) -join ',')) { return $false }
+    foreach ($name in @($unavailable.PSObject.Properties | ForEach-Object { $_.Name })) {
+        if ($name -cnotin $nullable -or $null -ne $phases.$name) { return $false }
+    }
+    foreach ($name in $names) {
+        $value = $phases.$name
+        if ($null -eq $value) {
+            if ($name -cnotin $nullable -or $unavailable.$name -isnot [string] -or $unavailable.$name -cnotmatch '^[A-Z][A-Z0-9_]{2,63}$') { return $false }
+        } elseif (!(Test-ReceiptInteger -Value $value -Minimum 0 -Maximum 60000)) { return $false }
+    }
+    # The refusal scenario's service refuses the newer database and opens none; every other scenario opens one.
+    return (($Driver.scenarioKind -ceq 'refusal') -eq ($null -eq $phases.historyStorageOpened))
+}
+
+# Electron's per-process peak working sets at the end of the journey, in bytes per process kind. Main, a renderer and the
+# telemetry service always run; the storage worker is a thread of the telemetry service and is named as not separable.
+function Test-ProcessMemoryReceipt {
+    param([object]$Driver)
+    $memory = $Driver.processMemory
+    if ($null -eq $memory -or $memory -is [array] -or $null -eq $memory.kinds -or $memory.kinds -is [array]) { return $false }
+    $run = if ($Driver.scenarioKind -cin @('lifecycle','recording','journal','plugin')) { 'restart' } else { 'first' }
+    if ($memory.run -cne $run -or $memory.unavailable.storageWorker -cne 'WORKER_THREAD_OF_TELEMETRY_SERVICE') { return $false }
+    $kinds = @($memory.kinds.PSObject.Properties | ForEach-Object { $_.Name })
+    foreach ($kind in $kinds) {
+        $entry = $memory.kinds.$kind
+        if ($kind -cnotin @('main','renderer','telemetryService','gpu','otherUtility','other') -or
+            !(Test-ReceiptInteger -Value $entry.processes -Minimum 1 -Maximum 16) -or
+            !(Test-ReceiptInteger -Value $entry.peakWorkingSetBytes -Minimum 0 -Maximum 4294967296)) { return $false }
+    }
+    foreach ($kind in @('main','renderer','telemetryService')) {
+        if ($kind -cnotin $kinds -or !(Test-ReceiptInteger -Value $memory.kinds.$kind.peakWorkingSetBytes -Minimum 1048576 -Maximum 4294967296)) { return $false }
+    }
+    return (Test-ReceiptInteger -Value $memory.kinds.main.processes -Minimum 1 -Maximum 1)
+}
+
+function Test-ResourceEvidence {
+    param([object]$Driver, [object]$Job)
+    if ($null -eq $Job -or $Job -is [array]) { return $false }
+    return ((Test-JobMemoryReceipt -Memory $Job.memory) -and (Test-ColdLaunchReceipt -Driver $Driver) -and (Test-ProcessMemoryReceipt -Driver $Driver))
+}
+
 function Test-RuntimeReceipt {
     param([string]$DriverResultPath, [string]$ExpectedCommit, [string]$ExpectedMode, [int]$JobExitCode,
-        [string]$ExpectedScenario)
+        [string]$ExpectedScenario, [string]$JobResultPath)
     $validation = [ordered]@{passed=$false; driverResultAvailable=$false; reason=$null; driverPassed=$null}
     if (!(Test-Path -LiteralPath $DriverResultPath -PathType Leaf)) {
         $validation.reason = 'DRIVER_RESULT_MISSING'; return $validation
@@ -726,6 +799,20 @@ function Test-RuntimeReceipt {
     # ET-018 PR-1: the installed mode adds its own facts to every scenario; the other modes are unchanged.
     if ($ExpectedMode -ceq 'installed' -and !(Test-InstalledReceipt -Driver $driver)) {
         $validation.reason = 'INSTALLED_RESULT_INCOMPLETE_OR_INVALID'; return $validation
+    }
+    # ET-019 PR-11: the wrapper always names its job-result.json, so every smoke must carry the resource evidence; a caller
+    # without it (the receipt tests of earlier rules) is unchanged. Read with the same bounds as the driver receipt.
+    if ($JobResultPath) {
+        $job = $null
+        try {
+            if (Test-Path -LiteralPath $JobResultPath -PathType Leaf) {
+                $jobItem = Get-Item -LiteralPath $JobResultPath
+                if ($jobItem.Length -le 262144 -and !($jobItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+                    $job = Get-Content -LiteralPath $JobResultPath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+                }
+            }
+        } catch { $job = $null }
+        if (!(Test-ResourceEvidence -Driver $driver -Job $job)) { $validation.reason = 'RESOURCE_EVIDENCE_INCOMPLETE_OR_INVALID'; return $validation }
     }
     $validation.passed = $true
     return $validation
