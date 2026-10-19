@@ -9,7 +9,10 @@ import {waitForCurrentTelemetry} from './renderer-observation.mjs';
 import {lifecycleState, until} from './lifecycle-observation.mjs';
 import {processKind} from './launch-evidence.mjs';
 import {checkHistoryInvariants, formatViolations} from './history-invariants.mjs';
-import {checkTail, databaseGrowth, listDifferences, logBudget, seriesSummary, soakExpectation, soakSessionId, summarizeSoakMetrics, tripUuidOf} from './soak-evidence.mjs';
+import {
+  checkTail, compactSoakLogs, databaseGrowth, journalPageSizes, listDifferences, logBudget, seriesSummary, SOAK_FAILURE_EVENTS, SOAK_RECORDING_FAILURES, soakExpectation, soakSessionId,
+  summarizeSoakMetrics, tripUuidOf
+} from './soak-evidence.mjs';
 
 // ET-019 PR-12b: the packaged application soak (scenario `soak`, docs/ci.md#et-019-recording-soak-workflow-dispatch-only).
 // The application records the protocol v1 simulator's soak source (`serve-v1-soak --minutes <M>`, docs/simulator-v1.md)
@@ -42,12 +45,8 @@ export const SOAK_SLACK_MS = 150_000;
 const TAIL_MINIMUM_SECONDS = 10;
 /** One probe's reads, each bounded so that a hung process fails the run instead of the Job. */
 const PROBE_TIMEOUT_MS = 10_000;
-const FAILURE_EVENTS = /FAILED|TIMEOUT|UNCAUGHT|UNHANDLED|INVALID|RENDER_PROCESS_GONE/;
-const RECORDING_FAILURES = new Set(['V1_DURABLE_RETRY', 'V1_DURABLE_UNAVAILABLE', 'V1_DURABLE_ACK_AHEAD', 'V1_DURABLE_RESTORE_LOSS', 'V1_EVENT_CONFLICT',
-  'RECORDING_TARGET_REJECTED', 'HISTORY_STORAGE_UNAVAILABLE', 'V1_SAMPLES_RETRY', 'V1_SAMPLES_DROPPED', 'V1_SAMPLES_DISCARDED', 'V1_SAMPLES_SKIPPED']);
-/** The rows a soak receipt keeps of each log; the rest is summarized by event (compactSoakEvents). */
-const KEPT_MAIN = new Set(['APP_START', 'SERVICE_START_REQUESTED', 'SERVICE_READY', 'DASHBOARD_WINDOW_CREATED', 'DASHBOARD_LOAD_FINISHED', 'APP_EXIT_REQUESTED', 'SERVICE_EXIT', 'APP_EXIT']);
-const KEPT_SERVICE = new Set(['STORAGE_VERIFIED', 'RECORDING_TARGET', 'HISTORY_STORAGE_OPENED', 'HISTORY_STORAGE_CLOSED', 'SHUTDOWN_STEP', 'SERVICE_REPORT', 'V1_SAMPLES_EXIT']);
+const FAILURE_EVENTS = SOAK_FAILURE_EVENTS;
+const RECORDING_FAILURES = new Set(SOAK_RECORDING_FAILURES);
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function bounded(promise, message) {
@@ -168,11 +167,14 @@ export async function runSoakSmoke({application, dashboard, source, config, reco
   phase('soak-tail-reached');
   // G6: one not-connected interval per reconnection and nothing else lost. G2: `trip` describes the game of the latest v1
   // observation, which is idle in the trip-free tail: no open trip and no untracked job.
-  const health = await until(async () => (await lifecycleState(application)).health.recording, value => value.state === 'recording', 'SOAK_NOT_RECORDING_IN_THE_TAIL');
+  // Each read is bounded like a probe's, so one hung evaluation cannot hold the run until the Job's deadline.
+  const health = await until(async () => (await bounded(lifecycleState(application), 'SOAK_STATE_PROBE_TIMEOUT')).health.recording, value => value.state === 'recording',
+    'SOAK_NOT_RECORDING_IN_THE_TAIL');
   record.recordingAtTail = health;
   assert.deepEqual(health, {state: 'recording', target: 'synthetic', code: null, losses: expected.losses, trip: {phase: 'idle', completeness: null, untrackedJob: false}}, 'The recording status in the tail differs from the expectation');
   record.recordingStatusMatch = true;
-  // 2. The journal through the bridge: every page of the trip list, newest first.
+  // 2. The journal through the bridge: every page of the trip list, newest first. A page carries a next cursor exactly when
+  // it is full (the trip-page contract), so a multiple of 50 trips ends in an empty page.
   record.journal = await bounded(dashboard.evaluate(async () => {
     const pages = [];
     let cursor, database = null;
@@ -196,7 +198,7 @@ export async function runSoakSmoke({application, dashboard, source, config, reco
   const trips = [...expected.trips].reverse().map(trip => ({tripUuid: tripUuidOf(session, trip.openedEventSeq), outcome: trip.outcome, recordingCompleteness: trip.recordingCompleteness,
     closeReason: 'outcome', startedUtcMs: trip.startedUtcMs, endedUtcMs: trip.endedUtcMs}));
   const pages = [];
-  for (let i = 0; i < trips.length; i += 50) pages.push(trips.slice(i, i + 50));
+  for (const size of journalPageSizes(trips.length)) pages.push(trips.slice(pages.length * 50, pages.length * 50 + size));
   assert.deepEqual(record.journal, {error: null, database: {purpose: 'synthetic', schemaVersion: 2}, pages}, 'The journal pages differ from the expectation');
   record.journal = {pages: pages.map(page => page.length), database: record.journal.database};
   record.journalMatch = true;
@@ -350,10 +352,5 @@ export async function verifySoakRun({config, record, mainEvents, serviceEvents})
     walPeakBytes: Math.max(0, ...(record.series ?? []).map(row => row.walBytes))};
 }
 
-/** A soak receipt keeps only the rows its checks name; every log's rows are counted by event. */
-export function compactSoakEvents(result) {
-  const count = rows => Object.fromEntries([...rows.reduce((map, row) => map.set(row.event, (map.get(row.event) ?? 0) + 1), new Map())].sort());
-  if (result.soak) result.soak.logEvents = {main: count(result.mainEvents ?? []), service: count(result.serviceEvents ?? [])};
-  if (result.mainEvents) result.mainEvents = result.mainEvents.filter(row => KEPT_MAIN.has(row.event));
-  if (result.serviceEvents) result.serviceEvents = result.serviceEvents.filter(row => KEPT_SERVICE.has(row.event));
-}
+/** A soak receipt keeps the rows its checks name and the first failure rows of each log (soak-evidence.mjs, compactSoakLogs). */
+export const compactSoakEvents = compactSoakLogs;

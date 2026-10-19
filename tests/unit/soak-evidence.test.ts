@@ -1,6 +1,7 @@
 import {describe, expect, it} from 'vitest';
 import {
-  checkTail, databaseGrowth, leakTrend, listDifferences, logBudget, reconnectCycles, seriesSummary, soakExpectation, soakSessionId, summarizeSoakMetrics, tripUuidOf
+  checkTail, compactSoakLogs, databaseGrowth, journalPageSizes, leakTrend, listDifferences, logBudget, reconnectCycles, seriesSummary, soakExpectation, soakSessionId,
+  summarizeSoakMetrics, tripUuidOf, type SoakLogRow
 } from '../../scripts/ci/soak-evidence.mjs';
 import {tripUuidFor} from '../../packages/telemetry-core/src';
 import {scenarioSource} from '../../tools/telemetry-simulator/src/v1/replay';
@@ -93,6 +94,25 @@ describe('soak expectation', () => {
     expect(soakSessionId()).toBe(scenarioSource({game: 'ets2', seed: 'soak-v1'}).pluginSessionId);
     for (const eventSeq of ['4', '10', '16']) expect(tripUuidOf(soakSessionId(), eventSeq)).toBe(tripUuidFor(soakSessionId(), eventSeq));
     expect(tripUuidOf(soakSessionId(), 4)).toBe(tripUuidOf(soakSessionId(), '4'));
+  });
+});
+
+describe('soak journal pages and log compaction', () => {
+  it('pages the trip list as the trip-page contract answers it: an empty last page after a full one', () => {
+    // packages/contracts/src/journal.ts: a page carries a next cursor exactly when it holds 50 trips.
+    expect([30, 49, 50, 51, 90, 100, 0].map(journalPageSizes)).toEqual([[30], [49], [50, 0], [50, 1], [50, 40], [50, 50, 0], [0]]);
+    expect(() => journalPageSizes(-1)).toThrow('Trip count must be a non-negative integer');
+  });
+  it('keeps the named rows and the first 16 failure rows of each log, and counts every row', () => {
+    const failures: SoakLogRow[] = Array.from({length: 20}, (_, i) => ({event: i % 2 ? 'V1_SAMPLES_DROPPED' : 'SETTINGS_WRITE_FAILED', i}));
+    const result: {mainEvents: SoakLogRow[]; serviceEvents: SoakLogRow[]; soak: Record<string, unknown>} = {soak: {},
+      mainEvents: [{event: 'APP_START'}, {event: 'RECORDING_STATUS'}, {event: 'RECORDING_STATUS'}, {event: 'MAIN_EVENT_LOOP_LAG'}, ...failures, {event: 'APP_EXIT'}],
+      serviceEvents: [{event: 'RECORDING_TARGET'}, {event: 'V1_SOURCE_STATUS'}, {event: 'V1_DURABLE_RETRY'}, {event: 'STORAGE_COMMAND_TIMEOUT'}, {event: 'SHUTDOWN_STEP'}]};
+    compactSoakLogs(result);
+    expect(result.mainEvents).toEqual([{event: 'APP_START'}, ...failures.slice(0, 16), {event: 'APP_EXIT'}]);
+    expect(result.serviceEvents).toEqual([{event: 'RECORDING_TARGET'}, {event: 'V1_DURABLE_RETRY'}, {event: 'STORAGE_COMMAND_TIMEOUT'}, {event: 'SHUTDOWN_STEP'}]);
+    expect(result.soak.logEvents).toEqual({main: {APP_EXIT: 1, APP_START: 1, MAIN_EVENT_LOOP_LAG: 1, RECORDING_STATUS: 2, SETTINGS_WRITE_FAILED: 10, V1_SAMPLES_DROPPED: 10},
+      service: {RECORDING_TARGET: 1, SHUTDOWN_STEP: 1, STORAGE_COMMAND_TIMEOUT: 1, V1_DURABLE_RETRY: 1, V1_SOURCE_STATUS: 1}});
   });
 });
 

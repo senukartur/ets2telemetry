@@ -582,13 +582,14 @@ function Test-SoakReceipt {
         $null -ne $status.trip.completeness -or $status.trip.untrackedJob -isnot [bool] -or $status.trip.untrackedJob) { return $false }
     foreach ($loss in @('lostEvents','eventLoss','sampleLoss','restoreLoss','droppedSamples')) { if (!(Test-ReceiptInteger -Value $status.losses.$loss -Minimum 0 -Maximum 0)) { return $false } }
     if (!(Test-ReceiptInteger -Value $status.losses.notConnected -Minimum $r -Maximum $r)) { return $false }
-    # The journal pages: 50 trips per page, M in all, from the synthetic database.
+    # The journal pages, from the synthetic database. A trip page carries a next cursor exactly when it is full
+    # (packages/contracts/src/journal.ts), so M trips give floor(M / 50) full pages and a last page of M % 50, empty when
+    # M is a multiple of 50.
     $pages = @($soak.journal.pages)
-    if ($soak.journal.database.purpose -cne 'synthetic' -or !(Test-ReceiptInteger -Value $soak.journal.database.schemaVersion -Minimum 2 -Maximum 2) -or
-        $pages.Count -ne [math]::Ceiling($m / 50)) { return $false }
-    $listed = 0
-    foreach ($page in $pages) { if (!(Test-ReceiptInteger -Value $page -Minimum 1 -Maximum 50)) { return $false }; $listed += $page }
-    if ($listed -ne $m) { return $false }
+    if ($soak.journal.database.purpose -cne 'synthetic' -or !(Test-ReceiptInteger -Value $soak.journal.database.schemaVersion -Minimum 2 -Maximum 2)) { return $false }
+    foreach ($page in $pages) { if (!(Test-ReceiptInteger -Value $page -Minimum 0 -Maximum 50)) { return $false } }
+    $expectedPages = @(@(50) * [int][math]::Floor($m / 50)) + @($m % 50)
+    if ((@($pages | ForEach-Object { [string]$_ }) -join ',') -cne ($expectedPages -join ',')) { return $false } # rule: journal pages
     # The stored rows: the closed forms, the tail and the invariants.
     $database = $soak.database; $counts = $database.counts
     $expected = [ordered]@{events=$events; trips=$m; cancelled=[math]::Floor(($m + 1) / 4); partial=$r; attributions=2 * $m; intervals=$r; cycleSamples=51 * $m - 2 * $r; gaps=0}
@@ -600,6 +601,9 @@ function Test-SoakReceipt {
     if (!(Test-ReceiptInteger -Value $counts.tailSamples -Minimum 10 -Maximum 300) -or $null -eq $tail -or @($tail.problems).Count -ne 0 -or
         !(Test-ReceiptInteger -Value $tail.fromSecond -Minimum (1000 + 60 * $m) -Maximum (1000 + 60 * $m)) -or
         !(Test-ReceiptInteger -Value $tail.lastSecond -Minimum (999 + 60 * $m + $counts.tailSamples) -Maximum (999 + 60 * $m + $counts.tailSamples))) { return $false }
+    # The tail ends at the last frame delivered before the stop: within the 100 ms before the source's stop time.
+    $stopMs = [double]$source.scenarioMs
+    if (!(Test-ReceiptInteger -Value $tail.lastSecond -Minimum (1000 + [math]::Floor(($stopMs - 100) / 1000)) -Maximum (1000 + [math]::Floor($stopMs / 1000)))) { return $false } # rule: tail stop
     $files = $soak.files
     if ($null -eq $files -or $files.magic -cne 'SQLite format 3' -or !(Test-ReceiptInteger -Value $files.userVersion -Minimum 2 -Maximum 2) -or @($files.sidecars).Count -ne 0 -or
         $files.historyDatabase -isnot [bool] -or $files.historyDatabase -or $files.syntheticBackups -isnot [bool] -or $files.syntheticBackups) { return $false }
@@ -629,6 +633,27 @@ function Test-SoakReceipt {
     }
     # The run itself: an explicit quit, an orderly exit and no leftover probe.
     $mainEvents = @($Driver.mainEvents); $serviceEvents = @($Driver.serviceEvents)
+    # The logs, independently of the driver's checks: the receipt keeps the first failure rows of each log and counts every
+    # row by event (scripts/ci/soak-evidence.mjs, compactSoakLogs). No count may name a failure event code or a recording
+    # failure, no kept row may be a recording failure, and the kept service rows show the synthetic target, the storage
+    # opening and clean recording-flush and history-storage steps.
+    $failurePattern = 'FAILED|TIMEOUT|UNCAUGHT|UNHANDLED|INVALID|RENDER_PROCESS_GONE'
+    $recordingFailures = @('V1_DURABLE_RETRY','V1_DURABLE_UNAVAILABLE','V1_DURABLE_ACK_AHEAD','V1_DURABLE_RESTORE_LOSS','V1_EVENT_CONFLICT','RECORDING_TARGET_REJECTED',
+        'HISTORY_STORAGE_UNAVAILABLE','V1_SAMPLES_RETRY','V1_SAMPLES_DROPPED','V1_SAMPLES_DISCARDED','V1_SAMPLES_SKIPPED')
+    $logEvents = $soak.logEvents
+    if ($null -eq $logEvents -or $null -eq $logEvents.main -or $null -eq $logEvents.service -or $logEvents.main -is [array] -or $logEvents.service -is [array]) { return $false } # rule: log counts present
+    $counted = @($logEvents.main.PSObject.Properties | ForEach-Object { $_.Name }) + @($logEvents.service.PSObject.Properties | ForEach-Object { $_.Name })
+    if (@($counted | Where-Object { $_ -cmatch $failurePattern }).Count -ne 0) { return $false } # rule: counted failure events
+    if (@($counted | Where-Object { $_ -cin $recordingFailures }).Count -ne 0) { return $false } # rule: counted recording failures
+    if (@(@($mainEvents) + @($serviceEvents) | Where-Object { $_.event -cin $recordingFailures }).Count -ne 0) { return $false } # rule: kept recording failures
+    $targets = @($serviceEvents | Where-Object { $_.event -ceq 'RECORDING_TARGET' })
+    if ($targets.Count -ne 1 -or $targets[0].facts.purpose -cne 'synthetic') { return $false } # rule: recording target
+    $opened = @($serviceEvents | Where-Object { $_.event -ceq 'HISTORY_STORAGE_OPENED' })
+    if ($opened.Count -ne 1 -or $opened[0].facts.created -isnot [bool] -or !$opened[0].facts.created) { return $false } # rule: storage opened
+    $flushSteps = @($serviceEvents | Where-Object { $_.event -ceq 'SHUTDOWN_STEP' -and $_.facts.name -ceq 'recording-flush' })
+    if ($flushSteps.Count -ne 1 -or $flushSteps[0].facts.outcome -cne 'ok') { return $false } # rule: recording-flush step
+    $historySteps = @($serviceEvents | Where-Object { $_.event -ceq 'SHUTDOWN_STEP' -and $_.facts.name -ceq 'history-storage' })
+    if ($historySteps.Count -ne 1 -or $historySteps[0].facts.outcome -cne 'ok') { return $false } # rule: history-storage step
     $exitRequests = @($mainEvents | Where-Object { $_.event -ceq 'APP_EXIT_REQUESTED' })
     if ($exitRequests.Count -ne 1 -or $exitRequests[0].facts.reason -cne 'app-quit') { return $false }
     if (!(Test-OrderlyRunEvent -MainEvents $mainEvents -ServiceEvents $serviceEvents)) { return $false }

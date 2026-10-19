@@ -209,6 +209,44 @@ export function logBudget({bytes, records, soakBytes, soakRecords, soakMs}, {tar
       headroomRecords: LOG_BUDGET.records - projectedRecords, wouldReach: projectedRecords >= LOG_BUDGET.records || projectedBytes > LOG_BUDGET.bytes - LOG_BUDGET.marginBytes}};
 }
 
+/** The journal's trip page size (packages/contracts/src/journal.ts, JOURNAL_TRIP_PAGE). */
+export const JOURNAL_TRIP_PAGE = 50;
+/**
+ * The trip counts of the journal list's pages for `count` trips, as the trip-page contract answers them
+ * (packages/contracts/src/journal.ts, `page`): a page carries a next cursor exactly when it is full, so full pages are
+ * followed by one more page, and `count` a multiple of 50 ends in an empty page. 30 trips: [30]; 50: [50, 0]; 51: [50, 1].
+ */
+export function journalPageSizes(count) {
+  if (!Number.isSafeInteger(count) || count < 0) throw new Error('Trip count must be a non-negative integer');
+  return [...Array(Math.floor(count / JOURNAL_TRIP_PAGE)).fill(JOURNAL_TRIP_PAGE), count % JOURNAL_TRIP_PAGE];
+}
+
+/** Failure event codes of every smoke (runtime-smoke.mjs) and the recording failures of the recording journey. */
+export const SOAK_FAILURE_EVENTS = /FAILED|TIMEOUT|UNCAUGHT|UNHANDLED|INVALID|RENDER_PROCESS_GONE/;
+export const SOAK_RECORDING_FAILURES = Object.freeze(['V1_DURABLE_RETRY', 'V1_DURABLE_UNAVAILABLE', 'V1_DURABLE_ACK_AHEAD', 'V1_DURABLE_RESTORE_LOSS', 'V1_EVENT_CONFLICT',
+  'RECORDING_TARGET_REJECTED', 'HISTORY_STORAGE_UNAVAILABLE', 'V1_SAMPLES_RETRY', 'V1_SAMPLES_DROPPED', 'V1_SAMPLES_DISCARDED', 'V1_SAMPLES_SKIPPED']);
+/** The rows a soak receipt keeps of each log besides the failure rows; the rest is counted by event. */
+const KEPT_MAIN = new Set(['APP_START', 'SERVICE_START_REQUESTED', 'SERVICE_READY', 'DASHBOARD_WINDOW_CREATED', 'DASHBOARD_LOAD_FINISHED', 'APP_EXIT_REQUESTED', 'SERVICE_EXIT', 'APP_EXIT']);
+const KEPT_SERVICE = new Set(['STORAGE_VERIFIED', 'RECORDING_TARGET', 'HISTORY_STORAGE_OPENED', 'HISTORY_STORAGE_CLOSED', 'SHUTDOWN_STEP', 'SERVICE_REPORT', 'V1_SAMPLES_EXIT']);
+/** At most this many failure rows of each log are kept; `logEvents` still counts every one. */
+export const SOAK_KEPT_FAILURE_ROWS = 16;
+const isFailure = event => SOAK_FAILURE_EVENTS.test(event) || SOAK_RECORDING_FAILURES.includes(event);
+/**
+ * A soak's logs can hold hundreds of rows, so its receipt keeps the rows its checks name, plus the first 16 failure rows of
+ * each log (a failure event code or a recording failure), and counts every row by event in `soak.logEvents`. The receipt
+ * rule then rejects a failure row or a failure count independently of the driver.
+ */
+export function compactSoakLogs(result) {
+  const count = rows => Object.fromEntries([...rows.reduce((map, row) => map.set(row.event, (map.get(row.event) ?? 0) + 1), new Map())].sort());
+  const keep = (rows, kept) => {
+    let failures = 0;
+    return rows.filter(row => kept.has(row.event) || (isFailure(row.event) && ++failures <= SOAK_KEPT_FAILURE_ROWS));
+  };
+  if (result.soak) result.soak.logEvents = {main: count(result.mainEvents ?? []), service: count(result.serviceEvents ?? [])};
+  if (result.mainEvents) result.mainEvents = keep(result.mainEvents, KEPT_MAIN);
+  if (result.serviceEvents) result.serviceEvents = keep(result.serviceEvents, KEPT_SERVICE);
+}
+
 /** Evidence only: the closed database's size per hour of one-second samples, against the measured size and the allowance. */
 export function databaseGrowth({databaseBytes, samples}) {
   const perHour = samples > 0 ? Math.round((databaseBytes * 3600) / samples) : null;

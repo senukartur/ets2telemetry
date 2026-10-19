@@ -49,7 +49,11 @@ function soakReceipt(): Json {
       growth: {databaseBytes: 217_088, samples: 164, bytesPerSampleHour: 4_765_346, measuredBytesPerSampleHour: 534_364, ratioToMeasured: 8.918,
         allowanceBytesPerSampleHour: 1_000_000, ratioToAllowance: 4.765, walPeakBytes: 1_108_312},
       series: [row(6, null, 'waiting', 94_056_448), row(90_137, 89_575, 'recording', 125_468_672)],
-      seriesSummary: {main: kindSummary(1), renderer: kindSummary(2), telemetryService: kindSummary(1), gpu: kindSummary(1)}}};
+      seriesSummary: {main: kindSummary(1), renderer: kindSummary(2), telemetryService: kindSummary(1), gpu: kindSummary(1)},
+      // Every row of each log counted by event (compactSoakLogs); none is a failure.
+      logEvents: {main: {APP_EXIT: 1, APP_EXIT_REQUESTED: 1, APP_START: 1, RECORDING_STATUS: 17, SERVICE_EXIT: 1, SERVICE_READY: 1},
+        service: {HISTORY_STORAGE_CLOSED: 1, HISTORY_STORAGE_OPENED: 1, RECORDING_TARGET: 1, SERVICE_REPORT: 2, SHUTDOWN_STEP: 6, STORAGE_VERIFIED: 1, V1_SAMPLES_EXIT: 1,
+          V1_SOURCE_STATUS: 9}}}};
 }
 function corrupt(path: (string | number)[], replacement?: Json, value: Json = soakReceipt()): string {
   let target = value as Record<string | number, Json>;
@@ -69,7 +73,31 @@ function oneMinute(): string {
   for (const [path, replacement] of edits) corrupt(path, replacement, value);
   return JSON.stringify(value);
 }
+/**
+ * A soak of `minutes` from the closed forms (r = floor((M + 8) / 10)), with a tail of 13 samples, the stop 12.5 s into the
+ * tail, and the journal pages given.
+ */
+function minutesReceipt(minutes: number, pages: number[]): string {
+  const value = soakReceipt(), r = Math.floor((minutes + 8) / 10), events = 3 + 6 * minutes, cycle = 51 * minutes - 2 * r, from = 1000 + 60 * minutes;
+  const edits: [(string | number)[], Json][] = [[['soak', 'minutes'], minutes], [['soak', 'sourceFacts', 'scenarioMs'], minutes * 60_000 + 12_500],
+    [['soak', 'sourceFacts', 'lastEventSeq'], String(events)], [['soak', 'sourceFacts', 'maxAckThroughEventSeq'], String(events)], [['soak', 'sourceFacts', 'events'], events],
+    [['soak', 'sourceFacts', 'connections'], 1 + r], [['soak', 'sourceFacts', 'closes'], [...Array<string>(r).fill('disconnect'), 'end']],
+    [['soak', 'recordingAtTail', 'losses', 'notConnected'], r], [['soak', 'journal', 'pages'], pages],
+    [['soak', 'database', 'counts'], {events, trips: minutes, cancelled: Math.floor((minutes + 1) / 4), partial: r, attributions: 2 * minutes, intervals: r, cycleSamples: cycle,
+      tailSamples: 13, gaps: 0}],
+    [['soak', 'database', 'tail'], {fromSecond: from, lastSecond: from + 12, samples: 13, expectedLastSecond: [from + 12, from + 12], problems: []}],
+    [['soak', 'growth', 'samples'], cycle + 13]];
+  for (const [path, replacement] of edits) corrupt(path, replacement, value);
+  return JSON.stringify(value);
+}
+/** The intact receipt with one service row appended or replaced. */
+function withServiceRows(change: (rows: Json[]) => void): string {
+  const value = soakReceipt() as {serviceEvents: Json[]};
+  change(value.serviceEvents);
+  return JSON.stringify(value);
+}
 const invalid = (name: string, path: (string | number)[], replacement?: Json) => ({name: `soak ${name}`, body: corrupt(path, replacement), scenario: 'soak', reason: REASON});
+const rejected = (name: string, body: string) => ({name: `soak ${name}`, body, scenario: 'soak', reason: REASON});
 
 const cases: {name: string; body: string; scenario: string; reason: string | null; numbers?: 'int64'}[] = [
   {name: 'intact three-minute soak', body: JSON.stringify(soakReceipt()), scenario: 'soak', reason: null},
@@ -138,7 +166,37 @@ const cases: {name: string; body: string; scenario: string; reason: string | nul
   invalid('a trend with an unknown status', ['soak', 'seriesSummary', 'renderer', 'trend', 'status'], 'LEAK'),
   invalid('another exit request', ['mainEvents', 1, 'facts', 'reason'], 'tray'),
   invalid('an unclean stop', ['serviceEvents', 11, 'detail', 'clean'], false),
-  invalid('a leftover probe', ['probesAfterExit'], ['ets2telemetry-probe-1'])
+  invalid('a leftover probe', ['probesAfterExit'], ['ets2telemetry-probe-1']),
+  // Fix round: the journal pages follow the trip-page contract, an empty last page exactly when M is a multiple of 50.
+  {name: 'intact 50-minute soak with an empty last journal page', body: minutesReceipt(50, [50, 0]), scenario: 'soak', reason: null},
+  {name: 'intact 51-minute soak', body: minutesReceipt(51, [50, 1]), scenario: 'soak', reason: null},
+  {name: 'intact 90-minute soak with a full and a partial page', body: minutesReceipt(90, [50, 40]), scenario: 'soak', reason: null},
+  rejected('50 minutes without the empty last page', minutesReceipt(50, [50])),
+  rejected('51 minutes with an extra empty page', minutesReceipt(51, [50, 1, 0])),
+  rejected('30 minutes with an empty page after a short one', minutesReceipt(30, [30, 0])),
+  rejected('50 minutes split into short pages', minutesReceipt(50, [25, 25, 0])),
+  rejected('90 minutes short of a trip', minutesReceipt(90, [50, 39])),
+  // Fix round: the tail ends within the stop window of the source's stop time, not only where its own count says.
+  rejected('a tail that ends before the stop window', corrupt(['soak', 'growth', 'samples'], 163,
+    JSON.parse(corrupt(['soak', 'database', 'tail', 'lastSecond'], 1191, JSON.parse(corrupt(['soak', 'database', 'counts', 'tailSamples'], 12)) as Json)) as Json)),
+  // Fix round: the logs are checked independently of the driver, from the kept rows and the counts.
+  rejected('a kept failure row', corrupt(['mainEvents', 4], {event: 'SETTINGS_WRITE_FAILED', facts: {code: 'IO_ERROR'}})),
+  rejected('a kept recording-failure row', withServiceRows(rows => {rows.push({event: 'V1_SAMPLES_DROPPED', facts: {count: 1}});})),
+  invalid('a failure count in the main log', ['soak', 'logEvents', 'main', 'SETTINGS_WRITE_FAILED'], 1),
+  invalid('a timeout count in the service log', ['soak', 'logEvents', 'service', 'STORAGE_COMMAND_TIMEOUT'], 2),
+  invalid('a recording-failure count', ['soak', 'logEvents', 'service', 'V1_DURABLE_RETRY'], 2),
+  invalid('a samples-dropped count', ['soak', 'logEvents', 'service', 'V1_SAMPLES_DROPPED'], 1),
+  invalid('log counts missing', ['soak', 'logEvents']),
+  invalid('service log counts missing', ['soak', 'logEvents', 'service']),
+  invalid('a history target instead of the synthetic one', ['serviceEvents', 0, 'facts', 'purpose'], 'history'),
+  rejected('no recording target row', withServiceRows(rows => {rows.splice(0, 1);})),
+  rejected('two recording target rows', withServiceRows(rows => {rows.unshift({event: 'RECORDING_TARGET', facts: {purpose: 'synthetic'}});})),
+  invalid('no storage opening created', ['serviceEvents', 2, 'facts', 'created'], false),
+  rejected('no storage opening row', withServiceRows(rows => {rows.splice(2, 1);})),
+  rejected('no recording-flush step', withServiceRows(rows => {rows.splice(7, 1);})),
+  invalid('a recording-flush step that timed out', ['serviceEvents', 7, 'facts', 'outcome'], 'timeout'),
+  rejected('no history-storage step', withServiceRows(rows => {rows.splice(10, 1);})),
+  invalid('a history-storage step that failed', ['serviceEvents', 10, 'facts', 'outcome'], 'failed')
 ];
 
 it('requires the soak receipt to match the closed forms of the schedule', async () => {

@@ -55,3 +55,10 @@ export function seriesSummary(series: readonly SoakSeriesRow[], options: {planne
 export function summarizeSoakMetrics(metrics: readonly SoakMetric[], kindOf: (metric: SoakMetric) => string): Record<string, SoakSeriesKind>;
 export function logBudget(use: {bytes: number; records: number; soakBytes: number; soakRecords: number; soakMs: number}, options?: {targetMinutes?: number}): SoakLogBudget;
 export function databaseGrowth(input: {databaseBytes: number; samples: number}): SoakGrowth;
+export const JOURNAL_TRIP_PAGE: number;
+export function journalPageSizes(count: number): number[];
+export const SOAK_FAILURE_EVENTS: RegExp;
+export const SOAK_RECORDING_FAILURES: readonly string[];
+export const SOAK_KEPT_FAILURE_ROWS: number;
+export interface SoakLogRow {event: string; [key: string]: unknown}
+export function compactSoakLogs(result: {mainEvents?: SoakLogRow[]; serviceEvents?: SoakLogRow[]; soak?: Record<string, unknown>}): void;
