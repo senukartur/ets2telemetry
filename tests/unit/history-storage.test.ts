@@ -399,6 +399,46 @@ describe('re-opening history storage after a recoverable stop (ET-037)', () => {
     }
   );
 
+  it('schedules retry on BACKUP_FAILED with retryable cause and re-opens when subsequent attempt succeeds', async () => {
+    const onOpened = vi.fn();
+    const states: string[] = [];
+    const backupError = storageError('BACKUP_FAILED', {cause: 'DATABASE_LOCKED'});
+    const f = fixture(
+      'C:\\isolated',
+      attempt => (attempt === 0 ? {ok: false, error: backupError} : {ok: true, value: SUMMARY}),
+      true,
+      {onOpened, onStateChange: s => states.push(s)}
+    );
+    f.history.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.history.state).toBe('unavailable');
+    expect(f.history.failureCode).toBe('BACKUP_FAILED');
+    expect(f.createWorker).toHaveBeenCalledTimes(1);
+    expect(onOpened).not.toHaveBeenCalled();
+
+    // At 249 ms, retry has not fired yet
+    await vi.advanceTimersByTimeAsync(249);
+    expect(f.createWorker).toHaveBeenCalledTimes(1);
+    expect(f.history.state).toBe('unavailable');
+
+    // At 250 ms, first retry fires and succeeds
+    await vi.advanceTimersByTimeAsync(1);
+    expect(f.createWorker).toHaveBeenCalledTimes(2);
+    expect(f.history.state).toBe('open');
+    expect(f.history.failureCode).toBeNull();
+    expect(f.history.client).toBeDefined();
+    expect(onOpened).toHaveBeenCalledOnce();
+    expect(states).toEqual(['opening', 'unavailable', 'opening', 'open']);
+    expect(f.events()).toEqual([
+      ['HISTORY_STORAGE_UNAVAILABLE', {code: 'BACKUP_FAILED'}],
+      ['HISTORY_STORAGE_OPENED', {schemaVersion: 1, created: true, migratedFrom: null}]
+    ]);
+
+    await f.history.close();
+    expect(f.history.state).toBe('closed');
+    expect(f.events().at(-1)).toEqual(['HISTORY_STORAGE_CLOSED', undefined]);
+  });
+
   it.each<StorageErrorCode>(['SCHEMA_NEWER', 'DATABASE_UNRECOGNIZED', 'PURPOSE_MISMATCH', 'PERMISSION_DENIED'])(
     'never schedules retry for non-retryable open refusal %s',
     async code => {
@@ -470,6 +510,7 @@ describe('re-opening history storage after a recoverable stop (ET-037)', () => {
     expect(f.createWorker).toHaveBeenCalledTimes(4);
     expect(f.history.state).toBe('unavailable');
     expect(f.history.failureCode).toBe('DATABASE_LOCKED');
+    expect(f.events()).toContainEqual(['HISTORY_STORAGE_REOPEN_EXHAUSTED', {attempts: 3, code: 'DATABASE_LOCKED'}]);
 
     await f.history.close();
     expect(f.history.state).toBe('closed');

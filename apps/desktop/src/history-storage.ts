@@ -3,7 +3,7 @@ import path from 'node:path';
 import {Worker} from 'node:worker_threads';
 import {version} from '../../../package.json';
 import type {JournalDatabase} from '../../../packages/contracts/src';
-import type {StorageErrorCode} from '../../../packages/storage/src/api';
+import type {StorageError, StorageErrorCode} from '../../../packages/storage/src/api';
 import {StorageClient, workerHandle, type ClientTimers, type StorageWorkerHandle} from '../../../packages/storage/src/client';
 import {isReopenRetryable, storageError} from '../../../packages/storage/src/errors';
 import type {DiagnosticFacts} from './diagnostics';
@@ -143,7 +143,7 @@ export class HistoryStorage {
         // The worker has nothing left to serve; end its thread now rather than at shutdown.
         void client.close();
         if (!this.#closing && isReopenRetryable(result.error)) {
-          this.#scheduleRetry();
+          this.#scheduleRetry(result.error);
         }
         return;
       }
@@ -161,10 +161,13 @@ export class HistoryStorage {
     });
   }
 
-  #scheduleRetry(): void {
+  #scheduleRetry(error: StorageError): void {
     if (this.#closing || this.#state === 'closed') return;
     const maxAttempts = this.options.maxReopenAttempts ?? MAX_HISTORY_REOPEN_ATTEMPTS;
-    if (this.#attempts >= maxAttempts) return;
+    if (this.#attempts >= maxAttempts) {
+      this.options.log('HISTORY_STORAGE_REOPEN_EXHAUSTED', undefined, {attempts: this.#attempts, code: error.code});
+      return;
+    }
     const backoffs = this.options.reopenBackoffMs ?? HISTORY_REOPEN_BACKOFF_MS;
     const delay = backoffs[Math.min(this.#attempts, backoffs.length - 1)];
     this.#attempts++;
