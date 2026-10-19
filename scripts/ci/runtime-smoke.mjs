@@ -21,6 +21,7 @@ import {assertNoGameRunning, buildPluginFixture, runDiagnosticsExport, runPlugin
 import {RECORDING_TARGET, runRecordingSmoke, startRecordingSource, verifyRecordingRestart, verifyRecordingRun} from './recording-observation.mjs';
 import {JOURNAL_TARGET, runJournalEmpty, runJournalExport, runJournalSeeded, seedJournalDatabase, verifyJournalRun} from './journal-observation.mjs';
 import {placeNewerHistory, runRefusalSmoke, verifyRefusalRun} from './refusal-observation.mjs';
+import {coldLaunchPhases, observeColdLaunch, observeProcessMemory} from './launch-evidence.mjs';
 import {installedEnvironment, minimalPath, normalizePath} from '../installer/installer-guard.mjs';
 // These read-only globals are used only inside serialized Playwright browser callbacks.
 /* global document: readonly, getComputedStyle: readonly, innerHeight: readonly, innerWidth: readonly */
@@ -47,6 +48,8 @@ let journalTarget;
 // ET-017 PR-5: the plugin scenario's fake Steam and game folders (plugin-fixture.mjs) and the snapshot run A compares against.
 let pluginFixture;
 let pluginBefore;
+// ET-019 PR-11: the first launch's process creation time and dashboard paint timing (launch-evidence.mjs).
+let coldLaunchObservation = null;
 const failure = error => ({name: error.name, message: error.message, stack: error.stack});
 /** The uninstall card of a portable or development copy: the warning, and the not-installed answer to its button. */
 async function verifyUninstallNotInstalled(page, press) {
@@ -144,6 +147,8 @@ try {
   await window.getByText('Telemetry service ready; isolated storage probe verified', {exact: true})
     .waitFor({state: 'visible', timeout: 10000});
   phase('dashboard-ready-visible');
+  // ET-019 PR-11: recorded, never asserted here; a failed read leaves the paint phases unavailable.
+  coldLaunchObservation = await observeColdLaunch(application, window).catch(() => ({error: 'OBSERVATION_FAILED'}));
   result.runtime = await application.evaluate(({app, BrowserWindow}) => {
     const preferences = BrowserWindow.getAllWindows()[0].webContents.getLastWebPreferences();
     return {versions: process.versions, packaged: app.isPackaged, rendererProcessLimit: app.commandLine.getSwitchValue('renderer-process-limit'),
@@ -503,6 +508,10 @@ try {
     phase('plugin-diagnostics-exported');
     await dashboard.screenshot({path: path.join(config.output, 'plugin.png')});
   }
+  // ET-019 PR-11: Electron's per-process peak working sets of the application open now (the restart run of the two-run
+  // scenarios); recorded, never asserted here.
+  result.processMemory = {run: ['lifecycle', 'recording', 'journal', 'plugin'].includes(config.scenario) ? 'restart' : 'first',
+    ...await observeProcessMemory(application).catch(() => ({error: 'OBSERVATION_FAILED'}))};
   phase('journey-complete');
   if (config.scenario !== 'lifecycle' && config.scenario !== 'recording' && config.scenario !== 'journal' && config.scenario !== 'plugin' && config.scenario !== 'refusal') await window.screenshot({path: path.join(config.output, 'ready.png')});
 } catch (error) {result.failure = failure(error); phase('failed');}
@@ -532,6 +541,8 @@ finally {
     // Preserve lifecycle evidence even when a later cleanup assertion fails.
     result.mainEvents = await diagnosticEvents(config.diagnostics);
     result.serviceEvents = await diagnosticEvents(path.join(config.diagnostics, 'service'));
+    // ET-019 PR-11: the first launch's phases from rows it already logs; kept even when a later postcondition fails.
+    result.coldLaunch = coldLaunchPhases({observation: coldLaunchObservation, driverPhases: result.phases, mainEvents: result.mainEvents, serviceEvents: result.serviceEvents});
     result.probesAfterExit = (await readdir(config.temp)).filter(name => name.startsWith('ets2telemetry-probe-'));
     const restartRecord = result.telemetry?.serviceRestartRecovered ? result.telemetry : result.recording?.serviceRestartRecovered ? result.recording : undefined;
     if (telemetrySource && restartRecord) {

@@ -30,7 +30,8 @@ const cases = [
   ...recordingCases(),
   ...journalCases(),
   ...refusalCases(),
-  ...installedCases()
+  ...installedCases(),
+  ...resourceCases()
 ];
 
 // ET-011a lifecycle receipts: one intact receipt, then single-field corruptions that must each fail.
@@ -695,15 +696,122 @@ function installedCases() {
   ];
 }
 
+// ET-019 PR-11: resource evidence. With a job-result.json named, as the wrapper always names it, a receipt must also carry
+// the Job's peak memory, the cold-launch phases and the per-process peak working sets. One intact receipt and job result
+// each (numbers from the first local packaged scaffold run), then single-field corruptions that must each fail.
+function coldLaunch(refusal = false): Json {
+  return {origin: 'main-process-created', originUtc: '2026-10-19T02:14:29.663Z', launchRequestedToOriginMs: 27,
+    phasesMs: {mainStarted: 50, mainReady: 100, serviceReady: 198, storageProbeVerified: 198, historyStorageOpened: refusal ? null : 202, firstWindowShown: 252,
+      dashboardLoaded: 350, rendererFirstPaint: 397, rendererFirstContentfulPaint: 521, dashboardReadyVisible: 447},
+    unavailable: refusal ? {historyStorageOpened: 'HISTORY_STORAGE_OPENED_NOT_LOGGED'} : {}, observationMs: 76};
+}
+function processMemory(run = 'first'): Json {
+  return {run, kinds: {main: {processes: 1, peakWorkingSetBytes: 119435264}, gpu: {processes: 1, peakWorkingSetBytes: 114659328},
+    otherUtility: {processes: 1, peakWorkingSetBytes: 48287744}, telemetryService: {processes: 1, peakWorkingSetBytes: 83406848},
+    renderer: {processes: 2, peakWorkingSetBytes: 122617856}}, unavailable: {storageWorker: 'WORKER_THREAD_OF_TELEMETRY_SERVICE'}, observationMs: 3};
+}
+function withResources(receipt: string, refusal = false, run = 'first'): Json {
+  return {...JSON.parse(receipt) as Record<string, Json>, coldLaunch: coldLaunch(refusal), processMemory: processMemory(run)};
+}
+function resourceReceipt(path: (string | number)[] = [], replacement?: Json): string {
+  return corrupt(withResources(scaffoldReceipt()), path, replacement);
+}
+function jobResult(path: (string | number)[] = [], replacement?: Json): string {
+  return corrupt({mode: 'packaged', scenario: 'scaffold', exitCode: 0, retries: 0, cpu: {samples: 30},
+    memory: {peakProcessMemoryBytes: 187506688, peakJobMemoryBytes: 593268736}}, path, replacement);
+}
+// A receipt whose cold-launch phase `name` is `value`, with `unavailable` as its reasons.
+function withPhase(name: string, value: Json, unavailable: Json = {}): string {
+  const launch = coldLaunch() as {phasesMs: Record<string, Json>};
+  return corrupt(withResources(scaffoldReceipt()), ['coldLaunch'], {...launch, phasesMs: {...launch.phasesMs, [name]: value}, unavailable});
+}
+function resourceCases() {
+  const reason = 'RESOURCE_EVIDENCE_INCOMPLETE_OR_INVALID';
+  const valid = {scenario: 'scaffold', code: 0, available: true, reason: null};
+  const rejected = {scenario: 'scaffold', code: 0, available: true, reason};
+  const invalid = (name: string, path: (string | number)[], replacement?: Json) =>
+    ({name: `resource ${name}`, body: resourceReceipt(path, replacement), jobResult: jobResult(), ...rejected});
+  const invalidJob = (name: string, path: (string | number)[], replacement?: Json) =>
+    ({name: `resource ${name}`, body: resourceReceipt(), jobResult: jobResult(path, replacement), ...rejected});
+  return [
+    {name: 'intact scaffold receipt with resource evidence', body: resourceReceipt(), jobResult: jobResult(), ...valid},
+    {name: 'intact refusal receipt with resource evidence and no history opening', body: JSON.stringify(withResources(refusalReceipt(), true)), jobResult: jobResult(),
+      ...valid, scenario: 'refusal'},
+    {name: 'intact lifecycle receipt with the restart run\'s process memory', body: JSON.stringify(withResources(lifecycleReceipt(), false, 'restart')), jobResult: jobResult(),
+      ...valid, scenario: 'lifecycle'},
+    {name: 'intact resource evidence with PowerShell 7 Int64 integers', body: resourceReceipt(), jobResult: jobResult(), numbers: 'int64' as const, ...valid},
+    {name: 'resource Job peak in KiB with Int64 integers', body: resourceReceipt(), jobResult: jobResult(['memory', 'peakJobMemoryBytes'], 579364), numbers: 'int64' as const,
+      ...rejected},
+    {name: 'intact resource evidence with the launch request as origin', body: resourceReceipt(['coldLaunch', 'origin'], 'launch-requested'), jobResult: jobResult(), ...valid},
+    {name: 'intact resource evidence with an unrecorded paint', jobResult: jobResult(), ...valid,
+      body: withPhase('rendererFirstContentfulPaint', null, {rendererFirstContentfulPaint: 'FIRST_CONTENTFUL_PAINT_NOT_RECORDED'})},
+    {name: 'resource evidence never hides a failed driver', body: resourceReceipt(['passed'], false), jobResult: jobResult(), ...rejected, reason: 'DRIVER_FAILED'},
+    {name: 'resource evidence never hides a failed scaffold card', body: resourceReceipt(['pluginCard', 'controlsDisabled'], false), jobResult: jobResult(), ...rejected,
+      reason: 'SCAFFOLD_PLUGIN_CARD_INVALID'},
+    {name: 'resource job result missing', body: resourceReceipt(), jobResult: null, ...rejected},
+    {name: 'resource job result malformed', body: resourceReceipt(), jobResult: '{invalid', ...rejected},
+    {name: 'resource job result as an array', body: resourceReceipt(), jobResult: '[]', ...rejected},
+    invalidJob('Job memory missing', ['memory']),
+    invalidJob('Job memory unavailable', ['memory'], {error: 'JOB_MEMORY_UNAVAILABLE'}),
+    invalidJob('Job peak in KiB', ['memory', 'peakJobMemoryBytes'], 579364),
+    invalidJob('Job peak in MiB', ['memory', 'peakJobMemoryBytes'], 566),
+    invalidJob('Job peak negative', ['memory', 'peakJobMemoryBytes'], -593268736),
+    invalidJob('Job peak above the 2 GiB limit', ['memory', 'peakJobMemoryBytes'], 2147483649),
+    invalidJob('Job peak fractional', ['memory', 'peakJobMemoryBytes'], 593268736.5),
+    invalidJob('Job peak as string', ['memory', 'peakJobMemoryBytes'], '593268736'),
+    invalidJob('process peak missing', ['memory', 'peakProcessMemoryBytes']),
+    invalidJob('process peak above the Job peak', ['memory', 'peakProcessMemoryBytes'], 593268737),
+    invalidJob('Job memory with an extra field', ['memory', 'path'], 'C:\\Users\\fixture'),
+    invalid('cold launch missing', ['coldLaunch']),
+    invalid('unknown origin', ['coldLaunch', 'origin'], 'unavailable'),
+    invalid('origin time missing', ['coldLaunch', 'originUtc']),
+    invalid('origin time not ISO', ['coldLaunch', 'originUtc'], 'Mon Oct 19 2026'),
+    invalid('launch request after the origin', ['coldLaunch', 'launchRequestedToOriginMs'], -1),
+    invalid('a phase missing', ['coldLaunch', 'phasesMs', 'serviceReady']),
+    invalid('an extra phase', ['coldLaunch', 'phasesMs', 'installPath'], 10),
+    invalid('a phase negative', ['coldLaunch', 'phasesMs', 'firstWindowShown'], -5),
+    invalid('a phase in microseconds', ['coldLaunch', 'phasesMs', 'dashboardLoaded'], 350000),
+    invalid('a phase fractional', ['coldLaunch', 'phasesMs', 'mainReady'], 100.5),
+    invalid('a phase as string', ['coldLaunch', 'phasesMs', 'mainStarted'], '50'),
+    invalid('phases missing', ['coldLaunch', 'phasesMs']),
+    invalid('reasons missing', ['coldLaunch', 'unavailable']),
+    {name: 'resource required phase unavailable', body: withPhase('serviceReady', null, {serviceReady: 'SERVICE_READY_NOT_LOGGED'}), jobResult: jobResult(), ...rejected},
+    {name: 'resource paint unavailable without a reason', body: withPhase('rendererFirstPaint', null), jobResult: jobResult(), ...rejected},
+    {name: 'resource paint reason not a fixed code', body: withPhase('rendererFirstPaint', null, {rendererFirstPaint: 'not painted in C:\\fixture'}), jobResult: jobResult(),
+      ...rejected},
+    {name: 'resource reason for a recorded phase', body: withPhase('rendererFirstPaint', 397, {rendererFirstPaint: 'FIRST_PAINT_NOT_RECORDED'}), jobResult: jobResult(), ...rejected},
+    {name: 'resource scaffold without a history opening', body: withPhase('historyStorageOpened', null, {historyStorageOpened: 'HISTORY_STORAGE_OPENED_NOT_LOGGED'}),
+      jobResult: jobResult(), ...rejected},
+    {name: 'resource refusal with a history opening', body: corrupt(withResources(refusalReceipt(), true), ['coldLaunch'], coldLaunch()), jobResult: jobResult(), ...rejected,
+      scenario: 'refusal'},
+    invalid('process memory missing', ['processMemory']),
+    invalid('process memory from the wrong run', ['processMemory', 'run'], 'restart'),
+    {name: 'resource lifecycle process memory from the first run', body: JSON.stringify(withResources(lifecycleReceipt())), jobResult: jobResult(), ...rejected,
+      scenario: 'lifecycle'},
+    invalid('telemetry service missing', ['processMemory', 'kinds', 'telemetryService']),
+    invalid('renderer missing', ['processMemory', 'kinds', 'renderer']),
+    invalid('main peak in KiB', ['processMemory', 'kinds', 'main', 'peakWorkingSetBytes'], 116636),
+    invalid('main peak negative', ['processMemory', 'kinds', 'main', 'peakWorkingSetBytes'], -1),
+    invalid('two main processes', ['processMemory', 'kinds', 'main', 'processes'], 2),
+    invalid('a kind with no process', ['processMemory', 'kinds', 'gpu', 'processes'], 0),
+    invalid('an unknown process kind', ['processMemory', 'kinds', 'storageWorker'], {processes: 1, peakWorkingSetBytes: 1048576}),
+    invalid('storage worker note missing', ['processMemory', 'unavailable'])
+  ];
+}
+
 it('requires an intact current driver receipt and normal Job exit without overwriting failed evidence', async () => {
   const resources = await temporaryResources();
   try {
     const receipts = cases.map((_, index) => path.join(resources.directory, `receipt-${index}.json`));
     for (const [index, scenario] of cases.entries()) if (scenario.body !== undefined) await writeFile(receipts[index], scenario.body);
+    // ET-019 PR-11: a case's job-result.json; null names the file without writing it.
+    const jobResults = cases.map((_, index) => path.join(resources.directory, `job-result-${index}.json`));
+    for (const [index, scenario] of cases.entries()) if ('jobResult' in scenario && typeof scenario.jobResult === 'string') await writeFile(jobResults[index], scenario.jobResult);
     // All cases share one PowerShell 5.1 validator process; see tests/shared/runtime-receipt-validator.ts.
     const results = await validateRuntimeReceipts(resources.directory, cases.map((scenario, index) =>
       ({receipt: receipts[index], code: scenario.code, ...('scenario' in scenario ? {scenario: scenario.scenario} : {}),
-        ...('numbers' in scenario ? {numbers: scenario.numbers} : {}), ...('mode' in scenario ? {mode: String(scenario.mode)} : {})})));
+        ...('numbers' in scenario ? {numbers: scenario.numbers} : {}), ...('mode' in scenario ? {mode: String(scenario.mode)} : {}),
+        ...('jobResult' in scenario ? {jobResult: jobResults[index]} : {})})));
     for (const [index, scenario] of cases.entries()) {
       expect(results[index], scenario.name).toMatchObject({passed: scenario.reason === null,
         driverResultAvailable: scenario.available, reason: scenario.reason});
