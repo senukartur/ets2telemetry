@@ -45,6 +45,8 @@ Since October 17, 2026 (ET-019t) the workflow has three jobs; from October 15 to
 | `windows-asan`, **Windows x64 native AddressSanitizer** | Pinned CMake, then the steps "SDK-independent console AddressSanitizer checks" (plugin `build-asan` tree, `-R asan-contract`) and "Separate native client AddressSanitizer controls" (client `build-asan` tree, `-R '^native-pipe-client-asan-'`) | `windows-asan-evidence-<run>-<attempt>`: `.local/ci` of this job (including `ctest-plugin-asan.xml` and `ctest-client-asan.xml`), ASan CTest diagnostics of both native trees | 20 min |
 | `windows-tests`, **Windows x64 tests** | `npm ci`, ESLint, PSScriptAnalyzer, typecheck and the Node-safe Vitest corpus, and the storage suite under Electron | `windows-tests-evidence-<run>-<attempt>`: `.local/ci` of this job (`vitest.xml`, `vitest-storage.xml`, `versions.json`) | 20 min |
 
+A fourth job, `windows-extended`, **Windows x64 extended campaigns**, runs only on pushes to `main` and on dispatch with `extended=true`, never on pull requests. It is not a required check; see [ET-019 extended campaigns](#et-019-extended-campaigns).
+
 The tests job needs no CMake and no native build: the Node-safe suite and the storage suite ran before `npm run build` in the single job too, and the storage suite bundles its own worker. Its steps moved from the scaffold job without changes: same commands, reporters, JUnit files and the storage step's 5-minute limit.
 
 The AddressSanitizer job uses no output of the scaffold job. Both CMake trees build their targets from the checkout, including the uninstrumented `snapshot-transport-test-plugin` and `snapshot-transport-hooked-test-plugin` DLLs that the ASan DLL cases load, and the tests read their fixtures from `tests/fixtures`. The job installs no npm dependencies and restores no cache; pinned Node is set up only for `scripts/ci/versions.mjs`, which writes this job's own `versions.json`. The two ASan steps moved without changes: same commands, target lists, CTest selections and per-test deadlines, in the same order, with no filter or retry. Since ET-019t the two build commands also pass CMake's `--parallel` and the two CTest commands `--output-junit`; targets, selections and per-test deadlines are unchanged. Because the Release and ASan client suites now run on different machines, the endpoint-name collision described in [the ET-006a section](#et-006a-native-client-and-live-smoke-implementation-candidate) cannot occur between them.
@@ -475,6 +477,40 @@ Audit of the other PowerShell-spawning tests:
 - No other Node test starts PowerShell. The native pipe and capture broker client tests replace `node:child_process` with mocks, and the CAP0 and protocol v1 chain integration tests start a project-built native host.
 
 Add new PowerShell-backed cases to an existing batch rather than starting a process per case, and keep each Vitest timeout above its child's bound.
+
+## ET-019 extended campaigns
+
+ET-019 PR-10 (October 19, 2026) adds the job `windows-extended`, check name **Windows x64 extended campaigns**, by owner decision D1 of October 18, 2026, with the campaign sizes of plan decision D4. It runs the seeded recovery and fuzz campaigns at sizes too long for a pull request:
+
+- **Condition.** `github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.extended)`: pushes to `main` and dispatch with `extended=true`. It never runs on `pull_request`, and a draft check dispatched with `extended=false` skips it.
+- **Not a required check.** The `Protect main` ruleset still requires only the three jobs above, whose names, conditions and steps are unchanged. A failure on `main` is a regression to investigate like any other failing check, but it does not gate a merge. A newer push to the same ref cancels the job through the workflow's concurrency group, and a cancelled or skipped run is not a passed campaign.
+- **PR sizes unchanged.** The PR run keeps the defaults: 4 recovery seeds, 2,000 fuzz inputs per case and native multiplier 1. The tests job's storage step is unchanged.
+
+| Step | Campaign | PR run | Extended job | Local wall time | Step budget |
+| --- | --- | --- | --- | ---: | ---: |
+| Native v1 producer fuzz, x50 | `v1-producer-test fuzz` (3,000 client, 2,000 record and 300 state rounds at x1) | x1 (CTest) | x50 | 27.0 s | 3 min |
+| Native v0 snapshot transport fuzz, x50 | `snapshot-transport-test fuzz` (96 mutated hellos at x1; the burst phase stays fixed) | x1 (CTest) | x50 | 4.8 s | 3 min |
+| Native v1 transport fuzz, x50 | `v1-transport-test fuzz` (40 mutated hellos and 40 mutated frames at x1) | x1 (CTest) | x50 | 119.9 s | 9 min |
+| Recovery campaign, 200 seeds | `tests/storage/trip-recorder-crash.test.ts` through `npm run test:storage` | 4 seeds | 200 seeds (`ETS2TELEMETRY_RECOVERY_SEEDS`) | 108 s | 8 min |
+| Protocol fuzz campaign, 200,000 inputs per case | `tests/unit/protocol-fuzz.test.ts` through `npm test` | 2,000 | 200,000 (`ETS2TELEMETRY_FUZZ_ITERATIONS`) | 547 s (609 s in PR-9) | 45 min |
+
+**Budgets.** Each step budget is the local wall time on the implementer's machine x 2.2 x 2, rounded up to whole minutes, at least 3 minutes. 2.2 is how much slower the slow hosted storage step was than a green hosted one ([storage suite headroom](validation/et-019.md#storage-suite-headroom-on-slow-hosted-runners-october-19-2026)), and the second factor is headroom. The one hosted-to-local ratio measured for a campaign file is within that product: `trip-recorder-crash.test.ts` took 12.2 s locally in PR-1 and 25.7 s and 41.5 s on those two hosted runs, 2.1 and 3.4 times. The single-thread speed of a hosted runner for the CPU-bound fuzz campaigns is not measured yet. The fuzz budget uses the slower of two local measurements, 609 s in PR-9. With the factor 2.2 the protocol fuzz, the longest campaign, is expected to take 20–22 minutes hosted, so it stays one step. A campaign whose hosted time exceeds about 30 minutes is split into separate steps of its cases or into shards instead of getting a longer budget ([TESTING.md](../TESTING.md#et-019-extended-campaigns--october-19-2026)). The job timeout of 80 minutes is the 68 minutes of step budgets plus 12 minutes for checkout, setup, `npm ci`, the native build and the upload; the expected job time is about 35–40 minutes. These are projections from local runs; the hosted times are recorded after the first dispatch.
+
+**Setup.** The job copies the setup of the tests job (pinned checkout, Node 24.19.0, the npm version check, the download cache and `npm ci`) and the pinned CMake acquisition of the scaffold job. It configures `native/telemetry-plugin/build` with `Visual Studio 17 2022` and builds only `v1-producer-test`, `snapshot-transport-test` and `v1-transport-test`. A step "Record campaign parameters" writes `.local/ci/extended-campaigns.json`. Each campaign step runs when its setup step succeeded, even after an earlier campaign failed, so one failure does not hide the others.
+
+**Native multiplier.** `ETS2TELEMETRY_NATIVE_FUZZ_MULTIPLIER` (`native/telemetry-plugin/tests/native-fuzz-multiplier.hpp`) multiplies the iteration counts of the three cases. Unset or empty means 1. Any other value than a decimal integer from 1 to 1000 fails the case with the variable's name and value, so a typo never runs the default campaign silently. Each case prints `fuzzMultiplier=` and its iteration counts. The seeds are unchanged. The extended job runs the executables directly, not through CTest: their CTest `TIMEOUT` properties (30 s for the snapshot transport, 60 s for the v1 cases) bound the x1 PR run, and the step budget bounds the x50 run. The CTest registrations and the AddressSanitizer job are unchanged and run at x1.
+
+**Evidence.** `windows-extended-evidence-<run>-<attempt>`, kept 14 days and uploaded even after a failure, holds `.local/ci`: `extended-campaigns.json` (source commit, recovery seeds 1 to 200, 200,000 fuzz inputs per case with the default seed 20261019, multiplier 50, native seeds fixed in source), `vitest-recovery-extended.xml`, `vitest-fuzz-extended.xml`, `native-fuzz-v1-producer.log`, `native-fuzz-snapshot-transport.log`, `native-fuzz-v1-transport.log` and `versions.json`. A recovery failure names its seed, scenario and kill point; a fuzz failure names its case, seed, iteration and input bytes.
+
+**Reproduction** from the repository root, with pinned Node on PATH and the Release plugin tree built:
+
+```powershell
+$env:ETS2TELEMETRY_RECOVERY_SEEDS = '200'; npm run test:storage -- tests/storage/trip-recorder-crash.test.ts -t "seed 137:"
+$env:ETS2TELEMETRY_FUZZ_ITERATIONS = '200000'; npx vitest run tests/unit/protocol-fuzz.test.ts
+$env:ETS2TELEMETRY_NATIVE_FUZZ_MULTIPLIER = '50'; & ./native/telemetry-plugin/build/Release/v1-transport-test.exe fuzz
+```
+
+**Replay.** No seeded replay campaign has a seed or size setting to enlarge. `tests/storage/replay-journal-export.test.ts` (ET-019 PR-5) replays ten fixed scenarios against hand-written rows; `tests/unit/trip-reducer-replay.test.ts` runs a fixed 150 seeds; the simulator and trip replay tests replay the fixed ET-005b corpus. They all run unchanged on every PR. The recovery campaign itself replays a corpus scenario through the reactive v1 simulator for each seed, with a seeded kill. The extended job therefore runs recovery and fuzz campaigns only; adding a size setting to a replay test is left to a later change.
 
 ## ET-005b protocol v1 simulator pipe smoke
 

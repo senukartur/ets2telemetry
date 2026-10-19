@@ -1008,6 +1008,23 @@ Changed tests: none. No existing assertion or expected value changed.
 
 RED, each applied alone to the product source and reverted, the file then byte-identical (`git hash-object`): the v1 frame decoder without its payload bound, v0 accepting any minor version, `decodeCap0Payload` letting a raw parser error escape, v0 `decodePayload` without its upper size bound, a CAP0 frame decoder that loses split headers, a 65,536-byte broker receipt bound, the strict JSON parser without its duplicate-member check, a string scanner that stops at a backslash (caught by the hang guard), both broker readers relaying a coalesced uncredited frame, the CAP0 reader accepting bytes after its receipt, and a v1 encoder writing a wrong length prefix. Each fails the file within the default 2,000 inputs. No parser defect was found. Commands, outcomes and findings are in [ET-019 validation](docs/validation/et-019.md#pr-9-seeded-mutation-fuzzing-of-the-typescript-frame-parsers-october-19-2026).
 
+## ET-019 extended campaigns — October 19, 2026
+
+ET-019 PR-10 runs the seeded campaigns at larger sizes in a fourth Windows CI job, **Windows x64 extended campaigns** (owner decision D1, sizes D4). It runs only on pushes to `main` and on dispatch with `extended=true`, never on pull requests, and it is not a required check: the three required jobs and the PR run's default sizes are unchanged. It changes test code, the workflow and documentation only: no product source, fixture or expected value. `GAME_HISTORY_RECORDING` stays `false`.
+
+| Campaign | Setting | PR run | Extended job |
+| --- | --- | --- | --- |
+| Killed-recorder recovery (`tests/storage/trip-recorder-crash.test.ts`) | `ETS2TELEMETRY_RECOVERY_SEEDS` | 4 seeds | 200 seeds |
+| TypeScript parser fuzz (`tests/unit/protocol-fuzz.test.ts`) | `ETS2TELEMETRY_FUZZ_ITERATIONS` | 2,000 inputs per case | 200,000 |
+| Native seeded fuzz (`snapshot-transport`, `v1-producer` and `v1-transport` `fuzz` cases) | `ETS2TELEMETRY_NATIVE_FUZZ_MULTIPLIER` | x1 | x50 |
+
+- **Native multiplier.** New in this PR. It multiplies the iteration counts of the three native cases and keeps their seeds. Unset or empty means 1; any value other than a decimal integer from 1 to 1000 fails the case with the variable's name and value, never a silent fallback. Each case prints its multiplier and iteration counts.
+- **Bounds.** Each campaign is its own step with a budget from local measurement (local time x 2.2 x 2, at least 3 minutes); the per-test timeouts are unchanged. The native cases run their executables directly in the extended job, because their CTest `TIMEOUT` bounds the x1 run. A campaign whose hosted time exceeds about 30 minutes is split into separate steps of its cases or into shards, following section 6, rather than given a longer budget.
+- **Replay.** No replay test has a seed or size setting, so the job runs recovery and fuzz only; the recovery campaign replays a corpus scenario through the reactive v1 simulator for every seed.
+- **Reproduction.** Set the same variable locally and run the same file or executable; a failure names its seed (recovery), its case, seed and iteration (fuzz), or its case and multiplier (native).
+
+The commands, budgets, evidence and reproduction are in [docs/ci.md](docs/ci.md#et-019-extended-campaigns); the measured times and RED checks in [ET-019 validation](docs/validation/et-019.md#pr-10-extended-seeded-campaigns-october-19-2026). The first hosted dispatch is pending.
+
 ## ET-019 history refusal through the service — October 19, 2026
 
 ET-019 PR-6 proves end to end that the telemetry service fails closed on a database it must not open. The storage core's refusals were already covered in process and through the bare worker (`migrations.test.ts`, `backup-restore.test.ts`, `worker.test.ts`); this PR drives them through the service's production wiring. It adds one test file and changes no product source, fixture, wire, schema, IPC or renderer code; `tests/storage/recording-helpers.ts` is unchanged. `GAME_HISTORY_RECORDING` stays `false`, and each case asserts it. Every case runs under a temporary LOCALAPPDATA, and the cases with a recording target assert that no `data\telemetry.sqlite` appears there. Expected values are written by hand from [storage](docs/storage.md) (the open sequence, migrations, backups and the history database in the telemetry service), [the telemetry service](docs/telemetry-service-v1.md) (the recording gate, G2, G3 and G10, journal queries) and [journal](docs/journal.md) (J11), never read back from the code under test (section 4).
