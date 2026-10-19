@@ -29,6 +29,7 @@ const cases = [
   ...pluginCases(),
   ...recordingCases(),
   ...journalCases(),
+  ...refusalCases(),
   ...installedCases()
 ];
 
@@ -572,6 +573,79 @@ function journalCases() {
     invalid('refused export logged with another code', ['journal', 'exportEvents', 3, 'facts', 'code'], 'EXPORT_WRITE_FAILED'),
     invalid('a second export failure in run 2', ['journal', 'restartMainEvents', 5], {event: 'JOURNAL_EXPORT_FAILED', facts: {code: 'EXPORT_WRITE_FAILED'}}),
     invalid('the refused export row missing from run 2', ['journal', 'restartMainEvents', 4], {event: 'JOURNAL_EXPORT_CANCELLED'})
+  ];
+}
+
+// ET-019 PR-7 refusal receipts: one intact receipt shaped like a real development run, then single-field corruptions. The
+// hash is the manifest entry of tests/fixtures/storage/schema-newer-999.sqlite. A function, because `cases` is built above.
+function newerFixtureSha256(): string {return '25588c340d06ef351b6c03cb7cf987fa315b7463e8b67bfcb0b50226eae25331';}
+function refusalReceipt(path: (string | number)[] = [], replacement?: Json): string {
+  const header = (): Json => ({magic: 'SQLite format 3', applicationId: 1163154226, userVersion: 999});
+  const refused = (): Json => ({ok: false, code: 'DATABASE_UNAVAILABLE', storageCode: 'SCHEMA_NEWER'});
+  const step = (phase: string, name: string): Json => ({event: 'SHUTDOWN_STEP', facts: {phase, name, outcome: 'ok', ms: 0}});
+  return corrupt({passed: true, commit: 'candidate', mode: 'packaged', scenarioKind: 'refusal', launcherExit: 0, probesAfterExit: [],
+    mainEvents: [{event: 'APP_START'}, {event: 'RECORDING_STATUS', facts: {state: 'disabled'}}, {event: 'APP_EXIT_REQUESTED', facts: {reason: 'app-quit'}},
+      {event: 'SERVICE_EXIT', detail: {code: 0}}, {event: 'APP_EXIT', detail: {code: 0}}],
+    serviceEvents: [{event: 'SERVICE_BOOT'}, {event: 'HISTORY_STORAGE_UNAVAILABLE', facts: {code: 'SCHEMA_NEWER'}}, {event: 'STORAGE_VERIFIED'},
+      {event: 'SERVICE_REPORT', detail: {type: 'ready'}}, step('intake', 'ingestion'), step('intake', 'capture'), step('intake', 'v1-ingestion'),
+      step('flush', 'recording-flush'), step('storage', 'history-storage'), step('storage', 'storage-probe'), {event: 'SERVICE_REPORT', detail: {type: 'stopped', clean: true}}],
+    refusal: {placed: {fixture: 'schema-newer-999.sqlite', manifestSha256: newerFixtureSha256(), fixtureSha256After: newerFixtureSha256(), sha256: newerFixtureSha256(),
+      bytes: 8192, header: header()}, fixtureUnchanged: true, placedAtHistoryPath: true,
+    bridge: {list: refused(), detail: refused(), events: refused()}, bridgeRefused: true,
+    health: {service: 'ready', storage: 'verified', recording: {state: 'disabled'}, lastError: null}, healthConsistent: true,
+    recordingText: {headline: 'Off: this version does not record game history', detail: null, losses: null, alert: null,
+      notice: 'Prototype live display. No trip recording or durable history.'}, recordingDisabledShown: true,
+    journal: {error: 'The database is unavailable: the database was written by a newer version.', empty: null, emptyNote: null, banner: null, rows: 0, next: false,
+      previous: false}, journalRefusalShown: true,
+    historyEvents: {unavailable: [{code: 'SCHEMA_NEWER'}], opened: 0, closed: 0, targets: 0, historyStep: ['ok']}, recordingStatusRows: [{state: 'disabled'}],
+    file: {sha256After: newerFixtureSha256(), bytesAfter: 8192, header: header(), dataEntries: ['telemetry.sqlite'], backups: false}, fileUnchanged: true, shutdownClean: true}},
+  path, replacement);
+}
+function refusalCases() {
+  const invalid = (name: string, path: (string | number)[], replacement?: Json) =>
+    ({name: `refusal ${name}`, body: refusalReceipt(path, replacement), scenario: 'refusal', code: 0, available: true, reason: 'REFUSAL_RESULT_INCOMPLETE_OR_INVALID'});
+  return [
+    {name: 'intact refusal receipt', body: refusalReceipt(), scenario: 'refusal', code: 0, available: true, reason: null},
+    {name: 'intact refusal receipt with PowerShell 7 Int64 integers', body: refusalReceipt(), scenario: 'refusal', numbers: 'int64' as const, code: 0, available: true, reason: null},
+    {name: 'refusal file grown with Int64 integers', body: refusalReceipt(['refusal', 'file', 'bytesAfter'], 12288), scenario: 'refusal', numbers: 'int64' as const, code: 0,
+      available: true, reason: 'REFUSAL_RESULT_INCOMPLETE_OR_INVALID'},
+    {name: 'scaffold receipt cannot prove the refusal', body: refusalReceipt(['scenarioKind'], 'scaffold'), scenario: 'refusal', code: 0, available: true,
+      reason: 'DRIVER_RESULT_SCENARIO_MISMATCH'},
+    {name: 'refusal receipt cannot prove the journal', body: refusalReceipt(), scenario: 'journal', code: 0, available: true, reason: 'DRIVER_RESULT_SCENARIO_MISMATCH'},
+    invalid('result missing', ['refusal']),
+    invalid('journal flag missing', ['refusal', 'journalRefusalShown']),
+    invalid('file flag as string', ['refusal', 'fileUnchanged'], 'true'),
+    invalid('another fixture placed', ['refusal', 'placed', 'fixture'], 'schema-v2-representative.sqlite'),
+    invalid('fixture changed by the copy', ['refusal', 'placed', 'fixtureSha256After'], '0'.repeat(64)),
+    invalid('file changed by the open', ['refusal', 'file', 'sha256After'], 'f'.repeat(64)),
+    invalid('file grown', ['refusal', 'file', 'bytesAfter'], 12288),
+    invalid('file migrated to version 2', ['refusal', 'file', 'header', 'userVersion'], 2),
+    invalid('WAL file beside the database', ['refusal', 'file', 'dataEntries'], ['telemetry.sqlite', 'telemetry.sqlite-wal']),
+    invalid('shared-memory file beside the database', ['refusal', 'file', 'dataEntries'], ['telemetry.sqlite', 'telemetry.sqlite-shm']),
+    invalid('database removed', ['refusal', 'file', 'dataEntries'], []),
+    invalid('backup taken', ['refusal', 'file', 'backups'], true),
+    invalid('journal list as an empty page', ['refusal', 'bridge', 'list'], {ok: true, value: {database: {purpose: 'history', schemaVersion: 2}, trips: [], nextCursor: null}}),
+    invalid('detail refused with another storage code', ['refusal', 'bridge', 'detail', 'storageCode'], 'DATABASE_UNRECOGNIZED'),
+    invalid('events still opening', ['refusal', 'bridge', 'events', 'code'], 'DATABASE_OPENING'),
+    invalid('Journal tab shows an empty list', ['refusal', 'journal'], {error: null, empty: 'No trips recorded',
+      emptyNote: 'Game history recording is off in this version, so no game trips are recorded yet.', banner: null, rows: 0, next: false, previous: false}),
+    invalid('Journal tab shows another cause', ['refusal', 'journal', 'error'], 'The database is unavailable: an internal error occurred.'),
+    invalid('Journal tab with a row', ['refusal', 'journal', 'rows'], 1),
+    invalid('recording shown as stopped', ['refusal', 'recordingText', 'headline'], 'Stopped: the database was written by a newer version. Restart ETS2Telemetry after fixing it'),
+    invalid('recording alert shown', ['refusal', 'recordingText', 'alert'], 'Recording problem'),
+    invalid('health recording stopped', ['refusal', 'health', 'recording'], {state: 'stopped', target: 'history', code: 'SCHEMA_NEWER',
+      losses: {lostEvents: 0, eventLoss: 0, notConnected: 0, sampleLoss: 0, restoreLoss: 0, droppedSamples: 0}, trip: null}),
+    invalid('health with a last error', ['refusal', 'health', 'lastError'], 'STORAGE_FAILED'),
+    invalid('health self-test failed', ['refusal', 'health', 'storage'], 'failed'),
+    invalid('main reported opening', ['refusal', 'recordingStatusRows'], [{state: 'opening'}, {state: 'disabled'}]),
+    invalid('refusal logged twice', ['serviceEvents', 11], {event: 'HISTORY_STORAGE_UNAVAILABLE', facts: {code: 'SCHEMA_NEWER'}}),
+    invalid('refused with another code', ['serviceEvents', 1, 'facts', 'code'], 'DATABASE_UNRECOGNIZED'),
+    invalid('history opened', ['serviceEvents', 11], {event: 'HISTORY_STORAGE_OPENED', facts: {schemaVersion: 2, created: false, migratedFrom: 999}}),
+    invalid('a recording target opened', ['serviceEvents', 0], {event: 'RECORDING_TARGET', facts: {purpose: 'synthetic'}}),
+    invalid('history step failed', ['serviceEvents', 8, 'facts', 'outcome'], 'failed'),
+    invalid('service stopped unclean', ['serviceEvents', 10, 'detail', 'clean'], false),
+    invalid('application exited nonzero', ['launcherExit'], 1),
+    invalid('a probe left behind', ['probesAfterExit'], ['ets2telemetry-probe-1'])
   ];
 }
 
