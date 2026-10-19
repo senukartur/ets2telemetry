@@ -1,6 +1,7 @@
 #include "protocol-v1-producer.hpp"
 #include "protocol-v1-delivery.hpp"
 #include "protocol-json.hpp"
+#include "native-fuzz-multiplier.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -844,8 +845,10 @@ void fuzz_case(const Fixtures& f) {
   std::vector<std::string> corpus;
   for (const auto& row : rows(read(f.dir / "manifest.txt"))) if (row.size() == 2 && row[1] == "valid-client") corpus.push_back(read(f.dir / row[0]));
   check(corpus.size() >= 8, "client corpus");
+  // ETS2TELEMETRY_NATIVE_FUZZ_MULTIPLIER multiplies the three seeded loops below (3,000, 2,000 and 300 rounds on a PR run).
+  const unsigned multiplier = ets2telemetry::test::native_fuzz_multiplier();
   std::mt19937_64 random(0xC11E47ULL); unsigned decoded = 0, accepted = 0, released = 0;
-  for (unsigned round = 0; round < 3000; ++round) {
+  for (unsigned round = 0; round < 3000 * multiplier; ++round) {
     auto bytes = corpus[random() % corpus.size()];
     for (auto ops = 1 + random() % 3; ops--;) {
       const auto at = bytes.empty() ? 0 : random() % bytes.size();
@@ -921,7 +924,7 @@ void fuzz_case(const Fixtures& f) {
     records::SimulationPaused{}, records::SimulationStarted{}, records::TimersRestart{}, records::GameTimeRegression{}, records::JobDelivered{}, records::JobCancelled{},
     records::PlayerFined{}, records::PlayerTollgatePaid{}, records::PlayerUseFerry{}, records::PlayerUseTrain{}, records::SourceGameMode{}};
   EventStore sink; sink.connect();
-  for (unsigned round = 0; round < 2000; ++round) {
+  for (unsigned round = 0; round < 2000 * multiplier; ++round) {
     auto e = make_event(sink.next_event_seq(), bases[round % std::size(bases)], 1000149000000ULL);
     std::visit([&](auto& r) { mutate(r); }, e.record); if (records_random() % 3 == 0) mutate(e.occurred);
     const auto size = encoder.measure_event(e);
@@ -936,13 +939,14 @@ void fuzz_case(const Fixtures& f) {
     check_store(sink);
   }
   check(sendable > 0 && failed > 0, "both outcomes exercised");
-  for (unsigned round = 0; round < 300; ++round) {
+  for (unsigned round = 0; round < 300 * multiplier; ++round) {
     auto s = minimal_state(); mutate(s); s.game_time.clock_id = make_uuid(GAME_CLOCK);
     StoreStatus d; d.next_event_seq = 1 + records_random() % 1000;
     const auto frame = encode(encoder.checkpoint(1, 1, s, StatusInfo{{}, records_random() % 2 != 0, d, {}}));
     check(frame.size() - 4 <= limits.server_frame_bytes, "mutated state encodes");
   }
   auto bad_clock = minimal_state(); bad_clock.game_time.clock_id = Uuid{}; rejects([&] { encode(encoder.snapshot(1, 1, bad_clock, StatusInfo{})); }, "state game clock must be a UUID");
+  std::cout << "fuzzMultiplier=" << multiplier << " clientRounds=" << 3000 * multiplier << " recordRounds=" << 2000 * multiplier << " stateRounds=" << 300 * multiplier << "; ";
   std::cout << decoded << " decoded client mutations, " << accepted << " accepted ACKs; " << sendable << " sendable and " << failed << " unsendable mutated records; ";
 }
 }

@@ -8,6 +8,7 @@
 #include "capture-wire.hpp"
 #include "snapshot-wire.hpp"
 #include "protocol-json.hpp"
+#include "native-fuzz-multiplier.hpp"
 #include "common/scssdk_telemetry_common_gameplay_events.h"
 #include <psapi.h>
 #include <tlhelp32.h>
@@ -677,9 +678,11 @@ void ack_control() {
 
 // Seeded mutations of the hello and of post-checkpoint client frames: each closes or is a valid frame; the endpoint relistens.
 void fuzz() {
+  // ETS2TELEMETRY_NATIVE_FUZZ_MULTIPLIER multiplies both loops (40 mutated hellos and 40 mutated frames on a PR run).
+  const unsigned multiplier = ets2telemetry::test::native_fuzz_multiplier(), rounds = 40 * multiplier;
   Fixture f; f.start(); std::uint32_t random = 0x5a17c0de; auto next = [&] { random = random * 1664525U + 1013904223U; return random; };
   unsigned hello_closed = 0, hello_served = 0;
-  for (unsigned i = 0; i < 40; ++i) {
+  for (unsigned i = 0; i < rounds; ++i) {
     auto bytes = framed(hello_payload(true)); const auto offset = 4 + next() % (bytes.size() - 4);
     switch (next() % 3) { case 0: bytes[offset] = static_cast<std::uint8_t>(1 + next() % 7); break; case 1: bytes[offset] ^= static_cast<std::uint8_t>(1u << (next() % 8)); break; default: bytes.resize(offset); bytes[0] = static_cast<std::uint8_t>(bytes.size() - 4); break; }
     auto c = f.client(true); send(c->pipe.get(), bytes);
@@ -687,7 +690,7 @@ void fuzz() {
     c.reset(); require(f.listening(), "relisten after a mutated hello");
   }
   unsigned frame_closed = 0, frame_kept = 0;
-  for (unsigned i = 0; i < 40; ++i) {
+  for (unsigned i = 0; i < rounds; ++i) {
     auto c = f.client(true); c->handshake();
     auto bytes = framed(i % 2 ? ack_payload(c->session(), 0) : probe_payload(1 + i)); const auto offset = next() % bytes.size();
     bytes[offset] ^= static_cast<std::uint8_t>(1u << (next() % 8));
@@ -698,7 +701,7 @@ void fuzz() {
     if (closed) ++frame_closed; else ++frame_kept;
     c.reset(); require(f.listening(), "relisten after a mutated frame");
   }
-  std::cout << "mutatedHelloClosed=" << hello_closed << " served=" << hello_served << " mutatedFrameClosed=" << frame_closed << " kept=" << frame_kept << '\n';
+  std::cout << "fuzzMultiplier=" << multiplier << " rounds=" << rounds << " mutatedHelloClosed=" << hello_closed << " served=" << hello_served << " mutatedFrameClosed=" << frame_closed << " kept=" << frame_kept << '\n';
   require(hello_closed > 0 && frame_closed > 0, "mutations are rejected");
   auto valid = f.client(true); valid->handshake(); cancelled(f.host, 2); f.host.frame();
   require(valid->read_until([&] { return valid->covered() == valid->messages[1].state->status.delivery.next_event_seq + 1; }), "a valid client is served after the fuzz");
