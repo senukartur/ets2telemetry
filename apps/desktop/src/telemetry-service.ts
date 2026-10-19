@@ -247,7 +247,7 @@ port.on('message', event => {
   } else if (command?.type === 'journal') {
     for (const transferred of event.ports) transferred.close();
     journal.receive(command, reply => port.postMessage(reply));
-  } else if ((process.env.ETS2TELEMETRY_LIVE_SMOKE === '1' || Boolean(process.env.ETS2TELEMETRY_DIAGNOSTIC_DIR)) && command?.type === 'diagnostic-freeze') {
+  } else if (process.env.ETS2TELEMETRY_LIVE_SMOKE === '1' && command?.type === 'diagnostic-freeze') {
     for (const transferred of event.ports) transferred.close();
     const duration = typeof command.ms === 'number' && Number.isFinite(command.ms) && command.ms > 0 ? command.ms : 10000;
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, duration);

@@ -9,9 +9,11 @@
 
 export const HEARTBEAT_INTERVAL_MS = 1000;
 export const HEARTBEAT_TIMEOUT_MS = 5000;
+export const STARTUP_TIMEOUT_MS = 15000;
 
 export interface ServiceHeartbeatMonitorOptions {
   timeoutMs?: number;
+  startupTimeoutMs?: number;
   setTimeout?: (callback: () => void, ms: number) => unknown;
   clearTimeout?: (timer: unknown) => void;
   onTimeout: () => void;
@@ -20,6 +22,7 @@ export interface ServiceHeartbeatMonitorOptions {
 
 export class ServiceHeartbeatMonitor {
   readonly timeoutMs: number;
+  readonly startupTimeoutMs: number;
   private readonly setTimer: (callback: () => void, ms: number) => unknown;
   private readonly clearTimer: (timer: unknown) => void;
   private readonly onTimeoutCallback: () => void;
@@ -28,9 +31,11 @@ export class ServiceHeartbeatMonitor {
   private timer: unknown = undefined;
   private _timedOut = false;
   private _active = false;
+  private _hasReceivedFirstMessage = false;
 
   constructor(options: ServiceHeartbeatMonitorOptions) {
     this.timeoutMs = options.timeoutMs ?? HEARTBEAT_TIMEOUT_MS;
+    this.startupTimeoutMs = options.startupTimeoutMs ?? STARTUP_TIMEOUT_MS;
     this.setTimer = options.setTimeout ?? ((cb, ms) => setTimeout(cb, ms));
     this.clearTimer = options.clearTimeout ?? (t => clearTimeout(t as ReturnType<typeof setTimeout>));
     this.onTimeoutCallback = options.onTimeout;
@@ -47,23 +52,26 @@ export class ServiceHeartbeatMonitor {
 
   /**
    * Starts monitoring liveness for an attached service child.
+   * Arms with the startup deadline (15,000 ms) until the first message is received.
    */
   start(): void {
     this.stop();
     this._active = true;
     this._timedOut = false;
-    this.arm();
+    this._hasReceivedFirstMessage = false;
+    this.arm(this.startupTimeoutMs);
   }
 
   /**
    * Records receipt of any message from the monitored service child, proving event loop liveness.
-   * If the service was previously timed out, onResume is fired.
+   * Transitions to the steady-state deadline (5,000 ms) and fires onResume if previously timed out.
    */
   touch(): void {
     if (!this._active) return;
+    this._hasReceivedFirstMessage = true;
     const wasTimedOut = this._timedOut;
     this._timedOut = false;
-    this.arm();
+    this.arm(this.timeoutMs);
     if (wasTimedOut) {
       this.onResumeCallback?.();
     }
@@ -82,17 +90,18 @@ export class ServiceHeartbeatMonitor {
   stop(): void {
     this._active = false;
     this._timedOut = false;
+    this._hasReceivedFirstMessage = false;
     this.disarm();
   }
 
-  private arm(): void {
+  private arm(delayMs: number): void {
     this.disarm();
     this.timer = this.setTimer(() => {
       this.timer = undefined;
       if (!this._active) return;
       this._timedOut = true;
       this.onTimeoutCallback();
-    }, this.timeoutMs);
+    }, delayMs);
   }
 
   private disarm(): void {

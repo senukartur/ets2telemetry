@@ -897,4 +897,20 @@ describe('ET-036 telemetry service heartbeat and diagnostic freeze', () => {
       vi.unstubAllEnvs();
     }
   });
+
+  it('ignores diagnostic-freeze when ETS2TELEMETRY_LIVE_SMOKE is not 1 even with diagnostic dir', async () => {
+    vi.stubEnv('ETS2TELEMETRY_DIAGNOSTIC_DIR', 'C:\\dummy-dir');
+    const f = await stoppedService(stopProbe);
+    try {
+      const waitSpy = vi.spyOn(Atomics, 'wait').mockReturnValue('timed-out');
+      f.parent.emit('message', {data: {type: 'diagnostic-freeze', ms: 500}, ports: []});
+      expect(waitSpy).not.toHaveBeenCalled();
+      waitSpy.mockRestore();
+    } finally {
+      f.stop();
+      await vi.advanceTimersByTimeAsync(0);
+      f.restore();
+      vi.unstubAllEnvs();
+    }
+  });
 });

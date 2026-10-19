@@ -646,6 +646,7 @@ function runApplication(profileError: unknown): void {
     if (!parsed) {
       const count = ++rejectedRecording;
       if ((count & (count - 1)) === 0) log('RECORDING_STATUS_REJECTED', undefined, {count});
+      lastKnownRecordingStatus = undefined;
       updateHealth({type: 'recording', status: {state: 'unknown'}});
       return;
     }

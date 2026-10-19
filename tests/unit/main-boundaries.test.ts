@@ -1840,6 +1840,27 @@ it('clears cached recording status on service restart or exit', async () => {
   expect(healthOf()).toEqual({state: 'unknown'});
 });
 
+it('does not restore a previously valid status on resume after a rejected report', async () => {
+  await ready();
+  report(recordingStatus('recording'));
+  expect(healthOf()).toEqual(recordingStatus('recording'));
+
+  // Rejected report clears cached status and marks health unknown
+  report({state: 'invalid-state'});
+  expect(healthOf()).toEqual({state: 'unknown'});
+
+  // Heartbeat timeout occurs
+  await vi.advanceTimersByTimeAsync(5000);
+  expect(healthOf()).toEqual({state: 'unknown'});
+  expect(log).toHaveBeenCalledWith('SERVICE_HEARTBEAT_TIMEOUT');
+
+  // Heartbeat resumes -> does not restore the rejected status, leaves unknown
+  child.emit('message', {type: 'heartbeat'});
+  expect(log).toHaveBeenCalledWith('SERVICE_HEARTBEAT_RESUMED');
+  expect(healthOf()).toEqual({state: 'unknown'});
+});
+
+
 
 // ET-016 PR-3 (J4, J10, J11): five fixed journal channels from the trusted dashboard main frame only, routed to the current
 // ready service on its parent port; main checks every reply strictly. Expected values are written by hand.
