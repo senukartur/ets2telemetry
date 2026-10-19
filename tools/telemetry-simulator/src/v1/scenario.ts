@@ -123,7 +123,8 @@ function policy(v: unknown, path: string, connectAt: number): ClientPolicy & {pr
   return {durable, commit, ack, probes};
 }
 
-function sourceStep(v: unknown, path: string, source: Scenario['source']): SourceStep {
+/** Validates one source step and rebuilds it from validated fields; the generated soak timeline (soak.ts) uses it too. */
+export function sourceStep(v: unknown, path: string, source: Scenario['source']): SourceStep {
   const action = oneOf(obj(v, path, ['atMs', 'action'], ['id', 'attributes', 'list', 'repeat', 'event', 'timerRestart', 'channels', 'mode', 'method', 'confidence', 'module',
     'count', 'full', 'deltaMs', 'durationMs', 'sourceClockAdvances', 'reason']).action, `${path}.action`,
   ['configuration', 'gameplay', 'lifecycle', 'frame', 'gameMode', 'encodingFailure', 'handoff', 'utcJump', 'suspend', 'shutdown'] as const);
@@ -166,7 +167,8 @@ function sourceStep(v: unknown, path: string, source: Scenario['source']): Sourc
     case 'shutdown': { const o = obj(v, path, ['atMs', 'action', 'reason']); return {atMs: at(o), action, reason: oneOf(o.reason, `${path}.reason`, ['plugin-shutdown', 'source-retired'] as const)}; }
   }
 }
-function transportStep(v: unknown, path: string, faultInjection: boolean): TransportStep {
+/** Validates one transport step and rebuilds it from validated fields; the generated soak timeline (soak.ts) uses it too. */
+export function transportStep(v: unknown, path: string, faultInjection: boolean): TransportStep {
   const o = obj(v, path, ['atMs', 'action'], ['client', 'fault']), atMs = int(o.atMs, `${path}.atMs`, 0, MAX_AT_MS);
   const action = oneOf(o.action, `${path}.action`, ['connect', 'disconnect', 'clientFault', 'wireFault', 'secondClient', 'writeDeadline'] as const);
   switch (action) {

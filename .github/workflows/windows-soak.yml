@@ -1,0 +1,77 @@
+name: Windows soak
+# ET-019 PR-12a (docs/ci.md#et-019-recording-soak-workflow-dispatch-only): a manual, long-running soak. It never runs on
+# pull requests or pushes and is not a required check. GitHub dispatches a workflow only once its file exists on the
+# default branch, so this file lands on main before ET-019 PR-12b extends it with the packaged application soak.
+on:
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: Soak length in whole minutes, 1 to 90
+        type: number
+        default: 30
+permissions:
+  contents: read
+concurrency:
+  # One soak per ref at a time; a second dispatch waits instead of cancelling a run that may be nearly done.
+  group: windows-soak-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  soak:
+    name: Windows x64 recording soak
+    runs-on: windows-2022
+    # Up to 100 minutes of soak (90 minutes of cycles plus the 300 s tail, bounded inside by RunExtended) and setup.
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      npm_config_cache: ${{ github.workspace }}\.local\cache\npm
+      electron_config_cache: ${{ github.workspace }}\.local\cache\electron
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+      ETS2TELEMETRY_SOURCE_COMMIT: ${{ github.sha }}
+      # Passed through the environment and validated in the step, never expanded into a script.
+      SOAK_MINUTES: ${{ inputs.minutes }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: '24.19.0'
+          architecture: x64
+          package-manager-cache: false
+      - name: Validate the soak length
+        run: |
+          if ($env:SOAK_MINUTES -notmatch '^[0-9]{1,2}$' -or [int]$env:SOAK_MINUTES -lt 1 -or [int]$env:SOAK_MINUTES -gt 90) { throw 'minutes must be a whole number from 1 to 90.' }
+      - name: Acquire checksum-pinned CMake 4.3.1 x64
+        run: ./scripts/ci/Install-CMake.ps1
+      - name: Verify pinned npm and record host versions
+        run: |
+          if ((npm --version) -ne '11.17.0') { throw 'Expected npm 11.17.0 bundled with pinned Node.' }
+          node scripts/ci/versions.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            .local/cache/npm
+            .local/cache/electron
+          key: download-${{ runner.os }}-x64-node24.19.0-abi137-electron44.7.0-abi149-${{ hashFiles('package-lock.json', 'tools/lint/package-lock.json') }}
+      - name: Clean lockfile installation
+        run: npm ci
+      - name: Build the protocol v1 simulator
+        run: |
+          npm run build --workspace @ets2telemetry/telemetry-simulator
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      # Static: a step timeout cannot be computed from the input. 100 minutes cover the longest soak, 95 minutes.
+      - name: Protocol v1 simulator source soak
+        timeout-minutes: 100
+        run: ./scripts/ci/Invoke-SoakSource.ps1 -Minutes ([int]$env:SOAK_MINUTES)
+      - name: Record final versions and duration
+        if: always()
+        run: node scripts/ci/versions.mjs
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: windows-soak-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .local/ci
+          retention-days: 14
+          if-no-files-found: error
+          include-hidden-files: true

@@ -8,7 +8,8 @@
 // then closes. It compares nothing itself; `reactiveDifferences` compares its transcript with `replay-v1` as plan item 7
 // claims: events, gaps, checkpoints and `end` byte-identical except the message `seq` (a client's own clock probes add
 // replies), snapshots equal in state and continuity. Client faults, wire faults and stalls script a client and exist
-// only in lockstep mode (pipe.ts).
+// only in lockstep mode (pipe.ts). ET-019 PR-12a adds a soak mode for long generated timelines with bounded memory
+// (ReactiveSoakOptions, soak.ts); without it nothing here changes.
 import net from 'node:net';
 import {randomUUID} from 'node:crypto';
 import {FrameDecoder, GAP_RECORD_BYTES, ProtocolError, V1_LIMITS, type ProtocolMessage, type ServerMessage} from '../../../../packages/contracts/src/protocol-v1';
@@ -40,12 +41,33 @@ export interface ReactiveServeOptions {
   settleTimeoutMs?: number;
   /** How long a scripted connect waits for a client: 1 to 600,000 ms, default 30,000. */
   connectTimeoutMs?: number;
+  /** Soak mode (ET-019 PR-12a, soak.ts); see ReactiveSoakOptions. Off by default. */
+  soak?: ReactiveSoakOptions;
   signal?: AbortSignal;
+}
+/**
+ * Soak mode serves a generated timeline instead of the scenario's steps, for runs far beyond the scenario bounds
+ * (MAX_STEPS, MAX_TRANSCRIPT_MESSAGES). Memory stays bounded: the entries are read one at a time and dropped, no transcript
+ * is kept, only counters (`SoakStatus`). `reactiveConflicts` is not run over the generated timeline; a test runs it on a
+ * reduced-frame cycle. A live-only hello for a durable scripted connection ends that attempt and is counted
+ * (`refusedLiveOnly`) instead of failing the run, as the desktop service sends one while its storage opens (R10).
+ */
+export interface ReactiveSoakOptions {
+  /** Time-ordered entries, each already checked by the per-step validators; the scenario's own steps must be empty. */
+  entries: Iterable<TimelineEntry>;
+}
+/** The counters of a soak run; eventSeqs are decimal strings, `0` before the first. */
+export interface SoakStatus {
+  scenarioMs: number; lastEventSeq: string; maxAckThroughEventSeq: string; ackCount: number; snapshots: number; connections: number; refusedLiveOnly: number;
+  /** Written messages by kind, server and client direction. */
+  messages: {server: Record<string, number>; client: Record<string, number>};
 }
 export type ReactiveClosedBy = 'disconnect' | 'client' | 'end' | 'serverRejected' | 'writeDeadline' | 'open';
 export interface ReactiveConnection {connection: number; durable: boolean; clientInstanceId: string; closedBy: ReactiveClosedBy; rejectedAttempts: number}
-export interface ReactiveReport {scenario: Scenario; transcript: TranscriptLine[]; connections: ReactiveConnection[]; refusedClients: number; cancelled: boolean}
-export interface ReactivePipeServer {endpoint: string; done: Promise<ReactiveReport>; stop: () => Promise<void>}
+/** In soak mode `transcript` stays empty and `soak` carries the counters. */
+export interface ReactiveReport {scenario: Scenario; transcript: TranscriptLine[]; connections: ReactiveConnection[]; refusedClients: number; cancelled: boolean; soak?: SoakStatus}
+/** `status` reads the counters of a soak run while it is served; it exists only in soak mode. */
+export interface ReactivePipeServer {endpoint: string; done: Promise<ReactiveReport>; stop: () => Promise<void>; status?: () => SoakStatus}
 
 class Reactive extends PipeHost {
   readonly scenario: Scenario; private readonly clock = new ScenarioClock(); private readonly producer: V1Producer;
@@ -56,12 +78,24 @@ class Reactive extends PipeHost {
   private refused = 0; private atMs = 0; private target = 0; private segment?: {realMs: number; atMs: number};
   private readonly scale: number; private readonly helloMs: number; private readonly writeMs: number; private readonly quiesceMs: number; private readonly connectMs: number;
   private readonly awaitScriptedAcks: boolean; private readonly settleMs: number;
+  // Soak mode only: the generated entries and the counters that replace the transcript.
+  private readonly soak?: ReactiveSoakOptions;
+  private readonly counts = {server: {} as Record<string, number>, client: {} as Record<string, number>};
+  private lastEventSeq = 0n; private maxAck = 0n; private refusedLiveOnly = 0;
+  /** The client instance of the latest hello, which the welcome that answers it records. */
+  private lastHelloInstance = '';
   constructor(input: unknown, options: ReactiveServeOptions) {
     super();
     const s = this.scenario = validateScenario(input);
+    if (options.soak !== undefined) {
+      if (!options.soak || typeof options.soak.entries?.[Symbol.iterator] !== 'function') throw new Error('Invalid soak entries');
+      if (s.steps.length || s.transport.length) throw new Error('A soak run takes its steps from the generated entries only');
+      this.soak = options.soak;
+    }
     const scripted = s.transport.find(t => t.action === 'clientFault' || t.action === 'wireFault' || t.action === 'writeDeadline');
     if (scripted) throw new Error(`Reactive serving cannot run ${scripted.action} steps, which script the client; use lockstep mode`);
-    const conflicts = reactiveConflicts(input);
+    // A soak timeline is checked on a reduced-frame cycle by its test instead (ReactiveSoakOptions).
+    const conflicts = this.soak ? [] : reactiveConflicts(input);
     if (conflicts.length) throw new Error(`Reactive serving cannot reproduce this scenario; use lockstep mode: ${conflicts.join('; ')}`);
     this.producer = new V1Producer(new AdapterModel({game: s.game, seed: s.seed, ...s.source}, this.clock), scenarioSource(s), seededId(s.seed, 'capture-clock'));
     this.scale = bounded(options.scale, 1, 0, 10, 'scale', false);
@@ -80,8 +114,23 @@ class Reactive extends PipeHost {
     return Math.floor(Math.min(this.target, Math.max(this.atMs, this.segment.atMs + (performance.now() - this.segment.realMs) / this.scale)));
   }
   private line(atMs: number, direction: 'server' | 'client', message: ProtocolMessage): void {
+    if (direction === 'client' && message.kind === 'hello') this.lastHelloInstance = message.data.clientInstanceId;
+    if (this.soak) { this.count(direction, message); return; }
     if (this.transcript.length >= MAX_TRANSCRIPT_MESSAGES) throw new Error('Simulator transcript limit exceeded');
     this.transcript.push({scenario: this.scenario.id, origin: 'synthetic', connection: this.live?.record.connection ?? 0, atMs, direction, message});
+  }
+  /** Soak mode: counters in place of the transcript line, so nothing grows with the number of messages. */
+  private count(direction: 'server' | 'client', message: ProtocolMessage): void {
+    const kinds = this.counts[direction]; kinds[message.kind] = (kinds[message.kind] ?? 0) + 1;
+    if (message.kind === 'event' && BigInt(message.data.eventSeq) > this.lastEventSeq) this.lastEventSeq = BigInt(message.data.eventSeq);
+    if (message.kind === 'gap' && BigInt(message.data.lastEventSeq) > this.lastEventSeq) this.lastEventSeq = BigInt(message.data.lastEventSeq);
+    if (message.kind === 'ack' && BigInt(message.data.throughEventSeq) > this.maxAck) this.maxAck = BigInt(message.data.throughEventSeq);
+  }
+  /** The counters of a soak run (SoakStatus). */
+  soakStatus(): SoakStatus {
+    return {scenarioMs: this.progressAtMs(), lastEventSeq: this.lastEventSeq.toString(), maxAckThroughEventSeq: this.maxAck.toString(), ackCount: this.counts.client.ack ?? 0,
+      snapshots: this.counts.server.snapshot ?? 0, connections: this.connections.length, refusedLiveOnly: this.refusedLiveOnly,
+      messages: {server: {...this.counts.server}, client: {...this.counts.client}}};
   }
 
   // One client at a time: a client arriving while another is connected is refused at once, never displacing it (§4).
@@ -126,10 +175,12 @@ class Reactive extends PipeHost {
     l.recorder.push(chunk, m => this.line(at, 'client', m));
     for (const out of outs) {
       if (out.message.kind === 'welcome') {
+        // Soak mode: a live-only hello for a durable connection ends only that attempt, before anything is written; the
+        // accept loop then closes the producer's connection and waits for the next client (ReactiveSoakOptions).
+        if (this.soak && l.record.durable && !out.message.data.durableEvents) { this.refusedLiveOnly++; this.live = undefined; l.link.socket.destroy(); return; }
         l.helloDone = true;
         if (out.message.data.durableEvents !== l.record.durable) this.failure ??= new Error(`Connection ${l.record.connection} expects a ${l.record.durable ? 'durable' : 'live-only'} client`);
-        const hello = [...this.transcript].reverse().find(t => t.direction === 'client' && t.message.kind === 'hello');
-        if (hello?.message.kind === 'hello') l.record.clientInstanceId = hello.message.data.clientInstanceId;
+        l.record.clientInstanceId = this.lastHelloInstance;
         this.segment = {realMs: performance.now(), atMs: this.atMs};
       }
       this.write(out, at);
@@ -234,9 +285,14 @@ class Reactive extends PipeHost {
   protected changed(): void { this.clientGone(); super.changed(); }
 
   async run(): Promise<ReactiveReport> {
-    const entries: TimelineEntry[] = timeline(this.scenario.steps, this.scenario.transport).filter(e => e.lane !== 'probe');
+    // A soak run reads its generated entries one at a time; nothing keeps them (ReactiveSoakOptions).
+    const entries: Iterable<TimelineEntry> = this.soak ? this.soak.entries : timeline(this.scenario.steps, this.scenario.transport).filter(e => e.lane !== 'probe');
+    let lastAtMs: number | undefined;
     try {
       for (const e of entries) {
+        if (e.lane === 'probe') continue;
+        if (lastAtMs !== undefined && e.atMs < lastAtMs) throw new Error('Timeline entries must be ordered by atMs');
+        lastAtMs = e.atMs;
         await this.fireTimers(e.atMs);
         await this.pace(e.atMs);
         if (this.stopError) throw this.stopError;
@@ -252,7 +308,7 @@ class Reactive extends PipeHost {
         await this.quiesce();
         if (this.failure) throw this.failure;
       }
-      if (entries.length) await this.fireTimers(entries.at(-1)!.atMs);
+      if (lastAtMs !== undefined) await this.fireTimers(lastAtMs);
       this.closeLive('open', true);
       for (const p of this.pending.splice(0)) p.socket.destroy();
       for (const l of this.links) await this.wait(() => l.closed, REPLY_DEADLINE_MS);
@@ -274,7 +330,7 @@ class Reactive extends PipeHost {
     } finally { await this.teardown(); }
   }
   private report(cancelled: boolean): ReactiveReport {
-    return {scenario: this.scenario, transcript: this.transcript, connections: this.connections, refusedClients: this.refused, cancelled};
+    return {scenario: this.scenario, transcript: this.transcript, connections: this.connections, refusedClients: this.refused, cancelled, ...(this.soak ? {soak: this.soakStatus()} : {})};
   }
 }
 
@@ -326,7 +382,7 @@ export async function serveV1Reactive(input: unknown, options: ReactiveServeOpti
   const stop = async () => { server.stop(); await done.catch(() => undefined); };
   options.signal?.addEventListener('abort', () => void stop(), {once: true});
   if (options.signal?.aborted) void stop();
-  return {endpoint: server.endpoint, done, stop};
+  return {endpoint: server.endpoint, done, stop, ...(options.soak ? {status: () => server.soakStatus()} : {})};
 }
 
 /** A message in comparable form: kind, source, capture and data, without the message seq. */

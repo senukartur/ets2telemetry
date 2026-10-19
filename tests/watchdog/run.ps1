@@ -65,6 +65,28 @@ try {
     $memory = Get-Content -LiteralPath (Join-Path $sampledDirectory 'memory.json') -Raw | ConvertFrom-Json
     Assert ((@($memory.PSObject.Properties | ForEach-Object { $_.Name }) -join ',') -eq 'peakProcessMemoryBytes,peakJobMemoryBytes') 'Peak memory fields are wrong.'
     Assert ($memory.peakProcessMemoryBytes -ge 1MB -and $memory.peakProcessMemoryBytes -le $memory.peakJobMemoryBytes -and $memory.peakJobMemoryBytes -le 2GB) "Peak memory is implausible ($($memory.peakProcessMemoryBytes), $($memory.peakJobMemoryBytes))."
+    # ET-019 PR-12a: RunExtended is Run's containment for long runs, with its own 60,001..6,000,000 ms deadline range;
+    # Run keeps 100..60,000 ms. A rejected deadline starts nothing and creates no output directory.
+    $outOfRange = @(@{Method='Run'; Ms=60001}, @{Method='RunExtended'; Ms=60000}, @{Method='RunExtended'; Ms=6000001})
+    foreach ($case in $outOfRange) {
+        $rejectedDirectory = Join-Path $root ("rejected-$($case.Method)-$($case.Ms)")
+        $rejected = $false
+        $method = $case.Method
+        try { [void][ETS2Telemetry.Diagnostics.BoundedProcess]::$method($NodePath, [string[]]@($fixture, 'normal', $rejectedDirectory), $root, $rejectedDirectory, $case.Ms, $true) }
+        catch { $rejected = $_.Exception.InnerException -is [ArgumentOutOfRangeException] }
+        Assert $rejected "$($case.Method) accepted a $($case.Ms) ms deadline."
+        Assert (!(Test-Path -LiteralPath $rejectedDirectory)) "$($case.Method) created output for a rejected $($case.Ms) ms deadline."
+    }
+    $extendedDirectory = Join-Path $root 'extended'
+    New-Item -ItemType Directory -Path $extendedDirectory | Out-Null
+    $extendedCode = [ETS2Telemetry.Diagnostics.BoundedProcess]::RunExtended($NodePath, [string[]]@($fixture, 'output', $extendedDirectory), $extendedDirectory, $extendedDirectory, 61000, $true)
+    Assert ($extendedCode -eq 0) "Extended fixture failed (code $extendedCode)."
+    Assert ((Get-Item -LiteralPath (Join-Path $extendedDirectory 'stdout.log')).Length -eq 1048576) 'Extended output capture is not capped at 1 MiB.'
+    $extendedHeader = Get-Content -LiteralPath (Join-Path $extendedDirectory 'cpu.jsonl') -TotalCount 1 | ConvertFrom-Json
+    Assert ($extendedHeader.type -eq 'start' -and $extendedHeader.jobCpuRatePercent -eq 25) 'Extended CPU sample header is wrong.'
+    $extendedMemory = Get-Content -LiteralPath (Join-Path $extendedDirectory 'memory.json') -Raw | ConvertFrom-Json
+    Assert ((@($extendedMemory.PSObject.Properties | ForEach-Object { $_.Name }) -join ',') -eq 'peakProcessMemoryBytes,peakJobMemoryBytes') 'Extended peak memory fields are wrong.'
+    Assert ($extendedMemory.peakProcessMemoryBytes -ge 1MB -and $extendedMemory.peakProcessMemoryBytes -le $extendedMemory.peakJobMemoryBytes -and $extendedMemory.peakJobMemoryBytes -le 2GB) 'Extended peak memory is implausible.'
     $ownerDirectory = Join-Path $root 'owner-death'
     New-Item -ItemType Directory -Path $ownerDirectory | Out-Null
     $shellPath = (Get-Process -Id $PID).Path
@@ -80,7 +102,7 @@ try {
     Assert ($owner.WaitForExit(5000)) 'Watchdog fixture process did not stop.'
     Assert-Stopped $ownerDirectory
     Assert (!$sentinel.HasExited) 'Watchdog affected an unrelated process.'
-    Write-Output 'PASS: exit codes, argument quoting, stderr, timeout tree cleanup, orphan cleanup, output cap, opt-in CPU samples and peak memory, owner-death cleanup, unrelated process preservation.'
+    Write-Output 'PASS: exit codes, argument quoting, stderr, timeout tree cleanup, orphan cleanup, output cap, opt-in CPU samples and peak memory, deadline ranges of Run and RunExtended, an extended run, owner-death cleanup, unrelated process preservation.'
     Write-Output "Evidence: $root"
 } finally {
     if ($null -ne $owner -and !$owner.HasExited) { $owner.Kill(); $null = $owner.WaitForExit(5000) }

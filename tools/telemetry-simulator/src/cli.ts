@@ -7,6 +7,22 @@ import {replayV1,transcriptLines} from './v1/replay';
 import {clientPlan,pipeDifferences,runV1PipeClient,serveV1} from './v1/pipe';
 import {checkStateRate,checkV1Cadence} from './v1/cadence';
 import {reactiveDifferences,runIndependentClient,serveV1Reactive} from './v1/reactive';
+import {SOAK_CYCLE_MS,runSoakClient,serveV1Soak,soakDifferences,soakTotals,type SoakPipeServer} from './v1/soak';
+
+/** `--minutes <1-90>` of the soak commands. */
+function soakArgs(command:string,args:string[]):number {
+  if(args.length!==2||args[0]!=='--minutes'||!/^[0-9]{1,2}$/.test(args[1])||Number(args[1])<1||Number(args[1])>90)throw new Error(`Usage: cli.cjs ${command} --minutes <1-90>`);
+  return Number(args[1]);
+}
+/** About every 10 s: one progress line of the soak counters and this process's heap (server and, in the smoke, client). */
+const SOAK_PROGRESS_MS=10_000;
+function soakProgress(server:SoakPipeServer):NodeJS.Timeout {
+  return setInterval(()=>console.log(JSON.stringify({type:'progress',...progressFields(server),heapUsedBytes:process.memoryUsage().heapUsed})),SOAK_PROGRESS_MS);
+}
+function progressFields(server:SoakPipeServer) {
+  const s=server.status();
+  return {scenarioMs:s.scenarioMs,lastEventSeq:s.lastEventSeq,maxAckThroughEventSeq:s.maxAckThroughEventSeq,ackCount:s.ackCount,snapshots:s.snapshots,connections:s.connections,refusedLiveOnly:s.refusedLiveOnly};
+}
 
 /**
  * `<file> [--scale <real ms per scenario ms>] [--lockstep | --reactive]` of the v1 pipe commands. serve-v1 also takes
@@ -89,6 +105,48 @@ async function main():Promise<void> {
         refusedClients:report.refusedClients,ledger:client.ledger,history:false}));
     }finally {await stop?.();process.removeListener('SIGINT',cancel);process.removeListener('SIGTERM',cancel);}
     return;
+  }
+  // ET-019 PR-12a soak source (soak.ts). serve-v1-soak serves the generated timeline to any durable consumer until it ends
+  // or a `stop` line arrives on stdin; on Windows a kill is TerminateProcess, which runs no signal handler, so a driver
+  // that wants the summary writes `stop`. smoke-soak-v1 serves it to the in-process soak client, stops it 5 s into the
+  // tail and checks the totals of the schedule. Both print a progress line about every 10 s, then one summary line.
+  if(command==='serve-v1-soak'||command==='smoke-soak-v1') {
+    const minutes=soakArgs(command,process.argv.slice(3));
+    const controller=new AbortController();const cancel=()=>controller.abort();process.once('SIGINT',cancel);process.once('SIGTERM',cancel);
+    const server=await serveV1Soak(minutes,{signal:controller.signal}),progress=soakProgress(server);
+    try {
+      if(command==='serve-v1-soak') {
+        let pending='';
+        process.stdin.setEncoding('utf8');
+        process.stdin.on('error',()=>undefined);
+        process.stdin.on('data',(chunk:string)=>{
+          const lines=(pending+chunk).split(/\r?\n/);pending=(lines.pop()??'').slice(-64);
+          if(lines.some(l=>l.trim()==='stop'))void server.stop();
+        });
+        console.log(JSON.stringify({type:'serving',origin:'synthetic',mode:'soak',minutes,endpoint:server.endpoint,history:false}));
+        const report=await server.done;
+        console.log(JSON.stringify({type:'summary',origin:'synthetic',mode:'soak',minutes,cancelled:report.cancelled,...report.soak,sessions:report.connections,
+          refusedClients:report.refusedClients,heapUsedBytes:process.memoryUsage().heapUsed,history:false}));
+        return;
+      }
+      const clientAbort=new AbortController(),client=runSoakClient(server.endpoint,clientAbort.signal);
+      // Awaited below; a client failure while the server still runs surfaces there, never as an unhandled rejection.
+      client.catch(()=>undefined);
+      // Stop the source 5 s into the tail, once every cycle has been served; a failed run ends earlier through `done`.
+      const stopAt=minutes*SOAK_CYCLE_MS+5_000,heap:number[]=[];
+      const watch=setInterval(()=>{if(server.status().scenarioMs>=stopAt)void server.stop();},250);
+      const sample=setInterval(()=>heap.push(process.memoryUsage().heapUsed),SOAK_PROGRESS_MS);
+      let report;
+      try {report=await server.done;} finally {clearInterval(watch);clearInterval(sample);clientAbort.abort();}
+      const result=await client,differences=soakDifferences(minutes,report,result);
+      // The run must have been stopped in the tail by the watch above, not have ended or failed on its own.
+      if(!report.cancelled||(report.soak?.scenarioMs??0)<stopAt)differences.push('the source was not stopped in the tail');
+      console.log(JSON.stringify({type:'summary',origin:'synthetic',mode:'soak-smoke',minutes,passed:differences.length===0,differences,expected:soakTotals(minutes),
+        cancelled:report.cancelled,...report.soak,sessions:report.connections,client:result,
+        heapUsedBytes:{samples:heap.length,first:heap[0]??null,max:heap.length?Math.max(...heap):null,last:heap.at(-1)??null},history:false}));
+      if(differences.length)process.exitCode=1;
+      return;
+    }finally {clearInterval(progress);await server.stop();process.stdin.destroy();process.removeListener('SIGINT',cancel);process.removeListener('SIGTERM',cancel);}
   }
   if(!['replay','serve','smoke'].includes(command)||!file||extra.length)throw new Error('Usage: cli.cjs replay|serve|smoke <synthetic-fixture.json>');
   const scenario=validateScenario(readFixtureFile(file)),emissions=replay(scenario);
