@@ -1023,7 +1023,7 @@ ET-019 PR-10 runs the seeded campaigns at larger sizes in a separate workflow, *
 - **Replay.** No replay test has a seed or size setting, so the workflow runs recovery and fuzz only; the recovery campaign replays a corpus scenario through the reactive v1 simulator for every seed.
 - **Reproduction.** Set the same variable locally and run the same file or executable; a failure names its seed (recovery), its case, seed and iteration (fuzz), or its case and multiplier (native).
 
-The commands, budgets, evidence and reproduction are in [docs/ci.md](docs/ci.md#et-019-extended-campaigns); the measured times and RED checks in [ET-019 validation](docs/validation/et-019.md#pr-10-extended-seeded-campaigns-october-19-2026). GitHub dispatches a workflow only when its file is on the default branch, so the workflow's first own run is the push to `main` at the merge; its campaign steps were validated hosted beforehand inside Windows CI by dispatch 39217989969.
+The commands, budgets, evidence and reproduction are in [docs/ci.md](docs/ci.md#et-019-extended-campaigns); the measured times and RED checks in [ET-019 validation](docs/validation/et-019.md#pr-10-extended-seeded-campaigns-october-19-2026). GitHub dispatches a workflow only when its file is on the default branch, so the workflow's first own run is the push to `main` at the merge; its campaign steps were validated hosted beforehand inside Windows CI by dispatch 39217989969, apart from the protocol fuzz split, the partition check and the budgets, which first run hosted at the merge.
 
 ## ET-019 history refusal through the service — October 19, 2026
 
