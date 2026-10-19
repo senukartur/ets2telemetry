@@ -583,7 +583,9 @@ function Test-ColdLaunchReceipt {
     # PowerShell 7 (the CI shell) parses an ISO date string as [datetime]; Windows PowerShell 5.1 keeps the string.
     if ($launch.originUtc -isnot [datetime] -and ($launch.originUtc -isnot [string] -or
         $launch.originUtc -cnotmatch '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$')) { return $false }
-    if (!(Test-ReceiptInteger -Value $launch.launchRequestedToOriginMs -Minimum 0 -Maximum 60000)) { return $false }
+    # The launch request is a V8 Date (coarse to the system timer tick, about 15.6 ms) and the origin the kernel's creation
+    # time, so a healthy launch can measure slightly negative. A bounded skew down to -1000 ms is recorded as measured.
+    if (!(Test-ReceiptInteger -Value $launch.launchRequestedToOriginMs -Minimum -1000 -Maximum 60000)) { return $false }
     $phases = $launch.phasesMs; $unavailable = $launch.unavailable
     if ($null -eq $phases -or $phases -is [array] -or $null -eq $unavailable -or $unavailable -is [array]) { return $false }
     $names = @('mainStarted','mainReady','serviceReady','storageProbeVerified','historyStorageOpened','firstWindowShown','dashboardLoaded',

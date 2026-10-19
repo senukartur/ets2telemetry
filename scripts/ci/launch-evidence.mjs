@@ -53,7 +53,8 @@ const at = value => {
 /**
  * The receipt's `coldLaunch`: each phase in whole milliseconds after the origin, or null with a fixed reason in
  * `unavailable`. The origin is the main process's creation time; without it, the driver's launch request.
- * `launchRequestedToOriginMs` is the time from the driver's launch request to that origin; `observationMs` is the time the
+ * `launchRequestedToOriginMs` is the time from the driver's launch request to that origin, as measured (the request's Date is
+ * coarse to the timer tick, so it can be slightly negative); `observationMs` is the time the
  * observation itself took in the driver (its cost to the smoke), or null.
  */
 export function coldLaunchPhases({observation, driverPhases = [], mainEvents = [], serviceEvents = []}) {

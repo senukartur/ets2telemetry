@@ -742,6 +742,9 @@ function resourceCases() {
     {name: 'intact resource evidence with PowerShell 7 Int64 integers', body: resourceReceipt(), jobResult: jobResult(), numbers: 'int64' as const, ...valid},
     {name: 'resource Job peak in KiB with Int64 integers', body: resourceReceipt(), jobResult: jobResult(['memory', 'peakJobMemoryBytes'], 579364), numbers: 'int64' as const,
       ...rejected},
+    // Timer-tick skew between the V8 launch request and the kernel creation time may measure a little below zero.
+    {name: 'intact resource evidence with a small negative clock skew', body: resourceReceipt(['coldLaunch', 'launchRequestedToOriginMs'], -16), jobResult: jobResult(), ...valid},
+    {name: 'intact resource evidence at the clock skew bound', body: resourceReceipt(['coldLaunch', 'launchRequestedToOriginMs'], -1000), jobResult: jobResult(), ...valid},
     {name: 'intact resource evidence with the launch request as origin', body: resourceReceipt(['coldLaunch', 'origin'], 'launch-requested'), jobResult: jobResult(), ...valid},
     {name: 'intact resource evidence with an unrecorded paint', jobResult: jobResult(), ...valid,
       body: withPhase('rendererFirstContentfulPaint', null, {rendererFirstContentfulPaint: 'FIRST_CONTENTFUL_PAINT_NOT_RECORDED'})},
@@ -766,7 +769,7 @@ function resourceCases() {
     invalid('unknown origin', ['coldLaunch', 'origin'], 'unavailable'),
     invalid('origin time missing', ['coldLaunch', 'originUtc']),
     invalid('origin time not ISO', ['coldLaunch', 'originUtc'], 'Mon Oct 19 2026'),
-    invalid('launch request after the origin', ['coldLaunch', 'launchRequestedToOriginMs'], -1),
+    invalid('launch request after the origin beyond the clock skew bound', ['coldLaunch', 'launchRequestedToOriginMs'], -1001),
     invalid('a phase missing', ['coldLaunch', 'phasesMs', 'serviceReady']),
     invalid('an extra phase', ['coldLaunch', 'phasesMs', 'installPath'], 10),
     invalid('a phase negative', ['coldLaunch', 'phasesMs', 'firstWindowShown'], -5),

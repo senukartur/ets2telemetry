@@ -84,15 +84,16 @@ namespace ETS2Telemetry.Diagnostics {
     }
 
     // Optional evidence (ET-019 PR-11): the Job's peak committed memory of any one process and of the whole Job, read once
-    // after the run while the Job handle is still open. A failed query or write leaves no file and never cancels containment.
+    // after the Job was terminated and before its handle closes; the peaks stay queryable while the handle is open. A failed
+    // query writes no file; a write that fails midway can leave a partial file, which the wrapper rejects (JOB_MEMORY_INVALID).
+    // Nothing here can stop the rest of the cleanup: every exception is swallowed.
     static void WritePeakMemory(IntPtr job, string path) {
-      ExtendedLimits value;
-      if (!QueryInformationJobObject(job,9,out value,(uint)Marshal.SizeOf(typeof(ExtendedLimits)),IntPtr.Zero)) return;
       try {
+        ExtendedLimits value;
+        if (!QueryInformationJobObject(job,9,out value,(uint)Marshal.SizeOf(typeof(ExtendedLimits)),IntPtr.Zero)) return;
         File.WriteAllText(path,String.Format(CultureInfo.InvariantCulture,"{{\"peakProcessMemoryBytes\":{0},\"peakJobMemoryBytes\":{1}}}\n",
           value.PeakProcessMemory.ToUInt64(),value.PeakJobMemory.ToUInt64()),new UTF8Encoding(false));
-      } catch (IOException) { /* A failed diagnostic disk does not affect containment. */ }
-      catch (UnauthorizedAccessException) { /* File permissions do not cancel containment. */ }
+      } catch (Exception) { /* Diagnostic evidence never affects containment or cleanup. */ }
     }
     static void Check(bool ok) {if (!ok) throw new Win32Exception(Marshal.GetLastWin32Error());}
     static void Close(ref IntPtr handle) {if (handle != IntPtr.Zero && handle != new IntPtr(-1)) CloseHandle(handle); handle=IntPtr.Zero;}
@@ -174,10 +175,10 @@ namespace ETS2Telemetry.Diagnostics {
       } finally {
         // Fail closed, including assignment/resume failures. Only held handles identify processes.
         if (sampler!=null) sampler.Dispose();
-        // Peaks are final once the root and its descendants ended; a deadline or forced cleanup reads them as they are.
-        if (sampleCpu && job!=IntPtr.Zero && process.Process!=IntPtr.Zero) WritePeakMemory(job,Path.Combine(output,"memory.json"));
         if (process.Process!=IntPtr.Zero && WaitForSingleObject(process.Process,0)==258) TerminateProcess(process.Process,126);
         if (job!=IntPtr.Zero) TerminateJobObject(job,126);
+        // After termination, before the handle closes: the peaks are final, also after a deadline or a forced cleanup.
+        if (sampleCpu && job!=IntPtr.Zero && process.Process!=IntPtr.Zero) WritePeakMemory(job,Path.Combine(output,"memory.json"));
         Close(ref job);
         if (process.Process!=IntPtr.Zero) WaitForSingleObject(process.Process,2000);
         Close(ref process.Thread); Close(ref process.Process);
