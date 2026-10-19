@@ -857,7 +857,7 @@ it.each(['tray', 'renderer', 'app-quit', 'session-end', 'uninstall'] as const)('
   expect(log.mock.calls.filter(call => call[0] === 'APP_EXIT_REQUESTED')).toEqual([['APP_EXIT_REQUESTED', undefined, {reason}]]);
   expect(child.postMessage.mock.calls.filter(call => call[0].type === 'stop')).toHaveLength(1);
   expect(channels.every(channel => channel.port1.close.mock.calls.length > 0)).toBe(true);
-  expect(windows[1].hide).toHaveBeenCalled();
+  expect(windows[1].hide).not.toHaveBeenCalled();
   expect(trays[0].setToolTip).toHaveBeenLastCalledWith('ETS2Telemetry\nExiting');
   expect(trayMenuItem('Exit ETS2Telemetry').enabled).toBe(false); expect(trayMenuItem('Open ETS2Telemetry').enabled).toBe(false);
   // Exiting is final: tray and overlay close requests no longer reopen or keep anything.
