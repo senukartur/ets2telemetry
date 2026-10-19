@@ -188,10 +188,11 @@ async function statusUntil(driver: Driver, predicate: (status: Driver['status'])
   expect(driver.errors).toEqual([]);
 }
 /**
- * A broker ended by TerminateProcess after its authority receipt (telemetry-service-v0.md, native broker control: any
- * exit other than 0 and 3 after a receipt is a rejection, and "Exit 1, receipt/relay violations and protocol or identity
- * failures remain final incompatible states"; E9: "other broker rejections" are `incompatible` without a reconnection).
- * A frame cut by the kill is the client's incomplete-frame rejection, equally final. The broker wrote no diagnostic line.
+ * A broker ended by TerminateProcess after its authority receipt exits 1. telemetry-service-v0.md documents "Authority
+ * failure exits 1" and "Exit 1, receipt/relay violations and protocol or identity failures remain final incompatible
+ * states"; E9 makes "other broker rejections" `incompatible` without a reconnection. The client's own mapping
+ * (native-pipe-client.ts) reports such an exit as a non-transient `rejected` error; a frame cut by the kill is its
+ * equally final `incomplete-frame` rejection. The broker wrote no diagnostic line, so its stage is `unreported`.
  */
 function expectKilledBroker(driver: Driver) {
   expect(driver.errors).toHaveLength(1);
@@ -242,19 +243,23 @@ it('ends the broker mid-session: the client reports a final rejection, and a fre
   expectKilledBroker(first);
   expect(host.exit).toBeUndefined();
 
-  // A live-only broker (the production E2 shape, D9) finds the same plugin session. The ACK persists across connections
-  // (§7), the two events stay retained, and a live-only connection never carries an event or gap (§4, native endpoint).
+  // A live-only broker (the production shape: ET-006b E2, GAME_HISTORY_RECORDING false) finds the same plugin session.
+  // The ACK persists across connections (§7), the two events stay retained, and a live-only connection never carries an
+  // event or gap (§4, native endpoint).
   const live = await connect(v1, false);
   expect(live.welcome.source).toEqual(first.welcome.source);
   expect(live.welcome.data.durableEvents).toBe(false);
   expect(live.checkpoint.data.status.delivery).toMatchObject({durable: false, ackedThroughEventSeq: acked, nextEventSeq: (baseline + 2n).toString(), retainedEvents: 2});
-  const lostBefore = BigInt(live.checkpoint.data.status.eventLoss.noDurableConsumer);
+  // Loss counters, by hand: before any client the gate was `none`, so every eventSeq below the baseline was lost as
+  // `offline`; the durable connection copied its two events, and nothing was observed while no client was connected
+  // (native-transport-v1.md, gate table; protocol v1 §7: counters are cumulative per plugin session).
+  expect(live.checkpoint.data.status.eventLoss).toEqual({...NO_LOSS, offline: (baseline - 1n).toString()});
   // An event observed while only a live-only client is connected is noDurableConsumer coverage (OD-4).
   await command(host, 'pause');
   await statusUntil(live, status => status.delivery.nextEventSeq === (baseline + 3n).toString(), 'the live-only loss stored');
-  expect(BigInt(live.status.eventLoss.noDurableConsumer)).toBe(lostBefore + 1n);
+  const pausedLoss = {...NO_LOSS, offline: (baseline - 1n).toString(), noDurableConsumer: '1'};
+  expect(live.status.eventLoss).toEqual(pausedLoss);
   expect(live.coverage).toEqual([]);
-  const pausedState = live.status;
   terminate(live.pid);
   expect(await until(() => live.closed, DELIVERY_GUARD_MS), 'killed live-only broker closed').toBe(true);
   expectKilledBroker(live);
@@ -264,7 +269,7 @@ it('ends the broker mid-session: the client reports a final rejection, and a fre
   const recovered = await connect(v1, false);
   expect(recovered.welcome.source).toEqual(first.welcome.source);
   expect(recovered.checkpoint.data.state.simulation).toBe('paused');
-  expect(recovered.checkpoint.data.status.eventLoss).toEqual(pausedState.eventLoss);
+  expect(recovered.checkpoint.data.status.eventLoss).toEqual(pausedLoss);
   expect(await until(() => recovered.messages.some(message => message.kind === 'snapshot') || recovered.errors.length > 0, DELIVERY_GUARD_MS), 'live snapshots after the checkpoint').toBe(true);
   expect(recovered.errors).toEqual([]); expect(recovered.coverage).toEqual([]);
   await recovered.stop();
