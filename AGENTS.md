@@ -684,3 +684,46 @@ Nothing has been published. A release needs the owner's authorization under O2. 
 ## Desktop UI design target — October 19, 2026
 
 The owner asked for a final mockup of the desktop application and the overlay in the Yukon Union community style, including the Hard Mode status of [ET-026](https://trello.com/c/Cl5oNGTw), and chose: files in the repository, English with a proposed Russian translation, the "Yukon Union Telemetry" brand, and screens for Live, the Hard Mode checklist, Journal, Trip details, Settings, account and sync (server phase), first run, and empty and error states. The result is [docs/design](docs/design/README.md): [the UI specification](docs/design/ui-spec.md) with spec ids and data bindings, [design tokens](docs/design/tokens.css) and an [interactive mockup](docs/design/mockup.html). For the visual design, this supersedes "Visual design is deferred" in the product requirements above; earlier dated text is unchanged. New UI work follows the specification. The design changes no product requirement, contract or acceptance criterion and authorizes no implementation, autostart, localization framework or server-phase work; each package needs its own card. The open points are in [§11 of the specification](docs/design/ui-spec.md#11-open-points-for-the-owner).
+
+## ET-019 implementation update — October 19, 2026
+
+Under the owner's standing delegation of October 15, 2026, the coordinator delivered the rest of ET-019, cross-component recovery and regression coverage, from October 18 to 19, 2026. The coordinator adopted the ET-019 plan decisions D3–D5 (D3 measure, then gate; D4 campaign sizes; D5 seeded mutation fuzzing); D6, a synthetic-content history-purpose fixture, was adopted but no PR needed it. These plan labels are not the protocol v1 decisions D1–D17 in concept.md. The owner approved D1, an extended CI job, and D2, a dispatch-only soak, on October 18, 2026. Every PR changed tests, test tools, CI or docs only: no product source, protocol, schema or IPC changed, and `GAME_HISTORY_RECORDING` stays `false`.
+
+Delivered work:
+- **History invariants and kill campaigns.**
+  - PR-1 (#126): history invariants I1–I5 and a seeded killed-recorder campaign.
+  - PR-2 (#127): kills of the storage open during backup and migration.
+- **Producer losses, stalls and replays.**
+  - PR-3 (#129): producer losses recorded as visible partial trips.
+  - PR-4 (#132): shutdown and close stalls.
+  - PR-5 (#133): lifecycle scenarios replayed into the journal and the export.
+- **Refusing databases it cannot use.**
+  - PR-6 (#139): the newer, foreign, locked or unbackupable database refused through the service wiring.
+  - PR-7 (#140): the refusal shown in the packaged journal.
+- **Process death and parser fuzzing.**
+  - PR-8 (#141): the broker and the fake game host ended mid-session.
+  - PR-9 (#142): seeded mutation fuzzing of the TypeScript frame parsers.
+- **CI evidence.**
+  - PR-10 (#144): a separate, non-required workflow, `windows-extended.yml`, that runs 200 recovery seeds, 200,000 fuzz inputs per case and the native fuzz cases at x50 on every `main` push and on dispatch.
+  - PR-11 (#143): Job peak memory and cold-launch phases recorded for every runtime smoke.
+- **The soak** (PR-12a: #145, PR-12b: #146). A bounded-memory soak source in the simulator, and a dispatch-only workflow, `windows-soak.yml`, that soaks the packaged application against it for 1 to 90 minutes. Hand-written expectations are checked against the stored rows, while memory, growth and log use are recorded only.
+- **Flaky-test fixes found on the way:** #125, #130, #131, #134, #136, #137 and #138.
+
+Hosted results:
+- The 30-minute application soak stored exactly the expected 183 events, 30 trips, 1,524 cycle samples and the 19-sample tail, with no gap.
+- The 90-minute application soak passed. The telemetry service's memory trend after the warm-up was flat (−1.3 MiB/h), while Electron main grew about 11 MiB per hour (r² 0.99). That growth is recorded as an observation for its own investigation, not a threshold (ET-019 plan decision D3).
+- The extended workflow's first own run passed in 14.5 minutes, and its second in 24.3 minutes.
+
+See [ET-019 validation](docs/validation/et-019.md).
+
+The card stays in Review. These gaps remain open and are recorded, not fixed. TD-016, TD-018 and TD-019 were found by these tests; TD-017 is a deferred test-tooling item; G5, G10 and G18 were deferred to ET-019 by ET-015c:
+- TD-016: a replayed gap's stale checkpoint;
+- TD-017: coverage-guided and native fuzzing;
+- TD-018: a broker that exits mid-session is not restarted;
+- TD-019: stale discovery records accumulate, so after enough game crashes the broker fails closed;
+- G10: no automatic re-open of history after it stopped;
+- G18: a history close slower than the 800 ms grace is terminated and reported unclean, so the service exits 1, though nothing committed is lost;
+- G5: no service heartbeat, so a hung telemetry service keeps its last recording status;
+- a kill between a backup's rename and its manifest can leave a manifest-less backup (PR-2, an uncovered kill point).
+
+Each needs its own card. Thresholds for resource use wait for more hosted runs (ET-019 plan decision D3). Real recording into history, CPU and frame time beside a game, TruckersMP, one-hour real sessions and a real power loss remain pending (ET-020). ET-020 and later phases are not authorized by this update. No game, TruckersMP, display or performance claim follows.
