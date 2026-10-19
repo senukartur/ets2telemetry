@@ -112,7 +112,7 @@ Columns:
 - **REG IDs.** The scenarios the entry point protects in part. "Smoke evidence" marks a harness-integrity test: it guards the evidence of the runtime smokes for those scenarios, not the product behavior itself. "Harness" marks a test of a test helper that the named scenarios depend on.
 - **Source.** How the mapping was confirmed. R: this registry, a scenario row or a dated paragraph. F: `REG-0nn` tags in the test file. T: [TESTING.md](../TESTING.md). V: the validation record of the PR that added the file, found with `git log --diff-filter=A`; the record is named in brackets.
 - **Owning card.** The card and PR that added the entry point.
-- **Runs in.** PR: every Windows CI run on a code PR, in the job named (`Windows x64 tests`, `Windows x64 scaffold` or `Windows x64 native AddressSanitizer`). Extended: pushes to `main` and manual dispatch with `extended=true`. Extended campaigns workflow: the separate `windows-extended.yml` workflow, on pushes to `main` and by dispatch, not a required check (ET-019 PR-10). Manual: not run by CI.
+- **Runs in.** PR: every Windows CI run on a code PR, in the job named (`Windows x64 tests`, `Windows x64 scaffold` or `Windows x64 native AddressSanitizer`). Extended: pushes to `main` and manual dispatch with `extended=true`. Extended campaigns workflow: the separate `windows-extended.yml` workflow, on pushes to `main` and by dispatch, not a required check (ET-019 PR-10). Soak workflow: run only by a dispatch of the separate `windows-soak.yml` workflow, never on push or pull_request, not a required check (ET-019 PR-12a). Manual: not run by CI.
 - **Protected.** The categories that must not be removed or weakened: ACK, dedup, gap, trip completeness, security (DACL, peer, authority, sandbox, the renderer boundary), v0/CAP0 isolation, historical fixture, and regression (a test for a fixed bug). The categories were assigned by reading each file's case titles. A dash means none of these; such a test can still be the only protection of its REG.
 
 ### Vitest, Playwright and measurement entry points
@@ -341,7 +341,7 @@ Each runtime smoke scenario runs once per mode through `./scripts/ci/Invoke-Runt
 | mode `installed` (`-Executable <binary root>app-<version>ETS2TelemetryDesktop.exe`): scenarios `scaffold` on 0.1.0 and `scaffold`, `plugin`, `telemetry` on 0.1.1 by default | Electron runtime smoke of an installed copy (minimal PATH, unrelated working directory) | REG-017, and the scenarios' own REG IDs | T, V (et-018) | ET-018 (PR-1) | main push and dispatch, inside the installer lifecycle step (scaffold job) | as the scenarios |
 | `npm run smoke --workspace @ets2telemetry/telemetry-simulator` (v0 CLI pipe smoke) | Simulator CLI | REG-003, REG-010 | R | ET-005a (#11) | PR (scaffold job) | — |
 | `npm run smoke:v1 --workspace @ets2telemetry/telemetry-simulator` (v1 CLI pipe smoke, lockstep and reactive) | Simulator CLI | REG-003, REG-005, REG-011 | R, T | ET-005b (#61) | PR (scaffold job) | — |
-| `scripts/ci/Invoke-SoakSource.ps1` (`smoke-soak-v1` under `BoundedProcess.RunExtended`) | Simulator CLI soak, real time | REG-011, REG-018 | R, T, V (et-019) | ET-019 (PR-12a) | Manual (`windows-soak.yml` dispatch, `Windows x64 recording soak`) | — |
+| `scripts/ci/Invoke-SoakSource.ps1` (`smoke-soak-v1` under `BoundedProcess.RunExtended`) | Simulator CLI soak, real time | REG-011, REG-018 | R, T, V (et-019) | ET-019 (PR-12a) | Soak workflow (`Windows x64 recording soak`) | — |
 
 ### Index findings
 

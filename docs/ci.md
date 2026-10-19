@@ -472,12 +472,12 @@ Measured local durations and the expected hosted cost are in [ET-019 validation]
 
 ## ET-019 recording soak workflow (dispatch-only)
 
-ET-019 PR-12a (October 19, 2026) adds a second workflow, [windows-soak.yml](../.github/workflows/windows-soak.yml), for long runs that do not fit the 20-minute jobs of `Windows CI`. In this PR it soaks only the protocol v1 simulator's [soak source](simulator-v1.md#soak-source-et-019-pr-12a); ET-019 PR-12b extends the same workflow with the packaged application soak.
+ET-019 PR-12a (October 19, 2026) adds a separate workflow beside `windows-ci.yml`, `windows-extended.yml` and `claude-review.yml`: [windows-soak.yml](../.github/workflows/windows-soak.yml), for long runs that do not fit the 20-minute jobs of `Windows CI`. In this PR it soaks only the protocol v1 simulator's [soak source](simulator-v1.md#soak-source-et-019-pr-12a); ET-019 PR-12b extends the same workflow with the packaged application soak.
 
 | Property | Value |
 | --- | --- |
 | Trigger | `workflow_dispatch` only, never `pull_request` or `push`. GitHub runs a `workflow_dispatch` workflow only once the workflow file exists on the default branch ([events that trigger workflows](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_dispatch)), so it can be dispatched only after this PR merges; a branch's changes to it can then be dispatched with `--ref` |
-| Input | `minutes`, a number from 1 to 90, default 30. It reaches the scripts only through the environment variable `SOAK_MINUTES`, and a step checks it against `^[0-9]{1,2}$` and 1..90 before anything else runs, so no input text is expanded into a script |
+| Input | `minutes`, a number from 1 to 90, default 30. It reaches the scripts only through the environment variable `SOAK_MINUTES`, and a step checks it against `^[0-9]{1,2}$` and 1..90 before any step that reads it (only checkout and the Node setup run earlier), so no input text is expanded into a script |
 | Job | **Windows x64 recording soak** on `windows-2022`, like the `Windows CI` jobs; 120-minute job timeout and a static 100-minute timeout for the soak step (an expression cannot compute it from the input). Not a required check, and its name differs from the three required jobs |
 | Concurrency | Group `windows-soak-<ref>`, `cancel-in-progress: false`: a second dispatch on the same ref waits instead of cancelling a soak that may be nearly done. It is separate from the `Windows CI` group |
 | Permissions | `contents: read` |
