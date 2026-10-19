@@ -214,17 +214,19 @@ The protocol parsers are fuzzed only by seeded mutation: `tests/unit/protocol-fu
 
 **Until then:** the seeded campaigns above are the only generated-input coverage of the parsers. No new toolchain, dependency, CI job or native build is authorized by this entry.
 
-## TD-018: A broker that exits mid-session is not restarted
+## TD-018: A broker that exits mid-session is not restarted (resolved by ET-034)
 
-Recorded October 19, 2026 by the coordinator with ET-019 PR-8 ([finding](validation/et-019.md#pr-8-findings)). **This entry is a coordinator decision under the owner's standing delegation of October 15, 2026, not an individually owner-approved deferral.** The owner may revise it.
+Recorded October 19, 2026 by the coordinator with ET-019 PR-8 ([finding](validation/et-019.md#pr-8-findings)). **This entry was a coordinator decision under the owner's standing delegation of October 15, 2026.** Resolved October 19, 2026 by ET-034.
 
 The documented recovery rules make exit 1 after an authority receipt final: telemetry-service-v0.md says "Exit 1, receipt/relay violations and protocol or identity failures remain final incompatible states", and E9 gives "other broker rejections" `incompatible` with no reconnection ([telemetry service v1](telemetry-service-v1.md#reconnection-e9)). The source stays `incompatible` until the user selects it again. A broker that crashes, or that the user or an antivirus product kills (the alpha is unsigned, TD-014), exits like an authority failure: `TerminateProcess` gives exit code 1, and the only difference is the missing diagnostic line (stage `unreported`). So such an exit stops both the v0 overlay feed and v1 for that game, although the plugin session survives and a fresh broker would resume it with nothing lost (`tests/integration/v1-chain-process-death.test.ts`, case 1).
 
-**Future work:**
-- Class an exit after a receipt that reports no diagnostic stage (`unreported`), or that carries a crash exit code, as a retryable `disconnected` with the E9 backoff, and keep diagnosed authority failures final.
-- Amend E9 and the v0 recovery rule in the same change, and extend the v1 chain test so that a killed broker is restarted.
-
-**Until then:** a broker that exits mid-session stays final until the next selection, as documented. No product change is authorized by this entry.
+**Resolution (ET-034, October 19, 2026):**
+- An exit after an authority receipt is classified as retryable `disconnected` with the E9 backoff when either holds:
+  - it reports no diagnostic stage (`unreported`);
+  - it carries a crash exit code (`code === null`, `code < 0`, `(code >>> 0) >= 0x80000000`, or `code > 4`).
+- Diagnosed authority failures (exit 1 with a known diagnostic stage) and pre-receipt rejections remain final `incompatible` states.
+- Reconnection rules amended in `docs/telemetry-service-v0.md` and `docs/telemetry-service-v1.md` (E9).
+- Integration test in `tests/integration/v1-chain-process-death.test.ts` case 1 extended to verify that a killed broker restarts within the E9 backoff, reconnects, and resumes the plugin session without loss or duplicates, while diagnosed authority failures remain final.
 
 ## TD-019: Stale discovery records accumulate (resolved by ET-033)
 

@@ -188,18 +188,16 @@ async function statusUntil(driver: Driver, predicate: (status: Driver['status'])
   expect(driver.errors).toEqual([]);
 }
 /**
- * A broker ended by TerminateProcess after its authority receipt exits 1. telemetry-service-v0.md documents "Authority
- * failure exits 1" and "Exit 1, receipt/relay violations and protocol or identity failures remain final incompatible
- * states"; E9 makes "other broker rejections" `incompatible` without a reconnection. The client's own mapping
- * (native-pipe-client.ts) reports such an exit as a non-transient `rejected` error; a frame cut by the kill is its
- * equally final `incomplete-frame` rejection. The broker wrote no diagnostic line, so its stage is `unreported`.
+ * A broker ended by TerminateProcess after its authority receipt exits 1 without a diagnostic line (stage `unreported`).
+ * ET-034 classes this as a retryable `disconnected` with transient: true. The client's own mapping (native-pipe-client.ts)
+ * reports such an exit as a transient `rejected` error (or `incomplete-frame` if cut mid-frame).
  */
 function expectKilledBroker(driver: Driver) {
   expect(driver.errors).toHaveLength(1);
   const error = driver.errors[0];
   expect(error).toBeInstanceOf(NativeClientError);
   const failure = error as NativeClientError;
-  expect(failure.transient).toBe(false);
+  expect(failure.transient).toBe(true);
   expect(['rejected', 'incomplete-frame']).toContain(failure.outcome);
   expect(driver.diagnostics).toEqual([expect.objectContaining({outcome: failure.outcome, exitCode: 1, stage: 'unreported', win32Error: null, slowStage: 'unreported'})]);
   expect(driver.ended).toBe(false);
@@ -207,7 +205,7 @@ function expectKilledBroker(driver: Driver) {
 }
 const identity = (source: SourceIdentity) => ({pluginSessionId: source.pluginSessionId, processInstanceId: source.processInstanceId, processId: source.processId});
 
-it('ends the broker mid-session: the client reports a final rejection, and a fresh broker resumes the same plugin session with its retained events redelivered and its live-only losses counted (REG-003, REG-011)', async () => {
+it('ends the broker mid-session: the client reports a retryable rejection, and a replacement broker resumes the same plugin session with no loss or duplicate; diagnosed authority failures stay final (REG-003, REG-011)', async () => {
   for (const [name, file] of Object.entries(artifacts)) expect(existsSync(file), `${name} artifact missing: build the native plugin and client first`).toBe(true);
   const {v0, v1} = await workspace();
   const host = await startHost(v0, v1);
@@ -243,9 +241,7 @@ it('ends the broker mid-session: the client reports a final rejection, and a fre
   expectKilledBroker(first);
   expect(host.exit).toBeUndefined();
 
-  // A live-only broker (the production shape: ET-006b E2, GAME_HISTORY_RECORDING false) finds the same plugin session.
-  // The ACK persists across connections (§7), the two events stay retained, and a live-only connection never carries an
-  // event or gap (§4, native endpoint).
+  // The killed broker reported a transient rejection. The host keeps running, and a replacement broker resumes the session.
   const live = await connect(v1, false);
   expect(live.welcome.source).toEqual(first.welcome.source);
   expect(live.welcome.data.durableEvents).toBe(false);
@@ -294,6 +290,22 @@ it('ends the broker mid-session: the client reports a final rejection, and a fre
   expect(resumed.status.delivery).toMatchObject({retainedEvents: 0, retainedBytes: 0, nextEventSeq: (baseline + 3n).toString()});
   await resumed.stop();
   expect([resumed.errors, resumed.diagnostics]).toEqual([[], []]);
+
+  // Diagnosed authority failures stay final (transient: false): an invalid v1 client frame causes the broker
+  // to reject at stage client-frame with exit 1.
+  const diagnosed = await connect(v1, false);
+  const invalidClientFrame = Buffer.alloc(10);
+  invalidClientFrame.writeUInt32LE(6, 0);
+  invalidClientFrame.write('not-js', 4);
+  diagnosed.client.write(invalidClientFrame);
+  expect(await until(() => diagnosed.closed, DELIVERY_GUARD_MS), 'diagnosed failure broker closed').toBe(true);
+  expect(diagnosed.errors).toHaveLength(1);
+  const diagFailure = diagnosed.errors[0] as NativeClientError;
+  expect(diagFailure).toBeInstanceOf(NativeClientError);
+  expect(diagFailure.transient).toBe(false);
+  expect(diagFailure.outcome).toBe('rejected');
+  expect(diagFailure.message).toBe('Native authority or connection rejected');
+  expect(diagnosed.diagnostics).toEqual([expect.objectContaining({outcome: 'rejected', exitCode: 1, stage: 'client-frame'})]);
 
   host.child.stdin.end('exit\n');
   expect(await until(() => host.exit !== undefined, DELIVERY_GUARD_MS)).toBe(true);

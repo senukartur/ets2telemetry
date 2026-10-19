@@ -42,7 +42,18 @@ export type BrokerOutcome = 'ended' | 'busy' | 'rejected' | 'startup-deadline' |
 /** Only fixed codes and numbers: never paths, identities, receipts or relayed bytes. */
 /** serviceMs spans spawn to exit, so launch delay before the broker's own clock starts is visible as serviceMs - elapsedMs. */
 export interface BrokerDiagnostic {outcome: BrokerOutcome; exitCode: number | null; serviceMs: number; stage: string; win32Error: number | null; elapsedMs: number | null; slowStage: string; slowMs: number | null}
-/** A transient failure granted no authority and may be retried after the broker has actually exited. */
+/**
+ * Normal broker exit codes are {0, 1, 2, 3, 4}. Abnormal/crash exits include uncatchable kill signals (null),
+ * signed Windows NTSTATUS error codes (< 0), unsigned 32-bit NTSTATUS codes (>= 0x80000000), or unexpected exit codes (> 4).
+ */
+export function isCrashExitCode(code: number | null): boolean {
+  if (code === null) return true;
+  if (!Number.isInteger(code)) return true;
+  if (code < 0) return true;
+  if ((code >>> 0) >= 0x80000000) return true;
+  return code > 4;
+}
+/** A transient failure (pre-receipt contention/deadline, or unexpected mid-session exit/crash) may be retried after the broker has actually exited. */
 export class NativeClientError extends Error {
   constructor(message: string, readonly outcome: BrokerOutcome, readonly transient = false) {super(message);}
 }
@@ -94,11 +105,16 @@ export class NativePipeClient extends EventEmitter implements TelemetrySocket {
     this.child.once('close', code => {
       clearTimeout(this.startup);
       if (!this.stopped) {
-        if (this.buffer.length) this.reject('Incomplete native relay frame', 'incomplete-frame');
+        const diag = brokerDiagnostic('rejected', code, 0, this.diagnosticTail);
+        const retryableAfterReceipt = Boolean(this.authority && ((code === 1 && diag.stage === 'unreported') || isCrashExitCode(code)));
+        if (this.buffer.length) this.reject('Incomplete native relay frame', 'incomplete-frame', retryableAfterReceipt);
         else if (code === 2 && !this.authority) this.emit('waiting');
         // Exit 4 reports local contention before any authority receipt; after a receipt it is a contract violation.
         else if (code === 4 && !this.authority) this.reject('Native authority check met local contention', 'busy', true);
-        else if (code !== 0 && code !== 3) this.reject('Native authority or connection rejected', 'rejected');
+        else if (code !== 0 && code !== 3) {
+          const reason = retryableAfterReceipt ? 'Native broker exited unexpectedly' : 'Native authority or connection rejected';
+          this.reject(reason, 'rejected', retryableAfterReceipt);
+        }
         else {this.outcome = 'ended'; this.emit('end');}
         this.stopped = true;
       }
