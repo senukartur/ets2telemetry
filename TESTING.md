@@ -1017,3 +1017,23 @@ RED, each applied alone to the product source and reverted, the file then byte-i
 - `HistoryStorage` keeping no failure code (`apps/desktop/src/history-storage.ts`): every case fails.
 
 Commands, timings and findings are in [ET-019 validation](docs/validation/et-019.md#pr-6-refused-databases-through-the-service-wiring-october-19-2026).
+
+## ET-019 newer-database refusal in the running application — October 19, 2026
+
+ET-019 PR-7 adds the runtime smoke scenario `refusal` in development and packaged mode ([ci](docs/ci.md#et-019-newer-history-database-refusal-smoke)). It changes test harness, CI workflow and documentation only: no product source, wire, schema, IPC or renderer change. `GAME_HISTORY_RECORDING` stays `false`. The scenario runs in the harness's isolated profile, TEMP, APPDATA and LOCALAPPDATA under its Windows Job, with plugin setup disabled. Before the launch it copies the immutable `schema-newer-999.sqlite` fixture to the isolated history path and checks the fixture's manifest hash. Every expectation is written by hand from [storage](docs/storage.md), [journal](docs/journal.md) J11, [the recording status](docs/telemetry-service-v1.md#recording-status-et-015c), [application lifecycle](docs/app-lifecycle.md#health-and-the-dashboard) and `apps/desktop/src/strings.ts`, never read back from the code under test (section 4).
+
+| Requirement | Executable regression protection | Evidence boundary |
+| --- | --- | --- |
+| A newer database is refused clearly and is not modified (REG-013, section 4) | `Invoke-RuntimeSmoke.ps1 -Scenario refusal`, development and packaged: one `HISTORY_STORAGE_UNAVAILABLE {code: SCHEMA_NEWER}`, no open, close or recording target; after the explicit exit the file keeps its manifest SHA-256, size and header, `data\` holds only `telemetry.sqlite` (no `-wal`, `-shm`, `-journal` or partial file) and no `backups` folder exists | A header-refused file without sidecars; a newer schema only in a live WAL is covered by the storage suite |
+| The journal shows the refusal as its fixed J11 text (REG-014) | The same smokes: the bridge's list, detail and timeline reads answer `DATABASE_UNAVAILABLE` with `storageCode` `SCHEMA_NEWER`, and the rendered Journal tab shows only `The database is unavailable: the database was written by a newer version.`, with no row, empty-history text or banner | No real history; keyboard use and readability stay manual |
+| The packaged application keeps running and reports a consistent state (REG-017) | The same smokes: `health` is ready with the storage self-test verified, the recording `disabled` and no last error; the dashboard shows the fixed disabled recording texts without an alert; main logs exactly one `RECORDING_STATUS {state: disabled}`; the run exits orderly with code 0. `RuntimeReceipt.ps1` re-checks the facts (`Test-RefusalReceipt`) and `tests/unit/runtime-receipt.test.ts` adds 49 cases | A production history target only; a refused synthetic target, which shows `stopped`, is not run |
+
+Changed tests: `tests/shared/Read-RuntimeReceipt.ps1` gained the scenario's PowerShell 7 Int64 branch. No existing assertion or expected value changed, and no fixture was regenerated.
+
+RED, each applied alone to the product source and reverted, the file then byte-identical (SHA-256):
+
+- the journal list renders an empty page for a refusal (`apps/desktop/src/journal.tsx`): the Journal tab shows `No trips recorded` and the smoke fails;
+- the inspections and the locked re-check let a newer schema through (`packages/storage/src/sqlite/connection.ts`): the reads name `INTERNAL`, and the file's SHA-256 changes because the writer switched it to WAL mode;
+- the journal service names `INTERNAL` for every unavailable database (`apps/desktop/src/journal-service.ts`): the reads differ from `SCHEMA_NEWER`.
+
+Removing only the header check passes, because the read-only inspection refuses the same file without changing it; the smoke does not tell the two layers apart. Commands, timings and findings are in [ET-019 validation](docs/validation/et-019.md#pr-7-the-newer-database-refusal-in-the-packaged-journal-october-19-2026).

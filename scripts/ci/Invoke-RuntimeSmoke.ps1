@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param([ValidateSet('development','packaged','installed')][string]$Mode,
-    [ValidateSet('scaffold','telemetry','overlay','lifecycle','recording','journal','plugin')][string]$Scenario = 'scaffold',
+    [ValidateSet('scaffold','telemetry','overlay','lifecycle','recording','journal','plugin','refusal')][string]$Scenario = 'scaffold',
     [switch]$ForceRendererReuse,
     [string]$OutputRoot = (Join-Path $PSScriptRoot '../../.local/ci'),
     # ET-018 PR-1 (U11): the installed mode runs `<binary root>\app-<version>\ETS2TelemetryDesktop.exe` of a Squirrel install.
