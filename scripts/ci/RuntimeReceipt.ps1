@@ -544,6 +544,98 @@ function Test-RefusalReceipt {
     return $true
 }
 
+# ET-019 PR-12b packaged application soak (scenario `soak`, docs/ci.md#et-019-recording-soak-workflow-dispatch-only): the
+# driver's flags and the key facts again, from the closed forms of the soak schedule for M minutes (docs/simulator-v1.md):
+# 3 + 6M events and ACKs, M trips of which floor((M + 1) / 4) cancelled and r = floor((M + 8) / 10) partial, one
+# not-connected interval per reconnection, 51M - 2r cycle samples, 1 + r connections closed by r disconnects and one end,
+# a contiguous tail of at least 10 samples, no invariant violation, and both logs inside their budget. Memory, database
+# growth and the log projection are evidence only (ET-019 plan decision D3): only their presence and units are checked.
+function Test-SoakLogBudget {
+    param([object]$Log)
+    if ($null -eq $Log -or $Log.reached -isnot [bool] -or $Log.reached) { return $false }
+    if (!(Test-ReceiptInteger -Value $Log.budgetBytes -Minimum 262144 -Maximum 262144) -or !(Test-ReceiptInteger -Value $Log.budgetRecords -Minimum 2000 -Maximum 2000) -or
+        !(Test-ReceiptInteger -Value $Log.bytes -Minimum 1 -Maximum (262144 - 8192)) -or !(Test-ReceiptInteger -Value $Log.records -Minimum 1 -Maximum 1999) -or
+        !(Test-ReceiptInteger -Value $Log.soak.bytes -Minimum 0 -Maximum $Log.bytes) -or !(Test-ReceiptInteger -Value $Log.soak.records -Minimum 0 -Maximum $Log.records)) { return $false }
+    $projected = $Log.projected
+    return ($null -ne $projected -and (Test-ReceiptInteger -Value $projected.minutes -Minimum 90 -Maximum 90) -and (Test-ReceiptInteger -Value $projected.bytes -Minimum 0 -Maximum 1e12) -and
+        (Test-ReceiptInteger -Value $projected.records -Minimum 0 -Maximum 1e9) -and $projected.wouldReach -is [bool])
+}
+function Test-SoakReceipt {
+    param([object]$Driver)
+    $soak = $Driver.soak
+    if ($null -eq $soak -or !(Test-ReceiptInteger -Value $soak.minutes -Minimum 1 -Maximum 90)) { return $false }
+    $m = [int]$soak.minutes; $r = [int][math]::Floor(($m + 8) / 10); $events = 3 + 6 * $m
+    foreach ($field in @('recordingStatusMatch','journalMatch','sourceStopped','logBudgetKept','shutdownClean','sourceMatch','historyDatabaseAbsent','sidecarsAbsent','rowsMatch','invariantsHold')) {
+        if ($soak.$field -isnot [bool] -or $soak.$field -ne $true) { return $false }
+    }
+    if ($soak.target -cne 'synthetic:soak') { return $false }
+    # The source: stopped in its tail, every event written once and acknowledged, the planned closes.
+    $source = $soak.sourceFacts
+    $closes = @(@('disconnect') * $r) + @('end')
+    if ($null -eq $source -or $source.cancelled -isnot [bool] -or !$source.cancelled -or $source.lastEventSeq -cne [string]$events -or $source.maxAckThroughEventSeq -cne [string]$events -or
+        !(Test-ReceiptInteger -Value $source.events -Minimum $events -Maximum $events) -or !(Test-ReceiptInteger -Value $source.gaps -Minimum 0 -Maximum 0) -or
+        !(Test-ReceiptInteger -Value $source.ends -Minimum 1 -Maximum 1) -or !(Test-ReceiptInteger -Value $source.connections -Minimum (1 + $r) -Maximum (1 + $r)) -or
+        (@($source.closes) -join ',') -cne ($closes -join ',') -or !(Test-ReceiptInteger -Value $source.scenarioMs -Minimum ($m * 60000 + 10000) -Maximum ($m * 60000 + 300000))) { return $false }
+    # The recording status in the tail: recording, idle, one not-connected interval per reconnection and no other loss.
+    $status = $soak.recordingAtTail
+    if ($null -eq $status -or $status.state -cne 'recording' -or $status.target -cne 'synthetic' -or $null -ne $status.code -or $status.trip.phase -cne 'idle' -or
+        $null -ne $status.trip.completeness -or $status.trip.untrackedJob -isnot [bool] -or $status.trip.untrackedJob) { return $false }
+    foreach ($loss in @('lostEvents','eventLoss','sampleLoss','restoreLoss','droppedSamples')) { if (!(Test-ReceiptInteger -Value $status.losses.$loss -Minimum 0 -Maximum 0)) { return $false } }
+    if (!(Test-ReceiptInteger -Value $status.losses.notConnected -Minimum $r -Maximum $r)) { return $false }
+    # The journal pages: 50 trips per page, M in all, from the synthetic database.
+    $pages = @($soak.journal.pages)
+    if ($soak.journal.database.purpose -cne 'synthetic' -or !(Test-ReceiptInteger -Value $soak.journal.database.schemaVersion -Minimum 2 -Maximum 2) -or
+        $pages.Count -ne [math]::Ceiling($m / 50)) { return $false }
+    $listed = 0
+    foreach ($page in $pages) { if (!(Test-ReceiptInteger -Value $page -Minimum 1 -Maximum 50)) { return $false }; $listed += $page }
+    if ($listed -ne $m) { return $false }
+    # The stored rows: the closed forms, the tail and the invariants.
+    $database = $soak.database; $counts = $database.counts
+    $expected = [ordered]@{events=$events; trips=$m; cancelled=[math]::Floor(($m + 1) / 4); partial=$r; attributions=2 * $m; intervals=$r; cycleSamples=51 * $m - 2 * $r; gaps=0}
+    if ($null -eq $database -or $null -eq $counts -or $database.integrity -cne 'ok' -or $database.purpose -cne 'synthetic' -or $database.acceptedOrigin -cne 'synthetic' -or
+        !(Test-ReceiptInteger -Value $database.foreignKeyViolations -Minimum 0 -Maximum 0) -or !(Test-ReceiptInteger -Value $database.violations -Minimum 0 -Maximum 0) -or
+        @($database.differences).Count -ne 0) { return $false }
+    foreach ($name in $expected.Keys) { if (!(Test-ReceiptInteger -Value $counts.$name -Minimum $expected[$name] -Maximum $expected[$name])) { return $false } }
+    $tail = $database.tail
+    if (!(Test-ReceiptInteger -Value $counts.tailSamples -Minimum 10 -Maximum 300) -or $null -eq $tail -or @($tail.problems).Count -ne 0 -or
+        !(Test-ReceiptInteger -Value $tail.fromSecond -Minimum (1000 + 60 * $m) -Maximum (1000 + 60 * $m)) -or
+        !(Test-ReceiptInteger -Value $tail.lastSecond -Minimum (999 + 60 * $m + $counts.tailSamples) -Maximum (999 + 60 * $m + $counts.tailSamples))) { return $false }
+    $files = $soak.files
+    if ($null -eq $files -or $files.magic -cne 'SQLite format 3' -or !(Test-ReceiptInteger -Value $files.userVersion -Minimum 2 -Maximum 2) -or @($files.sidecars).Count -ne 0 -or
+        $files.historyDatabase -isnot [bool] -or $files.historyDatabase -or $files.syntheticBackups -isnot [bool] -or $files.syntheticBackups) { return $false }
+    # H11: at most one exit flush row, which wrote what was pending without a loss.
+    foreach ($exit in @($soak.sampleExits)) {
+        if ($null -eq $exit -or $exit.code -cne 'WRITTEN' -or !(Test-ReceiptInteger -Value $exit.losses -Minimum 0 -Maximum 0) -or !(Test-ReceiptInteger -Value $exit.rows -Minimum 1 -Maximum 300)) { return $false }
+    }
+    if (@($soak.sampleExits).Count -gt 1) { return $false }
+    # Evidence, checked for presence and units only: both logs inside their budget, the growth and the series.
+    if (!(Test-SoakLogBudget -Log $soak.logs.main) -or !(Test-SoakLogBudget -Log $soak.logs.service)) { return $false }
+    $growth = $soak.growth
+    if ($null -eq $growth -or !(Test-ReceiptInteger -Value $growth.databaseBytes -Minimum 4096 -Maximum 2147483648) -or
+        !(Test-ReceiptInteger -Value $growth.samples -Minimum ($counts.cycleSamples + $counts.tailSamples) -Maximum ($counts.cycleSamples + $counts.tailSamples)) -or
+        !(Test-ReceiptInteger -Value $growth.bytesPerSampleHour -Minimum 1 -Maximum 1e12) -or !(Test-ReceiptInteger -Value $growth.measuredBytesPerSampleHour -Minimum 534364 -Maximum 534364) -or
+        !(Test-ReceiptInteger -Value $growth.allowanceBytesPerSampleHour -Minimum 1000000 -Maximum 1000000) -or !(Test-ReceiptInteger -Value $growth.walPeakBytes -Minimum 0 -Maximum 2147483648)) { return $false }
+    $series = @($soak.series)
+    if ($series.Count -lt 2) { return $false }
+    foreach ($row in $series) {
+        if (!(Test-ReceiptInteger -Value $row.elapsedMs -Minimum 0 -Maximum 6000000) -or !(Test-ReceiptInteger -Value $row.kinds.main.processes -Minimum 1 -Maximum 1)) { return $false }
+        foreach ($kind in @('main','renderer','telemetryService')) {
+            if (!(Test-ReceiptInteger -Value $row.kinds.$kind.privateBytes -Minimum 1048576 -Maximum 4294967296) -or
+                !(Test-ReceiptInteger -Value $row.kinds.$kind.workingSetBytes -Minimum 1048576 -Maximum 4294967296)) { return $false }
+        }
+    }
+    foreach ($kind in @('main','renderer','telemetryService')) {
+        if ($soak.seriesSummary.$kind.trend.status -cnotin @('MEASURED','TOO_FEW_POINTS')) { return $false }
+    }
+    # The run itself: an explicit quit, an orderly exit and no leftover probe.
+    $mainEvents = @($Driver.mainEvents); $serviceEvents = @($Driver.serviceEvents)
+    $exitRequests = @($mainEvents | Where-Object { $_.event -ceq 'APP_EXIT_REQUESTED' })
+    if ($exitRequests.Count -ne 1 -or $exitRequests[0].facts.reason -cne 'app-quit') { return $false }
+    if (!(Test-OrderlyRunEvent -MainEvents $mainEvents -ServiceEvents $serviceEvents)) { return $false }
+    if ($Driver.launcherExit -ne 0 -or $null -eq $Driver.probesAfterExit -or @($Driver.probesAfterExit).Count -ne 0) { return $false }
+    return $true
+}
+
 # ET-018 PR-1 (U11): an installed run started the installed executable itself, packaged, from a working directory outside
 # the install, with only the minimal Windows PATH and without Node or npm variables. `layout` names the binary root and
 # the application folder only.
@@ -788,6 +880,10 @@ function Test-RuntimeReceipt {
     # ET-019 PR-7: the newer-database refusal is its own scenario; it tightens no earlier scenario.
     if ($ExpectedScenario -ceq 'refusal' -and !(Test-RefusalReceipt -Driver $driver)) {
         $validation.reason = 'REFUSAL_RESULT_INCOMPLETE_OR_INVALID'; return $validation
+    }
+    # ET-019 PR-12b: the application soak is its own scenario; it tightens no earlier scenario.
+    if ($ExpectedScenario -ceq 'soak' -and !(Test-SoakReceipt -Driver $driver)) {
+        $validation.reason = 'SOAK_RESULT_INCOMPLETE_OR_INVALID'; return $validation
     }
     # ET-017 PR-5: the plugin journey is its own scenario; the scaffold smoke also proves the disabled card.
     if ($ExpectedScenario -ceq 'plugin' -and !(Test-PluginReceipt -Driver $driver)) {
