@@ -136,11 +136,12 @@ $receipt = [ordered]@{passed=$validation.passed; scenario=$Scenario;
     mode=$Mode; commit=$config.commit; validation=$validation; actualJobExitCode=$code;
     expected=@{jobExitCode=0; driverPassed=$true; status='ready; isolated storage verified; orderly exit'};
     driverResultPath=(Join-Path $output 'result.json'); stdoutPath=(Join-Path $output 'job/stdout.log');
-    stderrPath=(Join-Path $output 'job/stderr.log'); ownedPidPath=$ownedPidPath; ownedPid=$ownedPid; recordingFacts=$recordingFacts; soakFacts=$soakFacts;
+    stderrPath=(Join-Path $output 'job/stderr.log'); ownedPidPath=$ownedPidPath; ownedPid=$ownedPid; recordingFacts=$recordingFacts;
     resourceFacts=$resourceFacts;
     observedNodeVersion=(& $node --version); actualElectronRuntimeVersion=$null;
     playwrightMetadataVersion=(Get-Content -LiteralPath (Join-Path $checkout 'node_modules/playwright-core/package.json') -Raw | ConvertFrom-Json).version;
     finishedUtc=[datetime]::UtcNow.ToString('o')}
+if ($Scenario -eq 'soak') { $receipt.soakFacts = $soakFacts }
 # Never overwrite the driver's receipt or invent observations when it died early.
 # The soak's facts nest two levels deeper than any other scenario's.
 $receipt | ConvertTo-Json -Depth $(if ($Scenario -eq 'soak') { 8 } else { 6 }) | Set-Content -LiteralPath (Join-Path $output 'wrapper-result.json') -Encoding utf8
