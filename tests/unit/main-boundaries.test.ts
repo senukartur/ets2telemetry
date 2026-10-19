@@ -548,6 +548,8 @@ it('recovers the third upstream loss after a bounded cooldown in the same ready 
 });
 it('bounds recurring upstream losses across multiple cooldowns without accumulating recovery timers', async () => {
   await ready(); const attempts: number[] = [];
+  // Requirement change (ET-036): let the initial heartbeat timer settle before testing upstream recovery timer bounds alone.
+  await vi.advanceTimersByTimeAsync(5000);
   child.postMessage.mockImplementation((message: {type: string}) => {if (message.type === 'subscribe') attempts.push(performance.now());});
   for (let loss = 0; loss < 9; loss++) {
     const current = channels.at(-1)!; current.port1.close();
@@ -571,7 +573,8 @@ it('bounds recurring upstream losses across multiple cooldowns without accumulat
 it.each(['retry', 'cooldown'])('cancels pending upstream %s on stop and ignores retired deliveries', async phase => {
   await ready(); const retired = phase === 'cooldown' ? await exhaustUpstream() : [channels[0]];
   if (phase === 'retry') retired[0].port1.close();
-  expect(vi.getTimerCount()).toBe(1); const count = upstreamRequests();
+  // Requirement change (ET-036): 1 upstream recovery timer + 1 service heartbeat timer.
+  expect(vi.getTimerCount()).toBe(2); const count = upstreamRequests();
   app.emit('before-quit', {preventDefault: vi.fn()}); child.emit('exit', 0);
   const logs = log.mock.calls.length;
   for (const old of retired) {old.port1.emit('close'); deliver(currentGame(), 100, old);}
@@ -585,11 +588,14 @@ it.each(['retry', 'cooldown'])('cancels old-service upstream %s on generation re
   const count = upstreamRequests(); child.emit('exit', 1);
   await vi.advanceTimersByTimeAsync(250); const replacement = children[1];
   replacement.emit('message', {type: 'ready'}); await settle();
-  expect(upstreamRequests(replacement)).toBe(1); expect(vi.getTimerCount()).toBe(0);
+  // Requirement change (ET-036): old service's recovery timer was cancelled; the replacement service's heartbeat monitor timer is active (1 timer).
+  expect(upstreamRequests(replacement)).toBe(1); expect(vi.getTimerCount()).toBe(1);
   const logs = log.mock.calls.length, total = channels.length;
   for (const old of retired) {old.port1.emit('close'); deliver(currentGame(), 100, old);}
   child.emit('message', {type: 'failed'}); await vi.advanceTimersByTimeAsync(61000);
-  expect(log).toHaveBeenCalledTimes(logs); expect(upstreamRequests()).toBe(count);
+  // Requirement change (ET-036): old service logs nothing; the silent replacement service logs SERVICE_HEARTBEAT_TIMEOUT.
+  expect(log.mock.calls.slice(logs)).toEqual([['SERVICE_HEARTBEAT_TIMEOUT']]);
+  expect(upstreamRequests()).toBe(count);
   expect(upstreamRequests(replacement)).toBe(1); expect(channels).toHaveLength(total);
   expect(replacement.kill).not.toHaveBeenCalled(); expect(vi.getTimerCount()).toBe(0);
 });
@@ -1761,6 +1767,100 @@ it('keeps recording status changes out of default logs', async () => {
   expect(healthOf()).toEqual({state: 'unknown'});
   expect(recordingRows()).toEqual([]);
 });
+
+// ET-036: liveness heartbeat detection and degradation to unknown / stale (REG-011, REG-012).
+it('transitions recording health to unknown and live freshness to stale when heartbeat is missed for 5,000 ms, without killing service', async () => {
+  trayAvailable = true; await ready();
+  ipc.emit('app:subscribe-state', trusted());
+  ipc.emit('telemetry:subscribe', trusted());
+  const dashboard = channels.at(-1)!;
+  consumeOverlay(dashboard);
+  report(recordingStatus('recording'));
+  expect(healthOf()).toEqual(recordingStatus('recording'));
+
+  // 4,999 ms of silence: no timeout yet
+  await vi.advanceTimersByTimeAsync(4999);
+  expect(healthOf()).toEqual(recordingStatus('recording'));
+  expect(log).not.toHaveBeenCalledWith('SERVICE_HEARTBEAT_TIMEOUT');
+
+  // 1 ms more reaches 5,000 ms: triggers heartbeat timeout
+  await vi.advanceTimersByTimeAsync(1);
+  expect(log).toHaveBeenCalledWith('SERVICE_HEARTBEAT_TIMEOUT');
+  expect(healthOf()).toEqual({state: 'unknown'});
+  expect(pushedRecordings().at(-1)).toEqual({state: 'unknown'});
+  await vi.advanceTimersByTimeAsync(50);
+  const lastUpdate = dashboard.port1.postMessage.mock.lastCall?.[0]?.update as LiveTelemetry | undefined;
+  expect(lastUpdate).toMatchObject({status: 'stale', reason: expect.stringContaining('heartbeat missed')});
+  // Service is NOT killed or restarted
+  expect(child.kill).not.toHaveBeenCalled();
+  expect(app.exit).not.toHaveBeenCalled();
+});
+
+it('accepts {type: "heartbeat"} without error and resets the liveness deadline', async () => {
+  await ready();
+  report(recordingStatus('recording'));
+
+  // Heartbeats arrive periodically every 3,000 ms for 15 seconds
+  for (let i = 0; i < 5; i++) {
+    await vi.advanceTimersByTimeAsync(3000);
+    child.emit('message', {type: 'heartbeat'});
+  }
+
+  // Never timed out, never treated as invalid message
+  expect(log).not.toHaveBeenCalledWith('SERVICE_HEARTBEAT_TIMEOUT');
+  expect(log).not.toHaveBeenCalledWith('SERVICE_INVALID_MESSAGE');
+  expect(healthOf()).toEqual(recordingStatus('recording'));
+});
+
+it('logs SERVICE_HEARTBEAT_RESUMED upon recovering from a timeout and automatically restores pre-timeout recording status', async () => {
+  await ready();
+  report(recordingStatus('recording'));
+
+  // Silence for 5,000 ms -> timeout
+  await vi.advanceTimersByTimeAsync(5000);
+  expect(healthOf()).toEqual({state: 'unknown'});
+  expect(log).toHaveBeenCalledWith('SERVICE_HEARTBEAT_TIMEOUT');
+
+  // Recovering service emits heartbeat: restores pre-timeout status without requiring a new recording report
+  child.emit('message', {type: 'heartbeat'});
+  expect(log).toHaveBeenCalledWith('SERVICE_HEARTBEAT_RESUMED');
+  expect(healthOf()).toEqual(recordingStatus('recording'));
+});
+
+it('clears cached recording status on service restart or exit', async () => {
+  await ready();
+  report(recordingStatus('recording'));
+
+  await vi.advanceTimersByTimeAsync(5000);
+  expect(healthOf()).toEqual({state: 'unknown'});
+
+  // If the service exits, status stays unknown and cached status is cleared
+  child.emit('exit', 0);
+  await settle();
+  expect(healthOf()).toEqual({state: 'unknown'});
+});
+
+it('does not restore a previously valid status on resume after a rejected report', async () => {
+  await ready();
+  report(recordingStatus('recording'));
+  expect(healthOf()).toEqual(recordingStatus('recording'));
+
+  // Rejected report clears cached status and marks health unknown
+  report({state: 'invalid-state'});
+  expect(healthOf()).toEqual({state: 'unknown'});
+
+  // Heartbeat timeout occurs
+  await vi.advanceTimersByTimeAsync(5000);
+  expect(healthOf()).toEqual({state: 'unknown'});
+  expect(log).toHaveBeenCalledWith('SERVICE_HEARTBEAT_TIMEOUT');
+
+  // Heartbeat resumes -> does not restore the rejected status, leaves unknown
+  child.emit('message', {type: 'heartbeat'});
+  expect(log).toHaveBeenCalledWith('SERVICE_HEARTBEAT_RESUMED');
+  expect(healthOf()).toEqual({state: 'unknown'});
+});
+
+
 
 // ET-016 PR-3 (J4, J10, J11): five fixed journal channels from the trusted dashboard main frame only, routed to the current
 // ready service on its parent port; main checks every reply strictly. Expected values are written by hand.

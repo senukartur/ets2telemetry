@@ -22,8 +22,20 @@ import {createRecordingRuntime} from './recording-runtime';
 import {JournalService} from './journal-service';
 import type {LiveTelemetry, LiveTelemetryV1, SourceSelection} from '../../../packages/contracts/src';
 import {liveV1Projection, withV1} from './live-v1';
+import {HEARTBEAT_INTERVAL_MS} from './service-heartbeat';
 const port = process.parentPort;
 if (!port) throw new Error('Missing Electron parent port');
+// ET-036: liveness heartbeat to main, unreferenced so it never keeps the event loop alive alone.
+let heartbeatTimer: ReturnType<typeof setInterval> | undefined = setInterval(() => {
+  port.postMessage({type: 'heartbeat'});
+}, HEARTBEAT_INTERVAL_MS);
+heartbeatTimer.unref();
+function stopHeartbeat(): void {
+  if (heartbeatTimer !== undefined) {
+    clearInterval(heartbeatTimer);
+    heartbeatTimer = undefined;
+  }
+}
 // The `service` subdirectory of the log root main resolved and passed at fork (log-location.ts).
 const logLocation = serviceLogLocation(process.env, tmpdir());
 const log = createDiagnostics(logLocation.directory, logLocation.detailed);
@@ -183,6 +195,7 @@ function exitAfterLog(code: number): Promise<void> {
  */
 function exitAfterHistory(code: number): void {
   if (exiting) return;
+  stopHeartbeat();
   exiting = true; runtime.stopStatus();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const bound = new Promise<void>(resolve => {timer = setTimeout(resolve, HISTORY_CLOSE_BUDGET_MS);});
@@ -200,6 +213,7 @@ shutdown.register('storage', {name: 'storage-probe', budgetMs: 1000, run: async 
 runtime.register(shutdown);
 function stop(): void {
   if (stopping) return;
+  stopHeartbeat();
   stopping = true; stopReceivedAt = performance.now(); subscriptions.close(); runtime.stopStatus();
   void shutdown.run().then(({clean}) => {
     const message = {type: 'stopped', clean};
@@ -233,6 +247,10 @@ port.on('message', event => {
   } else if (command?.type === 'journal') {
     for (const transferred of event.ports) transferred.close();
     journal.receive(command, reply => port.postMessage(reply));
+  } else if (process.env.ETS2TELEMETRY_LIVE_SMOKE === '1' && command?.type === 'diagnostic-freeze') {
+    for (const transferred of event.ports) transferred.close();
+    const duration = typeof command.ms === 'number' && Number.isFinite(command.ms) && command.ms > 0 ? command.ms : 10000;
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, duration);
   } else {for (const transferred of event.ports) transferred.close();}
 });
 void probe.start();

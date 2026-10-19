@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type {EventEmitter} from 'node:events';
 import {version} from '../../../package.json';
-import type {AppHealth, AppState, AppUninstallResult, DiagnosticsExportResult, LiveTelemetry, OverlayEditState, OverlayPresentation, OverlaySettings, PluginFolderChoice, PluginGame, PluginShowFileResult, ScaffoldStatus, SettingsView,
+import type {AppHealth, AppState, AppUninstallResult, DiagnosticsExportResult, LiveTelemetry, OverlayEditState, OverlayPresentation, OverlaySettings, PluginFolderChoice, PluginGame, PluginShowFileResult, RecordingHealth, ScaffoldStatus, SettingsView,
   SourceSelection, UnitProfiles} from '../../../packages/contracts/src';
 import {SettingsBusyError, SettingsError, SettingsStore, settingsDirectory} from './settings-store';
 import {isUnitGame, isUnitProfile} from './unit-profiles';
@@ -14,6 +14,7 @@ import {processEntrypoint} from './entrypoints';
 import {BUNDLE_FLUSH_MS, createDiagnostics, MAIN_EXIT_FLUSH_MS, type DiagnosticFacts} from './diagnostics';
 import {mainLogLocation, serviceEnvironment} from './log-location';
 import {ServiceSupervisor} from './service-supervisor';
+import {ServiceHeartbeatMonitor} from './service-heartbeat';
 import {initialLive, sourceSelection} from './live-state';
 import {createBrokerResolver} from './broker-artifact';
 import {RecoveryBudget} from './recovery-budget';
@@ -126,8 +127,9 @@ function runApplication(profileError: unknown): void {
   // ET-015c (G4, G6, G12): the service whose recording status main accepts, until it fails, exits or restarts; the
   // committed losses of every earlier service process; and the latest losses the current one reported.
   let recordingChild: UtilityProcess | undefined, lossBase = ZERO_LOSSES, childLosses = ZERO_LOSSES, rejectedRecording = 0;
+  let lastKnownRecordingStatus: RecordingHealth | undefined;
   /** Stops accepting the current service's recording status and adds its losses to the totals; repeated calls add nothing. */
-  function retireRecording(): void {recordingChild = undefined; lossBase = addLosses(lossBase, childLosses); childLosses = ZERO_LOSSES;}
+  function retireRecording(): void {recordingChild = undefined; lossBase = addLosses(lossBase, childLosses); childLosses = ZERO_LOSSES; lastKnownRecordingStatus = undefined;}
   // ET-016 (J4): journal reads go to the current ready service, attached at readiness and retired with it.
   const journal = new JournalBroker({log});
   // ET-016 PR-5 (J16): one trip export at a time. Main owns the Save dialog and the file writer; the renderer gets fixed
@@ -267,11 +269,24 @@ function runApplication(profileError: unknown): void {
   let selectionPending = false;
   let rendererEpoch = 0;
   let selection: SourceSelection = sourceSelection(process.env.ETS2TELEMETRY_SOURCE_KIND || 'game');
+  const heartbeatMonitor = new ServiceHeartbeatMonitor({
+    onTimeout: () => {
+      log('SERVICE_HEARTBEAT_TIMEOUT');
+      timeline?.('SERVICE_HEARTBEAT_TIMEOUT');
+      updateHealth({type: 'recording', status: {state: 'unknown'}});
+      freshness.invalidate({...initialLive(selection), status: 'stale', reason: 'Telemetry service heartbeat missed; current interval is unknown'});
+    },
+    onResume: () => {
+      log('SERVICE_HEARTBEAT_RESUMED');
+      timeline?.('SERVICE_HEARTBEAT_RESUMED');
+      if (lastKnownRecordingStatus) updateHealth({type: 'recording', status: lastKnownRecordingStatus});
+    }
+  });
   const lifecycle = new ExitCoordinator({
     log,
     // A running trip export stops first, so a journal read that the retirement answers ends it as interrupted (J16).
     // ET-017: plugin setup stops after its current game folder; no new run, poll or trigger starts.
-    begin: () => {exporter.abort(); diagnosticsExporter.abort(); pluginSetup.abort(); updateHealth({type: 'exit-requested'}, true); retireLive();},
+    begin: () => {exporter.abort(); diagnosticsExporter.abort(); pluginSetup.abort(); heartbeatMonitor.stop(); updateHealth({type: 'exit-requested'}, true); retireLive();},
     stopService: () => supervisor.stop(),
     // An in-flight settings save, the removal of an interrupted trip or diagnostics export's partial file and the plugin setup run in flight
     // (which ends with the removal of its temporary file) may delay the final exit by at most EXIT_IDLE_BUDGET_MS
@@ -287,7 +302,7 @@ function runApplication(profileError: unknown): void {
   });
   const supervisor = new ServiceSupervisor(log, code => lifecycle.finish(code), {
     restart: () => startService(),
-    state: state => {serviceReady = false; selectionPending = false; status = undefined; closeUpstream(); retireRecording(); journal.retire();
+    state: state => {heartbeatMonitor.stop(); serviceReady = false; selectionPending = false; status = undefined; closeUpstream(); retireRecording(); journal.retire();
       if (state === 'service-failed') {updateHealth({type: 'service-exited', afterFailure: failureReported}); failureReported = false;}
       else updateHealth({type: 'service-restarting'});
       const update: LiveTelemetry = {...initialLive(selection), status: state, reason: 'Telemetry service exited; current interval is unknown'};
@@ -295,7 +310,7 @@ function runApplication(profileError: unknown): void {
     // A service that failed or exited before its first readiness completed (the readiness was retired while awaiting its
     // broker or settings) never created the windows; create them now, so the dashboard shows the exhausted state and
     // the tray and a second launch can open it (ET-016 PR-3 delta review).
-    exhausted: () => {retireRecording(); journal.retire(); updateHealth({type: 'service-restart-exhausted'});
+    exhausted: () => {heartbeatMonitor.stop(); retireRecording(); journal.retire(); updateHealth({type: 'service-restart-exhausted'});
       if (!started && !supervisor.stopping && !lifecycle.exiting) {started = true; createWindow(); createOverlay();}
       const update: LiveTelemetry = {...initialLive(selection), status: 'service-failed', reason: 'Automatic service restart limit reached'};
       freshness.invalidate(update); window?.webContents.send('telemetry:service-state', update);},
@@ -303,12 +318,12 @@ function runApplication(profileError: unknown): void {
     // load failure, recovery timeout, ...): mark the application exiting at once so nothing reopens a window, the
     // overlay may close and the tray shows the exiting state. Exit codes and bounds are unchanged.
     // A running trip export ends as interrupted before it opens a file (J16), also on a fatal stop.
-    stopping: () => {exporter.abort(); diagnosticsExporter.abort(); pluginSetup.abort(); if (lifecycle.abort()) {updateHealth({type: 'exit-requested'}, true); retireLive();}},
+    stopping: () => {heartbeatMonitor.stop(); exporter.abort(); diagnosticsExporter.abort(); pluginSetup.abort(); if (lifecycle.abort()) {updateHealth({type: 'exit-requested'}, true); retireLive();}},
     // The failed service is being terminated: retire its readiness, status and live channels now rather than when
     // its exit arrives (up to 3000 ms later). The later state callback finds them already retired.
     // A new selection generation also retires a readiness still awaiting its broker or settings, so the failing service
     // never becomes ready, selected or the journal's service afterwards (ET-016 PR-3 review).
-    failure: code => {failureReported = true; serviceReady = false; selectionPending = false; status = undefined; selectionGeneration++; closeUpstream(); retireRecording(); journal.retire();
+    failure: code => {heartbeatMonitor.stop(); failureReported = true; serviceReady = false; selectionPending = false; status = undefined; selectionGeneration++; closeUpstream(); retireRecording(); journal.retire();
       updateHealth({type: 'service-failure', code: failureCode(code, reportedFailureCode)}); reportedFailureCode = undefined;
       const update: LiveTelemetry = {...initialLive(selection), status: 'restarting', reason: 'Telemetry service failed; current interval is unknown'};
       freshness.invalidate(update); dashboardSubscriptions.close(); dashboardPort = undefined; window?.webContents.send('telemetry:service-state', update);}
@@ -583,14 +598,16 @@ function runApplication(profileError: unknown): void {
     if (!existsSync(entrypoint)) throw new Error('Missing physical telemetry service entrypoint');
     const child = service = utilityProcess.fork(entrypoint, [], {serviceName: 'ETS2Telemetry telemetry service', stdio: 'pipe',
       env: serviceEnvironment(process.env, logLocation.directory)});
-    supervisor.attach(child); recordingChild = child;
+    supervisor.attach(child); recordingChild = child; lastKnownRecordingStatus = undefined; heartbeatMonitor.start();
     child.stdout?.on('data', chunk => log('SERVICE_STDOUT', String(chunk)));
     child.stderr?.on('data', chunk => log('SERVICE_STDERR', String(chunk)));
     child.once('spawn', () => log('SERVICE_SPAWN', {pid: child.pid}));
-    child.once('exit', code => {if (service === child) {service = undefined; supervisor.serviceExited(code);}});
+    child.once('exit', code => {heartbeatMonitor.stop(); if (service === child) {service = undefined; supervisor.serviceExited(code);}});
     child.on('message', (message: unknown) => {
       if (supervisor.stopping || service !== child) return;
+      heartbeatMonitor.touch();
       const type = message && typeof message === 'object' && !Array.isArray(message) ? (message as Record<string, unknown>).type : undefined;
+      if (type === 'heartbeat') return;
       if (type === 'ready') {
         if (!supervisor.ready()) return;
         const requested = selection, generation = ++selectionGeneration;
@@ -629,12 +646,15 @@ function runApplication(profileError: unknown): void {
     if (!parsed) {
       const count = ++rejectedRecording;
       if ((count & (count - 1)) === 0) log('RECORDING_STATUS_REJECTED', undefined, {count});
+      lastKnownRecordingStatus = undefined;
       updateHealth({type: 'recording', status: {state: 'unknown'}});
       return;
     }
-    if (!('losses' in parsed)) {updateHealth({type: 'recording', status: parsed}); return;}
+    if (!('losses' in parsed)) {lastKnownRecordingStatus = parsed; updateHealth({type: 'recording', status: parsed}); return;}
     childLosses = parsed.losses;
-    updateHealth({type: 'recording', status: {...parsed, losses: addLosses(lossBase, parsed.losses)}});
+    const combined: RecordingHealth = {...parsed, losses: addLosses(lossBase, parsed.losses)};
+    lastKnownRecordingStatus = combined;
+    updateHealth({type: 'recording', status: combined});
   }
   log('APP_START', {electron: process.versions.electron, node: process.versions.node, packaged: app.isPackaged});
   if (timeline) {
