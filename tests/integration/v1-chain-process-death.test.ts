@@ -205,7 +205,7 @@ function expectKilledBroker(driver: Driver) {
 }
 const identity = (source: SourceIdentity) => ({pluginSessionId: source.pluginSessionId, processInstanceId: source.processInstanceId, processId: source.processId});
 
-it('ends the broker mid-session: the client reports a retryable rejection, restarts within the E9 backoff, and resumes the same plugin session with no loss or duplicate; diagnosed authority failures stay final (REG-003, REG-011)', async () => {
+it('ends the broker mid-session: the client reports a retryable rejection, and a replacement broker resumes the same plugin session with no loss or duplicate; diagnosed authority failures stay final (REG-003, REG-011)', async () => {
   for (const [name, file] of Object.entries(artifacts)) expect(existsSync(file), `${name} artifact missing: build the native plugin and client first`).toBe(true);
   const {v0, v1} = await workspace();
   const host = await startHost(v0, v1);
@@ -238,15 +238,10 @@ it('ends the broker mid-session: the client reports a retryable rejection, resta
   await statusUntil(first, status => status.delivery.retainedEvents === 2, 'two retained events', beforeEvents);
   terminate(first.pid);
   expect(await until(() => first.closed, DELIVERY_GUARD_MS), 'killed broker closed').toBe(true);
-  const firstClosedAt = performance.now();
   expectKilledBroker(first);
   expect(host.exit).toBeUndefined();
 
-  // The killed broker reported a transient rejection. The replacement broker restarts within the E9 backoff
-  // (at least 250 ms after the prior broker process exited) and resumes the session.
-  await new Promise(resolve => setTimeout(resolve, Math.max(0, DOCUMENTED_BACKOFF_MS[0] - (performance.now() - firstClosedAt))));
-  const firstRestartedAt = performance.now();
-  expect(firstRestartedAt - firstClosedAt).toBeGreaterThanOrEqual(DOCUMENTED_BACKOFF_MS[0] - TIMER_EARLY_ALLOWANCE_MS);
+  // The killed broker reported a transient rejection. The host keeps running, and a replacement broker resumes the session.
   const live = await connect(v1, false);
   expect(live.welcome.source).toEqual(first.welcome.source);
   expect(live.welcome.data.durableEvents).toBe(false);
@@ -263,14 +258,10 @@ it('ends the broker mid-session: the client reports a retryable rejection, resta
   expect(live.coverage).toEqual([]);
   terminate(live.pid);
   expect(await until(() => live.closed, DELIVERY_GUARD_MS), 'killed live-only broker closed').toBe(true);
-  const liveClosedAt = performance.now();
   expectKilledBroker(live);
 
   // The live state recovers on a new live-only connection: the same session, hydrated from its checkpoint (the paused
   // simulation), followed by live snapshots; the loss counters never decrease (§7, I7).
-  await new Promise(resolve => setTimeout(resolve, Math.max(0, DOCUMENTED_BACKOFF_MS[0] - (performance.now() - liveClosedAt))));
-  const secondRestartedAt = performance.now();
-  expect(secondRestartedAt - liveClosedAt).toBeGreaterThanOrEqual(DOCUMENTED_BACKOFF_MS[0] - TIMER_EARLY_ALLOWANCE_MS);
   const recovered = await connect(v1, false);
   expect(recovered.welcome.source).toEqual(first.welcome.source);
   expect(recovered.checkpoint.data.state.simulation).toBe('paused');

@@ -53,7 +53,7 @@ export function isCrashExitCode(code: number | null): boolean {
   if ((code >>> 0) >= 0x80000000) return true;
   return code > 4;
 }
-/** A transient failure granted no authority and may be retried after the broker has actually exited. */
+/** A transient failure (pre-receipt contention/deadline, or unexpected mid-session exit/crash) may be retried after the broker has actually exited. */
 export class NativeClientError extends Error {
   constructor(message: string, readonly outcome: BrokerOutcome, readonly transient = false) {super(message);}
 }

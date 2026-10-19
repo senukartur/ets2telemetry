@@ -287,7 +287,7 @@ Columns:
 | `tests/storage/worker.test.ts` | Storage (Vitest under Electron) | REG-005, REG-006, REG-007, REG-014 | R, F | ET-013 (#60) | PR (tests job, `npm run test:storage`) | ACK, regression |
 | `tests/integration/cap0-chain.test.ts` | Integration chain (Vitest) | REG-004, REG-005, REG-007, REG-009, REG-010, REG-011 | T, V (cap-01a) | CAP-01a (#26) | PR (scaffold job) | security, v0/CAP0 isolation |
 | `tests/integration/v1-chain.test.ts` | Integration chain (Vitest) | REG-003, REG-005, REG-010, REG-011 | T, V (et-006b) | ET-006b (#68) | PR (scaffold job) | ACK, security |
-| `tests/integration/v1-chain-process-death.test.ts` | Integration chain (Vitest) | REG-003, REG-011 | R, F, T, V (et-019) | ET-019 (PR-8), extended by ET-033 | PR (scaffold job, `npm run test:v1-chain`) | gap, security |
+| `tests/integration/v1-chain-process-death.test.ts` | Integration chain (Vitest) | REG-003, REG-011 | R, F, T, V (et-019) | ET-019 (PR-8), extended by ET-033 and ET-034 | PR (scaffold job, `npm run test:v1-chain`) | gap, security |
 | `tests/integration/plugin-image-lock.test.ts` | Integration (Vitest, fake SDK host) | REG-015 | R, F, T, V (et-017) | ET-017 (PR-3) | PR (scaffold job, `npm run test:plugin-lock`) | security |
 | `tests/electron/startup.spec.ts` | Playwright Electron | REG-017 | T, V (et-001) | ET-001 (#5) | manual (`npm run test:electron`); kept by owner decision Q2 of October 17, 2026 | security |
 | `tests/measurement/storage-size.measure.ts` | Measurement (Vitest under Electron) | REG-018 (size only) | F, V (et-013) | ET-013 (#60) | manual (`npm run measure:storage`) | — |
