@@ -35,11 +35,16 @@ beforeEach(async () => { ws = await workspace(); });
  * The service of the running case. A case that fails before its orderly stop leaves its v1 ingestion running, and a
  * synthetic-target case would keep reconnecting to its closed pipe server; afterEach ends the source and the status.
  */
+/** Below the 30 s hook timeout, so a stuck source stop reports its own name. */
+const CLEANUP_GUARD_MS = 10_000;
 let current: {runtime: ReturnType<typeof createRecordingRuntime>; stopped: boolean} | undefined;
 afterEach(async () => {
   const left = current; current = undefined;
-  if (left && !left.stopped) { left.runtime.stopStatus(); await guarded(left.runtime.v1.stopSource(), 'the source stop of a failed case', HANG_GUARD_MS); }
-  await terminateWorkers(); await ws.dispose();
+  try {
+    if (left && !left.stopped) { left.runtime.stopStatus(); await guarded(left.runtime.v1.stopSource(), 'the source stop of a failed case', CLEANUP_GUARD_MS); }
+  } finally {
+    await terminateWorkers(); await ws.dispose();
+  }
 });
 
 /** The committed storage fixtures are immutable: every listed file keeps its manifest SHA-256 after these cases. */
@@ -228,7 +233,8 @@ describe('ET-019 PR-6: refused history databases through the production service 
     expect(tree(root())).toEqual(before);
     // The lock ends. Up to the orderly stop the service does not re-open history: still unavailable, still one worker.
     // This checks the state at these two points only; no retry mutation was applied, and there is no automatic re-open
-    // to test (docs/telemetry-service-v1.md G10 records it as a product gap).
+    // to test (G10 keeps the status `stopped` for the service lifetime, docs/telemetry-service-v1.md; automatic re-open is a
+    // deferred gap in docs/validation/et-015c.md).
     holder.close();
     await expectUnavailable(s, 'DATABASE_LOCKED');
     await expectCleanStop(s);
