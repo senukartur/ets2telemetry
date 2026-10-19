@@ -25,15 +25,15 @@ vi.mock('node:child_process', () => ({spawn: () => {
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Campaign configuration (ET-019 decision D4: 2,000 inputs per parser on a PR, more in the extended job).
-function envInteger(name: string, fallback: number, max: number): number {
+function envInteger(name: string, fallback: number, min: number, max: number): number {
   const raw = process.env[name];
   if (raw === undefined || raw === '') return fallback;
-  if (!/^[0-9]{1,10}$/.test(raw) || Number(raw) > max) throw new Error(`${name} must be an integer from 0 to ${max}, got ${JSON.stringify(raw)}`);
+  if (!/^[0-9]{1,10}$/.test(raw) || Number(raw) < min || Number(raw) > max) throw new Error(`${name} must be an integer from ${min} to ${max}, got ${JSON.stringify(raw)}`);
   return Number(raw);
 }
 // At most 10,000,000, so that CAMPAIGN_CPU_BUDGET_MS stays a valid timer delay.
-const ITERATIONS = Math.max(1, envInteger('ETS2TELEMETRY_FUZZ_ITERATIONS', 2_000, 10_000_000));
-const SEED = envInteger('ETS2TELEMETRY_FUZZ_SEED', 20_261_019, 0xffff_ffff);
+const ITERATIONS = envInteger('ETS2TELEMETRY_FUZZ_ITERATIONS', 2_000, 1, 10_000_000);
+const SEED = envInteger('ETS2TELEMETRY_FUZZ_SEED', 20_261_019, 0, 0xffff_ffff);
 /**
  * Hang guard: an input whose processing has not returned by then is reported as a hang, with its seed and bytes. It
  * interrupts even a synchronous endless loop (node:vm terminates the running script). Iterations run in guarded batches
@@ -102,6 +102,10 @@ function campaign(name: string, index: number, body: (iteration: Iteration, outc
         }
       });
     } catch (error) {
+      // A guard timeout terminates the script without running its finally blocks: restore the allocation probe and end
+      // a broker reader the iteration left open (its startup timer), so neither reaches a later case.
+      globalThis.Uint8Array = NativeUint8Array;
+      openBrokerClient?.destroy(); openBrokerClient = undefined;
       const hung = (error as {code?: unknown} | null)?.code === 'ERR_SCRIPT_EXECUTION_TIMEOUT';
       const cause = hung ? `hang: no return within the ${ITERATION_HANG_GUARD_MS} ms guard` : error instanceof Violation ? error.message : `unexpected ${describeError(error)}`;
       expect.fail(`${name}: seed ${SEED}, iteration ${i} (reproduce with ETS2TELEMETRY_FUZZ_SEED=${SEED} and at least ${i + 1} iterations): ${cause}\n` +
@@ -248,8 +252,12 @@ const v0Decoder: PayloadDecoder = {
   problem: message => {
     const problem = v0Problem(message); if (problem) return problem;
     const m = message as v0.ProtocolMessage;
-    // A hello negotiates minor 0 and never durable recording (v0.md "Versions and handshake").
-    if (m.kind === 'hello' && !jsonEqual(v0.negotiateV0(m), {version: {major: 0, minor: 0}, diagnostics: m.data.diagnostics, durableRecording: false})) return 'negotiation';
+    // A hello negotiates version 0.0 without durable recording; diagnostics may be declined but never exceed the request
+    // (v0.md "Versions and handshake").
+    if (m.kind === 'hello') {
+      const n = v0.negotiateV0(m);
+      if (!isVersion(n.version, 0) || n.durableRecording !== false || typeof n.diagnostics !== 'boolean' || (n.diagnostics && !m.data.diagnostics)) return 'negotiation';
+    }
     return undefined;
   },
   reencode: message => encodedOrSizeRefusal(() => v0.encodeFrame(message as v0.ProtocolMessage), error => error instanceof v0.ProtocolError, jsonBytes(message) > V0_PAYLOAD_BYTES)
@@ -261,9 +269,11 @@ const v1Decoder = (sender: v1.Sender): PayloadDecoder => ({
     if (sender === 'server') return v1ServerProblem(message, bytes.length);
     const problem = v1ClientProblem(message); if (problem) return problem;
     const m = message as v1.ClientMessage;
-    // The server selects minor 0, and durable delivery never exceeds the request (v1.md §4).
+    // The server selects minor 0, and durable delivery is never granted beyond the request, nor by a server that does not
+    // offer it (v1.md §4; the endpoint stays live-only without its service policy, ET-004b OD-2).
     if (m.kind === 'hello') for (const allowDurable of [true, false]) {
-      if (!jsonEqual(v1.negotiateV1(m, {allowDurable}), {version: {major: 1, minor: 0}, minor: 0, durableEvents: m.data.durableEvents && allowDurable})) return 'negotiation';
+      const n = v1.negotiateV1(m, {allowDurable});
+      if (!isVersion(n.version, 1) || n.minor !== 0 || typeof n.durableEvents !== 'boolean' || (n.durableEvents && !(m.data.durableEvents && allowDurable))) return 'negotiation';
     }
     return undefined;
   },
@@ -673,6 +683,8 @@ class FakeStdin extends EventEmitter {
 }
 class FakeChild extends EventEmitter { readonly stdout = new FakeStream(); readonly stderr = new FakeStream(); readonly stdin = new FakeStdin(); }
 let lastChild: FakeChild | undefined;
+/** The broker reader of the running iteration, so that a hang-guard termination can still end it. */
+let openBrokerClient: {destroy(): void} | undefined;
 spawnHook.create = () => (lastChild = new FakeChild());
 const BROKER = {executable: 'C:\\isolated\\telemetry-pipe-client.exe', discoveryDirectory: 'C:\\isolated\\transport\\v0'};
 const RECEIPT_SOURCE = {game: 'ets2', processId: 4242, windowsSessionId: 1, processInstanceId: '11111111-1111-4111-8111-111111111111', pluginSessionId: '22222222-2222-4222-8222-222222222222', origin: 'game'};
@@ -733,6 +745,7 @@ function stdoutFrames(stream: Uint8Array): {start: number; bytes: Uint8Array}[] 
 interface BrokerResult {log: string[]; relayed: Uint8Array[]; authority?: unknown; failed: boolean}
 function runBroker(mode: BrokerMode, stream: Uint8Array, chunks: Uint8Array[]): BrokerResult {
   const {client, afterAuthority, afterRelay} = mode.start(), child = lastChild!;
+  openBrokerClient = client;
   const result: BrokerResult = {log: [], relayed: [], failed: false};
   // Listener checks are recorded, never thrown: the reader turns a listener exception into a rejection.
   let problem: string | undefined;
@@ -764,7 +777,7 @@ function runBroker(mode: BrokerMode, stream: Uint8Array, chunks: Uint8Array[]): 
       check(problem === undefined, () => problem!);
     }
     if (result.failed) check(child.stdin.writableEnded, () => 'the connection stayed open after a rejection');
-  } finally { client.destroy(); }
+  } finally { client.destroy(); openBrokerClient = undefined; }
   // Safety: relayed frames are the stream's own frames in order, unchanged and within the bound, after a valid receipt.
   const frames = stdoutFrames(stream);
   if (result.authority !== undefined) {
@@ -808,7 +821,9 @@ function brokerIteration(mode: BrokerMode, it: Iteration, outcomes: Outcomes): v
     else if (kind === 'waiting') expected = writes.length > 1 ? ['error'] : [];
     else {
       expected = ['authority'];
-      for (const write of writes.slice(1)) { if (write.length - 4 > BROKER_RELAY_BYTES) { expected.push('error'); break; } expected.push(`relay ${mode.payloadOnly ? write.length - 4 : write.length}`); }
+      // A payload of 1 to 65,536 bytes is relayed; an empty or larger one (havoc can truncate a seed to nothing) is a
+      // malformed frame that closes the connection.
+      for (const write of writes.slice(1)) { if (write.length - 4 < 1 || write.length - 4 > BROKER_RELAY_BYTES) { expected.push('error'); break; } expected.push(`relay ${mode.payloadOnly ? write.length - 4 : write.length}`); }
     }
     const shape = whole.log.map(entry => entry.startsWith('authority') ? 'authority' : entry);
     check(jsonEqual(shape, expected), () => `whole writes gave [${shape.join('; ')}], the documents [${expected.join('; ')}]`);
