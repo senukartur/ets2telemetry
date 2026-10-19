@@ -1,7 +1,7 @@
 #pragma once
 // ET-019 extended campaigns: ETS2TELEMETRY_NATIVE_FUZZ_MULTIPLIER multiplies the iteration counts of the seeded native
 // fuzz cases (snapshot-transport `fuzz`, v1-producer `fuzz`, v1-transport `fuzz`). Unset or empty means 1, the PR run;
-// the extended Windows job sets 50 (docs/ci.md#et-019-extended-campaigns). Any other value than a decimal integer from 1
+// the Windows extended campaigns workflow sets 50 (docs/ci.md#et-019-extended-campaigns). Any other value than a decimal integer from 1
 // to 1000 throws, so a typo can never silently run the default campaign. The seeds are unchanged, so each multiplier
 // gives a fixed, reproducible input sequence, and the first loop of each case begins with the inputs of the PR run.
 #include <cstdlib>

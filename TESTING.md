@@ -1010,20 +1010,20 @@ RED, each applied alone to the product source and reverted, the file then byte-i
 
 ## ET-019 extended campaigns — October 19, 2026
 
-ET-019 PR-10 runs the seeded campaigns at larger sizes in a fourth Windows CI job, **Windows x64 extended campaigns** (owner decision D1, sizes D4). It runs only on pushes to `main` and on dispatch with `extended=true`, never on pull requests, and it is not a required check: the three required jobs and the PR run's default sizes are unchanged. It changes test code, the workflow and documentation only: no product source, fixture or expected value. `GAME_HISTORY_RECORDING` stays `false`.
+ET-019 PR-10 runs the seeded campaigns at larger sizes in a separate workflow, **Windows extended campaigns** (`.github/workflows/windows-extended.yml`, job **Windows x64 extended campaigns**; owner decision D1, sizes D4). It runs on pushes to `main` and by dispatch, never on pull requests, and it is not a required check: Windows CI, its three required jobs and the PR run's default sizes are unchanged. The coordinator moved the job out of `windows-ci.yml` after review, because the next merge's run cancelled it there and its state changed that run's conclusion. It changes test code, the new workflow and documentation only: no product source, fixture or expected value. `GAME_HISTORY_RECORDING` stays `false`.
 
-| Campaign | Setting | PR run | Extended job |
+| Campaign | Setting | PR run | Extended workflow |
 | --- | --- | --- | --- |
 | Killed-recorder recovery (`tests/storage/trip-recorder-crash.test.ts`) | `ETS2TELEMETRY_RECOVERY_SEEDS` | 4 seeds | 200 seeds |
-| TypeScript parser fuzz (`tests/unit/protocol-fuzz.test.ts`) | `ETS2TELEMETRY_FUZZ_ITERATIONS` | 2,000 inputs per case | 200,000 |
+| TypeScript parser fuzz (`tests/unit/protocol-fuzz.test.ts`), in three steps by case name | `ETS2TELEMETRY_FUZZ_ITERATIONS` | 2,000 inputs per case | 200,000 |
 | Native seeded fuzz (`snapshot-transport`, `v1-producer` and `v1-transport` `fuzz` cases) | `ETS2TELEMETRY_NATIVE_FUZZ_MULTIPLIER` | x1 | x50 |
 
-- **Native multiplier.** New in this PR. It multiplies the iteration counts of the three native cases and keeps their seeds. Unset or empty means 1; any value other than a decimal integer from 1 to 1000 fails the case with the variable's name and value, never a silent fallback. Each case prints its multiplier and iteration counts.
-- **Bounds.** Each campaign is its own step with a budget from local measurement (local time x 2.2 x 2, at least 3 minutes); the per-test timeouts are unchanged. The native cases run their executables directly in the extended job, because their CTest `TIMEOUT` bounds the x1 run. A campaign whose hosted time exceeds about 30 minutes is split into separate steps of its cases or into shards, following section 6, rather than given a longer budget.
-- **Replay.** No replay test has a seed or size setting, so the job runs recovery and fuzz only; the recovery campaign replays a corpus scenario through the reactive v1 simulator for every seed.
+- **Native multiplier.** New in this PR. It multiplies the iteration counts of the three native cases and keeps their seeds. Unset or empty means 1; any value other than a decimal integer from 1 to 1000 fails the case with the variable's name and value, never a silent fallback. Each case prints its multiplier and planned iteration counts before its first iteration.
+- **Bounds.** Each campaign is its own step with a budget from local measurement (local time x 3.0 x 1.5, at least 3 minutes, where 3.0 covers the measured hosted slowdowns); the per-test timeouts are unchanged. The native cases run their executables directly, because their CTest `TIMEOUT` bounds the x1 run. A campaign whose hosted time exceeds about 30 minutes is split into separate steps of its cases or into shards, following section 6, rather than given a longer budget. The protocol fuzz is split that way, and a final step fails unless its three `-t` patterns ran every case exactly once.
+- **Replay.** No replay test has a seed or size setting, so the workflow runs recovery and fuzz only; the recovery campaign replays a corpus scenario through the reactive v1 simulator for every seed.
 - **Reproduction.** Set the same variable locally and run the same file or executable; a failure names its seed (recovery), its case, seed and iteration (fuzz), or its case and multiplier (native).
 
-The commands, budgets, evidence and reproduction are in [docs/ci.md](docs/ci.md#et-019-extended-campaigns); the measured times and RED checks in [ET-019 validation](docs/validation/et-019.md#pr-10-extended-seeded-campaigns-october-19-2026). The first hosted dispatch is pending.
+The commands, budgets, evidence and reproduction are in [docs/ci.md](docs/ci.md#et-019-extended-campaigns); the measured times and RED checks in [ET-019 validation](docs/validation/et-019.md#pr-10-extended-seeded-campaigns-october-19-2026). GitHub dispatches a workflow only when its file is on the default branch, so the workflow's first own run is the push to `main` at the merge; its campaign steps were validated hosted beforehand inside Windows CI by dispatch 39217989969.
 
 ## ET-019 history refusal through the service — October 19, 2026
 
