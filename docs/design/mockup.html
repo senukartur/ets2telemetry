@@ -4,9 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Yukon Union Telemetry UI</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700;800&display=swap">
+<!-- No web fonts: this page makes no network request. The application bundles Onest with
+     @fontsource-variable/onest and never loads Google Fonts (ui-spec.md §3). Here Onest is used only if it is
+     installed locally; otherwise the page falls back to Segoe UI. -->
 <style>
 /* Layout: a presentation page holding a scaled 1280x800 Electron window (or a 1920x1080 game scene for the overlay).
    Colours mirror docs/design/tokens.css, which is the source of truth; this page inlines a copy because it must run
