@@ -45,6 +45,7 @@ try {
     Assert ($output.Code -eq 0) 'Output fixture failed.'
     Assert ((Get-Item -LiteralPath (Join-Path $output.Directory 'stdout.log')).Length -eq 1048576) 'Output capture is not capped at 1 MiB.'
     Assert (!(Test-Path -LiteralPath (Join-Path $normal.Directory 'cpu.jsonl'))) 'CPU samples were written without being requested.'
+    Assert (!(Test-Path -LiteralPath (Join-Path $normal.Directory 'memory.json'))) 'Peak memory was written without being requested.'
     $sampledDirectory = Join-Path $root 'cpu-sampled'
     New-Item -ItemType Directory -Path $sampledDirectory | Out-Null
     $sampledCode = [ETS2Telemetry.Diagnostics.BoundedProcess]::Run($NodePath, [string[]]@($fixture, 'spin', $sampledDirectory), $sampledDirectory, $sampledDirectory, 5000, $true)
@@ -60,6 +61,10 @@ try {
     # A one-second spin under the hard cap: some CPU, but no more than the cap allows plus enforcement slack.
     Assert ($last.jobCpuMs -gt 50) "Job CPU time was not recorded ($($last.jobCpuMs) ms)."
     Assert ($last.jobCpuMs -le 0.25 * [Environment]::ProcessorCount * $last.elapsedMs + 250) "Job CPU time exceeds the 25% cap ($($last.jobCpuMs) ms in $($last.elapsedMs) ms)."
+    # ET-019 PR-11: the Job's peak committed memory, in bytes: a Node process commits several MiB, one process never more than the Job.
+    $memory = Get-Content -LiteralPath (Join-Path $sampledDirectory 'memory.json') -Raw | ConvertFrom-Json
+    Assert ((@($memory.PSObject.Properties | ForEach-Object { $_.Name }) -join ',') -eq 'peakProcessMemoryBytes,peakJobMemoryBytes') 'Peak memory fields are wrong.'
+    Assert ($memory.peakProcessMemoryBytes -ge 1MB -and $memory.peakProcessMemoryBytes -le $memory.peakJobMemoryBytes -and $memory.peakJobMemoryBytes -le 2GB) "Peak memory is implausible ($($memory.peakProcessMemoryBytes), $($memory.peakJobMemoryBytes))."
     $ownerDirectory = Join-Path $root 'owner-death'
     New-Item -ItemType Directory -Path $ownerDirectory | Out-Null
     $shellPath = (Get-Process -Id $PID).Path
@@ -75,7 +80,7 @@ try {
     Assert ($owner.WaitForExit(5000)) 'Watchdog fixture process did not stop.'
     Assert-Stopped $ownerDirectory
     Assert (!$sentinel.HasExited) 'Watchdog affected an unrelated process.'
-    Write-Output 'PASS: exit codes, argument quoting, stderr, timeout tree cleanup, orphan cleanup, output cap, opt-in CPU samples, owner-death cleanup, unrelated process preservation.'
+    Write-Output 'PASS: exit codes, argument quoting, stderr, timeout tree cleanup, orphan cleanup, output cap, opt-in CPU samples and peak memory, owner-death cleanup, unrelated process preservation.'
     Write-Output "Evidence: $root"
 } finally {
     if ($null -ne $owner -and !$owner.HasExited) { $owner.Kill(); $null = $owner.WaitForExit(5000) }

@@ -19,6 +19,15 @@ function ConvertTo-Int64Number {
 }
 foreach ($case in @($config.cases)) {
     try {
+        if ($case.numbers -ceq 'int64' -and $case.jobResult) {
+            # ET-019 PR-11: the resource evidence of a driver receipt and its job-result.json the same way.
+            $driver = ConvertTo-Int64Number -Value (Get-Content -LiteralPath $case.receipt -Raw -Encoding UTF8 | ConvertFrom-Json)
+            $job = ConvertTo-Int64Number -Value (Get-Content -LiteralPath $case.jobResult -Raw -Encoding UTF8 | ConvertFrom-Json)
+            if ($driver.coldLaunch.phasesMs.serviceReady -isnot [long] -or $driver.processMemory.kinds.main.processes -isnot [long]) { throw 'Int64 conversion failed.' }
+            $valid = [bool](Test-ResourceEvidence -Driver $driver -Job $job)
+            $results.Add([ordered]@{passed = $valid; driverResultAvailable = $true; reason = $(if ($valid) { $null } else { 'RESOURCE_EVIDENCE_INCOMPLETE_OR_INVALID' })})
+            continue
+        }
         if ($case.numbers -ceq 'int64' -and $case.scenario -ceq 'recording') {
             # ET-015a PR-4: the recording receipt the same way.
             $driver = ConvertTo-Int64Number -Value (Get-Content -LiteralPath $case.receipt -Raw -Encoding UTF8 | ConvertFrom-Json)
@@ -52,8 +61,10 @@ foreach ($case in @($config.cases)) {
         }
         # A case may name its expected mode (ET-018 PR-1 `installed`); every earlier case expects `packaged`.
         $mode = if ($case.mode) { [string]$case.mode } else { 'packaged' }
+        # ET-019 PR-11: a case may name a job-result.json, as the wrapper always does; earlier cases name none.
+        $jobResult = if ($case.jobResult) { [string]$case.jobResult } else { '' }
         $output = @(Test-RuntimeReceipt -DriverResultPath $case.receipt -ExpectedCommit 'candidate' -ExpectedMode $mode `
-            -ExpectedScenario $case.scenario -JobExitCode $case.code)
+            -ExpectedScenario $case.scenario -JobExitCode $case.code -JobResultPath $jobResult)
         # Exactly one result object per case, as when each case ran in its own process.
         if ($output.Count -ne 1) { $results.Add([ordered]@{error = "Expected one result, got $($output.Count)."}) }
         else { $results.Add($output[0]) }
