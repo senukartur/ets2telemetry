@@ -830,3 +830,71 @@ describe('ET-015c recording status on the parent port', () => {
     } finally {f.restore(); vi.unstubAllEnvs();}
   });
 });
+
+// ET-036: periodic liveness heartbeat on the parent port (REG-011).
+describe('ET-036 telemetry service heartbeat and diagnostic freeze', () => {
+  const stopProbe = (report: ProbeDependencies['report']) => {report({type: 'stopped'}); return Promise.resolve();};
+
+  it('emits a heartbeat every 1,000 ms and cleans up all timers upon stop', async () => {
+    const f = await stoppedService(stopProbe);
+    const heartbeats = () => f.parent.postMessage.mock.calls
+      .map(call => call[0] as {type: string})
+      .filter(msg => msg.type === 'heartbeat');
+
+    try {
+      expect(heartbeats()).toHaveLength(0);
+
+      // Advance by 1,000 ms -> 1 heartbeat
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(heartbeats()).toHaveLength(1);
+
+      // Advance by another 2,000 ms -> 2 more heartbeats (total 3)
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(heartbeats()).toHaveLength(3);
+
+      // Stop the service
+      f.stop();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(f.exit).toHaveBeenCalledExactlyOnceWith(0);
+
+      // Timer is cleared, no timers remain, no further heartbeats
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(heartbeats()).toHaveLength(3);
+    } finally {
+      f.restore();
+    }
+  });
+
+  it('clears the heartbeat timer on probe-failure exit', async () => {
+    const f = await stoppedService(() => Promise.resolve(), () => Promise.resolve());
+    try {
+      await vi.advanceTimersByTimeAsync(1000);
+      f.probeReport({type: 'failed', code: 'STORAGE_WORKER_FAILED'});
+      f.probeReport({type: 'stopped'});
+      await vi.advanceTimersByTimeAsync(0);
+      // Wait for probe failure exit
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(f.exit).toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      f.restore();
+    }
+  });
+
+  it('synchronously blocks event loop when diagnostic-freeze command is received in smoke mode', async () => {
+    vi.stubEnv('ETS2TELEMETRY_LIVE_SMOKE', '1');
+    const f = await stoppedService(stopProbe);
+    try {
+      const waitSpy = vi.spyOn(Atomics, 'wait').mockReturnValue('timed-out');
+      f.parent.emit('message', {data: {type: 'diagnostic-freeze', ms: 500}, ports: []});
+      expect(waitSpy).toHaveBeenCalledWith(expect.any(Int32Array), 0, 0, 500);
+      waitSpy.mockRestore();
+    } finally {
+      f.stop();
+      await vi.advanceTimersByTimeAsync(0);
+      f.restore();
+      vi.unstubAllEnvs();
+    }
+  });
+});
