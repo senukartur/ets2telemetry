@@ -91,9 +91,21 @@ struct Identity {
   }
   PSID user() const {return reinterpret_cast<const TOKEN_USER*>(tokenUser.data())->User.Sid;}
 };
+std::uint64_t filetime_u64(const FILETIME& time) {
+  return (static_cast<std::uint64_t>(time.dwHighDateTime) << 32) | time.dwLowDateTime;
+}
 std::uint64_t creation(HANDLE process) {
   FILETIME created{}, exited{}, kernel{}, user{}; if (!GetProcessTimes(process, &created, &exited, &kernel, &user)) process_query_failed(process);
-  return (static_cast<std::uint64_t>(created.dwHighDateTime) << 32) | created.dwLowDateTime;
+  return filetime_u64(created);
+}
+bool stale_process(HANDLE process, std::uint64_t expectedCreation) {
+  const auto waited = WaitForSingleObject(process, 0);
+  if (waited == WAIT_FAILED) fail();
+  if (waited == WAIT_OBJECT_0) return true;
+  if (waited != WAIT_TIMEOUT) fail();
+  FILETIME created{}, exited{}, kernel{}, user{};
+  if (!GetProcessTimes(process, &created, &exited, &kernel, &user)) fail();
+  return filetime_u64(created) != expectedCreation;
 }
 std::wstring final_path(HANDLE file) {
   std::wstring result(32768, L'\0'); const auto n = GetFinalPathNameByHandleW(file, result.data(), static_cast<DWORD>(result.size()), FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
@@ -136,6 +148,49 @@ std::optional<Handle> enumerated_discovery_file(const fs::path& filename, const 
     fail();
   }
   Handle file(raw); protected_owner(file.value, identity); return std::optional<Handle>(std::move(file));
+}
+bool same_file(HANDLE first, HANDLE second) {
+  BY_HANDLE_FILE_INFORMATION a{}, b{};
+  if (!GetFileInformationByHandle(first, &a) || !GetFileInformationByHandle(second, &b)) return false;
+  return a.dwVolumeSerialNumber == b.dwVolumeSerialNumber && a.nFileIndexHigh == b.nFileIndexHigh && a.nFileIndexLow == b.nFileIndexLow;
+}
+bool sweep_stale_record(const fs::path& path, std::optional<Handle>& verifiedFile, const Identity& self) {
+  if (!verifiedFile) fail();
+  const auto raw = CreateFileW(path.c_str(), DELETE | READ_CONTROL, FILE_SHARE_READ | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+  if (raw == INVALID_HANDLE_VALUE) {
+    const auto error = GetLastError();
+    if (error == ERROR_FILE_NOT_FOUND || error == ERROR_DELETE_PENDING) return true;
+    if (error == ERROR_SHARING_VIOLATION) return false;
+    SetLastError(error); fail();
+  }
+  Handle deleter(raw);
+  protected_owner(deleter.value, self);
+  if (!same_file(verifiedFile->value, deleter.value)) fail();
+  verifiedFile.reset();
+  FILE_DISPOSITION_INFO remove{TRUE};
+  if (!SetFileInformationByHandle(deleter.value, FileDispositionInfo, &remove, sizeof(remove))) fail();
+  return true;
+}
+bool is_reused_or_gone_on_access_denied(DWORD pid, std::uint64_t expectedCreation, const std::string& endpoint, const fs::path& path, std::optional<Handle>& file, const Identity& self) {
+  const auto rawLimited = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+  if (rawLimited) {
+    Handle limited(rawLimited);
+    FILETIME created{}, exited{}, kernel{}, user{};
+    if (!GetProcessTimes(limited.value, &created, &exited, &kernel, &user)) fail();
+    if (filetime_u64(created) == expectedCreation && filetime_u64(exited) == 0) return false;
+  } else {
+    const auto limitedError = GetLastError();
+    if (limitedError == ERROR_INVALID_PARAMETER) {
+      sweep_stale_record(path, file, self);
+      return true;
+    }
+    if (limitedError != ERROR_ACCESS_DENIED) {
+      SetLastError(limitedError);
+      fail();
+    }
+  }
+  if (WaitNamedPipeW(wide(endpoint).c_str(), 0) || GetLastError() != ERROR_FILE_NOT_FOUND) return false;
+  return sweep_stale_record(path, file, self);
 }
 std::string read_bounded(HANDLE file, DWORD bound) {
   LARGE_INTEGER size{}; if (!GetFileSizeEx(file, &size) || size.QuadPart <= 0 || size.QuadPart > bound) fail();
@@ -405,9 +460,8 @@ int wmain(int argc, wchar_t** argv) {
     stage = "own-image"; auto ownImage = image(GetCurrentProcess()); stage = "policy-lock"; bootstrap_policy(directory, self, ownImage.value, stage);
     stage = "discovery"; test_trace(stage); std::optional<Json> selected; std::optional<Handle> selectedProcess; unsigned records = 0, visited = 0;
     for (const auto& entry : fs::directory_iterator(directory)) {
-      if (++visited > 256) fail();
-      const auto stem = utf8(entry.path().stem().wstring()); if (!uuid(stem) || entry.path().extension() != L".json") continue;
-      if (++records > 128) fail();
+      const auto stem = utf8(entry.path().stem().wstring());
+      if (!uuid(stem) || entry.path().extension() != L".json") {if (++visited > 256) fail(); continue;}
 #ifdef ETS2TELEMETRY_CLIENT_DISCOVERY_TEST
       discovery_before_open(entry.path());
 #endif
@@ -415,21 +469,31 @@ int wmain(int argc, wchar_t** argv) {
       auto record = parse(read_bounded(file->value, 16384));
       exact(record, {"schemaVersion", "protocolMajor", "game", "userTag", "windowsSessionId", "processId", "processCreationTime", "processInstanceId", "pluginSessionId", "pipeName"});
       if (integer(record.at("schemaVersion")) != 1 || integer(record.at("protocolMajor")) != protocolMajor || record.at("userTag").string() != self.userTag || integer(record.at("windowsSessionId")) != self.session || record.at("processInstanceId").string() != stem || !uuid(record.at("pluginSessionId").string())) fail();
-      if (record.at("game").string() != "ets2" && record.at("game").string() != "ats") fail();
-      if (record.at("game").string() != game) continue;
+      const auto& recordGame = record.at("game").string();
+      if (recordGame != "ets2" && recordGame != "ats") fail();
       const auto pid = integer(record.at("processId")); if (!pid) fail();
       const auto expectedCreation = v0::parse_uint64(record.at("processCreationTime"));
-      const auto endpoint = "\\\\.\\pipe\\ETS2Telemetry-" + game + segment + self.userTag + "-" + std::to_string(self.session) + "-" + stem;
+      const auto endpoint = "\\\\.\\pipe\\ETS2Telemetry-" + recordGame + segment + self.userTag + "-" + std::to_string(self.session) + "-" + stem;
       if (record.at("pipeName").string() != endpoint) fail();
       stage = "server-process";
       const auto raw = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, pid);
-      if (!raw) {if (GetLastError() == ERROR_INVALID_PARAMETER) {stage = "discovery"; continue;} fail();}
-      Handle candidate(raw);
-      if (WaitForSingleObject(candidate.value, 0) == WAIT_OBJECT_0 || creation(candidate.value) != expectedCreation) {stage = "discovery"; continue;}
-      Identity server(candidate.value); if (server.sid != self.sid || server.session != self.session) fail();
-      stage = "server-image"; auto serverImage = image(candidate.value); const auto expectedName = game == "ets2" ? L"eurotrucks2.exe" : L"amtrucks.exe";
+      if (!raw) {
+        const auto openError = GetLastError();
+        if (openError == ERROR_INVALID_PARAMETER) {sweep_stale_record(entry.path(), file, self); stage = "discovery"; continue;}
+        if (openError == ERROR_ACCESS_DENIED && is_reused_or_gone_on_access_denied(pid, expectedCreation, endpoint, entry.path(), file, self)) {stage = "discovery"; continue;}
+        SetLastError(openError); fail();
+      }
+      std::optional<Handle> candidate(std::in_place, raw);
+      if (stale_process(candidate->value, expectedCreation)) {candidate.reset(); sweep_stale_record(entry.path(), file, self); stage = "discovery"; continue;}
+      file.reset();
+      stage = "discovery";
+      if (++visited > 256 || ++records > 128) fail();
+      if (recordGame != game) continue;
+      stage = "server-process";
+      Identity server(candidate->value); if (server.sid != self.sid || server.session != self.session) fail();
+      stage = "server-image"; auto serverImage = image(candidate->value); const auto expectedName = game == "ets2" ? L"eurotrucks2.exe" : L"amtrucks.exe";
       if (_wcsicmp(fs::path(final_path(serverImage.value)).filename().c_str(), expectedName) != 0) fail();
-      if (selected) fail(); selected = record; selectedProcess.emplace(std::move(candidate)); stage = "discovery";
+      if (selected) fail(); selected = record; selectedProcess.emplace(std::move(*candidate)); stage = "discovery";
     }
     if (!selected) {receipt(Json{Json::Object{{"type", Json{std::string("waiting")}}, {"schemaVersion", Json{1.0}}}}); return finish(2, stage);}
     const auto& record = *selected; const auto pid = integer(record.at("processId")); if (!pid) fail();

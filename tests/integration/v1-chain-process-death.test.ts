@@ -330,9 +330,9 @@ it('ends the fake game host mid-session: the source ends, the service waits on t
   // The killed plugin could not remove its discovery record; only the still-owned record is cleaned up at exit.
   expect(records(v1)).toEqual([oldRecord]);
 
-  // The production V1Ingestion selects the game. The broker ignores the record of the exited process and reports waiting
+  // The production V1Ingestion selects the game. The broker sweeps the record of the exited process and reports waiting
   // (exit 2), so the source is `waiting` and reconnects on the E9 backoff after each broker has exited
-  // (native-transport-boundary-v0.md: records of an exited process are ignored and the client reports waiting).
+  // (native-transport-boundary-v0.md: records of an exited process are swept and the client reports waiting).
   const brokers: Array<{spawnedAt: number; waitingAt?: number; authority?: SourceIdentity}> = [];
   const states: V1SourceState[] = [];
   ingestion = new V1Ingestion({
@@ -350,6 +350,7 @@ it('ends the fake game host mid-session: the source ends, the service waits on t
   expect(await until(() => brokers.filter(entry => entry.waitingAt !== undefined).length >= 3, RECONNECT_GUARD_MS), 'three waiting brokers').toBe(true);
   expect(ingestion.current).toMatchObject({status: 'waiting', reason: 'No selected game discovery record', fresh: false, durable: {state: 'off'}});
   expect(ingestion.current.observation).toBeUndefined();
+  expect(records(v1)).toEqual([]);
 
   // A new host is a new plugin session in a new process (§9: a new pluginSessionId restarts eventSeq at 1).
   const restarted = await startHost(v0, v1);
@@ -387,11 +388,11 @@ it('ends the fake game host mid-session: the source ends, the service waits on t
   expect(coverage.every(item => !item.redelivered)).toBe(true);
   expect(coverage.filter(item => item.kind === 'event')).toEqual([{kind: 'event', eventSeq: nextBaseline.toString(), type: 'simulation.paused', redelivered: false}]);
   await statusUntil(next, status => status.delivery.retainedEvents >= 1 && status.delivery.nextEventSeq === (nextBaseline + 1n).toString(), 'the new event retained');
-  expect(records(v1)).toEqual([oldRecord, `${fresh.processInstanceId}.json`].sort());
+  expect(records(v1)).toEqual([`${fresh.processInstanceId}.json`]);
 
   // Optional comparison: the clean exit runs the SDK shutdown, so the plugin writes `end` with plugin-shutdown, its
   // cursor and the one retained unacknowledged event (§9, I8), then the broker exits 3. The host exits 0 and removes its
-  // own discovery record; the killed host's record stays, because the client never deletes records.
+  // own discovery record; the killed host's record was already swept by the broker.
   restarted.child.stdin.end('exit\n');
   expect(await until(() => restarted.exit !== undefined && next.closed, DELIVERY_GUARD_MS), 'clean exit').toBe(true);
   expect(restarted.exit).toEqual({code: 0, signal: null});
@@ -400,6 +401,6 @@ it('ends the fake game host mid-session: the source ends, the service waits on t
   expect(next.messages.at(-1)?.kind).toBe('end');
   expect([next.errors, next.ended]).toEqual([[], true]);
   expect(next.diagnostics).toEqual([expect.objectContaining({outcome: 'ended', exitCode: 3})]);
-  expect(records(v1)).toEqual([oldRecord]);
+  expect(records(v1)).toEqual([]);
   console.log(JSON.stringify({case: 'host-killed', reconnections: incompatibleBrokers - 1, delaysMs: delays.map(delay => Math.round(delay))}));
 });
