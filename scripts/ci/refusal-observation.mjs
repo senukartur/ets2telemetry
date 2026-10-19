@@ -45,10 +45,12 @@ async function manifestHash(config) {
  * Before the launch: copies the fixture to the history path of this run's isolated LOCALAPPDATA, which must not exist
  * yet, and checks the fixture's manifest hash before and after the copy and the copy's own hash.
  */
+/** Whether a relative path leaves its base: `..` itself or a `..` segment, not a folder name that merely starts with `..`. */
+const escapes = (relative, separator) => relative === '..' || relative.startsWith('..' + separator);
 export async function placeNewerHistory({config, record}) {
   const fixture = path.join(config.checkout, 'tests', 'fixtures', 'storage', FIXTURE), target = historyFile(config);
   const relative = path.relative(path.resolve(config.output), path.resolve(target));
-  assert.ok(relative && !relative.startsWith('..') && !path.isAbsolute(relative), 'The history path is outside this run\'s output folder');
+  assert.ok(relative && !escapes(relative, path.sep) && !path.isAbsolute(relative), 'The history path is outside this run\'s output folder');
   assert.equal(existsSync(path.dirname(path.dirname(target))), false, 'The isolated LOCALAPPDATA already holds an ETS2Telemetry folder');
   // Defence in depth: whatever the configuration says, never write under this driver's own (real) LOCALAPPDATA. Both sides
   // are resolved through existing folders (realpath, so junctions and 8.3 names compare equal) and compared without case.
@@ -58,7 +60,7 @@ export async function placeNewerHistory({config, record}) {
     const own = (await canonical(realLocal)).toLowerCase();
     const placed = path.join(await canonical(config.localappdata), path.relative(config.localappdata, target)).toLowerCase();
     const inside = path.win32.relative(own, placed);
-    assert.ok(inside.startsWith('..') || path.win32.isAbsolute(inside), 'The history path is under the real LOCALAPPDATA');
+    assert.ok(escapes(inside, path.win32.sep) || path.win32.isAbsolute(inside), 'The history path is under the real LOCALAPPDATA');
   }
   const expected = await manifestHash(config);
   assert.equal(await sha256(fixture), expected, 'The newer-schema fixture differs from its manifest before the copy');
