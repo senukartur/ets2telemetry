@@ -347,18 +347,14 @@ void write_discovery_record(const fs::path& directory, const Identity& identity,
   }};
   write_file(directory / (instanceId + ".json"), record, identity);
 }
-DWORD find_access_denied_pid() {
-  for (DWORD pid : {4u, 8u, 12u}) {
-    const auto handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, pid);
-    if (handle) {CloseHandle(handle); continue;}
-    if (GetLastError() == ERROR_ACCESS_DENIED) return pid;
-  }
-  for (DWORD pid = 4; pid <= 65536; pid += 4) {
-    const auto handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, pid);
-    if (handle) {CloseHandle(handle); continue;}
-    if (GetLastError() == ERROR_ACCESS_DENIED) return pid;
-  }
-  return 0;
+void set_process_dacl(HANDLE process, const wchar_t* sddl) {
+  PSECURITY_DESCRIPTOR descriptor = nullptr;
+  require(ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, SDDL_REVISION_1, &descriptor, nullptr) != 0);
+  PACL dacl = nullptr; BOOL present = FALSE, defaulted = FALSE;
+  require(GetSecurityDescriptorDacl(descriptor, &present, &dacl, &defaulted) != 0 && present);
+  const auto result = SetSecurityInfo(process, SE_KERNEL_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, nullptr, nullptr, dacl, nullptr);
+  LocalFree(descriptor);
+  require(result == ERROR_SUCCESS);
 }
 void run_stale_record_sweep_cases(const fs::path& base, const std::wstring& self, const std::wstring& broker, const fs::path& fixtures, const Identity& identity, OwnerSecurity& security) {
   const auto diagnosed = [](Child& child, const std::string& stage, const std::string& error) {
@@ -407,19 +403,25 @@ void run_stale_record_sweep_cases(const fs::path& base, const std::wstring& self
     }
     require(fs::exists(directory / "00112233-4455-6677-8899-aabbccddeeff.json"));
   }
-  // 2) Reused inaccessible PID (ERROR_ACCESS_DENIED): unowned stale record is swept; locked record (no FILE_SHARE_DELETE) fails closed at stage=server-process.
+  // 2) Reused inaccessible PID (ERROR_ACCESS_DENIED) via a controlled child process with a restricted SE_KERNEL_OBJECT DACL:
+  //    unowned stale record is swept; locked record (no FILE_SHARE_DELETE) or matching live creation time fails closed at stage=server-process.
   {
-    const DWORD deniedPid = find_access_denied_pid();
-    require(deniedPid != 0);
-    std::uint64_t staleCreation = 1;
-    if (const auto limited = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, deniedPid)) {
-      FILETIME created{}, exited{}, kernel{}, user{};
-      if (GetProcessTimes(limited, &created, &exited, &kernel, &user)) {
-        const auto actual = (static_cast<std::uint64_t>(created.dwHighDateTime) << 32) | created.dwLowDateTime;
-        if (actual == staleCreation) staleCreation = 2;
-      }
-      CloseHandle(limited);
-    }
+    Child deniedHolder(self, L"--hold");
+    require(parse(read_frame(deniedHolder.output.value)).at("type").string() == "ready");
+    const DWORD deniedPid = deniedHolder.pid;
+    const auto actualCreation = creation(deniedHolder.process.value);
+    const auto staleCreation = actualCreation - 1;
+
+    set_process_dacl(deniedHolder.process.value, L"D:P");
+    const auto checkBoth = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, deniedPid);
+    const auto checkBothErr = GetLastError();
+    if (checkBoth) CloseHandle(checkBoth);
+    require(!checkBoth && checkBothErr == ERROR_ACCESS_DENIED);
+    const auto checkLimited = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, deniedPid);
+    const auto checkLimitedErr = GetLastError();
+    if (checkLimited) CloseHandle(checkLimited);
+    require(!checkLimited && checkLimitedErr == ERROR_ACCESS_DENIED);
+
     const auto sweepDir = makeTransportDir(L"sweep-access-denied");
     Child server(self, L"--host \"" + sweepDir.wstring() + L"\" \"" + fixtures.wstring() + L"\" valid");
     require(parse(read_frame(server.output.value)).at("type").string() == "ready");
@@ -449,6 +451,26 @@ void run_stale_record_sweep_cases(const fs::path& base, const std::wstring& self
     Child lockedClient(broker, L"--game ets2 --discovery-dir \"" + lockedDir.wstring() + L"\"", true);
     lockedClient.eof();
     require(lockedClient.wait() == 1 && diagnosed(lockedClient, "server-process", "5") && noOutput(lockedClient) && fs::exists(lockedPath));
+
+    set_process_dacl(deniedHolder.process.value, L"D:P(A;;0x1000;;;WD)");
+    const auto checkSync = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, deniedPid);
+    const auto checkSyncErr = GetLastError();
+    if (checkSync) CloseHandle(checkSync);
+    require(!checkSync && checkSyncErr == ERROR_ACCESS_DENIED);
+    const auto checkQuery = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, deniedPid);
+    require(checkQuery != nullptr);
+    CloseHandle(checkQuery);
+
+    const auto liveDeniedDir = makeTransportDir(L"live-access-denied");
+    const std::string liveDeniedId = "55112233-4455-6677-8899-aabbccddeeff";
+    write_discovery_record(liveDeniedDir, identity, "ets2", liveDeniedId, deniedPid, actualCreation);
+    const auto liveDeniedPath = liveDeniedDir / (liveDeniedId + ".json");
+    Child liveDeniedClient(broker, L"--game ets2 --discovery-dir \"" + liveDeniedDir.wstring() + L"\"", true);
+    liveDeniedClient.eof();
+    require(liveDeniedClient.wait() == 1 && diagnosed(liveDeniedClient, "server-process", "5") && noOutput(liveDeniedClient) && fs::exists(liveDeniedPath));
+
+    deniedHolder.eof();
+    require(deniedHolder.wait() == 0);
   }
   // 3) >256 non-record entries and >128 live records still fail closed at stage=discovery.
   {
@@ -472,6 +494,12 @@ void run_stale_record_sweep_cases(const fs::path& base, const std::wstring& self
 }
 int wmain(int argc, wchar_t** argv) {
   try {
+    if (argc == 2 && std::wstring(argv[1]) == L"--hold") {
+      receipt(Json{Json::Object{{"type", Json{std::string("ready")}}}});
+      Credits cancellation;
+      WaitForSingleObject(cancellation.cancelled.value, fixtureWaitMs);
+      return 0;
+    }
     if (argc == 4 && std::wstring(argv[1]) == L"--discovery-case") {
       discoveryCase = utf8(argv[3]);
       wchar_t* arguments[] = {argv[0], const_cast<wchar_t*>(L"--game"), const_cast<wchar_t*>(L"ets2"), const_cast<wchar_t*>(L"--discovery-dir"), argv[2]};
