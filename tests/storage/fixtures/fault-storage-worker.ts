@@ -7,10 +7,11 @@
 // `SQLITE_READONLY` -> PERMISSION_DENIED, `SQLITE_BUSY` -> DATABASE_LOCKED), and the transaction rolls back the event or
 // gap row together with its trip effects. A hold blocks that commit inside its transaction until the test posts
 // `{type: 'release'}` on the control port, for queue-pressure tests. `samplesFault` (ET-015b) does the same for
-// `appendSamples` commands: the transaction rolls back every row of the batch.
+// `appendSamples` commands: the transaction rolls back every row of the batch. `closeHold` (ET-019 PR-4) holds the first
+// `close` request on the worker thread before the host receives it, as a stalled host or disk would hold the close.
 import {parentPort, receiveMessageOnPort, workerData, type MessagePort} from 'node:worker_threads';
 import type {CommitOptions} from '../../../packages/storage/src/api';
-import {serveStorage, type CommitCommand} from '../../../packages/storage/src/worker/host';
+import {serveStorage, type CommitCommand, type HostPort} from '../../../packages/storage/src/worker/host';
 
 export type InjectedSqliteCode = 'SQLITE_FULL' | 'SQLITE_READONLY' | 'SQLITE_BUSY';
 export interface FaultWorkerData {
@@ -25,7 +26,14 @@ export interface FaultWorkerData {
    * `{type: 'release'}`.
    */
   samplesFault?: {code: InjectedSqliteCode; times: number} | {hold: true};
-  /** The test's control port; required with `hold` and with a `samplesFault` hold. */
+  /**
+   * ET-019 PR-4 (G18): hold the first `close` request on the worker thread before the host receives it: post
+   * `{type: 'held', command: 'close'}`, then wait for `{type: 'release'}`. The database stays open meanwhile, and the
+   * worker never answers the close unless it is released; the hold returns to JavaScript every 5 ms, so a termination
+   * ends it.
+   */
+  closeHold?: true;
+  /** The test's control port; required with `hold`, with a `samplesFault` hold and with `closeHold`. */
   control?: MessagePort;
 }
 
@@ -57,8 +65,8 @@ function holdUntilRelease(control: MessagePort, notice: Record<string, unknown>)
 }
 const injected = (code: InjectedSqliteCode) => Object.assign(new Error('Injected storage fault'), {code});
 
-const {fault: faultConfig, hold: holdConfig, samplesFault, control} = data;
-if ((holdConfig || (samplesFault && 'hold' in samplesFault)) && !control) throw new Error('The fault storage worker needs a control port to hold a commit');
+const {fault: faultConfig, hold: holdConfig, samplesFault, closeHold, control} = data;
+if ((holdConfig || (samplesFault && 'hold' in samplesFault) || closeHold) && !control) throw new Error('The fault storage worker needs a control port to hold a command');
 // Only the blocking receive reads the control port; it must not keep the worker alive after the host closed.
 control?.unref();
 let faultsLeft = faultConfig?.times ?? 0, holdPending = holdConfig !== undefined;
@@ -82,7 +90,36 @@ function sampleOptions(): CommitOptions | undefined {
   }}};
 }
 
-serveStorage(parentPort, {
+/**
+ * ET-019 PR-4: the worker port as the host sees it, with the first `close` request held before the host's listener
+ * receives it. Every other message, the answers and the host's release of the port pass unchanged.
+ */
+function holdingClose(port: NonNullable<typeof parentPort>, control: MessagePort): HostPort {
+  let pending = true;
+  const wrapped = new Map<(message: unknown) => void, (message: unknown) => void>();
+  return {
+    on(event, listener) {
+      const held = (message: unknown) => {
+        if (pending && isRecord(message) && isRecord(message.command) && message.command.name === 'close') {
+          pending = false;
+          holdUntilRelease(control, {command: 'close'});
+        }
+        listener(message);
+      };
+      wrapped.set(listener, held);
+      return port.on(event, held);
+    },
+    off(event, listener) {
+      const held = wrapped.get(listener) ?? listener;
+      wrapped.delete(listener);
+      return port.off(event, held);
+    },
+    postMessage: message => port.postMessage(message),
+    unref: () => port.unref()
+  };
+}
+
+serveStorage(closeHold && control ? holdingClose(parentPort, control) : parentPort, {
   commitOptions(command): CommitOptions | undefined {
     if (command.name === 'appendSamples') return sampleOptions();
     const hold = holdPending && holdConfig !== undefined && control !== undefined && covers(command, holdConfig.eventSeq);

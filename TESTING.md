@@ -904,3 +904,60 @@ RED, each applied alone to the product source and reverted, the file then byte-i
 - G6 counting skips the lost events of a gap with a `queueCount` cause (`apps/desktop/src/trip-recorder.ts`): (a), (b) and (d) fail their loss totals; (c), an `encodingFailed` gap, passes.
 
 Commands, timings and findings are in [ET-019 validation](docs/validation/et-019.md#pr-3-producer-losses-inside-an-open-trip-october-18-2026).
+
+## ET-019 shutdown and close stalls — October 19, 2026
+
+ET-019 PR-4 proves that a service stop and a stalled database close are bounded and that a process killed during the final sample write loses no committed work. It changes tests and test fixtures only: no product source, wire, schema, IPC or renderer change. `GAME_HISTORY_RECORDING` stays `false`, and each case asserts it. Cases (a) and (b) record `synthetic:t` through the production recording wiring under a temporary LOCALAPPDATA; case (c) runs its recording children under a temporary LOCALAPPDATA. Every case asserts that no `data\telemetry.sqlite` exists there. Expected values are written by hand from [the telemetry service](docs/telemetry-service-v1.md) (E9 backoff, one-second samples), [storage](docs/storage.md) (close grace, history database shutdown), [service shutdown](docs/app-lifecycle.md#service-shutdown), [trips](docs/trips.md) and the scenario fixtures, never read back from the code under test (section 4).
+
+| Requirement | Executable regression protection | Evidence boundary |
+| --- | --- | --- |
+| A stop while a reconnection is armed reconnects nowhere and stays bounded (REG-011) | `tests/storage/shutdown-stalls.test.ts` (a): normal-delivery through the production wiring with the real worker and the real shutdown sequence; the stop runs one macrotask after the source's `disconnected` state, when its reconnection timer is armed. After the stop the test waits on a timer armed with the longest backoff step plus 1 ms (4,001 ms): Node runs due timers in expiry order, so a reconnection timer armed before the stop would run first, and its connect would come before that callback. The first connection's end is held (ClientSocket gate after eventSeq 9) until the one sample row, written by a 1 ms sample flush, is stored, so the stop's flush has nothing to write or wait for. One connection, no ACK after the stop, every ACK 1–9 before it, one sample write before the stop and none at it, the intake and flush steps `ok`, `HISTORY_STORAGE_CLOSED` after the flush, the stop within 2,500 ms, the hand-written normal-delivery rows and I1–I5 | A fixture socket; the native broker's reconnection is not exercised |
+| A close stalled longer than 2 s is cut off before the step budget (G18; REG-006, REG-011) | (b): the test-only fault worker's `closeHold` keeps the `close` request on the worker thread before the host receives it and is never released. The flush is arranged as in (a), so its steps are `ok`. With the production 800 ms grace the client's `terminate` is called no earlier than the grace less a 100 ms event-loop clock allowance after the `history-storage` step started, and before the step's verdict at the 1,000 ms budget, which is `failed` or `timeout`, never `ok`. The sequence reports `clean: false` within 2,500 ms, and `HISTORY_STORAGE_CLOSED` is not logged. The next open has coverage 9 and the hand-written normal-delivery rows, with I1–I5 | A stall in JavaScript on the worker thread. A close stalled inside a native SQLite call has no hook and is not covered; see the finding below |
+| A process killed inside its final sample write loses only that batch and duplicates nothing (REG-006, REG-012) | (c): `trip-recorder-child.cjs` in its new `fault-worker` mode stops after connection 1 of one-second-samples; its only `appendSamples`, the final write of ten pending rows (seconds 1000–1005 and 1009–1012), is held inside its transaction, and the child is ended with `TerminateProcess` at the `barrier samples` line. The next open finds coverage 6, events 1–6, no sample and a sound file. A cold-started second process takes connection 2. Final: events 1–8 once, no gap row, the trip `[3, delivered, 7, outcome, partial]`, exactly the hand-written samples of seconds 1016 and 1017, every ACK after its process's commit, and I1–I5 over every ACK | The kill is barrier-based, never timed; a process kill, not power loss |
+
+Changed tests: `tests/storage/worker.test.ts` gains one case for the fault worker's `closeHold` (the close stays unanswered with the WAL present until the release, then closes clean with exit code 0). `tests/storage/fixtures/trip-recorder-child.cjs` gains the `fault-worker` mode, the `appendSamples <rows>` and `barrier samples` lines in that mode, and a `stopping` line before an orderly stop; no existing case reads the new lines. No existing assertion or expected value changed, and `tests/storage/recording-helpers.ts` is unchanged.
+
+RED, each applied alone to the product source and reverted, the file then byte-identical (SHA-256):
+
+- `V1Ingestion.stopSource` neither disposes the ingestion nor cancels its timers (`apps/desktop/src/v1-ingestion.ts`): (a) fails with five connections, and (b) with three. Removing only the dispose or only the cancel passes: each alone stops the reconnection;
+- the history close grace set to 2,000 ms (`apps/desktop/src/history-storage.ts`): (b) fails, because the termination starts after the step's `timeout` verdict;
+- the grace set to 200 ms: (b) fails its lower bound (termination after 215 ms). (b) is sensitive only to a grace outside about [700, 1000) ms (the lower edge holds with prompt timers; a late timer on a loaded host can let a grace just below 700 ms pass): it has deliberately no timed upper bound, so a grace of 950 ms would pass;
+- `HistoryStorage.close` no longer rejecting an unclean close: (b) fails with the step `ok`;
+- `appendSamples` rows written outside a transaction (`packages/storage/src/sqlite/writes.ts`): (c) fails, because the next open finds the killed batch's ten rows.
+
+Commands, timings and findings are in [ET-019 validation](docs/validation/et-019.md#pr-4-shutdown-and-close-stalls-october-19-2026).
+
+## ET-019 replay into the journal and export — October 19, 2026
+
+ET-019 PR-5 replays lifecycle scenarios through the real pipeline: the reactive v1 simulator on actual Windows pipes, `V1Ingestion`, the trip recorder and the real storage worker, into a temporary synthetic-purpose database. It then reads each scenario back the way the dashboard and main read it. It changes tests, fixtures and documentation only: no product source, simulator, wire, schema, IPC or renderer change, and `tests/storage/recording-helpers.ts` is unchanged. `GAME_HISTORY_RECORDING` stays `false`. The per-test workspace is the exporter's LOCALAPPDATA, and every case asserts that no `data\telemetry.sqlite` exists there.
+
+Six scenarios come from the ET-005b corpus and reuse their hand-written `*.trip.expected.json` rows unchanged: `save-load`, `quick-job-profile-change`, `timers-truck-refuel`, `ferry-train`, `app-absent-hydration` and `retention-expired`. Four are derived in the test from a corpus scenario's header and seed, because the corpus has no trip for them, and their rows are hand-written in `tests/fixtures/recording/<id>.rows.expected.json`:
+
+- `cancellation-trips`;
+- `ferry-train-trip`;
+- `timers-truck-refuel-trip`;
+- `missing-job-configuration`.
+
+What only the journal and the export show is hand-written in `tests/fixtures/recording/replay-journal-export.expected.json`. Every expectation comes from [trips](docs/trips.md), [journal](docs/journal.md), [the trip export](docs/journal-export.md), [storage](docs/storage.md) and [the v1 simulator](docs/simulator-v1.md), never from the code under test (section 4).
+
+| Requirement | Executable regression protection | Evidence boundary |
+| --- | --- | --- |
+| Missing configuration alone never proves delivery, and an ambiguous continuation is not merged (REG-004) | `tests/storage/replay-journal-export.test.ts` `missing-job-configuration`: a `job.delivered` whose job configuration was never observed is `ambiguous` and belongs to no trip. A job cleared without an outcome closes `{none, discontinuity, partial}` at a timer restart. The identical job after it is a separate trip with a not-merged continuation interval, delivered by its own outcome only. The journal's `delivered` filter lists that trip alone | Synthetic ATS source; the ordering is inference, not a real trace |
+| Cancellation and delivery stay distinct (REG-004) | `cancellation-trips`: a cargo-market job cancelled before pickup (fine and outcome `trip-before-loaded`, T14) and a job cancelled after its clear with a free-driving toll and an identical truck re-send between (O7). Both are cancelled and complete; the penalties are outcome records, never money totals | No frame, so no samples |
+| Lifecycle discontinuities reach the journal and the export unchanged (REG-003, REG-008) | `save-load` (open, partial, with its save-load interval), `quick-job-profile-change`, the two late-attach trips (`app-absent-hydration` with an empty `close-gap` window, `retention-expired` open), `ferry-train-trip` (a crossing `game-time-jump` annotation that leaves a delivered trip complete) and `timers-truck-refuel-trip` (truck-change and refuel annotations, fuel used 10 L, a 0 m road stop). The corpus `timers-truck-refuel` and `ferry-train`, which have no job, list no trip under any filter | Synthetic readings; real crossings, refuels and profile changes remain pending |
+| The journal reads (REG-014) | Through `JournalService`, with each answer passing main's `parseJournalReply` unchanged: the list rows with their job summaries; every outcome, completeness and game filter; each trip's detail (trip block, job source, truck, trailers, outcome record, money totals, window, intervals, samples and export bounds); its intervals page; its timeline window with each event's type and attribution; and its samples | A new real worker on the closed file, not the running service |
+| The export (REG-014) | Each trip through main's `JournalExporter`: the saved counts, an empty `tripExportProblems` list, and the hand-written header purpose, bounds, trip block, job source, truck, trailers, outcome record, money totals, window, intervals, events and samples | No real Save dialog |
+| ACKs and history invariants (REG-005) | Every ACK at or below the coverage storage had reported when it was written, and `checkHistoryInvariants` (I1–I5) over the stored rows and every ACK | One connection per scenario except `retention-expired` |
+
+Changed tests: none. No existing assertion or expected value changed, and no historical fixture was regenerated.
+
+RED, each applied alone to the product source and reverted, the file then byte-identical (`git hash-object` and the working-copy SHA-256):
+
+- the journal's completeness filter ignores `partial`: `cancellation-trips` and `ferry-train-trip` fail (main's reply check refuses the page first);
+- the export serializer drops interval rows: seven cases fail on the export's intervals, while the shared validator accepts the document;
+- a timer restart keeps an awaiting-outcome trip open, which merges the identical job into it: `missing-job-configuration` (one delivered trip instead of two) and `quick-job-profile-change` fail;
+- a `job.cleared` of an active trip closes it as delivered: four cases fail;
+- an outcome without an attachable trip is attributed `free-driving`: `missing-job-configuration` fails;
+- a `close-gap` window includes the gap's first eventSeq: `app-absent-hydration` fails.
+
+The new file takes about 5 s locally, one storage worker per case, about 2 s of it the idle quiesce of `retention-expired`. The storage suite margin within its 5 minute CI step is measured locally only; a slow hosted runner took 221 s for the whole suite on another PR, so the hosted step time is recorded with this PR. Commands, timings and findings are in [ET-019 validation](docs/validation/et-019.md#pr-5-lifecycle-scenarios-replayed-into-the-journal-and-the-export-october-19-2026).
