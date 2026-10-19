@@ -88,17 +88,19 @@ export async function observeProcessMemory(application) {
   return {...summarizeProcessMemory(metrics), observationMs: Math.round(performance.now() - started)};
 }
 
+/** The process kind of one Electron process metric; ET-019 PR-12b's soak series uses the same kinds. */
+export const processKind = metric => metric.type === 'Browser' ? 'main' : metric.type === 'Tab' ? 'renderer' : metric.type === 'GPU' ? 'gpu' :
+  metric.type === 'Utility' && (metric.name === TELEMETRY_SERVICE_NAME || metric.serviceName === TELEMETRY_SERVICE_NAME) ? 'telemetryService' :
+    metric.type === 'Utility' ? 'otherUtility' : 'other';
+
 /**
  * Per process kind: the number of processes and the largest peak working set in bytes since each started. The storage
  * worker is a worker thread of the telemetry service, so its memory is inside `telemetryService` and is not separable.
  */
 export function summarizeProcessMemory(metrics) {
-  const kind = metric => metric.type === 'Browser' ? 'main' : metric.type === 'Tab' ? 'renderer' : metric.type === 'GPU' ? 'gpu' :
-    metric.type === 'Utility' && (metric.name === TELEMETRY_SERVICE_NAME || metric.serviceName === TELEMETRY_SERVICE_NAME) ? 'telemetryService' :
-      metric.type === 'Utility' ? 'otherUtility' : 'other';
   const kinds = {};
   for (const metric of metrics) {
-    const entry = kinds[kind(metric)] ??= {processes: 0, peakWorkingSetBytes: 0};
+    const entry = kinds[processKind(metric)] ??= {processes: 0, peakWorkingSetBytes: 0};
     entry.processes++;
     if (Number.isFinite(metric.peakWorkingSetKiB)) entry.peakWorkingSetBytes = Math.max(entry.peakWorkingSetBytes, Math.round(metric.peakWorkingSetKiB * 1024));
   }

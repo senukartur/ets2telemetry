@@ -52,6 +52,14 @@ foreach ($case in @($config.cases)) {
             $results.Add([ordered]@{passed = $valid; driverResultAvailable = $true; reason = $(if ($valid) { $null } else { 'REFUSAL_RESULT_INCOMPLETE_OR_INVALID' })})
             continue
         }
+        if ($case.numbers -ceq 'int64' -and $case.scenario -ceq 'soak') {
+            # ET-019 PR-12b: the soak receipt the same way.
+            $driver = ConvertTo-Int64Number -Value (Get-Content -LiteralPath $case.receipt -Raw -Encoding UTF8 | ConvertFrom-Json)
+            if ($driver.soak.minutes -isnot [long] -or $driver.soak.database.counts.cycleSamples -isnot [long]) { throw 'Int64 conversion failed.' }
+            $valid = [bool](Test-SoakReceipt -Driver $driver)
+            $results.Add([ordered]@{passed = $valid; driverResultAvailable = $true; reason = $(if ($valid) { $null } else { 'SOAK_RESULT_INCOMPLETE_OR_INVALID' })})
+            continue
+        }
         if ($case.numbers -ceq 'int64') {
             $driver = ConvertTo-Int64Number -Value (Get-Content -LiteralPath $case.receipt -Raw -Encoding UTF8 | ConvertFrom-Json)
             if ($driver.lifecycle.secondInstance.exitCode -isnot [long] -or $driver.lifecycle.restartLauncherExit -isnot [long]) { throw 'Int64 conversion failed.' }

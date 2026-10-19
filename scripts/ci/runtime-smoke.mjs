@@ -22,13 +22,14 @@ import {RECORDING_TARGET, runRecordingSmoke, startRecordingSource, verifyRecordi
 import {JOURNAL_TARGET, runJournalEmpty, runJournalExport, runJournalSeeded, seedJournalDatabase, verifyJournalRun} from './journal-observation.mjs';
 import {placeNewerHistory, runRefusalSmoke, verifyRefusalRun} from './refusal-observation.mjs';
 import {coldLaunchPhases, observeColdLaunch, observeProcessMemory} from './launch-evidence.mjs';
+import {SOAK_TARGET, compactSoakEvents, runSoakSmoke, startSoakSource, verifySoakLogs, verifySoakRun} from './soak-observation.mjs';
 import {installedEnvironment, minimalPath, normalizePath} from '../installer/installer-guard.mjs';
 // These read-only globals are used only inside serialized Playwright browser callbacks.
 /* global document: readonly, getComputedStyle: readonly, innerHeight: readonly, innerWidth: readonly */
 
 const [configFile] = process.argv.slice(2);
 const config = JSON.parse((await readFile(configFile, 'utf8')).replace(/^\uFEFF/, ''));
-const result = {scenario: config.scenario === 'refusal' ? 'NEWER-HISTORY-REFUSAL / partial REG-013, REG-014, REG-017' : config.scenario === 'plugin' ? 'PLUGIN-SETUP-TEST-ROOT / partial REG-015, REG-017' : config.scenario === 'journal' ? 'SYNTHETIC-JOURNAL-UI / partial REG-009, REG-014, REG-017' : config.scenario === 'recording' ? 'V1 SYNTHETIC-RECORDING-JOURNEY / partial REG-006, REG-012, REG-017' : config.scenario === 'lifecycle' ? 'V0 TRAY-LIFECYCLE-SETTINGS / partial REG-009, REG-011, REG-012, REG-017' : config.scenario === 'overlay' ? 'V0 HIDDEN-OVERLAY-PROJECTION / partial REG-009, REG-011, REG-017' : config.scenario === 'telemetry' ? 'V0 SOURCE-RENDERER-RECOVERY / partial REG-003, REG-010, REG-011, REG-017' : 'SCAFFOLD-WORKER / partial REG-011, REG-017', passed: false,
+const result = {scenario: config.scenario === 'soak' ? 'V1 SYNTHETIC-RECORDING-SOAK / partial REG-011, REG-017, REG-018' : config.scenario === 'refusal' ? 'NEWER-HISTORY-REFUSAL / partial REG-013, REG-014, REG-017' : config.scenario === 'plugin' ? 'PLUGIN-SETUP-TEST-ROOT / partial REG-015, REG-017' : config.scenario === 'journal' ? 'SYNTHETIC-JOURNAL-UI / partial REG-009, REG-014, REG-017' : config.scenario === 'recording' ? 'V1 SYNTHETIC-RECORDING-JOURNEY / partial REG-006, REG-012, REG-017' : config.scenario === 'lifecycle' ? 'V0 TRAY-LIFECYCLE-SETTINGS / partial REG-009, REG-011, REG-012, REG-017' : config.scenario === 'overlay' ? 'V0 HIDDEN-OVERLAY-PROJECTION / partial REG-009, REG-011, REG-017' : config.scenario === 'telemetry' ? 'V0 SOURCE-RENDERER-RECOVERY / partial REG-003, REG-010, REG-011, REG-017' : 'SCAFFOLD-WORKER / partial REG-011, REG-017', passed: false,
   scenarioKind: config.scenario ?? 'scaffold',
   commit: config.commit, mode: config.mode, node: process.versions, expected: {
     status: {service: 'ready', storage: 'verified', synthetic: true}, exit: 0, probesAfterExit: []},
@@ -48,6 +49,8 @@ let journalTarget;
 // ET-017 PR-5: the plugin scenario's fake Steam and game folders (plugin-fixture.mjs) and the snapshot run A compares against.
 let pluginFixture;
 let pluginBefore;
+// ET-019 PR-12b: the soak scenario's protocol v1 soak source, spawned with a stdin pipe for its stop (soak-observation.mjs).
+let soakSource;
 // ET-019 PR-11: the first launch's process creation time and dashboard paint timing (launch-evidence.mjs).
 let coldLaunchObservation = null;
 const failure = error => ({name: error.name, message: error.message, stack: error.stack});
@@ -110,6 +113,7 @@ const environment = diagnostics => ({...(config.mode === 'installed' ? installed
   ...(telemetrySourceV1 ? {ETS2TELEMETRY_SOURCE_PIPE_V1: telemetrySourceV1.endpoint} : {}),
   ...(recordingSource ? {ETS2TELEMETRY_SOURCE_PIPE_V1: recordingSource.endpoint, ETS2TELEMETRY_RECORDING: RECORDING_TARGET} : {}),
   ...(journalTarget ? {ETS2TELEMETRY_RECORDING: journalTarget} : {}),
+  ...(soakSource ? {ETS2TELEMETRY_SOURCE_PIPE_V1: soakSource.endpoint, ETS2TELEMETRY_RECORDING: SOAK_TARGET} : {}),
   // ET-017 PR-5: the test-root mode, confined to the fake root inside this run's isolated output folder.
   ...(pluginFixture ? {ETS2TELEMETRY_PLUGIN_SETUP_ROOT: pluginFixture.root} : {})});
 const launchOptions = diagnostics => ({timeout: 20000, cwd: config.cwd,
@@ -122,9 +126,10 @@ try {
   assert.equal(process.versions.node, '24.19.0');
   result.playwright = JSON.parse(await readFile(new URL('../../node_modules/playwright-core/package.json', import.meta.url))).version;
   assert.equal(result.playwright, '1.64.0');
-  if (config.scenario === 'telemetry' || config.scenario === 'overlay' || config.scenario === 'lifecycle' || config.scenario === 'recording') telemetrySource = await startLiveSmokeSource(config.checkout);
+  if (config.scenario === 'telemetry' || config.scenario === 'overlay' || config.scenario === 'lifecycle' || config.scenario === 'recording' || config.scenario === 'soak') telemetrySource = await startLiveSmokeSource(config.checkout);
   if (config.scenario === 'telemetry') telemetrySourceV1 = await startLiveSmokeSourceV1(config.checkout);
   if (config.scenario === 'recording') recordingSource = await startRecordingSource(config);
+  if (config.scenario === 'soak') soakSource = await startSoakSource(config);
   // ET-011b: the lifecycle journey starts from a deliberately invalid settings file in the isolated LOCALAPPDATA.
   if (config.scenario === 'lifecycle') await seedLifecycleSettings(config);
   // ET-017 PR-5: the plugin journey never runs beside a real game, and only against its fake root.
@@ -481,6 +486,12 @@ try {
     await runRefusalSmoke({dashboard: window, config, record: result.refusal});
     phase('refusal-shown');
   }
+  if (config.scenario === 'soak') {
+    // ET-019 PR-12b: M minutes of recording from the soak source; the shared close path exits right after the source stops.
+    result.soak = {};
+    await runSoakSmoke({application, dashboard: window, source: soakSource, config, record: result.soak, phase,
+      stopTracing: async () => {tracing = false; await application.context().tracing.stop({path: path.join(config.output, 'trace.zip')}); phase('tracing-stopped');}});
+  }
   if (config.scenario === 'plugin') {
     // ET-017 PR-5: run A installs into the fake folders, shows the card and excludes ATS through the card's switch, then
     // exits orderly; run B, a restart with the same profile, must reach the same states without writing. The shared close
@@ -513,7 +524,7 @@ try {
   result.processMemory = {run: ['lifecycle', 'recording', 'journal', 'plugin'].includes(config.scenario) ? 'restart' : 'first',
     ...await observeProcessMemory(application).catch(() => ({error: 'OBSERVATION_FAILED'}))};
   phase('journey-complete');
-  if (config.scenario !== 'lifecycle' && config.scenario !== 'recording' && config.scenario !== 'journal' && config.scenario !== 'plugin' && config.scenario !== 'refusal') await window.screenshot({path: path.join(config.output, 'ready.png')});
+  if (config.scenario !== 'lifecycle' && config.scenario !== 'recording' && config.scenario !== 'journal' && config.scenario !== 'plugin' && config.scenario !== 'refusal' && config.scenario !== 'soak') await window.screenshot({path: path.join(config.output, 'ready.png')});
 } catch (error) {result.failure = failure(error); phase('failed');}
 finally {
   try {await telemetrySource?.stop();} catch (error) {result.sourceCloseFailure = failure(error);}
@@ -537,12 +548,19 @@ finally {
     } catch (error) {result.closeFailure = failure(error);}
     finally {clearTimeout(timer); phase('close-settled');}
   }
+  // ET-019 PR-12b: a soak whose source the journey did not stop (a failure, or an application that exited first) ends it
+  // now, so its summary records how its last connection closed.
+  if (soakSource && !result.soak?.sourceStopped) {
+    try {(result.soak ??= {}).source = await soakSource.stop({waitMs: 5000});} catch (error) {result.soakSourceFailure = failure(error);}
+  }
   try {
     // Preserve lifecycle evidence even when a later cleanup assertion fails.
     result.mainEvents = await diagnosticEvents(config.diagnostics);
     result.serviceEvents = await diagnosticEvents(path.join(config.diagnostics, 'service'));
     // ET-019 PR-11: the first launch's phases from rows it already logs; kept even when a later postcondition fails.
     result.coldLaunch = coldLaunchPhases({observation: coldLaunchObservation, driverPhases: result.phases, mainEvents: result.mainEvents, serviceEvents: result.serviceEvents});
+    // ET-019 PR-12b: a log that reached its budget may have dropped the rows the checks below read.
+    if (config.scenario === 'soak') await verifySoakLogs({config, record: result.soak ??= {}});
     result.probesAfterExit = (await readdir(config.temp)).filter(name => name.startsWith('ets2telemetry-probe-'));
     const restartRecord = result.telemetry?.serviceRestartRecovered ? result.telemetry : result.recording?.serviceRestartRecovered ? result.recording : undefined;
     if (telemetrySource && restartRecord) {
@@ -636,7 +654,8 @@ finally {
       recording.restartLauncherExit = result.launcherExit;
       await verifyRecordingRun({config, record: recording, recording: recordingSource, mainEvents: result.mainEvents, serviceEvents: result.serviceEvents,
         restartMainEvents: recording.restartMainEvents, restartServiceEvents: recording.restartServiceEvents, simulatorWaitMs: result.failure ? 1000 : 5000});
-    } else if (config.scenario !== 'refusal') result.history.file = await verifyHistoryFile();
+    } else if (config.scenario === 'soak') await verifySoakRun({config, record: result.soak ??= {}, mainEvents: result.mainEvents, serviceEvents: result.serviceEvents});
+    else if (config.scenario !== 'refusal') result.history.file = await verifyHistoryFile();
   } catch (error) {result.postconditionFailure = failure(error);}
   // A failed run still ends the simulator it started; the Job owns it otherwise.
   if (recordingSource && !result.recording?.simulator) {
@@ -645,8 +664,10 @@ finally {
     catch (error) {result.recordingSourceFailure = failure(error);}
   }
   result.passed = !result.failure && !result.closeFailure && !result.traceFailure && !result.postconditionFailure && !result.sourceCloseFailure && !result.sourceV1CloseFailure &&
-    !result.recordingSourceFailure;
+    !result.recordingSourceFailure && !result.soakSourceFailure;
   result.finishedUtc = new Date().toISOString();
+  // ET-019 PR-12b: a soak's logs can hold hundreds of rows; its receipt keeps the rows its checks name and counts the rest.
+  if (config.scenario === 'soak') compactSoakEvents(result);
   await writeFile(path.join(config.output, 'result.json'), JSON.stringify(result, null, 2) + '\n');
 }
 // The external Job owns descendants even if launch, instrumentation or shutdown fails.
