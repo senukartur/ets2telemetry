@@ -26,13 +26,13 @@ Talk to the owner in Russian. Write plans, commits, PR text and repository files
 ## 1. Understand the task
 
 1. If the task is empty, ask the owner for it and stop.
-2. If the task starts with a card or package ID (for example `ET-010`, `ET-004b`, `SP-01`, `CAP-01`):
+2. Recognize `--review-plan` anywhere in the arguments: it means always stop after planning for the owner's approval. Strip `--review-plan` before parsing the task text below.
+3. If the remaining task starts with a card or package ID (for example `ET-010`, `ET-004b`, `SP-01`, `CAP-01`):
    - Read that Trello card read-only for its brief, checklist and acceptance criteria. If the card cannot be read, ask the owner for the brief.
    - The run key is the ID in lowercase.
-3. Without an ID:
-   - The task text is the brief, and the ID is `NO-CARD`. The PR must explain why there is no card.
-   - The run key is `nc-` followed by the first six words of the task text, lowercased, with every run of non-alphanumeric characters replaced by one hyphen. For example, `fix the overlay unit label for ATS` becomes `nc-fix-the-overlay-unit-label-for`.
-4. `--review-plan` in the arguments means: always stop after planning for the owner's approval.
+4. Without an ID:
+   - The remaining task text (without `--review-plan`) is the brief, and the ID is `NO-CARD`. The PR must explain why there is no card.
+   - The run key is `nc-` followed by the first six words of the stripped task text, lowercased, with every run of non-alphanumeric characters replaced by one hyphen. For example, `fix the overlay unit label for ATS` becomes `nc-fix-the-overlay-unit-label-for`.
 5. The run directory is `.local/deliver/<run key>/` in the repository root. `.local/` is ignored by Git.
 6. If no `state.md` exists for this key, also scan `.local/deliver/*/state.md` for an unfinished run with the same brief. If one exists, ask the owner whether to resume it.
 7. If `state.md` already exists there, this is a resume. Read it. Then verify the recorded branch, HEAD, worktree and PR against Git and GitHub; the recorded values alone are not proof. Continue from the recorded step. Agent IDs from an earlier session are gone. Start fresh agents, and give them the plan, the state and the current diff.

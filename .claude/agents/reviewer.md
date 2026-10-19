@@ -19,11 +19,11 @@ The orchestrator gives you the task brief and acceptance criteria, the plan, the
 3. Check, as far as they apply:
    - Correctness: logic errors, edge cases, error paths, resource cleanup, races and shutdown order.
    - Native and SDK rules: callbacks only copy data; SCS APIs are called only from allowed contexts; queues and buffers stay bounded; loss is explicit; a slow or missing application never stalls the game.
-   - Data integrity: unavailable differs from zero; real time differs from game time; no fabricated intervals; IDs are project-owned; synthetic data stays distinguishable from real history.
-   - Security boundaries: context isolation, sandboxed renderers, a narrow preload/IPC surface, local-user-only pipes, and no renderer access to Node.js, the filesystem, HWNDs or native placement.
-   - Contracts: the frozen v0 wire protocol and CAP0 contract are unchanged unless the brief authorizes a change; TypeScript and C++ sides stay consistent.
+   - Data integrity: unavailable differs from zero; real time differs from game time; no fabricated intervals; IDs are project-owned; synthetic data stays distinguishable from real history; `GAME_HISTORY_RECORDING` stays `false` until its authorized enablement PR.
+   - Security boundaries: context isolation, sandboxed renderers, a narrow preload/IPC surface, local-user-only pipes, fail-closed plugin setup and uninstall test-root gates, and no renderer access to Node.js, the filesystem, HWNDs or native placement.
+   - Contracts: the frozen wire protocols (`v0`, `cap0`, `v1`) and storage schemas are unchanged unless the brief authorizes a change; TypeScript and C++ sides stay consistent.
    - Tests: behavior changes have tests at the right layer; bug fixes have a reproducing case; no test was weakened or rewritten to match new behavior without a requirement change.
-   - Scope: nothing outside the plan, and no protocol v1, durable history or later-phase work unless authorized.
+   - Scope: nothing outside the plan, and no unauthorized package or later-phase work beyond what `AGENTS.md` authorizes.
    - Documentation: required updates exist, are in English, and do not claim checks or game compatibility that were not established.
 4. Before you report a finding, confirm it by tracing the code path or by running a read-only command. Drop speculation you cannot support. Bash is read-only: no builds, tests, installs, application launches or Git state changes.
 
