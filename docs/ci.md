@@ -470,6 +470,28 @@ It runs one launch in the usual Windows Job (60 s, 16 processes, 2 GiB, 25% CPU,
 
 Measured local durations and the expected hosted cost are in [ET-019 validation](validation/et-019.md#pr-7-commands-and-results). What it does not show: a newer database that exists only in a live WAL, a foreign, locked or read-only history database, and a refused synthetic target, which would show `stopped` instead of `disabled`. The storage suite covers the refused opens themselves ([storage tests](storage.md#tests)). It also does not show which inspection layer refused the file: the header check and the read-only check give the same result.
 
+## ET-019 recording soak workflow (dispatch-only)
+
+ET-019 PR-12a (October 19, 2026) adds a separate workflow beside `windows-ci.yml`, `windows-extended.yml` and `claude-review.yml`: [windows-soak.yml](../.github/workflows/windows-soak.yml), for long runs that do not fit the 20-minute jobs of `Windows CI`. In this PR it soaks only the protocol v1 simulator's [soak source](simulator-v1.md#soak-source-et-019-pr-12a); ET-019 PR-12b extends the same workflow with the packaged application soak.
+
+| Property | Value |
+| --- | --- |
+| Trigger | `workflow_dispatch` only, never `pull_request` or `push`. GitHub runs a `workflow_dispatch` workflow only once the workflow file exists on the default branch ([events that trigger workflows](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_dispatch)), so it can be dispatched only after this PR merges; a branch's changes to it can then be dispatched with `--ref` |
+| Input | `minutes`, a number from 1 to 90, default 30. It reaches the scripts only through the environment variable `SOAK_MINUTES`, and a step checks it against `^[0-9]{1,2}$` and 1..90 before any step that reads it (only checkout and the Node setup run earlier), so no input text is expanded into a script |
+| Job | **Windows x64 recording soak** on `windows-2022`, like the `Windows CI` jobs; 120-minute job timeout and a static 100-minute timeout for the soak step (an expression cannot compute it from the input). Not a required check, and its name differs from the three required jobs |
+| Concurrency | Group `windows-soak-<ref>`, `cancel-in-progress: false`: a second dispatch on the same ref waits instead of cancelling a soak that may be nearly done. It is separate from the `Windows CI` group |
+| Permissions | `contents: read` |
+| Steps | Checkout, pinned Node 24.19.0, the input check, pinned CMake (`Install-CMake.ps1`, for PR-12b's native build), pinned npm and the version record, `npm ci` with the `Windows CI` download cache key, the simulator build, `Invoke-SoakSource.ps1 -Minutes <minutes>`, the final version record and the evidence upload. Actions are pinned to the same commit SHAs as in `windows-ci.yml` |
+| Evidence | `windows-soak-evidence-<run>-<attempt>`: `.local/ci`, uploaded with `if: always()` and kept 14 days |
+
+```powershell
+npm run build --workspace @ets2telemetry/telemetry-simulator
+./scripts/ci/Invoke-SoakSource.ps1 -Minutes 2 -OutputRoot <worktree>\.local\ci
+gh workflow run windows-soak.yml --ref main -f minutes=30
+```
+
+[Invoke-SoakSource.ps1](../scripts/ci/Invoke-SoakSource.ps1) runs `cli.cjs smoke-soak-v1 --minutes <M>` under `BoundedProcess.RunExtended` with CPU sampling: the same Job limits as every smoke (16 processes, 2 GiB, 25% CPU, kill-on-close) and a deadline of (M × 60 + 300) s. `RunExtended` accepts 60,001 to 6,000,000 ms (100 minutes); `Run` keeps 100 to 60,000 ms, and both share one implementation. The smoke serves the timeline in real time to its in-process durable client, stops it 5 s into the 300 s tail and checks the schedule's totals. The wrapper writes `soak-result.json` beside the Job's logs: whether the run passed and why not (`JOB_EXIT_<code>`, `SOAK_SUMMARY_MISSING` or `SOAK_SUMMARY_FAILED`), the smoke's summary, the heap of the progress lines (first, minimum, maximum and last), the Job CPU summary of `job-cpu-summary.mjs` and the Job's peak memory. Heap, CPU and memory are recorded, not gated (ET-019 plan decision D3). The evidence holds no path outside the run and no host fact beyond what `Windows CI` records. The source soak measures the simulator, not the application.
+
 ## PowerShell validator test budgets
 
 Five Node test files run production or fixture rules under Windows PowerShell 5.1 (`powershell.exe`). Starting that process dominates their cost: locally a bare `-NoProfile` start takes about 0.2 s, and dot-sourcing `RuntimeReceipt.ps1` and validating one receipt about 0.45 s per process. Hosted runners are slower and vary by runner: the installer helper fixture takes 1.2 s locally and 2.1–2.4 s hosted. Two tests intermittently failed on slow runners in October 2026:

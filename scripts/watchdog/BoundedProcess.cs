@@ -133,6 +133,15 @@ namespace ETS2Telemetry.Diagnostics {
     // sampleCpu adds output/cpu.jsonl and output/memory.json; limits, deadlines and cleanup are identical either way.
     public static int Run(string executable, string[] args, string cwd, string output, int timeoutMs, bool sampleCpu) {
       if (timeoutMs<100 || timeoutMs>60000) throw new ArgumentOutOfRangeException("timeoutMs");
+      return Contain(executable, args, cwd, output, timeoutMs, sampleCpu);
+    }
+    // ET-019 PR-12a: the same containment for a long run, such as a soak, with a deadline from 60,001 ms to 6,000,000 ms
+    // (100 minutes). Run keeps its 100..60,000 ms range; the limits (16 processes, 2 GiB, 25% CPU, kill-on-close) are shared.
+    public static int RunExtended(string executable, string[] args, string cwd, string output, int timeoutMs, bool sampleCpu) {
+      if (timeoutMs<60001 || timeoutMs>6000000) throw new ArgumentOutOfRangeException("timeoutMs");
+      return Contain(executable, args, cwd, output, timeoutMs, sampleCpu);
+    }
+    static int Contain(string executable, string[] args, string cwd, string output, int timeoutMs, bool sampleCpu) {
       if (!Path.IsPathRooted(executable) || !Path.IsPathRooted(cwd) || !Path.IsPathRooted(output)) throw new ArgumentException("Absolute paths required");
       Directory.CreateDirectory(output);
       IntPtr job=IntPtr.Zero, stdoutRead=IntPtr.Zero, stdoutWrite=IntPtr.Zero, stderrRead=IntPtr.Zero, stderrWrite=IntPtr.Zero, input=IntPtr.Zero;
