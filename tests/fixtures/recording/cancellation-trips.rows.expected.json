@@ -1,0 +1,32 @@
+{
+  "scenario": "cancellation-trips",
+  "basis": ["O3", "O7", "synthetic-inference"],
+  "authoredFrom": [
+    "tests/storage/replay-journal-export.test.ts builds the scenario from the header and seed of normal-delivery.json (ETS2, currency unknown): simulation.started (1, atMs 10); a cargo_market job with cargo.loaded false configured while running (2, 20); a fine (3, 30); job.cancelled (4, 40); job.cleared (5, 50); truck.configured (6, 60); a second, freight job configured while running (7, 70); a toll (8, 80); job.cleared (9, 90); a toll after the clear (10, 100); the identical truck re-sent (11, 110); job.cancelled (12, 120); job.cleared (13, 130). One durable client commits and acknowledges every item; no frame is published",
+    "docs/simulator-v1.md: UTC labels are 1,800,000,000,000 ms + atMs; docs/trips.md T4: trips are labelled trip@<eventSeq of the job configuration>",
+    "docs/trips.md transitions and T12/T13: both jobs are configured while running, so neither has a load window or a cause interval and each opens unknown; an outcome closes its trip {cancelled, outcome}, complete after a clean window",
+    "docs/trips.md Attribution (T14) and the ET-019 PR-1 review fix: every gameplay event of an active cargo_market job whose cargoLoaded is available and false is trip-before-loaded, its outcome included (3 and 4)",
+    "docs/trips.md T7 and O7: after job.cleared the trip awaits its outcome; a toll after the clear is free-driving (T14: outside any active job), an identical truck re-send changes nothing, and the later job.cancelled attaches to the trip (12)",
+    "docs/trips.md transitions: the trip opens with the session's current truck reference (6); no trailer was configured",
+    "docs/trips.md T16 (PR-2) and J8: no reading pair, so neither trip observes distance or fuel"
+  ],
+  "trips": [
+    {"trip": "trip@2", "jobConfigurationEventSeq": "2", "truckConfigurationEventSeq": null, "trailerConfigurationEventSeqs": [], "openedEventSeq": "2",
+      "gameMode": {"mode": "unknown", "method": "none", "confidence": "none"}, "gameModeAmbiguous": false, "outcome": "cancelled", "outcomeEventSeq": "4", "closeReason": "outcome",
+      "recordingCompleteness": "complete", "startedUtcMs": 1800000000020, "endedUtcMs": 1800000000040,
+      "observedDistanceM": {"available": false, "reason": "not-observed"}, "fuelUsedL": {"available": false, "reason": "not-observed"}},
+    {"trip": "trip@7", "jobConfigurationEventSeq": "7", "truckConfigurationEventSeq": "6", "trailerConfigurationEventSeqs": [], "openedEventSeq": "7",
+      "gameMode": {"mode": "unknown", "method": "none", "confidence": "none"}, "gameModeAmbiguous": false, "outcome": "cancelled", "outcomeEventSeq": "12", "closeReason": "outcome",
+      "recordingCompleteness": "complete", "startedUtcMs": 1800000000070, "endedUtcMs": 1800000000120,
+      "observedDistanceM": {"available": false, "reason": "not-observed"}, "fuelUsedL": {"available": false, "reason": "not-observed"}}
+  ],
+  "attributions": [
+    {"eventSeq": "3", "trip": "trip@2", "attribution": "trip-before-loaded"},
+    {"eventSeq": "4", "trip": "trip@2", "attribution": "trip-before-loaded"},
+    {"eventSeq": "8", "trip": "trip@7", "attribution": "trip"},
+    {"eventSeq": "10", "trip": null, "attribution": "free-driving"},
+    {"eventSeq": "12", "trip": "trip@7", "attribution": "trip"}
+  ],
+  "intervals": [],
+  "coverage": {"committedThroughEventSeq": "13", "committed": 13, "duplicate": 0, "covered": 0}
+}

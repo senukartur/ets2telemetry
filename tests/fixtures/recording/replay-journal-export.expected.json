@@ -1,0 +1,196 @@
+{
+  "purpose": "ET-019 PR-5: what the journal and the format version 1 export show for each replayed lifecycle scenario of tests/storage/replay-journal-export.test.ts, beyond the stored rows. The trip rows, attributions and intervals come from each scenario's hand-written rows expectation (tests/fixtures/simulator-v1/<id>.trip.expected.json for the corpus scenarios, tests/fixtures/recording/<id>.rows.expected.json for the derived ones); this file adds the stored event types, the list rows' job summaries, the close carriers, the timeline windows, the outcome records, the money totals and the one-second samples. Written by hand, never from the code under test.",
+  "authoredFrom": [
+    "docs/journal.md: the list row's job summary (source, names, planned distance and expected income as offered), the trip detail, money totals per category, SDK type and currency, and the timeline window (J7): from the earlier of the opening event and the job configuration (or the checkpoint's nextEventSeq) through the closing event (close-event), just before the first eventSeq a gap newly covered (close-gap), or without an end while open",
+    "docs/storage.md, schema version 2: the close carrier is the committing session and the closing event's eventSeq, or for a gap the first eventSeq it newly covers",
+    "docs/protocol/v1.md §5 and docs/simulator-v1.md: a message's capture is stamped when it is encoded, the 50 ms snapshot interval starts at the checkpoint, and a state's captureUtcUnixMs is its frame's label (1,800,000,000,000 ms + atMs); the source clock is 1,000,000,000,000 ns + atMs x 1,000,000",
+    "docs/trips.md, one-second sampler (H3, H4, H7): a connection's checkpoint is the session's baseline; the first fresh, running reading of each source second becomes a sample, referencing the trip only while it is active and no job is untracked; paused readings give none. docs/telemetry-service-v1.md (H11): the stop writes every pending row",
+    "docs/sdk-adapter.md: a configuration attribute the source never sent is not observed; a measure keeps its unit when unavailable"
+  ],
+  "currencies": {
+    "unknown": {"status": "unknown"},
+    "EUR": {"status": "sdk-documented", "code": "EUR", "source": "scs-sdk-1.15/include/eurotrucks2/scssdk_telemetry_eut2.h#game-specific-units"},
+    "USD": {"status": "sdk-documented", "code": "USD", "source": "scs-sdk-1.15/include/amtrucks/scssdk_telemetry_ats.h#game-specific-units"}
+  },
+  "scenarios": {
+    "save-load": {
+      "authoredFrom": [
+        "save-load.expected.json: the stored events 1-13 and their types; the snapshot at 100 (speed 20 m/s, game time 5,100 on game-clock-0) is the first running reading after the checkpoint at 0, so it is the trip's one sample; the snapshot at 240 is in the same source second",
+        "The trip is open after the save load, so its window has no end and lists every stored event from its job configuration (3) on"
+      ],
+      "events": {"1": "truck.configured", "2": "trailer.configured", "3": "job.configured", "4": "simulation.started", "5": "simulation.paused", "6": "job.cleared",
+        "7": "truck.cleared", "8": "trailer.cleared", "9": "job.configured", "10": "truck.configured", "11": "trailer.configured", "12": "simulation.started",
+        "13": "gameTime.regression"},
+      "trips": [
+        {"trip": "trip@3",
+          "job": {"source": "event", "sourceCity": {"available": false, "reason": "not-observed"}, "sourceCompany": {"available": false, "reason": "not-observed"},
+            "destinationCity": {"available": false, "reason": "not-observed"}, "destinationCompany": {"available": false, "reason": "not-observed"},
+            "cargo": {"available": false, "reason": "not-observed"}, "plannedDistance": {"available": true, "value": 300000, "unit": "m"},
+            "expectedIncome": {"available": false, "reason": "not-observed"}},
+          "closedBy": null, "window": {"fromEventSeq": "3", "throughEventSeq": null, "end": "open"}, "outcome": null, "money": [],
+          "samples": [{"utcMs": 1800000000100, "monotonicNs": "1000100000000", "values": {"speed": {"available": true, "value": 20},
+            "gameTime": {"minutes": {"available": true, "value": 5100}, "clockId": "game-clock-0"}}}]}
+      ]
+    },
+    "quick-job-profile-change": {
+      "authoredFrom": [
+        "quick-job-profile-change.expected.json: the stored events 1-9 and their types; the quick job has only a market, a cargo id and the special-job flag, so every summary field is not observed",
+        "The frame at 40 is sent at 50, the end of the 50 ms interval that starts at the checkpoint (capture 1,000,050,000,000; state label 1,800,000,000,040, game time 800 on game-clock-0); the simulation runs since 30 and the trip is active, so it is the trip's one sample; the snapshot at 120 is paused",
+        "The timer restart (7) closes the trip: its window ends there"
+      ],
+      "events": {"1": "truck.configured", "2": "job.configured", "3": "simulation.started", "4": "simulation.paused", "5": "job.cleared", "6": "truck.cleared",
+        "7": "timers.restart", "8": "truck.configured", "9": "simulation.started"},
+      "trips": [
+        {"trip": "trip@2",
+          "job": {"source": "event", "sourceCity": {"available": false, "reason": "not-observed"}, "sourceCompany": {"available": false, "reason": "not-observed"},
+            "destinationCity": {"available": false, "reason": "not-observed"}, "destinationCompany": {"available": false, "reason": "not-observed"},
+            "cargo": {"available": false, "reason": "not-observed"}, "plannedDistance": {"available": false, "reason": "not-observed", "unit": "m"},
+            "expectedIncome": {"available": false, "reason": "not-observed"}},
+          "closedBy": "7", "window": {"fromEventSeq": "2", "throughEventSeq": "7", "end": "close-event"}, "outcome": null, "money": [],
+          "samples": [{"utcMs": 1800000000040, "monotonicNs": "1000050000000", "values": {"gameTime": {"minutes": {"available": true, "value": 800}, "clockId": "game-clock-0"}}}]}
+      ]
+    },
+    "timers-truck-refuel": {
+      "authoredFrom": [
+        "timers-truck-refuel.expected.json: the stored events 1-3; no job event and no checkpoint job, so the journal lists no trip under any filter and nothing can be exported (REG-008: no false fuel usage or distance outside a trip)"
+      ],
+      "events": {"1": "truck.configured", "2": "timers.restart", "3": "truck.configured"},
+      "trips": []
+    },
+    "ferry-train": {
+      "authoredFrom": [
+        "ferry-train.expected.json: the stored events 1-3, each free-driving with no job; the journal lists no trip under any filter"
+      ],
+      "events": {"1": "player.use.ferry", "2": "player.use.train", "3": "player.tollgate.paid"},
+      "trips": []
+    },
+    "app-absent-hydration": {
+      "authoredFrom": [
+        "app-absent-hydration.expected.json: only the job.cleared (5) is stored; 1-3 and 4 are offline gaps. The checkpoint job (cargo id, destination city id, 300 km) is the trip's job, from the checkpoint with nextEventSeq 4",
+        "The live gap 4-4 closes the late-attach trip: its close carrier is the first newly covered eventSeq, 4, and its window ends just before it, at 3, before it starts at the checkpoint's nextEventSeq 4, so the timeline is empty",
+        "The snapshot at 150 follows the gap 4-4 (it reports ackedThroughEventSeq 4), so the trip is closed when it is sampled: the trip has no sample"
+      ],
+      "events": {"5": "job.cleared"},
+      "trips": [
+        {"trip": "attach@4",
+          "job": {"source": "checkpoint", "sourceCity": {"available": false, "reason": "not-observed"}, "sourceCompany": {"available": false, "reason": "not-observed"},
+            "destinationCity": {"available": false, "reason": "not-observed"}, "destinationCompany": {"available": false, "reason": "not-observed"},
+            "cargo": {"available": false, "reason": "not-observed"}, "plannedDistance": {"available": true, "value": 300000, "unit": "m"},
+            "expectedIncome": {"available": false, "reason": "not-observed"}},
+          "closedBy": "4", "window": {"fromEventSeq": "4", "throughEventSeq": "3", "end": "close-gap"}, "outcome": null, "money": [], "samples": []}
+      ]
+    },
+    "retention-expired": {
+      "authoredFrom": [
+        "retention-expired.expected.json: no event is stored, coverage 2 is the retentionExpired gap 1-2; the checkpoint job has only a cargo id",
+        "The late-attach trip stays open, so its window starts at the checkpoint's nextEventSeq 3 without an end and lists nothing; the frame at 400,000 has no running simulation, so there is no sample"
+      ],
+      "events": {},
+      "trips": [
+        {"trip": "attach@3",
+          "job": {"source": "checkpoint", "sourceCity": {"available": false, "reason": "not-observed"}, "sourceCompany": {"available": false, "reason": "not-observed"},
+            "destinationCity": {"available": false, "reason": "not-observed"}, "destinationCompany": {"available": false, "reason": "not-observed"},
+            "cargo": {"available": false, "reason": "not-observed"}, "plannedDistance": {"available": false, "reason": "not-observed", "unit": "m"},
+            "expectedIncome": {"available": false, "reason": "not-observed"}},
+          "closedBy": null, "window": {"fromEventSeq": "3", "throughEventSeq": null, "end": "open"}, "outcome": null, "money": [], "samples": []}
+      ]
+    },
+    "cancellation-trips": {
+      "authoredFrom": [
+        "The scenario's steps in tests/storage/replay-journal-export.test.ts and cancellation-trips.rows.expected.json; the source's currency is unknown",
+        "docs/journal.md money totals: the fine of the cargo-market job before pickup is attributed trip-before-loaded and counts in its trip's fine total; the toll after the clear (10) is free-driving and counts in no trip; the penalties are outcome records, never totals",
+        "No frame is published, so no sample is taken"
+      ],
+      "events": {"1": "simulation.started", "2": "job.configured", "3": "player.fined", "4": "job.cancelled", "5": "job.cleared", "6": "truck.configured", "7": "job.configured",
+        "8": "player.tollgate.paid", "9": "job.cleared", "10": "player.tollgate.paid", "11": "truck.configured", "12": "job.cancelled", "13": "job.cleared"},
+      "trips": [
+        {"trip": "trip@7",
+          "job": {"source": "event", "sourceCity": {"available": false, "reason": "not-observed"}, "sourceCompany": {"available": false, "reason": "not-observed"},
+            "destinationCity": {"available": false, "reason": "not-observed"}, "destinationCompany": {"available": false, "reason": "not-observed"},
+            "cargo": {"available": false, "reason": "not-observed"}, "plannedDistance": {"available": true, "value": 152000, "unit": "m"},
+            "expectedIncome": {"available": true, "value": {"raw": "12345", "sdkType": "u64", "currency": "unknown"}}},
+          "closedBy": "12", "window": {"fromEventSeq": "7", "throughEventSeq": "12", "end": "close-event"},
+          "outcome": {"eventSeq": "12", "type": "job.cancelled", "penalty": "1000", "currency": "unknown"},
+          "money": [{"category": "toll", "sdkType": "s64", "currency": "unknown", "raw": "5", "count": 1}], "samples": []},
+        {"trip": "trip@2",
+          "job": {"source": "event", "sourceCity": {"available": false, "reason": "not-observed"}, "sourceCompany": {"available": false, "reason": "not-observed"},
+            "destinationCity": {"available": false, "reason": "not-observed"}, "destinationCompany": {"available": false, "reason": "not-observed"},
+            "cargo": {"available": false, "reason": "not-observed"}, "plannedDistance": {"available": true, "value": 80000, "unit": "m"},
+            "expectedIncome": {"available": true, "value": {"raw": "4000", "sdkType": "u64", "currency": "unknown"}}},
+          "closedBy": "4", "window": {"fromEventSeq": "2", "throughEventSeq": "4", "end": "close-event"},
+          "outcome": {"eventSeq": "4", "type": "job.cancelled", "penalty": "2500", "currency": "unknown"},
+          "money": [{"category": "fine", "sdkType": "s64", "currency": "unknown", "raw": "150", "count": 1}], "samples": []}
+      ]
+    },
+    "ferry-train-trip": {
+      "authoredFrom": [
+        "The scenario's steps in tests/storage/replay-journal-export.test.ts and ferry-train-trip.rows.expected.json; the source's currency is SDK-documented EUR",
+        "docs/journal.md money totals: one exact total per category for the ferry (230), the train (120) and the toll (15); the revenue is the outcome record",
+        "The snapshot at 100 is the first running reading after the checkpoint at 0 (game time 1,000 on game-clock-0) while trip@2 is active, so it is that trip's one sample; the snapshot at 200 is in the same source second"
+      ],
+      "events": {"1": "simulation.started", "2": "job.configured", "3": "player.use.ferry", "4": "player.use.train", "5": "player.tollgate.paid", "6": "job.delivered",
+        "7": "job.cleared", "8": "job.configured"},
+      "trips": [
+        {"trip": "trip@8",
+          "job": {"source": "event", "sourceCity": {"available": false, "reason": "not-observed"}, "sourceCompany": {"available": false, "reason": "not-observed"},
+            "destinationCity": {"available": false, "reason": "not-observed"}, "destinationCompany": {"available": false, "reason": "not-observed"},
+            "cargo": {"available": false, "reason": "not-observed"}, "plannedDistance": {"available": true, "value": 90000, "unit": "m"},
+            "expectedIncome": {"available": true, "value": {"raw": "5000", "sdkType": "u64", "currency": "EUR"}}},
+          "closedBy": null, "window": {"fromEventSeq": "8", "throughEventSeq": null, "end": "open"}, "outcome": null, "money": [], "samples": []},
+        {"trip": "trip@2",
+          "job": {"source": "event", "sourceCity": {"available": false, "reason": "not-observed"}, "sourceCompany": {"available": false, "reason": "not-observed"},
+            "destinationCity": {"available": false, "reason": "not-observed"}, "destinationCompany": {"available": false, "reason": "not-observed"},
+            "cargo": {"available": false, "reason": "not-observed"}, "plannedDistance": {"available": true, "value": 400000, "unit": "m"},
+            "expectedIncome": {"available": true, "value": {"raw": "20000", "sdkType": "u64", "currency": "EUR"}}},
+          "closedBy": "6", "window": {"fromEventSeq": "2", "throughEventSeq": "6", "end": "close-event"},
+          "outcome": {"eventSeq": "6", "type": "job.delivered", "revenue": "21000", "distanceM": 400500, "currency": "EUR"},
+          "money": [{"category": "ferry", "sdkType": "s64", "currency": "EUR", "raw": "230", "count": 1}, {"category": "toll", "sdkType": "s64", "currency": "EUR", "raw": "15", "count": 1},
+            {"category": "train", "sdkType": "s64", "currency": "EUR", "raw": "120", "count": 1}],
+          "samples": [{"utcMs": 1800000000100, "monotonicNs": "1000100000000", "values": {"gameTime": {"minutes": {"available": true, "value": 1000}, "clockId": "game-clock-0"}}}]}
+      ]
+    },
+    "timers-truck-refuel-trip": {
+      "authoredFrom": [
+        "The scenario's steps in tests/storage/replay-journal-export.test.ts and timers-truck-refuel-trip.rows.expected.json; the source's currency is unknown",
+        "The snapshot at 100 (fuel 100 L, odometer 5,000 km = 5,000,000 m) is the first running reading after the checkpoint at 0 while the trip is active, so it is the trip's one sample; the later snapshots are in the same source second"
+      ],
+      "events": {"1": "simulation.started", "2": "truck.configured", "3": "job.configured", "4": "truck.configured", "5": "player.tollgate.paid", "6": "timers.restart"},
+      "trips": [
+        {"trip": "trip@3",
+          "job": {"source": "event", "sourceCity": {"available": false, "reason": "not-observed"}, "sourceCompany": {"available": false, "reason": "not-observed"},
+            "destinationCity": {"available": false, "reason": "not-observed"}, "destinationCompany": {"available": false, "reason": "not-observed"},
+            "cargo": {"available": false, "reason": "not-observed"}, "plannedDistance": {"available": true, "value": 200000, "unit": "m"},
+            "expectedIncome": {"available": false, "reason": "not-observed"}},
+          "closedBy": "6", "window": {"fromEventSeq": "3", "throughEventSeq": "6", "end": "close-event"}, "outcome": null,
+          "money": [{"category": "toll", "sdkType": "s64", "currency": "unknown", "raw": "5", "count": 1}],
+          "samples": [{"utcMs": 1800000000100, "monotonicNs": "1000100000000", "values": {"fuel": {"available": true, "value": 100}, "odometer": {"available": true, "value": 5000000}}}]}
+      ]
+    },
+    "missing-job-configuration": {
+      "authoredFrom": [
+        "The scenario's steps in tests/storage/replay-journal-export.test.ts and missing-job-configuration.rows.expected.json; the source is ATS with SDK-documented USD",
+        "The delivery at 2, whose job configuration was never observed, belongs to no trip: it lies outside every window and is in no outcome record or total; only trip@8's own delivery (11) makes a trip delivered",
+        "The only frame is the timer restart while paused, so no sample is taken"
+      ],
+      "events": {"1": "simulation.started", "2": "job.delivered", "3": "job.configured", "4": "player.tollgate.paid", "5": "simulation.paused", "6": "job.cleared",
+        "7": "timers.restart", "8": "job.configured", "9": "simulation.started", "10": "player.tollgate.paid", "11": "job.delivered", "12": "job.cleared"},
+      "trips": [
+        {"trip": "trip@8",
+          "job": {"source": "event", "sourceCity": {"available": false, "reason": "not-observed"}, "sourceCompany": {"available": false, "reason": "not-observed"},
+            "destinationCity": {"available": false, "reason": "not-observed"}, "destinationCompany": {"available": false, "reason": "not-observed"},
+            "cargo": {"available": false, "reason": "not-observed"}, "plannedDistance": {"available": true, "value": 120000, "unit": "m"},
+            "expectedIncome": {"available": true, "value": {"raw": "8000", "sdkType": "u64", "currency": "USD"}}},
+          "closedBy": "11", "window": {"fromEventSeq": "8", "throughEventSeq": "11", "end": "close-event"},
+          "outcome": {"eventSeq": "11", "type": "job.delivered", "revenue": "8500", "distanceM": 120500, "currency": "USD"},
+          "money": [{"category": "toll", "sdkType": "s64", "currency": "USD", "raw": "11", "count": 1}], "samples": []},
+        {"trip": "trip@3",
+          "job": {"source": "event", "sourceCity": {"available": false, "reason": "not-observed"}, "sourceCompany": {"available": false, "reason": "not-observed"},
+            "destinationCity": {"available": false, "reason": "not-observed"}, "destinationCompany": {"available": false, "reason": "not-observed"},
+            "cargo": {"available": false, "reason": "not-observed"}, "plannedDistance": {"available": true, "value": 120000, "unit": "m"},
+            "expectedIncome": {"available": true, "value": {"raw": "8000", "sdkType": "u64", "currency": "USD"}}},
+          "closedBy": "7", "window": {"fromEventSeq": "3", "throughEventSeq": "7", "end": "close-event"}, "outcome": null,
+          "money": [{"category": "toll", "sdkType": "s64", "currency": "USD", "raw": "9", "count": 1}], "samples": []}
+      ]
+    }
+  }
+}
