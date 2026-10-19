@@ -4,8 +4,8 @@ import path from 'node:path';
 import {promisify} from 'node:util';
 
 /**
- * `numbers: 'int64'` validates a lifecycle (or, with scenario `recording` or `journal`, a recording or journal) receipt with
- * PowerShell 7's Int64 JSON integers.
+ * `numbers: 'int64'` validates a lifecycle (or, with scenario `recording`, `journal` or `refusal`, a recording, journal or
+ * refusal) receipt with PowerShell 7's Int64 JSON integers.
  */
 /** `mode` is the expected mode (default `packaged`); ET-018 PR-1 adds `installed`. */
 export type RuntimeReceiptCase = {receipt: string; code: number; scenario?: string; numbers?: 'int64'; mode?: string};

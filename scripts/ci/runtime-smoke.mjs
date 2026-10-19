@@ -20,13 +20,14 @@ import {runLifecycleSmoke, seedLifecycleSettings, until, verifyLifecycleRestart}
 import {assertNoGameRunning, buildPluginFixture, runDiagnosticsExport, runPluginJourney, snapshotPluginFixture, verifyDisabledPluginCard, verifyPluginEvents, verifyPluginRestart} from './plugin-fixture.mjs';
 import {RECORDING_TARGET, runRecordingSmoke, startRecordingSource, verifyRecordingRestart, verifyRecordingRun} from './recording-observation.mjs';
 import {JOURNAL_TARGET, runJournalEmpty, runJournalExport, runJournalSeeded, seedJournalDatabase, verifyJournalRun} from './journal-observation.mjs';
+import {placeNewerHistory, runRefusalSmoke, verifyRefusalRun} from './refusal-observation.mjs';
 import {installedEnvironment, minimalPath, normalizePath} from '../installer/installer-guard.mjs';
 // These read-only globals are used only inside serialized Playwright browser callbacks.
 /* global document: readonly, getComputedStyle: readonly, innerHeight: readonly, innerWidth: readonly */
 
 const [configFile] = process.argv.slice(2);
 const config = JSON.parse((await readFile(configFile, 'utf8')).replace(/^\uFEFF/, ''));
-const result = {scenario: config.scenario === 'plugin' ? 'PLUGIN-SETUP-TEST-ROOT / partial REG-015, REG-017' : config.scenario === 'journal' ? 'SYNTHETIC-JOURNAL-UI / partial REG-009, REG-014, REG-017' : config.scenario === 'recording' ? 'V1 SYNTHETIC-RECORDING-JOURNEY / partial REG-006, REG-012, REG-017' : config.scenario === 'lifecycle' ? 'V0 TRAY-LIFECYCLE-SETTINGS / partial REG-009, REG-011, REG-012, REG-017' : config.scenario === 'overlay' ? 'V0 HIDDEN-OVERLAY-PROJECTION / partial REG-009, REG-011, REG-017' : config.scenario === 'telemetry' ? 'V0 SOURCE-RENDERER-RECOVERY / partial REG-003, REG-010, REG-011, REG-017' : 'SCAFFOLD-WORKER / partial REG-011, REG-017', passed: false,
+const result = {scenario: config.scenario === 'refusal' ? 'NEWER-HISTORY-REFUSAL / partial REG-013, REG-014, REG-017' : config.scenario === 'plugin' ? 'PLUGIN-SETUP-TEST-ROOT / partial REG-015, REG-017' : config.scenario === 'journal' ? 'SYNTHETIC-JOURNAL-UI / partial REG-009, REG-014, REG-017' : config.scenario === 'recording' ? 'V1 SYNTHETIC-RECORDING-JOURNEY / partial REG-006, REG-012, REG-017' : config.scenario === 'lifecycle' ? 'V0 TRAY-LIFECYCLE-SETTINGS / partial REG-009, REG-011, REG-012, REG-017' : config.scenario === 'overlay' ? 'V0 HIDDEN-OVERLAY-PROJECTION / partial REG-009, REG-011, REG-017' : config.scenario === 'telemetry' ? 'V0 SOURCE-RENDERER-RECOVERY / partial REG-003, REG-010, REG-011, REG-017' : 'SCAFFOLD-WORKER / partial REG-011, REG-017', passed: false,
   scenarioKind: config.scenario ?? 'scaffold',
   commit: config.commit, mode: config.mode, node: process.versions, expected: {
     status: {service: 'ready', storage: 'verified', synthetic: true}, exit: 0, probesAfterExit: []},
@@ -125,6 +126,8 @@ try {
   if (config.scenario === 'lifecycle') await seedLifecycleSettings(config);
   // ET-017 PR-5: the plugin journey never runs beside a real game, and only against its fake root.
   if (config.scenario === 'plugin') {assertNoGameRunning(); pluginFixture = await buildPluginFixture(config.output); pluginBefore = await snapshotPluginFixture(pluginFixture);}
+  // ET-019 PR-7: the history path of the isolated LOCALAPPDATA holds a copy of the newer-schema fixture before the launch.
+  if (config.scenario === 'refusal') await placeNewerHistory({config, record: result.refusal = {}});
   phase('launch-requested');
   application = await electron.launch(launchOptions(config.diagnostics));
   launcher = application.process();
@@ -468,6 +471,11 @@ try {
     phase('journal-exported');
     await dashboard.screenshot({path: path.join(config.output, 'journal.png')});
   }
+  if (config.scenario === 'refusal') {
+    // ET-019 PR-7: the refused history database through the bridge, main's health, the recording texts and the Journal tab.
+    await runRefusalSmoke({dashboard: window, config, record: result.refusal});
+    phase('refusal-shown');
+  }
   if (config.scenario === 'plugin') {
     // ET-017 PR-5: run A installs into the fake folders, shows the card and excludes ATS through the card's switch, then
     // exits orderly; run B, a restart with the same profile, must reach the same states without writing. The shared close
@@ -496,7 +504,7 @@ try {
     await dashboard.screenshot({path: path.join(config.output, 'plugin.png')});
   }
   phase('journey-complete');
-  if (config.scenario !== 'lifecycle' && config.scenario !== 'recording' && config.scenario !== 'journal' && config.scenario !== 'plugin') await window.screenshot({path: path.join(config.output, 'ready.png')});
+  if (config.scenario !== 'lifecycle' && config.scenario !== 'recording' && config.scenario !== 'journal' && config.scenario !== 'plugin' && config.scenario !== 'refusal') await window.screenshot({path: path.join(config.output, 'ready.png')});
 } catch (error) {result.failure = failure(error); phase('failed');}
 finally {
   try {await telemetrySource?.stop();} catch (error) {result.sourceCloseFailure = failure(error);}
@@ -543,7 +551,9 @@ finally {
     assert.ok(result.serviceEvents.some(row => row.event === 'SERVICE_REPORT' && row.detail?.type === 'stopped'));
     // A deliberately killed service never closed its database; its replacement reopens the existing file.
     // A recording target logs the same opening and closing codes for its synthetic database (ET-015a PR-3).
-    result.history = verifyHistoryEvents(result.serviceEvents, telemetrySource && restartRecord ? [true, false] : [true]);
+    // ET-019 PR-7: the refusal scenario's service never opens a database; its own checks replace the history ones.
+    if (config.scenario === 'refusal') await verifyRefusalRun({config, record: result.refusal ??= {}, mainEvents: result.mainEvents, serviceEvents: result.serviceEvents});
+    else result.history = verifyHistoryEvents(result.serviceEvents, telemetrySource && restartRecord ? [true, false] : [true]);
     assert.ok(![...result.mainEvents, ...result.serviceEvents].some(row =>
       /FAILED|TIMEOUT|UNCAUGHT|UNHANDLED|INVALID|RENDER_PROCESS_GONE/.test(row.event)));
     if (config.scenario === 'lifecycle') {
@@ -615,7 +625,7 @@ finally {
       recording.restartLauncherExit = result.launcherExit;
       await verifyRecordingRun({config, record: recording, recording: recordingSource, mainEvents: result.mainEvents, serviceEvents: result.serviceEvents,
         restartMainEvents: recording.restartMainEvents, restartServiceEvents: recording.restartServiceEvents, simulatorWaitMs: result.failure ? 1000 : 5000});
-    } else result.history.file = await verifyHistoryFile();
+    } else if (config.scenario !== 'refusal') result.history.file = await verifyHistoryFile();
   } catch (error) {result.postconditionFailure = failure(error);}
   // A failed run still ends the simulator it started; the Job owns it otherwise.
   if (recordingSource && !result.recording?.simulator) {

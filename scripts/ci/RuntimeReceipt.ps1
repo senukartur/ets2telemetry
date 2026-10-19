@@ -489,6 +489,61 @@ function Test-JournalReceipt {
     return $true
 }
 
+# ET-019 PR-7 newer-database refusal (scenario `refusal`): a copy of the immutable schema-newer-999 fixture at the isolated
+# history path is refused with SCHEMA_NEWER and keeps its bytes; the journal reads answer the refusal, the Journal tab shows
+# its J11 sentence, the recording stays disabled and main's health ready. The hash is the fixture's manifest entry.
+function Test-RefusalReceipt {
+    param([object]$Driver)
+    $refusal = $Driver.refusal
+    if ($null -eq $refusal) { return $false }
+    foreach ($field in @('fixtureUnchanged','placedAtHistoryPath','bridgeRefused','healthConsistent','recordingDisabledShown','journalRefusalShown',
+        'fileUnchanged','shutdownClean')) {
+        if ($refusal.$field -isnot [bool] -or $refusal.$field -ne $true) { return $false }
+    }
+    $hash = '25588c340d06ef351b6c03cb7cf987fa315b7463e8b67bfcb0b50226eae25331'
+    $placed = $refusal.placed; $file = $refusal.file
+    if ($null -eq $placed -or $null -eq $file -or $placed.fixture -cne 'schema-newer-999.sqlite' -or $placed.manifestSha256 -cne $hash -or
+        $placed.fixtureSha256After -cne $hash -or $placed.sha256 -cne $hash -or $file.sha256After -cne $hash -or
+        !(Test-ReceiptInteger -Value $placed.bytes -Minimum 1 -Maximum 1048576) -or !(Test-ReceiptInteger -Value $file.bytesAfter -Minimum $placed.bytes -Maximum $placed.bytes)) { return $false }
+    foreach ($header in @($placed.header, $file.header)) {
+        if ($null -eq $header -or $header.magic -cne 'SQLite format 3' -or !(Test-ReceiptInteger -Value $header.applicationId -Minimum 1163154226 -Maximum 1163154226) -or
+            !(Test-ReceiptInteger -Value $header.userVersion -Minimum 999 -Maximum 999)) { return $false }
+    }
+    # No WAL, shared-memory, journal or partial file beside it, and no backups folder.
+    if ((@($file.dataEntries) -join ',') -cne 'telemetry.sqlite' -or $file.backups -isnot [bool] -or $file.backups) { return $false }
+    foreach ($read in @('list','detail','events')) {
+        $answer = $refusal.bridge.$read
+        if ($null -eq $answer -or $answer.ok -isnot [bool] -or $answer.ok -or $answer.code -cne 'DATABASE_UNAVAILABLE' -or $answer.storageCode -cne 'SCHEMA_NEWER') { return $false }
+    }
+    $health = $refusal.health
+    if ($null -eq $health -or $health.service -cne 'ready' -or $health.storage -cne 'verified' -or $health.recording.state -cne 'disabled' -or
+        @($health.recording.PSObject.Properties).Count -ne 1 -or $null -ne $health.lastError) { return $false }
+    $text = $refusal.recordingText
+    if ($null -eq $text -or $text.headline -cne 'Off: this version does not record game history' -or $null -ne $text.detail -or $null -ne $text.losses -or
+        $null -ne $text.alert -or $text.notice -cne 'Prototype live display. No trip recording or durable history.') { return $false }
+    $journal = $refusal.journal
+    if ($null -eq $journal -or $journal.error -cne 'The database is unavailable: the database was written by a newer version.' -or
+        $null -ne $journal.empty -or $null -ne $journal.emptyNote -or $null -ne $journal.banner -or !(Test-ReceiptInteger -Value $journal.rows -Minimum 0 -Maximum 0) -or
+        $journal.next -isnot [bool] -or $journal.next -or $journal.previous -isnot [bool] -or $journal.previous) { return $false }
+    # The logs themselves, not the driver's summaries: main's one RECORDING_STATUS row and its app-quit exit request, and the
+    # service's one refusal row, one clean history-storage step and no open, close or target row; the run exited orderly.
+    $serviceEvents = @($Driver.serviceEvents); $mainEvents = @($Driver.mainEvents)
+    $statusRows = @($mainEvents | Where-Object { $_.event -ceq 'RECORDING_STATUS' })
+    if ($statusRows.Count -ne 1 -or $statusRows[0].facts.state -cne 'disabled' -or @($statusRows[0].facts.PSObject.Properties).Count -ne 1) { return $false }
+    $exitRequests = @($mainEvents | Where-Object { $_.event -ceq 'APP_EXIT_REQUESTED' })
+    if ($exitRequests.Count -ne 1 -or $exitRequests[0].facts.reason -cne 'app-quit') { return $false }
+    $unavailable = @($serviceEvents | Where-Object { $_.event -ceq 'HISTORY_STORAGE_UNAVAILABLE' })
+    if ($unavailable.Count -ne 1 -or $unavailable[0].facts.code -cne 'SCHEMA_NEWER') { return $false }
+    foreach ($eventName in @('HISTORY_STORAGE_OPENED','HISTORY_STORAGE_CLOSED','RECORDING_TARGET')) {
+        if (@($serviceEvents | Where-Object { $_.event -ceq $eventName }).Count -ne 0) { return $false }
+    }
+    $historySteps = @($serviceEvents | Where-Object { $_.event -ceq 'SHUTDOWN_STEP' -and $_.facts.name -ceq 'history-storage' })
+    if ($historySteps.Count -ne 1 -or $historySteps[0].facts.outcome -cne 'ok' -or (@($refusal.historyEvents.historyStep) -join ',') -cne 'ok') { return $false }
+    if (!(Test-OrderlyRunEvent -MainEvents $mainEvents -ServiceEvents $serviceEvents)) { return $false }
+    if ($Driver.launcherExit -ne 0 -or $null -eq $Driver.probesAfterExit -or @($Driver.probesAfterExit).Count -ne 0) { return $false }
+    return $true
+}
+
 # ET-018 PR-1 (U11): an installed run started the installed executable itself, packaged, from a working directory outside
 # the install, with only the minimal Windows PATH and without Node or npm variables. `layout` names the binary root and
 # the application folder only.
@@ -656,6 +711,10 @@ function Test-RuntimeReceipt {
     # Journal is additive too (ET-016 PR-4); it tightens no earlier scenario.
     if ($ExpectedScenario -ceq 'journal' -and !(Test-JournalReceipt -Driver $driver)) {
         $validation.reason = 'JOURNAL_RESULT_INCOMPLETE_OR_INVALID'; return $validation
+    }
+    # ET-019 PR-7: the newer-database refusal is its own scenario; it tightens no earlier scenario.
+    if ($ExpectedScenario -ceq 'refusal' -and !(Test-RefusalReceipt -Driver $driver)) {
+        $validation.reason = 'REFUSAL_RESULT_INCOMPLETE_OR_INVALID'; return $validation
     }
     # ET-017 PR-5: the plugin journey is its own scenario; the scaffold smoke also proves the disabled card.
     if ($ExpectedScenario -ceq 'plugin' -and !(Test-PluginReceipt -Driver $driver)) {
