@@ -4,8 +4,8 @@
 // health reducer), and journal reads through the service's JournalService and main's JournalBroker with its reply check.
 // Each case puts a database file under a temporary LOCALAPPDATA, at the history path for the default plan or at the
 // `synthetic:t` target, and checks that the open is refused with the documented code, that the worker ends at once and
-// nothing retries, that recording reports the documented state, that every journal read answers DATABASE_UNAVAILABLE
-// with that code, and that nothing under the data root changed. Expected values are written by hand from docs/storage.md
+// the service creates no second worker before its orderly stop, that recording reports the documented state, that every
+// journal read answers DATABASE_UNAVAILABLE with that code, and that nothing under the data root changed. Expected values are written by hand from docs/storage.md
 // (the open sequence, migrations, backups, the history database in the telemetry service), docs/telemetry-service-v1.md
 // (the recording gate and status, journal queries) and docs/journal.md (J11), never read back from the code. Waits count
 // state changes, worker exits and hellos; real-time bounds are named hang guards only (REG-007, REG-013, REG-014).
@@ -31,7 +31,16 @@ import {guarded, storageWorker, terminateWorkers, tracedShutdown, until} from '.
 
 let ws: Awaited<ReturnType<typeof workspace>>;
 beforeEach(async () => { ws = await workspace(); });
-afterEach(async () => { await terminateWorkers(); await ws.dispose(); });
+/**
+ * The service of the running case. A case that fails before its orderly stop leaves its v1 ingestion running, and a
+ * synthetic-target case would keep reconnecting to its closed pipe server; afterEach ends the source and the status.
+ */
+let current: {runtime: ReturnType<typeof createRecordingRuntime>; stopped: boolean} | undefined;
+afterEach(async () => {
+  const left = current; current = undefined;
+  if (left && !left.stopped) { left.runtime.stopStatus(); await guarded(left.runtime.v1.stopSource(), 'the source stop of a failed case', HANG_GUARD_MS); }
+  await terminateWorkers(); await ws.dispose();
+});
 
 /** The committed storage fixtures are immutable: every listed file keeps its manifest SHA-256 after these cases. */
 afterAll(() => {
@@ -111,6 +120,8 @@ function service(env: Record<string, string>) {
       received.push(parsed ?? 'rejected');
       health = reduceHealth(health, {type: 'recording', status: parsed ?? {state: 'unknown'}});
     }});
+  const self = {runtime, stopped: false};
+  current = self;
   const journal = new JournalService({history: runtime.history, stopping: () => stopping, log});
   const broker = new JournalBroker({log: (event, _detail, facts) => { brokerLogs.push([event, facts]); }});
   const channel: JournalServiceChannel = {postMessage: message => journal.receive(structuredClone(message), reply => broker.reply(channel, structuredClone(reply) as unknown as Record<string, unknown>))};
@@ -125,7 +136,7 @@ function service(env: Record<string, string>) {
   };
   /** The service's orderly stop: the status first, then the real shutdown sequence with the runtime's three steps. */
   const stop = async () => {
-    stopping = true; runtime.stopStatus();
+    stopping = true; self.stopped = true; runtime.stopStatus();
     const shutdown = tracedShutdown([]);
     runtime.register(shutdown.registrar);
     const result = await shutdown.sequence.run();
@@ -144,7 +155,7 @@ async function expectUnavailable(s: Service, code: string) {
   for (const query of QUERIES) expect(await s.read(query), query.kind).toEqual({ok: false, code: 'DATABASE_UNAVAILABLE', storageCode: code});
   // Main forwarded every reply: none was ignored or rejected by its check.
   expect(s.brokerLogs).toEqual([]);
-  // One worker for the service lifetime: nothing re-opens or retries (docs/storage.md, docs/telemetry-service-v1.md G10).
+  // One worker so far: the service has not re-opened history since the refusal (docs/storage.md, "Nothing retries yet").
   expect(s.workers()).toBe(1);
 }
 /** The orderly stop after a refused open: clean, every step ok, and the database is never reported as opened or closed. */
@@ -203,7 +214,7 @@ describe('ET-019 PR-6: refused history databases through the production service 
     expect(existsSync(historyBackups())).toBe(false);
   }, CASE_TIMEOUT_MS);
 
-  it('refuses a history database held by another writer with DATABASE_LOCKED and never retries (second instance)', async () => {
+  it('refuses a history database held by another writer with DATABASE_LOCKED and does not re-open it before the orderly stop (second instance)', async () => {
     // docs/storage.md OD-8 and "Second instance": the exclusive lock makes the running writer the only connection; a
     // refused open, DATABASE_LOCKED among them, ends the worker at once and history stays unavailable until the service
     // starts again. The holder is this test's own connection to a new history database in the temporary LOCALAPPDATA.
@@ -215,7 +226,9 @@ describe('ET-019 PR-6: refused history databases through the production service 
     await expectUnavailable(s, 'DATABASE_LOCKED');
     expect(s.received).toEqual([{state: 'disabled'}]);
     expect(tree(root())).toEqual(before);
-    // The lock ends; the refused service still opens nothing, because nothing retries.
+    // The lock ends. Up to the orderly stop the service does not re-open history: still unavailable, still one worker.
+    // This checks the state at these two points only; no retry mutation was applied, and there is no automatic re-open
+    // to test (docs/telemetry-service-v1.md G10 records it as a product gap).
     holder.close();
     await expectUnavailable(s, 'DATABASE_LOCKED');
     await expectCleanStop(s);
