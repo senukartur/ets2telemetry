@@ -1,6 +1,7 @@
 #include "pipe-server.hpp"
 #include "snapshot-wire.hpp"
 #include "protocol-json.hpp"
+#include "native-fuzz-multiplier.hpp"
 #include <map>
 #include <memory>
 #include <iostream>
@@ -536,9 +537,12 @@ void policy_and_exhaustion() {
   exhausted.stop(); require(exhausted.shutdown_ms()<1000,"exhausted worker joined");
 }
 void seeded_transport_fuzz() {
+  // ETS2TELEMETRY_NATIVE_FUZZ_MULTIPLIER multiplies the mutated hellos (96 on a PR run); the burst phase stays fixed.
+  const unsigned multiplier=ets2telemetry::test::native_fuzz_multiplier(), mutations=96*multiplier;
+  std::cout<<"fuzzMultiplier="<<multiplier<<" mutatedHellos="<<mutations<<std::endl;
   Fixture f; f.start(); std::uint32_t random=0x45a10f93;
   auto next=[&]{random=random*1664525U+1013904223U;return random;};
-  for(unsigned iteration=0;iteration<96;++iteration) {
+  for(unsigned iteration=0;iteration<mutations;++iteration) {
     std::string invalid=hello_payload; const auto offset=static_cast<std::size_t>(next()%invalid.size());
     // Raw C0 bytes are independently invalid in every JSON grammar position, including strings.
     invalid.insert(offset,1,static_cast<char>(1+(next()%7))); auto h=f.connect(); send(h.get(),framed(invalid));
