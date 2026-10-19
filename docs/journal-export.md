@@ -40,6 +40,8 @@ The whole document is never held in memory: main holds the detail and one page a
 
 The trip detail read at the start of an export fixes three bounds: the trip session's committed coverage (`committedThroughEventSeq`), the trip's largest sample id and its largest completeness interval id. Each section's pages stop at its bound, and rows past it are left out: an event, interval or sample committed after the detail read is not in the file, even when it belongs to the trip. A section whose bound is null (no samples or intervals at the read) is not read at all.
 
+Storage has no delete command for history entities ([storage](storage.md)), so a bound's row still exists when the export reads its section. A valid document therefore holds, for a non-null `lastIntervalId` or `lastSampleId`, a non-empty section whose last row has that id, and for a null one an empty section. `committedThroughEventSeq` is the session's committed coverage, not the id of a trip row, so the events section, the trip's timeline window (J7), can be empty or end before it. The hand-written validator `tests/shared/trip-export-validator.ts` checks these rules ([ET-019 validation](validation/et-019.md#export-validator-bounds-october-19-2026)).
+
 `bounds.snapshot` is `true` when the trip was still open (`trip.outcome` `open`) at the detail read. Such an export is a consistent snapshot of what was recorded up to its bounds; a later export of the same trip can contain more. A closed trip's export is not a snapshot, but its bounds are still recorded.
 
 ## Format version 1

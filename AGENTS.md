@@ -680,3 +680,7 @@ The card stays in Review. Every real-environment check remains pending, among th
 - the owner's first real history upgrade.
 
 Nothing has been published. A release needs the owner's authorization under O2. `GAME_HISTORY_RECORDING` stays `false`. Later phases are not authorized by this update. No game, TruckersMP, display or performance claim follows.
+
+## Desktop UI design target — October 19, 2026
+
+The owner asked for a final mockup of the desktop application and the overlay in the Yukon Union community style, including the Hard Mode status of [ET-026](https://trello.com/c/Cl5oNGTw), and chose: files in the repository, English with a proposed Russian translation, the "Yukon Union Telemetry" brand, and screens for Live, the Hard Mode checklist, Journal, Trip details, Settings, account and sync (server phase), first run, and empty and error states. The result is [docs/design](docs/design/README.md): [the UI specification](docs/design/ui-spec.md) with spec ids and data bindings, [design tokens](docs/design/tokens.css) and an [interactive mockup](docs/design/mockup.html). For the visual design, this supersedes "Visual design is deferred" in the product requirements above; earlier dated text is unchanged. New UI work follows the specification. The design changes no product requirement, contract or acceptance criterion and authorizes no implementation, autostart, localization framework or server-phase work; each package needs its own card. The open points are in [§11 of the specification](docs/design/ui-spec.md#11-open-points-for-the-owner).

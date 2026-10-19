@@ -30,7 +30,7 @@ Owner-approved deferred capabilities are tracked in [technical debt](docs/techni
 - The first release includes live metrics, an overlay, and a local trip history.
 - Record both trip summaries and **one telemetry sample per second** for future charts and trip analysis.
 - The website, accounts, company-wide statistics, and server synchronization belong to a later phase.
-- Visual design will be discussed separately. Correct data acquisition and storage are the current priorities.
+- Visual design will be discussed separately. Correct data acquisition and storage are the current priorities. Design target update on October 19, 2026: the owner-approved desktop and overlay design in the Yukon Union style is specified in [docs/design](docs/design/README.md); it changes no requirement in this concept.
 - New functionality must preserve existing behavior through regression tests added alongside each feature. Bug fixes should retain a reproducing test where feasible; the detailed policy is in [TESTING.md](TESTING.md).
 - **All internal documentation that may be committed to Git must be written in English.** This includes this concept, agent instructions, technical specifications, and development guides. This does not determine the application's UI language.
 

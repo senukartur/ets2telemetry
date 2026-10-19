@@ -1,0 +1,138 @@
+/*
+ * Yukon Union Telemetry design tokens.
+ *
+ * Source of truth for the desktop UI colours, type and shapes. The values follow the Yukon Union community style
+ * guide so the telemetry app and the company dashboard look like one product. There is no light theme.
+ *
+ * How to use (see docs/design/ui-spec.md#tokens):
+ * - Main window: replace the `:root` and `.dark` colour blocks in apps/desktop/src/index.css with the
+ *   "shadcn mapping" block below and keep `color-scheme: dark` on :root. shadcn components then pick up the palette
+ *   through their usual variables (`bg-card`, `text-muted-foreground`, `border`, `ring`, ...).
+ * - Use the `--yu-*` tokens directly only for things shadcn has no variable for: status colours, game chips, the
+ *   metric-tile gradient and the overlay.
+ * - Overlay window: it must not load the shadcn base stylesheet. Import only the `--yu-ov-*` block into the overlay's
+ *   own CSS (apps/desktop/src/renderer.css).
+ */
+
+:root {
+  color-scheme: dark;
+
+  /* Surfaces */
+  --yu-bg-app: #111827;          /* window work area */
+  --yu-bg-chrome: #0B1120;       /* title bar, sidebar, top bar */
+  --yu-bg-card: #1F2937;         /* cards, panels, menus */
+  --yu-bg-inset: #1A2332;        /* table header, nested blocks */
+  --yu-bg-input: #111827;        /* inputs, segmented control track */
+
+  /* Lines */
+  --yu-border: #374151;          /* card and menu borders, progress track */
+  --yu-border-input: #4B5563;    /* input and secondary button borders */
+  --yu-divider: #2B3544;         /* table rows, key-value rows */
+  --yu-divider-chrome: #1F2937;  /* chrome edges (sidebar, top bar) */
+
+  /* Text */
+  --yu-text: #F3F4F6;
+  --yu-text-secondary: #D1D5DB;
+  --yu-text-muted: #9CA3AF;
+
+  /* Accent: actions, selection, active navigation. Never used for status. */
+  --yu-accent: #2563EB;
+  --yu-accent-fg: #FFFFFF;
+  --yu-accent-light: #60A5FA;    /* links, focus ring, progress fill, gauge arc */
+  --yu-selected-bg: rgba(37, 99, 235, 0.16);
+  --yu-selected-border: rgba(96, 165, 250, 0.45);
+  --yu-selected-fg: #DBEAFE;
+
+  /* Status: always paired with an icon and a label, never colour alone */
+  --yu-ok-fg: #8FD3AE;      --yu-ok-bg: #13261D;      --yu-ok-border: #2A5640;
+  --yu-warn-fg: #E8C58A;    --yu-warn-bg: #2A2213;    --yu-warn-border: #5A4421;
+  --yu-err-fg: #F3B4A4;     --yu-err-bg: #2A1616;     --yu-err-border: #5B2A27;
+  --yu-neutral-fg: #D1D5DB; --yu-neutral-bg: #182131; --yu-neutral-border: #4B5563;
+  --yu-online: #34D399;            /* live dot */
+  --yu-progress-pending: #E3A13F;  /* goal reached, waiting for confirmation; low fuel */
+
+  /* Games */
+  --yu-ets2-fg: #7DD3FC; --yu-ets2-bg: rgba(14, 165, 233, 0.12); --yu-ets2-border: rgba(56, 189, 248, 0.4);
+  --yu-ats-fg: #C4B5FD;  --yu-ats-bg: rgba(139, 92, 246, 0.12);  --yu-ats-border: rgba(167, 139, 250, 0.4);
+
+  /* Metric tiles */
+  --yu-tile-gradient: linear-gradient(135deg, rgba(37, 99, 235, 0.32), rgba(31, 41, 55, 0.95) 70%);
+  --yu-tile-border: rgba(96, 165, 250, 0.5);
+  --yu-tile-teal-gradient: linear-gradient(135deg, rgba(20, 184, 166, 0.28), rgba(31, 41, 55, 0.95) 70%);
+  --yu-tile-teal-border: rgba(45, 212, 191, 0.45);
+
+  /* Shape */
+  --yu-radius-card: 12px;
+  --yu-radius-control: 10px;
+  --yu-radius-chip: 8px;
+  --yu-radius-badge: 6px;
+  --yu-title-bar: 3px solid var(--yu-accent);  /* left bar of every card title, 10px text indent */
+
+  /* Type: Onest, bundled with @fontsource-variable/onest (the app works offline; never load Google Fonts at runtime) */
+  --yu-font: 'Onest Variable', 'Onest', 'Segoe UI', system-ui, sans-serif;
+  --yu-text-screen: 24px;   /* screen title, 700 */
+  --yu-text-card: 15px;     /* card title, 600 */
+  --yu-text-body: 13px;     /* desktop body (one step denser than the web) */
+  --yu-text-meta: 12px;     /* captions, table header */
+  --yu-text-nav-group: 11px;/* sidebar group label, 600, uppercase, 0.6px tracking */
+  --yu-text-metric: 28px;   /* metric tile value, 800 */
+
+  /* Size */
+  --yu-control-h: 34px;     /* buttons, inputs, selects (32-36px) */
+  --yu-nav-item-h: 38px;
+  --yu-sidebar-w: 220px;
+  --yu-topbar-h: 52px;
+  --yu-titlebar-h: 32px;
+}
+
+/* shadcn mapping: paste into apps/desktop/src/index.css instead of the neutral :root/.dark blocks */
+:root {
+  --background: var(--yu-bg-app);
+  --foreground: var(--yu-text);
+  --card: var(--yu-bg-card);
+  --card-foreground: var(--yu-text);
+  --popover: var(--yu-bg-card);
+  --popover-foreground: var(--yu-text);
+  --primary: var(--yu-accent);
+  --primary-foreground: var(--yu-accent-fg);
+  --secondary: var(--yu-bg-inset);
+  --secondary-foreground: var(--yu-text);
+  --muted: var(--yu-bg-inset);
+  --muted-foreground: var(--yu-text-muted);
+  --accent: var(--yu-selected-bg);
+  --accent-foreground: var(--yu-selected-fg);
+  --destructive: var(--yu-err-fg);
+  --border: var(--yu-border);
+  --input: var(--yu-border-input);
+  --ring: var(--yu-accent-light);
+  --chart-1: var(--yu-accent-light);
+  --chart-2: var(--yu-accent);
+  --chart-3: #2DD4BF;
+  --chart-4: var(--yu-progress-pending);
+  --chart-5: var(--yu-text-muted);
+  --radius: 0.625rem; /* 10px controls; cards override to 12px (rounded-xl) */
+  --sidebar: var(--yu-bg-chrome);
+  --sidebar-foreground: var(--yu-text-secondary);
+  --sidebar-primary: var(--yu-accent);
+  --sidebar-primary-foreground: var(--yu-accent-fg);
+  --sidebar-accent: var(--yu-selected-bg);
+  --sidebar-accent-foreground: var(--yu-selected-fg);
+  --sidebar-border: var(--yu-divider-chrome);
+  --sidebar-ring: var(--yu-accent-light);
+}
+
+/* Overlay window only (transparent, click-through). Plain fills: a transparent Electron window cannot blur the game. */
+:root {
+  --yu-ov-panel: rgba(11, 17, 32, 0.80);   /* opacity setting scales the alpha, 40-100% */
+  --yu-ov-border: rgba(55, 65, 81, 0.9);
+  --yu-ov-text: #F3F4F6;
+  --yu-ov-muted: rgba(209, 213, 219, 0.72);
+  --yu-ov-icon: rgba(156, 163, 175, 0.9);
+  --yu-ov-accent: #60A5FA;
+  --yu-ov-fuel: #8FD3AE;
+  --yu-ov-low: #E8C58A;
+  --yu-ov-bad: #F3B4A4;
+  --yu-ov-edit: #60A5FA;                   /* dashed outline and handle in layout-edit mode */
+  --yu-ov-radius: 10px;
+  --yu-ov-strip-h: 38px;
+}
