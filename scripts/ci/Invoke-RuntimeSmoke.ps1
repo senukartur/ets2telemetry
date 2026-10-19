@@ -66,7 +66,9 @@ if (Test-Path -LiteralPath $cpuSeries -PathType Leaf) {
 $memory = [ordered]@{error='JOB_MEMORY_UNAVAILABLE'}
 $memoryFile = Join-Path $output 'job/memory.json'
 if (Test-Path -LiteralPath $memoryFile -PathType Leaf) {
-    try { $memory = Get-Content -LiteralPath $memoryFile -Raw | ConvertFrom-Json -ErrorAction Stop } catch { $memory = [ordered]@{error='JOB_MEMORY_INVALID'} }
+    # An empty file (a write that failed after creating it) parses to null; record it like any other invalid file.
+    try { $memory = Get-Content -LiteralPath $memoryFile -Raw | ConvertFrom-Json -ErrorAction Stop } catch { $memory = $null }
+    if ($null -eq $memory) { $memory = [ordered]@{error='JOB_MEMORY_INVALID'} }
 }
 @{mode=$Mode; scenario=$Scenario; commit=$config.commit; exitCode=$code; retries=0;
   durationSeconds=$durationSeconds;
