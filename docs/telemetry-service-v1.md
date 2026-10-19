@@ -73,11 +73,12 @@ pipe bytes -> FrameDecoder('server') -> V1Consumer -> identity check -> live sta
 | --- | --- | --- |
 | Hello or checkpoint not received within 5 s | `disconnected` | Reconnect |
 | EOF or close | `disconnected` | Reconnect |
+| Broker exit after authority receipt reporting stage `unreported` or crash code (killed/crashed broker) | `disconnected` | Reconnect |
 | `end` (`plugin-shutdown`, `sequence-exhausted`, `source-retired`) | `disconnected`, `lastEnd` kept | Reconnect; a retired session finds no discovery record and waits |
 | Broker exit 2 (no discovery record) | `waiting` | Reconnect |
 | Broker startup deadline or exit 4 before any receipt (transient) | `waiting` | Reconnect |
 | Retryable durable failure, `ACK_AHEAD_OF_STORAGE`, durable unavailable | `disconnected` | Reconnect (durable, or live-only) |
-| Schema, order or identity violation; other broker rejections | `incompatible` | None until a new selection |
+| Schema, order or identity violation; diagnosed authority failure or pre-receipt rejection | `incompatible` | None until a new selection |
 
 Reconnection delays are 250, 500, 1000, 2000 and then 4000 ms. They restart only once a connection proves healthy: a live-only connection at its hydrated checkpoint, a durable connection at its first successful commit. A persistent retryable storage failure, which closes each durable connection before its first commit, therefore keeps backing off instead of making the plugin redeliver its retained store every 250 ms. A reconnection waits for the previous broker process to exit.
 

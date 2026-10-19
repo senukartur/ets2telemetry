@@ -131,7 +131,10 @@ export class TelemetryIngestion {
     socket.on('error', (error: unknown) => {
       if (selection !== 'ets2' && selection !== 'ats') close('disconnected', 'Selected fixture connection failed', true);
       // A broker that granted no authority (deadline/local contention) retries on the normal backoff; rejections stay final.
-      else if (error instanceof NativeClientError && error.transient) close('waiting', 'Native authority check did not complete; retrying', true);
+      else if (error instanceof NativeClientError && error.transient) {
+        if (socket.authority) close('disconnected', 'Native broker exited unexpectedly; reconnecting', true);
+        else close('waiting', 'Native authority check did not complete; retrying', true);
+      }
       else close('incompatible', 'Native source authority or transport failed', false);
     });
     socket.on('waiting', () => close('waiting', 'No selected game discovery record', true));

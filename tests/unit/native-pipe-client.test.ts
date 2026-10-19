@@ -370,3 +370,109 @@ it('connects V1Ingestion live-only through the v1 broker: a durableEvents false 
   // Every observation publishes; the status only ever went from waiting to connected.
   expect([...new Set(states)]).toEqual(['waiting', 'connected']);
 });
+
+it('identifies crash exit codes correctly', async () => {
+  const {isCrashExitCode} = await import('../../apps/desktop/src/native-pipe-client');
+  expect(isCrashExitCode(null)).toBe(true);
+  expect(isCrashExitCode(-1073741819)).toBe(true); // 0xC0000005 as signed int32
+  expect(isCrashExitCode(0xC0000005)).toBe(true); // unsigned int32
+  expect(isCrashExitCode(-1)).toBe(true);
+  expect(isCrashExitCode(5)).toBe(true);
+  expect(isCrashExitCode(0)).toBe(false);
+  expect(isCrashExitCode(1)).toBe(false);
+  expect(isCrashExitCode(2)).toBe(false);
+  expect(isCrashExitCode(3)).toBe(false);
+  expect(isCrashExitCode(4)).toBe(false);
+});
+
+it('classifies mid-session exit 1 with stage unreported as retryable transient rejection', () => {
+  const diagnose = vi.fn(), f = fixture(diagnose);
+  f.child.output(relay(authority()));
+  f.child.emit('close', 1);
+  expect(failure(f.error)).toMatchObject({transient: true, outcome: 'rejected', message: 'Native broker exited unexpectedly'});
+  expect(diagnose).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({outcome: 'rejected', exitCode: 1, stage: 'unreported'}));
+});
+
+it('classifies mid-session cut frame with stage unreported as retryable transient incomplete-frame', () => {
+  const diagnose = vi.fn(), f = fixture(diagnose);
+  f.child.output(relay(authority()));
+  f.child.output(Buffer.from([1, 2]));
+  f.child.emit('close', 1);
+  expect(failure(f.error)).toMatchObject({transient: true, outcome: 'incomplete-frame', message: 'Incomplete native relay frame'});
+  expect(diagnose).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({outcome: 'incomplete-frame', exitCode: 1, stage: 'unreported'}));
+});
+
+it.each([-1073741819, 0xC0000005, null, 5])('classifies mid-session abnormal exit code %s as transient retryable', code => {
+  const f = fixture();
+  f.child.output(relay(authority()));
+  f.child.emit('close', code);
+  expect(failure(f.error)).toMatchObject({transient: true, outcome: 'rejected'});
+});
+
+it('keeps diagnosed exit 1 after authority receipt final and non-transient', () => {
+  const diagnose = vi.fn(), f = fixture(diagnose);
+  f.child.output(relay(authority()));
+  f.child.stderr.write('diag1 retained-authority 5 40 relay 30\n');
+  f.child.emit('close', 1);
+  expect(failure(f.error)).toMatchObject({transient: false, outcome: 'rejected', message: 'Native authority or connection rejected'});
+  expect(diagnose).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({outcome: 'rejected', exitCode: 1, stage: 'retained-authority'}));
+});
+
+it.each([
+  ['unreported', ''],
+  ['diagnosed', 'diag1 discovery 5 40 policy-write 30\n']
+])('keeps pre-receipt exit 1 (%s) non-transient', (_kind, stderr) => {
+  const f = fixture();
+  if (stderr) f.child.stderr.write(stderr);
+  f.child.emit('close', 1);
+  expect(failure(f.error)).toMatchObject({transient: false, outcome: 'rejected'});
+});
+
+it('transitions TelemetryIngestion to disconnected and reconnects on mid-session transient exit, while diagnosed exit remains incompatible', async () => {
+  const f = ingestion();
+  f.child.output(relay(authority()));
+  f.child.output(frames[0]); f.child.output(frames[1]);
+  expect(f.publish.mock.lastCall?.[0]).toMatchObject({status: 'connected', fresh: true});
+
+  // Mid-session unexpected exit 1 (unreported) -> disconnected, retries after 250ms backoff
+  f.child.emit('close', 1);
+  expect(f.publish.mock.lastCall?.[0]).toMatchObject({status: 'disconnected', reason: 'Native broker exited unexpectedly; reconnecting', fresh: false});
+  await vi.advanceTimersByTimeAsync(249);
+  expect(spawn).toHaveBeenCalledOnce();
+  await vi.advanceTimersByTimeAsync(1);
+  expect(spawn).toHaveBeenCalledTimes(2);
+
+  // Replacement broker connects, then encounters a diagnosed authority failure -> incompatible, no reconnect
+  const second = children[1];
+  second.output(relay(authority()));
+  second.stderr.write('diag1 retained-authority 5 40 relay 30\n');
+  second.emit('close', 1);
+  expect(f.publish.mock.lastCall?.[0]).toMatchObject({status: 'incompatible', reason: 'Native source authority or transport failed', fresh: false});
+  await vi.advanceTimersByTimeAsync(10000);
+  expect(spawn).toHaveBeenCalledTimes(2);
+});
+
+it('transitions V1Ingestion to disconnected and reconnects on mid-session transient exit, while diagnosed exit remains incompatible', async () => {
+  const states: string[] = [];
+  const service = new V1({now: () => 0, nowNs: () => 1_000_000_000n, connectGame: (configuration, game) => new Client(configuration, game, undefined, 'v1'), broker: v1Configuration,
+    onState: state => states.push(state.status)});
+  v1Ingestions.push(service); service.select('ets2');
+  const first = children[0];
+  first.output(relay(v1Authority()));
+  // Mid-session killed broker (exit 1 unreported) -> disconnected with reconnect
+  first.emit('close', 1);
+  expect(service.current).toMatchObject({status: 'disconnected', reason: 'Native broker exited unexpectedly; reconnecting'});
+  await vi.advanceTimersByTimeAsync(249);
+  expect(spawn).toHaveBeenCalledOnce();
+  await vi.advanceTimersByTimeAsync(1);
+  expect(spawn).toHaveBeenCalledTimes(2);
+
+  // Replacement broker encounters diagnosed exit 1 -> incompatible
+  const second = children[1];
+  second.output(relay(v1Authority()));
+  second.stderr.write('diag1 retained-authority 5 40 relay 30\n');
+  second.emit('close', 1);
+  expect(service.current).toMatchObject({status: 'incompatible', reason: 'Native source authority or transport failed'});
+  await vi.advanceTimersByTimeAsync(10000);
+  expect(spawn).toHaveBeenCalledTimes(2);
+});
