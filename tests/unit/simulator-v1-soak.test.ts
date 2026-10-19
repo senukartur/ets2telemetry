@@ -10,7 +10,7 @@ import {PROTOCOL_V1, encodeFrame} from '../../packages/contracts/src/protocol-v1
 import {reactiveConflicts, serveV1Reactive, type ReactiveReport} from '../../tools/telemetry-simulator/src/v1/reactive';
 import {MAX_TRANSCRIPT_MESSAGES, replayV1} from '../../tools/telemetry-simulator/src/v1/replay';
 import {sourceStep, transportStep, validateScenario} from '../../tools/telemetry-simulator/src/v1/scenario';
-import {runSoakClient, serveV1Soak, soakEntries, soakMinutes, soakRawSteps, soakScenario, type SoakClientResult, type SoakRawStep} from '../../tools/telemetry-simulator/src/v1/soak';
+import {runSoakClient, serveV1Soak, soakDifferences, soakEntries, soakMinutes, soakRawSteps, soakScenario, type SoakClientResult, type SoakRawStep} from '../../tools/telemetry-simulator/src/v1/soak';
 
 // ET-019 PR-12a: the soak source of the protocol v1 simulator (docs/simulator-v1.md#soak-source-et-019-pr-12a). Every
 // expectation below is written by hand from the schedule table in that section, never produced by the generator.
@@ -233,6 +233,22 @@ describe('simulator v1 soak serving', () => {
       expect(BigInt(report.soak!.lastEventSeq)).toBeGreaterThanOrEqual(4n);
     } finally { abort.abort(); await server.stop(); }
   }, 30_000);
+
+  it('accepts a two-minute smoke report only with its planned connection closes and one `end`', () => {
+    // Hand-written from the schedule: 15 events, a reconnect in cycle 1, then the stop's `end` in the tail.
+    const report = (closes: ReactiveReport['connections'][number]['closedBy'][], end: number): ReactiveReport => ({
+      scenario: validateScenario(soakScenario()), transcript: [], refusedClients: 0, cancelled: true,
+      connections: closes.map((closedBy, i) => ({connection: i + 1, durable: true, clientInstanceId: '00000000-0000-4000-8000-000000000001', closedBy, rejectedAttempts: 0})),
+      soak: {scenarioMs: 125_000, lastEventSeq: '15', maxAckThroughEventSeq: '15', ackCount: 15, snapshots: 2_400, connections: closes.length, refusedLiveOnly: 0,
+        messages: {server: {welcome: 2, checkpoint: 2, event: 15, snapshot: 2_400, end}, client: {hello: 2, ack: 15}}}});
+    const client: SoakClientResult = {attempts: 2, welcomed: 2, acks: 15, ledger: {committedThroughEventSeq: '15', committedEvents: 15, committedGapMarkers: '0', duplicates: 0}};
+    expect(soakDifferences(2, report(['disconnect', 'end'], 1), client)).toEqual([]);
+    // A write deadline before the scripted disconnect leaves every total unchanged; only the closes show it.
+    expect(soakDifferences(2, report(['writeDeadline', 'end'], 1), client)).toEqual(['connection closes writeDeadline,end, expected disconnect,end']);
+    expect(soakDifferences(2, report(['client', 'end'], 1), client)).toEqual(['connection closes client,end, expected disconnect,end']);
+    expect(soakDifferences(2, report(['disconnect', 'end'], 2), client)).toEqual(['end messages 2, expected 1']);
+    expect(soakDifferences(2, report(['disconnect', 'open'], 0), client)).toEqual(['connection closes disconnect,open, expected disconnect,end', 'end messages 0, expected 1']);
+  });
 
   it('rejects soak entries beside scenario steps', async () => {
     await expect(serveV1Reactive({...soakScenario(), transport: [{atMs: 0, action: 'connect', client: {durable: true}}]}, {soak: {entries: soakEntries(1)}}))

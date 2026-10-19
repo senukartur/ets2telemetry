@@ -200,7 +200,7 @@ export function soakTotals(minutes: number): {events: number; connections: numbe
   const m = soakMinutes(minutes);
   return {events: 3 + 6 * m, connections: 1 + Math.floor((m + 8) / 10)};
 }
-/** Why a stopped soak run differs from its totals, or an empty list. */
+/** Why a soak run stopped in its tail differs from its totals and planned connection closes, or an empty list. */
 export function soakDifferences(minutes: number, report: ReactiveReport, client: SoakClientResult): string[] {
   const t = soakTotals(minutes), s = report.soak, out: string[] = [];
   if (!s) return ['no soak counters'];
@@ -216,5 +216,10 @@ export function soakDifferences(minutes: number, report: ReactiveReport, client:
   check('committed events', client.ledger.committedEvents, t.events);
   check('duplicates', client.ledger.duplicates, 0);
   check('transcript lines', report.transcript.length, 0);
+  // Every connection but the last ends at its scripted disconnect and the last at the stop's `end`; a connection ended
+  // otherwise (a write deadline, a client close) before a scripted disconnect would leave every total above unchanged.
+  const closes = report.connections.map(c => c.closedBy).join(','), expectedCloses = [...Array<string>(t.connections - 1).fill('disconnect'), 'end'].join(',');
+  check('connection closes', closes, expectedCloses);
+  check('end messages', s.messages.server.end ?? 0, 1);
   return out;
 }

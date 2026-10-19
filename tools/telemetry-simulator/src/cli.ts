@@ -108,7 +108,9 @@ async function main():Promise<void> {
   }
   // ET-019 PR-12a soak source (soak.ts). serve-v1-soak serves the generated timeline to any durable consumer until it ends
   // or a `stop` line arrives on stdin; on Windows a kill is TerminateProcess, which runs no signal handler, so a driver
-  // that wants the summary writes `stop`. smoke-soak-v1 serves it to the in-process soak client, stops it 5 s into the
+  // that wants the summary writes `stop`. BoundedProcess.Run and RunExtended give the Job's root process a NUL stdin, so
+  // `stop` reaches serve-v1-soak only when a driver inside the Job spawns it with a stdin pipe, never as the Job root.
+  // smoke-soak-v1 stops itself instead: it serves the timeline to the in-process soak client, stops it 5 s into the
   // tail and checks the totals of the schedule. Both print a progress line about every 10 s, then one summary line.
   if(command==='serve-v1-soak'||command==='smoke-soak-v1') {
     const minutes=soakArgs(command,process.argv.slice(3));
