@@ -347,6 +347,18 @@ void write_discovery_record(const fs::path& directory, const Identity& identity,
   }};
   write_file(directory / (instanceId + ".json"), record, identity);
 }
+bool disable_privilege(const wchar_t* name) {
+  HANDLE raw = nullptr;
+  if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &raw)) return false;
+  Handle token(raw);
+  LUID luid{};
+  if (!LookupPrivilegeValueW(nullptr, name, &luid)) return false;
+  TOKEN_PRIVILEGES state{};
+  state.PrivilegeCount = 1;
+  state.Privileges[0].Luid = luid;
+  state.Privileges[0].Attributes = 0;
+  return AdjustTokenPrivileges(token.value, FALSE, &state, 0, nullptr, nullptr) != 0 && GetLastError() == ERROR_SUCCESS;
+}
 void set_process_dacl(HANDLE process, const wchar_t* sddl) {
   PSECURITY_DESCRIPTOR descriptor = nullptr;
   require(ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, SDDL_REVISION_1, &descriptor, nullptr) != 0);
@@ -406,13 +418,17 @@ void run_stale_record_sweep_cases(const fs::path& base, const std::wstring& self
   // 2) Reused inaccessible PID (ERROR_ACCESS_DENIED) via a controlled child process with a restricted SE_KERNEL_OBJECT DACL:
   //    unowned stale record is swept; locked record (no FILE_SHARE_DELETE) or matching live creation time fails closed at stage=server-process.
   {
+    // If running under an elevated token (e.g. administrator on CI or local dev), disable SeDebugPrivilege
+    // so OpenProcess respects the kernel object's DACL instead of bypassing access checks.
+    disable_privilege(L"SeDebugPrivilege");
+
     Child deniedHolder(self, L"--hold");
     require(parse(read_frame(deniedHolder.output.value)).at("type").string() == "ready");
     const DWORD deniedPid = deniedHolder.pid;
     const auto actualCreation = creation(deniedHolder.process.value);
     const auto staleCreation = actualCreation - 1;
 
-    set_process_dacl(deniedHolder.process.value, L"D:P");
+    set_process_dacl(deniedHolder.process.value, L"D:P(D;;0x101000;;;WD)");
     const auto checkBoth = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, deniedPid);
     const auto checkBothErr = GetLastError();
     if (checkBoth) CloseHandle(checkBoth);
@@ -452,7 +468,7 @@ void run_stale_record_sweep_cases(const fs::path& base, const std::wstring& self
     lockedClient.eof();
     require(lockedClient.wait() == 1 && diagnosed(lockedClient, "server-process", "5") && noOutput(lockedClient) && fs::exists(lockedPath));
 
-    set_process_dacl(deniedHolder.process.value, L"D:P(A;;0x1000;;;WD)");
+    set_process_dacl(deniedHolder.process.value, L"D:P(D;;0x100000;;;WD)(A;;0x1000;;;WD)");
     const auto checkSync = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, deniedPid);
     const auto checkSyncErr = GetLastError();
     if (checkSync) CloseHandle(checkSync);
