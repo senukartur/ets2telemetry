@@ -1,0 +1,34 @@
+{
+  "scenario": "ferry-train-trip",
+  "basis": ["O11", "synthetic-inference"],
+  "authoredFrom": [
+    "tests/storage/replay-journal-export.test.ts builds the scenario from the header and seed of ferry-train.json (ETS2, SDK-documented EUR): simulation.started (1, atMs 10); a job configured while running (2, 20); a frame with game time 1000 at 100; a ferry (3, 150); a frame with game time 1400 at 200; a train (4, 250); a toll (5, 300); job.delivered (6, 350); job.cleared (7, 360); a second, different job configured while running (8, 400). One durable client commits and acknowledges every item; the frames are 100 ms apart and at least 50 ms after the checkpoint at 0, so no snapshot is coalesced (protocol v1 §7)",
+    "docs/simulator-v1.md: UTC labels are 1,800,000,000,000 ms + atMs; the source clock is 1,000,000,000,000 ns + atMs x 1,000,000; docs/trips.md T4: trips are labelled trip@<eventSeq of the job configuration>",
+    "docs/trips.md T12/T13 and transitions: both jobs are configured while running, so each opens unknown with no cause interval; the delivery attaches to the active trip and closes it {delivered, outcome}, complete after a clean window (T13: annotations never downgrade)",
+    "docs/trips.md Attribution (T14): the ferry, train and toll inside the active trip's window are trip",
+    "docs/trips.md T17 (PR-2): the readings at 100 and 200 are on one game clock and advance 400 game minutes in 0.1 s, far above 30 minutes at 60 minutes per real minute, so the step is a game-time-jump that starts at the reading at 100 (fromMinutes 1000) and is found at the reading at 200 (atMonotonicNs 1,000,200,000,000); the ferry's source time (1,000,150,000,000) lies between its start and that reading, so it is labelled crossing. The annotation waits for the game's next carrier, the train (4), and never downgrades the trip",
+    "docs/trips.md T16 (PR-2) and J8: no odometer or fuel channel, so neither trip observes distance or fuel",
+    "The second job (8) stays open at the disconnect: outcome open, completeness unknown"
+  ],
+  "trips": [
+    {"trip": "trip@2", "jobConfigurationEventSeq": "2", "truckConfigurationEventSeq": null, "trailerConfigurationEventSeqs": [], "openedEventSeq": "2",
+      "gameMode": {"mode": "unknown", "method": "none", "confidence": "none"}, "gameModeAmbiguous": false, "outcome": "delivered", "outcomeEventSeq": "6", "closeReason": "outcome",
+      "recordingCompleteness": "complete", "startedUtcMs": 1800000000020, "endedUtcMs": 1800000000350,
+      "observedDistanceM": {"available": false, "reason": "not-observed"}, "fuelUsedL": {"available": false, "reason": "not-observed"}},
+    {"trip": "trip@8", "jobConfigurationEventSeq": "8", "truckConfigurationEventSeq": null, "trailerConfigurationEventSeqs": [], "openedEventSeq": "8",
+      "gameMode": {"mode": "unknown", "method": "none", "confidence": "none"}, "gameModeAmbiguous": false, "outcome": "open", "outcomeEventSeq": null, "closeReason": null,
+      "recordingCompleteness": "unknown", "startedUtcMs": 1800000000400, "endedUtcMs": null,
+      "observedDistanceM": {"available": false, "reason": "not-observed"}, "fuelUsedL": {"available": false, "reason": "not-observed"}}
+  ],
+  "attributions": [
+    {"eventSeq": "3", "trip": "trip@2", "attribution": "trip"},
+    {"eventSeq": "4", "trip": "trip@2", "attribution": "trip"},
+    {"eventSeq": "5", "trip": "trip@2", "attribution": "trip"},
+    {"eventSeq": "6", "trip": "trip@2", "attribution": "trip"}
+  ],
+  "intervals": [
+    {"trip": "trip@2", "kind": "discontinuity", "detail": {"cause": "game-time-jump", "annotation": true, "label": "crossing", "fromMinutes": "1000", "toMinutes": "1400",
+      "atMonotonicNs": "1000200000000"}}
+  ],
+  "coverage": {"committedThroughEventSeq": "8", "committed": 8, "duplicate": 0, "covered": 0}
+}

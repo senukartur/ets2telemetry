@@ -1,0 +1,26 @@
+{
+  "scenario": "timers-truck-refuel-trip",
+  "basis": ["synthetic-inference"],
+  "authoredFrom": [
+    "tests/storage/replay-journal-export.test.ts builds the scenario from the header and seed of timers-truck-refuel.json (ETS2, currency unknown): simulation.started (1, atMs 10); truck A with fuel capacity 400 (2, 20); a job configured while running (3, 30); frames at 100 (fuel 100 L, odometer 5000 km) and 200 (fuel 90 L, odometer 5000 km); truck B with fuel capacity 600 (4, 250); frames at 300 (fuel 50 L, odometer 5000 km) and 400 (fuel 550 L, odometer 5000 km); a toll (5, 450); a frame with a timer restart at 500 (timers.restart, 6). One durable client commits and acknowledges every item; the frames are 100 ms apart, so no snapshot is coalesced (protocol v1 §7)",
+    "docs/simulator-v1.md: UTC labels are 1,800,000,000,000 ms + atMs; the source clock is 1,000,000,000,000 ns + atMs x 1,000,000; docs/trips.md T4: trips are labelled trip@<eventSeq of the job configuration>",
+    "docs/trips.md transitions: the job opens unknown with the session's truck reference (2); truck B with different values updates the reference to 4 and adds a truck-change annotation (atEventSeq 4), which never downgrades",
+    "docs/live-telemetry-fields.md step primitives and docs/trips.md T16 (PR-2): 100 -> 200 is one truck, so the odometer step is continuous 0 m (a road stop: observed distance becomes available 0) and fuel consumed 10 L (fuel used 10); 200 -> 300 crosses the truck change and counts nothing; 300 -> 400 is continuous 0 m and a refuelled step of 500 L, one refuel episode whose annotation (addedLiters 500, atMonotonicNs of its step's reading at 400) waits for the next carrier, the toll (5), and never changes fuel used",
+    "docs/trips.md Persistence (J8): observed distance and fuel used are persisted on the first carrier after they changed (4), and not again because neither changes later",
+    "docs/trips.md transitions: timers.restart while the trip is active outside a load window closes it {none, discontinuity, partial} at the restart's label (atMs 500); the toll (5) is attributed to the trip (T14)"
+  ],
+  "trips": [
+    {"trip": "trip@3", "jobConfigurationEventSeq": "3", "truckConfigurationEventSeq": "4", "trailerConfigurationEventSeqs": [], "openedEventSeq": "3",
+      "gameMode": {"mode": "unknown", "method": "none", "confidence": "none"}, "gameModeAmbiguous": false, "outcome": "none", "outcomeEventSeq": null, "closeReason": "discontinuity",
+      "recordingCompleteness": "partial", "startedUtcMs": 1800000000030, "endedUtcMs": 1800000000500,
+      "observedDistanceM": {"available": true, "value": 0}, "fuelUsedL": {"available": true, "value": 10}}
+  ],
+  "attributions": [
+    {"eventSeq": "5", "trip": "trip@3", "attribution": "trip"}
+  ],
+  "intervals": [
+    {"trip": "trip@3", "kind": "discontinuity", "detail": {"cause": "truck-change", "annotation": true, "atEventSeq": "4"}},
+    {"trip": "trip@3", "kind": "discontinuity", "detail": {"cause": "refuel", "annotation": true, "addedLiters": 500, "atMonotonicNs": "1000400000000"}}
+  ],
+  "coverage": {"committedThroughEventSeq": "6", "committed": 6, "duplicate": 0, "covered": 0}
+}
