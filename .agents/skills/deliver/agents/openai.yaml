@@ -1,0 +1,7 @@
+interface:
+  display_name: "Deliver Task"
+  short_description: "Plan, implement, verify, and review one ETS2Telemetry task and open a draft PR"
+  default_prompt: "Deliver task "
+
+policy:
+  allow_implicit_invocation: false

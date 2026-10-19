@@ -31,14 +31,14 @@ Confirm that every relative Markdown link and anchor in the changed files resolv
 
 ### Every code change
 
-This sequence mirrors the Windows CI job in `.github/workflows/windows-ci.yml` and the local rule in `TESTING.md`:
+This sequence mirrors the Windows CI jobs in `.github/workflows/windows-ci.yml` and the local rule in `TESTING.md`:
 
 1. `npm run lint:install`, `npm run lint`, `npm run lint:ps`
-2. `npm run typecheck`, `npm test`
-3. `npm run build`, then `ctest --test-dir native/telemetry-client/build -C Release --output-on-failure --no-tests=error`
-4. `npm run native:configure`, `npm run native:build`, `npm run native:test`
-5. `npm run test:cap0-chain`
-6. `npm run smoke --workspace @ets2telemetry/telemetry-simulator`
+2. `npm run typecheck`, `npm test`, `npm run test:storage`
+3. `npm run native:configure`, `npm run build`, then `ctest --test-dir native/telemetry-client/build -C Release --output-on-failure --no-tests=error`
+4. `npm run native:build`, `npm run native:test`
+5. `npm run test:cap0-chain`, `npm run test:v1-chain`, `npm run test:plugin-lock`
+6. `npm run smoke --workspace @ets2telemetry/telemetry-simulator`, `npm run smoke:v1 --workspace @ets2telemetry/telemetry-simulator`
 
 ### Additional runtime checks
 
@@ -47,27 +47,32 @@ Run these when the diff touches any of the following:
 - `apps/desktop/**`
 - `packages/**`
 - `native/telemetry-client/**`
-- `scripts/build*.mjs`, `scripts/ci/**` or `scripts/watchdog/**`
+- `scripts/build*.mjs`, `scripts/stage-native-plugin.mjs`, `scripts/ci/**` or `scripts/watchdog/**`
 - `forge.config.cjs`
 - `package*.json`
 
-Each run is bounded by the Windows Job Object that the script uses:
+Each run is bounded by the Windows Job Object that the script uses (following the PR check layout in `.github/workflows/windows-ci.yml`, owner decisions E1 and E2):
 
-1. `scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development`, then the same script with `-Scenario telemetry`, then with `-Scenario overlay -ForceRendererReuse`.
-2. `npm run make`, `npm run inspect:package`.
-3. `scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged`, then the same three scenarios.
+1. `npm run package`, `npm run inspect:package`.
+2. `scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged`, then the same script with `-Scenario telemetry`, `-Scenario overlay -ForceRendererReuse`, `-Scenario lifecycle`, `-Scenario plugin`, `-Scenario recording`, `-Scenario journal`, and `-Scenario refusal`.
 
 If the diff does not touch these paths, report these checks as `CI ONLY`.
 
 ### Always CI ONLY
 
-Report the AddressSanitizer targets of the plugin and the client, and the extended regressions, as `CI ONLY`. They are not local passes.
+Report the following as `CI ONLY` (unless a specific command was explicitly requested in the plan's `Checks` list):
+
+- the AddressSanitizer targets of the plugin and the client (`windows-asan`);
+- development-mode runtime smokes on pull requests (E2) and the Squirrel maker / `release-identity` / hosted `Invoke-InstallerLifecycle.ps1` (E1; never run installer lifecycle on the owner's machine without an explicit owner request);
+- the extended regressions (`Invoke-Extended.ps1` / `windows-extended.yml`) and the soak workflow (`windows-soak.yml`).
+
+They are not local passes unless actually run.
 
 ## Rules
 
 - Never edit, stage or commit files. Never change tests, configuration or expected values to get a pass. Do not run `git` commands that change state.
 - Do not filter tests or add retries. If a failure looks nondeterministic, rerun that one command once and report the check as `FLAKY` with both outcomes.
-- Never launch ETS2 or ATS, install a game DLL, or touch real user data under `%LOCALAPPDATA%\ETS2Telemetry`. Application launches are allowed only through the bounded runtime smoke script.
+- Never launch ETS2 or ATS, install a game DLL into a real game folder, run `Invoke-InstallerLifecycle.ps1`, or touch real user data under `%LOCALAPPDATA%\ETS2Telemetry`. Application launches are allowed only through the bounded runtime smoke script.
 - If a tool is missing, report the check as `NOT RUN` with the exact error. Do not install anything globally.
 
 ## Report
