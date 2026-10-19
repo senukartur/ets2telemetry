@@ -847,6 +847,7 @@ void fuzz_case(const Fixtures& f) {
   check(corpus.size() >= 8, "client corpus");
   // ETS2TELEMETRY_NATIVE_FUZZ_MULTIPLIER multiplies the three seeded loops below (3,000, 2,000 and 300 rounds on a PR run).
   const unsigned multiplier = ets2telemetry::test::native_fuzz_multiplier();
+  std::cout << "fuzzMultiplier=" << multiplier << " clientRounds=" << 3000 * multiplier << " recordRounds=" << 2000 * multiplier << " stateRounds=" << 300 * multiplier << std::endl;
   std::mt19937_64 random(0xC11E47ULL); unsigned decoded = 0, accepted = 0, released = 0;
   for (unsigned round = 0; round < 3000 * multiplier; ++round) {
     auto bytes = corpus[random() % corpus.size()];
@@ -946,7 +947,6 @@ void fuzz_case(const Fixtures& f) {
     check(frame.size() - 4 <= limits.server_frame_bytes, "mutated state encodes");
   }
   auto bad_clock = minimal_state(); bad_clock.game_time.clock_id = Uuid{}; rejects([&] { encode(encoder.snapshot(1, 1, bad_clock, StatusInfo{})); }, "state game clock must be a UUID");
-  std::cout << "fuzzMultiplier=" << multiplier << " clientRounds=" << 3000 * multiplier << " recordRounds=" << 2000 * multiplier << " stateRounds=" << 300 * multiplier << "; ";
   std::cout << decoded << " decoded client mutations, " << accepted << " accepted ACKs; " << sendable << " sendable and " << failed << " unsendable mutated records; ";
 }
 }

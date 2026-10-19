@@ -680,6 +680,7 @@ void ack_control() {
 void fuzz() {
   // ETS2TELEMETRY_NATIVE_FUZZ_MULTIPLIER multiplies both loops (40 mutated hellos and 40 mutated frames on a PR run).
   const unsigned multiplier = ets2telemetry::test::native_fuzz_multiplier(), rounds = 40 * multiplier;
+  std::cout << "fuzzMultiplier=" << multiplier << " rounds=" << rounds << std::endl;
   Fixture f; f.start(); std::uint32_t random = 0x5a17c0de; auto next = [&] { random = random * 1664525U + 1013904223U; return random; };
   unsigned hello_closed = 0, hello_served = 0;
   for (unsigned i = 0; i < rounds; ++i) {
@@ -701,7 +702,7 @@ void fuzz() {
     if (closed) ++frame_closed; else ++frame_kept;
     c.reset(); require(f.listening(), "relisten after a mutated frame");
   }
-  std::cout << "fuzzMultiplier=" << multiplier << " rounds=" << rounds << " mutatedHelloClosed=" << hello_closed << " served=" << hello_served << " mutatedFrameClosed=" << frame_closed << " kept=" << frame_kept << '\n';
+  std::cout << "mutatedHelloClosed=" << hello_closed << " served=" << hello_served << " mutatedFrameClosed=" << frame_closed << " kept=" << frame_kept << '\n';
   require(hello_closed > 0 && frame_closed > 0, "mutations are rejected");
   auto valid = f.client(true); valid->handshake(); cancelled(f.host, 2); f.host.frame();
   require(valid->read_until([&] { return valid->covered() == valid->messages[1].state->status.delivery.next_event_seq + 1; }), "a valid client is served after the fuzz");

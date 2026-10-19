@@ -539,6 +539,7 @@ void policy_and_exhaustion() {
 void seeded_transport_fuzz() {
   // ETS2TELEMETRY_NATIVE_FUZZ_MULTIPLIER multiplies the mutated hellos (96 on a PR run); the burst phase stays fixed.
   const unsigned multiplier=ets2telemetry::test::native_fuzz_multiplier(), mutations=96*multiplier;
+  std::cout<<"fuzzMultiplier="<<multiplier<<" mutatedHellos="<<mutations<<std::endl;
   Fixture f; f.start(); std::uint32_t random=0x45a10f93;
   auto next=[&]{random=random*1664525U+1013904223U;return random;};
   for(unsigned iteration=0;iteration<mutations;++iteration) {
@@ -552,7 +553,6 @@ void seeded_transport_fuzz() {
   for(unsigned burst=0;burst<16;++burst) { for(unsigned i=0,n=1+next()%80;i<n;++i) f.host.frame(static_cast<float>(static_cast<int>(next()%101)-50)); Sleep(60); }
   receiver.read(h.get(),4); v0::Consumer consumer(true); for(const auto& message:receiver.messages) consumer.accept(message);
   require(receiver.messages.back().continuity.coalesced_snapshots>0,"seeded burst queue preserves ordered state and loss"); f.server.stop(); require(f.server.shutdown_ms()<1000,"seeded transport joined");
-  std::cout<<"fuzzMultiplier="<<multiplier<<" mutatedHellos="<<mutations<<'\n';
 }
 struct OwnedWindow {
   HWND handle=nullptr;
