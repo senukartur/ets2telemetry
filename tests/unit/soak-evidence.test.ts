@@ -2,6 +2,8 @@ import {describe, expect, it} from 'vitest';
 import {
   checkTail, databaseGrowth, leakTrend, listDifferences, logBudget, reconnectCycles, seriesSummary, soakExpectation, soakSessionId, summarizeSoakMetrics, tripUuidOf
 } from '../../scripts/ci/soak-evidence.mjs';
+import {tripUuidFor} from '../../packages/telemetry-core/src';
+import {scenarioSource} from '../../tools/telemetry-simulator/src/v1/replay';
 
 // ET-019 PR-12b: the application soak's oracle (scripts/ci/soak-evidence.mjs). Every value below is written by hand from
 // the schedule table in docs/simulator-v1.md#soak-source-et-019-pr-12a, the frame values there, the clocks of the
@@ -85,10 +87,12 @@ describe('soak expectation', () => {
   });
 
   it('derives the plugin session and trip UUIDs from their documented hashes', () => {
-    // SHA-256 of `simulator-v1:soak-v1:plugin-session` and of `ets2telemetry-trip-v1:<session>:4`, first 128 bits as 8-4-4-4-12.
+    // SHA-256 of `simulator-v1:soak-v1:plugin-session` and of `ets2telemetry-trip-v1:<session>:<eventSeq>`, first 128 bits as
+    // 8-4-4-4-12; the same values as the simulator's seeded identity and telemetry-core's own SHA-256 (T4).
     expect(soakSessionId()).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    expect(soakSessionId()).toBe(scenarioSource({game: 'ets2', seed: 'soak-v1'}).pluginSessionId);
+    for (const eventSeq of ['4', '10', '16']) expect(tripUuidOf(soakSessionId(), eventSeq)).toBe(tripUuidFor(soakSessionId(), eventSeq));
     expect(tripUuidOf(soakSessionId(), 4)).toBe(tripUuidOf(soakSessionId(), '4'));
-    expect(tripUuidOf(soakSessionId(), 4)).not.toBe(tripUuidOf(soakSessionId(), 10));
   });
 });
 
