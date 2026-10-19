@@ -873,6 +873,35 @@ RED, each applied alone to the product source and reverted, the file then byte-i
 - in the checker, each rule disabled in turn fails its unit set.
 - after the review fix, I1 accepting only `trip` again fails the unit case of a cargo-market job cancelled before pickup, whose outcome is `trip-before-loaded` (T14).
 
+## ET-019 v1 chain process death — October 19, 2026
+
+ET-019 PR-8 ends the native broker and the fake game host with `TerminateProcess` in the middle of a protocol v1 session of the E14 controlled chain. The chain is the tests-only fake SDK host with the test plugin DLL, the real broker in its v1 mode, and on the service side the production `NativePipeClient` with the ET-002b `V1Consumer`, or the production `V1Ingestion`. PR-8 adds one test file to `npm run test:v1-chain` and changes no product source, native source, wire, schema, IPC or renderer code. The chain has no storage and opens no database, and `GAME_HISTORY_RECORDING` is not touched. Every process works in an isolated temporary transport directory. Processes are ended at barriers the test observes (delivered events, a retained count in a status, a host's phase line), never on a timer. Expected values are written by hand from these documents, never read back from the code under test (section 4):
+
+- [native broker control](docs/telemetry-service-v0.md#native-broker-control) and its recovery rules;
+- [E9](docs/telemetry-service-v1.md#reconnection-e9);
+- [discovery](docs/native-transport-boundary-v0.md#discovery-and-service-policy);
+- [the native v1 store and endpoint](docs/native-transport-v1.md);
+- [protocol v1](docs/protocol/v1.md) §7, §9 and §10.
+
+| Requirement | Executable regression protection | Evidence boundary |
+| --- | --- | --- |
+| A broker killed after its authority receipt is a final rejection, and the plugin session outlives it (REG-011) | `tests/integration/v1-chain-process-death.test.ts` case 1: a durable and then a live-only broker are each killed while connected. Each client reports one `NativeClientError` that is not transient (`rejected`, or `incomplete-frame` when the kill cuts a frame) and no `end`. Its diagnostic has exit code 1 and the stage `unreported`. The host keeps running, and every later broker finds the same plugin session | The production `V1Ingestion` cannot pass the welcome of the synthetic test DLL (E14). Its `incompatible` state without a reconnection for this exit is the documented mapping, not observed in the chain. In production nothing restarts a killed broker until the source is selected again ([finding](docs/validation/et-019.md#pr-8-findings)) |
+| Nothing is lost silently across a broker death, durable or live-only (REG-003, REG-011) | Case 1: the ACK sent before the kill persists in the next checkpoint. A live-only connection never carries an event or gap. The loss counters are written out in full by hand: every eventSeq before the first client is `offline` loss, and an event observed while the live-only client is connected adds exactly one `noDurableConsumer`. A new live-only connection hydrates the paused state with the same counters. A durable reconnection redelivers both retained events with `redelivered: true`, then a gap for the live-only loss with `redelivered: false`, contiguous from the ACK. The next ACK releases every entry | Two retained events, inside the 300 s disconnect retention. The production wiring is live-only (ET-006b E2, `GAME_HISTORY_RECORDING` false), so the durable driver and its ACKs are test-level |
+| A killed host ends the source, the service waits on the E9 backoff, and a new host is a new plugin session that inherits nothing (REG-003, REG-011) | Case 2: after the host is killed with two unacknowledged events, the broker exits 3. The client reports a plain end with no error, no `end` message and no partial frame. The host's discovery record stays. The production `V1Ingestion` then selects the game: each broker ignores the record of the exited process and exits 2 (`waiting`, "No selected game discovery record"), and each reconnection starts no sooner than 250, 500, 1,000 ms after the previous broker exited. After a new host starts, the next broker's receipt names the new process and a new plugin session and process instance. A durable driver on it sees only the new session, coverage from eventSeq 1 and nothing redelivered | Delays are lower bounds only, with a 5 ms timer allowance. `V1Ingestion` ends `incompatible` at the synthetic welcome, as in E14, and applies no state of either session |
+| A clean exit differs from a kill (REG-011) | Case 2: the second host exits through the SDK shutdown. The client receives `end` `{plugin-shutdown, nextEventSeq, ackedThroughEventSeq '0', retainedUnacked '1'}` as the last message, then a plain end. The host exits 0 and removes its own discovery record, and the killed host's record remains | The client never deletes records |
+
+Changed tests: none. `vitest.v1-chain.config.mts` lists the new file beside `tests/integration/v1-chain.test.ts`, whose case and expectations are unchanged. The new file wraps `node:child_process` only to record the broker processes it ends; every spawn is passed through unchanged.
+
+RED, each applied alone and reverted, the file then byte-identical (`git hash-object`):
+
+- `V1Ingestion` never arms a reconnection (`apps/desktop/src/v1-ingestion.ts`): case 2 stops at its hang guard with one waiting broker;
+- the broker client keeps the first receipt's identity for every later broker (`apps/desktop/src/native-pipe-client.ts`): case 2 fails, because the broker that reaches the new host names the killed session;
+- a nonzero exit after a receipt reported as a plain end: case 1 fails, with no error for the killed broker;
+- an exit 3 after a receipt reported as a rejection: case 2 fails on the error for the ended source;
+- the plugin's store starting no retention window at a durable disconnect (`native/telemetry-plugin/src/protocol-v1-store.cpp`, test DLL rebuilt): case 1 fails, because the live-only checkpoint retains one expired gap record instead of the two events.
+
+Commands, timings and findings are in [ET-019 validation](docs/validation/et-019.md#pr-8-the-broker-and-the-fake-game-host-ended-mid-session-in-the-v1-chain-october-19-2026).
+
 ## ET-019 killed storage open — October 18, 2026
 
 ET-019 PR-2 adds REG-013 and REG-006 protection for a telemetry service process that dies while it opens an older database. No product source changed ([storage](docs/storage.md#tests), [ET-019 validation](docs/validation/et-019.md#pr-2-killed-storage-open-during-backup-and-migration)).
