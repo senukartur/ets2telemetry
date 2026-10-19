@@ -11,7 +11,7 @@ The owner asked for a final mockup that matches the Yukon Union community dashbo
 | [ui-spec.md](ui-spec.md) | This document: rules, components, screens, data bindings and states. **Authoritative for behaviour and structure.** |
 | [tokens.css](tokens.css) | Colours, type, shapes and the shadcn variable mapping. **Authoritative for values.** |
 | [mockup.html](mockup.html) | Interactive reference: open it in a browser. Controls switch screen, language, game, connection, Hard Mode result and an **Inspect** view that labels every region with its spec id. Authoritative for layout and proportions only. |
-| [assets/yukon-union-emblem.png](assets/yukon-union-emblem.png) | The community emblem, 256 × 256 PNG with transparency. Use unchanged. |
+| [assets/logo.png](assets/logo.png) | The application logo (bear head), white line art on a transparent background, 1024 × 1024 PNG. Rules in [§3 Logo](#3-tokens-type-and-icons). |
 
 Precedence: AGENTS.md and concept.md (product and data rules) → this spec → tokens.css → the mockup's pixels. If the mockup and this spec disagree, follow this spec and report the difference.
 
@@ -57,6 +57,15 @@ Values are in [tokens.css](tokens.css). Summary:
 
 **Shapes.** Cards 12 px radius, buttons and inputs 10 px, chips 8 px, badges 6 px. Card padding 14–16 px; gaps between blocks 14 px.
 
+**Logo.** `assets/logo.png`, chosen by the owner on October 19, 2026; it replaces the earlier community emblem everywhere in this design.
+- It is white line art on a transparent background, so place it only on the dark surfaces (`--yu-bg-chrome`, `--yu-bg-app`, `--yu-bg-card`). Never put it on a light, accent or status-coloured plate.
+- Use it unchanged: no recolouring, cropping, rotation, outlines, shadows or glow, and keep its proportions.
+- Keep clear space of at least 1/8 of its size on every side.
+- Minimum size 20 px. Below that the outline fades into grey, so 16 px uses (tray, taskbar, installer) need a simplified mark; see §11.
+- Sizes in this design: 20 px in the title bar, 40 px in the sidebar and first-run lockups, 64 px in Settings → About.
+- Next to the product name it is decorative (`alt=""`); alone, its alt text is "Yukon Union Telemetry".
+- Bundle the file with the application (no remote URL). Generate the Windows `.ico` sizes from the 1024 px master.
+
 **Icons.** `lucide-react` (already a dependency) with `strokeWidth={1.8}`, round caps and joins. Sizes: 14 px inside badges and small buttons, 16 px default, 18 px in the sidebar, 28 px in empty states. Icon names used:
 
 | Meaning | lucide-react |
@@ -80,9 +89,9 @@ Design canvas 1280 × 800; minimum window 1100 × 720. Layout: title bar (32 px)
 
 | Spec id | What | Implementation |
 | --- | --- | --- |
-| `shell.titlebar` | Window title bar, `#0B1120`, emblem 16 px and "Yukon Union Telemetry" | Electron `titleBarStyle: 'hidden'` with `titleBarOverlay: {color: '#0B1120', symbolColor: '#D1D5DB', height: 32}`; native caption buttons stay. Closing still hides to the tray (ET-011). |
+| `shell.titlebar` | Window title bar, `#0B1120`, logo 20 px and "Yukon Union Telemetry" | Electron `titleBarStyle: 'hidden'` with `titleBarOverlay: {color: '#0B1120', symbolColor: '#D1D5DB', height: 32}`; native caption buttons stay. Closing still hides to the tray (ET-011). |
 | `shell.sidebar` | Navigation column, `#0B1120`, right border `#1F2937` | shadcn `sidebar` component or a plain `nav`; items are buttons with `aria-current="page"` when active |
-| `shell.sidebar.lockup` | Emblem 36 px, "Yukon Union" 15 px/700, "Telemetry · ETS2 · ATS" 11 px muted | The emblem is decorative here (`alt=""`); never recolour, crop or put it on a coloured plate |
+| `shell.sidebar.lockup` | Logo 40 px, "Yukon Union" 15 px/700, "Telemetry · ETS2 · ATS" 11 px muted | The logo is decorative here (`alt=""`); follow the logo rules in §3 |
 | `shell.sidebar.nav` | Groups: **Drive** (Live, Journal), **Application** (Settings), **Company · Later** (Account & sync) | Active item: `--yu-selected-bg`, `--yu-selected-border`, `--yu-selected-fg`, 600 weight; others `--yu-text-secondary`; height 38 px, radius 10 px |
 | `shell.sidebar.recording` | Recording box at the bottom: dot, headline, one detail line | Bound to `AppState.health.recording` (`RecordingHealth`); texts from `RECORDING_STATE_SHORT_TEXT` |
 | — | Language button (globe, code, chevron) and Exit | Language opens a menu (shadcn `dropdown-menu`) with English and Русский. Exit calls `exitApplication()` (explicit full exit) |
@@ -185,7 +194,7 @@ Settings move from the single long Live column to their own screen with a left s
 | Overlay sections | `settings.sections` | `settings.sections.presets` (Everything, Job focus, Driving only) in the card header; `settings.sections.groups`: switches grouped Driving / Fuel / Job / Time / Status with requirement notes (`needs protocol v1`, `needs trip tracking`, `ids until v1`) from `OVERLAY_SECTION_REQUIREMENTS`; hint "A section without data stays hidden; it never shows zero." |
 | Game plugin | `settings.plugin` | One row per game: path, status badge (`installed` ✓ / `outdated` ◷ / `missing` / `blocked` ✕), Reinstall, Open folder |
 | Data and storage | `settings.data` | Database path, size and trip count, backup with "Create backup", diagnostics bundle |
-| About | `settings.about` | Version; Uninstall (danger outline) with the existing data-loss warning flow (ET-018) |
+| About | `settings.about` | Brand block `settings.about.brand` (logo 64 px, "Yukon Union Telemetry", "Telemetry · ETS2 · ATS"); version; Uninstall (danger outline) with the existing data-loss warning flow (ET-018) |
 
 Settings save as today: a choice shows as selected only after main saved it; a refused save shows its message in the same card.
 
@@ -273,6 +282,7 @@ These are suggestions for future cards; none is authorized by this document.
 ## 11. Open points for the owner
 
 - Window title and brand: the mockup uses "Yukon Union Telemetry"; the installer, tray and repository name still say ETS2Telemetry.
+- Small logo sizes: at 16 px (tray icon, taskbar, installer) the line-art logo fades. These uses need a simplified mark, either a filled silhouette or a heavier outline. That is a design task for the owner or a designer; until then the application keeps its current icons.
 - Review the Russian translation.
 - Start with Windows: needs an explicit authorization (autostart is currently out of scope).
 - The overlay `hard-mode` section and the "Delivered late" outcome display are proposals.
