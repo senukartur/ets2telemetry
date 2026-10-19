@@ -107,7 +107,8 @@ describe('money stays exact decimal text (J15)', () => {
       d.money = {incomplete: false, totals: [{category: 'fine', sdkType: 's64', currency: EUR, raw: '18446744073709551616', count: 2},
         {category: 'toll', sdkType: 's64', currency: {status: 'unknown'}, raw: '-5', count: 1}], unavailable: [{category: 'toll', reason: 'not-observed', count: 1}]} as typeof d.money;
     }) as unknown as JournalTripDetail;
-    const text = serialize(delivered, {});
+    // The rows at the detail's bounds (interval 7, sample 11), which a valid document holds (J17).
+    const text = serialize(delivered, {intervals: [[INTERVAL]], samples: [[SAMPLE]]});
     expect(text).toContain('"raw":"9007199254740993"');
     expect(text).toContain('"raw":"18446744073709551616"');
     const document = JSON.parse(text) as {outcomeDetails: {record: {revenue: {value: {raw: unknown}}}}; money: unknown; bounds: {snapshot: boolean}};
@@ -149,7 +150,24 @@ describe('bounds (J17)', () => {
   });
   it('are checked by the validator: a row past them is a problem', () => {
     const document = JSON.parse(serialize(detail, {samples: [[SAMPLE, {...SAMPLE, id: '12'}]], events: [[EVENT, EVENT_4, {...EVENT, eventSeq: '5'}]]})) as unknown;
-    expect(tripExportProblems(document)).toEqual(['$.events[2]: past the export bounds', '$.samples[1]: past the export bounds']);
+    // The document also leaves out interval 7, which its lastIntervalId names.
+    expect(tripExportProblems(document)).toEqual(['$.intervals: no row at the export bound', '$.events[2]: past the export bounds', '$.samples[1]: past the export bounds']);
+  });
+  it('are checked by the validator: a non-null sample or interval bound names the section\'s last row', () => {
+    // Bounds 7 and 11 with their rows, and an empty event window, which the committed coverage allows (J7).
+    expect(tripExportProblems(JSON.parse(serialize(detail, {intervals: [[{...INTERVAL, id: '6'}, INTERVAL]], samples: [[{...SAMPLE, id: '10'}, SAMPLE]]})))).toEqual([]);
+    // Dropped interval rows, then dropped sample rows.
+    expect(tripExportProblems(JSON.parse(serialize(detail, {samples: [[SAMPLE]]})))).toEqual(['$.intervals: no row at the export bound']);
+    expect(tripExportProblems(JSON.parse(serialize(detail, {intervals: [[INTERVAL]]})))).toEqual(['$.samples: no row at the export bound']);
+    // Rows that stop before the bound: the bound's own row is missing.
+    expect(tripExportProblems(JSON.parse(serialize(detail, {intervals: [[{...INTERVAL, id: '6'}]], samples: [[{...SAMPLE, id: '10'}]]}))))
+      .toEqual(['$.intervals: no row at the export bound', '$.samples: no row at the export bound']);
+  });
+  it('are checked by the validator: a null sample or interval bound allows no rows', () => {
+    const none = changed(detail, d => { d.exportBounds = {committedThroughEventSeq: '4', lastSampleId: null, lastIntervalId: null}; });
+    expect(tripExportProblems(JSON.parse(serialize(none, {})))).toEqual([]);
+    expect(tripExportProblems(JSON.parse(serialize(none, {intervals: [[INTERVAL]], samples: [[SAMPLE]]}))))
+      .toEqual(['$.intervals[0]: past the export bounds', '$.samples[0]: past the export bounds']);
   });
 });
 
