@@ -5,7 +5,7 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {afterEach, expect, it} from 'vitest';
 import {isUninstallExitPayload} from '../../apps/desktop/src/app-lifecycle';
-import {INSTANCE_EXIT_WAIT_MS, INSTANCE_POLL_MS} from '../../apps/desktop/src/squirrel-events';
+import {INSTANCE_EXIT_WAIT_MS} from '../../apps/desktop/src/squirrel-events';
 
 // REG-017 (ET-018 U6, risk G1): proves with the real Electron binary that requesting the single-instance lock again after
 // a refusal works, which Electron does not document. Two windowless Electron main scripts share an isolated temporary
@@ -80,7 +80,10 @@ it('a holder that does not exit keeps the lock: the requester gives up after its
   const result = await outcome(requester);
   expect(await requester.exited).toBe(3);
   expect(result.locked).toBe(false);
-  expect(result.requests).toBeGreaterThanOrEqual(1500 / INSTANCE_POLL_MS / 2);
+  // It gave up only after its wait, and requested again while waiting. The number of requests that fit into the real
+  // 1.5 s depends on how late a loaded host fires the requester's timers, so only the repetition is asserted, not a rate.
+  expect(result.elapsedMs).toBeGreaterThanOrEqual(1500);
+  expect(result.requests).toBeGreaterThanOrEqual(2);
   // Every refused request reached the holder.
   await expect.poll(() => signals(holder).length, {timeout: 2000}).toBe(result.requests);
 });
