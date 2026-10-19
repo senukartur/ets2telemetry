@@ -14,30 +14,59 @@ const timers = {setTimeout: (callback: () => void, ms: number) => setTimeout(cal
   setImmediate: (callback: () => void) => setImmediate(callback), clearImmediate: (handle: unknown) => clearImmediate(handle as ReturnType<typeof setImmediate>)};
 
 /** A scripted storage worker. `open` answers with `openResult`; `close` is answered only when `answerClose` is true. */
-function fixture(localAppData: string | null = 'C:\\isolated',openResult: Result<unknown> = {ok: true, value: SUMMARY}, answerClose = true, extra: Pick<HistoryStorageOptions, 'target' | 'onOpened' | 'onStateChange'> = {}) {
+function fixture(localAppData: string | null = 'C:\\isolated', openResult: Result<unknown> | ((attempt: number) => Result<unknown>) = {ok: true, value: SUMMARY}, answerClose = true, extra: Pick<HistoryStorageOptions, 'target' | 'onOpened' | 'onStateChange' | 'reopenBackoffMs' | 'maxReopenAttempts'> = {}) {
   const sent: StorageRequest[] = [], log = vi.fn();
-  const listeners: {message?: (message: unknown) => void; error?: (error: unknown) => void; exit?: (code: number) => void} = {};
-  let exited = false;
-  const exit = (code: number) => { if (!exited) { exited = true; listeners.exit?.(code); } };
-  const respond = (id: number, result: Result<unknown>) => queueMicrotask(() => listeners.message?.({type: 'storage.response', id, result}));
-  const worker: StorageWorkerHandle = {
-    postMessage: message => {
-      sent.push(message);
-      if (message.command.name === 'open' && openResult) respond(message.id, openResult);
-      if (message.command.name === 'close' && answerClose) { respond(message.id, {ok: true, value: undefined}); queueMicrotask(() => queueMicrotask(() => exit(0))); }
-    },
-    onMessage: listener => { listeners.message = listener; },
-    onError: listener => { listeners.error = listener; },
-    onExit: listener => { listeners.exit = listener; },
-    terminate: vi.fn(() => { exit(1); return Promise.resolve(1); })
-  };
-  const createWorker = vi.fn(() => worker);
+  let workerCount = 0;
+  let latestWorker: StorageWorkerHandle | undefined;
+  const workers: {
+    worker: StorageWorkerHandle;
+    respond: (id: number, result: Result<unknown>) => void;
+    finishClose: (id: number) => void;
+    crash: () => void;
+  }[] = [];
+
+  const createWorker = vi.fn(() => {
+    const attempt = workerCount++;
+    const listeners: {message?: (message: unknown) => void; error?: (error: unknown) => void; exit?: (code: number) => void} = {};
+    let exited = false;
+    const exit = (code: number) => { if (!exited) { exited = true; listeners.exit?.(code); } };
+    const respond = (id: number, result: Result<unknown>) => queueMicrotask(() => listeners.message?.({type: 'storage.response', id, result}));
+    const worker: StorageWorkerHandle = {
+      postMessage: message => {
+        sent.push(message);
+        if (message.command.name === 'open') {
+          const res = typeof openResult === 'function' ? openResult(attempt) : openResult;
+          if (res) respond(message.id, res);
+        }
+        if (message.command.name === 'close' && answerClose) {
+          respond(message.id, {ok: true, value: undefined});
+          queueMicrotask(() => queueMicrotask(() => exit(0)));
+        }
+      },
+      onMessage: listener => { listeners.message = listener; },
+      onError: listener => { listeners.error = listener; },
+      onExit: listener => { listeners.exit = listener; },
+      terminate: vi.fn(() => { exit(1); return Promise.resolve(1); })
+    };
+    latestWorker = worker;
+    const finishClose = (id: number) => { listeners.message?.({type: 'storage.response', id, result: {ok: true, value: undefined}}); exit(0); };
+    const crash = () => listeners.error?.(new Error('worker crashed'));
+    workers.push({worker, respond, finishClose, crash});
+    return worker;
+  });
+
   // null stands for an unset variable, since an omitted argument takes the default.
   const history = new HistoryStorage({localAppData: localAppData ?? undefined, appVersion: '0.1.0-test', log, createWorker, timers, ...extra});
   const events = () => log.mock.calls.map(call => [call[0], call[2]]);
-  /** Delivers the close answer at once and then the thread's exit, as a late poll phase delivers both. */
-  const finishClose = (id: number) => { listeners.message?.({type: 'storage.response', id, result: {ok: true, value: undefined}}); exit(0); };
-  return {history, sent, log, events, createWorker, worker, respond, finishClose, crash: () => listeners.error?.(new Error('worker crashed'))};
+
+  return {
+    history, sent, log, events, createWorker,
+    get worker() { return latestWorker!; },
+    respond: (id: number, result: Result<unknown>) => workers.at(-1)?.respond(id, result),
+    finishClose: (id: number) => workers.at(-1)?.finishClose(id),
+    crash: () => workers.at(-1)?.crash(),
+    workers
+  };
 }
 
 describe('history storage at service start (OD-2)', () => {
@@ -324,5 +353,125 @@ describe('the database the journal reads (ET-016 PR-3, J3, J4)', () => {
     expect(f.events().filter(([event]) => event === 'JOURNAL_ANSWER_INVALID')).toEqual([['JOURNAL_ANSWER_INVALID', {command: 'journalTrips', count: 1}],
       ['JOURNAL_ANSWER_INVALID', {command: 'journalTrips', count: 2}]]);
     expect([f.history.state, f.history.failureCode, f.history.client?.state]).toEqual(['open', null, 'running']);
+  });
+});
+
+describe('re-opening history storage after a recoverable stop (ET-037)', () => {
+  it.each<StorageErrorCode>(['DATABASE_LOCKED', 'DISK_FULL', 'IO_ERROR'])(
+    'schedules retry with backoff on %s and re-opens when subsequent attempt succeeds',
+    async code => {
+      const onOpened = vi.fn();
+      const states: string[] = [];
+      const f = fixture(
+        'C:\\isolated',
+        attempt => (attempt === 0 ? {ok: false, error: storageError(code)} : {ok: true, value: SUMMARY}),
+        true,
+        {onOpened, onStateChange: s => states.push(s)}
+      );
+      f.history.start();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(f.history.state).toBe('unavailable');
+      expect(f.history.failureCode).toBe(code);
+      expect(f.createWorker).toHaveBeenCalledTimes(1);
+      expect(onOpened).not.toHaveBeenCalled();
+
+      // At 249 ms, retry has not fired yet
+      await vi.advanceTimersByTimeAsync(249);
+      expect(f.createWorker).toHaveBeenCalledTimes(1);
+      expect(f.history.state).toBe('unavailable');
+
+      // At 250 ms, first retry fires and succeeds
+      await vi.advanceTimersByTimeAsync(1);
+      expect(f.createWorker).toHaveBeenCalledTimes(2);
+      expect(f.history.state).toBe('open');
+      expect(f.history.failureCode).toBeNull();
+      expect(f.history.client).toBeDefined();
+      expect(onOpened).toHaveBeenCalledOnce();
+      expect(states).toEqual(['opening', 'unavailable', 'opening', 'open']);
+      expect(f.events()).toEqual([
+        ['HISTORY_STORAGE_UNAVAILABLE', {code}],
+        ['HISTORY_STORAGE_OPENED', {schemaVersion: 1, created: true, migratedFrom: null}]
+      ]);
+
+      await f.history.close();
+      expect(f.history.state).toBe('closed');
+      expect(f.events().at(-1)).toEqual(['HISTORY_STORAGE_CLOSED', undefined]);
+    }
+  );
+
+  it.each<StorageErrorCode>(['SCHEMA_NEWER', 'DATABASE_UNRECOGNIZED', 'PURPOSE_MISMATCH', 'PERMISSION_DENIED'])(
+    'never schedules retry for non-retryable open refusal %s',
+    async code => {
+      const f = fixture('C:\\isolated', {ok: false, error: storageError(code)});
+      f.history.start();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(f.history.state).toBe('unavailable');
+      expect(f.history.failureCode).toBe(code);
+      expect(f.createWorker).toHaveBeenCalledTimes(1);
+
+      // Advance past max backoff delays
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(f.createWorker).toHaveBeenCalledTimes(1);
+      expect(f.history.state).toBe('unavailable');
+      expect(f.events()).toEqual([['HISTORY_STORAGE_UNAVAILABLE', {code}]]);
+
+      await f.history.close();
+      expect(f.history.state).toBe('closed');
+    }
+  );
+
+  it('cancels pending retry timer and closes cleanly on orderly close()', async () => {
+    const f = fixture('C:\\isolated', {ok: false, error: storageError('DATABASE_LOCKED')});
+    f.history.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.history.state).toBe('unavailable');
+    expect(f.createWorker).toHaveBeenCalledTimes(1);
+
+    // Close while waiting for retry timer
+    await f.history.close();
+    expect(f.history.state).toBe('closed');
+
+    // Advancing timers should not spawn any new worker
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(f.createWorker).toHaveBeenCalledTimes(1);
+    expect(f.history.state).toBe('closed');
+  });
+
+  it('stops retrying and stays unavailable when maxReopenAttempts is exhausted', async () => {
+    const states: string[] = [];
+    const f = fixture(
+      'C:\\isolated',
+      {ok: false, error: storageError('DATABASE_LOCKED')},
+      true,
+      {maxReopenAttempts: 3, reopenBackoffMs: [100, 200, 300], onStateChange: s => states.push(s)}
+    );
+    f.history.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.createWorker).toHaveBeenCalledTimes(1); // initial attempt
+    expect(f.history.state).toBe('unavailable');
+
+    // Retry 1: after 100 ms
+    await vi.advanceTimersByTimeAsync(100);
+    expect(f.createWorker).toHaveBeenCalledTimes(2);
+    expect(f.history.state).toBe('unavailable');
+
+    // Retry 2: after 200 ms
+    await vi.advanceTimersByTimeAsync(200);
+    expect(f.createWorker).toHaveBeenCalledTimes(3);
+    expect(f.history.state).toBe('unavailable');
+
+    // Retry 3: after 300 ms
+    await vi.advanceTimersByTimeAsync(300);
+    expect(f.createWorker).toHaveBeenCalledTimes(4); // 3 retries executed
+    expect(f.history.state).toBe('unavailable');
+
+    // Attempts exhausted; advancing further does not spawn more workers
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(f.createWorker).toHaveBeenCalledTimes(4);
+    expect(f.history.state).toBe('unavailable');
+    expect(f.history.failureCode).toBe('DATABASE_LOCKED');
+
+    await f.history.close();
+    expect(f.history.state).toBe('closed');
   });
 });

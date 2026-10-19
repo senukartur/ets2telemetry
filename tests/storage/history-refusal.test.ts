@@ -26,8 +26,16 @@ import {createRecordingRuntime} from '../../apps/desktop/src/recording-runtime';
 import {GAME_HISTORY_RECORDING} from '../../apps/desktop/src/recording-policy';
 import {parseRecordingHealth} from '../../apps/desktop/src/recording-status';
 import type {V1SourceState} from '../../apps/desktop/src/v1-ingestion';
+import {readFixtureFile} from '../../tools/telemetry-simulator/src/fixture-file';
+import {reactiveConflicts, serveV1Reactive} from '../../tools/telemetry-simulator/src/v1/reactive';
+import {scenarioPath} from '../shared/simulator-v1-expected';
 import {digestOf, readOnly, REPRESENTATIVE, sha256, STORAGE_FIXTURES, TEST_CLOSE_GRACE_MS, workspace} from './helpers';
-import {guarded, storageWorker, terminateWorkers, tracedShutdown, until} from './recording-helpers';
+import {guarded, servedAcks, storageWorker, terminateWorkers, tracedShutdown, until} from './recording-helpers';
+
+type Json = Record<string, unknown>;
+const connect = (atMs: number, client: Json = {durable: true}) => ({atMs, action: 'connect', client});
+const disconnect = (atMs: number) => ({atMs, action: 'disconnect'});
+const scenario = (id: string) => readFixtureFile(scenarioPath(id)) as Json & {seed: string; steps: Json[]};
 
 let ws: Awaited<ReturnType<typeof workspace>>;
 beforeEach(async () => { ws = await workspace(); });
@@ -113,11 +121,17 @@ const QUERIES: JournalQuery[] = [{kind: 'trips', query: {}}, {kind: 'trips', que
 function service(env: Record<string, string>) {
   expect(GAME_HISTORY_RECORDING).toBe(false);
   const logs: [string, unknown][] = [], states: V1SourceState[] = [], received: (RecordingHealth | 'rejected')[] = [], brokerLogs: [string, unknown][] = [];
-  const worker = storageWorker();
+  const workerList: ReturnType<typeof storageWorker>[] = [];
   let workers = 0, stopping = false, health: AppHealth = initialHealth();
   const log = (event: string, _detail?: unknown, facts?: unknown) => { logs.push([event, facts]); };
   const runtime = createRecordingRuntime({env, gameHistory: GAME_HISTORY_RECORDING, localAppData: ws.directory, log,
-    createWorker: () => { workers++; return worker.handle; }, historyOverrides: {appVersion: '0.1.0-test', closeGraceMs: TEST_CLOSE_GRACE_MS},
+    createWorker: () => {
+      workers++;
+      const w = storageWorker();
+      workerList.push(w);
+      return w.handle;
+    },
+    historyOverrides: {appVersion: '0.1.0-test', closeGraceMs: TEST_CLOSE_GRACE_MS},
     statusOverrides: {intervalMs: 0}, onV1State: state => { states.push(state); },
     onRecordingStatus: status => {
       const message = structuredClone({type: 'recording', status}) as Record<string, unknown>;
@@ -137,7 +151,7 @@ function service(env: Record<string, string>) {
     await until(() => runtime.history.state !== 'idle' && runtime.history.state !== 'opening', 'the database open settling', HANG_GUARD_MS);
     expect(runtime.history.state).toBe('unavailable');
     // docs/storage.md: a refused open ends the worker at once; it closed in order.
-    expect(await guarded(worker.exit, 'the storage worker exit after the refused open', HANG_GUARD_MS)).toBe(0);
+    expect(await guarded(workerList[0].exit, 'the storage worker exit after the refused open', HANG_GUARD_MS)).toBe(0);
   };
   /** The service's orderly stop: the status first, then the real shutdown sequence with the runtime's three steps. */
   const stop = async () => {
@@ -219,10 +233,10 @@ describe('ET-019 PR-6: refused history databases through the production service 
     expect(existsSync(historyBackups())).toBe(false);
   }, CASE_TIMEOUT_MS);
 
-  it('refuses a history database held by another writer with DATABASE_LOCKED and does not re-open it before the orderly stop (second instance)', async () => {
+  it('refuses a history database held by another writer with DATABASE_LOCKED and re-opens it after the lock is released (second instance)', async () => {
     // docs/storage.md OD-8 and "Second instance": the exclusive lock makes the running writer the only connection; a
-    // refused open, DATABASE_LOCKED among them, ends the worker at once and history stays unavailable until the service
-    // starts again. The holder is this test's own connection to a new history database in the temporary LOCALAPPDATA.
+    // refused open, DATABASE_LOCKED among them, ends the worker at once and history stays unavailable until the lock clears.
+    // The holder is this test's own connection to a new history database in the temporary LOCALAPPDATA.
     const holder = await ws.open({path: historyFile(), purpose: 'history', backupsDirectory: historyBackups()});
     const before = tree(root());
     const s = service(DEFAULT_PLAN);
@@ -231,13 +245,25 @@ describe('ET-019 PR-6: refused history databases through the production service 
     await expectUnavailable(s, 'DATABASE_LOCKED');
     expect(s.received).toEqual([{state: 'disabled'}]);
     expect(tree(root())).toEqual(before);
-    // The lock ends. Up to the orderly stop the service does not re-open history: still unavailable, still one worker.
-    // This checks the state at these two points only; no retry mutation was applied, and there is no automatic re-open
-    // to test (G10 keeps the status `stopped` for the service lifetime, docs/telemetry-service-v1.md; automatic re-open is a
-    // deferred gap in docs/validation/et-015c.md).
+
+    // Release the lock. HistoryStorage detects recovery on backoff and re-opens the database.
     holder.close();
-    await expectUnavailable(s, 'DATABASE_LOCKED');
-    await expectCleanStop(s);
+    await until(() => s.runtime.history.state === 'open' && s.workers() === 2, 'history re-opening after lock release', HANG_GUARD_MS);
+    expect(s.runtime.history.state).toBe('open');
+    expect(s.runtime.history.failureCode).toBeNull();
+    expect(s.runtime.history.client).toBeDefined();
+
+    // Verify journal queries succeed now that history is open.
+    for (const query of QUERIES) {
+      const res = await s.read(query);
+      expect(res.ok ? res.ok : res.code, query.kind).not.toBe('DATABASE_UNAVAILABLE');
+    }
+    expect(s.brokerLogs).toEqual([]);
+
+    const {result, steps} = await s.stop();
+    expect(result).toEqual({clean: true});
+    expect(steps.map(({phase, name, outcome}) => `${phase} ${name} ${outcome}`)).toEqual(['intake v1-ingestion ok', 'flush recording-flush ok', 'storage history-storage ok']);
+    expect(s.logs.map(([event]) => event).filter(event => /^HISTORY_/.test(event))).toEqual(['HISTORY_STORAGE_UNAVAILABLE', 'HISTORY_STORAGE_OPENED', 'HISTORY_STORAGE_CLOSED']);
   }, CASE_TIMEOUT_MS);
 });
 
@@ -312,6 +338,63 @@ describe('ET-019 PR-6: refused recording targets through the production service 
     // The backups folder was created for the copy and is empty again: no backup, partial, manifest or sidecar remains.
     const after = tree(root());
     expect([Object.keys(after), after['synthetic/backups']]).toEqual([['synthetic', 'synthetic/backups', 'synthetic/t.sqlite'], 'dir']);
+  }, CASE_TIMEOUT_MS);
+
+  it('resumes recording after DATABASE_LOCKED clears on a synthetic target: re-opens, reconnects durable, commits events, sends ACKs, and reports recording', async () => {
+    // Lock the synthetic target database with an external writer.
+    const holder = await ws.open({path: target(), purpose: 'synthetic', backupsDirectory: targetBackups()});
+    const s = service(SYNTHETIC_PLAN);
+
+    // Prepare a reactive v1 server: connection 0 is live-only while the target is locked.
+    // Once the lock clears and storage re-opens, durable availability changes, the client disconnects and reconnects durable,
+    // and events are committed and acknowledged.
+    const base = scenario('live-only');
+    const input = {
+      ...base,
+      id: 'reopen-locked-target',
+      purpose: 'ET-037: re-open synthetic target after DATABASE_LOCKED clears',
+      steps: [...base.steps, ...Array.from({length: 98}, (_, i) => ({atMs: 300 + 100 * i, action: 'frame'}))],
+      transport: [connect(0, {durable: false}), disconnect(10_050), connect(10_100), disconnect(10_200)]
+    };
+    expect(reactiveConflicts(input)).toEqual([]);
+    const server = await serveV1Reactive(input, {scale: 1, awaitScriptedAcks: true});
+
+    try {
+      await s.startRefused();
+      expect(s.logs).toEqual([['RECORDING_TARGET', {purpose: 'synthetic'}], ['HISTORY_STORAGE_UNAVAILABLE', {code: 'DATABASE_LOCKED'}]]);
+      await until(() => s.received.length === 2, 'the stopped status', HANG_GUARD_MS);
+      expect(s.received).toEqual([synthetic('opening'), synthetic('stopped', 'DATABASE_LOCKED')]);
+
+      // Connect to the reactive v1 server while storage is unavailable
+      s.runtime.v1.select('synthetic', server.endpoint);
+      await until(() => s.states.some(st => st.status === 'connected'), 'v1 connected live-only', HANG_GUARD_MS);
+      expect(s.states.find(st => st.status === 'connected')?.durable.state).toBe('off');
+
+      // Release the lock on the target database
+      holder.close();
+
+      // Wait for HistoryStorage to re-open on backoff
+      await until(() => s.runtime.history.state === 'open' && s.workers() === 2, 'history storage re-open', HANG_GUARD_MS);
+      expect(s.runtime.history.state).toBe('open');
+      expect(s.runtime.history.failureCode).toBeNull();
+
+      // Verify recording status transitions to recording
+      await until(() => s.received.some(r => typeof r === 'object' && r.state === 'recording'), 'recording status', HANG_GUARD_MS);
+      expect(s.health().recording.state).toBe('recording');
+
+      // The server run completes with connection 0 closed by client (durable upgrade) and connection 1 acknowledging the events
+      const report = await guarded(server.done, 'the reactive server run', HANG_GUARD_MS);
+      expect(report.connections.map(c => [c.durable, c.closedBy])).toEqual([[false, 'client'], [true, 'disconnect']]);
+      expect(servedAcks(report, 1)).toEqual(['2']);
+
+      // Orderly stop: all shutdown steps clean, history logs reflect unavailable, opened, closed
+      const {result, steps} = await s.stop();
+      expect(result).toEqual({clean: true});
+      expect(steps.map(({phase, name, outcome}) => `${phase} ${name} ${outcome}`)).toEqual(['intake v1-ingestion ok', 'flush recording-flush ok', 'storage history-storage ok']);
+      expect(s.logs.map(([event]) => event).filter(event => /^HISTORY_/.test(event))).toEqual(['HISTORY_STORAGE_UNAVAILABLE', 'HISTORY_STORAGE_OPENED', 'HISTORY_STORAGE_CLOSED']);
+    } finally {
+      await server.stop();
+    }
   }, CASE_TIMEOUT_MS);
 });
 

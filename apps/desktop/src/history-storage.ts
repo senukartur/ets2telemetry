@@ -5,7 +5,7 @@ import {version} from '../../../package.json';
 import type {JournalDatabase} from '../../../packages/contracts/src';
 import type {StorageErrorCode} from '../../../packages/storage/src/api';
 import {StorageClient, workerHandle, type ClientTimers, type StorageWorkerHandle} from '../../../packages/storage/src/client';
-import {storageError} from '../../../packages/storage/src/errors';
+import {isReopenRetryable, storageError} from '../../../packages/storage/src/errors';
 import type {DiagnosticFacts} from './diagnostics';
 import {processEntrypoint} from './entrypoints';
 import {dataPaths} from './paths';
@@ -20,6 +20,17 @@ export const HISTORY_CLOSE_BUDGET_MS = 1000;
  * ends at the step budget instead.
  */
 export const HISTORY_CLOSE_GRACE_MS = 800;
+/** Schedule of backoff delays for re-opening a database after a retryable open refusal. */
+export const HISTORY_REOPEN_BACKOFF_MS = [250, 500, 1000, 2000, 4000] as const;
+/** Maximum retry attempts before giving up re-opening. */
+export const MAX_HISTORY_REOPEN_ATTEMPTS = 60;
+
+const systemTimers: ClientTimers = {
+  setTimeout: (callback, milliseconds) => setTimeout(callback, milliseconds),
+  clearTimeout: handle => clearTimeout(handle as ReturnType<typeof setTimeout>),
+  setImmediate: callback => setImmediate(callback),
+  clearImmediate: handle => clearImmediate(handle as ReturnType<typeof setImmediate>)
+};
 
 export interface HistoryStorageOptions {
   /** The service's LOCALAPPDATA. Missing or not absolute: history stays unavailable; there is no fallback location. */
@@ -41,6 +52,10 @@ export interface HistoryStorageOptions {
   timers?: ClientTimers;
   /** Tests only: the real-worker storage suite bounds a close by its own grace (tests/storage/helpers.ts). */
   closeGraceMs?: number;
+  /** Tests only: backoff schedule for re-opening after a retryable open refusal. */
+  reopenBackoffMs?: readonly number[];
+  /** Tests only: max retry attempts before giving up re-opening. */
+  maxReopenAttempts?: number;
 }
 export type HistoryState = 'idle' | 'opening' | 'open' | 'unavailable' | 'closed';
 
@@ -69,6 +84,11 @@ export class HistoryStorage {
   #database: JournalDatabase | undefined;
   #databaseUuid: string | undefined;
   #invalidJournalAnswers = 0;
+  #retryTimer: unknown = undefined;
+  #attempts = 0;
+  #file: {path: string; backupsDirectory: string} | undefined;
+  #target: RecordingDatabase | undefined;
+  #closing = false;
 
   constructor(private readonly options: HistoryStorageOptions) {}
 
@@ -85,16 +105,21 @@ export class HistoryStorage {
   start(): void {
     if (this.#state !== 'idle') return;
     const target = this.options.target ?? {purpose: 'history'};
+    this.#target = target;
     if (target.purpose !== 'history') this.options.log('RECORDING_TARGET', undefined, {purpose: target.purpose});
-    let file: {path: string; backupsDirectory: string};
     try {
       if (!this.options.localAppData) throw new Error('LOCALAPPDATA is not set');
       const paths = dataPaths(this.options.localAppData);
-      if (target.purpose === 'history') file = {path: paths.database, backupsDirectory: paths.backups};
+      if (target.purpose === 'history') this.#file = {path: paths.database, backupsDirectory: paths.backups};
       // The name is checked again here, so no caller can leave the synthetic directory or reach the history file.
-      else if (RECORDING_NAME_PATTERN.test(target.name)) file = {path: path.join(paths.synthetic, `${target.name}.sqlite`), backupsDirectory: path.join(paths.synthetic, 'backups')};
+      else if (RECORDING_NAME_PATTERN.test(target.name)) this.#file = {path: path.join(paths.synthetic, `${target.name}.sqlite`), backupsDirectory: path.join(paths.synthetic, 'backups')};
       else throw new Error('Invalid recording target name');
     } catch { this.#unavailable('DATA_PATH_INVALID'); return; }
+    this.#attemptOpen();
+  }
+
+  #attemptOpen(): void {
+    if (this.#closing || this.#state === 'closed') return;
     let client: StorageClient;
     try {
       client = new StorageClient(this.options.createWorker(), {timers: this.options.timers, closeGraceMs: this.options.closeGraceMs ?? HISTORY_CLOSE_GRACE_MS, onFailure: error => this.#unavailable(error.code),
@@ -106,22 +131,57 @@ export class HistoryStorage {
     } catch { this.#unavailable('WORKER_FAILED'); return; }
     this.#client = client;
     this.#set('opening');
+    const file = this.#file!;
+    const target = this.#target!;
     this.#opening = client.open({...file, purpose: target.purpose, appVersion: this.options.appVersion ?? version}).then(result => {
+      if (this.#state === 'closed') {
+        void client.close();
+        return;
+      }
       if (!result.ok) {
         this.#unavailable(result.error.code);
         // The worker has nothing left to serve; end its thread now rather than at shutdown.
         void client.close();
+        if (!this.#closing && isReopenRetryable(result.error)) {
+          this.#scheduleRetry();
+        }
         return;
       }
       const summary = result.value;
       this.#database = {purpose: summary.purpose, schemaVersion: summary.schemaVersion};
       this.#databaseUuid = summary.databaseUuid;
+      this.#failure = null;
+      this.#attempts = 0;
+      this.#reported = false;
       if (this.#state === 'opening') this.#set('open');
       this.options.log('HISTORY_STORAGE_OPENED', undefined, {schemaVersion: summary.schemaVersion, created: summary.created, migratedFrom: summary.migratedFrom ?? null});
       // Leftovers of a backup that an earlier shutdown terminated; the count only, never a file name.
       if (summary.removedPartialBackups) this.options.log('HISTORY_BACKUP_PARTIALS_REMOVED', undefined, {count: summary.removedPartialBackups});
       if (this.#state === 'open') this.options.onOpened?.();
     });
+  }
+
+  #scheduleRetry(): void {
+    if (this.#closing || this.#state === 'closed') return;
+    const maxAttempts = this.options.maxReopenAttempts ?? MAX_HISTORY_REOPEN_ATTEMPTS;
+    if (this.#attempts >= maxAttempts) return;
+    const backoffs = this.options.reopenBackoffMs ?? HISTORY_REOPEN_BACKOFF_MS;
+    const delay = backoffs[Math.min(this.#attempts, backoffs.length - 1)];
+    this.#attempts++;
+    const timers = this.options.timers ?? systemTimers;
+    this.#clearRetryTimer();
+    this.#retryTimer = timers.setTimeout(() => {
+      this.#retryTimer = undefined;
+      this.#attemptOpen();
+    }, delay);
+  }
+
+  #clearRetryTimer(): void {
+    if (this.#retryTimer !== undefined) {
+      const timers = this.options.timers ?? systemTimers;
+      timers.clearTimeout(this.#retryTimer);
+      this.#retryTimer = undefined;
+    }
   }
 
   /**
@@ -131,6 +191,8 @@ export class HistoryStorage {
    * when the grace ran out is terminated and the close stays clean (StorageClient.close).
    */
   async close(): Promise<void> {
+    this.#closing = true;
+    this.#clearRetryTimer();
     const client = this.#client;
     if (!client) { this.#set('closed'); return; }
     const {clean} = await client.close();

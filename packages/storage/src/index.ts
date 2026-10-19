@@ -17,6 +17,7 @@ export * from './api';
 export {MIGRATIONS, APPLICATION_ID, type Migration} from './sqlite/migrations';
 export {JOURNAL_QUERIES} from './sqlite/journal';
 export type {OpenOptions, OpenTestHooks} from './sqlite/connection';
+export {REOPEN_RETRYABLE_CODES, isReopenRetryable} from './errors';
 
 function attempt<T>(body: () => T): Result<T> {
   try { return {ok: true, value: body()}; } catch (error) { return {ok: false, error: classifyError(error)}; }

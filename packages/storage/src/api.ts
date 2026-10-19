@@ -25,6 +25,7 @@ export interface StorageError {
   sqliteCode?: string; cause?: StorageErrorCode; backupFileName?: string;
 }
 export type Result<T> = {ok: true; value: T} | {ok: false; error: StorageError};
+export {REOPEN_RETRYABLE_CODES, isReopenRetryable} from './errors';
 
 /** Read back on every writer open; a write is refused unless every value matched. */
 export interface Durability {journalMode: 'wal'; synchronous: 'full'; lockingMode: 'exclusive'; foreignKeys: true}
