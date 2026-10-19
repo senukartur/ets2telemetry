@@ -720,7 +720,7 @@ The card stays in Review. These gaps remain open and are recorded, not fixed. TD
 - TD-016: a replayed gap's stale checkpoint;
 - TD-017: coverage-guided and native fuzzing;
 - TD-018: a broker that exits mid-session is not restarted;
-- TD-019: stale discovery records accumulate, so after enough game crashes the broker fails closed;
+- TD-019: stale discovery records accumulate, so after enough game crashes the broker fails closed (resolved on October 19, 2026 by ET-033: the broker now sweeps demonstrably stale discovery records during directory enumeration before counting live records toward the 256-entry / 128-record bounds);
 - G10: no automatic re-open of history after it stopped;
 - G18: a history close slower than the 800 ms grace is terminated and reported unclean, so the service exits 1, though nothing committed is lost;
 - G5: no service heartbeat, so a hung telemetry service keeps its last recording status;

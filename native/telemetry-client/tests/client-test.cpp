@@ -326,8 +326,196 @@ int v1_host(const fs::path& directory, const fs::path& fixtures, const std::stri
   }
   WaitForSingleObject(client.value, 10000); return silent(pipe.value, client.value) ? 0 : 1;
 }
+std::string indexed_uuid(unsigned prefix, unsigned index) {
+  char buffer[64]{};
+  std::snprintf(buffer, sizeof(buffer), "%08x-0000-4000-8000-%012x", prefix, index);
+  return std::string(buffer);
+}
+void write_discovery_record(const fs::path& directory, const Identity& identity, const std::string& recordGame, const std::string& instanceId, DWORD pid, std::uint64_t created) {
+  const auto endpoint = "\\\\.\\pipe\\ETS2Telemetry-" + recordGame + "-v0-" + identity.userTag + "-" + std::to_string(identity.session) + "-" + instanceId;
+  const auto record = Json{Json::Object{
+    {"schemaVersion", Json{1.0}},
+    {"protocolMajor", Json{0.0}},
+    {"game", Json{recordGame}},
+    {"userTag", Json{identity.userTag}},
+    {"windowsSessionId", Json{static_cast<double>(identity.session)}},
+    {"processId", Json{static_cast<double>(pid)}},
+    {"processCreationTime", Json{std::to_string(created)}},
+    {"processInstanceId", Json{instanceId}},
+    {"pluginSessionId", Json{std::string("11112233-4455-6677-8899-aabbccddeeff")}},
+    {"pipeName", Json{endpoint}}
+  }};
+  write_file(directory / (instanceId + ".json"), record, identity);
+}
+bool disable_privilege(const wchar_t* name) {
+  HANDLE raw = nullptr;
+  if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &raw)) return false;
+  Handle token(raw);
+  LUID luid{};
+  if (!LookupPrivilegeValueW(nullptr, name, &luid)) return false;
+  TOKEN_PRIVILEGES state{};
+  state.PrivilegeCount = 1;
+  state.Privileges[0].Luid = luid;
+  state.Privileges[0].Attributes = 0;
+  return AdjustTokenPrivileges(token.value, FALSE, &state, 0, nullptr, nullptr) != 0 && GetLastError() == ERROR_SUCCESS;
+}
+void set_process_dacl(HANDLE process, const wchar_t* sddl) {
+  PSECURITY_DESCRIPTOR descriptor = nullptr;
+  require(ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, SDDL_REVISION_1, &descriptor, nullptr) != 0);
+  PACL dacl = nullptr; BOOL present = FALSE, defaulted = FALSE;
+  require(GetSecurityDescriptorDacl(descriptor, &present, &dacl, &defaulted) != 0 && present);
+  const auto result = SetSecurityInfo(process, SE_KERNEL_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, nullptr, nullptr, dacl, nullptr);
+  LocalFree(descriptor);
+  require(result == ERROR_SUCCESS);
+}
+void run_stale_record_sweep_cases(const fs::path& base, const std::wstring& self, const std::wstring& broker, const fs::path& fixtures, const Identity& identity, OwnerSecurity& security) {
+  const auto diagnosed = [](Child& child, const std::string& stage, const std::string& error) {
+    const auto diagnostic = child.diagnostic(); std::cerr << "broker diagnostic " << diagnostic;
+    return std::regex_search(diagnostic, std::regex("(^|\n)diag1 " + stage + " " + error + " [0-9]{1,10} [a-z-]{1,24} [0-9]{1,10}\n$"));
+  };
+  const auto noOutput = [](Child& child) {DWORD available = 0; const auto peeked = PeekNamedPipe(child.output.value, nullptr, 0, nullptr, &available, nullptr); return (peeked || GetLastError() == ERROR_BROKEN_PIPE) && available == 0;};
+  const auto makeTransportDir = [&](const wchar_t* name) {
+    const auto directory = base / name / "transport" / "v0";
+    fs::create_directory(directory.parent_path().parent_path());
+    require(CreateDirectoryW(directory.parent_path().c_str(), &security.attributes) != 0);
+    require(CreateDirectoryW(directory.c_str(), &security.attributes) != 0);
+    return directory;
+  };
+  // 1) >256 stale discovery records (260 across ets2 and ats: non-existent PID, reused accessible PID, and exited process handle) plus 1 live Server record.
+  {
+    const auto directory = makeTransportDir(L"sweep-260");
+    Child exitedChild(self, L"--verify-cases \"" + wide(case_list()) + L"\"");
+    require(exitedChild.wait() == 0);
+    const auto exitedCreation = creation(exitedChild.process.value);
+    const auto selfCreation = creation(GetCurrentProcess());
+    Child server(self, L"--host \"" + directory.wstring() + L"\" \"" + fixtures.wstring() + L"\" valid");
+    require(parse(read_frame(server.output.value)).at("type").string() == "ready");
+    for (unsigned index = 0; index < 260; ++index) {
+      const auto id = indexed_uuid(0xdead0001u, index);
+      const std::string recGame = (index % 2 == 0) ? "ets2" : "ats";
+      if (index % 3 == 0) write_discovery_record(directory, identity, recGame, id, MAXDWORD, selfCreation);
+      else if (index % 3 == 1) write_discovery_record(directory, identity, recGame, id, GetCurrentProcessId(), selfCreation - 1);
+      else write_discovery_record(directory, identity, recGame, id, exitedChild.pid, exitedCreation);
+    }
+    Child client(broker, L"--game ets2 --discovery-dir \"" + directory.wstring() + L"\"");
+    const auto authority = parse(read_frame(client.output.value));
+    require(authority.at("type").string() == "authority" && integer(authority.at("source").at("processId")) == server.pid);
+    auto hello = v0::encode_frame(v0::decode_payload(file_bytes(fixtures / "hello.json")));
+    stdio_io(client.input.value, hello.data(), static_cast<DWORD>(hello.size()), true);
+    unsigned char credit = 1;
+    stdio_io(client.input.value, &credit, 1, true);
+    auto welcome = v0::decode_payload(read_frame(client.output.value));
+    require(welcome.kind == "welcome");
+    stdio_io(client.input.value, &credit, 1, true);
+    auto checkpoint = v0::decode_payload(read_frame(client.output.value));
+    v0::Consumer consumer(false); consumer.accept(welcome); require(consumer.accept(checkpoint)->hydration);
+    client.eof(); require(client.wait() == 3); require(server.wait() == 0);
+    for (unsigned index = 0; index < 260; ++index) {
+      require(!fs::exists(directory / (indexed_uuid(0xdead0001u, index) + ".json")));
+    }
+    require(fs::exists(directory / "00112233-4455-6677-8899-aabbccddeeff.json"));
+  }
+  // 2) Reused inaccessible PID (ERROR_ACCESS_DENIED) via a controlled child process with a restricted SE_KERNEL_OBJECT DACL:
+  //    unowned stale record is swept; locked record (no FILE_SHARE_DELETE) or matching live creation time fails closed at stage=server-process.
+  {
+    // If running under an elevated token (e.g. administrator on CI or local dev), disable SeDebugPrivilege
+    // so OpenProcess respects the kernel object's DACL instead of bypassing access checks.
+    disable_privilege(L"SeDebugPrivilege");
+
+    Child deniedHolder(self, L"--hold");
+    require(parse(read_frame(deniedHolder.output.value)).at("type").string() == "ready");
+    const DWORD deniedPid = deniedHolder.pid;
+    const auto actualCreation = creation(deniedHolder.process.value);
+    const auto staleCreation = actualCreation - 1;
+
+    set_process_dacl(deniedHolder.process.value, L"D:P(D;;0x101000;;;WD)");
+    const auto checkBoth = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, deniedPid);
+    const auto checkBothErr = GetLastError();
+    if (checkBoth) CloseHandle(checkBoth);
+    require(!checkBoth && checkBothErr == ERROR_ACCESS_DENIED);
+    const auto checkLimited = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, deniedPid);
+    const auto checkLimitedErr = GetLastError();
+    if (checkLimited) CloseHandle(checkLimited);
+    require(!checkLimited && checkLimitedErr == ERROR_ACCESS_DENIED);
+
+    const auto sweepDir = makeTransportDir(L"sweep-access-denied");
+    Child server(self, L"--host \"" + sweepDir.wstring() + L"\" \"" + fixtures.wstring() + L"\" valid");
+    require(parse(read_frame(server.output.value)).at("type").string() == "ready");
+    const std::string staleDeniedId = "33112233-4455-6677-8899-aabbccddeeff";
+    write_discovery_record(sweepDir, identity, "ets2", staleDeniedId, deniedPid, staleCreation);
+    Child client(broker, L"--game ets2 --discovery-dir \"" + sweepDir.wstring() + L"\"");
+    const auto authority = parse(read_frame(client.output.value));
+    require(authority.at("type").string() == "authority" && integer(authority.at("source").at("processId")) == server.pid);
+    auto hello = v0::encode_frame(v0::decode_payload(file_bytes(fixtures / "hello.json")));
+    stdio_io(client.input.value, hello.data(), static_cast<DWORD>(hello.size()), true);
+    unsigned char credit = 1;
+    stdio_io(client.input.value, &credit, 1, true);
+    auto welcome = v0::decode_payload(read_frame(client.output.value));
+    require(welcome.kind == "welcome");
+    stdio_io(client.input.value, &credit, 1, true);
+    auto checkpoint = v0::decode_payload(read_frame(client.output.value));
+    v0::Consumer consumer(false); consumer.accept(welcome); require(consumer.accept(checkpoint)->hydration);
+    client.eof(); require(client.wait() == 3); require(server.wait() == 0);
+    require(!fs::exists(sweepDir / (staleDeniedId + ".json")));
+    require(fs::exists(sweepDir / "00112233-4455-6677-8899-aabbccddeeff.json"));
+
+    const auto lockedDir = makeTransportDir(L"locked-access-denied");
+    const std::string lockedDeniedId = "44112233-4455-6677-8899-aabbccddeeff";
+    write_discovery_record(lockedDir, identity, "ets2", lockedDeniedId, deniedPid, staleCreation);
+    const auto lockedPath = lockedDir / (lockedDeniedId + ".json");
+    Handle heldWithoutShareDelete(CreateFileW(lockedPath.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+    Child lockedClient(broker, L"--game ets2 --discovery-dir \"" + lockedDir.wstring() + L"\"", true);
+    lockedClient.eof();
+    require(lockedClient.wait() == 1 && diagnosed(lockedClient, "server-process", "5") && noOutput(lockedClient) && fs::exists(lockedPath));
+
+    set_process_dacl(deniedHolder.process.value, L"D:P(D;;0x100000;;;WD)(A;;0x1000;;;WD)");
+    const auto checkSync = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, deniedPid);
+    const auto checkSyncErr = GetLastError();
+    if (checkSync) CloseHandle(checkSync);
+    require(!checkSync && checkSyncErr == ERROR_ACCESS_DENIED);
+    const auto checkQuery = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, deniedPid);
+    require(checkQuery != nullptr);
+    CloseHandle(checkQuery);
+
+    const auto liveDeniedDir = makeTransportDir(L"live-access-denied");
+    const std::string liveDeniedId = "55112233-4455-6677-8899-aabbccddeeff";
+    write_discovery_record(liveDeniedDir, identity, "ets2", liveDeniedId, deniedPid, actualCreation);
+    const auto liveDeniedPath = liveDeniedDir / (liveDeniedId + ".json");
+    Child liveDeniedClient(broker, L"--game ets2 --discovery-dir \"" + liveDeniedDir.wstring() + L"\"", true);
+    liveDeniedClient.eof();
+    require(liveDeniedClient.wait() == 1 && diagnosed(liveDeniedClient, "server-process", "5") && noOutput(liveDeniedClient) && fs::exists(liveDeniedPath));
+
+    deniedHolder.eof();
+    require(deniedHolder.wait() == 0);
+  }
+  // 3) >256 non-record entries and >128 live records still fail closed at stage=discovery.
+  {
+    const auto nonRecordDir = makeTransportDir(L"limit-non-records");
+    for (unsigned index = 0; index < 257; ++index) {
+      write_file(nonRecordDir / ("non-record-" + std::to_string(index) + ".txt"), Json{Json::Object{{"index", Json{static_cast<double>(index)}}}}, identity);
+    }
+    Child nonRecordClient(broker, L"--game ets2 --discovery-dir \"" + nonRecordDir.wstring() + L"\"", true);
+    nonRecordClient.eof();
+    require(nonRecordClient.wait() == 1 && diagnosed(nonRecordClient, "discovery", "[0-9]{1,10}") && noOutput(nonRecordClient));
+
+    const auto liveRecordDir = makeTransportDir(L"limit-live-records");
+    const auto selfCreation = creation(GetCurrentProcess());
+    for (unsigned index = 0; index < 129; ++index) {
+      write_discovery_record(liveRecordDir, identity, "ats", indexed_uuid(0xbeef0001u, index), GetCurrentProcessId(), selfCreation);
+    }
+    Child liveRecordClient(broker, L"--game ets2 --discovery-dir \"" + liveRecordDir.wstring() + L"\"", true);
+    liveRecordClient.eof();
+    require(liveRecordClient.wait() == 1 && diagnosed(liveRecordClient, "discovery", "[0-9]{1,10}") && noOutput(liveRecordClient));
+  }
+}
 int wmain(int argc, wchar_t** argv) {
   try {
+    if (argc == 2 && std::wstring(argv[1]) == L"--hold") {
+      receipt(Json{Json::Object{{"type", Json{std::string("ready")}}}});
+      Credits cancellation;
+      WaitForSingleObject(cancellation.cancelled.value, fixtureWaitMs);
+      return 0;
+    }
     if (argc == 4 && std::wstring(argv[1]) == L"--discovery-case") {
       discoveryCase = utf8(argv[3]);
       wchar_t* arguments[] = {argv[0], const_cast<wchar_t*>(L"--game"), const_cast<wchar_t*>(L"ets2"), const_cast<wchar_t*>(L"--discovery-dir"), argv[2]};
@@ -389,7 +577,7 @@ int wmain(int argc, wchar_t** argv) {
       std::cerr << "host ready\n";
       Child client(broker, L"--game ets2 --discovery-dir \"" + directory.wstring() + L"\"");
       const std::string scenario(mode);
-      if (scenario == "creation" || scenario == "dead") {require(parse(read_frame(client.output.value)).at("type").string() == "waiting"); require(client.wait() == 2); server.eof(); require(server.wait() == 0); continue;}
+      if (scenario == "creation" || scenario == "dead") {require(parse(read_frame(client.output.value)).at("type").string() == "waiting"); require(client.wait() == 2); require(!fs::exists(directory / "00112233-4455-6677-8899-aabbccddeeff.json")); server.eof(); require(server.wait() == 0); continue;}
       if (scenario == "collision" || scenario == "session" || scenario == "malformed" || scenario == "dacl") {client.eof(); require(client.wait() == 1); server.eof(); require(server.wait() == 0); continue;}
       const auto authority = parse(read_frame(client.output.value)); require(authority.at("type").string() == "authority"); require(integer(authority.at("source").at("processId")) == server.pid);
       std::cerr << "authority received\n";
@@ -417,6 +605,11 @@ int wmain(int argc, wchar_t** argv) {
         require(server.wait() == 0); continue;
       }
       client.eof(); require(client.wait() == 3); require(server.wait() == 0);
+      if (scenario == "dead-live") run_stale_record_sweep_cases(base, self, broker, fixtures, identity, security);
+      if (scenario == "stale-live" || scenario == "dead-live") {
+        require(!fs::exists(directory / "22112233-4455-6677-8899-aabbccddeeff.json"));
+        require(fs::exists(directory / "00112233-4455-6677-8899-aabbccddeeff.json"));
+      }
     }
     // CAP0 broker mode: same authority checks, separate keyed endpoint, marked receipt and CAP0-only hello.
     for (const auto* mode : captureCases) {

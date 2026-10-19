@@ -226,17 +226,13 @@ The documented recovery rules make exit 1 after an authority receipt final: tele
 
 **Until then:** a broker that exits mid-session stays final until the next selection, as documented. No product change is authorized by this entry.
 
-## TD-019: Stale discovery records accumulate
+## TD-019: Stale discovery records accumulate (resolved by ET-033)
 
-Recorded October 19, 2026 by the coordinator with ET-019 PR-8 ([finding](validation/et-019.md#pr-8-findings)). **This entry is a coordinator decision under the owner's standing delegation of October 15, 2026, not an individually owner-approved deferral.** The owner may revise it.
+Recorded October 19, 2026 by the coordinator with ET-019 PR-8 ([finding](validation/et-019.md#pr-8-findings)). **This entry was a coordinator decision under the owner's standing delegation of October 15, 2026.** Resolved October 19, 2026 by ET-033.
 
-A crashed or killed game leaves its v0 and v1 discovery records behind. `native/telemetry-plugin/src/pipe-discovery.cpp` removes only its own record, in its destructor, and the client does not delete records ([native transport boundary](native-transport-boundary-v0.md#discovery-and-service-policy)). `native/telemetry-client/src/client.cpp` counts every UUID-named `.json` record before the game filter and the liveness check, and fails closed above 128 records or 256 directory entries. After enough crashes in one profile, every broker run would fail, also for the v0 overlay, and only an uninstall or a manual delete recovers. This was read from the code, not executed; PR-8 observed only that a killed host's v1 record stays.
+A crashed or killed game leaves its v0 and v1 discovery records behind. Before ET-033, `native/telemetry-plugin/src/pipe-discovery.cpp` removed only its own record in its destructor, the client never deleted records, and `native/telemetry-client/src/client.cpp` counted every UUID-named `.json` record before the game filter and the liveness check, failing closed above 128 records or 256 directory entries; a reused PID whose `OpenProcess` returned `ERROR_ACCESS_DENIED` also failed discovery closed.
 
-A possible amplification, unverified: when a stale record's process ID has been reused, an `OpenProcess` error other than `ERROR_INVALID_PARAMETER` (for example access denied for another user's or an elevated process) is a hard discovery failure rather than a skipped record.
-
-**Future work:**
-- Sweep records whose process is demonstrably gone, or stop counting them toward the limit, without weakening the ownership, ACL and reparse checks.
-- Decide how a reused process ID of a stale record is treated.
-- Add a test with more than 128 stale records and one live record.
-
-**Until then:** stale records stay until an uninstall or a manual delete. No native change is authorized by this entry.
+**Resolution (ET-033, October 19, 2026):**
+- During directory enumeration, `native/telemetry-client/src/client.cpp` validates all ten record fields for both `ets2` and `ats`, checks process liveness before counting records toward the 256-entry / 128-record bounds, and sweeps demonstrably stale records via `sweep_stale_record` (`CreateFileW` with `DELETE | READ_CONTROL`, `FILE_SHARE_READ | FILE_SHARE_DELETE`, and `FILE_FLAG_OPEN_REPARSE_POINT`, tolerating `ERROR_FILE_NOT_FOUND`, `ERROR_DELETE_PENDING`, and `ERROR_SHARING_VIOLATION`, then `SetFileInformationByHandle(FileDispositionInfo)`) while preserving ownership, ACL, reparse and `BY_HANDLE_FILE_INFORMATION` identity checks ([native transport boundary](native-transport-boundary-v0.md#discovery-and-service-policy)).
+- When `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, pid)` returns `ERROR_ACCESS_DENIED` on a reused PID, the broker probes `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid)` + `GetProcessTimes` (failing closed if that process is still live with the recorded `processCreationTime`, or sweeping immediately if that open returns `ERROR_INVALID_PARAMETER`) and then sweeps the record only when **both** the derived pipe endpoint does not exist (`WaitNamedPipeW` returns `ERROR_FILE_NOT_FOUND`) **and** `sweep_stale_record` succeeds; otherwise it fails closed at stage `server-process`.
+- Covered by `native-pipe-client-{creation,dead,stale-live,dead-live}` (including 260 stale records alongside one live server, reused inaccessible PIDs, >256 non-record entries and >128 live records) and `tests/integration/v1-chain-process-death.test.ts` case 2.
