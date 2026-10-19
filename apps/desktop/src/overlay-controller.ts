@@ -179,6 +179,7 @@ export class OverlayController {
   }
   /** Hides first; an interactive edit overlay then becomes click-through, non-focusable and non-movable again. */
   private hide(): void {
+    if (!this.visible && !this.interactive) return;
     this.visible = false; this.moving = false; this.window.hide();
     if (!this.interactive) return;
     this.interactive = false;

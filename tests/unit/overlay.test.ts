@@ -313,7 +313,7 @@ it('never shows or raises a hidden overlay when the layout changes', () => {
   metadata.value.foreground = false; overlay.loaded(true); overlay.update(current);
   overlay.setLayout('hud'); overlay.setLayout('cluster');
   expect(window.showInactive).not.toHaveBeenCalled(); expect(window.moveTop).not.toHaveBeenCalled(); expect(window.setAlwaysOnTop).not.toHaveBeenCalled();
-  expect(window.setBounds).not.toHaveBeenCalled(); expect(window.hide).toHaveBeenCalled();
+  expect(window.setBounds).not.toHaveBeenCalled(); expect(window.hide).not.toHaveBeenCalled();
 });
 it('hides when the chosen layout does not fit the client area and shows again when one fits', () => {
   // 1920 x 700 physical is 960 x 350 DIP: the strip and cluster (299 DIP) fit; the card (416 DIP) and HUD (386 DIP) do
@@ -588,7 +588,7 @@ it('never shows, raises or moves a hidden strip when the saved sections change',
   overlay.setLayout('strip', DEFAULT_OVERLAY_PLACEMENTS.strip, OVERLAY_PRESETS['driving-only']);
   overlay.setLayout('strip', DEFAULT_OVERLAY_PLACEMENTS.strip, OVERLAY_PRESETS['job-focus']);
   expect(window.showInactive).not.toHaveBeenCalled(); expect(window.moveTop).not.toHaveBeenCalled(); expect(window.setAlwaysOnTop).not.toHaveBeenCalled();
-  expect(window.setBounds).not.toHaveBeenCalled(); expect(window.hide).toHaveBeenCalled();
+  expect(window.setBounds).not.toHaveBeenCalled(); expect(window.hide).not.toHaveBeenCalled();
   // Back in front, the strip shows once at the latest sections' size. Job-focus at 928 (inner 902) needs three rows:
   // tags, speed, gear and fuel = 668 (cargo would reach 982); cargo, destination and distance remaining = 778 (deadline
   // would reach 1012); deadline. 36 × 3 + 2 = 110.
@@ -660,7 +660,7 @@ it('never shows, raises or moves a hidden card when the saved sections change', 
   overlay.setLayout('card', DEFAULT_OVERLAY_PLACEMENTS.card, OVERLAY_PRESETS['driving-only']);
   overlay.setLayout('card', DEFAULT_OVERLAY_PLACEMENTS.card, DEFAULT_OVERLAY_SECTIONS);
   expect(window.showInactive).not.toHaveBeenCalled(); expect(window.moveTop).not.toHaveBeenCalled(); expect(window.setAlwaysOnTop).not.toHaveBeenCalled();
-  expect(window.setBounds).not.toHaveBeenCalled(); expect(window.hide).toHaveBeenCalled();
+  expect(window.setBounds).not.toHaveBeenCalled(); expect(window.hide).not.toHaveBeenCalled();
 });
 it('moves the top edge of a bottom-anchored cluster when saved sections change its height', () => {
   const {window, overlay} = controller('cluster'); overlay.loaded(true); overlay.update(live());
@@ -680,4 +680,51 @@ it.each(['card', 'cluster', 'hud'] as const)('keeps the %s rectangle while only 
   }
   expect(window.setBounds).toHaveBeenCalledOnce(); expect(screen.screenToDipRect).toHaveBeenCalledOnce();
   expect(window.showInactive).toHaveBeenCalledOnce(); expect(window.setAlwaysOnTop).toHaveBeenCalledOnce();
+});
+
+// ET-035: hide idempotency prevents redundant BrowserWindow.hide() dispatches at 20 Hz when game metadata is absent or unready.
+it('never calls window.hide() when update() is called repeatedly with unavailable game metadata while hidden', () => {
+  const {window, overlay} = controller(), current = live();
+  current.observation!.state.window = {available: false, reason: 'not-observed'};
+  overlay.loaded(true);
+  for (let i = 0; i < 20; i++) {
+    overlay.update(current);
+  }
+  expect(window.hide).not.toHaveBeenCalled();
+  expect(window.showInactive).not.toHaveBeenCalled();
+});
+it('calls window.hide() exactly once when transitioning from visible to hidden, and ignores subsequent updates while hidden', () => {
+  const {window, overlay} = controller(), current = live();
+  const metadata = current.observation!.state.window;
+  if (!metadata.available) throw new Error('Expected metadata');
+  overlay.loaded(true);
+  overlay.update(current);
+  expect(window.showInactive).toHaveBeenCalledOnce();
+  expect(window.hide).not.toHaveBeenCalled();
+
+  metadata.value.foreground = false;
+  overlay.update(current);
+  expect(window.hide).toHaveBeenCalledOnce();
+
+  for (let i = 0; i < 20; i++) {
+    overlay.update(current);
+  }
+  expect(window.hide).toHaveBeenCalledOnce();
+});
+it('transitions to hidden and resets interactivity flags once on ending edit mode, ignoring subsequent redundant hide requests', () => {
+  const tracked = trackedController();
+  editing(tracked);
+  tracked.calls.length = 0;
+
+  tracked.overlay.endEdit();
+  expect(tracked.calls).toEqual(['hide', 'setMovable(false)', 'setIgnoreMouseEvents(true)', 'setFocusable(false)', 'setSkipTaskbar(true)']);
+  expect(tracked.state.visible).toBe(false);
+
+  tracked.calls.length = 0;
+  tracked.metadata.foreground = false;
+  for (let i = 0; i < 20; i++) {
+    tracked.overlay.update(tracked.current);
+  }
+  tracked.overlay.setLayout('strip');
+  expect(tracked.calls).toEqual([]);
 });
