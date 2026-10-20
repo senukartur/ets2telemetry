@@ -2525,3 +2525,22 @@ it('wires the orchestrator to plugin setup: suspend, resume (after a removal rac
   expect(appUninstallFake.ports.setup.targetIdFor('ets2', 'C:\\Games\\ETS2')).toBe('ets2:steam:0');
   expect(pluginSetup.suspend).toHaveBeenCalledOnce(); expect(pluginSetup.resume).toHaveBeenCalledOnce();
 });
+
+it('limits Hard Mode status/refresh to the trusted dashboard with no arguments, validates service status and expires it', async () => {
+  await ready(); const {evaluateHardMode, parseHardModeConfig} = await import('../../packages/telemetry-core/src/hard-mode');
+  const {HARD_MODE_CONFIG} = await import('../shared/hard-mode');
+  const status = {assessment: evaluateHardMode(parseHardModeConfig(HARD_MODE_CONFIG), Date.now(), 'fixture'), trip: null};
+  child.emit('message', {type: 'hard-mode', status});
+  expect(handlers.get('hard-mode:status')!(trusted())).toEqual(status);
+  handlers.get('hard-mode:refresh')!(trusted()); expect(child.postMessage).toHaveBeenCalledWith({type: 'hard-mode-refresh'});
+  for (const name of ['hard-mode:status', 'hard-mode:refresh']) {
+    const handler = handlers.get(name)!;
+    expect(() => handler({sender: overlayContents, senderFrame: overlayContents.mainFrame})).toThrow('Untrusted');
+    expect(() => handler({sender: contents, senderFrame: {}})).toThrow('Untrusted');
+    expect(() => handler(trusted(), {path: 'private', state: 'pass'})).toThrow('Untrusted');
+  }
+  await vi.advanceTimersByTimeAsync(3001);
+  expect(handlers.get('hard-mode:status')!(trusted())).toMatchObject({assessment: {state: 'unknown'}});
+  child.emit('message', {type: 'hard-mode', status: {...status, filename: 'private'}});
+  expect(handlers.get('hard-mode:status')!(trusted())).toMatchObject({assessment: {state: 'unknown'}});
+});

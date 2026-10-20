@@ -234,6 +234,8 @@ export class HistoryStorage {
 export function recorderClient(storage: {readonly client: StorageClient | undefined}): TripRecorderClient {
   const closed = () => Promise.resolve({ok: false as const, error: storageError('STORAGE_CLOSED')});
   return {
+    observeHardMode: (game, observation) => storage.client?.observeHardMode(game, observation) ?? closed(),
+    getTrip: uuid => storage.client?.getTrip(uuid) ?? closed(),
     upsertSession: input => storage.client?.upsertSession(input) ?? closed(),
     committedThrough: session => storage.client?.committedThrough(session) ?? closed(),
     commitEvent: input => storage.client?.commitEvent(input) ?? closed(),

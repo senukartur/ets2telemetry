@@ -359,3 +359,15 @@ Each runtime smoke scenario runs once per mode through `./scripts/ci/Invoke-Runt
 - **No same-title, same-layer duplicate.** The only case title repeated within a layer is the `bounded framing` describe block of `protocol-v0.test.ts` and `protocol-v1.test.ts`, which test different protocols.
 - **Coverage gaps, report only.** REG-015 had no executable test; ET-017 PR-1 added partial bundle-identity protection (`plugin-bundle-stage.test.ts`), and PR-2 partial discovery and folder-validation protection (`steam-vdf`, `steam-discovery`, `game-folder`, `steam-registry` and `game-processes`, with the `guarded-fs` harness), and PR-3 partial installer and registry protection (`plugin-registry`, `plugin-installer` and the `plugin-image-lock` integration check). REG-018 covers database size only. REG-002 still has its trip-level pause outcome pending. REG-012, REG-014 and REG-016 keep runtime-only gaps: the real notification area, the real Save dialog and real-game overlay behavior.
 - `tests/electron/startup.spec.ts` stays: the owner decided on October 17, 2026 (Q2) to keep it and `npm run test:electron`, although the `scaffold` runtime smoke covers similar ground ([ET-019t validation](validation/et-019t.md)).
+
+## ET-026 Hard Mode
+
+| Scenarios | Protection | Evidence |
+| --- | --- | --- |
+| REG-009/010 | Twelve independent violations, unavailable/conflicting/malformed values, exact booleans/tolerance and strict reply shapes | `tests/unit/hard-mode.test.ts`, main/preload tests |
+| REG-008/010/011 | Local/Cloud matching, ordered generations, stale markers, wrong process/log, bounded stable bytes, redirects, coalescing/deadline | `tests/unit/hard-mode-reader.test.ts` |
+| REG-001/003/004/005/006/007/008 | Manual delivered qualification, unknown/failure/source loss, first-loss value, retry/duplicate/cold interruption and historical exclusion | `tests/storage/hard-mode.test.ts`, `hard-mode-integrity.test.ts` |
+| REG-013 | Frozen v1/v2 preservation, false/null defaults, partial migration rollback and verified backup reuse | `tests/storage/hard-mode-migrations.test.ts`, existing frozen-fixture suites |
+| REG-014/017 | Production reader through persisted trip, DOM states/checklist/focus, journal badge/export 2 | Bounded development/packaged `hard-mode` journey |
+
+Historical format-1 export examples/validation remain protected. Real ATS/TruckersMP/profile/process replacement, OneDrive placeholders, persisted timing of other settings, real positive trips and performance remain unverified under the approved observed-settings model. Actual Expert placement is not claimed, and game history remains disabled.

@@ -111,7 +111,7 @@ export function expectRepresentative(storage: Storage, file: string, rowCountCha
   // ET-016 PR-6: TripRecord gained fuelUsedL after this immutable expectation was written. A version 1 trip has no fuel
   // used, and migration 0002 stores `not-observed` for it (docs/storage.md, schema version 2). ET-016 PR-7: TripRecord also
   // gained where its job and opening came from; every version 1 trip opened at its job.configured event.
-  expect(ok(storage.listTrips()).trips).toEqual((expected.trips as object[]).map(trip => ({...trip, fuelUsedL: {available: false, reason: 'not-observed'}, ...EVENT_OPENED})));
+  expect(ok(storage.listTrips()).trips).toEqual((expected.trips as object[]).map(trip => ({...trip, isHardMode: false, hardModeDetails: null, fuelUsedL: {available: false, reason: 'not-observed'}, ...EVENT_OPENED})));
   expect(ok(storage.listSamples({pluginSessionId: P1}))).toEqual(expected.samples);
   storage.close();
   readOnly(file, db => {
@@ -138,23 +138,24 @@ export function readVersion1(copy: string) {
  * from readVersion1 and against the pre-migration backup at `backup` with its manifest.
  */
 export function expectMigratedFromVersion1(storage: Storage, copy: string, {original, v1Jobs, v1Trips, v1Referencing}: ReturnType<typeof readVersion1>, backup: string) {
-  const backupName = path.basename(backup);
-  expectRepresentative(storage, copy, {schema_migrations: 2});
+  const backupName = path.basename(backup), version = storage.summary.schemaVersion;
+  expectRepresentative(storage, copy, {schema_migrations: version});
   // The backup is the version 1 content, byte-for-byte in logical terms, with a manifest written last.
   expect(digestOf(backup)).toEqual(original);
   const manifest = JSON.parse(readFileSync(backup.replace(/\.sqlite$/, '.json'), 'utf8'));
   expect(manifest).toMatchObject({format: 'ets2telemetry-backup-1', databaseUuid: 'f0000000-0000-4000-8000-000000000001', fromVersion: 1, fileName: backupName,
     fileSha256: sha256(backup), logicalDigest: original.logicalDigest, rowCounts: original.rowCounts, reason: 'pre-migration'});
   const recorded = readOnly(copy, db => db.prepare('SELECT version, name, backup_file_name, backup_sha256 FROM schema_migrations ORDER BY version').all());
-  expect(recorded).toEqual([{version: 1, name: '0001-initial', backup_file_name: null, backup_sha256: null}, {version: 2, name: '0002-journal', backup_file_name: backupName, backup_sha256: manifest.fileSha256}]);
-  expect(digestOf(copy).userVersion).toBe(2);
+  expect(recorded).toEqual([{version: 1, name: '0001-initial', backup_file_name: null, backup_sha256: null}, {version: 2, name: '0002-journal', backup_file_name: backupName, backup_sha256: manifest.fileSha256},
+    ...(version >= 3 ? [{version: 3, name: '0003-hard-mode', backup_file_name: backupName, backup_sha256: manifest.fileSha256}] : [])]);
+  expect(digestOf(copy).userVersion).toBe(version);
   readOnly(copy, db => {
     // The cancelled trip of version 1 keeps every column, opened at an event, has no recorded carrier, and its fuel
     // used was never observed.
     expect(db.prepare('SELECT id, opened_event_ref, opened_by, fuel_used_l, fuel_used_l_state, closed_by_session_ref, closed_by_event_seq FROM trips').all())
       .toEqual([{id: 1, opened_event_ref: 1, opened_by: 'event', fuel_used_l: null, fuel_used_l_state: 'not-observed', closed_by_session_ref: null, closed_by_event_seq: null}]);
     expect(db.prepare('SELECT * FROM trips ORDER BY id').all()).toEqual(v1Trips.map(row => ({...row as object, opened_by: 'event', fuel_used_l: null,
-      fuel_used_l_state: 'not-observed', closed_by_session_ref: null, closed_by_event_seq: null})));
+      fuel_used_l_state: 'not-observed', closed_by_session_ref: null, closed_by_event_seq: null, ...(version >= 3 ? {is_hard_mode: 0, hard_mode_details: null} : {})})));
     REFERENCING.forEach((table, index) => expect(db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all(), table).toEqual(v1Referencing[index]));
     expect(v1Referencing.map(rows => rows.length)).toEqual([1, 4, 1, 3]);
     // The job configuration keeps every version 1 column and comes from event 1 of session 1.

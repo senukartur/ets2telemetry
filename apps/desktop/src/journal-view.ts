@@ -44,7 +44,7 @@ export interface JournalSection {id: string; title: string; fields: JournalField
 export interface JournalBadge {text: string; variant: 'secondary' | 'destructive' | 'outline'}
 
 export interface JournalTripRow {
-  tripUuid: string; gameId: JournalGame; started: string; game: string; route: string; cargo: string;
+  tripUuid: string; isHardMode: boolean; gameId: JournalGame; started: string; game: string; route: string; cargo: string;
   /** `Delivered`, `Cancelled`, `In progress` or `No outcome — <why it closed>`. */
   outcome: string;
   /** Recording completeness, always shown as its own badge. */
@@ -145,7 +145,7 @@ function tripRow(trip: JournalTripListItem, options: JournalTextOptions): Journa
   const units = unitsFor(trip.game, options);
   return {
     tripUuid: trip.tripUuid, gameId: trip.game, started: localTime(trip.startedUtcMs, options.timeZone), game: JOURNAL_GAME_TEXT[trip.game], route: routeText(trip.job),
-    cargo: nameOf(trip.job.cargo), outcome: outcomeText(trip), completeness: completenessBadge(trip.recordingCompleteness),
+    isHardMode: trip.isHardMode, cargo: nameOf(trip.job.cargo), outcome: outcomeText(trip), completeness: completenessBadge(trip.recordingCompleteness),
     plannedDistance: show(trip.job.plannedDistance, distance(units)), observedDistance: show(trip.observedDistanceM, distance(units)),
     fuelUsed: show(trip.fuelUsedL, volume(units)), expectedIncome: show(trip.job.expectedIncome, moneyText)
   };

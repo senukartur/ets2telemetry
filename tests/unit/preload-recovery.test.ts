@@ -158,8 +158,8 @@ it('marks v1 data stale when the subscription closes or a replacement port await
   stop(); expect(vi.getTimerCount()).toBe(0);
 });
 it('preserves the frozen narrow bridge and rejects privileged source values before IPC', async () => {
-  expect(Object.isFrozen(bridge)).toBe(true); expect(Object.keys(bridge).sort()).toEqual(['beginOverlayEdit', 'choosePluginFolder', 'exitApplication', 'exportDiagnostics', 'exportJournalTrip', 'finishOverlayEdit', 'getAppState', 'getJournalTrip', 'getStatus',
-    'listJournalEvents', 'listJournalIntervals', 'listJournalSamples', 'listJournalTrips', 'openPluginFolder',
+  expect(Object.isFrozen(bridge)).toBe(true); expect(Object.keys(bridge).sort()).toEqual(['beginOverlayEdit', 'choosePluginFolder', 'exitApplication', 'exportDiagnostics', 'exportJournalTrip', 'finishOverlayEdit', 'getAppState', 'getHardModeStatus', 'getJournalTrip', 'getStatus',
+    'listJournalEvents', 'listJournalIntervals', 'listJournalSamples', 'listJournalTrips', 'openPluginFolder', 'refreshHardMode',
     'resetOverlayEditPlacement', 'retryPluginSetup', 'selectSource', 'setOverlayEditScale', 'setOverlayLayout', 'setOverlaySections', 'setPluginGameExcluded', 'setUnitProfile',
     'showPluginFile', 'subscribeAppState', 'subscribeLive', 'uninstallApplication']);
   await expect(bridge.selectSource('C:\\arbitrary.exe' as never)).rejects.toThrow('Invalid source selection');
@@ -203,7 +203,7 @@ it('appends the application state and exit methods after the original three brid
   expect(Object.keys(bridge)).toEqual(['getStatus', 'selectSource', 'subscribeLive', 'getAppState', 'subscribeAppState', 'exitApplication', 'setUnitProfile',
     'setOverlayLayout', 'setOverlaySections', 'beginOverlayEdit', 'setOverlayEditScale', 'resetOverlayEditPlacement', 'finishOverlayEdit',
     'listJournalTrips', 'getJournalTrip', 'listJournalEvents', 'listJournalIntervals', 'listJournalSamples', 'exportJournalTrip',
-    'retryPluginSetup', 'choosePluginFolder', 'setPluginGameExcluded', 'showPluginFile', 'openPluginFolder', 'exportDiagnostics', 'uninstallApplication']);
+    'retryPluginSetup', 'choosePluginFolder', 'setPluginGameExcluded', 'showPluginFile', 'openPluginFolder', 'exportDiagnostics', 'uninstallApplication', 'getHardModeStatus', 'refreshHardMode']);
 });
 it('allows one application state listener, forwards pushed state and unsubscribes once', () => {
   const listener = vi.fn(); const stop = bridge.subscribeAppState(listener);
@@ -317,4 +317,15 @@ it('invokes the diagnostics export on its fixed channel without any argument', a
   await bridge.exportDiagnostics();
   expect(ipc.invoke.mock.calls).toEqual([['diagnostics:export'], ['diagnostics:export']]);
   expect(ipc.send).not.toHaveBeenCalled();
+});
+
+// ET-026: no caller-supplied path or evaluator value crosses the new read-only boundary.
+it('validates Hard Mode replies and rejects every supplied argument before IPC', async () => {
+  const {unknownHardMode} = await import('../../packages/telemetry-core/src/hard-mode');
+  const status = {assessment: unknownHardMode(Date.now()), trip: null}; ipc.invoke.mockResolvedValue(status);
+  await expect(bridge.getHardModeStatus()).resolves.toEqual(status); await expect(bridge.refreshHardMode()).resolves.toEqual(status);
+  expect(ipc.invoke.mock.calls).toEqual([['hard-mode:status'], ['hard-mode:refresh']]);
+  for (const method of [bridge.getHardModeStatus, bridge.refreshHardMode]) for (const argument of ['C:/private/config.cfg', {state: 'pass'}, undefined])
+    await expect(Reflect.apply(method, bridge, [argument])).rejects.toThrow('Invalid Hard Mode request');
+  ipc.invoke.mockResolvedValue({...status, filename: 'private'}); await expect(bridge.getHardModeStatus()).rejects.toThrow('Invalid Hard Mode status');
 });

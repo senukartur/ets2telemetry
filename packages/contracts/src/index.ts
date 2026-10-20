@@ -6,6 +6,7 @@ import type {AppState, DiagnosticsExportResult, OverlayEditState, OverlayLayout,
 import type {Available, LiveObservationV1, Uint64} from './protocol-v1';
 import type {JournalDatabase, JournalEventPage, JournalIntervalPage, JournalTripDetail, JournalTripPage, JournalTripsQuery} from './journal';
 import type {JournalExportResult} from './journal-export';
+import type {HardModeStatus} from './hard-mode';
 import type {AppUninstallResult} from './uninstall';
 export type SourceSelection = 'game' | 'ets2' | 'ats' | 'synthetic' | 'replay';
 /** Statuses of the v1 source; service failure and restart belong to the update that carries the projection. */
@@ -39,6 +40,8 @@ export interface LiveTelemetry {
   v1?: LiveTelemetryV1;
 }
 export interface DesktopBridge {
+  getHardModeStatus(): Promise<HardModeStatus>;
+  refreshHardMode(): Promise<HardModeStatus>;
   /** `null` while the telemetry service is not ready, for example during a supervised restart. */
   getStatus(): Promise<ScaffoldStatus | null>;
   selectSource(source: SourceSelection): Promise<void>;
@@ -194,3 +197,5 @@ export type {LiveObservationV1, LiveStateV1} from './protocol-v1';
 export * from './journal';
 export * from './journal-export';
 export * from './uninstall';
+
+export * from './hard-mode';

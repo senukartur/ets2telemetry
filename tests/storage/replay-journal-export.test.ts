@@ -165,7 +165,7 @@ function expectationsOf(s: Scenario): TripExpectation[] {
   expect(journal.trips.map(t => t.trip).sort(), `${s.id}: the journal fixture names every stored trip`).toEqual([...stored.keys()].sort());
   return journal.trips.map(t => {
     const row = stored.get(t.trip)!;
-    const listItem = {tripUuid: t.trip, game, gameMode: row.gameMode, gameModeAmbiguous: row.gameModeAmbiguous, outcome: row.outcome, closeReason: row.closeReason,
+    const listItem = {isHardMode: false, hardModeDetails: null, tripUuid: t.trip, game, gameMode: row.gameMode, gameModeAmbiguous: row.gameModeAmbiguous, outcome: row.outcome, closeReason: row.closeReason,
       recordingCompleteness: row.recordingCompleteness, startedUtcMs: row.startedUtcMs, endedUtcMs: row.endedUtcMs, observedDistanceM: row.observedDistanceM, fuelUsedL: row.fuelUsedL,
       job: expandMoney(t.job)};
     // A trip opened at an event has its job at its job configuration event; a late-attach trip (attach@<nextEventSeq>) has the checkpoint's job (J9).
@@ -202,7 +202,7 @@ async function value<T>(journal: JournalService, query: JournalQuery): Promise<T
   if (!result.ok) throw new Error(`The journal ${query.kind} read failed with ${result.code}`);
   return result.value as T;
 }
-const SYNTHETIC_V2 = {purpose: 'synthetic', schemaVersion: 2};
+const SYNTHETIC_V3 = {purpose: 'synthetic', schemaVersion: 3};
 const OUTCOMES = ['open', 'delivered', 'cancelled', 'none'] as const, COMPLETENESS = ['complete', 'partial', 'unknown'] as const, GAMES = ['ets2', 'ats'] as const;
 const withoutId = <T extends {id: string}>(rows: T[]) => rows.map(({id, ...rest}) => { void id; return rest; });
 const eventTuple = (e: {eventSeq: string; type: string; attribution: Json | null}) => [e.eventSeq, e.type, e.attribution];
@@ -212,7 +212,7 @@ const sortMoney = (totals: Json[]) => [...totals].sort((a, b) => String(a.catego
 async function expectJournal(journal: JournalService, s: Scenario, trips: TripExpectation[]) {
   const seed = s.input.seed, coverage = s.rows.coverage.committedThroughEventSeq;
   const page = await value<{database: unknown; trips: Json[]; nextCursor: string | null}>(journal, {kind: 'trips', query: {}});
-  expect(relabel(page, seed)).toEqual({database: SYNTHETIC_V2, trips: trips.map(t => t.listItem), nextCursor: null});
+  expect(relabel(page, seed)).toEqual({database: SYNTHETIC_V3, trips: trips.map(t => t.listItem), nextCursor: null});
   // Every filter, from the hand-written outcome, completeness and game of each trip (the list order is newest first).
   for (const [key, values] of [['outcome', OUTCOMES], ['completeness', COMPLETENESS], ['game', GAMES]] as const) {
     for (const v of values) {
@@ -226,7 +226,7 @@ async function expectJournal(journal: JournalService, s: Scenario, trips: TripEx
     const detail = relabel(await value<Json & {trip: Json; job: Json; truck: {eventSeq: string} | null; trailers: {items: {eventSeq: string}[]; total: number};
       outcomeDetails: {eventSeq: string; record: Json} | null; money: {incomplete: boolean; totals: Json[]; unavailable: unknown[]}; window: Json;
       intervals: {items: (Json & {id: string})[]; total: number; nextCursor: string | null}; samples: Json; exportBounds: Json}>(journal, {kind: 'trip', tripUuid}), seed);
-    expect(detail.database, t.label).toEqual(SYNTHETIC_V2);
+    expect(detail.database, t.label).toEqual(SYNTHETIC_V3);
     expect(detail.trip, t.label).toEqual(t.detailTrip);
     expect({source: detail.job.source, eventSeq: detail.job.eventSeq, checkpointNextEventSeq: detail.job.checkpointNextEventSeq}, t.label).toEqual(t.job);
     expect([detail.truck?.eventSeq ?? null, {eventSeqs: detail.trailers.items.map(i => i.eventSeq), total: detail.trailers.total}], t.label).toEqual([t.truck, t.trailers]);
@@ -274,12 +274,12 @@ async function expectExports(journal: JournalService, s: Scenario, trips: TripEx
     const raw = JSON.parse(readFileSync(target, 'utf8')) as unknown;
     expect(tripExportProblems(raw), t.label).toEqual([]);
     const document = relabel(raw as ExportDocument, seed);
-    expect([document.header.database, document.header.sessionOrigin], t.label).toEqual([{...SYNTHETIC_V2, uuid: expect.any(String) as string}, 'synthetic']);
+    expect([document.header.database, document.header.sessionOrigin], t.label).toEqual([{...SYNTHETIC_V3, uuid: expect.any(String) as string}, 'synthetic']);
     expect(document.bounds, t.label).toMatchObject({committedThroughEventSeq: coverage, snapshot: t.listItem.outcome === 'open'});
     expect([document.bounds.lastSampleId === null, document.bounds.lastIntervalId === null], t.label).toEqual([t.samples.length === 0, t.intervals.length === 0]);
     // The export's trip block is the detail's trip without the list's job summary (docs/journal-export.md).
-    const {job: summary, ...trip} = t.detailTrip; void summary;
-    expect(document.trip, t.label).toEqual(trip);
+    const {job: summary, isHardMode, hardModeDetails, ...trip} = t.detailTrip; void summary;
+    expect(document.trip, t.label).toEqual({is_hard_mode: isHardMode, hard_mode_details: hardModeDetails, ...trip});
     expect({source: document.job.source, eventSeq: document.job.eventSeq, checkpointNextEventSeq: document.job.checkpointNextEventSeq}, t.label).toEqual(t.job);
     expect([document.truck?.eventSeq ?? null, {eventSeqs: document.trailers.items.map(i => i.eventSeq), total: document.trailers.total}], t.label).toEqual([t.truck, t.trailers]);
     if (t.outcome === null) expect(document.outcomeDetails, t.label).toBeNull();

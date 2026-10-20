@@ -10,7 +10,7 @@ export const SESSION = '10000000-0000-4000-8000-000000000001';
 export const CLOCK = '2c000000-0000-4000-8000-00000000000a';
 export const DATABASE = {purpose: 'synthetic', schemaVersion: 2};
 const NO = {available: false, reason: 'not-observed'} as const;
-export const LIST_ITEM = {tripUuid: TRIP, game: 'ets2', gameMode: {mode: 'unknown', method: 'none', confidence: 'none'}, gameModeAmbiguous: false, outcome: 'open', closeReason: null,
+export const LIST_ITEM = {isHardMode: false, hardModeDetails: null, tripUuid: TRIP, game: 'ets2', gameMode: {mode: 'unknown', method: 'none', confidence: 'none'}, gameModeAmbiguous: false, outcome: 'open', closeReason: null,
   recordingCompleteness: 'partial', startedUtcMs: 1_791_676_800_000, endedUtcMs: null, observedDistanceM: {available: true, value: 0}, fuelUsedL: NO,
   job: {source: 'event', sourceCity: {available: true, value: 'Synthetic City A'}, sourceCompany: NO, destinationCity: NO, destinationCompany: NO, cargo: NO,
     plannedDistance: {available: true, value: 152_000, unit: 'm'}, expectedIncome: {available: true, value: {raw: '12345', sdkType: 'u64', currency: {status: 'unknown'}}}}};

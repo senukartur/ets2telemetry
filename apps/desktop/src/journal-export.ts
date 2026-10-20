@@ -1,4 +1,4 @@
-// The trip export document (ET-016 PR-5, J15-J17): pure serialization of `ets2telemetry.trip-export` format version 1.
+// The trip export document (ET-016 PR-5, J15-J17): pure serialization of `ets2telemetry.trip-export` format version 2.
 // The writer (journal-export-writer.ts) reads the trip detail once, then its completeness intervals, timeline events and
 // samples page by page, and appends this module's text for each page, so the whole document is never held in memory.
 // Every row is copied field by field in a fixed key order; values keep the protocol v1 availability and money shapes and
@@ -37,7 +37,7 @@ export function withinTripExportBounds<S extends TripExportSection>(section: S, 
 
 /** The trip row without the list's job summary; the job section holds the full job values. */
 function trip(t: JournalTripDetail['trip']): TripExportTrip {
-  return {tripUuid: t.tripUuid, pluginSessionId: t.pluginSessionId, game: t.game, gameMode: {mode: t.gameMode.mode, method: t.gameMode.method, confidence: t.gameMode.confidence},
+  return {is_hard_mode: t.isHardMode, hard_mode_details: t.hardModeDetails, tripUuid: t.tripUuid, pluginSessionId: t.pluginSessionId, game: t.game, gameMode: {mode: t.gameMode.mode, method: t.gameMode.method, confidence: t.gameMode.confidence},
     gameModeAmbiguous: t.gameModeAmbiguous, outcome: t.outcome, closeReason: t.closeReason, recordingCompleteness: t.recordingCompleteness,
     startedUtcMs: t.startedUtcMs, endedUtcMs: t.endedUtcMs, observedDistanceM: t.observedDistanceM, fuelUsedL: t.fuelUsedL,
     openedBy: t.openedBy, openedEventSeq: t.openedEventSeq, outcomeEventSeq: t.outcomeEventSeq, closedBy: t.closedBy};

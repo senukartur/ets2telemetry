@@ -13,6 +13,7 @@ import type {EventOccurrence, EventRecord, JobConfiguration, TrailerConfiguratio
 import type {Purpose} from '../api';
 import {fromAvailability, fromU64Key, isUuid, JOB_FIELDS, moneyFromColumns, specRecord, toReal, toSafeNumber, u64Key, type AvailabilityState} from '../codec';
 import {fail} from '../errors';
+import {readHardModeDetails} from './hard-mode';
 import type {StorageConnection} from './connection';
 import {statement} from './writes';
 
@@ -114,6 +115,7 @@ function listItem(db: Database.Database, r: Row): JournalTripListItem {
   if (!job) fail('DATABASE_CORRUPT');
   const values = jobValues(job);
   return {
+    isHardMode: r.is_hard_mode === 1n || r.is_hard_mode === 1, hardModeDetails: readHardModeDetails(r.hard_mode_details),
     tripUuid: String(r.trip_uuid), game: r.game as JournalTripListItem['game'],
     gameMode: {mode: r.game_mode, method: r.game_mode_method, confidence: r.game_mode_confidence} as JournalTripListItem['gameMode'],
     gameModeAmbiguous: toSafeNumber(r.game_mode_ambiguous, 1, 0) === 1, outcome: r.outcome as JournalTripListItem['outcome'],

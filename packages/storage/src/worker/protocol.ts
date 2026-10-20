@@ -1,3 +1,4 @@
+import {isHardModeObservation, type HardModeObservation} from '../../../contracts/src/hard-mode';
 // Messages between the StorageClient in the telemetry service and the storage worker host (ET-013). Node-safe: plain
 // data only, so the client and its tests never load native SQLite. Messages cross a worker port by structured clone.
 // The client sends one request at a time; the host answers every request exactly once, in order. See docs/storage.md.
@@ -23,12 +24,13 @@ export interface WorkerOpenOptions {path: string; purpose: Purpose; backupsDirec
 export interface StorageCommands {
   open: {args: {options: WorkerOpenOptions}; value: OpenSummary};
   upsertSession: {args: {input: {message: unknown}}; value: {created: boolean; committedThroughEventSeq: Uint64}};
-  commitEvent: {args: {input: {message: unknown; effects?: TripEffect[]}}; value: CommitResult};
-  commitGap: {args: {input: {message: unknown; effects?: TripEffect[]}}; value: CommitResult};
+  commitEvent: {args: {input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation}}; value: CommitResult};
+  commitGap: {args: {input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation}}; value: CommitResult};
   appendSamples: {args: {pluginSessionId: string; rows: SampleInput[]; options?: SampleAppendOptions}; value: SampleAppendResult};
   recordCompleteness: {args: {pluginSessionId: string; interval: CompletenessInterval; options?: CompletenessOptions}; value: undefined};
   /** ET-016 PR-7 (J9): a late-attach trip; never acknowledged and never a coverage change. */
   openAttachedTrip: {args: {input: AttachInput}; value: AttachResult};
+  observeHardMode: {args: {game: 'ets2' | 'ats'; observation: HardModeObservation}; value: undefined};
   committedThrough: {args: {pluginSessionId: string}; value: Uint64};
   getSession: {args: {pluginSessionId: string}; value: SessionRecord};
   getEvent: {args: {pluginSessionId: string; eventSeq: Uint64}; value: EventRow | undefined};
@@ -58,7 +60,7 @@ export interface StorageResponse {type: 'storage.response'; id: number; result: 
 export type ParsedResponse = StorageResponse | {type: 'storage.response'; id: number; result: {ok: false; error: JournalAnswerError}; journalAnswerInvalid: true};
 
 export const COMMAND_NAMES: readonly CommandName[] = Object.freeze([
-  'open', 'upsertSession', 'commitEvent', 'commitGap', 'appendSamples', 'recordCompleteness', 'openAttachedTrip', 'committedThrough', 'getSession', 'getEvent',
+  'observeHardMode', 'open', 'upsertSession', 'commitEvent', 'commitGap', 'appendSamples', 'recordCompleteness', 'openAttachedTrip', 'committedThrough', 'getSession', 'getEvent',
   'listEvents', 'getTrip', 'listTrips', 'listSamples', 'storageInfo', 'journalTrips', 'journalTrip', 'journalEvents', 'journalIntervals', 'close'
 ] as const);
 
@@ -138,6 +140,7 @@ export function parseRequest(message: unknown): {ok: true; id: number; command: 
   }
   if ((name === 'upsertSession' || name === 'commitEvent' || name === 'commitGap') && !isRecord(command.input)) return {ok: false, id};
   if (name === 'listTrips' && !optionalArgs(command.page, TRIP_PAGE_ARGS)) return {ok: false, id};
+  if (name === 'observeHardMode' && (Object.keys(command).sort().join(',') !== 'game,name,observation' || !['ets2', 'ats'].includes(command.game as string) || !isHardModeObservation(command.observation))) return {ok: false, id};
   if (name === 'recordCompleteness' && !optionalArgs(command.options, COMPLETENESS_OPTIONS_ARGS)) return {ok: false, id};
   if (name === 'appendSamples' && !optionalArgs(command.options, SAMPLE_OPTIONS_ARGS)) return {ok: false, id};
   // ET-016 PR-7: only the four listed input fields cross the boundary; the storage core checks their values.
@@ -168,7 +171,7 @@ function validValue(command: StorageCommand, value: unknown): boolean {
   case 'openAttachedTrip': return isRecord(value) && Object.keys(value).length === 1 && (value.status === 'committed' || value.status === 'duplicate');
   case 'open': return isRecord(value) && typeof value.schemaVersion === 'number' && typeof value.created === 'boolean' && isText(value.databaseUuid) && isText(value.purpose);
   case 'upsertSession': return isRecord(value) && typeof value.created === 'boolean' && isUint64(value.committedThroughEventSeq);
-  case 'close': case 'recordCompleteness': return value === undefined;
+  case 'close': case 'recordCompleteness': case 'observeHardMode': return value === undefined;
   // ET-016: a journal page reaches main and the renderer, so its value is checked exactly; parseResponse turns a
   // mismatch into a per-command error rather than a client failure.
   case 'journalTrips': case 'journalTrip': case 'journalEvents': case 'journalIntervals':

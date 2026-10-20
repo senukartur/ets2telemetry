@@ -6,6 +6,7 @@
 // the same wiring in process with the real or the fault storage worker (tests/storage/recording-runtime.test.ts).
 // Node-safe: it never loads native SQLite; the database lives in the storage worker that `createWorker` starts. See
 // docs/telemetry-service-v1.md#service-wiring.
+import type {HardModeDetails, HardModeObservation} from '../../../packages/contracts/src/hard-mode';
 import type {RecordingHealth, SourceSelection} from '../../../packages/contracts/src';
 import type {StorageWorkerHandle} from '../../../packages/storage/src/client';
 import type {DiagnosticFacts} from './diagnostics';
@@ -48,10 +49,13 @@ export interface RecordingRuntimeOptions {
   /** ET-015c (G4, G5): every recording status to send to main, from `start()` until `stopStatus()`. */
   onRecordingStatus?: (status: RecordingHealth) => void;
   /** Tests only: the coalescing interval (G5) and timers of the recording status; 250 ms and the system timers by default. */
+  hardModeEvidence?: () => HardModeObservation;
+  onHardModeTrip?: (details: HardModeDetails | null) => void;
   statusOverrides?: {intervalMs?: number; timers?: RecordingStatusTimers};
 }
 
 export interface RecordingRuntime {
+  observeHardMode(game: 'ets2' | 'ats', observation: HardModeObservation): void;
   readonly plan: RecordingPlan;
   readonly v1: V1Ingestion;
   readonly history: HistoryStorage;
@@ -81,7 +85,7 @@ export function createRecordingRuntime(options: RecordingRuntimeOptions): Record
   const changed = () => status.changed();
   // The recorder reaches storage through the history client, so a command before the open or after a failure answers
   // STORAGE_CLOSED (recorderClient).
-  const recorder = plan.durableSelections.length ? new TripRecorderSink(recorderClient({get client() {return history.client;}}), {onChange: changed}) : undefined;
+  const recorder = plan.durableSelections.length ? new TripRecorderSink(recorderClient({get client() {return history.client;}}), {onChange: changed, hardModeEvidence: options.hardModeEvidence, onHardModeTrip: options.onHardModeTrip}) : undefined;
   // The selection that was recording or paused (durable delivery active, fresh v1 data) since it was selected: G3 rule 8.
   let recorded: SourceSelection | undefined;
   const v1 = new V1Ingestion({
@@ -108,7 +112,7 @@ export function createRecordingRuntime(options: RecordingRuntimeOptions): Record
   };
   const status = new RecordingStatusPublisher(recordingStatus, next => options.onRecordingStatus?.(next), options.statusOverrides);
   return {
-    plan, v1, history, recordingStatus,
+    plan, v1, history, recordingStatus, observeHardMode: (game, observation) => recorder?.observeHardMode(game, observation),
     start: () => { history.start(); status.start(); },
     stopStatus: () => status.close(),
     register: shutdown => {

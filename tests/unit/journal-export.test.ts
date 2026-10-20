@@ -58,12 +58,15 @@ const EXPECTED = {
     position: {available: true, value: {x: -12.5, y: 3, z: 40_000.25}}}]
 };
 
-describe('format version 1 (J15)', () => {
+const EXPECTED_V2 = {...EXPECTED, formatVersion: 2, trip: {is_hard_mode: false, hard_mode_details: null, ...EXPECTED.trip}};
+
+describe('format version 2 (J15, ET-026)', () => {
+  it('still validates the hand-written historical format-1 document', () => {expect(tripExportProblems(EXPECTED)).toEqual([]);});
   it('writes the open anchor exactly as the hand-written document, in key order, one row per line', () => {
     const text = serialize(detail, {intervals: [[INTERVAL]], events: [[EVENT], [EVENT_4]], samples: [[SAMPLE]]});
     const document = JSON.parse(text) as Record<string, unknown>;
-    expect(document).toEqual(EXPECTED);
-    expect(Object.keys(document)).toEqual(Object.keys(EXPECTED));
+    expect(document).toEqual(EXPECTED_V2);
+    expect(Object.keys(document)).toEqual(Object.keys(EXPECTED_V2));
     expect(tripExportProblems(document)).toEqual([]);
     // Fixed sections, then each row of each section on its own line, then the closing lines.
     const lines = text.split('\n');

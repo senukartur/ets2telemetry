@@ -8,6 +8,7 @@ import {
 } from '../api';
 import {fromAvailability, fromMask, fromU64Key, isUuid, SAMPLE_FIELDS, toReal, toSafeNumber, u64Key} from '../codec';
 import {fail} from '../errors';
+import {readHardModeDetails} from './hard-mode';
 import type {StorageConnection} from './connection';
 import {jobValues} from './journal';
 import {statement} from './writes';
@@ -83,6 +84,7 @@ function tripRecord(db: Database.Database, r: Record<string, unknown>): TripReco
   const trailers = statement(db, `SELECT e.event_seq FROM trip_trailers t JOIN trailer_configurations c ON c.id = t.trailer_configuration_ref JOIN events e ON e.id = c.event_ref
     WHERE t.trip_ref = ? ORDER BY e.event_seq`).pluck().all(r.id).map(fromU64Key);
   return {
+    isHardMode: r.is_hard_mode === 1n || r.is_hard_mode === 1, hardModeDetails: readHardModeDetails(r.hard_mode_details),
     tripUuid: String(r.trip_uuid), pluginSessionId: String(statement(db, 'SELECT plugin_session_uuid FROM plugin_sessions WHERE id = ?').pluck().get(r.plugin_session_ref)),
     game: r.game as TripRecord['game'], gameMode: {mode: r.game_mode, method: r.game_mode_method, confidence: r.game_mode_confidence} as TripRecord['gameMode'],
     gameModeAmbiguous: toSafeNumber(r.game_mode_ambiguous, 1, 0) === 1, ...jobOf(db, r.job_configuration_ref),

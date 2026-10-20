@@ -1,3 +1,5 @@
+import {isHardModeStatus, type HardModeStatus} from '../../../packages/contracts/src/hard-mode';
+import {unknownHardMode} from '../../../packages/telemetry-core/src/hard-mode';
 import {app, BrowserWindow, dialog, ipcMain, Menu, MessageChannelMain, nativeImage, screen, shell, Tray, utilityProcess, type MessagePortMain, type UtilityProcess, type IpcMainEvent, type IpcMainInvokeEvent} from 'electron';
 import {spawn} from 'node:child_process';
 import {existsSync, mkdirSync} from 'node:fs';
@@ -124,6 +126,7 @@ function runApplication(profileError: unknown): void {
   let dashboardPort: MessagePortMain | undefined, overlayPort: MessagePortMain | undefined, upstream: MessagePortMain | undefined;
   let upstreamRecovery: ReturnType<typeof setTimeout> | undefined;
   let tray: Tray | undefined, trayPresenter: TrayPresenter | undefined, trayUnavailable = false;
+  let hardMode: HardModeStatus = {assessment: unknownHardMode(Date.now()), trip: null};
   let health: AppHealth = initialHealth(), appStateSubscribed = false, lastLive: LiveTelemetry = initialLive();
   let failureReported = false, reportedFailureCode: unknown;
   // ET-015c (G4, G6, G12): the service whose recording status main accepts, until it fails, exits or restarts; the
@@ -609,7 +612,7 @@ function runApplication(profileError: unknown): void {
     const entrypoint = processEntrypoint(__dirname, 'telemetry-service');
     if (!existsSync(entrypoint)) throw new Error('Missing physical telemetry service entrypoint');
     const child = service = utilityProcess.fork(entrypoint, [], {serviceName: 'ETS2Telemetry telemetry service', stdio: 'pipe',
-      env: serviceEnvironment(process.env, logLocation.directory)});
+      env: {...serviceEnvironment(process.env, logLocation.directory), ETS2TELEMETRY_DOCUMENTS: app.getPath('documents')}});
     supervisor.attach(child); recordingChild = child; lastKnownRecordingStatus = undefined; heartbeatMonitor.start();
     child.stdout?.on('data', chunk => log('SERVICE_STDOUT', String(chunk)));
     child.stderr?.on('data', chunk => log('SERVICE_STDERR', String(chunk)));
@@ -620,6 +623,11 @@ function runApplication(profileError: unknown): void {
       heartbeatMonitor.touch();
       const type = message && typeof message === 'object' && !Array.isArray(message) ? (message as Record<string, unknown>).type : undefined;
       if (type === 'heartbeat') return;
+      if (type === 'hard-mode') {
+        const incoming = (message as Record<string, unknown>).status;
+        hardMode = isHardModeStatus(incoming) ? incoming : {assessment: unknownHardMode(Date.now()), trip: null};
+        return;
+      }
       if (latency && type === 'overlay-latency-result') {latency.reply(message); return;}
       if (type === 'ready') {
         if (!supervisor.ready()) return;
@@ -716,6 +724,11 @@ function runApplication(profileError: unknown): void {
   // A dashboard opened while the service restarts or after restart exhaustion gets `null`, not an error; it queries
   // again when the pushed health reports readiness. Untrusted senders still fail.
   ipcMain.handle('scaffold:status', event => {if (!trusted(event)) throw new Error('Untrusted status request'); return status ?? null;});
+  for (const channel of ['hard-mode:status', 'hard-mode:refresh']) ipcMain.handle(channel, (event, ...request: unknown[]) => {
+    if (!trusted(event) || request.length !== 0) throw new Error('Untrusted Hard Mode request');
+    if (channel === 'hard-mode:refresh' && serviceReady && service && !supervisor.stopping) service.postMessage({type: 'hard-mode-refresh'});
+    return serviceReady && Date.now() - hardMode.assessment.observedUtcMs <= 3000 ? hardMode : {assessment: unknownHardMode(Date.now()), trip: hardMode.trip};
+  });
   ipcMain.handle('app:get-state', event => {if (!trusted(event)) throw new Error('Untrusted application state request'); return appState();});
   ipcMain.handle('app:exit', event => {if (!trusted(event)) throw new Error('Untrusted exit request'); requestExit('renderer');});
   ipcMain.on('app:subscribe-state', event => {

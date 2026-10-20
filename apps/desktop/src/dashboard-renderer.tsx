@@ -1,3 +1,4 @@
+import {HardModeCard} from './hard-mode/card';
 import React, {useEffect, useState} from 'react';
 import type {AppState, LiveTelemetry, SettingsView, SourceSelection, UnitGame} from '../../../packages/contracts/src';
 import {Card, CardContent, CardHeader, CardTitle} from '@/components/ui/card';
@@ -67,6 +68,7 @@ export default function App() {
     <p data-testid="prototype-notice">{recording.notice}</p>
   </CardContent></Card>
   <LiveDashboard live={live} units={settings?.units} />
+  <HardModeCard />
   <Card size="sm"><CardHeader><CardTitle><h2>{STRINGS.healthTitle}</h2></CardTitle></CardHeader><CardContent className="space-y-2">
     {problem ? <Alert variant="destructive" data-testid="health-alert"><AlertTitle>{STRINGS.serviceFailedTitle}</AlertTitle><AlertDescription>{APP_ERROR_TEXT[problem]}</AlertDescription></Alert> : null}
     <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1" data-testid="app-health">

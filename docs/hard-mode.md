@@ -1,0 +1,52 @@
+# Hard Mode persisted-settings verification (ET-026)
+
+Owner decision, October 21, 2026: Hard Mode verifies **observed persisted settings**. Settings not yet written by the game, and transient changes between observations, are not claimed as detected. This is not anti-cheat evidence. Current settings status is separate from a delivered trip's qualification. The observed ETS2 1.61.1.9s mapping supersedes the earlier cvar aliases in the mockup.
+
+## Rules
+
+All twelve configured rules must pass. Boolean comparisons are exact; numeric minimum/maximum comparisons allow an absolute tolerance of `1e-6` in the raw cvar unit. Unknown, malformed and conflicting values never pass. Identical numeric duplicates are harmless. Parsing accepts bounded `uset key "value"` directives, surrounding whitespace, `#`/`//` trailing comments and finite decimal/exponent numbers; partial/non-finite numbers are rejected. Unknown cvars are not retained.
+
+| Rule | Persisted cvar(s) | Requirement | File |
+| --- | --- | --- | --- |
+| Realistic fuel | `g_fuel_simulation` | `1` | Profile config |
+| Air brakes | `g_hardcore_simulation` | `1` | Profile config |
+| Police/fines | `g_police` | `1` | Profile config |
+| Fatigue | `g_fatigue` | `1` | Profile config |
+| Limiter | `g_use_speed_limiter` | `1` | Profile config |
+| Truck stability | `g_truck_stability` | `<= 0.5` | Profile config |
+| Trailer stability | `g_trailer_stability` | `<= 0.5` | Profile config |
+| Configured skilled parking | `g_simple_parking_doubles`, `g_parking_difficulty` | `0` and `2` | Profile config |
+| Rain | `g_bad_weather_factor` | `>= 0.12` | Profile config |
+| Road events | `g_road_events` | `>= 0.30` | Profile config |
+| Braking | `g_brake_intensity` | `<= 0.75` | Profile `config_local.cfg` |
+| Traffic | `g_traffic` | `>= 1.0` | Game-user-root `config.cfg` |
+
+Parking additionally requires a delivered event with **available `autoParkUsed == false`**. Configured difficulty and manual completion do not establish actual Expert placement. Missing/unavailable delivery proof stays unqualified.
+
+## Read-only evidence
+
+Electron main resolves the real Documents directory, including redirection, and passes it privately to the telemetry utility process. The service accepts no renderer-supplied path or assessment. The reader queries the authenticated pipe peer's PID through a fixed read-only Windows process query, checks executable/game and creation time, and matches the current log's creation header to that process (five-second timestamp allowance). The process facts are checked again after reading. The telemetry source's session/process identity remains part of the binding.
+
+Profile identity is the UTF-8 hex of the latest ordered `New profile selected` marker, matched against a later loaded-save path in the same selection generation. A new selection or unfinished transition invalidates preceding save evidence. `/home/profiles/<id>/save/` selects local storage; `/steam/profiles/<id>/save/` selects Cloud. A stale `Profile type: PC_steam_cloud` marker cannot override a newer local save path, as the owner's Cloud-to-local conversion demonstrated. No latest-mtime, process-name-only or single-folder heuristic is used. Missing or conflicting evidence fails closed.
+
+Local profile files live at `<Documents>/<Game>/profiles/<id>/config.cfg` and `config_local.cfg`. Cloud uses `<Documents>/<Game>/steam_profiles/<id>/config_local.cfg` and exactly one `<Steam>/userdata/<account>/<appid>/remote/profiles/<id>/config.cfg`. Steam's root comes from the existing bounded registry discovery; appids are ETS2 `227300` and ATS `270880`. Explicit game `-homedir` overrides are read from the verified process command line. Encrypted saves are never opened. Cloud-off is not required.
+
+The service polls **bytes**, including when an mtime changed without different content. Initial log `uset` values are never substituted for later file contents. Node/libuv shared-open reads are tested against an isolated log held by another Node writer. The reader checks file identity, two equal bounded byte reads and metadata stability. It canonicalizes Documents/game roots, accepts placeholders retaining their canonical path, and honestly refuses unsupported file redirections rather than treating every Windows ReparsePoint as a symlink. This does not establish every real OneDrive placeholder behavior.
+
+Bounds: at most 256 profile entries per discovery, 32 account entries and 256 Cloud profile entries total, 256 KiB per config, 8 KiB per line, 4 MiB per log, one observation in flight, two-second observation deadline and no scan more frequently than once per second. Refresh coalesces with an observation already in flight and obeys the same minimum interval. A timed-out underlying read cannot start a second concurrent scan; its result is retired. Log replacement/truncation, source transitions and expired observation coverage produce unknown evidence. Filesystem work is asynchronous and never runs inside ingestion callbacks.
+
+## Recording and durability
+
+The recorder captures one observation for an attempted event/gap operation and retains it through retry. The observation carries the current source capture watermark. An event older than that watermark, a redelivered opening, missing occurrence time, missing/mismatched session, expired observation or unproven binding cannot gain present-day file evidence. Historical and checkpoint-opened trips remain unqualified. Cold recorder/session opening first persists an interruption for existing open trips, even when the process/profile/plugin session and binding digest are unchanged; an initial unknown before storage opened cannot be forgotten.
+
+Observation writes use the existing bounded serialized storage client and carry no telemetry ACK. At most one observation write and one pending loss are retained by the recorder; later passing settings cannot overwrite a pending failure. Trip opening/closing audit changes run in the same transaction as ordinary trip effects, without adding effects or enlarging the sixteen-effect bound. Failed transactions change neither event coverage nor trip audit. Duplicates return before audit effects. New gaps record interruption in their transaction. First loss is irreversible, independently of outcome or recording completeness.
+
+Schema `0003-hard-mode` adds `is_hard_mode INTEGER NOT NULL DEFAULT 0 CHECK (is_hard_mode IN (0,1))` and nullable valid JSON `hard_mode_details`, capped at 16,384 characters. INTEGER preserves SQLite STRICT semantics. Versions 1/2 and their frozen fixture bytes are unchanged; old rows become false/null. Typed version-1 audit data contains opening/latest assessments, a SHA-256 binding digest, source categories, observation times, explicit manual-delivery availability and first loss with the **original detected value**, reason, rule and time. Names, account IDs, absolute paths and raw configs are excluded. Only an explicitly delivered trip with all observed evidence intact and manual completion gets true; open/cancelled/unresolved trips stay false.
+
+## UI and IPC
+
+`getHardModeStatus()` and `refreshHardMode()` use fixed `hard-mode:status` and `hard-mode:refresh` channels, accept no arguments and are limited to the trusted dashboard main frame. Replies are strictly validated in main and preload. Refresh schedules the bounded read and returns the current status; the dashboard's one outstanding poll reads the result. The overlay bridge is unchanged. Invalid or expired replies become unknown; no configuration path/name reaches the renderer.
+
+The Live card and 470 px Radix sheet use Flame in every state, explicit pass/fail/unknown words, twelve detected/required rows, source category and age. Booleans and percentages retain their exact raw numeric value beside their friendly label. Lost status retains the first violating value and time even after current settings pass. Radix supplies modal focus trapping, Escape and trigger focus restoration; controls retain visible keyboard focus. Qualifying journal rows show `HM`; trip details show opening/latest audit, manual-delivery proof and first loss. The JSON export is [format 2](journal-export.md#hard-mode-format-2-et-026). A future server dispatch maps `is_hard_mode` to the same boolean; no server exists or is implemented here.
+
+`GAME_HISTORY_RECORDING` remains false. Real history enablement and all other cards' game/performance gates are unchanged. See [validation](validation/et-026.md) and [regression registry](regression-registry.md#et-026-hard-mode).

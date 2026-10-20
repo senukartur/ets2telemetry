@@ -154,11 +154,11 @@ Opened from `live.hardMode`; a right-side `sheet`, 470 px, with a scrim. It impl
 | Spec id | Content |
 | --- | --- |
 | `hardMode.sheet` | Title "Hard Mode checklist", close button, status chip with the count, **Check again** (re-reads the profile files; read-only) |
-| `hardMode.sheet.source` | Profile name, game, the settings file path shortened from `Documents\<Game>\…\config.cfg`, and "Read N s ago" |
+| `hardMode.sheet.source` | Sanitized source category (Local / Steam Cloud / Synthetic or replay / Unproven), game when known, and "Read N s ago"; no profile name, account or filesystem path crosses IPC |
 | `hardMode.sheet.criteria` | 12 rows: status icon (✓ ok / ✕ error), number and name, the cvar in 11 px muted, **Required** and **In game** values right-aligned; failing rows show the detected value in `--yu-err-fg` bold |
 | footer | The all-12 rule and the read-only notice ("the app never changes game settings") |
 
-The 12 criteria, their cvars and thresholds are the ET-026 matrix: realistic fuel `g_realistic_fuel = 1`; air brakes `g_air_brake_safety = 1`; police `g_police = 1`; fatigue `g_fatigue = 1`; speed limiter `g_speed_limiter = 1`; truck stability `g_truck_stability ≤ 50%`; trailer stability `g_trailer_stability ≤ 50%`; difficult parking `g_simple_parking_doubles = 0` (shown as "Expert"); rain `g_rain_probability ≥ 12%`; road events `g_road_events ≥ 30%`; braking intensity `g_brake_intensity ≤ 75%`; traffic `g_traffic ≥ 100%`. Display booleans as On/Off and fractions as whole percentages. The evaluator, not the UI, owns the comparisons and their floating-point tolerance.
+The 12 criteria use the owner-approved observed persisted-setting matrix: realistic fuel `g_fuel_simulation = 1`; air brakes `g_hardcore_simulation = 1`; police `g_police = 1`; fatigue `g_fatigue = 1`; speed limiter `g_use_speed_limiter = 1`; truck stability `g_truck_stability ≤ 0.5`; trailer stability `g_trailer_stability ≤ 0.5`; configured skilled parking `g_simple_parking_doubles = 0` and `g_parking_difficulty = 2`; rain `g_bad_weather_factor ≥ 0.12`; road events `g_road_events ≥ 0.30`; braking intensity `g_brake_intensity ≤ 0.75`; traffic `g_traffic ≥ 1.0`. Display booleans as On/Off and fractions as percentages, retaining the exact raw value alongside. The evaluator owns comparisons and its `1e-6` tolerance. Manual completion additionally requires available `autoParkUsed == false` at delivery; actual Expert placement is not verified. Explain that unpersisted runtime settings/transient changes between observations are not detected. Unknown/failure/source switch/interruption irreversibly loses qualification, preserving the first lost value/time even when current settings recover.
 
 ### 5.3 Journal (`journal.*`)
 

@@ -15,7 +15,7 @@ import {
 import {ATS_A, BASE_UTC, ETS2_A, ETS2_B, job, money, r, Script, trailer, truck} from '../shared/trip-messages';
 import {failed, ok, REPRESENTATIVE, workspace} from './helpers';
 
-const DATABASE = {purpose: 'synthetic', schemaVersion: 2};
+const DATABASE = {purpose: 'synthetic', schemaVersion: 3};
 const NOT_OBSERVED = {available: false, reason: 'not-observed'} as const;
 const text = (value: string) => ({available: true as const, value});
 
@@ -26,7 +26,7 @@ beforeAll(async () => {
   ws = await workspace();
   ws.copyFixture(REPRESENTATIVE, ws.database);
   storage = await ws.open();
-  expect(storage.summary).toMatchObject({schemaVersion: 2, migratedFrom: 1});
+  expect(storage.summary).toMatchObject({schemaVersion: 3, migratedFrom: 1});
   await seedJournalAnchors(storage);
   fillers = await seedJournalFillers(storage, 110);
 }, 120_000);
@@ -97,7 +97,7 @@ describe('journal trip list (J5; REG-014)', () => {
     const page = ok(storage.journalTrips({game: 'ats', outcome: 'delivered', completeness: 'complete'}));
     const zero = page.trips.at(-1)!;
     expect(zero).toEqual({
-      tripUuid: T.zeroValues, game: 'ats', gameMode: ANCHOR_GAME_MODE, gameModeAmbiguous: false, outcome: 'delivered', closeReason: 'outcome', recordingCompleteness: 'complete',
+      isHardMode: false, hardModeDetails: null, tripUuid: T.zeroValues, game: 'ats', gameMode: ANCHOR_GAME_MODE, gameModeAmbiguous: false, outcome: 'delivered', closeReason: 'outcome', recordingCompleteness: 'complete',
       startedUtcMs: SESSION_C_UTC + 3_000, endedUtcMs: SESSION_C_UTC + 4_000, observedDistanceM: {available: true, value: 0}, fuelUsedL: NOT_OBSERVED,
       job: {source: 'event', sourceCity: text(''), sourceCompany: text('Synthetic Company A'), destinationCity: {available: false, reason: 'not-supported'},
         destinationCompany: text('Synthetic Company B'), cargo: NOT_OBSERVED, plannedDistance: {available: true, value: 0, unit: 'm'},
@@ -113,7 +113,7 @@ describe('journal trip list (J5; REG-014)', () => {
     expect(migrated).toBe(MIGRATED_V1_TRIP);
     expect(ok(storage.journalTrips({cursor: '2'})).trips.map(trip => trip.tripUuid)).toEqual([MIGRATED_V1_TRIP]);
     expect(ok(storage.journalTrips({cursor: '2'})).trips[0]).toEqual({
-      tripUuid: MIGRATED_V1_TRIP, game: 'ets2', gameMode: ANCHOR_GAME_MODE, gameModeAmbiguous: false, outcome: 'cancelled', closeReason: 'outcome', recordingCompleteness: 'partial',
+      isHardMode: false, hardModeDetails: null, tripUuid: MIGRATED_V1_TRIP, game: 'ets2', gameMode: ANCHOR_GAME_MODE, gameModeAmbiguous: false, outcome: 'cancelled', closeReason: 'outcome', recordingCompleteness: 'partial',
       startedUtcMs: 1_791_676_800_000, endedUtcMs: 1_791_677_100_000, observedDistanceM: {available: true, value: 1_500.5}, fuelUsedL: NOT_OBSERVED,
       job: {source: 'event', sourceCity: text('Synthetic City A'), sourceCompany: text('Synthetic Company A'), destinationCity: text('Synthetic City B'),
         destinationCompany: text('Synthetic Company B'), cargo: text('Synthetic Cargo'), plannedDistance: {available: true, value: 152_000, unit: 'm'},
@@ -126,7 +126,7 @@ describe('journal trip detail (J5, J13; REG-009, REG-014)', () => {
   it('returns the delivered trip with its job, truck, trailer, revenue, exact money totals, window, samples and export bounds', () => {
     expect(ok(storage.journalTrip(T.delivered))).toEqual({
       database: DATABASE,
-      trip: {
+      trip: {isHardMode: false, hardModeDetails: null,
         tripUuid: T.delivered, game: 'ets2', gameMode: ANCHOR_GAME_MODE, gameModeAmbiguous: false, outcome: 'delivered', closeReason: 'outcome', recordingCompleteness: 'complete',
         startedUtcMs: BASE_UTC + 4_000, endedUtcMs: BASE_UTC + 9_000, observedDistanceM: {available: true, value: 152_000.5}, fuelUsedL: NOT_OBSERVED,
         job: {source: 'event', sourceCity: text('Synthetic City A'), sourceCompany: text('Synthetic Company A'), destinationCity: text('Synthetic City B'),
@@ -154,7 +154,7 @@ describe('journal trip detail (J5, J13; REG-009, REG-014)', () => {
   it('keeps zero apart from unavailable for every job, outcome and sample value of the zero-values trip (REG-009)', () => {
     expect(ok(storage.journalTrip(T.zeroValues))).toEqual({
       database: DATABASE,
-      trip: {
+      trip: {isHardMode: false, hardModeDetails: null,
         tripUuid: T.zeroValues, game: 'ats', gameMode: ANCHOR_GAME_MODE, gameModeAmbiguous: false, outcome: 'delivered', closeReason: 'outcome', recordingCompleteness: 'complete',
         startedUtcMs: SESSION_C_UTC + 3_000, endedUtcMs: SESSION_C_UTC + 4_000, observedDistanceM: {available: true, value: 0}, fuelUsedL: NOT_OBSERVED,
         job: {source: 'event', sourceCity: text(''), sourceCompany: text('Synthetic Company A'), destinationCity: {available: false, reason: 'not-supported'},

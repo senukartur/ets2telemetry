@@ -150,3 +150,7 @@ ET-016 PR-5 exports one trip as `ets2telemetry.trip-export` format version 1; th
 - **Export manual checks (pending).** The real Windows Save dialog (overwrite prompt, cancel by Esc and the close box, OneDrive Documents, long paths, a read-only folder) and exports of real recorded game history after enablement.
 - **Late-attach trips (ET-016b PR-7, done).** Since PR-6 the recorder writes fuel used for each trip, as a value or with its unavailability reason. Since PR-7 a job accepted before the recorder attached is a partial trip with a checkpoint job and no truck or trailer until they are configured again ([TD-007](technical-debt.md#td-007-truck-and-trailer-identity-of-late-attach-trips)).
 - Real game history, journal read latency while recording, and large real histories remain unmeasured.
+
+## Hard Mode (ET-026)
+
+Current journal list/detail records add `isHardMode: boolean` and `hardModeDetails: HardModeDetails | null`, validated across worker/service/main boundaries. Only a qualifying delivered trip shows the Flame `HM` badge; standard/historical/open trips do not acquire it from current settings. Details retain opening/latest assessment, explicit manual delivery and first loss with the original detected value/time. Historical rows show not evaluated. This flag is independent of recording completeness and outcome. See [Hard Mode](hard-mode.md).

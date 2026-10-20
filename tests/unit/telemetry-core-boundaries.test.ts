@@ -120,7 +120,7 @@ function violations(source: string, file: string): string[] {
 describe('telemetry-core import boundary', () => {
   it('finds the expected modules and their imports', () => {
     const names = files.map(file => relative(coreDir, file).split(sep).join('/')).sort();
-    expect(names).toEqual(['derived.ts', 'display-profile.ts', 'format.ts', 'history-samples.ts', 'index.ts', 'live-view.ts', 'normalize-v0.ts', 'normalize-v1.ts', 'readings.ts',
+    expect(names).toEqual(['derived.ts', 'display-profile.ts', 'format.ts', 'hard-mode/index.ts', 'history-samples.ts', 'index.ts', 'live-view.ts', 'normalize-v0.ts', 'normalize-v1.ts', 'readings.ts',
       'trips/accounting.ts', 'trips/identity.ts', 'trips/reducer.ts', 'trips/types.ts', 'trips/view.ts', 'units.ts']);
     const all = files.flatMap(file => specifiers(readFileSync(file, 'utf8'))).map(({specifier, typeOnly}) => `${typeOnly ? 'type ' : ''}${specifier}`);
     expect(all).toContain('type ../../contracts/src/protocol-v0');

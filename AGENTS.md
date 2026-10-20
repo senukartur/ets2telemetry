@@ -753,3 +753,9 @@ Under this adaptive cascading:
 
 See [ET-038 validation](docs/validation/et-038.md). No protocol, schema, IPC, or game integration was changed.
 
+
+## ET-026 persisted-setting decision and implementation — October 21, 2026
+
+The owner accepted observed persisted-setting verification and configured skilled parking plus manual delivery. Twelve configured rules use the observed current cvars, unchanged numeric thresholds, `g_simple_parking_doubles == 0` and `g_parking_difficulty == 2`. Final qualification additionally requires a delivered event with available `autoParkUsed == false`; actual Expert placement is not claimed. Unpersisted runtime settings and transient changes between observations are outside the evidence model. An observed failure, unknown, source/profile switch or interruption irreversibly loses the trip's qualification; later settings cannot restore it.
+
+[Hard Mode](docs/hard-mode.md) implements bounded read-only local/Cloud profile observation, pure evaluation, irreversible trip audit, schema 3, narrow dashboard IPC, checklist/journal UI and JSON export 2. Historical schema/fixture bytes stay frozen and historical trips default false/null. `GAME_HISTORY_RECORDING` stays false, wires/native transport are unchanged, and future server mapping is documentation only. The owner authorized implementation, all checks, independent review, Claude feedback, final automatic Ready CI, squash merge and Done without limiting fix/review rounds; this entry does not assert those gates already passed. Remaining real-environment/history/performance checks retain their recorded status in [ET-026 validation](docs/validation/et-026.md).

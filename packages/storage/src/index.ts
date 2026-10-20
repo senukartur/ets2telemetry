@@ -1,3 +1,4 @@
+import type {HardModeObservation} from '../../contracts/src/hard-mode';
 // In-process storage API (ET-013). It loads native better-sqlite3, so only the storage worker and the Electron-runtime
 // storage suite may import it; Node-safe callers use ./api. Every method returns a Result and never throws for storage
 // failures; error results carry fixed text and never a filesystem path. See docs/storage.md.
@@ -29,8 +30,8 @@ export class Storage {
   get summary(): OpenSummary { return this.connection.summary; }
   get closed(): boolean { return this.connection.closed; }
   upsertSession(input: {message: unknown}) { return attempt(() => writes.upsertSession(this.connection, input)); }
-  commitEvent(input: {message: unknown; effects?: TripEffect[]}, options?: CommitOptions): Result<CommitResult> { return attempt(() => writes.commitEvent(this.connection, input, options)); }
-  commitGap(input: {message: unknown; effects?: TripEffect[]}, options?: CommitOptions): Result<CommitResult> { return attempt(() => writes.commitGap(this.connection, input, options)); }
+  commitEvent(input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation}, options?: CommitOptions): Result<CommitResult> { return attempt(() => writes.commitEvent(this.connection, input, options)); }
+  commitGap(input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation}, options?: CommitOptions): Result<CommitResult> { return attempt(() => writes.commitGap(this.connection, input, options)); }
   appendSamples(pluginSessionId: string, rows: SampleInput[], options?: SampleAppendOptions, commitOptions?: CommitOptions): Result<SampleAppendResult> {
     return attempt(() => writes.appendSamples(this.connection, pluginSessionId, rows, options, commitOptions));
   }
@@ -39,6 +40,7 @@ export class Storage {
   }
   /** ET-016 PR-7 (J9): opens a trip from a checkpoint job; see AttachInput. */
   openAttachedTrip(input: AttachInput): Result<AttachResult> { return attempt(() => writes.openAttachedTrip(this.connection, input)); }
+  observeHardMode(game: 'ets2' | 'ats', observation: HardModeObservation): Result<void> {return attempt(() => writes.observeHardMode(this.connection, game, observation));}
   committedThrough(pluginSessionId: string): Result<Uint64> { return attempt(() => reads.committedThrough(this.connection, pluginSessionId)); }
   getSession(pluginSessionId: string): Result<SessionRecord> { return attempt(() => reads.getSession(this.connection, pluginSessionId)); }
   getEvent(pluginSessionId: string, eventSeq: Uint64): Result<EventRow | undefined> { return attempt(() => reads.getEvent(this.connection, pluginSessionId, eventSeq)); }

@@ -49,7 +49,7 @@ describe('openAttachedTrip (J9)', () => {
     const storage = await ws.open(), s = sessionWithCoverage(storage), trip = attachUuid(ETS2_A, '3');
     expect(ok(storage.openAttachedTrip(attachInput(ETS2_A, '3')))).toEqual({status: 'committed'});
     expect(ok(storage.committedThrough(ETS2_A))).toBe('2');
-    expect(ok(storage.getTrip(trip))).toEqual({tripUuid: trip, pluginSessionId: ETS2_A, game: 'ets2', gameMode: MODE, gameModeAmbiguous: false,
+    expect(ok(storage.getTrip(trip))).toEqual({isHardMode: false, hardModeDetails: null, tripUuid: trip, pluginSessionId: ETS2_A, game: 'ets2', gameMode: MODE, gameModeAmbiguous: false,
       jobSource: 'checkpoint', jobConfigurationEventSeq: null, checkpointJob: {nextEventSeq: '3', values: job()}, truckConfigurationEventSeq: null, trailerConfigurationEventSeqs: [],
       openedBy: 'checkpoint', openedEventSeq: null, outcome: 'open', outcomeEventSeq: null, closeReason: null, recordingCompleteness: 'partial', startedUtcMs: BASE_UTC,
       endedUtcMs: null, observedDistanceM: NOT_OBSERVED, fuelUsedL: NOT_OBSERVED, createdUtcMs: expect.any(Number), updatedUtcMs: expect.any(Number)});

@@ -57,8 +57,8 @@ export function serveStorage(port: HostPort, testOptions: HostTestOptions = {}):
     case 'upsertSession': return storage.upsertSession({message: command.input.message});
     // Only the message and its effects are forwarded; in-process commit options never come from a message, only from
     // a test entry's in-process testOptions.
-    case 'commitEvent': return storage.commitEvent({message: command.input.message, effects: command.input.effects}, testOptions.commitOptions?.(command));
-    case 'commitGap': return storage.commitGap({message: command.input.message, effects: command.input.effects}, testOptions.commitOptions?.(command));
+    case 'commitEvent': return storage.commitEvent({message: command.input.message, effects: command.input.effects, hardMode: command.input.hardMode}, testOptions.commitOptions?.(command));
+    case 'commitGap': return storage.commitGap({message: command.input.message, effects: command.input.effects, hardMode: command.input.hardMode}, testOptions.commitOptions?.(command));
     // Only `uniqueSeconds` of the options is forwarded; the commit options come from the in-process testOptions only.
     case 'appendSamples':
       return storage.appendSamples(command.pluginSessionId, command.rows, command.options === undefined ? undefined : {uniqueSeconds: command.options.uniqueSeconds},
@@ -70,6 +70,7 @@ export function serveStorage(port: HostPort, testOptions: HostTestOptions = {}):
       const {pluginSessionId, nextEventSeq, job, effects} = command.input;
       return storage.openAttachedTrip({pluginSessionId, nextEventSeq, job, effects});
     }
+    case 'observeHardMode': return storage.observeHardMode(command.game, command.observation);
     case 'committedThrough': return storage.committedThrough(command.pluginSessionId);
     case 'getSession': return storage.getSession(command.pluginSessionId);
     case 'getEvent': return storage.getEvent(command.pluginSessionId, command.eventSeq);

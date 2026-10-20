@@ -95,7 +95,7 @@ describe('REG-013 killed open of a version 1 database', () => {
     expect(backupFiles()).toBeNull();
 
     const storage = await ws.open({path: copy});
-    expect(storage.summary).toEqual({schemaVersion: 2, created: false, databaseUuid: UUID, purpose: 'synthetic', migratedFrom: 1, backupFileName: `${REOPEN_BACKUP}.sqlite`});
+    expect(storage.summary).toEqual({schemaVersion: 3, created: false, databaseUuid: UUID, purpose: 'synthetic', migratedFrom: 1, backupFileName: `${REOPEN_BACKUP}.sqlite`});
     expectMigratedFromVersion1(storage, copy, before, path.join(ws.backups, `${REOPEN_BACKUP}.sqlite`));
     expect(backupFiles()).toEqual(pair(REOPEN_BACKUP));
   });
@@ -108,7 +108,7 @@ describe('REG-013 killed open of a version 1 database', () => {
     expect(digestOf(copy)).toEqual(before.original);
 
     const storage = await ws.open({path: copy});
-    expect(storage.summary).toEqual({schemaVersion: 2, created: false, databaseUuid: UUID, purpose: 'synthetic', migratedFrom: 1, backupFileName: `${REOPEN_BACKUP}.sqlite`,
+    expect(storage.summary).toEqual({schemaVersion: 3, created: false, databaseUuid: UUID, purpose: 'synthetic', migratedFrom: 1, backupFileName: `${REOPEN_BACKUP}.sqlite`,
       removedPartialBackups: 1});
     expectMigratedFromVersion1(storage, copy, before, path.join(ws.backups, `${REOPEN_BACKUP}.sqlite`));
     // Exactly one verified backup with its manifest; the stale partial copy is gone and was never trusted.
@@ -123,7 +123,7 @@ describe('REG-013 killed open of a version 1 database', () => {
     expect(digestOf(copy)).toEqual(before.original);
 
     const storage = await ws.open({path: copy});
-    expect(storage.summary).toEqual({schemaVersion: 2, created: false, databaseUuid: UUID, purpose: 'synthetic', migratedFrom: 1, backupFileName: `${REOPEN_BACKUP}.sqlite`,
+    expect(storage.summary).toEqual({schemaVersion: 3, created: false, databaseUuid: UUID, purpose: 'synthetic', migratedFrom: 1, backupFileName: `${REOPEN_BACKUP}.sqlite`,
       removedPartialBackups: 2});
     expectMigratedFromVersion1(storage, copy, before, path.join(ws.backups, `${REOPEN_BACKUP}.sqlite`));
     // Exactly one verified backup with its manifest; the unmanifested backup and stale partial manifest are gone.
@@ -154,7 +154,7 @@ describe('REG-013 killed open of a version 1 database', () => {
 
     const storage = await ws.open({path: copy});
     // A backup of exactly this content is reused (docs/storage.md, "Backups and restore", step 2).
-    expect(storage.summary).toEqual({schemaVersion: 2, created: false, databaseUuid: UUID, purpose: 'synthetic', migratedFrom: 1, backupFileName: `${CHILD_BACKUP}.sqlite`});
+    expect(storage.summary).toEqual({schemaVersion: 3, created: false, databaseUuid: UUID, purpose: 'synthetic', migratedFrom: 1, backupFileName: `${CHILD_BACKUP}.sqlite`});
     expectMigratedFromVersion1(storage, copy, before, path.join(ws.backups, `${CHILD_BACKUP}.sqlite`));
     expect(backupFiles()).toEqual(pair(CHILD_BACKUP));
   });
@@ -162,13 +162,13 @@ describe('REG-013 killed open of a version 1 database', () => {
   it('terminated after the open returned, without a close: the committed migration survives and the next open does not migrate', async () => {
     const copy = ws.copyFixture(REPRESENTATIVE), before = readVersion1(copy);
     const facts = await killAtBarrier('afterOpen', copy);
-    expect(facts).toEqual({summary: {schemaVersion: 2, created: false, databaseUuid: UUID, purpose: 'synthetic', migratedFrom: 1, backupFileName: `${CHILD_BACKUP}.sqlite`}});
+    expect(facts).toEqual({summary: {schemaVersion: 3, created: false, databaseUuid: UUID, purpose: 'synthetic', migratedFrom: 1, backupFileName: `${CHILD_BACKUP}.sqlite`}});
     // The committed migration is in the WAL the killed writer never checkpointed.
-    expect(digestOf(copy).userVersion).toBe(2);
+    expect(digestOf(copy).userVersion).toBe(3);
     expect(backupFiles()).toEqual(pair(CHILD_BACKUP));
 
     const storage = await ws.open({path: copy});
-    expect(storage.summary).toEqual({schemaVersion: 2, created: false, databaseUuid: UUID, purpose: 'synthetic'});
+    expect(storage.summary).toEqual({schemaVersion: 3, created: false, databaseUuid: UUID, purpose: 'synthetic'});
     expectMigratedFromVersion1(storage, copy, before, path.join(ws.backups, `${CHILD_BACKUP}.sqlite`));
     expect(backupFiles()).toEqual(pair(CHILD_BACKUP));
   });

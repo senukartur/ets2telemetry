@@ -1,3 +1,4 @@
+import type {HardModeObservation} from '../../contracts/src/hard-mode';
 // The telemetry service's handle on the storage worker (ET-013). Node-safe: it never loads native SQLite; the worker
 // owns the one connection. Commands are sent one at a time with monotonic request ids, each bounded by a deadline.
 // A worker failure, a missed deadline or a malformed response fails the client closed: the command in flight and every
@@ -97,9 +98,10 @@ export class StorageClient {
   open(options: WorkerOpenOptions): Promise<Result<OpenSummary>> {
     return this.#request({name: 'open', options: {path: options.path, purpose: options.purpose, backupsDirectory: options.backupsDirectory, appVersion: options.appVersion}});
   }
+  observeHardMode(game: 'ets2' | 'ats', observation: HardModeObservation): Promise<Result<undefined>> {return this.#request({name: 'observeHardMode', game, observation});}
   upsertSession(input: {message: unknown}) { return this.#request({name: 'upsertSession', input}); }
-  commitEvent(input: {message: unknown; effects?: TripEffect[]}): Promise<Result<CommitResult>> { return this.#request({name: 'commitEvent', input}); }
-  commitGap(input: {message: unknown; effects?: TripEffect[]}): Promise<Result<CommitResult>> { return this.#request({name: 'commitGap', input}); }
+  commitEvent(input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation}): Promise<Result<CommitResult>> { return this.#request({name: 'commitEvent', input}); }
+  commitGap(input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation}): Promise<Result<CommitResult>> { return this.#request({name: 'commitGap', input}); }
   /**
    * Only `uniqueSeconds` of the options crosses the worker boundary (ET-015b). A value that is not an object is forwarded
    * as given, so the worker's request parser refuses it with INVALID_INPUT instead of the client throwing.

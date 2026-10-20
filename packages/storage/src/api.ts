@@ -1,3 +1,4 @@
+import type {HardModeDetails} from '../../contracts/src/hard-mode';
 // Typed storage commands, results, errors and trip effects. Node-safe: no native SQLite, Electron or filesystem
 // access, so the Node-safe test suite and a future worker client can import it. See docs/storage.md.
 import type {Available, GameMode, JobConfiguration, Uint64} from '../../contracts/src/protocol-v1';
@@ -176,6 +177,7 @@ export interface EventRow {
  * `jobSource` `event`, an `openedEventSeq` and a `jobConfigurationEventSeq`, and `checkpointJob` null.
  */
 export interface TripRecord {
+  isHardMode: boolean; hardModeDetails: HardModeDetails | null;
   tripUuid: string; pluginSessionId: string; game: 'ets2' | 'ats'; gameMode: Pick<GameMode, 'mode' | 'method' | 'confidence'>; gameModeAmbiguous: boolean;
   jobSource: 'event' | 'checkpoint'; jobConfigurationEventSeq: Uint64 | null; checkpointJob: {nextEventSeq: Uint64; values: JobConfiguration} | null;
   truckConfigurationEventSeq: Uint64 | null; trailerConfigurationEventSeqs: Uint64[];

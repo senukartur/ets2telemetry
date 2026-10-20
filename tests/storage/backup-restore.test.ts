@@ -10,7 +10,7 @@ afterEach(async () => { await ws.dispose(); });
 
 const step = (version: number): Migration => ({version, name: `000${version}-test`, up: db => { db.exec(`CREATE TABLE test_v${version} (id INTEGER PRIMARY KEY)`); }});
 /** The production migrations (through 0002-journal since ET-016), then injected test steps from version 3 up to `version`. */
-const upTo = (version: number) => [...MIGRATIONS, ...Array.from({length: Math.max(0, version - MIGRATIONS.length)}, (_, i) => step(i + MIGRATIONS.length + 1))];
+const upTo = (version: number) => [...MIGRATIONS.slice(0, version), ...Array.from({length: Math.max(0, version - MIGRATIONS.length)}, (_, i) => step(i + MIGRATIONS.length + 1))];
 /** The production list up to version 1: restores a version 1 backup without migrating it. */
 const UP_TO_V1 = MIGRATIONS.slice(0, 1);
 const failingStep = (version: number): Migration => ({version, name: `000${version}-test-failure`, up: () => { throw new Error('injected migration failure'); }});
@@ -89,9 +89,9 @@ describe('REG-013 restore into a new file', () => {
   });
   it('migrates a restored older backup through the normal open path', async () => {
     const manifest = await migratedWithBackup(), target = path.join(ws.directory, 'restored.sqlite');
-    const storage = ok(await restoreBackup(manifest, ws.options({path: target, backupsDirectory: path.join(ws.directory, 'restored-backups'), migrations: upTo(3)})));
-    expect(storage.summary).toMatchObject({schemaVersion: 3, migratedFrom: 1});
-    expectRepresentative(storage, target, {schema_migrations: 3, test_v3: 0});
+    const storage = ok(await restoreBackup(manifest, ws.options({path: target, backupsDirectory: path.join(ws.directory, 'restored-backups'), migrations: upTo(4)})));
+    expect(storage.summary).toMatchObject({schemaVersion: 4, migratedFrom: 1});
+    expectRepresentative(storage, target, {schema_migrations: 4, test_v4: 0});
   });
   it('refuses synthetic data at the production history path before writing anything', async () => {
     const manifest = await migratedWithBackup(), root = path.join(ws.directory, 'ETS2Telemetry');

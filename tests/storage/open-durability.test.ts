@@ -88,7 +88,7 @@ describe('durability sequence on every writer open', () => {
   it('reports the verified durability, schema version and identity', async () => {
     const storage = await ws.open();
     const info = ok(storage.storageInfo());
-    expect(info).toMatchObject({schemaVersion: 2, purpose: 'synthetic', acceptedOrigin: 'synthetic', durability: {journalMode: 'wal', synchronous: 'full', lockingMode: 'exclusive', foreignKeys: true}});
+    expect(info).toMatchObject({schemaVersion: 3, purpose: 'synthetic', acceptedOrigin: 'synthetic', durability: {journalMode: 'wal', synchronous: 'full', lockingMode: 'exclusive', foreignKeys: true}});
     expect(info.databaseUuid).toBe(storage.summary.databaseUuid);
   });
 });

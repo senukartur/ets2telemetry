@@ -560,6 +560,7 @@ describe('ET-015a recording gate in the service (R3, R10, R14)', () => {
     const commits: string[] = [];
     const answer = (value: unknown) => Promise.resolve({ok: true, value});
     const client = {
+      observeHardMode: () => answer(undefined), getTrip: () => answer(undefined),
       upsertSession: () => answer({created: true, committedThroughEventSeq: '0'}), committedThrough: () => answer('0'),
       listTrips: () => answer({trips: [], nextCursor: null}), getEvent: () => answer(undefined), listEvents: () => answer([]), recordCompleteness: () => answer(undefined),
       commitGap: () => answer({status: 'committed', committedThroughEventSeq: '0'}),
@@ -601,6 +602,7 @@ describe('ET-015a recording gate in the service (R3, R10, R14)', () => {
     const order: string[] = [], appended: unknown[][] = [];
     const answer = (value: unknown) => Promise.resolve({ok: true, value});
     const client = {
+      observeHardMode: () => answer(undefined), getTrip: () => answer(undefined),
       upsertSession: () => answer({created: true, committedThroughEventSeq: '0'}), committedThrough: () => answer('0'),
       listTrips: () => answer({trips: [], nextCursor: null}), getEvent: () => answer(undefined), listEvents: () => answer([]), recordCompleteness: () => answer(undefined),
       appendSamples: (session: string, rows: {monotonicNs: string}[], options: unknown) => {
@@ -783,6 +785,7 @@ describe('ET-015c recording status on the parent port', () => {
     const connect = vi.spyOn(net, 'connect').mockImplementation(() => {const socket = new TestSocket(); sockets.push(socket); return socket as unknown as net.Socket;});
     const answer = (value: unknown) => Promise.resolve({ok: true, value});
     const client = {
+      observeHardMode: () => answer(undefined), getTrip: () => answer(undefined),
       upsertSession: () => answer({created: true, committedThroughEventSeq: '0'}), committedThrough: () => answer('0'),
       listTrips: () => answer({trips: [], nextCursor: null}), getEvent: () => answer(undefined), listEvents: () => answer([]), recordCompleteness: () => answer(undefined)
     } as unknown as StorageClient;
@@ -818,6 +821,7 @@ describe('ET-015c recording status on the parent port', () => {
     const connect = vi.spyOn(net, 'connect').mockImplementation(() => {const socket = new TestSocket(); sockets.push(socket); return socket as unknown as net.Socket;});
     const answer = (value: unknown) => Promise.resolve({ok: true, value});
     const client = {
+      observeHardMode: () => answer(undefined), getTrip: () => answer(undefined),
       upsertSession: () => answer({created: true, committedThroughEventSeq: '0'}), committedThrough: () => answer('0'),
       listTrips: () => answer({trips: [], nextCursor: null}), getEvent: () => answer(undefined), listEvents: () => answer([]), recordCompleteness: () => answer(undefined)
     } as unknown as StorageClient;
