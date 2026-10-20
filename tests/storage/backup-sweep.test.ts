@@ -44,16 +44,26 @@ async function seeded() {
   };
   writeFileSync(path.join(ws.backups, `${foreignPair}.json`), JSON.stringify(foreignManifest, null, 2) + '\n');
 
-  // 3. Stale partial files of this database: swept
+  // 3. Backup pair where the manifest is unrecognized/corrupt: both files exist, never an unmanifested rename orphan, strictly preserved
+  const unrecogStem = `telemetry-${uuid8}-v1-20261015T080000000Z`;
+  const unrecogSqlite = `${unrecogStem}.sqlite`;
+  const unrecogJson = `${unrecogStem}.json`;
+  writeFileSync(path.join(ws.backups, unrecogSqlite), 'fixture:existing-backup');
+  writeFileSync(path.join(ws.backups, unrecogJson), 'not-valid-manifest-json');
+
+  // 4. Stale partial files of this database: swept
   const own = `telemetry-${uuid8}-v1-20261015T110000000Z`;
   const stale = [
     `${own}.sqlite.partial`, `${own}.sqlite.partial-journal`, `${own}.sqlite.partial-wal`, `${own}.sqlite.partial-shm`,
     `${own}.json.partial`
   ];
 
-  // 4. Orphan backups and orphan manifests of this database: swept
+  // 5. Unmanifested orphan backup and sidecar of this database (no manifest file at all): swept
   const orphanBackup = `telemetry-${uuid8}-v1-20261015T100000000Z.sqlite`;
   const orphanJournal = `telemetry-${uuid8}-v1-20261015T100000000Z.sqlite-journal`;
+  for (const name of [...stale, orphanBackup, orphanJournal]) writeFileSync(path.join(ws.backups, name), `fixture:${name}`);
+
+  // 6. Orphan manifest of this database (no matching .sqlite file): swept
   const orphanManifest = `telemetry-${uuid8}-v1-20261015T090000000Z.json`;
   const orphanManifestContent = {
     format: 'ets2telemetry-backup-1', databaseUuid: uuid, fromVersion: 1,
@@ -63,17 +73,19 @@ async function seeded() {
   };
   writeFileSync(path.join(ws.backups, orphanManifest), JSON.stringify(orphanManifestContent, null, 2) + '\n');
 
-  // 5. Corrupt manifest alongside a .sqlite backup: swept
-  const corruptStem = `telemetry-${uuid8}-v1-20261015T080000000Z`;
-  const corruptSqlite = `${corruptStem}.sqlite`;
-  const corruptJson = `${corruptStem}.json`;
-  writeFileSync(path.join(ws.backups, corruptSqlite), 'fixture:corrupt-backup');
-  writeFileSync(path.join(ws.backups, corruptJson), 'not-valid-json');
+  // 7. Orphan manifest of a foreign database (same uuid8 prefix, but foreign databaseUuid): preserved
+  const foreignOrphanManifest = `telemetry-${uuid8}-v1-20261015T070000000Z.json`;
+  const foreignOrphanContent = {
+    format: 'ets2telemetry-backup-1', databaseUuid: foreignUuid, fromVersion: 1,
+    fileName: `telemetry-${uuid8}-v1-20261015T070000000Z.sqlite`, fileSha256: 'b'.repeat(64),
+    size: 100, rowCounts: {}, logicalDigest: '0'.repeat(64),
+    createdUtcMs: Date.parse('2026-10-15T07:00:00.000Z'), appVersion: '0.1.0', reason: 'pre-migration'
+  };
+  writeFileSync(path.join(ws.backups, foreignOrphanManifest), JSON.stringify(foreignOrphanContent, null, 2) + '\n');
 
-  const swept = [...stale, orphanBackup, orphanJournal, orphanManifest, corruptSqlite, corruptJson];
-  for (const name of [...stale, orphanBackup, orphanJournal]) writeFileSync(path.join(ws.backups, name), `fixture:${name}`);
+  const swept = [...stale, orphanBackup, orphanJournal, orphanManifest];
 
-  // 6. Files the sweep must never touch
+  // 8. Files the sweep must never touch
   const kept = [
     `telemetry-deadbeef-v1-${STAMP}.sqlite.partial`, // another database's leftover
     `telemetry-deadbeef-v1-${STAMP}.sqlite`, // another database's finished backup
@@ -81,6 +93,9 @@ async function seeded() {
     `${validPair}.json`,
     `${foreignPair}.sqlite`,
     `${foreignPair}.json`,
+    unrecogSqlite,
+    unrecogJson,
+    foreignOrphanManifest,
     `telemetry-${uuid8}-v1-${STAMP}.sqlite.partial.bak`,
     `telemetry-${uuid8}-v1-latest.sqlite.partial`,
     'notes.txt'

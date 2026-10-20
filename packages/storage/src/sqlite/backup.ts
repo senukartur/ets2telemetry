@@ -35,15 +35,24 @@ function fsyncFile(file: string) { const fd = openSync(file, 'r+'); try { fsyncS
 const sizeOf = (file: string) => { try { return statSync(file).size; } catch { return 0; } };
 function removeQuietly(...files: string[]) { for (const file of files) { try { rmSync(file, {force: true}); } catch { /* best effort */ } } }
 
+function isForeignManifest(manifestPath: string, databaseUuid: string): boolean {
+  const manifest = readManifest(manifestPath);
+  if (manifest) return manifest.databaseUuid !== databaseUuid;
+  try {
+    const raw = JSON.parse(readFileSync(manifestPath, 'utf8')) as {databaseUuid?: unknown};
+    return typeof raw.databaseUuid === 'string' && raw.databaseUuid !== databaseUuid;
+  } catch { return false; }
+}
+
 /**
  * Removes partial backup files and unmanifested orphan backups or manifests a writer left behind when it was
  * terminated during a pre-migration backup of this database: `telemetry-<uuid8>-v<n>-<timestamp>.sqlite.partial`
- * with its `-journal`, `-wal` and `-shm` files, `telemetry-<uuid8>-v<n>-<timestamp>.json.partial`, orphan `.sqlite`
- * backup files lacking a valid matching manifest for this database (with lingering sidecars), and orphan `.json`
- * manifests lacking a matching `.sqlite` backup. Call it only while holding the database's exclusive lock, so no other
- * writer can own them. Valid backup pairs, files belonging to other database UUIDs and anything else are never touched.
- * Best effort: a missing directory or a failed removal is skipped and retried at the next open. Returns the number
- * of files removed.
+ * with its `-journal`, `-wal` and `-shm` files, `telemetry-<uuid8>-v<n>-<timestamp>.json.partial`, unmanifested orphan
+ * `.sqlite` backup files (with lingering sidecars) left when terminated between renames, and orphan `.json` manifests
+ * lacking a matching `.sqlite` backup. Call it only while holding the database's exclusive lock, so no other writer can
+ * own them. Existing backup pairs (where both `.sqlite` and `.json` exist), files belonging to other database UUIDs and
+ * anything else are never touched. Best effort: a missing directory or a failed removal is skipped and retried at the
+ * next open. Returns the number of files removed.
  */
 export function sweepStalePartials(directory: string, databaseUuid: string): number {
   const uuid8 = databaseUuid.slice(0, 8);
@@ -72,39 +81,21 @@ export function sweepStalePartials(directory: string, databaseUuid: string): num
     const manifestExists = existsSync(manifestPath) && (() => { try { return lstatSync(manifestPath).isFile(); } catch { return false; } })();
 
     if (sqliteExists && manifestExists) {
-      const manifest = readManifest(manifestPath);
-      if (manifest && manifest.databaseUuid === databaseUuid) continue;
-      let foreign = manifest ? manifest.databaseUuid !== databaseUuid : false;
-      if (!foreign) {
-        try {
-          const raw = JSON.parse(readFileSync(manifestPath, 'utf8')) as {databaseUuid?: unknown};
-          if (typeof raw.databaseUuid === 'string' && raw.databaseUuid !== databaseUuid) foreign = true;
-        } catch { /* unparseable, not foreign */ }
-      }
-      if (foreign) continue;
-      for (const suffix of ['', '-journal', '-wal', '-shm']) {
-        const sidecar = path.join(directory, `${stem}.sqlite${suffix}`);
-        try { if (existsSync(sidecar) && lstatSync(sidecar).isFile()) { rmSync(sidecar); removed++; } } catch { /* best effort */ }
-      }
-      try { rmSync(manifestPath); removed++; } catch { /* best effort */ }
+      // Both files exist: a completed backup pair, never a rename-window orphan. Always preserve.
+      continue;
     } else if (sqliteExists && !manifestExists) {
+      // Unmanifested orphan backup left by a crash during rename: remove .sqlite and any sidecars.
       for (const suffix of ['', '-journal', '-wal', '-shm']) {
         const sidecar = path.join(directory, `${stem}.sqlite${suffix}`);
         try { if (existsSync(sidecar) && lstatSync(sidecar).isFile()) { rmSync(sidecar); removed++; } } catch { /* best effort */ }
       }
     } else if (!sqliteExists && manifestExists) {
-      const manifest = readManifest(manifestPath);
-      let foreign = manifest ? manifest.databaseUuid !== databaseUuid : false;
-      if (!foreign) {
-        try {
-          const raw = JSON.parse(readFileSync(manifestPath, 'utf8')) as {databaseUuid?: unknown};
-          if (typeof raw.databaseUuid === 'string' && raw.databaseUuid !== databaseUuid) foreign = true;
-        } catch { /* unparseable */ }
-      }
-      if (!foreign) {
+      // Manifest lacking a matching backup file: remove if it does not belong to another database.
+      if (!isForeignManifest(manifestPath, databaseUuid)) {
         try { rmSync(manifestPath); removed++; } catch { /* best effort */ }
       }
     } else {
+      // Lingering sidecars without base files.
       for (const suffix of ['-journal', '-wal', '-shm']) {
         const sidecar = path.join(directory, `${stem}.sqlite${suffix}`);
         try { if (existsSync(sidecar) && lstatSync(sidecar).isFile()) { rmSync(sidecar); removed++; } } catch { /* best effort */ }
