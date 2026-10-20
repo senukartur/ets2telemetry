@@ -125,7 +125,7 @@ function TripList({filters, options, recording, onDatabase, onOpen}: {
         <TableCell data-testid="journal-row-route">{row.route}</TableCell><TableCell data-testid="journal-row-outcome">{row.outcome}</TableCell>
         <TableCell>{completenessBadge(row.completeness, 'journal-row-completeness')}</TableCell>
         <TableCell data-testid="journal-row-observed">{row.observedDistance}</TableCell><TableCell data-testid="journal-row-fuel">{row.fuelUsed}</TableCell>
-        <TableCell data-testid="journal-row-cargo">{row.cargo} {row.isHardMode ? <HardModeBadge short /> : null}</TableCell>
+        <TableCell data-testid="journal-row-cargo">{row.cargo}{row.isHardMode ? <> <HardModeBadge short /></> : null}</TableCell>
         <TableCell><Button size="sm" variant="outline" data-testid="journal-row-open" onClick={() => onOpen({tripUuid: row.tripUuid, game: row.gameId})}>{JOURNAL_STRINGS.open}</Button></TableCell>
       </TableRow>)}
     </TableBody></Table> : null}
