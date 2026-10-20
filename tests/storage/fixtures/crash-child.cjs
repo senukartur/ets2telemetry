@@ -8,7 +8,8 @@
 //   migrate        in-process storage core (tests/storage/migration-crash.test.ts, ET-019); opens an older database copy,
 //                  and at the barrier `config.barrier` writes "barrier <name> <facts JSON>" synchronously to stdout and
 //                  blocks until the test terminates the process. Barriers: afterInspect (the open test hook), afterCopy
-//                  (the backup test hook: the partial copy exists), inside0002 (the real migration 0002 SQL has run inside
+//                  (the backup test hook: the partial copy exists), afterBackupRename (the backup was renamed to .sqlite),
+//                  inside0002 (the real migration 0002 SQL has run inside
 //                  the migration transaction, before the runner records the step and commits) and afterOpen (the open
 //                  returned, the database is never closed). The open runs in this process because the storage worker
 //                  copies open options field by field and never receives hooks or migrations (docs/storage.md).
@@ -90,7 +91,7 @@ async function migrate() {
   }});
   const options = {...config.open, now: () => config.nowMs,
     ...(config.barrier === 'inside0002' ? {migrations: [MIGRATIONS[0], wrapped]} : {}),
-    testHooks: {afterInspect: () => barrier('afterInspect'), afterCopy: partial => barrier('afterCopy', {partial: path.basename(partial)})}};
+    testHooks: {afterInspect: () => barrier('afterInspect'), afterCopy: partial => barrier('afterCopy', {partial: path.basename(partial)}), afterBackupRename: backup => barrier('afterBackupRename', {backup: path.basename(backup)})}};
   const storage = must(await openStorage(options));
   barrier('afterOpen', {summary: storage.summary});
   writeSync(2, `Barrier ${config.barrier} was never reached\n`);
