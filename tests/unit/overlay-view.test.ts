@@ -65,3 +65,29 @@ it('passes the edit mode through and starts in driving mode before the first del
   // The arrangement is the same in both modes.
   expect({...overlayView({...base, editing: true}), editing: false}).toEqual(overlayView(base));
 });
+it('localizes labels, units and tags in Russian when language is ru', () => {
+  const ruBase: OverlayPresentation = {...base, language: 'ru'};
+  const view = overlayView(ruBase);
+  expect(view.items.map(item => [item.testId, item.value, item.unit, item.caption])).toEqual([
+    ['overlay-speed', '90.0', 'км/ч', undefined],
+    ['overlay-rpm', '1500 rpm', undefined, undefined],
+    ['overlay-fuel', '250.0', 'л', undefined],
+    ['overlay-sdk-consumption', '25.0 L/100 km', undefined, 'среднее SDK'],
+    ['overlay-cargo', 'cargo.logs', undefined, undefined],
+    ['overlay-game-time', 'Day 1, 08:00', undefined, undefined]
+  ]);
+  expect(view.items.map(item => item.label)).toEqual(['Скорость', 'Обороты двигателя', 'Топливо', 'Средний расход по SDK', 'Груз', 'Игровое время']);
+  expect(view.items.map(item => item.short)).toEqual(['Скорость', 'Обороты', 'Топливо', 'Расход SDK', 'Груз', 'Время']);
+
+  const paused = overlayView({...ruBase, paused: true, status: 'paused'});
+  expect(paused.tags).toEqual([{id: 'paused', testId: 'overlay-tag-paused', text: 'Пауза'}]);
+
+  const noSignal = overlayView({...ruBase, freshness: 'unavailable', status: 'disconnected'});
+  expect(noSignal.tags).toEqual([{id: 'no-signal', testId: 'overlay-tag-no-signal', text: 'Нет сигнала'}]);
+
+  const synthetic = overlayView({...ruBase, origin: 'synthetic'});
+  expect(synthetic.tags).toEqual([{id: 'origin', testId: 'overlay-tag-origin', text: 'Синтетический'}]);
+
+  const replay = overlayView({...ruBase, origin: 'replay', freshness: 'stale'});
+  expect(replay.tags).toEqual([{id: 'origin', testId: 'overlay-tag-origin', text: 'Повтор'}]);
+});

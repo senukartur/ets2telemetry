@@ -25,6 +25,21 @@ it('builds the status, recording, open and exit menu and disables actions while 
   expect(exiting.tooltip).toBe('ETS2Telemetry\nExiting');
 });
 
+it('builds localized Russian menu and tooltip when language is ru', () => {
+  const ruReady: TrayInput = {...ready, language: 'ru'};
+  expect(trayModel(ruReady).menu).toEqual([
+    {kind: 'status', label: 'Служба: готово · Проверка хранилища: проверено'},
+    {kind: 'status', label: 'Запись: отключено в этой версии'},
+    {kind: 'separator'},
+    {kind: 'open', label: 'Открыть ETS2Telemetry', enabled: true},
+    {kind: 'separator'},
+    {kind: 'exit', label: 'Выход', enabled: true}
+  ]);
+  expect(trayModel(ruReady).tooltip).toBe('ETS2Telemetry\nСлужба готово · Источник: ETS2 (connected)');
+  const exiting = trayModel({...ruReady, exiting: true});
+  expect(exiting.tooltip).toBe('ETS2Telemetry\nЗавершение работы');
+});
+
 it('keeps tooltips within the notification-area limit and free of readings or paths', () => {
   expect(trayModel({...ready, health: health('starting', 'pending')}).tooltip).toBe('ETS2Telemetry\nStarting');
   expect(trayModel(ready).tooltip).toBe('ETS2Telemetry\nService ready · Source: ETS2 (connected)');

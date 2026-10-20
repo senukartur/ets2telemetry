@@ -51,20 +51,26 @@ export function formatPercent(fraction: number): string {
 }
 const pad2 = (value: bigint) => value.toString().padStart(2, '0');
 /** Absolute game minutes since the first game day as "Day N, HH:MM", where day 1 starts at minute 0. */
-export function formatGameTime(minutes: bigint): string {
+export function formatGameTime(minutes: bigint, labels: {day?: string} = {}): string {
   if (minutes < 0n) throw new RangeError('Game time cannot be negative');
   const minuteOfDay = minutes % MINUTES_PER_DAY;
-  return `Day ${(minutes / MINUTES_PER_DAY + 1n).toString()}, ${pad2(minuteOfDay / 60n)}:${pad2(minuteOfDay % 60n)}`;
+  const dayPrefix = labels.day ?? 'Day';
+  return `${dayPrefix} ${(minutes / MINUTES_PER_DAY + 1n).toString()}, ${pad2(minuteOfDay / 60n)}:${pad2(minuteOfDay % 60n)}`;
 }
 /** A non-negative game-time span as "H h M min" or "M min". */
-export function formatGameDuration(minutes: bigint): string {
+export function formatGameDuration(minutes: bigint, labels: {h?: string; min?: string} = {}): string {
   const span = minutes < 0n ? -minutes : minutes;
   const hours = span / 60n, rest = span % 60n;
-  return hours > 0n ? `${hours.toString()} h ${rest.toString()} min` : `${rest.toString()} min`;
+  const hLabel = labels.h ?? 'h';
+  const minLabel = labels.min ?? 'min';
+  return hours > 0n ? `${hours.toString()} ${hLabel} ${rest.toString()} ${minLabel}` : `${rest.toString()} ${minLabel}`;
 }
 /** Signed game minutes until the delivery deadline: "in …" before it and at it, "late by …" after it. */
-export function formatDeadline(remainingMinutes: bigint): string {
-  return remainingMinutes < 0n ? `late by ${formatGameDuration(remainingMinutes)}` : `in ${formatGameDuration(remainingMinutes)}`;
+export function formatDeadline(remainingMinutes: bigint, labels: {in?: string; lateBy?: string; h?: string; min?: string} = {}): string {
+  const inPrefix = labels.in ?? 'in';
+  const lateByPrefix = labels.lateBy ?? 'late by';
+  const duration = formatGameDuration(remainingMinutes, labels);
+  return remainingMinutes < 0n ? `${lateByPrefix} ${duration}` : `${inPrefix} ${duration}`;
 }
 /** Compass bearing rounded to whole degrees; 359.5° and above wrap to 0°. */
 export function formatBearing(heading: number): string {
@@ -82,6 +88,6 @@ export function formatPosition(position: {x: number; y: number; z: number}): str
 export function formatMoney(money: MoneyValue): string {
   return money.currency.basis === 'sdk-documented' ? `${money.raw} ${money.currency.code} (SDK-documented)` : `${money.raw} (currency unknown)`;
 }
-export function formatBoolean(value: boolean): string {
-  return value ? 'yes' : 'no';
+export function formatBoolean(value: boolean, labels: {yes?: string; no?: string} = {}): string {
+  return value ? (labels.yes ?? 'yes') : (labels.no ?? 'no');
 }

@@ -1,7 +1,7 @@
 import {randomUUID} from 'node:crypto';
 import * as nodeFs from 'node:fs/promises';
 import path from 'node:path';
-import type {OverlayLayout, OverlayPlacement, OverlaySections, SettingsSaveError, SettingsState, SettingsView, UnitGame, UnitProfile} from '../../../packages/contracts/src';
+import type {AppLanguage, OverlayLayout, OverlayPlacement, OverlaySections, SettingsSaveError, SettingsState, SettingsView, UnitGame, UnitProfile} from '../../../packages/contracts/src';
 import {withPlacement} from './overlay-placement';
 import {enabledSectionCount} from './overlay-sections';
 import type {DiagnosticFacts} from './diagnostics';
@@ -115,7 +115,7 @@ export class SettingsStore {
   get settled(): boolean {return this.loadSettled;}
 
   view(): SettingsView {
-    return {units: this.settings.units, overlay: this.settings.overlay, state: this.state, writable: !READ_ONLY_STATES.includes(this.state), saveError: this.saveError};
+    return {language: this.settings.language, units: this.settings.units, overlay: this.settings.overlay, state: this.state, writable: !READ_ONLY_STATES.includes(this.state), saveError: this.saveError};
   }
 
   /**
@@ -156,6 +156,11 @@ export class SettingsStore {
       returned(this.view());
     }, SETTINGS_LOAD_BUDGET_MS);
     return result;
+  }
+
+  /** Serialized save of the user interface language (ET-029). */
+  setLanguage(language: AppLanguage): Promise<SettingsView> {
+    return this.enqueue(settings => ({next: {...settings, language}, facts: {language}}));
   }
 
   /** Serialized save of one game's profile. Resolves with the applied settings only after the durable rename. */

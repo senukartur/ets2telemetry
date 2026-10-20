@@ -1,6 +1,6 @@
-import type {AppHealth, LiveTelemetry} from '../../../packages/contracts/src';
+import type {AppHealth, AppLanguage, LiveTelemetry} from '../../../packages/contracts/src';
 import {recordingStatusText} from './recording-status-text';
-import {SERVICE_HEALTH_TEXT, STORAGE_HEALTH_TEXT, STRINGS} from './strings';
+import {getServiceHealthText, getStorageHealthText, getStrings} from './strings';
 import type {TrayTone} from './tray-icon';
 
 /** Windows truncates notification-area tooltips longer than 127 characters; menu status lines keep the same limit. */
@@ -13,6 +13,7 @@ export interface TrayInput {
   /** Selection and status of the current live state; never readings, paths or identities. */
   source?: Pick<LiveTelemetry, 'selection' | 'status'>;
   exiting: boolean;
+  language?: AppLanguage;
 }
 export type TrayMenuItem =
   | {kind: 'status'; label: string}
@@ -23,31 +24,45 @@ export interface TrayModel {tooltip: string; menu: TrayMenuItem[]; tone: TrayTon
 const SOURCE_TEXT: Readonly<Record<LiveTelemetry['selection'], string>> = Object.freeze({
   game: 'no game selected', ets2: 'ETS2', ats: 'ATS', synthetic: 'synthetic fixture', replay: 'replay fixture'
 });
+const SOURCE_TEXT_RU: Readonly<Record<LiveTelemetry['selection'], string>> = Object.freeze({
+  game: 'игра не выбрана', ets2: 'ETS2', ats: 'ATS', synthetic: 'синтетический источник', replay: 'источник повтора'
+});
+function sourceText(selection: LiveTelemetry['selection'], language: AppLanguage): string {
+  return (language === 'ru' ? SOURCE_TEXT_RU : SOURCE_TEXT)[selection];
+}
+
 export function trayTone(health: AppHealth, exiting: boolean): TrayTone {
   if (!exiting && health.service === 'failed') return 'failed';
   return !exiting && health.service === 'ready' ? 'ready' : 'busy';
 }
-function statusLine(health: AppHealth): string {
-  return `Service: ${SERVICE_HEALTH_TEXT[health.service]} · Storage self-test: ${STORAGE_HEALTH_TEXT[health.storage]}`;
+function statusLine(health: AppHealth, language: AppLanguage): string {
+  if (language === 'ru') {
+    return `Служба: ${getServiceHealthText(health.service, 'ru')} · Проверка хранилища: ${getStorageHealthText(health.storage, 'ru')}`;
+  }
+  return `Service: ${getServiceHealthText(health.service, 'en')} · Storage self-test: ${getStorageHealthText(health.storage, 'en')}`;
 }
 export function trayModel(input: TrayInput): TrayModel {
   const {health, exiting} = input;
+  const language = input.language ?? 'en';
+  const strings = getStrings(language);
   let detail: string;
-  if (exiting) detail = STRINGS.trayExiting;
-  else if (health.service === 'starting') detail = STRINGS.trayStarting;
+  if (exiting) detail = strings.trayExiting;
+  else if (health.service === 'starting') detail = strings.trayStarting;
   else {
-    detail = `Service ${SERVICE_HEALTH_TEXT[health.service]}`;
-    if (health.service === 'ready' && input.source) detail += ` · Source: ${SOURCE_TEXT[input.source.selection]} (${input.source.status})`;
+    const serviceLabel = language === 'ru' ? 'Служба' : 'Service';
+    const sourceLabel = language === 'ru' ? 'Источник' : 'Source';
+    detail = `${serviceLabel} ${getServiceHealthText(health.service, language)}`;
+    if (health.service === 'ready' && input.source) detail += ` · ${sourceLabel}: ${sourceText(input.source.selection, language)} (${input.source.status})`;
   }
-  const tooltip = `${STRINGS.appName}\n${detail}`.slice(0, TRAY_TOOLTIP_LIMIT);
+  const tooltip = `${strings.appName}\n${detail}`.slice(0, TRAY_TOOLTIP_LIMIT);
   return {tooltip, tone: trayTone(health, exiting), menu: [
-    {kind: 'status', label: exiting ? STRINGS.trayExiting : statusLine(health)},
+    {kind: 'status', label: exiting ? strings.trayExiting : statusLine(health, language)},
     // ET-015c PR-4 (G8): the recording status in its short form; the tooltip does not carry it.
-    {kind: 'status', label: `${STRINGS.recordingTrayPrefix}${recordingStatusText(health.recording).short}`.slice(0, TRAY_TOOLTIP_LIMIT)},
+    {kind: 'status', label: `${strings.recordingTrayPrefix}${recordingStatusText(health.recording, language).short}`.slice(0, TRAY_TOOLTIP_LIMIT)},
     {kind: 'separator'},
-    {kind: 'open', label: STRINGS.trayOpen, enabled: !exiting},
+    {kind: 'open', label: strings.trayOpen, enabled: !exiting},
     {kind: 'separator'},
-    {kind: 'exit', label: STRINGS.trayExit, enabled: !exiting}
+    {kind: 'exit', label: strings.trayExit, enabled: !exiting}
   ]};
 }
 

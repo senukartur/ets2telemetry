@@ -1,4 +1,4 @@
-import type {LiveTelemetry, OverlayPresentation, OverlaySectionId, OverlaySectionView, OverlaySettings, UnitProfiles} from '../../../packages/contracts/src';
+import type {AppLanguage, LiveTelemetry, OverlayPresentation, OverlaySectionId, OverlaySectionView, OverlaySettings, UnitProfiles} from '../../../packages/contracts/src';
 import {resolveDisplayUnits} from '../../../packages/telemetry-core/src/display-profile';
 import {carriesField, type LiveFieldId} from '../../../packages/telemetry-core/src/live-view';
 import {liveSources, V1_JOB_FIELDS} from './live-sources';
@@ -54,7 +54,7 @@ const BASELINE_SECTIONS: ReadonlySet<OverlaySectionId> = new Set<OverlaySectionI
  * `editing` (ET-012b) only marks the overlay edit mode for the renderer; it changes no section or value.
  */
 export function overlayPresentation(live: LiveTelemetry, units: UnitProfiles = DEFAULT_UNIT_PROFILES, overlay: OverlaySettings = DEFAULT_OVERLAY_SETTINGS,
-  previous?: OverlayPresentation, editing = false): OverlayPresentation {
+  previous?: OverlayPresentation, editing = false, language: AppLanguage = 'en'): OverlayPresentation {
   const observation = live.observation;
   const explicitFixture = isExplicitFixture(live);
   const game = displayGame(live), profile = profileFor(units, game);
@@ -107,6 +107,7 @@ export function overlayPresentation(live: LiveTelemetry, units: UnitProfiles = D
     layout: overlay.layout,
     paused: current && sources.v0View.connection.paused,
     sections,
-    editing
+    editing,
+    language
   };
 }

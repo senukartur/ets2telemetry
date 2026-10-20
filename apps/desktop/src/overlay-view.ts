@@ -1,6 +1,7 @@
 import type {OverlayLayout, OverlayPresentation, OverlaySectionId} from '../../../packages/contracts/src';
 import {CLUSTER_GAUGE_SECTIONS, OVERLAY_GROUPS, type OverlayGroupId} from './overlay-sections';
-import {OVERLAY_SECTION_SHORT_TEXT, OVERLAY_SECTION_TEXT, STRINGS} from './strings';
+import {getOverlaySectionShortText, getOverlaySectionText, getStrings} from './strings';
+import {translateUnit} from './i18n';
 
 // The overlay renderer's view model (ET-012a). Pure, safe for the overlay bundle and plain Node tests. It only arranges
 // the text main already formatted; it converts, rounds and formats nothing (unit-profiles.test.ts scans it for that).
@@ -49,31 +50,38 @@ export interface OverlayView {
 
 /** What the overlay shows before main's first delivery: no signal, no sections. */
 export const OVERLAY_PLACEHOLDER: OverlayPresentation = Object.freeze({source: 'No game', origin: 'none', status: 'waiting', speed: '—', speedUnit: 'km/h',
-  fuel: '—', fuelUnit: 'L', freshness: 'unavailable', layout: 'strip', paused: false, sections: Object.freeze([]), editing: false});
+  fuel: '—', fuelUnit: 'L', freshness: 'unavailable', layout: 'strip', paused: false, sections: Object.freeze([]), editing: false, language: 'en'});
 const DASH = '—';
 
 export function overlayView(presentation: OverlayPresentation = OVERLAY_PLACEHOLDER): OverlayView {
+  const language = presentation.language ?? 'en';
+  const strings = getStrings(language);
   const items = presentation.sections.map((section): OverlayItem => {
     const available = section.state === 'value';
-    const base = {id: section.id, testId: `overlay-${section.id}` as const, label: OVERLAY_SECTION_TEXT[section.id], short: OVERLAY_SECTION_SHORT_TEXT[section.id],
-      unavailable: !available};
+    const base = {
+      id: section.id,
+      testId: `overlay-${section.id}` as const,
+      label: getOverlaySectionText(section.id, language),
+      short: getOverlaySectionShortText(section.id, language),
+      unavailable: !available
+    };
     // Speed and fuel keep the separate number and unit of the ET-008 smoke contract; the unit stays visible beside a dash.
-    if (section.id === 'speed') return {...base, value: available ? presentation.speed : DASH, unit: presentation.speedUnit};
-    if (section.id === 'fuel') return {...base, value: available ? presentation.fuel : DASH, unit: presentation.fuelUnit,
+    if (section.id === 'speed') return {...base, value: available ? presentation.speed : DASH, unit: translateUnit(presentation.speedUnit, language)};
+    if (section.id === 'fuel') return {...base, value: available ? presentation.fuel : DASH, unit: translateUnit(presentation.fuelUnit, language),
       ...(available && section.detail ? {detail: section.detail, detailTestId: 'overlay-fuel-level'} : {})};
     return {...base, value: available ? section.text : DASH,
       ...(available && section.detail ? {detail: section.detail, detailTestId: `overlay-${section.id}-detail`} : {}),
       ...(available && section.ring !== undefined ? {ring: section.ring} : {}),
-      ...(section.id === 'sdk-consumption' ? {caption: STRINGS.overlaySdkMean} : {})};
+      ...(section.id === 'sdk-consumption' ? {caption: strings.overlaySdkMean} : {})};
   });
   const byId = new Map(items.map(item => [item.id, item]));
   const groups = OVERLAY_GROUPS.map(group => ({id: group.id, items: group.sections.flatMap(id => byId.get(id) ?? [])})).filter(group => group.items.length > 0);
   const gaugeShown = items.some(item => CLUSTER_GAUGE_SECTIONS.has(item.id));
   const tags: OverlayTag[] = [];
-  if (presentation.paused) tags.push({id: 'paused', testId: 'overlay-tag-paused', text: STRINGS.overlayPaused});
-  if (presentation.freshness === 'unavailable') tags.push({id: 'no-signal', testId: 'overlay-tag-no-signal', text: STRINGS.overlayNoSignal});
+  if (presentation.paused) tags.push({id: 'paused', testId: 'overlay-tag-paused', text: strings.overlayPaused});
+  if (presentation.freshness === 'unavailable') tags.push({id: 'no-signal', testId: 'overlay-tag-no-signal', text: strings.overlayNoSignal});
   if (presentation.origin === 'synthetic' || presentation.origin === 'replay')
-    tags.push({id: 'origin', testId: 'overlay-tag-origin', text: presentation.origin === 'synthetic' ? STRINGS.overlaySynthetic : STRINGS.overlayReplay});
+    tags.push({id: 'origin', testId: 'overlay-tag-origin', text: presentation.origin === 'synthetic' ? strings.overlaySynthetic : strings.overlayReplay});
   return {
     layout: presentation.layout, source: presentation.source, origin: presentation.origin, status: presentation.status, freshness: presentation.freshness,
     paused: presentation.paused, dim: presentation.freshness !== 'current', tags, items, groups,

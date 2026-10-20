@@ -6,10 +6,11 @@ import os from 'node:os';
 import path from 'node:path';
 import type {EventEmitter} from 'node:events';
 import {version} from '../../../package.json';
-import type {AppHealth, AppState, AppUninstallResult, DiagnosticsExportResult, LiveTelemetry, OverlayEditState, OverlayPresentation, OverlaySettings, PluginFolderChoice, PluginGame, PluginShowFileResult, RecordingHealth, ScaffoldStatus, SettingsView,
+import type {AppHealth, AppLanguage, AppState, AppUninstallResult, DiagnosticsExportResult, LiveTelemetry, OverlayEditState, OverlayPresentation, OverlaySettings, PluginFolderChoice, PluginGame, PluginShowFileResult, RecordingHealth, ScaffoldStatus, SettingsView,
   SourceSelection, UnitProfiles} from '../../../packages/contracts/src';
 import {SettingsBusyError, SettingsError, SettingsStore, settingsDirectory} from './settings-store';
 import {isUnitGame, isUnitProfile} from './unit-profiles';
+import {isAppLanguage} from './settings-schema';
 import {processEntrypoint} from './entrypoints';
 import {BUNDLE_FLUSH_MS, createDiagnostics, MAIN_EXIT_FLUSH_MS, type DiagnosticFacts} from './diagnostics';
 import {mainLogLocation, serviceEnvironment} from './log-location';
@@ -242,14 +243,14 @@ function runApplication(profileError: unknown): void {
     if (!service || !serviceReady || supervisor.stopping) throw new Error('Service unavailable');
     service.postMessage(request);
   }, (code, error) => log(code, error)) : undefined;
-  function publishOverlay(live: LiveTelemetry, units: UnitProfiles, settings: OverlaySettings): void {
-    lastOverlay = overlayPresentation(live, units, settings, lastOverlay, overlayEdit.active);
+  function publishOverlay(live: LiveTelemetry, units: UnitProfiles, settings: OverlaySettings, language: AppLanguage = settingsStore.view().language): void {
+    lastOverlay = overlayPresentation(live, units, settings, lastOverlay, overlayEdit.active, language);
     if (latency) lastOverlay = latency.project(lastOverlay, live, Boolean(overlay && !overlay.isDestroyed() && overlay.isVisible()));
     overlaySubscriptions.publish(lastOverlay);
   }
   const freshness = new LiveFreshness(update => {
     const view = settingsStore.view();
-    dashboardSubscriptions.publish(update); publishOverlay(update, view.units, view.overlay); overlayController?.update(update);
+    dashboardSubscriptions.publish(update); publishOverlay(update, view.units, view.overlay, view.language); overlayController?.update(update);
     lastLive = update; presentTray();
   });
   const rendererBudget = new RecoveryBudget();
@@ -355,7 +356,8 @@ function runApplication(profileError: unknown): void {
     pushAppState();
     if (lifecycle.exiting) return;
     const view = settingsStore.view();
-    publishOverlay(lastLive, view.units, view.overlay);
+    presentTray(true);
+    publishOverlay(lastLive, view.units, view.overlay, view.language);
     overlayController?.setLayout(view.overlay.layout, view.overlay.placements[view.overlay.layout], view.overlay.sections);
   }
   // ET-012b edit mode. The controller reports every change of its edit state; main pushes it to the dashboard and,
@@ -366,7 +368,7 @@ function runApplication(profileError: unknown): void {
     overlayEdit = state;
     if (!state.active) focusGate.stop();
     pushAppState();
-    if (toggled && !lifecycle.exiting) {const view = settingsStore.view(); publishOverlay(lastLive, view.units, view.overlay);}
+    if (toggled && !lifecycle.exiting) {const view = settingsStore.view(); publishOverlay(lastLive, view.units, view.overlay, view.language);}
   }
   /** True while the dashboard or the overlay window has the keyboard focus. */
   function ownFocused(): boolean {
@@ -398,7 +400,7 @@ function runApplication(profileError: unknown): void {
     return saveSettings(() => settingsStore.setOverlayPlacement(layout, draft));
   }
   function presentTray(immediate = false): void {
-    trayPresenter?.update({health, exiting: lifecycle.exiting, source: {selection: lastLive.selection, status: lastLive.status}}, immediate);
+    trayPresenter?.update({health, exiting: lifecycle.exiting, source: {selection: lastLive.selection, status: lastLive.status}, language: settingsStore.view().language}, immediate);
   }
   // The overlay is marked not loaded first, so an edit in progress hides it before the edit is cancelled; that order avoids
   // a needless show on the retired document.
@@ -738,6 +740,13 @@ function runApplication(profileError: unknown): void {
       throw new Error(error instanceof SettingsError || error instanceof SettingsBusyError ? error.message : 'Settings could not be saved', {cause: error});
     }
   }
+  // Exactly one language id. Main validates it again and persists the change.
+  ipcMain.handle('settings:set-language', async (event, ...request: unknown[]) => {
+    if (!trusted(event)) throw new Error('Untrusted settings request');
+    const [language] = request;
+    if (request.length !== 1 || !isAppLanguage(language)) throw new Error('Invalid language request');
+    return saveSettings(() => settingsStore.setLanguage(language));
+  });
   // Exactly a game and a profile id; the store serializes saves and refuses more than four outstanding ones.
   ipcMain.handle('settings:set-unit-profile', async (event, ...request: unknown[]) => {
     if (!trusted(event)) throw new Error('Untrusted settings request');

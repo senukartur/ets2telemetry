@@ -1,7 +1,7 @@
 // Scaffold status only. The telemetry wire protocol belongs to ET-002a.
 export interface ScaffoldStatus { service: 'ready'; storage: 'verified'; synthetic: true }
 import type {CurrentState, SourceIdentity, AppliedState, CaptureTime} from './protocol-v0';
-import type {AppState, DiagnosticsExportResult, OverlayEditState, OverlayLayout, OverlaySectionId, OverlaySections, PluginFolderChoice, PluginGame, PluginSetupView, PluginShowFileResult, RecordingCode, SettingsView,
+import type {AppLanguage, AppState, DiagnosticsExportResult, OverlayEditState, OverlayLayout, OverlaySectionId, OverlaySections, PluginFolderChoice, PluginGame, PluginSetupView, PluginShowFileResult, RecordingCode, SettingsView,
   UnitGame, UnitProfile} from './app-state';
 import type {Available, LiveObservationV1, Uint64} from './protocol-v1';
 import type {JournalDatabase, JournalEventPage, JournalIntervalPage, JournalTripDetail, JournalTripPage, JournalTripsQuery} from './journal';
@@ -49,6 +49,10 @@ export interface DesktopBridge {
   subscribeAppState(listener: (state: AppState) => void): () => void;
   /** Explicit, orderly application exit; closing the window only hides it to the tray. */
   exitApplication(): Promise<void>;
+  /**
+   * Persists the user interface language and resolves with the settings that now apply.
+   */
+  setLanguage(language: AppLanguage): Promise<SettingsView>;
   /**
    * Persists one game's display unit profile and resolves with the settings that now apply. Main applies the change only
    * after the durable write; it rejects a newer-version (read-only) file, a failed write and invalid values.
@@ -184,6 +188,8 @@ export interface OverlayPresentation {
   sections: readonly OverlaySectionView[];
   /** The overlay edit mode (ET-012b): the renderer outlines the overlay and marks it as a drag region. Display only. */
   editing: boolean;
+  /** The interface language for localized tags and units. */
+  language?: AppLanguage;
 }
 export interface OverlayBridge {
   subscribeOverlay(listener: (update: OverlayPresentation) => void): () => void;
