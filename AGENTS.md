@@ -1,5 +1,19 @@
 # Agent Instructions
 
+## ET-009 acceptance and diagnostic PR handoff — October 20, 2026
+
+The owner accepted the full ET-009 prototype gate and moved the card to Done after reviewing the
+[closeout](docs/validation/et-009.md). Functional-matrix, latency and performance exceptions retain their
+recorded measurement limits. Multi-monitor, mixed-DPI and monitor-removal validation moved to
+[ET-042](https://trello.com/c/GmLKrK10) for later execution and remains unverified. Intentional TruckersMP
+disconnect plus console-assisted manual server re-entry passed in both games; automatic network-loss
+recovery is not inferred. SP-01/CAP-01 acceptance and CAP-01's recorded gaps remain unchanged.
+
+The owner subsequently authorized taking diagnostic PR #157 through independent review, final automatic
+Windows CI after Ready and squash merge. Card acceptance does not replace those code gates, authorize a
+release, or accept other cards. Preserve the frozen local evidence; do not repeat accepted game checks as
+a new gate without a relevant behavior change or finding.
+
 ## ET-008 code-acceptance exception — October 12, 2026
 
 The owner explicitly accepts ET-008 code by exception and authorizes the coordinator to integrate PR #21 with current main, preserve Tailwind/shadcn in the main window and the isolated transparent overlay, obtain independent review and a successful final automatic Windows CI after Ready, then squash merge without another confirmation. This supersedes the earlier implementation-only permission for this package. Mandatory game, environment, CAP-01/SP-01 and performance checks remain pending; a code merge does not establish compatibility or complete those criteria. The card remains in Review until its mandatory criteria are accepted. No protocol v1, durable history, later MVP or server work is authorized.

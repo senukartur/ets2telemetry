@@ -1,5 +1,14 @@
 # ET-009 overlay latency measurement
 
+## Current disposition — October 20, 2026
+
+The owner accepted the indicative latency item with its disclosed limits, then accepted the full ET-009
+prototype gate. See [the closeout](et-009.md) for the matrix, measurement results, performance exception,
+ET-042 transfer and evidence identities. The diagnostic code remains default-off and follows its own
+independent review and final automatic Ready CI before the owner-authorized squash merge of PR #157.
+The preparation-time pending statements later in this document describe their original attempts; the
+accepted real-game results in the closeout supersede their status, not their raw observations.
+
 ## Audit and scope (October 20, 2026)
 
 Existing lifecycle/freshness logs cannot measure SDK-to-overlay latency. A v0 capture has a session-relative timestamp,

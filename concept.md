@@ -2,9 +2,11 @@
 
 Concept recorded on: October 10, 2026.
 
-ET-009 latency preparation, October 20, 2026: the [opt-in measurement procedure](docs/validation/et-009-latency.md)
-correlates v0 speed/fuel captures with Chromium marker readbacks and reports clock-qualified bounds. It establishes no physical
-screen latency, performance or game acceptance; the 200 ms target requires reviewed game evidence.
+ET-009 owner acceptance, October 20, 2026: the [prototype closeout](docs/validation/et-009.md) records the
+accepted functional matrix, indicative latency and performance with their explicit exceptions and limits.
+Monitor/mixed-DPI/removal checks moved to ET-042 and remain unverified. The [opt-in measurement procedure](docs/validation/et-009-latency.md)
+correlates v0 speed/fuel captures with Chromium marker readbacks; it does not establish physical-screen
+latency or a universal 200 ms guarantee. The diagnostic PR's review/CI/merge gates remain separate.
 
 Status updated October 11, 2026: ET-001 scaffold implemented and its native Windows installer/packaged-worker criteria verified. All six actual lifecycle operations exited normally; acceptance includes a separate corrected uninstall residue evaluation and exact owned cleanup, preserving the original failed wrapper report. The package passed installed SQLite/security/startup/shutdown probes. Independent whole-PR review found no actionable source issues; the final documentation delta is reviewed separately. An earlier native Playwright launch timeout remains unexplained flakiness. No integration has been tested in a running game. ETS2Telemetry is the working project name. See [Windows setup](docs/setup.md) and [the validation record](docs/validation/et-001.md) for exact identities and limits. ET-022 and SP-01 become eligible after the accepted scaffold PR is merged.
 
