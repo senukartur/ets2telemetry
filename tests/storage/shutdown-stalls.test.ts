@@ -215,17 +215,70 @@ describe('ET-019 shutdown and close stalls', () => {
     } finally { await server.stop(); }
   }, 90_000);
 
-  // (b) G18. docs/storage.md: the `history-storage` close grace is 800 ms; then one event-loop turn, then the worker is
-  // terminated. The step fails, so the service reports `{type: 'stopped', clean: false}`, when the worker had not answered
-  // the close, and a close stalled inside SQLite ends as `timeout` at the 1,000 ms budget. A worker that never answers
-  // therefore ends unclean, `failed` or `timeout`, never `ok`, and never stretches the stop past its budget. Finding of
-  // this PR (docs/validation/et-019.md, PR-4): the termination itself closes the database in native SQLite (the WAL is
-  // checkpointed and removed), so even a stall outside SQLite can end as `timeout` when that close outlasts the 200 ms
-  // between the grace and the budget; the case therefore accepts either verdict and checks when the termination starts:
-  // no earlier than the grace less LOOP_CLOCK_SLACK_MS, and before the step's verdict at the 1,000 ms budget. A grace
-  // anywhere in [700, 1000) ms passes; there is deliberately no timed upper bound. The 700 ms edge holds with prompt
-  // timers: on a loaded host a late grace timer can let a grace just below 700 ms pass. The 1,000 ms edge is timer order.
-  it('(b) G18: a close that would stall forever is terminated no earlier than the 800 ms grace (less 100 ms) and before the 1,000 ms step budget; the stop is unclean and bounded, and every committed event survives (REG-006, REG-011)', async () => {
+  // (b1) ET-038 (G18): a slow close held for 1,200 ms (past the old 800 ms grace) completes cleanly under adaptive
+  // grace cascaded from prompt intake and flush phases (<50 ms); the stop exits 0 clean, records HISTORY_STORAGE_CLOSED,
+  // stays within the 2,500 ms budget, and stores every committed event (REG-006, REG-011).
+  it('(b1) ET-038: a slow close held for 1,200 ms (past the old 800 ms grace) completes cleanly under adaptive grace; the stop is clean and bounded, and every committed event survives (REG-006, REG-011)', async () => {
+    const localAppData = ws.directory;
+    expectNoGameHistory(localAppData);
+    const input = scenario('normal-delivery'), timeline: string[] = [];
+    expect(reactiveConflicts(input)).toEqual([]);
+    const server = await serveV1Reactive(input, {scale: 0, awaitScriptedAcks: true});
+    const worker = storageWorker({closeHold: true}), traced = tracedHandle(worker.handle, timeline), failures: unknown[] = [];
+    const socket = gatedConnect(timeline, '9', () => until(() => timeline.includes('done appendSamples'), 'the early sample write', HANG_GUARD_MS), error => failures.push(error));
+    const held = guarded(once(worker.control!, 'message'), 'the held close', HANG_GUARD_MS).then(async ([message]) => {
+      timeline.push('held close');
+      await new Promise(resolve => setTimeout(resolve, 1200));
+      worker.control?.postMessage({type: 'release'});
+      return message as unknown;
+    });
+    held.catch(() => undefined);
+    const shutdown = tracedShutdown(timeline);
+    let runtime!: RecordingRuntime;
+    const stop = stopOnDisconnect(shutdown, socket, timeline, () => runtime.v1.current);
+    const s = serviceRuntime('t', traced.handle, socket, timeline, {sampleFlushMs: EARLY_FLUSH_MS, onState: stop.onState});
+    runtime = s.runtime;
+    s.runtime.register(shutdown.registrar);
+    try {
+      await startDurable(s.runtime, server.endpoint);
+      const {clean, elapsedMs, atStop} = await stop.stopped();
+
+      const report = await guarded(server.done, 'the reactive server run', HANG_GUARD_MS);
+      expect(await held).toEqual({type: 'held', command: 'close'});
+      expect(await guarded(worker.exit, 'the storage worker exit', HANG_GUARD_MS)).toBe(0);
+
+      expect(atStop).toEqual({sockets: 1, status: 'disconnected'});
+      expect(shutdown.steps).toEqual([
+        {phase: 'intake', name: 'v1-ingestion', outcome: 'ok'},
+        {phase: 'flush', name: 'recording-flush', outcome: 'ok'},
+        {phase: 'storage', name: 'history-storage', outcome: 'ok'}
+      ]);
+      expect(clean).toBe(true);
+      expect([failures, timeline.filter(line => line === 'done appendSamples').length, ordered(timeline, ['done appendSamples', 'stop'])]).toEqual([[], 1, ['done appendSamples', 'stop']]);
+      expect(s.logs.filter(([event]) => event.startsWith('V1_SAMPLES_'))).toEqual([]);
+      expect(ordered(timeline, ['start history-storage', 'held close', 'done close', 'HISTORY_STORAGE_CLOSED', 'step storage history-storage ok']))
+        .toEqual(['start history-storage', 'held close', 'done close', 'HISTORY_STORAGE_CLOSED', 'step storage history-storage ok']);
+      expect(elapsedMs).toBeLessThanOrEqual(STOP_BUDGET_MS);
+      expect(s.logs.filter(([event]) => event === 'HISTORY_STORAGE_CLOSED')).toHaveLength(1);
+      await until(() => s.runtime.history.state === 'closed', 'the closed history state', HANG_GUARD_MS);
+      const acks = timeline.filter(line => line.startsWith('ack ')).map(line => line.slice(4));
+      expect([acks, servedAcks(report, 0), socket.sockets()]).toEqual([NORMAL_DELIVERY_ACKS, NORMAL_DELIVERY_ACKS, 1]);
+
+      const storage = await reader('t').open(), session = sessionOf(input);
+      expect(ok(storage.committedThrough(session))).toBe('9');
+      storage.close();
+      const expected = tripExpected('normal-delivery');
+      expect(await storedRows(reader('t'), input.seed)).toEqual({trips: expected.trips, attributions: expected.attributions, intervals: expected.intervals});
+      expect(expectInvariants(target('t'), session, acks).samples.map(row => row.monotonicNs)).toEqual(NORMAL_DELIVERY_SAMPLES);
+      expectNoGameHistory(localAppData);
+    } finally { worker.control?.close(); await server.stop(); }
+  }, 90_000);
+
+  // (b2) G18. docs/storage.md: a close held forever is terminated after the adaptive grace (~2,250 ms when earlier phases
+  // take <50 ms, with a 200 ms reserve before the effective budget). The step ends unclean, ailed or 	imeout,
+  // the service reports {type: 'stopped', clean: false} and exits 1, the stop stays within the 2,500 ms budget,
+  // and every committed event survives in the WAL (REG-006, REG-011).
+  it('(b2) G18: a close that would stall forever is terminated after the adaptive grace and before the stop budget; the stop is unclean and bounded, and every committed event survives (REG-006, REG-011)', async () => {
     const localAppData = ws.directory;
     expectNoGameHistory(localAppData);
     const input = scenario('normal-delivery'), timeline: string[] = [];
@@ -254,6 +307,7 @@ describe('ET-019 shutdown and close stalls', () => {
     try {
       await startDurable(s.runtime, server.endpoint);
       const {clean, elapsedMs, atStop} = await stop.stopped();
+
       const report = await guarded(server.done, 'the reactive server run', HANG_GUARD_MS);
       expect(await held).toEqual({type: 'held', command: 'close'});
       // Terminated before its host received the close: worker_threads reports exit code 1.
@@ -268,13 +322,15 @@ describe('ET-019 shutdown and close stalls', () => {
       // The one sample row was written before the stop, so the flush wrote nothing (no V1_SAMPLES_EXIT, no second write).
       expect([failures, timeline.filter(line => line === 'done appendSamples').length, ordered(timeline, ['done appendSamples', 'stop'])]).toEqual([[], 1, ['done appendSamples', 'stop']]);
       expect(s.logs.filter(([event]) => event.startsWith('V1_SAMPLES_'))).toEqual([]);
-      // The close was held, the termination started after the grace and before the step's verdict: the order of the
+      // The close was held, the termination started after the adaptive grace and before the step's verdict: the order of the
       // timeline, not a duration, bounds it by the budget.
       const step = `step storage history-storage ${verdict[0].outcome}`;
       expect(ordered(timeline, ['start history-storage', 'held close', 'terminate', step])).toEqual(['start history-storage', 'held close', 'terminate', step]);
-      expect(terminatedAfterMs).toBeGreaterThanOrEqual(HISTORY_CLOSE_GRACE_MS - LOOP_CLOCK_SLACK_MS);
+      // Adaptive grace gives ~2,250 ms (well beyond the baseline 800 ms grace), bounded by the stop budget.
+      expect(terminatedAfterMs).toBeGreaterThanOrEqual(1200);
+      expect(terminatedAfterMs).toBeLessThanOrEqual(STOP_BUDGET_MS);
       // The whole stop stayed inside its budget although the close never ended.
-      expect(elapsedMs).toBeLessThanOrEqual(STOP_BUDGET_MS);
+      expect(elapsedMs).toBeLessThanOrEqual(STOP_BUDGET_MS + LOOP_CLOCK_SLACK_MS);
       // No orderly-close row, and the database is closed for the service lifetime.
       expect(s.logs.filter(([event]) => event === 'HISTORY_STORAGE_CLOSED')).toEqual([]);
       await until(() => s.runtime.history.state === 'closed', 'the closed history state', HANG_GUARD_MS);
@@ -291,7 +347,6 @@ describe('ET-019 shutdown and close stalls', () => {
       expectNoGameHistory(localAppData);
     } finally { worker.control?.close(); await server.stop(); }
   }, 90_000);
-
   // (c) one-second-samples (tests/fixtures/recording/one-second-samples.json): connection 1 from 0 to 13,000 ms commits and
   // acknowledges events 1–6, connection 2 from 15,500 to 17,500 ms carries the delivery (7) and the clear (8). The first
   // process never flushes on its timer, so at its stop after connection 1 the final appendSamples carries every pending

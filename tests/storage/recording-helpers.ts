@@ -421,7 +421,7 @@ export function tracedShutdown(timeline: string[], onStart?: (name: string) => v
     steps.push(step); timeline.push(`step ${step.phase} ${step.name} ${step.outcome}`);
   });
   const registrar: Pick<ShutdownSequence, 'register'> = {
-    register: (phase, step) => sequence.register(phase, {...step, run: () => { timeline.push(`start ${step.name}`); onStart?.(step.name); return step.run(); }})
+    register: (phase, step) => sequence.register(phase, {...step, run: context => { timeline.push(`start ${step.name}`); onStart?.(step.name); return step.run(context); }})
   };
   return {sequence, registrar, steps};
 }

@@ -1,4 +1,8 @@
 import type {DiagnosticFacts} from './diagnostics';
+/** Baseline history close grace when earlier phases use full budget. */
+export const HISTORY_CLOSE_GRACE_MS = 800;
+/** Reserve between the storage close grace and the step budget for worker termination and step settlement. */
+export const CLOSE_TERMINATE_RESERVE_MS = 200;
 
 /** Ordered service shutdown phases: stop new input, write pending work, then release storage. */
 export const SHUTDOWN_PHASES = ['intake', 'flush', 'storage'] as const;
@@ -9,11 +13,16 @@ export type ShutdownPhase = typeof SHUTDOWN_PHASES[number];
  */
 export const SERVICE_STOP_BUDGET_MS = 2500;
 
+export interface ShutdownStepContext {
+  budgetMs: number;
+  graceMs?: number;
+}
+
 export interface ShutdownStep {
   /** Fixed lowercase code written to diagnostics; never a path or runtime value. */
   name: string;
   budgetMs: number;
-  run(): Promise<void> | void;
+  run(context?: ShutdownStepContext): Promise<void> | void;
 }
 export type ShutdownOutcome = 'ok' | 'failed' | 'timeout';
 export interface ShutdownTimers {
@@ -68,8 +77,22 @@ export class ShutdownSequence {
 
   private async execute(): Promise<{clean: boolean}> {
     let clean = true;
+    const sequenceStarted = this.timers.now();
     for (const phase of SHUTDOWN_PHASES) {
-      const outcomes = await Promise.all(this.phases.get(phase)!.map(step => this.runStep(phase, step)));
+      const steps = this.phases.get(phase)!;
+      let contexts: ShutdownStepContext[] | undefined;
+      if (phase === 'storage') {
+        const elapsed = this.timers.now() - sequenceStarted;
+        const remainingStopBudget = Math.max(0, SERVICE_STOP_BUDGET_MS - elapsed);
+        contexts = steps.map(step => {
+          const effectiveBudget = Math.max(step.budgetMs, remainingStopBudget);
+          const graceMs = step.name === 'history-storage'
+            ? Math.max(HISTORY_CLOSE_GRACE_MS, effectiveBudget - CLOSE_TERMINATE_RESERVE_MS)
+            : undefined;
+          return {budgetMs: effectiveBudget, ...(graceMs !== undefined ? {graceMs} : {})};
+        });
+      }
+      const outcomes = await Promise.all(steps.map((step, index) => this.runStep(phase, step, contexts ? contexts[index] : {budgetMs: step.budgetMs})));
       if (outcomes.some(outcome => outcome !== 'ok')) clean = false;
     }
     return {clean};
@@ -81,8 +104,9 @@ export class ShutdownSequence {
    * delivers the I/O that arrived meanwhile, so a step result that was already waiting still counts. A step that has
    * not finished by then times out; the turn is scheduled only after the budget expired.
    */
-  private runStep(phase: ShutdownPhase, step: ShutdownStep): Promise<ShutdownOutcome> {
+  private runStep(phase: ShutdownPhase, step: ShutdownStep, context?: ShutdownStepContext): Promise<ShutdownOutcome> {
     const started = this.timers.now();
+    const effectiveBudget = context?.budgetMs ?? step.budgetMs;
     return new Promise<ShutdownOutcome>(resolve => {
       let settled = false, verdict: unknown;
       const settle = (outcome: ShutdownOutcome) => {
@@ -92,8 +116,8 @@ export class ShutdownSequence {
         this.log('SHUTDOWN_STEP', undefined, {phase, name: step.name, outcome, ms: Number.isFinite(elapsed) ? Math.max(0, Math.round(elapsed)) : null});
         resolve(outcome);
       };
-      const timer = this.timers.setTimeout(() => { verdict = this.timers.setImmediate(() => settle('timeout')); }, step.budgetMs);
-      try {Promise.resolve(step.run()).then(() => settle('ok'), () => settle('failed'));}
+      const timer = this.timers.setTimeout(() => { verdict = this.timers.setImmediate(() => settle('timeout')); }, effectiveBudget);
+      try {Promise.resolve(step.run(context)).then(() => settle('ok'), () => settle('failed'));}
       catch {settle('failed');}
     });
   }

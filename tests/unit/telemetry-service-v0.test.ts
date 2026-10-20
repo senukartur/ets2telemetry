@@ -725,7 +725,9 @@ it.each(['hanging', 'failed'])('reports a %s storage step within its budget as a
   try {
     // Requirement change (October 18, 2026): the timeout verdict runs one event-loop turn after the 1,000 ms budget,
     // which the fake clock schedules 1 ms later.
-    f.stop(); await vi.advanceTimersByTimeAsync(mode === 'hanging' ? 1000 : 0);
+    // Requirement change (ET-038): under adaptive stop grace cascading, unused budget from earlier phases
+    // (<50 ms, 0 ms under fake clock) expands the effective budget of storage steps up to 2,500 ms.
+    f.stop(); await vi.advanceTimersByTimeAsync(mode === 'hanging' ? 2500 : 0);
     if (mode === 'hanging') {expect(f.stops()).toEqual([]); await vi.advanceTimersByTimeAsync(1);}
     else expect(f.parent.postMessage).toHaveBeenCalledWith({type: 'failed', code: 'SERVICE_STOP_FAILED'});
     expect(f.stops()).toEqual([{type: 'stopped', clean: false}]);

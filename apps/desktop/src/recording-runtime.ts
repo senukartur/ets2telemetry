@@ -117,7 +117,7 @@ export function createRecordingRuntime(options: RecordingRuntimeOptions): Record
       // Drops queued durable work and waits for the one storage command in flight before the database closes (R14); then,
       // unless durable delivery failed, writes the pending one-second samples (ET-015b, H11).
       shutdown.register('flush', {name: 'recording-flush', budgetMs: RECORDING_FLUSH_BUDGET_MS, run: () => v1.flush()});
-      shutdown.register('storage', {name: 'history-storage', budgetMs: HISTORY_CLOSE_BUDGET_MS, run: () => history.close()});
+      shutdown.register('storage', {name: 'history-storage', budgetMs: HISTORY_CLOSE_BUDGET_MS, run: context => history.close(context?.graceMs)});
     }
   };
 }

@@ -346,6 +346,50 @@ describe('StorageClient close', () => {
     expect(commit.value).toEqual(error('WORKER_FAILED'));
     expect(vi.getTimerCount()).toBe(0);
   });
+  it('overrides closeGraceMs when explicit graceMs is passed to close()', async () => {
+    const f = fixture({closeGraceMs: 800});
+    const commit = track(f.client.commitEvent({message: {}}));
+    const closed = track(f.client.close(1500));
+    await vi.advanceTimersByTimeAsync(802);
+    expect(closed.value).toBeUndefined();
+    expect(f.handle.terminate).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1500 - 802 - 1);
+    expect(closed.value).toBeUndefined();
+    expect(f.handle.terminate).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(closed.value).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(commit.value).toEqual(error('WORKER_FAILED'));
+    expect(closed.value).toEqual({clean: false});
+    expect(f.handle.terminate).toHaveBeenCalledOnce();
+  });
+  it('allows a slow close to finish cleanly when graceMs is extended', async () => {
+    const f = fixture({closeGraceMs: 800});
+    const closed = track(f.client.close(1500));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.sent.map(r => r.command.name)).toEqual(['close']);
+    await vi.advanceTimersByTimeAsync(1200);
+    expect(f.handle.terminate).not.toHaveBeenCalled();
+    expect(closed.value).toBeUndefined();
+    f.ok(1, undefined);
+    f.exit(0);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(closed.value).toEqual({clean: true});
+    expect(f.handle.terminate).not.toHaveBeenCalled();
+    expect(f.client.state).toBe('closed');
+  });
+  it('bounds close of a failed client by explicit graceMs when terminate hangs', async () => {
+    const f = fixture({closeGraceMs: 800});
+    f.handle.terminate = vi.fn(() => new Promise(() => undefined));
+    f.error();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.client.state).toBe('failed');
+    const closed = track(f.client.close(1200));
+    await vi.advanceTimersByTimeAsync(1199);
+    expect(closed.value).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(closed.value).toEqual({clean: false});
+  });
   // Regression (packaged recording smoke, October 18, 2026): `history-storage` failed at 807 ms against the 800 ms grace
   // while the service process used almost no CPU. A stalled service thread runs the due grace timer before the close
   // answer and exit that arrived meanwhile; the verdict now waits one loop turn, so they still count.

@@ -166,20 +166,22 @@ export class StorageClient {
    * only the thread was still ending. Otherwise the command in flight gets WORKER_FAILED and the result is
    * `{clean: false}`. A client that already failed (worker error or exit, missed deadline, malformed answer) never closed
    * its database in order: closing waits for the terminated thread, within the grace, and always resolves `{clean: false}`.
+   * An optional `graceMs` overrides the default `closeGraceMs` for this close call.
    */
-  close(): Promise<{clean: boolean}> {
+  close(graceMs?: number): Promise<{clean: boolean}> {
     if (this.#close) return this.#close;
     this.#close = new Promise(resolve => {
       this.#finishClose = clean => { this.#timers.clearTimeout(this.#closeTimer); this.#timers.clearImmediate(this.#closeVerdict); resolve({clean}); };
     });
+    const effectiveGrace = graceMs ?? this.#options.closeGraceMs;
     if (this.#state === 'failed') {
-      this.#closeTimer = this.#timers.setTimeout(() => this.#finishClose?.(false), this.#options.closeGraceMs);
+      this.#closeTimer = this.#timers.setTimeout(() => this.#finishClose?.(false), effectiveGrace);
       void this.#terminate().then(() => this.#finishClose?.(false));
       return this.#close;
     }
     this.#state = 'closing';
     for (const pending of this.#queue.splice(0)) pending.resolve(failure('STORAGE_CLOSED'));
-    this.#closeTimer = this.#timers.setTimeout(() => this.#graceExpired(), this.#options.closeGraceMs);
+    this.#closeTimer = this.#timers.setTimeout(() => this.#graceExpired(), effectiveGrace);
     if (!this.#inFlight) this.#sendClose();
     return this.#close;
   }

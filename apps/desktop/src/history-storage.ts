@@ -20,6 +20,8 @@ export const HISTORY_CLOSE_BUDGET_MS = 1000;
  * ends at the step budget instead.
  */
 export const HISTORY_CLOSE_GRACE_MS = 800;
+/** Reserve between the storage close grace and the step budget for worker termination and step settlement. */
+export const CLOSE_TERMINATE_RESERVE_MS = 200;
 /** Schedule of backoff delays for re-opening a database after a retryable open refusal. */
 export const HISTORY_REOPEN_BACKOFF_MS = [250, 500, 1000, 2000, 4000] as const;
 /** Maximum retry attempts before giving up re-opening. */
@@ -193,12 +195,13 @@ export class HistoryStorage {
    * session, so the step reports a failed outcome. A worker that answered the close but whose thread was still ending
    * when the grace ran out is terminated and the close stays clean (StorageClient.close).
    */
-  async close(): Promise<void> {
+  async close(graceMs?: number): Promise<void> {
     this.#closing = true;
     this.#clearRetryTimer();
     const client = this.#client;
     if (!client) { this.#set('closed'); return; }
-    const {clean} = await client.close();
+    const effectiveGrace = this.options.closeGraceMs ?? graceMs;
+    const {clean} = await client.close(effectiveGrace);
     await this.#opening;
     // Still open here only when the database opened and no failure followed.
     const opened = this.#state === 'open';

@@ -842,7 +842,7 @@ ET-015c shows the user a truthful recording status. It fixes a queue-pressure de
 | G15 | `TRIP_COVERAGE_MISMATCH` stays detection after the commit. The exclusive lock, the single worker, one command in flight and the single-instance lock make a coverage change between the read and the commit impossible. The item leaves the enablement list |
 | G16 | Plugin exit writes no new interval. T11 keeps the uncertainty: the next plugin session closes the open trip as `restart`, partial |
 | G17 | With the application absent there is no spool and no offline history. The checkpoint hydrates and the offline gap is committed and counted |
-| G18 | The storage close stall over 2 s is deferred to ET-019 |
+| G18 | The storage close stall over 2 s was deferred to ET-019 and is resolved in ET-038 via adaptive stop grace: when prompt intake and flush complete within <50 ms, the unused budget cascades to the storage phase steps, expanding effective budget up to ~2,450 ms and history close grace up to ~2,250 ms (with a 200 ms termination reserve), allowing slow closes to exit 0 clean while stalled closes remain strictly bounded within the 2,500 ms `SERVICE_STOP_BUDGET_MS` |
 | G19 | The recording gate is unchanged. The enablement PR still needs the v0 retirement, real-game v1 evidence, S-1/S-2 in ET-016, and real full-volume and ACL evidence |
 | G20 | Tests use hand-written tables and rows, fake timers, the production wiring in process with the real or fault worker, the reactive simulator on real pipes, and runtime smoke assertions. Waits count commits, ACKs or holds; real-time bounds are only named hang guards |
 
