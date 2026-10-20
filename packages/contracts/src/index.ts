@@ -166,6 +166,8 @@ export type OverlaySectionView =
   | {id: OverlaySectionId; state: 'unavailable'};
 /** Read-only display projection: no source selection, HWND or native placement authority. */
 export interface OverlayPresentation {
+  /** Opt-in diagnostic pixels only; no renderer command or game-protocol field. */
+  diagnosticFrame?: number;
   source: 'ETS2' | 'ATS' | 'No game';
   origin: 'game' | 'synthetic' | 'replay' | 'none';
   status: LiveTelemetry['status'];

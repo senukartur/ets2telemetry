@@ -23,6 +23,7 @@ import {JournalService} from './journal-service';
 import type {LiveTelemetry, LiveTelemetryV1, SourceSelection} from '../../../packages/contracts/src';
 import {liveV1Projection, withV1} from './live-v1';
 import {HEARTBEAT_INTERVAL_MS} from './service-heartbeat';
+import {latencyEnabled, latencyReply} from './overlay-latency';
 const port = process.parentPort;
 if (!port) throw new Error('Missing Electron parent port');
 // ET-036: liveness heartbeat to main, unreferenced so it never keeps the event loop alive alone.
@@ -244,6 +245,10 @@ port.on('message', event => {
       if (command.capture !== undefined) captures.offer(command.capture, selection, broker);
     }
     catch {postFailure({type: 'failed', code: 'INVALID_SOURCE_COMMAND'});}
+  } else if (latencyEnabled(process.env) && command?.type === 'overlay-latency') {
+    for (const transferred of event.ports) transferred.close();
+    const reply = latencyReply(command, v1.current, process.hrtime.bigint());
+    if (reply) port.postMessage(reply);
   } else if (command?.type === 'journal') {
     for (const transferred of event.ports) transferred.close();
     journal.receive(command, reply => port.postMessage(reply));

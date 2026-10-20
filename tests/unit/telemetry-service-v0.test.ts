@@ -349,6 +349,27 @@ async function stoppedService(stopProbe: (report: ProbeDependencies['report']) =
   return {exit, parent, log, diagnostics, history, v1, pipeClients, restore, stops, steps, probeReport: (message: Parameters<ProbeDependencies['report']>[0]) => probeReport(message),
     stop: () => parent.emit('message', {data: {type: 'stop'}, ports: []})};
 }
+it.each([false, true])('gates the latency parent command and uses the current service mapping (enabled=%s)', async enabled => {
+  vi.stubEnv('ETS2TELEMETRY_OVERLAY_LATENCY', enabled ? '1' : '0');
+  vi.stubEnv('ETS2TELEMETRY_DIAGNOSTIC_DIR', 'C:\\isolated-latency');
+  vi.stubEnv('ETS2TELEMETRY_PROFILE_DIR', 'C:\\isolated-profile');
+  const f = await stoppedService(report => {report({type: 'stopped'}); return Promise.resolve();});
+  try {
+    const message = decodePayloadV1(new Uint8Array(readFileSync('tests/fixtures/protocol-v1/checkpoint.json')), 'server');
+    if (message.kind !== 'checkpoint') throw new Error('Expected checkpoint');
+    const capture = {...message.capture, monotonicNs: '1000000000'};
+    f.v1.current = {...f.v1.current, selection: message.source.game, status: 'connected', fresh: true,
+      observation: {source: message.source, capture} as V1SourceState['observation'],
+      clockMapping: {sourceClockId: capture.clockId, clientClockId: 'service', offsetNs: '-9000000000', uncertaintyNs: '2000000', measuredAtClientNs: '10000000000'}};
+    const clock = vi.spyOn(process.hrtime, 'bigint').mockReturnValue(10050000000n);
+    const transferred = {close: vi.fn()};
+    try {f.parent.emit('message', {data: {type: 'overlay-latency', token: 7, source: message.source, capture}, ports: [transferred]});}
+    finally {clock.mockRestore();}
+    expect(transferred.close).toHaveBeenCalledOnce();
+    const replies = f.parent.postMessage.mock.calls.map(call => call[0]).filter((reply: {type: string}) => reply.type === 'overlay-latency-result');
+    expect(replies).toEqual(enabled ? [{type: 'overlay-latency-result', token: 7, upperNs: '52000000', uncertaintyNs: '2000000', mappingAgeNs: '50000000'}] : []);
+  } finally {f.stop(); await vi.advanceTimersByTimeAsync(0); f.restore(); vi.unstubAllEnvs();}
+});
 it('runs the ordered shutdown once and reports exactly one clean stopped message before exit 0', async () => {
   const f = await stoppedService(report => {report({type: 'stopped'}); return Promise.resolve();});
   try {
