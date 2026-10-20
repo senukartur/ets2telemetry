@@ -203,7 +203,7 @@ export async function runLifecycleSmoke({application, launcher, dashboard, overl
   // 3b. Saving ETS2's US customary profile quarantines the seeded file unchanged, writes the exact v2 content and
   // switches both the dashboard and the overlay to mph and US gallons.
   record.settingsSaveView = await trayDashboard.evaluate(() => globalThis.desktop.setUnitProfile('ets2', 'us-customary'));
-  assert.deepEqual(record.settingsSaveView, {units: {ets2: 'us-customary', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null});
+  assert.deepEqual(record.settingsSaveView, {language: 'en', units: {ets2: 'us-customary', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null});
   const saved = await settingsFiles(config);
   record.settingsAfterSave = saved.map(({name}) => name);
   const quarantined = saved.filter(file => QUARANTINE_NAME.test(file.name));
