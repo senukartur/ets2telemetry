@@ -9,7 +9,7 @@
 import type {RecordingHealth, SourceSelection} from '../../../packages/contracts/src';
 import type {StorageWorkerHandle} from '../../../packages/storage/src/client';
 import type {DiagnosticFacts} from './diagnostics';
-import {HistoryStorage, HISTORY_CLOSE_BUDGET_MS, recorderClient, type HistoryStorageOptions} from './history-storage';
+import {HistoryStorage, HISTORY_CLOSE_BUDGET_MS, HISTORY_STORAGE_STEP_NAME, recorderClient, type HistoryStorageOptions} from './history-storage';
 import {recordingPlan, type RecordingPlan} from './recording-policy';
 import {deriveRecordingStatus, RecordingStatusPublisher, type RecordingStatusTimers} from './recording-status';
 import type {ShutdownSequence} from './shutdown-sequence';
@@ -117,7 +117,7 @@ export function createRecordingRuntime(options: RecordingRuntimeOptions): Record
       // Drops queued durable work and waits for the one storage command in flight before the database closes (R14); then,
       // unless durable delivery failed, writes the pending one-second samples (ET-015b, H11).
       shutdown.register('flush', {name: 'recording-flush', budgetMs: RECORDING_FLUSH_BUDGET_MS, run: () => v1.flush()});
-      shutdown.register('storage', {name: 'history-storage', budgetMs: HISTORY_CLOSE_BUDGET_MS, run: () => history.close()});
+      shutdown.register('storage', {name: HISTORY_STORAGE_STEP_NAME, budgetMs: HISTORY_CLOSE_BUDGET_MS, run: context => history.close(context?.graceMs)});
     }
   };
 }

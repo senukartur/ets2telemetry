@@ -89,7 +89,7 @@ it('boots transport only after the parent selection and retains it across render
     stop() {this.dependencies.report({type: 'stopped'}); return Promise.resolve();}
   }}));
   // The history database is opened by its own worker; never touch the real LOCALAPPDATA from a Node unit test.
-  vi.doMock('../../apps/desktop/src/history-storage', () => ({HISTORY_CLOSE_BUDGET_MS: 1000, historyWorker: vi.fn(), HistoryStorage: class {start() {} close() {return Promise.resolve();}}}));
+  vi.doMock('../../apps/desktop/src/history-storage', () => ({HISTORY_STORAGE_STEP_NAME: 'history-storage', HISTORY_CLOSE_BUDGET_MS: 1000, HISTORY_CLOSE_GRACE_MS: 800, CLOSE_TERMINATE_RESERVE_MS: 200, historyWorker: vi.fn(), HistoryStorage: class {start() {} close() {return Promise.resolve();}}}));
   const command = (type: string, ports: TestPort[] = []) => parent.emit('message', {data: {type, source: 'synthetic'}, ports});
   try {
     await loadService();

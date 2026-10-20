@@ -1,5 +1,5 @@
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
-import {HISTORY_CLOSE_BUDGET_MS, HISTORY_CLOSE_GRACE_MS, HistoryStorage, recorderClient, type HistoryStorageOptions} from '../../apps/desktop/src/history-storage';
+import {CLOSE_TERMINATE_RESERVE_MS, HISTORY_CLOSE_BUDGET_MS, HISTORY_CLOSE_GRACE_MS, HistoryStorage, recorderClient, type HistoryStorageOptions} from '../../apps/desktop/src/history-storage';
 import {SERVICE_STOP_BUDGET_MS, ShutdownSequence} from '../../apps/desktop/src/shutdown-sequence';
 import type {Result, StorageErrorCode} from '../../packages/storage/src/api';
 import type {StorageClient, StorageWorkerHandle} from '../../packages/storage/src/client';
@@ -207,6 +207,36 @@ describe('history storage shutdown step', () => {
     expect(f.log.mock.calls.find(call => call[0] === 'SHUTDOWN_STEP')?.[2]).toEqual({phase: 'storage', name: 'history-storage', outcome: 'ok', ms: HISTORY_CLOSE_GRACE_MS});
     expect(f.events().map(([name]) => name)).toContain('HISTORY_STORAGE_CLOSED');
     expect(f.history.state).toBe('closed');
+  });
+
+  it('forwards custom graceMs so a slow close finishing at 1200 ms completes cleanly', async () => {
+    const f = fixture('C:\\isolated', {ok: true, value: SUMMARY}, false);
+    f.history.start(); await vi.advanceTimersByTimeAsync(0);
+    const closePromise = f.history.close(1500);
+    await vi.advanceTimersByTimeAsync(0);
+    const close = f.sent.find(request => request.command.name === 'close');
+    expect(close).toBeDefined();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(f.worker.terminate).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(200);
+    f.finishClose(close!.id);
+    await vi.advanceTimersByTimeAsync(0);
+    await expect(closePromise).resolves.toBeUndefined();
+    expect(f.history.state).toBe('closed');
+    expect(f.events().at(-1)).toEqual(['HISTORY_STORAGE_CLOSED', undefined]);
+    expect(f.worker.terminate).not.toHaveBeenCalled();
+  });
+  it('prefers explicitly injected closeGraceMs over graceMs passed to close()', async () => {
+    const f = fixture('C:\\isolated', {ok: true, value: SUMMARY}, false);
+    const explicitHistory = new HistoryStorage({localAppData: 'C:\\isolated', appVersion: '0.1.0-test', log: f.log, createWorker: f.createWorker, timers, closeGraceMs: 600});
+    explicitHistory.start(); await vi.advanceTimersByTimeAsync(0);
+    const rejection = expect(explicitHistory.close(1500)).rejects.toThrow('History storage did not close cleanly');
+    await vi.advanceTimersByTimeAsync(602);
+    await rejection;
+    expect(f.worker.terminate).toHaveBeenCalledOnce();
+  });
+  it('defines the close terminate reserve constant as 200 ms', () => {
+    expect(CLOSE_TERMINATE_RESERVE_MS).toBe(200);
   });
 });
 

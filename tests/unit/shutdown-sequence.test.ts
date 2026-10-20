@@ -1,6 +1,6 @@
 import {MessageChannel} from 'node:worker_threads';
 import {afterEach, beforeEach, expect, it, vi} from 'vitest';
-import {SERVICE_STOP_BUDGET_MS, ShutdownSequence} from '../../apps/desktop/src/shutdown-sequence';
+import {SERVICE_STOP_BUDGET_MS, ShutdownSequence, type ShutdownStepContext} from '../../apps/desktop/src/shutdown-sequence';
 
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
@@ -63,7 +63,8 @@ it('counts a step result that arrives after the due budget timer and before the 
   expect(f.steps()).toEqual([]);
   step.resolve();
   await expect(result).resolves.toEqual({clean: true});
-  expect(f.steps()).toEqual([{phase: 'storage', name: 'history-storage', outcome: 'ok', ms: 1000}]);
+  // Under ET-038 adaptive budget cascading, with 0 ms spent in earlier phases, effective budget is 2500 ms.
+  expect(f.steps()).toEqual([{phase: 'storage', name: 'history-storage', outcome: 'ok', ms: 2500}]);
   await vi.advanceTimersByTimeAsync(10);
   expect(f.steps()).toHaveLength(1);
   expect(vi.getTimerCount()).toBe(0);
@@ -99,7 +100,8 @@ it('still times out a step that has not finished after the verdict turn', async 
   expect(f.steps()).toEqual([]);
   await vi.advanceTimersByTimeAsync(1);
   await expect(result).resolves.toEqual({clean: false});
-  expect(f.steps()).toEqual([{phase: 'storage', name: 'history-storage', outcome: 'timeout', ms: 1001}]);
+  // Under ET-038 adaptive budget cascading, with 0 ms spent in earlier phases, effective budget is 2500 ms (2501 with immediate).
+  expect(f.steps()).toEqual([{phase: 'storage', name: 'history-storage', outcome: 'timeout', ms: 2501}]);
   expect(vi.getTimerCount()).toBe(0);
 });
 
@@ -143,6 +145,85 @@ it('rejects registrations whose phase maxima exceed the service stop budget, and
   for (const step of [{name: 'C:\\path', budgetMs: 1}, {name: 'ok', budgetMs: 0}, {name: 'ok', budgetMs: 1.5}, {name: 'ingestion', budgetMs: 1}])
     expect(() => f.sequence.register('intake', {...step, run})).toThrow();
   expect(() => f.sequence.register('unknown' as never, {name: 'other', budgetMs: 1, run})).toThrow('Unknown');
+});
+
+it('cascades unused intake and flush budget to storage phase steps', async () => {
+  const f = fixture();
+  let storageProbeContext: ShutdownStepContext | undefined;
+  let historyContext: ShutdownStepContext | undefined;
+  f.sequence.register('intake', {name: 'v1-ingestion', budgetMs: 1000, run: () => new Promise<void>(resolve => {
+    setTimeout(resolve, 30);
+  })});
+  f.sequence.register('flush', {name: 'recording-flush', budgetMs: 500, run: () => new Promise<void>(resolve => {
+    setTimeout(resolve, 20);
+  })});
+  f.sequence.register('storage', {name: 'storage-probe', budgetMs: 1000, run: ctx => {
+    storageProbeContext = ctx;
+  }});
+  f.sequence.register('storage', {name: 'history-storage', budgetMs: 1000, run: ctx => {
+    historyContext = ctx;
+    return new Promise<void>(resolve => {
+      setTimeout(resolve, 1500);
+    });
+  }});
+  const result = f.sequence.run();
+  await vi.advanceTimersByTimeAsync(30 + 20);
+  expect(storageProbeContext).toEqual({budgetMs: 1000});
+  expect(historyContext).toEqual({budgetMs: 2450, graceMs: 2250});
+  await vi.advanceTimersByTimeAsync(1500);
+  await expect(result).resolves.toEqual({clean: true});
+  expect(f.steps().map(s => [s.phase, s.name, s.outcome])).toEqual([
+    ['intake', 'v1-ingestion', 'ok'],
+    ['flush', 'recording-flush', 'ok'],
+    ['storage', 'storage-probe', 'ok'],
+    ['storage', 'history-storage', 'ok']
+  ]);
+  const historyStep = f.steps().find(s => s.name === 'history-storage')!;
+  expect(historyStep.ms).toBe(1500);
+});
+
+it('scales down storage effective budget and grace when earlier phases consume their full budget', async () => {
+  const f = fixture();
+  let historyContext: ShutdownStepContext | undefined;
+  f.sequence.register('intake', {name: 'v1-ingestion', budgetMs: 1000, run: () => new Promise<void>(resolve => {
+    setTimeout(resolve, 1000);
+  })});
+  f.sequence.register('flush', {name: 'recording-flush', budgetMs: 500, run: () => new Promise<void>(resolve => {
+    setTimeout(resolve, 500);
+  })});
+  f.sequence.register('storage', {name: 'history-storage', budgetMs: 1000, run: ctx => {
+    historyContext = ctx;
+  }});
+  const result = f.sequence.run();
+  await vi.advanceTimersByTimeAsync(1500);
+  await expect(result).resolves.toEqual({clean: true});
+  expect(historyContext).toEqual({budgetMs: 1000, graceMs: 800});
+});
+
+it('strictly enforces total 2500 ms bound by timing out a hanging storage step at its effective budget', async () => {
+  const f = fixture();
+  f.sequence.register('intake', {name: 'v1-ingestion', budgetMs: 1000, run: () => new Promise<void>(resolve => {
+    setTimeout(resolve, 40);
+  })});
+  f.sequence.register('flush', {name: 'recording-flush', budgetMs: 500, run: () => new Promise<void>(resolve => {
+    setTimeout(resolve, 10);
+  })});
+  f.sequence.register('storage', {name: 'history-storage', budgetMs: 1000, run: () => new Promise<void>(() => undefined)});
+  let settled: {clean: boolean} | undefined;
+  void f.sequence.run().then(res => { settled = res; });
+  await vi.advanceTimersByTimeAsync(50);
+  await vi.advanceTimersByTimeAsync(2449);
+  expect(settled).toBeUndefined();
+  await vi.advanceTimersByTimeAsync(1);
+  expect(settled).toBeUndefined();
+  await vi.advanceTimersByTimeAsync(1);
+  expect(settled).toEqual({clean: false});
+  expect(f.steps().find(s => s.name === 'history-storage')).toEqual({
+    phase: 'storage',
+    name: 'history-storage',
+    outcome: 'timeout',
+    ms: 2451
+  });
 });
 
 it('reports a clean empty sequence without timers', async () => {
