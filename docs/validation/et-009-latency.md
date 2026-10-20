@@ -13,18 +13,20 @@ performance acceptance. The 200 ms goal remains a target until actual game measu
 ## Method and limits
 
 Main attaches a unique token to each new eligible v0 capture's projection. React commits a small opaque black/white
-marker alongside speed/fuel. Electron's [frame subscription](https://github.com/electron/electron/blob/v44.7.0/docs/api/web-contents.md#contentsbeginframesubscriptiononlydirty-callback)
-captures the overlay's own composited content. Main timestamps callback entry and decodes the token. This introduces no
+marker alongside speed/fuel. Schema v2 uses Electron's [`capturePage`](https://github.com/electron/electron/blob/v44.7.0/docs/api/web-contents.md#contentscapturepagerect-opts)
+to read only the marker rectangle (128x8 CSS pixels, adjusted for zoom), with at most 20 requests/s and one pending
+readback. It runs only for a loaded, visible eligible overlay and uses `stayHidden: true, stayAwake: false`; an in-flight
+request cannot show the page after Alt+Tab. Main timestamps readback resolution before decoding. This introduces no
 renderer timing commands, rendering hooks, game-memory reads, game/desktop capture or saved screenshots/video.
 
 After observing the frame, main sends its source/session/clock identity to the current service. A mismatched, paused,
 stale or unmapped source, or a mapping older than 1500 ms, is rejected. With `source ≈ service + offset ± uncertainty`,
-`serviceNow - sourceCapture + offset + uncertainty` is a conservative capture-to-callback upper bound, since service
-receipt follows the frame callback. The lower bound is `mainCallback - mainPublish` on one clock. Main and service Node
+`serviceNow - sourceCapture + offset + uncertainty` is a conservative capture-to-readback upper bound, since service
+receipt follows readback completion. The lower bound is `mainReadback - mainPublish` on one clock. Main and service Node
 clock origins are never compared. Native v0/v1 streams share the SDK adapter's source clock.
 
 Bounds assume the offset stays inside measured uncertainty during the reported mapping age; both values are retained.
-The upper bound includes readback, decoding and IPC; the callback lower bound includes observer readback delay. An upper
+The upper bound includes polling, readback, decoding and IPC; the lower bound includes polling/readback delay. An upper
 bound <=200 ms supports that observed-stage target for that sample. A bound >200 ms alone does not prove slow physical
 presentation. A physical screen claim requires a separately designed external-camera/optical measurement and reference.
 
@@ -121,3 +123,26 @@ Corrective checks retain two local full-suite failures: a real `tasklist` call e
 5 s. The isolated game-process suite passed (19 tests). No assertions, test timeouts or expected values were relaxed;
 the full suite was rerun with four workers to reduce host contention while ATS remained running. The corrected package
 is built in a separate output directory so the still-running original application and its frozen evidence are untouched.
+
+## Stationary observer retry and explicit readback (October 20, 2026)
+
+The owner closed the first retry through Exit; all six shutdown steps and application/service exits passed. The
+`a37ba88` package was verified and copied into the existing authorized application path, without touching game files.
+However, its real stationary preflight also failed: 18:40:00–18:42:00 UTC, **1911 attempted, zero observed frames and
+zero valid bounds**. The owner confirmed that both overlay and marker were visible. The after-load change fixed the
+synthetic startup case but did not resolve capture in this game environment. The underlying continuous-subscription
+failure remains unexplained; it must not be described as resolved by that change.
+
+The current v2 observer replaces continuous subscription with bounded explicit marker readback. Reports identify this
+different endpoint/method; do not compare its values directly with hypothetical v1 frame-callback latency. They retain
+request/completion counts, one-pending state, eligibility/visibility skips, bitmap dimensions and decoding counts.
+Retired-document responses are ignored; an active readback error ends measurement, and disposal cancels scheduling.
+The original game reports and the passing but insufficient subscription tests are preserved. A more faithful two-window,
+isolated-session/topmost/odd-viewport smoke still passed continuous capture, so those tests do not explain the game
+failure. The first explicit-readback smoke matched 19/25, 25/25 and 25/25 synthetic captures at zoom 0.75/1/1.5.
+Real stationary calibration with v2 is still required before another driving cycle.
+
+V2 final local checks: typecheck and lint passed; the full suite passed 134 files / 4207 tests with four workers. The
+marker-only compositor smoke matched 21/25, 25/25 and 25/25 at zoom 0.75/1/1.5, retaining the missing rows. Static package
+inspection verified all 151 files and the unchanged game-plugin hash. The observer counts requested/completed readbacks,
+in-flight work, hidden/ineligible polls and decoded tokens, without storing images. These are preparation checks only.

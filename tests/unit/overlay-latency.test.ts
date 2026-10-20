@@ -31,20 +31,35 @@ it('requires explicit opt-in AND absolute evidence/profile paths', () => {
   expect(latencyEnabled({...env, ETS2TELEMETRY_PROFILE_DIR: 'relative'})).toBe(false);
   expect(latencyEnabled({...env, ETS2TELEMETRY_DIAGNOSTIC_DIR: undefined})).toBe(false);
 });
-it('waits for the loaded document, retires capture on navigation and rebinds after reload', () => {
+it('waits for a loaded visible document, bounds pending readback and retires navigation/completion/disposal', async () => {
+  vi.useFakeTimers();
+  const requests: ((image: NativeImage) => void)[] = [];
   const contents = Object.assign(new EventEmitter(), {getURL: () => 'about:blank', isLoadingMainFrame: () => false, isDestroyed: () => false,
-    beginFrameSubscription: vi.fn<(dirty: boolean, callback: (image: NativeImage) => void) => void>(), endFrameSubscription: vi.fn()});
+    getZoomFactor: () => 1, capturePage: vi.fn(() => new Promise<NativeImage>(resolve => requests.push(resolve)))});
+  let visible = false;
   const sink = {complete: false, frame: vi.fn(), finish: vi.fn()};
-  const dispose = observeLatencyFrames({webContents: contents} as unknown as BrowserWindow, sink, () => true, vi.fn());
-  expect(contents.beginFrameSubscription).not.toHaveBeenCalled();
-  contents.emit('did-finish-load'); expect(contents.beginFrameSubscription).toHaveBeenCalledTimes(1);
-  contents.emit('did-start-loading'); expect(contents.endFrameSubscription).toHaveBeenCalledOnce();
-  contents.emit('did-finish-load'); expect(contents.beginFrameSubscription).toHaveBeenCalledTimes(2);
-  sink.complete = true;
-  contents.beginFrameSubscription.mock.calls[1][1]({} as NativeImage);
-  expect(contents.endFrameSubscription).toHaveBeenCalledTimes(2);
-  contents.emit('did-finish-load'); expect(contents.beginFrameSubscription).toHaveBeenCalledTimes(2);
+  const dispose = observeLatencyFrames({webContents: contents, isDestroyed: () => false, isVisible: () => visible} as unknown as BrowserWindow, sink, () => true, vi.fn());
+  await vi.advanceTimersByTimeAsync(100); expect(contents.capturePage).not.toHaveBeenCalled();
+  contents.emit('did-finish-load'); await vi.advanceTimersByTimeAsync(100); expect(contents.capturePage).not.toHaveBeenCalled();
+  visible = true; await vi.advanceTimersByTimeAsync(50); expect(contents.capturePage).toHaveBeenCalledExactlyOnceWith({x: 0, y: 0, width: 128, height: 8}, {stayHidden: true, stayAwake: false});
+  await vi.advanceTimersByTimeAsync(200); expect(contents.capturePage).toHaveBeenCalledOnce();
+  expect(dispose.stats).toMatchObject({requests: 1, inFlight: true, callbacks: 0});
+  contents.emit('did-start-loading'); requests[0]({} as NativeImage); await vi.advanceTimersByTimeAsync(0);
+  expect(sink.frame).not.toHaveBeenCalled();
+  contents.emit('did-finish-load'); await vi.advanceTimersByTimeAsync(0); expect(contents.capturePage).toHaveBeenCalledTimes(2);
+  sink.complete = true; requests[1]({} as NativeImage); await vi.advanceTimersByTimeAsync(100);
+  contents.emit('did-finish-load'); await vi.advanceTimersByTimeAsync(100); expect(contents.capturePage).toHaveBeenCalledTimes(2);
   dispose(); expect(contents.listenerCount('did-finish-load')).toBe(0); expect(contents.listenerCount('did-start-loading')).toBe(0);
+});
+it('ends measurement on an active readback failure without retrying or showing the page', async () => {
+  vi.useFakeTimers();
+  const contents = Object.assign(new EventEmitter(), {getURL: () => 'file:///overlay', isLoadingMainFrame: () => false, isDestroyed: () => false,
+    getZoomFactor: () => 1, capturePage: vi.fn(() => Promise.reject(new Error('Readback rejected')))});
+  const sink = {complete: false, frame: vi.fn(), finish: vi.fn()}, failed = vi.fn();
+  const dispose = observeLatencyFrames({webContents: contents, isDestroyed: () => false, isVisible: () => true} as unknown as BrowserWindow, sink, () => true, failed);
+  await vi.advanceTimersByTimeAsync(500);
+  expect(contents.capturePage).toHaveBeenCalledOnce(); expect(failed).toHaveBeenCalledOnce(); expect(sink.finish).toHaveBeenCalledExactlyOnceWith('capture-failed');
+  expect(dispose.stats).toMatchObject({requests: 1, inFlight: false, callbacks: 0}); dispose();
 });
 it.each([0.5, 1, 1.25, 1.5, 2, 3, 4])('decodes opaque composited pixels at CSS scale %s and rejects corruption', scale => {
   const width = Math.ceil(140 * scale), height = Math.ceil(20 * scale), bitmap = new Uint8Array(width * height * 4);

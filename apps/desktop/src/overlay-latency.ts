@@ -5,6 +5,8 @@ import type {V1SourceState} from './v1-ingestion';
 
 export const LATENCY_DURATION_MS = 120000;
 export const LATENCY_MAX_SAMPLES = 3000;
+export interface LatencyFrameStats {subscriptions: number; requests: number; inFlight: boolean; hiddenSkips: number; ineligibleSkips: number; callbacks: number; eligible: number; decoded: number;
+  width: number; height: number; bytes: number; dipWidth: number; zoom: number; scale: number; firstPixel: string}
 export function latencyEnabled(env: Readonly<Record<string, string | undefined>>): boolean {
   return env.ETS2TELEMETRY_OVERLAY_LATENCY === '1' && Boolean(env.ETS2TELEMETRY_DIAGNOSTIC_DIR && path.isAbsolute(env.ETS2TELEMETRY_DIAGNOSTIC_DIR) &&
     env.ETS2TELEMETRY_PROFILE_DIR && path.isAbsolute(env.ETS2TELEMETRY_PROFILE_DIR));
@@ -47,6 +49,8 @@ export class OverlayLatency {
   private lastToken?: number;
   private firstFrame = false;
   private firstResult = false;
+  private frameStats?: () => LatencyFrameStats;
+  setFrameStats(read: () => LatencyFrameStats): void {this.frameStats = read;}
   constructor(private readonly directory: string, private readonly send: (request: LatencyRequest) => void,
     private readonly log: (code: string, error?: unknown) => void, private readonly now = () => process.hrtime.bigint()) {}
   project(view: OverlayPresentation, live: LiveTelemetry, visible: boolean): OverlayPresentation {
@@ -110,10 +114,12 @@ export class OverlayLatency {
       const at = (p: number) => values.length ? values[Math.max(0, Math.ceil(values.length * p) - 1)] : null;
       return {p50: at(0.5), p95: at(0.95), p99: at(0.99), max: at(1)};
     };
-    const report = {schema: 'et009-overlay-latency/1', utc: new Date().toISOString(), reason,
-      endpoint: 'SDK v0 speed/fuel capture to Chromium presentation callback; upper bound includes frame readback and service IPC; excludes DWM/scan-out/monitor and independent v1 sections',
+    const report = {schema: 'et009-overlay-latency/2', utc: new Date().toISOString(), reason,
+      method: 'capturePage marker-only readback; <=20 requests/s; <=1 pending; visibility gated; stayHidden true',
+      endpoint: 'SDK v0 speed/fuel capture to completed Chromium marker readback; upper bound includes polling, readback and service IPC; excludes DWM/scan-out/monitor and independent v1 sections',
       clockAssumption: 'v0/v1 share one source clock; clock offset remains within measured uncertainty for mapping age <= 1500 ms; no cross-process Node clock comparison',
       instrumented: true, recording: false, durationMs: this.started === undefined ? 0 : Number(this.now() - this.started) / 1e6,
+      frameCapture: this.frameStats ? {...this.frameStats()} : undefined,
       attempted: this.rows.length, observedFrames: this.rows.filter(row => row.frameNs !== undefined).length, valid: valid.length, unresolved: this.rows.length - valid.length,
       targetMs: 200, upperBoundWithinTarget: valid.filter(row => row.upperMs! <= 200).length,
       lowerBoundOverTarget: valid.filter(row => row.lowerMs! > 200).length,

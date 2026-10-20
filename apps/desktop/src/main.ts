@@ -481,8 +481,9 @@ function runApplication(profileError: unknown): void {
         zoomFactor: placement.scale}});
     timeline?.('OVERLAY_WINDOW_CREATED'); observeLoads(created.webContents, 'OVERLAY');
     if (latency) {
-      observeLatencyFrames(created, latency, () => lastOverlay.freshness === 'current' && !lastOverlay.paused && !overlayEdit.active,
-        error => log('OVERLAY_LATENCY_FRAME_FAILED', String(error)));
+      const frames = observeLatencyFrames(created, latency, () => lastOverlay.freshness === 'current' && !lastOverlay.paused && !overlayEdit.active,
+        error => log('OVERLAY_LATENCY_FRAME_FAILED', String(error)), facts => log('OVERLAY_LATENCY_CAPTURE_AVAILABLE', facts));
+      latency.setFrameStats(() => frames.stats);
     }
     created.setIgnoreMouseEvents(true); created.setFocusable(false);
     // Not the constructor's alwaysOnTop: its default `floating` level stacks the overlay behind the

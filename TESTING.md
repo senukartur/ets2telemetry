@@ -124,7 +124,7 @@ ET-009 validates the prototype; ET-020 validates the release candidate. Keep a m
 Test startup order, real values, pause/resume, Alt+Tab, click-through, minimize/restore, monitor changes, delivery/cancellation, reconnect, and orderly exit. Before release, also cover the journal/export, setup/upgrade, history preservation, and measured one-hour session. Do not require every game combination for unrelated text changes, and do not use a successful simulator run as evidence of real-game support.
 
 The default-off [ET-009 latency procedure](docs/validation/et-009-latency.md) correlates v0 speed/fuel capture with Chromium
-frame callbacks and reports clock-qualified bounds. Physical screen latency, performance and actual game acceptance
+completed marker readbacks and reports clock-qualified bounds. Physical screen latency, performance and actual game acceptance
 require separate evidence; missing frames and calibration uncertainty must be reviewed.
 
 ## 8. Later server phase

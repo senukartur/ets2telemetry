@@ -18,9 +18,12 @@ const deadline = setTimeout(() => app.exit(2), 20000);
 void app.whenReady().then(async () => {
   const fixture = validateMessage(JSON.parse(await readFile(path.join(root, 'tests/fixtures/protocol-v0/snapshot.json'), 'utf8')));
   assert.equal(fixture.kind, 'snapshot'); if (fixture.kind !== 'snapshot') throw new Error('Wrong fixture');
-  const window = new BrowserWindow({width: 700, height: 180, frame: false, transparent: true, show: false, focusable: false, skipTaskbar: true,
-    webPreferences: {preload: path.join(root, 'apps/desktop/dist/overlay-preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false}});
+  const dashboard = new BrowserWindow({show: false}); await dashboard.loadURL('about:blank');
+  const window = new BrowserWindow({width: 1248, height: 74, frame: false, transparent: true, backgroundColor: '#00000000', show: false,
+    focusable: false, skipTaskbar: true, resizable: false, movable: false, minimizable: false, maximizable: false, fullscreenable: false,
+    webPreferences: {partition: 'ets2telemetry-overlay', zoomFactor: 1, preload: path.join(root, 'apps/desktop/dist/overlay-preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false}});
   window.setIgnoreMouseEvents(true);
+  window.setFocusable(false); window.setAlwaysOnTop(true, 'screen-saver');
   // Match main.ts: observation is requested while the first document is still about:blank and the window is hidden.
   // This forwarding object lets the first case begin only after startup without changing the subscription lifetime.
   let activeCollector: OverlayLatency | undefined;
@@ -34,8 +37,9 @@ void app.whenReady().then(async () => {
     subscribed = true; window.webContents.postMessage('overlay:port', null, [channel.port2]);
   });
   await window.loadFile(path.join(root, 'apps/desktop/dist/renderer/index.html'), {query: {view: 'overlay'}});
-  window.setSize(1280, 108);
-  window.showInactive();
+  // A two-row production strip is 74 DIP high: at 150% DPI its 111-pixel viewport is odd-sized.
+  window.setSize(1248, 74);
+  window.showInactive(); window.setAlwaysOnTop(true, 'screen-saver'); window.moveTop();
   for (let attempt = 0; !subscribed && attempt < 100; attempt++) await pause(20);
   assert.equal(subscribed, true);
   // A subscribed React effect does not imply the first visible compositor frame has arrived.
@@ -53,6 +57,7 @@ void app.whenReady().then(async () => {
     }, () => undefined);
     activeCollector = collector;
     if (zoom !== 0.75) stopObserving = observeLatencyFrames(window, collector, () => true, error => {throw error;});
+    collector.setFrameStats(() => stopObserving.stats);
     for (let index = 0; index < 25; index++) {
       const live = {...initialLive('synthetic'), status: 'connected' as const, fresh: true, observation: {source: fixture.source,
         capture: {...fixture.capture, monotonicNs: (process.hrtime.bigint() - 2000000n).toString()}, state: fixture.data.state, seq: String(index + 1),
@@ -69,7 +74,7 @@ void app.whenReady().then(async () => {
   channel.port1.close();
   await mkdir(output, {recursive: true});
   await writeFile(path.join(output, 'result.json'), JSON.stringify({passed: true, synthetic: true, electron: process.versions.electron, results}, null, 2));
-  window.destroy();
+  window.destroy(); dashboard.destroy();
   clearTimeout(deadline); app.exit(0);
 }).catch(async (error: unknown) => {
   await writeFile(path.join(output, 'failure.txt'), String(error)); clearTimeout(deadline); app.exit(1);
