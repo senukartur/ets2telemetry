@@ -45,6 +45,8 @@ export class OverlayLatency {
   private writing: Promise<void> = Promise.resolve();
   private lastCapture?: string;
   private lastToken?: number;
+  private firstFrame = false;
+  private firstResult = false;
   constructor(private readonly directory: string, private readonly send: (request: LatencyRequest) => void,
     private readonly log: (code: string, error?: unknown) => void, private readonly now = () => process.hrtime.bigint()) {}
   project(view: OverlayPresentation, live: LiveTelemetry, visible: boolean): OverlayPresentation {
@@ -74,6 +76,7 @@ export class OverlayLatency {
     if (!row || row.frameNs || this.ended) return;
     if (!visible) {row.reason = 'overlay-hidden'; this.pending.delete(token); return;}
     row.frameNs = observedNs.toString(); row.lowerMs = Number(observedNs - BigInt(row.publishedNs)) / 1e6;
+    if (!this.firstFrame) {this.firstFrame = true; this.log('OVERLAY_LATENCY_FIRST_FRAME', {token, lowerMs: row.lowerMs});}
     try {this.send({type: 'overlay-latency', token, source: row.source, capture: row.capture});}
     catch {row.reason = 'service-unavailable'; this.pending.delete(token);}
   }
@@ -87,6 +90,8 @@ export class OverlayLatency {
     if (!('upperNs' in r) || !uint(r.upperNs) || !uint(r.uncertaintyNs) || !uint(r.mappingAgeNs)) {row.reason = 'invalid-reply'; return;}
     row.upperMs = Number(BigInt(r.upperNs)) / 1e6; row.uncertaintyMs = Number(BigInt(r.uncertaintyNs)) / 1e6; row.mappingAgeMs = Number(BigInt(r.mappingAgeNs)) / 1e6;
     if (row.upperMs < row.lowerMs!) row.reason = 'inconsistent-bounds';
+    if (!row.reason && !this.firstResult) {this.firstResult = true; this.log('OVERLAY_LATENCY_FIRST_RESULT',
+      {token: row.token, lowerMs: row.lowerMs, upperMs: row.upperMs, uncertaintyMs: row.uncertaintyMs, mappingAgeMs: row.mappingAgeMs});}
   }
   retire(): void {
     this.lastCapture = undefined;
@@ -109,7 +114,7 @@ export class OverlayLatency {
       endpoint: 'SDK v0 speed/fuel capture to Chromium presentation callback; upper bound includes frame readback and service IPC; excludes DWM/scan-out/monitor and independent v1 sections',
       clockAssumption: 'v0/v1 share one source clock; clock offset remains within measured uncertainty for mapping age <= 1500 ms; no cross-process Node clock comparison',
       instrumented: true, recording: false, durationMs: this.started === undefined ? 0 : Number(this.now() - this.started) / 1e6,
-      attempted: this.rows.length, valid: valid.length, unresolved: this.rows.length - valid.length,
+      attempted: this.rows.length, observedFrames: this.rows.filter(row => row.frameNs !== undefined).length, valid: valid.length, unresolved: this.rows.length - valid.length,
       targetMs: 200, upperBoundWithinTarget: valid.filter(row => row.upperMs! <= 200).length,
       lowerBoundOverTarget: valid.filter(row => row.lowerMs! > 200).length,
       lowerMs: distribution('lowerMs'), upperMs: distribution('upperMs'), samples: this.rows};

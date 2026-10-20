@@ -93,3 +93,31 @@ descendants and passed. `-verified` has a complete compositor receipt and 24/25 
 synthetic upper-bound maxima were 19.106/19.167/19.403 ms, which are not real-game measurements. Full ESLint passed with
 `.claude/**` excluded: the ordinary command also traverses an unrelated nested Claude checkout with missing lint
 dependencies and fails there. That local checkout was preserved. Native game calibration and latency remain pending.
+
+## First ATS game attempt and observer fix (October 20, 2026)
+
+The first frozen-path launch (`78f8532`) hit the existing four-entry v0 broker-policy capacity. It shut down cleanly and
+reported zero attempted samples. No policy was edited. The identical 151-file package was then launched from its already
+authorized `out` path while ATS remained running. The owner completed the prescribed cycle in ATS single-player 1.61.3.18,
+windowed 1920x1200 at 144 DPI. Collection ran 18:24:09–18:26:09 UTC and saved a report: **1914 attempted, zero observed
+frames/valid bounds**, 1882 frame-or-reply timeouts and 32 unfinished rows. This is failed instrumentation, not measured
+latency or game performance failure. Preserve both original attempts under `.local/validation/et009-latency-ats-sp-windowed-78f8532*`.
+
+The original compositor smoke subscribed after loading its document. Production subscribed on the hidden initial
+`about:blank` widget. Matching the production order reproduced zero matched frames (25 attempts) without a game in
+`.local/validation/et009-latency-before-load-reproduction`. Electron's [subscriber implementation](https://github.com/electron/electron/blob/v44.7.0/shell/browser/api/frame_subscriber.cc)
+can retain a host without constructing a video capturer when its view is absent. The observer now waits for
+`did-finish-load`, ends capture on navigation, rebinds for the loaded/recovered document and supports explicit disposal.
+The smoke retains the before-load/hidden/resize path. The fixed reproducer matched 25/25, 25/25 and 24/25 frames; the
+final source smoke matched 25/25, 24/25 and 24/25 at zoom 0.75/1/1.5. These remain synthetic results.
+
+Two bounded log records, `OVERLAY_LATENCY_FIRST_FRAME` and `OVERLAY_LATENCY_FIRST_RESULT`, now allow a stationary
+preflight before asking the owner to drive. Reports also count `observedFrames`, separating failure to observe pixels
+from failure to calibrate a bound. The unit regression covers initial blank state, navigation, reload, completion and
+listener disposal. A corrected game run is still required; do not reuse either failed report as acceptance evidence.
+
+Corrective checks retain two local full-suite failures: a real `tasklist` call exceeded its 10 s budget in
+`game-processes.test.ts`, and a later run timed out in the existing `plugin-setup.test.ts` locked-file polling case at
+5 s. The isolated game-process suite passed (19 tests). No assertions, test timeouts or expected values were relaxed;
+the full suite was rerun with four workers to reduce host contention while ATS remained running. The corrected package
+is built in a separate output directory so the still-running original application and its frozen evidence are untouched.

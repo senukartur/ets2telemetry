@@ -1,4 +1,6 @@
 import {mkdtemp, readFile, rm} from 'node:fs/promises';
+import {EventEmitter} from 'node:events';
+import type {BrowserWindow, NativeImage} from 'electron';
 import os from 'node:os';
 import path from 'node:path';
 import {afterEach, expect, it, vi} from 'vitest';
@@ -8,6 +10,7 @@ import {overlayPresentation} from '../../apps/desktop/src/overlay-presentation';
 import {initialLive} from '../../apps/desktop/src/live-state';
 import type {V1SourceState} from '../../apps/desktop/src/v1-ingestion';
 import {v0Message} from '../shared/live-v1-fixtures';
+import {observeLatencyFrames} from '../../apps/desktop/src/latency-frames';
 
 const snapshot = v0Message('snapshot');
 const live = {...initialLive('ets2'), status: 'connected' as const, fresh: true, observation: {source: {...snapshot.source, origin: 'game' as const},
@@ -27,6 +30,21 @@ it('requires explicit opt-in AND absolute evidence/profile paths', () => {
   expect(latencyEnabled({...env, ETS2TELEMETRY_OVERLAY_LATENCY: undefined})).toBe(false);
   expect(latencyEnabled({...env, ETS2TELEMETRY_PROFILE_DIR: 'relative'})).toBe(false);
   expect(latencyEnabled({...env, ETS2TELEMETRY_DIAGNOSTIC_DIR: undefined})).toBe(false);
+});
+it('waits for the loaded document, retires capture on navigation and rebinds after reload', () => {
+  const contents = Object.assign(new EventEmitter(), {getURL: () => 'about:blank', isLoadingMainFrame: () => false, isDestroyed: () => false,
+    beginFrameSubscription: vi.fn<(dirty: boolean, callback: (image: NativeImage) => void) => void>(), endFrameSubscription: vi.fn()});
+  const sink = {complete: false, frame: vi.fn(), finish: vi.fn()};
+  const dispose = observeLatencyFrames({webContents: contents} as unknown as BrowserWindow, sink, () => true, vi.fn());
+  expect(contents.beginFrameSubscription).not.toHaveBeenCalled();
+  contents.emit('did-finish-load'); expect(contents.beginFrameSubscription).toHaveBeenCalledTimes(1);
+  contents.emit('did-start-loading'); expect(contents.endFrameSubscription).toHaveBeenCalledOnce();
+  contents.emit('did-finish-load'); expect(contents.beginFrameSubscription).toHaveBeenCalledTimes(2);
+  sink.complete = true;
+  contents.beginFrameSubscription.mock.calls[1][1]({} as NativeImage);
+  expect(contents.endFrameSubscription).toHaveBeenCalledTimes(2);
+  contents.emit('did-finish-load'); expect(contents.beginFrameSubscription).toHaveBeenCalledTimes(2);
+  dispose(); expect(contents.listenerCount('did-finish-load')).toBe(0); expect(contents.listenerCount('did-start-loading')).toBe(0);
 });
 it.each([0.5, 1, 1.25, 1.5, 2, 3, 4])('decodes opaque composited pixels at CSS scale %s and rejects corruption', scale => {
   const width = Math.ceil(140 * scale), height = Math.ceil(20 * scale), bitmap = new Uint8Array(width * height * 4);
