@@ -23,6 +23,8 @@ import {LiveFreshness} from './live-freshness';
 import {parseLiveV1} from './live-v1';
 import {OVERLAY_TOPMOST_LEVEL, OverlayController} from './overlay-controller';
 import {overlayPresentation} from './overlay-presentation';
+import {latencyEnabled, OverlayLatency} from './overlay-latency';
+import {observeLatencyFrames} from './latency-frames';
 import {overlayWindowSize} from './overlay-geometry';
 import {isOverlayLayout, parseOverlaySections} from './overlay-sections';
 import {isOverlayEditOutcome, parseOverlayEditScale, type OverlayEditOutcome} from './overlay-placement';
@@ -236,8 +238,13 @@ function runApplication(profileError: unknown): void {
   const overlaySubscriptions = new LiveSubscriptions<OverlayPresentation>(lastOverlay, 1, 500);
   // ET-012b: the overlay edit mode lives in main's memory only; every start is in driving mode (decision M5).
   let overlayEdit: OverlayEditState = {active: false};
+  const latency = latencyEnabled(process.env) ? new OverlayLatency(diagnosticDirectory!, request => {
+    if (!service || !serviceReady || supervisor.stopping) throw new Error('Service unavailable');
+    service.postMessage(request);
+  }, (code, error) => log(code, error)) : undefined;
   function publishOverlay(live: LiveTelemetry, units: UnitProfiles, settings: OverlaySettings): void {
     lastOverlay = overlayPresentation(live, units, settings, lastOverlay, overlayEdit.active);
+    if (latency) lastOverlay = latency.project(lastOverlay, live, Boolean(overlay && !overlay.isDestroyed() && overlay.isVisible()));
     overlaySubscriptions.publish(lastOverlay);
   }
   const freshness = new LiveFreshness(update => {
@@ -286,13 +293,13 @@ function runApplication(profileError: unknown): void {
     log,
     // A running trip export stops first, so a journal read that the retirement answers ends it as interrupted (J16).
     // ET-017: plugin setup stops after its current game folder; no new run, poll or trigger starts.
-    begin: () => {exporter.abort(); diagnosticsExporter.abort(); pluginSetup.abort(); heartbeatMonitor.stop(); updateHealth({type: 'exit-requested'}, true); retireLive();},
+    begin: () => {latency?.finish('exit'); exporter.abort(); diagnosticsExporter.abort(); pluginSetup.abort(); heartbeatMonitor.stop(); updateHealth({type: 'exit-requested'}, true); retireLive();},
     stopService: () => supervisor.stop(),
     // An in-flight settings save, the removal of an interrupted trip or diagnostics export's partial file and the plugin setup run in flight
     // (which ends with the removal of its temporary file) may delay the final exit by at most EXIT_IDLE_BUDGET_MS
     // (1000 ms) together.
     idle: () => {
-      const pending = [settingsStore.idle(), exporter.idle(), diagnosticsExporter.idle(), pluginSetup.idle()].filter((work): work is Promise<void> => work !== undefined);
+      const pending = [latency?.idle(), settingsStore.idle(), exporter.idle(), diagnosticsExporter.idle(), pluginSetup.idle()].filter((work): work is Promise<void> => work !== undefined);
       return pending.length > 1 ? Promise.all(pending).then(() => undefined) : pending[0];
     },
     destroyTray: () => {trayPresenter?.dispose(); const previous = tray; tray = undefined; previous?.destroy();},
@@ -318,7 +325,7 @@ function runApplication(profileError: unknown): void {
     // load failure, recovery timeout, ...): mark the application exiting at once so nothing reopens a window, the
     // overlay may close and the tray shows the exiting state. Exit codes and bounds are unchanged.
     // A running trip export ends as interrupted before it opens a file (J16), also on a fatal stop.
-    stopping: () => {heartbeatMonitor.stop(); exporter.abort(); diagnosticsExporter.abort(); pluginSetup.abort(); if (lifecycle.abort()) {updateHealth({type: 'exit-requested'}, true); retireLive();}},
+    stopping: () => {latency?.finish('service-stop'); heartbeatMonitor.stop(); exporter.abort(); diagnosticsExporter.abort(); pluginSetup.abort(); if (lifecycle.abort()) {updateHealth({type: 'exit-requested'}, true); retireLive();}},
     // The failed service is being terminated: retire its readiness, status and live channels now rather than when
     // its exit arrives (up to 3000 ms later). The later state callback finds them already retired.
     // A new selection generation also retires a readiness still awaiting its broker or settings, so the failing service
@@ -395,7 +402,7 @@ function runApplication(profileError: unknown): void {
   }
   // The overlay is marked not loaded first, so an edit in progress hides it before the edit is cancelled; that order avoids
   // a needless show on the retired document.
-  function retireOverlay(): void {overlayPort = undefined; overlayController?.loaded(false); cancelOverlayEdit('overlay-retired'); overlaySubscriptions.close();}
+  function retireOverlay(): void {latency?.retire(); overlayPort = undefined; overlayController?.loaded(false); cancelOverlayEdit('overlay-retired'); overlaySubscriptions.close();}
   // Exits and fatal stops also retire the journal: pending journal requests resolve SERVICE_UNAVAILABLE (ET-016, J4).
   function retireLive(): void {freshness.close(); closeUpstream(); retireOverlay(); dashboardSubscriptions.close(); dashboardPort = undefined; journal.retire();}
   function stop(): void {retireLive(); supervisor.stop();}
@@ -473,6 +480,11 @@ function runApplication(profileError: unknown): void {
       webPreferences: {partition: 'ets2telemetry-overlay', preload: path.join(__dirname, 'overlay-preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false,
         zoomFactor: placement.scale}});
     timeline?.('OVERLAY_WINDOW_CREATED'); observeLoads(created.webContents, 'OVERLAY');
+    if (latency) {
+      const frames = observeLatencyFrames(created, latency, () => lastOverlay.freshness === 'current' && !lastOverlay.paused && !overlayEdit.active,
+        error => log('OVERLAY_LATENCY_FRAME_FAILED', String(error)), facts => log('OVERLAY_LATENCY_CAPTURE_AVAILABLE', facts));
+      latency.setFrameStats(() => frames.stats);
+    }
     created.setIgnoreMouseEvents(true); created.setFocusable(false);
     // Not the constructor's alwaysOnTop: its default `floating` level stacks the overlay behind the
     // taskbar, which drops WS_EX_TOPMOST while a borderless full-screen game is foreground.
@@ -608,6 +620,7 @@ function runApplication(profileError: unknown): void {
       heartbeatMonitor.touch();
       const type = message && typeof message === 'object' && !Array.isArray(message) ? (message as Record<string, unknown>).type : undefined;
       if (type === 'heartbeat') return;
+      if (latency && type === 'overlay-latency-result') {latency.reply(message); return;}
       if (type === 'ready') {
         if (!supervisor.ready()) return;
         const requested = selection, generation = ++selectionGeneration;

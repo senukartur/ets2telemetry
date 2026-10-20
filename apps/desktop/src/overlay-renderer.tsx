@@ -3,6 +3,7 @@ import type {OverlayPresentation} from '../../../packages/contracts/src';
 import {SectionIcon, TagIcon} from './overlay-icons';
 import {STRIP_ITEM_MAX_WIDTH_CSS, STRIP_TAG_MAX_WIDTH_CSS} from './overlay-strip';
 import {overlayView, type OverlayItem, type OverlayTag, type OverlayView} from './overlay-view';
+import {latencyBits, MARKER_CELL, MARKER_HEIGHT} from './latency-marker';
 import './renderer.css';
 
 // Display-only overlay (ET-008, layouts ET-012a). It renders main's formatted projection and holds no source, window,
@@ -110,6 +111,11 @@ export default function Overlay() {
   return <main data-testid="overlay-root" className={`overlay overlay-${view.layout}${view.dim ? ' is-dim' : ''}${view.editing ? ' is-editing' : ''}`} aria-label="Telemetry overlay"
     data-layout={view.layout} data-source={view.source} data-origin={view.origin} data-status={view.status} data-freshness={view.freshness}
     data-paused={String(view.paused)} data-editing={String(view.editing)}>
+    {live?.diagnosticFrame !== undefined ? <div aria-hidden="true" data-testid="latency-marker" style={{position: 'fixed', left: 0, top: 0,
+      width: MARKER_CELL * 32, height: MARKER_HEIGHT, display: 'flex', opacity: 1, pointerEvents: 'none', zIndex: 2147483647}}>
+      {latencyBits(live.diagnosticFrame).map((bit, index) => <span key={index} style={{display: 'block', flex: 'none', width: MARKER_CELL,
+        height: MARKER_HEIGHT, background: bit ? '#fff' : '#000'}} />)}
+    </div> : null}
     {view.layout === 'card' ? <CardLayout view={view} /> : view.layout === 'cluster' ? <Cluster view={view} /> : view.layout === 'hud' ? <Hud view={view} /> : <Strip view={view} />}
   </main>;
 }

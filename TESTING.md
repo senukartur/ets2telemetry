@@ -1,5 +1,11 @@
 # Testing and Regression Strategy
 
+ET-009 owner acceptance, October 20, 2026: [the closeout](docs/validation/et-009.md) separates observed game
+results from owner-accepted gaps and the environment checks transferred to ET-042. It preserves missing
+latency observations, performance-probe overhead and the unresolved hitch. This acceptance does not waive
+the diagnostic PR's independent review or final automatic Ready CI, and does not accept later recording or
+release checks. The dated pending statements below remain historical baselines.
+
 ET-002a adds shared TypeScript/C++ protocol 0.0 fixtures and partial REG-003/005/009/010 protection. See [the wire format](docs/protocol/v0.md), [validation](docs/validation/et-002a.md), and [scenario registry](docs/regression-registry.md). Full baseline checks remain required; no game or durable-recording acceptance is inferred.
 
 Owner exception on October 11, 2026 permits early ET-002a protocol v0 implementation and a draft PR while SP-01 game checks are deferred. Keep the failed ETS2 single-player windowed appearance result and required retry explicit; Convoy remains pending. Automated contract checks do not accept SP-01 or establish game compatibility. Existing applicable baseline suites remain mandatory.
@@ -122,6 +128,10 @@ Dependency upgrades (especially Electron, Node, better-sqlite3, SDK, or protocol
 ET-009 validates the prototype; ET-020 validates the release candidate. Keep a matrix for ETS2 and ATS, each in single-player and TruckersMP, with windowed and borderless modes. The built-in Convoy mode is deferred by owner decision on October 12, 2026 and is not part of the current matrix. Record exact game/client/app/SDK versions, Windows version, relevant hardware, monitor/DPI configuration, launch order, scenario outcome, and evidence. A game or TruckersMP update may require revalidation; support is tied to versions actually tested.
 
 Test startup order, real values, pause/resume, Alt+Tab, click-through, minimize/restore, monitor changes, delivery/cancellation, reconnect, and orderly exit. Before release, also cover the journal/export, setup/upgrade, history preservation, and measured one-hour session. Do not require every game combination for unrelated text changes, and do not use a successful simulator run as evidence of real-game support.
+
+The default-off [ET-009 latency procedure](docs/validation/et-009-latency.md) correlates v0 speed/fuel capture with Chromium
+completed marker readbacks and reports clock-qualified bounds. Physical screen latency, performance and actual game acceptance
+require separate evidence; missing frames and calibration uncertainty must be reviewed.
 
 ## 8. Later server phase
 

@@ -180,6 +180,9 @@ Columns:
 | `tests/unit/overlay-placement.test.ts` | Node unit (Vitest) | REG-016 | T, V (et-012b) | ET-012b (#74) | PR (tests job, `npm test`) | — |
 | `tests/unit/overlay-preload.test.ts` | Node unit (Vitest) | REG-016 | R | ET-008 (#21) | PR (tests job, `npm test`) | security, regression |
 | `tests/unit/overlay-presentation.test.ts` | Node unit (Vitest) | REG-009 | R, F | ET-012a (#70) | PR (tests job, `npm test`) | — |
+| `tests/unit/overlay-latency.test.ts` | Node unit (Vitest) | REG-016, REG-018 | R, T, F | ET-009 | PR (tests job, `npm test`) | clock bounds, security, bounded diagnostics, before-load/reload regression |
+| `tests/diagnostics/overlay-latency-smoke.ts` | Electron compositor smoke | partial REG-016, REG-018 | T | ET-009 | Manual, Windows Job via `Run-OverlayLatencySmoke.ps1` | synthetic frame correlation, zoom, no game latency claim |
+| `scripts/diagnostics/Run-OverlayLatencySmoke.ps1` | PowerShell smoke entry | partial REG-016, REG-018 | T | ET-009 | Manual after `npm run build` | bounded ownership, isolated synthetic state |
 | `tests/unit/overlay-rows.test.ts` | Node unit (Vitest) | REG-016 | R, F | ET-012d (#81) | PR (tests job, `npm test`) | regression |
 | `tests/unit/overlay-sections.test.ts` | Node unit (Vitest) | REG-009, REG-016 | T, V (et-012a) | ET-012a (#70) | PR (tests job, `npm test`) | — |
 | `tests/unit/overlay-smoke-source.test.ts` | Node unit (Vitest) | smoke evidence: REG-009, REG-011, REG-016, REG-017 | R | ET-008 (#21) | PR (tests job, `npm test`) | — |
