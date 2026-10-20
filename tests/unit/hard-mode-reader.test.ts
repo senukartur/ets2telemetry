@@ -92,9 +92,29 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
     vi.useFakeTimers(); const changes: HardModeObservation[] = [];
     const {evaluateHardMode, parseHardModeConfig} = await import('../../packages/telemetry-core/src/hard-mode');
     const scan = () => Promise.resolve({assessment: evaluateHardMode(parseHardModeConfig(HARD_MODE_CONFIG), Date.now(), 'fixture'), binding: 'a'.repeat(64), pluginSessionId: source.pluginSessionId, sourceMonotonicNs: '100'});
-    const m = new HardModeMonitor(scan, value => changes.push(value)); m.select({source, monotonicNs: '100'}); await m.refresh();
-    expect(m.status().assessment.state).toBe('pass'); await vi.advanceTimersByTimeAsync(3500); await m.refresh();
+    const m = new HardModeMonitor(scan, value => changes.push(value));
+    const bind = () => m.select({source, monotonicNs: '100', clockId: 'clock', boundary: {clockId: 'clock', probeSentClientNs: (process.hrtime.bigint() + 1n).toString(), receivedSourceNs: '200'}});
+    m.select({source, monotonicNs: '100', clockId: 'clock'}); await Promise.resolve(); bind(); await m.refresh();
+    expect(m.status().assessment.state).toBe('pass'); await vi.advanceTimersByTimeAsync(3500); const refresh = m.refresh(); await Promise.resolve(); bind(); await refresh;
     expect(changes.slice(-2).map(value => value.assessment.state)).toEqual(['unknown', 'pass']); m.close();
+  });
+  it('requires a post-read validated same-clock probe boundary; an old/mismatched boundary cannot publish pass', async () => {
+    const {evaluateHardMode, parseHardModeConfig} = await import('../../packages/telemetry-core/src/hard-mode');
+    const scan = () => Promise.resolve({assessment: evaluateHardMode(parseHardModeConfig(HARD_MODE_CONFIG), Date.now(), 'fixture'), binding: 'a'.repeat(64), pluginSessionId: source.pluginSessionId, sourceMonotonicNs: '100'});
+    const m = new HardModeMonitor(scan, undefined, () => 100n);
+    const select = (clockId: string, probeSentClientNs: string) => m.select({source, clockId: 'current', monotonicNs: '100', boundary: {clockId, probeSentClientNs, receivedSourceNs: '300'}});
+    select('current', '0'); await Promise.resolve(); expect(m.status().assessment.state).toBe('unknown');
+    select('current', '100'); expect(m.status().assessment.state).toBe('unknown');
+    select('wrong', '101'); expect(m.status().assessment.state).toBe('unknown');
+    select('current', '101'); await m.refresh();
+    expect(m.evidence()).toMatchObject({assessment: {state: 'pass'}, sourceMonotonicNs: '301'}); m.close();
+  });
+  it('expires a completed passing read without a causal reply within the unchanged deadline', async () => {
+    vi.useFakeTimers(); const {evaluateHardMode, parseHardModeConfig} = await import('../../packages/telemetry-core/src/hard-mode');
+    const changed = vi.fn<(value: HardModeObservation) => void>(), m = new HardModeMonitor(() => Promise.resolve({assessment: evaluateHardMode(parseHardModeConfig(HARD_MODE_CONFIG), Date.now(), 'fixture'), binding: 'a'.repeat(64), pluginSessionId: source.pluginSessionId, sourceMonotonicNs: '100'}), changed);
+    m.select({source, monotonicNs: '100', clockId: 'clock'}); await Promise.resolve();
+    expect(m.status().assessment.state).toBe('unknown'); const pending = m.refresh(); await vi.advanceTimersByTimeAsync(2001); await pending;
+    expect(changed.mock.calls.every(([value]) => value.assessment.state === 'unknown')).toBe(true); m.close();
   });
   it('coalesces refresh, enforces the deadline and never starts a second outstanding read', async () => {
     vi.useFakeTimers(); let finish!: (v: HardModeObservation) => void; const callback = vi.fn();

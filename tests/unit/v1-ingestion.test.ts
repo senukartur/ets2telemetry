@@ -280,16 +280,25 @@ describe('ET-006b protocol v1 ingestion', () => {
     // RTT = 500,000 - 200,000 = 300,000; offset = floor((-999,550,300,000 + -999,550,600,000) / 2) = -999,550,450,000; uncertainty = 150,000.
     clock.ns = 2_000_000_500_000n; latest().feed(frame('clock-reply'));
     expect(state().clockMapping).toEqual({sourceClockId: CAPTURE_CLOCK, clientClockId: ingestion!.clientClockId, offsetNs: '-999550450000', uncertaintyNs: '150000', measuredAtClientNs: '2000000500000'});
+    expect(state().clockBoundary).toEqual({clockId: CAPTURE_CLOCK, probeSentClientNs: '2000000000000', receivedSourceNs: '1000449700000'});
     await advance(1000); expect(latest().probes).toEqual(['1', '2']);
   });
 
+  it.each(['unsolicited', 'mismatched'] as const)('does not expose a causal boundary for an %s reply', async kind => {
+    start(); latest().feed(frame('welcome'), frame('checkpoint'));
+    if (kind === 'mismatched') await advance(1000);
+    const reply = server('clock-reply'); if (reply.kind !== 'clock.reply') throw new Error('fixture');
+    if (kind === 'mismatched') reply.data.probeId = '2';
+    latest().feed(encodeFrame(reply));
+    expect(state().status).toBe('incompatible'); expect(state().clockBoundary).toBeUndefined();
+  });
   it('accepts a late clock reply without a mapping and probes again only after it arrived', async () => {
     start({sink: new Sink()}); connectLatest();
     latest().feed(frame('welcome'), frame('checkpoint'));
     await advance(3000); expect(latest().probes).toEqual(['1']);
     // t3 - t0 = 1,000,000,001 ns: later than the 1 s deadline, with a valid round trip.
     clock.ns = 2_001_000_000_001n; latest().feed(frame('clock-reply'));
-    expect(state().clockMapping).toBeUndefined(); expect(state().status).not.toBe('incompatible');
+    expect(state().clockMapping).toBeUndefined(); expect(state().clockBoundary).toBeUndefined(); expect(state().status).not.toBe('incompatible');
     await advance(1000); expect(latest().probes).toEqual(['1', '2']);
   });
 

@@ -45,7 +45,17 @@ describe('ET-026 persisted settings (REG-009/010)', () => {
     const d = advanceHardMode(advanceHardMode(advanceHardMode(null, pass), fail), pass);
     expect(d.firstLoss).toEqual({atUtcMs: 1000, reason: 'outside-limit', rule: 'fatigue', values: [0]});
     expect(advanceHardMode(d, unknownHardMode(2000)).firstLoss).toEqual(d.firstLoss);
-    expect(hardModeView({assessment: pass, trip: d}, 2000).headline).toBe('Hard Mode lost for this trip');
+    const restored = hardModeView({assessment: pass, trip: d}, 2000);
+    expect(restored.headline).toBe('Hard Mode lost for this trip');
+    expect(restored.loss).toContain('Does not meet the required setting; detected 0');
+    expect(hardModeView({assessment: fail, trip: d}, 2000).rows[3]).toMatchObject({reason: 'Does not meet the required setting', detected: 'Off (0)', required: 'On (1)'});
+    expect(hardModeView({assessment: evaluate(HARD_MODE_CONFIG.replace('uset g_police "1"', '')), trip: null}, 2000).rows[2].reason).toBe('Required setting is missing');
+  });
+  it('does not move latest evidence backwards when an older intake snapshot follows a newer observed loss', () => {
+    const opening = evaluate(), lost = {...evaluate(HARD_MODE_CONFIG.replace('g_fatigue "1"', 'g_fatigue "0"')), observedUtcMs: 2000};
+    const details = advanceHardMode(advanceHardMode(advanceHardMode(null, opening), lost), opening);
+    expect(details.latest).toEqual(lost); expect(details.firstLoss).toMatchObject({atUtcMs: 2000, rule: 'fatigue', values: [0]});
+    expect(advanceHardMode(details, {...opening, observedUtcMs: 3000})).toMatchObject({latest: {state: 'pass', observedUtcMs: 3000}, firstLoss: {rule: 'fatigue', values: [0]}});
   });
   it('rejects unlisted fields, identities, bad lengths and malformed cross-boundary values', () => {
     const status = {assessment: evaluate(), trip: null}; expect(isHardModeStatus(status)).toBe(true);

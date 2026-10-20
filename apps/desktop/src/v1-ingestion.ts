@@ -41,6 +41,8 @@ export interface V1SourceState {
   observation?: V1Observation;
   /** Local-only mapping from the source clock to this service's clock (§11); never a wire field. */
   clockMapping?: ClockMapping;
+  /** Validated causal probe boundary, internal only; no equality of client/source clock origins is assumed. */
+  clockBoundary?: {clockId: string; probeSentClientNs: string; receivedSourceNs: string};
   /** The last `end` received, kept across reconnections. */
   lastEnd?: EndData;
   durable: DurableStatus;
@@ -308,7 +310,7 @@ export class V1Ingestion {
             case 'welcome': {
               const session = message.source.pluginSessionId;
               if (liveOnly) liveOnly.pluginSessionId = session;
-              if (this.state.clockMapping && !isClockMappingCurrent(this.state.clockMapping, message.capture.clockId, this.clientClockId)) this.state = {...this.state, clockMapping: undefined};
+              if (this.state.clockMapping && !isClockMappingCurrent(this.state.clockMapping, message.capture.clockId, this.clientClockId)) this.state = {...this.state, clockMapping: undefined, clockBoundary: undefined};
               if (message.data.durableEvents && this.delivery) durable = this.delivery.connect(message, link);
               // A live-only connection after ACK_AHEAD_OF_STORAGE that names a new plugin session reconnects durable.
               else if (this.delivery && !requested && this.delivery.observeLiveOnly(session)) close('disconnected', 'New plugin session; reconnecting durable', true);
@@ -334,7 +336,7 @@ export class V1Ingestion {
             case 'clock.reply': {
               const mapping = computeClockMapping({reply: message, probeId: probeId.toString(), clientClockId: this.clientClockId, probeSentNs: probeSentNs.toString(), replyReceivedNs: this.nowNs().toString()});
               // A late reply is accepted but gives no mapping (§11).
-              if (mapping) { this.state = {...this.state, clockMapping: mapping}; this.publish(); }
+              if (mapping) { this.state = {...this.state, clockMapping: mapping, clockBoundary: {clockId: message.capture.clockId, probeSentClientNs: probeSentNs.toString(), receivedSourceNs: message.data.receivedMonotonicNs}}; this.publish(); }
               return;
             }
             case 'end':

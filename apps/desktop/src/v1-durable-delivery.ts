@@ -10,7 +10,7 @@ import {DurableAckCursor} from '../../../packages/contracts/src/protocol-v1-deli
 import {isUint64} from '../../../packages/contracts/src/protocol-v0';
 import type {CommitResult} from '../../../packages/storage/src/api';
 import type {DiagnosticFacts} from './diagnostics';
-import {failureClass, type CoverageMessage, type DurableSink, type ReadingMessage, type SampleSink, type SinkError, type SinkResult, type WelcomeMessage} from './durable-sink';
+import {failureClass, type CoverageMessage, type HardModeCapture, type DurableSink, type ReadingMessage, type SampleSink, type SinkError, type SinkResult, type WelcomeMessage} from './durable-sink';
 import {MAX_PENDING_SAMPLES} from './sample-buffer';
 
 /**
@@ -84,7 +84,7 @@ type ConnectionOp = {connection: DurableConnection} & (
   {kind: 'open'; welcome: WelcomeMessage} |
   {kind: 'checkpoint'; message: CheckpointMessage; receivedUtcMs: number} |
   {kind: 'snapshot'; message: SnapshotMessage; receivedUtcMs: number} |
-  {kind: 'item'; first: Uint64; last: Uint64; message: CoverageMessage; receivedUtcMs: number} |
+  {kind: 'item'; first: Uint64; last: Uint64; message: CoverageMessage; receivedUtcMs: number; capture?: HardModeCapture} |
   {kind: 'attach'; receivedUtcMs: number});
 /** ET-015b: one batch of the sink's pending samples. It belongs to no connection and is never dropped with one. */
 type Op = ConnectionOp | {kind: 'samples'};
@@ -249,6 +249,7 @@ export class DurableDelivery {
   pushItem(op: ConnectionOp & {kind: 'item'}): boolean {
     if (op.connection.dropped || this.stopped) return true;
     if (this.pendingItems >= this.maxPending) { this.overflow(op.connection); return false; }
+    try {op.capture = this.sink.capture?.(op.message);} catch {this.unavailable(op.connection, 'INTERNAL'); return false;}
     this.pendingItems++;
     this.push(op);
     return true;
@@ -269,7 +270,7 @@ export class DurableDelivery {
   }
   /** Releases the bound an op counted against once it leaves the queue. */
   private release(op: Op): void {
-    if (op.kind === 'item') this.pendingItems--;
+    if (op.kind === 'item') {this.pendingItems--; if (op.capture) this.sink.releaseCapture?.(op.capture);}
     else if (op.kind === 'snapshot') this.pendingReadings--;
     else if (op.kind === 'samples') this.sampleOp = false;
   }
@@ -344,7 +345,7 @@ export class DurableDelivery {
     if (op.kind === 'snapshot') { this.observe(connection, op.message, op.receivedUtcMs); return; }
     if (op.kind === 'attach') { await this.attach(connection, op.receivedUtcMs); return; }
     try { cursor.received(op.first, op.last); } catch { this.failure(connection, internal()); return; }
-    const result = await this.call(() => this.sink.commit(op.message, {receivedUtcMs: op.receivedUtcMs}));
+    const result = await this.call(() => this.sink.commit(op.message, {receivedUtcMs: op.receivedUtcMs, ...(op.capture ? {hardModeCapture: op.capture} : {})}));
     if (connection.dropped || this.stopped) return;
     if (!result.ok) { this.failure(connection, result.error); return; }
     const value = result.value;

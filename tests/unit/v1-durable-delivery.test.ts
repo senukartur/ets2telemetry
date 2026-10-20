@@ -12,7 +12,8 @@ import type {CommitResult, Result, StorageErrorCode} from '../../packages/storag
 import {ERROR_MESSAGES, storageError} from '../../packages/storage/src/errors';
 import {STORAGE_FAILURE_CLASS, StorageDurableSink, failureClass, type CoverageMessage, type DurableSink, type WelcomeMessage} from '../../apps/desktop/src/durable-sink';
 import {DurableDelivery, MAX_PENDING_COMMITS, MAX_PENDING_READINGS, SAMPLE_BATCH_ROWS, SAMPLE_FLUSH_MS, type DurableCloseKind, type DurableLink} from '../../apps/desktop/src/v1-durable-delivery';
-import type {SampleSink} from '../../apps/desktop/src/durable-sink';
+import {unknownHardMode} from '../../packages/telemetry-core/src/hard-mode';
+import type {HardModeCapture, SampleSink} from '../../apps/desktop/src/durable-sink';
 
 const dir = resolve('tests/fixtures/protocol-v1');
 const server = (name: string) => decodePayload(new Uint8Array(readFileSync(resolve(dir, `${name}.json`))), 'server') as ServerMessage;
@@ -49,6 +50,8 @@ type Scripted = StorageErrorCode | 'reject' | {committedThroughEventSeq: string}
  * is kept) and `covered` for a gap wholly inside coverage. `paused` holds every command until `releaseOne`.
  */
 class MemorySink implements DurableSink {
+  capture?: DurableSink['capture'];
+  releaseCapture?: DurableSink['releaseCapture'];
   readonly sessions = new Map<string, {events: Map<bigint, string>; gaps: [bigint, bigint][]}>();
   readonly log: string[] = [];
   paused = false; private waiting: (() => void)[] = [];
@@ -322,6 +325,23 @@ describe('ET-006b storage-commit ACK pipeline', () => {
     sink.paused = false; sink.releaseOne(); await delivery.idle();
     // The open completed; no queued item of the closed connection was committed or acknowledged.
     expect([sink.log, link.acks]).toEqual([[`open ${P1}`], []]);
+  });
+  it.each(['overflow', 'stop', 'disconnected', 'failure'] as const)('releases every bounded intake capture after %s', async mode => {
+    const sink = new MemorySink(), active = new Set<HardModeCapture>();
+    sink.capture = message => {const capture: HardModeCapture = {game: message.source.game, observation: {assessment: unknownHardMode(RECEIVED), binding: null, pluginSessionId: null, sourceMonotonicNs: null}, firstUnsafe: null}; active.add(capture); return capture;};
+    sink.releaseCapture = capture => {expect(active.delete(capture)).toBe(true);};
+    sink.paused = true; const {delivery, link, connection} = started(sink, {maxPendingCommits: 2});
+    await flush();
+    connection.enqueue(range(event(1)), event(1), RECEIVED); connection.enqueue(range(event(2)), event(2), RECEIVED);
+    expect(active.size).toBe(2);
+    let stopping: Promise<void> | undefined;
+    if (mode === 'overflow') {connection.enqueue(range(event(3)), event(3), RECEIVED); expect(active.size).toBe(0);}
+    if (mode === 'stop') {stopping = delivery.stop(); expect(active.size).toBe(0);}
+    if (mode === 'disconnected') link.open = false;
+    if (mode === 'failure') sink.openFailures.push('IO_ERROR');
+    sink.paused = false; sink.releaseOne(); await delivery.idle(); await stopping;
+    expect(active.size).toBe(0); expect(delivery.pending).toBe(0);
+    if (mode === 'disconnected') expect(link.acks).toEqual([]);
   });
   it('keeps the items of an ended connection and a full redelivery with a live gap inside the bound, and commits each item once (G11, REG-011)', async () => {
     const sink = new MemorySink(); sink.paused = true;

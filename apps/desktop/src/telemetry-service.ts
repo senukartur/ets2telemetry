@@ -123,7 +123,7 @@ let lastV1: V1SourceState | undefined;
 function onV1State(state: V1SourceState): void {
   const current = state.fresh && state.observation && (state.status === 'connected' || state.status === 'paused') ? state.observation : undefined;
   if (current?.source.origin === 'game' && !steamDiscoveryStarted) {steamDiscoveryStarted = true; void readSteamRoot({signal: hardModeLifetime.signal}).then(root => {if (root.kind === 'found') steamRoot = root.path;}, () => undefined);}
-  hardMode.select(current ? {source: current.source, monotonicNs: current.capture.monotonicNs} : null);
+  hardMode.select(current ? {source: current.source, monotonicNs: current.capture.monotonicNs, clockId: current.capture.clockId, boundary: state.clockBoundary} : null);
   hardModeGame = current?.source.game ?? hardModeGame;
   recordV1State(state);
   const previous = lastV1; lastV1 = state;

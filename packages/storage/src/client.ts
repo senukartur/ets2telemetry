@@ -100,8 +100,8 @@ export class StorageClient {
   }
   observeHardMode(game: 'ets2' | 'ats', observation: HardModeObservation): Promise<Result<undefined>> {return this.#request({name: 'observeHardMode', game, observation});}
   upsertSession(input: {message: unknown}) { return this.#request({name: 'upsertSession', input}); }
-  commitEvent(input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation}): Promise<Result<CommitResult>> { return this.#request({name: 'commitEvent', input}); }
-  commitGap(input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation}): Promise<Result<CommitResult>> { return this.#request({name: 'commitGap', input}); }
+  commitEvent(input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation; hardModeLoss?: HardModeObservation}): Promise<Result<CommitResult>> { return this.#request({name: 'commitEvent', input}); }
+  commitGap(input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation; hardModeLoss?: HardModeObservation}): Promise<Result<CommitResult>> { return this.#request({name: 'commitGap', input}); }
   /**
    * Only `uniqueSeconds` of the options crosses the worker boundary (ET-015b). A value that is not an object is forwarded
    * as given, so the worker's request parser refuses it with INVALID_INPUT instead of the client throwing.

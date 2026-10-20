@@ -57,7 +57,8 @@ export async function startHardModeSource(config) {
           send('welcome', {...welcome.data, durableEvents: durable});
           send('checkpoint', {...checkpoint.data, state, status: status(), continuity: {coalescedSnapshots: '0', offlineTransitions: '0'}});
           timer = setInterval(snapshot, 100);
-        } else if (message.kind === 'ack') acked = BigInt(message.data.throughEventSeq);
+        } else if (message.kind === 'clock.probe') send('clock.reply', {probeId: message.data.probeId, receivedMonotonicNs: (ns + 1n).toString(), sentMonotonicNs: (ns + 2n).toString()});
+        else if (message.kind === 'ack') acked = BigInt(message.data.throughEventSeq);
       }
     });
     incoming.on('close', () => {if (socket === incoming) {socket = undefined; durable = false; clearInterval(timer);}});
@@ -81,18 +82,43 @@ const trips = page => page.evaluate(async () => {const result = await globalThis
 export async function runHardModeSmoke({application, dashboard, source, config, record}) {
   await dashboard.selectOption('select', 'synthetic');
   await until(source.connected, Boolean, 'HARD_MODE_DURABLE_SOURCE', 10000);
-  await until(async () => (await current(dashboard)).assessment.state, value => value === 'unknown', 'HARD_MODE_UNKNOWN', 5000); record.unknown = true; await dashboard.getByTestId('hard-mode-card').screenshot({path: path.join(config.output, 'hard-mode-unknown.png')});
+  await until(async () => (await current(dashboard)).assessment.state, value => value === 'unknown', 'HARD_MODE_UNKNOWN', 5000); record.unknown = true; await until(() => dashboard.locator('[data-testid^="hard-mode-rule-"][data-state="unknown"]').count(), count => count === 12, 'HARD_MODE_UNKNOWN_NAMES', 5000); await dashboard.getByTestId('hard-mode-card').screenshot({path: path.join(config.output, 'hard-mode-unknown.png')});
   await source.settings('fail');
   await until(async () => (await current(dashboard)).assessment.state, value => value === 'fail', 'HARD_MODE_FAIL', 8000); record.fail = true;
-  await clickTestId(dashboard, 'hard-mode-checklist');
-  await dashboard.getByRole('dialog').waitFor({state: 'visible'});
+  const hints = [
+    ['fuel', 'On (1)', 'On (1)', 'Meets the required setting'], ['air', 'On (1)', 'On (1)', 'Meets the required setting'],
+    ['police', 'On (1)', 'On (1)', 'Meets the required setting'], ['fatigue', 'Off (0)', 'On (1)', 'Does not meet the required setting'],
+    ['limiter', 'On (1)', 'On (1)', 'Meets the required setting'], ['truck', '50% (0.5)', '≤ 50% (0.5)', 'Meets the required setting'],
+    ['trailer', '50% (0.5)', '≤ 50% (0.5)', 'Meets the required setting'], ['parking', 'Off (0) / Skilled (2)', 'Off (0) and skilled (2); manual delivery required', 'Meets the required setting'],
+    ['rain', '12% (0.12)', '≥ 12% (0.12)', 'Meets the required setting'], ['events', '30% (0.3)', '≥ 30% (0.3)', 'Meets the required setting'],
+    ['braking', '75% (0.75)', '≤ 75% (0.75)', 'Meets the required setting'], ['traffic', '100% (1)', '≥ 100% (1)', 'Meets the required setting']
+  ];
   assert.equal(await dashboard.locator('[data-testid^="hard-mode-rule-"]').count(), 12);
-  await until(() => dashboard.getByTestId('hard-mode-rule-fatigue').innerText(), text => /Detected: Off \(0\).*Required: On \(1\)/.test(text), 'HARD_MODE_RENDERED_FAIL', 5000);
-  await dashboard.screenshot({path: path.join(config.output, 'hard-mode-checklist.png')});
-  await clickTestId(dashboard, 'hard-mode-refresh');
+  await until(() => dashboard.getByTestId('hard-mode-rule-fatigue').innerText(), text => text.includes('fail'), 'HARD_MODE_RENDERED_FAIL', 5000);
+  // Every parameter name supplies its own noninteractive hint on hover and keyboard focus, without a modal.
+  await dashboard.getByTestId('hard-mode-name-fuel').focus(); await dashboard.keyboard.press('Shift+Tab');
+  for (const [id, detected, required, reason] of hints) {
+    const trigger = dashboard.getByTestId(`hard-mode-name-${id}`), hint = dashboard.getByTestId(`hard-mode-hint-${id}`);
+    assert.match(await trigger.innerText(), new RegExp(`${id === 'fatigue' ? 'fail' : 'pass'}$`));
+    await trigger.hover(); await hint.waitFor({state: 'visible'});
+    const text = await hint.innerText();
+    assert.ok(text.includes(`Detected: ${detected}`) && text.includes(`Required: ${required}`) && text.includes(`Reason: ${reason}`), `Incorrect ${id} hint: ${text}`);
+    await dashboard.keyboard.press('Escape'); await hint.waitFor({state: 'hidden'});
+    await dashboard.mouse.move(0, 0); await dashboard.keyboard.press('Tab');
+    assert.equal(await trigger.evaluate(element => element === globalThis.document.activeElement), true, `Tab did not focus ${id}`);
+    await hint.waitFor({state: 'visible'});
+    await dashboard.keyboard.press('Escape'); await hint.waitFor({state: 'hidden'});
+    assert.equal(await trigger.evaluate(element => element === globalThis.document.activeElement), true, `Escape moved focus from ${id}`);
+  }
+  assert.equal(await dashboard.getByRole('dialog').count(), 0);
+  assert.equal(await dashboard.getByTestId('hard-mode-checklist').count(), 0);
+  assert.match(await dashboard.getByTestId('hard-mode-source').innerText(), /Synthetic \/ replay settings.*s since observation/);
+  await dashboard.getByTestId('hard-mode-name-fatigue').focus();
+  await dashboard.getByTestId('hard-mode-hint-fatigue').waitFor({state: 'visible'});
+  await dashboard.screenshot({path: path.join(config.output, 'hard-mode-parameter-hint.png')});
   await dashboard.keyboard.press('Escape');
-  await until(() => dashboard.getByTestId('hard-mode-checklist').evaluate(element => element === globalThis.document.activeElement), Boolean, 'HARD_MODE_FOCUS_RESTORED', 3000);
-  record.checklist = true; record.keyboard = true; record.refresh = true;
+  await clickTestId(dashboard, 'hard-mode-refresh');
+  record.hints = true; record.hover = true; record.noDrawer = true; record.keyboard = true; record.refresh = true;
   await source.settings('pass'); await until(async () => (await current(dashboard)).assessment.state, value => value === 'pass', 'HARD_MODE_PASS', 8000); record.pass = true; await until(() => dashboard.getByTestId('hard-mode-card').getAttribute('data-state'), state => state === 'pass', 'HARD_MODE_RENDERED_PASS', 5000); await dashboard.getByTestId('hard-mode-card').screenshot({path: path.join(config.output, 'hard-mode-pass.png')});
   source.begin('qualifying');
   await until(async () => await trips(dashboard), rows => rows.length === 1 && rows[0].outcome === 'open', 'HARD_MODE_OPEN', 5000);

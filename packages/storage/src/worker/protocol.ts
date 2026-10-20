@@ -24,8 +24,8 @@ export interface WorkerOpenOptions {path: string; purpose: Purpose; backupsDirec
 export interface StorageCommands {
   open: {args: {options: WorkerOpenOptions}; value: OpenSummary};
   upsertSession: {args: {input: {message: unknown}}; value: {created: boolean; committedThroughEventSeq: Uint64}};
-  commitEvent: {args: {input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation}}; value: CommitResult};
-  commitGap: {args: {input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation}}; value: CommitResult};
+  commitEvent: {args: {input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation; hardModeLoss?: HardModeObservation}}; value: CommitResult};
+  commitGap: {args: {input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation; hardModeLoss?: HardModeObservation}}; value: CommitResult};
   appendSamples: {args: {pluginSessionId: string; rows: SampleInput[]; options?: SampleAppendOptions}; value: SampleAppendResult};
   recordCompleteness: {args: {pluginSessionId: string; interval: CompletenessInterval; options?: CompletenessOptions}; value: undefined};
   /** ET-016 PR-7 (J9): a late-attach trip; never acknowledged and never a coverage change. */

@@ -368,6 +368,8 @@ Each runtime smoke scenario runs once per mode through `./scripts/ci/Invoke-Runt
 | REG-008/010/011 | Local/Cloud matching, ordered generations, stale markers, wrong process/log, bounded stable bytes, redirects, coalescing/deadline | `tests/unit/hard-mode-reader.test.ts` |
 | REG-001/003/004/005/006/007/008 | Manual delivered qualification, unknown/failure/source loss, first-loss value, retry/duplicate/cold interruption and historical exclusion | `tests/storage/hard-mode.test.ts`, `hard-mode-integrity.test.ts` |
 | REG-013 | Frozen v1/v2 preservation, false/null defaults, partial migration rollback and verified backup reuse | `tests/storage/hard-mode-migrations.test.ts`, existing frozen-fixture suites |
-| REG-014/017 | Production reader through persisted trip, DOM states/checklist/focus, journal badge/export 2 | Bounded development/packaged `hard-mode` journey |
+| REG-014/017 | Production reader through persisted trip, DOM states/all twelve hover and keyboard hints/no drawer/focus, journal badge/export 2 | Bounded development/packaged `hard-mode` journey |
 
 Historical format-1 export examples/validation remain protected. Real ATS/TruckersMP/profile/process replacement, OneDrive placeholders, persisted timing of other settings, real positive trips and performance remain unverified under the approved observed-settings model. Actual Expert placement is not claimed, and game history remains disabled.
+
+ET-026 review regressions: delayed async reads cannot qualify queued openings or older occurrences first received after publication; a validated probe sent after the read supplies the causal source watermark. Held opening coverage reads retain fatigue loss before any row exists, including IO-error/redelivery retry, with original value and ACK/coverage ordering. Capture lifecycle release is exercised at the existing FIFO bound.

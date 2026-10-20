@@ -2,6 +2,7 @@ import path from 'node:path';
 import {Worker} from 'node:worker_threads';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 import {StorageClient, workerHandle} from '../../packages/storage/src/client';
+import {HardModeMonitor} from '../../apps/desktop/src/hard-mode/monitor';
 import {TripRecorderSink} from '../../apps/desktop/src/trip-recorder';
 import type {HardModeObservation} from '../../packages/contracts/src/hard-mode';
 import {DurableDelivery} from '../../apps/desktop/src/v1-durable-delivery';
@@ -51,6 +52,76 @@ describe('ET-026 integrity (REG-005/006/007)', () => {
       expect(ok(await client.committedThrough(ETS2_A))).toBe('1'); expect(ok(await client.getTrip(trip.tripUuid))!.outcome).toBe('open'); expect(acks.at(-1)).toBe('1');
       release(); await pipeline.idle(); expect(acks.at(-1)).toBe('2'); expect(failures).toEqual([]);
       expect(ok(await client.getTrip(trip.tripUuid))).toMatchObject({outcome: 'delivered', isHardMode: false, hardModeDetails: {firstLoss: {rule: 'fatigue', values: [0]}}});
+    } finally {await pipeline.stop(); expect(await client.close()).toEqual({clean: true});}
+  });
+  it.each(['queued', 'delayed-first-arrival'] as const)('refuses retrospective proof for a %s opening after a delayed scan', async mode => {
+    const directory = process.env.ETS2TELEMETRY_STORAGE_TEST_BUNDLES; if (!directory) throw new Error('Run storage suite');
+    worker = new Worker(path.join(directory, 'storage-worker.cjs'), {workerData: {kind: 'storage'}});
+    const client = new StorageClient(workerHandle(worker), {closeGraceMs: TEST_CLOSE_GRACE_MS});
+    let finish!: (value: HardModeObservation) => void;
+    const monitor = new HardModeMonitor(() => new Promise(resolve => {finish = resolve;}));
+    const recorder = new TripRecorderSink(client, {hardModeEvidence: () => monitor.evidence()}), pipeline = new DurableDelivery(recorder), acks: string[] = [];
+    try {
+      ok(await client.open({path: ws.database, purpose: 'synthetic', backupsDirectory: ws.backups, appVersion: 'test-et026'}));
+      const script = new Script(ETS2_A), welcome = script.welcome(), first = script.event(r.jobConfigured());
+      const upsert = client.upsertSession.bind(client); let release!: () => void, sessionEntered!: () => void;
+      const sessionHeld = new Promise<void>(resolve => {sessionEntered = resolve;});
+      if (mode === 'queued') client.upsertSession = input => new Promise(resolve => {release = () => {void upsert(input).then(resolve);}; sessionEntered();});
+      monitor.select({source: welcome.source, clockId: script.clockId, monotonicNs: welcome.capture.monotonicNs});
+      const connection = pipeline.connect(welcome, {current: () => true, write: bytes => {const m = decodePayload(bytes.subarray(4), 'client') as ClientMessage; if (m.kind === 'ack') acks.push(m.data.throughEventSeq);}, close: () => undefined});
+      connection.checkpoint(script.checkpoint(null, 1), Date.now());
+      if (mode === 'queued') connection.enqueue({firstEventSeq: '1', lastEventSeq: '1'}, first, Date.now());
+      else await pipeline.idle();
+      // Bytes first become available now, after the opening occurred; no UI or recorder proof before the causal reply.
+      finish(evidence()); await Promise.resolve(); expect(monitor.status().assessment.state).toBe('unknown');
+      monitor.select({source: welcome.source, clockId: script.clockId, monotonicNs: welcome.capture.monotonicNs,
+        boundary: {clockId: script.clockId, probeSentClientNs: process.hrtime.bigint().toString(), receivedSourceNs: first.capture.monotonicNs}});
+      await monitor.refresh(); expect(monitor.status().assessment.state).toBe('pass');
+      if (mode === 'queued') {expect(acks).toEqual([]); await sessionHeld; release();}
+      else connection.enqueue({firstEventSeq: '1', lastEventSeq: '1'}, first, Date.now());
+      await pipeline.idle(); expect(acks).toEqual(['1']);
+      const last = script.event(delivery()); connection.enqueue({firstEventSeq: '2', lastEventSeq: '2'}, last, Date.now()); await pipeline.idle();
+      const trip = ok(await client.listTrips()).trips[0];
+      expect(ok(await client.getTrip(trip.tripUuid))).toMatchObject({isHardMode: false, outcome: 'delivered', hardModeDetails: {firstLoss: {reason: 'historical'}}});
+    } finally {monitor.close(); await pipeline.stop(); expect(await client.close()).toEqual({clean: true});}
+  });
+  it.each(['loss', 'loss-retry', 'observation-write-failure'] as const)('latches loss during a held opening coverage read: %s', async mode => {
+    const retry = mode === 'loss-retry';
+    const directory = process.env.ETS2TELEMETRY_STORAGE_TEST_BUNDLES; if (!directory) throw new Error('Run storage suite');
+    worker = new Worker(path.join(directory, 'storage-worker.cjs'), {workerData: {kind: 'storage'}});
+    const client = new StorageClient(workerHandle(worker), {closeGraceMs: TEST_CLOSE_GRACE_MS});
+    let current = evidence(); const recorder = new TripRecorderSink(client, {hardModeEvidence: () => current}), pipeline = new DurableDelivery(recorder), acks: string[] = [];
+    const link = {current: () => true, write: (bytes: Uint8Array) => {const m = decodePayload(bytes.subarray(4), 'client') as ClientMessage; if (m.kind === 'ack') acks.push(m.data.throughEventSeq);}, close: () => undefined};
+    try {
+      ok(await client.open({path: ws.database, purpose: 'synthetic', backupsDirectory: ws.backups, appVersion: 'test-et026'}));
+      const script = new Script(ETS2_A); let connection = pipeline.connect(script.welcome(), link); connection.checkpoint(script.checkpoint(null), Date.now()); await pipeline.idle();
+      const through = client.committedThrough.bind(client); let release!: () => void, entered!: () => void;
+      const held = new Promise<void>(resolve => {entered = resolve;});
+      client.committedThrough = session => {client.committedThrough = through; return new Promise(resolve => {release = () => {void through(session).then(resolve);}; entered();});};
+      const first = script.event(r.jobConfigured()); connection.enqueue({firstEventSeq: '1', lastEventSeq: '1'}, first, Date.now()); await held;
+      const observe = client.observeHardMode.bind(client); let stored!: () => void; const lossStored = new Promise<void>(resolve => {stored = resolve;});
+      let observationFailed = false;
+      client.observeHardMode = async (game, observation) => {
+        if (mode === 'observation-write-failure' && !observationFailed) {observationFailed = true; stored(); return {ok: false, error: {code: 'IO_ERROR', retryable: true, message: 'Injected'}};}
+        const result = await observe(game, observation); stored(); return result;
+      };
+      recorder.observeHardMode('ets2', mode === 'observation-write-failure' ? evidence() : evidence(HARD_MODE_CONFIG.replace('g_fatigue "1"', 'g_fatigue "0"'))); await lossStored; await Promise.resolve();
+      expect(ok(await client.listTrips()).trips).toEqual([]); expect(ok(await through(ETS2_A))).toBe('0'); expect(acks).toEqual([]);
+      current = evidence(); recorder.observeHardMode('ets2', current);
+      if (retry) {const commit = client.commitEvent.bind(client); client.commitEvent = () => {client.commitEvent = commit; return Promise.resolve({ok: false, error: {code: 'IO_ERROR', retryable: true, message: 'Injected'}});};}
+      release(); await pipeline.idle();
+      if (retry) {
+        expect(acks).toEqual([]); expect(ok(await through(ETS2_A))).toBe('0');
+        connection = pipeline.connect(script.welcome(), link); connection.checkpoint(script.checkpoint(null, 1), Date.now());
+        connection.enqueue({firstEventSeq: '1', lastEventSeq: '1'}, script.redeliver(first), Date.now()); await pipeline.idle();
+      }
+      expect(acks).toEqual(['1']); expect(ok(await through(ETS2_A))).toBe('1');
+      const trip = ok(await client.listTrips()).trips[0];
+      const expectedLoss = mode === 'observation-write-failure' ? {reason: 'interrupted', values: [null]} : {rule: 'fatigue', values: [0]};
+      expect(ok(await client.getTrip(trip.tripUuid))).toMatchObject({hardModeDetails: {firstLoss: expectedLoss}});
+      if (!retry) expect(ok(await client.getTrip(trip.tripUuid))!.hardModeDetails!.opening.state).toBe('pass');
+      const last = script.event(delivery()); connection.enqueue({firstEventSeq: '2', lastEventSeq: '2'}, last, Date.now()); await pipeline.idle();
+      expect(acks).toEqual(['1', '2']); expect(ok(await client.getTrip(trip.tripUuid))).toMatchObject({isHardMode: false, outcome: 'delivered', hardModeDetails: {firstLoss: expectedLoss}});
     } finally {await pipeline.stop(); expect(await client.close()).toEqual({clean: true});}
   });
   it('qualifies deterministic injected replay-origin observations through the real recorder/worker in a replay database', async () => {

@@ -289,10 +289,11 @@ function applyEffects(c: EffectContext, effects: unknown): void {
  * and advances coverage; an existing one is `duplicate` (same canonical payload) or `conflict` (the stored row is kept),
  * and neither writes anything.
  */
-export function commitEvent(conn: StorageConnection, input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation}, options: CommitOptions = {}): CommitResult {
+export function commitEvent(conn: StorageConnection, input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation; hardModeLoss?: HardModeObservation}, options: CommitOptions = {}): CommitResult {
   const m = serverMessage(input?.message, 'event');
   if (m.kind !== 'event') fail('INVALID_INPUT');
-  checkHardModeObservation(input.hardMode);
+  checkHardModeObservation(input.hardMode); checkHardModeObservation(input.hardModeLoss);
+  if (input.hardModeLoss?.assessment.state === 'pass') fail('INVALID_INPUT');
   const {eventSeq, occurred, record, redelivered} = m.data, seqKey = u64Key(eventSeq);
   const payload = canonicalJson({occurred, record});
   return transact(conn, db => {
@@ -315,9 +316,10 @@ export function commitEvent(conn: StorageConnection, input: {message: unknown; e
     if (result.changes !== 1) fail('CONSTRAINT_VIOLATION');
     const eventRef = BigInt(result.lastInsertRowid);
     normalize(db, session.id, eventRef, record);
+    if (input.hardModeLoss) updateOpenHardMode(db, session.game, input.hardModeLoss, now);
     if (input.hardMode) updateOpenHardMode(db, session.game, input.hardMode, now);
     applyEffects({db, session, game: session.game, now, eventRef, eventType: record.type, carrierEventSeq: seqKey}, input.effects);
-    applyEventHardMode(db, m, input.effects, input.hardMode, now);
+    applyEventHardMode(db, m, input.effects, input.hardMode, now, input.hardModeLoss);
     const through = advanceCoverage(db, session, BigInt(eventSeq), BigInt(eventSeq));
     options.testHooks?.beforeCommit?.();
     return {status: 'committed', committedThroughEventSeq: through};
@@ -332,9 +334,11 @@ const CAUSES: [keyof GapData['causes'], string][] = [['offline', 'cause_offline'
  * extends beyond coverage is stored with its own cause counts, even where it overlaps earlier gap rows, and events
  * already committed inside it keep their rows. Every result carries `previouslyCoveredThrough` (see CommitResult).
  */
-export function commitGap(conn: StorageConnection, input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation}, options: CommitOptions = {}): CommitResult {
+export function commitGap(conn: StorageConnection, input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation; hardModeLoss?: HardModeObservation}, options: CommitOptions = {}): CommitResult {
   const m = serverMessage(input?.message, 'gap');
   if (m.kind !== 'gap') fail('INVALID_INPUT');
+  checkHardModeObservation(input.hardMode); checkHardModeObservation(input.hardModeLoss);
+  if (input.hardModeLoss?.assessment.state === 'pass') fail('INVALID_INPUT');
   const d = m.data, firstKey = u64Key(d.firstEventSeq), lastKey = u64Key(d.lastEventSeq);
   const payload = canonicalJson({causes: d.causes, firstLostMonotonicNs: d.firstLostMonotonicNs, lastLostMonotonicNs: d.lastLostMonotonicNs});
   return transact(conn, db => {
@@ -355,6 +359,7 @@ export function commitGap(conn: StorageConnection, input: {message: unknown; eff
       return {status: 'covered', committedThroughEventSeq: previouslyCoveredThrough, previouslyCoveredThrough};
     }
     const now = conn.now(), clock = clockRef(db, session.id, 'source-monotonic', m.capture.clockId);
+    if (input.hardModeLoss) updateOpenHardMode(db, session.game, input.hardModeLoss, now);
     updateOpenHardMode(db, session.game, {assessment: unknownHardMode(now, 'interrupted'), binding: null, pluginSessionId: null, sourceMonotonicNs: null}, now);
     const [firstLost, firstLostState] = availabilityColumns(d.firstLostMonotonicNs, u64Key), [lastLost, lastLostState] = availabilityColumns(d.lastLostMonotonicNs, u64Key);
     statement(db, insert('event_gaps', ['plugin_session_ref', 'first_event_seq', 'last_event_seq', ...CAUSES.map(([, c]) => c), 'first_lost_monotonic_ns', 'first_lost_monotonic_ns_state',

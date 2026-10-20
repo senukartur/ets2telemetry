@@ -52,7 +52,7 @@ export function unknownHardMode(at: number, reason: HardModeReason = 'source-unp
 export function advanceHardMode(previous: HardModeDetails | null, assessment: HardModeAssessment, loss?: HardModeReason): HardModeDetails {
   const failed = assessment.rules.find(r => r.state !== 'pass');
   const firstLoss = previous?.firstLoss ?? (loss || failed ? {atUtcMs: assessment.observedUtcMs, reason: loss ?? failed!.reason, rule: loss ? null : failed!.id, values: loss ? null : [...failed!.values]} : null);
-  return {version: 1, binding: previous?.binding ?? null, opening: previous?.opening ?? assessment, latest: assessment, firstLoss, manualDelivery: previous?.manualDelivery ?? null};
+  return {version: 1, binding: previous?.binding ?? null, opening: previous?.opening ?? assessment, latest: previous && previous.latest.observedUtcMs > assessment.observedUtcMs ? previous.latest : assessment, firstLoss, manualDelivery: previous?.manualDelivery ?? null};
 }
 export function hardModeLoss(details: HardModeDetails, atUtcMs: number, reason: HardModeReason, rule: HardModeRuleId | null = null): HardModeDetails {
   return {...details, firstLoss: details.firstLoss ?? {atUtcMs, reason, rule, values: rule ? details.latest.rules.find(r => r.id === rule)?.values ?? null : null}};

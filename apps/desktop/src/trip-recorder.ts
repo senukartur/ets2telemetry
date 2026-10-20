@@ -18,7 +18,7 @@ import {
   dueAttach, initialSamplerState, initialTripState, normalizeV1State, sampleReading, stepTrip, tripView, type SamplerState, type TripErrorCode, type TripGame, type TripInput,
   type TripState, type TripView
 } from '../../../packages/telemetry-core/src/index';
-import type {AttachSink, AttachStatus, CommitContext, CoverageMessage, DurableSink, ReadingMessage, RecorderErrorCode, SampleSink, SinkError, SinkResult, WelcomeMessage} from './durable-sink';
+import type {AttachSink, AttachStatus, CommitContext, CoverageMessage, HardModeCapture, DurableSink, ReadingMessage, RecorderErrorCode, SampleSink, SinkError, SinkResult, WelcomeMessage} from './durable-sink';
 import {saturatingAdd} from './recording-status';
 import {SampleBuffer} from './sample-buffer';
 import {readTripSeeds} from './trip-seeds';
@@ -91,7 +91,18 @@ function reading(message: ReadingMessage): TripInput {
  * A reducer `ok: false` result becomes a RecorderErrorCode and changes no state.
  */
 export class TripRecorderSink implements DurableSink {
-  private readonly capturedEvidence = new Map<string, HardModeObservation>();
+  private readonly capturedEvidence = new Map<string, HardModeCapture>();
+  private readonly pendingCaptures = new Set<HardModeCapture>();
+  private evidenceKey(message: CoverageMessage): string {return `${message.source.pluginSessionId}:${message.kind}:${message.kind === 'event' ? message.data.eventSeq : message.data.firstEventSeq}`;}
+  capture(message: CoverageMessage): HardModeCapture | undefined {
+    if (!this.options.hardModeEvidence) return undefined;
+    const captured = this.capturedEvidence.get(this.evidenceKey(message)) ?? {game: message.source.game, observation: structuredClone(this.options.hardModeEvidence()), firstUnsafe: null};
+    const pending = this.pendingObservation;
+    if (captured.firstUnsafe === null && pending?.game === captured.game && pending.value.assessment.state !== 'pass') captured.firstUnsafe = structuredClone(pending.value);
+    if (captured.firstUnsafe === null && this.observationError) captured.firstUnsafe = {assessment: unknownHardMode(Date.now(), 'interrupted'), binding: null, pluginSessionId: null, sourceMonotonicNs: null};
+    this.pendingCaptures.add(captured); return captured;
+  }
+  releaseCapture(captured: HardModeCapture): void {this.pendingCaptures.delete(captured);}
   private pendingObservation: {game: TripGame; value: HardModeObservation} | undefined;
   private observing = false;
   private observationWrite: Promise<void> | undefined;
@@ -108,12 +119,19 @@ export class TripRecorderSink implements DurableSink {
   }
   /** At most one observation command and one pending loss. A compliant refresh never replaces a pending failure. */
   observeHardMode(game: TripGame, value: HardModeObservation): void {
-    if (!this.client.observeHardMode) return;
     if (this.observationBinding !== undefined && this.observationBinding !== value.binding && value.assessment.state === 'pass') value = {...value, assessment: unknownHardMode(value.assessment.observedUtcMs, 'source-changed')};
     this.observationBinding = value.binding;
+    this.latchCaptureLoss(game, value);
+    if (!this.client.observeHardMode) return;
     const pending = this.pendingObservation;
     if (!pending || pending.value.assessment.state === 'pass') this.pendingObservation = {game, value: structuredClone(value)};
     this.startObservationWrite();
+  }
+  private latchCaptureLoss(game: TripGame, value: HardModeObservation): void {
+    for (const capture of new Set([...this.pendingCaptures, ...this.capturedEvidence.values()])) if (capture.game === game && capture.firstUnsafe === null) {
+      if (value.assessment.state !== 'pass') capture.firstUnsafe = structuredClone(value);
+      else if (capture.observation.binding !== value.binding) capture.firstUnsafe = {...structuredClone(value), assessment: unknownHardMode(value.assessment.observedUtcMs, 'source-changed')};
+    }
   }
   private startObservationWrite(): void {
     if (this.observing || !this.pendingObservation) return;
@@ -128,13 +146,17 @@ export class TripRecorderSink implements DurableSink {
             // A storage interruption cannot be turned back into a pass by a later refresh.
             this.observationError = result.error;
             this.pendingObservation = {game: next.game, value: next.value.assessment.state === 'pass' ? {...next.value, assessment: unknownHardMode(Date.now(), 'interrupted'), binding: null} : next.value};
+            this.latchCaptureLoss(next.game, this.pendingObservation.value);
             return;
           }
           this.observationError = undefined;
           await this.readHardModeTrip(next.game);
         }
       } catch {
-        if (attempted) this.pendingObservation = {game: attempted.game, value: attempted.value.assessment.state === 'pass' ? {...attempted.value, assessment: unknownHardMode(Date.now(), 'interrupted'), binding: null} : attempted.value};
+        if (attempted) {
+          this.pendingObservation = {game: attempted.game, value: attempted.value.assessment.state === 'pass' ? {...attempted.value, assessment: unknownHardMode(Date.now(), 'interrupted'), binding: null} : attempted.value};
+          this.latchCaptureLoss(attempted.game, this.pendingObservation.value);
+        }
         this.observationError = {code: 'INTERNAL', retryable: false, message: 'The Hard Mode observation could not be stored.'};
       } finally {this.observing = false;}
     })();
@@ -193,12 +215,12 @@ export class TripRecorderSink implements DurableSink {
   }
 
   async commit(message: CoverageMessage, context: CommitContext): Promise<SinkResult<CommitResult>> {
-    const key = `${message.source.pluginSessionId}:${message.kind}:${message.kind === 'event' ? message.data.eventSeq : message.data.firstEventSeq}`;
-    let hardMode = this.capturedEvidence.get(key);
-    if (!hardMode && this.options.hardModeEvidence) {
-      // The delivery pipeline owns one attempted command at a time. Keep only its frozen evidence through retry.
-      hardMode = this.options.hardModeEvidence(); this.capturedEvidence.clear(); this.capturedEvidence.set(key, hardMode);
-    }
+    const key = this.evidenceKey(message);
+    const capture = this.capturedEvidence.get(key) ?? context.hardModeCapture ?? this.capture(message);
+    if (capture) {this.capturedEvidence.clear(); this.capturedEvidence.set(key, capture); this.pendingCaptures.add(capture);}
+    try {return await this.commitCaptured(message, context, key, capture);} finally {if (capture) this.releaseCapture(capture);}
+  }
+  private async commitCaptured(message: CoverageMessage, context: CommitContext, key: string, capture: HardModeCapture | undefined): Promise<SinkResult<CommitResult>> {
     const observationError = await this.flushObservations();
     if (observationError) return {ok: false, error: observationError};
     // The storage caller rule: read the coverage right before committing; the single writer keeps it until the commit.
@@ -207,7 +229,9 @@ export class TripRecorderSink implements DurableSink {
     const coveredThrough = covered.value, receivedUtcMs = context.receivedUtcMs;
     const stepped = stepTrip(this.state, message.kind === 'event' ? {kind: 'event', message, coveredThrough, receivedUtcMs} : {kind: 'gap', message, coveredThrough, receivedUtcMs});
     if (!stepped.ok) return refused(RECORDER_CODE[stepped.code]);
-    const input = {message, ...(stepped.effects.length ? {effects: stepped.effects} : {}), ...(hardMode ? {hardMode} : {})};
+    // No await between this read and posting the transaction: any earlier observed loss is part of opening/closing.
+    const hardMode = capture?.observation, hardModeLoss = capture?.firstUnsafe;
+    const input = {message, ...(stepped.effects.length ? {effects: stepped.effects} : {}), ...(hardMode ? {hardMode} : {}), ...(hardModeLoss ? {hardModeLoss} : {})};
     const result = message.kind === 'event' ? await this.client.commitEvent(input) : await this.client.commitGap(input);
     if (!result.ok || !ADOPT.has(result.value.status)) return result;
     // R7: the gap's effects describe only (coveredThrough, lastEventSeq]; another starting point means they were wrong.

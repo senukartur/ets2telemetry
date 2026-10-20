@@ -36,24 +36,28 @@ export function updateOpenHardMode(db: Database.Database, game: string, observat
 }
 /** Runs after the ordinary effects, within their event transaction. Duplicates return before this function. */
 export function applyEventHardMode(db: Database.Database, message: Extract<ServerMessage, {kind: 'event'}>, effects: readonly {kind: string; tripUuid?: string | null}[] | undefined,
-  observation: HardModeObservation | undefined, now: number): void {
+  observation: HardModeObservation | undefined, now: number, pendingLoss?: HardModeObservation): void {
   checkHardModeObservation(observation);
   if (observation === undefined) return;
   const at = observation?.assessment.observedUtcMs ?? now;
   const fresh = observation && observation.pluginSessionId === message.source.pluginSessionId && observation.binding !== null && observation.sourceMonotonicNs !== null
     && now >= at && now - at <= 3000 && message.data.occurred.monotonicNs.available
     && BigInt(message.data.occurred.monotonicNs.value) >= BigInt(observation.sourceMonotonicNs) && !message.data.redelivered;
-  const assessment = fresh ? observation.assessment : unknownHardMode(now, 'historical');
+  // Failing evidence is conservative even without current positive proof; never discard its original detected value.
+  const assessment = observation.assessment.state === 'fail' || fresh ? observation.assessment : unknownHardMode(now, 'historical');
   for (const effect of effects ?? []) {
     if (effect.kind !== 'trip.open' && effect.kind !== 'trip.close') continue;
     const row = db.prepare('SELECT id, hard_mode_details, outcome, opened_by FROM trips WHERE trip_uuid = ?').get(effect.tripUuid) as {id: unknown; hard_mode_details: unknown; outcome: string; opened_by: string};
     const previous = readHardModeDetails(row.hard_mode_details);
     if (effect.kind === 'trip.open') {
-      const details = advanceHardMode(null, assessment, fresh ? undefined : 'historical');
+      let details = advanceHardMode(null, assessment, fresh || assessment.state === 'fail' ? undefined : 'historical');
+      // This row is being created now: preserve the opening snapshot and the first unsafe observation captured
+      // during its queue/write awaits, even if redelivery itself cannot establish positive opening proof.
+      if (pendingLoss && observation.assessment.state === 'pass') details = advanceHardMode({...details, firstLoss: null}, pendingLoss.assessment);
       details.binding = fresh ? observation.binding : null;
       write(db, row.id, details);
     } else if (previous) {
-      const loss: HardModeReason | undefined = previous.binding !== observation?.binding ? 'source-changed' : fresh ? undefined : 'interrupted';
+      const loss: HardModeReason | undefined = assessment.state === 'fail' ? undefined : previous.binding !== observation?.binding ? 'source-changed' : fresh ? undefined : 'interrupted';
       let details = advanceHardMode(previous, assessment, loss);
       const delivered = message.data.record;
       details.manualDelivery = delivered.type === 'job.delivered' && delivered.autoParkUsed.available ? delivered.autoParkUsed.value === false : null;
