@@ -59,7 +59,7 @@ export class OverlayLatency {
     const {source, capture} = live.observation;
     const identity = `${source.processInstanceId}/${source.pluginSessionId}/${capture.clockId}/${capture.monotonicNs}`;
     // Re-publications caused by v1/window/health updates do not create new SDK samples.
-    if (identity === this.lastCapture) return {...view, diagnosticFrame: this.lastToken};
+    if (identity === this.lastCapture) return this.lastToken === undefined ? view : {...view, diagnosticFrame: this.lastToken};
     this.lastCapture = identity;
     if (this.rows.length === LATENCY_MAX_SAMPLES) {this.finish('sample-limit'); return view;}
     const now = this.now();
@@ -98,7 +98,7 @@ export class OverlayLatency {
       {token: row.token, lowerMs: row.lowerMs, upperMs: row.upperMs, uncertaintyMs: row.uncertaintyMs, mappingAgeMs: row.mappingAgeMs});}
   }
   retire(): void {
-    this.lastCapture = undefined;
+    // Keep the dedup identity: recovery must not measure an already-seen SDK capture again.
     this.lastToken = undefined;
     for (const row of this.pending.values()) row.reason = 'source-or-document-retired';
     this.pending.clear();

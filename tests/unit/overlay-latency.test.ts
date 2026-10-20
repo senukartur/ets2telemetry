@@ -125,13 +125,34 @@ it.each(['hidden', 'paused', 'editing', 'stale', 'window-not-current', 'missing-
     expect(collector.project(inactiveView, inactiveLive, reason !== 'hidden')).not.toHaveProperty('diagnosticFrame');
     collector.frame(1, true);
     expect(sent).not.toHaveBeenCalled();
-    // The same capture can be projected after recovery, but its old token must never be resurrected.
-    expect(collector.project(view, live, true).diagnosticFrame).toBe(2);
+    // Recovery must wait for another SDK capture, even if a window/health update republishes the old one.
+    expect(collector.project(view, live, true)).not.toHaveProperty('diagnosticFrame');
+    expect(collector.project(view, {...live, observation: {...live.observation,
+      capture: {...live.observation.capture, monotonicNs: '1100000000'}}}, true).diagnosticFrame).toBe(2);
+    collector.frame(2, true);
+    collector.reply({token: 2, upperNs: '1000000000', uncertaintyNs: '1000000', mappingAgeNs: '20000000'});
     collector.finish('exit'); await collector.idle();
     const report = JSON.parse(await readFile(path.join(temporary, 'overlay-latency.json'), 'utf8'));
-    expect(report).toMatchObject({attempted: 2, observedFrames: 0, valid: 0, unresolved: 2});
-    expect(report.samples.map((row: {reason: string}) => row.reason)).toEqual(['source-or-document-retired', 'unfinished']);
+    expect(report).toMatchObject({attempted: 2, observedFrames: 1, valid: 1, unresolved: 1});
+    expect(report.samples.map((row: {reason?: string}) => row.reason)).toEqual(['source-or-document-retired', undefined]);
   });
+it('does not count a completed capture again after document retirement', async () => {
+  temporary = await mkdtemp(path.join(os.tmpdir(), 'et009-latency-'));
+  let now = 1000000000n;
+  const sent = vi.fn(), collector = new OverlayLatency(temporary, sent, vi.fn(), () => now);
+  collector.project(view, live, true);
+  now += 10000000n; collector.frame(1, true);
+  collector.reply({token: 1, upperNs: '20000000', uncertaintyNs: '1000000', mappingAgeNs: '20000000'});
+  collector.retire();
+  now += 400000000n;
+  expect(collector.project(view, live, true)).not.toHaveProperty('diagnosticFrame');
+  collector.frame(1, true);
+  expect(sent).toHaveBeenCalledTimes(1);
+  collector.finish('exit'); await collector.idle();
+  const report = JSON.parse(await readFile(path.join(temporary, 'overlay-latency.json'), 'utf8'));
+  expect(report).toMatchObject({attempted: 1, observedFrames: 1, valid: 1, unresolved: 0,
+    lowerMs: {max: 10}, upperMs: {max: 20}});
+});
 it('ends automatically after 120s even when updates stop', async () => {
   vi.useFakeTimers(); temporary = await mkdtemp(path.join(os.tmpdir(), 'et009-latency-'));
   const collector = new OverlayLatency(temporary, vi.fn(), vi.fn());

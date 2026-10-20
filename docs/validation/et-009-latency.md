@@ -44,6 +44,11 @@ capture can skip tokens. Preserve all attempted rows, missing frames/replies, st
 p50/p95/p99/max of both bounds and successful/attempted counts; do not infer acceptance from successful rows alone.
 There is no automatic overall pass verdict.
 
+Percentiles include only valid rows and can have survivorship bias; slow or otherwise unresolved
+attempts are excluded. Group unresolved `samples` by their `reason` (for example timeout, retirement,
+unfinished or clock rejection) when interpreting the aggregate `unresolved` count. Every unresolved
+row retains its reason; a separate histogram is not required to inspect that population.
+
 ## Activation, collection and evidence
 
 All three variables are required: `ETS2TELEMETRY_OVERLAY_LATENCY=1`, an absolute `ETS2TELEMETRY_PROFILE_DIR`, and an absolute
@@ -55,7 +60,11 @@ while a game runs.
 
 Collection starts with a visible, current, non-paused, non-editing projection with fresh window authority. It ends after
 120 seconds, 3000 attempted captures or explicit Exit. Pending rows expire after two seconds; retirement/non-current
-projections invalidate pending work. Tokens never repeat in one app lifetime. Output is atomically written to
+projections invalidate pending work. Recovery retains the last SDK capture identity and waits for a
+different capture before issuing another token; it cannot recount a retired capture. Historical game
+reports predate this pre-merge deduplication fix and remain unchanged; their conditional percentiles
+may include repeated captures after retirement. The bounds remain conservative for each observed
+readback, but the population can include eligibility-delay bias. Tokens never repeat in one app lifetime. Output is atomically written to
 `<diagnostics>/overlay-latency.json`; logs show `OVERLAY_LATENCY_STARTED`, `OVERLAY_LATENCY_SAVED` or a write failure. Only
 bounded scalar rows are retained. Report flushing participates in the existing bounded shutdown idle; abrupt termination
 or a failed/over-budget write is not a successful run.
