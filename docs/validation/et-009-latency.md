@@ -74,6 +74,9 @@ budget. Fatal service shutdown starts the report write as best effort and does n
 awaited or durable. Confirm a complete saved report before treating a measurement as successful.
 Reports contain source/process/session identities. Keep raw reports local; before public sharing or
 committing, sanitize source identifiers and any associated user paths or telemetry.
+The collector does not determine application recording state; use the launch receipt and service
+recording status to establish it. New reports omit the historical constant `recording: false` field,
+which did not establish whether the application was recording.
 
 Pin commit, build/source hashes, EXE/ASAR/broker/DLL hashes, game/TruckersMP versions, Windows/GPU/display configuration
 and UTC interval. Retain launch receipt, raw report, app/service logs, owner scenario notes, process/exit audit and

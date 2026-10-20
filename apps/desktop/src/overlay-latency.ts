@@ -118,7 +118,7 @@ export class OverlayLatency {
       method: 'capturePage marker-only readback; <=20 requests/s; <=1 pending; visibility gated; stayHidden true',
       endpoint: 'SDK v0 speed/fuel capture to completed Chromium marker readback; upper bound includes polling, readback and service IPC; excludes DWM/scan-out/monitor and independent v1 sections',
       clockAssumption: 'v0/v1 share one source clock; clock offset remains within measured uncertainty for mapping age <= 1500 ms; no cross-process Node clock comparison',
-      instrumented: true, recording: false, durationMs: this.started === undefined ? 0 : Number(this.now() - this.started) / 1e6,
+      instrumented: true, durationMs: this.started === undefined ? 0 : Number(this.now() - this.started) / 1e6,
       frameCapture: this.frameStats ? {...this.frameStats()} : undefined,
       attempted: this.rows.length, observedFrames: this.rows.filter(row => row.frameNs !== undefined).length, valid: valid.length, unresolved: this.rows.length - valid.length,
       targetMs: 200, upperBoundWithinTarget: valid.filter(row => row.upperMs! <= 200).length,
