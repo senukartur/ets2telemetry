@@ -13,6 +13,7 @@ import {RECORDING_NAME_PATTERN, type RecordingDatabase} from './recording-policy
 import type {TripRecorderClient} from './trip-recorder';
 
 /** Budget of the `history-storage` step in the service's `storage` shutdown phase. */
+export const HISTORY_STORAGE_STEP_NAME = 'history-storage';
 export const HISTORY_CLOSE_BUDGET_MS = 1000;
 /**
  * The orderly close gets this long, plus one event-loop turn for answers that already arrived, before the worker is

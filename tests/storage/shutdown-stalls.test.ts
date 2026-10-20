@@ -327,7 +327,7 @@ describe('ET-019 shutdown and close stalls', () => {
       const step = `step storage history-storage ${verdict[0].outcome}`;
       expect(ordered(timeline, ['start history-storage', 'held close', 'terminate', step])).toEqual(['start history-storage', 'held close', 'terminate', step]);
       // Adaptive grace gives ~2,250 ms (well beyond the baseline 800 ms grace), bounded by the stop budget.
-      expect(terminatedAfterMs).toBeGreaterThanOrEqual(1200);
+      expect(terminatedAfterMs).toBeGreaterThanOrEqual(2000);
       expect(terminatedAfterMs).toBeLessThanOrEqual(STOP_BUDGET_MS);
       // The whole stop stayed inside its budget although the close never ended.
       expect(elapsedMs).toBeLessThanOrEqual(STOP_BUDGET_MS + LOOP_CLOCK_SLACK_MS);

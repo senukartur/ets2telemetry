@@ -168,7 +168,7 @@ it('cascades unused intake and flush budget to storage phase steps', async () =>
   }});
   const result = f.sequence.run();
   await vi.advanceTimersByTimeAsync(30 + 20);
-  expect(storageProbeContext).toEqual({budgetMs: 2450});
+  expect(storageProbeContext).toEqual({budgetMs: 1000});
   expect(historyContext).toEqual({budgetMs: 2450, graceMs: 2250});
   await vi.advanceTimersByTimeAsync(1500);
   await expect(result).resolves.toEqual({clean: true});

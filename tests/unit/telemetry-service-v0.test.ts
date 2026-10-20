@@ -89,7 +89,7 @@ it('boots transport only after the parent selection and retains it across render
     stop() {this.dependencies.report({type: 'stopped'}); return Promise.resolve();}
   }}));
   // The history database is opened by its own worker; never touch the real LOCALAPPDATA from a Node unit test.
-  vi.doMock('../../apps/desktop/src/history-storage', () => ({HISTORY_CLOSE_BUDGET_MS: 1000, historyWorker: vi.fn(), HistoryStorage: class {start() {} close() {return Promise.resolve();}}}));
+  vi.doMock('../../apps/desktop/src/history-storage', () => ({HISTORY_STORAGE_STEP_NAME: 'history-storage', HISTORY_CLOSE_BUDGET_MS: 1000, HISTORY_CLOSE_GRACE_MS: 800, CLOSE_TERMINATE_RESERVE_MS: 200, historyWorker: vi.fn(), HistoryStorage: class {start() {} close() {return Promise.resolve();}}}));
   const command = (type: string, ports: TestPort[] = []) => parent.emit('message', {data: {type, source: 'synthetic'}, ports});
   try {
     await loadService();
@@ -725,9 +725,7 @@ it.each(['hanging', 'failed'])('reports a %s storage step within its budget as a
   try {
     // Requirement change (October 18, 2026): the timeout verdict runs one event-loop turn after the 1,000 ms budget,
     // which the fake clock schedules 1 ms later.
-    // Requirement change (ET-038): under adaptive stop grace cascading, unused budget from earlier phases
-    // (<50 ms, 0 ms under fake clock) expands the effective budget of storage steps up to 2,500 ms.
-    f.stop(); await vi.advanceTimersByTimeAsync(mode === 'hanging' ? 2500 : 0);
+    f.stop(); await vi.advanceTimersByTimeAsync(mode === 'hanging' ? 1000 : 0);
     if (mode === 'hanging') {expect(f.stops()).toEqual([]); await vi.advanceTimersByTimeAsync(1);}
     else expect(f.parent.postMessage).toHaveBeenCalledWith({type: 'failed', code: 'SERVICE_STOP_FAILED'});
     expect(f.stops()).toEqual([{type: 'stopped', clean: false}]);

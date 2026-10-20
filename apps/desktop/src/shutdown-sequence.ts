@@ -1,8 +1,5 @@
 import type {DiagnosticFacts} from './diagnostics';
-/** Baseline history close grace when earlier phases use full budget. */
-export const HISTORY_CLOSE_GRACE_MS = 800;
-/** Reserve between the storage close grace and the step budget for worker termination and step settlement. */
-export const CLOSE_TERMINATE_RESERVE_MS = 200;
+import {CLOSE_TERMINATE_RESERVE_MS, HISTORY_CLOSE_GRACE_MS, HISTORY_STORAGE_STEP_NAME} from './history-storage';
 
 /** Ordered service shutdown phases: stop new input, write pending work, then release storage. */
 export const SHUTDOWN_PHASES = ['intake', 'flush', 'storage'] as const;
@@ -85,11 +82,12 @@ export class ShutdownSequence {
         const elapsed = this.timers.now() - sequenceStarted;
         const remainingStopBudget = Math.max(0, SERVICE_STOP_BUDGET_MS - elapsed);
         contexts = steps.map(step => {
-          const effectiveBudget = Math.max(step.budgetMs, remainingStopBudget);
-          const graceMs = step.name === 'history-storage'
-            ? Math.max(HISTORY_CLOSE_GRACE_MS, effectiveBudget - CLOSE_TERMINATE_RESERVE_MS)
-            : undefined;
-          return {budgetMs: effectiveBudget, ...(graceMs !== undefined ? {graceMs} : {})};
+          if (step.name === HISTORY_STORAGE_STEP_NAME) {
+            const effectiveBudget = Math.max(step.budgetMs, remainingStopBudget);
+            const graceMs = Math.max(HISTORY_CLOSE_GRACE_MS, effectiveBudget - CLOSE_TERMINATE_RESERVE_MS);
+            return {budgetMs: effectiveBudget, graceMs};
+          }
+          return {budgetMs: step.budgetMs};
         });
       }
       const outcomes = await Promise.all(steps.map((step, index) => this.runStep(phase, step, contexts ? contexts[index] : {budgetMs: step.budgetMs})));

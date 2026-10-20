@@ -722,8 +722,20 @@ The card stays in Review. These gaps remain open and are recorded, not fixed. TD
 - TD-018: a broker that exits mid-session is not restarted;
 - TD-019: stale discovery records accumulate, so after enough game crashes the broker fails closed (resolved on October 19, 2026 by ET-033: the broker now sweeps demonstrably stale discovery records during directory enumeration before counting live records toward the 256-entry / 128-record bounds);
 - G10: no automatic re-open of history after it stopped;
-- G18: a history close slower than the 800 ms grace is terminated and reported unclean, so the service exits 1, though nothing committed is lost;
+- G18: a history close slower than the 800 ms grace is terminated and reported unclean, so the service exits 1, though nothing committed is lost (resolved on October 20, 2026 by ET-038: adaptive stop budget cascading in `ShutdownSequence` grants `history-storage` unused budget from earlier prompt phases, expanding close grace up to ~2,250 ms so slow orderly closes finish cleanly without expanding the total 2,500 ms stop bound);
 - G5: no service heartbeat, so a hung telemetry service keeps its last recording status;
 - a kill between a backup's rename and its manifest can leave a manifest-less backup (PR-2, an uncovered kill point).
 
 Each needs its own card. Thresholds for resource use wait for more hosted runs (ET-019 plan decision D3). Real recording into history, CPU and frame time beside a game, TruckersMP, one-hour real sessions and a real power loss remain pending (ET-020). ET-020 and later phases are not authorized by this update. No game, TruckersMP, display or performance claim follows.
+
+## ET-038 implementation update — October 20, 2026
+
+ET-038 resolves product gap G18 by introducing adaptive stop budget cascading in `ShutdownSequence`. When earlier shutdown phases (`intake` and `flush`) complete promptly (<50 ms), the remaining sequence budget up to 2,500 ms `SERVICE_STOP_BUDGET_MS` cascades to `history-storage`, expanding the history close grace from the nominal 800 ms baseline up to ~2,250 ms (retaining a 200 ms termination reserve). Other storage steps maintain their registered nominal budgets.
+
+Under this adaptive cascading:
+- A slow close that takes up to ~2,250 ms finishes cleanly, logs `HISTORY_STORAGE_CLOSED` and allows the service to stop with exit code 0 (`tests/storage/shutdown-stalls.test.ts` case b1).
+- A stalled close (held indefinitely) is terminated after the expanded ~2,250 ms grace and exits 1 unclean, strictly bounded within `SERVICE_STOP_BUDGET_MS` plus loop clock slack, without hanging service shutdown and preserving all committed events in the WAL (`tests/storage/shutdown-stalls.test.ts` case b2).
+- Unit tests (`tests/unit/shutdown-sequence.test.ts`, `tests/unit/history-storage.test.ts`, `tests/unit/storage-client.test.ts`) verify that the adaptive budget calculation strictly enforces total sequence bounds and scales down when earlier phases consume their budgets.
+
+See [ET-038 validation](docs/validation/et-038.md). No protocol, schema, IPC, or game integration was changed.
+
