@@ -40,7 +40,7 @@ const REOPEN_BACKUP = 'telemetry-f0000000-v1-20261015T120000000Z';
 const pair = (stem: string) => [`${stem}.json`, `${stem}.sqlite`];
 const UUID = 'f0000000-0000-4000-8000-000000000001';
 
-type Barrier = 'afterInspect' | 'afterCopy' | 'inside0002' | 'afterOpen';
+type Barrier = 'afterInspect' | 'afterCopy' | 'afterBackupRename' | 'inside0002' | 'afterOpen';
 
 /**
  * Runs the child on `copy` until it reports `barrier`, then terminates it there with TerminateProcess (SIGKILL): no exit
@@ -112,6 +112,21 @@ describe('REG-013 killed open of a version 1 database', () => {
       removedPartialBackups: 1});
     expectMigratedFromVersion1(storage, copy, before, path.join(ws.backups, `${REOPEN_BACKUP}.sqlite`));
     // Exactly one verified backup with its manifest; the stale partial copy is gone and was never trusted.
+    expect(backupFiles()).toEqual(pair(REOPEN_BACKUP));
+  });
+
+  it('terminated after the backup rename, before its manifest is renamed: the next open removes the orphan backup and backs up again', async () => {
+    const copy = ws.copyFixture(REPRESENTATIVE), before = readVersion1(copy);
+    expect(await killAtBarrier('afterBackupRename', copy)).toEqual({backup: `${CHILD_BACKUP}.sqlite`});
+    // The backup was renamed to .sqlite, but its manifest was only .json.partial; the database itself is untouched.
+    expect(backupFiles()).toEqual([`${CHILD_BACKUP}.json.partial`, `${CHILD_BACKUP}.sqlite`]);
+    expect(digestOf(copy)).toEqual(before.original);
+
+    const storage = await ws.open({path: copy});
+    expect(storage.summary).toEqual({schemaVersion: 2, created: false, databaseUuid: UUID, purpose: 'synthetic', migratedFrom: 1, backupFileName: `${REOPEN_BACKUP}.sqlite`,
+      removedPartialBackups: 2});
+    expectMigratedFromVersion1(storage, copy, before, path.join(ws.backups, `${REOPEN_BACKUP}.sqlite`));
+    // Exactly one verified backup with its manifest; the unmanifested backup and stale partial manifest are gone.
     expect(backupFiles()).toEqual(pair(REOPEN_BACKUP));
   });
 

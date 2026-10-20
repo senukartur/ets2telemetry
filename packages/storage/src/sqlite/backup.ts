@@ -15,6 +15,8 @@ export interface BackupHooks {
   freeBytes?: (directory: string) => number;
   /** Runs after the copy is written and before it is verified, to prove that a damaged copy is refused. */
   afterCopy?: (partialPath: string) => void;
+  /** Runs after the verified backup copy is renamed to .sqlite and before its manifest is renamed. */
+  afterBackupRename?: (backupPath: string) => void;
 }
 /** Written last, after the verified backup file is in place; a backup without it is never trusted or deleted. */
 export interface BackupManifest {
@@ -34,25 +36,82 @@ const sizeOf = (file: string) => { try { return statSync(file).size; } catch { r
 function removeQuietly(...files: string[]) { for (const file of files) { try { rmSync(file, {force: true}); } catch { /* best effort */ } } }
 
 /**
- * Removes the partial files a writer left behind when it was terminated during a pre-migration backup of this database
- * (for example by the service's bounded shutdown): `telemetry-<uuid8>-v<n>-<timestamp>.sqlite.partial` with its
- * `-journal`, `-wal` and `-shm` files, and `telemetry-<uuid8>-v<n>-<timestamp>.json.partial`. Call it only while holding
- * the database's exclusive lock, so no other writer can own them. Only regular files with exactly these names for this
- * database are removed; finished backups, manifests (which describe `.sqlite` names only), other databases' files and
- * anything else are never touched. Best effort: a missing directory or a failed removal is skipped and retried at the
- * next open. Returns the number of files removed.
+ * Removes partial backup files and unmanifested orphan backups or manifests a writer left behind when it was
+ * terminated during a pre-migration backup of this database: `telemetry-<uuid8>-v<n>-<timestamp>.sqlite.partial`
+ * with its `-journal`, `-wal` and `-shm` files, `telemetry-<uuid8>-v<n>-<timestamp>.json.partial`, orphan `.sqlite`
+ * backup files lacking a valid matching manifest for this database (with lingering sidecars), and orphan `.json`
+ * manifests lacking a matching `.sqlite` backup. Call it only while holding the database's exclusive lock, so no other
+ * writer can own them. Valid backup pairs, files belonging to other database UUIDs and anything else are never touched.
+ * Best effort: a missing directory or a failed removal is skipped and retried at the next open. Returns the number
+ * of files removed.
  */
 export function sweepStalePartials(directory: string, databaseUuid: string): number {
   const uuid8 = databaseUuid.slice(0, 8);
   if (!/^[0-9a-f]{8}$/.test(uuid8)) return 0;
-  const pattern = new RegExp(String.raw`^telemetry-${uuid8}-v[0-9]+-[0-9]{8}T[0-9]{9}Z\.(sqlite\.partial(-journal|-wal|-shm)?|json\.partial)$`);
   let names: string[];
   try { names = readdirSync(directory); } catch { return 0; }
   let removed = 0;
-  for (const name of names.filter(entry => pattern.test(entry))) {
+
+  const partialPattern = new RegExp(String.raw`^telemetry-${uuid8}-v[0-9]+-[0-9]{8}T[0-9]{9}Z\.(sqlite\.partial(-journal|-wal|-shm)?|json\.partial)$`);
+  for (const name of names.filter(entry => partialPattern.test(entry))) {
     const file = path.join(directory, name);
     try { if (!lstatSync(file).isFile()) continue; rmSync(file); removed++; } catch { /* best effort */ }
   }
+
+  const candidatePattern = new RegExp(String.raw`^(telemetry-${uuid8}-v[0-9]+-[0-9]{8}T[0-9]{9}Z)\.(sqlite(-journal|-wal|-shm)?|json)$`);
+  const stems = new Set<string>();
+  for (const name of names) {
+    const match = name.match(candidatePattern);
+    if (match) stems.add(match[1]);
+  }
+
+  for (const stem of stems) {
+    const sqlitePath = path.join(directory, `${stem}.sqlite`);
+    const manifestPath = path.join(directory, `${stem}.json`);
+    const sqliteExists = existsSync(sqlitePath) && (() => { try { return lstatSync(sqlitePath).isFile(); } catch { return false; } })();
+    const manifestExists = existsSync(manifestPath) && (() => { try { return lstatSync(manifestPath).isFile(); } catch { return false; } })();
+
+    if (sqliteExists && manifestExists) {
+      const manifest = readManifest(manifestPath);
+      if (manifest && manifest.databaseUuid === databaseUuid) continue;
+      let foreign = manifest ? manifest.databaseUuid !== databaseUuid : false;
+      if (!foreign) {
+        try {
+          const raw = JSON.parse(readFileSync(manifestPath, 'utf8')) as {databaseUuid?: unknown};
+          if (typeof raw.databaseUuid === 'string' && raw.databaseUuid !== databaseUuid) foreign = true;
+        } catch { /* unparseable, not foreign */ }
+      }
+      if (foreign) continue;
+      for (const suffix of ['', '-journal', '-wal', '-shm']) {
+        const sidecar = path.join(directory, `${stem}.sqlite${suffix}`);
+        try { if (existsSync(sidecar) && lstatSync(sidecar).isFile()) { rmSync(sidecar); removed++; } } catch { /* best effort */ }
+      }
+      try { rmSync(manifestPath); removed++; } catch { /* best effort */ }
+    } else if (sqliteExists && !manifestExists) {
+      for (const suffix of ['', '-journal', '-wal', '-shm']) {
+        const sidecar = path.join(directory, `${stem}.sqlite${suffix}`);
+        try { if (existsSync(sidecar) && lstatSync(sidecar).isFile()) { rmSync(sidecar); removed++; } } catch { /* best effort */ }
+      }
+    } else if (!sqliteExists && manifestExists) {
+      const manifest = readManifest(manifestPath);
+      let foreign = manifest ? manifest.databaseUuid !== databaseUuid : false;
+      if (!foreign) {
+        try {
+          const raw = JSON.parse(readFileSync(manifestPath, 'utf8')) as {databaseUuid?: unknown};
+          if (typeof raw.databaseUuid === 'string' && raw.databaseUuid !== databaseUuid) foreign = true;
+        } catch { /* unparseable */ }
+      }
+      if (!foreign) {
+        try { rmSync(manifestPath); removed++; } catch { /* best effort */ }
+      }
+    } else {
+      for (const suffix of ['-journal', '-wal', '-shm']) {
+        const sidecar = path.join(directory, `${stem}.sqlite${suffix}`);
+        try { if (existsSync(sidecar) && lstatSync(sidecar).isFile()) { rmSync(sidecar); removed++; } } catch { /* best effort */ }
+      }
+    }
+  }
+
   return removed;
 }
 
@@ -111,11 +170,12 @@ export async function backupBeforeMigration(db: Database.Database, context: {fil
     verifyCopy(partial, source, context.databaseUuid);
     fsyncFile(partial);
     const sha256 = fileSha256(partial), size = statSync(partial).size;
-    renameSync(partial, finalPath);
     const manifest: BackupManifest = {format: 'ets2telemetry-backup-1', databaseUuid: context.databaseUuid, fromVersion: context.fromVersion, fileName, fileSha256: sha256, size,
       rowCounts: source.rowCounts, logicalDigest: source.logicalDigest, createdUtcMs, appVersion: context.appVersion, reason: 'pre-migration'};
     writeFileSync(`${manifestPath}.partial`, JSON.stringify(manifest, null, 2) + '\n', {flag: 'wx'});
     fsyncFile(`${manifestPath}.partial`);
+    renameSync(partial, finalPath);
+    context.hooks?.afterBackupRename?.(finalPath);
     renameSync(`${manifestPath}.partial`, manifestPath);
     return {fileName, sha256};
   } catch (error) {
