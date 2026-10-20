@@ -49,8 +49,8 @@ const EARLY_FLUSH_MS = 1;
 const LONGEST_BACKOFF_MS = 4_000;
 /** docs/app-lifecycle.md, service shutdown: `SERVICE_STOP_BUDGET_MS`, the sum of the phase maxima 1000 + 500 + 1000. */
 const STOP_BUDGET_MS = 2_500;
-/** docs/storage.md, history database in the telemetry service: the `history-storage` close grace. */
-const HISTORY_CLOSE_GRACE_MS = 800;
+
+
 /**
  * The longest a lower bound on a timer's wall time can read short: Node starts a timer from the event loop's time cached
  * at the start of the current iteration, which a preempted service thread may have read earlier than the call. It only
@@ -275,7 +275,7 @@ describe('ET-019 shutdown and close stalls', () => {
   }, 90_000);
 
   // (b2) G18. docs/storage.md: a close held forever is terminated after the adaptive grace (~2,250 ms when earlier phases
-  // take <50 ms, with a 200 ms reserve before the effective budget). The step ends unclean, ailed or 	imeout,
+  // take <50 ms, with a 200 ms reserve before the effective budget). The step ends unclean, failed or timeout,
   // the service reports {type: 'stopped', clean: false} and exits 1, the stop stays within the 2,500 ms budget,
   // and every committed event survives in the WAL (REG-006, REG-011).
   it('(b2) G18: a close that would stall forever is terminated after the adaptive grace and before the stop budget; the stop is unclean and bounded, and every committed event survives (REG-006, REG-011)', async () => {
