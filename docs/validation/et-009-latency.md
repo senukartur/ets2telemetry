@@ -60,6 +60,12 @@ projections invalidate pending work. Tokens never repeat in one app lifetime. Ou
 bounded scalar rows are retained. Report flushing participates in the existing bounded shutdown idle; abrupt termination
 or a failed/over-budget write is not a successful run.
 
+The 1000 ms exit-idle budget is shared additional waiting for pending writers, not the total process-exit
+budget. Fatal service shutdown starts the report write as best effort and does not guarantee that it is
+awaited or durable. Confirm a complete saved report before treating a measurement as successful.
+Reports contain source/process/session identities. Keep raw reports local; before public sharing or
+committing, sanitize source identifiers and any associated user paths or telemetry.
+
 Pin commit, build/source hashes, EXE/ASAR/broker/DLL hashes, game/TruckersMP versions, Windows/GPU/display configuration
 and UTC interval. Retain launch receipt, raw report, app/service logs, owner scenario notes, process/exit audit and
 before/after file hashes. Distinguish this instrumented candidate from previous functional candidates. Preparation or a
@@ -89,6 +95,17 @@ This smoke uses the existing Windows Job containment (30 s, 16 processes, 2 GiB,
 state and synthetic fixtures at zoom 0.75, 1 and 1.5. It opens no application service, settings, history or games. Its
 controlled in-process clock does not validate native calibration. First paint is warmed up here only; game startup rows
 remain measured.
+
+The smoke's `valid >= 15` of 25 per zoom is an activity/readback compatibility floor that tolerates
+compositor scheduling and coalescing. It is not a completeness, 200 ms latency or performance acceptance
+threshold. Attempted/valid/missing counts remain visible; zero successful reads cannot pass. A passing
+smoke does not establish complete pixel coverage; missing observations remain unverified.
+
+Collector retirement tests cover hidden, paused, editing, stale, missing-observation and stale-window
+projections with pending-token invalidation and resumption. Latency-specific wiring in `main.ts` is
+reviewed and exercised by the recorded real application sessions, but has no dedicated automated
+main-process integration harness. Existing lifecycle tests protect the shared idle deadline and exit
+ordering; they do not replace an automated test of every new main/collector connection.
 
 Preparation evidence remains under `.local/validation/et009-latency-compositor-*`: `-a` records a PowerShell inline-quoting
 failure; `-b` records a real first-paint delay (4/25 frames at the first scale). The corrected file-based builder and

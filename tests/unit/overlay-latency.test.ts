@@ -9,6 +9,7 @@ import {latencyEnabled, latencyReply, OverlayLatency, type LatencyRequest} from 
 import {overlayPresentation} from '../../apps/desktop/src/overlay-presentation';
 import {initialLive} from '../../apps/desktop/src/live-state';
 import type {V1SourceState} from '../../apps/desktop/src/v1-ingestion';
+import type {LiveTelemetry, OverlayPresentation} from '../../packages/contracts/src';
 import {v0Message} from '../shared/live-v1-fixtures';
 import {observeLatencyFrames} from '../../apps/desktop/src/latency-frames';
 
@@ -109,6 +110,28 @@ it('reports bounds, outliers, retired and missing frames without treating them a
   expect(report.samples.map((row: {reason?: string}) => row.reason)).toEqual([undefined, 'source-or-document-retired', 'unfinished']);
   expect(collector.project(view, live, true)).not.toHaveProperty('diagnosticFrame');
 });
+it.each(['hidden', 'paused', 'editing', 'stale', 'window-not-current', 'missing-observation'] as const)(
+  'excludes %s projections and retires their pending observations before resuming', async reason => {
+    temporary = await mkdtemp(path.join(os.tmpdir(), 'et009-latency-'));
+    const sent = vi.fn(), collector = new OverlayLatency(temporary, sent, vi.fn());
+    expect(collector.project(view, live, true).diagnosticFrame).toBe(1);
+    let inactiveView: OverlayPresentation = {...view};
+    let inactiveLive: LiveTelemetry = live;
+    if (reason === 'paused') inactiveView = {...view, paused: true};
+    if (reason === 'editing') inactiveView = {...view, editing: true};
+    if (reason === 'stale') inactiveView = {...view, freshness: 'stale'};
+    if (reason === 'window-not-current') inactiveLive = {...live, observation: {...live.observation, windowFresh: false}};
+    if (reason === 'missing-observation') inactiveLive = {...live, observation: undefined};
+    expect(collector.project(inactiveView, inactiveLive, reason !== 'hidden')).not.toHaveProperty('diagnosticFrame');
+    collector.frame(1, true);
+    expect(sent).not.toHaveBeenCalled();
+    // The same capture can be projected after recovery, but its old token must never be resurrected.
+    expect(collector.project(view, live, true).diagnosticFrame).toBe(2);
+    collector.finish('exit'); await collector.idle();
+    const report = JSON.parse(await readFile(path.join(temporary, 'overlay-latency.json'), 'utf8'));
+    expect(report).toMatchObject({attempted: 2, observedFrames: 0, valid: 0, unresolved: 2});
+    expect(report.samples.map((row: {reason: string}) => row.reason)).toEqual(['source-or-document-retired', 'unfinished']);
+  });
 it('ends automatically after 120s even when updates stop', async () => {
   vi.useFakeTimers(); temporary = await mkdtemp(path.join(os.tmpdir(), 'et009-latency-'));
   const collector = new OverlayLatency(temporary, vi.fn(), vi.fn());
