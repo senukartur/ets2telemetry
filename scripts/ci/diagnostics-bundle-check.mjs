@@ -51,6 +51,7 @@ export const ENUMS = Object.freeze({
   recordingTarget: ['history', 'synthetic', 'replay'],
   tripPhase: ['idle', 'active', 'awaiting-outcome', 'reload-check'],
   tripCompleteness: ['unknown', 'partial', 'complete'],
+  language: ['en', 'ru'],
   unitProfile: ['metric', 'us-customary'],
   overlayLayout: ['strip', 'card', 'cluster', 'hud'],
   overlaySection: ['speed', 'gear', 'rpm', 'fuel', 'range', 'sdk-consumption', 'cargo', 'origin', 'destination', 'distance-driven', 'distance-remaining',
@@ -96,6 +97,7 @@ const BUNDLE_SCHEMA = object({
     })
   }),
   settings: object({
+    language: oneOf(ENUMS.language),
     units: map(ENUMS.pluginGame, oneOf(ENUMS.unitProfile)),
     overlay: object({layout: oneOf(ENUMS.overlayLayout), sections: map(ENUMS.overlaySection, boolean),
       placements: map(ENUMS.overlayLayout, object({x: number, y: number, scale: number}))}),
