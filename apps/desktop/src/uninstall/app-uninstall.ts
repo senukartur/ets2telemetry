@@ -69,6 +69,8 @@ export interface AppUninstallPorts {
   log(event: string, facts: Record<string, string | number | boolean | null>): void;
   /** Starts `<installRoot>\Update.exe --uninstall` detached; true once the process has started. */
   startWindowsUninstall(installRoot: string): Promise<boolean>;
+  /** ET-031: Removes the per-user autostart login item before handover. */
+  readonly removeLoginItem?: (installRoot: string) => Promise<boolean> | boolean | void;
   /** The engine; tests replace it to inject failures. */
   readonly runUninstall?: (ports: UninstallPorts) => Promise<UninstallResult>;
 }
@@ -189,9 +191,12 @@ export class AppUninstall {
 }
 
 /** Step 7 of U8, after the result dialog: hands over to Windows' uninstall. False when nothing was prepared or it did not start. */
-export async function handOver(uninstall: AppUninstall, ports: Pick<AppUninstallPorts, 'startWindowsUninstall'>): Promise<boolean> {
+export async function handOver(uninstall: AppUninstall, ports: Pick<AppUninstallPorts, 'startWindowsUninstall' | 'removeLoginItem'>): Promise<boolean> {
   const prepared = uninstall.prepared;
   if (!prepared) return false;
+  if (ports.removeLoginItem) {
+    try {await ports.removeLoginItem(prepared.installRoot);} catch {/* best effort */}
+  }
   return ports.startWindowsUninstall(prepared.installRoot).catch(() => false);
 }
 

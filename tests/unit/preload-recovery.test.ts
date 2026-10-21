@@ -160,7 +160,7 @@ it('marks v1 data stale when the subscription closes or a replacement port await
 it('preserves the frozen narrow bridge and rejects privileged source values before IPC', async () => {
   expect(Object.isFrozen(bridge)).toBe(true); expect(Object.keys(bridge).sort()).toEqual(['beginOverlayEdit', 'choosePluginFolder', 'exitApplication', 'exportDiagnostics', 'exportJournalTrip', 'finishOverlayEdit', 'getAppState', 'getHardModeStatus', 'getJournalTrip', 'getStatus',
     'listJournalEvents', 'listJournalIntervals', 'listJournalSamples', 'listJournalTrips', 'openPluginFolder', 'refreshHardMode',
-    'resetOverlayEditPlacement', 'retryPluginSetup', 'selectSource', 'setLanguage', 'setOverlayEditScale', 'setOverlayLayout', 'setOverlaySections', 'setPluginGameExcluded', 'setUnitProfile',
+    'resetOverlayEditPlacement', 'retryPluginSetup', 'selectSource', 'setAutostart', 'setLanguage', 'setOverlayEditScale', 'setOverlayLayout', 'setOverlaySections', 'setPluginGameExcluded', 'setUnitProfile',
     'showPluginFile', 'subscribeAppState', 'subscribeLive', 'uninstallApplication']);
   await expect(bridge.selectSource('C:\\arbitrary.exe' as never)).rejects.toThrow('Invalid source selection');
   expect(ipc.invoke).not.toHaveBeenCalled();
@@ -200,7 +200,7 @@ it('appends the application state and exit methods after the original three brid
   // ET-012a appends the two overlay settings methods, ET-012b the four overlay edit methods, ET-016 PR-3 the five journal reads,
   // ET-016 PR-5 the trip export, ET-017 PR-4 the five plugin setup methods, ET-017 PR-6 the diagnostics export and ET-018
   // PR-4 the in-app uninstall.
-  expect(Object.keys(bridge)).toEqual(['getStatus', 'selectSource', 'subscribeLive', 'getAppState', 'subscribeAppState', 'exitApplication', 'setLanguage', 'setUnitProfile',
+  expect(Object.keys(bridge)).toEqual(['getStatus', 'selectSource', 'subscribeLive', 'getAppState', 'subscribeAppState', 'exitApplication', 'setLanguage', 'setAutostart', 'setUnitProfile',
     'setOverlayLayout', 'setOverlaySections', 'beginOverlayEdit', 'setOverlayEditScale', 'resetOverlayEditPlacement', 'finishOverlayEdit',
     'listJournalTrips', 'getJournalTrip', 'listJournalEvents', 'listJournalIntervals', 'listJournalSamples', 'exportJournalTrip',
     'retryPluginSetup', 'choosePluginFolder', 'setPluginGameExcluded', 'showPluginFile', 'openPluginFolder', 'exportDiagnostics', 'uninstallApplication', 'getHardModeStatus', 'refreshHardMode']);
@@ -229,6 +229,16 @@ it('validates language requests before IPC and forwards exactly an allowed langu
   expect(ipc.invoke).not.toHaveBeenCalled();
   await bridge.setLanguage('ru');
   expect(ipc.invoke).toHaveBeenCalledWith('settings:set-language', 'ru');
+});
+it('validates autostart requests before IPC and forwards exactly a boolean', async () => {
+  await expect(bridge.setAutostart('true' as never)).rejects.toThrow('Invalid autostart');
+  await expect(bridge.setAutostart(1 as never)).rejects.toThrow('Invalid autostart');
+  await expect(bridge.setAutostart(null as never)).rejects.toThrow('Invalid autostart');
+  expect(ipc.invoke).not.toHaveBeenCalled();
+  await bridge.setAutostart(true);
+  expect(ipc.invoke).toHaveBeenCalledWith('settings:set-autostart', true);
+  await bridge.setAutostart(false);
+  expect(ipc.invoke).toHaveBeenCalledWith('settings:set-autostart', false);
 });
 it('validates unit profile requests before IPC and forwards exactly a game and a profile', async () => {
   for (const [game, profile] of [['ets2', 'imperial'], ['ETS2', 'metric'], ['synthetic', 'metric'], ['ats', 'C:\\settings.json'], [undefined, undefined], [{}, 'metric']]) {

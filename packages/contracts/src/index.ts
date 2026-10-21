@@ -56,6 +56,8 @@ export interface DesktopBridge {
    * Persists the user interface language and resolves with the settings that now apply.
    */
   setLanguage(language: AppLanguage): Promise<SettingsView>;
+  /** Persists whether the application starts with Windows (ET-031). */
+  setAutostart(enabled: boolean): Promise<SettingsView>;
   /**
    * Persists one game's display unit profile and resolves with the settings that now apply. Main applies the change only
    * after the durable write; it rejects a newer-version (read-only) file, a failed write and invalid values.

@@ -142,6 +142,9 @@ const bridge: DesktopBridge = {
   setLanguage: language => isAppLanguage(language)
     ? ipcRenderer.invoke('settings:set-language', language)
     : Promise.reject(new Error('Invalid language request')),
+  setAutostart: enabled => typeof enabled === 'boolean'
+    ? ipcRenderer.invoke('settings:set-autostart', enabled)
+    : Promise.reject(new Error('Invalid autostart request')),
   // Only the two fixed enums reach main, which validates them again; nothing else is forwarded.
   setUnitProfile: (game, profile) => isUnitGame(game) && isUnitProfile(profile)
     ? ipcRenderer.invoke('settings:set-unit-profile', game, profile)

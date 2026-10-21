@@ -230,4 +230,14 @@ describe('the handover to Windows\' uninstall', () => {
     await test.uninstall.run();
     expect(await test.uninstall.handOver()).toBe(false);
   });
+  it('removes the autostart login item during handover', async () => {
+    const {fixture} = await scene();
+    const removed: string[] = [];
+    const test = harness(fixture, {
+      removeLoginItem: installRoot => {removed.push(installRoot);}
+    });
+    await test.uninstall.run();
+    expect(await test.uninstall.handOver()).toBe(true);
+    expect(removed).toEqual([fixture.installRoot]);
+  });
 });

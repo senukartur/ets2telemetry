@@ -20,6 +20,7 @@ import {createStartupLine} from './dashboard-startup';
 import {recordingStatusText} from './recording-status-text';
 import {LiveDashboard} from './live-dashboard';
 import {LanguageCard} from './language-card';
+import {AutostartCard} from './autostart-card';
 import {OverlaySettingsCard} from './overlay-settings-card';
 import {PluginSetupCard} from './plugin-setup-card';
 import {UninstallCard} from './uninstall-card';
@@ -45,7 +46,7 @@ export default function App() {
   const [exit, setExit] = useState<'idle' | 'pending' | 'failed'>('idle');
   const [units, setUnits] = useState<'idle' | 'saving' | 'failed'>('idle');
   // Main reports one `saveError` for the whole settings file; it is shown in the card whose request caused it.
-  const [lastCard, setLastCard] = useState<'units' | 'overlay' | 'language'>('units');
+  const [lastCard, setLastCard] = useState<'units' | 'overlay' | 'language' | 'autostart'>('units');
   const [startupLine] = useState(() => createStartupLine(() => window.desktop.getStatus(), setStartup));
   useEffect(() => {
     startupLine.start();
@@ -105,7 +106,8 @@ export default function App() {
         {route === 'journal' ? <JournalBoundary language={language}><Journal units={settings?.units} recording={health?.recording.state} language={language} /></JournalBoundary> : null}
         <div hidden={route !== 'settings'} className="yu-settings" data-testid="settings.screen"><nav className="yu-settings-nav" aria-label={t('nav.settings', undefined, language)} data-testid="settings.nav">{settingsPanels.map(id => <button key={id} type="button" aria-current={panel === id ? 'page' : undefined} data-testid={`settings.nav.${id}`} onClick={() => setPanel(id)}>{t(`s.${id}`, undefined, language)}</button>)}</nav>
           <div className="yu-stack"><div hidden={panel !== 'general'} className="yu-stack" data-testid="settings.general"><LanguageCard settings={settings} onSaved={saved} controller={languageController} showSaveError={lastCard === 'language'} />
-            <Card><CardHeader><CardTitle><h2>{t('s.general', undefined, language)}</h2></CardTitle></CardHeader><CardContent className="space-y-3"><p>{t('s.closeD', undefined, language)}</p><p>{t('s.autostart', undefined, language)} — <Badge variant="later">{t('tag.planned', undefined, language)}</Badge></p><p>{t('ui.helpNote', undefined, language)}</p><Button variant="outline" onClick={() => setPanel('plugin')}><CircleHelp aria-hidden="true" />{t('ob.s2', undefined, language)}</Button></CardContent></Card>
+            <AutostartCard settings={settings} status={app?.autostart} onSaved={saved} onRequest={() => setLastCard('autostart')} showSaveError={lastCard === 'autostart'} />
+            <Card><CardHeader><CardTitle><h2>{t('s.general', undefined, language)}</h2></CardTitle></CardHeader><CardContent className="space-y-3"><p>{t('s.closeD', undefined, language)}</p><p>{t('ui.helpNote', undefined, language)}</p><Button variant="outline" onClick={() => setPanel('plugin')}><CircleHelp aria-hidden="true" />{t('ob.s2', undefined, language)}</Button></CardContent></Card>
           </div><div hidden={panel !== 'units'} data-testid="settings.units">  <Card size="sm"><CardHeader><CardTitle><h2>{strings.unitsTitle}</h2></CardTitle></CardHeader><CardContent className="space-y-3">
     {UNIT_GAMES.map(game => <div key={game} className="space-y-2">
       <p id={`units-${game}-label`}>{getUnitGameText(game, language)}</p>

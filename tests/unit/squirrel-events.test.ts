@@ -206,6 +206,18 @@ describe('uninstall', () => {
     expectNoPath(text, fixture);
   });
 
+  it('removes the autostart login item during squirrel uninstall', async () => {
+    const {fixture} = await scene();
+    const removed: {installRoot: string; executableName?: string}[] = [];
+    const test = harness(fixture, {
+      removeLoginItem: (installRoot, executableName) => {
+        removed.push({installRoot, executableName});
+      }
+    });
+    expect(await runSquirrelEvent(event('uninstall'), test.ports)).toBe(EXIT_CODES.complete);
+    expect(removed).toEqual([{installRoot: fixture.installRoot, executableName: 'ETS2TelemetryDesktop.exe'}]);
+  });
+
   it('refuses a layout that is not an install, changes nothing and exits 4', async () => {
     const {fixture} = await scene();
     const before = await listTree(guard.root);
