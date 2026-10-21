@@ -11,7 +11,7 @@ const config = JSON.parse((await readFile(configFile, 'utf8')).replace(/^\uFEFF/
 const record = {kind: 'OWNED-WINDOW-WM_ENDSESSION', passed: false, baselineMissingAudit: config.baselineMissingAudit,
   commit: config.commit, harnessHashes: config.harnessHashes, senderSha256: config.senderSha256,
   actualWindowsSignout: false, noBroadcast: true, startedUtc: new Date().toISOString(), stage: 'initializing'};
-let application;
+let application, launcher;
 let finalized = false, browserLogBytes = 0;
 function checkpoint(stage) {
   record.stage = stage;
@@ -27,6 +27,7 @@ function finish() {
 }
 function fatal(kind, error) {
   record.passed = false; record.failureKind = kind; record.error = String(error).slice(0, 8192);
+  record.errorStack = error instanceof Error ? error.stack?.slice(0, 16384) : null;
   try {checkpoint('fatal'); finish();} catch { /* The outer Job receipt still records a missing or unreadable result. */ }
   process.exit(1);
 }
@@ -84,7 +85,7 @@ try {
   checkpoint('launching');
   application = await electron.launch({executablePath: config.executable, cwd: config.output, env: environment, timeout: 20000});
   checkpoint('launched');
-  const launcher = application.process();
+  launcher = application.process();
   const mainPath = path.join(config.diagnostics, 'startup.jsonl');
   await until(async () => {try {return (await rows(mainPath)).some(row => row.event === 'SERVICE_READY');} catch {return false;}});
   record.mainPid = (await rows(mainPath)).find(row => row.event === 'APP_START').pid;
@@ -119,9 +120,15 @@ try {
     assert.equal(events.some(row => row.event === 'APP_EXIT' || row.event === 'SERVICE_EXIT'), false);
     record.passed = true;
   }
-} catch (error) {record.error = String(error).slice(0, 8192); process.exitCode = 1;}
+} catch (error) {
+  record.error = String(error).slice(0, 8192);
+  record.errorStack = error instanceof Error ? error.stack?.slice(0, 16384) : null;
+  process.exitCode = 1;
+}
 finally {
   checkpoint(record.error ? 'failed' : 'completed');
-  if (application?.process().exitCode === null) await application.close().catch(() => undefined);
+  // Keep the original ChildProcess: ElectronApplication.process() resolves through SDK objects that native termination
+  // has already disposed. Re-resolving it during cleanup throws instead of reporting the observed launcher exit.
+  if (launcher?.exitCode === null) await application.close().catch(() => undefined);
   finish();
 }
