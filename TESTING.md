@@ -1,5 +1,14 @@
 # Testing and Regression Strategy
 
+ET-011 hosted Hard Mode driver correction, October 22, 2026: `hard-mode-proof-observation.test.ts` uses the real
+`HardModeMonitor`, gated read/bind completions and a controlled monotonic clock to reproduce a coalesced periodic tick
+and passive proof expiry. The driver arms a new passing publication after screenshots, then sequentially invokes the
+existing trusted refresh/status boundaries through open-trip audits, two distinct persisted publications and qualifying
+delivery. Production scan/probe limits, causal binding, three-second coverage and irreversible loss remain unchanged.
+One fixed deadline covers pending requests, predicates and polling: existing open/audit/delivery waits retain 5 seconds,
+passing-refresh waits retain 8 seconds. First loss fails immediately, last status is retained, and late settlement after
+timeout starts no further requests. A synthetic driver success does not establish real-game qualification/performance.
+
 ET-011 flush allocation, October 22, 2026: `shutdown-sequence.test.ts` verifies that only `recording-flush` borrows
 unused registered intake time, reserves future storage and does not reuse spent time in history close. The nominal
 500 ms allocation can become up to 1500 ms; the service's 2500 ms budget is unchanged. `shutdown-stalls.test.ts` adds

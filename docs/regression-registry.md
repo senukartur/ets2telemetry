@@ -1,5 +1,11 @@
 # Regression scenario-to-test registry
 
+ET-011 hosted Hard Mode driver (October 22, 2026), REG-011/012: `hard-mode-proof-observation.test.ts` exercises the real
+monitor's coalesced read-plus-causal-bind interval and unchanged scan/coverage constraints. Passive polling loses proof;
+the active trusted-boundary driver observes distinct unlost publications. Separate ports prove sequential requests,
+loss rejection before acceptance, unchanged-stamp rejection, request errors and a single non-resetting deadline over
+hung refresh/status/predicate calls, with retained last status and no requests after failure or late settlement.
+
 ET-011 final-write allocation, October 22, 2026 (REG-006/011/012): `shutdown-sequence.test.ts` covers unused registered
 intake borrowing by recording flush, the future storage reserve, exact remaining close allocation, exhausted intake,
 no invented unregistered budget, other flush steps and a hanging flush. `shutdown-stalls.test.ts` adds a released and
@@ -171,6 +177,7 @@ Columns:
 | `tests/unit/diagnostics.test.ts` | Node unit (Vitest) | REG-017 | T, V (et-001) | ET-001 (#5) | PR (tests job, `npm test`) | security |
 | `tests/unit/event-loop-lag.test.ts` | Node unit (Vitest) | smoke evidence: REG-011, REG-012, REG-014, REG-016, REG-017 | V (ci-smoke-window-stall) | ET-022 (#46) | PR (tests job, `npm test`) | — |
 | `tests/unit/exit-observation.test.ts` | Node unit (Vitest), inert emitters/promises and controlled clock | harness: REG-012, REG-017 | R, T | ET-011 (#162) | PR (tests job, `npm test`) | regression |
+| `tests/unit/hard-mode-proof-observation.test.ts` | Node unit (Vitest), real monitor with gated read/bind, controlled clocks and trusted-request ports | harness: REG-011, REG-012 | R, T | ET-011 (#167), ET-026 journey | PR (tests job, `npm test`) | regression |
 | `tests/unit/game-folder.test.ts` | Node unit (Vitest) | REG-015 | R, F, V (et-017) | ET-017 (PR-2) | PR (tests job, `npm test`) | security |
 | `tests/unit/game-processes.test.ts` | Node unit (Vitest) | REG-015 | R, F, V (et-017) | ET-017 (PR-2) | PR (tests job, `npm test`) | — |
 | `tests/unit/guarded-fs.test.ts` | Node unit (Vitest) | harness: REG-015 | T, V (et-017) | ET-017 (PR-2) | PR (tests job, `npm test`) | security |
