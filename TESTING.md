@@ -1,5 +1,46 @@
 # Testing and Regression Strategy
 
+ET-011 hosted Hard Mode driver correction, October 22, 2026: `hard-mode-proof-observation.test.ts` uses the real
+`HardModeMonitor`, gated read/bind completions and a controlled monotonic clock to reproduce a coalesced periodic tick
+and passive proof expiry. The driver arms a new passing publication after screenshots, then sequentially invokes the
+existing trusted refresh/status boundaries through open-trip audits, two distinct persisted publications and qualifying
+delivery. Production scan/probe limits, causal binding, three-second coverage and irreversible loss remain unchanged.
+One fixed deadline covers pending requests, predicates and polling: existing open/audit/delivery waits retain 5 seconds,
+passing-refresh waits retain 8 seconds. First loss fails immediately, last status is retained, and late settlement after
+timeout starts no further requests. A synthetic driver success does not establish real-game qualification/performance.
+
+ET-011 flush allocation, October 22, 2026: `shutdown-sequence.test.ts` verifies that only `recording-flush` borrows
+unused registered intake time, reserves future storage and does not reuse spent time in history close. The nominal
+500 ms allocation can become up to 1500 ms; the service's 2500 ms budget is unchanged. `shutdown-stalls.test.ts` adds
+two isolated real-worker final-sample transaction cases with the sequence clock controlled after the hold notice:
+release after the former cap must persist exactly one sample and stop cleanly; expiry of the borrowed allocation
+must remain unclean, terminate the held worker and preserve committed events. These are logic/durability proofs;
+the rebuilt packaged recording journey uses production timers. Existing shutdown verdict-turn and nominal-floor
+semantics remain, so the budget is not a hard wall-clock guarantee against host scheduling stalls.
+
+ET-011 scope reconciliation, October 22, 2026: the owner authorized final PR #167 gates and squash merge, then card
+closeout. Narrator, real-game unit profiles and close-to-tray overlay continuity moved **unverified** to
+[ET-043](https://trello.com/c/2fbiCET0); installed shortcut/update checks remain ET-018, monitor/mixed-DPI checks ET-042.
+The new main-boundary rejection regression requires one truthful terminal handoff despite a synchronous exit-hook
+failure, without inventing service stop/completion. Historical manual-pending statements below are dated baselines.
+
+ET-011 local-contract reconciliation, October 22, 2026: native startup-reporting tests accept either the exact
+caller-owned error or the documented pending warning followed by the exact stage error on a later SDK callback,
+before shutdown can change its attribution. A controlled foreign discovery record forces the latter path. A protected
+publication held beyond 1,000 ms proves mandatory join and cleanup with the unchanged over-target shutdown diagnostic;
+it does not establish a hard kernel deadline or improve the measured target. Storage refusal recovery retains its
+clean-stop/ACK/integrity assertions and production timers while separate diagnostics expose step duration, nominal and
+effective budgets and history grace. Historical failed runs remain recorded. Narrator and the remaining game checks
+transfer unverified to [ET-043](https://trello.com/c/2fbiCET0); corrected real sign-out/restart observations and current
+verification status are in [ET-011 validation](docs/validation/et-011.md).
+
+ET-011 Windows session end, October 21, 2026: terminal diagnostics/main-boundary regressions retain confirmed-end rows
+before Electron's immediate native termination, without treating a cancelled query as an exit. The separate bounded
+`scripts/ci/Invoke-SessionEndSmoke.ps1` checks an owned HWND/PID/image, cancelled query and confirmed native end after
+dashboard close; it sends no broadcast and does not sign out Windows. Its `WINDOWS_SESSION_END_HANDOFF` predicate is
+separate from ordinary `APP_EXIT`/`SERVICE_EXIT` receipt rules, which stay unchanged. Real owner sign-out/restart and
+service/storage completion remain separate acceptance evidence; see [ET-011](docs/validation/et-011.md).
+
 ET-011 closeout, October 21, 2026: `tests/unit/exit-observation.test.ts` uses controlled promises,
 emitters and clocks to distinguish a pending exit request, real launcher exit/stdio closure and
 Playwright close, keeping the original eight-second bound around the whole operation. The runtime

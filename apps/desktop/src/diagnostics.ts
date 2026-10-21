@@ -46,6 +46,12 @@ export interface DiagnosticLog {
    */
   finalize(timeoutMs: number): Promise<void>;
   /**
+   * Irreversible Windows session end: write the queue and all later rows synchronously before returning. Does not wait
+   * for or replay an append already in flight; that older batch can land later or be lost when Electron terminates.
+   * The normal byte/record limits and fixed-code fallback still apply. Never use this on a cancellable session query.
+   */
+  enterTerminalMode(): void;
+  /**
    * Crash and unhandled-rejection paths only: writes every queued record at once with a synchronous append (at most the
    * 256 KiB the bounds counted). A batch already being written asynchronously may land after these records, or be lost
    * if the process exits first; nothing is written twice.
@@ -56,7 +62,8 @@ export interface DiagnosticLog {
 /**
  * Startup diagnostics only; never log telemetry or credentials. Detailed errors are opt-in.
  *
- * Logging never waits for the disk. A record is formatted and counted against the 256 KiB and 2,000-record bounds when
+ * Normal logging never waits for the disk; irreversible Windows session end opts into synchronous terminal mode.
+ * A record is formatted and counted against the 256 KiB and 2,000-record bounds when
  * it is logged, then queued; one asynchronous append at a time writes everything queued, in order, to `startup.jsonl`
  * with the same append semantics as before. The bounds count queued records too, so the queue never holds more than
  * 256 KiB. A failed append reports that batch, the rest of the queue and every later record on the console by event
@@ -79,7 +86,7 @@ export function createDiagnostics(directory: string, detailed = false): Diagnost
 
   let queue: {event: string; line: string}[] = [];
   let writing = false;
-  // final: no new asynchronous append (finalize was called); drained: finalize resolved, so records are written at once.
+  // final: no new asynchronous append; drained: finalize resolved or terminal mode began, so records write at once.
   let final = false, drained = false;
   // Called once the append in flight settled, before the next one may start (settle and finalize).
   const idle: (() => void)[] = [];
@@ -173,6 +180,7 @@ export function createDiagnostics(directory: string, detailed = false): Diagnost
       final = true;
       return settleWrites(timeoutMs).then(() => { drained = true; drainSync(); });
     },
+    enterTerminalMode(): void {final = true; drained = true; drainSync();},
     drainSync
   });
 }

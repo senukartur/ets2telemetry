@@ -2,6 +2,12 @@
 
 Concept recorded on: October 10, 2026.
 
+ET-011 closeout authorization, October 22, 2026: the owner requested resolving local failures, independent review,
+final automatic Ready CI and squash merge of PR #167, then closing ET-011. Narrator, real-game unit profiles and
+close-to-tray overlay continuity transfer **unverified** to [ET-043](https://trello.com/c/2fbiCET0). Installed shortcut
+and update checks retain their ET-018 deferral; monitor/mixed-DPI checks remain ET-042. Dated pending statements below
+retain their historical scope. Actual code gates and Windows evidence are in [ET-011 validation](docs/validation/et-011.md).
+
 ET-009 owner acceptance, October 20, 2026: the [prototype closeout](docs/validation/et-009.md) records the
 accepted functional matrix, indicative latency and performance with their explicit exceptions and limits.
 Monitor/mixed-DPI/removal checks moved to ET-042 and remain unverified. The [opt-in measurement procedure](docs/validation/et-009-latency.md)
@@ -529,6 +535,24 @@ ET-013 PR-2 implementation update (October 15, 2026): the telemetry service runs
 
 ## ET-011 authorization — October 15, 2026
 
+Closeout authorization, October 22, 2026: the owner authorized resolving local verification failures, independent
+review, final automatic Ready CI and squash merge of PR #167, followed by ET-011 closure. Narrator accessibility and
+remaining real-game unit-profile/close-to-tray overlay checks transfer **unverified** to
+[ET-043](https://trello.com/c/2fbiCET0); installed shortcut/update checks retain their ET-018 deferral. Corrected
+Windows sign-out and actual restart passed in separate isolated synthetic sessions. The native regression correction
+follows the existing pending-start policy and mandatory-join/measured-target contract; no product deadline, protocol,
+storage schema, game-history enablement or release scope changes. Historical failures are retained, and this decision
+does not assert the PR's remaining gates or transferred checks already passed. See [ET-011 validation](docs/validation/et-011.md).
+
+Windows session-end correction, October 21, 2026: pinned Electron immediately terminates main after confirmed native
+`session-end` listeners, so C6's normal asynchronous supervisor completion cannot be guaranteed at that OS boundary.
+The owner requested diagnosing/fixing the lost audit and preparing a repeat manual check. Confirmed end now enters
+synchronous bounded logging before the same lifecycle request, removes the tray immediately and records the truthful
+`WINDOWS_SESSION_END_HANDOFF` boundary. It never invents completed service/app exits, stops on a cancellable query or
+vetoes Windows shutdown. Ordinary exit budgets remain unchanged. Actual service/storage completion and real Windows
+acceptance remain independently evidenced, as [the lifecycle](docs/app-lifecycle.md#windows-terminal-session-boundary--october-21-2026)
+and [validation](docs/validation/et-011.md) describe. This is a diagnostic correction, not an OS-lifecycle policy change.
+
 Closeout instruction, October 21, 2026: the owner requested Review status, card reconciliation and
 completion of unattended follow-ups before manual checks together. This includes diagnosing the
 historical launcher close timeout and the approved source-selection logs. Main records fixed
@@ -749,7 +773,7 @@ Event and trip effects are committed in one transaction before the ACK. Recordin
 | R11 | S-1 (fuel-used column) and S-2 (late-attached job trips) go to ET-016 in one schema v2 migration; S-3 is resolved here; S-4 stays in detail JSON. No schema migration in ET-015a |
 | R12 | Storage API additions without a schema change: a `{game, outcome}` filter on `listTrips` and an `ifAbsent` option on `recordCompleteness` |
 | R13 | Disk-full, permission and lock failures are injected through the real worker by a test-only entry inside the real transaction, so rollback of the event and its effects is proven |
-| R14 | Orderly exit splits ingestion stop into intake (`stopSource`) and a 500 ms `recording-flush` step that waits for the in-flight commit and drops queued work; the producer redelivers it. The service stop budget stays 2500 ms |
+| R14 | Orderly exit splits ingestion stop into intake (`stopSource`) and a nominal 500 ms `recording-flush` step that waits for the in-flight commit and drops queued work; the producer redelivers it. The October 22 ET-011 allocation correction permits borrowing only unused registered intake time, reserving the full registered future storage maximum. The service stop budget stays 2500 ms |
 | R15 | Seeds are read only at the first durable welcome of a game in the recorder's lifetime |
 | R16 | `conflict` results are adopted as T3 says; a later divergence fails closed |
 | R17 | The recorder exposes a read-only trip view for ET-015b's sample references |
@@ -821,7 +845,7 @@ Under the owner's standing delegation of October 15, 2026 (quoted in the ET-015a
 | H8 | A low-priority `samples` op in the FIFO writes at most 60 rows of one session per `appendSamples`. It is queued when the oldest pending row is 5 s old or 60 rows are pending, and at most one such op is queued or running |
 | H9 | Loss budget. In steady state, at most 5 s plus one batch command is uncommitted. A kill loses at most those rows; an open trip records this only through its `consumer-restart` interval. An orderly exit loses none unless its step expires. Under a storage backlog at most 300 rows are held; newer rows are dropped, and each dropped run becomes one session-level `sample-loss` interval with `cause: 'sample-backlog'` |
 | H10 | A coverage item waits behind at most one bounded batch. Samples never count against the 256-item and 512-reading bounds |
-| H11 | `recording-flush` keeps its 500 ms. After the commit in flight, it writes every pending row (at most 300 per session) unless delivery has failed, and logs `V1_SAMPLES_EXIT` once. The 2500 ms stop total is unchanged |
+| H11 | `recording-flush` has a nominal 500 ms allocation and may use unused registered intake time, up to 1500 ms with prompt intake, while reserving storage's registered maximum. After the commit in flight, it writes every pending row (at most 300 per session) unless delivery has failed, and logs `V1_SAMPLES_EXIT` once. Expiry of the effective allocation remains an unclean stop; the 2500 ms stop total is unchanged |
 | H12 | Sample write failures follow the E7 classes. A retryable failure keeps the rows and retries them at the next timer, and the connection stays open. An unavailable failure makes the service live-only for its lifetime and discards pending rows. Diagnostics are the `V1_SAMPLES_*` codes, logged at counts 1, 2, 4, … |
 | H13 | Readings carry the receipt UTC label taken at decode (as R8). A sample's `utcMs` is the reading's `captureUtcUnixMs` when it is available and safe, and otherwise this label |
 | H14 | Wire canonical units are copied unchanged, and position comes from `worldPlacement.position`. Availability objects lose their `unit` key, and game time keeps its own clock. UTC, game time and real time stay in separate columns |

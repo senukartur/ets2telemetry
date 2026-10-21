@@ -12,7 +12,7 @@ import {expect} from 'vitest';
 import {FrameDecoder, decodePayload, type ClientMessage} from '../../packages/contracts/src/protocol-v1';
 import {StorageClient, workerHandle, type StorageWorkerHandle} from '../../packages/storage/src/client';
 import type {CommandName, StorageRequest} from '../../packages/storage/src/worker/protocol';
-import {ShutdownSequence} from '../../apps/desktop/src/shutdown-sequence';
+import {ShutdownSequence, type ShutdownTimers} from '../../apps/desktop/src/shutdown-sequence';
 import {storageError} from '../../packages/storage/src/errors';
 import type {TripSummaryView, TripView} from '../../packages/telemetry-core/src/index';
 import {TripRecorderSink, type TripRecorderClient} from '../../apps/desktop/src/trip-recorder';
@@ -408,22 +408,30 @@ export function tracedHandle(handle: StorageWorkerHandle, timeline: string[], ho
 
 /** One SHUTDOWN_STEP line of the service log. */
 export interface LoggedStep {phase: string; name: string; outcome: string}
+/** Separate diagnostic facts; assertion-facing step and timeline shapes stay unchanged. */
+export interface LoggedStepDiagnostic extends LoggedStep {ms: number | null; nominalBudgetMs: number; effectiveBudgetMs: number; graceMs: number | null}
 /**
- * The real ShutdownSequence with its production timers. Its SHUTDOWN_STEP log goes to `steps` and to `timeline` as
+ * The real ShutdownSequence, with production timers by default or an explicitly injected sequence clock. Its SHUTDOWN_STEP log goes to `steps` and to `timeline` as
  * `step <phase> <name> <outcome>`; each step registered through `registrar` writes `start <name>` when it starts and
  * then calls `onStart` with its name.
  */
-export function tracedShutdown(timeline: string[], onStart?: (name: string) => void) {
+export function tracedShutdown(timeline: string[], onStart?: (name: string) => void, timers?: ShutdownTimers) {
   const steps: LoggedStep[] = [];
+  const diagnostics: LoggedStepDiagnostic[] = [];
+  const contexts = new Map<string, {nominalBudgetMs: number; effectiveBudgetMs: number; graceMs: number | null}>();
   const sequence = new ShutdownSequence((event, _detail, facts) => {
     if (event !== 'SHUTDOWN_STEP' || !facts) return;
     const step = {phase: String(facts.phase), name: String(facts.name), outcome: String(facts.outcome)};
     steps.push(step); timeline.push(`step ${step.phase} ${step.name} ${step.outcome}`);
-  });
+    diagnostics.push({...step, ms: typeof facts.ms === 'number' ? facts.ms : null, ...contexts.get(step.name)!});
+  }, timers);
   const registrar: Pick<ShutdownSequence, 'register'> = {
-    register: (phase, step) => sequence.register(phase, {...step, run: context => { timeline.push(`start ${step.name}`); onStart?.(step.name); return step.run(context); }})
+    register: (phase, step) => sequence.register(phase, {...step, run: context => {
+      contexts.set(step.name, {nominalBudgetMs: step.budgetMs, effectiveBudgetMs: context?.budgetMs ?? step.budgetMs, graceMs: context?.graceMs ?? null});
+      timeline.push(`start ${step.name}`); onStart?.(step.name); return step.run(context);
+    }})
   };
-  return {sequence, registrar, steps};
+  return {sequence, registrar, steps, diagnostics};
 }
 
 /**

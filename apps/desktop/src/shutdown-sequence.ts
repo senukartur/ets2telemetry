@@ -40,8 +40,9 @@ const systemTimers: ShutdownTimers = {
 
 /**
  * Runs registered service shutdown steps once, phase by phase. Steps within a phase run in parallel and
- * each is bounded by its own budget, so a phase lasts at most its largest step budget. A failed or late
- * step is recorded and the sequence continues; the result reports whether every step finished cleanly.
+ * each is bounded by its effective budget. Recording flush can use unused registered intake time while reserving
+ * the future storage phase; history close uses only the time actually remaining. A failed or late step is recorded
+ * and the sequence continues; the result reports whether every step finished cleanly.
  */
 export class ShutdownSequence {
   private readonly phases = new Map<ShutdownPhase, ShutdownStep[]>(SHUTDOWN_PHASES.map(phase => [phase, []]));
@@ -78,6 +79,19 @@ export class ShutdownSequence {
     for (const phase of SHUTDOWN_PHASES) {
       const steps = this.phases.get(phase)!;
       let contexts: ShutdownStepContext[] | undefined;
+      if (phase === 'flush') {
+        const elapsed = Math.max(0, this.timers.now() - sequenceStarted);
+        const intakeBudget = Math.max(0, ...this.phases.get('intake')!.map(step => step.budgetMs));
+        const unusedIntake = Math.max(0, intakeBudget - elapsed);
+        const storageReserve = Math.max(0, ...this.phases.get('storage')!.map(step => step.budgetMs));
+        contexts = steps.map(step => {
+          // Only the recording drain borrows time. Never invent an intake allowance when none was registered,
+          // spend the storage reservation, or add time after intake has used its nominal allocation.
+          const headroom = Math.max(0, SERVICE_STOP_BUDGET_MS - elapsed - storageReserve - step.budgetMs);
+          const borrowed = step.name === 'recording-flush' ? Math.min(unusedIntake, headroom) : 0;
+          return {budgetMs: step.budgetMs + borrowed};
+        });
+      }
       if (phase === 'storage') {
         const elapsed = this.timers.now() - sequenceStarted;
         const remainingStopBudget = Math.max(0, SERVICE_STOP_BUDGET_MS - elapsed);

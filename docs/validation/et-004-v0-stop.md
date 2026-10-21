@@ -1,5 +1,11 @@
 # ET-004 v0 stop and discovery record validation record
 
+Regression reconciliation, October 22, 2026: [ET-011](et-011.md#local-contract-correction-and-closeout-authorization--october-22-2026)
+holds protected publication beyond the 1,000 ms measured target after stop's first cancellation and requires mandatory
+join, cleanup and the unchanged `shutdown_deadline_exceeded` diagnostic. The pending-startup stop assertion now checks
+status against internal duration instead of imposing an undocumented universal sub-second stop. No product cancellation
+window, ownership or threshold changes; earlier 1,078 ms observations remain target misses, not performance fixes.
+
 Recorded October 15, 2026. This is a transport lifecycle bug fix in the v0 pipe server, not a wire change. Pipe names, discovery records and their bytes, the v0 protocol, the CAP0 contract and the [October 13, 2026 startup budget](et-004-startup-budget.md) (1 s SDK-initialization wait, pending rather than failed, one deferred log) are unchanged. No game was launched and no DLL was installed into a game directory. The fix was developed on top of ET-004b PR C (`c284a6b`), whose `1d73b29` fixed the same defect for the v1 endpoint, and was cherry-picked onto `main` after PR C merged as `ceba919` (#54).
 
 ## Problem
