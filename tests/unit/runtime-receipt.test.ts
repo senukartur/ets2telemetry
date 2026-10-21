@@ -184,6 +184,9 @@ function lifecycleCases() {
     invalid('restart visibility missing', ['lifecycle', 'restart', 'overlayEnabled']),
     invalid('restart visibility enabled', ['lifecycle', 'restart', 'overlayEnabled'], true),
     invalid('restart visibility nonboolean', ['lifecycle', 'restart', 'overlayEnabled'], 'false'),
+    invalid('required visibility save missing', ['mainEvents', 7]),
+    invalid('visibility save cannot precede units', ['mainEvents', 6, 'facts'], {overlayEnabled: false}),
+    invalid('visibility save carries extra facts', ['mainEvents', 7, 'facts'], {overlayEnabled: false, extra: 'invented'}),
     invalid('off-save did not save false', ['mainEvents', 7, 'facts', 'overlayEnabled'], true),
     // ET-011b settings evidence.
     invalid('settings seed flag missing', ['lifecycle', 'settingsSeededInvalidFile']),

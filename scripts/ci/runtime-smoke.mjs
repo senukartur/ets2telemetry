@@ -645,7 +645,7 @@ finally {
       assert.deepEqual(lifecycle.restartMainEvents.filter(row => row.event === 'APP_EXIT_REQUESTED').map(row => row.facts?.reason), ['app-quit']);
       // Run B reopens the history database that run A created.
       lifecycle.restartHistory = verifyHistoryEvents(lifecycle.restartServiceEvents, [false]);
-      // Settings diagnostics: run A falls back from the invalid file, quarantines it and saves once; run B only loads.
+      // Settings diagnostics: run A falls back from the invalid file, quarantines it and saves units then visibility false; run B only loads.
       const settingsEvents = rows => rows.filter(row => row.event.startsWith('SETTINGS_')).map(row => ({event: row.event, facts: row.facts ?? null}));
       lifecycle.settingsEvents = {runA: settingsEvents(result.mainEvents), runB: settingsEvents(lifecycle.restartMainEvents)};
       // A read that outlasted its 1000 ms load budget under CPU starvation is preceded by exactly one pending row; the
@@ -654,7 +654,8 @@ finally {
       const late = rows => rows[0]?.event === pending.event ? [pending] : [];
       lifecycle.settingsLateRead = {runA: late(lifecycle.settingsEvents.runA).length === 1, runB: late(lifecycle.settingsEvents.runB).length === 1};
       assert.deepEqual(lifecycle.settingsEvents.runA, [...late(lifecycle.settingsEvents.runA), {event: 'SETTINGS_FALLBACK', facts: {state: 'invalid-file'}},
-        {event: 'SETTINGS_QUARANTINED', facts: {state: 'invalid-file'}}, {event: 'SETTINGS_SAVED', facts: {game: 'ets2', profile: 'us-customary'}}]);
+        {event: 'SETTINGS_QUARANTINED', facts: {state: 'invalid-file'}}, {event: 'SETTINGS_SAVED', facts: {game: 'ets2', profile: 'us-customary'}},
+        {event: 'SETTINGS_SAVED', facts: {overlayEnabled: false}}]);
       assert.deepEqual(lifecycle.settingsEvents.runB, [...late(lifecycle.settingsEvents.runB), {event: 'SETTINGS_LOADED', facts: {state: 'loaded'}}]);
       lifecycle.restartLauncherExit = result.launcherExit;
       lifecycle.shutdownClean = true;

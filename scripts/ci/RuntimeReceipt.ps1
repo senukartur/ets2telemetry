@@ -159,7 +159,7 @@ function Test-LifecycleSettingsReceipt {
     foreach ($row in @($lifecycle.dashboardUnits, $lifecycle.restart.dashboardUnits)) {
         if ($null -eq $row -or $row.speed -cne 'Speed: 55.9 mph' -or $row.fuel -cne 'Fuel: 19.3 US gal') { return $false }
     }
-    # Diagnostics: run A falls back from the invalid file, quarantines it once and saves once; run B only loads.
+    # Diagnostics: run A falls back from the invalid file, quarantines it once and saves units then visibility false; run B only loads.
     # A read past the 1000 ms load budget adds one SETTINGS_LOAD_PENDING row before any other settings row of that run.
     foreach ($rows in @(@($Driver.mainEvents), @($lifecycle.restartMainEvents))) {
         $settingsRows = @($rows | Where-Object { $_.event -cmatch '^SETTINGS_' })
