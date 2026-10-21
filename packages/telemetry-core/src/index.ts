@@ -16,3 +16,5 @@ export * from './trips/reducer';
 export * from './trips/view';
 // Pure one-second history sampler (ET-015b); see docs/trips.md.
 export * from './history-samples';
+
+export * from './hard-mode';

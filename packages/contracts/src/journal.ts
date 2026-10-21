@@ -3,6 +3,7 @@
 // Every value keeps the protocol v1 availability and money shapes, so zero stays distinct from an unavailable value
 // and money stays exact decimal text with its SDK type and currency basis. Every response names the database purpose,
 // so synthetic and replay data are never shown as game history. See docs/journal.md.
+import {isHardModeDetails, type HardModeDetails} from './hard-mode';
 import {validateServerMessage, type Available, type Currency, type EventOccurrence, type EventRecord, type GameMode, type JobConfiguration, type Money,
   type TrailerConfiguration, type TruckConfiguration, type UnavailableReason, type Uint64} from './protocol-v1';
 
@@ -57,6 +58,7 @@ export interface JournalJobSummary {
 }
 /** One journal list row. Outcome and recording completeness are separate; neither is inferred from the other. */
 export interface JournalTripListItem {
+  isHardMode: boolean; hardModeDetails: HardModeDetails | null;
   tripUuid: string; game: JournalGame; gameMode: JournalGameMode; gameModeAmbiguous: boolean;
   outcome: JournalOutcome; closeReason: JournalCloseReason | null; recordingCompleteness: JournalCompleteness;
   /** UTC labels in milliseconds; real durations come from monotonic time, never from these labels. */
@@ -257,9 +259,11 @@ function gameMode(value: unknown): void {
   const o = exact(value, ['mode', 'method', 'confidence']);
   oneOf(o.mode, ['single-player', 'truckersmp', 'unknown', 'convoy']); oneOf(o.method, ['module-scan', 'process-scan', 'none']); oneOf(o.confidence, ['strong', 'weak', 'none']);
 }
-const LIST_KEYS = ['tripUuid', 'game', 'gameMode', 'gameModeAmbiguous', 'outcome', 'closeReason', 'recordingCompleteness', 'startedUtcMs', 'endedUtcMs', 'observedDistanceM', 'fuelUsedL', 'job'];
+const LIST_KEYS = ['isHardMode', 'hardModeDetails', 'tripUuid', 'game', 'gameMode', 'gameModeAmbiguous', 'outcome', 'closeReason', 'recordingCompleteness', 'startedUtcMs', 'endedUtcMs', 'observedDistanceM', 'fuelUsedL', 'job'];
 const CLOSE_REASONS: readonly unknown[] = ['outcome', 'configuration-cleared', 'different-job', 'restart', 'discontinuity', 'gap'];
 function listItem(o: Record<string, unknown>): void {
+  boolean(o.isHardMode); if (o.hardModeDetails !== null && !isHardModeDetails(o.hardModeDetails)) bad();
+  if (o.isHardMode && (o.outcome !== 'delivered' || o.hardModeDetails === null || (o.hardModeDetails as HardModeDetails).firstLoss !== null || (o.hardModeDetails as HardModeDetails).manualDelivery !== true)) bad();
   uuid(o.tripUuid); oneOf(o.game, GAMES); gameMode(o.gameMode); boolean(o.gameModeAmbiguous); oneOf(o.outcome, OUTCOMES);
   nullable(o.closeReason, value => oneOf(value, CLOSE_REASONS)); oneOf(o.recordingCompleteness, COMPLETENESS);
   if ((o.outcome === 'open') !== (o.closeReason === null) || (o.outcome === 'open') !== (o.endedUtcMs === null)) bad();

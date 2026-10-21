@@ -16,7 +16,7 @@ const NOT_OBSERVED = {available: false as const, reason: 'not-observed' as const
 
 /** A stored open trip opened by its job configuration event `opened`. */
 function trip(overrides: Partial<TripRecord> = {}): TripRecord {
-  return {
+  return {isHardMode: false, hardModeDetails: null,
     tripUuid: T1, pluginSessionId: S1, game: 'ets2', gameMode: {mode: 'unknown', method: 'none', confidence: 'none'}, gameModeAmbiguous: false,
     jobSource: 'event', jobConfigurationEventSeq: '2', checkpointJob: null, truckConfigurationEventSeq: null, trailerConfigurationEventSeqs: [], openedBy: 'event', openedEventSeq: '2',
     outcome: 'open', outcomeEventSeq: null,
@@ -151,7 +151,7 @@ function reader(pages: TripRecord[][], events: Record<string, EventRow[]>) {
       return Promise.resolve({ok: true, value: (events[pluginSessionId] ?? []).find(row => row.eventSeq === eventSeq)});
     }
   };
-  return {reader: fake, calls, failures, served};
+  return {isHardMode: false, hardModeDetails: null,reader: fake, calls, failures, served};
 }
 /** The seeds the pure rule gives with every stored event of each trip's session: what readTripSeeds must return. */
 const pureSeeds = (trips: TripRecord[], events: Record<string, EventRow[]>) => trips.map(t =>

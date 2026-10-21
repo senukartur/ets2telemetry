@@ -25,6 +25,7 @@ const cases = [
   {name: 'scaffold receipt cannot prove telemetry', body: JSON.stringify({passed: true, commit: 'candidate', mode: 'packaged', scenarioKind: 'scaffold'}), scenario: 'telemetry', code: 0, available: true, reason: 'DRIVER_RESULT_SCENARIO_MISMATCH'},
   {name: 'telemetry receipt missing scenario', body: JSON.stringify({passed: true, commit: 'candidate', mode: 'packaged'}), scenario: 'telemetry', code: 0, available: true, reason: 'DRIVER_RESULT_SCENARIO_MISMATCH'},
   {name: 'matching telemetry scenario', body: JSON.stringify({passed: true, commit: 'candidate', mode: 'packaged', scenarioKind: 'telemetry'}), scenario: 'telemetry', code: 0, available: true, reason: null},
+  ...hardModeCases(),
   ...lifecycleCases(),
   ...pluginCases(),
   ...recordingCases(),
@@ -215,7 +216,7 @@ type Edit = [(string | number)[], Json | undefined];
 function recordingReceiptWith(edits: Edit[]): string {
   const step = (pid: number, name: string): Json => ({pid, event: 'SHUTDOWN_STEP', facts: {name, outcome: 'ok'}});
   const started = (pid: number, created: boolean): Json[] => [{pid, event: 'RECORDING_TARGET', facts: {purpose: 'synthetic'}}, {pid, event: 'STORAGE_VERIFIED'},
-    {pid, event: 'HISTORY_STORAGE_OPENED', facts: {schemaVersion: 2, created, migratedFrom: null}},
+    {pid, event: 'HISTORY_STORAGE_OPENED', facts: {schemaVersion: 3, created, migratedFrom: null}},
     {pid, event: 'V1_SOURCE_STATUS', facts: {status: 'stale', selection: 'synthetic', durable: 'active', count: 1}}];
   // Seven rows: the intake and flush steps, then the storage steps around the close.
   const stopped = (pid: number): Json[] => [...['ingestion', 'capture', 'v1-ingestion', 'recording-flush', 'storage-probe'].map(name => step(pid, name)),
@@ -285,7 +286,7 @@ function recordingReceiptWith(edits: Edit[]): string {
       trayExit: {launcherExit: 0, signal: null, exitMilliseconds: 88, requests: ['tray']}, restartLauncherExit: 0,
       simulator: {exit: {code: 0, signal: null}, report: {scenario: 'normal-delivery-runtime-journey', cancelled: false, matchesReplay: true, differences: [],
         connections: [1, 2, 3].map(index => ({connection: index, durable: true, closedBy: index === 1 ? 'disconnect' : 'client'}))}},
-      files: {magic: 'SQLite format 3', applicationId: 1163154226, userVersion: 2, sidecars: [], syntheticBackups: false, historyDatabase: false, dataDirectory: false},
+      files: {magic: 'SQLite format 3', applicationId: 1163154226, userVersion: 3, sidecars: [], syntheticBackups: false, historyDatabase: false, dataDirectory: false},
       database: {integrity: ['ok'], foreignKeyViolations: 0, purpose: 'synthetic', acceptedOrigin: 'synthetic', acknowledgedThrough: '13',
         sessions: [{game: 'ets2', origin: 'synthetic', committedThrough: '13', endReason: null, simulatorSession: true}],
         // ET-016 PR-8: the schema version 2 columns of a trip opened at its job event.
@@ -467,7 +468,7 @@ function withTripSample(): Edit[] {
 function journalReceipt(path: (string | number)[] = [], replacement?: Json): string {
   const main = (): Json[] => [{event: 'APP_START'}, {event: 'APP_EXIT_REQUESTED', facts: {reason: 'app-quit'}}, {event: 'SERVICE_EXIT', detail: {code: 0}}, {event: 'APP_EXIT', detail: {code: 0}}];
   const service = (created: boolean): Json[] => [...(created ? [] : [{event: 'RECORDING_TARGET', facts: {purpose: 'synthetic'}}]), {event: 'STORAGE_VERIFIED'},
-    {event: 'HISTORY_STORAGE_OPENED', facts: {schemaVersion: 2, created, migratedFrom: null}},
+    {event: 'HISTORY_STORAGE_OPENED', facts: {schemaVersion: 3, created, migratedFrom: null}},
     ...['ingestion', 'capture', 'v1-ingestion', 'recording-flush', 'storage-probe'].map(name => ({event: 'SHUTDOWN_STEP', facts: {name, outcome: 'ok'}})),
     {event: 'HISTORY_STORAGE_CLOSED'}, {event: 'SHUTDOWN_STEP', facts: {name: 'history-storage', outcome: 'ok'}}, {event: 'SERVICE_REPORT', detail: {type: 'stopped', clean: true}}];
   const trip = (n: number) => `7a000000-0000-4000-8000-00000000000${n}`;
@@ -492,7 +493,7 @@ function journalReceipt(path: (string | number)[] = [], replacement?: Json): str
       pagingTimeline: {first: '1', pageTwo: ['101', '102', '103', '104', '105'], nextOnLast: false}, pagingIntervals: {pageTwo: 4, nextOnLast: false},
       pagingSamples: {kinds: ['sample'], firstSpeed: '72.0 km/h', nextOnSecond: true},
       filters: {none: [trip(5), trip(4), trip(3)], noneNext: false, partial: 39, partialNext: false},
-      restartLauncherExit: 0, files: {magic: 'SQLite format 3', applicationId: 1163154226, userVersion: 2, sidecars: [], syntheticBackups: false},
+      restartLauncherExit: 0, files: {magic: 'SQLite format 3', applicationId: 1163154226, userVersion: 3, sidecars: [], syntheticBackups: false},
       exportNoteShown: true, exportsSaved: true, exportCancelledWritesNothing: true, exportTargetRefused: true, dataFolderUnchanged: true,
       exportFolder: ['delivered.json', 'paging.json'],
       pagingExport: {events: 105, firstEvent: '1', lastEvent: '105', intervals: 104, samples: 3600, snapshot: true, outcome: 'open'},
@@ -625,7 +626,7 @@ function refusalCases() {
     invalid('shared-memory file beside the database', ['refusal', 'file', 'dataEntries'], ['telemetry.sqlite', 'telemetry.sqlite-shm']),
     invalid('database removed', ['refusal', 'file', 'dataEntries'], []),
     invalid('backup taken', ['refusal', 'file', 'backups'], true),
-    invalid('journal list as an empty page', ['refusal', 'bridge', 'list'], {ok: true, value: {database: {purpose: 'history', schemaVersion: 2}, trips: [], nextCursor: null}}),
+    invalid('journal list as an empty page', ['refusal', 'bridge', 'list'], {ok: true, value: {database: {purpose: 'history', schemaVersion: 3}, trips: [], nextCursor: null}}),
     invalid('detail refused with another storage code', ['refusal', 'bridge', 'detail', 'storageCode'], 'DATABASE_UNRECOGNIZED'),
     invalid('events still opening', ['refusal', 'bridge', 'events', 'code'], 'DATABASE_OPENING'),
     invalid('Journal tab shows an empty list', ['refusal', 'journal'], {error: null, empty: 'No trips recorded',
@@ -654,7 +655,7 @@ function refusalCases() {
     invalid('history step logged twice', ['serviceEvents', 11], {event: 'SHUTDOWN_STEP', facts: {phase: 'storage', name: 'history-storage', outcome: 'ok', ms: 0}}),
     invalid('refusal logged twice', ['serviceEvents', 11], {event: 'HISTORY_STORAGE_UNAVAILABLE', facts: {code: 'SCHEMA_NEWER'}}),
     invalid('refused with another code', ['serviceEvents', 1, 'facts', 'code'], 'DATABASE_UNRECOGNIZED'),
-    invalid('history opened', ['serviceEvents', 11], {event: 'HISTORY_STORAGE_OPENED', facts: {schemaVersion: 2, created: false, migratedFrom: 999}}),
+    invalid('history opened', ['serviceEvents', 11], {event: 'HISTORY_STORAGE_OPENED', facts: {schemaVersion: 3, created: false, migratedFrom: 999}}),
     invalid('a recording target opened', ['serviceEvents', 0], {event: 'RECORDING_TARGET', facts: {purpose: 'synthetic'}}),
     invalid('history step failed', ['serviceEvents', 8, 'facts', 'outcome'], 'failed'),
     invalid('service stopped unclean', ['serviceEvents', 10, 'detail', 'clean'], false),
@@ -822,3 +823,18 @@ it('requires an intact current driver receipt and normal Job exit without overwr
     }
   } finally {await resources.dispose();}
 }, receiptBatchTimeout(cases.length) + 5000);
+
+function hardModeCases() {
+  const hardMode = {unknown: true, fail: true, pass: true, hints: true, hover: true, drawer: true, bilingual: true, languageHotChange: true, keyboard: true, refresh: true, lost: true, restoredLost: true, irreversible: true, badge: true,
+    export: true, overlayExcluded: true, persisted: true, schemaVersion: 3, flags: [false, true], errors: []};
+  const body = (value: unknown) => JSON.stringify({passed: true, commit: 'candidate', mode: 'packaged', scenarioKind: 'hard-mode', hardMode: value});
+  const accepted = {scenario: 'hard-mode', code: 0, available: true, reason: null};
+  const rejected = {...accepted, reason: 'HARD_MODE_RESULT_INVALID'};
+  return [{name: 'intact Hard Mode receipt', body: body(hardMode), ...accepted},
+    ...['unknown','fail','pass','hints','hover','drawer','bilingual','languageHotChange','keyboard','refresh','lost','restoredLost','irreversible','badge','export','overlayExcluded','persisted'].flatMap(field => [
+      {name: `Hard Mode missing ${field}`, body: body({...hardMode, [field]: undefined}), ...rejected},
+      {name: `Hard Mode false ${field}`, body: body({...hardMode, [field]: false}), ...rejected}]),
+    {name: 'Hard Mode false delivered flag', body: body({...hardMode, flags: [false, false]}), ...rejected},
+    {name: 'Hard Mode numeric flag', body: body({...hardMode, flags: [0, true]}), ...rejected},
+    {name: 'Hard Mode old schema', body: body({...hardMode, schemaVersion: 2}), ...rejected}];
+}

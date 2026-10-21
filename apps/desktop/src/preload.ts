@@ -1,3 +1,4 @@
+import {isHardModeStatus, type HardModeStatus} from '../../../packages/contracts/src/hard-mode';
 import {contextBridge, ipcRenderer} from 'electron';
 import type {AppState, DesktopBridge, LiveTelemetry} from '../../../packages/contracts/src';
 import {initialLive, sourceSelection} from './live-state';
@@ -112,6 +113,11 @@ ipcRenderer.on('telemetry:service-state', (_event, update: LiveTelemetry) => {
 let appStateListener: ((state: AppState) => void) | undefined;
 // Main pushes fixed health codes only after this document subscribed through the trusted main frame.
 ipcRenderer.on('app:state', (_event, state: AppState) => {appStateListener?.(state);});
+async function hardModeCall(channel: 'hard-mode:status' | 'hard-mode:refresh'): Promise<HardModeStatus> {
+  const reply: unknown = await ipcRenderer.invoke(channel);
+  if (!isHardModeStatus(reply)) throw new Error('Invalid Hard Mode status');
+  return reply;
+}
 const bridge: DesktopBridge = {
   getStatus: () => ipcRenderer.invoke('scaffold:status'),
   selectSource: source => {
@@ -185,7 +191,9 @@ const bridge: DesktopBridge = {
   exportDiagnostics: () => ipcRenderer.invoke(DIAGNOSTICS_EXPORT_CHANNEL),
   // ET-018 PR-4 (U8): no argument may reach main, which checks again; main owns both dialogs and answers with fixed codes and
   // target ids, never a path.
-  uninstallApplication: (...args: unknown[]) => args.length === 0 ? ipcRenderer.invoke(UNINSTALL_CHANNEL) : Promise.reject(new Error('Invalid uninstall request'))
+  uninstallApplication: (...args: unknown[]) => args.length === 0 ? ipcRenderer.invoke(UNINSTALL_CHANNEL) : Promise.reject(new Error('Invalid uninstall request')),
+  getHardModeStatus: (...args: unknown[]) => args.length === 0 ? hardModeCall('hard-mode:status') : Promise.reject(new Error('Invalid Hard Mode request')),
+  refreshHardMode: (...args: unknown[]) => args.length === 0 ? hardModeCall('hard-mode:refresh') : Promise.reject(new Error('Invalid Hard Mode request'))
 };
 /** One page request of a trip: exactly the UUID and the cursor, or null for the first page. */
 function journalPage<T>(kind: 'events' | 'intervals' | 'samples', tripUuid: unknown, cursor: unknown): Promise<T> {

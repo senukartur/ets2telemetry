@@ -130,6 +130,9 @@ jobs:
       - name: Bounded development synthetic trip journal smoke
         if: github.event_name != 'pull_request'
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario journal
+      - name: Development Hard Mode journey
+        if: github.event_name != 'pull_request'
+        run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario hard-mode
       # ET-019 PR-7: a newer-schema history database is refused, shown in the Journal tab and left unchanged.
       - name: Bounded development newer history database refusal smoke
         if: github.event_name != 'pull_request'
@@ -193,6 +196,8 @@ jobs:
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged -Scenario recording
       - name: Bounded packaged synthetic trip journal smoke
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged -Scenario journal
+      - name: Packaged Hard Mode journey
+        run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged -Scenario hard-mode
       - name: Bounded packaged newer history database refusal smoke
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged -Scenario refusal
       - name: Extended existing safety regressions

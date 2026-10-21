@@ -111,7 +111,7 @@ function expectInvariants(file: string, pluginSessionId: string, acks: string[])
 }
 
 const TRIPS: JournalQuery = {kind: 'trips', query: {}};
-const SYNTHETIC_V2 = {purpose: 'synthetic', schemaVersion: 2};
+const SYNTHETIC_V3 = {purpose: 'synthetic', schemaVersion: 3};
 /** A journal read that main would forward unchanged (journal-contract.ts, parseJournalReply). */
 async function read(journal: JournalService, query: JournalQuery): Promise<JournalCallResult<unknown>> {
   const result = await guarded(journal.query(query), `the journal ${query.kind} read`, HANG_GUARD_MS);
@@ -126,7 +126,7 @@ async function read(journal: JournalService, query: JournalQuery): Promise<Journ
 async function expectJournal(journal: JournalService, e: LossExpected, window: {fromEventSeq: string; throughEventSeq: string; end: string; events: string[]}) {
   const trip = e.trips[0] as {startedUtcMs: number; endedUtcMs: number};
   const list = await read(journal, TRIPS);
-  expect(list).toMatchObject({ok: true, value: {database: SYNTHETIC_V2, nextCursor: null, trips: [{game: 'ets2', outcome: 'none', closeReason: 'gap',
+  expect(list).toMatchObject({ok: true, value: {database: SYNTHETIC_V3, nextCursor: null, trips: [{game: 'ets2', outcome: 'none', closeReason: 'gap',
     recordingCompleteness: 'partial', startedUtcMs: trip.startedUtcMs, endedUtcMs: trip.endedUtcMs,
     job: {source: 'event', plannedDistance: {available: true, value: 152_000, unit: 'm'}}}]}});
   const trips = (list as {value: {trips: {tripUuid: string}[]}}).value.trips;

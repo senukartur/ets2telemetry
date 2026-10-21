@@ -1,0 +1,73 @@
+import type {HardModeObservation, HardModeStatus} from '../../../../packages/contracts/src/hard-mode';
+import {HARD_MODE_COVERAGE_NS, type HardModeServiceMessage} from './service-status';
+import type {SourceIdentity} from '../../../../packages/contracts/src/protocol-v1';
+import {unknownHardMode} from '../../../../packages/telemetry-core/src/hard-mode';
+export const HARD_MODE_POLL_MS = 1000, HARD_MODE_DEADLINE_MS = 2000;
+export interface MonitorSource {source: SourceIdentity; monotonicNs: string; clockId?: string; boundary?: {clockId: string; probeSentClientNs: string; receivedSourceNs: string}}
+export class HardModeMonitor {
+  private observation: HardModeObservation = this.unknown();
+  private source: MonitorSource | null = null;
+  private inFlight: Promise<void> | undefined;
+  private controller: AbortController | undefined;
+  private epoch = 0;
+  private lastScanNs: bigint | undefined;
+  private observedClientNs: bigint | undefined;
+  private pendingProof: {value: HardModeObservation; completedClientNs: bigint; resolve: () => void} | undefined;
+  private bindProof(): void {
+    const pending = this.pendingProof, current = this.source, boundary = current?.boundary;
+    if (!pending || !boundary || boundary.clockId !== current?.clockId || BigInt(boundary.probeSentClientNs) <= pending.completedClientNs) return;
+    this.pendingProof = undefined;
+    this.expireCoverage();
+    if (BigInt(boundary.receivedSourceNs) >= 18446744073709551615n) this.publish(this.unknown());
+    else this.publish({...pending.value, sourceMonotonicNs: (BigInt(boundary.receivedSourceNs) + 1n).toString()}, pending.completedClientNs);
+    pending.resolve();
+  }
+  private retireProof(): void {const pending = this.pendingProof; this.pendingProof = undefined; pending?.resolve();}
+  private timer: ReturnType<typeof setInterval> | undefined;
+  constructor(private readonly read: (source: SourceIdentity, monotonicNs: string, atUtcMs: number, signal: AbortSignal) => Promise<HardModeObservation>,
+    private readonly changed: (value: HardModeObservation) => void = () => undefined, private readonly nowNs: () => bigint = () => process.hrtime.bigint()) {}
+  private unknown(): HardModeObservation {return {assessment: unknownHardMode(Date.now()), binding: null, pluginSessionId: null, sourceMonotonicNs: null};}
+  private publish(value: HardModeObservation, observedClientNs = this.nowNs()): void {this.observation = value; this.observedClientNs = observedClientNs; this.changed(value);}
+  private expired(): boolean {const age = this.observedClientNs === undefined ? -1n : this.nowNs() - this.observedClientNs; return age < 0n || age > BigInt(HARD_MODE_POLL_MS + HARD_MODE_DEADLINE_MS) * 1_000_000n;}
+  private expireCoverage(): void {if (this.observation.binding !== null && this.expired()) this.publish(this.unknown());}
+  select(next: MonitorSource | null): void {
+    const before = this.source?.source, after = next?.source;
+    const previousClock = this.source?.clockId;
+    this.source = next;
+    if (previousClock === next?.clockId && before?.pluginSessionId === after?.pluginSessionId && before?.processInstanceId === after?.processInstanceId && before?.processId === after?.processId && before?.windowsSessionId === after?.windowsSessionId && before?.game === after?.game && before?.origin === after?.origin) {this.bindProof(); return;}
+    this.epoch++; this.controller?.abort(); this.retireProof(); this.publish(this.unknown());
+    void this.refresh();
+  }
+  evidence(): HardModeObservation {
+    if (this.expired()) return this.unknown();
+    return structuredClone(this.observation);
+  }
+  publication(): Extract<HardModeServiceMessage, {update: 'assessment'}> {
+    const age = this.observedClientNs === undefined ? -1n : this.nowNs() - this.observedClientNs;
+    const remaining = age >= 0n && age < HARD_MODE_COVERAGE_NS ? HARD_MODE_COVERAGE_NS - age : 0n;
+    return {type: 'hard-mode', update: 'assessment', assessment: this.evidence().assessment, remainingNs: remaining.toString()};
+  }
+  status(): HardModeStatus {return {assessment: this.evidence().assessment, trip: null};}
+  start(): void {this.timer ??= setInterval(() => {void this.refresh();}, HARD_MODE_POLL_MS); this.timer.unref();}
+  refresh(): Promise<void> {
+    this.expireCoverage();
+    if (this.inFlight) return this.inFlight;
+    const current = this.source;
+    if (!current || this.lastScanNs !== undefined && this.nowNs() - this.lastScanNs < BigInt(HARD_MODE_POLL_MS) * 1_000_000n) return Promise.resolve();
+    this.lastScanNs = this.nowNs();
+    const epoch = this.epoch, controller = this.controller = new AbortController();
+    const deadline = setTimeout(() => {controller.abort(); if (epoch === this.epoch) this.publish(this.unknown()); this.retireProof();}, HARD_MODE_DEADLINE_MS);
+    this.inFlight = this.read(current.source, current.monotonicNs, Date.now(), controller.signal).then(value => {
+      if (!controller.signal.aborted && epoch === this.epoch) {
+        if (value.assessment.state !== 'pass') {this.publish({...value, sourceMonotonicNs: null}); return;}
+        // A source receipt of a probe sent after the file read is a causal boundary, without clock-origin mapping.
+        return new Promise<void>(resolve => {
+          this.pendingProof = {value: {...value, assessment: {...value.assessment, observedUtcMs: Date.now()}}, completedClientNs: this.nowNs(), resolve};
+          this.bindProof();
+        });
+      }
+    }, () => {if (epoch === this.epoch) this.publish(this.unknown());}).finally(() => {clearTimeout(deadline); this.inFlight = undefined;});
+    return this.inFlight;
+  }
+  close(): void {clearInterval(this.timer); this.timer = undefined; this.epoch++; this.controller?.abort(); this.retireProof(); this.publish(this.unknown());}
+}

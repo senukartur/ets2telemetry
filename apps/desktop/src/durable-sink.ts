@@ -3,6 +3,7 @@
 // through the StorageClient interface and never loads native SQLite. `StorageDurableSink` commits messages without trip
 // effects; the trip recorder (trip-recorder.ts) commits them with their ET-014 effects. Production passes no sink yet,
 // so nothing is recorded or acknowledged; see docs/telemetry-service-v1.md.
+import type {HardModeObservation} from '../../../packages/contracts/src/hard-mode';
 import type {ServerMessage, Uint64} from '../../../packages/contracts/src/protocol-v1';
 import type {CommitResult, SampleAppendResult, StorageError, StorageErrorCode} from '../../../packages/storage/src/api';
 import type {StorageClient} from '../../../packages/storage/src/client';
@@ -33,7 +34,9 @@ export type SinkResult<T> = {ok: true; value: T} | {ok: false; error: SinkError}
  * R8, H13: the consumer's UTC label, captured when the frame was decoded, never when its commit or observation runs.
  * Every event, gap, checkpoint and snapshot of a durable connection carries one.
  */
-export interface CommitContext {receivedUtcMs: number}
+/** Bounded per-coverage intake evidence; the recorder may only latch the first later unsafe observation. */
+export interface HardModeCapture {game: 'ets2' | 'ats'; observation: HardModeObservation; fresh: boolean; firstUnsafe: HardModeObservation | null}
+export interface CommitContext {receivedUtcMs: number; hardModeCapture?: HardModeCapture}
 
 /**
  * ET-015b (H2, H8, H11, H12): the sink's pending one-second samples, written only by DurableDelivery's `samples` op and
@@ -81,6 +84,9 @@ export interface AttachSink {
  * - `attach` (ET-016 PR-7) opens a late-attach trip at its place in the FIFO (AttachSink).
  */
 export interface DurableSink {
+  /** Synchronous, bounded intake capture; released when its queued/in-flight item leaves the delivery FIFO. */
+  capture?(message: CoverageMessage): HardModeCapture | undefined;
+  releaseCapture?(capture: HardModeCapture): void;
   openSession(welcome: WelcomeMessage): Promise<SinkResult<{committedThroughEventSeq: Uint64}>>;
   commit(message: CoverageMessage, context: CommitContext): Promise<SinkResult<CommitResult>>;
   observe?(message: ReadingMessage, context: CommitContext): SinkResult<undefined>;

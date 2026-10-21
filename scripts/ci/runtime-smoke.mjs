@@ -1,3 +1,4 @@
+import {HARD_MODE_TARGET, runHardModeSmoke, startHardModeSource, verifyHardModeRun} from './hard-mode-observation.mjs';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import os from 'node:os';
@@ -44,6 +45,7 @@ let telemetrySource;
 let telemetrySourceV1;
 // ET-015a PR-4: the recording scenario's reactive v1 simulator behind its recording proxy (recording-observation.mjs).
 let recordingSource;
+let hardModeSource;
 // ET-016 PR-4: the journal scenario's second run opens its seeded synthetic database (journal-observation.mjs).
 let journalTarget;
 // ET-017 PR-5: the plugin scenario's fake Steam and game folders (plugin-fixture.mjs) and the snapshot run A compares against.
@@ -82,7 +84,7 @@ const diagnosticEvents = async directory => (await readFile(path.join(directory,
 // never reports it unavailable, and closes it in its storage shutdown step before its single stopped report.
 const verifyHistoryEvents = (service, created) => {
   const opened = service.filter(row => row.event === 'HISTORY_STORAGE_OPENED').map(row => row.facts);
-  assert.deepEqual(opened, created.map(value => ({schemaVersion: 2, created: value, migratedFrom: null})));
+  assert.deepEqual(opened, created.map(value => ({schemaVersion: 3, created: value, migratedFrom: null})));
   assert.ok(!service.some(row => row.event === 'HISTORY_STORAGE_UNAVAILABLE'), 'History storage was unavailable');
   const closed = service.flatMap((row, index) => row.event === 'HISTORY_STORAGE_CLOSED' ? [index] : []);
   const stopped = service.findLastIndex(row => row.event === 'SERVICE_REPORT' && row.detail?.type === 'stopped');
@@ -100,7 +102,7 @@ const verifyHistoryFile = async () => {
   const facts = {magic: header.subarray(0, 15).toString('latin1'), applicationId: header.readInt32BE(68), userVersion: header.readUInt32BE(60),
     sidecars: ['-wal', '-shm', '-journal'].filter(suffix => existsSync(database + suffix)),
     backups: existsSync(path.join(config.localappdata, 'ETS2Telemetry', 'backups'))};
-  assert.deepEqual(facts, {magic: 'SQLite format 3', applicationId: 1163154226, userVersion: 2, sidecars: [], backups: false});
+  assert.deepEqual(facts, {magic: 'SQLite format 3', applicationId: 1163154226, userVersion: 3, sidecars: [], backups: false});
   return facts;
 };
 // Every launch of one run shares the isolated profile, TEMP, APPDATA and LOCALAPPDATA; only the diagnostic directory may differ.
@@ -112,6 +114,7 @@ const environment = diagnostics => ({...(config.mode === 'installed' ? installed
   ...(telemetrySource ? {ETS2TELEMETRY_LIVE_SMOKE: '1', ETS2TELEMETRY_SOURCE_KIND: 'synthetic', ETS2TELEMETRY_SOURCE_PIPE: telemetrySource.endpoint} : {}),
   ...(telemetrySourceV1 ? {ETS2TELEMETRY_SOURCE_PIPE_V1: telemetrySourceV1.endpoint} : {}),
   ...(recordingSource ? {ETS2TELEMETRY_SOURCE_PIPE_V1: recordingSource.endpoint, ETS2TELEMETRY_RECORDING: RECORDING_TARGET} : {}),
+  ...(hardModeSource ? {ETS2TELEMETRY_SOURCE_PIPE_V1: hardModeSource.endpoint, ETS2TELEMETRY_RECORDING: HARD_MODE_TARGET, ETS2TELEMETRY_LIVE_SMOKE: '1', ETS2TELEMETRY_HARD_MODE_FIXTURE: '1'} : {}),
   ...(journalTarget ? {ETS2TELEMETRY_RECORDING: journalTarget} : {}),
   ...(soakSource ? {ETS2TELEMETRY_SOURCE_PIPE_V1: soakSource.endpoint, ETS2TELEMETRY_RECORDING: SOAK_TARGET} : {}),
   // ET-017 PR-5: the test-root mode, confined to the fake root inside this run's isolated output folder.
@@ -128,6 +131,7 @@ try {
   assert.equal(result.playwright, '1.64.0');
   if (config.scenario === 'telemetry' || config.scenario === 'overlay' || config.scenario === 'lifecycle' || config.scenario === 'recording' || config.scenario === 'soak') telemetrySource = await startLiveSmokeSource(config.checkout);
   if (config.scenario === 'telemetry') telemetrySourceV1 = await startLiveSmokeSourceV1(config.checkout);
+  if (config.scenario === 'hard-mode') hardModeSource = await startHardModeSource(config);
   if (config.scenario === 'recording') recordingSource = await startRecordingSource(config);
   if (config.scenario === 'soak') soakSource = await startSoakSource(config);
   // ET-011b: the lifecycle journey starts from a deliberately invalid settings file in the isolated LOCALAPPDATA.
@@ -183,7 +187,7 @@ try {
   assert.deepEqual(result.actual, {require: 'undefined', process: 'undefined', keys: ['getStatus', 'selectSource', 'subscribeLive', 'getAppState', 'subscribeAppState', 'exitApplication', 'setLanguage', 'setUnitProfile', 'setOverlayLayout', 'setOverlaySections',
     'beginOverlayEdit', 'setOverlayEditScale', 'resetOverlayEditPlacement', 'finishOverlayEdit',
     'listJournalTrips', 'getJournalTrip', 'listJournalEvents', 'listJournalIntervals', 'listJournalSamples', 'exportJournalTrip',
-    'retryPluginSetup', 'choosePluginFolder', 'setPluginGameExcluded', 'showPluginFile', 'openPluginFolder', 'exportDiagnostics', 'uninstallApplication'],
+    'retryPluginSetup', 'choosePluginFolder', 'setPluginGameExcluded', 'showPluginFile', 'openPluginFolder', 'exportDiagnostics', 'uninstallApplication', 'getHardModeStatus', 'refreshHardMode'],
     frozen: true, status: result.expected.status});
   if (config.scenario === 'scaffold') {
     // ET-016 PR-3: a journal read crosses the preload, main and the telemetry service to the new, empty history database
@@ -198,7 +202,7 @@ try {
       const refused = await globalThis.desktop.getJournalTrip('C:\\Users\\owner\\telemetry.sqlite').then(() => 'resolved', error => String(error?.message));
       return {answer, refused};
     });
-    assert.deepEqual(result.journal, {answer: {ok: true, value: {database: {purpose: 'history', schemaVersion: 2}, trips: [], nextCursor: null}},
+    assert.deepEqual(result.journal, {answer: {ok: true, value: {database: {purpose: 'history', schemaVersion: 3}, trips: [], nextCursor: null}},
       refused: 'Invalid journal request'});
     // ET-017 PR-5 review: plugin setup is disabled here; the card says so and disables every control that would change nothing.
     result.pluginCard = await verifyDisabledPluginCard(window);
@@ -426,6 +430,7 @@ try {
     result.telemetry.overlayV1.stopped = await waitForOverlayV1(overlay, SYNTHETIC_V1_OVERLAY_STOPPED);
     result.telemetry.v1DisconnectedHidden = true;
   }
+  if (config.scenario === 'hard-mode') await runHardModeSmoke({application, dashboard: window, source: hardModeSource, config, record: result.hardMode = {}});
   if (config.scenario === 'lifecycle') {
     result.lifecycle = {};
     await runLifecycleSmoke({application, launcher, dashboard: window, overlay, source: telemetrySource, config,
@@ -527,6 +532,7 @@ try {
   if (config.scenario !== 'lifecycle' && config.scenario !== 'recording' && config.scenario !== 'journal' && config.scenario !== 'plugin' && config.scenario !== 'refusal' && config.scenario !== 'soak') await window.screenshot({path: path.join(config.output, 'ready.png')});
 } catch (error) {result.failure = failure(error); phase('failed');}
 finally {
+  try {await hardModeSource?.stop();} catch (error) {result.sourceV1CloseFailure = failure(error);}
   try {await telemetrySource?.stop();} catch (error) {result.sourceCloseFailure = failure(error);}
   try {await telemetrySourceV1?.stop();} catch (error) {result.sourceV1CloseFailure = failure(error);}
   if (application) {
@@ -654,7 +660,8 @@ finally {
       recording.restartLauncherExit = result.launcherExit;
       await verifyRecordingRun({config, record: recording, recording: recordingSource, mainEvents: result.mainEvents, serviceEvents: result.serviceEvents,
         restartMainEvents: recording.restartMainEvents, restartServiceEvents: recording.restartServiceEvents, simulatorWaitMs: result.failure ? 1000 : 5000});
-    } else if (config.scenario === 'soak') await verifySoakRun({config, record: result.soak ??= {}, mainEvents: result.mainEvents, serviceEvents: result.serviceEvents});
+    } else if (config.scenario === 'hard-mode') await verifyHardModeRun({config, record: result.hardMode});
+    else if (config.scenario === 'soak') await verifySoakRun({config, record: result.soak ??= {}, mainEvents: result.mainEvents, serviceEvents: result.serviceEvents});
     else if (config.scenario !== 'refusal') result.history.file = await verifyHistoryFile();
   } catch (error) {result.postconditionFailure = failure(error);}
   // A failed run still ends the simulator it started; the Job owns it otherwise.

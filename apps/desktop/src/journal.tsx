@@ -1,3 +1,4 @@
+import {HardModeBadge, HardModeTrip} from './hard-mode/card';
 import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import type {
   AppLanguage, JournalCallResult, JournalCompleteness, JournalDatabase, JournalGame, JournalOutcome, JournalTripDetail, JournalTripPage, JournalTripsQuery, RecordingHealth, UnitProfiles
@@ -124,7 +125,7 @@ function TripList({filters, options, recording, onDatabase, onOpen}: {
         <TableCell data-testid="journal-row-route">{row.route}</TableCell><TableCell data-testid="journal-row-outcome">{row.outcome}</TableCell>
         <TableCell>{completenessBadge(row.completeness, 'journal-row-completeness')}</TableCell>
         <TableCell data-testid="journal-row-observed">{row.observedDistance}</TableCell><TableCell data-testid="journal-row-fuel">{row.fuelUsed}</TableCell>
-        <TableCell data-testid="journal-row-cargo">{row.cargo}</TableCell>
+        <TableCell data-testid="journal-row-cargo">{row.cargo}{row.isHardMode ? <> <HardModeBadge short language={options.language} /></> : null}</TableCell>
         <TableCell><Button size="sm" variant="outline" data-testid="journal-row-open" onClick={() => onOpen({tripUuid: row.tripUuid, game: row.gameId})}>{JOURNAL_STRINGS.open}</Button></TableCell>
       </TableRow>)}
     </TableBody></Table> : null}
@@ -142,6 +143,7 @@ function Summary({trip, options, onDatabase}: {trip: Selected; options: JournalT
     <Button size="sm" variant="outline" disabled={paged.loaded.state === 'loading'} onClick={paged.refresh} data-testid="journal-summary-refresh">{JOURNAL_STRINGS.refresh}</Button>
     <Status loaded={paged.loaded} testId="journal-summary" />
     {text ? <>
+      {paged.loaded.state === 'value' ? <HardModeTrip qualified={paged.loaded.value.trip.isHardMode} details={paged.loaded.value.trip.hardModeDetails} language={options.language} /> : null}
       <div className="flex flex-wrap items-center gap-2"><h3 className="font-medium" data-testid="journal-detail-title">{text.title}</h3>
         <span data-testid="journal-detail-outcome">{text.outcome}</span>{completenessBadge(text.completeness, 'journal-detail-completeness')}</div>
       {text.sections.map(section => <section key={section.id} className="space-y-1" data-testid={`journal-section-${section.id}`}>

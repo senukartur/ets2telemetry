@@ -1,3 +1,4 @@
+import {unknownHardMode} from '../../packages/telemetry-core/src/hard-mode';
 import {readFileSync} from 'node:fs';
 import path from 'node:path';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
@@ -465,7 +466,7 @@ describe('ET-016 journal reads at the worker boundary', () => {
   const TRIP = '7a000000-0000-4000-8000-000000000001';
   const NO = {available: false, reason: 'not-observed'} as const;
   const DATABASE = {purpose: 'synthetic', schemaVersion: 2};
-  const LIST_ITEM = {tripUuid: TRIP, game: 'ets2', gameMode: {mode: 'unknown', method: 'none', confidence: 'none'}, gameModeAmbiguous: false, outcome: 'open', closeReason: null,
+  const LIST_ITEM = {isHardMode: false, hardModeDetails: null, tripUuid: TRIP, game: 'ets2', gameMode: {mode: 'unknown', method: 'none', confidence: 'none'}, gameModeAmbiguous: false, outcome: 'open', closeReason: null,
     recordingCompleteness: 'unknown', startedUtcMs: 1_791_676_800_000, endedUtcMs: null, observedDistanceM: {available: true, value: 0}, fuelUsedL: NO,
     job: {source: 'event', sourceCity: {available: true, value: ''}, sourceCompany: NO, destinationCity: NO, destinationCompany: NO, cargo: NO,
       plannedDistance: {available: true, value: 0, unit: 'm'}, expectedIncome: {available: true, value: {raw: '18446744073709551615', sdkType: 'u64', currency: {status: 'unknown'}}}}};
@@ -668,4 +669,14 @@ describe('StorageClient openAttachedTrip (ET-016 PR-7, J9)', () => {
       await expect(attach).resolves.toEqual(error('WORKER_FAILED'));
       expect(f.client.state).toBe('failed');
     });
+});
+
+it('strictly validates private Hard Mode freshness verdicts on observer and event requests', () => {
+  const observation = {assessment: unknownHardMode(1), binding: null, pluginSessionId: null, sourceMonotonicNs: null};
+  const request = (command: unknown) => ({type: 'storage.request', id: 1, command});
+  for (const fresh of [true, false]) expect(parseRequest(request({name: 'observeHardMode', game: 'ets2', observation, fresh})).ok).toBe(true);
+  for (const fresh of [undefined, null, 1, 'true', {}]) {
+    expect(parseRequest(request({name: 'observeHardMode', game: 'ets2', observation, fresh})).ok).toBe(false);
+    if (fresh !== undefined) expect(parseRequest(request({name: 'commitEvent', input: {message: {}, hardMode: observation, hardModeFresh: fresh}})).ok).toBe(false);
+  }
 });

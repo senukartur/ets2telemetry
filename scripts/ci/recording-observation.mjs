@@ -225,6 +225,7 @@ export async function runRecordingSmoke({application, launcher, dashboard, recor
   await startRecordingTextLog(dashboard);
   // Connection 1 is admitted only now, with both windows up and current data shown, so the simulator's 1 s ACK waits
   // (quiesce) do not overlap the application's own startup.
+  record.hardModeAdmissionUtcMs = Date.now();
   recording.admit();
 
   // 1. Commits become active: connection 1 commits events 1-5 (ACKs 1-4 reach the simulator, the ACK of 5 is lost) and
@@ -452,7 +453,7 @@ const sha256Of = async file => createHash('sha256').update(await readFile(file))
  */
 async function runRecordingJournal({application, dashboard, recording, config, record}) {
   const session = seededId(recording.seed, 'plugin-session'), trip = journeyTripUuid(session);
-  const journal = record.journal = {tripUuid: trip};
+  const journal = record.journal = {tripUuid: trip, readStartedUtcMs: Date.now()};
   await clickTestId(dashboard, 'tab-journal');
   const list = await untilPage(dashboard, listState, {page: 1, count: 1, first: trip});
   journal.list = {rows: list.rows, banner: list.banner, error: list.error, next: list.next, previous: list.previous};
@@ -519,10 +520,26 @@ const DELIVERED_RECORD = {type: 'job.delivered', revenue: unknownMoney('12000', 
   cargoDamage: {available: true, value: 0.03125, unit: 'fraction'}, distance: {available: true, value: 152500, unit: 'm'}, deliveryDuration: {available: true, value: '300', unit: 'min'},
   autoParkUsed: {available: true, value: false}, autoLoadUsed: {available: true, value: false}};
 /** The trip section of the export: the hand-written trip row with its stable identifiers and the close carrier, job.delivered (8). */
-const exportTripSection = (session, trip) => ({tripUuid: trip, pluginSessionId: session, game: 'ets2', gameMode: {mode: 'unknown', method: 'none', confidence: 'none'},
+const exportTripSection = (session, trip, audit) => ({is_hard_mode: false, hard_mode_details: audit, tripUuid: trip, pluginSessionId: session, game: 'ets2', gameMode: {mode: 'unknown', method: 'none', confidence: 'none'},
   gameModeAmbiguous: false, outcome: 'delivered', closeReason: 'outcome', recordingCompleteness: 'partial', startedUtcMs: labelAt(30), endedUtcMs: labelAt(600),
   observedDistanceM: {available: true, value: 0}, fuelUsedL: {available: false, reason: 'not-observed'}, openedBy: 'event', openedEventSeq: '3', outcomeEventSeq: '8',
   closedBy: {pluginSessionId: session, eventSeq: '8'}});
+/** Independent oracle: no Hard Mode fixture is enabled, so the normal reader refuses this synthetic source before
+ * process/filesystem access. Opening has no eligible proof and is historical; ordered monitor failures publish all
+ * twelve source-unproven rules. Frozen closing proof preserves that publication as latest. Only the UTC labels vary:
+ * independently bound opening/latest by admission and journal read; latest is not a closing-capture timestamp. */
+function recordingHardModeAudit(document, record) {
+  const opening = document.trip.hard_mode_details?.opening?.observedUtcMs;
+  const latest = document.trip.hard_mode_details?.latest?.observedUtcMs;
+  assert.ok(Number.isSafeInteger(opening) && Number.isSafeInteger(latest), 'Hard Mode observation clocks must be safe UTC milliseconds');
+  assert.ok(record.hardModeAdmissionUtcMs <= opening && opening <= latest && latest <= record.journal.readStartedUtcMs,
+    'Hard Mode observation clocks must be ordered within source admission and the journal read');
+  const unknown = (at, reason) => ({observedUtcMs: at, state: 'unknown', source: 'unknown', rules:
+    ['fuel', 'air', 'police', 'fatigue', 'limiter', 'truck', 'trailer', 'parking', 'rain', 'events', 'braking', 'traffic']
+      .map(id => ({id, state: 'unknown', values: id === 'parking' ? [null, null] : [null], reason}))});
+  return {version: 1, binding: null, opening: unknown(opening, 'historical'), latest: unknown(latest, 'source-unproven'),
+    firstLoss: {atUtcMs: opening, reason: 'historical', rule: null, values: null}, manualDelivery: true};
+}
 /** The window's events as [eventSeq, type, attribution kind]: only job.delivered (8) is attributed, to the trip itself. */
 const EXPORT_EVENTS = [['3', 'job.configured', null], ['4', 'simulation.started', null], ['5', 'job.configured', null], ['6', 'simulation.paused', null],
   ['7', 'simulation.started', null], ['8', 'job.delivered', 'trip']];
@@ -541,14 +558,14 @@ async function reconcileExport({config, record, raw, session, restartMainEvents}
   const document = JSON.parse(await readFile(path.join(config.output, 'recording-export', 'trip.json'), 'utf8'));
   const problemsOf = await exportValidator(config);
   journal.exportProblems = problemsOf(document);
-  assert.deepEqual(journal.exportProblems, [], 'The export is not a valid format version 1 document');
+  assert.deepEqual(journal.exportProblems, [], 'The export is not a valid format version 2 document');
   journal.exportValidated = true;
 
   // Hand-written sections.
   assert.deepEqual({format: document.format, formatVersion: document.formatVersion, application: document.header.application, purpose: document.header.database.purpose,
     schemaVersion: document.header.database.schemaVersion, sessionOrigin: document.header.sessionOrigin},
-  {format: 'ets2telemetry.trip-export', formatVersion: 1, application: {name: 'ETS2Telemetry', version: '0.1.0'}, purpose: 'synthetic', schemaVersion: 2, sessionOrigin: 'synthetic'});
-  assert.deepEqual(document.trip, exportTripSection(session, trip), 'The exported trip differs from the hand-written row');
+  {format: 'ets2telemetry.trip-export', formatVersion: 2, application: {name: 'ETS2Telemetry', version: '0.1.0'}, purpose: 'synthetic', schemaVersion: 3, sessionOrigin: 'synthetic'});
+  assert.deepEqual(document.trip, exportTripSection(session, trip, recordingHardModeAudit(document, record)), 'The exported trip differs from the hand-written row');
   assert.deepEqual(document.window, {known: true, pluginSessionId: session, fromEventSeq: '3', throughEventSeq: '8', end: 'close-event'});
   assert.deepEqual({source: document.job.source, eventSeq: document.job.eventSeq, checkpointNextEventSeq: document.job.checkpointNextEventSeq, values: document.job.values},
     {source: 'event', eventSeq: '3', checkpointNextEventSeq: null, values: JOB_VALUES}, 'The exported job differs from eventSeq 3');
@@ -725,7 +742,7 @@ export async function verifyRecordingRun({config, record, recording, mainEvents,
     sidecars: ['-wal', '-shm', '-journal'].filter(suffix => existsSync(database + suffix)), syntheticBackups: existsSync(path.join(root, 'synthetic', 'backups')),
     historyDatabase: existsSync(path.join(root, 'data', 'telemetry.sqlite')), dataDirectory: existsSync(path.join(root, 'data'))};
   // Whether the empty `data` directory exists is recorded only; the history database file must not.
-  assert.deepEqual({...files, dataDirectory: null}, {magic: 'SQLite format 3', applicationId: 1163154226, userVersion: 2, sidecars: [], syntheticBackups: false,
+  assert.deepEqual({...files, dataDirectory: null}, {magic: 'SQLite format 3', applicationId: 1163154226, userVersion: 3, sidecars: [], syntheticBackups: false,
     historyDatabase: false, dataDirectory: null});
   record.historyDatabaseAbsent = true; record.sidecarsAbsent = true;
 
@@ -737,7 +754,7 @@ export async function verifyRecordingRun({config, record, recording, mainEvents,
       simulatorSession: s.session === session}))};
   assert.deepEqual(raw.integrity, ['ok']); assert.equal(raw.foreignKeyViolations, 0);
   assert.deepEqual({purpose: raw.purpose, acceptedOrigin: raw.acceptedOrigin, applicationId: raw.applicationId, userVersion: raw.userVersion},
-    {purpose: 'synthetic', acceptedOrigin: 'synthetic', applicationId: 1163154226, userVersion: 2});
+    {purpose: 'synthetic', acceptedOrigin: 'synthetic', applicationId: 1163154226, userVersion: 3});
   assert.deepEqual(record.database.sessions, [{game: 'ets2', origin: 'synthetic', committedThrough: '13', endReason: null, simulatorSession: true}]);
   assert.ok(raw.events.every(event => event.session === session) && raw.trips.every(trip => trip.session === session && trip.game === 'ets2'));
   assert.ok(raw.sampleRows.every(sample => sample.session === session), 'A sample belongs to another plugin session');

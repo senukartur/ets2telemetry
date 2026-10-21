@@ -1,3 +1,4 @@
+import type {HardModeObservation} from '../../../contracts/src/hard-mode';
 // Write commands. Each command is one BEGIN IMMEDIATE transaction on the verified writer connection; a commit result
 // exists only after COMMIT returned. Events and gaps are keyed UNIQUE(plugin session, eventSeq range): a redelivery
 // is a no-op whose effects are never applied again (protocol v1 §10, docs/storage.md "Write commands").
@@ -14,6 +15,8 @@ import {
 } from '../codec';
 import {fail} from '../errors';
 import type {StorageConnection} from './connection';
+import {unknownHardMode} from '../../../telemetry-core/src/hard-mode';
+import {applyEventHardMode, checkHardModeObservation, updateOpenHardMode} from './hard-mode';
 
 const cache = new WeakMap<Database.Database, Map<string, Database.Statement>>();
 /** Prepared statements are cached per connection; SQL text is always a constant of this module. */
@@ -241,7 +244,8 @@ function applyEffects(c: EffectContext, effects: unknown): void {
         }
         if (set.truckConfiguration !== undefined) statement(c.db, 'UPDATE trips SET truck_configuration_ref = ? WHERE id = ?').run(configurationRef(c, 'truck_configurations', set.truckConfiguration), trip.id);
         addTrailers(c, trip.id, set.trailerConfigurations);
-        statement(c.db, 'UPDATE trips SET updated_utc_ms = ? WHERE id = ?').run(c.now, trip.id);
+        // Mutation metadata stays nondecreasing through UTC corrections; event/observation labels stay raw.
+        statement(c.db, 'UPDATE trips SET updated_utc_ms = max(updated_utc_ms, ?) WHERE id = ?').run(c.now, trip.id);
         break;
       }
       case 'trip.close': {
@@ -261,7 +265,7 @@ function applyEffects(c: EffectContext, effects: unknown): void {
         // The close carrier is the committed item itself, in the current session: a restart close made by a later
         // plugin session records that session, not the trip's own.
         if (c.carrierEventSeq === undefined) fail('INVALID_INPUT');
-        statement(c.db, `UPDATE trips SET outcome = ?, close_reason = ?, outcome_event_ref = ?, recording_completeness = ?, ended_utc_ms = ?, updated_utc_ms = ?,
+        statement(c.db, `UPDATE trips SET outcome = ?, close_reason = ?, outcome_event_ref = ?, recording_completeness = ?, ended_utc_ms = ?, updated_utc_ms = max(updated_utc_ms, ?),
           closed_by_session_ref = ?, closed_by_event_seq = ? WHERE id = ?`)
           .run(outcome, enumValue(effect.closeReason, CLOSE_REASONS), outcomeEvent, enumValue(effect.recordingCompleteness, COMPLETENESS), utcMs(effect.endedUtcMs), c.now,
             c.session.id, c.carrierEventSeq, trip.id);
@@ -286,9 +290,12 @@ function applyEffects(c: EffectContext, effects: unknown): void {
  * and advances coverage; an existing one is `duplicate` (same canonical payload) or `conflict` (the stored row is kept),
  * and neither writes anything.
  */
-export function commitEvent(conn: StorageConnection, input: {message: unknown; effects?: TripEffect[]}, options: CommitOptions = {}): CommitResult {
+export function commitEvent(conn: StorageConnection, input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation; hardModeFresh?: boolean; hardModeLoss?: HardModeObservation}, options: CommitOptions = {}): CommitResult {
   const m = serverMessage(input?.message, 'event');
   if (m.kind !== 'event') fail('INVALID_INPUT');
+  checkHardModeObservation(input.hardMode); checkHardModeObservation(input.hardModeLoss);
+  if (input.hardModeFresh !== undefined && typeof input.hardModeFresh !== 'boolean') fail('INVALID_INPUT');
+  if (input.hardModeLoss?.assessment.state === 'pass') fail('INVALID_INPUT');
   const {eventSeq, occurred, record, redelivered} = m.data, seqKey = u64Key(eventSeq);
   const payload = canonicalJson({occurred, record});
   return transact(conn, db => {
@@ -311,7 +318,10 @@ export function commitEvent(conn: StorageConnection, input: {message: unknown; e
     if (result.changes !== 1) fail('CONSTRAINT_VIOLATION');
     const eventRef = BigInt(result.lastInsertRowid);
     normalize(db, session.id, eventRef, record);
+    if (input.hardModeLoss) updateOpenHardMode(db, session.game, input.hardModeLoss, now, false, 'frozen');
+    if (input.hardMode) updateOpenHardMode(db, session.game, input.hardMode, now, input.hardModeFresh === true, 'frozen');
     applyEffects({db, session, game: session.game, now, eventRef, eventType: record.type, carrierEventSeq: seqKey}, input.effects);
+    applyEventHardMode(db, m, input.effects, input.hardMode, now, input.hardModeLoss, input.hardModeFresh === true);
     const through = advanceCoverage(db, session, BigInt(eventSeq), BigInt(eventSeq));
     options.testHooks?.beforeCommit?.();
     return {status: 'committed', committedThroughEventSeq: through};
@@ -326,9 +336,12 @@ const CAUSES: [keyof GapData['causes'], string][] = [['offline', 'cause_offline'
  * extends beyond coverage is stored with its own cause counts, even where it overlaps earlier gap rows, and events
  * already committed inside it keep their rows. Every result carries `previouslyCoveredThrough` (see CommitResult).
  */
-export function commitGap(conn: StorageConnection, input: {message: unknown; effects?: TripEffect[]}, options: CommitOptions = {}): CommitResult {
+export function commitGap(conn: StorageConnection, input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation; hardModeFresh?: boolean; hardModeLoss?: HardModeObservation}, options: CommitOptions = {}): CommitResult {
   const m = serverMessage(input?.message, 'gap');
   if (m.kind !== 'gap') fail('INVALID_INPUT');
+  checkHardModeObservation(input.hardMode); checkHardModeObservation(input.hardModeLoss);
+  if (input.hardModeFresh !== undefined && typeof input.hardModeFresh !== 'boolean') fail('INVALID_INPUT');
+  if (input.hardModeLoss?.assessment.state === 'pass') fail('INVALID_INPUT');
   const d = m.data, firstKey = u64Key(d.firstEventSeq), lastKey = u64Key(d.lastEventSeq);
   const payload = canonicalJson({causes: d.causes, firstLostMonotonicNs: d.firstLostMonotonicNs, lastLostMonotonicNs: d.lastLostMonotonicNs});
   return transact(conn, db => {
@@ -349,6 +362,8 @@ export function commitGap(conn: StorageConnection, input: {message: unknown; eff
       return {status: 'covered', committedThroughEventSeq: previouslyCoveredThrough, previouslyCoveredThrough};
     }
     const now = conn.now(), clock = clockRef(db, session.id, 'source-monotonic', m.capture.clockId);
+    if (input.hardModeLoss) updateOpenHardMode(db, session.game, input.hardModeLoss, now, false, 'frozen');
+    updateOpenHardMode(db, session.game, {assessment: unknownHardMode(now, 'interrupted'), binding: null, pluginSessionId: null, sourceMonotonicNs: null}, now, false, 'frozen');
     const [firstLost, firstLostState] = availabilityColumns(d.firstLostMonotonicNs, u64Key), [lastLost, lastLostState] = availabilityColumns(d.lastLostMonotonicNs, u64Key);
     statement(db, insert('event_gaps', ['plugin_session_ref', 'first_event_seq', 'last_event_seq', ...CAUSES.map(([, c]) => c), 'first_lost_monotonic_ns', 'first_lost_monotonic_ns_state',
       'last_lost_monotonic_ns', 'last_lost_monotonic_ns_state', 'source_clock_ref', 'redelivered', 'committed_utc_ms']))
@@ -561,4 +576,10 @@ export function recordCompleteness(conn: StorageConnection, pluginSessionId: str
   if (typeof options !== 'object' || options === null || Array.isArray(options) || (options.ifAbsent !== undefined && typeof options.ifAbsent !== 'boolean')) fail('INVALID_INPUT');
   const ifAbsent = options.ifAbsent === true;
   transact(conn, db => { const session = sessionByUuid(db, pluginSessionId); addInterval({db, session, game: session.game, now: conn.now()}, interval, ifAbsent); });
+}
+
+export function observeHardMode(conn: StorageConnection, game: 'ets2' | 'ats', observation: HardModeObservation, fresh = false): void {
+  if (typeof fresh !== 'boolean') fail('INVALID_INPUT');
+  if (!['ets2', 'ats'].includes(game)) fail('INVALID_INPUT');
+  transact(conn, db => updateOpenHardMode(db, game, observation, conn.now(), fresh));
 }

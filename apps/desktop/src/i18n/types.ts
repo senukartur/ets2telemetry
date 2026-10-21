@@ -70,6 +70,7 @@ export type I18nKey =
   | 'fmt.in' | 'fmt.dur' | 'fmt.min' | 'fmt.day' | 'fmt.date'
   | 'u.kmh' | 'u.mph' | 'u.l' | 'u.gal' | 'u.km' | 'u.mi' | 'u.rpm' | 'u.t' | 'u.lb' | 'u.l100' | 'u.mpg'
   | 'ov.edit' | 'ov.drag' | 'ov.hidden' | 'ov.hiddenT' | 'ov.noSignal' | 'ov.paused'
+  | 'hm.status.pass' | 'hm.status.fail' | 'hm.status.unknown' | 'hm.status.lost' | 'hm.state.pass' | 'hm.state.fail' | 'hm.state.unknown' | 'hm.configuredCount' | 'hm.reading' | 'hm.checking' | 'hm.progress' | 'hm.unavailable' | 'hm.source.local' | 'hm.source.cloud' | 'hm.source.fixture' | 'hm.source.unknown' | 'hm.age' | 'hm.detected' | 'hm.required' | 'hm.reason' | 'hm.value.unknown' | 'hm.value.invalid' | 'hm.value.skilled' | 'hm.value.other' | 'hm.required.parking' | 'hm.notice' | 'hm.distinction' | 'hm.evidence' | 'hm.loss' | 'hm.audit' | 'hm.firstLoss' | 'hm.manual.pending' | 'hm.manual.yes' | 'hm.manual.no' | 'hm.snapshots' | 'hm.notEvaluated' | 'hm.close' | 'hm.reason.compliant' | 'hm.reason.outside-limit' | 'hm.reason.missing' | 'hm.reason.malformed' | 'hm.reason.conflicting' | 'hm.reason.source-unproven' | 'hm.reason.interrupted' | 'hm.reason.historical' | 'hm.reason.source-changed' | 'hm.reason.parking-unproven'
   | 'lang.title' | 'lang.en' | 'lang.ru' | 'lang.saveFailed';
 
 export type TranslationDictionary = Readonly<Record<I18nKey, string>>;

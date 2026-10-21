@@ -2525,3 +2525,55 @@ it('wires the orchestrator to plugin setup: suspend, resume (after a removal rac
   expect(appUninstallFake.ports.setup.targetIdFor('ets2', 'C:\\Games\\ETS2')).toBe('ets2:steam:0');
   expect(pluginSetup.suspend).toHaveBeenCalledOnce(); expect(pluginSetup.resume).toHaveBeenCalledOnce();
 });
+
+it('limits Hard Mode status/refresh to the trusted dashboard with no arguments, validates service status and expires it', async () => {
+  await ready(); let monotonic = 0n; vi.spyOn(process.hrtime, 'bigint').mockImplementation(() => monotonic);
+  const {evaluateHardMode, parseHardModeConfig} = await import('../../packages/telemetry-core/src/hard-mode');
+  const {HARD_MODE_CONFIG} = await import('../shared/hard-mode');
+  const status = {assessment: evaluateHardMode(parseHardModeConfig(HARD_MODE_CONFIG), Date.now(), 'fixture'), trip: null};
+  child.emit('message', {type: 'hard-mode', update: 'assessment', assessment: status.assessment, remainingNs: '3000000000'});
+  expect(handlers.get('hard-mode:status')!(trusted())).toEqual(status);
+  handlers.get('hard-mode:refresh')!(trusted()); expect(child.postMessage).toHaveBeenCalledWith({type: 'hard-mode-refresh'});
+  for (const name of ['hard-mode:status', 'hard-mode:refresh']) {
+    const handler = handlers.get(name)!;
+    expect(() => handler({sender: overlayContents, senderFrame: overlayContents.mainFrame})).toThrow('Untrusted');
+    expect(() => handler({sender: contents, senderFrame: {}})).toThrow('Untrusted');
+    expect(() => handler(trusted(), {path: 'private', state: 'pass'})).toThrow('Untrusted');
+  }
+  const utc = Date.now(); vi.setSystemTime(utc + 120_000);
+  expect(handlers.get('hard-mode:status')!(trusted())).toEqual(status);
+  vi.setSystemTime(utc - 120_000); monotonic = 3_001_000_000n;
+  await vi.advanceTimersByTimeAsync(3001);
+  expect(handlers.get('hard-mode:status')!(trusted())).toMatchObject({assessment: {state: 'unknown'}});
+  child.emit('message', {type: 'hard-mode', update: 'assessment', assessment: {...status.assessment, filename: 'private'}, remainingNs: '3000000000'});
+  expect(handlers.get('hard-mode:status')!(trusted())).toMatchObject({assessment: {state: 'unknown'}});
+});
+
+it('retires Hard Mode receipt proof on service exit/restart and rejects old-child publications', async () => {
+  await ready(); const {evaluateHardMode, parseHardModeConfig} = await import('../../packages/telemetry-core/src/hard-mode');
+  const {HARD_MODE_CONFIG} = await import('../shared/hard-mode');
+  const status = {assessment: evaluateHardMode(parseHardModeConfig(HARD_MODE_CONFIG), Date.now(), 'fixture'), trip: null};
+  child.emit('message', {type: 'hard-mode', update: 'assessment', assessment: status.assessment, remainingNs: '3000000000'}); expect(handlers.get('hard-mode:status')!(trusted())).toEqual(status);
+  child.emit('exit', 1); expect(handlers.get('hard-mode:status')!(trusted())).toMatchObject({assessment: {state: 'unknown'}, trip: null});
+  await vi.advanceTimersByTimeAsync(250); const replacement = children[1];
+  child.emit('message', {type: 'hard-mode', update: 'assessment', assessment: status.assessment, remainingNs: '3000000000'}); replacement.emit('message', {type: 'ready'}); await settle();
+  expect(handlers.get('hard-mode:status')!(trusted())).toMatchObject({assessment: {state: 'unknown'}, trip: null});
+  replacement.emit('message', {type: 'hard-mode', update: 'assessment', assessment: status.assessment, remainingNs: '3000000000'}); expect(handlers.get('hard-mode:status')!(trusted())).toEqual(status);
+});
+
+it('does not renew aged Hard Mode publication lifetime on trip-only updates', async () => {
+  await ready(); let mono = 9_000_000_000n; vi.spyOn(process.hrtime, 'bigint').mockImplementation(() => mono);
+  const {evaluateHardMode, parseHardModeConfig, advanceHardMode} = await import('../../packages/telemetry-core/src/hard-mode');
+  const {HARD_MODE_CONFIG} = await import('../shared/hard-mode');
+  const assessment = evaluateHardMode(parseHardModeConfig(HARD_MODE_CONFIG), Date.now(), 'fixture'), trip = advanceHardMode(null, assessment);
+  child.emit('message', {type: 'hard-mode', update: 'assessment', assessment, remainingNs: '100000000'});
+  mono += 50_000_000n; child.emit('message', {type: 'hard-mode', update: 'trip', trip});
+  expect(handlers.get('hard-mode:status')!(trusted())).toEqual({assessment, trip});
+  mono += 50_000_000n; expect(handlers.get('hard-mode:status')!(trusted())).toMatchObject({assessment: {state: 'unknown'}, trip});
+  child.emit('message', {type: 'hard-mode', update: 'trip', trip});
+  expect(handlers.get('hard-mode:status')!(trusted())).toMatchObject({assessment: {state: 'unknown'}, trip});
+  child.emit('message', {type: 'hard-mode', update: 'assessment', assessment});
+  expect(handlers.get('hard-mode:status')!(trusted())).toMatchObject({assessment: {state: 'unknown'}, trip});
+  child.emit('message', {type: 'hard-mode', update: 'assessment', assessment, remainingNs: '3000000000'});
+  expect(handlers.get('hard-mode:status')!(trusted())).toEqual({assessment, trip});
+});

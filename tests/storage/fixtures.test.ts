@@ -15,6 +15,7 @@ afterAll(() => { for (const [hash, name] of manifest) expect(sha256(path.join(ST
 const schemaOf = (file: string) => readOnly(file, db => db.prepare('SELECT type, name, tbl_name, sql FROM sqlite_schema ORDER BY type, name').all());
 /** The production list up to version 1: opens a version 1 copy without migrating it (ET-016 made version 2 current). */
 const UP_TO_V1 = MIGRATIONS.slice(0, 1);
+const UP_TO_V2 = MIGRATIONS.slice(0, 2);
 const REPRESENTATIVE_V2 = 'schema-v2-representative.sqlite';
 
 /**
@@ -38,7 +39,7 @@ function expectRepresentativeV2(storage: Storage, file: string) {
   // the fixture's fuel used, as in its SQL and in `tripColumns` below: 42.5 L, not observed, 0 L and not supported.
   const fuelUsedL = [{available: true, value: 42.5}, {available: false, reason: 'not-observed'}, {available: true, value: 0}, {available: false, reason: 'not-supported'}];
   // ET-016 PR-7: and where each trip's job and opening came from; the fixture SQL opens every trip at its event.
-  expect(ok(storage.listTrips()).trips).toEqual((expected.trips as object[]).map((trip, index) => ({...trip, fuelUsedL: fuelUsedL[index], ...EVENT_OPENED})));
+  expect(ok(storage.listTrips()).trips).toEqual((expected.trips as object[]).map((trip, index) => ({...trip, isHardMode: false, hardModeDetails: null, fuelUsedL: fuelUsedL[index], ...EVENT_OPENED})));
   storage.close();
   readOnly(file, db => {
     expect(db.prepare(`SELECT t.trip_uuid, t.opened_by, t.fuel_used_l, t.fuel_used_l_state, s.plugin_session_uuid AS closed_by_session, t.closed_by_event_seq
@@ -70,19 +71,19 @@ describe('REG-013 immutable storage fixtures', () => {
   });
   it('treats a redelivered copy of a stored event as a duplicate, so the stored payload encoding is stable', async () => {
     const copy = ws.copyFixture(REPRESENTATIVE);
-    const storage = await ws.open({path: copy});
+    const storage = await ws.open({path: copy, migrations: UP_TO_V2});
     // The stored session lists fewer event types than the shared welcome: a changed capability is a conflict.
     failed(storage.upsertSession({message: v1('welcome')}), 'SESSION_CONFLICT');
     expect(ok(storage.commitEvent({message: v1('money-uint64-max')}))).toEqual({status: 'duplicate', committedThroughEventSeq: '6'});
     expect(ok(storage.commitEvent({message: v1('event-job-configured')})).status).toBe('conflict');
   });
   it('keeps the frozen version 2 schema: migrations 0001 and 0002 still produce exactly the fixture schema', async () => {
-    const storage = await ws.open(); storage.close();
+    const storage = await ws.open({migrations: UP_TO_V2}); storage.close();
     expect(schemaOf(ws.database)).toEqual(schemaOf(ws.copyFixture(REPRESENTATIVE_V2)));
   });
   it('reads the representative version 2 content from a temporary copy without migrating it', async () => {
     const copy = ws.copyFixture(REPRESENTATIVE_V2);
-    const storage = await ws.open({path: copy});
+    const storage = await ws.open({path: copy, migrations: UP_TO_V2});
     expect(storage.summary).toMatchObject({schemaVersion: 2, created: false});
     expect(storage.summary.migratedFrom).toBeUndefined();
     expect(storage.summary.backupFileName).toBeUndefined();
@@ -90,7 +91,7 @@ describe('REG-013 immutable storage fixtures', () => {
   });
   it('treats a redelivered copy of a stored version 2 event as a duplicate and changes nothing', async () => {
     const copy = ws.copyFixture(REPRESENTATIVE_V2);
-    const storage = await ws.open({path: copy});
+    const storage = await ws.open({path: copy, migrations: UP_TO_V2});
     expect(ok(storage.commitEvent({message: withEventSeq('event-job-configured', 1n)}))).toEqual({status: 'duplicate', committedThroughEventSeq: '6'});
     expect(ok(storage.commitEvent({message: withEventSeq('event-job-delivered', 2n)}))).toEqual({status: 'duplicate', committedThroughEventSeq: '6'});
     // eventSeq 3 holds the job with the SDK-documented currency, so the plain fixture job is a different payload.

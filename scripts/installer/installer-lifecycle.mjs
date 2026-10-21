@@ -68,17 +68,18 @@ export const SEED_REGISTRY = JSON.stringify({format: 'ets2telemetry.plugin-setup
 // A trip export the user saved outside the data root; uninstall and upgrade must never touch it.
 export const SEED_EXPORT = JSON.stringify({format: 'ets2telemetry.trip-export', note: 'Synthetic export of the ET-018 installer lifecycle; kept outside the data root.'}, null, 2) + '\n';
 
-// The upgraded database, written by hand from tests/fixtures/storage/schema-v1-representative.sql and the 0002-journal
-// migration (docs/storage.md, J6); `backup` is filled from the one manifest the migration wrote.
+// The upgraded database, written by hand from the frozen version-1 fixture and migrations 0002-journal/0003-hard-mode
+// (docs/storage.md); `backup` is filled from the one manifest the migration wrote.
 export function expectedDatabase(backup) {
   const counts = {plugin_sessions: 1, clocks: 2, events: 5, event_gaps: 1, job_configurations: 1, truck_configurations: 1, trailer_configurations: 1,
     event_amounts: 1, trips: 1, trip_trailers: 1, event_attributions: 4, completeness_intervals: 1, samples: 3};
   return {
-    userVersion: 2, applicationId: 1163154226, integrity: ['ok'], foreignKeyViolations: 0,
+    userVersion: 3, applicationId: 1163154226, integrity: ['ok'], foreignKeyViolations: 0,
     info: [{database_uuid: 'f0000000-0000-4000-8000-000000000001', purpose: 'synthetic', accepted_origin: 'synthetic', created_utc_ms: 1791676800000, created_app_version: '0.1.0'}],
     counts,
     migrations: [{version: 1, name: '0001-initial', app_version: '0.1.0', backup_file_name: null, backup_sha256: null},
-      {version: 2, name: '0002-journal', app_version: '0.1.0', backup_file_name: backup.fileName, backup_sha256: backup.fileSha256}],
+      {version: 2, name: '0002-journal', app_version: '0.1.0', backup_file_name: backup.fileName, backup_sha256: backup.fileSha256},
+      {version: 3, name: '0003-hard-mode', app_version: '0.1.0', backup_file_name: backup.fileName, backup_sha256: backup.fileSha256}],
     sessions: [{plugin_session_uuid: '10000000-0000-4000-8000-000000000001', game: 'ets2', origin: 'synthetic', committed_through_event_seq: '00000000000000000006'}],
     events: [{id: 1, event_seq: '00000000000000000001', type: 'job.configured'}, {id: 2, event_seq: '00000000000000000002', type: 'truck.configured'},
       {id: 3, event_seq: '00000000000000000003', type: 'trailer.configured'}, {id: 4, event_seq: '00000000000000000006', type: 'job.cancelled'},
@@ -341,7 +342,7 @@ async function launch(config, label, executable, migratedFrom) {
   assert.deepEqual(record.exit, {code: 0, signal: null}, 'LAUNCH_EXIT_NONZERO');
   assert.equal(record.runtime.executableMatches, true, 'LAUNCH_EXECUTABLE_DIFFERS');
   assert.equal(record.runtime.packaged, true);
-  assert.deepEqual(record.events.opened, [{schemaVersion: 2, created: false, migratedFrom: migratedFrom === 'none' ? null : Number(migratedFrom)}], 'HISTORY_OPEN_UNEXPECTED');
+  assert.deepEqual(record.events.opened, [{schemaVersion: 3, created: false, migratedFrom: migratedFrom === 'none' ? null : Number(migratedFrom)}], 'HISTORY_OPEN_UNEXPECTED');
   assert.deepEqual(record.events.target, [{purpose: 'synthetic'}], 'RECORDING_TARGET_UNEXPECTED');
   assert.equal(record.events.closed, 1, 'HISTORY_NOT_CLOSED');
   // The format 2 settings load as migrated in memory, and nothing saves or quarantines them.

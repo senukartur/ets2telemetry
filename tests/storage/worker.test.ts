@@ -72,7 +72,7 @@ describe('storage worker', () => {
   it('opens, commits, reads and closes through the real worker, and a new worker reopens the same history', async () => {
     const first = startWorker();
     const summary = ok(await first.client.open(options()));
-    expect(summary).toMatchObject({schemaVersion: 2, created: true, purpose: 'synthetic'});
+    expect(summary).toMatchObject({schemaVersion: 3, created: true, purpose: 'synthetic'});
     expect(ok(await first.client.upsertSession({message: v1('welcome')}))).toEqual({created: true, committedThroughEventSeq: '0'});
     expect(ok(await first.client.commitEvent({message: v1('event-job-configured'), effects: [openTrip, {kind: 'event.attribute', tripUuid: T1, attribution: 'trip'}]})))
       .toEqual({status: 'committed', committedThroughEventSeq: '1'});
@@ -262,7 +262,7 @@ describe('storage worker', () => {
     // The seed writes the anchors through the client, as a later seeding script would.
     await seedJournalAnchors(client);
     const page = ok(await client.journalTrips());
-    expect(page.database).toEqual({purpose: 'synthetic', schemaVersion: 2});
+    expect(page.database).toEqual({purpose: 'synthetic', schemaVersion: 3});
     expect(page.trips.map(trip => trip.tripUuid)).toEqual([T.manySamples, T.zeroValues, T.open, T.restartClosed, T.gapClosed, T.differentJob, T.cancelled, T.delivered]);
     expect(page.nextCursor).toBeNull();
     expect(ok(await client.journalTrips({game: 'ats', outcome: 'delivered', completeness: 'complete'})).trips.map(trip => trip.tripUuid)).toEqual([T.zeroValues]);

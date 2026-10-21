@@ -35,7 +35,7 @@ export function tripExportProblems(document: unknown): string[] {
   if (!isObject(document)) return ['$: not an object'];
   if (!sameKeys(document, TOP_KEYS)) problem('$', `keys are not ${TOP_KEYS.join(', ')} in this order`);
   if (document.format !== 'ets2telemetry.trip-export') problem('$.format', 'not ets2telemetry.trip-export');
-  if (document.formatVersion !== 1) problem('$.formatVersion', 'not 1');
+  if (document.formatVersion !== 1 && document.formatVersion !== 2) problem('$.formatVersion', 'neither 1 nor 2');
 
   const header = document.header;
   if (!isObject(header) || !isObject(header.application) || header.application.name !== 'ETS2Telemetry' || typeof header.application.version !== 'string'
@@ -66,11 +66,20 @@ export function tripExportProblems(document: unknown): string[] {
   walk(document, '$');
 
   const trip = document.trip, bounds = document.bounds;
-  if (!isObject(trip) || !sameKeys(trip, TRIP_KEYS) || !UUID.test(textOf(trip.tripUuid)) || !UUID.test(textOf(trip.pluginSessionId))) problem('$.trip', 'malformed');
+  if (!isObject(trip) || !sameKeys(trip, document.formatVersion === 2 ? ['is_hard_mode', 'hard_mode_details', ...TRIP_KEYS] : TRIP_KEYS) || !UUID.test(textOf(trip.tripUuid)) || !UUID.test(textOf(trip.pluginSessionId))) problem('$.trip', 'malformed');
   else if ((trip.outcome === 'open') !== (trip.closeReason === null) || (trip.outcome === 'open') !== (trip.endedUtcMs === null)) problem('$.trip', 'outcome, close reason and end disagree');
   if (!isObject(bounds) || !sameKeys(bounds, ['committedThroughEventSeq', 'lastSampleId', 'lastIntervalId', 'snapshot']) || !U64.test(textOf(bounds.committedThroughEventSeq))
     || (bounds.lastSampleId !== null && !ROW_ID.test(textOf(bounds.lastSampleId))) || (bounds.lastIntervalId !== null && !ROW_ID.test(textOf(bounds.lastIntervalId)))
     || bounds.snapshot !== (isObject(trip) && trip.outcome === 'open')) { problem('$.bounds', 'malformed'); return problems; }
+  if (document.formatVersion === 2 && isObject(trip)) {
+    if (typeof trip.is_hard_mode !== 'boolean') problem('$.trip.is_hard_mode', 'not boolean');
+    const audit = trip.hard_mode_details;
+    const keys = ['version', 'binding', 'opening', 'latest', 'firstLoss', 'manualDelivery'];
+    if (audit !== null && (!isObject(audit) || !sameKeys(audit, keys) || audit.version !== 1
+      || !(audit.binding === null || /^[0-9a-f]{64}$/.test(textOf(audit.binding)))
+      || !(audit.manualDelivery === null || typeof audit.manualDelivery === 'boolean'))) problem('$.trip.hard_mode_details', 'malformed');
+    if (trip.is_hard_mode && (trip.outcome !== 'delivered' || !isObject(audit) || audit.firstLoss !== null || audit.manualDelivery !== true)) problem('$.trip.is_hard_mode', 'qualification lacks delivery proof');
+  }
   const window = document.window;
   if (!isObject(window) || !isObject(trip) || window.pluginSessionId !== trip.pluginSessionId) problem('$.window', 'not the trip session');
 

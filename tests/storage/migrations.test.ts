@@ -2,13 +2,15 @@ import {copyFileSync, existsSync, readFileSync, writeFileSync} from 'node:fs';
 import path from 'node:path';
 import Database from 'better-sqlite3';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
-import {MIGRATIONS, openStorage, type Migration} from '../../packages/storage/src/index';
+import {MIGRATIONS as CURRENT_MIGRATIONS, openStorage, type Migration} from '../../packages/storage/src/index';
 import {SCHEMA_V1} from '../../packages/storage/src/sqlite/schema-v1';
 import {SCHEMA_V2} from '../../packages/storage/src/sqlite/schema-v2';
 import {digestOf, expectMigratedFromVersion1, expectRepresentative, failed, files, ok, readOnly, readVersion1, REPRESENTATIVE, sha256, workspace} from './helpers';
 
+// These historical ET-016 cases freeze versions 1/2. ET-026 migration 3 is covered in hard-mode-migrations.test.ts.
+const MIGRATIONS = CURRENT_MIGRATIONS.slice(0, 2);
 let ws: Awaited<ReturnType<typeof workspace>>;
-beforeEach(async () => { ws = await workspace(); });
+beforeEach(async () => { ws = await workspace(); const options = ws.options; ws.options = overrides => options({migrations: MIGRATIONS, ...overrides}); });
 afterEach(async () => { await ws.dispose(); });
 
 const failingV3: Migration = {version: 3, name: '0003-test-failure', up: db => { db.exec('CREATE TABLE test_v3 (id INTEGER PRIMARY KEY)'); throw new Error('injected migration failure'); }};

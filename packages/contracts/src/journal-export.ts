@@ -1,14 +1,15 @@
-// Trip export format version 1 (ET-016 PR-5, J15-J17). One recorded trip as a versioned JSON document for the user's own
+// Trip export format version 2 (ET-016 PR-5, J15-J17). One recorded trip as a versioned JSON document for the user's own
 // records: canonical units, stable identifiers, the protocol v1 availability and money shapes, and the bounds that fix
 // what an export of a still changing trip contains. The application never imports or restores it. Plain data only;
 // Node-safe and renderer-safe. See docs/journal-export.md.
+import type {HardModeDetails} from './hard-mode';
 import type {JournalCallCode, JournalCallResult, JournalSample} from './index';
 import type {JournalEvent, JournalInterval, JournalPurpose, JournalTripDetail} from './journal';
 import type {Uint64} from './protocol-v1';
 
 export const TRIP_EXPORT_FORMAT = 'ets2telemetry.trip-export';
 /** Bumped by any change to the document below; there is no import, so older versions are never read back. */
-export const TRIP_EXPORT_FORMAT_VERSION = 1;
+export const TRIP_EXPORT_FORMAT_VERSION = 2;
 
 /**
  * The canonical units of every number in the document (J15). Values are never converted for display: a measure of a
@@ -52,9 +53,9 @@ export interface TripExportBounds {committedThroughEventSeq: Uint64; lastSampleI
 /** One stored one-second sample of the trip in canonical units; the trip is the document's own. */
 export type TripExportSample = Omit<JournalSample, 'tripUuid'>;
 /** The trip section: the stored trip row with its outcome, close reason, recording completeness, UTC labels, observed distance and fuel used. */
-export type TripExportTrip = Omit<JournalTripDetail['trip'], 'job'>;
+export type TripExportTrip = Omit<JournalTripDetail['trip'], 'job' | 'isHardMode' | 'hardModeDetails'> & {is_hard_mode: boolean; hard_mode_details: HardModeDetails | null};
 
-/** Format version 1 of `ets2telemetry.trip-export`, in key order. */
+/** Format version 2 of `ets2telemetry.trip-export`, in key order. */
 export interface TripExportDocument {
   format: typeof TRIP_EXPORT_FORMAT;
   formatVersion: typeof TRIP_EXPORT_FORMAT_VERSION;

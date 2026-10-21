@@ -8,6 +8,8 @@
 // and holds the rows until DurableDelivery's `samples` op writes them. ET-016 PR-7 (J9): a checkpoint job seen while the
 // game is idle opens a late-attach trip through DurableDelivery's `attach` op once the replayed events drained. Node-safe:
 // it talks to storage only through the StorageClient interface. See docs/telemetry-service-v1.md.
+import type {HardModeDetails, HardModeObservation} from '../../../packages/contracts/src/hard-mode';
+import {unknownHardMode} from '../../../packages/telemetry-core/src/hard-mode';
 import type {RecordingLosses, RecordingTrip} from '../../../packages/contracts/src';
 import type {Uint64} from '../../../packages/contracts/src/protocol-v1';
 import type {CommitResult, CompletenessKind, SampleAppendResult, TripEffect} from '../../../packages/storage/src/api';
@@ -16,7 +18,7 @@ import {
   dueAttach, initialSamplerState, initialTripState, normalizeV1State, sampleReading, stepTrip, tripView, type SamplerState, type TripErrorCode, type TripGame, type TripInput,
   type TripState, type TripView
 } from '../../../packages/telemetry-core/src/index';
-import type {AttachSink, AttachStatus, CommitContext, CoverageMessage, DurableSink, ReadingMessage, RecorderErrorCode, SampleSink, SinkError, SinkResult, WelcomeMessage} from './durable-sink';
+import type {AttachSink, AttachStatus, CommitContext, CoverageMessage, HardModeCapture, DurableSink, ReadingMessage, RecorderErrorCode, SampleSink, SinkError, SinkResult, WelcomeMessage} from './durable-sink';
 import {saturatingAdd} from './recording-status';
 import {SampleBuffer} from './sample-buffer';
 import {readTripSeeds} from './trip-seeds';
@@ -26,7 +28,7 @@ export {RECORDER_FAILURE_CLASS, type RecorderErrorCode} from './durable-sink';
 
 /** The storage commands the recorder uses: the durable path, the restore-loss marker, the cold-start reads and the samples. */
 export type TripRecorderClient = Pick<StorageClient, 'upsertSession' | 'committedThrough' | 'commitEvent' | 'commitGap' | 'recordCompleteness' | 'listTrips' | 'getEvent' |
-  'listEvents' | 'appendSamples' | 'openAttachedTrip'>;
+  'listEvents' | 'appendSamples' | 'openAttachedTrip'> & Partial<Pick<StorageClient, 'observeHardMode' | 'getTrip'>>;
 
 const RECORDER_CODE: Readonly<Record<TripErrorCode, RecorderErrorCode>> = {
   ORDER_VIOLATION: 'TRIP_ORDER_VIOLATION', COVERAGE_MISMATCH: 'TRIP_COVERAGE_MISMATCH', UNKNOWN_SESSION: 'TRIP_UNKNOWN_SESSION'
@@ -41,7 +43,7 @@ const COUNTED: Partial<Record<CompletenessKind, 'eventLoss' | 'notConnected' | '
 };
 const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
 /** ET-015c: `onChange` is called after every change the recording status may show: trip state, losses or dropped samples. */
-export interface TripRecorderOptions {onChange?: () => void}
+export interface TripRecorderOptions {onChange?: () => void; hardModeEvidence?: () => HardModeObservation; onHardModeTrip?: (details: HardModeDetails | null) => void}
 
 /** The reducer reading of a checkpoint or snapshot: its normalized state, source identity, capture time and UTC label. */
 function reading(message: ReadingMessage): TripInput {
@@ -89,6 +91,91 @@ function reading(message: ReadingMessage): TripInput {
  * A reducer `ok: false` result becomes a RecorderErrorCode and changes no state.
  */
 export class TripRecorderSink implements DurableSink {
+  private readonly capturedEvidence = new Map<string, HardModeCapture>();
+  private readonly pendingCaptures = new Set<HardModeCapture>();
+  private evidenceKey(message: CoverageMessage): string {return `${message.source.pluginSessionId}:${message.kind}:${message.kind === 'event' ? message.data.eventSeq : message.data.firstEventSeq}`;}
+  capture(message: CoverageMessage): HardModeCapture | undefined {
+    if (!this.options.hardModeEvidence) return undefined;
+    let captured = this.capturedEvidence.get(this.evidenceKey(message));
+    if (!captured) {
+      // The provider ages proof on the monitor's monotonic clock at synchronous intake, never at commit.
+      const observation = structuredClone(this.options.hardModeEvidence());
+      captured = {game: message.source.game, observation, fresh: observation.assessment.state === 'pass', firstUnsafe: null};
+    }
+    const pending = this.pendingObservation;
+    if (captured.firstUnsafe === null && pending?.game === captured.game && pending.value.assessment.state !== 'pass') captured.firstUnsafe = structuredClone(pending.value);
+    if (captured.firstUnsafe === null && this.observationError) captured.firstUnsafe = {assessment: unknownHardMode(Date.now(), 'interrupted'), binding: null, pluginSessionId: null, sourceMonotonicNs: null};
+    this.pendingCaptures.add(captured); return captured;
+  }
+  releaseCapture(captured: HardModeCapture): void {this.pendingCaptures.delete(captured);}
+  private pendingObservation: {game: TripGame; value: HardModeObservation; fresh: boolean} | undefined;
+  private observing = false;
+  private observationWrite: Promise<void> | undefined;
+  private observationError: SinkError | undefined;
+  private observationBinding: string | null | undefined;
+  private lastTrip: string | null = null;
+  private async readHardModeTrip(game: TripGame): Promise<void> {
+    if (!this.options.hardModeEvidence || !this.client.getTrip) return;
+    const uuid = this.view(game).current?.tripUuid ?? this.lastTrip;
+    if (!uuid) {this.options.onHardModeTrip?.(null); return;}
+    this.lastTrip = uuid;
+    const result = await this.client.getTrip(uuid);
+    if (result.ok) this.options.onHardModeTrip?.(result.value?.hardModeDetails ?? null);
+  }
+  /** At most one observation command and one pending loss. A compliant refresh never replaces a pending failure. */
+  observeHardMode(game: TripGame, value: HardModeObservation): void {
+    // Validate positive offers against the monitor's monotonic-aged proof synchronously, before any write await.
+    const current = value.assessment.state === 'pass' ? this.options.hardModeEvidence?.() : undefined;
+    const fresh = value.assessment.state === 'pass' && current?.assessment.state === 'pass' && current.binding !== null
+      && current.binding === value.binding && current.pluginSessionId === value.pluginSessionId && current.sourceMonotonicNs === value.sourceMonotonicNs;
+    if (value.assessment.state === 'pass' && !fresh) value = {...value, assessment: unknownHardMode(value.assessment.observedUtcMs, 'interrupted')};
+    if (this.observationBinding !== undefined && this.observationBinding !== value.binding && value.assessment.state === 'pass') value = {...value, assessment: unknownHardMode(value.assessment.observedUtcMs, 'source-changed')};
+    this.observationBinding = value.binding;
+    this.latchCaptureLoss(game, value);
+    if (!this.client.observeHardMode) return;
+    const pending = this.pendingObservation;
+    if (!pending || pending.value.assessment.state === 'pass') this.pendingObservation = {game, value: structuredClone(value), fresh: fresh && value.assessment.state === 'pass'};
+    this.startObservationWrite();
+  }
+  private latchCaptureLoss(game: TripGame, value: HardModeObservation): void {
+    for (const capture of new Set([...this.pendingCaptures, ...this.capturedEvidence.values()])) if (capture.game === game && capture.firstUnsafe === null) {
+      if (value.assessment.state !== 'pass') capture.firstUnsafe = structuredClone(value);
+      else if (capture.observation.binding !== value.binding) capture.firstUnsafe = {...structuredClone(value), assessment: unknownHardMode(value.assessment.observedUtcMs, 'source-changed')};
+    }
+  }
+  private startObservationWrite(): void {
+    if (this.observing || !this.pendingObservation) return;
+    this.observing = true;
+    this.observationWrite = (async () => {
+      let attempted: {game: TripGame; value: HardModeObservation; fresh: boolean} | undefined;
+      try {
+        while (this.pendingObservation) {
+          const next = attempted = this.pendingObservation; this.pendingObservation = undefined;
+          const result = await this.client.observeHardMode!(next.game, next.value, next.fresh);
+          if (!result.ok) {
+            // A storage interruption cannot be turned back into a pass by a later refresh.
+            this.observationError = result.error;
+            this.pendingObservation = {game: next.game, fresh: false, value: next.value.assessment.state === 'pass' ? {...next.value, assessment: unknownHardMode(Date.now(), 'interrupted'), binding: null} : next.value};
+            this.latchCaptureLoss(next.game, this.pendingObservation.value);
+            return;
+          }
+          this.observationError = undefined;
+          await this.readHardModeTrip(next.game);
+        }
+      } catch {
+        if (attempted) {
+          this.pendingObservation = {game: attempted.game, fresh: false, value: attempted.value.assessment.state === 'pass' ? {...attempted.value, assessment: unknownHardMode(Date.now(), 'interrupted'), binding: null} : attempted.value};
+          this.latchCaptureLoss(attempted.game, this.pendingObservation.value);
+        }
+        this.observationError = {code: 'INTERNAL', retryable: false, message: 'The Hard Mode observation could not be stored.'};
+      } finally {this.observing = false;}
+    })();
+  }
+  private async flushObservations(): Promise<SinkError | undefined> {
+    await this.observationWrite;
+    if (this.pendingObservation) {this.startObservationWrite(); await this.observationWrite;}
+    return this.observationError;
+  }
   private state: TripState = initialTripState();
   private sampler: SamplerState = initialSamplerState();
   private readonly buffer = new SampleBuffer();
@@ -107,6 +194,10 @@ export class TripRecorderSink implements DurableSink {
   constructor(private readonly client: TripRecorderClient, private readonly options: TripRecorderOptions = {}) {}
 
   async openSession(welcome: WelcomeMessage): Promise<SinkResult<{committedThroughEventSeq: Uint64}>> {
+    if (this.options.hardModeEvidence && this.client.observeHardMode) {
+      const lost = await this.client.observeHardMode(welcome.source.game, {assessment: unknownHardMode(Date.now(), 'interrupted'), binding: null, pluginSessionId: null, sourceMonotonicNs: null});
+      if (!lost.ok) return lost;
+    }
     const stored = await this.client.upsertSession({message: welcome});
     if (!stored.ok) return stored;
     const coveredThrough = stored.value.committedThroughEventSeq, game = welcome.source.game;
@@ -134,18 +225,30 @@ export class TripRecorderSink implements DurableSink {
   }
 
   async commit(message: CoverageMessage, context: CommitContext): Promise<SinkResult<CommitResult>> {
+    const key = this.evidenceKey(message);
+    const capture = this.capturedEvidence.get(key) ?? context.hardModeCapture ?? this.capture(message);
+    if (capture) {this.capturedEvidence.clear(); this.capturedEvidence.set(key, capture); this.pendingCaptures.add(capture);}
+    try {return await this.commitCaptured(message, context, key, capture);} finally {if (capture) this.releaseCapture(capture);}
+  }
+  private async commitCaptured(message: CoverageMessage, context: CommitContext, key: string, capture: HardModeCapture | undefined): Promise<SinkResult<CommitResult>> {
+    const observationError = await this.flushObservations();
+    if (observationError) return {ok: false, error: observationError};
     // The storage caller rule: read the coverage right before committing; the single writer keeps it until the commit.
     const covered = await this.client.committedThrough(message.source.pluginSessionId);
     if (!covered.ok) return covered;
     const coveredThrough = covered.value, receivedUtcMs = context.receivedUtcMs;
     const stepped = stepTrip(this.state, message.kind === 'event' ? {kind: 'event', message, coveredThrough, receivedUtcMs} : {kind: 'gap', message, coveredThrough, receivedUtcMs});
     if (!stepped.ok) return refused(RECORDER_CODE[stepped.code]);
-    const input = stepped.effects.length ? {message, effects: stepped.effects} : {message};
+    // No await between this read and posting the transaction: any earlier observed loss is part of opening/closing.
+    const hardMode = capture?.observation, hardModeLoss = capture?.firstUnsafe;
+    const input = {message, ...(stepped.effects.length ? {effects: stepped.effects} : {}), ...(hardMode ? {hardMode, hardModeFresh: capture.fresh} : {}), ...(hardModeLoss ? {hardModeLoss} : {})};
     const result = message.kind === 'event' ? await this.client.commitEvent(input) : await this.client.commitGap(input);
     if (!result.ok || !ADOPT.has(result.value.status)) return result;
     // R7: the gap's effects describe only (coveredThrough, lastEventSeq]; another starting point means they were wrong.
     if (message.kind === 'gap' && result.value.previouslyCoveredThrough !== coveredThrough) return refused('TRIP_COVERAGE_MISMATCH');
     this.state = stepped.state;
+    this.capturedEvidence.delete(key);
+    await this.readHardModeTrip(message.source.game);
     // G6: only a new row stored its effects; a gap covers (previouslyCoveredThrough, lastEventSeq] anew.
     if (result.value.status === 'committed') {
       this.countIntervals(stepped.effects);

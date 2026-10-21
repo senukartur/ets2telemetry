@@ -30,7 +30,7 @@ function summary(job: typeof ANCHOR_JOBS.delivered): JournalTripListItem['job'] 
     cargo: job.cargo, plannedDistance: job.plannedDistance, expectedIncome: job.expectedIncome};
 }
 // The delivered anchor: ETS2 session A, opened at A4, delivered at A9 with fines, a toll and a ferry in EUR.
-const DELIVERED: JournalTripListItem = {tripUuid: T.delivered, game: 'ets2', gameMode: MODE, gameModeAmbiguous: false, outcome: 'delivered', closeReason: 'outcome',
+const DELIVERED: JournalTripListItem = {isHardMode: false, hardModeDetails: null, tripUuid: T.delivered, game: 'ets2', gameMode: MODE, gameModeAmbiguous: false, outcome: 'delivered', closeReason: 'outcome',
   recordingCompleteness: 'complete', startedUtcMs: BASE_UTC + 4_000, endedUtcMs: BASE_UTC + 9_000, observedDistanceM: value(152_000.5), fuelUsedL: NO,
   job: summary(ANCHOR_JOBS.delivered)};
 const DELIVERED_RECORD = {type: 'job.delivered', revenue: money('15000', 's64', EUR), earnedXp: value(250), cargoDamage: {available: true, value: 0.0125, unit: 'fraction'},
@@ -46,7 +46,7 @@ const DELIVERED_DETAIL: JournalTripDetail = {database: DATABASE,
   intervals: {items: [], total: 0, nextCursor: null}, samples: {count: 3, firstUtcMs: BASE_UTC + 5_000, lastUtcMs: BASE_UTC + 8_000},
   exportBounds: {committedThroughEventSeq: '29', lastSampleId: '4', lastIntervalId: null}};
 // The zero-values anchor: ATS session C, delivered, with zero values and unavailable values side by side (REG-009).
-const ZERO: JournalTripListItem = {tripUuid: T.zeroValues, game: 'ats', gameMode: MODE, gameModeAmbiguous: false, outcome: 'delivered', closeReason: 'outcome',
+const ZERO: JournalTripListItem = {isHardMode: false, hardModeDetails: null, tripUuid: T.zeroValues, game: 'ats', gameMode: MODE, gameModeAmbiguous: false, outcome: 'delivered', closeReason: 'outcome',
   recordingCompleteness: 'complete', startedUtcMs: BASE_UTC + 203_000, endedUtcMs: BASE_UTC + 204_000, observedDistanceM: value(0), fuelUsedL: value(0),
   job: summary(ANCHOR_JOBS.zeroValues)};
 const ZERO_DETAIL: JournalTripDetail = {...DELIVERED_DETAIL,
@@ -90,19 +90,19 @@ describe('journal list (J13; REG-014, REG-009)', () => {
     const text = journalListText(page([OPEN, ZERO, GAP_CLOSED, CANCELLED, DELIVERED], '42'), {units: DEFAULT, timeZone: ZONE, filtered: false, recording: 'disabled'});
     expect(text.empty).toBeNull(); expect(text.emptyNote).toBeNull(); expect(text.hasNext).toBe(true);
     expect(text.rows).toEqual([
-      {tripUuid: T.open, gameId: 'ets2', started: '2026-10-11 02:01:41', game: 'ETS2', route: 'Synthetic City A → Synthetic City B', cargo: 'Synthetic Cargo', outcome: 'In progress',
+      {isHardMode: false, tripUuid: T.open, gameId: 'ets2', started: '2026-10-11 02:01:41', game: 'ETS2', route: 'Synthetic City A → Synthetic City B', cargo: 'Synthetic Cargo', outcome: 'In progress',
         completeness: {text: 'Unknown', variant: 'outline'}, plannedDistance: '152.0 km', observedDistance: 'unavailable (not observed)', fuelUsed: 'unavailable (not observed)',
         expectedIncome: '12345 (currency unknown)'},
-      {tripUuid: T.zeroValues, gameId: 'ats', started: '2026-10-11 02:03:23', game: 'ATS', route: '(empty) → unavailable (not provided by the game)', cargo: 'unavailable (not observed)',
+      {isHardMode: false, tripUuid: T.zeroValues, gameId: 'ats', started: '2026-10-11 02:03:23', game: 'ATS', route: '(empty) → unavailable (not provided by the game)', cargo: 'unavailable (not observed)',
         outcome: 'Delivered', completeness: {text: 'Complete', variant: 'secondary'}, plannedDistance: '0.0 mi', observedDistance: '0.0 mi', fuelUsed: '0.0 US gal',
         expectedIncome: '0 USD (SDK-documented)'},
-      {tripUuid: T.gapClosed, gameId: 'ets2', started: '2026-10-11 02:00:22', game: 'ETS2', route: 'Synthetic City A → Synthetic City B', cargo: 'Synthetic Cargo',
+      {isHardMode: false, tripUuid: T.gapClosed, gameId: 'ets2', started: '2026-10-11 02:00:22', game: 'ETS2', route: 'Synthetic City A → Synthetic City B', cargo: 'Synthetic Cargo',
         outcome: 'No outcome — events were lost', completeness: {text: 'Partial', variant: 'destructive'}, plannedDistance: '152.0 km', observedDistance: 'unavailable (not observed)',
         fuelUsed: 'unavailable (not observed)', expectedIncome: '12345 (currency unknown)'},
-      {tripUuid: T.cancelled, gameId: 'ets2', started: '2026-10-11 02:00:12', game: 'ETS2', route: 'Synthetic City A → Synthetic City B', cargo: 'Synthetic Cancel Cargo',
+      {isHardMode: false, tripUuid: T.cancelled, gameId: 'ets2', started: '2026-10-11 02:00:12', game: 'ETS2', route: 'Synthetic City A → Synthetic City B', cargo: 'Synthetic Cancel Cargo',
         outcome: 'Cancelled', completeness: {text: 'Complete', variant: 'secondary'}, plannedDistance: '152.0 km', observedDistance: 'unavailable (not observed)',
         fuelUsed: 'unavailable (not observed)', expectedIncome: '12345 (currency unknown)'},
-      {tripUuid: T.delivered, gameId: 'ets2', started: '2026-10-11 02:00:04', game: 'ETS2', route: 'Synthetic City A → Synthetic City B', cargo: 'Synthetic Cargo',
+      {isHardMode: false, tripUuid: T.delivered, gameId: 'ets2', started: '2026-10-11 02:00:04', game: 'ETS2', route: 'Synthetic City A → Synthetic City B', cargo: 'Synthetic Cargo',
         outcome: 'Delivered', completeness: {text: 'Complete', variant: 'secondary'}, plannedDistance: '152.0 km', observedDistance: '152.0 km', fuelUsed: 'unavailable (not observed)',
         expectedIncome: '12345 (currency unknown)'}
     ]);

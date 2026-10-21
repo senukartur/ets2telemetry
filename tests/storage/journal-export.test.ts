@@ -136,7 +136,7 @@ describe('a trip export through the real worker, the service journal and main\'s
     const document = JSON.parse(readFileSync(f.target(), 'utf8')) as Exported & {job: unknown; truck: unknown; trailers: unknown};
     expect(tripExportProblems(document)).toEqual([]);
     expect(path.basename(f.target())).toBe(`ets2telemetry-trip-ets2-20261011-0140-${LATE_TRIP.slice(0, 8)}.json`);
-    expect(document.trip).toEqual({tripUuid: LATE_TRIP, pluginSessionId: LATE_SESSION, game: 'ets2', gameMode: {mode: 'single-player', method: 'module-scan', confidence: 'weak'},
+    expect(document.trip).toEqual({is_hard_mode: false, hard_mode_details: null, tripUuid: LATE_TRIP, pluginSessionId: LATE_SESSION, game: 'ets2', gameMode: {mode: 'single-player', method: 'module-scan', confidence: 'weak'},
       gameModeAmbiguous: false, outcome: 'delivered', closeReason: 'outcome', recordingCompleteness: 'partial', startedUtcMs: LATE_UTC + 2_500, endedUtcMs: LATE_UTC + 5_000,
       observedDistanceM: {available: false, reason: 'not-observed'}, fuelUsedL: {available: false, reason: 'not-observed'}, openedBy: 'checkpoint', openedEventSeq: null,
       outcomeEventSeq: '5', closedBy: {pluginSessionId: LATE_SESSION, eventSeq: '5'}});

@@ -335,7 +335,7 @@ const EUR = {status: 'sdk-documented', code: 'EUR', source: 'scs-sdk-1.15/includ
 /** The delivered anchor's export, written by hand from tests/shared/journal-seed.ts: its row, bounds, timeline, samples and money. */
 const DELIVERED_EXPORT = {
   bounds: {committedThroughEventSeq: '29', lastSampleId: '4', lastIntervalId: null, snapshot: false},
-  trip: {tripUuid: T.delivered, pluginSessionId: ETS2_A, game: 'ets2', gameMode: {mode: 'single-player', method: 'module-scan', confidence: 'weak'}, gameModeAmbiguous: false,
+  trip: {is_hard_mode: false, hard_mode_details: null, tripUuid: T.delivered, pluginSessionId: ETS2_A, game: 'ets2', gameMode: {mode: 'single-player', method: 'module-scan', confidence: 'weak'}, gameModeAmbiguous: false,
     outcome: 'delivered', closeReason: 'outcome', recordingCompleteness: 'complete', startedUtcMs: BASE_UTC + 4_000, endedUtcMs: BASE_UTC + 9_000,
     observedDistanceM: {available: true, value: 152_000.5}, fuelUsedL: {available: false, reason: 'not-observed'}, openedBy: 'event', openedEventSeq: '4', outcomeEventSeq: '9',
     closedBy: {pluginSessionId: ETS2_A, eventSeq: '9'}},
@@ -418,12 +418,15 @@ export async function runJournalExport({application, dashboard, config, record})
   const documents = {};
   for (const name of ['paging', 'delivered']) {
     const document = documents[name] = JSON.parse(await readFile(path.join(folder, `${name}.json`), 'utf8'));
-    assert.deepEqual(problemsOf(document), [], `The ${name} export is not a valid format version 1 document`);
+    assert.deepEqual(problemsOf(document), [], `The ${name} export is not a valid format version 2 document`);
     assert.deepEqual({format: document.format, formatVersion: document.formatVersion, application: document.header.application, purpose: document.header.database.purpose,
       schemaVersion: document.header.database.schemaVersion, sessionOrigin: document.header.sessionOrigin},
-    {format: 'ets2telemetry.trip-export', formatVersion: 1, application: {name: 'ETS2Telemetry', version: '0.1.0'}, purpose: 'synthetic', schemaVersion: 2, sessionOrigin: 'synthetic'});
+    {format: 'ets2telemetry.trip-export', formatVersion: 2, application: {name: 'ETS2Telemetry', version: '0.1.0'}, purpose: 'synthetic', schemaVersion: 3, sessionOrigin: 'synthetic'});
   }
   assert.equal(documents.paging.header.database.uuid, documents.delivered.header.database.uuid);
+  // Historical seeds never supplied observation metadata; current settings cannot create retrospective proof.
+  assert.equal(documents.paging.trip.is_hard_mode, false);
+  assert.equal(documents.paging.trip.hard_mode_details, null);
   const p = documents.paging;
   record.pagingExport = {events: p.events.length, firstEvent: p.events[0].eventSeq, lastEvent: p.events.at(-1).eventSeq, intervals: p.intervals.length, samples: p.samples.length,
     snapshot: p.bounds.snapshot, outcome: p.trip.outcome, tollTotal: p.money.totals};
@@ -478,14 +481,14 @@ export async function verifyJournalRun({config, record, restartMainEvents, resta
   assert.deepEqual(record.exportEvents, EXPORT_EVENTS);
   assert.ok(![...restartMainEvents.filter(row => !expectedRefusal(row)), ...restartServiceEvents].some(row => FAILURE_EVENTS.test(row.event)));
   assert.deepEqual(restartServiceEvents.filter(row => row.event === 'RECORDING_TARGET').map(row => row.facts), [{purpose: 'synthetic'}]);
-  assert.deepEqual(restartServiceEvents.filter(row => row.event === 'HISTORY_STORAGE_OPENED').map(row => row.facts), [{schemaVersion: 2, created: false, migratedFrom: null}]);
+  assert.deepEqual(restartServiceEvents.filter(row => row.event === 'HISTORY_STORAGE_OPENED').map(row => row.facts), [{schemaVersion: 3, created: false, migratedFrom: null}]);
   assert.equal(restartServiceEvents.filter(row => row.event === 'HISTORY_STORAGE_CLOSED').length, 1);
   assert.deepEqual(restartMainEvents.filter(row => row.event === 'APP_EXIT_REQUESTED').map(row => row.facts?.reason), ['app-quit']);
   const database = journalDatabase(config), header = Buffer.alloc(100), file = await open(database, 'r');
   try {await file.read(header, 0, 100, 0);} finally {await file.close();}
   const files = record.files = {magic: header.subarray(0, 15).toString('latin1'), applicationId: header.readInt32BE(68), userVersion: header.readUInt32BE(60),
     sidecars: ['-wal', '-shm', '-journal'].filter(suffix => existsSync(database + suffix)), syntheticBackups: existsSync(path.join(path.dirname(database), 'backups'))};
-  assert.deepEqual(files, {magic: 'SQLite format 3', applicationId: 1163154226, userVersion: 2, sidecars: [], syntheticBackups: false});
+  assert.deepEqual(files, {magic: 'SQLite format 3', applicationId: 1163154226, userVersion: 3, sidecars: [], syntheticBackups: false});
   record.shutdownClean = true;
 }
 

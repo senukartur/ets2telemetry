@@ -1,3 +1,8 @@
+import {hardModeFixtureReader} from './hard-mode/fixture';
+import {HardModeReader} from './hard-mode/reader';
+import {HardModeMonitor} from './hard-mode/monitor';
+import {inspectGameProcess} from './hard-mode/process';
+import {readSteamRoot} from './plugin-setup/steam-registry';
 import { Worker } from 'node:worker_threads';
 import path from 'node:path';
 import { mkdtemp, rm, open } from 'node:fs/promises';
@@ -95,9 +100,29 @@ function recordV1State(state: V1SourceState): void {
   const count = (v1StatusCounts.get(state.status) ?? 0) + 1; v1StatusCounts.set(state.status, count);
   if ((count & (count - 1)) === 0) log('V1_SOURCE_STATUS', undefined, {status: state.status, selection: state.selection, durable: state.durable.state, count});
 }
+let hardModeGame: 'ets2' | 'ats' | undefined;
+let steamRoot: string | undefined;
+// Registry discovery has no renderer input; an unavailable Cloud root fails closed while local profiles remain readable.
+const hardModeLifetime = new AbortController();
+let steamDiscoveryStarted = false;
+const hardMode = new HardModeMonitor((source, ns, at, signal) => {
+  if (hardModeReader) return hardModeReader.read(source, ns, at, signal);
+  const documents = process.env.ETS2TELEMETRY_DOCUMENTS;
+  if (!documents) return Promise.reject(new Error('Documents unavailable'));
+  const reader = hardModeReader ??= new HardModeReader({documents, get steamRoot() {return steamRoot;}, process: inspectGameProcess});
+  return reader.read(source, ns, at, signal);
+}, observation => {
+  if (hardModeGame) runtime.observeHardMode(hardModeGame, observation);
+  port.postMessage(hardMode.publication());
+});
+let hardModeReader: HardModeReader | undefined = hardModeFixtureReader(process.env) ?? undefined;
 let lastV1: V1SourceState | undefined;
 /** Republishes only for a change the projection shows: a clock mapping or durable status update alone is not one. */
 function onV1State(state: V1SourceState): void {
+  const current = state.fresh && state.observation && (state.status === 'connected' || state.status === 'paused') ? state.observation : undefined;
+  if (current?.source.origin === 'game' && !steamDiscoveryStarted) {steamDiscoveryStarted = true; void readSteamRoot({signal: hardModeLifetime.signal}).then(root => {if (root.kind === 'found') steamRoot = root.path;}, () => undefined);}
+  hardMode.select(current ? {source: current.source, monotonicNs: current.capture.monotonicNs, clockId: current.capture.clockId, boundary: state.clockBoundary} : null);
+  hardModeGame = current?.source.game ?? hardModeGame;
   recordV1State(state);
   const previous = lastV1; lastV1 = state;
   if (previous && previous.selection === state.selection && previous.status === state.status && previous.reason === state.reason &&
@@ -115,6 +140,7 @@ function onV1State(state: V1SourceState): void {
 // orderly stop begins; production, which builds no recorder, reports {state: 'disabled'} once.
 const runtime = createRecordingRuntime({env: process.env, gameHistory: GAME_HISTORY_RECORDING, localAppData: process.env.LOCALAPPDATA, log,
   createWorker: () => historyWorker(__dirname), connectGame: (configuration, game) => new NativePipeClient(configuration, game, diagnoseV1Broker, 'v1'),
+  hardModeEvidence: () => hardMode.evidence(), onHardModeTrip: details => {port.postMessage({type: 'hard-mode', update: 'trip', trip: details});},
   onV1State, onRecordingStatus: status => port.postMessage({type: 'recording', status})});
 const v1 = runtime.v1;
 // ET-016 (J2, J4): journal reads from main, through the database the runtime opened, one at a time and only while it is
@@ -197,7 +223,7 @@ function exitAfterLog(code: number): Promise<void> {
 function exitAfterHistory(code: number): void {
   if (exiting) return;
   stopHeartbeat();
-  exiting = true; runtime.stopStatus();
+  exiting = true; hardModeLifetime.abort(); hardMode.close(); runtime.stopStatus();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const bound = new Promise<void>(resolve => {timer = setTimeout(resolve, HISTORY_CLOSE_BUDGET_MS);});
   void Promise.race([runtime.history.close().catch(() => undefined), bound]).then(() => {clearTimeout(timer); return exitAfterLog(code);});
@@ -215,7 +241,7 @@ runtime.register(shutdown);
 function stop(): void {
   if (stopping) return;
   stopHeartbeat();
-  stopping = true; stopReceivedAt = performance.now(); subscriptions.close(); runtime.stopStatus();
+  stopping = true; stopReceivedAt = performance.now(); subscriptions.close(); hardModeLifetime.abort(); hardMode.close(); runtime.stopStatus();
   void shutdown.run().then(({clean}) => {
     const message = {type: 'stopped', clean};
     log('SERVICE_REPORT', message); port.postMessage(message);
@@ -226,6 +252,7 @@ port.on('message', event => {
   const incoming: unknown = event.data;
   const command = incoming && typeof incoming === 'object' && !Array.isArray(incoming) ? incoming as Record<string, unknown> : undefined;
   if (command?.type === 'stop') stop();
+  else if (command?.type === 'hard-mode-refresh') {void hardMode.refresh();}
   else if (command?.type === 'unsubscribe') subscriptions.close();
   else if (command?.type === 'subscribe' && event.ports.length === 1) subscriptions.attach(event.ports[0]);
   else if (command?.type === 'select') {
@@ -260,3 +287,4 @@ port.on('message', event => {
 });
 void probe.start();
 runtime.start();
+hardMode.start();
