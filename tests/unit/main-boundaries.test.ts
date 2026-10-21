@@ -2764,10 +2764,15 @@ it.each([false, true])('retires held startup before an explicit request whose sa
   login.discover.mockReturnValueOnce(held.promise); settingsView = {...settingsView, autostart: true};
   await ready(); if (fail) autostartWrite.mockRejectedValueOnce(new FakeSettingsError('SETTINGS_WRITE_FAILED'));
   const requested = Promise.resolve(handlers.get('settings:set-autostart')!(trusted(), false));
-  if (fail) await expect(requested).rejects.toThrow('Settings could not be saved'); else await requested;
+  if (fail) {
+    await expect(requested).rejects.toThrow('Settings could not be saved');
+    expect(login.get).toHaveBeenCalledOnce(); expect(login.set).not.toHaveBeenCalled();
+    expect(handlers.get('app:get-state')!(trusted())).toMatchObject({autostart: 'registered', settings: {autostart: true}});
+  } else await requested;
   held.resolve({ok: true, mode: 'test-root', installRoot: 'C:\\isolated'}); await settle(); settingsChanged!(); await settle();
   expect(login.set).toHaveBeenCalledTimes(fail ? 0 : 1);
   if (!fail) expect(login.set).toHaveBeenCalledWith(expect.objectContaining({openAtLogin: false}));
+  else expect(handlers.get('app:get-state')!(trusted())).toMatchObject({autostart: 'registered', settings: {autostart: true}});
 });
 it('does not retire startup for rejected invalid or untrusted autostart requests', async () => {
   const login = installedLogin(), held = deferred<Awaited<ReturnType<typeof login.discover>>>();
@@ -2794,9 +2799,11 @@ it.each(['startup-discovery', 'request-discovery', 'durable-save'])('does not mu
     pending = Promise.resolve(handlers.get('settings:set-autostart')!(trusted(), true));
     await settle();
   }
+  const queriesBeforeExit = login.get.mock.calls.length;
   settingsIdle = deferred().promise; handlers.get('app:exit')!(trusted()); await settle();
   held.resolve({ok: true, mode: 'test-root', installRoot: 'C:\\isolated'}); settingsView = {...settingsView, autostart: true}; saved.resolve(settingsView);
   if (pending) await expect(pending).rejects.toThrow('retired'); await settle(); expect(login.set).not.toHaveBeenCalled();
+  expect(login.get).toHaveBeenCalledTimes(queriesBeforeExit);
 });
 it('applies the current committed choice rather than an older overlapping request result', async () => {
   const login = installedLogin(); await ready(); login.set.mockClear();
@@ -2806,4 +2813,53 @@ it('applies the current committed choice rather than an older overlapping reques
   const second = Promise.resolve(handlers.get('settings:set-autostart')!(trusted(), true)); await settle();
   settingsView = {...settingsView, autostart: true}; older.resolve({...settingsView, autostart: false}); newer.resolve(settingsView);
   await Promise.all([first, second]); expect(login.set.mock.calls.map(call => call[0].openAtLogin)).toEqual([true, true]);
+});
+
+it.each([{name: 'unregistered', registered: false, throws: false}, {name: 'failed', registered: true, throws: true}])(
+  'reports the synchronous $name registration query even when explicit persistence fails', async ({name, registered, throws}) => {
+    const login = installedLogin(), held = deferred<Awaited<ReturnType<typeof login.discover>>>();
+    login.discover.mockReturnValueOnce(held.promise); settingsView = {...settingsView, autostart: true}; await ready();
+    login.get.mockImplementation(() => {if (throws) throw new Error('query refused'); return {openAtLogin: registered};});
+    autostartWrite.mockRejectedValueOnce(new FakeSettingsError('SETTINGS_WRITE_FAILED'));
+    await expect(Promise.resolve(handlers.get('settings:set-autostart')!(trusted(), false))).rejects.toThrow('Settings could not be saved');
+    expect(handlers.get('app:get-state')!(trusted())).toMatchObject({autostart: name, settings: {autostart: true}});
+    held.resolve({ok: true, mode: 'test-root', installRoot: 'C:\\isolated'}); await settle();
+    expect(login.set).not.toHaveBeenCalled(); expect(login.get).toHaveBeenCalledOnce();
+  }
+);
+it('does not restore stale registration status when an older held save fails after a newer success', async () => {
+  const login = installedLogin(); autostartKnown = false; settingsView = {...settingsView, state: 'invalid-file', autostart: true};
+  let registered = true; login.get.mockImplementation(() => ({openAtLogin: registered}));
+  login.set.mockImplementation((options: {openAtLogin: boolean}) => {registered = options.openAtLogin;});
+  await ready(); const older = deferred<typeof settingsView>(); autostartWrite.mockReturnValueOnce(older.promise);
+  const first = Promise.resolve(handlers.get('settings:set-autostart')!(trusted(), true));
+  const rejected = expect(first).rejects.toThrow('Settings could not be saved'); await settle();
+  await handlers.get('settings:set-autostart')!(trusted(), false);
+  expect(handlers.get('app:get-state')!(trusted())).toMatchObject({autostart: 'unregistered', settings: {autostart: false}});
+  older.reject(new FakeSettingsError('SETTINGS_WRITE_FAILED')); await rejected;
+  expect(handlers.get('app:get-state')!(trusted())).toMatchObject({autostart: 'unregistered', settings: {autostart: false}});
+  expect(login.set).toHaveBeenCalledOnce();
+});
+it('retains a verified target when an older concurrent discovery later returns no installed target', async () => {
+  const login = installedLogin(), startup = deferred<Awaited<ReturnType<typeof login.discover>>>(), older = deferred<Awaited<ReturnType<typeof login.discover>>>();
+  login.discover.mockReturnValueOnce(startup.promise).mockReturnValueOnce(older.promise);
+  await ready(); const first = Promise.resolve(handlers.get('settings:set-autostart')!(trusted(), false));
+  await settle(); await handlers.get('settings:set-autostart')!(trusted(), true);
+  autostartWrite.mockRejectedValueOnce(new FakeSettingsError('SETTINGS_WRITE_FAILED'));
+  const rejected = expect(first).rejects.toThrow('Settings could not be saved');
+  older.resolve({ok: false} as unknown as Awaited<ReturnType<typeof login.discover>>); await rejected;
+  expect(handlers.get('app:get-state')!(trusted())).toMatchObject({autostart: 'registered', settings: {autostart: true}});
+  await handlers.get('settings:set-autostart')!(trusted(), true);
+  expect(login.discover).toHaveBeenCalledTimes(3); expect(login.set).toHaveBeenCalledTimes(2);
+  startup.resolve({ok: true, mode: 'test-root', installRoot: 'C:\\isolated'}); await settle(); expect(login.set).toHaveBeenCalledTimes(2);
+});
+it('observes actual status before a held durable save and mutates registration only after commit', async () => {
+  const login = installedLogin(); autostartKnown = false; settingsView = {...settingsView, state: 'invalid-file'};
+  await ready(); login.set.mockClear(); login.get.mockClear(); const saved = deferred<typeof settingsView>();
+  autostartWrite.mockReturnValueOnce(saved.promise);
+  const request = Promise.resolve(handlers.get('settings:set-autostart')!(trusted(), true)); await settle();
+  expect(login.get).toHaveBeenCalledOnce(); expect(login.set).not.toHaveBeenCalled();
+  expect(handlers.get('app:get-state')!(trusted())).toMatchObject({autostart: 'registered', settings: {autostart: false}});
+  settingsView = {...settingsView, autostart: true}; saved.resolve(settingsView); await request;
+  expect(login.set).toHaveBeenCalledOnce(); expect(login.set).toHaveBeenCalledWith(expect.objectContaining({openAtLogin: true}));
 });

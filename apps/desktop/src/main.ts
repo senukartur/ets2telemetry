@@ -805,13 +805,17 @@ function runApplication(profileError: unknown): void {
     if (!autostartTarget) {
       const roots = await resolveUninstallRoots({executable: process.execPath, env: process.env, fs: uninstallFs}).catch(() => ({ok: false as const, code: 'NOT_INSTALLED' as const}));
       if (lifecycle.exiting) throw new Error('Settings request was retired');
-      autostartTarget = resolveAutostartTarget(roots, process.execPath);
+      const candidate = resolveAutostartTarget(roots, process.execPath);
+      autostartTarget ??= candidate;
     }
     if (!autostartTarget) {
       autostartStatus = 'not-installed';
       pushAppState();
       throw new Error('Autostart is not available in an unpackaged or portable environment');
     }
+    // Observe now: a failed durable write must still report the actual registration, without restoring stale state.
+    autostartStatus = queryAutostartStatus(app, autostartTarget);
+    pushAppState();
     const view = await saveSettings(() => settingsStore.setAutostart(enabled));
     if (lifecycle.exiting) throw new Error('Settings request was retired');
     autostartStatus = applyAutostartRegistration(app, autostartTarget, settingsStore.view().autostart);
