@@ -496,7 +496,7 @@ it('declares a read hung at the 30 s limit, stays read-only and ignores its late
   await new Promise(resolve => setImmediate(resolve));
   expect(changed).toHaveBeenCalledOnce();
   expect(settings.view()).toMatchObject({state: 'unreadable', writable: false, units: {ets2: 'metric', ats: 'us-customary'}});
-  expect(events).toHaveLength(seen);
+  expect(events).toHaveLength(seen); expect(settings.knownAutostartIntent).toBeUndefined();
   expect((await read()).toString('utf8')).toBe(VALID_METRIC); expect(await list()).toEqual(['settings.json']);
 });
 
@@ -748,4 +748,37 @@ it('loads accepted v5 bytes without writing and saves v6 visibility without losi
   expect(settings.view()).toMatchObject({autostart: true, language: 'en', overlay: {enabled: false, layout: 'hud', sections: old.overlay.sections, placements: MOVED}});
   const saved = await read(); const restarted = store();
   expect(await restarted.load()).toEqual(settings.view()); expect(await read()).toEqual(saved);
+});
+
+it.each([
+  {name: 'missing file', bytes: undefined, intent: false},
+  {name: 'accepted v5 true', bytes: v6Text('metric', 'metric', 'en', 'strip', true, PLACEMENTS, true).replace('"version": 6', '"version": 5'), intent: true},
+  {name: 'current false', bytes: v6Text('metric', 'metric'), intent: false},
+  {name: 'unrelated fallback', bytes: v6Text('invalid', 'metric', 'en', 'strip', true, PLACEMENTS, true), intent: true},
+  {name: 'invalid autostart', bytes: v6Text('metric', 'metric').replace('"autostart": false', '"autostart": "false"'), intent: undefined},
+  {name: 'invalid file', bytes: CORRUPT, intent: undefined},
+  {name: 'unsupported older', bytes: '{"format":"ets2telemetry.settings","version":0}', intent: undefined},
+  {name: 'newer version', bytes: '{"format":"ets2telemetry.settings","version":999}', intent: undefined}
+])('classifies initial autostart authority independently: $name', async ({bytes, intent}) => {
+  if (bytes !== undefined) await seed(bytes);
+  const settings = store(); expect(settings.knownAutostartIntent).toBeUndefined(); await settings.load();
+  expect(settings.knownAutostartIntent).toBe(intent);
+  if (settings.view().writable) {
+    await settings.setLanguage('ru'); expect(settings.knownAutostartIntent).toBe(intent);
+    await settings.setAutostart(true); expect(settings.knownAutostartIntent).toBe(intent === undefined ? undefined : true);
+  }
+});
+it('never promotes unavailable, read-error or reparse defaults to login intent', async () => {
+  await seed(VALID_METRIC);
+  for (const settings of [new SettingsStore(undefined), store(wrapped({lstat: () => Promise.reject(errno('EIO'))})),
+    store(wrapped({lstat: async target => {const stat = await fs.lstat(target); return {...stat, isSymbolicLink: () => true};}}))]) {
+    await settings.load(); expect(settings.knownAutostartIntent).toBeUndefined();
+  }
+});
+it('exposes only the committed known intent through a held and failed durable save', async () => {
+  await seed(v6Text('metric', 'metric', 'en', 'strip', true, PLACEMENTS, true));
+  let release!: () => void; const gate = new Promise<void>(resolve => {release = resolve;});
+  const settings = store(wrapped({rename: async () => {await gate; throw errno('EIO');}})); await settings.load();
+  const pending = settings.setAutostart(false); expect(settings.knownAutostartIntent).toBe(true);
+  release(); await expect(pending).rejects.toMatchObject({code: 'SETTINGS_WRITE_FAILED'}); expect(settings.knownAutostartIntent).toBe(true);
 });

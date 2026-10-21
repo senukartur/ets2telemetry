@@ -117,7 +117,7 @@ function runApplication(profileError: unknown): void {
   // Settings load in parallel with the service start and never write. The store's view is the only settings state in
   // main; it changes only after a durable save or when a startup read that outlasted its budget is applied. The first
   // windows open after the load returned (at most 1000 ms), if need be with defaults in the read-only `loading` state.
-  const settingsStore = new SettingsStore(settingsDirectory(process.env.LOCALAPPDATA), {log, changed: () => settingsChanged()});
+  const settingsStore = new SettingsStore(settingsDirectory(process.env.LOCALAPPDATA), {log, changed: () => {settingsChanged(); void syncAutostart();}});
   const settingsLoad = settingsStore.load().then(() => undefined, (error: unknown) => {log('SETTINGS_LOAD_REJECTED', String(error));});
   let window: BrowserWindow | undefined, service: UtilityProcess | undefined, status: ScaffoldStatus | undefined;
   let subscribed = false, serviceReady = false;
@@ -126,26 +126,23 @@ function runApplication(profileError: unknown): void {
   let startHiddenOnLaunch = process.argv.includes('--hidden');
   let autostartTarget: AutostartTarget | undefined;
   let autostartStatus: AutostartRegistrationStatus = 'unregistered';
+  let autostartGeneration = 0, startupAutostartRetired = false;
+  // Startup may observe pending defaults, but only a classified initial load supplies login-item intent.
   async function syncAutostart(): Promise<void> {
+    if (startupAutostartRetired || lifecycle.exiting) return;
+    const generation = ++autostartGeneration;
     try {
       const roots = await resolveUninstallRoots({executable: process.execPath, env: process.env, fs: uninstallFs});
+      if (generation !== autostartGeneration || startupAutostartRetired || lifecycle.exiting) return;
       autostartTarget = resolveAutostartTarget(roots, process.execPath);
-      if (!autostartTarget) {
-        autostartStatus = 'not-installed';
-      } else {
-        const view = settingsStore.view();
-        if (view.autostart) {
-          autostartStatus = applyAutostartRegistration(app, autostartTarget, true);
-        } else {
-          const current = queryAutostartStatus(app, autostartTarget);
-          if (current === 'registered') {
-            autostartStatus = applyAutostartRegistration(app, autostartTarget, false);
-          } else {
-            autostartStatus = current;
-          }
-        }
-      }
+      const intent = settingsStore.knownAutostartIntent;
+      startupAutostartRetired = intent !== undefined || settingsStore.view().state !== 'loading';
+      const current = queryAutostartStatus(app, autostartTarget);
+      autostartStatus = intent === true || (intent === false && current === 'registered')
+        ? applyAutostartRegistration(app, autostartTarget, intent) : current;
     } catch {
+      if (generation !== autostartGeneration || startupAutostartRetired || lifecycle.exiting) return;
+      startupAutostartRetired = settingsStore.view().state !== 'loading';
       autostartStatus = 'not-installed';
     }
     pushAppState();
@@ -803,8 +800,11 @@ function runApplication(profileError: unknown): void {
     if (!trusted(event)) throw new Error('Untrusted settings request');
     const [enabled] = request;
     if (request.length !== 1 || typeof enabled !== 'boolean') throw new Error('Invalid autostart request');
+    startupAutostartRetired = true; ++autostartGeneration;
+    if (lifecycle.exiting) throw new Error('Settings request was retired');
     if (!autostartTarget) {
       const roots = await resolveUninstallRoots({executable: process.execPath, env: process.env, fs: uninstallFs}).catch(() => ({ok: false as const, code: 'NOT_INSTALLED' as const}));
+      if (lifecycle.exiting) throw new Error('Settings request was retired');
       autostartTarget = resolveAutostartTarget(roots, process.execPath);
     }
     if (!autostartTarget) {
@@ -813,7 +813,8 @@ function runApplication(profileError: unknown): void {
       throw new Error('Autostart is not available in an unpackaged or portable environment');
     }
     const view = await saveSettings(() => settingsStore.setAutostart(enabled));
-    autostartStatus = applyAutostartRegistration(app, autostartTarget, enabled);
+    if (lifecycle.exiting) throw new Error('Settings request was retired');
+    autostartStatus = applyAutostartRegistration(app, autostartTarget, settingsStore.view().autostart);
     pushAppState();
     return view;
   });

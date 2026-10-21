@@ -93,6 +93,7 @@ let autostartWrite: ReturnType<typeof vi.fn<(enabled: boolean) => Promise<typeof
 let settingsIdle: Promise<void> | undefined;
 let settingsDirectories: unknown[];
 let settingsLoaded: boolean;
+let autostartKnown: boolean;
 let settingsLoading: Promise<unknown>;
 // Clean late read (October 15, 2026): the `changed` callback main hands to the store, which reports a late read.
 let settingsChanged: (() => void) | undefined;
@@ -162,12 +163,13 @@ function installFixture() {
   vi.doMock('../../apps/desktop/src/broker-artifact', () => ({brokerConfiguration: resolveBroker, createBrokerResolver: () => resolveBroker}));
   vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'synthetic');
   settingsView = {autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: null};
-  settingsWrite = vi.fn<SettingsWrite>(); overlayWrite = vi.fn<OverlayWrite>(); autostartWrite = vi.fn((enabled: boolean) => Promise.resolve({...settingsView, autostart: enabled})); settingsIdle = undefined; settingsDirectories = []; settingsLoaded = true; settingsLoading = Promise.resolve();
-  settingsChanged = undefined;
+  settingsWrite = vi.fn<SettingsWrite>(); overlayWrite = vi.fn<OverlayWrite>(); autostartWrite = vi.fn((enabled: boolean) => {settingsView = {...settingsView, autostart: enabled}; return Promise.resolve(settingsView);}); settingsIdle = undefined; settingsDirectories = []; settingsLoaded = true; settingsLoading = Promise.resolve();
+  settingsChanged = undefined; autostartKnown = true;
   vi.doMock('../../apps/desktop/src/settings-store', () => ({
     settingsDirectory: (localAppData: unknown) => typeof localAppData === 'string' ? `${localAppData}\\ETS2Telemetry\\settings` : undefined, SettingsError: FakeSettingsError, SettingsBusyError: FakeSettingsBusyError,
     SettingsStore: class {
       get settled() {return settingsLoaded;}
+      get knownAutostartIntent() {return autostartKnown ? settingsView.autostart : undefined;}
       constructor(directory: unknown, options?: {changed?: () => void}) {settingsDirectories.push(directory); settingsChanged = options?.changed;}
       view() {return settingsView;}
       load() {return settingsLoading.then(() => {settingsLoaded = true; return settingsView;});}
@@ -187,7 +189,7 @@ async function removeFixture() {
   for (const name of processEvents) for (const listener of processEmitter.listeners(name)) if (!originals.get(name)!.includes(listener)) processEmitter.removeListener(name, listener as (...args: unknown[]) => void);
   vi.clearAllTimers(); vi.restoreAllMocks(); vi.useRealTimers(); vi.unstubAllEnvs();
   for (const name of ['electron', '../../apps/desktop/src/entrypoints', '../../apps/desktop/src/diagnostics', '../../apps/desktop/src/broker-artifact',
-    '../../apps/desktop/src/settings-store', '../../apps/desktop/src/plugin-setup/plugin-setup', '../../apps/desktop/src/squirrel-events',
+    '../../apps/desktop/src/settings-store', '../../apps/desktop/src/uninstall/roots', '../../apps/desktop/src/plugin-setup/plugin-setup', '../../apps/desktop/src/squirrel-events',
     '../../apps/desktop/src/uninstall/app-uninstall']) vi.doUnmock(name);
 }
 async function settle() {await Promise.resolve(); await Promise.resolve();}
@@ -1528,11 +1530,12 @@ it('commits off before cancelling an edit begun while the off save was pending, 
 });
 it.each([false, true])('keeps the real pending settings defaults hidden until a late enabled=%s load installs its geometry', async enabled => {
   const real = await vi.importActual<typeof import('../../apps/desktop/src/settings-store')>('../../apps/desktop/src/settings-store');
+  const login = installedLogin();
   const directory = await mkdtemp(path.join(os.tmpdir(), 'ets2-settings-visibility-'));
   const gate = deferred(), applied = deferred();
   const stores: InstanceType<typeof real.SettingsStore>[] = [];
-  const bytes = JSON.stringify({format: 'ets2telemetry.settings', version: 6, language: 'en', autostart: false,
-    units: {ets2: 'metric', ats: 'us-customary'}, overlay: {...DEFAULT_OVERLAY, enabled, layout: 'hud'}});
+  const bytes = JSON.stringify({format: 'ets2telemetry.settings', version: 6, language: 'en', autostart: true,
+    units: {ets2: 'invalid', ats: 'us-customary'}, overlay: {...DEFAULT_OVERLAY, enabled, layout: 'hud', sections: {...ALL_SECTIONS, rpm: 'invalid'}}});
   await writeFile(path.join(directory, 'settings.json'), bytes);
   // The production store, parser and load budget run unchanged; only file reads wait behind a controlled barrier.
   vi.doMock('../../apps/desktop/src/settings-store', () => ({...real, SettingsStore: class extends real.SettingsStore {
@@ -1556,8 +1559,10 @@ it.each([false, true])('keeps the real pending settings defaults hidden until a 
     expect(windows[1].showInactive).not.toHaveBeenCalled();
     settingsChanged!();
     expect(windows[1].showInactive).not.toHaveBeenCalled();
-    windows[1].setBounds.mockClear(); gate.resolve(); await applied.promise;
-    expect(store.view()).toMatchObject({state: 'loaded', overlay: {enabled, layout: 'hud'}});
+    expect(login.set).not.toHaveBeenCalled();
+    windows[1].setBounds.mockClear(); gate.resolve(); await applied.promise; await settle();
+    expect(login.set).toHaveBeenCalledOnce(); expect(login.set).toHaveBeenCalledWith(expect.objectContaining({openAtLogin: true}));
+    expect(store.view()).toMatchObject({state: 'loaded-with-fallbacks', autostart: true, overlay: {enabled, layout: 'hud'}});
     expect(await readFile(path.join(directory, 'settings.json'), 'utf8')).toBe(bytes);
     if (enabled) {
       expect(windows[1].setBounds.mock.calls).toEqual([[{x: -1904, y: 16, width: 320, height: 354}]]);
@@ -2728,4 +2733,77 @@ it('rejects autostart requests from untrusted senders, frames and the overlay, a
   for (const request of [['yes'], [1], [null], [], [{}]])
     await expect(saveAutostart(trusted(), ...request)).rejects.toThrow('Invalid autostart request');
   await expect(saveAutostart(trusted(), true)).rejects.toThrow('Autostart is not available in an unpackaged or portable environment');
+});
+
+// Login-item ports are entirely mocked; these cases never access Windows registration.
+function installedLogin() {
+  const get = vi.fn(() => ({openAtLogin: true})), set = vi.fn();
+  Object.assign(app, {getLoginItemSettings: get, setLoginItemSettings: set});
+  const discover = vi.fn(() => Promise.resolve({ok: true, mode: 'test-root', installRoot: 'C:\\isolated'}));
+  vi.doMock('../../apps/desktop/src/uninstall/roots', () => ({resolveUninstallRoots: discover}));
+  return {get, set, discover};
+}
+it.each(['loading', 'newer-version'])('does not unregister existing login registration from unknown %s defaults', async state => {
+  const login = installedLogin(); autostartKnown = false;
+  settingsView = {...settingsView, state, writable: false};
+  await ready(); await settle();
+  expect(login.get).toHaveBeenCalled(); expect(login.set).not.toHaveBeenCalled();
+  expect(handlers.get('app:get-state')!(trusted())).toMatchObject({autostart: 'registered'});
+});
+
+it('supersedes held startup discovery with the late authoritative load exactly once', async () => {
+  const login = installedLogin(), held = deferred<Awaited<ReturnType<typeof login.discover>>>();
+  login.discover.mockReturnValueOnce(held.promise); autostartKnown = false; settingsView = {...settingsView, state: 'loading'};
+  await ready(); settingsView = {...settingsView, state: 'loaded', autostart: true}; autostartKnown = true;
+  settingsChanged!(); await settle(); expect(login.set).toHaveBeenCalledOnce();
+  held.resolve({ok: true, mode: 'test-root', installRoot: 'C:\\isolated'}); await settle();
+  expect(login.set).toHaveBeenCalledOnce(); expect(login.set).toHaveBeenCalledWith(expect.objectContaining({openAtLogin: true}));
+});
+it.each([false, true])('retires held startup before an explicit request whose save fails=%s', async fail => {
+  const login = installedLogin(), held = deferred<Awaited<ReturnType<typeof login.discover>>>();
+  login.discover.mockReturnValueOnce(held.promise); settingsView = {...settingsView, autostart: true};
+  await ready(); if (fail) autostartWrite.mockRejectedValueOnce(new FakeSettingsError('SETTINGS_WRITE_FAILED'));
+  const requested = Promise.resolve(handlers.get('settings:set-autostart')!(trusted(), false));
+  if (fail) await expect(requested).rejects.toThrow('Settings could not be saved'); else await requested;
+  held.resolve({ok: true, mode: 'test-root', installRoot: 'C:\\isolated'}); await settle(); settingsChanged!(); await settle();
+  expect(login.set).toHaveBeenCalledTimes(fail ? 0 : 1);
+  if (!fail) expect(login.set).toHaveBeenCalledWith(expect.objectContaining({openAtLogin: false}));
+});
+it('does not retire startup for rejected invalid or untrusted autostart requests', async () => {
+  const login = installedLogin(), held = deferred<Awaited<ReturnType<typeof login.discover>>>();
+  login.discover.mockReturnValueOnce(held.promise); settingsView = {...settingsView, autostart: true}; await ready();
+  await expect(Promise.resolve(handlers.get('settings:set-autostart')!(trusted(), 'true'))).rejects.toThrow('Invalid');
+  await expect(Promise.resolve(handlers.get('settings:set-autostart')!({sender: {}}, true))).rejects.toThrow('Untrusted');
+  held.resolve({ok: true, mode: 'test-root', installRoot: 'C:\\isolated'}); await settle();
+  expect(login.set).toHaveBeenCalledOnce(); expect(login.set).toHaveBeenCalledWith(expect.objectContaining({openAtLogin: true}));
+});
+it('queries terminal unknown settings once without later reconciling ordinary saves', async () => {
+  const login = installedLogin(); autostartKnown = false; settingsView = {...settingsView, state: 'invalid-file'};
+  await ready(); settingsWrite.mockImplementation(() => {settingsView = {...settingsView, state: 'loaded'}; return Promise.resolve(settingsView);});
+  const saveUnits: (...request: unknown[]) => unknown = handlers.get('settings:set-unit-profile')!;
+  await saveUnits(trusted(), 'ets2', 'metric');
+  settingsChanged!(); await settle(); expect(login.discover).toHaveBeenCalledOnce(); expect(login.set).not.toHaveBeenCalled();
+});
+it.each(['startup-discovery', 'request-discovery', 'durable-save'])('does not mutate registration when exit retires %s', async stage => {
+  const login = installedLogin(), held = deferred<Awaited<ReturnType<typeof login.discover>>>(), saved = deferred<typeof settingsView>();
+  if (stage === 'startup-discovery') login.discover.mockReturnValueOnce(held.promise);
+  else if (stage === 'request-discovery') {autostartKnown = false; settingsView = {...settingsView, state: 'loading'}; login.discover.mockResolvedValueOnce({ok: false} as unknown as Awaited<ReturnType<typeof login.discover>>).mockReturnValueOnce(held.promise);}
+  await ready(); login.set.mockClear(); let pending: Promise<unknown> | undefined;
+  if (stage !== 'startup-discovery') {
+    if (stage === 'durable-save') autostartWrite.mockReturnValueOnce(saved.promise);
+    pending = Promise.resolve(handlers.get('settings:set-autostart')!(trusted(), true));
+    await settle();
+  }
+  settingsIdle = deferred().promise; handlers.get('app:exit')!(trusted()); await settle();
+  held.resolve({ok: true, mode: 'test-root', installRoot: 'C:\\isolated'}); settingsView = {...settingsView, autostart: true}; saved.resolve(settingsView);
+  if (pending) await expect(pending).rejects.toThrow('retired'); await settle(); expect(login.set).not.toHaveBeenCalled();
+});
+it('applies the current committed choice rather than an older overlapping request result', async () => {
+  const login = installedLogin(); await ready(); login.set.mockClear();
+  const older = deferred<typeof settingsView>(), newer = deferred<typeof settingsView>();
+  autostartWrite.mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
+  const first = Promise.resolve(handlers.get('settings:set-autostart')!(trusted(), false));
+  const second = Promise.resolve(handlers.get('settings:set-autostart')!(trusted(), true)); await settle();
+  settingsView = {...settingsView, autostart: true}; older.resolve({...settingsView, autostart: false}); newer.resolve(settingsView);
+  await Promise.all([first, second]); expect(login.set.mock.calls.map(call => call[0].openAtLogin)).toEqual([true, true]);
 });

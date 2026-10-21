@@ -239,3 +239,9 @@ A successful off save gates visibility before hiding and cancelling edit mode, d
 While the startup read is still `loading`, the overlay remains hidden even though the pending settings view carries the enabled default. A completed read applies its saved value and final geometry. Once the read limit reports `unreadable`, the existing default-true fallback applies; the loading gate does not change corruption or read-limit policy.
 
 The first save writes canonical v6; v1–v5 load without startup writes. Missing or invalid current-format visibility falls back independently to true with `overlay.enabled`. Older applications treat v6 as newer-version and refuse writes rather than erase visibility. Historical fixture files remain unchanged. See [ET-012e evidence and pending manual checks](validation/et-012e.md).
+
+### Startup autostart authority
+
+The main-only store getter distinguishes a confirmed initial autostart choice from display defaults. A positively missing file/directory supplies false; parsed settings supply their current committed choice, including a migration or unrelated field fallback. A fallback of autostart itself, invalid/unsupported/newer files, unavailable/read-error/reparse outcomes, pending reads and the read limit supply no intent. Generic saves never promote an unknown initial load. A read retired at 30 seconds cannot restore authority later.
+
+Startup queries actual registration while intent is unknown and never writes login registration from provisional defaults. A late load may reconcile once; it supersedes older target discovery. Ordinary save publications do not restart this startup operation. A valid trusted explicit autostart request retires startup before awaiting discovery, even if its durable save fails; invalid/untrusted requests do not. Exit retires pending discovery and prevents OS mutation after a durable save. Explicit successful writes apply the current committed choice, preserving shared-queue ordering.
