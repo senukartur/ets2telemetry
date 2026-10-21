@@ -5,8 +5,9 @@ const {version} = require('./package.json');
 // inspect-package --installer and the installer lifecycle find Setup by this exact name.
 const squirrel = {name: 'ETS2TelemetryDesktop', authors: 'ETS2Telemetry contributors',
   description: 'Local telemetry utility for Euro Truck Simulator 2 and American Truck Simulator', setupExe: `ETS2Telemetry-Setup-${version}.exe`,
-  // The Setup executable's own icon; scripts/generate-app-icons.mjs renders it from the logo.
-  setupIcon: 'resources/icon/app.ico'};
+  // The Setup executable's own icon; scripts/generate-app-icons.mjs renders it from the logo. skipUpdateIcon keeps
+  // Update.exe byte-identical to the vendored Squirrel.exe, which release-identity.mjs asserts (docs/release.md).
+  setupIcon: 'resources/icon/app.ico', skipUpdateIcon: true};
 
 module.exports = {
   // better-sqlite3 13.0.3 ships Node-API prebuilds; preserve its bundled binary.

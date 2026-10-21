@@ -78,8 +78,8 @@ Values are in [tokens.css](tokens.css). Summary:
 **Application icon.** Added on October 21, 2026 at the owner's request for the taskbar and the notification area. It is a separate mark, so the logo rules above about plates and shadows do not apply to it. `scripts/generate-app-icons.mjs` renders it from `assets/logo.png`; rerun it and commit the outputs whenever the logo changes.
 - The bear in `--yu-bg-chrome`-to-`--yu-accent` gradient tile with rounded corners and a `--yu-accent-light` rim, so it reads on light and dark taskbars.
 - 48 px and above keep every inner stroke of the logo, as cut-outs, with a soft shadow below the bear. Below 48 px the silhouette is filled and only the open mouth and the eye are cut out in `--yu-bg-chrome`, because thinner strokes fade.
-- `resources/icon/app.ico` (16–256 px) is embedded in the executable and Setup, so the taskbar, shortcuts and windows show it.
-- The notification-area icon is the small mark with a status dot in the lower right corner: green `#34D399` ready, amber `#F59E0B` starting, restarting or exiting, red `#EF4444` failed. The tray tooltip states the status in words, so the dot is never the only signal.
+- `resources/icon/app.ico` (16–256 px) is embedded in the executable and is the Setup icon, so the taskbar, shortcuts and windows show it. Squirrel's Update.exe keeps its vendored icon.
+- The notification-area icon is the small mark with a status dot in the lower right corner: green `#34D399` ready, amber `#F59E0B` starting, restarting or exiting, red `#EF4444` failed. The tray tooltip states the status in words, so the dot is never the only signal. Green is `--yu-online`; amber and red are icon-only values with no token, defined by the generator and `TRAY_TONE_RGB` in `apps/desktop/src/tray-icon.ts`, which a unit test keeps equal.
 
 **Icons.** `lucide-react` (already a dependency) with `strokeWidth={1.8}`, round caps and joins. Sizes: 14 px inside badges and small buttons, 16 px default, 18 px in the sidebar, 28 px in empty states. Icon names used:
 
