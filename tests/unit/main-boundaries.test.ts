@@ -189,6 +189,7 @@ async function removeFixture() {
 async function settle() {await Promise.resolve(); await Promise.resolve();}
 async function ready() {await loadMain(); await Promise.resolve(); child.emit('message', {type: 'ready'}); await settle();}
 const trusted = () => ({sender: contents, senderFrame: contents.mainFrame});
+const sourceEvents = () => log.mock.calls.filter(call => call[0] === 'SOURCE_SELECTED' || call[0] === 'SOURCE_SELECTION_RETIRED');
 function upstreamRequests(target = child) {return target.postMessage.mock.calls.filter(call => call[0].type === 'subscribe').length;}
 async function exhaustUpstream() {
   const retired: typeof channels = [];
@@ -220,6 +221,48 @@ it('commits selected state only after successful IPC and retains sender/main-fra
   await expect(select(trusted(), 'replay')).rejects.toThrow('closed IPC');
   child.emit('exit', 1);
   expect(contents.send.mock.calls[0][1].selection).toBe('synthetic');
+  expect(sourceEvents()).toEqual([['SOURCE_SELECTED', undefined, {source: 'synthetic', origin: 'startup'}]]);
+});
+
+it.each(['game', 'ets2', 'ats', 'synthetic', 'replay'])('logs the first dispatched %s selection with only fixed startup facts', async source => {
+  vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', source);
+  resolveBroker.mockReturnValue({executable: 'C:\\private\\broker.exe', args: ['private-user'], pid: 123, peer: 'secret'});
+  await ready();
+  expect(sourceEvents()).toEqual([['SOURCE_SELECTED', undefined, {source, origin: 'startup'}]]);
+  child.emit('message', {type: 'ready'}); await settle();
+  expect(sourceEvents()).toHaveLength(1);
+});
+it('logs successful user selections, retiring only a replaced committed selection, and distinguishes restore', async () => {
+  await ready(); const select = handlers.get('telemetry:select')!;
+  await select(trusted(), 'ats'); await vi.advanceTimersByTimeAsync(250); await select(trusted(), 'ats');
+  child.emit('exit', 1); await vi.advanceTimersByTimeAsync(250); children[1].emit('message', {type: 'ready'}); await settle();
+  expect(sourceEvents()).toEqual([
+    ['SOURCE_SELECTED', undefined, {source: 'synthetic', origin: 'startup'}],
+    ['SOURCE_SELECTION_RETIRED', undefined, {source: 'synthetic', origin: 'user'}],
+    ['SOURCE_SELECTED', undefined, {source: 'ats', origin: 'user'}],
+    ['SOURCE_SELECTED', undefined, {source: 'ats', origin: 'user'}],
+    ['SOURCE_SELECTED', undefined, {source: 'ats', origin: 'restore'}]
+  ]);
+});
+it('logs no source success for malformed, untrusted, rate-limited or failed dispatch requests', async () => {
+  await ready(); const select = handlers.get('telemetry:select')!;
+  await expect(select(trusted(), 'C:\\private\\not-a-source')).rejects.toThrow('Invalid');
+  await expect(select({sender: {}, senderFrame: {}}, 'ats')).rejects.toThrow('Untrusted');
+  child.postMessage.mockImplementationOnce(() => {throw new Error('C:\\private\\closed IPC');});
+  await expect(select(trusted(), 'ats')).rejects.toThrow('closed IPC');
+  await expect(select(trusted(), 'replay')).rejects.toThrow('limit');
+  expect(sourceEvents()).toEqual([['SOURCE_SELECTED', undefined, {source: 'synthetic', origin: 'startup'}]]);
+});
+it('does not log a startup selection if dispatch fails', async () => {
+  child.postMessage.mockImplementation(() => {throw new Error('private failed dispatch');});
+  await ready(); expect(sourceEvents()).toEqual([]);
+});
+it('keeps startup origin for the first successful dispatch after an earlier readiness was retired', async () => {
+  vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2'); const complete = pendingVerification();
+  await ready(); child.emit('exit', 1); resolveBroker.mockReturnValue(undefined);
+  await vi.advanceTimersByTimeAsync(250); children[1].emit('message', {type: 'ready'}); await settle();
+  complete(); await settle();
+  expect(sourceEvents()).toEqual([['SOURCE_SELECTED', undefined, {source: 'ets2', origin: 'startup'}]]);
 });
 
 function pendingVerification() {
@@ -233,7 +276,7 @@ it.each(['owned', 'retired'])('awaits game startup verification before window cr
   await expect(handlers.get('telemetry:select')!(trusted(), 'synthetic')).rejects.toThrow('Untrusted');
   if (outcome === 'retired') child.emit('exit', 1);
   complete(); await settle();
-  if (outcome === 'retired') {expect(loadFile).not.toHaveBeenCalled(); expect(child.postMessage).not.toHaveBeenCalled();}
+  if (outcome === 'retired') {expect(loadFile).not.toHaveBeenCalled(); expect(child.postMessage).not.toHaveBeenCalled(); expect(sourceEvents()).toEqual([]);}
   else {expect(loadFile).toHaveBeenCalledTimes(2); expect(child.postMessage).toHaveBeenCalledWith({type: 'select', source: 'ets2', broker: undefined});}
 });
 it('does not dispatch or commit an older game request after a newer source selection', async () => {
@@ -242,6 +285,11 @@ it('does not dispatch or commit an older game request after a newer source selec
   await select(trusted(), 'replay'); complete(); await expect(older).rejects.toThrow('retired');
   expect(child.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({type: 'select', source: 'ets2'}));
   child.emit('exit', 1); expect(contents.send.mock.calls[0][1].selection).toBe('replay');
+  expect(sourceEvents()).toEqual([
+    ['SOURCE_SELECTED', undefined, {source: 'synthetic', origin: 'startup'}],
+    ['SOURCE_SELECTION_RETIRED', undefined, {source: 'synthetic', origin: 'user'}],
+    ['SOURCE_SELECTED', undefined, {source: 'replay', origin: 'user'}]
+  ]);
 });
 it.each(['service-exit', 'frame-replaced', 'reload', 'renderer-crash', 'stop'])('rechecks async dispatch ownership after %s', async reason => {
   await ready(); const complete = pendingVerification(), event = trusted();
@@ -253,6 +301,7 @@ it.each(['service-exit', 'frame-replaced', 'reload', 'renderer-crash', 'stop'])(
   else app.emit('before-quit', {preventDefault: vi.fn()});
   complete(); await expect(pending).rejects.toThrow('retired');
   expect(child.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({type: 'select', source: 'ats'}));
+  expect(sourceEvents()).toEqual([['SOURCE_SELECTED', undefined, {source: 'synthetic', origin: 'startup'}]]);
 });
 it('recovers separated renderer crashes while stopping clustered crash loops', async () => {
   await ready();
@@ -1974,6 +2023,7 @@ it('never makes a service ready, selected or the journal\'s service when its fai
   replacement.emit('message', {type: 'failed', code: 'STORAGE_WORKER_EXIT'});
   complete(); await settle();
   expect(replacement.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({type: 'select'}));
+  expect(sourceEvents()).toEqual([['SOURCE_SELECTED', undefined, {source: 'ets2', origin: 'startup'}]]);
   expect(handlers.get('scaffold:status')!(trusted())).toBeNull();
   await expect(journalCall('journal:list-trips', trusted(), {})).resolves.toEqual({ok: false, code: 'SERVICE_UNAVAILABLE'});
   expect(journalSent(replacement)).toEqual([]);

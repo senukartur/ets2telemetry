@@ -145,6 +145,20 @@ ET-002b PR-2 adds the `protocol-v1-asan-test` console target to that ASan build 
 
 Each job's timeout is 20 minutes; see [Job layout](#job-layout) for the per-job budget. The clean and restored hosted jobs of October 11, 2026, then a single job, measured 199 and 200 seconds respectively; feedback under 10 minutes remains a target for future runs. `versions.json` records elapsed time from toolchain verification through final collection. GitHub job duration includes earlier checkout/setup overhead and is the end-to-end timing source. Always-uploaded 14-day evidence includes JUnit results, runtime runs, package inspection and CTest diagnostics; workflow command logs contain build/install/vendor output. Both job names (`Windows x64 scaffold` and `Windows x64 native AddressSanitizer`) are required status checks of the `Protect main` ruleset, so renaming a job requires updating the ruleset in the same change ([branch protection](../AGENTS.md#branch-protection--october-16-2026)). Superseded runs are cancelled; cancellation is not a passed check.
 
+### Exit observation (ET-011 closeout)
+
+The runtime driver observes the exit request, launcher `exit`, launcher/stdio `close` and Playwright
+close separately. It installs listeners before requesting exit and retains a small observation on
+failure. The same eight-second operation deadline includes the request itself, so a pending renderer
+evaluation cannot prevent the driver from reporting its timeout. A rejected renderer evaluation during
+teardown is tolerated only with an observed clean launcher exit; a required `application.close()`
+failure still fails. An application `APP_EXIT` log or launcher `exit` alone cannot replace a required
+Playwright close completion. Late request failures are consumed and listeners/timers are removed.
+
+These observations do not enlarge the 60-second runtime Job or change its process/memory/CPU limits,
+clean exit, storage, receipt or natural-drain predicates. The old saturated-host failure remains failed
+evidence with an unproven cause; see [ET-011](validation/et-011.md#historical-timeout-evidence).
+
 ### Resource evidence (ET-019 PR-11)
 
 Since ET-019 PR-11 (October 19, 2026) every runtime smoke records resource evidence: development, packaged and installed mode, every scenario. The values are measured, not gated (ET-019 plan decision D3, measure, then gate): no threshold fails a run. `Test-RuntimeReceipt` fails only a receipt whose values are missing or implausible, with the reason `RESOURCE_EVIDENCE_INCOMPLETE_OR_INVALID`. The wrapper always names its `job-result.json` for that check; a caller that names none keeps the earlier rules.
