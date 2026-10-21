@@ -20,7 +20,7 @@ function write(db: Database.Database, id: unknown, details: HardModeDetails, qua
   db.prepare('UPDATE trips SET is_hard_mode = ?, hard_mode_details = ? WHERE id = ?').run(qualifies ? 1 : 0, text, id);
 }
 /** One bounded observer command; storage's own FIFO serializes it with event commits, without any ACK. */
-export function updateOpenHardMode(db: Database.Database, game: string, observation: HardModeObservation, now: number, fresh = false): void {
+export function updateOpenHardMode(db: Database.Database, game: string, observation: HardModeObservation, now: number, fresh = false, latest: 'publication' | 'frozen' = 'publication'): void {
   if (typeof fresh !== 'boolean' || !isHardModeObservation(observation)) fail('INVALID_INPUT');
   const rows = db.prepare("SELECT id, hard_mode_details FROM trips WHERE game = ? AND outcome = 'open' LIMIT 101").all(game) as {id: unknown; hard_mode_details: unknown}[];
   if (rows.length > 100) fail('INVALID_INPUT');
@@ -31,7 +31,7 @@ export function updateOpenHardMode(db: Database.Database, game: string, observat
     // Freshness was frozen at offer/intake on the service's monotonic clock, before this FIFO/transaction.
     const assessment = !fresh && observation.assessment.state === 'pass' ? unknownHardMode(now, 'interrupted') : observation.assessment;
     const loss = assessment.state === 'unknown' ? 'interrupted' : previous.binding !== observation.binding ? 'source-changed' : undefined;
-    write(db, row.id, advanceHardMode(previous, assessment, loss));
+    write(db, row.id, advanceHardMode(previous, assessment, loss, latest));
   }
 }
 /** Runs after the ordinary effects, within their event transaction. Duplicates return before this function. */
@@ -57,7 +57,7 @@ export function applyEventHardMode(db: Database.Database, message: Extract<Serve
       write(db, row.id, details);
     } else if (previous) {
       const loss: HardModeReason | undefined = assessment.state === 'fail' ? undefined : previous.binding !== observation?.binding ? 'source-changed' : fresh ? undefined : 'interrupted';
-      let details = advanceHardMode(previous, assessment, loss);
+      let details = advanceHardMode(previous, assessment, loss, 'frozen');
       const delivered = message.data.record;
       details.manualDelivery = delivered.type === 'job.delivered' && delivered.autoParkUsed.available ? delivered.autoParkUsed.value === false : null;
       if (row.outcome === 'delivered' && details.manualDelivery !== true) details = hardModeLoss(details, now, 'parking-unproven');

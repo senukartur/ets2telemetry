@@ -143,6 +143,13 @@ export async function runHardModeSmoke({application, dashboard, source, config, 
   await source.settings('pass'); await until(async () => (await current(dashboard)).assessment.state, value => value === 'pass', 'HARD_MODE_PASS', 8000); record.pass = true; await until(() => dashboard.getByTestId('hard-mode-card').getAttribute('data-state'), state => state === 'pass', 'HARD_MODE_RENDERED_PASS', 5000); await dashboard.getByTestId('hard-mode-card').screenshot({path: path.join(config.output, 'hard-mode-pass.png')});
   source.begin('qualifying');
   await until(async () => await trips(dashboard), rows => rows.length === 1 && rows[0].outcome === 'open', 'HARD_MODE_OPEN', 5000);
+  // Require two distinct persisted passing publications while this trip is open, through the production adapter.
+  let observed = (await until(() => current(dashboard), value => value.trip?.latest.state === 'pass' && value.trip.firstLoss === null, 'HARD_MODE_OPEN_AUDIT', 5000)).trip.latest.observedUtcMs;
+  for (let refresh = 0; refresh < 2; refresh++) {
+    await clickTestId(dashboard, 'hard-mode-refresh');
+    const next = await until(() => current(dashboard), value => value.trip?.latest.state === 'pass' && value.trip.firstLoss === null && value.trip.latest.observedUtcMs !== observed, 'HARD_MODE_OPEN_PASSING_REFRESH', 8000);
+    assert.equal((await trips(dashboard))[0].outcome, 'open'); observed = next.trip.latest.observedUtcMs;
+  }
   source.deliver();
   const positive = await until(async () => await trips(dashboard), rows => rows.length === 1 && rows[0].isHardMode === true, 'HARD_MODE_QUALIFIED', 5000);
   record.qualified = positive[0].tripUuid;

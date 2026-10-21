@@ -49,10 +49,11 @@ export function evaluateHardMode(settings: ParsedSettings, observedUtcMs: number
 export function unknownHardMode(at: number, reason: HardModeReason = 'source-unproven'): HardModeAssessment {
   return {observedUtcMs: at, state: 'unknown', source: 'unknown', rules: HARD_MODE_RULES.map(({id}) => ({id, state: 'unknown', values: id === 'parking' ? [null, null] : [null], reason}))};
 }
-export function advanceHardMode(previous: HardModeDetails | null, assessment: HardModeAssessment, loss?: HardModeReason): HardModeDetails {
+/** Ordered observer offers replace latest; queued intake reapplication only latches loss, independently of UTC labels. */
+export function advanceHardMode(previous: HardModeDetails | null, assessment: HardModeAssessment, loss?: HardModeReason, latest: 'publication' | 'frozen' = 'publication'): HardModeDetails {
   const failed = assessment.rules.find(r => r.state !== 'pass');
   const firstLoss = previous?.firstLoss ?? (loss || failed ? {atUtcMs: assessment.observedUtcMs, reason: loss ?? failed!.reason, rule: loss ? null : failed!.id, values: loss ? null : [...failed!.values]} : null);
-  return {version: 1, binding: previous?.binding ?? null, opening: previous?.opening ?? assessment, latest: previous && previous.latest.observedUtcMs > assessment.observedUtcMs ? previous.latest : assessment, firstLoss, manualDelivery: previous?.manualDelivery ?? null};
+  return {version: 1, binding: previous?.binding ?? null, opening: previous?.opening ?? assessment, latest: previous && latest === 'frozen' ? previous.latest : assessment, firstLoss, manualDelivery: previous?.manualDelivery ?? null};
 }
 export function hardModeLoss(details: HardModeDetails, atUtcMs: number, reason: HardModeReason, rule: HardModeRuleId | null = null): HardModeDetails {
   return {...details, firstLoss: details.firstLoss ?? {atUtcMs, reason, rule, values: rule ? details.latest.rules.find(r => r.id === rule)?.values ?? null : null}};

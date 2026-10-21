@@ -4,6 +4,7 @@ import {HardModeReader} from '../../apps/desktop/src/hard-mode/reader';
 import {Worker} from 'node:worker_threads';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import {StorageClient, workerHandle} from '../../packages/storage/src/client';
+import {recorderClient} from '../../apps/desktop/src/history-storage';
 import {HardModeMonitor} from '../../apps/desktop/src/hard-mode/monitor';
 import {TripRecorderSink} from '../../apps/desktop/src/trip-recorder';
 import type {HardModeObservation} from '../../packages/contracts/src/hard-mode';
@@ -135,7 +136,7 @@ describe('ET-026 integrity (REG-005/006/007)', () => {
     let recorder!: TripRecorderSink, observing = false;
     // Establish the known passing baseline before attaching recording observations; all later observations are persisted.
     const monitor = new HardModeMonitor(() => Promise.resolve(evidence(config)), value => {if (observing) recorder.observeHardMode('ets2', value);}, () => mono);
-    recorder = new TripRecorderSink(client, {hardModeEvidence: () => monitor.evidence()});
+    recorder = new TripRecorderSink(recorderClient({client}), {hardModeEvidence: () => monitor.evidence()});
     const pipeline = new DurableDelivery(recorder);
     try {
       ok(await client.open({path: ws.database, purpose: 'synthetic', backupsDirectory: ws.backups, appVersion: 'test-et026'}));
@@ -180,7 +181,7 @@ describe('ET-026 integrity (REG-005/006/007)', () => {
       pid: source.processId, createdUtcMs: new Date(2026, 9, 20, 12, 0, 0).getTime(), executable: 'C:/Synthetic/eurotrucks2.exe', commandLine: 'synthetic'})});
     let recorder!: TripRecorderSink;
     const monitor = new HardModeMonitor(async (...args) => {try {return await reader.read(...args);} finally {readFinished?.();}}, value => {if (observe) recorder.observeHardMode('ets2', value);}, () => mono);
-    recorder = new TripRecorderSink(client, {hardModeEvidence: () => monitor.evidence()});
+    recorder = new TripRecorderSink(recorderClient({client}), {hardModeEvidence: () => monitor.evidence()});
     const pipeline = new DurableDelivery(recorder), acks: string[] = [], failures: string[] = [];
     const script = new Script(ETS2_A), welcome = script.welcome();
     const scan = async () => {
@@ -199,8 +200,15 @@ describe('ET-026 integrity (REG-005/006/007)', () => {
         boundary: {clockId: script.clockId, probeSentClientNs: mono.toString(), receivedSourceNs: welcome.capture.monotonicNs}}); await initial; observe = true;
       const connection = pipeline.connect(welcome, {current: () => true, write: bytes => {const m = decodePayload(bytes.subarray(4), 'client') as ClientMessage; if (m.kind === 'ack') acks.push(m.data.throughEventSeq);}, close: (_kind, code) => failures.push(code)});
       connection.checkpoint(script.checkpoint(null), Date.now()); await pipeline.idle();
-      const through = client.committedThrough.bind(client);
+      const through = client.committedThrough.bind(client), offered = client.observeHardMode.bind(client);
+      let countOpenPasses = false, openPasses = 0;
+      client.observeHardMode = async (game, value, fresh) => {
+        const result = await offered(game, value, fresh);
+        if (countOpenPasses && fresh && value.assessment.state === 'pass' && result.ok) openPasses++;
+        return result;
+      };
       for (const seq of ['1', '2']) {
+        countOpenPasses = seq === '2';
         if (mode === 'expired-intake' && seq === '1') mono += 3_000_000_001n;
         let release!: () => void, entered!: () => void; const held = new Promise<void>(resolve => {entered = resolve;});
         client.committedThrough = session => {client.committedThrough = through; return new Promise(resolve => {release = () => {void through(session).then(resolve);}; entered();});};
@@ -223,7 +231,7 @@ describe('ET-026 integrity (REG-005/006/007)', () => {
       const trip = ok(await client.listTrips()).trips[0], details = ok(await client.getTrip(trip.tripUuid))!;
       const qualified = ['delay', 'utc-forward', 'utc-back'].includes(mode);
       expect(details).toMatchObject({outcome: 'delivered', isHardMode: qualified});
-      if (qualified) expect(details.hardModeDetails!.firstLoss).toBeNull();
+      if (qualified) {expect(details.hardModeDetails!.firstLoss).toBeNull(); expect(openPasses).toBeGreaterThanOrEqual(2);}
       else {expect(details.hardModeDetails!.firstLoss).not.toBeNull(); if (mode === 'pending-failure') expect(details.hardModeDetails!.firstLoss).toMatchObject({rule: 'fatigue', values: [0]});}
       expect(acks).toEqual(['1', '2']);
     } finally {monitor.close(); await pipeline.stop(); utc.mockRestore(); expect(await client.close()).toEqual({clean: true});}

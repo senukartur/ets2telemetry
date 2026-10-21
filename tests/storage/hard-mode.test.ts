@@ -59,6 +59,27 @@ describe('ET-026 worker classification (REG-001/003/005/006/007/014)', () => {
     expect(ok(await client.getTrip(f.trip))).toMatchObject({isHardMode: false, hardModeDetails: {firstLoss: first}}); expect(first).not.toBeNull();
     if (kind === 'failed') {expect(first!.values).toEqual([0]); expect(ok(await client.getTrip(f.trip))!.hardModeDetails!.latest.rules[3].values).toEqual([1]);}
   });
+  it.each([false, true])('publishes latest through UTC rollback and preserves it against frozen closing proof (restore=%s)', async restore => {
+    const f = await setup(), last = f.script.event(manual()), capture = f.recorder.capture(last)!;
+    const observedUtcMs = capture.observation.assessment.observedUtcMs - 120_000;
+    const failure = evidence(HARD_MODE_CONFIG.replace('g_fatigue "1"', 'g_fatigue "0"')); failure.assessment.observedUtcMs = observedUtcMs;
+    ok(await client.observeHardMode('ets2', failure, true));
+    const first = ok(await client.getTrip(f.trip))!.hardModeDetails!.firstLoss;
+    expect(first).toMatchObject({atUtcMs: observedUtcMs, rule: 'fatigue', values: [0]});
+    let expected = failure.assessment;
+    expect(ok(await client.journalTrip(f.trip)).trip.hardModeDetails!.latest).toEqual(expected);
+    if (restore) {
+      const passing = evidence(); passing.assessment.observedUtcMs = observedUtcMs - 1000;
+      ok(await client.observeHardMode('ets2', passing, true)); expected = passing.assessment;
+    }
+    ok(await f.recorder.commit(last, {receivedUtcMs: Date.now(), hardModeCapture: capture}));
+    expect(ok(await client.getTrip(f.trip))).toMatchObject({isHardMode: false, hardModeDetails: {latest: expected, firstLoss: first}});
+    const detail = ok(await client.journalTrip(f.trip)); expect(detail.trip.hardModeDetails!.latest).toEqual(expected);
+    const serializer = new TripExportSerializer(detail, tripExportHeader({uuid: '30000000-0000-4000-8000-000000000001', purpose: 'synthetic', schemaVersion: 3}, 'test', Date.now()));
+    const text = serializer.begin() + serializer.rows('intervals', ok(await client.journalIntervals(f.trip, {limit: 500})).intervals) + serializer.rows('events', ok(await client.journalEvents(f.trip, {limit: 500})).events) + serializer.end();
+    const exported = JSON.parse(text) as {trip: {hard_mode_details: {latest: unknown; firstLoss: unknown}}};
+    expect(exported.trip.hard_mode_details).toMatchObject({latest: expected, firstLoss: first}); expect(tripExportProblems(exported)).toEqual([]);
+  });
   it.each(['automatic', 'unavailable'] as const)('requires explicit manual delivery rather than %s autoparking evidence', async kind => {
     const f = await setup(), d = manual(); if (d.type !== 'job.delivered') throw new Error('fixture');
     await f.send({...d, autoParkUsed: kind === 'automatic' ? {available: true, value: true} : {available: false, reason: 'not-supported'}});

@@ -51,11 +51,11 @@ describe('ET-026 persisted settings (REG-009/010)', () => {
     expect(hardModeView({assessment: fail, trip: d}, 2000).rows[3]).toMatchObject({reason: 'Does not meet the required setting', detected: 'Off (0)', required: 'On (1)'});
     expect(hardModeView({assessment: evaluate(HARD_MODE_CONFIG.replace('uset g_police "1"', '')), trip: null}, 2000).rows[2].reason).toBe('Required setting is missing');
   });
-  it('does not move latest evidence backwards when an older intake snapshot follows a newer observed loss', () => {
-    const opening = evaluate(), lost = {...evaluate(HARD_MODE_CONFIG.replace('g_fatigue "1"', 'g_fatigue "0"')), observedUtcMs: 2000};
-    const details = advanceHardMode(advanceHardMode(advanceHardMode(null, opening), lost), opening);
-    expect(details.latest).toEqual(lost); expect(details.firstLoss).toMatchObject({atUtcMs: 2000, rule: 'fatigue', values: [0]});
-    expect(advanceHardMode(details, {...opening, observedUtcMs: 3000})).toMatchObject({latest: {state: 'pass', observedUtcMs: 3000}, firstLoss: {rule: 'fatigue', values: [0]}});
+  it('orders published latest by actual offer order and preserves it against a numerically newer frozen intake', () => {
+    const opening = {...evaluate(), observedUtcMs: 2000}, lost = {...evaluate(HARD_MODE_CONFIG.replace('g_fatigue "1"', 'g_fatigue "0"')), observedUtcMs: 1000};
+    const details = advanceHardMode(advanceHardMode(advanceHardMode(null, opening), lost), opening, undefined, 'frozen');
+    expect(details.latest).toEqual(lost); expect(details.firstLoss).toMatchObject({atUtcMs: 1000, rule: 'fatigue', values: [0]});
+    expect(advanceHardMode(details, {...opening, observedUtcMs: 500})).toMatchObject({latest: {state: 'pass', observedUtcMs: 500}, firstLoss: {rule: 'fatigue', values: [0]}});
   });
   it('renders Russian rule states, exact values and retained loss without mutating the stored audit or global language', () => {
     const fail = evaluate(HARD_MODE_CONFIG.replace('g_fatigue "1"', 'g_fatigue "0"')), details = advanceHardMode(null, fail), before = JSON.stringify(details);
