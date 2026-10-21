@@ -280,6 +280,14 @@ function runApplication(profileError: unknown): void {
   let selectionPending = false;
   let rendererEpoch = 0;
   let selection: SourceSelection = sourceSelection(process.env.ETS2TELEMETRY_SOURCE_KIND || 'game');
+  let selectionDispatched = false;
+  function commitSelection(next: SourceSelection, origin: 'startup' | 'user' | 'restore'): void {
+    const previous = selection;
+    selection = next;
+    if (selectionDispatched && previous !== next) log('SOURCE_SELECTION_RETIRED', undefined, {source: previous, origin});
+    selectionDispatched = true;
+    log('SOURCE_SELECTED', undefined, {source: next, origin});
+  }
   const heartbeatMonitor = new ServiceHeartbeatMonitor({
     onTimeout: () => {
       log('SERVICE_HEARTBEAT_TIMEOUT');
@@ -639,6 +647,7 @@ function runApplication(profileError: unknown): void {
           if (!settingsStore.settled) await settingsLoad;
           if (supervisor.stopping || service !== child || generation !== selectionGeneration) return;
           child.postMessage(selectMessage(requested, broker));
+          commitSelection(requested, selectionDispatched ? 'restore' : 'startup');
           serviceReady = true; selectionPending = false; status = {service: 'ready', storage: 'verified', synthetic: true};
           journal.attach(child);
           updateHealth({type: 'service-ready'});
@@ -919,7 +928,7 @@ function runApplication(profileError: unknown): void {
       const broker = next === 'ets2' || next === 'ats' ? await selectedBroker(next) : undefined;
       if (!trusted(event) || !serviceReady || supervisor.stopping || service !== child || generation !== selectionGeneration || epoch !== rendererEpoch) throw new Error('Source request was retired');
       child.postMessage(selectMessage(next, broker));
-      selection = next; freshness.invalidate(initialLive(selection));
+      commitSelection(next, 'user'); freshness.invalidate(initialLive(selection));
     } finally {if (generation === selectionGeneration) selectionPending = false;}
   });
   ipcMain.on('telemetry:subscribe', event => {if (!trusted(event) || subscribed || supervisor.stopping) return; subscribed = true; connectSubscription();});

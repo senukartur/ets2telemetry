@@ -8,7 +8,8 @@ import {createRequire} from 'node:module';
 import path from 'node:path';
 import {performance} from 'node:perf_hooks';
 import {recordingTextLog, startRecordingTextLog, waitForCurrentTelemetry, waitForRecordingText} from './renderer-observation.mjs';
-import {closeDashboard, lifecycleState, newDashboardPage, until, waitForExit} from './lifecycle-observation.mjs';
+import {closeDashboard, lifecycleState, newDashboardPage, until} from './lifecycle-observation.mjs';
+import {observeExit} from './exit-observation.mjs';
 import {startRecordingProxy} from './recording-proxy.mjs';
 import {clickTestId, dialogCalls, exportTrip, exportValidator, listState, openDetail, openTable, stubSaveDialog, untilPage} from './journal-observation.mjs';
 
@@ -334,10 +335,9 @@ export async function runRecordingSmoke({application, launcher, dashboard, recor
   // second 1001 (H11), then closes the database.
   await stopTracing();
   const exitStarted = performance.now();
-  const exited = waitForExit(launcher, 8000, 'TRAY_EXIT_DID_NOT_FINISH_WITHIN_8_SECONDS');
   // Main may exit before the evaluation returns; only the process exit is the outcome.
-  await application.evaluate(({app}) => {app.emit('ets2telemetry:diagnostic-tray-action', 'exit'); return true;}).catch(() => undefined);
-  const exit = await exited;
+  const exit = await observeExit({application, launcher, record: record.exitObservation = {}, message: 'TRAY_EXIT_DID_NOT_FINISH_WITHIN_8_SECONDS',
+    request: () => application.evaluate(({app}) => {app.emit('ets2telemetry:diagnostic-tray-action', 'exit'); return true;})});
   record.trayExit = {launcherExit: exit.code, signal: exit.signal, exitMilliseconds: Math.round(performance.now() - exitStarted)};
   assert.equal(exit.code, 0); assert.equal(exit.signal, null);
   record.trayExit.requests = (await mainEvents()).filter(row => row.event === 'APP_EXIT_REQUESTED').map(row => row.facts?.reason ?? null);
