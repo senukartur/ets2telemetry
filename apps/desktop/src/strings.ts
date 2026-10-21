@@ -1,5 +1,5 @@
 import type {AppErrorCode, AppLanguage, DiagnosticsExportFailure, DiagnosticsExportRefusal, JournalAttributionKind, JournalCallCode, JournalCloseReason, JournalCompleteness, JournalExportCode, JournalIntervalKind, JournalMoneyCategory, JournalOutcome,
-  JournalPurpose, OverlayEditPlacement, OverlayLayout, OverlaySectionId, PluginBlockReason, PluginDiscoveryOutcome, PluginFolderRefusal, PluginManualFolderState,
+  JournalPurpose, LiveTelemetry, OverlayEditPlacement, OverlayLayout, OverlaySectionId, PluginBlockReason, PluginDiscoveryOutcome, PluginFolderRefusal, PluginManualFolderState,
   PluginSetupMode, PluginTargetState, RecordingCode, RecordingHealth, RecordingLosses, RecordingTarget, RecordingTrip, ServiceHealth,
   SettingsSaveError, SettingsState, StorageHealth, UnitGame, UnitProfile} from '../../../packages/contracts/src';
 import type {EventType, GameMode, UnavailableReason} from '../../../packages/contracts/src/protocol-v1';
@@ -39,6 +39,16 @@ export const STRINGS = Object.freeze({
   trayStarting: 'Starting',
   trayExiting: 'Exiting',
   serviceFailedTitle: 'Telemetry service problem',
+  sourceLabel: 'Source',
+  sourceSelectPrompt: 'Select a game',
+  sourceSyntheticFixture: 'Synthetic fixture',
+  sourceReplayFixture: 'Replay fixture',
+  sourceNoGameSelected: 'no game selected',
+  speedLabel: 'Speed',
+  fuelLabel: 'Fuel',
+  unavailableText: 'unavailable',
+  serviceTrayLabel: 'Service',
+  storageTrayLabel: 'Storage self-test',
   unitsTitle: 'Display units',
   unitsSaveFailed: 'The unit change was not saved; the previous units stay in use.',
   liveTitle: 'Live telemetry',
@@ -97,6 +107,16 @@ export const STRINGS_RU: Readonly<Record<StringKey, string>> = Object.freeze({
   trayStarting: 'Запуск',
   trayExiting: 'Завершение работы',
   serviceFailedTitle: 'Проблема службы телеметрии',
+  sourceLabel: 'Источник',
+  sourceSelectPrompt: 'Выберите игру',
+  sourceSyntheticFixture: 'Синтетический источник',
+  sourceReplayFixture: 'Источник повтора',
+  sourceNoGameSelected: 'игра не выбрана',
+  speedLabel: 'Скорость',
+  fuelLabel: 'Топливо',
+  unavailableText: 'недоступно',
+  serviceTrayLabel: 'Служба',
+  storageTrayLabel: 'Проверка хранилища',
   unitsTitle: 'Единицы измерения',
   unitsSaveFailed: 'Изменение единиц не удалось сохранить; остаются предыдущие единицы.',
   liveTitle: 'Сейчас',
@@ -139,6 +159,16 @@ export const SERVICE_HEALTH_TEXT: Readonly<Record<ServiceHealth, string>> = Obje
 export const SERVICE_HEALTH_TEXT_RU: Readonly<Record<ServiceHealth, string>> = Object.freeze({
   starting: 'запуск', ready: 'готово', restarting: 'перезапуск', failed: 'ошибка', stopping: 'остановка'
 });
+
+export const SOURCE_SELECTION_TEXT: Readonly<Record<LiveTelemetry['selection'], string>> = Object.freeze({
+  game: 'no game selected', ets2: 'ETS2', ats: 'ATS', synthetic: 'synthetic fixture', replay: 'replay fixture'
+});
+export const SOURCE_SELECTION_TEXT_RU: Readonly<Record<LiveTelemetry['selection'], string>> = Object.freeze({
+  game: 'игра не выбрана', ets2: 'ETS2', ats: 'ATS', synthetic: 'синтетический источник', replay: 'источник повтора'
+});
+export function getSourceSelectionText(selection: LiveTelemetry['selection'], language: AppLanguage = 'en'): string {
+  return (language === 'ru' ? SOURCE_SELECTION_TEXT_RU : SOURCE_SELECTION_TEXT)[selection];
+}
 export function getServiceHealthText(health: ServiceHealth, language: AppLanguage = 'en'): string {
   return language === 'ru' ? SERVICE_HEALTH_TEXT_RU[health] : SERVICE_HEALTH_TEXT[health];
 }

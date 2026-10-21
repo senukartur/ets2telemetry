@@ -1,7 +1,7 @@
 import type {OverlayLayout, OverlayPresentation, OverlaySectionId} from '../../../packages/contracts/src';
 import {CLUSTER_GAUGE_SECTIONS, OVERLAY_GROUPS, type OverlayGroupId} from './overlay-sections';
 import {getOverlaySectionShortText, getOverlaySectionText, getStrings} from './strings';
-import {translateUnit} from './i18n';
+import {localizeDeadlineString, localizeGameTimeString, translateUnit} from './i18n';
 
 // The overlay renderer's view model (ET-012a). Pure, safe for the overlay bundle and plain Node tests. It only arranges
 // the text main already formatted; it converts, rounds and formats nothing (unit-profiles.test.ts scans it for that).
@@ -69,7 +69,15 @@ export function overlayView(presentation: OverlayPresentation = OVERLAY_PLACEHOL
     if (section.id === 'speed') return {...base, value: available ? presentation.speed : DASH, unit: translateUnit(presentation.speedUnit, language)};
     if (section.id === 'fuel') return {...base, value: available ? presentation.fuel : DASH, unit: translateUnit(presentation.fuelUnit, language),
       ...(available && section.detail ? {detail: section.detail, detailTestId: 'overlay-fuel-level'} : {})};
-    return {...base, value: available ? section.text : DASH,
+    let value = available ? section.text : DASH;
+    if (available) {
+      if (section.id === 'game-time') {
+        value = localizeGameTimeString(value, language);
+      } else if (section.id === 'deadline') {
+        value = localizeDeadlineString(value, language);
+      }
+    }
+    return {...base, value,
       ...(available && section.detail ? {detail: section.detail, detailTestId: `overlay-${section.id}-detail`} : {}),
       ...(available && section.ring !== undefined ? {ring: section.ring} : {}),
       ...(section.id === 'sdk-consumption' ? {caption: strings.overlaySdkMean} : {})};

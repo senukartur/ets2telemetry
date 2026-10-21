@@ -4,6 +4,7 @@ import {carriesField, type LiveFieldId} from '../../../packages/telemetry-core/s
 import {liveSources, V1_JOB_FIELDS} from './live-sources';
 import {DEFAULT_OVERLAY_SETTINGS, OVERLAY_SECTION_IDS} from './overlay-sections';
 import {DEFAULT_UNIT_PROFILES, displayGame, isExplicitFixture, profileFor, speedNumber, speedUnit, volumeNumber, volumeUnit} from './unit-profiles';
+import {localizeDeadlineString, localizeGameTimeString} from './i18n';
 
 /** Full scale of the engine RPM ring (ET-012a decision L12). Neither v0 nor v1 carries the SDK's `rpm.limit`. */
 export const RPM_RING_FULL_SCALE = 3000;
@@ -86,7 +87,12 @@ export function overlayPresentation(live: LiveTelemetry, units: UnitProfiles = D
       if (shown.has(id) || BASELINE_SECTIONS.has(id)) sections.push({id, state: 'unavailable'});
       continue;
     }
-    const texts = parts.map(valueOf).filter((text): text is string => text !== undefined);
+    let texts = parts.map(valueOf).filter((text): text is string => text !== undefined);
+    if (id === 'game-time') {
+      texts = texts.map(t => localizeGameTimeString(t, language));
+    } else if (id === 'deadline') {
+      texts = texts.map(t => localizeDeadlineString(t, language));
+    }
     if (!texts.length) {
       // A section shown before keeps a dash while its v1 data is not current or describes another job.
       if (BASELINE_SECTIONS.has(id) || (shown.has(id) && parts.some(ineligible))) sections.push({id, state: 'unavailable'});

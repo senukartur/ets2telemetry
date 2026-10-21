@@ -1,11 +1,11 @@
 import type {
-  JournalCallResult, JournalDatabase, JournalExportResult, JournalEvent, JournalEventPage, JournalGame, JournalGameMode, JournalInterval, JournalIntervalPage, JournalMoneyTotals,
+  AppLanguage, JournalCallResult, JournalDatabase, JournalExportResult, JournalEvent, JournalEventPage, JournalGame, JournalGameMode, JournalInterval, JournalIntervalPage, JournalMoneyTotals,
   JournalSample, JournalSamplePage, JournalTripDetail, JournalTripListItem, JournalTripPage, JournalWindow, RecordingHealth, UnitProfiles
 } from '../../../packages/contracts/src';
 import type {Currency, EventRecord, Money, UnavailableReason} from '../../../packages/contracts/src/protocol-v1';
 import {resolveDisplayUnits, type DisplayUnits} from '../../../packages/telemetry-core/src/display-profile';
 import {
-  formatBoolean, formatConsumption, formatDistance, formatGameDuration, formatGameTime, formatGear, formatMass, formatMoney, formatPercent, formatPosition, formatRpm,
+  formatConsumption, formatDistance, formatGear, formatMass, formatMoney, formatPercent, formatPosition, formatRpm,
   formatSpeed, formatVolume
 } from '../../../packages/telemetry-core/src/format';
 import type {MoneyCurrency} from '../../../packages/telemetry-core/src/readings';
@@ -17,6 +17,7 @@ import {
   JOURNAL_SECTION_TEXT, JOURNAL_STRINGS, RECORDING_CODE_TEXT, UNIT_GAME_TEXT
 } from './strings';
 import {DEFAULT_UNIT_PROFILES} from './unit-profiles';
+import {formatLocalizedBoolean, formatLocalizedGameDuration, formatLocalizedGameTime} from './i18n';
 
 // Text of the trip journal (ET-016 PR-4, J12-J14): every string the Journal tab shows, built from one journal page or
 // trip detail at a time. Pure, safe for renderer bundles and plain Node tests: type imports, telemetry-core formatting
@@ -36,6 +37,8 @@ export interface JournalTextOptions {
    * was recorded.
    */
   firstPage?: boolean;
+  /** The user's active UI language. */
+  language?: AppLanguage;
 }
 /** One labelled value. `note` says what the value means, such as "job offer, excludes ferries". */
 export interface JournalField {id: string; label: string; value: string; note?: string}
@@ -104,7 +107,7 @@ const moneyText = (money: {raw: string; sdkType: Money['sdkType']; currency: Cur
 const distance = (units: DisplayUnits) => (meters: number) => formatDistance(meters, units.distance, 1);
 const volume = (units: DisplayUnits) => (liters: number) => formatVolume(liters, units.volume, 1);
 /** Absolute game minutes (a decimal uint64) as `Day N, HH:MM`. */
-const gameTime = (minutes: string) => formatGameTime(BigInt(minutes));
+const gameTime = (minutes: string, language: AppLanguage = 'en') => formatLocalizedGameTime(BigInt(minutes), language);
 
 /** Fixed text for every journal refusal code (J11); a storage code adds its fixed cause, never error text. */
 export function journalErrorText(failure: JournalFailure): string {
@@ -184,7 +187,7 @@ function moneyLines(totals: JournalMoneyTotals): {fields: JournalField[]; notes:
 
 /** The trip detail's summary sections (J13). */
 export function journalDetailText(detail: JournalTripDetail, options: JournalTextOptions = {}): JournalDetailText {
-  const {trip, job: {values: job}} = detail;
+  const {trip, job: {values: job}} = detail, language = options.language ?? 'en';
   const units = unitsFor(trip.game, options), zone = options.timeZone;
   const record = detail.outcomeDetails?.record ?? null;
   const delivered = record?.type === 'job.delivered' ? record : null, cancelled = record?.type === 'job.cancelled' ? record : null;
@@ -214,14 +217,14 @@ export function journalDetailText(detail: JournalTripDetail, options: JournalTex
   sections.push(section('job', [
     field('sourceCity', nameOf(job.sourceCity)), field('sourceCompany', nameOf(job.sourceCompany)), field('destinationCity', nameOf(job.destinationCity)),
     field('destinationCompany', nameOf(job.destinationCompany)), field('cargo', nameOf(job.cargo)), field('cargoMass', show(job.cargoMass, kg => formatMass(kg, units.mass))),
-    field('market', nameOf(job.market)), field('specialJob', show(job.isSpecialJob, formatBoolean)), field('cargoLoaded', show(job.cargoLoaded, formatBoolean)),
-    field('deadline', show(job.deliveryDeadline, gameTime), JOURNAL_NOTE_TEXT.deadline), field('jobSource', jobSource)
+    field('market', nameOf(job.market)), field('specialJob', show(job.isSpecialJob, v => formatLocalizedBoolean(v, language))), field('cargoLoaded', show(job.cargoLoaded, v => formatLocalizedBoolean(v, language))),
+    field('deadline', show(job.deliveryDeadline, minutes => gameTime(minutes, language)), JOURNAL_NOTE_TEXT.deadline), field('jobSource', jobSource)
   ]));
   if (delivered) {
     sections.push(section('delivery', [
       field('earnedXp', show(delivered.earnedXp, String)), field('cargoDamage', show(delivered.cargoDamage, formatPercent)),
-      field('deliveryDuration', show(delivered.deliveryDuration, minutes => formatGameDuration(BigInt(minutes))), JOURNAL_NOTE_TEXT.deliveryDuration),
-      field('autoPark', show(delivered.autoParkUsed, formatBoolean)), field('autoLoad', show(delivered.autoLoadUsed, formatBoolean))
+      field('deliveryDuration', show(delivered.deliveryDuration, minutes => formatLocalizedGameDuration(BigInt(minutes), language)), JOURNAL_NOTE_TEXT.deliveryDuration),
+      field('autoPark', show(delivered.autoParkUsed, v => formatLocalizedBoolean(v, language))), field('autoLoad', show(delivered.autoLoadUsed, v => formatLocalizedBoolean(v, language)))
     ]));
   }
   // A trip attached late has no truck or trailer identity until the game sends them again (J22).
@@ -311,8 +314,8 @@ export function journalEventText(page: JournalEventPage, trip: {tripUuid: string
 }
 
 /** Game minutes of a sample: a whole, non-negative number; anything else reads as invalid. */
-const sampleGameTime = (sample: JournalSample) => sample.gameTime === null ? unavailable('not-observed')
-  : show(sample.gameTime.minutes, minutes => Number.isSafeInteger(minutes) && minutes >= 0 ? formatGameTime(BigInt(minutes)) : unavailable('invalid'));
+const sampleGameTime = (sample: JournalSample, language: AppLanguage = 'en') => sample.gameTime === null ? unavailable('not-observed')
+  : show(sample.gameTime.minutes, minutes => Number.isSafeInteger(minutes) && minutes >= 0 ? formatLocalizedGameTime(BigInt(minutes), language) : unavailable('invalid'));
 /** The SDK mean in the profile's unit. Zero L/100 km has no US mpg value and is shown as no consumption, never as zero mpg. */
 function consumptionText(litersPer100Km: number, units: DisplayUnits): string {
   const result = formatConsumption(litersPer100Km, units.consumption);
@@ -325,7 +328,7 @@ const sourceSecond = (sample: JournalSample) => BigInt(sample.monotonicNs) / 1_0
  * `source restarted` row. Only the current page is held, so the first row of a page is compared with nothing.
  */
 export function journalSampleText(page: JournalSamplePage, game: JournalGame, options: JournalTextOptions = {}): JournalSampleText {
-  const units = unitsFor(game, options), rows: JournalSampleRow[] = [];
+  const units = unitsFor(game, options), rows: JournalSampleRow[] = [], language = options.language ?? 'en';
   let previous: JournalSample | undefined;
   for (const sample of page.samples) {
     if (previous && previous.sourceClockId !== sample.sourceClockId) rows.push({kind: 'restart', key: `restart-${sample.id}`, text: JOURNAL_STRINGS.sourceRestarted});
@@ -337,7 +340,7 @@ export function journalSampleText(page: JournalSamplePage, game: JournalGame, op
       fuel: show(sample.fuel, volume(units)),
       consumption: show(sample.averageConsumption, value => consumptionText(value, units)),
       range: show(sample.estimatedRange, distance(units)), rpm: show(sample.engineRpm, formatRpm), gear: show(sample.gear, formatGear),
-      odometer: show(sample.odometer, distance(units)), gameTime: sampleGameTime(sample), position: show(sample.position, formatPosition)});
+      odometer: show(sample.odometer, distance(units)), gameTime: sampleGameTime(sample, language), position: show(sample.position, formatPosition)});
     previous = sample;
   }
   const L = JOURNAL_LABEL_TEXT;

@@ -1,6 +1,6 @@
 import type {AppHealth, AppLanguage, LiveTelemetry} from '../../../packages/contracts/src';
 import {recordingStatusText} from './recording-status-text';
-import {getServiceHealthText, getStorageHealthText, getStrings} from './strings';
+import {getSourceSelectionText, getServiceHealthText, getStorageHealthText, getStrings} from './strings';
 import type {TrayTone} from './tray-icon';
 
 /** Windows truncates notification-area tooltips longer than 127 characters; menu status lines keep the same limit. */
@@ -21,25 +21,15 @@ export type TrayMenuItem =
   | {kind: 'open' | 'exit'; label: string; enabled: boolean};
 export interface TrayModel {tooltip: string; menu: TrayMenuItem[]; tone: TrayTone}
 
-const SOURCE_TEXT: Readonly<Record<LiveTelemetry['selection'], string>> = Object.freeze({
-  game: 'no game selected', ets2: 'ETS2', ats: 'ATS', synthetic: 'synthetic fixture', replay: 'replay fixture'
-});
-const SOURCE_TEXT_RU: Readonly<Record<LiveTelemetry['selection'], string>> = Object.freeze({
-  game: 'игра не выбрана', ets2: 'ETS2', ats: 'ATS', synthetic: 'синтетический источник', replay: 'источник повтора'
-});
-function sourceText(selection: LiveTelemetry['selection'], language: AppLanguage): string {
-  return (language === 'ru' ? SOURCE_TEXT_RU : SOURCE_TEXT)[selection];
-}
+
 
 export function trayTone(health: AppHealth, exiting: boolean): TrayTone {
   if (!exiting && health.service === 'failed') return 'failed';
   return !exiting && health.service === 'ready' ? 'ready' : 'busy';
 }
 function statusLine(health: AppHealth, language: AppLanguage): string {
-  if (language === 'ru') {
-    return `Служба: ${getServiceHealthText(health.service, 'ru')} · Проверка хранилища: ${getStorageHealthText(health.storage, 'ru')}`;
-  }
-  return `Service: ${getServiceHealthText(health.service, 'en')} · Storage self-test: ${getStorageHealthText(health.storage, 'en')}`;
+  const strings = getStrings(language);
+  return `${strings.serviceTrayLabel}: ${getServiceHealthText(health.service, language)} · ${strings.storageTrayLabel}: ${getStorageHealthText(health.storage, language)}`;
 }
 export function trayModel(input: TrayInput): TrayModel {
   const {health, exiting} = input;
@@ -49,10 +39,10 @@ export function trayModel(input: TrayInput): TrayModel {
   if (exiting) detail = strings.trayExiting;
   else if (health.service === 'starting') detail = strings.trayStarting;
   else {
-    const serviceLabel = language === 'ru' ? 'Служба' : 'Service';
-    const sourceLabel = language === 'ru' ? 'Источник' : 'Source';
+    const serviceLabel = strings.serviceTrayLabel;
+    const sourceLabel = strings.sourceLabel;
     detail = `${serviceLabel} ${getServiceHealthText(health.service, language)}`;
-    if (health.service === 'ready' && input.source) detail += ` · ${sourceLabel}: ${sourceText(input.source.selection, language)} (${input.source.status})`;
+    if (health.service === 'ready' && input.source) detail += ` · ${sourceLabel}: ${getSourceSelectionText(input.source.selection, language)} (${input.source.status})`;
   }
   const tooltip = `${strings.appName}\n${detail}`.slice(0, TRAY_TOOLTIP_LIMIT);
   return {tooltip, tone: trayTone(health, exiting), menu: [

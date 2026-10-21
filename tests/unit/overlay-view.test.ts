@@ -74,7 +74,7 @@ it('localizes labels, units and tags in Russian when language is ru', () => {
     ['overlay-fuel', '250.0', 'л', undefined],
     ['overlay-sdk-consumption', '25.0 L/100 km', undefined, 'среднее SDK'],
     ['overlay-cargo', 'cargo.logs', undefined, undefined],
-    ['overlay-game-time', 'Day 1, 08:00', undefined, undefined]
+    ['overlay-game-time', 'День 1, 08:00', undefined, undefined]
   ]);
   expect(view.items.map(item => item.label)).toEqual(['Скорость', 'Обороты двигателя', 'Топливо', 'Средний расход по SDK', 'Груз', 'Игровое время']);
   expect(view.items.map(item => item.short)).toEqual(['Скорость', 'Обороты', 'Топливо', 'Расход SDK', 'Груз', 'Время']);
@@ -90,4 +90,9 @@ it('localizes labels, units and tags in Russian when language is ru', () => {
 
   const replay = overlayView({...ruBase, origin: 'replay', freshness: 'stale'});
   expect(replay.tags).toEqual([{id: 'origin', testId: 'overlay-tag-origin', text: 'Повтор'}]);
+
+  const deadlineEarly = overlayView({...ruBase, sections: [{id: 'deadline', state: 'value', text: 'in 1 h 30 min'}]});
+  expect(deadlineEarly.items[0]?.value).toBe('через 1 ч 30 мин');
+  const deadlineLate = overlayView({...ruBase, sections: [{id: 'deadline', state: 'value', text: 'late by 45 min'}]});
+  expect(deadlineLate.items[0]?.value).toBe('опоздание на 45 мин');
 });

@@ -78,3 +78,27 @@ export function formatLocalizedBoolean(value: boolean, language: AppLanguage): s
   if (language === 'ru') return value ? 'да' : 'нет';
   return value ? 'yes' : 'no';
 }
+
+/**
+ * Localizes an already-formatted game time string ("Day N, HH:MM") to the target language.
+ */
+export function localizeGameTimeString(text: string, language: AppLanguage): string {
+  if (language === 'ru') {
+    return text.replace(/^Day\s+/, 'День ');
+  }
+  return text;
+}
+
+/**
+ * Localizes an already-formatted deadline string ("in …", "late by …") to the target language.
+ */
+export function localizeDeadlineString(text: string, language: AppLanguage): string {
+  if (language === 'ru') {
+    return text
+      .replace(/^in\s+/, 'через ')
+      .replace(/^late by\s+/, 'опоздание на ')
+      .replace(/\bh\b/g, 'ч')
+      .replace(/\bmin\b/g, 'мин');
+  }
+  return text;
+}

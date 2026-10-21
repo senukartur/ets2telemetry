@@ -19,7 +19,7 @@ import {Journal, JournalBoundary} from './journal';
 import {DEFAULT_UNIT_PROFILES, displayProfile, isUnitProfile, UNIT_GAMES, UNIT_PROFILE_IDS} from './unit-profiles';
 import {
   getAppErrorText, getServiceHealthText, getSettingsSaveErrorText, getSettingsStateText,
-  getStorageHealthText, getStrings, getUnitGameText, getUnitProfileText, JOURNAL_STRINGS
+  getStorageHealthText, getStrings, getUnitGameText, getUnitProfileText
 } from './strings';
 import {t} from './i18n';
 import './index.css';
@@ -63,16 +63,16 @@ export default function App() {
   // opened, loads its first page then and holds nothing while closed. The tab list is one compact row, so the status,
   // speed and fuel lines stay in the first viewport (B6).
   return <main className="mx-auto max-w-xl p-4"><Tabs defaultValue="live">
-  <TabsList><TabsTrigger value="live" data-testid="tab-live">{language === 'ru' ? t('nav.live', undefined, 'ru') : JOURNAL_STRINGS.liveTab}</TabsTrigger>
-    <TabsTrigger value="journal" data-testid="tab-journal">{language === 'ru' ? t('nav.journal', undefined, 'ru') : JOURNAL_STRINGS.journalTab}</TabsTrigger></TabsList>
+  <TabsList><TabsTrigger value="live" data-testid="tab-live">{t('nav.live', undefined, language)}</TabsTrigger>
+    <TabsTrigger value="journal" data-testid="tab-journal">{t('nav.journal', undefined, language)}</TabsTrigger></TabsList>
   <TabsContent value="live" forceMount className="space-y-4 data-[state=inactive]:hidden"><Card><CardHeader><CardTitle><h1>ETS2Telemetry</h1></CardTitle></CardHeader><CardContent className="space-y-2"><p>{startup}</p>
-    <label>{language === 'ru' ? 'Источник' : 'Source'} <select value={live?.selection ?? 'game'} onChange={event => {void window.desktop.selectSource(event.target.value as SourceSelection).catch(() => setStartup(strings.sourceSelectionFailed));}}>
-      <option value="game">{language === 'ru' ? 'Выберите игру' : 'Select a game'}</option><option value="ets2">Euro Truck Simulator 2</option><option value="ats">American Truck Simulator</option><option value="synthetic">{language === 'ru' ? 'Синтетический источник' : 'Synthetic fixture'}</option><option value="replay">{language === 'ru' ? 'Источник повтора' : 'Replay fixture'}</option>
+    <label>{strings.sourceLabel} <select value={live?.selection ?? 'game'} onChange={event => {void window.desktop.selectSource(event.target.value as SourceSelection).catch(() => setStartup(strings.sourceSelectionFailed));}}>
+      <option value="game">{strings.sourceSelectPrompt}</option><option value="ets2">Euro Truck Simulator 2</option><option value="ats">American Truck Simulator</option><option value="synthetic">{strings.sourceSyntheticFixture}</option><option value="replay">{strings.sourceReplayFixture}</option>
     </select></label>
     <p data-testid="telemetry-status">{live?.status ?? 'waiting'}: {live?.reason ?? 'Awaiting telemetry service'}</p>
     <p>Origin: {live?.observation?.source.origin ?? (live?.selection === 'synthetic' || live?.selection === 'replay' ? live.selection : 'game')}; {live?.fresh ? 'current' : 'not current'}; interval coverage unknown.</p>
-    <p data-testid="speed">{language === 'ru' ? 'Скорость' : 'Speed'}: {dashboardSpeed(live, profile, language)}</p>
-    <p data-testid="fuel">{language === 'ru' ? 'Топливо' : 'Fuel'}: {dashboardFuel(live, profile, language)}</p>
+    <p data-testid="speed">{strings.speedLabel}: {dashboardSpeed(live, profile, language)}</p>
+    <p data-testid="fuel">{strings.fuelLabel}: {dashboardFuel(live, profile, language)}</p>
     <p data-testid="prototype-notice">{recording.notice}</p>
   </CardContent></Card>
   <LiveDashboard live={live} units={settings?.units} />
@@ -117,5 +117,5 @@ export default function App() {
   <OverlaySettingsCard settings={settings} edit={app?.overlayEdit} onSaved={saved} onRequest={() => setLastCard('overlay')} showSaveError={lastCard === 'overlay'} />
   <UninstallCard />
   </TabsContent>
-  <TabsContent value="journal"><JournalBoundary><Journal units={settings?.units} recording={health?.recording.state} /></JournalBoundary></TabsContent></Tabs></main>;
+  <TabsContent value="journal"><JournalBoundary><Journal units={settings?.units} recording={health?.recording.state} language={language} /></JournalBoundary></TabsContent></Tabs></main>;
 }

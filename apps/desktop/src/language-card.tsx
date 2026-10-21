@@ -54,11 +54,11 @@ export function LanguageCard({settings, onSaved, onRequest, showSaveError}: Lang
         >
           <div className="flex items-center gap-2">
             <RadioGroupItem value="en" id="language-en" />
-            <Label htmlFor="language-en">English</Label>
+            <Label htmlFor="language-en">{t('lang.en', undefined, currentLanguage)}</Label>
           </div>
           <div className="flex items-center gap-2">
             <RadioGroupItem value="ru" id="language-ru" />
-            <Label htmlFor="language-ru">Русский</Label>
+            <Label htmlFor="language-ru">{t('lang.ru', undefined, currentLanguage)}</Label>
           </div>
         </RadioGroup>
         {showSaveError && settings?.saveError ? (
