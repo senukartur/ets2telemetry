@@ -76,15 +76,15 @@ const ALL_SECTIONS = {'speed': true, 'gear': true, 'rpm': true, 'fuel': true, 'r
   'destination': true, 'distance-driven': true, 'distance-remaining': true, 'deadline': true, 'expected-income': true, 'game-time': true};
 // ET-012b: the overlay settings carry the placements of every layout (the ET-012a anchors at scale 1 by default).
 const PLACEMENTS = {strip: {x: 0.5, y: 0, scale: 1}, card: {x: 1, y: 0, scale: 1}, cluster: {x: 0, y: 1, scale: 1}, hud: {x: 0, y: 0, scale: 1}};
-const DEFAULT_OVERLAY = {layout: 'strip', sections: ALL_SECTIONS, placements: PLACEMENTS};
+const DEFAULT_OVERLAY = {enabled: true, layout: 'strip', sections: ALL_SECTIONS, placements: PLACEMENTS};
 // ET-012b: the application state carries the overlay edit mode, which every start leaves in driving mode.
 const DRIVING = {active: false};
 // ET-017: the application state carries the plugin setup view. These cases run with ETS2TELEMETRY_SOURCE_KIND set and
 // unpackaged, so the mode gate disables plugin setup: nothing is read or written, and no game is ever discovered.
 const NO_PLUGIN_GAME = {excluded: false, discovery: 'pending', manualFolder: 'none', targets: [], unlistedFolders: 0};
 const PLUGINS_DISABLED = {mode: 'disabled', bundled: null, running: false, games: {ets2: NO_PLUGIN_GAME, ats: NO_PLUGIN_GAME}};
-let settingsView: {units: {ets2: string; ats: string}; overlay: {layout: string; sections: Record<string, boolean>; placements: Record<string, {x: number; y: number; scale: number}>}; state: string; writable: boolean; saveError: string | null};
-type OverlayWrite = (kind: 'layout' | 'sections' | 'placement', value: unknown) => Promise<unknown>;
+let settingsView: {units: {ets2: string; ats: string}; overlay: {enabled: boolean, layout: string; sections: Record<string, boolean>; placements: Record<string, {x: number; y: number; scale: number}>}; state: string; writable: boolean; saveError: string | null};
+type OverlayWrite = (kind: 'enabled' | 'layout' | 'sections' | 'placement', value: unknown) => Promise<unknown>;
 let overlayWrite: ReturnType<typeof vi.fn<OverlayWrite>>;
 type SettingsWrite = (game: string, profile: string) => Promise<unknown>;
 let settingsWrite: ReturnType<typeof vi.fn<SettingsWrite>>;
@@ -170,6 +170,7 @@ function installFixture() {
       view() {return settingsView;}
       load() {return settingsLoading.then(() => {settingsLoaded = true; return settingsView;});}
       setUnitProfile(game: string, profile: string) {return settingsWrite(game, profile);}
+      setOverlayEnabled(enabled: boolean) {return overlayWrite('enabled', enabled);}
       setOverlayLayout(layout: string) {return overlayWrite('layout', layout);}
       setOverlaySections(sections: unknown) {return overlayWrite('sections', sections);}
       setOverlayPlacement(layout: string, placement: unknown) {return overlayWrite('placement', [layout, placement]);}
@@ -1201,11 +1202,11 @@ it('creates the overlay window at the strip size reserved for every section by d
   await ready(); expect(configurations[1]).toMatchObject({width: 1280, height: 116});
 });
 it('creates the overlay window at the size the saved layout reserves for its sections', async () => {
-  settingsView = {...settingsView, overlay: {layout: 'cluster', sections: ALL_SECTIONS, placements: PLACEMENTS}}; await ready();
+  settingsView = {...settingsView, overlay: {enabled: true, layout: 'cluster', sections: ALL_SECTIONS, placements: PLACEMENTS}}; await ready();
   expect(configurations[1]).toMatchObject({width: 440, height: 267});
 });
 it('delivers the saved layout and sections in the overlay document first projection', async () => {
-  settingsView = {...settingsView, overlay: {layout: 'card', sections: {...ALL_SECTIONS, rpm: false, cargo: false}, placements: PLACEMENTS}}; await ready();
+  settingsView = {...settingsView, overlay: {enabled: true, layout: 'card', sections: {...ALL_SECTIONS, rpm: false, cargo: false}, placements: PLACEMENTS}}; await ready();
   // Twelve sections reserve 48 + 24 × 12 = 336 CSS px, below the card's nominal 360.
   expect(configurations[1]).toMatchObject({width: 300, height: 360});
   ipc.emit('overlay:subscribe', overlayTrusted());
@@ -1220,7 +1221,7 @@ it('rejects overlay settings requests from untrusted senders, frames and the ove
     await expect(saveOverlay('settings:set-overlay-layout', event, 'card')).rejects.toThrow('Untrusted');
     await expect(saveOverlay('settings:set-overlay-sections', event, ALL_SECTIONS)).rejects.toThrow('Untrusted');
   }
-  for (const request of [['bar'], ['Card'], [], ['card', 'hud'], [{layout: 'card'}]])
+  for (const request of [['bar'], ['Card'], [], ['card', 'hud'], [{enabled: true, layout: 'card'}]])
     await expect(saveOverlay('settings:set-overlay-layout', trusted(), ...request)).rejects.toThrow('Invalid overlay layout request');
   for (const request of [[], [ALL_SECTIONS, 'extra'], [{...ALL_SECTIONS, theme: true}], [{...ALL_SECTIONS, rpm: 1}],
     [Object.fromEntries(Object.keys(ALL_SECTIONS).map(id => [id, false]))], [[true]], ['all']])
@@ -1245,7 +1246,7 @@ it('applies an overlay layout only after the durable save, then republishes and 
   expect(overlayWrite).toHaveBeenCalledExactlyOnceWith('layout', 'card');
   expect(pushes()).toHaveLength(before); expect(windows[1].setBounds).toHaveBeenCalledOnce();
   expect(overlayProjection(overlayChannel)).toMatchObject({layout: 'strip'});
-  settingsView = {...settingsView, overlay: {layout: 'card', sections: ALL_SECTIONS, placements: PLACEMENTS}, state: 'loaded'}; saved.resolve(settingsView);
+  settingsView = {...settingsView, overlay: {enabled: true, layout: 'card', sections: ALL_SECTIONS, placements: PLACEMENTS}, state: 'loaded'}; saved.resolve(settingsView);
   await expect(request).resolves.toEqual(settingsView);
   expect(pushes().at(-1)).toMatchObject({settings: settingsView});
   expect(windows[1].setBounds).toHaveBeenLastCalledWith({x: -316, y: 16, width: 300, height: 384});
@@ -1270,7 +1271,7 @@ it('applies overlay sections after the durable save and hands the store only a v
   expect(sectionIds(overlayProjection(overlayChannel))).toContain('rpm');
   const input = {...ALL_SECTIONS, rpm: false, cargo: false};
   overlayWrite.mockImplementation((_kind, value) => {
-    settingsView = {...settingsView, overlay: {layout: 'strip', sections: value as Record<string, boolean>, placements: PLACEMENTS}, state: 'loaded'}; return Promise.resolve(settingsView);
+    settingsView = {...settingsView, overlay: {enabled: true, layout: 'strip', sections: value as Record<string, boolean>, placements: PLACEMENTS}, state: 'loaded'}; return Promise.resolve(settingsView);
   });
   await saveOverlay('settings:set-overlay-sections', trusted(), input);
   const [kind, forwarded] = overlayWrite.mock.calls[0];
@@ -1284,7 +1285,7 @@ it('applies overlay sections after the durable save and hands the store only a v
 // row at 1280 DIP wide: 38 high.
 const DRIVING_ONLY = Object.fromEntries(Object.keys(ALL_SECTIONS).map(id => [id, ['speed', 'gear', 'rpm', 'fuel', 'range'].includes(id)]));
 it('creates the strip overlay window as high as its saved sections need', async () => {
-  settingsView = {...settingsView, overlay: {layout: 'strip', sections: DRIVING_ONLY, placements: PLACEMENTS}}; await ready();
+  settingsView = {...settingsView, overlay: {enabled: true, layout: 'strip', sections: DRIVING_ONLY, placements: PLACEMENTS}}; await ready();
   expect(configurations[1]).toMatchObject({width: 1280, height: 40});
 });
 it('re-places the strip for saved sections only after the durable save and re-asserts topmost once without showing it again', async () => {
@@ -1299,7 +1300,7 @@ it('re-places the strip for saved sections only after the durable save and re-as
   await vi.advanceTimersByTimeAsync(10);
   // Not durable yet: the strip keeps its rows.
   expect(overlayWrite).toHaveBeenCalledOnce(); expect(overlay.setBounds).toHaveBeenCalledOnce(); expect(overlay.setAlwaysOnTop).not.toHaveBeenCalled();
-  settingsView = {...settingsView, overlay: {layout: 'strip', sections: DRIVING_ONLY, placements: PLACEMENTS}, state: 'loaded'}; saved.resolve(settingsView);
+  settingsView = {...settingsView, overlay: {enabled: true, layout: 'strip', sections: DRIVING_ONLY, placements: PLACEMENTS}, state: 'loaded'}; saved.resolve(settingsView);
   await expect(request).resolves.toEqual(settingsView);
   expect(overlay.setBounds.mock.calls).toEqual([[{x: -1600, y: 8, width: 1280, height: 116}], [{x: -1600, y: 8, width: 1280, height: 40}]]);
   expect(overlay.setAlwaysOnTop.mock.calls).toEqual([[true, 'screen-saver']]); expect(overlay.moveTop).toHaveBeenCalledOnce();
@@ -1418,7 +1419,7 @@ it('re-places the overlay when a late settings read brings another layout', asyn
   ipc.emit('overlay:subscribe', overlayTrusted()); const overlayChannel = channels[1];
   consumeOverlay(overlayChannel); deliver(currentReading()); await vi.advanceTimersByTimeAsync(50); consumeOverlay(overlayChannel);
   expect(windows[1].setBounds.mock.calls).toEqual([[{x: -1600, y: 8, width: 1280, height: 116}]]);
-  settingsView = {...settingsView, overlay: {layout: 'hud', sections: ALL_SECTIONS, placements: PLACEMENTS}, state: 'loaded', writable: true};
+  settingsView = {...settingsView, overlay: {enabled: true, layout: 'hud', sections: ALL_SECTIONS, placements: PLACEMENTS}, state: 'loaded', writable: true};
   settingsChanged!();
   expect(windows[1].setBounds).toHaveBeenLastCalledWith({x: -1904, y: 16, width: 320, height: 354});
   await vi.advanceTimersByTimeAsync(50);
@@ -1452,6 +1453,52 @@ function interactive(target = windows[1]) {
     movable: target.setMovable.mock.lastCall?.[0] ?? false, skipTaskbar: target.setSkipTaskbar.mock.lastCall?.[0] ?? true};
 }
 const CLICK_THROUGH = {ignoreMouse: true, focusable: false, movable: false, skipTaskbar: true};
+const visibility = (event: unknown, ...request: unknown[]) => Promise.resolve().then(() => Reflect.apply(handlers.get('settings:set-overlay-enabled')!, undefined, [event, ...request]));
+it('validates visibility IPC as one boolean from the trusted dashboard only', async () => {
+  await ready();
+  for (const event of [{sender: {}, senderFrame: contents.mainFrame}, overlayTrusted(), {sender: contents, senderFrame: {}}]) await expect(visibility(event, false)).rejects.toThrow('Untrusted');
+  for (const args of [[], [0], ['false'], [{}], [false, true]]) await expect(visibility(trusted(), ...args)).rejects.toThrow('Invalid overlay visibility request');
+  expect(overlayWrite).not.toHaveBeenCalled();
+});
+it('commits off before cancelling an edit begun while the off save was pending, without renewing authority', async () => {
+  await editableOverlay(); const saved = deferred<typeof settingsView>(); overlayWrite.mockReturnValueOnce(saved.promise);
+  const pending = visibility(trusted(), false); await settle();
+  expect(overlayWrite).toHaveBeenCalledExactlyOnceWith('enabled', false);
+  expect(await edit('overlay-edit:begin', trusted())).toMatchObject({active: true});
+  await edit('overlay-edit:set-scale', trusted(), 1.5);
+  const posts = child.postMessage.mock.calls.length; windows[1].showInactive.mockClear();
+  settingsView = {...settingsView, overlay: {...settingsView.overlay, enabled: false}, state: 'loaded'}; saved.resolve(settingsView);
+  await pending; expect(editPushes().at(-1)).toEqual({active: false}); expect(interactive()).toEqual(CLICK_THROUGH);
+  expect(windows[1].showInactive).not.toHaveBeenCalled(); expect(child.postMessage.mock.calls).toHaveLength(posts);
+  await expect(edit('overlay-edit:begin', trusted())).rejects.toThrow('Overlay is disabled');
+  expect(settingsView.overlay.placements).toEqual(PLACEMENTS);
+});
+it('enables a late startup load only after its final layout and placement are installed', async () => {
+  trayAvailable = true; vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2');
+  settingsView = {...settingsView, overlay: {...DEFAULT_OVERLAY, enabled: false}, state: 'loading', writable: false}; await ready();
+  ipc.emit('overlay:subscribe', overlayTrusted()); deliver(currentReading()); await vi.advanceTimersByTimeAsync(50);
+  expect(windows[1].showInactive).not.toHaveBeenCalled(); windows[1].setBounds.mockClear();
+  settingsView = {...settingsView, overlay: {...DEFAULT_OVERLAY, layout: 'hud'}, state: 'loaded', writable: true}; settingsChanged!();
+  expect(windows[1].setBounds.mock.calls).toEqual([[{x: -1904, y: 16, width: 320, height: 354}]]);
+  expect(windows[1].showInactive).toHaveBeenCalledOnce();
+  expect(windows[1].setBounds.mock.invocationCallOrder[0]).toBeLessThan(windows[1].showInactive.mock.invocationCallOrder[0]);
+});
+it('never re-shows a retired overlay when a pending enable save completes during exit', async () => {
+  await editableOverlay({overlay: {...DEFAULT_OVERLAY, enabled: false}}); renew(true);
+  const saved = deferred<typeof settingsView>(); overlayWrite.mockReturnValueOnce(saved.promise);
+  const pending = visibility(trusted(), true); await settle();
+  settingsIdle = deferred().promise; void handlers.get('app:exit')!(trusted()); await settle();
+  settingsView = {...settingsView, overlay: {...DEFAULT_OVERLAY}}; saved.resolve(settingsView); await pending;
+  settingsChanged!();
+  expect(windows[1].showInactive).not.toHaveBeenCalled();
+});
+it('preserves visibility and the active placement draft when the off save fails', async () => {
+  await editableOverlay(); await edit('overlay-edit:begin', trusted()); await edit('overlay-edit:set-scale', trusted(), 1.5);
+  overlayWrite.mockRejectedValueOnce(new FakeSettingsError('SETTINGS_WRITE_FAILED'));
+  await expect(visibility(trusted(), false)).rejects.toThrow('Settings could not be saved');
+  expect(settingsView.overlay.enabled).toBe(true); expect(editPushes().at(-1)).toMatchObject({active: true, scale: 1.5});
+  expect(interactive()).toEqual(EDITABLE);
+});
 /** The overlay was hidden after it last became focusable and before it became click-through again. */
 function hiddenBeforeClickThrough(target = windows[1]) {
   const restored = target.setIgnoreMouseEvents.mock.invocationCallOrder.at(-1)!;
@@ -1461,7 +1508,7 @@ function hiddenBeforeClickThrough(target = windows[1]) {
 const EDITABLE = {ignoreMouse: false, focusable: true, movable: true, skipTaskbar: true};
 
 it('creates the overlay window at the saved scale of its layout and applies that zoom after every load', async () => {
-  settingsView = {...settingsView, overlay: {layout: 'cluster', sections: ALL_SECTIONS, placements: {...PLACEMENTS, cluster: {x: 0, y: 1, scale: 1.5}}}}; await ready();
+  settingsView = {...settingsView, overlay: {enabled: true, layout: 'cluster', sections: ALL_SECTIONS, placements: {...PLACEMENTS, cluster: {x: 0, y: 1, scale: 1.5}}}}; await ready();
   // ET-012d: the cluster with every section at 1.5 is ceil(265 × 1.5 + 3) = 401 high (330 before).
   expect(configurations[1]).toMatchObject({width: 660, height: 401, webPreferences: {zoomFactor: 1.5, partition: 'ets2telemetry-overlay'}});
   expect(configurations[0].webPreferences).not.toHaveProperty('zoomFactor');

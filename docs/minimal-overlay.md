@@ -137,3 +137,9 @@ Follow [manual prototype setup](manual-plugin-setup.md) for the maintained SDK D
 ### Yukon appearance (ET-028)
 
 The overlay independently bundles Onest and imports only `--yu-ov-*` tokens. Transparent html/body/root, no blur, click-through, source freshness, window tracking, anchor/scale/refusal algorithms and edit ownership are unchanged. Strip rows are38CSSpx plus the existing snapped border; all geometry oracles use that arithmetic. The card's speed/gear/RPM hero consumes exactly their existing24px rows, including every subset and no hero; other fields keep their fixed rows. The cluster moves the existing validated numeric RPM ring to a distinct inner arc. Formatted speed alone cannot supply numeric geometry, so the outer speed track is decorative. No string parsing, new IPC or invented speed ratio is used. RU numeric RPM/consumption units localize separately from raw SDK names. Captures of the hidden isolated synthetic renderer are visual evidence only, not real game visibility or DPI/input/focus acceptance.
+
+## Saved visibility and remaining display validation (ET-012e, October 21, 2026)
+
+The [saved visibility setting](settings.md#saved-overlay-visibility-et-012e) defaults on. Disabled state is checked before both driving and edit authority. Successful off cancels/discards a draft after disabling the gate; a failed save preserves it. Enable applies final saved geometry before showing and does not refresh source or window authority. Existing foreground/minimize/service/source/freshness/client-fit gates remain mandatory.
+
+The owner transferred multi-monitor, mixed-DPI, negative-origin, monitor-removal and off-screen manual acceptance to ET-042. Both task descriptions were synchronized by the coordinator. These checks remain **unverified**, with no display-support acceptance inferred. Relevant single-monitor real-game visibility/edit checks remain in [ET-012e](validation/et-012e.md); accepted ET-009 evidence is preserved.

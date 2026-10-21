@@ -13,13 +13,14 @@ const SETTINGS_SEED = '{"format":"ets2telemetry.settings","version":1,"units":{"
 // ET-012a: every save writes the overlay block (strip layout and every section by default). ET-012b: the block also
 // holds the placements of all four layouts (the ET-012a anchors at scale 1 by default), so the format is v3.
 const placementLines = (layout, x, y, last = false) => [`      "${layout}": {`, `        "x": ${x},`, `        "y": ${y},`, '        "scale": 1', last ? '      }' : '      },'];
-const SETTINGS_SAVED = ['{', '  "format": "ets2telemetry.settings",', '  "version": 4,', '  "language": "en",', '  "units": {', '    "ets2": "us-customary",', '    "ats": "us-customary"', '  },',
-  '  "overlay": {', '    "layout": "strip",', '    "sections": {', '      "speed": true,', '      "gear": true,', '      "rpm": true,', '      "fuel": true,',
+const SETTINGS_SAVED = ['{', '  "format": "ets2telemetry.settings",', '  "version": 5,', '  "language": "en",', '  "units": {', '    "ets2": "us-customary",', '    "ats": "us-customary"', '  },',
+  '  "overlay": {', '    "enabled": false,', '    "layout": "strip",', '    "sections": {', '      "speed": true,', '      "gear": true,', '      "rpm": true,', '      "fuel": true,',
   '      "range": true,', '      "sdk-consumption": true,', '      "cargo": true,', '      "origin": true,', '      "destination": true,', '      "distance-driven": true,',
   '      "distance-remaining": true,', '      "deadline": true,', '      "expected-income": true,', '      "game-time": true', '    },', '    "placements": {',
   ...placementLines('strip', 0.5, 0), ...placementLines('card', 1, 0), ...placementLines('cluster', 0, 1), ...placementLines('hud', 0, 0, true),
   '    }', '  }', '}', ''].join('\n');
-const DEFAULT_OVERLAY = {layout: 'strip', sections: {'speed': true, 'gear': true, 'rpm': true, 'fuel': true, 'range': true, 'sdk-consumption': true, 'cargo': true,
+const SETTINGS_UNIT_SAVED = SETTINGS_SAVED.replace('"enabled": false', '"enabled": true');
+const DEFAULT_OVERLAY = {enabled: true, layout: 'strip', sections: {'speed': true, 'gear': true, 'rpm': true, 'fuel': true, 'range': true, 'sdk-consumption': true, 'cargo': true,
   'origin': true, 'destination': true, 'distance-driven': true, 'distance-remaining': true, 'deadline': true, 'expected-income': true, 'game-time': true},
 placements: {strip: {x: 0.5, y: 0, scale: 1}, card: {x: 1, y: 0, scale: 1}, cluster: {x: 0, y: 1, scale: 1}, hud: {x: 0, y: 0, scale: 1}}};
 const QUARANTINE_NAME = /^settings\.rejected-\d{8}T\d{6}Z\.json$/;
@@ -210,12 +211,25 @@ export async function runLifecycleSmoke({application, launcher, dashboard, overl
   record.settingsQuarantined = quarantined.length;
   assert.equal(quarantined.length, 1); assert.equal(quarantined[0].content, SETTINGS_SEED);
   record.settingsQuarantinePreserved = true;
-  assert.deepEqual(saved.filter(file => !QUARANTINE_NAME.test(file.name)), [{name: 'settings.json', content: SETTINGS_SAVED}]);
+  assert.deepEqual(saved.filter(file => !QUARANTINE_NAME.test(file.name)), [{name: 'settings.json', content: SETTINGS_UNIT_SAVED}]);
   record.settingsSavedExact = true;
   record.dashboardUnits = await waitForDashboardUnits(trayDashboard, US_DASHBOARD);
   record.overlayUnits = await waitForOverlay(overlay, {...expected, speed: '55.9', fuel: '19.3', speedUnit: 'mph', fuelUnit: 'US gal'});
   assert.equal((await lifecycleState(application)).settings.units.ets2, 'us-customary');
   record.unitsApplied = true;
+  // ET-012e: persist off without retiring telemetry or the service; run B must load it without writing.
+  await trayDashboard.evaluate(() => globalThis.desktop.setOverlayEnabled(false));
+  const disabled = await lifecycleState(application);
+  assert.equal(disabled.settings.overlay.enabled, false); assert.equal(disabled.servicePid, initial.servicePid);
+  assert.equal(source.statistics().connections, 1);
+  assert.equal((await settingsFiles(config)).find(file => file.name === 'settings.json').content, SETTINGS_SAVED);
+  record.overlayVisibilitySaved = true;
+  record.overlayHiddenWhileDisabled = await application.evaluate(({BrowserWindow}) => {
+    const window = BrowserWindow.getAllWindows().find(w => new URL(w.webContents.mainFrame.url).search === '?view=overlay');
+    return Boolean(window && !window.isVisible());
+  });
+  assert.equal(record.overlayHiddenWhileDisabled, true);
+  await disabledRecording(application, trayDashboard);
 
   // 4. Explicit exit from the renderer: one orderly sequence, normal service stop, exit 0.
   await trayDashboard.screenshot({path: path.join(config.output, 'ready.png')});
@@ -248,7 +262,10 @@ export async function verifyLifecycleRestart({application, record, rendererPages
   record.recordingDisabledShown = true;
   record.restartRecovered = true;
   record.restart.settingsState = state.settings.state;
-  assert.deepEqual(state.settings, {language: 'en', units: {ets2: 'us-customary', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null});
+  assert.deepEqual(state.settings, {language: 'en', units: {ets2: 'us-customary', ats: 'us-customary'}, overlay: {...DEFAULT_OVERLAY, enabled: false}, state: 'loaded', writable: true, saveError: null});
+  record.restart.overlayEnabled = state.settings.overlay.enabled;
+  assert.equal(record.restart.overlayEnabled, false);
+  record.overlayVisibilityRestarted = true;
   // Loading wrote nothing: the saved file and the single quarantined file are unchanged.
   const files = await settingsFiles(config);
   assert.deepEqual(files.map(file => file.name), record.settingsAfterSave);
@@ -256,8 +273,8 @@ export async function verifyLifecycleRestart({application, record, rendererPages
   assert.equal(files.find(file => QUARANTINE_NAME.test(file.name)).content, SETTINGS_SEED);
   record.settingsRestartLoaded = true;
   // ET-012b: the restart restores the saved placements, starts in driving mode and gives the overlay document the saved
-  // scale of its layout as zoom factor, without writing. Run A saves only once (the receipt requires exactly one
-  // SETTINGS_SAVED row), so the saved placements are the defaults here; the overlay smoke saves an edited scale.
+  // scale of its layout as zoom factor, without writing. Run A saves only units and visibility (the receipt requires exactly two
+  // SETTINGS_SAVED rows), so the saved placements are the defaults here; the overlay smoke saves an edited scale.
   record.restart.placements = state.settings.overlay.placements;
   record.restart.overlayEdit = (await dashboard.evaluate(() => globalThis.desktop.getAppState())).overlayEdit;
   assert.deepEqual(record.restart.overlayEdit, {active: false});

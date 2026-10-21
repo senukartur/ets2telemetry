@@ -104,6 +104,8 @@ export interface OverlayPlacement {
 /** One placement per layout: always all four keys. */
 export type OverlayPlacements = Readonly<Record<OverlayLayout, OverlayPlacement>>;
 export interface OverlaySettings {
+  /** Persisted user visibility gate, independent of source/window authority (ET-012e). */
+  enabled: boolean;
   layout: OverlayLayout;
   sections: OverlaySections;
   /** The saved position and scale of every layout (ET-012b). */

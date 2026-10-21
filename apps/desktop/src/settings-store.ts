@@ -168,6 +168,11 @@ export class SettingsStore {
     return this.enqueue(settings => ({next: {...settings, units: Object.freeze({...settings.units, [game]: profile})}, facts: {game, profile}}));
   }
 
+  /** Serialized visibility save through the shared bounded durable queue. */
+  setOverlayEnabled(enabled: boolean): Promise<SettingsView> {
+    return this.enqueue(settings => ({next: {...settings, overlay: Object.freeze({...settings.overlay, enabled})}, facts: {overlayEnabled: enabled}}));
+  }
+
   /** Serialized save of the overlay layout; the sections and units stay as they are at the time of the write. */
   setOverlayLayout(layout: OverlayLayout): Promise<SettingsView> {
     return this.enqueue(settings => ({next: {...settings, overlay: Object.freeze({...settings.overlay, layout})}, facts: {overlayLayout: layout}}));

@@ -148,7 +148,7 @@ function Test-LifecycleSettingsReceipt {
     param([object]$Driver)
     $lifecycle = $Driver.lifecycle
     foreach ($field in @('settingsSeededInvalidFile','settingsStartupUnchanged','settingsQuarantinePreserved','settingsSavedExact',
-        'unitsApplied','settingsRestartLoaded')) {
+        'unitsApplied','settingsRestartLoaded','overlayVisibilitySaved','overlayVisibilityRestarted','overlayHiddenWhileDisabled')) {
         if ($lifecycle.$field -isnot [bool] -or $lifecycle.$field -ne $true) { return $false }
     }
     if (!(Test-ReceiptInteger -Value $lifecycle.settingsQuarantined -Minimum 1 -Maximum 1) -or $lifecycle.restart.settingsState -cne 'loaded') { return $false }
@@ -171,7 +171,12 @@ function Test-LifecycleSettingsReceipt {
     }
     $fallback = @($Driver.mainEvents | Where-Object { $_.event -ceq 'SETTINGS_FALLBACK' })
     if ($fallback.Count -ne 1 -or $fallback[0].facts.state -cne 'invalid-file') { return $false }
-    foreach ($eventName in @('SETTINGS_QUARANTINED','SETTINGS_SAVED')) {
+    if ($lifecycle.restart.overlayEnabled -isnot [bool] -or $lifecycle.restart.overlayEnabled) { return $false }
+    $visibilitySaves = @($Driver.mainEvents | Where-Object { $_.event -ceq 'SETTINGS_SAVED' })
+    if ($visibilitySaves.Count -ne 2 -or $visibilitySaves[0].facts.game -cne 'ets2' -or $visibilitySaves[0].facts.profile -cne 'us-customary' -or
+        $visibilitySaves[1].facts.overlayEnabled -isnot [bool] -or $visibilitySaves[1].facts.overlayEnabled -ne $false -or
+        (@($visibilitySaves[1].facts.PSObject.Properties.Name) -join ',') -cne 'overlayEnabled') { return $false }
+    foreach ($eventName in @('SETTINGS_QUARANTINED')) {
         if (@($Driver.mainEvents | Where-Object { $_.event -ceq $eventName }).Count -ne 1) { return $false }
     }
     $loaded = @($lifecycle.restartMainEvents | Where-Object { $_.event -ceq 'SETTINGS_LOADED' })
@@ -775,7 +780,7 @@ function Test-UiReceipt {
         'shell' { $flags += @('navigation','headingFocus','journalUnmount','menuKeyboard','exitAvailable','laterAccount'); $screens = @('live','journal','settings','account') }
         'live' { $flags += @('numericGauge','unavailableVsZero','paused','staleDashes','rawNames','unsupportedTrip','jobViewport','hmNamesReadable','tankUnknownVsZero'); $screens = @('current','zero','missing','paused','stale') }
         'journal' { $flags += @('syntheticBanner','pageReturn','chartBounded','rawTabs','searchPlanned','tripRegions','tableReadable','signedChart'); $screens = @('list','trip','intervals','timeline','samples') }
-        'settings' { $flags += @('allPanels','allSections','committedSave','sourceSelector','uninstallRefusal','refusedSave','readOnly','controlsKeyboard','lastEnabled','fontLicense'); $screens = @('general','units','overlay','sections','plugin','data','about','save-error') }
+        'settings' { $flags += @('allPanels','allSections','committedSave','sourceSelector','uninstallRefusal','refusedSave','readOnly','controlsKeyboard','lastEnabled','fontLicense','overlayVisibility','visibilityFailedSave'); $screens = @('general','units','overlay','sections','plugin','data','about','save-error') }
         'overlay' { $flags += @('fourLayouts','transparent','contained','independentFont','missing','paused','staleDashes','heroSubsets','formatterProfiles'); $screens = @('strip','card','cluster','hud') }
     }
     foreach ($flag in $flags) { if ($ui.flags.$flag -isnot [bool] -or !$ui.flags.$flag) { return $false } }
@@ -812,10 +817,10 @@ function Test-UiReceipt {
         $readOnly = $ui.readOnly
         if ($null -eq $readOnly -or $readOnly.state -cne 'newer-version' -or $readOnly.language -cne 'en' -or
             $readOnly.writable -isnot [bool] -or $readOnly.writable -or $readOnly.bytesUnchanged -isnot [bool] -or !$readOnly.bytesUnchanged -or
-            $ui.firstLauncherExit -ne 0 -or $readOnly.launcherExit -ne 0 -or @($ui.saveFailureFacts).Count -ne 4) { return $false }
+            $ui.firstLauncherExit -ne 0 -or $readOnly.launcherExit -ne 0 -or @($ui.saveFailureFacts).Count -ne 8) { return $false }
         foreach ($fact in $ui.saveFailureFacts) { if ($fact.step -cne 'target' -or $null -ne $fact.code) { return $false } }
         $expectedErrors = @($Driver.mainEvents | Where-Object { $_.event -ceq 'SETTINGS_WRITE_FAILED' })
-        if ($expectedErrors.Count -ne 4) { return $false }
+        if ($expectedErrors.Count -ne 8) { return $false }
         foreach ($row in $expectedErrors) { if ($row.facts.step -cne 'target' -or $null -ne $row.facts.code) { return $false } }
         if (!(Test-OrderlyRunEvent -MainEvents @($Driver.mainEvents | Where-Object { $_.event -cne 'SETTINGS_WRITE_FAILED' }) -ServiceEvents @($Driver.serviceEvents)) -or
             !(Test-OrderlyRunEvent -MainEvents @($readOnly.mainEvents) -ServiceEvents @($readOnly.serviceEvents)) -or

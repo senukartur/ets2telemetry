@@ -3,10 +3,10 @@ import {DEFAULT_OVERLAY_PLACEMENTS, normalizeFraction, normalizeScale, parseOver
 import {DEFAULT_OVERLAY_SECTIONS, DEFAULT_OVERLAY_SETTINGS, isOverlayLayout, OVERLAY_LAYOUTS, OVERLAY_SECTION_IDS} from './overlay-sections';
 import {DEFAULT_UNIT_PROFILES, isUnitProfile, UNIT_GAMES} from './unit-profiles';
 
-// Settings file format v4 (docs/settings.md). Pure parsing and serialization; the store owns file access.
+// Settings file format v5 (docs/settings.md). Pure parsing and serialization; the store owns file access.
 
 export const SETTINGS_FORMAT = 'ets2telemetry.settings';
-export const SETTINGS_VERSION = 4;
+export const SETTINGS_VERSION = 5;
 /** Larger files are rejected as invalid without being parsed. */
 export const MAX_SETTINGS_BYTES = 64 * 1024;
 
@@ -29,10 +29,10 @@ export const DEFAULT_SETTINGS: Settings = Object.freeze({
 });
 
 /** Field paths that can fall back to their default independently. */
-export type SettingsField = 'language' | `units.${UnitGame}` | 'overlay.layout' | 'overlay.sections' | `overlay.sections.${OverlaySectionId}`
+export type SettingsField = 'overlay.enabled' | 'language' | `units.${UnitGame}` | 'overlay.layout' | 'overlay.sections' | `overlay.sections.${OverlaySectionId}`
   | 'overlay.placements' | `overlay.placements.${OverlayLayout}`;
 /** Set when the file was upgraded in memory from an older format; the file itself stays unchanged until the next save. */
-type Migrated = {migratedFrom?: 1 | 2 | 3};
+type Migrated = {migratedFrom?: 1 | 2 | 3 | 4};
 export type ParsedSettings =
   | ({state: 'loaded'; settings: Settings} & Migrated)
   /** A valid file with some invalid or missing fields; they use defaults until the next save rewrites them. */
@@ -53,13 +53,14 @@ const isRecord = (value: unknown): value is Record<string, unknown> => typeof va
  * mutates its input. v1 -> v2 adds the overlay block with its defaults (strip, every section); the v1 units then pass
  * the normal validation, so an invalid v1 unit still falls back alone. v2 -> v3 adds the default placements of every
  * layout to an overlay block (ET-012b); a v2 overlay that is not an object stays as it is and falls back as a whole.
- * v3 -> v4 adds the interface language (ET-029).
+ * v3 -> v4 adds the interface language (ET-029). v4 -> v5 enables the overlay by default (ET-012e).
  * Version 0 and below have no path.
  */
 const MIGRATIONS: ReadonlyMap<number, (raw: Record<string, unknown>) => Record<string, unknown>> = new Map<number, (raw: Record<string, unknown>) => Record<string, unknown>>([
   [1, (raw: Record<string, unknown>) => ({...raw, version: 2, overlay: defaultOverlayDocument()})],
   [2, (raw: Record<string, unknown>) => ({...raw, version: 3, overlay: isRecord(raw.overlay) ? {...raw.overlay, placements: defaultPlacementsDocument()} : raw.overlay})],
-  [3, (raw: Record<string, unknown>) => ({...raw, version: 4, language: 'en'})]
+  [3, (raw: Record<string, unknown>) => ({...raw, version: 4, language: 'en'})],
+  [4, (raw: Record<string, unknown>) => ({...raw, version: 5, overlay: isRecord(raw.overlay) ? {...raw.overlay, enabled: true} : raw.overlay})]
 ]);
 
 /** Upgrades an older raw document to the current version through the migration chain, or undefined without a complete path. */
@@ -112,7 +113,9 @@ function parseOverlay(value: unknown, fallbackFields: SettingsField[]): OverlayS
   else fallbackFields.push('overlay.layout');
   const sections = parseSections(overlay.sections, fallbackFields);
   const placements = parsePlacements(overlay.placements, fallbackFields);
-  return {layout, sections, placements};
+  const enabled = typeof overlay.enabled === 'boolean' ? overlay.enabled : DEFAULT_OVERLAY_SETTINGS.enabled;
+  if (typeof overlay.enabled !== 'boolean') fallbackFields.push('overlay.enabled');
+  return {enabled, layout, sections, placements};
 }
 
 /** Classifies settings bytes. A leading UTF-8 byte order mark is accepted; unknown keys are ignored. */
@@ -133,7 +136,7 @@ export function parseSettings(bytes: Uint8Array): ParsedSettings {
     document = migrateToCurrent(raw, version);
     if (!document) return {state: 'unsupported-older'};
   }
-  const migrated: Migrated = version === 1 || version === 2 || version === 3 ? {migratedFrom: version} : {};
+  const migrated: Migrated = version === 1 || version === 2 || version === 3 || version === 4 ? {migratedFrom: version} : {};
   const fallbackFields: SettingsField[] = [];
 
   let language: AppLanguage = DEFAULT_APP_LANGUAGE;
@@ -153,7 +156,7 @@ export function parseSettings(bytes: Uint8Array): ParsedSettings {
 }
 
 /**
- * The exact v4 file content: UTF-8 without a byte order mark, two-space indentation, a trailing newline, language,
+ * The exact v5 file content: UTF-8 without a byte order mark, two-space indentation, a trailing newline, language,
  * all fourteen overlay sections in canonical order and the placements of all four layouts in canonical order, each with
  * x and y rounded to four decimals and the scale to two.
  */
@@ -168,6 +171,6 @@ export function serializeSettings(settings: Settings): string {
     version: SETTINGS_VERSION,
     language: settings.language,
     units: {ets2: settings.units.ets2, ats: settings.units.ats},
-    overlay: {layout: settings.overlay.layout, sections, placements}
+    overlay: {enabled: settings.overlay.enabled, layout: settings.overlay.layout, sections, placements}
   }, null, 2) + '\n';
 }

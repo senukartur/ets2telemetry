@@ -28,6 +28,14 @@ beforeEach(async () => {
 });
 afterEach(() => {vi.useRealTimers(); vi.doUnmock('electron');});
 const connected = (): LiveTelemetry => ({...initialLive('synthetic'), status: 'connected', fresh: true});
+it('rejects missing, invalid and extra visibility arguments before IPC', async () => {
+  for (const value of [null, undefined, 0, 1, 'false', {}, []]) await expect(bridge.setOverlayEnabled(value as never)).rejects.toThrow('Invalid overlay visibility request');
+  expect(ipc.invoke).not.toHaveBeenCalled();
+  for (const args of [[], [true, {path: 'untrusted'}]]) await expect(Reflect.apply(bridge.setOverlayEnabled, bridge, args)).rejects.toThrow('Invalid overlay visibility request');
+  expect(ipc.invoke).not.toHaveBeenCalled();
+  await bridge.setOverlayEnabled(false); await bridge.setOverlayEnabled(true);
+  expect(ipc.invoke.mock.calls).toEqual([['settings:set-overlay-enabled', false], ['settings:set-overlay-enabled', true]]);
+});
 function attach() {const port = new RendererPort(); ipc.emit('telemetry:port', {ports: [port]}); return port;}
 function subscriptions() {return ipc.send.mock.calls.filter(call => call[0] === 'telemetry:subscribe').length;}
 it('does not extend SDK expiry for equal captures and expires window metadata separately', async () => {
@@ -160,7 +168,7 @@ it('marks v1 data stale when the subscription closes or a replacement port await
 it('preserves the frozen narrow bridge and rejects privileged source values before IPC', async () => {
   expect(Object.isFrozen(bridge)).toBe(true); expect(Object.keys(bridge).sort()).toEqual(['beginOverlayEdit', 'choosePluginFolder', 'exitApplication', 'exportDiagnostics', 'exportJournalTrip', 'finishOverlayEdit', 'getAppState', 'getHardModeStatus', 'getJournalTrip', 'getStatus',
     'listJournalEvents', 'listJournalIntervals', 'listJournalSamples', 'listJournalTrips', 'openPluginFolder', 'refreshHardMode',
-    'resetOverlayEditPlacement', 'retryPluginSetup', 'selectSource', 'setLanguage', 'setOverlayEditScale', 'setOverlayLayout', 'setOverlaySections', 'setPluginGameExcluded', 'setUnitProfile',
+    'resetOverlayEditPlacement', 'retryPluginSetup', 'selectSource', 'setLanguage', 'setOverlayEditScale', 'setOverlayEnabled', 'setOverlayLayout', 'setOverlaySections', 'setPluginGameExcluded', 'setUnitProfile',
     'showPluginFile', 'subscribeAppState', 'subscribeLive', 'uninstallApplication']);
   await expect(bridge.selectSource('C:\\arbitrary.exe' as never)).rejects.toThrow('Invalid source selection');
   expect(ipc.invoke).not.toHaveBeenCalled();
@@ -201,7 +209,7 @@ it('appends the application state and exit methods after the original three brid
   // ET-016 PR-5 the trip export, ET-017 PR-4 the five plugin setup methods, ET-017 PR-6 the diagnostics export and ET-018
   // PR-4 the in-app uninstall.
   expect(Object.keys(bridge)).toEqual(['getStatus', 'selectSource', 'subscribeLive', 'getAppState', 'subscribeAppState', 'exitApplication', 'setLanguage', 'setUnitProfile',
-    'setOverlayLayout', 'setOverlaySections', 'beginOverlayEdit', 'setOverlayEditScale', 'resetOverlayEditPlacement', 'finishOverlayEdit',
+    'setOverlayEnabled', 'setOverlayLayout', 'setOverlaySections', 'beginOverlayEdit', 'setOverlayEditScale', 'resetOverlayEditPlacement', 'finishOverlayEdit',
     'listJournalTrips', 'getJournalTrip', 'listJournalEvents', 'listJournalIntervals', 'listJournalSamples', 'exportJournalTrip',
     'retryPluginSetup', 'choosePluginFolder', 'setPluginGameExcluded', 'showPluginFile', 'openPluginFolder', 'exportDiagnostics', 'uninstallApplication', 'getHardModeStatus', 'refreshHardMode']);
 });

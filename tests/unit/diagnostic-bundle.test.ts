@@ -13,7 +13,7 @@ import {temporaryResources} from '../shared/resources';
 
 const USER = 'Jane.Doe', MACHINE = 'TRUCKER-PC7';
 const HEALTH: AppHealth = {service: 'ready', storage: 'verified', recording: {state: 'disabled'}, lastError: null};
-const SETTINGS: SettingsView = {language: 'en', units: {ets2: 'metric', ats: 'us-customary'}, overlay: {layout: 'strip', sections: {
+const SETTINGS: SettingsView = {language: 'en', units: {ets2: 'metric', ats: 'us-customary'}, overlay: {enabled: true, layout: 'strip', sections: {
   'speed': true, 'gear': true, 'rpm': true, 'fuel': true, 'range': true, 'sdk-consumption': true, 'cargo': true, 'origin': true, 'destination': true,
   'distance-driven': true, 'distance-remaining': true, 'deadline': true, 'expected-income': true, 'game-time': true},
 placements: {strip: {x: 0.5, y: 0, scale: 1}, card: {x: 1, y: 0, scale: 1}, cluster: {x: 0, y: 1, scale: 1}, hud: {x: 0, y: 0, scale: 1}}},

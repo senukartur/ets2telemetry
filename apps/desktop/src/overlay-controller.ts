@@ -32,6 +32,8 @@ export interface OverlayScreen {
   getAllDisplays(): {bounds: PhysicalClientBounds}[];
 }
 export interface OverlayControllerOptions {
+  /** Persisted visibility gate; evaluated before edit and driving authority. */
+  enabled?: boolean;
   /** The saved placement of the initial layout; the overlay window was created at its scale. */
   placement?: OverlayPlacement;
   /** The saved enabled sections; every layout reserves rows for them (ET-012c, ET-012d). Defaults to every section. */
@@ -56,6 +58,7 @@ const sameEditState = (left: OverlayEditState | undefined, right: OverlayEditSta
 export class OverlayController {
   private live?: LiveTelemetry;
   private ready = false;
+  private enabled: boolean;
   private visible = false;
   private topmostLossReported = false;
   private bounds?: PhysicalClientBounds;
@@ -75,6 +78,7 @@ export class OverlayController {
   private client?: DipRect;
   constructor(private readonly window: OverlayWindow, private readonly screen: OverlayScreen, private readonly topmostLost: (phase: 'show' | 'visible') => void = () => {},
     private layout: OverlayLayout = 'strip', options: OverlayControllerOptions = {}) {
+    this.enabled = options.enabled ?? true;
     this.placement = options.placement ?? DEFAULT_OVERLAY_PLACEMENTS[layout];
     this.sections = options.sections ?? DEFAULT_OVERLAY_SECTIONS;
     this.zoom = this.placement.scale;
@@ -102,6 +106,13 @@ export class OverlayController {
     else this.bounds = this.physical = undefined;
     this.place();
   }
+  /** Applies committed visibility first, so discarding an edit cannot briefly re-show the driving overlay. */
+  setEnabled(enabled: boolean): void {
+    if (enabled === this.enabled) return;
+    this.enabled = enabled;
+    if (!enabled) this.endEdit();
+    this.place();
+  }
   loaded(ready: boolean): void {this.ready = ready; this.place();}
   topologyChanged(): void {
     // A removed/reconfigured monitor invalidates the previous coordinate observation.
@@ -114,6 +125,7 @@ export class OverlayController {
 
   /** Enters edit mode for the current layout from its saved placement; `ownForeground` is the gate's current state. */
   beginEdit(ownForeground: boolean): OverlayEditState {
+    if (!this.enabled) throw new Error('Overlay is disabled');
     if (!this.edit) {
       this.edit = {layout: this.layout, draft: this.placement};
       this.ownForeground = ownForeground; this.editStatus = 'waiting-for-game';
@@ -209,6 +221,7 @@ export class OverlayController {
   }
   private place(): void {
     if (this.window.isDestroyed()) return;
+    if (!this.enabled) {this.hide(); return;}
     this.syncZoom();
     if (this.edit) {this.placeEditing(this.edit); return;}
     const physical = this.live && currentGameClientBounds(this.live);

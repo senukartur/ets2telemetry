@@ -780,3 +780,9 @@ The assigned ET-028 candidate implements the approved Yukon dark desktop shell/s
 
 
 ET-028 supersession: the dated ET-012c 36px strip-row observations above remain historical. The current Yukon presentation uses `STRIP_ROW_HEIGHT_CSS = 38`, with height `ceil(38 × rows × scale + 2 × max(1, scale))`. Wrapping, snapped borders and whole-overlay fit refusal are unchanged. Real-game taller-window placement/click-through and fractional-DPI/performance checks remain unverified.
+
+## ET-012e visibility implementation scope — October 21, 2026
+
+The owner authorized saved overlay visibility (v5 `overlay.enabled`, default true), trusted boolean IPC, durable settings, gate-before-edit/driving behavior and the existing Yukon settings switch. This supersedes earlier statements that show/hide is only planned. Disabling after save cancels/discards unsaved placement; failed saves preserve it. Telemetry and recording behavior is unchanged.
+
+The owner explicitly transferred multi-monitor, mixed-DPI, negative-origin, monitor-removal and off-screen manual checks to ET-042; the coordinator synchronized both task descriptions. Those checks remain unverified, with no inferred display acceptance. ET-012e still needs relevant single-monitor ETS2/ATS SP/TruckersMP windowed/borderless manual disposition and all code/review/CI gates. Preserve accepted ET-009 evidence and all historical ET-012a–d records. See [ET-012e validation](docs/validation/et-012e.md). No game launch, release or game-history enablement follows from implementation.

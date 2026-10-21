@@ -409,3 +409,15 @@ ET-028 closeout strengthens the existing `tests/storage/history-refusal.test.ts`
 ET-028 Claude follow-up adds `tests/unit/formatter-localization.test.ts` (Node/Vitest, REG-002/003/009/014, R/T, ET-028, PR `npm test`): real core formatter and main/overlay output, all units/profiles/games/EN-RU, exact signed/large money and SDK-name/detail provenance. It adds `tests/unit/ci-compiled-artifact.test.ts` (Node/Vitest with isolated temporary files and inert Node CLI children, REG-015/017, R/T, ET-028, PR `npm test`): fail-closed aggregate participation, real artifact identity/hash/path/link rejection and exact native-binding replacement. Existing `journal-chart.test.ts`, `renderer-observation.test.ts`, `desktop-ui-view.test.ts` and `ui-runtime-receipt.test.ts` now cover signed SVG/domains, unknown/zero/positive tank states and missing/false `signedChart`, `tankUnknownVsZero` and `formatterProfiles` receipts. Existing flags and all 308 screenshots remain required; no storage/protocol or history fixture changes.
 
 ET-005b final-verification baseline follow-up (October21): shutdown-stalls.test.ts retains all four REG-006/011/012 scenarios and unchanged deadlines/assertions, but runs in the storage-shutdown project after other storage-file forks. Failure-only b1 diagnostics retain effective context, monotonic boundary stamps, exit/verdict and bounded synthetic logs. Full storage inventory remains455tests/39files. The original parallel failure followed by one diagnostic pass is flaky evidence with an unproven scheduling cause, not a waived result; see [validation](validation/et-005b.md#storage-shutdown-baseline-flake-and-scheduling-mitigation).
+
+## ET-012e saved visibility delta — October 21, 2026
+
+| Tests / journey | Regression | Retained protection |
+| --- | --- | --- |
+| `settings-schema`, `settings-store`, `i18n-lifecycle` unit tests | REG-017 | v5 strict flag, v1–v4 pure migration/no startup writes, false restart, canonical serialization, shared bounded queue and failure recovery |
+| `preload-recovery`, `main-boundaries` unit tests | REG-016, REG-017 | trusted exact boolean IPC, durable application, pending off/edit race, failed-save draft retention, final geometry before late enable, no show after exit |
+| `overlay.test.ts` | REG-016 | gate before edit/driving, off discard, disabled begin refusal; enable preserves existing source/freshness/foreground/minimize/topology/fit gates |
+| Existing settings UI shard and `ui-runtime-receipt` | REG-016, REG-017 | associated EN/RU label, Space off/on, committed value and failed-save state, disabled edit/read-only; strict new flags and exact eight expected refused writes |
+| Existing lifecycle journey and `runtime-receipt` | REG-012, REG-016, REG-017 | false saved and loaded across two launches, hidden state without service/source restart, unchanged canonical bytes and strict negative receipt cases |
+
+No critical gate is skipped or retried. Real-game acceptance and transferred ET-042 manual display checks remain unverified; see [validation](validation/et-012e.md).

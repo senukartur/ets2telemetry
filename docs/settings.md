@@ -1,23 +1,26 @@
-# Persistent settings, unit profiles, overlay settings and localization (ET-011b, ET-012a, ET-012b, ET-029)
+# Persistent settings, unit profiles, overlay settings and localization (ET-011b, ET-012a, ET-012b, ET-029, ET-012e)
 
 ET-011b stores the user's settings in a small JSON file and uses them to choose the display units of each game. ET-012a adds the overlay layout and the overlay sections in format v2. ET-012b adds the saved position and scale of every overlay layout in format v3. The decisions behind the file are C10–C12 in [concept.md](../concept.md#et-011-authorization--october-15-2026) and, for the overlay settings, L2, L3 and L13 in [concept.md](../concept.md#et-012a-authorization--october-15-2026) and M2, M3, M10, M11 and M12 in [concept.md](../concept.md#et-012b-authorization--october-15-2026); numeric conversion follows ET-010 decision N2 (telemetry-core is the single numeric source). ET-029 adds the UI language (`language: 'en' | 'ru'`) in format v4, letting the user switch desktop app, tray and overlay live without restart.
+
+ET-012e adds saved overlay visibility in format v5, defaulting to enabled.
 
 ## Location
 
 The file is `%LOCALAPPDATA%\ETS2Telemetry\settings\settings.json`. Main resolves `%LOCALAPPDATA%` at runtime through `dataPaths(LOCALAPPDATA).settings` (`apps/desktop/src/paths.ts`), separately from the application binaries and from `telemetry.sqlite`, so an application update does not replace it. When `LOCALAPPDATA` is missing or not an absolute path, there is no settings location: defaults apply and nothing can be saved (`unavailable`). Preserving the file across a real installed update and an optional uninstall removal belong to ET-018. Since ET-018 PR-1 the installer lifecycle proves that install, repair and update keep the file byte-identical. An uninstall deletes it with the rest of the data folder, from Windows Settings or from the application; the [in-app uninstall](uninstall.md#in-app-uninstall) and the Journal tab's export note say so ([user guide](user-guide.md#uninstalling)).
 
-## Format v4 (ET-029)
+## Format v5 (ET-012e)
 
 ```json
 {
   "format": "ets2telemetry.settings",
-  "version": 4,
+  "version": 5,
   "language": "en",
   "units": {
     "ets2": "metric",
     "ats": "us-customary"
   },
   "overlay": {
+    "enabled": true,
     "layout": "strip",
     "sections": {
       "speed": true,
@@ -65,18 +68,19 @@ The application writes exactly this shape: UTF-8 without a byte order mark, two-
 
 - a leading UTF-8 byte order mark is accepted and unknown keys are ignored;
 - a file larger than 64 KiB, bytes that are not UTF-8, anything other than a JSON object, a missing or different `format` marker, or a `version` that is not an integer makes the file **invalid**;
-- a version 1, 2 or 3 file is migrated in memory ([below](#migration-from-v1-v2-and-v3)) and then read as v4;
+- a version 1, 2, 3 or 4 file is migrated in memory ([below](#migration-from-v1-v2-v3-and-v4)) and then read as v5;
 - a missing `version` or a version below 1 is **unsupported-older**: there is no migration path, so such a file uses defaults;
-- a version above 4 is **newer-version**: written by a later application version;
+- a version above 5 is **newer-version**: written by a later application version;
 - `language` must be exactly `en` or `ru` (default: `en`);
 - each `units.ets2` and `units.ats` value must be exactly `metric` or `us-customary`;
+- `overlay.enabled` must be a boolean (default: `true`); strings and numbers are not coerced.
 - `overlay.layout` must be exactly `strip`, `card`, `cluster` or `hud`;
 - `overlay.sections` must be an object of booleans that enables at least one section;
 - `overlay.placements` must be an object; each layout's placement must have `x` and `y` that are finite numbers in [0, 1] and a `scale` that is a finite number in [0.5, 2]. Values are rounded to four decimals (`x`, `y`) and two decimals (`scale`) when read and when written.
 
-An invalid or missing value falls back to its default on its own (**loaded-with-fallbacks**); the other values still apply. The fallback field paths are `units.ets2`, `units.ats`, `overlay.layout`, `overlay.sections`, `overlay.sections.<id>`, `overlay.placements` and `overlay.placements.<layout>`:
+An invalid or missing value falls back to its default on its own (**loaded-with-fallbacks**); the other values still apply. The fallback field paths include `language` and `overlay.enabled`; the remaining paths are `units.ets2`, `units.ats`, `overlay.layout`, `overlay.sections`, `overlay.sections.<id>`, `overlay.placements` and `overlay.placements.<layout>`:
 
-- A missing or non-object `overlay` block falls back as `overlay.layout`, `overlay.sections` and `overlay.placements`.
+- A missing or non-object `overlay` block falls back as `overlay.layout`, `overlay.sections`, `overlay.placements` and `overlay.enabled`.
 - A missing or non-object `sections` value, or one that enables no section, falls back as a whole to every section (`overlay.sections`).
 - A single missing or non-boolean section falls back to its default, enabled (`overlay.sections.<id>`).
 - A missing or non-object `placements` value falls back as a whole to the default placements (`overlay.placements`).
@@ -84,29 +88,31 @@ An invalid or missing value falls back to its default on its own (**loaded-with-
 
 ### Format v3 (ET-012b)
 
-Format v3, written by ET-012b builds, is the v4 document above without `language` and with `"version": 3`. This version reads it through the migration below and writes it back only as v4.
+Format v3, written by ET-012b builds, is the v5 document above without `language` or `overlay.enabled` and with `"version": 3`. This version reads it through the migration below and writes it back only as v5.
 
 ### Format v2 (ET-012a)
 
 Format v2, written by ET-012a builds, is the v3 document above without `overlay.placements` and with `"version": 2`.
 
-### Migration from v1, v2 and v3
+### Migration from v1, v2, v3 and v4
 
-Format v1 (ET-011b) had only the `units` block; format v2 (ET-012a) added the overlay layout and sections; format v3 (ET-012b) added overlay placements; format v4 (ET-029) added the UI language. The migration chain in `apps/desktop/src/settings-schema.ts` has three pure steps, which never mutate their input:
+Format v1 (ET-011b) had only the `units` block; format v2 (ET-012a) added the overlay layout and sections; format v3 (ET-012b) added overlay placements; format v4 (ET-029) added the UI language. The migration chain in `apps/desktop/src/settings-schema.ts` has four pure steps, which never mutate their input:
 
 - v1 to v2 adds the overlay block with its defaults (the strip layout and every section). The v1 units then pass the normal validation, so an invalid v1 unit still falls back alone.
 - v2 to v3 (ET-012b) adds the default placements of all four layouts to the overlay block; the layout and sections are kept. A v2 file never had placements, so a stray `placements` key in it is replaced by the defaults. A v2 overlay that is not an object stays as it is and falls back as a whole.
 - v3 to v4 (ET-029) adds `"language": "en"`.
+- v4 to v5 (ET-012e) adds `"overlay.enabled": true` inside the overlay object, preserving language, units, layouts, sections and placements. A stray pre-v5 visibility key is replaced by the default.
 
-A v1 file passes all three steps. A migrated file loads as `loaded` (or `loaded-with-fallbacks`) and its load row carries `migratedFrom: 1`, `migratedFrom: 2` or `migratedFrom: 3`. Nothing is written at startup: the file stays v1, v2 or v3 on disk until the first save of any setting writes the complete v4 document. A migrated file is valid, so it is never quarantined.
+A v1 file passes all four steps. A migrated file loads as `loaded` (or `loaded-with-fallbacks`) and its load row carries `migratedFrom: 1`, `migratedFrom: 2`, `migratedFrom: 3` or `migratedFrom: 4`. Nothing is written at startup: the file stays v1, v2, v3 or v4 on disk until the first save of any setting writes the complete v5 document. A migrated file is valid, so it is never quarantined.
 
-**Downgrade.** An ET-011b build reads a v2 or v3 file, and an ET-012a build a v3 file, as `newer-version`: it uses defaults, never modifies the file and refuses to save (`SETTINGS_READ_ONLY`). Going back to such a build therefore shows default units and overlay settings until a newer build runs again. Making `placements` an optional key in v2 instead was rejected (decision M2), so that an older build never rewrites a file and silently drops the placements.
+**Downgrade.** An application supporting only v4 reads v5 as newer-version and refuses writes. An ET-011b build reads a v2 or v3 file, and an ET-012a build a v3 file, as `newer-version`: it uses defaults, never modifies the file and refuses to save (`SETTINGS_READ_ONLY`). Going back to such a build therefore shows default units and overlay settings until a newer build runs again. Making `placements` an optional key in v2 instead was rejected (decision M2), so that an older build never rewrites a file and silently drops the placements.
 
 ## Overlay settings (ET-012a)
 
 | Field | Values | Default |
 | --- | --- | --- |
-| `overlay.layout` | `strip` (one or more 36 px rows at the top centre, as many as the enabled sections need), `card` (top right), `cluster` (round speed gauge and side panel at the bottom left), `hud` (shadowed text at the top left) | `strip` |
+| `overlay.enabled` (ET-012e) | `true` or `false` | `true` |
+| `overlay.layout` | `strip` (one or more 38 px rows at the top centre, as many as the enabled sections need), `card` (top right), `cluster` (round speed gauge and side panel at the bottom left), `hud` (shadowed text at the top left) | `strip` |
 | `overlay.sections.<id>` | `true` or `false` for each of the fourteen sections; at least one `true` | all `true` |
 | `overlay.placements.<layout>` (ET-012b) | `x` and `y` in [0, 1], `scale` in [0.5, 2]; see [overlay placements](#overlay-placements-and-edit-mode-et-012b) | the ET-012a anchor of each layout at scale 1: strip `0.5, 0`, card `1, 0`, cluster `0, 1`, HUD `0, 0` |
 
@@ -156,7 +162,7 @@ Loading happens once at startup, in parallel with the service start. Loading nev
 | `loaded-with-fallbacks` | A v3 (or migrated v1 or v2) file with some invalid fields | Valid fields from the file, defaults for the others | Yes; the save rewrites the whole file |
 | `invalid-file` | Not a usable settings file | Defaults | Yes; the first save quarantines the file |
 | `unsupported-older` | An older format without a migration path | Defaults | Yes; the first save quarantines the file |
-| `newer-version` | Written by a newer version (version 4 or later) | Defaults | No (`SETTINGS_READ_ONLY`); the file is never modified |
+| `newer-version` | Written by a newer version (version 6 or later) | Defaults | No (`SETTINGS_READ_ONLY`); the file is never modified |
 | `unreadable` | The file or directory is a symbolic link or junction, not a plain file or directory, or could not be read, or the read had not settled within the read limit (about 30 s) | Defaults | No (`SETTINGS_WRITE_FAILED`) |
 | `unavailable` | No valid settings location | Defaults | No (`SETTINGS_WRITE_FAILED`) |
 
@@ -191,7 +197,7 @@ Both are refused for an untrusted sender or frame (including the overlay), for a
 
 ## Language card (ET-029)
 
-The dashboard includes a standalone **Language** card (Option B, before the full Yukon Union multi-page navigation is introduced) with a radio group for English (`en`) and Russian (`ru`). Changing the language calls `setLanguage(language)` over the bridge, saves format v4 settings to disk, and pushes the updated `language` to both the dashboard renderer and the transparent overlay without restart. The notification area tray model also reflects the chosen language.
+The dashboard includes a standalone **Language** card (Option B, before the full Yukon Union multi-page navigation is introduced) with a radio group for English (`en`) and Russian (`ru`). Changing the language calls `setLanguage(language)` over the bridge, saves format v5 settings to disk, and pushes the updated `language` to both the dashboard renderer and the transparent overlay without restart. The notification area tray model also reflects the chosen language.
 
 ## Diagnostics
 
@@ -207,3 +213,11 @@ Startup logs `SETTINGS_LOADED` (`state` `defaults` or `loaded`) or `SETTINGS_FAL
 - The development and packaged `lifecycle` runtime smokes seed an invalid file and check quarantine, exact content (v3 since ET-012b), mph and US gallons, and the restart; a pending read is waited for before the exact checks. Since ET-012b run B also checks the restored default placements (run A saves only the units), driving mode after the restart and the overlay zoom factor of the saved scale (1); a non-default placement's restore is covered by unit tests. See [CI](ci.md#et-011b-settings-in-the-lifecycle-smoke). The overlay smoke saves the `card` layout and waits for the overlay document to render it, then enters edit mode, saves the card at scale 1.5 and checks the overlay and dashboard zoom factors (see [CI](ci.md#overlay-edit-step-et-012b)).
 
 Evidence and pending manual checks are in [ET-011 validation](validation/et-011.md#et-011b-persistent-settings-and-unit-profiles), [ET-012a validation](validation/et-012a.md) and [ET-012b validation](validation/et-012b.md).
+
+## Saved overlay visibility (ET-012e)
+
+Settings → Overlay has the labelled keyboard-operable **Show overlay** switch (**Показывать оверлей** in Russian). It displays only the committed value. The narrow dashboard-main-frame IPC `settings:set-overlay-enabled` accepts exactly one boolean through `DesktopBridge.setOverlayEnabled`; the overlay renderer cannot call it. It shares the existing four-request durable settings queue and atomic rename. A refused or failed write leaves visibility and any active edit draft unchanged. Successful saves log only `overlayEnabled`, without coordinates or file content.
+
+A successful off save gates visibility before hiding and cancelling edit mode, discarding unsaved position/scale and restoring click-through behavior. Edit cannot begin while disabled. Enabling happens after committed geometry is installed and keeps all existing source, freshness, foreground, minimization, topology and fit gates. It renews no telemetry or window observation. Late completions after exit cannot show a retired overlay. Telemetry ingestion and recording continue; visibility does not control recording eligibility.
+
+The first save writes canonical v5; v1–v4 load without startup writes. Missing or invalid current-format visibility falls back independently to true with `overlay.enabled`. Older applications treat v5 as newer-version and refuse writes rather than erase visibility. Historical fixture files remain unchanged. See [ET-012e evidence and pending manual checks](validation/et-012e.md).

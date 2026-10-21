@@ -380,6 +380,31 @@ function editing(tracked: Tracked) {
   tracked.calls.length = 0;
   return tracked.overlay.beginEdit(true);
 }
+it('applies visibility before discarding edit, hides interactively first, and refuses edit while off', () => {
+  const tracked = trackedController(); editing(tracked); tracked.overlay.setEditScale(1.5); tracked.calls.length = 0;
+  tracked.overlay.setEnabled(false);
+  expect(tracked.calls.slice(0, 5)).toEqual(['hide', 'setMovable(false)', 'setIgnoreMouseEvents(true)', 'setFocusable(false)', 'setSkipTaskbar(true)']);
+  expect(tracked.calls).not.toContain('showInactive'); expect(tracked.overlay.editState()).toEqual({active: false});
+  expect(() => tracked.overlay.beginEdit(true)).toThrow('Overlay is disabled'); assertInvariant(tracked, true);
+  tracked.metadata.foreground = true; tracked.overlay.update(tracked.current); expect(tracked.state.visible).toBe(false);
+  tracked.overlay.setEnabled(true); expect(tracked.state.visible).toBe(true); expect(tracked.overlay.editState()).toEqual({active: false});
+  expect(tracked.window.webContents.setZoomFactor).toHaveBeenLastCalledWith(1); assertInvariant(tracked, true);
+});
+it.each(['expired', 'minimized', 'background', 'source', 'failed', 'small', 'topology', 'offscreen'])('enabling never bypasses the existing %s gate', fault => {
+  const tracked = trackedController(), {overlay, current, metadata, window, screen} = tracked;
+  overlay.setEnabled(false); overlay.loaded(true); overlay.update(current);
+  expect(window.showInactive).not.toHaveBeenCalled();
+  if (fault === 'expired') current.observation!.windowFresh = false;
+  if (fault === 'minimized') metadata.minimized = true;
+  if (fault === 'background') metadata.foreground = false;
+  if (fault === 'source') current.selection = 'synthetic';
+  if (fault === 'failed') current.status = 'service-failed';
+  if (fault === 'small') metadata.width = 10;
+  if (fault === 'topology') overlay.topologyChanged();
+  if (fault === 'offscreen') screen.screenToDipRect.mockReturnValue({x: -5000, y: 0, width: 1920, height: 1080});
+  overlay.update(current); const before = structuredClone(current); overlay.setEnabled(true);
+  expect(window.showInactive).not.toHaveBeenCalled(); expect(window.moveTop).not.toHaveBeenCalled(); expect(current).toEqual(before);
+});
 const order = (calls: string[], names: string[]) => names.map(name => calls.indexOf(name));
 
 it('makes the edit overlay interactive before an inactive show and raises it afterwards, without show or focus', () => {

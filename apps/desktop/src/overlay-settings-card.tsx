@@ -57,9 +57,17 @@ export function OverlaySettingsCard({settings, edit, onSaved, onRequest, showSav
     setEditRequest('pending');
     void window.desktop.finishOverlayEdit(outcome).then(view => {onSaved(view); setEditRequest('idle');}, () => setEditRequest('failed'));
   };
-  const busy = editRequest === 'pending';
+  const busy = editRequest === 'pending' || request === 'saving';
   return <Card size="sm" data-testid="overlay-settings"><CardHeader><CardTitle><h2>{strings.overlayTitle}</h2></CardTitle></CardHeader>
     <CardContent className="space-y-4">
+      <div className="space-y-2" hidden={panel !== 'overlay'}>
+        <div className="flex items-center gap-2">
+          <Switch id="overlay-enabled" data-testid="overlay-enabled" checked={overlay.enabled} disabled={locked}
+            aria-describedby="overlay-enabled-help" onCheckedChange={next => save(() => window.desktop.setOverlayEnabled(next))} />
+          <Label htmlFor="overlay-enabled">{strings.overlayEnabledLabel}</Label>
+        </div>
+        <p id="overlay-enabled-help" className="text-xs text-muted-foreground" data-testid="overlay-enabled-help">{strings.overlayEnabledHelp}</p>
+      </div>
       <div className="space-y-2" hidden={panel !== 'overlay'}>
         <p id="overlay-layout-label" className="font-medium">{strings.overlayLayoutLabel}</p>
         <RadioGroup aria-labelledby="overlay-layout-label" data-testid="overlay-layout" className="yu-layout-options" value={overlay.layout} disabled={locked || editing}
@@ -90,7 +98,7 @@ export function OverlaySettingsCard({settings, edit, onSaved, onRequest, showSav
           </div>
           <p className="text-xs text-muted-foreground">{strings.overlayEditHelp}</p>
         </> : <div className="flex flex-wrap items-center gap-2">
-          <Button size="sm" variant="outline" disabled={locked || busy} data-testid="overlay-edit-start"
+          <Button size="sm" variant="outline" disabled={locked || busy || !overlay.enabled} data-testid="overlay-edit-start"
             onClick={() => editCall(() => window.desktop.beginOverlayEdit())}>{strings.overlayEditAction}</Button>
           <span data-testid="overlay-saved-scale">{strings.overlayScaleLabel}: {percent(overlay.placements[overlay.layout].scale)}</span>
         </div>}

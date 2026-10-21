@@ -356,12 +356,16 @@ function runApplication(profileError: unknown): void {
   // for its layout and saved placement. It accepts no observation and renews no SDK or window authority: freshness and
   // its expiry timers are untouched, and the placement uses the last observation the controller already holds.
   function settingsChanged(): void {
+    const view = settingsStore.view();
+    // Disable before edit cancellation; enable only after the final committed geometry is installed.
+    if (!view.overlay.enabled && overlayEdit.active) timeline?.('OVERLAY_EDIT_CANCELLED', {reason: 'overlay-disabled'});
+    if (!view.overlay.enabled) overlayController?.setEnabled(false);
     pushAppState();
     if (lifecycle.exiting) return;
-    const view = settingsStore.view();
     presentTray(true);
     publishOverlay(lastLive, view.units, view.overlay, view.language);
     overlayController?.setLayout(view.overlay.layout, view.overlay.placements[view.overlay.layout], view.overlay.sections);
+    if (view.overlay.enabled) overlayController?.setEnabled(true);
   }
   // ET-012b edit mode. The controller reports every change of its edit state; main pushes it to the dashboard and,
   // when the mode itself changes, republishes the overlay projection with its `editing` flag (no authority renewed).
@@ -495,7 +499,7 @@ function runApplication(profileError: unknown): void {
     // taskbar, which drops WS_EX_TOPMOST while a borderless full-screen game is foreground.
     created.setAlwaysOnTop(true, OVERLAY_TOPMOST_LEVEL);
     overlayController = new OverlayController(created, screen, phase => log('OVERLAY_TOPMOST_RESTORED', undefined, {phase}), layout,
-      {placement, sections: settings.overlay.sections, editChanged: overlayEditChanged});
+      {enabled: settings.overlay.enabled, placement, sections: settings.overlay.sections, editChanged: overlayEditChanged});
     created.webContents.setWindowOpenHandler(() => ({action: 'deny'}));
     created.webContents.on('will-navigate', event => event.preventDefault());
     // A loaded document starts at the default zoom; the scale in use applies again.
@@ -767,6 +771,13 @@ function runApplication(profileError: unknown): void {
     if (request.length !== 2 || !isUnitGame(game) || !isUnitProfile(profile)) throw new Error('Invalid unit profile request');
     return saveSettings(() => settingsStore.setUnitProfile(game, profile));
   });
+  // Exactly one boolean, from the trusted dashboard frame. A failed write leaves visibility and any draft untouched.
+  ipcMain.handle('settings:set-overlay-enabled', async (event, ...request: unknown[]) => {
+    if (!trusted(event)) throw new Error('Untrusted settings request');
+    const [enabled] = request;
+    if (request.length !== 1 || typeof enabled !== 'boolean') throw new Error('Invalid overlay visibility request');
+    return saveSettings(() => settingsStore.setOverlayEnabled(enabled));
+  });
   // Exactly one layout id. There is no generic settings patch: each channel accepts one fixed, validated shape.
   ipcMain.handle('settings:set-overlay-layout', async (event, ...request: unknown[]) => {
     if (!trusted(event)) throw new Error('Untrusted settings request');
@@ -794,6 +805,7 @@ function runApplication(profileError: unknown): void {
   }
   ipcMain.handle('overlay-edit:begin', (event, ...request: unknown[]) => {
     const controller = editRequest(event, request.length === 0);
+    if (!settingsStore.view().overlay.enabled) throw new Error('Overlay is disabled');
     if (overlayEdit.active) return overlayEdit;
     if (!settingsStore.view().writable) throw new Error('Overlay edit mode needs writable settings');
     focusGate.start(ownFocused());

@@ -147,6 +147,20 @@ export async function runUiSmoke({application, dashboard, overlay, source, confi
         assert.equal(await license.locator('pre').innerText(), await readFile(path.join(config.checkout, 'apps/desktop/src/assets/onest-OFL.txt'), 'utf8'));
         assert.match(await license.locator('pre').getAttribute('data-license-asset'), /onest-OFL[^/]*\.txt$/);
         await dashboard.keyboard.press('Enter'); record.flags.fontLicense = true;
+        await settingsPanel(dashboard, 'overlay');
+        const visibility = dashboard.getByRole('switch', {name: language === 'en' ? 'Show overlay' : 'Показывать оверлей', exact: true});
+        assert.equal(await visibility.getAttribute('data-state'), 'checked');
+        assert.ok((await dashboard.getByTestId('overlay-enabled-help').innerText()).length > 0);
+        await visibility.focus(); await dashboard.keyboard.press('Space');
+        await until(() => dashboard.evaluate(() => globalThis.desktop.getAppState()), state => state.settings.overlay.enabled === false, 'UI_OVERLAY_DISABLED_SAVED');
+        assert.equal(await visibility.getAttribute('data-state'), 'unchecked');
+        assert.equal(await dashboard.getByTestId('overlay-edit-start').isDisabled(), true);
+        await assert.rejects(dashboard.evaluate(() => globalThis.desktop.beginOverlayEdit()));
+        await visibility.focus(); await dashboard.keyboard.press('Space');
+        await until(() => dashboard.evaluate(() => globalThis.desktop.getAppState()), state => state.settings.overlay.enabled === true, 'UI_OVERLAY_ENABLED_SAVED');
+        assert.equal(await visibility.getAttribute('data-state'), 'checked');
+        assert.equal(await dashboard.getByTestId('overlay-edit-start').isEnabled(), true);
+        record.flags.overlayVisibility = true;
         await settingsPanel(dashboard, 'sections'); assert.equal(await dashboard.locator('[data-testid^="overlay-switch-"]').count(), 14);
         await dashboard.getByTestId('overlay-preset-driving-only').click();
         await until(() => dashboard.evaluate(() => globalThis.desktop.getAppState()), state => !state.settings.overlay.sections.cargo, 'UI_SECTIONS_SAVED');
@@ -177,6 +191,14 @@ export async function runUiSmoke({application, dashboard, overlay, source, confi
           assert.equal(await dashboard.locator(`#units-ets2-${before}`).getAttribute('aria-checked'), 'true');
           assert.equal(await dashboard.locator(`#units-ets2-${wanted}`).getAttribute('aria-checked'), 'false');
           await save('save-error', language, size);
+          await settingsPanel(dashboard, 'overlay');
+          await dashboard.getByTestId('overlay-enabled').focus(); await dashboard.keyboard.press('Space');
+          await dashboard.getByTestId('overlay-settings-error').waitFor({state: 'visible', timeout: 5000});
+          assert.equal((await dashboard.evaluate(() => globalThis.desktop.getAppState())).settings.overlay.enabled, true);
+          assert.equal(await dashboard.getByTestId('overlay-enabled').getAttribute('data-state'), 'checked');
+          assert.equal(await dashboard.getByTestId('overlay-edit-start').isEnabled(), true);
+          record.flags.visibilityFailedSave = true;
+          await settingsPanel(dashboard, 'units');
         } finally {await rmdir(settingsFile); await rename(backup, settingsFile);}
         assert.deepEqual(await readFile(settingsFile), bytes);
         await dashboard.locator(`#units-ets2-${wanted}`).click();
@@ -291,6 +313,7 @@ export async function runUiReadOnly({application, dashboard, config, record, set
     for (const game of ['ets2', 'ats']) for (const profile of ['metric', 'us-customary']) assert.equal(await dashboard.locator(`#units-${game}-${profile}`).isDisabled(), true);
     await capture({page: dashboard, application, config, record, name: 'read-only', language: 'en', size});
     await settingsPanel(dashboard, 'overlay');
+    assert.equal(await dashboard.getByTestId('overlay-enabled').isDisabled(), true);
     for (const layout of layouts) assert.equal(await dashboard.locator(`#overlay-layout-${layout}`).isDisabled(), true);
     assert.equal(await dashboard.getByTestId('overlay-edit-start').isDisabled(), true);
     await settingsPanel(dashboard, 'sections');
