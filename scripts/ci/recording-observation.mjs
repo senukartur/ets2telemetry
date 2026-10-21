@@ -524,19 +524,20 @@ const exportTripSection = (session, trip, audit) => ({is_hard_mode: false, hard_
   gameModeAmbiguous: false, outcome: 'delivered', closeReason: 'outcome', recordingCompleteness: 'partial', startedUtcMs: labelAt(30), endedUtcMs: labelAt(600),
   observedDistanceM: {available: true, value: 0}, fuelUsedL: {available: false, reason: 'not-observed'}, openedBy: 'event', openedEventSeq: '3', outcomeEventSeq: '8',
   closedBy: {pluginSessionId: session, eventSeq: '8'}});
-/** Independent oracle: this journey has no config fixture/binding. The production recorder supplies evidence, so
- * opening/closing are explicitly unknown/historical, unlike old seeded rows with no observation metadata. Only the
- * real observation clock varies: validate it against the harness's admission/read bounds before building exact rows. */
+/** Independent oracle: no Hard Mode fixture is enabled, so the normal reader refuses this synthetic source before
+ * process/filesystem access. Opening has no eligible proof and is historical; ordered monitor failures publish all
+ * twelve source-unproven rules. Frozen closing proof preserves that publication as latest. Only the UTC labels vary:
+ * independently bound opening/latest by admission and journal read; latest is not a closing-capture timestamp. */
 function recordingHardModeAudit(document, record) {
   const opening = document.trip.hard_mode_details?.opening?.observedUtcMs;
   const latest = document.trip.hard_mode_details?.latest?.observedUtcMs;
   assert.ok(Number.isSafeInteger(opening) && Number.isSafeInteger(latest), 'Hard Mode observation clocks must be safe UTC milliseconds');
   assert.ok(record.hardModeAdmissionUtcMs <= opening && opening <= latest && latest <= record.journal.readStartedUtcMs,
     'Hard Mode observation clocks must be ordered within source admission and the journal read');
-  const unknown = at => ({observedUtcMs: at, state: 'unknown', source: 'unknown', rules:
+  const unknown = (at, reason) => ({observedUtcMs: at, state: 'unknown', source: 'unknown', rules:
     ['fuel', 'air', 'police', 'fatigue', 'limiter', 'truck', 'trailer', 'parking', 'rain', 'events', 'braking', 'traffic']
-      .map(id => ({id, state: 'unknown', values: id === 'parking' ? [null, null] : [null], reason: 'historical'}))});
-  return {version: 1, binding: null, opening: unknown(opening), latest: unknown(latest),
+      .map(id => ({id, state: 'unknown', values: id === 'parking' ? [null, null] : [null], reason}))});
+  return {version: 1, binding: null, opening: unknown(opening, 'historical'), latest: unknown(latest, 'source-unproven'),
     firstLoss: {atUtcMs: opening, reason: 'historical', rule: null, values: null}, manualDelivery: true};
 }
 /** The window's events as [eventSeq, type, attribution kind]: only job.delivered (8) is attributed, to the trip itself. */
