@@ -145,6 +145,8 @@ export interface SquirrelPorts {
   readonly appVersion: string;
   /** The executable's file name, for `Update.exe --createShortcut=<name>`. */
   readonly executableName: string;
+  /** ET-031: Removes the per-user autostart login item during uninstall. */
+  readonly removeLoginItem?: (installRoot: string, executableName: string) => Promise<boolean> | boolean | void;
   resolveRoots(): Promise<UninstallRoots>;
   /** Test root only: points userData at the test file's profile folder before the lock is requested; false on failure. */
   useProfile(profileDir: string): boolean;
@@ -267,6 +269,9 @@ async function uninstall(ports: SquirrelPorts, state: HookState, deadline: numbe
   // 2. A running instance: the lock with the uninstall-exit payload, polled until it is free or the wait ends.
   const profileReady = roots.mode === 'test-root' ? ports.useProfile(roots.testFile.profileDir) : true;
   state.instance = profileReady ? await closeInstance(ports, Math.min(ports.clock() + INSTANCE_EXIT_WAIT_MS, deadline)) : 'running';
+  if (ports.removeLoginItem) {
+    try {await ports.removeLoginItem(roots.installRoot, ports.executableName);} catch {/* best effort */}
+  }
   // The shortcuts go beside the cleanup; Squirrel does not remove them for an application that handles its events.
   const shortcuts = !wantsShortcuts(roots, ports) ? Promise.resolve<ShortcutState>('skipped')
     : ports.runUpdate(roots.installRoot, [`--removeShortcut=${ports.executableName}`], REMOVE_SHORTCUT_TIMEOUT_MS).then((ok): ShortcutState => ok ? 'removed' : 'failed', (): ShortcutState => 'failed');
@@ -371,6 +376,7 @@ export interface SquirrelApp {
   requestSingleInstanceLock(additionalData?: Record<string, unknown>): boolean;
   releaseSingleInstanceLock(): void;
   getAppMetrics(): readonly {readonly pid: number}[];
+  setLoginItemSettings?(settings: {openAtLogin: boolean; path?: string; args?: string[]}): void;
 }
 export const ROAMING_USER_DATA_NAME = 'ETS2Telemetry Desktop';
 
@@ -382,6 +388,18 @@ export function productionSquirrelPorts(options: {app: SquirrelApp; appVersion: 
   return {
     appVersion: options.appVersion,
     executableName: path.win32.basename(options.executable),
+    removeLoginItem: (installRoot, executableName) => {
+      try {
+        app.setLoginItemSettings?.({
+          openAtLogin: false,
+          path: path.win32.join(installRoot, 'Update.exe'),
+          args: ['--processStart', '"' + executableName + '"', '--process-start-args', '"--hidden"']
+        });
+        return true;
+      } catch {
+        return false;
+      }
+    },
     resolveRoots: () => resolveUninstallRoots({executable: options.executable, env, fs}),
     useProfile: profileDir => {
       try {mkdirSync(profileDir, {recursive: true}); app.setPath('userData', profileDir); app.setPath('sessionData', profileDir); return true;} catch {return false;}

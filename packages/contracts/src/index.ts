@@ -1,7 +1,7 @@
 // Scaffold status only. The telemetry wire protocol belongs to ET-002a.
 export interface ScaffoldStatus { service: 'ready'; storage: 'verified'; synthetic: true }
 import type {CurrentState, SourceIdentity, AppliedState, CaptureTime} from './protocol-v0';
-import type {AppLanguage, AppState, DiagnosticsExportResult, OverlayEditState, OverlayLayout, OverlaySectionId, OverlaySections, PluginFolderChoice, PluginGame, PluginSetupView, PluginShowFileResult, RecordingCode, SettingsView,
+import type {AppLanguage, AppState, AutostartRegistrationStatus, DiagnosticsExportResult, OverlayEditState, OverlayLayout, OverlaySectionId, OverlaySections, PluginFolderChoice, PluginGame, PluginSetupView, PluginShowFileResult, RecordingCode, SettingsView,
   UnitGame, UnitProfile} from './app-state';
 import type {Available, LiveObservationV1, Uint64} from './protocol-v1';
 import type {JournalDatabase, JournalEventPage, JournalIntervalPage, JournalTripDetail, JournalTripPage, JournalTripsQuery} from './journal';
@@ -56,6 +56,8 @@ export interface DesktopBridge {
    * Persists the user interface language and resolves with the settings that now apply.
    */
   setLanguage(language: AppLanguage): Promise<SettingsView>;
+  /** Persists whether the application starts with Windows (ET-031). */
+  setAutostart(enabled: boolean): Promise<SettingsView>;
   /**
    * Persists one game's display unit profile and resolves with the settings that now apply. Main applies the change only
    * after the durable write; it rejects a newer-version (read-only) file, a failed write and invalid values.

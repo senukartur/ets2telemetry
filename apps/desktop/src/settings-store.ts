@@ -115,7 +115,7 @@ export class SettingsStore {
   get settled(): boolean {return this.loadSettled;}
 
   view(): SettingsView {
-    return {language: this.settings.language, units: this.settings.units, overlay: this.settings.overlay, state: this.state, writable: !READ_ONLY_STATES.includes(this.state), saveError: this.saveError};
+    return {language: this.settings.language, autostart: this.settings.autostart, units: this.settings.units, overlay: this.settings.overlay, state: this.state, writable: !READ_ONLY_STATES.includes(this.state), saveError: this.saveError};
   }
 
   /**
@@ -161,6 +161,11 @@ export class SettingsStore {
   /** Serialized save of the user interface language (ET-029). */
   setLanguage(language: AppLanguage): Promise<SettingsView> {
     return this.enqueue(settings => ({next: {...settings, language}, facts: {language}}));
+  }
+
+  /** Serialized save of the Start with Windows setting (ET-031). */
+  setAutostart(autostart: boolean): Promise<SettingsView> {
+    return this.enqueue(settings => ({next: {...settings, autostart}, facts: {autostart}}));
   }
 
   /** Serialized save of one game's profile. Resolves with the applied settings only after the durable rename. */

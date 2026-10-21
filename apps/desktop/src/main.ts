@@ -7,11 +7,12 @@ import os from 'node:os';
 import path from 'node:path';
 import type {EventEmitter} from 'node:events';
 import {version} from '../../../package.json';
-import type {AppHealth, AppLanguage, AppState, AppUninstallResult, DiagnosticsExportResult, LiveTelemetry, OverlayEditState, OverlayPresentation, OverlaySettings, PluginFolderChoice, PluginGame, PluginShowFileResult, RecordingHealth, ScaffoldStatus, SettingsView,
+import type {AppHealth, AppLanguage, AppState, AutostartRegistrationStatus, AppUninstallResult, DiagnosticsExportResult, LiveTelemetry, OverlayEditState, OverlayPresentation, OverlaySettings, PluginFolderChoice, PluginGame, PluginShowFileResult, RecordingHealth, ScaffoldStatus, SettingsView,
   SourceSelection, UnitProfiles} from '../../../packages/contracts/src';
 import {SettingsBusyError, SettingsError, SettingsStore, settingsDirectory} from './settings-store';
 import {isUnitGame, isUnitProfile} from './unit-profiles';
 import {isAppLanguage} from './settings-schema';
+import {applyAutostartRegistration, queryAutostartStatus, removeAutostartLoginItem, resolveAutostartTarget, type AutostartTarget} from './autostart';
 import {processEntrypoint} from './entrypoints';
 import {BUNDLE_FLUSH_MS, createDiagnostics, MAIN_EXIT_FLUSH_MS, type DiagnosticFacts} from './diagnostics';
 import {mainLogLocation, serviceEnvironment} from './log-location';
@@ -122,6 +123,28 @@ function runApplication(profileError: unknown): void {
   let subscribed = false, serviceReady = false;
   // First readiness creates the dashboard and overlay once; later service restarts never recreate them.
   let started = false;
+  let startHiddenOnLaunch = process.argv.includes('--hidden');
+  let autostartTarget: AutostartTarget | undefined;
+  let autostartStatus: AutostartRegistrationStatus = 'unregistered';
+  async function syncAutostart(): Promise<void> {
+    try {
+      const roots = await resolveUninstallRoots({executable: process.execPath, env: process.env, fs: uninstallFs});
+      autostartTarget = resolveAutostartTarget(roots, process.execPath);
+      if (!autostartTarget) {
+        autostartStatus = 'not-installed';
+      } else {
+        const view = settingsStore.view();
+        if (view.autostart) {
+          autostartStatus = applyAutostartRegistration(app, autostartTarget, true);
+        } else {
+          autostartStatus = queryAutostartStatus(app, autostartTarget);
+        }
+      }
+    } catch {
+      autostartStatus = 'not-installed';
+    }
+    pushAppState();
+  }
   let overlay: BrowserWindow | undefined, overlayController: OverlayController | undefined;
   let dashboardPort: MessagePortMain | undefined, overlayPort: MessagePortMain | undefined, upstream: MessagePortMain | undefined;
   let upstreamRecovery: ReturnType<typeof setTimeout> | undefined;
@@ -192,6 +215,7 @@ function runApplication(profileError: unknown): void {
     clock: () => performance.now(),
     log: (event, facts) => log(event, undefined, facts),
     // Windows' uninstall removes the program files and the registration; its hook finds the data already gone.
+    removeLoginItem: installRoot => removeAutostartLoginItem(app, installRoot, path.win32.basename(process.execPath)),
     startWindowsUninstall: installRoot => new Promise<boolean>(resolve => {
       try {
         const child = spawn(path.win32.join(installRoot, 'Update.exe'), ['--uninstall'], {detached: true, stdio: 'ignore', windowsHide: true});
@@ -217,6 +241,7 @@ function runApplication(profileError: unknown): void {
       if (uninstallDialogs) {if (logOutside) timeline?.('DIAGNOSTIC_UNINSTALL_DIALOG', {dialog: 'result', rootRemoved: finished.data.rootRemoved, failed: finished.data.failed.length});}
       else await dialog.showMessageBox({type: finished.data.failed.some(entry => entry.code !== 'BUDGET_EXPIRED') ? 'warning' : 'info', title: text.title, message: text.message, detail: text.detail, buttons: ['OK'], noLink: true}).catch(() => undefined);
     }
+    removeAutostartLoginItem(app, prepared.installRoot, path.win32.basename(process.execPath));
     const started = await appUninstall.handOver();
     if (!started) {
       if (logOutside) log('APP_UNINSTALL_HANDOFF_FAILED');
@@ -339,7 +364,7 @@ function runApplication(profileError: unknown): void {
       const update: LiveTelemetry = {...initialLive(selection), status: 'restarting', reason: 'Telemetry service failed; current interval is unknown'};
       freshness.invalidate(update); dashboardSubscriptions.close(); dashboardPort = undefined; window?.webContents.send('telemetry:service-state', update);}
   });
-  function appState(): AppState {return {health: {...health}, settings: settingsStore.view(), overlayEdit, plugins: pluginSetup.view()};}
+  function appState(): AppState {return {health: {...health}, settings: settingsStore.view(), overlayEdit, plugins: pluginSetup.view(), autostart: autostartStatus};}
   function pushAppState(): void {if (appStateSubscribed && window && !window.isDestroyed()) window.webContents.send('app:state', appState());}
   function updateHealth(event: HealthEvent, immediate = false): void {
     const next = reduceHealth(health, event);
@@ -642,7 +667,7 @@ function runApplication(profileError: unknown): void {
           serviceReady = true; selectionPending = false; status = {service: 'ready', storage: 'verified', synthetic: true};
           journal.attach(child);
           updateHealth({type: 'service-ready'});
-          if (!started) {started = true; createWindow(); createOverlay();} else connectSubscription();
+          if (!started) {started = true; if (!startHiddenOnLaunch) createWindow(); createOverlay();} else connectSubscription();
           connectUpstream();
         })().catch(error => {if (!supervisor.stopping && service === child) fail('SERVICE_CONFIGURATION_FAILED', error);});
       } else if (type === 'failed') {
@@ -695,7 +720,7 @@ function runApplication(profileError: unknown): void {
   // payload only: the Squirrel uninstall hook's request to run the explicit exit (ET-018 U6). Main deletes nothing for it;
   // every other payload only shows the dashboard, and an instance that is already exiting ignores both.
   app.on('second-instance', (_event, _argv, _cwd, additionalData) => {
-    if (!isUninstallExitPayload(additionalData)) {openDashboard('second-instance'); return;}
+    if (!isUninstallExitPayload(additionalData)) {startHiddenOnLaunch = false; openDashboard('second-instance'); return;}
     log('SECOND_INSTANCE', undefined, {action: lifecycle.exiting ? 'ignored-exiting' : 'uninstall-exit'});
     requestExit('uninstall');
   });
@@ -753,6 +778,25 @@ function runApplication(profileError: unknown): void {
       throw new Error(error instanceof SettingsError || error instanceof SettingsBusyError ? error.message : 'Settings could not be saved', {cause: error});
     }
   }
+  // Exactly one boolean autostart setting.
+  ipcMain.handle('settings:set-autostart', async (event, ...request: unknown[]) => {
+    if (!trusted(event)) throw new Error('Untrusted settings request');
+    const [enabled] = request;
+    if (request.length !== 1 || typeof enabled !== 'boolean') throw new Error('Invalid autostart request');
+    if (!autostartTarget) {
+      const roots = await resolveUninstallRoots({executable: process.execPath, env: process.env, fs: uninstallFs}).catch(() => ({ok: false as const, code: 'NOT_INSTALLED' as const}));
+      autostartTarget = resolveAutostartTarget(roots, process.execPath);
+    }
+    if (!autostartTarget) {
+      autostartStatus = 'not-installed';
+      pushAppState();
+      throw new Error('Autostart is not available in an unpackaged or portable environment');
+    }
+    const view = await saveSettings(() => settingsStore.setAutostart(enabled));
+    autostartStatus = applyAutostartRegistration(app, autostartTarget, enabled);
+    pushAppState();
+    return view;
+  });
   // Exactly one language id. Main validates it again and persists the change.
   ipcMain.handle('settings:set-language', async (event, ...request: unknown[]) => {
     if (!trusted(event)) throw new Error('Untrusted settings request');
@@ -934,7 +978,7 @@ function runApplication(profileError: unknown): void {
   });
   ipcMain.on('overlay:unsubscribe', event => {if (!trustedOverlay(event)) return; retireOverlay();});
   // ET-017 (P13): plugin setup starts 2 s after readiness on its own unreferenced timer; startup never waits for it.
-  app.whenReady().then(() => {if (!lifecycle.exiting) {createTray(); pluginSetup.start();} startService();}).catch(error => fail('APP_START_FAILED', error));
+  app.whenReady().then(() => {if (!lifecycle.exiting) {createTray(); pluginSetup.start();} startService(); void settingsLoad.then(() => syncAutostart());}).catch(error => fail('APP_START_FAILED', error));
   // ET-018 (U7): a start of the installed application cancels a pending uninstall deferral; it removes only the deferral's
   // intent, README and copied executor, then the executor's RunOnce registration, and the next plugin setup run takes
   // over the plugin files again.

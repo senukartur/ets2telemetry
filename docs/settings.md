@@ -1,6 +1,6 @@
-# Persistent settings, unit profiles, overlay settings and localization (ET-011b, ET-012a, ET-012b, ET-029)
+# Persistent settings, unit profiles, overlay settings, localization and autostart (ET-011b, ET-012a, ET-012b, ET-029, ET-031)
 
-ET-011b stores the user's settings in a small JSON file and uses them to choose the display units of each game. ET-012a adds the overlay layout and the overlay sections in format v2. ET-012b adds the saved position and scale of every overlay layout in format v3. The decisions behind the file are C10–C12 in [concept.md](../concept.md#et-011-authorization--october-15-2026) and, for the overlay settings, L2, L3 and L13 in [concept.md](../concept.md#et-012a-authorization--october-15-2026) and M2, M3, M10, M11 and M12 in [concept.md](../concept.md#et-012b-authorization--october-15-2026); numeric conversion follows ET-010 decision N2 (telemetry-core is the single numeric source). ET-029 adds the UI language (`language: 'en' | 'ru'`) in format v4, letting the user switch desktop app, tray and overlay live without restart.
+ET-011b stores the user's settings in a small JSON file and uses them to choose the display units of each game. ET-012a adds the overlay layout and the overlay sections in format v2. ET-012b adds the saved position and scale of every overlay layout in format v3. The decisions behind the file are C10–C12 in [concept.md](../concept.md#et-011-authorization--october-15-2026) and, for the overlay settings, L2, L3 and L13 in [concept.md](../concept.md#et-012a-authorization--october-15-2026) and M2, M3, M10, M11 and M12 in [concept.md](../concept.md#et-012b-authorization--october-15-2026); numeric conversion follows ET-010 decision N2 (telemetry-core is the single numeric source). ET-029 adds the UI language (`language: 'en' | 'ru'`) in format v4, letting the user switch desktop app, tray and overlay live without restart. ET-031 adds Start with Windows (`autostart: boolean`) in format v5, allowing the application to launch minimized to the notification area upon user sign-in.
 
 ## Location
 
@@ -188,6 +188,15 @@ ET-012a adds the **Overlay** card after the units card and two more bridge metho
 - `setOverlaySections(sections)` over `settings:set-overlay-sections`: exactly one argument, a complete record with exactly the fourteen section ids as own data properties, booleans only, at least one `true`, and a plain object prototype. The preload forwards a fresh copy of the validated record; main validates it again (`parseOverlaySections` in `apps/desktop/src/overlay-sections.ts`) and hands the store a frozen copy.
 
 Both are refused for an untrusted sender or frame (including the overlay), for any other shape, and once the exit has started. They share the unit save's error mapping (fixed messages only) and its refusal reporting in `saveError`. After the durable save main pushes `AppState`, republishes the overlay projection with the new layout and sections from its stored freshness output, and moves the overlay window to the new layout's anchor (see [the minimal overlay](minimal-overlay.md#layouts-and-sections-et-012a)). As for units, this renews neither SDK nor window freshness. A late startup read that brings another layout is applied the same way. The card shows only saved values: the layout radio group, three presets (Everything, Job focus, Driving only, shown as pressed when the saved sections equal them) and one switch per section grouped Driving, Fuel, Job and Time, with a marker for sections that need protocol v1 or trip tracking. Since ET-010c the protocol v1 sections appear once the plugin's v1 data arrives, so the markers read "needs the plugin's protocol v1 data" (origin, distance remaining, deadline), "shows game ids without protocol v1" (cargo, destination) and "needs trip tracking; hidden for now" (distance driven). Controls are disabled while a save runs and when settings cannot be saved; the last enabled section cannot be switched off.
+
+
+## Start with Windows card (ET-031)
+
+The dashboard's **General** settings panel includes an **Autostart** card with a toggle switch and status badge:
+- Displays live status: `Active`, `Disabled`, `Not installed` (in unpackaged/portable mode), or `Failed`.
+- In an installed application, toggling updates the Windows login item via `Update.exe --processStart "<exe>" --process-start-args "--hidden"`.
+- In an unpackaged or portable environment, the toggle is disabled with an informational note indicating autostart is available after installation.
+- Toggling invokes `setAutostart(enabled)` over the bridge and persists the setting atomically.
 
 ## Language card (ET-029)
 

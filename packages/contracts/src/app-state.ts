@@ -67,6 +67,8 @@ export type UnitProfile = 'metric' | 'us-customary';
 export type UnitProfiles = Readonly<Record<UnitGame, UnitProfile>>;
 /** Application user interface languages (ET-029). */
 export type AppLanguage = 'en' | 'ru';
+/** Windows login item registration state (ET-031). */
+export type AutostartRegistrationStatus = 'registered' | 'unregistered' | 'not-installed' | 'failed';
 /**
  * How the persisted settings were obtained at startup or by the last save. `defaults`: no file. `loaded-with-fallbacks`:
  * some fields were invalid and use defaults. `invalid-file`, `unsupported-older`: the file is kept unchanged until the
@@ -123,6 +125,7 @@ export type OverlayEditState =
 /** The settings that apply now. Never carries paths, file content or error text. */
 export interface SettingsView {
   language: AppLanguage;
+  autostart: boolean;
   units: UnitProfiles;
   /** The saved overlay layout, sections and placements, or their defaults (strip, every section, the default anchors). */
   overlay: OverlaySettings;
@@ -220,4 +223,6 @@ export interface AppState {
   overlayEdit: OverlayEditState;
   /** ET-017: the per-game plugin setup state; pushed whenever it changes. */
   plugins: PluginSetupView;
+  /** ET-031: the live Windows login item registration state. */
+  autostart: AutostartRegistrationStatus;
 }

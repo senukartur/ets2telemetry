@@ -50,7 +50,7 @@ describe('i18n settings lifecycle and reflection', () => {
 
     // 3. Verify file on disk has format v4 and language: "ru"
     const diskContent = JSON.parse(await fs.readFile(path.join(tempDir, 'settings.json'), 'utf8'));
-    expect(diskContent.version).toBe(4);
+    expect(diskContent.version).toBe(5);
     expect(diskContent.language).toBe('ru');
 
     // 4. Verify Russian tray and overlay reflection

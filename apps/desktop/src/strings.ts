@@ -1,4 +1,4 @@
-import type {AppErrorCode, AppLanguage, DiagnosticsExportFailure, DiagnosticsExportRefusal, JournalAttributionKind, JournalCallCode, JournalCloseReason, JournalCompleteness, JournalExportCode, JournalIntervalKind, JournalMoneyCategory, JournalOutcome,
+import type {AppErrorCode, AppLanguage, AutostartRegistrationStatus, DiagnosticsExportFailure, DiagnosticsExportRefusal, JournalAttributionKind, JournalCallCode, JournalCloseReason, JournalCompleteness, JournalExportCode, JournalIntervalKind, JournalMoneyCategory, JournalOutcome,
   JournalPurpose, LiveTelemetry, OverlayEditPlacement, OverlayLayout, OverlaySectionId, PluginBlockReason, PluginDiscoveryOutcome, PluginFolderRefusal, PluginManualFolderState,
   PluginSetupMode, PluginTargetState, RecordingCode, RecordingHealth, RecordingLosses, RecordingTarget, RecordingTrip, ServiceHealth,
   SettingsSaveError, SettingsState, StorageHealth, UnitGame, UnitProfile} from '../../../packages/contracts/src';
@@ -1036,3 +1036,33 @@ export const UNINSTALL_DATA_ENTRY_TEXT: Readonly<Record<DataEntry, string>> = Ob
   data: 'trip history', backups: 'history backups', settings: 'settings', logs: 'logs', synthetic: 'synthetic recordings', plugins: 'plugin setup record',
   captures: 'captures', transport: 'connection settings', uninstall: 'uninstall record'
 });
+
+export function getAutostartStatusBadgeText(status: AutostartRegistrationStatus | undefined, language: AppLanguage): string {
+  switch (status) {
+    case 'registered':
+      return language === 'ru' ? 'Активен' : 'Active';
+    case 'unregistered':
+      return language === 'ru' ? 'Отключён' : 'Disabled';
+    case 'not-installed':
+      return language === 'ru' ? 'Не установлено' : 'Not installed';
+    case 'failed':
+      return language === 'ru' ? 'Сбой' : 'Failed';
+    default:
+      return '—';
+  }
+}
+
+export function getAutostartBadgeVariant(status: AutostartRegistrationStatus | undefined): 'ok' | 'neutral' | 'outline' | 'error' {
+  switch (status) {
+    case 'registered':
+      return 'ok';
+    case 'unregistered':
+      return 'neutral';
+    case 'not-installed':
+      return 'outline';
+    case 'failed':
+      return 'error';
+    default:
+      return 'neutral';
+  }
+}
