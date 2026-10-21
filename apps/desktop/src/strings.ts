@@ -1,5 +1,5 @@
-import type {AppErrorCode, DiagnosticsExportFailure, DiagnosticsExportRefusal, JournalAttributionKind, JournalCallCode, JournalCloseReason, JournalCompleteness, JournalExportCode, JournalIntervalKind, JournalMoneyCategory, JournalOutcome,
-  JournalPurpose, OverlayEditPlacement, OverlayLayout, OverlaySectionId, PluginBlockReason, PluginDiscoveryOutcome, PluginFolderRefusal, PluginManualFolderState,
+import type {AppErrorCode, AppLanguage, DiagnosticsExportFailure, DiagnosticsExportRefusal, JournalAttributionKind, JournalCallCode, JournalCloseReason, JournalCompleteness, JournalExportCode, JournalIntervalKind, JournalMoneyCategory, JournalOutcome,
+  JournalPurpose, LiveTelemetry, OverlayEditPlacement, OverlayLayout, OverlaySectionId, PluginBlockReason, PluginDiscoveryOutcome, PluginFolderRefusal, PluginManualFolderState,
   PluginSetupMode, PluginTargetState, RecordingCode, RecordingHealth, RecordingLosses, RecordingTarget, RecordingTrip, ServiceHealth,
   SettingsSaveError, SettingsState, StorageHealth, UnitGame, UnitProfile} from '../../../packages/contracts/src';
 import type {EventType, GameMode, UnavailableReason} from '../../../packages/contracts/src/protocol-v1';
@@ -39,6 +39,16 @@ export const STRINGS = Object.freeze({
   trayStarting: 'Starting',
   trayExiting: 'Exiting',
   serviceFailedTitle: 'Telemetry service problem',
+  sourceLabel: 'Source',
+  sourceSelectPrompt: 'Select a game',
+  sourceSyntheticFixture: 'Synthetic fixture',
+  sourceReplayFixture: 'Replay fixture',
+  sourceNoGameSelected: 'no game selected',
+  speedLabel: 'Speed',
+  fuelLabel: 'Fuel',
+  unavailableText: 'unavailable',
+  serviceTrayLabel: 'Service',
+  storageTrayLabel: 'Storage self-test',
   unitsTitle: 'Display units',
   unitsSaveFailed: 'The unit change was not saved; the previous units stay in use.',
   liveTitle: 'Live telemetry',
@@ -72,18 +82,122 @@ export const STRINGS = Object.freeze({
 });
 export type StringKey = keyof typeof STRINGS;
 
+export const STRINGS_RU: Readonly<Record<StringKey, string>> = Object.freeze({
+  appName: 'ETS2Telemetry',
+  startupPending: 'Запуск',
+  startupReady: 'Служба телеметрии готова; изолированное хранилище проверено',
+  startupFailed: 'Ошибка запуска',
+  startupWaiting: 'Ожидание службы телеметрии',
+  sourceSelectionFailed: 'Ошибка выбора источника',
+  healthTitle: 'Статус программы',
+  serviceLabel: 'Служба телеметрии',
+  storageLabel: 'Проверка хранилища',
+  recordingLabel: 'Запись',
+  recordingProblemTitle: 'Проблема записи',
+  recordingLossesTitle: 'Пропуски, записанные с момента запуска ETS2Telemetry',
+  recordingUpperBound: 'Эти итоги могут быть верхней оценкой: после перезапуска службы телеметрии в той же игровой сессии потеря при восстановлении базы учитывается снова. Сама база данных корректна.',
+  recordingTrayPrefix: 'Запись: ',
+  lastErrorLabel: 'Последняя ошибка',
+  closeToTray: 'Закрытие этого окна оставляет ETS2Telemetry работать в области уведомлений. Откройте его снова из значка в трее; для полной остановки используйте «Выход».',
+  exitAction: 'Выйти из ETS2Telemetry',
+  exitPending: 'Выход…',
+  exitFailed: 'Не удалось завершить работу',
+  trayOpen: 'Открыть ETS2Telemetry',
+  trayExit: 'Выход',
+  trayStarting: 'Запуск',
+  trayExiting: 'Завершение работы',
+  serviceFailedTitle: 'Проблема службы телеметрии',
+  sourceLabel: 'Источник',
+  sourceSelectPrompt: 'Выберите игру',
+  sourceSyntheticFixture: 'Синтетический источник',
+  sourceReplayFixture: 'Источник повтора',
+  sourceNoGameSelected: 'игра не выбрана',
+  speedLabel: 'Скорость',
+  fuelLabel: 'Топливо',
+  unavailableText: 'недоступно',
+  serviceTrayLabel: 'Служба',
+  storageTrayLabel: 'Проверка хранилища',
+  unitsTitle: 'Единицы измерения',
+  unitsSaveFailed: 'Изменение единиц не удалось сохранить; остаются предыдущие единицы.',
+  liveTitle: 'Сейчас',
+  livePaused: 'Игра на паузе',
+  liveNoJob: 'Заказ не назначен',
+  liveJobUnavailable: 'Заказ недоступен',
+  liveSourceTitle: 'Источник протокола v1',
+  liveEventLossNote: 'эта версия не записывает события геймплея',
+  overlayTitle: 'Оверлей',
+  overlayLayoutLabel: 'Вид',
+  overlaySectionsLabel: 'Секции',
+  overlayPresetsLabel: 'Наборы',
+  overlayPaused: 'Пауза',
+  overlayNoSignal: 'Нет сигнала',
+  overlaySynthetic: 'Синтетический',
+  overlayReplay: 'Повтор',
+  overlaySdkMean: 'среднее SDK',
+  overlaySaveFailed: 'Изменение оверлея не удалось сохранить; остаются предыдущие настройки.',
+  overlayLastSection: 'Хотя бы одна секция должна оставаться включённой.',
+  overlayHiddenNote: 'Пока данные актуальны, секция без данных скрыта (скорость и топливо показывают прочерк). Пока данные не актуальны, каждая показанная секция — прочерк.',
+  overlayPlacementLabel: 'Положение и размер',
+  overlayScaleLabel: 'Размер',
+  overlayEditAction: 'Переместить оверлей',
+  overlayScaleDown: 'Меньше',
+  overlayScaleUp: 'Больше',
+  overlayResetPlacement: 'Сбросить',
+  overlayEditDone: 'Готово',
+  overlayEditCancel: 'Отмена',
+  overlayEditHelp: 'Перетащите оверлей по экрану игры. Enter сохраняет, Esc отменяет. Вид нельзя менять во время перемещения.',
+  overlayEditFailed: 'Не удалось сохранить настройки положения оверлея; остаются сохранённые значения.'
+});
+
+export function getStrings(language: AppLanguage = 'en'): Readonly<Record<StringKey, string>> {
+  return language === 'ru' ? STRINGS_RU : STRINGS;
+}
+
 export const SERVICE_HEALTH_TEXT: Readonly<Record<ServiceHealth, string>> = Object.freeze({
   starting: 'starting', ready: 'ready', restarting: 'restarting', failed: 'failed', stopping: 'stopping'
 });
+export const SERVICE_HEALTH_TEXT_RU: Readonly<Record<ServiceHealth, string>> = Object.freeze({
+  starting: 'запуск', ready: 'готово', restarting: 'перезапуск', failed: 'ошибка', stopping: 'остановка'
+});
+
+export const SOURCE_SELECTION_TEXT: Readonly<Record<LiveTelemetry['selection'], string>> = Object.freeze({
+  game: 'no game selected', ets2: 'ETS2', ats: 'ATS', synthetic: 'synthetic fixture', replay: 'replay fixture'
+});
+export const SOURCE_SELECTION_TEXT_RU: Readonly<Record<LiveTelemetry['selection'], string>> = Object.freeze({
+  game: 'игра не выбрана', ets2: 'ETS2', ats: 'ATS', synthetic: 'синтетический источник', replay: 'источник повтора'
+});
+export function getSourceSelectionText(selection: LiveTelemetry['selection'], language: AppLanguage = 'en'): string {
+  return (language === 'ru' ? SOURCE_SELECTION_TEXT_RU : SOURCE_SELECTION_TEXT)[selection];
+}
+export function getServiceHealthText(health: ServiceHealth, language: AppLanguage = 'en'): string {
+  return language === 'ru' ? SERVICE_HEALTH_TEXT_RU[health] : SERVICE_HEALTH_TEXT[health];
+}
+
 export const STORAGE_HEALTH_TEXT: Readonly<Record<StorageHealth, string>> = Object.freeze({
   pending: 'pending', verified: 'verified', failed: 'failed'
 });
+export const STORAGE_HEALTH_TEXT_RU: Readonly<Record<StorageHealth, string>> = Object.freeze({
+  pending: 'ожидание', verified: 'проверено', failed: 'ошибка'
+});
+export function getStorageHealthText(health: StorageHealth, language: AppLanguage = 'en'): string {
+  return language === 'ru' ? STORAGE_HEALTH_TEXT_RU[health] : STORAGE_HEALTH_TEXT[health];
+}
+
 export const APP_ERROR_TEXT: Readonly<Record<AppErrorCode, string>> = Object.freeze({
   SERVICE_EXITED: 'The telemetry service stopped unexpectedly.',
   SERVICE_RESTART_EXHAUSTED: 'Automatic service restart limit reached. Exit and start ETS2Telemetry again.',
   STORAGE_FAILED: 'The isolated storage self-test failed.',
   SERVICE_START_TIMEOUT: 'The telemetry service did not start in time.'
 });
+export const APP_ERROR_TEXT_RU: Readonly<Record<AppErrorCode, string>> = Object.freeze({
+  SERVICE_EXITED: 'Служба телеметрии неожиданно завершила работу.',
+  SERVICE_RESTART_EXHAUSTED: 'Достигнут предел автоматических перезапусков службы. Закройте и снова запустите ETS2Telemetry.',
+  STORAGE_FAILED: 'Сбой самотестирования изолированного хранилища.',
+  SERVICE_START_TIMEOUT: 'Служба телеметрии не запустилась вовремя.'
+});
+export function getAppErrorText(code: AppErrorCode, language: AppLanguage = 'en'): string {
+  return language === 'ru' ? APP_ERROR_TEXT_RU[code] : APP_ERROR_TEXT[code];
+}
 // Recording status text (ET-015c PR-4, G8). apps/desktop/src/recording-status-text.ts composes these; each map covers
 // every state, code, target, trip phase and loss counter, so a new value fails to compile until it has a text.
 /** The headline of each recording state; retrying and stopped add their cause. */
@@ -100,6 +214,23 @@ export const RECORDING_STATE_TEXT: Readonly<Record<RecordingHealth['state'], str
   'live-only': 'Not recording this game session: the database is behind the plugin (restored database); recording resumes with the next game session',
   'not-recorded-source': 'Not recording the selected source'
 });
+export const RECORDING_STATE_TEXT_RU: Readonly<Record<RecordingHealth['state'], string>> = Object.freeze({
+  'disabled': 'Отключено: эта версия не записывает историю игры',
+  'unknown': 'Неизвестно: служба телеметрии не запущена или не передала корректный статус',
+  'opening': 'Открытие базы данных',
+  'waiting': 'Ожидание подключения записываемого источника',
+  'recording': 'Запись',
+  'paused': 'Игра на паузе; запись продолжится после снятия с паузы',
+  'interrupted': 'Соединение потеряно; запись возобновится при повторном подключении, а пропущенное время запишется как пропуск',
+  'retrying': 'Повторная попытка: {cause}. Данные не подтверждаются до фиксации в хранилище; события во время переподключения записываются как пропуск',
+  'stopped': 'Остановлено: {cause}. Перезапустите ETS2Telemetry после устранения причины',
+  'live-only': 'Эта игровая сессия не записывается: база данных отстаёт от плагина (восстановленная база данных); запись возобновится со следующей игровой сессии',
+  'not-recorded-source': 'Выбранный источник не записывается'
+});
+export function getRecordingStateText(state: RecordingHealth['state'], language: AppLanguage = 'en'): string {
+  return language === 'ru' ? RECORDING_STATE_TEXT_RU[state] : RECORDING_STATE_TEXT[state];
+}
+
 /** The tray's short form after `Recording: `; retrying and stopped add their cause. */
 export const RECORDING_STATE_SHORT_TEXT: Readonly<Record<RecordingHealth['state'], string>> = Object.freeze({
   'disabled': 'off in this version',
@@ -114,6 +245,23 @@ export const RECORDING_STATE_SHORT_TEXT: Readonly<Record<RecordingHealth['state'
   'live-only': 'not this game session',
   'not-recorded-source': 'not this source'
 });
+export const RECORDING_STATE_SHORT_TEXT_RU: Readonly<Record<RecordingHealth['state'], string>> = Object.freeze({
+  'disabled': 'отключено в этой версии',
+  'unknown': 'неизвестно',
+  'opening': 'открытие базы данных',
+  'waiting': 'ожидание источника',
+  'recording': 'вкл',
+  'paused': 'игра на паузе',
+  'interrupted': 'соединение потеряно',
+  'retrying': 'повтор, {cause}',
+  'stopped': 'остановлено, {cause}',
+  'live-only': 'не эта игровая сессия',
+  'not-recorded-source': 'не этот источник'
+});
+export function getRecordingStateShortText(state: RecordingHealth['state'], language: AppLanguage = 'en'): string {
+  return language === 'ru' ? RECORDING_STATE_SHORT_TEXT_RU[state] : RECORDING_STATE_SHORT_TEXT[state];
+}
+
 /** What a recording code means, as a cause inside a sentence. Never a path or error text. */
 export const RECORDING_CODE_TEXT: Readonly<Record<RecordingCode, string>> = Object.freeze({
   DATABASE_LOCKED: 'the database is locked by another program',
@@ -146,16 +294,67 @@ export const RECORDING_CODE_TEXT: Readonly<Record<RecordingCode, string>> = Obje
   COVERAGE_MISMATCH: 'the plugin and the database disagree about what was stored',
   ACK_AHEAD_OF_STORAGE: 'the database is behind the plugin'
 });
+export const RECORDING_CODE_TEXT_RU: Readonly<Record<RecordingCode, string>> = Object.freeze({
+  DATABASE_LOCKED: 'база данных заблокирована другой программой',
+  PERMISSION_DENIED: 'нет прав на запись в базу данных',
+  DISK_FULL: 'диск заполнен',
+  IO_ERROR: 'ошибка чтения или записи на диск',
+  DATABASE_CORRUPT: 'база данных повреждена',
+  CONSTRAINT_VIOLATION: 'хранилище отклонило противоречивые данные',
+  INVALID_INPUT: 'хранилище отклонило некорректные данные',
+  UNKNOWN_SESSION: 'хранилищу неизвестна эта игровая сессия',
+  UNKNOWN_TRIP: 'хранилищу неизвестен этот рейс',
+  SESSION_CONFLICT: 'эта игровая сессия конфликтует с сохранённой',
+  VALUE_OUT_OF_RANGE: 'значение вне допустимого диапазона',
+  STORAGE_CLOSED: 'база данных закрыта',
+  STORAGE_BUSY: 'хранилище занято',
+  WORKER_FAILED: 'сбой рабочего процесса хранилища',
+  TIMEOUT: 'хранилище не ответило вовремя',
+  DATA_PATH_INVALID: 'папка данных недоступна для использования',
+  DATABASE_UNRECOGNIZED: 'файл базы данных не является базой ETS2Telemetry',
+  SCHEMA_NEWER: 'база данных создана более новой версией',
+  PURPOSE_MISMATCH: 'база данных предназначена для другого типа данных',
+  DURABILITY_UNVERIFIED: 'не удалось подтвердить надёжную запись на диск',
+  BACKUP_FAILED: 'сбой резервного копирования перед обновлением базы данных',
+  MIGRATION_FAILED: 'сбой обновления базы данных',
+  INTERNAL: 'произошла внутренняя ошибка',
+  TRIP_ORDER_VIOLATION: 'события рейса поступили не по порядку',
+  TRIP_COVERAGE_MISMATCH: 'записи рейса не соответствуют сохранённому охвату',
+  TRIP_UNKNOWN_SESSION: 'рейс относится к неизвестной игровой сессии',
+  BACKLOG_FULL: 'очередь операций хранилища переполнена',
+  COVERAGE_MISMATCH: 'плагин и база данных расходятся в том, что сохранено',
+  ACK_AHEAD_OF_STORAGE: 'база данных отстаёт от плагина'
+});
+export function getRecordingCodeText(code: RecordingCode, language: AppLanguage = 'en'): string {
+  return language === 'ru' ? RECORDING_CODE_TEXT_RU[code] : RECORDING_CODE_TEXT[code];
+}
+
 /** The database a recording writes, shown only for a test database. */
 export const RECORDING_TARGET_TEXT: Readonly<Record<RecordingTarget, string | null>> = Object.freeze({
   history: null,
   synthetic: 'Synthetic test database (never game history)',
   replay: 'Replay test database (never game history)'
 });
+export const RECORDING_TARGET_TEXT_RU: Readonly<Record<RecordingTarget, string | null>> = Object.freeze({
+  history: null,
+  synthetic: 'Синтетическая тестовая база данных (не история игры)',
+  replay: 'Тестовая база данных повтора (не история игры)'
+});
+export function getRecordingTargetText(target: RecordingTarget, language: AppLanguage = 'en'): string | null {
+  return language === 'ru' ? RECORDING_TARGET_TEXT_RU[target] : RECORDING_TARGET_TEXT[target];
+}
+
 /** The tray's form of a test database target, after the short state. */
 export const RECORDING_TARGET_SHORT_TEXT: Readonly<Record<RecordingTarget, string | null>> = Object.freeze({
   history: null, synthetic: 'synthetic test database', replay: 'replay test database'
 });
+export const RECORDING_TARGET_SHORT_TEXT_RU: Readonly<Record<RecordingTarget, string | null>> = Object.freeze({
+  history: null, synthetic: 'синтетическая тестовая база данных', replay: 'тестовая база данных повтора'
+});
+export function getRecordingTargetShortText(target: RecordingTarget, language: AppLanguage = 'en'): string | null {
+  return language === 'ru' ? RECORDING_TARGET_SHORT_TEXT_RU[target] : RECORDING_TARGET_SHORT_TEXT[target];
+}
+
 /**
  * The current trip; an idle trip without an untracked job shows nothing. Since ET-016 PR-7 (J9) a job that started before
  * recording opens a partial trip once the replayed events have drained, so an untracked job is either such a job before
@@ -171,6 +370,25 @@ export const RECORDING_TRIP_TEXT = Object.freeze({
   phase: Object.freeze({'idle': null, 'active': null, 'awaiting-outcome': 'waiting for its delivery outcome', 'reload-check': 'checking a loaded save'}) satisfies
     Readonly<Record<RecordingTrip['phase'], string | null>>
 });
+export const RECORDING_TRIP_TEXT_RU = Object.freeze({
+  untrackedJob: 'Текущий заказ не отслеживается как рейс: он начался до включения записи, либо пропуск записи прервал рейс',
+  completeness: Object.freeze({
+    unknown: 'Полнота текущего рейса пока неизвестна', partial: 'Текущий рейс частичный', complete: 'Текущий рейс полностью записан к этому моменту'
+  }) satisfies Readonly<Record<NonNullable<RecordingTrip['completeness']>, string>>,
+  open: 'Рейс выполняется',
+  phase: Object.freeze({'idle': null, 'active': null, 'awaiting-outcome': 'ожидание результата доставки', 'reload-check': 'проверка загруженного сохранения'}) satisfies
+    Readonly<Record<RecordingTrip['phase'], string | null>>
+});
+export interface RecordingTripText {
+  untrackedJob: string;
+  completeness: Readonly<Record<NonNullable<RecordingTrip['completeness']>, string>>;
+  open: string;
+  phase: Readonly<Record<RecordingTrip['phase'], string | null>>;
+}
+export function getRecordingTripText(language: AppLanguage = 'en'): RecordingTripText {
+  return language === 'ru' ? RECORDING_TRIP_TEXT_RU : RECORDING_TRIP_TEXT;
+}
+
 /** One line per non-zero loss counter, with `{count}` replaced. */
 export const RECORDING_LOSS_TEXT: Readonly<Record<keyof RecordingLosses, string>> = Object.freeze({
   lostEvents: 'Lost events: {count}',
@@ -180,6 +398,18 @@ export const RECORDING_LOSS_TEXT: Readonly<Record<keyof RecordingLosses, string>
   restoreLoss: 'Restored-database intervals: {count}',
   droppedSamples: 'Dropped one-second samples: {count}'
 });
+export const RECORDING_LOSS_TEXT_RU: Readonly<Record<keyof RecordingLosses, string>> = Object.freeze({
+  lostEvents: 'Потерянные события: {count}',
+  eventLoss: 'Интервалы потери событий: {count}',
+  notConnected: 'Интервалы отсутствия подключения: {count}',
+  sampleLoss: 'Интервалы потери секундных замеров: {count}',
+  restoreLoss: 'Интервалы восстановленной базы данных: {count}',
+  droppedSamples: 'Пропущенные секундные замеры: {count}'
+});
+export function getRecordingLossText(key: keyof RecordingLosses, language: AppLanguage = 'en'): string {
+  return language === 'ru' ? RECORDING_LOSS_TEXT_RU[key] : RECORDING_LOSS_TEXT[key];
+}
+
 /** The status card's prototype notice for the recording state: no recording, not known, a test database or history. */
 export const PROTOTYPE_NOTICE_TEXT = Object.freeze({
   disabled: 'Prototype live display. No trip recording or durable history.',
@@ -187,12 +417,31 @@ export const PROTOTYPE_NOTICE_TEXT = Object.freeze({
   test: 'Prototype live display. Only a test database is recorded, never game history.',
   history: 'Prototype live display. Game history recording is new; check the recording status below.'
 });
+export const PROTOTYPE_NOTICE_TEXT_RU = Object.freeze({
+  disabled: 'Прототипное отображение. Запись рейсов и сохранение истории отключены.',
+  unknown: 'Прототипное отображение. Статус записи сейчас неизвестен.',
+  test: 'Прототипное отображение. Записывается только тестовая база данных, но не история игры.',
+  history: 'Прототипное отображение. Запись истории игры — новая функция; проверьте статус записи ниже.'
+});
+export function getPrototypeNoticeText(key: 'disabled' | 'unknown' | 'test' | 'history', language: AppLanguage = 'en'): string {
+  return language === 'ru' ? PROTOTYPE_NOTICE_TEXT_RU[key] : PROTOTYPE_NOTICE_TEXT[key];
+}
+
 /** The Alert below the recording row while recording is retrying, stopped or live-only. */
 export const RECORDING_ALERT_TEXT = Object.freeze({
   retrying: 'ETS2Telemetry retries automatically. Live telemetry and the overlay keep working.',
   stopped: 'Recording stopped until the telemetry service starts again. Live telemetry and the overlay keep working.',
   liveOnly: 'Live telemetry and the overlay keep working; this game session is not recorded.'
 });
+export const RECORDING_ALERT_TEXT_RU = Object.freeze({
+  retrying: 'ETS2Telemetry выполняет повторные попытки автоматически. Живая телеметрия и оверлей продолжают работать.',
+  stopped: 'Запись остановлена до перезапуска службы телеметрии. Живая телеметрия и оверлей продолжают работать.',
+  liveOnly: 'Живая телеметрия и оверлей продолжают работать; эта игровая сессия не записывается.'
+});
+export function getRecordingAlertText(key: 'retrying' | 'stopped' | 'liveOnly', language: AppLanguage = 'en'): string {
+  return language === 'ru' ? RECORDING_ALERT_TEXT_RU[key] : RECORDING_ALERT_TEXT[key];
+}
+
 /**
  * Shown in the units card and the overlay card for the last refused save; never part of the service's last problem.
  * Neutral wording: either card's change may have been refused.
@@ -201,12 +450,34 @@ export const SETTINGS_SAVE_ERROR_TEXT: Readonly<Record<SettingsSaveError, string
   SETTINGS_WRITE_FAILED: 'The change could not be saved; the previous settings stay in use.',
   SETTINGS_READ_ONLY: 'Settings were written by a newer version and are read-only; the change was not saved.'
 });
+export const SETTINGS_SAVE_ERROR_TEXT_RU: Readonly<Record<SettingsSaveError, string>> = Object.freeze({
+  SETTINGS_WRITE_FAILED: 'Не удалось сохранить изменение; остаются предыдущие настройки.',
+  SETTINGS_READ_ONLY: 'Настройки были сохранены более новой версией программы и доступны только для чтения; изменение не сохранено.'
+});
+export function getSettingsSaveErrorText(error: SettingsSaveError, language: AppLanguage = 'en'): string {
+  return language === 'ru' ? SETTINGS_SAVE_ERROR_TEXT_RU[error] : SETTINGS_SAVE_ERROR_TEXT[error];
+}
+
 export const UNIT_GAME_TEXT: Readonly<Record<UnitGame, string>> = Object.freeze({
   ets2: 'Euro Truck Simulator 2', ats: 'American Truck Simulator'
 });
+export const UNIT_GAME_TEXT_RU: Readonly<Record<UnitGame, string>> = Object.freeze({
+  ets2: 'Euro Truck Simulator 2', ats: 'American Truck Simulator'
+});
+export function getUnitGameText(game: UnitGame, language: AppLanguage = 'en'): string {
+  return language === 'ru' ? UNIT_GAME_TEXT_RU[game] : UNIT_GAME_TEXT[game];
+}
+
 export const UNIT_PROFILE_TEXT: Readonly<Record<UnitProfile, string>> = Object.freeze({
   'metric': 'Metric (km/h, L)', 'us-customary': 'US customary (mph, US gal)'
 });
+export const UNIT_PROFILE_TEXT_RU: Readonly<Record<UnitProfile, string>> = Object.freeze({
+  'metric': 'Метрическая (км/ч, л)', 'us-customary': 'Американская (миль/ч, галл)'
+});
+export function getUnitProfileText(profile: UnitProfile, language: AppLanguage = 'en'): string {
+  return language === 'ru' ? UNIT_PROFILE_TEXT_RU[profile] : UNIT_PROFILE_TEXT[profile];
+}
+
 /** How the persisted settings were obtained; shown under the unit choices. Never contains a path. */
 export const SETTINGS_STATE_TEXT: Readonly<Record<SettingsState, string>> = Object.freeze({
   'loading': 'Saved settings are still being read; defaults are in use and changes cannot be saved yet.',
@@ -219,6 +490,20 @@ export const SETTINGS_STATE_TEXT: Readonly<Record<SettingsState, string>> = Obje
   'unreadable': 'Settings could not be read safely; defaults are in use and changes cannot be saved.',
   'unavailable': 'No settings location is available; defaults are in use and changes cannot be saved.'
 });
+export const SETTINGS_STATE_TEXT_RU: Readonly<Record<SettingsState, string>> = Object.freeze({
+  'loading': 'Сохранённые настройки читаются; используются значения по умолчанию, изменения пока нельзя сохранить.',
+  'defaults': 'Настройки по умолчанию. Изменение будет сохранено для следующих запусков.',
+  'loaded': 'Сохранённые настройки загружены.',
+  'loaded-with-fallbacks': 'Некоторые настройки были некорректны; их значения по умолчанию используются до следующего изменения.',
+  'invalid-file': 'Файл настроек повреждён; используются значения по умолчанию. Файл сохранён в резервной копии при сохранении изменений.',
+  'unsupported-older': 'Файл настроек имеет неподдерживаемый старый формат; используются значения по умолчанию. Файл отложен при сохранении изменений.',
+  'newer-version': 'Настройки записаны более новой версией программы и доступны только для чтения; используются значения по умолчанию.',
+  'unreadable': 'Настройки не удалось безопасно прочитать; используются значения по умолчанию, изменения нельзя сохранить.',
+  'unavailable': 'Расположение настроек недоступно; используются значения по умолчанию, изменения нельзя сохранить.'
+});
+export function getSettingsStateText(state: SettingsState, language: AppLanguage = 'en'): string {
+  return language === 'ru' ? SETTINGS_STATE_TEXT_RU[state] : SETTINGS_STATE_TEXT[state];
+}
 
 // Live dashboard labels (ET-010 N5). Each map covers every telemetry-core id, so a new id fails to compile until it
 // has a text. Values themselves are formatted by telemetry-core; these maps hold only labels, reasons and notes.
@@ -252,24 +537,63 @@ export const LIVE_SECTION_TEXT: Readonly<Record<LiveSectionId, string>> = Object
 export const OVERLAY_LAYOUT_TEXT: Readonly<Record<OverlayLayout, string>> = Object.freeze({
   strip: 'Strip (top centre)', card: 'Card (top right)', cluster: 'Cluster (bottom left)', hud: 'Minimal HUD (top left)'
 });
+export const OVERLAY_LAYOUT_TEXT_RU: Readonly<Record<OverlayLayout, string>> = Object.freeze({
+  strip: 'Полоса (сверху по центру)', card: 'Карточка (сверху справа)', cluster: 'Приборная панель (снизу слева)', hud: 'Компактный HUD (сверху слева)'
+});
+export function getOverlayLayoutText(layout: OverlayLayout, language: AppLanguage = 'en'): string {
+  return language === 'ru' ? OVERLAY_LAYOUT_TEXT_RU[layout] : OVERLAY_LAYOUT_TEXT[layout];
+}
+
 /** Full labels for the settings card and the overlay card layout. Income is expected income, never revenue. */
 export const OVERLAY_SECTION_TEXT: Readonly<Record<OverlaySectionId, string>> = Object.freeze({
   'speed': 'Speed', 'gear': 'Gear', 'rpm': 'Engine RPM', 'fuel': 'Fuel', 'range': 'Estimated range', 'sdk-consumption': 'SDK average consumption',
   'cargo': 'Cargo', 'origin': 'Origin', 'destination': 'Destination', 'distance-driven': 'Distance driven', 'distance-remaining': 'Distance remaining',
   'deadline': 'Delivery deadline', 'expected-income': 'Expected income', 'game-time': 'Game time'
 });
+export const OVERLAY_SECTION_TEXT_RU: Readonly<Record<OverlaySectionId, string>> = Object.freeze({
+  'speed': 'Скорость', 'gear': 'Передача', 'rpm': 'Обороты двигателя', 'fuel': 'Топливо', 'range': 'Запас хода', 'sdk-consumption': 'Средний расход по SDK',
+  'cargo': 'Груз', 'origin': 'Отправление', 'destination': 'Назначение', 'distance-driven': 'Пройденное расстояние', 'distance-remaining': 'Оставшееся расстояние',
+  'deadline': 'Срок доставки', 'expected-income': 'Ожидаемый доход', 'game-time': 'Игровое время'
+});
+export function getOverlaySectionText(section: OverlaySectionId, language: AppLanguage = 'en'): string {
+  return language === 'ru' ? OVERLAY_SECTION_TEXT_RU[section] : OVERLAY_SECTION_TEXT[section];
+}
+
 /** Short labels for the strip, cluster panel and HUD. */
 export const OVERLAY_SECTION_SHORT_TEXT: Readonly<Record<OverlaySectionId, string>> = Object.freeze({
   'speed': 'Speed', 'gear': 'Gear', 'rpm': 'RPM', 'fuel': 'Fuel', 'range': 'Range', 'sdk-consumption': 'SDK mean',
   'cargo': 'Cargo', 'origin': 'From', 'destination': 'To', 'distance-driven': 'Driven', 'distance-remaining': 'Remaining',
   'deadline': 'Due', 'expected-income': 'Expected', 'game-time': 'Time'
 });
+export const OVERLAY_SECTION_SHORT_TEXT_RU: Readonly<Record<OverlaySectionId, string>> = Object.freeze({
+  'speed': 'Скорость', 'gear': 'Передача', 'rpm': 'Обороты', 'fuel': 'Топливо', 'range': 'Запас хода', 'sdk-consumption': 'Расход SDK',
+  'cargo': 'Груз', 'origin': 'Откуда', 'destination': 'Куда', 'distance-driven': 'Пройдено', 'distance-remaining': 'Осталось',
+  'deadline': 'Срок', 'expected-income': 'Ожидается', 'game-time': 'Время'
+});
+export function getOverlaySectionShortText(section: OverlaySectionId, language: AppLanguage = 'en'): string {
+  return language === 'ru' ? OVERLAY_SECTION_SHORT_TEXT_RU[section] : OVERLAY_SECTION_SHORT_TEXT[section];
+}
+
 export const OVERLAY_GROUP_TEXT: Readonly<Record<OverlayGroupId, string>> = Object.freeze({
   driving: 'Driving', fuel: 'Fuel', job: 'Job', time: 'Time'
 });
+export const OVERLAY_GROUP_TEXT_RU: Readonly<Record<OverlayGroupId, string>> = Object.freeze({
+  driving: 'Вождение', fuel: 'Топливо', job: 'Заказ', time: 'Время'
+});
+export function getOverlayGroupText(group: OverlayGroupId, language: AppLanguage = 'en'): string {
+  return language === 'ru' ? OVERLAY_GROUP_TEXT_RU[group] : OVERLAY_GROUP_TEXT[group];
+}
+
 export const OVERLAY_PRESET_TEXT: Readonly<Record<OverlayPresetId, string>> = Object.freeze({
   'everything': 'Everything', 'job-focus': 'Job focus', 'driving-only': 'Driving only'
 });
+export const OVERLAY_PRESET_TEXT_RU: Readonly<Record<OverlayPresetId, string>> = Object.freeze({
+  'everything': 'Все секции', 'job-focus': 'Фокус на заказе', 'driving-only': 'Только вождение'
+});
+export function getOverlayPresetText(preset: OverlayPresetId, language: AppLanguage = 'en'): string {
+  return language === 'ru' ? OVERLAY_PRESET_TEXT_RU[preset] : OVERLAY_PRESET_TEXT[preset];
+}
+
 /** Where the overlay is while its position is edited (ET-012b); shown in the overlay card. */
 export const OVERLAY_EDIT_PLACEMENT_TEXT: Readonly<Record<OverlayEditPlacement, string>> = Object.freeze({
   'visible': 'Editing: the overlay is outlined over the game. Drag it to move it.',
@@ -277,12 +601,30 @@ export const OVERLAY_EDIT_PLACEMENT_TEXT: Readonly<Record<OverlayEditPlacement, 
   'too-large': 'Editing: at this scale the overlay does not fit the game window. Make it smaller.',
   'not-foreground': 'Editing: the overlay is hidden while another application or the game is in front. Click this window to show it again.'
 });
+export const OVERLAY_EDIT_PLACEMENT_TEXT_RU: Readonly<Record<OverlayEditPlacement, string>> = Object.freeze({
+  'visible': 'Редактирование: оверлей обведён рамкой поверх игры. Перетащите его для перемещения.',
+  'waiting-for-game': 'Редактирование: ожидание окна игры. Запустите игру в оконном или безрамочном режиме, не свёрнутой.',
+  'too-large': 'Редактирование: при таком масштабе оверлей не помещается в окне игры. Уменьшите масштаб.',
+  'not-foreground': 'Редактирование: оверлей скрыт, пока активно другое приложение. Нажмите на это окно, чтобы показать его снова.'
+});
+export function getOverlayEditPlacementText(edit: OverlayEditPlacement, language: AppLanguage = 'en'): string {
+  return language === 'ru' ? OVERLAY_EDIT_PLACEMENT_TEXT_RU[edit] : OVERLAY_EDIT_PLACEMENT_TEXT[edit];
+}
+
 /** Why a section may stay hidden in this version; shown beside its switch. */
 export const OVERLAY_REQUIREMENT_TEXT: Readonly<Record<OverlayRequirement, string>> = Object.freeze({
   'protocol-v1': "needs the plugin's protocol v1 data",
   'trip-tracking': 'needs trip tracking; hidden for now',
   'ids-until-v1': 'shows game ids without protocol v1'
 });
+export const OVERLAY_REQUIREMENT_TEXT_RU: Readonly<Record<OverlayRequirement, string>> = Object.freeze({
+  'protocol-v1': 'требуются данные протокола v1 плагина',
+  'trip-tracking': 'требуется отслеживание рейсов; пока скрыто',
+  'ids-until-v1': 'показывает идентификаторы игры до протокола v1'
+});
+export function getOverlayRequirementText(req: OverlayRequirement, language: AppLanguage = 'en'): string {
+  return language === 'ru' ? OVERLAY_REQUIREMENT_TEXT_RU[req] : OVERLAY_REQUIREMENT_TEXT[req];
+}
 
 // Trip journal text (ET-016 PR-4, J12-J14). apps/desktop/src/journal-view.ts composes these; each map covers every
 // code, outcome, close reason, completeness, interval kind, event type and attribution, so a new value fails to compile

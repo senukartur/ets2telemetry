@@ -258,6 +258,19 @@ describe('trip detail (J13, J21, J22; REG-014, REG-009)', () => {
     expect(notes(journalDetailText({...DELIVERED_DETAIL, trailers: {items, total: 12}}).sections, 'trailers'))
       .toEqual(['Showing the latest 10 of 12 trailer configurations.']);
   });
+  it('localizes booleans, game time and duration in Russian', () => {
+    const text = journalDetailText(DELIVERED_DETAIL, {units: DEFAULT, timeZone: ZONE, language: 'ru'});
+    expect(fields(text.sections, 'job')).toMatchObject({
+      specialJob: 'нет',
+      cargoLoaded: 'да',
+      deadline: 'День 10, 00:40 [game time]'
+    });
+    expect(fields(text.sections, 'delivery')).toMatchObject({
+      deliveryDuration: '7 ч 51 мин [game time]',
+      autoPark: 'нет',
+      autoLoad: 'да'
+    });
+  });
 });
 
 describe('completeness intervals and timeline (J7, J13)', () => {
@@ -376,5 +389,9 @@ describe('one-second samples (J14; REG-009, REG-017)', () => {
   it('shows a sample label outside the Date range as an invalid reading (review round 1)', () => {
     const rows = journalSampleText({database: DATABASE, nextCursor: null, samples: [sample('9', 1, {utcMs: -8_640_000_000_000_001})]}, 'ets2', {timeZone: ZONE}).rows;
     expect(rows[0]).toMatchObject({kind: 'sample', time: 'unavailable (invalid reading)'});
+  });
+  it('localizes sample game time in Russian', () => {
+    const rows = journalSampleText(page, 'ets2', {units: DEFAULT, timeZone: ZONE, language: 'ru'}).rows;
+    expect(rows[0]).toMatchObject({kind: 'sample', gameTime: 'День 9, 13:45'});
   });
 });

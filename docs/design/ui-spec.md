@@ -22,6 +22,14 @@ Precedence: AGENTS.md and concept.md (product and data rules) → this spec → 
 **Sample data.** All values in the mockup are invented examples. Game data (cargo, city and company names, truck models) is shown as the game sends it and is never translated by the application.
 
 ## 2. Principles
+### ET-029 note: Localization (Option B)
+
+In ET-029, the Russian localization and i18n framework are implemented following Option B (approved by owner):
+- Standalone `LanguageCard` on the dashboard allows switching between English (`en`) and Russian (`ru`).
+- Switching language updates dashboard, overlay and tray immediately without restart, and persists via format v4 settings.
+- Translation dictionary parity is verified by unit tests, matching keys from `mockup.html`.
+- When the multi-page Yukon Union shell is introduced, the language selector will migrate into the shell header/sidebar.
+
 
 1. **Status is always visible.** The top bar shows the game connection, plugin, Hard Mode and (later) dashboard sync on every screen. The sidebar shows the recording state.
 2. **Status is never colour alone.** Every status pairs a colour with an icon and a word: ✓ success, ◷ waiting or warning, ✕ error, ◌ neutral or offline. The accent blue is for actions and selection only, never for status.

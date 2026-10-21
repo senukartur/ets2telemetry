@@ -6,6 +6,7 @@ import {RecoveryBudget} from './recovery-budget';
 import {isOverlayLayout, parseOverlaySections} from './overlay-sections';
 import {isOverlayEditOutcome, parseOverlayEditScale} from './overlay-placement';
 import {isUnitGame, isUnitProfile} from './unit-profiles';
+import {isAppLanguage} from './settings-schema';
 import {copyTripsQuery, isPageArgument, JOURNAL_CHANNELS, JOURNAL_EXPORT_CHANNEL} from './journal-contract';
 import {isJournalUuid} from '../../../packages/contracts/src/journal';
 import {DIAGNOSTICS_EXPORT_CHANNEL, isPluginGame, isPluginTargetId, PLUGIN_CHANNELS} from './plugin-setup-contract';
@@ -132,6 +133,9 @@ const bridge: DesktopBridge = {
   },
   // Exit takes no arguments: the reason is fixed by main as a renderer request.
   exitApplication: () => ipcRenderer.invoke('app:exit'),
+  setLanguage: language => isAppLanguage(language)
+    ? ipcRenderer.invoke('settings:set-language', language)
+    : Promise.reject(new Error('Invalid language request')),
   // Only the two fixed enums reach main, which validates them again; nothing else is forwarded.
   setUnitProfile: (game, profile) => isUnitGame(game) && isUnitProfile(profile)
     ? ipcRenderer.invoke('settings:set-unit-profile', game, profile)

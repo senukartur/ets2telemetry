@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest';
-import type {AppHealth, LiveTelemetry, OverlayLayout, OverlaySectionId, PluginDiscoveryOutcome, PluginGame, PluginManualFolderState, PluginSetupMode, PluginSetupView, PluginTargetState,
+import type {AppHealth, AppLanguage, LiveTelemetry, OverlayLayout, OverlaySectionId, PluginDiscoveryOutcome, PluginGame, PluginManualFolderState, PluginSetupMode, PluginSetupView, PluginTargetState,
   PluginTargetView, RecordingHealth, RecordingTarget, RecordingTrip, ServiceHealth, SettingsState, SettingsView, SourceSelection, StorageHealth, UnitProfile} from '../../packages/contracts/src';
 import {buildDiagnosticBundle, type DiagnosticBundleInput} from '../../apps/desktop/src/diagnostic-bundle';
 import {checkDiagnosticsBundle, ENUMS, runtimeStrings, schemaTokens} from '../../scripts/ci/diagnostics-bundle-check.mjs';
@@ -9,7 +9,7 @@ import {checkDiagnosticsBundle, ENUMS, runtimeStrings, schemaTokens} from '../..
 // smoke reads (`mode`, `root`). The names and paths are invented.
 
 const HEALTH: AppHealth = {service: 'ready', storage: 'verified', recording: {state: 'disabled'}, lastError: null};
-const SETTINGS = {units: {ets2: 'metric', ats: 'us-customary'}, overlay: {layout: 'strip', sections: {}, placements: {}}, state: 'defaults', writable: true, saveError: null} as unknown as SettingsView;
+const SETTINGS = {language: 'en', units: {ets2: 'metric', ats: 'us-customary'}, overlay: {layout: 'strip', sections: {}, placements: {}}, state: 'defaults', writable: true, saveError: null} as unknown as SettingsView;
 const PLUGINS: PluginSetupView = {mode: 'test-root', bundled: {version: '0.2.0', sha256Prefix: '0123456789ab'}, running: false, games: {
   ets2: {excluded: false, discovery: 'found', manualFolder: 'set', unlistedFolders: 0, targets: []},
   ats: {excluded: true, discovery: 'found', manualFolder: 'none', unlistedFolders: 0, targets: []}}};
@@ -89,6 +89,7 @@ describe('names outside the runtime strings', () => {
       recordingTarget: {history: true, synthetic: true, replay: true} satisfies Record<RecordingTarget, true>,
       tripPhase: {idle: true, active: true, 'awaiting-outcome': true, 'reload-check': true} satisfies Record<RecordingTrip['phase'], true>,
       tripCompleteness: {unknown: true, partial: true, complete: true} satisfies Record<NonNullable<RecordingTrip['completeness']>, true>,
+      language: {en: true, ru: true} satisfies Record<AppLanguage, true>,
       unitProfile: {metric: true, 'us-customary': true} satisfies Record<UnitProfile, true>,
       overlayLayout: {strip: true, card: true, cluster: true, hud: true} satisfies Record<OverlayLayout, true>,
       settingsState: {loading: true, defaults: true, loaded: true, 'loaded-with-fallbacks': true, 'invalid-file': true, 'unsupported-older': true, 'newer-version': true,
