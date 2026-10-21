@@ -26,7 +26,7 @@ export interface OverlayItem {
   ring?: number;
   unavailable: boolean;
 }
-export type OverlayTagId = 'paused' | 'no-signal' | 'origin';
+export type OverlayTagId = 'paused' | 'no-signal' | 'stale' | 'origin';
 export interface OverlayTag {id: OverlayTagId; testId: `overlay-tag-${OverlayTagId}`; text: string}
 export interface OverlayItemGroup {id: OverlayGroupId; items: OverlayItem[]}
 export interface OverlayView {
@@ -90,8 +90,9 @@ export function overlayView(presentation: OverlayPresentation = OVERLAY_PLACEHOL
   const groups = OVERLAY_GROUPS.map(group => ({id: group.id, items: group.sections.flatMap(id => byId.get(id) ?? [])})).filter(group => group.items.length > 0);
   const gaugeShown = items.some(item => CLUSTER_GAUGE_SECTIONS.has(item.id));
   const tags: OverlayTag[] = [];
-  if (presentation.paused) tags.push({id: 'paused', testId: 'overlay-tag-paused', text: strings.overlayPaused});
-  if (presentation.freshness === 'unavailable') tags.push({id: 'no-signal', testId: 'overlay-tag-no-signal', text: strings.overlayNoSignal});
+  if (presentation.freshness === 'stale') tags.push({id: 'stale', testId: 'overlay-tag-stale', text: strings.overlayStale});
+  else if (presentation.freshness === 'unavailable') tags.push({id: 'no-signal', testId: 'overlay-tag-no-signal', text: strings.overlayNoSignal});
+  else if (presentation.paused) tags.push({id: 'paused', testId: 'overlay-tag-paused', text: strings.overlayPaused});
   if (presentation.origin === 'synthetic' || presentation.origin === 'replay')
     tags.push({id: 'origin', testId: 'overlay-tag-origin', text: presentation.origin === 'synthetic' ? strings.overlaySynthetic : strings.overlayReplay});
   return {

@@ -779,11 +779,11 @@ function Test-UiReceipt {
         'overlay' { $flags += @('fourLayouts','transparent','contained','independentFont','missing','paused','staleDashes','heroSubsets'); $screens = @('strip','card','cluster','hud') }
     }
     foreach ($flag in $flags) { if ($ui.flags.$flag -isnot [bool] -or !$ui.flags.$flag) { return $false } }
-    if (@($ui.screenshots).Count -ne $(if ($ExpectedUiCase -ceq 'overlay') { 40 } elseif ($ExpectedUiCase -ceq 'settings') { 34 } else { 4 * $screens.Count })) { return $false }
+    if (@($ui.screenshots).Count -ne $(if ($ExpectedUiCase -ceq 'overlay') { 64 } elseif ($ExpectedUiCase -ceq 'settings') { 34 } else { 4 * $screens.Count })) { return $false }
     foreach ($language in @('en','ru')) {
         foreach ($size in @(@{width=1280;height=800},@{width=1100;height=720})) {
             $pairScreens = $screens
-            if ($ExpectedUiCase -ceq 'overlay' -and $size.width -eq 1280) {
+            if ($ExpectedUiCase -ceq 'overlay') {
                 $pairScreens = @($screens | ForEach-Object { $_; "$_-missing"; "$_-paused"; "$_-stale" })
             }
             foreach ($screen in $pairScreens) {

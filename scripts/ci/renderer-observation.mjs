@@ -339,3 +339,10 @@ export async function startRecordingTextLog(page) {
 export async function recordingTextLog(page) {
   return (await page.evaluate(() => globalThis.__ets2telemetryRecordingText ?? [])).map(entry => JSON.parse(entry));
 }
+
+export function zeroLiveObservation(language) {
+  const read = selector => globalThis.document.querySelector(selector);
+  return read('[data-testid="speed"]')?.innerText === (language === 'en' ? 'Speed: 0.0 km/h' : 'Скорость: 0.0 км/ч') &&
+    read('[data-testid="fuel"]')?.innerText === (language === 'en' ? 'Fuel: 0.0 L' : 'Топливо: 0.0 л') &&
+    read('.yu-gauge-number')?.textContent === '0.0' && !read('.yu-gauge-speed') && read('.yu-tank i')?.style.height === '0%';
+}

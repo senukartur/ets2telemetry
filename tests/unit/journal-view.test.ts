@@ -422,3 +422,15 @@ it('separates typed hero amounts and missing values from their provenance withou
   expect(journalTileValues(detail).money).toEqual({value: '9007199254740993.123456', note: 'Currency unknown'});
   expect(journalTileValues(CANCELLED_DETAIL).money).toEqual({value: '12000 EUR', note: 'Currency documented by the SDK'});
 });
+
+
+it.each([
+  ['SCHEMA_NEWER', 'база данных создана более новой версией'],
+  ['DATABASE_LOCKED', 'база данных заблокирована другой программой'],
+  ['TIMEOUT', 'хранилище не ответило вовремя'],
+  ['DISK_FULL', 'диск заполнен']
+] as const)('localizes the fixed journal storage cause %s without changing its code', (storageCode, cause) => {
+  const failure = {ok: false as const, code: 'DATABASE_UNAVAILABLE' as const, storageCode};
+  expect(journalErrorText(failure, 'ru')).toBe(`База данных недоступна: ${cause}.`);
+  expect(failure.storageCode).toBe(storageCode);
+});

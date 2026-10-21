@@ -22,7 +22,7 @@ function fixture(uiCase: Case) {
     firstLauncherExit: 0, saveFailureFacts: Array.from({length: 4}, () => ({step: 'target', code: null})),
     readOnly: {state: 'newer-version', writable: false, language: 'en', bytesUnchanged: true, launcherExit: 0, windows, mainEvents: [...mainEvents, {event: 'SETTINGS_FALLBACK', facts: {state: 'newer-version'}}], serviceEvents},
     flags: Object.fromEntries([...common, ...flags[uiCase]].map(flag => [flag, true])),
-    screenshots: ['en', 'ru'].flatMap(language => sizes.flatMap(size => (uiCase === 'overlay' && size.width === 1280 ? screens.overlay.flatMap(layout => [layout, `${layout}-missing`, `${layout}-paused`, `${layout}-stale`]) : screens[uiCase]).map(screen => ({file: `ui-${uiCase}-${screen}-${language}-${size.width}x${size.height}.png`, language,
+    screenshots: ['en', 'ru'].flatMap(language => sizes.flatMap(size => (uiCase === 'overlay' ? screens.overlay.flatMap(layout => [layout, `${layout}-missing`, `${layout}-paused`, `${layout}-stale`]) : screens[uiCase]).map(screen => ({file: `ui-${uiCase}-${screen}-${language}-${size.width}x${size.height}.png`, language,
       ...size, screen, imageWidth: size.width, imageHeight: size.height, bytes: 600})))).concat(uiCase === 'settings' ? sizes.map(size => ({file: `ui-settings-read-only-en-${size.width}x${size.height}.png`, language: 'en', ...size, screen: 'read-only', imageWidth: size.width, imageHeight: size.height, bytes: 600})) : [])}};
 }
 type Fixture = ReturnType<typeof fixture>;
@@ -40,6 +40,7 @@ it('requires every UI language/size/screen, assertion and plain screenshot file 
     {name: 'missing language', uiCase: 'live', change: value => {value.ui.languages.pop();}},
     {name: 'missing size', uiCase: 'live', change: value => {value.ui.sizes = value.ui.sizes.slice(0, 1);}},
     {name: 'wrong shard', uiCase: 'live', change: value => {value.ui.case = 'shell';}},
+    {name: 'missing minimum-size stale overlay', uiCase: 'overlay', change: value => {value.ui.screenshots = value.ui.screenshots.filter(shot => !(shot.language === 'ru' && shot.width === 1100 && shot.screen === 'cluster-stale'));}},
     {name: 'missing screenshot', uiCase: 'live', change: value => {value.ui.screenshots.pop();}},
     {name: 'duplicate replacing another screenshot', uiCase: 'live', change: value => {value.ui.screenshots[0] = {...value.ui.screenshots[1]};}},
     {name: 'file absent', uiCase: 'live', omitFile: true}, {name: 'invalid PNG signature', uiCase: 'live', badPng: true},
@@ -71,4 +72,4 @@ it('requires every UI language/size/screen, assertion and plain screenshot file 
     variants.forEach((variant, index) => expect(results[index], variant.name).toMatchObject({passed: variant.accepted === true, driverResultAvailable: true,
       reason: variant.accepted ? null : 'UI_RESULT_INCOMPLETE_OR_INVALID'}));
   } finally {await resources.dispose();}
-}, receiptBatchTimeout(50) + 5000);
+}, receiptBatchTimeout(51) + 5000);

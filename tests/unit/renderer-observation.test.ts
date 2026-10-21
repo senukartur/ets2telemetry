@@ -1,3 +1,4 @@
+import {zeroLiveObservation} from '../../scripts/ci/renderer-observation.mjs';
 import type {Page} from '@playwright/test';
 import {runInNewContext} from 'node:vm';
 import {afterEach, describe, expect, it, vi} from 'vitest';
@@ -240,4 +241,20 @@ describe('ET-010c overlay v1 observation', () => {
     expect(overlayOverflow()).toEqual({layout: 'strip', root: {width: 1280, height: 38}, sections: ['speed', 'origin', 'deadline', 'cargo'],
       outside: ['origin', 'deadline'], truncated: ['cargo']});
   });
+});
+
+
+it.each(['en', 'ru'])('accepts only a coherent exact zero speed/fuel and numeric geometry in %s', language => {
+  const zero = {speed: language === 'en' ? 'Speed: 0.0 km/h' : 'Скорость: 0.0 км/ч', fuel: language === 'en' ? 'Fuel: 0.0 L' : 'Топливо: 0.0 л', number: '0.0', arc: false, height: '0%'};
+  const observe = (patch: Partial<typeof zero>) => {
+    const sample = {...zero, ...patch};
+    const document = {querySelector: (selector: string) => selector === '[data-testid="speed"]' ? {innerText: sample.speed} : selector === '[data-testid="fuel"]' ? {innerText: sample.fuel} : selector === '.yu-gauge-number' ? {textContent: sample.number} : selector === '.yu-gauge-speed' ? sample.arc ? {} : null : {style: {height: sample.height}}};
+    return runInNewContext(`(${zeroLiveObservation.toString()})(language)`, {document, language}) as unknown;
+  };
+  expect(observe({})).toBe(true);
+  expect(observe({speed: zero.speed.replace('0.0', '90.0')})).toBe(false);
+  expect(observe({fuel: zero.fuel.replace('0.0', '73.0')})).toBe(false);
+  expect(observe({number: '90.0'})).toBe(false);
+  expect(observe({arc: true})).toBe(false);
+  expect(observe({height: '7.3%'})).toBe(false);
 });

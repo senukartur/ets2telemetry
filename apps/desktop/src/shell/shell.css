@@ -195,3 +195,6 @@ button:not(:disabled), select:not(:disabled) { cursor: pointer; }
 
 .yu-hard-mode-rules li,.yu-hard-mode-rules button>span:last-child {min-width:0}
 @container (min-width:360px) {.yu-hard-mode-rules {grid-template-columns:repeat(3,minmax(0,1fr))}}
+
+.yu-gear {min-width:0}
+.yu-instrument [data-testid="live-paused"] {grid-column:1/-1;justify-self:start;white-space:normal;overflow-wrap:normal;max-width:100%;height:auto}

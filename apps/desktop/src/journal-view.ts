@@ -82,7 +82,7 @@ function createJournalText(language: AppLanguage) {
 
  const formatConsumption = (...args: Parameters<typeof coreFormatConsumption>): ReturnType<typeof coreFormatConsumption> => {const result = coreFormatConsumption(...args); return 'text' in result ? {text: localizedMeasurement(result.text, language)} : result;};
 
-  const {JOURNAL_ATTRIBUTION_TEXT, JOURNAL_CLOSE_REASON_TEXT, JOURNAL_COMPLETENESS_TEXT, JOURNAL_ERROR_TEXT, JOURNAL_EVENT_TYPE_TEXT, JOURNAL_EXPORT_ERROR_TEXT, JOURNAL_EXPORT_STRINGS, JOURNAL_GAME_MODE_EVIDENCE_TEXT, JOURNAL_GAME_MODE_TEXT, JOURNAL_GAME_TEXT, JOURNAL_INTERVAL_CAUSE_TEXT, JOURNAL_INTERVAL_KIND_TEXT, JOURNAL_JOB_SOURCE_TEXT, JOURNAL_LABEL_TEXT, JOURNAL_MONEY_CATEGORY_TEXT, JOURNAL_NOTE_TEXT, JOURNAL_OPENED_BY_TEXT, JOURNAL_OTHER_CAUSE, JOURNAL_OUTCOME_TEXT, JOURNAL_PURPOSE_TEXT, JOURNAL_REASON_TEXT, JOURNAL_SECTION_TEXT, JOURNAL_STRINGS, RECORDING_CODE_TEXT, UNIT_GAME_TEXT} = copyTable(BASE_COPY, language);
+  const {JOURNAL_ATTRIBUTION_TEXT, JOURNAL_CLOSE_REASON_TEXT, JOURNAL_COMPLETENESS_TEXT, JOURNAL_ERROR_TEXT, JOURNAL_EVENT_TYPE_TEXT, JOURNAL_EXPORT_ERROR_TEXT, JOURNAL_EXPORT_STRINGS, JOURNAL_GAME_MODE_EVIDENCE_TEXT, JOURNAL_GAME_MODE_TEXT, JOURNAL_GAME_TEXT, JOURNAL_INTERVAL_CAUSE_TEXT, JOURNAL_INTERVAL_KIND_TEXT, JOURNAL_JOB_SOURCE_TEXT, JOURNAL_LABEL_TEXT, JOURNAL_MONEY_CATEGORY_TEXT, JOURNAL_NOTE_TEXT, JOURNAL_OPENED_BY_TEXT, JOURNAL_OTHER_CAUSE, JOURNAL_OUTCOME_TEXT, JOURNAL_PURPOSE_TEXT, JOURNAL_REASON_TEXT, JOURNAL_SECTION_TEXT, JOURNAL_STRINGS, UNIT_GAME_TEXT} = copyTable(BASE_COPY, language);
 const fill = (template: string, values: Record<string, string | number>) =>
   template.replace(/\{(\w+)\}/g, (match, key: string) => Object.hasOwn(values, key) ? String(values[key]) : match);
 const unavailable = (reason: UnavailableReason) => `${JOURNAL_STRINGS.unavailable} (${JOURNAL_REASON_TEXT[reason]})`;
@@ -122,7 +122,7 @@ const gameTime = (minutes: string, gameLanguage: AppLanguage = language) => form
 
 /** Fixed text for every journal refusal code (J11); a storage code adds its fixed cause, never error text. */
 function journalErrorText(failure: JournalFailure): string {
-  if (failure.code === 'DATABASE_UNAVAILABLE') return fill(JOURNAL_ERROR_TEXT.DATABASE_UNAVAILABLE, {cause: RECORDING_CODE_TEXT[failure.storageCode]});
+  if (failure.code === 'DATABASE_UNAVAILABLE') return fill(JOURNAL_ERROR_TEXT.DATABASE_UNAVAILABLE, {cause: BASE_COPY.getRecordingCodeText(failure.storageCode, language)});
   return JOURNAL_ERROR_TEXT[failure.code];
 }
 /** The fixed result text of a trip export (ET-016 PR-5, J16): the row counts, a cancellation or the refusal code's sentence. */

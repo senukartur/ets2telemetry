@@ -43,13 +43,18 @@ export interface LiveSectionText {
 }
 export interface LiveDashboardText {paused: boolean; sections: LiveSectionText[]}
 
+/** Translate generated absence copy before applying the SDK-name exclusion. */
+export function liveFieldValue(field: LiveField, language: AppLanguage): string {
+  return field.state === 'value' ? ((field.id === 'special-job' || field.id === 'cargo-loaded') ? field.text === 'yes' ? (language === 'ru' ? 'да' : 'yes') : (language === 'ru' ? 'нет' : 'no') : ['cargo', 'source-city', 'source-company', 'destination-city', 'destination-company', 'truck', 'truck-plate', 'trailers', 'market', 'game-mode'].includes(field.id) ? field.text : localizedMeasurement(field.text, language)) : appCopy(field.text, language);
+}
+
 function createLiveText(language: AppLanguage) {
  const {FIELD_NOTE_TEXT, LIVE_FIELD_TEXT, LIVE_SECTION_TEXT, STRINGS, VIEW_REASON_TEXT} = copyTable(BASE_COPY, language);
 function rowText(field: LiveField, extraNote?: string): LiveRowText {
   const reason = (field.state === 'missing' || field.state === 'absent') && field.reason ? VIEW_REASON_TEXT[field.reason] : undefined;
   const notes = [...(field.notes ?? []).map(id => FIELD_NOTE_TEXT[id]), ...(extraNote ? [extraNote] : [])];
   const note = notes.length ? notes.join('; ') : undefined;
-  return {id: field.id, testId: `live-${field.id}`, label: LIVE_FIELD_TEXT[field.id], value: field.state === 'value' ? ((field.id === 'special-job' || field.id === 'cargo-loaded') ? field.text === 'yes' ? (language === 'ru' ? 'да' : 'yes') : (language === 'ru' ? 'нет' : 'no') : ['cargo', 'source-city', 'source-company', 'destination-city', 'destination-company', 'truck', 'truck-plate', 'trailers', 'market', 'game-mode'].includes(field.id) ? field.text : localizedMeasurement(field.text, language)) : appCopy(field.text, language), ...(reason ? {reason} : {}), ...(note ? {note} : {})};
+  return {id: field.id, testId: `live-${field.id}`, label: LIVE_FIELD_TEXT[field.id], value: liveFieldValue(field, language), ...(reason ? {reason} : {}), ...(note ? {note} : {})};
 }
 
 /**
