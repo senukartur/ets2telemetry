@@ -26,7 +26,8 @@ const PAGING_TOLLS = 104, PAGING_SAMPLES = 3_600, FILLERS = 110;
 // The bundle is CommonJS, which has no top-level await.
 async function main() {
   const started = performance.now();
-  const [database] = process.argv.slice(2);
+  const [database, variant] = process.argv.slice(2);
+  if (variant !== undefined && variant !== '--ui-signed') throw new Error('JOURNAL_SEED_VARIANT_INVALID');
   const localAppData = process.env.LOCALAPPDATA;
   if (!database || !localAppData) { console.error('Usage: journal-seed <database path> (with LOCALAPPDATA set)'); process.exit(2); }
   const expected = path.join(localAppData, 'ETS2Telemetry', 'synthetic', 'journal.sqlite');
@@ -57,7 +58,7 @@ async function main() {
         {kind: 'completeness.add', interval: {tripUuid: PAGING_TRIP, kind: 'discontinuity', detail: {cause: 'truck-change', annotation: true, atEventSeq}}}]}), `paging toll ${atEventSeq}`);
     }
     check(storage.appendSamples(PAGING_SESSION, Array.from({length: PAGING_SAMPLES}, (_, second) =>
-      seedSample(script, PAGING_TRIP, second, PAGING_UTC + 200_000 + second * 1_000, {speed: {available: true, value: 20 + (second % 5)}}))), 'paging samples');
+      seedSample(script, PAGING_TRIP, second, PAGING_UTC + 200_000 + second * 1_000, {speed: {available: true, value: variant === '--ui-signed' ? [-20, 0, 20][second % 3] : 20 + (second % 5)}}))), 'paging samples');
     process.stdout.write(JSON.stringify({trips: 8 + fillers.length + 1, fillers: fillers.length, pagingTolls: PAGING_TOLLS, pagingSamples: PAGING_SAMPLES,
       elapsedMs: Math.round(performance.now() - started)}) + '\n');
   } finally {

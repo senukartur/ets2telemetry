@@ -4,8 +4,12 @@ export function currentTelemetryObservation() {
   for (const [field, testId] of [['status', 'telemetry-status'], ['speed', 'speed'], ['fuel', 'fuel']]) {
     const elements = globalThis.document.querySelectorAll(`[data-testid="${testId}"]`);
     if (elements.length !== 1) return false;
-    const element = elements[0], bounds = element.getBoundingClientRect();
-    if (globalThis.getComputedStyle(element).visibility !== 'visible' || bounds.width <= 0 || bounds.height <= 0 ||
+    const element = elements[0];
+    // Raw diagnostic text lives in Settings/Data. Its translated persistent connection chip owns visibility.
+    const visible = field === 'status' ? globalThis.document.querySelectorAll('[data-testid="shell.status.connection"]')[0] : element;
+    if (!visible) return false;
+    const bounds = visible.getBoundingClientRect();
+    if (globalThis.getComputedStyle(visible).visibility !== 'visible' || bounds.width <= 0 || bounds.height <= 0 ||
       bounds.bottom <= 0 || bounds.right <= 0 || bounds.top >= globalThis.innerHeight || bounds.left >= globalThis.innerWidth) return false;
     observation[field] = element.innerText;
   }
@@ -77,8 +81,10 @@ export function notCurrentLiveObservation({values, status, hidden}) {
   const read = (id, viewport) => {
     const elements = globalThis.document.querySelectorAll(`[data-testid="${id}"]`);
     if (elements.length !== 1) return undefined;
-    const element = elements[0], bounds = element.getBoundingClientRect();
-    if (globalThis.getComputedStyle(element).visibility !== 'visible' || bounds.width <= 0 || bounds.height <= 0) return undefined;
+    const element = elements[0], visible = id === 'telemetry-status' ? globalThis.document.querySelectorAll('[data-testid="shell.status.connection"]')[0] : element;
+    if (!visible) return undefined;
+    const bounds = visible.getBoundingClientRect();
+    if (globalThis.getComputedStyle(visible).visibility !== 'visible' || bounds.width <= 0 || bounds.height <= 0) return undefined;
     if (viewport && (bounds.bottom <= 0 || bounds.right <= 0 || bounds.top >= globalThis.innerHeight || bounds.left >= globalThis.innerWidth)) return undefined;
     return element.innerText;
   };
@@ -332,4 +338,11 @@ export async function startRecordingTextLog(page) {
 /** The distinct recording texts seen since startRecordingTextLog, in order. */
 export async function recordingTextLog(page) {
   return (await page.evaluate(() => globalThis.__ets2telemetryRecordingText ?? [])).map(entry => JSON.parse(entry));
+}
+
+export function zeroLiveObservation(language) {
+  const read = selector => globalThis.document.querySelector(selector);
+  return read('[data-testid="speed"]')?.innerText === (language === 'en' ? 'Speed: 0.0 km/h' : 'Скорость: 0.0 км/ч') &&
+    read('[data-testid="fuel"]')?.innerText === (language === 'en' ? 'Fuel: 0.0 L' : 'Топливо: 0.0 л') &&
+    read('.yu-gauge-number')?.textContent === '0.0' && !read('.yu-gauge-speed') && read('[data-testid="live.instrument.tank"]')?.getAttribute('data-state') === 'value' && !read('.yu-tank-unavailable') && read('.yu-tank i')?.style.height === '0%';
 }

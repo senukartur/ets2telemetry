@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param([ValidateSet('development','packaged','installed')][string]$Mode,
-    [ValidateSet('scaffold','telemetry','overlay','lifecycle','recording','journal','hard-mode','plugin','refusal','soak')][string]$Scenario = 'scaffold',
+    [ValidateSet('scaffold','telemetry','overlay','lifecycle','recording','journal','hard-mode','plugin','refusal','soak','ui')][string]$Scenario = 'scaffold',
+    [ValidateSet('shell','live','journal','settings','overlay')][string]$UiCase,
     [switch]$ForceRendererReuse,
     [string]$OutputRoot = (Join-Path $PSScriptRoot '../../.local/ci'),
     # ET-018 PR-1 (U11): the installed mode runs `<binary root>\app-<version>\ETS2TelemetryDesktop.exe` of a Squirrel install.
@@ -14,6 +15,9 @@ if ($Scenario -eq 'soak') {
     if ($Mode -eq 'installed') { throw 'The soak runs only in the development and packaged modes.' }
     if ($SoakMinutes -lt 1) { throw 'The soak needs -SoakMinutes from 1 to 90.' }
 } elseif ($SoakMinutes -ne 0) { throw 'Soak minutes are given only with -Scenario soak.' }
+if ($Scenario -eq 'ui') {
+    if ($Mode -eq 'installed' -or !$UiCase) { throw 'UI shards require development/packaged mode and -UiCase.' }
+} elseif ($UiCase) { throw 'UiCase is given only with -Scenario ui.' }
 if ($Mode -ne 'installed' -and $Executable) { throw 'An executable is given only in the installed mode.' }
 if ($Mode -eq 'installed') {
     # Only an installed layout: ETS2TelemetryDesktop\app-<semver>\ETS2TelemetryDesktop.exe beside the binary root's Update.exe.
@@ -35,13 +39,14 @@ foreach ($name in @('cwd','temp','appdata','localappdata','profile','diagnostics
     New-Item -ItemType Directory -Path $paths[$name] | Out-Null
 }
 # The lifecycle, recording, journal and plugin restart runs reuse the profile and LOCALAPPDATA but write their own diagnostics.
-if ($Scenario -eq 'lifecycle' -or $Scenario -eq 'recording' -or $Scenario -eq 'journal' -or $Scenario -eq 'plugin') {
+if ($Scenario -eq 'lifecycle' -or $Scenario -eq 'recording' -or $Scenario -eq 'journal' -or $Scenario -eq 'plugin' -or ($Scenario -eq 'ui' -and $UiCase -eq 'settings')) {
     $paths.diagnosticsRestart = Join-Path $output 'diagnostics-restart'
     New-Item -ItemType Directory -Path $paths.diagnosticsRestart | Out-Null
 }
 $config = $paths.Clone()
 $config.mode = $Mode; $config.output = $output; $config.checkout = $checkout
 $config.scenario = $Scenario
+if ($Scenario -eq 'ui') { $config.uiCase = $UiCase }
 if ($ForceRendererReuse -and $Scenario -ne 'overlay') { throw 'Renderer reuse control is restricted to the hidden overlay fixture.' }
 $config.forceRendererProcessReuse = [bool]$ForceRendererReuse
 if ($Scenario -eq 'soak') { $config.soakMinutes = $SoakMinutes }
@@ -97,7 +102,7 @@ if (Test-Path -LiteralPath $memoryFile -PathType Leaf) {
   durationSeconds=$durationSeconds;
   limits=$limits;
   descendantsNaturallyDrained=($code -eq 0); cpu=$cpu; memory=$memory} | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $output 'job-result.json') -Encoding utf8
-$validation = Test-RuntimeReceipt -DriverResultPath (Join-Path $output 'result.json') -ExpectedCommit $config.commit -ExpectedMode $Mode -ExpectedScenario $Scenario -JobExitCode $code `
+$validation = Test-RuntimeReceipt -DriverResultPath (Join-Path $output 'result.json') -ExpectedCommit $config.commit -ExpectedMode $Mode -ExpectedScenario $Scenario -ExpectedUiCase $UiCase -JobExitCode $code `
     -JobResultPath (Join-Path $output 'job-result.json')
 # ET-019 PR-11: the resource evidence beside the wrapper's own facts, copied only from a receipt that could be read.
 $resourceFacts = [ordered]@{jobMemory=$memory; coldLaunchOrigin=$null; coldLaunchMs=$null; processMemory=$null}

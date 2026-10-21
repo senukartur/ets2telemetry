@@ -5,7 +5,7 @@ import {readFileSync} from 'node:fs';
 import {describe, expect, it} from 'vitest';
 import type {LiveTelemetry} from '../../packages/contracts/src';
 import * as v0 from '../../packages/contracts/src/protocol-v0';
-import {LEGACY_ROW_IDS, liveDashboardText, type LiveDashboardText} from '../../apps/desktop/src/live-dashboard-text';
+import {LEGACY_ROW_IDS, liveDashboardText, liveFieldValue, type LiveDashboardText} from '../../apps/desktop/src/live-dashboard-text';
 import {initialLive} from '../../apps/desktop/src/live-state';
 import {FIELD_NOTE_TEXT, LIVE_FIELD_TEXT} from '../../apps/desktop/src/strings';
 import * as v1 from '../../packages/contracts/src/protocol-v1';
@@ -384,4 +384,11 @@ it('repeats no conversion constant or rounding in the card modules', () => {
     expect(source, file).not.toMatch(/\b(?:3\.6|2\.236\d*|3\.785\d*|1609\.344|0\.6213\d*|0\.4535\d*|235\.21\d*)\b/);
     expect(source, file).not.toMatch(/\.toFixed\(/);
   }
+});
+
+
+it('localizes an absent trailer sentinel without translating an SDK trailer named none', () => {
+  expect(liveFieldValue({id: 'trailers', state: 'absent', text: 'none'}, 'ru')).toBe('нет');
+  expect(liveFieldValue({id: 'trailers', state: 'value', text: 'none'}, 'ru')).toBe('none');
+  expect(liveFieldValue({id: 'trailers', state: 'absent', text: 'none'}, 'en')).toBe('none');
 });

@@ -80,7 +80,7 @@ export type SettingsState = 'loading' | 'defaults' | 'loaded' | 'loaded-with-fal
 /** Why the last settings save was refused: it could not be written, or the file is read-only (newer version). */
 export type SettingsSaveError = 'SETTINGS_WRITE_FAILED' | 'SETTINGS_READ_ONLY';
 /**
- * Overlay layouts (ET-012a): a strip of 36 px rows at the top centre, as many as its enabled sections need (ET-012c),
+ * Overlay layouts (ET-012a): a strip of 38 px rows (STRIP_ROW_HEIGHT_CSS) at the top centre, as many as its enabled sections need (ET-012c),
  * a card at the top right, a cluster with a round speed gauge at the bottom left, or a minimal text HUD at the top left
  * of the game's client area.
  */

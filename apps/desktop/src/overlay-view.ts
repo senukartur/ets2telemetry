@@ -1,10 +1,14 @@
 import type {OverlayLayout, OverlayPresentation, OverlaySectionId} from '../../../packages/contracts/src';
+import {CARD_ROW_HEIGHT_CSS} from './overlay-rows';
+import {localizedMeasurement} from './screens/app-copy';
 import {CLUSTER_GAUGE_SECTIONS, OVERLAY_GROUPS, type OverlayGroupId} from './overlay-sections';
 import {getOverlaySectionShortText, getOverlaySectionText, getStrings} from './strings';
 import {localizeDeadlineString, localizeGameTimeString, translateUnit} from './i18n';
 
-// The overlay renderer's view model (ET-012a). Pure, safe for the overlay bundle and plain Node tests. It only arranges
-// the text main already formatted; it converts, rounds and formats nothing (unit-profiles.test.ts scans it for that).
+// Pure renderer view model. Main/telemetry-core own numeric conversion and rounding; this view arranges their text
+// and localizes known app-owned units, deadlines, clocks and provenance notes. It never reparses numbers or SDK names.
+// formatter-localization.test.ts binds these localization paths to real formatter output; unit-profiles.test.ts guards
+// against duplicated numeric conversion constants and rounding here.
 
 export interface OverlayItem {
   id: OverlaySectionId;
@@ -24,7 +28,7 @@ export interface OverlayItem {
   ring?: number;
   unavailable: boolean;
 }
-export type OverlayTagId = 'paused' | 'no-signal' | 'origin';
+export type OverlayTagId = 'paused' | 'no-signal' | 'stale' | 'origin';
 export interface OverlayTag {id: OverlayTagId; testId: `overlay-tag-${OverlayTagId}`; text: string}
 export interface OverlayItemGroup {id: OverlayGroupId; items: OverlayItem[]}
 export interface OverlayView {
@@ -67,7 +71,7 @@ export function overlayView(presentation: OverlayPresentation = OVERLAY_PLACEHOL
     };
     // Speed and fuel keep the separate number and unit of the ET-008 smoke contract; the unit stays visible beside a dash.
     if (section.id === 'speed') return {...base, value: available ? presentation.speed : DASH, unit: translateUnit(presentation.speedUnit, language)};
-    if (section.id === 'fuel') return {...base, value: available ? presentation.fuel : DASH, unit: translateUnit(presentation.fuelUnit, language),
+    if (section.id === 'fuel') return {...base, value: available ? presentation.fuel : DASH, unit: translateUnit(language === 'ru' && presentation.fuelUnit === 'US gal' ? 'gal' : presentation.fuelUnit, language),
       ...(available && section.detail ? {detail: section.detail, detailTestId: 'overlay-fuel-level'} : {})};
     let value = available ? section.text : DASH;
     if (available) {
@@ -75,10 +79,13 @@ export function overlayView(presentation: OverlayPresentation = OVERLAY_PLACEHOL
         value = localizeGameTimeString(value, language);
       } else if (section.id === 'deadline') {
         value = localizeDeadlineString(value, language);
+      } else if (['rpm', 'sdk-consumption', 'range', 'distance-driven', 'distance-remaining', 'expected-income'].includes(section.id)) {
+        value = localizedMeasurement(value, language);
       }
     }
+    // Cargo detail is the numeric cargo-mass field (SECTION_FIELDS); name/company details retain SDK bytes.
     return {...base, value,
-      ...(available && section.detail ? {detail: section.detail, detailTestId: `overlay-${section.id}-detail`} : {}),
+      ...(available && section.detail ? {detail: section.id === 'cargo' ? localizedMeasurement(section.detail, language) : section.detail, detailTestId: `overlay-${section.id}-detail`} : {}),
       ...(available && section.ring !== undefined ? {ring: section.ring} : {}),
       ...(section.id === 'sdk-consumption' ? {caption: strings.overlaySdkMean} : {})};
   });
@@ -86,8 +93,9 @@ export function overlayView(presentation: OverlayPresentation = OVERLAY_PLACEHOL
   const groups = OVERLAY_GROUPS.map(group => ({id: group.id, items: group.sections.flatMap(id => byId.get(id) ?? [])})).filter(group => group.items.length > 0);
   const gaugeShown = items.some(item => CLUSTER_GAUGE_SECTIONS.has(item.id));
   const tags: OverlayTag[] = [];
-  if (presentation.paused) tags.push({id: 'paused', testId: 'overlay-tag-paused', text: strings.overlayPaused});
-  if (presentation.freshness === 'unavailable') tags.push({id: 'no-signal', testId: 'overlay-tag-no-signal', text: strings.overlayNoSignal});
+  if (presentation.freshness === 'stale') tags.push({id: 'stale', testId: 'overlay-tag-stale', text: strings.overlayStale});
+  else if (presentation.freshness === 'unavailable') tags.push({id: 'no-signal', testId: 'overlay-tag-no-signal', text: strings.overlayNoSignal});
+  else if (presentation.paused) tags.push({id: 'paused', testId: 'overlay-tag-paused', text: strings.overlayPaused});
   if (presentation.origin === 'synthetic' || presentation.origin === 'replay')
     tags.push({id: 'origin', testId: 'overlay-tag-origin', text: presentation.origin === 'synthetic' ? strings.overlaySynthetic : strings.overlayReplay});
   return {
@@ -97,4 +105,10 @@ export function overlayView(presentation: OverlayPresentation = OVERLAY_PLACEHOL
     panel: gaugeShown ? items.filter(item => !CLUSTER_GAUGE_SECTIONS.has(item.id)) : items,
     editing: presentation.editing === true
   };
+}
+
+/** Card hierarchy uses precisely the existing reserved rows, including every subset of speed/gear/RPM. */
+export function overlayCardParts(view: Pick<OverlayView, 'items'>) {
+  const hero = view.items.filter(item => CLUSTER_GAUGE_SECTIONS.has(item.id));
+  return {hero, rows: view.items.filter(item => !CLUSTER_GAUGE_SECTIONS.has(item.id)), heroHeight: hero.length * CARD_ROW_HEIGHT_CSS};
 }

@@ -1,6 +1,6 @@
 import {expect, it} from 'vitest';
 import type {OverlayPresentation} from '../../packages/contracts/src';
-import {overlayView} from '../../apps/desktop/src/overlay-view';
+import {overlayView, overlayCardParts} from '../../apps/desktop/src/overlay-view';
 
 // The overlay renderer's view model (ET-012a): arrangement only. React components are not unit-tested (decision L14);
 // the runtime overlay smoke reads the rendered DOM.
@@ -42,14 +42,14 @@ it('splits the cluster into a gauge and a side panel, and drops the gauge withou
 it('dims stale placeholders and tags no signal, paused and non-game origins', () => {
   const stale = overlayView({...base, status: 'stale', freshness: 'stale', speed: '—', fuel: '—',
     sections: base.sections.map(section => ({id: section.id, state: 'unavailable' as const}))});
-  expect(stale.dim).toBe(true); expect(stale.tags).toEqual([]);
+  expect(stale.dim).toBe(true); expect(stale.tags).toEqual([{id: 'stale', testId: 'overlay-tag-stale', text: 'Stale'}]);
   expect(stale.items.map(item => [item.value, item.unit, item.unavailable, item.ring, item.detail])).toEqual([
     ['—', 'km/h', true, undefined, undefined], ['—', undefined, true, undefined, undefined], ['—', 'L', true, undefined, undefined],
     ['—', undefined, true, undefined, undefined], ['—', undefined, true, undefined, undefined], ['—', undefined, true, undefined, undefined]]);
   expect(overlayView({...base, freshness: 'unavailable', status: 'disconnected'}).tags).toEqual([{id: 'no-signal', testId: 'overlay-tag-no-signal', text: 'No signal'}]);
   expect(overlayView({...base, paused: true, status: 'paused'}).tags).toEqual([{id: 'paused', testId: 'overlay-tag-paused', text: 'Paused'}]);
   expect(overlayView({...base, origin: 'synthetic'}).tags).toEqual([{id: 'origin', testId: 'overlay-tag-origin', text: 'Synthetic'}]);
-  expect(overlayView({...base, origin: 'replay', freshness: 'stale'}).tags).toEqual([{id: 'origin', testId: 'overlay-tag-origin', text: 'Replay'}]);
+  expect(overlayView({...base, origin: 'replay', freshness: 'stale'}).tags).toEqual([{id: 'stale', testId: 'overlay-tag-stale', text: 'Stale'}, {id: 'origin', testId: 'overlay-tag-origin', text: 'Replay'}]);
 });
 
 it('shows no signal and no sections before the first delivery', () => {
@@ -70,9 +70,9 @@ it('localizes labels, units and tags in Russian when language is ru', () => {
   const view = overlayView(ruBase);
   expect(view.items.map(item => [item.testId, item.value, item.unit, item.caption])).toEqual([
     ['overlay-speed', '90.0', 'км/ч', undefined],
-    ['overlay-rpm', '1500 rpm', undefined, undefined],
+    ['overlay-rpm', '1500 об/мин', undefined, undefined],
     ['overlay-fuel', '250.0', 'л', undefined],
-    ['overlay-sdk-consumption', '25.0 L/100 km', undefined, 'среднее SDK'],
+    ['overlay-sdk-consumption', '25.0 л/100 км', undefined, 'среднее SDK'],
     ['overlay-cargo', 'cargo.logs', undefined, undefined],
     ['overlay-game-time', 'День 1, 08:00', undefined, undefined]
   ]);
@@ -89,10 +89,43 @@ it('localizes labels, units and tags in Russian when language is ru', () => {
   expect(synthetic.tags).toEqual([{id: 'origin', testId: 'overlay-tag-origin', text: 'Синтетический'}]);
 
   const replay = overlayView({...ruBase, origin: 'replay', freshness: 'stale'});
-  expect(replay.tags).toEqual([{id: 'origin', testId: 'overlay-tag-origin', text: 'Повтор'}]);
+  expect(replay.tags).toEqual([{id: 'stale', testId: 'overlay-tag-stale', text: 'Устарело'}, {id: 'origin', testId: 'overlay-tag-origin', text: 'Повтор'}]);
 
   const deadlineEarly = overlayView({...ruBase, sections: [{id: 'deadline', state: 'value', text: 'in 1 h 30 min'}]});
   expect(deadlineEarly.items[0]?.value).toBe('через 1 ч 30 мин');
   const deadlineLate = overlayView({...ruBase, sections: [{id: 'deadline', state: 'value', text: 'late by 45 min'}]});
   expect(deadlineLate.items[0]?.value).toBe('опоздание на 45 мин');
+});
+
+it('localizes only numeric RPM/consumption units, preserving names equal to those units or UI words', () => {
+  const sections: OverlayPresentation['sections'] = [{id: 'rpm', state: 'value', text: '600 rpm', ring: 0.2},
+    {id: 'sdk-consumption', state: 'value', text: '25.0 L/100 km'}, {id: 'cargo', state: 'value', text: 'Speed'},
+    {id: 'origin', state: 'value', text: '600 rpm, Settings'}, {id: 'destination', state: 'value', text: 'Łódź, Скорость'}];
+  const en = overlayView({...base, sections, language: 'en'}), ru = overlayView({...base, sections, language: 'ru'});
+  expect(en.items.map(item => item.value)).toEqual(['600 rpm', '25.0 L/100 km', 'Speed', '600 rpm, Settings', 'Łódź, Скорость']);
+  expect(ru.items.map(item => item.value)).toEqual(['600 об/мин', '25.0 л/100 км', 'Speed', '600 rpm, Settings', 'Łódź, Скорость']);
+  expect(ru.items[0].ring).toBe(0.2);
+});
+it('reserves exactly the existing rows for all eight card hero subsets, including no hero, RPM-only and speed-only', () => {
+  const ids = ['speed', 'gear', 'rpm'] as const;
+  for (let mask = 0; mask < 8; mask++) {
+    const chosen = ids.filter((_id, index) => (mask & (1 << index)) !== 0);
+    const presentation: OverlayPresentation = {...base, layout: 'card', sections: [
+      ...chosen.map(id => ({id, state: 'unavailable' as const})), {id: 'fuel', state: 'value', text: '0.0 L'}]};
+    const parts = overlayCardParts(overlayView(presentation));
+    expect(parts.hero.map(item => item.id)).toEqual(chosen); expect(parts.rows.map(item => item.id)).toEqual(['fuel']);
+    expect(parts.heroHeight).toBe(chosen.length * 24);
+    expect(parts.hero.every(item => item.value === '—' && item.ring === undefined)).toBe(true);
+  }
+});
+
+
+it.each(['strip', 'card', 'cluster', 'hud'] as const)('uses one short localized stale tag slot in %s, including paused/section subsets', layout => {
+  for (const language of ['en', 'ru'] as const) for (const freshness of ['current', 'stale', 'unavailable'] as const) for (let mask = 0; mask < 8; mask++) {
+    const ids = ['speed', 'gear', 'rpm'];
+    const view = overlayView({...base, layout, language, freshness, paused: true, origin: 'synthetic', sections: base.sections.filter(item => !ids.includes(item.id) || (mask & (1 << ids.indexOf(item.id))) !== 0)});
+    expect(view.tags.map(tag => tag.id)).toEqual([freshness === 'stale' ? 'stale' : freshness === 'unavailable' ? 'no-signal' : 'paused', 'origin']);
+    if (freshness === 'stale') expect(view.tags[0].text).toBe(language === 'en' ? 'Stale' : 'Устарело');
+    expect(view.dim).toBe(freshness !== 'current'); expect(view.paused).toBe(true);
+  }
 });

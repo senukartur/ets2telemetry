@@ -5,17 +5,12 @@ import type {
 import type {Currency, EventRecord, Money, UnavailableReason} from '../../../packages/contracts/src/protocol-v1';
 import {resolveDisplayUnits, type DisplayUnits} from '../../../packages/telemetry-core/src/display-profile';
 import {
-  formatConsumption, formatDistance, formatGear, formatMass, formatMoney, formatPercent, formatPosition, formatRpm,
-  formatSpeed, formatVolume
+  formatConsumption as coreFormatConsumption, formatDistance as coreFormatDistance, formatGear, formatMass as coreFormatMass, formatMoney as coreFormatMoney, formatPercent, formatPosition, formatRpm as coreFormatRpm,
+  formatSpeed as coreFormatSpeed, formatVolume as coreFormatVolume
 } from '../../../packages/telemetry-core/src/format';
 import type {MoneyCurrency} from '../../../packages/telemetry-core/src/readings';
-import {
-  JOURNAL_ATTRIBUTION_TEXT, JOURNAL_CLOSE_REASON_TEXT, JOURNAL_COMPLETENESS_TEXT, JOURNAL_ERROR_TEXT, JOURNAL_EVENT_TYPE_TEXT, JOURNAL_EXPORT_ERROR_TEXT, JOURNAL_EXPORT_STRINGS,
-  JOURNAL_GAME_MODE_EVIDENCE_TEXT,
-  JOURNAL_GAME_MODE_TEXT, JOURNAL_GAME_TEXT, JOURNAL_INTERVAL_CAUSE_TEXT, JOURNAL_INTERVAL_KIND_TEXT, JOURNAL_JOB_SOURCE_TEXT, JOURNAL_LABEL_TEXT,
-  JOURNAL_MONEY_CATEGORY_TEXT, JOURNAL_NOTE_TEXT, JOURNAL_OPENED_BY_TEXT, JOURNAL_OTHER_CAUSE, JOURNAL_OUTCOME_TEXT, JOURNAL_PURPOSE_TEXT, JOURNAL_REASON_TEXT,
-  JOURNAL_SECTION_TEXT, JOURNAL_STRINGS, RECORDING_CODE_TEXT, UNIT_GAME_TEXT
-} from './strings';
+import * as BASE_COPY from './strings';
+import {copyTable, localizedMeasurement} from './screens/app-copy';
 import {DEFAULT_UNIT_PROFILES} from './unit-profiles';
 import {formatLocalizedBoolean, formatLocalizedGameDuration, formatLocalizedGameTime} from './i18n';
 
@@ -72,6 +67,22 @@ export interface JournalSampleText {columns: JournalColumn[]; rows: JournalSampl
 type JournalFailure = Extract<JournalCallResult<unknown>, {ok: false}>;
 type Avail<T> = {available: true; value: T} | {available: false; reason: UnavailableReason};
 
+function createJournalText(language: AppLanguage) {
+ const formatVolume = (...args: Parameters<typeof coreFormatVolume>) => localizedMeasurement(coreFormatVolume(...args), language);
+
+ const formatSpeed = (...args: Parameters<typeof coreFormatSpeed>) => localizedMeasurement(coreFormatSpeed(...args), language);
+
+ const formatRpm = (...args: Parameters<typeof coreFormatRpm>) => localizedMeasurement(coreFormatRpm(...args), language);
+
+ const formatMoney = (...args: Parameters<typeof coreFormatMoney>) => localizedMeasurement(coreFormatMoney(...args), language);
+
+ const formatMass = (...args: Parameters<typeof coreFormatMass>) => localizedMeasurement(coreFormatMass(...args), language);
+
+ const formatDistance = (...args: Parameters<typeof coreFormatDistance>) => localizedMeasurement(coreFormatDistance(...args), language);
+
+ const formatConsumption = (...args: Parameters<typeof coreFormatConsumption>): ReturnType<typeof coreFormatConsumption> => {const result = coreFormatConsumption(...args); return 'text' in result ? {text: localizedMeasurement(result.text, language)} : result;};
+
+  const {JOURNAL_ATTRIBUTION_TEXT, JOURNAL_CLOSE_REASON_TEXT, JOURNAL_COMPLETENESS_TEXT, JOURNAL_ERROR_TEXT, JOURNAL_EVENT_TYPE_TEXT, JOURNAL_EXPORT_ERROR_TEXT, JOURNAL_EXPORT_STRINGS, JOURNAL_GAME_MODE_EVIDENCE_TEXT, JOURNAL_GAME_MODE_TEXT, JOURNAL_GAME_TEXT, JOURNAL_INTERVAL_CAUSE_TEXT, JOURNAL_INTERVAL_KIND_TEXT, JOURNAL_JOB_SOURCE_TEXT, JOURNAL_LABEL_TEXT, JOURNAL_MONEY_CATEGORY_TEXT, JOURNAL_NOTE_TEXT, JOURNAL_OPENED_BY_TEXT, JOURNAL_OTHER_CAUSE, JOURNAL_OUTCOME_TEXT, JOURNAL_PURPOSE_TEXT, JOURNAL_REASON_TEXT, JOURNAL_SECTION_TEXT, JOURNAL_STRINGS, UNIT_GAME_TEXT} = copyTable(BASE_COPY, language);
 const fill = (template: string, values: Record<string, string | number>) =>
   template.replace(/\{(\w+)\}/g, (match, key: string) => Object.hasOwn(values, key) ? String(values[key]) : match);
 const unavailable = (reason: UnavailableReason) => `${JOURNAL_STRINGS.unavailable} (${JOURNAL_REASON_TEXT[reason]})`;
@@ -85,7 +96,7 @@ const nameOf = (input: Avail<string>) => show(input, name);
 
 const formatters = new Map<string, Intl.DateTimeFormat>();
 /** A UTC label as local clock time, `YYYY-MM-DD HH:MM:SS`. The label is never used for real durations. */
-export function localTime(utcMs: number, timeZone?: string): string {
+function localTime(utcMs: number, timeZone?: string): string {
   // A label outside the Date range (about ±8.64e15 ms) is an invalid reading, never a thrown RangeError.
   const date = new Date(utcMs);
   if (!Number.isFinite(date.getTime())) return unavailable('invalid');
@@ -107,15 +118,15 @@ const moneyText = (money: {raw: string; sdkType: Money['sdkType']; currency: Cur
 const distance = (units: DisplayUnits) => (meters: number) => formatDistance(meters, units.distance, 1);
 const volume = (units: DisplayUnits) => (liters: number) => formatVolume(liters, units.volume, 1);
 /** Absolute game minutes (a decimal uint64) as `Day N, HH:MM`. */
-const gameTime = (minutes: string, language: AppLanguage = 'en') => formatLocalizedGameTime(BigInt(minutes), language);
+const gameTime = (minutes: string, gameLanguage: AppLanguage = language) => formatLocalizedGameTime(BigInt(minutes), gameLanguage);
 
 /** Fixed text for every journal refusal code (J11); a storage code adds its fixed cause, never error text. */
-export function journalErrorText(failure: JournalFailure): string {
-  if (failure.code === 'DATABASE_UNAVAILABLE') return fill(JOURNAL_ERROR_TEXT.DATABASE_UNAVAILABLE, {cause: RECORDING_CODE_TEXT[failure.storageCode]});
+function journalErrorText(failure: JournalFailure): string {
+  if (failure.code === 'DATABASE_UNAVAILABLE') return fill(JOURNAL_ERROR_TEXT.DATABASE_UNAVAILABLE, {cause: BASE_COPY.getRecordingCodeText(failure.storageCode, language)});
   return JOURNAL_ERROR_TEXT[failure.code];
 }
 /** The fixed result text of a trip export (ET-016 PR-5, J16): the row counts, a cancellation or the refusal code's sentence. */
-export function journalExportText(result: JournalExportResult): {text: string; failed: boolean} {
+function journalExportText(result: JournalExportResult): {text: string; failed: boolean} {
   if (result.ok) {
     const value = result.value;
     return value.outcome === 'cancelled' ? {text: JOURNAL_EXPORT_STRINGS.cancelled, failed: false}
@@ -125,20 +136,20 @@ export function journalExportText(result: JournalExportResult): {text: string; f
   return {text: journalErrorText(result as JournalFailure), failed: true};
 }
 /** The persistent banner of a synthetic or replay test database (J3); null for history and before the first answer. */
-export function journalBannerText(database: JournalDatabase | undefined): string | null {
+function journalBannerText(database: JournalDatabase | undefined): string | null {
   return database ? JOURNAL_PURPOSE_TEXT[database.purpose] : null;
 }
 
 /** `Delivered`, `Cancelled`, `In progress`, or `No outcome — <close reason>`; never inferred from completeness. */
-export function outcomeText(trip: Pick<JournalTripListItem, 'outcome' | 'closeReason'>): string {
+function outcomeText(trip: Pick<JournalTripListItem, 'outcome' | 'closeReason'>): string {
   const text = JOURNAL_OUTCOME_TEXT[trip.outcome];
   return trip.outcome === 'none' && trip.closeReason !== null ? `${text} — ${JOURNAL_CLOSE_REASON_TEXT[trip.closeReason]}` : text;
 }
-export function completenessBadge(completeness: JournalTripListItem['recordingCompleteness']): JournalBadge {
+function completenessBadge(completeness: JournalTripListItem['recordingCompleteness']): JournalBadge {
   return {text: JOURNAL_COMPLETENESS_TEXT[completeness], variant: completeness === 'complete' ? 'secondary' : completeness === 'partial' ? 'destructive' : 'outline'};
 }
 /** The mode with its detection evidence; a weak result is never presented as confirmed (D9). */
-export function gameModeText(mode: JournalGameMode, ambiguous: boolean): string {
+function gameModeText(mode: JournalGameMode, ambiguous: boolean): string {
   const evidence = mode.mode === 'unknown' ? '' : ` (${JOURNAL_GAME_MODE_EVIDENCE_TEXT.confidence[mode.confidence]}, ${JOURNAL_GAME_MODE_EVIDENCE_TEXT.method[mode.method]})`;
   return `${JOURNAL_GAME_MODE_TEXT[mode.mode]}${evidence}${ambiguous ? `; ${JOURNAL_STRINGS.gameModeChanged}` : ''}`;
 }
@@ -159,7 +170,7 @@ function tripRow(trip: JournalTripListItem, options: JournalTextOptions): Journa
  * `disabled` (GAME_HISTORY_RECORDING false) it adds that game recording is off in this version. An empty later page
  * only says that no more trips follow.
  */
-export function journalListText(page: JournalTripPage, options: JournalTextOptions & {filtered: boolean; recording?: RecordingHealth['state']}): JournalListText {
+function journalListText(page: JournalTripPage, options: JournalTextOptions & {filtered: boolean; recording?: RecordingHealth['state']}): JournalListText {
   const first = options.firstPage ?? true;
   const empty = page.trips.length ? null : !first ? JOURNAL_STRINGS.noMoreTrips : options.filtered ? JOURNAL_STRINGS.emptyFiltered : JOURNAL_STRINGS.empty;
   return {rows: page.trips.map(trip => tripRow(trip, options)), empty,
@@ -186,7 +197,7 @@ function moneyLines(totals: JournalMoneyTotals): {fields: JournalField[]; notes:
 }
 
 /** The trip detail's summary sections (J13). */
-export function journalDetailText(detail: JournalTripDetail, options: JournalTextOptions = {}): JournalDetailText {
+function journalDetailText(detail: JournalTripDetail, options: JournalTextOptions = {}): JournalDetailText {
   const {trip, job: {values: job}} = detail, language = options.language ?? 'en';
   const units = unitsFor(trip.game, options), zone = options.timeZone;
   const record = detail.outcomeDetails?.record ?? null;
@@ -260,7 +271,7 @@ function causeText(interval: JournalInterval): string {
   return interval.annotation ? `${cause} (${JOURNAL_STRINGS.annotation})` : cause;
 }
 /** One page of the trip's completeness intervals with the trip's total. */
-export function journalIntervalText(page: JournalIntervalPage, options: JournalTextOptions = {}): JournalIntervalText {
+function journalIntervalText(page: JournalIntervalPage, options: JournalTextOptions = {}): JournalIntervalText {
   const time = (utcMs: number | null) => utcMs === null ? '—' : localTime(utcMs, options.timeZone);
   return {
     total: fill(JOURNAL_STRINGS.intervalsTotal, {count: page.total}),
@@ -303,7 +314,7 @@ function attributionText(event: JournalEvent, tripUuid: string): string {
   return JOURNAL_ATTRIBUTION_TEXT[a.kind];
 }
 /** One page of the trip's timeline (J7) in the trip's own game profile. */
-export function journalEventText(page: JournalEventPage, trip: {tripUuid: string; game: JournalGame}, options: JournalTextOptions = {}): JournalEventText {
+function journalEventText(page: JournalEventPage, trip: {tripUuid: string; game: JournalGame}, options: JournalTextOptions = {}): JournalEventText {
   const units = unitsFor(trip.game, options);
   return {
     window: windowText(page.window),
@@ -327,7 +338,7 @@ const sourceSecond = (sample: JournalSample) => BigInt(sample.monotonicNs) / 1_0
  * seconds are more than 1 apart, a `no samples for N s` row names the N missing seconds; a change of source clock is a
  * `source restarted` row. Only the current page is held, so the first row of a page is compared with nothing.
  */
-export function journalSampleText(page: JournalSamplePage, game: JournalGame, options: JournalTextOptions = {}): JournalSampleText {
+function journalSampleText(page: JournalSamplePage, game: JournalGame, options: JournalTextOptions = {}): JournalSampleText {
   const units = unitsFor(game, options), rows: JournalSampleRow[] = [], language = options.language ?? 'en';
   let previous: JournalSample | undefined;
   for (const sample of page.samples) {
@@ -349,3 +360,19 @@ export function journalSampleText(page: JournalSamplePage, game: JournalGame, op
   return {columns, rows, empty: page.samples.length ? null : (options.firstPage ?? true) ? JOURNAL_STRINGS.noSamples : JOURNAL_STRINGS.noMoreSamples,
     hasNext: page.nextCursor !== null};
 }
+
+  return {localTime, journalErrorText, journalExportText, journalBannerText, outcomeText, completenessBadge, gameModeText, journalListText, journalDetailText, journalIntervalText, journalEventText, journalSampleText};
+}
+const texts = {en: createJournalText('en'), ru: createJournalText('ru')};
+export const journalListText = (...args: Parameters<typeof texts.en.journalListText>): ReturnType<typeof texts.en.journalListText> => texts[args[1]?.language ?? 'en'].journalListText(...args);
+export const journalDetailText = (...args: Parameters<typeof texts.en.journalDetailText>): ReturnType<typeof texts.en.journalDetailText> => texts[args[1]?.language ?? 'en'].journalDetailText(...args);
+export const journalIntervalText = (...args: Parameters<typeof texts.en.journalIntervalText>): ReturnType<typeof texts.en.journalIntervalText> => texts[args[1]?.language ?? 'en'].journalIntervalText(...args);
+export const journalEventText = (...args: Parameters<typeof texts.en.journalEventText>): ReturnType<typeof texts.en.journalEventText> => texts[args[2]?.language ?? 'en'].journalEventText(...args);
+export const journalSampleText = (...args: Parameters<typeof texts.en.journalSampleText>): ReturnType<typeof texts.en.journalSampleText> => texts[args[2]?.language ?? 'en'].journalSampleText(...args);
+export const journalErrorText = (failure: JournalFailure, language: AppLanguage = 'en'): ReturnType<typeof texts.en.journalErrorText> => texts[language].journalErrorText(failure);
+export const journalExportText = (result: JournalExportResult, language: AppLanguage = 'en'): ReturnType<typeof texts.en.journalExportText> => texts[language].journalExportText(result);
+export const journalBannerText = (database: JournalDatabase | undefined, language: AppLanguage = 'en'): ReturnType<typeof texts.en.journalBannerText> => texts[language].journalBannerText(database);
+export const outcomeText = (trip: Pick<JournalTripListItem, 'outcome' | 'closeReason'>, language: AppLanguage = 'en'): ReturnType<typeof texts.en.outcomeText> => texts[language].outcomeText(trip);
+export const completenessBadge = (completeness: JournalTripListItem['recordingCompleteness'], language: AppLanguage = 'en'): ReturnType<typeof texts.en.completenessBadge> => texts[language].completenessBadge(completeness);
+export const localTime = texts.en.localTime;
+export const gameModeText = (mode: JournalGameMode, ambiguous: boolean, language: AppLanguage = 'en'): string => texts[language].gameModeText(mode, ambiguous);

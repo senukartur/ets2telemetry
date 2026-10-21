@@ -25,16 +25,18 @@ import {JournalService} from '../../apps/desktop/src/journal-service';
 import {createRecordingRuntime} from '../../apps/desktop/src/recording-runtime';
 import {GAME_HISTORY_RECORDING} from '../../apps/desktop/src/recording-policy';
 import {parseRecordingHealth} from '../../apps/desktop/src/recording-status';
-import type {V1SourceState} from '../../apps/desktop/src/v1-ingestion';
+import {V1_STALE_MS, type V1SourceState} from '../../apps/desktop/src/v1-ingestion';
 import {readFixtureFile} from '../../tools/telemetry-simulator/src/fixture-file';
-import {reactiveConflicts, serveV1Reactive} from '../../tools/telemetry-simulator/src/v1/reactive';
+import {V1Producer, type Out} from '../../tools/telemetry-simulator/src/v1/producer';
+import {AdapterModel, ScenarioClock, seededId} from '../../tools/telemetry-simulator/src/v1/source';
+import {scenarioSource} from '../../tools/telemetry-simulator/src/v1/replay';
+import {validateScenario} from '../../tools/telemetry-simulator/src/v1/scenario';
+import type {StorageWorkerHandle} from '../../packages/storage/src/client';
 import {scenarioPath} from '../shared/simulator-v1-expected';
 import {digestOf, readOnly, REPRESENTATIVE, sha256, STORAGE_FIXTURES, TEST_CLOSE_GRACE_MS, workspace} from './helpers';
-import {guarded, servedAcks, storageWorker, terminateWorkers, tracedShutdown, until} from './recording-helpers';
+import {guarded, storageWorker, terminateWorkers, tracedHandle, tracedShutdown, until} from './recording-helpers';
 
 type Json = Record<string, unknown>;
-const connect = (atMs: number, client: Json = {durable: true}) => ({atMs, action: 'connect', client});
-const disconnect = (atMs: number) => ({atMs, action: 'disconnect'});
 const scenario = (id: string) => readFixtureFile(scenarioPath(id)) as Json & {seed: string; steps: Json[]};
 
 let ws: Awaited<ReturnType<typeof workspace>>;
@@ -118,7 +120,7 @@ const QUERIES: JournalQuery[] = [{kind: 'trips', query: {}}, {kind: 'trips', que
  * reduced into AppState health; a journal read goes from main's JournalBroker to the service's JournalService and back,
  * both directions cloned, and main forwards only a reply that its check accepts.
  */
-function service(env: Record<string, string>) {
+function service(env: Record<string, string>, controls: {now?: () => number; timeline?: string[]; wrapWorker?: (handle: StorageWorkerHandle, ordinal: number) => StorageWorkerHandle} = {}) {
   expect(GAME_HISTORY_RECORDING).toBe(false);
   const logs: [string, unknown][] = [], states: V1SourceState[] = [], received: (RecordingHealth | 'rejected')[] = [], brokerLogs: [string, unknown][] = [];
   const workerList: ReturnType<typeof storageWorker>[] = [];
@@ -129,14 +131,18 @@ function service(env: Record<string, string>) {
       workers++;
       const w = storageWorker();
       workerList.push(w);
-      return w.handle;
+      return controls.wrapWorker?.(w.handle, workers) ?? w.handle;
     },
     historyOverrides: {appVersion: '0.1.0-test', closeGraceMs: TEST_CLOSE_GRACE_MS},
-    statusOverrides: {intervalMs: 0}, onV1State: state => { states.push(state); },
+    ingestionOverrides: controls.now ? {now: controls.now} : {},
+    statusOverrides: {intervalMs: 0}, onV1State: state => {
+      if (states.at(-1)?.status !== state.status || states.at(-1)?.durable.state !== state.durable.state) controls.timeline?.push(`state ${state.status} ${state.durable.state}`);
+      states.push(state);
+    },
     onRecordingStatus: status => {
       const message = structuredClone({type: 'recording', status}) as Record<string, unknown>;
       const parsed = Object.keys(message).length === 2 && Object.hasOwn(message, 'status') ? parseRecordingHealth(message.status) : undefined;
-      received.push(parsed ?? 'rejected');
+      received.push(parsed ?? 'rejected'); controls.timeline?.push(`published ${parsed?.state ?? 'rejected'}`);
       health = reduceHealth(health, {type: 'recording', status: parsed ?? {state: 'unknown'}});
     }});
   const self = {runtime, stopped: false};
@@ -197,6 +203,53 @@ async function helloServer() {
   server.listen(endpoint);
   await once(server, 'listening');
   return {endpoint, hellos, close: async () => { for (const socket of sockets) socket.destroy(); await new Promise<void>(resolve => server.close(() => resolve())); }};
+}
+
+/** Test-local real pipe: SDK callbacks are sent only when the test requests them; no fixed terminal connection window. */
+async function controlledRecoverySource(timeline: string[]) {
+  const input = validateScenario(scenario('live-only')), clock = new ScenarioClock();
+  const adapter = new AdapterModel({game: input.game, seed: input.seed, ...input.source}, clock);
+  const producer = new V1Producer(adapter, scenarioSource(input), seededId(input.seed, 'capture-clock'));
+  const endpoint = `\\\\.\\pipe\\ETS2Telemetry-SYNTHETIC-TEST-v1-${process.pid}-${randomUUID()}`;
+  const connections: {durable: boolean; closedBy: string}[] = [], acks: string[] = [], failures: string[] = [];
+  let socket: net.Socket | undefined, at = 0, checkpointSeq = '';
+  const write = (out: Out | undefined) => {
+    if (!out) return;
+    timeline.push(`sent ${out.message.kind}`);
+    if (out.message.kind === 'checkpoint') checkpointSeq = out.message.seq;
+    socket!.write(out.frame);
+  };
+  const frame = () => {at += 100; adapter.frame(false, {}, at); producer.drain(clock.sourceNs(at)); write(producer.publication(clock.sourceNs(at)));};
+  const server = net.createServer(incoming => {
+    socket = incoming; producer.open();
+    const decoder = new FrameDecoder('client'); let record: typeof connections[number] | undefined;
+    incoming.on('error', error => {failures.push(String((error as NodeJS.ErrnoException).code));});
+    incoming.on('data', bytes => {
+      try {
+        decoder.push(bytes, message => {
+          if (message.kind === 'hello') {record = {durable: message.data.durableEvents, closedBy: 'open'}; connections.push(record); timeline.push(`hello ${record.durable}`);}
+          if (message.kind === 'ack') {acks.push(message.data.throughEventSeq); timeline.push(`ack ${message.data.throughEventSeq}`);}
+        });
+        for (const out of producer.receive(bytes, clock.sourceNs(at))) write(out);
+        if (record && !record.durable && at === 0) {
+          at = 10; adapter.lifecycle('simulation.started', at);
+          at = 100; adapter.configuration('job', [], 'terminated', at);
+          frame();
+        }
+        let next: Out | undefined;
+        while ((next = producer.pump(clock.sourceNs(at)))) write(next);
+      } catch (error) {failures.push(error instanceof Error ? error.message : 'source error'); incoming.destroy();}
+    });
+    incoming.on('close', () => {if (record?.closedBy === 'open') record.closedBy = 'client'; if (socket === incoming) {producer.close(clock.sourceNs(at)); socket = undefined;}});
+  });
+  server.listen(endpoint); await once(server, 'listening');
+  let closed = false;
+  const stop = async () => {
+    if (closed) return; closed = true;
+    if (connections.at(-1)?.closedBy === 'open') connections.at(-1)!.closedBy = 'disconnect';
+    socket?.destroy(); await new Promise<void>(resolve => server.close(() => resolve()));
+  };
+  return {endpoint, connections, acks, failures, frame, checkpoint: () => checkpointSeq, stop};
 }
 
 const ZERO = {lostEvents: 0, eventLoss: 0, notConnected: 0, sampleLoss: 0, restoreLoss: 0, droppedSamples: 0};
@@ -341,59 +394,66 @@ describe('ET-019 PR-6: refused recording targets through the production service 
   }, CASE_TIMEOUT_MS);
 
   it('resumes recording after DATABASE_LOCKED clears on a synthetic target: re-opens, reconnects durable, commits events, sends ACKs, and reports recording', async () => {
-    // Lock the synthetic target database with an external writer.
-    const holder = await ws.open({path: target(), purpose: 'synthetic', backupsDirectory: targetBackups()});
-    const s = service(SYNTHETIC_PLAN);
-
-    // Prepare a reactive v1 server: connection 0 is live-only while the target is locked.
-    // Once the lock clears and storage re-opens, durable availability changes, the client disconnects and reconnects durable,
-    // and events are committed and acknowledged.
-    const base = scenario('live-only');
-    const input = {
-      ...base,
-      id: 'reopen-locked-target',
-      purpose: 'ET-037: re-open synthetic target after DATABASE_LOCKED clears',
-      steps: [...base.steps, ...Array.from({length: 98}, (_, i) => ({atMs: 300 + 100 * i, action: 'frame'}))],
-      transport: [connect(0, {durable: false}), disconnect(10_050), connect(10_100), disconnect(10_200)]
-    };
-    expect(reactiveConflicts(input)).toEqual([]);
-    const server = await serveV1Reactive(input, {scale: 1, awaitScriptedAcks: true});
-
+    const timeline: string[] = [], holder = await ws.open({path: target(), purpose: 'synthetic', backupsDirectory: targetBackups()});
+    let receiveClock = 0, releasedHolder = false, barrier: ReturnType<typeof tracedHandle> | undefined;
+    const s = service(SYNTHETIC_PLAN, {now: () => receiveClock, timeline, wrapWorker: (handle, ordinal) => {
+      const traced = tracedHandle(handle, timeline, ordinal === 2 ? 'upsertSession' : undefined);
+      if (ordinal === 2) barrier = traced;
+      return {...traced.handle, postMessage: request => {timeline.push(`request ${request.command.name}`); traced.handle.postMessage(request);}};
+    }});
+    const source = await controlledRecoverySource(timeline);
     try {
       await s.startRefused();
       expect(s.logs).toEqual([['RECORDING_TARGET', {purpose: 'synthetic'}], ['HISTORY_STORAGE_UNAVAILABLE', {code: 'DATABASE_LOCKED'}]]);
       await until(() => s.received.length === 2, 'the stopped status', HANG_GUARD_MS);
       expect(s.received).toEqual([synthetic('opening'), synthetic('stopped', 'DATABASE_LOCKED')]);
-
-      // Connect to the reactive v1 server while storage is unavailable
-      s.runtime.v1.select('synthetic', server.endpoint);
-      await until(() => s.states.some(st => st.status === 'connected'), 'v1 connected live-only', HANG_GUARD_MS);
-      expect(s.states.find(st => st.status === 'connected')?.durable.state).toBe('off');
-
-      // Release the lock on the target database
-      holder.close();
-
-      // Wait for HistoryStorage to re-open on backoff
-      await until(() => s.runtime.history.state === 'open' && s.workers() === 2, 'history storage re-open', HANG_GUARD_MS);
-      expect(s.runtime.history.state).toBe('open');
+      s.runtime.v1.select('synthetic', source.endpoint);
+      await until(() => s.states.some(state => state.status === 'connected'), 'v1 connected live-only', HANG_GUARD_MS);
+      expect(s.states.find(state => state.status === 'connected')?.durable.state).toBe('off');
+      holder.close(); releasedHolder = true;
+      await until(() => s.runtime.history.state === 'open' && s.workers() === 2 && barrier !== undefined, 'history storage re-open', HANG_GUARD_MS);
       expect(s.runtime.history.failureCode).toBeNull();
-
-      // Verify recording status transitions to recording
-      await until(() => s.received.some(r => typeof r === 'object' && r.state === 'recording'), 'recording status', HANG_GUARD_MS);
-      expect(s.health().recording.state).toBe('recording');
-
-      // The server run completes with connection 0 closed by client (durable upgrade) and connection 1 acknowledging the events
-      const report = await guarded(server.done, 'the reactive server run', HANG_GUARD_MS);
-      expect(report.connections.map(c => [c.durable, c.closedBy])).toEqual([[false, 'client'], [true, 'disconnect']]);
-      expect(servedAcks(report, 1)).toEqual(['2']);
-
-      // Orderly stop: all shutdown steps clean, history logs reflect unavailable, opened, closed
+      await guarded(barrier!.held, 'second-worker session command held', HANG_GUARD_MS);
+      await until(() => s.runtime.v1.current.observation?.seq === source.checkpoint() && source.connections.length === 2, 'durable checkpoint received', HANG_GUARD_MS);
+      timeline.push('checkpoint observed before session commit');
+      expect(source.acks).toEqual([]);
+      expect(s.received.some(status => typeof status === 'object' && status.state === 'recording')).toBe(false);
+      // Deterministic reproduction: the sole durable checkpoint expires before async session initialization completes.
+      receiveClock += V1_STALE_MS;
+      await until(() => s.runtime.v1.current.status === 'stale', 'checkpoint explicitly stale', HANG_GUARD_MS);
+      timeline.push('checkpoint stale');
+      expect(source.acks).toEqual([]); expect(timeline).not.toContain('done upsertSession');
+      barrier!.release();
+      await until(() => s.runtime.v1.current.durable.state === 'active' && source.acks.includes('2'), 'backlog coverage committed and ACK2 received', HANG_GUARD_MS);
+      expect(source.acks).toEqual(['2']);
+      // The old terminal-checkpoint assumption is false even after real writes settle; a new SDK boundary is required.
+      expect(s.runtime.v1.current.status).toBe('stale'); expect(s.runtime.recordingStatus().state).not.toBe('recording');
+      expect(s.received.some(status => typeof status === 'object' && status.state === 'recording')).toBe(false);
+      expect(timeline).toEqual(expect.arrayContaining(['done upsertSession', 'done commitGap', 'ack 2']));
+      expect(timeline.indexOf('done upsertSession')).toBeLessThan(timeline.indexOf('ack 2'));
+      expect(timeline.indexOf('done commitGap')).toBeLessThan(timeline.indexOf('ack 2'));
+      timeline.push('unsafe terminal-checkpoint assumption refused');
+      source.frame(); timeline.push('new SDK boundary after backlog');
+      await until(() => s.received.some(status => typeof status === 'object' && status.state === 'recording'), 'parsed recording publication after fresh SDK boundary', HANG_GUARD_MS);
+      expect(s.health().recording.state).toBe('recording'); expect(s.received).not.toContain('rejected');
+      expect(timeline.indexOf('new SDK boundary after backlog')).toBeLessThan(timeline.indexOf('published recording'));
+      expect(source.connections.map(connection => [connection.durable, connection.closedBy])).toEqual([[false, 'client'], [true, 'open']]);
+      await source.stop();
+      expect(source.connections.map(connection => [connection.durable, connection.closedBy])).toEqual([[false, 'client'], [true, 'disconnect']]);
+      expect(source.failures).toEqual([]);
       const {result, steps} = await s.stop();
       expect(result).toEqual({clean: true});
       expect(steps.map(({phase, name, outcome}) => `${phase} ${name} ${outcome}`)).toEqual(['intake v1-ingestion ok', 'flush recording-flush ok', 'storage history-storage ok']);
       expect(s.logs.map(([event]) => event).filter(event => /^HISTORY_/.test(event))).toEqual(['HISTORY_STORAGE_UNAVAILABLE', 'HISTORY_STORAGE_OPENED', 'HISTORY_STORAGE_CLOSED']);
+      readOnly(target(), db => {
+        expect(db.prepare('SELECT CAST(committed_through_event_seq AS INTEGER) AS through FROM plugin_sessions').all()).toEqual([{through: 2}]);
+        expect(db.prepare('SELECT CAST(first_event_seq AS INTEGER) AS first, CAST(last_event_seq AS INTEGER) AS last, CAST(cause_no_durable_consumer AS INTEGER) AS lost FROM event_gaps').all()).toEqual([{first: 1, last: 2, lost: 2}]);
+        expect(db.prepare('SELECT count(*) AS n FROM events').get()).toEqual({n: 0});
+        expect(db.pragma('integrity_check', {simple: true})).toBe('ok'); expect(db.pragma('foreign_key_check')).toEqual([]);
+      });
     } finally {
-      await server.stop();
+      barrier?.release(); if (!releasedHolder) holder.close(); await source.stop();
+      console.info('controlled recovery timeline', JSON.stringify(timeline));
     }
   }, CASE_TIMEOUT_MS);
 });

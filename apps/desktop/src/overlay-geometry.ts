@@ -48,7 +48,7 @@ const validArea = (client: DipRect) => [client.x, client.y, client.width, client
 export function surfaceHeightDip(contentCss: number, borderCss: number, scale: number): number {
   return Math.ceil(contentCss * scale + 2 * borderCss * Math.max(1, scale) - HEIGHT_EPSILON);
 }
-/** The strip's DIP height for its reserved rows: ceil(36 × rows × scale + 2 × max(1, scale)), ET-012c's rule unchanged. */
+/** The strip's DIP height for its reserved rows: ceil(STRIP_ROW_HEIGHT_CSS × rows × scale + 2 × max(1, scale)), ET-012c's rule unchanged. */
 const stripHeight = (rows: number, scale: number) => surfaceHeightDip(STRIP_ROW_HEIGHT_CSS * rows, STRIP_BORDER_CSS, scale);
 /**
  * The card, cluster or HUD window at this scale (ET-012d decision K4): round(nominal width × scale) wide and the larger
@@ -69,7 +69,7 @@ function rowLayoutSize(layout: RowLayout, scale: number, sections: OverlaySectio
  * ceil(content × scale + 2 × border × max(1, scale))) high, where `content` is the CSS height the reserved rows of their
  * enabled sections need inside the outer border (overlay-rows.ts). The strip is
  * floor(min(1280 × scale, client width − 32)) wide, at least round(480 × scale), and
- * ceil(36 × rows × scale + 2 × max(1, scale)) high, where `rows` is what its enabled sections need at its CSS width
+ * ceil(STRIP_ROW_HEIGHT_CSS × rows × scale + 2 × max(1, scale)) high, where `rows` is what its enabled sections need at its CSS width
  * floor(width / scale) and zoom (overlay-strip.ts). Nothing shrinks automatically: a scaled layout that does not fit
  * hides as a whole. `sections` defaults to every section, which reserves the most rows.
  */

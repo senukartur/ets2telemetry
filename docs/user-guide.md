@@ -15,7 +15,7 @@ Run `ETS2Telemetry-Setup-<version>.exe`, for example `ETS2Telemetry-Setup-0.1.0.
 | Electron's own browser data | `%APPDATA%\ETS2Telemetry Desktop` |
 | The game plugin | `<game folder>\bin\win_x64\plugins\ets2telemetry-plugin.dll` |
 
-When the application starts, it finds Euro Truck Simulator 2 and American Truck Simulator through Steam and copies its game plugin into each game's `plugins` folder while the game is closed. The **Game plugin** card on the Live tab shows the state of each game, lets you choose a game folder by hand and lets you exclude a game ([game plugin setup](plugin-setup.md)).
+When the application starts, it finds Euro Truck Simulator 2 and American Truck Simulator through Steam and copies its game plugin into each game's `plugins` folder while the game is closed. The **Game plugin** panel in **Settings** shows the state of each game, lets you choose a game folder by hand and lets you exclude a game ([game plugin setup](plugin-setup.md)).
 
 ### Windows SmartScreen
 
@@ -107,3 +107,14 @@ Use these steps when the uninstall cannot finish, for example when `%LOCALAPPDAT
 2. In each game folder, open `bin\win_x64\plugins`. Delete `ets2telemetry-plugin.dll` only if it is ETS2Telemetry's: in PowerShell, `Get-FileHash -Algorithm SHA256 -LiteralPath '<path to the file>'` must print one of the checksums that `README.txt` lists, or the checksum in `resources\telemetry-plugin\plugin-manifest.json` of the installed program. Leave every other file.
 3. Delete `%LOCALAPPDATA%\ETS2Telemetry`. This deletes your trip history for good.
 4. If the program is still listed in Windows Settings, uninstall it there. Otherwise delete `%LOCALAPPDATA%\ETS2TelemetryDesktop`, `%APPDATA%\ETS2Telemetry Desktop` and any remaining **ETS2Telemetry Desktop** shortcuts.
+
+
+## Yukon Union desktop navigation (ET-028)
+
+The main window is branded **Yukon Union Telemetry**. Package names, Windows shortcuts and data folders retain their ETS2Telemetry identities. The sidebar opens Live, Journal, Settings and an informational Account and sync placeholder. Its recording words and indicator, and the top bar's connection/plugin/Hard Mode states, stay visible on every screen. Closing the native window still hides to the tray; **Exit** explicitly stops the app.
+
+Change English/Russian from the sidebar language menu or Settings → General. Both use the same saved choice. Game-provided cargo, city, company, truck and trailer names are never translated. General and Units use keyboard-operable segmented choices. Settings includes Overlay (four layout previews and position/scale editing), Overlay sections (all fourteen switches and presets), Game plugin, Data and storage, and About. The working source selector and raw connection diagnostics are under Data. Unsupported show/opacity, autostart and backup controls are marked Planned; database statistics and application version are unavailable rather than invented.
+
+Live keeps every telemetry field and its provenance. Gauge geometry uses current normalized numbers; an oversized reading is clamped only for the drawing, while its exact formatted value remains visible. A stale reading becomes unavailable. Live trip duration/fuel and observed route progress are unavailable in this version. Hard Mode retains its twelve parameter hints, check-again action and accessible right checklist drawer; current settings do not by themselves qualify a trip.
+
+Journal reads one cursor page at a time and updates only on Refresh. Its wide table scrolls horizontally; expected income is separate from unavailable actual list revenue. Opening a trip shows its cargo/route, outcome and recording completeness, four metric tiles, retained Hard Mode evidence, exact money categories and raw detail sections. Back returns to the same list page. The chart covers **only the current sample page**, up to 300 samples; source-monotonic segments break at missing readings/seconds and clock discontinuities. It does not claim whole-trip duration or that a gap was a pause. Raw Samples, Timeline and Completeness tabs remain available, as does JSON export with its existing uninstall warning. Game history recording remains disabled.

@@ -1,3 +1,5 @@
+import {runUiSmoke, runUiReadOnly, UI_CASES} from './ui-observation.mjs';
+import {screen, settingsPanel, waitForStartup} from './ui-navigation.mjs';
 import {HARD_MODE_TARGET, runHardModeSmoke, startHardModeSource, verifyHardModeRun} from './hard-mode-observation.mjs';
 import assert from 'node:assert/strict';
 import path from 'node:path';
@@ -58,6 +60,7 @@ let coldLaunchObservation = null;
 const failure = error => ({name: error.name, message: error.message, stack: error.stack});
 /** The uninstall card of a portable or development copy: the warning, and the not-installed answer to its button. */
 async function verifyUninstallNotInstalled(page, press) {
+  await settingsPanel(page, 'about');
   const warning = await page.getByTestId('uninstall-warning').innerText();
   // An installed copy (the installer lifecycle's installed smokes) would open the confirmation: its button is not pressed.
   if (!press) {
@@ -129,8 +132,9 @@ try {
   assert.equal(process.versions.node, '24.19.0');
   result.playwright = JSON.parse(await readFile(new URL('../../node_modules/playwright-core/package.json', import.meta.url))).version;
   assert.equal(result.playwright, '1.64.0');
-  if (config.scenario === 'telemetry' || config.scenario === 'overlay' || config.scenario === 'lifecycle' || config.scenario === 'recording' || config.scenario === 'soak') telemetrySource = await startLiveSmokeSource(config.checkout);
-  if (config.scenario === 'telemetry') telemetrySourceV1 = await startLiveSmokeSourceV1(config.checkout);
+  if (config.scenario === 'ui' && (!UI_CASES.includes(config.uiCase) || config.mode === 'installed')) throw new Error('INVALID_UI_SHARD');
+  if (config.scenario === 'ui' && config.uiCase !== 'journal' || config.scenario === 'telemetry' || config.scenario === 'overlay' || config.scenario === 'lifecycle' || config.scenario === 'recording' || config.scenario === 'soak') telemetrySource = await startLiveSmokeSource(config.checkout);
+  if (config.scenario === 'telemetry' || config.scenario === 'ui' && ['live', 'overlay'].includes(config.uiCase)) telemetrySourceV1 = await startLiveSmokeSourceV1(config.checkout);
   if (config.scenario === 'hard-mode') hardModeSource = await startHardModeSource(config);
   if (config.scenario === 'recording') recordingSource = await startRecordingSource(config);
   if (config.scenario === 'soak') soakSource = await startSoakSource(config);
@@ -140,6 +144,7 @@ try {
   if (config.scenario === 'plugin') {assertNoGameRunning(); pluginFixture = await buildPluginFixture(config.output); pluginBefore = await snapshotPluginFixture(pluginFixture);}
   // ET-019 PR-7: the history path of the isolated LOCALAPPDATA holds a copy of the newer-schema fixture before the launch.
   if (config.scenario === 'refusal') await placeNewerHistory({config, record: result.refusal = {}});
+  if (config.scenario === 'ui' && config.uiCase === 'journal') {await seedJournalDatabase({config, record: result.uiSeed = {}}); journalTarget = JOURNAL_TARGET;}
   phase('launch-requested');
   application = await electron.launch(launchOptions(config.diagnostics));
   launcher = application.process();
@@ -147,14 +152,13 @@ try {
   await application.context().tracing.start({screenshots: true, snapshots: true});
   tracing = true;
   phase('tracing-started');
-  const {dashboard: window, overlay} = await rendererPages(application).catch(error => {
+  let {dashboard: window, overlay} = await rendererPages(application).catch(error => {
     // Playwright's own view of the windows, read locally without a protocol round trip.
     result.pagesAtRendererPagesFailure = application.windows().map(page => page.url());
     throw error;
   });
   phase('renderer-pages-found');
-  await window.getByText('Telemetry service ready; isolated storage probe verified', {exact: true})
-    .waitFor({state: 'visible', timeout: 10000});
+  await waitForStartup(window);
   phase('dashboard-ready-visible');
   // ET-019 PR-11: recorded, never asserted here; a failed read leaves the paint phases unavailable.
   coldLaunchObservation = await observeColdLaunch(application, window).catch(() => ({error: 'OBSERVATION_FAILED'}));
@@ -210,6 +214,7 @@ try {
     // uninstalling is available only in an installed copy: main answers before any dialog and changes nothing. An installed
     // copy's button is never pressed here; the installer lifecycle's app-assisted scenarios do that through the dialog seam.
     result.uninstallCard = await verifyUninstallNotInstalled(window, config.mode !== 'installed');
+    await screen(window, 'live');
     await window.evaluate(() => globalThis.scrollTo(0, 0));
   }
   result.probesBeforeExit = (await readdir(config.temp)).filter(name => name.startsWith('ets2telemetry-probe-'));
@@ -224,7 +229,7 @@ try {
     // The dashboard is taller than the smoke window, and outside wheel input on a shared desktop can scroll it, also
     // during the renderer stall (compositor scrolling). Return to the top right before each wait that requires the
     // status, speed and fuel lines inside the viewport; the predicates themselves are unchanged.
-    const atTop = () => window.evaluate(() => globalThis.scrollTo(0, 0));
+    const atTop = () => window.locator('.yu-content').evaluate(node => {node.scrollTop = 0;});
     const current = async phase => {
       await atTop();
       const observation = await waitForCurrentTelemetry(window);
@@ -372,8 +377,10 @@ try {
       const read = id => {
         const nodes = document.querySelectorAll(`[data-testid="${id}"]`);
         if (nodes.length !== 1) return undefined;
-        const node = nodes[0], bounds = node.getBoundingClientRect();
-        return getComputedStyle(node).visibility === 'visible' && bounds.width > 0 && bounds.height > 0 && bounds.bottom > 0 && bounds.right > 0 && bounds.top < innerHeight && bounds.left < innerWidth ? node.innerText : undefined;
+        const node = nodes[0], visible = id === 'telemetry-status' ? document.querySelector('[data-testid="shell.status.connection"]') : node;
+        if (!visible) return undefined;
+        const bounds = visible.getBoundingClientRect();
+        return getComputedStyle(visible).visibility === 'visible' && bounds.width > 0 && bounds.height > 0 && bounds.bottom > 0 && bounds.right > 0 && bounds.top < innerHeight && bounds.left < innerWidth ? node.innerText : undefined;
       };
       return /^connected:/.test(read('telemetry-status') ?? '') && read('speed') === 'Speed: 72.0 km/h' && read('fuel') === 'Fuel: 71.0 L';
     }, undefined, {timeout: 10000});
@@ -411,7 +418,7 @@ try {
     const restartRequested = await application.evaluate(({app}) => app.emit('ets2telemetry:diagnostic-service-exit'));
     assert.equal(restartRequested, true, 'Opt-in diagnostic event unavailable');
     result.telemetry.diagnosticCrashRequested = true;
-    await window.getByText(/^(restarting|service-failed):/).waitFor({state: 'visible', timeout: 5000});
+    await window.waitForFunction(() => /^(restarting|service-failed):/.test(globalThis.document.querySelector('[data-testid="telemetry-status"]')?.textContent ?? ''), undefined, {timeout: 5000});
     await current('service-restart'); result.telemetry.serviceRestartRecovered = true;
     result.telemetry.source = telemetrySource.statistics();
     assert.equal(result.telemetry.source.connections, 2, 'Expected one initial source connection and one service-restart connection');
@@ -429,6 +436,24 @@ try {
     await atTop(); await waitForV1NotCurrentLive(window, SYNTHETIC_V1_VALUE_IDS, '^(disconnected|waiting):', 'Speed: unavailable');
     result.telemetry.overlayV1.stopped = await waitForOverlayV1(overlay, SYNTHETIC_V1_OVERLAY_STOPPED);
     result.telemetry.v1DisconnectedHidden = true;
+  }
+  if (config.scenario === 'ui') {
+    await runUiSmoke({application, dashboard: window, overlay, source: telemetrySource, config, record: result.ui = {}});
+    if (config.uiCase === 'settings') {
+      // Same 60-second Job: a normal first run, then an isolated newer-version read-only launch.
+      await application.context().tracing.stop({path: path.join(config.output, 'ui-settings-first-trace.zip')}); tracing = false;
+      await application.close(); assert.equal(launcher.exitCode, 0); assert.equal(launcher.signalCode, null);
+      result.ui.firstLauncherExit = launcher.exitCode;
+      const settingsBytes = '{"format":"ets2telemetry.settings","version":999,"language":"ru","fixture":"future settings retained byte-identically"}';
+      await writeFile(path.join(config.localappdata, 'ETS2Telemetry', 'settings', 'settings.json'), settingsBytes);
+      phase('ui-readonly-launch-requested');
+      application = await electron.launch(launchOptions(config.diagnosticsRestart)); launcher = application.process();
+      await application.context().tracing.start({screenshots: true, snapshots: true}); tracing = true;
+      ({dashboard: window, overlay} = await rendererPages(application)); await waitForStartup(window);
+      await runUiReadOnly({application, dashboard: window, config, record: result.ui, settingsBytes});
+      result.ui.readOnly.windows = await windowSecurity(application);
+      await screen(window, 'live');
+    }
   }
   if (config.scenario === 'hard-mode') await runHardModeSmoke({application, dashboard: window, source: hardModeSource, config, record: result.hardMode = {}});
   if (config.scenario === 'lifecycle') {
@@ -477,7 +502,7 @@ try {
     await application.context().tracing.start({screenshots: true, snapshots: true});
     tracing = true;
     const {dashboard} = await rendererPages(application);
-    await dashboard.getByText('Telemetry service ready; isolated storage probe verified', {exact: true}).waitFor({state: 'visible', timeout: 10000});
+    await waitForStartup(dashboard);
     phase('restart-ready');
     await runJournalSeeded({dashboard, record: result.journal});
     phase('journal-read');
@@ -516,7 +541,7 @@ try {
     application = await electron.launch(launchOptions(config.diagnosticsRestart));
     launcher = application.process(); phase('restart-launch-returned');
     const {dashboard} = await rendererPages(application);
-    await dashboard.getByText('Telemetry service ready; isolated storage probe verified', {exact: true}).waitFor({state: 'visible', timeout: 10000});
+    await waitForStartup(dashboard);
     phase('restart-ready');
     await verifyPluginRestart({dashboard, fixture: pluginFixture, before: afterRunA, record: result.plugin, phase});
     // ET-017 PR-6: "Export diagnostics…" after run B's states and files were verified; it writes only into this run's output.
@@ -526,7 +551,7 @@ try {
   }
   // ET-019 PR-11: Electron's per-process peak working sets of the application open now (the restart run of the two-run
   // scenarios); recorded, never asserted here.
-  result.processMemory = {run: ['lifecycle', 'recording', 'journal', 'plugin'].includes(config.scenario) ? 'restart' : 'first',
+  result.processMemory = {run: ['lifecycle', 'recording', 'journal', 'plugin'].includes(config.scenario) || config.scenario === 'ui' && config.uiCase === 'settings' ? 'restart' : 'first',
     ...await observeProcessMemory(application).catch(() => ({error: 'OBSERVATION_FAILED'}))};
   phase('journey-complete');
   if (config.scenario !== 'lifecycle' && config.scenario !== 'recording' && config.scenario !== 'journal' && config.scenario !== 'plugin' && config.scenario !== 'refusal' && config.scenario !== 'soak') await window.screenshot({path: path.join(config.output, 'ready.png')});
@@ -588,8 +613,20 @@ finally {
     // A recording target logs the same opening and closing codes for its synthetic database (ET-015a PR-3).
     // ET-019 PR-7: the refusal scenario's service never opens a database; its own checks replace the history ones.
     if (config.scenario === 'refusal') await verifyRefusalRun({config, record: result.refusal ??= {}, mainEvents: result.mainEvents, serviceEvents: result.serviceEvents});
-    else result.history = verifyHistoryEvents(result.serviceEvents, telemetrySource && restartRecord ? [true, false] : [true]);
-    assert.ok(![...result.mainEvents, ...result.serviceEvents].some(row =>
+    else result.history = verifyHistoryEvents(result.serviceEvents, telemetrySource && restartRecord ? [true, false] : config.scenario === 'ui' && config.uiCase === 'journal' ? [false] : [true]);
+    const deliberateUiErrors = config.scenario === 'ui' && config.uiCase === 'settings' ? result.mainEvents.filter(row => row.event === 'SETTINGS_WRITE_FAILED') : [];
+    if (config.scenario === 'ui' && config.uiCase === 'settings') {
+      assert.deepEqual(deliberateUiErrors.map(row => row.facts), Array.from({length: 4}, () => ({step: 'target', code: null})));
+      result.ui.saveFailureFacts = deliberateUiErrors.map(row => row.facts);
+      result.ui.readOnly.mainEvents = await diagnosticEvents(config.diagnosticsRestart);
+      result.ui.readOnly.serviceEvents = await diagnosticEvents(path.join(config.diagnosticsRestart, 'service'));
+      result.ui.readOnly.launcherExit = result.launcherExit;
+      for (const name of ['APP_EXIT', 'SERVICE_EXIT']) {const rows = result.ui.readOnly.mainEvents.filter(row => row.event === name); assert.equal(rows.length, 1); assert.equal(rows[0].detail.code, 0);}
+      assert.ok(![...result.ui.readOnly.mainEvents, ...result.ui.readOnly.serviceEvents].some(row => /FAILED|TIMEOUT|UNCAUGHT|UNHANDLED|INVALID|RENDER_PROCESS_GONE/.test(row.event)));
+      verifyHistoryEvents(result.ui.readOnly.serviceEvents, [false]);
+      assert.deepEqual(result.ui.readOnly.mainEvents.filter(row => row.event === 'SETTINGS_FALLBACK').map(row => row.facts), [{state: 'newer-version'}]);
+    }
+    assert.ok(![...result.mainEvents.filter(row => !deliberateUiErrors.includes(row)), ...result.serviceEvents].some(row =>
       /FAILED|TIMEOUT|UNCAUGHT|UNHANDLED|INVALID|RENDER_PROCESS_GONE/.test(row.event)));
     if (config.scenario === 'lifecycle') {
       // Run B wrote to its own diagnostic directory; both runs need the same orderly, clean shutdown.
@@ -662,7 +699,7 @@ finally {
         restartMainEvents: recording.restartMainEvents, restartServiceEvents: recording.restartServiceEvents, simulatorWaitMs: result.failure ? 1000 : 5000});
     } else if (config.scenario === 'hard-mode') await verifyHardModeRun({config, record: result.hardMode});
     else if (config.scenario === 'soak') await verifySoakRun({config, record: result.soak ??= {}, mainEvents: result.mainEvents, serviceEvents: result.serviceEvents});
-    else if (config.scenario !== 'refusal') result.history.file = await verifyHistoryFile();
+    else if (config.scenario !== 'refusal' && !(config.scenario === 'ui' && config.uiCase === 'journal')) result.history.file = await verifyHistoryFile();
   } catch (error) {result.postconditionFailure = failure(error);}
   // A failed run still ends the simulator it started; the Job owns it otherwise.
   if (recordingSource && !result.recording?.simulator) {

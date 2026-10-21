@@ -1,3 +1,4 @@
+import {waitForStartup} from './ui-navigation.mjs';
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
 import {mkdir, readFile, readdir, writeFile} from 'node:fs/promises';
@@ -52,7 +53,6 @@ async function waitForDashboardUnits(page, expected) {
 
 // ET-011a tray lifecycle journey against the isolated synthetic source. The tray icon itself cannot be
 // clicked here: the gated diagnostic tray action calls the same main handlers as the tray menu.
-const READY_TEXT = 'Telemetry service ready; isolated storage probe verified';
 const dashboardUrl = url => {
   if (!url.startsWith('file:')) return false;
   const parsed = new URL(url);
@@ -94,7 +94,7 @@ async function disabledRecording(application, page) {
 }
 
 async function readyDashboard(page) {
-  await page.getByText(READY_TEXT, {exact: true}).waitFor({state: 'visible', timeout: 10000});
+  await waitForStartup(page);
   return waitForCurrentTelemetry(page);
 }
 
@@ -236,7 +236,7 @@ export async function runLifecycleSmoke({application, launcher, dashboard, overl
 /** Run B: the same profile and LOCALAPPDATA start again after the orderly exit. */
 export async function verifyLifecycleRestart({application, record, rendererPages, config}) {
   const {dashboard} = await rendererPages(application);
-  await dashboard.getByText(READY_TEXT, {exact: true}).waitFor({state: 'visible', timeout: 10000});
+  await waitForStartup(dashboard);
   // The saved ETS2 profile applies from the first current reading.
   record.restart = {ready: await waitForDashboardUnits(dashboard, US_DASHBOARD)};
   record.restart.dashboardUnits = {speed: record.restart.ready.speed, fuel: record.restart.ready.fuel};

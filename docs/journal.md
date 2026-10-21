@@ -154,3 +154,10 @@ ET-016 PR-5 exports one trip as `ets2telemetry.trip-export` format version 1; th
 ## Hard Mode (ET-026)
 
 Current journal list/detail records add `isHardMode: boolean` and `hardModeDetails: HardModeDetails | null`, validated across worker/service/main boundaries. Only a qualifying delivered trip shows the Flame `HM` badge; standard/historical/open trips do not acquire it from current settings. Details retain opening/latest assessment, explicit manual delivery and first loss with the original detected value/time. Historical rows show not evaluated. This flag is independent of recording completeness and outcome. See [Hard Mode](hard-mode.md).
+
+
+## Yukon presentation (ET-028)
+
+The sidebar Journal screen preserves explicit Refresh, cursor bounds, filter resets, refusal/empty banners, unmount/late-answer protection and same-page Back. The primary columns remain readable in a horizontally scrolling table. Expected income is not presented as revenue, outcome is separate from recording completeness, and the Sync column is explicitly Later.
+
+Trip header and four hero tiles share one bounded detail result. All original summary fields, precise money categories/currency bases, notes, intervals, timeline, paged samples and export remain available. Unavailable tile values are dashes with small reasons; aggregate durations are not inferred from UTC. The Summary/Samples chart owns just the mounted current sample page (300 maximum), uses source-monotonic elapsed time within each segment and UTC only for labels. Missing speed/seconds, clock changes and backwards/duplicate instants split segments. A later cursor page never connects to an unseen earlier page or claims to be the whole trip.

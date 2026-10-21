@@ -122,8 +122,8 @@ describe('ET-012c strip containment observation', () => {
   const rect = ({left, top, width, height}: Box) => ({left, top, width, height, right: left + width, bottom: top + height});
   // A 1280 x 110 window: the root fills it, the strip row is 1260 wide and three 36 px rows high, and every item is 90 x 36
   // on the first row after a 96 px synthetic tag. `item` moves single sections; `maxWidth` overrides computed maximum widths.
-  function stripDocument({sections = EXPECTED, roots = 1, layout = 'strip', freshness = 'current', root = {left: 0, top: 0, width: 1280, height: 110},
-    row = {left: 10, top: 0, width: 1260, height: 110}, item = {}, truncated = []}: Layout = {}) {
+  function stripDocument({sections = EXPECTED, roots = 1, layout = 'strip', freshness = 'current', root = {left: 0, top: 0, width: 1280, height: 116},
+    row = {left: 10, top: 0, width: 1260, height: 116}, item = {}, truncated = []}: Layout = {}) {
     const node = (testId: string, box: Box, extra: Record<string, unknown> = {}) => ({testId, className: testId === 'overlay-tag-origin' ? 'overlay-tag' : 'overlay-item',
       getAttribute: (name: string) => name === 'data-testid' ? testId : null, getBoundingClientRect: () => rect(box), ...extra});
     const nodes = sections.map((id, index) => node(`overlay-section-${id}`, item[id] ?? {left: 120 + index * 100, top: 1, width: 90, height: 36},
@@ -136,7 +136,7 @@ describe('ET-012c strip containment observation', () => {
   }
   async function observeStrip(layout: Layout = {}, expected: string[] = EXPECTED) {
     const {stripLayoutObservation} = await import(observationModule);
-    const viewport = layout.viewport ?? {innerWidth: 1280, innerHeight: 110};
+    const viewport = layout.viewport ?? {innerWidth: 1280, innerHeight: 116};
     // The exact-state form also protects the callback from requiring module closures; the JSON round trip stands in for
     // Playwright's serialization, which returns plain objects of this realm.
     return JSON.parse(JSON.stringify(runInNewContext(`(${stripLayoutObservation.toString()})(expected)`, {expected: {sections: expected},
@@ -146,15 +146,15 @@ describe('ET-012c strip containment observation', () => {
   it('names the sections the synthetic checkpoint fixture shows in the strip', async () => {
     const {STRIP_SMOKE_SECTIONS, STRIP_SMOKE_WINDOW} = await import(observationModule);
     expect(STRIP_SMOKE_SECTIONS).toEqual(EXPECTED);
-    expect(STRIP_SMOKE_WINDOW).toEqual({innerHeight: 110, minWidth: 480, maxWidth: 1280});
+    expect(STRIP_SMOKE_WINDOW).toEqual({innerHeight: 116, minWidth: 480, maxWidth: 1280});
   });
   it('reports every shown section inside the window and the strip row, every item capped, and records truncation and rows', async () => {
-    expect(await observeStrip({truncated: ['cargo']})).toEqual({viewport: {innerWidth: 1280, innerHeight: 110}, sections: EXPECTED,
+    expect(await observeStrip({truncated: ['cargo']})).toEqual({viewport: {innerWidth: 1280, innerHeight: 116}, sections: EXPECTED,
       outside: [], uncapped: [], truncated: ['cargo'], rows: 1});
   });
   it.each([
-    {name: 'below the window', item: {'game-time': {left: 120, top: 110, width: 90, height: 36}}},
-    {name: 'partly below the window', item: {'game-time': {left: 120, top: 80, width: 90, height: 36}}},
+    {name: 'below the window', item: {'game-time': {left: 120, top: 117, width: 90, height: 36}}},
+    {name: 'partly below the window', item: {'game-time': {left: 120, top: 81, width: 90, height: 36}}},
     {name: 'past the right edge', item: {'game-time': {left: 1250, top: 1, width: 90, height: 36}}},
     {name: 'outside only the strip row', row: {left: 10, top: 0, width: 1260, height: 38}, item: {'game-time': {left: 120, top: 37, width: 90, height: 36}}},
     {name: 'with an empty box', item: {'game-time': {left: 120, top: 1, width: 0, height: 36}}}
@@ -190,12 +190,12 @@ describe('ET-012c strip containment observation', () => {
     // Windows limits a window to the screen size: on a 1024-wide hosted runner screen the hidden overlay, created
     // 1280 x 110 and never placed without a game window, is 1024 x 110 (CI run 38878781715).
     const {verifyStripLayout} = await import(observationModule);
-    const narrow = await observeStrip({viewport: {innerWidth: 1024, innerHeight: 110}});
+    const narrow = await observeStrip({viewport: {innerWidth: 1024, innerHeight: 116}});
     expect(verifyStripLayout(narrow)).toBe(narrow);
-    expect(verifyStripLayout({...narrow, viewport: {innerWidth: 480, innerHeight: 110}})).toBeTruthy();
+    expect(verifyStripLayout({...narrow, viewport: {innerWidth: 480, innerHeight: 116}})).toBeTruthy();
     for (const viewport of [{innerWidth: 1024, innerHeight: 74}, {innerWidth: 1024, innerHeight: 111}, {innerWidth: 1024, innerHeight: 146}])
       expect(() => verifyStripLayout({...narrow, viewport}), JSON.stringify(viewport)).toThrow('The strip overlay window must have its reserved size');
-    for (const viewport of [{innerWidth: 479, innerHeight: 110}, {innerWidth: 1281, innerHeight: 110}])
+    for (const viewport of [{innerWidth: 479, innerHeight: 116}, {innerWidth: 1281, innerHeight: 116}])
       expect(() => verifyStripLayout({...narrow, viewport}), JSON.stringify(viewport)).toThrow('The strip overlay window width must lie between 480 and 1280');
     // Containment still applies to the narrowed window.
     expect(() => verifyStripLayout({...narrow, outside: ['game-time']})).toThrow('Enabled strip sections lie outside the overlay window');

@@ -1,33 +1,35 @@
-/* Overlay only (ET-008, layouts ET-012a). No Tailwind, no shadcn base layer, no web fonts and no backdrop-filter:
+@import "@fontsource-variable/onest";
+@import "./shell/overlay-tokens.css";
+/* Overlay only (ET-008, layouts ET-012a). No Tailwind, no shadcn base layer, bundled offline font and no backdrop-filter:
    the window stays transparent and only each layout's surface paints. */
 html:has(.overlay-body) { background: transparent; }
 .overlay-body { margin: 0; background: transparent; overflow: hidden; pointer-events: none; user-select: none; }
-.overlay { box-sizing: border-box; width: 100vw; height: 100vh; display: flex; overflow: hidden; color: #fff; background: transparent; font: 14px/1.3 system-ui, sans-serif; font-variant-numeric: tabular-nums; }
+.overlay { box-sizing: border-box; width: 100vw; height: 100vh; display: flex; overflow: hidden; color: var(--yu-ov-text); background: transparent; font: 14px/1.3 'Onest Variable', 'Onest', system-ui, sans-serif; font-variant-numeric: tabular-nums; }
 .overlay *, .overlay *::before, .overlay *::after { box-sizing: border-box; }
-.overlay-surface { background: rgba(10, 17, 24, .88); border: 1px solid rgba(255, 255, 255, .4); border-radius: 8px; }
+.overlay-surface { background: var(--yu-ov-panel); border: 1px solid var(--yu-ov-border); border-radius: var(--yu-ov-radius); }
 .overlay-surface:empty { display: none; }
-.overlay-icon { flex: none; color: #9fb3c8; }
+.overlay-icon { flex: none; color: var(--yu-ov-icon); }
 .overlay-value-group { display: inline-flex; align-items: baseline; gap: 4px; white-space: nowrap; min-width: 0; }
 .overlay-value { font-weight: 600; }
-.overlay-unit, .overlay-detail, .overlay-caption { flex: none; color: #c8d3de; font-size: 12px; }
+.overlay-unit, .overlay-detail, .overlay-caption { flex: none; color: var(--yu-ov-muted); font-size: 12px; }
 .overlay-caption { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
 /* Only the strip has no labels, so only there does the SDK mean need its caption. */
 .overlay:not(.overlay-strip) .overlay-caption { display: none; }
-.overlay-label { display: inline-flex; flex: none; align-items: center; gap: 4px; color: #e2e8ef; font-size: 12px; white-space: nowrap; }
+.overlay-label { display: inline-flex; flex: none; align-items: center; gap: 4px; color: var(--yu-ov-text); font-size: 12px; white-space: nowrap; }
 .overlay-source { font-size: 12px; font-weight: 600; white-space: nowrap; }
 .overlay-tag { display: inline-flex; align-items: center; gap: 3px; padding: 1px 6px; border-radius: 4px; font-size: 11px; font-weight: 600; white-space: nowrap; background: rgba(255, 255, 255, .16); }
-.overlay-tag-paused { background: rgba(214, 158, 46, .55); }
-.overlay-tag-no-signal { background: rgba(197, 48, 48, .6); }
+.overlay-tag-paused { background: rgba(90, 68, 33, .95); }
+.overlay-tag-no-signal { background: rgba(91, 42, 39, .95); }
 /* Not current: placeholders and icons are dimmed; there are no last-known values to dim (N6). */
 .overlay.is-dim .overlay-value, .overlay.is-dim .overlay-unit, .overlay.is-dim .overlay-icon, .overlay.is-dim .overlay-ring { opacity: .5; }
 
-/* Strip (ET-012c): 36 px rows at the top centre of a window main sized for the enabled sections (overlay-strip.ts, whose
+/* Strip (ET-012c): 38 px rows at the top centre of a window main sized for the enabled sections (overlay-strip.ts, whose
    constants these rules must match). Items wrap whole onto as many rows as they need; each is capped by an inline
    max-width, and a longer value ends in an ellipsis. The surface takes its content height at the top of the window; the
    unused reserved rows stay transparent. */
 .overlay-strip { justify-content: center; align-items: flex-start; }
 .overlay-strip-row { display: flex; flex-wrap: wrap; align-content: flex-start; justify-content: center; column-gap: 14px; max-width: 100%; max-height: 100%; padding: 0 12px; overflow: hidden; }
-.overlay-strip-row > * { height: 36px; }
+.overlay-strip-row > * { height: 38px; }
 .overlay-strip-row > .overlay-tag { height: auto; align-self: center; }
 .overlay-strip .overlay-item { min-width: 0; overflow: hidden; }
 .overlay-strip .overlay-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
@@ -35,7 +37,7 @@ html:has(.overlay-body) { background: transparent; }
 .overlay-item { display: inline-flex; align-items: center; gap: 6px; }
 .overlay-group-start { position: relative; padding-left: 15px; }
 .overlay-group-start::before { content: ''; position: absolute; left: 0; top: 8px; bottom: 8px; width: 1px; background: rgba(255, 255, 255, .3); }
-.overlay-strip .overlay-value { font-size: 18px; }
+.overlay-strip .overlay-value { font-size: 22px; font-weight: 800; }
 
 /* Card, cluster panel and HUD (ET-012d): fixed-height rows, one per enabled section, in a window main sized for them
    (overlay-rows.ts, whose constants these rules must match). Each row centres its content and clips what does not fit,
@@ -48,8 +50,8 @@ html:has(.overlay-body) { background: transparent; }
 .overlay-card-body { width: 100%; max-height: 100%; padding: 10px 14px; overflow: hidden; }
 .overlay-card-header { display: flex; flex-wrap: nowrap; align-items: center; gap: 6px; height: 20px; margin-bottom: 6px; overflow: hidden; }
 .overlay-rows { margin: 0; }
-.overlay-row { display: flex; align-items: center; gap: 10px; height: 24px; padding: 0; border-top: 1px solid rgba(255, 255, 255, .12); overflow: hidden; }
-.overlay-row dt { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #e2e8ef; font-size: 12px; }
+.overlay-row { display: flex; align-items: center; gap: 10px; height: 24px; padding: 0; border-top: 1px solid var(--yu-ov-border); overflow: hidden; }
+.overlay-row dt { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--yu-ov-text); font-size: 12px; }
 .overlay-row dt .overlay-icon { vertical-align: -2px; margin-right: 6px; }
 .overlay-row dd { flex: 0 1 auto; min-width: 0; max-width: 72%; margin: 0; overflow: hidden; }
 .overlay-row .overlay-value-group, .overlay-panel-row .overlay-value-group { display: flex; justify-content: flex-end; max-width: 100%; }
@@ -59,16 +61,16 @@ html:has(.overlay-body) { background: transparent; }
 /* Cluster: bottom left, a round speed gauge with the RPM ring and gear badge, and a side panel. */
 .overlay-cluster { align-items: flex-end; }
 .overlay-cluster-body { display: flex; align-items: flex-end; gap: 10px; max-width: 100%; max-height: 100%; }
-.overlay-gauge { position: relative; flex: none; width: 200px; height: 200px; border-radius: 50%; background: rgba(10, 17, 24, .88); border: 1px solid rgba(255, 255, 255, .4); }
+.overlay-gauge { position: relative; flex: none; width: 200px; height: 200px; border-radius: 50%; background: var(--yu-ov-panel); border: 1px solid var(--yu-ov-border); }
 .overlay-ring { position: absolute; inset: 6px; width: 186px; height: 186px; }
 .overlay-ring-track { fill: none; stroke: rgba(255, 255, 255, .15); stroke-width: 6; }
-.overlay-ring-value { fill: none; stroke: #4fb3f6; stroke-width: 6; stroke-linecap: round; }
+.overlay-ring-value { fill: none; stroke: var(--yu-ov-accent); stroke-width: 6; stroke-linecap: round; }
 .overlay-gauge-centre { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; }
 .overlay-gauge-speed .overlay-value-group { flex-direction: column; align-items: center; gap: 0; }
 .overlay-gauge-speed .overlay-value { font-size: 40px; line-height: 1.05; }
 .overlay-gauge-gear { padding: 1px 10px; border-radius: 6px; background: rgba(255, 255, 255, .16); }
 .overlay-gauge-gear .overlay-value { font-size: 16px; }
-.overlay-gauge-rpm .overlay-value { font-size: 12px; font-weight: 400; color: #c8d3de; }
+.overlay-gauge-rpm .overlay-value { font-size: 12px; font-weight: 400; color: var(--yu-ov-muted); }
 /* The panel takes its content height, which the window reserves; ET-012a's 200 px cap clipped its last rows. */
 .overlay-panel { display: flex; flex: 1 1 auto; flex-direction: column; gap: 3px; min-width: 0; max-width: 230px; padding: 8px 10px; overflow: hidden; font-size: 13px; }
 .overlay-panel-tags { display: flex; flex: none; flex-wrap: nowrap; align-items: center; gap: 6px; height: 18px; overflow: hidden; }
@@ -88,3 +90,24 @@ html:has(.overlay-body) { background: transparent; }
    can see and grab it over the game. Main makes the window movable and interactive only while it shows it for editing;
    in driving mode nothing here receives input. No hint text: the dashboard explains the controls. */
 .overlay.is-editing { pointer-events: auto; cursor: move; app-region: drag; -webkit-app-region: drag; outline: 2px dashed rgba(79, 179, 246, .95); outline-offset: -2px; background: rgba(79, 179, 246, .14); }
+
+/* Card hero occupies exactly the 24px rows reserved for its enabled speed/gear/RPM parts. */
+.overlay-card-hero {display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);grid-auto-rows:minmax(0,1fr);column-gap:10px;align-items:center;overflow:hidden}
+.overlay-card-hero>div {min-width:0;max-height:100%;overflow:hidden}
+.overlay-card-speed {grid-column:1;grid-row:1/span 2}
+.overlay-card-speed .overlay-value-group {display:flex;flex-direction:column;align-items:flex-start;gap:0}
+.overlay-card-speed .overlay-value {font-size:40px;font-weight:800;line-height:1.05}
+.overlay-card-gear {grid-column:2;grid-row:1;font-size:20px}
+.overlay-card-gear .overlay-value {font-size:22px}
+.overlay-card-rpm {grid-column:2;grid-row:2;color:var(--yu-ov-muted)}
+.overlay-card-hero[data-count="2"] .overlay-card-speed .overlay-value {font-size:28px}
+.overlay-card-hero[data-count="1"] .overlay-card-speed .overlay-value {font-size:18px}
+.overlay-card-hero[data-count="1"] .overlay-card-speed .overlay-value-group {flex-direction:row;align-items:baseline;gap:4px}
+.overlay-card-hero[data-count="1"] .overlay-card-rpm,.overlay-card-hero[data-count="1"] .overlay-card-gear {grid-column:1/span 2;grid-row:1}
+.overlay-rpm-track {stroke-width:3}
+.overlay-ring-value {stroke-width:3}
+
+.overlay-card-hero[data-speed="false"] {grid-template-columns:minmax(0,1fr)}
+.overlay-card-hero[data-speed="false"] .overlay-card-gear,.overlay-card-hero[data-speed="false"] .overlay-card-rpm {grid-column:1}
+.overlay-card-gear .overlay-value {line-height:1.05}
+.overlay-card-hero[data-count="1"] .overlay-card-gear .overlay-value {font-size:18px}
