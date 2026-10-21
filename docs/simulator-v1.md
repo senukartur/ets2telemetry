@@ -1,8 +1,8 @@
-# Synthetic protocol v1 simulator
+# Protocol v1 simulator and CAP-01 replay
 
-ET-005b adds a deterministic [protocol v1](protocol/v1.md) producer model beside the unchanged [v0 simulator](simulator-v0.md). It is a Node test tool, independent of Electron and the SCS SDK. It opens no database, writes no history, discovery or service-policy file, calls no SDK function and emits only synthetic origins. The desktop application still speaks v0. Nothing here establishes game, TruckersMP, display or performance behavior.
+ET-005b adds a deterministic [protocol v1](protocol/v1.md) producer model beside the unchanged [v0 simulator](simulator-v0.md). It is a Node test tool, independent of Electron and the SCS SDK. It opens no database, writes no history, discovery or service-policy file, calls no SDK function and emits only synthetic or replay origins. The desktop application consumes v1 through the separately implemented [v1 ingestion](telemetry-service-v1.md). Nothing here establishes game, TruckersMP, display or performance behavior.
 
-PR-1 provides deterministic replay. PR-2 serves the same model on a real named pipe, reactively for any contract consumer or in lockstep with client and wire fault injection ([below](#named-pipe-serving)). Replaying sanitized CAP-01 callback sequences (PR-3) is a separate pull request.
+PR-1 provides deterministic replay. PR-2 serves the same model on a real named pipe, reactively for any contract consumer or in lockstep with client and wire fault injection ([below](#named-pipe-serving)). PR-3 imports minimized CAP-01 callback sequences with provenance; see [CAP-01 replay](#cap-01-replay-october-21-2026).
 
 From the repository root, using the [pinned toolchain](setup.md):
 
@@ -46,7 +46,7 @@ A scenario file is strict JSON of at most 2 MiB, read once through the v0 simula
  "steps": [...], "transport": [...]}
 ```
 
-- `origin` is `synthetic` with `provenance: null`. `game` is always rejected (CD-4). `replay` with CAP-01 provenance is added by PR-3.
+- `origin` is `synthetic` with `provenance: null` for authored scenarios. CAP0-derived scenarios carry strict provenance and have `replay` origin for game captures or `synthetic` for synthetic captures. `game` is always rejected (CD-4).
 - `source.gameplayEvents`: `registered` or `not-supported` (no gameplay steps, no gameplay types in welcome). `source.currency`: `unknown` or `sdk-documented`, which uses EUR from `scssdk_telemetry_eut2.h` for ETS2 and USD from `scssdk_telemetry_ats.h` for ATS (CD-9, D11). `source.gameMode`: `unknown` (OD-3: mode unknown, no `source.gameMode` type) or `synthetic-detection`, which allows `gameMode` steps (CD-8, D9 only). `startEventSeq` above 1 is a synthetic affordance for exhaustion: [1, start) counts as acknowledged and committed.
 - At most 1,000 steps in total, `atMs` from 0 to 86,400,000 and ordered within each array, `repeat` and `count` at most 1,000, at most 255 attributes per callback, and at most 20,000 transcript messages per replay.
 
@@ -184,3 +184,33 @@ The source soak runs under `BoundedProcess.RunExtended` through `scripts/ci/Invo
 ## Pending
 
 Real-game event rates against the v1 bounds; the native v1 endpoint in a running game; profile change, train crossing, weigh station, special jobs and owned trailers (synthetic only here); QPC behavior across sleep and real UTC changes; second-user and remote rejection (Node pipes are not DACL or peer-authentication evidence); the real transactional insert and crash recovery (ET-013/ET-015a); trip outcomes from a running game and their recording (ET-015); TruckersMP detection. There is no automated differential test between this TypeScript model and the native store, nor between the Node pipe server and the native endpoint; ET-006b PR-1 consumes the reactive server with the desktop's `V1Ingestion` in tests only (`v1-ingestion-pipe.test.ts` and the storage suite), including an ACK still in flight at a disconnect (`v1-durable-delivery.test.ts`, `v1-ingestion.test.ts`); the running application does not consume v1 until ET-006b PR-3.
+
+## CAP-01 replay (October 21, 2026)
+
+The owner approved CD-7 on October 21: only minimized derived fixtures may be committed. Original captures and sanitized exports stay local. The five derived scenarios and hand-authored source-order oracles live under [tests/fixtures/simulator-v1/cap01](../tests/fixtures/simulator-v1/cap01), with a separate manifest. Existing synthetic fixture bytes and expectations are unchanged.
+
+```powershell
+npm run build --workspace @ets2telemetry/telemetry-simulator
+node tools/telemetry-simulator/dist/cli.cjs import-cap0 <sanitized-export-directory> --run cap01-run8 --out <new-scenario.json>
+node tools/telemetry-simulator/dist/cli.cjs replay-v1 tests/fixtures/simulator-v1/cap01/cap01-run9.json
+node tools/telemetry-simulator/dist/cli.cjs smoke-v1 tests/fixtures/simulator-v1/cap01/cap01-run8.json --scale 0 --reactive
+npm test -- tests/unit/simulator-v1-cap0-import.test.ts tests/unit/simulator-v1-cap0-replay.test.ts tests/unit/v1-ingestion-pipe.test.ts
+```
+
+The importer reads three fixed filenames through bounded handles: export and manifest at most 1 MiB each, packets at most 20 MiB, 4,096 newline-terminated records, 128 KiB per wrapper line, and at most 998 complete callback envelopes. It requires strict JSON and UTF-8, a sanitized schema-1 export with raw-integrity verification, a complete manifest, matching packet bytes/SHA-256, source/header/count/end consistency, ordered receipts, and the unchanged CAP0 packet and stream validators. Loss packets, dropped/discarded/unsent data, partial envelopes, unsupported SDK versions/currency, unavailable callback times/identifiers/names, and unrepresentable identifiers or lifecycle callbacks fail closed. Split envelopes must have identical callback context and list metadata; their ordered observations are assembled before conversion. Historical run 2 predates manifest flowControl, so that field is optional. The input is never rewritten and output creation refuses an existing file. Import errors never echo source content.
+
+A replay-only `capture` step retains the typed CAP0 observations (including indexes, vectors, unavailable reasons/details and empty strings), callback group/id, envelope order, game minutes/simulation and clock changes. Callback monotonic times are rebased to 1 ms at the first callback and retain exact decimal nanoseconds; integer `atMs` is their ceiling for scheduling. Occurrences add the simulator's source-clock base, preserving sub-millisecond order (run 9's start/regression are 30,100 ns apart). Source boundary orders are rebased against the open boundary while preserving differences. CAP0 configurationRevision is retained as evidence metadata; v1 configuration revisions are generated by the v1 adapter's D13 rules from zero and are not a claim about v0 revisions. Game-clock IDs are first-appearance tokens, then scenario-seeded identities on the wire. Occurrence UTC is not-observed because CAP0 has no callback UTC; generated capture UTC labels remain simulator labels. No channel frames or pre-attachment state are invented. Publishing a context step is a simulator test publication, not observed frame timing or native callback-fidelity evidence.
+
+Scalar mapping follows the existing v1 adapter. Indexed observations stay in the fixture but do not override scalar fields (native v1_scan); unsupported/vector types cannot satisfy scalar fields and become invalid there. Unused configuration attributes remain typed evidence but produce no additional v1 records. Localized display names and every other non-allowlisted string value, even in ignored configurations, become first-appearance name-N tokens; plates use plate-N. Empty and unavailable strings stay distinct. Only documented game identifier fields retain restricted ASCII game IDs. Paths, source identities, receipt times, SDK frame timestamps, window/display geometry and unrelated binary hashes are absent. Game truck geometry in typed attributes is game data, not host display geometry.
+
+Provenance includes converter/schema identity, sanitized packet SHA-256, recomputable source-step SHA-256, zero-loss/order declarations, review reference, SDK/currency source, and a narrow operator/build ledger. Mode/display labels and the run 8/9 game version are operator evidence, never SDK detection. Known plugin hashes/build commits come from the CAP-01 coordinator ledger; the original manifests' sourceCommit is null. Unrecognized run labels carry unknown operator/build metadata. SHA-256 detects mutation; it does not authenticate evidence or replace independent source review. Only transport steps may be added without changing the hashed source steps.
+
+| Run | Envelopes | Observed sequence retained |
+| --- | --- | --- |
+| 2 | 69 | Late attach, delivery, fines and an unannounced game-time jump (sleep label from owner) |
+| 4 | 71 | ATS startup, fines before/during a job, paused delivery before clear |
+| 7 | 56 | ATS TruckersMP operator label, running toll, paused delivery before clear |
+| 8 | 29 | Late attach; cargo-market accept/pickup differs only in cargo.loaded; paused ferry; unlocated time jumps |
+| 9 | 54 | No pre-save job configuration; clear/re-send; start on old clock followed by regression; clear before cancellation |
+
+The source-order expectations cite the independently reviewed O1–O11 observations in [CAP-01a validation](validation/cap-01a.md). They are finite observations, not universal rules: run 2's configured-to-delivered minute difference is 635 while delivery duration is 636. They establish neither trip accounting nor inferred causes of revenue differences. All five scenarios are checked through deterministic replay, lockstep pipes and the production V1Ingestion consumer over reactive pipes, with an isolated in-memory durable sink. Existing CAP-01 gaps (fuel/odometer channels, pre-attachment job state, profile/train/weigh-station/special-job/owned-trailer cases and other recorded gaps) remain explicit; no new game sessions or compatibility claims follow.

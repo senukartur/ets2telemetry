@@ -1,0 +1,6 @@
+# Minimized CAP-01-derived replay corpus; independent expectations
+cap01-run2
+cap01-run4
+cap01-run7
+cap01-run8
+cap01-run9

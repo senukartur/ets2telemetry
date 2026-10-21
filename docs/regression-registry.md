@@ -218,6 +218,8 @@ Columns:
 | `tests/unit/settings-store.test.ts` | Node unit (Vitest) | REG-017 | R, F | ET-011b (#56) | PR (tests job, `npm test`) | regression |
 | `tests/unit/shutdown-sequence.test.ts` | Node unit (Vitest) | REG-011, REG-012 | R, T | ET-011a (#52); ET-038 | PR (tests job, `npm test`) | regression |
 | `tests/unit/simulator-v0.test.ts` | Node unit (Vitest) | REG-003 | R | ET-005a (#11) | PR (tests job, `npm test`) | gap |
+| `tests/unit/simulator-v1-cap0-import.test.ts` | Node unit (Vitest) | REG-008, REG-009, REG-010 | R, F | ET-005b PR-3 | PR (tests job, `npm test`) | — |
+| `tests/unit/simulator-v1-cap0-replay.test.ts` | Node unit/integration (Vitest, real pipes) | REG-001, REG-002, REG-008, REG-009 | R, F | ET-005b PR-3 | PR (tests job, `npm test`) | — |
 | `tests/unit/simulator-v1-faults.test.ts` | Node unit (Vitest) | REG-005, REG-010 | R, F | ET-005b (#61) | PR (tests job, `npm test`) | — |
 | `tests/unit/simulator-v1-pipe.test.ts` | Node unit (Vitest) | REG-003, REG-011 | R, F | ET-005b (#61) | PR (tests job, `npm test`) | — |
 | `tests/unit/simulator-v1-reactive.test.ts` | Node unit (Vitest) | REG-011 | F | ET-005b (#61) | PR (tests job, `npm test`) | ACK |
@@ -379,3 +381,5 @@ Claude C1 regressions: real-worker production delivery holds both opening and de
 Review R4/R5: the seven-case real-worker reader/monitor/FIFO matrix now crosses production `recorderClient`, with at least two successful passing writes while positive trips remain open. Both app journeys require two distinct persisted passing observations before positive delivery. Ordered observer publications update trip/journal/export latest across UTC rollback/restoration, while numerically newer frozen captures preserve that later publication and original first loss (`hard-mode.test.ts`, `hard-mode-integrity.test.ts`, domain unit test).
 
 Claude2 display-lifetime regression: `tests/unit/hard-mode-service-status.test.ts` validates the private relative-lifetime/strict assessment-versus-trip envelope, aged proof, repeated trip posts, absent further messages, UTC steps, genuine new publications and retirement/malformed metadata. `hard-mode-reader.test.ts` retains read-completion and post-bind age in remaining lifetime; `main-boundaries.test.ts` exercises actual IPC expiry and service restart/old-child refusal. Renderer/preload/native/SQL contracts are unchanged.
+
+ET-005b PR-3 (October 21, 2026): five minimized CAP-01-derived scenarios add observed callback-order/value protection for REG-001/002/008/009, checked against source-authored expectations and production V1Ingestion on actual pipes. The cap01 manifest is separate from the frozen synthetic corpus. No unavailable channel, native callback timing, trip/storage or new game result is inferred; CAP-01 gaps remain recorded in its validation.

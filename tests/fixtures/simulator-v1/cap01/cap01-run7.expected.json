@@ -1,0 +1,121 @@
+{
+  "scenario": "cap01-run7",
+  "authoredFrom": [
+    "docs/validation/cap-01a.md O1–O11; October 13/14 independent observation reviews",
+    "October 21, 2026 independent read-only CAP0 source audit; v1 D12/D13 callback projection"
+  ],
+  "envelopes": 56,
+  "coverage": [
+    {
+      "envelope": 1,
+      "event": "1",
+      "type": "job.cleared"
+    },
+    {
+      "envelope": 6,
+      "event": "2",
+      "type": "truck.configured"
+    },
+    {
+      "envelope": 18,
+      "event": "3",
+      "type": "timers.restart"
+    },
+    {
+      "envelope": 19,
+      "event": "4",
+      "type": "simulation.started"
+    },
+    {
+      "envelope": 20,
+      "event": "5",
+      "type": "simulation.paused"
+    },
+    {
+      "envelope": 21,
+      "event": "6",
+      "type": "simulation.started"
+    },
+    {
+      "envelope": 22,
+      "event": "7",
+      "type": "simulation.paused"
+    },
+    {
+      "envelope": 23,
+      "event": "8",
+      "type": "job.configured"
+    },
+    {
+      "envelope": 24,
+      "event": "9",
+      "type": "truck.configured"
+    },
+    {
+      "envelope": 26,
+      "event": "10",
+      "type": "trailer.configured"
+    },
+    {
+      "envelope": 36,
+      "event": "11",
+      "type": "simulation.started"
+    },
+    {
+      "envelope": 37,
+      "event": "12",
+      "type": "simulation.paused"
+    },
+    {
+      "envelope": 38,
+      "event": "13",
+      "type": "simulation.started"
+    },
+    {
+      "envelope": 39,
+      "event": "14",
+      "type": "player.tollgate.paid"
+    },
+    {
+      "envelope": 40,
+      "event": "15",
+      "type": "simulation.paused"
+    },
+    {
+      "envelope": 41,
+      "event": "16",
+      "type": "simulation.started"
+    },
+    {
+      "envelope": 42,
+      "event": "17",
+      "type": "simulation.paused"
+    },
+    {
+      "envelope": 43,
+      "event": "18",
+      "type": "job.delivered"
+    },
+    {
+      "envelope": 44,
+      "event": "19",
+      "type": "job.cleared"
+    },
+    {
+      "envelope": 45,
+      "event": "20",
+      "type": "truck.configured"
+    },
+    {
+      "envelope": 47,
+      "event": "21",
+      "type": "trailer.cleared"
+    }
+  ],
+  "ledger": {
+    "committedThroughEventSeq": "21",
+    "committedEvents": 21,
+    "committedGapMarkers": "0",
+    "duplicates": 0
+  }
+}

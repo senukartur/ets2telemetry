@@ -1,0 +1,5336 @@
+{
+  "format": "ets2telemetry-simulator-v1",
+  "schemaVersion": 1,
+  "id": "cap01-run8",
+  "purpose": "Minimized CAP0 callback replay; no observed channel samples or inferred job state",
+  "reg": [
+    "REG-001",
+    "REG-002",
+    "REG-008",
+    "REG-009"
+  ],
+  "origin": "replay",
+  "game": "ets2",
+  "seed": "cap01-run8",
+  "provenance": {
+    "converter": "cap0-v1-1",
+    "run": "cap01-run8",
+    "inputOrigin": "game",
+    "packetsSha256": "1dfab91e0421e59bd8014a4fed02db05110354fbde3fa34c621c50290a22df8f",
+    "stepsSha256": "9de4d676249da48047b103961b5e742ce49da7bf45e3016f7f6cbee0f777430a",
+    "envelopes": 29,
+    "orderingComplete": true,
+    "lossFree": true,
+    "review": "docs/validation/cap-01a.md#expectation-updates",
+    "operator": {
+      "mode": "single-player",
+      "display": "windowed",
+      "gameVersion": "1.61.1.1s"
+    },
+    "build": {
+      "pluginSha256": "b03a6c79e9be958e5f6f2be67eabbe2c7506ef13b43b543b3db131928facf113",
+      "sourceCommit": "aa67956",
+      "source": "coordinator-ledger"
+    }
+  },
+  "source": {
+    "versions": {
+      "telemetryApi": {
+        "major": 1,
+        "minor": 1
+      },
+      "gameTelemetry": {
+        "major": 1,
+        "minor": 20
+      },
+      "sdkArchive": "scs-sdk-1.15"
+    },
+    "gameplayEvents": "registered",
+    "currency": "sdk-documented",
+    "gameMode": "unknown"
+  },
+  "steps": [
+    {
+      "action": "capture",
+      "atMs": 1,
+      "data": {
+        "attributes": {
+          "count": 0,
+          "expected": false,
+          "final": true,
+          "first": 0,
+          "omittedLowerBound": 0,
+          "present": false,
+          "terminated": true,
+          "total": 0
+        },
+        "callback": {
+          "group": "lifecycle",
+          "id": {
+            "available": true,
+            "value": "simulation.paused"
+          }
+        },
+        "callbackMonotonicNs": {
+          "available": true,
+          "value": "1000000"
+        },
+        "configurationRevision": "5",
+        "droppedBefore": "0",
+        "envelopeSeq": "1",
+        "gameTime": {
+          "clockId": "7f4a4539-16b7-e86a-da3f-0d2214ca8392",
+          "minutes": {
+            "available": true,
+            "value": "251375"
+          }
+        },
+        "observations": [],
+        "sharedBoundaryOrder": "86329",
+        "simulation": "paused"
+      }
+    },
+    {
+      "action": "capture",
+      "atMs": 29897,
+      "data": {
+        "attributes": {
+          "count": 0,
+          "expected": false,
+          "final": true,
+          "first": 0,
+          "omittedLowerBound": 0,
+          "present": false,
+          "terminated": true,
+          "total": 0
+        },
+        "callback": {
+          "group": "lifecycle",
+          "id": {
+            "available": true,
+            "value": "simulation.started"
+          }
+        },
+        "callbackMonotonicNs": {
+          "available": true,
+          "value": "29896125400"
+        },
+        "configurationRevision": "5",
+        "droppedBefore": "0",
+        "envelopeSeq": "2",
+        "gameTime": {
+          "clockId": "7f4a4539-16b7-e86a-da3f-0d2214ca8392",
+          "minutes": {
+            "available": true,
+            "value": "251375"
+          }
+        },
+        "observations": [],
+        "sharedBoundaryOrder": "89736",
+        "simulation": "running"
+      }
+    },
+    {
+      "action": "capture",
+      "atMs": 68855,
+      "data": {
+        "attributes": {
+          "count": 0,
+          "expected": false,
+          "final": true,
+          "first": 0,
+          "omittedLowerBound": 0,
+          "present": false,
+          "terminated": true,
+          "total": 0
+        },
+        "callback": {
+          "group": "lifecycle",
+          "id": {
+            "available": true,
+            "value": "simulation.paused"
+          }
+        },
+        "callbackMonotonicNs": {
+          "available": true,
+          "value": "68854391400"
+        },
+        "configurationRevision": "5",
+        "droppedBefore": "0",
+        "envelopeSeq": "3",
+        "gameTime": {
+          "clockId": "7f4a4539-16b7-e86a-da3f-0d2214ca8392",
+          "minutes": {
+            "available": true,
+            "value": "251377"
+          }
+        },
+        "observations": [],
+        "sharedBoundaryOrder": "117769",
+        "simulation": "paused"
+      }
+    },
+    {
+      "action": "capture",
+      "atMs": 87030,
+      "data": {
+        "attributes": {
+          "count": 0,
+          "expected": false,
+          "final": true,
+          "first": 0,
+          "omittedLowerBound": 0,
+          "present": false,
+          "terminated": true,
+          "total": 0
+        },
+        "callback": {
+          "group": "lifecycle",
+          "id": {
+            "available": true,
+            "value": "simulation.started"
+          }
+        },
+        "callbackMonotonicNs": {
+          "available": true,
+          "value": "87029804600"
+        },
+        "configurationRevision": "5",
+        "droppedBefore": "0",
+        "envelopeSeq": "4",
+        "gameTime": {
+          "clockId": "7f4a4539-16b7-e86a-da3f-0d2214ca8392",
+          "minutes": {
+            "available": true,
+            "value": "251377"
+          }
+        },
+        "observations": [],
+        "sharedBoundaryOrder": "119936",
+        "simulation": "running"
+      }
+    },
+    {
+      "action": "capture",
+      "atMs": 143455,
+      "data": {
+        "attributes": {
+          "count": 0,
+          "expected": false,
+          "final": true,
+          "first": 0,
+          "omittedLowerBound": 0,
+          "present": false,
+          "terminated": true,
+          "total": 0
+        },
+        "callback": {
+          "group": "lifecycle",
+          "id": {
+            "available": true,
+            "value": "simulation.paused"
+          }
+        },
+        "callbackMonotonicNs": {
+          "available": true,
+          "value": "143454729500"
+        },
+        "configurationRevision": "5",
+        "droppedBefore": "0",
+        "envelopeSeq": "5",
+        "gameTime": {
+          "clockId": "7f4a4539-16b7-e86a-da3f-0d2214ca8392",
+          "minutes": {
+            "available": true,
+            "value": "251380"
+          }
+        },
+        "observations": [],
+        "sharedBoundaryOrder": "160557",
+        "simulation": "paused"
+      }
+    },
+    {
+      "action": "capture",
+      "atMs": 149422,
+      "data": {
+        "attributes": {
+          "count": 0,
+          "expected": false,
+          "final": true,
+          "first": 0,
+          "omittedLowerBound": 0,
+          "present": false,
+          "terminated": true,
+          "total": 0
+        },
+        "callback": {
+          "group": "lifecycle",
+          "id": {
+            "available": true,
+            "value": "simulation.started"
+          }
+        },
+        "callbackMonotonicNs": {
+          "available": true,
+          "value": "149421695700"
+        },
+        "configurationRevision": "5",
+        "droppedBefore": "0",
+        "envelopeSeq": "6",
+        "gameTime": {
+          "clockId": "7f4a4539-16b7-e86a-da3f-0d2214ca8392",
+          "minutes": {
+            "available": true,
+            "value": "251380"
+          }
+        },
+        "observations": [],
+        "sharedBoundaryOrder": "161272",
+        "simulation": "running"
+      }
+    },
+    {
+      "action": "capture",
+      "atMs": 420531,
+      "data": {
+        "attributes": {
+          "count": 2,
+          "expected": true,
+          "final": true,
+          "first": 0,
+          "omittedLowerBound": 0,
+          "present": true,
+          "terminated": true,
+          "total": 2
+        },
+        "callback": {
+          "group": "gameplay",
+          "id": {
+            "available": true,
+            "value": "player.fined"
+          }
+        },
+        "callbackMonotonicNs": {
+          "available": true,
+          "value": "420530225700"
+        },
+        "configurationRevision": "5",
+        "droppedBefore": "0",
+        "envelopeSeq": "7",
+        "gameTime": {
+          "clockId": "7f4a4539-16b7-e86a-da3f-0d2214ca8392",
+          "minutes": {
+            "available": true,
+            "value": "251453"
+          }
+        },
+        "observations": [
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "fine.offence"
+            },
+            "position": 0,
+            "sdkType": "string",
+            "sdkTypeId": 12,
+            "value": {
+              "available": true,
+              "value": "red_signal"
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "fine.amount"
+            },
+            "position": 1,
+            "sdkType": "s64",
+            "sdkTypeId": 13,
+            "value": {
+              "available": true,
+              "value": "360"
+            }
+          }
+        ],
+        "sharedBoundaryOrder": "356394",
+        "simulation": "running"
+      }
+    },
+    {
+      "action": "capture",
+      "atMs": 480028,
+      "data": {
+        "attributes": {
+          "count": 0,
+          "expected": false,
+          "final": true,
+          "first": 0,
+          "omittedLowerBound": 0,
+          "present": false,
+          "terminated": true,
+          "total": 0
+        },
+        "callback": {
+          "group": "lifecycle",
+          "id": {
+            "available": true,
+            "value": "simulation.paused"
+          }
+        },
+        "callbackMonotonicNs": {
+          "available": true,
+          "value": "480027253200"
+        },
+        "configurationRevision": "5",
+        "droppedBefore": "0",
+        "envelopeSeq": "8",
+        "gameTime": {
+          "clockId": "7f4a4539-16b7-e86a-da3f-0d2214ca8392",
+          "minutes": {
+            "available": true,
+            "value": "251456"
+          }
+        },
+        "observations": [],
+        "sharedBoundaryOrder": "399066",
+        "simulation": "paused"
+      }
+    },
+    {
+      "action": "capture",
+      "atMs": 484562,
+      "data": {
+        "attributes": {
+          "count": 19,
+          "expected": true,
+          "final": true,
+          "first": 0,
+          "omittedLowerBound": 0,
+          "present": true,
+          "terminated": true,
+          "total": 19
+        },
+        "callback": {
+          "group": "configuration",
+          "id": {
+            "available": true,
+            "value": "job"
+          }
+        },
+        "callbackMonotonicNs": {
+          "available": true,
+          "value": "484561036800"
+        },
+        "configurationRevision": "6",
+        "droppedBefore": "0",
+        "envelopeSeq": "9",
+        "gameTime": {
+          "clockId": "7f4a4539-16b7-e86a-da3f-0d2214ca8392",
+          "minutes": {
+            "available": true,
+            "value": "251456"
+          }
+        },
+        "observations": [
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "cargo.id"
+            },
+            "position": 0,
+            "sdkType": "string",
+            "sdkTypeId": 12,
+            "value": {
+              "available": true,
+              "value": "oranges"
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "cargo"
+            },
+            "position": 1,
+            "sdkType": "string",
+            "sdkTypeId": 12,
+            "value": {
+              "available": true,
+              "value": "name-1"
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "cargo.mass"
+            },
+            "position": 2,
+            "sdkType": "float",
+            "sdkTypeId": 5,
+            "value": {
+              "available": true,
+              "value": 32006
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "cargo.unit.mass"
+            },
+            "position": 3,
+            "sdkType": "float",
+            "sdkTypeId": 5,
+            "value": {
+              "available": true,
+              "value": 615.5
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "cargo.unit.count"
+            },
+            "position": 4,
+            "sdkType": "u32",
+            "sdkTypeId": 3,
+            "value": {
+              "available": true,
+              "value": 52
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "destination.company.id"
+            },
+            "position": 5,
+            "sdkType": "string",
+            "sdkTypeId": 12,
+            "value": {
+              "available": true,
+              "value": "drekkar"
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "destination.company"
+            },
+            "position": 6,
+            "sdkType": "string",
+            "sdkTypeId": 12,
+            "value": {
+              "available": true,
+              "value": "name-2"
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "source.company.id"
+            },
+            "position": 7,
+            "sdkType": "string",
+            "sdkTypeId": 12,
+            "value": {
+              "available": true,
+              "value": "polarislines"
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "source.company"
+            },
+            "position": 8,
+            "sdkType": "string",
+            "sdkTypeId": 12,
+            "value": {
+              "available": true,
+              "value": "name-3"
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "destination.city.id"
+            },
+            "position": 9,
+            "sdkType": "string",
+            "sdkTypeId": 12,
+            "value": {
+              "available": true,
+              "value": "aarhus"
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "destination.city"
+            },
+            "position": 10,
+            "sdkType": "string",
+            "sdkTypeId": 12,
+            "value": {
+              "available": true,
+              "value": "name-4"
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "source.city.id"
+            },
+            "position": 11,
+            "sdkType": "string",
+            "sdkTypeId": 12,
+            "value": {
+              "available": true,
+              "value": "goteborg"
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "source.city"
+            },
+            "position": 12,
+            "sdkType": "string",
+            "sdkTypeId": 12,
+            "value": {
+              "available": true,
+              "value": "name-5"
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "income"
+            },
+            "position": 13,
+            "sdkType": "u64",
+            "sdkTypeId": 4,
+            "value": {
+              "available": true,
+              "value": "11621"
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "delivery.time"
+            },
+            "position": 14,
+            "sdkType": "u32",
+            "sdkTypeId": 3,
+            "value": {
+              "available": true,
+              "value": 252694
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "planned_distance.km"
+            },
+            "position": 15,
+            "sdkType": "u32",
+            "sdkTypeId": 3,
+            "value": {
+              "available": true,
+              "value": 203
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "cargo.loaded"
+            },
+            "position": 16,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": false
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "job.market"
+            },
+            "position": 17,
+            "sdkType": "string",
+            "sdkTypeId": 12,
+            "value": {
+              "available": true,
+              "value": "cargo_market"
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "is.special.job"
+            },
+            "position": 18,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": false
+            }
+          }
+        ],
+        "sharedBoundaryOrder": "399601",
+        "simulation": "paused"
+      }
+    },
+    {
+      "action": "capture",
+      "atMs": 486494,
+      "data": {
+        "attributes": {
+          "count": 0,
+          "expected": false,
+          "final": true,
+          "first": 0,
+          "omittedLowerBound": 0,
+          "present": false,
+          "terminated": true,
+          "total": 0
+        },
+        "callback": {
+          "group": "lifecycle",
+          "id": {
+            "available": true,
+            "value": "simulation.started"
+          }
+        },
+        "callbackMonotonicNs": {
+          "available": true,
+          "value": "486493619500"
+        },
+        "configurationRevision": "6",
+        "droppedBefore": "0",
+        "envelopeSeq": "10",
+        "gameTime": {
+          "clockId": "7f4a4539-16b7-e86a-da3f-0d2214ca8392",
+          "minutes": {
+            "available": true,
+            "value": "251456"
+          }
+        },
+        "observations": [],
+        "sharedBoundaryOrder": "399836",
+        "simulation": "running"
+      }
+    },
+    {
+      "action": "capture",
+      "atMs": 534250,
+      "data": {
+        "attributes": {
+          "count": 0,
+          "expected": false,
+          "final": true,
+          "first": 0,
+          "omittedLowerBound": 0,
+          "present": false,
+          "terminated": true,
+          "total": 0
+        },
+        "callback": {
+          "group": "lifecycle",
+          "id": {
+            "available": true,
+            "value": "simulation.paused"
+          }
+        },
+        "callbackMonotonicNs": {
+          "available": true,
+          "value": "534249497600"
+        },
+        "configurationRevision": "6",
+        "droppedBefore": "0",
+        "envelopeSeq": "11",
+        "gameTime": {
+          "clockId": "7f4a4539-16b7-e86a-da3f-0d2214ca8392",
+          "minutes": {
+            "available": true,
+            "value": "251458"
+          }
+        },
+        "observations": [],
+        "sharedBoundaryOrder": "434049",
+        "simulation": "paused"
+      }
+    },
+    {
+      "action": "capture",
+      "atMs": 535380,
+      "data": {
+        "attributes": {
+          "count": 19,
+          "expected": true,
+          "final": true,
+          "first": 0,
+          "omittedLowerBound": 0,
+          "present": true,
+          "terminated": true,
+          "total": 19
+        },
+        "callback": {
+          "group": "configuration",
+          "id": {
+            "available": true,
+            "value": "job"
+          }
+        },
+        "callbackMonotonicNs": {
+          "available": true,
+          "value": "535379287600"
+        },
+        "configurationRevision": "7",
+        "droppedBefore": "0",
+        "envelopeSeq": "12",
+        "gameTime": {
+          "clockId": "7f4a4539-16b7-e86a-da3f-0d2214ca8392",
+          "minutes": {
+            "available": true,
+            "value": "251458"
+          }
+        },
+        "observations": [
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "cargo.id"
+            },
+            "position": 0,
+            "sdkType": "string",
+            "sdkTypeId": 12,
+            "value": {
+              "available": true,
+              "value": "oranges"
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "cargo"
+            },
+            "position": 1,
+            "sdkType": "string",
+            "sdkTypeId": 12,
+            "value": {
+              "available": true,
+              "value": "name-1"
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "cargo.mass"
+            },
+            "position": 2,
+            "sdkType": "float",
+            "sdkTypeId": 5,
+            "value": {
+              "available": true,
+              "value": 32006
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "cargo.unit.mass"
+            },
+            "position": 3,
+            "sdkType": "float",
+            "sdkTypeId": 5,
+            "value": {
+              "available": true,
+              "value": 615.5
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "cargo.unit.count"
+            },
+            "position": 4,
+            "sdkType": "u32",
+            "sdkTypeId": 3,
+            "value": {
+              "available": true,
+              "value": 52
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "destination.company.id"
+            },
+            "position": 5,
+            "sdkType": "string",
+            "sdkTypeId": 12,
+            "value": {
+              "available": true,
+              "value": "drekkar"
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "destination.company"
+            },
+            "position": 6,
+            "sdkType": "string",
+            "sdkTypeId": 12,
+            "value": {
+              "available": true,
+              "value": "name-2"
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "source.company.id"
+            },
+            "position": 7,
+            "sdkType": "string",
+            "sdkTypeId": 12,
+            "value": {
+              "available": true,
+              "value": "polarislines"
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "source.company"
+            },
+            "position": 8,
+            "sdkType": "string",
+            "sdkTypeId": 12,
+            "value": {
+              "available": true,
+              "value": "name-3"
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "destination.city.id"
+            },
+            "position": 9,
+            "sdkType": "string",
+            "sdkTypeId": 12,
+            "value": {
+              "available": true,
+              "value": "aarhus"
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "destination.city"
+            },
+            "position": 10,
+            "sdkType": "string",
+            "sdkTypeId": 12,
+            "value": {
+              "available": true,
+              "value": "name-4"
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "source.city.id"
+            },
+            "position": 11,
+            "sdkType": "string",
+            "sdkTypeId": 12,
+            "value": {
+              "available": true,
+              "value": "goteborg"
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "source.city"
+            },
+            "position": 12,
+            "sdkType": "string",
+            "sdkTypeId": 12,
+            "value": {
+              "available": true,
+              "value": "name-5"
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "income"
+            },
+            "position": 13,
+            "sdkType": "u64",
+            "sdkTypeId": 4,
+            "value": {
+              "available": true,
+              "value": "11621"
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "delivery.time"
+            },
+            "position": 14,
+            "sdkType": "u32",
+            "sdkTypeId": 3,
+            "value": {
+              "available": true,
+              "value": 252694
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "planned_distance.km"
+            },
+            "position": 15,
+            "sdkType": "u32",
+            "sdkTypeId": 3,
+            "value": {
+              "available": true,
+              "value": 203
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "cargo.loaded"
+            },
+            "position": 16,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": true
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "job.market"
+            },
+            "position": 17,
+            "sdkType": "string",
+            "sdkTypeId": 12,
+            "value": {
+              "available": true,
+              "value": "cargo_market"
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "is.special.job"
+            },
+            "position": 18,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": false
+            }
+          }
+        ],
+        "sharedBoundaryOrder": "434146",
+        "simulation": "paused"
+      }
+    },
+    {
+      "action": "capture",
+      "atMs": 535380,
+      "data": {
+        "attributes": {
+          "count": 61,
+          "expected": true,
+          "final": true,
+          "first": 0,
+          "omittedLowerBound": 0,
+          "present": true,
+          "terminated": true,
+          "total": 61
+        },
+        "callback": {
+          "group": "configuration",
+          "id": {
+            "available": true,
+            "value": "truck"
+          }
+        },
+        "callbackMonotonicNs": {
+          "available": true,
+          "value": "535379866499"
+        },
+        "configurationRevision": "8",
+        "droppedBefore": "0",
+        "envelopeSeq": "13",
+        "gameTime": {
+          "clockId": "7f4a4539-16b7-e86a-da3f-0d2214ca8392",
+          "minutes": {
+            "available": true,
+            "value": "251458"
+          }
+        },
+        "observations": [
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "brand_id"
+            },
+            "position": 0,
+            "sdkType": "string",
+            "sdkTypeId": 12,
+            "value": {
+              "available": true,
+              "value": "daf"
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "brand"
+            },
+            "position": 1,
+            "sdkType": "string",
+            "sdkTypeId": 12,
+            "value": {
+              "available": true,
+              "value": "name-6"
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "id"
+            },
+            "position": 2,
+            "sdkType": "string",
+            "sdkTypeId": 12,
+            "value": {
+              "available": true,
+              "value": "vehicle.daf.2021"
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "name"
+            },
+            "position": 3,
+            "sdkType": "string",
+            "sdkTypeId": 12,
+            "value": {
+              "available": true,
+              "value": "name-7"
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "fuel.capacity"
+            },
+            "position": 4,
+            "sdkType": "float",
+            "sdkTypeId": 5,
+            "value": {
+              "available": true,
+              "value": 1245
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "adblue.capacity"
+            },
+            "position": 5,
+            "sdkType": "float",
+            "sdkTypeId": 5,
+            "value": {
+              "available": true,
+              "value": 90
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "rpm.limit"
+            },
+            "position": 6,
+            "sdkType": "float",
+            "sdkTypeId": 5,
+            "value": {
+              "available": true,
+              "value": 2200
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "gears.forward"
+            },
+            "position": 7,
+            "sdkType": "u32",
+            "sdkTypeId": 3,
+            "value": {
+              "available": true,
+              "value": 12
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "gears.reverse"
+            },
+            "position": 8,
+            "sdkType": "u32",
+            "sdkTypeId": 3,
+            "value": {
+              "available": true,
+              "value": 4
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "differential.ratio"
+            },
+            "position": 9,
+            "sdkType": "float",
+            "sdkTypeId": 5,
+            "value": {
+              "available": true,
+              "value": 2.640000104904175
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "retarder.steps"
+            },
+            "position": 10,
+            "sdkType": "u32",
+            "sdkTypeId": 3,
+            "value": {
+              "available": true,
+              "value": 3
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 0
+            },
+            "name": {
+              "available": true,
+              "value": "forward.ratio"
+            },
+            "position": 11,
+            "sdkType": "float",
+            "sdkTypeId": 5,
+            "value": {
+              "available": true,
+              "value": 16.690000534057617
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 1
+            },
+            "name": {
+              "available": true,
+              "value": "forward.ratio"
+            },
+            "position": 12,
+            "sdkType": "float",
+            "sdkTypeId": 5,
+            "value": {
+              "available": true,
+              "value": 12.920000076293945
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 2
+            },
+            "name": {
+              "available": true,
+              "value": "forward.ratio"
+            },
+            "position": 13,
+            "sdkType": "float",
+            "sdkTypeId": 5,
+            "value": {
+              "available": true,
+              "value": 9.930000305175781
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 3
+            },
+            "name": {
+              "available": true,
+              "value": "forward.ratio"
+            },
+            "position": 14,
+            "sdkType": "float",
+            "sdkTypeId": 5,
+            "value": {
+              "available": true,
+              "value": 7.690000057220459
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 4
+            },
+            "name": {
+              "available": true,
+              "value": "forward.ratio"
+            },
+            "position": 15,
+            "sdkType": "float",
+            "sdkTypeId": 5,
+            "value": {
+              "available": true,
+              "value": 5.889999866485596
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 5
+            },
+            "name": {
+              "available": true,
+              "value": "forward.ratio"
+            },
+            "position": 16,
+            "sdkType": "float",
+            "sdkTypeId": 5,
+            "value": {
+              "available": true,
+              "value": 4.559999942779541
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 6
+            },
+            "name": {
+              "available": true,
+              "value": "forward.ratio"
+            },
+            "position": 17,
+            "sdkType": "float",
+            "sdkTypeId": 5,
+            "value": {
+              "available": true,
+              "value": 3.6500000953674316
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 7
+            },
+            "name": {
+              "available": true,
+              "value": "forward.ratio"
+            },
+            "position": 18,
+            "sdkType": "float",
+            "sdkTypeId": 5,
+            "value": {
+              "available": true,
+              "value": 2.8299999237060547
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 8
+            },
+            "name": {
+              "available": true,
+              "value": "forward.ratio"
+            },
+            "position": 19,
+            "sdkType": "float",
+            "sdkTypeId": 5,
+            "value": {
+              "available": true,
+              "value": 2.1700000762939453
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 9
+            },
+            "name": {
+              "available": true,
+              "value": "forward.ratio"
+            },
+            "position": 20,
+            "sdkType": "float",
+            "sdkTypeId": 5,
+            "value": {
+              "available": true,
+              "value": 1.6799999475479126
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 10
+            },
+            "name": {
+              "available": true,
+              "value": "forward.ratio"
+            },
+            "position": 21,
+            "sdkType": "float",
+            "sdkTypeId": 5,
+            "value": {
+              "available": true,
+              "value": 1.2899999618530273
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 11
+            },
+            "name": {
+              "available": true,
+              "value": "forward.ratio"
+            },
+            "position": 22,
+            "sdkType": "float",
+            "sdkTypeId": 5,
+            "value": {
+              "available": true,
+              "value": 1
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 0
+            },
+            "name": {
+              "available": true,
+              "value": "reverse.ratio"
+            },
+            "position": 23,
+            "sdkType": "float",
+            "sdkTypeId": 5,
+            "value": {
+              "available": true,
+              "value": -15.539999961853027
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 1
+            },
+            "name": {
+              "available": true,
+              "value": "reverse.ratio"
+            },
+            "position": 24,
+            "sdkType": "float",
+            "sdkTypeId": 5,
+            "value": {
+              "available": true,
+              "value": -12.029999732971191
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 2
+            },
+            "name": {
+              "available": true,
+              "value": "reverse.ratio"
+            },
+            "position": 25,
+            "sdkType": "float",
+            "sdkTypeId": 5,
+            "value": {
+              "available": true,
+              "value": -3.4000000953674316
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 3
+            },
+            "name": {
+              "available": true,
+              "value": "reverse.ratio"
+            },
+            "position": 26,
+            "sdkType": "float",
+            "sdkTypeId": 5,
+            "value": {
+              "available": true,
+              "value": -2.640000104904175
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "cabin.position"
+            },
+            "position": 27,
+            "sdkType": "fvector",
+            "sdkTypeId": 7,
+            "value": {
+              "available": true,
+              "value": {
+                "x": 0,
+                "y": 1.023817539215088,
+                "z": -2.5824928283691406
+              }
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "head.position"
+            },
+            "position": 28,
+            "sdkType": "fvector",
+            "sdkTypeId": 7,
+            "value": {
+              "available": true,
+              "value": {
+                "x": -0.7221924662590027,
+                "y": 1.6961824893951416,
+                "z": 0.6864197254180908
+              }
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "hook.position"
+            },
+            "position": 29,
+            "sdkType": "fvector",
+            "sdkTypeId": 7,
+            "value": {
+              "available": true,
+              "value": {
+                "x": 0,
+                "y": 0.999744176864624,
+                "z": 1.6522263288497925
+              }
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "fuel.warning.factor"
+            },
+            "position": 30,
+            "sdkType": "float",
+            "sdkTypeId": 5,
+            "value": {
+              "available": true,
+              "value": 0.15000000596046448
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "adblue.warning.factor"
+            },
+            "position": 31,
+            "sdkType": "float",
+            "sdkTypeId": 5,
+            "value": {
+              "available": true,
+              "value": 0.15000000596046448
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "brake.air.pressure.warning"
+            },
+            "position": 32,
+            "sdkType": "float",
+            "sdkTypeId": 5,
+            "value": {
+              "available": true,
+              "value": 69.5999984741211
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "brake.air.pressure.emergency"
+            },
+            "position": 33,
+            "sdkType": "float",
+            "sdkTypeId": 5,
+            "value": {
+              "available": true,
+              "value": 34.79999923706055
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "oil.pressure.warning"
+            },
+            "position": 34,
+            "sdkType": "float",
+            "sdkTypeId": 5,
+            "value": {
+              "available": true,
+              "value": 10.149999618530273
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "water.temperature.warning"
+            },
+            "position": 35,
+            "sdkType": "float",
+            "sdkTypeId": 5,
+            "value": {
+              "available": true,
+              "value": 95
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "battery.voltage.warning"
+            },
+            "position": 36,
+            "sdkType": "float",
+            "sdkTypeId": 5,
+            "value": {
+              "available": true,
+              "value": 23.760000228881836
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "license.plate"
+            },
+            "position": 37,
+            "sdkType": "string",
+            "sdkTypeId": 12,
+            "value": {
+              "available": true,
+              "value": "plate-1"
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "license.plate.country.id"
+            },
+            "position": 38,
+            "sdkType": "string",
+            "sdkTypeId": 12,
+            "value": {
+              "available": true,
+              "value": "poland"
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "license.plate.country"
+            },
+            "position": 39,
+            "sdkType": "string",
+            "sdkTypeId": 12,
+            "value": {
+              "available": true,
+              "value": "name-8"
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "wheels.count"
+            },
+            "position": 40,
+            "sdkType": "u32",
+            "sdkTypeId": 3,
+            "value": {
+              "available": true,
+              "value": 4
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 0
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.position"
+            },
+            "position": 41,
+            "sdkType": "fvector",
+            "sdkTypeId": 7,
+            "value": {
+              "available": true,
+              "value": {
+                "x": -1.0853769779205322,
+                "y": 0.5,
+                "z": -1.7453386783599854
+              }
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 0
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.steerable"
+            },
+            "position": 42,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": true
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 0
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.simulated"
+            },
+            "position": 43,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": true
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 0
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.radius"
+            },
+            "position": 44,
+            "sdkType": "float",
+            "sdkTypeId": 5,
+            "value": {
+              "available": true,
+              "value": 0.5059999823570251
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 0
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.powered"
+            },
+            "position": 45,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": false
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 1
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.position"
+            },
+            "position": 46,
+            "sdkType": "fvector",
+            "sdkTypeId": 7,
+            "value": {
+              "available": true,
+              "value": {
+                "x": 1.0853769779205322,
+                "y": 0.5,
+                "z": -1.7453386783599854
+              }
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 1
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.steerable"
+            },
+            "position": 47,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": true
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 1
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.simulated"
+            },
+            "position": 48,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": true
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 1
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.radius"
+            },
+            "position": 49,
+            "sdkType": "float",
+            "sdkTypeId": 5,
+            "value": {
+              "available": true,
+              "value": 0.5059999823570251
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 1
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.powered"
+            },
+            "position": 50,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": false
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 2
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.position"
+            },
+            "position": 51,
+            "sdkType": "fvector",
+            "sdkTypeId": 7,
+            "value": {
+              "available": true,
+              "value": {
+                "x": -0.927661120891571,
+                "y": 0.5,
+                "z": 2.244009017944336
+              }
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 2
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.steerable"
+            },
+            "position": 52,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": false
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 2
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.simulated"
+            },
+            "position": 53,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": true
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 2
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.radius"
+            },
+            "position": 54,
+            "sdkType": "float",
+            "sdkTypeId": 5,
+            "value": {
+              "available": true,
+              "value": 0.5059999823570251
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 2
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.powered"
+            },
+            "position": 55,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": true
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 3
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.position"
+            },
+            "position": 56,
+            "sdkType": "fvector",
+            "sdkTypeId": 7,
+            "value": {
+              "available": true,
+              "value": {
+                "x": 0.927661120891571,
+                "y": 0.5,
+                "z": 2.244009017944336
+              }
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 3
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.steerable"
+            },
+            "position": 57,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": false
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 3
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.simulated"
+            },
+            "position": 58,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": true
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 3
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.radius"
+            },
+            "position": 59,
+            "sdkType": "float",
+            "sdkTypeId": 5,
+            "value": {
+              "available": true,
+              "value": 0.5059999823570251
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 3
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.powered"
+            },
+            "position": 60,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": true
+            }
+          }
+        ],
+        "sharedBoundaryOrder": "434147",
+        "simulation": "paused"
+      }
+    },
+    {
+      "action": "capture",
+      "atMs": 535381,
+      "data": {
+        "attributes": {
+          "count": 47,
+          "expected": true,
+          "final": true,
+          "first": 0,
+          "omittedLowerBound": 0,
+          "present": true,
+          "terminated": true,
+          "total": 47
+        },
+        "callback": {
+          "group": "configuration",
+          "id": {
+            "available": true,
+            "value": "trailer"
+          }
+        },
+        "callbackMonotonicNs": {
+          "available": true,
+          "value": "535380058600"
+        },
+        "configurationRevision": "8",
+        "droppedBefore": "0",
+        "envelopeSeq": "14",
+        "gameTime": {
+          "clockId": "7f4a4539-16b7-e86a-da3f-0d2214ca8392",
+          "minutes": {
+            "available": true,
+            "value": "251458"
+          }
+        },
+        "observations": [
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "id"
+            },
+            "position": 0,
+            "sdkType": "string",
+            "sdkTypeId": 12,
+            "value": {
+              "available": true,
+              "value": "vehicle.scs.box"
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "cargo.accessory.id"
+            },
+            "position": 1,
+            "sdkType": "string",
+            "sdkTypeId": 12,
+            "value": {
+              "available": true,
+              "value": ""
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "hook.position"
+            },
+            "position": 2,
+            "sdkType": "fvector",
+            "sdkTypeId": 7,
+            "value": {
+              "available": true,
+              "value": {
+                "x": 0,
+                "y": 1,
+                "z": -5.0657806396484375
+              }
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "brand_id"
+            },
+            "position": 3,
+            "sdkType": "string",
+            "sdkTypeId": 12,
+            "value": {
+              "available": true,
+              "value": "scs"
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "name"
+            },
+            "position": 4,
+            "sdkType": "string",
+            "sdkTypeId": 12,
+            "value": {
+              "available": true,
+              "value": "name-9"
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "chain.type"
+            },
+            "position": 5,
+            "sdkType": "string",
+            "sdkTypeId": 12,
+            "value": {
+              "available": true,
+              "value": "double"
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "body.type"
+            },
+            "position": 6,
+            "sdkType": "string",
+            "sdkTypeId": 12,
+            "value": {
+              "available": true,
+              "value": "insulated"
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "license.plate"
+            },
+            "position": 7,
+            "sdkType": "string",
+            "sdkTypeId": 12,
+            "value": {
+              "available": true,
+              "value": "plate-2"
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "license.plate.country.id"
+            },
+            "position": 8,
+            "sdkType": "string",
+            "sdkTypeId": 12,
+            "value": {
+              "available": true,
+              "value": "germany"
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "license.plate.country"
+            },
+            "position": 9,
+            "sdkType": "string",
+            "sdkTypeId": 12,
+            "value": {
+              "available": true,
+              "value": "name-10"
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "wheels.count"
+            },
+            "position": 10,
+            "sdkType": "u32",
+            "sdkTypeId": 3,
+            "value": {
+              "available": true,
+              "value": 6
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 0
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.position"
+            },
+            "position": 11,
+            "sdkType": "fvector",
+            "sdkTypeId": 7,
+            "value": {
+              "available": true,
+              "value": {
+                "x": -0.8199999928474426,
+                "y": 0.5120000243186951,
+                "z": 1.5416467189788818
+              }
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 0
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.steerable"
+            },
+            "position": 12,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": false
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 0
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.simulated"
+            },
+            "position": 13,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": true
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 0
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.radius"
+            },
+            "position": 14,
+            "sdkType": "float",
+            "sdkTypeId": 5,
+            "value": {
+              "available": true,
+              "value": 0.5359962582588196
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 0
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.powered"
+            },
+            "position": 15,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": false
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 0
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.liftable"
+            },
+            "position": 16,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": true
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 1
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.position"
+            },
+            "position": 17,
+            "sdkType": "fvector",
+            "sdkTypeId": 7,
+            "value": {
+              "available": true,
+              "value": {
+                "x": 0.8199999928474426,
+                "y": 0.5120000243186951,
+                "z": 1.5416467189788818
+              }
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 1
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.steerable"
+            },
+            "position": 18,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": false
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 1
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.simulated"
+            },
+            "position": 19,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": true
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 1
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.radius"
+            },
+            "position": 20,
+            "sdkType": "float",
+            "sdkTypeId": 5,
+            "value": {
+              "available": true,
+              "value": 0.5359962582588196
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 1
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.powered"
+            },
+            "position": 21,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": false
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 1
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.liftable"
+            },
+            "position": 22,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": true
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 2
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.position"
+            },
+            "position": 23,
+            "sdkType": "fvector",
+            "sdkTypeId": 7,
+            "value": {
+              "available": true,
+              "value": {
+                "x": -0.8199999928474426,
+                "y": 0.5120000243186951,
+                "z": 2.857391834259033
+              }
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 2
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.steerable"
+            },
+            "position": 24,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": false
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 2
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.simulated"
+            },
+            "position": 25,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": true
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 2
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.radius"
+            },
+            "position": 26,
+            "sdkType": "float",
+            "sdkTypeId": 5,
+            "value": {
+              "available": true,
+              "value": 0.5359962582588196
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 2
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.powered"
+            },
+            "position": 27,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": false
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 2
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.liftable"
+            },
+            "position": 28,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": false
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 3
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.position"
+            },
+            "position": 29,
+            "sdkType": "fvector",
+            "sdkTypeId": 7,
+            "value": {
+              "available": true,
+              "value": {
+                "x": 0.8199999928474426,
+                "y": 0.5120000243186951,
+                "z": 2.857391834259033
+              }
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 3
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.steerable"
+            },
+            "position": 30,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": false
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 3
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.simulated"
+            },
+            "position": 31,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": true
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 3
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.radius"
+            },
+            "position": 32,
+            "sdkType": "float",
+            "sdkTypeId": 5,
+            "value": {
+              "available": true,
+              "value": 0.5359962582588196
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 3
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.powered"
+            },
+            "position": 33,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": false
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 3
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.liftable"
+            },
+            "position": 34,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": false
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 4
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.position"
+            },
+            "position": 35,
+            "sdkType": "fvector",
+            "sdkTypeId": 7,
+            "value": {
+              "available": true,
+              "value": {
+                "x": -0.8199999928474426,
+                "y": 0.5120000243186951,
+                "z": 4.161406993865967
+              }
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 4
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.steerable"
+            },
+            "position": 36,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": false
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 4
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.simulated"
+            },
+            "position": 37,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": true
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 4
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.radius"
+            },
+            "position": 38,
+            "sdkType": "float",
+            "sdkTypeId": 5,
+            "value": {
+              "available": true,
+              "value": 0.5359962582588196
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 4
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.powered"
+            },
+            "position": 39,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": false
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 4
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.liftable"
+            },
+            "position": 40,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": false
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 5
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.position"
+            },
+            "position": 41,
+            "sdkType": "fvector",
+            "sdkTypeId": 7,
+            "value": {
+              "available": true,
+              "value": {
+                "x": 0.8199999928474426,
+                "y": 0.5120000243186951,
+                "z": 4.161406993865967
+              }
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 5
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.steerable"
+            },
+            "position": 42,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": false
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 5
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.simulated"
+            },
+            "position": 43,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": true
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 5
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.radius"
+            },
+            "position": 44,
+            "sdkType": "float",
+            "sdkTypeId": 5,
+            "value": {
+              "available": true,
+              "value": 0.5359962582588196
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 5
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.powered"
+            },
+            "position": 45,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": false
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 5
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.liftable"
+            },
+            "position": 46,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": false
+            }
+          }
+        ],
+        "sharedBoundaryOrder": "434148",
+        "simulation": "paused"
+      }
+    },
+    {
+      "action": "capture",
+      "atMs": 535381,
+      "data": {
+        "attributes": {
+          "count": 47,
+          "expected": true,
+          "final": true,
+          "first": 0,
+          "omittedLowerBound": 0,
+          "present": true,
+          "terminated": true,
+          "total": 47
+        },
+        "callback": {
+          "group": "configuration",
+          "id": {
+            "available": true,
+            "value": "trailer.0"
+          }
+        },
+        "callbackMonotonicNs": {
+          "available": true,
+          "value": "535380080899"
+        },
+        "configurationRevision": "8",
+        "droppedBefore": "0",
+        "envelopeSeq": "15",
+        "gameTime": {
+          "clockId": "7f4a4539-16b7-e86a-da3f-0d2214ca8392",
+          "minutes": {
+            "available": true,
+            "value": "251458"
+          }
+        },
+        "observations": [
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "id"
+            },
+            "position": 0,
+            "sdkType": "string",
+            "sdkTypeId": 12,
+            "value": {
+              "available": true,
+              "value": "vehicle.scs.box"
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "cargo.accessory.id"
+            },
+            "position": 1,
+            "sdkType": "string",
+            "sdkTypeId": 12,
+            "value": {
+              "available": true,
+              "value": ""
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "hook.position"
+            },
+            "position": 2,
+            "sdkType": "fvector",
+            "sdkTypeId": 7,
+            "value": {
+              "available": true,
+              "value": {
+                "x": 0,
+                "y": 1,
+                "z": -5.0657806396484375
+              }
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "brand_id"
+            },
+            "position": 3,
+            "sdkType": "string",
+            "sdkTypeId": 12,
+            "value": {
+              "available": true,
+              "value": "scs"
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "name"
+            },
+            "position": 4,
+            "sdkType": "string",
+            "sdkTypeId": 12,
+            "value": {
+              "available": true,
+              "value": "name-9"
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "chain.type"
+            },
+            "position": 5,
+            "sdkType": "string",
+            "sdkTypeId": 12,
+            "value": {
+              "available": true,
+              "value": "double"
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "body.type"
+            },
+            "position": 6,
+            "sdkType": "string",
+            "sdkTypeId": 12,
+            "value": {
+              "available": true,
+              "value": "insulated"
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "license.plate"
+            },
+            "position": 7,
+            "sdkType": "string",
+            "sdkTypeId": 12,
+            "value": {
+              "available": true,
+              "value": "plate-2"
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "license.plate.country.id"
+            },
+            "position": 8,
+            "sdkType": "string",
+            "sdkTypeId": 12,
+            "value": {
+              "available": true,
+              "value": "germany"
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "license.plate.country"
+            },
+            "position": 9,
+            "sdkType": "string",
+            "sdkTypeId": 12,
+            "value": {
+              "available": true,
+              "value": "name-10"
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "wheels.count"
+            },
+            "position": 10,
+            "sdkType": "u32",
+            "sdkTypeId": 3,
+            "value": {
+              "available": true,
+              "value": 6
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 0
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.position"
+            },
+            "position": 11,
+            "sdkType": "fvector",
+            "sdkTypeId": 7,
+            "value": {
+              "available": true,
+              "value": {
+                "x": -0.8199999928474426,
+                "y": 0.5120000243186951,
+                "z": 1.5416467189788818
+              }
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 0
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.steerable"
+            },
+            "position": 12,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": false
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 0
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.simulated"
+            },
+            "position": 13,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": true
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 0
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.radius"
+            },
+            "position": 14,
+            "sdkType": "float",
+            "sdkTypeId": 5,
+            "value": {
+              "available": true,
+              "value": 0.5359962582588196
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 0
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.powered"
+            },
+            "position": 15,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": false
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 0
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.liftable"
+            },
+            "position": 16,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": true
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 1
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.position"
+            },
+            "position": 17,
+            "sdkType": "fvector",
+            "sdkTypeId": 7,
+            "value": {
+              "available": true,
+              "value": {
+                "x": 0.8199999928474426,
+                "y": 0.5120000243186951,
+                "z": 1.5416467189788818
+              }
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 1
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.steerable"
+            },
+            "position": 18,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": false
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 1
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.simulated"
+            },
+            "position": 19,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": true
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 1
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.radius"
+            },
+            "position": 20,
+            "sdkType": "float",
+            "sdkTypeId": 5,
+            "value": {
+              "available": true,
+              "value": 0.5359962582588196
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 1
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.powered"
+            },
+            "position": 21,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": false
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 1
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.liftable"
+            },
+            "position": 22,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": true
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 2
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.position"
+            },
+            "position": 23,
+            "sdkType": "fvector",
+            "sdkTypeId": 7,
+            "value": {
+              "available": true,
+              "value": {
+                "x": -0.8199999928474426,
+                "y": 0.5120000243186951,
+                "z": 2.857391834259033
+              }
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 2
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.steerable"
+            },
+            "position": 24,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": false
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 2
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.simulated"
+            },
+            "position": 25,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": true
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 2
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.radius"
+            },
+            "position": 26,
+            "sdkType": "float",
+            "sdkTypeId": 5,
+            "value": {
+              "available": true,
+              "value": 0.5359962582588196
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 2
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.powered"
+            },
+            "position": 27,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": false
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 2
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.liftable"
+            },
+            "position": 28,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": false
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 3
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.position"
+            },
+            "position": 29,
+            "sdkType": "fvector",
+            "sdkTypeId": 7,
+            "value": {
+              "available": true,
+              "value": {
+                "x": 0.8199999928474426,
+                "y": 0.5120000243186951,
+                "z": 2.857391834259033
+              }
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 3
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.steerable"
+            },
+            "position": 30,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": false
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 3
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.simulated"
+            },
+            "position": 31,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": true
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 3
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.radius"
+            },
+            "position": 32,
+            "sdkType": "float",
+            "sdkTypeId": 5,
+            "value": {
+              "available": true,
+              "value": 0.5359962582588196
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 3
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.powered"
+            },
+            "position": 33,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": false
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 3
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.liftable"
+            },
+            "position": 34,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": false
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 4
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.position"
+            },
+            "position": 35,
+            "sdkType": "fvector",
+            "sdkTypeId": 7,
+            "value": {
+              "available": true,
+              "value": {
+                "x": -0.8199999928474426,
+                "y": 0.5120000243186951,
+                "z": 4.161406993865967
+              }
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 4
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.steerable"
+            },
+            "position": 36,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": false
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 4
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.simulated"
+            },
+            "position": 37,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": true
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 4
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.radius"
+            },
+            "position": 38,
+            "sdkType": "float",
+            "sdkTypeId": 5,
+            "value": {
+              "available": true,
+              "value": 0.5359962582588196
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 4
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.powered"
+            },
+            "position": 39,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": false
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 4
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.liftable"
+            },
+            "position": 40,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": false
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 5
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.position"
+            },
+            "position": 41,
+            "sdkType": "fvector",
+            "sdkTypeId": 7,
+            "value": {
+              "available": true,
+              "value": {
+                "x": 0.8199999928474426,
+                "y": 0.5120000243186951,
+                "z": 4.161406993865967
+              }
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 5
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.steerable"
+            },
+            "position": 42,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": false
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 5
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.simulated"
+            },
+            "position": 43,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": true
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 5
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.radius"
+            },
+            "position": 44,
+            "sdkType": "float",
+            "sdkTypeId": 5,
+            "value": {
+              "available": true,
+              "value": 0.5359962582588196
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 5
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.powered"
+            },
+            "position": 45,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": false
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 5
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.liftable"
+            },
+            "position": 46,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": false
+            }
+          }
+        ],
+        "sharedBoundaryOrder": "434149",
+        "simulation": "paused"
+      }
+    },
+    {
+      "action": "capture",
+      "atMs": 535381,
+      "data": {
+        "attributes": {
+          "count": 29,
+          "expected": true,
+          "final": true,
+          "first": 0,
+          "omittedLowerBound": 0,
+          "present": true,
+          "terminated": true,
+          "total": 29
+        },
+        "callback": {
+          "group": "configuration",
+          "id": {
+            "available": true,
+            "value": "trailer.1"
+          }
+        },
+        "callbackMonotonicNs": {
+          "available": true,
+          "value": "535380249400"
+        },
+        "configurationRevision": "8",
+        "droppedBefore": "0",
+        "envelopeSeq": "16",
+        "gameTime": {
+          "clockId": "7f4a4539-16b7-e86a-da3f-0d2214ca8392",
+          "minutes": {
+            "available": true,
+            "value": "251458"
+          }
+        },
+        "observations": [
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "id"
+            },
+            "position": 0,
+            "sdkType": "string",
+            "sdkTypeId": 12,
+            "value": {
+              "available": true,
+              "value": "vehicle.scs.box"
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "cargo.accessory.id"
+            },
+            "position": 1,
+            "sdkType": "string",
+            "sdkTypeId": 12,
+            "value": {
+              "available": true,
+              "value": ""
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "hook.position"
+            },
+            "position": 2,
+            "sdkType": "fvector",
+            "sdkTypeId": 7,
+            "value": {
+              "available": true,
+              "value": {
+                "x": 0,
+                "y": 0.44999998807907104,
+                "z": -5.5167317390441895
+              }
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "brand_id"
+            },
+            "position": 3,
+            "sdkType": "string",
+            "sdkTypeId": 12,
+            "value": {
+              "available": true,
+              "value": "scs"
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "name"
+            },
+            "position": 4,
+            "sdkType": "string",
+            "sdkTypeId": 12,
+            "value": {
+              "available": true,
+              "value": "name-9"
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "license.plate"
+            },
+            "position": 5,
+            "sdkType": "string",
+            "sdkTypeId": 12,
+            "value": {
+              "available": true,
+              "value": "plate-3"
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "license.plate.country.id"
+            },
+            "position": 6,
+            "sdkType": "string",
+            "sdkTypeId": 12,
+            "value": {
+              "available": true,
+              "value": "germany"
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "license.plate.country"
+            },
+            "position": 7,
+            "sdkType": "string",
+            "sdkTypeId": 12,
+            "value": {
+              "available": true,
+              "value": "name-10"
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "wheels.count"
+            },
+            "position": 8,
+            "sdkType": "u32",
+            "sdkTypeId": 3,
+            "value": {
+              "available": true,
+              "value": 4
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 0
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.position"
+            },
+            "position": 9,
+            "sdkType": "fvector",
+            "sdkTypeId": 7,
+            "value": {
+              "available": true,
+              "value": {
+                "x": -0.8199999928474426,
+                "y": 0.5120000243186951,
+                "z": 0.6665385365486145
+              }
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 0
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.steerable"
+            },
+            "position": 10,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": false
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 0
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.simulated"
+            },
+            "position": 11,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": true
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 0
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.radius"
+            },
+            "position": 12,
+            "sdkType": "float",
+            "sdkTypeId": 5,
+            "value": {
+              "available": true,
+              "value": 0.5359962582588196
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 0
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.powered"
+            },
+            "position": 13,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": false
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 1
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.position"
+            },
+            "position": 14,
+            "sdkType": "fvector",
+            "sdkTypeId": 7,
+            "value": {
+              "available": true,
+              "value": {
+                "x": 0.8199999928474426,
+                "y": 0.5120000243186951,
+                "z": 0.6665385365486145
+              }
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 1
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.steerable"
+            },
+            "position": 15,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": false
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 1
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.simulated"
+            },
+            "position": 16,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": true
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 1
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.radius"
+            },
+            "position": 17,
+            "sdkType": "float",
+            "sdkTypeId": 5,
+            "value": {
+              "available": true,
+              "value": 0.5359962582588196
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 1
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.powered"
+            },
+            "position": 18,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": false
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 2
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.position"
+            },
+            "position": 19,
+            "sdkType": "fvector",
+            "sdkTypeId": 7,
+            "value": {
+              "available": true,
+              "value": {
+                "x": -0.8199999928474426,
+                "y": 0.5120000243186951,
+                "z": 2.432616710662842
+              }
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 2
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.steerable"
+            },
+            "position": 20,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": false
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 2
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.simulated"
+            },
+            "position": 21,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": true
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 2
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.radius"
+            },
+            "position": 22,
+            "sdkType": "float",
+            "sdkTypeId": 5,
+            "value": {
+              "available": true,
+              "value": 0.5359962582588196
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 2
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.powered"
+            },
+            "position": 23,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": false
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 3
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.position"
+            },
+            "position": 24,
+            "sdkType": "fvector",
+            "sdkTypeId": 7,
+            "value": {
+              "available": true,
+              "value": {
+                "x": 0.8199999928474426,
+                "y": 0.5120000243186951,
+                "z": 2.432616710662842
+              }
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 3
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.steerable"
+            },
+            "position": 25,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": false
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 3
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.simulated"
+            },
+            "position": 26,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": true
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 3
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.radius"
+            },
+            "position": 27,
+            "sdkType": "float",
+            "sdkTypeId": 5,
+            "value": {
+              "available": true,
+              "value": 0.5359962582588196
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": true,
+              "value": 3
+            },
+            "name": {
+              "available": true,
+              "value": "wheel.powered"
+            },
+            "position": 28,
+            "sdkType": "bool",
+            "sdkTypeId": 1,
+            "value": {
+              "available": true,
+              "value": false
+            }
+          }
+        ],
+        "sharedBoundaryOrder": "434150",
+        "simulation": "paused"
+      }
+    },
+    {
+      "action": "capture",
+      "atMs": 535381,
+      "data": {
+        "attributes": {
+          "count": 0,
+          "expected": true,
+          "final": true,
+          "first": 0,
+          "omittedLowerBound": 0,
+          "present": true,
+          "terminated": true,
+          "total": 0
+        },
+        "callback": {
+          "group": "configuration",
+          "id": {
+            "available": true,
+            "value": "trailer.2"
+          }
+        },
+        "callbackMonotonicNs": {
+          "available": true,
+          "value": "535380436400"
+        },
+        "configurationRevision": "8",
+        "droppedBefore": "0",
+        "envelopeSeq": "17",
+        "gameTime": {
+          "clockId": "7f4a4539-16b7-e86a-da3f-0d2214ca8392",
+          "minutes": {
+            "available": true,
+            "value": "251458"
+          }
+        },
+        "observations": [],
+        "sharedBoundaryOrder": "434151",
+        "simulation": "paused"
+      }
+    },
+    {
+      "action": "capture",
+      "atMs": 535381,
+      "data": {
+        "attributes": {
+          "count": 0,
+          "expected": true,
+          "final": true,
+          "first": 0,
+          "omittedLowerBound": 0,
+          "present": true,
+          "terminated": true,
+          "total": 0
+        },
+        "callback": {
+          "group": "configuration",
+          "id": {
+            "available": true,
+            "value": "trailer.3"
+          }
+        },
+        "callbackMonotonicNs": {
+          "available": true,
+          "value": "535380438400"
+        },
+        "configurationRevision": "8",
+        "droppedBefore": "0",
+        "envelopeSeq": "18",
+        "gameTime": {
+          "clockId": "7f4a4539-16b7-e86a-da3f-0d2214ca8392",
+          "minutes": {
+            "available": true,
+            "value": "251458"
+          }
+        },
+        "observations": [],
+        "sharedBoundaryOrder": "434152",
+        "simulation": "paused"
+      }
+    },
+    {
+      "action": "capture",
+      "atMs": 535381,
+      "data": {
+        "attributes": {
+          "count": 0,
+          "expected": true,
+          "final": true,
+          "first": 0,
+          "omittedLowerBound": 0,
+          "present": true,
+          "terminated": true,
+          "total": 0
+        },
+        "callback": {
+          "group": "configuration",
+          "id": {
+            "available": true,
+            "value": "trailer.4"
+          }
+        },
+        "callbackMonotonicNs": {
+          "available": true,
+          "value": "535380439600"
+        },
+        "configurationRevision": "8",
+        "droppedBefore": "0",
+        "envelopeSeq": "19",
+        "gameTime": {
+          "clockId": "7f4a4539-16b7-e86a-da3f-0d2214ca8392",
+          "minutes": {
+            "available": true,
+            "value": "251458"
+          }
+        },
+        "observations": [],
+        "sharedBoundaryOrder": "434153",
+        "simulation": "paused"
+      }
+    },
+    {
+      "action": "capture",
+      "atMs": 535381,
+      "data": {
+        "attributes": {
+          "count": 0,
+          "expected": true,
+          "final": true,
+          "first": 0,
+          "omittedLowerBound": 0,
+          "present": true,
+          "terminated": true,
+          "total": 0
+        },
+        "callback": {
+          "group": "configuration",
+          "id": {
+            "available": true,
+            "value": "trailer.5"
+          }
+        },
+        "callbackMonotonicNs": {
+          "available": true,
+          "value": "535380443400"
+        },
+        "configurationRevision": "8",
+        "droppedBefore": "0",
+        "envelopeSeq": "20",
+        "gameTime": {
+          "clockId": "7f4a4539-16b7-e86a-da3f-0d2214ca8392",
+          "minutes": {
+            "available": true,
+            "value": "251458"
+          }
+        },
+        "observations": [],
+        "sharedBoundaryOrder": "434154",
+        "simulation": "paused"
+      }
+    },
+    {
+      "action": "capture",
+      "atMs": 535381,
+      "data": {
+        "attributes": {
+          "count": 0,
+          "expected": true,
+          "final": true,
+          "first": 0,
+          "omittedLowerBound": 0,
+          "present": true,
+          "terminated": true,
+          "total": 0
+        },
+        "callback": {
+          "group": "configuration",
+          "id": {
+            "available": true,
+            "value": "trailer.6"
+          }
+        },
+        "callbackMonotonicNs": {
+          "available": true,
+          "value": "535380444200"
+        },
+        "configurationRevision": "8",
+        "droppedBefore": "0",
+        "envelopeSeq": "21",
+        "gameTime": {
+          "clockId": "7f4a4539-16b7-e86a-da3f-0d2214ca8392",
+          "minutes": {
+            "available": true,
+            "value": "251458"
+          }
+        },
+        "observations": [],
+        "sharedBoundaryOrder": "434155",
+        "simulation": "paused"
+      }
+    },
+    {
+      "action": "capture",
+      "atMs": 535381,
+      "data": {
+        "attributes": {
+          "count": 0,
+          "expected": true,
+          "final": true,
+          "first": 0,
+          "omittedLowerBound": 0,
+          "present": true,
+          "terminated": true,
+          "total": 0
+        },
+        "callback": {
+          "group": "configuration",
+          "id": {
+            "available": true,
+            "value": "trailer.7"
+          }
+        },
+        "callbackMonotonicNs": {
+          "available": true,
+          "value": "535380445800"
+        },
+        "configurationRevision": "8",
+        "droppedBefore": "0",
+        "envelopeSeq": "22",
+        "gameTime": {
+          "clockId": "7f4a4539-16b7-e86a-da3f-0d2214ca8392",
+          "minutes": {
+            "available": true,
+            "value": "251458"
+          }
+        },
+        "observations": [],
+        "sharedBoundaryOrder": "434156",
+        "simulation": "paused"
+      }
+    },
+    {
+      "action": "capture",
+      "atMs": 535381,
+      "data": {
+        "attributes": {
+          "count": 0,
+          "expected": true,
+          "final": true,
+          "first": 0,
+          "omittedLowerBound": 0,
+          "present": true,
+          "terminated": true,
+          "total": 0
+        },
+        "callback": {
+          "group": "configuration",
+          "id": {
+            "available": true,
+            "value": "trailer.8"
+          }
+        },
+        "callbackMonotonicNs": {
+          "available": true,
+          "value": "535380446400"
+        },
+        "configurationRevision": "8",
+        "droppedBefore": "0",
+        "envelopeSeq": "23",
+        "gameTime": {
+          "clockId": "7f4a4539-16b7-e86a-da3f-0d2214ca8392",
+          "minutes": {
+            "available": true,
+            "value": "251458"
+          }
+        },
+        "observations": [],
+        "sharedBoundaryOrder": "434157",
+        "simulation": "paused"
+      }
+    },
+    {
+      "action": "capture",
+      "atMs": 535381,
+      "data": {
+        "attributes": {
+          "count": 0,
+          "expected": true,
+          "final": true,
+          "first": 0,
+          "omittedLowerBound": 0,
+          "present": true,
+          "terminated": true,
+          "total": 0
+        },
+        "callback": {
+          "group": "configuration",
+          "id": {
+            "available": true,
+            "value": "trailer.9"
+          }
+        },
+        "callbackMonotonicNs": {
+          "available": true,
+          "value": "535380447600"
+        },
+        "configurationRevision": "8",
+        "droppedBefore": "0",
+        "envelopeSeq": "24",
+        "gameTime": {
+          "clockId": "7f4a4539-16b7-e86a-da3f-0d2214ca8392",
+          "minutes": {
+            "available": true,
+            "value": "251458"
+          }
+        },
+        "observations": [],
+        "sharedBoundaryOrder": "434158",
+        "simulation": "paused"
+      }
+    },
+    {
+      "action": "capture",
+      "atMs": 539917,
+      "data": {
+        "attributes": {
+          "count": 0,
+          "expected": false,
+          "final": true,
+          "first": 0,
+          "omittedLowerBound": 0,
+          "present": false,
+          "terminated": true,
+          "total": 0
+        },
+        "callback": {
+          "group": "lifecycle",
+          "id": {
+            "available": true,
+            "value": "simulation.started"
+          }
+        },
+        "callbackMonotonicNs": {
+          "available": true,
+          "value": "539916511500"
+        },
+        "configurationRevision": "8",
+        "droppedBefore": "0",
+        "envelopeSeq": "25",
+        "gameTime": {
+          "clockId": "7f4a4539-16b7-e86a-da3f-0d2214ca8392",
+          "minutes": {
+            "available": true,
+            "value": "251458"
+          }
+        },
+        "observations": [],
+        "sharedBoundaryOrder": "434675",
+        "simulation": "running"
+      }
+    },
+    {
+      "action": "capture",
+      "atMs": 588742,
+      "data": {
+        "attributes": {
+          "count": 0,
+          "expected": false,
+          "final": true,
+          "first": 0,
+          "omittedLowerBound": 0,
+          "present": false,
+          "terminated": true,
+          "total": 0
+        },
+        "callback": {
+          "group": "lifecycle",
+          "id": {
+            "available": true,
+            "value": "simulation.paused"
+          }
+        },
+        "callbackMonotonicNs": {
+          "available": true,
+          "value": "588741542300"
+        },
+        "configurationRevision": "8",
+        "droppedBefore": "0",
+        "envelopeSeq": "26",
+        "gameTime": {
+          "clockId": "7f4a4539-16b7-e86a-da3f-0d2214ca8392",
+          "minutes": {
+            "available": true,
+            "value": "251528"
+          }
+        },
+        "observations": [],
+        "sharedBoundaryOrder": "469716",
+        "simulation": "paused"
+      }
+    },
+    {
+      "action": "capture",
+      "atMs": 592396,
+      "data": {
+        "attributes": {
+          "count": 5,
+          "expected": true,
+          "final": true,
+          "first": 0,
+          "omittedLowerBound": 0,
+          "present": true,
+          "terminated": true,
+          "total": 5
+        },
+        "callback": {
+          "group": "gameplay",
+          "id": {
+            "available": true,
+            "value": "player.use.ferry"
+          }
+        },
+        "callbackMonotonicNs": {
+          "available": true,
+          "value": "592395681699"
+        },
+        "configurationRevision": "8",
+        "droppedBefore": "0",
+        "envelopeSeq": "27",
+        "gameTime": {
+          "clockId": "7f4a4539-16b7-e86a-da3f-0d2214ca8392",
+          "minutes": {
+            "available": true,
+            "value": "251528"
+          }
+        },
+        "observations": [
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "pay.amount"
+            },
+            "position": 0,
+            "sdkType": "s64",
+            "sdkTypeId": 13,
+            "value": {
+              "available": true,
+              "value": "677"
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "source.name"
+            },
+            "position": 1,
+            "sdkType": "string",
+            "sdkTypeId": 12,
+            "value": {
+              "available": true,
+              "value": "name-11"
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "target.name"
+            },
+            "position": 2,
+            "sdkType": "string",
+            "sdkTypeId": 12,
+            "value": {
+              "available": true,
+              "value": "name-12"
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "source.id"
+            },
+            "position": 3,
+            "sdkType": "string",
+            "sdkTypeId": 12,
+            "value": {
+              "available": true,
+              "value": "goteborg"
+            }
+          },
+          {
+            "arrayIndex": {
+              "available": false,
+              "detail": "none",
+              "reason": "not-supported"
+            },
+            "name": {
+              "available": true,
+              "value": "target.id"
+            },
+            "position": 4,
+            "sdkType": "string",
+            "sdkTypeId": 12,
+            "value": {
+              "available": true,
+              "value": "frederikshv"
+            }
+          }
+        ],
+        "sharedBoundaryOrder": "470094",
+        "simulation": "paused"
+      }
+    },
+    {
+      "action": "capture",
+      "atMs": 595086,
+      "data": {
+        "attributes": {
+          "count": 0,
+          "expected": false,
+          "final": true,
+          "first": 0,
+          "omittedLowerBound": 0,
+          "present": false,
+          "terminated": true,
+          "total": 0
+        },
+        "callback": {
+          "group": "lifecycle",
+          "id": {
+            "available": true,
+            "value": "simulation.started"
+          }
+        },
+        "callbackMonotonicNs": {
+          "available": true,
+          "value": "595085020800"
+        },
+        "configurationRevision": "8",
+        "droppedBefore": "0",
+        "envelopeSeq": "28",
+        "gameTime": {
+          "clockId": "7f4a4539-16b7-e86a-da3f-0d2214ca8392",
+          "minutes": {
+            "available": true,
+            "value": "251528"
+          }
+        },
+        "observations": [],
+        "sharedBoundaryOrder": "470252",
+        "simulation": "running"
+      }
+    },
+    {
+      "action": "capture",
+      "atMs": 737649,
+      "data": {
+        "attributes": {
+          "count": 0,
+          "expected": false,
+          "final": true,
+          "first": 0,
+          "omittedLowerBound": 0,
+          "present": false,
+          "terminated": true,
+          "total": 0
+        },
+        "callback": {
+          "group": "lifecycle",
+          "id": {
+            "available": true,
+            "value": "simulation.paused"
+          }
+        },
+        "callbackMonotonicNs": {
+          "available": true,
+          "value": "737648865300"
+        },
+        "configurationRevision": "8",
+        "droppedBefore": "0",
+        "envelopeSeq": "29",
+        "gameTime": {
+          "clockId": "7f4a4539-16b7-e86a-da3f-0d2214ca8392",
+          "minutes": {
+            "available": true,
+            "value": "251751"
+          }
+        },
+        "observations": [],
+        "sharedBoundaryOrder": "572793",
+        "simulation": "paused"
+      }
+    },
+    {
+      "action": "shutdown",
+      "atMs": 737650,
+      "reason": "plugin-shutdown"
+    }
+  ],
+  "transport": [
+    {
+      "atMs": 0,
+      "action": "connect",
+      "client": {
+        "durable": true,
+        "commit": "each",
+        "ack": "each"
+      }
+    }
+  ]
+}

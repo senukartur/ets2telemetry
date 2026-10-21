@@ -1,6 +1,7 @@
 // Strict protocol v1 simulator scenario schema (ET-005b). Scenario files are read with the bounded strict-JSON reader of
 // the v0 simulator; unknown keys, unordered steps and unsupported origins are rejected, and the returned scenario is
 // rebuilt from validated fields only. The format is documented in docs/simulator-v1.md.
+import {validateCaptureStep, validateProvenance, stepsDigest, type CaptureStep, type CaptureProvenance} from './cap0-schema';
 import {MAX_EVENT_SEQ, PROTOCOL_V1, validateServerMessage, type GameMode} from '../../../../packages/contracts/src/protocol-v1';
 import {isUint64} from '../../../../packages/contracts/src/protocol-v0';
 import {CHANNELS, type AttributeList, type FrameChannels, type SdkAttribute, type SdkType, type SourceConfig} from './source';
@@ -11,7 +12,7 @@ export const SCENARIO_FORMAT = 'ets2telemetry-simulator-v1';
 export const MAX_AT_MS = 86_400_000;
 export const MAX_STEPS = 1_000;
 type At = {atMs: number};
-export type SourceStep = At & (
+export type SourceStep = CaptureStep | At & (
   {action: 'configuration' | 'gameplay'; id: string; attributes: SdkAttribute[]; list: AttributeList; repeat: number} |
   {action: 'lifecycle'; event: 'simulation.started' | 'simulation.paused'} |
   {action: 'frame'; timerRestart: boolean; channels: FrameChannels} |
@@ -29,7 +30,7 @@ export type SourceStep = At & (
 export type TransportStep = At & ({action: 'connect'; client: ClientPolicy & {probes: number[]}} | {action: 'disconnect'} | {action: 'clientFault'; fault: ClientFault} |
   {action: 'wireFault'; fault: WireFault} | {action: 'secondClient'} | {action: 'writeDeadline'});
 export interface Scenario {
-  id: string; purpose: string; reg: string[]; origin: 'synthetic'; game: 'ets2' | 'ats'; seed: string; faultInjection: boolean;
+  id: string; purpose: string; reg: string[]; origin: 'synthetic' | 'replay'; provenance?: CaptureProvenance; game: 'ets2' | 'ats'; seed: string; faultInjection: boolean;
   source: Omit<SourceConfig, 'game' | 'seed'>; steps: SourceStep[]; transport: TransportStep[];
 }
 
@@ -125,6 +126,7 @@ function policy(v: unknown, path: string, connectAt: number): ClientPolicy & {pr
 
 /** Validates one source step and rebuilds it from validated fields; the generated soak timeline (soak.ts) uses it too. */
 export function sourceStep(v: unknown, path: string, source: Scenario['source']): SourceStep {
+  if (v && typeof v === 'object' && (v as {action?: unknown}).action === 'capture') return validateCaptureStep(v);
   const action = oneOf(obj(v, path, ['atMs', 'action'], ['id', 'attributes', 'list', 'repeat', 'event', 'timerRestart', 'channels', 'mode', 'method', 'confidence', 'module',
     'count', 'full', 'deltaMs', 'durationMs', 'sourceClockAdvances', 'reason']).action, `${path}.action`,
   ['configuration', 'gameplay', 'lifecycle', 'frame', 'gameMode', 'encodingFailure', 'handoff', 'utcJump', 'suspend', 'shutdown'] as const);
@@ -187,10 +189,11 @@ export function transportStep(v: unknown, path: string, faultInjection: boolean)
 export function validateScenario(input: unknown): Scenario {
   const o = obj(input, '$', ['format', 'schemaVersion', 'id', 'purpose', 'reg', 'origin', 'game', 'seed', 'provenance', 'source', 'steps', 'transport'], ['faultInjection']);
   if (o.format !== SCENARIO_FORMAT || o.schemaVersion !== 1) fail('$.format', `${SCENARIO_FORMAT} schema 1 expected`);
-  // The simulator never emits `game` (CD-4). Replay origins require CAP-01 provenance, which a later ET-005b PR adds.
   if (o.origin === 'game') fail('$.origin', 'the simulator never emits origin game');
-  if (o.origin !== 'synthetic') fail('$.origin', 'only synthetic scenarios are supported in this revision');
-  if (o.provenance !== null) fail('$.provenance', 'a synthetic scenario has no capture provenance');
+  const origin = oneOf(o.origin, '$.origin', ['synthetic', 'replay'] as const);
+  let provenance: CaptureProvenance | undefined;
+  try { provenance = o.provenance === null ? undefined : validateProvenance(o.provenance); } catch { fail('$.provenance', 'invalid capture provenance'); }
+  if (origin === 'replay' && !provenance) fail('$.provenance', 'replay requires capture provenance');
   const reg = arr(o.reg, '$.reg', 18).map((r, i) => { const s = str(r, `$.reg[${i}]`); if (!/^REG-0(0[1-9]|1[0-8])$/.test(s)) fail(`$.reg[${i}]`); return s; });
   if (!reg.length || new Set(reg).size !== reg.length) fail('$.reg', 'unique REG identifiers expected');
   const s = obj(o.source, '$.source', ['versions', 'gameplayEvents', 'currency', 'gameMode'], ['startEventSeq']);
@@ -211,7 +214,20 @@ export function validateScenario(input: unknown): Scenario {
   if (steps.length + transport.length > MAX_STEPS) fail('$', `at most ${MAX_STEPS} steps`);
   if (faultInjection && !transport.some(t => t.action === 'wireFault')) fail('$.faultInjection', 'only a scenario with wire faults enables fault injection');
   checkTimeline(steps, transport);
-  return {id: str(o.id, '$.id'), purpose: str(o.purpose, '$.purpose', 1_024), reg, origin: 'synthetic', game: oneOf(o.game, '$.game', ['ets2', 'ats'] as const), seed: str(o.seed, '$.seed'),
+  if (provenance) {
+    if (steps.some(s => s.action !== 'capture' && s.action !== 'shutdown') || steps.filter(s => s.action === 'shutdown').length !== 1 || steps.at(-1)?.action !== 'shutdown') fail('$.steps', 'capture callbacks followed by one shutdown expected');
+    if (provenance.stepsSha256 !== stepsDigest(o.steps) || provenance.envelopes !== steps.length - 1) fail('$.provenance', 'capture steps integrity mismatch');
+    if ((provenance.inputOrigin === 'game' ? 'replay' : 'synthetic') !== origin || s.gameMode !== 'unknown' || source.startEventSeq !== 1n) fail('$.origin', 'capture source policy mismatch');
+    if (faultInjection) fail('$.faultInjection', 'capture steps cannot inject wire faults');
+    let ns = -1n, boundary = 0n;
+    steps.forEach((step, i) => {
+      if (step.action !== 'capture') return;
+      const d = step.data, t = d.callbackMonotonicNs;
+      if (!t.available || BigInt(t.value) < ns || BigInt(d.sharedBoundaryOrder) <= boundary || d.envelopeSeq !== String(i + 1)) fail('$.steps', 'capture context ordering mismatch');
+      ns = BigInt(t.value); boundary = BigInt(d.sharedBoundaryOrder);
+    });
+  } else if (steps.some(s => s.action === 'capture')) fail('$.steps', 'capture context requires provenance');
+  return {id: str(o.id, '$.id'), purpose: str(o.purpose, '$.purpose', 1_024), reg, origin, ...(provenance ? {provenance} : {}), game: oneOf(o.game, '$.game', ['ets2', 'ats'] as const), seed: str(o.seed, '$.seed'),
     faultInjection, source, steps, transport};
 }
 

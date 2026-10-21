@@ -1,0 +1,196 @@
+{
+  "scenario": "cap01-run4",
+  "authoredFrom": [
+    "docs/validation/cap-01a.md O1–O11; October 13/14 independent observation reviews",
+    "October 21, 2026 independent read-only CAP0 source audit; v1 D12/D13 callback projection"
+  ],
+  "envelopes": 71,
+  "coverage": [
+    {
+      "envelope": 1,
+      "event": "1",
+      "type": "job.cleared"
+    },
+    {
+      "envelope": 6,
+      "event": "2",
+      "type": "truck.configured"
+    },
+    {
+      "envelope": 18,
+      "event": "3",
+      "type": "timers.restart"
+    },
+    {
+      "envelope": 19,
+      "event": "4",
+      "type": "simulation.started"
+    },
+    {
+      "envelope": 20,
+      "event": "5",
+      "type": "simulation.paused"
+    },
+    {
+      "envelope": 21,
+      "event": "6",
+      "type": "simulation.started"
+    },
+    {
+      "envelope": 22,
+      "event": "7",
+      "type": "simulation.paused"
+    },
+    {
+      "envelope": 23,
+      "event": "8",
+      "type": "simulation.started"
+    },
+    {
+      "envelope": 24,
+      "event": "9",
+      "type": "player.fined"
+    },
+    {
+      "envelope": 25,
+      "event": "10",
+      "type": "player.fined"
+    },
+    {
+      "envelope": 26,
+      "event": "11",
+      "type": "player.fined"
+    },
+    {
+      "envelope": 27,
+      "event": "12",
+      "type": "player.fined"
+    },
+    {
+      "envelope": 28,
+      "event": "13",
+      "type": "simulation.paused"
+    },
+    {
+      "envelope": 29,
+      "event": "14",
+      "type": "simulation.started"
+    },
+    {
+      "envelope": 30,
+      "event": "15",
+      "type": "simulation.paused"
+    },
+    {
+      "envelope": 31,
+      "event": "16",
+      "type": "simulation.started"
+    },
+    {
+      "envelope": 32,
+      "event": "17",
+      "type": "simulation.paused"
+    },
+    {
+      "envelope": 33,
+      "event": "18",
+      "type": "simulation.started"
+    },
+    {
+      "envelope": 34,
+      "event": "19",
+      "type": "simulation.paused"
+    },
+    {
+      "envelope": 35,
+      "event": "20",
+      "type": "job.configured"
+    },
+    {
+      "envelope": 36,
+      "event": "21",
+      "type": "truck.configured"
+    },
+    {
+      "envelope": 38,
+      "event": "22",
+      "type": "trailer.configured"
+    },
+    {
+      "envelope": 48,
+      "event": "23",
+      "type": "simulation.started"
+    },
+    {
+      "envelope": 49,
+      "event": "24",
+      "type": "simulation.paused"
+    },
+    {
+      "envelope": 50,
+      "event": "25",
+      "type": "simulation.started"
+    },
+    {
+      "envelope": 51,
+      "event": "26",
+      "type": "simulation.paused"
+    },
+    {
+      "envelope": 52,
+      "event": "27",
+      "type": "simulation.started"
+    },
+    {
+      "envelope": 53,
+      "event": "28",
+      "type": "player.fined"
+    },
+    {
+      "envelope": 54,
+      "event": "29",
+      "type": "player.fined"
+    },
+    {
+      "envelope": 55,
+      "event": "30",
+      "type": "simulation.paused"
+    },
+    {
+      "envelope": 56,
+      "event": "31",
+      "type": "simulation.started"
+    },
+    {
+      "envelope": 57,
+      "event": "32",
+      "type": "simulation.paused"
+    },
+    {
+      "envelope": 58,
+      "event": "33",
+      "type": "job.delivered"
+    },
+    {
+      "envelope": 59,
+      "event": "34",
+      "type": "job.cleared"
+    },
+    {
+      "envelope": 60,
+      "event": "35",
+      "type": "truck.configured"
+    },
+    {
+      "envelope": 62,
+      "event": "36",
+      "type": "trailer.cleared"
+    }
+  ],
+  "ledger": {
+    "committedThroughEventSeq": "36",
+    "committedEvents": 36,
+    "committedGapMarkers": "0",
+    "duplicates": 0
+  }
+}
