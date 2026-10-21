@@ -5,8 +5,8 @@ import {CLOSE_TERMINATE_RESERVE_MS, HISTORY_CLOSE_GRACE_MS, HISTORY_STORAGE_STEP
 export const SHUTDOWN_PHASES = ['intake', 'flush', 'storage'] as const;
 export type ShutdownPhase = typeof SHUTDOWN_PHASES[number];
 /**
- * The whole sequence must finish before main's 3000 ms kill deadline. The sum of every phase's
- * largest step budget is checked against this bound at registration time.
+ * Nominal allocation before main's 3000 ms kill deadline. Registration checks the sum of phase maxima.
+ * Event-loop verdict turns and history-close floors retain their existing scheduling limits.
  */
 export const SERVICE_STOP_BUDGET_MS = 2500;
 
@@ -40,7 +40,7 @@ const systemTimers: ShutdownTimers = {
 
 /**
  * Runs registered service shutdown steps once, phase by phase. Steps within a phase run in parallel and
- * each is bounded by its own budget, so a phase lasts at most its largest step budget. A failed or late
+ * each uses its effective budget (recording may borrow unused intake, then history uses actual remaining time). A failed or late
  * step is recorded and the sequence continues; the result reports whether every step finished cleanly.
  */
 export class ShutdownSequence {
@@ -62,7 +62,7 @@ export class ShutdownSequence {
     steps.push({...step});
   }
 
-  /** Total of the largest step budget in each phase: the sequence's upper bound. */
+  /** Total of the largest nominal step budget in each phase; not an absolute physical scheduler deadline. */
   get budgetMs(): number {
     return SHUTDOWN_PHASES.reduce((sum, phase) => sum + Math.max(0, ...this.phases.get(phase)!.map(step => step.budgetMs)), 0);
   }
@@ -78,7 +78,17 @@ export class ShutdownSequence {
     for (const phase of SHUTDOWN_PHASES) {
       const steps = this.phases.get(phase)!;
       let contexts: ShutdownStepContext[] | undefined;
-      if (phase === 'storage') {
+      if (phase === 'flush') {
+        const elapsed = this.timers.now() - sequenceStarted;
+        const intakeBudget = Math.max(0, ...this.phases.get('intake')!.map(step => step.budgetMs));
+        const storageBudget = Math.max(0, ...this.phases.get('storage')!.map(step => step.budgetMs));
+        contexts = steps.map(step => {
+          // Only recording borrows unused intake, preserving the registered parallel storage maximum.
+          const extra = step.name === 'recording-flush' && Number.isFinite(elapsed) && elapsed >= 0
+            ? Math.max(0, Math.min(intakeBudget - elapsed, SERVICE_STOP_BUDGET_MS - elapsed - storageBudget - step.budgetMs)) : 0;
+          return {budgetMs: step.budgetMs + extra};
+        });
+      } else if (phase === 'storage') {
         const elapsed = this.timers.now() - sequenceStarted;
         const remainingStopBudget = Math.max(0, SERVICE_STOP_BUDGET_MS - elapsed);
         contexts = steps.map(step => {

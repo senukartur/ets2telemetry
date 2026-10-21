@@ -4,11 +4,11 @@ import {SERVICE_STOP_BUDGET_MS, ShutdownSequence, type ShutdownStepContext} from
 
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
-function fixture() {
+function fixture(now = () => Date.now()) {
   const log = vi.fn();
   // The injected clock follows Vitest's fake time, so measured step durations are deterministic.
   const sequence = new ShutdownSequence(log, {setTimeout: (callback, ms) => setTimeout(callback, ms), clearTimeout: handle => clearTimeout(handle as ReturnType<typeof setTimeout>),
-    setImmediate: callback => setImmediate(callback), clearImmediate: handle => clearImmediate(handle as ReturnType<typeof setImmediate>), now: () => Date.now()});
+    setImmediate: callback => setImmediate(callback), clearImmediate: handle => clearImmediate(handle as ReturnType<typeof setImmediate>), now});
   const steps = () => log.mock.calls.filter(call => call[0] === 'SHUTDOWN_STEP').map(call => call[2] as Record<string, unknown>);
   return {log, sequence, steps};
 }
@@ -230,4 +230,79 @@ it('reports a clean empty sequence without timers', async () => {
   const f = fixture();
   await expect(f.sequence.run()).resolves.toEqual({clean: true});
   expect(f.steps()).toEqual([]); expect(vi.getTimerCount()).toBe(0);
+});
+
+// Owner-approved corrective allocation: a prompt intake may lend its unused budget to the final recording flush.
+it('keeps an 829 ms recording flush clean and reserves actual remaining time for storage', async () => {
+  const f = fixture(), pending = deferred(); let flush: ShutdownStepContext | undefined, storage: ShutdownStepContext | undefined;
+  f.sequence.register('intake', {name: 'v1-ingestion', budgetMs: 1000, run: () => undefined});
+  f.sequence.register('flush', {name: 'recording-flush', budgetMs: 500, run: context => {flush = context; return pending.promise;}});
+  f.sequence.register('storage', {name: 'history-storage', budgetMs: 1000, run: context => {storage = context;}});
+  const result = f.sequence.run(); await vi.advanceTimersByTimeAsync(829);
+  pending.resolve(); await expect(result).resolves.toEqual({clean: true});
+  expect(flush).toEqual({budgetMs: 1500}); expect(storage).toEqual({budgetMs: 1671, graceMs: 1471});
+  expect(f.steps()).toEqual([{phase: 'intake', name: 'v1-ingestion', outcome: 'ok', ms: 0},
+    {phase: 'flush', name: 'recording-flush', outcome: 'ok', ms: 829}, {phase: 'storage', name: 'history-storage', outcome: 'ok', ms: 0}]);
+});
+
+it.each([[0, 1500], [300, 1200], [1000, 500]])('after %i ms intake grants the recording flush %i ms', async (elapsed, budgetMs) => {
+  const f = fixture(), recording = vi.fn();
+  f.sequence.register('intake', {name: 'v1-ingestion', budgetMs: 1000, run: () => new Promise<void>(resolve => setTimeout(resolve, elapsed))});
+  f.sequence.register('intake', {name: 'capture', budgetMs: 600, run: () => undefined});
+  f.sequence.register('flush', {name: 'recording-flush', budgetMs: 500, run: recording});
+  f.sequence.register('storage', {name: 'history-storage', budgetMs: 1000, run: () => undefined});
+  const result = f.sequence.run(); await vi.advanceTimersByTimeAsync(elapsed);
+  await expect(result).resolves.toEqual({clean: true}); expect(recording).toHaveBeenCalledExactlyOnceWith({budgetMs});
+  expect(f.sequence.budgetMs).toBe(2500);
+});
+it('uses parallel maxima and retains the registered storage reserve', async () => {
+  const f = fixture(), recording = vi.fn();
+  f.sequence.register('intake', {name: 'v1-ingestion', budgetMs: 1500, run: () => undefined});
+  f.sequence.register('intake', {name: 'capture', budgetMs: 1200, run: () => undefined});
+  f.sequence.register('flush', {name: 'recording-flush', budgetMs: 500, run: recording});
+  f.sequence.register('storage', {name: 'first-storage', budgetMs: 500, run: () => undefined});
+  f.sequence.register('storage', {name: 'second-storage', budgetMs: 400, run: () => undefined});
+  await expect(f.sequence.run()).resolves.toEqual({clean: true});
+  expect(recording).toHaveBeenCalledExactlyOnceWith({budgetMs: 2000}); expect(f.sequence.budgetMs).toBe(2500);
+});
+it.each(['flush', 'intake'] as const)('does not lend to an unrelated name or a recording name in the %s phase', async phase => {
+  const f = fixture(), ordinary = vi.fn();
+  f.sequence.register('intake', {name: 'ingestion', budgetMs: 1000, run: () => undefined});
+  f.sequence.register(phase, {name: phase === 'flush' ? 'other-flush' : 'recording-flush', budgetMs: 500, run: ordinary});
+  f.sequence.register('storage', {name: 'storage-probe', budgetMs: 1000, run: () => undefined});
+  await expect(f.sequence.run()).resolves.toEqual({clean: true}); expect(ordinary).toHaveBeenCalledExactlyOnceWith({budgetMs: 500});
+});
+it('grants no spare intake allocation when no intake steps are registered', async () => {
+  const f = fixture(), recording = vi.fn();
+  f.sequence.register('flush', {name: 'recording-flush', budgetMs: 500, run: recording});
+  await expect(f.sequence.run()).resolves.toEqual({clean: true}); expect(recording).toHaveBeenCalledExactlyOnceWith({budgetMs: 500});
+});
+it.each([-1, NaN, Infinity, -Infinity])('grants nothing for invalid elapsed time %s', async elapsed => {
+  let reads = 0; const f = fixture(() => reads++ === 0 ? 0 : elapsed), recording = vi.fn();
+  f.sequence.register('intake', {name: 'ingestion', budgetMs: 1000, run: () => undefined});
+  f.sequence.register('flush', {name: 'recording-flush', budgetMs: 500, run: recording});
+  await expect(f.sequence.run()).resolves.toEqual({clean: true}); expect(recording).toHaveBeenCalledExactlyOnceWith({budgetMs: 500});
+});
+it('bounds stalled recording and history at nominal 2500 ms plus the existing verdict turns and history floor', async () => {
+  const f = fixture(); let result: {clean: boolean} | undefined;
+  f.sequence.register('intake', {name: 'ingestion', budgetMs: 1000, run: () => undefined});
+  f.sequence.register('flush', {name: 'recording-flush', budgetMs: 500, run: () => new Promise<void>(() => undefined)});
+  f.sequence.register('storage', {name: 'history-storage', budgetMs: 1000, run: () => new Promise<void>(() => undefined)});
+  void f.sequence.run().then(value => {result = value;}); await vi.advanceTimersByTimeAsync(2500); expect(result).toBeUndefined();
+  await vi.advanceTimersByTimeAsync(2); expect(result).toEqual({clean: false});
+  expect(f.steps()).toEqual([{phase: 'intake', name: 'ingestion', outcome: 'ok', ms: 0},
+    {phase: 'flush', name: 'recording-flush', outcome: 'timeout', ms: 1501}, {phase: 'storage', name: 'history-storage', outcome: 'timeout', ms: 1001}]);
+  expect(vi.getTimerCount()).toBe(0);
+});
+it.each(['failed', 'late-success', 'late-failure'])('keeps %s sticky after recording uses its effective budget', async outcome => {
+  const f = fixture(), pending = deferred();
+  f.sequence.register('intake', {name: 'ingestion', budgetMs: 1000, run: () => undefined});
+  f.sequence.register('flush', {name: 'recording-flush', budgetMs: 500, run: () => pending.promise});
+  const result = f.sequence.run(); await vi.advanceTimersByTimeAsync(0);
+  if (outcome === 'failed') pending.reject(new Error('fixed-test-failure')); else await vi.advanceTimersByTimeAsync(1501);
+  await expect(result).resolves.toEqual({clean: false});
+  const before = f.steps();
+  if (outcome === 'late-success') pending.resolve(); else if (outcome === 'late-failure') pending.reject(new Error('fixed-late-failure'));
+  await vi.advanceTimersByTimeAsync(0); expect(f.steps()).toEqual(before);
+  expect(before.at(-1)?.outcome).toBe(outcome === 'failed' ? 'failed' : 'timeout'); expect(vi.getTimerCount()).toBe(0);
 });

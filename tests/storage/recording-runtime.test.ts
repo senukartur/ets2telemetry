@@ -1,6 +1,6 @@
 // ET-015c PR-1 (G13, G14, G20): the telemetry service's recording runtime (apps/desktop/src/recording-runtime.ts), the
 // production wiring of the recording plan, HistoryStorage, TripRecorderSink and V1Ingestion, driven in process under the
-// pinned Electron runtime with the real or the fault storage worker, the real ShutdownSequence with its production timers
+// pinned Electron runtime with the real or the fault storage worker, the real ShutdownSequence (production timers except the explicit controlled-shutdown-clock regression)
 // and the reactive v1 simulator on actual Windows pipes. Every case records `synthetic:<name>` under a temporary
 // LOCALAPPDATA and must never create its history database. Waits count held requests, commits and ACKs; real-time bounds
 // are named hang guards only. Expected values are written by hand from R10, R14, H11 and the simulator scenarios.
@@ -11,13 +11,13 @@ import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 import type {StorageWorkerHandle} from '../../packages/storage/src/client';
 import {createRecordingRuntime, type RecordingIngestionOverrides, type RecordingRuntime} from '../../apps/desktop/src/recording-runtime';
 import {GAME_HISTORY_RECORDING} from '../../apps/desktop/src/recording-policy';
-import {SERVICE_STOP_BUDGET_MS} from '../../apps/desktop/src/shutdown-sequence';
+import {ShutdownSequence, type ShutdownTimers, SERVICE_STOP_BUDGET_MS} from '../../apps/desktop/src/shutdown-sequence';
 import type {V1SourceState} from '../../apps/desktop/src/v1-ingestion';
 import {readFixtureFile} from '../../tools/telemetry-simulator/src/fixture-file';
 import {reactiveConflicts, serveV1Reactive} from '../../tools/telemetry-simulator/src/v1/reactive';
 import {scenarioSource} from '../../tools/telemetry-simulator/src/v1/replay';
 import {scenarioPath} from '../shared/simulator-v1-expected';
-import {ok, TEST_CLOSE_GRACE_MS, workspace} from './helpers';
+import {ok, readOnly, TEST_CLOSE_GRACE_MS, workspace} from './helpers';
 import {
   guarded, RECORDING_FIXTURES, recordingExpected, replayOf, servedAcks, storageWorker, storedGaps, storedRows, storedSamples, terminateWorkers, tracedConnect,
   tracedHandle, tracedShutdown, until, withTransport
@@ -70,7 +70,69 @@ async function startDurable(runtime: RecordingRuntime, endpoint: string) {
 }
 const durableLogs = (logs: [string, unknown][]) => logs.filter(([event]) => /^V1_(DURABLE|SAMPLES)_/.test(event));
 
+/** Only the shutdown policy clock is controlled: pipe, ingestion, SQLite worker and close use their real event loops. */
+function shutdownClock() {
+  let now = 0;
+  type Timer = {at: number; callback: () => void};
+  const pending = new Set<Timer>();
+  const schedule = (callback: () => void, ms: number) => {const timer = {at: now + ms, callback}; pending.add(timer); return timer;};
+  const clear = (handle: unknown) => {pending.delete(handle as Timer);};
+  const timers: ShutdownTimers = {now: () => now, setTimeout: schedule, clearTimeout: clear,
+    setImmediate: callback => schedule(callback, 0), clearImmediate: clear};
+  return {timers, advanceTo(value: number) {
+    now = value;
+    for (;;) {const due = [...pending].find(timer => timer.at <= now); if (!due) break; pending.delete(due); due.callback();}
+  }};
+}
+
 describe('ET-015c recording runtime with the real storage worker and the real shutdown sequence', () => {
+  it('persists the held final sample after 829 ms of controlled shutdown time without an ACK after stop', async () => {
+    const base = samplesScenario();
+    // The first five authored steps end at the 100 ms running frame, yielding exactly source second 1000.
+    const input = {...base, steps: (base.steps as Json[]).slice(0, 5), transport: [connect(0, {durable: true, commit: 'each', ack: 'each'}), disconnect(10_000)]};
+    const timeline: string[] = [], worker = storageWorker(), traced = tracedHandle(worker.handle, timeline, 'appendSamples'), socket = tracedConnect(timeline);
+    const server = await serveV1Reactive(input, {scale: 1, awaitScriptedAcks: true});
+    const clock = shutdownClock(), steps: {name: string; outcome: string; ms: unknown}[] = [];
+    const sequence = new ShutdownSequence((_event, _detail, facts) => {
+      if (!facts) return; steps.push({name: String(facts.name), outcome: String(facts.outcome), ms: facts.ms});
+      timeline.push(`step ${facts.phase} ${facts.name} ${facts.outcome}`);
+    }, clock.timers);
+    const s = serviceRuntime('held-final-sample', traced.handle, socket, timeline, {ingestionOverrides: {sampleFlushMs: NO_FLUSH_TIMER_MS}});
+    s.runtime.register({register: (phase, step) => sequence.register(phase, {...step, run: context => {timeline.push(`start ${step.name}`); return step.run(context);}})});
+    let stopping: Promise<{clean: boolean}> | undefined;
+    try {
+      await startDurable(s.runtime, server.endpoint);
+      await until(() => s.states.some(state => state.observation?.kind === 'snapshot' && state.observation.state.simulation === 'running'), 'the authored running frame', HANG_GUARD_MS);
+      expect(timeline).not.toContain('held appendSamples'); timeline.push('stop'); stopping = sequence.run();
+      await guarded(traced.held, 'the final appendSamples barrier', HANG_GUARD_MS);
+      clock.advanceTo(829); await Promise.resolve(); await Promise.resolve();
+      expect(steps.find(step => step.name === 'recording-flush')).toBeUndefined();
+      expect(timeline).not.toContain('start history-storage'); traced.release();
+      expect(await guarded(stopping, 'the recording stop', HANG_GUARD_MS)).toEqual({clean: true});
+      expect(await guarded(worker.exit, 'the real storage worker exit', HANG_GUARD_MS)).toBe(0);
+      await server.stop(); const report = await server.done;
+      expect(steps).toEqual([{name: 'v1-ingestion', outcome: 'ok', ms: 0}, {name: 'recording-flush', outcome: 'ok', ms: 829},
+        {name: 'history-storage', outcome: 'ok', ms: 0}]);
+      expect(ordered(timeline, ['stop', 'start recording-flush', 'held appendSamples', 'release', 'done appendSamples',
+        'step flush recording-flush ok', 'start history-storage', 'HISTORY_STORAGE_CLOSED'])).toEqual(['stop', 'start recording-flush',
+        'held appendSamples', 'release', 'done appendSamples', 'step flush recording-flush ok', 'start history-storage', 'HISTORY_STORAGE_CLOSED']);
+      expect(timeline.slice(timeline.indexOf('stop')).filter(line => line.startsWith('ack '))).toEqual([]);
+      expect(servedAcks(report, 0)).toEqual(['1', '2', '3', '4']);
+      expect(report.connections.map(connection => [connection.durable, connection.closedBy])).toEqual([[true, 'client']]);
+      // Independently authored source-frame row: no later frame or source second is admitted.
+      expect(await storedSamples(reader('held-final-sample'), base.seed, sessionOf(input))).toEqual([{
+        monotonicNs: '1000100000000', utcMs: 1800000000100, trip: 'trip@3', sourceClockId: 'capture-clock',
+        gameTime: {minutes: {available: true, value: 600}, clockId: 'game-clock-0'}, speed: {available: true, value: 25.5},
+        fuel: {available: true, value: 400.5}, averageConsumption: {available: true, value: 37.5}, estimatedRange: {available: true, value: 1000500},
+        engineRpm: {available: true, value: 1250.5}, gear: {available: true, value: 5}, odometer: {available: true, value: 1000500},
+        position: {available: true, value: {x: -31234.5, y: 42.25, z: 18800.75}}
+      }]);
+      expect(readOnly(target('held-final-sample'), db => ({integrity: db.pragma('integrity_check', {simple: true}), foreignKeys: db.pragma('foreign_key_check')})))
+        .toEqual({integrity: 'ok', foreignKeys: []});
+      expect(existsSync(historyFile())).toBe(false);
+    } finally {traced.release(); if (stopping) await guarded(stopping, 'stop cleanup', HANG_GUARD_MS); await server.stop();}
+  }, 90_000);
+
   it('(a) recording-flush waits for the commit in flight, no ACK follows the source stop, and the database closes after the flush (REG-011, REG-012)', async () => {
     // normal-delivery with one durable client that commits and acknowledges each item: the fault worker holds the commit
     // of simulation.started (eventSeq 4) inside its transaction, after 1-3 were committed and acknowledged. The server

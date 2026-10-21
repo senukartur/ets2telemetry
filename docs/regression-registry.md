@@ -433,3 +433,12 @@ ET-005b final-verification baseline follow-up (October21): shutdown-stalls.test.
 No critical gate is skipped or retried. Real-game acceptance and transferred ET-042 manual display checks remain unverified; see [validation](validation/et-012e.md).
 
 ET-012e runtime-consumer regression follow-up extends `diagnostics-bundle-check.test.ts` (REG-015/REG-017) with production-built visibility true/false, required-field/type and unknown-overlay-key negatives. `runtime-receipt.test.ts` requires the visibility save in its ordered position with no extra facts. The bounded lifecycle driver's exact settings event sequence includes both unit and visibility saves, preserving the single optional leading pending-read event and run B load-only checks. Actual failed and corrected runtime results are recorded in [ET-012e validation](validation/et-012e.md).
+
+## ET-012 recording-flush budget correction — October 21, 2026
+
+| Tests | Regression | Protection |
+| --- | --- | --- |
+| `tests/unit/shutdown-sequence.test.ts` | REG-011, REG-012 | approved unused-intake grant, 829 ms flush, actual storage remainder/no double spend, partial/full/empty intake, invalid clock, parallel maxima/reserve, ordinary-step isolation, sticky failure and total nominal/verdict/floor limits; existing ET-038 behavior |
+| `tests/storage/recording-runtime.test.ts` | REG-001, REG-011, REG-012 | real runtime/worker/pipe, final authored sample held at append barrier across controlled 829 ms, exact persisted row/integrity/FK, no ACK after stop and storage close after flush |
+
+The original runtime failure and passing diagnostic remain FLAKY with unknown cause. The correction proves bounded additional tolerance, not an operating-system cause. Historical fixture rows and all current recording oracles remain intact; [evidence](validation/et-012e.md).
