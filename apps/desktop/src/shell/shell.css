@@ -198,3 +198,5 @@ button:not(:disabled), select:not(:disabled) { cursor: pointer; }
 
 .yu-gear {min-width:0}
 .yu-instrument [data-testid="live-paused"] {grid-column:1/-1;justify-self:start;white-space:normal;overflow-wrap:normal;max-width:100%;height:auto}
+
+.yu-tank-unavailable { position: absolute; inset: 0; display: grid; place-items: center; color: var(--yu-text-muted); font-size: 20px; }

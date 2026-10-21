@@ -5,8 +5,10 @@ import {CLUSTER_GAUGE_SECTIONS, OVERLAY_GROUPS, type OverlayGroupId} from './ove
 import {getOverlaySectionShortText, getOverlaySectionText, getStrings} from './strings';
 import {localizeDeadlineString, localizeGameTimeString, translateUnit} from './i18n';
 
-// The overlay renderer's view model (ET-012a). Pure, safe for the overlay bundle and plain Node tests. It only arranges
-// the text main already formatted; it converts, rounds and formats nothing (unit-profiles.test.ts scans it for that).
+// Pure renderer view model. Main/telemetry-core own numeric conversion and rounding; this view arranges their text
+// and localizes known app-owned units, deadlines, clocks and provenance notes. It never reparses numbers or SDK names.
+// formatter-localization.test.ts binds these localization paths to real formatter output; unit-profiles.test.ts guards
+// against duplicated numeric conversion constants and rounding here.
 
 export interface OverlayItem {
   id: OverlaySectionId;
@@ -69,7 +71,7 @@ export function overlayView(presentation: OverlayPresentation = OVERLAY_PLACEHOL
     };
     // Speed and fuel keep the separate number and unit of the ET-008 smoke contract; the unit stays visible beside a dash.
     if (section.id === 'speed') return {...base, value: available ? presentation.speed : DASH, unit: translateUnit(presentation.speedUnit, language)};
-    if (section.id === 'fuel') return {...base, value: available ? presentation.fuel : DASH, unit: translateUnit(presentation.fuelUnit, language),
+    if (section.id === 'fuel') return {...base, value: available ? presentation.fuel : DASH, unit: translateUnit(language === 'ru' && presentation.fuelUnit === 'US gal' ? 'gal' : presentation.fuelUnit, language),
       ...(available && section.detail ? {detail: section.detail, detailTestId: 'overlay-fuel-level'} : {})};
     let value = available ? section.text : DASH;
     if (available) {
@@ -81,8 +83,9 @@ export function overlayView(presentation: OverlayPresentation = OVERLAY_PLACEHOL
         value = localizedMeasurement(value, language);
       }
     }
+    // Cargo detail is the numeric cargo-mass field (SECTION_FIELDS); name/company details retain SDK bytes.
     return {...base, value,
-      ...(available && section.detail ? {detail: section.detail, detailTestId: `overlay-${section.id}-detail`} : {}),
+      ...(available && section.detail ? {detail: section.id === 'cargo' ? localizedMeasurement(section.detail, language) : section.detail, detailTestId: `overlay-${section.id}-detail`} : {}),
       ...(available && section.ring !== undefined ? {ring: section.ring} : {}),
       ...(section.id === 'sdk-consumption' ? {caption: strings.overlaySdkMean} : {})};
   });

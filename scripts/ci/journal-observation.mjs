@@ -176,7 +176,7 @@ export async function seedJournalDatabase({config, record}) {
     rollupOptions: {external: ['better-sqlite3', ...builtinModules, ...builtinModules.map(name => `node:${name}`)], output: {paths: {'better-sqlite3': sqlite}}}}});
   const bundled = performance.now();
   const electron = require('electron');
-  const child = spawn(electron, [path.join(directory, 'journal-seed.cjs'), database], {cwd: config.checkout, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
+  const child = spawn(electron, [path.join(directory, 'journal-seed.cjs'), database, ...(config.scenario === 'ui' && config.uiCase === 'journal' ? ['--ui-signed'] : [])], {cwd: config.checkout, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
     env: {...process.env, ELECTRON_RUN_AS_NODE: '1', TEMP: config.temp, TMP: config.temp, APPDATA: config.appdata, LOCALAPPDATA: config.localappdata}});
   const stdout = [], stderr = [];
   child.stdout.on('data', chunk => stdout.push(chunk)); child.stderr.on('data', chunk => stderr.push(chunk));

@@ -1,3 +1,4 @@
+import {dashboardFuel} from '../../apps/desktop/src/speed-display';
 import {describe, expect, it} from 'vitest';
 import {clampRatio, connectionTone, desktopLiveView, gaugeArc, hardModeTone, pluginTone, pluginStatusText, recordingTone} from '../../apps/desktop/src/screens/desktop-ui-view';
 import {liveDashboardText} from '../../apps/desktop/src/live-dashboard-text';
@@ -74,4 +75,18 @@ it('makes blocked and missing visibly distinct, with localized words alongside t
   expect(pluginStatusText([{state: 'blocked'}], 'ru')).toBe('Заблокирован');
   expect(pluginStatusText([{state: 'missing'}], 'ru')).toBe('Не установлен');
   expect(pluginStatusText([], 'ru')).toBe('Неизвестно');
+});
+
+it('distinguishes unavailable tank level, known empty and positive level without discarding known fuel when capacity is missing', () => {
+  const live = smokeV0();
+  live.observation!.state.fuelCapacity = {available: true, value: 1000, unit: 'L'};
+  for (const fuel of [0, 73]) {
+    live.observation!.state.fuel = {available: true, value: fuel, unit: 'L'};
+    expect(desktopLiveView(live).fuelRatio).toBe(fuel / 1000);
+  }
+  live.observation!.state.fuelCapacity = {available: false, reason: 'not-observed', unit: 'L'};
+  expect(desktopLiveView(live).fuelRatio).toBeNull();
+  expect(dashboardFuel(live, 'metric')).toBe('73.0 L');
+  live.observation!.state.fuel = {available: false, reason: 'not-observed', unit: 'L'};
+  expect(desktopLiveView(live).fuelRatio).toBeNull();
 });

@@ -8,9 +8,9 @@ const screens = {shell: ['live', 'journal', 'settings', 'account'], live: ['curr
   journal: ['list', 'trip', 'intervals', 'timeline', 'samples'], settings: ['general', 'units', 'overlay', 'sections', 'plugin', 'data', 'about', 'save-error'], overlay: ['strip', 'card', 'cluster', 'hud']};
 const common = ['bilingual', 'bothSizes', 'security', 'offlineFonts', 'recordingIndicator'];
 const flags = {shell: ['navigation', 'headingFocus', 'journalUnmount', 'menuKeyboard', 'exitAvailable', 'laterAccount'],
-  live: ['numericGauge', 'unavailableVsZero', 'paused', 'staleDashes', 'rawNames', 'unsupportedTrip', 'jobViewport', 'hmNamesReadable'],
-  journal: ['syntheticBanner', 'pageReturn', 'chartBounded', 'rawTabs', 'searchPlanned', 'tripRegions', 'tableReadable'], settings: ['allPanels', 'allSections', 'committedSave', 'sourceSelector', 'uninstallRefusal', 'refusedSave', 'readOnly', 'controlsKeyboard', 'lastEnabled', 'fontLicense'],
-  overlay: ['fourLayouts', 'transparent', 'contained', 'independentFont', 'missing', 'paused', 'staleDashes', 'heroSubsets']};
+  live: ['numericGauge', 'unavailableVsZero', 'paused', 'staleDashes', 'rawNames', 'unsupportedTrip', 'jobViewport', 'hmNamesReadable','tankUnknownVsZero'],
+  journal: ['syntheticBanner', 'pageReturn', 'chartBounded', 'rawTabs', 'searchPlanned', 'tripRegions', 'tableReadable','signedChart'], settings: ['allPanels', 'allSections', 'committedSave', 'sourceSelector', 'uninstallRefusal', 'refusedSave', 'readOnly', 'controlsKeyboard', 'lastEnabled', 'fontLicense'],
+  overlay: ['fourLayouts', 'transparent', 'contained', 'independentFont', 'missing', 'paused', 'staleDashes', 'heroSubsets','formatterProfiles']};
 type Case = keyof typeof screens;
 const sizes = [{width: 1280, height: 800}, {width: 1100, height: 720}];
 const mainEvents = [{event: 'APP_EXIT', detail: {code: 0}}, {event: 'SERVICE_EXIT', detail: {code: 0}}];
@@ -46,6 +46,14 @@ it('requires every UI language/size/screen, assertion and plain screenshot file 
     {name: 'file absent', uiCase: 'live', omitFile: true}, {name: 'invalid PNG signature', uiCase: 'live', badPng: true},
     {name: 'escaping filename', uiCase: 'live', change: value => {value.ui.screenshots[0].file = '../outside.png';}},
     {name: 'wrong image size', uiCase: 'live', change: value => {value.ui.screenshots[0].imageWidth = 1279;}},
+    ...['formatterProfiles'].flatMap(flag => [
+      {name: `false overlay ${flag}`, uiCase: 'overlay' as const, change: (value: Fixture) => {value.ui.flags[flag] = false;}},
+      {name: `missing overlay ${flag}`, uiCase: 'overlay' as const, change: (value: Fixture) => {delete value.ui.flags[flag];}}
+    ]),
+    ...['signedChart'].flatMap(flag => [
+      {name: `false journal ${flag}`, uiCase: 'journal' as const, change: (value: Fixture) => {value.ui.flags[flag] = false;}},
+      {name: `missing journal ${flag}`, uiCase: 'journal' as const, change: (value: Fixture) => {delete value.ui.flags[flag];}}
+    ]),
     ...['controlsKeyboard', 'lastEnabled', 'fontLicense'].flatMap(flag => [
       {name: `false settings ${flag}`, uiCase: 'settings' as const, change: (value: Fixture) => {value.ui.flags[flag] = false;}},
       {name: `missing settings ${flag}`, uiCase: 'settings' as const, change: (value: Fixture) => {delete value.ui.flags[flag];}}
@@ -72,4 +80,4 @@ it('requires every UI language/size/screen, assertion and plain screenshot file 
     variants.forEach((variant, index) => expect(results[index], variant.name).toMatchObject({passed: variant.accepted === true, driverResultAvailable: true,
       reason: variant.accepted ? null : 'UI_RESULT_INCOMPLETE_OR_INVALID'}));
   } finally {await resources.dispose();}
-}, receiptBatchTimeout(51) + 5000);
+}, receiptBatchTimeout(57) + 5000);

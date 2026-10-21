@@ -79,9 +79,17 @@ export async function runUiSmoke({application, dashboard, overlay, source, confi
         });
         assert.equal(jobVisible, true, `UI_JOB_NOT_READABLE_WITHOUT_SCROLL_${language}_${size.width}`); record.flags.jobViewport = true;
         assert.equal(await dashboard.locator('[data-testid^="hard-mode-name-"]').evaluateAll(nodes => nodes.length === 12 && nodes.every(node => node.getBoundingClientRect().height >= 32 && node.scrollWidth <= node.clientWidth)), true, `UI_HM_NAMES_OVERFLOW_${language}_${size.width}`); record.flags.hmNamesReadable = true;
+        assert.equal(await dashboard.getByTestId('live.instrument.tank').getAttribute('data-state'), 'value');
+        assert.equal(await dashboard.locator('.yu-tank i').evaluate(node => node.style.height), '7.3%');
+        assert.equal(await dashboard.locator('.yu-tank-unavailable').count(), 0);
         await save('current', language, size);
         source.setReading(0, 0); await dashboard.waitForFunction(zeroLiveObservation, language, {timeout: 5000}); await save('zero', language, size);
-        source.setUnavailable(); await until(() => dashboard.getByTestId('speed').innerText(), value => value === (language === 'en' ? 'Speed: unavailable' : 'Скорость: недоступно'), 'UI_MISSING'); await save('missing', language, size);
+        source.setReading(25, 73); source.setCapacity(null);
+        await dashboard.waitForFunction(language => globalThis.document.querySelector('[data-testid="live.instrument.tank"]')?.getAttribute('data-state') === 'unavailable' && !globalThis.document.querySelector('.yu-tank i') && globalThis.document.querySelector('.yu-tank-unavailable')?.textContent === '—' && globalThis.document.querySelector('[data-testid="fuel"]')?.textContent === (language === 'en' ? 'Fuel: 73.0 L' : 'Топливо: 73.0 л'), language, {timeout: 5000});
+        source.setCapacity(1000);
+        source.setUnavailable(); await until(() => dashboard.getByTestId('speed').innerText(), value => value === (language === 'en' ? 'Speed: unavailable' : 'Скорость: недоступно'), 'UI_MISSING');
+        await dashboard.waitForFunction(() => globalThis.document.querySelector('[data-testid="live.instrument.tank"]')?.getAttribute('data-state') === 'unavailable' && !globalThis.document.querySelector('.yu-tank i') && globalThis.document.querySelector('.yu-tank-unavailable')?.textContent === '—', undefined, {timeout: 5000});
+        record.flags.tankUnknownVsZero = true; await save('missing', language, size);
         source.setReading(25, 73); source.setPaused(true); await waitState(dashboard, 'paused');
         assert.equal(await dashboard.getByTestId('live-paused').innerText(), language === 'en' ? 'Game paused' : 'Игра на паузе');
         assert.equal(await dashboard.getByTestId('live-paused').evaluate(node => {
@@ -112,10 +120,22 @@ export async function runUiSmoke({application, dashboard, overlay, source, confi
         assert.match(await dashboard.getByTestId('journal-list-page').innerText(), /2/);
         await dashboard.getByTestId('journal-list-previous').click(); await until(() => dashboard.getByTestId('journal-row').first().getAttribute('data-trip'), id => id === '7b000000-0000-4000-8000-000000000001', 'UI_JOURNAL_PAGE_ONE');
         await dashboard.getByTestId('journal-row-open').first().click(); await dashboard.getByTestId('journal-detail-title').waitFor({state: 'visible'});
-        for (const tab of ['intervals', 'timeline', 'samples']) {await dashboard.getByTestId(`journal-detail-tab-${tab}`).click(); await dashboard.getByTestId(`journal-${tab === 'timeline' ? 'events' : tab}-loading`).waitFor({state: 'detached'}); await save(tab, language, size);}
+        for (const tab of ['intervals', 'timeline', 'samples']) {await dashboard.getByTestId(`journal-detail-tab-${tab}`).click(); await dashboard.getByTestId(`journal-${tab === 'timeline' ? 'events' : tab}-loading`).waitFor({state: 'detached'}); if (tab !== 'samples') await save(tab, language, size);}
         assert.equal(await dashboard.getByTestId('journal-sample-row').count(), 300);
         assert.equal(await dashboard.getByTestId('trip.chart.segment').count(), 1);
         assert.equal(await dashboard.locator('[data-testid="trip.chart"] circle').count(), 300);
+        const signed = await dashboard.getByTestId('trip.chart').evaluate(node => {
+          const circles = [...node.querySelectorAll('circle')], zero = Number(node.querySelector('[data-testid="trip.chart.zero"]').getAttribute('y1'));
+          return circles.length === 300 && zero === 80 && circles.every((circle, index) => {
+            const speed = Number(circle.getAttribute('data-speed')), y = Number(circle.getAttribute('cy'));
+            return speed === [-72, 0, 72][index % 3] && y === [130, 80, 30][index % 3] && circle.querySelector('title').textContent.includes(`${speed.toFixed(1)} `);
+          });
+        });
+        assert.equal(signed, true, 'UI_SIGNED_CHART_SVG'); record.flags.signedChart = true;
+        await dashboard.getByTestId('trip.chart').scrollIntoViewIfNeeded({timeout: 5000});
+        assert.equal(await dashboard.getByTestId('trip.chart').locator('svg').evaluate(node => {const box = node.getBoundingClientRect(); return box.top >= 84 && box.bottom <= globalThis.innerHeight && box.left >= 0 && box.right <= globalThis.innerWidth;}), true, 'UI_SIGNED_CHART_NOT_VISIBLE');
+        await save('samples', language, size);
+
         await dashboard.getByTestId('journal-samples-next').click(); await until(() => dashboard.getByTestId('journal-samples-page').innerText(), text => text.includes('2'), 'UI_SAMPLE_PAGE_TWO');
         assert.equal(await dashboard.locator('[data-testid="trip.chart"] circle').count(), 300);
         await dashboard.getByTestId('journal-back').click();
@@ -234,6 +254,18 @@ export async function runUiSmoke({application, dashboard, overlay, source, confi
     }
     await dashboard.evaluate(all => globalThis.desktop.setOverlaySections(all), all);
     record.flags.heroSubsets = true;
+    await application.evaluate(({BrowserWindow}, size) => {const window = BrowserWindow.getAllWindows().find(candidate => candidate.webContents.getURL().endsWith('?view=overlay')); window.setContentSize(size.width, size.height);}, dimensions.card);
+    for (const language of ['en', 'ru']) {
+      await chooseLanguage(dashboard, language);
+      for (const profile of ['metric', 'us-customary']) {
+        await dashboard.evaluate(profile => globalThis.desktop.setUnitProfile('ets2', profile), profile);
+        const expected = profile === 'metric' ? {speed: '90.0', fuel: '73.0', speedUnit: language === 'en' ? 'km/h' : 'км/ч', fuelUnit: language === 'en' ? 'L' : 'л'} : {speed: '55.9', fuel: '19.3', speedUnit: language === 'en' ? 'mph' : 'миль/ч', fuelUnit: language === 'en' ? 'US gal' : 'гал'};
+        await overlay.waitForFunction(expected => ['speed', 'fuel'].every(id => globalThis.document.querySelector(`[data-testid="overlay-${id}"]`)?.textContent === expected[id] && globalThis.document.querySelector(`[data-testid="overlay-${id}-unit"]`)?.textContent === expected[`${id}Unit`]), expected, {timeout: 5000});
+        assert.deepEqual((await overlay.evaluate(overlayOverflow)).outside, []);
+      }
+    }
+    await dashboard.evaluate(() => globalThis.desktop.setUnitProfile('ets2', 'metric')); record.flags.formatterProfiles = true;
+
   }
   record.flags.bilingual = true; record.flags.bothSizes = true;
   assert.deepEqual(await dashboard.evaluate(() => ({require: typeof globalThis.require, process: typeof globalThis.process})), {require: 'undefined', process: 'undefined'});

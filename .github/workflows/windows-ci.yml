@@ -23,8 +23,8 @@ concurrency:
   group: windows-ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 jobs:
-  windows:
-    name: Windows x64 scaffold
+  windows-build:
+    name: Windows x64 compiled artifacts
     # A skipped draft run is not a passed check; use workflow_dispatch on the branch to check a draft head.
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: windows-2022
@@ -104,59 +104,6 @@ jobs:
         run: npm run smoke --workspace @ets2telemetry/telemetry-simulator
       - name: Isolated synthetic v1 CLI pipe smoke
         run: npm run smoke:v1 --workspace @ets2telemetry/telemetry-simulator
-      # Owner decision E2 (October 17, 2026, docs/ci.md#et-019t-speed-up-october-17-2026): pull requests run only the packaged
-      # smokes; the development smokes run on main pushes and on every dispatch, whatever its `extended` input.
-      - name: Bounded development Electron worker smoke
-        if: github.event_name != 'pull_request'
-        run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development
-      - name: Bounded development telemetry source and recovery smoke
-        if: github.event_name != 'pull_request'
-        run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario telemetry
-      - name: Bounded development hidden overlay projection and isolation smoke
-        if: github.event_name != 'pull_request'
-        run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario overlay -ForceRendererReuse
-      - name: Bounded development tray lifecycle, single instance and explicit exit smoke
-        if: github.event_name != 'pull_request'
-        run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario lifecycle
-      # ET-017 PR-5: plugin setup in the test-root mode against a fake Steam and game root (scripts/ci/plugin-fixture.mjs).
-      - name: Bounded development plugin setup and Game plugin card smoke
-        if: github.event_name != 'pull_request'
-        run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario plugin
-      # ET-015a PR-4: synthetic v1 recording through a killed service, close-to-tray, tray exit and restart.
-      - name: Bounded development synthetic recording journey smoke
-        if: github.event_name != 'pull_request'
-        run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario recording
-      # ET-016 PR-4: the Journal tab on an empty history, then on a seeded synthetic database (never history).
-      - name: Bounded development synthetic trip journal smoke
-        if: github.event_name != 'pull_request'
-        run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario journal
-      - name: Development Hard Mode journey
-        if: github.event_name != 'pull_request'
-        run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario hard-mode
-      # ET-019 PR-7: a newer-schema history database is refused, shown in the Journal tab and left unchanged.
-      - name: Bounded development Yukon UI shell shard
-        if: github.event_name != 'pull_request'
-        run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario ui -UiCase shell
-
-      - name: Bounded development Yukon UI live shard
-        if: github.event_name != 'pull_request'
-        run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario ui -UiCase live
-
-      - name: Bounded development Yukon UI journal shard
-        if: github.event_name != 'pull_request'
-        run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario ui -UiCase journal
-
-      - name: Bounded development Yukon UI settings shard
-        if: github.event_name != 'pull_request'
-        run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario ui -UiCase settings
-
-      - name: Bounded development Yukon UI overlay shard
-        if: github.event_name != 'pull_request'
-        run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario ui -UiCase overlay
-
-      - name: Bounded development newer history database refusal smoke
-        if: github.event_name != 'pull_request'
-        run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario refusal
       # Owner decision E1 (October 17, 2026): pull requests package without the Squirrel maker. Nothing in a PR run reads
       # out/make; inspect:package and the packaged smokes read out/ETS2Telemetry Desktop-win32-x64, which both commands write.
       - name: Forge package and static native package inspection
@@ -194,14 +141,121 @@ jobs:
           if-no-files-found: error
           # Setup and the NuGet package are already compressed.
           compression-level: 0
-      # ET-018 PR-1 (docs/installer-testing.md): install, repair and update the Squirrel output inside a marked test root in
-      # the runner's temporary folder, with installed smokes and the seeded upgrade of a version 1 database; it never
-      # uninstalls. Non-PR events only, like the maker that builds its Setup.exe. Its evidence, .local/ci/installer-*-evidence,
-      # lies inside the uploaded .local/ci; the run root itself is deleted and never uploaded.
-      - name: Installer lifecycle in a test root
+      - name: Seal exact-source compiled inputs
+        run: node scripts/ci/compiled-artifact.mjs create .local/compiled-inputs ${{ github.event_name == 'pull_request' && 'portable' || 'installer' }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-compiled-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .local/compiled-inputs
+          include-hidden-files: true
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 2
+      - name: Record final versions and duration
+        if: always()
+        run: node scripts/ci/versions.mjs
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: windows-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .local/ci
+            .local/diagnostics/package-inspection.json
+            native/telemetry-plugin/build/Testing/Temporary
+            native/telemetry-client/build/Testing/Temporary
+          retention-days: 14
+          if-no-files-found: error
+          include-hidden-files: true
+  windows-runtime:
+    name: Windows x64 runtime and UI
+    needs: windows-build
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: windows-2022
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      # Download caches live in the workspace so actions/cache saves paths that actually exist.
+      # Electron's installer and @electron/get read electron_config_cache, not ELECTRON_CACHE.
+      npm_config_cache: ${{ github.workspace }}\.local\cache\npm
+      electron_config_cache: ${{ github.workspace }}\.local\cache\electron
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+      ETS2TELEMETRY_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: '24.19.0'
+          architecture: x64
+          package-manager-cache: false
+      - name: Verify pinned npm and record host versions
+        run: |
+          if ((npm --version) -ne '11.17.0') { throw 'Expected npm 11.17.0 bundled with pinned Node.' }
+          node scripts/ci/versions.mjs
+          & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products '*' -format json
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            .local/cache/npm
+            .local/cache/electron
+          key: download-${{ runner.os }}-x64-node24.19.0-abi137-electron44.7.0-abi149-${{ hashFiles('package-lock.json', 'tools/lint/package-lock.json') }}
+      - name: Clean lockfile installation
+        run: npm ci
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4, verified official actions/download-artifact tag
+        with:
+          name: windows-compiled-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .local/downloaded-compiled
+      - name: Verify and restore exact-source compiled inputs
+        run: node scripts/ci/compiled-artifact.mjs restore .local/downloaded-compiled ${{ github.event_name == 'pull_request' && 'portable' || 'installer' }}
+      # Owner decision E2 (October 17, 2026, docs/ci.md#et-019t-speed-up-october-17-2026): pull requests run only the packaged
+      # smokes; the development smokes run on main pushes and on every dispatch, whatever its `extended` input.
+      # ET-017 PR-5: plugin setup in the test-root mode against a fake Steam and game root (scripts/ci/plugin-fixture.mjs).
+      # ET-015a PR-4: synthetic v1 recording through a killed service, close-to-tray, tray exit and restart.
+      # ET-016 PR-4: the Journal tab on an empty history, then on a seeded synthetic database (never history).
+      - name: Bounded development Electron worker smoke
         if: github.event_name != 'pull_request'
-        timeout-minutes: 8
-        run: ./scripts/installer/Invoke-InstallerLifecycle.ps1
+        run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development
+      - name: Bounded development telemetry source and recovery smoke
+        if: github.event_name != 'pull_request'
+        run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario telemetry
+      - name: Bounded development hidden overlay projection and isolation smoke
+        if: github.event_name != 'pull_request'
+        run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario overlay -ForceRendererReuse
+      - name: Bounded development tray lifecycle, single instance and explicit exit smoke
+        if: github.event_name != 'pull_request'
+        run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario lifecycle
+      - name: Bounded development plugin setup and Game plugin card smoke
+        if: github.event_name != 'pull_request'
+        run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario plugin
+      - name: Bounded development synthetic recording journey smoke
+        if: github.event_name != 'pull_request'
+        run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario recording
+      - name: Bounded development synthetic trip journal smoke
+        if: github.event_name != 'pull_request'
+        run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario journal
+      - name: Development Hard Mode journey
+        if: github.event_name != 'pull_request'
+        run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario hard-mode
+      - name: Bounded development Yukon UI shell shard
+        if: github.event_name != 'pull_request'
+        run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario ui -UiCase shell
+      - name: Bounded development Yukon UI live shard
+        if: github.event_name != 'pull_request'
+        run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario ui -UiCase live
+      - name: Bounded development Yukon UI journal shard
+        if: github.event_name != 'pull_request'
+        run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario ui -UiCase journal
+      - name: Bounded development Yukon UI settings shard
+        if: github.event_name != 'pull_request'
+        run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario ui -UiCase settings
+      - name: Bounded development Yukon UI overlay shard
+        if: github.event_name != 'pull_request'
+        run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario ui -UiCase overlay
+      # ET-019 PR-7: a newer-schema history database is refused, shown in Journal and left unchanged.
+      - name: Bounded development newer history database refusal smoke
+        if: github.event_name != 'pull_request'
+        run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario refusal
       - name: Bounded Forge packaged Electron worker smoke
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged
       - name: Bounded packaged telemetry source and recovery smoke
@@ -220,19 +274,15 @@ jobs:
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged -Scenario hard-mode
       - name: Bounded packaged Yukon UI shell shard
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged -Scenario ui -UiCase shell
-
       - name: Bounded packaged Yukon UI live shard
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged -Scenario ui -UiCase live
-
       - name: Bounded packaged Yukon UI journal shard
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged -Scenario ui -UiCase journal
-
       - name: Bounded packaged Yukon UI settings shard
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged -Scenario ui -UiCase settings
-
       - name: Bounded packaged Yukon UI overlay shard
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged -Scenario ui -UiCase overlay
-
+      # ET-019 PR-7: the same refusal postconditions in the packaged runtime.
       - name: Bounded packaged newer history database refusal smoke
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged -Scenario refusal
       - name: Extended existing safety regressions
@@ -244,15 +294,90 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
-          name: windows-evidence-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            .local/ci
-            .local/diagnostics/package-inspection.json
-            native/telemetry-plugin/build/Testing/Temporary
-            native/telemetry-client/build/Testing/Temporary
-          retention-days: 14
-          if-no-files-found: error
+          name: windows-runtime-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .local/ci
           include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+  windows-installer:
+    name: Windows x64 hosted installer
+    needs: windows-build
+    if: github.event_name != 'pull_request'
+    runs-on: windows-2022
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      # Download caches live in the workspace so actions/cache saves paths that actually exist.
+      # Electron's installer and @electron/get read electron_config_cache, not ELECTRON_CACHE.
+      npm_config_cache: ${{ github.workspace }}\.local\cache\npm
+      electron_config_cache: ${{ github.workspace }}\.local\cache\electron
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+      ETS2TELEMETRY_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: '24.19.0'
+          architecture: x64
+          package-manager-cache: false
+      - name: Verify pinned npm and record host versions
+        run: |
+          if ((npm --version) -ne '11.17.0') { throw 'Expected npm 11.17.0 bundled with pinned Node.' }
+          node scripts/ci/versions.mjs
+          & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products '*' -format json
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            .local/cache/npm
+            .local/cache/electron
+          key: download-${{ runner.os }}-x64-node24.19.0-abi137-electron44.7.0-abi149-${{ hashFiles('package-lock.json', 'tools/lint/package-lock.json') }}
+      - name: Clean lockfile installation
+        run: npm ci
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4, verified official actions/download-artifact tag
+        with:
+          name: windows-compiled-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .local/downloaded-compiled
+      - name: Verify and restore exact-source compiled inputs
+        run: node scripts/ci/compiled-artifact.mjs restore .local/downloaded-compiled ${{ github.event_name == 'pull_request' && 'portable' || 'installer' }}
+      # ET-018 PR-1 (docs/installer-testing.md): install, repair and update the Squirrel output inside a marked test root in
+      # the runner's temporary folder, with installed smokes and the seeded upgrade of a version 1 database; it never
+      # uninstalls. Non-PR events only, like the maker that builds its Setup.exe. Its evidence, .local/ci/installer-*-evidence,
+      # lies inside the uploaded .local/ci; the run root itself is deleted and never uploaded.
+      - name: Installer lifecycle in a test root
+        if: github.event_name != 'pull_request'
+        timeout-minutes: 8
+        run: ./scripts/installer/Invoke-InstallerLifecycle.ps1
+      - name: Record final versions and duration
+        if: always()
+        run: node scripts/ci/versions.mjs
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: windows-installer-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .local/ci
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+  windows:
+    name: Windows x64 scaffold
+    needs: [windows-build, windows-runtime, windows-installer, windows-tests, windows-asan]
+    if: always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: '24.19.0'
+          architecture: x64
+          package-manager-cache: false
+      - name: Require every participating job to succeed
+        shell: pwsh
+        env:
+          ETS2TELEMETRY_JOB_RESULTS: ${{ toJSON(needs) }}
+        run: node scripts/ci/scaffold-gate.mjs
   windows-asan:
     name: Windows x64 native AddressSanitizer
     # Runs in parallel with the scaffold job on its own runner; same draft skip, triggers and concurrency group.

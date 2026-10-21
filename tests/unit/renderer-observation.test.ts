@@ -245,10 +245,10 @@ describe('ET-010c overlay v1 observation', () => {
 
 
 it.each(['en', 'ru'])('accepts only a coherent exact zero speed/fuel and numeric geometry in %s', language => {
-  const zero = {speed: language === 'en' ? 'Speed: 0.0 km/h' : 'Скорость: 0.0 км/ч', fuel: language === 'en' ? 'Fuel: 0.0 L' : 'Топливо: 0.0 л', number: '0.0', arc: false, height: '0%'};
+  const zero = {speed: language === 'en' ? 'Speed: 0.0 km/h' : 'Скорость: 0.0 км/ч', fuel: language === 'en' ? 'Fuel: 0.0 L' : 'Топливо: 0.0 л', number: '0.0', arc: false, height: '0%', tankState: 'value', unavailable: false};
   const observe = (patch: Partial<typeof zero>) => {
     const sample = {...zero, ...patch};
-    const document = {querySelector: (selector: string) => selector === '[data-testid="speed"]' ? {innerText: sample.speed} : selector === '[data-testid="fuel"]' ? {innerText: sample.fuel} : selector === '.yu-gauge-number' ? {textContent: sample.number} : selector === '.yu-gauge-speed' ? sample.arc ? {} : null : {style: {height: sample.height}}};
+    const document = {querySelector: (selector: string) => selector === '[data-testid="speed"]' ? {innerText: sample.speed} : selector === '[data-testid="fuel"]' ? {innerText: sample.fuel} : selector === '.yu-gauge-number' ? {textContent: sample.number} : selector === '.yu-gauge-speed' ? sample.arc ? {} : null : selector === '[data-testid="live.instrument.tank"]' ? {getAttribute: () => sample.tankState} : selector === '.yu-tank-unavailable' ? sample.unavailable ? {} : null : {style: {height: sample.height}}};
     return runInNewContext(`(${zeroLiveObservation.toString()})(language)`, {document, language}) as unknown;
   };
   expect(observe({})).toBe(true);
@@ -257,4 +257,5 @@ it.each(['en', 'ru'])('accepts only a coherent exact zero speed/fuel and numeric
   expect(observe({number: '90.0'})).toBe(false);
   expect(observe({arc: true})).toBe(false);
   expect(observe({height: '7.3%'})).toBe(false);
+  expect(observe({tankState: 'unavailable'})).toBe(false); expect(observe({unavailable: true})).toBe(false);
 });

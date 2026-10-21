@@ -22,5 +22,10 @@ export function journalChart(samples: readonly JournalSample[], game: JournalGam
       speed: convertSpeed(sample.speed.value, unit), utcMs: sample.utcMs});
     previous = sample;
   }
-  return {unit, segments, sampleCount: Math.min(samples.length, 300)};
+  const speeds = segments.flatMap(segment => segment.points.map(point => point.speed));
+  const min = Math.min(0, ...speeds), upper = Math.max(0, ...speeds), max = upper === min ? min + 1 : upper;
+  return {unit, segments, sampleCount: Math.min(samples.length, 300), domain: {min, max}};
 }
+
+/** Signed speed geometry; the domain includes zero and has a nonzero span, even for an all-zero page. */
+export const chartSpeedY = (speed: number, domain: {min: number; max: number}) => 130 - (speed - domain.min) / (domain.max - domain.min) * 100;

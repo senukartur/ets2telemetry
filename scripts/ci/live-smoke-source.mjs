@@ -69,6 +69,7 @@ export async function startLiveSmokeSource(checkout) {
       checkpoint.data.state.speed = {available: true, value: speedMps, unit: 'm/s'};
       checkpoint.data.state.fuel = {available: true, value: fuelL, unit: 'L'};
     },
+    setCapacity: value => {checkpoint.data.state.fuelCapacity = value === null ? {available: false, reason: 'not-observed', unit: 'L'} : {available: true, value, unit: 'L'};},
     setPaused: value => {checkpoint.data.state.simulation = value ? 'paused' : 'running';},
     setUnavailable: () => {
       checkpoint.data.state.speed = {available: false, reason: 'not-observed', unit: 'm/s'};

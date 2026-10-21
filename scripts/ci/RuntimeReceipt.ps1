@@ -773,10 +773,10 @@ function Test-UiReceipt {
     $screens = @()
     switch -CaseSensitive ($ExpectedUiCase) {
         'shell' { $flags += @('navigation','headingFocus','journalUnmount','menuKeyboard','exitAvailable','laterAccount'); $screens = @('live','journal','settings','account') }
-        'live' { $flags += @('numericGauge','unavailableVsZero','paused','staleDashes','rawNames','unsupportedTrip','jobViewport','hmNamesReadable'); $screens = @('current','zero','missing','paused','stale') }
-        'journal' { $flags += @('syntheticBanner','pageReturn','chartBounded','rawTabs','searchPlanned','tripRegions','tableReadable'); $screens = @('list','trip','intervals','timeline','samples') }
+        'live' { $flags += @('numericGauge','unavailableVsZero','paused','staleDashes','rawNames','unsupportedTrip','jobViewport','hmNamesReadable','tankUnknownVsZero'); $screens = @('current','zero','missing','paused','stale') }
+        'journal' { $flags += @('syntheticBanner','pageReturn','chartBounded','rawTabs','searchPlanned','tripRegions','tableReadable','signedChart'); $screens = @('list','trip','intervals','timeline','samples') }
         'settings' { $flags += @('allPanels','allSections','committedSave','sourceSelector','uninstallRefusal','refusedSave','readOnly','controlsKeyboard','lastEnabled','fontLicense'); $screens = @('general','units','overlay','sections','plugin','data','about','save-error') }
-        'overlay' { $flags += @('fourLayouts','transparent','contained','independentFont','missing','paused','staleDashes','heroSubsets'); $screens = @('strip','card','cluster','hud') }
+        'overlay' { $flags += @('fourLayouts','transparent','contained','independentFont','missing','paused','staleDashes','heroSubsets','formatterProfiles'); $screens = @('strip','card','cluster','hud') }
     }
     foreach ($flag in $flags) { if ($ui.flags.$flag -isnot [bool] -or !$ui.flags.$flag) { return $false } }
     if (@($ui.screenshots).Count -ne $(if ($ExpectedUiCase -ceq 'overlay') { 64 } elseif ($ExpectedUiCase -ceq 'settings') { 34 } else { 4 * $screens.Count })) { return $false }
