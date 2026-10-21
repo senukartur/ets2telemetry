@@ -771,3 +771,12 @@ ET-026 Claude2 follow-up: private assessment publications carry only their bound
 ## ET-005b CAP-01 replay authorization — October 21, 2026
 
 The owner explicitly approved CD-7: commit minimized anonymized CAP-01-derived fixtures; original captures and sanitized exports remain local. The owner authorized completing ET-005 through implementation, checks, independent review, Claude feedback, final automatic Windows CI and squash merge, then Done. This removes the earlier pending acknowledgement for PR-3 only. The replay importer and five derived runs are described in [simulator v1](docs/simulator-v1.md#cap-01-replay-october-21-2026). Existing CAP-01 evidence/gaps stay frozen; no new game sessions, real user history, release, wire, native or storage changes are authorized by this task.
+
+## ET-028 Yukon UI implementation candidate — October 21, 2026
+
+The assigned ET-028 candidate implements the approved Yukon dark desktop shell/screens, bundled Onest, local routing, settings panels, truthful placeholders, bounded sample-page chart and independently styled four-layout overlay. Existing game-provided names remain exact in EN/RU; raw protocol/audit/cvar evidence and money digits/currency are unchanged. The working source selector is in Settings → Data. One dashboard-lifetime Hard Mode controller retains the accepted drawer/hints; no qualification, source proof or recorder behavior changes.
+
+`GAME_HISTORY_RECORDING` stays false. Protocol/preload/storage/schema/native and package/data identities are unchanged. Current automated/visual evidence and failed attempts are recorded in [ET-028 validation](docs/validation/et-028.md); full verifier, independent code/visual review and hosted draft CI remain delivery gates. Manual native-caption/DPI/game-overlay/performance checks remain unverified. This is implementation status, not ET-028 acceptance, Ready or merge authorization.
+
+
+ET-028 supersession: the dated ET-012c 36px strip-row observations above remain historical. The current Yukon presentation uses `STRIP_ROW_HEIGHT_CSS = 38`, with height `ceil(38 × rows × scale + 2 × max(1, scale))`. Wrapping, snapped borders and whole-overlay fit refusal are unchanged. Real-game taller-window placement/click-through and fractional-DPI/performance checks remain unverified.

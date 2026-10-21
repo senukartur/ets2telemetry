@@ -8,6 +8,7 @@ import {fileURLToPath} from 'node:url';
 import {promisify} from 'node:util';
 import {_electron as electron} from '@playwright/test';
 import {rendererPages} from '../ci/overlay-observation.mjs';
+import {settingsPanel, waitForStartup} from '../ci/ui-navigation.mjs';
 import {checkedPaths, checkInstalled, checkLaunchEnvironment, checkRunPlan, checkRunSignal, FACTS_VARIABLE, factsEvidence, InstallerGuardError, installedEnvironment, normalizePath,
   checkDataRootUnchanged, checkDecoyUnchanged, checkUninstallResidue, electronRuntimeNames, ownsRegistration, parseUninstallString, resolveRealLocation, RUN_ONCE_KEY, RUN_ROOT_NAME,
   runLayout, steamLibraryPaths, uninstallEnvironment} from './installer-guard.mjs';
@@ -309,7 +310,7 @@ async function launch(config, label, executable, migratedFrom) {
     application = await electron.launch({executablePath: executable, cwd: layout.cwd, env, timeout: 20000});
     const launcher = application.process();
     const {dashboard} = await rendererPages(application);
-    await dashboard.getByText('Telemetry service ready; isolated storage probe verified', {exact: true}).waitFor({state: 'visible', timeout: 15000});
+    await waitForStartup(dashboard, undefined, 15000);
     // Compared here; the evidence keeps the outcome only, never the path.
     const runtime = await application.evaluate(({app}) => ({executable: process.execPath, packaged: app.isPackaged, version: app.getVersion()}));
     record.runtime = {executableMatches: normalizePath(runtime.executable) === normalizePath(executable), packaged: runtime.packaged, version: runtime.version};
@@ -500,7 +501,7 @@ async function startWithPlugin(config, label, executable, extra = {}, left = cap
   const application = await electron.launch({executablePath: executable, cwd: layout.cwd, env, timeout: left(20000)});
   try {
     const {dashboard} = await rendererPages(application);
-    await dashboard.getByText('Telemetry service ready; isolated storage probe verified', {exact: true}).waitFor({state: 'visible', timeout: left(15000)});
+    await waitForStartup(dashboard, left, 15000);
     const registry = path.join(layout.dataRoot, 'plugins', 'setup.json');
     await until(async () => {
       const document = await readJson(registry, 256 * 1024).catch(() => null);
@@ -847,6 +848,8 @@ async function appUninstall(config, label, executable, expectation) {
     record.before.dataRoot = await dataRootState(layout.dataRoot);
     await started.application.evaluate(({app}) => {app.emit('ets2telemetry:diagnostic-uninstall-dialogs', 'uninstall');});
     const {dashboard} = await rendererPages(started.application);
+    await settingsPanel(dashboard, 'about', left);
+    await dashboard.getByTestId('uninstall-warning').waitFor({state: 'visible', timeout: left(10000)});
     const warning = await dashboard.getByTestId('uninstall-warning').innerText({timeout: left(10000)});
     record.warningShown = /trip history/.test(warning) && /captures/.test(warning) && /exports/i.test(warning);
     await dashboard.getByTestId('uninstall-button').click({timeout: left(10000)});

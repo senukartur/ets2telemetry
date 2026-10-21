@@ -1,5 +1,5 @@
 import React, {useState} from 'react';
-import type {PluginGame, PluginSetupView} from '../../../packages/contracts/src';
+import type {AppLanguage, PluginGame, PluginSetupView} from '../../../packages/contracts/src';
 import {Alert, AlertDescription} from '@/components/ui/alert';
 import {Badge} from '@/components/ui/badge';
 import {Button} from '@/components/ui/button';
@@ -8,7 +8,8 @@ import {Label} from '@/components/ui/label';
 import {Switch} from '@/components/ui/switch';
 import type {ConnectionDiagnosis} from './connection-diagnosis';
 import {connectionDiagnosisText, diagnosticsExportText, pluginFolderChoiceText, pluginSetupText, pluginShowFileText} from './plugin-setup-text';
-import {DIAGNOSTICS_EXPORT_STRINGS, PLUGIN_STRINGS} from './strings';
+import * as BASE_COPY from './strings';
+import {copyTable} from './screens/app-copy';
 
 const PLUGIN_GAMES: readonly PluginGame[] = ['ets2', 'ats'];
 /** A test id from a target id such as `ets2:steam:0`. */
@@ -21,16 +22,17 @@ const targetTestId = (id: string) => `plugin-target-${id.replaceAll(':', '-')}`;
  * at the bottom, which stays available in every mode. It shows only main's pushed view, the diagnosis and the fixed
  * answers of the bridge methods, through plugin-setup-text.ts: never a path. The overlay is untouched.
  */
-export function PluginSetupCard({view, diagnosis, onView}: {view: PluginSetupView | undefined; diagnosis: ConnectionDiagnosis | undefined; onView: (view: PluginSetupView) => void}) {
+export function PluginSetupCard({view, diagnosis, onView, language = 'en'}: {language?: AppLanguage; view: PluginSetupView | undefined; diagnosis: ConnectionDiagnosis | undefined; onView: (view: PluginSetupView) => void}) {
   const [pending, setPending] = useState(false);
-  const [result, setResult] = useState<string | null>(null);
+  const [result, setResult] = useState<((language: AppLanguage) => string | null) | null>(null);
+  const {DIAGNOSTICS_EXPORT_STRINGS, PLUGIN_STRINGS} = copyTable(BASE_COPY, language);
   if (!view) return null;
-  const text = pluginSetupText(view);
-  const connection = diagnosis ? connectionDiagnosisText(diagnosis) : undefined;
+  const text = pluginSetupText(view, language);
+  const connection = diagnosis ? connectionDiagnosisText(diagnosis, language) : undefined;
   const disabled = pending || !text.actionable;
-  const call = <T,>(start: () => Promise<T>, answer: (value: T) => string | null) => {
+  const call = <T,>(start: () => Promise<T>, answer: (value: T, language: AppLanguage) => string | null) => {
     setPending(true); setResult(null);
-    void start().then(value => {setResult(answer(value)); setPending(false);}, () => {setResult(PLUGIN_STRINGS.requestFailed); setPending(false);});
+    void start().then(value => {setResult(() => (lang: AppLanguage) => answer(value, lang)); setPending(false);}, () => {setResult(() => (lang: AppLanguage) => copyTable(BASE_COPY.PLUGIN_STRINGS, lang).requestFailed); setPending(false);});
   };
   const withView = (next: PluginSetupView) => {onView(next); return null;};
   return <Card size="sm" data-testid="plugin-card"><CardHeader><CardTitle><h2>{PLUGIN_STRINGS.title}</h2></CardTitle></CardHeader>
@@ -70,6 +72,6 @@ export function PluginSetupCard({view, diagnosis, onView}: {view: PluginSetupVie
           onClick={() => call(() => window.desktop.exportDiagnostics(), diagnosticsExportText)}>{DIAGNOSTICS_EXPORT_STRINGS.button}</Button>
         <p className="text-sm text-muted-foreground">{DIAGNOSTICS_EXPORT_STRINGS.note}</p>
       </div>
-      {result ? <p role="status" data-testid="plugin-result">{result}</p> : null}
+      {result ? <p role="status" data-testid="plugin-result">{result(language)}</p> : null}
     </CardContent></Card>;
 }

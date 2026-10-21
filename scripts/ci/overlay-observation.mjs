@@ -35,11 +35,11 @@ export async function waitForOverlay(page, expected) {
 // ET-012c strip containment. The synthetic checkpoint fixture (tests/fixtures/protocol-v0/checkpoint.json) carries
 // current values for these sections, in canonical order; range stays hidden because its estimate is not observed.
 export const STRIP_SMOKE_SECTIONS = Object.freeze(['speed', 'gear', 'rpm', 'fuel', 'sdk-consumption', 'cargo', 'destination', 'expected-income', 'game-time']);
-// The hidden overlay window is created at the strip's reserved size for every section at scale 1, 1280 x 110
+// The hidden overlay window is created at the strip's reserved size for every section at scale 1, 1280 x 116
 // (overlay-geometry.ts). Without a game window main never places it, and Windows limits a window to the screen size, so
 // on a narrow screen it is narrower (1024 on the hosted runner of CI run 38878781715). The height is not limited, and the
 // width must stay within the strip's own limits of 480 to 1280.
-export const STRIP_SMOKE_WINDOW = Object.freeze({innerHeight: 110, minWidth: 480, maxWidth: 1280});
+export const STRIP_SMOKE_WINDOW = Object.freeze({innerHeight: 116, minWidth: 480, maxWidth: 1280});
 
 // Self-contained browser callback: false until exactly one current strip root shows exactly the expected sections, then
 // one coherent read of where they lie. `outside` lists sections with an empty box or one not fully inside both the root
@@ -186,7 +186,7 @@ export async function verifyRendererStyles(dashboard, overlay) {
   const read = () => {
     const document = globalThis.document;
     const style = node => globalThis.getComputedStyle(node);
-    const card = document.querySelector('[data-slot="card"]');
+    const card = document.querySelector('[data-slot="card"]:not(.yu-instrument)');
     // ET-012a: the overlay root is transparent; each layout's first visible surface paints the background.
     const widget = document.querySelector('.overlay-surface');
     return {htmlBackground: style(document.documentElement).backgroundColor,
@@ -201,12 +201,12 @@ export async function verifyRendererStyles(dashboard, overlay) {
   const mainStyles = await dashboard.evaluate(read);
   const overlayStyles = await overlay.evaluate(read);
   assert.ok(mainStyles.themeBackground && mainStyles.cardBackground && mainStyles.cardBackground !== 'rgba(0, 0, 0, 0)', 'Dashboard shadcn theme and Card must be styled');
-  assert.ok(mainStyles.fontFaces.some(family => family.includes('Geist')), 'Dashboard must retain the configured Geist font');
+  assert.ok(mainStyles.fontFaces.some(family => family.includes('Onest')), 'Dashboard must retain the configured offline Onest font');
   assert.equal(overlayStyles.htmlBackground, 'rgba(0, 0, 0, 0)');
   assert.equal(overlayStyles.bodyBackground, 'rgba(0, 0, 0, 0)');
   assert.equal(overlayStyles.themeBackground, '', 'Overlay must not load the main theme');
-  assert.deepEqual(overlayStyles.fontFaces, [], 'Overlay must not load main-window font faces');
-  assert.equal(overlayStyles.widgetBackground, 'rgba(10, 17, 24, 0.88)');
+  assert.ok(overlayStyles.fontFaces.length > 0 && overlayStyles.fontFaces.every(family => family.includes('Onest')), 'Overlay must bundle its own offline Onest faces');
+  assert.equal(overlayStyles.widgetBackground, 'rgba(11, 17, 32, 0.8)');
   assert.equal(overlayStyles.widgetBackdropFilter, 'none', 'Overlay must not blur the game behind it');
   assert.ok(mainStyles.stylesheets.length > 0 && overlayStyles.stylesheets.length > 0);
   assert.ok(overlayStyles.stylesheets.every(href => href && !mainStyles.stylesheets.includes(href)), 'Renderer CSS assets must be separate');

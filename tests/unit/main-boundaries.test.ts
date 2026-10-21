@@ -1198,7 +1198,7 @@ const saveOverlay = (channel: 'settings:set-overlay-layout' | 'settings:set-over
   Promise.resolve(handlers.get(channel)!(event, ...request as [unknown]));
 const sectionIds = (projection: Record<string, unknown>) => (projection.sections as {id: string}[]).map(section => section.id);
 it('creates the overlay window at the strip size reserved for every section by default', async () => {
-  await ready(); expect(configurations[1]).toMatchObject({width: 1280, height: 110});
+  await ready(); expect(configurations[1]).toMatchObject({width: 1280, height: 116});
 });
 it('creates the overlay window at the size the saved layout reserves for its sections', async () => {
   settingsView = {...settingsView, overlay: {layout: 'cluster', sections: ALL_SECTIONS, placements: PLACEMENTS}}; await ready();
@@ -1233,7 +1233,7 @@ it('applies an overlay layout only after the durable save, then republishes and 
   ipc.emit('app:subscribe-state', trusted()); ipc.emit('overlay:subscribe', overlayTrusted()); const overlayChannel = channels[1];
   consumeOverlay(overlayChannel); deliver(currentReading()); await vi.advanceTimersByTimeAsync(50);
   expect(overlayProjection(overlayChannel)).toMatchObject({layout: 'strip', speed: '90.0', freshness: 'current'});
-  expect(windows[1].setBounds.mock.calls).toEqual([[{x: -1600, y: 8, width: 1280, height: 110}]]);
+  expect(windows[1].setBounds.mock.calls).toEqual([[{x: -1600, y: 8, width: 1280, height: 116}]]);
   expect(windows[1].showInactive).toHaveBeenCalledOnce(); consumeOverlay(overlayChannel);
   windows[1].setAlwaysOnTop.mockClear(); windows[1].moveTop.mockClear();
   const pushes = () => contents.send.mock.calls.filter(call => call[0] === 'app:state').map(call => call[1] as {settings: unknown});
@@ -1285,14 +1285,14 @@ it('applies overlay sections after the durable save and hands the store only a v
 const DRIVING_ONLY = Object.fromEntries(Object.keys(ALL_SECTIONS).map(id => [id, ['speed', 'gear', 'rpm', 'fuel', 'range'].includes(id)]));
 it('creates the strip overlay window as high as its saved sections need', async () => {
   settingsView = {...settingsView, overlay: {layout: 'strip', sections: DRIVING_ONLY, placements: PLACEMENTS}}; await ready();
-  expect(configurations[1]).toMatchObject({width: 1280, height: 38});
+  expect(configurations[1]).toMatchObject({width: 1280, height: 40});
 });
 it('re-places the strip for saved sections only after the durable save and re-asserts topmost once without showing it again', async () => {
   trayAvailable = true; vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2'); await ready();
   ipc.emit('overlay:subscribe', overlayTrusted()); const overlayChannel = channels[1];
   consumeOverlay(overlayChannel); deliver(currentReading()); await vi.advanceTimersByTimeAsync(50); consumeOverlay(overlayChannel);
   const overlay = windows[1];
-  expect(overlay.setBounds.mock.calls).toEqual([[{x: -1600, y: 8, width: 1280, height: 110}]]); expect(overlay.showInactive).toHaveBeenCalledOnce();
+  expect(overlay.setBounds.mock.calls).toEqual([[{x: -1600, y: 8, width: 1280, height: 116}]]); expect(overlay.showInactive).toHaveBeenCalledOnce();
   overlay.setAlwaysOnTop.mockClear(); overlay.moveTop.mockClear();
   const saved = deferred<typeof settingsView>(); overlayWrite.mockReturnValue(saved.promise);
   const request = saveOverlay('settings:set-overlay-sections', trusted(), DRIVING_ONLY);
@@ -1301,7 +1301,7 @@ it('re-places the strip for saved sections only after the durable save and re-as
   expect(overlayWrite).toHaveBeenCalledOnce(); expect(overlay.setBounds).toHaveBeenCalledOnce(); expect(overlay.setAlwaysOnTop).not.toHaveBeenCalled();
   settingsView = {...settingsView, overlay: {layout: 'strip', sections: DRIVING_ONLY, placements: PLACEMENTS}, state: 'loaded'}; saved.resolve(settingsView);
   await expect(request).resolves.toEqual(settingsView);
-  expect(overlay.setBounds.mock.calls).toEqual([[{x: -1600, y: 8, width: 1280, height: 110}], [{x: -1600, y: 8, width: 1280, height: 38}]]);
+  expect(overlay.setBounds.mock.calls).toEqual([[{x: -1600, y: 8, width: 1280, height: 116}], [{x: -1600, y: 8, width: 1280, height: 40}]]);
   expect(overlay.setAlwaysOnTop.mock.calls).toEqual([[true, 'screen-saver']]); expect(overlay.moveTop).toHaveBeenCalledOnce();
   expect(overlay.setBounds.mock.invocationCallOrder[1]).toBeLessThan(overlay.setAlwaysOnTop.mock.invocationCallOrder[0]);
   expect(overlay.showInactive).toHaveBeenCalledOnce();
@@ -1414,10 +1414,10 @@ it('expires v1 data 500 ms after its last new boundary while v0 renews, turning 
 it('re-places the overlay when a late settings read brings another layout', async () => {
   trayAvailable = true; vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2');
   settingsView = {...settingsView, state: 'loading', writable: false}; await ready();
-  expect(configurations[1]).toMatchObject({width: 1280, height: 110});
+  expect(configurations[1]).toMatchObject({width: 1280, height: 116});
   ipc.emit('overlay:subscribe', overlayTrusted()); const overlayChannel = channels[1];
   consumeOverlay(overlayChannel); deliver(currentReading()); await vi.advanceTimersByTimeAsync(50); consumeOverlay(overlayChannel);
-  expect(windows[1].setBounds.mock.calls).toEqual([[{x: -1600, y: 8, width: 1280, height: 110}]]);
+  expect(windows[1].setBounds.mock.calls).toEqual([[{x: -1600, y: 8, width: 1280, height: 116}]]);
   settingsView = {...settingsView, overlay: {layout: 'hud', sections: ALL_SECTIONS, placements: PLACEMENTS}, state: 'loaded', writable: true};
   settingsChanged!();
   expect(windows[1].setBounds).toHaveBeenLastCalledWith({x: -1904, y: 16, width: 320, height: 354});
@@ -1494,7 +1494,7 @@ it('edits over a background game: interactive only while shown, the layout locke
   expect(begun).toEqual({active: true, layout: 'strip', scale: 1, placement: 'visible'});
   expect(editPushes().at(-1)).toEqual(begun); expect(handlers.get('app:get-state')!(trusted())).toMatchObject({overlayEdit: begun});
   expect(interactive()).toEqual(EDITABLE);
-  expect(overlay.setBounds).toHaveBeenLastCalledWith({x: -1600, y: 8, width: 1280, height: 110});
+  expect(overlay.setBounds).toHaveBeenLastCalledWith({x: -1600, y: 8, width: 1280, height: 116});
   expect(overlay.showInactive).toHaveBeenCalledOnce(); expect(overlay.show).not.toHaveBeenCalled(); expect(overlay.focus).not.toHaveBeenCalled();
   expect(overlay.setFocusable.mock.invocationCallOrder.at(-1)).toBeLessThan(overlay.showInactive.mock.invocationCallOrder[0]);
   expect(overlay.showInactive.mock.invocationCallOrder[0]).toBeLessThan(overlay.setAlwaysOnTop.mock.invocationCallOrder.at(-1)!);
@@ -1503,33 +1503,33 @@ it('edits over a background game: interactive only while shown, the layout locke
   await vi.advanceTimersByTimeAsync(50); expect(overlayProjection(overlayChannel)).toMatchObject({editing: true, layout: 'strip'}); consumeOverlay(overlayChannel);
   await expect(saveOverlay('settings:set-overlay-layout', trusted(), 'card')).rejects.toThrow('The overlay layout cannot change while its position is edited');
   // The scale is rounded to two decimals; the strip at 1.23 is floor(1280 × 1.23) = 1574 wide. Its CSS width
-  // floor(1574 / 1.23) = 1279 needs three rows for every section, so it is ceil(110 × 1.23 = 135.3) = 136 high.
+  // floor(1574 / 1.23) = 1279 needs three rows for every section, so it is ceil(116 × 1.23 = 142.68) = 143 high.
   expect(await edit('overlay-edit:set-scale', trusted(), 1.234)).toEqual({active: true, layout: 'strip', scale: 1.23, placement: 'visible'});
   expect(overlayContents.setZoomFactor).toHaveBeenLastCalledWith(1.23); expect(contents.setZoomFactor).not.toHaveBeenCalled();
-  expect(overlay.setBounds).toHaveBeenLastCalledWith({x: -1747, y: 8, width: 1574, height: 136});
-  // A drag past the left edge snaps inside: x = 0; y = (500 − 8) / (1080 − 16 − 136) = 0.5302.
+  expect(overlay.setBounds).toHaveBeenLastCalledWith({x: -1747, y: 8, width: 1574, height: 143});
+  // A drag past the left edge snaps inside: x = 0; y = (500 − 8) / (1080 − 16 − 143) = 492/921 = 0.5342.
   overlay.emit('will-move'); overlay.setBounds.mockClear();
   renew(); expect(overlay.setBounds).not.toHaveBeenCalled();
-  overlay.bounds = {x: -5000, y: 500, width: 1574, height: 136}; overlay.emit('moved');
-  expect(overlay.setBounds.mock.calls).toEqual([[{x: -1904, y: 500, width: 1574, height: 136}]]);
+  overlay.bounds = {x: -5000, y: 500, width: 1574, height: 143}; overlay.emit('moved');
+  expect(overlay.setBounds.mock.calls).toEqual([[{x: -1904, y: 500, width: 1574, height: 143}]]);
   // Unit and section saves stay allowed while editing.
   overlayWrite.mockImplementationOnce(() => Promise.resolve(settingsView));
   await saveOverlay('settings:set-overlay-sections', trusted(), ALL_SECTIONS);
   const saved = deferred<typeof settingsView>(); overlayWrite.mockReturnValueOnce(saved.promise);
   const finishing = edit('overlay-edit:finish', trusted(), 'save');
   // Edit mode ended first: hidden, then click-through again, before the write completes; nothing is applied yet.
-  expect(overlayWrite).toHaveBeenLastCalledWith('placement', ['strip', {x: 0, y: 0.5302, scale: 1.23}]);
+  expect(overlayWrite).toHaveBeenLastCalledWith('placement', ['strip', {x: 0, y: 0.5342, scale: 1.23}]);
   expect(interactive()).toEqual(CLICK_THROUGH);
   hiddenBeforeClickThrough();
   expect(editPushes().at(-1)).toEqual({active: false});
-  const placements = {...PLACEMENTS, strip: {x: 0, y: 0.5302, scale: 1.23}};
+  const placements = {...PLACEMENTS, strip: {x: 0, y: 0.5342, scale: 1.23}};
   settingsView = {...settingsView, overlay: {...DEFAULT_OVERLAY, placements}, state: 'loaded'}; saved.resolve(settingsView);
   await expect(finishing).resolves.toEqual(settingsView);
   expect(overlayContents.setZoomFactor).toHaveBeenLastCalledWith(1.23);
   await vi.advanceTimersByTimeAsync(50); expect(overlayProjection(overlayChannel)).toMatchObject({editing: false}); consumeOverlay(overlayChannel);
   // Driving mode: the saved placement shows only with the game in front, still click-through.
   overlay.showInactive.mockClear(); renew(true);
-  expect(overlay.showInactive).toHaveBeenCalledOnce(); expect(overlay.setBounds).toHaveBeenLastCalledWith({x: -1904, y: 500, width: 1574, height: 136});
+  expect(overlay.showInactive).toHaveBeenCalledOnce(); expect(overlay.setBounds).toHaveBeenLastCalledWith({x: -1904, y: 500, width: 1574, height: 143});
   expect(interactive()).toEqual(CLICK_THROUGH);
 });
 it('keeps the previous placement when the edit save fails and reports the refusal in the settings view', async () => {

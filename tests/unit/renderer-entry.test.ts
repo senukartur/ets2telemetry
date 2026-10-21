@@ -22,6 +22,10 @@ describe('renderer stylesheet isolation', () => {
         build: {outDir: outputDirectory, emptyOutDir: true, assetsInlineLimit: 0, manifest: true},
       });
       const manifest = JSON.parse(await readFile(path.join(outputDirectory, '.vite/manifest.json'), 'utf8')) as Manifest;
+      const license = manifest['src/assets/onest-OFL.txt'];
+      expect(license).toBeDefined();
+      expect(await readFile(path.join(outputDirectory, license.file))).toEqual(await readFile('node_modules/@fontsource-variable/onest/LICENSE'));
+      expect(await readFile('apps/desktop/src/assets/onest-OFL.txt')).toEqual(await readFile('node_modules/@fontsource-variable/onest/LICENSE'));
       const entry = manifest['index.html'];
       const overlay = manifest['src/overlay-renderer.tsx'];
       const dashboard = manifest['src/dashboard-renderer.tsx'];
@@ -47,7 +51,10 @@ describe('renderer stylesheet isolation', () => {
       const overlayCss = await readFile(path.join(outputDirectory, overlayStyles[0]), 'utf8');
       expect(overlayCss).toMatch(/\.overlay-body\s*\{[^}]*background:\s*(?:transparent|0 0)[;}]/);
       expect(overlayCss).toMatch(/html:has\(\.overlay-body\)\s*\{[^}]*background:\s*(?:transparent|0 0)[;}]/);
-      expect(overlayCss).not.toMatch(/@font-face|--background|--tw-|--radix-/);
+      expect(overlayCss).toContain('@font-face');
+      expect(overlayCss).toMatch(/Onest Variable/);
+      expect(overlayCss).toMatch(/url\([^)]*\.woff2/);
+      expect(overlayCss).not.toMatch(/--background|--tw-|--radix-/);
       // ET-012a: the transparent overlay never blurs what is behind it (no backdrop-filter, decision L6/brief).
       expect(overlayCss).not.toMatch(/backdrop-filter/);
       const overlayModules = staticClosure('src/overlay-renderer.tsx').flatMap(key => chunkModules.get(manifest[key].file) ?? []).join('\n').replaceAll('\\', '/');
@@ -56,6 +63,8 @@ describe('renderer stylesheet isolation', () => {
       expect(overlayModules).toMatch(/\/lucide-react\//);
       const dashboardCss = (await Promise.all(dashboardStyles.map(style => readFile(path.join(outputDirectory, style), 'utf8')))).join('\n');
       expect(dashboardCss).toContain('@font-face');
+      expect(dashboardCss).toMatch(/Onest Variable/);
+      expect(dashboardCss).toMatch(/url\([^)]*\.woff2/);
       expect(dashboardCss).toContain('--background');
       expect(dashboardCss).toContain('.bg-card');
     } finally {

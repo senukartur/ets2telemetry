@@ -27,3 +27,5 @@ export function overlayV1Observation(expected: OverlayV1Expectation): Record<str
 export function waitForOverlayV1(page: Page, expected: OverlayV1Expectation): Promise<Record<string, string | null>>;
 export interface OverlayOverflow {layout: string | null; root: {width: number; height: number} | null; sections: string[]; outside: string[]; truncated: string[]}
 export function overlayOverflow(): OverlayOverflow;
+
+export function zeroLiveObservation(language: string): boolean;

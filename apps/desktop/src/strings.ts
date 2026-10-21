@@ -11,8 +11,8 @@ import type {FolderNote} from './uninstall/plugin-cleanup';
 import type {DataEntry} from './uninstall/data-wipe';
 
 /**
- * User-visible English text for the dashboard and tray. There is no i18n framework yet; keeping the
- * literals here gives a later localization one place to start. Pure data, safe for renderer bundles.
+ * Legacy fixed application copy for the dashboard and tray. Renderer adapters select the typed EN/RU dictionaries
+ * before interpolation; raw SDK values never enter those lookups. Pure data, safe for renderer bundles.
  */
 export const STRINGS = Object.freeze({
   appName: 'ETS2Telemetry',
@@ -63,6 +63,7 @@ export const STRINGS = Object.freeze({
   overlayPresetsLabel: 'Presets',
   overlayPaused: 'Paused',
   overlayNoSignal: 'No signal',
+  overlayStale: 'Stale',
   overlaySynthetic: 'Synthetic',
   overlayReplay: 'Replay',
   overlaySdkMean: 'SDK mean',
@@ -131,6 +132,7 @@ export const STRINGS_RU: Readonly<Record<StringKey, string>> = Object.freeze({
   overlayPresetsLabel: 'Наборы',
   overlayPaused: 'Пауза',
   overlayNoSignal: 'Нет сигнала',
+  overlayStale: 'Устарело',
   overlaySynthetic: 'Синтетический',
   overlayReplay: 'Повтор',
   overlaySdkMean: 'среднее SDK',
@@ -904,7 +906,7 @@ export const PLUGIN_FOLDER_REFUSAL_TEXT: Readonly<Record<PluginFolderRefusal, st
 export const CONNECTION_DIAGNOSIS_TEXT: Readonly<Record<ConnectionDiagnosisCode, string>> = Object.freeze({
   SERVICE_UNAVAILABLE: 'The telemetry service is not running; see Application status.',
   CONNECTED: 'Receiving telemetry from the selected source.',
-  NO_GAME_SELECTED: 'No game is selected as the source. Choose Euro Truck Simulator 2 or American Truck Simulator above.',
+  NO_GAME_SELECTED: 'No game is selected as the source. Choose Euro Truck Simulator 2 or American Truck Simulator in Settings > Data.',
   SETUP_DISABLED: 'Not checked: plugin setup is off in this launch.',
   GAME_NOT_FOUND: 'The selected game was not found. Choose its game folder below.',
   PLUGIN_BLOCKED_PERMISSION: 'Windows did not allow the plugin file in a game folder to be read or changed. See the folder line below for what to do.',
@@ -914,7 +916,7 @@ export const CONNECTION_DIAGNOSIS_TEXT: Readonly<Record<ConnectionDiagnosisCode,
   PLUGIN_BUNDLE_UNAVAILABLE: 'The bundled plugin is missing or damaged. Reinstall ETS2Telemetry.',
   PLUGIN_NOT_CHECKED: 'The plugin could not be checked in a game folder; see the folder line below.',
   PLUGIN_MISSING: 'The plugin is not installed in a game folder. Turn on "Manage the plugin for this game" or press Retry.',
-  TRANSPORT_FAILED: 'The game\'s plugin could not be connected, or it is incompatible, and the connection is not tried again by itself. After the plugin is fixed, choose another source and then the game again above, or exit ETS2Telemetry from the tray and start it again.',
+  TRANSPORT_FAILED: 'The game\'s plugin could not be connected, or it is incompatible, and the connection is not tried again by itself. After the plugin is fixed, choose another source and then the game again in Settings > Data, or exit ETS2Telemetry from the tray and start it again.',
   NO_RUNNING_SOURCE: 'The plugin is in place. Start the game to connect.'
 });
 export const CONNECTION_DIAGNOSIS_NOTE_TEXT: Readonly<Record<ConnectionDiagnosisNote, string>> = Object.freeze({

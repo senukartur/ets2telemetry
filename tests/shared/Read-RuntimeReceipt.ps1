@@ -72,7 +72,7 @@ foreach ($case in @($config.cases)) {
         # ET-019 PR-11: a case may name a job-result.json, as the wrapper always does; earlier cases name none.
         $jobResult = if ($case.jobResult) { [string]$case.jobResult } else { '' }
         $output = @(Test-RuntimeReceipt -DriverResultPath $case.receipt -ExpectedCommit 'candidate' -ExpectedMode $mode `
-            -ExpectedScenario $case.scenario -JobExitCode $case.code -JobResultPath $jobResult)
+            -ExpectedScenario $case.scenario -ExpectedUiCase $case.uiCase -JobExitCode $case.code -JobResultPath $jobResult)
         # Exactly one result object per case, as when each case ran in its own process.
         if ($output.Count -ne 1) { $results.Add([ordered]@{error = "Expected one result, got $($output.Count)."}) }
         else { $results.Add($output[0]) }

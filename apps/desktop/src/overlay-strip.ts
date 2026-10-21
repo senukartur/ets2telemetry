@@ -5,8 +5,8 @@ import {OVERLAY_SECTION_IDS} from './overlay-sections';
 // the overlay renderer applies the same maximum widths, so every enabled section fits inside the window by construction.
 // All lengths are CSS pixels at zoom 1; renderer.css holds the matching strip rules (overlay-strip.test.ts checks them).
 
-/** Height of one strip row: every strip item is 36 px high. */
-export const STRIP_ROW_HEIGHT_CSS = 36;
+/** Height of one strip row: every strip item is 38 px high. */
+export const STRIP_ROW_HEIGHT_CSS = 38;
 /** The strip surface's border on each side at zoom 1 and above; see `stripBorderWidthCss` below zoom 1. */
 export const STRIP_BORDER_CSS = 1;
 /** The strip row's horizontal padding on each side. */

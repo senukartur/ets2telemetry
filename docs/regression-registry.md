@@ -145,6 +145,7 @@ Columns:
 | `tests/unit/history-storage.test.ts` | Node unit (Vitest) | REG-007, REG-011 | R | ET-013 (#60); ET-038 | PR (tests job, `npm test`) | regression |
 | `tests/unit/installer-driver-provenance.test.ts` | Node unit (Vitest) | REG-017 (historical provenance) | T, V (et-001) | ET-001 (#5) | PR (tests job, `npm test`) | — |
 | `tests/unit/installer-guard.test.ts` | Node unit (Vitest) | REG-017 | T, V (et-018) | ET-018 (PR-1) | PR (tests job, `npm test`) | security |
+| `tests/unit/installer-ui-navigation.test.ts` | Inert Node unit (Vitest), production navigation helpers and hidden-control/budget fixture | REG-017 | T, R (et-028 closeout) | ET-028 | PR (tests job, `npm test`) | exact visible startup, About warning, remaining deadline |
 | `tests/unit/uninstall-data-wipe.test.ts` | Node unit (Vitest) | REG-017 | T, V (et-018) | ET-018 (PR-2) | PR (tests job, `npm test`) | security |
 | `tests/unit/uninstall-engine.test.ts` | Node unit (Vitest) | REG-015, REG-017 | T, V (et-018) | ET-018 (PR-2) | PR (tests job, `npm test`) | security |
 | `tests/unit/uninstall-plugin-cleanup.test.ts` | Node unit (Vitest) | REG-015, REG-017 | T, V (et-018) | ET-018 (PR-2) | PR (tests job, `npm test`) | security |
@@ -383,3 +384,26 @@ Review R4/R5: the seven-case real-worker reader/monitor/FIFO matrix now crosses 
 Claude2 display-lifetime regression: `tests/unit/hard-mode-service-status.test.ts` validates the private relative-lifetime/strict assessment-versus-trip envelope, aged proof, repeated trip posts, absent further messages, UTC steps, genuine new publications and retirement/malformed metadata. `hard-mode-reader.test.ts` retains read-completion and post-bind age in remaining lifetime; `main-boundaries.test.ts` exercises actual IPC expiry and service restart/old-child refusal. Renderer/preload/native/SQL contracts are unchanged.
 
 ET-005b PR-3 (October 21, 2026): five minimized CAP-01-derived scenarios add observed callback-order/value protection for REG-001/002/008/009, checked against source-authored expectations and production V1Ingestion on actual pipes. The cap01 manifest is separate from the frozen synthetic corpus. No unavailable channel, native callback timing, trip/storage or new game result is inferred; CAP-01 gaps remain recorded in its validation.
+
+## ET-028 presentation coverage
+
+| Entry point | Layer | REG IDs | Source | Owning card | Runs in | Protected |
+| --- | --- | --- | --- | --- | --- | --- |
+| `tests/unit/desktop-ui-view.test.ts` | Node unit | REG-002, REG-003, REG-009, REG-014 | R | ET-028 | `npm test` | normalized geometry, unavailable/zero, status words/colors, exact SDK names |
+| `tests/unit/journal-chart.test.ts` | Node unit | REG-002, REG-003, REG-008, REG-009, REG-014 | R | ET-028 | `npm test` | current-page bound, source-monotonic segments, UTC separation, missing data |
+| `tests/unit/ui-runtime-receipt.test.ts` | Node + inert PowerShell receipt fixtures | REG-009, REG-012, REG-016, REG-017 | R, T | ET-028 | `npm test` | complete UI language/size/screen/assertion/PNG requirements, refusal/read-only evidence |
+| `Invoke-RuntimeSmoke.ps1 -Scenario ui -UiCase shell` (`ui-observation.mjs`) | Running app, development and packaged | REG-009, REG-012, REG-017 | T | ET-028 | development main/dispatch; packaged PR/main/dispatch | routing/focus, status, language/menu keyboard, Journal unmount, Later/Exit |
+| `Invoke-RuntimeSmoke.ps1 -Scenario ui -UiCase live` | Running app, development and packaged | REG-002, REG-003, REG-009, REG-017 | T | ET-028 | same UI matrix | normalized gauge, exact SDK names, zero/missing/paused/stale, truthful placeholders |
+| `Invoke-RuntimeSmoke.ps1 -Scenario ui -UiCase journal` | Running app, development and packaged | REG-008, REG-009, REG-014, REG-017 | T | ET-028 | same UI matrix | readable primary table, trip header/tiles, cursor Back, bounded chart, raw tabs |
+| `Invoke-RuntimeSmoke.ps1 -Scenario ui -UiCase settings` | Running app, development and packaged | REG-009, REG-012, REG-016, REG-017 | T | ET-028 | same UI matrix | panels/committed saves, all sections, isolated save refusal/recovery, real future-version read-only EN fallback, uninstall refusal |
+| `Invoke-RuntimeSmoke.ps1 -Scenario ui -UiCase overlay` | Running app, development and packaged | REG-002, REG-009, REG-016, REG-017 | T | ET-028 | same UI matrix | four layouts, independent font/transparency, missing/paused/stale, card subsets and numeric RPM arc |
+
+Existing Live/Journal/plugin/uninstall/renderer/main/overlay/locale tests and all previous runtime entrypoints remain mandatory. The 38px strip oracles are independently recalculated visual geometry, not relaxed data or fit assertions. Manual native-caption/Windows 100%/150%/game/performance acceptance is not inferred from emulated screenshots.
+
+The Settings UI receipt also requires keyboard-operated segmented/switch controls, the last-enabled-section guard, and readable offline Onest copyright/license text. Missing or false assertions are rejected by the inert receipt fixtures.
+
+
+ET-028 closeout strengthens the existing `tests/storage/history-refusal.test.ts` REG-007/REG-011/REG-017 lock-recovery coverage with a held real-worker session command, controlled checkpoint expiry, no premature Recording/ACK, committed gap coverage before exact ACK 2, and a new SDK boundary followed by an actual parsed Recording publication before signal-driven teardown. It retains live-only/durable connection order, real SQLite integrity/coverage and clean stop/log checks. The controlled RED unsafe-expectation experiment and the original unknown-timing failure/full diagnostic retry are retained separately in [validation](validation/et-028.md). No product freshness, storage deadline or protocol assertion changes.
+
+
+ET-028 Claude follow-up adds `tests/unit/formatter-localization.test.ts` (Node/Vitest, REG-002/003/009/014, R/T, ET-028, PR `npm test`): real core formatter and main/overlay output, all units/profiles/games/EN-RU, exact signed/large money and SDK-name/detail provenance. It adds `tests/unit/ci-compiled-artifact.test.ts` (Node/Vitest with isolated temporary files and inert Node CLI children, REG-015/017, R/T, ET-028, PR `npm test`): fail-closed aggregate participation, real artifact identity/hash/path/link rejection and exact native-binding replacement. Existing `journal-chart.test.ts`, `renderer-observation.test.ts`, `desktop-ui-view.test.ts` and `ui-runtime-receipt.test.ts` now cover signed SVG/domains, unknown/zero/positive tank states and missing/false `signedChart`, `tankUnknownVsZero` and `formatterProfiles` receipts. Existing flags and all 308 screenshots remain required; no storage/protocol or history fixture changes.

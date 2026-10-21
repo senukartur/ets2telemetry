@@ -1,3 +1,4 @@
+import {chooseSource, chooseLanguage} from './ui-navigation.mjs';
 // Isolated ET-026 app journey: production file reader/monitor -> recorder -> real SQLite worker -> UI/journal/export.
 import assert from 'node:assert/strict';
 import {createServer} from 'node:net';
@@ -80,7 +81,7 @@ export async function startHardModeSource(config) {
 const current = page => page.evaluate(() => globalThis.desktop.getHardModeStatus());
 const trips = page => page.evaluate(async () => {const result = await globalThis.desktop.listJournalTrips(); return result.ok ? result.value.trips : [];});
 export async function runHardModeSmoke({application, dashboard, source, config, record}) {
-  await dashboard.selectOption('select', 'synthetic');
+  await chooseSource(dashboard, 'synthetic');
   await until(source.connected, Boolean, 'HARD_MODE_DURABLE_SOURCE', 10000);
   await until(async () => (await current(dashboard)).assessment.state, value => value === 'unknown', 'HARD_MODE_UNKNOWN', 5000); record.unknown = true; await until(() => dashboard.locator('[data-testid^="hard-mode-rule-"][data-state="unknown"]').count(), count => count === 12, 'HARD_MODE_UNKNOWN_NAMES', 5000); await dashboard.getByTestId('hard-mode-card').screenshot({path: path.join(config.output, 'hard-mode-unknown.png')});
   await source.settings('fail');
@@ -94,7 +95,7 @@ export async function runHardModeSmoke({application, dashboard, source, config, 
     ['braking', '75% (0.75)', '≤ 75% (0.75)', 'Meets the required setting'], ['traffic', '100% (1)', '≥ 100% (1)', 'Meets the required setting']
   ];
   const language = async value => {
-    await dashboard.locator(`#language-${value}`).click();
+    await chooseLanguage(dashboard, value);
     await until(() => dashboard.evaluate(() => globalThis.desktop.getAppState()), state => state.settings?.language === value, 'HARD_MODE_LANGUAGE_SAVED', 5000);
   };
   const localizedHints = value => value === 'en' ? hints : hints.map(([id, detected, required, reason]) => [id,
@@ -103,14 +104,17 @@ export async function runHardModeSmoke({application, dashboard, source, config, 
     reason === 'Meets the required setting' ? 'Соответствует требуемой настройке' : 'Не соответствует требуемой настройке']);
   for (const lang of ['en', 'ru']) {
     await language(lang);
+    const names = lang === 'en' ? ['Realistic fuel consumption', 'Air brake simulation', 'Police and fines', 'Fatigue simulation', 'Speed limiter', 'Truck stability', 'Trailer stability', 'Configured skilled parking', 'Rain probability', 'Random road events', 'Braking intensity', 'Traffic density'] : ['Реалистичный расход топлива', 'Пневмотормоза', 'Штрафы / полиция', 'Усталость', 'Ограничитель скорости', 'Стабилизация тягача', 'Стабилизация прицепа', 'Настроенная умелая парковка', 'Вероятность дождя', 'Случайные события', 'Интенсивность торможения', 'Плотность трафика'];
     const expected = localizedHints(lang), fail = lang === 'en' ? 'fail' : 'не выполнено', pass = lang === 'en' ? 'pass' : 'выполнено';
     const detectedLabel = lang === 'en' ? 'Detected' : 'Обнаружено', requiredLabel = lang === 'en' ? 'Required' : 'Требуется', reasonLabel = lang === 'en' ? 'Reason' : 'Причина';
     assert.equal(await dashboard.locator('[data-testid^="hard-mode-rule-"]').count(), 12);
-    await until(() => dashboard.getByTestId('hard-mode-rule-fatigue').innerText(), text => text.endsWith(fail), 'HARD_MODE_RENDERED_FAIL', 5000);
+    await until(() => dashboard.getByTestId('hard-mode-name-fatigue').getAttribute('aria-label'), text => text.endsWith(fail), 'HARD_MODE_RENDERED_FAIL', 5000);
     await dashboard.getByTestId('hard-mode-name-fuel').focus(); await dashboard.keyboard.press('Shift+Tab');
-    for (const [id, detected, required, reason] of expected) {
+    for (const [index, [id, detected, required, reason]] of expected.entries()) {
       const trigger = dashboard.getByTestId(`hard-mode-name-${id}`), hint = dashboard.getByTestId(`hard-mode-hint-${id}`);
-      assert.ok((await trigger.innerText()).endsWith(id === 'fatigue' ? fail : pass));
+      assert.equal(await trigger.getAttribute('aria-label'), `${names[index]}: ${id === 'fatigue' ? fail : pass}`);
+      assert.equal(await trigger.locator('span').last().innerText(), names[index]);
+      assert.equal(await dashboard.getByTestId(`hard-mode-rule-${id}`).getAttribute('data-state'), id === 'fatigue' ? 'fail' : 'pass');
       await trigger.hover(); await hint.waitFor({state: 'visible'});
       const text = await hint.innerText();
       assert.ok(text.includes(`${detectedLabel}: ${detected}`) && text.includes(`${requiredLabel}: ${required}`) && text.includes(`${reasonLabel}: ${reason}`), `Incorrect ${lang}/${id} hint: ${text}`);
@@ -130,6 +134,8 @@ export async function runHardModeSmoke({application, dashboard, source, config, 
       const text = await dashboard.getByTestId(`hard-mode-drawer-rule-${id}`).innerText();
       assert.ok(text.includes(`${detectedLabel}: ${detected}`) && text.includes(`${requiredLabel}: ${required}`) && text.includes(reason), `Incorrect ${lang}/${id} drawer row`);
     }
+    const drawerText = await drawer.innerText();
+    for (const caveat of (lang === 'en' ? ['Read-only checks observe persisted settings.', 'Unpersisted menu or console changes and transient changes between checks are not verified.', 'Manual delivery is required; actual Expert placement is not verified.', 'Current settings pass is separate from delivered-trip qualification.'] : ['Проверка только читает сохранённые настройки.', 'Несохранённые изменения в меню или консоли и временные изменения между проверками не проверяются.', 'Требуется ручная парковка; фактическое место уровня «Эксперт» не подтверждается.', 'Соответствие текущих настроек не означает, что завершённый рейс будет засчитан как Hard Mode.'])) assert.ok(drawerText.includes(caveat), `Missing ${lang} drawer caveat: ${caveat}`);
     if (lang === 'ru') assert.doesNotMatch(await drawer.innerText(), /Detected:|Required:|Reason:|Check again|Current settings|Read-only/);
     await dashboard.screenshot({path: path.join(config.output, `hard-mode-checklist-${lang}.png`)});
     await clickTestId(dashboard, 'hard-mode-drawer-refresh'); await dashboard.keyboard.press('Escape'); await drawer.waitFor({state: 'hidden'});

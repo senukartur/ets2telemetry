@@ -300,3 +300,25 @@ These are suggestions for future cards; none is authorized by this document.
 - Start with Windows: needs an explicit authorization (autostart is currently out of scope).
 - The overlay `hard-mode` section and the "Delivered late" outcome display are proposals.
 - Journal search needs a new storage query.
+
+
+## ET-028 implementation mapping and accepted read-boundary limits — October 21, 2026
+
+The renderer implements the approved dark Yukon shell and local screen routing. Main window geometry is 1280×800, minimum 1100×720, with a 32px native title-bar overlay; only the title strip drags. The 220px sidebar, persistent status chips and 200px Settings navigation use the canonical tokens and unchanged bear. Both renderers bundle Onest 5.3.1 independently. Existing package/shortcut/data identities and small Windows/tray icons remain unchanged.
+
+| Reference region | Implemented binding / deliberate limit |
+| --- | --- |
+| Live instrument / job | Normalized current v0 numbers drive geometry; independently fresh matching v1 supplies job names. Job spans the row below instrument/Hard Mode. Full existing field set and provenance remain below. |
+| Live trip / route progress | RecordingHealth exposes no observed trip distance, fuel or duration. These are explicitly unavailable; no demo totals or progress are substituted. |
+| Journal table | Started, game chip, cargo/HM, route, observed/planned distance, expected income versus unavailable actual revenue, outcome, completeness, Sync Later and fuel remain reachable in a bounded horizontal table. No per-row detail queries. |
+| Trip header / four tiles | One detail query supplies cargo/route/companies/start/chips, observed/planned/game-reported distances, exact outcome money and fuel. Missing hero values use a dash plus a small reason; money keeps exact raw digits/currency with a separate basis note. Aggregate real/game durations are unavailable. |
+| Trip chart | Summary and Samples read only the currently mounted page (≤300). Independent source-monotonic elapsed axes per segment; UTC labels only. No line crosses unavailable speed, missing seconds, changed clock or non-increasing time. Raw paged tables remain. |
+| Settings | General/Units segmented controls; four Overlay thumbnail cards; existing read-only/committed-save authority, fourteen sections, last-enabled guard and position editing. Unsupported show/opacity/autostart/backup are Planned, version/statistics unavailable. Source selection/raw diagnostic details live in Data. |
+| Account / first run | Informational Later screen and General help only. No credential, sync, onboarding or autostart backend/control is invented. This owner-approved placeholder supersedes the reference's hidden-until-server-phase suggestion. |
+| Overlay | Independent transparent CSS with yu-ov tokens and Onest. Card hierarchy shares the existing reserved 24px rows; speed/gear/RPM subsets never manufacture disabled fields. The cluster's validated numeric RPM fraction draws an inner arc. The existing renderer bridge has formatted speed only, so its outer track is decorative, with no invented speed progress or IPC extension. |
+
+App-owned EN/RU labels and numeric unit labels are localized; raw SDK names, money digits/currency codes, protocol/audit enums and cvars remain unchanged. All twelve Hard Mode hints/drawer rows, observation boundaries and irreversible first loss remain governed by ET-026; this task changes presentation only.
+
+Spec IDs use compatible existing IDs where established (`hard-mode-*`, `journal-*`, `overlay-*`) plus `shell.*`, `settings.*`, `live.instrument*`, `trip.header`, `trip.tiles`, `trip.chart` and `trip.hardMode`. Native caption behavior, actual Windows 100%/150% scaling, game overlay input/focus/z-order and performance require manual evidence; viewport screenshots do not establish them.
+
+ET-028 Live compaction keeps all twelve actual parameter names with state icons and complete accessible rule/state labels, hover/keyboard hints, source/age and both actions. The grid uses two columns below a 360px card width, three only above that threshold, with wrapping and ≥32px targets. A short saved-settings limitation stays visible; full observation/manual-parking/qualification caveats remain in the accessible 470px drawer. Current Live screenshot checks require the Job heading and both route endpoints fully inside the content viewport without scrolling, and separately reject overflowing parameter labels.

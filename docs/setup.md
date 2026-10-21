@@ -64,7 +64,7 @@ Rule exceptions, each with its reason:
 
 ## UI components (shadcn/ui)
 
-The main window uses [shadcn/ui](https://ui.shadcn.com/) with Tailwind CSS v4. shadcn/ui is not a runtime dependency: the CLI copies component source into `apps/desktop/src/components/ui`, where it is project code that is linted, typechecked and edited like any other module. The renderer bundle is built by Vite, so every UI package is a pinned dev dependency: tailwindcss and @tailwindcss/vite 4.3.3, tw-animate-css, radix-ui, class-variance-authority, lucide-react, cn (a Tailwind-aware class-name merge helper published by shadcn, MIT, repository shadcn-ui/cn, described as a drop-in replacement for clsx plus tailwind-merge; generated components import it directly and `apps/desktop/src/lib/utils.ts` re-exports it) and @fontsource-variable/geist. The CLI is not installed; run it through npx.
+The main window uses [shadcn/ui](https://ui.shadcn.com/) with Tailwind CSS v4. shadcn/ui is not a runtime dependency: the CLI copies component source into `apps/desktop/src/components/ui`, where it is project code that is linted, typechecked and edited like any other module. The renderer bundle is built by Vite, so every UI package is a pinned dev dependency: tailwindcss and @tailwindcss/vite 4.3.3, tw-animate-css, radix-ui, class-variance-authority, lucide-react, cn (a Tailwind-aware class-name merge helper published by shadcn, MIT, repository shadcn-ui/cn, described as a drop-in replacement for clsx plus tailwind-merge; generated components import it directly and `apps/desktop/src/lib/utils.ts` re-exports it) and @fontsource-variable/onest 5.3.1. The CLI is not installed; run it through npx.
 
 Add a component from the repository root:
 
@@ -276,3 +276,10 @@ Since ET-013 PR-2 the telemetry service opens `%LOCALAPPDATA%\ETS2Telemetry\data
 ## Node test scheduling (ET-026)
 
 `npm test` retains the complete Node corpus. Vitest first runs `tests/unit/**/*.test.ts` with its normal parallelism, then `tests/host/**/*.test.ts` and the unchanged real-I/O `tests/unit/plugin-setup.test.ts` in the one-worker `host-boundaries` project. The Windows own-PID process-list case remains a real, unfiltered system call and retains its win32 gate, success assertion, 10-second product timeout, 1-MiB output cap and 20-second test hang guard. Run it alone with `npx vitest run tests/host/game-processes.test.ts`; the unit file retains eighteen deterministic cases. The host directory keeps the same Node-safe SQLite import restrictions as unit tests. The setup file is explicitly excluded from the parallel unit project, so every test is discovered once; its existing case/I/O guards and assertions remain unchanged. This prevents the real boundaries from competing with the unit runner's process churn; it does not suppress failures or retry them. See [the measured evidence](validation/et-026.md#verifier-round-4-and-real-host-test-isolation).
+
+
+### Yukon UI assets (ET-028)
+
+The pinned package is `@fontsource-variable/onest` 5.3.1 (official npm registry verified before pinning). Main and overlay each import the offline font; no runtime font request is needed. Their Vite stylesheet closures remain separate: the overlay imports only its own CSS/font/yu-ov tokens, never shadcn base/Tailwind/Radix. Main uses the approved yu tokens and installed Radix menu/Sheet/Tooltip primitives. The approved bear copy is byte-identical to `docs/design/assets/logo.png`; native small icons/package names are unchanged. Earlier Geist validation above is historical, superseded for the current renderer by the ET-028 checks.
+
+The unchanged Onest copyright/OFL1.1 text is bundled at `apps/desktop/src/assets/onest-OFL.txt`, readable offline in Settings → About and emitted as a separate renderer asset. Its SHA256 is `a2a09da98a3d0d1ec79fc2d6deeac748b20a8153e26699552e7b59b5a40b63a3`; ET-028 package extraction verifies the distributed bytes equal the pinned package license.
