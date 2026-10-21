@@ -3,7 +3,8 @@ import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
 import {createHash} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
-import {afterEach, describe, expect, it} from 'vitest';
+import {builtinModules} from 'node:module';
+import {afterAll, afterEach, beforeAll, describe, expect, it} from 'vitest';
 import {importCap0} from '../../tools/telemetry-simulator/src/v1/cap0-import';
 import {stepsDigest} from '../../tools/telemetry-simulator/src/v1/cap0-schema';
 import {validateScenario} from '../../tools/telemetry-simulator/src/v1/scenario';
@@ -12,6 +13,10 @@ import {header, envelope, end, observation} from '../shared/cap0-fixtures';
 import type {Cap0Packet} from '../../packages/contracts/src/capture-cap0';
 
 const dirs: string[] = [];
+// Compile current source once into an owned directory. This preparation budget also covers loaded CI hosts;
+// npm test runs before the workspace build and must never borrow its cached dist output.
+const CLI_BUILD_BUDGET_MS = 60_000;
+const CLI_RUN_BUDGET_MS = 10_000;
 afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, {recursive: true, force: true}); });
 type Json = Record<string, unknown>;
 function fixture(packets: Cap0Packet[] = [header(), envelope(1, 1, {group: 'configuration', id: 'job', observations: [observation(0, 'cargo', 'string', 'Private Cargo'), observation(1, 'income', 'u64', '1000')]}), end(2, 1)],
@@ -157,14 +162,26 @@ describe('CAP0 sanitized export importer', () => {
     const x = {...s, steps: [{action: 'frame', atMs: 1, channels: {speed: 0}}, s.steps.at(-1)]};
     expect(() => validateScenario({...x, provenance: {...s.provenance, stepsSha256: stepsDigest(x.steps)}})).toThrow(/capture callbacks/);
   });
-  it('CLI import refuses replacement and replay bytes match the library', () => {
-    const dir = fixture(), out = join(dir, 'derived.json');
-    const cli = resolve('tools/telemetry-simulator/dist/cli.cjs');
-    execFileSync(process.execPath, [cli, 'import-cap0', dir, '--run', 'cli-test', '--out', out]);
-    const expected = importCap0(dir, 'cli-test');
-    expect(JSON.parse(readFileSync(out, 'utf8'))).toEqual(expected);
-    const a = execFileSync(process.execPath, [cli, 'replay-v1', out], {encoding: 'utf8'}), b = execFileSync(process.execPath, [cli, 'replay-v1', out], {encoding: 'utf8'});
-    expect(a).toBe(b); expect(a).toBe(transcriptLines(replayV1(expected)).join('\n') + '\n');
-    expect(() => execFileSync(process.execPath, [cli, 'import-cap0', dir, '--run', 'cli-test', '--out', out], {stdio: 'pipe'})).toThrow();
+  describe('isolated CAP0 CLI', () => {
+    let cliDirectory: string | undefined, cli = '';
+    beforeAll(async () => {
+      cliDirectory = mkdtempSync(join(tmpdir(), 'et005-cap0-cli-'));
+      const {build} = await import('vite'), bundle = join(cliDirectory, 'bundle');
+      await build({configFile: false, logLevel: 'silent', build: {outDir: bundle, emptyOutDir: true,
+        lib: {entry: resolve('tools/telemetry-simulator/src/cli.ts'), formats: ['cjs'], fileName: () => 'cli.cjs'},
+        rollupOptions: {external: [...builtinModules, ...builtinModules.map(x => `node:${x}`)]}}});
+      cli = join(bundle, 'cli.cjs');
+    }, CLI_BUILD_BUDGET_MS);
+    afterAll(() => { if (cliDirectory) rmSync(cliDirectory, {recursive: true, force: true}); });
+    it('CLI import refuses replacement and replay bytes match the library', () => {
+      const dir = fixture(), out = join(dir, 'derived.json');
+      const run = (args: string[]) => execFileSync(process.execPath, [cli, ...args], {encoding: 'utf8', timeout: CLI_RUN_BUDGET_MS, windowsHide: true, stdio: 'pipe'});
+      run(['import-cap0', dir, '--run', 'cli-test', '--out', out]);
+      const expected = importCap0(dir, 'cli-test');
+      expect(JSON.parse(readFileSync(out, 'utf8'))).toEqual(expected);
+      const a = run(['replay-v1', out]), b = run(['replay-v1', out]);
+      expect(a).toBe(b); expect(a).toBe(transcriptLines(replayV1(expected)).join('\n') + '\n');
+      expect(() => run(['import-cap0', dir, '--run', 'cli-test', '--out', out])).toThrow();
+    });
   });
 });
