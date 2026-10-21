@@ -57,6 +57,14 @@ describe('ET-026 persisted settings (REG-009/010)', () => {
     expect(details.latest).toEqual(lost); expect(details.firstLoss).toMatchObject({atUtcMs: 2000, rule: 'fatigue', values: [0]});
     expect(advanceHardMode(details, {...opening, observedUtcMs: 3000})).toMatchObject({latest: {state: 'pass', observedUtcMs: 3000}, firstLoss: {rule: 'fatigue', values: [0]}});
   });
+  it('renders Russian rule states, exact values and retained loss without mutating the stored audit or global language', () => {
+    const fail = evaluate(HARD_MODE_CONFIG.replace('g_fatigue "1"', 'g_fatigue "0"')), details = advanceHardMode(null, fail), before = JSON.stringify(details);
+    const ru = hardModeView({assessment: fail, trip: details}, 2000, 'ru');
+    expect(ru.headline).toBe('Hard Mode потерян для этого рейса');
+    expect(ru.rows[3]).toMatchObject({stateText: 'не выполнено', detected: 'Выкл. (0)', required: 'Вкл. (1)', reason: 'Не соответствует требуемой настройке'});
+    expect(ru.loss).toContain('обнаружено 0'); expect(ru.loss).not.toContain('outside-limit');
+    expect(JSON.stringify(details)).toBe(before); expect(hardModeView({assessment: fail, trip: details}, 2000, 'en').rows[3].detected).toBe('Off (0)');
+  });
   it('rejects unlisted fields, identities, bad lengths and malformed cross-boundary values', () => {
     const status = {assessment: evaluate(), trip: null}; expect(isHardModeStatus(status)).toBe(true);
     expect(isHardModeStatus({...status, filename: 'private'})).toBe(false);

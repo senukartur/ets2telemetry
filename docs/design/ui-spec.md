@@ -130,6 +130,7 @@ Game mode text comes from the trip's game-mode evidence; while it is unknown, sh
 | Slider | `slider` (add) | Track `--yu-border`, range `--yu-accent-light` |
 | Progress bar | `progress` (add) | 8 px high; fill `--yu-accent-light`, `--yu-ok-fg` when complete, `--yu-progress-pending` for low fuel or pending |
 | Hard Mode parameter hints | `tooltip` | Each of the twelve parameter names: hover and keyboard focus; noninteractive, Escape dismissal |
+| Hard Mode checklist drawer | `sheet` (installed Radix Dialog) | Right drawer, 470px maximum viewport width; modal focus trap, Escape and focus restoration |
 | Language menu | `dropdown-menu` (add) | Panel `--yu-bg-card`, selected item `--yu-accent` with white text |
 | Tooltips on icon-only items | `tooltip` (add) | Overlay icons have no tooltips (the overlay never takes the mouse while driving) |
 | Charts | `chart` (add, Recharts) or plain SVG | Area under the line at 16% opacity, grid `--yu-divider`, last point emphasized |
@@ -147,7 +148,7 @@ The main screen while driving. It follows the owner-chosen variant B (instrument
 | `live.instrument.gauge` | 260 px gauge: outer ring = speed (0–130 km/h or 0–80 mph, ticks every 10, labels every 20), inner arc = engine RPM, centre speed 54 px/800 with unit, RPM text below | `speed`, `engine-rpm` from telemetry-core's live view in the game's unit profile |
 | `live.instrument.gear` | Gear block 64 px, stale or paused badge under it | `gear` (`N`, `1…n`, `R1…Rn`) |
 | `live.instrument.fuel` | Vertical tank (fill `--yu-ok-fg`, below 30% `--yu-progress-pending`), fuel amount and capacity with %, range with "game's estimate", SDK average consumption with its note | `fuel`, `fuel-capacity`, `fuel-level`, `estimated-range`, `sdk-average-consumption` |
-| `live.hardMode` | Hard Mode card: status chip (Active / Not active / Lost for this trip), "N of 12" with a progress bar, a two-column list of the 12 criteria with ✓/✕, and hints attached to each parameter name on hover/keyboard focus | ET-026 status IPC (ET-026c). When lost, an error badge says which setting changed, its value and the time |
+| `live.hardMode` | Hard Mode card: status chip (Active / Not active / Lost for this trip), "N of 12" with a progress bar, a two-column list of the 12 criteria with ✓/✕, hints attached to each parameter name on hover/keyboard focus, and View checklist opening the right drawer | ET-026 status IPC (ET-026c). When lost, an error badge says which setting changed, its value and the time |
 | `live.job` | Current job: cargo and mass badge, market badge, deadline badge; a route progress line with a truck marker; origin city and company, driven, remaining with "planned …", expected income, destination city and company | `cargo`, `cargo-mass`, `market`, `deadline`, `source-city/company`, `destination-city/company`, `route-remaining`, `planned-distance`, `expected-income`; driven = observed distance of the open trip (ET-014). A field without data is hidden, not zero |
 | `live.trip` | This trip: real time, game time, fuel used, recording completeness badge | Open trip from `AppState.health.recording` and the trip recorder |
 | `live.truck` | Truck, plate, trailer(s), odometer | `truck`, `truck-plate`, `trailers`, `odometer` |
@@ -155,19 +156,20 @@ The main screen while driving. It follows the owner-chosen variant B (instrument
 
 States: **Waiting**: banner and dashes. **Paused**: values stay current with a ◷ paused badge. **Stale or disconnected**: values greyed with a ✕ "stale 12 s" badge; never shown as current. **Incompatible**: error banner (see §6).
 
-### 5.2 Hard Mode parameter hints (`hardMode.hint*`)
+### 5.2 Hard Mode parameter hints and checklist (`hardMode.hint*`, `hardMode.sheet`)
 
-Owner clarification, October 21, 2026: all twelve parameters stay in the compact Live card. Each name is a keyboard-focusable Radix/shadcn Tooltip trigger. There is no separate drawer, modal, scrim or View checklist button. This supersedes the original mockup's sheet interaction.
+Latest owner clarification, October 21, 2026: restore the mockup's 470px right checklist Sheet with View checklist and Check again, while retaining all twelve compact-card parameter-name hints. This supersedes the earlier no-drawer refinement. Use the accepted ET-029 selected-language EN/RU framework for every Hard Mode label, status, reason, source/age, notice and trip explanation; preserve SDK names and raw audit/cvar evidence.
 
 | Spec id | Content |
 | --- | --- |
-| `hardMode.hint` | Noninteractive hint on name hover and keyboard focus: friendly/exact raw **Detected**, **Required**, state, a plain-English reason and optional secondary cvar |
+| `hardMode.sheet` | Accessible 470px right drawer with title/count, twelve detected/required/state/reason rows, source/age, bounded Check again, retained first loss and read-only/persisted-setting notices |
+| `hardMode.hint` | Noninteractive hint on name hover and keyboard focus: friendly/exact raw **Detected**, **Required**, state, a localized friendly reason and optional secondary cvar |
 | `live.hardMode.criteria` | Twelve names with explicit pass/fail/unknown words and ✓/✕/? icons; visible keyboard focus |
 | `live.hardMode.source` | Sanitized source category (Local / Steam Cloud / Synthetic or replay / Unproven) and observation age, readable in the card; no profile name, account or filesystem path crosses IPC |
 | `live.hardMode.refresh` | **Check again**, bounded read-only refresh, loading/unavailable text in the card |
 | `live.hardMode.notice` | Read-only/persisted-setting boundary and current settings versus trip qualification; first loss retains value/time even when all current rules pass |
 
-Hints open on hover or focus, dismiss with Escape without moving focus, and contain no links or controls. Tab moves normally through the parameter names; there is no focus trap.
+Hints open on hover or focus, dismiss with Escape without moving focus, and contain no links or controls. Tab moves normally through the parameter names. The separate checklist drawer traps focus while open, closes on Escape and restores focus to View checklist. Selected-language changes update both hints and an already-open drawer without changing evidence or qualification.
 
 The 12 criteria use the owner-approved observed persisted-setting matrix: realistic fuel `g_fuel_simulation = 1`; air brakes `g_hardcore_simulation = 1`; police `g_police = 1`; fatigue `g_fatigue = 1`; speed limiter `g_use_speed_limiter = 1`; truck stability `g_truck_stability ≤ 0.5`; trailer stability `g_trailer_stability ≤ 0.5`; configured skilled parking `g_simple_parking_doubles = 0` and `g_parking_difficulty = 2`; rain `g_bad_weather_factor ≥ 0.12`; road events `g_road_events ≥ 0.30`; braking intensity `g_brake_intensity ≤ 0.75`; traffic `g_traffic ≥ 1.0`. Display booleans as On/Off and fractions as percentages, retaining the exact raw value alongside. The evaluator owns comparisons and its `1e-6` tolerance. Manual completion additionally requires available `autoParkUsed == false` at delivery; actual Expert placement is not verified. Explain that unpersisted runtime settings/transient changes between observations are not detected. Unknown/failure/source switch/interruption irreversibly loses qualification, preserving the first lost value/time even when current settings recover.
 

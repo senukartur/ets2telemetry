@@ -905,7 +905,7 @@ function Test-RuntimeReceipt {
     if ($ExpectedScenario -ceq 'hard-mode') {
         $hardMode = $driver.hardMode
         if ($null -eq $hardMode) { $validation.reason = 'HARD_MODE_RESULT_MISSING'; return $validation }
-        foreach ($field in @('unknown','fail','pass','hints','hover','noDrawer','keyboard','refresh','lost','restoredLost','irreversible','badge','export','overlayExcluded','persisted')) {
+        foreach ($field in @('unknown','fail','pass','hints','hover','drawer','bilingual','languageHotChange','keyboard','refresh','lost','restoredLost','irreversible','badge','export','overlayExcluded','persisted')) {
             if ($hardMode.$field -isnot [bool] -or !$hardMode.$field) { $validation.reason = 'HARD_MODE_RESULT_INVALID'; return $validation }
         }
         if ($hardMode.schemaVersion -ne 3 -or @($hardMode.flags).Count -ne 2 -or $hardMode.flags[0] -isnot [bool] -or $hardMode.flags[0] -or

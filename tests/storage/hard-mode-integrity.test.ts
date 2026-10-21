@@ -1,6 +1,6 @@
 import path from 'node:path';
 import {Worker} from 'node:worker_threads';
-import {afterEach, beforeEach, describe, expect, it} from 'vitest';
+import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import {StorageClient, workerHandle} from '../../packages/storage/src/client';
 import {HardModeMonitor} from '../../apps/desktop/src/hard-mode/monitor';
 import {TripRecorderSink} from '../../apps/desktop/src/trip-recorder';
@@ -123,6 +123,42 @@ describe('ET-026 integrity (REG-005/006/007)', () => {
       const last = script.event(delivery()); connection.enqueue({firstEventSeq: '2', lastEventSeq: '2'}, last, Date.now()); await pipeline.idle();
       expect(acks).toEqual(['1', '2']); expect(ok(await client.getTrip(trip.tripUuid))).toMatchObject({isHardMode: false, outcome: 'delivered', hardModeDetails: {firstLoss: expectedLoss}});
     } finally {await pipeline.stop(); expect(await client.close()).toEqual({clean: true});}
+  });
+  it('continues monitoring through UTC rollback with snapshots but no coverage events, retaining a restored fatigue loss', async () => {
+    const directory = process.env.ETS2TELEMETRY_STORAGE_TEST_BUNDLES; if (!directory) throw new Error('Run storage suite');
+    worker = new Worker(path.join(directory, 'storage-worker.cjs'), {workerData: {kind: 'storage'}});
+    const client = new StorageClient(workerHandle(worker), {closeGraceMs: TEST_CLOSE_GRACE_MS});
+    let utc = Date.now(), mono = 0n, config = HARD_MODE_CONFIG;
+    const utcClock = vi.spyOn(Date, 'now').mockImplementation(() => utc);
+    let recorder!: TripRecorderSink, observing = false;
+    // Establish the known passing baseline before attaching recording observations; all later observations are persisted.
+    const monitor = new HardModeMonitor(() => Promise.resolve(evidence(config)), value => {if (observing) recorder.observeHardMode('ets2', value);}, () => mono);
+    recorder = new TripRecorderSink(client, {hardModeEvidence: () => monitor.evidence()});
+    const pipeline = new DurableDelivery(recorder);
+    try {
+      ok(await client.open({path: ws.database, purpose: 'synthetic', backupsDirectory: ws.backups, appVersion: 'test-et026'}));
+      const script = new Script(ETS2_A), welcome = script.welcome();
+      const connection = pipeline.connect(welcome, {current: () => true, write: () => undefined, close: () => undefined});
+      connection.checkpoint(script.checkpoint(null), Date.now()); await pipeline.idle();
+      const observe = async (ns: string) => {
+        monitor.select({source: welcome.source, clockId: script.clockId, monotonicNs: ns}); const pending = monitor.refresh(); await Promise.resolve();
+        mono++; monitor.select({source: welcome.source, clockId: script.clockId, monotonicNs: ns, boundary: {clockId: script.clockId, probeSentClientNs: mono.toString(), receivedSourceNs: ns}}); await pending;
+      };
+      await observe(welcome.capture.monotonicNs); observing = true;
+      const first = script.event(r.jobConfigured()); connection.enqueue({firstEventSeq: '1', lastEventSeq: '1'}, first, Date.now()); await pipeline.idle();
+      const trip = ok(await client.listTrips()).trips[0]; expect(ok(await client.getTrip(trip.tripUuid))!.hardModeDetails!.firstLoss).toBeNull();
+      const original = client.observeHardMode.bind(client); let failedStored!: () => void;
+      const failureStored = new Promise<void>(resolve => {failedStored = resolve;});
+      client.observeHardMode = async (game, observation) => {const result = await original(game, observation); if (observation.assessment.state === 'fail') failedStored(); return result;};
+      utc -= 120_000; mono += 1_000_000_000n; config = HARD_MODE_CONFIG.replace('g_fatigue "1"', 'g_fatigue "0"');
+      const low = script.snapshot(); connection.snapshot(low, Date.now()); await observe(low.capture.monotonicNs); await failureStored;
+      expect(monitor.status().assessment.state).toBe('fail'); expect(ok(await client.committedThrough(ETS2_A))).toBe('1');
+      expect(ok(await client.getTrip(trip.tripUuid))!.hardModeDetails!.firstLoss).toMatchObject({rule: 'fatigue', values: [0]});
+      config = HARD_MODE_CONFIG; mono += 1_000_000_000n; const restored = script.snapshot(); connection.snapshot(restored, Date.now()); await observe(restored.capture.monotonicNs);
+      expect(monitor.status().assessment.state).toBe('pass'); utc += 120_000;
+      const last = script.event(delivery()); connection.enqueue({firstEventSeq: '2', lastEventSeq: '2'}, last, Date.now()); await pipeline.idle();
+      expect(ok(await client.getTrip(trip.tripUuid))).toMatchObject({outcome: 'delivered', isHardMode: false, hardModeDetails: {firstLoss: {rule: 'fatigue', values: [0]}}});
+    } finally {utcClock.mockRestore(); monitor.close(); await pipeline.stop(); expect(await client.close()).toEqual({clean: true});}
   });
   it('qualifies deterministic injected replay-origin observations through the real recorder/worker in a replay database', async () => {
     const directory = process.env.ETS2TELEMETRY_STORAGE_TEST_BUNDLES; if (!directory) throw new Error('Run storage suite');

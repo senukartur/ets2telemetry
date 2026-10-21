@@ -77,7 +77,7 @@ export default function App() {
     <p data-testid="prototype-notice">{recording.notice}</p>
   </CardContent></Card>
   <LiveDashboard live={live} units={settings?.units} />
-  <HardModeCard />
+  <HardModeCard language={language} />
   <Card size="sm"><CardHeader><CardTitle><h2>{strings.healthTitle}</h2></CardTitle></CardHeader><CardContent className="space-y-2">
     {problem ? <Alert variant="destructive" data-testid="health-alert"><AlertTitle>{strings.serviceFailedTitle}</AlertTitle><AlertDescription>{getAppErrorText(problem, language)}</AlertDescription></Alert> : null}
     <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1" data-testid="app-health">

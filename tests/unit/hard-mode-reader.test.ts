@@ -116,6 +116,18 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
     expect(m.status().assessment.state).toBe('unknown'); const pending = m.refresh(); await vi.advanceTimersByTimeAsync(2001); await pending;
     expect(changed.mock.calls.every(([value]) => value.assessment.state === 'unknown')).toBe(true); m.close();
   });
+  it('expires coverage on monotonic elapsed time despite UTC rollback and never refreshes age at causal publication', async () => {
+    let mono = 0n; const changes: HardModeObservation[] = [];
+    const {evaluateHardMode, parseHardModeConfig} = await import('../../packages/telemetry-core/src/hard-mode');
+    const scan = () => Promise.resolve({assessment: evaluateHardMode(parseHardModeConfig(HARD_MODE_CONFIG), Date.now(), 'fixture'), binding: 'a'.repeat(64), pluginSessionId: source.pluginSessionId, sourceMonotonicNs: '100'});
+    const m = new HardModeMonitor(scan, value => changes.push(value), () => mono);
+    const bind = () => m.select({source, monotonicNs: '100', clockId: 'clock', boundary: {clockId: 'clock', probeSentClientNs: (++mono).toString(), receivedSourceNs: '200'}});
+    m.select({source, monotonicNs: '100', clockId: 'clock'}); await Promise.resolve(); mono += 1_000_000_000n; bind(); await m.refresh();
+    const utc = vi.spyOn(Date, 'now').mockReturnValue(1);
+    mono = 3_500_000_000n; expect(m.evidence().assessment.state).toBe('unknown');
+    const pending = m.refresh(); await Promise.resolve(); bind(); await pending;
+    expect(changes.slice(-2).map(value => value.assessment.state)).toEqual(['unknown', 'pass']); utc.mockRestore(); m.close();
+  });
   it('coalesces refresh, enforces the deadline and never starts a second outstanding read', async () => {
     vi.useFakeTimers(); let finish!: (v: HardModeObservation) => void; const callback = vi.fn();
     const scan = vi.fn(() => new Promise<HardModeObservation>(resolve => {finish = resolve;}));

@@ -9,14 +9,16 @@ export class HardModeMonitor {
   private inFlight: Promise<void> | undefined;
   private controller: AbortController | undefined;
   private epoch = 0;
-  private lastScan = -Infinity;
+  private lastScanNs: bigint | undefined;
+  private observedClientNs: bigint | undefined;
   private pendingProof: {value: HardModeObservation; completedClientNs: bigint; resolve: () => void} | undefined;
   private bindProof(): void {
     const pending = this.pendingProof, current = this.source, boundary = current?.boundary;
     if (!pending || !boundary || boundary.clockId !== current?.clockId || BigInt(boundary.probeSentClientNs) <= pending.completedClientNs) return;
     this.pendingProof = undefined;
+    this.expireCoverage();
     if (BigInt(boundary.receivedSourceNs) >= 18446744073709551615n) this.publish(this.unknown());
-    else this.publish({...pending.value, sourceMonotonicNs: (BigInt(boundary.receivedSourceNs) + 1n).toString()});
+    else this.publish({...pending.value, sourceMonotonicNs: (BigInt(boundary.receivedSourceNs) + 1n).toString()}, pending.completedClientNs);
     pending.resolve();
   }
   private retireProof(): void {const pending = this.pendingProof; this.pendingProof = undefined; pending?.resolve();}
@@ -24,7 +26,9 @@ export class HardModeMonitor {
   constructor(private readonly read: (source: SourceIdentity, monotonicNs: string, atUtcMs: number, signal: AbortSignal) => Promise<HardModeObservation>,
     private readonly changed: (value: HardModeObservation) => void = () => undefined, private readonly nowNs: () => bigint = () => process.hrtime.bigint()) {}
   private unknown(): HardModeObservation {return {assessment: unknownHardMode(Date.now()), binding: null, pluginSessionId: null, sourceMonotonicNs: null};}
-  private publish(value: HardModeObservation): void {this.observation = value; this.changed(value);}
+  private publish(value: HardModeObservation, observedClientNs = this.nowNs()): void {this.observation = value; this.observedClientNs = observedClientNs; this.changed(value);}
+  private expired(): boolean {const age = this.observedClientNs === undefined ? -1n : this.nowNs() - this.observedClientNs; return age < 0n || age > BigInt(HARD_MODE_POLL_MS + HARD_MODE_DEADLINE_MS) * 1_000_000n;}
+  private expireCoverage(): void {if (this.observation.binding !== null && this.expired()) this.publish(this.unknown());}
   select(next: MonitorSource | null): void {
     const before = this.source?.source, after = next?.source;
     const previousClock = this.source?.clockId;
@@ -34,17 +38,17 @@ export class HardModeMonitor {
     void this.refresh();
   }
   evidence(): HardModeObservation {
-    if (Date.now() - this.observation.assessment.observedUtcMs > HARD_MODE_POLL_MS + HARD_MODE_DEADLINE_MS) return this.unknown();
+    if (this.expired()) return this.unknown();
     return structuredClone(this.observation);
   }
   status(): HardModeStatus {return {assessment: this.evidence().assessment, trip: null};}
   start(): void {this.timer ??= setInterval(() => {void this.refresh();}, HARD_MODE_POLL_MS); this.timer.unref();}
   refresh(): Promise<void> {
+    this.expireCoverage();
     if (this.inFlight) return this.inFlight;
     const current = this.source;
-    if (!current || Date.now() - this.lastScan < HARD_MODE_POLL_MS) return Promise.resolve();
-    if (this.observation.binding !== null && Date.now() - this.observation.assessment.observedUtcMs > HARD_MODE_POLL_MS + HARD_MODE_DEADLINE_MS) this.publish(this.unknown());
-    this.lastScan = Date.now();
+    if (!current || this.lastScanNs !== undefined && this.nowNs() - this.lastScanNs < BigInt(HARD_MODE_POLL_MS) * 1_000_000n) return Promise.resolve();
+    this.lastScanNs = this.nowNs();
     const epoch = this.epoch, controller = this.controller = new AbortController();
     const deadline = setTimeout(() => {controller.abort(); if (epoch === this.epoch) this.publish(this.unknown()); this.retireProof();}, HARD_MODE_DEADLINE_MS);
     this.inFlight = this.read(current.source, current.monotonicNs, Date.now(), controller.signal).then(value => {
