@@ -146,6 +146,7 @@ Columns:
 | `tests/unit/diagnostic-bundle.test.ts` | Node unit (Vitest) | REG-015, REG-017 | R, F, T, V (et-017) | ET-017 (PR-6) | PR (tests job, `npm test`) | security |
 | `tests/unit/diagnostics.test.ts` | Node unit (Vitest) | REG-017 | T, V (et-001) | ET-001 (#5) | PR (tests job, `npm test`) | security |
 | `tests/unit/event-loop-lag.test.ts` | Node unit (Vitest) | smoke evidence: REG-011, REG-012, REG-014, REG-016, REG-017 | V (ci-smoke-window-stall) | ET-022 (#46) | PR (tests job, `npm test`) | — |
+| `tests/unit/exit-observation.test.ts` | Node unit (Vitest), inert emitters/promises and controlled clock | harness: REG-012, REG-017 | R, T | ET-011 (#162) | PR (tests job, `npm test`) | regression |
 | `tests/unit/game-folder.test.ts` | Node unit (Vitest) | REG-015 | R, F, V (et-017) | ET-017 (PR-2) | PR (tests job, `npm test`) | security |
 | `tests/unit/game-processes.test.ts` | Node unit (Vitest) | REG-015 | R, F, V (et-017) | ET-017 (PR-2) | PR (tests job, `npm test`) | — |
 | `tests/unit/guarded-fs.test.ts` | Node unit (Vitest) | harness: REG-015 | T, V (et-017) | ET-017 (PR-2) | PR (tests job, `npm test`) | security |
