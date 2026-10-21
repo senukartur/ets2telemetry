@@ -259,6 +259,8 @@ Columns:
 | `tests/unit/telemetry-service-v0.test.ts` | Node unit (Vitest) | REG-003, REG-007, REG-010, REG-011, REG-012 | R, F | ET-006a (#13) | PR (tests job, `npm test`) | security, regression |
 | `tests/unit/test-resources.test.ts` | Node unit (Vitest) | harness: REG-001 to REG-014, REG-016, REG-017 (the scenarios of every case that imports `tests/shared/resources.ts`, directly or through `tests/storage/helpers.ts`) | R (shared fixtures note), V (et-022), importers | ET-022 (#7) | PR (tests job, `npm test`) | — |
 | `tests/unit/tray-model.test.ts` | Node unit (Vitest) | REG-012 | R | ET-011a (#52) | PR (tests job, `npm test`) | — |
+| `tests/unit/tray-icon.test.ts` | Node unit (Vitest), committed asset bytes and image API fixture | REG-012, REG-017 | R | ET-011 brand follow-up | PR (tests job, `npm test`) | ICO/PNG identity, development/asar asset roots, all tray scales, missing-image fallback |
+| `tests/unit/icon-inspection.test.ts` | Node unit (Vitest), inert PE resource fixtures | REG-017 | R | ET-011 brand follow-up | PR (tests job, `npm test`) | matching primary icon; rejects missing, stale and secondary-only brand icons |
 | `tests/unit/trip-accounting.test.ts` | Node unit (Vitest) | REG-001, REG-002, REG-003, REG-008, REG-012 | R, F | ET-014 (#72) | PR (tests job, `npm test`) | gap, trip completeness |
 | `tests/unit/trip-identity.test.ts` | Node unit (Vitest) | REG-005, REG-008 | T, V (et-014) | ET-014 (#71) | PR (tests job, `npm test`) | dedup |
 | `tests/unit/trip-recorder.test.ts` | Node unit (Vitest) | REG-001, REG-003, REG-004, REG-005, REG-006, REG-007, REG-009, REG-011 | R, F | ET-015a (#77) | PR (tests job, `npm test`) | ACK, dedup, gap, trip completeness |

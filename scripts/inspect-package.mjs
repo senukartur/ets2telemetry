@@ -4,6 +4,7 @@ import {createRequire} from 'node:module';
 import path from 'node:path';
 import * as asar from '@electron/asar';
 import {sha256, sourceHashes} from './source-inputs.mjs';
+import {verifyExecutableIcon} from './icon-inspection.mjs';
 import {verifyPackage} from './package-integrity.mjs';
 import {verifyPluginBundleAgainstTree} from './plugin-bundle.mjs';
 import {assertNoPackedNativeCode, inspectInstaller, MAKE_DIRECTORY, PACKAGE_DIRECTORY} from './release-identity.mjs';
@@ -53,7 +54,12 @@ assert.equal(nativeBytes.readUInt16LE(0), 0x5a4d, 'Native binding must be a PE i
 const peOffset = nativeBytes.readUInt32LE(0x3c);
 assert.equal(nativeBytes.readUInt16LE(peOffset + 4), 0x8664, 'Native binding must be x64');
 const executable = path.join(directory, 'ETS2TelemetryDesktop.exe');
-const report = {checkedUtc: new Date().toISOString(), directory, applicationLaunched: false,
+const brandIcon = 'apps/desktop/src/assets/icons/brand.ico';
+const applicationIcon = verifyExecutableIcon(executable, brandIcon);
+for (const name of readdirSync('apps/desktop/src/assets/icons').filter(name => /\.(png|ico)$/.test(name))) {
+  assert.equal(sha256(read(`apps/desktop/dist/icons/${name}`)), sha256(readFileSync(`apps/desktop/src/assets/icons/${name}`)), `Stale packaged brand asset: ${name}`);
+}
+const report = {applicationIcon, checkedUtc: new Date().toISOString(), directory, applicationLaunched: false,
   ...integrity,
   asarSha256: sha256(readFileSync(archive)), executableSha256: sha256(readFileSync(executable)),
   nativeSha256: sha256(nativeBytes), compiledFilesVerified: files, sources: metadata.sources};
@@ -84,9 +90,10 @@ report.uninstallExecutor = {sha256: sha256(executorBytes), size: executorBytes.l
 if (installerCheck) {
   const version = JSON.parse(readFileSync('package.json', 'utf8')).version;
   report.installer = inspectInstaller({packageDirectory: directory, makeDirectory: path.resolve(MAKE_DIRECTORY), version});
+  report.installer.icon = verifyExecutableIcon(path.join(MAKE_DIRECTORY, report.installer.setup), brandIcon);
 }
 mkdirSync('.local/diagnostics', {recursive: true});
 writeFileSync('.local/diagnostics/package-inspection.json', JSON.stringify(report, null, 2) + '\n');
-console.log(JSON.stringify({applicationLaunched: false, ...integrity, compiledFilesVerified: files.length, asarSha256: report.asarSha256, executableSha256: report.executableSha256, pluginSha256: report.nativePlugin.sha256,
+console.log(JSON.stringify({applicationLaunched: false, applicationIcon, ...integrity, compiledFilesVerified: files.length, asarSha256: report.asarSha256, executableSha256: report.executableSha256, pluginSha256: report.nativePlugin.sha256,
   uninstallExecutorSha256: report.uninstallExecutor.sha256,
   ...(report.installer ? {installer: {setup: report.installer.setup, nupkg: report.installer.nupkg, projectedFiles: report.installer.projectedFiles, additions: report.installer.additions}} : {})}, null, 2));

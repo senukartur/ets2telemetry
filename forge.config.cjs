@@ -1,9 +1,11 @@
+const path = require('node:path');
+const icon = path.join(__dirname, 'apps/desktop/src/assets/icons/brand.ico');
 const {version} = require('./package.json');
 
 // Squirrel maker options (ET-018 PR-6, docs/release.md). `authors` and `description` become the NuGet metadata that
 // Squirrel shows as the publisher text; Setup carries the version in its name. scripts/release-identity.mjs,
 // inspect-package --installer and the installer lifecycle find Setup by this exact name.
-const squirrel = {name: 'ETS2TelemetryDesktop', authors: 'ETS2Telemetry contributors',
+const squirrel = {setupIcon: icon, name: 'ETS2TelemetryDesktop', authors: 'ETS2Telemetry contributors',
   description: 'Local telemetry utility for Euro Truck Simulator 2 and American Truck Simulator', setupExe: `ETS2Telemetry-Setup-${version}.exe`};
 
 module.exports = {
@@ -11,6 +13,7 @@ module.exports = {
   // Other native dependencies remain eligible for Forge's Electron rebuild.
   rebuildConfig: {ignoreModules:['better-sqlite3']},
   packagerConfig: {
+    icon,
     // resources/uninstall holds the deferred-cleanup executor that an uninstall copies and registers (ET-018 PR-5, U7).
     extraResource: ['.local/package-native/telemetry-client', '.local/package-native/telemetry-plugin', 'resources/uninstall'],
     // The physical Node worker must resolve SQLite's JavaScript loader without ASAR patches.

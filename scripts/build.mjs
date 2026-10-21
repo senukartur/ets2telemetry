@@ -2,13 +2,15 @@ import { build } from 'vite';
 import tailwindcss from '@tailwindcss/vite';
 import path from 'node:path';
 import { builtinModules } from 'node:module';
-import {readdirSync, readFileSync, writeFileSync} from 'node:fs';
+import {cpSync, readdirSync, readFileSync, writeFileSync} from 'node:fs';
 import {sourceHashes} from './source-inputs.mjs';
 const sources = sourceHashes();
 const external = ['electron', 'better-sqlite3', ...builtinModules, ...builtinModules.map(x => `node:${x}`)];
 for (const name of ['main', 'preload', 'overlay-preload', 'telemetry-service', 'storage-worker']) {
   await build({configFile:false, build:{outDir:'apps/desktop/dist',emptyOutDir:name === 'main',lib:{entry:`apps/desktop/src/${name}.ts`,formats:['cjs'],fileName:()=>`${name}.cjs`},rollupOptions:{external}}});
 }
+// Main resolves these via app.getAppPath() in development and in app.asar.
+cpSync('apps/desktop/src/assets/icons', 'apps/desktop/dist/icons', {recursive: true, filter: source => !source.endsWith('.md')});
 // Tailwind v4 compiles the renderer stylesheet. The '@' alias mirrors tsconfig.json paths for shadcn/ui components.
 // The renderer CSP has no data: source, so assets must never be inlined as data URIs.
 await build({configFile:false,root:'apps/desktop',base:'./',plugins:[tailwindcss()],resolve:{alias:{'@':path.resolve('apps/desktop/src')}},build:{outDir:'dist/renderer',emptyOutDir:true,assetsInlineLimit:0}});

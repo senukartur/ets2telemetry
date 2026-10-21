@@ -42,7 +42,7 @@ import {JournalBroker} from './journal-broker';
 import {JOURNAL_CHANNELS, JOURNAL_EXPORT_CHANNEL, journalRequest, type JournalChannelKind} from './journal-contract';
 import {EXPORT_DIALOG_FILTERS, JournalExporter} from './journal-export-writer';
 import {isJournalUuid} from '../../../packages/contracts/src/journal';
-import {TRAY_ICON_REPRESENTATIONS, trayIconPng, type TrayTone} from './tray-icon';
+import {applicationIconPath, createTrayIcon} from './tray-icon';
 import {pluginSetupMode} from './plugin-setup/mode';
 import {PluginSetup, PluginSetupError, productionPluginSetupPorts} from './plugin-setup/plugin-setup';
 import {DIAGNOSTICS_EXPORT_CHANNEL, isPluginGame, isPluginTargetId, PLUGIN_CHANNELS} from './plugin-setup-contract';
@@ -581,7 +581,7 @@ function runApplication(profileError: unknown): void {
     rendererEpoch++; subscribed = false; appStateSubscribed = false; dashboardSubscriptions.close(); dashboardPort = undefined;
   }
   function createWindow(): void {
-    const created = window = new BrowserWindow({width: 1280, height: 800, minWidth: 1100, minHeight: 720, title: 'Yukon Union Telemetry', titleBarStyle: 'hidden', titleBarOverlay: {color: '#0B1120', symbolColor: '#D1D5DB', height: 32}, webPreferences: {preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false}});
+    const created = window = new BrowserWindow({width: 1280, height: 800, minWidth: 1100, minHeight: 720, icon: applicationIconPath(app.getAppPath()), title: 'Yukon Union Telemetry', titleBarStyle: 'hidden', titleBarOverlay: {color: '#0B1120', symbolColor: '#D1D5DB', height: 32}, webPreferences: {preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false}});
     timeline?.('DASHBOARD_WINDOW_CREATED'); observeLoads(created.webContents, 'DASHBOARD');
     created.webContents.setWindowOpenHandler(() => ({action: 'deny'}));
     created.webContents.on('will-navigate', event => event.preventDefault());
@@ -621,12 +621,6 @@ function runApplication(profileError: unknown): void {
     if (action === 'restored') window!.restore();
     window!.show(); window!.focus();
   }
-  function trayImage(tone: TrayTone): Electron.NativeImage {
-    const [first, ...rest] = TRAY_ICON_REPRESENTATIONS;
-    const image = nativeImage.createFromBuffer(trayIconPng(first.size, tone), {scaleFactor: first.scaleFactor});
-    for (const representation of rest) image.addRepresentation({scaleFactor: representation.scaleFactor, buffer: trayIconPng(representation.size, tone)});
-    return image;
-  }
   function trayMenu(items: TrayMenuItem[]): Electron.Menu {
     return Menu.buildFromTemplate(items.map(item => item.kind === 'separator' ? {type: 'separator' as const}
       : item.kind === 'status' ? {label: item.label, enabled: false}
@@ -634,12 +628,11 @@ function runApplication(profileError: unknown): void {
   }
   function createTray(): void {
     try {
-      const created = tray = new Tray(trayImage('busy'));
+      const created = tray = new Tray(createTrayIcon(app.getAppPath(), nativeImage));
       created.on('click', () => openDashboard('tray'));
       trayPresenter = new TrayPresenter({
         setToolTip: text => {if (tray === created) created.setToolTip(text);},
-        setMenu: items => {if (tray === created) created.setContextMenu(trayMenu(items));},
-        setTone: tone => {if (tray === created) created.setImage(trayImage(tone));}
+        setMenu: items => {if (tray === created) created.setContextMenu(trayMenu(items));}
       });
       presentTray(true);
     } catch (error) {

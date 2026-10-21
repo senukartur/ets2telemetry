@@ -15,7 +15,7 @@ import {changed, DETAIL, LIST_ITEM, TRIP, TRIP_PAGE} from '../shared/journal-rep
 const processEvents = ['uncaughtException', 'unhandledRejection'] as const;
 const processEmitter: EventEmitter = process;
 let originals: Map<string, ReturnType<EventEmitter['listeners']>>;
-let app: EventEmitter & {exit: ReturnType<typeof vi.fn>; quit: ReturnType<typeof vi.fn>; setPath: ReturnType<typeof vi.fn>; requestSingleInstanceLock: ReturnType<typeof vi.fn>;
+let app: EventEmitter & {exit: ReturnType<typeof vi.fn>; quit: ReturnType<typeof vi.fn>; getAppPath: () => string; setPath: ReturnType<typeof vi.fn>; requestSingleInstanceLock: ReturnType<typeof vi.fn>;
   disableHardwareAcceleration: ReturnType<typeof vi.fn>; commandLine: {appendSwitch: ReturnType<typeof vi.fn>}};
 let ipc: EventEmitter;
 let handlers: Map<string, (event: unknown, source?: unknown) => unknown>;
@@ -45,6 +45,7 @@ let diagnosticsCalls: unknown[][], forkCalls: unknown[][];
 // timer and log expectations; windows after the first dashboard and overlay get their own web contents.
 let lockGranted: boolean;
 let trayAvailable: boolean;
+let trayImages: unknown[];
 let trays: (EventEmitter & {setToolTip: ReturnType<typeof vi.fn>; setContextMenu: ReturnType<typeof vi.fn>; setImage: ReturnType<typeof vi.fn>; destroy: ReturnType<typeof vi.fn>; destroyed: boolean})[];
 let extraContents: typeof contents[];
 // Every import of main.ts that a case starts. main.ts is an entry point with startup side effects, so each
@@ -104,8 +105,8 @@ function installFixture() {
   vi.useFakeTimers(); vi.resetModules();
   const started = Date.now(); vi.spyOn(performance, 'now').mockImplementation(() => Date.now() - started);
   originals = new Map(processEvents.map(name => [name, processEmitter.listeners(name)]));
-  lockGranted = true; trayAvailable = false; trays = []; extraContents = [];
-  app = Object.assign(new EventEmitter(), {exit: vi.fn(), quit: vi.fn(), getPath: () => 'C:\\isolated', setPath: vi.fn(), whenReady: () => Promise.resolve(), isPackaged: false,
+  lockGranted = true; trayAvailable = false; trayImages = []; trays = []; extraContents = [];
+  app = Object.assign(new EventEmitter(), {exit: vi.fn(), quit: vi.fn(), getPath: () => 'C:\\isolated', getAppPath: () => 'C:\\isolated', setPath: vi.fn(), whenReady: () => Promise.resolve(), isPackaged: false,
     requestSingleInstanceLock: vi.fn(() => lockGranted), disableHardwareAcceleration: vi.fn(), commandLine: {appendSwitch: vi.fn()}});
   child = Object.assign(new EventEmitter(), {postMessage: vi.fn(), kill: vi.fn(() => true)});
   children = [child]; let forks = 0;
@@ -146,11 +147,11 @@ function installFixture() {
     },
     Tray: class extends EventEmitter {
       setToolTip = vi.fn(); setContextMenu = vi.fn(); setImage = vi.fn(); destroyed = false; destroy = vi.fn(() => {this.destroyed = true;});
-      constructor() {super(); if (!trayAvailable) throw new Error('Notification area unavailable in this fixture'); trays.push(this);}
+      constructor(image: unknown) {super(); trayImages.push(image); if (!trayAvailable) throw new Error('Notification area unavailable in this fixture'); trays.push(this);}
       isDestroyed() {return this.destroyed;}
     },
     Menu: {buildFromTemplate: (template: unknown[]) => ({template})},
-    nativeImage: {createFromBuffer: () => ({addRepresentation: vi.fn()})},
+    nativeImage: {createFromPath: (filename: string) => ({filename, isEmpty: () => false, toPNG: () => Buffer.from(filename), addRepresentation: vi.fn()})},
     dialog: {showSaveDialog: (window: unknown, options: unknown) => showSaveDialog(window, options), showOpenDialog: (window: unknown, options: unknown) => showOpenDialog(window, options),
       showMessageBox: (...args: unknown[]) => showMessageBox(...args)},
     shell: {showItemInFolder: (file: string) => shell.showItemInFolder(file), openPath: (folder: string) => shell.openPath(folder)}}));
@@ -966,6 +967,12 @@ it('keeps a pre-readiness service failure report fatal', async () => {
   expect(child.kill).not.toHaveBeenCalled(); expect(child.postMessage).toHaveBeenCalledWith({type: 'stop'});
   child.emit('exit', 0); await settle(); expect(app.exit).toHaveBeenCalledExactlyOnceWith(1); expect(trays[0].destroy).toHaveBeenCalledOnce();
 });
+it.each(['C:\\development', 'C:\\portable\\resources\\app.asar'])('uses the brand icon for dashboard and tray from application root %s', async applicationPath => {
+  app.getAppPath = () => applicationPath; trayAvailable = true; await ready();
+  expect(configurations[0].icon).toBe(path.join(applicationPath, 'apps/desktop/dist/icons/brand.ico'));
+  expect(trayImages[0]).toMatchObject({filename: path.join(applicationPath, 'apps/desktop/dist/icons/brand-16.png')});
+  expect(trays[0].setImage).not.toHaveBeenCalled();
+});
 it('shows restart exhaustion in health and the tray and stays running until an explicit exit', async () => {
   trayAvailable = true; await ready();
   for (let crash = 0; crash < 3; crash++) {
@@ -974,7 +981,7 @@ it('shows restart exhaustion in health and the tray and stays running until an e
   }
   expect(handlers.get('app:get-state')!(trusted())).toEqual({health: {service: 'failed', storage: 'pending', recording: {state: 'unknown'}, lastError: 'SERVICE_RESTART_EXHAUSTED'}, settings: {units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: null}, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED, autostart: 'not-installed'});
   await vi.advanceTimersByTimeAsync(500);
-  expect(trays[0].setImage).toHaveBeenCalled(); expect(trays[0].setToolTip).toHaveBeenLastCalledWith('ETS2Telemetry\nService failed');
+  expect(trays[0].setImage).not.toHaveBeenCalled(); expect(trays[0].setToolTip).toHaveBeenLastCalledWith('ETS2Telemetry\nService failed');
   expect(app.exit).not.toHaveBeenCalled();
   trayMenuItem('Exit ETS2Telemetry').click!(); await settle(); expect(app.exit).toHaveBeenCalledOnce(); expect(trays[0].destroy).toHaveBeenCalledOnce();
 });

@@ -548,7 +548,7 @@ On October 15, 2026 the owner wrote (translated from Russian): "Overall, keep do
 | C2 | Closing the main window destroys it and retires only its document state; reopening creates a new window that subscribes again |
 | C3 | The overlay survives main-window close and keeps following the game; it closes only on exit |
 | C4 | Single instance after the diagnostic profile override; a second launch exits 0 silently before any log, service or window; its arguments, working directory and data are ignored |
-| C5 | A generated multi-resolution PNG tray icon without a fixed GUID; menu with status, recording notice, Open and Exit; click opens; no balloons; without a notification area, closing minimizes |
+| C5 | Owner update, October 21, 2026: the existing desktop bear in fixed multi-resolution system icons, with its navy background for contrast, replaces the generated health-colour disc; matching dashboard taskbar, EXE and Setup ICO, unchanged application identities and no fixed tray GUID; menu with status, recording notice, Open and Exit; click opens; no balloons; without a notification area, closing minimizes |
 | C6 | One idempotent exit for the tray, the renderer, `app.quit()` and Windows session end; existing 3 s kill and 5 s final exit bounds unchanged |
 | C7 | Service shutdown in ordered intake, flush and storage phases with per-step budgets and a 2500 ms total |
 | C8 | Post-readiness service failures use the existing supervised restart with visible state instead of exiting; pre-readiness failures stay fatal |

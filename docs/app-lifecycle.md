@@ -58,7 +58,7 @@ The overlay window refuses close requests until the application exits. If creati
 
 ## Tray icon
 
-The icon is created when Electron is ready, before the service starts, with the tooltip `Starting`. It has no fixed GUID. The bitmap is generated at runtime (`apps/desktop/src/tray-icon.ts`): a filled disc in 16, 20, 24 and 32 px representations for 100%, 125%, 150% and 200% display scaling. Its colour shows health: green when ready, amber while starting, restarting or exiting, red when the service has failed.
+The icon is created when Electron is ready, before the service starts, with the tooltip `Starting`. It has no fixed GUID. The fixed brand bitmap uses the same white bear as the desktop shell, on its existing navy `#0B1120` background for visibility on light and dark Windows shells. Committed PNG representations are 16, 20, 24 and 32 px for 100%, 125%, 150% and 200% display scaling (`apps/desktop/src/tray-icon.ts`). Service and recording health stay in the tooltip and menu; the icon does not change colour. This owner-requested October 21, 2026 change supersedes C5's generated health disc. The dashboard taskbar icon and the packaged EXE and Setup use the matching multi-resolution ICO (16 through 256 px); application, executable and Squirrel identities are unchanged. [Asset provenance](../apps/desktop/src/assets/icons/README.md) records the source and derivation. Main resolves assets under `app.getAppPath()/apps/desktop/dist/icons`, including when its own entry point is physically unpacked under `app.asar.unpacked`.
 
 The context menu contains:
 
@@ -67,7 +67,7 @@ The context menu contains:
 3. **Open ETS2Telemetry**;
 4. **Exit ETS2Telemetry**.
 
-A left click opens the dashboard. The tooltip shows the service state and, when ready, the selected source and its status; it stays under the 127-character Windows limit and carries no readings, paths or identities. Tooltip, menu and icon are rebuilt only when they change, at most twice per second. There are no balloon notifications.
+A left click opens the dashboard. The tooltip shows the service state and, when ready, the selected source and its status; it stays under the 127-character Windows limit and carries no readings, paths or identities. Tooltip and menu are rebuilt only when they change, at most twice per second. There are no balloon notifications.
 
 ## Explicit exit
 

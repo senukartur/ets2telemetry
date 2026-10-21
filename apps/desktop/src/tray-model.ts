@@ -1,11 +1,10 @@
 import type {AppHealth, AppLanguage, LiveTelemetry} from '../../../packages/contracts/src';
 import {recordingStatusText} from './recording-status-text';
 import {getSourceSelectionText, getServiceHealthText, getStorageHealthText, getStrings} from './strings';
-import type {TrayTone} from './tray-icon';
 
 /** Windows truncates notification-area tooltips longer than 127 characters; menu status lines keep the same limit. */
 export const TRAY_TOOLTIP_LIMIT = 127;
-/** Tooltip, menu and icon changes are applied at most twice per second. */
+/** Tooltip and menu changes are applied at most twice per second. */
 export const TRAY_MIN_UPDATE_INTERVAL_MS = 500;
 
 export interface TrayInput {
@@ -19,14 +18,9 @@ export type TrayMenuItem =
   | {kind: 'status'; label: string}
   | {kind: 'separator'}
   | {kind: 'open' | 'exit'; label: string; enabled: boolean};
-export interface TrayModel {tooltip: string; menu: TrayMenuItem[]; tone: TrayTone}
+export interface TrayModel {tooltip: string; menu: TrayMenuItem[]}
 
 
-
-export function trayTone(health: AppHealth, exiting: boolean): TrayTone {
-  if (!exiting && health.service === 'failed') return 'failed';
-  return !exiting && health.service === 'ready' ? 'ready' : 'busy';
-}
 function statusLine(health: AppHealth, language: AppLanguage): string {
   const strings = getStrings(language);
   return `${strings.serviceTrayLabel}: ${getServiceHealthText(health.service, language)} · ${strings.storageTrayLabel}: ${getStorageHealthText(health.storage, language)}`;
@@ -45,7 +39,7 @@ export function trayModel(input: TrayInput): TrayModel {
     if (health.service === 'ready' && input.source) detail += ` · ${sourceLabel}: ${getSourceSelectionText(input.source.selection, language)} (${input.source.status})`;
   }
   const tooltip = `${strings.appName}\n${detail}`.slice(0, TRAY_TOOLTIP_LIMIT);
-  return {tooltip, tone: trayTone(health, exiting), menu: [
+  return {tooltip, menu: [
     {kind: 'status', label: exiting ? strings.trayExiting : statusLine(health, language)},
     // ET-015c PR-4 (G8): the recording status in its short form; the tooltip does not carry it.
     {kind: 'status', label: `${strings.recordingTrayPrefix}${recordingStatusText(health.recording, language).short}`.slice(0, TRAY_TOOLTIP_LIMIT)},
@@ -59,7 +53,6 @@ export function trayModel(input: TrayInput): TrayModel {
 export interface TrayView {
   setToolTip(text: string): void;
   setMenu(menu: TrayMenuItem[]): void;
-  setTone(tone: TrayTone): void;
 }
 export interface TrayTimers {
   setTimeout(callback: () => void, milliseconds: number): unknown;
@@ -78,7 +71,7 @@ const systemTimers: TrayTimers = {
  * exit transition, which must disable the menu at once.
  */
 export class TrayPresenter {
-  private applied?: {tooltip: string; menu: string; tone: TrayTone};
+  private applied?: {tooltip: string; menu: string};
   private pending?: TrayInput;
   private timer: unknown;
   private lastApplied = -Infinity;
@@ -105,10 +98,9 @@ export class TrayPresenter {
     const input = this.pending; this.pending = undefined;
     if (!input || this.disposed) return;
     const model = trayModel(input), menu = JSON.stringify(model.menu), previous = this.applied;
-    if (previous?.tooltip === model.tooltip && previous.menu === menu && previous.tone === model.tone) return;
-    this.applied = {tooltip: model.tooltip, menu, tone: model.tone};
+    if (previous?.tooltip === model.tooltip && previous.menu === menu) return;
+    this.applied = {tooltip: model.tooltip, menu};
     this.lastApplied = this.timers.now();
-    if (previous?.tone !== model.tone) this.view.setTone(model.tone);
     if (previous?.tooltip !== model.tooltip) this.view.setToolTip(model.tooltip);
     if (previous?.menu !== menu) this.view.setMenu(model.menu);
   }
