@@ -85,6 +85,14 @@ describe('autostart query', () => {
     });
   });
 
+  it('returns unregistered when openAtLogin is true but executableWillLaunchAtLogin is false (Task Manager disabled)', () => {
+    const ports: LoginItemPorts = {
+      getLoginItemSettings: vi.fn().mockReturnValue({openAtLogin: true, executableWillLaunchAtLogin: false}),
+      setLoginItemSettings: vi.fn()
+    };
+    expect(queryAutostartStatus(ports, target)).toBe('unregistered');
+  });
+
   it('returns unregistered when openAtLogin is false', () => {
     const ports: LoginItemPorts = {
       getLoginItemSettings: vi.fn().mockReturnValue({openAtLogin: false}),
@@ -169,6 +177,14 @@ describe('autostart apply registration', () => {
       setLoginItemSettings: vi.fn()
     };
     expect(applyAutostartRegistration(ports, target, true)).toBe('failed');
+  });
+
+  it('returns unregistered when enabling autostart but executableWillLaunchAtLogin is false (Task Manager disabled)', () => {
+    const ports: LoginItemPorts = {
+      getLoginItemSettings: vi.fn(() => ({openAtLogin: true, executableWillLaunchAtLogin: false})),
+      setLoginItemSettings: vi.fn()
+    };
+    expect(applyAutostartRegistration(ports, target, true)).toBe('unregistered');
   });
 });
 

@@ -137,7 +137,12 @@ function runApplication(profileError: unknown): void {
         if (view.autostart) {
           autostartStatus = applyAutostartRegistration(app, autostartTarget, true);
         } else {
-          autostartStatus = queryAutostartStatus(app, autostartTarget);
+          const current = queryAutostartStatus(app, autostartTarget);
+          if (current === 'registered') {
+            autostartStatus = applyAutostartRegistration(app, autostartTarget, false);
+          } else {
+            autostartStatus = current;
+          }
         }
       }
     } catch {

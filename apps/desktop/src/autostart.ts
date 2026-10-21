@@ -13,6 +13,7 @@ export interface LoginItemOptions {
 
 export interface LoginItemStatus {
   openAtLogin: boolean;
+  executableWillLaunchAtLogin?: boolean;
 }
 
 export interface LoginItemPorts {
@@ -50,7 +51,10 @@ export function queryAutostartStatus(
   if (!target) return 'not-installed';
   try {
     const status = ports.getLoginItemSettings({path: target.path, args: [...target.args]});
-    return status.openAtLogin ? 'registered' : 'unregistered';
+    if (status.openAtLogin && status.executableWillLaunchAtLogin !== false) {
+      return 'registered';
+    }
+    return 'unregistered';
   } catch {
     return 'failed';
   }
@@ -73,10 +77,13 @@ export function applyAutostartRegistration(
       args: [...target.args]
     });
     const status = ports.getLoginItemSettings({path: target.path, args: [...target.args]});
-    if (status.openAtLogin === enabled) {
-      return enabled ? 'registered' : 'unregistered';
+    if (enabled) {
+      if (status.openAtLogin && status.executableWillLaunchAtLogin === false) {
+        return 'unregistered';
+      }
+      return status.openAtLogin ? 'registered' : 'failed';
     }
-    return 'failed';
+    return status.openAtLogin ? 'failed' : 'unregistered';
   } catch {
     return 'failed';
   }
