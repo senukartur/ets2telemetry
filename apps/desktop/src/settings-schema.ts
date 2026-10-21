@@ -56,7 +56,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> => typeof va
  * the normal validation, so an invalid v1 unit still falls back alone. v2 -> v3 adds the default placements of every
  * layout to an overlay block (ET-012b); a v2 overlay that is not an object stays as it is and falls back as a whole.
  * v3 -> v4 adds the interface language (ET-029). v4 -> v5 adds autostart false (accepted ET-031).
- * v5 -> v6 adds overlay visibility true, preserving the accepted autostart preference (ET-012e integration). v4 -> v5 enables the overlay by default (ET-012e).
+ * v5 -> v6 adds overlay visibility true, preserving the accepted autostart preference (ET-012e integration).
  * Version 0 and below have no path.
  */
 const MIGRATIONS: ReadonlyMap<number, (raw: Record<string, unknown>) => Record<string, unknown>> = new Map<number, (raw: Record<string, unknown>) => Record<string, unknown>>([
