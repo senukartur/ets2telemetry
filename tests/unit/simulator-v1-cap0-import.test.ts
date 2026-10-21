@@ -75,6 +75,10 @@ describe('CAP0 sanitized export importer', () => {
     expect(Buffer.byteLength(value + 'a', 'utf8')).toBe(257);
     expect(() => importCap0(make(value + 'a'), 'name-overlength')).toThrow(/^CAP0 import rejected:/);
   });
+  it.each(['cargo\nname', 'cargo\tname', 'cargo\u007fname'])('rejects CAP0-valid control characters before display-name tokenization', value => {
+    const dir = fixture([header(), envelope(1, 1, {group: 'configuration', id: 'job', observations: [observation(0, 'cargo', 'string', value)]}), end(2, 1)]);
+    expect(() => importCap0(dir, 'name-control')).toThrow(/^CAP0 import rejected:/);
+  });
   it.each(['150', '90'])('does not infer the immediately previous channel time from a prior callback when regression ends at %s', minutes => {
     const before = envelope(1, 1, {group: 'lifecycle', id: 'simulation.started'}), regression = envelope(2, 2, {group: 'lifecycle', id: 'game.time.regression'});
     if (before.kind !== 'envelope' || regression.kind !== 'envelope') throw new Error('test envelope expected');
