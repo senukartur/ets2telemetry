@@ -1,16 +1,51 @@
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import {spawn} from 'node:child_process';
-import {readFile, writeFile} from 'node:fs/promises';
-import {_electron as electron} from '@playwright/test';
+import {appendFileSync, renameSync, writeFileSync} from 'node:fs';
+import {readFile} from 'node:fs/promises';
 import {observeExit} from './exit-observation.mjs';
 import {verifyPackage} from '../package-integrity.mjs';
 
 const [configFile] = process.argv.slice(2);
 const config = JSON.parse((await readFile(configFile, 'utf8')).replace(/^\uFEFF/, ''));
 const record = {kind: 'OWNED-WINDOW-WM_ENDSESSION', passed: false, baselineMissingAudit: config.baselineMissingAudit,
-  commit: config.commit, actualWindowsSignout: false, noBroadcast: true};
+  commit: config.commit, harnessHashes: config.harnessHashes, senderSha256: config.senderSha256,
+  actualWindowsSignout: false, noBroadcast: true, startedUtc: new Date().toISOString(), stage: 'initializing'};
 let application;
+let finalized = false, browserLogBytes = 0;
+function checkpoint(stage) {
+  record.stage = stage;
+  const temporary = path.join(config.output, `progress-${process.pid}.next`);
+  writeFileSync(temporary, JSON.stringify(record, null, 2) + '\n', {flush: true});
+  renameSync(temporary, path.join(config.output, 'progress.json'));
+}
+function finish() {
+  if (finalized) return;
+  record.finishedUtc = new Date().toISOString();
+  writeFileSync(path.join(config.output, 'result.json'), JSON.stringify(record, null, 2) + '\n', {flag: 'wx', flush: true});
+  finalized = true;
+}
+function fatal(kind, error) {
+  record.passed = false; record.failureKind = kind; record.error = String(error).slice(0, 8192);
+  try {checkpoint('fatal'); finish();} catch { /* The outer Job receipt still records a missing or unreadable result. */ }
+  process.exit(1);
+}
+process.once('unhandledRejection', error => fatal('unhandledRejection', error));
+process.once('uncaughtException', error => fatal('uncaughtException', error));
+// Electron.launch does not expose the browser logger option. Enable the pinned SDK's existing browser diagnostics
+// before importing it; retain at most 64 KiB, while the outer Job independently bounds its stdout/stderr capture.
+process.env.DEBUG = 'pw:browser*';
+const originalStderrWrite = process.stderr.write;
+process.stderr.write = function(chunk, ...args) {
+  const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+  const retained = bytes.subarray(0, Math.max(0, 64 * 1024 - browserLogBytes));
+  if (retained.length) {
+    try {appendFileSync(path.join(config.output, 'browser-launch.log'), retained); browserLogBytes += retained.length;}
+    catch { /* Launch diagnostics cannot replace the underlying check result. */ }
+  }
+  return originalStderrWrite.call(this, chunk, ...args);
+};
+checkpoint('initializing');
 const rows = async filename => (await readFile(filename, 'utf8')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line));
 async function until(probe) {
   const deadline = Date.now() + 10000;
@@ -38,6 +73,7 @@ async function target(overlay) {
   }, overlay);
 }
 try {
+  const { _electron: electron } = await import('@playwright/test');
   const integrity = verifyPackage(config.packageDirectory);
   record.packageSha256 = integrity.packageSha256;
   assert.equal(integrity.packageSha256, config.expectedPackageSha256);
@@ -45,19 +81,23 @@ try {
     ETS2TELEMETRY_PROFILE_DIR: config.profile, ETS2TELEMETRY_DIAGNOSTIC_DIR: config.diagnostics,
     ETS2TELEMETRY_PLUGIN_SETUP: 'disabled', ETS2TELEMETRY_RECORDING: 'synthetic:session-end'};
   for (const key of Object.keys(environment)) if ((key.startsWith('ETS2TELEMETRY_') && !['ETS2TELEMETRY_PROFILE_DIR', 'ETS2TELEMETRY_DIAGNOSTIC_DIR', 'ETS2TELEMETRY_PLUGIN_SETUP', 'ETS2TELEMETRY_RECORDING'].includes(key)) || key.startsWith('ELECTRON_') || key === 'NODE_OPTIONS') delete environment[key];
+  checkpoint('launching');
   application = await electron.launch({executablePath: config.executable, cwd: config.output, env: environment, timeout: 20000});
+  checkpoint('launched');
   const launcher = application.process();
   const mainPath = path.join(config.diagnostics, 'startup.jsonl');
   await until(async () => {try {return (await rows(mainPath)).some(row => row.event === 'SERVICE_READY');} catch {return false;}});
   record.mainPid = (await rows(mainPath)).find(row => row.event === 'APP_START').pid;
   await until(async () => await application.evaluate(({BrowserWindow}) => BrowserWindow.getAllWindows().length === 2 && BrowserWindow.getAllWindows().every(window => window.webContents.getURL().includes('/renderer/index.html') && !window.webContents.isLoading())));
   record.cancelledQuery = await send(await target(false), 'cancel');
+  checkpoint('cancelled-query');
   assert.equal(launcher.exitCode, null);
   let events = await rows(mainPath);
   assert.equal(events.some(row => row.event === 'APP_EXIT_REQUESTED' || row.event === 'APP_STOP_REQUESTED' || row.event === 'WINDOWS_SESSION_END_HANDOFF'), false);
   await application.evaluate(({BrowserWindow}) => BrowserWindow.getAllWindows().find(window => !window.webContents.getURL().includes('?view=overlay')).close());
   await until(async () => await application.evaluate(({BrowserWindow}) => BrowserWindow.getAllWindows().length === 1));
   record.dashboardClosed = true;
+  checkpoint('dashboard-closed');
   const ownedOverlay = await target(true);
   record.exit = await observeExit({application, launcher, record: record.exitObservation = {}, message: 'SESSION_END_EXIT_TIMEOUT_8_SECONDS',
     request: async () => {record.sender = await send(ownedOverlay, 'end');}});
@@ -79,8 +119,9 @@ try {
     assert.equal(events.some(row => row.event === 'APP_EXIT' || row.event === 'SERVICE_EXIT'), false);
     record.passed = true;
   }
-} catch (error) {record.error = String(error); process.exitCode = 1;}
+} catch (error) {record.error = String(error).slice(0, 8192); process.exitCode = 1;}
 finally {
-  await writeFile(path.join(config.output, 'result.json'), JSON.stringify(record, null, 2) + '\n');
+  checkpoint(record.error ? 'failed' : 'completed');
   if (application?.process().exitCode === null) await application.close().catch(() => undefined);
+  finish();
 }
