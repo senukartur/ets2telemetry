@@ -98,11 +98,17 @@ stop. It removes the tray synchronously and writes `WINDOWS_SESSION_END_HANDOFF`
 returning to Electron. Duplicate notifications across dashboard/overlay do nothing. `query-session-end` is left inert:
 Windows may cancel a query, so it must neither stop the service nor veto the user's session end.
 
+If a synchronous lifecycle hook rejects, `WINDOWS_SESSION_END_REQUEST_REJECTED` records that failure. A `finally`
+boundary still attempts tray disposal and writes the truthful OS handoff once; it does not claim that service stop
+was requested or completed. A boundary regression injects a native tray rejection and duplicate window notifications.
+
 The handoff marker records the native termination boundary, not a completed service flush or a supervisor-observed
 exit. `SERVICE_EXIT` and `APP_EXIT` are written only if those events are actually observed. A full asynchronous
 supervised completion cannot be guaranteed at this boundary without changing Windows shutdown policy; this fix does
 not add a veto, delay, new native service or wider deadline. Real sign-out/restart acceptance still requires the owner
-and separate service/storage evidence, not merely a zero exit code or absent processes.
+and separate service/storage evidence, not merely a zero exit code or absent processes. Both owner-run corrected
+sessions passed on frozen runtime `15dab09`; see [the bound results](validation/et-011.md#actual-corrected-windows-sessions-and-code-gates).
+The later exception-path guard has separate automated coverage and is not relabeled as part of that frozen artifact.
 
 Terminal logging keeps the existing 256 KiB/2,000-record limits and fixed-code console fallback. It drains the queued
 rows and writes later rows synchronously; an older append already in flight is not replayed and can land later or be

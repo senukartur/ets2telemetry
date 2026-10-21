@@ -1,5 +1,11 @@
 # Testing and Regression Strategy
 
+ET-011 scope reconciliation, October 22, 2026: the owner authorized final PR #167 gates and squash merge, then card
+closeout. Narrator, real-game unit profiles and close-to-tray overlay continuity moved **unverified** to
+[ET-043](https://trello.com/c/2fbiCET0); installed shortcut/update checks remain ET-018, monitor/mixed-DPI checks ET-042.
+The new main-boundary rejection regression requires one truthful terminal handoff despite a synchronous exit-hook
+failure, without inventing service stop/completion. Historical manual-pending statements below are dated baselines.
+
 ET-011 local-contract reconciliation, October 22, 2026: native startup-reporting tests accept either the exact
 caller-owned error or the documented pending warning followed by the exact stage error on a later SDK callback,
 before shutdown can change its attribution. A controlled foreign discovery record forces the latter path. A protected

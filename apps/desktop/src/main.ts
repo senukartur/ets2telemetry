@@ -459,9 +459,12 @@ function runApplication(profileError: unknown): void {
     // Electron 44.7.0 terminates synchronously after notifying session-end listeners. No promise or service response
     // can be awaited here. Preserve the actual request and terminal boundary, without inventing a completed exit.
     log.enterTerminalMode();
-    requestExit('session-end');
-    try {destroyTray();} catch (error) {log('TRAY_DESTROY_REJECTED', String(error));}
-    log('WINDOWS_SESSION_END_HANDOFF', undefined, {completion: 'os-owned'});
+    try {requestExit('session-end');}
+    catch (error) {log('WINDOWS_SESSION_END_REQUEST_REJECTED', String(error));}
+    finally {
+      try {destroyTray();} catch (error) {log('TRAY_DESTROY_REJECTED', String(error));}
+      log('WINDOWS_SESSION_END_HANDOFF', undefined, {completion: 'os-owned'});
+    }
   }
   const trusted = (event: IpcMainEvent | IpcMainInvokeEvent) => Boolean(window && !window.isDestroyed() && event.sender === window.webContents && event.senderFrame === window.webContents.mainFrame);
   function connectSubscription(): void {

@@ -2,6 +2,12 @@
 
 Concept recorded on: October 10, 2026.
 
+ET-011 closeout authorization, October 22, 2026: the owner requested resolving local failures, independent review,
+final automatic Ready CI and squash merge of PR #167, then closing ET-011. Narrator, real-game unit profiles and
+close-to-tray overlay continuity transfer **unverified** to [ET-043](https://trello.com/c/2fbiCET0). Installed shortcut
+and update checks retain their ET-018 deferral; monitor/mixed-DPI checks remain ET-042. Dated pending statements below
+retain their historical scope. Actual code gates and Windows evidence are in [ET-011 validation](docs/validation/et-011.md).
+
 ET-009 owner acceptance, October 20, 2026: the [prototype closeout](docs/validation/et-009.md) records the
 accepted functional matrix, indicative latency and performance with their explicit exceptions and limits.
 Monitor/mixed-DPI/removal checks moved to ET-042 and remain unverified. The [opt-in measurement procedure](docs/validation/et-009-latency.md)

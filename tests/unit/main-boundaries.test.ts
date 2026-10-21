@@ -946,6 +946,20 @@ it('keeps a cancellable Windows session query inert and audits confirmed end syn
   expect(log.mock.calls.filter(call => call[0] === 'APP_EXIT' || call[0] === 'SERVICE_EXIT')).toEqual([]);
   expect(app.exit).not.toHaveBeenCalled();
 });
+it('preserves Windows terminal cleanup and truthful handoff when an exit hook rejects', async () => {
+  trayAvailable = true; await ready();
+  trays[0].setToolTip.mockImplementation(() => {throw new Error('Native tray rejected');});
+  expect(() => windows[1].emit('session-end')).not.toThrow();
+  expect(() => {windows[0].emit('session-end'); windows[1].emit('session-end');}).not.toThrow();
+  expect(log.enterTerminalMode).toHaveBeenCalledOnce();
+  expect(log.mock.calls.filter(call => call[0] === 'APP_EXIT_REQUESTED')).toEqual([['APP_EXIT_REQUESTED', undefined, {reason: 'session-end'}]]);
+  expect(log.mock.calls.filter(call => call[0] === 'WINDOWS_SESSION_END_REQUEST_REJECTED')).toEqual([['WINDOWS_SESSION_END_REQUEST_REJECTED', 'Error: Native tray rejected']]);
+  expect(trays[0].destroy).toHaveBeenCalledOnce();
+  expect(log.mock.calls.filter(call => call[0] === 'WINDOWS_SESSION_END_HANDOFF')).toEqual([['WINDOWS_SESSION_END_HANDOFF', undefined, {completion: 'os-owned'}]]);
+  expect(child.postMessage.mock.calls.filter(call => call[0].type === 'stop')).toEqual([]);
+  expect(log.mock.calls.filter(call => ['APP_STOP_REQUESTED', 'APP_EXIT', 'SERVICE_EXIT'].includes(call[0] as string))).toEqual([]);
+  expect(app.exit).not.toHaveBeenCalled();
+});
 it('rejects application exit and state requests from untrusted senders, frames and the overlay', async () => {
   trayAvailable = true; await ready();
   for (const event of [{sender: {}, senderFrame: contents.mainFrame}, {sender: contents, senderFrame: {}}, overlayTrusted()]) {
