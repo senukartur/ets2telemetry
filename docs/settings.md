@@ -73,7 +73,7 @@ The application writes exactly this shape: UTF-8 without a byte order mark, two-
 - a version above 5 is **newer-version**: written by a later application version;
 - `language` must be exactly `en` or `ru` (default: `en`);
 - each `units.ets2` and `units.ats` value must be exactly `metric` or `us-customary`;
-- `overlay.enabled` must be a boolean (default: `true`); strings and numbers are not coerced.
+- `overlay.enabled` must be a boolean (default: `true`); strings and numbers are not coerced;
 - `overlay.layout` must be exactly `strip`, `card`, `cluster` or `hud`;
 - `overlay.sections` must be an object of booleans that enables at least one section;
 - `overlay.placements` must be an object; each layout's placement must have `x` and `y` that are finite numbers in [0, 1] and a `scale` that is a finite number in [0.5, 2]. Values are rounded to four decimals (`x`, `y`) and two decimals (`scale`) when read and when written.
@@ -218,6 +218,8 @@ Evidence and pending manual checks are in [ET-011 validation](validation/et-011.
 
 Settings → Overlay has the labelled keyboard-operable **Show overlay** switch (**Показывать оверлей** in Russian). It displays only the committed value. The narrow dashboard-main-frame IPC `settings:set-overlay-enabled` accepts exactly one boolean through `DesktopBridge.setOverlayEnabled`; the overlay renderer cannot call it. It shares the existing four-request durable settings queue and atomic rename. A refused or failed write leaves visibility and any active edit draft unchanged. Successful saves log only `overlayEnabled`, without coordinates or file content.
 
-A successful off save gates visibility before hiding and cancelling edit mode, discarding unsaved position/scale and restoring click-through behavior. Edit cannot begin while disabled. Enabling happens after committed geometry is installed and keeps all existing source, freshness, foreground, minimization, topology and fit gates. It renews no telemetry or window observation. Late completions after exit cannot show a retired overlay. Telemetry ingestion and recording continue; visibility does not control recording eligibility.
+A successful off save gates visibility before hiding and cancelling edit mode, discarding unsaved position/scale and restoring click-through behavior. Edit cannot begin while disabled. Enabling happens after committed geometry is installed and keeps all existing source, freshness, foreground, minimization, topology and fit gates. It renews no telemetry or window observation. Late completions after exit cannot show a retired overlay. Telemetry keeps updating; visibility does not control recording eligibility, which remains disabled for game history.
+
+While the startup read is still `loading`, the overlay remains hidden even though the pending settings view carries the enabled default. A completed read applies its saved value and final geometry. Once the read limit reports `unreadable`, the existing default-true fallback applies; the loading gate does not change corruption or read-limit policy.
 
 The first save writes canonical v5; v1–v4 load without startup writes. Missing or invalid current-format visibility falls back independently to true with `overlay.enabled`. Older applications treat v5 as newer-version and refuse writes rather than erase visibility. Historical fixture files remain unchanged. See [ET-012e evidence and pending manual checks](validation/et-012e.md).

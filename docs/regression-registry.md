@@ -425,9 +425,9 @@ ET-005b final-verification baseline follow-up (October21): shutdown-stalls.test.
 | Tests / journey | Regression | Retained protection |
 | --- | --- | --- |
 | `settings-schema`, `settings-store`, `i18n-lifecycle` unit tests | REG-017 | v5 strict flag, v1–v4 pure migration/no startup writes, false restart, canonical serialization, shared bounded queue and failure recovery |
-| `preload-recovery`, `main-boundaries` unit tests | REG-016, REG-017 | trusted exact boolean IPC, durable application, pending off/edit race, failed-save draft retention, final geometry before late enable, no show after exit |
+| `preload-recovery`, `main-boundaries` unit tests | REG-016, REG-017 | trusted exact boolean IPC, durable application, pending off/edit race, failed-save draft retention, real pending-load defaults hidden, final geometry before late enable, no show after exit |
 | `overlay.test.ts` | REG-016 | gate before edit/driving, off discard, disabled begin refusal; enable preserves existing source/freshness/foreground/minimize/topology/fit gates |
 | Existing settings UI shard and `ui-runtime-receipt` | REG-016, REG-017 | associated EN/RU label, Space off/on, committed value and failed-save state, disabled edit/read-only; strict new flags and exact eight expected refused writes |
-| Existing lifecycle journey and `runtime-receipt` | REG-012, REG-016, REG-017 | false saved and loaded across two launches, hidden state without service/source restart, unchanged canonical bytes and strict negative receipt cases |
+| Existing lifecycle journey and `runtime-receipt` | REG-012, REG-016, REG-017 | false saved and loaded across two launches, synthetic-hidden invariant without service/source restart (not a gate proof), unchanged canonical bytes and strict negative receipt cases |
 
 No critical gate is skipped or retried. Real-game acceptance and transferred ET-042 manual display checks remain unverified; see [validation](validation/et-012e.md).
