@@ -1,8 +1,11 @@
+import {writeFileSync} from 'node:fs';
+import {importCap0} from './v1/cap0-import';
 import {createHash} from 'node:crypto';
 import {readFixtureFile} from './fixture-file';
 import {replay,validateScenario} from './scenario';
 import {startPipe,consumePipe} from './pipe';
 import {checkCadence} from './cadence';
+import {validateScenario as validateScenarioV1} from './v1/scenario';
 import {replayV1,transcriptLines} from './v1/replay';
 import {clientPlan,pipeDifferences,runV1PipeClient,serveV1} from './v1/pipe';
 import {checkStateRate,checkV1Cadence} from './v1/cadence';
@@ -47,6 +50,12 @@ const sha256=(lines:string[])=>createHash('sha256').update(lines.map(l=>l+'\n').
 
 async function main():Promise<void> {
   const [command,file,...extra]=process.argv.slice(2);
+  if(command==='import-cap0') {
+    if(!file||extra.length!==4||extra[0]!=='--run'||extra[2]!=='--out')throw new Error('Usage: cli.cjs import-cap0 <sanitized-export-dir> --run <label> --out <new-file>');
+    const scenario=importCap0(file,extra[1]);
+    writeFileSync(extra[3],JSON.stringify(scenario,null,2)+'\n',{flag:'wx'});
+    console.log(JSON.stringify({scenario:scenario.id,origin:scenario.origin,envelopes:scenario.provenance.envelopes,history:false}));return;
+  }
   // Protocol v1 deterministic replay (ET-005b); the v0 commands below are unchanged.
   if(command==='replay-v1') {
     if(!file||extra.length)throw new Error('Usage: cli.cjs replay-v1 <simulator-v1-scenario.json>');
@@ -57,18 +66,18 @@ async function main():Promise<void> {
   // independent consumer against a reactive server with --reactive, and checks the run against replay-v1.
   if(command==='serve-v1'||command==='smoke-v1') {
     const {file:path,scale,flag,awaitScriptedAcks}=v1Args(command,process.argv.slice(3)),input=readFixtureFile(path);
-    const reactive=command==='serve-v1'?!flag:flag;
+    const reactive=command==='serve-v1'?!flag:flag,origin=validateScenarioV1(input).origin;
     const controller=new AbortController();const cancel=()=>controller.abort();process.once('SIGINT',cancel);process.once('SIGTERM',cancel);
     let stop:(()=>Promise<void>)|undefined;
     try {
       if(reactive) {
         const server=await serveV1Reactive(input,{scale,awaitScriptedAcks,signal:controller.signal});stop=server.stop;
         if(command==='serve-v1') {
-          console.log(JSON.stringify({origin:'synthetic',mode:'reactive',endpoint:server.endpoint,history:false}));
+          console.log(JSON.stringify({origin,mode:'reactive',endpoint:server.endpoint,history:false}));
           const report=await server.done;
           // The verdict of plan item 7 against replay-v1; a cancelled run is not compared.
           const differences=report.cancelled?[]:reactiveDifferences(replayV1(input),report);
-          console.log(JSON.stringify({origin:'synthetic',mode:'reactive',scenario:report.scenario.id,cancelled:report.cancelled,connections:report.connections,
+          console.log(JSON.stringify({origin:report.scenario.origin,mode:'reactive',scenario:report.scenario.id,cancelled:report.cancelled,connections:report.connections,
             messages:report.transcript.length,refusedClients:report.refusedClients,matchesReplay:report.cancelled?null:differences.length===0,differences,history:false}));
           if(differences.length)process.exitCode=1;
           return;
@@ -79,15 +88,15 @@ async function main():Promise<void> {
         const differences=reactiveDifferences(expected,report);
         if(JSON.stringify(client.ledger)!==JSON.stringify(expected.ledger))differences.push('independent client ledger differs from the replay');
         if(differences.length)throw new Error(`Reactive pipe run differs from the deterministic replay: ${differences.join('; ')}`);
-        console.log(JSON.stringify({origin:'synthetic',mode:'reactive',scenario:expected.scenario.id,messages:report.transcript.length,connections:report.connections.length,
+        console.log(JSON.stringify({origin:expected.scenario.origin,mode:'reactive',scenario:expected.scenario.id,messages:report.transcript.length,connections:report.connections.length,
           clockReplies:client.sessions.reduce((n,s)=>n+s.replies,0),attempts:client.attempts,ledger:client.ledger,history:false}));
         return;
       }
       const server=await serveV1(input,{scale,signal:controller.signal});stop=server.stop;
       if(command==='serve-v1') {
-        console.log(JSON.stringify({origin:'synthetic',mode:'lockstep',endpoint:server.endpoint,history:false}));
+        console.log(JSON.stringify({origin,mode:'lockstep',endpoint:server.endpoint,history:false}));
         const report=await server.done;
-        console.log(JSON.stringify({origin:'synthetic',mode:'lockstep',scenario:report.result.scenario.id,cancelled:report.cancelled,connections:report.result.connections.length,
+        console.log(JSON.stringify({origin:report.result.scenario.origin,mode:'lockstep',scenario:report.result.scenario.id,cancelled:report.cancelled,connections:report.result.connections.length,
           messages:report.result.transcript.length,transcriptSha256:sha256(transcriptLines(report.result)),refusedClients:report.refusedClients,history:false}));
         return;
       }
@@ -100,7 +109,7 @@ async function main():Promise<void> {
       const mappings=client.connections.flatMap(c=>c.mappings.map(m=>({connection:c.connection,probeId:m.probeId,offsetNs:m.mapping?.offsetNs??null,uncertaintyNs:m.mapping?.uncertaintyNs??null,roundTripNs:m.roundTripNs})));
       const probes=plan.connections.reduce((n,c)=>n+c.actions.filter(a=>a.action==='probe').length,0);
       if(mappings.length!==probes)throw new Error('A clock probe received no reply');
-      console.log(JSON.stringify({origin:'synthetic',mode:'lockstep',scenario:expected.scenario.id,messages:report.result.transcript.length,connections:client.connections.length,
+      console.log(JSON.stringify({origin:expected.scenario.origin,mode:'lockstep',scenario:expected.scenario.id,messages:report.result.transcript.length,connections:client.connections.length,
         transcriptSha256:sha256(transcriptLines(report.result)),cadence:cadence??null,minStateIntervalNs:checkStateRate(report.result.transcript),mappings,
         refusedClients:report.refusedClients,ledger:client.ledger,history:false}));
     }finally {await stop?.();process.removeListener('SIGINT',cancel);process.removeListener('SIGTERM',cancel);}

@@ -117,7 +117,7 @@ class Reactive extends PipeHost {
     if (direction === 'client' && message.kind === 'hello') this.lastHelloInstance = message.data.clientInstanceId;
     if (this.soak) { this.count(direction, message); return; }
     if (this.transcript.length >= MAX_TRANSCRIPT_MESSAGES) throw new Error('Simulator transcript limit exceeded');
-    this.transcript.push({scenario: this.scenario.id, origin: 'synthetic', connection: this.live?.record.connection ?? 0, atMs, direction, message});
+    this.transcript.push({scenario: this.scenario.id, origin: this.scenario.origin, connection: this.live?.record.connection ?? 0, atMs, direction, message});
   }
   /** Soak mode: counters in place of the transcript line, so nothing grows with the number of messages. */
   private count(direction: 'server' | 'client', message: ProtocolMessage): void {
@@ -203,6 +203,7 @@ class Reactive extends PipeHost {
   private async apply(step: SourceStep): Promise<void> {
     const at = step.atMs, adapter = this.producer.adapter;
     switch (step.action) {
+      case 'capture': { adapter.capture(step, at); await this.settle(at); const out = this.producer.publication(this.ns(at)); if (out) this.write(out, at); break; }
       case 'configuration': case 'gameplay': for (let i = 0; i < step.repeat; i++) { adapter[step.action](step.id, step.attributes, step.list, at); await this.settle(at); } break;
       case 'lifecycle': adapter.lifecycle(step.event, at); await this.settle(at); break;
       case 'frame': { adapter.frame(step.timerRestart, step.channels, at); await this.settle(at); const out = this.producer.publication(this.ns(at)); if (out) this.write(out, at); break; }
@@ -431,7 +432,7 @@ export async function runIndependentClient(endpoint: string, input: unknown, opt
     for (;;) {
       if (options.signal?.aborted) throw new Error('Independent client cancelled');
       const result = await new Promise<{welcomed: boolean; crashed: boolean; client: ScriptedClient}>((resolve, reject) => {
-        const socket = net.connect(endpoint), client = new ScriptedClient(ledger, step.client, instance, randomUUID(), cursors);
+        const socket = net.connect(endpoint), client = new ScriptedClient(ledger, step.client, instance, randomUUID(), cursors, s.origin);
         let settled = false, crashed = false, probed = false, writing = false; attempts++;
         // Writes leave strictly in order, one at a time, each after its own random delay, as a storage-paced consumer sends
         // them. ACKs are cumulative: a new ACK replaces one still waiting behind it, so a burst costs one ACK, not one each.

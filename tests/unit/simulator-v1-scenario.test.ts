@@ -42,9 +42,9 @@ describe('simulator v1 scenario schema', () => {
     ['missing field', (s: Json) => { delete s.purpose; }]
   ])('rejects an unknown or missing field at %s', (_, edit) => expect(() => validateScenario(variant(edit))).toThrow(/Invalid simulator v1 scenario/));
 
-  it('accepts only synthetic origins without provenance; the simulator never emits game', () => {
+  it('requires provenance for replay origins; the simulator never emits game', () => {
     expect(() => validateScenario(variant(s => { s.origin = 'game'; }))).toThrow(/never emits origin game/);
-    expect(() => validateScenario(variant(s => { s.origin = 'replay'; }))).toThrow(/only synthetic/);
+    expect(() => validateScenario(variant(s => { s.origin = 'replay'; }))).toThrow(/replay requires capture provenance/);
     expect(() => validateScenario(variant(s => { s.provenance = {run: 'x'}; }))).toThrow(/provenance/);
     expect(() => validateScenario(variant(s => { s.format = 'ets2telemetry-simulator-v0'; }))).toThrow(/format/);
   });

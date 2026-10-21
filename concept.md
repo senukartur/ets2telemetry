@@ -514,7 +514,7 @@ The coordinator adopted these decisions under that delegation; the owner has not
 | CD-4 | Only `synthetic` and `replay` origins; the simulator never emits `game` |
 | CD-5 | A `SYNTHETIC-TEST-v1` pipe endpoint without discovery records or service-policy files |
 | CD-6 | An in-memory commit ledger stands in for storage; it is not storage |
-| CD-7 | Minimized, tokenized fixtures derived from CAP-01 may be committed with provenance; lossy captures are rejected and raw or sanitized exports stay local. Adopted, pending owner acknowledgement before PR-3: it reverses the owner's earlier deferral of committing CAP-01 fixtures ([CAP-01a validation](docs/validation/cap-01a.md)), for these derived fixtures only. PR-3 lands last and records the owner's response |
+| CD-7 | Minimized, tokenized fixtures derived from CAP-01 may be committed with provenance; lossy captures are rejected and raw or sanitized exports stay local. Explicitly approved by the owner on October 21, 2026, superseding the earlier fixture-publication deferral ([CAP-01a validation](docs/validation/cap-01a.md)) for minimized derived fixtures only. Original captures and sanitized exports remain local; PR-3 lands last |
 | CD-8 | Game mode is `unknown` by default (OD-3); a synthetic override exists only to exercise D9 |
 | CD-9 | Currency status is chosen per scenario: `unknown` or the SDK-documented EUR or USD |
 | CD-10 | In pipe mode, events, gaps, checkpoints and `end` are byte-identical to replay, snapshots equal in state and continuity, and clock replies are checked separately |
@@ -1086,6 +1086,9 @@ ET-026 review follow-up: the production HistoryStorage adapter forwards private 
 
 ET-026 Claude2 follow-up: private assessment publications carry only their bounded remaining monotonic lifetime; main consumes it on its own clock, and trip-only updates cannot renew proof. Strict invalid metadata and service retirement fail closed without changing renderer/native/storage contracts. The shared 2000ms read-plus-bind deadline, two sequential 1500ms process-query bounds, three-second coverage and four full bounded log reads retain their unmeasured false-loss/cost limits; no optimization or grace period is adopted.
 
+## ET-005b CAP-01 replay closeout — October 21, 2026
+
+The owner approved CD-7 and authorized completing ET-005 through implementation, validation, independent review, Claude feedback, final automatic Windows CI and squash merge, then moving the card to Done. [CAP-01 replay](docs/simulator-v1.md#cap-01-replay-october-21-2026) imports complete loss-free sanitized CAP0 exports into minimized replay scenarios for runs 2, 4, 7, 8 and 9. Source originals and sanitized exports remain local. Exact callback context is preserved without inventing observed frames, channel samples, pre-attachment configuration, trip outcomes or native replay fidelity. Existing CAP-01 acceptance limits remain unchanged. This implementation record is not a claim that the final code/review/CI gates have completed.
 
 ## ET-028 approved desktop presentation — October 21, 2026
 

@@ -16,7 +16,7 @@ import {helloFaultBytes, hex, isHelloFault, liveFaultBytes, wireFaultBytes, type
 export const MAX_TRANSCRIPT_MESSAGES = 20_000;
 /** The scripted client's own monotonic clock, with an origin independent of the source clock (§11). */
 export const CLIENT_BASE_NS = 5_000_000_000_000n;
-type LineBase = {scenario: string; origin: 'synthetic'; connection: number; atMs: number; direction: 'server' | 'client'};
+type LineBase = {scenario: string; origin: 'synthetic' | 'replay'; connection: number; atMs: number; direction: 'server' | 'client'};
 /** One valid wire message. */
 export type TranscriptLine = LineBase & {message: ProtocolMessage};
 /**
@@ -54,8 +54,8 @@ export type Effect =
   {kind: 'close'; by: 'server' | 'client'; graceful: boolean};
 
 /** The fixed synthetic source identity of a scenario; every identifier derives from its seed. */
-export function scenarioSource(s: Pick<Scenario, 'game' | 'seed'>): SourceIdentity {
-  return {game: s.game, pluginSessionId: seededId(s.seed, 'plugin-session'), processInstanceId: seededId(s.seed, 'process-instance'), processId: 1, windowsSessionId: 0, origin: 'synthetic'};
+export function scenarioSource(s: Pick<Scenario, 'game' | 'seed'> & Partial<Pick<Scenario, 'origin'>>): SourceIdentity {
+  return {game: s.game, pluginSessionId: seededId(s.seed, 'plugin-session'), processInstanceId: seededId(s.seed, 'process-instance'), processId: 1, windowsSessionId: 0, origin: s.origin ?? 'synthetic'};
 }
 /** The plugin session a client fault or a wire fault may name instead of the real one. */
 export const foreignSession = (seed: string) => seededId(seed, 'foreign-plugin-session');
@@ -127,6 +127,7 @@ export class V1Driver {
   private *apply(step: SourceStep): Generator<Effect, void, void> {
     const at = step.atMs, adapter = this.producer.adapter;
     switch (step.action) {
+      case 'capture': { adapter.capture(step, at); yield* this.settle(at); const out = this.producer.publication(this.ns(at)); if (out) yield* this.deliver(out, at); break; }
       case 'configuration': case 'gameplay':
         for (let i = 0; i < step.repeat; i++) { adapter[step.action](step.id, step.attributes, step.list, at); yield* this.settle(at); } break;
       case 'lifecycle': adapter.lifecycle(step.event, at); yield* this.settle(at); break;
@@ -152,7 +153,7 @@ export class V1Driver {
   }
   private *connect(atMs: number, connection: number, policy: ClientPolicy): Generator<Effect, void, void> {
     const clientInstanceId = this.beginAttempt();
-    const clientClockId = seededId(this.scenario.seed, `client-clock-${this.instance}`), client = new ScriptedClient(this.ledger, policy, clientInstanceId, clientClockId, this.cursors);
+    const clientClockId = seededId(this.scenario.seed, `client-clock-${this.instance}`), client = new ScriptedClient(this.ledger, policy, clientInstanceId, clientClockId, this.cursors, this.scenario.origin);
     const record: ConnectionRecord = {connection, openedAtMs: atMs, durableRequested: policy.durable, clientInstanceId, clientClockId, closedBy: 'open', mappings: client.mappings, policy, actions: [], refusedClients: 0};
     this.connections.push(record); this.open = {client, record, stalled: false}; this.probeId = 0;
     this.producer.open(); yield {kind: 'accept', connection};

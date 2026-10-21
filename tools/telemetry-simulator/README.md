@@ -12,3 +12,5 @@ real synthetic named pipe with client and wire fault injection (`serve-v1`, `smo
 [validation](../../docs/validation/et-005b.md).
 
 No SDK, desktop bridge, database, history, discovery file or game acceptance is provided.
+
+CAP-01-derived replay is available through `import-cap0 <sanitized-export-directory> --run <label> --out <new-file>`. Only minimized derived fixtures are committed; raw captures and sanitized exports remain local. See [CAP-01 replay](../../docs/simulator-v1.md#cap-01-replay-october-21-2026) for provenance, bounds, privacy and commands. Game captures emit replay origin; synthetic captures remain synthetic.

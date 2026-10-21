@@ -8,6 +8,7 @@ import {
   type GameTimeStamp, type JobConfiguration, type Measure, type TrailerConfiguration, type TruckConfiguration, type UnavailableReason
 } from '../../../../packages/contracts/src/protocol-v1';
 import {MAX_SEQ} from './store';
+import type {CaptureStep} from './cap0-schema';
 
 /** Deterministic UUID-shaped identity from the scenario seed (namespace `simulator-v1`). */
 export function seededId(seed: string, label: string): string {
@@ -46,7 +47,7 @@ export class ScenarioClock {
 
 export type SdkType = 'string' | 'bool' | 's32' | 'u32' | 's64' | 'u64' | 'float' | 'double';
 /** One SDK named value. A string value of null models a null string pointer. */
-export interface SdkAttribute {name: string; sdkType: SdkType; value: string | number | boolean | null}
+export interface SdkAttribute {name: string; sdkType: SdkType; value: string | number | boolean | null; unavailable?: UnavailableReason; indexed?: boolean}
 /** `terminated` is a normal list; `null` a null attribute pointer; `unterminated` a list cut at the scan bound. */
 export type AttributeList = 'terminated' | 'null' | 'unterminated';
 export interface Placement {x: number; y: number; z: number; heading: number; pitch: number; roll: number}
@@ -104,22 +105,25 @@ const TRAILER_TEXT: Record<string, [keyof TrailerConfiguration, 'id' | 'name']> 
  */
 class Attributes {
   private seen = new Map<string, SdkAttribute>();
-  constructor(attributes: readonly SdkAttribute[], private readonly list: AttributeList) { for (const a of attributes) this.seen.set(a.name, a); }
+  constructor(attributes: readonly SdkAttribute[], private readonly list: AttributeList) { for (const a of attributes) if (!a.indexed) this.seen.set(a.name, a); }
   private missing(): Available<never> { return this.list === 'terminated' ? notObserved : invalid; }
   text(name: string, kind: 'id' | 'name'): Available<string> {
     const a = this.seen.get(name); if (!a) return this.missing();
+    if (a.unavailable) return unavailable(a.unavailable);
     return a.sdkType === 'string' && typeof a.value === 'string' ? sdkText(a.value, kind) : invalid;
   }
   number(name: string, type: 'u32' | 's32'): Available<number> {
     const a = this.seen.get(name); if (!a) return this.missing();
+    if (a.unavailable) return unavailable(a.unavailable);
     return a.sdkType === type && typeof a.value === 'number' ? {available: true, value: a.value} : invalid;
   }
   /** SDK floats are 32-bit; scenario values are float32-exact, so the copy is exact. */
-  float(name: string): Reading { const a = this.seen.get(name); if (!a) return this.missing(); return a.sdkType === 'float' && typeof a.value === 'number' ? {available: true, value: Math.fround(a.value)} : invalid; }
-  flag(name: string): Available<boolean> { const a = this.seen.get(name); if (!a) return this.missing(); return a.sdkType === 'bool' && typeof a.value === 'boolean' ? {available: true, value: a.value} : invalid; }
+  float(name: string): Reading { const a = this.seen.get(name); if (!a) return this.missing(); if (a.unavailable) return unavailable(a.unavailable); return a.sdkType === 'float' && typeof a.value === 'number' ? {available: true, value: Math.fround(a.value)} : invalid; }
+  flag(name: string): Available<boolean> { const a = this.seen.get(name); if (!a) return this.missing(); if (a.unavailable) return unavailable(a.unavailable); return a.sdkType === 'bool' && typeof a.value === 'boolean' ? {available: true, value: a.value} : invalid; }
   minutes(name: string): Available<string> & {unit: 'min'} { const n = this.number(name, 'u32'); return n.available ? {available: true, value: String(n.value), unit: 'min'} : {...n, unit: 'min'}; }
   money(name: string, type: 's64' | 'u64', currency: Currency) {
     const a = this.seen.get(name); if (!a) return this.missing();
+    if (a.unavailable) return unavailable(a.unavailable);
     return a.sdkType === type && typeof a.value === 'string' ? sdkMoney(a.value, type, currency) : invalid;
   }
 }
@@ -171,6 +175,8 @@ export class AdapterModel {
   private truck: Available<TruckConfiguration> = notObserved;
   private trailers: Available<TrailerConfiguration>[] = Array.from({length: 10}, () => notObserved);
   private publishedSlot: Published;
+  private captureContext?: CaptureStep['data'];
+  private captureGameClock?: string;
   constructor(readonly config: SourceConfig, private readonly clock: ScenarioClock) {
     this.channel = new EventChannel(config.startEventSeq);
     this.currency = config.currency === 'unknown' ? {status: 'unknown'} : {status: 'sdk-documented', ...CURRENCY_SOURCE[config.game]};
@@ -181,7 +187,7 @@ export class AdapterModel {
   eventTypes(): EventType[] {
     return EVENT_TYPES.filter(t => !(this.config.gameplayEvents === 'not-supported' && GAMEPLAY_EVENT_TYPES.includes(t)) && !(t === 'source.gameMode' && this.config.gameMode === 'unknown'));
   }
-  private gameClockId(): string { return seededId(this.config.seed, `game-clock-${this.clockEpoch}`); }
+  private gameClockId(): string { return this.captureGameClock ?? seededId(this.config.seed, `game-clock-${this.clockEpoch}`); }
   private stamp(): GameTimeStamp {
     return {minutes: this.gameTime.available ? {available: true, value: String(this.gameTime.value)} : unavailable(this.gameTime.reason), clockId: this.gameClockId()};
   }
@@ -190,6 +196,11 @@ export class AdapterModel {
   private emit(record: EventRecord, atMs: number, boundary: boolean): void {
     const occurred: EventOccurrence = {monotonicNs: {available: true, value: this.clock.sourceNs(atMs).toString()}, gameTime: this.stamp(),
       utcUnixMs: {available: true, value: this.clock.utcMs(atMs).toString()}, simulation: this.simulation, configurationRevision: this.revision.toString(), boundaryOrder: this.boundary.toString()};
+    if (this.captureContext) {
+      const ns = this.captureContext.callbackMonotonicNs;
+      occurred.monotonicNs = ns.available ? {available: true, value: (ScenarioClock.SOURCE_BASE_NS + BigInt(ns.value)).toString()} : unavailable(ns.reason);
+      occurred.utcUnixMs = notObserved;
+    }
     // OD-5 S10: lifecycle and configuration boundaries while no v1 client is connected. Gameplay events count as loss.
     if (boundary && this.channel.gate === 'none') this.offlineTransitions++;
     this.channel.observe({occurred, record});
@@ -266,6 +277,40 @@ export class AdapterModel {
     this.next();
     this.simulation = event === 'simulation.started' ? 'running' : 'paused';
     this.emit({type: event}, atMs, true);
+  }
+
+  /** CAP0 has callback context but no observed channel samples. Publish that context without inventing a frame. */
+  capture(step: CaptureStep, atMs: number): void {
+    const d = step.data, id = d.callback.id;
+    if (!id.available) throw new Error('CAP0 callback identifier unavailable');
+    // CAP0 omits the intervening game.time channels. A previous callback cannot prove the regression's prior minutes.
+    const from: GameTimeStamp = {minutes: notObserved, clockId: this.gameClockId()};
+    this.captureContext = d;
+    this.captureGameClock = seededId(this.config.seed, `capture-game-clock:${d.gameTime.clockId}`);
+    this.gameTime = d.gameTime.minutes.available ? {available: true, value: Number(d.gameTime.minutes.value)} : unavailable(d.gameTime.minutes.reason);
+    this.simulation = d.simulation;
+    this.boundary = BigInt(d.sharedBoundaryOrder) - 1n;
+    const attributes: SdkAttribute[] = d.observations.flatMap(o => {
+      if (!o.name.available) throw new Error('CAP0 attribute name unavailable');
+      // Vector and unknown SDK types cannot satisfy a scalar v1 field. Their full typed values stay in the fixture.
+      const scalar = ['string', 'bool', 's32', 'u32', 's64', 'u64', 'float', 'double'].includes(o.sdkType);
+      return [{name: o.name.value, sdkType: scalar ? o.sdkType as SdkType : 'string',
+        value: scalar && o.value.available ? o.value.value as SdkAttribute['value'] : null,
+        indexed: o.arrayIndex.available,
+        ...(!o.value.available ? {unavailable: o.value.reason} : {})}];
+    });
+    const list: AttributeList = !d.attributes.present ? 'null' : d.attributes.terminated ? 'terminated' : 'unterminated';
+    if (d.callback.group === 'configuration' || d.callback.group === 'gameplay') this[d.callback.group](id.value, attributes, list, atMs);
+    else if (id.value === 'simulation.started' || id.value === 'simulation.paused') this.lifecycle(id.value, atMs);
+    else {
+      this.next();
+      if (id.value === 'timers.restart') this.emit({type: 'timers.restart'}, atMs, true);
+      else if (id.value === 'game.time.regression') this.emit({type: 'gameTime.regression', from, to: this.stamp()}, atMs, true);
+      else throw new Error('Unsupported CAP0 lifecycle callback');
+    }
+    this.channel.flushLoss();
+    this.publishedSlot = this.copyState(atMs);
+    this.captureContext = undefined;
   }
 
   /** frame_start, the listed channels in registration order, then frame_end with the loss flush and publication. */

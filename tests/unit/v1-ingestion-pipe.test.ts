@@ -17,12 +17,12 @@ import {CommitLedger, type ClientPolicy} from '../../tools/telemetry-simulator/s
 import {TEST_PIPE_PATTERN_V1 as SIMULATOR_PATTERN} from '../../tools/telemetry-simulator/src/v1/pipe-host';
 import {reactiveConflicts, reactiveDifferences, serveV1Reactive} from '../../tools/telemetry-simulator/src/v1/reactive';
 import {replayV1, scenarioSource} from '../../tools/telemetry-simulator/src/v1/replay';
-import {expectedPath, scenarioPath} from '../shared/simulator-v1-expected';
+import {cap01Manifest, expectedPath, scenarioPath} from '../shared/simulator-v1-expected';
 
 type Json = Record<string, unknown>;
 const load = (id: string) => readFixtureFile(scenarioPath(id)) as Json;
 const expectedLedger = (id: string) => (JSON.parse(readFileSync(expectedPath(id), 'utf8')) as {ledger: Json}).ledger;
-const SCENARIOS = ['normal-delivery', 'pipe-reconnect', 'reconnect-lost-ack', 'app-absent-hydration', 'live-only', 'retention-expired', 'shutdown-end', 'sequence-exhausted'];
+const SCENARIOS = ['normal-delivery', 'pipe-reconnect', 'reconnect-lost-ack', 'app-absent-hydration', 'live-only', 'retention-expired', 'shutdown-end', 'sequence-exhausted', ...cap01Manifest()];
 
 /** The in-memory durable sink: CommitLedger rows keyed by eventSeq, with the scripted commit policy of each connection. */
 class LedgerSink implements DurableSink {
@@ -106,7 +106,7 @@ async function runScenario(id: string, scale: number) {
   });
   const start = (durable: boolean) => {
     const next = new V1Ingestion({connect: run.connect, sink: durable ? new LedgerSink(ledger, run) : undefined, onState: s => states.push(s)});
-    next.select('synthetic', server.endpoint); return next;
+    next.select(replay.scenario.origin, server.endpoint); return next;
   };
   try {
     ingestion = start(policies[0].durable);

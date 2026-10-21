@@ -1,0 +1,116 @@
+{
+  "scenario": "cap01-run8",
+  "authoredFrom": [
+    "docs/validation/cap-01a.md O1–O11; October 13/14 independent observation reviews",
+    "October 21, 2026 independent read-only CAP0 source audit; v1 D12/D13 callback projection"
+  ],
+  "envelopes": 29,
+  "coverage": [
+    {
+      "envelope": 1,
+      "event": "1",
+      "type": "simulation.paused"
+    },
+    {
+      "envelope": 2,
+      "event": "2",
+      "type": "simulation.started"
+    },
+    {
+      "envelope": 3,
+      "event": "3",
+      "type": "simulation.paused"
+    },
+    {
+      "envelope": 4,
+      "event": "4",
+      "type": "simulation.started"
+    },
+    {
+      "envelope": 5,
+      "event": "5",
+      "type": "simulation.paused"
+    },
+    {
+      "envelope": 6,
+      "event": "6",
+      "type": "simulation.started"
+    },
+    {
+      "envelope": 7,
+      "event": "7",
+      "type": "player.fined"
+    },
+    {
+      "envelope": 8,
+      "event": "8",
+      "type": "simulation.paused"
+    },
+    {
+      "envelope": 9,
+      "event": "9",
+      "type": "job.configured"
+    },
+    {
+      "envelope": 10,
+      "event": "10",
+      "type": "simulation.started"
+    },
+    {
+      "envelope": 11,
+      "event": "11",
+      "type": "simulation.paused"
+    },
+    {
+      "envelope": 12,
+      "event": "12",
+      "type": "job.configured"
+    },
+    {
+      "envelope": 13,
+      "event": "13",
+      "type": "truck.configured"
+    },
+    {
+      "envelope": 15,
+      "event": "14",
+      "type": "trailer.configured"
+    },
+    {
+      "envelope": 16,
+      "event": "15",
+      "type": "trailer.configured"
+    },
+    {
+      "envelope": 25,
+      "event": "16",
+      "type": "simulation.started"
+    },
+    {
+      "envelope": 26,
+      "event": "17",
+      "type": "simulation.paused"
+    },
+    {
+      "envelope": 27,
+      "event": "18",
+      "type": "player.use.ferry"
+    },
+    {
+      "envelope": 28,
+      "event": "19",
+      "type": "simulation.started"
+    },
+    {
+      "envelope": 29,
+      "event": "20",
+      "type": "simulation.paused"
+    }
+  ],
+  "ledger": {
+    "committedThroughEventSeq": "20",
+    "committedEvents": 20,
+    "committedGapMarkers": "0",
+    "duplicates": 0
+  }
+}

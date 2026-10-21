@@ -219,6 +219,8 @@ Columns:
 | `tests/unit/settings-store.test.ts` | Node unit (Vitest) | REG-017 | R, F | ET-011b (#56) | PR (tests job, `npm test`) | regression |
 | `tests/unit/shutdown-sequence.test.ts` | Node unit (Vitest) | REG-011, REG-012 | R, T | ET-011a (#52); ET-038 | PR (tests job, `npm test`) | regression |
 | `tests/unit/simulator-v0.test.ts` | Node unit (Vitest) | REG-003 | R | ET-005a (#11) | PR (tests job, `npm test`) | gap |
+| `tests/unit/simulator-v1-cap0-import.test.ts` | Node unit (Vitest) | REG-008, REG-009, REG-010 | R, F | ET-005b PR-3 | PR (tests job, `npm test`) | — |
+| `tests/unit/simulator-v1-cap0-replay.test.ts` | Node unit/integration (Vitest, real pipes) | REG-001, REG-002, REG-008, REG-009 | R, F | ET-005b PR-3 | PR (tests job, `npm test`) | — |
 | `tests/unit/simulator-v1-faults.test.ts` | Node unit (Vitest) | REG-005, REG-010 | R, F | ET-005b (#61) | PR (tests job, `npm test`) | — |
 | `tests/unit/simulator-v1-pipe.test.ts` | Node unit (Vitest) | REG-003, REG-011 | R, F | ET-005b (#61) | PR (tests job, `npm test`) | — |
 | `tests/unit/simulator-v1-reactive.test.ts` | Node unit (Vitest) | REG-011 | F | ET-005b (#61) | PR (tests job, `npm test`) | ACK |
@@ -381,6 +383,7 @@ Review R4/R5: the seven-case real-worker reader/monitor/FIFO matrix now crosses 
 
 Claude2 display-lifetime regression: `tests/unit/hard-mode-service-status.test.ts` validates the private relative-lifetime/strict assessment-versus-trip envelope, aged proof, repeated trip posts, absent further messages, UTC steps, genuine new publications and retirement/malformed metadata. `hard-mode-reader.test.ts` retains read-completion and post-bind age in remaining lifetime; `main-boundaries.test.ts` exercises actual IPC expiry and service restart/old-child refusal. Renderer/preload/native/SQL contracts are unchanged.
 
+ET-005b PR-3 (October 21, 2026): five minimized CAP-01-derived scenarios add observed callback-order/value protection for REG-001/002/008/009, checked against source-authored expectations and production V1Ingestion on actual pipes. The cap01 manifest is separate from the frozen synthetic corpus. No unavailable channel, native callback timing, trip/storage or new game result is inferred; CAP-01 gaps remain recorded in its validation.
 
 ## ET-028 presentation coverage
 
@@ -404,3 +407,5 @@ ET-028 closeout strengthens the existing `tests/storage/history-refusal.test.ts`
 
 
 ET-028 Claude follow-up adds `tests/unit/formatter-localization.test.ts` (Node/Vitest, REG-002/003/009/014, R/T, ET-028, PR `npm test`): real core formatter and main/overlay output, all units/profiles/games/EN-RU, exact signed/large money and SDK-name/detail provenance. It adds `tests/unit/ci-compiled-artifact.test.ts` (Node/Vitest with isolated temporary files and inert Node CLI children, REG-015/017, R/T, ET-028, PR `npm test`): fail-closed aggregate participation, real artifact identity/hash/path/link rejection and exact native-binding replacement. Existing `journal-chart.test.ts`, `renderer-observation.test.ts`, `desktop-ui-view.test.ts` and `ui-runtime-receipt.test.ts` now cover signed SVG/domains, unknown/zero/positive tank states and missing/false `signedChart`, `tankUnknownVsZero` and `formatterProfiles` receipts. Existing flags and all 308 screenshots remain required; no storage/protocol or history fixture changes.
+
+ET-005b final-verification baseline follow-up (October21): shutdown-stalls.test.ts retains all four REG-006/011/012 scenarios and unchanged deadlines/assertions, but runs in the storage-shutdown project after other storage-file forks. Failure-only b1 diagnostics retain effective context, monotonic boundary stamps, exit/verdict and bounded synthetic logs. Full storage inventory remains455tests/39files. The original parallel failure followed by one diagnostic pass is flaky evidence with an unproven scheduling cause, not a waived result; see [validation](validation/et-005b.md#storage-shutdown-baseline-flake-and-scheduling-mitigation).

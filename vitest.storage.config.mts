@@ -1,6 +1,6 @@
 import path from 'node:path';
 import {BaseSequencer, type TestSpecification} from 'vitest/node';
-import {defineConfig} from 'vitest/config';
+import {configDefaults, defineConfig} from 'vitest/config';
 // Storage suite: loads native better-sqlite3, so it runs only under the pinned Electron executable in Node mode
 // through `npm run test:storage` (scripts/run-electron-node.mjs). It is not part of `npm test`, whose Node-safe corpus
 // must never load native SQLite. This file and tests/storage/setup.ts both refuse any other runtime.
@@ -34,5 +34,12 @@ class LongFirstSequencer extends BaseSequencer {
   }
 }
 
-export default defineConfig({test: {include: ['tests/storage/**/*.test.ts'], setupFiles: ['tests/storage/setup.ts'], pool: 'forks', testTimeout: 30_000, hookTimeout: 30_000,
-  sequence: {sequencer: LongFirstSequencer}}});
+const runtime = {setupFiles: ['tests/storage/setup.ts'], pool: 'forks' as const, testTimeout: 30_000, hookTimeout: 30_000};
+export default defineConfig({test: {sequence: {sequencer: LongFirstSequencer}, projects: [
+  {test: {...runtime, name: 'storage', include: ['tests/storage/**/*.test.ts'],
+    exclude: [...configDefaults.exclude, 'tests/storage/shutdown-stalls.test.ts'], sequence: {groupOrder: 0}}},
+  // Keep real shutdown deadlines independent of this suite's other file forks, as for the unit host-boundary group.
+  // All four scenarios retain their real timers, worker/pipe concurrency, limits and assertions.
+  {test: {...runtime, name: 'storage-shutdown', include: ['tests/storage/shutdown-stalls.test.ts'],
+    sequence: {groupOrder: 1}, fileParallelism: false, maxWorkers: 1}}
+]}});

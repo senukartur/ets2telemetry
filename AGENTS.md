@@ -768,6 +768,9 @@ ET-026 review follow-up: the production HistoryStorage adapter forwards private 
 
 ET-026 Claude2 follow-up: private assessment publications carry only their bounded remaining monotonic lifetime; main consumes it on its own clock, and trip-only updates cannot renew proof. Strict invalid metadata and service retirement fail closed without changing renderer/native/storage contracts. The shared 2000ms read-plus-bind deadline, two sequential 1500ms process-query bounds, three-second coverage and four full bounded log reads retain their unmeasured false-loss/cost limits; no optimization or grace period is adopted.
 
+## ET-005b CAP-01 replay authorization — October 21, 2026
+
+The owner explicitly approved CD-7: commit minimized anonymized CAP-01-derived fixtures; original captures and sanitized exports remain local. The owner authorized completing ET-005 through implementation, checks, independent review, Claude feedback, final automatic Windows CI and squash merge, then Done. This removes the earlier pending acknowledgement for PR-3 only. The replay importer and five derived runs are described in [simulator v1](docs/simulator-v1.md#cap-01-replay-october-21-2026). Existing CAP-01 evidence/gaps stay frozen; no new game sessions, real user history, release, wire, native or storage changes are authorized by this task.
 
 ## ET-028 Yukon UI implementation candidate — October 21, 2026
 

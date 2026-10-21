@@ -12,6 +12,10 @@ export const SIMULATOR_V1_DIR = resolve('tests/fixtures/simulator-v1');
 export function manifest(): string[] {
   return readFileSync(resolve(SIMULATOR_V1_DIR, 'manifest.txt'), 'utf8').split(/\r?\n/).map(l => l.trim()).filter(l => l && !l.startsWith('#'));
 }
+/** The separate CAP-01 manifest never changes the frozen synthetic corpus. */
+export function cap01Manifest(): string[] {
+  return readFileSync(resolve(SIMULATOR_V1_DIR, 'cap01/manifest.txt'), 'utf8').split(/\r?\n/).map(l => l.trim()).filter(l => l && !l.startsWith('#')).map(id => 'cap01/' + id);
+}
 export const scenarioPath = (id: string) => resolve(SIMULATOR_V1_DIR, `${id}.json`);
 export const expectedPath = (id: string) => resolve(SIMULATOR_V1_DIR, `${id}.expected.json`);
 

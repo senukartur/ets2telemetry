@@ -1,0 +1,121 @@
+{
+  "scenario": "cap01-run9",
+  "authoredFrom": [
+    "docs/validation/cap-01a.md O1–O11; October 13/14 independent observation reviews",
+    "October 21, 2026 independent read-only CAP0 source audit; v1 D12/D13 callback projection"
+  ],
+  "envelopes": 54,
+  "coverage": [
+    {
+      "envelope": 1,
+      "event": "1",
+      "type": "simulation.started"
+    },
+    {
+      "envelope": 2,
+      "event": "2",
+      "type": "simulation.paused"
+    },
+    {
+      "envelope": 3,
+      "event": "3",
+      "type": "simulation.started"
+    },
+    {
+      "envelope": 4,
+      "event": "4",
+      "type": "simulation.paused"
+    },
+    {
+      "envelope": 5,
+      "event": "5",
+      "type": "simulation.started"
+    },
+    {
+      "envelope": 6,
+      "event": "6",
+      "type": "simulation.paused"
+    },
+    {
+      "envelope": 7,
+      "event": "7",
+      "type": "job.cleared"
+    },
+    {
+      "envelope": 9,
+      "event": "8",
+      "type": "truck.cleared"
+    },
+    {
+      "envelope": 21,
+      "event": "9",
+      "type": "job.configured"
+    },
+    {
+      "envelope": 25,
+      "event": "10",
+      "type": "truck.configured"
+    },
+    {
+      "envelope": 27,
+      "event": "11",
+      "type": "trailer.configured"
+    },
+    {
+      "envelope": 28,
+      "event": "12",
+      "type": "trailer.configured"
+    },
+    {
+      "envelope": 37,
+      "event": "13",
+      "type": "simulation.started"
+    },
+    {
+      "envelope": 38,
+      "event": "14",
+      "type": "gameTime.regression"
+    },
+    {
+      "envelope": 39,
+      "event": "15",
+      "type": "player.fined"
+    },
+    {
+      "envelope": 40,
+      "event": "16",
+      "type": "simulation.paused"
+    },
+    {
+      "envelope": 41,
+      "event": "17",
+      "type": "job.cleared"
+    },
+    {
+      "envelope": 42,
+      "event": "18",
+      "type": "truck.configured"
+    },
+    {
+      "envelope": 44,
+      "event": "19",
+      "type": "trailer.configured"
+    },
+    {
+      "envelope": 45,
+      "event": "20",
+      "type": "trailer.configured"
+    },
+    {
+      "envelope": 54,
+      "event": "21",
+      "type": "job.cancelled"
+    }
+  ],
+  "ledger": {
+    "committedThroughEventSeq": "21",
+    "committedEvents": 21,
+    "committedGapMarkers": "0",
+    "duplicates": 0
+  }
+}

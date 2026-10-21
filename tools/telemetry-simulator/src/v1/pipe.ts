@@ -184,7 +184,7 @@ export interface PlannedConnection {
   connection: number; openedAtMs: number; clientInstanceId: string; clientClockId: string; closedBy: ClosedBy;
   helloFault?: HelloFault; policy?: ClientPolicy; actions: ClientAction[];
 }
-export interface V1ClientPlan {scenario: string; origin: 'synthetic'; pluginSessionId: string; foreignSessionId: string; ledgerSeedThrough: bigint; connections: PlannedConnection[]}
+export interface V1ClientPlan {scenario: string; origin: 'synthetic' | 'replay'; pluginSessionId: string; foreignSessionId: string; ledgerSeedThrough: bigint; connections: PlannedConnection[]}
 /**
  * The client's script: per connection its policy or hello fault, and the actions it takes after a given server message
  * (probes, live faults, second clients). Taken from the replay, because a probe or fault belongs to a point of the

@@ -225,10 +225,25 @@ describe('ET-019 shutdown and close stalls', () => {
     expect(reactiveConflicts(input)).toEqual([]);
     const server = await serveV1Reactive(input, {scale: 0, awaitScriptedAcks: true});
     const worker = storageWorker({closeHold: true}), traced = tracedHandle(worker.handle, timeline), failures: unknown[] = [];
+    // Failure-only evidence: the grace also includes request/notice/release scheduling and actual worker close/exit.
+    const diagnosticStart = performance.now(), stamps: {label: string; ms: number}[] = [];
+    const stamp = (label: string) => { stamps.push({label, ms: performance.now() - diagnosticStart}); };
+    let closeId: number | undefined, exitCode: number | undefined;
+    let context: {budgetMs: number | null; graceMs: number | null} | undefined;
+    let verdict: {clean: boolean; elapsedMs: number} | undefined;
+    const handle: StorageWorkerHandle = {...traced.handle,
+      postMessage: request => { if (request.command.name === 'close') { closeId = request.id; stamp('close-posted'); } traced.handle.postMessage(request); },
+      onMessage: listener => traced.handle.onMessage(message => {
+        if (closeId !== undefined && (message as {id?: unknown} | null)?.id === closeId) stamp('close-response');
+        listener(message);
+      }),
+      terminate: () => { stamp('terminate-request'); return traced.handle.terminate(); }};
+    void worker.exit.then(code => { exitCode = code; stamp('worker-exit'); }, () => stamp('worker-exit-error'));
     const socket = gatedConnect(timeline, '9', () => until(() => timeline.includes('done appendSamples'), 'the early sample write', HANG_GUARD_MS), error => failures.push(error));
     const held = guarded(once(worker.control!, 'message'), 'the held close', HANG_GUARD_MS).then(async ([message]) => {
-      timeline.push('held close');
+      timeline.push('held close'); stamp('held-notice');
       await new Promise(resolve => setTimeout(resolve, 1200));
+      stamp('release-posted');
       worker.control?.postMessage({type: 'release'});
       return message as unknown;
     });
@@ -236,12 +251,16 @@ describe('ET-019 shutdown and close stalls', () => {
     const shutdown = tracedShutdown(timeline);
     let runtime!: RecordingRuntime;
     const stop = stopOnDisconnect(shutdown, socket, timeline, () => runtime.v1.current);
-    const s = serviceRuntime('t', traced.handle, socket, timeline, {sampleFlushMs: EARLY_FLUSH_MS, onState: stop.onState});
+    const s = serviceRuntime('t', handle, socket, timeline, {sampleFlushMs: EARLY_FLUSH_MS, onState: stop.onState});
     runtime = s.runtime;
-    s.runtime.register(shutdown.registrar);
+    s.runtime.register({register: (phase, step) => shutdown.registrar.register(phase, {...step, run: effective => {
+      if (step.name === 'history-storage') { context = {budgetMs: effective?.budgetMs ?? null, graceMs: effective?.graceMs ?? null}; stamp('storage-start'); }
+      return step.run(effective);
+    }})});
     try {
       await startDurable(s.runtime, server.endpoint);
       const {clean, elapsedMs, atStop} = await stop.stopped();
+      verdict = {clean, elapsedMs}; stamp('shutdown-result');
 
       const report = await guarded(server.done, 'the reactive server run', HANG_GUARD_MS);
       expect(await held).toEqual({type: 'held', command: 'close'});
@@ -271,6 +290,10 @@ describe('ET-019 shutdown and close stalls', () => {
       expect(await storedRows(reader('t'), input.seed)).toEqual({trips: expected.trips, attributions: expected.attributions, intervals: expected.intervals});
       expect(expectInvariants(target('t'), session, acks).samples.map(row => row.monotonicNs)).toEqual(NORMAL_DELIVERY_SAMPLES);
       expectNoGameHistory(localAppData);
+    } catch (error) {
+      console.error('ET038_SLOW_CLOSE_DIAGNOSTIC', JSON.stringify({context, verdict, exitCode, stamps: stamps.slice(-16), steps: shutdown.steps,
+        timeline: timeline.slice(-80), logs: s.logs.slice(-32)}));
+      throw error;
     } finally { worker.control?.close(); await server.stop(); }
   }, 90_000);
 
