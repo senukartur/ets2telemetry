@@ -12,6 +12,21 @@ const panels = ['general', 'units', 'overlay', 'sections', 'plugin', 'data', 'ab
 const layouts = ['strip', 'card', 'cluster', 'hud'];
 const dimensions = {strip: {width: 1280, height: 116}, card: {width: 300, height: 384}, cluster: {width: 440, height: 267}, hud: {width: 320, height: 354}};
 const waitState = (page, state) => until(() => page.getByTestId('telemetry-status').innerText(), value => value.startsWith(`${state}:`), `UI_LIVE_${state}`, 5000);
+// A committed main-process value may precede React's rendered switch and pending-save controls.
+function waitOverlayVisibility(page, {enabled, writable = true, saveError = null, errorVisible}, message, timeoutMs) {
+  return until(() => page.evaluate(async () => {
+    const state = await globalThis.desktop.getAppState();
+    const switches = globalThis.document.querySelectorAll('[data-testid="overlay-enabled"]'), visibility = switches[0];
+    const edit = globalThis.document.querySelector('[data-testid="overlay-edit-start"]');
+    const error = globalThis.document.querySelector('[data-testid="overlay-settings-error"]');
+    return {state, count: switches.length, rendered: visibility?.getAttribute('data-state'),
+      interactable: Boolean(visibility && !visibility.disabled), editEnabled: Boolean(edit && !edit.disabled),
+      errorShown: Boolean(error && error.getClientRects().length && globalThis.getComputedStyle(error).visibility === 'visible')};
+  }), observed => observed.count === 1 && observed.state.settings.overlay.enabled === enabled && observed.state.settings.writable === writable &&
+    observed.state.settings.saveError === saveError && observed.rendered === (enabled ? 'checked' : 'unchecked') &&
+    observed.interactable === writable && observed.editEnabled === (writable && enabled) &&
+    (errorVisible === undefined || observed.errorShown === errorVisible), message, timeoutMs);
+}
 async function settled(page) {await page.evaluate(async () => {await globalThis.document.fonts.ready;});}
 async function capture({page, application, config, record, name, language, size, overlay = false}) {
   const file = `ui-${config.uiCase}-${name}-${language}-${size.width}x${size.height}.png`;
@@ -159,15 +174,15 @@ export async function runUiSmoke({application, dashboard, overlay, source, confi
         await dashboard.keyboard.press('Enter'); record.flags.fontLicense = true;
         await settingsPanel(dashboard, 'overlay');
         const visibility = dashboard.getByRole('switch', {name: language === 'en' ? 'Show overlay' : 'Показывать оверлей', exact: true});
-        assert.equal(await visibility.getAttribute('data-state'), 'checked');
+        await waitOverlayVisibility(dashboard, {enabled: true}, 'UI_OVERLAY_INITIAL_RENDERED');
         assert.ok((await dashboard.getByTestId('overlay-enabled-help').innerText()).length > 0);
         await visibility.focus(); await dashboard.keyboard.press('Space');
-        await until(() => dashboard.evaluate(() => globalThis.desktop.getAppState()), state => state.settings.overlay.enabled === false, 'UI_OVERLAY_DISABLED_SAVED');
+        await waitOverlayVisibility(dashboard, {enabled: false}, 'UI_OVERLAY_DISABLED_SAVED');
         assert.equal(await visibility.getAttribute('data-state'), 'unchecked');
         assert.equal(await dashboard.getByTestId('overlay-edit-start').isDisabled(), true);
         await assert.rejects(dashboard.evaluate(() => globalThis.desktop.beginOverlayEdit()));
         await visibility.focus(); await dashboard.keyboard.press('Space');
-        await until(() => dashboard.evaluate(() => globalThis.desktop.getAppState()), state => state.settings.overlay.enabled === true, 'UI_OVERLAY_ENABLED_SAVED');
+        await waitOverlayVisibility(dashboard, {enabled: true}, 'UI_OVERLAY_ENABLED_SAVED');
         assert.equal(await visibility.getAttribute('data-state'), 'checked');
         assert.equal(await dashboard.getByTestId('overlay-edit-start').isEnabled(), true);
         record.flags.overlayVisibility = true;
@@ -203,7 +218,7 @@ export async function runUiSmoke({application, dashboard, overlay, source, confi
           await save('save-error', language, size);
           await settingsPanel(dashboard, 'overlay');
           await dashboard.getByTestId('overlay-enabled').focus(); await dashboard.keyboard.press('Space');
-          await dashboard.getByTestId('overlay-settings-error').waitFor({state: 'visible', timeout: 5000});
+          await waitOverlayVisibility(dashboard, {enabled: true, saveError: 'SETTINGS_WRITE_FAILED', errorVisible: true}, 'UI_OVERLAY_FAILED_SAVE_RENDERED', 5000);
           assert.equal((await dashboard.evaluate(() => globalThis.desktop.getAppState())).settings.overlay.enabled, true);
           assert.equal(await dashboard.getByTestId('overlay-enabled').getAttribute('data-state'), 'checked');
           assert.equal(await dashboard.getByTestId('overlay-edit-start').isEnabled(), true);
@@ -323,7 +338,7 @@ export async function runUiReadOnly({application, dashboard, config, record, set
     for (const game of ['ets2', 'ats']) for (const profile of ['metric', 'us-customary']) assert.equal(await dashboard.locator(`#units-${game}-${profile}`).isDisabled(), true);
     await capture({page: dashboard, application, config, record, name: 'read-only', language: 'en', size});
     await settingsPanel(dashboard, 'overlay');
-    assert.equal(await dashboard.getByTestId('overlay-enabled').isDisabled(), true);
+    await waitOverlayVisibility(dashboard, {enabled: true, writable: false}, 'UI_OVERLAY_READ_ONLY_RENDERED');
     for (const layout of layouts) assert.equal(await dashboard.locator(`#overlay-layout-${layout}`).isDisabled(), true);
     assert.equal(await dashboard.getByTestId('overlay-edit-start').isDisabled(), true);
     await settingsPanel(dashboard, 'sections');
