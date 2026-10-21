@@ -145,6 +145,7 @@ Columns:
 | `tests/unit/history-storage.test.ts` | Node unit (Vitest) | REG-007, REG-011 | R | ET-013 (#60); ET-038 | PR (tests job, `npm test`) | regression |
 | `tests/unit/installer-driver-provenance.test.ts` | Node unit (Vitest) | REG-017 (historical provenance) | T, V (et-001) | ET-001 (#5) | PR (tests job, `npm test`) | — |
 | `tests/unit/installer-guard.test.ts` | Node unit (Vitest) | REG-017 | T, V (et-018) | ET-018 (PR-1) | PR (tests job, `npm test`) | security |
+| `tests/unit/installer-ui-navigation.test.ts` | Inert Node unit (Vitest), production navigation helpers and hidden-control/budget fixture | REG-017 | T, R (et-028 closeout) | ET-028 | PR (tests job, `npm test`) | exact visible startup, About warning, remaining deadline |
 | `tests/unit/uninstall-data-wipe.test.ts` | Node unit (Vitest) | REG-017 | T, V (et-018) | ET-018 (PR-2) | PR (tests job, `npm test`) | security |
 | `tests/unit/uninstall-engine.test.ts` | Node unit (Vitest) | REG-015, REG-017 | T, V (et-018) | ET-018 (PR-2) | PR (tests job, `npm test`) | security |
 | `tests/unit/uninstall-plugin-cleanup.test.ts` | Node unit (Vitest) | REG-015, REG-017 | T, V (et-018) | ET-018 (PR-2) | PR (tests job, `npm test`) | security |
@@ -397,3 +398,6 @@ Claude2 display-lifetime regression: `tests/unit/hard-mode-service-status.test.t
 Existing Live/Journal/plugin/uninstall/renderer/main/overlay/locale tests and all previous runtime entrypoints remain mandatory. The 38px strip oracles are independently recalculated visual geometry, not relaxed data or fit assertions. Manual native-caption/Windows 100%/150%/game/performance acceptance is not inferred from emulated screenshots.
 
 The Settings UI receipt also requires keyboard-operated segmented/switch controls, the last-enabled-section guard, and readable offline Onest copyright/license text. Missing or false assertions are rejected by the inert receipt fixtures.
+
+
+ET-028 closeout strengthens the existing `tests/storage/history-refusal.test.ts` REG-007/REG-011/REG-017 lock-recovery coverage with a held real-worker session command, controlled checkpoint expiry, no premature Recording/ACK, committed gap coverage before exact ACK 2, and a new SDK boundary followed by an actual parsed Recording publication before signal-driven teardown. It retains live-only/durable connection order, real SQLite integrity/coverage and clean stop/log checks. The controlled RED unsafe-expectation experiment and the original unknown-timing failure/full diagnostic retry are retained separately in [validation](validation/et-028.md). No product freshness, storage deadline or protocol assertion changes.

@@ -1,16 +1,16 @@
 // All navigation is through the production shell; no bridge or product authority is added.
-export async function screen(page, route) {
-  await page.getByTestId(`tab-${route}`).click({timeout: 5000});
-  await page.locator('.yu-content').evaluate(node => {node.scrollTop = 0;});
+export async function screen(page, route, left = cap => cap) {
+  await page.getByTestId(`tab-${route}`).click({timeout: left(5000)});
+  await page.locator('.yu-content').evaluate(node => {node.scrollTop = 0;}, undefined, {timeout: left(5000)});
 }
-export async function settingsPanel(page, panel) {
-  await screen(page, 'settings');
-  await page.getByTestId(`settings.nav.${panel}`).click({timeout: 5000});
+export async function settingsPanel(page, panel, left = cap => cap) {
+  await screen(page, 'settings', left);
+  await page.getByTestId(`settings.nav.${panel}`).click({timeout: left(5000)});
 }
-export async function waitForStartup(page) {
-  await settingsPanel(page, 'data');
-  await page.getByText('Telemetry service ready; isolated storage probe verified', {exact: true}).waitFor({state: 'visible', timeout: 10000});
-  await screen(page, 'live');
+export async function waitForStartup(page, left = cap => cap, readyCap = 10000) {
+  await settingsPanel(page, 'data', left);
+  await page.getByText('Telemetry service ready; isolated storage probe verified', {exact: true}).waitFor({state: 'visible', timeout: left(readyCap)});
+  await screen(page, 'live', left);
 }
 export async function chooseSource(page, value) {
   await settingsPanel(page, 'data');
