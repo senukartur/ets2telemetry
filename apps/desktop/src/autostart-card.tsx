@@ -61,7 +61,7 @@ export function AutostartCard({settings, status, onSaved, onRequest, showSaveErr
         </div>
         {notInstalled ? (
           <p className="text-xs text-muted-foreground" data-testid="autostart-not-installed-note">
-            {t('s.autostart.notInstalled', undefined, language)}
+            {t('s.autostart.notInstalledNote', undefined, language)}
           </p>
         ) : null}
         {showSaveError && settings?.saveError ? (

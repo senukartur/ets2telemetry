@@ -9,6 +9,7 @@ import type {ConnectionDiagnosisCode, ConnectionDiagnosisNote} from './connectio
 import type {UninstallBlockCode, UninstallFailureCode} from '../../../packages/contracts/src/uninstall';
 import type {FolderNote} from './uninstall/plugin-cleanup';
 import type {DataEntry} from './uninstall/data-wipe';
+import {t} from './i18n';
 
 /**
  * Legacy fixed application copy for the dashboard and tray. Renderer adapters select the typed EN/RU dictionaries
@@ -1040,13 +1041,13 @@ export const UNINSTALL_DATA_ENTRY_TEXT: Readonly<Record<DataEntry, string>> = Ob
 export function getAutostartStatusBadgeText(status: AutostartRegistrationStatus | undefined, language: AppLanguage): string {
   switch (status) {
     case 'registered':
-      return language === 'ru' ? 'Активен' : 'Active';
+      return t('s.autostart.active', undefined, language);
     case 'unregistered':
-      return language === 'ru' ? 'Отключён' : 'Disabled';
+      return t('s.autostart.disabled', undefined, language);
     case 'not-installed':
-      return language === 'ru' ? 'Не установлено' : 'Not installed';
+      return t('s.autostart.notInstalled', undefined, language);
     case 'failed':
-      return language === 'ru' ? 'Сбой' : 'Failed';
+      return t('s.autostart.failed', undefined, language);
     default:
       return '—';
   }

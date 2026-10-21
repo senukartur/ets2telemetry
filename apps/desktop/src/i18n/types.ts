@@ -429,7 +429,7 @@ export type I18nKey =
   | 'tr.ivRecorded' | 'tr.ivGap' | 'tr.ivTotal'
   | 'ev.accepted' | 'ev.refuel' | 'ev.fine' | 'ev.toll' | 'ev.gap' | 'ev.delivered' | 'ev.cancelled' | 'ev.closed' | 'ev.recording'
   | 's.general' | 's.units' | 's.overlay' | 's.sections' | 's.plugin' | 's.data' | 's.about'
-  | 's.lang' | 's.langD' | 's.autostart' | 's.autostartD' | 's.autostart.active' | 's.autostart.disabled' | 's.autostart.notInstalled' | 's.autostart.failed' | 's.autostart.saveFailed'
+  | 's.lang' | 's.langD' | 's.autostart' | 's.autostartD' | 's.autostart.active' | 's.autostart.disabled' | 's.autostart.notInstalled' | 's.autostart.notInstalledNote' | 's.autostart.failed' | 's.autostart.saveFailed'
   | 's.close' | 's.closeD' | 's.closeV'
   | 's.u.metric' | 's.u.us' | 's.u.d'
   | 's.o.show' | 's.o.showD' | 's.o.layout' | 's.o.scale' | 's.o.opacity'
