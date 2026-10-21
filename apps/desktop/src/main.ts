@@ -1,5 +1,4 @@
-import {isHardModeStatus, type HardModeStatus} from '../../../packages/contracts/src/hard-mode';
-import {unknownHardMode} from '../../../packages/telemetry-core/src/hard-mode';
+import {HardModeServiceCache} from './hard-mode/service-status';
 import {app, BrowserWindow, dialog, ipcMain, Menu, MessageChannelMain, nativeImage, screen, shell, Tray, utilityProcess, type MessagePortMain, type UtilityProcess, type IpcMainEvent, type IpcMainInvokeEvent} from 'electron';
 import {spawn} from 'node:child_process';
 import {existsSync, mkdirSync} from 'node:fs';
@@ -127,9 +126,8 @@ function runApplication(profileError: unknown): void {
   let dashboardPort: MessagePortMain | undefined, overlayPort: MessagePortMain | undefined, upstream: MessagePortMain | undefined;
   let upstreamRecovery: ReturnType<typeof setTimeout> | undefined;
   let tray: Tray | undefined, trayPresenter: TrayPresenter | undefined, trayUnavailable = false;
-  let hardModeReceivedNs: bigint | undefined;
-  let hardMode: HardModeStatus = {assessment: unknownHardMode(Date.now()), trip: null};
-  function retireHardMode(): void {hardModeReceivedNs = undefined; hardMode = {assessment: unknownHardMode(Date.now()), trip: null};}
+  const hardMode = new HardModeServiceCache();
+  function retireHardMode(): void {hardMode.retire();}
   let health: AppHealth = initialHealth(), appStateSubscribed = false, lastLive: LiveTelemetry = initialLive();
   let failureReported = false, reportedFailureCode: unknown;
   // ET-015c (G4, G6, G12): the service whose recording status main accepts, until it fails, exits or restarts; the
@@ -629,9 +627,7 @@ function runApplication(profileError: unknown): void {
       const type = message && typeof message === 'object' && !Array.isArray(message) ? (message as Record<string, unknown>).type : undefined;
       if (type === 'heartbeat') return;
       if (type === 'hard-mode') {
-        const incoming = (message as Record<string, unknown>).status;
-        hardModeReceivedNs = isHardModeStatus(incoming) ? process.hrtime.bigint() : undefined;
-        hardMode = isHardModeStatus(incoming) ? incoming : {assessment: unknownHardMode(Date.now()), trip: null};
+        hardMode.accept(message);
         return;
       }
       if (latency && type === 'overlay-latency-result') {latency.reply(message); return;}
@@ -733,8 +729,7 @@ function runApplication(profileError: unknown): void {
   for (const channel of ['hard-mode:status', 'hard-mode:refresh']) ipcMain.handle(channel, (event, ...request: unknown[]) => {
     if (!trusted(event) || request.length !== 0) throw new Error('Untrusted Hard Mode request');
     if (channel === 'hard-mode:refresh' && serviceReady && service && !supervisor.stopping) service.postMessage({type: 'hard-mode-refresh'});
-    const age = hardModeReceivedNs === undefined ? -1n : process.hrtime.bigint() - hardModeReceivedNs;
-    return serviceReady && !supervisor.stopping && age >= 0n && age <= 3_000_000_000n ? hardMode : {assessment: unknownHardMode(Date.now()), trip: hardMode.trip};
+    return hardMode.status(serviceReady && !supervisor.stopping);
   });
   ipcMain.handle('app:get-state', event => {if (!trusted(event)) throw new Error('Untrusted application state request'); return appState();});
   ipcMain.handle('app:exit', event => {if (!trusted(event)) throw new Error('Untrusted exit request'); requestExit('renderer');});

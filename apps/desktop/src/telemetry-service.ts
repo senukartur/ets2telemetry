@@ -3,7 +3,6 @@ import {HardModeReader} from './hard-mode/reader';
 import {HardModeMonitor} from './hard-mode/monitor';
 import {inspectGameProcess} from './hard-mode/process';
 import {readSteamRoot} from './plugin-setup/steam-registry';
-import type {HardModeDetails} from '../../../packages/contracts/src/hard-mode';
 import { Worker } from 'node:worker_threads';
 import path from 'node:path';
 import { mkdtemp, rm, open } from 'node:fs/promises';
@@ -101,7 +100,6 @@ function recordV1State(state: V1SourceState): void {
   const count = (v1StatusCounts.get(state.status) ?? 0) + 1; v1StatusCounts.set(state.status, count);
   if ((count & (count - 1)) === 0) log('V1_SOURCE_STATUS', undefined, {status: state.status, selection: state.selection, durable: state.durable.state, count});
 }
-let hardModeTrip: HardModeDetails | null = null;
 let hardModeGame: 'ets2' | 'ats' | undefined;
 let steamRoot: string | undefined;
 // Registry discovery has no renderer input; an unavailable Cloud root fails closed while local profiles remain readable.
@@ -115,7 +113,7 @@ const hardMode = new HardModeMonitor((source, ns, at, signal) => {
   return reader.read(source, ns, at, signal);
 }, observation => {
   if (hardModeGame) runtime.observeHardMode(hardModeGame, observation);
-  port.postMessage({type: 'hard-mode', status: {...hardMode.status(), trip: hardModeTrip}});
+  port.postMessage(hardMode.publication());
 });
 let hardModeReader: HardModeReader | undefined = hardModeFixtureReader(process.env) ?? undefined;
 let lastV1: V1SourceState | undefined;
@@ -142,7 +140,7 @@ function onV1State(state: V1SourceState): void {
 // orderly stop begins; production, which builds no recorder, reports {state: 'disabled'} once.
 const runtime = createRecordingRuntime({env: process.env, gameHistory: GAME_HISTORY_RECORDING, localAppData: process.env.LOCALAPPDATA, log,
   createWorker: () => historyWorker(__dirname), connectGame: (configuration, game) => new NativePipeClient(configuration, game, diagnoseV1Broker, 'v1'),
-  hardModeEvidence: () => hardMode.evidence(), onHardModeTrip: details => {hardModeTrip = details; port.postMessage({type: 'hard-mode', status: {...hardMode.status(), trip: details}});},
+  hardModeEvidence: () => hardMode.evidence(), onHardModeTrip: details => {port.postMessage({type: 'hard-mode', update: 'trip', trip: details});},
   onV1State, onRecordingStatus: status => port.postMessage({type: 'recording', status})});
 const v1 = runtime.v1;
 // ET-016 (J2, J4): journal reads from main, through the database the runtime opened, one at a time and only while it is

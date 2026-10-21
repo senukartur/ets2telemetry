@@ -123,8 +123,10 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
     const m = new HardModeMonitor(scan, value => changes.push(value), () => mono);
     const bind = () => m.select({source, monotonicNs: '100', clockId: 'clock', boundary: {clockId: 'clock', probeSentClientNs: (++mono).toString(), receivedSourceNs: '200'}});
     m.select({source, monotonicNs: '100', clockId: 'clock'}); await Promise.resolve(); mono += 1_000_000_000n; bind(); await m.refresh();
+    expect(m.publication()).toMatchObject({update: 'assessment', assessment: {state: 'pass'}, remainingNs: '1999999999'});
     const utc = vi.spyOn(Date, 'now').mockReturnValue(1);
-    mono = 3_500_000_000n; expect(m.evidence().assessment.state).toBe('unknown');
+    mono = 2_900_000_000n; expect(m.publication().remainingNs).toBe('100000000');
+    mono = 3_500_000_000n; expect(m.publication()).toMatchObject({assessment: {state: 'unknown'}, remainingNs: '0'}); expect(m.evidence().assessment.state).toBe('unknown');
     const pending = m.refresh(); await Promise.resolve(); bind(); await pending;
     expect(changes.slice(-2).map(value => value.assessment.state)).toEqual(['unknown', 'pass']); utc.mockRestore(); m.close();
   });

@@ -1,4 +1,5 @@
 import type {HardModeObservation, HardModeStatus} from '../../../../packages/contracts/src/hard-mode';
+import {HARD_MODE_COVERAGE_NS, type HardModeServiceMessage} from './service-status';
 import type {SourceIdentity} from '../../../../packages/contracts/src/protocol-v1';
 import {unknownHardMode} from '../../../../packages/telemetry-core/src/hard-mode';
 export const HARD_MODE_POLL_MS = 1000, HARD_MODE_DEADLINE_MS = 2000;
@@ -40,6 +41,11 @@ export class HardModeMonitor {
   evidence(): HardModeObservation {
     if (this.expired()) return this.unknown();
     return structuredClone(this.observation);
+  }
+  publication(): Extract<HardModeServiceMessage, {update: 'assessment'}> {
+    const age = this.observedClientNs === undefined ? -1n : this.nowNs() - this.observedClientNs;
+    const remaining = age >= 0n && age < HARD_MODE_COVERAGE_NS ? HARD_MODE_COVERAGE_NS - age : 0n;
+    return {type: 'hard-mode', update: 'assessment', assessment: this.evidence().assessment, remainingNs: remaining.toString()};
   }
   status(): HardModeStatus {return {assessment: this.evidence().assessment, trip: null};}
   start(): void {this.timer ??= setInterval(() => {void this.refresh();}, HARD_MODE_POLL_MS); this.timer.unref();}
