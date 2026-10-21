@@ -12,7 +12,7 @@ import {promisify} from 'node:util';
  * `jobResult` names the wrapper's job-result.json (ET-019 PR-11): the receipt must then also carry valid resource evidence.
  * With `numbers: 'int64'` only that resource evidence is validated, with PowerShell 7's Int64 JSON integers.
  */
-export type RuntimeReceiptCase = {receipt: string; code: number; scenario?: string; numbers?: 'int64'; mode?: string; jobResult?: string};
+export type RuntimeReceiptCase = {receipt: string; code: number; scenario?: string; uiCase?: string; numbers?: 'int64'; mode?: string; jobResult?: string};
 export type RuntimeReceiptResult = {passed?: boolean; driverResultAvailable?: boolean; reason?: string | null; error?: string};
 
 // Measured budgets for one batch; docs/ci.md#powershell-validator-test-budgets records the evidence.

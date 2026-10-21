@@ -1,3 +1,4 @@
+import {settingsPanel} from './ui-navigation.mjs';
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
@@ -167,6 +168,7 @@ const CARD_EXCLUDED = {...CARD_A, 'plugin-target-ats-steam-0-state': 'Not manage
  * and the plugins folder this application created for it.
  */
 export async function runPluginJourney({dashboard, fixture, config, before, record, phase = () => undefined}) {
+  await settingsPanel(dashboard, 'plugin');
   const bundled = await bundledPluginHash(config);
   record.view = await until(() => appPlugins(dashboard), settled(RUN_A), 'PLUGIN_SETUP_NOT_SETTLED', 30000);
   record.card = await until(() => cardStates(dashboard), value => JSON.stringify(value) === JSON.stringify(CARD_A), 'PLUGIN_CARD_NOT_SHOWN', 10000);
@@ -196,6 +198,7 @@ export async function runPluginJourney({dashboard, fixture, config, before, reco
 
 /** Run B: the restart reaches the same states without writing: every fixture file keeps its bytes and modification time. */
 export async function verifyPluginRestart({dashboard, fixture, before, record, phase = () => undefined}) {
+  await settingsPanel(dashboard, 'plugin');
   record.restartView = await until(() => appPlugins(dashboard), view => view.games.ats.excluded && settled(RUN_A_EXCLUDED)(view), 'PLUGIN_RESTART_NOT_SETTLED', 30000);
   record.restartCard = await until(() => cardStates(dashboard), value => JSON.stringify(value) === JSON.stringify(CARD_EXCLUDED), 'PLUGIN_RESTART_CARD_NOT_SHOWN', 10000);
   assertNoPath(await cardText(dashboard), fixture);
@@ -217,6 +220,7 @@ const DIAGNOSTICS_SAVED = 'Diagnostics saved.';
  * computer names are looked for only in runtime content (diagnostics-bundle-check.mjs), where the bundle redacts them.
  */
 export async function runDiagnosticsExport({application, dashboard, config, fixture, record}) {
+  await settingsPanel(dashboard, 'plugin');
   const directory = path.join(config.output, 'diagnostics-export'), file = path.join(directory, 'diagnostics.json');
   await mkdir(directory);
   const button = dashboard.getByTestId('plugin-export-diagnostics');
@@ -262,6 +266,7 @@ export const NO_GAME_SELECTED_DIAGNOSIS = 'No game is selected as the source. Ch
 const CHANGING_CONTROLS = ['plugin-ets2-managed', 'plugin-ets2-choose', 'plugin-ats-managed', 'plugin-ats-choose', 'plugin-retry'];
 /** In the disabled mode the card shows its note and disables every control that would change nothing. */
 export async function verifyDisabledPluginCard(dashboard) {
+  await settingsPanel(dashboard, 'plugin');
   const note = dashboard.getByTestId('plugin-mode');
   await note.waitFor({state: 'attached', timeout: 10000});
   const record = {note: await note.innerText(), controls: {}};

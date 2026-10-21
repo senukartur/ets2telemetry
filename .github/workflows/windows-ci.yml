@@ -134,6 +134,26 @@ jobs:
         if: github.event_name != 'pull_request'
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario hard-mode
       # ET-019 PR-7: a newer-schema history database is refused, shown in the Journal tab and left unchanged.
+      - name: Bounded development Yukon UI shell shard
+        if: github.event_name != 'pull_request'
+        run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario ui -UiCase shell
+
+      - name: Bounded development Yukon UI live shard
+        if: github.event_name != 'pull_request'
+        run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario ui -UiCase live
+
+      - name: Bounded development Yukon UI journal shard
+        if: github.event_name != 'pull_request'
+        run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario ui -UiCase journal
+
+      - name: Bounded development Yukon UI settings shard
+        if: github.event_name != 'pull_request'
+        run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario ui -UiCase settings
+
+      - name: Bounded development Yukon UI overlay shard
+        if: github.event_name != 'pull_request'
+        run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario ui -UiCase overlay
+
       - name: Bounded development newer history database refusal smoke
         if: github.event_name != 'pull_request'
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario refusal
@@ -198,6 +218,21 @@ jobs:
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged -Scenario journal
       - name: Packaged Hard Mode journey
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged -Scenario hard-mode
+      - name: Bounded packaged Yukon UI shell shard
+        run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged -Scenario ui -UiCase shell
+
+      - name: Bounded packaged Yukon UI live shard
+        run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged -Scenario ui -UiCase live
+
+      - name: Bounded packaged Yukon UI journal shard
+        run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged -Scenario ui -UiCase journal
+
+      - name: Bounded packaged Yukon UI settings shard
+        run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged -Scenario ui -UiCase settings
+
+      - name: Bounded packaged Yukon UI overlay shard
+        run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged -Scenario ui -UiCase overlay
+
       - name: Bounded packaged newer history database refusal smoke
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged -Scenario refusal
       - name: Extended existing safety regressions

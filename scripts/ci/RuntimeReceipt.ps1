@@ -740,7 +740,7 @@ function Test-ProcessMemoryReceipt {
     param([object]$Driver)
     $memory = $Driver.processMemory
     if ($null -eq $memory -or $memory -is [array] -or $null -eq $memory.kinds -or $memory.kinds -is [array]) { return $false }
-    $run = if ($Driver.scenarioKind -cin @('lifecycle','recording','journal','plugin')) { 'restart' } else { 'first' }
+    $run = if ($Driver.scenarioKind -cin @('lifecycle','recording','journal','plugin') -or ($Driver.scenarioKind -ceq 'ui' -and $Driver.ui.case -ceq 'settings')) { 'restart' } else { 'first' }
     if ($memory.run -cne $run -or $memory.unavailable.storageWorker -cne 'WORKER_THREAD_OF_TELEMETRY_SERVICE') { return $false }
     $kinds = @($memory.kinds.PSObject.Properties | ForEach-Object { $_.Name })
     foreach ($kind in $kinds) {
@@ -761,9 +761,92 @@ function Test-ResourceEvidence {
     return ((Test-JobMemoryReceipt -Memory $Job.memory) -and (Test-ColdLaunchReceipt -Driver $Driver) -and (Test-ProcessMemoryReceipt -Driver $Driver))
 }
 
+# ET-028 visual shards: exact language/size/screen coverage, assertions and bounded plain PNG files.
+function Test-UiReceipt {
+    param([object]$Driver, [string]$ExpectedUiCase, [string]$Directory)
+    $ui = $Driver.ui
+    $cases = @('shell','live','journal','settings','overlay')
+    if ($Driver.mode -cnotin @('development','packaged') -or $ExpectedUiCase -cnotin $cases -or $null -eq $ui -or $ui.case -cne $ExpectedUiCase -or
+        (@($ui.languages) -join ',') -cne 'en,ru' -or @($ui.sizes).Count -ne 2 -or
+        $ui.sizes[0].width -ne 1280 -or $ui.sizes[0].height -ne 800 -or $ui.sizes[1].width -ne 1100 -or $ui.sizes[1].height -ne 720) { return $false }
+    $flags = @('bilingual','bothSizes','security','offlineFonts','recordingIndicator')
+    $screens = @()
+    switch -CaseSensitive ($ExpectedUiCase) {
+        'shell' { $flags += @('navigation','headingFocus','journalUnmount','menuKeyboard','exitAvailable','laterAccount'); $screens = @('live','journal','settings','account') }
+        'live' { $flags += @('numericGauge','unavailableVsZero','paused','staleDashes','rawNames','unsupportedTrip','jobViewport','hmNamesReadable'); $screens = @('current','zero','missing','paused','stale') }
+        'journal' { $flags += @('syntheticBanner','pageReturn','chartBounded','rawTabs','searchPlanned','tripRegions','tableReadable'); $screens = @('list','trip','intervals','timeline','samples') }
+        'settings' { $flags += @('allPanels','allSections','committedSave','sourceSelector','uninstallRefusal','refusedSave','readOnly','controlsKeyboard','lastEnabled','fontLicense'); $screens = @('general','units','overlay','sections','plugin','data','about','save-error') }
+        'overlay' { $flags += @('fourLayouts','transparent','contained','independentFont','missing','paused','staleDashes','heroSubsets'); $screens = @('strip','card','cluster','hud') }
+    }
+    foreach ($flag in $flags) { if ($ui.flags.$flag -isnot [bool] -or !$ui.flags.$flag) { return $false } }
+    if (@($ui.screenshots).Count -ne $(if ($ExpectedUiCase -ceq 'overlay') { 40 } elseif ($ExpectedUiCase -ceq 'settings') { 34 } else { 4 * $screens.Count })) { return $false }
+    foreach ($language in @('en','ru')) {
+        foreach ($size in @(@{width=1280;height=800},@{width=1100;height=720})) {
+            $pairScreens = $screens
+            if ($ExpectedUiCase -ceq 'overlay' -and $size.width -eq 1280) {
+                $pairScreens = @($screens | ForEach-Object { $_; "$_-missing"; "$_-paused"; "$_-stale" })
+            }
+            foreach ($screen in $pairScreens) {
+                $rows = @($ui.screenshots | Where-Object { $_.language -ceq $language -and $_.width -eq $size.width -and $_.height -eq $size.height -and $_.screen -ceq $screen })
+                if ($rows.Count -ne 1) { return $false }
+                $row = $rows[0]
+                $expectedFile = "ui-$ExpectedUiCase-$screen-$language-$($size.width)x$($size.height).png"
+                if ($row.file -cne $expectedFile -or !(Test-ReceiptInteger -Value $row.bytes -Minimum 501 -Maximum 5242880) -or
+                    !(Test-ReceiptInteger -Value $row.imageWidth -Minimum 1 -Maximum 2560) -or !(Test-ReceiptInteger -Value $row.imageHeight -Minimum 1 -Maximum 1600)) { return $false }
+                $file = Join-Path $Directory $expectedFile
+                if (!(Test-Path -LiteralPath $file -PathType Leaf)) { return $false }
+                $item = Get-Item -LiteralPath $file
+                if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint -or $item.Length -ne $row.bytes) { return $false }
+                $header = New-Object byte[] 24
+                $stream = [IO.File]::OpenRead($file)
+                try { if ($stream.Read($header, 0, 24) -ne 24) { return $false } } finally { $stream.Dispose() }
+                if (($header[0..7] -join ',') -cne '137,80,78,71,13,10,26,10') { return $false }
+                $imageWidth = [double]$header[16] * 16777216 + [double]$header[17] * 65536 + [double]$header[18] * 256 + $header[19]
+                $imageHeight = [double]$header[20] * 16777216 + [double]$header[21] * 65536 + [double]$header[22] * 256 + $header[23]
+                if ($imageWidth -ne $row.imageWidth -or $imageHeight -ne $row.imageHeight) { return $false }
+                if ($ExpectedUiCase -cne 'overlay' -and ($imageWidth -ne $size.width -or $imageHeight -ne $size.height)) { return $false }
+            }
+        }
+    }
+    if ($ExpectedUiCase -ceq 'settings') {
+        $readOnly = $ui.readOnly
+        if ($null -eq $readOnly -or $readOnly.state -cne 'newer-version' -or $readOnly.language -cne 'en' -or
+            $readOnly.writable -isnot [bool] -or $readOnly.writable -or $readOnly.bytesUnchanged -isnot [bool] -or !$readOnly.bytesUnchanged -or
+            $ui.firstLauncherExit -ne 0 -or $readOnly.launcherExit -ne 0 -or @($ui.saveFailureFacts).Count -ne 4) { return $false }
+        foreach ($fact in $ui.saveFailureFacts) { if ($fact.step -cne 'target' -or $null -ne $fact.code) { return $false } }
+        $expectedErrors = @($Driver.mainEvents | Where-Object { $_.event -ceq 'SETTINGS_WRITE_FAILED' })
+        if ($expectedErrors.Count -ne 4) { return $false }
+        foreach ($row in $expectedErrors) { if ($row.facts.step -cne 'target' -or $null -ne $row.facts.code) { return $false } }
+        if (!(Test-OrderlyRunEvent -MainEvents @($Driver.mainEvents | Where-Object { $_.event -cne 'SETTINGS_WRITE_FAILED' }) -ServiceEvents @($Driver.serviceEvents)) -or
+            !(Test-OrderlyRunEvent -MainEvents @($readOnly.mainEvents) -ServiceEvents @($readOnly.serviceEvents)) -or
+            !(Test-OverlayRendererIsolation -Windows @($readOnly.windows)) -or !(Test-OverlayTopmost -Windows @($readOnly.windows))) { return $false }
+        foreach ($window in $readOnly.windows) {
+            if ($window.sandbox -isnot [bool] -or !$window.sandbox -or $window.isolation -isnot [bool] -or !$window.isolation -or $window.node -isnot [bool] -or $window.node) { return $false }
+        }
+        $fallback = @($readOnly.mainEvents | Where-Object { $_.event -ceq 'SETTINGS_FALLBACK' })
+        if ($fallback.Count -ne 1 -or $fallback[0].facts.state -cne 'newer-version') { return $false }
+        foreach ($size in @(@{width=1280;height=800},@{width=1100;height=720})) {
+            $shots = @($ui.screenshots | Where-Object { $_.screen -ceq 'read-only' -and $_.language -ceq 'en' -and $_.width -eq $size.width -and $_.height -eq $size.height })
+            if ($shots.Count -ne 1) { return $false }
+            $shot = $shots[0]
+            $file = Join-Path $Directory "ui-settings-read-only-en-$($size.width)x$($size.height).png"
+            if ($shot.file -cne (Split-Path -Leaf $file) -or !(Test-Path -LiteralPath $file -PathType Leaf)) { return $false }
+            $item = Get-Item -LiteralPath $file
+            if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint -or $item.Length -ne $shot.bytes -or $item.Length -le 500 -or $item.Length -gt 5242880 -or
+                $shot.imageWidth -ne $size.width -or $shot.imageHeight -ne $size.height) { return $false }
+            $header = New-Object byte[] 24; $stream = [IO.File]::OpenRead($file)
+            try { if ($stream.Read($header, 0, 24) -ne 24) { return $false } } finally { $stream.Dispose() }
+            if (($header[0..7] -join ',') -cne '137,80,78,71,13,10,26,10' -or
+                ([double]$header[16] * 16777216 + [double]$header[17] * 65536 + [double]$header[18] * 256 + $header[19]) -ne $size.width -or
+                ([double]$header[20] * 16777216 + [double]$header[21] * 65536 + [double]$header[22] * 256 + $header[23]) -ne $size.height) { return $false }
+        }
+    }
+    return $true
+}
+
 function Test-RuntimeReceipt {
     param([string]$DriverResultPath, [string]$ExpectedCommit, [string]$ExpectedMode, [int]$JobExitCode,
-        [string]$ExpectedScenario, [string]$JobResultPath)
+        [string]$ExpectedScenario, [string]$JobResultPath, [string]$ExpectedUiCase)
     $validation = [ordered]@{passed=$false; driverResultAvailable=$false; reason=$null; driverPassed=$null}
     if (!(Test-Path -LiteralPath $DriverResultPath -PathType Leaf)) {
         $validation.reason = 'DRIVER_RESULT_MISSING'; return $validation
@@ -901,6 +984,9 @@ function Test-RuntimeReceipt {
         if (@($driver.serviceEvents | Where-Object { $_.event -ceq 'STORAGE_VERIFIED' }).Count -lt 1 -or
             @($driver.serviceEvents | Where-Object { $_.event -ceq 'SERVICE_REPORT' -and $_.detail.type -ceq 'stopped' }).Count -lt 1) { $valid = $false }
         if (!$valid) { $validation.reason = 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'; return $validation }
+    }
+    if ($ExpectedScenario -ceq 'ui' -and !(Test-UiReceipt -Driver $driver -ExpectedUiCase $ExpectedUiCase -Directory (Split-Path -Parent $DriverResultPath))) {
+        $validation.reason = 'UI_RESULT_INCOMPLETE_OR_INVALID'; return $validation
     }
     if ($ExpectedScenario -ceq 'hard-mode') {
         $hardMode = $driver.hardMode

@@ -1,3 +1,4 @@
+import {waitForStartup} from './ui-navigation.mjs';
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
 import {createHash} from 'node:crypto';
@@ -33,7 +34,6 @@ import {clickTestId, dialogCalls, exportTrip, exportValidator, listState, openDe
 
 export const RECORDING_TARGET = 'synthetic:smoke';
 export const RECORDING_SCENARIO = 'normal-delivery-runtime-journey';
-const READY_TEXT = 'Telemetry service ready; isolated storage probe verified';
 const PIPE_PATTERN_V1 = /^\\\\\.\\pipe\\ETS2Telemetry-SYNTHETIC-TEST-v1-[1-9][0-9]*-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const durable = Object.freeze({durable: true, commit: 'each', ack: 'each'});
 /**
@@ -351,7 +351,7 @@ export async function runRecordingSmoke({application, launcher, dashboard, recor
  */
 export async function verifyRecordingRestart({application, record, rendererPages, recording, events, config}) {
   const {dashboard} = await rendererPages(application);
-  await dashboard.getByText(READY_TEXT, {exact: true}).waitFor({state: 'visible', timeout: 10000});
+  await waitForStartup(dashboard);
   record.restart = {ready: await waitForCurrentTelemetry(dashboard)};
   const state = await lifecycleState(application);
   record.restart.servicePid = state.servicePid;

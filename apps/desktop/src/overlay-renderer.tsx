@@ -2,7 +2,7 @@ import React, {Fragment, useEffect, useMemo, useState} from 'react';
 import type {OverlayPresentation} from '../../../packages/contracts/src';
 import {SectionIcon, TagIcon} from './overlay-icons';
 import {STRIP_ITEM_MAX_WIDTH_CSS, STRIP_TAG_MAX_WIDTH_CSS} from './overlay-strip';
-import {overlayView, type OverlayItem, type OverlayTag, type OverlayView} from './overlay-view';
+import {overlayView, overlayCardParts, type OverlayItem, type OverlayTag, type OverlayView} from './overlay-view';
 import {latencyBits, MARKER_CELL, MARKER_HEIGHT} from './latency-marker';
 import './renderer.css';
 
@@ -11,7 +11,7 @@ import './renderer.css';
 // mode (ET-012b) only adds an outline and a drag region; it shows no hint text and has no controls.
 
 /** Ring geometry of the cluster's RPM gauge in SVG user units. */
-const RING_RADIUS = 52, RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
+const RING_RADIUS = 40, RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
 
 function Value({item}: {item: OverlayItem}) {
   return <span className="overlay-value-group">
@@ -28,7 +28,7 @@ function Tags({tags, maxWidth}: {tags: OverlayTag[]; maxWidth?: number}) {
 }
 
 /**
- * 36 px rows (ET-012c): tags, then the groups' items with icons, wrapped whole onto as many rows as the window reserves
+ * 38 px rows (ET-012c): tags, then the groups' items with icons, wrapped whole onto as many rows as the window reserves
  * for the enabled sections. The first item of each later group draws a thin divider before itself, so an item that
  * starts a row keeps its divider. Every item is capped at the maximum width main reserved for it (overlay-strip.ts); a
  * longer value ends in an ellipsis, so every enabled section stays inside the window.
@@ -51,10 +51,14 @@ function Strip({view}: {view: OverlayView}) {
  * inside the window; a longer value ends in an ellipsis.
  */
 function CardLayout({view}: {view: OverlayView}) {
+  const parts = overlayCardParts(view);
   return <div className="overlay-surface overlay-card-body">
     <header className="overlay-card-header"><span className="overlay-source">{view.source}</span><Tags tags={view.tags} /></header>
+    {parts.hero.length ? <div className="overlay-card-hero" data-count={parts.hero.length} data-speed={String(parts.hero.some(item => item.id === 'speed'))} data-testid="overlay-card-hero" style={{height: parts.heroHeight}}>
+      {parts.hero.map(item => <div className={`overlay-card-${item.id}`} key={item.id} data-testid={`overlay-section-${item.id}`} aria-label={item.label}><Value item={item} /></div>)}
+    </div> : null}
     <dl className="overlay-rows">
-      {view.items.map(item => <div key={item.id} className="overlay-row" data-testid={`overlay-section-${item.id}`}>
+      {parts.rows.map(item => <div key={item.id} className="overlay-row" data-testid={`overlay-section-${item.id}`}>
         <dt><SectionIcon id={item.id} size={14} />{item.label}</dt><dd><Value item={item} /></dd>
       </div>)}
     </dl>
@@ -70,9 +74,10 @@ function Cluster({view}: {view: OverlayView}) {
   return <div className="overlay-cluster-body">
     {gauge ? <div className="overlay-gauge">
       <svg className="overlay-ring" viewBox="0 0 120 120" aria-hidden="true" focusable="false">
-        <circle className="overlay-ring-track" cx="60" cy="60" r={RING_RADIUS} />
+        {gauge.speed ? <circle className="overlay-ring-track overlay-speed-track" data-testid="overlay-speed-track" cx="60" cy="60" r="52" /> : null}
+        {gauge.rpm ? <circle className="overlay-ring-track overlay-rpm-track" cx="60" cy="60" r={RING_RADIUS} /> : null}
         {/* No arc without a current reading or at 0 rpm: a round line cap would otherwise draw a dot. */}
-        {ring > 0 ? <circle className="overlay-ring-value" cx="60" cy="60" r={RING_RADIUS} transform="rotate(-90 60 60)"
+        {ring > 0 ? <circle className="overlay-ring-value" data-testid="overlay-rpm-arc" cx="60" cy="60" r={RING_RADIUS} transform="rotate(-90 60 60)"
           strokeDasharray={`${ring * RING_CIRCUMFERENCE} ${RING_CIRCUMFERENCE}`} /> : null}
       </svg>
       <div className="overlay-gauge-centre">

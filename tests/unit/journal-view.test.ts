@@ -1,3 +1,4 @@
+import {journalTileValues} from '../../apps/desktop/src/screens/journal-tiles';
 import {describe, expect, it} from 'vitest';
 import type {
   JournalCallCode, JournalEvent, JournalEventPage, JournalInterval, JournalIntervalPage, JournalSample, JournalSamplePage, JournalStorageCode, JournalTripDetail,
@@ -263,10 +264,12 @@ describe('trip detail (J13, J21, J22; REG-014, REG-009)', () => {
     expect(fields(text.sections, 'job')).toMatchObject({
       specialJob: 'нет',
       cargoLoaded: 'да',
-      deadline: 'День 10, 00:40 [game time]'
+      deadline: 'День 10, 00:40 [игровое время]'
     });
+    expect(text.sections.find(section => section.id === 'money')?.title).toBe('Деньги');
+    expect(fields(text.sections, 'job').cargo).toBe(fields(journalDetailText(DELIVERED_DETAIL).sections, 'job').cargo);
     expect(fields(text.sections, 'delivery')).toMatchObject({
-      deliveryDuration: '7 ч 51 мин [game time]',
+      deliveryDuration: '7 ч 51 мин [игровое время]',
       autoPark: 'нет',
       autoLoad: 'да'
     });
@@ -394,4 +397,28 @@ describe('one-second samples (J14; REG-009, REG-017)', () => {
     const rows = journalSampleText(page, 'ets2', {units: DEFAULT, timeZone: ZONE, language: 'ru'}).rows;
     expect(rows[0]).toMatchObject({kind: 'sample', gameTime: 'День 9, 13:45'});
   });
+});
+
+it('keeps stored SDK names equal to known UI labels exact in both selected languages', () => {
+  const detail = structuredClone(DELIVERED_DETAIL);
+  for (const key of ['cargo', 'sourceCity', 'sourceCompany', 'destinationCity', 'destinationCompany'] as const) {
+    detail.job.values[key] = {available: true, value: key === 'cargo' ? 'Speed' : 'Settings'};
+    detail.trip.job[key] = detail.job.values[key];
+  }
+  for (const language of ['en', 'ru'] as const) {
+    const view = journalDetailText(detail, {language});
+    expect(fields(view.sections, 'job')).toMatchObject({cargo: 'Speed', sourceCity: 'Settings', sourceCompany: 'Settings', destinationCity: 'Settings', destinationCompany: 'Settings'});
+  }
+});
+
+it('separates typed hero amounts and missing values from their provenance without converting exact money', () => {
+  expect(journalTileValues(DELIVERED_DETAIL, {language: 'ru'})).toEqual({distance: {value: '152.0 км', note: null},
+    fuel: {value: '—', note: 'недоступно (не наблюдалось)'}, money: {value: '15000 EUR', note: 'Валюта подтверждена SDK'}, realDuration: '—'});
+  expect(journalTileValues(ZERO_DETAIL).distance).toEqual({value: '0.0 mi', note: null});
+  expect(journalTileValues(ZERO_DETAIL).fuel).toEqual({value: '0.0 US gal', note: null});
+  const detail = structuredClone(DELIVERED_DETAIL);
+  if (detail.outcomeDetails?.record.type !== 'job.delivered') throw new Error('Delivered fixture unavailable');
+  detail.outcomeDetails.record.revenue = money('9007199254740993.123456', 's64', UNKNOWN_CURRENCY);
+  expect(journalTileValues(detail).money).toEqual({value: '9007199254740993.123456', note: 'Currency unknown'});
+  expect(journalTileValues(CANCELLED_DETAIL).money).toEqual({value: '12000 EUR', note: 'Currency documented by the SDK'});
 });

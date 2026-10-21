@@ -123,7 +123,7 @@ function liveLinesInViewport() {
     const node = globalThis.document.querySelector(`[data-testid="${id}"]`), bounds = node?.getBoundingClientRect();
     return bounds ? {top: Math.round(bounds.top), bottom: Math.round(bounds.bottom), visible: bounds.width > 0 && bounds.height > 0} : null;
   };
-  return {innerHeight: globalThis.innerHeight, scrollY: globalThis.scrollY, status: box('telemetry-status'), speed: box('speed'), fuel: box('fuel')};
+  return {innerHeight: globalThis.innerHeight, scrollY: globalThis.scrollY, status: box('shell.status.connection'), speed: box('speed'), fuel: box('fuel')};
 }
 
 /** Chooses a filter in its shadcn Select: open the trigger, then click the option, which Radix renders in a portal. */
@@ -145,7 +145,7 @@ export async function runJournalEmpty({dashboard, record}) {
     assert.ok(viewport[line]?.visible && viewport[line].top >= 0 && viewport[line].bottom <= viewport.innerHeight, `The ${line} line is outside the first viewport`);
   }
   record.liveLinesInViewport = true;
-  assert.equal(await dashboard.getByTestId('tab-live').getAttribute('aria-selected'), 'true');
+  assert.equal(await dashboard.getByTestId('tab-live').getAttribute('aria-current'), 'page');
   await clickTestId(dashboard, 'tab-journal');
   const empty = record.emptyHistory = await until(dashboard, listState, {page: 1, count: 0});
   // Only one tab panel is shown: the Live cards are hidden, not stacked above the journal.

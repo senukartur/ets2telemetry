@@ -249,3 +249,11 @@ it('never puts a path into any text of a full view', () => {
   }));
   expect(JSON.stringify(text)).not.toMatch(/[A-Za-z]:\\\\|\\\\\\\\|steamapps|win_x64/);
 });
+
+it('localizes static templates before inserting plugin identity and folder ordinals', () => {
+  const text = pluginSetupText(view({}, {ets2: {discovery: 'found', targets: [target()]}}), 'ru');
+  expect(text.bundled).toBe('Плагин в комплекте: 0.2.0 (0123456789ab)');
+  expect(text.games.ets2.title).toBe('Euro Truck Simulator 2');
+  expect(text.games.ets2.targets[0]).toMatchObject({id: 'ets2:steam:0', state: 'installed', label: 'Папка Steam 1', status: 'Установлен'});
+  expect(pluginFolderChoiceText({outcome: 'cancelled'}, 'ru')).toBe('Папка не выбрана; ничего не изменено.');
+});

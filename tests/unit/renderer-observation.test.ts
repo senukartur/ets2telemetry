@@ -79,6 +79,7 @@ describe('coherent renderer acceptance', () => {
 interface FakeElement {innerText: string; visibility?: string; box?: {width: number; height: number; top: number}}
 type Change = (elements: Record<string, FakeElement[]>) => void;
 function fakeGlobals(elements: Record<string, FakeElement[]>) {
+  if (elements['telemetry-status'] && !elements['shell.status.connection']) elements = {...elements, 'shell.status.connection': elements['telemetry-status']};
   return {innerWidth: 784, innerHeight: 435, getComputedStyle: (element: {visibility: string}) => ({visibility: element.visibility}), document: {querySelectorAll: (selector: string) => {
     const id = /^\[data-testid="([^"]+)"\]$/.exec(selector)?.[1];
     if (!id) throw new Error(`unexpected selector ${selector}`);

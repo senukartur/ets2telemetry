@@ -767,3 +767,10 @@ ET-026 Claude follow-up: freshness eligibility is frozen at synchronous intake/o
 ET-026 review follow-up: the production HistoryStorage adapter forwards private freshness unchanged. Ordered observer publications select latest by actual FIFO publication order regardless of UTC; queued frozen captures/close/gap reapplication preserve published latest while first loss remains irreversible. Real-worker adapter and app journeys keep compliant trips open across multiple persisted passing refreshes before positive delivery.
 
 ET-026 Claude2 follow-up: private assessment publications carry only their bounded remaining monotonic lifetime; main consumes it on its own clock, and trip-only updates cannot renew proof. Strict invalid metadata and service retirement fail closed without changing renderer/native/storage contracts. The shared 2000ms read-plus-bind deadline, two sequential 1500ms process-query bounds, three-second coverage and four full bounded log reads retain their unmeasured false-loss/cost limits; no optimization or grace period is adopted.
+
+
+## ET-028 Yukon UI implementation candidate — October 21, 2026
+
+The assigned ET-028 candidate implements the approved Yukon dark desktop shell/screens, bundled Onest, local routing, settings panels, truthful placeholders, bounded sample-page chart and independently styled four-layout overlay. Existing game-provided names remain exact in EN/RU; raw protocol/audit/cvar evidence and money digits/currency are unchanged. The working source selector is in Settings → Data. One dashboard-lifetime Hard Mode controller retains the accepted drawer/hints; no qualification, source proof or recorder behavior changes.
+
+`GAME_HISTORY_RECORDING` stays false. Protocol/preload/storage/schema/native and package/data identities are unchanged. Current automated/visual evidence and failed attempts are recorded in [ET-028 validation](docs/validation/et-028.md); full verifier, independent code/visual review and hosted draft CI remain delivery gates. Manual native-caption/DPI/game-overlay/performance checks remain unverified. This is implementation status, not ET-028 acceptance, Ready or merge authorization.

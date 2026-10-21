@@ -18,28 +18,28 @@ it('fixes the hand-written maximum widths of every strip item', () => {
   expect(STRIP_ITEM_MAX_WIDTH_CSS).toEqual({'speed': 140, 'gear': 90, 'rpm': 130, 'fuel': 190, 'range': 140, 'sdk-consumption': 230, 'cargo': 300,
     'origin': 300, 'destination': 300, 'distance-driven': 150, 'distance-remaining': 150, 'deadline': 220, 'expected-income': 300, 'game-time': 200});
   expect({slots: STRIP_TAG_SLOTS, tag: STRIP_TAG_MAX_WIDTH_CSS, row: STRIP_ROW_HEIGHT_CSS, border: STRIP_BORDER_CSS, padding: STRIP_PADDING_X_CSS,
-    gap: STRIP_COLUMN_GAP_CSS}).toEqual({slots: 2, tag: 96, row: 36, border: 1, padding: 12, gap: 14});
+    gap: STRIP_COLUMN_GAP_CSS}).toEqual({slots: 2, tag: 96, row: 38, border: 1, padding: 12, gap: 14});
 });
 
 it.each([
   // Inner 1254: tags, speed, gear, rpm, fuel, range, sdk = 1210; cargo, origin, destination, distance driven = 1092
   // (distance remaining would reach 1256); distance remaining, deadline, income, game time = 912.
-  {name: 'every section at 1280 (1920 x 1080)', sections: ALL, width: 1280, rows: 3, height: 110},
-  {name: 'every section at 1248 (1280 x 720)', sections: ALL, width: 1248, rows: 3, height: 110},
-  {name: 'every section at 768 (800 x 600)', sections: ALL, width: 768, rows: 6, height: 218},
-  {name: 'every section at 928 (960 x 540)', sections: ALL, width: 928, rows: 5, height: 182},
-  {name: 'every section at 1247 (fractional client)', sections: ALL, width: 1247, rows: 3, height: 110},
-  {name: 'every section at the 480 minimum', sections: ALL, width: 480, rows: 10, height: 362},
-  {name: 'speed only at the 480 minimum', sections: only('speed'), width: 480, rows: 1, height: 38},
-  {name: 'every section at 1258 (scale 1.5)', sections: ALL, width: 1258, rows: 3, height: 110},
-  {name: 'every section at 944 (scale 2)', sections: ALL, width: 944, rows: 4, height: 146},
-  {name: 'every section at 1279 (scale 1.1)', sections: ALL, width: 1279, rows: 3, height: 110},
-  {name: 'speed only at 1279 (scale 1.01)', sections: only('speed'), width: 1279, rows: 1, height: 38},
-  {name: 'driving-only at 768', sections: OVERLAY_PRESETS['driving-only'], width: 768, rows: 2, height: 74},
-  {name: 'driving-only at 928', sections: OVERLAY_PRESETS['driving-only'], width: 928, rows: 2, height: 74},
-  {name: 'driving-only at 1248', sections: OVERLAY_PRESETS['driving-only'], width: 1248, rows: 1, height: 38},
-  {name: 'job-focus at 1280', sections: OVERLAY_PRESETS['job-focus'], width: 1280, rows: 2, height: 74},
-  {name: 'all but RPM and cargo at 1280', sections: {...ALL, rpm: false, cargo: false}, width: 1280, rows: 3, height: 110}
+  {name: 'every section at 1280 (1920 x 1080)', sections: ALL, width: 1280, rows: 3, height: 116},
+  {name: 'every section at 1248 (1280 x 720)', sections: ALL, width: 1248, rows: 3, height: 116},
+  {name: 'every section at 768 (800 x 600)', sections: ALL, width: 768, rows: 6, height: 230},
+  {name: 'every section at 928 (960 x 540)', sections: ALL, width: 928, rows: 5, height: 192},
+  {name: 'every section at 1247 (fractional client)', sections: ALL, width: 1247, rows: 3, height: 116},
+  {name: 'every section at the 480 minimum', sections: ALL, width: 480, rows: 10, height: 382},
+  {name: 'speed only at the 480 minimum', sections: only('speed'), width: 480, rows: 1, height: 40},
+  {name: 'every section at 1258 (scale 1.5)', sections: ALL, width: 1258, rows: 3, height: 116},
+  {name: 'every section at 944 (scale 2)', sections: ALL, width: 944, rows: 4, height: 154},
+  {name: 'every section at 1279 (scale 1.1)', sections: ALL, width: 1279, rows: 3, height: 116},
+  {name: 'speed only at 1279 (scale 1.01)', sections: only('speed'), width: 1279, rows: 1, height: 40},
+  {name: 'driving-only at 768', sections: OVERLAY_PRESETS['driving-only'], width: 768, rows: 2, height: 78},
+  {name: 'driving-only at 928', sections: OVERLAY_PRESETS['driving-only'], width: 928, rows: 2, height: 78},
+  {name: 'driving-only at 1248', sections: OVERLAY_PRESETS['driving-only'], width: 1248, rows: 1, height: 40},
+  {name: 'job-focus at 1280', sections: OVERLAY_PRESETS['job-focus'], width: 1280, rows: 2, height: 78},
+  {name: 'all but RPM and cargo at 1280', sections: {...ALL, rpm: false, cargo: false}, width: 1280, rows: 3, height: 116}
 ])('reserves $rows rows for $name', ({sections, width, rows, height}) => {
   expect(stripRowCount(sections, width)).toBe(rows);
   expect(stripCssHeight(rows)).toBe(height);

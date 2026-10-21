@@ -379,3 +379,21 @@ Claude C1 regressions: real-worker production delivery holds both opening and de
 Review R4/R5: the seven-case real-worker reader/monitor/FIFO matrix now crosses production `recorderClient`, with at least two successful passing writes while positive trips remain open. Both app journeys require two distinct persisted passing observations before positive delivery. Ordered observer publications update trip/journal/export latest across UTC rollback/restoration, while numerically newer frozen captures preserve that later publication and original first loss (`hard-mode.test.ts`, `hard-mode-integrity.test.ts`, domain unit test).
 
 Claude2 display-lifetime regression: `tests/unit/hard-mode-service-status.test.ts` validates the private relative-lifetime/strict assessment-versus-trip envelope, aged proof, repeated trip posts, absent further messages, UTC steps, genuine new publications and retirement/malformed metadata. `hard-mode-reader.test.ts` retains read-completion and post-bind age in remaining lifetime; `main-boundaries.test.ts` exercises actual IPC expiry and service restart/old-child refusal. Renderer/preload/native/SQL contracts are unchanged.
+
+
+## ET-028 presentation coverage
+
+| Entry point | Layer | REG IDs | Source | Owning card | Runs in | Protected |
+| --- | --- | --- | --- | --- | --- | --- |
+| `tests/unit/desktop-ui-view.test.ts` | Node unit | REG-002, REG-003, REG-009, REG-014 | R | ET-028 | `npm test` | normalized geometry, unavailable/zero, status words/colors, exact SDK names |
+| `tests/unit/journal-chart.test.ts` | Node unit | REG-002, REG-003, REG-008, REG-009, REG-014 | R | ET-028 | `npm test` | current-page bound, source-monotonic segments, UTC separation, missing data |
+| `tests/unit/ui-runtime-receipt.test.ts` | Node + inert PowerShell receipt fixtures | REG-009, REG-012, REG-016, REG-017 | R, T | ET-028 | `npm test` | complete UI language/size/screen/assertion/PNG requirements, refusal/read-only evidence |
+| `Invoke-RuntimeSmoke.ps1 -Scenario ui -UiCase shell` (`ui-observation.mjs`) | Running app, development and packaged | REG-009, REG-012, REG-017 | T | ET-028 | development main/dispatch; packaged PR/main/dispatch | routing/focus, status, language/menu keyboard, Journal unmount, Later/Exit |
+| `Invoke-RuntimeSmoke.ps1 -Scenario ui -UiCase live` | Running app, development and packaged | REG-002, REG-003, REG-009, REG-017 | T | ET-028 | same UI matrix | normalized gauge, exact SDK names, zero/missing/paused/stale, truthful placeholders |
+| `Invoke-RuntimeSmoke.ps1 -Scenario ui -UiCase journal` | Running app, development and packaged | REG-008, REG-009, REG-014, REG-017 | T | ET-028 | same UI matrix | readable primary table, trip header/tiles, cursor Back, bounded chart, raw tabs |
+| `Invoke-RuntimeSmoke.ps1 -Scenario ui -UiCase settings` | Running app, development and packaged | REG-009, REG-012, REG-016, REG-017 | T | ET-028 | same UI matrix | panels/committed saves, all sections, isolated save refusal/recovery, real future-version read-only EN fallback, uninstall refusal |
+| `Invoke-RuntimeSmoke.ps1 -Scenario ui -UiCase overlay` | Running app, development and packaged | REG-002, REG-009, REG-016, REG-017 | T | ET-028 | same UI matrix | four layouts, independent font/transparency, missing/paused/stale, card subsets and numeric RPM arc |
+
+Existing Live/Journal/plugin/uninstall/renderer/main/overlay/locale tests and all previous runtime entrypoints remain mandatory. The 38px strip oracles are independently recalculated visual geometry, not relaxed data or fit assertions. Manual native-caption/Windows 100%/150%/game/performance acceptance is not inferred from emulated screenshots.
+
+The Settings UI receipt also requires keyboard-operated segmented/switch controls, the last-enabled-section guard, and readable offline Onest copyright/license text. Missing or false assertions are rejected by the inert receipt fixtures.

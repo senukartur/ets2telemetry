@@ -126,3 +126,11 @@ describe('the result dialog', () => {
     for (const entry of DATA_ALLOWLIST) expect(UNINSTALL_DATA_ENTRY_TEXT[entry]).toMatch(/\S/);
   });
 });
+
+it('localizes renderer uninstall results while keeping game identity and exact target ordinal', () => {
+  expect(appUninstallResultText({outcome: 'cancelled'}, 'ru')).toEqual({line: 'Удаление отменено. Ничего не изменено.', folders: []});
+  expect(uninstallTargetText('ats:steam:1', 'ru')).toBe('American Truck Simulator (папка Steam 2)');
+  expect(appUninstallResultText({outcome: 'blocked', code: 'GAME_RUNNING', blocked: [{targetId: 'ets2:steam:0', reason: 'GAME_RUNNING'}]}, 'ru')).toEqual({
+    line: 'ETS2Telemetry не удалена, ничего не изменено: игра запущена. Закройте её и повторите.',
+    folders: ['Euro Truck Simulator 2 (папка Steam 1): игра запущена. Закройте её и повторите.']});
+});

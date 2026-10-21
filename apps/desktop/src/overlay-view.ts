@@ -1,4 +1,6 @@
 import type {OverlayLayout, OverlayPresentation, OverlaySectionId} from '../../../packages/contracts/src';
+import {CARD_ROW_HEIGHT_CSS} from './overlay-rows';
+import {localizedMeasurement} from './screens/app-copy';
 import {CLUSTER_GAUGE_SECTIONS, OVERLAY_GROUPS, type OverlayGroupId} from './overlay-sections';
 import {getOverlaySectionShortText, getOverlaySectionText, getStrings} from './strings';
 import {localizeDeadlineString, localizeGameTimeString, translateUnit} from './i18n';
@@ -75,6 +77,8 @@ export function overlayView(presentation: OverlayPresentation = OVERLAY_PLACEHOL
         value = localizeGameTimeString(value, language);
       } else if (section.id === 'deadline') {
         value = localizeDeadlineString(value, language);
+      } else if (['rpm', 'sdk-consumption', 'range', 'distance-driven', 'distance-remaining', 'expected-income'].includes(section.id)) {
+        value = localizedMeasurement(value, language);
       }
     }
     return {...base, value,
@@ -97,4 +101,10 @@ export function overlayView(presentation: OverlayPresentation = OVERLAY_PLACEHOL
     panel: gaugeShown ? items.filter(item => !CLUSTER_GAUGE_SECTIONS.has(item.id)) : items,
     editing: presentation.editing === true
   };
+}
+
+/** Card hierarchy uses precisely the existing reserved rows, including every subset of speed/gear/RPM. */
+export function overlayCardParts(view: Pick<OverlayView, 'items'>) {
+  const hero = view.items.filter(item => CLUSTER_GAUGE_SECTIONS.has(item.id));
+  return {hero, rows: view.items.filter(item => !CLUSTER_GAUGE_SECTIONS.has(item.id)), heroHeight: hero.length * CARD_ROW_HEIGHT_CSS};
 }

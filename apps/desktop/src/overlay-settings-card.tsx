@@ -27,13 +27,14 @@ const percent = (scale: number) => `${Math.round(scale * 100)}%`;
  * over the game and can be dragged; the scale buttons, reset, Done and Cancel act on main's draft. The edit state shown
  * here is the one main pushes; the layout cannot change while editing.
  */
-export function OverlaySettingsCard({settings, edit, onSaved, onRequest, showSaveError}: {
+export function OverlaySettingsCard({settings, edit, onSaved, onRequest, showSaveError, panel = 'overlay'}: {
   settings: SettingsView | undefined;
   edit: OverlayEditState | undefined;
   onSaved: (view: SettingsView) => void;
   /** Called when this card starts a save, so the dashboard shows a refusal in the card that caused it. */
   onRequest: () => void;
   showSaveError: boolean;
+  panel?: 'overlay' | 'sections';
 }) {
   const [request, setRequest] = useState<'idle' | 'saving' | 'failed'>('idle');
   const [editRequest, setEditRequest] = useState<'idle' | 'pending' | 'failed'>('idle');
@@ -59,16 +60,18 @@ export function OverlaySettingsCard({settings, edit, onSaved, onRequest, showSav
   const busy = editRequest === 'pending';
   return <Card size="sm" data-testid="overlay-settings"><CardHeader><CardTitle><h2>{strings.overlayTitle}</h2></CardTitle></CardHeader>
     <CardContent className="space-y-4">
-      <div className="space-y-2">
+      <div className="space-y-2" hidden={panel !== 'overlay'}>
         <p id="overlay-layout-label" className="font-medium">{strings.overlayLayoutLabel}</p>
-        <RadioGroup aria-labelledby="overlay-layout-label" data-testid="overlay-layout" value={overlay.layout} disabled={locked || editing}
+        <RadioGroup aria-labelledby="overlay-layout-label" data-testid="overlay-layout" className="yu-layout-options" value={overlay.layout} disabled={locked || editing}
           onValueChange={value => {if (isOverlayLayout(value)) save(() => window.desktop.setOverlayLayout(value));}}>
-          {OVERLAY_LAYOUTS.map(layout => <div key={layout} className="flex items-center gap-2">
-            <RadioGroupItem value={layout} id={`overlay-layout-${layout}`} /><Label htmlFor={`overlay-layout-${layout}`}>{getOverlayLayoutText(layout, language)}</Label>
+          {OVERLAY_LAYOUTS.map(layout => <div key={layout} className="yu-layout-option" data-selected={overlay.layout === layout}>
+            <RadioGroupItem value={layout} id={`overlay-layout-${layout}`} /><Label htmlFor={`overlay-layout-${layout}`}><svg viewBox="0 0 160 75" aria-hidden="true" className={`yu-layout-preview yu-layout-preview-${layout}`}><rect className="yu-preview-window" x="1" y="1" width="158" height="73" rx="5" />
+              {layout === 'strip' ? <rect x="28" y="8" width="104" height="13" rx="3" /> : layout === 'card' ? <rect x="112" y="8" width="38" height="57" rx="4" /> : layout === 'hud' ? <><rect x="10" y="10" width="60" height="6" rx="2" /><rect x="10" y="22" width="44" height="6" rx="2" /><rect x="10" y="34" width="54" height="6" rx="2" /></> : <><circle cx="34" cy="48" r="19" /><rect x="58" y="41" width="58" height="25" rx="4" /></>}
+            </svg><span>{getOverlayLayoutText(layout, language)}</span></Label>
           </div>)}
         </RadioGroup>
       </div>
-      <div className="space-y-2" data-testid="overlay-placement">
+      <div className="space-y-2" hidden={panel !== 'overlay'} data-testid="overlay-placement">
         <p className="font-medium">{strings.overlayPlacementLabel}</p>
         {edit?.active ? <>
           <p role="status" data-testid="overlay-edit-status">{getOverlayEditPlacementText(edit.placement, language)}</p>
@@ -93,7 +96,7 @@ export function OverlaySettingsCard({settings, edit, onSaved, onRequest, showSav
         </div>}
         {editRequest === 'failed' ? <p role="status" data-testid="overlay-edit-error">{strings.overlayEditFailed}</p> : null}
       </div>
-      <div className="space-y-2">
+      <div className="space-y-2" hidden={panel !== 'sections'}>
         <p className="font-medium">{strings.overlayPresetsLabel}</p>
         <div className="flex flex-wrap gap-2" data-testid="overlay-presets">
           {OVERLAY_PRESET_IDS.map(preset => {
@@ -105,7 +108,7 @@ export function OverlaySettingsCard({settings, edit, onSaved, onRequest, showSav
           })}
         </div>
       </div>
-      <div className="space-y-3">
+      <div className="space-y-3" hidden={panel !== 'sections'}>
         <p className="font-medium">{strings.overlaySectionsLabel}</p>
         {OVERLAY_GROUPS.map(group => <section key={group.id} className="space-y-2" aria-labelledby={`overlay-group-${group.id}`}>
           <h3 id={`overlay-group-${group.id}`} className="text-sm text-muted-foreground">{getOverlayGroupText(group.id, language)}</h3>

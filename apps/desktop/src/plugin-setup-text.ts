@@ -2,12 +2,11 @@
 // the plugin bridge methods: main validated the view, and this module only picks fixed texts from strings.ts. The view
 // never carries a path, and neither does any text here: a game folder is named by its source and position. Renderer-safe:
 // type imports and strings only. See docs/plugin-setup.md#the-game-plugin-card.
-import type {DiagnosticsExportResult, PluginBlockReason, PluginFolderChoice, PluginGame, PluginGameView, PluginSetupView, PluginShowFileResult, PluginTargetState,
+import type {AppLanguage, DiagnosticsExportResult, PluginBlockReason, PluginFolderChoice, PluginGame, PluginGameView, PluginSetupView, PluginShowFileResult, PluginTargetState,
   PluginTargetView} from '../../../packages/contracts/src';
 import type {ConnectionDiagnosis} from './connection-diagnosis';
-import {
-  CONNECTION_DIAGNOSIS_NOTE_TEXT, CONNECTION_DIAGNOSIS_TEXT, DIAGNOSTICS_EXPORT_ERROR_TEXT, DIAGNOSTICS_EXPORT_STRINGS, PLUGIN_DISCOVERY_TEXT, PLUGIN_FOLDER_REFUSAL_TEXT, PLUGIN_MANUAL_FOLDER_TEXT, PLUGIN_MODE_TEXT, PLUGIN_REASON_TEXT, PLUGIN_STATE_TEXT, PLUGIN_STRINGS, UNIT_GAME_TEXT
-} from './strings';
+import * as BASE_COPY from './strings';
+import {copyTable} from './screens/app-copy';
 
 /**
  * Block reasons after which the card offers the manual copy (P12): "Show plugin file" and "Open game plugins folder". A
@@ -59,6 +58,8 @@ export interface PluginSetupText {
   games: Readonly<Record<PluginGame, PluginGameText>>;
 }
 
+function createPluginText(language: AppLanguage) {
+ const {CONNECTION_DIAGNOSIS_NOTE_TEXT, CONNECTION_DIAGNOSIS_TEXT, DIAGNOSTICS_EXPORT_ERROR_TEXT, DIAGNOSTICS_EXPORT_STRINGS, PLUGIN_DISCOVERY_TEXT, PLUGIN_FOLDER_REFUSAL_TEXT, PLUGIN_MANUAL_FOLDER_TEXT, PLUGIN_MODE_TEXT, PLUGIN_REASON_TEXT, PLUGIN_STATE_TEXT, PLUGIN_STRINGS, UNIT_GAME_TEXT} = copyTable(BASE_COPY, language);
 const fill = (template: string, values: Readonly<Record<string, string>>) => template.replace(/\{(\w+)\}/g, (_match, key: string) => values[key] ?? '');
 const fileText = (template: string, file: {version: string | null; sha256Prefix: string}) =>
   fill(template, {version: file.version ?? PLUGIN_STRINGS.unknownVersion, hash: file.sha256Prefix});
@@ -116,7 +117,7 @@ function gameText(game: PluginGame, view: PluginGameView, disabled: boolean): Pl
 }
 
 /** The texts of one plugin setup view. Every mode, outcome, state and reason has a fixed text. */
-export function pluginSetupText(view: PluginSetupView): PluginSetupText {
+function pluginSetupText(view: PluginSetupView): PluginSetupText {
   return {
     mode: PLUGIN_MODE_TEXT[view.mode],
     bundled: view.bundled ? fileText(PLUGIN_STRINGS.bundled, view.bundled) : PLUGIN_STRINGS.bundledUnknown,
@@ -127,25 +128,34 @@ export function pluginSetupText(view: PluginSetupView): PluginSetupText {
 }
 
 /** The answer of the folder dialog: saved, cancelled (nothing written) or a fixed refusal. */
-export function pluginFolderChoiceText(choice: PluginFolderChoice): string {
+function pluginFolderChoiceText(choice: PluginFolderChoice): string {
   if (choice.outcome === 'chosen') return PLUGIN_STRINGS.folderChosen;
   if (choice.outcome === 'cancelled') return PLUGIN_STRINGS.folderCancelled;
   return PLUGIN_FOLDER_REFUSAL_TEXT[choice.code];
 }
 
 /** The answer of "Show plugin file". */
-export function pluginShowFileText(result: PluginShowFileResult): string {
+function pluginShowFileText(result: PluginShowFileResult): string {
   return result.outcome === 'shown' ? PLUGIN_STRINGS.fileShown : PLUGIN_STRINGS.fileUnavailable;
 }
 
 /** The card's diagnosis line (P17) and its notes. */
-export function connectionDiagnosisText(diagnosis: ConnectionDiagnosis): {line: string; notes: string[]} {
+function connectionDiagnosisText(diagnosis: ConnectionDiagnosis): {line: string; notes: string[]} {
   return {line: CONNECTION_DIAGNOSIS_TEXT[diagnosis.code], notes: diagnosis.notes.map(note => CONNECTION_DIAGNOSIS_NOTE_TEXT[note])};
 }
 
 /** The answer of "Export diagnostics…". */
-export function diagnosticsExportText(result: DiagnosticsExportResult): string {
+function diagnosticsExportText(result: DiagnosticsExportResult): string {
   if (result.outcome === 'saved') return DIAGNOSTICS_EXPORT_STRINGS.saved;
   if (result.outcome === 'cancelled') return DIAGNOSTICS_EXPORT_STRINGS.cancelled;
   return DIAGNOSTICS_EXPORT_ERROR_TEXT[result.code];
 }
+
+ return {pluginSetupText, pluginFolderChoiceText, pluginShowFileText, connectionDiagnosisText, diagnosticsExportText};
+}
+const texts = {en: createPluginText('en'), ru: createPluginText('ru')};
+export const pluginSetupText = (value: Parameters<typeof texts.en.pluginSetupText>[0], language: AppLanguage = 'en'): ReturnType<typeof texts.en.pluginSetupText> => texts[language].pluginSetupText(value);
+export const pluginFolderChoiceText = (value: Parameters<typeof texts.en.pluginFolderChoiceText>[0], language: AppLanguage = 'en'): ReturnType<typeof texts.en.pluginFolderChoiceText> => texts[language].pluginFolderChoiceText(value);
+export const pluginShowFileText = (value: Parameters<typeof texts.en.pluginShowFileText>[0], language: AppLanguage = 'en'): ReturnType<typeof texts.en.pluginShowFileText> => texts[language].pluginShowFileText(value);
+export const connectionDiagnosisText = (value: Parameters<typeof texts.en.connectionDiagnosisText>[0], language: AppLanguage = 'en'): ReturnType<typeof texts.en.connectionDiagnosisText> => texts[language].connectionDiagnosisText(value);
+export const diagnosticsExportText = (value: Parameters<typeof texts.en.diagnosticsExportText>[0], language: AppLanguage = 'en'): ReturnType<typeof texts.en.diagnosticsExportText> => texts[language].diagnosticsExportText(value);

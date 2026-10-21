@@ -1,6 +1,6 @@
 import {expect, it} from 'vitest';
 import type {OverlayPresentation} from '../../packages/contracts/src';
-import {overlayView} from '../../apps/desktop/src/overlay-view';
+import {overlayView, overlayCardParts} from '../../apps/desktop/src/overlay-view';
 
 // The overlay renderer's view model (ET-012a): arrangement only. React components are not unit-tested (decision L14);
 // the runtime overlay smoke reads the rendered DOM.
@@ -70,9 +70,9 @@ it('localizes labels, units and tags in Russian when language is ru', () => {
   const view = overlayView(ruBase);
   expect(view.items.map(item => [item.testId, item.value, item.unit, item.caption])).toEqual([
     ['overlay-speed', '90.0', 'км/ч', undefined],
-    ['overlay-rpm', '1500 rpm', undefined, undefined],
+    ['overlay-rpm', '1500 об/мин', undefined, undefined],
     ['overlay-fuel', '250.0', 'л', undefined],
-    ['overlay-sdk-consumption', '25.0 L/100 km', undefined, 'среднее SDK'],
+    ['overlay-sdk-consumption', '25.0 л/100 км', undefined, 'среднее SDK'],
     ['overlay-cargo', 'cargo.logs', undefined, undefined],
     ['overlay-game-time', 'День 1, 08:00', undefined, undefined]
   ]);
@@ -95,4 +95,26 @@ it('localizes labels, units and tags in Russian when language is ru', () => {
   expect(deadlineEarly.items[0]?.value).toBe('через 1 ч 30 мин');
   const deadlineLate = overlayView({...ruBase, sections: [{id: 'deadline', state: 'value', text: 'late by 45 min'}]});
   expect(deadlineLate.items[0]?.value).toBe('опоздание на 45 мин');
+});
+
+it('localizes only numeric RPM/consumption units, preserving names equal to those units or UI words', () => {
+  const sections: OverlayPresentation['sections'] = [{id: 'rpm', state: 'value', text: '600 rpm', ring: 0.2},
+    {id: 'sdk-consumption', state: 'value', text: '25.0 L/100 km'}, {id: 'cargo', state: 'value', text: 'Speed'},
+    {id: 'origin', state: 'value', text: '600 rpm, Settings'}, {id: 'destination', state: 'value', text: 'Łódź, Скорость'}];
+  const en = overlayView({...base, sections, language: 'en'}), ru = overlayView({...base, sections, language: 'ru'});
+  expect(en.items.map(item => item.value)).toEqual(['600 rpm', '25.0 L/100 km', 'Speed', '600 rpm, Settings', 'Łódź, Скорость']);
+  expect(ru.items.map(item => item.value)).toEqual(['600 об/мин', '25.0 л/100 км', 'Speed', '600 rpm, Settings', 'Łódź, Скорость']);
+  expect(ru.items[0].ring).toBe(0.2);
+});
+it('reserves exactly the existing rows for all eight card hero subsets, including no hero, RPM-only and speed-only', () => {
+  const ids = ['speed', 'gear', 'rpm'] as const;
+  for (let mask = 0; mask < 8; mask++) {
+    const chosen = ids.filter((_id, index) => (mask & (1 << index)) !== 0);
+    const presentation: OverlayPresentation = {...base, layout: 'card', sections: [
+      ...chosen.map(id => ({id, state: 'unavailable' as const})), {id: 'fuel', state: 'value', text: '0.0 L'}]};
+    const parts = overlayCardParts(overlayView(presentation));
+    expect(parts.hero.map(item => item.id)).toEqual(chosen); expect(parts.rows.map(item => item.id)).toEqual(['fuel']);
+    expect(parts.heroHeight).toBe(chosen.length * 24);
+    expect(parts.hero.every(item => item.value === '—' && item.ring === undefined)).toBe(true);
+  }
 });

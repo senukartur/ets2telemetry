@@ -2,7 +2,9 @@ import React, {useState} from 'react';
 import {Alert, AlertDescription, AlertTitle} from '@/components/ui/alert';
 import {Button} from '@/components/ui/button';
 import {Card, CardContent, CardHeader, CardTitle} from '@/components/ui/card';
-import {UNINSTALL_STRINGS} from './strings';
+import {UNINSTALL_STRINGS as BASE_STRINGS} from './strings';
+import type {AppLanguage, AppUninstallResult} from '../../../packages/contracts/src';
+import {copyTable} from './screens/app-copy';
 import {appUninstallResultText} from './uninstall-text';
 
 /**
@@ -11,13 +13,15 @@ import {appUninstallResultText} from './uninstall-text';
  * answer through uninstall-text.ts, never a path. A portable or development copy answers that uninstalling is available
  * only in an installed copy.
  */
-export function UninstallCard() {
+export function UninstallCard({language = 'en'}: {language?: AppLanguage}) {
+  const UNINSTALL_STRINGS = copyTable(BASE_STRINGS, language);
   const [pending, setPending] = useState(false);
-  const [answer, setAnswer] = useState<{line: string; folders: string[]} | null>(null);
+  const [result, setResult] = useState<AppUninstallResult | 'refused' | null>(null);
+  const answer = result === null ? null : result === 'refused' ? {line: UNINSTALL_STRINGS.requestFailed, folders: []} : appUninstallResultText(result, language);
   const uninstall = () => {
-    setPending(true); setAnswer(null);
-    void window.desktop.uninstallApplication().then(result => {setAnswer(appUninstallResultText(result)); setPending(result.outcome === 'started');},
-      () => {setAnswer({line: UNINSTALL_STRINGS.requestFailed, folders: []}); setPending(false);});
+    setPending(true); setResult(null);
+    void window.desktop.uninstallApplication().then(result => {setResult(result); setPending(result.outcome === 'started');},
+      () => {setResult('refused'); setPending(false);});
   };
   return <Card size="sm" data-testid="uninstall-card"><CardHeader><CardTitle><h2>{UNINSTALL_STRINGS.title}</h2></CardTitle></CardHeader>
     <CardContent className="space-y-3">

@@ -574,7 +574,7 @@ it('neither moves nor raises a visible strip when saved sections keep its reserv
   const metadata = current.observation!.state.window;
   if (!metadata.available) throw new Error('Expected metadata');
   metadata.value.width = 2624; overlay.loaded(true); overlay.update(current);
-  expect(window.setBounds.mock.calls).toEqual([[{x: -944, y: 8, width: 1280, height: 110}]]);
+  expect(window.setBounds.mock.calls).toEqual([[{x: -944, y: 8, width: 1280, height: 116}]]);
   window.setAlwaysOnTop.mockClear(); window.moveTop.mockClear();
   overlay.setLayout('strip', DEFAULT_OVERLAY_PLACEMENTS.strip, {...DEFAULT_OVERLAY_SECTIONS, rpm: false, cargo: false});
   expect(window.setBounds).toHaveBeenCalledOnce(); expect(window.setAlwaysOnTop).not.toHaveBeenCalled(); expect(window.moveTop).not.toHaveBeenCalled();
@@ -593,7 +593,7 @@ it('never shows, raises or moves a hidden strip when the saved sections change',
   // tags, speed, gear and fuel = 668 (cargo would reach 982); cargo, destination and distance remaining = 778 (deadline
   // would reach 1012); deadline. 36 × 3 + 2 = 110.
   metadata.value.foreground = true; overlay.update(current);
-  expect(window.setBounds.mock.calls).toEqual([[{x: -944, y: 8, width: 928, height: 110}]]); expect(window.showInactive).toHaveBeenCalledOnce();
+  expect(window.setBounds.mock.calls).toEqual([[{x: -944, y: 8, width: 928, height: 116}]]); expect(window.showInactive).toHaveBeenCalledOnce();
 });
 it('keeps the strip rectangle while only the values change', () => {
   const {window, screen, overlay} = controller(), current = live(), state = current.observation!.state;

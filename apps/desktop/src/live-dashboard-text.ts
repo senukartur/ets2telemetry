@@ -1,10 +1,11 @@
-import type {LiveTelemetry, UnitProfiles} from '../../../packages/contracts/src';
+import type {AppLanguage, LiveTelemetry, UnitProfiles} from '../../../packages/contracts/src';
 import {resolveDisplayUnits} from '../../../packages/telemetry-core/src/display-profile';
 import type {LiveField, LiveFieldId, LiveSectionId} from '../../../packages/telemetry-core/src/live-view';
 import type {MissingReason} from '../../../packages/telemetry-core/src/readings';
 import {liveSources} from './live-sources';
 import {initialLive} from './live-state';
-import {FIELD_NOTE_TEXT, LIVE_FIELD_TEXT, LIVE_SECTION_TEXT, STRINGS, VIEW_REASON_TEXT} from './strings';
+import * as BASE_COPY from './strings';
+import {appCopy, copyTable, localizedMeasurement} from './screens/app-copy';
 import {DEFAULT_UNIT_PROFILES, displayGame, profileFor} from './unit-profiles';
 
 // Text of the live telemetry card (ET-010b, protocol v1 fields ET-010c): telemetry-core's view model with the
@@ -42,11 +43,13 @@ export interface LiveSectionText {
 }
 export interface LiveDashboardText {paused: boolean; sections: LiveSectionText[]}
 
+function createLiveText(language: AppLanguage) {
+ const {FIELD_NOTE_TEXT, LIVE_FIELD_TEXT, LIVE_SECTION_TEXT, STRINGS, VIEW_REASON_TEXT} = copyTable(BASE_COPY, language);
 function rowText(field: LiveField, extraNote?: string): LiveRowText {
   const reason = (field.state === 'missing' || field.state === 'absent') && field.reason ? VIEW_REASON_TEXT[field.reason] : undefined;
   const notes = [...(field.notes ?? []).map(id => FIELD_NOTE_TEXT[id]), ...(extraNote ? [extraNote] : [])];
   const note = notes.length ? notes.join('; ') : undefined;
-  return {id: field.id, testId: `live-${field.id}`, label: LIVE_FIELD_TEXT[field.id], value: field.text, ...(reason ? {reason} : {}), ...(note ? {note} : {})};
+  return {id: field.id, testId: `live-${field.id}`, label: LIVE_FIELD_TEXT[field.id], value: field.state === 'value' ? ((field.id === 'special-job' || field.id === 'cargo-loaded') ? field.text === 'yes' ? (language === 'ru' ? 'да' : 'yes') : (language === 'ru' ? 'нет' : 'no') : ['cargo', 'source-city', 'source-company', 'destination-city', 'destination-company', 'truck', 'truck-plate', 'trailers', 'market', 'game-mode'].includes(field.id) ? field.text : localizedMeasurement(field.text, language)) : appCopy(field.text, language), ...(reason ? {reason} : {}), ...(note ? {note} : {})};
 }
 
 /**
@@ -58,7 +61,7 @@ function rowText(field: LiveField, extraNote?: string): LiveRowText {
  * not current; without v1 the card shows only the fields v0 carries, so the Position section never appears under v0.
  * The Protocol v1 source section appears once a v1 observation exists for the current selection.
  */
-export function liveDashboardText(live: LiveTelemetry | undefined, units: UnitProfiles = DEFAULT_UNIT_PROFILES): LiveDashboardText {
+function liveDashboardText(live: LiveTelemetry | undefined, units: UnitProfiles = DEFAULT_UNIT_PROFILES): LiveDashboardText {
   const telemetry = live ?? initialLive();
   const game = displayGame(telemetry);
   const sources = liveSources(telemetry, resolveDisplayUnits(game, {profile: profileFor(units, game)}));
@@ -88,3 +91,8 @@ export function liveDashboardText(live: LiveTelemetry | undefined, units: UnitPr
 function missingSubjectText(reason: MissingReason): string {
   return reason === 'not-observed' ? STRINGS.liveNoJob : `${STRINGS.liveJobUnavailable} (${VIEW_REASON_TEXT[reason]})`;
 }
+
+ return liveDashboardText;
+}
+const builders = {en: createLiveText('en'), ru: createLiveText('ru')};
+export const liveDashboardText = (live: LiveTelemetry | undefined, units: UnitProfiles = DEFAULT_UNIT_PROFILES, language: AppLanguage = 'en'): LiveDashboardText => builders[language](live, units);

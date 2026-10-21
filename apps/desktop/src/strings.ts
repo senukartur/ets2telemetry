@@ -11,8 +11,8 @@ import type {FolderNote} from './uninstall/plugin-cleanup';
 import type {DataEntry} from './uninstall/data-wipe';
 
 /**
- * User-visible English text for the dashboard and tray. There is no i18n framework yet; keeping the
- * literals here gives a later localization one place to start. Pure data, safe for renderer bundles.
+ * Legacy fixed application copy for the dashboard and tray. Renderer adapters select the typed EN/RU dictionaries
+ * before interpolation; raw SDK values never enter those lookups. Pure data, safe for renderer bundles.
  */
 export const STRINGS = Object.freeze({
   appName: 'ETS2Telemetry',
