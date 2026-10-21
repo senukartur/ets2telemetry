@@ -7,9 +7,9 @@ const v2 = (units: unknown, overlay: unknown, extra: Record<string, unknown> = {
   utf8(JSON.stringify({format: 'ets2telemetry.settings', version: 2, units, overlay, ...extra}));
 const v3 = (units: unknown, overlay: unknown, extra: Record<string, unknown> = {}) =>
   utf8(JSON.stringify({format: 'ets2telemetry.settings', version: 3, units, overlay, ...extra}));
-// ET-012e: current format v5 retains language and adds persisted visibility.
-const v5 = (language: unknown, units: unknown, overlay: unknown, extra: Record<string, unknown> = {}) =>
-  utf8(JSON.stringify({format: 'ets2telemetry.settings', version: 5, language, units, overlay, ...extra}));
+// ET-012e: current format v6 retains language and adds persisted visibility.
+const v6 = (language: unknown, autostart: unknown, units: unknown, overlay: unknown, extra: Record<string, unknown> = {}) =>
+  utf8(JSON.stringify({format: 'ets2telemetry.settings', version: 6, language, autostart, units, overlay, ...extra}));
 
 // Hand-written expectations: the fourteen section ids in canonical order, all enabled by default.
 const ALL_ON = {'speed': true, 'gear': true, 'rpm': true, 'fuel': true, 'range': true, 'sdk-consumption': true, 'cargo': true, 'origin': true,
@@ -22,80 +22,86 @@ const DRIVING_ONLY = {...ALL_ON, 'sdk-consumption': false, 'cargo': false, 'orig
   'distance-remaining': false, 'deadline': false, 'expected-income': false, 'game-time': false};
 const without = (record: Record<string, unknown>, key: string) => Object.fromEntries(Object.entries(record).filter(([name]) => name !== key));
 
-it('migrates v4 purely to enabled v5 without adopting a previously unknown flag', () => {
+it('migrates v4 purely to enabled v6 without adopting a previously unknown flag', () => {
   const old = {format: 'ets2telemetry.settings', version: 4, language: 'ru', units: {ets2: 'metric', ats: 'metric'}, overlay: {...DEFAULT_OVERLAY, enabled: false}};
   const before = structuredClone(old);
-  expect(migrateToCurrent(old, 4)).toEqual({...old, version: 5, overlay: {...old.overlay, enabled: true}});
+  expect(migrateToCurrent(old, 4)).toEqual({...old, version: 6, autostart: false, overlay: {...old.overlay, enabled: true}});
   expect(old).toEqual(before);
   expect(parseSettings(utf8(JSON.stringify(old)))).toMatchObject({state: 'loaded', migratedFrom: 4, settings: {overlay: {enabled: true}}});
 });
 it.each([undefined, null, 0, 1, 'false', {}, []])('falls back independently for invalid current enabled flag %j', enabled => {
-  expect(parseSettings(v5('ru', {ets2: 'metric', ats: 'metric'}, {...DEFAULT_OVERLAY, enabled}))).toEqual({state: 'loaded-with-fallbacks',
-    settings: {language: 'ru', units: {ets2: 'metric', ats: 'metric'}, overlay: DEFAULT_OVERLAY}, fallbackFields: ['overlay.enabled']});
+  expect(parseSettings(v6('ru', true, {ets2: 'metric', ats: 'metric'}, {...DEFAULT_OVERLAY, enabled}))).toEqual({state: 'loaded-with-fallbacks',
+    settings: {language: 'ru', autostart: true, units: {ets2: 'metric', ats: 'metric'}, overlay: DEFAULT_OVERLAY}, fallbackFields: ['overlay.enabled']});
 });
-it('roundtrips committed false in canonical v5 without falling back', () => {
-  const settings = {language: 'ru' as const, units: {ets2: 'metric' as const, ats: 'us-customary' as const}, overlay: {...DEFAULT_OVERLAY, layout: 'strip' as const, enabled: false}};
+it('roundtrips committed false in canonical v6 without falling back', () => {
+  const settings = {language: 'ru' as const, autostart: true, units: {ets2: 'metric' as const, ats: 'us-customary' as const}, overlay: {...DEFAULT_OVERLAY, layout: 'card' as const, sections: DRIVING_ONLY, placements: MOVED, enabled: false}};
   const serialized = serializeSettings(settings);
-  expect(serialized).toContain('"overlay": {\n    "enabled": false,\n    "layout": "strip"');
+  expect(serialized).toContain('"overlay": {\n    "enabled": false,\n    "layout": "card"');
   expect(parseSettings(utf8(serialized))).toEqual({state: 'loaded', settings});
 });
 
-it('reads a valid v4 file, ignoring unknown keys', () => {
-  expect(parseSettings(v5('ru', {ets2: 'us-customary', ats: 'metric', future: 'x'},
+it('reads a valid current v6 file, ignoring unknown keys', () => {
+  expect(parseSettings(v6('ru', false, {ets2: 'us-customary', ats: 'metric', future: 'x'},
     {enabled: true, layout: 'cluster', sections: {...DRIVING_ONLY, future: true}, placements: {...MOVED, future: {x: 0, y: 0, scale: 1}}, theme: 'x'}, {theme: 'dark'})))
-    .toEqual({state: 'loaded', settings: {language: 'ru', units: {ets2: 'us-customary', ats: 'metric'}, overlay: {enabled: true, layout: 'cluster', sections: DRIVING_ONLY, placements: MOVED}}});
+    .toEqual({state: 'loaded', settings: {language: 'ru', autostart: false, units: {ets2: 'us-customary', ats: 'metric'}, overlay: {enabled: true, layout: 'cluster', sections: DRIVING_ONLY, placements: MOVED}}});
 });
 
-it('migrates a v3 file to v4 in memory: default language en, units and overlay kept, migratedFrom 3', () => {
+it('migrates a v3 file through v4 and v5 to v6 in memory: default language en, units and overlay kept, migratedFrom 3', () => {
   expect(parseSettings(v3({ets2: 'us-customary', ats: 'metric'}, {enabled: true, layout: 'cluster', sections: DRIVING_ONLY, placements: MOVED})))
-    .toEqual({state: 'loaded', settings: {language: 'en', units: {ets2: 'us-customary', ats: 'metric'}, overlay: {enabled: true, layout: 'cluster', sections: DRIVING_ONLY, placements: MOVED}},
+    .toEqual({state: 'loaded', settings: {language: 'en', autostart: false, units: {ets2: 'us-customary', ats: 'metric'}, overlay: {enabled: true, layout: 'cluster', sections: DRIVING_ONLY, placements: MOVED}},
       migratedFrom: 3});
 });
 
-it('migrates a v2 file through v3 to v4 in memory: default language en, layout and sections kept, default placements, migratedFrom 2', () => {
+it('migrates a v2 file through v3, v4 and v5 to v6 in memory: default language en, layout and sections kept, default placements, migratedFrom 2', () => {
   expect(parseSettings(v2({ets2: 'us-customary', ats: 'metric'}, {enabled: true, layout: 'cluster', sections: DRIVING_ONLY})))
-    .toEqual({state: 'loaded', settings: {language: 'en', units: {ets2: 'us-customary', ats: 'metric'}, overlay: {enabled: true, layout: 'cluster', sections: DRIVING_ONLY, placements: PLACEMENTS}},
+    .toEqual({state: 'loaded', settings: {language: 'en', autostart: false, units: {ets2: 'us-customary', ats: 'metric'}, overlay: {enabled: true, layout: 'cluster', sections: DRIVING_ONLY, placements: PLACEMENTS}},
       migratedFrom: 2});
   // A v2 file never had placements: a stray key is replaced by the defaults.
   expect(parseSettings(v2({ets2: 'metric', ats: 'metric'}, {enabled: true, layout: 'hud', sections: ALL_ON, placements: MOVED})))
     .toMatchObject({state: 'loaded', settings: {language: 'en', overlay: {enabled: true, layout: 'hud', placements: PLACEMENTS}}, migratedFrom: 2});
 });
 
-it('migrates a v1 file through v2 and v3 to v4 in memory: default language en, units kept, overlay defaults, migratedFrom 1', () => {
+it('migrates a v1 file through v2, v3 and v4 to v6 in memory: default language en, autostart false, units kept, overlay defaults, migratedFrom 1', () => {
   expect(parseSettings(v1({ets2: 'us-customary', ats: 'metric', future: 'x'}, {theme: 'dark'})))
-    .toEqual({state: 'loaded', settings: {language: 'en', units: {ets2: 'us-customary', ats: 'metric'}, overlay: DEFAULT_OVERLAY}, migratedFrom: 1});
+    .toEqual({state: 'loaded', settings: {language: 'en', autostart: false, units: {ets2: 'us-customary', ats: 'metric'}, overlay: DEFAULT_OVERLAY}, migratedFrom: 1});
 });
 
-it('migrates v1, v2 and v3 purely without mutating their input, and leaves current documents unchanged', () => {
+it('migrates v1, v2, v3 and v4 purely without mutating their input, and leaves current documents unchanged', () => {
   const document = {format: 'ets2telemetry.settings', version: 1, units: {ets2: 'metric', ats: 'metric'}};
   const snapshot = structuredClone(document);
   const migrated = migrateToCurrent(document, 1);
-  expect(migrated).toEqual({format: 'ets2telemetry.settings', version: 5, language: 'en', units: {ets2: 'metric', ats: 'metric'}, overlay: DEFAULT_OVERLAY});
+  expect(migrated).toEqual({format: 'ets2telemetry.settings', version: 6, language: 'en', autostart: false, units: {ets2: 'metric', ats: 'metric'}, overlay: DEFAULT_OVERLAY});
   expect(document).toEqual(snapshot);
   expect(migrated).not.toBe(document);
 
   const second = {format: 'ets2telemetry.settings', version: 2, units: {ets2: 'metric', ats: 'metric'}, overlay: {enabled: true, layout: 'card', sections: DRIVING_ONLY}};
   const secondSnapshot = structuredClone(second);
   const upgraded = migrateToCurrent(second, 2);
-  expect(upgraded).toEqual({...second, version: 5, language: 'en', overlay: {enabled: true, layout: 'card', sections: DRIVING_ONLY, placements: PLACEMENTS}});
+  expect(upgraded).toEqual({...second, version: 6, language: 'en', autostart: false, overlay: {enabled: true, layout: 'card', sections: DRIVING_ONLY, placements: PLACEMENTS}});
   expect(second).toEqual(secondSnapshot); expect(upgraded!.overlay).not.toBe(second.overlay);
 
   const third = {format: 'ets2telemetry.settings', version: 3, units: {ets2: 'metric', ats: 'metric'}, overlay: {enabled: true, layout: 'card', sections: DRIVING_ONLY, placements: PLACEMENTS}};
   const thirdSnapshot = structuredClone(third);
   const upgradedThird = migrateToCurrent(third, 3);
-  expect(upgradedThird).toEqual({...third, version: 5, language: 'en'});
+  expect(upgradedThird).toEqual({...third, version: 6, language: 'en', autostart: false});
   expect(third).toEqual(thirdSnapshot);
 
+  const fourth = {format: 'ets2telemetry.settings', version: 4, language: 'ru', autostart: false, units: {ets2: 'metric', ats: 'metric'}, overlay: {layout: 'card', sections: DRIVING_ONLY, placements: PLACEMENTS}};
+  const fourthSnapshot = structuredClone(fourth);
+  const upgradedFourth = migrateToCurrent(fourth, 4);
+  expect(upgradedFourth).toEqual({...fourth, version: 6, autostart: false, overlay: {...fourth.overlay, enabled: true}});
+  expect(fourth).toEqual(fourthSnapshot);
+
   // A v2 overlay that is not an object stays as it is.
-  expect(migrateToCurrent({format: 'ets2telemetry.settings', version: 2, overlay: 'strip'}, 2)).toEqual({format: 'ets2telemetry.settings', version: 5, language: 'en', overlay: 'strip'});
-  const current = {format: 'ets2telemetry.settings', version: 5};
-  expect(migrateToCurrent(current, 5)).toBe(current);
+  expect(migrateToCurrent({format: 'ets2telemetry.settings', version: 2, overlay: 'strip'}, 2)).toEqual({format: 'ets2telemetry.settings', version: 6, language: 'en', autostart: false, overlay: 'strip'});
+  const current = {format: 'ets2telemetry.settings', version: 6};
+  expect(migrateToCurrent(current, 6)).toBe(current);
   expect(migrateToCurrent({format: 'ets2telemetry.settings'}, 0)).toBeUndefined();
 });
 
 it('accepts a leading UTF-8 byte order mark', () => {
-  const bytes = new Uint8Array([0xef, 0xbb, 0xbf, ...v5('en', {ets2: 'metric', ats: 'us-customary'}, DEFAULT_OVERLAY)]);
-  expect(parseSettings(bytes)).toEqual({state: 'loaded', settings: {language: 'en', units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY}});
+  const bytes = new Uint8Array([0xef, 0xbb, 0xbf, ...v6('en', false, {ets2: 'metric', ats: 'us-customary'}, DEFAULT_OVERLAY)]);
+  expect(parseSettings(bytes)).toEqual({state: 'loaded', settings: {language: 'en', autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY}});
 });
 
 it.each([
@@ -104,9 +110,22 @@ it.each([
   {name: 'uppercase language', language: 'EN', expected: 'en', fields: ['language']},
   {name: 'missing language', language: undefined, expected: 'en', fields: ['language']}
 ])('falls back per language field for $name', ({language, expected, fields}) => {
-  expect(parseSettings(v5(language, {ets2: 'metric', ats: 'us-customary'}, DEFAULT_OVERLAY))).toEqual({
+  expect(parseSettings(v6(language, false, {ets2: 'metric', ats: 'us-customary'}, DEFAULT_OVERLAY))).toEqual({
     state: 'loaded-with-fallbacks',
-    settings: {language: expected, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY},
+    settings: {language: expected, autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY},
+    fallbackFields: fields
+  });
+});
+
+it.each([
+  {name: 'invalid autostart string', autostart: 'yes', expected: false, fields: ['autostart']},
+  {name: 'numeric autostart', autostart: 1, expected: false, fields: ['autostart']},
+  {name: 'null autostart', autostart: null, expected: false, fields: ['autostart']},
+  {name: 'missing autostart', autostart: undefined, expected: false, fields: ['autostart']}
+])('falls back per autostart field for $name', ({autostart, expected, fields}) => {
+  expect(parseSettings(v6('en', autostart, {ets2: 'metric', ats: 'us-customary'}, {...DEFAULT_OVERLAY, enabled: false}))).toEqual({
+    state: 'loaded-with-fallbacks',
+    settings: {language: 'en', autostart: expected, units: {ets2: 'metric', ats: 'us-customary'}, overlay: {...DEFAULT_OVERLAY, enabled: false}},
     fallbackFields: fields
   });
 });
@@ -117,12 +136,12 @@ it.each([
   {name: 'units not an object', units: ['metric'], expected: {ets2: 'metric', ats: 'us-customary'}, fields: ['units.ets2', 'units.ats']},
   {name: 'a profile in the wrong case', units: {ets2: 'Metric', ats: 'metric'}, expected: {ets2: 'metric', ats: 'metric'}, fields: ['units.ets2']}
 ])('falls back per unit field for $name', ({units, expected, fields}) => {
-  expect(parseSettings(v5('en', units, DEFAULT_OVERLAY))).toEqual({state: 'loaded-with-fallbacks', settings: {language: 'en', units: expected, overlay: DEFAULT_OVERLAY}, fallbackFields: fields});
+  expect(parseSettings(v6('en', false, units, DEFAULT_OVERLAY))).toEqual({state: 'loaded-with-fallbacks', settings: {language: 'en', autostart: false, units: expected, overlay: DEFAULT_OVERLAY}, fallbackFields: fields});
 });
 
 it('lets an invalid v1 unit fall back alone after migration', () => {
   expect(parseSettings(v1({ets2: 'imperial', ats: 'metric'}))).toEqual({state: 'loaded-with-fallbacks',
-    settings: {language: 'en', units: {ets2: 'metric', ats: 'metric'}, overlay: DEFAULT_OVERLAY}, fallbackFields: ['units.ets2'], migratedFrom: 1});
+    settings: {language: 'en', autostart: false, units: {ets2: 'metric', ats: 'metric'}, overlay: DEFAULT_OVERLAY}, fallbackFields: ['units.ets2'], migratedFrom: 1});
 });
 
 it.each([
@@ -144,8 +163,8 @@ it.each([
   {name: 'one missing section key', overlay: {enabled: true, layout: 'card', sections: without(DRIVING_ONLY, 'deadline'), placements: MOVED},
     expected: {enabled: true, layout: 'card', sections: {...DRIVING_ONLY, deadline: true}, placements: MOVED}, fields: ['overlay.sections.deadline']}
 ])('falls back per overlay field for $name', ({overlay, expected, fields}) => {
-  expect(parseSettings(v5('en', {ets2: 'metric', ats: 'metric'}, overlay))).toEqual({state: 'loaded-with-fallbacks',
-    settings: {language: 'en', units: {ets2: 'metric', ats: 'metric'}, overlay: expected}, fallbackFields: fields});
+  expect(parseSettings(v6('en', false, {ets2: 'metric', ats: 'metric'}, overlay))).toEqual({state: 'loaded-with-fallbacks',
+    settings: {language: 'en', autostart: false, units: {ets2: 'metric', ats: 'metric'}, overlay: expected}, fallbackFields: fields});
 });
 
 // ET-012b (REG-017): out-of-range values fall back to the layout's default; they are never clamped.
@@ -163,26 +182,26 @@ it.each([
   {name: 'invalid strip and cluster placements', placements: {...MOVED, strip: null, cluster: {x: 0, y: 1, scale: 0}},
     expected: MOVED, fields: ['overlay.placements.strip', 'overlay.placements.cluster']}
 ])('falls back per placement for $name', ({placements, expected, fields}) => {
-  expect(parseSettings(v5('en', {ets2: 'metric', ats: 'metric'}, {enabled: true, layout: 'card', sections: ALL_ON, placements}))).toEqual({state: 'loaded-with-fallbacks',
-    settings: {language: 'en', units: {ets2: 'metric', ats: 'metric'}, overlay: {enabled: true, layout: 'card', sections: ALL_ON, placements: expected}}, fallbackFields: fields});
+  expect(parseSettings(v6('en', false, {ets2: 'metric', ats: 'metric'}, {enabled: true, layout: 'card', sections: ALL_ON, placements}))).toEqual({state: 'loaded-with-fallbacks',
+    settings: {language: 'en', autostart: false, units: {ets2: 'metric', ats: 'metric'}, overlay: {enabled: true, layout: 'card', sections: ALL_ON, placements: expected}}, fallbackFields: fields});
 });
 
 it('normalises placements read from the file and accepts the range bounds', () => {
   const placements = {strip: {x: 0, y: 1, scale: 0.5}, card: {x: 1, y: 0, scale: 2}, cluster: {x: 0.123456, y: 0.99999, scale: 1.234}, hud: {x: 0, y: 0, scale: 1}};
-  expect(parseSettings(v5('en', {ets2: 'metric', ats: 'metric'}, {enabled: true, layout: 'hud', sections: ALL_ON, placements}))).toEqual({state: 'loaded',
-    settings: {language: 'en', units: {ets2: 'metric', ats: 'metric'}, overlay: {enabled: true, layout: 'hud', sections: ALL_ON,
+  expect(parseSettings(v6('en', false, {ets2: 'metric', ats: 'metric'}, {enabled: true, layout: 'hud', sections: ALL_ON, placements}))).toEqual({state: 'loaded',
+    settings: {language: 'en', autostart: false, units: {ets2: 'metric', ats: 'metric'}, overlay: {enabled: true, layout: 'hud', sections: ALL_ON,
       placements: {...placements, cluster: {x: 0.1235, y: 1, scale: 1.23}}}}});
 });
 
 it.each([
-  ['truncated JSON', utf8('{"format":"ets2telemetry.settings","version":4,"units":{"ets2":"metric",')],
+  ['truncated JSON', utf8('{"format":"ets2telemetry.settings","version":5,"units":{"ets2":"metric",')],
   ['an empty file', utf8('')],
   ['a JSON array', utf8('[]')],
   ['JSON null', utf8('null')],
   ['invalid UTF-8', new Uint8Array([0x7b, 0xff, 0x7d])],
-  ['another format marker', utf8('{"format":"ets2telemetry.other","version":4,"units":{}}')],
-  ['no format marker', utf8('{"version":4,"language":"en","units":{"ets2":"metric","ats":"metric"}}')],
-  ['a string version', utf8('{"format":"ets2telemetry.settings","version":"4","units":{}}')],
+  ['another format marker', utf8('{"format":"ets2telemetry.other","version":5,"units":{}}')],
+  ['no format marker', utf8('{"version":5,"language":"en","units":{"ets2":"metric","ats":"metric"}}')],
+  ['a string version', utf8('{"format":"ets2telemetry.settings","version":"5","units":{}}')],
   ['a fractional version', utf8('{"format":"ets2telemetry.settings","version":2.5,"units":{}}')],
   ['a UTF-16 byte order mark', new Uint8Array([0xff, 0xfe, ...utf8('{}')])]
 ])('rejects %s as an invalid file', (_name, bytes) => {
@@ -190,25 +209,25 @@ it.each([
 });
 
 it('rejects a file above 64 KiB and accepts one of exactly 64 KiB', () => {
-  const base = new TextDecoder().decode(v5('en', {ets2: 'us-customary', ats: 'metric'}, {enabled: true, layout: 'hud', sections: DRIVING_ONLY, placements: MOVED}));
+  const base = new TextDecoder().decode(v6('en', false, {ets2: 'us-customary', ats: 'metric'}, {enabled: true, layout: 'hud', sections: DRIVING_ONLY, placements: MOVED}));
   const exact = utf8(base + ' '.repeat(MAX_SETTINGS_BYTES - base.length));
   expect(exact.byteLength).toBe(65536);
-  expect(parseSettings(exact)).toEqual({state: 'loaded', settings: {language: 'en', units: {ets2: 'us-customary', ats: 'metric'}, overlay: {enabled: true, layout: 'hud', sections: DRIVING_ONLY, placements: MOVED}}});
+  expect(parseSettings(exact)).toEqual({state: 'loaded', settings: {language: 'en', autostart: false, units: {ets2: 'us-customary', ats: 'metric'}, overlay: {enabled: true, layout: 'hud', sections: DRIVING_ONLY, placements: MOVED}}});
   expect(parseSettings(utf8(base + ' '.repeat(MAX_SETTINGS_BYTES - base.length + 1)))).toEqual({state: 'invalid-file'});
 });
 
-// ET-012e: version 5 is current format, so version 6 is newer-version.
+// ET-012e: version 6 is current format, so version 7 is newer-version.
 it('classifies missing and older versions as unsupported-older and later ones as newer-version', () => {
   expect(parseSettings(utf8('{"format":"ets2telemetry.settings","units":{"ets2":"metric","ats":"metric"}}'))).toEqual({state: 'unsupported-older'});
   expect(parseSettings(utf8('{"format":"ets2telemetry.settings","version":0,"units":{}}'))).toEqual({state: 'unsupported-older'});
   expect(parseSettings(utf8('{"format":"ets2telemetry.settings","version":-3}'))).toEqual({state: 'unsupported-older'});
-  expect(parseSettings(utf8('{"format":"ets2telemetry.settings","version":6,"units":{"ets2":"metric","ats":"metric"}}'))).toEqual({state: 'newer-version'});
+  expect(parseSettings(utf8('{"format":"ets2telemetry.settings","version":7,"units":{"ets2":"metric","ats":"metric"}}'))).toEqual({state: 'newer-version'});
   expect(parseSettings(utf8('{"format":"ets2telemetry.settings","version":4,"units":{"ets2":"metric","ats":"metric"}}'))).toMatchObject({state: 'loaded-with-fallbacks'});
 });
 
-it('serializes the exact v5 bytes: language, units, sections and placements in canonical order, two-space indentation and a trailing newline', () => {
-  expect(serializeSettings({language: 'ru', units: {ets2: 'us-customary', ats: 'metric'}, overlay: {enabled: true, layout: 'card', sections: {...ALL_ON, rpm: false}, placements: MOVED}})).toBe([
-    '{', '  "format": "ets2telemetry.settings",', '  "version": 5,', '  "language": "ru",', '  "units": {', '    "ets2": "us-customary",', '    "ats": "metric"', '  },',
+it('serializes the exact v6 bytes: language, units, sections and placements in canonical order, two-space indentation and a trailing newline', () => {
+  expect(serializeSettings({language: 'ru', autostart: false, units: {ets2: 'us-customary', ats: 'metric'}, overlay: {enabled: true, layout: 'card', sections: {...ALL_ON, rpm: false}, placements: MOVED}})).toBe([
+    '{', '  "format": "ets2telemetry.settings",', '  "version": 6,', '  "language": "ru",', '  "autostart": false,', '  "units": {', '    "ets2": "us-customary",', '    "ats": "metric"', '  },',
     '  "overlay": {', '    "enabled": true,', '    "layout": "card",', '    "sections": {', '      "speed": true,', '      "gear": true,', '      "rpm": false,', '      "fuel": true,',
     '      "range": true,', '      "sdk-consumption": true,', '      "cargo": true,', '      "origin": true,', '      "destination": true,',
     '      "distance-driven": true,', '      "distance-remaining": true,', '      "deadline": true,', '      "expected-income": true,', '      "game-time": true',
@@ -221,13 +240,24 @@ it('serializes the exact v5 bytes: language, units, sections and placements in c
   // The canonical order holds whatever order the in-memory records have, and values are normalised on the way out.
   const reversed = Object.fromEntries(Object.entries(DRIVING_ONLY).reverse()) as typeof DRIVING_ONLY;
   const placements = {hud: {scale: 1, y: 0, x: 0}, cluster: {x: 0.123456, y: 1, scale: 1.256}, card: PLACEMENTS.card, strip: PLACEMENTS.strip};
-  const text = serializeSettings({language: 'en', units: {ets2: 'metric', ats: 'metric'}, overlay: {enabled: true, layout: 'hud', sections: reversed, placements}});
-  const written = JSON.parse(text) as {language: string; overlay: {sections: object; placements: Record<string, object>}};
+  const text = serializeSettings({language: 'en', autostart: false, units: {ets2: 'metric', ats: 'metric'}, overlay: {enabled: true, layout: 'hud', sections: reversed, placements}});
+  const written = JSON.parse(text) as {language: string; autostart: boolean; overlay: {sections: object; placements: Record<string, object>}};
   expect(written.language).toBe('en');
+  expect(written.autostart).toBe(false);
   expect(Object.keys(written.overlay.sections)).toEqual(Object.keys(ALL_ON));
   expect(Object.keys(written.overlay.placements)).toEqual(['strip', 'card', 'cluster', 'hud']);
   expect(Object.keys(written.overlay.placements.hud)).toEqual(['x', 'y', 'scale']);
   // Round trip through the parser.
-  expect(parseSettings(utf8(text))).toEqual({state: 'loaded', settings: {language: 'en', units: {ets2: 'metric', ats: 'metric'},
+  expect(parseSettings(utf8(text))).toEqual({state: 'loaded', settings: {language: 'en', autostart: false, units: {ets2: 'metric', ats: 'metric'},
     overlay: {enabled: true, layout: 'hud', sections: DRIVING_ONLY, placements: {...PLACEMENTS, cluster: {x: 0.1235, y: 1, scale: 1.26}}}}});
+});
+
+it('migrates accepted v5 autostart true purely while preserving all prior settings', () => {
+  const old = {format: 'ets2telemetry.settings', version: 5, language: 'ru', autostart: true,
+    units: {ets2: 'us-customary', ats: 'metric'}, overlay: {layout: 'card', sections: DRIVING_ONLY, placements: MOVED}};
+  const before = structuredClone(old);
+  expect(migrateToCurrent(old, 5)).toEqual({...old, version: 6, overlay: {...old.overlay, enabled: true}});
+  expect(parseSettings(utf8(JSON.stringify(old)))).toEqual({state: 'loaded', migratedFrom: 5,
+    settings: {language: 'ru', autostart: true, units: old.units, overlay: {...old.overlay, enabled: true}}});
+  expect(old).toEqual(before);
 });

@@ -1,4 +1,4 @@
-import type {AppErrorCode, AppLanguage, DiagnosticsExportFailure, DiagnosticsExportRefusal, JournalAttributionKind, JournalCallCode, JournalCloseReason, JournalCompleteness, JournalExportCode, JournalIntervalKind, JournalMoneyCategory, JournalOutcome,
+import type {AppErrorCode, AppLanguage, AutostartRegistrationStatus, DiagnosticsExportFailure, DiagnosticsExportRefusal, JournalAttributionKind, JournalCallCode, JournalCloseReason, JournalCompleteness, JournalExportCode, JournalIntervalKind, JournalMoneyCategory, JournalOutcome,
   JournalPurpose, LiveTelemetry, OverlayEditPlacement, OverlayLayout, OverlaySectionId, PluginBlockReason, PluginDiscoveryOutcome, PluginFolderRefusal, PluginManualFolderState,
   PluginSetupMode, PluginTargetState, RecordingCode, RecordingHealth, RecordingLosses, RecordingTarget, RecordingTrip, ServiceHealth,
   SettingsSaveError, SettingsState, StorageHealth, UnitGame, UnitProfile} from '../../../packages/contracts/src';
@@ -9,6 +9,7 @@ import type {ConnectionDiagnosisCode, ConnectionDiagnosisNote} from './connectio
 import type {UninstallBlockCode, UninstallFailureCode} from '../../../packages/contracts/src/uninstall';
 import type {FolderNote} from './uninstall/plugin-cleanup';
 import type {DataEntry} from './uninstall/data-wipe';
+import {t} from './i18n';
 
 /**
  * Legacy fixed application copy for the dashboard and tray. Renderer adapters select the typed EN/RU dictionaries
@@ -1040,3 +1041,33 @@ export const UNINSTALL_DATA_ENTRY_TEXT: Readonly<Record<DataEntry, string>> = Ob
   data: 'trip history', backups: 'history backups', settings: 'settings', logs: 'logs', synthetic: 'synthetic recordings', plugins: 'plugin setup record',
   captures: 'captures', transport: 'connection settings', uninstall: 'uninstall record'
 });
+
+export function getAutostartStatusBadgeText(status: AutostartRegistrationStatus | undefined, language: AppLanguage): string {
+  switch (status) {
+    case 'registered':
+      return t('s.autostart.active', undefined, language);
+    case 'unregistered':
+      return t('s.autostart.disabled', undefined, language);
+    case 'not-installed':
+      return t('s.autostart.notInstalled', undefined, language);
+    case 'failed':
+      return t('s.autostart.failed', undefined, language);
+    default:
+      return '—';
+  }
+}
+
+export function getAutostartBadgeVariant(status: AutostartRegistrationStatus | undefined): 'ok' | 'neutral' | 'outline' | 'error' {
+  switch (status) {
+    case 'registered':
+      return 'ok';
+    case 'unregistered':
+      return 'neutral';
+    case 'not-installed':
+      return 'outline';
+    case 'failed':
+      return 'error';
+    default:
+      return 'neutral';
+  }
+}

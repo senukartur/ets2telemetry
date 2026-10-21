@@ -188,7 +188,7 @@ try {
   result.actual = await window.evaluate(async () => ({require: typeof globalThis.require,
     process: typeof globalThis.process, keys: Object.keys(globalThis.desktop),
     frozen: Object.isFrozen(globalThis.desktop), status: await globalThis.desktop.getStatus()}));
-  assert.deepEqual(result.actual, {require: 'undefined', process: 'undefined', keys: ['getStatus', 'selectSource', 'subscribeLive', 'getAppState', 'subscribeAppState', 'exitApplication', 'setLanguage', 'setUnitProfile', 'setOverlayEnabled', 'setOverlayLayout', 'setOverlaySections',
+  assert.deepEqual(result.actual, {require: 'undefined', process: 'undefined', keys: ['getStatus', 'selectSource', 'subscribeLive', 'getAppState', 'subscribeAppState', 'exitApplication', 'setLanguage', 'setAutostart', 'setUnitProfile', 'setOverlayEnabled', 'setOverlayLayout', 'setOverlaySections',
     'beginOverlayEdit', 'setOverlayEditScale', 'resetOverlayEditPlacement', 'finishOverlayEdit',
     'listJournalTrips', 'getJournalTrip', 'listJournalEvents', 'listJournalIntervals', 'listJournalSamples', 'exportJournalTrip',
     'retryPluginSetup', 'choosePluginFolder', 'setPluginGameExcluded', 'showPluginFile', 'openPluginFolder', 'exportDiagnostics', 'uninstallApplication', 'getHardModeStatus', 'refreshHardMode'],

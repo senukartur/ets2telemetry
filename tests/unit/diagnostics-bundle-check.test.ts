@@ -10,7 +10,7 @@ import {checkDiagnosticsBundle, ENUMS, runtimeStrings, schemaTokens} from '../..
 // smoke reads (`mode`, `root`). The names and paths are invented.
 
 const HEALTH: AppHealth = {service: 'ready', storage: 'verified', recording: {state: 'disabled'}, lastError: null};
-const SETTINGS: SettingsView = {language: 'en', units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY_SETTINGS, state: 'defaults', writable: true, saveError: null};
+const SETTINGS: SettingsView = {language: 'en', autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY_SETTINGS, state: 'defaults', writable: true, saveError: null};
 const PLUGINS: PluginSetupView = {mode: 'test-root', bundled: {version: '0.2.0', sha256Prefix: '0123456789ab'}, running: false, games: {
   ets2: {excluded: false, discovery: 'found', manualFolder: 'set', unlistedFolders: 0, targets: []},
   ats: {excluded: true, discovery: 'found', manualFolder: 'none', unlistedFolders: 0, targets: []}}};
@@ -134,6 +134,16 @@ describe('current settings visibility contract', () => {
     const value = JSON.parse(bundle([])) as {settings: {overlay: Record<string, unknown>}};
     if (enabled === undefined) delete value.settings.overlay.enabled; else value.settings.overlay.enabled = enabled;
     expect(() => check(JSON.stringify(value), [])).toThrow(/bundle\.settings\.overlay\.enabled/);
+  });
+  it.each([null, 0, 'true', {}])('validates the accepted autostart boolean %j independently of visibility', autostart => {
+    const value = JSON.parse(bundle([])) as {settings: Record<string, unknown>};
+    value.settings.autostart = autostart;
+    expect(() => check(JSON.stringify(value), [])).toThrow(/bundle\.settings\.autostart/);
+  });
+  it('accepts true autostart and false visibility together from the production bundle builder', () => {
+    const text = bundle([], {}, {settings: {...SETTINGS, autostart: true, overlay: {...SETTINGS.overlay, enabled: false}}});
+    expect(() => check(text, [])).not.toThrow();
+    expect(JSON.parse(text)).toMatchObject({settings: {autostart: true, overlay: {enabled: false}}});
   });
   it('rejects unrelated overlay keys beside a valid visibility flag', () => {
     const value = JSON.parse(bundle([])) as {settings: {overlay: Record<string, unknown>}};

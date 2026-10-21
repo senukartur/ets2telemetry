@@ -98,6 +98,7 @@ const BUNDLE_SCHEMA = object({
   }),
   settings: object({
     language: oneOf(ENUMS.language),
+    autostart: boolean,
     units: map(ENUMS.pluginGame, oneOf(ENUMS.unitProfile)),
     overlay: object({enabled: boolean, layout: oneOf(ENUMS.overlayLayout), sections: map(ENUMS.overlaySection, boolean),
       placements: map(ENUMS.overlayLayout, object({x: number, y: number, scale: number}))}),

@@ -141,7 +141,17 @@ export async function runUiSmoke({application, dashboard, overlay, source, confi
         await dashboard.getByTestId('journal-back').click();
         Object.assign(record.flags, {syntheticBanner: true, pageReturn: true, chartBounded: true, rawTabs: true, searchPlanned: true, tripRegions: true, tableReadable: true});
       } else if (config.uiCase === 'settings') {
-        for (const panel of panels) {await settingsPanel(dashboard, panel); await save(panel, language, size);}
+        for (const panel of panels) {
+          await settingsPanel(dashboard, panel);
+          if (panel === 'general') {
+            const state = await dashboard.evaluate(() => globalThis.desktop.getAppState());
+            assert.equal(state.autostart, 'not-installed'); assert.equal(state.settings.autostart, false);
+            assert.equal(await dashboard.getByTestId('autostart-card').isVisible(), true);
+            assert.equal(await dashboard.getByTestId('autostart-toggle').isDisabled(), true);
+            assert.equal(await dashboard.getByTestId('autostart-not-installed-note').isVisible(), true);
+          }
+          await save(panel, language, size);
+        }
         const license = dashboard.getByTestId('settings.about.font-license');
         await license.locator('summary').focus(); await dashboard.keyboard.press('Enter');
         assert.equal(await license.locator('pre').innerText(), await readFile(path.join(config.checkout, 'apps/desktop/src/assets/onest-OFL.txt'), 'utf8'));

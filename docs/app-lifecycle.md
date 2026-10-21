@@ -35,6 +35,17 @@ Since ET-018 PR-3 (plan U2) `apps/desktop/src/squirrel-events.ts` replaces elect
 
 electron-squirrel-startup was removed because its uninstall branch quits the process when `Update.exe --removeShortcut` closes, which would race the cleanup. A start of the installed application also cancels a pending deferral, with its RunOnce registration. Squirrel runs these hooks with 15 s (install, updated) and 10 s (obsolete, uninstall); see [installer testing](installer-testing.md#squirrel-behaviour-of-the-pinned-electron-winstaller).
 
+
+## Start with Windows and background launch (ET-031)
+
+ET-031 adds an optional Start with Windows capability:
+- **Login item registration:** When enabled in an installed application, the login item registers Squirrel's `Update.exe` rather than the versioned executable path (`app-<version>\ETS2TelemetryDesktop.exe`):
+  `Update.exe --processStart "ETS2TelemetryDesktop.exe" --process-start-args "--hidden"`
+  Pointing to `Update.exe` ensures that when Squirrel updates the application to a newer version directory, the Windows Run entry remains valid and executes the updated executable.
+- **Background launch via `--hidden`:** When launched with the `--hidden` command-line switch, Electron main initializes the telemetry service, tray icon, and transparent overlay as usual, but skips initial dashboard window creation (`createWindow()`). The application starts running quietly minimized to the notification area (system tray).
+- **Subsequent launch:** A second launch of the application (or clicking the tray icon) detects the running instance and invokes `openDashboard()`, creating and focusing the dashboard window.
+- **Uninstall deregistration:** When uninstalled (either via in-app uninstall handover or via Squirrel's `--squirrel-uninstall` hook), the login item is removed cleanly via `removeAutostartLoginItem()`, preventing orphaned autostart entries.
+
 ## Close to tray
 
 Closing the dashboard window destroys that window and retires only its document state: its live subscription, its application-state subscription and its renderer epoch. The telemetry service, the upstream live channel, main's freshness clocks, the overlay and the tray stay as they are. The overlay keeps following the game while the main window is closed. A source request still in flight from the closed document is rejected when it completes. An active overlay edit mode (ET-012b) is cancelled without saving when the dashboard closes, is minimized or its document is retired, and when the exit begins; see [the minimal overlay](minimal-overlay.md#edit-mode-et-012b).
