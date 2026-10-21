@@ -328,7 +328,7 @@ describe('ET-006b storage-commit ACK pipeline', () => {
   });
   it.each(['overflow', 'stop', 'disconnected', 'failure'] as const)('releases every bounded intake capture after %s', async mode => {
     const sink = new MemorySink(), active = new Set<HardModeCapture>();
-    sink.capture = message => {const capture: HardModeCapture = {game: message.source.game, observation: {assessment: unknownHardMode(RECEIVED), binding: null, pluginSessionId: null, sourceMonotonicNs: null}, firstUnsafe: null}; active.add(capture); return capture;};
+    sink.capture = message => {const capture: HardModeCapture = {game: message.source.game, observation: {assessment: unknownHardMode(RECEIVED), binding: null, pluginSessionId: null, sourceMonotonicNs: null}, fresh: false, firstUnsafe: null}; active.add(capture); return capture;};
     sink.releaseCapture = capture => {expect(active.delete(capture)).toBe(true);};
     sink.paused = true; const {delivery, link, connection} = started(sink, {maxPendingCommits: 2});
     await flush();

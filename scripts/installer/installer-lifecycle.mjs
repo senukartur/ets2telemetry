@@ -341,7 +341,7 @@ async function launch(config, label, executable, migratedFrom) {
   assert.deepEqual(record.exit, {code: 0, signal: null}, 'LAUNCH_EXIT_NONZERO');
   assert.equal(record.runtime.executableMatches, true, 'LAUNCH_EXECUTABLE_DIFFERS');
   assert.equal(record.runtime.packaged, true);
-  assert.deepEqual(record.events.opened, [{schemaVersion: 2, created: false, migratedFrom: migratedFrom === 'none' ? null : Number(migratedFrom)}], 'HISTORY_OPEN_UNEXPECTED');
+  assert.deepEqual(record.events.opened, [{schemaVersion: 3, created: false, migratedFrom: migratedFrom === 'none' ? null : Number(migratedFrom)}], 'HISTORY_OPEN_UNEXPECTED');
   assert.deepEqual(record.events.target, [{purpose: 'synthetic'}], 'RECORDING_TARGET_UNEXPECTED');
   assert.equal(record.events.closed, 1, 'HISTORY_NOT_CLOSED');
   // The format 2 settings load as migrated in memory, and nothing saves or quarantines them.

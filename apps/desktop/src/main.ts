@@ -127,7 +127,9 @@ function runApplication(profileError: unknown): void {
   let dashboardPort: MessagePortMain | undefined, overlayPort: MessagePortMain | undefined, upstream: MessagePortMain | undefined;
   let upstreamRecovery: ReturnType<typeof setTimeout> | undefined;
   let tray: Tray | undefined, trayPresenter: TrayPresenter | undefined, trayUnavailable = false;
+  let hardModeReceivedNs: bigint | undefined;
   let hardMode: HardModeStatus = {assessment: unknownHardMode(Date.now()), trip: null};
+  function retireHardMode(): void {hardModeReceivedNs = undefined; hardMode = {assessment: unknownHardMode(Date.now()), trip: null};}
   let health: AppHealth = initialHealth(), appStateSubscribed = false, lastLive: LiveTelemetry = initialLive();
   let failureReported = false, reportedFailureCode: unknown;
   // ET-015c (G4, G6, G12): the service whose recording status main accepts, until it fails, exits or restarts; the
@@ -313,7 +315,7 @@ function runApplication(profileError: unknown): void {
   });
   const supervisor = new ServiceSupervisor(log, code => lifecycle.finish(code), {
     restart: () => startService(),
-    state: state => {heartbeatMonitor.stop(); serviceReady = false; selectionPending = false; status = undefined; closeUpstream(); retireRecording(); journal.retire();
+    state: state => {heartbeatMonitor.stop(); serviceReady = false; retireHardMode(); selectionPending = false; status = undefined; closeUpstream(); retireRecording(); journal.retire();
       if (state === 'service-failed') {updateHealth({type: 'service-exited', afterFailure: failureReported}); failureReported = false;}
       else updateHealth({type: 'service-restarting'});
       const update: LiveTelemetry = {...initialLive(selection), status: state, reason: 'Telemetry service exited; current interval is unknown'};
@@ -334,7 +336,7 @@ function runApplication(profileError: unknown): void {
     // its exit arrives (up to 3000 ms later). The later state callback finds them already retired.
     // A new selection generation also retires a readiness still awaiting its broker or settings, so the failing service
     // never becomes ready, selected or the journal's service afterwards (ET-016 PR-3 review).
-    failure: code => {heartbeatMonitor.stop(); failureReported = true; serviceReady = false; selectionPending = false; status = undefined; selectionGeneration++; closeUpstream(); retireRecording(); journal.retire();
+    failure: code => {heartbeatMonitor.stop(); failureReported = true; serviceReady = false; retireHardMode(); selectionPending = false; status = undefined; selectionGeneration++; closeUpstream(); retireRecording(); journal.retire();
       updateHealth({type: 'service-failure', code: failureCode(code, reportedFailureCode)}); reportedFailureCode = undefined;
       const update: LiveTelemetry = {...initialLive(selection), status: 'restarting', reason: 'Telemetry service failed; current interval is unknown'};
       freshness.invalidate(update); dashboardSubscriptions.close(); dashboardPort = undefined; window?.webContents.send('telemetry:service-state', update);}
@@ -611,6 +613,7 @@ function runApplication(profileError: unknown): void {
   }
   function startService(): void {
     if (supervisor.stopping) return;
+    retireHardMode();
     const entrypoint = processEntrypoint(__dirname, 'telemetry-service');
     if (!existsSync(entrypoint)) throw new Error('Missing physical telemetry service entrypoint');
     const child = service = utilityProcess.fork(entrypoint, [], {serviceName: 'ETS2Telemetry telemetry service', stdio: 'pipe',
@@ -627,6 +630,7 @@ function runApplication(profileError: unknown): void {
       if (type === 'heartbeat') return;
       if (type === 'hard-mode') {
         const incoming = (message as Record<string, unknown>).status;
+        hardModeReceivedNs = isHardModeStatus(incoming) ? process.hrtime.bigint() : undefined;
         hardMode = isHardModeStatus(incoming) ? incoming : {assessment: unknownHardMode(Date.now()), trip: null};
         return;
       }
@@ -729,7 +733,8 @@ function runApplication(profileError: unknown): void {
   for (const channel of ['hard-mode:status', 'hard-mode:refresh']) ipcMain.handle(channel, (event, ...request: unknown[]) => {
     if (!trusted(event) || request.length !== 0) throw new Error('Untrusted Hard Mode request');
     if (channel === 'hard-mode:refresh' && serviceReady && service && !supervisor.stopping) service.postMessage({type: 'hard-mode-refresh'});
-    return serviceReady && Date.now() - hardMode.assessment.observedUtcMs <= 3000 ? hardMode : {assessment: unknownHardMode(Date.now()), trip: hardMode.trip};
+    const age = hardModeReceivedNs === undefined ? -1n : process.hrtime.bigint() - hardModeReceivedNs;
+    return serviceReady && !supervisor.stopping && age >= 0n && age <= 3_000_000_000n ? hardMode : {assessment: unknownHardMode(Date.now()), trip: hardMode.trip};
   });
   ipcMain.handle('app:get-state', event => {if (!trusted(event)) throw new Error('Untrusted application state request'); return appState();});
   ipcMain.handle('app:exit', event => {if (!trusted(event)) throw new Error('Untrusted exit request'); requestExit('renderer');});

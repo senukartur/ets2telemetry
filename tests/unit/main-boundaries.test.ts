@@ -2527,7 +2527,8 @@ it('wires the orchestrator to plugin setup: suspend, resume (after a removal rac
 });
 
 it('limits Hard Mode status/refresh to the trusted dashboard with no arguments, validates service status and expires it', async () => {
-  await ready(); const {evaluateHardMode, parseHardModeConfig} = await import('../../packages/telemetry-core/src/hard-mode');
+  await ready(); let monotonic = 0n; vi.spyOn(process.hrtime, 'bigint').mockImplementation(() => monotonic);
+  const {evaluateHardMode, parseHardModeConfig} = await import('../../packages/telemetry-core/src/hard-mode');
   const {HARD_MODE_CONFIG} = await import('../shared/hard-mode');
   const status = {assessment: evaluateHardMode(parseHardModeConfig(HARD_MODE_CONFIG), Date.now(), 'fixture'), trip: null};
   child.emit('message', {type: 'hard-mode', status});
@@ -2539,8 +2540,23 @@ it('limits Hard Mode status/refresh to the trusted dashboard with no arguments, 
     expect(() => handler({sender: contents, senderFrame: {}})).toThrow('Untrusted');
     expect(() => handler(trusted(), {path: 'private', state: 'pass'})).toThrow('Untrusted');
   }
+  const utc = Date.now(); vi.setSystemTime(utc + 120_000);
+  expect(handlers.get('hard-mode:status')!(trusted())).toEqual(status);
+  vi.setSystemTime(utc - 120_000); monotonic = 3_001_000_000n;
   await vi.advanceTimersByTimeAsync(3001);
   expect(handlers.get('hard-mode:status')!(trusted())).toMatchObject({assessment: {state: 'unknown'}});
   child.emit('message', {type: 'hard-mode', status: {...status, filename: 'private'}});
   expect(handlers.get('hard-mode:status')!(trusted())).toMatchObject({assessment: {state: 'unknown'}});
+});
+
+it('retires Hard Mode receipt proof on service exit/restart and rejects old-child publications', async () => {
+  await ready(); const {evaluateHardMode, parseHardModeConfig} = await import('../../packages/telemetry-core/src/hard-mode');
+  const {HARD_MODE_CONFIG} = await import('../shared/hard-mode');
+  const status = {assessment: evaluateHardMode(parseHardModeConfig(HARD_MODE_CONFIG), Date.now(), 'fixture'), trip: null};
+  child.emit('message', {type: 'hard-mode', status}); expect(handlers.get('hard-mode:status')!(trusted())).toEqual(status);
+  child.emit('exit', 1); expect(handlers.get('hard-mode:status')!(trusted())).toMatchObject({assessment: {state: 'unknown'}, trip: null});
+  await vi.advanceTimersByTimeAsync(250); const replacement = children[1];
+  child.emit('message', {type: 'hard-mode', status}); replacement.emit('message', {type: 'ready'}); await settle();
+  expect(handlers.get('hard-mode:status')!(trusted())).toMatchObject({assessment: {state: 'unknown'}, trip: null});
+  replacement.emit('message', {type: 'hard-mode', status}); expect(handlers.get('hard-mode:status')!(trusted())).toEqual(status);
 });

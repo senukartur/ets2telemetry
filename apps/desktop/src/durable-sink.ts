@@ -35,7 +35,7 @@ export type SinkResult<T> = {ok: true; value: T} | {ok: false; error: SinkError}
  * Every event, gap, checkpoint and snapshot of a durable connection carries one.
  */
 /** Bounded per-coverage intake evidence; the recorder may only latch the first later unsafe observation. */
-export interface HardModeCapture {game: 'ets2' | 'ats'; observation: HardModeObservation; firstUnsafe: HardModeObservation | null}
+export interface HardModeCapture {game: 'ets2' | 'ats'; observation: HardModeObservation; fresh: boolean; firstUnsafe: HardModeObservation | null}
 export interface CommitContext {receivedUtcMs: number; hardModeCapture?: HardModeCapture}
 
 /**

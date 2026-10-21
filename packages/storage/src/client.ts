@@ -98,10 +98,10 @@ export class StorageClient {
   open(options: WorkerOpenOptions): Promise<Result<OpenSummary>> {
     return this.#request({name: 'open', options: {path: options.path, purpose: options.purpose, backupsDirectory: options.backupsDirectory, appVersion: options.appVersion}});
   }
-  observeHardMode(game: 'ets2' | 'ats', observation: HardModeObservation): Promise<Result<undefined>> {return this.#request({name: 'observeHardMode', game, observation});}
+  observeHardMode(game: 'ets2' | 'ats', observation: HardModeObservation, fresh = false): Promise<Result<undefined>> {return this.#request({name: 'observeHardMode', game, observation, fresh});}
   upsertSession(input: {message: unknown}) { return this.#request({name: 'upsertSession', input}); }
-  commitEvent(input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation; hardModeLoss?: HardModeObservation}): Promise<Result<CommitResult>> { return this.#request({name: 'commitEvent', input}); }
-  commitGap(input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation; hardModeLoss?: HardModeObservation}): Promise<Result<CommitResult>> { return this.#request({name: 'commitGap', input}); }
+  commitEvent(input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation; hardModeFresh?: boolean; hardModeLoss?: HardModeObservation}): Promise<Result<CommitResult>> { return this.#request({name: 'commitEvent', input}); }
+  commitGap(input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation; hardModeFresh?: boolean; hardModeLoss?: HardModeObservation}): Promise<Result<CommitResult>> { return this.#request({name: 'commitGap', input}); }
   /**
    * Only `uniqueSeconds` of the options crosses the worker boundary (ET-015b). A value that is not an object is forwarded
    * as given, so the worker's request parser refuses it with INVALID_INPUT instead of the client throwing.

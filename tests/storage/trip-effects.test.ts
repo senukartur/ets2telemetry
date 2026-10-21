@@ -7,7 +7,7 @@ import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 import type {Storage} from '../../packages/storage/src/index';
 import type {JobConfiguration} from '../../packages/contracts/src/protocol-v1';
 import {initialTripState, jobKey, stepTrip, type EventMessage, type GapMessage, type TripInput, type TripSeed, type TripState} from '../../packages/telemetry-core/src/index';
-import {ATS_A, BASE_UTC, ETS2_A, ETS2_B, GAME_CLOCK_1, GAME_CLOCK_2, RECEIVED_UTC, Script, job, otherJob, r, run, sessionInput} from '../shared/trip-messages';
+import {ATS_A, BASE_UTC, ETS2_A, ETS2_B, GAME_CLOCK_1, GAME_CLOCK_2, RECEIVED_UTC, Script, job, otherJob, r, run, sessionInput, truck} from '../shared/trip-messages';
 import {failed, ok, readOnly, workspace} from './helpers';
 
 let ws: Awaited<ReturnType<typeof workspace>>;
@@ -190,6 +190,23 @@ describe('ET-014 reducer effects through real commits', () => {
       attributions: [{eventSeq: 9, trip: t, attribution: 'trip'}],
       intervals: [{kind: 'discontinuity', trip: t, detail: {annotation: true, cause: 'utc-label-jump', labelUtcMs: back + 1_000, clampedToUtcMs: at(6), atEventSeq: '9'}}],
       counts: {trips: 1, events: 9}
+    });
+  });
+  it('keeps trip update metadata nondecreasing during real storage UTC rollback without rewriting event audit labels', async () => {
+    const storage = await ws.open(), script = new Script(ETS2_A), trip = uuid(ETS2_A, '6');
+    const first = drive(storage, accepted(script)); const created = ok(storage.getTrip(trip))!.createdUtcMs;
+    ws.advance(1000); const updated = drive(storage, [script.event(r.truckConfigured(truck({licensePlate: {available: true, value: 'SYN 0009'}})))], first.state);
+    expect(ok(storage.getTrip(trip))!.updatedUtcMs).toBe(created + 1000);
+    ws.advance(-120_000); const rollback = ws.now();
+    const next = drive(storage, [script.event(r.truckConfigured(truck({licensePlate: {available: true, value: 'SYN 0010'}})))], updated.state);
+    expect(ok(storage.getTrip(trip))!.updatedUtcMs).toBe(created + 1000);
+    const closed = drive(storage, [script.event(r.delivered())], next.state);
+    expect(closed.statuses).toEqual(['committed']); expect(ok(storage.committedThrough(ETS2_A))).toBe('10');
+    expect(ok(storage.getTrip(trip))).toMatchObject({outcome: 'delivered', createdUtcMs: created, updatedUtcMs: created + 1000, startedUtcMs: at(6), endedUtcMs: at(10)});
+    storage.close();
+    readOnly(ws.database, db => {
+      expect(db.prepare('PRAGMA integrity_check').pluck().get()).toBe('ok');
+      expect(db.prepare('SELECT committed_utc_ms FROM events ORDER BY id DESC LIMIT 2').pluck().all()).toEqual([rollback, rollback]);
     });
   });
   it('22. a reconnection marks the open trip partial with a bounded not-connected interval on its own session clock (T13) [synthetic-inference]', async () => {

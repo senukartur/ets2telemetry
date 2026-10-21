@@ -21,16 +21,17 @@ import {ERROR_MESSAGES} from '../errors';
 export interface WorkerOpenOptions {path: string; purpose: Purpose; backupsDirectory: string; appVersion: string}
 
 /** Arguments and success value of every worker command; each mirrors the in-process Storage method of the same name. */
+/** Hard Mode freshness verdicts are private, frozen at service monotonic intake/offer; never worker UTC ages. */
 export interface StorageCommands {
   open: {args: {options: WorkerOpenOptions}; value: OpenSummary};
   upsertSession: {args: {input: {message: unknown}}; value: {created: boolean; committedThroughEventSeq: Uint64}};
-  commitEvent: {args: {input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation; hardModeLoss?: HardModeObservation}}; value: CommitResult};
-  commitGap: {args: {input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation; hardModeLoss?: HardModeObservation}}; value: CommitResult};
+  commitEvent: {args: {input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation; hardModeFresh?: boolean; hardModeLoss?: HardModeObservation}}; value: CommitResult};
+  commitGap: {args: {input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation; hardModeFresh?: boolean; hardModeLoss?: HardModeObservation}}; value: CommitResult};
   appendSamples: {args: {pluginSessionId: string; rows: SampleInput[]; options?: SampleAppendOptions}; value: SampleAppendResult};
   recordCompleteness: {args: {pluginSessionId: string; interval: CompletenessInterval; options?: CompletenessOptions}; value: undefined};
   /** ET-016 PR-7 (J9): a late-attach trip; never acknowledged and never a coverage change. */
   openAttachedTrip: {args: {input: AttachInput}; value: AttachResult};
-  observeHardMode: {args: {game: 'ets2' | 'ats'; observation: HardModeObservation}; value: undefined};
+  observeHardMode: {args: {game: 'ets2' | 'ats'; observation: HardModeObservation; fresh: boolean}; value: undefined};
   committedThrough: {args: {pluginSessionId: string}; value: Uint64};
   getSession: {args: {pluginSessionId: string}; value: SessionRecord};
   getEvent: {args: {pluginSessionId: string; eventSeq: Uint64}; value: EventRow | undefined};
@@ -139,8 +140,9 @@ export function parseRequest(message: unknown): {ok: true; id: number; command: 
     if (!isRecord(options) || !isText(options.path) || !isText(options.purpose) || !isText(options.backupsDirectory) || !isText(options.appVersion)) return {ok: false, id};
   }
   if ((name === 'upsertSession' || name === 'commitEvent' || name === 'commitGap') && !isRecord(command.input)) return {ok: false, id};
+  if ((name === 'commitEvent' || name === 'commitGap') && isRecord(command.input) && command.input.hardModeFresh !== undefined && typeof command.input.hardModeFresh !== 'boolean') return {ok: false, id};
   if (name === 'listTrips' && !optionalArgs(command.page, TRIP_PAGE_ARGS)) return {ok: false, id};
-  if (name === 'observeHardMode' && (Object.keys(command).sort().join(',') !== 'game,name,observation' || !['ets2', 'ats'].includes(command.game as string) || !isHardModeObservation(command.observation))) return {ok: false, id};
+  if (name === 'observeHardMode' && (Object.keys(command).sort().join(',') !== 'fresh,game,name,observation' || !['ets2', 'ats'].includes(command.game as string) || !isHardModeObservation(command.observation) || typeof command.fresh !== 'boolean')) return {ok: false, id};
   if (name === 'recordCompleteness' && !optionalArgs(command.options, COMPLETENESS_OPTIONS_ARGS)) return {ok: false, id};
   if (name === 'appendSamples' && !optionalArgs(command.options, SAMPLE_OPTIONS_ARGS)) return {ok: false, id};
   // ET-016 PR-7: only the four listed input fields cross the boundary; the storage core checks their values.

@@ -53,9 +53,9 @@ describe('ET-026 worker classification (REG-001/003/005/006/007/014)', () => {
     const bad = evidence(kind === 'failed' ? HARD_MODE_CONFIG.replace('g_fatigue "1"', 'g_fatigue "0"') : HARD_MODE_CONFIG);
     if (kind === 'unknown') bad.assessment = unknownHardMode(Date.now(), 'interrupted');
     if (kind === 'source-changed') bad.binding = 'b'.repeat(64);
-    ok(await client.observeHardMode('ets2', bad));
+    ok(await client.observeHardMode('ets2', bad, true));
     const first = ok(await client.getTrip(f.trip))!.hardModeDetails!.firstLoss;
-    ok(await client.observeHardMode('ets2', evidence())); await f.send(manual());
+    ok(await client.observeHardMode('ets2', evidence(), true)); await f.send(manual());
     expect(ok(await client.getTrip(f.trip))).toMatchObject({isHardMode: false, hardModeDetails: {firstLoss: first}}); expect(first).not.toBeNull();
     if (kind === 'failed') {expect(first!.values).toEqual([0]); expect(ok(await client.getTrip(f.trip))!.hardModeDetails!.latest.rules[3].values).toEqual([1]);}
   });
@@ -64,14 +64,23 @@ describe('ET-026 worker classification (REG-001/003/005/006/007/014)', () => {
     await f.send({...d, autoParkUsed: kind === 'automatic' ? {available: true, value: true} : {available: false, reason: 'not-supported'}});
     expect(ok(await client.getTrip(f.trip))).toMatchObject({isHardMode: false, hardModeDetails: {firstLoss: {reason: 'parking-unproven'}}});
   });
+  it('requires an explicit validated freshness verdict and never discards negative evidence with a false verdict', async () => {
+    const f = await setup(), message = f.script.event(r.fined());
+    const invalid = await client.commitEvent({message, hardMode: evidence(), hardModeFresh: 'true' as unknown as boolean}); expect(invalid.ok).toBe(false);
+    expect(ok(await client.committedThrough(ETS2_A))).toBe('1');
+    ok(await f.recorder.commit(message, {receivedUtcMs: Date.now()}));
+    ok(await client.observeHardMode('ets2', evidence()));
+    expect(ok(await client.getTrip(f.trip))!.hardModeDetails!.firstLoss).toMatchObject({reason: 'interrupted'});
+    await f.send(manual()); expect(ok(await client.getTrip(f.trip))!.isHardMode).toBe(false);
+  });
   it('does not qualify cancellation, redelivered openings or older queued events from current files', async () => {
     const script = new Script(ETS2_A); ok(await client.upsertSession({message: script.welcome()}));
     const opened = script.event(r.jobConfigured()), obs = evidence(); obs.sourceMonotonicNs = (BigInt(opened.capture.monotonicNs) + 1n).toString();
     const id = '70000000-0000-4000-8000-000000000001';
-    ok(await client.commitEvent({message: opened, hardMode: obs, effects: [{kind: 'trip.open', tripUuid: id, game: 'ets2', gameMode: {mode: 'unknown', method: 'none', confidence: 'none'}, jobConfiguration: 'this-event', recordingCompleteness: 'complete', startedUtcMs: Date.now()}]}));
+    ok(await client.commitEvent({message: opened, hardMode: obs, hardModeFresh: true, effects: [{kind: 'trip.open', tripUuid: id, game: 'ets2', gameMode: {mode: 'unknown', method: 'none', confidence: 'none'}, jobConfiguration: 'this-event', recordingCompleteness: 'complete', startedUtcMs: Date.now()}]}));
     expect(ok(await client.getTrip(id))).toMatchObject({isHardMode: false, hardModeDetails: {firstLoss: {reason: 'historical'}}});
     const cancelled = script.event(r.cancelled());
-    ok(await client.commitEvent({message: cancelled, hardMode: evidence(), effects: [{kind: 'trip.close', tripUuid: id, outcome: 'cancelled', closeReason: 'outcome', outcomeEvent: 'this-event', recordingCompleteness: 'complete', endedUtcMs: Date.now()}]}));
+    ok(await client.commitEvent({message: cancelled, hardMode: evidence(), hardModeFresh: true, effects: [{kind: 'trip.close', tripUuid: id, outcome: 'cancelled', closeReason: 'outcome', outcomeEvent: 'this-event', recordingCompleteness: 'complete', endedUtcMs: Date.now()}]}));
     expect(ok(await client.getTrip(id))!.isHardMode).toBe(false);
   });
   it('keeps loss across worker restart and duplicate delivery without changing coverage', async () => {
@@ -90,12 +99,12 @@ describe('ET-026 worker classification (REG-001/003/005/006/007/014)', () => {
     ok(await replacement.openSession(f.script.welcome()));
     const details = ok(await client.getTrip(f.trip))!.hardModeDetails!;
     expect(details.firstLoss).not.toBeNull();
-    ok(await client.observeHardMode('ets2', evidence()));
+    ok(await client.observeHardMode('ets2', evidence(), true));
     expect(ok(await client.getTrip(f.trip))!.hardModeDetails!.firstLoss).toEqual(details.firstLoss);
   });
   it('stores a pending observed loss before delivery after an observation-write failure, retaining the original value', async () => {
     const f = await setup(), original = client.observeHardMode.bind(client); let failed = false;
-    client.observeHardMode = (game, observation) => {if (!failed) {failed = true; return Promise.resolve({ok: false, error: {code: 'IO_ERROR', retryable: true, message: 'Injected'}});} return original(game, observation);};
+    client.observeHardMode = (game, observation, fresh) => {if (!failed) {failed = true; return Promise.resolve({ok: false, error: {code: 'IO_ERROR', retryable: true, message: 'Injected'}});} return original(game, observation, fresh);};
     f.recorder.observeHardMode('ets2', evidence(HARD_MODE_CONFIG.replace('g_fatigue "1"', 'g_fatigue "0"')));
     f.set(evidence()); await f.send(manual());
     expect(ok(await client.getTrip(f.trip))).toMatchObject({isHardMode: false, hardModeDetails: {firstLoss: {rule: 'fatigue', values: [0]}}});

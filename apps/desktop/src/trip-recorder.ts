@@ -96,14 +96,19 @@ export class TripRecorderSink implements DurableSink {
   private evidenceKey(message: CoverageMessage): string {return `${message.source.pluginSessionId}:${message.kind}:${message.kind === 'event' ? message.data.eventSeq : message.data.firstEventSeq}`;}
   capture(message: CoverageMessage): HardModeCapture | undefined {
     if (!this.options.hardModeEvidence) return undefined;
-    const captured = this.capturedEvidence.get(this.evidenceKey(message)) ?? {game: message.source.game, observation: structuredClone(this.options.hardModeEvidence()), firstUnsafe: null};
+    let captured = this.capturedEvidence.get(this.evidenceKey(message));
+    if (!captured) {
+      // The provider ages proof on the monitor's monotonic clock at synchronous intake, never at commit.
+      const observation = structuredClone(this.options.hardModeEvidence());
+      captured = {game: message.source.game, observation, fresh: observation.assessment.state === 'pass', firstUnsafe: null};
+    }
     const pending = this.pendingObservation;
     if (captured.firstUnsafe === null && pending?.game === captured.game && pending.value.assessment.state !== 'pass') captured.firstUnsafe = structuredClone(pending.value);
     if (captured.firstUnsafe === null && this.observationError) captured.firstUnsafe = {assessment: unknownHardMode(Date.now(), 'interrupted'), binding: null, pluginSessionId: null, sourceMonotonicNs: null};
     this.pendingCaptures.add(captured); return captured;
   }
   releaseCapture(captured: HardModeCapture): void {this.pendingCaptures.delete(captured);}
-  private pendingObservation: {game: TripGame; value: HardModeObservation} | undefined;
+  private pendingObservation: {game: TripGame; value: HardModeObservation; fresh: boolean} | undefined;
   private observing = false;
   private observationWrite: Promise<void> | undefined;
   private observationError: SinkError | undefined;
@@ -119,12 +124,17 @@ export class TripRecorderSink implements DurableSink {
   }
   /** At most one observation command and one pending loss. A compliant refresh never replaces a pending failure. */
   observeHardMode(game: TripGame, value: HardModeObservation): void {
+    // Validate positive offers against the monitor's monotonic-aged proof synchronously, before any write await.
+    const current = value.assessment.state === 'pass' ? this.options.hardModeEvidence?.() : undefined;
+    const fresh = value.assessment.state === 'pass' && current?.assessment.state === 'pass' && current.binding !== null
+      && current.binding === value.binding && current.pluginSessionId === value.pluginSessionId && current.sourceMonotonicNs === value.sourceMonotonicNs;
+    if (value.assessment.state === 'pass' && !fresh) value = {...value, assessment: unknownHardMode(value.assessment.observedUtcMs, 'interrupted')};
     if (this.observationBinding !== undefined && this.observationBinding !== value.binding && value.assessment.state === 'pass') value = {...value, assessment: unknownHardMode(value.assessment.observedUtcMs, 'source-changed')};
     this.observationBinding = value.binding;
     this.latchCaptureLoss(game, value);
     if (!this.client.observeHardMode) return;
     const pending = this.pendingObservation;
-    if (!pending || pending.value.assessment.state === 'pass') this.pendingObservation = {game, value: structuredClone(value)};
+    if (!pending || pending.value.assessment.state === 'pass') this.pendingObservation = {game, value: structuredClone(value), fresh: fresh && value.assessment.state === 'pass'};
     this.startObservationWrite();
   }
   private latchCaptureLoss(game: TripGame, value: HardModeObservation): void {
@@ -137,15 +147,15 @@ export class TripRecorderSink implements DurableSink {
     if (this.observing || !this.pendingObservation) return;
     this.observing = true;
     this.observationWrite = (async () => {
-      let attempted: {game: TripGame; value: HardModeObservation} | undefined;
+      let attempted: {game: TripGame; value: HardModeObservation; fresh: boolean} | undefined;
       try {
         while (this.pendingObservation) {
           const next = attempted = this.pendingObservation; this.pendingObservation = undefined;
-          const result = await this.client.observeHardMode!(next.game, next.value);
+          const result = await this.client.observeHardMode!(next.game, next.value, next.fresh);
           if (!result.ok) {
             // A storage interruption cannot be turned back into a pass by a later refresh.
             this.observationError = result.error;
-            this.pendingObservation = {game: next.game, value: next.value.assessment.state === 'pass' ? {...next.value, assessment: unknownHardMode(Date.now(), 'interrupted'), binding: null} : next.value};
+            this.pendingObservation = {game: next.game, fresh: false, value: next.value.assessment.state === 'pass' ? {...next.value, assessment: unknownHardMode(Date.now(), 'interrupted'), binding: null} : next.value};
             this.latchCaptureLoss(next.game, this.pendingObservation.value);
             return;
           }
@@ -154,7 +164,7 @@ export class TripRecorderSink implements DurableSink {
         }
       } catch {
         if (attempted) {
-          this.pendingObservation = {game: attempted.game, value: attempted.value.assessment.state === 'pass' ? {...attempted.value, assessment: unknownHardMode(Date.now(), 'interrupted'), binding: null} : attempted.value};
+          this.pendingObservation = {game: attempted.game, fresh: false, value: attempted.value.assessment.state === 'pass' ? {...attempted.value, assessment: unknownHardMode(Date.now(), 'interrupted'), binding: null} : attempted.value};
           this.latchCaptureLoss(attempted.game, this.pendingObservation.value);
         }
         this.observationError = {code: 'INTERNAL', retryable: false, message: 'The Hard Mode observation could not be stored.'};
@@ -231,7 +241,7 @@ export class TripRecorderSink implements DurableSink {
     if (!stepped.ok) return refused(RECORDER_CODE[stepped.code]);
     // No await between this read and posting the transaction: any earlier observed loss is part of opening/closing.
     const hardMode = capture?.observation, hardModeLoss = capture?.firstUnsafe;
-    const input = {message, ...(stepped.effects.length ? {effects: stepped.effects} : {}), ...(hardMode ? {hardMode} : {}), ...(hardModeLoss ? {hardModeLoss} : {})};
+    const input = {message, ...(stepped.effects.length ? {effects: stepped.effects} : {}), ...(hardMode ? {hardMode, hardModeFresh: capture.fresh} : {}), ...(hardModeLoss ? {hardModeLoss} : {})};
     const result = message.kind === 'event' ? await this.client.commitEvent(input) : await this.client.commitGap(input);
     if (!result.ok || !ADOPT.has(result.value.status)) return result;
     // R7: the gap's effects describe only (coveredThrough, lastEventSeq]; another starting point means they were wrong.
