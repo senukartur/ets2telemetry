@@ -6,6 +6,7 @@ import path from 'node:path';
 import {performance} from 'node:perf_hooks';
 import {RECORDING_DISABLED_TEXT, waitForCurrentTelemetry, waitForRecordingText} from './renderer-observation.mjs';
 import {waitForOverlay} from './overlay-observation.mjs';
+import {observeExit} from './exit-observation.mjs';
 
 // ET-011b settings evidence. Run A starts with a deliberately truncated settings file, which must stay byte-identical
 // until the first save quarantines it; run B must load the saved file without writing.
@@ -118,8 +119,9 @@ export async function closeDashboard(application, page) {
 export function waitForExit(child, timeoutMs, message) {
   if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve({code: child.exitCode, signal: child.signalCode});
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(message)), timeoutMs);
-    child.once('exit', (code, signal) => {clearTimeout(timer); resolve({code, signal});});
+    const exited = (code, signal) => {clearTimeout(timer); resolve({code, signal});};
+    const timer = setTimeout(() => {child.removeListener('exit', exited); reject(new Error(message));}, timeoutMs);
+    child.once('exit', exited);
   });
 }
 
@@ -235,10 +237,9 @@ export async function runLifecycleSmoke({application, launcher, dashboard, overl
   await trayDashboard.screenshot({path: path.join(config.output, 'ready.png')});
   await stopTracing();
   const exitStarted = performance.now();
-  const exited = waitForExit(launcher, 8000, 'EXPLICIT_EXIT_DID_NOT_FINISH_WITHIN_8_SECONDS');
   // The renderer may be torn down before its evaluation returns; only the process exit is the outcome.
-  await trayDashboard.evaluate(() => {void globalThis.desktop.exitApplication(); return true;}).catch(() => undefined);
-  const exit = await exited;
+  const exit = await observeExit({application, launcher, record: record.exitObservation = {}, message: 'EXPLICIT_EXIT_DID_NOT_FINISH_WITHIN_8_SECONDS',
+    request: () => trayDashboard.evaluate(() => {void globalThis.desktop.exitApplication(); return true;})});
   record.explicitExit = {launcherExit: exit.code, signal: exit.signal, exitMilliseconds: Math.round(performance.now() - exitStarted)};
   assert.equal(exit.code, 0); assert.equal(exit.signal, null);
   const finalEvents = await mainEvents();

@@ -2,6 +2,15 @@
 
 Read the full requirements in [TESTING.md](../TESTING.md). Pending means the owning component has not implemented an executable scenario; there are no passing empty cases. Partial protection does not satisfy the complete REG requirement.
 
+ET-011 closeout (October 21, 2026) adds `tests/unit/exit-observation.test.ts` (Node/Vitest,
+REG-012/REG-017, ET-011, PR `npm test`): controlled request/process/Playwright ordering, the unchanged
+eight-second operation deadline including a hung request, clean versus nonzero/signal exits, late
+rejection handling and listener/timer cleanup. `tests/unit/main-boundaries.test.ts` extends
+REG-010/REG-012 with exact fixed source-selection diagnostics on successful startup/user/restore
+dispatches and no false success for rejected or retired requests. Development/packaged lifecycle
+journeys retain their existing close/reopen/settings/shutdown requirements; observations do not prove
+the historical saturated-host cause or manual Windows/game acceptance.
+
 | Scenario | Status / existing executable protection | Remaining owner / boundary |
 | --- | --- | --- |
 | REG-001 normal job/road stop/delivery | Partial (domain): ET-014 PR-1 `trip-reducer.test.ts` case 1 (one complete delivered trip with its fine attributed; O1, O2, O5, O6, O8) and `tests/storage/trip-effects.test.ts` case 1 (the same effects committed to a synthetic database); ET-005b `simulator-v1-replay.test.ts` scenario `normal-delivery` checks only the synthetic v1 wire events of a delivery; ET-014 PR-2 `trip-accounting.test.ts` (a road stop is a continuous 0 m step; observed distance is persisted on carriers and before every close), `trip-simulator-replay.test.ts` scenario `normal-delivery` (a delivered trip with 0 m observed over its road stop, against a hand-written trip expectation) and `tests/storage/trip-accounting-effects.test.ts`; ET-015a PR-2: `tests/storage/trip-recorder.test.ts` (S2) records `normal-delivery` through `V1Ingestion`, the trip recorder and the real storage worker on actual pipes and stores exactly the hand-written trip rows; `tests/unit/trip-recorder.test.ts` U1 (trip.open committed with job.configured, adopted only after the commit) and U3 (readings behind a commit in flight give the 150 m close); ET-015b PR-3: `tests/storage/sample-recorder.test.ts` records `tests/fixtures/recording/one-second-samples.json` through the recorder and the real storage worker on actual pipes and stores one row per source second while driving and at a road stop at speed 0 (seconds 1000–1005), each naming trip@3 opened by a committed event, against hand-written rows; `trip-recorder.test.ts` S1 (a sample observed behind the opening commit names the trip only after that commit); ET-016 stale-checkpoint fix (October 18, 2026): `normal-delivery` replayed after a stale checkpoint stores only its delivered trip, with no late-attach trip for the delivered job (`tests/storage/stale-checkpoint.test.ts`, REG-003) | ET-015 1 Hz integration; real-game distance checks |
@@ -137,6 +146,7 @@ Columns:
 | `tests/unit/diagnostic-bundle.test.ts` | Node unit (Vitest) | REG-015, REG-017 | R, F, T, V (et-017) | ET-017 (PR-6) | PR (tests job, `npm test`) | security |
 | `tests/unit/diagnostics.test.ts` | Node unit (Vitest) | REG-017 | T, V (et-001) | ET-001 (#5) | PR (tests job, `npm test`) | security |
 | `tests/unit/event-loop-lag.test.ts` | Node unit (Vitest) | smoke evidence: REG-011, REG-012, REG-014, REG-016, REG-017 | V (ci-smoke-window-stall) | ET-022 (#46) | PR (tests job, `npm test`) | — |
+| `tests/unit/exit-observation.test.ts` | Node unit (Vitest), inert emitters/promises and controlled clock | harness: REG-012, REG-017 | R, T | ET-011 (#162) | PR (tests job, `npm test`) | regression |
 | `tests/unit/game-folder.test.ts` | Node unit (Vitest) | REG-015 | R, F, V (et-017) | ET-017 (PR-2) | PR (tests job, `npm test`) | security |
 | `tests/unit/game-processes.test.ts` | Node unit (Vitest) | REG-015 | R, F, V (et-017) | ET-017 (PR-2) | PR (tests job, `npm test`) | — |
 | `tests/unit/guarded-fs.test.ts` | Node unit (Vitest) | harness: REG-015 | T, V (et-017) | ET-017 (PR-2) | PR (tests job, `npm test`) | security |

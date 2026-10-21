@@ -529,6 +529,17 @@ ET-013 PR-2 implementation update (October 15, 2026): the telemetry service runs
 
 ## ET-011 authorization — October 15, 2026
 
+Closeout instruction, October 21, 2026: the owner requested Review status, card reconciliation and
+completion of unattended follow-ups before manual checks together. This includes diagnosing the
+historical launcher close timeout and the approved source-selection logs. Main records fixed
+`SOURCE_SELECTED`/`SOURCE_SELECTION_RETIRED` dispatch facts with `startup`/`user`/`restore` origin;
+the logs do not prove connection, capture binding or recording. Exit observation keeps the existing
+eight-second operation and 60-second smoke Job bounds and distinguishes app logs, launcher termination,
+stdio closure and Playwright teardown. The original saturated-host cause remains unproven. The
+[closeout record](docs/validation/et-011.md) reconciles merged packages and later evidence while
+retaining manual Windows/game acceptance. No product architecture, wire, history or release scope
+changes.
+
 On October 15, 2026 the owner wrote (translated from Russian): "Overall, keep doing other tasks until you hit tests in the real game. Make optimal decisions. I want you to close as many tasks as possible without my involvement. If there are flaky tests, delegate their fixes to subagents." Under this standing delegation the coordinator started ET-011 (application tray lifecycle and persistent settings) and adopted the architect's recommendations C1–C17 below as coordinator decisions. The owner has not reviewed them individually; they can be revisited like any other recorded decision. This section covers ET-011 only; other packages started under the same delegation are recorded in their own sections.
 
 | # | Decision |

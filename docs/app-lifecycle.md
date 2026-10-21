@@ -161,6 +161,22 @@ The tray's second status line is `Recording: ` and the short form of the headlin
 
 ## Diagnostics log
 
+### Source selection (ET-011 closeout)
+
+Main logs `SOURCE_SELECTED` only after a validated source command was successfully dispatched to the
+current telemetry service. Its only facts are the validated `source` enum and `origin`: `startup`
+for the first successful initial dispatch, `user` for a successful dashboard request, or `restore`
+when a replacement service receives the retained committed selection. A repeated successful request
+for the same source still gets a selected row. Replacing a successfully dispatched source with a
+different one first logs `SOURCE_SELECTION_RETIRED` for the previous source, with the same origin.
+No initial source is retired before its first successful dispatch.
+
+Rejected input, an untrusted or replaced dashboard, rate limiting, an obsolete pending request,
+service retirement, shutdown or a throwing dispatch produces no successful selection or retirement
+row. A pending request does not replace the retained committed source. These rows describe dispatch,
+not a service acknowledgement, a connection, a CAP0 grant or recording. Their facts contain no paths,
+arguments, broker/peer data, process identity or telemetry; the existing log bounds still apply.
+
 Main and the telemetry service each write `startup.jsonl` with `createDiagnostics` ([diagnostics.ts](../apps/desktop/src/diagnostics.ts)): main in `%LOCALAPPDATA%\ETS2Telemetry\logs` and the service in its `service` subdirectory, or both under `ETS2TELEMETRY_DIAGNOSTIC_DIR` in isolated runs. A record is one JSON line with the time, the PID, a fixed event code and optional fixed facts; the error detail is included only in diagnostic-directory mode. Each log holds at most 256 KiB and 2,000 records per process; when a process starts with a file within 8 KiB of the limit, the file is renamed to `startup.jsonl.1`, replacing the previous one.
 
 **Asynchronous writes (October 18, 2026).** Logging never waits for the disk. A synchronous append once blocked a process's main thread for 1,184 ms on the development host, which can delay the service's shutdown verdicts past their budgets (found during the history close grace investigation, PR #114). The writer works as follows:

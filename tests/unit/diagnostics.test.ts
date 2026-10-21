@@ -69,6 +69,21 @@ it('always records fixed facts while still suppressing the default detail', asyn
   const record = JSON.parse(readFileSync(path.join(dir, 'startup.jsonl'), 'utf8'));
   expect(record.facts).toEqual({outcome: 'busy', stage: 'policy-publish', win32Error: 5, elapsedMs: null}); expect(record.detail).toBeUndefined();
 });
+it('keeps source-selection facts in default logs without private details and within the existing bounds', async () => {
+  const dir = directory(), log = createDiagnostics(dir);
+  for (let index = 0; index < 3000; index++) {
+    log(index % 2 ? 'SOURCE_SELECTION_RETIRED' : 'SOURCE_SELECTED', {path: 'C:\\private\\profile', argv: ['secret'], peer: 'private-peer'},
+      {source: 'ets2', origin: 'user'});
+  }
+  expect(await log.flush(5000)).toBe(true);
+  const text = readFileSync(path.join(dir, 'startup.jsonl'), 'utf8');
+  const records = text.trim().split('\n').map(line => JSON.parse(line));
+  expect(records.length).toBeGreaterThan(1); expect(records.length).toBeLessThanOrEqual(2000);
+  expect(Buffer.byteLength(text)).toBeLessThanOrEqual(256 * 1024);
+  expect(records.every(record => record.detail === undefined && Object.keys(record.facts).sort().join(',') === 'origin,source'
+    && record.facts.source === 'ets2' && record.facts.origin === 'user')).toBe(true);
+  expect(text).not.toMatch(/private|secret|profile|argv|peer/);
+});
 it('retains opt-in errors and caps file growth and individual messages', async () => {
   const dir = directory();
   const log = createDiagnostics(dir, true);

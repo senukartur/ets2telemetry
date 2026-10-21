@@ -25,6 +25,7 @@ import {RECORDING_TARGET, runRecordingSmoke, startRecordingSource, verifyRecordi
 import {JOURNAL_TARGET, runJournalEmpty, runJournalExport, runJournalSeeded, seedJournalDatabase, verifyJournalRun} from './journal-observation.mjs';
 import {placeNewerHistory, runRefusalSmoke, verifyRefusalRun} from './refusal-observation.mjs';
 import {coldLaunchPhases, observeColdLaunch, observeProcessMemory} from './launch-evidence.mjs';
+import {observeExit} from './exit-observation.mjs';
 import {SOAK_TARGET, compactSoakEvents, runSoakSmoke, startSoakSource, verifySoakLogs, verifySoakRun} from './soak-observation.mjs';
 import {installedEnvironment, minimalPath, normalizePath} from '../installer/installer-guard.mjs';
 // These read-only globals are used only inside serialized Playwright browser callbacks.
@@ -40,7 +41,6 @@ const result = {scenario: config.scenario === 'soak' ? 'V1 SYNTHETIC-RECORDING-S
   host: {logicalProcessors: os.availableParallelism()}, startedUtc: new Date().toISOString()};
 let application;
 let launcher;
-let timer;
 let tracing = false;
 let telemetrySource;
 // ET-010c: the telemetry scenario also serves synthetic protocol v1 data; every other scenario stays v0-only.
@@ -442,7 +442,8 @@ try {
     if (config.uiCase === 'settings') {
       // Same 60-second Job: a normal first run, then an isolated newer-version read-only launch.
       await application.context().tracing.stop({path: path.join(config.output, 'ui-settings-first-trace.zip')}); tracing = false;
-      await application.close(); assert.equal(launcher.exitCode, 0); assert.equal(launcher.signalCode, null);
+      await observeExit({application, launcher, request: () => application.close(), requireRequest: true,
+        record: result.ui.exitObservation = {}, message: 'APP_CLOSE_TIMEOUT_8_SECONDS'});
       result.ui.firstLauncherExit = launcher.exitCode;
       const settingsBytes = '{"format":"ets2telemetry.settings","version":999,"language":"ru","fixture":"future settings retained byte-identically"}';
       await writeFile(path.join(config.localappdata, 'ETS2Telemetry', 'settings', 'settings.json'), settingsBytes);
@@ -488,9 +489,8 @@ try {
     phase('journal-empty-shown');
     tracing = false; await application.context().tracing.stop({path: path.join(config.output, 'trace-empty-history.zip')}); phase('tracing-stopped');
     const closeStart = performance.now();
-    try {
-      await Promise.race([application.close(), new Promise((_, reject) => {timer = setTimeout(() => reject(new Error('APP_CLOSE_TIMEOUT_8_SECONDS')), 8000);})]);
-    } finally {clearTimeout(timer);}
+    await observeExit({application, launcher, request: () => application.close(), requireRequest: true,
+      record: result.journal.exitObservation = {}, message: 'APP_CLOSE_TIMEOUT_8_SECONDS'});
     result.journal.emptyRunExit = {launcherExit: launcher.exitCode, signal: launcher.signalCode, closeMilliseconds: Math.round(performance.now() - closeStart)};
     assert.deepEqual({launcherExit: launcher.exitCode, signal: launcher.signalCode}, {launcherExit: 0, signal: null});
     application = undefined; phase('journal-empty-run-exited');
@@ -529,9 +529,8 @@ try {
     result.plugin = {};
     await runPluginJourney({dashboard: window, fixture: pluginFixture, config, before: pluginBefore, record: result.plugin, phase});
     tracing = false; await application.context().tracing.stop({path: path.join(config.output, 'trace.zip')}); phase('tracing-stopped');
-    try {
-      await Promise.race([application.close(), new Promise((_, reject) => {timer = setTimeout(() => reject(new Error('APP_CLOSE_TIMEOUT_8_SECONDS')), 8000);})]);
-    } finally {clearTimeout(timer);}
+    await observeExit({application, launcher, request: () => application.close(), requireRequest: true,
+      record: result.plugin.exitObservation = {}, message: 'APP_CLOSE_TIMEOUT_8_SECONDS'});
     result.plugin.runAExit = launcher.exitCode;
     assert.deepEqual({launcherExit: launcher.exitCode, signal: launcher.signalCode}, {launcherExit: 0, signal: null});
     application = undefined; phase('plugin-run-a-exited');
@@ -569,15 +568,14 @@ finally {
     const start = performance.now();
     phase('close-requested');
     try {
-      await Promise.race([application.close(), new Promise((_, reject) => {
-        timer = setTimeout(() => reject(new Error('APP_CLOSE_TIMEOUT_8_SECONDS')), 8000);
-      })]);
+      await observeExit({application, launcher, request: () => application.close(), requireRequest: true,
+        record: result.closeObservation = {}, message: 'APP_CLOSE_TIMEOUT_8_SECONDS'});
       result.closeMilliseconds = performance.now() - start;
       result.launcherExit = launcher.exitCode;
       assert.equal(result.launcherExit, 0);
       assert.equal(launcher.signalCode, null);
     } catch (error) {result.closeFailure = failure(error);}
-    finally {clearTimeout(timer); phase('close-settled');}
+    finally {phase('close-settled');}
   }
   // ET-019 PR-12b: a soak whose source the journey did not stop (a failure, or an application that exited first) ends it
   // now, so its summary records how its last connection closed.

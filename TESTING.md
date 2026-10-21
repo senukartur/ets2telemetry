@@ -1,5 +1,14 @@
 # Testing and Regression Strategy
 
+ET-011 closeout, October 21, 2026: `tests/unit/exit-observation.test.ts` uses controlled promises,
+emitters and clocks to distinguish a pending exit request, real launcher exit/stdio closure and
+Playwright close, keeping the original eight-second bound around the whole operation. The runtime
+driver retains bounded partial observations on failure; it never accepts `APP_EXIT` logging as process
+termination. `main-boundaries.test.ts` checks fixed source-selection diagnostics only after successful
+current-service dispatch, including rejection and retirement races. No stress loops, broader timeout,
+game launch or real-history enablement is part of this coverage. See [ET-011](docs/validation/et-011.md)
+for preserved historical failures and remaining manual acceptance.
+
 ET-009 owner acceptance, October 20, 2026: [the closeout](docs/validation/et-009.md) separates observed game
 results from owner-accepted gaps and the environment checks transferred to ET-042. It preserves missing
 latency observations, performance-probe overhead and the unresolved hitch. This acceptance does not waive
