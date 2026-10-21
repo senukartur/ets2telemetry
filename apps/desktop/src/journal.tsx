@@ -1,7 +1,7 @@
 import {HardModeBadge, HardModeTrip} from './hard-mode/card';
 import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import type {
-  JournalCallResult, JournalCompleteness, JournalDatabase, JournalGame, JournalOutcome, JournalTripDetail, JournalTripPage, JournalTripsQuery, RecordingHealth, UnitProfiles
+  AppLanguage, JournalCallResult, JournalCompleteness, JournalDatabase, JournalGame, JournalOutcome, JournalTripDetail, JournalTripPage, JournalTripsQuery, RecordingHealth, UnitProfiles
 } from '../../../packages/contracts/src';
 import {Alert, AlertDescription} from '@/components/ui/alert';
 import {Badge} from '@/components/ui/badge';
@@ -276,11 +276,11 @@ const GAMES: readonly JournalGame[] = ['ets2', 'ats'];
 const OUTCOMES: readonly JournalOutcome[] = ['open', 'delivered', 'cancelled', 'none'];
 const COMPLETENESS: readonly JournalCompleteness[] = ['complete', 'partial', 'unknown'];
 
-export function Journal({units, recording}: {units: UnitProfiles | undefined; recording: RecordingHealth['state'] | undefined}) {
+export function Journal({units, recording, language}: {units: UnitProfiles | undefined; recording: RecordingHealth['state'] | undefined; language?: AppLanguage}) {
   const [database, setDatabase] = useState<JournalDatabase>();
   const [filters, setFilters] = useState<Filters>({});
   const [selected, setSelected] = useState<Selected | null>(null);
-  const options = useMemo<JournalTextOptions>(() => (units ? {units} : {}), [units]);
+  const options = useMemo<JournalTextOptions>(() => ({...(units ? {units} : {}), ...(language ? {language} : {})}), [units, language]);
   const banner = journalBannerText(database);
   const filterKey = `${filters.game ?? ''}|${filters.outcome ?? ''}|${filters.completeness ?? ''}`;
   return <Card size="sm" data-testid="journal"><CardHeader><CardTitle><h2>{JOURNAL_STRINGS.title}</h2></CardTitle></CardHeader>

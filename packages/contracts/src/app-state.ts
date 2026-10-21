@@ -65,6 +65,8 @@ export type UnitGame = 'ets2' | 'ats';
  */
 export type UnitProfile = 'metric' | 'us-customary';
 export type UnitProfiles = Readonly<Record<UnitGame, UnitProfile>>;
+/** Application user interface languages (ET-029). */
+export type AppLanguage = 'en' | 'ru';
 /**
  * How the persisted settings were obtained at startup or by the last save. `defaults`: no file. `loaded-with-fallbacks`:
  * some fields were invalid and use defaults. `invalid-file`, `unsupported-older`: the file is kept unchanged until the
@@ -120,6 +122,7 @@ export type OverlayEditState =
   | {active: true; layout: OverlayLayout; scale: number; placement: OverlayEditPlacement};
 /** The settings that apply now. Never carries paths, file content or error text. */
 export interface SettingsView {
+  language: AppLanguage;
   units: UnitProfiles;
   /** The saved overlay layout, sections and placements, or their defaults (strip, every section, the default anchors). */
   overlay: OverlaySettings;
