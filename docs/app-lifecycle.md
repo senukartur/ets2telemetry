@@ -84,6 +84,31 @@ Every way to leave the application goes through one idempotent exit coordinator 
 
 The first request logs `APP_EXIT_REQUESTED` with its reason, sets the tray tooltip to `Exiting`, disables the menu, retires live subscriptions, hides the overlay and asks the supervisor to stop the service. Later requests do nothing. `query-session-end` is not prevented. After the supervisor finishes, the coordinator waits for pending idle work (an in-flight [settings](settings.md#saving) save, since ET-016 PR-5 the removal of an interrupted [trip export](journal-export.md#saving-a-trip-j16-j17)'s partial file, since ET-017 PR-6 the same for an interrupted [diagnostic bundle](plugin-setup.md#diagnostic-bundle) export, and, since ET-017 PR-4, the [plugin setup](plugin-setup.md#setup-run) run in flight, which the exit aborts and which ends with the removal of its temporary file, and its registry write of an exclusion change or folder choice; together at most 1000 ms from the request; new saves, exports and plugin setup requests are refused once the exit started), removes the tray icon so no ghost icon remains, writes its final log rows (the append in flight gets at most 300 ms, [diagnostics log](#diagnostics-log)) and calls `app.exit(code)`. The supervisor's existing bounds are unchanged: the service is killed after 3000 ms without a clean stop and the application exits after 5000 ms in any case. Main-internal fatal paths still exit 1 through the same final step. A fatal stop (for example renderer or overlay restart exhaustion, a load or configuration failure, or a service recovery timeout) marks the application exiting as soon as it starts, without logging an exit request: the tray shows `Exiting` with a disabled menu, live state is retired, the overlay may close and neither the tray nor a second launch reopens the dashboard during the stop window.
 
+### Windows terminal session boundary — October 21, 2026
+
+The supervised completion described above applies while Electron can keep its event loop running. The pinned
+[Electron 44.7.0 native handler](https://github.com/electron/electron/blob/v44.7.0/shell/browser/native_window_views_win.cc#L383-L413)
+notifies every window of confirmed `WM_ENDSESSION`, then immediately terminates main if Electron has not begun its own
+quit. Our `before-quit` redirection deliberately prevents that separate quit path. Returning from a JavaScript
+`session-end` callback therefore cannot await the supervisor or an asynchronous log append. This explains the real
+October 21 sign-out's missing main rows despite the service's clean stop; its frozen evidence remains partial.
+
+Confirmed `session-end` now enters synchronous terminal logging **before** requesting the same idempotent lifecycle
+stop. It removes the tray synchronously and writes `WINDOWS_SESSION_END_HANDOFF` with `{completion: 'os-owned'}` before
+returning to Electron. Duplicate notifications across dashboard/overlay do nothing. `query-session-end` is left inert:
+Windows may cancel a query, so it must neither stop the service nor veto the user's session end.
+
+The handoff marker records the native termination boundary, not a completed service flush or a supervisor-observed
+exit. `SERVICE_EXIT` and `APP_EXIT` are written only if those events are actually observed. A full asynchronous
+supervised completion cannot be guaranteed at this boundary without changing Windows shutdown policy; this fix does
+not add a veto, delay, new native service or wider deadline. Real sign-out/restart acceptance still requires the owner
+and separate service/storage evidence, not merely a zero exit code or absent processes.
+
+Terminal logging keeps the existing 256 KiB/2,000-record limits and fixed-code console fallback. It drains the queued
+rows and writes later rows synchronously; an older append already in flight is not replayed and can land later or be
+lost. A full log or unavailable/stalled disk remains an explicit diagnostic limit. The regular recording/telemetry
+path remains asynchronous.
+
 ## In-app uninstall (ET-018 PR-4)
 
 The Live tab's **Uninstall ETS2Telemetry** card calls the bridge method `uninstallApplication()` on the `app:uninstall` channel. Main accepts it only from the trusted dashboard's main frame (the overlay and any other sender are refused), only with zero arguments (preload refuses any argument before IPC, and main refuses again), and refuses it once the exit has begun. The answer is `{outcome: 'cancelled' | 'not-installed' | 'blocked' | 'interrupted' | 'started' | 'failed', code?, removed?, blocked?: [{targetId, reason}]}` with fixed codes and the plugin card's target ids, never a path. The steps before `started` are in [uninstall](uninstall.md#in-app-uninstall).

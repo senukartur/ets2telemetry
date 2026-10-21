@@ -258,6 +258,11 @@ jobs:
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode development -Scenario refusal
       - name: Bounded Forge packaged Electron worker smoke
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged
+      - name: Bounded packaged native Windows session-end audit
+        run: |
+          $packageHash = node --input-type=module -e 'import {verifyPackage} from "./scripts/package-integrity.mjs"; console.log(verifyPackage("out/ETS2Telemetry Desktop-win32-x64").packageSha256)'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./scripts/ci/Invoke-SessionEndSmoke.ps1 -OutputRoot .local/ci -ExpectedPackageSha256 $packageHash
       - name: Bounded packaged telemetry source and recovery smoke
         run: ./scripts/ci/Invoke-RuntimeSmoke.ps1 -Mode packaged -Scenario telemetry
       - name: Bounded packaged hidden overlay projection and isolation smoke

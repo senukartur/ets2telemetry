@@ -38,7 +38,7 @@ let showMessageBox: ReturnType<typeof vi.fn<(...args: unknown[]) => Promise<{res
 let shell: {showItemInFolder: ReturnType<typeof vi.fn<(file: string) => void>>; openPath: ReturnType<typeof vi.fn<(folder: string) => Promise<string>>>};
 let channels: {port1: EventEmitter & {postMessage: ReturnType<typeof vi.fn>; close: ReturnType<typeof vi.fn<() => void>>; start: ReturnType<typeof vi.fn<() => void>>}; port2: {close: ReturnType<typeof vi.fn<() => void>>}}[];
 let configurations: Electron.BrowserWindowConstructorOptions[];
-let log: ReturnType<typeof vi.fn> & {flush: ReturnType<typeof vi.fn>; finalize: ReturnType<typeof vi.fn>};
+let log: ReturnType<typeof vi.fn> & {flush: ReturnType<typeof vi.fn>; finalize: ReturnType<typeof vi.fn>; enterTerminalMode: ReturnType<typeof vi.fn>};
 // Log location fix: the arguments of every createDiagnostics call and of every service fork.
 let diagnosticsCalls: unknown[][], forkCalls: unknown[][];
 // ET-011a fixture additions. The tray is unavailable unless a test enables it, so earlier tests keep their
@@ -155,7 +155,7 @@ function installFixture() {
       showMessageBox: (...args: unknown[]) => showMessageBox(...args)},
     shell: {showItemInFolder: (file: string) => shell.showItemInFolder(file), openPath: (folder: string) => shell.openPath(folder)}}));
   vi.doMock('../../apps/desktop/src/entrypoints', () => ({processEntrypoint: () => 'package.json'}));
-  log = Object.assign(vi.fn(), {flush: vi.fn(() => Promise.resolve(true)), settle: vi.fn<(timeoutMs: number) => Promise<void>>(() => Promise.resolve()), finalize: vi.fn<(timeoutMs: number) => Promise<void>>(() => Promise.resolve()), drainSync: vi.fn()}); diagnosticsCalls = [];
+  log = Object.assign(vi.fn(), {flush: vi.fn(() => Promise.resolve(true)), settle: vi.fn<(timeoutMs: number) => Promise<void>>(() => Promise.resolve()), finalize: vi.fn<(timeoutMs: number) => Promise<void>>(() => Promise.resolve()), drainSync: vi.fn(), enterTerminalMode: vi.fn()}); diagnosticsCalls = [];
   vi.doMock('../../apps/desktop/src/diagnostics', async importOriginal => ({...await importOriginal<typeof import('../../apps/desktop/src/diagnostics')>(),
     createDiagnostics: (...args: unknown[]) => {diagnosticsCalls.push(args); return log;}}));
   vi.doMock('../../apps/desktop/src/broker-artifact', () => ({brokerConfiguration: resolveBroker, createBrokerResolver: () => resolveBroker}));
@@ -914,7 +914,9 @@ it.each(['tray', 'renderer', 'app-quit', 'session-end', 'uninstall'] as const)('
   // Exiting is final: tray and overlay close requests no longer reopen or keep anything.
   trays[0].emit('click'); expect(windows).toHaveLength(2);
   const overlayClose = {preventDefault: vi.fn()}; windows[1].emit('close', overlayClose); expect(overlayClose.preventDefault).not.toHaveBeenCalled();
-  expect(app.exit).not.toHaveBeenCalled(); expect(trays[0].destroy).not.toHaveBeenCalled();
+  // Every case above also receives a confirmed Windows session-end. Unlike an ordinary request it must remove the
+  // tray synchronously, before Electron terminates, rather than wait for the later mocked service completion.
+  expect(app.exit).not.toHaveBeenCalled(); expect(trays[0].destroy).toHaveBeenCalledOnce();
   child.emit('exit', 0);
   // Since October 18, 2026 main exits after its pending log records are written, waiting at most MAIN_EXIT_FLUSH_MS.
   expect(log.finalize).toHaveBeenCalledExactlyOnceWith(MAIN_EXIT_FLUSH_MS); expect(app.exit).not.toHaveBeenCalled();
@@ -925,6 +927,24 @@ it.each(['tray', 'renderer', 'app-quit', 'session-end', 'uninstall'] as const)('
   expect(trays[0].destroy.mock.invocationCallOrder[0]).toBeLessThan(app.exit.mock.invocationCallOrder[0]);
   expect(log.mock.calls.map(call => call[0] as string).filter(name => failurePattern.test(name))).toEqual([]);
   expect(vi.getTimerCount()).toBe(0);
+});
+it('keeps a cancellable Windows session query inert and audits confirmed end synchronously once across both windows', async () => {
+  trayAvailable = true; await ready();
+  const query = {preventDefault: vi.fn()};
+  windows[0].emit('query-session-end', query); windows[1].emit('query-session-end', query);
+  expect(query.preventDefault).not.toHaveBeenCalled();
+  expect(log.enterTerminalMode).not.toHaveBeenCalled();
+  expect(child.postMessage.mock.calls.filter(call => call[0].type === 'stop')).toHaveLength(0);
+  expect(trays[0].destroy).not.toHaveBeenCalled();
+  windows[1].emit('session-end'); windows[0].emit('session-end'); windows[1].emit('session-end');
+  expect(log.enterTerminalMode).toHaveBeenCalledOnce();
+  expect(log.mock.calls.filter(call => call[0] === 'APP_EXIT_REQUESTED')).toEqual([['APP_EXIT_REQUESTED', undefined, {reason: 'session-end'}]]);
+  expect(log.mock.calls.filter(call => call[0] === 'WINDOWS_SESSION_END_HANDOFF')).toEqual([['WINDOWS_SESSION_END_HANDOFF', undefined, {completion: 'os-owned'}]]);
+  expect(log.enterTerminalMode.mock.invocationCallOrder[0]).toBeLessThan(log.mock.invocationCallOrder[log.mock.calls.findIndex(call => call[0] === 'APP_EXIT_REQUESTED')]);
+  expect(child.postMessage.mock.calls.filter(call => call[0].type === 'stop')).toHaveLength(1);
+  expect(trays[0].destroy).toHaveBeenCalledOnce();
+  expect(log.mock.calls.filter(call => call[0] === 'APP_EXIT' || call[0] === 'SERVICE_EXIT')).toEqual([]);
+  expect(app.exit).not.toHaveBeenCalled();
 });
 it('rejects application exit and state requests from untrusted senders, frames and the overlay', async () => {
   trayAvailable = true; await ready();

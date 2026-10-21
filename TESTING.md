@@ -1,5 +1,12 @@
 # Testing and Regression Strategy
 
+ET-011 Windows session end, October 21, 2026: terminal diagnostics/main-boundary regressions retain confirmed-end rows
+before Electron's immediate native termination, without treating a cancelled query as an exit. The separate bounded
+`scripts/ci/Invoke-SessionEndSmoke.ps1` checks an owned HWND/PID/image, cancelled query and confirmed native end after
+dashboard close; it sends no broadcast and does not sign out Windows. Its `WINDOWS_SESSION_END_HANDOFF` predicate is
+separate from ordinary `APP_EXIT`/`SERVICE_EXIT` receipt rules, which stay unchanged. Real owner sign-out/restart and
+service/storage completion remain separate acceptance evidence; see [ET-011](docs/validation/et-011.md).
+
 ET-011 closeout, October 21, 2026: `tests/unit/exit-observation.test.ts` uses controlled promises,
 emitters and clocks to distinguish a pending exit request, real launcher exit/stdio closure and
 Playwright close, keeping the original eight-second bound around the whole operation. The runtime

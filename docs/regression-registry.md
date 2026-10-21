@@ -1,5 +1,11 @@
 # Regression scenario-to-test registry
 
+ET-011 Windows terminal boundary (October 21, 2026), partial REG-012/REG-017: `diagnostics.test.ts` and
+`main-boundaries.test.ts` protect synchronous terminal audit, cancelled queries and duplicate notifications. The
+packaged `scripts/ci/Invoke-SessionEndSmoke.ps1` sends native session messages only to the verified owned window after
+dashboard close. It checks the truthful handoff marker without weakening normal orderly-exit predicates. This is
+controlled native-message evidence; actual Windows sign-out/restart and service/storage completion remain separate.
+
 Read the full requirements in [TESTING.md](../TESTING.md). Pending means the owning component has not implemented an executable scenario; there are no passing empty cases. Partial protection does not satisfy the complete REG requirement.
 
 ET-011 closeout (October 21, 2026) adds `tests/unit/exit-observation.test.ts` (Node/Vitest,

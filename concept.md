@@ -529,6 +529,15 @@ ET-013 PR-2 implementation update (October 15, 2026): the telemetry service runs
 
 ## ET-011 authorization — October 15, 2026
 
+Windows session-end correction, October 21, 2026: pinned Electron immediately terminates main after confirmed native
+`session-end` listeners, so C6's normal asynchronous supervisor completion cannot be guaranteed at that OS boundary.
+The owner requested diagnosing/fixing the lost audit and preparing a repeat manual check. Confirmed end now enters
+synchronous bounded logging before the same lifecycle request, removes the tray immediately and records the truthful
+`WINDOWS_SESSION_END_HANDOFF` boundary. It never invents completed service/app exits, stops on a cancellable query or
+vetoes Windows shutdown. Ordinary exit budgets remain unchanged. Actual service/storage completion and real Windows
+acceptance remain independently evidenced, as [the lifecycle](docs/app-lifecycle.md#windows-terminal-session-boundary--october-21-2026)
+and [validation](docs/validation/et-011.md) describe. This is a diagnostic correction, not an OS-lifecycle policy change.
+
 Closeout instruction, October 21, 2026: the owner requested Review status, card reconciliation and
 completion of unattended follow-ups before manual checks together. This includes diagnosing the
 historical launcher close timeout and the approved source-selection logs. Main records fixed
