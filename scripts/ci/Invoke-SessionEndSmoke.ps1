@@ -26,7 +26,7 @@ foreach ($name in @('temp', 'appdata', 'localappdata', 'profile', 'diagnostics')
 $config.commit = (& git -C $checkout rev-parse HEAD)
 if ($LASTEXITCODE -ne 0) { throw 'Commit identity unavailable.' }
 $config.harnessHashes = @{}
-foreach ($relative in @('scripts/ci/Invoke-SessionEndSmoke.ps1', 'scripts/ci/session-end-smoke.mjs', 'scripts/ci/SessionEndSender.cs', 'scripts/ci/exit-observation.mjs', 'scripts/package-integrity.mjs', 'scripts/watchdog/BoundedProcess.cs')) {
+foreach ($relative in @('scripts/ci/Invoke-SessionEndSmoke.ps1', 'scripts/ci/session-end-smoke.mjs', 'scripts/ci/session-end-observation.mjs', 'scripts/ci/SessionEndSender.cs', 'scripts/ci/exit-observation.mjs', 'scripts/package-integrity.mjs', 'scripts/watchdog/BoundedProcess.cs')) {
     $config.harnessHashes[$relative] = (Get-FileHash -LiteralPath (Join-Path $checkout $relative) -Algorithm SHA256).Hash.ToLowerInvariant()
 }
 $config.sender = Join-Path $output 'SessionEndSender.exe'

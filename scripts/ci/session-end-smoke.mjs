@@ -3,7 +3,7 @@ import path from 'node:path';
 import {spawn} from 'node:child_process';
 import {appendFileSync, renameSync, writeFileSync} from 'node:fs';
 import {readFile} from 'node:fs/promises';
-import {observeExit} from './exit-observation.mjs';
+import {assertSessionSender, observeSessionEnd} from './session-end-observation.mjs';
 import {verifyPackage} from '../package-integrity.mjs';
 
 const [configFile] = process.argv.slice(2);
@@ -90,7 +90,9 @@ try {
   await until(async () => {try {return (await rows(mainPath)).some(row => row.event === 'SERVICE_READY');} catch {return false;}});
   record.mainPid = (await rows(mainPath)).find(row => row.event === 'APP_START').pid;
   await until(async () => await application.evaluate(({BrowserWindow}) => BrowserWindow.getAllWindows().length === 2 && BrowserWindow.getAllWindows().every(window => window.webContents.getURL().includes('/renderer/index.html') && !window.webContents.isLoading())));
-  record.cancelledQuery = await send(await target(false), 'cancel');
+  record.cancelTarget = await target(false);
+  record.cancelledQuery = await send(record.cancelTarget, 'cancel');
+  assertSessionSender(record.cancelledQuery, record.cancelTarget, config.executable, 'cancel');
   checkpoint('cancelled-query');
   assert.equal(launcher.exitCode, null);
   let events = await rows(mainPath);
@@ -100,8 +102,9 @@ try {
   record.dashboardClosed = true;
   checkpoint('dashboard-closed');
   const ownedOverlay = await target(true);
-  record.exit = await observeExit({application, launcher, record: record.exitObservation = {}, message: 'SESSION_END_EXIT_TIMEOUT_8_SECONDS',
-    request: async () => {record.sender = await send(ownedOverlay, 'end');}});
+  record.endTarget = ownedOverlay;
+  record.exit = await observeSessionEnd({application, launcher, record, target: ownedOverlay, executable: config.executable,
+    send: () => send(ownedOverlay, 'end')});
   assert.equal(record.exit.code, 0); assert.equal(record.exit.signal, null);
   events = await rows(mainPath);
   record.mainEvents = events;

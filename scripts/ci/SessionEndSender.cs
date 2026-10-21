@@ -43,7 +43,10 @@ internal static class SessionEndSender {
           targetActive = code == 259;
           if (!delivered && targetActive) throw new InvalidOperationException("WM_ENDSESSION did not complete and the target is still active; Win32 error " + sendError);
         }
-        Console.WriteLine("{\"ownerPidVerified\":true,\"imageVerified\":true,\"broadcast\":false,\"mode\":\"" + args[3] +
+        Console.WriteLine("{\"ownerPidVerified\":true,\"imageVerified\":true,\"verifiedPid\":" + owner +
+          ",\"verifiedHwnd\":\"" + window.ToInt64().ToString("x", System.Globalization.CultureInfo.InvariantCulture) +
+          "\",\"verifiedImage\":\"" + Path.GetFullPath(image.ToString()).Replace("\\", "\\\\").Replace("\"", "\\\"") +
+          "\",\"broadcast\":false,\"mode\":\"" + args[3] +
           "\",\"sendReturnedSuccess\":" + delivered.ToString().ToLowerInvariant() + ",\"win32Error\":" + sendError + ",\"targetActiveAfterSend\":" + targetActive.ToString().ToLowerInvariant() + "}");
       }
       return 0;
