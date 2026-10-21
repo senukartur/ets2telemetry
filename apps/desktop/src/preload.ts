@@ -150,7 +150,6 @@ const bridge: DesktopBridge = {
   setOverlayEnabled: (...request: unknown[]) => request.length === 1 && typeof request[0] === 'boolean'
     ? ipcRenderer.invoke('settings:set-overlay-enabled', request[0])
     : Promise.reject(new Error('Invalid overlay visibility request')),
-
   // One fixed layout id only; main validates it again.
   setOverlayLayout: layout => isOverlayLayout(layout)
     ? ipcRenderer.invoke('settings:set-overlay-layout', layout)

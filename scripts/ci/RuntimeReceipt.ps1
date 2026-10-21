@@ -148,7 +148,7 @@ function Test-LifecycleSettingsReceipt {
     param([object]$Driver)
     $lifecycle = $Driver.lifecycle
     foreach ($field in @('settingsSeededInvalidFile','settingsStartupUnchanged','settingsQuarantinePreserved','settingsSavedExact',
-        'unitsApplied','settingsRestartLoaded','overlayVisibilitySaved','overlayVisibilityRestarted','overlayHiddenWhileDisabled')) {
+        'unitsApplied','settingsRestartLoaded','overlayVisibilitySaved','overlayVisibilityRestarted','syntheticOverlayHiddenAfterOff')) {
         if ($lifecycle.$field -isnot [bool] -or $lifecycle.$field -ne $true) { return $false }
     }
     if (!(Test-ReceiptInteger -Value $lifecycle.settingsQuarantined -Minimum 1 -Maximum 1) -or $lifecycle.restart.settingsState -cne 'loaded') { return $false }

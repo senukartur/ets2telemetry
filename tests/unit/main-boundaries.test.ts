@@ -1,5 +1,6 @@
 import {EventEmitter} from 'node:events';
 import {readFileSync} from 'node:fs';
+import * as nodeFs from 'node:fs/promises';
 import {mkdir, mkdtemp, readdir, readFile, rm, writeFile} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -83,7 +84,7 @@ const DRIVING = {active: false};
 // unpackaged, so the mode gate disables plugin setup: nothing is read or written, and no game is ever discovered.
 const NO_PLUGIN_GAME = {excluded: false, discovery: 'pending', manualFolder: 'none', targets: [], unlistedFolders: 0};
 const PLUGINS_DISABLED = {mode: 'disabled', bundled: null, running: false, games: {ets2: NO_PLUGIN_GAME, ats: NO_PLUGIN_GAME}};
-let settingsView: {units: {ets2: string; ats: string}; overlay: {enabled: boolean, layout: string; sections: Record<string, boolean>; placements: Record<string, {x: number; y: number; scale: number}>}; state: string; writable: boolean; saveError: string | null};
+let settingsView: {units: {ets2: string; ats: string}; overlay: {enabled: boolean; layout: string; sections: Record<string, boolean>; placements: Record<string, {x: number; y: number; scale: number}>}; state: string; writable: boolean; saveError: string | null};
 type OverlayWrite = (kind: 'enabled' | 'layout' | 'sections' | 'placement', value: unknown) => Promise<unknown>;
 let overlayWrite: ReturnType<typeof vi.fn<OverlayWrite>>;
 type SettingsWrite = (game: string, profile: string) => Promise<unknown>;
@@ -1135,7 +1136,8 @@ it('applies a settings read that settles after the load budget to the dashboard 
   expect(pushes().at(-1)!.settings).toEqual(pending);
   consumeOverlay(overlayChannel); deliver(currentReading()); await vi.advanceTimersByTimeAsync(50);
   expect(overlayProjection(overlayChannel)).toMatchObject({source: 'ETS2', speed: '90.0', speedUnit: 'km/h', fuel: '73.0', fuelUnit: 'L', freshness: 'current'});
-  expect(windows[1].showInactive).toHaveBeenCalledOnce(); consumeOverlay(overlayChannel);
+  // ET-012e keeps the overlay hidden while the pending view contains only defaults.
+  expect(windows[1].showInactive).not.toHaveBeenCalled(); consumeOverlay(overlayChannel);
   await drainOverlay(overlayChannel, 150);
   // The store applies the late read (t = 200 ms) and reports it; main reads the new view from the store.
   settingsView = {units: {ets2: 'us-customary', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null};
@@ -1467,7 +1469,7 @@ it('re-places the overlay when a late settings read brings another layout', asyn
   expect(configurations[1]).toMatchObject({width: 1280, height: 116});
   ipc.emit('overlay:subscribe', overlayTrusted()); const overlayChannel = channels[1];
   consumeOverlay(overlayChannel); deliver(currentReading()); await vi.advanceTimersByTimeAsync(50); consumeOverlay(overlayChannel);
-  expect(windows[1].setBounds.mock.calls).toEqual([[{x: -1600, y: 8, width: 1280, height: 116}]]);
+  expect(windows[1].setBounds).not.toHaveBeenCalled(); expect(windows[1].showInactive).not.toHaveBeenCalled();
   settingsView = {...settingsView, overlay: {enabled: true, layout: 'hud', sections: ALL_SECTIONS, placements: PLACEMENTS}, state: 'loaded', writable: true};
   settingsChanged!();
   expect(windows[1].setBounds).toHaveBeenLastCalledWith({x: -1904, y: 16, width: 320, height: 354});
@@ -1522,15 +1524,45 @@ it('commits off before cancelling an edit begun while the off save was pending, 
   await expect(edit('overlay-edit:begin', trusted())).rejects.toThrow('Overlay is disabled');
   expect(settingsView.overlay.placements).toEqual(PLACEMENTS);
 });
-it('enables a late startup load only after its final layout and placement are installed', async () => {
-  trayAvailable = true; vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2');
-  settingsView = {...settingsView, overlay: {...DEFAULT_OVERLAY, enabled: false}, state: 'loading', writable: false}; await ready();
-  ipc.emit('overlay:subscribe', overlayTrusted()); deliver(currentReading()); await vi.advanceTimersByTimeAsync(50);
-  expect(windows[1].showInactive).not.toHaveBeenCalled(); windows[1].setBounds.mockClear();
-  settingsView = {...settingsView, overlay: {...DEFAULT_OVERLAY, layout: 'hud'}, state: 'loaded', writable: true}; settingsChanged!();
-  expect(windows[1].setBounds.mock.calls).toEqual([[{x: -1904, y: 16, width: 320, height: 354}]]);
-  expect(windows[1].showInactive).toHaveBeenCalledOnce();
-  expect(windows[1].setBounds.mock.invocationCallOrder[0]).toBeLessThan(windows[1].showInactive.mock.invocationCallOrder[0]);
+it.each([false, true])('keeps the real pending settings defaults hidden until a late enabled=%s load installs its geometry', async enabled => {
+  const real = await vi.importActual<typeof import('../../apps/desktop/src/settings-store')>('../../apps/desktop/src/settings-store');
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'ets2-settings-visibility-'));
+  const gate = deferred(), applied = deferred();
+  const stores: InstanceType<typeof real.SettingsStore>[] = [];
+  const bytes = JSON.stringify({format: 'ets2telemetry.settings', version: 5, language: 'en',
+    units: {ets2: 'metric', ats: 'us-customary'}, overlay: {...DEFAULT_OVERLAY, enabled, layout: 'hud'}});
+  await writeFile(path.join(directory, 'settings.json'), bytes);
+  // The production store, parser and load budget run unchanged; only file reads wait behind a controlled barrier.
+  vi.doMock('../../apps/desktop/src/settings-store', () => ({...real, SettingsStore: class extends real.SettingsStore {
+    constructor(_directory: string | undefined, options: import('../../apps/desktop/src/settings-store').SettingsStoreOptions) {
+      super(directory, {...options, fs: {...nodeFs, lstat: async target => {await gate.promise; return nodeFs.lstat(target);}},
+        changed: () => {options.changed?.(); applied.resolve();}});
+      stores.push(this); settingsChanged = options.changed;
+    }
+  }}));
+  try {
+    trayAvailable = true; vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2'); await ready();
+    expect(windows).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(real.SETTINGS_LOAD_BUDGET_MS);
+    expect(stores).toHaveLength(1); const store = stores[0];
+    expect(store.settled).toBe(true);
+    expect(store.view()).toMatchObject({state: 'loading', writable: false, overlay: {enabled: true, layout: 'strip'}});
+    expect(windows).toHaveLength(2);
+    ipc.emit('overlay:subscribe', overlayTrusted());
+    const current = currentReading(); current.observation!.receivedMonotonicMs = performance.now();
+    current.observation!.windowReceivedMonotonicMs = performance.now(); deliver(current);
+    expect(windows[1].showInactive).not.toHaveBeenCalled();
+    settingsChanged!();
+    expect(windows[1].showInactive).not.toHaveBeenCalled();
+    windows[1].setBounds.mockClear(); gate.resolve(); await applied.promise;
+    expect(store.view()).toMatchObject({state: 'loaded', overlay: {enabled, layout: 'hud'}});
+    expect(await readFile(path.join(directory, 'settings.json'), 'utf8')).toBe(bytes);
+    if (enabled) {
+      expect(windows[1].setBounds.mock.calls).toEqual([[{x: -1904, y: 16, width: 320, height: 354}]]);
+      expect(windows[1].showInactive).toHaveBeenCalledOnce();
+      expect(windows[1].setBounds.mock.invocationCallOrder[0]).toBeLessThan(windows[1].showInactive.mock.invocationCallOrder[0]);
+    } else expect(windows[1].showInactive).not.toHaveBeenCalled();
+  } finally {gate.resolve(); await applied.promise; await rm(directory, {recursive: true, force: true});}
 });
 it('never re-shows a retired overlay when a pending enable save completes during exit', async () => {
   await editableOverlay({overlay: {...DEFAULT_OVERLAY, enabled: false}}); renew(true);

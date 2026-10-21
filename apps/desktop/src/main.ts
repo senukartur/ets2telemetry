@@ -365,15 +365,17 @@ function runApplication(profileError: unknown): void {
   // its expiry timers are untouched, and the placement uses the last observation the controller already holds.
   function settingsChanged(): void {
     const view = settingsStore.view();
+    // Pending defaults are not the saved visibility; wait for the read result or existing read-limit fallback.
+    const enabled = view.state !== 'loading' && view.overlay.enabled;
     // Disable before edit cancellation; enable only after the final committed geometry is installed.
-    if (!view.overlay.enabled && overlayEdit.active) timeline?.('OVERLAY_EDIT_CANCELLED', {reason: 'overlay-disabled'});
-    if (!view.overlay.enabled) overlayController?.setEnabled(false);
+    if (!enabled && overlayEdit.active) timeline?.('OVERLAY_EDIT_CANCELLED', {reason: 'overlay-disabled'});
+    if (!enabled) overlayController?.setEnabled(false);
     pushAppState();
     if (lifecycle.exiting) return;
     presentTray(true);
     publishOverlay(lastLive, view.units, view.overlay, view.language);
     overlayController?.setLayout(view.overlay.layout, view.overlay.placements[view.overlay.layout], view.overlay.sections);
-    if (view.overlay.enabled) overlayController?.setEnabled(true);
+    if (enabled) overlayController?.setEnabled(true);
   }
   // ET-012b edit mode. The controller reports every change of its edit state; main pushes it to the dashboard and,
   // when the mode itself changes, republishes the overlay projection with its `editing` flag (no authority renewed).
@@ -507,7 +509,7 @@ function runApplication(profileError: unknown): void {
     // taskbar, which drops WS_EX_TOPMOST while a borderless full-screen game is foreground.
     created.setAlwaysOnTop(true, OVERLAY_TOPMOST_LEVEL);
     overlayController = new OverlayController(created, screen, phase => log('OVERLAY_TOPMOST_RESTORED', undefined, {phase}), layout,
-      {enabled: settings.overlay.enabled, placement, sections: settings.overlay.sections, editChanged: overlayEditChanged});
+      {enabled: settings.state !== 'loading' && settings.overlay.enabled, placement, sections: settings.overlay.sections, editChanged: overlayEditChanged});
     created.webContents.setWindowOpenHandler(() => ({action: 'deny'}));
     created.webContents.on('will-navigate', event => event.preventDefault());
     // A loaded document starts at the default zoom; the scale in use applies again.

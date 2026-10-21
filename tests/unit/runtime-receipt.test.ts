@@ -57,7 +57,7 @@ function lifecycleReceipt(path: (string | number)[] = [], replacement?: Json): s
       explicitExit: {launcherExit: 0, signal: null, exitMilliseconds: 179, requests: ['renderer']},
       restart: {overlayEnabled: false, servicePid: 4300, settingsState: 'loaded', dashboardUnits: {speed: 'Speed: 55.9 mph', fuel: 'Fuel: 19.3 US gal'}}, restartLauncherExit: 0,
       settingsSeededInvalidFile: true, settingsStartupUnchanged: true, settingsQuarantinePreserved: true, settingsSavedExact: true, unitsApplied: true,
-      overlayVisibilitySaved: true, overlayVisibilityRestarted: true, overlayHiddenWhileDisabled: true, settingsRestartLoaded: true, settingsQuarantined: 1, dashboardUnits: {speed: 'Speed: 55.9 mph', fuel: 'Fuel: 19.3 US gal'},
+      overlayVisibilitySaved: true, overlayVisibilityRestarted: true, syntheticOverlayHiddenAfterOff: true, settingsRestartLoaded: true, settingsQuarantined: 1, dashboardUnits: {speed: 'Speed: 55.9 mph', fuel: 'Fuel: 19.3 US gal'},
       overlayUnits: {...reading('55.9', '19.3'), speedUnit: 'mph', fuelUnit: 'US gal'},
       restartMainEvents: [...orderlyMain(), {event: 'APP_EXIT_REQUESTED', facts: {reason: 'app-quit'}}, {event: 'SETTINGS_LOADED', facts: {state: 'loaded'}}],
       restartServiceEvents: orderlyService()}};
@@ -173,11 +173,14 @@ function lifecycleCases() {
     invalid('restart events missing', ['lifecycle', 'restartMainEvents']),
     invalid('restart closed nonzero', ['lifecycle', 'restartLauncherExit'], 1),
     invalid('probe left behind', ['probesAfterExit', 0], 'ets2telemetry-probe-x'),
-    ...['overlayVisibilitySaved', 'overlayVisibilityRestarted', 'overlayHiddenWhileDisabled'].flatMap(flag => [
+    ...['overlayVisibilitySaved', 'overlayVisibilityRestarted', 'syntheticOverlayHiddenAfterOff'].flatMap(flag => [
       invalid(`missing visibility ${flag}`, ['lifecycle', flag]),
       invalid(`false visibility ${flag}`, ['lifecycle', flag], false),
       invalid(`nonboolean visibility ${flag}`, ['lifecycle', flag], 'true')
     ]),
+    {...invalid('legacy hidden flag cannot replace synthetic invariant', ['lifecycle', 'syntheticOverlayHiddenAfterOff']),
+      body: (() => {const value = JSON.parse(lifecycleReceipt()) as {lifecycle: Record<string, unknown>};
+        delete value.lifecycle.syntheticOverlayHiddenAfterOff; value.lifecycle.overlayHiddenWhileDisabled = true; return JSON.stringify(value);})()},
     invalid('restart visibility missing', ['lifecycle', 'restart', 'overlayEnabled']),
     invalid('restart visibility enabled', ['lifecycle', 'restart', 'overlayEnabled'], true),
     invalid('restart visibility nonboolean', ['lifecycle', 'restart', 'overlayEnabled'], 'false'),

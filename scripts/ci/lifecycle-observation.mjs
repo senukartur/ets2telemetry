@@ -226,11 +226,12 @@ export async function runLifecycleSmoke({application, launcher, dashboard, overl
   assert.equal(source.statistics().connections, 1);
   assert.equal((await settingsFiles(config)).find(file => file.name === 'settings.json').content, SETTINGS_SAVED);
   record.overlayVisibilitySaved = true;
-  record.overlayHiddenWhileDisabled = await application.evaluate(({BrowserWindow}) => {
+  // This synthetic source has no game-window authority: hidden is an invariant, not proof of the visibility gate.
+  record.syntheticOverlayHiddenAfterOff = await application.evaluate(({BrowserWindow}) => {
     const window = BrowserWindow.getAllWindows().find(w => new URL(w.webContents.mainFrame.url).search === '?view=overlay');
     return Boolean(window && !window.isVisible());
   });
-  assert.equal(record.overlayHiddenWhileDisabled, true);
+  assert.equal(record.syntheticOverlayHiddenAfterOff, true);
   await disabledRecording(application, trayDashboard);
 
   // 4. Explicit exit from the renderer: one orderly sequence, normal service stop, exit 0.
