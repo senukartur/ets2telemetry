@@ -65,7 +65,7 @@ describe('minimized CAP-01 replay corpus', () => {
     expect(events.some(m => m.data.record.type === 'timers.restart')).toBe(false);
     expect(steps.slice(0, 6).some(s => s.data.callback.group === 'configuration')).toBe(false);
     expect(atEnvelope(37).data.occurred.gameTime.minutes).toEqual({available: true, value: '251808'});
-    expect(atEnvelope(38).data.record).toMatchObject({type: 'gameTime.regression', from: {minutes: {value: '251808'}}, to: {minutes: {value: '251789'}}});
+    expect(atEnvelope(38).data.record).toMatchObject({type: 'gameTime.regression', from: {minutes: {available: false, reason: 'not-observed'}, clockId: atEnvelope(37).data.occurred.gameTime.clockId}, to: {minutes: {value: '251789'}}});
     expect(atEnvelope(37).data.occurred.gameTime.clockId).not.toBe(atEnvelope(38).data.occurred.gameTime.clockId);
     const ns = (n: number) => { const v = atEnvelope(n).data.occurred.monotonicNs; return BigInt(v.available ? v.value : '0'); };
     expect(ns(38) - ns(37)).toBe(30100n);

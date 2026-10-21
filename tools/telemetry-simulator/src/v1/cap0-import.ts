@@ -3,6 +3,7 @@ import {openSync, closeSync, readSync} from 'node:fs';
 import {join} from 'node:path';
 import {createHash} from 'node:crypto';
 import {strictJson} from '../../../../packages/contracts/src/protocol-v0';
+import {NAME_BYTES} from '../../../../packages/contracts/src/protocol-v1';
 import {Cap0StreamValidator, validateCap0Packet, type Cap0EnvelopeData, type Cap0HeaderData, type Cap0Observation} from '../../../../packages/contracts/src/capture-cap0';
 import {exactObject, runLabel, stepsDigest, type CaptureProvenance, type CaptureStep} from './cap0-schema';
 import {seededId} from './source';
@@ -40,6 +41,8 @@ function minimize(observations: Cap0Observation[], names: Map<string, string>, p
       if (typeof value !== 'string') fail();
       if (!value.length) return o;
       if (ID_FIELDS.has(o.name.value)) { if (!/^[a-zA-Z0-9_.-]{1,128}$/.test(value)) fail(); return o; }
+      // Minimized text must not turn a native-invalid display name into an available short token.
+      if (Buffer.byteLength(value, 'utf8') > NAME_BYTES) fail();
       const isPlate = o.name.value === 'license.plate', map = isPlate ? plates : names;
       if (!map.has(value)) map.set(value, `${isPlate ? 'plate' : 'name'}-${map.size + 1}`);
       o.value = {available: true, value: map.get(value)!};

@@ -283,7 +283,8 @@ export class AdapterModel {
   capture(step: CaptureStep, atMs: number): void {
     const d = step.data, id = d.callback.id;
     if (!id.available) throw new Error('CAP0 callback identifier unavailable');
-    const from = this.stamp();
+    // CAP0 omits the intervening game.time channels. A previous callback cannot prove the regression's prior minutes.
+    const from: GameTimeStamp = {minutes: notObserved, clockId: this.gameClockId()};
     this.captureContext = d;
     this.captureGameClock = seededId(this.config.seed, `capture-game-clock:${d.gameTime.clockId}`);
     this.gameTime = d.gameTime.minutes.available ? {available: true, value: Number(d.gameTime.minutes.value)} : unavailable(d.gameTime.minutes.reason);

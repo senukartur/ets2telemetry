@@ -68,6 +68,30 @@ describe('CAP0 sanitized export importer', () => {
     b.data.simulation = 'paused';
     expect(() => importCap0(fixture([header(), a, b, end(3, 1)]), 'split')).toThrow(/CAP0 import rejected/);
   });
+  it.each(['a'.repeat(256), 'я'.repeat(128), '🚚'.repeat(64)])('preserves the v1 256-byte display-name boundary before tokenization', value => {
+    expect(Buffer.byteLength(value, 'utf8')).toBe(256);
+    const make = (name: string) => fixture([header(), envelope(1, 1, {group: 'configuration', id: 'job', observations: [observation(0, 'cargo', 'string', name)]}), end(2, 1)]);
+    expect(events(importCap0(make(value), 'name-boundary'))[0].data.record).toMatchObject({type: 'job.configured', cargo: {available: true, value: 'name-1'}});
+    expect(Buffer.byteLength(value + 'a', 'utf8')).toBe(257);
+    expect(() => importCap0(make(value + 'a'), 'name-overlength')).toThrow(/^CAP0 import rejected:/);
+  });
+  it.each(['150', '90'])('does not infer the immediately previous channel time from a prior callback when regression ends at %s', minutes => {
+    const before = envelope(1, 1, {group: 'lifecycle', id: 'simulation.started'}), regression = envelope(2, 2, {group: 'lifecycle', id: 'game.time.regression'});
+    if (before.kind !== 'envelope' || regression.kind !== 'envelope') throw new Error('test envelope expected');
+    before.data.gameTime.minutes = {available: true, value: '100'};
+    regression.data.gameTime = {minutes: {available: true, value: minutes}, clockId: '44444444-4444-4444-8444-000000000001'};
+    // CAP0 observes no intervening game.time channel (it might have been 200). The earlier callback is not `from`.
+    const result = replayV1(importCap0(fixture([header(), before, regression, end(3, 2)]), 'regression-context'));
+    const captured = result.transcript.flatMap(l => l.message.kind === 'event' ? [l.message] : []);
+    expect(captured).toHaveLength(2);
+    expect(captured[1].data.record).toEqual({type: 'gameTime.regression',
+      from: {minutes: {available: false, reason: 'not-observed'}, clockId: captured[0].data.occurred.gameTime.clockId},
+      to: captured[1].data.occurred.gameTime});
+    expect(captured[1].data.occurred.gameTime.minutes).toEqual({available: true, value: minutes});
+    expect(captured[1].data.occurred.gameTime.clockId).not.toBe(captured[0].data.occurred.gameTime.clockId);
+    expect(result.transcript.filter(l => l.message.kind === 'gap')).toEqual([]);
+    expect(result.store.eventLoss.encodingFailed).toBe('0');
+  });
   it('retains per-callback nanoseconds, game time, simulation and unavailable versus invalid', () => {
     const a = envelope(1, 1, {group: 'configuration', id: 'job', observations: [observation(0, 'cargo', 'string', 'unused')]});
     const b = envelope(2, 2, {group: 'lifecycle', id: 'simulation.paused'});
