@@ -431,3 +431,5 @@ ET-005b final-verification baseline follow-up (October21): shutdown-stalls.test.
 | Existing lifecycle journey and `runtime-receipt` | REG-012, REG-016, REG-017 | false saved and loaded across two launches, synthetic-hidden invariant without service/source restart (not a gate proof), unchanged canonical bytes and strict negative receipt cases |
 
 No critical gate is skipped or retried. Real-game acceptance and transferred ET-042 manual display checks remain unverified; see [validation](validation/et-012e.md).
+
+ET-012e runtime-consumer regression follow-up extends `diagnostics-bundle-check.test.ts` (REG-015/REG-017) with production-built visibility true/false, required-field/type and unknown-overlay-key negatives. `runtime-receipt.test.ts` requires the visibility save in its ordered position with no extra facts. The bounded lifecycle driver's exact settings event sequence includes both unit and visibility saves, preserving the single optional leading pending-read event and run B load-only checks. Actual failed and corrected runtime results are recorded in [ET-012e validation](validation/et-012e.md).
