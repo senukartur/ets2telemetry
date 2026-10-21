@@ -1,5 +1,14 @@
 # Testing and Regression Strategy
 
+ET-011 flush allocation, October 22, 2026: `shutdown-sequence.test.ts` verifies that only `recording-flush` borrows
+unused registered intake time, reserves future storage and does not reuse spent time in history close. The nominal
+500 ms allocation can become up to 1500 ms; the service's 2500 ms budget is unchanged. `shutdown-stalls.test.ts` adds
+two isolated real-worker final-sample transaction cases with the sequence clock controlled after the hold notice:
+release after the former cap must persist exactly one sample and stop cleanly; expiry of the borrowed allocation
+must remain unclean, terminate the held worker and preserve committed events. These are logic/durability proofs;
+the rebuilt packaged recording journey uses production timers. Existing shutdown verdict-turn and nominal-floor
+semantics remain, so the budget is not a hard wall-clock guarantee against host scheduling stalls.
+
 ET-011 scope reconciliation, October 22, 2026: the owner authorized final PR #167 gates and squash merge, then card
 closeout. Narrator, real-game unit profiles and close-to-tray overlay continuity moved **unverified** to
 [ET-043](https://trello.com/c/2fbiCET0); installed shortcut/update checks remain ET-018, monitor/mixed-DPI checks ET-042.

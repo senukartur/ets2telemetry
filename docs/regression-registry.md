@@ -1,5 +1,13 @@
 # Regression scenario-to-test registry
 
+ET-011 final-write allocation, October 22, 2026 (REG-006/011/012): `shutdown-sequence.test.ts` covers unused registered
+intake borrowing by recording flush, the future storage reserve, exact remaining close allocation, exhausted intake,
+no invented unregistered budget, other flush steps and a hanging flush. `shutdown-stalls.test.ts` adds a released and
+an indefinitely held final sample transaction through the production recording runtime and actual SQLite worker.
+Only the shutdown sequence clock is controlled after an observed hold; released work must stop cleanly with the exact
+sample, and over-budget work must stop unclean while preserving committed events, no ACK after intake and integrity.
+The existing test-index rows remain the entry points; production-timer coverage remains the packaged recording journey.
+
 ET-011 reconciliation, October 22, 2026 (REG-011/012): `snapshot-transport-test.cpp` forces a foreign discovery failure
 after the startup wait and requires the exact pending/deferred SDK-thread reports before shutdown, without a duplicate.
 Its protected-publication case holds I/O beyond the unchanged 1,000 ms measured shutdown target and requires mandatory
@@ -243,7 +251,7 @@ Columns:
 | `tests/unit/service-supervisor.test.ts` | Node unit (Vitest) | REG-011, REG-012 | R, T | ET-001 (#5) | PR (tests job, `npm test`) | regression |
 | `tests/unit/settings-schema.test.ts` | Node unit (Vitest) | REG-017 | R, F | ET-011b (#56) | PR (tests job, `npm test`) | — |
 | `tests/unit/settings-store.test.ts` | Node unit (Vitest) | REG-017 | R, F | ET-011b (#56) | PR (tests job, `npm test`) | regression |
-| `tests/unit/shutdown-sequence.test.ts` | Node unit (Vitest) | REG-011, REG-012 | R, T | ET-011a (#52); ET-038 | PR (tests job, `npm test`) | regression |
+| `tests/unit/shutdown-sequence.test.ts` | Node unit (Vitest) | REG-011, REG-012 | R, T | ET-011a (#52); ET-038; ET-011 (#167) | PR (tests job, `npm test`) | regression |
 | `tests/unit/simulator-v0.test.ts` | Node unit (Vitest) | REG-003 | R | ET-005a (#11) | PR (tests job, `npm test`) | gap |
 | `tests/unit/simulator-v1-cap0-import.test.ts` | Node unit (Vitest) | REG-008, REG-009, REG-010 | R, F | ET-005b PR-3 | PR (tests job, `npm test`) | — |
 | `tests/unit/simulator-v1-cap0-replay.test.ts` | Node unit/integration (Vitest, real pipes) | REG-001, REG-002, REG-008, REG-009 | R, F | ET-005b PR-3 | PR (tests job, `npm test`) | — |
@@ -310,7 +318,7 @@ Columns:
 | `tests/storage/sample-recorder.test.ts` | Storage (Vitest under Electron) | REG-001, REG-002, REG-003, REG-005, REG-009, REG-012 | R, F | ET-015b (#86) | PR (tests job, `npm run test:storage`) | gap |
 | `tests/storage/samples.test.ts` | Storage (Vitest under Electron) | REG-005, REG-009 | R, F | ET-013 (#51) | PR (tests job, `npm run test:storage`) | dedup |
 | `tests/storage/schema-constraints.test.ts` | Storage (Vitest under Electron) | REG-013 | R | ET-013 (#51) | PR (tests job, `npm run test:storage`) | historical fixture |
-| `tests/storage/shutdown-stalls.test.ts` | Storage (Vitest under Electron) | REG-006, REG-011, REG-012 | F, T, V (et-019) | ET-019 (PR-4); ET-038 | PR (tests job, `npm run test:storage`) | ACK, dedup, gap, trip completeness |
+| `tests/storage/shutdown-stalls.test.ts` | Storage (Vitest under Electron) | REG-006, REG-011, REG-012 | F, T, V (et-019) | ET-019 (PR-4); ET-038; ET-011 (#167) | PR (tests job, `npm run test:storage`) | ACK, dedup, gap, trip completeness |
 | `tests/storage/trip-accounting-effects.test.ts` | Storage (Vitest under Electron) | REG-001, REG-008 | R | ET-014 (#72) | PR (tests job, `npm run test:storage`) | trip completeness |
 | `tests/storage/trip-effects.test.ts` | Storage (Vitest under Electron) | REG-001, REG-003, REG-004, REG-005, REG-006, REG-008, REG-013 | R, F | ET-014 (#71) | PR (tests job, `npm run test:storage`) | dedup, trip completeness |
 | `tests/storage/trip-recorder-crash.test.ts` | Storage (Vitest under Electron) | REG-005, REG-006, REG-012 | R, F, T, V (et-019) | ET-015a (#77); ET-019 (PR-1) invariants, kill rows and seeded campaign | PR (tests job, `npm run test:storage`); Extended campaigns workflow (200 seeds) | ACK, dedup, gap, trip completeness |
