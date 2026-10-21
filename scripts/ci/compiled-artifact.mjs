@@ -6,7 +6,8 @@ import {fileURLToPath} from 'node:url';
 import {execFileSync} from 'node:child_process';
 export const COMPILED_ROOTS = ['apps/desktop/dist', '.local/package-native/telemetry-plugin', 'tools/telemetry-simulator/dist',
   'native/telemetry-client/build/Release', 'native/telemetry-plugin/build/Release', 'out/ETS2Telemetry Desktop-win32-x64',
-  'node_modules/better-sqlite3/prebuilds/win32-x64.node'];
+  'node_modules/better-sqlite3/prebuilds/win32-x64.node', 'native/telemetry-plugin/build/cap0-host/Release'];
+const CAP0_HOST = 'native/telemetry-plugin/build/cap0-host/Release/eurotrucks2.exe';
 const MAKER = 'out/make/squirrel.windows/x64';
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 const refuse = () => {throw new Error('COMPILED_ARTIFACT_INVALID');};
@@ -45,16 +46,22 @@ function allowed(name, installer) {return [...COMPILED_ROOTS, ...(installer ? [M
 export async function createCompiledArtifact(root, output, source, checkout, installer) {
   validIdentity(source, checkout);
   await plainRoot(root); await plainRoot(output, true);
-  const entries = [];
+  // Preflight the complete inventory before publishing anything, including separately built nested helpers.
+  const inventory = [];
   for (const base of [...COMPILED_ROOTS, ...(installer ? [MAKER] : [])]) {
     await plain(root, base, !(await lstat(path.join(root, base))).isFile());
-    for (const name of await files(root, base)) {
-      // Build libraries/debug outputs are not runtime inputs. Keep native executables, DLLs and build evidence only.
-      if (name.startsWith('native/') && !/\.(exe|dll|json)$/.test(name)) continue;
-      const bytes = await readFile(path.join(root, name));
-      entries.push({path: name, bytes: bytes.length, sha256: sha(bytes)});
-      const target = path.join(output, 'payload', name); await mkdir(path.dirname(target), {recursive: true}); await writeFile(target, bytes);
-    }
+    // Build libraries/debug outputs are not runtime inputs. Keep native executables, DLLs and build evidence only.
+    const selected = (await files(root, base)).filter(name => !name.startsWith('native/') || /\.(exe|dll|json)$/.test(name));
+    if (!selected.length) refuse();
+    inventory.push(...selected);
+  }
+  await plain(root, CAP0_HOST);
+  if (!inventory.includes(CAP0_HOST)) refuse();
+  const entries = [];
+  for (const name of inventory) {
+    const bytes = await readFile(path.join(root, name));
+    entries.push({path: name, bytes: bytes.length, sha256: sha(bytes)});
+    const target = path.join(output, 'payload', name); await mkdir(path.dirname(target), {recursive: true}); await writeFile(target, bytes);
   }
   await writeFile(path.join(output, 'manifest.json'), JSON.stringify({version: 1, source, checkout, installer, files: entries}));
 }
@@ -74,6 +81,7 @@ export async function restoreCompiledArtifact(input, root, source, checkout, ins
     if (bytes.length !== entry.bytes || sha(bytes) !== entry.sha256) refuse();
   }
   for (const base of [...COMPILED_ROOTS, ...(installer ? [MAKER] : [])]) if (!manifest.files.some(entry => entry.path === base || entry.path.startsWith(`${base}/`))) refuse();
+  if (!manifest.files.some(entry => entry.path === CAP0_HOST)) refuse();
   const actual = await files(input, 'payload');
   if (actual.length !== names.size || actual.some(name => !names.has(name.slice(8).toLowerCase()))) refuse();
   // All input validated before mutation. Reject destination links before creating/copying a bounded allowed path.

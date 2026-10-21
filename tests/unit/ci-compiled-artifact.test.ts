@@ -1,11 +1,28 @@
+import {createHash} from 'node:crypto';
 import {spawnSync} from 'node:child_process';
 import {expect, it} from 'vitest';
-import {mkdir, readFile, writeFile, rm, symlink, readdir} from 'node:fs/promises';
+import {mkdir, readFile, writeFile, rm, symlink, readdir, lstat} from 'node:fs/promises';
 import path from 'node:path';
 import {temporaryResources} from '../shared/resources';
 import {COMPILED_ROOTS, createCompiledArtifact, restoreCompiledArtifact} from '../../scripts/ci/compiled-artifact.mjs';
 import {scaffoldGate} from '../../scripts/ci/scaffold-gate.mjs';
 const source = 'a'.repeat(40), checkout = 'b'.repeat(40);
+const HOST_ROOT = 'native/telemetry-plugin/build/cap0-host/Release';
+const HOST = 'native/telemetry-plugin/build/cap0-host/Release/eurotrucks2.exe';
+const BINDING = 'node_modules/better-sqlite3/prebuilds/win32-x64.node';
+const MAKER = 'out/make/squirrel.windows/x64';
+const HOST_BYTES = Buffer.from('compiled nested CAP0 host fixture');
+const HOST_HASH = 'fea6030bb5e81d9f665e74cf9db624325d03f05073506e9dd0b19a3bf590e130';
+async function writeFixture(root: string, installer = false, omit?: string) {
+  for (const base of [...COMPILED_ROOTS, ...(installer ? [MAKER] : [])]) {
+    if (base === omit || base === HOST_ROOT) continue;
+    const file = base === BINDING ? base : `${base}/fixture.exe`;
+    await mkdir(path.dirname(path.join(root, file)), {recursive: true}); await writeFile(path.join(root, file), `compiled ${base}`);
+  }
+  // Literal consumer path, independent of the producer's root list: catches a helper silently omitted from that list.
+  if (omit !== HOST_ROOT) {await mkdir(path.dirname(path.join(root, HOST)), {recursive: true}); await writeFile(path.join(root, HOST), HOST_BYTES);}
+}
+
 it.each(['push', 'workflow_dispatch', 'pull_request'])('fails closed for every participating job on %s', event => {
   const needs = Object.fromEntries(['windows-build', 'windows-runtime', 'windows-installer', 'windows-tests', 'windows-asan'].map(name => [name, {result: name === 'windows-installer' && event === 'pull_request' ? 'skipped' : 'success'}]));
   expect(scaffoldGate(needs, event)).toBe(true);
@@ -22,15 +39,14 @@ it('restores exactly verified producer bytes and rejects wrong identity, missing
   const temp = await temporaryResources();
   const root = path.join(temp.directory, 'producer'), input = path.join(temp.directory, 'sealed'), target = path.join(temp.directory, 'consumer');
   try {
-    for (const base of COMPILED_ROOTS) {
-      const file = base.endsWith('.node') ? base : `${base}/fixture.exe`;
-      await mkdir(path.dirname(path.join(root, file)), {recursive: true}); await writeFile(path.join(root, file), `compiled ${base}`);
-    }
+    await writeFixture(root);
     await createCompiledArtifact(root, input, source, checkout, false);
-    await mkdir(path.dirname(path.join(target, COMPILED_ROOTS[6])), {recursive: true}); await writeFile(path.join(target, COMPILED_ROOTS[6]), 'different consumer binding');
+    await mkdir(path.dirname(path.join(target, BINDING)), {recursive: true}); await writeFile(path.join(target, BINDING), 'different consumer binding');
     const restored = await restoreCompiledArtifact(input, target, source, checkout, false);
     expect(restored.files).toBe(COMPILED_ROOTS.length);
-    expect(await readFile(path.join(target, COMPILED_ROOTS[6]))).toEqual(await readFile(path.join(root, COMPILED_ROOTS[6])));
+    const restoredHost = await readFile(path.join(target, HOST));
+    expect(restoredHost).toEqual(HOST_BYTES); expect(createHash('sha256').update(restoredHost).digest('hex')).toBe(HOST_HASH);
+    expect(await readFile(path.join(target, BINDING))).toEqual(await readFile(path.join(root, BINDING)));
     const manifestFile = path.join(input, 'manifest.json'), original = await readFile(manifestFile, 'utf8');
     for (const [wrongSource, wrongCheckout, installer] of [['c'.repeat(40), checkout, false], [source, 'c'.repeat(40), false], [source, checkout, true]] as const)
       await expect(restoreCompiledArtifact(input, target, wrongSource, wrongCheckout, installer)).rejects.toThrow('COMPILED_ARTIFACT_INVALID');
@@ -84,4 +100,59 @@ it('retains every runtime scenario, fixed required names, timeout ceilings and e
   expect(consumer.match(/compiled-artifact.mjs restore/g)).toHaveLength(2);
   expect(consumer).not.toMatch(/npm run (?:build|package|make)|cmake --build/);
   expect(workflow.match(/timeout-minutes: 20/g)).toHaveLength(6);
+});
+
+it.each([false, true])('requires the literal nested helper at create and restore despite valid decoy files (installer=%s)', async installer => {
+  const temp = await temporaryResources();
+  try {
+    for (const variant of ['missing', 'renamed']) {
+      const root = path.join(temp.directory, variant, 'producer'), input = path.join(temp.directory, variant, 'sealed');
+      const output = path.join(temp.directory, variant, 'refused-publication'), target = path.join(temp.directory, variant, 'consumer');
+      await writeFixture(root, installer); await createCompiledArtifact(root, input, source, checkout, installer);
+      const manifestFile = path.join(input, 'manifest.json');
+      const manifest = JSON.parse(await readFile(manifestFile, 'utf8')) as {files: {path: string; bytes: number; sha256: string}[]};
+      expect(manifest.files.find(entry => entry.path === 'native/telemetry-plugin/build/cap0-host/Release/eurotrucks2.exe')).toEqual({path: HOST, bytes: HOST_BYTES.length, sha256: HOST_HASH});
+      const baseline = path.join(temp.directory, variant, 'baseline-consumer');
+      await restoreCompiledArtifact(input, baseline, source, checkout, installer);
+      const exactHost = await readFile(path.join(baseline, 'native/telemetry-plugin/build/cap0-host/Release/eurotrucks2.exe'));
+      expect(exactHost).toEqual(HOST_BYTES); expect(createHash('sha256').update(exactHost).digest('hex')).toBe(HOST_HASH);
+      await rm(path.join(root, HOST)); await writeFile(path.join(root, HOST_ROOT, 'decoy.exe'), 'decoy');
+      if (variant === 'renamed') await writeFile(path.join(root, HOST_ROOT, 'renamed.exe'), HOST_BYTES);
+      await expect(createCompiledArtifact(root, output, source, checkout, installer)).rejects.toThrow();
+      expect(await lstat(output).catch(error => {if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;})).toBeUndefined();
+      await rm(path.join(input, 'payload', HOST));
+      const decoy = {path: `${HOST_ROOT}/decoy.exe`, bytes: 5, sha256: createHash('sha256').update('decoy').digest('hex')};
+      await writeFile(path.join(input, 'payload', decoy.path), 'decoy');
+      if (variant === 'renamed') {
+        manifest.files.find(entry => entry.path === HOST)!.path = `${HOST_ROOT}/renamed.exe`;
+        await writeFile(path.join(input, 'payload', HOST_ROOT, 'renamed.exe'), HOST_BYTES);
+      } else manifest.files = manifest.files.filter(entry => entry.path !== HOST);
+      manifest.files.push(decoy); await writeFile(manifestFile, JSON.stringify(manifest));
+      await mkdir(target); await writeFile(path.join(target, 'sentinel.txt'), 'untouched');
+      await expect(restoreCompiledArtifact(input, target, source, checkout, installer)).rejects.toThrow('COMPILED_ARTIFACT_INVALID');
+      expect(await readdir(target)).toEqual(['sentinel.txt']); expect(await readFile(path.join(target, 'sentinel.txt'), 'utf8')).toBe('untouched');
+    }
+  } finally {await temp.dispose();}
+});
+it.each([false, true])('refuses every missing required root, including installer maker, before publication or destination mutation (installer=%s)', async installer => {
+  const temp = await temporaryResources(), roots = [...COMPILED_ROOTS, ...(installer ? ['out/make/squirrel.windows/x64'] : [])];
+  try {
+    const root = path.join(temp.directory, 'producer'), input = path.join(temp.directory, 'sealed'), target = path.join(temp.directory, 'consumer');
+    await writeFixture(root, installer); await createCompiledArtifact(root, input, source, checkout, installer);
+    await mkdir(target); await writeFile(path.join(target, 'sentinel.txt'), 'untouched');
+    for (const [index, omitted] of roots.entries()) {
+      const incomplete = path.join(temp.directory, `producer-${index}`), output = path.join(temp.directory, `publication-${index}`);
+      await writeFixture(incomplete, installer, omitted);
+      await expect(createCompiledArtifact(incomplete, output, source, checkout, installer), omitted).rejects.toThrow();
+      expect(await lstat(output).catch(error => {if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;})).toBeUndefined();
+      const manifestFile = path.join(input, 'manifest.json'), manifest = JSON.parse(await readFile(manifestFile, 'utf8')) as {files: {path: string}[]};
+      manifest.files = manifest.files.filter(entry => entry.path !== omitted && !entry.path.startsWith(`${omitted}/`));
+      const removed = path.resolve(input, 'payload', omitted);
+      expect(removed.startsWith(path.resolve(temp.directory) + path.sep)).toBe(true);
+      await rm(removed, {recursive: true, force: true}); await writeFile(manifestFile, JSON.stringify(manifest));
+      await expect(restoreCompiledArtifact(input, target, source, checkout, installer), omitted).rejects.toThrow('COMPILED_ARTIFACT_INVALID');
+      expect(await readdir(target)).toEqual(['sentinel.txt']); expect(await readFile(path.join(target, 'sentinel.txt'), 'utf8')).toBe('untouched');
+      await createCompiledArtifact(root, input, source, checkout, installer);
+    }
+  } finally {await temp.dispose();}
 });
