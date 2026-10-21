@@ -318,8 +318,9 @@ void startup_late() {
       <<" stopAfterCancelEnterMs="<<relative(HookState::cancel_enter)<<" stopAfterCancelReturnMs="<<relative(HookState::cancel_return)
       <<" startupBeforeDiscoveryMs="<<relative(HookState::before_discovery)<<" v0ExitMs="<<relative(HookState::worker_exit)
       <<" lateReadError="<<hooks.late_read_error.load()<<" log="<<(f.host.logs.empty()?std::string("none"):f.host.logs[0])<<'\n';
-    require(elapsed<1000&&f.server.endpoint().empty()&&!fallback.load(),"stop joins a pending startup promptly"); require(silent,"worker never logs");
-    require(status==(failed?Status::failed:Status::stopped)&&(variant!=2||hooks.late_read_error.load()==ERROR_OPERATION_ABORTED),"stop-time startup outcome is the one each variant forces");
+    require(f.server.endpoint().empty()&&!fallback.load(),"stop joins the pending startup and retires its endpoint"); require(silent,"worker never logs");
+    const auto expected_status=f.server.shutdown_ms()>1000?Status::shutdown_deadline_exceeded:failed?Status::failed:Status::stopped;
+    require(status==expected_status&&(variant!=2||hooks.late_read_error.load()==ERROR_OPERATION_ABORTED),"joined startup outcome retains the measured shutdown diagnostic");
     require(f.host.logs.size()==1&&f.host.log_types[0]==(failed?SCS_LOG_TYPE_warning:SCS_LOG_TYPE_message)&&f.host.logs[0]==(failed?late_stopped:late_started)&&f.host.wrong_thread==0&&hooks.synchronized.load(),"a startup ending during stop is logged once at shutdown, without a stage reason for a failure");
   }
   for(const bool collide:{false,true}) {
@@ -346,7 +347,7 @@ void startup_late() {
 // ends it, so the result tells whether stop() cancelled synchronous I/O at that point. A failed read fails the hook.
 struct BlockedRead {
   static BlockedRead* active;
-  std::string at; Handle read_end,write_end,reached{CreateEventW(nullptr,TRUE,FALSE,nullptr)},done{CreateEventW(nullptr,TRUE,FALSE,nullptr)};
+  std::string at; Handle read_end,write_end,reached{CreateEventW(nullptr,TRUE,FALSE,nullptr)},done{CreateEventW(nullptr,TRUE,FALSE,nullptr)},stop_requested{CreateEventW(nullptr,TRUE,FALSE,nullptr)};
   std::atomic<bool> fired{false}; std::atomic<DWORD> error{ERROR_INVALID_FUNCTION};
   explicit BlockedRead(std::string phase):at(std::move(phase)) {
     HANDLE r=nullptr,w=nullptr; require(CreatePipe(&r,&w,nullptr,0)!=FALSE,"owned synchronous read fixture");
@@ -357,6 +358,7 @@ struct BlockedRead {
   bool fallback(DWORD ms) { if(WaitForSingleObject(done.get(),ms)==WAIT_OBJECT_0)return false; char byte=1; DWORD n=0; WriteFile(write_end.get(),&byte,1,&n,nullptr); return true; }
   static DWORD hook(const char* phase,HANDLE,HANDLE stop,DWORD result) {
     auto* self=active;
+    if(self&&stop&&std::string(phase)=="stop-after-cancel")SetEvent(self->stop_requested.get());
     if(!self||!stop||self->at!=phase||self->fired.exchange(true))return result;
     SetEvent(self->reached.get()); char byte=0; DWORD n=0;
     const auto ok=ReadFile(self->read_end.get(),&byte,1,&n,nullptr);
@@ -402,6 +404,19 @@ void stop_discovery() {
     require(publish.error.load()==ERROR_SUCCESS&&fallback,"stop never cancels synchronous I/O during discovery publication");
     require(f.server.endpoint().empty()&&f.server.status()!=Status::failed&&GetFileAttributesW(record.c_str())==INVALID_FILE_ATTRIBUTES,"a startup ending by stop publishes and then deletes its record");
     require(stray_entries(f.directory).empty(),"no record or temporary file is left after a stop during startup");
+  }
+  {
+    // Protected publication must finish even beyond the measured 1 s target. Start the hold after stop has signalled,
+    // so this exercises the mandatory join rather than host startup speed. The existing CTest bound detects a hang.
+    Fixture f; const auto record=f.directory+L"\\"+record_name(f); BlockedRead publish("startup-before-discovery");
+    require(f.server.start(f.directory),"over-target publishing worker start"); require(WaitForSingleObject(publish.reached.get(),10000)==WAIT_OBJECT_0,"worker held before protected publication");
+    bool stop_reached=false,fallback=false;
+    std::thread guard([&]{stop_reached=WaitForSingleObject(publish.stop_requested.get(),10000)==WAIT_OBJECT_0; fallback=publish.fallback(1100);});
+    f.server.stop(); guard.join();
+    std::cout<<"overTargetPublishReadError="<<publish.error.load()<<" stopReached="<<stop_reached<<" fallback="<<fallback<<" shutdownMs="<<f.server.shutdown_ms()<<'\n';
+    require(stop_reached&&publish.error.load()==ERROR_SUCCESS&&fallback,"stop does not cancel protected publication to meet a target");
+    require(f.server.shutdown_ms()>1000&&f.server.status()==Status::shutdown_deadline_exceeded,"mandatory join retains the unchanged over-target shutdown diagnostic");
+    require(f.server.endpoint().empty()&&GetFileAttributesW(record.c_str())==INVALID_FILE_ATTRIBUTES&&stray_entries(f.directory).empty(),"over-target join completes publication and cleanup before returning");
   }
   {
     // An actual foreign record makes the rename fail, so the publication's catch path deletes its temporary file while
@@ -632,6 +647,12 @@ void dll_lifecycle(const char* path) {
     require(FreeLibrary(module)!=FALSE,"test DLL unload after joined worker"); require(f.host.wrong_thread==0,"DLL worker makes no SDK API calls");
   }
 }
+bool exact_startup_failure(const Host& host,scs_result_t result,const std::string& expected,std::size_t initial_logs) {
+  if(initial_logs!=1||host.wrong_thread!=0)return false;
+  const bool prompt=result==SCS_RESULT_generic_error&&host.logs.size()==1&&host.log_types[0]==SCS_LOG_TYPE_error&&host.logs[0]==expected;
+  const bool deferred=result==SCS_RESULT_ok&&host.logs.size()==2&&host.log_types[0]==SCS_LOG_TYPE_warning&&host.logs[0]==std::string(startup_pending_message())&&host.log_types[1]==SCS_LOG_TYPE_error&&host.logs[1]==expected;
+  return prompt||deferred;
+}
 void dll_startup_reporting(const char* path) {
   OwnedWindow owned;
   bool reported=true;
@@ -647,16 +668,22 @@ void dll_startup_reporting(const char* path) {
     auto init=reinterpret_cast<decltype(&scs_telemetry_init)>(GetProcAddress(module,"scs_telemetry_init")); auto shutdown=reinterpret_cast<decltype(&scs_telemetry_shutdown)>(GetProcAddress(module,"scs_telemetry_shutdown"));
     using SetDirectory=int(*)(const wchar_t*); auto directory=reinterpret_cast<SetDirectory>(GetProcAddress(module,"ets2telemetry_test_directory")); require(init&&shutdown&&directory&&directory(f.directory.c_str()),"reporting official SDK/test directory");
     auto params=f.host.params(); const auto started=GetTickCount64(); const auto result=init(SCS_TELEMETRY_VERSION_1_01,&params); const auto elapsed=GetTickCount64()-started;
+    const auto initial_logs=f.host.logs.size();
+    // Pending startup is valid at the fixed wait. Observe the actual failure on frame_end before shutdown can replace
+    // an unfinished result with its distinct "ended by shutdown" warning.
+    const bool completed=result!=SCS_RESULT_ok||until([&]{f.host.frame(1); return f.host.logs.size()>=2;},5000);
+    const bool exact_report=completed&&exact_startup_failure(f.host,result,expected,initial_logs);
+    const auto reported_logs=f.host.logs.size();
     // Even the retained red implementation is safely joined before assertions and unloading.
     shutdown(); require(FreeLibrary(module)!=FALSE,"reporting DLL unload");
     bool preserved=true;
     if(scenario==0) {Handle replacement(CreateNamedPipeW(name.c_str(),PIPE_ACCESS_DUPLEX|FILE_FLAG_OVERLAPPED|FILE_FLAG_FIRST_PIPE_INSTANCE,PIPE_TYPE_BYTE|PIPE_REJECT_REMOTE_CLIENTS,1,4096,4096,0,f.security.attributes())); preserved=!replacement;}
     if(scenario==2) {std::array<char,7> sentinel{}; LARGE_INTEGER zero{}; DWORD read=0; preserved=SetFilePointerEx(foreign_record.get(),zero,nullptr,FILE_BEGIN)&&ReadFile(foreign_record.get(),sentinel.data(),7,&read,nullptr)&&read==7&&std::string(sentinel.data(),7)=="foreign"; FILE_DISPOSITION_INFO remove{TRUE}; SetFileInformationByHandle(foreign_record.get(),FileDispositionInfo,&remove,sizeof(remove)); foreign_record.reset();}
     std::cout<<"startup scenario="<<scenario<<" result="<<result<<" logs="<<f.host.logs.size()<<" wrongThread="<<f.host.wrong_thread<<" elapsedMs="<<elapsed<<std::endl;
-    reported=reported&&result==SCS_RESULT_generic_error&&f.host.logs.size()==1&&f.host.log_types[0]==SCS_LOG_TYPE_error&&f.host.logs[0]==expected&&f.host.wrong_thread==0;
-    require(elapsed<1000,"local startup failure promptly returned without client wait"); require(preserved,"foreign collision/publication object preserved");
+    reported=reported&&exact_report&&f.host.logs.size()==reported_logs;
+    require(preserved,"foreign collision/publication object preserved");
   }
-  require(reported,"all startup failures return generic error and log the fixed reason once on the direct SDK caller thread");
+  require(reported,"each startup failure has its exact caller-owned or pending/deferred SDK-thread report, with no shutdown duplicate");
 }
 #ifdef ETS2TELEMETRY_TRANSPORT_TEST_HOOKS
 // Official init on the separately hooked test DLL. A startup held past the wait returns ok with one fixed
@@ -664,8 +691,8 @@ void dll_startup_reporting(const char* path) {
 void dll_late_startup(const char* path) {
   OwnedWindow owned;
   // 0 late success, 1 late failure, 2 shutdown while pending, 3 failure completing after the wait but
-  // before the caller's exchange (caller-owned: generic error, no deferred entry).
-  for(unsigned scenario=0;scenario<4;++scenario) {
+  // before the caller's exchange (caller-owned: generic error, no deferred entry), 4 late discovery publication failure.
+  for(unsigned scenario=0;scenario<5;++scenario) {
     HookState hooks; hooks.mode=scenario==2?HookState::Mode::startup_until_stop:scenario==3?HookState::Mode::startup_race:HookState::Mode::startup_hold;
     if(scenario==2) hooks.injected=ERROR_OPERATION_ABORTED;
     Fixture f; sdk::Snapshot source; f.adapter->read_current(source); f.adapter->shutdown(); const auto name=endpoint_name(source,f.user);
@@ -677,8 +704,16 @@ void dll_late_startup(const char* path) {
     require(init&&shutdown&&endpoint&&set_hook&&directory&&directory(f.directory.c_str()),"hooked DLL official SDK/test seams");
     HookState::active=&hooks; set_hook(&HookState::hook);
     Handle foreign; const auto collide=[&]{foreign.reset(CreateNamedPipeW(name.c_str(),PIPE_ACCESS_DUPLEX|FILE_FLAG_OVERLAPPED|FILE_FLAG_FIRST_PIPE_INSTANCE,PIPE_TYPE_BYTE|PIPE_REJECT_REMOTE_CLIENTS,1,4096,4096,0,f.security.attributes())); require(static_cast<bool>(foreign),"actual foreign endpoint for DLL startup");};
+    const auto record=f.directory+L"\\"+std::wstring(source.identity.process_instance_id.bytes.begin(),source.identity.process_instance_id.bytes.begin()+36)+L".json";
+    Handle foreign_record;
+    if(scenario==4) {
+      foreign_record.reset(CreateFileW(record.c_str(),GENERIC_READ|GENERIC_WRITE|DELETE,FILE_SHARE_READ,f.security.attributes(),CREATE_NEW,0,nullptr));
+      require(static_cast<bool>(foreign_record),"actual foreign record for delayed discovery failure"); DWORD written=0;
+      require(WriteFile(foreign_record.get(),"foreign",7,&written,nullptr)&&written==7,"delayed discovery sentinel");
+    }
     if(scenario==3) collide();
     auto params=f.host.params(); const auto started=GetTickCount64(); const auto result=init(SCS_TELEMETRY_VERSION_1_01,&params); const auto elapsed=GetTickCount64()-started;
+    const auto initial_logs=f.host.logs.size();
     std::cout<<"late scenario="<<scenario<<" result="<<result<<" initMs="<<elapsed<<std::endl;
     const auto failed_reason=std::string(startup_failure_message(StartupFailure::endpoint_creation));
     if(scenario==3) {
@@ -689,7 +724,9 @@ void dll_late_startup(const char* path) {
       require(f.host.logs.size()==1&&f.host.log_types[0]==SCS_LOG_TYPE_warning&&f.host.logs[0]==std::string(startup_pending_message()),"pending warning logged once on the direct caller");
     }
     if(scenario==1) collide();
-    if(scenario<2) {SetEvent(hooks.release.get()); require(until([&]{f.host.frame(1); return f.host.logs.size()>=2;},5000),"late result reaches a later frame_end callback");}
+    if(scenario<2||scenario==4) {SetEvent(hooks.release.get()); require(until([&]{f.host.frame(1); return f.host.logs.size()>=2;},5000),"late result reaches a later frame_end callback");}
+    const auto discovery_reason=std::string(startup_failure_message(StartupFailure::discovery_publication));
+    const bool delayed_discovery_report=scenario!=4||exact_startup_failure(f.host,result,discovery_reason,initial_logs);
     if(scenario==0) {
       std::array<wchar_t,512> pipe{}; require(endpoint(pipe.data(),static_cast<unsigned>(pipe.size()))!=0,"late DLL endpoint published");
       Handle client(CreateFileW(pipe.data(),GENERIC_READ|GENERIC_WRITE,0,nullptr,OPEN_EXISTING,FILE_FLAG_OVERLAPPED,nullptr)); require(static_cast<bool>(client),"late DLL pipe client");
@@ -699,9 +736,16 @@ void dll_late_startup(const char* path) {
     set_hook(nullptr); require(FreeLibrary(module)!=FALSE,"hooked DLL unload after joined worker");
     if(scenario==3) require(f.host.logs.size()==1,"caller-owned failure adds no deferred entry at shutdown");
     else {
-      const std::string late=scenario==0?late_started:scenario==1?failed_reason:late_stopped;
-      const auto severity=scenario==0?SCS_LOG_TYPE_message:scenario==1?SCS_LOG_TYPE_error:SCS_LOG_TYPE_warning;
+      const std::string late=scenario==0?late_started:scenario==1?failed_reason:scenario==4?discovery_reason:late_stopped;
+      const auto severity=scenario==0?SCS_LOG_TYPE_message:scenario==1||scenario==4?SCS_LOG_TYPE_error:SCS_LOG_TYPE_warning;
       require(f.host.logs.size()==2&&f.host.logs[1]==late&&f.host.log_types[1]==severity,"eventual result logged exactly once with its fixed text and severity");
+    }
+    if(scenario==4) {
+      std::array<char,7> sentinel{}; LARGE_INTEGER zero{}; DWORD read=0;
+      const bool preserved=SetFilePointerEx(foreign_record.get(),zero,nullptr,FILE_BEGIN)&&ReadFile(foreign_record.get(),sentinel.data(),7,&read,nullptr)&&read==7&&std::string(sentinel.data(),7)=="foreign";
+      FILE_DISPOSITION_INFO remove{TRUE}; SetFileInformationByHandle(foreign_record.get(),FileDispositionInfo,&remove,sizeof(remove)); foreign_record.reset();
+      require(preserved,"delayed failure preserves the foreign discovery record");
+      require(delayed_discovery_report,"delayed discovery failure satisfies the same exact reporting contract as ordinary collisions");
     }
     require(f.host.wrong_thread==0&&hooks.synchronized.load(),"all game logging stays on the SDK caller thread");
     if(scenario==1||scenario==3) {Handle replacement(CreateNamedPipeW(name.c_str(),PIPE_ACCESS_DUPLEX|FILE_FLAG_OVERLAPPED|FILE_FLAG_FIRST_PIPE_INSTANCE,PIPE_TYPE_BYTE|PIPE_REJECT_REMOTE_CLIENTS,1,4096,4096,0,f.security.attributes())); require(!replacement,"foreign endpoint preserved");}

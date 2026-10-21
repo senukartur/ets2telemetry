@@ -1,5 +1,14 @@
 # Regression scenario-to-test registry
 
+ET-011 reconciliation, October 22, 2026 (REG-011/012): `snapshot-transport-test.cpp` forces a foreign discovery failure
+after the startup wait and requires the exact pending/deferred SDK-thread reports before shutdown, without a duplicate.
+Its protected-publication case holds I/O beyond the unchanged 1,000 ms measured shutdown target and requires mandatory
+join, cleanup and `shutdown_deadline_exceeded`; a target miss does not permit unloading a live worker. The refusal
+recovery storage case retains clean-stop, durable ACK and integrity expectations with separate timing/context
+diagnostics. Corrected owner sign-out/restart passed within the isolated scope recorded in
+[ET-011 validation](validation/et-011.md). Narrator and remaining in-game unit/close-to-tray observations are owned by
+[ET-043](https://trello.com/c/2fbiCET0), still unverified; the installed-check deferrals remain with ET-018.
+
 ET-011 Windows terminal boundary (October 21, 2026), partial REG-012/REG-017: `diagnostics.test.ts` and
 `main-boundaries.test.ts` protect synchronous terminal audit, cancelled queries and duplicate notifications. The
 packaged `scripts/ci/Invoke-SessionEndSmoke.ps1` sends native session messages only to the verified owned window after

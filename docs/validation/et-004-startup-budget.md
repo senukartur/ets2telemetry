@@ -1,5 +1,11 @@
 # ET-004 startup-budget validation record
 
+Regression reconciliation, October 22, 2026: [ET-011](et-011.md#local-contract-correction-and-closeout-authorization--october-22-2026)
+corrects the real-collision test's obsolete unconditional `generic_error`/sub-second assumption. A foreign discovery
+record held beyond the fixed wait forces the accepted pending warning plus exact deferred stage error before shutdown.
+Caller-owned/raced failures, exact severity/thread, foreign bytes and no duplicate remain protected. The product's
+startup wait and pending policy are unchanged; earlier measurements below retain their recorded scope.
+
 Recorded October 13, 2026. This is hardening of accepted ET-004a code: v0 pipe-server startup that is slow but succeeds no longer fails the plugin load. The bug was found on October 12, 2026 while investigating the hosted CI flake for PR #26 (CAP-01); see [CAP-01a validation](cap-01a.md) finding M. The wire protocol, discovery records, CAP0 contract and application code are unchanged. No game was launched and no DLL was installed into a game directory.
 
 ## Problem

@@ -408,6 +408,8 @@ export function tracedHandle(handle: StorageWorkerHandle, timeline: string[], ho
 
 /** One SHUTDOWN_STEP line of the service log. */
 export interface LoggedStep {phase: string; name: string; outcome: string}
+/** Separate diagnostic facts; assertion-facing step and timeline shapes stay unchanged. */
+export interface LoggedStepDiagnostic extends LoggedStep {ms: number | null; nominalBudgetMs: number; effectiveBudgetMs: number; graceMs: number | null}
 /**
  * The real ShutdownSequence with its production timers. Its SHUTDOWN_STEP log goes to `steps` and to `timeline` as
  * `step <phase> <name> <outcome>`; each step registered through `registrar` writes `start <name>` when it starts and
@@ -415,15 +417,21 @@ export interface LoggedStep {phase: string; name: string; outcome: string}
  */
 export function tracedShutdown(timeline: string[], onStart?: (name: string) => void) {
   const steps: LoggedStep[] = [];
+  const diagnostics: LoggedStepDiagnostic[] = [];
+  const contexts = new Map<string, {nominalBudgetMs: number; effectiveBudgetMs: number; graceMs: number | null}>();
   const sequence = new ShutdownSequence((event, _detail, facts) => {
     if (event !== 'SHUTDOWN_STEP' || !facts) return;
     const step = {phase: String(facts.phase), name: String(facts.name), outcome: String(facts.outcome)};
     steps.push(step); timeline.push(`step ${step.phase} ${step.name} ${step.outcome}`);
+    diagnostics.push({...step, ms: typeof facts.ms === 'number' ? facts.ms : null, ...contexts.get(step.name)!});
   });
   const registrar: Pick<ShutdownSequence, 'register'> = {
-    register: (phase, step) => sequence.register(phase, {...step, run: context => { timeline.push(`start ${step.name}`); onStart?.(step.name); return step.run(context); }})
+    register: (phase, step) => sequence.register(phase, {...step, run: context => {
+      contexts.set(step.name, {nominalBudgetMs: step.budgetMs, effectiveBudgetMs: context?.budgetMs ?? step.budgetMs, graceMs: context?.graceMs ?? null});
+      timeline.push(`start ${step.name}`); onStart?.(step.name); return step.run(context);
+    }})
   };
-  return {sequence, registrar, steps};
+  return {sequence, registrar, steps, diagnostics};
 }
 
 /**

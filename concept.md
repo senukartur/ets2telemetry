@@ -529,6 +529,15 @@ ET-013 PR-2 implementation update (October 15, 2026): the telemetry service runs
 
 ## ET-011 authorization — October 15, 2026
 
+Closeout authorization, October 22, 2026: the owner authorized resolving local verification failures, independent
+review, final automatic Ready CI and squash merge of PR #167, followed by ET-011 closure. Narrator accessibility and
+remaining real-game unit-profile/close-to-tray overlay checks transfer **unverified** to
+[ET-043](https://trello.com/c/2fbiCET0); installed shortcut/update checks retain their ET-018 deferral. Corrected
+Windows sign-out and actual restart passed in separate isolated synthetic sessions. The native regression correction
+follows the existing pending-start policy and mandatory-join/measured-target contract; no product deadline, protocol,
+storage schema, game-history enablement or release scope changes. Historical failures are retained, and this decision
+does not assert the PR's remaining gates or transferred checks already passed. See [ET-011 validation](docs/validation/et-011.md).
+
 Windows session-end correction, October 21, 2026: pinned Electron immediately terminates main after confirmed native
 `session-end` listeners, so C6's normal asynchronous supervisor completion cannot be guaranteed at that OS boundary.
 The owner requested diagnosing/fixing the lost audit and preparing a repeat manual check. Confirmed end now enters

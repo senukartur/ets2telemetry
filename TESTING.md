@@ -1,5 +1,15 @@
 # Testing and Regression Strategy
 
+ET-011 local-contract reconciliation, October 22, 2026: native startup-reporting tests accept either the exact
+caller-owned error or the documented pending warning followed by the exact stage error on a later SDK callback,
+before shutdown can change its attribution. A controlled foreign discovery record forces the latter path. A protected
+publication held beyond 1,000 ms proves mandatory join and cleanup with the unchanged over-target shutdown diagnostic;
+it does not establish a hard kernel deadline or improve the measured target. Storage refusal recovery retains its
+clean-stop/ACK/integrity assertions and production timers while separate diagnostics expose step duration, nominal and
+effective budgets and history grace. Historical failed runs remain recorded. Narrator and the remaining game checks
+transfer unverified to [ET-043](https://trello.com/c/2fbiCET0); corrected real sign-out/restart observations and current
+verification status are in [ET-011 validation](docs/validation/et-011.md).
+
 ET-011 Windows session end, October 21, 2026: terminal diagnostics/main-boundary regressions retain confirmed-end rows
 before Electron's immediate native termination, without treating a cancelled query as an exit. The separate bounded
 `scripts/ci/Invoke-SessionEndSmoke.ps1` checks an owned HWND/PID/image, cancelled query and confirmed native end after
