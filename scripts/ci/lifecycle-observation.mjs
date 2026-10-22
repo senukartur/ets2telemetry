@@ -249,7 +249,7 @@ export async function verifyLifecycleRestart({application, record, rendererPages
   await waitForStartup(dashboard);
   // The saved ETS2 profile applies from the first current reading.
   record.restart = {ready: await waitForDashboardUnits(dashboard, US_DASHBOARD)};
-  record.restart.dashboardUnits = {speed: record.restart.ready.speed, fuel: record.restart.ready.fuel};
+  record.restart.dashboardUnits = {speed: record.restart.ready.speed, fuel: record.restart.ready.fuel, gauge: record.restart.ready.gauge};
   const state = await lifecycleState(application);
   assert.equal(state.started, true); assert.equal(state.tray, true);
   record.restart.servicePid = state.servicePid;
