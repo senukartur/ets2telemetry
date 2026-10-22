@@ -274,9 +274,15 @@ function runApplication(profileError: unknown): void {
     service.postMessage(request);
   }, (code, error) => log(code, error)) : undefined;
   function publishOverlay(live: LiveTelemetry, units: UnitProfiles, settings: OverlaySettings, language: AppLanguage = settingsStore.view().language): void {
-    lastOverlay = overlayPresentation(live, units, settings, lastOverlay, overlayEdit.active, language);
+    lastOverlay = {...overlayPresentation(live, units, settings, lastOverlay, overlayEdit.active, language),
+      contentAnchorY: overlayController?.contentAnchorY ?? settings.placements[settings.layout].y};
     if (latency) lastOverlay = latency.project(lastOverlay, live, Boolean(overlay && !overlay.isDestroyed() && overlay.isVisible()));
     overlaySubscriptions.publish(lastOverlay);
+  }
+  function publishOverlayAnchor(contentAnchorY: number): void {
+    if (lifecycle.exiting || lastOverlay.contentAnchorY === contentAnchorY) return;
+    // Preserve the existing projection/capture/diagnostic token and the normal credit/coalescing/epoch path.
+    lastOverlay = {...lastOverlay, contentAnchorY}; overlaySubscriptions.publish(lastOverlay);
   }
   const freshness = new LiveFreshness(update => {
     const view = settingsStore.view();
@@ -551,7 +557,7 @@ function runApplication(profileError: unknown): void {
     // taskbar, which drops WS_EX_TOPMOST while a borderless full-screen game is foreground.
     created.setAlwaysOnTop(true, OVERLAY_TOPMOST_LEVEL);
     overlayController = new OverlayController(created, screen, phase => log('OVERLAY_TOPMOST_RESTORED', undefined, {phase}), layout,
-      {enabled: settings.state !== 'loading' && settings.overlay.enabled, placement, sections: settings.overlay.sections, editChanged: overlayEditChanged});
+      {enabled: settings.state !== 'loading' && settings.overlay.enabled, placement, sections: settings.overlay.sections, editChanged: overlayEditChanged, anchorChanged: publishOverlayAnchor});
     created.webContents.setWindowOpenHandler(() => ({action: 'deny'}));
     created.webContents.on('will-navigate', event => event.preventDefault());
     // A loaded document starts at the default zoom; the scale in use applies again.

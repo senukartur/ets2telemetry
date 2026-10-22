@@ -38,11 +38,11 @@ it('takes the game from an explicit fixture source and otherwise only from an ET
 it('formats both profiles with telemetry-core conversions and no signed zero', () => {
   expect([speedUnit('metric'), volumeUnit('metric'), speedUnit('us-customary'), volumeUnit('us-customary')]).toEqual(['km/h', 'L', 'mph', 'US gal']);
   // 25 m/s = 90 km/h = 55.92 mph; 73 L = 19.28 US gal.
-  expect([speedNumber(25, 'metric'), speedNumber(25, 'us-customary'), volumeNumber(73, 'metric'), volumeNumber(73, 'us-customary')]).toEqual(['90.0', '55.9', '73.0', '19.3']);
+  expect([speedNumber(25, 'metric'), speedNumber(25, 'us-customary'), volumeNumber(73, 'metric'), volumeNumber(73, 'us-customary')]).toEqual(['90', '56', '73.0', '19.3']);
   for (const profile of ['metric', 'us-customary'] as const) {
-    expect(speedNumber(-0, profile)).toBe('0.0'); expect(speedNumber(-0.001, profile)).toBe('0.0'); expect(volumeNumber(-0, profile)).toBe('0.0');
+    expect(speedNumber(-0, profile)).toBe('0'); expect(speedNumber(-0.001, profile)).toBe('0'); expect(volumeNumber(-0, profile)).toBe('0.0');
   }
-  expect(speedNumber(-2, 'us-customary')).toBe('-4.5');
+  expect(speedNumber(-2, 'us-customary')).toBe('-4');
 });
 
 it('repeats no conversion constant in the desktop display projections', () => {
@@ -68,10 +68,17 @@ it('selects the displayed game profile for the dashboard, with ATS defaulting to
   expect(displayProfile(initialLive('game'))).toBe('metric');
   expect(displayProfile(undefined)).toBe('metric');
   const ats = reading('ats', 'game', 'ats');
-  expect([dashboardSpeed(ats, displayProfile(ats)), dashboardFuel(ats, displayProfile(ats))]).toEqual(['55.9 mph', '19.3 US gal']);
+  expect([dashboardSpeed(ats, displayProfile(ats)), dashboardFuel(ats, displayProfile(ats))]).toEqual(['56 mph', '19.3 US gal']);
   const ets2 = reading('ets2', 'game', 'ets2');
-  expect([dashboardSpeed(ets2, displayProfile(ets2)), dashboardFuel(ets2, displayProfile(ets2))]).toEqual(['90.0 km/h', '73.0 L']);
+  expect([dashboardSpeed(ets2, displayProfile(ets2)), dashboardFuel(ets2, displayProfile(ets2))]).toEqual(['90 km/h', '73.0 L']);
   // Persisted settings replace the defaults.
   expect(displayProfile(ats, {ets2: 'metric', ats: 'metric'})).toBe('metric');
   expect(displayProfile(ets2, {ets2: 'us-customary', ats: 'us-customary'})).toBe('us-customary');
 });
+
+it.each([[1.25, '5'], [-1.25, '-5'], [0.001, '0'], [-0.001, '0'], [25, '90'], [2.1, '8'], [-2.1, '-8']] as const)(
+  'rounds LIVE metric speed %s after conversion with fixed nearest semantics', (raw, text) => {
+    expect(speedNumber(raw, 'metric')).toBe(text);
+    expect(volumeNumber(73, 'metric')).toBe('73.0'); expect(volumeNumber(73, 'us-customary')).toBe('19.3');
+  }
+);

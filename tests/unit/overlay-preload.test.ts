@@ -14,8 +14,8 @@ class Port {
 }
 let bridge: OverlayBridge;
 let ipc: EventEmitter & {send: ReturnType<typeof vi.fn>};
-const projected: OverlayPresentation = {source: 'ETS2', origin: 'synthetic', status: 'connected', speed: '90.0', fuel: '73.0', speedUnit: 'km/h', fuelUnit: 'L', freshness: 'current',
-  layout: 'card', paused: true, sections: [{id: 'speed', state: 'value', text: '90.0 km/h'}, {id: 'rpm', state: 'value', text: '1500 rpm', ring: 0.5}, {id: 'fuel', state: 'unavailable'}],
+const projected: OverlayPresentation = {source: 'ETS2', origin: 'synthetic', status: 'connected', speed: '90', fuel: '73.0', speedUnit: 'km/h', fuelUnit: 'L', freshness: 'current',
+  layout: 'card', paused: true, sections: [{id: 'speed', state: 'value', text: '90 km/h'}, {id: 'rpm', state: 'value', text: '1500 rpm', ring: 0.5}, {id: 'fuel', state: 'unavailable'}],
   editing: false};
 beforeEach(async () => {
   vi.useFakeTimers(); vi.resetModules(); ipc = Object.assign(new EventEmitter(), {send: vi.fn()});

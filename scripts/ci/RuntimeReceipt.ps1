@@ -38,6 +38,19 @@ function Test-ReceiptInteger {
     return ([math]::Truncate([decimal]$Value) -eq [decimal]$Value -and [double]$Value -ge $Minimum -and [double]$Value -le $Maximum)
 }
 
+# Exact visible SVG evidence; the speed string is derived from the observed number and unit.
+function Test-LiveGaugeReceipt {
+    param([object]$Reading)
+    $gauge = $Reading.gauge
+    if ($null -eq $gauge -or ((@($gauge.PSObject.Properties.Name) | Sort-Object) -join ',') -cne 'accessibleName,number,unit,visible' -or
+        $gauge.number -isnot [string] -or $gauge.unit -isnot [string] -or $gauge.accessibleName -isnot [string] -or
+        $gauge.visible -isnot [bool] -or !$gauge.visible -or $gauge.unit -cnotin @('km/h','mph') -or
+        $gauge.number -cnotmatch ('^(?:-?[0-9]+|' + [char]0x2014 + ')$')) { return $false }
+    $expected = if ($gauge.number -ceq [string][char]0x2014) { 'Speed: unavailable' } else { 'Speed: ' + $gauge.number + ' ' + $gauge.unit }
+    $prefix = $expected + '; Engine RPM: '
+    return ($Reading.speed -ceq $expected -and $gauge.accessibleName.StartsWith($prefix, [StringComparison]::Ordinal) -and $gauge.accessibleName.Length -gt $prefix.Length)
+}
+
 # Exactly one APP_EXIT and SERVICE_EXIT with code 0, the service's single clean stopped report and only clean shutdown steps.
 function Test-OrderlyRunEvent {
     param([object[]]$MainEvents, [object[]]$ServiceEvents)
@@ -71,7 +84,7 @@ function Test-LifecycleReceipt {
         $lifecycle.restart.servicePid -eq $lifecycle.servicePid -or $lifecycle.afterClose.servicePid -ne $lifecycle.servicePid) { return $false }
     foreach ($flag in @('dashboard','exiting')) { if ($lifecycle.afterClose.$flag -isnot [bool] -or $lifecycle.afterClose.$flag) { return $false } }
     foreach ($flag in @('overlay','tray','upstream')) { if ($lifecycle.afterClose.$flag -isnot [bool] -or !$lifecycle.afterClose.$flag) { return $false } }
-    foreach ($reading in @(@{row=$lifecycle.overlayChanged; speed='72.0'; fuel='71.0'}, @{row=$lifecycle.overlayRestored; speed='90.0'; fuel='73.0'})) {
+    foreach ($reading in @(@{row=$lifecycle.overlayChanged; speed='72'; fuel='71.0'}, @{row=$lifecycle.overlayRestored; speed='90'; fuel='73.0'})) {
         $row = $reading.row
         if ($null -eq $row -or $row.source -cne 'ETS2' -or $row.origin -cne 'synthetic' -or $row.freshness -cne 'current' -or $row.status -cne 'connected' -or
             $row.speed -cne $reading.speed -or $row.fuel -cne $reading.fuel) { return $false }
@@ -154,10 +167,10 @@ function Test-LifecycleSettingsReceipt {
     if (!(Test-ReceiptInteger -Value $lifecycle.settingsQuarantined -Minimum 1 -Maximum 1) -or $lifecycle.restart.settingsState -cne 'loaded') { return $false }
     $units = $lifecycle.overlayUnits
     if ($null -eq $units -or $units.source -cne 'ETS2' -or $units.origin -cne 'synthetic' -or $units.status -cne 'connected' -or
-        $units.freshness -cne 'current' -or $units.speed -cne '55.9' -or $units.speedUnit -cne 'mph' -or
+        $units.freshness -cne 'current' -or $units.speed -cne '56' -or $units.speedUnit -cne 'mph' -or
         $units.fuel -cne '19.3' -or $units.fuelUnit -cne 'US gal') { return $false }
     foreach ($row in @($lifecycle.dashboardUnits, $lifecycle.restart.dashboardUnits)) {
-        if ($null -eq $row -or $row.speed -cne 'Speed: 55.9 mph' -or $row.fuel -cne 'Fuel: 19.3 US gal') { return $false }
+        if (!(Test-LiveGaugeReceipt -Reading $row) -or $row.speed -cne 'Speed: 56 mph' -or $row.fuel -cne 'Fuel: 19.3 US gal') { return $false }
     }
     # Diagnostics: run A falls back from the invalid file, quarantines it once and saves units then visibility false; run B only loads.
     # A read past the 1000 ms load budget adds one SETTINGS_LOAD_PENDING row before any other settings row of that run.
@@ -923,9 +936,9 @@ function Test-RuntimeReceipt {
             }
             $during = $proof.independentObservation.reading
             if ($kind -ceq 'overlay') {
-                if ($during.status -cnotmatch '^connected:' -or $during.speed -cne 'Speed: 72.0 km/h' -or $during.fuel -cne 'Fuel: 71.0 L') { $valid = $false }
+                if (!(Test-LiveGaugeReceipt -Reading $during) -or $during.status -cnotmatch '^connected:' -or $during.speed -cne 'Speed: 72 km/h' -or $during.fuel -cne 'Fuel: 71.0 L') { $valid = $false }
             } elseif ($during.phase -cne 'during-dashboard-stall' -or $during.status -cne 'connected' -or $during.source -cne 'ETS2' -or
-                $during.origin -cne 'synthetic' -or $during.freshness -cne 'current' -or $during.speed -cne '72.0' -or $during.fuel -cne '71.0' -or
+                $during.origin -cne 'synthetic' -or $during.freshness -cne 'current' -or $during.speed -cne '72' -or $during.fuel -cne '71.0' -or
                 $during.speedUnit -cne 'km/h' -or $during.fuelUnit -cne 'L') { $valid = $false }
             $duringWindows = @($proof.independentObservation.windows)
             if (!(Test-OverlayRendererIsolation -Windows $duringWindows) -or !(Test-OverlayTopmost -Windows $duringWindows)) { $valid = $false }
@@ -949,10 +962,10 @@ function Test-RuntimeReceipt {
             $rows = @($overlay.observations | Where-Object { $_.phase -ceq $phase })
             if ($rows.Count -ne 1) { $valid = $false; continue }
             $row = $rows[0]
-            $speed = '90.0'; $fuel = '73.0'; $freshness = 'current'; $states = @('connected')
-            if ($phase -in @('changed','overlay-credit-recovery','dashboard-reload','during-dashboard-stall','dashboard-credit-recovery')) { $speed = '72.0'; $fuel = '71.0' }
+            $speed = '90'; $fuel = '73.0'; $freshness = 'current'; $states = @('connected')
+            if ($phase -in @('changed','overlay-credit-recovery','dashboard-reload','during-dashboard-stall','dashboard-credit-recovery')) { $speed = '72'; $fuel = '71.0' }
             if ($phase -in @('missing','silent-open-stale','disconnected')) { $speed = [string][char]0x2014; $fuel = $speed }
-            if ($phase -ceq 'zero') { $speed = '0.0'; $fuel = '0.0' }
+            if ($phase -ceq 'zero') { $speed = '0'; $fuel = '0.0' }
             if ($phase -ceq 'silent-open-stale') { $freshness = 'stale'; $states = @('stale') }
             if ($phase -ceq 'disconnected') { $freshness = 'unavailable'; $states = @('disconnected','waiting') }
             if ($row.source -cne 'ETS2' -or $row.origin -cne 'synthetic' -or $row.speedUnit -cne 'km/h' -or $row.fuelUnit -cne 'L' -or

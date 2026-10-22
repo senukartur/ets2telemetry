@@ -50,12 +50,18 @@ export interface OverlayView {
   panel: OverlayItem[];
   /** The overlay edit mode (ET-012b): the renderer outlines the overlay and makes it a drag region. */
   editing: boolean;
+  contentAnchorY: number;
 }
 
 /** What the overlay shows before main's first delivery: no signal, no sections. */
 export const OVERLAY_PLACEHOLDER: OverlayPresentation = Object.freeze({source: 'No game', origin: 'none', status: 'waiting', speed: '—', speedUnit: 'km/h',
   fuel: '—', fuelUnit: 'L', freshness: 'unavailable', layout: 'strip', paused: false, sections: Object.freeze([]), editing: false, language: 'en'});
 const DASH = '—';
+/** Old projections retain their layout anchor; malformed provided values never become CSS/native coordinates. */
+export function contentAnchorY(presentation: Pick<OverlayPresentation, 'layout' | 'contentAnchorY'>): number {
+  const value = presentation.contentAnchorY;
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1 ? value : presentation.layout === 'cluster' ? 1 : 0;
+}
 
 export function overlayView(presentation: OverlayPresentation = OVERLAY_PLACEHOLDER): OverlayView {
   const language = presentation.language ?? 'en';
@@ -103,7 +109,7 @@ export function overlayView(presentation: OverlayPresentation = OVERLAY_PLACEHOL
     paused: presentation.paused, dim: presentation.freshness !== 'current', tags, items, groups,
     ...(gaugeShown ? {gauge: {speed: byId.get('speed'), gear: byId.get('gear'), rpm: byId.get('rpm')}} : {}),
     panel: gaugeShown ? items.filter(item => !CLUSTER_GAUGE_SECTIONS.has(item.id)) : items,
-    editing: presentation.editing === true
+    editing: presentation.editing === true, contentAnchorY: contentAnchorY(presentation)
   };
 }
 

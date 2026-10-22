@@ -1,5 +1,6 @@
 import type {Page} from '@playwright/test';
-export interface RendererObservation {status: string; speed: string; fuel: string}
+export interface GaugeObservation {number: string; unit: string; accessibleName: string; visible: boolean}
+export interface RendererObservation {status: string; speed: string; fuel: string; gauge?: GaugeObservation}
 export function currentTelemetryObservation(): RendererObservation | false;
 export function waitForCurrentTelemetry(page: Page): Promise<RendererObservation>;
 export type LiveRow = readonly [testId: string, text: string];
@@ -14,7 +15,7 @@ export const SYNTHETIC_V1_LIVE_ROWS: readonly LiveRow[];
 export const SYNTHETIC_V1_VALUE_IDS: readonly string[];
 export const SYNTHETIC_V0V1_LIVE_ROWS: readonly LiveRow[];
 export const SYNTHETIC_V0V1_HIDDEN_ROWS: readonly string[];
-export function v1NotCurrentObservation(expected: {values: readonly string[]; status: string; speed: string}): Record<string, string | undefined> | false;
+export function v1NotCurrentObservation(expected: {values: readonly string[]; status: string; speed: string; statusId?: string; omitFuel?: boolean}): Record<string, string | undefined> | false;
 export function waitForV1NotCurrentLive(page: Page, values: readonly string[], status: string, speed: string): Promise<Record<string, string | undefined>>;
 /** Element test id to exact text, `null` for an absent element; `freshness` compares overlay-root's data-freshness. */
 export type OverlayV1Expectation = Readonly<Record<string, string | null>>;

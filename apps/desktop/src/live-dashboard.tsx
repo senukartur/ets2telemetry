@@ -22,17 +22,17 @@ export function LiveDashboard({live, units, language = 'en', hardMode}: {live: L
     {!view.current ? <div className="yu-connection" data-testid="live.waiting"><WifiOff aria-hidden="true" /><div><strong>{t(`ui.status.${live?.status ?? 'waiting'}`, undefined, language)}</strong><p>{live?.status === 'waiting' || !live ? t('st.waitT', undefined, language) : t('ui.notCurrent', undefined, language)}</p></div></div> : null}
     <div className="yu-live-top">
       <Card className={`yu-instrument ${view.current ? '' : 'yu-not-current'}`} data-testid="live.instrument"><CardContent>
-        <div className="yu-gauge" data-testid="live.instrument.gauge"><svg viewBox="0 0 260 238" role="img" aria-label={`${t('live.speed', undefined, language)}: ${speedText}; ${t('live.rpm', undefined, language)}: ${value('engine-rpm')}`}>
+        <div className="yu-gauge" data-testid="live.instrument.gauge"><svg data-testid="live-speed-gauge" viewBox="0 0 260 238" role="img" aria-label={`${t('live.speed', undefined, language)}: ${speedText}; ${t('live.rpm', undefined, language)}: ${value('engine-rpm')}`}>
           <path d={gaugeArc(122, -128, 128)} className="yu-gauge-track" strokeWidth={10} />
           {view.speedRatio !== null && view.speedRatio > 0 ? <path d={gaugeArc(122, -128, -128 + 256 * view.speedRatio)} className="yu-gauge-speed" strokeWidth={10} /> : null}
           {Array.from({length: Math.floor(view.scaleMax / 10) + 1}, (_, i) => {const v = i * 10, angle = (-128 + 256 * v / view.scaleMax) * Math.PI / 180;
             return <g key={v}><line x1={130 + 111 * Math.sin(angle)} y1={130 - 111 * Math.cos(angle)} x2={130 + (v % 20 === 0 ? 101 : 106) * Math.sin(angle)} y2={130 - (v % 20 === 0 ? 101 : 106) * Math.cos(angle)} stroke="var(--yu-text-muted)" />{v % 20 === 0 ? <text x={130 + 88 * Math.sin(angle)} y={134 - 88 * Math.cos(angle)} textAnchor="middle" className="yu-gauge-tick">{v}</text> : null}</g>;})}
           <path d={gaugeArc(66, -100, 100)} className="yu-gauge-track" strokeWidth={5} />
           {view.rpmRatio !== null && view.rpmRatio > 0 ? <path d={gaugeArc(66, -100, -100 + 200 * view.rpmRatio)} className="yu-gauge-rpm" strokeWidth={5} /> : null}
-          <text x={130} y={142} textAnchor="middle" className="yu-gauge-number">{view.speedText}</text>
-          <text x={130} y={166} textAnchor="middle" className="yu-gauge-unit">{translateUnit(view.units.speed, language)}</text>
+          <text x={130} y={142} textAnchor="middle" className="yu-gauge-number" data-testid="live-speed-number">{view.speedText}</text>
+          <text x={130} y={166} textAnchor="middle" className="yu-gauge-unit" data-testid="live-speed-unit">{translateUnit(view.units.speed, language)}</text>
           <text x={130} y={214} textAnchor="middle" className="yu-gauge-caption">{value('engine-rpm')}</text>
-        </svg><p data-testid="speed" className="yu-muted">{strings.speedLabel}: {speedText}</p></div>
+        </svg></div>
         <div className="yu-gear" data-testid="live.instrument.gear"><span className="yu-muted">{t('live.gear', undefined, language)}</span><strong>{value('gear')}</strong></div>
         <div className="yu-fuel" data-testid="live.instrument.fuel"><div className="yu-tank" data-testid="live.instrument.tank" data-state={view.fuelRatio === null ? 'unavailable' : 'value'} aria-hidden="true">{view.fuelRatio === null ? <span className="yu-tank-unavailable">—</span> : <i style={{height: `${view.fuelRatio * 100}%`, background: view.fuelRatio < .3 ? 'var(--yu-progress-pending)' : 'var(--yu-ok-fg)'}} />}</div><div className="yu-stack">
           <div><p className="yu-muted">{t('live.fuel', undefined, language)}</p><strong className="yu-metric" data-testid="fuel">{strings.fuelLabel}: {fuelText}</strong><p className="yu-muted">{t('live.of', {v: value('fuel-capacity')}, language)} · {value('fuel-level')}</p></div>

@@ -1,3 +1,4 @@
+import {dashboardObservation} from './dashboard-observation.mjs';
 // ET-028: bounded visual shards against the production renderer, fixed bridge and isolated synthetic sources.
 import assert from 'node:assert/strict';
 import path from 'node:path';
@@ -28,6 +29,25 @@ function waitOverlayVisibility(page, {enabled, writable = true, saveError = null
     (errorVisible === undefined || observed.errorShown === errorVisible), message, timeoutMs);
 }
 async function settled(page) {await page.evaluate(async () => {await globalThis.document.fonts.ready;});}
+// Isolated CSS display probe only: it does not exercise committed y, native drag or game authority.
+function cssDisplayGeometry() {
+  const root = globalThis.document.querySelector('[data-testid="overlay-root"]');
+  const content = root.querySelector('[data-testid="overlay-content"]');
+  const original = {style: content.getAttribute('style'), anchor: content.getAttribute('data-anchor-y')};
+  const capacity = root.getBoundingClientRect(), results = [];
+  try {
+    for (const y of [0, 0.5, 1]) {
+      content.style.top = y * 100 + '%'; content.style.transform = 'translateY(-' + y * 100 + '%)'; content.setAttribute('data-anchor-y', String(y));
+      const box = content.getBoundingClientRect(), expected = capacity.top + (capacity.height - box.height) * y;
+      results.push({y, capacityHeight: capacity.height, paintedHeight: box.height, top: box.top, expected,
+        aligned: box.height > 0 && box.height <= capacity.height && Math.abs(box.top - expected) <= 1});
+    }
+  } finally {
+    if (original.style === null) content.removeAttribute('style'); else content.setAttribute('style', original.style);
+    if (original.anchor === null) content.removeAttribute('data-anchor-y'); else content.setAttribute('data-anchor-y', original.anchor);
+  }
+  return {results, restored: content.getAttribute('style') === original.style && content.getAttribute('data-anchor-y') === original.anchor};
+}
 async function capture({page, application, config, record, name, language, size, overlay = false}) {
   const file = `ui-${config.uiCase}-${name}-${language}-${size.width}x${size.height}.png`;
   await settled(page);
@@ -79,7 +99,7 @@ export async function runUiSmoke({application, dashboard, overlay, source, confi
         Object.assign(record.flags, {navigation: true, headingFocus: true, journalUnmount: true, menuKeyboard: true, exitAvailable: true, laterAccount: true});
       } else if (config.uiCase === 'live') {
         await screen(dashboard, 'live');
-        assert.equal(await dashboard.getByTestId('speed').innerText(), language === 'en' ? 'Speed: 90.0 km/h' : 'Скорость: 90.0 км/ч');
+        assert.ok(await dashboard.evaluate(dashboardObservation, {speed: language === 'en' ? 'Speed: 90 km/h' : 'Скорость: 90 км/ч', fuel: language === 'en' ? 'Fuel: 73.0 L' : 'Топливо: 73.0 л'}));
         for (const [id, text] of [['cargo', 'Synthetic Cargo'], ['source-city', 'Synthetic City A'], ['source-company', 'Synthetic Company A'], ['destination-city', 'Synthetic City B'], ['destination-company', 'Synthetic Company B'], ['truck', 'truck.volvo']]) {
           assert.equal(await dashboard.getByTestId(`live-${id}`).innerText(), text);
         }
@@ -102,7 +122,7 @@ export async function runUiSmoke({application, dashboard, overlay, source, confi
         source.setReading(25, 73); source.setCapacity(null);
         await dashboard.waitForFunction(language => globalThis.document.querySelector('[data-testid="live.instrument.tank"]')?.getAttribute('data-state') === 'unavailable' && !globalThis.document.querySelector('.yu-tank i') && globalThis.document.querySelector('.yu-tank-unavailable')?.textContent === '—' && globalThis.document.querySelector('[data-testid="fuel"]')?.textContent === (language === 'en' ? 'Fuel: 73.0 L' : 'Топливо: 73.0 л'), language, {timeout: 5000});
         source.setCapacity(1000);
-        source.setUnavailable(); await until(() => dashboard.getByTestId('speed').innerText(), value => value === (language === 'en' ? 'Speed: unavailable' : 'Скорость: недоступно'), 'UI_MISSING');
+        source.setUnavailable(); await until(() => dashboard.evaluate(dashboardObservation, {speed: language === 'en' ? 'Speed: unavailable' : 'Скорость: недоступно', fuel: language === 'en' ? 'Fuel: unavailable' : 'Топливо: недоступно'}), value => Boolean(value), 'UI_MISSING');
         await dashboard.waitForFunction(() => globalThis.document.querySelector('[data-testid="live.instrument.tank"]')?.getAttribute('data-state') === 'unavailable' && !globalThis.document.querySelector('.yu-tank i') && globalThis.document.querySelector('.yu-tank-unavailable')?.textContent === '—', undefined, {timeout: 5000});
         record.flags.tankUnknownVsZero = true; await save('missing', language, size);
         source.setReading(25, 73); source.setPaused(true); await waitState(dashboard, 'paused');
@@ -240,7 +260,9 @@ export async function runUiSmoke({application, dashboard, overlay, source, confi
           await until(() => dashboard.evaluate(() => globalThis.desktop.getAppState()), state => state.settings.overlay.layout === layout, 'UI_LAYOUT_SAVED');
           await application.evaluate(({BrowserWindow}, size) => {const window = BrowserWindow.getAllWindows().find(candidate => candidate.webContents.getURL().endsWith('?view=overlay')); window.webContents.setZoomFactor(1); window.setContentSize(size.width, size.height);}, dimensions[layout]);
           await overlay.waitForFunction(layout => globalThis.document.querySelector('[data-testid="overlay-root"]')?.getAttribute('data-layout') === layout, layout, {timeout: 5000});
-          const overflow = await overlay.evaluate(overlayOverflow); assert.deepEqual(overflow.outside, []);
+          const overflow = await overlay.evaluate(overlayOverflow); assert.deepEqual(overflow.outside, []); assert.equal(overflow.alignment?.aligned, true);
+          assert.equal(await overlay.getByTestId('overlay-fuel').evaluate(node => globalThis.getComputedStyle(node).fontSize), {strip: '20px', card: '13px', cluster: '12px', hud: '14px'}[layout]);
+          assert.equal(await overlay.getByTestId('overlay-speed').evaluate(node => globalThis.getComputedStyle(node).fontSize), {strip: '22px', card: '40px', cluster: '40px', hud: '16px'}[layout]);
           assert.deepEqual(await overlay.evaluate(() => ({html: globalThis.getComputedStyle(globalThis.document.documentElement).backgroundColor, body: globalThis.getComputedStyle(globalThis.document.body).backgroundColor})), {html: 'rgba(0, 0, 0, 0)', body: 'rgba(0, 0, 0, 0)'});
           if (layout === 'card') {assert.equal(await overlay.getByTestId('overlay-card-hero').count(), 1); assert.equal(await overlay.getByTestId('overlay-card-hero').getAttribute('data-count'), '3');}
           if (layout === 'cluster') {assert.equal(await overlay.getByTestId('overlay-rpm-arc').getAttribute('stroke-dasharray'), '50.26548245743669 251.32741228718345');}
@@ -306,13 +328,34 @@ export async function runUiSmoke({application, dashboard, overlay, source, confi
       await chooseLanguage(dashboard, language);
       for (const profile of ['metric', 'us-customary']) {
         await dashboard.evaluate(profile => globalThis.desktop.setUnitProfile('ets2', profile), profile);
-        const expected = profile === 'metric' ? {speed: '90.0', fuel: '73.0', speedUnit: language === 'en' ? 'km/h' : 'км/ч', fuelUnit: language === 'en' ? 'L' : 'л'} : {speed: '55.9', fuel: '19.3', speedUnit: language === 'en' ? 'mph' : 'миль/ч', fuelUnit: language === 'en' ? 'US gal' : 'гал'};
+        const expected = profile === 'metric' ? {speed: '90', fuel: '73.0', speedUnit: language === 'en' ? 'km/h' : 'км/ч', fuelUnit: language === 'en' ? 'L' : 'л'} : {speed: '56', fuel: '19.3', speedUnit: language === 'en' ? 'mph' : 'миль/ч', fuelUnit: language === 'en' ? 'US gal' : 'гал'};
         await overlay.waitForFunction(expected => ['speed', 'fuel'].every(id => globalThis.document.querySelector(`[data-testid="overlay-${id}"]`)?.textContent === expected[id] && globalThis.document.querySelector(`[data-testid="overlay-${id}-unit"]`)?.textContent === expected[`${id}Unit`]), expected, {timeout: 5000});
         assert.deepEqual((await overlay.evaluate(overlayOverflow)).outside, []);
       }
     }
     await dashboard.evaluate(() => globalThis.desktop.setUnitProfile('ets2', 'metric')); record.flags.formatterProfiles = true;
-
+    record.cssDisplayGeometry = [];
+    for (const layout of layouts) {
+      await dashboard.evaluate(layout => globalThis.desktop.setOverlayLayout(layout), layout);
+      await application.evaluate(({BrowserWindow}, size) => {BrowserWindow.getAllWindows().find(candidate => candidate.webContents.getURL().endsWith('?view=overlay')).setContentSize(size.width, size.height);}, dimensions[layout]);
+      const bounds = () => application.evaluate(({BrowserWindow}) => BrowserWindow.getAllWindows().find(candidate => candidate.webContents.getURL().endsWith('?view=overlay')).getBounds());
+      const nativeBefore = await bounds();
+      for (const sparse of [false, true]) {
+        await dashboard.evaluate(({all, sparse}) => globalThis.desktop.setOverlaySections(Object.fromEntries(Object.keys(all).map(id => [id, !sparse || id === 'speed']))), {all, sparse});
+        await overlay.waitForFunction(({layout, sparse}) => {
+          const root = globalThis.document.querySelector('[data-testid="overlay-root"]');
+          const count = root.querySelectorAll('[data-testid^="overlay-section-"]').length;
+          return root.getAttribute('data-layout') === layout && (sparse ? count === 1 : count > 1);
+        }, {layout, sparse}, {timeout: 5000});
+        const production = await overlay.evaluate(overlayOverflow);
+        assert.deepEqual(production.outside, []); assert.equal(production.alignment?.aligned, true);
+        const probe = await overlay.evaluate(cssDisplayGeometry);
+        assert.equal(probe.restored, true); assert.equal(probe.results.length, 3); assert.ok(probe.results.every(row => row.aligned));
+        assert.deepEqual(await bounds(), nativeBefore, 'CSS_DISPLAY_PROBE_CHANGED_NATIVE_BOUNDS');
+        record.cssDisplayGeometry.push({layout, sparse, ...probe});
+      }
+      await dashboard.evaluate(all => globalThis.desktop.setOverlaySections(all), all);
+    }
   }
   record.flags.bilingual = true; record.flags.bothSizes = true;
   assert.deepEqual(await dashboard.evaluate(() => ({require: typeof globalThis.require, process: typeof globalThis.process})), {require: 'undefined', process: 'undefined'});

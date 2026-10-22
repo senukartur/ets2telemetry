@@ -179,6 +179,8 @@ export type OverlaySectionView =
 export interface OverlayPresentation {
   /** Opt-in diagnostic pixels only; no renderer command or game-protocol field. */
   diagnosticFrame?: number;
+  /** Display-only vertical content anchor in [0, 1]; never a native coordinate or source observation. */
+  contentAnchorY?: number;
   source: 'ETS2' | 'ATS' | 'No game';
   origin: 'game' | 'synthetic' | 'replay' | 'none';
   status: LiveTelemetry['status'];

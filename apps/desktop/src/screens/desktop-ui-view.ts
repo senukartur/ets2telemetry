@@ -17,7 +17,7 @@ export function desktopLiveView(live: LiveTelemetry | undefined, profiles: UnitP
   const rpm = current && state?.engineRpm.state === 'value' ? state.engineRpm.value : null;
   const fuel = current && state?.fuel.state === 'value' && state.fuelCapacity.state === 'value' && state.fuelCapacity.value > 0 ? state.fuel.value / state.fuelCapacity.value : null;
   const scaleMax = units.speed === 'mph' ? 80 : 130;
-  return {sources, units, current, speed, speedText: speed === null ? '—' : fixed(speed, 1), rpm, scaleMax, speedRatio: clampRatio(speed === null ? null : speed / scaleMax), rpmRatio: clampRatio(rpm === null ? null : rpm / 3000), fuelRatio: clampRatio(fuel)};
+  return {sources, units, current, speed, speedText: speed === null ? '—' : fixed(speed, 0), rpm, scaleMax, speedRatio: clampRatio(speed === null ? null : speed / scaleMax), rpmRatio: clampRatio(rpm === null ? null : rpm / 3000), fuelRatio: clampRatio(fuel)};
 }
 export function gaugeArc(radius: number, start: number, end: number, center = 130): string {
   const point = (angle: number) => {const rad = angle * Math.PI / 180; return [center + radius * Math.sin(rad), center - radius * Math.cos(rad)];};

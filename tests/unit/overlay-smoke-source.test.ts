@@ -10,7 +10,7 @@ import {receiptBatchTimeout, validateRuntimeReceipts, type RuntimeReceiptCase} f
 // Runtime helpers are JavaScript outside the application TypeScript project.
 const sourceModule = pathToFileURL(path.resolve('scripts/ci/live-smoke-source.mjs')).href;
 const observationModule = pathToFileURL(path.resolve('scripts/ci/overlay-observation.mjs')).href;
-const current = {source: 'ETS2', origin: 'synthetic', status: 'connected', freshness: 'current', speed: '90.0', fuel: '73.0', speedUnit: 'km/h', fuelUnit: 'L'};
+const current = {source: 'ETS2', origin: 'synthetic', status: 'connected', freshness: 'current', speed: '90', fuel: '73.0', speedUnit: 'km/h', fuelUnit: 'L'};
 /** Hang guard of a wait for the source's 50 ms snapshot timer, inside the case's 6 s timeout; never a cadence claim. */
 const TICK_HANG_GUARD_MS = 1500;
 const phases = ['initial','changed','missing','zero','restored','silent-open-stale','resumed','overlay-reload',
@@ -104,11 +104,11 @@ describe('coherent hidden-renderer observations', () => {
     const document = fakeDocument(current), select = document.querySelectorAll;
     document.querySelectorAll = (selector: string) => selector.includes('overlay-root')
       ? select(selector).map(node => ({...node, getAttribute: (name: string) => name === 'data-status' ? null : node.getAttribute(name)})) : select(selector);
-    expect(runInNewContext(`(${overlayObservation.toString()})(expected)`, {expected: {speed: '90.0'}, document, innerWidth: 1280, innerHeight: 38,
+    expect(runInNewContext(`(${overlayObservation.toString()})(expected)`, {expected: {speed: '90'}, document, innerWidth: 1280, innerHeight: 38,
       getComputedStyle: () => ({visibility: 'visible'})})).toBe(false);
   });
   it.each([
-    {...current, status: 'stale', freshness: 'stale'}, {...current, origin: 'game'}, {...current, speed: '72.0'},
+    {...current, status: 'stale', freshness: 'stale'}, {...current, origin: 'game'}, {...current, speed: '72'},
     {...current, fuel: '71.0'}, {...current, speedUnit: 'mph'}, {...current, fuelUnit: 'US gal'}
   ])('cannot accept mismatched state, readings, origin or units', async sample => {expect(await observe(sample)).toBe(false);});
 });
@@ -489,7 +489,7 @@ describe('debugger-paused stall start, independent observation and resume orderi
       order.push('independent-observed');
       const observedObserverMonotonicMs = now ? now() : performance.now();
       if (mode === 'late-metadata') await resumeSent;
-      return {reading: {status: 'connected: current', speed: 'Speed: 72.0 km/h', fuel: 'Fuel: 71.0 L',
+      return {reading: {status: 'connected: current', speed: 'Speed: 72 km/h', fuel: 'Fuel: 71.0 L', gauge: {number: '72', unit: 'km/h', accessibleName: 'Speed: 72 km/h; Engine RPM: 600 rpm', visible: true},
         ...(mode === 'missing-reading-time' ? {} : {observedObserverMonotonicMs})}};
     };
     const promise = proveIndependentDuringStall(page, 'overlay', observation, source, proof, {requestedMilliseconds: requested, ...(now ? {now} : {})});
@@ -584,8 +584,8 @@ function validReceipt() {
     requestedMilliseconds: 6000, stallMethod: 'debugger-pause', pauseReason: 'other', started: true, completed: true, pendingAtObservation: true,
     ...timing[kind],
     sourceAtObservation: structuredClone(source), independentObservation: {windows: structuredClone(windows),
-      reading: kind === 'overlay' ? {status: 'connected: Validated current observation', speed: 'Speed: 72.0 km/h', fuel: 'Fuel: 71.0 L'} :
-        {...current, phase: 'during-dashboard-stall', speed: '72.0', fuel: '71.0'}}});
+      reading: kind === 'overlay' ? {status: 'connected: Validated current observation', speed: 'Speed: 72 km/h', fuel: 'Fuel: 71.0 L', gauge: {number: '72', unit: 'km/h', accessibleName: 'Speed: 72 km/h; Engine RPM: 600 rpm', visible: true}} :
+        {...current, phase: 'during-dashboard-stall', speed: '72', fuel: '71.0'}}});
   return {passed: true, commit: 'candidate', mode: 'packaged', scenarioKind: 'overlay', launcherExit: 0, probesAfterExit: [],
     runtime: {rendererProcessLimit: '1', windows: structuredClone(windows)},
     mainEvents: [{event: 'APP_EXIT', detail: {code: 0}}, {event: 'SERVICE_EXIT', detail: {code: 0}}],
@@ -600,9 +600,9 @@ function validReceipt() {
       windows: phases.map(phase => ({phase, windows: structuredClone(windows)})),
       observations: phases.map(phase => {
         const row = {...current, phase};
-        if (['changed','overlay-credit-recovery','dashboard-reload','during-dashboard-stall','dashboard-credit-recovery'].includes(phase)) {row.speed = '72.0'; row.fuel = '71.0';}
+        if (['changed','overlay-credit-recovery','dashboard-reload','during-dashboard-stall','dashboard-credit-recovery'].includes(phase)) {row.speed = '72'; row.fuel = '71.0';}
         if (['missing','silent-open-stale','disconnected'].includes(phase)) {row.speed = row.fuel = '—';}
-        if (phase === 'zero') {row.speed = row.fuel = '0.0';}
+        if (phase === 'zero') {row.speed = '0'; row.fuel = '0.0';}
         if (phase === 'silent-open-stale') {row.status = row.freshness = 'stale';}
         if (phase === 'disconnected') {row.status = 'disconnected'; row.freshness = 'unavailable';}
         return row;
@@ -685,7 +685,7 @@ const completeCases: OverlayReceiptCase[] = [
   {name: 'malformed time value', mutate: receipt => {receipt.overlay.overlayStallProof.rendererCompletedMonotonicMs = 'invalid';}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
   {name: 'barrier timing differs from actual execution', mutate: receipt => {receipt.overlay.overlayStallProof.rendererStartBarrierMonotonicMs = 99;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
   {name: 'source reconnected during stall', mutate: receipt => {receipt.overlay.overlayStallProof.sourceAtObservation.connections = 2;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
-  {name: 'dashboard reading during overlay stall incorrect', mutate: receipt => {receipt.overlay.overlayStallProof.independentObservation.reading.speed = 'Speed: 90.0 km/h';}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
+  {name: 'dashboard reading during overlay stall incorrect', mutate: receipt => {receipt.overlay.overlayStallProof.independentObservation.reading.speed = 'Speed: 90 km/h';}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
   {name: 'symmetric stall proof absent', mutate: receipt => {delete receipt.overlay.dashboardStallProof;}, reason: 'OVERLAY_RESULT_INCOMPLETE_OR_INVALID'},
   {name: 'wrong source scenario', mutate: receipt => {receipt.scenarioKind = 'telemetry';}, reason: 'DRIVER_RESULT_SCENARIO_MISMATCH'},
   {name: 'Job failure overrides intact result', code: 125, reason: 'JOB_FAILED'}

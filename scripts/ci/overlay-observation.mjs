@@ -1,3 +1,4 @@
+import {dashboardObservation} from './dashboard-observation.mjs';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import {writeFile} from 'node:fs/promises';
@@ -339,7 +340,7 @@ export async function proveIndependentDuringStall(page, kind, independentObserva
 export async function runOverlaySmoke(application, dashboard, overlay, source, result) {
   Object.assign(result, {scope: 'hidden synthetic renderer; OS visibility, focus and input unverified', origin: 'synthetic', recording: false,
     observations: [], windows: []});
-  const expected = {source: 'ETS2', origin: 'synthetic', statuses: ['connected'], freshness: 'current', speed: '90.0', fuel: '73.0', speedUnit: 'km/h', fuelUnit: 'L'};
+  const expected = {source: 'ETS2', origin: 'synthetic', statuses: ['connected'], freshness: 'current', speed: '90', fuel: '73.0', speedUnit: 'km/h', fuelUnit: 'L'};
   const observe = async (phase, change = {}) => {
     const observation = {phase, ...await waitForOverlay(overlay, {...expected, ...change}), observedObserverMonotonicMs: performance.now()};
     result.observations.push(observation);
@@ -347,11 +348,7 @@ export async function runOverlaySmoke(application, dashboard, overlay, source, r
     return observation;
   };
   const dashboardReading = async (speed, fuel) => {
-    const handle = await dashboard.waitForFunction(({speed, fuel}) => {
-      const read = id => {const nodes = globalThis.document.querySelectorAll(`[data-testid="${id}"]`); return nodes.length === 1 ? nodes[0].innerText : undefined;};
-      const observation = {status: read('telemetry-status'), speed: read('speed'), fuel: read('fuel')};
-      return /^connected:/.test(observation.status ?? '') && observation.speed === `Speed: ${speed} km/h` && observation.fuel === `Fuel: ${fuel} L` ? observation : false;
-    }, {speed, fuel}, {timeout: 10000, polling: 50});
+    const handle = await dashboard.waitForFunction(dashboardObservation, {speed: `Speed: ${speed} km/h`, fuel: `Fuel: ${fuel} L`}, {timeout: 10000, polling: 50});
     try {const observation = await handle.jsonValue(); assert.ok(observation); return {...observation, observedObserverMonotonicMs: performance.now()};} finally {await handle.dispose();}
   };
   result.bridge = await overlay.evaluate(() => ({require: typeof globalThis.require, process: typeof globalThis.process,
@@ -361,32 +358,32 @@ export async function runOverlaySmoke(application, dashboard, overlay, source, r
   // ET-012c (REG-016): every enabled strip section with data lies inside the overlay window. The observation is stored
   // before it is verified, so a failed receipt keeps it. Recorded for review; RuntimeReceipt.ps1 does not validate it.
   verifyStripLayout(result.stripLayout = await waitForStripLayout(overlay, {sections: STRIP_SMOKE_SECTIONS}));
-  source.setReading(20, 71); await observe('changed', {speed: '72.0', fuel: '71.0'}); await dashboardReading('72.0', '71.0');
+  source.setReading(20, 71); await observe('changed', {speed: '72', fuel: '71.0'}); await dashboardReading('72', '71.0');
   result.changedReading = {speedKmh: 72, fuelL: 71};
   source.setUnavailable(); await observe('missing', {speed: '—', fuel: '—'});
   result.missingDistinctFromZero = true;
-  source.setReading(0, 0); await observe('zero', {speed: '0.0', fuel: '0.0'});
+  source.setReading(0, 0); await observe('zero', {speed: '0', fuel: '0.0'});
   source.setReading(25, 73); await observe('restored');
   source.hold(); await observe('silent-open-stale', {statuses: ['stale'], freshness: 'stale', speed: '—', fuel: '—'});
   result.silentOpenSource = source.statistics();
   assert.equal(result.silentOpenSource.activeClients, 1); assert.equal(result.silentOpenSource.connections, 1); assert.equal(result.silentOpenSource.held, true);
   result.silentOpenStale = true;
   source.resume(); await observe('resumed'); result.resumeRecovered = true;
-  await overlay.reload({timeout: 10000}); await observe('overlay-reload'); await dashboardReading('90.0', '73.0');
+  await overlay.reload({timeout: 10000}); await observe('overlay-reload'); await dashboardReading('90', '73.0');
   result.stylesAfterOverlayReload = await verifyRendererStyles(dashboard, overlay);
   assert.equal(source.statistics().connections, 1); result.overlayReloadIndependent = true;
   result.overlayStallProof = {};
-  await proveIndependentDuringStall(overlay, 'overlay', async () => ({reading: await dashboardReading('72.0', '71.0'),
+  await proveIndependentDuringStall(overlay, 'overlay', async () => ({reading: await dashboardReading('72', '71.0'),
     windows: await windowSecurity(application)}), source, result.overlayStallProof);
-  await observe('overlay-credit-recovery', {speed: '72.0', fuel: '71.0'}); await dashboardReading('72.0', '71.0');
+  await observe('overlay-credit-recovery', {speed: '72', fuel: '71.0'}); await dashboardReading('72', '71.0');
   assert.equal(source.statistics().connections, 1); result.overlayCreditRecovered = true; result.overlayStallMilliseconds = 6000;
-  await dashboard.reload({timeout: 10000}); await dashboardReading('72.0', '71.0'); await observe('dashboard-reload', {speed: '72.0', fuel: '71.0'});
+  await dashboard.reload({timeout: 10000}); await dashboardReading('72', '71.0'); await observe('dashboard-reload', {speed: '72', fuel: '71.0'});
   assert.equal(source.statistics().connections, 1); result.dashboardReloadIndependent = true;
   source.setReading(25, 73); await observe('before-dashboard-stall');
   result.dashboardStallProof = {};
-  await proveIndependentDuringStall(dashboard, 'dashboard', async () => ({reading: await observe('during-dashboard-stall', {speed: '72.0', fuel: '71.0'}),
+  await proveIndependentDuringStall(dashboard, 'dashboard', async () => ({reading: await observe('during-dashboard-stall', {speed: '72', fuel: '71.0'}),
     windows: await windowSecurity(application)}), source, result.dashboardStallProof);
-  await dashboardReading('72.0', '71.0'); await observe('dashboard-credit-recovery', {speed: '72.0', fuel: '71.0'});
+  await dashboardReading('72', '71.0'); await observe('dashboard-credit-recovery', {speed: '72', fuel: '71.0'});
   assert.equal(source.statistics().connections, 1); result.dashboardCreditIndependent = true; result.dashboardStallMilliseconds = 6000;
   await source.stop(); await observe('disconnected', {statuses: ['disconnected', 'waiting'], freshness: 'unavailable', speed: '—', fuel: '—'});
   result.disconnectUnavailable = true; result.sourceAfter = source.statistics();

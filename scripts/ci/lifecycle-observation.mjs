@@ -1,3 +1,4 @@
+import {dashboardObservation} from './dashboard-observation.mjs';
 import {waitForStartup} from './ui-navigation.mjs';
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
@@ -26,7 +27,7 @@ const DEFAULT_OVERLAY = {enabled: true, layout: 'strip', sections: {'speed': tru
 placements: {strip: {x: 0.5, y: 0, scale: 1}, card: {x: 1, y: 0, scale: 1}, cluster: {x: 0, y: 1, scale: 1}, hud: {x: 0, y: 0, scale: 1}}};
 const QUARANTINE_NAME = /^settings\.rejected-\d{8}T\d{6}Z\.json$/;
 // 25 m/s and 73 L in the us-customary profile.
-const US_DASHBOARD = {speed: 'Speed: 55.9 mph', fuel: 'Fuel: 19.3 US gal'};
+const US_DASHBOARD = {speed: 'Speed: 56 mph', fuel: 'Fuel: 19.3 US gal'};
 const settingsDirectory = config => path.join(config.localappdata, 'ETS2Telemetry', 'settings');
 
 /** Seeds the isolated LOCALAPPDATA before run A launches. */
@@ -40,14 +41,7 @@ async function settingsFiles(config) {
 }
 
 // Self-contained browser callback: the dashboard's current speed and fuel rows in the expected units.
-function dashboardReadings(expected) {
-  const read = id => {
-    const nodes = globalThis.document.querySelectorAll(`[data-testid="${id}"]`);
-    return nodes.length === 1 ? nodes[0].innerText : undefined;
-  };
-  const observation = {status: read('telemetry-status'), speed: read('speed'), fuel: read('fuel')};
-  return /^connected:/.test(observation.status ?? '') && observation.speed === expected.speed && observation.fuel === expected.fuel ? observation : false;
-}
+const dashboardReadings = dashboardObservation;
 async function waitForDashboardUnits(page, expected) {
   const handle = await page.waitForFunction(dashboardReadings, expected, {timeout: 10000, polling: 50});
   try {return await handle.jsonValue();} finally {await handle.dispose();}
@@ -167,9 +161,9 @@ export async function runLifecycleSmoke({application, launcher, dashboard, overl
   assert.equal(afterClose.tray, true); record.trayPresentAfterClose = true;
   const expected = {source: 'ETS2', origin: 'synthetic', statuses: ['connected'], freshness: 'current', speedUnit: 'km/h', fuelUnit: 'L'};
   source.setReading(20, 71);
-  record.overlayChanged = await waitForOverlay(overlay, {...expected, speed: '72.0', fuel: '71.0'});
+  record.overlayChanged = await waitForOverlay(overlay, {...expected, speed: '72', fuel: '71.0'});
   source.setReading(25, 73);
-  record.overlayRestored = await waitForOverlay(overlay, {...expected, speed: '90.0', fuel: '73.0'});
+  record.overlayRestored = await waitForOverlay(overlay, {...expected, speed: '90', fuel: '73.0'});
   record.overlayCurrentAfterClose = true;
   assert.equal(source.statistics().connections, 1); record.sourceConnectionPreserved = true;
 
@@ -216,7 +210,7 @@ export async function runLifecycleSmoke({application, launcher, dashboard, overl
   assert.deepEqual(saved.filter(file => !QUARANTINE_NAME.test(file.name)), [{name: 'settings.json', content: SETTINGS_UNIT_SAVED}]);
   record.settingsSavedExact = true;
   record.dashboardUnits = await waitForDashboardUnits(trayDashboard, US_DASHBOARD);
-  record.overlayUnits = await waitForOverlay(overlay, {...expected, speed: '55.9', fuel: '19.3', speedUnit: 'mph', fuelUnit: 'US gal'});
+  record.overlayUnits = await waitForOverlay(overlay, {...expected, speed: '56', fuel: '19.3', speedUnit: 'mph', fuelUnit: 'US gal'});
   assert.equal((await lifecycleState(application)).settings.units.ets2, 'us-customary');
   record.unitsApplied = true;
   // ET-012e: persist off without retiring telemetry or the service; run B must load it without writing.

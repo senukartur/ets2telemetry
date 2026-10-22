@@ -134,7 +134,8 @@ function installFixture() {
         const next = Object.assign(new EventEmitter(), {mainFrame: {}, send: vi.fn(), postMessage: vi.fn(), setWindowOpenHandler: vi.fn(), setZoomFactor: vi.fn()}); extraContents.push(next); return next;
       })();
       minimized = false; isMinimized = () => this.minimized; minimize = vi.fn(() => {this.minimized = true;}); restore = vi.fn(() => {this.minimized = false;}); show = vi.fn(); focus = vi.fn();
-      hide = vi.fn(); showInactive = vi.fn(); setBounds = vi.fn(); setIgnoreMouseEvents = vi.fn(); setFocusable = vi.fn(); destroy = vi.fn(() => this.emit('closed'));
+      visible = false; isVisible = () => this.visible;
+      hide = vi.fn(() => {this.visible = false;}); showInactive = vi.fn(() => {this.visible = true;}); setBounds = vi.fn(); setIgnoreMouseEvents = vi.fn(); setFocusable = vi.fn(); destroy = vi.fn(() => this.emit('closed'));
       // ET-012b: focus feeds the edit mode's own-foreground gate; the overlay becomes movable only while edited.
       focused = false; isFocused = () => this.focused; setMovable = vi.fn(); setSkipTaskbar = vi.fn(); bounds = {x: 0, y: 0, width: 0, height: 0}; getBounds = () => ({...this.bounds});
       // Models Windows: isAlwaysOnTop() reports the HWND style, which external z-order changes can clear.
@@ -189,7 +190,7 @@ async function removeFixture() {
   for (const name of processEvents) for (const listener of processEmitter.listeners(name)) if (!originals.get(name)!.includes(listener)) processEmitter.removeListener(name, listener as (...args: unknown[]) => void);
   vi.clearAllTimers(); vi.restoreAllMocks(); vi.useRealTimers(); vi.unstubAllEnvs();
   for (const name of ['electron', '../../apps/desktop/src/entrypoints', '../../apps/desktop/src/diagnostics', '../../apps/desktop/src/broker-artifact',
-    '../../apps/desktop/src/settings-store', '../../apps/desktop/src/uninstall/roots', '../../apps/desktop/src/plugin-setup/plugin-setup', '../../apps/desktop/src/squirrel-events',
+    '../../apps/desktop/src/settings-store', '../../apps/desktop/src/overlay-latency', '../../apps/desktop/src/latency-frames', '../../apps/desktop/src/uninstall/roots', '../../apps/desktop/src/plugin-setup/plugin-setup', '../../apps/desktop/src/squirrel-events',
     '../../apps/desktop/src/uninstall/app-uninstall']) vi.doUnmock(name);
 }
 async function settle() {await Promise.resolve(); await Promise.resolve();}
@@ -834,7 +835,7 @@ it.each([
   if (action === 'restored') expect(windows[0].restore).toHaveBeenCalledOnce();
   if (action === 'focused' || action === 'restored') {expect(windows[0].show).toHaveBeenCalledOnce(); expect(windows[0].focus).toHaveBeenCalledOnce();}
   if (action === 'ignored-exiting' || action === 'ignored-starting') expect(windows.every(target => target.show.mock.calls.length === 0)).toBe(true);
-  expect(JSON.stringify(log.mock.calls)).not.toContain('attacker');
+  expect(JSON.stringify(log.mock.calls, (_key, value: unknown) => value && typeof value === 'object' && 'message' in value ? String(value.message) : value)).not.toContain('attacker');
 });
 // ET-018 (U2): a Squirrel event runs first and alone. The handler is replaced here; it never sees the real execPath layout.
 async function withArgv(args: readonly string[], run: () => Promise<void>) {
@@ -1173,7 +1174,7 @@ it('applies a settings read that settles after the load budget to the dashboard 
   const pushes = () => contents.send.mock.calls.filter(call => call[0] === 'app:state').map(call => call[1] as {settings: unknown});
   expect(pushes().at(-1)!.settings).toEqual(pending);
   consumeOverlay(overlayChannel); deliver(currentReading()); await vi.advanceTimersByTimeAsync(50);
-  expect(overlayProjection(overlayChannel)).toMatchObject({source: 'ETS2', speed: '90.0', speedUnit: 'km/h', fuel: '73.0', fuelUnit: 'L', freshness: 'current'});
+  expect(overlayProjection(overlayChannel)).toMatchObject({source: 'ETS2', speed: '90', speedUnit: 'km/h', fuel: '73.0', fuelUnit: 'L', freshness: 'current'});
   // ET-012e keeps the overlay hidden while the pending view contains only defaults.
   expect(windows[1].showInactive).not.toHaveBeenCalled(); consumeOverlay(overlayChannel);
   await drainOverlay(overlayChannel, 150);
@@ -1183,7 +1184,7 @@ it('applies a settings read that settles after the load budget to the dashboard 
   expect(pushes().at(-1)).toEqual({health: {service: 'ready', storage: 'verified', recording: {state: 'unknown'}, lastError: null}, settings: settingsView, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED, autostart: 'not-installed'});
   expect(handlers.get('app:get-state')!(trusted())).toMatchObject({settings: settingsView});
   await vi.advanceTimersByTimeAsync(50);
-  expect(overlayProjection(overlayChannel)).toMatchObject({source: 'ETS2', speed: '55.9', speedUnit: 'mph', fuel: '19.3', fuelUnit: 'US gal', freshness: 'current'});
+  expect(overlayProjection(overlayChannel)).toMatchObject({source: 'ETS2', speed: '56', speedUnit: 'mph', fuel: '19.3', fuelUnit: 'US gal', freshness: 'current'});
   consumeOverlay(overlayChannel);
   // Nothing was saved, and neither SDK nor window freshness was renewed: the reading still expires 500 ms after its
   // delivery, inside this window; a renewal when the read was applied would end after it.
@@ -1204,7 +1205,7 @@ it('applies a unit profile only after the durable save and republishes the overl
   trayAvailable = true; vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2'); await ready();
   ipc.emit('app:subscribe-state', trusted()); ipc.emit('overlay:subscribe', overlayTrusted()); const overlayChannel = channels[1];
   consumeOverlay(overlayChannel); deliver(currentReading()); await vi.advanceTimersByTimeAsync(50);
-  expect(overlayProjection(overlayChannel)).toMatchObject({source: 'ETS2', speed: '90.0', speedUnit: 'km/h', fuel: '73.0', fuelUnit: 'L', freshness: 'current'});
+  expect(overlayProjection(overlayChannel)).toMatchObject({source: 'ETS2', speed: '90', speedUnit: 'km/h', fuel: '73.0', fuelUnit: 'L', freshness: 'current'});
   expect(windows[1].showInactive).toHaveBeenCalledOnce(); consumeOverlay(overlayChannel);
   const pushes = () => contents.send.mock.calls.filter(call => call[0] === 'app:state').map(call => call[1] as {settings: unknown; health: {lastError: unknown}});
   const before = pushes().length, saved = deferred<typeof settingsView>();
@@ -1218,7 +1219,7 @@ it('applies a unit profile only after the durable save and republishes the overl
   await expect(request).resolves.toEqual(settingsView);
   expect(pushes().at(-1)).toEqual({health: {service: 'ready', storage: 'verified', recording: {state: 'unknown'}, lastError: null}, settings: settingsView, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED, autostart: 'not-installed'});
   await vi.advanceTimersByTimeAsync(50);
-  expect(overlayProjection(overlayChannel)).toMatchObject({source: 'ETS2', speed: '55.9', speedUnit: 'mph', fuel: '19.3', fuelUnit: 'US gal', freshness: 'current'});
+  expect(overlayProjection(overlayChannel)).toMatchObject({source: 'ETS2', speed: '56', speedUnit: 'mph', fuel: '19.3', fuelUnit: 'US gal', freshness: 'current'});
   consumeOverlay(overlayChannel);
   // The republication renewed neither SDK nor window receipts: both still expire from the original delivery.
   expect(windows[1].showInactive).toHaveBeenCalledOnce();
@@ -1322,7 +1323,7 @@ it('applies an overlay layout only after the durable save, then republishes and 
   trayAvailable = true; vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2'); await ready();
   ipc.emit('app:subscribe-state', trusted()); ipc.emit('overlay:subscribe', overlayTrusted()); const overlayChannel = channels[1];
   consumeOverlay(overlayChannel); deliver(currentReading()); await vi.advanceTimersByTimeAsync(50);
-  expect(overlayProjection(overlayChannel)).toMatchObject({layout: 'strip', speed: '90.0', freshness: 'current'});
+  expect(overlayProjection(overlayChannel)).toMatchObject({layout: 'strip', speed: '90', freshness: 'current'});
   expect(windows[1].setBounds.mock.calls).toEqual([[{x: -1600, y: 8, width: 1280, height: 116}]]);
   expect(windows[1].showInactive).toHaveBeenCalledOnce(); consumeOverlay(overlayChannel);
   windows[1].setAlwaysOnTop.mockClear(); windows[1].moveTop.mockClear();
@@ -1343,7 +1344,7 @@ it('applies an overlay layout only after the durable save, then republishes and 
   expect(windows[1].showInactive).toHaveBeenCalledOnce();
   await vi.advanceTimersByTimeAsync(50);
   const currentProjection = overlayProjection(overlayChannel);
-  expect(currentProjection).toMatchObject({layout: 'card', speed: '90.0', freshness: 'current'});
+  expect(currentProjection).toMatchObject({layout: 'card', speed: '90', freshness: 'current'});
   consumeOverlay(overlayChannel);
   // The original 500 ms SDK deadline still applies; a renewal at the save (t = 150 ms) would end after this window.
   await drainOverlay(overlayChannel, 400);
@@ -1417,7 +1418,7 @@ it('refuses overlay settings requests once exiting', async () => {
 // ET-010c decisions F2, F3 and F7: main validates the v1 projection before freshness and the overlay see it, expires it
 // on its own clock and feeds it into the overlay projection. The v1 input is snapshot-live with the v0 job ids under the
 // ETS2 game origin; the overlay origin text is written by hand from it. Since ET-012b the projection also carries `editing`.
-const OVERLAY_KEYS = ['source', 'origin', 'status', 'speed', 'speedUnit', 'fuel', 'fuelUnit', 'freshness', 'layout', 'paused', 'sections', 'editing', 'language'];
+const OVERLAY_KEYS = ['source', 'origin', 'status', 'speed', 'speedUnit', 'fuel', 'fuelUnit', 'freshness', 'layout', 'paused', 'sections', 'editing', 'language', 'contentAnchorY'];
 const ORIGIN_VALUE = {id: 'origin', state: 'value', text: 'Synthetic City A, Synthetic Company A'};
 const sectionOf = (projection: Record<string, unknown>, id: string) => (projection.sections as {id: string}[]).find(section => section.id === id);
 function readingWithV1(options: V1Options = {}): LiveTelemetry {
@@ -1478,7 +1479,7 @@ it('keeps a shown overlay origin as a dash when main strips the next v1 projecti
   deliver(invalid, 2); await vi.advanceTimersByTimeAsync(50); consumeOverlay(dashboard); consumeOverlay(overlayChannel);
   expect(log.mock.calls.filter(call => call[0] === 'LIVE_V1_REJECTED')).toEqual([['LIVE_V1_REJECTED', undefined, {count: 1}]]);
   const stripped = overlayProjection(overlayChannel);
-  expect(stripped).toMatchObject({freshness: 'current', speed: '90.0'});
+  expect(stripped).toMatchObject({freshness: 'current', speed: '90'});
   for (const id of ['origin', 'distance-remaining', 'deadline']) expect(sectionOf(stripped, id)).toEqual({id, state: 'unavailable'});
   expect(sectionOf(stripped, 'cargo')).toEqual({id: 'cargo', state: 'value', text: 'cargo.logs'});
   // A source change publishes an update without an observation; the v1 sections are then left out.
@@ -1495,7 +1496,7 @@ it('expires v1 data 500 ms after its last new boundary while v0 renews, turning 
     await drainOverlay(overlayChannel, 100); consumeOverlay(dashboard);
   }
   const projection = overlayProjection(overlayChannel);
-  expect(projection).toMatchObject({freshness: 'current', speed: '90.0'});
+  expect(projection).toMatchObject({freshness: 'current', speed: '90'});
   expect(sectionOf(projection, 'origin')).toEqual({id: 'origin', state: 'unavailable'});
   expect(sectionOf(projection, 'distance-remaining')).toEqual({id: 'distance-remaining', state: 'unavailable'});
   expect(sectionOf(projection, 'cargo')).toEqual({id: 'cargo', state: 'value', text: 'cargo.logs'});
@@ -2896,4 +2897,28 @@ it('observes actual status before a held durable save and mutates registration o
   expect(handlers.get('app:get-state')!(trusted())).toMatchObject({autostart: 'registered', settings: {autostart: false}});
   settingsView = {...settingsView, autostart: true}; saved.resolve(settingsView); await request;
   expect(login.set).toHaveBeenCalledOnce(); expect(login.set).toHaveBeenCalledWith(expect.objectContaining({openAtLogin: true}));
+});
+
+it('coalesces fraction-only overlay alignment through credits without reprojecting capture/latency, and retires the old port', async () => {
+  const projected = vi.fn((view: import('../../packages/contracts/src').OverlayPresentation) => ({...view, diagnosticFrame: 77}));
+  vi.doMock('../../apps/desktop/src/overlay-latency', async importOriginal => {
+    const actual = await importOriginal<typeof import('../../apps/desktop/src/overlay-latency')>();
+    return {...actual, latencyEnabled: () => true, OverlayLatency: class extends actual.OverlayLatency {override project = projected;}};
+  });
+  vi.doMock('../../apps/desktop/src/latency-frames', () => ({observeLatencyFrames: () => ({stats: {}})}));
+  const channel = await editableOverlay(); await edit('overlay-edit:begin', trusted()); await vi.advanceTimersByTimeAsync(50); consumeOverlay(channel);
+  const before = overlayProjection(channel), count = channel.port1.postMessage.mock.calls.length, messages = child.postMessage.mock.calls.length;
+  projected.mockClear();
+  for (const y of [400, 600]) {
+    windows[1].emit('will-move'); windows[1].bounds = {x: -1800, y, width: 1280, height: 116}; windows[1].emit('moved');
+  }
+  await vi.advanceTimersByTimeAsync(49); expect(channel.port1.postMessage).toHaveBeenCalledTimes(count);
+  await vi.advanceTimersByTimeAsync(1); const after = overlayProjection(channel);
+  expect(after.contentAnchorY).toBeGreaterThan(0.5); expect(after.contentAnchorY).toBeLessThan(1);
+  expect({...after, contentAnchorY: before.contentAnchorY}).toEqual(before);
+  expect(channel.port1.postMessage).toHaveBeenCalledTimes(count + 1); expect(projected).not.toHaveBeenCalled();
+  expect(child.postMessage).toHaveBeenCalledTimes(messages);
+  ipc.emit('overlay:unsubscribe', overlayTrusted()); const retired = channel.port1.postMessage.mock.calls.length;
+  windows[1].emit('moved'); await vi.advanceTimersByTimeAsync(50);
+  expect(channel.port1.postMessage).toHaveBeenCalledTimes(retired);
 });
