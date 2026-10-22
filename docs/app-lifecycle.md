@@ -58,7 +58,7 @@ The overlay window refuses close requests until the application exits. If creati
 
 ## Tray icon
 
-The icon is created when Electron is ready, before the service starts, with the tooltip `Starting`. It has no fixed GUID. The bitmap is the application icon's small bear mark with a status dot in its lower right corner, in 16, 20, 24 and 32 px representations for 100%, 125%, 150% and 200% display scaling ([application icon](design/ui-spec.md#3-tokens-type-and-icons)). `scripts/generate-app-icons.mjs` renders them from the logo into `apps/desktop/src/tray-icon-data.ts`, read by `apps/desktop/src/tray-icon.ts`. The dot's colour shows health: green when ready, amber while starting, restarting or exiting, red when the service has failed. Since October 21, 2026 the executable, Setup and the main window also carry the application icon (`resources/icon/app.ico`); it replaced the earlier plain coloured disc.
+The icon is created when Electron is ready, before the service starts, with the tooltip `Starting`. It has no fixed GUID. The bitmap is the application icon's small "road merge" mark with a status dot in its lower right corner, in 16, 20, 24 and 32 px representations for 100%, 125%, 150% and 200% display scaling ([application icon](design/ui-spec.md#3-tokens-type-and-icons)). `scripts/generate-app-icons.mjs` renders them into `apps/desktop/src/tray-icon-data.ts`, read by `apps/desktop/src/tray-icon.ts`. The dot's colour shows health: green when ready, amber while starting, restarting or exiting, red when the service has failed. Since October 22, 2026 the executable, Setup and the main window also carry the application icon (`resources/icon/app.ico`); it replaced the earlier plain coloured disc.
 
 The context menu contains:
 

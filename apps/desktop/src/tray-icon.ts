@@ -16,8 +16,8 @@ export const TRAY_ICON_REPRESENTATIONS = Object.freeze([
 export type TrayIconSize = (typeof TRAY_ICON_REPRESENTATIONS)[number]['size'];
 
 /**
- * The square RGBA PNG for one notification-area representation: the simplified bear tile with a status dot in the
- * lower right corner. scripts/generate-app-icons.mjs renders it from the logo; see docs/design/ui-spec.md#3-tokens-type-and-icons.
+ * The square RGBA PNG for one notification-area representation: the small "road merge" tile with a status dot in the
+ * lower right corner. scripts/generate-app-icons.mjs renders it; see docs/design/ui-spec.md#3-tokens-type-and-icons.
  */
 export function trayIconPng(size: TrayIconSize, tone: TrayTone): Buffer {
   const encoded = TRAY_ICON_PNG_BASE64[tone]?.[size];

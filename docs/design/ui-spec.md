@@ -12,7 +12,7 @@ The owner asked for a final mockup that matches the Yukon Union community dashbo
 | [tokens.css](tokens.css) | Colours, type, shapes and the shadcn variable mapping. **Authoritative for values.** |
 | [mockup.html](mockup.html) | Interactive reference: open it in a browser. Controls switch screen, language, game, connection, Hard Mode result and an **Inspect** view that labels every region with its spec id. Authoritative for layout and proportions only. |
 | [assets/logo.png](assets/logo.png) | The application logo (bear head), white line art on a transparent background, 1024 × 1024 PNG. Rules in [§3 Logo](#3-tokens-type-and-icons). |
-| [assets/app-icon.png](assets/app-icon.png) | A 256 px preview of the application icon generated from the logo. Rules in [§3 Application icon](#3-tokens-type-and-icons). |
+| [assets/app-icon.png](assets/app-icon.png) | A 256 px preview of the application icon (the "road merge" mark). Rules in [§3 Application icon](#3-tokens-type-and-icons). |
 
 Precedence: AGENTS.md and concept.md (product and data rules) → this spec → tokens.css → the mockup's pixels. If the mockup and this spec disagree, follow this spec and report the difference.
 
@@ -70,14 +70,15 @@ Values are in [tokens.css](tokens.css). Summary:
 - It is white line art on a transparent background, so place it only on the dark surfaces (`--yu-bg-chrome`, `--yu-bg-app`, `--yu-bg-card`). Never put it on a light, accent or status-coloured plate.
 - Use it unchanged: no recolouring, cropping, rotation, outlines, shadows or glow, and keep its proportions.
 - Keep clear space of at least 1/8 of its size on every side.
-- Minimum size 20 px. Below that the outline fades into grey, so 16 px uses (tray, taskbar, installer) use the application icon below.
+- Minimum size 20 px. Below that the outline fades into grey, so the tray, taskbar, desktop shortcut and installer use the application icon below instead.
 - Sizes in this design: 20 px in the title bar, 40 px in the sidebar and first-run lockups, 64 px in Settings → About.
 - Next to the product name it is decorative (`alt=""`); alone, its alt text is "Yukon Union Telemetry".
 - Bundle the file with the application (no remote URL). Generate the Windows `.ico` sizes from the 1024 px master.
 
-**Application icon.** Added on October 21, 2026 at the owner's request for the taskbar and the notification area. It is a separate mark, so the logo rules above about plates and shadows do not apply to it. `scripts/generate-app-icons.mjs` renders it from `assets/logo.png`; rerun it and commit the outputs whenever the logo changes.
-- The bear in `--yu-bg-chrome`-to-`--yu-accent` gradient tile with rounded corners and a `--yu-accent-light` rim, so it reads on light and dark taskbars.
-- 48 px and above keep every inner stroke of the logo, as cut-outs, with a soft shadow below the bear. Below 48 px the silhouette is filled and only the open mouth and the eye are cut out in `--yu-bg-chrome`, because thinner strokes fade.
+**Application icon.** Chosen by the owner on October 22, 2026 for the taskbar, the desktop shortcut and the notification area, because the bear did not read at small sizes. It is a separate mark: the bear stays the logo inside the application, and the logo rules above do not apply to the icon. `scripts/generate-app-icons.mjs` draws it; rerun it and commit the outputs whenever the design changes.
+- **Road merge.** Two roads join into one and form a Y: Yukon, and the union of drivers. The roads are white `#F8FAFC` with an amber `#FFB300` centre line, on a rounded tile with a `--yu-accent`-to-`--yu-bg-chrome` ("twilight") gradient.
+- **48 px and above: liquid glass.** Blurred cyan and violet aurora light glows behind the tile and is refracted through frosted, translucent roads with lit edges. The centre line is dashed and glows, a soft shadow lies under the roads, and the tile has a top gloss and a white rim lit from the top left.
+- **Below 48 px and in the tray: the small mark.** The glass turns to noise, so the roads are solid and wider, the centre line is a solid amber line and only the rim remains.
 - `resources/icon/app.ico` (16–256 px) is embedded in the executable and is the Setup icon, so the taskbar, shortcuts and windows show it. Squirrel's Update.exe keeps its vendored icon.
 - The notification-area icon is the small mark with a status dot in the lower right corner: green `#34D399` ready, amber `#F59E0B` starting, restarting or exiting, red `#EF4444` failed. The tray tooltip states the status in words, so the dot is never the only signal. Green is `--yu-online`; amber and red are icon-only values with no token, defined by the generator and `TRAY_TONE_RGB` in `apps/desktop/src/tray-icon.ts`, which a unit test keeps equal.
 
@@ -306,7 +307,7 @@ These are suggestions for future cards; none is authorized by this document.
 ## 11. Open points for the owner
 
 - Window title and brand: the mockup uses "Yukon Union Telemetry"; the installer, tray and repository name still say ETS2Telemetry.
-- Small logo sizes: resolved on October 21, 2026 by the application icon in §3 (a filled silhouette with the mouth and eye cut out).
+- Small logo sizes: resolved on October 22, 2026 by the "road merge" application icon in §3; the bear stays the in-app logo.
 - Review the Russian translation.
 - Start with Windows: needs an explicit authorization (autostart is currently out of scope).
 - The overlay `hard-mode` section and the "Delivered late" outcome display are proposals.

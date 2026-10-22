@@ -143,7 +143,7 @@ it('provides valid RGBA PNG representations for every notification-area scale', 
       expect(pixel(0, 0)[3]).toBeLessThan(16);
       const dot = Math.floor(size * 0.79);
       expect(pixel(dot, dot)).toEqual([...TRAY_TONE_RGB[tone], 255]);
-      // Only the status dot changes with the tone; the bear tile is shared.
+      // Only the status dot changes with the tone; the tile is shared.
       let changed = 0;
       for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) if (pixel(x, y).join() !== reference(x, y).join()) {
         changed++; expect(x + y).toBeGreaterThanOrEqual(size);
