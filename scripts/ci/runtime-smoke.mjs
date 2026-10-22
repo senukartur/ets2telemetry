@@ -373,7 +373,10 @@ try {
     assert.equal(changedDuringStall, true, 'Source did not change during controlled renderer stall');
     await atTop();
     const recovered = await window.waitForFunction(dashboardObservation, {speed: 'Speed: 72 km/h', fuel: 'Fuel: 71.0 L'}, {timeout: 10000});
-    try {assert.equal(await recovered.jsonValue(), true);} finally {await recovered.dispose();}
+    try {
+      const reading = await recovered.jsonValue();
+      assert.equal(reading.speed, 'Speed: 72 km/h'); assert.equal(reading.fuel, 'Fuel: 71.0 L'); assert.match(reading.status, /^connected:/);
+    } finally {await recovered.dispose();}
     assert.equal(telemetrySource.statistics().connections, 1, 'Subscription recovery restarted source ingestion');
     result.telemetry.subscriptionRestartRecovered = true;
     result.telemetry.rendererStallMilliseconds = 6000;

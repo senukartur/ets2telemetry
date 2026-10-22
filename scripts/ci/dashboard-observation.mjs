@@ -8,7 +8,8 @@ export function dashboardObservation(expected = {}) {
     for (let ancestor = node; ancestor; ancestor = ancestor.parentElement) {
       const style = globalThis.getComputedStyle(ancestor);
       if (style.visibility !== 'visible' || Number(style.opacity ?? 1) === 0) return false;
-      if (ancestor === node) continue;
+      // Detail rows may be rendered below the scrolling fold (B6); primary instruments must be fully in view.
+      if (!viewport || ancestor === node) continue;
       const clip = ancestor.getBoundingClientRect();
       if (/(?:hidden|clip|auto|scroll)/.test(style.overflowX ?? '') && (box.left < clip.left || box.right > clip.right) ||
           /(?:hidden|clip|auto|scroll)/.test(style.overflowY ?? '') && (box.top < clip.top || box.bottom > clip.bottom)) return false;

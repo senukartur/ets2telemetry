@@ -5,7 +5,7 @@ import {afterEach, describe, expect, it, vi} from 'vitest';
 import {
   completeLiveObservation, currentTelemetryObservation, notCurrentLiveObservation, overlayOverflow, overlayV1Observation, SYNTHETIC_V0_HIDDEN_ROWS,
   SYNTHETIC_V0_LIVE_ROWS, SYNTHETIC_V0_VALUE_IDS, SYNTHETIC_V0V1_HIDDEN_ROWS, SYNTHETIC_V0V1_LIVE_ROWS, SYNTHETIC_V1_OVERLAY_CURRENT, SYNTHETIC_V1_OVERLAY_STOPPED,
-  SYNTHETIC_V1_OVERLAY_V0_STALE, SYNTHETIC_V1_OVERLAY_V1_STALE, SYNTHETIC_V1_VALUE_IDS, v1NotCurrentObservation, waitForCompleteLive, waitForCurrentTelemetry,
+  SYNTHETIC_V1_OVERLAY_V0_STALE, SYNTHETIC_V1_OVERLAY_V1_STALE, SYNTHETIC_V1_LIVE_ROWS, SYNTHETIC_V1_VALUE_IDS, v1NotCurrentObservation, waitForCompleteLive, waitForCurrentTelemetry,
   waitForNotCurrentLive, type RendererObservation
 } from '../../scripts/ci/renderer-observation.mjs';
 
@@ -194,6 +194,43 @@ describe('ET-010c not-current v1 observation', () => {
     const elements = v1NotCurrentElements(); change(elements); stubDocument(elements);
     expect(v1NotCurrentObservation(expectedV1)).toBe(false);
   });
+});
+
+// The real Yukon content area scrolls: primary instruments are in view, while Details follows Current job.
+function scrollableDetails(v1Stale: boolean) {
+  const elements = v1Stale ? v1NotCurrentElements() : notCurrentElements();
+  if (!v1Stale) {
+    for (const [id, text] of SYNTHETIC_V1_LIVE_ROWS) elements[id] = one(text, {box: {width: 100, height: 20, top: 900}});
+  }
+  for (const [id, nodes] of Object.entries(elements)) if (id.startsWith('live-')) {
+    for (const node of nodes) node.box = {width: 100, height: 20, top: 900};
+  }
+  const observe = () => {
+    const globals = fakeGlobals(elements), read = globals.document.querySelectorAll, style = globals.getComputedStyle;
+    const scroll = {visibility: 'visible', opacity: '1', overflowX: 'hidden', overflowY: 'auto',
+      getBoundingClientRect: () => ({left: 0, right: 784, top: 0, bottom: 435})};
+    globals.document.querySelectorAll = selector => read(selector).map(node => ({...node, parentElement: scroll}));
+    globals.getComputedStyle = node => ({...style(node), ...node});
+    const expected = v1Stale ? {values: SYNTHETIC_V1_VALUE_IDS, status: '^stale:', speed: 'Speed: 90 km/h', statusId: 'live-v1-status', omitFuel: true}
+      : {values: SYNTHETIC_V0_VALUE_IDS, status: '^stale:', hidden: []};
+    return runInNewContext('(' + notCurrentLiveObservation.toString() + ')(expected)', {...globals, expected}) as unknown;
+  };
+  return {elements, observe, id: v1Stale ? 'live-route-remaining' : 'live-gear'};
+}
+it.each([false, true])('accepts exact below-fold details inside a real-shaped scrolling ancestor (v1 stale: %s)', v1Stale => {
+  const fixture = scrollableDetails(v1Stale);
+  expect(fixture.observe()).toMatchObject({[fixture.id]: 'unavailable', speed: v1Stale ? 'Speed: 90 km/h' : 'Speed: unavailable'});
+});
+it.each([false, true])('still rejects wrong/missing/duplicate/hidden below-fold detail values and reasons (v1 stale: %s)', v1Stale => {
+  for (const reason of [false, true]) for (const fault of ['wrong', 'missing', 'duplicate', 'hidden', 'zero box']) {
+    const fixture = scrollableDetails(v1Stale), id = fixture.id + (reason ? '-reason' : '');
+    if (fault === 'wrong') fixture.elements[id] = one('unexpected');
+    if (fault === 'missing') delete fixture.elements[id];
+    if (fault === 'duplicate') fixture.elements[id].push(fixture.elements[id][0]);
+    if (fault === 'hidden') fixture.elements[id][0].visibility = 'hidden';
+    if (fault === 'zero box') fixture.elements[id][0].box = {width: 0, height: 20, top: 900};
+    expect(fixture.observe(), id + '/' + fault).toBe(false);
+  }
 });
 
 /** A fake overlay document: text by test id, and the root's data attributes. */
