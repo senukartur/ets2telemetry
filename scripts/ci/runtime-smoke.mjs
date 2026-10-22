@@ -419,7 +419,9 @@ try {
     result.telemetry.sourceV1 = telemetrySourceV1.statistics();
     assert.equal(result.telemetry.sourceV1.connections, 2, 'Expected one initial v1 source connection and one service-restart connection');
     await telemetrySource.stop();
-    await window.getByText('Speed: unavailable', {exact: true}).waitFor({state: 'visible', timeout: 5000});
+    const disconnected = await window.waitForFunction(dashboardObservation,
+      {status: '^(disconnected|waiting):', speed: 'Speed: unavailable', omitFuel: true}, {timeout: 5000});
+    try {assert.equal((await disconnected.jsonValue()).speed, 'Speed: unavailable');} finally {await disconnected.dispose();}
     assert.match(await window.getByTestId('telemetry-status').innerText(), /^(disconnected|waiting):/);
     result.telemetry.staleAfterDisconnect = true;
     await atTop(); await waitForNotCurrentLive(window, ['live-gear', 'live-cargo', 'live-odometer'], '^(disconnected|waiting):');
