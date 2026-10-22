@@ -2,6 +2,16 @@
 
 Concept recorded on: October 10, 2026.
 
+ET-012 closeout disposition, October 22, 2026: the owner accepted the four display corrections and 200% mouse-release
+behavior on the c6d70e4 ETS2 preview, without individually accepting all layouts or the full game matrix. The owner
+separately authorized administrative Done and consolidation of the remaining seven rows and P2/A2/A3/A7/M1–M8/E4
+in [ET-044](https://trello.com/c/ucJbXIEH), **unverified**; ET-042/ET-043 transfers retain their existing scope/status.
+This supersedes earlier ET-012 manual-gate/Review wording without changing historical outcomes. Independent round 9
+passed all 39 local commands / 21 journeys on 722938c9; Claude's four nonblocking notes have recorded dispositions.
+Current independent review, final automatic Ready CI and authorized squash merge remain pending PR gates. No release
+or real-history enablement follows. See
+[ET-012e validation](docs/validation/et-012e.md) for exact identities, limits and pending CI snapshot.
+
 ET-011 closeout authorization, October 22, 2026: the owner requested resolving local failures, independent review,
 final automatic Ready CI and squash merge of PR #167, then closing ET-011. Narrator, real-game unit profiles and
 close-to-tray overlay continuity transfer **unverified** to [ET-043](https://trello.com/c/2fbiCET0). Installed shortcut

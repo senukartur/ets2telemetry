@@ -1,5 +1,18 @@
 # Agent Instructions
 
+## ET-012 administrative closeout and code gates — October 22, 2026
+
+The owner explicitly authorized consolidating unfinished Review-card validation in
+[ET-044](https://trello.com/c/ucJbXIEH) and moving the source cards to Done administratively. ET-012 is Done/complete
+under that decision; its remaining seven game-matrix rows and criteria P2/A2/A3/A7/M1–M8/E4 transferred **unverified**.
+Existing ET-042 monitor and ET-043 accessibility/unit-profile/close-to-tray transfers remain unverified. This explicit
+disposition supersedes earlier ET-012 Review/manual-gate wording; it does not claim those tests passed.
+
+The owner accepted the four display corrections and observed mouse-release behavior at 200% on the c6d70e4 ETS2 preview,
+within the limits in [ET-012e validation](docs/validation/et-012e.md). All four layouts and the full matrix were not
+individually accepted. PR #163 still requires current independent review, Claude disposition, final automatic CI after
+Ready and the already authorized squash merge. Administrative Done does not waive code gates or authorize a release.
+
 ## ET-011 closeout authorization — October 22, 2026
 
 The owner authorized investigating the local verification failures and taking PR #167 through independent review,

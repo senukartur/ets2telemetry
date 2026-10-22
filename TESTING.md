@@ -1,5 +1,13 @@
 # Testing and Regression Strategy
 
+ET-012 closeout snapshot, October 22, 2026: independent round 9 passed 39/39 commands and 21/21 isolated journeys on
+722938c9, including 4,658 Node tests, 458 storage tests, 53 native client cases and 75 plugin cases, without retries. Both
+Hard Mode journeys retained 78 independently audited coherent phases and ten PNGs; the existing wrapper does not add
+a separate 78-phase gate. Owner display feedback is scoped to the recorded c6d preview. The remaining seven game rows
+and P2/A2/A3/A7/M1–M8/E4 moved **unverified** to [ET-044](https://trello.com/c/ucJbXIEH); ET-042/ET-043 transfers remain.
+Administrative Done is separate from current review and final automatic Ready CI. Historical failures, the unknown
+hosted source-interruption cause and extracted-RED provenance limits remain in [ET-012e validation](docs/validation/et-012e.md).
+
 ET-011 hosted Hard Mode driver correction, October 22, 2026: `hard-mode-proof-observation.test.ts` uses the real
 `HardModeMonitor`, gated read/bind completions and a controlled monotonic clock to reproduce a coalesced periodic tick
 and passive proof expiry. The driver arms a new passing publication after screenshots, then sequentially invokes the
