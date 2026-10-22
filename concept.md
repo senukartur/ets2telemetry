@@ -2,6 +2,12 @@
 
 Concept recorded on: October 10, 2026.
 
+ET-011 closeout authorization, October 22, 2026: the owner requested resolving local failures, independent review,
+final automatic Ready CI and squash merge of PR #167, then closing ET-011. Narrator, real-game unit profiles and
+close-to-tray overlay continuity transfer **unverified** to [ET-043](https://trello.com/c/2fbiCET0). Installed shortcut
+and update checks retain their ET-018 deferral; monitor/mixed-DPI checks remain ET-042. Dated pending statements below
+retain their historical scope. Actual code gates and Windows evidence are in [ET-011 validation](docs/validation/et-011.md).
+
 ET-009 owner acceptance, October 20, 2026: the [prototype closeout](docs/validation/et-009.md) records the
 accepted functional matrix, indicative latency and performance with their explicit exceptions and limits.
 Monitor/mixed-DPI/removal checks moved to ET-042 and remain unverified. The [opt-in measurement procedure](docs/validation/et-009-latency.md)
@@ -528,6 +534,24 @@ The owner authorized ET-013 (the SQLite storage worker and schema) on October 15
 ET-013 PR-2 implementation update (October 15, 2026): the telemetry service runs the storage core in its storage worker, opens `%LOCALAPPDATA%\ETS2Telemetry\data\telemetry.sqlite` at start without blocking live telemetry and closes it in the `storage` shutdown phase; killed-process and worker-failure tests and a measured 53.4 MB per 100 hours are recorded in [ET-013 validation](docs/validation/et-013.md); nothing is recorded or acknowledged yet.
 
 ## ET-011 authorization — October 15, 2026
+
+Closeout authorization, October 22, 2026: the owner authorized resolving local verification failures, independent
+review, final automatic Ready CI and squash merge of PR #167, followed by ET-011 closure. Narrator accessibility and
+remaining real-game unit-profile/close-to-tray overlay checks transfer **unverified** to
+[ET-043](https://trello.com/c/2fbiCET0); installed shortcut/update checks retain their ET-018 deferral. Corrected
+Windows sign-out and actual restart passed in separate isolated synthetic sessions. The native regression correction
+follows the existing pending-start policy and mandatory-join/measured-target contract; no product deadline, protocol,
+storage schema, game-history enablement or release scope changes. Historical failures are retained, and this decision
+does not assert the PR's remaining gates or transferred checks already passed. See [ET-011 validation](docs/validation/et-011.md).
+
+Windows session-end correction, October 21, 2026: pinned Electron immediately terminates main after confirmed native
+`session-end` listeners, so C6's normal asynchronous supervisor completion cannot be guaranteed at that OS boundary.
+The owner requested diagnosing/fixing the lost audit and preparing a repeat manual check. Confirmed end now enters
+synchronous bounded logging before the same lifecycle request, removes the tray immediately and records the truthful
+`WINDOWS_SESSION_END_HANDOFF` boundary. It never invents completed service/app exits, stops on a cancellable query or
+vetoes Windows shutdown. Ordinary exit budgets remain unchanged. Actual service/storage completion and real Windows
+acceptance remain independently evidenced, as [the lifecycle](docs/app-lifecycle.md#windows-terminal-session-boundary--october-21-2026)
+and [validation](docs/validation/et-011.md) describe. This is a diagnostic correction, not an OS-lifecycle policy change.
 
 Closeout instruction, October 21, 2026: the owner requested Review status, card reconciliation and
 completion of unattended follow-ups before manual checks together. This includes diagnosing the

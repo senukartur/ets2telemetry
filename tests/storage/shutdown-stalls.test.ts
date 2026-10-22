@@ -18,6 +18,7 @@ import type {StorageWorkerHandle} from '../../packages/storage/src/client';
 import {createRecordingRuntime, type RecordingRuntime} from '../../apps/desktop/src/recording-runtime';
 import {GAME_HISTORY_RECORDING} from '../../apps/desktop/src/recording-policy';
 import type {V1SourceState} from '../../apps/desktop/src/v1-ingestion';
+import type {ShutdownTimers} from '../../apps/desktop/src/shutdown-sequence';
 import {checkHistoryInvariants, formatViolations, type HistoryAck} from '../../scripts/ci/history-invariants.mjs';
 import {readFixtureFile} from '../../tools/telemetry-simulator/src/fixture-file';
 import {reactiveConflicts, serveV1Reactive} from '../../tools/telemetry-simulator/src/v1/reactive';
@@ -160,7 +161,76 @@ function stopOnDisconnect(shutdown: ReturnType<typeof tracedShutdown>, socket: F
 /** normal-delivery: events 1–9 on one durable connection that commits and acknowledges each; the server closes it at 1,100 ms. */
 const NORMAL_DELIVERY_ACKS = ['1', '2', '3', '4', '5', '6', '7', '8', '9'];
 
+/** Only the sequence clock is controlled; pipes, SQLite transactions and history close remain real. */
+function shutdownClock() {
+  let now = 0, next = 0;
+  const pending = new Map<number, {at: number; callback: () => void}>();
+  const schedule = (callback: () => void, delay: number) => {const id = ++next; pending.set(id, {at: now + delay, callback}); return id;};
+  const timers: ShutdownTimers = {now: () => now, setTimeout: schedule, clearTimeout: id => {pending.delete(id as number);},
+    setImmediate: callback => schedule(callback, 1), clearImmediate: id => {pending.delete(id as number);}};
+  const advance = async (target: number) => {
+    for (;;) {
+      const due = [...pending].filter(([, timer]) => timer.at <= target).sort((a, b) => a[1].at - b[1].at)[0];
+      if (!due) break;
+      pending.delete(due[0]); now = due[1].at; due[1].callback();
+      await new Promise<void>(resolve => setImmediate(resolve));
+    }
+    now = target;
+  };
+  return {timers, advance, pending: () => pending.size};
+}
+
 describe('ET-019 shutdown and close stalls', () => {
+  it.each(['released', 'stalled'] as const)('(d) a %s final sample transaction preserves bounded flush allocation and durable history (REG-006, REG-011, REG-012)', async mode => {
+    expectNoGameHistory(ws.directory);
+    const input = scenario('normal-delivery'), timeline: string[] = [], failures: unknown[] = [];
+    const server = await serveV1Reactive(input, {scale: 0, awaitScriptedAcks: true});
+    const worker = storageWorker({samplesFault: {hold: true}}), traced = tracedHandle(worker.handle, timeline);
+    const clock = shutdownClock(), shutdown = tracedShutdown(timeline, undefined, clock.timers);
+    const socket = gatedConnect(timeline, '9', () => Promise.resolve(), error => failures.push(error));
+    let runtime!: RecordingRuntime;
+    const stop = stopOnDisconnect(shutdown, socket, timeline, () => runtime.v1.current);
+    const s = serviceRuntime('t', traced.handle, socket, timeline, {onState: stop.onState}); runtime = s.runtime;
+    runtime.register(shutdown.registrar);
+    const held = guarded(once(worker.control!, 'message'), 'the final sample transaction', HANG_GUARD_MS);
+    held.catch(() => undefined);
+    try {
+      await startDurable(runtime, server.endpoint);
+      expect((await held)[0]).toEqual({type: 'held', command: 'appendSamples'});
+      timeline.push('held final sample');
+      // The final write is known to exist before advancing any budget. A released real transaction remains held
+      // beyond the former 500 ms cap; the negative case expires its entire 1,500 ms effective allocation.
+      await clock.advance(mode === 'released' ? 600 : 1501);
+      if (mode === 'released') worker.control?.postMessage({type: 'release'});
+      const {clean} = await stop.stopped();
+      const report = await guarded(server.done, 'the reactive server run', HANG_GUARD_MS);
+      expect(await guarded(worker.exit, 'the storage worker exit', HANG_GUARD_MS)).toBe(mode === 'released' ? 0 : 1);
+      expect(clean).toBe(mode === 'released');
+      expect(shutdown.steps.find(step => step.name === 'recording-flush')?.outcome).toBe(mode === 'released' ? 'ok' : 'timeout');
+      expect(shutdown.diagnostics.find(step => step.name === 'recording-flush')).toMatchObject({nominalBudgetMs: 500, effectiveBudgetMs: 1500});
+      const close = shutdown.diagnostics.find(step => step.name === 'history-storage')!;
+      expect(close.effectiveBudgetMs).toBe(mode === 'released' ? 1900 : 1000);
+      expect(close.graceMs).toBe(mode === 'released' ? 1700 : 800);
+      const acks = timeline.filter(line => line.startsWith('ack ')).map(line => line.slice(4));
+      expect([acks, servedAcks(report, 0)]).toEqual([NORMAL_DELIVERY_ACKS, NORMAL_DELIVERY_ACKS]);
+      expect(timeline.slice(timeline.indexOf('stop')).filter(line => line.startsWith('ack '))).toEqual([]);
+      expect(failures).toEqual([]);
+      if (mode === 'released') {
+        expect(s.logs.filter(([event]) => event === 'V1_SAMPLES_EXIT')).toEqual([['V1_SAMPLES_EXIT', {rows: 1, losses: 0, code: 'WRITTEN'}]]);
+        expect(timeline).toContain('HISTORY_STORAGE_CLOSED');
+      } else {
+        expect(timeline).not.toContain('HISTORY_STORAGE_CLOSED');
+        expect(s.logs.filter(([event, facts]) => event === 'V1_SAMPLES_EXIT' && (facts as {code?: string})?.code === 'WRITTEN')).toEqual([]);
+      }
+      const rows = expectInvariants(target('t'), sessionOf(input), acks);
+      expect(rows.integrity).toBe('ok');
+      expect(rows.events.map(row => row.eventSeq)).toEqual(NORMAL_DELIVERY_ACKS);
+      expect(rows.samples.map(row => row.monotonicNs)).toEqual(mode === 'released' ? NORMAL_DELIVERY_SAMPLES : []);
+      expect(clock.pending()).toBe(0);
+      expectNoGameHistory(ws.directory);
+    } finally {worker.control?.close(); await server.stop();}
+  }, 90_000);
+
   it('(a) a stop while a reconnection is armed makes no connection, not even after the longest backoff, writes no ACK after the stop and stays within 2,500 ms (REG-011)', async () => {
     const localAppData = ws.directory;
     expectNoGameHistory(localAppData);

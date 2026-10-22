@@ -1,10 +1,10 @@
-import {inflateSync} from 'node:zlib';
+import {crc32, inflateSync} from 'node:zlib';
 import {afterEach, beforeEach, expect, it, vi} from 'vitest';
 import type {AppHealth} from '../../packages/contracts/src';
 import {TRAY_TOOLTIP_LIMIT, TrayPresenter, trayModel, trayTone, type TrayInput} from '../../apps/desktop/src/tray-model';
 import {RECORDING_CODES} from '../../apps/desktop/src/recording-status';
 import type {RecordingHealth, RecordingLosses, RecordingState} from '../../packages/contracts/src';
-import {TRAY_ICON_REPRESENTATIONS, TRAY_TONE_RGB, crc32, trayIconPng, type TrayTone} from '../../apps/desktop/src/tray-icon';
+import {TRAY_ICON_REPRESENTATIONS, TRAY_TONE_RGB, trayIconPng, type TrayIconSize, type TrayTone} from '../../apps/desktop/src/tray-icon';
 
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
@@ -115,30 +115,43 @@ function chunks(png: Buffer) {
   const result: {type: string; data: Buffer; crcValid: boolean}[] = [];
   for (let offset = 8; offset < png.length;) {
     const length = png.readUInt32BE(offset), type = png.toString('ascii', offset + 4, offset + 8), data = png.subarray(offset + 8, offset + 8 + length);
-    result.push({type, data, crcValid: png.readUInt32BE(offset + 8 + length) === crc32(png.subarray(offset + 4, offset + 8 + length))});
+    result.push({type, data, crcValid: png.readUInt32BE(offset + 8 + length) === crc32(png.subarray(offset + 4, offset + 8 + length)) >>> 0});
     offset += 12 + length;
   }
   return result;
 }
-it('generates valid RGBA PNG representations for every notification-area scale', () => {
-  // The CRC-32 check value from the PNG specification's reference algorithm.
-  expect(crc32(Buffer.from('123456789'))).toBe(0xcbf43926);
+function pixels(png: Buffer, size: number) {
+  const parsed = chunks(png);
+  expect(parsed.map(entry => entry.type)).toEqual(['IHDR', 'IDAT', 'IEND']);
+  expect(parsed.every(entry => entry.crcValid)).toBe(true);
+  const header = parsed[0].data;
+  expect([header.readUInt32BE(0), header.readUInt32BE(4), header[8], header[9], header[10], header[11], header[12]]).toEqual([size, size, 8, 6, 0, 0, 0]);
+  const rows = inflateSync(parsed[1].data);
+  expect(rows.length).toBe(size * (1 + size * 4));
+  for (let y = 0; y < size; y++) expect(rows[y * (1 + size * 4)]).toBe(0); // Filter byte 0: no filtering.
+  return (x: number, y: number) => [...rows.subarray(y * (1 + size * 4) + 1 + x * 4, y * (1 + size * 4) + 1 + x * 4 + 4)];
+}
+it('provides valid RGBA PNG representations for every notification-area scale', () => {
   expect(TRAY_ICON_REPRESENTATIONS.map(entry => [entry.size, entry.scaleFactor])).toEqual([[16, 1], [20, 1.25], [24, 1.5], [32, 2]]);
-  for (const {size} of TRAY_ICON_REPRESENTATIONS) for (const tone of Object.keys(TRAY_TONE_RGB) as TrayTone[]) {
-    const png = trayIconPng(size, tone);
-    expect([...png.subarray(0, 8)]).toEqual([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-    const parsed = chunks(png);
-    expect(parsed.map(entry => entry.type)).toEqual(['IHDR', 'IDAT', 'IEND']);
-    expect(parsed.every(entry => entry.crcValid)).toBe(true);
-    const header = parsed[0].data;
-    expect([header.readUInt32BE(0), header.readUInt32BE(4), header[8], header[9], header[10], header[11], header[12]]).toEqual([size, size, 8, 6, 0, 0, 0]);
-    const pixels = inflateSync(parsed[1].data);
-    expect(pixels.length).toBe(size * (1 + size * 4));
-    const pixel = (x: number, y: number) => [...pixels.subarray(y * (1 + size * 4) + 1 + x * 4, y * (1 + size * 4) + 1 + x * 4 + 4)];
-    expect(pixel(0, 0)[3]).toBe(0);
-    expect(pixel(size / 2, size / 2)).toEqual([...TRAY_TONE_RGB[tone], 255]);
+  for (const {size} of TRAY_ICON_REPRESENTATIONS) {
+    const reference = pixels(trayIconPng(size, 'ready'), size);
+    for (const tone of Object.keys(TRAY_TONE_RGB) as TrayTone[]) {
+      const png = trayIconPng(size, tone);
+      expect([...png.subarray(0, 8)]).toEqual([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+      const pixel = pixels(png, size);
+      // Rounded tile corners stay (nearly) transparent; the lower right status dot carries the exact tone colour.
+      expect(pixel(0, 0)[3]).toBeLessThan(16);
+      const dot = Math.floor(size * 0.79);
+      expect(pixel(dot, dot)).toEqual([...TRAY_TONE_RGB[tone], 255]);
+      // Only the status dot changes with the tone; the bear tile is shared.
+      let changed = 0;
+      for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) if (pixel(x, y).join() !== reference(x, y).join()) {
+        changed++; expect(x + y).toBeGreaterThanOrEqual(size);
+      }
+      expect(changed).toBeLessThan(size * size / 4);
+    }
   }
-  expect(() => trayIconPng(4, 'ready')).toThrow(); expect(() => trayIconPng(16.5, 'ready')).toThrow();
+  expect(() => trayIconPng(4 as TrayIconSize, 'ready')).toThrow(); expect(() => trayIconPng(16, 'unknown' as TrayTone)).toThrow();
 });
 it('uses visibly distinct colours for each health tone', () => {
   const tones = Object.values(TRAY_TONE_RGB);

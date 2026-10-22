@@ -8,6 +8,7 @@ The design target for the desktop application and its overlay, in the Yukon Unio
 | [tokens.css](tokens.css) | Colour, type and shape tokens, the shadcn variable mapping and the overlay tokens |
 | [mockup.html](mockup.html) | Interactive mockup. Open it in a browser (it needs the `assets` folder next to it). Use **Inspect** to see spec ids, and switch language, game, connection and Hard Mode state |
 | [assets/logo.png](assets/logo.png) | The application logo, 1024 × 1024 white line art on transparency; usage rules in [ui-spec.md §3](ui-spec.md#3-tokens-type-and-icons) |
+| [assets/app-icon.png](assets/app-icon.png) | 256 px preview of the taskbar and tray icon generated from the logo by `scripts/generate-app-icons.mjs`; rules in [ui-spec.md §3](ui-spec.md#3-tokens-type-and-icons) |
 
 The mockup inlines a copy of the tokens so it can run on its own and makes no network request; tokens.css is the source of truth. It uses Onest only if the font is installed locally and otherwise falls back to Segoe UI; the application bundles Onest instead (ui-spec.md §3). All values shown in the mockup are invented examples.
 

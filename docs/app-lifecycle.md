@@ -58,7 +58,7 @@ The overlay window refuses close requests until the application exits. If creati
 
 ## Tray icon
 
-The icon is created when Electron is ready, before the service starts, with the tooltip `Starting`. It has no fixed GUID. The bitmap is generated at runtime (`apps/desktop/src/tray-icon.ts`): a filled disc in 16, 20, 24 and 32 px representations for 100%, 125%, 150% and 200% display scaling. Its colour shows health: green when ready, amber while starting, restarting or exiting, red when the service has failed.
+The icon is created when Electron is ready, before the service starts, with the tooltip `Starting`. It has no fixed GUID. The bitmap is the application icon's small bear mark with a status dot in its lower right corner, in 16, 20, 24 and 32 px representations for 100%, 125%, 150% and 200% display scaling ([application icon](design/ui-spec.md#3-tokens-type-and-icons)). `scripts/generate-app-icons.mjs` renders them from the logo into `apps/desktop/src/tray-icon-data.ts`, read by `apps/desktop/src/tray-icon.ts`. The dot's colour shows health: green when ready, amber while starting, restarting or exiting, red when the service has failed. Since October 21, 2026 the executable, Setup and the main window also carry the application icon (`resources/icon/app.ico`); it replaced the earlier plain coloured disc.
 
 The context menu contains:
 
@@ -83,6 +83,37 @@ Every way to leave the application goes through one idempotent exit coordinator 
 | A started [in-app uninstall](#in-app-uninstall-et-018-pr-4) (ET-018 PR-4) | `uninstall` |
 
 The first request logs `APP_EXIT_REQUESTED` with its reason, sets the tray tooltip to `Exiting`, disables the menu, retires live subscriptions, hides the overlay and asks the supervisor to stop the service. Later requests do nothing. `query-session-end` is not prevented. After the supervisor finishes, the coordinator waits for pending idle work (an in-flight [settings](settings.md#saving) save, since ET-016 PR-5 the removal of an interrupted [trip export](journal-export.md#saving-a-trip-j16-j17)'s partial file, since ET-017 PR-6 the same for an interrupted [diagnostic bundle](plugin-setup.md#diagnostic-bundle) export, and, since ET-017 PR-4, the [plugin setup](plugin-setup.md#setup-run) run in flight, which the exit aborts and which ends with the removal of its temporary file, and its registry write of an exclusion change or folder choice; together at most 1000 ms from the request; new saves, exports and plugin setup requests are refused once the exit started), removes the tray icon so no ghost icon remains, writes its final log rows (the append in flight gets at most 300 ms, [diagnostics log](#diagnostics-log)) and calls `app.exit(code)`. The supervisor's existing bounds are unchanged: the service is killed after 3000 ms without a clean stop and the application exits after 5000 ms in any case. Main-internal fatal paths still exit 1 through the same final step. A fatal stop (for example renderer or overlay restart exhaustion, a load or configuration failure, or a service recovery timeout) marks the application exiting as soon as it starts, without logging an exit request: the tray shows `Exiting` with a disabled menu, live state is retired, the overlay may close and neither the tray nor a second launch reopens the dashboard during the stop window.
+
+### Windows terminal session boundary — October 21, 2026
+
+The supervised completion described above applies while Electron can keep its event loop running. The pinned
+[Electron 44.7.0 native handler](https://github.com/electron/electron/blob/v44.7.0/shell/browser/native_window_views_win.cc#L383-L413)
+notifies every window of confirmed `WM_ENDSESSION`, then immediately terminates main if Electron has not begun its own
+quit. Our `before-quit` redirection deliberately prevents that separate quit path. Returning from a JavaScript
+`session-end` callback therefore cannot await the supervisor or an asynchronous log append. This explains the real
+October 21 sign-out's missing main rows despite the service's clean stop; its frozen evidence remains partial.
+
+Confirmed `session-end` now enters synchronous terminal logging **before** requesting the same idempotent lifecycle
+stop. It removes the tray synchronously and writes `WINDOWS_SESSION_END_HANDOFF` with `{completion: 'os-owned'}` before
+returning to Electron. Duplicate notifications across dashboard/overlay do nothing. `query-session-end` is left inert:
+Windows may cancel a query, so it must neither stop the service nor veto the user's session end.
+
+If a synchronous lifecycle hook rejects, `WINDOWS_SESSION_END_REQUEST_REJECTED` records that failure. A `finally`
+boundary still attempts tray disposal and writes the truthful OS handoff once; it does not claim that service stop
+was requested or completed. A boundary regression injects a native tray rejection and duplicate window notifications.
+
+The handoff marker records the native termination boundary, not a completed service flush or a supervisor-observed
+exit. `SERVICE_EXIT` and `APP_EXIT` are written only if those events are actually observed. A full asynchronous
+supervised completion cannot be guaranteed at this boundary without changing Windows shutdown policy; this fix does
+not add a veto, delay, new native service or wider deadline. Real sign-out/restart acceptance still requires the owner
+and separate service/storage evidence, not merely a zero exit code or absent processes. Both owner-run corrected
+sessions passed on frozen runtime `15dab09`; see [the bound results](validation/et-011.md#actual-corrected-windows-sessions-and-code-gates).
+The later exception-path guard has separate automated coverage and is not relabeled as part of that frozen artifact.
+
+Terminal logging keeps the existing 256 KiB/2,000-record limits and fixed-code console fallback. It drains the queued
+rows and writes later rows synchronously; an older append already in flight is not replayed and can land later or be
+lost. A full log or unavailable/stalled disk remains an explicit diagnostic limit. The regular recording/telemetry
+path remains asynchronous.
 
 ## In-app uninstall (ET-018 PR-4)
 
@@ -109,6 +140,14 @@ The service stops through an ordered sequence (`apps/desktop/src/shutdown-sequen
 | `storage` | `storage-probe` (1000 ms), `history-storage` (1000 ms nominal budget, closes the history database; ET-013 PR-2). 800 ms is the baseline close grace when earlier phases consume their full budgets; under ET-038 adaptive stop grace, unused budget from earlier stop phases (prompt intake and flush phases, typically <50 ms) cascades adaptively to history storage up to ~2,250 ms (with an expanded effective budget up to ~2,450 ms and a 200 ms termination reserve, plus one event-loop turn for answers that already arrived). It fails when the worker had not answered the close by then or had failed earlier in the session ([storage](storage.md#history-database-in-the-telemetry-service)) |
 
 Steps of one phase run in parallel with their effective allocated budgets; nominal phase maxima govern registration, with the adaptive recording/history rules below and the existing verdict-turn scheduling limitation. Since October 18, 2026 the `timeout` verdict runs one turn after the budget (an immediate, after the next poll phase): a service thread stalled past the budget runs the due budget timer before it delivers I/O that arrived meanwhile, so a step result that was already waiting still counts, and a step that has not finished by then times out ([ET-013 validation](validation/et-013.md#history-close-grace-flake-october-18-2026)). Registration fails if the sum of phase maxima exceeds `SERVICE_STOP_BUDGET_MS` (2500 ms), which retains the nominal allocation before main's 3000 ms kill deadline. Since ET-015a PR-3 the maxima are 1000 (`intake`) + 500 (`flush`) + 1000 (`storage`) = 2500 ms, the whole budget; a further step must fit inside an existing phase maximum. In ET-038, the unused budget from prompt intake and flush execution cascades to the storage phase steps, allowing slow SQLite closes to finish cleanly without premature termination while retaining the nominal 2500 ms allocation and existing scheduling/floor limitations. Every step, successful ones included, logs `SHUTDOWN_STEP` with fixed `phase`, `name`, `outcome` (`ok`, `failed` or `timeout`) and `ms` facts; a failed or late step does not stop the sequence. The service then sends exactly one `{type: 'stopped', clean}` message and, after its final log rows are on disk ([diagnostics log](#diagnostics-log)), exits 0 when clean or 1 otherwise.
+
+ET-011 allocation correction, October 22, 2026: recording flush can borrow only the unused registered intake maximum,
+measured from actual elapsed monotonic time, and only within the remaining sequence budget after reserving the full
+registered future storage maximum. Prompt intake permits up to 1500 ms flush, full intake leaves its nominal 500 ms,
+and no registered intake means no borrowed allowance. Other flush steps keep their own budgets. History close then
+uses the time actually remaining, so borrowed time is not spent twice. Registration still checks 1000 + 500 + 1000;
+the 2500 ms sequence, 3000 ms main kill and 5000 ms application budgets and 200 ms termination reserve remain.
+Nominal floors and the existing verdict-turn behavior remain; arbitrary host scheduling can exceed measured wall time.
 
 ## Service failures after readiness
 
@@ -169,6 +208,7 @@ The cause is a fixed phrase per recording code, for example `the disk is full` f
 For `retrying`, `stopped` and `live-only` a shadcn `Alert` titled **Recording problem** follows the list (`health-recording-alert`; destructive except for `retrying`) and says that live telemetry and the overlay keep working. The status card's prototype notice (`prototype-notice`) follows the state: `No trip recording or durable history` while disabled, a not-known notice while unknown, `Only a test database is recorded, never game history` for a test target, and a notice that game history recording is new for the history target. Before main's first push the row shows a dash.
 
 The tray's second status line is `Recording: ` and the short form of the headline, for example `off in this version`, `not known`, `on`, `connection lost` or `retrying, the disk is full`, followed by ` · synthetic test database` or ` · replay test database` for a test target; it is cut at 127 characters like the tooltip, and the tooltip does not carry it. The overlay and both preloads are unchanged.
+
 
 ## Diagnostics log
 

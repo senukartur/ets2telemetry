@@ -53,6 +53,31 @@ function held() {
 }
 const rows = (dir: string) => readFileSync(path.join(dir, 'startup.jsonl'), 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line) as {event: string; detail?: unknown});
 
+it('writes terminal session-end rows before returning even while an earlier append never settles', async () => {
+  const dir = directory(), log = createDiagnostics(dir);
+  const release = held();
+  log('IN_FLIGHT'); log('QUEUED');
+  log.enterTerminalMode();
+  log('APP_EXIT_REQUESTED', undefined, {reason: 'session-end'});
+  log('WINDOWS_SESSION_END_HANDOFF', undefined, {completion: 'os-owned'});
+  expect(rows(dir).map(row => row.event)).toEqual(['QUEUED', 'APP_EXIT_REQUESTED', 'WINDOWS_SESSION_END_HANDOFF']);
+  expect(control.writes).toHaveLength(1);
+  log.enterTerminalMode();
+  release(); await afterCallbacks();
+  expect(rows(dir).map(row => row.event)).toEqual(['QUEUED', 'APP_EXIT_REQUESTED', 'WINDOWS_SESSION_END_HANDOFF', 'IN_FLIGHT']);
+  expect(control.writes).toHaveLength(1);
+  expect(await log.flush(0)).toBe(true);
+});
+
+it('keeps terminal disk failure fallback fixed-code-only and does not break the caller', () => {
+  const dir = directory(), log = createDiagnostics(dir, true);
+  const output = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  log.enterTerminalMode(); control.syncFail = true;
+  expect(() => log('WINDOWS_SESSION_END_HANDOFF', 'private path', {completion: 'os-owned'})).not.toThrow();
+  expect(output).toHaveBeenCalledExactlyOnceWith('[ETS2Telemetry] WINDOWS_SESSION_END_HANDOFF');
+  expect(control.writes).toHaveLength(0);
+});
+
 it('stores structured events, suppressing sensitive details by default', async () => {
   const dir = directory(), log = createDiagnostics(dir);
   log('FAILURE', new Error('private path'));

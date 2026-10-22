@@ -341,7 +341,7 @@ function runApplication(profileError: unknown): void {
       const pending = [latency?.idle(), settingsStore.idle(), exporter.idle(), diagnosticsExporter.idle(), pluginSetup.idle()].filter((work): work is Promise<void> => work !== undefined);
       return pending.length > 1 ? Promise.all(pending).then(() => undefined) : pending[0];
     },
-    destroyTray: () => {trayPresenter?.dispose(); const previous = tray; tray = undefined; previous?.destroy();},
+    destroyTray,
     // The final rows (SERVICE_EXIT, APP_EXIT) are on disk before the process ends: the append in flight gets up to
     // MAIN_EXIT_FLUSH_MS, the queue is then written synchronously, and later rows are written at once.
     exit: code => {void log.finalize(MAIN_EXIT_FLUSH_MS).then(() => appUninstall.prepared ? completeAppUninstall() : app.exit(code));}
@@ -454,6 +454,21 @@ function runApplication(profileError: unknown): void {
   function stop(): void {retireLive(); supervisor.stop();}
   function fail(code: string, error?: unknown): void {retireLive(); supervisor.fail(code, error);}
   function requestExit(reason: ExitReason): void {lifecycle.request(reason);}
+  function destroyTray(): void {trayPresenter?.dispose(); const previous = tray; tray = undefined; previous?.destroy();}
+  let windowsSessionEnded = false;
+  function endWindowsSession(): void {
+    if (windowsSessionEnded) return;
+    windowsSessionEnded = true;
+    // Electron 44.7.0 terminates synchronously after notifying session-end listeners. No promise or service response
+    // can be awaited here. Preserve the actual request and terminal boundary, without inventing a completed exit.
+    log.enterTerminalMode();
+    try {requestExit('session-end');}
+    catch (error) {log('WINDOWS_SESSION_END_REQUEST_REJECTED', String(error));}
+    finally {
+      try {destroyTray();} catch (error) {log('TRAY_DESTROY_REJECTED', String(error));}
+      log('WINDOWS_SESSION_END_HANDOFF', undefined, {completion: 'os-owned'});
+    }
+  }
   const trusted = (event: IpcMainEvent | IpcMainInvokeEvent) => Boolean(window && !window.isDestroyed() && event.sender === window.webContents && event.senderFrame === window.webContents.mainFrame);
   function connectSubscription(): void {
     if (!subscribed || dashboardPort || supervisor.stopping || !window || window.isDestroyed()) return;
@@ -566,7 +581,7 @@ function runApplication(profileError: unknown): void {
     });
     // The overlay lives as long as the application: it outlasts the main window and closes only on exit.
     created.on('close', event => {if (!lifecycle.exiting) event.preventDefault();});
-    created.on('session-end', () => requestExit('session-end'));
+    created.on('session-end', endWindowsSession);
     created.on('closed', () => {retire(); overlay = undefined; overlayController = undefined; if (!supervisor.stopping) stop();});
     const changed = () => overlayController?.topologyChanged();
     screen.on('display-added', changed); screen.on('display-removed', changed); screen.on('display-metrics-changed', changed);
@@ -584,7 +599,10 @@ function runApplication(profileError: unknown): void {
     rendererEpoch++; subscribed = false; appStateSubscribed = false; dashboardSubscriptions.close(); dashboardPort = undefined;
   }
   function createWindow(): void {
-    const created = window = new BrowserWindow({width: 1280, height: 800, minWidth: 1100, minHeight: 720, title: 'Yukon Union Telemetry', titleBarStyle: 'hidden', titleBarOverlay: {color: '#0B1120', symbolColor: '#D1D5DB', height: 32}, webPreferences: {preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false}});
+    // A packaged window inherits the executable's icon (forge packagerConfig.icon). Development runs electron.exe, so it
+    // points at the same generated .ico in the repository.
+    const icon = app.isPackaged ? undefined : path.join(__dirname, '..', '..', '..', 'resources', 'icon', 'app.ico');
+    const created = window = new BrowserWindow({width: 1280, height: 800, minWidth: 1100, minHeight: 720, title: 'Yukon Union Telemetry', ...(icon && existsSync(icon) ? {icon} : {}),titleBarStyle: 'hidden', titleBarOverlay: {color: '#0B1120', symbolColor: '#D1D5DB', height: 32}, webPreferences: {preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false}});
     timeline?.('DASHBOARD_WINDOW_CREATED'); observeLoads(created.webContents, 'DASHBOARD');
     created.webContents.setWindowOpenHandler(() => ({action: 'deny'}));
     created.webContents.on('will-navigate', event => event.preventDefault());
@@ -606,7 +624,7 @@ function runApplication(profileError: unknown): void {
     // If creating the tray threw there is no tray way back, so closing minimizes instead. Electron does not report a
     // notification-area registration failure that does not throw; a second launch always reopens the dashboard.
     created.on('close', event => {if (!lifecycle.exiting && !tray) {event.preventDefault(); created.minimize();}});
-    created.on('session-end', () => requestExit('session-end'));
+    created.on('session-end', endWindowsSession);
     created.on('closed', () => {if (window !== created) return; retireDashboard(); window = undefined; timeline?.('DASHBOARD_WINDOW_CLOSED');});
     loadWindow(created);
   }

@@ -214,6 +214,14 @@ PR-3 (E2, E9, E12) runs one `V1Ingestion` in the telemetry service beside the v0
 - **Two brokers.** A game selection now runs two broker processes, one per protocol, each with its own directory, policy and lock. A v1 broker that finds no `transport\v1` directory (a plugin without v1) reports `waiting` and exits 2; the ingestion retries on the backoff above.
 - **Shutdown (R14).** The `v1-ingestion` step runs in the `intake` phase beside `ingestion` and `capture` with a 1,000 ms budget; it calls `stopSource()`, which ends the source and waits for the broker process, so nothing is acknowledged afterwards. The `recording-flush` step (ET-015a PR-3) is the only step of the `flush` phase, with a nominal 500 ms budget and the owner-approved [unused-intake allocation](app-lifecycle.md#recording-flush-allocation-et-012-correction); it calls `flush()`, which drops queued durable work and waits for the one storage command in flight, before the `storage` phase closes the database. Since ET-015b PR-3 it then writes the pending one-second samples (H11). Without a sink it has nothing to wait for. The phase maxima are 1,000 ms (`intake`) + 500 ms (`flush`) + 1,000 ms (`storage`) = 2,500 ms, exactly the nominal `SERVICE_STOP_BUDGET_MS` allocation before main's 3,000 ms kill deadline. ET-038 history floors and the event-loop verdict turn retain their scheduling limitations; this is not an absolute physical deadline.
 
+ET-011 allocation correction, October 22, 2026: the effective `recording-flush` allocation is its nominal 500 ms plus
+only unused registered intake time. Borrowing is capped by remaining `SERVICE_STOP_BUDGET_MS` after reserving the full
+registered future storage maximum. Prompt intake permits up to 1500 ms; full intake leaves 500 ms. No registered
+intake creates no extra allowance, other flush steps do not borrow, and history close uses actual remaining time
+without reusing spent allocation. Nominal floors, timeout-verdict turn, FULL durability and the 2500/3000/5000 ms
+sequence/main/application budgets remain. Slow work beyond its effective allocation still reports an unclean stop;
+host scheduling stalls are not bounded by a hard wall-clock guarantee.
+
 ## Recording gate (ET-015a)
 
 PR-3 (R3, R10, R14) decides in [recording-policy.ts](../apps/desktop/src/recording-policy.ts) whether the service records, and where. Production records no real game history: `GAME_HISTORY_RECORDING` is `false` (a unit test is a tripwire on it), and only the separate enablement PR may change it, after the v0 retirement (D2), real-game v1 evidence, ET-015b, ET-015c and the S-1/S-2 decision in ET-016. Both are done: ET-016 PR-6 persists trip fuel used (S-1, [trips](trips.md#readings-accounting-t16-t17)) and ET-016 PR-7 opens late-attach trips (S-2, [trips](trips.md#late-attach-trips-j9)), so the enablement PR no longer waits for them.

@@ -1,5 +1,34 @@
 # Regression scenario-to-test registry
 
+ET-011 hosted Hard Mode driver (October 22, 2026), REG-011/012: `hard-mode-proof-observation.test.ts` exercises the real
+monitor's coalesced read-plus-causal-bind interval and unchanged scan/coverage constraints. Passive polling loses proof;
+the active trusted-boundary driver observes distinct unlost publications. Separate ports prove sequential requests,
+loss rejection before acceptance, unchanged-stamp rejection, request errors and a single non-resetting deadline over
+hung refresh/status/predicate calls, with retained last status and no requests after failure or late settlement.
+
+ET-011 final-write allocation, October 22, 2026 (REG-006/011/012): `shutdown-sequence.test.ts` covers unused registered
+intake borrowing by recording flush, the future storage reserve, exact remaining close allocation, exhausted intake,
+no invented unregistered budget, other flush steps and a hanging flush. `shutdown-stalls.test.ts` adds a released and
+an indefinitely held final sample transaction through the production recording runtime and actual SQLite worker.
+Only the shutdown sequence clock is controlled after an observed hold; released work must stop cleanly with the exact
+sample, and over-budget work must stop unclean while preserving committed events, no ACK after intake and integrity.
+The existing test-index rows remain the entry points; production-timer coverage remains the packaged recording journey.
+
+ET-011 reconciliation, October 22, 2026 (REG-011/012): `snapshot-transport-test.cpp` forces a foreign discovery failure
+after the startup wait and requires the exact pending/deferred SDK-thread reports before shutdown, without a duplicate.
+Its protected-publication case holds I/O beyond the unchanged 1,000 ms measured shutdown target and requires mandatory
+join, cleanup and `shutdown_deadline_exceeded`; a target miss does not permit unloading a live worker. The refusal
+recovery storage case retains clean-stop, durable ACK and integrity expectations with separate timing/context
+diagnostics. Corrected owner sign-out/restart passed within the isolated scope recorded in
+[ET-011 validation](validation/et-011.md). Narrator and remaining in-game unit/close-to-tray observations are owned by
+[ET-043](https://trello.com/c/2fbiCET0), still unverified; the installed-check deferrals remain with ET-018.
+
+ET-011 Windows terminal boundary (October 21, 2026), partial REG-012/REG-017: `diagnostics.test.ts` and
+`main-boundaries.test.ts` protect synchronous terminal audit, cancelled queries and duplicate notifications. The
+packaged `scripts/ci/Invoke-SessionEndSmoke.ps1` sends native session messages only to the verified owned window after
+dashboard close. It checks the truthful handoff marker without weakening normal orderly-exit predicates. This is
+controlled native-message evidence; actual Windows sign-out/restart and service/storage completion remain separate.
+
 Read the full requirements in [TESTING.md](../TESTING.md). Pending means the owning component has not implemented an executable scenario; there are no passing empty cases. Partial protection does not satisfy the complete REG requirement.
 
 ET-011 closeout (October 21, 2026) adds `tests/unit/exit-observation.test.ts` (Node/Vitest,
@@ -148,6 +177,7 @@ Columns:
 | `tests/unit/diagnostics.test.ts` | Node unit (Vitest) | REG-017 | T, V (et-001) | ET-001 (#5) | PR (tests job, `npm test`) | security |
 | `tests/unit/event-loop-lag.test.ts` | Node unit (Vitest) | smoke evidence: REG-011, REG-012, REG-014, REG-016, REG-017 | V (ci-smoke-window-stall) | ET-022 (#46) | PR (tests job, `npm test`) | — |
 | `tests/unit/exit-observation.test.ts` | Node unit (Vitest), inert emitters/promises and controlled clock | harness: REG-012, REG-017 | R, T | ET-011 (#162) | PR (tests job, `npm test`) | regression |
+| `tests/unit/hard-mode-proof-observation.test.ts` | Node unit (Vitest), real monitor with gated read/bind, controlled clocks and trusted-request ports | harness: REG-011, REG-012 | R, T | ET-011 (#167), ET-026 journey | PR (tests job, `npm test`) | regression |
 | `tests/unit/game-folder.test.ts` | Node unit (Vitest) | REG-015 | R, F, V (et-017) | ET-017 (PR-2) | PR (tests job, `npm test`) | security |
 | `tests/unit/game-processes.test.ts` | Node unit (Vitest) | REG-015 | R, F, V (et-017) | ET-017 (PR-2) | PR (tests job, `npm test`) | — |
 | `tests/unit/guarded-fs.test.ts` | Node unit (Vitest) | harness: REG-015 | T, V (et-017) | ET-017 (PR-2) | PR (tests job, `npm test`) | security |
@@ -228,7 +258,7 @@ Columns:
 | `tests/unit/service-supervisor.test.ts` | Node unit (Vitest) | REG-011, REG-012 | R, T | ET-001 (#5) | PR (tests job, `npm test`) | regression |
 | `tests/unit/settings-schema.test.ts` | Node unit (Vitest) | REG-017 | R, F | ET-011b (#56) | PR (tests job, `npm test`) | — |
 | `tests/unit/settings-store.test.ts` | Node unit (Vitest) | REG-017 | R, F | ET-011b (#56) | PR (tests job, `npm test`) | regression |
-| `tests/unit/shutdown-sequence.test.ts` | Node unit (Vitest) | REG-011, REG-012 | R, T | ET-011a (#52); ET-038 | PR (tests job, `npm test`) | regression |
+| `tests/unit/shutdown-sequence.test.ts` | Node unit (Vitest) | REG-011, REG-012 | R, T | ET-011a (#52); ET-038; ET-011 (#167) | PR (tests job, `npm test`) | regression |
 | `tests/unit/simulator-v0.test.ts` | Node unit (Vitest) | REG-003 | R | ET-005a (#11) | PR (tests job, `npm test`) | gap |
 | `tests/unit/simulator-v1-cap0-import.test.ts` | Node unit (Vitest) | REG-008, REG-009, REG-010 | R, F | ET-005b PR-3 | PR (tests job, `npm test`) | — |
 | `tests/unit/simulator-v1-cap0-replay.test.ts` | Node unit/integration (Vitest, real pipes) | REG-001, REG-002, REG-008, REG-009 | R, F | ET-005b PR-3 | PR (tests job, `npm test`) | — |
@@ -295,7 +325,7 @@ Columns:
 | `tests/storage/sample-recorder.test.ts` | Storage (Vitest under Electron) | REG-001, REG-002, REG-003, REG-005, REG-009, REG-012 | R, F | ET-015b (#86) | PR (tests job, `npm run test:storage`) | gap |
 | `tests/storage/samples.test.ts` | Storage (Vitest under Electron) | REG-005, REG-009 | R, F | ET-013 (#51) | PR (tests job, `npm run test:storage`) | dedup |
 | `tests/storage/schema-constraints.test.ts` | Storage (Vitest under Electron) | REG-013 | R | ET-013 (#51) | PR (tests job, `npm run test:storage`) | historical fixture |
-| `tests/storage/shutdown-stalls.test.ts` | Storage (Vitest under Electron) | REG-006, REG-011, REG-012 | F, T, V (et-019) | ET-019 (PR-4); ET-038 | PR (tests job, `npm run test:storage`) | ACK, dedup, gap, trip completeness |
+| `tests/storage/shutdown-stalls.test.ts` | Storage (Vitest under Electron) | REG-006, REG-011, REG-012 | F, T, V (et-019) | ET-019 (PR-4); ET-038; ET-011 (#167) | PR (tests job, `npm run test:storage`) | ACK, dedup, gap, trip completeness |
 | `tests/storage/trip-accounting-effects.test.ts` | Storage (Vitest under Electron) | REG-001, REG-008 | R | ET-014 (#72) | PR (tests job, `npm run test:storage`) | trip completeness |
 | `tests/storage/trip-effects.test.ts` | Storage (Vitest under Electron) | REG-001, REG-003, REG-004, REG-005, REG-006, REG-008, REG-013 | R, F | ET-014 (#71) | PR (tests job, `npm run test:storage`) | dedup, trip completeness |
 | `tests/storage/trip-recorder-crash.test.ts` | Storage (Vitest under Electron) | REG-005, REG-006, REG-012 | R, F, T, V (et-019) | ET-015a (#77); ET-019 (PR-1) invariants, kill rows and seeded campaign | PR (tests job, `npm run test:storage`); Extended campaigns workflow (200 seeds) | ACK, dedup, gap, trip completeness |

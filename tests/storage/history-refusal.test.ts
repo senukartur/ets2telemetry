@@ -162,10 +162,10 @@ function service(env: Record<string, string>, controls: {now?: () => number; tim
   /** The service's orderly stop: the status first, then the real shutdown sequence with the runtime's three steps. */
   const stop = async () => {
     stopping = true; self.stopped = true; runtime.stopStatus();
-    const shutdown = tracedShutdown([]);
+    const shutdown = tracedShutdown(controls.timeline ?? []);
     runtime.register(shutdown.registrar);
     const result = await shutdown.sequence.run();
-    return {result, steps: shutdown.steps};
+    return {result, steps: shutdown.steps, diagnostics: shutdown.diagnostics};
   };
   return {runtime, logs, states, received, brokerLogs, health: () => health, workers: () => workers, stop,
     startRefused, read: (query: JournalQuery) => broker.request(query)};
@@ -441,8 +441,9 @@ describe('ET-019 PR-6: refused recording targets through the production service 
       await source.stop();
       expect(source.connections.map(connection => [connection.durable, connection.closedBy])).toEqual([[false, 'client'], [true, 'disconnect']]);
       expect(source.failures).toEqual([]);
-      const {result, steps} = await s.stop();
-      expect(result).toEqual({clean: true});
+      const {result, steps, diagnostics} = await s.stop();
+      console.info('controlled recovery shutdown', JSON.stringify(diagnostics));
+      expect(result, JSON.stringify({steps, diagnostics, timeline})).toEqual({clean: true});
       expect(steps.map(({phase, name, outcome}) => `${phase} ${name} ${outcome}`)).toEqual(['intake v1-ingestion ok', 'flush recording-flush ok', 'storage history-storage ok']);
       expect(s.logs.map(([event]) => event).filter(event => /^HISTORY_/.test(event))).toEqual(['HISTORY_STORAGE_UNAVAILABLE', 'HISTORY_STORAGE_OPENED', 'HISTORY_STORAGE_CLOSED']);
       readOnly(target(), db => {

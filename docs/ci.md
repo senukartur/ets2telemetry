@@ -700,6 +700,14 @@ The new steps run before **Installer lifecycle in a test root**, so the artifact
 
 ## ET-026 Hard Mode journey
 
+The October 22 ET-011 harness correction arms a new passing publication immediately after the pass screenshot, then
+drives the existing trusted `refreshHardMode()` and status requests sequentially while waiting for the open audit,
+both distinct persisted passing publications and the qualifying delivery. The production monitor may coalesce these
+requests and still enforces its unchanged scan/probe limits and causal boundary. A single 8-second deadline covers
+each passing-refresh wait, including pending requests; original open/audit/delivery waits retain 5 seconds. Loss fails
+immediately and the receipt retains the last status for every positive wait. No coverage grace, future proof or new
+IPC/test hook is introduced; the driver stops on completion/failure and consumes late request settlement.
+
 `Invoke-RuntimeSmoke.ps1 -Mode development -Scenario hard-mode` and the corresponding `-Mode packaged` command run the existing 60-second Job, 16-process/2-GiB/25%-CPU containment and clean shutdown checks. In Windows PowerShell 5.1 provide an explicit absolute `-OutputRoot` if its parameter-default evaluation does not expose `PSScriptRoot`. The Windows CI workflow runs the development journey only on main pushes/manual dispatch, matching the existing development-smoke placement; the packaged journey also runs on pull requests. All three required jobs and every existing smoke remain.
 
 `hard-mode-observation.mjs` serves a synthetic v1 endpoint and only writes fixed fixture configs/logs under the run's isolated LOCALAPPDATA `ETS2Telemetry/synthetic/hard-mode-fixture`. The app enables this reader only with LIVE_SMOKE, the explicit Hard Mode fixture flag and a synthetic/replay recording target. It accepts only that fixture origin; real game sources never use fixture process facts. No renderer may select files or evaluator values.

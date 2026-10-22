@@ -7,6 +7,7 @@ import {mkdir, readFile, writeFile, rm, open} from 'node:fs/promises';
 import path from 'node:path';
 import {until} from './lifecycle-observation.mjs';
 import {clickTestId, openDetail, stubSaveDialog, exportValidator} from './journal-observation.mjs';
+import {waitForHardModeProof} from './hard-mode-proof-observation.mjs';
 export const HARD_MODE_TARGET = 'synthetic:hard-mode';
 const CONFIG = `uset g_fuel_simulation "1"
 uset g_hardcore_simulation "1"
@@ -81,6 +82,11 @@ export async function startHardModeSource(config) {
 const current = page => page.evaluate(() => globalThis.desktop.getHardModeStatus());
 const trips = page => page.evaluate(async () => {const result = await globalThis.desktop.listJournalTrips(); return result.ok ? result.value.trips : [];});
 export async function runHardModeSmoke({application, dashboard, source, config, record}) {
+  const proof = (message, accept, timeoutMs = 8000) => {
+    const observation = {message}; (record.proofWaits ??= []).push(observation);
+    return waitForHardModeProof({message, accept, timeoutMs, record: observation, read: () => current(dashboard),
+      refresh: () => dashboard.evaluate(() => globalThis.desktop.refreshHardMode())});
+  };
   await chooseSource(dashboard, 'synthetic');
   await until(source.connected, Boolean, 'HARD_MODE_DURABLE_SOURCE', 10000);
   await until(async () => (await current(dashboard)).assessment.state, value => value === 'unknown', 'HARD_MODE_UNKNOWN', 5000); record.unknown = true; await until(() => dashboard.locator('[data-testid^="hard-mode-rule-"][data-state="unknown"]').count(), count => count === 12, 'HARD_MODE_UNKNOWN_NAMES', 5000); await dashboard.getByTestId('hard-mode-card').screenshot({path: path.join(config.output, 'hard-mode-unknown.png')});
@@ -147,17 +153,24 @@ export async function runHardModeSmoke({application, dashboard, source, config, 
   await clickTestId(dashboard, 'hard-mode-refresh');
   record.hints = true; record.hover = true; record.drawer = true; record.bilingual = true; record.keyboard = true; record.refresh = true;
   await source.settings('pass'); await until(async () => (await current(dashboard)).assessment.state, value => value === 'pass', 'HARD_MODE_PASS', 8000); record.pass = true; await until(() => dashboard.getByTestId('hard-mode-card').getAttribute('data-state'), state => state === 'pass', 'HARD_MODE_RENDERED_PASS', 5000); await dashboard.getByTestId('hard-mode-card').screenshot({path: path.join(config.output, 'hard-mode-pass.png')});
+  // Screenshots and the bilingual hint journey may outlive proof. Arm a new genuine publication immediately before
+  // opening; subsequent waits drive the trusted refresh boundary instead of assuming a periodic tick was eligible.
+  const beforeOpening = (await current(dashboard)).assessment.observedUtcMs;
+  await proof('HARD_MODE_ARMED_PASS', value => value.assessment.state === 'pass' && value.assessment.observedUtcMs !== beforeOpening);
   source.begin('qualifying');
-  await until(async () => await trips(dashboard), rows => rows.length === 1 && rows[0].outcome === 'open', 'HARD_MODE_OPEN', 5000);
+  await proof('HARD_MODE_OPEN', async () => {const rows = await trips(dashboard); return rows.length === 1 && rows[0].outcome === 'open';}, 5000);
   // Require two distinct persisted passing publications while this trip is open, through the production adapter.
-  let observed = (await until(() => current(dashboard), value => value.trip?.latest.state === 'pass' && value.trip.firstLoss === null, 'HARD_MODE_OPEN_AUDIT', 5000)).trip.latest.observedUtcMs;
+  let observed = (await proof('HARD_MODE_OPEN_AUDIT', value => value.trip?.latest.state === 'pass' && value.trip.firstLoss === null, 5000)).trip.latest.observedUtcMs;
   for (let refresh = 0; refresh < 2; refresh++) {
-    await clickTestId(dashboard, 'hard-mode-refresh');
-    const next = await until(() => current(dashboard), value => value.trip?.latest.state === 'pass' && value.trip.firstLoss === null && value.trip.latest.observedUtcMs !== observed, 'HARD_MODE_OPEN_PASSING_REFRESH', 8000);
-    assert.equal((await trips(dashboard))[0].outcome, 'open'); observed = next.trip.latest.observedUtcMs;
+    const next = await proof('HARD_MODE_OPEN_PASSING_REFRESH', async value => {
+      if (value.trip?.latest.state !== 'pass' || value.trip.firstLoss !== null || value.trip.latest.observedUtcMs === observed) return false;
+      assert.equal((await trips(dashboard))[0].outcome, 'open'); return true;
+    });
+    observed = next.trip.latest.observedUtcMs;
   }
   source.deliver();
-  const positive = await until(async () => await trips(dashboard), rows => rows.length === 1 && rows[0].isHardMode === true, 'HARD_MODE_QUALIFIED', 5000);
+  let positive;
+  await proof('HARD_MODE_QUALIFIED', async () => {positive = await trips(dashboard); return positive.length === 1 && positive[0].isHardMode === true;}, 5000);
   record.qualified = positive[0].tripUuid;
   source.begin('lost');
   await until(async () => await trips(dashboard), rows => rows.length === 2 && rows[0].outcome === 'open', 'HARD_MODE_SECOND_OPEN', 5000);

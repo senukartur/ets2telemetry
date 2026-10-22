@@ -226,6 +226,63 @@ it('strictly enforces total 2500 ms bound by timing out a hanging storage step a
   });
 });
 
+it('borrows unused registered intake for recording flush without spending the storage reserve twice', async () => {
+  const f = fixture();
+  let flushContext: ShutdownStepContext | undefined, historyContext: ShutdownStepContext | undefined;
+  f.sequence.register('intake', {name: 'v1-ingestion', budgetMs: 1000, run: () => new Promise(resolve => setTimeout(resolve, 30))});
+  f.sequence.register('flush', {name: 'recording-flush', budgetMs: 500, run: context => {
+    flushContext = context; return new Promise(resolve => setTimeout(resolve, 900));
+  }});
+  f.sequence.register('storage', {name: 'history-storage', budgetMs: 1000, run: context => {
+    historyContext = context; return new Promise(resolve => setTimeout(resolve, 1200));
+  }});
+  const result = f.sequence.run();
+  await vi.advanceTimersByTimeAsync(2130);
+  await expect(result).resolves.toEqual({clean: true});
+  expect(flushContext).toEqual({budgetMs: 1470});
+  expect(historyContext).toEqual({budgetMs: 1570, graceMs: 1370});
+  expect(f.steps().map(step => step.outcome)).toEqual(['ok', 'ok', 'ok']);
+  expect(f.sequence.budgetMs).toBe(2500);
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it.each([0, 200, 1000, 1500])('borrows only unused registered intake after %i ms, never unregistered slack', async elapsed => {
+  const f = fixture();
+  let flushContext: ShutdownStepContext | undefined;
+  if (elapsed !== 0) f.sequence.register('intake', {name: 'v1-ingestion', budgetMs: 1000, run: () => {
+    // Move the measured clock without executing the budget timer, as after synchronous work or host preemption.
+    vi.setSystemTime(Date.now() + elapsed);
+  }});
+  f.sequence.register('flush', {name: 'recording-flush', budgetMs: 500, run: context => {flushContext = context;}});
+  f.sequence.register('storage', {name: 'history-storage', budgetMs: 1000, run: () => undefined});
+  await expect(f.sequence.run()).resolves.toEqual({clean: true});
+  expect(flushContext).toEqual({budgetMs: elapsed === 0 ? 500 : 500 + Math.max(0, 1000 - elapsed)});
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it('times out a hanging borrowed flush while preserving the future storage reservation', async () => {
+  const f = fixture();
+  let historyContext: ShutdownStepContext | undefined;
+  f.sequence.register('intake', {name: 'v1-ingestion', budgetMs: 1000, run: () => undefined});
+  f.sequence.register('flush', {name: 'recording-flush', budgetMs: 500, run: () => new Promise<void>(() => undefined)});
+  f.sequence.register('storage', {name: 'history-storage', budgetMs: 1000, run: context => {historyContext = context;}});
+  const result = f.sequence.run(); await vi.advanceTimersByTimeAsync(1500);
+  expect(f.steps().map(step => step.name)).toEqual(['v1-ingestion']);
+  await vi.advanceTimersByTimeAsync(1);
+  await expect(result).resolves.toEqual({clean: false});
+  expect(f.steps()).toContainEqual({phase: 'flush', name: 'recording-flush', outcome: 'timeout', ms: 1501});
+  expect(historyContext).toEqual({budgetMs: 1000, graceMs: 800});
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it('does not transfer recording flush allocation to another flush step', async () => {
+  const f = fixture();
+  let context: ShutdownStepContext | undefined;
+  f.sequence.register('intake', {name: 'ingestion', budgetMs: 1000, run: () => undefined});
+  f.sequence.register('flush', {name: 'other-flush', budgetMs: 500, run: value => {context = value;}});
+  await f.sequence.run(); expect(context).toEqual({budgetMs: 500});
+});
+
 it('reports a clean empty sequence without timers', async () => {
   const f = fixture();
   await expect(f.sequence.run()).resolves.toEqual({clean: true});

@@ -1,5 +1,20 @@
 # Agent Instructions
 
+## ET-011 closeout authorization — October 22, 2026
+
+The owner authorized investigating the local verification failures and taking PR #167 through independent review,
+final automatic Windows CI after Ready and squash merge, then closing ET-011. Narrator accessibility and the remaining
+in-game unit-profile and close-to-tray overlay checks move, **unverified**, to
+[ET-043](https://trello.com/c/2fbiCET0). The installed Start-menu and settings-through-update checks retain their existing
+ET-018 deferral; this decision neither passes nor waives them. Corrected real Windows sign-out and restart passed in
+separate isolated synthetic sessions; see [ET-011 validation](docs/validation/et-011.md).
+
+The existing native contract requires a mandatory join even when protected I/O exceeds the measured 1,000 ms shutdown
+target, and permits a pending startup followed by one deferred SDK-thread result. Tests must preserve those outcomes,
+the diagnostic threshold and ownership, rather than impose an undocumented universal deadline. Historical failed
+observations and unknown causes stay recorded. This authorization does not assert that the remaining code gates have
+passed, enable real recording, authorize a release or accept the transferred checks.
+
 ## ET-009 acceptance and diagnostic PR handoff — October 20, 2026
 
 The owner accepted the full ET-009 prototype gate and moved the card to Done after reviewing the
