@@ -5,19 +5,16 @@ import {afterEach, describe, expect, it, vi} from 'vitest';
 import {
   completeLiveObservation, currentTelemetryObservation, notCurrentLiveObservation, overlayOverflow, overlayV1Observation, SYNTHETIC_V0_HIDDEN_ROWS,
   SYNTHETIC_V0_LIVE_ROWS, SYNTHETIC_V0_VALUE_IDS, SYNTHETIC_V0V1_HIDDEN_ROWS, SYNTHETIC_V0V1_LIVE_ROWS, SYNTHETIC_V1_OVERLAY_CURRENT, SYNTHETIC_V1_OVERLAY_STOPPED,
-  SYNTHETIC_V1_OVERLAY_V0_STALE, SYNTHETIC_V1_OVERLAY_V1_STALE, SYNTHETIC_V1_VALUE_IDS, v1NotCurrentObservation, waitForCompleteLive, waitForCurrentTelemetry,
+  SYNTHETIC_V1_OVERLAY_V0_STALE, SYNTHETIC_V1_OVERLAY_V1_STALE, SYNTHETIC_V1_LIVE_ROWS, SYNTHETIC_V1_VALUE_IDS, v1NotCurrentObservation, waitForCompleteLive, waitForCurrentTelemetry,
   waitForNotCurrentLive, type RendererObservation
 } from '../../scripts/ci/renderer-observation.mjs';
 
-const current = {status: 'connected: Validated current observation', speed: 'Speed: 90.0 km/h', fuel: 'Fuel: 73.0 L'};
+const current = {gauge: {number: '90', unit: 'km/h', accessibleName: 'Speed: 90 km/h; Engine RPM: 600 rpm', visible: true}, status: 'connected: Validated current observation', speed: 'Speed: 90 km/h', fuel: 'Fuel: 73.0 L'};
 const stale = {status: 'stale: No recent current observation', speed: 'Speed: unavailable', fuel: 'Fuel: unavailable'};
 function controlledPage(samples: RendererObservation[]) {
   let index = 0, elapsed = 0, disposed = false; const bounds: number[] = [];
   const next = () => samples[Math.min(index++, samples.length - 1)];
-  const documentFor = (sample: RendererObservation) => ({querySelectorAll: (selector: string) => {
-    const key = selector.includes('telemetry-status') ? 'status' : selector.includes('speed') ? 'speed' : 'fuel';
-    return [{innerText: sample[key], getBoundingClientRect: () => ({width: 100, height: 20, top: 10, left: 10, bottom: 30, right: 110})}];
-  }});
+  const documentFor = (sample: RendererObservation) => fakeGlobals({'telemetry-status': one(sample.status), speed: one(sample.speed), fuel: one(sample.fuel)}).document;
   const page = {
     // These separate legacy reads intentionally advance between renderer observations.
     getByText: (text: string) => ({waitFor: () => {
@@ -77,16 +74,24 @@ describe('coherent renderer acceptance', () => {
 });
 
 // ET-010b live card predicates. The fake document returns elements by exact data-testid.
-interface FakeElement {innerText: string; visibility?: string; box?: {width: number; height: number; top: number}}
+interface FakeElement {innerText: string; attributes?: Record<string, string>; visibility?: string; box?: {width: number; height: number; top: number}}
 type Change = (elements: Record<string, FakeElement[]>) => void;
 function fakeGlobals(elements: Record<string, FakeElement[]>) {
   if (elements['telemetry-status'] && !elements['shell.status.connection']) elements = {...elements, 'shell.status.connection': elements['telemetry-status']};
-  return {innerWidth: 784, innerHeight: 435, getComputedStyle: (element: {visibility: string}) => ({visibility: element.visibility}), document: {querySelectorAll: (selector: string) => {
+  // Semantic speed fixtures now materialize the existing visible SVG, without a legacy paragraph.
+  if (elements.speed) {
+    const input = elements.speed[0], text = input.innerText.slice('Speed: '.length), missing = text === 'unavailable';
+    const pieces = text.split(' '), value = missing ? '—' : pieces[0], unit = missing ? 'km/h' : pieces.slice(1).join(' ');
+    elements = {...elements, 'live-speed-number': [{...input, innerText: value}], 'live-speed-unit': [{...input, innerText: unit}],
+      'live-speed-gauge': [{innerText: '', attributes: {role: 'img', 'aria-label': input.innerText + '; Engine RPM: 600 rpm'}}]};
+    delete elements.speed;
+  }
+  return {innerWidth: 784, innerHeight: 435, getComputedStyle: (element: {visibility: string}) => ({visibility: element.visibility}), document: {documentElement: {lang: 'en'}, querySelectorAll: (selector: string) => {
     const id = /^\[data-testid="([^"]+)"\]$/.exec(selector)?.[1];
     if (!id) throw new Error(`unexpected selector ${selector}`);
     return (elements[id] ?? []).map(element => {
       const box = element.box ?? {width: 100, height: 20, top: 10};
-      return {innerText: element.innerText, visibility: element.visibility ?? 'visible',
+      return {innerText: element.innerText, textContent: element.innerText, getAttribute: (name: string) => element.attributes?.[name] ?? null, visibility: element.visibility ?? 'visible',
         getBoundingClientRect: () => ({...box, left: 10, right: 10 + box.width, bottom: box.top + box.height})};
     });
   }}};
@@ -146,7 +151,7 @@ describe('ET-010b not-current live card observation', () => {
   });
   it.each<[string, Change]>([
     ['a connected status', (elements: Record<string, FakeElement[]>) => {elements['telemetry-status'] = one('connected: Validated current observation');}],
-    ['a current legacy speed', (elements: Record<string, FakeElement[]>) => {elements.speed = one('Speed: 90.0 km/h');}],
+    ['a current legacy speed', (elements: Record<string, FakeElement[]>) => {elements.speed = one('Speed: 90 km/h');}],
     ['an offscreen legacy speed', (elements: Record<string, FakeElement[]>) => {elements.speed = one('Speed: unavailable', {box: {width: 100, height: 20, top: 500}});}],
     ['a row still showing R1', (elements: Record<string, FakeElement[]>) => {elements['live-gear'] = one('R1'); delete elements['live-gear-reason'];}],
     ['a row with another reason', (elements: Record<string, FakeElement[]>) => {elements['live-cargo-reason'] = one('not yet observed');}],
@@ -168,20 +173,20 @@ describe('ET-010c combined live card observation', () => {
   });
 });
 const v1NotCurrentElements = (): Record<string, FakeElement[]> => ({
-  'live-v1-status': one('stale: Renderer has no recent v1 SDK capture', {box: {width: 100, height: 20, top: 900}}), 'speed': one('Speed: 90.0 km/h'),
+  'live-v1-status': one('stale: Renderer has no recent v1 SDK capture', {box: {width: 100, height: 20, top: 900}}), 'speed': one('Speed: 90 km/h'),
   ...Object.fromEntries(SYNTHETIC_V1_VALUE_IDS.flatMap(id => [[id, one('unavailable', {box: {width: 100, height: 20, top: 900}})], [`${id}-reason`, one('not current')]]))
 });
 describe('ET-010c not-current v1 observation', () => {
-  const expectedV1 = {values: SYNTHETIC_V1_VALUE_IDS, status: '^stale:', speed: 'Speed: 90.0 km/h'};
+  const expectedV1 = {values: SYNTHETIC_V1_VALUE_IDS, status: '^stale:', speed: 'Speed: 90 km/h', statusId: 'live-v1-status', omitFuel: true};
   it('accepts unavailable v1 rows below the fold beside a current legacy speed line', () => {
     stubDocument(v1NotCurrentElements());
-    expect(v1NotCurrentObservation(expectedV1)).toMatchObject({status: 'stale: Renderer has no recent v1 SDK capture', speed: 'Speed: 90.0 km/h', 'live-route-remaining': 'unavailable'});
+    expect(v1NotCurrentObservation(expectedV1)).toMatchObject({status: 'stale: Renderer has no recent v1 SDK capture', speed: 'Speed: 90 km/h', 'live-route-remaining': 'unavailable'});
   });
   it.each<[string, Change]>([
     ['a connected v1 status', (elements: Record<string, FakeElement[]>) => {elements['live-v1-status'] = one('connected: Validated current observation');}],
     ['a missing v1 status', (elements: Record<string, FakeElement[]>) => {delete elements['live-v1-status'];}],
     ['an unavailable legacy speed', (elements: Record<string, FakeElement[]>) => {elements.speed = one('Speed: unavailable');}],
-    ['an offscreen legacy speed', (elements: Record<string, FakeElement[]>) => {elements.speed = one('Speed: 90.0 km/h', {box: {width: 100, height: 20, top: 500}});}],
+    ['an offscreen legacy speed', (elements: Record<string, FakeElement[]>) => {elements.speed = one('Speed: 90 km/h', {box: {width: 100, height: 20, top: 500}});}],
     ['a v1 row still showing its value', (elements: Record<string, FakeElement[]>) => {elements['live-route-remaining'] = one('151.0 km'); delete elements['live-route-remaining-reason'];}],
     ['a v1 row with another reason', (elements: Record<string, FakeElement[]>) => {elements['live-position-reason'] = one('not yet observed');}],
     ['a missing v1 row', (elements: Record<string, FakeElement[]>) => {delete elements['live-game-mode'];}]
@@ -189,6 +194,43 @@ describe('ET-010c not-current v1 observation', () => {
     const elements = v1NotCurrentElements(); change(elements); stubDocument(elements);
     expect(v1NotCurrentObservation(expectedV1)).toBe(false);
   });
+});
+
+// The real Yukon content area scrolls: primary instruments are in view, while Details follows Current job.
+function scrollableDetails(v1Stale: boolean) {
+  const elements = v1Stale ? v1NotCurrentElements() : notCurrentElements();
+  if (!v1Stale) {
+    for (const [id, text] of SYNTHETIC_V1_LIVE_ROWS) elements[id] = one(text, {box: {width: 100, height: 20, top: 900}});
+  }
+  for (const [id, nodes] of Object.entries(elements)) if (id.startsWith('live-')) {
+    for (const node of nodes) node.box = {width: 100, height: 20, top: 900};
+  }
+  const observe = () => {
+    const globals = fakeGlobals(elements), read = globals.document.querySelectorAll, style = globals.getComputedStyle;
+    const scroll = {visibility: 'visible', opacity: '1', overflowX: 'hidden', overflowY: 'auto',
+      getBoundingClientRect: () => ({left: 0, right: 784, top: 0, bottom: 435})};
+    globals.document.querySelectorAll = selector => read(selector).map(node => ({...node, parentElement: scroll}));
+    globals.getComputedStyle = node => ({...style(node), ...node});
+    const expected = v1Stale ? {values: SYNTHETIC_V1_VALUE_IDS, status: '^stale:', speed: 'Speed: 90 km/h', statusId: 'live-v1-status', omitFuel: true}
+      : {values: SYNTHETIC_V0_VALUE_IDS, status: '^stale:', hidden: []};
+    return runInNewContext('(' + notCurrentLiveObservation.toString() + ')(expected)', {...globals, expected}) as unknown;
+  };
+  return {elements, observe, id: v1Stale ? 'live-route-remaining' : 'live-gear'};
+}
+it.each([false, true])('accepts exact below-fold details inside a real-shaped scrolling ancestor (v1 stale: %s)', v1Stale => {
+  const fixture = scrollableDetails(v1Stale);
+  expect(fixture.observe()).toMatchObject({[fixture.id]: 'unavailable', speed: v1Stale ? 'Speed: 90 km/h' : 'Speed: unavailable'});
+});
+it.each([false, true])('still rejects wrong/missing/duplicate/hidden below-fold detail values and reasons (v1 stale: %s)', v1Stale => {
+  for (const reason of [false, true]) for (const fault of ['wrong', 'missing', 'duplicate', 'hidden', 'zero box']) {
+    const fixture = scrollableDetails(v1Stale), id = fixture.id + (reason ? '-reason' : '');
+    if (fault === 'wrong') fixture.elements[id] = one('unexpected');
+    if (fault === 'missing') delete fixture.elements[id];
+    if (fault === 'duplicate') fixture.elements[id].push(fixture.elements[id][0]);
+    if (fault === 'hidden') fixture.elements[id][0].visibility = 'hidden';
+    if (fault === 'zero box') fixture.elements[id][0].box = {width: 0, height: 20, top: 900};
+    expect(fixture.observe(), id + '/' + fault).toBe(false);
+  }
 });
 
 /** A fake overlay document: text by test id, and the root's data attributes. */
@@ -245,17 +287,39 @@ describe('ET-010c overlay v1 observation', () => {
 
 
 it.each(['en', 'ru'])('accepts only a coherent exact zero speed/fuel and numeric geometry in %s', language => {
-  const zero = {speed: language === 'en' ? 'Speed: 0.0 km/h' : 'Скорость: 0.0 км/ч', fuel: language === 'en' ? 'Fuel: 0.0 L' : 'Топливо: 0.0 л', number: '0.0', arc: false, height: '0%', tankState: 'value', unavailable: false};
+  const zero = {speed: language === 'en' ? 'Speed: 0.0 km/h' : 'Скорость: 0.0 км/ч', fuel: language === 'en' ? 'Fuel: 0.0 L' : 'Топливо: 0.0 л', number: '0', arc: false, height: '0%', tankState: 'value', unavailable: false};
   const observe = (patch: Partial<typeof zero>) => {
     const sample = {...zero, ...patch};
-    const document = {querySelector: (selector: string) => selector === '[data-testid="speed"]' ? {innerText: sample.speed} : selector === '[data-testid="fuel"]' ? {innerText: sample.fuel} : selector === '.yu-gauge-number' ? {textContent: sample.number} : selector === '.yu-gauge-speed' ? sample.arc ? {} : null : selector === '[data-testid="live.instrument.tank"]' ? {getAttribute: () => sample.tankState} : selector === '.yu-tank-unavailable' ? sample.unavailable ? {} : null : {style: {height: sample.height}}};
+    const document = {querySelector: (selector: string) => selector === '[data-testid="speed"]' ? null : selector === '[data-testid="live-speed-number"]' ? {textContent: sample.number} : selector === '[data-testid="fuel"]' ? {innerText: sample.fuel} : selector === '.yu-gauge-number' ? {textContent: sample.number} : selector === '.yu-gauge-speed' ? sample.arc ? {} : null : selector === '[data-testid="live.instrument.tank"]' ? {getAttribute: () => sample.tankState} : selector === '.yu-tank-unavailable' ? sample.unavailable ? {} : null : {style: {height: sample.height}}};
     return runInNewContext(`(${zeroLiveObservation.toString()})(language)`, {document, language}) as unknown;
   };
   expect(observe({})).toBe(true);
-  expect(observe({speed: zero.speed.replace('0.0', '90.0')})).toBe(false);
+  expect(observe({number: '90'})).toBe(false);
   expect(observe({fuel: zero.fuel.replace('0.0', '73.0')})).toBe(false);
   expect(observe({number: '90.0'})).toBe(false);
   expect(observe({arc: true})).toBe(false);
   expect(observe({height: '7.3%'})).toBe(false);
   expect(observe({tankState: 'unavailable'})).toBe(false); expect(observe({unavailable: true})).toBe(false);
+});
+
+it.each(['wrong number','wrong unit','wrong accessible name','missing accessible name','hidden number','outside gauge','duplicate number','legacy paragraph','transparent number','transparent ancestor','clipped viewport','clipped ancestor'])('rejects actual SVG gauge evidence: %s', fault => {
+  const elements: Record<string, FakeElement[]> = {'telemetry-status': one(current.status), fuel: one(current.fuel),
+    'live-speed-number': one(fault === 'wrong number' ? '91' : '90'), 'live-speed-unit': one(fault === 'wrong unit' ? 'mph' : 'km/h'),
+    'live-speed-gauge': [{innerText: '', attributes: {role: 'img', 'aria-label': 'Speed: 90 km/h; Engine RPM: 600 rpm'}}]};
+  if (fault === 'wrong accessible name') elements['live-speed-gauge'][0].attributes!['aria-label'] = 'Speed: unavailable';
+  if (fault === 'missing accessible name') delete elements['live-speed-gauge'][0].attributes!['aria-label'];
+  if (fault === 'hidden number') elements['live-speed-number'][0].visibility = 'hidden';
+  if (fault === 'outside gauge') elements['live-speed-number'][0].box = {width: 100, height: 20, top: 31};
+  if (fault === 'duplicate number') elements['live-speed-number'].push(elements['live-speed-number'][0]);
+  const globals = fakeGlobals(elements);
+  if (fault === 'legacy paragraph') {const read = globals.document.querySelectorAll; globals.document.querySelectorAll = selector => selector === '[data-testid="speed"]' ? read('[data-testid="live-speed-number"]') : read(selector);}
+  const getStyle = globals.getComputedStyle;
+  if (fault === 'transparent number' || fault === 'transparent ancestor' || fault === 'clipped ancestor') {
+    const read = globals.document.querySelectorAll;
+    globals.document.querySelectorAll = selector => read(selector).map(node => selector === '[data-testid="live-speed-number"]'
+      ? {...node, ...(fault === 'transparent number' ? {opacity: '0'} : {parentElement: {visibility: 'visible', opacity: fault === 'transparent ancestor' ? '0' : '1', overflowX: 'hidden', getBoundingClientRect: () => ({left: 50, right: 80})}})} : node);
+    globals.getComputedStyle = node => ({...getStyle(node), ...node});
+  }
+  if (fault === 'clipped viewport') globals.innerWidth = 100;
+  expect(runInNewContext('(' + currentTelemetryObservation.toString() + ')()', globals)).toBe(false);
 });

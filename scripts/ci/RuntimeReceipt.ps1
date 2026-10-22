@@ -38,6 +38,19 @@ function Test-ReceiptInteger {
     return ([math]::Truncate([decimal]$Value) -eq [decimal]$Value -and [double]$Value -ge $Minimum -and [double]$Value -le $Maximum)
 }
 
+# Exact visible SVG evidence; the speed string is derived from the observed number and unit.
+function Test-LiveGaugeReceipt {
+    param([object]$Reading)
+    $gauge = $Reading.gauge
+    if ($null -eq $gauge -or ((@($gauge.PSObject.Properties.Name) | Sort-Object) -join ',') -cne 'accessibleName,number,unit,visible' -or
+        $gauge.number -isnot [string] -or $gauge.unit -isnot [string] -or $gauge.accessibleName -isnot [string] -or
+        $gauge.visible -isnot [bool] -or !$gauge.visible -or $gauge.unit -cnotin @('km/h','mph') -or
+        $gauge.number -cnotmatch ('^(?:-?[0-9]+|' + [char]0x2014 + ')$')) { return $false }
+    $expected = if ($gauge.number -ceq [string][char]0x2014) { 'Speed: unavailable' } else { 'Speed: ' + $gauge.number + ' ' + $gauge.unit }
+    $prefix = $expected + '; Engine RPM: '
+    return ($Reading.speed -ceq $expected -and $gauge.accessibleName.StartsWith($prefix, [StringComparison]::Ordinal) -and $gauge.accessibleName.Length -gt $prefix.Length)
+}
+
 # Exactly one APP_EXIT and SERVICE_EXIT with code 0, the service's single clean stopped report and only clean shutdown steps.
 function Test-OrderlyRunEvent {
     param([object[]]$MainEvents, [object[]]$ServiceEvents)
@@ -71,7 +84,7 @@ function Test-LifecycleReceipt {
         $lifecycle.restart.servicePid -eq $lifecycle.servicePid -or $lifecycle.afterClose.servicePid -ne $lifecycle.servicePid) { return $false }
     foreach ($flag in @('dashboard','exiting')) { if ($lifecycle.afterClose.$flag -isnot [bool] -or $lifecycle.afterClose.$flag) { return $false } }
     foreach ($flag in @('overlay','tray','upstream')) { if ($lifecycle.afterClose.$flag -isnot [bool] -or !$lifecycle.afterClose.$flag) { return $false } }
-    foreach ($reading in @(@{row=$lifecycle.overlayChanged; speed='72.0'; fuel='71.0'}, @{row=$lifecycle.overlayRestored; speed='90.0'; fuel='73.0'})) {
+    foreach ($reading in @(@{row=$lifecycle.overlayChanged; speed='72'; fuel='71.0'}, @{row=$lifecycle.overlayRestored; speed='90'; fuel='73.0'})) {
         $row = $reading.row
         if ($null -eq $row -or $row.source -cne 'ETS2' -or $row.origin -cne 'synthetic' -or $row.freshness -cne 'current' -or $row.status -cne 'connected' -or
             $row.speed -cne $reading.speed -or $row.fuel -cne $reading.fuel) { return $false }
@@ -148,18 +161,18 @@ function Test-LifecycleSettingsReceipt {
     param([object]$Driver)
     $lifecycle = $Driver.lifecycle
     foreach ($field in @('settingsSeededInvalidFile','settingsStartupUnchanged','settingsQuarantinePreserved','settingsSavedExact',
-        'unitsApplied','settingsRestartLoaded')) {
+        'unitsApplied','settingsRestartLoaded','overlayVisibilitySaved','overlayVisibilityRestarted','syntheticOverlayHiddenAfterOff')) {
         if ($lifecycle.$field -isnot [bool] -or $lifecycle.$field -ne $true) { return $false }
     }
     if (!(Test-ReceiptInteger -Value $lifecycle.settingsQuarantined -Minimum 1 -Maximum 1) -or $lifecycle.restart.settingsState -cne 'loaded') { return $false }
     $units = $lifecycle.overlayUnits
     if ($null -eq $units -or $units.source -cne 'ETS2' -or $units.origin -cne 'synthetic' -or $units.status -cne 'connected' -or
-        $units.freshness -cne 'current' -or $units.speed -cne '55.9' -or $units.speedUnit -cne 'mph' -or
+        $units.freshness -cne 'current' -or $units.speed -cne '56' -or $units.speedUnit -cne 'mph' -or
         $units.fuel -cne '19.3' -or $units.fuelUnit -cne 'US gal') { return $false }
     foreach ($row in @($lifecycle.dashboardUnits, $lifecycle.restart.dashboardUnits)) {
-        if ($null -eq $row -or $row.speed -cne 'Speed: 55.9 mph' -or $row.fuel -cne 'Fuel: 19.3 US gal') { return $false }
+        if (!(Test-LiveGaugeReceipt -Reading $row) -or $row.speed -cne 'Speed: 56 mph' -or $row.fuel -cne 'Fuel: 19.3 US gal') { return $false }
     }
-    # Diagnostics: run A falls back from the invalid file, quarantines it once and saves once; run B only loads.
+    # Diagnostics: run A falls back from the invalid file, quarantines it once and saves units then visibility false; run B only loads.
     # A read past the 1000 ms load budget adds one SETTINGS_LOAD_PENDING row before any other settings row of that run.
     foreach ($rows in @(@($Driver.mainEvents), @($lifecycle.restartMainEvents))) {
         $settingsRows = @($rows | Where-Object { $_.event -cmatch '^SETTINGS_' })
@@ -171,7 +184,12 @@ function Test-LifecycleSettingsReceipt {
     }
     $fallback = @($Driver.mainEvents | Where-Object { $_.event -ceq 'SETTINGS_FALLBACK' })
     if ($fallback.Count -ne 1 -or $fallback[0].facts.state -cne 'invalid-file') { return $false }
-    foreach ($eventName in @('SETTINGS_QUARANTINED','SETTINGS_SAVED')) {
+    if ($lifecycle.restart.overlayEnabled -isnot [bool] -or $lifecycle.restart.overlayEnabled) { return $false }
+    $visibilitySaves = @($Driver.mainEvents | Where-Object { $_.event -ceq 'SETTINGS_SAVED' })
+    if ($visibilitySaves.Count -ne 2 -or $visibilitySaves[0].facts.game -cne 'ets2' -or $visibilitySaves[0].facts.profile -cne 'us-customary' -or
+        $visibilitySaves[1].facts.overlayEnabled -isnot [bool] -or $visibilitySaves[1].facts.overlayEnabled -ne $false -or
+        (@($visibilitySaves[1].facts.PSObject.Properties.Name) -join ',') -cne 'overlayEnabled') { return $false }
+    foreach ($eventName in @('SETTINGS_QUARANTINED')) {
         if (@($Driver.mainEvents | Where-Object { $_.event -ceq $eventName }).Count -ne 1) { return $false }
     }
     $loaded = @($lifecycle.restartMainEvents | Where-Object { $_.event -ceq 'SETTINGS_LOADED' })
@@ -775,7 +793,7 @@ function Test-UiReceipt {
         'shell' { $flags += @('navigation','headingFocus','journalUnmount','menuKeyboard','exitAvailable','laterAccount'); $screens = @('live','journal','settings','account') }
         'live' { $flags += @('numericGauge','unavailableVsZero','paused','staleDashes','rawNames','unsupportedTrip','jobViewport','hmNamesReadable','tankUnknownVsZero'); $screens = @('current','zero','missing','paused','stale') }
         'journal' { $flags += @('syntheticBanner','pageReturn','chartBounded','rawTabs','searchPlanned','tripRegions','tableReadable','signedChart'); $screens = @('list','trip','intervals','timeline','samples') }
-        'settings' { $flags += @('allPanels','allSections','committedSave','sourceSelector','uninstallRefusal','refusedSave','readOnly','controlsKeyboard','lastEnabled','fontLicense'); $screens = @('general','units','overlay','sections','plugin','data','about','save-error') }
+        'settings' { $flags += @('allPanels','allSections','committedSave','sourceSelector','uninstallRefusal','refusedSave','readOnly','controlsKeyboard','lastEnabled','fontLicense','overlayVisibility','visibilityFailedSave'); $screens = @('general','units','overlay','sections','plugin','data','about','save-error') }
         'overlay' { $flags += @('fourLayouts','transparent','contained','independentFont','missing','paused','staleDashes','heroSubsets','formatterProfiles'); $screens = @('strip','card','cluster','hud') }
     }
     foreach ($flag in $flags) { if ($ui.flags.$flag -isnot [bool] -or !$ui.flags.$flag) { return $false } }
@@ -812,10 +830,10 @@ function Test-UiReceipt {
         $readOnly = $ui.readOnly
         if ($null -eq $readOnly -or $readOnly.state -cne 'newer-version' -or $readOnly.language -cne 'en' -or
             $readOnly.writable -isnot [bool] -or $readOnly.writable -or $readOnly.bytesUnchanged -isnot [bool] -or !$readOnly.bytesUnchanged -or
-            $ui.firstLauncherExit -ne 0 -or $readOnly.launcherExit -ne 0 -or @($ui.saveFailureFacts).Count -ne 4) { return $false }
+            $ui.firstLauncherExit -ne 0 -or $readOnly.launcherExit -ne 0 -or @($ui.saveFailureFacts).Count -ne 8) { return $false }
         foreach ($fact in $ui.saveFailureFacts) { if ($fact.step -cne 'target' -or $null -ne $fact.code) { return $false } }
         $expectedErrors = @($Driver.mainEvents | Where-Object { $_.event -ceq 'SETTINGS_WRITE_FAILED' })
-        if ($expectedErrors.Count -ne 4) { return $false }
+        if ($expectedErrors.Count -ne 8) { return $false }
         foreach ($row in $expectedErrors) { if ($row.facts.step -cne 'target' -or $null -ne $row.facts.code) { return $false } }
         if (!(Test-OrderlyRunEvent -MainEvents @($Driver.mainEvents | Where-Object { $_.event -cne 'SETTINGS_WRITE_FAILED' }) -ServiceEvents @($Driver.serviceEvents)) -or
             !(Test-OrderlyRunEvent -MainEvents @($readOnly.mainEvents) -ServiceEvents @($readOnly.serviceEvents)) -or
@@ -918,9 +936,9 @@ function Test-RuntimeReceipt {
             }
             $during = $proof.independentObservation.reading
             if ($kind -ceq 'overlay') {
-                if ($during.status -cnotmatch '^connected:' -or $during.speed -cne 'Speed: 72.0 km/h' -or $during.fuel -cne 'Fuel: 71.0 L') { $valid = $false }
+                if (!(Test-LiveGaugeReceipt -Reading $during) -or $during.status -cnotmatch '^connected:' -or $during.speed -cne 'Speed: 72 km/h' -or $during.fuel -cne 'Fuel: 71.0 L') { $valid = $false }
             } elseif ($during.phase -cne 'during-dashboard-stall' -or $during.status -cne 'connected' -or $during.source -cne 'ETS2' -or
-                $during.origin -cne 'synthetic' -or $during.freshness -cne 'current' -or $during.speed -cne '72.0' -or $during.fuel -cne '71.0' -or
+                $during.origin -cne 'synthetic' -or $during.freshness -cne 'current' -or $during.speed -cne '72' -or $during.fuel -cne '71.0' -or
                 $during.speedUnit -cne 'km/h' -or $during.fuelUnit -cne 'L') { $valid = $false }
             $duringWindows = @($proof.independentObservation.windows)
             if (!(Test-OverlayRendererIsolation -Windows $duringWindows) -or !(Test-OverlayTopmost -Windows $duringWindows)) { $valid = $false }
@@ -944,10 +962,10 @@ function Test-RuntimeReceipt {
             $rows = @($overlay.observations | Where-Object { $_.phase -ceq $phase })
             if ($rows.Count -ne 1) { $valid = $false; continue }
             $row = $rows[0]
-            $speed = '90.0'; $fuel = '73.0'; $freshness = 'current'; $states = @('connected')
-            if ($phase -in @('changed','overlay-credit-recovery','dashboard-reload','during-dashboard-stall','dashboard-credit-recovery')) { $speed = '72.0'; $fuel = '71.0' }
+            $speed = '90'; $fuel = '73.0'; $freshness = 'current'; $states = @('connected')
+            if ($phase -in @('changed','overlay-credit-recovery','dashboard-reload','during-dashboard-stall','dashboard-credit-recovery')) { $speed = '72'; $fuel = '71.0' }
             if ($phase -in @('missing','silent-open-stale','disconnected')) { $speed = [string][char]0x2014; $fuel = $speed }
-            if ($phase -ceq 'zero') { $speed = '0.0'; $fuel = '0.0' }
+            if ($phase -ceq 'zero') { $speed = '0'; $fuel = '0.0' }
             if ($phase -ceq 'silent-open-stale') { $freshness = 'stale'; $states = @('stale') }
             if ($phase -ceq 'disconnected') { $freshness = 'unavailable'; $states = @('disconnected','waiting') }
             if ($row.source -cne 'ETS2' -or $row.origin -cne 'synthetic' -or $row.speedUnit -cne 'km/h' -or $row.fuelUnit -cne 'L' -or

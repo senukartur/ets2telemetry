@@ -450,3 +450,34 @@ ET-028 closeout strengthens the existing `tests/storage/history-refusal.test.ts`
 ET-028 Claude follow-up adds `tests/unit/formatter-localization.test.ts` (Node/Vitest, REG-002/003/009/014, R/T, ET-028, PR `npm test`): real core formatter and main/overlay output, all units/profiles/games/EN-RU, exact signed/large money and SDK-name/detail provenance. It adds `tests/unit/ci-compiled-artifact.test.ts` (Node/Vitest with isolated temporary files and inert Node CLI children, REG-015/017, R/T, ET-028, PR `npm test`): fail-closed aggregate participation, real artifact identity/hash/path/link rejection and exact native-binding replacement. Existing `journal-chart.test.ts`, `renderer-observation.test.ts`, `desktop-ui-view.test.ts` and `ui-runtime-receipt.test.ts` now cover signed SVG/domains, unknown/zero/positive tank states and missing/false `signedChart`, `tankUnknownVsZero` and `formatterProfiles` receipts. Existing flags and all 308 screenshots remain required; no storage/protocol or history fixture changes.
 
 ET-005b final-verification baseline follow-up (October21): shutdown-stalls.test.ts retains all four REG-006/011/012 scenarios and unchanged deadlines/assertions, but runs in the storage-shutdown project after other storage-file forks. Failure-only b1 diagnostics retain effective context, monotonic boundary stamps, exit/verdict and bounded synthetic logs. Full storage inventory remains455tests/39files. The original parallel failure followed by one diagnostic pass is flaky evidence with an unproven scheduling cause, not a waived result; see [validation](validation/et-005b.md#storage-shutdown-baseline-flake-and-scheduling-mitigation).
+
+## ET-012e saved visibility delta — October 21, 2026
+
+| Tests / journey | Regression | Retained protection |
+| --- | --- | --- |
+| `settings-schema`, `settings-store`, `i18n-lifecycle` unit tests | REG-017 | v5 strict flag, v1–v4 pure migration/no startup writes, false restart, canonical serialization, shared bounded queue and failure recovery |
+| `preload-recovery`, `main-boundaries` unit tests | REG-016, REG-017 | trusted exact boolean IPC, durable application, pending off/edit race, failed-save draft retention, real pending-load defaults hidden, final geometry before late enable, no show after exit |
+| `overlay.test.ts` | REG-016 | gate before edit/driving, off discard, disabled begin refusal; enable preserves existing source/freshness/foreground/minimize/topology/fit gates |
+| Existing settings UI shard and `ui-runtime-receipt` | REG-016, REG-017 | associated EN/RU label, Space off/on, committed value and failed-save state, disabled edit/read-only; strict new flags and exact eight expected refused writes |
+| Existing lifecycle journey and `runtime-receipt` | REG-012, REG-016, REG-017 | false saved and loaded across two launches, synthetic-hidden invariant without service/source restart (not a gate proof), unchanged canonical bytes and strict negative receipt cases |
+
+No critical gate is skipped or retried. Real-game acceptance and transferred ET-042 manual display checks remain unverified; see [validation](validation/et-012e.md).
+
+ET-012e runtime-consumer regression follow-up extends `diagnostics-bundle-check.test.ts` (REG-015/REG-017) with production-built visibility true/false, required-field/type and unknown-overlay-key negatives. `runtime-receipt.test.ts` requires the visibility save in its ordered position with no extra facts. The bounded lifecycle driver's exact settings event sequence includes both unit and visibility saves, preserving the single optional leading pending-read event and run B load-only checks. Actual failed and corrected runtime results are recorded in [ET-012e validation](validation/et-012e.md).
+
+## ET-012 recording-flush budget correction — October 21, 2026
+
+| Tests | Regression | Protection |
+| --- | --- | --- |
+| `tests/unit/shutdown-sequence.test.ts` | REG-011, REG-012 | approved unused-intake grant, 829 ms flush, actual storage remainder/no double spend, partial/full/empty intake, invalid clock, parallel maxima/reserve, ordinary-step isolation, sticky failure and total nominal/verdict/floor limits; existing ET-038 behavior |
+| `tests/storage/recording-runtime.test.ts` | REG-001, REG-011, REG-012 | real runtime/worker/pipe, final authored sample held at append barrier across controlled 829 ms, exact persisted row/integrity/FK, no ACK after stop and storage close after flush |
+
+The original runtime failure and passing diagnostic remain FLAKY with unknown cause. The correction proves bounded additional tolerance, not an operating-system cause. Historical fixture rows and all current recording oracles remain intact; [evidence](validation/et-012e.md).
+
+ET-012/ET-031 integration extends REG-017 settings-schema/store coverage with genuine accepted-v5 autostart-true migration, no startup rewrite, current-v6 true/false roundtrip, independent flag fallbacks, queued composition and restart. Diagnostics retain accepted autostart validation and required visibility; lifecycle canonical v6/31-method inventories and General portable autostart UI are audited without login activation. The shutdown `15420f0` regression and all historical fixture bytes stay unchanged. Dated visibility-v5 records remain prototype evidence; [integration](validation/et-012e.md).
+
+ET-012/ET-031 integration: settings-store.test.ts classifies initial autostart authority (missing, accepted v5, current v6, independent fallback, invalid/unsupported/newer/unavailable/read-error/reparse/read-limit) and committed/failed saves. main-boundaries.test.ts covers registered mock targets with provisional defaults, real-store late load plus unrelated fallbacks and overlay geometry, superseded discovery, explicit requests and failed saves, invalid/untrusted requests, ordinary saves, exit and overlapping committed choices. No real login registration is touched.
+
+### ET-012e presentation followup — October 22, 2026
+
+REG-009/REG-016 add `overlay-rendering.test.ts`, `overlay.test.ts`, `overlay-view.test.ts` and `main-boundaries.test.ts` cases for fixed capacity versus painted top/centre/bottom alignment, frozen native drags, hold retirement and anchor-only scheduler ownership. REG-003/REG-014 add signed integer LIVE conversion and unchanged numeric gauge/fuel precision in `unit-profiles.test.ts` and `desktop-ui-view.test.ts`; telemetry-core and journal precision retain their existing oracles. REG-017's `renderer-observation.test.ts`, `runtime-receipt.test.ts` and `overlay-smoke-source.test.ts` require actual visible SVG text/accessibility and reject missing, malformed, invisible or inconsistent gauge evidence. Geometry/style facts extend existing bounded renderer observations without changing receipt counts or timing limits. Real-game release usability remains pending in [ET-012e](validation/et-012e.md).

@@ -28,7 +28,7 @@ it('shows speed, gear and RPM in the cluster gauge and nothing else (ET-012d dec
 
 it('defaults to the strip layout with every section and the default placements, and defines three complete presets', () => {
   // ET-012b added the default placements: the ET-012a anchors at scale 1.
-  expect(DEFAULT_OVERLAY_SETTINGS).toEqual({layout: 'strip', sections: ALL_ON, placements: {strip: {x: 0.5, y: 0, scale: 1}, card: {x: 1, y: 0, scale: 1},
+  expect(DEFAULT_OVERLAY_SETTINGS).toEqual({enabled: true, layout: 'strip', sections: ALL_ON, placements: {strip: {x: 0.5, y: 0, scale: 1}, card: {x: 1, y: 0, scale: 1},
     cluster: {x: 0, y: 1, scale: 1}, hud: {x: 0, y: 0, scale: 1}}});
   expect(OVERLAY_PRESETS).toEqual({
     'everything': ALL_ON,
@@ -82,10 +82,10 @@ it('never runs a getter while validating', () => {
 });
 
 it('turns a presentation stale: placeholders for every shown section, same layout, units and edit mode, not paused', () => {
-  const current: OverlayPresentation = {source: 'ATS', origin: 'game', status: 'paused', speed: '55.9', speedUnit: 'mph', fuel: '19.3', fuelUnit: 'US gal',
-    freshness: 'current', layout: 'cluster', paused: true, sections: [{id: 'speed', state: 'value', text: '55.9 mph'}, {id: 'rpm', state: 'value', text: '600 rpm', ring: 0.2},
+  const current: OverlayPresentation = {source: 'ATS', origin: 'game', status: 'paused', speed: '56', speedUnit: 'mph', fuel: '19.3', fuelUnit: 'US gal',
+    freshness: 'current', layout: 'cluster', paused: true, sections: [{id: 'speed', state: 'value', text: '56 mph'}, {id: 'rpm', state: 'value', text: '600 rpm', ring: 0.2},
       {id: 'fuel', state: 'unavailable'}], editing: true};
   expect(staleOverlay(current)).toEqual({source: 'ATS', origin: 'game', status: 'stale', speed: '—', speedUnit: 'mph', fuel: '—', fuelUnit: 'US gal',
     freshness: 'stale', layout: 'cluster', paused: false, sections: [{id: 'speed', state: 'unavailable'}, {id: 'rpm', state: 'unavailable'}, {id: 'fuel', state: 'unavailable'}], editing: true});
-  expect(current.sections[0]).toEqual({id: 'speed', state: 'value', text: '55.9 mph'});
+  expect(current.sections[0]).toEqual({id: 'speed', state: 'value', text: '56 mph'});
 });

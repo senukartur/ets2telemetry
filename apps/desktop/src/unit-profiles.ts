@@ -54,9 +54,9 @@ export function speedUnit(profile: UnitProfile): SpeedUnit {
 export function volumeUnit(profile: UnitProfile): VolumeUnit {
   return DISPLAY_PROFILES[profile].volume;
 }
-/** Canonical m/s as a one-decimal number in the profile's speed unit; a rounded negative zero shows as 0.0. */
+/** Canonical m/s as an integer LIVE number in the profile's speed unit; rounded negative zero shows as 0. */
 export function speedNumber(metersPerSecond: number, profile: UnitProfile): string {
-  return fixed(convertSpeed(metersPerSecond, speedUnit(profile)), 1);
+  return fixed(convertSpeed(metersPerSecond, speedUnit(profile)), 0);
 }
 /** Canonical liters as a one-decimal number in the profile's volume unit. */
 export function volumeNumber(liters: number, profile: UnitProfile): string {

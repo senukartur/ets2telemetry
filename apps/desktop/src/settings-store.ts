@@ -86,13 +86,14 @@ export function settingsDirectory(localAppData: string | undefined): string | un
 const errorCode = (error: unknown) => error && typeof error === 'object' && 'code' in error ? String(error.code) : undefined;
 const READ_ONLY_STATES: readonly SettingsState[] = ['loading', 'newer-version', 'unreadable', 'unavailable'];
 const QUARANTINED_STATES: readonly SettingsState[] = ['invalid-file', 'unsupported-older'];
-type Loaded = {state: SettingsState; settings: Settings; facts?: DiagnosticFacts};
+type Loaded = {state: SettingsState; settings: Settings; facts?: DiagnosticFacts; autostartKnown?: boolean};
 
 export class SettingsStore {
   private settings: Settings = DEFAULT_SETTINGS;
   private state: SettingsState = 'loading';
   private quarantinePending = false;
   private loadSettled = false;
+  private autostartKnown = false;
   private saveError: SettingsSaveError | null = null;
   private tail: Promise<unknown> = Promise.resolve();
   private pending = 0;
@@ -114,6 +115,9 @@ export class SettingsStore {
   /** True once `load()` has returned: with the read's result, or with the pending `loading` state after the budget. */
   get settled(): boolean {return this.loadSettled;}
 
+  /** Initial-load authority only; saves expose the current committed value but never establish authority. */
+  get knownAutostartIntent(): boolean | undefined {return this.autostartKnown ? this.settings.autostart : undefined;}
+
   view(): SettingsView {
     return {language: this.settings.language, autostart: this.settings.autostart, units: this.settings.units, overlay: this.settings.overlay, state: this.state, writable: !READ_ONLY_STATES.includes(this.state), saveError: this.saveError};
   }
@@ -133,7 +137,7 @@ export class SettingsStore {
     const apply = (loaded: Loaded) => {
       const late = phase === 'late';
       phase = 'done';
-      this.settings = loaded.settings; this.state = loaded.state;
+      this.settings = loaded.settings; this.state = loaded.state; this.autostartKnown = loaded.autostartKnown === true;
       this.quarantinePending = QUARANTINED_STATES.includes(loaded.state);
       this.loadSettled = true;
       // Neither event name may look like a failure: a fallback is a supported outcome, not an error.
@@ -171,6 +175,11 @@ export class SettingsStore {
   /** Serialized save of one game's profile. Resolves with the applied settings only after the durable rename. */
   setUnitProfile(game: UnitGame, profile: UnitProfile): Promise<SettingsView> {
     return this.enqueue(settings => ({next: {...settings, units: Object.freeze({...settings.units, [game]: profile})}, facts: {game, profile}}));
+  }
+
+  /** Serialized visibility save through the shared bounded durable queue. */
+  setOverlayEnabled(enabled: boolean): Promise<SettingsView> {
+    return this.enqueue(settings => ({next: {...settings, overlay: Object.freeze({...settings.overlay, enabled})}, facts: {overlayEnabled: enabled}}));
   }
 
   /** Serialized save of the overlay layout; the sections and units stay as they are at the time of the write. */
@@ -219,10 +228,10 @@ export class SettingsStore {
   private async classify(): Promise<Loaded> {
     if (!this.directory) return {state: 'unavailable', settings: DEFAULT_SETTINGS};
     const directory = await this.inspect(this.directory, 'directory');
-    if (directory !== 'present') return directory === 'absent' ? {state: 'defaults', settings: DEFAULT_SETTINGS} : {state: 'unreadable', settings: DEFAULT_SETTINGS, facts: {reason: directory}};
+    if (directory !== 'present') return directory === 'absent' ? {state: 'defaults', settings: DEFAULT_SETTINGS, autostartKnown: true} : {state: 'unreadable', settings: DEFAULT_SETTINGS, facts: {reason: directory}};
     const file = path.join(this.directory, SETTINGS_FILE);
     const entry = await this.inspect(file, 'file');
-    if (entry === 'absent') return {state: 'defaults', settings: DEFAULT_SETTINGS};
+    if (entry === 'absent') return {state: 'defaults', settings: DEFAULT_SETTINGS, autostartKnown: true};
     if (entry !== 'present') return {state: 'unreadable', settings: DEFAULT_SETTINGS, facts: {reason: entry}};
     let bytes: Uint8Array;
     try {bytes = await this.readBounded(file);} catch {return {state: 'unreadable', settings: DEFAULT_SETTINGS, facts: {reason: 'read'}};}
@@ -230,8 +239,8 @@ export class SettingsStore {
     // A migrated older file is reported as such; it stays unchanged on disk until the first save writes the current format.
     const migrated = parsed.state === 'loaded' || parsed.state === 'loaded-with-fallbacks' ? parsed.migratedFrom : undefined;
     const migration: DiagnosticFacts = migrated === undefined ? {} : {migratedFrom: migrated};
-    if (parsed.state === 'loaded') return {state: 'loaded', settings: parsed.settings, ...(migrated === undefined ? {} : {facts: migration})};
-    if (parsed.state === 'loaded-with-fallbacks') return {state: parsed.state, settings: parsed.settings, facts: {fields: parsed.fallbackFields.join(','), ...migration}};
+    if (parsed.state === 'loaded') return {state: 'loaded', settings: parsed.settings, autostartKnown: true, ...(migrated === undefined ? {} : {facts: migration})};
+    if (parsed.state === 'loaded-with-fallbacks') return {state: parsed.state, settings: parsed.settings, autostartKnown: !parsed.fallbackFields.includes('autostart'), facts: {fields: parsed.fallbackFields.join(','), ...migration}};
     return {state: parsed.state, settings: DEFAULT_SETTINGS};
   }
 

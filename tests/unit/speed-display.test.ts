@@ -16,16 +16,16 @@ function live(): LiveTelemetry {
 }
 
 it.each([
-  {raw: -0.001, displayed: '0.0 km/h'},
-  {raw: -0, displayed: '0.0 km/h'},
-  {raw: 0, displayed: '0.0 km/h'},
+  {raw: -0.001, displayed: '0 km/h'},
+  {raw: -0, displayed: '0 km/h'},
+  {raw: 0, displayed: '0 km/h'},
   // Straddle 0.05 km/h on both sides, safely away from binary rounding ties.
-  {raw: -0.0136, displayed: '0.0 km/h'},
-  {raw: -0.0142, displayed: '-0.1 km/h'},
-  {raw: 0.0136, displayed: '0.0 km/h'},
-  {raw: 0.0142, displayed: '0.1 km/h'},
-  {raw: -2, displayed: '-7.2 km/h'},
-  {raw: 10, displayed: '36.0 km/h'}
+  {raw: -0.136, displayed: '0 km/h'},
+  {raw: -0.142, displayed: '-1 km/h'},
+  {raw: 0.136, displayed: '0 km/h'},
+  {raw: 0.142, displayed: '1 km/h'},
+  {raw: -2, displayed: '-7 km/h'},
+  {raw: 10, displayed: '36 km/h'}
 ])('projects dashboard speed $raw m/s as $displayed without changing telemetry', ({raw, displayed}) => {
   const current = live();
   current.observation!.state.speed = {available: true, value: raw, unit: 'm/s'};
@@ -53,17 +53,17 @@ it.each(['ets2', 'ats', 'synthetic', 'replay'] as const)('defaults dashboardSpee
   current.observation!.source.game = selection === 'ats' ? 'ats' : 'ets2';
   current.observation!.source.origin = selection === 'synthetic' || selection === 'replay' ? selection : 'game';
   current.observation!.state.speed = {available: true, value: 10, unit: 'm/s'};
-  expect(dashboardSpeed(current)).toBe('36.0 km/h');
+  expect(dashboardSpeed(current)).toBe('36 km/h');
   current.status = 'paused';
-  expect(dashboardSpeed(current)).toBe('36.0 km/h');
+  expect(dashboardSpeed(current)).toBe('36 km/h');
 });
 
 // ET-011b: the dashboard follows the persisted profile of the displayed game.
 it.each([
-  {profile: 'metric' as const, raw: 25, liters: 73, speed: '90.0 km/h', fuel: '73.0 L'},
-  {profile: 'us-customary' as const, raw: 25, liters: 73, speed: '55.9 mph', fuel: '19.3 US gal'},
-  {profile: 'us-customary' as const, raw: -0.001, liters: -0, speed: '0.0 mph', fuel: '0.0 US gal'},
-  {profile: 'us-customary' as const, raw: -2, liters: 0, speed: '-4.5 mph', fuel: '0.0 US gal'}
+  {profile: 'metric' as const, raw: 25, liters: 73, speed: '90 km/h', fuel: '73.0 L'},
+  {profile: 'us-customary' as const, raw: 25, liters: 73, speed: '56 mph', fuel: '19.3 US gal'},
+  {profile: 'us-customary' as const, raw: -0.001, liters: -0, speed: '0 mph', fuel: '0.0 US gal'},
+  {profile: 'us-customary' as const, raw: -2, liters: 0, speed: '-4 mph', fuel: '0.0 US gal'}
 ])('projects dashboard speed $raw m/s and fuel $liters L in $profile', ({profile, raw, liters, speed, fuel}) => {
   const current = live();
   current.observation!.state.speed = {available: true, value: raw, unit: 'm/s'};

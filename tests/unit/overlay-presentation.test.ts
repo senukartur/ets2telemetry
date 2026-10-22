@@ -32,7 +32,7 @@ const ids = (sections: readonly OverlaySectionView[]) => sections.map(section =>
 
 it('shows the v0 sections of the fixture in metric for ETS2, in canonical order, with absent ones left out', () => {
   expect(overlayPresentation(live()).sections).toEqual([
-    {id: 'speed', state: 'value', text: '0.0 km/h'},
+    {id: 'speed', state: 'value', text: '0 km/h'},
     {id: 'gear', state: 'value', text: 'R1'},
     {id: 'rpm', state: 'value', text: '600 rpm', ring: 0.2},
     // Fuel is not observed: the baseline section stays as a dash, never 0.
@@ -52,9 +52,9 @@ it('formats every section in the US customary profile for ATS, leaving canonical
   state.speed = {available: true, value: 25, unit: 'm/s'};
   const before = structuredClone(current);
   const presentation = overlayPresentation(current, {ets2: 'metric', ats: 'us-customary'});
-  expect(presentation).toMatchObject({source: 'ATS', speed: '55.9', speedUnit: 'mph', fuel: '66.0', fuelUnit: 'US gal', freshness: 'current'});
+  expect(presentation).toMatchObject({source: 'ATS', speed: '56', speedUnit: 'mph', fuel: '66.0', fuelUnit: 'US gal', freshness: 'current'});
   expect(presentation.sections.slice(0, 6)).toEqual([
-    {id: 'speed', state: 'value', text: '55.9 mph'},
+    {id: 'speed', state: 'value', text: '56 mph'},
     {id: 'gear', state: 'value', text: 'R1'},
     {id: 'rpm', state: 'value', text: '600 rpm', ring: 0.2},
     {id: 'fuel', state: 'value', text: '66.0 US gal', detail: '25%'},
@@ -69,14 +69,14 @@ it('keeps the speed section text equal to the legacy speed number and unit', () 
   current.observation!.state.speed = {available: true, value: 25, unit: 'm/s'};
   const presentation = overlayPresentation(current);
   expect(presentation.sections[0]).toEqual({id: 'speed', state: 'value', text: `${presentation.speed} ${presentation.speedUnit}`});
-  expect(presentation.speed).toBe('90.0');
+  expect(presentation.speed).toBe('90');
 });
 
 it('shows zero speed and zero fuel as values, distinct from an unavailable dash', () => {
   const current = live(), state = current.observation!.state;
   state.fuel = {available: true, value: 0, unit: 'L'};
   expect(overlayPresentation(current).sections.filter(section => section.id === 'speed' || section.id === 'fuel')).toEqual([
-    {id: 'speed', state: 'value', text: '0.0 km/h'}, {id: 'fuel', state: 'value', text: '0.0 L', detail: '0%'}]);
+    {id: 'speed', state: 'value', text: '0 km/h'}, {id: 'fuel', state: 'value', text: '0.0 L', detail: '0%'}]);
   state.speed = {available: false, reason: 'not-observed', unit: 'm/s'};
   expect(overlayPresentation(current).sections[0]).toEqual({id: 'speed', state: 'unavailable'});
 });
@@ -140,7 +140,7 @@ it('shows only the speed and fuel placeholders while not current without a previ
   expect(overlayPresentation(stale).sections).toEqual([{id: 'speed', state: 'unavailable'}, {id: 'fuel', state: 'unavailable'}]);
   // A section disabled since the previous projection is left out.
   const previous = overlayPresentation(live());
-  expect(ids(overlayPresentation(stale, undefined, {layout: 'strip', sections: {...ALL, gear: false, fuel: false}, placements: PLACEMENTS}, previous).sections))
+  expect(ids(overlayPresentation(stale, undefined, {enabled: true, layout: 'strip', sections: {...ALL, gear: false, fuel: false}, placements: PLACEMENTS}, previous).sections))
     .toEqual(['speed', 'rpm', 'sdk-consumption', 'cargo', 'destination', 'expected-income', 'game-time']);
 });
 
@@ -150,15 +150,15 @@ it('shows placeholders before the first observation', () => {
 });
 
 it('leaves disabled sections out and passes the layout through', () => {
-  const presentation = overlayPresentation(live(), undefined, {layout: 'cluster', sections: OVERLAY_PRESETS['driving-only'], placements: PLACEMENTS});
+  const presentation = overlayPresentation(live(), undefined, {enabled: true, layout: 'cluster', sections: OVERLAY_PRESETS['driving-only'], placements: PLACEMENTS});
   expect(presentation.layout).toBe('cluster');
   expect(ids(presentation.sections)).toEqual(['speed', 'gear', 'rpm', 'fuel']);
   const stale = {...live(), fresh: false, status: 'stale' as const};
-  const jobFocus = {layout: 'hud' as const, sections: OVERLAY_PRESETS['job-focus'], placements: PLACEMENTS};
+  const jobFocus = {enabled: true, layout: 'hud' as const, sections: OVERLAY_PRESETS['job-focus'], placements: PLACEMENTS};
   expect(ids(overlayPresentation(stale, undefined, jobFocus, overlayPresentation(live(), undefined, jobFocus)).sections))
     .toEqual(['speed', 'gear', 'fuel', 'cargo', 'destination']);
   // The legacy speed and fuel fields stay in the projection whatever the sections are.
-  expect(overlayPresentation(live(), undefined, {layout: 'strip', sections: {...ALL, speed: false, fuel: false}, placements: PLACEMENTS})).toMatchObject({speed: '0.0', fuel: '—'});
+  expect(overlayPresentation(live(), undefined, {enabled: true, layout: 'strip', sections: {...ALL, speed: false, fuel: false}, placements: PLACEMENTS})).toMatchObject({speed: '0', fuel: '—'});
 });
 
 it('reports a paused game only while current', () => {
@@ -197,7 +197,7 @@ function withV1(options: V1Options = {}, v0 = live()): LiveTelemetry {
 }
 const V1_STALE: V1Options = {status: 'stale', fresh: false, reason: 'Main has no recent v1 SDK capture'};
 const FULL: OverlaySectionView[] = [
-  {id: 'speed', state: 'value', text: '0.0 km/h'},
+  {id: 'speed', state: 'value', text: '0 km/h'},
   {id: 'gear', state: 'value', text: 'R1'},
   {id: 'rpm', state: 'value', text: '600 rpm', ring: 0.2},
   {id: 'fuel', state: 'unavailable'},
@@ -213,7 +213,7 @@ const FULL: OverlaySectionView[] = [
 it('shows the v1 sections and names beside the v0 sections while both are current (ET-010c)', () => {
   const presentation = overlayPresentation(withV1());
   expect(presentation.sections).toEqual(FULL);
-  expect(presentation).toMatchObject({source: 'ETS2', origin: 'game', freshness: 'current', speed: '0.0', paused: false});
+  expect(presentation).toMatchObject({source: 'ETS2', origin: 'game', freshness: 'current', speed: '0', paused: false});
 });
 it('formats the v1 sections in the ATS US customary profile: 18000 kg is 39683 lb', () => {
   const current = live(); current.selection = 'ats'; current.observation!.source.game = 'ats';
@@ -225,7 +225,7 @@ it('keeps v1 sections as dashes when v1, then v0, stops being current, and drops
   const first = overlayPresentation(withV1());
   const v1Stale = overlayPresentation(withV1(V1_STALE), undefined, undefined, first);
   expect(v1Stale.sections).toEqual([
-    {id: 'speed', state: 'value', text: '0.0 km/h'},
+    {id: 'speed', state: 'value', text: '0 km/h'},
     {id: 'gear', state: 'value', text: 'R1'},
     {id: 'rpm', state: 'value', text: '600 rpm', ring: 0.2},
     {id: 'fuel', state: 'unavailable'},
@@ -285,7 +285,7 @@ it('keeps v1 sections that were never shown absent without v1 data (fix round 1)
 // an update still carries a v0 observation (ET-012a L5), for example when main strips an invalid projection or the v1 origin stops
 // matching. An update without a v0 observation (a selection change, a service restart or a lost channel) clears it.
 const LOST_V1: OverlaySectionView[] = [
-  {id: 'speed', state: 'value', text: '0.0 km/h'},
+  {id: 'speed', state: 'value', text: '0 km/h'},
   {id: 'gear', state: 'value', text: 'R1'},
   {id: 'rpm', state: 'value', text: '600 rpm', ring: 0.2},
   {id: 'fuel', state: 'unavailable'},
@@ -305,7 +305,7 @@ it.each([
 ])('keeps shown v1 sections as dashes while v0 stays current when %s', (_name, lost) => {
   const shown = overlayPresentation(withV1());
   const presentation = overlayPresentation(lost(), undefined, undefined, shown);
-  expect(presentation).toMatchObject({freshness: 'current', speed: '0.0'});
+  expect(presentation).toMatchObject({freshness: 'current', speed: '0'});
   expect(presentation.sections).toEqual(LOST_V1);
   // The dash stays while the same source continues without v1, and the value returns with v1.
   expect(overlayPresentation(lost(), undefined, undefined, presentation).sections).toEqual(LOST_V1);
@@ -351,7 +351,7 @@ it('produces the overlay texts the telemetry smoke expects for the smoke pair', 
     {status: 'disconnected', fresh: false}), undefined, undefined, current), SYNTHETIC_V1_OVERLAY_STOPPED);
 });
 it('leaves disabled v1 sections out and passes no source identity, boundary, window or clock data to the renderer', () => {
-  expect(ids(overlayPresentation(withV1(), undefined, {layout: 'hud', sections: OVERLAY_PRESETS['job-focus'], placements: PLACEMENTS}).sections))
+  expect(ids(overlayPresentation(withV1(), undefined, {enabled: true, layout: 'hud', sections: OVERLAY_PRESETS['job-focus'], placements: PLACEMENTS}).sections))
     .toEqual(['speed', 'gear', 'fuel', 'cargo', 'destination', 'distance-remaining', 'deadline']);
   const json = JSON.stringify(overlayPresentation(withV1()));
   for (const text of ['10000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000001', 'pluginSessionId', 'boundaryOrder', 'handle', '65538', 'clockMapping'])

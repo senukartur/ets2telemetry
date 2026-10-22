@@ -34,7 +34,7 @@ function sectionsWith(enabled: readonly OverlaySectionId[]): OverlaySections {
 }
 export const DEFAULT_OVERLAY_SECTIONS: OverlaySections = sectionsWith(OVERLAY_SECTION_IDS);
 /** Strip layout with every section and the default placements; the defaults of a new or migrated settings file. */
-export const DEFAULT_OVERLAY_SETTINGS: OverlaySettings = Object.freeze({layout: 'strip', sections: DEFAULT_OVERLAY_SECTIONS, placements: DEFAULT_OVERLAY_PLACEMENTS});
+export const DEFAULT_OVERLAY_SETTINGS: OverlaySettings = Object.freeze({enabled: true, layout: 'strip', sections: DEFAULT_OVERLAY_SECTIONS, placements: DEFAULT_OVERLAY_PLACEMENTS});
 
 export type OverlayPresetId = 'everything' | 'job-focus' | 'driving-only';
 /** Complete section records the settings card can apply in one save. */

@@ -4,16 +4,16 @@ import {overlayView, overlayCardParts} from '../../apps/desktop/src/overlay-view
 
 // The overlay renderer's view model (ET-012a): arrangement only. React components are not unit-tested (decision L14);
 // the runtime overlay smoke reads the rendered DOM.
-const base: OverlayPresentation = {source: 'ETS2', origin: 'game', status: 'connected', speed: '90.0', speedUnit: 'km/h', fuel: '250.0', fuelUnit: 'L',
+const base: OverlayPresentation = {source: 'ETS2', origin: 'game', status: 'connected', speed: '90', speedUnit: 'km/h', fuel: '250.0', fuelUnit: 'L',
   freshness: 'current', layout: 'strip', paused: false, sections: [
-    {id: 'speed', state: 'value', text: '90.0 km/h'}, {id: 'rpm', state: 'value', text: '1500 rpm', ring: 0.5},
+    {id: 'speed', state: 'value', text: '90 km/h'}, {id: 'rpm', state: 'value', text: '1500 rpm', ring: 0.5},
     {id: 'fuel', state: 'value', text: '250.0 L', detail: '25%'}, {id: 'sdk-consumption', state: 'value', text: '25.0 L/100 km'},
     {id: 'cargo', state: 'value', text: 'cargo.logs'}, {id: 'game-time', state: 'value', text: 'Day 1, 08:00'}], editing: false};
 
 it('keeps the speed and fuel number apart from their unit and labels the SDK mean', () => {
   const view = overlayView(base);
   expect(view.items.map(item => [item.testId, item.value, item.unit, item.detail, item.detailTestId, item.caption])).toEqual([
-    ['overlay-speed', '90.0', 'km/h', undefined, undefined, undefined],
+    ['overlay-speed', '90', 'km/h', undefined, undefined, undefined],
     ['overlay-rpm', '1500 rpm', undefined, undefined, undefined, undefined],
     ['overlay-fuel', '250.0', 'L', '25%', 'overlay-fuel-level', undefined],
     ['overlay-sdk-consumption', '25.0 L/100 km', undefined, undefined, undefined, 'SDK mean'],
@@ -69,7 +69,7 @@ it('localizes labels, units and tags in Russian when language is ru', () => {
   const ruBase: OverlayPresentation = {...base, language: 'ru'};
   const view = overlayView(ruBase);
   expect(view.items.map(item => [item.testId, item.value, item.unit, item.caption])).toEqual([
-    ['overlay-speed', '90.0', 'км/ч', undefined],
+    ['overlay-speed', '90', 'км/ч', undefined],
     ['overlay-rpm', '1500 об/мин', undefined, undefined],
     ['overlay-fuel', '250.0', 'л', undefined],
     ['overlay-sdk-consumption', '25.0 л/100 км', undefined, 'среднее SDK'],
@@ -127,5 +127,13 @@ it.each(['strip', 'card', 'cluster', 'hud'] as const)('uses one short localized 
     expect(view.tags.map(tag => tag.id)).toEqual([freshness === 'stale' ? 'stale' : freshness === 'unavailable' ? 'no-signal' : 'paused', 'origin']);
     if (freshness === 'stale') expect(view.tags[0].text).toBe(language === 'en' ? 'Stale' : 'Устарело');
     expect(view.dim).toBe(freshness !== 'current'); expect(view.paused).toBe(true);
+  }
+});
+
+it.each(['strip', 'card', 'cluster', 'hud'] as const)('validates display-only %s content anchors for sparse and populated projections', layout => {
+  for (const sections of [[], base.sections]) {
+    for (const y of [0, 0.5, 1]) expect(overlayView({...base, layout, sections, contentAnchorY: y}).contentAnchorY).toBe(y);
+    for (const value of [undefined, null, NaN, Infinity, -0.1, 1.1, '1', {}, true])
+      expect(overlayView({...base, layout, sections, contentAnchorY: value as number}).contentAnchorY).toBe(layout === 'cluster' ? 1 : 0);
   }
 });

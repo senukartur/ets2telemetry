@@ -1,20 +1,6 @@
+import {dashboardObservation} from './dashboard-observation.mjs';
 // Self-contained browser callback: Playwright serializes this function without module closures.
-export function currentTelemetryObservation() {
-  const observation = {};
-  for (const [field, testId] of [['status', 'telemetry-status'], ['speed', 'speed'], ['fuel', 'fuel']]) {
-    const elements = globalThis.document.querySelectorAll(`[data-testid="${testId}"]`);
-    if (elements.length !== 1) return false;
-    const element = elements[0];
-    // Raw diagnostic text lives in Settings/Data. Its translated persistent connection chip owns visibility.
-    const visible = field === 'status' ? globalThis.document.querySelectorAll('[data-testid="shell.status.connection"]')[0] : element;
-    if (!visible) return false;
-    const bounds = visible.getBoundingClientRect();
-    if (globalThis.getComputedStyle(visible).visibility !== 'visible' || bounds.width <= 0 || bounds.height <= 0 ||
-      bounds.bottom <= 0 || bounds.right <= 0 || bounds.top >= globalThis.innerHeight || bounds.left >= globalThis.innerWidth) return false;
-    observation[field] = element.innerText;
-  }
-  return /^connected:/.test(observation.status) && observation.speed === 'Speed: 90.0 km/h' && observation.fuel === 'Fuel: 73.0 L' ? observation : false;
-}
+export const currentTelemetryObservation = dashboardObservation;
 
 export async function waitForCurrentTelemetry(page) {
   const handle = await page.waitForFunction(currentTelemetryObservation, undefined, {timeout: 10000});
@@ -77,26 +63,7 @@ export function completeLiveObservation({rows, hidden}) {
 // Self-contained browser callback for a non-current dashboard: the status matches `status` (a RegExp source), the legacy
 // speed and fuel lines read unavailable in the viewport, and every listed value row reads `unavailable` with the reason
 // `not current`. No hidden element exists.
-export function notCurrentLiveObservation({values, status, hidden}) {
-  const read = (id, viewport) => {
-    const elements = globalThis.document.querySelectorAll(`[data-testid="${id}"]`);
-    if (elements.length !== 1) return undefined;
-    const element = elements[0], visible = id === 'telemetry-status' ? globalThis.document.querySelectorAll('[data-testid="shell.status.connection"]')[0] : element;
-    if (!visible) return undefined;
-    const bounds = visible.getBoundingClientRect();
-    if (globalThis.getComputedStyle(visible).visibility !== 'visible' || bounds.width <= 0 || bounds.height <= 0) return undefined;
-    if (viewport && (bounds.bottom <= 0 || bounds.right <= 0 || bounds.top >= globalThis.innerHeight || bounds.left >= globalThis.innerWidth)) return undefined;
-    return element.innerText;
-  };
-  const observation = {status: read('telemetry-status', true), speed: read('speed', true), fuel: read('fuel', true)};
-  if (!new RegExp(status).test(observation.status ?? '') || observation.speed !== 'Speed: unavailable' || observation.fuel !== 'Fuel: unavailable') return false;
-  for (const id of values) {
-    if (read(id, false) !== 'unavailable' || read(`${id}-reason`, false) !== 'not current') return false;
-    observation[id] = 'unavailable';
-  }
-  for (const id of hidden) if (globalThis.document.querySelectorAll(`[data-testid="${id}"]`).length) return false;
-  return observation;
-}
+export const notCurrentLiveObservation = dashboardObservation;
 
 export async function waitForCompleteLive(page, rows = SYNTHETIC_V0_LIVE_ROWS, hidden = SYNTHETIC_V0_HIDDEN_ROWS) {
   const handle = await page.waitForFunction(completeLiveObservation, {rows, hidden}, {timeout: 10000});
@@ -185,25 +152,9 @@ export const SYNTHETIC_V0V1_HIDDEN_ROWS = Object.freeze(['live-speed', 'live-fue
 // Self-contained browser callback for a dashboard whose v1 data is not current while v0 still is: the v1 status line
 // matches `status` (a RegExp source), the legacy speed line reads exactly `speed` in the viewport, and every listed v1
 // value row reads `unavailable` with the reason `not current`.
-export function v1NotCurrentObservation({values, status, speed}) {
-  const read = (id, viewport) => {
-    const elements = globalThis.document.querySelectorAll(`[data-testid="${id}"]`);
-    if (elements.length !== 1) return undefined;
-    const element = elements[0], bounds = element.getBoundingClientRect();
-    if (globalThis.getComputedStyle(element).visibility !== 'visible' || bounds.width <= 0 || bounds.height <= 0) return undefined;
-    if (viewport && (bounds.bottom <= 0 || bounds.right <= 0 || bounds.top >= globalThis.innerHeight || bounds.left >= globalThis.innerWidth)) return undefined;
-    return element.innerText;
-  };
-  const observation = {status: read('live-v1-status', false), speed: read('speed', true)};
-  if (!new RegExp(status).test(observation.status ?? '') || observation.speed !== speed) return false;
-  for (const id of values) {
-    if (read(id, false) !== 'unavailable' || read(`${id}-reason`, false) !== 'not current') return false;
-    observation[id] = 'unavailable';
-  }
-  return observation;
-}
+export const v1NotCurrentObservation = dashboardObservation;
 export async function waitForV1NotCurrentLive(page, values, status, speed) {
-  const handle = await page.waitForFunction(v1NotCurrentObservation, {values, status, speed}, {timeout: 10000});
+  const handle = await page.waitForFunction(v1NotCurrentObservation, {values, status, speed, statusId: 'live-v1-status', omitFuel: true}, {timeout: 10000});
   try {return await handle.jsonValue();} finally {await handle.dispose();}
 }
 
@@ -212,7 +163,7 @@ export async function waitForV1NotCurrentLive(page, values, status, speed) {
 export const SYNTHETIC_V1_OVERLAY_CURRENT = Object.freeze({
   'overlay-origin': 'Synthetic City A, Synthetic Company A', 'overlay-distance-remaining': '151.0 km', 'overlay-deadline': 'in 10 h 55 min',
   'overlay-cargo': 'Synthetic Cargo', 'overlay-cargo-detail': '18.0 t', 'overlay-destination': 'Synthetic City B, Synthetic Company B',
-  'overlay-speed': '90.0', 'freshness': 'current'
+  'overlay-speed': '90', 'freshness': 'current'
 });
 /** The strip sections the pair shows, in canonical order: range stays hidden (its estimate is not observed). */
 export const SYNTHETIC_V1_STRIP_SECTIONS = Object.freeze(['speed', 'gear', 'rpm', 'fuel', 'sdk-consumption', 'cargo', 'origin', 'destination',
@@ -225,7 +176,7 @@ export const SYNTHETIC_V1_OVERLAY_V0_STALE = Object.freeze({
 /** v1 not current while v0 is: the v1 sections are dashes, the mixed sections keep their v0 part (game ids, no mass). */
 export const SYNTHETIC_V1_OVERLAY_V1_STALE = Object.freeze({
   'overlay-origin': '—', 'overlay-distance-remaining': '—', 'overlay-deadline': '—', 'overlay-cargo': 'cargo.logs', 'overlay-cargo-detail': null,
-  'overlay-destination': 'city.warszawa', 'overlay-speed': '90.0', 'freshness': 'current'
+  'overlay-destination': 'city.warszawa', 'overlay-speed': '90', 'freshness': 'current'
 });
 /** Both sources stopped: dashes only; the freshness depends on which status arrives first, so it is not compared. */
 export const SYNTHETIC_V1_OVERLAY_STOPPED = Object.freeze({
@@ -269,7 +220,16 @@ export function overlayOverflow() {
     if (box.left < bounds.left || box.top < bounds.top || box.right > bounds.right || box.bottom > bounds.bottom) outside.push(id);
     if ([...element.querySelectorAll('.overlay-value')].some(value => value.scrollWidth > value.clientWidth)) truncated.push(id);
   }
-  return {layout: root.getAttribute('data-layout'), root: {width: Math.round(bounds.width), height: Math.round(bounds.height)}, sections, outside, truncated};
+  let alignment;
+  const content = root.querySelector?.('[data-testid="overlay-content"]');
+  if (content) {
+    const painted = content.getBoundingClientRect(), fraction = Number(content.getAttribute('data-anchor-y'));
+    const expectedTop = bounds.top + (bounds.height - painted.height) * fraction;
+    const aligned = Number.isFinite(fraction) && fraction >= 0 && fraction <= 1 && Math.abs(painted.top - expectedTop) <= 1;
+    alignment = {fraction, capacityHeight: bounds.height, paintedHeight: painted.height, top: painted.top - bounds.top, expectedTop: expectedTop - bounds.top, aligned};
+    if (!aligned) outside.push('content-anchor');
+  }
+  return {...(alignment ? {alignment} : {}), layout: root.getAttribute('data-layout'), root: {width: Math.round(bounds.width), height: Math.round(bounds.height)}, sections, outside, truncated};
 }
 
 /** ET-015c PR-4: the recording texts of a service that records nothing (production, GAME_HISTORY_RECORDING false). */
@@ -342,7 +302,7 @@ export async function recordingTextLog(page) {
 
 export function zeroLiveObservation(language) {
   const read = selector => globalThis.document.querySelector(selector);
-  return read('[data-testid="speed"]')?.innerText === (language === 'en' ? 'Speed: 0.0 km/h' : 'Скорость: 0.0 км/ч') &&
+  return !read('[data-testid="speed"]') && read('[data-testid="live-speed-number"]')?.textContent === '0' &&
     read('[data-testid="fuel"]')?.innerText === (language === 'en' ? 'Fuel: 0.0 L' : 'Топливо: 0.0 л') &&
-    read('.yu-gauge-number')?.textContent === '0.0' && !read('.yu-gauge-speed') && read('[data-testid="live.instrument.tank"]')?.getAttribute('data-state') === 'value' && !read('.yu-tank-unavailable') && read('.yu-tank i')?.style.height === '0%';
+    read('.yu-gauge-number')?.textContent === '0' && !read('.yu-gauge-speed') && read('[data-testid="live.instrument.tank"]')?.getAttribute('data-state') === 'value' && !read('.yu-tank-unavailable') && read('.yu-tank i')?.style.height === '0%';
 }

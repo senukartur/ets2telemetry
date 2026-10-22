@@ -123,7 +123,7 @@ function liveLinesInViewport() {
     const node = globalThis.document.querySelector(`[data-testid="${id}"]`), bounds = node?.getBoundingClientRect();
     return bounds ? {top: Math.round(bounds.top), bottom: Math.round(bounds.bottom), visible: bounds.width > 0 && bounds.height > 0} : null;
   };
-  return {innerHeight: globalThis.innerHeight, scrollY: globalThis.scrollY, status: box('shell.status.connection'), speed: box('speed'), fuel: box('fuel')};
+  return {innerHeight: globalThis.innerHeight, scrollY: globalThis.scrollY, status: box('shell.status.connection'), speed: box('live-speed-number'), fuel: box('fuel')};
 }
 
 /** Chooses a filter in its shadcn Select: open the trigger, then click the option, which Radix renders in a portal. */
@@ -149,13 +149,13 @@ export async function runJournalEmpty({dashboard, record}) {
   await clickTestId(dashboard, 'tab-journal');
   const empty = record.emptyHistory = await until(dashboard, listState, {page: 1, count: 0});
   // Only one tab panel is shown: the Live cards are hidden, not stacked above the journal.
-  record.liveHiddenInJournal = await dashboard.getByTestId('speed').isHidden() && await dashboard.getByTestId('overlay-settings').isHidden();
+  record.liveHiddenInJournal = await dashboard.getByTestId('live-speed-number').isHidden() && await dashboard.getByTestId('overlay-settings').isHidden();
   assert.equal(record.liveHiddenInJournal, true, 'The Live panel is shown while the Journal tab is open');
   assert.deepEqual({error: empty.error, empty: empty.empty, emptyNote: empty.emptyNote, banner: empty.banner, next: empty.next, previous: empty.previous},
     {error: null, empty: 'No trips recorded', emptyNote: 'Game history recording is off in this version, so no game trips are recorded yet.', banner: null, next: false, previous: false});
   record.emptyHistoryShown = true; record.recordingOffNoteShown = true;
   await clickTestId(dashboard, 'tab-live');
-  await dashboard.getByTestId('speed').waitFor({state: 'visible', timeout: 5000});
+  await dashboard.getByTestId('live-speed-number').waitFor({state: 'visible', timeout: 5000});
   // The closed Journal tab is unmounted and holds no page.
   await dashboard.getByTestId('journal').waitFor({state: 'detached', timeout: 5000});
   record.liveRestored = true;
@@ -225,7 +225,7 @@ export async function runJournalSeeded({dashboard, record}) {
   const pages = record.pages = [];
   const page1 = await until(dashboard, listState, {page: 1, count: 50, first: T.paging});
   assert.equal(page1.banner, BANNER); record.syntheticBannerShown = true;
-  assert.equal(await dashboard.getByTestId('speed').isHidden(), true, 'The Live panel is shown while the Journal tab is open');
+  assert.equal(await dashboard.getByTestId('live-speed-number').isHidden(), true, 'The Live panel is shown while the Journal tab is open');
   pages.push({...rowSummary(page1.rows), next: page1.next, previous: page1.previous});
   await clickTestId(dashboard, 'journal-list-next');
   const page2 = await until(dashboard, listState, {page: 2, count: 50, first: filler(60)});

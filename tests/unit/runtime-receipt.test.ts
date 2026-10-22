@@ -5,7 +5,7 @@ import {temporaryResources} from '../shared/resources';
 import {receiptBatchTimeout, validateRuntimeReceipts} from '../shared/runtime-receipt-validator';
 
 // The index that appends a row to run A's lifecycle main events; ET-011b added three settings rows after the original four.
-const MAIN_EVENTS_APPEND = 7;
+const MAIN_EVENTS_APPEND = 8;
 // ET-015a recording receipts: run A has the terminated service (pid 4100) and its replacement (4200), run B one service
 // (4300). The index of run A's recording-flush step, and the index that appends a row to run A's service events.
 const RECORDING_FLUSH_A = 11;
@@ -46,19 +46,19 @@ function lifecycleReceipt(path: (string | number)[] = [], replacement?: Json): s
     mainEvents: [...orderlyMain(), {event: 'SECOND_INSTANCE', facts: {action: 'created'}}, {event: 'APP_EXIT_REQUESTED', facts: {reason: 'renderer'}},
       // ET-011b settings diagnostics of run A; MAIN_EVENTS_APPEND below is the index after them.
       {event: 'SETTINGS_FALLBACK', facts: {state: 'invalid-file'}}, {event: 'SETTINGS_QUARANTINED', facts: {state: 'invalid-file'}},
-      {event: 'SETTINGS_SAVED', facts: {game: 'ets2', profile: 'us-customary'}}],
+      {event: 'SETTINGS_SAVED', facts: {game: 'ets2', profile: 'us-customary'}}, {event: 'SETTINGS_SAVED', facts: {overlayEnabled: false}}],
     serviceEvents: orderlyService(),
     lifecycle: {dashboardClosedServiceAlive: true, overlayAliveAfterClose: true, trayPresentAfterClose: true, overlayCurrentAfterClose: true,
       sourceConnectionPreserved: true, secondInstanceRestoredDashboard: true, trayOpenRestoredDashboard: true, explicitExitOrderly: true,
       restartRecovered: true, shutdownClean: true, servicePid: 4100,
       afterClose: {servicePid: 4100, dashboard: false, exiting: false, overlay: true, tray: true, upstream: true},
-      overlayChanged: reading('72.0', '71.0'), overlayRestored: reading('90.0', '73.0'),
+      overlayChanged: reading('72', '71.0'), overlayRestored: reading('90', '73.0'),
       secondInstance: {pid: 4200, exitCode: 0, signal: null, exitMilliseconds: 164, wroteLog: false, primaryActions: ['created']},
       explicitExit: {launcherExit: 0, signal: null, exitMilliseconds: 179, requests: ['renderer']},
-      restart: {servicePid: 4300, settingsState: 'loaded', dashboardUnits: {speed: 'Speed: 55.9 mph', fuel: 'Fuel: 19.3 US gal'}}, restartLauncherExit: 0,
+      restart: {overlayEnabled: false, servicePid: 4300, settingsState: 'loaded', dashboardUnits: {speed: 'Speed: 56 mph', fuel: 'Fuel: 19.3 US gal', gauge: {number: '56', unit: 'mph', accessibleName: 'Speed: 56 mph; Engine RPM: 600 rpm', visible: true}}}, restartLauncherExit: 0,
       settingsSeededInvalidFile: true, settingsStartupUnchanged: true, settingsQuarantinePreserved: true, settingsSavedExact: true, unitsApplied: true,
-      settingsRestartLoaded: true, settingsQuarantined: 1, dashboardUnits: {speed: 'Speed: 55.9 mph', fuel: 'Fuel: 19.3 US gal'},
-      overlayUnits: {...reading('55.9', '19.3'), speedUnit: 'mph', fuelUnit: 'US gal'},
+      overlayVisibilitySaved: true, overlayVisibilityRestarted: true, syntheticOverlayHiddenAfterOff: true, settingsRestartLoaded: true, settingsQuarantined: 1, dashboardUnits: {speed: 'Speed: 56 mph', fuel: 'Fuel: 19.3 US gal', gauge: {number: '56', unit: 'mph', accessibleName: 'Speed: 56 mph; Engine RPM: 600 rpm', visible: true}},
+      overlayUnits: {...reading('56', '19.3'), speedUnit: 'mph', fuelUnit: 'US gal'},
       restartMainEvents: [...orderlyMain(), {event: 'APP_EXIT_REQUESTED', facts: {reason: 'app-quit'}}, {event: 'SETTINGS_LOADED', facts: {state: 'loaded'}}],
       restartServiceEvents: orderlyService()}};
   if (path.length) {
@@ -173,6 +173,21 @@ function lifecycleCases() {
     invalid('restart events missing', ['lifecycle', 'restartMainEvents']),
     invalid('restart closed nonzero', ['lifecycle', 'restartLauncherExit'], 1),
     invalid('probe left behind', ['probesAfterExit', 0], 'ets2telemetry-probe-x'),
+    ...['overlayVisibilitySaved', 'overlayVisibilityRestarted', 'syntheticOverlayHiddenAfterOff'].flatMap(flag => [
+      invalid(`missing visibility ${flag}`, ['lifecycle', flag]),
+      invalid(`false visibility ${flag}`, ['lifecycle', flag], false),
+      invalid(`nonboolean visibility ${flag}`, ['lifecycle', flag], 'true')
+    ]),
+    {...invalid('legacy hidden flag cannot replace synthetic invariant', ['lifecycle', 'syntheticOverlayHiddenAfterOff']),
+      body: (() => {const value = JSON.parse(lifecycleReceipt()) as {lifecycle: Record<string, unknown>};
+        delete value.lifecycle.syntheticOverlayHiddenAfterOff; value.lifecycle.overlayHiddenWhileDisabled = true; return JSON.stringify(value);})()},
+    invalid('restart visibility missing', ['lifecycle', 'restart', 'overlayEnabled']),
+    invalid('restart visibility enabled', ['lifecycle', 'restart', 'overlayEnabled'], true),
+    invalid('restart visibility nonboolean', ['lifecycle', 'restart', 'overlayEnabled'], 'false'),
+    invalid('required visibility save missing', ['mainEvents', 7]),
+    invalid('visibility save cannot precede units', ['mainEvents', 6, 'facts'], {overlayEnabled: false}),
+    invalid('visibility save carries extra facts', ['mainEvents', 7, 'facts'], {overlayEnabled: false, extra: 'invented'}),
+    invalid('off-save did not save false', ['mainEvents', 7, 'facts', 'overlayEnabled'], true),
     // ET-011b settings evidence.
     invalid('settings seed flag missing', ['lifecycle', 'settingsSeededInvalidFile']),
     invalid('startup changed the settings file', ['lifecycle', 'settingsStartupUnchanged'], false),
@@ -185,12 +200,18 @@ function lifecycleCases() {
     invalid('overlay still metric after the change', ['lifecycle', 'overlayUnits', 'speedUnit'], 'km/h'),
     invalid('overlay fuel not converted', ['lifecycle', 'overlayUnits', 'fuel'], '73.0'),
     invalid('overlay units stale', ['lifecycle', 'overlayUnits', 'freshness'], 'stale'),
-    invalid('dashboard still metric after the change', ['lifecycle', 'dashboardUnits', 'speed'], 'Speed: 90.0 km/h'),
+    invalid('missing SVG evidence', ['lifecycle', 'dashboardUnits', 'gauge'], null),
+    invalid('wrong SVG number', ['lifecycle', 'dashboardUnits', 'gauge', 'number'], '55.9'),
+    invalid('wrong SVG unit', ['lifecycle', 'dashboardUnits', 'gauge', 'unit'], 'km/h'),
+    invalid('wrong SVG accessible name', ['lifecycle', 'dashboardUnits', 'gauge', 'accessibleName'], 'Speed: unavailable'),
+    invalid('SVG hidden', ['lifecycle', 'dashboardUnits', 'gauge', 'visible'], false),
+    invalid('SVG visibility as string', ['lifecycle', 'dashboardUnits', 'gauge', 'visible'], 'true'),
+    invalid('dashboard still metric after the change', ['lifecycle', 'dashboardUnits', 'speed'], 'Speed: 90 km/h'),
     invalid('restart dashboard back to metric', ['lifecycle', 'restart', 'dashboardUnits', 'fuel'], 'Fuel: 73.0 L'),
     invalid('restart settings not loaded', ['lifecycle', 'restart', 'settingsState'], 'defaults'),
     invalid('fallback row missing', ['mainEvents', 4], {event: 'SETTINGS_LOADED', facts: {state: 'defaults'}}),
     invalid('fallback for another state', ['mainEvents', 4, 'facts', 'state'], 'loaded-with-fallbacks'),
-    invalid('second save', ['mainEvents', MAIN_EVENTS_APPEND], {event: 'SETTINGS_SAVED', facts: {game: 'ats', profile: 'metric'}}),
+    invalid('unexpected third save', ['mainEvents', MAIN_EVENTS_APPEND], {event: 'SETTINGS_SAVED', facts: {game: 'ats', profile: 'metric'}}),
     invalid('restart loaded another state', ['lifecycle', 'restartMainEvents', 3, 'facts', 'state'], 'defaults'),
     invalid('restart wrote settings', ['lifecycle', 'restartMainEvents', 4], {event: 'SETTINGS_SAVED', facts: {game: 'ets2', profile: 'us-customary'}}),
     // Clean late read: one leading pending row per run is accepted; anything else about it is not.
@@ -491,7 +512,7 @@ function journalReceipt(path: (string | number)[] = [], replacement?: Json): str
       anchorRows: [8, 7, 6, 5, 4, 3, 2, 1].map(n => ({trip: trip(n)})), anchorDetails: [1, 2, 3, 4, 5, 6, 7, 8].map(n => ({trip: trip(n)})),
       deliveredSamples: [{kind: 'sample', speed: '80.1 km/h'}, {kind: 'sample', speed: '0.0 km/h'}, {kind: 'gap', text: 'no samples for 1 s'}, {kind: 'sample', speed: 'unavailable (invalid reading)'}],
       pagingTimeline: {first: '1', pageTwo: ['101', '102', '103', '104', '105'], nextOnLast: false}, pagingIntervals: {pageTwo: 4, nextOnLast: false},
-      pagingSamples: {kinds: ['sample'], firstSpeed: '72.0 km/h', nextOnSecond: true},
+      pagingSamples: {kinds: ['sample'], firstSpeed: '72 km/h', nextOnSecond: true},
       filters: {none: [trip(5), trip(4), trip(3)], noneNext: false, partial: 39, partialNext: false},
       restartLauncherExit: 0, files: {magic: 'SQLite format 3', applicationId: 1163154226, userVersion: 3, sidecars: [], syntheticBackups: false},
       exportNoteShown: true, exportsSaved: true, exportCancelledWritesNothing: true, exportTargetRefused: true, dataFolderUnchanged: true,

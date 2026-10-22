@@ -32,12 +32,16 @@ export interface OverlayScreen {
   getAllDisplays(): {bounds: PhysicalClientBounds}[];
 }
 export interface OverlayControllerOptions {
+  /** Persisted visibility gate; evaluated before edit and driving authority. */
+  enabled?: boolean;
   /** The saved placement of the initial layout; the overlay window was created at its scale. */
   placement?: OverlayPlacement;
   /** The saved enabled sections; every layout reserves rows for them (ET-012c, ET-012d). Defaults to every section. */
   sections?: OverlaySections;
   /** Receives every change of the edit state. */
   editChanged?: (state: OverlayEditState) => void;
+  /** Fraction-only content alignment change; does not carry an observation or native command. */
+  anchorChanged?: (anchor: number) => void;
 }
 interface EditDraft {layout: OverlayLayout; draft: OverlayPlacement}
 const sameRect = (left: DipRect, right: DipRect) => left.x === right.x && left.y === right.y && left.width === right.width && left.height === right.height;
@@ -56,6 +60,7 @@ const sameEditState = (left: OverlayEditState | undefined, right: OverlayEditSta
 export class OverlayController {
   private live?: LiveTelemetry;
   private ready = false;
+  private enabled: boolean;
   private visible = false;
   private topmostLossReported = false;
   private bounds?: PhysicalClientBounds;
@@ -71,15 +76,26 @@ export class OverlayController {
   private ownForeground = false;
   private interactive = false;
   private moving = false;
+  private heldAnchor?: number;
+  private reportedAnchor: number;
+  private readonly anchorChanged: (anchor: number) => void;
   /** The client area the visible edit overlay was placed in; a finished drag converts against it. */
   private client?: DipRect;
   constructor(private readonly window: OverlayWindow, private readonly screen: OverlayScreen, private readonly topmostLost: (phase: 'show' | 'visible') => void = () => {},
     private layout: OverlayLayout = 'strip', options: OverlayControllerOptions = {}) {
+    this.enabled = options.enabled ?? true;
     this.placement = options.placement ?? DEFAULT_OVERLAY_PLACEMENTS[layout];
     this.sections = options.sections ?? DEFAULT_OVERLAY_SECTIONS;
     this.zoom = this.placement.scale;
     this.editChanged = options.editChanged ?? (() => {});
     this.reportedEdit = {active: false};
+    this.reportedAnchor = this.placement.y; this.anchorChanged = options.anchorChanged ?? (() => {});
+  }
+  get contentAnchorY(): number {return this.heldAnchor ?? (this.edit?.draft ?? this.placement).y;}
+  private reportAnchor(): void {
+    const anchor = this.contentAnchorY;
+    if (anchor === this.reportedAnchor) return;
+    this.reportedAnchor = anchor; this.anchorChanged(anchor);
   }
   update(live: LiveTelemetry): void {this.live = live; this.place();}
   /**
@@ -94,12 +110,20 @@ export class OverlayController {
     const placed = layout === this.layout && samePlacement(placement, this.placement), sectionsChanged = !sameSections(sections, this.sections);
     if (placed && !sectionsChanged) return;
     this.layout = layout; this.placement = placement; this.sections = sections;
+    this.reportAnchor();
     // Main refuses a layout change while editing; should one arrive anyway, the edit is cancelled.
     if (this.edit && this.edit.layout !== layout) {this.endEdit(); return;}
     if (this.edit) {if (sectionsChanged) this.place(); return;}
     // A new layout or placement always moves the window; new sections only invalidate the cached client observation.
     if (placed) this.physical = undefined;
     else this.bounds = this.physical = undefined;
+    this.place();
+  }
+  /** Applies committed visibility first, so discarding an edit cannot briefly re-show the driving overlay. */
+  setEnabled(enabled: boolean): void {
+    if (enabled === this.enabled) return;
+    this.enabled = enabled;
+    if (!enabled) this.endEdit();
     this.place();
   }
   loaded(ready: boolean): void {this.ready = ready; this.place();}
@@ -114,6 +138,7 @@ export class OverlayController {
 
   /** Enters edit mode for the current layout from its saved placement; `ownForeground` is the gate's current state. */
   beginEdit(ownForeground: boolean): OverlayEditState {
+    if (!this.enabled) throw new Error('Overlay is disabled');
     if (!this.edit) {
       this.edit = {layout: this.layout, draft: this.placement};
       this.ownForeground = ownForeground; this.editStatus = 'waiting-for-game';
@@ -135,7 +160,7 @@ export class OverlayController {
   }
   /** The layout's default anchor at scale 1. */
   resetEdit(): OverlayEditState {
-    if (this.edit) {this.edit.draft = DEFAULT_OVERLAY_PLACEMENTS[this.edit.layout]; this.place();}
+    if (this.edit) {this.edit.draft = DEFAULT_OVERLAY_PLACEMENTS[this.edit.layout]; this.reportAnchor(); this.place();}
     return this.editState();
   }
   /**
@@ -146,22 +171,22 @@ export class OverlayController {
     const edit = this.edit;
     if (!edit) return undefined;
     if (!this.window.isDestroyed()) this.hide();
-    this.edit = undefined; this.moving = false; this.client = undefined; this.bounds = this.physical = undefined;
+    this.edit = undefined; this.moving = false; this.heldAnchor = undefined; this.reportAnchor(); this.client = undefined; this.bounds = this.physical = undefined;
     this.place();
     this.reportEdit();
     return edit.draft;
   }
   /** The user started dragging the visible edit overlay: no placement moves it until the drag ends. */
-  moveStarted(): void {if (this.edit && this.visible && this.interactive) this.moving = true;}
+  moveStarted(): void {if (this.edit && this.visible && this.interactive && !this.moving) {this.heldAnchor = this.contentAnchorY; this.moving = true;}}
   /** The drag ended at these DIP bounds: they become the draft's clamped fractions, then the window snaps inside. */
   moved(bounds: DipRect): void {
     if (!this.edit) return;
-    this.moving = false;
+    this.moving = false; this.heldAnchor = undefined;
     if (this.visible && this.client) {
       this.edit.draft = placementFromBounds(this.edit.layout, this.client, bounds, this.edit.draft, this.sections);
       this.bounds = {x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height};
     }
-    this.place();
+    this.place(); this.reportAnchor();
   }
   editState(): OverlayEditState {
     return this.edit ? {active: true, layout: this.edit.layout, scale: this.edit.draft.scale, placement: this.editStatus} : {active: false};
@@ -180,7 +205,7 @@ export class OverlayController {
   /** Hides first; an interactive edit overlay then becomes click-through, non-focusable and non-movable again. */
   private hide(): void {
     if (!this.visible && !this.interactive) return;
-    this.visible = false; this.moving = false; this.window.hide();
+    this.visible = false; this.moving = false; this.heldAnchor = undefined; this.reportAnchor(); this.window.hide();
     if (!this.interactive) return;
     this.interactive = false;
     this.window.setMovable(false); this.window.setIgnoreMouseEvents(true); this.window.setFocusable(false);
@@ -209,7 +234,8 @@ export class OverlayController {
   }
   private place(): void {
     if (this.window.isDestroyed()) return;
-    this.syncZoom();
+    if (!this.enabled) {this.hide(); return;}
+    if (!this.moving) this.syncZoom();
     if (this.edit) {this.placeEditing(this.edit); return;}
     const physical = this.live && currentGameClientBounds(this.live);
     if (!this.ready || !physical || this.topologyPending()) {this.hide(); return;}

@@ -108,6 +108,14 @@ function Hud({view}: {view: OverlayView}) {
   </div>;
 }
 
+/** Painted content aligns inside the unchanged native capacity; the diagnostic marker stays outside. */
+export function OverlayContent({view}: {view: OverlayView}) {
+  return <div className="overlay-content" data-testid="overlay-content" data-anchor-y={view.contentAnchorY}
+      style={{top: view.contentAnchorY * 100 + '%', transform: 'translateY(-' + view.contentAnchorY * 100 + '%)'}}>
+    {view.layout === 'card' ? <CardLayout view={view} /> : view.layout === 'cluster' ? <Cluster view={view} /> : view.layout === 'hud' ? <Hud view={view} /> : <Strip view={view} />}
+    </div>;
+}
+
 export default function Overlay() {
   const [live, setLive] = useState<OverlayPresentation>();
   useEffect(() => window.overlay.subscribeOverlay(setLive), []);
@@ -121,6 +129,6 @@ export default function Overlay() {
       {latencyBits(live.diagnosticFrame).map((bit, index) => <span key={index} style={{display: 'block', flex: 'none', width: MARKER_CELL,
         height: MARKER_HEIGHT, background: bit ? '#fff' : '#000'}} />)}
     </div> : null}
-    {view.layout === 'card' ? <CardLayout view={view} /> : view.layout === 'cluster' ? <Cluster view={view} /> : view.layout === 'hud' ? <Hud view={view} /> : <Strip view={view} />}
+    <OverlayContent view={view} />
   </main>;
 }

@@ -88,6 +88,7 @@ export function overlayPresentation(live: LiveTelemetry, units: UnitProfiles = D
       continue;
     }
     let texts = parts.map(valueOf).filter((text): text is string => text !== undefined);
+    if (id === 'speed' && state?.speed.available) texts = [speedNumber(state.speed.value, profile) + ' ' + speedUnit(profile)];
     if (id === 'game-time') {
       texts = texts.map(t => localizeGameTimeString(t, language));
     } else if (id === 'deadline') {

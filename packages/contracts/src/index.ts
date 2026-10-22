@@ -65,6 +65,8 @@ export interface DesktopBridge {
   setUnitProfile(game: UnitGame, profile: UnitProfile): Promise<SettingsView>;
   /** Persists the overlay layout; like a unit profile, main applies it only after the durable write. */
   setOverlayLayout(layout: OverlayLayout): Promise<SettingsView>;
+  /** Persists visibility; disabling discards an active placement draft only after the durable save. */
+  setOverlayEnabled(enabled: boolean): Promise<SettingsView>;
   /** Persists the complete overlay section set: exactly the fourteen ids, booleans only, at least one enabled. */
   setOverlaySections(sections: OverlaySections): Promise<SettingsView>;
   /**
@@ -177,6 +179,8 @@ export type OverlaySectionView =
 export interface OverlayPresentation {
   /** Opt-in diagnostic pixels only; no renderer command or game-protocol field. */
   diagnosticFrame?: number;
+  /** Display-only vertical content anchor in [0, 1]; never a native coordinate or source observation. */
+  contentAnchorY?: number;
   source: 'ETS2' | 'ATS' | 'No game';
   origin: 'game' | 'synthetic' | 'replay' | 'none';
   status: LiveTelemetry['status'];

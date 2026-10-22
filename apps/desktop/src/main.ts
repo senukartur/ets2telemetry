@@ -117,7 +117,7 @@ function runApplication(profileError: unknown): void {
   // Settings load in parallel with the service start and never write. The store's view is the only settings state in
   // main; it changes only after a durable save or when a startup read that outlasted its budget is applied. The first
   // windows open after the load returned (at most 1000 ms), if need be with defaults in the read-only `loading` state.
-  const settingsStore = new SettingsStore(settingsDirectory(process.env.LOCALAPPDATA), {log, changed: () => settingsChanged()});
+  const settingsStore = new SettingsStore(settingsDirectory(process.env.LOCALAPPDATA), {log, changed: () => {settingsChanged(); void syncAutostart();}});
   const settingsLoad = settingsStore.load().then(() => undefined, (error: unknown) => {log('SETTINGS_LOAD_REJECTED', String(error));});
   let window: BrowserWindow | undefined, service: UtilityProcess | undefined, status: ScaffoldStatus | undefined;
   let subscribed = false, serviceReady = false;
@@ -126,26 +126,23 @@ function runApplication(profileError: unknown): void {
   let startHiddenOnLaunch = process.argv.includes('--hidden');
   let autostartTarget: AutostartTarget | undefined;
   let autostartStatus: AutostartRegistrationStatus = 'unregistered';
+  let autostartGeneration = 0, startupAutostartRetired = false;
+  // Startup may observe pending defaults, but only a classified initial load supplies login-item intent.
   async function syncAutostart(): Promise<void> {
+    if (startupAutostartRetired || lifecycle.exiting) return;
+    const generation = ++autostartGeneration;
     try {
       const roots = await resolveUninstallRoots({executable: process.execPath, env: process.env, fs: uninstallFs});
+      if (generation !== autostartGeneration || startupAutostartRetired || lifecycle.exiting) return;
       autostartTarget = resolveAutostartTarget(roots, process.execPath);
-      if (!autostartTarget) {
-        autostartStatus = 'not-installed';
-      } else {
-        const view = settingsStore.view();
-        if (view.autostart) {
-          autostartStatus = applyAutostartRegistration(app, autostartTarget, true);
-        } else {
-          const current = queryAutostartStatus(app, autostartTarget);
-          if (current === 'registered') {
-            autostartStatus = applyAutostartRegistration(app, autostartTarget, false);
-          } else {
-            autostartStatus = current;
-          }
-        }
-      }
+      const intent = settingsStore.knownAutostartIntent;
+      startupAutostartRetired = intent !== undefined || settingsStore.view().state !== 'loading';
+      const current = queryAutostartStatus(app, autostartTarget);
+      autostartStatus = intent === true || (intent === false && current === 'registered')
+        ? applyAutostartRegistration(app, autostartTarget, intent) : current;
     } catch {
+      if (generation !== autostartGeneration || startupAutostartRetired || lifecycle.exiting) return;
+      startupAutostartRetired = settingsStore.view().state !== 'loading';
       autostartStatus = 'not-installed';
     }
     pushAppState();
@@ -277,9 +274,15 @@ function runApplication(profileError: unknown): void {
     service.postMessage(request);
   }, (code, error) => log(code, error)) : undefined;
   function publishOverlay(live: LiveTelemetry, units: UnitProfiles, settings: OverlaySettings, language: AppLanguage = settingsStore.view().language): void {
-    lastOverlay = overlayPresentation(live, units, settings, lastOverlay, overlayEdit.active, language);
+    lastOverlay = {...overlayPresentation(live, units, settings, lastOverlay, overlayEdit.active, language),
+      contentAnchorY: overlayController?.contentAnchorY ?? settings.placements[settings.layout].y};
     if (latency) lastOverlay = latency.project(lastOverlay, live, Boolean(overlay && !overlay.isDestroyed() && overlay.isVisible()));
     overlaySubscriptions.publish(lastOverlay);
+  }
+  function publishOverlayAnchor(contentAnchorY: number): void {
+    if (lifecycle.exiting || lastOverlay.contentAnchorY === contentAnchorY) return;
+    // Preserve the existing projection/capture/diagnostic token and the normal credit/coalescing/epoch path.
+    lastOverlay = {...lastOverlay, contentAnchorY}; overlaySubscriptions.publish(lastOverlay);
   }
   const freshness = new LiveFreshness(update => {
     const view = settingsStore.view();
@@ -394,12 +397,18 @@ function runApplication(profileError: unknown): void {
   // for its layout and saved placement. It accepts no observation and renews no SDK or window authority: freshness and
   // its expiry timers are untouched, and the placement uses the last observation the controller already holds.
   function settingsChanged(): void {
+    const view = settingsStore.view();
+    // Pending defaults are not the saved visibility; wait for the read result or existing read-limit fallback.
+    const enabled = view.state !== 'loading' && view.overlay.enabled;
+    // Disable before edit cancellation; enable only after the final committed geometry is installed.
+    if (!enabled && overlayEdit.active) timeline?.('OVERLAY_EDIT_CANCELLED', {reason: 'overlay-disabled'});
+    if (!enabled) overlayController?.setEnabled(false);
     pushAppState();
     if (lifecycle.exiting) return;
-    const view = settingsStore.view();
     presentTray(true);
     publishOverlay(lastLive, view.units, view.overlay, view.language);
     overlayController?.setLayout(view.overlay.layout, view.overlay.placements[view.overlay.layout], view.overlay.sections);
+    if (enabled) overlayController?.setEnabled(true);
   }
   // ET-012b edit mode. The controller reports every change of its edit state; main pushes it to the dashboard and,
   // when the mode itself changes, republishes the overlay projection with its `editing` flag (no authority renewed).
@@ -548,7 +557,7 @@ function runApplication(profileError: unknown): void {
     // taskbar, which drops WS_EX_TOPMOST while a borderless full-screen game is foreground.
     created.setAlwaysOnTop(true, OVERLAY_TOPMOST_LEVEL);
     overlayController = new OverlayController(created, screen, phase => log('OVERLAY_TOPMOST_RESTORED', undefined, {phase}), layout,
-      {placement, sections: settings.overlay.sections, editChanged: overlayEditChanged});
+      {enabled: settings.state !== 'loading' && settings.overlay.enabled, placement, sections: settings.overlay.sections, editChanged: overlayEditChanged, anchorChanged: publishOverlayAnchor});
     created.webContents.setWindowOpenHandler(() => ({action: 'deny'}));
     created.webContents.on('will-navigate', event => event.preventDefault());
     // A loaded document starts at the default zoom; the scale in use applies again.
@@ -815,17 +824,25 @@ function runApplication(profileError: unknown): void {
     if (!trusted(event)) throw new Error('Untrusted settings request');
     const [enabled] = request;
     if (request.length !== 1 || typeof enabled !== 'boolean') throw new Error('Invalid autostart request');
+    startupAutostartRetired = true; ++autostartGeneration;
+    if (lifecycle.exiting) throw new Error('Settings request was retired');
     if (!autostartTarget) {
       const roots = await resolveUninstallRoots({executable: process.execPath, env: process.env, fs: uninstallFs}).catch(() => ({ok: false as const, code: 'NOT_INSTALLED' as const}));
-      autostartTarget = resolveAutostartTarget(roots, process.execPath);
+      if (lifecycle.exiting) throw new Error('Settings request was retired');
+      const candidate = resolveAutostartTarget(roots, process.execPath);
+      autostartTarget ??= candidate;
     }
     if (!autostartTarget) {
       autostartStatus = 'not-installed';
       pushAppState();
       throw new Error('Autostart is not available in an unpackaged or portable environment');
     }
+    // Observe now: a failed durable write must still report the actual registration, without restoring stale state.
+    autostartStatus = queryAutostartStatus(app, autostartTarget);
+    pushAppState();
     const view = await saveSettings(() => settingsStore.setAutostart(enabled));
-    autostartStatus = applyAutostartRegistration(app, autostartTarget, enabled);
+    if (lifecycle.exiting) throw new Error('Settings request was retired');
+    autostartStatus = applyAutostartRegistration(app, autostartTarget, settingsStore.view().autostart);
     pushAppState();
     return view;
   });
@@ -842,6 +859,13 @@ function runApplication(profileError: unknown): void {
     const [game, profile] = request;
     if (request.length !== 2 || !isUnitGame(game) || !isUnitProfile(profile)) throw new Error('Invalid unit profile request');
     return saveSettings(() => settingsStore.setUnitProfile(game, profile));
+  });
+  // Exactly one boolean, from the trusted dashboard frame. A failed write leaves visibility and any draft untouched.
+  ipcMain.handle('settings:set-overlay-enabled', async (event, ...request: unknown[]) => {
+    if (!trusted(event)) throw new Error('Untrusted settings request');
+    const [enabled] = request;
+    if (request.length !== 1 || typeof enabled !== 'boolean') throw new Error('Invalid overlay visibility request');
+    return saveSettings(() => settingsStore.setOverlayEnabled(enabled));
   });
   // Exactly one layout id. There is no generic settings patch: each channel accepts one fixed, validated shape.
   ipcMain.handle('settings:set-overlay-layout', async (event, ...request: unknown[]) => {
@@ -870,6 +894,7 @@ function runApplication(profileError: unknown): void {
   }
   ipcMain.handle('overlay-edit:begin', (event, ...request: unknown[]) => {
     const controller = editRequest(event, request.length === 0);
+    if (!settingsStore.view().overlay.enabled) throw new Error('Overlay is disabled');
     if (overlayEdit.active) return overlayEdit;
     if (!settingsStore.view().writable) throw new Error('Overlay edit mode needs writable settings');
     focusGate.start(ownFocused());

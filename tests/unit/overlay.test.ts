@@ -24,28 +24,28 @@ afterEach(() => vi.useRealTimers());
 it('converts ETS2 and ATS defaults without changing canonical quantities, including real zeros', () => {
   const current = live(), state = current.observation!.state;
   state.speed = {available: true, value: 10, unit: 'm/s'}; state.fuel = {available: true, value: 37.85411784, unit: 'L'};
-  expect(overlayPresentation(current)).toMatchObject({source: 'ETS2', speed: '36.0', speedUnit: 'km/h', fuel: '37.9', fuelUnit: 'L', freshness: 'current'});
+  expect(overlayPresentation(current)).toMatchObject({source: 'ETS2', speed: '36', speedUnit: 'km/h', fuel: '37.9', fuelUnit: 'L', freshness: 'current'});
   current.selection = 'ats'; current.observation!.source.game = 'ats';
-  expect(overlayPresentation(current)).toMatchObject({source: 'ATS', speed: '22.4', speedUnit: 'mph', fuel: '10.0', fuelUnit: 'US gal'});
+  expect(overlayPresentation(current)).toMatchObject({source: 'ATS', speed: '22', speedUnit: 'mph', fuel: '10.0', fuelUnit: 'US gal'});
   expect(state.speed.value).toBe(10); expect(state.fuel.value).toBe(37.85411784);
   state.speed.value = 0; state.fuel.value = 0;
-  expect(overlayPresentation(current)).toMatchObject({speed: '0.0', fuel: '0.0'});
+  expect(overlayPresentation(current)).toMatchObject({speed: '0', fuel: '0.0'});
 });
 it.each([
-  {game: 'ets2' as const, unit: 'km/h', below: 0.0136, above: 0.0142, reverse: '-7.2'},
-  {game: 'ats' as const, unit: 'mph', below: 0.0219, above: 0.0228, reverse: '-4.5'}
+  {game: 'ets2' as const, unit: 'km/h', below: 0.136, above: 0.142, reverse: '-7'},
+  {game: 'ats' as const, unit: 'mph', below: 0.219, above: 0.228, reverse: '-4'}
 ])('shows rounded zero without a minus sign and preserves signed reverse speed in $game', ({game, unit, below, above, reverse}) => {
   const current = live(), state = current.observation!.state;
   current.selection = game; current.observation!.source.game = game;
-  // Values straddle 0.05 in each display unit, safely away from binary rounding ties.
+  // Values straddle 0.5 in each display unit, safely away from binary rounding ties.
   const cases = [
-    {raw: -0.001, displayed: '0.0'},
-    {raw: -0, displayed: '0.0'},
-    {raw: 0, displayed: '0.0'},
-    {raw: -below, displayed: '0.0'},
-    {raw: -above, displayed: '-0.1'},
-    {raw: below, displayed: '0.0'},
-    {raw: above, displayed: '0.1'},
+    {raw: -0.001, displayed: '0'},
+    {raw: -0, displayed: '0'},
+    {raw: 0, displayed: '0'},
+    {raw: -below, displayed: '0'},
+    {raw: -above, displayed: '-1'},
+    {raw: below, displayed: '0'},
+    {raw: above, displayed: '1'},
     {raw: -2, displayed: reverse}
   ];
   for (const {raw, displayed} of cases) {
@@ -77,7 +77,7 @@ it.each(['synthetic', 'replay'] as const)('projects explicit %s fixtures for a h
   const current = live(); current.selection = origin; current.observation!.source.origin = origin;
   current.observation!.state.speed = {available: true, value: 25, unit: 'm/s'};
   current.observation!.state.fuel = {available: true, value: 73, unit: 'L'};
-  expect(overlayPresentation(current)).toMatchObject({source: 'ETS2', origin, speed: '90.0', fuel: '73.0', freshness: 'current'});
+  expect(overlayPresentation(current)).toMatchObject({source: 'ETS2', origin, speed: '90', fuel: '73.0', freshness: 'current'});
 });
 it('does not renew equal SDK captures, permits fresh windows with stale metrics, then hides on window expiry', async () => {
   const publish = vi.fn(), freshness = new LiveFreshness(publish), current = live();
@@ -261,9 +261,9 @@ it('recovers an unchanged rectangle after a transient conversion failure without
 });
 // ET-011b: the overlay follows the persisted profile of the displayed game.
 it.each([
-  {game: 'ets2' as const, units: {ets2: 'us-customary', ats: 'us-customary'} as const, speed: '55.9', speedUnit: 'mph', fuel: '19.3', fuelUnit: 'US gal'},
-  {game: 'ats' as const, units: {ets2: 'metric', ats: 'metric'} as const, speed: '90.0', speedUnit: 'km/h', fuel: '73.0', fuelUnit: 'L'},
-  {game: 'ets2' as const, units: {ets2: 'metric', ats: 'metric'} as const, speed: '90.0', speedUnit: 'km/h', fuel: '73.0', fuelUnit: 'L'}
+  {game: 'ets2' as const, units: {ets2: 'us-customary', ats: 'us-customary'} as const, speed: '56', speedUnit: 'mph', fuel: '19.3', fuelUnit: 'US gal'},
+  {game: 'ats' as const, units: {ets2: 'metric', ats: 'metric'} as const, speed: '90', speedUnit: 'km/h', fuel: '73.0', fuelUnit: 'L'},
+  {game: 'ets2' as const, units: {ets2: 'metric', ats: 'metric'} as const, speed: '90', speedUnit: 'km/h', fuel: '73.0', fuelUnit: 'L'}
 ])('projects $game in its persisted profile $units', ({game, units, speed, speedUnit, fuel, fuelUnit}) => {
   const current = live(), state = current.observation!.state;
   current.selection = game; current.observation!.source.game = game;
@@ -279,7 +279,7 @@ it('keeps metric without a game and the fixture game profile for synthetic sourc
   expect(overlayPresentation(initialLive('game'), units)).toMatchObject({source: 'No game', speedUnit: 'km/h', fuelUnit: 'L'});
   const current = live(); current.selection = 'synthetic'; current.observation!.source.origin = 'synthetic';
   current.observation!.state.speed = {available: true, value: 25, unit: 'm/s'}; current.observation!.state.fuel = {available: true, value: 73, unit: 'L'};
-  expect(overlayPresentation(current, units)).toMatchObject({source: 'ETS2', origin: 'synthetic', speed: '55.9', speedUnit: 'mph', fuel: '19.3', fuelUnit: 'US gal'});
+  expect(overlayPresentation(current, units)).toMatchObject({source: 'ETS2', origin: 'synthetic', speed: '56', speedUnit: 'mph', fuel: '19.3', fuelUnit: 'US gal'});
 });
 // ET-012a: each layout has its own anchor and size in the game's client area (DIP -960, 0, 960 x 540 here).
 // ET-012c reserves five rows at 928 DIP wide; ET-028's 38 px rows make the height 5 × 38 + 2 = 192 DIP.
@@ -354,11 +354,11 @@ function trackedController(layout: OverlayLayout = 'cluster', placement?: Overla
     webContents: {setZoomFactor: vi.fn((factor: number) => record(`zoom(${factor})`))}};
   const screen = {screenToDipRect: vi.fn((_window: null, bounds: Electron.Rectangle) => ({x: bounds.x / 2, y: bounds.y / 2, width: bounds.width / 2, height: bounds.height / 2})),
     getAllDisplays: () => [{bounds: {x: -960, y: 0, width: 1920, height: 1080}}]};
-  const editChanged = vi.fn<(state: OverlayEditState) => void>();
+  const editChanged = vi.fn<(state: OverlayEditState) => void>(), anchorChanged = vi.fn<(anchor: number) => void>();
   const current = live(), metadata = current.observation!.state.window;
   if (!metadata.available) throw new Error('Expected metadata');
-  return {window, state, calls, screen, editChanged, current, metadata: metadata.value,
-    overlay: new OverlayController(window, screen, vi.fn(), layout, {...(placement ? {placement} : {}), ...(sections ? {sections} : {}), editChanged})};
+  return {window, state, calls, screen, editChanged, anchorChanged, current, metadata: metadata.value,
+    overlay: new OverlayController(window, screen, vi.fn(), layout, {...(placement ? {placement} : {}), ...(sections ? {sections} : {}), editChanged, anchorChanged})};
 }
 type Tracked = ReturnType<typeof trackedController>;
 /** The REG-016 invariant after every controller call: never a taskbar tab; hidden or driving means click-through. */
@@ -380,6 +380,31 @@ function editing(tracked: Tracked) {
   tracked.calls.length = 0;
   return tracked.overlay.beginEdit(true);
 }
+it('applies visibility before discarding edit, hides interactively first, and refuses edit while off', () => {
+  const tracked = trackedController(); editing(tracked); tracked.overlay.setEditScale(1.5); tracked.calls.length = 0;
+  tracked.overlay.setEnabled(false);
+  expect(tracked.calls.slice(0, 5)).toEqual(['hide', 'setMovable(false)', 'setIgnoreMouseEvents(true)', 'setFocusable(false)', 'setSkipTaskbar(true)']);
+  expect(tracked.calls).not.toContain('showInactive'); expect(tracked.overlay.editState()).toEqual({active: false});
+  expect(() => tracked.overlay.beginEdit(true)).toThrow('Overlay is disabled'); assertInvariant(tracked, true);
+  tracked.metadata.foreground = true; tracked.overlay.update(tracked.current); expect(tracked.state.visible).toBe(false);
+  tracked.overlay.setEnabled(true); expect(tracked.state.visible).toBe(true); expect(tracked.overlay.editState()).toEqual({active: false});
+  expect(tracked.window.webContents.setZoomFactor).toHaveBeenLastCalledWith(1); assertInvariant(tracked, true);
+});
+it.each(['expired', 'minimized', 'background', 'source', 'failed', 'small', 'topology', 'offscreen'])('enabling never bypasses the existing %s gate', fault => {
+  const tracked = trackedController(), {overlay, current, metadata, window, screen} = tracked;
+  overlay.setEnabled(false); overlay.loaded(true); overlay.update(current);
+  expect(window.showInactive).not.toHaveBeenCalled();
+  if (fault === 'expired') current.observation!.windowFresh = false;
+  if (fault === 'minimized') metadata.minimized = true;
+  if (fault === 'background') metadata.foreground = false;
+  if (fault === 'source') current.selection = 'synthetic';
+  if (fault === 'failed') current.status = 'service-failed';
+  if (fault === 'small') metadata.width = 10;
+  if (fault === 'topology') overlay.topologyChanged();
+  if (fault === 'offscreen') screen.screenToDipRect.mockReturnValue({x: -5000, y: 0, width: 1920, height: 1080});
+  overlay.update(current); const before = structuredClone(current); overlay.setEnabled(true);
+  expect(window.showInactive).not.toHaveBeenCalled(); expect(window.moveTop).not.toHaveBeenCalled(); expect(current).toEqual(before);
+});
 const order = (calls: string[], names: string[]) => names.map(name => calls.indexOf(name));
 
 it('makes the edit overlay interactive before an inactive show and raises it afterwards, without show or focus', () => {
@@ -728,4 +753,37 @@ it('transitions to hidden and resets interactivity flags once on ending edit mod
   }
   tracked.overlay.setLayout('strip');
   expect(tracked.calls).toEqual([]);
+});
+
+it.each(['strip', 'card', 'cluster', 'hud'] as const)('keeps %s native capacity fixed across sparse/populated readings and uses committed anchors', layout => {
+  const t = trackedController(layout, {x: 0.5, y: 1, scale: 1}); t.overlay.loaded(true); t.overlay.update(t.current);
+  expect(t.overlay.contentAnchorY).toBe(1); t.window.setBounds.mockClear();
+  t.current.observation!.state.speed = {available: false, reason: 'not-observed', unit: 'm/s'};
+  t.overlay.update(t.current); t.current.observation!.state.speed = {available: true, value: 25, unit: 'm/s'}; t.overlay.update(t.current);
+  expect(t.window.setBounds).not.toHaveBeenCalled(); expect(t.anchorChanged).not.toHaveBeenCalled();
+});
+it('publishes a fraction-only drag once after release, freezes anchor/zoom/bounds while held and restores committed anchor on cancel', () => {
+  const t = trackedController('cluster', {x: 0, y: 1, scale: 1}); editing(t);
+  t.overlay.moveStarted(); t.window.setBounds.mockClear(); t.window.webContents.setZoomFactor.mockClear();
+  t.overlay.resetEdit(); t.overlay.setEditScale(1.1); t.overlay.update(t.current);
+  expect(t.overlay.contentAnchorY).toBe(1); expect(t.anchorChanged).not.toHaveBeenCalled();
+  expect(t.window.setBounds).not.toHaveBeenCalled(); expect(t.window.webContents.setZoomFactor).not.toHaveBeenCalled();
+  t.overlay.moved({x: -700, y: 100, width: 484, height: 294});
+  expect(t.overlay.contentAnchorY).toBeGreaterThan(0); expect(t.overlay.contentAnchorY).toBeLessThan(1);
+  expect(t.anchorChanged).toHaveBeenCalledOnce(); expect(t.window.webContents.setZoomFactor).toHaveBeenCalledOnce();
+  t.overlay.endEdit(); expect(t.overlay.contentAnchorY).toBe(1); expect(t.anchorChanged).toHaveBeenCalledTimes(2);
+});
+it.each(['off', 'document', 'cancel'] as const)('retires a held drag on %s and applies the current anchor/scale without a late move', action => {
+  const t = trackedController('card', {x: 1, y: 1, scale: 1}); editing(t);
+  t.overlay.moveStarted(); t.overlay.resetEdit(); t.overlay.setEditScale(1.1);
+  expect(t.overlay.contentAnchorY).toBe(1);
+  if (action === 'off') t.overlay.setEnabled(false);
+  else if (action === 'document') t.overlay.loaded(false);
+  else t.overlay.endEdit();
+  expect(t.state.visible).toBe(false); expect(t.state.ignoreMouse).toBe(true);
+  expect(t.overlay.contentAnchorY).toBe(action === 'document' ? 0 : 1);
+  if (action === 'off') t.overlay.setEnabled(true);
+  if (action === 'document') t.overlay.loaded(true);
+  t.overlay.update(t.current);
+  expect(t.overlay.contentAnchorY).toBe(action === 'document' ? 0 : 1);
 });

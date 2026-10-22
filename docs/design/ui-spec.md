@@ -148,6 +148,8 @@ Game mode text comes from the trip's game-mode evidence; while it is unknown, sh
 
 The main screen while driving. It follows the owner-chosen variant B (instrument cluster), restyled.
 
+Owner-requested amendment, October 22, 2026 (ET-012e): the central speed number and its accessible description use integer km/h or mph after unit conversion. Show the number and unit once in the gauge; remove the duplicate speed paragraph below it. Preserve the full-precision numeric gauge ratio, existing fuel decimals and journal/export precision.
+
 | Spec id | Content | Data binding |
 | --- | --- | --- |
 | `live.waiting` | Shown only while waiting for a game: empty-state banner above the cards | `LiveTelemetry.status = 'waiting'`; all values show `—` |
@@ -258,6 +260,8 @@ Each state is an icon in a 52 px rounded square (error and warning states tint i
 
 The overlay keeps its own minimal stylesheet with the `--yu-ov-*` tokens: panel `rgba(11,17,32,.80)` (the opacity setting scales the alpha), border `rgba(55,65,81,.9)`, text `#F3F4F6`, icons muted, accent `#60A5FA`, fuel `#8FD3AE`, low fuel `#E8C58A`, problems `#F3B4A4`. Onest is bundled into the overlay as well. No backdrop blur. Values use tabular figures.
 
+The October 22 ET-012e amendment applies integer speed to all four layouts. Ordinary values use 20 px in Strip, 13 px in Card, 12 px in the Cluster panel and 14 px in HUD; preserve the existing primary speed/gear hierarchy, label and unit sizes, fixed row heights and styles. In the implemented Strip and HUD, primary speed remains 22 px and 16 px respectively. The saved vertical placement also aligns painted content inside the stable reserved window: top at `y = 0`, centre at `0.5`, bottom at `1`. Dragging freezes that internal anchor until release; placement accuracy and possible release adjustment require the focused owner checks described in [the minimal overlay](../minimal-overlay.md#geometry-and-placements-et-012b).
+
 | Spec id | Layout | Default anchor |
 | --- | --- | --- |
 | `overlay.strip` | One 38 px row with icons instead of labels; groups separated by thin dividers; speed 22 px/800, gear in a blue-outlined chip, mini bars for RPM and fuel | Top centre (clear of the in-game route advisor at the bottom right) |
@@ -283,7 +287,7 @@ English is the canonical UI language today (`apps/desktop/src/strings.ts`). The 
 - Sidebar items and tabs are real buttons with `aria-current` or `aria-selected`; icon-only buttons have `aria-label`.
 - Focus ring: 2 px `--yu-accent-light` with a 2 px offset on every interactive element.
 - Status is never colour alone (icon and word).
-- Gauges and charts have an accessible name; their numbers also appear as text.
+- Gauges and charts have an accessible name; their numbers also appear as text. For the Live speed gauge, its visible SVG number/unit and localized accessible image name satisfy this requirement; no duplicate paragraph is required.
 - Minimum interactive size 32 px; contrast at least 4.5:1. Measured WCAG ratios of the token pairs on their surfaces: muted text on a card 5.78, on the work area 6.99, on the table header 6.22; white on the accent 5.17; status texts on their backgrounds 9.15 (ok) to 10.96 (neutral); game chips 9.08 (ATS) and 9.60 (ETS2). Re-check any new pair.
 
 ## 10. Suggested implementation order

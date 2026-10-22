@@ -1,6 +1,7 @@
 import {describe, expect, it} from 'vitest';
 import type {AppHealth, AppLanguage, LiveTelemetry, OverlayLayout, OverlaySectionId, PluginDiscoveryOutcome, PluginGame, PluginManualFolderState, PluginSetupMode, PluginSetupView, PluginTargetState,
   PluginTargetView, RecordingHealth, RecordingTarget, RecordingTrip, ServiceHealth, SettingsState, SettingsView, SourceSelection, StorageHealth, UnitProfile} from '../../packages/contracts/src';
+import {DEFAULT_OVERLAY_SETTINGS} from '../../apps/desktop/src/overlay-sections';
 import {buildDiagnosticBundle, type DiagnosticBundleInput} from '../../apps/desktop/src/diagnostic-bundle';
 import {checkDiagnosticsBundle, ENUMS, runtimeStrings, schemaTokens} from '../../scripts/ci/diagnostics-bundle-check.mjs';
 
@@ -9,7 +10,7 @@ import {checkDiagnosticsBundle, ENUMS, runtimeStrings, schemaTokens} from '../..
 // smoke reads (`mode`, `root`). The names and paths are invented.
 
 const HEALTH: AppHealth = {service: 'ready', storage: 'verified', recording: {state: 'disabled'}, lastError: null};
-const SETTINGS = {language: 'en', units: {ets2: 'metric', ats: 'us-customary'}, overlay: {layout: 'strip', sections: {}, placements: {}}, state: 'defaults', writable: true, saveError: null} as unknown as SettingsView;
+const SETTINGS: SettingsView = {language: 'en', autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY_SETTINGS, state: 'defaults', writable: true, saveError: null};
 const PLUGINS: PluginSetupView = {mode: 'test-root', bundled: {version: '0.2.0', sha256Prefix: '0123456789ab'}, running: false, games: {
   ets2: {excluded: false, discovery: 'found', manualFolder: 'set', unlistedFolders: 0, targets: []},
   ats: {excluded: true, discovery: 'found', manualFolder: 'none', unlistedFolders: 0, targets: []}}};
@@ -122,6 +123,35 @@ describe('names outside the runtime strings', () => {
 });
 
 // PR #111 delta review: other product-built variants of the views also fit the version 1 structure.
+describe('current settings visibility contract', () => {
+  it.each([false, true])('accepts a production-built diagnostic bundle with enabled=%s', enabled => {
+    const text = bundle([], {}, {settings: {...SETTINGS, overlay: {...SETTINGS.overlay, enabled}}});
+    expect(() => check(text, [])).not.toThrow();
+    expect(schemaTokens(JSON.parse(text))).toContain('enabled');
+    expect(JSON.parse(text)).toMatchObject({settings: {overlay: {enabled}}});
+  });
+  it.each([undefined, null, 0, 1, 'false', {}, []])('rejects missing or nonboolean enabled=%j', enabled => {
+    const value = JSON.parse(bundle([])) as {settings: {overlay: Record<string, unknown>}};
+    if (enabled === undefined) delete value.settings.overlay.enabled; else value.settings.overlay.enabled = enabled;
+    expect(() => check(JSON.stringify(value), [])).toThrow(/bundle\.settings\.overlay\.enabled/);
+  });
+  it.each([null, 0, 'true', {}])('validates the accepted autostart boolean %j independently of visibility', autostart => {
+    const value = JSON.parse(bundle([])) as {settings: Record<string, unknown>};
+    value.settings.autostart = autostart;
+    expect(() => check(JSON.stringify(value), [])).toThrow(/bundle\.settings\.autostart/);
+  });
+  it('accepts true autostart and false visibility together from the production bundle builder', () => {
+    const text = bundle([], {}, {settings: {...SETTINGS, autostart: true, overlay: {...SETTINGS.overlay, enabled: false}}});
+    expect(() => check(text, [])).not.toThrow();
+    expect(JSON.parse(text)).toMatchObject({settings: {autostart: true, overlay: {enabled: false}}});
+  });
+  it('rejects unrelated overlay keys beside a valid visibility flag', () => {
+    const value = JSON.parse(bundle([])) as {settings: {overlay: Record<string, unknown>}};
+    value.settings.overlay.windowPath = 'invented';
+    expect(() => check(JSON.stringify(value), [])).toThrow(/unexpected field in bundle\.settings\.overlay/);
+  });
+});
+
 describe('other valid variants', () => {
   it('accepts the full recording health variant with losses and a trip', () => {
     const health: AppHealth = {service: 'ready', storage: 'verified', lastError: null, recording: {state: 'recording', target: 'synthetic', code: null,

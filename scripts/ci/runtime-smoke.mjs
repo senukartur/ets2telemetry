@@ -1,3 +1,4 @@
+import {dashboardObservation} from './dashboard-observation.mjs';
 import {runUiSmoke, runUiReadOnly, UI_CASES} from './ui-observation.mjs';
 import {screen, settingsPanel, waitForStartup} from './ui-navigation.mjs';
 import {HARD_MODE_TARGET, runHardModeSmoke, startHardModeSource, verifyHardModeRun} from './hard-mode-observation.mjs';
@@ -28,8 +29,6 @@ import {coldLaunchPhases, observeColdLaunch, observeProcessMemory} from './launc
 import {observeExit} from './exit-observation.mjs';
 import {SOAK_TARGET, compactSoakEvents, runSoakSmoke, startSoakSource, verifySoakLogs, verifySoakRun} from './soak-observation.mjs';
 import {installedEnvironment, minimalPath, normalizePath} from '../installer/installer-guard.mjs';
-// These read-only globals are used only inside serialized Playwright browser callbacks.
-/* global document: readonly, getComputedStyle: readonly, innerHeight: readonly, innerWidth: readonly */
 
 const [configFile] = process.argv.slice(2);
 const config = JSON.parse((await readFile(configFile, 'utf8')).replace(/^\uFEFF/, ''));
@@ -188,7 +187,7 @@ try {
   result.actual = await window.evaluate(async () => ({require: typeof globalThis.require,
     process: typeof globalThis.process, keys: Object.keys(globalThis.desktop),
     frozen: Object.isFrozen(globalThis.desktop), status: await globalThis.desktop.getStatus()}));
-  assert.deepEqual(result.actual, {require: 'undefined', process: 'undefined', keys: ['getStatus', 'selectSource', 'subscribeLive', 'getAppState', 'subscribeAppState', 'exitApplication', 'setLanguage', 'setAutostart', 'setUnitProfile', 'setOverlayLayout', 'setOverlaySections',
+  assert.deepEqual(result.actual, {require: 'undefined', process: 'undefined', keys: ['getStatus', 'selectSource', 'subscribeLive', 'getAppState', 'subscribeAppState', 'exitApplication', 'setLanguage', 'setAutostart', 'setUnitProfile', 'setOverlayEnabled', 'setOverlayLayout', 'setOverlaySections',
     'beginOverlayEdit', 'setOverlayEditScale', 'resetOverlayEditPlacement', 'finishOverlayEdit',
     'listJournalTrips', 'getJournalTrip', 'listJournalEvents', 'listJournalIntervals', 'listJournalSamples', 'exportJournalTrip',
     'retryPluginSetup', 'choosePluginFolder', 'setPluginGameExcluded', 'showPluginFile', 'openPluginFolder', 'exportDiagnostics', 'uninstallApplication', 'getHardModeStatus', 'refreshHardMode'],
@@ -356,7 +355,7 @@ try {
     // Hold the v1 source the same way: the v1 rows and the v1 overlay sections expire while v0 stays current.
     telemetrySourceV1.hold();
     try {
-      await atTop(); result.telemetry.v1Stale = await waitForV1NotCurrentLive(window, SYNTHETIC_V1_VALUE_IDS, '^stale:', 'Speed: 90.0 km/h');
+      await atTop(); result.telemetry.v1Stale = await waitForV1NotCurrentLive(window, SYNTHETIC_V1_VALUE_IDS, '^stale:', 'Speed: 90 km/h');
       result.telemetry.overlayV1.v1Stale = await waitForOverlayV1(overlay, SYNTHETIC_V1_OVERLAY_V1_STALE);
     } finally {telemetrySourceV1.resume();}
     await atTop(); await waitForCurrentTelemetry(window);
@@ -373,18 +372,11 @@ try {
     } finally {clearTimeout(changeReading);}
     assert.equal(changedDuringStall, true, 'Source did not change during controlled renderer stall');
     await atTop();
-    const recovered = await window.waitForFunction(() => {
-      const read = id => {
-        const nodes = document.querySelectorAll(`[data-testid="${id}"]`);
-        if (nodes.length !== 1) return undefined;
-        const node = nodes[0], visible = id === 'telemetry-status' ? document.querySelector('[data-testid="shell.status.connection"]') : node;
-        if (!visible) return undefined;
-        const bounds = visible.getBoundingClientRect();
-        return getComputedStyle(visible).visibility === 'visible' && bounds.width > 0 && bounds.height > 0 && bounds.bottom > 0 && bounds.right > 0 && bounds.top < innerHeight && bounds.left < innerWidth ? node.innerText : undefined;
-      };
-      return /^connected:/.test(read('telemetry-status') ?? '') && read('speed') === 'Speed: 72.0 km/h' && read('fuel') === 'Fuel: 71.0 L';
-    }, undefined, {timeout: 10000});
-    try {assert.equal(await recovered.jsonValue(), true);} finally {await recovered.dispose();}
+    const recovered = await window.waitForFunction(dashboardObservation, {speed: 'Speed: 72 km/h', fuel: 'Fuel: 71.0 L'}, {timeout: 10000});
+    try {
+      const reading = await recovered.jsonValue();
+      assert.equal(reading.speed, 'Speed: 72 km/h'); assert.equal(reading.fuel, 'Fuel: 71.0 L'); assert.match(reading.status, /^connected:/);
+    } finally {await recovered.dispose();}
     assert.equal(telemetrySource.statistics().connections, 1, 'Subscription recovery restarted source ingestion');
     result.telemetry.subscriptionRestartRecovered = true;
     result.telemetry.rendererStallMilliseconds = 6000;
@@ -427,7 +419,9 @@ try {
     result.telemetry.sourceV1 = telemetrySourceV1.statistics();
     assert.equal(result.telemetry.sourceV1.connections, 2, 'Expected one initial v1 source connection and one service-restart connection');
     await telemetrySource.stop();
-    await window.getByText('Speed: unavailable', {exact: true}).waitFor({state: 'visible', timeout: 5000});
+    const disconnected = await window.waitForFunction(dashboardObservation,
+      {status: '^(disconnected|waiting):', speed: 'Speed: unavailable', omitFuel: true}, {timeout: 5000});
+    try {assert.equal((await disconnected.jsonValue()).speed, 'Speed: unavailable');} finally {await disconnected.dispose();}
     assert.match(await window.getByTestId('telemetry-status').innerText(), /^(disconnected|waiting):/);
     result.telemetry.staleAfterDisconnect = true;
     await atTop(); await waitForNotCurrentLive(window, ['live-gear', 'live-cargo', 'live-odometer'], '^(disconnected|waiting):');
@@ -614,7 +608,7 @@ finally {
     else result.history = verifyHistoryEvents(result.serviceEvents, telemetrySource && restartRecord ? [true, false] : config.scenario === 'ui' && config.uiCase === 'journal' ? [false] : [true]);
     const deliberateUiErrors = config.scenario === 'ui' && config.uiCase === 'settings' ? result.mainEvents.filter(row => row.event === 'SETTINGS_WRITE_FAILED') : [];
     if (config.scenario === 'ui' && config.uiCase === 'settings') {
-      assert.deepEqual(deliberateUiErrors.map(row => row.facts), Array.from({length: 4}, () => ({step: 'target', code: null})));
+      assert.deepEqual(deliberateUiErrors.map(row => row.facts), Array.from({length: 8}, () => ({step: 'target', code: null})));
       result.ui.saveFailureFacts = deliberateUiErrors.map(row => row.facts);
       result.ui.readOnly.mainEvents = await diagnosticEvents(config.diagnosticsRestart);
       result.ui.readOnly.serviceEvents = await diagnosticEvents(path.join(config.diagnosticsRestart, 'service'));
@@ -645,7 +639,7 @@ finally {
       assert.deepEqual(lifecycle.restartMainEvents.filter(row => row.event === 'APP_EXIT_REQUESTED').map(row => row.facts?.reason), ['app-quit']);
       // Run B reopens the history database that run A created.
       lifecycle.restartHistory = verifyHistoryEvents(lifecycle.restartServiceEvents, [false]);
-      // Settings diagnostics: run A falls back from the invalid file, quarantines it and saves once; run B only loads.
+      // Settings diagnostics: run A falls back from the invalid file, quarantines it and saves units then visibility false; run B only loads.
       const settingsEvents = rows => rows.filter(row => row.event.startsWith('SETTINGS_')).map(row => ({event: row.event, facts: row.facts ?? null}));
       lifecycle.settingsEvents = {runA: settingsEvents(result.mainEvents), runB: settingsEvents(lifecycle.restartMainEvents)};
       // A read that outlasted its 1000 ms load budget under CPU starvation is preceded by exactly one pending row; the
@@ -654,7 +648,8 @@ finally {
       const late = rows => rows[0]?.event === pending.event ? [pending] : [];
       lifecycle.settingsLateRead = {runA: late(lifecycle.settingsEvents.runA).length === 1, runB: late(lifecycle.settingsEvents.runB).length === 1};
       assert.deepEqual(lifecycle.settingsEvents.runA, [...late(lifecycle.settingsEvents.runA), {event: 'SETTINGS_FALLBACK', facts: {state: 'invalid-file'}},
-        {event: 'SETTINGS_QUARANTINED', facts: {state: 'invalid-file'}}, {event: 'SETTINGS_SAVED', facts: {game: 'ets2', profile: 'us-customary'}}]);
+        {event: 'SETTINGS_QUARANTINED', facts: {state: 'invalid-file'}}, {event: 'SETTINGS_SAVED', facts: {game: 'ets2', profile: 'us-customary'}},
+        {event: 'SETTINGS_SAVED', facts: {overlayEnabled: false}}]);
       assert.deepEqual(lifecycle.settingsEvents.runB, [...late(lifecycle.settingsEvents.runB), {event: 'SETTINGS_LOADED', facts: {state: 'loaded'}}]);
       lifecycle.restartLauncherExit = result.launcherExit;
       lifecycle.shutdownClean = true;

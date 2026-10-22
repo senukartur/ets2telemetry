@@ -9,15 +9,21 @@ describe('desktop numeric presentation (REG-002/003/009/014)', () => {
   it('uses normalized canonical values and clamps only geometry, not the displayed reading', () => {
     const live = smokeV0(); live.observation!.state.speed = {available: true, value: 100, unit: 'm/s'};
     const view = desktopLiveView(live);
-    expect(view.speed).toBe(360); expect(view.speedText).toBe('360.0'); expect(view.speedRatio).toBe(1);
+    expect(view.speed).toBe(360); expect(view.speedText).toBe('360'); expect(view.speedRatio).toBe(1);
     expect(clampRatio(-1)).toBe(0); expect(clampRatio(0)).toBe(0); expect(clampRatio(0.4)).toBe(0.4);
     expect(clampRatio(Infinity)).toBeNull(); expect(clampRatio(null)).toBeNull();
   });
   it('shows zero as current but stale, waiting and disconnected observations as unavailable', () => {
     const live = smokeV0(); live.observation!.state.speed = {available: true, value: 0, unit: 'm/s'};
-    expect(desktopLiveView(live)).toMatchObject({current: true, speed: 0, speedText: '0.0', speedRatio: 0});
+    expect(desktopLiveView(live)).toMatchObject({current: true, speed: 0, speedText: '0', speedRatio: 0});
     for (const status of ['stale', 'waiting', 'disconnected'] as const) expect(desktopLiveView({...live, fresh: false, status})).toMatchObject({current: false, speed: null, speedText: '—', speedRatio: null, fuelRatio: null});
     expect(desktopLiveView(undefined)).toMatchObject({current: false, speed: null});
+  });
+  it('rounds only the live speed text and preserves fractional gauge geometry', () => {
+    const live = smokeV0(); live.observation!.state.speed = {available: true, value: 1.25, unit: 'm/s'};
+    const view = desktopLiveView(live);
+    expect(view.speedText).toBe('5'); expect(view.speed).toBe(4.5); expect(view.speedRatio).toBe(4.5 / view.scaleMax);
+    expect(live.observation!.state.speed).toEqual({available: true, value: 1.25, unit: 'm/s'});
   });
   it('preserves game-provided cargo/city/company/truck names in both languages, localizing only labels and provenance', () => {
     const live = smokePair();

@@ -37,7 +37,7 @@ Exact constants: mile 1,609.344 m; US gallon 3.785411784 L; pound 0.45359237 kg;
 
 | Field | Canonical | SDK source | Wire | Display (`metric` / `us-customary`) and rounding |
 | --- | --- | --- | --- | --- |
-| Speed | m/s, signed | `truck.speed` | v0, v1 | km/h or mph, 1 dp; a rounded −0.0 shows 0.0; negative means reverse |
+| Speed | m/s, signed | `truck.speed` | v0, v1 | General telemetry-core formatting: km/h or mph, 1 dp, rounded −0.0 becomes 0.0. The Live gauge and overlay use the integer presentation override below; negative means reverse |
 | Gear | index | `truck.displayed.gear`, s32 | v0, v1 | `N`, `1`…`n`, `R1`…`Rn` |
 | Engine RPM | rpm | `truck.engine.rpm` | v0, v1 | integer, `600 rpm` |
 | Fuel | L | `truck.fuel.amount` | v0, v1 | L or US gal, 1 dp |
@@ -66,6 +66,8 @@ Exact constants: mile 1,609.344 m; US gallon 3.785411784 L; pound 0.45359237 kg;
 
 Rounding uses `Number.prototype.toFixed` on the converted value, and a rounded negative zero is shown as positive zero for every quantity. A provided empty text value shows `(empty)`.
 
+Owner-requested presentation update, October 22, 2026 (ET-012e): the Live dashboard gauge, its accessible name and every overlay layout show speed as an integer after conversion to the selected game's km/h or mph profile. They use the existing `fixed(..., 0)` rounding, including negative values and normalization of rounded negative zero to `0`. For example, 25 m/s shows `90 km/h` or `56 mph`. The canonical numeric reading, gauge ratio, telemetry-core's general one-decimal formatter, journal samples and exports retain their existing precision. Fuel and consumption formatting are unchanged.
+
 ## Money
 
 `MoneyValue` holds `raw` (an exact decimal string, never a JavaScript number), `sdkType` (`s64`, `u64` or `v0-decimal`) and a currency basis: `{basis: 'unknown'}` or `{basis: 'sdk-documented', code, source}`. The v0 wire spelling `verified` and the v1 `sdk-documented` both map to `sdk-documented`; the v0 name is frozen and does not mean a runtime observation. Currency is never inferred from the game, locale or profile, and money is never converted.
@@ -80,13 +82,13 @@ Money and distance values carry a kind. Money: `expected-income`, `revenue`, `pe
 | --- | --- |
 | Fresh `connected` or `paused` with an observation (`isCurrent`) | Values shown; a missing field shows `unavailable` with its reason |
 | `paused` status or paused simulation while current | Values shown; `connection.paused` drives a "game paused" banner |
-| A road stop (unchanged fresh state) | Still current; speed `0.0 km/h` |
+| A road stop (unchanged fresh state) | Still current; the Live gauge and overlay show `0 km/h` (general telemetry-core formatting remains `0.0 km/h`) |
 | `waiting`, `stale`, `incompatible`, `disconnected`, `unavailable`, `service-failed`, `restarting`, or not fresh | Every carried row `unavailable` with reason `not-current`; no dimmed last-known values. Without any normalized state, every row reads this way |
 | Field not carried by the protocol in use | Row hidden. Carriage is a static table per protocol (`V0_CARRIED_FIELDS`; v1 carries every field), never inferred from a missing parent job or truck reading |
 | No job while current | Job rows hidden; the job section carries the job's missing reason ("no job reported") |
 | No trailer attached while current (v1: every slot empty, and no slot `not-supported`) | Trailers row in the `absent` state with text `none` and reason `no-trailer`. Per OD-6 an empty slot arrives as `not-observed`. The SDK delivers the initial configuration after `scs_telemetry_init()` succeeds and before any other callback ([scssdk_telemetry_event.h](../native/telemetry-plugin/vendor/scs-sdk-1.15/include/scssdk_telemetry_event.h) lines 63–69), so an empty slot in a current checkpoint is taken as no trailer. Bobtail versus a coupled trailer, including late attach, is still unverified in real sessions |
 
-The application maps reasons to text: `not-observed` "not yet observed", `not-supported` "not provided by the game", `invalid` "invalid reading", `not-current` "not current", `zero-consumption` "no consumption recorded", `no-trailer` "no trailer attached". The existing speed and fuel lines read `<Label>: <text>` or `<Label>: unavailable`, so the `Speed: unavailable` text is unchanged; the other rows use a label and value pair with the reason in parentheses (see [Dashboard](#dashboard)). Staleness comes from the existing ingestion and main-process freshness; telemetry-core adds no timer.
+The application maps reasons to text: `not-observed` "not yet observed", `not-supported` "not provided by the game", `invalid` "invalid reading", `not-current` "not current", `zero-consumption` "no consumption recorded", `no-trailer` "no trailer attached". The Live speed gauge shows a dash for unavailable speed and retains the localized `Speed: unavailable` description in its accessible name; fuel reads `<Label>: <text>` or `<Label>: unavailable`. The other rows use a label and value pair with the reason in parentheses (see [Dashboard](#dashboard)). Staleness comes from the existing ingestion and main-process freshness; telemetry-core adds no timer.
 
 Hydrated checkpoint configuration is current state only. The view shows the job and never derives a delivery, cancellation or other gameplay effect from it.
 
@@ -94,7 +96,7 @@ Hydrated checkpoint configuration is current state only. The view shows the job 
 
 ET-010b adds the **Live telemetry** card ([live-dashboard.tsx](../apps/desktop/src/live-dashboard.tsx)) between the status card and the application status card of the main window. It is a thin map over the pure builder [live-dashboard-text.ts](../apps/desktop/src/live-dashboard-text.ts), which builds the view on each bridge update and adds the application's texts. ET-010b showed the v0 field set only; ET-010c adds the v1 rows, game mode and event loss through the combiner [live-sources.ts](../apps/desktop/src/live-sources.ts) (see [Protocol v1 rows](#protocol-v1-rows-et-010c)). Without a v1 observation for the current selection the card is exactly the ET-010b card.
 
-- **Speed and fuel** stay in the existing `Speed: …` and `Fuel: …` lines of the status card, with the same test ids and order; the card does not repeat them (`LEGACY_ROW_IDS`, decision B1). Their freshness gate is `live.fresh`, which equals `isCurrent` in practice.
+- **Speed and fuel** use the Live instrument after its restyle. Since the October 22 ET-012e presentation update, speed appears once as the visible SVG number and unit (`live-speed-number`, `live-speed-unit`), with an accessible name on `live-speed-gauge`; the duplicate `speed` paragraph is removed. Fuel keeps its existing `fuel` value. The detailed field rows do not repeat them (`LEGACY_ROW_IDS`, decision B1). Their freshness gate remains `live.fresh`, which equals `isCurrent` in practice.
 - **Sections** follow `buildLiveView`: Driving, Fuel, Distance, Time, Job, Vehicle and Position, then the Protocol v1 source section (ET-010c). A section is omitted when it has no rows and no missing subject, so Position never appears under v0 alone. Before the first observation telemetry-core reports every field as not current; the card still shows only the fields v0 carries (`carriesField`). A current update whose job reading was never reported shows the Job section with "No job reported"; a job reading that was rejected or is not provided keeps its reason instead, for example "Job unavailable (invalid reading)", so an unavailable job is never presented as the absence of a job.
 - **Rows** are `<dt>`/`<dd>` pairs in one grid per section, like the application status card (decision B2). The label carries the note in parentheses; the value carries the reason in parentheses. Hidden rows (`hidden` state: not carried by the protocol in use or not applicable) are not rendered at all.
 - **Paused**: current values stay visible under a "Game paused" status line.

@@ -1,5 +1,18 @@
 # Agent Instructions
 
+## ET-012 administrative closeout and code gates — October 22, 2026
+
+The owner explicitly authorized consolidating unfinished Review-card validation in
+[ET-044](https://trello.com/c/ucJbXIEH) and moving the source cards to Done administratively. ET-012 is Done/complete
+under that decision; its remaining seven game-matrix rows and criteria P2/A2/A3/A7/M1–M8/E4 transferred **unverified**.
+Existing ET-042 monitor and ET-043 accessibility/unit-profile/close-to-tray transfers remain unverified. This explicit
+disposition supersedes earlier ET-012 Review/manual-gate wording; it does not claim those tests passed.
+
+The owner accepted the four display corrections and observed mouse-release behavior at 200% on the c6d70e4 ETS2 preview,
+within the limits in [ET-012e validation](docs/validation/et-012e.md). All four layouts and the full matrix were not
+individually accepted. PR #163 still requires current independent review, Claude disposition, final automatic CI after
+Ready and the already authorized squash merge. Administrative Done does not waive code gates or authorize a release.
+
 ## ET-011 closeout authorization — October 22, 2026
 
 The owner authorized investigating the local verification failures and taking PR #167 through independent review,
@@ -802,3 +815,17 @@ The assigned ET-028 candidate implements the approved Yukon dark desktop shell/s
 
 
 ET-028 supersession: the dated ET-012c 36px strip-row observations above remain historical. The current Yukon presentation uses `STRIP_ROW_HEIGHT_CSS = 38`, with height `ceil(38 × rows × scale + 2 × max(1, scale))`. Wrapping, snapped borders and whole-overlay fit refusal are unchanged. Real-game taller-window placement/click-through and fractional-DPI/performance checks remain unverified.
+
+## ET-012e visibility implementation scope — October 21, 2026
+
+The owner authorized saved overlay visibility (v5 `overlay.enabled`, default true), trusted boolean IPC, durable settings, gate-before-edit/driving behavior and the existing Yukon settings switch. This supersedes earlier statements that show/hide is only planned. Disabling after save cancels/discards unsaved placement; failed saves preserve it. Telemetry and recording behavior is unchanged.
+
+The owner explicitly transferred multi-monitor, mixed-DPI, negative-origin, monitor-removal and off-screen manual checks to ET-042; the coordinator synchronized both task descriptions. Those checks remain unverified, with no inferred display acceptance. ET-012e still needs relevant single-monitor ETS2/ATS SP/TruckersMP windowed/borderless manual disposition and all code/review/CI gates. Preserve accepted ET-009 evidence and all historical ET-012a–d records. See [ET-012e validation](docs/validation/et-012e.md). No game launch, release or game-history enablement follows from implementation.
+
+## ET-012 corrective shutdown authorization — October 21, 2026
+
+The owner explicitly approved bounded redistribution of shutdown time and regression checks for the recording-flush gate. Only the flush-phase `recording-flush` step may borrow unused registered intake while preserving the registered storage maximum and nominal 2500 ms total. The nominal recording constant stays 500 ms; ET-038 uses actual elapsed for history close. Existing history floors, termination reserve and event-loop verdict scheduling limits remain; no absolute physical deadline is inferred. This supersedes fixed-effective-500 wording in R14/H11, as detailed in [concept](concept.md#et-012-corrective-shutdown-allocation--october-21-2026). Preserve the original failure and passing diagnostic as FLAKY, with unknown cause. No game, native, wire, SQLite schema, recording-eligibility or release change is authorized by this correction.
+
+## ET-012 / accepted ET-031 integration — October 21, 2026
+
+Accepted main `bf17eea` defines settings v5 as autostart. Current ET-012 integration uses v6 for overlay visibility: the accepted v4-to-v5 autostart-false step remains unchanged, then v5-to-v6 adds enabled-true while preserving autostart. Earlier dated visibility-v5 notes refer to the unmerged prototype schema; no owner/game preferences were exercised with it and its bounded temporary evidence remains historical. No dual-v5 guessing is introduced. Preserve the separate settings autostart boolean and application registration-status enum, General UI and both narrow setters. Portable checks remain not-installed and never activate Windows login registration. Shutdown source/tests from `15420f0` and historical fixtures remain unchanged; [current settings](docs/settings.md), [integration evidence](docs/validation/et-012e.md).

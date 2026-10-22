@@ -1,5 +1,6 @@
 import {EventEmitter} from 'node:events';
 import {readFileSync} from 'node:fs';
+import * as nodeFs from 'node:fs/promises';
 import {mkdir, mkdtemp, readdir, readFile, rm, writeFile} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -76,15 +77,15 @@ const ALL_SECTIONS = {'speed': true, 'gear': true, 'rpm': true, 'fuel': true, 'r
   'destination': true, 'distance-driven': true, 'distance-remaining': true, 'deadline': true, 'expected-income': true, 'game-time': true};
 // ET-012b: the overlay settings carry the placements of every layout (the ET-012a anchors at scale 1 by default).
 const PLACEMENTS = {strip: {x: 0.5, y: 0, scale: 1}, card: {x: 1, y: 0, scale: 1}, cluster: {x: 0, y: 1, scale: 1}, hud: {x: 0, y: 0, scale: 1}};
-const DEFAULT_OVERLAY = {layout: 'strip', sections: ALL_SECTIONS, placements: PLACEMENTS};
+const DEFAULT_OVERLAY = {enabled: true, layout: 'strip', sections: ALL_SECTIONS, placements: PLACEMENTS};
 // ET-012b: the application state carries the overlay edit mode, which every start leaves in driving mode.
 const DRIVING = {active: false};
 // ET-017: the application state carries the plugin setup view. These cases run with ETS2TELEMETRY_SOURCE_KIND set and
 // unpackaged, so the mode gate disables plugin setup: nothing is read or written, and no game is ever discovered.
 const NO_PLUGIN_GAME = {excluded: false, discovery: 'pending', manualFolder: 'none', targets: [], unlistedFolders: 0};
 const PLUGINS_DISABLED = {mode: 'disabled', bundled: null, running: false, games: {ets2: NO_PLUGIN_GAME, ats: NO_PLUGIN_GAME}};
-let settingsView: {units: {ets2: string; ats: string}; overlay: {layout: string; sections: Record<string, boolean>; placements: Record<string, {x: number; y: number; scale: number}>}; state: string; writable: boolean; saveError: string | null};
-type OverlayWrite = (kind: 'layout' | 'sections' | 'placement', value: unknown) => Promise<unknown>;
+let settingsView: {autostart: boolean; units: {ets2: string; ats: string}; overlay: {enabled: boolean; layout: string; sections: Record<string, boolean>; placements: Record<string, {x: number; y: number; scale: number}>}; state: string; writable: boolean; saveError: string | null};
+type OverlayWrite = (kind: 'enabled' | 'layout' | 'sections' | 'placement', value: unknown) => Promise<unknown>;
 let overlayWrite: ReturnType<typeof vi.fn<OverlayWrite>>;
 type SettingsWrite = (game: string, profile: string) => Promise<unknown>;
 let settingsWrite: ReturnType<typeof vi.fn<SettingsWrite>>;
@@ -92,6 +93,7 @@ let autostartWrite: ReturnType<typeof vi.fn<(enabled: boolean) => Promise<typeof
 let settingsIdle: Promise<void> | undefined;
 let settingsDirectories: unknown[];
 let settingsLoaded: boolean;
+let autostartKnown: boolean;
 let settingsLoading: Promise<unknown>;
 // Clean late read (October 15, 2026): the `changed` callback main hands to the store, which reports a late read.
 let settingsChanged: (() => void) | undefined;
@@ -132,7 +134,8 @@ function installFixture() {
         const next = Object.assign(new EventEmitter(), {mainFrame: {}, send: vi.fn(), postMessage: vi.fn(), setWindowOpenHandler: vi.fn(), setZoomFactor: vi.fn()}); extraContents.push(next); return next;
       })();
       minimized = false; isMinimized = () => this.minimized; minimize = vi.fn(() => {this.minimized = true;}); restore = vi.fn(() => {this.minimized = false;}); show = vi.fn(); focus = vi.fn();
-      hide = vi.fn(); showInactive = vi.fn(); setBounds = vi.fn(); setIgnoreMouseEvents = vi.fn(); setFocusable = vi.fn(); destroy = vi.fn(() => this.emit('closed'));
+      visible = false; isVisible = () => this.visible;
+      hide = vi.fn(() => {this.visible = false;}); showInactive = vi.fn(() => {this.visible = true;}); setBounds = vi.fn(); setIgnoreMouseEvents = vi.fn(); setFocusable = vi.fn(); destroy = vi.fn(() => this.emit('closed'));
       // ET-012b: focus feeds the edit mode's own-foreground gate; the overlay becomes movable only while edited.
       focused = false; isFocused = () => this.focused; setMovable = vi.fn(); setSkipTaskbar = vi.fn(); bounds = {x: 0, y: 0, width: 0, height: 0}; getBounds = () => ({...this.bounds});
       // Models Windows: isAlwaysOnTop() reports the HWND style, which external z-order changes can clear.
@@ -160,17 +163,19 @@ function installFixture() {
     createDiagnostics: (...args: unknown[]) => {diagnosticsCalls.push(args); return log;}}));
   vi.doMock('../../apps/desktop/src/broker-artifact', () => ({brokerConfiguration: resolveBroker, createBrokerResolver: () => resolveBroker}));
   vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'synthetic');
-  settingsView = {units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: null};
-  settingsWrite = vi.fn<SettingsWrite>(); overlayWrite = vi.fn<OverlayWrite>(); autostartWrite = vi.fn((enabled: boolean) => Promise.resolve({...settingsView, autostart: enabled})); settingsIdle = undefined; settingsDirectories = []; settingsLoaded = true; settingsLoading = Promise.resolve();
-  settingsChanged = undefined;
+  settingsView = {autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: null};
+  settingsWrite = vi.fn<SettingsWrite>(); overlayWrite = vi.fn<OverlayWrite>(); autostartWrite = vi.fn((enabled: boolean) => {settingsView = {...settingsView, autostart: enabled}; return Promise.resolve(settingsView);}); settingsIdle = undefined; settingsDirectories = []; settingsLoaded = true; settingsLoading = Promise.resolve();
+  settingsChanged = undefined; autostartKnown = true;
   vi.doMock('../../apps/desktop/src/settings-store', () => ({
     settingsDirectory: (localAppData: unknown) => typeof localAppData === 'string' ? `${localAppData}\\ETS2Telemetry\\settings` : undefined, SettingsError: FakeSettingsError, SettingsBusyError: FakeSettingsBusyError,
     SettingsStore: class {
       get settled() {return settingsLoaded;}
+      get knownAutostartIntent() {return autostartKnown ? settingsView.autostart : undefined;}
       constructor(directory: unknown, options?: {changed?: () => void}) {settingsDirectories.push(directory); settingsChanged = options?.changed;}
       view() {return settingsView;}
       load() {return settingsLoading.then(() => {settingsLoaded = true; return settingsView;});}
       setUnitProfile(game: string, profile: string) {return settingsWrite(game, profile);}
+      setOverlayEnabled(enabled: boolean) {return overlayWrite('enabled', enabled);}
       setAutostart(autostart: boolean) {return autostartWrite(autostart);}
       setOverlayLayout(layout: string) {return overlayWrite('layout', layout);}
       setOverlaySections(sections: unknown) {return overlayWrite('sections', sections);}
@@ -185,7 +190,7 @@ async function removeFixture() {
   for (const name of processEvents) for (const listener of processEmitter.listeners(name)) if (!originals.get(name)!.includes(listener)) processEmitter.removeListener(name, listener as (...args: unknown[]) => void);
   vi.clearAllTimers(); vi.restoreAllMocks(); vi.useRealTimers(); vi.unstubAllEnvs();
   for (const name of ['electron', '../../apps/desktop/src/entrypoints', '../../apps/desktop/src/diagnostics', '../../apps/desktop/src/broker-artifact',
-    '../../apps/desktop/src/settings-store', '../../apps/desktop/src/plugin-setup/plugin-setup', '../../apps/desktop/src/squirrel-events',
+    '../../apps/desktop/src/settings-store', '../../apps/desktop/src/overlay-latency', '../../apps/desktop/src/latency-frames', '../../apps/desktop/src/uninstall/roots', '../../apps/desktop/src/plugin-setup/plugin-setup', '../../apps/desktop/src/squirrel-events',
     '../../apps/desktop/src/uninstall/app-uninstall']) vi.doUnmock(name);
 }
 async function settle() {await Promise.resolve(); await Promise.resolve();}
@@ -799,7 +804,7 @@ it('reopens a new dashboard from the tray that resubscribes without a second ups
   ipc.emit('telemetry:subscribe', reopenedSender);
   expect(reopened.postMessage).toHaveBeenCalledWith('telemetry:port', null, [channels.at(-1)!.port2]);
   expect(upstreamRequests()).toBe(1); expect(children).toHaveLength(1);
-  expect(handlers.get('app:get-state')!(reopenedSender)).toEqual({health: {service: 'ready', storage: 'verified', recording: {state: 'unknown'}, lastError: null}, settings: {units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: null}, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED, autostart: 'not-installed'});
+  expect(handlers.get('app:get-state')!(reopenedSender)).toEqual({health: {service: 'ready', storage: 'verified', recording: {state: 'unknown'}, lastError: null}, settings: {autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: null}, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED, autostart: 'not-installed'});
   // A second tray open focuses the existing window instead of creating another.
   trays[0].emit('click'); expect(windows).toHaveLength(3); expect(windows[2].show).toHaveBeenCalledOnce(); expect(windows[2].focus).toHaveBeenCalledOnce();
 });
@@ -830,7 +835,7 @@ it.each([
   if (action === 'restored') expect(windows[0].restore).toHaveBeenCalledOnce();
   if (action === 'focused' || action === 'restored') {expect(windows[0].show).toHaveBeenCalledOnce(); expect(windows[0].focus).toHaveBeenCalledOnce();}
   if (action === 'ignored-exiting' || action === 'ignored-starting') expect(windows.every(target => target.show.mock.calls.length === 0)).toBe(true);
-  expect(JSON.stringify(log.mock.calls)).not.toContain('attacker');
+  expect(JSON.stringify(log.mock.calls, (_key, value: unknown) => value && typeof value === 'object' && 'message' in value ? String(value.message) : value)).not.toContain('attacker');
 });
 // ET-018 (U2): a Squirrel event runs first and alone. The handler is replaced here; it never sees the real execPath layout.
 async function withArgv(args: readonly string[], run: () => Promise<void>) {
@@ -1006,7 +1011,7 @@ it('shows restart exhaustion in health and the tray and stays running until an e
     children.at(-1)!.emit('exit', 1); await vi.advanceTimersByTimeAsync(1000);
     if (crash < 2) {children.at(-1)!.emit('message', {type: 'ready'}); await settle();}
   }
-  expect(handlers.get('app:get-state')!(trusted())).toEqual({health: {service: 'failed', storage: 'pending', recording: {state: 'unknown'}, lastError: 'SERVICE_RESTART_EXHAUSTED'}, settings: {units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: null}, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED, autostart: 'not-installed'});
+  expect(handlers.get('app:get-state')!(trusted())).toEqual({health: {service: 'failed', storage: 'pending', recording: {state: 'unknown'}, lastError: 'SERVICE_RESTART_EXHAUSTED'}, settings: {autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: null}, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED, autostart: 'not-installed'});
   await vi.advanceTimersByTimeAsync(500);
   expect(trays[0].setImage).toHaveBeenCalled(); expect(trays[0].setToolTip).toHaveBeenLastCalledWith('ETS2Telemetry\nService failed');
   expect(app.exit).not.toHaveBeenCalled();
@@ -1037,7 +1042,7 @@ it('answers a dashboard opened during a service restart with a not-ready status,
   expect(handlers.get('scaffold:status')!(sender)).toBeNull();
   expect(() => handlers.get('scaffold:status')!(trusted())).toThrow('Untrusted');
   ipc.emit('app:subscribe-state', sender);
-  expect(reopened.send).toHaveBeenLastCalledWith('app:state', {health: expect.objectContaining({service: 'restarting'}), settings: {units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: null}, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED, autostart: 'not-installed'});
+  expect(reopened.send).toHaveBeenLastCalledWith('app:state', {health: expect.objectContaining({service: 'restarting'}), settings: {autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: null}, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED, autostart: 'not-installed'});
   // When the pushed health reports ready, the status query already answers with the ready status.
   let statusAtReadyPush: unknown;
   reopened.send.mockImplementation((channel: string, state: {health: {service: string}}) => {
@@ -1162,23 +1167,24 @@ it('loads settings from LOCALAPPDATA and opens the first windows only after the 
 // state, and the late read's result reaches the dashboard and the overlay as a save's does.
 it('applies a settings read that settles after the load budget to the dashboard and the overlay without renewing authority', async () => {
   trayAvailable = true; vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2');
-  const pending = {units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loading', writable: false, saveError: null};
+  const pending = {autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loading', writable: false, saveError: null};
   settingsView = pending; await ready();
   expect(windows).toHaveLength(2);
   ipc.emit('app:subscribe-state', trusted()); ipc.emit('overlay:subscribe', overlayTrusted()); const overlayChannel = channels[1];
   const pushes = () => contents.send.mock.calls.filter(call => call[0] === 'app:state').map(call => call[1] as {settings: unknown});
   expect(pushes().at(-1)!.settings).toEqual(pending);
   consumeOverlay(overlayChannel); deliver(currentReading()); await vi.advanceTimersByTimeAsync(50);
-  expect(overlayProjection(overlayChannel)).toMatchObject({source: 'ETS2', speed: '90.0', speedUnit: 'km/h', fuel: '73.0', fuelUnit: 'L', freshness: 'current'});
-  expect(windows[1].showInactive).toHaveBeenCalledOnce(); consumeOverlay(overlayChannel);
+  expect(overlayProjection(overlayChannel)).toMatchObject({source: 'ETS2', speed: '90', speedUnit: 'km/h', fuel: '73.0', fuelUnit: 'L', freshness: 'current'});
+  // ET-012e keeps the overlay hidden while the pending view contains only defaults.
+  expect(windows[1].showInactive).not.toHaveBeenCalled(); consumeOverlay(overlayChannel);
   await drainOverlay(overlayChannel, 150);
   // The store applies the late read (t = 200 ms) and reports it; main reads the new view from the store.
-  settingsView = {units: {ets2: 'us-customary', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null};
+  settingsView = {autostart: false, units: {ets2: 'us-customary', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null};
   expect(settingsChanged).toBeTypeOf('function'); settingsChanged!();
   expect(pushes().at(-1)).toEqual({health: {service: 'ready', storage: 'verified', recording: {state: 'unknown'}, lastError: null}, settings: settingsView, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED, autostart: 'not-installed'});
   expect(handlers.get('app:get-state')!(trusted())).toMatchObject({settings: settingsView});
   await vi.advanceTimersByTimeAsync(50);
-  expect(overlayProjection(overlayChannel)).toMatchObject({source: 'ETS2', speed: '55.9', speedUnit: 'mph', fuel: '19.3', fuelUnit: 'US gal', freshness: 'current'});
+  expect(overlayProjection(overlayChannel)).toMatchObject({source: 'ETS2', speed: '56', speedUnit: 'mph', fuel: '19.3', fuelUnit: 'US gal', freshness: 'current'});
   consumeOverlay(overlayChannel);
   // Nothing was saved, and neither SDK nor window freshness was renewed: the reading still expires 500 ms after its
   // delivery, inside this window; a renewal when the read was applied would end after it.
@@ -1199,7 +1205,7 @@ it('applies a unit profile only after the durable save and republishes the overl
   trayAvailable = true; vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2'); await ready();
   ipc.emit('app:subscribe-state', trusted()); ipc.emit('overlay:subscribe', overlayTrusted()); const overlayChannel = channels[1];
   consumeOverlay(overlayChannel); deliver(currentReading()); await vi.advanceTimersByTimeAsync(50);
-  expect(overlayProjection(overlayChannel)).toMatchObject({source: 'ETS2', speed: '90.0', speedUnit: 'km/h', fuel: '73.0', fuelUnit: 'L', freshness: 'current'});
+  expect(overlayProjection(overlayChannel)).toMatchObject({source: 'ETS2', speed: '90', speedUnit: 'km/h', fuel: '73.0', fuelUnit: 'L', freshness: 'current'});
   expect(windows[1].showInactive).toHaveBeenCalledOnce(); consumeOverlay(overlayChannel);
   const pushes = () => contents.send.mock.calls.filter(call => call[0] === 'app:state').map(call => call[1] as {settings: unknown; health: {lastError: unknown}});
   const before = pushes().length, saved = deferred<typeof settingsView>();
@@ -1209,11 +1215,11 @@ it('applies a unit profile only after the durable save and republishes the overl
   // Not durable yet: nothing applied, pushed or republished.
   expect(settingsWrite).toHaveBeenCalledExactlyOnceWith('ets2', 'us-customary');
   expect(pushes()).toHaveLength(before); expect(overlayProjection(overlayChannel)).toMatchObject({speedUnit: 'km/h'});
-  settingsView = {units: {ets2: 'us-customary', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null}; saved.resolve(settingsView);
+  settingsView = {autostart: false, units: {ets2: 'us-customary', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null}; saved.resolve(settingsView);
   await expect(request).resolves.toEqual(settingsView);
   expect(pushes().at(-1)).toEqual({health: {service: 'ready', storage: 'verified', recording: {state: 'unknown'}, lastError: null}, settings: settingsView, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED, autostart: 'not-installed'});
   await vi.advanceTimersByTimeAsync(50);
-  expect(overlayProjection(overlayChannel)).toMatchObject({source: 'ETS2', speed: '55.9', speedUnit: 'mph', fuel: '19.3', fuelUnit: 'US gal', freshness: 'current'});
+  expect(overlayProjection(overlayChannel)).toMatchObject({source: 'ETS2', speed: '56', speedUnit: 'mph', fuel: '19.3', fuelUnit: 'US gal', freshness: 'current'});
   consumeOverlay(overlayChannel);
   // The republication renewed neither SDK nor window receipts: both still expire from the original delivery.
   expect(windows[1].showInactive).toHaveBeenCalledOnce();
@@ -1239,14 +1245,14 @@ it.each(['SETTINGS_WRITE_FAILED', 'SETTINGS_READ_ONLY'] as const)('keeps the uni
   // The store records the refusal in its view, as the real store does.
   settingsWrite.mockImplementation(() => {settingsView = {...settingsView, saveError: code}; return Promise.reject(new FakeSettingsError(code));});
   await expect(saveUnits(trusted(), 'ets2', 'us-customary')).rejects.toThrow(code === 'SETTINGS_READ_ONLY' ? 'Settings are read-only' : 'Settings could not be saved');
-  const refused = {health, settings: {units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: code}, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED, autostart: 'not-installed'};
+  const refused = {health, settings: {autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'defaults', writable: true, saveError: code}, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED, autostart: 'not-installed'};
   expect(handlers.get('app:get-state')!(trusted())).toEqual(refused);
   expect(contents.send).toHaveBeenLastCalledWith('app:state', refused);
   await vi.advanceTimersByTimeAsync(50); expect(overlayChannel.port1.postMessage.mock.calls).toHaveLength(deliveries);
   // A later successful save clears the settings error and still leaves the service problem in place.
-  settingsWrite.mockImplementation(() => {settingsView = {units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null}; return Promise.resolve(settingsView);});
+  settingsWrite.mockImplementation(() => {settingsView = {autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null}; return Promise.resolve(settingsView);});
   await saveUnits(trusted(), 'ats', 'us-customary');
-  const saved = {health, settings: {units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null}, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED, autostart: 'not-installed'};
+  const saved = {health, settings: {autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'loaded', writable: true, saveError: null}, overlayEdit: DRIVING, plugins: PLUGINS_DISABLED, autostart: 'not-installed'};
   expect(handlers.get('app:get-state')!(trusted())).toEqual(saved);
   expect(contents.send).toHaveBeenLastCalledWith('app:state', saved);
 });
@@ -1269,10 +1275,10 @@ it('exits after at most 1000 ms when an in-flight settings save does not settle'
 it('reports the settings view in the gated lifecycle facts', () => isolatedProfile(async profile => {
   vi.stubEnv('ETS2TELEMETRY_LIVE_SMOKE', '1'); vi.stubEnv('ETS2TELEMETRY_DIAGNOSTIC_DIR', 'C:\\isolated\\diagnostics');
   vi.stubEnv('ETS2TELEMETRY_PROFILE_DIR', profile); trayAvailable = true;
-  settingsView = {units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'invalid-file', writable: true, saveError: null}; await ready();
+  settingsView = {autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'invalid-file', writable: true, saveError: null}; await ready();
   let facts: Record<string, unknown> | undefined;
   app.emit('ets2telemetry:diagnostic-lifecycle-state', (state: Record<string, unknown>) => {facts = state;});
-  expect(facts).toMatchObject({settings: {units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'invalid-file', writable: true, saveError: null}});
+  expect(facts).toMatchObject({settings: {autostart: false, units: {ets2: 'metric', ats: 'us-customary'}, overlay: DEFAULT_OVERLAY, state: 'invalid-file', writable: true, saveError: null}});
 }));
 // ET-012a: overlay layouts and sections. The snapshot's game client is 1920 x 1080 at (-1920, 0) and the fixture's
 // screen conversion is the identity, so the strip is {-1600, 8, 1280, 110} with every section (ET-012c: three 36 px
@@ -1286,11 +1292,11 @@ it('creates the overlay window at the strip size reserved for every section by d
   await ready(); expect(configurations[1]).toMatchObject({width: 1280, height: 116});
 });
 it('creates the overlay window at the size the saved layout reserves for its sections', async () => {
-  settingsView = {...settingsView, overlay: {layout: 'cluster', sections: ALL_SECTIONS, placements: PLACEMENTS}}; await ready();
+  settingsView = {...settingsView, overlay: {enabled: true, layout: 'cluster', sections: ALL_SECTIONS, placements: PLACEMENTS}}; await ready();
   expect(configurations[1]).toMatchObject({width: 440, height: 267});
 });
 it('delivers the saved layout and sections in the overlay document first projection', async () => {
-  settingsView = {...settingsView, overlay: {layout: 'card', sections: {...ALL_SECTIONS, rpm: false, cargo: false}, placements: PLACEMENTS}}; await ready();
+  settingsView = {...settingsView, overlay: {enabled: true, layout: 'card', sections: {...ALL_SECTIONS, rpm: false, cargo: false}, placements: PLACEMENTS}}; await ready();
   // Twelve sections reserve 48 + 24 × 12 = 336 CSS px, below the card's nominal 360.
   expect(configurations[1]).toMatchObject({width: 300, height: 360});
   ipc.emit('overlay:subscribe', overlayTrusted());
@@ -1305,7 +1311,7 @@ it('rejects overlay settings requests from untrusted senders, frames and the ove
     await expect(saveOverlay('settings:set-overlay-layout', event, 'card')).rejects.toThrow('Untrusted');
     await expect(saveOverlay('settings:set-overlay-sections', event, ALL_SECTIONS)).rejects.toThrow('Untrusted');
   }
-  for (const request of [['bar'], ['Card'], [], ['card', 'hud'], [{layout: 'card'}]])
+  for (const request of [['bar'], ['Card'], [], ['card', 'hud'], [{enabled: true, layout: 'card'}]])
     await expect(saveOverlay('settings:set-overlay-layout', trusted(), ...request)).rejects.toThrow('Invalid overlay layout request');
   for (const request of [[], [ALL_SECTIONS, 'extra'], [{...ALL_SECTIONS, theme: true}], [{...ALL_SECTIONS, rpm: 1}],
     [Object.fromEntries(Object.keys(ALL_SECTIONS).map(id => [id, false]))], [[true]], ['all']])
@@ -1317,7 +1323,7 @@ it('applies an overlay layout only after the durable save, then republishes and 
   trayAvailable = true; vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2'); await ready();
   ipc.emit('app:subscribe-state', trusted()); ipc.emit('overlay:subscribe', overlayTrusted()); const overlayChannel = channels[1];
   consumeOverlay(overlayChannel); deliver(currentReading()); await vi.advanceTimersByTimeAsync(50);
-  expect(overlayProjection(overlayChannel)).toMatchObject({layout: 'strip', speed: '90.0', freshness: 'current'});
+  expect(overlayProjection(overlayChannel)).toMatchObject({layout: 'strip', speed: '90', freshness: 'current'});
   expect(windows[1].setBounds.mock.calls).toEqual([[{x: -1600, y: 8, width: 1280, height: 116}]]);
   expect(windows[1].showInactive).toHaveBeenCalledOnce(); consumeOverlay(overlayChannel);
   windows[1].setAlwaysOnTop.mockClear(); windows[1].moveTop.mockClear();
@@ -1330,7 +1336,7 @@ it('applies an overlay layout only after the durable save, then republishes and 
   expect(overlayWrite).toHaveBeenCalledExactlyOnceWith('layout', 'card');
   expect(pushes()).toHaveLength(before); expect(windows[1].setBounds).toHaveBeenCalledOnce();
   expect(overlayProjection(overlayChannel)).toMatchObject({layout: 'strip'});
-  settingsView = {...settingsView, overlay: {layout: 'card', sections: ALL_SECTIONS, placements: PLACEMENTS}, state: 'loaded'}; saved.resolve(settingsView);
+  settingsView = {...settingsView, overlay: {enabled: true, layout: 'card', sections: ALL_SECTIONS, placements: PLACEMENTS}, state: 'loaded'}; saved.resolve(settingsView);
   await expect(request).resolves.toEqual(settingsView);
   expect(pushes().at(-1)).toMatchObject({settings: settingsView});
   expect(windows[1].setBounds).toHaveBeenLastCalledWith({x: -316, y: 16, width: 300, height: 384});
@@ -1338,7 +1344,7 @@ it('applies an overlay layout only after the durable save, then republishes and 
   expect(windows[1].showInactive).toHaveBeenCalledOnce();
   await vi.advanceTimersByTimeAsync(50);
   const currentProjection = overlayProjection(overlayChannel);
-  expect(currentProjection).toMatchObject({layout: 'card', speed: '90.0', freshness: 'current'});
+  expect(currentProjection).toMatchObject({layout: 'card', speed: '90', freshness: 'current'});
   consumeOverlay(overlayChannel);
   // The original 500 ms SDK deadline still applies; a renewal at the save (t = 150 ms) would end after this window.
   await drainOverlay(overlayChannel, 400);
@@ -1355,7 +1361,7 @@ it('applies overlay sections after the durable save and hands the store only a v
   expect(sectionIds(overlayProjection(overlayChannel))).toContain('rpm');
   const input = {...ALL_SECTIONS, rpm: false, cargo: false};
   overlayWrite.mockImplementation((_kind, value) => {
-    settingsView = {...settingsView, overlay: {layout: 'strip', sections: value as Record<string, boolean>, placements: PLACEMENTS}, state: 'loaded'}; return Promise.resolve(settingsView);
+    settingsView = {...settingsView, overlay: {enabled: true, layout: 'strip', sections: value as Record<string, boolean>, placements: PLACEMENTS}, state: 'loaded'}; return Promise.resolve(settingsView);
   });
   await saveOverlay('settings:set-overlay-sections', trusted(), input);
   const [kind, forwarded] = overlayWrite.mock.calls[0];
@@ -1369,7 +1375,7 @@ it('applies overlay sections after the durable save and hands the store only a v
 // row at 1280 DIP wide: 38 high.
 const DRIVING_ONLY = Object.fromEntries(Object.keys(ALL_SECTIONS).map(id => [id, ['speed', 'gear', 'rpm', 'fuel', 'range'].includes(id)]));
 it('creates the strip overlay window as high as its saved sections need', async () => {
-  settingsView = {...settingsView, overlay: {layout: 'strip', sections: DRIVING_ONLY, placements: PLACEMENTS}}; await ready();
+  settingsView = {...settingsView, overlay: {enabled: true, layout: 'strip', sections: DRIVING_ONLY, placements: PLACEMENTS}}; await ready();
   expect(configurations[1]).toMatchObject({width: 1280, height: 40});
 });
 it('re-places the strip for saved sections only after the durable save and re-asserts topmost once without showing it again', async () => {
@@ -1384,7 +1390,7 @@ it('re-places the strip for saved sections only after the durable save and re-as
   await vi.advanceTimersByTimeAsync(10);
   // Not durable yet: the strip keeps its rows.
   expect(overlayWrite).toHaveBeenCalledOnce(); expect(overlay.setBounds).toHaveBeenCalledOnce(); expect(overlay.setAlwaysOnTop).not.toHaveBeenCalled();
-  settingsView = {...settingsView, overlay: {layout: 'strip', sections: DRIVING_ONLY, placements: PLACEMENTS}, state: 'loaded'}; saved.resolve(settingsView);
+  settingsView = {...settingsView, overlay: {enabled: true, layout: 'strip', sections: DRIVING_ONLY, placements: PLACEMENTS}, state: 'loaded'}; saved.resolve(settingsView);
   await expect(request).resolves.toEqual(settingsView);
   expect(overlay.setBounds.mock.calls).toEqual([[{x: -1600, y: 8, width: 1280, height: 116}], [{x: -1600, y: 8, width: 1280, height: 40}]]);
   expect(overlay.setAlwaysOnTop.mock.calls).toEqual([[true, 'screen-saver']]); expect(overlay.moveTop).toHaveBeenCalledOnce();
@@ -1412,7 +1418,7 @@ it('refuses overlay settings requests once exiting', async () => {
 // ET-010c decisions F2, F3 and F7: main validates the v1 projection before freshness and the overlay see it, expires it
 // on its own clock and feeds it into the overlay projection. The v1 input is snapshot-live with the v0 job ids under the
 // ETS2 game origin; the overlay origin text is written by hand from it. Since ET-012b the projection also carries `editing`.
-const OVERLAY_KEYS = ['source', 'origin', 'status', 'speed', 'speedUnit', 'fuel', 'fuelUnit', 'freshness', 'layout', 'paused', 'sections', 'editing', 'language'];
+const OVERLAY_KEYS = ['source', 'origin', 'status', 'speed', 'speedUnit', 'fuel', 'fuelUnit', 'freshness', 'layout', 'paused', 'sections', 'editing', 'language', 'contentAnchorY'];
 const ORIGIN_VALUE = {id: 'origin', state: 'value', text: 'Synthetic City A, Synthetic Company A'};
 const sectionOf = (projection: Record<string, unknown>, id: string) => (projection.sections as {id: string}[]).find(section => section.id === id);
 function readingWithV1(options: V1Options = {}): LiveTelemetry {
@@ -1473,7 +1479,7 @@ it('keeps a shown overlay origin as a dash when main strips the next v1 projecti
   deliver(invalid, 2); await vi.advanceTimersByTimeAsync(50); consumeOverlay(dashboard); consumeOverlay(overlayChannel);
   expect(log.mock.calls.filter(call => call[0] === 'LIVE_V1_REJECTED')).toEqual([['LIVE_V1_REJECTED', undefined, {count: 1}]]);
   const stripped = overlayProjection(overlayChannel);
-  expect(stripped).toMatchObject({freshness: 'current', speed: '90.0'});
+  expect(stripped).toMatchObject({freshness: 'current', speed: '90'});
   for (const id of ['origin', 'distance-remaining', 'deadline']) expect(sectionOf(stripped, id)).toEqual({id, state: 'unavailable'});
   expect(sectionOf(stripped, 'cargo')).toEqual({id: 'cargo', state: 'value', text: 'cargo.logs'});
   // A source change publishes an update without an observation; the v1 sections are then left out.
@@ -1490,7 +1496,7 @@ it('expires v1 data 500 ms after its last new boundary while v0 renews, turning 
     await drainOverlay(overlayChannel, 100); consumeOverlay(dashboard);
   }
   const projection = overlayProjection(overlayChannel);
-  expect(projection).toMatchObject({freshness: 'current', speed: '90.0'});
+  expect(projection).toMatchObject({freshness: 'current', speed: '90'});
   expect(sectionOf(projection, 'origin')).toEqual({id: 'origin', state: 'unavailable'});
   expect(sectionOf(projection, 'distance-remaining')).toEqual({id: 'distance-remaining', state: 'unavailable'});
   expect(sectionOf(projection, 'cargo')).toEqual({id: 'cargo', state: 'value', text: 'cargo.logs'});
@@ -1502,8 +1508,8 @@ it('re-places the overlay when a late settings read brings another layout', asyn
   expect(configurations[1]).toMatchObject({width: 1280, height: 116});
   ipc.emit('overlay:subscribe', overlayTrusted()); const overlayChannel = channels[1];
   consumeOverlay(overlayChannel); deliver(currentReading()); await vi.advanceTimersByTimeAsync(50); consumeOverlay(overlayChannel);
-  expect(windows[1].setBounds.mock.calls).toEqual([[{x: -1600, y: 8, width: 1280, height: 116}]]);
-  settingsView = {...settingsView, overlay: {layout: 'hud', sections: ALL_SECTIONS, placements: PLACEMENTS}, state: 'loaded', writable: true};
+  expect(windows[1].setBounds).not.toHaveBeenCalled(); expect(windows[1].showInactive).not.toHaveBeenCalled();
+  settingsView = {...settingsView, overlay: {enabled: true, layout: 'hud', sections: ALL_SECTIONS, placements: PLACEMENTS}, state: 'loaded', writable: true};
   settingsChanged!();
   expect(windows[1].setBounds).toHaveBeenLastCalledWith({x: -1904, y: 16, width: 320, height: 354});
   await vi.advanceTimersByTimeAsync(50);
@@ -1537,6 +1543,85 @@ function interactive(target = windows[1]) {
     movable: target.setMovable.mock.lastCall?.[0] ?? false, skipTaskbar: target.setSkipTaskbar.mock.lastCall?.[0] ?? true};
 }
 const CLICK_THROUGH = {ignoreMouse: true, focusable: false, movable: false, skipTaskbar: true};
+const visibility = (event: unknown, ...request: unknown[]) => Promise.resolve().then(() => Reflect.apply(handlers.get('settings:set-overlay-enabled')!, undefined, [event, ...request]));
+it('validates visibility IPC as one boolean from the trusted dashboard only', async () => {
+  await ready();
+  for (const event of [{sender: {}, senderFrame: contents.mainFrame}, overlayTrusted(), {sender: contents, senderFrame: {}}]) await expect(visibility(event, false)).rejects.toThrow('Untrusted');
+  for (const args of [[], [0], ['false'], [{}], [false, true]]) await expect(visibility(trusted(), ...args)).rejects.toThrow('Invalid overlay visibility request');
+  expect(overlayWrite).not.toHaveBeenCalled();
+});
+it('commits off before cancelling an edit begun while the off save was pending, without renewing authority', async () => {
+  await editableOverlay(); const saved = deferred<typeof settingsView>(); overlayWrite.mockReturnValueOnce(saved.promise);
+  const pending = visibility(trusted(), false); await settle();
+  expect(overlayWrite).toHaveBeenCalledExactlyOnceWith('enabled', false);
+  expect(await edit('overlay-edit:begin', trusted())).toMatchObject({active: true});
+  await edit('overlay-edit:set-scale', trusted(), 1.5);
+  const posts = child.postMessage.mock.calls.length; windows[1].showInactive.mockClear();
+  settingsView = {...settingsView, overlay: {...settingsView.overlay, enabled: false}, state: 'loaded'}; saved.resolve(settingsView);
+  await pending; expect(editPushes().at(-1)).toEqual({active: false}); expect(interactive()).toEqual(CLICK_THROUGH);
+  expect(windows[1].showInactive).not.toHaveBeenCalled(); expect(child.postMessage.mock.calls).toHaveLength(posts);
+  await expect(edit('overlay-edit:begin', trusted())).rejects.toThrow('Overlay is disabled');
+  expect(settingsView.overlay.placements).toEqual(PLACEMENTS);
+});
+it.each([false, true])('keeps the real pending settings defaults hidden until a late enabled=%s load installs its geometry', async enabled => {
+  const real = await vi.importActual<typeof import('../../apps/desktop/src/settings-store')>('../../apps/desktop/src/settings-store');
+  const login = installedLogin();
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'ets2-settings-visibility-'));
+  const gate = deferred(), applied = deferred();
+  const stores: InstanceType<typeof real.SettingsStore>[] = [];
+  const bytes = JSON.stringify({format: 'ets2telemetry.settings', version: 6, language: 'en', autostart: true,
+    units: {ets2: 'invalid', ats: 'us-customary'}, overlay: {...DEFAULT_OVERLAY, enabled, layout: 'hud', sections: {...ALL_SECTIONS, rpm: 'invalid'}}});
+  await writeFile(path.join(directory, 'settings.json'), bytes);
+  // The production store, parser and load budget run unchanged; only file reads wait behind a controlled barrier.
+  vi.doMock('../../apps/desktop/src/settings-store', () => ({...real, SettingsStore: class extends real.SettingsStore {
+    constructor(_directory: string | undefined, options: import('../../apps/desktop/src/settings-store').SettingsStoreOptions) {
+      super(directory, {...options, fs: {...nodeFs, lstat: async target => {await gate.promise; return nodeFs.lstat(target);}},
+        changed: () => {options.changed?.(); applied.resolve();}});
+      stores.push(this); settingsChanged = options.changed;
+    }
+  }}));
+  try {
+    trayAvailable = true; vi.stubEnv('ETS2TELEMETRY_SOURCE_KIND', 'ets2'); await ready();
+    expect(windows).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(real.SETTINGS_LOAD_BUDGET_MS);
+    expect(stores).toHaveLength(1); const store = stores[0];
+    expect(store.settled).toBe(true);
+    expect(store.view()).toMatchObject({state: 'loading', writable: false, overlay: {enabled: true, layout: 'strip'}});
+    expect(windows).toHaveLength(2);
+    ipc.emit('overlay:subscribe', overlayTrusted());
+    const current = currentReading(); current.observation!.receivedMonotonicMs = performance.now();
+    current.observation!.windowReceivedMonotonicMs = performance.now(); deliver(current);
+    expect(windows[1].showInactive).not.toHaveBeenCalled();
+    settingsChanged!();
+    expect(windows[1].showInactive).not.toHaveBeenCalled();
+    expect(login.set).not.toHaveBeenCalled();
+    windows[1].setBounds.mockClear(); gate.resolve(); await applied.promise; await settle();
+    expect(login.set).toHaveBeenCalledOnce(); expect(login.set).toHaveBeenCalledWith(expect.objectContaining({openAtLogin: true}));
+    expect(store.view()).toMatchObject({state: 'loaded-with-fallbacks', autostart: true, overlay: {enabled, layout: 'hud'}});
+    expect(await readFile(path.join(directory, 'settings.json'), 'utf8')).toBe(bytes);
+    if (enabled) {
+      expect(windows[1].setBounds.mock.calls).toEqual([[{x: -1904, y: 16, width: 320, height: 354}]]);
+      expect(windows[1].showInactive).toHaveBeenCalledOnce();
+      expect(windows[1].setBounds.mock.invocationCallOrder[0]).toBeLessThan(windows[1].showInactive.mock.invocationCallOrder[0]);
+    } else expect(windows[1].showInactive).not.toHaveBeenCalled();
+  } finally {gate.resolve(); await applied.promise; await rm(directory, {recursive: true, force: true});}
+});
+it('never re-shows a retired overlay when a pending enable save completes during exit', async () => {
+  await editableOverlay({overlay: {...DEFAULT_OVERLAY, enabled: false}}); renew(true);
+  const saved = deferred<typeof settingsView>(); overlayWrite.mockReturnValueOnce(saved.promise);
+  const pending = visibility(trusted(), true); await settle();
+  settingsIdle = deferred().promise; void handlers.get('app:exit')!(trusted()); await settle();
+  settingsView = {...settingsView, overlay: {...DEFAULT_OVERLAY}}; saved.resolve(settingsView); await pending;
+  settingsChanged!();
+  expect(windows[1].showInactive).not.toHaveBeenCalled();
+});
+it('preserves visibility and the active placement draft when the off save fails', async () => {
+  await editableOverlay(); await edit('overlay-edit:begin', trusted()); await edit('overlay-edit:set-scale', trusted(), 1.5);
+  overlayWrite.mockRejectedValueOnce(new FakeSettingsError('SETTINGS_WRITE_FAILED'));
+  await expect(visibility(trusted(), false)).rejects.toThrow('Settings could not be saved');
+  expect(settingsView.overlay.enabled).toBe(true); expect(editPushes().at(-1)).toMatchObject({active: true, scale: 1.5});
+  expect(interactive()).toEqual(EDITABLE);
+});
 /** The overlay was hidden after it last became focusable and before it became click-through again. */
 function hiddenBeforeClickThrough(target = windows[1]) {
   const restored = target.setIgnoreMouseEvents.mock.invocationCallOrder.at(-1)!;
@@ -1546,7 +1631,7 @@ function hiddenBeforeClickThrough(target = windows[1]) {
 const EDITABLE = {ignoreMouse: false, focusable: true, movable: true, skipTaskbar: true};
 
 it('creates the overlay window at the saved scale of its layout and applies that zoom after every load', async () => {
-  settingsView = {...settingsView, overlay: {layout: 'cluster', sections: ALL_SECTIONS, placements: {...PLACEMENTS, cluster: {x: 0, y: 1, scale: 1.5}}}}; await ready();
+  settingsView = {...settingsView, overlay: {enabled: true, layout: 'cluster', sections: ALL_SECTIONS, placements: {...PLACEMENTS, cluster: {x: 0, y: 1, scale: 1.5}}}}; await ready();
   // ET-012d: the cluster with every section at 1.5 is ceil(265 × 1.5 + 3) = 401 high (330 before).
   expect(configurations[1]).toMatchObject({width: 660, height: 401, webPreferences: {zoomFactor: 1.5, partition: 'ets2telemetry-overlay'}});
   expect(configurations[0].webPreferences).not.toHaveProperty('zoomFactor');
@@ -2683,4 +2768,157 @@ it('rejects autostart requests from untrusted senders, frames and the overlay, a
   for (const request of [['yes'], [1], [null], [], [{}]])
     await expect(saveAutostart(trusted(), ...request)).rejects.toThrow('Invalid autostart request');
   await expect(saveAutostart(trusted(), true)).rejects.toThrow('Autostart is not available in an unpackaged or portable environment');
+});
+
+// Login-item ports are entirely mocked; these cases never access Windows registration.
+function installedLogin() {
+  const get = vi.fn(() => ({openAtLogin: true})), set = vi.fn();
+  Object.assign(app, {getLoginItemSettings: get, setLoginItemSettings: set});
+  const discover = vi.fn(() => Promise.resolve({ok: true, mode: 'test-root', installRoot: 'C:\\isolated'}));
+  vi.doMock('../../apps/desktop/src/uninstall/roots', () => ({resolveUninstallRoots: discover}));
+  return {get, set, discover};
+}
+it.each(['loading', 'newer-version'])('does not unregister existing login registration from unknown %s defaults', async state => {
+  const login = installedLogin(); autostartKnown = false;
+  settingsView = {...settingsView, state, writable: false};
+  await ready(); await settle();
+  expect(login.get).toHaveBeenCalled(); expect(login.set).not.toHaveBeenCalled();
+  expect(handlers.get('app:get-state')!(trusted())).toMatchObject({autostart: 'registered'});
+});
+
+it('supersedes held startup discovery with the late authoritative load exactly once', async () => {
+  const login = installedLogin(), held = deferred<Awaited<ReturnType<typeof login.discover>>>();
+  login.discover.mockReturnValueOnce(held.promise); autostartKnown = false; settingsView = {...settingsView, state: 'loading'};
+  await ready(); settingsView = {...settingsView, state: 'loaded', autostart: true}; autostartKnown = true;
+  settingsChanged!(); await settle(); expect(login.set).toHaveBeenCalledOnce();
+  held.resolve({ok: true, mode: 'test-root', installRoot: 'C:\\isolated'}); await settle();
+  expect(login.set).toHaveBeenCalledOnce(); expect(login.set).toHaveBeenCalledWith(expect.objectContaining({openAtLogin: true}));
+});
+it.each([false, true])('retires held startup before an explicit request whose save fails=%s', async fail => {
+  const login = installedLogin(), held = deferred<Awaited<ReturnType<typeof login.discover>>>();
+  login.discover.mockReturnValueOnce(held.promise); settingsView = {...settingsView, autostart: true};
+  await ready(); if (fail) autostartWrite.mockRejectedValueOnce(new FakeSettingsError('SETTINGS_WRITE_FAILED'));
+  const requested = Promise.resolve(handlers.get('settings:set-autostart')!(trusted(), false));
+  if (fail) {
+    await expect(requested).rejects.toThrow('Settings could not be saved');
+    expect(login.get).toHaveBeenCalledOnce(); expect(login.set).not.toHaveBeenCalled();
+    expect(handlers.get('app:get-state')!(trusted())).toMatchObject({autostart: 'registered', settings: {autostart: true}});
+  } else await requested;
+  held.resolve({ok: true, mode: 'test-root', installRoot: 'C:\\isolated'}); await settle(); settingsChanged!(); await settle();
+  expect(login.set).toHaveBeenCalledTimes(fail ? 0 : 1);
+  if (!fail) expect(login.set).toHaveBeenCalledWith(expect.objectContaining({openAtLogin: false}));
+  else expect(handlers.get('app:get-state')!(trusted())).toMatchObject({autostart: 'registered', settings: {autostart: true}});
+});
+it('does not retire startup for rejected invalid or untrusted autostart requests', async () => {
+  const login = installedLogin(), held = deferred<Awaited<ReturnType<typeof login.discover>>>();
+  login.discover.mockReturnValueOnce(held.promise); settingsView = {...settingsView, autostart: true}; await ready();
+  await expect(Promise.resolve(handlers.get('settings:set-autostart')!(trusted(), 'true'))).rejects.toThrow('Invalid');
+  await expect(Promise.resolve(handlers.get('settings:set-autostart')!({sender: {}}, true))).rejects.toThrow('Untrusted');
+  held.resolve({ok: true, mode: 'test-root', installRoot: 'C:\\isolated'}); await settle();
+  expect(login.set).toHaveBeenCalledOnce(); expect(login.set).toHaveBeenCalledWith(expect.objectContaining({openAtLogin: true}));
+});
+it('queries terminal unknown settings once without later reconciling ordinary saves', async () => {
+  const login = installedLogin(); autostartKnown = false; settingsView = {...settingsView, state: 'invalid-file'};
+  await ready(); settingsWrite.mockImplementation(() => {settingsView = {...settingsView, state: 'loaded'}; return Promise.resolve(settingsView);});
+  const saveUnits: (...request: unknown[]) => unknown = handlers.get('settings:set-unit-profile')!;
+  await saveUnits(trusted(), 'ets2', 'metric');
+  settingsChanged!(); await settle(); expect(login.discover).toHaveBeenCalledOnce(); expect(login.set).not.toHaveBeenCalled();
+});
+it.each(['startup-discovery', 'request-discovery', 'durable-save'])('does not mutate registration when exit retires %s', async stage => {
+  const login = installedLogin(), held = deferred<Awaited<ReturnType<typeof login.discover>>>(), saved = deferred<typeof settingsView>();
+  if (stage === 'startup-discovery') login.discover.mockReturnValueOnce(held.promise);
+  else if (stage === 'request-discovery') {autostartKnown = false; settingsView = {...settingsView, state: 'loading'}; login.discover.mockResolvedValueOnce({ok: false} as unknown as Awaited<ReturnType<typeof login.discover>>).mockReturnValueOnce(held.promise);}
+  await ready(); login.set.mockClear(); let pending: Promise<unknown> | undefined;
+  if (stage !== 'startup-discovery') {
+    if (stage === 'durable-save') autostartWrite.mockReturnValueOnce(saved.promise);
+    pending = Promise.resolve(handlers.get('settings:set-autostart')!(trusted(), true));
+    await settle();
+  }
+  const queriesBeforeExit = login.get.mock.calls.length;
+  settingsIdle = deferred().promise; handlers.get('app:exit')!(trusted()); await settle();
+  held.resolve({ok: true, mode: 'test-root', installRoot: 'C:\\isolated'}); settingsView = {...settingsView, autostart: true}; saved.resolve(settingsView);
+  if (pending) await expect(pending).rejects.toThrow('retired'); await settle(); expect(login.set).not.toHaveBeenCalled();
+  expect(login.get).toHaveBeenCalledTimes(queriesBeforeExit);
+});
+it('applies the current committed choice rather than an older overlapping request result', async () => {
+  const login = installedLogin(); await ready(); login.set.mockClear();
+  const older = deferred<typeof settingsView>(), newer = deferred<typeof settingsView>();
+  autostartWrite.mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
+  const first = Promise.resolve(handlers.get('settings:set-autostart')!(trusted(), false));
+  const second = Promise.resolve(handlers.get('settings:set-autostart')!(trusted(), true)); await settle();
+  settingsView = {...settingsView, autostart: true}; older.resolve({...settingsView, autostart: false}); newer.resolve(settingsView);
+  await Promise.all([first, second]); expect(login.set.mock.calls.map(call => call[0].openAtLogin)).toEqual([true, true]);
+});
+
+it.each([{name: 'unregistered', registered: false, throws: false}, {name: 'failed', registered: true, throws: true}])(
+  'reports the synchronous $name registration query even when explicit persistence fails', async ({name, registered, throws}) => {
+    const login = installedLogin(), held = deferred<Awaited<ReturnType<typeof login.discover>>>();
+    login.discover.mockReturnValueOnce(held.promise); settingsView = {...settingsView, autostart: true}; await ready();
+    login.get.mockImplementation(() => {if (throws) throw new Error('query refused'); return {openAtLogin: registered};});
+    autostartWrite.mockRejectedValueOnce(new FakeSettingsError('SETTINGS_WRITE_FAILED'));
+    await expect(Promise.resolve(handlers.get('settings:set-autostart')!(trusted(), false))).rejects.toThrow('Settings could not be saved');
+    expect(handlers.get('app:get-state')!(trusted())).toMatchObject({autostart: name, settings: {autostart: true}});
+    held.resolve({ok: true, mode: 'test-root', installRoot: 'C:\\isolated'}); await settle();
+    expect(login.set).not.toHaveBeenCalled(); expect(login.get).toHaveBeenCalledOnce();
+  }
+);
+it('does not restore stale registration status when an older held save fails after a newer success', async () => {
+  const login = installedLogin(); autostartKnown = false; settingsView = {...settingsView, state: 'invalid-file', autostart: true};
+  let registered = true; login.get.mockImplementation(() => ({openAtLogin: registered}));
+  login.set.mockImplementation((options: {openAtLogin: boolean}) => {registered = options.openAtLogin;});
+  await ready(); const older = deferred<typeof settingsView>(); autostartWrite.mockReturnValueOnce(older.promise);
+  const first = Promise.resolve(handlers.get('settings:set-autostart')!(trusted(), true));
+  const rejected = expect(first).rejects.toThrow('Settings could not be saved'); await settle();
+  await handlers.get('settings:set-autostart')!(trusted(), false);
+  expect(handlers.get('app:get-state')!(trusted())).toMatchObject({autostart: 'unregistered', settings: {autostart: false}});
+  older.reject(new FakeSettingsError('SETTINGS_WRITE_FAILED')); await rejected;
+  expect(handlers.get('app:get-state')!(trusted())).toMatchObject({autostart: 'unregistered', settings: {autostart: false}});
+  expect(login.set).toHaveBeenCalledOnce();
+});
+it('retains a verified target when an older concurrent discovery later returns no installed target', async () => {
+  const login = installedLogin(), startup = deferred<Awaited<ReturnType<typeof login.discover>>>(), older = deferred<Awaited<ReturnType<typeof login.discover>>>();
+  login.discover.mockReturnValueOnce(startup.promise).mockReturnValueOnce(older.promise);
+  await ready(); const first = Promise.resolve(handlers.get('settings:set-autostart')!(trusted(), false));
+  await settle(); await handlers.get('settings:set-autostart')!(trusted(), true);
+  autostartWrite.mockRejectedValueOnce(new FakeSettingsError('SETTINGS_WRITE_FAILED'));
+  const rejected = expect(first).rejects.toThrow('Settings could not be saved');
+  older.resolve({ok: false} as unknown as Awaited<ReturnType<typeof login.discover>>); await rejected;
+  expect(handlers.get('app:get-state')!(trusted())).toMatchObject({autostart: 'registered', settings: {autostart: true}});
+  await handlers.get('settings:set-autostart')!(trusted(), true);
+  expect(login.discover).toHaveBeenCalledTimes(3); expect(login.set).toHaveBeenCalledTimes(2);
+  startup.resolve({ok: true, mode: 'test-root', installRoot: 'C:\\isolated'}); await settle(); expect(login.set).toHaveBeenCalledTimes(2);
+});
+it('observes actual status before a held durable save and mutates registration only after commit', async () => {
+  const login = installedLogin(); autostartKnown = false; settingsView = {...settingsView, state: 'invalid-file'};
+  await ready(); login.set.mockClear(); login.get.mockClear(); const saved = deferred<typeof settingsView>();
+  autostartWrite.mockReturnValueOnce(saved.promise);
+  const request = Promise.resolve(handlers.get('settings:set-autostart')!(trusted(), true)); await settle();
+  expect(login.get).toHaveBeenCalledOnce(); expect(login.set).not.toHaveBeenCalled();
+  expect(handlers.get('app:get-state')!(trusted())).toMatchObject({autostart: 'registered', settings: {autostart: false}});
+  settingsView = {...settingsView, autostart: true}; saved.resolve(settingsView); await request;
+  expect(login.set).toHaveBeenCalledOnce(); expect(login.set).toHaveBeenCalledWith(expect.objectContaining({openAtLogin: true}));
+});
+
+it('coalesces fraction-only overlay alignment through credits without reprojecting capture/latency, and retires the old port', async () => {
+  const projected = vi.fn((view: import('../../packages/contracts/src').OverlayPresentation) => ({...view, diagnosticFrame: 77}));
+  vi.doMock('../../apps/desktop/src/overlay-latency', async importOriginal => {
+    const actual = await importOriginal<typeof import('../../apps/desktop/src/overlay-latency')>();
+    return {...actual, latencyEnabled: () => true, OverlayLatency: class extends actual.OverlayLatency {override project = projected;}};
+  });
+  vi.doMock('../../apps/desktop/src/latency-frames', () => ({observeLatencyFrames: () => ({stats: {}})}));
+  const channel = await editableOverlay(); await edit('overlay-edit:begin', trusted()); await vi.advanceTimersByTimeAsync(50); consumeOverlay(channel);
+  const before = overlayProjection(channel), count = channel.port1.postMessage.mock.calls.length, messages = child.postMessage.mock.calls.length;
+  projected.mockClear();
+  for (const y of [400, 600]) {
+    windows[1].emit('will-move'); windows[1].bounds = {x: -1800, y, width: 1280, height: 116}; windows[1].emit('moved');
+  }
+  await vi.advanceTimersByTimeAsync(49); expect(channel.port1.postMessage).toHaveBeenCalledTimes(count);
+  await vi.advanceTimersByTimeAsync(1); const after = overlayProjection(channel);
+  expect(after.contentAnchorY).toBeGreaterThan(0.5); expect(after.contentAnchorY).toBeLessThan(1);
+  expect({...after, contentAnchorY: before.contentAnchorY}).toEqual(before);
+  expect(channel.port1.postMessage).toHaveBeenCalledTimes(count + 1); expect(projected).not.toHaveBeenCalled();
+  expect(child.postMessage).toHaveBeenCalledTimes(messages);
+  ipc.emit('overlay:unsubscribe', overlayTrusted()); const retired = channel.port1.postMessage.mock.calls.length;
+  windows[1].emit('moved'); await vi.advanceTimersByTimeAsync(50);
+  expect(channel.port1.postMessage).toHaveBeenCalledTimes(retired);
 });

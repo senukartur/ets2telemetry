@@ -2,6 +2,16 @@
 
 Concept recorded on: October 10, 2026.
 
+ET-012 closeout disposition, October 22, 2026: the owner accepted the four display corrections and 200% mouse-release
+behavior on the c6d70e4 ETS2 preview, without individually accepting all layouts or the full game matrix. The owner
+separately authorized administrative Done and consolidation of the remaining seven rows and P2/A2/A3/A7/M1–M8/E4
+in [ET-044](https://trello.com/c/ucJbXIEH), **unverified**; ET-042/ET-043 transfers retain their existing scope/status.
+This supersedes earlier ET-012 manual-gate/Review wording without changing historical outcomes. Independent round 9
+passed all 39 local commands / 21 journeys on 722938c9; Claude's four nonblocking notes have recorded dispositions.
+Current independent review, final automatic Ready CI and authorized squash merge remain pending PR gates. No release
+or real-history enablement follows. See
+[ET-012e validation](docs/validation/et-012e.md) for exact identities, limits and pending CI snapshot.
+
 ET-011 closeout authorization, October 22, 2026: the owner requested resolving local failures, independent review,
 final automatic Ready CI and squash merge of PR #167, then closing ET-011. Narrator, real-game unit profiles and
 close-to-tray overlay continuity transfer **unverified** to [ET-043](https://trello.com/c/2fbiCET0). Installed shortcut
@@ -773,7 +783,7 @@ Event and trip effects are committed in one transaction before the ACK. Recordin
 | R11 | S-1 (fuel-used column) and S-2 (late-attached job trips) go to ET-016 in one schema v2 migration; S-3 is resolved here; S-4 stays in detail JSON. No schema migration in ET-015a |
 | R12 | Storage API additions without a schema change: a `{game, outcome}` filter on `listTrips` and an `ifAbsent` option on `recordCompleteness` |
 | R13 | Disk-full, permission and lock failures are injected through the real worker by a test-only entry inside the real transaction, so rollback of the event and its effects is proven |
-| R14 | Orderly exit splits ingestion stop into intake (`stopSource`) and a nominal 500 ms `recording-flush` step that waits for the in-flight commit and drops queued work; the producer redelivers it. The October 22 ET-011 allocation correction permits borrowing only unused registered intake time, reserving the full registered future storage maximum. The service stop budget stays 2500 ms |
+| R14 | Orderly exit splits ingestion stop into intake (`stopSource`) and a nominal 500 ms `recording-flush` step (bounded unused-intake allocation approved October 21, 2026; see [correction](#et-012-corrective-shutdown-allocation--october-21-2026)) that waits for the in-flight commit and drops queued work; the producer redelivers it. The service stop budget stays 2500 ms |
 | R15 | Seeds are read only at the first durable welcome of a game in the recorder's lifetime |
 | R16 | `conflict` results are adopted as T3 says; a later divergence fails closed |
 | R17 | The recorder exposes a read-only trip view for ET-015b's sample references |
@@ -845,7 +855,7 @@ Under the owner's standing delegation of October 15, 2026 (quoted in the ET-015a
 | H8 | A low-priority `samples` op in the FIFO writes at most 60 rows of one session per `appendSamples`. It is queued when the oldest pending row is 5 s old or 60 rows are pending, and at most one such op is queued or running |
 | H9 | Loss budget. In steady state, at most 5 s plus one batch command is uncommitted. A kill loses at most those rows; an open trip records this only through its `consumer-restart` interval. An orderly exit loses none unless its step expires. Under a storage backlog at most 300 rows are held; newer rows are dropped, and each dropped run becomes one session-level `sample-loss` interval with `cause: 'sample-backlog'` |
 | H10 | A coverage item waits behind at most one bounded batch. Samples never count against the 256-item and 512-reading bounds |
-| H11 | `recording-flush` has a nominal 500 ms allocation and may use unused registered intake time, up to 1500 ms with prompt intake, while reserving storage's registered maximum. After the commit in flight, it writes every pending row (at most 300 per session) unless delivery has failed, and logs `V1_SAMPLES_EXIT` once. Expiry of the effective allocation remains an unclean stop; the 2500 ms stop total is unchanged |
+| H11 | `recording-flush` keeps its nominal 500 ms; the owner-approved October 21, 2026 [correction](#et-012-corrective-shutdown-allocation--october-21-2026) supersedes the fixed effective deadline. After the commit in flight, it writes every pending row (at most 300 per session) unless delivery has failed, and logs `V1_SAMPLES_EXIT` once. The 2500 ms stop total is unchanged |
 | H12 | Sample write failures follow the E7 classes. A retryable failure keeps the rows and retries them at the next timer, and the connection stays open. An unavailable failure makes the service live-only for its lifetime and discards pending rows. Diagnostics are the `V1_SAMPLES_*` codes, logged at counts 1, 2, 4, … |
 | H13 | Readings carry the receipt UTC label taken at decode (as R8). A sample's `utcMs` is the reading's `captureUtcUnixMs` when it is available and safe, and otherwise this label |
 | H14 | Wire canonical units are copied unchanged, and position comes from `worldPlacement.position`. Availability objects lose their `unit` key, and game time keeps its own clock. UTC, game time and real time stay in separate columns |
@@ -1132,3 +1142,25 @@ ET-028 implements [the canonical Yukon UI](docs/design/ui-spec.md) on the existi
 Accepted binding limits are explicit: Live trip aggregates/progress, list actual revenue, aggregate trip durations, application version and DB statistics are unavailable; account/sync/autostart/backup/show-overlay/opacity backends are not implemented. The overlay's existing numeric RPM fraction supplies its inner arc; formatted-only speed does not justify numeric speed progress, so the outer track is decorative. App-owned EN/RU copy is localized, while SDK cargo/city/company/vehicle names, raw enums/cvars and exact money/currency remain untouched. `GAME_HISTORY_RECORDING=false` is preserved.
 
 Five development/packaged UI shards retain the global60s owned Job deadline and mandatory screenshots/receipt coverage; the settings read-only relaunch uses the unchanged future-version EN fallback. See [ET-028 evidence](docs/validation/et-028.md) for actual check outcomes and failures. Independent review/full verification/draft CI and manual DPI/native-caption/game-overlay/performance evidence are separate gates; implementation alone accepts none of them.
+
+## ET-012e visibility implementation scope — October 21, 2026
+
+The owner authorized saved overlay visibility (v5 `overlay.enabled`, default true), trusted boolean IPC, durable settings, gate-before-edit/driving behavior and the existing Yukon settings switch. This supersedes earlier statements that show/hide is only planned. Disabling after save cancels/discards unsaved placement; failed saves preserve it. Telemetry and recording behavior is unchanged.
+
+The owner explicitly transferred multi-monitor, mixed-DPI, negative-origin, monitor-removal and off-screen manual checks to ET-042; the coordinator synchronized both task descriptions. Those checks remain unverified, with no inferred display acceptance. ET-012e still needs relevant single-monitor ETS2/ATS SP/TruckersMP windowed/borderless manual disposition and all code/review/CI gates. Preserve accepted ET-009 evidence and all historical ET-012a–d records. See [ET-012e validation](docs/validation/et-012e.md). No game launch, release or game-history enablement follows from implementation.
+
+## ET-012 corrective shutdown allocation — October 21, 2026
+
+The owner explicitly authorized bounded time redistribution and regression checks after the final recording-flush gate was FLAKY (failure followed by one passing diagnostic). Its original delay segment and operating-system cause remain unknown. This correction supersedes the fixed effective 500 ms statements in R14/H11; `RECORDING_FLUSH_BUDGET_MS` remains nominally 500 and registered phase maxima still total at most 2500.
+
+Only `recording-flush` in the `flush` phase may borrow unused intake: let B=2500, I be the maximum registered intake budget, S the maximum registered storage budget, f the nominal flush-step budget and e the monotonic elapsed since sequence start at flush entry. Extra is `max(0, min(I - e, B - e - S - f))`, effective budget `f + extra`, with no grant for nonfinite/negative elapsed or empty intake. Parallel budgets use maxima, never sums. Ordinary intake lasting 0/300/1000 ms gives flush 1500/1200/500 ms. Other steps retain their nominal budgets.
+
+ET-038 storage recalculates from actual elapsed after flushing, so lent time is not spent twice. Its nominal history budget floor, 800 ms grace floor, 200 ms termination reserve and the existing event-loop verdict turn remain. Scheduling can exceed the nominal wall-clock point; this is not an absolute physical deadline under arbitrarily late scheduling. Failure remains sticky; source-stop/no-ACK and final-sample/storage-close ordering are unchanged. See [policy](docs/app-lifecycle.md#recording-flush-allocation-et-012-correction) and [evidence](docs/validation/et-012e.md). Game-history recording stays disabled.
+
+## ET-012 settings v6 integration — October 21, 2026
+
+Accepted ET-031 main `bf17eea` owns settings v5 for autostart. The visibility extension is now v6, superseding earlier dated ET-012 prototype-v5 references. Migration v4-to-v5 remains autostart false; v5-to-v6 copies an object-valued overlay and adds enabled true, retaining every accepted autostart/language/unit/layout/section/placement preference. Malformed values retain independent fallback; startup never rewrites old bytes. No ambiguous second-v5 detection is used: the visibility-v5 schema was an unmerged prototype with temporary automated evidence and no exercised owner/game settings. Current v6 serializes both flags and older apps refuse it read-only. Autostart registration/hidden startup/uninstall behavior and the approved recording-flush allocation remain unchanged. See [settings](docs/settings.md) and [ET-012e](docs/validation/et-012e.md).
+
+## ET-012e presentation followup — October 22, 2026
+
+The owner requested smaller ordinary overlay values, bottom attachment, removal of the visible duplicate dashboard speed paragraph and integer live speed. This supersedes the earlier top-of-capacity presentation and one-decimal LIVE speed wording (including historical N7/S9), without changing canonical telemetry, numeric gauge geometry, journal/export precision or fuel decimals. The native window retains fixed worst-case capacity; an optional finite normalized display-only anchor aligns painted content with committed/draft y. No renderer measurement controls native size. Anchor-only publication retains the existing credit/epoch scheduler and capture/freshness/diagnostic identity. Drag start freezes geometry and painted anchor; release applies the existing bounds-to-fraction conversion. Its painted adjustment `(reservedHeight - paintedHeight) * deltaAnchorY` can be large and does not promise pointer-drop continuity. Sparse content/large capacity/near-bottom release requires owner retesting. See [minimal overlay](docs/minimal-overlay.md#painted-alignment-and-integer-live-speed-et-012e-october-22-2026) and [current evidence](docs/validation/et-012e.md). Earlier dated observations remain historical.
