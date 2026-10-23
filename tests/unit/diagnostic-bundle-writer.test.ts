@@ -1,6 +1,7 @@
 // REG-015, REG-017 (ET-017 PR-6, P17): the diagnostic bundle export in main, on real temporary folders. The Save dialog is
 // scripted; the target checks and the partial-file write are the shared export-file.ts routine. Expected outcomes and log
 // rows are written by hand from P17. No real user or data folder is touched: LOCALAPPDATA is a temporary folder.
+import {existsSync} from 'node:fs';
 import {mkdir, readdir, readFile, symlink, writeFile} from 'node:fs/promises';
 import * as realFs from 'node:fs/promises';
 import path from 'node:path';
@@ -42,6 +43,18 @@ it('names the default file by the UTC time and offers it in Documents', async ()
   await f.instance.export();
   expect(f.showSaveDialog).toHaveBeenCalledExactlyOnceWith('C:\\Users\\owner\\Documents\\ets2telemetry-diagnostics-20261017T083015Z.json');
 });
+
+function exactLengthPath(parentDir: string, fileName: string, targetLen = 282): string {
+  let remaining = targetLen - path.join(parentDir, fileName).length - 1;
+  const segments: string[] = [];
+  while (remaining > 0) {
+    const chunk = Math.min(remaining, 80);
+    segments.push('d'.repeat(chunk));
+    remaining -= chunk;
+    if (remaining > 0) remaining -= 1;
+  }
+  return path.join(parentDir, ...segments, fileName);
+}
 
 describe('a cancelled Save dialog', () => {
   it('builds, reads and writes nothing and answers cancelled', async () => {
@@ -188,5 +201,58 @@ describe('one export at a time, and the application exit', () => {
     expect(await readFile(path.join(out, 'diagnostics.json'), 'utf8')).toBe('old bundle');
     await expect(running).resolves.toEqual({outcome: 'refused', code: 'EXPORT_INTERRUPTED'});
     expect(f.instance.idle()).toBeUndefined();
+  });
+});
+
+describe('ordinary long target path (282 chars, ET-046)', () => {
+  it('writes valid bundle, syncs, and renames with and without extended prefix', async () => {
+    const longTarget = exactLengthPath(out, 'diagnostics-long.json', 282);
+    expect(longTarget.length).toBe(282);
+    await mkdir(path.dirname(longTarget), {recursive: true});
+
+    // Without \\?\ prefix
+    const f1 = exporter({target: longTarget});
+    await expect(f1.instance.export()).resolves.toEqual({outcome: 'saved'});
+    expect(existsSync(longTarget)).toBe(true);
+    expect(await readFile(longTarget, 'utf8')).toBe(BUNDLE);
+
+    // With \\?\ prefix
+    const extTarget = `\\\\?\\${longTarget}`;
+    const f2 = exporter({target: extTarget});
+    await expect(f2.instance.export()).resolves.toEqual({outcome: 'saved'});
+    expect(existsSync(longTarget)).toBe(true);
+    expect(await readFile(longTarget, 'utf8')).toBe(BUNDLE);
+  });
+
+  it('cleans up partial on failure and leaves existing target intact', async () => {
+    const longTarget = exactLengthPath(out, 'diagnostics-long.json', 282);
+    await mkdir(path.dirname(longTarget), {recursive: true});
+    await writeFile(longTarget, 'old bundle');
+
+    const fs: ExportFileSystem = {
+      ...realFs,
+      open: async (target, flags) => {
+        const handle = await realFs.open(target, flags);
+        return {
+          writeFile: () => Promise.reject(Object.assign(new Error('disk fail'), {code: 'EIO'})),
+          sync: () => handle.sync(),
+          close: () => handle.close()
+        };
+      }
+    };
+    const f = exporter({target: longTarget, fs});
+    await expect(f.instance.export()).resolves.toEqual({outcome: 'failed', code: 'EXPORT_WRITE_FAILED'});
+    expect(await readFile(longTarget, 'utf8')).toBe('old bundle');
+    const parentFiles = await readdir(path.dirname(longTarget));
+    expect(parentFiles.filter(name => name.endsWith('.partial'))).toEqual([]);
+  });
+
+  it('refuses a 282-character target inside the data directory before bundle generation', async () => {
+    const dataLogs = path.join(local, 'ETS2Telemetry', 'logs');
+    const longInsideData = exactLengthPath(dataLogs, 'diagnostics-long.json', 282);
+    expect(longInsideData.length).toBe(282);
+    const f = exporter({target: longInsideData});
+    await expect(f.instance.export()).resolves.toEqual({outcome: 'refused', code: 'EXPORT_TARGET_REFUSED'});
+    expect(f.build).not.toHaveBeenCalled();
   });
 });

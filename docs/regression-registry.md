@@ -484,3 +484,15 @@ REG-009/REG-016 add `overlay-rendering.test.ts`, `overlay.test.ts`, `overlay-vie
 
 
 ET-047 (October 23, 2026) extends the existing shell/Live UI shards, Hard Mode journey, `hard-mode-fixture-observation.test.ts`, `runtime-receipt.test.ts` and `ui-runtime-receipt.test.ts`; no new entrypoint. Protected categories remain R/T, REG-009/012/016/017: Drive order/focus, full-width Live card, inline twelve-rule evidence, no drawer, EN/RU/zoom containment and retained irreversible trip qualification. Shell coverage grows from 16 to 20 PNGs per invocation (whole ten-shard inventory 316); other UI inventories are unchanged. Mandatory `hardModePage`, `fullWidthTelemetry` and `inlineDetails` receipt fields fail closed on false/missing evidence.
+
+## ET-046 ordinary long export path acceptance — October 23, 2026
+
+ET-046 (October 23, 2026) resolves the ET-044 finding where Windows Save dialog returns Win32 extended-length paths (`\\?\` prefix) when targets exceed MAX_PATH (260 characters). Shared export validator `apps/desktop/src/export-file.ts` now accepts and canonicalizes ordinary extended drive (`\\?\\[A-Za-z]:\\`) and extended UNC (`\\?\\UNC\\<server>\\<share>...`) file paths outside `%LOCALAPPDATA%\ETS2Telemetry`, while strictly refusing device namespaces (`\\.\\`, `\??\\`, `\\?\\pipe\\`, `\\?\\Volume{...}`), DOS device names (`CON`, `PRN`, `AUX`, `NUL`, `COM1-9`, `LPT1-9`) and targets inside the data directory (lexically or by file identity).
+
+| Entry point | Layer | REG IDs | Source | Owning card (PR) | Runs in | Protected |
+| --- | --- | --- | --- | --- | --- | --- |
+| `tests/unit/journal-export-writer.test.ts` | Node unit (Vitest) | REG-014 | R, F | ET-046 | PR (tests job, `npm test`) | security, long-path acceptance, atomic partial output |
+| `tests/unit/diagnostic-bundle-writer.test.ts` | Node unit (Vitest) | REG-012, REG-015, REG-017 | R, F | ET-046 | PR (tests job, `npm test`) | security, long-path acceptance, data-root boundary |
+
+REG-014: `journal-export-writer.test.ts` verifies export to a 282-character path with and without `\\?\` prefix (atomic `.partial` write, sync, rename), partial file removal and existing-target preservation on failure, cancellation, and refusal of 282-character paths inside the data directory as well as extended device paths (`\\?\\pipe\\`, `\\?\\Volume{...}`) and DOS device names.
+REG-015/REG-017: `diagnostic-bundle-writer.test.ts` verifies diagnostic bundle export to a 282-character path with and without `\\?\` prefix (atomic `.partial` write, sync, rename), cleanup on failure, and fail-closed refusal of a 282-character path inside the data directory before bundle generation.

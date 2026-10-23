@@ -8,6 +8,7 @@ import path from 'node:path';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import type {JournalCallResult, JournalTripDetail} from '../../packages/contracts/src';
 import {exportTargetRefused, JournalExporter, type ExportFileSystem, type JournalExporterOptions} from '../../apps/desktop/src/journal-export-writer';
+import {stripExtendedPrefix} from '../../apps/desktop/src/export-file';
 import type {JournalQuery} from '../../apps/desktop/src/journal-contract';
 import {changed, DETAIL, EVENT, INTERVAL, SAMPLE, TRIP} from '../shared/journal-replies';
 import {temporaryResources} from '../shared/resources';
@@ -51,6 +52,18 @@ function exporter(options: Partial<JournalExporterOptions> & {target?: string | 
 }
 const events = (log: ReturnType<typeof vi.fn>) => log.mock.calls.map(call => [call[0], call[2] ?? null]);
 const listing = async (directory = out) => (await readdir(directory)).sort();
+
+function exactLengthPath(parentDir: string, fileName: string, targetLen = 282): string {
+  let remaining = targetLen - path.join(parentDir, fileName).length - 1;
+  const segments: string[] = [];
+  while (remaining > 0) {
+    const chunk = Math.min(remaining, 80);
+    segments.push('d'.repeat(chunk));
+    remaining -= chunk;
+    if (remaining > 0) remaining -= 1;
+  }
+  return path.join(parentDir, ...segments, fileName);
+}
 
 describe('a cancelled Save dialog (J16)', () => {
   it('writes nothing and answers cancelled', async () => {
@@ -257,14 +270,29 @@ describe('refused targets (J16)', () => {
     expect((await exporter({localAppData: fresh}).instance.export(TRIP)).ok).toBe(true);
   });
   it.each([
-    '\\\\?\\C:\\exports\\trip.json', '\\\\.\\C:\\exports\\trip.json', '\\\\.\\pipe\\trip', '//?/C:/exports/trip.json', '\\??\\C:\\exports\\trip.json', 'C:\\exports\\NUL.json',
+    '\\\\.\\C:\\exports\\trip.json', '\\\\.\\pipe\\trip', '//?/C:/exports/trip.json', '\\??\\C:\\exports\\trip.json', 'C:\\exports\\NUL.json',
     'C:\\exports\\con', 'C:\\COM1\\trip.json', 'C:\\exports\\lpt9.txt', 'trip.json', '.\\trip.json', 'C:trip.json', '', 'C:\\exports\\trip\0.json'
   ])('refuses the device, relative or malformed path %j', target => {
     expect(exportTargetRefused(target, 'C:\\Users\\owner\\AppData\\Local')).toBe(true);
   });
   it.each(['C:\\Users\\owner\\Documents\\trip.json', 'D:\\exports\\ETS2Telemetry\\trip.json', 'C:\\Users\\owner\\AppData\\Local\\ETS2Telemetry-exports\\trip.json',
-    '\\\\server\\share\\trip.json', 'C:\\exports\\console.json'])('allows %j', target => {
+    '\\\\server\\share\\trip.json', 'C:\\exports\\console.json', '\\\\?\\C:\\exports\\trip.json', '\\\\?\\UNC\\server\\share\\trip.json'])('allows %j', target => {
     expect(exportTargetRefused(target, 'C:\\Users\\owner\\AppData\\Local')).toBe(false);
+  });
+  it.each([
+    '\\\\?\\pipe\\trip',
+    '\\\\?\\Volume{12345678-1234-1234-1234-123456789012}\\trip.json',
+    '\\\\?\\C:\\exports\\NUL.json'
+  ])('refuses non-file or DOS device path in extended syntax %j', target => {
+    expect(exportTargetRefused(target, 'C:\\Users\\owner\\AppData\\Local')).toBe(true);
+  });
+  it.each([
+    ['\\\\?\\C:\\exports\\trip.json', 'C:\\exports\\trip.json'],
+    ['\\\\?\\UNC\\server\\share\\trip.json', '\\\\server\\share\\trip.json'],
+    ['\\\\?\\pipe\\trip', '\\\\?\\pipe\\trip'],
+    ['C:\\exports\\trip.json', 'C:\\exports\\trip.json'],
+  ])('strips extended prefix %j to %j', (target, expected) => {
+    expect(stripExtendedPrefix(target)).toBe(expected);
   });
   it('refuses every target when LOCALAPPDATA is unknown', () => {
     expect(exportTargetRefused('C:\\Users\\owner\\Documents\\trip.json', undefined)).toBe(true);
@@ -332,5 +360,67 @@ describe('one export at a time, and the application exit (J16)', () => {
     const f = exporter({read: journal({database: () => ({ok: true, value: {database: {purpose: 'history', schemaVersion: 2}, databaseUuid: DATABASE_UUID}})}).read});
     await expect(f.instance.export(TRIP)).resolves.toEqual({ok: false, code: 'FAILED'});
     expect(f.showSaveDialog).not.toHaveBeenCalled();
+  });
+});
+
+describe('ordinary long target path (282 chars, ET-046)', () => {
+  it('saves valid document through .partial, syncs, and renames with and without extended prefix', async () => {
+    const longTarget = exactLengthPath(out, 'trip-long.json', 282);
+    expect(longTarget.length).toBe(282);
+    await mkdir(path.dirname(longTarget), {recursive: true});
+
+    // Test without \\?\ prefix
+    const f1 = exporter({target: longTarget});
+    await expect(f1.instance.export(TRIP)).resolves.toEqual({ok: true, value: {outcome: 'saved', events: 2, intervals: 1, samples: 1}});
+    expect(existsSync(longTarget)).toBe(true);
+    const doc1 = JSON.parse(await readFile(longTarget, 'utf8')) as {header: unknown};
+    expect(tripExportProblems(doc1)).toEqual([]);
+
+    // Test with \\?\ prefix
+    const extTarget = `\\\\?\\${longTarget}`;
+    const f2 = exporter({target: extTarget});
+    await expect(f2.instance.export(TRIP)).resolves.toEqual({ok: true, value: {outcome: 'saved', events: 2, intervals: 1, samples: 1}});
+    expect(existsSync(longTarget)).toBe(true);
+    const doc2 = JSON.parse(await readFile(longTarget, 'utf8')) as {header: unknown};
+    expect(tripExportProblems(doc2)).toEqual([]);
+  });
+
+  it('cleans up partial file and leaves existing target intact on injected failure', async () => {
+    const longTarget = exactLengthPath(out, 'trip-long.json', 282);
+    await mkdir(path.dirname(longTarget), {recursive: true});
+    await writeFile(longTarget, 'prior content');
+
+    const fs: ExportFileSystem = {
+      ...realFs,
+      open: async (target, flags) => {
+        const handle = await realFs.open(target, flags);
+        return {
+          writeFile: () => Promise.reject(Object.assign(new Error('disk fail'), {code: 'EIO'})),
+          sync: () => handle.sync(),
+          close: () => handle.close()
+        };
+      }
+    };
+    const f = exporter({target: longTarget, fs});
+    await expect(f.instance.export(TRIP)).resolves.toEqual({ok: false, code: 'EXPORT_WRITE_FAILED'});
+    expect(await readFile(longTarget, 'utf8')).toBe('prior content');
+    const parentFiles = await readdir(path.dirname(longTarget));
+    expect(parentFiles.filter(name => name.endsWith('.partial'))).toEqual([]);
+  });
+
+  it('cancels cleanly without writing when dialog is cancelled', async () => {
+    const longTarget = exactLengthPath(out, 'trip-long.json', 282);
+    await mkdir(path.dirname(longTarget), {recursive: true});
+    const f = exporter({target: null});
+    await expect(f.instance.export(TRIP)).resolves.toEqual({ok: true, value: {outcome: 'cancelled'}});
+    expect(existsSync(longTarget)).toBe(false);
+  });
+
+  it('refuses a 282-character path inside the data directory', async () => {
+    const dataDir = path.join(local, 'ETS2Telemetry');
+    const longInsideData = exactLengthPath(dataDir, 'trip-long.json', 282);
+    expect(longInsideData.length).toBe(282);
+    const f = exporter({target: longInsideData});
+    await expect(f.instance.export(TRIP)).resolves.toEqual({ok: false, code: 'EXPORT_TARGET_REFUSED'});
   });
 });
