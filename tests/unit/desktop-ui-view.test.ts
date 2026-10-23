@@ -25,6 +25,24 @@ describe('desktop numeric presentation (REG-002/003/009/014)', () => {
     expect(view.speedText).toBe('5'); expect(view.speed).toBe(4.5); expect(view.speedRatio).toBe(4.5 / view.scaleMax);
     expect(live.observation!.state.speed).toEqual({available: true, value: 1.25, unit: 'm/s'});
   });
+  it('draws no speed arc while the displayed integer is 0, and keeps fractional geometry above it (ET-045a item 1)', () => {
+    const at = (value: number, profiles?: {ets2: 'metric' | 'us-customary'; ats: 'metric' | 'us-customary'}) => {
+      const live = smokeV0(); live.observation!.state.speed = {available: true, value, unit: 'm/s'};
+      return {view: desktopLiveView(live, profiles), live};
+    };
+    for (const [value, profiles] of [[0.1, undefined], [0.2, {ets2: 'us-customary', ats: 'us-customary'}], [-0.1, undefined]] as const) {
+      const {view, live} = at(value, profiles);
+      expect(view.speedText, String(value)).toBe('0'); expect(view.speedRatio, String(value)).toBe(0);
+      expect(view.speed, String(value)).not.toBe(0);
+      expect(live.observation!.state.speed).toEqual({available: true, value, unit: 'm/s'});
+    }
+    const moving = at(0.14).view;
+    expect(moving.speedText).toBe('1'); expect(moving.speedRatio).toBeGreaterThan(0); expect(moving.speedRatio).toBe(moving.speed! / moving.scaleMax);
+    const stale = at(0.1).live;
+    expect(desktopLiveView({...stale, fresh: false, status: 'stale'})).toMatchObject({speedText: '—', speedRatio: null});
+    const unavailable = smokeV0(); unavailable.observation!.state.speed = {available: false, reason: 'not-observed', unit: 'm/s'};
+    expect(desktopLiveView(unavailable)).toMatchObject({speed: null, speedText: '—', speedRatio: null});
+  });
   it('preserves game-provided cargo/city/company/truck names in both languages, localizing only labels and provenance', () => {
     const live = smokePair();
     const en = liveDashboardText(live), ru = liveDashboardText(live, undefined, 'ru');
