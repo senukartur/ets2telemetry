@@ -177,7 +177,7 @@ describe('trip detail (J13, J21, J22; REG-014, REG-009)', () => {
       fine: '401 EUR (SDK-documented), 2 amounts', toll: '35 EUR (SDK-documented), 1 amount', ferry: '677 EUR (SDK-documented), 1 amount', train: 'none recorded'});
     expect(notes(text.sections, 'money')).toEqual(['Amounts are the exact game values. They are never converted, netted or added across currencies.']);
     expect(fields(text.sections, 'job')).toEqual({sourceCity: 'Synthetic City A', sourceCompany: 'Synthetic Company A', destinationCity: 'Synthetic City B',
-      destinationCompany: 'Synthetic Company B', cargo: 'Synthetic Cargo', cargoMass: '18.0 t', market: 'freight_market', specialJob: 'no', cargoLoaded: 'yes',
+      destinationCompany: 'Synthetic Company B', cargo: 'Synthetic Cargo', cargoMass: '18.0 t', market: 'Freight market', specialJob: 'no', cargoLoaded: 'yes',
       deadline: 'Day 10, 00:40 [game time]', jobSource: 'job event 4'});
     expect(fields(text.sections, 'delivery')).toEqual({earnedXp: '250', cargoDamage: '1%', deliveryDuration: '7 h 51 min [game time]', autoPark: 'no', autoLoad: 'yes'});
     expect(fields(text.sections, 'truck')).toEqual({brand: 'Synthetic Brand', model: 'Synthetic Truck', licensePlate: 'SYN 0001', plateCountry: 'Synthetica', fuelCapacity: '1000.0 L'});
@@ -203,7 +203,7 @@ describe('trip detail (J13, J21, J22; REG-014, REG-009)', () => {
       expect(fields(text.sections, 'fuel')).toEqual({fuelUsed: `${fuel} [while recording, refuels excluded]`});
       expect(fields(text.sections, 'money')).toMatchObject({expectedIncome: '0 USD (SDK-documented) [job offer]', revenue: '0 USD (SDK-documented) [reported by the game]'});
       expect(fields(text.sections, 'job')).toEqual({sourceCity: '(empty)', sourceCompany: 'Synthetic Company A', destinationCity: 'unavailable (not provided by the game)',
-        destinationCompany: 'Synthetic Company B', cargo: 'unavailable (not observed)', cargoMass: 'unavailable (not provided by the game)', market: 'freight_market', specialJob: 'no',
+        destinationCompany: 'Synthetic Company B', cargo: 'unavailable (not observed)', cargoMass: 'unavailable (not provided by the game)', market: 'Freight market', specialJob: 'no',
         cargoLoaded: 'unavailable (invalid reading)', deadline: 'unavailable (invalid reading) [game time]', jobSource: 'job event 3'});
       expect(fields(text.sections, 'delivery')).toEqual({earnedXp: '0', cargoDamage: '0%', deliveryDuration: 'unavailable (not observed) [game time]', autoPark: 'no',
         autoLoad: 'unavailable (not observed)'});
@@ -273,6 +273,21 @@ describe('trip detail (J13, J21, J22; REG-014, REG-009)', () => {
       autoPark: 'нет',
       autoLoad: 'да'
     });
+  });
+  it('labels known SDK job markets in both languages and keeps unknown, empty and unavailable markets truthful (ET-045a)', () => {
+    const withMarket = (market: JournalTripDetail['job']['values']['market']): JournalTripDetail =>
+      ({...DELIVERED_DETAIL, job: {...DELIVERED_DETAIL.job, values: {...DELIVERED_DETAIL.job.values, market}}});
+    const market = (detail: JournalTripDetail, language: 'en' | 'ru') => fields(journalDetailText(detail, {units: DEFAULT, timeZone: ZONE, language}).sections, 'job').market;
+    for (const [raw, en, ru] of [['cargo_market', 'Cargo market', 'Рынок грузов'], ['quick_job', 'Quick job', 'Быстрый заказ'],
+      ['freight_market', 'Freight market', 'Грузоперевозки'], ['external_contracts', 'External contracts', 'Внешние контракты'],
+      ['external_market', 'External market', 'Внешний рынок']] as const) {
+      const detail = withMarket(value(raw));
+      expect(market(detail, 'en'), raw).toBe(en); expect(market(detail, 'ru'), raw).toBe(ru);
+      expect(detail.job.values.market).toEqual(value(raw));
+    }
+    for (const raw of ['some_future_market', 'constructor', '__proto__']) expect(market(withMarket(value(raw)), 'ru'), raw).toBe(raw);
+    expect(market(withMarket(value('')), 'en')).toBe('(empty)');
+    expect(market(withMarket(NO), 'en')).toBe('unavailable (not observed)');
   });
 });
 

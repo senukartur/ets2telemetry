@@ -537,6 +537,27 @@ export const LIVE_SECTION_TEXT: Readonly<Record<LiveSectionId, string>> = Object
   motion: 'Driving', fuel: 'Fuel', distance: 'Distance', time: 'Time', job: 'Job', vehicle: 'Vehicle', position: 'Position'
 });
 
+/** The job market values SCS SDK 1.15 documents for `job.market`. */
+export type JobMarket = 'cargo_market' | 'quick_job' | 'freight_market' | 'external_contracts' | 'external_market';
+/**
+ * Display labels of the SDK job markets (ET-045a), written for this application rather than copied from the game. Only
+ * the dashboard and journal display change: telemetry-core, the v1 projection, storage and the JSON export keep the raw
+ * value, and an unknown value is shown verbatim.
+ */
+export const JOB_MARKET_TEXT: Readonly<Record<JobMarket, string>> = Object.freeze({
+  'cargo_market': 'Cargo market', 'quick_job': 'Quick job', 'freight_market': 'Freight market',
+  'external_contracts': 'External contracts', 'external_market': 'External market'
+});
+export const JOB_MARKET_TEXT_RU: Readonly<Record<JobMarket, string>> = Object.freeze({
+  'cargo_market': 'Рынок грузов', 'quick_job': 'Быстрый заказ', 'freight_market': 'Грузоперевозки',
+  'external_contracts': 'Внешние контракты', 'external_market': 'Внешний рынок'
+});
+/** The label of a raw SDK market value; an unknown value (or an inherited name such as `constructor`) stays verbatim. */
+export function getJobMarketText(raw: string, language: AppLanguage = 'en'): string {
+  const table = language === 'ru' ? JOB_MARKET_TEXT_RU : JOB_MARKET_TEXT;
+  return Object.hasOwn(table, raw) ? table[raw as JobMarket] : raw;
+}
+
 // Overlay labels (ET-012a). Each map covers every id, so a new layout, section, group, preset or requirement fails to
 // compile until it has a text. Values are formatted by telemetry-core in main; these maps hold only labels.
 export const OVERLAY_LAYOUT_TEXT: Readonly<Record<OverlayLayout, string>> = Object.freeze({
