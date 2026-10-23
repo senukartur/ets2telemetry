@@ -57,9 +57,11 @@ async function run(): Promise<void> {
     const summary = {startedUtc, endedUtc: new Date().toISOString(), reason, failure: failure ?? null,
       purpose: 'native-game-event-validation', applicationHistoryRecording: false, clientInstanceId, brokerSha256: sha256,
       snapshotPolicy: 'All validated; raw diagnostic samples at most once per second, not application history', ...probe.summary()};
-    writeFileSync(path.join(output, 'summary.json'), JSON.stringify(summary, null, 2), {flag: 'wx'});
-    say({state: failure ? 'failed' : 'stopped', output, ...summary});
-    process.exitCode = failure ? 1 : 0; resolveFinished();
+    try {writeFileSync(path.join(output, 'summary.json'), JSON.stringify(summary, null, 2), {flag: 'wx'});}
+    catch (error) {failure ??= String(error);}
+    process.exitCode = failure ? 1 : 0;
+    try {say({state: failure ? 'failed' : 'stopped', output, ...summary, failure: failure ?? null});}
+    finally {resolveFinished();}
   })();
   const fail = (error: unknown) => {failure ??= String(error).slice(0, 512); void stop('error');};
   const open = () => {
@@ -132,10 +134,13 @@ async function run(): Promise<void> {
   input.on('close', () => {if (!stopping) void stop('control-eof');});
   process.once('SIGINT', () => {void stop('signal');});
   process.once('SIGTERM', () => {void stop('signal');});
-  note({type: 'run', startedUtc, purpose: 'native-game-event-validation', clientInstanceId, clientClockId, brokerSha256: sha256,
-    applicationHistoryRecording: false, seconds: +secondsText});
-  say({state: 'ready', applicationHistoryRecording: false, output, seconds: +secondsText});
-  open(); await finished;
+  try {
+    note({type: 'run', startedUtc, purpose: 'native-game-event-validation', clientInstanceId, clientClockId, brokerSha256: sha256,
+      applicationHistoryRecording: false, seconds: +secondsText});
+    say({state: 'ready', applicationHistoryRecording: false, output, seconds: +secondsText});
+    open();
+  } catch (error) {fail(error);}
+  await finished;
 }
 
 void run().catch(error => {process.stderr.write(String(error) + '\n'); process.exitCode = 1;});
