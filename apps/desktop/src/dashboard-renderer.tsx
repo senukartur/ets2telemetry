@@ -38,8 +38,13 @@ export default function App() {
   const [route, setRoute] = useState<'live' | 'hardMode' | 'journal' | 'settings' | 'account'>('live');
   const [panel, setPanel] = useState<'general' | 'units' | 'overlay' | 'sections' | 'plugin' | 'data' | 'about'>('general');
   const heading = useRef<HTMLHeadingElement>(null);
+  const content = useRef<HTMLElement>(null);
   const hardMode = useHardModeStatus();
-  useEffect(() => {heading.current?.focus();}, [route]);
+  useEffect(() => {
+    // Each top-level destination starts at its heading, including after the long inline checklist.
+    if (content.current) content.current.scrollTop = 0;
+    heading.current?.focus();
+  }, [route]);
   const [startup, setStartup] = useState<string>('Starting');
   const [live, setLive] = useState<LiveTelemetry>();
   const [app, setApp] = useState<AppState>();
@@ -98,7 +103,7 @@ export default function App() {
         <Badge variant={connectionTone(live?.status)} data-testid="shell.status.connection"><Gauge aria-hidden="true" />{live?.observation?.source.game.toUpperCase() ?? ''} {t(`ui.status.${live?.status ?? 'waiting'}`, undefined, language)}</Badge>
         <Badge variant={pluginTone(targets)} data-testid="shell.status.plugin"><Plug aria-hidden="true" />{t('ui.plugin', undefined, language)} {installed}/{targets.length} · {pluginStatusText(targets, language)}</Badge>
         <Badge variant={hardModeTone(hardMode.status)} data-testid="shell.status.hardMode"><Flame aria-hidden="true" />{hmView.headline}</Badge>
-      </header><main className="yu-content" data-testid="shell.content">
+      </header><main ref={content} className="yu-content" data-testid="shell.content">
         <div hidden={route !== 'live'} className="yu-stack" data-testid="live.screen">
           <LiveDashboard live={live} units={settings?.units} language={language} />
           <p data-testid="prototype-notice" className="yu-muted">{recording.notice}</p>

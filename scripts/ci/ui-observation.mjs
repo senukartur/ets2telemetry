@@ -94,6 +94,11 @@ export async function runUiSmoke({application, dashboard, overlay, source, confi
         await dashboard.waitForFunction(() => globalThis.document.activeElement?.getAttribute('data-testid') === 'screen-title');
         assert.equal(await dashboard.getByTestId('hardMode.screen').isVisible(), true);
         assert.equal(await dashboard.getByTestId('hard-mode-drawer').count(), 0);
+        await dashboard.getByTestId('shell.content').evaluate(node => {node.scrollTop = node.scrollHeight;});
+        assert.ok(await dashboard.getByTestId('shell.content').evaluate(node => node.scrollTop > 0));
+        await dashboard.getByTestId('tab-live').click();
+        await dashboard.waitForFunction(() => globalThis.document.activeElement?.getAttribute('data-testid') === 'screen-title');
+        assert.equal(await dashboard.getByTestId('shell.content').evaluate(node => node.scrollTop), 0, 'UI_ROUTE_RETAINS_HARD_MODE_SCROLL');
         for (const zoom of [1.5, 2]) {
           await application.evaluate(({BrowserWindow}, zoom) => {BrowserWindow.getAllWindows().find(window => !window.webContents.getURL().endsWith('?view=overlay')).webContents.setZoomFactor(zoom);}, zoom);
           for (const route of ['live', 'hardMode']) {
